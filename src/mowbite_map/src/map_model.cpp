@@ -230,4 +230,8 @@ json ToJson(const MapData& map) {
   return j;
 }
 
+std::string ToText(const MapData& map) {
+  return ToJson(map).dump(2);
+}
+
 }  // namespace mowbite_map

@@ -305,6 +305,13 @@ TEST(MapModel, NamesTheAreaInTheError) {
   EXPECT_EQ(Error(map), "areas[1] 'tree': unknown type 'garden'");
 }
 
+TEST(MapModel, TextIsIndentedByTwoLikeOpenMower) {
+  EXPECT_EQ(mowbite_map::ToText(mowbite_map::MapData{}), "{\n  \"areas\": [],\n  \"docking_stations\": []\n}");
+  const std::string text = mowbite_map::ToText(*ParseMap(SampleMap()).map);
+  EXPECT_NE(text.find("\n      \"id\": \"lawn\""), std::string::npos);
+  EXPECT_EQ(json::parse(text), ToJson(*ParseMap(SampleMap()).map));
+}
+
 TEST(MapModel, ReportsTheStoredAreaProperties) {
   const std::vector<std::string> expected = {"name",  "type", "active", "mowable", "angle", "outline_count",
                                              "outline_overlap_count", "outline_offset"};

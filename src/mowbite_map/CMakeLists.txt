@@ -9,7 +9,7 @@ find_package(ament_cmake REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
 # Map model, storage and RPC handling without ROS, testable on any machine.
-add_library(mowbite_map_core STATIC src/map_model.cpp)
+add_library(mowbite_map_core STATIC src/map_model.cpp src/map_store.cpp)
 target_include_directories(mowbite_map_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -25,7 +25,7 @@ install(TARGETS mowbite_map_core
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(mowbite_map_test test/test_map_model.cpp)
+  ament_add_gtest(mowbite_map_test test/test_map_model.cpp test/test_map_store.cpp)
   target_link_libraries(mowbite_map_test mowbite_map_core)
 endif()
 

@@ -65,6 +65,9 @@ ParseResult ParseMap(const json& j);
 // Writes the shape of map/json like OpenMower: active and mowable only when false, empty name left out.
 json ToJson(const MapData& map);
 
+// The text of map.json and map/json: indented by 2 like OpenMower writes it.
+std::string ToText(const MapData& map);
+
 // The area properties this version stores, the answer of map.area_properties.
 const std::vector<std::string>& AreaPropertyNames();
 
