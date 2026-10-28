@@ -28,6 +28,10 @@ size_t JsonNesting(const std::string& text) {
   return deepest;
 }
 
+json SystemInfo(const std::string& version, const std::string& platform) {
+  return json{{"name", "mowbite-os"}, {"version", version}, {"platform", platform}, {"schema", kDataSchema}};
+}
+
 std::string RpcErrorJson(int16_t code, const std::string& message, const json& id) {
   json err = {{"jsonrpc", "2.0"}, {"error", {{"code", code}, {"message", message}}}, {"id", id}};
   return err.dump(2);

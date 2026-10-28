@@ -162,6 +162,11 @@ r = rpc("rpc.methods")
 check("rpc.methods", r and "rpc.ping" in r["result"] and "logs.recent" in r["result"]
       and "map.replace" in r["result"] and "map.area_properties" in r["result"] and "mowing.plan" in r["result"],
       json.dumps(r and r["result"]))
+check("rpc.methods lists system.info", r and "system.info" in r["result"], "")
+r = rpc("system.info")
+info = r and r.get("result") or {}
+check("system.info", info.get("name") == "mowbite-os" and info.get("platform") and info.get("schema") == 1
+      and info.get("version"), json.dumps(info))
 # The planner is a process of its own, started by tron.launch.py.
 
 

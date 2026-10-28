@@ -9,6 +9,7 @@
 #include <map>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
+#include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
 #include <mowbite_msgs/msg/rpc_error.hpp>
@@ -73,6 +74,10 @@ class BridgeNode : public rclcpp::Node {
 
     local_methods_["rpc.ping"] = [](const json&) { return json("pong"); };
     local_methods_["rpc.methods"] = [this](const json&) { return MethodList(); };
+    local_methods_["system.info"] = [this](const json&) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      return SystemInfo(version_, platform_);
+    };
     local_methods_["events.history"] = [this](const json& params) {
       if (params.is_object() && params.contains("date") && params["date"].is_string()) {
         return event_history_.getAll(params["date"].get<std::string>());
@@ -146,6 +151,11 @@ class BridgeNode : public rclcpp::Node {
             actions_[msg->node_prefix] = msg->actions;
           }
           PublishActions();
+        });
+    capabilities_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
+        "hw/capabilities", LatchedQos(1), [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          platform_ = msg->platform;
         });
     methods_sub_ = create_subscription<mowbite_msgs::msg::RpcMethods>(
         "bridge/rpc/methods", LatchedQos(50), [this](mowbite_msgs::msg::RpcMethods::ConstSharedPtr msg) {
@@ -489,6 +499,7 @@ class BridgeNode : public rclcpp::Node {
   }
 
   std::string version_;
+  std::string platform_;  // from hw/capabilities, guarded by mutex_
   ParamsStore params_;
   Callback callback_;
   std::shared_ptr<mqtt::async_client> client_;
@@ -517,6 +528,7 @@ class BridgeNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::ActionList>::SharedPtr actions_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RpcMethods>::SharedPtr methods_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr capabilities_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RpcResponse>::SharedPtr rpc_response_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RpcError>::SharedPtr rpc_error_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_sub_;

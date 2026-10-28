@@ -159,3 +159,16 @@ TEST(Sensors, ValueDescriptionNames) {
   // OpenMower writes DISTANCE as UNKNOWN.
   EXPECT_STREQ(ValueDescriptionName(7), "UNKNOWN");
 }
+
+TEST(SystemInfo, FieldsForTheApp) {
+  auto info = SystemInfo("1.2.3", "airseekers_tron");
+  EXPECT_EQ(info["name"], "mowbite-os");
+  EXPECT_EQ(info["version"], "1.2.3");
+  EXPECT_EQ(info["platform"], "airseekers_tron");
+  EXPECT_EQ(info["schema"], 1);
+  EXPECT_EQ(info.size(), 4u);
+}
+
+TEST(SystemInfo, PlatformEmptyBeforeTheDriverReports) {
+  EXPECT_EQ(SystemInfo("UNKNOWN VERSION", "")["platform"], "");
+}

@@ -53,6 +53,12 @@ std::optional<std::pair<double, double>> DecodeTeleop(const std::string& payload
 
 std::string NanoId(size_t length = 32);
 
+// Version of the files in data_dir, raised when their layout changes.
+constexpr int kDataSchema = 1;
+
+// Answer of system.info: how the app recognizes MowBite OS. platform is empty until the driver has reported it.
+json SystemInfo(const std::string& version, const std::string& platform);
+
 // {"id", "t", "type", ...details}
 json EventPayload(const std::string& type, const json& details, double t);
 
