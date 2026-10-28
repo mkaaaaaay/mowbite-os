@@ -208,6 +208,22 @@ teleop(0.0, 0.0)
 time.sleep(0.5)
 check("teleop drives again after a zero", len([s for t, s in sent_speeds(t0) if s != [0.0, 0.0]]) >= 4,
       str(sent_speeds(t0)[:3]))
+
+# Leaving the recording mode while the joystick is held stops at once, not after the 0.5 s watchdog.
+t0 = sim_time()
+hold = Hold(0.2, 0.0)
+time.sleep(0.6)
+c.publish("action", "mower_logic:area_recording/exit_recording_mode")
+time.sleep(1.0)
+hold.release()
+time.sleep(0.3)
+speeds = sent_speeds(t0)
+last_moving = max((t for t, s in speeds if s != [0.0, 0.0]), default=None)
+zeros = [t for t, s in speeds if s == [0.0, 0.0] and last_moving is not None and t > last_moving]
+check("exit_recording_mode stops at once: 3 zeros within 0.3 s", last_moving is not None and len(zeros) == 3
+      and zeros[0] - last_moving < 0.3, f"last moving {last_moving}, zeros {zeros}")
+state = wait_for(lambda: b'"current_state":"IDLE"' in (latest("robot_state/json") or b""), 3)
+check("state IDLE", bool(state))
 with open(LOG) as f:
     clears = [json.loads(l) for l in f if '"mod": 10' in l and '"type": 0,' in l]
 check("clear frame sent", len(clears) == 1 and clears[0]["hex"] == "00" * 8, str(clears))

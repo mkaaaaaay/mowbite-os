@@ -185,6 +185,20 @@ TEST(Logic, HeldJoystickWaitsWhenRecordingStarts) {
   EXPECT_EQ(Passed(core, 12.1, 13.0), 9);
 }
 
+TEST(Logic, LeavingRecordingStopsTheWheels) {
+  LogicCore core{LogicConfig{}};
+  core.OnMcuStatus(Healthy());
+  EXPECT_FALSE(core.TakeStopRequest());
+  core.OnAction("mower_logic:idle/start_area_recording");
+  EXPECT_FALSE(core.TakeStopRequest());
+  EXPECT_EQ(core.OnAction("mower_logic:area_recording/exit_recording_mode"), ActionResult::kDone);
+  EXPECT_TRUE(core.TakeStopRequest());
+  EXPECT_FALSE(core.TakeStopRequest());
+  // Rejected actions change nothing.
+  EXPECT_EQ(core.OnAction("mower_logic:area_recording/exit_recording_mode"), ActionResult::kRejected);
+  EXPECT_FALSE(core.TakeStopRequest());
+}
+
 TEST(Logic, NoRecordingDuringEmergency) {
   LogicCore core{LogicConfig{}};
   auto latched = Healthy();

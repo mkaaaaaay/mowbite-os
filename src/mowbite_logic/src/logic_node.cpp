@@ -224,15 +224,18 @@ class LogicNode : public rclcpp::Node {
     }
   }
 
-  // Sends events and changed actions collected by the core.
+  // Sends stop requests, events and changed actions collected by the core.
   void Flush() {
     std::vector<Event> events;
     bool actions_changed;
+    bool stop;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       events = core_.TakeEvents();
       actions_changed = core_.TakeActionsChanged();
+      stop = core_.TakeStopRequest();
     }
+    if (stop) cmd_vel_pub_->publish(geometry_msgs::msg::Twist());
     for (auto& event : events) {
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "events/json";

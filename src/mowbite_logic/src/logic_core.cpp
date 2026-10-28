@@ -137,6 +137,7 @@ std::optional<std::pair<double, double>> LogicCore::OnTeleop(double vx, double v
 
 void LogicCore::SetState(State state) {
   if (state == state_) return;
+  if (state_ == State::kAreaRecording) stop_requested_ = true;
   state_ = state;
   teleop_armed_ = false;
   AddEvent("STATE", {{"state", StateName(state)}});
@@ -272,6 +273,12 @@ bool LogicCore::TakeActionsChanged() {
   bool changed = actions_changed_;
   actions_changed_ = false;
   return changed;
+}
+
+bool LogicCore::TakeStopRequest() {
+  bool stop = stop_requested_;
+  stop_requested_ = false;
+  return stop;
 }
 
 }  // namespace mowbite_logic

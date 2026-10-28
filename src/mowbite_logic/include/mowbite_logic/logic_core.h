@@ -157,6 +157,9 @@ class LogicCore {
   std::vector<Event> TakeEvents();
   // True once after the enabled flags of the actions changed.
   bool TakeActionsChanged();
+  // True once after the logic left a state that drives: the wheels get a zero command at once instead of waiting for
+  // the cmd_vel watchdog of the driver.
+  bool TakeStopRequest();
   bool Emergency() const;
 
  private:
@@ -177,6 +180,7 @@ class LogicCore {
   double last_y_ = 0;
   bool mcu_seen_ = false;
   bool actions_changed_ = true;
+  bool stop_requested_ = false;
   bool teleop_armed_ = false;
   double last_teleop_s_ = -std::numeric_limits<double>::infinity();
   std::vector<Event> events_;
