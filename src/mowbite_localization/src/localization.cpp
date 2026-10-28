@@ -122,6 +122,7 @@ GpsResult Localization::AddGps(const GpsFix& fix, double now_s) {
   if (!std::isfinite(fix.x) || !std::isfinite(fix.y) || !std::isfinite(fix.z)) return GpsResult::kInaccurate;
 
   if (now_s - last_gps_time_s_ > kGpsGapS) {
+    reset_by_outliers_ = false;
     has_gps_ = false;
     valid_gps_samples_ = 0;
     gps_outliers_ = 0;
@@ -138,6 +139,7 @@ GpsResult Localization::AddGps(const GpsFix& fix, double now_s) {
     has_gps_ = false;
     valid_gps_samples_ = 0;
     gps_outliers_ = 0;
+    reset_by_outliers_ = true;
     return GpsResult::kOutlierReset;
   }
 
@@ -147,8 +149,13 @@ GpsResult Localization::AddGps(const GpsFix& fix, double now_s) {
   valid_gps_samples_++;
   if (!has_gps_) {
     if (valid_gps_samples_ <= kInliersBeforeInit) return GpsResult::kWarmup;
+    const Estimate before = GetEstimate();
     UpdatePosition(fix.x, fix.y, kInitVariance);
     has_gps_ = true;
+    const Estimate after = GetEstimate();
+    PositionJump jump{reset_by_outliers_, before.x, before.y, after.x, after.y};
+    if (initialized_once_ && jump.distance() > config_.max_gps_accuracy) jump_ = jump;
+    initialized_once_ = true;
     return GpsResult::kInitialized;
   }
   UpdatePosition(fix.x, fix.y, kPositionVariance);
@@ -242,6 +249,16 @@ double Localization::PositionAccuracy(double now_s) const {
   if (!has_gps_ || !RecentGps(now_s)) return kNoAccuracy;
   return last_gps_.accuracy + config_.accuracy_growth_per_m * distance_since_fix_ +
          config_.accuracy_growth_per_s * std::max(0.0, now_s - last_gps_time_s_);
+}
+
+double PositionJump::distance() const {
+  return std::hypot(to_x - from_x, to_y - from_y);
+}
+
+std::optional<PositionJump> Localization::TakeJump() {
+  std::optional<PositionJump> out;
+  out.swap(jump_);
+  return out;
 }
 
 MotionMeasurement<double> Localization::ExpectedMotion() const {

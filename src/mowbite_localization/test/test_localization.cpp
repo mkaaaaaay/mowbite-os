@@ -283,6 +283,58 @@ TEST(Localization, OutliersAreIgnoredUntilTheEleventh) {
   EXPECT_EQ(loc.AddGps(Fixed(16.01, 20), t), GpsResult::kWarmup);
 }
 
+TEST(Localization, FirstInitializationIsNoJump) {
+  Localization loc({});
+  double t = 100;
+  Calibrate(loc, t);
+  InitGps(loc, t, 10, 20);
+  EXPECT_FALSE(loc.TakeJump());
+}
+
+TEST(Localization, ReinitializationAfterOutliersIsAJump) {
+  Localization loc({});
+  double t = 100;
+  Calibrate(loc, t);
+  InitGps(loc, t, 10, 20);
+  for (int i = 0; i < 11; ++i) {
+    Step(loc, t, 0.1, 0.0, 0.0);
+    loc.AddGps(Fixed(16, 20), t);
+  }
+  EXPECT_FALSE(loc.TakeJump());
+  GpsResult result = GpsResult::kWarmup;
+  for (int i = 0; i < 11 && result != GpsResult::kInitialized; ++i) {
+    Step(loc, t, 0.1, 0.0, 0.0);
+    result = loc.AddGps(Fixed(16, 20), t);
+  }
+  ASSERT_EQ(result, GpsResult::kInitialized);
+  auto jump = loc.TakeJump();
+  ASSERT_TRUE(jump);
+  EXPECT_TRUE(jump->after_outliers);
+  EXPECT_NEAR(jump->from_x, 10.0, 0.01);
+  EXPECT_NEAR(jump->to_x, 16.0, 0.01);
+  EXPECT_NEAR(jump->distance(), 6.0, 0.02);
+  EXPECT_FALSE(loc.TakeJump());
+}
+
+TEST(Localization, ReinitializationAfterAGapIsAJumpOnlyIfItMoves) {
+  Localization loc({});
+  double t = 100;
+  Calibrate(loc, t);
+  InitGps(loc, t, 10, 20);
+  // Back at the same place after a gap: no jump.
+  Step(loc, t, 6.0, 0.0, 0.0);
+  InitGps(loc, t, 10, 20);
+  EXPECT_FALSE(loc.TakeJump());
+  // Dead reckoning drove 1 m east, GPS says 0.5 m: a jump of about 0.5 m back.
+  Step(loc, t, 6.0, 0.0, 1.0 / 6.0);
+  const double x = loc.GetEstimate().x;
+  InitGps(loc, t, x - 0.5, 20);
+  auto jump = loc.TakeJump();
+  ASSERT_TRUE(jump);
+  EXPECT_FALSE(jump->after_outliers);
+  EXPECT_NEAR(jump->distance(), 0.5, 0.02);
+}
+
 TEST(Localization, AntennaOffsetIsRemovedFromTheFix) {
   LocalizationConfig config;
   config.antenna_offset_x = 0.3;

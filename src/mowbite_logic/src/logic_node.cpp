@@ -4,6 +4,7 @@
 #include <mowbite_msgs/msg/action_list.hpp>
 #include <mowbite_msgs/msg/mcu_status.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
+#include <mowbite_msgs/msg/position_jump.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
 #include <mowbite_msgs/msg/sensor_info.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
@@ -66,6 +67,15 @@ class LogicNode : public rclcpp::Node {
         "mcu/status", 10, [this](mowbite_msgs::msg::McuStatus::ConstSharedPtr msg) { OnMcuStatus(*msg); });
     pose_sub_ = create_subscription<mowbite_msgs::msg::AbsolutePose>(
         "localization/pose", 10, [this](mowbite_msgs::msg::AbsolutePose::ConstSharedPtr msg) { OnPose(*msg); });
+    jump_sub_ = create_subscription<mowbite_msgs::msg::PositionJump>(
+        "localization/jump", 10, [this](mowbite_msgs::msg::PositionJump::ConstSharedPtr msg) {
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            core_.OnPositionJump(msg->after.x, msg->after.y, msg->distance,
+                                 msg->reason == mowbite_msgs::msg::PositionJump::REASON_OUTLIERS);
+          }
+          Flush();
+        });
     action_sub_ = create_subscription<std_msgs::msg::String>(
         "bridge/action", 10, [this](std_msgs::msg::String::ConstSharedPtr msg) { OnAction(msg->data); });
     teleop_sub_ = create_subscription<geometry_msgs::msg::Twist>(
@@ -304,6 +314,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr emergency_client_;
   rclcpp::Subscription<mowbite_msgs::msg::McuStatus>::SharedPtr mcu_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::PositionJump>::SharedPtr jump_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr action_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr teleop_sub_;
   rclcpp::TimerBase::SharedPtr state_timer_;

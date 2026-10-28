@@ -90,6 +90,12 @@ void LogicCore::OnPoseTimeout() {
   pose_.reset();
 }
 
+void LogicCore::OnPositionJump(double to_x, double to_y, double distance_m, bool after_outliers) {
+  last_x_ = to_x;
+  last_y_ = to_y;
+  AddEvent("POSITION_JUMP", {{"distance", distance_m}, {"reason", after_outliers ? "outliers" : "gap"}});
+}
+
 // Every event carries the position where it happened.
 void LogicCore::AddEvent(const std::string& type, json details) {
   details["x"] = last_x_;

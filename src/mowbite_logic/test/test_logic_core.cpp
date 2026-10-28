@@ -428,6 +428,21 @@ TEST(Logic, EventsCarryThePositionTheyHappenedAt) {
   EXPECT_DOUBLE_EQ(events[1].details["y"].get<double>(), 8.0);
 }
 
+TEST(Logic, PositionJumpIsAnEventAtTheNewPosition) {
+  LogicCore core{LogicConfig{}};
+  core.OnMcuStatus(Healthy());
+  core.OnPose(Pose(1.0, 2.0, 0.02f));
+  core.OnPositionJump(7.0, 2.0, 6.0, true);
+  auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].type, "POSITION_JUMP");
+  EXPECT_DOUBLE_EQ(events[0].details["distance"].get<double>(), 6.0);
+  EXPECT_EQ(events[0].details["reason"], "outliers");
+  EXPECT_DOUBLE_EQ(events[0].details["x"].get<double>(), 7.0);
+  core.OnPositionJump(7.5, 2.0, 0.5, false);
+  EXPECT_EQ(core.TakeEvents()[0].details["reason"], "gap");
+}
+
 TEST(Logic, EventsWithoutAnyPoseAreAtZero) {
   LogicCore core{LogicConfig{}};
   core.OnMcuStatus(Healthy());

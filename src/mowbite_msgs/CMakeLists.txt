@@ -21,6 +21,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RpcResponse.msg"
   "msg/RpcError.msg"
   "msg/MqttPublish.msg"
+  "msg/PositionJump.msg"
   "srv/SetPose.srv"
   DEPENDENCIES builtin_interfaces std_msgs geometry_msgs
 )

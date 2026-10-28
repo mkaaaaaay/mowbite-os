@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <kalman/ExtendedKalmanFilter.hpp>
 #include <limits>
+#include <optional>
 
 #include "mowbite_localization/models.h"
 
@@ -61,6 +62,14 @@ struct GpsFix {
   double motion_x = 0.0, motion_y = 0.0;
 };
 
+// The estimate moved onto GPS again by more than max_gps_accuracy.
+struct PositionJump {
+  bool after_outliers = false;  // otherwise after a gap without fixes
+  double from_x = 0.0, from_y = 0.0;
+  double to_x = 0.0, to_y = 0.0;
+  double distance() const;
+};
+
 struct Estimate {
   double x = 0.0, y = 0.0, theta = 0.0, vx = 0.0, vr = 0.0;
   // Row-major covariance of x, y, theta.
@@ -99,6 +108,8 @@ class Localization {
   bool RecentGps(double now_s) const;
   // Antenna velocity the filter expects, compared with the GPS motion vector.
   MotionMeasurement<double> ExpectedMotion() const;
+  // The jump of the last re-initialization onto GPS, once; nothing for the first one.
+  std::optional<PositionJump> TakeJump();
 
   bool calibrated() const {
     return calibrated_;
@@ -154,6 +165,9 @@ class Localization {
   int valid_gps_samples_ = 0;
   int gps_outliers_ = 0;
   double distance_since_fix_ = 0.0;
+  bool initialized_once_ = false;
+  bool reset_by_outliers_ = false;
+  std::optional<PositionJump> jump_;
 
   bool heading_valid_ = false;
   int heading_agreements_ = 0;

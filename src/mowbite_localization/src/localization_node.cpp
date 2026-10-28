@@ -10,6 +10,7 @@
 #include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <memory>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
+#include <mowbite_msgs/msg/position_jump.hpp>
 #include <mowbite_msgs/srv/set_pose.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -76,6 +77,7 @@ class LocalizationNode : public rclcpp::Node {
 
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
     pose_pub_ = create_publisher<mowbite_msgs::msg::AbsolutePose>("localization/pose", 10);
+    jump_pub_ = create_publisher<mowbite_msgs::msg::PositionJump>("localization/jump", 10);
     if (publish_tf) tf_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     if (debug_) {
       motion_pub_ = create_publisher<geometry_msgs::msg::Vector3Stamped>("localization/debug/expected_motion", 10);
@@ -147,6 +149,7 @@ class LocalizationNode : public rclcpp::Node {
         break;
       case GpsResult::kInitialized:
         RCLCPP_INFO(get_logger(), "GPS valid, moved the filter to %.2f, %.2f", fix.x, fix.y);
+        if (auto jump = localization_->TakeJump()) PublishJump(*jump, msg.header.stamp);
         break;
       case GpsResult::kOutlier:
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "GPS outlier at %.2f, %.2f", fix.x, fix.y);
@@ -167,6 +170,22 @@ class LocalizationNode : public rclcpp::Node {
       dbg.vector.y = m.y();
       motion_pub_->publish(dbg);
     }
+  }
+
+  void PublishJump(const PositionJump& jump, const builtin_interfaces::msg::Time& stamp) {
+    RCLCPP_WARN(get_logger(), "Position jumped by %.2f m onto GPS, after %s", jump.distance(),
+                jump.after_outliers ? "a run of outliers" : "a gap without fixes");
+    mowbite_msgs::msg::PositionJump msg;
+    msg.header.stamp = stamp;
+    msg.header.frame_id = frame_id_;
+    msg.reason = jump.after_outliers ? mowbite_msgs::msg::PositionJump::REASON_OUTLIERS
+                                     : mowbite_msgs::msg::PositionJump::REASON_GAP;
+    msg.before.x = jump.from_x;
+    msg.before.y = jump.from_y;
+    msg.after.x = jump.to_x;
+    msg.after.y = jump.to_y;
+    msg.distance = jump.distance();
+    jump_pub_->publish(msg);
   }
 
   void Publish(const builtin_interfaces::msg::Time& stamp) {
@@ -228,6 +247,7 @@ class LocalizationNode : public rclcpp::Node {
   bool had_fix_ = false;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::PositionJump>::SharedPtr jump_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr motion_pub_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_;

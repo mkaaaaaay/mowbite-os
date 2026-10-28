@@ -154,6 +154,8 @@ class LogicCore {
   void OnPose(const PoseSnapshot& pose);
   // localization/pose stopped coming; events keep the last position.
   void OnPoseTimeout();
+  // The localization moved its estimate onto GPS again by distance_m, the event is at the new position.
+  void OnPositionJump(double to_x, double to_y, double distance_m, bool after_outliers);
   ActionResult OnAction(const std::string& action_id);
   // Remote control reaches the wheels only while recording an area, like in OpenMower. After an emergency or a state
   // change it waits for a zero command or a pause of kTeleopQuietS, so a held joystick does not move the mower.
