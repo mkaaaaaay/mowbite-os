@@ -2,11 +2,14 @@
 
 Needs mosquitto on 127.0.0.1:1883 and `ros2 launch mowbite_sim sim.launch.py` running with its default paths.
 """
+import datetime
 import json
+import os
 import struct
 import sys
 import threading
 import time
+import zoneinfo
 
 import paho.mqtt.client as mqtt
 
@@ -252,6 +255,18 @@ check("dock -> is_charging", bool(state))
 cs = wait_for(lambda: latest("sensors/om_charge_state/data") == b"Fast Charge" or None, 3)
 check("charge state Fast Charge", bool(cs), str(latest("sensors/om_charge_state/data")))
 set_flags()
+
+# The heartbeat carries the local time of TZ (default of tron.launch.py: Europe/Berlin), not UTC.
+with open(LOG) as f:
+    beats = [json.loads(l) for l in f if '"type": 255' in l]
+b = bytes.fromhex(beats[-1]["hex"]) if beats else bytes(8)
+zone = zoneinfo.ZoneInfo(os.environ.get("TZ") or "Europe/Berlin")
+try:
+    sent = datetime.datetime(2000 + b[0], b[1], b[2], b[3], b[4], b[5], tzinfo=zone)
+    skew = abs((datetime.datetime.now(zone) - sent).total_seconds())
+except ValueError:
+    skew = None
+check("heartbeat in local time", skew is not None and skew < 5, f"{b.hex()} in {zone}, skew {skew}")
 
 r = rpc("logs.recent", {"level": "WARN"}, "9")
 check("logs.recent answers", r is not None and isinstance(r.get("result"), list), f'{len((r or {}).get("result", []))} entries')

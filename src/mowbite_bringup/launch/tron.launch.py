@@ -1,7 +1,7 @@
 # All of MowBite OS in one process: one ROS context and one DDS participant for every node.
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
 from launch_ros.parameter_descriptions import ParameterValue
@@ -48,5 +48,12 @@ def generate_launch_description():
         DeclareLaunchArgument("mqtt_host", default_value="127.0.0.1"),
         DeclareLaunchArgument("mqtt_port", default_value="1883"),
         DeclareLaunchArgument("data_dir", default_value="/userdata/mowbite"),
+        # Local time for the heartbeat of the MCU (and later the schedules); a TZ from the environment wins.
+        DeclareLaunchArgument("tz", default_value=EnvironmentVariable("TZ", default_value="Europe/Berlin")),
+        SetEnvironmentVariable("TZ", LaunchConfiguration("tz")),
+        # DDS stays on the mower unless the environment says otherwise. Set before the first ROS node of this launch,
+        # which launch_ros creates only to load the components.
+        SetEnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE",
+                               EnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE", default_value="LOCALHOST")),
         container,
     ])

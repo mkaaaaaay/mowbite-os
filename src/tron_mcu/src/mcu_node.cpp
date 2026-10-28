@@ -2,6 +2,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <ctime>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
@@ -79,6 +80,7 @@ class McuNode : public rclcpp::Node {
         "mcu/blade", [this](const std_srvs::srv::SetBool::Request::SharedPtr req,
                             std_srvs::srv::SetBool::Response::SharedPtr res) { OnBlade(*req, *res); });
     status_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { PublishStatus(); });
+    LogTimeZone();
 
     io_thread_ = std::thread([this] { IoLoop(); });
   }
@@ -108,6 +110,21 @@ class McuNode : public rclcpp::Node {
                   config.expected_cutter_version.c_str(), config.expected_chassis_version.c_str());
     }
     return config;
+  }
+
+  // The heartbeat carries local time; without TZ that is UTC in a container.
+  void LogTimeZone() {
+    const char* tz = std::getenv("TZ");
+    std::time_t now = std::time(nullptr);
+    std::tm local{};
+    localtime_r(&now, &local);
+    char text[64];
+    std::strftime(text, sizeof(text), "%H:%M %Z (UTC%z)", &local);
+    if (tz == nullptr || *tz == '\0') {
+      RCLCPP_WARN(get_logger(), "TZ is not set, the heartbeat sends %s", text);
+    } else {
+      RCLCPP_INFO(get_logger(), "Heartbeat in local time, TZ=%s: %s", tz, text);
+    }
   }
 
   // Owns the port: reads telemetry, runs the control tick every 10 ms and writes all frames.
