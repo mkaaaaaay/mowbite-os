@@ -249,8 +249,22 @@ with open(LOG) as f:
     clears = [json.loads(l) for l in f if '"mod": 10' in l and '"type": 0,' in l]
 check("clear frame sent", len(clears) == 1 and clears[0]["hex"] == "00" * 8, str(clears))
 
+# The driver keeps the cause of a latch until the reset, also after the bumper is let go.
+set_flags(bumper=1)
+state = wait_for(lambda: b'"emergency":1' in (latest("robot_state/json") or b""), 3)
+check("bumper -> emergency", bool(state))
+set_flags()
+time.sleep(1.5)
+s = json.loads(latest("robot_state/json"))
+check("bumper let go: emergency and reason LATCH|COLLISION stay", s["emergency"] == 1 and s.get("emergency_reason") == 33,
+      f'emergency={s["emergency"]} reason={s.get("emergency_reason")}')
+c.publish("action", "mower_logic/reset_emergency")
+state = wait_for(lambda: b'"emergency":0' in (latest("robot_state/json") or b""), 4)
+check("reset after the bumper clears", bool(state) and json.loads(latest("robot_state/json")).get("emergency_reason") == 0)
+
+# Charging follows the debounced dock contact of the driver (3 battery reports at 1 Hz).
 set_flags(dock=1)
-state = wait_for(lambda: b'"is_charging":1' in (latest("robot_state/json") or b""), 4)
+state = wait_for(lambda: b'"is_charging":1' in (latest("robot_state/json") or b""), 6)
 check("dock -> is_charging", bool(state))
 cs = wait_for(lambda: latest("sensors/om_charge_state/data") == b"Fast Charge" or None, 3)
 check("charge state Fast Charge", bool(cs), str(latest("sensors/om_charge_state/data")))
