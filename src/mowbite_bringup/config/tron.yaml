@@ -86,3 +86,27 @@ mowbite_bridge:
     # Mowing track on the mower: at most this many days and MB, oldest files go first (the active job's file stays).
     position_history_days: 60
     position_history_max_mb: 50.0
+
+mowbite_planner:
+  ros__parameters:
+    frame_id: map
+    # Cutting width (small deck; the big deck, 0.30, only after measuring, open question 11) and lane overlap: lanes are
+    # 0.22 * 0.85 = 0.187 m apart. The overlap is for plans that do not come from mowbite_logic (it sets both per request).
+    mower_width: 0.22
+    overlap: 0.15
+    # Turns forwards only, every lane change a U-turn of turn_radius with the lanes 2 * turn_radius apart (lane_order skip).
+    # No turning on the spot: the nose swings out about 56 cm. Assumptions until driven in phase 7.
+    turn_radius: 0.27
+    lane_order: skip
+    turn_on_spot: false
+    turn_types: [u_turn, bulb, detour]
+    # Body around base_link (x forward, y left) from mowerBody.ts of the app, to be measured on the device. Without a body
+    # mop_up and body_fit do nothing.
+    robot_width: 0.47
+    robot_front: 0.54
+    robot_rear: 0.178
+    # The blade centre lies 0.16 or 0.23 m ahead of base_link (open question 11); lanes start and end that much earlier
+    # once it is measured. perimeter_offset stays at half the cutting width (-1.0).
+    blade_ahead: 0.0
+    # Nobody listens to ~/coverage_path, so do not publish every plan.
+    publish_path: false

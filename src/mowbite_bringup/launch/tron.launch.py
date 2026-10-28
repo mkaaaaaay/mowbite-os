@@ -1,8 +1,9 @@
-# All of MowBite OS in one process: one ROS context and one DDS participant for every node.
+# All of MowBite OS in one process: one ROS context and one DDS participant for every node. Only the MowBite Planner
+# (Python, shapely) runs as a process of its own.
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import ComposableNodeContainer
+from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -38,6 +39,9 @@ def generate_launch_description():
     container = ComposableNodeContainer(
         name="mowbite", namespace="", package="rclcpp_components", executable="component_container",
         composable_node_descriptions=[mcu, gnss, imu, localization, logic, bridge, map_node], output="screen")
+    # Plans the mowing paths for mowing.plan; a crash only costs the plans until it is back.
+    planner = Node(package="mowbite_planner", executable="mowbite_planner_node", name="mowbite_planner",
+                   parameters=[config], output="screen", respawn=True, respawn_delay=5.0)
     return LaunchDescription([
         DeclareLaunchArgument("config", default_value=PathJoinSubstitution(
             [FindPackageShare("mowbite_bringup"), "config", "tron.yaml"])),
@@ -59,4 +63,5 @@ def generate_launch_description():
         SetEnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE",
                                EnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE", default_value="LOCALHOST")),
         container,
+        planner,
     ])

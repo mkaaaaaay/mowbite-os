@@ -6,6 +6,7 @@ import datetime
 import json
 import os
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -160,6 +161,17 @@ check("actions", by_id.get("mower_logic/reset_emergency") == 1 and by_id.get("mo
 r = rpc("rpc.methods")
 check("rpc.methods", r and "rpc.ping" in r["result"] and "logs.recent" in r["result"]
       and "map.replace" in r["result"] and "map.area_properties" in r["result"], json.dumps(r and r["result"]))
+# The planner is a process of its own, started by tron.launch.py.
+
+
+def planner_services():
+    listed = subprocess.run(["ros2", "service", "list"], capture_output=True, text=True, timeout=60).stdout.split()
+    return listed if "/mowbite_planner/plan_coverage" in listed and "/mowbite_planner/plan_transit" in listed else None
+
+
+# discovery takes a moment after the start
+services = wait_for(planner_services, 40) or []
+check("planner process offers plan_coverage and plan_transit", bool(services), "")
 r = rpc("events.history", None, "2")
 types = [e.get("type") for e in (r or {}).get("result", [])]
 check("events.history has BOOTED", "BOOTED" in types, ",".join(map(str, types)))
