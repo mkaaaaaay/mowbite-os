@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <geometry_msgs/msg/vector3_stamped.hpp>
@@ -14,6 +15,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 
 #include "mowbite_localization/localization.h"
@@ -58,6 +60,17 @@ class LocalizationNode : public rclcpp::Node {
     } else {
       RCLCPP_INFO(get_logger(), "Gyro calibration: keep the mower still for %.0f s", config.gyro_calibration_s);
     }
+
+    // The app shows the antenna offset from params/json, the bridge collects it from this latched topic.
+    params_pub_ = create_publisher<std_msgs::msg::String>(
+        "bridge/params", rclcpp::QoS(rclcpp::KeepLast(50)).reliable().transient_local());
+    char text[160];
+    std::snprintf(text, sizeof(text),
+                  "{\"node\":\"/xbot_positioning\",\"params\":{\"antenna_offset_x\":%.15g,\"antenna_offset_y\":%.15g}}",
+                  config.antenna_offset_x, config.antenna_offset_y);
+    std_msgs::msg::String params_msg;
+    params_msg.data = text;
+    params_pub_->publish(params_msg);
 
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
     pose_pub_ = create_publisher<mowbite_msgs::msg::AbsolutePose>("localization/pose", 10);
@@ -209,6 +222,7 @@ class LocalizationNode : public rclcpp::Node {
   bool had_fix_ = false;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr motion_pub_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;

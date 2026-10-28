@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <geometry_msgs/msg/twist.hpp>
 #include <map>
+#include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
@@ -26,6 +27,9 @@
 #include "mowbite_bridge/event_history.h"
 #include "mowbite_bridge/log_buffer.h"
 #include "mowbite_bridge/monitor.h"
+#include "mowbite_bridge/params_store.h"
+#include "mowbite_bridge/position_history.h"
+#include "mowbite_bridge/position_median.h"
 
 namespace mowbite_bridge {
 
@@ -60,7 +64,7 @@ class BridgeNode : public rclcpp::Node {
     const std::string data_dir = declare_parameter("data_dir", ".");
     version_ = declare_parameter("software_version", "");
     if (version_.empty()) version_ = "UNKNOWN VERSION";
-    params_json_ = declare_parameter("params_json", "{}");
+    params_ = ParamsStore(json::parse(declare_parameter("params_json", "{}"), nullptr, false));
 
     const int history_days = declare_parameter("event_history_days", 60);
     const double history_mb = declare_parameter("event_history_max_mb", 20.0);
@@ -82,6 +86,19 @@ class BridgeNode : public rclcpp::Node {
       }
       return event_history_.deleteHistory(std::nullopt);
     };
+    local_methods_["position.history"] = [this](const json& params) {
+      if (params.is_object() && params.contains("job_id") && params["job_id"].is_string()) {
+        return position_history_.getHistory(params["job_id"].get<std::string>());
+      }
+      return position_history_.getHistory();
+    };
+    local_methods_["position.history.list"] = [this](const json&) { return position_history_.listHistories(); };
+    local_methods_["position.history.delete"] = [this](const json& params) {
+      if (params.is_object() && params.contains("job_id") && params["job_id"].is_string()) {
+        return position_history_.deleteHistory(params["job_id"].get<std::string>());
+      }
+      return position_history_.deleteHistory(std::nullopt);
+    };
     local_methods_["logs.recent"] = [this](const json& params) {
       double since = 0;
       uint8_t level = LogBuffer::WARN;
@@ -96,10 +113,24 @@ class BridgeNode : public rclcpp::Node {
       return log_buffer_.get(since, level, limit);
     };
 
+    const int track_days = declare_parameter("position_history_days", 60);
+    const double track_mb = declare_parameter("position_history_max_mb", 50.0);
+    position_history_.init(
+        (std::filesystem::path(data_dir) / "position_history").string(), [this] { return now().seconds(); },
+        static_cast<size_t>(std::max(track_days, 1)), static_cast<uintmax_t>(track_mb * 1e6),
+        [this](const std::string& message) { RCLCPP_WARN(get_logger(), "%s", message.c_str()); });
+
     teleop_pub_ = create_publisher<geometry_msgs::msg::Twist>("bridge/teleop", 10);
     action_pub_ = create_publisher<std_msgs::msg::String>("bridge/action", 10);
     rpc_request_pub_ = create_publisher<mowbite_msgs::msg::RpcRequest>("bridge/rpc/request", 100);
 
+    pose_sub_ = create_subscription<mowbite_msgs::msg::AbsolutePose>(
+        "localization/pose", 10, [this](mowbite_msgs::msg::AbsolutePose::ConstSharedPtr msg) {
+          std::lock_guard<std::mutex> lock(pose_mutex_);
+          pose_buffer_.push_back({msg->pose.pose.position.x, msg->pose.pose.position.y, msg->vehicle_heading});
+        });
+    params_sub_ = create_subscription<std_msgs::msg::String>(
+        "bridge/params", LatchedQos(50), [this](std_msgs::msg::String::ConstSharedPtr msg) { OnParams(msg->data); });
     robot_state_sub_ = create_subscription<mowbite_msgs::msg::RobotState>(
         "bridge/robot_state", 10, [this](mowbite_msgs::msg::RobotState::ConstSharedPtr msg) { OnRobotState(*msg); });
     sensor_info_sub_ = create_subscription<mowbite_msgs::msg::SensorInfo>(
@@ -133,7 +164,11 @@ class BridgeNode : public rclcpp::Node {
     publish_sub_ = create_subscription<mowbite_msgs::msg::MqttPublish>(
         "bridge/publish", 100, [this](mowbite_msgs::msg::MqttPublish::ConstSharedPtr msg) {
           TryPublish(msg->topic, msg->payload, msg->retain);
-          if (msg->topic == kEventsTopic) event_history_.add(msg->payload);
+          if (msg->topic == kEventsTopic) {
+            event_history_.add(msg->payload);
+            json event = json::parse(msg->payload, nullptr, false);
+            if (event.is_object()) position_history_.onEvent(event);
+          }
         });
     map_sub_ = create_subscription<std_msgs::msg::String>(
         "map/json", LatchedQos(1), [this](std_msgs::msg::String::ConstSharedPtr msg) { OnMap(msg->data); });
@@ -145,6 +180,8 @@ class BridgeNode : public rclcpp::Node {
     client_ = std::make_shared<mqtt::async_client>("tcp://" + host + ":" + std::to_string(port), kNodeId);
     client_->set_callback(callback_);
     Connect();
+    position_timer_ = create_wall_timer(std::chrono::milliseconds(150), [this] { PublishPosition(); });
+    position_flush_timer_ = create_wall_timer(std::chrono::seconds(30), [this] { position_history_.periodicFlush(); });
     reconnect_timer_ = create_wall_timer(std::chrono::seconds(5), [this] {
       if (!client_->is_connected() && !connecting_) Connect();
     });
@@ -153,6 +190,7 @@ class BridgeNode : public rclcpp::Node {
   }
 
   ~BridgeNode() override {
+    position_history_.flush();
     PublishEvent("SHUTDOWN");
     try {
       if (client_->is_connected()) client_->disconnect()->wait_for(std::chrono::seconds(1));
@@ -204,7 +242,7 @@ class BridgeNode : public rclcpp::Node {
     json capabilities = {{"rpc", 1}, {"map:json", 1}, {"events", 1}};
     TryPublish("capabilities/json", capabilities.dump(2), true);
     TryPublish("version/json", json{{"version", version_}}.dump(), true);
-    TryPublish("params/json", params_json_, true);
+    TryPublish("params/json", ParamsPayload(), true);
     PublishSensorInfos();
     PublishActions();
     std::string map;
@@ -220,6 +258,35 @@ class BridgeNode : public rclcpp::Node {
         RCLCPP_ERROR(get_logger(), "MQTT subscribe %s failed: %s", topic, e.what());
       }
     }
+  }
+
+  std::string ParamsPayload() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return params_.Payload();
+  }
+
+  void OnParams(const std::string& message) {
+    bool changed;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      changed = params_.Update(message);
+    }
+    if (changed) TryPublish("params/json", ParamsPayload(), true);
+  }
+
+  // Median of the poses since the last call; the track only records while a mowing session runs.
+  void PublishPosition() {
+    std::vector<PoseSample> samples;
+    {
+      std::lock_guard<std::mutex> lock(pose_mutex_);
+      samples.swap(pose_buffer_);
+    }
+    const auto median = MedianPose(samples);
+    if (!median) return;
+    position_history_.addPoint(median->x, median->y);
+    const json j = {
+        {"x", median->x}, {"y", median->y}, {"heading", median->heading}, {"attributes", position_history_.getAttributes()}};
+    TryPublish("position/json", j.dump());
   }
 
   void OnMessage(const std::string& topic, const std::string& payload) {
@@ -412,7 +479,7 @@ class BridgeNode : public rclcpp::Node {
   }
 
   std::string version_;
-  std::string params_json_;
+  ParamsStore params_;
   Callback callback_;
   std::shared_ptr<mqtt::async_client> client_;
   std::atomic<bool> connecting_{false};
@@ -425,11 +492,16 @@ class BridgeNode : public rclcpp::Node {
 
   std::map<std::string, std::function<json(const json&)>> local_methods_;
   EventHistory event_history_;
+  PositionHistory position_history_;
+  std::mutex pose_mutex_;
+  std::vector<PoseSample> pose_buffer_;
   LogBuffer log_buffer_{1000};
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr teleop_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr action_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcRequest>::SharedPtr rpc_request_pub_;
+  rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr params_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotState>::SharedPtr robot_state_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::SensorInfo>::SharedPtr sensor_info_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_sub_;
@@ -440,6 +512,8 @@ class BridgeNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr map_sub_;
   rclcpp::Subscription<rcl_interfaces::msg::Log>::SharedPtr rosout_sub_;
+  rclcpp::TimerBase::SharedPtr position_timer_;
+  rclcpp::TimerBase::SharedPtr position_flush_timer_;
   rclcpp::TimerBase::SharedPtr reconnect_timer_;
 };
 

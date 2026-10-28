@@ -1,5 +1,6 @@
 #include <chrono>
 #include <geometry_msgs/msg/twist.hpp>
+#include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
 #include <mowbite_msgs/msg/mcu_status.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
@@ -38,6 +39,7 @@ class LogicNode : public rclcpp::Node {
  public:
   explicit LogicNode(const rclcpp::NodeOptions& options) : rclcpp::Node("mowbite_logic", options), core_(LoadConfig()) {
     mcu_timeout_s_ = declare_parameter("mcu_status_timeout", 2.0);
+    pose_timeout_s_ = declare_parameter("pose_timeout", 2.0);
 
     robot_state_pub_ = create_publisher<mowbite_msgs::msg::RobotState>("bridge/robot_state", 10);
     actions_pub_ = create_publisher<mowbite_msgs::msg::ActionList>("bridge/actions", LatchedQos(50));
@@ -49,6 +51,8 @@ class LogicNode : public rclcpp::Node {
 
     mcu_sub_ = create_subscription<mowbite_msgs::msg::McuStatus>(
         "mcu/status", 10, [this](mowbite_msgs::msg::McuStatus::ConstSharedPtr msg) { OnMcuStatus(*msg); });
+    pose_sub_ = create_subscription<mowbite_msgs::msg::AbsolutePose>(
+        "localization/pose", 10, [this](mowbite_msgs::msg::AbsolutePose::ConstSharedPtr msg) { OnPose(*msg); });
     action_sub_ = create_subscription<std_msgs::msg::String>(
         "bridge/action", 10, [this](std_msgs::msg::String::ConstSharedPtr msg) { OnAction(msg->data); });
     teleop_sub_ = create_subscription<geometry_msgs::msg::Twist>(
@@ -82,6 +86,7 @@ class LogicNode : public rclcpp::Node {
     config.battery_empty_voltage = declare_parameter("battery_empty_voltage", config.battery_empty_voltage);
     config.battery_full_voltage = declare_parameter("battery_full_voltage", config.battery_full_voltage);
     config.dock_charge_voltage = declare_parameter("dock_charge_voltage", config.dock_charge_voltage);
+    config.max_position_accuracy = declare_parameter("max_position_accuracy", config.max_position_accuracy);
     return config;
   }
 
@@ -108,6 +113,19 @@ class LogicNode : public rclcpp::Node {
       last_mcu_ = now();
     }
     Flush();
+  }
+
+  void OnPose(const mowbite_msgs::msg::AbsolutePose& msg) {
+    PoseSnapshot pose;
+    pose.x = msg.pose.pose.position.x;
+    pose.y = msg.pose.pose.position.y;
+    pose.heading = msg.vehicle_heading;
+    pose.position_accuracy = msg.position_accuracy;
+    pose.orientation_accuracy = msg.orientation_accuracy;
+    pose.orientation_valid = msg.orientation_valid;
+    std::lock_guard<std::mutex> lock(mutex_);
+    core_.OnPose(pose);
+    last_pose_ = now();
   }
 
   void OnAction(const std::string& action_id) {
@@ -154,6 +172,7 @@ class LogicNode : public rclcpp::Node {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (!last_mcu_ || (now() - *last_mcu_).seconds() > mcu_timeout_s_) core_.OnMcuTimeout();
+      if (!last_pose_ || (now() - *last_pose_).seconds() > pose_timeout_s_) core_.OnPoseTimeout();
       state = core_.RobotState();
     }
     Flush();
@@ -167,9 +186,13 @@ class LogicNode : public rclcpp::Node {
     msg.emergency = state.emergency;
     msg.is_charging = state.is_charging;
     msg.rain_detected = state.rain_detected;
-    // No localization before stage 2; an accuracy of 0 would read as a perfect RTK fix in the app.
-    msg.pos_accuracy = 999.0f;
-    msg.heading_accuracy = 999.0f;
+    msg.gps_percentage = state.gps_percentage;
+    msg.pose_x = state.pose_x;
+    msg.pose_y = state.pose_y;
+    msg.pose_heading = state.pose_heading;
+    msg.pos_accuracy = state.pos_accuracy;
+    msg.heading_accuracy = state.heading_accuracy;
+    msg.heading_valid = state.heading_valid;
     robot_state_pub_->publish(msg);
   }
 
@@ -198,9 +221,6 @@ class LogicNode : public rclcpp::Node {
       actions_changed = core_.TakeActionsChanged();
     }
     for (auto& event : events) {
-      // Position comes with localization in a later stage.
-      event.details["x"] = 0.0;
-      event.details["y"] = 0.0;
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "events/json";
       msg.payload = mowbite_bridge::EventPayload(event.type, event.details, now().seconds()).dump();
@@ -241,7 +261,9 @@ class LogicNode : public rclcpp::Node {
   std::mutex mutex_;
   LogicCore core_;
   std::optional<rclcpp::Time> last_mcu_;
+  std::optional<rclcpp::Time> last_pose_;
   double mcu_timeout_s_;
+  double pose_timeout_s_;
 
   rclcpp::Publisher<mowbite_msgs::msg::RobotState>::SharedPtr robot_state_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::ActionList>::SharedPtr actions_pub_;
@@ -251,6 +273,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr emergency_client_;
   rclcpp::Subscription<mowbite_msgs::msg::McuStatus>::SharedPtr mcu_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr action_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr teleop_sub_;
   rclcpp::TimerBase::SharedPtr state_timer_;

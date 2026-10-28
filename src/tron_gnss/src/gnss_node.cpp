@@ -2,12 +2,14 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <thread>
 #include <vector>
 
@@ -53,6 +55,17 @@ class GnssNode : public rclcpp::Node {
     }
 
     pose_pub_ = create_publisher<mowbite_msgs::msg::AbsolutePose>("gps/absolute_pose", 10);
+    // The app reads the datum from params/json, the bridge collects it from this latched topic.
+    if (std::isfinite(lat) && std::isfinite(lon) && std::abs(lat) <= 90.0 && std::abs(lon) <= 180.0) {
+      params_pub_ = create_publisher<std_msgs::msg::String>(
+          "bridge/params", rclcpp::QoS(rclcpp::KeepLast(50)).reliable().transient_local());
+      char text[160];
+      std::snprintf(text, sizeof(text), "{\"node\":\"/tron_gnss\",\"params\":{\"datum_lat\":%.15g,\"datum_long\":%.15g}}",
+                    lat, lon);
+      std_msgs::msg::String msg;
+      msg.data = text;
+      params_pub_->publish(msg);
+    }
     io_thread_ = std::thread([this] { IoLoop(); });
   }
 
@@ -156,6 +169,7 @@ class GnssNode : public rclcpp::Node {
   std::optional<tron::GnssTracker> tracker_;
   uint64_t reported_errors_ = 0;
   rclcpp::Publisher<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   std::atomic<bool> running_{true};
   std::thread io_thread_;
 };

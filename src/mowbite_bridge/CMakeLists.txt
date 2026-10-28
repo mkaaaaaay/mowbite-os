@@ -16,7 +16,7 @@ find_package(nlohmann_json REQUIRED)
 find_package(PahoMqttCpp REQUIRED)
 
 # Payloads and RPC handling without ROS and MQTT, testable on any machine.
-add_library(mowbite_bridge_core STATIC src/monitor.cpp)
+add_library(mowbite_bridge_core STATIC src/monitor.cpp src/params_store.cpp)
 target_include_directories(mowbite_bridge_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -40,7 +40,7 @@ install(TARGETS mowbite_bridge_core mowbite_bridge_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(mowbite_bridge_test test/test_monitor.cpp)
+  ament_add_gtest(mowbite_bridge_test test/test_monitor.cpp test/test_position.cpp)
   target_link_libraries(mowbite_bridge_test mowbite_bridge_core)
 endif()
 

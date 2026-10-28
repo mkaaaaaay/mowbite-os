@@ -14,6 +14,7 @@ const std::string kRecordingPrefix = "mower_logic:area_recording";
 constexpr uint8_t kTemperature = 1;
 constexpr uint8_t kVoltage = 4;
 constexpr uint8_t kCurrent = 5;
+constexpr uint8_t kDistance = 7;
 constexpr uint8_t kRpm = 8;
 
 SensorDefinition Range(std::string id, std::string name, std::string unit, uint8_t description, double min,
@@ -54,6 +55,23 @@ void LogicCore::OnMcuTimeout() {
   UpdateEmergency();
 }
 
+void LogicCore::OnPose(const PoseSnapshot& pose) {
+  pose_ = pose;
+  last_x_ = pose.x;
+  last_y_ = pose.y;
+}
+
+void LogicCore::OnPoseTimeout() {
+  pose_.reset();
+}
+
+// Every event carries the position where it happened.
+void LogicCore::AddEvent(const std::string& type, json details) {
+  details["x"] = last_x_;
+  details["y"] = last_y_;
+  events_.push_back({type, std::move(details)});
+}
+
 bool LogicCore::Emergency() const {
   return emergency_;
 }
@@ -79,7 +97,7 @@ void LogicCore::UpdateEmergency() {
   }
   if (emergency != emergency_) {
     emergency_ = emergency;
-    events_.push_back({"EMERGENCY", {{"emergency", emergency}, {"reason", EmergencyReason()}}});
+    AddEvent("EMERGENCY", {{"emergency", emergency}, {"reason", EmergencyReason()}});
     actions_changed_ = true;
   }
 }
@@ -109,7 +127,7 @@ std::optional<std::pair<double, double>> LogicCore::OnTeleop(double vx, double v
 void LogicCore::SetState(State state) {
   if (state == state_) return;
   state_ = state;
-  events_.push_back({"STATE", {{"state", StateName(state)}}});
+  AddEvent("STATE", {{"state", StateName(state)}});
   actions_changed_ = true;
 }
 
@@ -129,6 +147,18 @@ RobotStateData LogicCore::RobotState() const {
   s.rain_detected = mcu_.telemetry_ok && mcu_.rain;
   if (mcu_.battery_ok) {
     s.battery_percentage = std::clamp(mcu_.battery_percentage / 100.0f, 0.0f, 1.0f);
+  }
+  if (pose_) {
+    s.pose_x = pose_->x;
+    s.pose_y = pose_->y;
+    s.pose_heading = pose_->heading;
+    s.pos_accuracy = pose_->position_accuracy;
+    s.heading_accuracy = pose_->orientation_accuracy;
+    s.heading_valid = pose_->orientation_valid;
+    if (pose_->position_accuracy <= config_.max_position_accuracy && pose_->orientation_valid) {
+      s.gps_percentage = static_cast<float>(
+          1.0 - std::min(1.0, pose_->position_accuracy / config_.max_position_accuracy));
+    }
   }
   return s;
 }
@@ -178,6 +208,12 @@ std::vector<SensorDefinition> LogicCore::Sensors() const {
   sensors.push_back(Range("om_mow_motor_current", "Mow Motor Current", "A", kCurrent, 0, 5));
   // One temperature per motor board, so no separate mow ESC temperature. Own limits: the drive motors hold position
   // up to 68 degC, warn above 80.
+  SensorDefinition gps_accuracy;
+  gps_accuracy.id = "om_gps_accuracy";
+  gps_accuracy.name = "GPS Accuracy";
+  gps_accuracy.unit = "m";
+  gps_accuracy.value_description = kDistance;
+  sensors.push_back(gps_accuracy);
   sensors.push_back(Temperature("om_mow_motor_temp", "Mow Motor Temp", 0, 100, 80));
   sensors.push_back(Temperature("om_left_esc_temp", "Left ESC Temp", 0, 100, 80));
   sensors.push_back(Temperature("om_right_esc_temp", "Right ESC Temp", 0, 100, 80));
@@ -203,6 +239,7 @@ std::vector<SensorReading> LogicCore::Readings() const {
     readings.push_back({"om_charge_state", 0, state});
     readings.push_back({"battery_temp", static_cast<double>(mcu_.battery_temperature), ""});
   }
+  if (pose_) readings.push_back({"om_gps_accuracy", pose_->position_accuracy, ""});
   if (mcu_.cutter.ok) {
     readings.push_back({"om_mow_motor_rpm", static_cast<double>(mcu_.cutter.rpm), ""});
     readings.push_back({"om_mow_motor_current", mcu_.cutter.current, ""});

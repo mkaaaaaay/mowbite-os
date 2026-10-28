@@ -38,12 +38,25 @@ struct McuSnapshot {
   Motor right;
 };
 
+// What the logic needs from localization/pose.
+struct PoseSnapshot {
+  double x = 0;
+  double y = 0;
+  double heading = 0;
+  float position_accuracy = 999;
+  float orientation_accuracy = 999;
+  bool orientation_valid = false;
+};
+
 struct LogicConfig {
   // 6S Li-ion; empty is an assumption until the discharge curve of the Tron is measured.
   double battery_empty_voltage = 19.2;
   double battery_full_voltage = 25.2;
   // The MCU reports no charge voltage, dock contact stands in for it.
   double dock_charge_voltage = 28.0;
+  // GPS counts as good up to this accuracy (m), like max_position_accuracy of OpenMower; it matches
+  // max_gps_accuracy of the localization.
+  double max_position_accuracy = 0.1;
 };
 
 struct Action {
@@ -64,6 +77,16 @@ struct RobotStateData {
   bool emergency = false;
   bool is_charging = false;
   bool rain_detected = false;
+  // 1 at perfect accuracy, 0 at max_position_accuracy or worse, without a recent pose or without a heading.
+  // OpenMower sends -1 for a bad position with a valid heading; a negative percentage is not shown here.
+  float gps_percentage = 0;
+  double pose_x = 0;
+  double pose_y = 0;
+  double pose_heading = 0;
+  // 999 without a recent pose: an accuracy of 0 would read as a perfect RTK fix in the app.
+  float pos_accuracy = 999;
+  float heading_accuracy = 999;
+  bool heading_valid = false;
 };
 
 constexpr uint8_t kSensorTypeString = 1;
@@ -112,6 +135,9 @@ class LogicCore {
   void OnMcuStatus(const McuSnapshot& mcu);
   // mcu/status stopped coming.
   void OnMcuTimeout();
+  void OnPose(const PoseSnapshot& pose);
+  // localization/pose stopped coming; events keep the last position.
+  void OnPoseTimeout();
   ActionResult OnAction(const std::string& action_id);
   // Remote control reaches the wheels only while recording an area, like in OpenMower.
   std::optional<std::pair<double, double>> OnTeleop(double vx, double vz) const;
@@ -131,6 +157,7 @@ class LogicCore {
   enum class State { kIdle, kAreaRecording };
 
   void SetState(State state);
+  void AddEvent(const std::string& type, json details);
   void UpdateEmergency();
   int EmergencyReason() const;
   static const char* StateName(State state);
@@ -139,6 +166,9 @@ class LogicCore {
   McuSnapshot mcu_;
   State state_ = State::kIdle;
   bool emergency_ = false;
+  std::optional<PoseSnapshot> pose_;
+  double last_x_ = 0;
+  double last_y_ = 0;
   bool mcu_seen_ = false;
   bool actions_changed_ = true;
   std::vector<Event> events_;

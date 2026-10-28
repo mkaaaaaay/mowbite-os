@@ -43,6 +43,10 @@ mowbite_logic:
     battery_empty_voltage: 19.2
     battery_full_voltage: 25.2
     dock_charge_voltage: 28.0
+    # GPS counts as good up to this accuracy in m; keep it equal to max_gps_accuracy of the localization.
+    max_position_accuracy: 0.1
+    # localization/pose older than this (s) counts as lost: accuracy 999, GPS 0.
+    pose_timeout: 2.0
 
 mowbite_bridge:
   ros__parameters:
@@ -52,3 +56,6 @@ mowbite_bridge:
     # Event history on the mower: at most this many days and MB, oldest days go first.
     event_history_days: 60
     event_history_max_mb: 20.0
+    # Mowing track on the mower: at most this many days and MB, oldest files go first (the active job's file stays).
+    position_history_days: 60
+    position_history_max_mb: 50.0

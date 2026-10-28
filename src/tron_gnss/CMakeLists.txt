@@ -8,6 +8,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(tron_mcu REQUIRED)
 
@@ -20,7 +21,7 @@ set_target_properties(tron_gnss_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(tron_gnss_component SHARED src/gnss_node.cpp)
 target_link_libraries(tron_gnss_component tron_gnss_core tron_mcu::tron_mcu_core)
-ament_target_dependencies(tron_gnss_component rclcpp rclcpp_components mowbite_msgs)
+ament_target_dependencies(tron_gnss_component rclcpp rclcpp_components std_msgs mowbite_msgs)
 rclcpp_components_register_node(tron_gnss_component
   PLUGIN "tron_gnss::GnssNode"
   EXECUTABLE tron_gnss_node)
