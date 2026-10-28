@@ -159,8 +159,7 @@ class FollowerNode : public rclcpp::Node {
     in.position_accuracy = position_accuracy_;
     in.heading_valid = heading_valid_;
     // Off the path counts only while on it; before the start the tracker checks the distance itself.
-    const Phase phase = tracker_->phase();
-    in.cross_track = phase == Phase::kFollowing ? tracker_->CrossTrack(pose_) : 0.0;
+    in.cross_track = tracker_->OnPath() ? tracker_->CrossTrack(pose_) : 0.0;
     const GuardResult guard = CheckGuard(guard_config_, in, fence_);
     if (guard.reason != StopReason::kNone) {
       Finish(static_cast<uint8_t>(guard.reason), guard.message, tracker_->index());

@@ -69,7 +69,7 @@ double Drive(PathTracker& tracker, Robot& robot, double max_s = 300) {
   double t = 0;
   while (t < max_s && tracker.phase() != Phase::kDone && tracker.phase() != Phase::kFailed) {
     const auto cmd = tracker.Step(robot.pose, kDt);
-    if (tracker.phase() == Phase::kFollowing) {
+    if (tracker.OnPath()) {
       robot.max_cross = std::max(robot.max_cross, std::abs(tracker.CrossTrack(robot.pose)));
     }
     robot.Move(cmd, kDt);
@@ -159,7 +159,7 @@ TEST(PathTracker, UTurnBetweenLanesSlowerOnTheTurn) {
   double t = 0;
   while (t < 300 && tracker.phase() != Phase::kDone && tracker.phase() != Phase::kFailed) {
     const auto cmd = tracker.Step(robot.pose, kDt);
-    if (tracker.phase() == Phase::kFollowing) {
+    if (tracker.OnPath()) {
       robot.max_cross = std::max(robot.max_cross, std::abs(tracker.CrossTrack(robot.pose)));
       if (robot.pose.x > 3.1) turn_speed = std::max(turn_speed, cmd.linear);
     }
@@ -188,6 +188,50 @@ TEST(PathTracker, TurnsOnTheSpotBeforeTheStart) {
   EXPECT_EQ(tracker.phase(), Phase::kDone) << tracker.failure();
   EXPECT_NEAR(robot.pose.y, 2.0, 0.1);
   EXPECT_NEAR(robot.pose.x, 0.0, 0.05);
+}
+
+// The way into the lanes of a small lawn (sim, 28.10.): a transit heading 114 deg, then a lane heading 0 deg from the
+// pose where it ends. Before, the mower cut this corner on a wide arc and stopped 0.5 m off the lane.
+TEST(PathTracker, StopsOnACornerAndTurnsOnTheSpot) {
+  const double in = 113.9 * M_PI / 180.0;
+  std::vector<Pose2> path = Line(0.047, 0.329, in, 0.4);
+  const Pose2 corner{path.back().x, path.back().y, 0.0};
+  path.back().yaw = in;
+  Append(path, Line(corner.x, corner.y, 0.0, 2.0), true);
+  PathTracker tracker{TrackerConfig()};
+  ASSERT_EQ(tracker.Start(path, {}, 0), "");
+  Robot robot;
+  robot.pose = path.front();
+  bool turned_on_corner = false;
+  double t = 0;
+  while (t < 120 && tracker.phase() != Phase::kDone && tracker.phase() != Phase::kFailed) {
+    const auto cmd = tracker.Step(robot.pose, kDt);
+    if (tracker.OnPath()) robot.max_cross = std::max(robot.max_cross, std::abs(tracker.CrossTrack(robot.pose)));
+    if (tracker.phase() == Phase::kCornerRotate) {
+      turned_on_corner = true;
+      EXPECT_EQ(cmd.linear, 0.0);
+    }
+    robot.Move(cmd, kDt);
+    t += kDt;
+  }
+  EXPECT_EQ(tracker.phase(), Phase::kDone) << tracker.failure();
+  EXPECT_TRUE(turned_on_corner);
+  EXPECT_LT(robot.max_cross, 0.1);
+  EXPECT_NEAR(robot.pose.y, corner.y, 0.05);
+}
+
+TEST(PathTracker, NeverDrivesForwardsFacingFarOff) {
+  // The control point behind on the left: turning first, not an arc forwards.
+  PathTracker tracker{TrackerConfig()};
+  const auto line = Line(0, 0, 0, 3.0);
+  ASSERT_EQ(tracker.Start(line, {}, 0), "");
+  Robot robot;
+  robot.pose = {0.0, 0.0, 0.0};
+  Drive(tracker, robot, 1.0);
+  robot.pose.yaw = 80.0 * M_PI / 180.0;
+  const auto cmd = tracker.Step(robot.pose, kDt);
+  EXPECT_EQ(cmd.linear, 0.0);
+  EXPECT_LT(cmd.angular, 0.0);
 }
 
 TEST(PathTracker, GoesOnFromTheStartIndex) {

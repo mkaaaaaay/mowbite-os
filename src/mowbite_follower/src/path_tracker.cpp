@@ -17,6 +17,8 @@ const char* PhaseName(Phase phase) {
     case Phase::kIdle: return "idle";
     case Phase::kPreRotate: return "turning to the path";
     case Phase::kFollowing: return "following";
+    case Phase::kCornerApproach: return "approaching a corner";
+    case Phase::kCornerRotate: return "turning on a corner";
     case Phase::kGoalApproach: return "approaching the goal";
     case Phase::kPostRotate: return "turning at the goal";
     case Phase::kDone: return "done";
@@ -73,6 +75,7 @@ std::string PathTracker::Start(const std::vector<Pose2>& poses, const std::vecto
   control_ = poses_[index_];
   i_lon_ = i_lat_ = i_angle_ = 0;
   first_step_ = true;
+  corner_done_ = SIZE_MAX;
   SetPhase(Phase::kPreRotate);
   return "";
 }
@@ -91,6 +94,10 @@ void PathTracker::SetPhase(Phase phase) {
 void PathTracker::Fail(const std::string& why) {
   failure_ = why;
   SetPhase(Phase::kFailed);
+}
+
+bool PathTracker::CornerAt(size_t i) const {
+  return i + 1 < poses_.size() && std::abs(NormalizeAngle(poses_[i + 1].yaw - poses_[i].yaw)) > config_.corner_angle;
 }
 
 double PathTracker::StraightAhead() const {
@@ -116,6 +123,12 @@ void PathTracker::AdvanceControlPoint(double dt) {
   double distance = dt * speed_;
   double angle = dt * config_.turn_rate;
   while (distance > 0 && angle > 0 && index_ + 1 < poses_.size()) {
+    // A corner: the control point waits on it until the mower got there and turned.
+    if (progress_ == 0 && corner_done_ != index_ && CornerAt(index_)) {
+      control_ = poses_[index_];
+      SetPhase(Phase::kCornerApproach);
+      return;
+    }
     const Pose2& a = poses_[index_];
     const Pose2& b = poses_[index_ + 1];
     const double d = std::hypot(b.x - a.x, b.y - a.y);
@@ -178,7 +191,22 @@ PathTracker::Command PathTracker::Step(const Pose2& pose, double dt) {
       break;
     case Phase::kFollowing:
       AdvanceControlPoint(dt);
-      if (index_ + 1 >= poses_.size()) SetPhase(Phase::kGoalApproach);
+      if (phase_ == Phase::kFollowing && index_ + 1 >= poses_.size()) SetPhase(Phase::kGoalApproach);
+      break;
+    case Phase::kCornerApproach:
+      if (phase_time_ > config_.phase_timeout) {
+        Fail("reaching a corner of the path took too long");
+        return cmd;
+      }
+      control_ = poses_[index_];
+      break;
+    case Phase::kCornerRotate:
+      if (phase_time_ > config_.phase_timeout) {
+        Fail("turning on a corner of the path took too long");
+        return cmd;
+      }
+      control_ = poses_[index_];
+      control_.yaw = poses_[index_ + 1].yaw;
       break;
     case Phase::kGoalApproach:
       if (phase_time_ > config_.phase_timeout) {
@@ -215,6 +243,13 @@ PathTracker::Command PathTracker::Step(const Pose2& pose, double dt) {
     SetPhase(Phase::kFollowing);
   } else if (phase_ == Phase::kGoalApproach && distance < config_.max_goal_distance_error) {
     SetPhase(Phase::kPostRotate);
+  } else if (phase_ == Phase::kCornerApproach && distance < config_.max_goal_distance_error) {
+    SetPhase(Phase::kCornerRotate);
+    return Command();
+  } else if (phase_ == Phase::kCornerRotate && std::abs(angle_error_) < config_.max_goal_angle_error) {
+    corner_done_ = index_;
+    SetPhase(Phase::kFollowing);
+    return Command();
   }
   if (phase_ == Phase::kPostRotate && std::abs(angle_error_) < config_.max_goal_angle_error) {
     SetPhase(Phase::kDone);
@@ -238,10 +273,10 @@ PathTracker::Command PathTracker::Step(const Pose2& pose, double dt) {
   last_angle_error_ = angle_error_;
 
   const double angular = angle_error_ * config_.kp_ang + i_angle_ * config_.ki_ang + d_angle * config_.kd_ang;
-  if (phase_ == Phase::kFollowing || phase_ == Phase::kGoalApproach) {
+  if (phase_ == Phase::kFollowing || phase_ == Phase::kGoalApproach || phase_ == Phase::kCornerApproach) {
     const double linear = lon_error_ * config_.kp_lon + i_lon_ * config_.ki_lon + d_lon * config_.kd_lon;
-    // Forwards only: a control point behind the mower means waiting for it.
-    cmd.linear = std::clamp(linear, 0.0, config_.max_linear);
+    // Forwards only: a control point behind the mower means waiting for it, one facing far off turning first.
+    cmd.linear = std::abs(angle_error_) > config_.max_drive_angle_error ? 0.0 : std::clamp(linear, 0.0, config_.max_linear);
     double gain = 1.0;
     if (config_.lateral_priority_distance > 0) {
       gain = std::max(config_.lateral_priority_min_gain,
@@ -250,7 +285,7 @@ PathTracker::Command PathTracker::Step(const Pose2& pose, double dt) {
     cmd.angular = Clamp(gain * angular + lat_error_ * config_.kp_lat + i_lat_ * config_.ki_lat + d_lat * config_.kd_lat,
                         config_.max_angular);
   } else {
-    // Turning on the spot before the start and at the goal.
+    // Turning on the spot before the start, on a corner and at the goal.
     cmd.angular = Clamp(angular, config_.max_angular);
   }
   return cmd;

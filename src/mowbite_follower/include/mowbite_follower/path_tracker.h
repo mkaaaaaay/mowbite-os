@@ -57,13 +57,28 @@ struct TrackerConfig {
   double max_goal_angle_error = 20.0 * M_PI / 180.0;
   // The goal counts as reached this close (m).
   double max_goal_distance_error = 0.1;
-  // s for turning before the start, approaching the goal and turning there.
+  // A heading change of more than this (rad) from one pose to the next is a corner: the mower stops on it and turns on
+  // the spot, like before the start.
+  double corner_angle = 45.0 * M_PI / 180.0;
+  // Forwards only while the heading is within this (rad) of the control point's; beyond it the mower turns first.
+  double max_drive_angle_error = 45.0 * M_PI / 180.0;
+  // s for turning before the start, approaching the goal or a corner and turning there.
   double phase_timeout = 20.0;
   // m between base_link and the control point; further means the mower stays behind (stuck).
   double max_follow_distance = 1.0;
 };
 
-enum class Phase { kIdle, kPreRotate, kFollowing, kGoalApproach, kPostRotate, kDone, kFailed };
+enum class Phase {
+  kIdle,
+  kPreRotate,
+  kFollowing,
+  kCornerApproach,
+  kCornerRotate,
+  kGoalApproach,
+  kPostRotate,
+  kDone,
+  kFailed
+};
 
 const char* PhaseName(Phase phase);
 
@@ -92,6 +107,10 @@ class PathTracker {
   const std::string& failure() const {
     return failure_;
   }
+  // On the path: following it or turning on one of its corners.
+  bool OnPath() const {
+    return phase_ == Phase::kFollowing || phase_ == Phase::kCornerApproach || phase_ == Phase::kCornerRotate;
+  }
   // The pose the control point has passed.
   size_t index() const {
     return index_;
@@ -104,6 +123,8 @@ class PathTracker {
 
  private:
   void AdvanceControlPoint(double dt);
+  // Whether the stretch from poses_[i] to the next turns by more than corner_angle.
+  bool CornerAt(size_t i) const;
   // m the poses from the control point on stay straight, up to fast_distance.
   double StraightAhead() const;
   void SetPhase(Phase phase);
@@ -130,6 +151,8 @@ class PathTracker {
   double i_lat_ = 0;
   double i_angle_ = 0;
   bool first_step_ = true;
+  // The corner at this pose is turned already; SIZE_MAX: none.
+  size_t corner_done_ = SIZE_MAX;
 };
 
 }  // namespace mowbite_follower
