@@ -3,6 +3,8 @@
 string type
 string name
 geometry_msgs/Point[] outline
+# Recorded inside the area, stored as areas of type obstacle in the same write: all of them or none.
+mowbite_msgs/Outline[] obstacles
 ---
 bool success
 # The id of the new area

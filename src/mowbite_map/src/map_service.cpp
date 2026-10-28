@@ -143,20 +143,31 @@ RpcOutcome MapService::Replace(const json& params) {
   return outcome;
 }
 
-EditResult MapService::AddArea(const std::string& type, const std::string& name, const std::vector<Point>& outline) {
+EditResult MapService::AddArea(const std::string& type, const std::string& name, const std::vector<Point>& outline,
+                               const std::vector<std::vector<Point>>& obstacles) {
+  MapData candidate = map_;
   Area area;
-  area.id = NewId();
+  area.id = NewId(candidate);
   area.name = name;
   area.type = type;
   area.outline = outline;
-  MapData candidate = map_;
+  const std::string id = area.id;
   candidate.areas.push_back(std::move(area));
-  return Apply(candidate, candidate.areas.back().id, "area '" + name + "' (" + type + ")");
+  for (const auto& ring : obstacles) {
+    Area obstacle;
+    obstacle.id = NewId(candidate);
+    obstacle.type = "obstacle";
+    obstacle.outline = ring;
+    candidate.areas.push_back(std::move(obstacle));
+  }
+  std::string what = "area '" + name + "' (" + type + ")";
+  if (!obstacles.empty()) what += " with " + std::to_string(obstacles.size()) + " obstacles";
+  return Apply(candidate, id, what);
 }
 
 EditResult MapService::SetDock(const Point& position, double heading) {
   DockingStation dock;
-  dock.id = NewId();
+  dock.id = NewId(map_);
   dock.name = "Docking Station";
   dock.position = position;
   dock.heading = heading;
@@ -175,13 +186,13 @@ EditResult MapService::Apply(const MapData& candidate, const std::string& id, co
   return {true, id, ""};
 }
 
-std::string MapService::NewId() const {
+std::string MapService::NewId(const MapData& taken) const {
   // Not in use yet; a made-up source that repeats gives up after a few tries.
   for (int attempt = 0; attempt < 16; ++attempt) {
     std::string id = new_id_();
     bool used = false;
-    for (const auto& area : map_.areas) used = used || area.id == id;
-    for (const auto& dock : map_.docking_stations) used = used || dock.id == id;
+    for (const auto& area : taken.areas) used = used || area.id == id;
+    for (const auto& dock : taken.docking_stations) used = used || dock.id == id;
     if (!used) return id;
   }
   return new_id_();

@@ -73,7 +73,12 @@ class MapNode : public rclcpp::Node {
                                std::shared_ptr<mowbite_msgs::srv::AddArea::Response> response) {
           std::vector<Point> outline;
           for (const auto& p : request->outline) outline.push_back({p.x, p.y});
-          const EditResult result = service_.AddArea(request->type, request->name, outline);
+          std::vector<std::vector<Point>> obstacles;
+          for (const auto& ring : request->obstacles) {
+            obstacles.emplace_back();
+            for (const auto& p : ring.points) obstacles.back().push_back({p.x, p.y});
+          }
+          const EditResult result = service_.AddArea(request->type, request->name, outline, obstacles);
           response->success = result.ok;
           response->id = result.id;
           response->message = result.message;

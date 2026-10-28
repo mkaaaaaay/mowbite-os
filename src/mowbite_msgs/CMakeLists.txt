@@ -25,6 +25,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RpcError.msg"
   "msg/MqttPublish.msg"
   "msg/PositionJump.msg"
+  "msg/Outline.msg"
   "srv/AddArea.srv"
   "srv/SetBlade.srv"
   "srv/SetDock.srv"

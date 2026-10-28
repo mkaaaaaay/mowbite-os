@@ -94,8 +94,10 @@ class MapService {
   // The answer to a method of this service, nothing for any other method.
   std::optional<RpcOutcome> Call(const std::string& method, const json& params);
 
-  // For the logic: adds an area of a recording (outline open or closed) with a new id.
-  EditResult AddArea(const std::string& type, const std::string& name, const std::vector<Point>& outline);
+  // For the logic: adds an area of a recording (outline open or closed) with a new id, and the obstacles recorded
+  // inside it as areas of type obstacle in the same write.
+  EditResult AddArea(const std::string& type, const std::string& name, const std::vector<Point>& outline,
+                     const std::vector<std::vector<Point>>& obstacles = {});
   // For the logic: the docking station becomes the only one, with a new id, like with OpenMower.
   EditResult SetDock(const Point& position, double heading);
 
@@ -137,7 +139,8 @@ class MapService {
   Status Evaluate() const;
   // Works out the status again; a new mismatch or missing datum goes to the log and the events.
   void Refresh();
-  std::string NewId() const;
+  // An id that is not in taken.
+  std::string NewId(const MapData& taken) const;
 
   MapStore store_;
   double tolerance_m_;

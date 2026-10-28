@@ -328,6 +328,54 @@ TEST(MapServiceEdits, AddsAnAreaForTheLogic) {
   EXPECT_EQ(ReadAll(dir.path() / "map.json"), service.map_text());
 }
 
+TEST(MapServiceEdits, AddsTheObstaclesOfAnAreaInTheSameWrite) {
+  TempDir dir;
+  MapService service = Started(NumberedIds(dir));
+  const std::vector<mowbite_map::Point> tree = {{1, 1}, {2, 1}, {2, 2}};
+  const std::vector<mowbite_map::Point> bed = {{3, 3}, {4, 3}, {4, 4}, {3, 4}, {3, 3}};
+  const auto result = service.AddArea("mow", "Back", Square(5), {tree, bed});
+  ASSERT_TRUE(result.ok) << result.message;
+  EXPECT_EQ(result.id, "id1");
+  ASSERT_EQ(service.map().areas.size(), 3u);
+  EXPECT_EQ(service.map().areas[1].id, "id2");
+  EXPECT_EQ(service.map().areas[1].type, "obstacle");
+  EXPECT_EQ(service.map().areas[1].outline.size(), 4u);
+  EXPECT_EQ(service.map().areas[2].id, "id3");
+  EXPECT_EQ(service.map().areas[2].outline.size(), 5u);
+  MapService again(ConfigFor(dir));
+  EXPECT_EQ(again.map().areas.size(), 3u);
+}
+
+TEST(MapServiceEdits, StoresNoneOfTheAreaWhenAnObstacleIsInvalid) {
+  TempDir dir;
+  MapService service = Started(NumberedIds(dir));
+  service.TakeChanged();
+  const auto result = service.AddArea("mow", "Back", Square(5), {{{1, 1}, {2, 1}}});
+  EXPECT_FALSE(result.ok);
+  EXPECT_NE(result.message.find("with 1 obstacles"), std::string::npos) << result.message;
+  EXPECT_NE(result.message.find("outline needs at least 3 points"), std::string::npos) << result.message;
+  EXPECT_TRUE(service.map().areas.empty());
+  EXPECT_FALSE(service.TakeChanged());
+}
+
+TEST(MapServiceEdits, GivesTheObstaclesIdsOfTheirOwnWhenTheSourceRepeats) {
+  TempDir dir;
+  MapService::Config config = ConfigFor(dir);
+  auto ids = std::make_shared<std::vector<std::string>>(std::vector<std::string>{"a", "a", "b", "b", "c"});
+  config.new_id = [ids] {
+    std::string id = ids->front();
+    if (ids->size() > 1) ids->erase(ids->begin());
+    return id;
+  };
+  MapService service = Started(config);
+  const auto result = service.AddArea("mow", "One", Square(5), {{{1, 1}, {2, 1}, {2, 2}}, {{3, 3}, {4, 3}, {4, 4}}});
+  ASSERT_TRUE(result.ok) << result.message;
+  ASSERT_EQ(service.map().areas.size(), 3u);
+  EXPECT_EQ(service.map().areas[0].id, "a");
+  EXPECT_EQ(service.map().areas[1].id, "b");
+  EXPECT_EQ(service.map().areas[2].id, "c");
+}
+
 TEST(MapServiceEdits, KeepsWhatIsThereWhenAddingAndAfterARestart) {
   TempDir dir;
   json map = AppMap();
