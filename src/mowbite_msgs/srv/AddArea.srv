@@ -1,0 +1,11 @@
+# Adds an area from a recording to the map. The outline may be open or closed, the map closes it.
+# type: mow, nav, obstacle, decor or draft
+string type
+string name
+geometry_msgs/Point[] outline
+---
+bool success
+# The id of the new area
+string id
+# Why the area was refused, empty if it was added
+string message

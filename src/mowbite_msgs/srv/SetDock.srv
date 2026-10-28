@@ -1,0 +1,10 @@
+# Makes this the docking station of the map, the only one. x and y in the map frame in m, heading in rad.
+float64 x
+float64 y
+float64 heading
+---
+bool success
+# The id of the docking station
+string id
+# Why it was refused, empty if it was set
+string message

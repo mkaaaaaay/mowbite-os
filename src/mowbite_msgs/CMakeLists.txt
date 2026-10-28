@@ -12,6 +12,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/AbsolutePose.msg"
   "msg/HardwareCapabilities.msg"
   "msg/HardwareStatus.msg"
+  "msg/MapStatus.msg"
   "msg/MotorState.msg"
   "msg/RobotState.msg"
   "msg/SensorInfo.msg"
@@ -24,7 +25,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RpcError.msg"
   "msg/MqttPublish.msg"
   "msg/PositionJump.msg"
+  "srv/AddArea.srv"
   "srv/SetBlade.srv"
+  "srv/SetDock.srv"
   "srv/SetEmergency.srv"
   "srv/SetPose.srv"
   DEPENDENCIES builtin_interfaces std_msgs geometry_msgs diagnostic_msgs
