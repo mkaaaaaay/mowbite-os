@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "mowbite_map/map_service.h"
+#include "mowbite_map/sha256.h"
 
 using mowbite_map::json;
 using mowbite_map::MapService;
@@ -733,4 +734,137 @@ TEST(MapDatum, MapWithoutDatumFileStaysSafeWhenTheDatumCannotBeWritten) {
   EXPECT_EQ(service.map().areas.size(), 2u);
   EXPECT_EQ(service.status().datum, DatumState::kUnbound);
   EXPECT_FALSE(service.status().mowing_allowed);
+}
+
+TEST(MapReplaceChecked, StoresTheMapWhenTheVersionIsTheOneRead) {
+  TempDir dir;
+  MapService service = Started(ConfigFor(dir));
+  ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
+  service.TakeChanged();
+  const std::string read = mowbite_map::Sha256Hex(service.map_text());
+
+  json planned = AppMap();
+  planned["areas"][0]["properties"]["planner"] = json::parse(R"({"pattern": "stripes"})");
+  const auto answer = service.ReplaceChecked(planned.dump(), read);
+  ASSERT_TRUE(answer.ok) << answer.message;
+  EXPECT_EQ(answer.result, "Successfully stored map (2 areas)");
+  EXPECT_TRUE(service.TakeChanged());
+  EXPECT_EQ(json::parse(service.map_text())["areas"][0]["properties"]["planner"]["pattern"], "stripes");
+  EXPECT_EQ(service.map_text(), ReadAll(dir.path() / "map.json"));
+}
+
+TEST(MapReplaceChecked, WritesNothingWhenTheMapChangedMeanwhile) {
+  TempDir dir;
+  MapService service = Started(ConfigFor(dir));
+  ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
+  const std::string read = mowbite_map::Sha256Hex(service.map_text());
+  // The app saved a map in between.
+  json app = AppMap();
+  app["areas"][0]["properties"]["name"] = "Back";
+  ASSERT_TRUE(service.Call("map.replace", json::array({app}))->ok);
+  service.TakeChanged();
+  const std::string before = service.map_text();
+  const std::string previous = ReadAll(dir.path() / "map.json.bak");
+
+  const auto answer = service.ReplaceChecked(AppMap().dump(), read);
+  EXPECT_FALSE(answer.ok);
+  EXPECT_EQ(answer.code, -32001);
+  EXPECT_EQ(answer.message, "map changed meanwhile");
+  EXPECT_FALSE(service.TakeChanged());
+  EXPECT_EQ(service.map_text(), before);
+  EXPECT_EQ(ReadAll(dir.path() / "map.json"), before);
+  EXPECT_EQ(ReadAll(dir.path() / "map.json.bak"), previous);
+}
+
+TEST(MapReplaceChecked, LetsOnlyTheFirstOfTwoWritersWithTheSameVersionThrough) {
+  TempDir dir;
+  MapService service = Started(ConfigFor(dir));
+  ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
+  const std::string read = mowbite_map::Sha256Hex(service.map_text());
+  json first = AppMap();
+  first["areas"][0]["properties"]["name"] = "First";
+  json second = AppMap();
+  second["areas"][0]["properties"]["name"] = "Second";
+  EXPECT_TRUE(service.ReplaceChecked(first.dump(), read).ok);
+  const auto late = service.ReplaceChecked(second.dump(), read);
+  EXPECT_FALSE(late.ok);
+  EXPECT_EQ(late.code, -32001);
+  EXPECT_EQ(service.map().areas[0].name, "First");
+}
+
+TEST(MapReplaceChecked, SkipsTheCheckWithoutAVersion) {
+  TempDir dir;
+  MapService service = Started(ConfigFor(dir));
+  ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
+  json other = AppMap();
+  other["areas"][0]["properties"]["name"] = "Back";
+  const auto answer = service.ReplaceChecked(other.dump(), "");
+  ASSERT_TRUE(answer.ok) << answer.message;
+  EXPECT_EQ(service.map().areas[0].name, "Back");
+}
+
+TEST(MapReplaceChecked, TakesTheVersionOfAMapReadAfterARestart) {
+  TempDir dir;
+  std::string read;
+  {
+    MapService service = Started(ConfigFor(dir));
+    ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
+    read = mowbite_map::Sha256Hex(service.map_text());
+  }
+  MapService again = Started(ConfigFor(dir));
+  EXPECT_EQ(mowbite_map::Sha256Hex(again.map_text()), read);
+  EXPECT_TRUE(again.ReplaceChecked(AppMap().dump(), read).ok);
+}
+
+TEST(MapReplaceChecked, RefusesAVersionThatIsNotASha256) {
+  TempDir dir;
+  MapService service = Started(ConfigFor(dir));
+  for (const std::string& version : std::vector<std::string>{"abc", std::string(64, 'A'), std::string(65, '0')}) {
+    const auto answer = service.ReplaceChecked(AppMap().dump(), version);
+    EXPECT_FALSE(answer.ok) << version;
+    EXPECT_EQ(answer.code, -32602) << version;
+    EXPECT_EQ(answer.message, "expected_sha256 is not 64 lower-case hex digits");
+  }
+  EXPECT_TRUE(service.map().Empty());
+}
+
+TEST(MapReplaceChecked, MakesTheChecksOfMapReplace) {
+  TempDir dir;
+  MapService service = Started(ConfigFor(dir));
+  auto answer = service.ReplaceChecked("{not json", "");
+  EXPECT_FALSE(answer.ok);
+  EXPECT_EQ(answer.code, -32602);
+  EXPECT_EQ(answer.message, "Invalid map: not valid JSON");
+
+  json bad = AppMap();
+  bad["areas"][1]["outline"] = json::parse(R"([{"x": 0, "y": 0}, {"x": 1, "y": 0}])");
+  answer = service.ReplaceChecked(bad.dump(), mowbite_map::Sha256Hex(service.map_text()));
+  EXPECT_FALSE(answer.ok);
+  EXPECT_EQ(answer.code, -32602);
+  EXPECT_EQ(answer.message, "Invalid map: areas[1] 'tree': outline needs at least 3 points");
+  EXPECT_TRUE(service.map().Empty());
+  EXPECT_FALSE(fs::exists(dir.path() / "map.json"));
+}
+
+TEST(MapReplaceChecked, RefusesAnotherDatumLikeMapReplace) {
+  TempDir dir;
+  StoreAppMap(dir);
+  MapService service(ConfigFor(dir));
+  service.SetDatum(Moved(1000.0));
+  const auto answer = service.ReplaceChecked(AppMap().dump(), mowbite_map::Sha256Hex(service.map_text()));
+  EXPECT_FALSE(answer.ok);
+  EXPECT_EQ(answer.code, -32000);
+  EXPECT_NE(answer.message.find("send an empty map to start over"), std::string::npos) << answer.message;
+}
+
+TEST(MapReplaceChecked, ReportsADiskThatCannotBeWritten) {
+  TempDir dir;
+  WriteAll(dir.path() / "file", "not a directory");
+  MapService::Config config;
+  config.data_dir = (dir.path() / "file" / "sub").string();
+  MapService service = Started(config);
+  const auto answer = service.ReplaceChecked(AppMap().dump(), "");
+  EXPECT_FALSE(answer.ok);
+  EXPECT_EQ(answer.code, -32603);
+  EXPECT_TRUE(service.map().Empty());
 }

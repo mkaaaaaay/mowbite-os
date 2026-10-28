@@ -3,6 +3,7 @@ the app (MQTT), the logic (the services) and tron_gnss (the datum).
 
 Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite_sim/test/test_map.py
 """
+import hashlib
 import json
 import os
 import shutil
@@ -22,7 +23,7 @@ from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix
 from mowbite_msgs.msg import MapStatus, RpcMethods
-from mowbite_msgs.srv import AddArea, SetDock
+from mowbite_msgs.srv import AddArea, ReplaceMap, SetDock
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
@@ -67,6 +68,13 @@ def area_request(kind, name, points):
     return request
 
 
+def replace_request(map_json, expected_sha256=""):
+    request = ReplaceMap.Request()
+    request.map = map_json if isinstance(map_json, str) else json.dumps(map_json)
+    request.expected_sha256 = expected_sha256
+    return request
+
+
 def moved(north_m):
     return (DATUM[0] + north_m / METRES_PER_DEGREE, DATUM[1], DATUM[2])
 
@@ -87,6 +95,7 @@ class Probe:
         self.node.create_subscription(MapStatus, "map/status", lambda m: self._ros("status", m), LATCHED)
         self.add_area = self.node.create_client(AddArea, "map/add_area")
         self.set_dock = self.node.create_client(SetDock, "map/set_dock")
+        self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         try:
             self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "map_probe")
         except AttributeError:
@@ -338,6 +347,41 @@ class TestMap(unittest.TestCase):
         while time.time() < end and len(stored()) != 8:
             time.sleep(0.2)
         self.assertEqual(len(stored()), 8)
+
+    def test_08_the_planner_replaces_the_map_through_map_replace_with_a_version_check(self):
+        read = self.probe.ros["map"].data
+        version = hashlib.sha256(read.encode()).hexdigest()
+        planned = json.loads(read)
+        planned["areas"][0]["properties"]["planner"] = {"pattern": "stripes"}
+        response = self.probe.call(self.probe.replace_map, replace_request(planned, version))
+        self.assertIsNotNone(response, "no answer from map/replace")
+        self.assertTrue(response.success, response.message)
+        self.assertEqual((response.code, response.message), (0, "Successfully stored map (1 areas)"))
+        written = self.probe.wait(lambda: self.probe.ros["map"].data
+                                  if '"planner"' in self.probe.ros["map"].data else None)
+        self.assertIsNotNone(written, "map/json without the planner settings")
+        retained = self.probe.wait(lambda: self.probe.mqtt.get("map/json")
+                                   if b'"planner"' in self.probe.mqtt.get("map/json", b"") else None)
+        self.assertIsNotNone(retained, "retained map/json without the planner settings")
+
+        # A second writer with the version of before is too late and changes nothing.
+        late = json.loads(read)
+        late["areas"][0]["properties"]["name"] = "Late"
+        response = self.probe.call(self.probe.replace_map, replace_request(late, version))
+        self.assertFalse(response.success)
+        self.assertEqual((response.code, response.message), (-32001, "map changed meanwhile"))
+        self.assertEqual(self.probe.ros["map"].data, written)
+
+        # With the version of the map as it is now it goes through.
+        response = self.probe.call(self.probe.replace_map,
+                                   replace_request(late, hashlib.sha256(written.encode()).hexdigest()))
+        self.assertTrue(response.success, response.message)
+        self.assertIsNotNone(self.probe.wait(lambda: '"Late"' in self.probe.ros["map"].data or None))
+
+        response = self.probe.call(self.probe.replace_map, replace_request("{not json"))
+        self.assertEqual((response.code, response.message), (-32602, "Invalid map: not valid JSON"))
+        response = self.probe.call(self.probe.replace_map, replace_request(late, "abc"))
+        self.assertEqual(response.code, -32602)
 
 
 @launch_testing.post_shutdown_test()

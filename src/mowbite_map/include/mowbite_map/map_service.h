@@ -18,6 +18,8 @@ constexpr int kRpcInvalidParams = -32602;
 constexpr int kRpcInternal = -32603;
 // A valid request the mower does not do now
 constexpr int kRpcRefused = -32000;
+// The map is not the one the caller last read (map/replace with expected_sha256)
+constexpr int kRpcMapChanged = -32001;
 
 // The answer of an RPC method: a result, or an error with its code.
 struct RpcOutcome {
@@ -94,6 +96,10 @@ class MapService {
   // The answer to a method of this service, nothing for any other method.
   std::optional<RpcOutcome> Call(const std::string& method, const json& params);
 
+  // map.replace for the planner (service map/replace): the map as JSON text. expected_sha256 is the SHA-256 of the
+  // map_text() the caller read; another map text writes nothing (kRpcMapChanged), empty skips the check.
+  RpcOutcome ReplaceChecked(const std::string& map, const std::string& expected_sha256);
+
   // For the logic: adds an area of a recording (outline open or closed) with a new id, and the obstacles recorded
   // inside it as areas of type obstacle in the same write.
   EditResult AddArea(const std::string& type, const std::string& name, const std::vector<Point>& outline,
@@ -129,6 +135,8 @@ class MapService {
 
  private:
   RpcOutcome Replace(const json& params);
+  // Checks and stores a map of map.replace or map/replace.
+  RpcOutcome ReplaceMap(const json& map);
   RpcOutcome AreaProperties() const;
   // Stores the map and makes it the current one. replaces: the whole map is sent again (map.replace).
   RpcOutcome Commit(MapData candidate, bool replaces);

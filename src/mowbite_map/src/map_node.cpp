@@ -8,6 +8,7 @@
 #include <mowbite_msgs/msg/rpc_request.hpp>
 #include <mowbite_msgs/msg/rpc_response.hpp>
 #include <mowbite_msgs/srv/add_area.hpp>
+#include <mowbite_msgs/srv/replace_map.hpp>
 #include <mowbite_msgs/srv/set_dock.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
@@ -40,7 +41,7 @@ uint8_t ToMsg(DatumState state) {
 }  // namespace
 
 // Keeps the map: map/json for the app and the planner, the RPC methods map.replace and map.area_properties through the
-// bridge, services for the logic and the status that says whether the map fits the datum.
+// bridge, services for the logic and the planner and the status that says whether the map fits the datum.
 class MapNode : public rclcpp::Node {
  public:
   explicit MapNode(const rclcpp::NodeOptions& options) : rclcpp::Node("mowbite_map", options), service_(LoadConfig()) {
@@ -91,6 +92,17 @@ class MapNode : public rclcpp::Node {
           response->success = result.ok;
           response->id = result.id;
           response->message = result.message;
+          Flush();
+        });
+
+    // map.replace for nodes of the stack (the planner), with a version check and an answer of its own.
+    replace_srv_ = create_service<mowbite_msgs::srv::ReplaceMap>(
+        "map/replace", [this](const std::shared_ptr<mowbite_msgs::srv::ReplaceMap::Request> request,
+                              std::shared_ptr<mowbite_msgs::srv::ReplaceMap::Response> response) {
+          const RpcOutcome outcome = service_.ReplaceChecked(request->map, request->expected_sha256);
+          response->success = outcome.ok;
+          response->code = outcome.code;
+          response->message = outcome.ok ? outcome.result.get<std::string>() : outcome.message;
           Flush();
         });
 
@@ -194,6 +206,7 @@ class MapNode : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr datum_sub_;
   rclcpp::Service<mowbite_msgs::srv::AddArea>::SharedPtr add_area_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetDock>::SharedPtr set_dock_srv_;
+  rclcpp::Service<mowbite_msgs::srv::ReplaceMap>::SharedPtr replace_srv_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

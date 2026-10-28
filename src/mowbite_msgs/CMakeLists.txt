@@ -27,6 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PositionJump.msg"
   "msg/Outline.msg"
   "srv/AddArea.srv"
+  "srv/ReplaceMap.srv"
   "srv/SetBlade.srv"
   "srv/SetDock.srv"
   "srv/SetEmergency.srv"

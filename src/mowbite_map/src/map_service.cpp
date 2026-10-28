@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <random>
 
+#include "mowbite_map/sha256.h"
+
 namespace mowbite_map {
 
 namespace {
@@ -133,7 +135,23 @@ RpcOutcome MapService::AreaProperties() const {
 // params is [map], the same shape as map/json, like with OpenMower.
 RpcOutcome MapService::Replace(const json& params) {
   if (!params.is_array() || params.size() != 1) return Failure(kRpcInvalidParams, "Missing map parameter");
-  ParseResult parsed = ParseMap(params[0]);
+  return ReplaceMap(params[0]);
+}
+
+RpcOutcome MapService::ReplaceChecked(const std::string& map, const std::string& expected_sha256) {
+  if (!expected_sha256.empty()) {
+    if (!IsSha256Hex(expected_sha256)) return Failure(kRpcInvalidParams, "expected_sha256 is not 64 lower-case hex digits");
+    const std::string current = Sha256Hex(text_);
+    if (current.empty()) return Failure(kRpcInternal, "Cannot make the SHA-256 of the map");
+    if (current != expected_sha256) return Failure(kRpcMapChanged, "map changed meanwhile");
+  }
+  const json parsed = json::parse(map, nullptr, false);
+  if (parsed.is_discarded()) return Failure(kRpcInvalidParams, "Invalid map: not valid JSON");
+  return ReplaceMap(parsed);
+}
+
+RpcOutcome MapService::ReplaceMap(const json& map) {
+  ParseResult parsed = ParseMap(map);
   if (!parsed.map) return Failure(kRpcInvalidParams, "Invalid map: " + parsed.error);
   const size_t areas = parsed.map->areas.size();
   RpcOutcome outcome = Commit(std::move(*parsed.map), true);
