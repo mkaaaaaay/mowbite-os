@@ -183,6 +183,17 @@ check("lift -> emergency", bool(state))
 ev = wait_for(lambda: [json.loads(p) for _, top, p, _ in msgs if top == "events/json" and json.loads(p)["type"] == "EMERGENCY"])
 check("EMERGENCY event with reason bits", ev and ev[-1]["emergency"] is True and ev[-1]["reason"] & 8,
       json.dumps(ev[-1] if ev else None))
+s = json.loads(latest("robot_state/json"))
+check("robot_state emergency_reason LATCH|LIFT", s.get("emergency_reason") == 9, str(s.get("emergency_reason")))
+
+
+def reason_line():
+    r = rpc("logs.recent", {"level": "WARN"}, "reason")
+    lines = [e["msg"] for e in (r or {}).get("result", [])]
+    return [l for l in lines if l == "Emergency reason changed from: '' to: 'LATCH, LIFT'"] or None
+
+
+check("log line with the reason, as the app reads it", bool(wait_for(reason_line, 3)))
 t0 = sim_time()
 for _ in range(5):
     teleop(0.2, 0.0)
@@ -195,6 +206,7 @@ time.sleep(0.5)
 set_flags()
 state = wait_for(lambda: b'"emergency":0' in (latest("robot_state/json") or b""), 4)
 check("reset_emergency clears", bool(state))
+check("emergency_reason 0 after reset", json.loads(latest("robot_state/json")).get("emergency_reason") == 0)
 t0 = sim_time()
 time.sleep(1.5)
 check("held joystick does not drive after reset", not [s for t, s in sent_speeds(t0) if s != [0.0, 0.0]],

@@ -10,6 +10,21 @@ const std::string kRootPrefix = "mower_logic";
 const std::string kIdlePrefix = "mower_logic:idle";
 const std::string kRecordingPrefix = "mower_logic:area_recording";
 
+// EmergencyReason of OpenMower, one name per bit.
+const char* const kReasonNames[] = {"LATCH",
+                                    "TIMEOUT_INPUTS",
+                                    "STOP",
+                                    "LIFT",
+                                    "LIFT_MULTIPLE",
+                                    "COLLISION",
+                                    "TIMEOUT_HIGH_LEVEL",
+                                    "HIGH_LEVEL",
+                                    "SERVICE_NOT_READY",
+                                    "COLLISION_MULTIPLE",
+                                    "MOWER_RPM_TIMEOUT",
+                                    "MOWER_RPM_LIMIT",
+                                    "FIRMWARE_INCOMPATIBLE"};
+
 // SensorInfo value descriptions
 constexpr uint8_t kTemperature = 1;
 constexpr uint8_t kVoltage = 4;
@@ -38,6 +53,16 @@ SensorDefinition Temperature(std::string id, std::string name, double min, doubl
 }
 
 }  // namespace
+
+std::string EmergencyReasonNames(int reason) {
+  std::string names;
+  for (size_t bit = 0; bit < sizeof(kReasonNames) / sizeof(kReasonNames[0]); bit++) {
+    if ((reason & (1 << bit)) == 0) continue;
+    if (!names.empty()) names += ", ";
+    names += kReasonNames[bit];
+  }
+  return names;
+}
 
 LogicCore::LogicCore(const LogicConfig& config) : config_(config) {
   // Without telemetry the mower counts as stopped until the MCU reports.
@@ -89,6 +114,12 @@ int LogicCore::EmergencyReason() const {
 
 void LogicCore::UpdateEmergency() {
   const bool emergency = mcu_.emergency_latched || !mcu_.telemetry_ok || mcu_.firmware_incompatible;
+  // A bumper that does not latch is no emergency, so its bit is not shown either.
+  reason_ = emergency ? EmergencyReason() : 0;
+  if (reason_ != logged_reason_) {
+    reason_changes_.push_back({logged_reason_, reason_});
+    logged_reason_ = reason_;
+  }
   // The first report after the start only sets the state, it is no change worth an event.
   if (!mcu_seen_) {
     mcu_seen_ = true;
@@ -99,7 +130,7 @@ void LogicCore::UpdateEmergency() {
   if (emergency != emergency_) {
     emergency_ = emergency;
     if (emergency) teleop_armed_ = false;
-    AddEvent("EMERGENCY", {{"emergency", emergency}, {"reason", EmergencyReason()}});
+    AddEvent("EMERGENCY", {{"emergency", emergency}, {"reason", reason_}});
     actions_changed_ = true;
   }
 }
@@ -157,6 +188,7 @@ RobotStateData LogicCore::RobotState() const {
   RobotStateData s;
   s.state = StateName(state_);
   s.emergency = emergency_;
+  s.emergency_reason = reason_;
   s.is_charging = mcu_.battery_ok && mcu_.battery_dock;
   s.rain_detected = mcu_.telemetry_ok && mcu_.rain;
   if (mcu_.battery_ok) {
@@ -274,6 +306,12 @@ bool LogicCore::TakeActionsChanged() {
   bool changed = actions_changed_;
   actions_changed_ = false;
   return changed;
+}
+
+std::vector<ReasonChange> LogicCore::TakeReasonChanges() {
+  std::vector<ReasonChange> out;
+  out.swap(reason_changes_);
+  return out;
 }
 
 bool LogicCore::TakeStopRequest() {

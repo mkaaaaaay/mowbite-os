@@ -10,6 +10,8 @@ float32 current_action_progress
 float32 battery_percentage
 float32 gps_percentage
 bool emergency
+# Not in OpenMower: bits as in EMERGENCY events (EmergencyReason), 0 without emergency.
+uint16 emergency_reason
 bool is_charging
 bool rain_detected
 

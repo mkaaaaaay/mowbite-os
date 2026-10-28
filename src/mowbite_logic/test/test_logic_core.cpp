@@ -84,6 +84,66 @@ TEST(Logic, IncompatibleFirmwareIsEmergencyWithItsOwnBit) {
   EXPECT_EQ(events[0].details["reason"], kEmergencyFirmwareIncompatible);
 }
 
+TEST(Logic, ReasonStaysInTheStateAndEveryChangeIsReported) {
+  LogicCore core{LogicConfig{}};
+  // Before the MCU reports, the mower stands for lack of telemetry.
+  EXPECT_EQ(core.RobotState().emergency_reason, kEmergencyTimeoutInputs);
+  core.OnMcuStatus(Healthy());
+  EXPECT_EQ(core.RobotState().emergency_reason, 0);
+  EXPECT_TRUE(core.TakeReasonChanges().empty());
+
+  auto lifted = Healthy();
+  lifted.lift = true;
+  lifted.emergency_latched = true;
+  core.OnMcuStatus(lifted);
+  core.OnMcuStatus(lifted);
+  auto down = Healthy();
+  down.emergency_latched = true;
+  core.OnMcuStatus(down);
+  EXPECT_EQ(core.RobotState().emergency_reason, kEmergencyLatch);
+  core.OnMcuStatus(Healthy());
+  EXPECT_EQ(core.RobotState().emergency_reason, 0);
+
+  auto changes = core.TakeReasonChanges();
+  ASSERT_EQ(changes.size(), 3u);
+  EXPECT_EQ(changes[0].from, 0);
+  EXPECT_EQ(changes[0].to, kEmergencyLatch | kEmergencyLift);
+  EXPECT_EQ(changes[1].from, kEmergencyLatch | kEmergencyLift);
+  EXPECT_EQ(changes[1].to, kEmergencyLatch);
+  EXPECT_EQ(changes[2].to, 0);
+  // Putting it down changes the reason but not the emergency: one event on, one off.
+  auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0].details["reason"], kEmergencyLatch | kEmergencyLift);
+  EXPECT_EQ(events[1].details["reason"], 0);
+}
+
+TEST(Logic, NoTelemetryFromTheStartIsReportedAsAChange) {
+  LogicCore core{LogicConfig{}};
+  core.OnMcuTimeout();
+  auto changes = core.TakeReasonChanges();
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes[0].from, 0);
+  EXPECT_EQ(changes[0].to, kEmergencyTimeoutInputs);
+}
+
+TEST(Logic, BumperWithoutLatchIsNoReason) {
+  LogicCore core{LogicConfig{}};
+  auto bumper = Healthy();
+  bumper.bumper = true;
+  core.OnMcuStatus(bumper);
+  EXPECT_FALSE(core.RobotState().emergency);
+  EXPECT_EQ(core.RobotState().emergency_reason, 0);
+}
+
+TEST(Logic, ReasonNamesAsOpenMowerLogsThem) {
+  EXPECT_EQ(EmergencyReasonNames(0), "");
+  EXPECT_EQ(EmergencyReasonNames(kEmergencyLatch | kEmergencyLift), "LATCH, LIFT");
+  EXPECT_EQ(EmergencyReasonNames(kEmergencyTimeoutInputs | kEmergencyStop | kEmergencyCollision),
+            "TIMEOUT_INPUTS, STOP, COLLISION");
+  EXPECT_EQ(EmergencyReasonNames(kEmergencyFirmwareIncompatible), "FIRMWARE_INCOMPATIBLE");
+}
+
 TEST(Logic, TelemetryTimeoutIsEmergency) {
   LogicCore core{LogicConfig{}};
   core.OnMcuStatus(Healthy());

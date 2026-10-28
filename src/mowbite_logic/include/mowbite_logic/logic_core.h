@@ -89,6 +89,8 @@ struct RobotStateData {
   float pos_accuracy = 999;
   float heading_accuracy = 999;
   bool heading_valid = false;
+  // Bits as in EMERGENCY events, 0 without emergency.
+  int emergency_reason = 0;
 };
 
 constexpr uint8_t kSensorTypeString = 1;
@@ -122,6 +124,11 @@ struct Event {
 
 enum class ActionResult { kUnknown, kRejected, kDone, kReleaseEmergency };
 
+struct ReasonChange {
+  int from = 0;
+  int to = 0;
+};
+
 // Bits of the reason in an EMERGENCY event, as the app reads them (EmergencyReason of OpenMower).
 constexpr int kEmergencyLatch = 1 << 0;
 constexpr int kEmergencyTimeoutInputs = 1 << 1;
@@ -129,6 +136,9 @@ constexpr int kEmergencyStop = 1 << 2;
 constexpr int kEmergencyLift = 1 << 3;
 constexpr int kEmergencyCollision = 1 << 5;
 constexpr int kEmergencyFirmwareIncompatible = 1 << 12;
+
+// "LATCH, LIFT": the names of the bits as OpenMower logs them, in bit order.
+std::string EmergencyReasonNames(int reason);
 
 // The app repeats teleop every 100 ms while the joystick is held and sends one zero when it is let go.
 constexpr double kTeleopQuietS = 1.0;
@@ -159,6 +169,8 @@ class LogicCore {
   std::vector<Event> TakeEvents();
   // True once after the enabled flags of the actions changed.
   bool TakeActionsChanged();
+  // Every change of the emergency reason since the last call, for the log line the app reads.
+  std::vector<ReasonChange> TakeReasonChanges();
   // True once after the logic left a state that drives: the wheels get a zero command at once instead of waiting for
   // the cmd_vel watchdog of the driver.
   bool TakeStopRequest();
@@ -177,6 +189,11 @@ class LogicCore {
   McuSnapshot mcu_;
   State state_ = State::kIdle;
   bool emergency_ = false;
+  // Without telemetry the mower counts as stopped until the MCU reports.
+  int reason_ = kEmergencyTimeoutInputs;
+  // OpenMower logs the first reason as a change from none.
+  int logged_reason_ = 0;
+  std::vector<ReasonChange> reason_changes_;
   std::optional<PoseSnapshot> pose_;
   double last_x_ = 0;
   double last_y_ = 0;

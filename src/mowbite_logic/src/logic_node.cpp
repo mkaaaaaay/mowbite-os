@@ -198,6 +198,7 @@ class LogicNode : public rclcpp::Node {
     msg.current_path_index = -1;
     msg.battery_percentage = state.battery_percentage;
     msg.emergency = state.emergency;
+    msg.emergency_reason = static_cast<uint16_t>(state.emergency_reason);
     msg.is_charging = state.is_charging;
     msg.rain_detected = state.rain_detected;
     msg.gps_percentage = state.gps_percentage;
@@ -230,13 +231,24 @@ class LogicNode : public rclcpp::Node {
     std::vector<Event> events;
     bool actions_changed;
     bool stop;
+    std::vector<ReasonChange> reasons;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       events = core_.TakeEvents();
       actions_changed = core_.TakeActionsChanged();
       stop = core_.TakeStopRequest();
+      reasons = core_.TakeReasonChanges();
     }
     if (stop) cmd_vel_pub_->publish(geometry_msgs::msg::Twist());
+    // The app shows the reasons of an active emergency from this line, like with mower_comms_v2 of OpenMower.
+    for (const auto& change : reasons) {
+      if (change.to == 0) {
+        RCLCPP_INFO(get_logger(), "Emergency cleared");
+      } else {
+        RCLCPP_WARN(get_logger(), "Emergency reason changed from: '%s' to: '%s'",
+                    EmergencyReasonNames(change.from).c_str(), EmergencyReasonNames(change.to).c_str());
+      }
+    }
     for (auto& event : events) {
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "events/json";

@@ -383,6 +383,7 @@ class BridgeNode : public rclcpp::Node {
     j["current_path"] = msg.current_path;
     j["current_path_index"] = msg.current_path_index;
     j["emergency"] = msg.emergency ? 1 : 0;
+    j["emergency_reason"] = msg.emergency_reason;
     j["is_charging"] = msg.is_charging ? 1 : 0;
     j["rain_detected"] = msg.rain_detected ? 1 : 0;
     j["pose"]["x"] = msg.pose_x;
