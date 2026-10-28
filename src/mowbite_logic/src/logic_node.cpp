@@ -2,18 +2,18 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
-#include <mowbite_msgs/msg/mcu_status.hpp>
+#include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/position_jump.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
 #include <mowbite_msgs/msg/sensor_info.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
+#include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <std_msgs/msg/string.hpp>
-#include <std_srvs/srv/set_bool.hpp>
 
 #include "mowbite_bridge/monitor.h"
 #include "mowbite_logic/logic_core.h"
@@ -31,8 +31,8 @@ double MonotonicSeconds() {
   return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
-McuSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
-  McuSnapshot::Motor motor;
+HardwareSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
+  HardwareSnapshot::Motor motor;
   motor.ok = m.ok;
   motor.rpm = m.rpm;
   motor.current = m.current;
@@ -45,7 +45,7 @@ McuSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
 class LogicNode : public rclcpp::Node {
  public:
   explicit LogicNode(const rclcpp::NodeOptions& options) : rclcpp::Node("mowbite_logic", options), core_(LoadConfig()) {
-    mcu_timeout_s_ = declare_parameter("mcu_status_timeout", 2.0);
+    hw_timeout_s_ = declare_parameter("hw_status_timeout", 2.0);
     pose_timeout_s_ = declare_parameter("pose_timeout", 2.0);
 
     robot_state_pub_ = create_publisher<mowbite_msgs::msg::RobotState>("bridge/robot_state", 10);
@@ -53,7 +53,8 @@ class LogicNode : public rclcpp::Node {
     sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorInfo>("bridge/sensor_info", LatchedQos(100));
     sensor_value_pub_ = create_publisher<mowbite_msgs::msg::SensorValue>("bridge/sensor_value", 100);
     publish_pub_ = create_publisher<mowbite_msgs::msg::MqttPublish>("bridge/publish", 100);
-    cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
+    // The only source of motion so far; the safety filter goes in between once there are more.
+    cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("hw/cmd_vel", 10);
 
     // The app container rates the battery by /ll/board; any value except YardForce makes it show battery_percentage.
     params_pub_ = create_publisher<std_msgs::msg::String>(
@@ -61,10 +62,10 @@ class LogicNode : public rclcpp::Node {
     std_msgs::msg::String board_msg;
     board_msg.data = nlohmann::json{{"node", "/ll"}, {"params", {{"board", declare_parameter("board", "Tron")}}}}.dump();
     params_pub_->publish(board_msg);
-    emergency_client_ = create_client<std_srvs::srv::SetBool>("mcu/emergency");
+    emergency_client_ = create_client<mowbite_msgs::srv::SetEmergency>("hw/emergency");
 
-    mcu_sub_ = create_subscription<mowbite_msgs::msg::McuStatus>(
-        "mcu/status", 10, [this](mowbite_msgs::msg::McuStatus::ConstSharedPtr msg) { OnMcuStatus(*msg); });
+    hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
+        "hw/status", 10, [this](mowbite_msgs::msg::HardwareStatus::ConstSharedPtr msg) { OnHardwareStatus(*msg); });
     pose_sub_ = create_subscription<mowbite_msgs::msg::AbsolutePose>(
         "localization/pose", 10, [this](mowbite_msgs::msg::AbsolutePose::ConstSharedPtr msg) { OnPose(*msg); });
     jump_sub_ = create_subscription<mowbite_msgs::msg::PositionJump>(
@@ -113,28 +114,25 @@ class LogicNode : public rclcpp::Node {
     return config;
   }
 
-  void OnMcuStatus(const mowbite_msgs::msg::McuStatus& msg) {
-    McuSnapshot mcu;
-    mcu.telemetry_ok = msg.telemetry_ok;
-    mcu.emergency_latched = msg.emergency_latched;
-    mcu.firmware_incompatible = msg.firmware_incompatible;
-    mcu.lift = msg.lift;
-    mcu.stop = msg.stop;
-    mcu.bumper = msg.bumper;
-    mcu.rain = msg.rain;
-    mcu.battery_ok = msg.battery_ok;
-    mcu.battery_voltage = msg.battery_voltage;
-    mcu.battery_current = msg.battery_current;
-    mcu.battery_percentage = msg.battery_percentage;
-    mcu.battery_temperature = msg.battery_temperature;
-    mcu.battery_dock = msg.battery_dock;
-    mcu.cutter = ToMotor(msg.cutter);
-    mcu.left = ToMotor(msg.left);
-    mcu.right = ToMotor(msg.right);
+  void OnHardwareStatus(const mowbite_msgs::msg::HardwareStatus& msg) {
+    HardwareSnapshot hw;
+    hw.telemetry_ok = msg.telemetry_ok;
+    hw.emergency = msg.emergency;
+    hw.emergency_reason = static_cast<int>(msg.emergency_reason);
+    hw.rain = msg.rain;
+    hw.dock_contact = msg.dock_contact;
+    hw.battery_ok = msg.battery_source != mowbite_msgs::msg::HardwareStatus::BATTERY_SOURCE_NONE;
+    hw.battery_voltage = msg.battery_voltage;
+    hw.battery_current = msg.battery_current;
+    hw.battery_percentage = msg.battery_percentage;
+    hw.battery_temperature = msg.battery_temperature;
+    hw.blade = ToMotor(msg.blade_motor);
+    hw.left = ToMotor(msg.left_motor);
+    hw.right = ToMotor(msg.right_motor);
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      core_.OnMcuStatus(mcu);
-      last_mcu_ = now();
+      core_.OnHardwareStatus(hw);
+      last_hw_ = now();
     }
     Flush();
   }
@@ -169,11 +167,12 @@ class LogicNode : public rclcpp::Node {
 
   void ReleaseEmergency() {
     if (!emergency_client_->service_is_ready()) {
-      RCLCPP_ERROR(get_logger(), "mcu/emergency is not available, emergency stays");
+      RCLCPP_ERROR(get_logger(), "hw/emergency is not available, emergency stays");
       return;
     }
-    auto request = std::make_shared<std_srvs::srv::SetBool::Request>();
-    request->data = false;
+    auto request = std::make_shared<mowbite_msgs::srv::SetEmergency::Request>();
+    request->latch = false;
+    request->reason = "reset_emergency from the app";
     emergency_client_->async_send_request(request);
     RCLCPP_INFO(get_logger(), "Emergency release requested");
   }
@@ -195,7 +194,7 @@ class LogicNode : public rclcpp::Node {
     RobotStateData state;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (!last_mcu_ || (now() - *last_mcu_).seconds() > mcu_timeout_s_) core_.OnMcuTimeout();
+      if (!last_hw_ || (now() - *last_hw_).seconds() > hw_timeout_s_) core_.OnHardwareTimeout();
       if (!last_pose_ || (now() - *last_pose_).seconds() > pose_timeout_s_) core_.OnPoseTimeout();
       state = core_.RobotState();
     }
@@ -299,9 +298,9 @@ class LogicNode : public rclcpp::Node {
 
   std::mutex mutex_;
   LogicCore core_;
-  std::optional<rclcpp::Time> last_mcu_;
+  std::optional<rclcpp::Time> last_hw_;
   std::optional<rclcpp::Time> last_pose_;
-  double mcu_timeout_s_;
+  double hw_timeout_s_;
   double pose_timeout_s_;
 
   rclcpp::Publisher<mowbite_msgs::msg::RobotState>::SharedPtr robot_state_pub_;
@@ -311,8 +310,8 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
-  rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr emergency_client_;
-  rclcpp::Subscription<mowbite_msgs::msg::McuStatus>::SharedPtr mcu_sub_;
+  rclcpp::Client<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_client_;
+  rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::PositionJump>::SharedPtr jump_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr action_sub_;

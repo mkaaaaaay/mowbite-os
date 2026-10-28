@@ -6,13 +6,16 @@
 #include <ctime>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
-#include <mowbite_msgs/msg/mcu_status.hpp>
+#include <diagnostic_msgs/msg/key_value.hpp>
+#include <mowbite_msgs/msg/hardware_capabilities.hpp>
+#include <mowbite_msgs/msg/hardware_status.hpp>
+#include <mowbite_msgs/srv/set_blade.hpp>
+#include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/imu.hpp>
-#include <std_srvs/srv/set_bool.hpp>
 #include <thread>
 
 #include "tron_mcu/mcu_codec.h"
@@ -23,7 +26,35 @@ namespace tron_mcu {
 
 namespace {
 
+using mowbite_msgs::msg::HardwareStatus;
 using tron::Module;
+
+// The core numbers its reasons like the contract.
+static_assert(tron::kReasonLatch == HardwareStatus::REASON_LATCH);
+static_assert(tron::kReasonTimeoutInputs == HardwareStatus::REASON_TIMEOUT_INPUTS);
+static_assert(tron::kReasonStop == HardwareStatus::REASON_STOP);
+static_assert(tron::kReasonLift == HardwareStatus::REASON_LIFT);
+static_assert(tron::kReasonCollision == HardwareStatus::REASON_COLLISION);
+static_assert(tron::kReasonHighLevel == HardwareStatus::REASON_HIGH_LEVEL);
+static_assert(tron::kReasonFirmwareIncompatible == HardwareStatus::REASON_FIRMWARE_INCOMPATIBLE);
+static_assert(static_cast<uint8_t>(tron::BladeOffReason::kLeaseExpired) == HardwareStatus::BLADE_OFF_LEASE_EXPIRED);
+static_assert(static_cast<uint8_t>(tron::BladeOffReason::kReconnect) == HardwareStatus::BLADE_OFF_RECONNECT);
+
+const char* BladeOffText(tron::BladeOffReason reason) {
+  switch (reason) {
+    case tron::BladeOffReason::kNone: return "none";
+    case tron::BladeOffReason::kRequest: return "request";
+    case tron::BladeOffReason::kLeaseExpired: return "lease expired";
+    case tron::BladeOffReason::kBlocked: return "blocked";
+    case tron::BladeOffReason::kDock: return "dock contact";
+    case tron::BladeOffReason::kReconnect: return "port reopened";
+  }
+  return "unknown";
+}
+
+rclcpp::QoS LatchedQos() {
+  return rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
+}
 
 constexpr double kRadToDeg = 180.0 / M_PI;
 constexpr double kStandardGravity = 9.80665;
@@ -54,6 +85,7 @@ tron::WallClock LocalWallClock() {
 
 }  // namespace
 
+// Driver of the Tron behind the hardware contract hw/* of MowBite OS.
 class McuNode : public rclcpp::Node {
  public:
   explicit McuNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_mcu", options), control_(LoadConfig()) {
@@ -64,22 +96,29 @@ class McuNode : public rclcpp::Node {
     drive_current_scale_ = declare_parameter("drive_current_scale", 0.001);
     imu_roll_offset_deg_ = declare_parameter("imu_roll_offset_deg", 0.0);
     imu_pitch_offset_deg_ = declare_parameter("imu_pitch_offset_deg", 0.0);
+    failsafe_without_host_s_ = declare_parameter("failsafe_without_host", -1.0);
+    safety_measurement_date_ = declare_parameter("safety_measurement_date", "");
+    if (safety_measurement_date_.empty()) {
+      RCLCPP_WARN(get_logger(), "No safety measurement of this Tron yet: remote control only");
+    }
 
-    twist_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("wheel_twist", 10);
-    status_pub_ = create_publisher<mowbite_msgs::msg::McuStatus>("mcu/status", 10);
+    twist_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("hw/wheel_odom", 10);
+    status_pub_ = create_publisher<HardwareStatus>("hw/status", 10);
+    capabilities_pub_ = create_publisher<mowbite_msgs::msg::HardwareCapabilities>("hw/capabilities", LatchedQos());
+    PublishCapabilities();
 
     cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-        "cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) { OnCmdVel(*msg); });
+        "hw/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) { OnCmdVel(*msg); });
     if (declare_parameter("send_imu", true)) {
       imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
           "imu/data", rclcpp::SensorDataQoS(), [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) { OnImu(*msg); });
     }
-    emergency_srv_ = create_service<std_srvs::srv::SetBool>(
-        "mcu/emergency", [this](const std_srvs::srv::SetBool::Request::SharedPtr req,
-                                std_srvs::srv::SetBool::Response::SharedPtr res) { OnEmergency(*req, *res); });
-    blade_srv_ = create_service<std_srvs::srv::SetBool>(
-        "mcu/blade", [this](const std_srvs::srv::SetBool::Request::SharedPtr req,
-                            std_srvs::srv::SetBool::Response::SharedPtr res) { OnBlade(*req, *res); });
+    emergency_srv_ = create_service<mowbite_msgs::srv::SetEmergency>(
+        "hw/emergency", [this](const mowbite_msgs::srv::SetEmergency::Request::SharedPtr req,
+                               mowbite_msgs::srv::SetEmergency::Response::SharedPtr res) { OnEmergency(*req, *res); });
+    blade_srv_ = create_service<mowbite_msgs::srv::SetBlade>(
+        "hw/blade", [this](const mowbite_msgs::srv::SetBlade::Request::SharedPtr req,
+                           mowbite_msgs::srv::SetBlade::Response::SharedPtr res) { OnBlade(*req, *res); });
     status_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { PublishStatus(); });
     LogTimeZone();
 
@@ -235,6 +274,9 @@ class McuNode : public rclcpp::Node {
       case Module::kSensor:
         if (auto info = tron::DecodeSensorInfo(packet.payload)) {
           control_.OnSensorInfo(*info, now);
+          if (info->cutter_size != sensor_.cutter_size) {
+            RCLCPP_INFO(get_logger(), "Mowing deck: %u (1 small, 2 large)", info->cutter_size);
+          }
           sensor_ = *info;
         }
         break;
@@ -255,7 +297,13 @@ class McuNode : public rclcpp::Node {
         if (auto versions = tron::DecodeVersionInfo(packet.payload)) CheckVersions(*versions);
         break;
       case Module::kBmsVersion:
-        if (auto bms = tron::DecodeBmsVersion(packet.payload)) bms_version_ = VersionString(*bms);
+        if (auto bms = tron::DecodeBmsVersion(packet.payload)) {
+          std::string version = VersionString(*bms);
+          if (version != bms_version_) {
+            bms_version_ = version;
+            PublishCapabilities();
+          }
+        }
         break;
       case Module::kLog: RCLCPP_INFO(get_logger(), "MCU log: %s", tron::DecodeLog(packet.payload).c_str()); break;
       case Module::kUptime:
@@ -274,6 +322,7 @@ class McuNode : public rclcpp::Node {
       RCLCPP_INFO(get_logger(), "MCU versions: cutter %s, chassis %s", cutter.c_str(), chassis.c_str());
       cutter_version_ = cutter;
       chassis_version_ = chassis;
+      PublishCapabilities();
     }
     if (!control_.OnVersions(versions)) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000,
@@ -291,6 +340,38 @@ class McuNode : public rclcpp::Node {
     twist_pub_->publish(msg);
   }
 
+  // Called with mutex_ held, or before the I/O thread starts.
+  void PublishCapabilities() {
+    mowbite_msgs::msg::HardwareCapabilities msg;
+    msg.platform = "airseekers_tron";
+    auto add_firmware = [&msg](const char* board, const std::string& version) {
+      diagnostic_msgs::msg::KeyValue entry;
+      entry.key = board;
+      entry.value = version;
+      msg.firmware.push_back(entry);
+    };
+    add_firmware("cutter", cutter_version_);
+    add_firmware("chassis", chassis_version_);
+    add_firmware("bms", bms_version_);
+    msg.blade_speed_control = true;
+    msg.blade_height_control = true;
+    msg.blade_height_min_mm = tron::kMinCutterHeightMm;
+    msg.blade_height_max_mm = tron::kMaxCutterHeightMm;
+    msg.blade_lease_max_s = static_cast<float>(blade_lease_max_s_);
+    // The driver sends Charge itself after a debounced dock contact.
+    msg.host_charge_control = false;
+    msg.rain_sensor = true;
+    msg.separate_bumpers = true;
+    msg.wheel_ticks = false;
+    msg.imu_source = "tron_imu";
+    msg.gnss_source = "tron_gnss";
+    msg.max_linear_speed = tron::kMaxLinearSpeed;
+    msg.max_angular_speed = tron::kMaxAngularSpeed;
+    msg.failsafe_without_host_s = static_cast<float>(failsafe_without_host_s_);
+    msg.safety_measurement_date = safety_measurement_date_;
+    capabilities_pub_->publish(msg);
+  }
+
   mowbite_msgs::msg::MotorState MotorMessage(const tron::MotorInfo& motor, bool fresh, double current_scale) const {
     mowbite_msgs::msg::MotorState msg;
     msg.ok = fresh;
@@ -303,48 +384,55 @@ class McuNode : public rclcpp::Node {
   }
 
   void PublishStatus() {
-    mowbite_msgs::msg::McuStatus msg;
+    HardwareStatus msg;
     msg.stamp = now();
     {
       std::lock_guard<std::mutex> lock(mutex_);
       double now_s = MonotonicSeconds();
       const auto state = control_.Status(now_s);
-      msg.telemetry_ok = !state.telemetry_stale;
+      msg.emergency = state.blocked;
       msg.emergency_latched = state.latched;
+      msg.emergency_reason = state.emergency_reason;
+      msg.telemetry_ok = !state.telemetry_stale;
       msg.lift = state.lift;
       msg.stop = state.stop;
       msg.bumper = state.bumper;
       msg.bumper_left = msg.telemetry_ok && sensor_.bumper_left;
       msg.bumper_right = msg.telemetry_ok && sensor_.bumper_right;
       msg.rain = msg.telemetry_ok && sensor_.rain;
-      msg.cutter_size = sensor_.cutter_size;
+      msg.dock_contact = state.dock_contact;
       msg.moving = state.moving;
       msg.blade_on = state.blade_on;
-      msg.dock_contact = state.dock_contact;
-      msg.firmware_incompatible = state.firmware_incompatible;
+      msg.blade_off_reason = static_cast<uint8_t>(state.blade_off_reason);
+      if (state.blade_on != blade_on_logged_) {
+        blade_on_logged_ = state.blade_on;
+        if (state.blade_on) {
+          RCLCPP_INFO(get_logger(), "Blade on");
+        } else if (state.blade_off_reason == tron::BladeOffReason::kLeaseExpired) {
+          RCLCPP_WARN(get_logger(), "Blade off: lease expired without renewal");
+        } else {
+          RCLCPP_INFO(get_logger(), "Blade off: %s", BladeOffText(state.blade_off_reason));
+        }
+      }
 
-      msg.battery_ok = battery_s_ && now_s - *battery_s_ < kReportMaxAge;
-      if (msg.battery_ok) {
+      if (battery_s_ && now_s - *battery_s_ < kReportMaxAge) {
+        msg.battery_source = HardwareStatus::BATTERY_SOURCE_BMS;
         msg.battery_voltage = static_cast<float>(battery_.voltage_v);
         msg.battery_current = static_cast<float>(battery_.current_a);
         msg.battery_percentage = battery_.percentage;
         msg.battery_temperature = battery_.temperature_c;
-        msg.battery_dock = battery_.dock_ok == 1;
         msg.battery_error_bits = battery_.error_bits;
       }
 
       bool motors_ok = motors_s_ && now_s - *motors_s_ < kReportMaxAge;
       // Cutter current comes in 10 mA steps.
-      msg.cutter = MotorMessage(motors_.cutter, motors_ok, 0.01);
-      msg.left = MotorMessage(motors_.left, motors_ok, drive_current_scale_);
-      msg.right = MotorMessage(motors_.right, motors_ok, drive_current_scale_);
+      msg.blade_motor = MotorMessage(motors_.cutter, motors_ok, 0.01);
+      msg.left_motor = MotorMessage(motors_.left, motors_ok, drive_current_scale_);
+      msg.right_motor = MotorMessage(motors_.right, motors_ok, drive_current_scale_);
 
-      msg.cutter_version = cutter_version_;
-      msg.chassis_version = chassis_version_;
-      msg.bms_version = bms_version_;
       const auto& stats = parser_.Stats();
-      msg.frames_ok = stats.frames;
-      msg.frame_errors = stats.checksum_errors + stats.length_errors + stats.escape_errors + stats.overflows;
+      msg.link_messages_ok = stats.frames;
+      msg.link_errors = stats.checksum_errors + stats.length_errors + stats.escape_errors + stats.overflows;
     }
     status_pub_->publish(msg);
   }
@@ -375,28 +463,34 @@ class McuNode : public rclcpp::Node {
     control_.OnImu(counts);
   }
 
-  void OnEmergency(const std_srvs::srv::SetBool::Request& req, std_srvs::srv::SetBool::Response& res) {
+  void OnEmergency(const mowbite_msgs::srv::SetEmergency::Request& req,
+                   mowbite_msgs::srv::SetEmergency::Response& res) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (req.data) {
-      RCLCPP_WARN(get_logger(), "Emergency latched by request");
+    if (req.latch) {
+      RCLCPP_WARN(get_logger(), "Emergency latched by request: %s", req.reason.c_str());
       control_.LatchEmergency(tron::kReasonHighLevel);
       res.message = "latched";
     } else {
+      RCLCPP_INFO(get_logger(), "Emergency release requested: %s", req.reason.c_str());
       control_.ReleaseEmergency(MonotonicSeconds());
       res.message = "release requested";
     }
     res.success = true;
   }
 
-  void OnBlade(const std_srvs::srv::SetBool::Request& req, std_srvs::srv::SetBool::Response& res) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    // Until hw/blade takes over, an on request holds for the longest lease.
+  void OnBlade(const mowbite_msgs::srv::SetBlade::Request& req, mowbite_msgs::srv::SetBlade::Response& res) {
     tron::BladeRequest request;
-    request.on = req.data;
-    request.lease_s = blade_lease_max_s_;
+    request.on = req.on;
+    request.speed_percent = req.speed_percent;
+    request.height_mm = req.height_mm;
+    request.lease_s = req.lease_s;
+    std::lock_guard<std::mutex> lock(mutex_);
     auto result = control_.SetBlade(request, MonotonicSeconds());
     res.success = result == tron::BladeResult::kOk;
     res.message = tron::BladeResultText(result);
+    if (!res.success) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Blade request refused: %s", res.message.c_str());
+    }
   }
 
   std::mutex mutex_;
@@ -417,6 +511,9 @@ class McuNode : public rclcpp::Node {
   std::thread io_thread_;
 
   double blade_lease_max_s_;
+  double failsafe_without_host_s_;
+  std::string safety_measurement_date_;
+  bool blade_on_logged_ = false;
   double measured_linear_scale_;
   double measured_angular_scale_;
   double drive_current_scale_;
@@ -424,11 +521,12 @@ class McuNode : public rclcpp::Node {
   double imu_pitch_offset_deg_;
 
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
-  rclcpp::Publisher<mowbite_msgs::msg::McuStatus>::SharedPtr status_pub_;
+  rclcpp::Publisher<HardwareStatus>::SharedPtr status_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr capabilities_pub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr emergency_srv_;
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr blade_srv_;
+  rclcpp::Service<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_srv_;
+  rclcpp::Service<mowbite_msgs::srv::SetBlade>::SharedPtr blade_srv_;
   rclcpp::TimerBase::SharedPtr status_timer_;
 };
 

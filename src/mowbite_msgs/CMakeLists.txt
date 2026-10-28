@@ -13,7 +13,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/HardwareCapabilities.msg"
   "msg/HardwareStatus.msg"
   "msg/MotorState.msg"
-  "msg/McuStatus.msg"
   "msg/RobotState.msg"
   "msg/SensorInfo.msg"
   "msg/SensorValue.msg"

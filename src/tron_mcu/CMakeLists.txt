@@ -10,7 +10,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(std_srvs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 
 # Codec, control logic and port without ROS, testable on any machine.
@@ -22,7 +22,7 @@ set_target_properties(tron_mcu_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(tron_mcu_component SHARED src/mcu_node.cpp)
 target_link_libraries(tron_mcu_component tron_mcu_core)
-ament_target_dependencies(tron_mcu_component rclcpp rclcpp_components geometry_msgs sensor_msgs std_srvs mowbite_msgs)
+ament_target_dependencies(tron_mcu_component rclcpp rclcpp_components geometry_msgs sensor_msgs diagnostic_msgs mowbite_msgs)
 rclcpp_components_register_node(tron_mcu_component
   PLUGIN "tron_mcu::McuNode"
   EXECUTABLE tron_mcu_node)

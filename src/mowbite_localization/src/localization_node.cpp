@@ -32,7 +32,7 @@ double MonotonicSeconds() {
 
 }  // namespace
 
-// Fuses imu/data, wheel_twist and gps/absolute_pose. Publishes odom, localization/pose and the map -> base_link
+// Fuses imu/data, hw/wheel_odom and gps/absolute_pose. Publishes odom, localization/pose and the map -> base_link
 // transform on every gyro sample.
 class LocalizationNode : public rclcpp::Node {
  public:
@@ -86,7 +86,7 @@ class LocalizationNode : public rclcpp::Node {
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>("imu/data", rclcpp::SensorDataQoS(),
                                                           [this](const sensor_msgs::msg::Imu& msg) { OnImu(msg); });
     wheel_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
-        "wheel_twist", 10, [this](const geometry_msgs::msg::TwistStamped& msg) {
+        "hw/wheel_odom", 10, [this](const geometry_msgs::msg::TwistStamped& msg) {
           localization_->AddWheelSpeed(msg.twist.linear.x, MonotonicSeconds());
         });
     gps_sub_ = create_subscription<mowbite_msgs::msg::AbsolutePose>(

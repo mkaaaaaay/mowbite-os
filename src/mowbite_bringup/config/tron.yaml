@@ -23,6 +23,10 @@ tron_mcu:
     # Set after reading the versions of this Tron in phase 4.
     expected_cutter_version: ""
     expected_chassis_version: ""
+    # Set after the safety measurement in phase 6 (hw/capabilities): the time the MCU keeps the last setpoint without
+    # a heartbeat in s (-1 unknown), and the date of the measurement. Without the date only remote control.
+    failsafe_without_host: -1.0
+    safety_measurement_date: ""
 
 tron_gnss:
   ros__parameters:

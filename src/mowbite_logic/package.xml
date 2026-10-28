@@ -12,7 +12,6 @@
   <depend>rclcpp_components</depend>
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
-  <depend>std_srvs</depend>
   <depend>mowbite_msgs</depend>
   <depend>mowbite_bridge</depend>
   <depend>nlohmann-json-dev</depend>

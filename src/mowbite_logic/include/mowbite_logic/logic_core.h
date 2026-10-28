@@ -13,29 +13,27 @@ namespace mowbite_logic {
 
 using json = nlohmann::ordered_json;
 
-// What the logic needs from mcu/status.
-struct McuSnapshot {
+// What the logic needs from hw/status.
+struct HardwareSnapshot {
   bool telemetry_ok = false;
-  bool emergency_latched = false;
-  bool firmware_incompatible = false;
-  bool lift = false;
-  bool stop = false;
-  bool bumper = false;
+  // Blocked by the driver; the reason bits come from it, numbered like the EMERGENCY event.
+  bool emergency = false;
+  int emergency_reason = 0;
   bool rain = false;
+  bool dock_contact = false;
   bool battery_ok = false;
   float battery_voltage = 0;
   // Positive while discharging.
   float battery_current = 0;
   uint8_t battery_percentage = 0;
   int8_t battery_temperature = 0;
-  bool battery_dock = false;
   struct Motor {
     bool ok = false;
     int16_t rpm = 0;
     float current = 0;
     int8_t temperature = 0;
   };
-  Motor cutter;
+  Motor blade;
   Motor left;
   Motor right;
 };
@@ -129,12 +127,14 @@ struct ReasonChange {
   int to = 0;
 };
 
-// Bits of the reason in an EMERGENCY event, as the app reads them (EmergencyReason of OpenMower).
+// Bits of the reason in an EMERGENCY event, as the app reads them (EmergencyReason of OpenMower) and as
+// hw/status carries them.
 constexpr int kEmergencyLatch = 1 << 0;
 constexpr int kEmergencyTimeoutInputs = 1 << 1;
 constexpr int kEmergencyStop = 1 << 2;
 constexpr int kEmergencyLift = 1 << 3;
 constexpr int kEmergencyCollision = 1 << 5;
+constexpr int kEmergencyHighLevel = 1 << 7;
 constexpr int kEmergencyFirmwareIncompatible = 1 << 12;
 
 // "LATCH, LIFT": the names of the bits as OpenMower logs them, in bit order.
@@ -148,9 +148,9 @@ class LogicCore {
  public:
   explicit LogicCore(const LogicConfig& config);
 
-  void OnMcuStatus(const McuSnapshot& mcu);
-  // mcu/status stopped coming.
-  void OnMcuTimeout();
+  void OnHardwareStatus(const HardwareSnapshot& hw);
+  // hw/status stopped coming.
+  void OnHardwareTimeout();
   void OnPose(const PoseSnapshot& pose);
   // localization/pose stopped coming; events keep the last position.
   void OnPoseTimeout();
@@ -188,10 +188,10 @@ class LogicCore {
   static const char* StateName(State state);
 
   LogicConfig config_;
-  McuSnapshot mcu_;
+  HardwareSnapshot hw_;
   State state_ = State::kIdle;
   bool emergency_ = false;
-  // Without telemetry the mower counts as stopped until the MCU reports.
+  // Without telemetry the mower counts as stopped until the driver reports.
   int reason_ = kEmergencyTimeoutInputs;
   // OpenMower logs the first reason as a change from none.
   int logged_reason_ = 0;
@@ -199,7 +199,7 @@ class LogicCore {
   std::optional<PoseSnapshot> pose_;
   double last_x_ = 0;
   double last_y_ = 0;
-  bool mcu_seen_ = false;
+  bool hw_seen_ = false;
   bool actions_changed_ = true;
   bool stop_requested_ = false;
   bool teleop_armed_ = false;

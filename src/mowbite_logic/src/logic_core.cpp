@@ -65,18 +65,18 @@ std::string EmergencyReasonNames(int reason) {
 }
 
 LogicCore::LogicCore(const LogicConfig& config) : config_(config) {
-  // Without telemetry the mower counts as stopped until the MCU reports.
+  // Without telemetry the mower counts as stopped until the driver reports.
   emergency_ = true;
 }
 
-void LogicCore::OnMcuStatus(const McuSnapshot& mcu) {
-  mcu_ = mcu;
+void LogicCore::OnHardwareStatus(const HardwareSnapshot& hw) {
+  hw_ = hw;
   UpdateEmergency();
 }
 
-void LogicCore::OnMcuTimeout() {
-  mcu_.telemetry_ok = false;
-  mcu_.battery_ok = false;
+void LogicCore::OnHardwareTimeout() {
+  hw_.telemetry_ok = false;
+  hw_.battery_ok = false;
   UpdateEmergency();
 }
 
@@ -108,27 +108,20 @@ bool LogicCore::Emergency() const {
 }
 
 int LogicCore::EmergencyReason() const {
-  int reason = 0;
-  if (!mcu_.telemetry_ok) reason |= kEmergencyTimeoutInputs;
-  if (mcu_.emergency_latched) reason |= kEmergencyLatch;
-  if (mcu_.stop) reason |= kEmergencyStop;
-  if (mcu_.lift) reason |= kEmergencyLift;
-  if (mcu_.bumper) reason |= kEmergencyCollision;
-  if (mcu_.firmware_incompatible) reason |= kEmergencyFirmwareIncompatible;
-  return reason;
+  return hw_.emergency_reason | (hw_.telemetry_ok ? 0 : kEmergencyTimeoutInputs);
 }
 
 void LogicCore::UpdateEmergency() {
-  const bool emergency = mcu_.emergency_latched || !mcu_.telemetry_ok || mcu_.firmware_incompatible;
-  // A bumper that does not latch is no emergency, so its bit is not shown either.
+  const bool emergency = hw_.emergency || !hw_.telemetry_ok;
+  // The driver sends no reason without an emergency; one that does not block is not shown either.
   reason_ = emergency ? EmergencyReason() : 0;
   if (reason_ != logged_reason_) {
     reason_changes_.push_back({logged_reason_, reason_});
     logged_reason_ = reason_;
   }
   // The first report after the start only sets the state, it is no change worth an event.
-  if (!mcu_seen_) {
-    mcu_seen_ = true;
+  if (!hw_seen_) {
+    hw_seen_ = true;
     actions_changed_ |= emergency != emergency_;
     emergency_ = emergency;
     return;
@@ -195,10 +188,10 @@ RobotStateData LogicCore::RobotState() const {
   s.state = StateName(state_);
   s.emergency = emergency_;
   s.emergency_reason = reason_;
-  s.is_charging = mcu_.battery_ok && mcu_.battery_dock;
-  s.rain_detected = mcu_.telemetry_ok && mcu_.rain;
-  if (mcu_.battery_ok) {
-    s.battery_percentage = std::clamp(mcu_.battery_percentage / 100.0f, 0.0f, 1.0f);
+  s.is_charging = hw_.battery_ok && hw_.dock_contact;
+  s.rain_detected = hw_.telemetry_ok && hw_.rain;
+  if (hw_.battery_ok) {
+    s.battery_percentage = std::clamp(hw_.battery_percentage / 100.0f, 0.0f, 1.0f);
   }
   if (pose_) {
     s.pose_x = pose_->x;
@@ -276,29 +269,29 @@ std::vector<SensorDefinition> LogicCore::Sensors() const {
 
 std::vector<SensorReading> LogicCore::Readings() const {
   std::vector<SensorReading> readings;
-  if (mcu_.battery_ok) {
-    const double charge_current = mcu_.battery_current < 0 ? -mcu_.battery_current : 0.0;
-    readings.push_back({"om_v_battery", mcu_.battery_voltage, ""});
-    readings.push_back({"om_v_charge", mcu_.battery_dock ? config_.dock_charge_voltage : 0.0, ""});
+  if (hw_.battery_ok) {
+    const double charge_current = hw_.battery_current < 0 ? -hw_.battery_current : 0.0;
+    readings.push_back({"om_v_battery", hw_.battery_voltage, ""});
+    readings.push_back({"om_v_charge", hw_.dock_contact ? config_.dock_charge_voltage : 0.0, ""});
     readings.push_back({"om_charge_current", charge_current, ""});
     // Texts of the charger of OpenMower v2, the app's battery script reads them.
     std::string state = "Not Charging";
-    if (mcu_.battery_dock && charge_current > 0.1) {
+    if (hw_.dock_contact && charge_current > 0.1) {
       state = "Fast Charge";
-    } else if (mcu_.battery_dock && mcu_.battery_percentage >= 99) {
+    } else if (hw_.dock_contact && hw_.battery_percentage >= 99) {
       state = "Done";
     }
     readings.push_back({"om_charge_state", 0, state});
-    readings.push_back({"battery_temp", static_cast<double>(mcu_.battery_temperature), ""});
+    readings.push_back({"battery_temp", static_cast<double>(hw_.battery_temperature), ""});
   }
   if (pose_) readings.push_back({"om_gps_accuracy", pose_->position_accuracy, ""});
-  if (mcu_.cutter.ok) {
-    readings.push_back({"om_mow_motor_rpm", static_cast<double>(mcu_.cutter.rpm), ""});
-    readings.push_back({"om_mow_motor_current", mcu_.cutter.current, ""});
-    readings.push_back({"om_mow_motor_temp", static_cast<double>(mcu_.cutter.temperature), ""});
+  if (hw_.blade.ok) {
+    readings.push_back({"om_mow_motor_rpm", static_cast<double>(hw_.blade.rpm), ""});
+    readings.push_back({"om_mow_motor_current", hw_.blade.current, ""});
+    readings.push_back({"om_mow_motor_temp", static_cast<double>(hw_.blade.temperature), ""});
   }
-  if (mcu_.left.ok) readings.push_back({"om_left_esc_temp", static_cast<double>(mcu_.left.temperature), ""});
-  if (mcu_.right.ok) readings.push_back({"om_right_esc_temp", static_cast<double>(mcu_.right.temperature), ""});
+  if (hw_.left.ok) readings.push_back({"om_left_esc_temp", static_cast<double>(hw_.left.temperature), ""});
+  if (hw_.right.ok) readings.push_back({"om_right_esc_temp", static_cast<double>(hw_.right.temperature), ""});
   return readings;
 }
 

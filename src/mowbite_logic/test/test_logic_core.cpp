@@ -8,22 +8,30 @@ using namespace mowbite_logic;
 
 namespace {
 
-McuSnapshot Healthy() {
-  McuSnapshot mcu;
-  mcu.telemetry_ok = true;
-  mcu.battery_ok = true;
-  mcu.battery_voltage = 24.5f;
-  mcu.battery_current = 1.2f;
-  mcu.battery_percentage = 80;
-  mcu.battery_temperature = 27;
-  mcu.cutter.ok = true;
-  mcu.cutter.rpm = 0;
-  mcu.cutter.temperature = 30;
-  mcu.left.ok = true;
-  mcu.left.temperature = 31;
-  mcu.right.ok = true;
-  mcu.right.temperature = 32;
-  return mcu;
+HardwareSnapshot Healthy() {
+  HardwareSnapshot hw;
+  hw.telemetry_ok = true;
+  hw.battery_ok = true;
+  hw.battery_voltage = 24.5f;
+  hw.battery_current = 1.2f;
+  hw.battery_percentage = 80;
+  hw.battery_temperature = 27;
+  hw.blade.ok = true;
+  hw.blade.rpm = 0;
+  hw.blade.temperature = 30;
+  hw.left.ok = true;
+  hw.left.temperature = 31;
+  hw.right.ok = true;
+  hw.right.temperature = 32;
+  return hw;
+}
+
+// Blocked by the driver with these reason bits.
+HardwareSnapshot Stopped(int reason) {
+  HardwareSnapshot hw = Healthy();
+  hw.emergency = true;
+  hw.emergency_reason = reason;
+  return hw;
 }
 
 bool Enabled(const LogicCore& core, const std::string& prefix, const std::string& id) {
@@ -47,7 +55,7 @@ const SensorReading* Find(const std::vector<SensorReading>& readings, const std:
 TEST(Logic, StartsInEmergencyWithoutEventOnFirstReport) {
   LogicCore core{LogicConfig{}};
   EXPECT_TRUE(core.RobotState().emergency);
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.RobotState().emergency);
   EXPECT_TRUE(core.TakeEvents().empty());
   EXPECT_EQ(core.RobotState().state, "IDLE");
@@ -55,17 +63,15 @@ TEST(Logic, StartsInEmergencyWithoutEventOnFirstReport) {
 
 TEST(Logic, EmergencyEventsCarryReasonBits) {
   LogicCore core{LogicConfig{}};
-  core.OnMcuStatus(Healthy());
-  auto lifted = Healthy();
-  lifted.lift = true;
-  lifted.emergency_latched = true;
-  core.OnMcuStatus(lifted);
+  core.OnHardwareStatus(Healthy());
+  auto lifted = Stopped(kEmergencyLatch | kEmergencyLift);
+  core.OnHardwareStatus(lifted);
   auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].type, "EMERGENCY");
   EXPECT_EQ(events[0].details["emergency"], true);
   EXPECT_EQ(events[0].details["reason"], kEmergencyLatch | kEmergencyLift);
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].details["emergency"], false);
@@ -73,10 +79,9 @@ TEST(Logic, EmergencyEventsCarryReasonBits) {
 
 TEST(Logic, IncompatibleFirmwareIsEmergencyWithItsOwnBit) {
   LogicCore core{LogicConfig{}};
-  core.OnMcuStatus(Healthy());
-  auto firmware = Healthy();
-  firmware.firmware_incompatible = true;
-  core.OnMcuStatus(firmware);
+  core.OnHardwareStatus(Healthy());
+  auto firmware = Stopped(kEmergencyFirmwareIncompatible);
+  core.OnHardwareStatus(firmware);
   EXPECT_TRUE(core.RobotState().emergency);
   EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
   auto events = core.TakeEvents();
@@ -86,22 +91,19 @@ TEST(Logic, IncompatibleFirmwareIsEmergencyWithItsOwnBit) {
 
 TEST(Logic, ReasonStaysInTheStateAndEveryChangeIsReported) {
   LogicCore core{LogicConfig{}};
-  // Before the MCU reports, the mower stands for lack of telemetry.
+  // Before the driver reports, the mower stands for lack of telemetry.
   EXPECT_EQ(core.RobotState().emergency_reason, kEmergencyTimeoutInputs);
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   EXPECT_EQ(core.RobotState().emergency_reason, 0);
   EXPECT_TRUE(core.TakeReasonChanges().empty());
 
-  auto lifted = Healthy();
-  lifted.lift = true;
-  lifted.emergency_latched = true;
-  core.OnMcuStatus(lifted);
-  core.OnMcuStatus(lifted);
-  auto down = Healthy();
-  down.emergency_latched = true;
-  core.OnMcuStatus(down);
-  EXPECT_EQ(core.RobotState().emergency_reason, kEmergencyLatch);
-  core.OnMcuStatus(Healthy());
+  auto lifted = Stopped(kEmergencyLatch | kEmergencyLift);
+  core.OnHardwareStatus(lifted);
+  core.OnHardwareStatus(lifted);
+  auto requested = Stopped(kEmergencyLatch | kEmergencyLift | kEmergencyHighLevel);
+  core.OnHardwareStatus(requested);
+  EXPECT_EQ(core.RobotState().emergency_reason, kEmergencyLatch | kEmergencyLift | kEmergencyHighLevel);
+  core.OnHardwareStatus(Healthy());
   EXPECT_EQ(core.RobotState().emergency_reason, 0);
 
   auto changes = core.TakeReasonChanges();
@@ -109,29 +111,36 @@ TEST(Logic, ReasonStaysInTheStateAndEveryChangeIsReported) {
   EXPECT_EQ(changes[0].from, 0);
   EXPECT_EQ(changes[0].to, kEmergencyLatch | kEmergencyLift);
   EXPECT_EQ(changes[1].from, kEmergencyLatch | kEmergencyLift);
-  EXPECT_EQ(changes[1].to, kEmergencyLatch);
+  EXPECT_EQ(changes[1].to, kEmergencyLatch | kEmergencyLift | kEmergencyHighLevel);
   EXPECT_EQ(changes[2].to, 0);
-  // Putting it down changes the reason but not the emergency: one event on, one off.
+  // A further cause changes the reason but not the emergency: one event on, one off.
   auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[0].details["reason"], kEmergencyLatch | kEmergencyLift);
   EXPECT_EQ(events[1].details["reason"], 0);
 }
 
+TEST(Logic, LostHardwareStatusAddsTheTimeoutBit) {
+  LogicCore core{LogicConfig{}};
+  core.OnHardwareStatus(Stopped(kEmergencyLatch | kEmergencyLift));
+  core.OnHardwareTimeout();
+  EXPECT_EQ(core.RobotState().emergency_reason, kEmergencyLatch | kEmergencyLift | kEmergencyTimeoutInputs);
+}
+
 TEST(Logic, NoTelemetryFromTheStartIsReportedAsAChange) {
   LogicCore core{LogicConfig{}};
-  core.OnMcuTimeout();
+  core.OnHardwareTimeout();
   auto changes = core.TakeReasonChanges();
   ASSERT_EQ(changes.size(), 1u);
   EXPECT_EQ(changes[0].from, 0);
   EXPECT_EQ(changes[0].to, kEmergencyTimeoutInputs);
 }
 
-TEST(Logic, BumperWithoutLatchIsNoReason) {
+TEST(Logic, ReasonWithoutEmergencyIsNotShown) {
   LogicCore core{LogicConfig{}};
   auto bumper = Healthy();
-  bumper.bumper = true;
-  core.OnMcuStatus(bumper);
+  bumper.emergency_reason = kEmergencyCollision;
+  core.OnHardwareStatus(bumper);
   EXPECT_FALSE(core.RobotState().emergency);
   EXPECT_EQ(core.RobotState().emergency_reason, 0);
 }
@@ -146,8 +155,8 @@ TEST(Logic, ReasonNamesAsOpenMowerLogsThem) {
 
 TEST(Logic, TelemetryTimeoutIsEmergency) {
   LogicCore core{LogicConfig{}};
-  core.OnMcuStatus(Healthy());
-  core.OnMcuTimeout();
+  core.OnHardwareStatus(Healthy());
+  core.OnHardwareTimeout();
   EXPECT_TRUE(core.RobotState().emergency);
   auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
@@ -157,7 +166,7 @@ TEST(Logic, TelemetryTimeoutIsEmergency) {
 
 TEST(Logic, TeleopOnlyWhileRecordingAndNoEmergency) {
   LogicCore core{LogicConfig{}};
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 0.0));
   EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_area_recording"));
   EXPECT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
@@ -167,12 +176,10 @@ TEST(Logic, TeleopOnlyWhileRecordingAndNoEmergency) {
   auto cmd = core.OnTeleop(0.2, -0.1, 2.0);
   ASSERT_TRUE(cmd);
   EXPECT_DOUBLE_EQ(cmd->first, 0.2);
-  auto stopped = Healthy();
-  stopped.stop = true;
-  stopped.emergency_latched = true;
-  core.OnMcuStatus(stopped);
+  auto stopped = Stopped(kEmergencyLatch | kEmergencyStop);
+  core.OnHardwareStatus(stopped);
   EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 4.0));
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   EXPECT_EQ(core.OnAction("mower_logic:area_recording/exit_recording_mode"), ActionResult::kDone);
   EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 6.0));
   auto events = core.TakeEvents();
@@ -187,7 +194,7 @@ namespace {
 // Healthy mower in AREA_RECORDING.
 LogicCore RecordingCore() {
   LogicCore core{LogicConfig{}};
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   core.OnAction("mower_logic:idle/start_area_recording");
   return core;
 }
@@ -200,10 +207,8 @@ int Passed(LogicCore& core, double from_s, double to_s, double vx = 0.2) {
 }
 
 void Latch(LogicCore& core) {
-  auto lifted = Healthy();
-  lifted.lift = true;
-  lifted.emergency_latched = true;
-  core.OnMcuStatus(lifted);
+  auto lifted = Stopped(kEmergencyLatch | kEmergencyLift);
+  core.OnHardwareStatus(lifted);
 }
 
 }  // namespace
@@ -213,7 +218,7 @@ TEST(Logic, HeldJoystickWaitsForZeroAfterRelease) {
   EXPECT_EQ(Passed(core, 10.0, 11.0), 10);
   Latch(core);
   EXPECT_EQ(Passed(core, 11.0, 12.0), 0);
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   ASSERT_FALSE(core.RobotState().emergency);
   // Still held after the release: nothing moves.
   EXPECT_EQ(Passed(core, 12.0, 14.0), 0);
@@ -228,7 +233,7 @@ TEST(Logic, PauseOfOneSecondArmsTeleopAfterRelease) {
   LogicCore core = RecordingCore();
   EXPECT_EQ(Passed(core, 10.0, 11.0), 10);
   Latch(core);
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   // The last teleop came at 10.9: a press 0.5 s later is held back, as is everything close to it.
   EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 11.4));
   EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 12.3));
@@ -244,13 +249,13 @@ TEST(Logic, ZeroDuringEmergencyDoesNotArm) {
   // Let go and pressed again while stopped: the zero came too early to count.
   EXPECT_FALSE(core.OnTeleop(0.0, 0.0, 11.0));
   EXPECT_EQ(Passed(core, 11.1, 12.0), 0);
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   EXPECT_EQ(Passed(core, 12.0, 13.0), 0);
 }
 
 TEST(Logic, HeldJoystickWaitsWhenRecordingStarts) {
   LogicCore core{LogicConfig{}};
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   EXPECT_EQ(Passed(core, 10.0, 11.0), 0);
   core.OnAction("mower_logic:idle/start_area_recording");
   EXPECT_EQ(Passed(core, 11.0, 12.0), 0);
@@ -260,7 +265,7 @@ TEST(Logic, HeldJoystickWaitsWhenRecordingStarts) {
 
 TEST(Logic, LeavingRecordingStopsTheWheels) {
   LogicCore core{LogicConfig{}};
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.TakeStopRequest());
   core.OnAction("mower_logic:idle/start_area_recording");
   EXPECT_FALSE(core.TakeStopRequest());
@@ -274,9 +279,8 @@ TEST(Logic, LeavingRecordingStopsTheWheels) {
 
 TEST(Logic, NoRecordingDuringEmergency) {
   LogicCore core{LogicConfig{}};
-  auto latched = Healthy();
-  latched.emergency_latched = true;
-  core.OnMcuStatus(latched);
+  auto latched = Stopped(kEmergencyLatch | kEmergencyHighLevel);
+  core.OnHardwareStatus(latched);
   EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
   EXPECT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kRejected);
   EXPECT_EQ(core.OnAction("mower_logic/reset_emergency"), ActionResult::kReleaseEmergency);
@@ -288,19 +292,19 @@ TEST(Logic, ActionsChangeFlag) {
   LogicCore core{LogicConfig{}};
   EXPECT_TRUE(core.TakeActionsChanged());
   EXPECT_FALSE(core.TakeActionsChanged());
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   EXPECT_TRUE(core.TakeActionsChanged());
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.TakeActionsChanged());
 }
 
 TEST(Logic, RobotStateAndSensors) {
   LogicCore core{LogicConfig{}};
   auto docked = Healthy();
-  docked.battery_dock = true;
+  docked.dock_contact = true;
   docked.battery_current = -3.0f;
   docked.rain = true;
-  core.OnMcuStatus(docked);
+  core.OnHardwareStatus(docked);
   auto state = core.RobotState();
   EXPECT_FLOAT_EQ(state.battery_percentage, 0.8f);
   EXPECT_TRUE(state.is_charging);
@@ -318,7 +322,7 @@ TEST(Logic, RobotStateAndSensors) {
   auto full = docked;
   full.battery_current = 0.0f;
   full.battery_percentage = 100;
-  core.OnMcuStatus(full);
+  core.OnHardwareStatus(full);
   EXPECT_EQ(Find(core.Readings(), "om_charge_state")->text, "Done");
 }
 
@@ -355,7 +359,7 @@ PoseSnapshot Pose(double x, double y, float accuracy, bool heading_valid = true)
 
 TEST(Logic, WithoutPoseAccuracyIsNeverPerfect) {
   LogicCore core{LogicConfig{}};
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   auto state = core.RobotState();
   EXPECT_FLOAT_EQ(state.pos_accuracy, 999.0f);
   EXPECT_FLOAT_EQ(state.heading_accuracy, 999.0f);
@@ -366,7 +370,7 @@ TEST(Logic, WithoutPoseAccuracyIsNeverPerfect) {
 
 TEST(Logic, PoseFillsRobotStateAndGpsPercentage) {
   LogicCore core{LogicConfig{}};
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   core.OnPose(Pose(12.5, -3.25, 0.02f));
   auto state = core.RobotState();
   EXPECT_DOUBLE_EQ(state.pose_x, 12.5);
@@ -395,7 +399,7 @@ TEST(Logic, GpsPercentageIsZeroWhenTooInaccurateOrWithoutHeading) {
 
 TEST(Logic, PoseTimeoutDropsPoseButEventsKeepLastPosition) {
   LogicCore core{LogicConfig{}};
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   core.OnPose(Pose(4.0, 5.0, 0.02f));
   core.OnPoseTimeout();
   auto state = core.RobotState();
@@ -411,14 +415,12 @@ TEST(Logic, PoseTimeoutDropsPoseButEventsKeepLastPosition) {
 
 TEST(Logic, EventsCarryThePositionTheyHappenedAt) {
   LogicCore core{LogicConfig{}};
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   core.OnPose(Pose(1.0, 2.0, 0.02f));
   core.OnAction("mower_logic:idle/start_area_recording");
   core.OnPose(Pose(7.0, 8.0, 0.02f));
-  auto lift = Healthy();
-  lift.emergency_latched = true;
-  lift.lift = true;
-  core.OnMcuStatus(lift);
+  auto lift = Stopped(kEmergencyLatch | kEmergencyLift);
+  core.OnHardwareStatus(lift);
   auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[0].type, "STATE");
@@ -430,7 +432,7 @@ TEST(Logic, EventsCarryThePositionTheyHappenedAt) {
 
 TEST(Logic, PositionJumpIsAnEventAtTheNewPosition) {
   LogicCore core{LogicConfig{}};
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   core.OnPose(Pose(1.0, 2.0, 0.02f));
   core.OnPositionJump(7.0, 2.0, 6.0, true);
   auto events = core.TakeEvents();
@@ -445,7 +447,7 @@ TEST(Logic, PositionJumpIsAnEventAtTheNewPosition) {
 
 TEST(Logic, EventsWithoutAnyPoseAreAtZero) {
   LogicCore core{LogicConfig{}};
-  core.OnMcuStatus(Healthy());
+  core.OnHardwareStatus(Healthy());
   core.OnAction("mower_logic:idle/start_area_recording");
   auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
