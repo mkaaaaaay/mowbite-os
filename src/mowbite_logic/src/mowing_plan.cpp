@@ -185,6 +185,7 @@ void MowingPlanner::SetMap(const std::string& text) {
       const json properties =
           entry.contains("properties") && entry["properties"].is_object() ? entry["properties"] : json::object();
       area.type = properties.value("type", "");
+      area.name = properties.value("name", "");
       area.active = properties.value("active", true);
       area.mowable = properties.value("mowable", true);
       area.angle = OptionalNumber(properties, "angle");
@@ -216,6 +217,21 @@ std::string MowingPlanner::TransitAreas(std::vector<Ring>* drivable, std::vector
     if (area.type == "obstacle") obstacles->push_back(area.outline);
   }
   if (drivable->empty()) return "The map has no active mowing or navigation area";
+  return "";
+}
+
+std::vector<JobArea> MowingPlanner::MowAreas() const {
+  std::vector<JobArea> areas;
+  if (!map_readable_) return areas;
+  for (const auto& area : map_) {
+    if (area.type == "mow") areas.push_back({area.id, area.name, area.active && area.mowable});
+  }
+  return areas;
+}
+
+std::string MowingPlanner::MapProblem() const {
+  if (!map_fits_) return "Cannot mow on the map: " + map_reason_;
+  if (!map_readable_) return "Cannot mow on the map: map/json is not readable";
   return "";
 }
 

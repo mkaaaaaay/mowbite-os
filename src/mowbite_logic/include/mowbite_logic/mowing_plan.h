@@ -65,6 +65,8 @@ struct CoverageAnswer {
   // Why it failed, or a summary
   std::string message;
   std::vector<Point2> poses;
+  // rad, one per pose; may be empty
+  std::vector<double> headings;
   std::vector<uint32_t> section_start;
   std::vector<uint32_t> segment_start;
   std::vector<uint32_t> segment_end;
@@ -82,6 +84,15 @@ struct PlanQuestion {
   // Empty for an outline given in the request
   std::string area_id;
   CoverageRequest request;
+};
+
+// A mowing area of the map. Its index counts the mow areas in map order, inactive ones included, like current_area of
+// OpenMower and the app.
+struct JobArea {
+  std::string id;
+  std::string name;
+  // Active and mowable: the job mows it, else it is passed over.
+  bool mowable = true;
 };
 
 // A piece of the route as the app draws it: a run of poses, indices into the poses of the answer.
@@ -121,10 +132,15 @@ class MowingPlanner {
   // Where a drive between areas may go: the active mow and nav areas (also those not to be mowed) and the active
   // obstacles. Empty if the map allows it, else why not.
   std::string TransitAreas(std::vector<Ring>* drivable, std::vector<Ring>* obstacles) const;
+  // The mow areas of the map in map order, inactive ones included; nothing while the map is not readable.
+  std::vector<JobArea> MowAreas() const;
+  // Whether mowing may plan from the map: readable and fitting the datum in use; else why not.
+  std::string MapProblem() const;
 
  private:
   struct MapArea {
     std::string id;
+    std::string name;
     std::string type;
     bool active = true;
     bool mowable = true;
