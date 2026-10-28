@@ -29,7 +29,8 @@ def generate_launch_description():
         package="mowbite_localization", plugin="mowbite_localization::LocalizationNode", name="mowbite_localization",
         parameters=[config, extra])
     logic = ComposableNode(
-        package="mowbite_logic", plugin="mowbite_logic::LogicNode", name="mowbite_logic", parameters=[config, extra])
+        package="mowbite_logic", plugin="mowbite_logic::LogicNode", name="mowbite_logic",
+        parameters=[config, extra, {"data_dir": LaunchConfiguration("data_dir")}])
     bridge = ComposableNode(
         package="mowbite_bridge", plugin="mowbite_bridge::BridgeNode", name="mowbite_bridge",
         parameters=[config, extra, {"mqtt_host": LaunchConfiguration("mqtt_host"),

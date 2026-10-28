@@ -77,6 +77,24 @@ mowbite_logic:
     mow_angle_offset: 0.0
     mow_angle_offset_is_absolute: false
     plan_timeout: 30.0
+    # Mowing. The blade turns only with mow_with_blade here and allow_blade of tron_mcu, and only on mow segments. It runs
+    # on a lease of blade_lease s, renewed every blade_renew s. mower_spinup_rpm 0: no wait for the blade (Tron rpm not
+    # measured yet); BLADES events from blade_running_rpm on. gps_wait_time s of good position before mowing goes on.
+    # Below battery_critical_voltage for battery_critical_time s mowing ends (assumption, 3.5 V per cell). A path that
+    # starts farther than approach_distance m away is reached over the drivable areas first. mow_angle_increment deg
+    # after each finished job. The checkpoint in data_dir is written every checkpoint_period s while mowing.
+    mow_with_blade: false
+    blade_lease: 1.0
+    blade_renew: 0.5
+    mower_spinup_rpm: 0
+    mower_spinup_timeout: 10.0
+    blade_running_rpm: 100
+    gps_wait_time: 10.0
+    battery_critical_voltage: 21.0
+    battery_critical_time: 10.0
+    approach_distance: 0.5
+    mow_angle_increment: 0.0
+    checkpoint_period: 30.0
 
 mowbite_follower:
   ros__parameters:
@@ -98,7 +116,7 @@ mowbite_follower:
 mowbite_map:
   ros__parameters:
     # Largest map.json in bytes (MQTT drops messages from about 2 MB) and the distance in m under which two datums count
-    # as the same. The map is kept in data_dir, which tron.launch.py sets for the bridge and the map together.
+    # as the same. The map is kept in data_dir, which tron.launch.py sets for the bridge, the map and the logic.
     max_map_bytes: 1500000
     datum_tolerance: 0.01
 

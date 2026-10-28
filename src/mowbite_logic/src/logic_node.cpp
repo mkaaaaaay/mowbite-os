@@ -1,6 +1,9 @@
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <fstream>
 #include <limits>
+#include <sstream>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/point32.hpp>
 #include <geometry_msgs/msg/polygon.hpp>
@@ -24,6 +27,7 @@
 #include <mowbite_msgs/msg/sensor_value.hpp>
 #include <mowbite_msgs/srv/add_area.hpp>
 #include <mowbite_msgs/srv/drive_to.hpp>
+#include <mowbite_msgs/srv/set_blade.hpp>
 #include <mowbite_msgs/srv/set_dock.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <map>
@@ -103,6 +107,24 @@ geometry_msgs::msg::Pose PoseAt(double x, double y, double heading) {
   return pose;
 }
 
+double Yaw(const geometry_msgs::msg::Quaternion& q) {
+  return std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+}
+
+// How a drive of the follower ended, for the job: a bad position goes on by itself, the rest waits for continue.
+LegEnd ToLegEnd(uint8_t reason) {
+  using Result = mowbite_msgs::action::FollowPath::Result;
+  switch (reason) {
+    case Result::REASON_DONE: return LegEnd::kDone;
+    case Result::REASON_CANCELED: return LegEnd::kCanceled;
+    case Result::REASON_EMERGENCY: return LegEnd::kEmergency;
+    case Result::REASON_POSE_LOST:
+    case Result::REASON_POSITION_ACCURACY:
+    case Result::REASON_HEADING: return LegEnd::kGps;
+    default: return LegEnd::kFailed;
+  }
+}
+
 HardwareSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
   HardwareSnapshot::Motor motor;
   motor.ok = m.ok;
@@ -115,6 +137,9 @@ HardwareSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
 }  // namespace
 
 class LogicNode : public rclcpp::Node {
+  using FollowPath = mowbite_msgs::action::FollowPath;
+  using FollowHandle = rclcpp_action::ClientGoalHandle<FollowPath>;
+
  public:
   explicit LogicNode(const rclcpp::NodeOptions& options)
       : rclcpp::Node("mowbite_logic", options), core_(LoadConfig()), planner_(LoadPlanSettings()) {
@@ -122,6 +147,13 @@ class LogicNode : public rclcpp::Node {
     pose_timeout_s_ = declare_parameter("pose_timeout", 2.0);
     // mowbite_map answers at once; a recording waits this long (s) before it counts as not saved.
     map_edit_timeout_s_ = declare_parameter("map_edit_timeout", 5.0);
+    // The checkpoint of the mowing job; empty: none, a restart starts over.
+    data_dir_ = declare_parameter("data_dir", std::string());
+    // The blade: a lease of blade_lease (s), renewed every blade_renew (s) while the logic wants it to turn.
+    blade_lease_s_ = declare_parameter("blade_lease", 1.0);
+    blade_renew_s_ = declare_parameter("blade_renew", 0.5);
+    blade_client_ = create_client<mowbite_msgs::srv::SetBlade>("hw/blade");
+    RestoreCheckpoint();
 
     robot_state_pub_ = create_publisher<mowbite_msgs::msg::RobotState>("bridge/robot_state", 10);
     actions_pub_ = create_publisher<mowbite_msgs::msg::ActionList>("bridge/actions", LatchedQos(50));
@@ -151,8 +183,12 @@ class LogicNode : public rclcpp::Node {
         "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRpcRequest(*msg); });
     map_sub_ = create_subscription<std_msgs::msg::String>(
         "map/json", LatchedQos(1), [this](std_msgs::msg::String::ConstSharedPtr msg) {
-          std::lock_guard<std::mutex> lock(mutex_);
-          planner_.SetMap(msg->data);
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            planner_.SetMap(msg->data);
+            core_.OnMowMap(planner_.MowAreas(), planner_.MapProblem());
+          }
+          Flush();
         });
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_logic";
@@ -178,6 +214,7 @@ class LogicNode : public rclcpp::Node {
             std::lock_guard<std::mutex> lock(mutex_);
             core_.OnMapStatus(ToDatum(msg->datum_state), msg->reason);
             planner_.SetMapStatus(msg->mowing_allowed, msg->reason);
+            core_.OnMowMap(planner_.MowAreas(), planner_.MapProblem());
           }
           Flush();
         });
@@ -199,6 +236,7 @@ class LogicNode : public rclcpp::Node {
           {
             std::lock_guard<std::mutex> lock(mutex_);
             core_.OnCapabilities(!msg->safety_measurement_date.empty());
+            blade_lease_max_s_ = msg->blade_lease_max_s;
           }
           Flush();
         });
@@ -217,7 +255,7 @@ class LogicNode : public rclcpp::Node {
                                    std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
           {
             std::lock_guard<std::mutex> lock(mutex_);
-            response->success = core_.Driving();
+            response->success = core_.Driving() && drive_.purpose == Purpose::kDriveTo;
             response->message = response->success ? "stopping" : "not driving";
             if (response->success) CancelDrive("stopped by logic/stop_drive");
           }
@@ -245,7 +283,11 @@ class LogicNode : public rclcpp::Node {
     sensor_timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] { PublishReadings(); });
     // At most twice a second: a long outline is a large message. Retained, so a late app sees the lines too.
     overlay_timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] { PublishOverlay(); });
-    plan_timer_ = create_wall_timer(std::chrono::seconds(1), [this] { ExpirePlans(); });
+    plan_timer_ = create_wall_timer(std::chrono::seconds(1), [this] {
+      ExpirePlans();
+      Flush();
+    });
+    blade_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { UpdateBlade(); });
     PublishActionsIfChanged();
   }
 
@@ -260,6 +302,18 @@ class LogicNode : public rclcpp::Node {
     config.recorder.max_points =
         static_cast<size_t>(declare_parameter("recording_max_points", static_cast<int64_t>(config.recorder.max_points)));
     config.recorder.min_dock_distance = declare_parameter("recording_min_dock_distance", config.recorder.min_dock_distance);
+    config.mow_with_blade = declare_parameter("mow_with_blade", config.mow_with_blade);
+    config.mower_spinup_rpm =
+        static_cast<int>(declare_parameter("mower_spinup_rpm", static_cast<int64_t>(config.mower_spinup_rpm)));
+    config.mower_spinup_timeout = declare_parameter("mower_spinup_timeout", config.mower_spinup_timeout);
+    config.blade_running_rpm =
+        static_cast<int>(declare_parameter("blade_running_rpm", static_cast<int64_t>(config.blade_running_rpm)));
+    config.gps_wait_time = declare_parameter("gps_wait_time", config.gps_wait_time);
+    config.battery_critical_voltage = declare_parameter("battery_critical_voltage", config.battery_critical_voltage);
+    config.battery_critical_time = declare_parameter("battery_critical_time", config.battery_critical_time);
+    config.mow_angle_increment = declare_parameter("mow_angle_increment", config.mow_angle_increment);
+    config.approach_distance = declare_parameter("approach_distance", config.approach_distance);
+    config.checkpoint_period = declare_parameter("checkpoint_period", config.checkpoint_period);
     return config;
   }
 
@@ -318,7 +372,19 @@ class LogicNode : public rclcpp::Node {
     ActionResult result;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      result = core_.OnAction(action_id);
+      std::string missing;
+      if (action_id == "mower_logic:idle/start_mowing" && core_.StartProblem().empty()) {
+        if (!plan_client_->service_is_ready() || !transit_client_->service_is_ready()) missing = "The planner is not running";
+        if (!follow_client_->action_server_is_ready()) missing = "The follower is not running";
+        // The node still ends a leg of the last job.
+        if (drive_.active || job_plan_.active) missing = "The last job is still stopping, try again in a moment";
+      }
+      if (!missing.empty()) {
+        core_.RefuseStart(missing);
+        result = ActionResult::kRejected;
+      } else {
+        result = core_.OnAction(action_id);
+      }
     }
     switch (result) {
       case ActionResult::kReleaseEmergency: ReleaseEmergency(); break;
@@ -376,7 +442,9 @@ class LogicNode : public rclcpp::Node {
         for (const auto& ring : obstacles) plan->obstacles.push_back(ToPolygon(ring));
         plan->max_outside = transit_max_outside_;
         drive_ = Drive();
+        drive_.purpose = Purpose::kDriveTo;
         drive_.seq = ++drive_seq_;
+        drive_.active = true;
         drive_.header = header;
         drive_.planning = true;
         drive_.sent = now();
@@ -402,64 +470,74 @@ class LogicNode : public rclcpp::Node {
       if (seq != drive_.seq || !drive_.planning) return;
       drive_.planning = false;
       if (!response.success) {
-        EndDrive(false, "transit planning failed: " + response.message);
+        EndDrive(false, "transit planning failed: " + response.message, FollowPath::Result::REASON_INVALID, 0);
       } else if (response.path.poses.empty()) {
         // Already there; the planner says so in its message.
         RespondDrive(drive_.header, true, "already there: " + response.message);
         drive_.header.reset();
-        EndDrive(true, "already there");
+        EndDrive(true, "already there", FollowPath::Result::REASON_DONE, 0);
       } else {
         FollowPath::Goal goal;
         for (const auto& pose : response.path.poses) goal.poses.push_back(pose.pose);
         goal.allowed_areas = drive_.allowed;
         goal.obstacles = drive_.obstacles;
-        const double length = response.path_length;
-        typename rclcpp_action::Client<FollowPath>::SendGoalOptions options;
-        options.goal_response_callback = [this, seq, length](const FollowHandle::SharedPtr& handle) {
-          {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (seq != drive_.seq) return;
-            if (!handle) {
-              EndDrive(false, "the follower did not take the path");
-            } else {
-              drive_.handle = handle;
-              char text[64];
-              std::snprintf(text, sizeof(text), "driving %.1f m", length);
-              RCLCPP_INFO(get_logger(), "Drive: %s", text);
-              RespondDrive(drive_.header, true, text);
-              drive_.header.reset();
-              // An emergency while the goal was on its way.
-              if (drive_.cancel_pending) follow_client_->async_cancel_goal(handle);
-            }
-          }
-          Flush();
-        };
-        options.result_callback = [this, seq](const FollowHandle::WrappedResult& wrapped) {
-          {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (seq != drive_.seq) return;
-            const auto& result = wrapped.result;
-            const bool arrived = result && result->reason == FollowPath::Result::REASON_DONE;
-            std::string why = result ? result->message : "no result from the follower";
-            if (!drive_.cancel_reason.empty()) why = drive_.cancel_reason + " (" + why + ")";
-            EndDrive(arrived, why);
-          }
-          Flush();
-        };
-        follow_client_->async_send_goal(goal, options);
+        char text[64];
+        std::snprintf(text, sizeof(text), "driving %.1f m", response.path_length);
+        SendFollow(goal, text);
       }
     }
     Flush();
   }
 
+  // Hands a path to the follower for the current drive. Called with the mutex held.
+  void SendFollow(const FollowPath::Goal& goal, const std::string& what) {
+    const uint64_t seq = drive_.seq;
+    typename rclcpp_action::Client<FollowPath>::SendGoalOptions options;
+    options.goal_response_callback = [this, seq, what](const FollowHandle::SharedPtr& handle) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (seq != drive_.seq) return;
+        if (!handle) {
+          EndDrive(false, "the follower did not take the path", FollowPath::Result::REASON_INVALID, 0);
+        } else {
+          drive_.handle = handle;
+          RCLCPP_INFO(get_logger(), "%s: %s", PurposeName(drive_.purpose), what.c_str());
+          RespondDrive(drive_.header, true, what);
+          drive_.header.reset();
+          // An emergency or a pause while the goal was on its way.
+          if (drive_.cancel_pending) follow_client_->async_cancel_goal(handle);
+        }
+      }
+      Flush();
+    };
+    options.feedback_callback = [this, seq](FollowHandle::SharedPtr, const std::shared_ptr<const FollowPath::Feedback> feedback) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (seq != drive_.seq || drive_.purpose != Purpose::kMow) return;
+      core_.OnJobProgress(drive_.PathIndex(feedback->index));
+    };
+    options.result_callback = [this, seq](const FollowHandle::WrappedResult& wrapped) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (seq != drive_.seq) return;
+        const auto& result = wrapped.result;
+        const uint8_t reason = result ? result->reason : FollowPath::Result::REASON_CANCELED;
+        std::string why = result ? result->message : "no result from the follower";
+        if (!drive_.cancel_reason.empty()) why = drive_.cancel_reason + " (" + why + ")";
+        EndDrive(reason == FollowPath::Result::REASON_DONE, why, reason, result ? result->index : 0);
+      }
+      Flush();
+    };
+    follow_client_->async_send_goal(goal, options);
+  }
+
   // Stops the drive: cancels the follower, or drops the way still being planned. Called with the mutex held.
   void CancelDrive(const std::string& why) {
-    if (!core_.Driving()) return;
+    if (!drive_.active) return;
     drive_.cancel_reason = why;
     if (drive_.planning) {
       transit_client_->remove_pending_request(drive_.request_id);
       drive_.planning = false;
-      EndDrive(false, why);
+      EndDrive(false, why, FollowPath::Result::REASON_CANCELED, 0);
     } else if (drive_.handle) {
       follow_client_->async_cancel_goal(drive_.handle);
     } else {
@@ -467,16 +545,245 @@ class LogicNode : public rclcpp::Node {
     }
   }
 
-  // Called with the mutex held.
-  void EndDrive(bool arrived, const std::string& message) {
+  // Ends the drive, the approach or the path of the job; index is the pose of the follower's path it got to. Called
+  // with the mutex held.
+  void EndDrive(bool arrived, const std::string& message, uint8_t reason, uint32_t index) {
     if (drive_.header) RespondDrive(drive_.header, false, message);
+    const char* name = PurposeName(drive_.purpose);
     if (arrived) {
-      RCLCPP_INFO(get_logger(), "Drive: arrived");
+      RCLCPP_INFO(get_logger(), "%s: done", name);
     } else {
-      RCLCPP_WARN(get_logger(), "Drive ended: %s", message.c_str());
+      RCLCPP_WARN(get_logger(), "%s ended: %s", name, message.c_str());
     }
-    core_.OnDriveEnded(arrived, message);
+    const Drive ended = drive_;
     drive_ = Drive();
+    if (ended.purpose == Purpose::kDriveTo) {
+      core_.OnDriveEnded(arrived, message);
+    } else {
+      core_.OnLegEnded(ToLegEnd(reason), ended.PathIndex(index), message);
+    }
+  }
+
+  static const char* PurposeName(int purpose) {
+    switch (purpose) {
+      case 1: return "Approach";
+      case 2: return "Mow path";
+      default: return "Drive";
+    }
+  }
+
+  // The next step of the job, when nothing is on its way for it. Called with the mutex held.
+  void PumpJob() {
+    if (drive_.active || job_plan_.active || !core_.Mowing()) return;
+    JobStep step = core_.NextJobStep(MonotonicSeconds());
+    switch (step.kind) {
+      case JobStep::Kind::kNone: return;
+      case JobStep::Kind::kPlan: PlanJobArea(step.area_id); return;
+      case JobStep::Kind::kApproach: Approach(step.goal); return;
+      case JobStep::Kind::kFollow: FollowJobPath(step.path, step.start_index); return;
+    }
+  }
+
+  void PlanJobArea(const std::string& area_id) {
+    const PlanQuestion question = planner_.Prepare(json{{"area_id", area_id}});
+    if (!question.ok) {
+      core_.OnJobPlanFailed(question.message);
+      return;
+    }
+    if (!plan_client_->service_is_ready()) {
+      core_.OnJobPlanFailed("The planner is not running");
+      return;
+    }
+    RCLCPP_INFO(get_logger(), "Mowing: planning area %s", area_id.c_str());
+    const uint64_t seq = ++plan_seq_;
+    job_plan_.active = true;
+    job_plan_.seq = seq;
+    job_plan_.sent = now();
+    job_plan_.request_id =
+        plan_client_
+            ->async_send_request(ToServiceRequest(question.request),
+                                 [this, seq](rclcpp::Client<mowbite_planner_interfaces::srv::PlanCoverage>::SharedFuture f) {
+                                   OnJobPlan(seq, *f.get());
+                                 })
+            .request_id;
+  }
+
+  void OnJobPlan(uint64_t seq, const mowbite_planner_interfaces::srv::PlanCoverage::Response& response) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!job_plan_.active || seq != job_plan_.seq) return;
+      job_plan_ = JobPlan();
+      const CoverageAnswer answer = ToAnswer(response);
+      if (!answer.success) {
+        core_.OnJobPlanFailed(answer.message);
+      } else {
+        std::vector<JobPath> paths = JobPaths(answer);
+        RCLCPP_INFO(get_logger(), "Mowing: %zu paths from %zu poses", paths.size(), answer.poses.size());
+        core_.OnJobPlanned(std::move(paths), answer.fingerprint);
+      }
+    }
+    Flush();
+  }
+
+  // Drives to the start of a path over the drivable areas, the blade off. Called with the mutex held.
+  void Approach(const JobPose& goal) {
+    std::vector<Ring> drivable;
+    std::vector<Ring> obstacles;
+    std::string why = planner_.TransitAreas(&drivable, &obstacles);
+    if (why.empty() && !transit_client_->service_is_ready()) why = "The planner is not running";
+    if (!why.empty()) {
+      core_.OnLegEnded(LegEnd::kFailed, 0, why);
+      return;
+    }
+    const RobotStateData state = core_.RobotState();
+    auto plan = std::make_shared<mowbite_planner_interfaces::srv::PlanTransit::Request>();
+    plan->start = PoseAt(state.pose_x, state.pose_y, state.pose_heading);
+    plan->goal = PoseAt(goal.x, goal.y, goal.heading);
+    plan->use_goal_heading = true;
+    for (const auto& ring : drivable) plan->drivable_areas.push_back(ToPolygon(ring));
+    for (const auto& ring : obstacles) plan->obstacles.push_back(ToPolygon(ring));
+    plan->max_outside = transit_max_outside_;
+    drive_ = Drive();
+    drive_.purpose = Purpose::kApproach;
+    drive_.seq = ++drive_seq_;
+    drive_.active = true;
+    drive_.planning = true;
+    drive_.sent = now();
+    drive_.allowed = plan->drivable_areas;
+    drive_.obstacles = plan->obstacles;
+    const uint64_t seq = drive_.seq;
+    drive_.request_id =
+        transit_client_
+            ->async_send_request(plan,
+                                 [this, seq](rclcpp::Client<mowbite_planner_interfaces::srv::PlanTransit>::SharedFuture f) {
+                                   OnTransit(seq, *f.get());
+                                 })
+            .request_id;
+    RCLCPP_INFO(get_logger(), "Mowing: approaching (%.2f, %.2f)", goal.x, goal.y);
+  }
+
+  // Hands a path of the plan to the follower from start_index on. Poses on the one before are left out, the follower
+  // refuses them; feedback and result are counted back in poses of the path. Called with the mutex held.
+  void FollowJobPath(const JobPath& path, size_t start_index) {
+    std::vector<Ring> drivable;
+    std::vector<Ring> obstacles;
+    const std::string why = planner_.TransitAreas(&drivable, &obstacles);
+    if (!why.empty()) {
+      core_.OnLegEnded(LegEnd::kFailed, start_index, why);
+      return;
+    }
+    drive_ = Drive();
+    drive_.purpose = Purpose::kMow;
+    FollowPath::Goal goal;
+    goal.start_index = 0;
+    for (size_t i = 0; i < path.poses.size(); ++i) {
+      const JobPose& p = path.poses[i];
+      if (!goal.poses.empty() && std::hypot(p.x - goal.poses.back().position.x, p.y - goal.poses.back().position.y) < 1e-6) {
+        continue;
+      }
+      if (i <= start_index) goal.start_index = static_cast<uint32_t>(goal.poses.size());
+      goal.poses.push_back(PoseAt(p.x, p.y, p.heading));
+      goal.kinds.push_back(p.kind);
+      drive_.path_index.push_back(i);
+    }
+    // Nothing left to drive on this path.
+    if (goal.poses.size() < 3 || goal.start_index + 1 >= goal.poses.size()) {
+      drive_ = Drive();
+      core_.OnLegEnded(LegEnd::kDone, path.poses.empty() ? 0 : path.poses.size() - 1, "");
+      return;
+    }
+    for (const auto& ring : drivable) goal.allowed_areas.push_back(ToPolygon(ring));
+    for (const auto& ring : obstacles) goal.obstacles.push_back(ToPolygon(ring));
+    drive_.seq = ++drive_seq_;
+    drive_.active = true;
+    drive_.sent = now();
+    char text[64];
+    std::snprintf(text, sizeof(text), "%zu poses from %zu", path.poses.size(), start_index);
+    SendFollow(goal, text);
+  }
+
+  // Keeps the lease of hw/blade alive while the logic wants the blade, and switches it off at once when not.
+  void UpdateBlade() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    UpdateBladeLocked();
+  }
+
+  void UpdateBladeLocked() {
+    const bool wanted = core_.BladeWanted();
+    const double t = MonotonicSeconds();
+    if (!wanted) {
+      if (!blade_on_requested_) return;
+      blade_on_requested_ = false;
+      SendBlade(false);
+      return;
+    }
+    if (blade_on_requested_ && t - blade_sent_s_ < blade_renew_s_) return;
+    if (!blade_client_->service_is_ready()) {
+      core_.OnBladeRefused("hw/blade is not available");
+      return;
+    }
+    blade_on_requested_ = true;
+    blade_sent_s_ = t;
+    SendBlade(true);
+  }
+
+  // Called with the mutex held.
+  void SendBlade(bool on) {
+    auto request = std::make_shared<mowbite_msgs::srv::SetBlade::Request>();
+    request->on = on;
+    double lease = blade_lease_s_;
+    if (blade_lease_max_s_ > 0) lease = std::min(lease, static_cast<double>(blade_lease_max_s_));
+    request->lease_s = static_cast<float>(lease);
+    blade_client_->async_send_request(request, [this, on](rclcpp::Client<mowbite_msgs::srv::SetBlade>::SharedFuture f) {
+      const auto response = f.get();
+      if (response->success) return;
+      RCLCPP_WARN(get_logger(), "hw/blade refused %s: %s", on ? "on" : "off", response->message.c_str());
+      if (!on) return;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        blade_on_requested_ = false;
+        core_.OnBladeRefused(response->message);
+      }
+      Flush();
+    });
+  }
+
+  // <data_dir>/checkpoint.json, written to a new file and renamed, so a crash never leaves half a checkpoint.
+  std::string CheckpointPath() const {
+    return data_dir_.empty() ? "" : data_dir_ + "/checkpoint.json";
+  }
+
+  void RestoreCheckpoint() {
+    const std::string path = CheckpointPath();
+    if (path.empty()) return;
+    std::ifstream in(path);
+    if (!in) return;
+    std::stringstream text;
+    text << in.rdbuf();
+    const auto progress = ParseCheckpoint(text.str());
+    if (!progress) {
+      RCLCPP_WARN(get_logger(), "%s is not a checkpoint, starting over", path.c_str());
+      return;
+    }
+    RCLCPP_INFO(get_logger(), "Checkpoint: job %s, area %d, path %d, index %d", progress->job_id.c_str(), progress->area,
+                progress->path, progress->index);
+    core_.RestoreJob(*progress);
+    planner_.settings().angle_increment_sum = progress->angle_increment_sum;
+  }
+
+  void SaveCheckpoint(const std::string& text) {
+    const std::string path = CheckpointPath();
+    if (path.empty()) return;
+    const std::string temp = path + ".new";
+    {
+      std::ofstream out(temp, std::ios::trunc);
+      out << text;
+      if (!out.flush()) {
+        RCLCPP_ERROR(get_logger(), "Cannot write %s", temp.c_str());
+        return;
+      }
+    }
+    if (std::rename(temp.c_str(), path.c_str()) != 0) RCLCPP_ERROR(get_logger(), "Cannot replace %s", path.c_str());
   }
 
   void RespondDrive(const std::shared_ptr<rmw_request_id_t>& header, bool success, const std::string& message) {
@@ -493,6 +800,7 @@ class LogicNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       if (!last_hw_ || (now() - *last_hw_).seconds() > hw_timeout_s_) core_.OnHardwareTimeout();
       if (!last_pose_ || (now() - *last_pose_).seconds() > pose_timeout_s_) core_.OnPoseTimeout();
+      core_.OnTick(MonotonicSeconds());
       if (edit_sent_ && (now() - *edit_sent_).seconds() > map_edit_timeout_s_) {
         edit_sent_.reset();
         if (edit_request_id_) {
@@ -511,9 +819,9 @@ class LogicNode : public rclcpp::Node {
     mowbite_msgs::msg::RobotState msg;
     msg.current_state = state.state;
     msg.current_sub_state = state.sub_state;
-    msg.current_area = -1;
-    msg.current_path = -1;
-    msg.current_path_index = -1;
+    msg.current_area = static_cast<int16_t>(state.current_area);
+    msg.current_path = static_cast<int16_t>(state.current_path);
+    msg.current_path_index = static_cast<int16_t>(state.current_path_index);
     msg.battery_percentage = state.battery_percentage;
     msg.emergency = state.emergency;
     msg.emergency_reason = static_cast<uint16_t>(state.emergency_reason);
@@ -601,6 +909,11 @@ class LogicNode : public rclcpp::Node {
       if (drive_.planning && (now() - drive_.sent).seconds() > plan_timeout_s_) {
         CancelDrive("No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s");
       }
+      if (job_plan_.active && (now() - job_plan_.sent).seconds() > plan_timeout_s_) {
+        plan_client_->remove_pending_request(job_plan_.request_id);
+        job_plan_ = JobPlan();
+        core_.OnJobPlanFailed("No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s");
+      }
       for (auto it = pending_plans_.begin(); it != pending_plans_.end();) {
         if ((now() - it->second.sent).seconds() > plan_timeout_s_) {
           plan_client_->remove_pending_request(it->second.request_id);
@@ -648,7 +961,10 @@ class LogicNode : public rclcpp::Node {
     answer.angle = r.angle;
     answer.fingerprint = r.fingerprint;
     answer.poses.reserve(r.path.poses.size());
-    for (const auto& pose : r.path.poses) answer.poses.push_back({pose.pose.position.x, pose.pose.position.y});
+    for (const auto& pose : r.path.poses) {
+      answer.poses.push_back({pose.pose.position.x, pose.pose.position.y});
+      answer.headings.push_back(Yaw(pose.pose.orientation));
+    }
     answer.section_start = r.section_start;
     answer.segment_start = r.segment_start;
     answer.segment_end = r.segment_end;
@@ -760,15 +1076,26 @@ class LogicNode : public rclcpp::Node {
     bool stop;
     std::vector<ReasonChange> reasons;
     std::vector<std::string> notices;
+    std::optional<std::string> checkpoint;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (core_.TakeDriveCancel()) {
+        CancelDrive("stopped by the logic: emergency, no pose, no safety measurement, pause, skip or stop");
+      }
+      // The blade goes off at once when the logic no longer wants it, not at the next tick.
+      UpdateBladeLocked();
+      PumpJob();
+      if (core_.TakeDriveCancel()) CancelDrive("stopped by the logic");
+      UpdateBladeLocked();
       events = core_.TakeEvents();
       actions_changed = core_.TakeActionsChanged();
-      if (core_.TakeDriveCancel()) CancelDrive("stopped by the logic: emergency, no pose or no safety measurement");
       stop = core_.TakeStopRequest();
       reasons = core_.TakeReasonChanges();
       notices = core_.TakeNotices();
+      checkpoint = core_.TakeCheckpoint();
+      planner_.settings().angle_increment_sum = core_.AngleIncrementSum();
     }
+    if (checkpoint) SaveCheckpoint(*checkpoint);
     for (const auto& line : notices) RCLCPP_INFO(get_logger(), "%s", line.c_str());
     if (stop) cmd_vel_pub_->publish(geometry_msgs::msg::Twist());
     // The app shows the reasons of an active emergency from this line, like with mower_comms_v2 of OpenMower.
@@ -822,12 +1149,20 @@ class LogicNode : public rclcpp::Node {
     }
   }
 
-  using FollowPath = mowbite_msgs::action::FollowPath;
-  using FollowHandle = rclcpp_action::ClientGoalHandle<FollowPath>;
-
   // The drive to a pose: its number tells late answers apart, the request waits for its answer until the follower
   // has taken the path.
+  // What the follower drives for: logic/drive_to, the approach to a path of the job, or that path.
+  enum Purpose { kDriveTo = 0, kApproach = 1, kMow = 2 };
+
   struct Drive {
+    Purpose purpose = Purpose::kDriveTo;
+    bool active = false;
+    // kMow: the pose of the job's path for each pose of the follower's path.
+    std::vector<size_t> path_index;
+    size_t PathIndex(uint32_t index) const {
+      if (path_index.empty()) return index;
+      return path_index[std::min<size_t>(index, path_index.size() - 1)];
+    }
     uint64_t seq = 0;
     std::shared_ptr<rmw_request_id_t> header;
     bool planning = false;
@@ -838,6 +1173,14 @@ class LogicNode : public rclcpp::Node {
     FollowHandle::SharedPtr handle;
     bool cancel_pending = false;
     std::string cancel_reason;
+  };
+
+  // The plan of the job's area on its way to the planner.
+  struct JobPlan {
+    bool active = false;
+    uint64_t seq = 0;
+    rclcpp::Time sent{0, 0, RCL_ROS_TIME};
+    int64_t request_id = 0;
   };
 
   // A mowing.plan request on its way to the planner.
@@ -851,6 +1194,13 @@ class LogicNode : public rclcpp::Node {
   std::mutex mutex_;
   LogicCore core_;
   Drive drive_;
+  JobPlan job_plan_;
+  std::string data_dir_;
+  double blade_lease_s_ = 1.0;
+  double blade_renew_s_ = 0.5;
+  float blade_lease_max_s_ = 0;
+  bool blade_on_requested_ = false;
+  double blade_sent_s_ = 0;
   uint64_t drive_seq_ = 0;
   double transit_max_outside_ = 0.3;
   MowingPlanner planner_;
@@ -876,6 +1226,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp::Client<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_client_;
+  rclcpp::Client<mowbite_msgs::srv::SetBlade>::SharedPtr blade_client_;
   rclcpp::Client<mowbite_msgs::srv::AddArea>::SharedPtr add_area_client_;
   rclcpp::Client<mowbite_msgs::srv::SetDock>::SharedPtr set_dock_client_;
   rclcpp::Client<mowbite_planner_interfaces::srv::PlanCoverage>::SharedPtr plan_client_;
@@ -900,6 +1251,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::TimerBase::SharedPtr sensor_timer_;
   rclcpp::TimerBase::SharedPtr overlay_timer_;
   rclcpp::TimerBase::SharedPtr plan_timer_;
+  rclcpp::TimerBase::SharedPtr blade_timer_;
 };
 
 }  // namespace mowbite_logic
