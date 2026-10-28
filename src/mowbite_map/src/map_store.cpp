@@ -125,7 +125,7 @@ std::string MapStore::Save(const std::string& text) {
     fs::remove(temp_path, ec);
     return error;
   }
-  // The version being replaced becomes map.json.bak, if it is a usable map. A hard link, so map.json never goes missing.
+  // The version being replaced becomes map.json.bak if it is a usable map, by a hard link: map.json never goes missing.
   if (ReadMap(map_path, max_bytes_).map) {
     fs::remove(backup_path, ec);
     fs::create_hard_link(map_path, backup_path, ec);
