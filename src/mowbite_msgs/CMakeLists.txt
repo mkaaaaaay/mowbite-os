@@ -7,6 +7,7 @@ find_package(builtin_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
+find_package(action_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/AbsolutePose.msg"
@@ -32,7 +33,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetDock.srv"
   "srv/SetEmergency.srv"
   "srv/SetPose.srv"
-  DEPENDENCIES builtin_interfaces std_msgs geometry_msgs diagnostic_msgs
+  "action/FollowPath.action"
+  DEPENDENCIES builtin_interfaces std_msgs geometry_msgs diagnostic_msgs action_msgs
 )
 
 install(FILES LICENSE.xbot_monitoring DESTINATION share/${PROJECT_NAME})

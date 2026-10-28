@@ -1,0 +1,41 @@
+# Follows a path of base_link poses in the map frame (mowbite_follower). Stops by no longer sending follower/cmd_vel.
+
+# Kinds of poses, the segment types of the planner
+uint8 KIND_PERIMETER=0
+uint8 KIND_LANE=1
+uint8 KIND_TURN=2
+uint8 KIND_TRANSIT=3
+
+# At least 3 poses, none on the position of the one before; each faces the way the mower faces there.
+geometry_msgs/Pose[] poses
+# One per pose; empty: all KIND_TRANSIT. Turns are driven slower.
+uint8[] kinds
+# Starts here instead of at poses[0], e.g. to go on after a pause.
+uint32 start_index
+# Where base_link may be (mowing and navigation areas, plus the margin of the follower): at least one.
+geometry_msgs/Polygon[] allowed_areas
+# Where base_link must never be.
+geometry_msgs/Polygon[] obstacles
+---
+uint8 REASON_DONE=0
+uint8 REASON_CANCELED=1
+uint8 REASON_INVALID=2
+# no safety measurement of the platform (hw/capabilities)
+uint8 REASON_NOT_ALLOWED=3
+uint8 REASON_EMERGENCY=4
+uint8 REASON_POSE_LOST=5
+uint8 REASON_POSITION_ACCURACY=6
+uint8 REASON_HEADING=7
+uint8 REASON_CROSS_TRACK=8
+uint8 REASON_OUTSIDE=9
+# the mower stays behind (stuck) or a phase takes too long
+uint8 REASON_TIMEOUT=10
+
+uint8 reason
+string message
+# The pose the mower got to; a new goal with this start_index goes on from there.
+uint32 index
+---
+uint32 index
+# m, left of the path positive
+float32 cross_track
