@@ -25,6 +25,11 @@ rclcpp::QoS LatchedQos(size_t depth) {
   return rclcpp::QoS(rclcpp::KeepLast(depth)).reliable().transient_local();
 }
 
+double MonotonicSeconds() {
+  using namespace std::chrono;
+  return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
 McuSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
   McuSnapshot::Motor motor;
   motor.ok = m.ok;
@@ -166,7 +171,7 @@ class LogicNode : public rclcpp::Node {
     std::optional<std::pair<double, double>> cmd;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      cmd = core_.OnTeleop(msg.linear.x, msg.angular.z);
+      cmd = core_.OnTeleop(msg.linear.x, msg.angular.z, MonotonicSeconds());
     }
     if (!cmd) return;
     geometry_msgs::msg::Twist out;

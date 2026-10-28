@@ -2,6 +2,7 @@
 #define MOWBITE_LOGIC_LOGIC_CORE_H
 
 #include <cstdint>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
@@ -127,6 +128,9 @@ constexpr int kEmergencyStop = 1 << 2;
 constexpr int kEmergencyLift = 1 << 3;
 constexpr int kEmergencyCollision = 1 << 5;
 
+// The app repeats teleop every 100 ms while the joystick is held and sends one zero when it is let go.
+constexpr double kTeleopQuietS = 1.0;
+
 // Mower states and actions of stage 1: IDLE and AREA_RECORDING (remote control only), emergency and sensors.
 class LogicCore {
  public:
@@ -139,8 +143,10 @@ class LogicCore {
   // localization/pose stopped coming; events keep the last position.
   void OnPoseTimeout();
   ActionResult OnAction(const std::string& action_id);
-  // Remote control reaches the wheels only while recording an area, like in OpenMower.
-  std::optional<std::pair<double, double>> OnTeleop(double vx, double vz) const;
+  // Remote control reaches the wheels only while recording an area, like in OpenMower. After an emergency or a state
+  // change it waits for a zero command or a pause of kTeleopQuietS, so a held joystick does not move the mower.
+  // now_s is a monotonic clock.
+  std::optional<std::pair<double, double>> OnTeleop(double vx, double vz, double now_s);
 
   RobotStateData RobotState() const;
   std::vector<ActionGroup> Actions() const;
@@ -171,6 +177,8 @@ class LogicCore {
   double last_y_ = 0;
   bool mcu_seen_ = false;
   bool actions_changed_ = true;
+  bool teleop_armed_ = false;
+  double last_teleop_s_ = -std::numeric_limits<double>::infinity();
   std::vector<Event> events_;
 };
 

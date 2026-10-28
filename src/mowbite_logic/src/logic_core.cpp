@@ -97,6 +97,7 @@ void LogicCore::UpdateEmergency() {
   }
   if (emergency != emergency_) {
     emergency_ = emergency;
+    if (emergency) teleop_armed_ = false;
     AddEvent("EMERGENCY", {{"emergency", emergency}, {"reason", EmergencyReason()}});
     actions_changed_ = true;
   }
@@ -119,14 +120,25 @@ ActionResult LogicCore::OnAction(const std::string& action_id) {
   return known_prefix ? ActionResult::kRejected : ActionResult::kUnknown;
 }
 
-std::optional<std::pair<double, double>> LogicCore::OnTeleop(double vx, double vz) const {
-  if (state_ != State::kAreaRecording || emergency_) return std::nullopt;
+std::optional<std::pair<double, double>> LogicCore::OnTeleop(double vx, double vz, double now_s) {
+  const double quiet_s = now_s - last_teleop_s_;
+  last_teleop_s_ = now_s;
+  if (state_ != State::kAreaRecording || emergency_) {
+    teleop_armed_ = false;
+    return std::nullopt;
+  }
+  if (!teleop_armed_) {
+    const bool zero = vx == 0.0 && vz == 0.0;
+    if (!zero && quiet_s < kTeleopQuietS) return std::nullopt;
+    teleop_armed_ = true;
+  }
   return std::make_pair(vx, vz);
 }
 
 void LogicCore::SetState(State state) {
   if (state == state_) return;
   state_ = state;
+  teleop_armed_ = false;
   AddEvent("STATE", {{"state", StateName(state)}});
   actions_changed_ = true;
 }

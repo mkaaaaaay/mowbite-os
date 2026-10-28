@@ -5,6 +5,7 @@ Needs mosquitto on 127.0.0.1:1883 and `ros2 launch mowbite_sim sim.launch.py` ru
 import json
 import struct
 import sys
+import threading
 import time
 
 import paho.mqtt.client as mqtt
@@ -67,6 +68,25 @@ def rpc(method, params=None, rid="1"):
 def teleop(vx, vz):
     doc = b"\x01vx\x00" + struct.pack("<d", vx) + b"\x01vz\x00" + struct.pack("<d", vz) + b"\x00"
     c.publish("teleop", struct.pack("<i", len(doc) + 4) + doc)
+
+
+class Hold:
+    """A held joystick: teleop every 100 ms like the app, until released with one zero."""
+
+    def __init__(self, vx, vz):
+        self.running = True
+        self.thread = threading.Thread(target=self._run, args=(vx, vz), daemon=True)
+        self.thread.start()
+
+    def _run(self, vx, vz):
+        while self.running:
+            teleop(vx, vz)
+            time.sleep(0.1)
+
+    def release(self):
+        self.running = False
+        self.thread.join()
+        teleop(0.0, 0.0)
 
 
 def sent_speeds(since):
@@ -143,6 +163,8 @@ check("teleop ignored in IDLE", not sent_speeds(t0), str(sent_speeds(t0)))
 c.publish("action", "mower_logic:idle/start_area_recording")
 state = wait_for(lambda: b'"current_state":"AREA_RECORDING"' in (latest("robot_state/json") or b""), 3)
 check("state AREA_RECORDING", bool(state))
+# Like the app on a mode change: one zero, then the joystick.
+teleop(0.0, 0.0)
 t0 = sim_time()
 for _ in range(10):
     teleop(0.5, 0.1)
@@ -166,11 +188,26 @@ for _ in range(5):
     teleop(0.2, 0.0)
     time.sleep(0.1)
 check("teleop blocked during emergency", not [s for t, s in sent_speeds(t0) if s != [0.0, 0.0]])
+# The joystick is still held while the emergency is reset.
+hold = Hold(0.2, 0.0)
 c.publish("action", "mower_logic/reset_emergency")
 time.sleep(0.5)
 set_flags()
 state = wait_for(lambda: b'"emergency":0' in (latest("robot_state/json") or b""), 4)
 check("reset_emergency clears", bool(state))
+t0 = sim_time()
+time.sleep(1.5)
+check("held joystick does not drive after reset", not [s for t, s in sent_speeds(t0) if s != [0.0, 0.0]],
+      str(sent_speeds(t0)[:3]))
+hold.release()
+t0 = sim_time()
+for _ in range(5):
+    teleop(0.2, 0.0)
+    time.sleep(0.1)
+teleop(0.0, 0.0)
+time.sleep(0.5)
+check("teleop drives again after a zero", len([s for t, s in sent_speeds(t0) if s != [0.0, 0.0]]) >= 4,
+      str(sent_speeds(t0)[:3]))
 with open(LOG) as f:
     clears = [json.loads(l) for l in f if '"mod": 10' in l and '"type": 0,' in l]
 check("clear frame sent", len(clears) == 1 and clears[0]["hex"] == "00" * 8, str(clears))

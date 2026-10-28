@@ -85,28 +85,104 @@ TEST(Logic, TelemetryTimeoutIsEmergency) {
 TEST(Logic, TeleopOnlyWhileRecordingAndNoEmergency) {
   LogicCore core{LogicConfig{}};
   core.OnMcuStatus(Healthy());
-  EXPECT_FALSE(core.OnTeleop(0.2, 0.0));
+  EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 0.0));
   EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_area_recording"));
   EXPECT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
   EXPECT_EQ(core.RobotState().state, "AREA_RECORDING");
   EXPECT_TRUE(Enabled(core, "mower_logic:area_recording", "exit_recording_mode"));
   EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
-  auto cmd = core.OnTeleop(0.2, -0.1);
+  auto cmd = core.OnTeleop(0.2, -0.1, 2.0);
   ASSERT_TRUE(cmd);
   EXPECT_DOUBLE_EQ(cmd->first, 0.2);
   auto stopped = Healthy();
   stopped.stop = true;
   stopped.emergency_latched = true;
   core.OnMcuStatus(stopped);
-  EXPECT_FALSE(core.OnTeleop(0.2, 0.0));
+  EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 4.0));
   core.OnMcuStatus(Healthy());
   EXPECT_EQ(core.OnAction("mower_logic:area_recording/exit_recording_mode"), ActionResult::kDone);
-  EXPECT_FALSE(core.OnTeleop(0.2, 0.0));
+  EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 6.0));
   auto events = core.TakeEvents();
   ASSERT_GE(events.size(), 2u);
   EXPECT_EQ(events.front().type, "STATE");
   EXPECT_EQ(events.front().details["state"], "AREA_RECORDING");
   EXPECT_EQ(events.back().details["state"], "IDLE");
+}
+
+namespace {
+
+// Healthy mower in AREA_RECORDING.
+LogicCore RecordingCore() {
+  LogicCore core{LogicConfig{}};
+  core.OnMcuStatus(Healthy());
+  core.OnAction("mower_logic:idle/start_area_recording");
+  return core;
+}
+
+// A held joystick: teleop every 100 ms from from_s until before to_s. Returns how many reached the wheels.
+int Passed(LogicCore& core, double from_s, double to_s, double vx = 0.2) {
+  int passed = 0;
+  for (double t = from_s; t < to_s - 1e-9; t += 0.1) passed += core.OnTeleop(vx, 0.0, t) ? 1 : 0;
+  return passed;
+}
+
+void Latch(LogicCore& core) {
+  auto lifted = Healthy();
+  lifted.lift = true;
+  lifted.emergency_latched = true;
+  core.OnMcuStatus(lifted);
+}
+
+}  // namespace
+
+TEST(Logic, HeldJoystickWaitsForZeroAfterRelease) {
+  LogicCore core = RecordingCore();
+  EXPECT_EQ(Passed(core, 10.0, 11.0), 10);
+  Latch(core);
+  EXPECT_EQ(Passed(core, 11.0, 12.0), 0);
+  core.OnMcuStatus(Healthy());
+  ASSERT_FALSE(core.RobotState().emergency);
+  // Still held after the release: nothing moves.
+  EXPECT_EQ(Passed(core, 12.0, 14.0), 0);
+  // Let go: the zero goes through and the next press drives.
+  auto zero = core.OnTeleop(0.0, 0.0, 14.0);
+  ASSERT_TRUE(zero);
+  EXPECT_DOUBLE_EQ(zero->first, 0.0);
+  EXPECT_EQ(Passed(core, 14.1, 15.0), 9);
+}
+
+TEST(Logic, PauseOfOneSecondArmsTeleopAfterRelease) {
+  LogicCore core = RecordingCore();
+  EXPECT_EQ(Passed(core, 10.0, 11.0), 10);
+  Latch(core);
+  core.OnMcuStatus(Healthy());
+  // The last teleop came at 10.9: a press 0.5 s later is held back, as is everything close to it.
+  EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 11.4));
+  EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 12.3));
+  // A full second of silence arms it again.
+  EXPECT_TRUE(core.OnTeleop(0.2, 0.0, 13.3));
+  EXPECT_TRUE(core.OnTeleop(0.2, 0.0, 13.4));
+}
+
+TEST(Logic, ZeroDuringEmergencyDoesNotArm) {
+  LogicCore core = RecordingCore();
+  EXPECT_EQ(Passed(core, 10.0, 11.0), 10);
+  Latch(core);
+  // Let go and pressed again while stopped: the zero came too early to count.
+  EXPECT_FALSE(core.OnTeleop(0.0, 0.0, 11.0));
+  EXPECT_EQ(Passed(core, 11.1, 12.0), 0);
+  core.OnMcuStatus(Healthy());
+  EXPECT_EQ(Passed(core, 12.0, 13.0), 0);
+}
+
+TEST(Logic, HeldJoystickWaitsWhenRecordingStarts) {
+  LogicCore core{LogicConfig{}};
+  core.OnMcuStatus(Healthy());
+  EXPECT_EQ(Passed(core, 10.0, 11.0), 0);
+  core.OnAction("mower_logic:idle/start_area_recording");
+  EXPECT_EQ(Passed(core, 11.0, 12.0), 0);
+  EXPECT_TRUE(core.OnTeleop(0.0, 0.0, 12.0));
+  EXPECT_EQ(Passed(core, 12.1, 13.0), 9);
 }
 
 TEST(Logic, NoRecordingDuringEmergency) {
