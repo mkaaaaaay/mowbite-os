@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mowbite_logic/area_recorder.h"
+#include "mowbite_logic/mowing_job.h"
 
 namespace mowbite_logic {
 
@@ -58,6 +59,25 @@ struct LogicConfig {
   double max_position_accuracy = 0.1;
   // Its max_position_accuracy is the one above.
   RecorderConfig recorder;
+  // Mowing. The blade only with mow_with_blade, and then only on mow segments (perimeter, lanes, turns).
+  bool mow_with_blade = false;
+  // Before a path starts on a mow segment the blade has to reach this rpm within mower_spinup_timeout (s); 0: no wait.
+  int mower_spinup_rpm = 0;
+  double mower_spinup_timeout = 10.0;
+  // The blade counts as running from this rpm on, for BLADES events.
+  int blade_running_rpm = 100;
+  // s with a good position before mowing goes on after the GPS got bad.
+  double gps_wait_time = 10.0;
+  // Mowing ends below this voltage (V), held for battery_critical_time (s). Assumption until the discharge curve is
+  // measured: 3.5 V per cell.
+  double battery_critical_voltage = 21.0;
+  double battery_critical_time = 10.0;
+  // deg added to the mow angle after every finished job.
+  double mow_angle_increment = 0;
+  // m: farther from the start of a path the mower first drives there over the drivable areas.
+  double approach_distance = 0.5;
+  // s between checkpoints while a path is mowed.
+  double checkpoint_period = 30.0;
 };
 
 // map/status of mowbite_map: whether the map fits the datum of the GNSS.
@@ -93,6 +113,10 @@ struct RobotStateData {
   bool heading_valid = false;
   // Bits as in EMERGENCY events, 0 without emergency.
   int emergency_reason = 0;
+  // While mowing: the area (counting the mow areas of the map), the path of its plan and the pose in it; else -1.
+  int current_area = -1;
+  int current_path = -1;
+  int current_path_index = -1;
 };
 
 constexpr uint8_t kSensorTypeString = 1;
@@ -139,11 +163,27 @@ constexpr int kEmergencyFirmwareIncompatible = 1 << 12;
 // "LATCH, LIFT": the names of the bits as OpenMower logs them, in bit order.
 std::string EmergencyReasonNames(int reason);
 
+// How a drive of the follower for a job ended.
+enum class LegEnd { kDone, kCanceled, kGps, kEmergency, kFailed };
+
+// What the node does next for the job.
+struct JobStep {
+  enum class Kind { kNone, kPlan, kApproach, kFollow };
+  Kind kind = Kind::kNone;
+  // kPlan: the area to plan.
+  std::string area_id;
+  // kApproach: where to drive to, over the drivable areas.
+  JobPose goal;
+  // kFollow: the path and the pose to start at.
+  JobPath path;
+  size_t start_index = 0;
+};
+
 // The app repeats teleop every 100 ms while the joystick is held and sends one zero when it is let go.
 constexpr double kTeleopQuietS = 1.0;
 
-// Mower states and actions: IDLE, AREA_RECORDING (remote control and recording of areas) and driving to a pose,
-// emergency and sensors.
+// Mower states and actions: IDLE, AREA_RECORDING (remote control and recording of areas), driving to a pose, MOWING
+// and PAUSED, emergency and sensors.
 class LogicCore {
  public:
   explicit LogicCore(const LogicConfig& config);
@@ -175,11 +215,42 @@ class LogicCore {
   // The drive is over: arrived, or why not.
   void OnDriveEnded(bool arrived, const std::string& message);
   bool Driving() const;
-  // The commands of the follower reach the wheels only while driving and without emergency; teleop only while
-  // recording. So hw/cmd_vel has one source at a time.
+  // The commands of the follower reach the wheels only while driving, or mowing on a leg and not paused, and without
+  // emergency; teleop only while recording. So hw/cmd_vel has one source at a time.
   bool FollowerActive() const;
-  // True once when a drive has to stop at once (emergency, no pose, no safety measurement): the node cancels it.
+  // True once when a drive or a leg of the job has to stop at once (emergency, no pose, no safety measurement, pause,
+  // skip, abort): the node cancels it.
   bool TakeDriveCancel();
+
+  // The mow areas of the map and why mowing may not plan from it (empty if it may).
+  void OnMowMap(std::vector<JobArea> areas, const std::string& problem);
+  // The checkpoint read at the start.
+  void RestoreJob(const JobProgress& progress);
+  // Why mowing cannot start now, empty if it can.
+  std::string StartProblem() const;
+  // A start refused by the node (planner or follower missing): event MOWING_REFUSED.
+  void RefuseStart(const std::string& why);
+  bool Mowing() const;
+  // Called whenever the node has nothing on its way for the job; the step it returns is on its way until its result
+  // comes back. now_s is a monotonic clock.
+  JobStep NextJobStep(double now_s);
+  // The plan of the area asked for by kPlan, or why there is none.
+  void OnJobPlanned(std::vector<JobPath> paths, const std::string& fingerprint);
+  void OnJobPlanFailed(const std::string& message);
+  // The follower got to this pose of the path of kFollow.
+  void OnJobProgress(size_t index);
+  // The approach or path ended; index is the pose of the path it got to (kFollow only).
+  void OnLegEnded(LegEnd end, size_t index, const std::string& message);
+  // Timers of the job: GPS back, battery, checkpoint period.
+  void OnTick(double now_s);
+  // Whether the blade should turn now: mowing, not paused, a mow segment (or spinning up for one), mow_with_blade, a
+  // safety measurement, telemetry and not on the dock. The node keeps the lease of hw/blade alive only while it is.
+  bool BladeWanted() const;
+  // hw/blade refused while the blade was wanted: mowing pauses.
+  void OnBladeRefused(const std::string& message);
+  // The checkpoint to save, once after each change worth keeping.
+  std::optional<std::string> TakeCheckpoint();
+  double AngleIncrementSum() const;
 
   RobotStateData RobotState() const;
   std::vector<ActionGroup> Actions() const;
@@ -206,7 +277,13 @@ class LogicCore {
   }
 
  private:
-  enum class State { kIdle, kAreaRecording, kDriving };
+  enum class State { kIdle, kAreaRecording, kDriving, kMowing };
+  // Why mowing pauses; manual, emergency and fault wait for continue, GPS goes on by itself.
+  static constexpr int kPauseManual = 1 << 0;
+  static constexpr int kPauseEmergency = 1 << 1;
+  static constexpr int kPauseGps = 1 << 2;
+  static constexpr int kPauseFault = 1 << 3;
+  enum class Leg { kNone, kPlanning, kApproach, kFollow };
 
   void SetState(State state);
   // Moves the events of the recorder into the events of the logic, at the current position.
@@ -215,6 +292,16 @@ class LogicCore {
   void UpdateEmergency();
   int EmergencyReason() const;
   static const char* StateName(State state);
+  std::string CurrentStateName() const;
+  ActionResult OnMowingAction(const std::string& name);
+  void StartMowing();
+  void Pause(int why, const std::string& reason);
+  void Unpause(int why);
+  void ApplySkips();
+  // Ends the job: finished (JOB_COMPLETE) or not (it goes on from the checkpoint next time).
+  void EndJob(bool finished);
+  bool PoseGood() const;
+  void CheckpointNow();
 
   LogicConfig config_;
   HardwareSnapshot hw_;
@@ -239,6 +326,25 @@ class LogicCore {
   AreaRecorder recorder_;
   bool map_writable_ = false;
   std::string map_reason_ = "The map status is not known yet";
+
+  MowingJob job_;
+  std::string mow_map_problem_ = "The map status is not known yet";
+  std::string session_id_;
+  int pause_ = 0;
+  std::string pause_reason_;
+  Leg leg_ = Leg::kNone;
+  bool approached_ = false;
+  bool skip_path_ = false;
+  bool skip_area_ = false;
+  std::string announced_area_;
+  std::optional<double> spinup_since_;
+  std::optional<double> gps_good_since_;
+  std::optional<double> battery_low_since_;
+  double last_checkpoint_s_ = 0;
+  bool checkpoint_due_ = false;
+  bool blades_running_ = false;
+  bool last_start_ok_ = false;
+  std::vector<std::string> notices_;
 };
 
 }  // namespace mowbite_logic

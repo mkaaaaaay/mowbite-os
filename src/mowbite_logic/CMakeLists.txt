@@ -44,7 +44,7 @@ install(TARGETS mowbite_logic_core mowbite_logic_component
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(mowbite_logic_test test/test_logic_core.cpp test/test_area_recorder.cpp test/test_mowing_plan.cpp
-    test/test_mowing_job.cpp)
+    test/test_mowing_job.cpp test/test_logic_mowing.cpp)
   target_link_libraries(mowbite_logic_test mowbite_logic_core)
 endif()
 
