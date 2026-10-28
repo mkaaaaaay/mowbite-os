@@ -7,7 +7,10 @@
 namespace tron {
 namespace {
 
-NmeaMessage Gga(int quality, double lat, double lon, double alt = 60.0, double utc = 43200.5) {
+// Without a time each GGA is 0.2 s after the one before, as from a receiver at 5 Hz.
+NmeaMessage Gga(int quality, double lat, double lon, double alt = 60.0, double utc = -1.0) {
+  static double next_utc = 43200.0;
+  if (utc < 0) utc = next_utc += 0.2;
   NmeaMessage m;
   m.type = NmeaMessage::Type::kGga;
   m.gga.quality = quality;
@@ -86,7 +89,7 @@ TEST_F(TrackerTest, MotionMessagesAloneGiveNoPose) {
 }
 
 TEST_F(TrackerTest, PositionIsEnuFromTheDatum) {
-  auto p = tracker.Update(Gga(4, 52.0003, 9.0004, 61.0), 0);
+  auto p = tracker.Update(Gga(4, 52.0003, 9.0004, 61.0, 43200.5), 0);
   ASSERT_TRUE(p);
   EXPECT_GT(p->position.north, 30.0);
   EXPECT_GT(p->position.east, 20.0);
@@ -138,6 +141,33 @@ TEST_F(TrackerTest, InvalidMotionRemovesEarlierMotion) {
   auto p = tracker.Update(Gga(4, 52.0, 9.0), 0.2);
   ASSERT_TRUE(p);
   EXPECT_FALSE(p->motion_valid);
+}
+
+TEST_F(TrackerTest, RepeatedGgaGivesNoPose) {
+  EXPECT_TRUE(tracker.Update(Gga(4, 52.0, 9.0, 60.0, 50000.0), 0));
+  EXPECT_FALSE(tracker.Update(Gga(4, 52.0, 9.0, 60.0, 50000.0), 0.2));
+  EXPECT_FALSE(tracker.Update(Gga(4, 52.0, 9.0, 60.0, 50000.0), 0.4));
+  EXPECT_EQ(tracker.stale_gga(), 2u);
+  EXPECT_TRUE(tracker.Update(Gga(4, 52.0, 9.0, 60.0, 50000.2), 0.6));
+}
+
+TEST_F(TrackerTest, GgaTimeAcrossMidnightAdvances) {
+  EXPECT_TRUE(tracker.Update(Gga(4, 52.0, 9.0, 60.0, 86399.8), 0));
+  EXPECT_TRUE(tracker.Update(Gga(4, 52.0, 9.0, 60.0, 0.0), 0.2));
+  EXPECT_EQ(tracker.stale_gga(), 0u);
+}
+
+TEST_F(TrackerTest, StepBackIsDroppedOnceThenFollowed) {
+  EXPECT_TRUE(tracker.Update(Gga(4, 52.0, 9.0, 60.0, 50000.0), 0));
+  EXPECT_FALSE(tracker.Update(Gga(4, 52.0, 9.0, 60.0, 49990.0), 0.2));
+  EXPECT_TRUE(tracker.Update(Gga(4, 52.0, 9.0, 60.0, 49990.2), 0.4));
+  EXPECT_EQ(tracker.stale_gga(), 1u);
+}
+
+TEST_F(TrackerTest, GgaWithoutFixStillCountsForTheTime) {
+  EXPECT_FALSE(tracker.Update(Gga(0, 52.0, 9.0, 60.0, 50000.0), 0));
+  EXPECT_FALSE(tracker.Update(Gga(4, 52.0, 9.0, 60.0, 50000.0), 0.2));
+  EXPECT_TRUE(tracker.Update(Gga(4, 52.0, 9.0, 60.0, 50000.2), 0.4));
 }
 
 TEST_F(TrackerTest, MissingCourseGivesNoMotion) {

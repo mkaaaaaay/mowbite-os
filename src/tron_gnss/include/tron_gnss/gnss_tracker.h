@@ -1,6 +1,7 @@
 #ifndef TRON_GNSS_GNSS_TRACKER_H
 #define TRON_GNSS_GNSS_TRACKER_H
 
+#include <cstdint>
 #include <optional>
 
 #include "tron_gnss/geodesy.h"
@@ -37,7 +38,8 @@ struct GnssPose {
   int satellites = 0;
 };
 
-// Combines position from GGA with speed and course from RMC or VTG. One pose per usable GGA.
+// Combines position from GGA with speed and course from RMC or VTG. One pose per usable GGA whose UTC time is later
+// than the one of the GGA before, so a receiver that hangs and repeats its last sentence gives no pose.
 class GnssTracker {
  public:
   GnssTracker(const GnssConfig& config, const LocalFrame& frame) : config_(config), frame_(frame) {
@@ -45,6 +47,11 @@ class GnssTracker {
 
   // now_s is a monotonic clock, only differences are used.
   std::optional<GnssPose> Update(const NmeaMessage& message, double now_s);
+
+  // GGA sentences dropped because their time did not advance.
+  uint64_t stale_gga() const {
+    return stale_gga_;
+  }
 
  private:
   struct Motion {
@@ -57,6 +64,8 @@ class GnssTracker {
   GnssConfig config_;
   LocalFrame frame_;
   std::optional<Motion> motion_;
+  std::optional<double> last_gga_utc_s_;
+  uint64_t stale_gga_ = 0;
 };
 
 }  // namespace tron

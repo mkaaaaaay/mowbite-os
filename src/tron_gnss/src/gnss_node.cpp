@@ -130,6 +130,12 @@ class GnssNode : public rclcpp::Node {
       auto pose = tracker_->Update(message, now);
       if (pose) Publish(*pose);
     }
+    if (tracker_->stale_gga() != reported_stale_) {
+      reported_stale_ = tracker_->stale_gga();
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                           "GGA time does not advance, %lu sentences dropped so far; receiver hanging?",
+                           static_cast<unsigned long>(reported_stale_));
+    }
     if (parser_.checksum_errors() + parser_.malformed() != reported_errors_) {
       reported_errors_ = parser_.checksum_errors() + parser_.malformed();
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 30000, "NMEA errors so far: %lu checksum, %lu malformed",
@@ -168,6 +174,7 @@ class GnssNode : public rclcpp::Node {
   tron::NmeaParser parser_;
   std::optional<tron::GnssTracker> tracker_;
   uint64_t reported_errors_ = 0;
+  uint64_t reported_stale_ = 0;
   rclcpp::Publisher<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   std::atomic<bool> running_{true};

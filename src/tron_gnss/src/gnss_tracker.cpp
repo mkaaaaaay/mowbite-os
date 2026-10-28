@@ -7,6 +7,15 @@ namespace tron {
 namespace {
 
 constexpr double kDegToRad = M_PI / 180.0;
+constexpr double kDayS = 86400.0;
+
+// Later within half a day, across midnight as well. A step back counts as not advancing once, the next GGA is
+// compared with it.
+bool Advances(double previous_s, double current_s) {
+  double d = current_s - previous_s;
+  if (d < -kDayS / 2) d += kDayS;
+  return d > 0.0 && d < kDayS / 2;
+}
 
 }  // namespace
 
@@ -31,6 +40,12 @@ std::optional<GnssPose> GnssTracker::Update(const NmeaMessage& message, double n
   }
 
   const GgaData& gga = message.gga;
+  const bool advanced = !last_gga_utc_s_ || Advances(*last_gga_utc_s_, gga.utc_s);
+  last_gga_utc_s_ = gga.utc_s;
+  if (!advanced) {
+    stale_gga_++;
+    return std::nullopt;
+  }
   if (!gga.lat_deg || !gga.lon_deg) return std::nullopt;
   GnssPose pose;
   switch (gga.quality) {
