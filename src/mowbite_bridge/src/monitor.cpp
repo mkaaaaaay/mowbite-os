@@ -84,6 +84,18 @@ RpcParseResult ParseRpcRequest(const std::string& payload) {
   return out;
 }
 
+Incoming ClassifyIncoming(const std::string& topic, bool retained) {
+  Incoming kind = Incoming::kOther;
+  if (topic == "teleop") {
+    kind = Incoming::kTeleop;
+  } else if (topic == "action") {
+    kind = Incoming::kAction;
+  } else if (topic == "rpc/request") {
+    kind = Incoming::kRpcRequest;
+  }
+  return retained && kind != Incoming::kOther ? Incoming::kRetainedCommand : kind;
+}
+
 std::optional<std::pair<double, double>> DecodeTeleop(const std::string& payload) {
   // Only vx and vz, some 30 bytes. A large nested document overflowed the stack while decoding.
   if (payload.size() > 1024) return std::nullopt;

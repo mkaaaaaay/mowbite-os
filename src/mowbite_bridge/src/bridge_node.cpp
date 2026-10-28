@@ -210,7 +210,7 @@ class BridgeNode : public rclcpp::Node {
       RCLCPP_WARN(node_.get_logger(), "MQTT connection lost");
     }
     void message_arrived(mqtt::const_message_ptr msg) override {
-      node_.OnMessage(msg->get_topic(), msg->get_payload_str());
+      node_.OnMessage(msg->get_topic(), msg->get_payload_str(), msg->is_retained());
     }
     void on_failure(const mqtt::token&) override {
       node_.connecting_ = false;
@@ -289,24 +289,33 @@ class BridgeNode : public rclcpp::Node {
     TryPublish("position/json", j.dump());
   }
 
-  void OnMessage(const std::string& topic, const std::string& payload) {
-    if (topic == "teleop") {
-      auto teleop = DecodeTeleop(payload);
-      if (!teleop) {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Ignoring invalid teleop of %zu bytes", payload.size());
-        return;
+  void OnMessage(const std::string& topic, const std::string& payload, bool retained) {
+    switch (ClassifyIncoming(topic, retained)) {
+      case Incoming::kTeleop: {
+        auto teleop = DecodeTeleop(payload);
+        if (!teleop) {
+          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Ignoring invalid teleop of %zu bytes",
+                               payload.size());
+          return;
+        }
+        geometry_msgs::msg::Twist twist;
+        twist.linear.x = teleop->first;
+        twist.angular.z = teleop->second;
+        teleop_pub_->publish(twist);
+        break;
       }
-      geometry_msgs::msg::Twist twist;
-      twist.linear.x = teleop->first;
-      twist.angular.z = teleop->second;
-      teleop_pub_->publish(twist);
-    } else if (topic == "action") {
-      RCLCPP_INFO(get_logger(), "Got action: %s", payload.c_str());
-      std_msgs::msg::String msg;
-      msg.data = payload;
-      action_pub_->publish(msg);
-    } else if (topic == "rpc/request") {
-      OnRpcRequest(payload);
+      case Incoming::kAction: {
+        RCLCPP_INFO(get_logger(), "Got action: %s", payload.c_str());
+        std_msgs::msg::String msg;
+        msg.data = payload;
+        action_pub_->publish(msg);
+        break;
+      }
+      case Incoming::kRpcRequest: OnRpcRequest(payload); break;
+      case Incoming::kRetainedCommand:
+        RCLCPP_WARN(get_logger(), "Dropped a retained message on %s, commands act only when sent", topic.c_str());
+        break;
+      case Incoming::kOther: break;
     }
   }
 

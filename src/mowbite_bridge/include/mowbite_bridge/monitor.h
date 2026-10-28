@@ -42,6 +42,12 @@ struct RpcParseResult {
 // known is up to the caller.
 RpcParseResult ParseRpcRequest(const std::string& payload);
 
+enum class Incoming { kTeleop, kAction, kRpcRequest, kRetainedCommand, kOther };
+
+// Commands from the app act only when sent. A retained one comes again after every connect and is dropped; the broker
+// clears the retain flag for messages to an existing subscription, so live commands are never affected.
+Incoming ClassifyIncoming(const std::string& topic, bool retained);
+
 // teleop: BSON {vx, vz}. Returns nothing for oversized or invalid payloads.
 std::optional<std::pair<double, double>> DecodeTeleop(const std::string& payload);
 

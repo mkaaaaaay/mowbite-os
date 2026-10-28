@@ -78,6 +78,17 @@ TEST(Teleop, DecodesBson) {
   EXPECT_FALSE(DecodeTeleop(std::string(missing.begin(), missing.end())));
 }
 
+TEST(Incoming, RetainedCommandsAreDropped) {
+  EXPECT_EQ(ClassifyIncoming("teleop", false), Incoming::kTeleop);
+  EXPECT_EQ(ClassifyIncoming("action", false), Incoming::kAction);
+  EXPECT_EQ(ClassifyIncoming("rpc/request", false), Incoming::kRpcRequest);
+  for (const char* topic : {"teleop", "action", "rpc/request"}) {
+    EXPECT_EQ(ClassifyIncoming(topic, true), Incoming::kRetainedCommand) << topic;
+  }
+  EXPECT_EQ(ClassifyIncoming("map/json", true), Incoming::kOther);
+  EXPECT_EQ(ClassifyIncoming("teleop/x", false), Incoming::kOther);
+}
+
 TEST(Events, Payload) {
   json e = EventPayload("STATE", {{"state", "IDLE"}}, 12.5);
   EXPECT_EQ(e["type"], "STATE");

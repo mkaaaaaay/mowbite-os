@@ -28,6 +28,8 @@ DATUM = (52.0, 9.0, 50.0)
 ANTENNA_X = 0.098
 WORK = tempfile.mkdtemp(prefix="mowbite_smoke_")
 LINKS = {name: os.path.join(WORK, name) for name in ("mcu", "gnss", "imu")}
+BRIDGE_START_S = 6.0
+RETAINED_ID = "retained-1"
 
 
 def generate_test_description():
@@ -47,13 +49,15 @@ def generate_test_description():
              parameters=[{"port": LINKS["imu"], "mount_roll_deg": 180.0}]),
         Node(package="mowbite_localization", executable="mowbite_localization_node", output="screen",
              parameters=[{"gyro_calibration_time": 2.0, "antenna_offset_x": ANTENNA_X}]),
-        Node(package="mowbite_bridge", executable="mowbite_bridge_node", output="screen",
-             parameters=[{"mqtt_host": "127.0.0.1", "mqtt_port": MQTT_PORT, "data_dir": WORK}]),
     ]
-    # The ptys and the broker have to exist before the drivers and the bridge look for them.
+    bridge = Node(package="mowbite_bridge", executable="mowbite_bridge_node", output="screen",
+                  parameters=[{"mqtt_host": "127.0.0.1", "mqtt_port": MQTT_PORT, "data_dir": WORK}])
+    # The ptys and the broker have to exist before the drivers look for them. The bridge comes last, after the probe
+    # has left a retained request on the broker.
     return launch.LaunchDescription([
         fake_tron, mosquitto,
         TimerAction(period=2.0, actions=nodes + [launch_testing.actions.ReadyToTest()]),
+        TimerAction(period=BRIDGE_START_S, actions=[bridge]),
     ]), {}
 
 
@@ -63,6 +67,7 @@ class Collector:
     def __init__(self):
         self.ros = {}
         self.mqtt = {}
+        self.rpc_ids = []
         self.lock = threading.Lock()
         self.node = rclpy.create_node("stack_smoke_probe")
         self.node.create_subscription(AbsolutePose, "gps/absolute_pose", lambda m: self._ros("gps", m), 10)
@@ -102,6 +107,8 @@ class Collector:
     def _mqtt(self, _c, _u, msg):
         with self.lock:
             self.mqtt[msg.topic] = msg.payload
+            if msg.topic == "rpc/response":
+                self.rpc_ids.append(json.loads(msg.payload).get("id"))
 
     def wait(self, getter, timeout=30.0):
         end = time.time() + timeout
@@ -126,6 +133,9 @@ class TestSensorChain(unittest.TestCase):
         rclpy.init()
         cls.probe = Collector()
         cls.probe.connect()
+        # Left on the broker before the bridge connects: it must not run when the bridge subscribes.
+        request = {"jsonrpc": "2.0", "method": "rpc.ping", "id": RETAINED_ID}
+        cls.probe.client.publish("rpc/request", json.dumps(request), retain=True).wait_for_publish(5.0)
 
     @classmethod
     def tearDownClass(cls):
@@ -162,13 +172,17 @@ class TestSensorChain(unittest.TestCase):
         self.assertEqual(odom.child_frame_id, "base_link")
 
     def test_bridge_publishes_antenna_offset_and_answers_ping(self):
-        params = self.probe.wait(lambda: self.probe.mqtt.get("params/json"), timeout=40.0)
+        # The first params/json can come before the latched parameters of the localization, the next one has them.
+        params = self.probe.wait(lambda: self.probe.mqtt.get("params/json")
+                                 if b"antenna_offset_x" in self.probe.mqtt.get("params/json", b"") else None, timeout=40.0)
         self.assertIsNotNone(params, "no params/json")
         self.assertAlmostEqual(json.loads(params)["/xbot_positioning/antenna_offset_x"], ANTENNA_X, places=6)
         self.probe.client.publish("rpc/request", json.dumps({"jsonrpc": "2.0", "method": "rpc.ping", "id": "p1"}))
-        answer = self.probe.wait(lambda: self.probe.mqtt.get("rpc/response"))
+        answer = self.probe.wait(lambda: "p1" in self.probe.rpc_ids or None)
         self.assertIsNotNone(answer, "no rpc/response")
-        self.assertEqual(json.loads(answer)["result"], "pong")
+        self.assertEqual(json.loads(self.probe.mqtt["rpc/response"])["result"], "pong")
+        # The retained request reached the bridge on subscribe, before the live one, and was dropped.
+        self.assertNotIn(RETAINED_ID, self.probe.rpc_ids)
 
 
 @launch_testing.post_shutdown_test()
