@@ -2,14 +2,13 @@
 #define MOWBITE_LOGIC_AREA_RECORDER_H
 
 #include <cstddef>
-#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <vector>
 
-namespace mowbite_logic {
+#include "mowbite_logic/reasons.h"
 
-using json = nlohmann::ordered_json;
+namespace mowbite_logic {
 
 struct Event {
   std::string type;
@@ -24,8 +23,8 @@ struct Point2 {
 // Open: the last point does not repeat the first.
 using Ring = std::vector<Point2>;
 
-// Why the ring cannot become an outline, empty if it can: too few points, crossing itself, enclosing almost nothing.
-std::string RingProblem(const Ring& ring, double min_area_m2);
+// Why the ring cannot become an outline, empty if it can: RING_FEW_POINTS, RING_CROSSES_ITSELF, RING_TOO_SMALL.
+Reason RingProblem(const Ring& ring, double min_area_m2);
 // Whether two segments that are not neighbours on the closed ring touch or cross.
 bool SelfIntersects(const Ring& ring);
 // m², of the closed ring.
@@ -74,12 +73,12 @@ class AreaRecorder {
   // The pose got too old.
   void OnPoseLost();
   // Whether mowbite_map takes changes now, and why not.
-  void SetMapWritable(bool writable, const std::string& reason);
+  void SetMapWritable(bool writable, const Reason& reason);
 
   // The edit to send, once.
   std::optional<MapEdit> TakeMapEdit();
-  // The answer of mowbite_map to the edit sent last.
-  void OnMapEditResult(bool ok, const std::string& id, const std::string& message);
+  // The answer of mowbite_map to the edit sent last; code says why it was not saved (SAVE_FAILED).
+  void OnMapEditResult(bool ok, const std::string& id, const std::string& code, const std::string& message);
   bool EditPending() const {
     return pending_.has_value();
   }
@@ -117,7 +116,7 @@ class AreaRecorder {
   }
 
  private:
-  Result Refuse(const std::string& action, const std::string& reason);
+  Result Refuse(const std::string& action, const Reason& reason);
   // Ends the open ring: the outline if there is none yet, else an obstacle.
   bool CloseRing(const std::string& action);
   Result Finish(const std::string& action, const std::string& type);
@@ -144,7 +143,7 @@ class AreaRecorder {
   bool accuracy_blocked_ = false;
   bool full_reported_ = false;
   bool map_writable_ = false;
-  std::string map_reason_ = "The map status is not known yet";
+  Reason map_reason_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
   // The edit waiting for its answer, and the one not yet taken by the node.
   std::optional<MapEdit> pending_;
   bool edit_untaken_ = false;

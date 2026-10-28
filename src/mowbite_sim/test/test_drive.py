@@ -212,6 +212,7 @@ class TestDrive(unittest.TestCase):
         ended = p.drive_ended(since, 200)
         self.assertIsNotNone(ended, "the drive never ended")
         self.assertTrue(ended["arrived"], ended.get("reason"))
+        self.assertIn(ended["reason"], ("DONE", "ALREADY_THERE"))
         truth = p.truth()
         self.assertLess(math.hypot(truth["x"] - 15, truth["y"] - 1.0), 0.25, truth)
         self.assertLess(abs(math.remainder(truth["yaw"], 2 * math.pi)), math.radians(25), truth)
@@ -229,7 +230,7 @@ class TestDrive(unittest.TestCase):
     def test_03_a_goal_off_the_map_is_refused(self):
         answer = self.probe.drive(30, 30)
         self.assertFalse(answer.success)
-        self.assertIn("transit planning failed", answer.message)
+        self.assertIn("Transit planning failed", answer.message)
 
     def test_04_stop_drive_stops_the_mower(self):
         p = self.probe
@@ -242,7 +243,9 @@ class TestDrive(unittest.TestCase):
         ended = p.drive_ended(since, 10)
         self.assertIsNotNone(ended)
         self.assertFalse(ended["arrived"])
-        self.assertIn("stopped by logic/stop_drive", ended["reason"])
+        self.assertEqual(ended["reason"], "STOPPED")
+        self.assertIn("logic/stop_drive", ended["message"])
+        self.assertEqual(ended["severity"], "info")
         time.sleep(1.5)
         a = p.truth()
         time.sleep(1.0)

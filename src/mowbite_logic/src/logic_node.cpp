@@ -125,6 +125,33 @@ LegEnd ToLegEnd(uint8_t reason) {
   }
 }
 
+// The name of a result of the follower, as in FollowPath.action.
+std::string FollowerCode(uint8_t reason) {
+  using Result = mowbite_msgs::action::FollowPath::Result;
+  switch (reason) {
+    case Result::REASON_DONE: return "DONE";
+    case Result::REASON_CANCELED: return "CANCELED";
+    case Result::REASON_INVALID: return "INVALID";
+    case Result::REASON_NOT_ALLOWED: return "NOT_ALLOWED";
+    case Result::REASON_EMERGENCY: return "EMERGENCY";
+    case Result::REASON_POSE_LOST: return "POSE_LOST";
+    case Result::REASON_POSITION_ACCURACY: return "POSITION_ACCURACY";
+    case Result::REASON_HEADING: return "HEADING";
+    case Result::REASON_CROSS_TRACK: return "CROSS_TRACK";
+    case Result::REASON_OUTSIDE: return "OUTSIDE";
+    case Result::REASON_TIMEOUT: return "TIMEOUT";
+    default: return "INVALID";
+  }
+}
+
+Reason PlannerMissing() {
+  return Reason("PLANNER_MISSING", "The planner is not running");
+}
+
+Reason FollowerMissing() {
+  return Reason("FOLLOWER_MISSING", "The follower is not running");
+}
+
 HardwareSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
   HardwareSnapshot::Motor motor;
   motor.ok = m.ok;
@@ -213,7 +240,8 @@ class LogicNode : public rclcpp::Node {
           {
             std::lock_guard<std::mutex> lock(mutex_);
             core_.OnMapStatus(ToDatum(msg->datum_state), msg->reason);
-            planner_.SetMapStatus(msg->mowing_allowed, msg->reason);
+            planner_.SetMapStatus(msg->mowing_allowed,
+                                  msg->mowing_allowed ? Reason() : MapReason(ToDatum(msg->datum_state), msg->reason));
             core_.OnMowMap(planner_.MowAreas(), planner_.MapProblem());
           }
           Flush();
@@ -257,7 +285,7 @@ class LogicNode : public rclcpp::Node {
             std::lock_guard<std::mutex> lock(mutex_);
             response->success = core_.Driving() && drive_.purpose == Purpose::kDriveTo;
             response->message = response->success ? "stopping" : "not driving";
-            if (response->success) CancelDrive("stopped by logic/stop_drive");
+            if (response->success) CancelDrive(Reason("STOPPED", "Stopped by logic/stop_drive"));
           }
           Flush();
         });
@@ -372,12 +400,14 @@ class LogicNode : public rclcpp::Node {
     ActionResult result;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      std::string missing;
+      Reason missing;
       if (action_id == "mower_logic:idle/start_mowing" && core_.StartProblem().empty()) {
-        if (!plan_client_->service_is_ready() || !transit_client_->service_is_ready()) missing = "The planner is not running";
-        if (!follow_client_->action_server_is_ready()) missing = "The follower is not running";
+        if (!plan_client_->service_is_ready() || !transit_client_->service_is_ready()) missing = PlannerMissing();
+        if (!follow_client_->action_server_is_ready()) missing = FollowerMissing();
         // The node still ends a leg of the last job.
-        if (drive_.active || job_plan_.active) missing = "The last job is still stopping, try again in a moment";
+        if (drive_.active || job_plan_.active) {
+          missing = Reason("STILL_STOPPING", "The last job is still stopping, try again in a moment");
+        }
       }
       if (!missing.empty()) {
         core_.RefuseStart(missing);
@@ -425,13 +455,19 @@ class LogicNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       std::vector<Ring> drivable;
       std::vector<Ring> obstacles;
-      std::string why = planner_.TransitAreas(&drivable, &obstacles);
-      if (why.empty() && !transit_client_->service_is_ready()) why = "The planner is not running";
-      if (why.empty() && !follow_client_->action_server_is_ready()) why = "The follower is not running";
-      if (why.empty()) why = core_.StartDrive(request.x, request.y);
+      // What the core checks first (busy, emergency, position), then what only the node knows.
+      Reason why = core_.DriveProblem();
+      if (why.empty()) why = planner_.TransitAreas(&drivable, &obstacles);
+      if (why.empty() && !transit_client_->service_is_ready()) why = PlannerMissing();
+      if (why.empty() && !follow_client_->action_server_is_ready()) why = FollowerMissing();
       if (!why.empty()) {
-        RCLCPP_WARN(get_logger(), "Drive refused: %s", why.c_str());
-        RespondDrive(header, false, why);
+        core_.RefuseDrive(why);
+      } else {
+        why = core_.StartDrive(request.x, request.y);
+      }
+      if (!why.empty()) {
+        RCLCPP_WARN(get_logger(), "Drive refused: %s (%s)", why.code.c_str(), why.message.c_str());
+        RespondDrive(header, false, why.message);
       } else {
         const RobotStateData state = core_.RobotState();
         auto plan = std::make_shared<mowbite_planner_interfaces::srv::PlanTransit::Request>();
@@ -470,12 +506,13 @@ class LogicNode : public rclcpp::Node {
       if (seq != drive_.seq || !drive_.planning) return;
       drive_.planning = false;
       if (!response.success) {
-        EndDrive(false, "transit planning failed: " + response.message, FollowPath::Result::REASON_INVALID, 0);
+        EndDrive(false, Reason("TRANSIT_FAILED", "Transit planning failed: " + response.message),
+                 FollowPath::Result::REASON_INVALID, 0);
       } else if (response.path.poses.empty()) {
         // Already there; the planner says so in its message.
         RespondDrive(drive_.header, true, "already there: " + response.message);
         drive_.header.reset();
-        EndDrive(true, "already there", FollowPath::Result::REASON_DONE, 0);
+        EndDrive(true, Reason("ALREADY_THERE", "Already there"), FollowPath::Result::REASON_DONE, 0);
       } else {
         FollowPath::Goal goal;
         for (const auto& pose : response.path.poses) goal.poses.push_back(pose.pose);
@@ -498,7 +535,8 @@ class LogicNode : public rclcpp::Node {
         std::lock_guard<std::mutex> lock(mutex_);
         if (seq != drive_.seq) return;
         if (!handle) {
-          EndDrive(false, "the follower did not take the path", FollowPath::Result::REASON_INVALID, 0);
+          EndDrive(false, Reason("FOLLOWER_REFUSED", "The follower did not take the path"),
+                   FollowPath::Result::REASON_INVALID, 0);
         } else {
           drive_.handle = handle;
           RCLCPP_INFO(get_logger(), "%s: %s", PurposeName(drive_.purpose), what.c_str());
@@ -521,8 +559,11 @@ class LogicNode : public rclcpp::Node {
         if (seq != drive_.seq) return;
         const auto& result = wrapped.result;
         const uint8_t reason = result ? result->reason : FollowPath::Result::REASON_CANCELED;
-        std::string why = result ? result->message : "no result from the follower";
-        if (!drive_.cancel_reason.empty()) why = drive_.cancel_reason + " (" + why + ")";
+        Reason why(FollowerCode(reason), result ? result->message : "No result from the follower");
+        // Stopped from here: the cause, not the cancel of the follower.
+        if (drive_.cancel_reason && reason == FollowPath::Result::REASON_CANCELED) {
+          why = Reason(*drive_.cancel_reason).WithMessage(drive_.cancel_reason->message + " (" + why.message + ")");
+        }
         EndDrive(reason == FollowPath::Result::REASON_DONE, why, reason, result ? result->index : 0);
       }
       Flush();
@@ -531,7 +572,7 @@ class LogicNode : public rclcpp::Node {
   }
 
   // Stops the drive: cancels the follower, or drops the way still being planned. Called with the mutex held.
-  void CancelDrive(const std::string& why) {
+  void CancelDrive(const Reason& why) {
     if (!drive_.active) return;
     drive_.cancel_reason = why;
     if (drive_.planning) {
@@ -547,21 +588,26 @@ class LogicNode : public rclcpp::Node {
 
   // Ends the drive, the approach or the path of the job; index is the pose of the follower's path it got to. Called
   // with the mutex held.
-  void EndDrive(bool arrived, const std::string& message, uint8_t reason, uint32_t index) {
-    if (drive_.header) RespondDrive(drive_.header, false, message);
+  void EndDrive(bool arrived, const Reason& why, uint8_t reason, uint32_t index) {
+    if (drive_.header) RespondDrive(drive_.header, false, why.message);
     const char* name = PurposeName(drive_.purpose);
     if (arrived) {
       RCLCPP_INFO(get_logger(), "%s: done", name);
     } else {
-      RCLCPP_WARN(get_logger(), "%s ended: %s", name, message.c_str());
+      RCLCPP_WARN(get_logger(), "%s ended: %s (%s)", name, why.code.c_str(), why.message.c_str());
     }
     const Drive ended = drive_;
     drive_ = Drive();
     if (ended.purpose == Purpose::kDriveTo) {
-      core_.OnDriveEnded(arrived, message);
-    } else {
-      core_.OnLegEnded(ToLegEnd(reason), ended.PathIndex(index), message);
+      core_.OnDriveEnded(arrived, why);
+      return;
     }
+    // In a job the way to the start of a path failed, or the follower did not take a path of the plan.
+    Reason leg = why;
+    const bool way = why.code == "TRANSIT_FAILED" || why.code == "PLANNER_TIMEOUT" || why.code == "FOLLOWER_REFUSED";
+    if (way && ended.purpose == Purpose::kApproach) leg.code = "APPROACH_FAILED";
+    if (way && ended.purpose == Purpose::kMow) leg.code = "INVALID";
+    core_.OnLegEnded(ToLegEnd(reason), ended.PathIndex(index), leg);
   }
 
   static const char* PurposeName(int purpose) {
@@ -629,8 +675,10 @@ class LogicNode : public rclcpp::Node {
   void Approach(const JobPose& goal) {
     std::vector<Ring> drivable;
     std::vector<Ring> obstacles;
-    std::string why = planner_.TransitAreas(&drivable, &obstacles);
-    if (why.empty() && !transit_client_->service_is_ready()) why = "The planner is not running";
+    Reason why = planner_.TransitAreas(&drivable, &obstacles);
+    if (why.empty() && !transit_client_->service_is_ready()) {
+      why = Reason("APPROACH_FAILED", "The planner is not running");
+    }
     if (!why.empty()) {
       core_.OnLegEnded(LegEnd::kFailed, 0, why);
       return;
@@ -667,7 +715,7 @@ class LogicNode : public rclcpp::Node {
   void FollowJobPath(const JobPath& path, size_t start_index) {
     std::vector<Ring> drivable;
     std::vector<Ring> obstacles;
-    const std::string why = planner_.TransitAreas(&drivable, &obstacles);
+    const Reason why = planner_.TransitAreas(&drivable, &obstacles);
     if (!why.empty()) {
       core_.OnLegEnded(LegEnd::kFailed, start_index, why);
       return;
@@ -689,7 +737,7 @@ class LogicNode : public rclcpp::Node {
     // Nothing left to drive on this path.
     if (goal.poses.size() < 3 || goal.start_index + 1 >= goal.poses.size()) {
       drive_ = Drive();
-      core_.OnLegEnded(LegEnd::kDone, path.poses.empty() ? 0 : path.poses.size() - 1, "");
+      core_.OnLegEnded(LegEnd::kDone, path.poses.empty() ? 0 : path.poses.size() - 1, Reason("DONE", ""));
       return;
     }
     for (const auto& ring : drivable) goal.allowed_areas.push_back(ToPolygon(ring));
@@ -811,7 +859,7 @@ class LogicNode : public rclcpp::Node {
           }
           edit_request_id_.reset();
         }
-        core_.OnMapEditResult(false, "", "No answer from mowbite_map; look at the map before saving again");
+        core_.OnMapEditResult(false, "", "NO_ANSWER", "No answer from mowbite_map; look at the map before saving again");
       }
       state = core_.RobotState();
     }
@@ -907,7 +955,8 @@ class LogicNode : public rclcpp::Node {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (drive_.planning && (now() - drive_.sent).seconds() > plan_timeout_s_) {
-        CancelDrive("No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s");
+        CancelDrive(Reason("PLANNER_TIMEOUT",
+                           "No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s"));
       }
       if (job_plan_.active && (now() - job_plan_.sent).seconds() > plan_timeout_s_) {
         plan_client_->remove_pending_request(job_plan_.request_id);
@@ -1005,20 +1054,21 @@ class LogicNode : public rclcpp::Node {
   void SendMapEdit(const MapEdit& edit) {
     const uint64_t seq = ++edit_seq_;
     edit_is_dock_ = edit.kind == MapEdit::Kind::kDock;
-    const auto answer = [this, seq](bool ok, const std::string& id, const std::string& message) {
+    const auto answer = [this, seq](bool ok, const std::string& id, const std::string& code,
+                                    const std::string& message) {
       {
         std::lock_guard<std::mutex> lock(mutex_);
         // A late answer after the timeout is not the current one any more.
         if (seq != edit_seq_ || !edit_sent_) return;
         edit_sent_.reset();
         edit_request_id_.reset();
-        core_.OnMapEditResult(ok, id, message);
+        core_.OnMapEditResult(ok, id, code, message);
       }
       Flush();
     };
     if (edit_is_dock_) {
       if (!set_dock_client_->service_is_ready()) {
-        core_.OnMapEditResult(false, "", "mowbite_map does not offer map/set_dock");
+        core_.OnMapEditResult(false, "", "NO_ANSWER", "mowbite_map does not offer map/set_dock");
         return;
       }
       auto request = std::make_shared<mowbite_msgs::srv::SetDock::Request>();
@@ -1030,13 +1080,13 @@ class LogicNode : public rclcpp::Node {
                              ->async_send_request(request,
                                                   [answer](rclcpp::Client<mowbite_msgs::srv::SetDock>::SharedFuture f) {
                                                     const auto r = f.get();
-                                                    answer(r->success, r->id, r->message);
+                                                    answer(r->success, r->id, r->code, r->message);
                                                   })
                              .request_id;
       return;
     }
     if (!add_area_client_->service_is_ready()) {
-      core_.OnMapEditResult(false, "", "mowbite_map does not offer map/add_area");
+      core_.OnMapEditResult(false, "", "NO_ANSWER", "mowbite_map does not offer map/add_area");
       return;
     }
     auto request = std::make_shared<mowbite_msgs::srv::AddArea::Request>();
@@ -1052,7 +1102,7 @@ class LogicNode : public rclcpp::Node {
                            ->async_send_request(request,
                                                 [answer](rclcpp::Client<mowbite_msgs::srv::AddArea>::SharedFuture f) {
                                                   const auto r = f.get();
-                                                  answer(r->success, r->id, r->message);
+                                                  answer(r->success, r->id, r->code, r->message);
                                                 })
                            .request_id;
   }
@@ -1079,13 +1129,11 @@ class LogicNode : public rclcpp::Node {
     std::optional<std::string> checkpoint;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (core_.TakeDriveCancel()) {
-        CancelDrive("stopped by the logic: emergency, no pose, no safety measurement, pause, skip or stop");
-      }
+      if (auto why = core_.TakeDriveCancel()) CancelDrive(*why);
       // The blade goes off at once when the logic no longer wants it, not at the next tick.
       UpdateBladeLocked();
       PumpJob();
-      if (core_.TakeDriveCancel()) CancelDrive("stopped by the logic");
+      if (auto why = core_.TakeDriveCancel()) CancelDrive(*why);
       UpdateBladeLocked();
       events = core_.TakeEvents();
       actions_changed = core_.TakeActionsChanged();
@@ -1172,7 +1220,7 @@ class LogicNode : public rclcpp::Node {
     std::vector<geometry_msgs::msg::Polygon> obstacles;
     FollowHandle::SharedPtr handle;
     bool cancel_pending = false;
-    std::string cancel_reason;
+    std::optional<Reason> cancel_reason;
   };
 
   // The plan of the job's area on its way to the planner.

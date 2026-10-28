@@ -73,10 +73,14 @@ TEST(Logic, EmergencyEventsCarryReasonBits) {
   EXPECT_EQ(events[0].type, "EMERGENCY");
   EXPECT_EQ(events[0].details["emergency"], true);
   EXPECT_EQ(events[0].details["reason"], kEmergencyLatch | kEmergencyLift);
+  EXPECT_EQ(events[0].details["severity"], "error");
+  EXPECT_EQ(events[0].details["resume"], "user");
   core.OnHardwareStatus(Healthy());
   events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].details["emergency"], false);
+  EXPECT_EQ(events[0].details["severity"], "info");
+  EXPECT_EQ(events[0].details["resume"], "auto");
 }
 
 TEST(Logic, IncompatibleFirmwareIsEmergencyWithItsOwnBit) {
@@ -461,10 +465,12 @@ TEST(Logic, PositionJumpIsAnEventAtTheNewPosition) {
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].type, "POSITION_JUMP");
   EXPECT_DOUBLE_EQ(events[0].details["distance"].get<double>(), 6.0);
-  EXPECT_EQ(events[0].details["reason"], "outliers");
+  EXPECT_EQ(events[0].details["reason"], "OUTLIERS");
+  EXPECT_EQ(events[0].details["severity"], "warning");
+  EXPECT_EQ(events[0].details["resume"], "auto");
   EXPECT_DOUBLE_EQ(events[0].details["x"].get<double>(), 7.0);
   core.OnPositionJump(7.5, 2.0, 0.5, false);
-  EXPECT_EQ(core.TakeEvents()[0].details["reason"], "gap");
+  EXPECT_EQ(core.TakeEvents()[0].details["reason"], "GAP");
 }
 
 TEST(Logic, EventsWithoutAnyPoseAreAtZero) {
@@ -509,7 +515,7 @@ bool HasEvent(const std::vector<Event>& events, const std::string& type) {
 TEST(LogicDrive, StartsFromIdleAndShowsDriving) {
   LogicCore core = ReadyToDrive();
   EXPECT_FALSE(core.FollowerActive());
-  EXPECT_EQ(core.StartDrive(5, 3), "");
+  EXPECT_TRUE(core.StartDrive(5, 3).empty());
   EXPECT_TRUE(core.Driving());
   EXPECT_TRUE(core.FollowerActive());
   EXPECT_EQ(core.RobotState().state, "IDLE");
@@ -523,16 +529,18 @@ TEST(LogicDrive, StartsFromIdleAndShowsDriving) {
   EXPECT_EQ(events[1].details["phase"], "start");
   EXPECT_EQ(events[1].details["goal_x"], 5.0);
   // No second drive and no recording meanwhile.
-  EXPECT_EQ(core.StartDrive(6, 3), "The mower is busy: driving");
+  const Reason busy = core.StartDrive(6, 3);
+  EXPECT_EQ(busy.code, "BUSY");
+  EXPECT_EQ(busy.fields["state"], "driving");
   EXPECT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kRejected);
 }
 
 TEST(LogicDrive, EndStopsTheWheelsAndGoesBackToIdle) {
   LogicCore core = ReadyToDrive();
-  ASSERT_EQ(core.StartDrive(5, 3), "");
+  ASSERT_TRUE(core.StartDrive(5, 3).empty());
   core.TakeEvents();
   core.TakeStopRequest();
-  core.OnDriveEnded(false, "position accuracy 0.30 m worse than 0.10 m");
+  core.OnDriveEnded(false, Reason("POSITION_ACCURACY", "Position accuracy 0.30 m"));
   EXPECT_FALSE(core.Driving());
   EXPECT_FALSE(core.FollowerActive());
   EXPECT_TRUE(core.TakeStopRequest());
@@ -541,11 +549,14 @@ TEST(LogicDrive, EndStopsTheWheelsAndGoesBackToIdle) {
   ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[0].type, "DRIVE");
   EXPECT_EQ(events[0].details["arrived"], false);
-  EXPECT_EQ(events[0].details["reason"], "position accuracy 0.30 m worse than 0.10 m");
+  EXPECT_EQ(events[0].details["reason"], "POSITION_ACCURACY");
+  EXPECT_EQ(events[0].details["message"], "Position accuracy 0.30 m");
+  EXPECT_EQ(events[0].details["severity"], "warning");
+  EXPECT_EQ(events[0].details["resume"], "user");
   EXPECT_EQ(events[1].type, "STATE");
   EXPECT_EQ(events[1].details["state"], "IDLE");
   // A late end changes nothing.
-  core.OnDriveEnded(true, "done");
+  core.OnDriveEnded(true, Reason("DONE", ""));
   EXPECT_TRUE(core.TakeEvents().empty());
 }
 
@@ -553,52 +564,65 @@ TEST(LogicDrive, RefusedWithAReason) {
   {
     LogicCore core = ReadyToDrive();
     core.OnCapabilities(false);
-    EXPECT_EQ(core.StartDrive(5, 3), "No safety measurement of this platform (hw/capabilities): remote control only");
-    EXPECT_TRUE(HasEvent(core.TakeEvents(), "DRIVE_REFUSED"));
+    EXPECT_EQ(core.StartDrive(5, 3).code, "NO_SAFETY_MEASUREMENT");
+    const auto events = core.TakeEvents();
+    ASSERT_TRUE(HasEvent(events, "DRIVE_REFUSED"));
+    EXPECT_EQ(events.back().details["reason"], "NO_SAFETY_MEASUREMENT");
+    EXPECT_EQ(events.back().details["severity"], "error");
+    EXPECT_EQ(events.back().details["resume"], "user");
+    EXPECT_FALSE(events.back().details["message"].get<std::string>().empty());
   }
   {
     LogicCore core = ReadyToDrive();
     core.OnHardwareStatus(Stopped(kEmergencyLatch | kEmergencyStop));
-    EXPECT_EQ(core.StartDrive(5, 3), "Emergency: reset it first");
+    EXPECT_EQ(core.StartDrive(5, 3).code, "EMERGENCY");
   }
   {
     LogicCore core = ReadyToDrive();
     core.OnPoseTimeout();
-    EXPECT_EQ(core.StartDrive(5, 3), "No position from the localization");
+    EXPECT_EQ(core.StartDrive(5, 3).code, "NO_POSITION");
   }
   {
     LogicCore core = ReadyToDrive();
     PoseSnapshot pose = GoodPose();
     pose.position_accuracy = 0.3f;
     core.OnPose(pose);
-    EXPECT_EQ(core.StartDrive(5, 3), "Position accuracy 0.30 m is worse than 0.10 m");
+    const Reason why = core.StartDrive(5, 3);
+    EXPECT_EQ(why.code, "POSITION_ACCURACY");
+    EXPECT_FLOAT_EQ(why.fields["accuracy"].get<float>(), 0.3f);
+    EXPECT_DOUBLE_EQ(why.fields["limit"].get<double>(), 0.1);
+    EXPECT_EQ(why.message, "Position accuracy 0.30 m is worse than 0.10 m");
   }
   {
     LogicCore core = ReadyToDrive();
     PoseSnapshot pose = GoodPose();
     pose.orientation_valid = false;
     core.OnPose(pose);
-    EXPECT_EQ(core.StartDrive(5, 3), "The heading is not aligned yet: drive a few metres by remote control");
+    EXPECT_EQ(core.StartDrive(5, 3).code, "NO_HEADING");
   }
   {
     LogicCore core = ReadyToDrive();
     ASSERT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
-    EXPECT_EQ(core.StartDrive(5, 3), "The mower is busy: AREA_RECORDING");
+    const Reason why = core.StartDrive(5, 3);
+    EXPECT_EQ(why.code, "BUSY");
+    EXPECT_EQ(why.fields["state"], "AREA_RECORDING");
     EXPECT_FALSE(core.Driving());
   }
 }
 
 TEST(LogicDrive, EmergencyCutsTheFollowerOffAtOnceAndCancels) {
   LogicCore core = ReadyToDrive();
-  ASSERT_EQ(core.StartDrive(5, 3), "");
+  ASSERT_TRUE(core.StartDrive(5, 3).empty());
   EXPECT_FALSE(core.TakeDriveCancel());
   core.OnHardwareStatus(Stopped(kEmergencyLatch | kEmergencyCollision));
   EXPECT_FALSE(core.FollowerActive());
-  EXPECT_TRUE(core.TakeDriveCancel());
+  const auto cancel = core.TakeDriveCancel();
+  ASSERT_TRUE(cancel.has_value());
+  EXPECT_EQ(cancel->code, "EMERGENCY");
   EXPECT_FALSE(core.TakeDriveCancel());
   // Driving until the follower has answered, then idle; the emergency stays.
   EXPECT_TRUE(core.Driving());
-  core.OnDriveEnded(false, "emergency");
+  core.OnDriveEnded(false, *cancel);
   EXPECT_FALSE(core.Driving());
   // After the release the follower stays off: a new drive needs a new request.
   core.OnHardwareStatus(Healthy());
@@ -608,28 +632,28 @@ TEST(LogicDrive, EmergencyCutsTheFollowerOffAtOnceAndCancels) {
 TEST(LogicDrive, LostTelemetryPoseOrSafetyMeasurementCancel) {
   {
     LogicCore core = ReadyToDrive();
-    ASSERT_EQ(core.StartDrive(5, 3), "");
+    ASSERT_TRUE(core.StartDrive(5, 3).empty());
     core.OnHardwareTimeout();
     EXPECT_FALSE(core.FollowerActive());
-    EXPECT_TRUE(core.TakeDriveCancel());
+    EXPECT_EQ(core.TakeDriveCancel().value_or(Reason()).code, "EMERGENCY");
   }
   {
     LogicCore core = ReadyToDrive();
-    ASSERT_EQ(core.StartDrive(5, 3), "");
+    ASSERT_TRUE(core.StartDrive(5, 3).empty());
     core.OnPoseTimeout();
-    EXPECT_TRUE(core.TakeDriveCancel());
+    EXPECT_EQ(core.TakeDriveCancel().value_or(Reason()).code, "POSE_LOST");
   }
   {
     LogicCore core = ReadyToDrive();
-    ASSERT_EQ(core.StartDrive(5, 3), "");
+    ASSERT_TRUE(core.StartDrive(5, 3).empty());
     core.OnCapabilities(false);
-    EXPECT_TRUE(core.TakeDriveCancel());
+    EXPECT_EQ(core.TakeDriveCancel().value_or(Reason()).code, "NOT_ALLOWED");
   }
 }
 
 TEST(LogicDrive, TeleopNeverReachesTheWheelsWhileDriving) {
   LogicCore core = ReadyToDrive();
-  ASSERT_EQ(core.StartDrive(5, 3), "");
+  ASSERT_TRUE(core.StartDrive(5, 3).empty());
   EXPECT_FALSE(core.OnTeleop(0.0, 0.0, 10.0).has_value());
   EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 12.0).has_value());
 }

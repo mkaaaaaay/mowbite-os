@@ -57,7 +57,7 @@ LogicCore Ready(LogicConfig config = LogicConfig{}) {
   core.OnHardwareStatus(Healthy());
   core.OnCapabilities(true);
   core.OnPose(PoseAt(1, 2));
-  core.OnMowMap(Garden(), "");
+  core.OnMowMap(Garden(), Reason());
   core.TakeEvents();
   core.TakeActionsChanged();
   return core;
@@ -107,17 +107,17 @@ TEST(LogicMowing, StartRefusedWithAReasonAndAnEvent) {
     std::function<void(LogicCore&)> spoil;
   };
   const std::vector<Case> cases = {
-      {"Emergency: reset it first", [](LogicCore& c) { auto hw = Healthy(); hw.emergency = true; c.OnHardwareStatus(hw); }},
-      {"No safety measurement", [](LogicCore& c) { c.OnCapabilities(false); }},
-      {"docking station", [](LogicCore& c) { auto hw = Healthy(); hw.dock_contact = true; c.OnHardwareStatus(hw); }},
-      {"Rain detected", [](LogicCore& c) { auto hw = Healthy(); hw.rain = true; c.OnHardwareStatus(hw); }},
-      {"Battery 20.0 V is below 21.0 V", [](LogicCore& c) { auto hw = Healthy(); hw.battery_voltage = 20; c.OnHardwareStatus(hw); }},
-      {"No position", [](LogicCore& c) { c.OnPoseTimeout(); }},
-      {"Position accuracy 0.50 m", [](LogicCore& c) { c.OnPose(PoseAt(1, 2, 0.5f)); }},
-      {"heading is not aligned", [](LogicCore& c) { auto p = PoseAt(1, 2); p.orientation_valid = false; c.OnPose(p); }},
-      {"map mismatch", [](LogicCore& c) { c.OnMowMap(Garden(), "map mismatch"); }},
-      {"no active mowing area", [](LogicCore& c) { c.OnMowMap({{"bed", "", false}}, ""); }},
-      {"busy: AREA_RECORDING", [](LogicCore& c) { c.OnAction("mower_logic:idle/start_area_recording"); }},
+      {"EMERGENCY", [](LogicCore& c) { auto hw = Healthy(); hw.emergency = true; c.OnHardwareStatus(hw); }},
+      {"NO_SAFETY_MEASUREMENT", [](LogicCore& c) { c.OnCapabilities(false); }},
+      {"ON_DOCK", [](LogicCore& c) { auto hw = Healthy(); hw.dock_contact = true; c.OnHardwareStatus(hw); }},
+      {"RAIN", [](LogicCore& c) { auto hw = Healthy(); hw.rain = true; c.OnHardwareStatus(hw); }},
+      {"BATTERY_LOW", [](LogicCore& c) { auto hw = Healthy(); hw.battery_voltage = 20; c.OnHardwareStatus(hw); }},
+      {"NO_POSITION", [](LogicCore& c) { c.OnPoseTimeout(); }},
+      {"POSITION_ACCURACY", [](LogicCore& c) { c.OnPose(PoseAt(1, 2, 0.5f)); }},
+      {"NO_HEADING", [](LogicCore& c) { auto p = PoseAt(1, 2); p.orientation_valid = false; c.OnPose(p); }},
+      {"MAP_MISMATCH", [](LogicCore& c) { c.OnMowMap(Garden(), MapReason(MapDatum::kMismatch, "map mismatch")); }},
+      {"NO_MOWING_AREA", [](LogicCore& c) { c.OnMowMap({{"bed", "", false}}, Reason()); }},
+      {"BUSY", [](LogicCore& c) { c.OnAction("mower_logic:idle/start_area_recording"); }},
   };
   for (const auto& test : cases) {
     LogicCore core = Ready();
@@ -130,8 +130,10 @@ TEST(LogicMowing, StartRefusedWithAReasonAndAnEvent) {
     const auto events = core.TakeEvents();
     const Event* refused = Find(events, "MOWING_REFUSED");
     ASSERT_TRUE(refused) << test.why;
-    EXPECT_NE(refused->details["reason"].get<std::string>().find(test.why), std::string::npos)
-        << refused->details["reason"];
+    EXPECT_EQ(refused->details["reason"], test.why);
+    EXPECT_EQ(refused->details["resume"], "user") << test.why;
+    EXPECT_TRUE(refused->details.contains("severity")) << test.why;
+    EXPECT_FALSE(refused->details["message"].get<std::string>().empty()) << test.why;
   }
 }
 
@@ -157,7 +159,7 @@ TEST(LogicMowing, StartOpensAJobAndASessionCarriedByEveryEvent) {
   EXPECT_NE(job, session);
   // Not for the app while mowing: a second start, recording, a drive.
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kRejected);
-  EXPECT_NE(core.StartDrive(3, 3), "");
+  EXPECT_FALSE(core.StartDrive(3, 3).empty());
   auto hw = Healthy();
   hw.blade.rpm = 2500;
   core.OnHardwareStatus(hw);
@@ -191,16 +193,16 @@ TEST(LogicMowing, PlansEachMowableAreaFollowsItsPathsAndCompletesTheJob) {
   core.OnJobProgress(3);
   EXPECT_EQ(core.RobotState().current_path, 0);
   EXPECT_EQ(core.RobotState().current_path_index, 3);
-  core.OnLegEnded(LegEnd::kDone, 4, "");
+  core.OnLegEnded(LegEnd::kDone, 4, Reason("DONE", ""));
   EXPECT_EQ(core.RobotState().current_path, 1);
   // The second path starts 4 m away: approach first, then follow.
   step = core.NextJobStep(0);
   ASSERT_EQ(step.kind, JobStep::Kind::kApproach);
   EXPECT_DOUBLE_EQ(step.goal.x, 5);
   core.OnPose(PoseAt(5, 2));
-  core.OnLegEnded(LegEnd::kDone, 0, "");
+  core.OnLegEnded(LegEnd::kDone, 0, Reason("DONE", ""));
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kFollow);
-  core.OnLegEnded(LegEnd::kDone, 4, "");
+  core.OnLegEnded(LegEnd::kDone, 4, Reason("DONE", ""));
   // On to the third area, the second one is not mowed.
   step = core.NextJobStep(0);
   ASSERT_EQ(step.kind, JobStep::Kind::kPlan);
@@ -239,12 +241,15 @@ TEST(LogicMowing, PauseStopsAtOnceAndContinueGoesOnFromWhereItStopped) {
   auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].details["state"], "PAUSED");
-  EXPECT_EQ(events[0].details["reason"], "Paused by the app");
+  EXPECT_EQ(events[0].details["reason"], "MANUAL");
+  EXPECT_EQ(events[0].details["message"], "Paused by the app");
+  EXPECT_EQ(events[0].details["severity"], "info");
+  EXPECT_EQ(events[0].details["resume"], "user");
   EXPECT_FALSE(Enabled(core, "mower_logic:mowing", "pause"));
   EXPECT_TRUE(Enabled(core, "mower_logic:mowing", "continue"));
   EXPECT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kRejected);
   // The follower reports where it stopped.
-  core.OnLegEnded(LegEnd::kCanceled, 3, "canceled");
+  core.OnLegEnded(LegEnd::kCanceled, 3, Reason("CANCELED", ""));
   EXPECT_EQ(core.RobotState().current_path_index, 3);
   EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kNone);
   ASSERT_TRUE(core.TakeCheckpoint());
@@ -269,7 +274,7 @@ TEST(LogicMowing, EmergencyPausesAndWaitsForContinueAfterTheReset) {
   EXPECT_FALSE(core.FollowerActive());
   EXPECT_FALSE(Enabled(core, "mower_logic:mowing", "continue"));
   EXPECT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kRejected);
-  core.OnLegEnded(LegEnd::kEmergency, 1, "emergency");
+  core.OnLegEnded(LegEnd::kEmergency, 1, Reason("EMERGENCY", ""));
   core.OnHardwareStatus(Healthy());
   // Released, but it does not drive off by itself.
   EXPECT_EQ(core.RobotState().state, "PAUSED");
@@ -283,7 +288,7 @@ TEST(LogicMowing, AfterBadGpsItGoesOnByItselfOnceThePositionIsGoodLongEnough) {
   LogicConfig config;
   config.gps_wait_time = 10;
   LogicCore core = Following(config);
-  core.OnLegEnded(LegEnd::kGps, 2, "Position accuracy 0.30 m");
+  core.OnLegEnded(LegEnd::kGps, 2, Reason("POSITION_ACCURACY", "Position accuracy 0.30 m"));
   EXPECT_EQ(core.RobotState().state, "PAUSED");
   core.OnPose(PoseAt(1, 2, 0.3f));
   core.OnTick(100);
@@ -330,7 +335,7 @@ TEST(LogicMowing, TheBladeOnlyOnMowSegmentsAndOnlyWhenAllowed) {
   core.OnHardwareStatus(Healthy());
   core.OnAction(kMowing + "pause");
   EXPECT_FALSE(core.BladeWanted());
-  core.OnLegEnded(LegEnd::kCanceled, 1, "");
+  core.OnLegEnded(LegEnd::kCanceled, 1, Reason("CANCELED", ""));
   core.OnAction(kMowing + "continue");
   // Continued, but off until the follower drives again.
   EXPECT_FALSE(core.BladeWanted());
@@ -340,7 +345,7 @@ TEST(LogicMowing, TheBladeOnlyOnMowSegmentsAndOnlyWhenAllowed) {
   core.OnBladeRefused("allow_blade is off");
   EXPECT_EQ(core.RobotState().state, "PAUSED");
   EXPECT_FALSE(core.BladeWanted());
-  core.OnLegEnded(LegEnd::kCanceled, 1, "");
+  core.OnLegEnded(LegEnd::kCanceled, 1, Reason("CANCELED", ""));
   core.OnAction(kMowing + "abort_mowing");
   EXPECT_FALSE(core.BladeWanted());
   // An approach is a transit.
@@ -372,7 +377,7 @@ TEST(LogicMowing, WaitsForTheBladeToSpinUpOrPausesWhenItDoesNot) {
   hw.blade.rpm = 2100;
   core.OnHardwareStatus(hw);
   EXPECT_EQ(core.NextJobStep(5).kind, JobStep::Kind::kFollow);
-  core.OnLegEnded(LegEnd::kDone, 4, "");
+  core.OnLegEnded(LegEnd::kDone, 4, Reason("DONE", ""));
   core.OnHardwareStatus(Healthy());
   core.TakeEvents();
   EXPECT_EQ(core.NextJobStep(20).kind, JobStep::Kind::kNone);
@@ -410,14 +415,14 @@ TEST(LogicMowing, SkipPathAndSkipAreaWaitForTheLegToEnd) {
   EXPECT_EQ(core.OnAction(kMowing + "skip_path"), ActionResult::kDone);
   EXPECT_TRUE(core.TakeDriveCancel());
   EXPECT_EQ(core.RobotState().current_path, 0);
-  core.OnLegEnded(LegEnd::kCanceled, 2, "");
+  core.OnLegEnded(LegEnd::kCanceled, 2, Reason("CANCELED", ""));
   EXPECT_EQ(core.RobotState().current_path, 1);
   EXPECT_EQ(core.RobotState().current_path_index, 0);
   EXPECT_EQ(core.RobotState().state, "MOWING");
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kFollow);
   core.TakeEvents();
   EXPECT_EQ(core.OnAction(kMowing + "skip_area"), ActionResult::kDone);
-  core.OnLegEnded(LegEnd::kCanceled, 1, "");
+  core.OnLegEnded(LegEnd::kCanceled, 1, Reason("CANCELED", ""));
   const auto events = core.TakeEvents();
   ASSERT_TRUE(Find(events, "AREA_SKIPPED"));
   EXPECT_EQ(Find(events, "AREA_SKIPPED")->details["area_id"], "front");
@@ -446,7 +451,7 @@ TEST(LogicMowing, AbortKeepsTheJobForTheNextStartAndResetJobDropsIt) {
   const std::string job = events[0].details["job_id"];
   EXPECT_FALSE(events[0].details.contains("session_id"));
   // A late end of the leg changes nothing.
-  core.OnLegEnded(LegEnd::kCanceled, 4, "");
+  core.OnLegEnded(LegEnd::kCanceled, 4, Reason("CANCELED", ""));
   EXPECT_TRUE(Enabled(core, "mower_logic:idle", "reset_job"));
   auto saved = ParseCheckpoint(*core.TakeCheckpoint());
   ASSERT_TRUE(saved);
@@ -515,13 +520,13 @@ TEST(LogicMowing, AFailedPlanOrLegPausesUntilContinue) {
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
   core.OnJobPlanned({Lane(1)}, "fp");
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kFollow);
-  core.OnLegEnded(LegEnd::kFailed, 2, "Cross track 0.6 m");
+  core.OnLegEnded(LegEnd::kFailed, 2, Reason("CROSS_TRACK", "Cross track 0.6 m"));
   EXPECT_EQ(core.RobotState().state, "PAUSED");
   EXPECT_EQ(core.RobotState().current_path_index, 2);
   EXPECT_FALSE(core.TakeDriveCancel());
   // A map that no longer fits pauses as well.
   core.OnAction(kMowing + "continue");
-  core.OnMowMap(Garden(), "The map does not fit the datum in use");
+  core.OnMowMap(Garden(), MapReason(MapDatum::kMismatch, ""));
   EXPECT_EQ(core.RobotState().state, "PAUSED");
 }
 

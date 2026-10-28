@@ -13,7 +13,7 @@ const std::string kPrefix = "mower_logic:area_recording/";
 
 AreaRecorder Writable(const RecorderConfig& config = RecorderConfig{}) {
   AreaRecorder recorder(config);
-  recorder.SetMapWritable(true, "");
+  recorder.SetMapWritable(true, Reason());
   recorder.TakeActionsChanged();
   return recorder;
 }
@@ -49,22 +49,28 @@ Ring Square(double side, double x0 = 0, double y0 = 0) {
 }  // namespace
 
 TEST(Ring, ThreePointsMakeARing) {
-  EXPECT_EQ(RingProblem({{0, 0}, {1, 0}, {0, 1}}, 0.05), "");
+  EXPECT_TRUE(RingProblem({{0, 0}, {1, 0}, {0, 1}}, 0.05).empty());
   EXPECT_DOUBLE_EQ(RingArea({{0, 0}, {1, 0}, {0, 1}}), 0.5);
 }
 
 TEST(Ring, TooFewPoints) {
-  EXPECT_EQ(RingProblem({{0, 0}, {1, 0}}, 0.05), "a ring needs at least 3 points, it has 2");
+  const Reason problem = RingProblem({{0, 0}, {1, 0}}, 0.05);
+  EXPECT_EQ(problem.code, "RING_FEW_POINTS");
+  EXPECT_EQ(problem.fields["points"], 2);
+  EXPECT_EQ(problem.fields["limit"], 3);
 }
 
 TEST(Ring, PointsOnALineEncloseNothing) {
-  const std::string problem = RingProblem({{0, 0}, {1, 0}, {2, 0}, {3, 0.01}}, 0.05);
-  EXPECT_NE(problem.find("encloses only"), std::string::npos) << problem;
+  const Reason problem = RingProblem({{0, 0}, {1, 0}, {2, 0}, {3, 0.01}}, 0.05);
+  EXPECT_EQ(problem.code, "RING_TOO_SMALL");
+  EXPECT_LT(problem.fields["area"].get<double>(), 0.05);
+  EXPECT_DOUBLE_EQ(problem.fields["limit"].get<double>(), 0.05);
+  EXPECT_NE(problem.message.find("encloses only"), std::string::npos) << problem.message;
 }
 
 TEST(Ring, AFigureEightCrossesItself) {
   EXPECT_TRUE(SelfIntersects({{0, 0}, {2, 2}, {2, 0}, {0, 2}}));
-  EXPECT_EQ(RingProblem({{0, 0}, {2, 2}, {2, 0}, {0, 2}}, 0.05), "the line crosses itself");
+  EXPECT_EQ(RingProblem({{0, 0}, {2, 2}, {2, 0}, {0, 2}}, 0.05).code, "RING_CROSSES_ITSELF");
 }
 
 TEST(Ring, TheClosingSegmentCountsToo) {
@@ -119,7 +125,11 @@ TEST(Recorder, NoPointsFromAnInaccuratePositionAndOneEventForIt) {
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].type, "RECORDING_REFUSED");
   EXPECT_EQ(events[0].details["action"], "point");
-  EXPECT_NE(events[0].details["reason"].get<std::string>().find("0.30 m"), std::string::npos);
+  EXPECT_EQ(events[0].details["reason"], "POSITION_ACCURACY");
+  EXPECT_FLOAT_EQ(events[0].details["accuracy"].get<float>(), 0.3f);
+  EXPECT_DOUBLE_EQ(events[0].details["limit"].get<double>(), 0.1);
+  EXPECT_NE(events[0].details["message"].get<std::string>().find("0.30 m"), std::string::npos);
+  EXPECT_EQ(events[0].details["resume"], "auto");
   // Accurate again: points come and a log line says so.
   recorder.TakeNotices();
   Drive(recorder, {{1, 0}, {2, 0}});
@@ -157,7 +167,9 @@ TEST(Recorder, ManualPointsOnlyOnRequestAndFarEnough) {
   auto events = recorder.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].details["action"], "collect_point");
-  EXPECT_NE(events[0].details["reason"].get<std::string>().find("Only 0.05 m"), std::string::npos);
+  EXPECT_EQ(events[0].details["reason"], "POINT_TOO_CLOSE");
+  EXPECT_NEAR(events[0].details["distance"].get<double>(), 0.05, 1e-9);
+  EXPECT_DOUBLE_EQ(events[0].details["limit"].get<double>(), 0.1);
   recorder.OnAction("collect_point");
   recorder.OnPose(1.5, 0, 0.02f);
   EXPECT_EQ(recorder.current().size(), 2u);
@@ -175,8 +187,9 @@ TEST(Recorder, ManualPointWithBadAccuracyOrLostPoseIsRefused) {
   EXPECT_TRUE(recorder.current().empty());
   auto events = recorder.TakeEvents();
   ASSERT_EQ(events.size(), 2u);
-  EXPECT_NE(events[0].details["reason"].get<std::string>().find("accuracy"), std::string::npos);
-  EXPECT_EQ(events[1].details["reason"], "No position");
+  EXPECT_EQ(events[0].details["reason"], "POSITION_ACCURACY");
+  EXPECT_EQ(events[0].details["resume"], "user");
+  EXPECT_EQ(events[1].details["reason"], "NO_POSITION");
 }
 
 TEST(Recorder, OutlineThenObstacleThenSave) {
@@ -210,7 +223,7 @@ TEST(Recorder, OutlineThenObstacleThenSave) {
   EXPECT_GT(edit->obstacles[0].size(), 20u);
 
   recorder.TakeEvents();
-  recorder.OnMapEditResult(true, "lawn1", "");
+  recorder.OnMapEditResult(true, "lawn1", "", "");
   EXPECT_FALSE(recorder.EditPending());
   EXPECT_FALSE(recorder.outline());
   EXPECT_TRUE(recorder.obstacles().empty());
@@ -248,7 +261,7 @@ TEST(Recorder, ABadRingStaysOpen) {
   auto events = recorder.TakeEvents();
   ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[0].details["action"], "stop_recording");
-  EXPECT_NE(events[0].details["reason"].get<std::string>().find("at least 3 points"), std::string::npos);
+  EXPECT_EQ(events[0].details["reason"], "RING_FEW_POINTS");
   // Driving on makes it a ring.
   Drive(recorder, {{0.15, 0}, {2, 0}, {2, 2}, {0, 0.1}});
   EXPECT_EQ(recorder.OnAction("stop_recording"), AreaRecorder::Result::kDone);
@@ -261,7 +274,8 @@ TEST(Recorder, AFigureEightIsRefused) {
   EXPECT_EQ(recorder.OnAction("stop_recording"), AreaRecorder::Result::kRefused);
   auto events = recorder.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
-  EXPECT_EQ(events[0].details["reason"], "Cannot close the ring: the line crosses itself");
+  EXPECT_EQ(events[0].details["reason"], "RING_CROSSES_ITSELF");
+  EXPECT_EQ(events[0].details["message"], "Cannot close the ring: the line crosses itself");
 }
 
 TEST(Recorder, NoSavingWhileTheMapIsNotWritable) {
@@ -269,14 +283,15 @@ TEST(Recorder, NoSavingWhileTheMapIsNotWritable) {
   recorder.OnAction("start_recording");
   Drive(recorder, Square(2));
   recorder.OnAction("stop_recording");
-  recorder.SetMapWritable(false, "The map was recorded for another datum");
+  recorder.SetMapWritable(false, MapReason(MapDatum::kMismatch, "The map was recorded for another datum"));
   EXPECT_EQ(recorder.OnAction("finish_mowing_area"), AreaRecorder::Result::kRefused);
   EXPECT_FALSE(recorder.TakeMapEdit());
   EXPECT_TRUE(recorder.outline());
   auto events = recorder.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
-  EXPECT_EQ(events[0].details["reason"], "The map was recorded for another datum");
-  recorder.SetMapWritable(true, "");
+  EXPECT_EQ(events[0].details["reason"], "MAP_MISMATCH");
+  EXPECT_EQ(events[0].details["message"], "The map was recorded for another datum");
+  recorder.SetMapWritable(true, Reason());
   EXPECT_EQ(recorder.OnAction("finish_mowing_area"), AreaRecorder::Result::kDone);
 }
 
@@ -286,16 +301,19 @@ TEST(Recorder, ARefusedSaveKeepsTheArea) {
   Drive(recorder, Square(2));
   recorder.OnAction("finish_mowing_area");
   ASSERT_TRUE(recorder.TakeMapEdit());
-  recorder.OnMapEditResult(false, "", "Cannot store the map: disk full");
+  recorder.OnMapEditResult(false, "", "STORAGE", "Cannot store the map: disk full");
   EXPECT_TRUE(recorder.outline());
   EXPECT_TRUE(On(recorder, "finish_mowing_area"));
   auto events = recorder.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].type, "RECORDING_REFUSED");
   EXPECT_EQ(events[0].details["action"], "finish_mowing_area");
-  EXPECT_EQ(events[0].details["reason"], "Cannot store the map: disk full");
+  EXPECT_EQ(events[0].details["reason"], "SAVE_FAILED");
+  EXPECT_EQ(events[0].details["code"], "STORAGE");
+  EXPECT_EQ(events[0].details["message"], "Cannot store the map: disk full");
+  EXPECT_EQ(events[0].details["severity"], "error");
   // A late second answer changes nothing.
-  recorder.OnMapEditResult(true, "x", "");
+  recorder.OnMapEditResult(true, "x", "", "");
   EXPECT_TRUE(recorder.outline());
   EXPECT_TRUE(recorder.TakeEvents().empty());
 }
@@ -332,7 +350,8 @@ TEST(Recorder, StopsCollectingAtTheLimit) {
   EXPECT_EQ(recorder.current().size(), 5u);
   auto events = recorder.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
-  EXPECT_NE(events[0].details["reason"].get<std::string>().find("5 points"), std::string::npos);
+  EXPECT_EQ(events[0].details["reason"], "TOO_MANY_POINTS");
+  EXPECT_EQ(events[0].details["limit"], 5);
 }
 
 namespace {
@@ -390,12 +409,15 @@ TEST(LogicRecording, NeedsAMapThatFitsTheDatum) {
   auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].type, "RECORDING_REFUSED");
-  EXPECT_EQ(events[0].details["reason"], "The map status is not known yet");
+  EXPECT_EQ(events[0].details["reason"], "MAP_UNKNOWN");
+  EXPECT_EQ(events[0].details["message"], "The map status is not known yet");
 
   core.OnMapStatus(MapDatum::kMismatch, "The map was recorded for the datum 52, 9");
   EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
   core.OnAction("mower_logic:idle/start_area_recording");
-  EXPECT_EQ(core.TakeEvents()[0].details["reason"], "The map was recorded for the datum 52, 9");
+  const auto refused = core.TakeEvents();
+  EXPECT_EQ(refused[0].details["reason"], "MAP_MISMATCH");
+  EXPECT_EQ(refused[0].details["message"], "The map was recorded for the datum 52, 9");
   core.OnMapStatus(MapDatum::kUnbound, "");
   EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
   core.OnMapStatus(MapDatum::kUnknown, "");
@@ -426,7 +448,7 @@ TEST(LogicRecording, RecordsAndSavesThroughTheCore) {
   auto edit = core.TakeMapEdit();
   ASSERT_TRUE(edit);
   core.TakeEvents();
-  core.OnMapEditResult(true, "a1", "");
+  core.OnMapEditResult(true, "a1", "", "");
   auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].type, "AREA_RECORDED");
@@ -484,7 +506,7 @@ TEST(RecorderDock, TwoPointsGiveTheHeading) {
   EXPECT_DOUBLE_EQ(edit->y, 2);
   EXPECT_NEAR(edit->heading, M_PI / 2, 1e-9);
   recorder.TakeEvents();
-  recorder.OnMapEditResult(true, "dock1", "");
+  recorder.OnMapEditResult(true, "dock1", "", "");
   EXPECT_EQ(recorder.SubState(), "");
   EXPECT_TRUE(On(recorder, "start_recording"));
   auto events = recorder.TakeEvents();
@@ -504,7 +526,9 @@ TEST(RecorderDock, TooCloseKeepsTheFirstPoint) {
   EXPECT_EQ(recorder.SubState(), "RECORD_DOCKING_POSITION");
   auto events = recorder.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
-  EXPECT_NE(events[0].details["reason"].get<std::string>().find("Only 0.10 m"), std::string::npos);
+  EXPECT_EQ(events[0].details["reason"], "DOCK_TOO_CLOSE");
+  EXPECT_NEAR(events[0].details["distance"].get<double>(), 0.1, 1e-9);
+  EXPECT_DOUBLE_EQ(events[0].details["limit"].get<double>(), 0.3);
   // Backwards onto the contacts: the heading points the way the mower moved.
   recorder.OnPose(-1, 0, 0.02f);
   ASSERT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kDone);
@@ -517,13 +541,14 @@ TEST(RecorderDock, NeedsAnAccuratePositionAndAWritableMap) {
   recorder.OnPose(0, 0, 0.4f);
   EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
   recorder.OnPose(0, 0, 0.02f);
-  recorder.SetMapWritable(false, "The map was recorded for another datum");
+  recorder.SetMapWritable(false, MapReason(MapDatum::kMismatch, "The map was recorded for another datum"));
   EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
   auto events = recorder.TakeEvents();
   ASSERT_EQ(events.size(), 3u);
-  EXPECT_EQ(events[0].details["reason"], "No position");
-  EXPECT_NE(events[1].details["reason"].get<std::string>().find("0.40 m"), std::string::npos);
-  EXPECT_EQ(events[2].details["reason"], "The map was recorded for another datum");
+  EXPECT_EQ(events[0].details["reason"], "NO_POSITION");
+  EXPECT_EQ(events[1].details["reason"], "POSITION_ACCURACY");
+  EXPECT_FLOAT_EQ(events[1].details["accuracy"].get<float>(), 0.4f);
+  EXPECT_EQ(events[2].details["reason"], "MAP_MISMATCH");
   EXPECT_EQ(recorder.SubState(), "");
 }
 
@@ -534,7 +559,7 @@ TEST(RecorderDock, ARefusedSaveKeepsTheFirstPoint) {
   recorder.OnPose(1, 0, 0.02f);
   recorder.OnAction("record_dock");
   ASSERT_TRUE(recorder.TakeMapEdit());
-  recorder.OnMapEditResult(false, "", "Cannot store the map: disk full");
+  recorder.OnMapEditResult(false, "", "STORAGE", "Cannot store the map: disk full");
   EXPECT_EQ(recorder.SubState(), "RECORD_DOCKING_POSITION");
   EXPECT_EQ(recorder.TakeEvents().back().details["action"], "record_dock");
   ASSERT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kDone);
@@ -609,7 +634,7 @@ TEST(RecorderOverlay, LinesInBothFormats) {
   recorder.OnAction("finish_mowing_area");
   recorder.TakeMapEdit();
   recorder.TakeOverlayChanged();
-  recorder.OnMapEditResult(true, "a", "");
+  recorder.OnMapEditResult(true, "a", "", "");
   EXPECT_TRUE(recorder.TakeOverlayChanged());
   EXPECT_TRUE(recorder.Overlay()["polygons"].empty());
 }

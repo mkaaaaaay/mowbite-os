@@ -31,6 +31,10 @@ std::string Metres(double value) {
   return text;
 }
 
+Reason NoPosition() {
+  return Reason("NO_POSITION", "No position");
+}
+
 // > 0: c lies left of the line from a to b.
 double Cross(const Point2& a, const Point2& b, const Point2& c) {
   return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
@@ -85,12 +89,22 @@ bool SelfIntersects(const Ring& ring) {
   return false;
 }
 
-std::string RingProblem(const Ring& ring, double min_area_m2) {
-  if (ring.size() < 3) return "a ring needs at least 3 points, it has " + std::to_string(ring.size());
-  if (SelfIntersects(ring)) return "the line crosses itself";
+Reason RingProblem(const Ring& ring, double min_area_m2) {
+  if (ring.size() < 3) {
+    return Reason("RING_FEW_POINTS", "Cannot close the ring: it needs at least 3 points, it has " +
+                                         std::to_string(ring.size()))
+        .With("points", ring.size())
+        .With("limit", 3);
+  }
+  if (SelfIntersects(ring)) return Reason("RING_CROSSES_ITSELF", "Cannot close the ring: the line crosses itself");
   const double area = RingArea(ring);
-  if (area < min_area_m2) return "it encloses only " + Metres(area) + " m², at least " + Metres(min_area_m2) + " needed";
-  return "";
+  if (area < min_area_m2) {
+    return Reason("RING_TOO_SMALL", "Cannot close the ring: it encloses only " + Metres(area) + " m², at least " +
+                                        Metres(min_area_m2) + " needed")
+        .With("area", area)
+        .With("limit", min_area_m2);
+  }
+  return {};
 }
 
 AreaRecorder::AreaRecorder(const RecorderConfig& config) : config_(config) {}
@@ -124,8 +138,10 @@ void AreaRecorder::Reset() {
   overlay_changed_ = true;
 }
 
-AreaRecorder::Result AreaRecorder::Refuse(const std::string& action, const std::string& reason) {
-  events_.push_back({"RECORDING_REFUSED", {{"action", action}, {"reason", reason}}});
+AreaRecorder::Result AreaRecorder::Refuse(const std::string& action, const Reason& reason) {
+  json details = {{"action", action}};
+  PutReason(&details, "RECORDING_REFUSED", reason);
+  events_.push_back({"RECORDING_REFUSED", std::move(details)});
   return Result::kRefused;
 }
 
@@ -135,7 +151,7 @@ AreaRecorder::Result AreaRecorder::OnAction(const std::string& name) {
   if (it == names.end() || name == "exit_recording_mode") return Result::kUnknown;
   const size_t index = static_cast<size_t>(it - names.begin());
   // The edit on its way decides what comes next; the app shows no buttons until then.
-  if (pending_) return Refuse(name, "The last change of the map is still being saved");
+  if (pending_) return Refuse(name, Reason("STILL_SAVING", "The last change of the map is still being saved"));
   if (!Enabled()[index]) return Result::kRefused;
   actions_changed_ = true;
   switch (index) {
@@ -160,7 +176,7 @@ AreaRecorder::Result AreaRecorder::OnAction(const std::string& name) {
       collect_requested_ = false;
       return Result::kDone;
     case kCollectPoint:
-      if (!pose_) return Refuse(name, "No position");
+      if (!pose_) return Refuse(name, NoPosition());
       // The next pose, so the point is where the mower is now.
       collect_requested_ = true;
       return Result::kDone;
@@ -169,10 +185,10 @@ AreaRecorder::Result AreaRecorder::OnAction(const std::string& name) {
 }
 
 bool AreaRecorder::CloseRing(const std::string& action) {
-  const std::string problem = RingProblem(current_, config_.min_area);
+  const Reason problem = RingProblem(current_, config_.min_area);
   if (!problem.empty()) {
     // The ring stays open: the mower can drive on and close it better.
-    Refuse(action, "Cannot close the ring: " + problem);
+    Refuse(action, problem);
     return false;
   }
   if (outline_) {
@@ -192,7 +208,7 @@ bool AreaRecorder::CloseRing(const std::string& action) {
 AreaRecorder::Result AreaRecorder::Finish(const std::string& action, const std::string& type) {
   if (!map_writable_) return Refuse(action, map_reason_);
   if (recording_ && !CloseRing(action)) return Result::kRefused;
-  if (!outline_) return Refuse(action, "No outline recorded");
+  if (!outline_) return Refuse(action, Reason("NO_OUTLINE", "No outline recorded"));
   MapEdit edit;
   edit.type = type;
   edit.outline = *outline_;
@@ -206,10 +222,13 @@ AreaRecorder::Result AreaRecorder::Finish(const std::string& action, const std::
 AreaRecorder::Result AreaRecorder::RecordDock() {
   const std::string action = "record_dock";
   if (!map_writable_) return Refuse(action, map_reason_);
-  if (!pose_) return Refuse(action, "No position");
+  if (!pose_) return Refuse(action, NoPosition());
   if (!(pose_->accuracy <= config_.max_position_accuracy)) {
-    return Refuse(action, "Position accuracy " + Metres(pose_->accuracy) + " m, the docking station needs " +
-                              Metres(config_.max_position_accuracy) + " m or better");
+    return Refuse(action, Reason("POSITION_ACCURACY", "Position accuracy " + Metres(pose_->accuracy) +
+                                                          " m, the docking station needs " +
+                                                          Metres(config_.max_position_accuracy) + " m or better")
+                              .With("accuracy", pose_->accuracy)
+                              .With("limit", config_.max_position_accuracy));
   }
   const Point2 here{pose_->x, pose_->y};
   if (!dock_first_) {
@@ -220,8 +239,10 @@ AreaRecorder::Result AreaRecorder::RecordDock() {
   const double distance = std::hypot(here.x - dock_first_->x, here.y - dock_first_->y);
   if (distance < config_.min_dock_distance) {
     // The first point stays, driving on is enough.
-    return Refuse(action, "Only " + Metres(distance) + " m from the first point, at least " +
-                              Metres(config_.min_dock_distance) + " m needed for the heading");
+    return Refuse(action, Reason("DOCK_TOO_CLOSE", "Only " + Metres(distance) + " m from the first point, at least " +
+                                                       Metres(config_.min_dock_distance) + " m needed for the heading")
+                              .With("distance", distance)
+                              .With("limit", config_.min_dock_distance));
   }
   MapEdit edit;
   edit.kind = MapEdit::Kind::kDock;
@@ -239,7 +260,9 @@ std::optional<MapEdit> AreaRecorder::TakeMapEdit() {
   return pending_;
 }
 
-void AreaRecorder::OnMapEditResult(bool ok, const std::string& id, const std::string& message) {
+void AreaRecorder::OnMapEditResult(bool ok, const std::string& id, const std::string& code,
+                                   const std::string& message) {
+  const Reason failed = Reason("SAVE_FAILED", message).With("code", code);
   if (!pending_) return;
   const MapEdit edit = std::move(*pending_);
   pending_.reset();
@@ -248,7 +271,7 @@ void AreaRecorder::OnMapEditResult(bool ok, const std::string& id, const std::st
   if (edit.kind == MapEdit::Kind::kDock) {
     if (!ok) {
       // The first point stays, the second can be taken again.
-      Refuse("record_dock", message);
+      Refuse("record_dock", failed);
       return;
     }
     events_.push_back({"DOCK_RECORDED", {{"dock_id", id}, {"heading", edit.heading}}});
@@ -259,7 +282,7 @@ void AreaRecorder::OnMapEditResult(bool ok, const std::string& id, const std::st
   const std::string action = edit.type == "nav" ? "finish_navigation_area" : "finish_mowing_area";
   if (!ok) {
     // Outline and obstacles stay, the user can try again or discard them.
-    Refuse(action, message);
+    Refuse(action, failed);
     return;
   }
   size_t points = edit.outline.size();
@@ -287,7 +310,9 @@ void AreaRecorder::AddPoint(double x, double y) {
   if (PointCount() >= config_.max_points) {
     if (!full_reported_) {
       full_reported_ = true;
-      Refuse("point", "The recording has reached " + std::to_string(config_.max_points) + " points, close the ring");
+      Refuse("point", Reason("TOO_MANY_POINTS", "The recording has reached " + std::to_string(config_.max_points) +
+                                                    " points, close the ring")
+                          .With("limit", config_.max_points));
     }
     return;
   }
@@ -299,8 +324,11 @@ void AreaRecorder::OnPose(double x, double y, float position_accuracy) {
   pose_ = Pose{x, y, position_accuracy};
   if (!recording_) return;
   if (!(position_accuracy <= config_.max_position_accuracy)) {
-    const std::string reason = "Position accuracy " + Metres(position_accuracy) + " m, points need " +
-                               Metres(config_.max_position_accuracy) + " m or better";
+    const Reason reason = Reason("POSITION_ACCURACY", "Position accuracy " + Metres(position_accuracy) +
+                                                          " m, points need " + Metres(config_.max_position_accuracy) +
+                                                          " m or better")
+                              .With("accuracy", position_accuracy)
+                              .With("limit", config_.max_position_accuracy);
     if (collect_requested_) {
       collect_requested_ = false;
       Refuse("collect_point", reason);
@@ -325,8 +353,10 @@ void AreaRecorder::OnPose(double x, double y, float position_accuracy) {
   if (far_enough) {
     AddPoint(x, y);
   } else {
-    Refuse("collect_point", "Only " + Metres(distance) + " m from the last point, more than " +
-                                Metres(config_.min_point_distance) + " m needed");
+    Refuse("collect_point", Reason("POINT_TOO_CLOSE", "Only " + Metres(distance) + " m from the last point, more than " +
+                                                          Metres(config_.min_point_distance) + " m needed")
+                                .With("distance", distance)
+                                .With("limit", config_.min_point_distance));
   }
 }
 
@@ -334,13 +364,13 @@ void AreaRecorder::OnPoseLost() {
   pose_.reset();
   if (collect_requested_) {
     collect_requested_ = false;
-    Refuse("collect_point", "No position");
+    Refuse("collect_point", NoPosition());
   }
 }
 
-void AreaRecorder::SetMapWritable(bool writable, const std::string& reason) {
+void AreaRecorder::SetMapWritable(bool writable, const Reason& reason) {
   map_writable_ = writable;
-  map_reason_ = writable ? "" : reason;
+  map_reason_ = writable ? Reason() : reason;
 }
 
 std::string AreaRecorder::SubState() const {

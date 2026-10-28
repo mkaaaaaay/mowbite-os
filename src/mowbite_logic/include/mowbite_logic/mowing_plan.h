@@ -118,7 +118,7 @@ class MowingPlanner {
   // The text of map/json.
   void SetMap(const std::string& text);
   // map/status: planning from the map needs a map that fits the datum in use.
-  void SetMapStatus(bool fits, const std::string& reason);
+  void SetMapStatus(bool fits, const Reason& reason);
   PlanSettings& settings() {
     return settings_;
   }
@@ -130,12 +130,12 @@ class MowingPlanner {
   // simplified to 1 cm and rounded to mm, pose_index the index of each point in its path.
   json Result(const PlanQuestion& question, const CoverageAnswer& answer) const;
   // Where a drive between areas may go: the active mow and nav areas (also those not to be mowed) and the active
-  // obstacles. Empty if the map allows it, else why not.
-  std::string TransitAreas(std::vector<Ring>* drivable, std::vector<Ring>* obstacles) const;
+  // obstacles. Empty if the map allows it, else why not (MAP_*, NO_MOWING_AREA).
+  Reason TransitAreas(std::vector<Ring>* drivable, std::vector<Ring>* obstacles) const;
   // The mow areas of the map in map order, inactive ones included; nothing while the map is not readable.
   std::vector<JobArea> MowAreas() const;
-  // Whether mowing may plan from the map: readable and fitting the datum in use; else why not.
-  std::string MapProblem() const;
+  // Whether mowing may plan from the map: readable and fitting the datum in use; else why not (MAP_*).
+  Reason MapProblem() const;
 
  private:
   struct MapArea {
@@ -155,7 +155,7 @@ class MowingPlanner {
   std::vector<MapArea> map_;
   bool map_readable_ = false;
   bool map_fits_ = false;
-  std::string map_reason_ = "The map status is not known yet";
+  Reason map_reason_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
 };
 
 }  // namespace mowbite_logic

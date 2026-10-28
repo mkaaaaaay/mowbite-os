@@ -230,7 +230,9 @@ class TestRecording(unittest.TestCase):
         self.probe.act(REC + "finish_mowing_area")
         refused = self.probe.wait(lambda: self.probe.events_of("RECORDING_REFUSED")[before:])
         self.assertIsNotNone(refused, "finish_mowing_area was not refused")
-        self.assertIn("datum", refused[0]["reason"])
+        self.assertEqual(refused[0]["reason"], "MAP_MISMATCH")
+        self.assertIn("datum", refused[0]["message"])
+        self.assertEqual(refused[0]["resume"], "user")
         time.sleep(0.5)
         self.assertEqual(len(self.probe.map["areas"]), 2)
         # Still recording: the outline can be saved once the datum is back.

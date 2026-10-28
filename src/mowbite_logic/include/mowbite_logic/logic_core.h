@@ -10,6 +10,7 @@
 
 #include "mowbite_logic/area_recorder.h"
 #include "mowbite_logic/mowing_job.h"
+#include "mowbite_logic/reasons.h"
 
 namespace mowbite_logic {
 
@@ -79,9 +80,6 @@ struct LogicConfig {
   // s between checkpoints while a path is mowed.
   double checkpoint_period = 30.0;
 };
-
-// map/status of mowbite_map: whether the map fits the datum of the GNSS.
-enum class MapDatum { kUnknown, kEmpty, kMatch, kMismatch, kUnbound };
 
 struct Action {
   std::string id;
@@ -201,7 +199,7 @@ class LogicCore {
   void OnMapStatus(MapDatum datum, const std::string& reason);
   // The change of the map a recording asks for, once; the node sends it to mowbite_map.
   std::optional<MapEdit> TakeMapEdit();
-  void OnMapEditResult(bool ok, const std::string& id, const std::string& message);
+  void OnMapEditResult(bool ok, const std::string& id, const std::string& code, const std::string& message);
   // Remote control reaches the wheels only while recording an area, like in OpenMower. After an emergency or a state
   // change it waits for a zero command or a pause of kTeleopQuietS, so a held joystick does not move the mower.
   // now_s is a monotonic clock.
@@ -209,27 +207,31 @@ class LogicCore {
 
   // hw/capabilities: whether the platform has a safety measurement. Without one only remote control, no driving.
   void OnCapabilities(bool safety_measured);
-  // Starts a drive to (x, y): empty if it may start, else why not. Shown as IDLE with the sub state DRIVING; the node
-  // plans the way and hands it to the follower.
-  std::string StartDrive(double x, double y);
-  // The drive is over: arrived, or why not.
-  void OnDriveEnded(bool arrived, const std::string& message);
+  // Why a drive cannot start now (BUSY, EMERGENCY, NO_SAFETY_MEASUREMENT, position), empty if it can.
+  Reason DriveProblem() const;
+  // Starts a drive to (x, y): empty if it may start, else why not (event DRIVE_REFUSED). Shown as IDLE with the sub
+  // state DRIVING; the node plans the way and hands it to the follower.
+  Reason StartDrive(double x, double y);
+  // A drive refused by the node (map, planner or follower missing): event DRIVE_REFUSED.
+  void RefuseDrive(const Reason& why);
+  // The drive is over: arrived, and the reason (DONE, ALREADY_THERE or why not).
+  void OnDriveEnded(bool arrived, const Reason& reason);
   bool Driving() const;
   // The commands of the follower reach the wheels only while driving, or mowing on a leg and not paused, and without
   // emergency; teleop only while recording. So hw/cmd_vel has one source at a time.
   bool FollowerActive() const;
-  // True once when a drive or a leg of the job has to stop at once (emergency, no pose, no safety measurement, pause,
-  // skip, abort): the node cancels it.
-  bool TakeDriveCancel();
+  // Once when a drive or a leg of the job has to stop at once (emergency, no pose, no safety measurement, pause, skip,
+  // abort): the node cancels it, and a drive ends with this reason.
+  std::optional<Reason> TakeDriveCancel();
 
   // The mow areas of the map and why mowing may not plan from it (empty if it may).
-  void OnMowMap(std::vector<JobArea> areas, const std::string& problem);
+  void OnMowMap(std::vector<JobArea> areas, const Reason& problem);
   // The checkpoint read at the start.
   void RestoreJob(const JobProgress& progress);
   // Why mowing cannot start now, empty if it can.
-  std::string StartProblem() const;
+  Reason StartProblem() const;
   // A start refused by the node (planner or follower missing): event MOWING_REFUSED.
-  void RefuseStart(const std::string& why);
+  void RefuseStart(const Reason& why);
   bool Mowing() const;
   // Called whenever the node has nothing on its way for the job; the step it returns is on its way until its result
   // comes back. now_s is a monotonic clock.
@@ -239,8 +241,8 @@ class LogicCore {
   void OnJobPlanFailed(const std::string& message);
   // The follower got to this pose of the path of kFollow.
   void OnJobProgress(size_t index);
-  // The approach or path ended; index is the pose of the path it got to (kFollow only).
-  void OnLegEnded(LegEnd end, size_t index, const std::string& message);
+  // The approach or path ended; index is the pose of the path it got to (kFollow only), reason why it ended.
+  void OnLegEnded(LegEnd end, size_t index, const Reason& reason);
   // Timers of the job: GPS back, battery, checkpoint period.
   void OnTick(double now_s);
   // Whether the blade should turn now: mowing, not paused, a mow segment (or spinning up for one), mow_with_blade, a
@@ -293,9 +295,16 @@ class LogicCore {
   int EmergencyReason() const;
   static const char* StateName(State state);
   std::string CurrentStateName() const;
+  // Each empty if nothing stands in the way: BUSY; EMERGENCY or NO_SAFETY_MEASUREMENT; NO_POSITION,
+  // POSITION_ACCURACY or NO_HEADING.
+  Reason Busy() const;
+  Reason Unsafe() const;
+  Reason PositionProblem() const;
   ActionResult OnMowingAction(const std::string& name);
   void StartMowing();
-  void Pause(int why, const std::string& reason);
+  void Pause(int why, const Reason& reason);
+  // Stops a drive or a leg on its way; a drive ends with the first reason given.
+  void CancelDrive(const Reason& reason);
   void Unpause(int why);
   void ApplySkips();
   // Ends the job: finished (JOB_COMPLETE) or not (it goes on from the checkpoint next time).
@@ -321,17 +330,18 @@ class LogicCore {
   bool teleop_armed_ = false;
   bool safety_measured_ = false;
   bool drive_cancel_ = false;
+  std::optional<Reason> cancel_reason_;
   double last_teleop_s_ = -std::numeric_limits<double>::infinity();
   std::vector<Event> events_;
   AreaRecorder recorder_;
   bool map_writable_ = false;
-  std::string map_reason_ = "The map status is not known yet";
+  Reason map_reason_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
 
   MowingJob job_;
-  std::string mow_map_problem_ = "The map status is not known yet";
+  Reason mow_map_problem_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
   std::string session_id_;
   int pause_ = 0;
-  std::string pause_reason_;
+  Reason pause_reason_;
   Leg leg_ = Leg::kNone;
   bool approached_ = false;
   bool skip_path_ = false;

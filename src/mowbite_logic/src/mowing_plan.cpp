@@ -206,18 +206,18 @@ void MowingPlanner::SetMap(const std::string& text) {
   map_readable_ = true;
 }
 
-std::string MowingPlanner::TransitAreas(std::vector<Ring>* drivable, std::vector<Ring>* obstacles) const {
+Reason MowingPlanner::TransitAreas(std::vector<Ring>* drivable, std::vector<Ring>* obstacles) const {
   drivable->clear();
   obstacles->clear();
-  if (!map_fits_) return "Cannot drive on the map: " + map_reason_;
-  if (!map_readable_) return "Cannot drive on the map: map/json is not readable";
+  if (!map_fits_) return Reason(map_reason_).WithMessage("Cannot drive on the map: " + map_reason_.message);
+  if (!map_readable_) return Reason("MAP_UNREADABLE", "Cannot drive on the map: map/json is not readable");
   for (const auto& area : map_) {
     if (!area.active) continue;
     if (area.type == "mow" || area.type == "nav") drivable->push_back(area.outline);
     if (area.type == "obstacle") obstacles->push_back(area.outline);
   }
-  if (drivable->empty()) return "The map has no active mowing or navigation area";
-  return "";
+  if (drivable->empty()) return Reason("NO_MOWING_AREA", "The map has no active mowing or navigation area");
+  return {};
 }
 
 std::vector<JobArea> MowingPlanner::MowAreas() const {
@@ -229,15 +229,15 @@ std::vector<JobArea> MowingPlanner::MowAreas() const {
   return areas;
 }
 
-std::string MowingPlanner::MapProblem() const {
-  if (!map_fits_) return "Cannot mow on the map: " + map_reason_;
-  if (!map_readable_) return "Cannot mow on the map: map/json is not readable";
-  return "";
+Reason MowingPlanner::MapProblem() const {
+  if (!map_fits_) return Reason(map_reason_).WithMessage("Cannot mow on the map: " + map_reason_.message);
+  if (!map_readable_) return Reason("MAP_UNREADABLE", "Cannot mow on the map: map/json is not readable");
+  return {};
 }
 
-void MowingPlanner::SetMapStatus(bool fits, const std::string& reason) {
+void MowingPlanner::SetMapStatus(bool fits, const Reason& reason) {
   map_fits_ = fits;
-  map_reason_ = reason.empty() ? "The map does not fit the datum in use" : reason;
+  map_reason_ = reason.empty() ? MapReason(MapDatum::kMismatch, "") : reason;
 }
 
 PlanQuestion MowingPlanner::Prepare(const json& params) const {
@@ -256,7 +256,7 @@ PlanQuestion MowingPlanner::Prepare(const json& params) const {
       question.area_id = params["area_id"].get<std::string>();
       // The map is only trusted for the datum it was recorded in.
       if (!map_fits_ || !map_readable_) {
-        throw PlanError{kPlanRefused, "Cannot plan from the map: " + (map_readable_ ? map_reason_ : "The map is not readable")};
+        throw PlanError{kPlanRefused, "Cannot plan from the map: " + (map_readable_ ? map_reason_.message : "The map is not readable")};
       }
       const MapArea* found = nullptr;
       for (const auto& area : map_) {

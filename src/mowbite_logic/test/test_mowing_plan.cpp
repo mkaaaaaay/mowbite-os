@@ -36,7 +36,7 @@ const char* kMap = R"({
 MowingPlanner PlannerWithMap(const PlanSettings& settings = PlanSettings()) {
   MowingPlanner planner(settings);
   planner.SetMap(kMap);
-  planner.SetMapStatus(true, "");
+  planner.SetMapStatus(true, Reason());
   return planner;
 }
 
@@ -116,17 +116,18 @@ TEST(MowingPlanMap, NeedsAMapThatFitsTheDatum) {
   EXPECT_EQ(q.code, -32000);
   EXPECT_EQ(q.message, "Cannot plan from the map: The map status is not known yet");
 
-  planner.SetMapStatus(false, "The map was recorded for the datum 52.0000000, 9.0000000, the datum in use is far away");
+  planner.SetMapStatus(false, MapReason(MapDatum::kMismatch,
+                                        "The map was recorded for the datum 52.0000000, 9.0000000, the datum in use is far away"));
   q = planner.Prepare(Params(R"({"area_id": "lawn"})"));
   EXPECT_EQ(q.code, -32000);
   EXPECT_EQ(q.message,
             "Cannot plan from the map: The map was recorded for the datum 52.0000000, 9.0000000, the datum in use is far away");
 
-  planner.SetMapStatus(false, "");
+  planner.SetMapStatus(false, Reason());
   EXPECT_EQ(planner.Prepare(Params(R"({"area_id": "lawn"})")).message,
             "Cannot plan from the map: The map does not fit the datum in use");
 
-  planner.SetMapStatus(true, "");
+  planner.SetMapStatus(true, Reason());
   EXPECT_TRUE(planner.Prepare(Params(R"({"area_id": "lawn"})")).ok);
 }
 
@@ -167,7 +168,7 @@ TEST(MowingPlanMap, ANewMapReplacesTheOldOne) {
 
 TEST(MowingPlanMap, AMapWithTheWrongTypeOfAPropertyIsNotPlannedFrom) {
   MowingPlanner planner(PlanSettings{});
-  planner.SetMapStatus(true, "");
+  planner.SetMapStatus(true, Reason());
   planner.SetMap(R"({"areas": [{"id": "lawn", "properties": {"type": "mow", "active": "yes"},
                                 "outline": [{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 1, "y": 1}]}]})");
   const PlanQuestion q = planner.Prepare(Params(R"({"area_id": "lawn"})"));
@@ -471,7 +472,7 @@ TEST(MowingPlanTransit, DrivesOnTheActiveMowAndNavAreasAroundTheActiveObstacles)
   MowingPlanner planner = PlannerWithMap();
   std::vector<Ring> drivable;
   std::vector<Ring> obstacles;
-  ASSERT_EQ(planner.TransitAreas(&drivable, &obstacles), "");
+  ASSERT_TRUE(planner.TransitAreas(&drivable, &obstacles).empty());
   // lawn, path, back (not mowed, still drivable), side; not the inactive bed nor the draft
   ASSERT_EQ(drivable.size(), 4u);
   EXPECT_EQ(drivable[1].front().x, 10.0);
@@ -486,15 +487,18 @@ TEST(MowingPlanTransit, NeedsAMapThatFitsAndAnArea) {
   MowingPlanner planner(PlanSettings{});
   std::vector<Ring> drivable;
   std::vector<Ring> obstacles;
-  EXPECT_EQ(planner.TransitAreas(&drivable, &obstacles), "Cannot drive on the map: The map status is not known yet");
-  planner.SetMapStatus(true, "");
-  EXPECT_EQ(planner.TransitAreas(&drivable, &obstacles), "Cannot drive on the map: map/json is not readable");
+  Reason why = planner.TransitAreas(&drivable, &obstacles);
+  EXPECT_EQ(why.code, "MAP_UNKNOWN");
+  EXPECT_EQ(why.message, "Cannot drive on the map: The map status is not known yet");
+  planner.SetMapStatus(true, Reason());
+  EXPECT_EQ(planner.TransitAreas(&drivable, &obstacles).code, "MAP_UNREADABLE");
   planner.SetMap(R"({"areas": [{"id": "t", "properties": {"type": "obstacle"},
                     "outline": [{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 1, "y": 1}]}]})");
-  EXPECT_EQ(planner.TransitAreas(&drivable, &obstacles), "The map has no active mowing or navigation area");
+  EXPECT_EQ(planner.TransitAreas(&drivable, &obstacles).code, "NO_MOWING_AREA");
   planner.SetMap(kMap);
-  planner.SetMapStatus(false, "The map was recorded for another datum");
-  EXPECT_EQ(planner.TransitAreas(&drivable, &obstacles),
-            "Cannot drive on the map: The map was recorded for another datum");
+  planner.SetMapStatus(false, MapReason(MapDatum::kMismatch, "The map was recorded for another datum"));
+  why = planner.TransitAreas(&drivable, &obstacles);
+  EXPECT_EQ(why.code, "MAP_MISMATCH");
+  EXPECT_EQ(why.message, "Cannot drive on the map: The map was recorded for another datum");
   EXPECT_TRUE(drivable.empty());
 }

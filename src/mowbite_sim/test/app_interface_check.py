@@ -314,6 +314,25 @@ check("actions enabled at the start", by_id.get("mower_logic/reset_emergency") =
       f"{len(actions)} actions")
 
 
+def events_of(kind, since=0):
+    return [json.loads(p) for _, top, p, _ in msgs[since:] if top == "events/json" and json.loads(p)["type"] == kind]
+
+
+def fixed_reason(event, resume=None):
+    """masterplan 3.1a: a name in capitals, an English message, severity and resume."""
+    return (bool(event) and isinstance(event.get("reason"), str) and event["reason"].replace("_", "").isalpha()
+            and event["reason"].isupper() and bool(event.get("message"))
+            and event.get("severity") in ("info", "warning", "error")
+            and event.get("resume") == (resume or event.get("resume")) and event.get("resume") in ("auto", "user"))
+
+
+mark = len(msgs)
+c.publish("action", "mower_logic:idle/start_mowing")
+refused = wait_for(lambda: events_of("MOWING_REFUSED", mark), 3)
+check("MOWING_REFUSED with a fixed reason", fixed_reason(refused[-1] if refused else None, "user"),
+      json.dumps(refused[-1] if refused else None), point="3.1a MOWING_REFUSED")
+
+
 def planner_services():
     listed = subprocess.run(["ros2", "service", "list"], capture_output=True, text=True, timeout=60).stdout.split()
     return listed if "/mowbite_planner/plan_coverage" in listed and "/mowbite_planner/plan_transit" in listed else None
@@ -411,6 +430,14 @@ check("first recording step: start_recording and record_dock", bool(wait_for(
 c.publish("action", REC + "start_recording")
 check("start_recording: the step the app calls recording", bool(wait_for(
     lambda: enabled(REC + "stop_recording") == 1 and enabled(REC + "start_recording") == 0, 3)))
+# Standing still there are too few points for a ring; it stays open and recording goes on.
+mark = len(msgs)
+c.publish("action", REC + "stop_recording")
+refused = wait_for(lambda: events_of("RECORDING_REFUSED", mark), 3)
+last = refused[-1] if refused else {}
+check("RECORDING_REFUSED RING_FEW_POINTS with points and limit", fixed_reason(last, "user")
+      and last.get("reason") == "RING_FEW_POINTS" and last.get("action") == "stop_recording" and last.get("limit") == 3
+      and isinstance(last.get("points"), int), json.dumps(last), point="3.1a RECORDING_REFUSED")
 # Like the app on a mode change: one zero, then the joystick.
 teleop(0.0, 0.0)
 t0 = sim_time()
@@ -434,6 +461,8 @@ check("lift -> emergency", bool(state))
 ev = wait_for(lambda: [json.loads(p) for _, top, p, _ in msgs if top == "events/json" and json.loads(p)["type"] == "EMERGENCY"])
 check("EMERGENCY event with reason bits", ev and ev[-1]["emergency"] is True and ev[-1]["reason"] & 8,
       json.dumps(ev[-1] if ev else None))
+check("EMERGENCY with severity error and resume user", bool(ev) and ev[-1].get("severity") == "error"
+      and ev[-1].get("resume") == "user", json.dumps(ev[-1] if ev else None), point="3.1a EMERGENCY")
 s = json.loads(latest("robot_state/json"))
 check("robot_state emergency_reason LATCH|LIFT", s.get("emergency_reason") == 9, str(s.get("emergency_reason")))
 

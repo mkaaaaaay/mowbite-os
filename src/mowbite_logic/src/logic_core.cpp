@@ -121,19 +121,17 @@ void LogicCore::OnPose(const PoseSnapshot& pose) {
 
 void LogicCore::OnPoseTimeout() {
   pose_.reset();
-  if (state_ == State::kDriving) drive_cancel_ = true;
-  if (state_ == State::kMowing) Pause(kPauseGps, "No position from the localization");
+  if (state_ == State::kDriving) CancelDrive(Reason("POSE_LOST", "No position from the localization"));
+  if (state_ == State::kMowing) Pause(kPauseGps, Reason("NO_POSITION", "No position from the localization"));
   recorder_.OnPoseLost();
   PullRecorder();
 }
 
 void LogicCore::OnMapStatus(MapDatum datum, const std::string& reason) {
   const bool writable = datum == MapDatum::kMatch || datum == MapDatum::kEmpty;
-  std::string why = reason;
-  if (!writable && why.empty()) why = "The map does not fit the datum in use";
   if (writable != map_writable_) actions_changed_ = true;
   map_writable_ = writable;
-  map_reason_ = writable ? "" : why;
+  map_reason_ = writable ? Reason() : MapReason(datum, reason);
   recorder_.SetMapWritable(writable, map_reason_);
 }
 
@@ -141,8 +139,9 @@ std::optional<MapEdit> LogicCore::TakeMapEdit() {
   return recorder_.TakeMapEdit();
 }
 
-void LogicCore::OnMapEditResult(bool ok, const std::string& id, const std::string& message) {
-  recorder_.OnMapEditResult(ok, id, message);
+void LogicCore::OnMapEditResult(bool ok, const std::string& id, const std::string& code,
+                                const std::string& message) {
+  recorder_.OnMapEditResult(ok, id, code, message);
   PullRecorder();
 }
 
@@ -170,7 +169,12 @@ std::vector<std::string> LogicCore::TakeNotices() {
 void LogicCore::OnPositionJump(double to_x, double to_y, double distance_m, bool after_outliers) {
   last_x_ = to_x;
   last_y_ = to_y;
-  AddEvent("POSITION_JUMP", {{"distance", distance_m}, {"reason", after_outliers ? "outliers" : "gap"}});
+  json details = json::object();
+  PutReason(&details, "POSITION_JUMP",
+            Reason(after_outliers ? "OUTLIERS" : "GAP",
+                   after_outliers ? "Back on GPS after outliers" : "Back on GPS after a gap")
+                .With("distance", distance_m));
+  AddEvent("POSITION_JUMP", std::move(details));
 }
 
 // Every event carries the position where it happened.
@@ -208,9 +212,14 @@ void LogicCore::UpdateEmergency() {
   if (emergency != emergency_) {
     emergency_ = emergency;
     if (emergency) teleop_armed_ = false;
-    if (emergency && state_ == State::kDriving) drive_cancel_ = true;
-    if (emergency && state_ == State::kMowing) Pause(kPauseEmergency, "Emergency: " + EmergencyReasonNames(reason_));
-    AddEvent("EMERGENCY", {{"emergency", emergency}, {"reason", reason_}});
+    const Reason why("EMERGENCY", "Emergency: " + EmergencyReasonNames(reason_));
+    if (emergency && state_ == State::kDriving) CancelDrive(why);
+    if (emergency && state_ == State::kMowing) Pause(kPauseEmergency, why);
+    // reason stays the bits of OpenMower; resetting is up to the user.
+    AddEvent("EMERGENCY", {{"emergency", emergency},
+                           {"reason", reason_},
+                           {"severity", emergency ? "error" : "info"},
+                           {"resume", emergency ? "user" : "auto"}});
     actions_changed_ = true;
   }
 }
@@ -218,7 +227,7 @@ void LogicCore::UpdateEmergency() {
 ActionResult LogicCore::OnAction(const std::string& action_id) {
   if (action_id == kRootPrefix + "/reset_emergency") return ActionResult::kReleaseEmergency;
   if (action_id == kIdlePrefix + "/start_mowing") {
-    const std::string why = StartProblem();
+    const Reason why = StartProblem();
     if (!why.empty()) {
       RefuseStart(why);
       return ActionResult::kRejected;
@@ -242,7 +251,9 @@ ActionResult LogicCore::OnAction(const std::string& action_id) {
   if (action_id == kIdlePrefix + "/start_area_recording") {
     if (state_ != State::kIdle || emergency_) return ActionResult::kRejected;
     if (!map_writable_) {
-      AddEvent("RECORDING_REFUSED", {{"action", "start_area_recording"}, {"reason", map_reason_}});
+      json details = {{"action", "start_area_recording"}};
+      PutReason(&details, "RECORDING_REFUSED", map_reason_);
+      AddEvent("RECORDING_REFUSED", std::move(details));
       return ActionResult::kRejected;
     }
     SetState(State::kAreaRecording);
@@ -281,42 +292,46 @@ std::optional<std::pair<double, double>> LogicCore::OnTeleop(double vx, double v
 
 void LogicCore::OnCapabilities(bool safety_measured) {
   safety_measured_ = safety_measured;
-  if (!safety_measured && state_ == State::kDriving) drive_cancel_ = true;
-  if (!safety_measured) Pause(kPauseFault, "No safety measurement of this platform (hw/capabilities)");
+  if (safety_measured) return;
+  if (state_ == State::kDriving) {
+    CancelDrive(Reason("NOT_ALLOWED", "No safety measurement of this platform (hw/capabilities)"));
+  }
+  Pause(kPauseFault, Reason("NO_SAFETY_MEASUREMENT", "No safety measurement of this platform (hw/capabilities)"));
 }
 
-std::string LogicCore::StartDrive(double x, double y) {
-  std::string why;
-  char text[160];
-  if (state_ != State::kIdle) {
-    why = std::string("The mower is busy: ") + (state_ == State::kDriving ? "driving" : StateName(state_));
-  } else if (emergency_) {
-    why = "Emergency: reset it first";
-  } else if (!safety_measured_) {
-    why = "No safety measurement of this platform (hw/capabilities): remote control only";
-  } else if (!pose_) {
-    why = "No position from the localization";
-  } else if (!(pose_->position_accuracy <= config_.max_position_accuracy)) {
-    std::snprintf(text, sizeof(text), "Position accuracy %.2f m is worse than %.2f m", pose_->position_accuracy,
-                  config_.max_position_accuracy);
-    why = text;
-  } else if (!pose_->orientation_valid) {
-    why = "The heading is not aligned yet: drive a few metres by remote control";
-  }
+Reason LogicCore::DriveProblem() const {
+  Reason why = Busy();
+  if (why.empty()) why = Unsafe();
+  if (why.empty()) why = PositionProblem();
+  return why;
+}
+
+Reason LogicCore::StartDrive(double x, double y) {
+  const Reason why = DriveProblem();
   if (!why.empty()) {
-    AddEvent("DRIVE_REFUSED", {{"reason", why}});
+    RefuseDrive(why);
     return why;
   }
   drive_cancel_ = false;
+  cancel_reason_.reset();
   SetState(State::kDriving);
   AddEvent("DRIVE", {{"phase", "start"}, {"goal_x", x}, {"goal_y", y}});
-  return "";
+  return {};
 }
 
-void LogicCore::OnDriveEnded(bool arrived, const std::string& message) {
+void LogicCore::RefuseDrive(const Reason& why) {
+  json details = json::object();
+  PutReason(&details, "DRIVE_REFUSED", why);
+  AddEvent("DRIVE_REFUSED", std::move(details));
+}
+
+void LogicCore::OnDriveEnded(bool arrived, const Reason& reason) {
   if (state_ != State::kDriving) return;
-  AddEvent("DRIVE", {{"phase", "end"}, {"arrived", arrived}, {"reason", message}});
+  json details = {{"phase", "end"}, {"arrived", arrived}};
+  PutReason(&details, "DRIVE", reason);
+  AddEvent("DRIVE", std::move(details));
   drive_cancel_ = false;
+  cancel_reason_.reset();
   SetState(State::kIdle);
 }
 
@@ -330,10 +345,17 @@ bool LogicCore::FollowerActive() const {
   return state_ == State::kMowing && pause_ == 0 && (leg_ == Leg::kApproach || leg_ == Leg::kFollow);
 }
 
-bool LogicCore::TakeDriveCancel() {
-  const bool cancel = drive_cancel_;
+std::optional<Reason> LogicCore::TakeDriveCancel() {
+  if (!drive_cancel_) return std::nullopt;
   drive_cancel_ = false;
-  return cancel;
+  Reason reason = cancel_reason_.value_or(Reason("STOPPED", "Stopped by the logic"));
+  cancel_reason_.reset();
+  return reason;
+}
+
+void LogicCore::CancelDrive(const Reason& reason) {
+  drive_cancel_ = true;
+  if (!cancel_reason_) cancel_reason_ = reason;
 }
 
 void LogicCore::SetState(State state) {
@@ -346,10 +368,10 @@ void LogicCore::SetState(State state) {
   }
   if (state_ == State::kMowing) {
     session_id_.clear();
-    if (leg_ == Leg::kApproach || leg_ == Leg::kFollow) drive_cancel_ = true;
+    if (leg_ == Leg::kApproach || leg_ == Leg::kFollow) CancelDrive(Reason("STOPPED", "Mowing ended"));
     leg_ = Leg::kNone;
     pause_ = 0;
-    pause_reason_.clear();
+    pause_reason_ = Reason();
     skip_path_ = skip_area_ = false;
     spinup_since_.reset();
     gps_good_since_.reset();
@@ -545,7 +567,7 @@ bool LogicCore::TakeStopRequest() {
   return stop;
 }
 
-void LogicCore::OnMowMap(std::vector<JobArea> areas, const std::string& problem) {
+void LogicCore::OnMowMap(std::vector<JobArea> areas, const Reason& problem) {
   job_.SetAreas(std::move(areas));
   mow_map_problem_ = problem;
   if (state_ == State::kMowing && !problem.empty()) Pause(kPauseFault, problem);
@@ -560,35 +582,65 @@ bool LogicCore::PoseGood() const {
   return pose_ && pose_->position_accuracy <= config_.max_position_accuracy && pose_->orientation_valid;
 }
 
-std::string LogicCore::StartProblem() const {
-  char text[160];
-  if (state_ != State::kIdle) {
-    return std::string("The mower is busy: ") + (state_ == State::kDriving ? "driving" : CurrentStateName());
-  }
-  if (emergency_) return "Emergency: reset it first";
-  if (!safety_measured_) return "No safety measurement of this platform (hw/capabilities): remote control only";
-  // Undocking comes with docking (stage 4).
-  if (hw_.dock_contact) return "The mower is on the docking station: drive it off by remote control first";
-  if (hw_.rain) return "Rain detected";
-  if (hw_.battery_ok && hw_.battery_voltage < config_.battery_critical_voltage) {
-    std::snprintf(text, sizeof(text), "Battery %.1f V is below %.1f V", hw_.battery_voltage,
-                  config_.battery_critical_voltage);
-    return text;
-  }
-  if (!pose_) return "No position from the localization";
-  if (!(pose_->position_accuracy <= config_.max_position_accuracy)) {
-    std::snprintf(text, sizeof(text), "Position accuracy %.2f m is worse than %.2f m", pose_->position_accuracy,
-                  config_.max_position_accuracy);
-    return text;
-  }
-  if (!pose_->orientation_valid) return "The heading is not aligned yet: drive a few metres by remote control";
-  if (!mow_map_problem_.empty()) return mow_map_problem_;
-  if (!job_.HasMowableArea()) return "The map has no active mowing area";
-  return "";
+Reason LogicCore::Busy() const {
+  if (state_ == State::kIdle) return {};
+  const std::string state = state_ == State::kDriving ? "driving" : CurrentStateName();
+  return Reason("BUSY", "The mower is busy: " + state).With("state", state);
 }
 
-void LogicCore::RefuseStart(const std::string& why) {
-  AddEvent("MOWING_REFUSED", {{"reason", why}});
+Reason LogicCore::Unsafe() const {
+  if (emergency_) return Reason("EMERGENCY", "Emergency: reset it first");
+  if (!safety_measured_) {
+    return Reason("NO_SAFETY_MEASUREMENT",
+                  "No safety measurement of this platform (hw/capabilities): remote control only");
+  }
+  return {};
+}
+
+Reason LogicCore::PositionProblem() const {
+  if (!pose_) return Reason("NO_POSITION", "No position from the localization");
+  if (!(pose_->position_accuracy <= config_.max_position_accuracy)) {
+    char text[160];
+    std::snprintf(text, sizeof(text), "Position accuracy %.2f m is worse than %.2f m", pose_->position_accuracy,
+                  config_.max_position_accuracy);
+    return Reason("POSITION_ACCURACY", text)
+        .With("accuracy", pose_->position_accuracy)
+        .With("limit", config_.max_position_accuracy);
+  }
+  if (!pose_->orientation_valid) {
+    return Reason("NO_HEADING", "The heading is not aligned yet: drive a few metres by remote control");
+  }
+  return {};
+}
+
+Reason LogicCore::StartProblem() const {
+  Reason why = Busy();
+  if (why.empty()) why = Unsafe();
+  if (!why.empty()) return why;
+  // Undocking comes with docking (stage 4).
+  if (hw_.dock_contact) {
+    return Reason("ON_DOCK", "The mower is on the docking station: drive it off by remote control first");
+  }
+  if (hw_.rain) return Reason("RAIN", "Rain detected");
+  if (hw_.battery_ok && hw_.battery_voltage < config_.battery_critical_voltage) {
+    char text[160];
+    std::snprintf(text, sizeof(text), "Battery %.1f V is below %.1f V", hw_.battery_voltage,
+                  config_.battery_critical_voltage);
+    return Reason("BATTERY_LOW", text)
+        .With("battery_voltage", hw_.battery_voltage)
+        .With("limit", config_.battery_critical_voltage);
+  }
+  why = PositionProblem();
+  if (!why.empty()) return why;
+  if (!mow_map_problem_.empty()) return mow_map_problem_;
+  if (!job_.HasMowableArea()) return Reason("NO_MOWING_AREA", "The map has no active mowing area");
+  return {};
+}
+
+void LogicCore::RefuseStart(const Reason& why) {
+  json details = json::object();
+  PutReason(&details, "MOWING_REFUSED", why);
+  AddEvent("MOWING_REFUSED", std::move(details));
 }
 
 bool LogicCore::Mowing() const {
@@ -608,7 +660,7 @@ void LogicCore::StartMowing() {
 ActionResult LogicCore::OnMowingAction(const std::string& name) {
   if (name == "pause") {
     if (pause_ & kPauseManual) return ActionResult::kRejected;
-    Pause(kPauseManual, "Paused by the app");
+    Pause(kPauseManual, Reason("MANUAL", "Paused by the app"));
     return ActionResult::kDone;
   }
   if (name == "continue") {
@@ -626,7 +678,7 @@ ActionResult LogicCore::OnMowingAction(const std::string& name) {
     (name == "skip_area" ? skip_area_ : skip_path_) = true;
     // A leg on its way ends first, its index counts.
     if (leg_ == Leg::kApproach || leg_ == Leg::kFollow) {
-      drive_cancel_ = true;
+      CancelDrive(Reason("STOPPED", "Skipped by the app"));
       stop_requested_ = true;
     } else {
       ApplySkips();
@@ -639,7 +691,9 @@ ActionResult LogicCore::OnMowingAction(const std::string& name) {
 void LogicCore::ApplySkips() {
   if (skip_area_) {
     if (const JobArea* area = job_.CurrentArea()) {
-      AddEvent("AREA_SKIPPED", {{"area_id", area->id}, {"area_name", area->name}});
+      json details = {{"area_id", area->id}, {"area_name", area->name}};
+      PutReason(&details, "AREA_SKIPPED", Reason("MANUAL", "Skipped by the app"));
+      AddEvent("AREA_SKIPPED", std::move(details));
     }
     job_.SkipArea();
     // A plan on its way is for the skipped area.
@@ -655,20 +709,22 @@ void LogicCore::ApplySkips() {
   skip_area_ = skip_path_ = false;
 }
 
-void LogicCore::Pause(int why, const std::string& reason) {
+void LogicCore::Pause(int why, const Reason& reason) {
   if (state_ != State::kMowing) return;
   const bool was_paused = pause_ != 0;
   pause_ |= why;
   if (why == kPauseGps) gps_good_since_.reset();
   if (leg_ == Leg::kApproach || leg_ == Leg::kFollow) {
-    drive_cancel_ = true;
+    CancelDrive(reason);
     stop_requested_ = true;
   }
   spinup_since_.reset();
   if (was_paused) return;
   pause_reason_ = reason;
-  notices_.push_back("Mowing paused: " + reason);
-  AddEvent("STATE", {{"state", "PAUSED"}, {"reason", reason}});
+  notices_.push_back("Mowing paused: " + reason.message);
+  json details = {{"state", "PAUSED"}};
+  PutReason(&details, "STATE", reason);
+  AddEvent("STATE", std::move(details));
   actions_changed_ = true;
   CheckpointNow();
 }
@@ -678,7 +734,7 @@ void LogicCore::Unpause(int why) {
   pause_ &= ~why;
   actions_changed_ = true;
   if (pause_ != 0) return;
-  pause_reason_.clear();
+  pause_reason_ = Reason();
   // From where it stopped: the start of the path may be behind it now.
   approached_ = false;
   AddEvent("STATE", {{"state", "MOWING"}});
@@ -718,7 +774,7 @@ JobStep LogicCore::NextJobStep(double now_s) {
   const JobPose* goal = job_.CurrentPose();
   if (!goal) return step;
   if (!pose_) {
-    Pause(kPauseGps, "No position from the localization");
+    Pause(kPauseGps, Reason("NO_POSITION", "No position from the localization"));
     return step;
   }
   if (!approached_ && std::hypot(goal->x - pose_->x, goal->y - pose_->y) > config_.approach_distance) {
@@ -733,7 +789,7 @@ JobStep LogicCore::NextJobStep(double now_s) {
     if (!spinup_since_) spinup_since_ = now_s;
     if (now_s - *spinup_since_ > config_.mower_spinup_timeout) {
       AddEvent("MOW_MOTOR_SPINUP_FAILED", json::object());
-      Pause(kPauseFault, "The blade did not reach its speed");
+      Pause(kPauseFault, Reason("BLADE_SPINUP_FAILED", "The blade did not reach its speed"));
     }
     return step;
   }
@@ -756,7 +812,7 @@ void LogicCore::OnJobPlanned(std::vector<JobPath> paths, const std::string& fing
 void LogicCore::OnJobPlanFailed(const std::string& message) {
   if (state_ != State::kMowing || leg_ != Leg::kPlanning) return;
   leg_ = Leg::kNone;
-  Pause(kPauseFault, "Planning failed: " + message);
+  Pause(kPauseFault, Reason("PLANNING_FAILED", "Planning failed: " + message));
 }
 
 void LogicCore::OnJobProgress(size_t index) {
@@ -764,7 +820,7 @@ void LogicCore::OnJobProgress(size_t index) {
   job_.OnIndex(index);
 }
 
-void LogicCore::OnLegEnded(LegEnd end, size_t index, const std::string& message) {
+void LogicCore::OnLegEnded(LegEnd end, size_t index, const Reason& reason) {
   if (state_ != State::kMowing || (leg_ != Leg::kApproach && leg_ != Leg::kFollow)) return;
   const bool follow = leg_ == Leg::kFollow;
   leg_ = Leg::kNone;
@@ -784,11 +840,11 @@ void LogicCore::OnLegEnded(LegEnd end, size_t index, const std::string& message)
       }
       break;
     case LegEnd::kCanceled: approached_ = false; break;
-    case LegEnd::kGps: Pause(kPauseGps, message); break;
-    case LegEnd::kEmergency: Pause(kPauseEmergency, message); break;
+    case LegEnd::kGps: Pause(kPauseGps, reason); break;
+    case LegEnd::kEmergency: Pause(kPauseEmergency, reason); break;
     case LegEnd::kFailed:
       approached_ = false;
-      Pause(kPauseFault, message);
+      Pause(kPauseFault, reason);
       break;
   }
   if (follow) CheckpointNow();
@@ -809,7 +865,7 @@ void LogicCore::OnTick(double now_s) {
   if (hw_.battery_ok && hw_.battery_voltage < config_.battery_critical_voltage) {
     if (!battery_low_since_) battery_low_since_ = now_s;
     if (now_s - *battery_low_since_ >= config_.battery_critical_time) {
-      AddEvent("BATTERY_LOW", {{"voltage", hw_.battery_voltage}});
+      AddEvent("BATTERY_LOW", {{"battery_voltage", hw_.battery_voltage}, {"limit", config_.battery_critical_voltage}});
       notices_.push_back("Mowing ends: the battery is low");
       EndJob(false);
       return;
@@ -835,7 +891,7 @@ bool LogicCore::BladeWanted() const {
 
 void LogicCore::OnBladeRefused(const std::string& message) {
   if (!BladeWanted()) return;
-  Pause(kPauseFault, "The blade was refused: " + message);
+  Pause(kPauseFault, Reason("BLADE_REFUSED", "The blade was refused: " + message));
 }
 
 void LogicCore::CheckpointNow() {

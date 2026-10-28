@@ -312,6 +312,8 @@ class TestMap(unittest.TestCase):
         event = self.probe.wait(lambda: next((e for e in self.probe.events if e.get("type") == "MAP_DATUM"), None))
         self.assertIsNotNone(event, "no MAP_DATUM event")
         self.assertEqual(event["state"], "mismatch")
+        self.assertEqual(event["reason"], "MAP_MISMATCH")
+        self.assertEqual(event["severity"], "error")
         # The map stays as it was, but nothing may change it.
         self.assertEqual(len(self.map_json(3)["areas"]), 3)
         answer = self.probe.rpc("map.replace", [APP_MAP])

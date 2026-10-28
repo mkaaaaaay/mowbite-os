@@ -253,7 +253,7 @@ TEST(MowingJob, MowAreasOfTheMapInMapOrder) {
   EXPECT_FALSE(areas[2].mowable);
   EXPECT_EQ(areas[3].id, "d");
   EXPECT_TRUE(areas[3].mowable);
-  EXPECT_NE(planner.MapProblem(), "");
-  planner.SetMapStatus(true, "");
-  EXPECT_EQ(planner.MapProblem(), "");
+  EXPECT_FALSE(planner.MapProblem().empty());
+  planner.SetMapStatus(true, Reason());
+  EXPECT_TRUE(planner.MapProblem().empty());
 }
