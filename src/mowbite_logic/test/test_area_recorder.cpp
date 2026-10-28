@@ -46,12 +46,6 @@ Ring Square(double side, double x0 = 0, double y0 = 0) {
   return {{x0, y0}, {x0 + side, y0}, {x0 + side, y0 + side}, {x0, y0 + side}, {x0, y0 + 0.05}};
 }
 
-std::vector<std::string> Types(const std::vector<Event>& events) {
-  std::vector<std::string> types;
-  for (const auto& e : events) types.push_back(e.type);
-  return types;
-}
-
 }  // namespace
 
 TEST(Ring, ThreePointsMakeARing) {
@@ -468,4 +462,101 @@ TEST(LogicRecording, ManualMowingStaysOff) {
   core.OnAction("mower_logic:idle/start_area_recording");
   EXPECT_FALSE(Enabled(core, "mower_logic:area_recording", "start_manual_mowing"));
   EXPECT_EQ(core.OnAction(kPrefix + "start_manual_mowing"), ActionResult::kRejected);
+}
+
+TEST(RecorderDock, TwoPointsGiveTheHeading) {
+  AreaRecorder recorder = Writable();
+  EXPECT_TRUE(On(recorder, "record_dock"));
+  recorder.OnPose(2, 1, 0.02f);
+  ASSERT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kDone);
+  EXPECT_EQ(recorder.SubState(), "RECORD_DOCKING_POSITION");
+  // The step the app calls dock: record_dock without start_recording.
+  EXPECT_TRUE(On(recorder, "record_dock"));
+  EXPECT_FALSE(On(recorder, "start_recording"));
+  EXPECT_FALSE(On(recorder, "finish_mowing_area"));
+  EXPECT_FALSE(recorder.TakeMapEdit());
+  recorder.OnPose(2, 2, 0.02f);
+  ASSERT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kDone);
+  auto edit = recorder.TakeMapEdit();
+  ASSERT_TRUE(edit);
+  EXPECT_EQ(edit->kind, MapEdit::Kind::kDock);
+  EXPECT_DOUBLE_EQ(edit->x, 2);
+  EXPECT_DOUBLE_EQ(edit->y, 2);
+  EXPECT_NEAR(edit->heading, M_PI / 2, 1e-9);
+  recorder.TakeEvents();
+  recorder.OnMapEditResult(true, "dock1", "");
+  EXPECT_EQ(recorder.SubState(), "");
+  EXPECT_TRUE(On(recorder, "start_recording"));
+  auto events = recorder.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].type, "DOCK_RECORDED");
+  EXPECT_EQ(events[0].details["dock_id"], "dock1");
+  EXPECT_NEAR(events[0].details["heading"].get<double>(), M_PI / 2, 1e-9);
+}
+
+TEST(RecorderDock, TooCloseKeepsTheFirstPoint) {
+  AreaRecorder recorder = Writable();
+  recorder.OnPose(0, 0, 0.02f);
+  recorder.OnAction("record_dock");
+  recorder.OnPose(0.1, 0, 0.02f);
+  EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
+  EXPECT_FALSE(recorder.TakeMapEdit());
+  EXPECT_EQ(recorder.SubState(), "RECORD_DOCKING_POSITION");
+  auto events = recorder.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_NE(events[0].details["reason"].get<std::string>().find("Only 0.10 m"), std::string::npos);
+  // Backwards onto the contacts: the heading points the way the mower moved.
+  recorder.OnPose(-1, 0, 0.02f);
+  ASSERT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kDone);
+  EXPECT_NEAR(std::fabs(recorder.TakeMapEdit()->heading), M_PI, 1e-9);
+}
+
+TEST(RecorderDock, NeedsAnAccuratePositionAndAWritableMap) {
+  AreaRecorder recorder = Writable();
+  EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
+  recorder.OnPose(0, 0, 0.4f);
+  EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
+  recorder.OnPose(0, 0, 0.02f);
+  recorder.SetMapWritable(false, "The map was recorded for another datum");
+  EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
+  auto events = recorder.TakeEvents();
+  ASSERT_EQ(events.size(), 3u);
+  EXPECT_EQ(events[0].details["reason"], "No position");
+  EXPECT_NE(events[1].details["reason"].get<std::string>().find("0.40 m"), std::string::npos);
+  EXPECT_EQ(events[2].details["reason"], "The map was recorded for another datum");
+  EXPECT_EQ(recorder.SubState(), "");
+}
+
+TEST(RecorderDock, ARefusedSaveKeepsTheFirstPoint) {
+  AreaRecorder recorder = Writable();
+  recorder.OnPose(0, 0, 0.02f);
+  recorder.OnAction("record_dock");
+  recorder.OnPose(1, 0, 0.02f);
+  recorder.OnAction("record_dock");
+  ASSERT_TRUE(recorder.TakeMapEdit());
+  recorder.OnMapEditResult(false, "", "Cannot store the map: disk full");
+  EXPECT_EQ(recorder.SubState(), "RECORD_DOCKING_POSITION");
+  EXPECT_EQ(recorder.TakeEvents().back().details["action"], "record_dock");
+  ASSERT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kDone);
+  EXPECT_TRUE(recorder.TakeMapEdit());
+}
+
+TEST(RecorderDock, DiscardDropsTheFirstPoint) {
+  AreaRecorder recorder = Writable();
+  recorder.OnPose(0, 0, 0.02f);
+  recorder.OnAction("record_dock");
+  EXPECT_TRUE(On(recorder, "finish_discard"));
+  ASSERT_EQ(recorder.OnAction("finish_discard"), AreaRecorder::Result::kDone);
+  EXPECT_EQ(recorder.SubState(), "");
+  EXPECT_TRUE(On(recorder, "start_recording"));
+}
+
+TEST(RecorderDock, NotWhileAnAreaIsRecorded) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  EXPECT_FALSE(On(recorder, "record_dock"));
+  Drive(recorder, Square(2));
+  recorder.OnAction("stop_recording");
+  EXPECT_FALSE(On(recorder, "record_dock"));
+  EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
 }

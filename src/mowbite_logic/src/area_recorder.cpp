@@ -117,6 +117,7 @@ void AreaRecorder::Reset() {
   outline_.reset();
   obstacles_.clear();
   collect_requested_ = false;
+  dock_first_.reset();
   accuracy_blocked_ = false;
   full_reported_ = false;
   actions_changed_ = true;
@@ -133,7 +134,7 @@ AreaRecorder::Result AreaRecorder::OnAction(const std::string& name) {
   if (it == names.end() || name == "exit_recording_mode") return Result::kUnknown;
   const size_t index = static_cast<size_t>(it - names.begin());
   // The edit on its way decides what comes next; the app shows no buttons until then.
-  if (pending_) return Refuse(name, "The last area is still being saved");
+  if (pending_) return Refuse(name, "The last change of the map is still being saved");
   if (!Enabled()[index]) return Result::kRefused;
   actions_changed_ = true;
   switch (index) {
@@ -147,9 +148,11 @@ AreaRecorder::Result AreaRecorder::OnAction(const std::string& name) {
     case kFinishNavigationArea: return Finish(name, "nav");
     case kFinishMowingArea: return Finish(name, "mow");
     case kFinishDiscard:
+      notices_.push_back(dock_first_ ? "Discarded the first point of the docking station"
+                                     : "Discarded the area being recorded");
       Reset();
-      notices_.push_back("Discarded the area being recorded");
       return Result::kDone;
+    case kRecordDock: return RecordDock();
     case kAutoPointsEnable:
     case kAutoPointsDisable:
       auto_points_ = index == kAutoPointsEnable;
@@ -197,6 +200,37 @@ AreaRecorder::Result AreaRecorder::Finish(const std::string& action, const std::
   return Result::kDone;
 }
 
+// Like OpenMower: a point in front of the station, then one on the contacts; the way between them is the heading.
+AreaRecorder::Result AreaRecorder::RecordDock() {
+  const std::string action = "record_dock";
+  if (!map_writable_) return Refuse(action, map_reason_);
+  if (!pose_) return Refuse(action, "No position");
+  if (!(pose_->accuracy <= config_.max_position_accuracy)) {
+    return Refuse(action, "Position accuracy " + Metres(pose_->accuracy) + " m, the docking station needs " +
+                              Metres(config_.max_position_accuracy) + " m or better");
+  }
+  const Point2 here{pose_->x, pose_->y};
+  if (!dock_first_) {
+    dock_first_ = here;
+    notices_.push_back("Recorded the point in front of the docking station, now drive onto the contacts");
+    return Result::kDone;
+  }
+  const double distance = std::hypot(here.x - dock_first_->x, here.y - dock_first_->y);
+  if (distance < config_.min_dock_distance) {
+    // The first point stays, driving on is enough.
+    return Refuse(action, "Only " + Metres(distance) + " m from the first point, at least " +
+                              Metres(config_.min_dock_distance) + " m needed for the heading");
+  }
+  MapEdit edit;
+  edit.kind = MapEdit::Kind::kDock;
+  edit.x = here.x;
+  edit.y = here.y;
+  edit.heading = std::atan2(here.y - dock_first_->y, here.x - dock_first_->x);
+  pending_ = edit;
+  edit_untaken_ = true;
+  return Result::kDone;
+}
+
 std::optional<MapEdit> AreaRecorder::TakeMapEdit() {
   if (!edit_untaken_) return std::nullopt;
   edit_untaken_ = false;
@@ -209,6 +243,17 @@ void AreaRecorder::OnMapEditResult(bool ok, const std::string& id, const std::st
   pending_.reset();
   edit_untaken_ = false;
   actions_changed_ = true;
+  if (edit.kind == MapEdit::Kind::kDock) {
+    if (!ok) {
+      // The first point stays, the second can be taken again.
+      Refuse("record_dock", message);
+      return;
+    }
+    events_.push_back({"DOCK_RECORDED", {{"dock_id", id}, {"heading", edit.heading}}});
+    notices_.push_back("Saved the docking station " + id);
+    dock_first_.reset();
+    return;
+  }
   const std::string action = edit.type == "nav" ? "finish_navigation_area" : "finish_mowing_area";
   if (!ok) {
     // Outline and obstacles stay, the user can try again or discard them.
@@ -295,6 +340,7 @@ void AreaRecorder::SetMapWritable(bool writable, const std::string& reason) {
 }
 
 std::string AreaRecorder::SubState() const {
+  if (dock_first_) return "RECORD_DOCKING_POSITION";
   if (!recording_) return "";
   return outline_ ? "RECORD_OBSTACLE" : "RECORD_OUTLINE";
 }
@@ -304,7 +350,10 @@ std::vector<bool> AreaRecorder::Enabled() const {
   std::vector<bool> on(kActionCount, false);
   on[kExitRecordingMode] = true;
   if (pending_) return on;
-  if (recording_) {
+  if (dock_first_) {
+    // The app shows only record_dock here; discard drops the first point.
+    on[kRecordDock] = on[kFinishDiscard] = true;
+  } else if (recording_) {
     on[kStopRecording] = on[kFinishNavigationArea] = on[kFinishMowingArea] = on[kFinishDiscard] = true;
     on[kAutoPointsEnable] = !auto_points_;
     on[kAutoPointsDisable] = auto_points_;
@@ -312,7 +361,7 @@ std::vector<bool> AreaRecorder::Enabled() const {
   } else if (outline_) {
     on[kStartRecording] = on[kFinishNavigationArea] = on[kFinishMowingArea] = on[kFinishDiscard] = true;
   } else {
-    on[kStartRecording] = true;
+    on[kStartRecording] = on[kRecordDock] = true;
   }
   // start_manual_mowing and stop_manual_mowing stay off: the blade comes after phase 7.
   return on;

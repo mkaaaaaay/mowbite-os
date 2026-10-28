@@ -40,17 +40,25 @@ struct RecorderConfig {
   double min_area = 0.05;
   // All rings of one recording together; the map must fit into one MQTT message.
   size_t max_points = 5000;
+  // The two points of the docking station must be this far apart (m) for a usable heading.
+  double min_dock_distance = 0.3;
 };
 
 // A change of the map the recording asks mowbite_map for.
 struct MapEdit {
-  // mow or nav
+  enum class Kind { kArea, kDock };
+  Kind kind = Kind::kArea;
+  // kArea: mow or nav
   std::string type;
   Ring outline;
   std::vector<Ring> obstacles;
+  // kDock: on the contacts, map frame; heading in rad, the way the mower drives in
+  double x = 0;
+  double y = 0;
+  double heading = 0;
 };
 
-// What AREA_RECORDING records: one outline and the obstacles inside it, like OpenMower. Without
+// What AREA_RECORDING records: one outline, the obstacles inside it and the docking station, like OpenMower. Without
 // ROS; the logic passes poses and actions, sends the edits to mowbite_map and returns their results.
 class AreaRecorder {
  public:
@@ -76,7 +84,7 @@ class AreaRecorder {
     return pending_.has_value();
   }
 
-  // RECORD_OUTLINE, RECORD_OBSTACLE or empty, as OpenMower names them.
+  // RECORD_OUTLINE, RECORD_OBSTACLE, RECORD_DOCKING_POSITION or empty, as OpenMower names them.
   std::string SubState() const;
   // Enabled flags in the order of ActionNames().
   std::vector<bool> Enabled() const;
@@ -107,6 +115,7 @@ class AreaRecorder {
   // Ends the open ring: the outline if there is none yet, else an obstacle.
   bool CloseRing(const std::string& action);
   Result Finish(const std::string& action, const std::string& type);
+  Result RecordDock();
   void AddPoint(double x, double y);
   size_t PointCount() const;
 
@@ -118,6 +127,8 @@ class AreaRecorder {
   // Like OpenMower: points come by themselves at min_point_distance.
   bool auto_points_ = true;
   bool collect_requested_ = false;
+  // The point in front of the docking station, the first of two.
+  std::optional<Point2> dock_first_;
   struct Pose {
     double x;
     double y;
