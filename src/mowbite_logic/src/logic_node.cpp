@@ -8,6 +8,7 @@
 #include <mowbite_msgs/msg/sensor_info.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -47,6 +48,13 @@ class LogicNode : public rclcpp::Node {
     sensor_value_pub_ = create_publisher<mowbite_msgs::msg::SensorValue>("bridge/sensor_value", 100);
     publish_pub_ = create_publisher<mowbite_msgs::msg::MqttPublish>("bridge/publish", 100);
     cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
+
+    // The app container rates the battery by /ll/board; any value except YardForce makes it show battery_percentage.
+    params_pub_ = create_publisher<std_msgs::msg::String>(
+        "bridge/params", rclcpp::QoS(rclcpp::KeepLast(50)).reliable().transient_local());
+    std_msgs::msg::String board_msg;
+    board_msg.data = nlohmann::json{{"node", "/ll"}, {"params", {{"board", declare_parameter("board", "Tron")}}}}.dump();
+    params_pub_->publish(board_msg);
     emergency_client_ = create_client<std_srvs::srv::SetBool>("mcu/emergency");
 
     mcu_sub_ = create_subscription<mowbite_msgs::msg::McuStatus>(
@@ -270,6 +278,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::SensorInfo>::SharedPtr sensor_info_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr emergency_client_;
   rclcpp::Subscription<mowbite_msgs::msg::McuStatus>::SharedPtr mcu_sub_;

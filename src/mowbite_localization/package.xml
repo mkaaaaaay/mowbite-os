@@ -6,6 +6,7 @@
   <description>2D localization from gyro, wheel speed and RTK GPS, a port of xbot_positioning</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
   <license>GPL-3.0</license>
+  <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <build_depend>eigen</build_depend>

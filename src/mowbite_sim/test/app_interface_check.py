@@ -96,6 +96,9 @@ retained = {top for _, top, _, r in msgs if r}
 for top in ["capabilities/json", "version/json", "params/json", "sensor_infos/json", "actions/json"]:
     check("retained " + top, top in retained)
 
+params = json.loads(latest("params/json") or "{}")
+check("params /ll/board is Tron", params.get("/ll/board") == "Tron", str(params.get("/ll/board")))
+
 infos = json.loads(latest("sensor_infos/json") or "[]")
 ids = sorted(i["sensor_id"] for i in infos)
 check("sensor ids", len(ids) == 11 and "om_v_battery" in ids and "om_gps_accuracy" in ids, ",".join(ids))
