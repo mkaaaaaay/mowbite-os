@@ -6,4 +6,9 @@ find_package(ament_cmake REQUIRED)
 install(PROGRAMS scripts/fake_tron DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 
+if(BUILD_TESTING)
+  find_package(launch_testing_ament_cmake REQUIRED)
+  add_launch_test(test/test_stack_smoke.py TIMEOUT 120)
+endif()
+
 ament_package()

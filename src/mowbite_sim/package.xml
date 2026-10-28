@@ -12,6 +12,20 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>mosquitto</test_depend>
+  <test_depend>python3-paho-mqtt</test_depend>
+  <test_depend>rclpy</test_depend>
+  <test_depend>nav_msgs</test_depend>
+  <test_depend>sensor_msgs</test_depend>
+  <test_depend>mowbite_msgs</test_depend>
+  <test_depend>tron_gnss</test_depend>
+  <test_depend>tron_imu</test_depend>
+  <test_depend>mowbite_localization</test_depend>
+  <test_depend>mowbite_bridge</test_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>
