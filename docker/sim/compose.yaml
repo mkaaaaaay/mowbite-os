@@ -1,0 +1,50 @@
+# MowBite OS against the simulated MCU, with mosquitto and the MowBite app, all on the PC.
+#   docker compose -f docker/sim/compose.yaml up -d --build      (in the repo)
+#   docker compose -f docker/sim/compose.yaml down
+# App: http://<OMTRON_HOST>:48082, MQTT 41883, WebSocket 49001. OMTRON_HOST (default localhost) can be set in
+# docker/sim/.env, e.g. to the LAN address of the PC for phones. Sensor flags of the simulated MCU, e.g. lift:
+#   docker exec omtron-mowbite_os-1 sh -c 'echo "{\"lift\": 1}" > /tmp/mowbite_sim_flags.json'
+name: omtron
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "2"
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    labels:
+      - com.centurylinklabs.watchtower.enable=false
+    logging: *logging
+    ports:
+      - "${OMTRON_MQTT_PORT:-41883}:1883"
+      - "${OMTRON_WS_PORT:-49001}:9001"
+      - "${OMTRON_APP_PORT:-48082}:8080"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+  mowbite_os:
+    build:
+      context: ../..
+      dockerfile: docker/sim.Dockerfile
+    image: local/mowbite-os-sim:dev
+    labels:
+      - com.centurylinklabs.watchtower.enable=false
+    logging: *logging
+    network_mode: "service:mosquitto"
+    environment:
+      - ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+    command: ["ros2", "launch", "mowbite_sim", "sim.launch.py"]
+  mowbite:
+    image: ${OMTRON_APP_IMAGE:-ghcr.io/mkaaaaaay/mowbite:1.4.0-beta.16}
+    labels:
+      - com.centurylinklabs.watchtower.enable=false
+    logging: *logging
+    network_mode: "service:mosquitto"
+    environment:
+      - MOWER_MQTT_WS_URL=ws://${OMTRON_HOST:-localhost}:${OMTRON_WS_PORT:-49001}
+      - MOWER_MQTT_HOST=localhost
+      - MOWER_MQTT_PORT=1883
+    volumes:
+      - mowbite_data:/data
+volumes:
+  mowbite_data:

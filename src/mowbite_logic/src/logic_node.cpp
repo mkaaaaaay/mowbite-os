@@ -166,6 +166,9 @@ class LogicNode : public rclcpp::Node {
     msg.emergency = state.emergency;
     msg.is_charging = state.is_charging;
     msg.rain_detected = state.rain_detected;
+    // No localization before stage 2; an accuracy of 0 would read as a perfect RTK fix in the app.
+    msg.pos_accuracy = 999.0f;
+    msg.heading_accuracy = 999.0f;
     robot_state_pub_->publish(msg);
   }
 
