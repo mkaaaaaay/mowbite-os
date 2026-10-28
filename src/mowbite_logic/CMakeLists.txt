@@ -15,7 +15,7 @@ find_package(mowbite_bridge REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
 # States, actions and sensors without ROS, testable on any machine.
-add_library(mowbite_logic_core STATIC src/logic_core.cpp)
+add_library(mowbite_logic_core STATIC src/logic_core.cpp src/area_recorder.cpp)
 target_include_directories(mowbite_logic_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -38,7 +38,7 @@ install(TARGETS mowbite_logic_core mowbite_logic_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(mowbite_logic_test test/test_logic_core.cpp)
+  ament_add_gtest(mowbite_logic_test test/test_logic_core.cpp test/test_area_recorder.cpp)
   target_link_libraries(mowbite_logic_test mowbite_logic_core)
 endif()
 

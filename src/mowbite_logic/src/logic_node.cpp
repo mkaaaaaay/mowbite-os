@@ -3,6 +3,7 @@
 #include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
+#include <mowbite_msgs/msg/map_status.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/position_jump.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
@@ -29,6 +30,17 @@ rclcpp::QoS LatchedQos(size_t depth) {
 double MonotonicSeconds() {
   using namespace std::chrono;
   return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+MapDatum ToDatum(uint8_t state) {
+  using mowbite_msgs::msg::MapStatus;
+  switch (state) {
+    case MapStatus::DATUM_EMPTY: return MapDatum::kEmpty;
+    case MapStatus::DATUM_MATCH: return MapDatum::kMatch;
+    case MapStatus::DATUM_MISMATCH: return MapDatum::kMismatch;
+    case MapStatus::DATUM_UNBOUND: return MapDatum::kUnbound;
+    default: return MapDatum::kUnknown;
+  }
 }
 
 HardwareSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
@@ -74,6 +86,14 @@ class LogicNode : public rclcpp::Node {
             std::lock_guard<std::mutex> lock(mutex_);
             core_.OnPositionJump(msg->after.x, msg->after.y, msg->distance,
                                  msg->reason == mowbite_msgs::msg::PositionJump::REASON_OUTLIERS);
+          }
+          Flush();
+        });
+    map_status_sub_ = create_subscription<mowbite_msgs::msg::MapStatus>(
+        "map/status", LatchedQos(1), [this](mowbite_msgs::msg::MapStatus::ConstSharedPtr msg) {
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            core_.OnMapStatus(ToDatum(msg->datum_state), msg->reason);
           }
           Flush();
         });
@@ -241,13 +261,16 @@ class LogicNode : public rclcpp::Node {
     bool actions_changed;
     bool stop;
     std::vector<ReasonChange> reasons;
+    std::vector<std::string> notices;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       events = core_.TakeEvents();
       actions_changed = core_.TakeActionsChanged();
       stop = core_.TakeStopRequest();
       reasons = core_.TakeReasonChanges();
+      notices = core_.TakeNotices();
     }
+    for (const auto& line : notices) RCLCPP_INFO(get_logger(), "%s", line.c_str());
     if (stop) cmd_vel_pub_->publish(geometry_msgs::msg::Twist());
     // The app shows the reasons of an active emergency from this line, like with mower_comms_v2 of OpenMower.
     for (const auto& change : reasons) {
@@ -259,6 +282,10 @@ class LogicNode : public rclcpp::Node {
       }
     }
     for (auto& event : events) {
+      if (event.type == "RECORDING_REFUSED") {
+        RCLCPP_WARN(get_logger(), "Recording: %s refused: %s", event.details.value("action", "").c_str(),
+                    event.details.value("reason", "").c_str());
+      }
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "events/json";
       msg.payload = mowbite_bridge::EventPayload(event.type, event.details, now().seconds()).dump();
@@ -314,6 +341,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::PositionJump>::SharedPtr jump_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::MapStatus>::SharedPtr map_status_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr action_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr teleop_sub_;
   rclcpp::TimerBase::SharedPtr state_timer_;

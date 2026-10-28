@@ -54,6 +54,7 @@ const SensorReading* Find(const std::vector<SensorReading>& readings, const std:
 
 TEST(Logic, StartsInEmergencyWithoutEventOnFirstReport) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   EXPECT_TRUE(core.RobotState().emergency);
   core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.RobotState().emergency);
@@ -63,6 +64,7 @@ TEST(Logic, StartsInEmergencyWithoutEventOnFirstReport) {
 
 TEST(Logic, EmergencyEventsCarryReasonBits) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   auto lifted = Stopped(kEmergencyLatch | kEmergencyLift);
   core.OnHardwareStatus(lifted);
@@ -79,6 +81,7 @@ TEST(Logic, EmergencyEventsCarryReasonBits) {
 
 TEST(Logic, IncompatibleFirmwareIsEmergencyWithItsOwnBit) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   auto firmware = Stopped(kEmergencyFirmwareIncompatible);
   core.OnHardwareStatus(firmware);
@@ -91,6 +94,7 @@ TEST(Logic, IncompatibleFirmwareIsEmergencyWithItsOwnBit) {
 
 TEST(Logic, ReasonStaysInTheStateAndEveryChangeIsReported) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   // Before the driver reports, the mower stands for lack of telemetry.
   EXPECT_EQ(core.RobotState().emergency_reason, kEmergencyTimeoutInputs);
   core.OnHardwareStatus(Healthy());
@@ -122,6 +126,7 @@ TEST(Logic, ReasonStaysInTheStateAndEveryChangeIsReported) {
 
 TEST(Logic, LostHardwareStatusAddsTheTimeoutBit) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Stopped(kEmergencyLatch | kEmergencyLift));
   core.OnHardwareTimeout();
   EXPECT_EQ(core.RobotState().emergency_reason, kEmergencyLatch | kEmergencyLift | kEmergencyTimeoutInputs);
@@ -129,6 +134,7 @@ TEST(Logic, LostHardwareStatusAddsTheTimeoutBit) {
 
 TEST(Logic, NoTelemetryFromTheStartIsReportedAsAChange) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareTimeout();
   auto changes = core.TakeReasonChanges();
   ASSERT_EQ(changes.size(), 1u);
@@ -138,6 +144,7 @@ TEST(Logic, NoTelemetryFromTheStartIsReportedAsAChange) {
 
 TEST(Logic, ReasonWithoutEmergencyIsNotShown) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   auto bumper = Healthy();
   bumper.emergency_reason = kEmergencyCollision;
   core.OnHardwareStatus(bumper);
@@ -155,6 +162,7 @@ TEST(Logic, ReasonNamesAsOpenMowerLogsThem) {
 
 TEST(Logic, TelemetryTimeoutIsEmergency) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnHardwareTimeout();
   EXPECT_TRUE(core.RobotState().emergency);
@@ -166,6 +174,7 @@ TEST(Logic, TelemetryTimeoutIsEmergency) {
 
 TEST(Logic, TeleopOnlyWhileRecordingAndNoEmergency) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 0.0));
   EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_area_recording"));
@@ -194,6 +203,7 @@ namespace {
 // Healthy mower in AREA_RECORDING.
 LogicCore RecordingCore() {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnAction("mower_logic:idle/start_area_recording");
   return core;
@@ -255,6 +265,7 @@ TEST(Logic, ZeroDuringEmergencyDoesNotArm) {
 
 TEST(Logic, HeldJoystickWaitsWhenRecordingStarts) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   EXPECT_EQ(Passed(core, 10.0, 11.0), 0);
   core.OnAction("mower_logic:idle/start_area_recording");
@@ -265,6 +276,7 @@ TEST(Logic, HeldJoystickWaitsWhenRecordingStarts) {
 
 TEST(Logic, LeavingRecordingStopsTheWheels) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.TakeStopRequest());
   core.OnAction("mower_logic:idle/start_area_recording");
@@ -279,6 +291,7 @@ TEST(Logic, LeavingRecordingStopsTheWheels) {
 
 TEST(Logic, NoRecordingDuringEmergency) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   auto latched = Stopped(kEmergencyLatch | kEmergencyHighLevel);
   core.OnHardwareStatus(latched);
   EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
@@ -290,6 +303,7 @@ TEST(Logic, NoRecordingDuringEmergency) {
 
 TEST(Logic, ActionsChangeFlag) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   EXPECT_TRUE(core.TakeActionsChanged());
   EXPECT_FALSE(core.TakeActionsChanged());
   core.OnHardwareStatus(Healthy());
@@ -300,6 +314,7 @@ TEST(Logic, ActionsChangeFlag) {
 
 TEST(Logic, RobotStateAndSensors) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   auto docked = Healthy();
   docked.dock_contact = true;
   docked.battery_current = -3.0f;
@@ -328,6 +343,7 @@ TEST(Logic, RobotStateAndSensors) {
 
 TEST(Logic, SensorDefinitionsMatchTheApp) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   auto sensors = core.Sensors();
   for (const char* id :
        {"om_v_battery", "om_v_charge", "om_charge_current", "om_charge_state", "om_mow_motor_rpm",
@@ -359,6 +375,7 @@ PoseSnapshot Pose(double x, double y, float accuracy, bool heading_valid = true)
 
 TEST(Logic, WithoutPoseAccuracyIsNeverPerfect) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   auto state = core.RobotState();
   EXPECT_FLOAT_EQ(state.pos_accuracy, 999.0f);
@@ -370,6 +387,7 @@ TEST(Logic, WithoutPoseAccuracyIsNeverPerfect) {
 
 TEST(Logic, PoseFillsRobotStateAndGpsPercentage) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnPose(Pose(12.5, -3.25, 0.02f));
   auto state = core.RobotState();
@@ -386,6 +404,7 @@ TEST(Logic, PoseFillsRobotStateAndGpsPercentage) {
 
 TEST(Logic, GpsPercentageIsZeroWhenTooInaccurateOrWithoutHeading) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnPose(Pose(0, 0, 0.1f));
   EXPECT_FLOAT_EQ(core.RobotState().gps_percentage, 0.0f);
   core.OnPose(Pose(0, 0, 999.0f));
@@ -399,6 +418,7 @@ TEST(Logic, GpsPercentageIsZeroWhenTooInaccurateOrWithoutHeading) {
 
 TEST(Logic, PoseTimeoutDropsPoseButEventsKeepLastPosition) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnPose(Pose(4.0, 5.0, 0.02f));
   core.OnPoseTimeout();
@@ -415,6 +435,7 @@ TEST(Logic, PoseTimeoutDropsPoseButEventsKeepLastPosition) {
 
 TEST(Logic, EventsCarryThePositionTheyHappenedAt) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnPose(Pose(1.0, 2.0, 0.02f));
   core.OnAction("mower_logic:idle/start_area_recording");
@@ -432,6 +453,7 @@ TEST(Logic, EventsCarryThePositionTheyHappenedAt) {
 
 TEST(Logic, PositionJumpIsAnEventAtTheNewPosition) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnPose(Pose(1.0, 2.0, 0.02f));
   core.OnPositionJump(7.0, 2.0, 6.0, true);
@@ -447,6 +469,7 @@ TEST(Logic, PositionJumpIsAnEventAtTheNewPosition) {
 
 TEST(Logic, EventsWithoutAnyPoseAreAtZero) {
   LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnAction("mower_logic:idle/start_area_recording");
   auto events = core.TakeEvents();

@@ -64,7 +64,17 @@ std::string EmergencyReasonNames(int reason) {
   return names;
 }
 
-LogicCore::LogicCore(const LogicConfig& config) : config_(config) {
+namespace {
+
+RecorderConfig RecorderConfigOf(const LogicConfig& config) {
+  RecorderConfig recorder = config.recorder;
+  recorder.max_position_accuracy = config.max_position_accuracy;
+  return recorder;
+}
+
+}  // namespace
+
+LogicCore::LogicCore(const LogicConfig& config) : config_(config), recorder_(RecorderConfigOf(config)) {
   // Without telemetry the mower counts as stopped until the driver reports.
   emergency_ = true;
 }
@@ -84,10 +94,43 @@ void LogicCore::OnPose(const PoseSnapshot& pose) {
   pose_ = pose;
   last_x_ = pose.x;
   last_y_ = pose.y;
+  if (state_ != State::kAreaRecording) return;
+  recorder_.OnPose(pose.x, pose.y, pose.position_accuracy);
+  PullRecorder();
 }
 
 void LogicCore::OnPoseTimeout() {
   pose_.reset();
+  recorder_.OnPoseLost();
+  PullRecorder();
+}
+
+void LogicCore::OnMapStatus(MapDatum datum, const std::string& reason) {
+  const bool writable = datum == MapDatum::kMatch || datum == MapDatum::kEmpty;
+  std::string why = reason;
+  if (!writable && why.empty()) why = "The map does not fit the datum in use";
+  if (writable != map_writable_) actions_changed_ = true;
+  map_writable_ = writable;
+  map_reason_ = writable ? "" : why;
+  recorder_.SetMapWritable(writable, map_reason_);
+}
+
+std::optional<MapEdit> LogicCore::TakeMapEdit() {
+  return recorder_.TakeMapEdit();
+}
+
+void LogicCore::OnMapEditResult(bool ok, const std::string& id, const std::string& message) {
+  recorder_.OnMapEditResult(ok, id, message);
+  PullRecorder();
+}
+
+void LogicCore::PullRecorder() {
+  for (auto& event : recorder_.TakeEvents()) AddEvent(event.type, std::move(event.details));
+  actions_changed_ |= recorder_.TakeActionsChanged();
+}
+
+std::vector<std::string> LogicCore::TakeNotices() {
+  return recorder_.TakeNotices();
 }
 
 void LogicCore::OnPositionJump(double to_x, double to_y, double distance_m, bool after_outliers) {
@@ -138,6 +181,10 @@ ActionResult LogicCore::OnAction(const std::string& action_id) {
   if (action_id == kRootPrefix + "/reset_emergency") return ActionResult::kReleaseEmergency;
   if (action_id == kIdlePrefix + "/start_area_recording") {
     if (state_ != State::kIdle || emergency_) return ActionResult::kRejected;
+    if (!map_writable_) {
+      AddEvent("RECORDING_REFUSED", {{"action", "start_area_recording"}, {"reason", map_reason_}});
+      return ActionResult::kRejected;
+    }
     SetState(State::kAreaRecording);
     return ActionResult::kDone;
   }
@@ -145,6 +192,12 @@ ActionResult LogicCore::OnAction(const std::string& action_id) {
     if (state_ != State::kAreaRecording) return ActionResult::kRejected;
     SetState(State::kIdle);
     return ActionResult::kDone;
+  }
+  if (action_id.rfind(kRecordingPrefix + "/", 0) == 0 && state_ == State::kAreaRecording) {
+    const AreaRecorder::Result result = recorder_.OnAction(action_id.substr(kRecordingPrefix.size() + 1));
+    PullRecorder();
+    if (result == AreaRecorder::Result::kDone) return ActionResult::kDone;
+    if (result == AreaRecorder::Result::kRefused) return ActionResult::kRejected;
   }
   const bool known_prefix =
       action_id.rfind(kIdlePrefix + "/", 0) == 0 || action_id.rfind(kRecordingPrefix + "/", 0) == 0;
@@ -169,6 +222,9 @@ std::optional<std::pair<double, double>> LogicCore::OnTeleop(double vx, double v
 void LogicCore::SetState(State state) {
   if (state == state_) return;
   if (state_ == State::kAreaRecording) stop_requested_ = true;
+  // Entering and leaving both start from nothing; what was not saved is gone, like with OpenMower.
+  recorder_.Reset();
+  recorder_.TakeActionsChanged();
   state_ = state;
   teleop_armed_ = false;
   AddEvent("STATE", {{"state", StateName(state)}});
@@ -186,6 +242,7 @@ const char* LogicCore::StateName(State state) {
 RobotStateData LogicCore::RobotState() const {
   RobotStateData s;
   s.state = StateName(state_);
+  if (state_ == State::kAreaRecording) s.sub_state = recorder_.SubState();
   s.emergency = emergency_;
   s.emergency_reason = reason_;
   s.is_charging = hw_.battery_ok && hw_.dock_contact;
@@ -216,21 +273,27 @@ std::vector<ActionGroup> LogicCore::Actions() const {
   // Mowing needs map, localization and path following, all later stages.
   groups.push_back({kIdlePrefix,
                     {{"start_mowing", "Start Mowing", false},
-                     {"start_area_recording", "Start Area Recording", idle && !emergency_},
+                     {"start_area_recording", "Start Area Recording", idle && !emergency_ && map_writable_},
                      {"reset_job", "Reset Job", false}}});
-  groups.push_back({kRecordingPrefix,
-                    {{"start_recording", "Start Recording", false},
-                     {"stop_recording", "Stop Recording", false},
-                     {"finish_navigation_area", "Save Navigation Area", false},
-                     {"finish_mowing_area", "Save Mowing Area", false},
-                     {"exit_recording_mode", "Exit", recording},
-                     {"finish_discard", "Discard Area", false},
-                     {"record_dock", "Record Docking point", false},
-                     {"auto_point_collecting_enable", "Enable automatic point collecting", false},
-                     {"auto_point_collecting_disable", "Disable automatic point collecting", false},
-                     {"collect_point", "Collect point", false},
-                     {"start_manual_mowing", "Start manual mowing", false},
-                     {"stop_manual_mowing", "Stop manual mowing", false}}});
+  // The recorder decides while recording; outside of it all are off.
+  const std::vector<bool> enabled = recorder_.Enabled();
+  const std::vector<std::string> names = {"Start Recording",
+                                          "Stop Recording",
+                                          "Save Navigation Area",
+                                          "Save Mowing Area",
+                                          "Exit",
+                                          "Discard Area",
+                                          "Record Docking point",
+                                          "Enable automatic point collecting",
+                                          "Disable automatic point collecting",
+                                          "Collect point",
+                                          "Start manual mowing",
+                                          "Stop manual mowing"};
+  ActionGroup recording_group{kRecordingPrefix, {}};
+  for (size_t i = 0; i < names.size(); i++) {
+    recording_group.actions.push_back({AreaRecorder::ActionNames()[i], names[i], recording && enabled[i]});
+  }
+  groups.push_back(std::move(recording_group));
   return groups;
 }
 

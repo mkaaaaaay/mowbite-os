@@ -3,15 +3,14 @@
 
 #include <cstdint>
 #include <limits>
-#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-namespace mowbite_logic {
+#include "mowbite_logic/area_recorder.h"
 
-using json = nlohmann::ordered_json;
+namespace mowbite_logic {
 
 // What the logic needs from hw/status.
 struct HardwareSnapshot {
@@ -57,7 +56,12 @@ struct LogicConfig {
   // GPS counts as good up to this accuracy (m), like max_position_accuracy of OpenMower. The localization reads the
   // same parameter (tron.yaml, /**).
   double max_position_accuracy = 0.1;
+  // Its max_position_accuracy is the one above.
+  RecorderConfig recorder;
 };
+
+// map/status of mowbite_map: whether the map fits the datum of the GNSS.
+enum class MapDatum { kUnknown, kEmpty, kMatch, kMismatch, kUnbound };
 
 struct Action {
   std::string id;
@@ -115,11 +119,6 @@ struct SensorReading {
   std::string text;
 };
 
-struct Event {
-  std::string type;
-  json details;
-};
-
 enum class ActionResult { kUnknown, kRejected, kDone, kReleaseEmergency };
 
 struct ReasonChange {
@@ -143,7 +142,7 @@ std::string EmergencyReasonNames(int reason);
 // The app repeats teleop every 100 ms while the joystick is held and sends one zero when it is let go.
 constexpr double kTeleopQuietS = 1.0;
 
-// Mower states and actions of stage 1: IDLE and AREA_RECORDING (remote control only), emergency and sensors.
+// Mower states and actions: IDLE and AREA_RECORDING (remote control and recording of areas), emergency and sensors.
 class LogicCore {
  public:
   explicit LogicCore(const LogicConfig& config);
@@ -157,6 +156,11 @@ class LogicCore {
   // The localization moved its estimate onto GPS again by distance_m, the event is at the new position.
   void OnPositionJump(double to_x, double to_y, double distance_m, bool after_outliers);
   ActionResult OnAction(const std::string& action_id);
+  // Recording starts and saves only while the map fits the datum in use, or is still empty and takes it.
+  void OnMapStatus(MapDatum datum, const std::string& reason);
+  // The change of the map a recording asks for, once; the node sends it to mowbite_map.
+  std::optional<MapEdit> TakeMapEdit();
+  void OnMapEditResult(bool ok, const std::string& id, const std::string& message);
   // Remote control reaches the wheels only while recording an area, like in OpenMower. After an emergency or a state
   // change it waits for a zero command or a pause of kTeleopQuietS, so a held joystick does not move the mower.
   // now_s is a monotonic clock.
@@ -176,12 +180,19 @@ class LogicCore {
   // True once after the logic left a state that drives: the wheels get a zero command at once instead of waiting for
   // the cmd_vel watchdog of the driver.
   bool TakeStopRequest();
+  // Lines for the log since the last call.
+  std::vector<std::string> TakeNotices();
   bool Emergency() const;
+  const AreaRecorder& recorder() const {
+    return recorder_;
+  }
 
  private:
   enum class State { kIdle, kAreaRecording };
 
   void SetState(State state);
+  // Moves the events of the recorder into the events of the logic, at the current position.
+  void PullRecorder();
   void AddEvent(const std::string& type, json details);
   void UpdateEmergency();
   int EmergencyReason() const;
@@ -205,6 +216,9 @@ class LogicCore {
   bool teleop_armed_ = false;
   double last_teleop_s_ = -std::numeric_limits<double>::infinity();
   std::vector<Event> events_;
+  AreaRecorder recorder_;
+  bool map_writable_ = false;
+  std::string map_reason_ = "The map status is not known yet";
 };
 
 }  // namespace mowbite_logic
