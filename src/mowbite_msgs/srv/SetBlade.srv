@@ -1,0 +1,12 @@
+# Blade on with a lease: the driver switches it off unless the next request comes within lease_s. on = false switches
+# it off at once and always succeeds.
+bool on
+# Percent of full speed, 0 = driver default.
+uint8 speed_percent
+# Cutting height in mm, 0 = driver default; outside the range of hw/capabilities the request is refused.
+uint16 height_mm
+# More than 0 and at most blade_lease_max_s of hw/capabilities.
+float32 lease_s
+---
+bool success
+string message

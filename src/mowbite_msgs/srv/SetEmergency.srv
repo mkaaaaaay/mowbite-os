@@ -1,0 +1,8 @@
+# latch = true latches the emergency (reason HIGH_LEVEL). latch = false asks for a release, which takes effect once
+# lift, stop and bumper are free; hw/status shows the outcome.
+bool latch
+# Why, for the log of the driver.
+string reason
+---
+bool success
+string message
