@@ -118,7 +118,7 @@ double Localization::WheelSpeed(double now_s) const {
 GpsResult Localization::AddGps(const GpsFix& fix, double now_s) {
   if (!gps_enabled_) return GpsResult::kDisabled;
   if ((fix.flags & kFlagGpsRtkFixed) == 0) return GpsResult::kNotFixed;
-  if (!(fix.accuracy <= config_.max_gps_accuracy)) return GpsResult::kInaccurate;
+  if (!(fix.accuracy <= config_.max_position_accuracy)) return GpsResult::kInaccurate;
   if (!std::isfinite(fix.x) || !std::isfinite(fix.y) || !std::isfinite(fix.z)) return GpsResult::kInaccurate;
 
   if (now_s - last_gps_time_s_ > kGpsGapS) {
@@ -154,7 +154,7 @@ GpsResult Localization::AddGps(const GpsFix& fix, double now_s) {
     has_gps_ = true;
     const Estimate after = GetEstimate();
     PositionJump jump{reset_by_outliers_, before.x, before.y, after.x, after.y};
-    if (initialized_once_ && jump.distance() > config_.max_gps_accuracy) jump_ = jump;
+    if (initialized_once_ && jump.distance() > config_.max_position_accuracy) jump_ = jump;
     initialized_once_ = true;
     return GpsResult::kInitialized;
   }

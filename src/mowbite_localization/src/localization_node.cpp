@@ -42,7 +42,7 @@ class LocalizationNode : public rclcpp::Node {
     config.skip_gyro_calibration = declare_parameter("skip_gyro_calibration", config.skip_gyro_calibration);
     config.gyro_offset = declare_parameter("gyro_offset", config.gyro_offset);
     config.min_speed = declare_parameter("min_speed", config.min_speed);
-    config.max_gps_accuracy = declare_parameter("max_gps_accuracy", config.max_gps_accuracy);
+    config.max_position_accuracy = declare_parameter("max_position_accuracy", config.max_position_accuracy);
     config.antenna_offset_x = declare_parameter("antenna_offset_x", config.antenna_offset_x);
     config.antenna_offset_y = declare_parameter("antenna_offset_y", config.antenna_offset_y);
     config.process_noise = declare_parameter("process_noise", config.process_noise);
@@ -54,7 +54,7 @@ class LocalizationNode : public rclcpp::Node {
     child_frame_id_ = declare_parameter("child_frame_id", "base_link");
     const bool publish_tf = declare_parameter("publish_tf", true);
     debug_ = declare_parameter("debug", false);
-    max_gps_accuracy_ = config.max_gps_accuracy;
+    max_position_accuracy_ = config.max_position_accuracy;
     localization_ = std::make_unique<Localization>(config);
 
     RCLCPP_INFO(get_logger(), "Antenna offset: %.3f, %.3f", config.antenna_offset_x, config.antenna_offset_y);
@@ -141,7 +141,7 @@ class LocalizationNode : public rclcpp::Node {
         break;
       case GpsResult::kInaccurate:
         RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 10000, "Dropped GPS update, accuracy %.3f m above %.3f m",
-                             fix.accuracy, max_gps_accuracy_);
+                             fix.accuracy, max_position_accuracy_);
         break;
       case GpsResult::kRestarted:
         if (had_fix_) RCLCPP_WARN(get_logger(), "No usable GPS fix for more than 5 s, waiting for 10 inliers again");
@@ -242,7 +242,7 @@ class LocalizationNode : public rclcpp::Node {
   std::unique_ptr<Localization> localization_;
   std::string frame_id_;
   std::string child_frame_id_;
-  double max_gps_accuracy_ = 0.0;
+  double max_position_accuracy_ = 0.0;
   bool debug_ = false;
   bool had_fix_ = false;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;

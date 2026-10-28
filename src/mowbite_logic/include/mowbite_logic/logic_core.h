@@ -56,8 +56,8 @@ struct LogicConfig {
   double battery_full_voltage = 25.2;
   // The MCU reports no charge voltage, dock contact stands in for it.
   double dock_charge_voltage = 28.0;
-  // GPS counts as good up to this accuracy (m), like max_position_accuracy of OpenMower; it matches
-  // max_gps_accuracy of the localization.
+  // GPS counts as good up to this accuracy (m), like max_position_accuracy of OpenMower. The localization reads the
+  // same parameter (tron.yaml, /**).
   double max_position_accuracy = 0.1;
 };
 

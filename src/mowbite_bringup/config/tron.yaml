@@ -1,4 +1,11 @@
 # Parameters of MowBite OS on the Tron. Values marked as assumption are checked in phase 6.
+
+# Shared by all nodes, so it is set only here.
+/**:
+  ros__parameters:
+    # GPS counts as good up to this accuracy in m: the localization fuses only such fixes, the logic works only with
+    # such a position.
+    max_position_accuracy: 0.1
 tron_mcu:
   ros__parameters:
     port: /dev/ttyS9
@@ -32,7 +39,6 @@ mowbite_localization:
   ros__parameters:
     gyro_calibration_time: 5.0
     min_speed: 0.01
-    max_gps_accuracy: 0.1
     # GPS antenna relative to the point of rotation (x forward, y left), measured on the device in phase 7.
     antenna_offset_x: 0.0
     antenna_offset_y: 0.0
@@ -46,8 +52,6 @@ mowbite_logic:
     battery_empty_voltage: 19.2
     battery_full_voltage: 25.2
     dock_charge_voltage: 28.0
-    # GPS counts as good up to this accuracy in m; keep it equal to max_gps_accuracy of the localization.
-    max_position_accuracy: 0.1
     # localization/pose older than this (s) counts as lost: accuracy 999, GPS 0.
     pose_timeout: 2.0
 

@@ -27,7 +27,7 @@ struct LocalizationConfig {
   // Motion vectors below this speed do not correct the heading.
   double min_speed = 0.01;
   // Fixes with a worse accuracy are dropped.
-  double max_gps_accuracy = 0.1;
+  double max_position_accuracy = 0.1;
   // GPS antenna relative to the point of rotation, x forward, y left.
   double antenna_offset_x = 0.0;
   double antenna_offset_y = 0.0;
@@ -45,7 +45,7 @@ struct LocalizationConfig {
 enum class GpsResult {
   kDisabled,      // GPS switched off by the logic
   kNotFixed,      // no RTK fixed solution
-  kInaccurate,    // accuracy above max_gps_accuracy
+  kInaccurate,    // accuracy above max_position_accuracy
   kRestarted,     // first fix or more than 5 s since the last one, counting starts again
   kWarmup,        // inlier, waiting for more than 10 in a row
   kInitialized,   // filter moved to the GPS position
@@ -62,7 +62,7 @@ struct GpsFix {
   double motion_x = 0.0, motion_y = 0.0;
 };
 
-// The estimate moved onto GPS again by more than max_gps_accuracy.
+// The estimate moved onto GPS again by more than max_position_accuracy.
 struct PositionJump {
   bool after_outliers = false;  // otherwise after a gap without fixes
   double from_x = 0.0, from_y = 0.0;
