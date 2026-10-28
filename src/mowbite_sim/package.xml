@@ -3,7 +3,7 @@
 <package format="3">
   <name>mowbite_sim</name>
   <version>0.0.0</version>
-  <description>Simulation of MowBite OS on the PC: a simulated MCU on a pty</description>
+  <description>Simulation of MowBite OS on the PC: a simulated Tron (MCU, GNSS, IMU) on ptys</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
   <license>GPL-3.0</license>
 

@@ -98,7 +98,7 @@ for top in ["capabilities/json", "version/json", "params/json", "sensor_infos/js
 
 infos = json.loads(latest("sensor_infos/json") or "[]")
 ids = sorted(i["sensor_id"] for i in infos)
-check("sensor ids", len(ids) == 10 and "om_v_battery" in ids, ",".join(ids))
+check("sensor ids", len(ids) == 11 and "om_v_battery" in ids and "om_gps_accuracy" in ids, ",".join(ids))
 battery_info = next((i for i in infos if i["sensor_id"] == "om_v_battery"), {})
 check("battery max 25.2 and 0/1 flags", battery_info.get("max_value") == 25.2 and battery_info.get("has_min_max") == 1,
       json.dumps(battery_info))

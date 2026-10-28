@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+"""Simulated Airseekers Tron on three ptys: MCU (ttyS9), GNSS (ttyS4) and WIT IMU (ttyS1).
+
+The MCU pty sends sensor, speed, battery, version and motor frames like the real MCU. SpeedData (linear, angular) drives a
+unicycle model of the base frame. The speed drops to 0 after --host-timeout seconds without any frame from the host and
+while the lift or stop flag is set; it stays 0 until the next SpeedData. The GNSS pty carries NMEA GGA, RMC and VTG for the
+antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an upside-down mounted sensor.
+Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality) is read on every cycle, every received
+sub packet goes to a JSON lines log, and --state writes the true pose as JSON.
+"""
+import argparse
+import atexit
+import datetime
+import json
+import math
+import os
+import select
+import signal
+import struct
+import sys
+import time
+import tty
+
+FRAME_START = 0xA5
+FRAME_END = 0x5A
+ESCAPE = 0xF5
+ESCAPE_CODE = {FRAME_START: 0x01, FRAME_END: 0x02, ESCAPE: 0x03}
+ESCAPED_BYTE = {code: raw for raw, code in ESCAPE_CODE.items()}
+
+TO_MCU = 0x00
+FROM_MCU = 0x08
+
+
+def encode(subpackets):
+    """One frame from (type, module, payload) tuples."""
+    inner = bytearray([0])
+    for packet_type, module, payload in subpackets:
+        inner.extend((len(payload), packet_type, module))
+        inner.extend(payload)
+    inner[0] = len(inner) - 1
+    inner.append(sum(inner) % 256)
+    out = bytearray([FRAME_START])
+    for b in inner:
+        out.extend((ESCAPE, ESCAPE_CODE[b]) if b in ESCAPE_CODE else (b,))
+    out.append(FRAME_END)
+    return bytes(out)
+
+
+class Decoder:
+    """Byte stream to frames. A start byte inside a frame begins a new one."""
+
+    def __init__(self):
+        self.inner = None
+        self.pending_escape = False
+
+    def feed(self, data):
+        for b in data:
+            if b == FRAME_START:
+                self.inner = bytearray()
+                self.pending_escape = False
+            elif self.inner is None:
+                continue
+            elif b == FRAME_END:
+                yield self._split(self.inner)
+                self.inner = None
+            elif self.pending_escape:
+                self.inner.append(ESCAPED_BYTE.get(b, b))
+                self.pending_escape = False
+            elif b == ESCAPE:
+                self.pending_escape = True
+            else:
+                self.inner.append(b)
+
+    @staticmethod
+    def _split(inner):
+        """List of (type, module, payload), or None for a broken frame."""
+        if len(inner) < 2 or inner[0] != len(inner) - 2 or sum(inner[:-1]) % 256 != inner[-1]:
+            return None
+        packets = []
+        body = inner[1:-1]
+        while body:
+            size = body[0]
+            if len(body) < 3 + size:
+                return None
+            packets.append((body[1], body[2], bytes(body[3:3 + size])))
+            body = body[3 + size:]
+        return packets
+
+
+def read_flags(path):
+    if not path:
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+class Log:
+    """JSON lines, stops writing at max_bytes."""
+
+    def __init__(self, path, max_bytes):
+        self.file = open(path, "w") if path else None
+        self.left = max_bytes
+
+    def write(self, entry):
+        if not self.file or self.left <= 0:
+            return
+        line = json.dumps(entry) + "\n"
+        self.left -= len(line)
+        self.file.write(line)
+        self.file.flush()
+
+
+WGS84_A = 6378137.0
+WGS84_E2 = 6.69437999014e-3
+KNOTS = 0.514444
+SENSOR_PERIOD = 0.02
+GNSS_PERIOD = 0.2
+IMU_PERIOD = 0.02
+
+
+class Pose:
+    """Base frame in the local ENU frame: x east, y north, yaw counterclockwise from east. Unicycle model."""
+
+    def __init__(self, x=0.0, y=0.0, yaw=0.0):
+        self.x, self.y, self.yaw = x, y, yaw
+        self.linear = self.angular = 0.0
+
+    def step(self, dt, linear, angular):
+        self.linear, self.angular = linear, angular
+        # Midpoint heading keeps circles closed.
+        mid = self.yaw + 0.5 * angular * dt
+        self.x += linear * math.cos(mid) * dt
+        self.y += linear * math.sin(mid) * dt
+        self.yaw = math.atan2(math.sin(self.yaw + angular * dt), math.cos(self.yaw + angular * dt))
+
+    def antenna(self, ax, ay):
+        c, s = math.cos(self.yaw), math.sin(self.yaw)
+        return self.x + c * ax - s * ay, self.y + s * ax + c * ay
+
+    def antenna_velocity(self, ax, ay):
+        """East and north velocity of the antenna."""
+        c, s = math.cos(self.yaw), math.sin(self.yaw)
+        return (self.linear * c - self.angular * (s * ax + c * ay), self.linear * s + self.angular * (c * ax - s * ay))
+
+
+class HostLink:
+    """The setpoint the MCU holds: only while the host talks, and not during a lift or stop."""
+
+    def __init__(self, timeout):
+        self.timeout = timeout
+        self.linear = self.angular = 0.0
+        self.last_rx = None
+
+    def on_frame(self, now):
+        self.last_rx = now
+
+    def on_speed(self, linear, angular):
+        self.linear, self.angular = linear, angular
+
+    def setpoint(self, now, blocked):
+        """The (linear, angular) to drive now. A timeout or a block clears the held setpoint."""
+        silent = self.last_rx is None or now - self.last_rx > self.timeout
+        if silent or blocked:
+            self.linear = self.angular = 0.0
+        return self.linear, self.angular
+
+
+def enu_to_geodetic(datum, east, north, up):
+    """(lat deg, lon deg, height m) of an ENU offset to the datum (lat deg, lon deg, height m)."""
+    lat0, lon0 = math.radians(datum[0]), math.radians(datum[1])
+    sl, cl, sp, cp = math.sin(lon0), math.cos(lon0), math.sin(lat0), math.cos(lat0)
+    n0 = WGS84_A / math.sqrt(1.0 - WGS84_E2 * sp * sp)
+    ox = (n0 + datum[2]) * cp * cl
+    oy = (n0 + datum[2]) * cp * sl
+    oz = (n0 * (1.0 - WGS84_E2) + datum[2]) * sp
+    x = ox - sl * east - sp * cl * north + cp * cl * up
+    y = oy + cl * east - sp * sl * north + cp * sl * up
+    z = oz + cp * north + sp * up
+    lon = math.atan2(y, x)
+    p = math.hypot(x, y)
+    lat = math.atan2(z, p * (1.0 - WGS84_E2))
+    height = 0.0
+    for _ in range(8):
+        n = WGS84_A / math.sqrt(1.0 - WGS84_E2 * math.sin(lat) ** 2)
+        height = p / math.cos(lat) - n
+        lat = math.atan2(z, p * (1.0 - WGS84_E2 * n / (n + height)))
+    return math.degrees(lat), math.degrees(lon), height
+
+
+def nmea(body):
+    checksum = 0
+    for c in body.encode():
+        checksum ^= c
+    return f"${body}*{checksum:02X}\r\n".encode()
+
+
+def nmea_coordinate(value, positive, negative, degree_digits):
+    hemisphere = positive if value >= 0 else negative
+    value = abs(value)
+    degrees = int(value)
+    minutes = (value - degrees) * 60.0
+    return f"{degrees:0{degree_digits}d}{minutes:010.7f}", hemisphere
+
+
+def gnss_sentences(utc, lat, lon, height, quality, speed, course):
+    """GGA, RMC and VTG as bytes. Quality 0 gives no position, a missing course leaves the course fields empty."""
+    stamp = utc.strftime("%H%M%S.") + f"{utc.microsecond // 10000:02d}"
+    date = utc.strftime("%d%m%y")
+    if quality in (1, 2, 4, 5, 6):
+        la, ns = nmea_coordinate(lat, "N", "S", 2)
+        lo, ew = nmea_coordinate(lon, "E", "W", 3)
+        position = f"{la},{ns},{lo},{ew}"
+        gga = f"GNGGA,{stamp},{position},{quality},24,0.6,{height:.3f},M,0.0,M,1.0,0000"
+        status, mode = "A", "R" if quality in (4, 5) else "A"
+    else:
+        gga = f"GNGGA,{stamp},,,,,0,00,99.99,,,,,,"
+        position, status, mode = ",,,", "V", "N"
+    course_text = "" if course is None else f"{course:.2f}"
+    knots = speed / KNOTS
+    rmc = f"GNRMC,{stamp},{status},{position},{knots:.3f},{course_text},{date},,,{mode}"
+    vtg = f"GNVTG,{course_text},T,,M,{knots:.3f},N,{speed * 3.6:.3f},K,{mode}"
+    return nmea(gga) + nmea(rmc) + nmea(vtg)
+
+
+def wit_frame(frame_type, values):
+    body = bytearray([0x55, frame_type])
+    for v in values:
+        body.extend(struct.pack("<h", v))
+    body.append(sum(body) % 256)
+    return bytes(body)
+
+
+def wit_scaled(value, full_scale):
+    return max(-32768, min(32767, round(value / full_scale * 32768.0)))
+
+
+def rotation_rpy(roll, pitch, yaw):
+    """Rz(yaw) Ry(pitch) Rx(roll), built from the three single-axis turns."""
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    turn_x = [[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]]
+    turn_y = [[cp, 0.0, sp], [0.0, 1.0, 0.0], [-sp, 0.0, cp]]
+    turn_z = [[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]]
+    return matmul(turn_z, matmul(turn_y, turn_x))
+
+
+def matmul(a, b):
+    columns = list(zip(*b))
+    return [[sum(x * y for x, y in zip(row, col)) for col in columns] for row in a]
+
+
+def transpose(a):
+    return [list(col) for col in zip(*a)]
+
+
+def wit_frames(pose, mount_rpy_deg, gyro_bias_dps=0.0):
+    """Acceleration, rate and angle frames of a level base with the sensor turned by the mount rotation.
+
+    The driver turns sensor to base with R_mount; so the sensor sees the base through its transpose.
+    """
+    mount = rotation_rpy(*(math.radians(a) for a in mount_rpy_deg))
+    to_sensor = transpose(mount)
+    # A level base without acceleration: the accelerometer reads 1 g up, the gyro the yaw rate.
+    acc = [to_sensor[i][2] for i in range(3)]
+    rate = [math.degrees(to_sensor[i][2] * pose.angular) + (gyro_bias_dps if i == 2 else 0.0) for i in range(3)]
+    r_sensor = matmul(rotation_rpy(0.0, 0.0, pose.yaw), mount)
+    roll = math.degrees(math.atan2(r_sensor[2][1], r_sensor[2][2]))
+    pitch = math.degrees(math.asin(max(-1.0, min(1.0, -r_sensor[2][0]))))
+    yaw = math.degrees(math.atan2(r_sensor[1][0], r_sensor[0][0]))
+    return (wit_frame(0x51, [wit_scaled(a, 16.0) for a in acc] + [0]) +
+            wit_frame(0x52, [wit_scaled(r, 2000.0) for r in rate] + [0]) +
+            wit_frame(0x53, [wit_scaled(a, 180.0) for a in (roll, pitch, yaw)] + [0]))
+
+
+def open_pty(link):
+    """Master end of a new pty, symlinked at link. The slave stays closed so a driver may open it."""
+    master, slave = os.openpty()
+    tty.setraw(master)
+    os.set_blocking(master, False)
+    if os.path.lexists(link):
+        os.remove(link)
+    os.symlink(os.ttyname(slave), link)
+    os.close(slave)
+    return master
+
+
+def remove_links(links):
+    for link in links:
+        if os.path.islink(link):
+            os.remove(link)
+
+
+def send(fd, data):
+    try:
+        os.write(fd, data)
+    except OSError:
+        pass
+
+
+def write_state(path, now, pose):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"t": round(now, 3), "x": pose.x, "y": pose.y, "yaw": pose.yaw, "linear": pose.linear,
+                   "angular": pose.angular}, f)
+    os.replace(tmp, path)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--link", default="/tmp/mowbite_sim_mcu", help="symlink to the MCU pty the driver opens")
+    parser.add_argument("--gnss-link", default="/tmp/mowbite_sim_gnss", help="symlink to the GNSS pty")
+    parser.add_argument("--imu-link", default="/tmp/mowbite_sim_imu", help="symlink to the IMU pty")
+    parser.add_argument("--flags", help="JSON file with lift, stop, bumper, rain, dock, gnss_quality")
+    parser.add_argument("--log", help="JSON lines log of received sub packets")
+    parser.add_argument("--log-max-mb", type=float, default=20.0)
+    parser.add_argument("--state", help="JSON file with the true pose, written 5 times a second")
+    parser.add_argument("--host-timeout", type=float, default=2.0, help="seconds without host frames until stop")
+    parser.add_argument("--datum", type=float, nargs=3, default=[52.0, 9.0, 50.0], metavar=("LAT", "LON", "H"),
+                        help="geodetic origin of the local frame (test value, not a real garden)")
+    parser.add_argument("--start", type=float, nargs=3, default=[0.0, 0.0, 0.0], metavar=("X", "Y", "YAW_DEG"))
+    parser.add_argument("--antenna-offset", type=float, nargs=2, default=[0.098, 0.0], metavar=("X", "Y"))
+    parser.add_argument("--mount-rpy-deg", type=float, nargs=3, default=[180.0, 0.0, 0.0],
+                        help="IMU mount rotation, upside down by default")
+    parser.add_argument("--gyro-bias-dps", type=float, default=0.0, help="constant yaw rate error of the sensor")
+    args = parser.parse_args()
+
+    # SIGTERM from launch or docker has to reach the finally block that removes the symlinks.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    atexit.register(remove_links, (args.link, args.gnss_link, args.imu_link))
+    mcu = open_pty(args.link)
+    gnss = open_pty(args.gnss_link)
+    imu = open_pty(args.imu_link)
+    log = Log(args.log, int(args.log_max_mb * 1e6))
+    decoder = Decoder()
+    pose = Pose(args.start[0], args.start[1], math.radians(args.start[2]))
+    host = HostLink(args.host_timeout)
+    course = None
+
+    t0 = time.monotonic()
+    last = 0.0
+    next_sensor = next_status = next_gnss = next_imu = next_state = 0.0
+    try:
+        while True:
+            now = time.monotonic() - t0
+            flags = read_flags(args.flags)
+            blocked = bool(flags.get("lift", 0) or flags.get("stop", 0))
+            linear, angular = host.setpoint(now, blocked)
+            pose.step(now - last, linear, angular)
+            last = now
+
+            if now >= next_sensor:
+                next_sensor = now + SENSOR_PERIOD
+                bumper = int(flags.get("bumper", 0))
+                # bumper, rain, lift, stop, power_off, battery_gate, cutter_size (2 = large), press_module, right, left
+                sensor = bytes([bumper, int(flags.get("rain", 0)), int(flags.get("lift", 0)),
+                                int(flags.get("stop", 0)), 0, 0, 2, 0, bumper, 0])
+                send(mcu, encode([(FROM_MCU, 10, sensor), (FROM_MCU, 4, struct.pack("<ff", pose.linear,
+                                                                                    pose.angular))]))
+            if now >= next_status:
+                next_status = now + 1.0
+                dock = int(flags.get("dock", 0))
+                # 24.5 V, -3.0 A charging on the dock or 1.2 A discharging, 80 %, 30 degC
+                battery = struct.pack("<HhBbbI", 245, -30 if dock else 12, 80, dock, 30, 0)
+                motor = struct.pack("<hhhbb", 0, 0, 2450, 30, 0)
+                version = bytes([0, 6, 36, 0, 6, 34, 0, 0, 0])
+                send(mcu, encode([(FROM_MCU, 5, battery), (FROM_MCU, 12, version), (FROM_MCU, 13, motor * 4)]))
+            if now >= next_gnss:
+                next_gnss = now + GNSS_PERIOD
+                ax, ay = pose.antenna(*args.antenna_offset)
+                vx, vy = pose.antenna_velocity(*args.antenna_offset)
+                speed = math.hypot(vx, vy)
+                if speed > 0.01:
+                    course = math.degrees(math.atan2(vx, vy)) % 360.0
+                lat, lon, height = enu_to_geodetic(args.datum, ax, ay, 0.0)
+                send(gnss, gnss_sentences(datetime.datetime.now(datetime.timezone.utc), lat, lon, height,
+                                          int(flags.get("gnss_quality", 4)), speed, course))
+            if now >= next_imu:
+                next_imu = now + IMU_PERIOD
+                send(imu, wit_frames(pose, args.mount_rpy_deg, args.gyro_bias_dps))
+            if args.state and now >= next_state:
+                next_state = now + 0.2
+                write_state(args.state, now, pose)
+
+            ready, _, _ = select.select([mcu], [], [], 0.005)
+            if not ready:
+                continue
+            try:
+                data = os.read(mcu, 4096)
+            except OSError:
+                continue
+            for packets in decoder.feed(data):
+                if packets is None:
+                    log.write({"t": round(now, 3), "bad": True})
+                    continue
+                host.on_frame(now)
+                for packet_type, module, payload in packets:
+                    entry = {"t": round(now, 3), "type": packet_type, "mod": module, "hex": payload.hex()}
+                    if packet_type == TO_MCU and module == 4 and len(payload) == 8:
+                        speed_cmd = struct.unpack("<ff", payload)
+                        # SpeedData is ignored while the MCU is locked by lift or stop.
+                        if not blocked:
+                            host.on_speed(*speed_cmd)
+                        entry["speed"] = [round(v, 3) for v in speed_cmd]
+                    log.write(entry)
+    finally:
+        remove_links((args.link, args.gnss_link, args.imu_link))
+
+
+if __name__ == "__main__":
+    main()

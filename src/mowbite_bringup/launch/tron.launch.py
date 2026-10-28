@@ -15,7 +15,10 @@ def generate_launch_description():
         parameters=[config, {"port": LaunchConfiguration("mcu_port")}])
     gnss = ComposableNode(
         package="tron_gnss", plugin="tron_gnss::GnssNode", name="tron_gnss",
-        parameters=[config, {"port": LaunchConfiguration("gnss_port")}])
+        parameters=[config, {"port": LaunchConfiguration("gnss_port"),
+                             "datum_lat": ParameterValue(LaunchConfiguration("datum_lat"), value_type=float),
+                             "datum_long": ParameterValue(LaunchConfiguration("datum_long"), value_type=float),
+                             "datum_height": ParameterValue(LaunchConfiguration("datum_height"), value_type=float)}])
     imu = ComposableNode(
         package="tron_imu", plugin="tron_imu::ImuNode", name="tron_imu",
         parameters=[config, {"port": LaunchConfiguration("imu_port")}])
@@ -38,6 +41,10 @@ def generate_launch_description():
         DeclareLaunchArgument("mcu_port", default_value="/dev/ttyS9"),
         DeclareLaunchArgument("gnss_port", default_value="/dev/ttyS4"),
         DeclareLaunchArgument("imu_port", default_value="/dev/ttyS1"),
+        # The datum of the garden stays out of the repo; without it tron_gnss publishes nothing.
+        DeclareLaunchArgument("datum_lat", default_value="nan"),
+        DeclareLaunchArgument("datum_long", default_value="nan"),
+        DeclareLaunchArgument("datum_height", default_value="0.0"),
         DeclareLaunchArgument("mqtt_host", default_value="127.0.0.1"),
         DeclareLaunchArgument("mqtt_port", default_value="1883"),
         DeclareLaunchArgument("data_dir", default_value="/userdata/mowbite"),
