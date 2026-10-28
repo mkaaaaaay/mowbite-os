@@ -67,6 +67,16 @@ mowbite_logic:
     recording_max_points: 5000
     recording_min_dock_distance: 0.3
     map_edit_timeout: 5.0
+    # mowing.plan, names and meaning as /mower_logic in OpenMower. tool_width is the distance of the lanes, mower_width the
+    # cutting width of the planner (0.22 small deck, same value as mowbite_planner); 0.187 = 0.22 * 0.85. outline_offset
+    # is left out: the planner then keeps the first loop half a cutting width inside the outline. plan_timeout in s.
+    tool_width: 0.187
+    mower_width: 0.22
+    outline_count: 3
+    outline_overlap_count: 0
+    mow_angle_offset: 0.0
+    mow_angle_offset_is_absolute: false
+    plan_timeout: 30.0
 
 mowbite_map:
   ros__parameters:

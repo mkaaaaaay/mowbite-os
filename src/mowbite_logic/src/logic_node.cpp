@@ -1,5 +1,9 @@
 #include <chrono>
+#include <cmath>
+#include <limits>
 #include <geometry_msgs/msg/point.hpp>
+#include <geometry_msgs/msg/point32.hpp>
+#include <geometry_msgs/msg/polygon.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
@@ -9,19 +13,28 @@
 #include <mowbite_msgs/msg/outline.hpp>
 #include <mowbite_msgs/msg/position_jump.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
+#include <mowbite_msgs/msg/rpc_error.hpp>
+#include <mowbite_msgs/msg/rpc_methods.hpp>
+#include <mowbite_msgs/msg/rpc_request.hpp>
+#include <mowbite_msgs/msg/rpc_response.hpp>
 #include <mowbite_msgs/msg/sensor_info.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
 #include <mowbite_msgs/srv/add_area.hpp>
 #include <mowbite_msgs/srv/set_dock.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
+#include <map>
+#include <mowbite_planner_interfaces/srv/plan_coverage.hpp>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <rcl_interfaces/msg/parameter.hpp>
+#include <rcl_interfaces/msg/parameter_type.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <std_msgs/msg/string.hpp>
 
 #include "mowbite_bridge/monitor.h"
 #include "mowbite_logic/logic_core.h"
+#include "mowbite_logic/mowing_plan.h"
 
 namespace mowbite_logic {
 
@@ -47,6 +60,33 @@ MapDatum ToDatum(uint8_t state) {
   }
 }
 
+geometry_msgs::msg::Polygon ToPolygon(const Ring& ring) {
+  geometry_msgs::msg::Polygon polygon;
+  for (const auto& p : ring) {
+    geometry_msgs::msg::Point32 point;
+    point.x = static_cast<float>(p.x);
+    point.y = static_cast<float>(p.y);
+    polygon.points.push_back(point);
+  }
+  return polygon;
+}
+
+rcl_interfaces::msg::Parameter IntegerParameter(const std::string& name, int64_t value) {
+  rcl_interfaces::msg::Parameter parameter;
+  parameter.name = name;
+  parameter.value.type = rcl_interfaces::msg::ParameterType::PARAMETER_INTEGER;
+  parameter.value.integer_value = value;
+  return parameter;
+}
+
+rcl_interfaces::msg::Parameter DoubleParameter(const std::string& name, double value) {
+  rcl_interfaces::msg::Parameter parameter;
+  parameter.name = name;
+  parameter.value.type = rcl_interfaces::msg::ParameterType::PARAMETER_DOUBLE;
+  parameter.value.double_value = value;
+  return parameter;
+}
+
 HardwareSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
   HardwareSnapshot::Motor motor;
   motor.ok = m.ok;
@@ -60,7 +100,8 @@ HardwareSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
 
 class LogicNode : public rclcpp::Node {
  public:
-  explicit LogicNode(const rclcpp::NodeOptions& options) : rclcpp::Node("mowbite_logic", options), core_(LoadConfig()) {
+  explicit LogicNode(const rclcpp::NodeOptions& options)
+      : rclcpp::Node("mowbite_logic", options), core_(LoadConfig()), planner_(LoadPlanSettings()) {
     hw_timeout_s_ = declare_parameter("hw_status_timeout", 2.0);
     pose_timeout_s_ = declare_parameter("pose_timeout", 2.0);
     // mowbite_map answers at once; a recording waits this long (s) before it counts as not saved.
@@ -84,6 +125,24 @@ class LogicNode : public rclcpp::Node {
     add_area_client_ = create_client<mowbite_msgs::srv::AddArea>("map/add_area");
     set_dock_client_ = create_client<mowbite_msgs::srv::SetDock>("map/set_dock");
 
+    // mowing.plan: asks the planner process for the paths of an area, answers through the bridge.
+    plan_timeout_s_ = declare_parameter("plan_timeout", 30.0);
+    plan_client_ = create_client<mowbite_planner_interfaces::srv::PlanCoverage>("mowbite_planner/plan_coverage");
+    rpc_response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
+    rpc_error_pub_ = create_publisher<mowbite_msgs::msg::RpcError>("bridge/rpc/error", 100);
+    rpc_methods_pub_ = create_publisher<mowbite_msgs::msg::RpcMethods>("bridge/rpc/methods", LatchedQos(50));
+    rpc_sub_ = create_subscription<mowbite_msgs::msg::RpcRequest>(
+        "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRpcRequest(*msg); });
+    map_sub_ = create_subscription<std_msgs::msg::String>(
+        "map/json", LatchedQos(1), [this](std_msgs::msg::String::ConstSharedPtr msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          planner_.SetMap(msg->data);
+        });
+    mowbite_msgs::msg::RpcMethods methods;
+    methods.node_id = "mowbite_logic";
+    methods.methods = {"mowing.plan"};
+    rpc_methods_pub_->publish(methods);
+
     hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
         "hw/status", 10, [this](mowbite_msgs::msg::HardwareStatus::ConstSharedPtr msg) { OnHardwareStatus(*msg); });
     pose_sub_ = create_subscription<mowbite_msgs::msg::AbsolutePose>(
@@ -102,6 +161,7 @@ class LogicNode : public rclcpp::Node {
           {
             std::lock_guard<std::mutex> lock(mutex_);
             core_.OnMapStatus(ToDatum(msg->datum_state), msg->reason);
+            planner_.SetMapStatus(msg->mowing_allowed, msg->reason);
           }
           Flush();
         });
@@ -131,6 +191,7 @@ class LogicNode : public rclcpp::Node {
     sensor_timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] { PublishReadings(); });
     // At most twice a second: a long outline is a large message. Retained, so a late app sees the lines too.
     overlay_timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] { PublishOverlay(); });
+    plan_timer_ = create_wall_timer(std::chrono::seconds(1), [this] { ExpirePlans(); });
     PublishActionsIfChanged();
   }
 
@@ -146,6 +207,21 @@ class LogicNode : public rclcpp::Node {
         static_cast<size_t>(declare_parameter("recording_max_points", static_cast<int64_t>(config.recorder.max_points)));
     config.recorder.min_dock_distance = declare_parameter("recording_min_dock_distance", config.recorder.min_dock_distance);
     return config;
+  }
+
+  // The parameters of /mower_logic in OpenMower that shape a plan, same names.
+  PlanSettings LoadPlanSettings() {
+    PlanSettings settings;
+    settings.tool_width = declare_parameter("tool_width", settings.tool_width);
+    settings.mower_width = declare_parameter("mower_width", settings.mower_width);
+    settings.outline_count = static_cast<int>(declare_parameter("outline_count", static_cast<int64_t>(settings.outline_count)));
+    settings.outline_overlap_count =
+        static_cast<int>(declare_parameter("outline_overlap_count", static_cast<int64_t>(settings.outline_overlap_count)));
+    const double offset = declare_parameter("outline_offset", std::numeric_limits<double>::quiet_NaN());
+    if (std::isfinite(offset)) settings.outline_offset = offset;
+    settings.mow_angle_offset = declare_parameter("mow_angle_offset", settings.mow_angle_offset);
+    settings.mow_angle_offset_is_absolute = declare_parameter("mow_angle_offset_is_absolute", false);
+    return settings;
   }
 
   void OnHardwareStatus(const mowbite_msgs::msg::HardwareStatus& msg) {
@@ -264,6 +340,130 @@ class LogicNode : public rclcpp::Node {
     msg.heading_accuracy = state.heading_accuracy;
     msg.heading_valid = state.heading_valid;
     robot_state_pub_->publish(msg);
+  }
+
+  void OnRpcRequest(const mowbite_msgs::msg::RpcRequest& request) {
+    // The bridge hands every registered method to every node, the others answer theirs.
+    if (request.method != "mowing.plan") return;
+    json params;
+    if (!request.params.empty()) {
+      params = json::parse(request.params, nullptr, false);
+      if (params.is_discarded()) {
+        PublishRpcError(request.id, kPlanInvalidParams, "The parameters are not valid JSON");
+        return;
+      }
+    }
+    PlanQuestion question;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      question = planner_.Prepare(params);
+    }
+    if (!question.ok) {
+      PublishRpcError(request.id, question.code, question.message);
+      return;
+    }
+    if (!plan_client_->service_is_ready()) {
+      PublishRpcError(request.id, kPlanInternal, "The planner is not running");
+      return;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    const uint64_t seq = ++plan_seq_;
+    auto& pending = pending_plans_[seq];
+    pending.rpc_id = request.id;
+    pending.question = question;
+    pending.sent = now();
+    pending.request_id =
+        plan_client_
+            ->async_send_request(ToServiceRequest(question.request),
+                                 [this, seq](rclcpp::Client<mowbite_planner_interfaces::srv::PlanCoverage>::SharedFuture f) {
+                                   OnPlanAnswer(seq, *f.get());
+                                 })
+            .request_id;
+  }
+
+  void OnPlanAnswer(uint64_t seq, const mowbite_planner_interfaces::srv::PlanCoverage::Response& response) {
+    PendingPlan pending;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const auto it = pending_plans_.find(seq);
+      // Late: the request has timed out and was answered with an error.
+      if (it == pending_plans_.end()) return;
+      pending = std::move(it->second);
+      pending_plans_.erase(it);
+    }
+    const CoverageAnswer answer = ToAnswer(response);
+    if (!answer.success) {
+      RCLCPP_WARN(get_logger(), "mowing.plan: the planner failed: %s", answer.message.c_str());
+      PublishRpcError(pending.rpc_id, kPlanInternal, "coverage planning failed: " + answer.message);
+      return;
+    }
+    const json result = planner_.Result(pending.question, answer);
+    RCLCPP_INFO(get_logger(), "mowing.plan %s: %zu paths from %zu poses in %.1f s", pending.question.area_id.c_str(),
+                result["paths"].size(), answer.poses.size(), (now() - pending.sent).seconds());
+    mowbite_msgs::msg::RpcResponse msg;
+    msg.result = result.dump();
+    msg.id = pending.rpc_id;
+    rpc_response_pub_->publish(msg);
+  }
+
+  // A plan the planner does not answer in time is dropped, with an error for the app.
+  void ExpirePlans() {
+    std::vector<std::string> expired;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      for (auto it = pending_plans_.begin(); it != pending_plans_.end();) {
+        if ((now() - it->second.sent).seconds() > plan_timeout_s_) {
+          plan_client_->remove_pending_request(it->second.request_id);
+          expired.push_back(it->second.rpc_id);
+          it = pending_plans_.erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
+    for (const auto& id : expired) {
+      RCLCPP_WARN(get_logger(), "mowing.plan: no answer from the planner in %.0f s", plan_timeout_s_);
+      PublishRpcError(id, kPlanInternal, "No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s");
+    }
+  }
+
+  void PublishRpcError(const std::string& id, int code, const std::string& message) {
+    mowbite_msgs::msg::RpcError msg;
+    msg.code = static_cast<int16_t>(code);
+    msg.message = message;
+    msg.id = id;
+    rpc_error_pub_->publish(msg);
+  }
+
+  static std::shared_ptr<mowbite_planner_interfaces::srv::PlanCoverage::Request> ToServiceRequest(const CoverageRequest& r) {
+    auto request = std::make_shared<mowbite_planner_interfaces::srv::PlanCoverage::Request>();
+    request->boundary = ToPolygon(r.boundary);
+    for (const auto& ring : r.obstacles) request->obstacles.push_back(ToPolygon(ring));
+    for (const auto& ring : r.drivable_areas) request->drivable_areas.push_back(ToPolygon(ring));
+    request->mower_width = r.mower_width;
+    request->overlap = r.overlap;
+    request->perimeter_passes = r.perimeter_passes;
+    request->use_angle = r.use_angle;
+    request->angle = r.angle;
+    request->overrides.push_back(IntegerParameter("lane_overlap_passes", r.lane_overlap_passes));
+    if (r.perimeter_offset) request->overrides.push_back(DoubleParameter("perimeter_offset", *r.perimeter_offset));
+    if (r.angle_offset_deg) request->overrides.push_back(DoubleParameter("angle_offset_deg", *r.angle_offset_deg));
+    return request;
+  }
+
+  static CoverageAnswer ToAnswer(const mowbite_planner_interfaces::srv::PlanCoverage::Response& r) {
+    CoverageAnswer answer;
+    answer.success = r.success;
+    answer.message = r.message;
+    answer.angle = r.angle;
+    answer.fingerprint = r.fingerprint;
+    answer.poses.reserve(r.path.poses.size());
+    for (const auto& pose : r.path.poses) answer.poses.push_back({pose.pose.position.x, pose.pose.position.y});
+    answer.section_start = r.section_start;
+    answer.segment_start = r.segment_start;
+    answer.segment_end = r.segment_end;
+    answer.segment_type = r.segment_type;
+    return answer;
   }
 
   void PublishReadings() {
@@ -431,8 +631,20 @@ class LogicNode : public rclcpp::Node {
     }
   }
 
+  // A mowing.plan request on its way to the planner.
+  struct PendingPlan {
+    std::string rpc_id;
+    PlanQuestion question;
+    rclcpp::Time sent{0, 0, RCL_ROS_TIME};
+    int64_t request_id = 0;
+  };
+
   std::mutex mutex_;
   LogicCore core_;
+  MowingPlanner planner_;
+  std::map<uint64_t, PendingPlan> pending_plans_;
+  uint64_t plan_seq_ = 0;
+  double plan_timeout_s_ = 30.0;
   std::optional<rclcpp::Time> last_hw_;
   std::optional<rclcpp::Time> last_pose_;
   double hw_timeout_s_;
@@ -454,6 +666,12 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Client<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_client_;
   rclcpp::Client<mowbite_msgs::srv::AddArea>::SharedPtr add_area_client_;
   rclcpp::Client<mowbite_msgs::srv::SetDock>::SharedPtr set_dock_client_;
+  rclcpp::Client<mowbite_planner_interfaces::srv::PlanCoverage>::SharedPtr plan_client_;
+  rclcpp::Publisher<mowbite_msgs::msg::RpcResponse>::SharedPtr rpc_response_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::RpcError>::SharedPtr rpc_error_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::RpcMethods>::SharedPtr rpc_methods_pub_;
+  rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr rpc_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr map_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::PositionJump>::SharedPtr jump_sub_;
@@ -463,6 +681,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::TimerBase::SharedPtr state_timer_;
   rclcpp::TimerBase::SharedPtr sensor_timer_;
   rclcpp::TimerBase::SharedPtr overlay_timer_;
+  rclcpp::TimerBase::SharedPtr plan_timer_;
 };
 
 }  // namespace mowbite_logic

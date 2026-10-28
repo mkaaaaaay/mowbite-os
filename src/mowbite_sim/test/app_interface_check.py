@@ -52,7 +52,7 @@ def set_flags(**flags):
         json.dump(flags, f)
 
 
-def rpc(method, params=None, rid="1"):
+def rpc(method, params=None, rid="1", timeout=5.0):
     req = {"jsonrpc": "2.0", "method": method, "id": rid}
     if params is not None:
         req["params"] = params
@@ -66,7 +66,7 @@ def rpc(method, params=None, rid="1"):
                 if j.get("id") == rid:
                     return j
         return None
-    return wait_for(answer)
+    return wait_for(answer, timeout)
 
 
 REC = "mower_logic:area_recording/"
@@ -160,7 +160,8 @@ check("actions", by_id.get("mower_logic/reset_emergency") == 1 and by_id.get("mo
 
 r = rpc("rpc.methods")
 check("rpc.methods", r and "rpc.ping" in r["result"] and "logs.recent" in r["result"]
-      and "map.replace" in r["result"] and "map.area_properties" in r["result"], json.dumps(r and r["result"]))
+      and "map.replace" in r["result"] and "map.area_properties" in r["result"] and "mowing.plan" in r["result"],
+      json.dumps(r and r["result"]))
 # The planner is a process of its own, started by tron.launch.py.
 
 
@@ -207,6 +208,45 @@ check("invalid map -32602 with the reason", r and r["error"]["code"] == -32602
       and r["error"]["message"] == "Invalid map: areas[0] 'lawn': outline needs at least 3 points", json.dumps(r and r.get("error")))
 r = rpc("map.replace", None, "7")
 check("map.replace without params -32602", r and r["error"]["code"] == -32602, json.dumps(r and r.get("error")))
+# mowing.plan: the planner process plans the area of the map, the way the app asks for it.
+r = rpc("mowing.plan", {"area_id": "lawn"}, "8", 30)
+plan = (r or {}).get("result") or {}
+paths = plan.get("paths") or []
+points = [p for path in paths for p in path["points"]]
+TREE = [(4, 2), (5, 2), (5, 3)]
+
+
+def in_polygon(point, ring):
+    x, y = point
+    hit = False
+    for (ax, ay), (bx, by) in zip(ring, ring[1:] + ring[:1]):
+        if (ay > y) != (by > y) and x < ax + (y - ay) * (bx - ax) / (by - ay):
+            hit = not hit
+    return hit
+
+
+odd = [p for p in points if not (-0.01 <= p[0] <= 10.01 and -0.01 <= p[1] <= 6.01) or in_polygon(p, TREE)]
+check("mowing.plan: loops first, then lanes", bool(paths) and paths[0]["is_outline"] is True and paths[-1]["is_outline"] is False
+      and plan.get("area_id") == "lawn", json.dumps(r)[:200])
+check("mowing.plan: the angle of the area", abs(plan.get("angle", 9) - 0.35) < 1e-6, str(plan.get("angle")))
+check("mowing.plan: points inside the lawn, none in the tree", bool(points) and not odd,
+      f"{len(points)} points, {len(odd)} odd, e.g. {odd[:3]}")
+check("mowing.plan: pose_index counts the poses of each path", bool(paths) and all(
+    len(p["pose_index"]) == len(p["points"]) >= 2 and p["pose_index"][0] == 0
+    and all(a < b for a, b in zip(p["pose_index"], p["pose_index"][1:])) for p in paths))
+check("mowing.plan: fingerprint", len(plan.get("fingerprint", "")) == 64, plan.get("fingerprint", ""))
+again = (rpc("mowing.plan", {"area_id": "lawn"}, "9", 30) or {}).get("result") or {}
+check("mowing.plan: the same plan again", again.get("fingerprint") == plan.get("fingerprint") and again.get("paths") == paths)
+r = rpc("mowing.plan", {"outline": [{"x": 0, "y": 0}, {"x": 4, "y": 0}, {"x": 4, "y": 3}, {"x": 0, "y": 3}], "obstacles": [],
+                        "outline_count": 1, "angle": 0.0}, "10", 30)
+free = (r or {}).get("result") or {}
+check("mowing.plan: an outline in the request", bool(free.get("paths")) and free.get("area_id") == "", json.dumps(r)[:200])
+for params, message in ((None, "parameters must be an object"), ({"area_id": "nobody"}, "no mowing area with id: nobody"),
+                        ({"area_id": "tree"}, "no mowing area with id: tree"),
+                        ({"area_id": "lawn", "outline_count": 300}, "parameter is not a whole number from 0 to 255: outline_count")):
+    r = rpc("mowing.plan", params, "11")
+    check("mowing.plan refuses: " + message, r and r.get("error", {}).get("code") == -32602
+          and r["error"]["message"] == message, json.dumps(r and r.get("error")))
 # A phone that connects later gets the map from the broker.
 late = []
 phone = mqtt.Client("late_phone")

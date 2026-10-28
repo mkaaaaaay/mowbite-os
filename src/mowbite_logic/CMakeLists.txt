@@ -12,10 +12,12 @@ find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_bridge REQUIRED)
+find_package(mowbite_planner_interfaces REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
 # States, actions and sensors without ROS, testable on any machine.
-add_library(mowbite_logic_core STATIC src/logic_core.cpp src/area_recorder.cpp)
+add_library(mowbite_logic_core STATIC src/logic_core.cpp src/area_recorder.cpp src/mowing_plan.cpp)
 target_include_directories(mowbite_logic_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -24,7 +26,8 @@ set_target_properties(mowbite_logic_core PROPERTIES POSITION_INDEPENDENT_CODE ON
 
 add_library(mowbite_logic_component SHARED src/logic_node.cpp)
 target_link_libraries(mowbite_logic_component mowbite_logic_core mowbite_bridge::mowbite_bridge_core)
-ament_target_dependencies(mowbite_logic_component rclcpp rclcpp_components geometry_msgs std_msgs mowbite_msgs)
+ament_target_dependencies(mowbite_logic_component rclcpp rclcpp_components geometry_msgs std_msgs mowbite_msgs
+  mowbite_planner_interfaces rcl_interfaces)
 rclcpp_components_register_node(mowbite_logic_component
   PLUGIN "mowbite_logic::LogicNode"
   EXECUTABLE mowbite_logic_node)
@@ -38,7 +41,7 @@ install(TARGETS mowbite_logic_core mowbite_logic_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(mowbite_logic_test test/test_logic_core.cpp test/test_area_recorder.cpp)
+  ament_add_gtest(mowbite_logic_test test/test_logic_core.cpp test/test_area_recorder.cpp test/test_mowing_plan.cpp)
   target_link_libraries(mowbite_logic_test mowbite_logic_core)
 endif()
 
