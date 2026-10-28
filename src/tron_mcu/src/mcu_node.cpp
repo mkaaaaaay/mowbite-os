@@ -379,7 +379,7 @@ class McuNode : public rclcpp::Node {
     std::lock_guard<std::mutex> lock(mutex_);
     if (req.data) {
       RCLCPP_WARN(get_logger(), "Emergency latched by request");
-      control_.LatchEmergency();
+      control_.LatchEmergency(tron::kReasonHighLevel);
       res.message = "latched";
     } else {
       control_.ReleaseEmergency(MonotonicSeconds());

@@ -269,7 +269,7 @@ TEST_F(ControlTest, EmergencyLatchesUntilReleased) {
   Run(0.1);
   control_.OnCmdVel(0.2f, 0.0f, now_);
   Run(0.2);
-  control_.LatchEmergency();
+  control_.LatchEmergency(kReasonHighLevel);
   control_.OnCmdVel(0.2f, 0.0f, now_);
   Run(1.0);
   EXPECT_EQ(Times(IsMovingSpeed).size(), 1u);
@@ -365,6 +365,65 @@ TEST_F(ControlTest, BumperLatches) {
   EXPECT_FALSE(control_.Status(now_).latched);
 }
 
+TEST_F(ControlTest, LiftReasonStaysUntilRelease) {
+  Run(0.5);
+  EXPECT_FALSE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+  sensor_.lift = true;
+  Run(0.6);
+  EXPECT_TRUE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonLift);
+  sensor_.lift = false;
+  Run(1.0);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonLift);
+  control_.ReleaseEmergency(now_);
+  Run(1.1);
+  EXPECT_FALSE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+}
+
+TEST_F(ControlTest, ReasonsAddUpUntilRelease) {
+  Run(0.5);
+  sensor_.bumper_right = true;
+  Run(0.6);
+  sensor_.bumper_right = false;
+  sensor_.stop = true;
+  Run(0.7);
+  sensor_.stop = false;
+  control_.LatchEmergency(kReasonHighLevel);
+  Run(1.0);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonCollision | kReasonStop | kReasonHighLevel);
+  control_.ReleaseEmergency(now_);
+  Run(1.1);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+  // A new cause starts from scratch.
+  sensor_.lift = true;
+  Run(1.2);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonLift);
+}
+
+TEST_F(ControlTest, StaleTelemetryBlocksWithoutLatch) {
+  Run(0.5, false);
+  EXPECT_TRUE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonTimeoutInputs);
+  Run(0.6);
+  EXPECT_FALSE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+}
+
+TEST_F(ControlTest, NonLatchingBumperGivesNoReason) {
+  McuControlConfig config;
+  config.bumper_latches_emergency = false;
+  McuControl control(config);
+  SensorInfo sensor;
+  sensor.bumper_left = true;
+  control.OnSensorInfo(sensor, 0.01);
+  control.Tick(0.01, kWall);
+  EXPECT_TRUE(control.Status(0.01).bumper);
+  EXPECT_FALSE(control.Status(0.01).blocked);
+  EXPECT_EQ(control.Status(0.01).emergency_reason, 0u);
+}
+
 TEST_F(ControlTest, WithoutExpectedVersionsTheFirmwareIsNotChecked) {
   Run(0.1);
   EXPECT_FALSE(control_.Status(now_).firmware_incompatible);
@@ -404,11 +463,15 @@ TEST_F(FirmwareControlTest, MismatchStaysBlockedAfterRelease) {
 TEST_F(FirmwareControlTest, MatchAfterMismatchStillNeedsRelease) {
   Run(0.1);
   control_.OnVersions(Versions(30, 34));
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonFirmwareIncompatible);
   control_.OnVersions(Versions(36, 34));
   EXPECT_FALSE(control_.Status(now_).firmware_incompatible);
+  // The mismatch stays in the reason until the release.
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonFirmwareIncompatible);
   EXPECT_FALSE(DrivesOrMows(0.5));
   control_.ReleaseEmergency(now_);
   Run(0.6);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
   EXPECT_TRUE(DrivesOrMows(0.8));
 }
 
@@ -532,7 +595,7 @@ TEST_F(BladeControlTest, RenewalWhileBlockedEndsTheLease) {
   Run(0.5);
   control_.SetBlade(BladeOn(), now_);
   Run(1.0);
-  control_.LatchEmergency();
+  control_.LatchEmergency(kReasonHighLevel);
   EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kBlocked);
   Run(1.5);
   EXPECT_FALSE(control_.Status(now_).blade_on);
@@ -603,7 +666,7 @@ TEST_F(BladeControlTest, NeverSendsPowerOff) {
     control_.OnCmdVel(i % 3 ? 0.3f : 0.0f, i % 5 ? -0.3f : 0.0f, now_);
     if (i % 7 == 0) control_.ReleaseEmergency(now_);
     if (i % 11 == 0) control_.SetBlade(i % 22 == 0 ? BladeOn(0.3) : kBladeOff, now_);
-    if (i % 13 == 0) control_.LatchEmergency();
+    if (i % 13 == 0) control_.LatchEmergency(kReasonHighLevel);
     control_.OnDockContactSample(i % 17 < 5);
     sensor_.lift = i % 19 == 0;
     sensor_.stop = i % 23 == 0;

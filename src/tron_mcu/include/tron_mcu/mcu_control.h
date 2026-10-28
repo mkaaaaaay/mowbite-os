@@ -39,6 +39,15 @@ struct McuControlConfig {
   std::string expected_chassis_version;
 };
 
+// Bits of the emergency reason, numbered like EmergencyReason of OpenMower.
+constexpr uint32_t kReasonLatch = 1u << 0;
+constexpr uint32_t kReasonTimeoutInputs = 1u << 1;
+constexpr uint32_t kReasonStop = 1u << 2;
+constexpr uint32_t kReasonLift = 1u << 3;
+constexpr uint32_t kReasonCollision = 1u << 5;
+constexpr uint32_t kReasonHighLevel = 1u << 7;
+constexpr uint32_t kReasonFirmwareIncompatible = 1u << 12;
+
 // Why the blade went off the last time it was requested or running.
 enum class BladeOffReason : uint8_t {
   kNone = 0,
@@ -64,6 +73,10 @@ enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvali
 const char* BladeResultText(BladeResult result);
 
 struct McuControlStatus {
+  // Motion and blade are blocked: latched, stale telemetry or incompatible firmware.
+  bool blocked = false;
+  // Reason bits while blocked, 0 otherwise. A cause that latched stays in it until the release.
+  uint32_t emergency_reason = 0;
   bool latched = false;
   bool lift = false;
   bool stop = false;
@@ -91,8 +104,8 @@ class McuControl {
   // Version frame of the MCU, about once a second. Returns false if it does not match the expected firmware.
   bool OnVersions(const VersionInfo& versions);
 
-  // Lift, stop and bumper latch the emergency as well; all of it stays until released.
-  void LatchEmergency();
+  // Lift, stop and bumper latch the emergency as well; all of it stays until released, with its reason bits.
+  void LatchEmergency(uint32_t reason);
   // Clears a latched lift or stop on the MCU and releases the emergency once the flags are gone.
   void ReleaseEmergency(double now);
   // Switching off always works. Switching on, or renewing the lease with the same or another setting, is refused when
@@ -127,6 +140,7 @@ class McuControl {
   };
 
   bool Blocked(double now) const;
+  uint32_t EmergencyReason(double now) const;
   bool DockContact() const;
   void DropBlade(BladeOffReason reason);
   bool TelemetryStale(double now) const;
@@ -154,6 +168,8 @@ class McuControl {
   double last_sensor_s_ = 0;
 
   bool latched_ = false;
+  // Every cause that latched since the last release.
+  uint32_t latch_reason_ = 0;
   bool release_requested_ = false;
   std::optional<double> release_until_s_;
   std::optional<double> last_clear_s_;

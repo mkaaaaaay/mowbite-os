@@ -54,13 +54,14 @@ bool McuControl::OnVersions(const VersionInfo& versions) {
   const bool ok = VersionMatches(config_.expected_cutter_version, versions.cutter_board) &&
                   VersionMatches(config_.expected_chassis_version, versions.chassis_board);
   // A mismatch also latches, so motion after a later matching frame still needs a release.
-  if (!ok && firmware_ok_ != false) LatchEmergency();
+  if (!ok && firmware_ok_ != false) LatchEmergency(kReasonFirmwareIncompatible);
   firmware_ok_ = ok;
   return ok;
 }
 
-void McuControl::LatchEmergency() {
+void McuControl::LatchEmergency(uint32_t reason) {
   latched_ = true;
+  latch_reason_ |= reason;
   release_until_s_.reset();
 }
 
@@ -122,6 +123,18 @@ void McuControl::OnConnected(double now) {
 
 bool McuControl::Blocked(double now) const {
   return latched_ || TelemetryStale(now) || FirmwareIncompatible();
+}
+
+uint32_t McuControl::EmergencyReason(double now) const {
+  if (!Blocked(now)) return 0;
+  uint32_t reason = latch_reason_;
+  if (latched_) reason |= kReasonLatch;
+  if (TelemetryStale(now)) reason |= kReasonTimeoutInputs;
+  if (Stop(now)) reason |= kReasonStop;
+  if (Lift(now)) reason |= kReasonLift;
+  if (config_.bumper_latches_emergency && Bumper(now)) reason |= kReasonCollision;
+  if (FirmwareIncompatible()) reason |= kReasonFirmwareIncompatible;
+  return reason;
 }
 
 bool McuControl::DockContact() const {
@@ -190,7 +203,12 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   const bool lift = Lift(now);
   const bool stop = Stop(now);
   const bool bumper = config_.bumper_latches_emergency && Bumper(now);
-  if (lift || stop || bumper) latched_ = true;
+  // Unlike a request, active flags keep a pending release open: the clear frame below is what drops them.
+  const uint32_t flags = (lift ? kReasonLift : 0) | (stop ? kReasonStop : 0) | (bumper ? kReasonCollision : 0);
+  if (flags) {
+    latched_ = true;
+    latch_reason_ |= flags;
+  }
 
   if (release_requested_) {
     release_requested_ = false;
@@ -207,6 +225,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   if (release_until_s_) {
     if (!lift && !stop && !bumper && !TelemetryStale(now)) {
       latched_ = false;
+      latch_reason_ = 0;
       release_until_s_.reset();
     } else if (now > *release_until_s_) {
       release_until_s_.reset();
@@ -285,6 +304,8 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
 
 McuControlStatus McuControl::Status(double now) const {
   McuControlStatus status;
+  status.blocked = Blocked(now);
+  status.emergency_reason = EmergencyReason(now);
   status.latched = latched_;
   status.lift = Lift(now);
   status.stop = Stop(now);
