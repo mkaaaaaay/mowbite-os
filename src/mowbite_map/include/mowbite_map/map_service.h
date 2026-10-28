@@ -1,6 +1,7 @@
 // The map of the mower and the RPC methods around it: map.replace and map.area_properties.
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -22,6 +23,13 @@ struct RpcOutcome {
   std::string message;
 };
 
+// The answer to an edit for the logic: the id of what was added, or why it was refused.
+struct EditResult {
+  bool ok = false;
+  std::string id;
+  std::string message;
+};
+
 // A line for the log of the node.
 struct Notice {
   enum class Level { kInfo, kWarn, kError };
@@ -36,6 +44,8 @@ class MapService {
     std::string data_dir;
     // The largest map.json; MQTT drops messages from about 2 MB.
     size_t max_bytes = 1500000;
+    // Makes the ids of new areas and docking stations; random 32 characters like OpenMower if empty.
+    std::function<std::string()> new_id;
   };
 
   // Loads map.json, or its previous version, from the data directory.
@@ -44,6 +54,11 @@ class MapService {
   static const std::vector<std::string>& Methods();
   // The answer to a method of this service, nothing for any other method.
   std::optional<RpcOutcome> Call(const std::string& method, const json& params);
+
+  // For the logic: adds an area of a recording (outline open or closed) with a new id.
+  EditResult AddArea(const std::string& type, const std::string& name, const std::vector<Point>& outline);
+  // For the logic: the docking station becomes the only one, with a new id, like with OpenMower.
+  EditResult SetDock(const Point& position, double heading);
 
   const MapData& map() const {
     return map_;
@@ -61,8 +76,12 @@ class MapService {
   RpcOutcome AreaProperties() const;
   // Stores the map and makes it the current one.
   RpcOutcome Commit(MapData candidate);
+  // Checks a map made by an edit the way a replaced map is checked, then stores it.
+  EditResult Apply(const MapData& candidate, const std::string& id, const std::string& what);
+  std::string NewId() const;
 
   MapStore store_;
+  std::function<std::string()> new_id_;
   MapData map_;
   std::string text_;
   // Whether map.json holds the current map; false when it came from the previous version.

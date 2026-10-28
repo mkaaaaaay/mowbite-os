@@ -1,8 +1,19 @@
 #include "mowbite_map/map_service.h"
 
+#include <random>
+
 namespace mowbite_map {
 
 namespace {
+
+std::string RandomId() {
+  static const char alphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  thread_local std::mt19937 rng{std::random_device{}()};
+  std::uniform_int_distribution<size_t> pick(0, sizeof(alphabet) - 2);
+  std::string id(32, '\0');
+  for (auto& c : id) c = alphabet[pick(rng)];
+  return id;
+}
 
 RpcOutcome Failure(int code, std::string message) {
   RpcOutcome outcome;
@@ -14,7 +25,8 @@ RpcOutcome Failure(int code, std::string message) {
 
 }  // namespace
 
-MapService::MapService(const Config& config) : store_(config.data_dir, config.max_bytes) {
+MapService::MapService(const Config& config)
+    : store_(config.data_dir, config.max_bytes), new_id_(config.new_id ? config.new_id : RandomId) {
   MapStore::Loaded loaded = store_.Load();
   if (loaded.map) {
     map_ = std::move(*loaded.map);
@@ -75,6 +87,50 @@ RpcOutcome MapService::Replace(const json& params) {
   notices_.push_back({Notice::Level::kInfo, "Stored the map of map.replace (" + std::to_string(areas) + " areas)"});
   outcome.result = "Successfully stored map (" + std::to_string(areas) + " areas)";
   return outcome;
+}
+
+EditResult MapService::AddArea(const std::string& type, const std::string& name, const std::vector<Point>& outline) {
+  Area area;
+  area.id = NewId();
+  area.name = name;
+  area.type = type;
+  area.outline = outline;
+  MapData candidate = map_;
+  candidate.areas.push_back(std::move(area));
+  return Apply(candidate, candidate.areas.back().id, "area '" + name + "' (" + type + ")");
+}
+
+EditResult MapService::SetDock(const Point& position, double heading) {
+  DockingStation dock;
+  dock.id = NewId();
+  dock.name = "Docking Station";
+  dock.position = position;
+  dock.heading = heading;
+  MapData candidate = map_;
+  candidate.docking_stations = {dock};
+  return Apply(candidate, dock.id, "docking station");
+}
+
+EditResult MapService::Apply(const MapData& candidate, const std::string& id, const std::string& what) {
+  // The checks of map.replace, which also close the ring of a new area.
+  ParseResult parsed = ParseMap(ToJson(candidate));
+  if (!parsed.map) return {false, "", "Invalid " + what + ": " + parsed.error};
+  RpcOutcome outcome = Commit(std::move(*parsed.map));
+  if (!outcome.ok) return {false, "", outcome.message};
+  notices_.push_back({Notice::Level::kInfo, "Stored the " + what + ", id " + id});
+  return {true, id, ""};
+}
+
+std::string MapService::NewId() const {
+  // Not in use yet; a made-up source that repeats gives up after a few tries.
+  for (int attempt = 0; attempt < 16; ++attempt) {
+    std::string id = new_id_();
+    bool used = false;
+    for (const auto& area : map_.areas) used = used || area.id == id;
+    for (const auto& dock : map_.docking_stations) used = used || dock.id == id;
+    if (!used) return id;
+  }
+  return new_id_();
 }
 
 RpcOutcome MapService::Commit(MapData candidate) {

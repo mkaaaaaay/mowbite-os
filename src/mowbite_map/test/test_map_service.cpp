@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
+#include <memory>
 #include <vector>
 
 #include "mowbite_map/map_service.h"
@@ -260,4 +262,171 @@ TEST(MapService, SaysSoWhenNoFileIsUsable) {
   EXPECT_TRUE(service.map().Empty());
   EXPECT_TRUE(
       Mentions(service.TakeNotices(), Notice::Level::kError, "No usable map file (map.json is not valid JSON)"));
+}
+
+namespace {
+
+std::vector<mowbite_map::Point> Square(double size) {
+  return {{0, 0}, {size, 0}, {size, size}, {0, size}};
+}
+
+// Ids "id1", "id2", ... so the tests can name them.
+MapService::Config NumberedIds(const TempDir& dir) {
+  MapService::Config config = ConfigFor(dir);
+  auto counter = std::make_shared<int>(0);
+  config.new_id = [counter] { return "id" + std::to_string(++*counter); };
+  return config;
+}
+
+}  // namespace
+
+TEST(MapServiceEdits, AddsAnAreaForTheLogic) {
+  TempDir dir;
+  MapService service(NumberedIds(dir));
+  service.TakeChanged();
+  const auto result = service.AddArea("mow", "Front", Square(5));
+  ASSERT_TRUE(result.ok) << result.message;
+  EXPECT_EQ(result.id, "id1");
+  ASSERT_EQ(service.map().areas.size(), 1u);
+  const auto& area = service.map().areas[0];
+  EXPECT_EQ(area.id, "id1");
+  EXPECT_EQ(area.name, "Front");
+  EXPECT_EQ(area.type, "mow");
+  EXPECT_TRUE(area.active);
+  // The ring is closed when stored.
+  ASSERT_EQ(area.outline.size(), 5u);
+  EXPECT_EQ(area.outline.front().x, area.outline.back().x);
+  EXPECT_TRUE(service.TakeChanged());
+  EXPECT_EQ(ReadAll(dir.path() / "map.json"), service.map_text());
+}
+
+TEST(MapServiceEdits, KeepsWhatIsThereWhenAddingAndAfterARestart) {
+  TempDir dir;
+  json map = AppMap();
+  map["areas"][0]["properties"]["planner"] = json::parse(R"({"pattern": "stripes"})");
+  {
+    MapService service(NumberedIds(dir));
+    ASSERT_TRUE(service.Call("map.replace", json::array({map}))->ok);
+    const auto result = service.AddArea("nav", "Path", Square(2));
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_EQ(result.id, "id1");
+  }
+  MapService again(ConfigFor(dir));
+  ASSERT_EQ(again.map().areas.size(), 3u);
+  EXPECT_EQ(again.map().areas[2].type, "nav");
+  EXPECT_EQ(again.map().areas[0].other_properties["planner"]["pattern"], "stripes");
+  EXPECT_EQ(again.map().docking_stations.size(), 1u);
+}
+
+TEST(MapServiceEdits, RefusesAnAreaThatIsNotOne) {
+  TempDir dir;
+  MapService service(NumberedIds(dir));
+  ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
+  service.TakeChanged();
+  const std::string before = service.map_text();
+
+  auto result = service.AddArea("mow", "Line", {{0, 0}, {1, 0}});
+  EXPECT_FALSE(result.ok);
+  EXPECT_NE(result.message.find("Invalid area 'Line' (mow): "), std::string::npos) << result.message;
+  EXPECT_NE(result.message.find("outline needs at least 3 points"), std::string::npos) << result.message;
+  EXPECT_TRUE(result.id.empty());
+
+  result = service.AddArea("garden", "Odd", Square(2));
+  EXPECT_FALSE(result.ok);
+  EXPECT_NE(result.message.find("unknown type 'garden'"), std::string::npos) << result.message;
+
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  result = service.AddArea("mow", "Nan", {{0, 0}, {1, 0}, {1, nan}});
+  EXPECT_FALSE(result.ok);
+  EXPECT_NE(result.message.find("finite number"), std::string::npos) << result.message;
+
+  EXPECT_FALSE(service.TakeChanged());
+  EXPECT_EQ(service.map_text(), before);
+  EXPECT_EQ(ReadAll(dir.path() / "map.json"), before);
+}
+
+TEST(MapServiceEdits, TakesAFreshIdWhenTheSourceRepeats) {
+  TempDir dir;
+  MapService::Config config = ConfigFor(dir);
+  auto ids = std::make_shared<std::vector<std::string>>(std::vector<std::string>{"same", "same", "same", "other"});
+  config.new_id = [ids] {
+    std::string id = ids->front();
+    if (ids->size() > 1) ids->erase(ids->begin());
+    return id;
+  };
+  MapService service(config);
+  ASSERT_TRUE(service.AddArea("mow", "One", Square(2)).ok);
+  const auto second = service.AddArea("mow", "Two", Square(3));
+  ASSERT_TRUE(second.ok) << second.message;
+  EXPECT_EQ(second.id, "other");
+  EXPECT_EQ(service.map().areas[0].id, "same");
+}
+
+TEST(MapServiceEdits, MakesRandomIdsOfThe32CharactersOpenMowerUses) {
+  TempDir dir;
+  MapService service(ConfigFor(dir));
+  const auto first = service.AddArea("mow", "A", Square(2));
+  const auto second = service.AddArea("mow", "B", Square(3));
+  ASSERT_TRUE(first.ok && second.ok);
+  EXPECT_EQ(first.id.size(), 32u);
+  EXPECT_NE(first.id, second.id);
+  EXPECT_EQ(first.id.find_first_not_of("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"),
+            std::string::npos);
+}
+
+TEST(MapServiceEdits, RefusesAnAreaThatMakesTheMapTooLarge) {
+  TempDir dir;
+  TempDir probe_dir;
+  MapService probe(NumberedIds(probe_dir));
+  ASSERT_TRUE(probe.AddArea("mow", "Small", Square(2)).ok);
+  MapService::Config config = NumberedIds(dir);
+  config.max_bytes = probe.map_text().size() + 50;
+  MapService service(config);
+  ASSERT_TRUE(service.AddArea("mow", "Small", Square(2)).ok);
+  const std::string before = service.map_text();
+  std::vector<mowbite_map::Point> many;
+  for (int i = 0; i < 40; ++i) many.push_back({static_cast<double>(i), static_cast<double>(i % 3)});
+  const auto result = service.AddArea("mow", "Big", many);
+  EXPECT_FALSE(result.ok);
+  EXPECT_NE(result.message.find("The map is too large"), std::string::npos) << result.message;
+  EXPECT_EQ(service.map_text(), before);
+}
+
+TEST(MapServiceEdits, SetsTheDockAsTheOnlyOne) {
+  TempDir dir;
+  MapService service(NumberedIds(dir));
+  ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
+  ASSERT_EQ(service.map().docking_stations.size(), 1u);
+  const auto result = service.SetDock({2.5, -1.0}, 1.57);
+  ASSERT_TRUE(result.ok) << result.message;
+  EXPECT_EQ(result.id, "id1");
+  ASSERT_EQ(service.map().docking_stations.size(), 1u);
+  const auto& dock = service.map().docking_stations[0];
+  EXPECT_EQ(dock.id, "id1");
+  EXPECT_EQ(dock.name, "Docking Station");
+  EXPECT_DOUBLE_EQ(dock.position.x, 2.5);
+  EXPECT_DOUBLE_EQ(dock.position.y, -1.0);
+  EXPECT_DOUBLE_EQ(dock.heading, 1.57);
+  EXPECT_EQ(service.map().areas.size(), 2u);
+  EXPECT_EQ(json::parse(ReadAll(dir.path() / "map.json"))["docking_stations"][0]["heading"], 1.57);
+}
+
+TEST(MapServiceEdits, RefusesADockThatIsNotFinite) {
+  TempDir dir;
+  MapService service(NumberedIds(dir));
+  constexpr double kInf = std::numeric_limits<double>::infinity();
+  EXPECT_FALSE(service.SetDock({0, 0}, kInf).ok);
+  EXPECT_FALSE(service.SetDock({kInf, 0}, 0).ok);
+  EXPECT_TRUE(service.map().docking_stations.empty());
+}
+
+TEST(MapServiceEdits, TellsTheLogWhatWasStored) {
+  TempDir dir;
+  MapService service(NumberedIds(dir));
+  service.TakeNotices();
+  ASSERT_TRUE(service.AddArea("mow", "Front", Square(2)).ok);
+  ASSERT_TRUE(service.SetDock({0, 0}, 0).ok);
+  const auto notices = service.TakeNotices();
+  EXPECT_TRUE(Mentions(notices, Notice::Level::kInfo, "Stored the area 'Front' (mow), id id1"));
+  EXPECT_TRUE(Mentions(notices, Notice::Level::kInfo, "Stored the docking station, id id2"));
 }
