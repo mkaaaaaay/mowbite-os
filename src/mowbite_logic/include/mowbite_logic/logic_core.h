@@ -25,6 +25,7 @@ struct McuSnapshot {
   // Positive while discharging.
   float battery_current = 0;
   uint8_t battery_percentage = 0;
+  int8_t battery_temperature = 0;
   bool battery_dock = false;
   struct Motor {
     bool ok = false;

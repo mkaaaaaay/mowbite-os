@@ -15,6 +15,7 @@ McuSnapshot Healthy() {
   mcu.battery_voltage = 24.5f;
   mcu.battery_current = 1.2f;
   mcu.battery_percentage = 80;
+  mcu.battery_temperature = 27;
   mcu.cutter.ok = true;
   mcu.cutter.rpm = 0;
   mcu.cutter.temperature = 30;
@@ -147,6 +148,9 @@ TEST(Logic, RobotStateAndSensors) {
   EXPECT_DOUBLE_EQ(Find(readings, "om_charge_current")->value, 3.0);
   EXPECT_EQ(Find(readings, "om_charge_state")->text, "Fast Charge");
   EXPECT_DOUBLE_EQ(Find(readings, "om_left_esc_temp")->value, 31.0);
+  EXPECT_DOUBLE_EQ(Find(readings, "battery_temp")->value, 27.0);
+  // One temperature per motor board: no mow ESC value that would only repeat the motor's.
+  EXPECT_EQ(Find(readings, "om_mow_esc_temp"), nullptr);
 
   auto full = docked;
   full.battery_current = 0.0f;
@@ -160,10 +164,11 @@ TEST(Logic, SensorDefinitionsMatchTheApp) {
   auto sensors = core.Sensors();
   for (const char* id :
        {"om_v_battery", "om_v_charge", "om_charge_current", "om_charge_state", "om_mow_motor_rpm",
-        "om_mow_motor_current", "om_mow_motor_temp", "om_mow_esc_temp", "om_left_esc_temp", "om_right_esc_temp"}) {
+        "om_mow_motor_current", "om_mow_motor_temp", "om_left_esc_temp", "om_right_esc_temp", "battery_temp"}) {
     EXPECT_TRUE(std::any_of(sensors.begin(), sensors.end(), [&](const SensorDefinition& s) { return s.id == id; }))
         << id;
   }
+  EXPECT_FALSE(std::any_of(sensors.begin(), sensors.end(), [](const auto& s) { return s.id == "om_mow_esc_temp"; }));
   auto battery = std::find_if(sensors.begin(), sensors.end(), [](const auto& s) { return s.id == "om_v_battery"; });
   // The app derives the cell count from max_value: 25.2 V / 4.2 V = 6.
   EXPECT_DOUBLE_EQ(battery->max_value, 25.2);

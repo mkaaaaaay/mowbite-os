@@ -29,11 +29,10 @@ SensorDefinition Range(std::string id, std::string name, std::string unit, uint8
   return s;
 }
 
-SensorDefinition Temperature(std::string id, std::string name) {
-  // Own limits: the drive motors hold position up to 68 degC, warn above 80.
-  SensorDefinition s = Range(std::move(id), std::move(name), "deg.C", kTemperature, 0, 100);
+SensorDefinition Temperature(std::string id, std::string name, double min, double max, double critical_high) {
+  SensorDefinition s = Range(std::move(id), std::move(name), "deg.C", kTemperature, min, max);
   s.has_critical_high = true;
-  s.upper_critical_value = 80;
+  s.upper_critical_value = critical_high;
   return s;
 }
 
@@ -167,19 +166,23 @@ std::vector<SensorDefinition> LogicCore::Sensors() const {
   battery.has_critical_low = true;
   battery.lower_critical_value = config_.battery_empty_voltage;
   sensors.push_back(battery);
-  sensors.push_back(Range("om_v_charge", "V Charge", "V", kVoltage, 0, config_.dock_charge_voltage + 2));
+  // The MCU reports neither a charge voltage nor a charger state: both are derived, the names say so.
+  sensors.push_back(Range("om_v_charge", "V Charge (dock contact)", "V", kVoltage, 0, config_.dock_charge_voltage + 2));
   sensors.push_back(Range("om_charge_current", "Charge Current", "A", kCurrent, 0, 7));
   SensorDefinition charge_state;
   charge_state.id = "om_charge_state";
-  charge_state.name = "Charge State";
+  charge_state.name = "Charge State (derived)";
   charge_state.value_type = kSensorTypeString;
   sensors.push_back(charge_state);
   sensors.push_back(Range("om_mow_motor_rpm", "Mow Motor Revolutions", "rpm", kRpm, 0, 3500));
   sensors.push_back(Range("om_mow_motor_current", "Mow Motor Current", "A", kCurrent, 0, 5));
-  sensors.push_back(Temperature("om_mow_motor_temp", "Mow Motor Temp"));
-  sensors.push_back(Temperature("om_mow_esc_temp", "Mow ESC Temp"));
-  sensors.push_back(Temperature("om_left_esc_temp", "Left ESC Temp"));
-  sensors.push_back(Temperature("om_right_esc_temp", "Right ESC Temp"));
+  // One temperature per motor board, so no separate mow ESC temperature. Own limits: the drive motors hold position
+  // up to 68 degC, warn above 80.
+  sensors.push_back(Temperature("om_mow_motor_temp", "Mow Motor Temp", 0, 100, 80));
+  sensors.push_back(Temperature("om_left_esc_temp", "Left ESC Temp", 0, 100, 80));
+  sensors.push_back(Temperature("om_right_esc_temp", "Right ESC Temp", 0, 100, 80));
+  // From the BMS. Own limits for Li-ion: warn above 55 degC.
+  sensors.push_back(Temperature("battery_temp", "Battery Temp", -10, 70, 55));
   return sensors;
 }
 
@@ -198,12 +201,12 @@ std::vector<SensorReading> LogicCore::Readings() const {
       state = "Done";
     }
     readings.push_back({"om_charge_state", 0, state});
+    readings.push_back({"battery_temp", static_cast<double>(mcu_.battery_temperature), ""});
   }
   if (mcu_.cutter.ok) {
     readings.push_back({"om_mow_motor_rpm", static_cast<double>(mcu_.cutter.rpm), ""});
     readings.push_back({"om_mow_motor_current", mcu_.cutter.current, ""});
     readings.push_back({"om_mow_motor_temp", static_cast<double>(mcu_.cutter.temperature), ""});
-    readings.push_back({"om_mow_esc_temp", static_cast<double>(mcu_.cutter.temperature), ""});
   }
   if (mcu_.left.ok) readings.push_back({"om_left_esc_temp", static_cast<double>(mcu_.left.temperature), ""});
   if (mcu_.right.ok) readings.push_back({"om_right_esc_temp", static_cast<double>(mcu_.right.temperature), ""});

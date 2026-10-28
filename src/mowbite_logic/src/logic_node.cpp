@@ -97,6 +97,7 @@ class LogicNode : public rclcpp::Node {
     mcu.battery_voltage = msg.battery_voltage;
     mcu.battery_current = msg.battery_current;
     mcu.battery_percentage = msg.battery_percentage;
+    mcu.battery_temperature = msg.battery_temperature;
     mcu.battery_dock = msg.battery_dock;
     mcu.cutter = ToMotor(msg.cutter);
     mcu.left = ToMotor(msg.left);
