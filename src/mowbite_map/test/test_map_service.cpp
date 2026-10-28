@@ -43,6 +43,20 @@ MapService::Config ConfigFor(const TempDir& dir) {
   return config;
 }
 
+// A garden somewhere; the datum a map is recorded in.
+const mowbite_map::Datum kDatum{52.0, 9.0, 50.0};
+
+// A service that knows its datum, with the start-up messages taken.
+MapService Started(const MapService::Config& config) {
+  MapService service(config);
+  service.SetDatum(kDatum);
+  service.TakeChanged();
+  service.TakeStatusChanged();
+  service.TakeNotices();
+  service.TakeEvents();
+  return service;
+}
+
 // A map like the app sends it: open rings are fine, the mower closes them.
 json AppMap() {
   return json::parse(R"({
@@ -78,14 +92,14 @@ bool Mentions(const std::vector<Notice>& notices, Notice::Level level, const std
 TEST(MapService, AnswersTheTwoMethodsOfOpenMower) {
   EXPECT_EQ(MapService::Methods(), (std::vector<std::string>{"map.replace", "map.area_properties"}));
   TempDir dir;
-  MapService service(ConfigFor(dir));
+  MapService service = Started(ConfigFor(dir));
   EXPECT_FALSE(service.Call("map.something", json::array()).has_value());
   EXPECT_FALSE(service.Call("rpc.ping", json()).has_value());
 }
 
 TEST(MapService, ReportsWhatItStores) {
   TempDir dir;
-  MapService service(ConfigFor(dir));
+  MapService service = Started(ConfigFor(dir));
   auto answer = service.Call("map.area_properties", json());
   ASSERT_TRUE(answer.has_value());
   ASSERT_TRUE(answer->ok);
@@ -111,7 +125,7 @@ TEST(MapService, StartsWithAnEmptyMapWithoutAFile) {
 
 TEST(MapService, ReplacesTheMapAndKeepsItOnDisk) {
   TempDir dir;
-  MapService service(ConfigFor(dir));
+  MapService service = Started(ConfigFor(dir));
   service.TakeChanged();
   auto answer = service.Call("map.replace", json::array({AppMap()}));
   ASSERT_TRUE(answer.has_value());
@@ -129,7 +143,7 @@ TEST(MapService, LoadsTheStoredMapAfterARestart) {
   TempDir dir;
   std::string text;
   {
-    MapService service(ConfigFor(dir));
+    MapService service = Started(ConfigFor(dir));
     ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
     text = service.map_text();
   }
@@ -142,7 +156,7 @@ TEST(MapService, LoadsTheStoredMapAfterARestart) {
 
 TEST(MapService, RefusesAWrongParameterList) {
   TempDir dir;
-  MapService service(ConfigFor(dir));
+  MapService service = Started(ConfigFor(dir));
   for (const json& params : {json(), json::array(), json::array({AppMap(), AppMap()}), json(AppMap())}) {
     auto answer = service.Call("map.replace", params);
     ASSERT_TRUE(answer.has_value());
@@ -154,7 +168,7 @@ TEST(MapService, RefusesAWrongParameterList) {
 
 TEST(MapService, RefusesAnInvalidMapWithTheReasonAndChangesNothing) {
   TempDir dir;
-  MapService service(ConfigFor(dir));
+  MapService service = Started(ConfigFor(dir));
   ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
   service.TakeChanged();
   const std::string before = service.map_text();
@@ -178,7 +192,7 @@ TEST(MapService, RefusesAMapAboveTheLimit) {
   TempDir dir;
   MapService::Config config = ConfigFor(dir);
   config.max_bytes = 300;
-  MapService service(config);
+  MapService service = Started(config);
   auto answer = service.Call("map.replace", json::array({AppMap()}));
   ASSERT_TRUE(answer.has_value());
   EXPECT_FALSE(answer->ok);
@@ -194,7 +208,7 @@ TEST(MapService, ReportsADiskThatCannotBeWrittenAndKeepsTheOldMap) {
   WriteAll(dir.path() / "file", "not a directory");
   MapService::Config config;
   config.data_dir = (dir.path() / "file" / "sub").string();
-  MapService service(config);
+  MapService service = Started(config);
   service.TakeChanged();
   auto answer = service.Call("map.replace", json::array({AppMap()}));
   ASSERT_TRUE(answer.has_value());
@@ -207,7 +221,7 @@ TEST(MapService, ReportsADiskThatCannotBeWrittenAndKeepsTheOldMap) {
 
 TEST(MapService, StoresTheSameMapAgainWithoutTouchingThePreviousVersion) {
   TempDir dir;
-  MapService service(ConfigFor(dir));
+  MapService service = Started(ConfigFor(dir));
   ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
   json other = AppMap();
   other["areas"][0]["properties"]["name"] = "Back";
@@ -223,7 +237,7 @@ TEST(MapService, StoresTheSameMapAgainWithoutTouchingThePreviousVersion) {
 
 TEST(MapService, KeepsPropertiesItDoesNotKnow) {
   TempDir dir;
-  MapService service(ConfigFor(dir));
+  MapService service = Started(ConfigFor(dir));
   json map = AppMap();
   map["areas"][0]["properties"]["planner"] = json::parse(R"({"pattern": "stripes"})");
   map["areas"][0]["properties"]["mow_around"] = true;
@@ -238,7 +252,7 @@ TEST(MapService, KeepsPropertiesItDoesNotKnow) {
 TEST(MapService, WarnsWhenItHadToUseThePreviousVersion) {
   TempDir dir;
   {
-    MapService service(ConfigFor(dir));
+    MapService service = Started(ConfigFor(dir));
     ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
     json other = AppMap();
     other["areas"][0]["properties"]["name"] = "Back";
@@ -250,6 +264,7 @@ TEST(MapService, WarnsWhenItHadToUseThePreviousVersion) {
   const auto notices = service.TakeNotices();
   EXPECT_TRUE(Mentions(notices, Notice::Level::kWarn, "from map.json.bak"));
   EXPECT_TRUE(Mentions(notices, Notice::Level::kWarn, "map.json is not valid JSON"));
+  service.SetDatum(kDatum);
   // The same map again still repairs map.json, which does not hold it.
   ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
   EXPECT_EQ(ReadAll(dir.path() / "map.json"), service.map_text());
@@ -282,7 +297,7 @@ MapService::Config NumberedIds(const TempDir& dir) {
 
 TEST(MapServiceEdits, AddsAnAreaForTheLogic) {
   TempDir dir;
-  MapService service(NumberedIds(dir));
+  MapService service = Started(NumberedIds(dir));
   service.TakeChanged();
   const auto result = service.AddArea("mow", "Front", Square(5));
   ASSERT_TRUE(result.ok) << result.message;
@@ -305,7 +320,7 @@ TEST(MapServiceEdits, KeepsWhatIsThereWhenAddingAndAfterARestart) {
   json map = AppMap();
   map["areas"][0]["properties"]["planner"] = json::parse(R"({"pattern": "stripes"})");
   {
-    MapService service(NumberedIds(dir));
+    MapService service = Started(NumberedIds(dir));
     ASSERT_TRUE(service.Call("map.replace", json::array({map}))->ok);
     const auto result = service.AddArea("nav", "Path", Square(2));
     ASSERT_TRUE(result.ok) << result.message;
@@ -320,7 +335,7 @@ TEST(MapServiceEdits, KeepsWhatIsThereWhenAddingAndAfterARestart) {
 
 TEST(MapServiceEdits, RefusesAnAreaThatIsNotOne) {
   TempDir dir;
-  MapService service(NumberedIds(dir));
+  MapService service = Started(NumberedIds(dir));
   ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
   service.TakeChanged();
   const std::string before = service.map_text();
@@ -354,7 +369,7 @@ TEST(MapServiceEdits, TakesAFreshIdWhenTheSourceRepeats) {
     if (ids->size() > 1) ids->erase(ids->begin());
     return id;
   };
-  MapService service(config);
+  MapService service = Started(config);
   ASSERT_TRUE(service.AddArea("mow", "One", Square(2)).ok);
   const auto second = service.AddArea("mow", "Two", Square(3));
   ASSERT_TRUE(second.ok) << second.message;
@@ -364,7 +379,7 @@ TEST(MapServiceEdits, TakesAFreshIdWhenTheSourceRepeats) {
 
 TEST(MapServiceEdits, MakesRandomIdsOfThe32CharactersOpenMowerUses) {
   TempDir dir;
-  MapService service(ConfigFor(dir));
+  MapService service = Started(ConfigFor(dir));
   const auto first = service.AddArea("mow", "A", Square(2));
   const auto second = service.AddArea("mow", "B", Square(3));
   ASSERT_TRUE(first.ok && second.ok);
@@ -377,11 +392,11 @@ TEST(MapServiceEdits, MakesRandomIdsOfThe32CharactersOpenMowerUses) {
 TEST(MapServiceEdits, RefusesAnAreaThatMakesTheMapTooLarge) {
   TempDir dir;
   TempDir probe_dir;
-  MapService probe(NumberedIds(probe_dir));
+  MapService probe = Started(NumberedIds(probe_dir));
   ASSERT_TRUE(probe.AddArea("mow", "Small", Square(2)).ok);
   MapService::Config config = NumberedIds(dir);
   config.max_bytes = probe.map_text().size() + 50;
-  MapService service(config);
+  MapService service = Started(config);
   ASSERT_TRUE(service.AddArea("mow", "Small", Square(2)).ok);
   const std::string before = service.map_text();
   std::vector<mowbite_map::Point> many;
@@ -394,7 +409,7 @@ TEST(MapServiceEdits, RefusesAnAreaThatMakesTheMapTooLarge) {
 
 TEST(MapServiceEdits, SetsTheDockAsTheOnlyOne) {
   TempDir dir;
-  MapService service(NumberedIds(dir));
+  MapService service = Started(NumberedIds(dir));
   ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
   ASSERT_EQ(service.map().docking_stations.size(), 1u);
   const auto result = service.SetDock({2.5, -1.0}, 1.57);
@@ -413,7 +428,7 @@ TEST(MapServiceEdits, SetsTheDockAsTheOnlyOne) {
 
 TEST(MapServiceEdits, RefusesADockThatIsNotFinite) {
   TempDir dir;
-  MapService service(NumberedIds(dir));
+  MapService service = Started(NumberedIds(dir));
   constexpr double kInf = std::numeric_limits<double>::infinity();
   EXPECT_FALSE(service.SetDock({0, 0}, kInf).ok);
   EXPECT_FALSE(service.SetDock({kInf, 0}, 0).ok);
@@ -422,11 +437,239 @@ TEST(MapServiceEdits, RefusesADockThatIsNotFinite) {
 
 TEST(MapServiceEdits, TellsTheLogWhatWasStored) {
   TempDir dir;
-  MapService service(NumberedIds(dir));
+  MapService service = Started(NumberedIds(dir));
   service.TakeNotices();
   ASSERT_TRUE(service.AddArea("mow", "Front", Square(2)).ok);
   ASSERT_TRUE(service.SetDock({0, 0}, 0).ok);
   const auto notices = service.TakeNotices();
   EXPECT_TRUE(Mentions(notices, Notice::Level::kInfo, "Stored the area 'Front' (mow), id id1"));
   EXPECT_TRUE(Mentions(notices, Notice::Level::kInfo, "Stored the docking station, id id2"));
+}
+
+namespace {
+
+using mowbite_map::DatumState;
+using mowbite_map::Event;
+
+// kDatum moved north by this many metres.
+mowbite_map::Datum Moved(double north_m) {
+  mowbite_map::Datum datum = kDatum;
+  datum.lat += north_m / 111320.0;
+  return datum;
+}
+
+bool HasEvent(const std::vector<Event>& events, const std::string& state) {
+  for (const auto& event : events) {
+    if (event.type == "MAP_DATUM" && event.details["state"] == state) return true;
+  }
+  return false;
+}
+
+// A map stored for kDatum in the directory, as a service of an earlier run left it.
+void StoreAppMap(const TempDir& dir) {
+  MapService service = Started(ConfigFor(dir));
+  ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
+}
+
+}  // namespace
+
+TEST(MapDatum, WaitsForTheDatumOfTheGnssAndStoresNothingBeforeIt) {
+  TempDir dir;
+  MapService service(ConfigFor(dir));
+  EXPECT_EQ(service.status().datum, DatumState::kUnknown);
+  EXPECT_FALSE(service.status().mowing_allowed);
+  EXPECT_NE(service.status().reason.find("not known yet"), std::string::npos);
+
+  auto answer = service.Call("map.replace", json::array({AppMap()}));
+  ASSERT_TRUE(answer.has_value());
+  EXPECT_FALSE(answer->ok);
+  EXPECT_EQ(answer->code, -32000);
+  EXPECT_NE(answer->message.find("The datum of the GNSS is not known yet"), std::string::npos) << answer->message;
+  EXPECT_FALSE(service.AddArea("mow", "Front", Square(2)).ok);
+  EXPECT_FALSE(service.SetDock({0, 0}, 0).ok);
+  EXPECT_TRUE(service.map().Empty());
+  EXPECT_FALSE(fs::exists(dir.path() / "map.json"));
+  // An empty map needs no datum.
+  EXPECT_TRUE(service.Call("map.replace", json::array({json::parse(R"({"areas": [], "docking_stations": []})")}))->ok);
+}
+
+TEST(MapDatum, AnEmptyMapHasNothingToTie) {
+  TempDir dir;
+  MapService service(ConfigFor(dir));
+  EXPECT_TRUE(service.TakeStatusChanged());
+  service.SetDatum(kDatum);
+  EXPECT_EQ(service.status().datum, DatumState::kEmpty);
+  EXPECT_FALSE(service.status().mowing_allowed);
+  EXPECT_TRUE(service.TakeStatusChanged());
+  EXPECT_FALSE(service.TakeStatusChanged());
+  EXPECT_TRUE(service.TakeEvents().empty());
+}
+
+TEST(MapDatum, TiesAStoredMapToTheDatumInUse) {
+  TempDir dir;
+  MapService service = Started(ConfigFor(dir));
+  ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
+  const auto& status = service.status();
+  EXPECT_EQ(status.datum, DatumState::kMatch);
+  EXPECT_TRUE(status.mowing_allowed);
+  EXPECT_TRUE(status.reason.empty());
+  EXPECT_EQ(status.areas, 2u);
+  EXPECT_EQ(status.docking_stations, 1u);
+  EXPECT_TRUE(service.TakeStatusChanged());
+  const json file = json::parse(ReadAll(dir.path() / "map_datum.json"));
+  EXPECT_EQ(file["schema"], 1);
+  EXPECT_EQ(file["datum_lat"], 52.0);
+  EXPECT_EQ(file["datum_long"], 9.0);
+  EXPECT_EQ(file["datum_height"], 50.0);
+}
+
+TEST(MapDatum, KeepsTheTieAcrossARestart) {
+  TempDir dir;
+  StoreAppMap(dir);
+  MapService again(ConfigFor(dir));
+  EXPECT_EQ(again.status().datum, DatumState::kUnknown);
+  again.SetDatum(kDatum);
+  EXPECT_EQ(again.status().datum, DatumState::kMatch);
+  EXPECT_TRUE(again.status().mowing_allowed);
+  EXPECT_TRUE(again.TakeEvents().empty());
+  EXPECT_TRUE(Mentions(again.TakeNotices(), Notice::Level::kInfo, "The map belongs to the datum in use"));
+}
+
+TEST(MapDatum, StopsMowingWhenTheDatumChanged) {
+  TempDir dir;
+  StoreAppMap(dir);
+  MapService again(ConfigFor(dir));
+  again.TakeNotices();
+  again.SetDatum(Moved(1000.0));
+  const auto& status = again.status();
+  EXPECT_EQ(status.datum, DatumState::kMismatch);
+  EXPECT_FALSE(status.mowing_allowed);
+  EXPECT_NE(status.reason.find("recorded for the datum 52.0000000, 9.0000000"), std::string::npos) << status.reason;
+  EXPECT_NE(status.reason.find("1000.00 m apart"), std::string::npos) << status.reason;
+  EXPECT_TRUE(Mentions(again.TakeNotices(), Notice::Level::kError, "No mowing, the map does not fit the datum"));
+  const auto events = again.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_TRUE(HasEvent(events, "mismatch"));
+  EXPECT_NE(events[0].details["reason"].get<std::string>().find("m apart"), std::string::npos);
+  // The same datum again is nothing new.
+  again.SetDatum(Moved(1000.0));
+  EXPECT_TRUE(again.TakeEvents().empty());
+  EXPECT_TRUE(again.TakeNotices().empty());
+}
+
+TEST(MapDatum, RefusesEveryWriteForAnotherDatumButEmptyingTheMap) {
+  TempDir dir;
+  StoreAppMap(dir);
+  const std::string before = ReadAll(dir.path() / "map.json");
+  MapService service(ConfigFor(dir));
+  service.SetDatum(Moved(1000.0));
+
+  auto answer = service.Call("map.replace", json::array({AppMap()}));
+  EXPECT_FALSE(answer->ok);
+  EXPECT_EQ(answer->code, -32000);
+  EXPECT_NE(answer->message.find("send an empty map to start over"), std::string::npos) << answer->message;
+  const auto area = service.AddArea("mow", "More", Square(2));
+  EXPECT_FALSE(area.ok);
+  EXPECT_NE(area.message.find("recorded for the datum"), std::string::npos) << area.message;
+  EXPECT_FALSE(service.SetDock({0, 0}, 0).ok);
+  EXPECT_EQ(service.map().areas.size(), 2u);
+  EXPECT_EQ(ReadAll(dir.path() / "map.json"), before);
+
+  // The way out: an empty map, then a new recording that gets the datum in use.
+  ASSERT_TRUE(service.Call("map.replace", json::array({json::parse(R"({"areas": [], "docking_stations": []})")}))->ok);
+  EXPECT_EQ(service.status().datum, DatumState::kEmpty);
+  ASSERT_TRUE(service.AddArea("mow", "New", Square(3)).ok);
+  EXPECT_EQ(service.status().datum, DatumState::kMatch);
+  EXPECT_TRUE(service.status().mowing_allowed);
+  EXPECT_DOUBLE_EQ(json::parse(ReadAll(dir.path() / "map_datum.json"))["datum_lat"].get<double>(), Moved(1000.0).lat);
+}
+
+TEST(MapDatum, ToleratesTheNoiseOfANewSurvey) {
+  TempDir dir;
+  StoreAppMap(dir);
+  MapService near(ConfigFor(dir));
+  near.SetDatum(Moved(0.005));
+  EXPECT_EQ(near.status().datum, DatumState::kMatch);
+  MapService far(ConfigFor(dir));
+  far.SetDatum(Moved(0.05));
+  EXPECT_EQ(far.status().datum, DatumState::kMismatch);
+}
+
+TEST(MapDatum, DoesNotLookAtTheHeight) {
+  TempDir dir;
+  StoreAppMap(dir);
+  MapService service(ConfigFor(dir));
+  mowbite_map::Datum higher = kDatum;
+  higher.height = 80.0;
+  service.SetDatum(higher);
+  EXPECT_EQ(service.status().datum, DatumState::kMatch);
+}
+
+TEST(MapDatum, AMapWithoutARecordedDatumIsNotTrusted) {
+  TempDir dir;
+  StoreAppMap(dir);
+  fs::remove(dir.path() / "map_datum.json");
+  MapService service(ConfigFor(dir));
+  service.TakeNotices();
+  service.SetDatum(kDatum);
+  EXPECT_EQ(service.status().datum, DatumState::kUnbound);
+  EXPECT_FALSE(service.status().mowing_allowed);
+  EXPECT_TRUE(HasEvent(service.TakeEvents(), "unbound"));
+  EXPECT_TRUE(Mentions(service.TakeNotices(), Notice::Level::kError, "The map has no recorded datum"));
+
+  // Areas cannot be added to a map nobody can vouch for ...
+  const auto area = service.AddArea("mow", "More", Square(2));
+  EXPECT_FALSE(area.ok);
+  EXPECT_NE(area.message.find("send it again with map.replace"), std::string::npos) << area.message;
+  EXPECT_FALSE(service.SetDock({0, 0}, 0).ok);
+  // ... but sending the whole map again ties it, even if it is the very same map.
+  ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
+  EXPECT_EQ(service.status().datum, DatumState::kMatch);
+  EXPECT_TRUE(fs::exists(dir.path() / "map_datum.json"));
+}
+
+TEST(MapDatum, ABrokenDatumFileCountsAsMissing) {
+  TempDir dir;
+  StoreAppMap(dir);
+  WriteAll(dir.path() / "map_datum.json", "{broken");
+  MapService service(ConfigFor(dir));
+  EXPECT_TRUE(Mentions(service.TakeNotices(), Notice::Level::kWarn, "map_datum.json is not valid JSON"));
+  service.SetDatum(kDatum);
+  EXPECT_EQ(service.status().datum, DatumState::kUnbound);
+}
+
+TEST(MapDatum, TheFirstAreaTiesTheMap) {
+  TempDir dir;
+  MapService service = Started(NumberedIds(dir));
+  ASSERT_TRUE(service.AddArea("mow", "Front", Square(2)).ok);
+  EXPECT_EQ(service.status().datum, DatumState::kMatch);
+  EXPECT_TRUE(fs::exists(dir.path() / "map_datum.json"));
+  EXPECT_EQ(service.status().areas, 1u);
+  ASSERT_TRUE(service.SetDock({1, 1}, 0).ok);
+  EXPECT_EQ(service.status().docking_stations, 1u);
+}
+
+TEST(MapDatum, IgnoresAnInvalidDatum) {
+  TempDir dir;
+  MapService service(ConfigFor(dir));
+  service.TakeNotices();
+  service.SetDatum({91.0, 0.0, 0.0});
+  service.SetDatum({std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0});
+  EXPECT_EQ(service.status().datum, DatumState::kUnknown);
+  EXPECT_TRUE(Mentions(service.TakeNotices(), Notice::Level::kError, "Ignoring an invalid datum"));
+}
+
+TEST(MapDatum, MapWithoutDatumFileStaysSafeWhenTheDatumCannotBeWritten) {
+  TempDir dir;
+  MapService service = Started(ConfigFor(dir));
+  // A directory where the temporary datum file goes makes writing it fail, the map itself is written.
+  fs::create_directory(dir.path() / "map_datum.json.tmp");
+  const auto answer = service.Call("map.replace", json::array({AppMap()}));
+  ASSERT_TRUE(answer.has_value());
+  EXPECT_FALSE(answer->ok);
+  EXPECT_EQ(answer->code, -32603);
+  EXPECT_NE(answer->message.find("Stored the map but not its datum"), std::string::npos) << answer->message;
+  EXPECT_EQ(service.map().areas.size(), 2u);
+  EXPECT_EQ(service.status().datum, DatumState::kUnbound);
+  EXPECT_FALSE(service.status().mowing_allowed);
 }

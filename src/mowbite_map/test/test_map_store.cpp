@@ -2,9 +2,11 @@
 #include <stdlib.h>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <vector>
 
 #include "mowbite_map/map_store.h"
@@ -208,4 +210,86 @@ TEST(MapStore, ReportsWhyItCannotWrite) {
   MapStore store((dir.path() / "file" / "sub").string(), kLimit);
   const std::string error = store.Save(Text("a"));
   EXPECT_NE(error.find("cannot create"), std::string::npos) << error;
+}
+
+TEST(MapStoreDatum, SavesAndLoadsTheDatumExactly) {
+  TempDir dir;
+  MapStore store(dir.path().string(), kLimit);
+  const mowbite_map::Datum datum{52.123456789012, -9.987654321098, 61.5};
+  ASSERT_EQ(store.Save(Text("a")), "");
+  ASSERT_EQ(store.SaveDatum(datum), "");
+  const auto loaded = store.LoadDatum();
+  ASSERT_TRUE(loaded.datum.has_value());
+  EXPECT_EQ(loaded.datum->lat, datum.lat);
+  EXPECT_EQ(loaded.datum->lon, datum.lon);
+  EXPECT_EQ(loaded.datum->height, datum.height);
+  EXPECT_TRUE(loaded.problem.empty());
+  const json file = json::parse(ReadAll(dir.path() / "map_datum.json"));
+  EXPECT_EQ(file["schema"], 1);
+  EXPECT_FALSE(fs::exists(dir.path() / "map_datum.json.tmp"));
+  // The map is not touched by it.
+  EXPECT_EQ(ReadAll(dir.path() / "map.json"), Text("a"));
+}
+
+TEST(MapStoreDatum, MissingFileIsNoProblem) {
+  TempDir dir;
+  const auto loaded = MapStore(dir.path().string(), kLimit).LoadDatum();
+  EXPECT_FALSE(loaded.datum.has_value());
+  EXPECT_TRUE(loaded.problem.empty());
+}
+
+TEST(MapStoreDatum, DoesNotUseAFileItCannotTrust) {
+  TempDir dir;
+  MapStore store(dir.path().string(), kLimit);
+  const auto problem = [&](const std::string& text) {
+    WriteAll(dir.path() / "map_datum.json", text);
+    const auto loaded = store.LoadDatum();
+    EXPECT_FALSE(loaded.datum.has_value()) << text;
+    return loaded.problem;
+  };
+  EXPECT_EQ(problem("{broken"), "map_datum.json is not valid JSON");
+  EXPECT_EQ(problem("[1]"), "map_datum.json is not valid JSON");
+  EXPECT_EQ(problem(R"({"datum_lat": 52, "datum_long": 9, "datum_height": 1})"), "map_datum.json has no schema");
+  EXPECT_EQ(problem(R"({"schema": 2, "datum_lat": 52, "datum_long": 9, "datum_height": 1})"),
+            "map_datum.json has the schema 2, this version reads 1");
+  EXPECT_EQ(problem(R"({"schema": 1, "datum_lat": 52, "datum_long": 9})"), "map_datum.json holds no valid datum");
+  EXPECT_EQ(problem(R"({"schema": 1, "datum_lat": "52", "datum_long": 9, "datum_height": 1})"),
+            "map_datum.json holds no valid datum");
+  EXPECT_EQ(problem(R"({"schema": 1, "datum_lat": 91, "datum_long": 9, "datum_height": 1})"),
+            "map_datum.json holds no valid datum");
+  EXPECT_EQ(problem(std::string(5000, ' ')), "map_datum.json is too large");
+}
+
+TEST(MapStoreDatum, RefusesToWriteAnInvalidDatum) {
+  TempDir dir;
+  MapStore store(dir.path().string(), kLimit);
+  EXPECT_EQ(store.SaveDatum({91.0, 0.0, 0.0}), "not a valid datum");
+  EXPECT_EQ(store.SaveDatum({0.0, 181.0, 0.0}), "not a valid datum");
+  EXPECT_EQ(store.SaveDatum({std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0}), "not a valid datum");
+  EXPECT_FALSE(fs::exists(dir.path() / "map_datum.json"));
+}
+
+TEST(MapStoreDatum, ReportsWhyItCannotWrite) {
+  TempDir dir;
+  WriteAll(dir.path() / "file", "not a directory");
+  MapStore store((dir.path() / "file" / "sub").string(), kLimit);
+  EXPECT_NE(store.SaveDatum({52.0, 9.0, 0.0}).find("cannot create"), std::string::npos);
+}
+
+TEST(Datum, MeasuresTheDistanceOnTheGround) {
+  const mowbite_map::Datum a{52.0, 9.0, 0.0};
+  EXPECT_DOUBLE_EQ(mowbite_map::DistanceM(a, a), 0.0);
+  // a thousandth of a degree north is 111.32 m anywhere, east it shrinks with the cosine of the latitude
+  EXPECT_NEAR(mowbite_map::DistanceM(a, {52.001, 9.0, 0.0}), 111.32, 0.001);
+  EXPECT_NEAR(mowbite_map::DistanceM(a, {52.0, 9.001, 0.0}), 111.32 * std::cos(52.0 * 3.14159265358979 / 180.0), 0.01);
+  EXPECT_NEAR(mowbite_map::DistanceM(a, {52.001, 9.0, 99.0}), mowbite_map::DistanceM(a, {52.001, 9.0, 0.0}), 1e-9);
+  EXPECT_NEAR(mowbite_map::DistanceM({52.001, 9.0, 0.0}, a), 111.32, 0.001);
+}
+
+TEST(Datum, ChecksTheRanges) {
+  EXPECT_TRUE(mowbite_map::IsValid({52.0, 9.0, 50.0}));
+  EXPECT_TRUE(mowbite_map::IsValid({-90.0, 180.0, -3.0}));
+  EXPECT_FALSE(mowbite_map::IsValid({90.1, 0.0, 0.0}));
+  EXPECT_FALSE(mowbite_map::IsValid({0.0, -180.1, 0.0}));
+  EXPECT_FALSE(mowbite_map::IsValid({0.0, 0.0, std::numeric_limits<double>::infinity()}));
 }

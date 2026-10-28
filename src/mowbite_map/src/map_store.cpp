@@ -17,6 +17,11 @@ namespace {
 const char* const kMapFile = "map.json";
 const char* const kBackupFile = "map.json.bak";
 const char* const kTempFile = "map.json.tmp";
+const char* const kDatumFile = "map_datum.json";
+const char* const kDatumTempFile = "map_datum.json.tmp";
+// The version of map_datum.json; a newer one is not read, the map counts as without a datum then.
+constexpr int kDatumSchema = 1;
+constexpr uintmax_t kDatumMaxBytes = 4096;
 
 namespace fs = std::filesystem;
 
@@ -141,6 +146,67 @@ std::string MapStore::Save(const std::string& text) {
   }
   if (::rename(temp_path.c_str(), map_path.c_str()) != 0) {
     error = Errno("cannot replace " + map_path.string());
+    fs::remove(temp_path, ec);
+    return error;
+  }
+  SyncDirectory(dir_);
+  return "";
+}
+
+MapStore::LoadedDatum MapStore::LoadDatum() const {
+  const fs::path path = fs::path(dir_) / kDatumFile;
+  std::error_code ec;
+  const auto size = fs::file_size(path, ec);
+  if (ec) return {};
+  if (size > kDatumMaxBytes) return {std::nullopt, std::string(kDatumFile) + " is too large"};
+  std::ifstream file(path, std::ios::binary);
+  if (!file) return {std::nullopt, std::string("cannot read ") + kDatumFile};
+  const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  const json parsed = json::parse(text, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_object()) {
+    return {std::nullopt, std::string(kDatumFile) + " is not valid JSON"};
+  }
+  const auto schema = parsed.find("schema");
+  if (schema == parsed.end() || !schema->is_number_integer()) {
+    return {std::nullopt, std::string(kDatumFile) + " has no schema"};
+  }
+  if (schema->get<long long>() != kDatumSchema) {
+    return {std::nullopt, std::string(kDatumFile) + " has the schema " + std::to_string(schema->get<long long>()) +
+                              ", this version reads " + std::to_string(kDatumSchema)};
+  }
+  Datum datum;
+  const std::pair<const char*, double*> fields[] = {
+      {"datum_lat", &datum.lat}, {"datum_long", &datum.lon}, {"datum_height", &datum.height}};
+  for (const auto& [key, field] : fields) {
+    const auto value = parsed.find(key);
+    if (value == parsed.end() || !value->is_number()) {
+      return {std::nullopt, std::string(kDatumFile) + " holds no valid datum"};
+    }
+    *field = value->get<double>();
+  }
+  if (!IsValid(datum)) return {std::nullopt, std::string(kDatumFile) + " holds no valid datum"};
+  return {datum, ""};
+}
+
+std::string MapStore::SaveDatum(const Datum& datum) {
+  if (!IsValid(datum)) return "not a valid datum";
+  std::error_code ec;
+  fs::create_directories(dir_, ec);
+  if (ec) return "cannot create " + dir_ + ": " + ec.message();
+  json j = json::object();
+  j["schema"] = kDatumSchema;
+  j["datum_lat"] = datum.lat;
+  j["datum_long"] = datum.lon;
+  j["datum_height"] = datum.height;
+  const fs::path path = fs::path(dir_) / kDatumFile;
+  const fs::path temp_path = fs::path(dir_) / kDatumTempFile;
+  std::string error;
+  if (!WriteSynced(temp_path.string(), j.dump(2) + "\n", error)) {
+    fs::remove(temp_path, ec);
+    return error;
+  }
+  if (::rename(temp_path.c_str(), path.c_str()) != 0) {
+    error = Errno("cannot replace " + path.string());
     fs::remove(temp_path, ec);
     return error;
   }

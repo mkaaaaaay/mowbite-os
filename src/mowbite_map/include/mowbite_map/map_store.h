@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 
+#include "mowbite_map/datum.h"
 #include "mowbite_map/map_model.h"
 
 namespace mowbite_map {
@@ -27,6 +28,16 @@ class MapStore {
 
   // Writes the text of a map. Returns an empty string, or why it failed; the files stay as they were then.
   std::string Save(const std::string& text);
+
+  struct LoadedDatum {
+    std::optional<Datum> datum;
+    // Why the file was not used, empty if it is missing or fine.
+    std::string problem;
+  };
+
+  // map_datum.json next to the map: the datum the map was recorded in.
+  LoadedDatum LoadDatum() const;
+  std::string SaveDatum(const Datum& datum);
 
   const std::string& dir() const {
     return dir_;

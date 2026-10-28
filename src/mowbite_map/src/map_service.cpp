@@ -1,5 +1,6 @@
 #include "mowbite_map/map_service.h"
 
+#include <cstdio>
 #include <random>
 
 namespace mowbite_map {
@@ -23,10 +24,35 @@ RpcOutcome Failure(int code, std::string message) {
   return outcome;
 }
 
+// 7 decimals of a degree are about a centimetre.
+std::string Describe(const Datum& datum) {
+  char text[64];
+  std::snprintf(text, sizeof(text), "%.7f, %.7f", datum.lat, datum.lon);
+  return text;
+}
+
 }  // namespace
 
+const char* DatumStateName(DatumState state) {
+  switch (state) {
+    case DatumState::kUnknown: return "unknown";
+    case DatumState::kEmpty: return "empty";
+    case DatumState::kMatch: return "match";
+    case DatumState::kMismatch: return "mismatch";
+    case DatumState::kUnbound: return "unbound";
+  }
+  return "unknown";
+}
+
+bool operator==(const Status& a, const Status& b) {
+  return a.datum == b.datum && a.mowing_allowed == b.mowing_allowed && a.reason == b.reason && a.areas == b.areas &&
+         a.docking_stations == b.docking_stations;
+}
+
 MapService::MapService(const Config& config)
-    : store_(config.data_dir, config.max_bytes), new_id_(config.new_id ? config.new_id : RandomId) {
+    : store_(config.data_dir, config.max_bytes),
+      tolerance_m_(config.datum_tolerance_m),
+      new_id_(config.new_id ? config.new_id : RandomId) {
   MapStore::Loaded loaded = store_.Load();
   if (loaded.map) {
     map_ = std::move(*loaded.map);
@@ -45,6 +71,11 @@ MapService::MapService(const Config& config)
   }
   text_ = ToText(map_);
   changed_ = true;
+
+  MapStore::LoadedDatum datum = store_.LoadDatum();
+  recorded_ = datum.datum;
+  if (!datum.problem.empty()) notices_.push_back({Notice::Level::kWarn, "Datum file problem: " + datum.problem});
+  Refresh();
 }
 
 const std::vector<std::string>& MapService::Methods() {
@@ -58,9 +89,24 @@ std::optional<RpcOutcome> MapService::Call(const std::string& method, const json
   return std::nullopt;
 }
 
+void MapService::SetDatum(const Datum& datum) {
+  if (!IsValid(datum)) {
+    notices_.push_back({Notice::Level::kError, "Ignoring an invalid datum from the GNSS"});
+    return;
+  }
+  current_ = datum;
+  Refresh();
+}
+
 bool MapService::TakeChanged() {
   const bool changed = changed_;
   changed_ = false;
+  return changed;
+}
+
+bool MapService::TakeStatusChanged() {
+  const bool changed = status_changed_;
+  status_changed_ = false;
   return changed;
 }
 
@@ -68,6 +114,12 @@ std::vector<Notice> MapService::TakeNotices() {
   std::vector<Notice> notices;
   notices.swap(notices_);
   return notices;
+}
+
+std::vector<Event> MapService::TakeEvents() {
+  std::vector<Event> events;
+  events.swap(events_);
+  return events;
 }
 
 RpcOutcome MapService::AreaProperties() const {
@@ -82,7 +134,7 @@ RpcOutcome MapService::Replace(const json& params) {
   ParseResult parsed = ParseMap(params[0]);
   if (!parsed.map) return Failure(kRpcInvalidParams, "Invalid map: " + parsed.error);
   const size_t areas = parsed.map->areas.size();
-  RpcOutcome outcome = Commit(std::move(*parsed.map));
+  RpcOutcome outcome = Commit(std::move(*parsed.map), true);
   if (!outcome.ok) return outcome;
   notices_.push_back({Notice::Level::kInfo, "Stored the map of map.replace (" + std::to_string(areas) + " areas)"});
   outcome.result = "Successfully stored map (" + std::to_string(areas) + " areas)";
@@ -115,7 +167,7 @@ EditResult MapService::Apply(const MapData& candidate, const std::string& id, co
   // The checks of map.replace, which also close the ring of a new area.
   ParseResult parsed = ParseMap(ToJson(candidate));
   if (!parsed.map) return {false, "", "Invalid " + what + ": " + parsed.error};
-  RpcOutcome outcome = Commit(std::move(*parsed.map));
+  RpcOutcome outcome = Commit(std::move(*parsed.map), false);
   if (!outcome.ok) return {false, "", outcome.message};
   notices_.push_back({Notice::Level::kInfo, "Stored the " + what + ", id " + id});
   return {true, id, ""};
@@ -133,21 +185,97 @@ std::string MapService::NewId() const {
   return new_id_();
 }
 
-RpcOutcome MapService::Commit(MapData candidate) {
+std::string MapService::Refusal(const MapData& candidate, bool replaces) const {
+  // Emptying the map is always possible, it is the way out of a map that belongs to another datum.
+  if (candidate.Empty()) return "";
+  switch (status_.datum) {
+    case DatumState::kUnknown:
+      return "The datum of the GNSS is not known yet (datum_lat and datum_long), so the map cannot be tied to it";
+    case DatumState::kMismatch:
+      return status_.reason + ". Set datum_lat and datum_long back, or send an empty map to start over";
+    case DatumState::kUnbound:
+      if (replaces) return "";
+      return "The map has no recorded datum: send it again with map.replace to tie it to the datum in use";
+    case DatumState::kEmpty:
+    case DatumState::kMatch: return "";
+  }
+  return "";
+}
+
+RpcOutcome MapService::Commit(MapData candidate, bool replaces) {
+  const std::string refusal = Refusal(candidate, replaces);
+  if (!refusal.empty()) return Failure(kRpcRefused, refusal);
   std::string text = ToText(candidate);
   if (text.size() > store_.max_bytes()) {
     return Failure(kRpcInvalidParams, "The map is too large: " + std::to_string(text.size()) + " bytes, the limit is " +
                                           std::to_string(store_.max_bytes()));
   }
+  // A map with areas gets the datum in use if it has none of its own (the refusal has seen to it that one is known).
+  const bool bind = !candidate.Empty() && current_ && (!recorded_ || DistanceM(*recorded_, *current_) > tolerance_m_);
   // The same map again changes nothing, and does not push the previous version out of map.json.bak.
-  if (text == text_ && on_disk_) return {};
+  if (text == text_ && on_disk_ && !bind) return {};
   const std::string error = store_.Save(text);
   if (!error.empty()) return Failure(kRpcInternal, "Cannot store the map: " + error);
   map_ = std::move(candidate);
   text_ = std::move(text);
   on_disk_ = true;
   changed_ = true;
+  // The datum goes after the map: if it fails the map stays without one, which blocks mowing and does no harm.
+  if (bind) {
+    const std::string datum_error = store_.SaveDatum(*current_);
+    if (!datum_error.empty()) {
+      Refresh();
+      return Failure(kRpcInternal, "Stored the map but not its datum: " + datum_error);
+    }
+    recorded_ = current_;
+  }
+  Refresh();
   return {};
+}
+
+Status MapService::Evaluate() const {
+  Status status;
+  status.areas = map_.areas.size();
+  status.docking_stations = map_.docking_stations.size();
+  if (!current_) {
+    status.datum = DatumState::kUnknown;
+    status.reason = "The datum of the GNSS is not known yet";
+  } else if (map_.Empty()) {
+    status.datum = DatumState::kEmpty;
+    status.reason = "The map is empty";
+  } else if (!recorded_) {
+    status.datum = DatumState::kUnbound;
+    status.reason = "The map has no recorded datum";
+  } else if (DistanceM(*recorded_, *current_) > tolerance_m_) {
+    char apart[32];
+    std::snprintf(apart, sizeof(apart), "%.2f", DistanceM(*recorded_, *current_));
+    status.datum = DatumState::kMismatch;
+    status.reason = "The map was recorded for the datum " + Describe(*recorded_) + ", the datum in use is " +
+                    Describe(*current_) + " (" + apart + " m apart)";
+  } else {
+    status.datum = DatumState::kMatch;
+    status.mowing_allowed = true;
+  }
+  return status;
+}
+
+void MapService::Refresh() {
+  Status next = Evaluate();
+  if (next == status_) return;
+  const DatumState before = status_.datum;
+  status_ = std::move(next);
+  status_changed_ = true;
+  if (status_.datum == before) return;
+  switch (status_.datum) {
+    case DatumState::kMismatch:
+    case DatumState::kUnbound:
+      notices_.push_back({Notice::Level::kError, "No mowing, the map does not fit the datum: " + status_.reason});
+      events_.push_back({"MAP_DATUM", json{{"state", DatumStateName(status_.datum)}, {"reason", status_.reason}}});
+      break;
+    case DatumState::kMatch: notices_.push_back({Notice::Level::kInfo, "The map belongs to the datum in use"}); break;
+    case DatumState::kUnknown:
+    case DatumState::kEmpty: break;
+  }
 }
 
 }  // namespace mowbite_map
