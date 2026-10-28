@@ -74,7 +74,9 @@ std::string Geofence::Check(double x, double y) const {
     closest = std::min(closest, DistanceToRing(ring, x, y));
   }
   if (closest <= margin_) return "";
-  return Format("the mower is %.2f m outside of the allowed areas at (%.2f, ...)", closest, x);
+  char text[160];
+  std::snprintf(text, sizeof(text), "the mower is %.2f m outside of the allowed areas at (%.2f, %.2f)", closest, x, y);
+  return text;
 }
 
 GuardResult CheckGuard(const GuardConfig& config, const GuardInput& in, const Geofence& fence) {

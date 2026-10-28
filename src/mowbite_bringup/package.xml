@@ -18,6 +18,7 @@
   <exec_depend>mowbite_logic</exec_depend>
   <exec_depend>mowbite_bridge</exec_depend>
   <exec_depend>mowbite_map</exec_depend>
+  <exec_depend>mowbite_follower</exec_depend>
   <exec_depend>mowbite_planner</exec_depend>
 
   <export>

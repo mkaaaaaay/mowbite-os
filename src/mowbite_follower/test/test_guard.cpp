@@ -46,7 +46,7 @@ TEST(Geofence, MarginObstaclesAndProblems) {
   EXPECT_EQ(fence.Problem(), "");
   EXPECT_EQ(fence.Check(1, 1), "");
   EXPECT_EQ(fence.Check(-0.4, 3), "");
-  EXPECT_NE(fence.Check(-0.6, 3).find("outside of the allowed areas"), std::string::npos);
+  EXPECT_EQ(fence.Check(-0.6, 3), "the mower is 0.60 m outside of the allowed areas at (-0.60, 3.00)");
   EXPECT_NE(fence.Check(4.5, 2.5).find("in an obstacle"), std::string::npos);
   EXPECT_EQ(Geofence({}, {}, 0.5).Problem(), "no allowed area");
   EXPECT_EQ(Geofence({{{0, 0}, {1, 1}}}, {}, 0.5).Problem(), "an allowed area has fewer than 3 points");

@@ -28,6 +28,7 @@
   <test_depend>mowbite_localization</test_depend>
   <test_depend>mowbite_bridge</test_depend>
   <test_depend>mowbite_map</test_depend>
+  <test_depend>mowbite_follower</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

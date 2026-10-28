@@ -36,9 +36,12 @@ def generate_launch_description():
     map_node = ComposableNode(
         package="mowbite_map", plugin="mowbite_map::MapNode", name="mowbite_map",
         parameters=[config, {"data_dir": LaunchConfiguration("data_dir")}])
+    follower = ComposableNode(
+        package="mowbite_follower", plugin="mowbite_follower::FollowerNode", name="mowbite_follower",
+        parameters=[config])
     container = ComposableNodeContainer(
         name="mowbite", namespace="", package="rclcpp_components", executable="component_container",
-        composable_node_descriptions=[mcu, gnss, imu, localization, logic, bridge, map_node], output="screen")
+        composable_node_descriptions=[mcu, gnss, imu, localization, logic, bridge, map_node, follower], output="screen")
     # Plans the mowing paths for mowing.plan; a crash only costs the plans until it is back.
     planner = Node(package="mowbite_planner", executable="mowbite_planner_node", name="mowbite_planner",
                    parameters=[config], output="screen", respawn=True, respawn_delay=5.0)
