@@ -560,3 +560,70 @@ TEST(RecorderDock, NotWhileAnAreaIsRecorded) {
   EXPECT_FALSE(On(recorder, "record_dock"));
   EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
 }
+
+TEST(RecorderOverlay, EmptyAtFirst) {
+  AreaRecorder recorder = Writable();
+  EXPECT_TRUE(recorder.TakeOverlayChanged());
+  EXPECT_EQ(recorder.Overlay().dump(), R"({"polygons":[]})");
+  EXPECT_FALSE(recorder.TakeOverlayChanged());
+}
+
+TEST(RecorderOverlay, LinesInBothFormats) {
+  AreaRecorder recorder = Writable();
+  recorder.TakeOverlayChanged();
+  recorder.OnAction("start_recording");
+  recorder.OnPose(0, 0, 0.02f);
+  // One point is no line yet.
+  EXPECT_TRUE(recorder.Overlay()["polygons"].empty());
+  recorder.OnPose(1, 0, 0.02f);
+  EXPECT_TRUE(recorder.TakeOverlayChanged());
+  json line = recorder.Overlay()["polygons"][0];
+  EXPECT_EQ(line["is_closed"], 0);
+  EXPECT_EQ(line["closed"], 0);
+  EXPECT_EQ(line["color"], "blue");
+  EXPECT_DOUBLE_EQ(line["line_width"].get<double>(), 0.1);
+  ASSERT_EQ(line["poly"].size(), 2u);
+  EXPECT_DOUBLE_EQ(line["poly"][1]["x"].get<double>(), 1.0);
+  EXPECT_EQ(line["polygon"]["points"], line["poly"]);
+
+  // A pose too close changes nothing.
+  recorder.OnPose(1.05, 0, 0.02f);
+  EXPECT_FALSE(recorder.TakeOverlayChanged());
+
+  Drive(recorder, {{1, 0}, {1, 1}, {0, 1}, {0, 0.05}});
+  recorder.OnAction("stop_recording");
+  EXPECT_TRUE(recorder.TakeOverlayChanged());
+  json polygons = recorder.Overlay()["polygons"];
+  ASSERT_EQ(polygons.size(), 1u);
+  EXPECT_EQ(polygons[0]["color"], "green");
+  EXPECT_EQ(polygons[0]["is_closed"], 1);
+  EXPECT_EQ(polygons[0]["closed"], 1);
+
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0.2, 0.2}, {0.6, 0.2}, {0.6, 0.6}, {0.2, 0.55}});
+  recorder.OnAction("stop_recording");
+  polygons = recorder.Overlay()["polygons"];
+  ASSERT_EQ(polygons.size(), 2u);
+  EXPECT_EQ(polygons[1]["color"], "red");
+
+  recorder.OnAction("finish_mowing_area");
+  recorder.TakeMapEdit();
+  recorder.TakeOverlayChanged();
+  recorder.OnMapEditResult(true, "a", "");
+  EXPECT_TRUE(recorder.TakeOverlayChanged());
+  EXPECT_TRUE(recorder.Overlay()["polygons"].empty());
+}
+
+TEST(RecorderOverlay, LeavingRecordingClearsIt) {
+  LogicCore core{LogicConfig{}};
+  core.OnHardwareStatus(Healthy());
+  core.OnMapStatus(MapDatum::kMatch, "");
+  core.OnAction("mower_logic:idle/start_area_recording");
+  core.OnAction(kPrefix + "start_recording");
+  DriveCore(core, {{0, 0}, {1, 0}});
+  EXPECT_EQ(core.MapOverlay()["polygons"].size(), 1u);
+  core.TakeOverlayChanged();
+  core.OnAction(kPrefix + "exit_recording_mode");
+  EXPECT_TRUE(core.TakeOverlayChanged());
+  EXPECT_TRUE(core.MapOverlay()["polygons"].empty());
+}

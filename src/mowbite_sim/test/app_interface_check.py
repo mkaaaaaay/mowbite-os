@@ -68,6 +68,17 @@ def rpc(method, params=None, rid="1"):
     return wait_for(answer)
 
 
+REC = "mower_logic:area_recording/"
+
+
+def enabled(action_id):
+    return {a["action_id"]: a["enabled"] for a in json.loads(latest("actions/json") or "[]")}.get(action_id)
+
+
+def overlay_lines(color):
+    return [p for p in json.loads(latest("map_overlay/json") or "{}").get("polygons") or [] if p.get("color") == color]
+
+
 def teleop(vx, vz):
     doc = b"\x01vx\x00" + struct.pack("<d", vx) + b"\x01vz\x00" + struct.pack("<d", vz) + b"\x00"
     c.publish("teleop", struct.pack("<i", len(doc) + 4) + doc)
@@ -211,6 +222,12 @@ check("teleop ignored in IDLE", not sent_speeds(t0), str(sent_speeds(t0)))
 c.publish("action", "mower_logic:idle/start_area_recording")
 state = wait_for(lambda: b'"current_state":"AREA_RECORDING"' in (latest("robot_state/json") or b""), 3)
 check("state AREA_RECORDING", bool(state))
+check("first recording step: start_recording and record_dock", bool(wait_for(
+    lambda: enabled(REC + "start_recording") == 1 and enabled(REC + "record_dock") == 1
+    and enabled(REC + "stop_recording") == 0, 3)))
+c.publish("action", REC + "start_recording")
+check("start_recording: the step the app calls recording", bool(wait_for(
+    lambda: enabled(REC + "stop_recording") == 1 and enabled(REC + "start_recording") == 0, 3)))
 # Like the app on a mode change: one zero, then the joystick.
 teleop(0.0, 0.0)
 t0 = sim_time()
@@ -224,6 +241,9 @@ moving = [s for t, s in speeds if s != [0.0, 0.0]]
 zeros = [t for t, s in speeds if s == [0.0, 0.0]]
 check("teleop drives, clamped to 0.3", len(moving) >= 8 and all(s[0] == 0.3 for s in moving), f"{len(moving)} frames, {moving[:2]}")
 check("stop after teleop: 3 zeros", len(zeros) == 3, str(zeros))
+line = wait_for(lambda: [p for p in overlay_lines("blue") if len(p["poly"]) >= 2], 3)
+check("map_overlay: the open line, in both formats", bool(line) and line[0]["is_closed"] == 0 and line[0]["closed"] == 0
+      and line[0]["polygon"]["points"] == line[0]["poly"], json.dumps(line[0] if line else latest("map_overlay/json"))[:200])
 
 set_flags(lift=1)
 state = wait_for(lambda: b'"emergency":1' in (latest("robot_state/json") or b""), 3)
@@ -284,6 +304,8 @@ check("exit_recording_mode stops at once: 3 zeros within 0.3 s", last_moving is 
       and zeros[0] - last_moving < 0.3, f"last moving {last_moving}, zeros {zeros}")
 state = wait_for(lambda: b'"current_state":"IDLE"' in (latest("robot_state/json") or b""), 3)
 check("state IDLE", bool(state))
+check("map_overlay empty after leaving", bool(wait_for(
+    lambda: latest("map_overlay/json") is not None and json.loads(latest("map_overlay/json"))["polygons"] == [], 3)))
 s = json.loads(wait_for(lambda: latest("robot_state/json") if b'"heading_valid":1' in (latest("robot_state/json") or b"")
                         else None, 3) or latest("robot_state/json"))
 check("heading aligned after driving, GPS above 0", s["pose"]["heading_valid"] == 1 and s["gps_percentage"] > 0.5,

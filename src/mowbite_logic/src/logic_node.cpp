@@ -121,6 +121,8 @@ class LogicNode : public rclcpp::Node {
 
     state_timer_ = create_wall_timer(std::chrono::seconds(1), [this] { OnStateTimer(); });
     sensor_timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] { PublishReadings(); });
+    // At most twice a second: a long outline is a large message. Retained, so a late app sees the lines too.
+    overlay_timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] { PublishOverlay(); });
     PublishActionsIfChanged();
   }
 
@@ -255,6 +257,20 @@ class LogicNode : public rclcpp::Node {
     }
   }
 
+  void PublishOverlay() {
+    // The first, empty one replaces the lines of a recording before a restart, so it waits for the bridge.
+    if (publish_pub_->get_subscription_count() == 0) return;
+    mowbite_msgs::msg::MqttPublish msg;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!core_.TakeOverlayChanged()) return;
+      msg.payload = core_.MapOverlay().dump();
+    }
+    msg.topic = "map_overlay/json";
+    msg.retain = true;
+    publish_pub_->publish(msg);
+  }
+
   // Sends stop requests, events and changed actions collected by the core.
   void Flush() {
     std::vector<Event> events;
@@ -346,6 +362,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr teleop_sub_;
   rclcpp::TimerBase::SharedPtr state_timer_;
   rclcpp::TimerBase::SharedPtr sensor_timer_;
+  rclcpp::TimerBase::SharedPtr overlay_timer_;
 };
 
 }  // namespace mowbite_logic

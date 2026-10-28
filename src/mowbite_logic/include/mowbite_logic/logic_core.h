@@ -183,6 +183,9 @@ class LogicCore {
   // Lines for the log since the last call.
   std::vector<std::string> TakeNotices();
   bool Emergency() const;
+  // The lines of map_overlay/json, none outside of AREA_RECORDING.
+  json MapOverlay() const;
+  bool TakeOverlayChanged();
   const AreaRecorder& recorder() const {
     return recorder_;
   }

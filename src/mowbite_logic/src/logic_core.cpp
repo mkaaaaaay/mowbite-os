@@ -129,6 +129,15 @@ void LogicCore::PullRecorder() {
   actions_changed_ |= recorder_.TakeActionsChanged();
 }
 
+json LogicCore::MapOverlay() const {
+  // The recorder is reset when the state changes, so outside of AREA_RECORDING it has no lines.
+  return recorder_.Overlay();
+}
+
+bool LogicCore::TakeOverlayChanged() {
+  return recorder_.TakeOverlayChanged();
+}
+
 std::vector<std::string> LogicCore::TakeNotices() {
   return recorder_.TakeNotices();
 }

@@ -96,6 +96,12 @@ class AreaRecorder {
   std::vector<std::string> TakeNotices();
   bool TakeActionsChanged();
 
+  // map_overlay/json like OpenMower: the outline green, obstacles red, the open ring blue. Each line also carries
+  // polygon.points and closed, which MowBite up to 1.4.0-beta.16 reads instead of poly and is_closed.
+  json Overlay() const;
+  // True once after the lines changed.
+  bool TakeOverlayChanged();
+
   const std::optional<Ring>& outline() const {
     return outline_;
   }
@@ -145,6 +151,7 @@ class AreaRecorder {
   std::vector<Event> events_;
   std::vector<std::string> notices_;
   bool actions_changed_ = true;
+  bool overlay_changed_ = true;
 };
 
 }  // namespace mowbite_logic

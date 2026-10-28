@@ -121,6 +121,7 @@ void AreaRecorder::Reset() {
   accuracy_blocked_ = false;
   full_reported_ = false;
   actions_changed_ = true;
+  overlay_changed_ = true;
 }
 
 AreaRecorder::Result AreaRecorder::Refuse(const std::string& action, const std::string& reason) {
@@ -184,6 +185,7 @@ bool AreaRecorder::CloseRing(const std::string& action) {
   recording_ = false;
   current_.clear();
   collect_requested_ = false;
+  overlay_changed_ = true;
   return true;
 }
 
@@ -272,6 +274,7 @@ void AreaRecorder::OnMapEditResult(bool ok, const std::string& id, const std::st
   notices_.push_back("Saved the " + std::string(edit.type == "nav" ? "navigation" : "mowing") + " area " + id);
   outline_.reset();
   obstacles_.clear();
+  overlay_changed_ = true;
 }
 
 size_t AreaRecorder::PointCount() const {
@@ -289,6 +292,7 @@ void AreaRecorder::AddPoint(double x, double y) {
     return;
   }
   current_.push_back({x, y});
+  overlay_changed_ = true;
 }
 
 void AreaRecorder::OnPose(double x, double y, float position_accuracy) {
@@ -365,6 +369,32 @@ std::vector<bool> AreaRecorder::Enabled() const {
   }
   // start_manual_mowing and stop_manual_mowing stay off: the blade comes after phase 7.
   return on;
+}
+
+json AreaRecorder::Overlay() const {
+  json polygons = json::array();
+  const auto add = [&polygons](const Ring& ring, bool closed, double line_width, const char* color) {
+    // Like OpenMower: a single point is no line.
+    if (ring.size() < 2) return;
+    json points = json::array();
+    for (const auto& p : ring) points.push_back({{"x", p.x}, {"y", p.y}});
+    polygons.push_back({{"poly", points},
+                        {"is_closed", closed ? 1 : 0},
+                        {"line_width", line_width},
+                        {"color", color},
+                        {"polygon", {{"points", points}}},
+                        {"closed", closed ? 1 : 0}});
+  };
+  if (outline_) add(*outline_, true, 0.05, "green");
+  for (const auto& ring : obstacles_) add(ring, true, 0.05, "red");
+  if (recording_) add(current_, false, 0.1, "blue");
+  return {{"polygons", polygons}};
+}
+
+bool AreaRecorder::TakeOverlayChanged() {
+  const bool changed = overlay_changed_;
+  overlay_changed_ = false;
+  return changed;
 }
 
 std::vector<Event> AreaRecorder::TakeEvents() {
