@@ -201,7 +201,11 @@ def nmea_coordinate(value, positive, negative, degree_digits):
     hemisphere = positive if value >= 0 else negative
     value = abs(value)
     degrees = int(value)
-    minutes = (value - degrees) * 60.0
+    # Rounded first: 59.99999999 would print as 60.0000000, which a receiver never sends (and tron_gnss drops).
+    minutes = round((value - degrees) * 60.0, 7)
+    if minutes >= 60.0:
+        degrees += 1
+        minutes -= 60.0
     return f"{degrees:0{degree_digits}d}{minutes:010.7f}", hemisphere
 
 
@@ -294,11 +298,20 @@ def remove_links(links):
             os.remove(link)
 
 
+SEND_ERRORS = {}
+
+
 def send(fd, data):
+    """Writes to a pty; a driver that does not read (full buffer) or is not there costs the data, the first error of
+    each kind is reported."""
     try:
         os.write(fd, data)
-    except OSError:
-        pass
+    except OSError as e:
+        key = (fd, e.errno)
+        SEND_ERRORS[key] = SEND_ERRORS.get(key, 0) + 1
+        if SEND_ERRORS[key] == 1:
+            print(f"fake_tron: writing to {os.ttyname(fd) if os.isatty(fd) else fd} failed: {e}", file=sys.stderr,
+                  flush=True)
 
 
 def write_state(path, now, pose):
@@ -339,6 +352,8 @@ def main():
     pose = Pose(args.start[0], args.start[1], math.radians(args.start[2]))
     host = HostLink(args.host_timeout)
     course = None
+    # Cutter: on with a speed in percent from the last cutter frame; it stops with the wheels (lift, stop, no host).
+    cutter_percent = 0
 
     t0 = time.monotonic()
     last = 0.0
@@ -366,8 +381,13 @@ def main():
                 # 24.5 V, -3.0 A charging on the dock or 1.2 A discharging, 80 %, 30 degC
                 battery = struct.pack("<HhBbbI", 245, -30 if dock else 12, 80, dock, 30, 0)
                 motor = struct.pack("<hhhbb", 0, 0, 2450, 30, 0)
+                if blocked or host.last_rx is None or now - host.last_rx > args.host_timeout:
+                    cutter_percent = 0
+                # Assumed 2800 rpm at full speed, 0.8 A while turning (10 mA steps).
+                cutter = struct.pack("<hhhbb", 28 * cutter_percent, 80 if cutter_percent else 0, 2450, 30, 0)
                 version = bytes([0, 6, 36, 0, 6, 34, 0, 0, 0])
-                send(mcu, encode([(FROM_MCU, 5, battery), (FROM_MCU, 12, version), (FROM_MCU, 13, motor * 4)]))
+                send(mcu, encode([(FROM_MCU, 5, battery), (FROM_MCU, 12, version),
+                                  (FROM_MCU, 13, cutter + motor * 3)]))
             if now >= next_gnss:
                 next_gnss = now + GNSS_PERIOD
                 ax, ay = pose.antenna(*args.antenna_offset)
@@ -405,6 +425,10 @@ def main():
                         if not blocked:
                             host.on_speed(*speed_cmd)
                         entry["speed"] = [round(v, 3) for v in speed_cmd]
+                    if packet_type == TO_MCU and module == 11 and len(payload) >= 4:
+                        on = payload[0] == 1
+                        cutter_percent = min(100, struct.unpack("<H", payload[2:4])[0]) if on and not blocked else 0
+                        entry["cutter"] = cutter_percent
                     log.write(entry)
     finally:
         remove_links((args.link, args.gnss_link, args.imu_link))

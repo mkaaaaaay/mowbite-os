@@ -144,6 +144,12 @@ class NmeaTest(unittest.TestCase):
         args.update(kw)
         return ft.gnss_sentences(**args).decode().splitlines()
 
+    def test_minutes_never_round_to_sixty(self):
+        # Just south of a whole degree: 59.99999999 minutes are the next degree, not "60.0000000".
+        self.assertEqual(ft.nmea_coordinate(52.0 - 1e-12, "N", "S", 2), ("5200.0000000", "N"))
+        self.assertEqual(ft.nmea_coordinate(9.0 - 1e-12, "E", "W", 3), ("00900.0000000", "E"))
+        self.assertEqual(ft.nmea_coordinate(52.0 - 1e-6, "N", "S", 2), ("5159.9999400", "N"))
+
     def test_checksums_and_kinds(self):
         lines = self.sentences()
         self.assertEqual([l[3:6] for l in lines], ["GGA", "RMC", "VTG"])
