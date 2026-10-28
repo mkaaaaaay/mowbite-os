@@ -1,10 +1,15 @@
-"""Drives MowBite OS like the app does and checks the answers.
+"""Checks a mower against the OpenMower app interface the way the app uses it (masterplan 3.8).
 
-Needs mosquitto on 127.0.0.1:1883 and `ros2 launch mowbite_sim sim.launch.py` running with its default paths.
+Read-only by default: what the mower publishes and answers without being asked to act. --write adds the steps that act
+(map.replace, actions, teleop, flags); it needs the simulated MowBite OS, which alone offers the RPC sim.flags.
+stdout: one JSON document with a status (ok, missing, different, skipped) per point; PASS/FAIL/SKIP lines go to stderr.
+Exit 0 without missing or different, 1 with, 2 for a wrong call or a mower that cannot be reached.
 """
+import argparse
 import datetime
 import json
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -14,16 +19,56 @@ import zoneinfo
 
 import paho.mqtt.client as mqtt
 
-FLAGS = "/tmp/mowbite_sim_flags.json"
-LOG = "/tmp/mowbite_sim_rx.jsonl"
+parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+parser.add_argument("--host", required=True)
+parser.add_argument("--port", type=int, required=True, help="MQTT over TCP")
+parser.add_argument("--target", required=True, choices=["openmower", "mowbite-os"])
+parser.add_argument("--user", default=os.environ.get("MQTT_USER"))
+parser.add_argument("--pass", dest="password", default=os.environ.get("MQTT_PASS"))
+parser.add_argument("--app-url", help="accepted for the common call of the test series, not used here")
+parser.add_argument("--seconds", type=float, default=2.0, help="how long to collect what the mower publishes")
+parser.add_argument("--write", action="store_true", help="also act on the mower; simulated MowBite OS only")
+parser.add_argument("--sim-log", help="JSON lines log of the simulated MCU, for the checks of the frames it received")
+args = parser.parse_args()
+if args.write and args.target != "mowbite-os":
+    parser.error("--write is implemented for --target mowbite-os only")
+
+LOG = args.sim_log
 msgs = []
-ok = True
+results = []
 
 
-def check(name, cond, detail=""):
-    global ok
-    print(("PASS " if cond else "FAIL ") + name + (f"  [{detail}]" if detail else ""))
-    ok = ok and cond
+def record(point, status, example=""):
+    results.append({"point": point, "status": status, "example": example})
+    label = {"ok": "PASS ", "skipped": "SKIP "}.get(status, "FAIL ")
+    print(label + point + (f"  [{example}]" if example else ""), file=sys.stderr)
+
+
+def check(name, cond, detail="", point=None, missing=False):
+    """missing: what an absent part means for a mandatory part of the OpenMower interface (3.1)."""
+    record(point or "3.1 " + name, "ok" if cond else ("missing" if missing else "different"), detail)
+
+
+def skip(name, reason, point=None):
+    record(point or "3.1 " + name, "skipped", reason)
+
+
+def check_log(name, cond, detail="", point=None):
+    if LOG:
+        check(name, cond, detail, point)
+    else:
+        skip(name, "needs the MCU log of the simulation (--sim-log)", point)
+
+
+def finish(code=None):
+    summary = {k: sum(r["status"] == k for r in results) for k in ("ok", "missing", "different", "skipped")}
+    print(json.dumps({"target": args.target, "host": args.host, "write": args.write, "points": results,
+                      "summary": summary}, indent=1))
+    sys.stdout.flush()
+    c.loop_stop()
+    code = code if code is not None else (1 if summary["missing"] or summary["different"] else 0)
+    print("RESULT", "OK" if code == 0 else "FAILED", file=sys.stderr, flush=True)
+    sys.exit(code)
 
 
 def on_message(_c, _u, m):
@@ -48,8 +93,8 @@ def wait_for(pred, timeout=5.0):
 
 
 def set_flags(**flags):
-    with open(FLAGS, "w") as f:
-        json.dump(flags, f)
+    r = rpc("sim.flags", [flags], "flags")
+    assert r and "result" in r, f"sim.flags failed: {r}"
 
 
 def rpc(method, params=None, rid="1", timeout=5.0):
@@ -106,6 +151,8 @@ class Hold:
 
 def sent_speeds(since):
     out = []
+    if not LOG:
+        return out
     with open(LOG) as f:
         for line in f:
             e = json.loads(line)
@@ -115,59 +162,156 @@ def sent_speeds(since):
 
 
 def sim_time():
+    if not LOG:
+        return 0.0
     with open(LOG) as f:
         lines = f.readlines()
     return json.loads(lines[-1])["t"] if lines else 0.0
 
 
 c = mqtt.Client("stack_test")
+if args.user:
+    c.username_pw_set(args.user, args.password)
+connected = []
+c.on_connect = lambda _c, _u, _f, rc: connected.append(rc)
 c.on_message = on_message
-c.connect("127.0.0.1", 1883)
+try:
+    c.connect(args.host, args.port)
+except OSError as e:
+    print(f"cannot reach {args.host}:{args.port}: {e}", file=sys.stderr)
+    sys.exit(2)
 c.subscribe("#")
 c.loop_start()
-time.sleep(2)
+time.sleep(args.seconds)
+if connected and connected[0] != 0:
+    print(f"the broker refused the connection (code {connected[0]})", file=sys.stderr)
+    sys.exit(2)
 
 retained = {top for _, top, _, r in msgs if r}
 for top in ["capabilities/json", "version/json", "params/json", "sensor_infos/json", "actions/json"]:
-    check("retained " + top, top in retained)
+    check("retained " + top, top in retained, missing=True)
 
 params = json.loads(latest("params/json") or "{}")
-check("params /ll/board is Tron", params.get("/ll/board") == "Tron", str(params.get("/ll/board")))
+if args.target == "mowbite-os":
+    check("params /ll/board is Tron", params.get("/ll/board") == "Tron", str(params.get("/ll/board")))
+else:
+    skip("params /ll/board is Tron", "MowBite OS only")
 
 infos = json.loads(latest("sensor_infos/json") or "[]")
 ids = sorted(i["sensor_id"] for i in infos)
-check("sensor ids", len(ids) == 11 and "om_v_battery" in ids and "om_gps_accuracy" in ids, ",".join(ids))
+check("sensor ids", "om_v_battery" in ids and "om_gps_accuracy" in ids and (len(ids) == 11 or args.target != "mowbite-os"),
+      ",".join(ids), missing=True)
 battery_info = next((i for i in infos if i["sensor_id"] == "om_v_battery"), {})
-check("battery max 25.2 and 0/1 flags", battery_info.get("max_value") == 25.2 and battery_info.get("has_min_max") == 1,
-      json.dumps(battery_info))
+if args.target == "mowbite-os":
+    check("battery max 25.2 and 0/1 flags", battery_info.get("max_value") == 25.2 and battery_info.get("has_min_max") == 1,
+          json.dumps(battery_info))
+else:
+    skip("battery max 25.2 and 0/1 flags", "MowBite OS only")
 
 state = wait_for(lambda: latest("robot_state/json"))
-check("robot_state compact", state is not None and b'"current_state":"IDLE"' in state, (state or b"")[:160].decode())
-s = json.loads(state)
+s = json.loads(state) if state else {}
+check("robot_state fields", all(k in s for k in ("battery_percentage", "gps_percentage", "current_state", "emergency",
+                                                  "is_charging", "pose")), (state or b"")[:160].decode(), missing=True)
+v = wait_for(lambda: latest("sensors/om_v_battery/data"))
+try:
+    float(v)
+    battery_ok = True
+except (TypeError, ValueError):
+    battery_ok = False
+check("sensor value text", battery_ok, str(v), missing=True)
+
+actions = json.loads(latest("actions/json") or "[]")
+by_id = {a["action_id"]: a["enabled"] for a in actions}
+check("actions", "mower_logic/reset_emergency" in by_id, f"{len(actions)} actions", missing=True)
+
+r = rpc("rpc.methods")
+methods = r["result"] if r and isinstance(r.get("result"), list) else None
+if methods is not None:
+    check("rpc.methods", "rpc.ping" in methods, json.dumps(methods), missing=True)
+elif args.target == "mowbite-os":
+    check("rpc.methods", False, "no answer", missing=True)
+else:
+    skip("rpc.methods", "no answer, older mowers have none")
+if args.write and (methods is None or "sim.flags" not in methods):
+    print("refusing --write: the mower does not offer sim.flags, so it is not a simulation", file=sys.stderr)
+    sys.exit(2)
+
+
+def offers(method):
+    """True when rpc.methods lists the method; a MowBite OS promises it, an OpenMower may lack it (K2)."""
+    if methods is not None and method in methods:
+        return True
+    if args.target == "mowbite-os":
+        check(method + " is offered", False, "not in rpc.methods", missing=True)
+    else:
+        skip(method, "not in rpc.methods")
+    return False
+
+
+if offers("system.info"):
+    r = rpc("system.info", None, "info")
+    info = (r or {}).get("result") or {}
+    check("system.info", info.get("name") == "mowbite-os" and info.get("version") and info.get("platform")
+          and isinstance(info.get("schema"), int), json.dumps(info))
+for method in ("map.replace", "mowing.plan"):
+    offers(method)
+if offers("events.history"):
+    r = rpc("events.history", None, "2")
+    types = [e.get("type") for e in (r or {}).get("result", [])]
+    check("events.history", isinstance((r or {}).get("result"), list) and (args.target != "mowbite-os" or "BOOTED" in types),
+          ",".join(map(str, types)))
+if offers("logs.recent"):
+    r = rpc("logs.recent", {"level": "WARN"}, "9")
+    check("logs.recent answers", r is not None and isinstance(r.get("result"), list),
+          f'{len((r or {}).get("result", []))} entries')
+if offers("map.area_properties"):
+    r = rpc("map.area_properties", None, "4")
+    expected = ["name", "type", "active", "mowable", "angle", "outline_count", "outline_overlap_count", "outline_offset"]
+    check("map.area_properties", r and isinstance(r.get("result"), list) and (r["result"] == expected
+                                                                              or args.target != "mowbite-os"),
+          json.dumps(r and r.get("result")))
+r = rpc("no.such.method", None, "3")
+check("unknown method -32601", r and r.get("error", {}).get("code") == -32601, json.dumps(r and r.get("error")))
+c.publish("rpc/request", "{broken")
+r = wait_for(lambda: (latest("rpc/response") and json.loads(latest("rpc/response")).get("error", {}).get("code") == -32700))
+check("invalid json -32700", bool(r))
+
+
+def late_phone_gets_map(name, expected):
+    late = []
+    phone = mqtt.Client("late_phone")
+    if args.user:
+        phone.username_pw_set(args.user, args.password)
+    phone.on_message = lambda _c, _u, m: late.append((m.topic, m.payload, m.retain))
+    phone.connect(args.host, args.port)
+    phone.subscribe("map/json")
+    phone.loop_start()
+    time.sleep(1)
+    phone.loop_stop()
+    phone.disconnect()
+    check(name, any(t == "map/json" and ret and json.loads(p) == expected for t, p, ret in late), f"{len(late)} messages")
+
+
+if latest("map/json") is not None:
+    late_phone_gets_map("a phone connecting later gets the retained map", json.loads(latest("map/json")))
+else:
+    skip("a phone connecting later gets the retained map", "the mower has no map")
+
+if not args.write:
+    finish()
+
+# From here on the check acts on the simulation: values of its start state, then map, actions, teleop and flags.
+check("robot_state compact", b'"current_state":"IDLE"' in (state or b""), (state or b"")[:160].decode())
 check("robot_state values", s["emergency"] == 0 and s["is_charging"] == 0 and abs(s["battery_percentage"] - 0.8) < 1e-6,
       f'emergency={s["emergency"]} charging={s["is_charging"]} battery={s["battery_percentage"]}')
 check("standing since the start: heading not aligned, GPS 0", s["pose"]["heading_valid"] == 0 and s["gps_percentage"] == 0,
       f'heading_valid={s["pose"]["heading_valid"]} gps={s["gps_percentage"]} acc={s["pose"]["pos_accuracy"]}')
-v = wait_for(lambda: latest("sensors/om_v_battery/data"))
-check("sensor value text", v == b"24.500000", str(v))
+check("sensor value 24.5", v == b"24.500000", str(v))
 cs = wait_for(lambda: latest("sensors/om_charge_state/data"))
 check("charge state", cs == b"Not Charging", str(cs))
-
-actions = json.loads(latest("actions/json"))
-by_id = {a["action_id"]: a["enabled"] for a in actions}
-check("actions", by_id.get("mower_logic/reset_emergency") == 1 and by_id.get("mower_logic:idle/start_area_recording") == 1
-      and by_id.get("mower_logic:idle/start_mowing") == 0, f"{len(actions)} actions")
-
-r = rpc("rpc.methods")
-check("rpc.methods", r and "rpc.ping" in r["result"] and "logs.recent" in r["result"]
-      and "map.replace" in r["result"] and "map.area_properties" in r["result"] and "mowing.plan" in r["result"],
-      json.dumps(r and r["result"]))
-check("rpc.methods lists system.info", r and "system.info" in r["result"], "")
-r = rpc("system.info")
-info = r and r.get("result") or {}
-check("system.info", info.get("name") == "mowbite-os" and info.get("platform") and info.get("schema") == 1
-      and info.get("version"), json.dumps(info))
-# The planner is a process of its own, started by tron.launch.py.
+check("actions enabled at the start", by_id.get("mower_logic/reset_emergency") == 1
+      and by_id.get("mower_logic:idle/start_area_recording") == 1 and by_id.get("mower_logic:idle/start_mowing") == 0,
+      f"{len(actions)} actions")
 
 
 def planner_services():
@@ -175,14 +319,13 @@ def planner_services():
     return listed if "/mowbite_planner/plan_coverage" in listed and "/mowbite_planner/plan_transit" in listed else None
 
 
-# discovery takes a moment after the start
-services = wait_for(planner_services, 40) or []
-check("planner process offers plan_coverage and plan_transit", bool(services), "")
-r = rpc("events.history", None, "2")
-types = [e.get("type") for e in (r or {}).get("result", [])]
-check("events.history has BOOTED", "BOOTED" in types, ",".join(map(str, types)))
-r = rpc("planner.settings", None, "3")
-check("unknown method -32601", r and r["error"]["code"] == -32601, json.dumps(r and r.get("error")))
+if shutil.which("ros2"):
+    # discovery takes a moment after the start
+    services = wait_for(planner_services, 40) or []
+    check("planner process offers plan_coverage and plan_transit", bool(services), "")
+else:
+    skip("planner process offers plan_coverage and plan_transit", "needs the ros2 command on the same machine")
+
 
 # The map the way the app saves it: open rings, settings of its own, a property the mower does not know.
 APP_MAP = {
@@ -194,9 +337,6 @@ APP_MAP = {
     ],
     "docking_stations": [{"id": "dock", "position": {"x": -1.5, "y": 3.0}, "heading": 3.14}],
 }
-r = rpc("map.area_properties", None, "4")
-check("map.area_properties", r and r["result"] == ["name", "type", "active", "mowable", "angle", "outline_count",
-                                                  "outline_overlap_count", "outline_offset"], json.dumps(r and r.get("result")))
 r = rpc("map.replace", [APP_MAP], "5")
 check("map.replace stores", r and r.get("result") == "Successfully stored map (2 areas)", json.dumps(r))
 published = wait_for(lambda: (latest("map/json") if b'"lawn"' in (latest("map/json") or b"") else None))
@@ -252,21 +392,7 @@ for params, message in ((None, "parameters must be an object"), ({"area_id": "no
     r = rpc("mowing.plan", params, "11")
     check("mowing.plan refuses: " + message, r and r.get("error", {}).get("code") == -32602
           and r["error"]["message"] == message, json.dumps(r and r.get("error")))
-# A phone that connects later gets the map from the broker.
-late = []
-phone = mqtt.Client("late_phone")
-phone.on_message = lambda _c, _u, m: late.append((m.topic, m.payload, m.retain))
-phone.connect("127.0.0.1", 1883)
-phone.subscribe("map/json")
-phone.loop_start()
-time.sleep(1)
-phone.loop_stop()
-phone.disconnect()
-check("a phone connecting later gets the retained map", any(t == "map/json" and ret and json.loads(p) == saved
-                                                            for t, p, ret in late), f"{len(late)} messages")
-c.publish("rpc/request", "{broken")
-r = wait_for(lambda: (latest("rpc/response") and json.loads(latest("rpc/response")).get("error", {}).get("code") == -32700))
-check("invalid json -32700", bool(r))
+late_phone_gets_map("a phone connecting later gets the retained map after map.replace", saved)
 
 # Teleop does nothing in IDLE
 t0 = sim_time()
@@ -274,7 +400,7 @@ for _ in range(5):
     teleop(0.2, 0.0)
     time.sleep(0.1)
 time.sleep(0.3)
-check("teleop ignored in IDLE", not sent_speeds(t0), str(sent_speeds(t0)))
+check_log("teleop ignored in IDLE", not sent_speeds(t0), str(sent_speeds(t0)))
 
 c.publish("action", "mower_logic:idle/start_area_recording")
 state = wait_for(lambda: b'"current_state":"AREA_RECORDING"' in (latest("robot_state/json") or b""), 3)
@@ -296,8 +422,8 @@ time.sleep(1.0)
 speeds = sent_speeds(t0)
 moving = [s for t, s in speeds if s != [0.0, 0.0]]
 zeros = [t for t, s in speeds if s == [0.0, 0.0]]
-check("teleop drives, clamped to 0.3", len(moving) >= 8 and all(s[0] == 0.3 for s in moving), f"{len(moving)} frames, {moving[:2]}")
-check("stop after teleop: 3 zeros", len(zeros) == 3, str(zeros))
+check_log("teleop drives, clamped to 0.3", len(moving) >= 8 and all(s[0] == 0.3 for s in moving), f"{len(moving)} frames, {moving[:2]}")
+check_log("stop after teleop: 3 zeros", len(zeros) == 3, str(zeros))
 line = wait_for(lambda: [p for p in overlay_lines("blue") if len(p["poly"]) >= 2], 3)
 check("map_overlay: the open line, in both formats", bool(line) and line[0]["is_closed"] == 0 and line[0]["closed"] == 0
       and line[0]["polygon"]["points"] == line[0]["poly"], json.dumps(line[0] if line else latest("map_overlay/json"))[:200])
@@ -323,7 +449,7 @@ t0 = sim_time()
 for _ in range(5):
     teleop(0.2, 0.0)
     time.sleep(0.1)
-check("teleop blocked during emergency", not [s for t, s in sent_speeds(t0) if s != [0.0, 0.0]])
+check_log("teleop blocked during emergency", not [s for t, s in sent_speeds(t0) if s != [0.0, 0.0]])
 # The joystick is still held while the emergency is reset.
 hold = Hold(0.2, 0.0)
 c.publish("action", "mower_logic/reset_emergency")
@@ -334,7 +460,7 @@ check("reset_emergency clears", bool(state))
 check("emergency_reason 0 after reset", json.loads(latest("robot_state/json")).get("emergency_reason") == 0)
 t0 = sim_time()
 time.sleep(1.5)
-check("held joystick does not drive after reset", not [s for t, s in sent_speeds(t0) if s != [0.0, 0.0]],
+check_log("held joystick does not drive after reset", not [s for t, s in sent_speeds(t0) if s != [0.0, 0.0]],
       str(sent_speeds(t0)[:3]))
 hold.release()
 t0 = sim_time()
@@ -343,7 +469,7 @@ for _ in range(5):
     time.sleep(0.1)
 teleop(0.0, 0.0)
 time.sleep(0.5)
-check("teleop drives again after a zero", len([s for t, s in sent_speeds(t0) if s != [0.0, 0.0]]) >= 4,
+check_log("teleop drives again after a zero", len([s for t, s in sent_speeds(t0) if s != [0.0, 0.0]]) >= 4,
       str(sent_speeds(t0)[:3]))
 
 # Leaving the recording mode while the joystick is held stops at once, not after the 0.5 s watchdog.
@@ -357,7 +483,7 @@ time.sleep(0.3)
 speeds = sent_speeds(t0)
 last_moving = max((t for t, s in speeds if s != [0.0, 0.0]), default=None)
 zeros = [t for t, s in speeds if s == [0.0, 0.0] and last_moving is not None and t > last_moving]
-check("exit_recording_mode stops at once: 3 zeros within 0.3 s", last_moving is not None and len(zeros) == 3
+check_log("exit_recording_mode stops at once: 3 zeros within 0.3 s", last_moving is not None and len(zeros) == 3
       and zeros[0] - last_moving < 0.3, f"last moving {last_moving}, zeros {zeros}")
 state = wait_for(lambda: b'"current_state":"IDLE"' in (latest("robot_state/json") or b""), 3)
 check("state IDLE", bool(state))
@@ -367,9 +493,11 @@ s = json.loads(wait_for(lambda: latest("robot_state/json") if b'"heading_valid":
                         else None, 3) or latest("robot_state/json"))
 check("heading aligned after driving, GPS above 0", s["pose"]["heading_valid"] == 1 and s["gps_percentage"] > 0.5,
       f'heading_valid={s["pose"]["heading_valid"]} gps={s["gps_percentage"]} acc={s["pose"]["pos_accuracy"]}')
-with open(LOG) as f:
-    clears = [json.loads(l) for l in f if '"mod": 10' in l and '"type": 0,' in l]
-check("clear frame sent", len(clears) == 1 and clears[0]["hex"] == "00" * 8, str(clears))
+clears = []
+if LOG:
+    with open(LOG) as f:
+        clears = [json.loads(l) for l in f if '"mod": 10' in l and '"type": 0,' in l]
+check_log("clear frame sent", len(clears) == 1 and clears[0]["hex"] == "00" * 8, str(clears))
 
 # The driver keeps the cause of a latch until the reset, also after the bumper is let go.
 set_flags(bumper=1)
@@ -393,8 +521,10 @@ check("charge state Fast Charge", bool(cs), str(latest("sensors/om_charge_state/
 set_flags()
 
 # The heartbeat carries the local time of TZ (default of tron.launch.py: Europe/Berlin), not UTC.
-with open(LOG) as f:
-    beats = [json.loads(l) for l in f if '"type": 255' in l]
+beats = []
+if LOG:
+    with open(LOG) as f:
+        beats = [json.loads(l) for l in f if '"type": 255' in l]
 b = bytes.fromhex(beats[-1]["hex"]) if beats else bytes(8)
 zone = zoneinfo.ZoneInfo(os.environ.get("TZ") or "Europe/Berlin")
 try:
@@ -402,14 +532,9 @@ try:
     skew = abs((datetime.datetime.now(zone) - sent).total_seconds())
 except ValueError:
     skew = None
-check("heartbeat in local time", skew is not None and skew < 5, f"{b.hex()} in {zone}, skew {skew}")
-
-r = rpc("logs.recent", {"level": "WARN"}, "9")
-check("logs.recent answers", r is not None and isinstance(r.get("result"), list), f'{len((r or {}).get("result", []))} entries')
+check_log("heartbeat in local time", skew is not None and skew < 5, f"{b.hex()} in {zone}, skew {skew}")
 
 r = rpc("map.replace", [{"areas": [], "docking_stations": []}], "10")
 check("an empty map empties it", r and "(0 areas)" in str(r.get("result")), json.dumps(r))
 
-c.loop_stop()
-print("RESULT", "OK" if ok else "FAILED")
-sys.exit(0 if ok else 1)
+finish()

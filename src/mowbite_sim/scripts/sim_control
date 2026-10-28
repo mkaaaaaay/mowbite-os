@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""RPC sim.flags for the simulated Tron: sets the flags file that fake_tron reads on every cycle.
+
+Only sim.launch.py starts it, so a mower that offers sim.flags in rpc.methods is a simulation.
+Params: one object (or a list with one object) of lift, stop, bumper, rain, dock, gnss_quality; {} clears all flags.
+"""
+import argparse
+import json
+import os
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+
+from mowbite_msgs.msg import RpcError, RpcMethods, RpcRequest, RpcResponse
+
+FLAGS = ("lift", "stop", "bumper", "rain", "dock", "gnss_quality")
+
+
+class SimControl(Node):
+    def __init__(self, path):
+        super().__init__("sim_control")
+        self.path = path
+        latched = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE,
+                             durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.methods = self.create_publisher(RpcMethods, "bridge/rpc/methods", latched)
+        self.response = self.create_publisher(RpcResponse, "bridge/rpc/response", 100)
+        self.error = self.create_publisher(RpcError, "bridge/rpc/error", 100)
+        self.create_subscription(RpcRequest, "bridge/rpc/request", self.on_request, 100)
+        self.methods.publish(RpcMethods(node_id="sim_control", methods=["sim.flags"]))
+
+    def fail(self, request, message):
+        self.error.publish(RpcError(code=RpcError.ERROR_INVALID_PARAMS, message=message, id=request.id))
+
+    def on_request(self, request):
+        if request.method != "sim.flags":
+            return
+        try:
+            params = json.loads(request.params) if request.params else None
+        except ValueError:
+            params = None
+        if isinstance(params, list) and len(params) == 1:
+            params = params[0]
+        if not isinstance(params, dict):
+            return self.fail(request, "parameters must be an object")
+        for key, value in params.items():
+            if key not in FLAGS or isinstance(value, bool) or not isinstance(value, int):
+                return self.fail(request, "flag is not one of " + ", ".join(FLAGS) + " with a whole number: " + key)
+        # Replace the file in one step so fake_tron never reads half of it.
+        with open(self.path + ".tmp", "w") as f:
+            json.dump(params, f)
+        os.replace(self.path + ".tmp", self.path)
+        self.response.publish(RpcResponse(result=json.dumps(params), id=request.id))
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--flags", required=True, help="JSON file that fake_tron reads")
+    args, ros_args = parser.parse_known_args()
+    rclpy.init(args=ros_args)
+    rclpy.spin(SimControl(args.flags))
+
+
+if __name__ == "__main__":
+    main()

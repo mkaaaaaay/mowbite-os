@@ -20,6 +20,10 @@ def generate_launch_description():
              "--state", LaunchConfiguration("state"),
              "--datum", datum_lat, datum_long, datum_height],
         output="screen")
+    sim_control = ExecuteProcess(
+        cmd=[PathJoinSubstitution([FindPackagePrefix("mowbite_sim"), "lib", "mowbite_sim", "sim_control"]),
+             "--flags", LaunchConfiguration("flags")],
+        output="screen")
     stack = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(PathJoinSubstitution([FindPackageShare("mowbite_bringup"), "launch",
                                                             "tron.launch.py"])),
@@ -46,6 +50,7 @@ def generate_launch_description():
         DeclareLaunchArgument("extra_config", default_value=PathJoinSubstitution(
             [FindPackageShare("mowbite_sim"), "config", "sim.yaml"])),
         fake_tron,
+        sim_control,
         # The pty has to exist before the driver looks for it.
         TimerAction(period=1.0, actions=[stack]),
     ])

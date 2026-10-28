@@ -11,6 +11,8 @@
   <exec_depend>mowbite_bringup</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>mowbite_msgs</exec_depend>
 
   <test_depend>launch_testing</test_depend>
   <test_depend>launch_testing_ament_cmake</test_depend>
