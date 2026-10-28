@@ -1,0 +1,31 @@
+# Parameters of MowBite OS on the Tron. Values marked as assumption are checked in phase 6.
+tron_mcu:
+  ros__parameters:
+    port: /dev/ttyS9
+    send_imu: true
+    # Assumption (the reference driver uses 0.5 s), set after measuring the heartbeat failsafe.
+    cmd_vel_timeout: 0.5
+    telemetry_timeout: 1.0
+    allow_blade: false
+    blade_speed_percent: 100
+    mow_height_mm: 60
+    bumper_latches_emergency: true
+    # Set after reading the versions of this Tron in phase 4.
+    expected_cutter_version: ""
+    expected_chassis_version: ""
+
+mowbite_logic:
+  ros__parameters:
+    # Assumption for 6S Li-ion until the discharge curve is measured.
+    battery_empty_voltage: 19.2
+    battery_full_voltage: 25.2
+    dock_charge_voltage: 28.0
+
+mowbite_bridge:
+  ros__parameters:
+    mqtt_host: 127.0.0.1
+    mqtt_port: 1883
+    data_dir: /userdata/mowbite
+    # Event history on the mower: at most this many days and MB, oldest days go first.
+    event_history_days: 60
+    event_history_max_mb: 20.0

@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mowbite_bringup</name>
+  <version>0.0.0</version>
+  <description>Launch files and parameters of MowBite OS</description>
+  <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
+  <license>GPL-3.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rclcpp_components</exec_depend>
+  <exec_depend>tron_mcu</exec_depend>
+  <exec_depend>mowbite_logic</exec_depend>
+  <exec_depend>mowbite_bridge</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
