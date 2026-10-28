@@ -8,3 +8,5 @@ bool success
 string id
 # Why it was refused, empty if it was set
 string message
+# Why it was not saved, empty if it was: INVALID, DATUM, TOO_LARGE or STORAGE
+string code

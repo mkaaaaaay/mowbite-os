@@ -405,6 +405,7 @@ TEST(MapServiceEdits, RefusesAnAreaThatIsNotOne) {
   auto result = service.AddArea("mow", "Line", {{0, 0}, {1, 0}});
   EXPECT_FALSE(result.ok);
   EXPECT_NE(result.message.find("Invalid area 'Line' (mow): "), std::string::npos) << result.message;
+  EXPECT_EQ(result.code, "INVALID");
   EXPECT_NE(result.message.find("outline needs at least 3 points"), std::string::npos) << result.message;
   EXPECT_TRUE(result.id.empty());
 
@@ -466,6 +467,7 @@ TEST(MapServiceEdits, RefusesAnAreaThatMakesTheMapTooLarge) {
   const auto result = service.AddArea("mow", "Big", many);
   EXPECT_FALSE(result.ok);
   EXPECT_NE(result.message.find("The map is too large"), std::string::npos) << result.message;
+  EXPECT_EQ(result.code, "TOO_LARGE");
   EXPECT_EQ(service.map_text(), before);
 }
 
@@ -612,7 +614,10 @@ TEST(MapDatum, StopsMowingWhenTheDatumChanged) {
   const auto events = again.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_TRUE(HasEvent(events, "mismatch"));
-  EXPECT_NE(events[0].details["reason"].get<std::string>().find("m apart"), std::string::npos);
+  EXPECT_EQ(events[0].details["reason"], "MAP_MISMATCH");
+  EXPECT_EQ(events[0].details["severity"], "error");
+  EXPECT_EQ(events[0].details["resume"], "user");
+  EXPECT_NE(events[0].details["message"].get<std::string>().find("m apart"), std::string::npos);
   // The same datum again is nothing new.
   again.SetDatum(Moved(1000.0));
   EXPECT_TRUE(again.TakeEvents().empty());
@@ -633,6 +638,7 @@ TEST(MapDatum, RefusesEveryWriteForAnotherDatumButEmptyingTheMap) {
   const auto area = service.AddArea("mow", "More", Square(2));
   EXPECT_FALSE(area.ok);
   EXPECT_NE(area.message.find("recorded for the datum"), std::string::npos) << area.message;
+  EXPECT_EQ(area.code, "DATUM");
   EXPECT_FALSE(service.SetDock({0, 0}, 0).ok);
   EXPECT_EQ(service.map().areas.size(), 2u);
   EXPECT_EQ(ReadAll(dir.path() / "map.json"), before);

@@ -34,6 +34,8 @@ struct EditResult {
   bool ok = false;
   std::string id;
   std::string message;
+  // SAVE_FAILED code when refused: INVALID, DATUM, TOO_LARGE or STORAGE.
+  std::string code;
 };
 
 // A line for the log of the node.

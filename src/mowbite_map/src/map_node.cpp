@@ -83,6 +83,7 @@ class MapNode : public rclcpp::Node {
           response->success = result.ok;
           response->id = result.id;
           response->message = result.message;
+          response->code = result.code;
           Flush();
         });
     set_dock_srv_ = create_service<mowbite_msgs::srv::SetDock>(
@@ -92,6 +93,7 @@ class MapNode : public rclcpp::Node {
           response->success = result.ok;
           response->id = result.id;
           response->message = result.message;
+          response->code = result.code;
           Flush();
         });
 

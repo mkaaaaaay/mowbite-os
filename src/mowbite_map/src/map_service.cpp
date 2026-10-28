@@ -26,6 +26,15 @@ RpcOutcome Failure(int code, std::string message) {
   return outcome;
 }
 
+// The SAVE_FAILED code of an edit for a failure of Commit.
+std::string SaveFailedCode(int rpc_code) {
+  switch (rpc_code) {
+    case kRpcRefused: return "DATUM";
+    case kRpcInvalidParams: return "TOO_LARGE";
+    default: return "STORAGE";
+  }
+}
+
 // 7 decimals of a degree are about a centimetre.
 std::string Describe(const Datum& datum) {
   char text[64];
@@ -197,9 +206,9 @@ EditResult MapService::SetDock(const Point& position, double heading) {
 EditResult MapService::Apply(const MapData& candidate, const std::string& id, const std::string& what) {
   // The checks of map.replace, which also close the ring of a new area.
   ParseResult parsed = ParseMap(ToJson(candidate));
-  if (!parsed.map) return {false, "", "Invalid " + what + ": " + parsed.error};
+  if (!parsed.map) return {false, "", "Invalid " + what + ": " + parsed.error, "INVALID"};
   RpcOutcome outcome = Commit(std::move(*parsed.map), false);
-  if (!outcome.ok) return {false, "", outcome.message};
+  if (!outcome.ok) return {false, "", outcome.message, SaveFailedCode(outcome.code)};
   notices_.push_back({Notice::Level::kInfo, "Stored the " + what + ", id " + id});
   return {true, id, ""};
 }
@@ -301,7 +310,12 @@ void MapService::Refresh() {
     case DatumState::kMismatch:
     case DatumState::kUnbound:
       notices_.push_back({Notice::Level::kError, "No mowing, the map does not fit the datum: " + status_.reason});
-      events_.push_back({"MAP_DATUM", json{{"state", DatumStateName(status_.datum)}, {"reason", status_.reason}}});
+      // Names and rating as the events of mowbite_logic (masterplan 3.1a).
+      events_.push_back({"MAP_DATUM", json{{"state", DatumStateName(status_.datum)},
+                                           {"reason", "MAP_MISMATCH"},
+                                           {"message", status_.reason},
+                                           {"severity", "error"},
+                                           {"resume", "user"}}});
       break;
     case DatumState::kMatch: notices_.push_back({Notice::Level::kInfo, "The map belongs to the datum in use"}); break;
     case DatumState::kUnknown:

@@ -11,3 +11,5 @@ bool success
 string id
 # Why the area was refused, empty if it was added
 string message
+# Why it was not saved, empty if it was: INVALID, DATUM, TOO_LARGE or STORAGE
+string code
