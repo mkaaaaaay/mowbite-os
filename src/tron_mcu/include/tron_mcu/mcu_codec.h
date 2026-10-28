@@ -209,6 +209,9 @@ std::optional<Version> DecodeBmsVersion(const std::vector<uint8_t>& payload);
 std::optional<uint32_t> DecodeUptime(const std::vector<uint8_t>& payload);
 std::string DecodeLog(const std::vector<uint8_t>& payload);
 
+// "major.minor.patch"
+std::string VersionString(const Version& version);
+
 }  // namespace tron
 
 #endif  // TRON_MCU_MCU_CODEC_H

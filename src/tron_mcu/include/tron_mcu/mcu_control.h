@@ -2,6 +2,7 @@
 #define TRON_MCU_MCU_CONTROL_H
 
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "tron_mcu/mcu_codec.h"
@@ -29,6 +30,10 @@ struct McuControlConfig {
   double clear_min_interval_s = 1.0;
   // Zero speed follows a clear frame only if the wheels were commanded this recently.
   double clear_zero_after_motion_s = 5.0;
+  // Firmware the driver was checked against, "major.minor.patch". Empty skips the check of that board. With a check,
+  // motion and blade stay blocked until a version frame matches; a release does not lift it.
+  std::string expected_cutter_version;
+  std::string expected_chassis_version;
 };
 
 struct McuControlStatus {
@@ -40,6 +45,8 @@ struct McuControlStatus {
   bool moving = false;
   bool blade_on = false;
   bool dock_contact = false;
+  // No version frame since the port opened, or one that does not match.
+  bool firmware_incompatible = false;
 };
 
 // Decides what goes to the MCU and when. Time is passed in (monotonic seconds), nothing here touches the port.
@@ -53,6 +60,8 @@ class McuControl {
   void OnDockContactSample(bool contact);
   // Every sample is forwarded at most once, so a dead IMU stops the stream.
   void OnImu(const ImuCounts& imu);
+  // Version frame of the MCU, about once a second. Returns false if it does not match the expected firmware.
+  bool OnVersions(const VersionInfo& versions);
 
   // Lift, stop and bumper latch the emergency as well; all of it stays until released.
   void LatchEmergency();
@@ -74,6 +83,7 @@ class McuControl {
   };
 
   bool TelemetryStale(double now) const;
+  bool FirmwareIncompatible() const;
   bool Lift(double now) const;
   bool Stop(double now) const;
   bool Bumper(double now) const;
@@ -107,6 +117,9 @@ class McuControl {
   int dock_samples_ = 0;
   bool charge_sent_ = false;
   double last_charge_s_ = 0;
+
+  // Unknown until the first version frame after the port opened.
+  std::optional<bool> firmware_ok_;
 
   std::optional<ImuCounts> pending_imu_;
   std::optional<double> last_imu_s_;

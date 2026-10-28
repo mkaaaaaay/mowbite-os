@@ -4,6 +4,9 @@ builtin_interfaces/Time stamp
 bool telemetry_ok
 # Lift, stop, bumper or a host request latch the emergency until it is released.
 bool emergency_latched
+# Firmware check on and no matching version frame since the port opened: motion and blade stay blocked, a release
+# does not lift it.
+bool firmware_incompatible
 bool lift
 bool stop
 bool bumper

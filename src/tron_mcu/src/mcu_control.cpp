@@ -9,6 +9,10 @@ namespace {
 // Tolerance for comparing loop times against deadlines.
 constexpr double kTimeEpsilon = 1e-6;
 
+bool VersionMatches(const std::string& expected, const Version& version) {
+  return expected.empty() || expected == VersionString(version);
+}
+
 }  // namespace
 
 McuControl::McuControl(const McuControlConfig& config) : config_(config) {
@@ -30,6 +34,15 @@ void McuControl::OnDockContactSample(bool contact) {
 
 void McuControl::OnImu(const ImuCounts& imu) {
   pending_imu_ = imu;
+}
+
+bool McuControl::OnVersions(const VersionInfo& versions) {
+  const bool ok = VersionMatches(config_.expected_cutter_version, versions.cutter_board) &&
+                  VersionMatches(config_.expected_chassis_version, versions.chassis_board);
+  // A mismatch also latches, so motion after a later matching frame still needs a release.
+  if (!ok && firmware_ok_ != false) LatchEmergency();
+  firmware_ok_ = ok;
+  return ok;
 }
 
 void McuControl::LatchEmergency() {
@@ -54,6 +67,8 @@ void McuControl::OnConnected(double now) {
   pending_cmd_.reset();
   blade_request_ = false;
   blade_on_ = false;
+  // After the port reopens the MCU might run another firmware, e.g. after an update.
+  firmware_ok_.reset();
   if (moving_) {
     moving_ = false;
     StartRepeat(stop_repeat_, ZeroSpeed(), now);
@@ -62,6 +77,11 @@ void McuControl::OnConnected(double now) {
 
 bool McuControl::TelemetryStale(double now) const {
   return !sensor_ || now - last_sensor_s_ > config_.telemetry_timeout_s;
+}
+
+bool McuControl::FirmwareIncompatible() const {
+  const bool checked = !config_.expected_cutter_version.empty() || !config_.expected_chassis_version.empty();
+  return checked && firmware_ok_ != true;
 }
 
 bool McuControl::Lift(double now) const {
@@ -140,7 +160,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     }
   }
 
-  const bool blocked = latched_ || TelemetryStale(now);
+  const bool blocked = latched_ || TelemetryStale(now) || FirmwareIncompatible();
   const bool dock_contact = dock_samples_ >= config_.dock_debounce_samples;
 
   if (blocked) {
@@ -217,6 +237,7 @@ McuControlStatus McuControl::Status(double now) const {
   status.moving = moving_;
   status.blade_on = blade_on_;
   status.dock_contact = dock_samples_ >= config_.dock_debounce_samples;
+  status.firmware_incompatible = FirmwareIncompatible();
   return status;
 }
 

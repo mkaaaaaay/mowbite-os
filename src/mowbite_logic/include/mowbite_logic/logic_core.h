@@ -17,6 +17,7 @@ using json = nlohmann::ordered_json;
 struct McuSnapshot {
   bool telemetry_ok = false;
   bool emergency_latched = false;
+  bool firmware_incompatible = false;
   bool lift = false;
   bool stop = false;
   bool bumper = false;
@@ -127,6 +128,7 @@ constexpr int kEmergencyTimeoutInputs = 1 << 1;
 constexpr int kEmergencyStop = 1 << 2;
 constexpr int kEmergencyLift = 1 << 3;
 constexpr int kEmergencyCollision = 1 << 5;
+constexpr int kEmergencyFirmwareIncompatible = 1 << 12;
 
 // The app repeats teleop every 100 ms while the joystick is held and sends one zero when it is let go.
 constexpr double kTeleopQuietS = 1.0;

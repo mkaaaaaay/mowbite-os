@@ -83,11 +83,12 @@ int LogicCore::EmergencyReason() const {
   if (mcu_.stop) reason |= kEmergencyStop;
   if (mcu_.lift) reason |= kEmergencyLift;
   if (mcu_.bumper) reason |= kEmergencyCollision;
+  if (mcu_.firmware_incompatible) reason |= kEmergencyFirmwareIncompatible;
   return reason;
 }
 
 void LogicCore::UpdateEmergency() {
-  const bool emergency = mcu_.emergency_latched || !mcu_.telemetry_ok;
+  const bool emergency = mcu_.emergency_latched || !mcu_.telemetry_ok || mcu_.firmware_incompatible;
   // The first report after the start only sets the state, it is no change worth an event.
   if (!mcu_seen_) {
     mcu_seen_ = true;

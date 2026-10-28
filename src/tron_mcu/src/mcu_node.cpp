@@ -11,7 +11,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/imu.hpp>
-#include <sstream>
 #include <std_srvs/srv/set_bool.hpp>
 #include <thread>
 
@@ -52,12 +51,6 @@ tron::WallClock LocalWallClock() {
   return wall;
 }
 
-std::string VersionString(const tron::Version& v) {
-  std::ostringstream s;
-  s << static_cast<int>(v.major) << "." << static_cast<int>(v.minor) << "." << static_cast<int>(v.patch);
-  return s.str();
-}
-
 }  // namespace
 
 class McuNode : public rclcpp::Node {
@@ -69,8 +62,6 @@ class McuNode : public rclcpp::Node {
     drive_current_scale_ = declare_parameter("drive_current_scale", 0.001);
     imu_roll_offset_deg_ = declare_parameter("imu_roll_offset_deg", 0.0);
     imu_pitch_offset_deg_ = declare_parameter("imu_pitch_offset_deg", 0.0);
-    expected_cutter_version_ = declare_parameter("expected_cutter_version", "");
-    expected_chassis_version_ = declare_parameter("expected_chassis_version", "");
 
     twist_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("wheel_twist", 10);
     status_pub_ = create_publisher<mowbite_msgs::msg::McuStatus>("mcu/status", 10);
@@ -106,8 +97,16 @@ class McuNode : public rclcpp::Node {
     config.blade_speed_percent = static_cast<uint16_t>(declare_parameter("blade_speed_percent", 100));
     config.mow_height_mm = static_cast<uint16_t>(declare_parameter("mow_height_mm", 60));
     config.bumper_latches_emergency = declare_parameter("bumper_latches_emergency", true);
+    config.expected_cutter_version = declare_parameter("expected_cutter_version", "");
+    config.expected_chassis_version = declare_parameter("expected_chassis_version", "");
     RCLCPP_INFO(get_logger(), "allow_blade: %d, cmd_vel_timeout: %.2f s, mow_height: %u mm", config.allow_blade,
                 config.cmd_vel_timeout_s, config.mow_height_mm);
+    if (config.expected_cutter_version.empty() && config.expected_chassis_version.empty()) {
+      RCLCPP_WARN(get_logger(), "Firmware check is off: expected_cutter_version and expected_chassis_version are empty");
+    } else {
+      RCLCPP_INFO(get_logger(), "Expecting MCU firmware cutter '%s', chassis '%s'; blocked until the MCU reports it",
+                  config.expected_cutter_version.c_str(), config.expected_chassis_version.c_str());
+    }
     return config;
   }
 
@@ -250,19 +249,16 @@ class McuNode : public rclcpp::Node {
 
   // Called with mutex_ held.
   void CheckVersions(const tron::VersionInfo& versions) {
-    std::string cutter = VersionString(versions.cutter_board);
-    std::string chassis = VersionString(versions.chassis_board);
+    std::string cutter = tron::VersionString(versions.cutter_board);
+    std::string chassis = tron::VersionString(versions.chassis_board);
     if (cutter != cutter_version_ || chassis != chassis_version_) {
       RCLCPP_INFO(get_logger(), "MCU versions: cutter %s, chassis %s", cutter.c_str(), chassis.c_str());
       cutter_version_ = cutter;
       chassis_version_ = chassis;
     }
-    bool cutter_ok = expected_cutter_version_.empty() || cutter == expected_cutter_version_;
-    bool chassis_ok = expected_chassis_version_.empty() || chassis == expected_chassis_version_;
-    if (!cutter_ok || !chassis_ok) {
-      // A firmware the driver was not checked against keeps the emergency latched.
-      control_.LatchEmergency();
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Unexpected MCU firmware: cutter %s, chassis %s",
+    if (!control_.OnVersions(versions)) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000,
+                            "Unexpected MCU firmware: cutter %s, chassis %s; motion and blade stay blocked",
                             cutter.c_str(), chassis.c_str());
     }
   }
@@ -306,6 +302,7 @@ class McuNode : public rclcpp::Node {
       msg.moving = state.moving;
       msg.blade_on = state.blade_on;
       msg.dock_contact = state.dock_contact;
+      msg.firmware_incompatible = state.firmware_incompatible;
 
       msg.battery_ok = battery_s_ && now_s - *battery_s_ < kReportMaxAge;
       if (msg.battery_ok) {
@@ -400,8 +397,6 @@ class McuNode : public rclcpp::Node {
   double drive_current_scale_;
   double imu_roll_offset_deg_;
   double imu_pitch_offset_deg_;
-  std::string expected_cutter_version_;
-  std::string expected_chassis_version_;
 
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::McuStatus>::SharedPtr status_pub_;

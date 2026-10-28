@@ -71,6 +71,19 @@ TEST(Logic, EmergencyEventsCarryReasonBits) {
   EXPECT_EQ(events[0].details["emergency"], false);
 }
 
+TEST(Logic, IncompatibleFirmwareIsEmergencyWithItsOwnBit) {
+  LogicCore core{LogicConfig{}};
+  core.OnMcuStatus(Healthy());
+  auto firmware = Healthy();
+  firmware.firmware_incompatible = true;
+  core.OnMcuStatus(firmware);
+  EXPECT_TRUE(core.RobotState().emergency);
+  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
+  auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].details["reason"], kEmergencyFirmwareIncompatible);
+}
+
 TEST(Logic, TelemetryTimeoutIsEmergency) {
   LogicCore core{LogicConfig{}};
   core.OnMcuStatus(Healthy());

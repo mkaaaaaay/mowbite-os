@@ -107,6 +107,7 @@ class LogicNode : public rclcpp::Node {
     McuSnapshot mcu;
     mcu.telemetry_ok = msg.telemetry_ok;
     mcu.emergency_latched = msg.emergency_latched;
+    mcu.firmware_incompatible = msg.firmware_incompatible;
     mcu.lift = msg.lift;
     mcu.stop = msg.stop;
     mcu.bumper = msg.bumper;

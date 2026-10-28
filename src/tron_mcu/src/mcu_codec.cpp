@@ -325,6 +325,10 @@ std::optional<uint32_t> DecodeUptime(const std::vector<uint8_t>& payload) {
   return GetU32(payload, 0);
 }
 
+std::string VersionString(const Version& version) {
+  return std::to_string(version.major) + "." + std::to_string(version.minor) + "." + std::to_string(version.patch);
+}
+
 std::string DecodeLog(const std::vector<uint8_t>& payload) {
   std::string text(payload.begin(), payload.end());
   text.erase(std::find(text.begin(), text.end(), '\0'), text.end());

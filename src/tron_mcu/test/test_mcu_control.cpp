@@ -89,6 +89,36 @@ class BladeControlTest : public ControlTest {
   }
 };
 
+class FirmwareControlTest : public ControlTest {
+ protected:
+  static McuControlConfig FirmwareConfig() {
+    McuControlConfig config;
+    config.allow_blade = true;
+    config.expected_cutter_version = "0.6.36";
+    config.expected_chassis_version = "0.6.34";
+    return config;
+  }
+  FirmwareControlTest() : ControlTest(FirmwareConfig()) {
+  }
+  static VersionInfo Versions(uint8_t cutter_patch, uint8_t chassis_patch) {
+    VersionInfo v;
+    v.cutter_board = {0, 6, cutter_patch};
+    v.chassis_board = {0, 6, chassis_patch};
+    return v;
+  }
+  // Commands motion and blade, runs on and tells whether either reached the MCU.
+  bool DrivesOrMows(double until) {
+    const size_t before = sent_.size();
+    control_.OnCmdVel(0.2f, 0.0f, now_);
+    control_.SetBlade(true);
+    Run(until);
+    for (size_t i = before; i < sent_.size(); i++) {
+      if (IsMovingSpeed(sent_[i].packet) || IsBladeOn(sent_[i].packet)) return true;
+    }
+    return false;
+  }
+};
+
 }  // namespace
 
 TEST_F(ControlTest, HeartbeatEvery100ms) {
@@ -322,6 +352,62 @@ TEST_F(ControlTest, BumperLatches) {
   Run(1.1);
   EXPECT_TRUE(Times(IsClear).empty());
   EXPECT_FALSE(control_.Status(now_).latched);
+}
+
+TEST_F(ControlTest, WithoutExpectedVersionsTheFirmwareIsNotChecked) {
+  Run(0.1);
+  EXPECT_FALSE(control_.Status(now_).firmware_incompatible);
+  EXPECT_TRUE(control_.OnVersions(VersionInfo{}));
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(0.2);
+  EXPECT_EQ(Times(IsMovingSpeed).size(), 1u);
+}
+
+TEST_F(FirmwareControlTest, BlockedUntilAVersionFrameMatches) {
+  Run(0.1);
+  EXPECT_TRUE(control_.Status(now_).firmware_incompatible);
+  EXPECT_FALSE(control_.Status(now_).latched);
+  EXPECT_FALSE(DrivesOrMows(0.5));
+  EXPECT_TRUE(control_.OnVersions(Versions(36, 34)));
+  EXPECT_FALSE(control_.Status(now_).firmware_incompatible);
+  EXPECT_TRUE(DrivesOrMows(0.7));
+}
+
+TEST_F(FirmwareControlTest, MismatchStaysBlockedAfterRelease) {
+  Run(0.1);
+  EXPECT_FALSE(control_.OnVersions(Versions(36, 35)));
+  auto status = control_.Status(now_);
+  EXPECT_TRUE(status.firmware_incompatible);
+  EXPECT_TRUE(status.latched);
+  control_.ReleaseEmergency(now_);
+  Run(0.5);
+  EXPECT_FALSE(control_.Status(now_).latched);
+  EXPECT_TRUE(control_.Status(now_).firmware_incompatible);
+  EXPECT_FALSE(DrivesOrMows(1.0));
+  // The next frame with the same wrong firmware does not latch again, the block stays as it is.
+  EXPECT_FALSE(control_.OnVersions(Versions(36, 35)));
+  EXPECT_FALSE(control_.Status(now_).latched);
+  EXPECT_FALSE(DrivesOrMows(1.5));
+}
+
+TEST_F(FirmwareControlTest, MatchAfterMismatchStillNeedsRelease) {
+  Run(0.1);
+  control_.OnVersions(Versions(30, 34));
+  control_.OnVersions(Versions(36, 34));
+  EXPECT_FALSE(control_.Status(now_).firmware_incompatible);
+  EXPECT_FALSE(DrivesOrMows(0.5));
+  control_.ReleaseEmergency(now_);
+  Run(0.6);
+  EXPECT_TRUE(DrivesOrMows(0.8));
+}
+
+TEST_F(FirmwareControlTest, ReconnectForgetsTheVersion) {
+  Run(0.1);
+  control_.OnVersions(Versions(36, 34));
+  EXPECT_TRUE(DrivesOrMows(0.3));
+  control_.OnConnected(now_);
+  EXPECT_TRUE(control_.Status(now_).firmware_incompatible);
+  EXPECT_FALSE(DrivesOrMows(0.8));
 }
 
 TEST_F(ControlTest, BladeRefusedByDefault) {
