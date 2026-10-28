@@ -13,13 +13,14 @@ find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_bridge REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 # Map model, storage and RPC handling without ROS, testable on any machine.
-add_library(mowbite_map_core STATIC src/map_model.cpp src/map_store.cpp src/map_service.cpp)
+add_library(mowbite_map_core STATIC src/map_model.cpp src/map_store.cpp src/map_service.cpp src/sha256.cpp)
 target_include_directories(mowbite_map_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(mowbite_map_core nlohmann_json::nlohmann_json)
+target_link_libraries(mowbite_map_core nlohmann_json::nlohmann_json OpenSSL::Crypto)
 set_target_properties(mowbite_map_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_map_component SHARED src/map_node.cpp)
@@ -38,7 +39,8 @@ install(TARGETS mowbite_map_core mowbite_map_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(mowbite_map_test test/test_map_model.cpp test/test_map_store.cpp test/test_map_service.cpp)
+  ament_add_gtest(mowbite_map_test test/test_map_model.cpp test/test_map_store.cpp test/test_map_service.cpp
+    test/test_sha256.cpp)
   target_link_libraries(mowbite_map_test mowbite_map_core)
 endif()
 
