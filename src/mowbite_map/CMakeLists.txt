@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(mowbite_msgs REQUIRED)
+find_package(mowbite_bridge REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
 # Map model, storage and RPC handling without ROS, testable on any machine.
@@ -16,8 +22,15 @@ target_include_directories(mowbite_map_core PUBLIC
 target_link_libraries(mowbite_map_core nlohmann_json::nlohmann_json)
 set_target_properties(mowbite_map_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+add_library(mowbite_map_component SHARED src/map_node.cpp)
+target_link_libraries(mowbite_map_component mowbite_map_core mowbite_bridge::mowbite_bridge_core)
+ament_target_dependencies(mowbite_map_component rclcpp rclcpp_components sensor_msgs std_msgs mowbite_msgs)
+rclcpp_components_register_node(mowbite_map_component
+  PLUGIN "mowbite_map::MapNode"
+  EXECUTABLE mowbite_map_node)
+
 install(DIRECTORY include/ DESTINATION include)
-install(TARGETS mowbite_map_core
+install(TARGETS mowbite_map_core mowbite_map_component
   EXPORT export_mowbite_map
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib

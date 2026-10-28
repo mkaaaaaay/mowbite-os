@@ -32,9 +32,12 @@ def generate_launch_description():
         parameters=[config, {"mqtt_host": LaunchConfiguration("mqtt_host"),
                              "mqtt_port": ParameterValue(LaunchConfiguration("mqtt_port"), value_type=int),
                              "data_dir": LaunchConfiguration("data_dir")}])
+    map_node = ComposableNode(
+        package="mowbite_map", plugin="mowbite_map::MapNode", name="mowbite_map",
+        parameters=[config, {"data_dir": LaunchConfiguration("data_dir")}])
     container = ComposableNodeContainer(
         name="mowbite", namespace="", package="rclcpp_components", executable="component_container",
-        composable_node_descriptions=[mcu, gnss, imu, localization, logic, bridge], output="screen")
+        composable_node_descriptions=[mcu, gnss, imu, localization, logic, bridge, map_node], output="screen")
     return LaunchDescription([
         DeclareLaunchArgument("config", default_value=PathJoinSubstitution(
             [FindPackageShare("mowbite_bringup"), "config", "tron.yaml"])),

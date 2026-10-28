@@ -62,6 +62,13 @@ mowbite_logic:
     # localization/pose older than this (s) counts as lost: accuracy 999, GPS 0.
     pose_timeout: 2.0
 
+mowbite_map:
+  ros__parameters:
+    # Largest map.json in bytes (MQTT drops messages from about 2 MB) and the distance in m under which two datums count
+    # as the same. The map is kept in data_dir, which tron.launch.py sets for the bridge and the map together.
+    max_map_bytes: 1500000
+    datum_tolerance: 0.01
+
 mowbite_bridge:
   ros__parameters:
     mqtt_host: 127.0.0.1

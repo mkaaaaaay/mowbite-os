@@ -147,12 +147,55 @@ check("actions", by_id.get("mower_logic/reset_emergency") == 1 and by_id.get("mo
       and by_id.get("mower_logic:idle/start_mowing") == 0, f"{len(actions)} actions")
 
 r = rpc("rpc.methods")
-check("rpc.methods", r and "rpc.ping" in r["result"] and "logs.recent" in r["result"], json.dumps(r and r["result"]))
+check("rpc.methods", r and "rpc.ping" in r["result"] and "logs.recent" in r["result"]
+      and "map.replace" in r["result"] and "map.area_properties" in r["result"], json.dumps(r and r["result"]))
 r = rpc("events.history", None, "2")
 types = [e.get("type") for e in (r or {}).get("result", [])]
 check("events.history has BOOTED", "BOOTED" in types, ",".join(map(str, types)))
-r = rpc("map.replace", [{}], "3")
+r = rpc("planner.settings", None, "3")
 check("unknown method -32601", r and r["error"]["code"] == -32601, json.dumps(r and r.get("error")))
+
+# The map the way the app saves it: open rings, settings of its own, a property the mower does not know.
+APP_MAP = {
+    "areas": [
+        {"id": "lawn", "properties": {"name": "Front", "type": "mow", "angle": 0.35, "planner": {"pattern": "stripes"}},
+         "outline": [{"x": 0, "y": 0}, {"x": 10, "y": 0}, {"x": 10, "y": 6}, {"x": 0, "y": 6}]},
+        {"id": "tree", "properties": {"type": "obstacle", "pin": True},
+         "outline": [{"x": 4, "y": 2}, {"x": 5, "y": 2}, {"x": 5, "y": 3}]},
+    ],
+    "docking_stations": [{"id": "dock", "position": {"x": -1.5, "y": 3.0}, "heading": 3.14}],
+}
+r = rpc("map.area_properties", None, "4")
+check("map.area_properties", r and r["result"] == ["name", "type", "active", "mowable", "angle", "outline_count",
+                                                  "outline_overlap_count", "outline_offset"], json.dumps(r and r.get("result")))
+r = rpc("map.replace", [APP_MAP], "5")
+check("map.replace stores", r and r.get("result") == "Successfully stored map (2 areas)", json.dumps(r))
+published = wait_for(lambda: (latest("map/json") if b'"lawn"' in (latest("map/json") or b"") else None))
+saved = json.loads(published) if published else {"areas": [], "docking_stations": []}
+check("map/json: rings closed, unknown properties kept",
+      len(saved["areas"]) == 2 and len(saved["areas"][0]["outline"]) == 5
+      and saved["areas"][0]["outline"][0] == saved["areas"][0]["outline"][-1]
+      and saved["areas"][0]["properties"].get("planner") == {"pattern": "stripes"}
+      and saved["areas"][1]["properties"].get("pin") is True, json.dumps(saved)[:200])
+bad = json.loads(json.dumps(APP_MAP))
+bad["areas"][0]["outline"] = bad["areas"][0]["outline"][:2]
+r = rpc("map.replace", [bad], "6")
+check("invalid map -32602 with the reason", r and r["error"]["code"] == -32602
+      and r["error"]["message"] == "Invalid map: areas[0] 'lawn': outline needs at least 3 points", json.dumps(r and r.get("error")))
+r = rpc("map.replace", None, "7")
+check("map.replace without params -32602", r and r["error"]["code"] == -32602, json.dumps(r and r.get("error")))
+# A phone that connects later gets the map from the broker.
+late = []
+phone = mqtt.Client("late_phone")
+phone.on_message = lambda _c, _u, m: late.append((m.topic, m.payload, m.retain))
+phone.connect("127.0.0.1", 1883)
+phone.subscribe("map/json")
+phone.loop_start()
+time.sleep(1)
+phone.loop_stop()
+phone.disconnect()
+check("a phone connecting later gets the retained map", any(t == "map/json" and ret and json.loads(p) == saved
+                                                            for t, p, ret in late), f"{len(late)} messages")
 c.publish("rpc/request", "{broken")
 r = wait_for(lambda: (latest("rpc/response") and json.loads(latest("rpc/response")).get("error", {}).get("code") == -32700))
 check("invalid json -32700", bool(r))
@@ -284,6 +327,9 @@ check("heartbeat in local time", skew is not None and skew < 5, f"{b.hex()} in {
 
 r = rpc("logs.recent", {"level": "WARN"}, "9")
 check("logs.recent answers", r is not None and isinstance(r.get("result"), list), f'{len((r or {}).get("result", []))} entries')
+
+r = rpc("map.replace", [{"areas": [], "docking_stations": []}], "10")
+check("an empty map empties it", r and "(0 areas)" in str(r.get("result")), json.dumps(r))
 
 c.loop_stop()
 print("RESULT", "OK" if ok else "FAILED")
