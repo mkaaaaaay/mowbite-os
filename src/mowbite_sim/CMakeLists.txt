@@ -11,6 +11,7 @@ if(BUILD_TESTING)
   add_launch_test(test/test_stack_smoke.py TIMEOUT 120)
   add_launch_test(test/test_hw_contract.py TIMEOUT 120)
   add_launch_test(test/test_map.py TIMEOUT 180)
+  add_launch_test(test/test_recording.py TIMEOUT 120)
 endif()
 
 ament_package()

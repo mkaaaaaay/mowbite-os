@@ -61,6 +61,12 @@ mowbite_logic:
     dock_charge_voltage: 28.0
     # localization/pose older than this (s) counts as lost: accuracy 999, GPS 0.
     pose_timeout: 2.0
+    # Area recording: smallest area in m², most points of one recording (the map must fit one MQTT message), distance
+    # in m between the two points of the docking station, and how long (s) a save waits for mowbite_map.
+    recording_min_area: 0.05
+    recording_max_points: 5000
+    recording_min_dock_distance: 0.3
+    map_edit_timeout: 5.0
 
 mowbite_map:
   ros__parameters:

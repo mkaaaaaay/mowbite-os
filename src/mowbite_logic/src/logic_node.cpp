@@ -1,14 +1,18 @@
 #include <chrono>
+#include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/map_status.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
+#include <mowbite_msgs/msg/outline.hpp>
 #include <mowbite_msgs/msg/position_jump.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
 #include <mowbite_msgs/msg/sensor_info.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
+#include <mowbite_msgs/srv/add_area.hpp>
+#include <mowbite_msgs/srv/set_dock.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -59,6 +63,8 @@ class LogicNode : public rclcpp::Node {
   explicit LogicNode(const rclcpp::NodeOptions& options) : rclcpp::Node("mowbite_logic", options), core_(LoadConfig()) {
     hw_timeout_s_ = declare_parameter("hw_status_timeout", 2.0);
     pose_timeout_s_ = declare_parameter("pose_timeout", 2.0);
+    // mowbite_map answers at once; a recording waits this long (s) before it counts as not saved.
+    map_edit_timeout_s_ = declare_parameter("map_edit_timeout", 5.0);
 
     robot_state_pub_ = create_publisher<mowbite_msgs::msg::RobotState>("bridge/robot_state", 10);
     actions_pub_ = create_publisher<mowbite_msgs::msg::ActionList>("bridge/actions", LatchedQos(50));
@@ -75,6 +81,8 @@ class LogicNode : public rclcpp::Node {
     board_msg.data = nlohmann::json{{"node", "/ll"}, {"params", {{"board", declare_parameter("board", "Tron")}}}}.dump();
     params_pub_->publish(board_msg);
     emergency_client_ = create_client<mowbite_msgs::srv::SetEmergency>("hw/emergency");
+    add_area_client_ = create_client<mowbite_msgs::srv::AddArea>("map/add_area");
+    set_dock_client_ = create_client<mowbite_msgs::srv::SetDock>("map/set_dock");
 
     hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
         "hw/status", 10, [this](mowbite_msgs::msg::HardwareStatus::ConstSharedPtr msg) { OnHardwareStatus(*msg); });
@@ -133,6 +141,10 @@ class LogicNode : public rclcpp::Node {
     config.battery_full_voltage = declare_parameter("battery_full_voltage", config.battery_full_voltage);
     config.dock_charge_voltage = declare_parameter("dock_charge_voltage", config.dock_charge_voltage);
     config.max_position_accuracy = declare_parameter("max_position_accuracy", config.max_position_accuracy);
+    config.recorder.min_area = declare_parameter("recording_min_area", config.recorder.min_area);
+    config.recorder.max_points =
+        static_cast<size_t>(declare_parameter("recording_max_points", static_cast<int64_t>(config.recorder.max_points)));
+    config.recorder.min_dock_distance = declare_parameter("recording_min_dock_distance", config.recorder.min_dock_distance);
     return config;
   }
 
@@ -218,6 +230,18 @@ class LogicNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       if (!last_hw_ || (now() - *last_hw_).seconds() > hw_timeout_s_) core_.OnHardwareTimeout();
       if (!last_pose_ || (now() - *last_pose_).seconds() > pose_timeout_s_) core_.OnPoseTimeout();
+      if (edit_sent_ && (now() - *edit_sent_).seconds() > map_edit_timeout_s_) {
+        edit_sent_.reset();
+        if (edit_request_id_) {
+          if (edit_is_dock_) {
+            set_dock_client_->remove_pending_request(*edit_request_id_);
+          } else {
+            add_area_client_->remove_pending_request(*edit_request_id_);
+          }
+          edit_request_id_.reset();
+        }
+        core_.OnMapEditResult(false, "", "No answer from mowbite_map; look at the map before saving again");
+      }
       state = core_.RobotState();
     }
     Flush();
@@ -271,8 +295,76 @@ class LogicNode : public rclcpp::Node {
     publish_pub_->publish(msg);
   }
 
-  // Sends stop requests, events and changed actions collected by the core.
+  // Sends a change of the map the recording asks for; its answer goes back to the core. Called with the mutex held.
+  void SendMapEdit(const MapEdit& edit) {
+    const uint64_t seq = ++edit_seq_;
+    edit_is_dock_ = edit.kind == MapEdit::Kind::kDock;
+    const auto answer = [this, seq](bool ok, const std::string& id, const std::string& message) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // A late answer after the timeout is not the current one any more.
+        if (seq != edit_seq_ || !edit_sent_) return;
+        edit_sent_.reset();
+        edit_request_id_.reset();
+        core_.OnMapEditResult(ok, id, message);
+      }
+      Flush();
+    };
+    if (edit_is_dock_) {
+      if (!set_dock_client_->service_is_ready()) {
+        core_.OnMapEditResult(false, "", "mowbite_map does not offer map/set_dock");
+        return;
+      }
+      auto request = std::make_shared<mowbite_msgs::srv::SetDock::Request>();
+      request->x = edit.x;
+      request->y = edit.y;
+      request->heading = edit.heading;
+      edit_sent_ = now();
+      edit_request_id_ = set_dock_client_
+                             ->async_send_request(request,
+                                                  [answer](rclcpp::Client<mowbite_msgs::srv::SetDock>::SharedFuture f) {
+                                                    const auto r = f.get();
+                                                    answer(r->success, r->id, r->message);
+                                                  })
+                             .request_id;
+      return;
+    }
+    if (!add_area_client_->service_is_ready()) {
+      core_.OnMapEditResult(false, "", "mowbite_map does not offer map/add_area");
+      return;
+    }
+    auto request = std::make_shared<mowbite_msgs::srv::AddArea::Request>();
+    request->type = edit.type;
+    for (const auto& p : edit.outline) request->outline.push_back(ToPoint(p));
+    for (const auto& ring : edit.obstacles) {
+      mowbite_msgs::msg::Outline outline;
+      for (const auto& p : ring) outline.points.push_back(ToPoint(p));
+      request->obstacles.push_back(std::move(outline));
+    }
+    edit_sent_ = now();
+    edit_request_id_ = add_area_client_
+                           ->async_send_request(request,
+                                                [answer](rclcpp::Client<mowbite_msgs::srv::AddArea>::SharedFuture f) {
+                                                  const auto r = f.get();
+                                                  answer(r->success, r->id, r->message);
+                                                })
+                           .request_id;
+  }
+
+  static geometry_msgs::msg::Point ToPoint(const Point2& p) {
+    geometry_msgs::msg::Point point;
+    point.x = p.x;
+    point.y = p.y;
+    return point;
+  }
+
+  // Sends stop requests, events, changed actions and map edits collected by the core.
   void Flush() {
+    // An edit refused before it went out brings its events with it, so they are collected after it.
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (auto edit = core_.TakeMapEdit()) SendMapEdit(*edit);
+    }
     std::vector<Event> events;
     bool actions_changed;
     bool stop;
@@ -345,6 +437,12 @@ class LogicNode : public rclcpp::Node {
   std::optional<rclcpp::Time> last_pose_;
   double hw_timeout_s_;
   double pose_timeout_s_;
+  double map_edit_timeout_s_;
+  // The map edit on its way: when it went out, its request, and a number that tells a late answer apart.
+  std::optional<rclcpp::Time> edit_sent_;
+  std::optional<int64_t> edit_request_id_;
+  bool edit_is_dock_ = false;
+  uint64_t edit_seq_ = 0;
 
   rclcpp::Publisher<mowbite_msgs::msg::RobotState>::SharedPtr robot_state_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::ActionList>::SharedPtr actions_pub_;
@@ -354,6 +452,8 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp::Client<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_client_;
+  rclcpp::Client<mowbite_msgs::srv::AddArea>::SharedPtr add_area_client_;
+  rclcpp::Client<mowbite_msgs::srv::SetDock>::SharedPtr set_dock_client_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::PositionJump>::SharedPtr jump_sub_;
