@@ -1,0 +1,148 @@
+// 2D localization from gyro, wheel speed and RTK GPS. Based on xbot_positioning.cpp and xbot_positioning_core.cpp
+// (OpenMower), MIT License, Copyright (c) 2022 Clemens Elflein. See LICENSE.xbot_positioning.
+#ifndef MOWBITE_LOCALIZATION_LOCALIZATION_H
+#define MOWBITE_LOCALIZATION_LOCALIZATION_H
+
+#include <array>
+#include <cstdint>
+#include <kalman/ExtendedKalmanFilter.hpp>
+#include <limits>
+
+#include "mowbite_localization/models.h"
+
+namespace mowbite_localization {
+
+// Flag of mowbite_msgs/AbsolutePose for an RTK fixed solution.
+constexpr uint16_t kFlagGpsRtkFixed = 2;
+// Accuracy reported without a usable GPS fix.
+constexpr double kNoAccuracy = 999.0;
+
+struct LocalizationConfig {
+  // The robot has to stand still for this long after the start to measure the gyro offset.
+  double gyro_calibration_s = 5.0;
+  bool skip_gyro_calibration = false;
+  // Used instead of the measured offset when the calibration is skipped.
+  double gyro_offset = 0.0;
+  // Motion vectors below this speed do not correct the heading.
+  double min_speed = 0.01;
+  // Fixes with a worse accuracy are dropped.
+  double max_gps_accuracy = 0.1;
+  // GPS antenna relative to the point of rotation, x forward, y left.
+  double antenna_offset_x = 0.0;
+  double antenna_offset_y = 0.0;
+  // Variance added to every state per prediction step (one per gyro sample), as in xbot_positioning.
+  double process_noise = 1.0;
+  // Wheel speed older than this counts as zero.
+  double wheel_timeout_s = 0.5;
+  // Gyro samples further apart than this restart the integration instead of predicting over the gap.
+  double max_imu_gap_s = 0.5;
+};
+
+enum class GpsResult {
+  kDisabled,      // GPS switched off by the logic
+  kNotFixed,      // no RTK fixed solution
+  kInaccurate,    // accuracy above max_gps_accuracy
+  kRestarted,     // first fix or more than 5 s since the last one, counting starts again
+  kWarmup,        // inlier, waiting for more than 10 in a row
+  kInitialized,   // filter moved to the GPS position
+  kFused,         // regular update
+  kOutlier,       // more than 5 m from the last fix
+  kOutlierReset,  // more than 10 outliers in a row, the fix is taken as the new reference
+};
+
+struct GpsFix {
+  uint16_t flags = 0;
+  double accuracy = 0.0;
+  double x = 0.0, y = 0.0, z = 0.0;
+  bool motion_valid = false;
+  double motion_x = 0.0, motion_y = 0.0;
+};
+
+struct Estimate {
+  double x = 0.0, y = 0.0, theta = 0.0, vx = 0.0, vr = 0.0;
+  // Row-major covariance of x, y, theta.
+  std::array<double, 9> pose_covariance{};
+  double vx_variance = 0.0, vr_variance = 0.0;
+};
+
+// Wraps an angle to (-pi, pi].
+double NormalizeAngle(double angle);
+// Yaw of a quaternion (x, y, z, w).
+double YawFromQuaternion(double x, double y, double z, double w);
+
+class Localization {
+ public:
+  explicit Localization(const LocalizationConfig& config);
+
+  // Gyro rate about z in rad/s. stamp_s is the sample time, now_s a monotonic clock. Returns true when the
+  // estimate was advanced, i.e. after the gyro calibration.
+  bool AddImu(double stamp_s, double gyro_z, double now_s);
+  // Measured forward speed of the wheels in m/s.
+  void AddWheelSpeed(double vx, double now_s);
+  GpsResult AddGps(const GpsFix& fix, double now_s);
+
+  void SetGpsEnabled(bool enabled) {
+    gps_enabled_ = enabled;
+  }
+  // Restarts the filter at this pose with zero speed.
+  void SetPose(double x, double y, double theta);
+
+  Estimate GetEstimate() const;
+  // Accuracy of the last fix, kNoAccuracy before the filter took GPS or 10 s after the last fix.
+  double PositionAccuracy(double now_s) const;
+  // True within 10 s after the last usable fix.
+  bool RecentGps(double now_s) const;
+  // Antenna velocity the filter expects, compared with the GPS motion vector.
+  MotionMeasurement<double> ExpectedMotion() const;
+
+  bool calibrated() const {
+    return calibrated_;
+  }
+  double gyro_offset() const {
+    return gyro_offset_;
+  }
+  bool gps_enabled() const {
+    return gps_enabled_;
+  }
+  bool gps_valid() const {
+    return has_gps_;
+  }
+
+ private:
+  using StateT = State<double>;
+
+  bool Calibrate(double stamp_s, double gyro_z, double now_s);
+  double WheelSpeed(double now_s) const;
+  void UpdatePosition(double x, double y, double variance);
+  void UpdateMotion(double vx, double vy, double variance);
+  void KeepAngleWrapped();
+
+  LocalizationConfig config_;
+  Kalman::ExtendedKalmanFilter<StateT> ekf_;
+  SystemModel<double> system_;
+  PositionMeasurementModel<double> position_model_;
+  SpeedMeasurementModel<double> speed_model_;
+  MotionMeasurementModel<double> motion_model_;
+
+  bool calibrated_ = false;
+  double gyro_offset_ = 0.0;
+  double calibration_start_s_ = 0.0;
+  double calibration_sum_ = 0.0;
+  int calibration_samples_ = 0;
+  bool has_imu_stamp_ = false;
+  double last_imu_stamp_s_ = 0.0;
+
+  double wheel_vx_ = 0.0;
+  double wheel_time_s_ = -std::numeric_limits<double>::infinity();
+
+  bool gps_enabled_ = true;
+  bool has_gps_ = false;
+  GpsFix last_gps_;
+  double last_gps_time_s_ = -std::numeric_limits<double>::infinity();
+  int valid_gps_samples_ = 0;
+  int gps_outliers_ = 0;
+};
+
+}  // namespace mowbite_localization
+
+#endif  // MOWBITE_LOCALIZATION_LOCALIZATION_H

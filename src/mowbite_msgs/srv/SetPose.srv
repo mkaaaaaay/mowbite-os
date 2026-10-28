@@ -1,0 +1,3 @@
+# Restarts the localization at this pose in the map frame, with zero speed.
+geometry_msgs/Pose pose
+---
