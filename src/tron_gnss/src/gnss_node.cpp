@@ -9,6 +9,7 @@
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <thread>
 #include <vector>
@@ -57,6 +58,18 @@ class GnssNode : public rclcpp::Node {
     pose_pub_ = create_publisher<mowbite_msgs::msg::AbsolutePose>("gps/absolute_pose", 10);
     // The app reads the datum from params/json, the bridge collects it from this latched topic.
     if (std::isfinite(lat) && std::isfinite(lon) && std::abs(lat) <= 90.0 && std::abs(lon) <= 180.0) {
+      // The datum for the map, which belongs to it: the origin of the poses above, not a measured fix.
+      datum_pub_ = create_publisher<sensor_msgs::msg::NavSatFix>(
+          "gps/datum", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+      sensor_msgs::msg::NavSatFix datum;
+      datum.header.stamp = now();
+      datum.header.frame_id = frame_id_;
+      datum.status.status = sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX;
+      datum.latitude = lat;
+      datum.longitude = lon;
+      datum.altitude = height;
+      datum.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN;
+      datum_pub_->publish(datum);
       params_pub_ = create_publisher<std_msgs::msg::String>(
           "bridge/params", rclcpp::QoS(rclcpp::KeepLast(50)).reliable().transient_local());
       char text[160];
@@ -176,6 +189,7 @@ class GnssNode : public rclcpp::Node {
   uint64_t reported_errors_ = 0;
   uint64_t reported_stale_ = 0;
   rclcpp::Publisher<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr datum_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   std::atomic<bool> running_{true};
   std::thread io_thread_;

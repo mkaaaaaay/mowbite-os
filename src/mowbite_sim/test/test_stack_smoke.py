@@ -20,8 +20,8 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix
 from mowbite_msgs.msg import AbsolutePose
 from nav_msgs.msg import Odometry
-from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Imu
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from sensor_msgs.msg import Imu, NavSatFix
 
 MQTT_PORT = 18831
 DATUM = (52.0, 9.0, 50.0)
@@ -30,6 +30,7 @@ WORK = tempfile.mkdtemp(prefix="mowbite_smoke_")
 LINKS = {name: os.path.join(WORK, name) for name in ("mcu", "gnss", "imu")}
 BRIDGE_START_S = 6.0
 RETAINED_ID = "retained-1"
+LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 
 def generate_test_description():
@@ -71,6 +72,7 @@ class Collector:
         self.lock = threading.Lock()
         self.node = rclpy.create_node("stack_smoke_probe")
         self.node.create_subscription(AbsolutePose, "gps/absolute_pose", lambda m: self._ros("gps", m), 10)
+        self.node.create_subscription(NavSatFix, "gps/datum", lambda m: self._ros("datum", m), LATCHED)
         self.node.create_subscription(Imu, "imu/data", lambda m: self._ros("imu", m), qos_profile_sensor_data)
         self.node.create_subscription(AbsolutePose, "localization/pose", lambda m: self._ros("pose", m), 10)
         self.node.create_subscription(Odometry, "odom", lambda m: self._ros("odom", m), 10)
@@ -151,6 +153,12 @@ class TestSensorChain(unittest.TestCase):
         self.assertLess(msg.position_accuracy, 0.1)
         self.assertAlmostEqual(msg.pose.pose.position.x, ANTENNA_X, delta=0.05)
         self.assertAlmostEqual(msg.pose.pose.position.y, 0.0, delta=0.05)
+
+    def test_gnss_publishes_its_datum_latched(self):
+        # Latched, so the map finds it however late it starts.
+        msg = self.probe.wait(lambda: self.probe.ros.get("datum"))
+        self.assertIsNotNone(msg, "no gps/datum")
+        self.assertEqual((msg.latitude, msg.longitude, msg.altitude), DATUM)
 
     def test_imu_is_upright_after_mount_rotation(self):
         msg = self.probe.wait(lambda: self.probe.ros.get("imu"))
