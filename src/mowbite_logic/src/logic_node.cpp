@@ -5,8 +5,11 @@
 #include <geometry_msgs/msg/point32.hpp>
 #include <geometry_msgs/msg/polygon.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/pose.hpp>
+#include <mowbite_msgs/action/follow_path.hpp>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
+#include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/map_status.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
@@ -20,17 +23,21 @@
 #include <mowbite_msgs/msg/sensor_info.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
 #include <mowbite_msgs/srv/add_area.hpp>
+#include <mowbite_msgs/srv/drive_to.hpp>
 #include <mowbite_msgs/srv/set_dock.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <map>
 #include <mowbite_planner_interfaces/srv/plan_coverage.hpp>
+#include <mowbite_planner_interfaces/srv/plan_transit.hpp>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <rcl_interfaces/msg/parameter.hpp>
 #include <rcl_interfaces/msg/parameter_type.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_srvs/srv/trigger.hpp>
 
 #include "mowbite_bridge/monitor.h"
 #include "mowbite_logic/logic_core.h"
@@ -87,6 +94,15 @@ rcl_interfaces::msg::Parameter DoubleParameter(const std::string& name, double v
   return parameter;
 }
 
+geometry_msgs::msg::Pose PoseAt(double x, double y, double heading) {
+  geometry_msgs::msg::Pose pose;
+  pose.position.x = x;
+  pose.position.y = y;
+  pose.orientation.z = std::sin(heading / 2);
+  pose.orientation.w = std::cos(heading / 2);
+  return pose;
+}
+
 HardwareSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
   HardwareSnapshot::Motor motor;
   motor.ok = m.ok;
@@ -112,7 +128,7 @@ class LogicNode : public rclcpp::Node {
     sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorInfo>("bridge/sensor_info", LatchedQos(100));
     sensor_value_pub_ = create_publisher<mowbite_msgs::msg::SensorValue>("bridge/sensor_value", 100);
     publish_pub_ = create_publisher<mowbite_msgs::msg::MqttPublish>("bridge/publish", 100);
-    // The only source of motion so far; the safety filter goes in between once there are more.
+    // The only writer of hw/cmd_vel: teleop while recording, the follower while driving (LogicCore decides).
     cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("hw/cmd_vel", 10);
 
     // The app container rates the battery by /ll/board; any value except YardForce makes it show battery_percentage.
@@ -169,6 +185,44 @@ class LogicNode : public rclcpp::Node {
         "bridge/action", 10, [this](std_msgs::msg::String::ConstSharedPtr msg) { OnAction(msg->data); });
     teleop_sub_ = create_subscription<geometry_msgs::msg::Twist>(
         "bridge/teleop", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) { OnTeleop(*msg); });
+    follower_sub_ = create_subscription<geometry_msgs::msg::Twist>(
+        "follower/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) {
+          bool active;
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            active = core_.FollowerActive();
+          }
+          if (active) cmd_vel_pub_->publish(*msg);
+        });
+    caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
+        "hw/capabilities", LatchedQos(1), [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            core_.OnCapabilities(!msg->safety_measurement_date.empty());
+          }
+          Flush();
+        });
+
+    // Driving to a pose: the planner plans the way, the follower drives it. A ROS service only, not for the app yet.
+    transit_max_outside_ = declare_parameter("transit_max_outside", 0.3);
+    transit_client_ = create_client<mowbite_planner_interfaces::srv::PlanTransit>("mowbite_planner/plan_transit");
+    follow_client_ = rclcpp_action::create_client<FollowPath>(this, "follow_path");
+    drive_srv_ = create_service<mowbite_msgs::srv::DriveTo>(
+        "logic/drive_to", [this](std::shared_ptr<rmw_request_id_t> header,
+                                 std::shared_ptr<mowbite_msgs::srv::DriveTo::Request> request) {
+          OnDriveTo(header, *request);
+        });
+    stop_drive_srv_ = create_service<std_srvs::srv::Trigger>(
+        "logic/stop_drive", [this](std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                                   std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            response->success = core_.Driving();
+            response->message = response->success ? "stopping" : "not driving";
+            if (response->success) CancelDrive("stopped by logic/stop_drive");
+          }
+          Flush();
+        });
 
     for (const auto& sensor : core_.Sensors()) {
       mowbite_msgs::msg::SensorInfo info;
@@ -300,6 +354,139 @@ class LogicNode : public rclcpp::Node {
     cmd_vel_pub_->publish(out);
   }
 
+  void OnDriveTo(const std::shared_ptr<rmw_request_id_t>& header, const mowbite_msgs::srv::DriveTo::Request& request) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      std::vector<Ring> drivable;
+      std::vector<Ring> obstacles;
+      std::string why = planner_.TransitAreas(&drivable, &obstacles);
+      if (why.empty() && !transit_client_->service_is_ready()) why = "The planner is not running";
+      if (why.empty() && !follow_client_->action_server_is_ready()) why = "The follower is not running";
+      if (why.empty()) why = core_.StartDrive(request.x, request.y);
+      if (!why.empty()) {
+        RCLCPP_WARN(get_logger(), "Drive refused: %s", why.c_str());
+        RespondDrive(header, false, why);
+      } else {
+        const RobotStateData state = core_.RobotState();
+        auto plan = std::make_shared<mowbite_planner_interfaces::srv::PlanTransit::Request>();
+        plan->start = PoseAt(state.pose_x, state.pose_y, state.pose_heading);
+        plan->goal = PoseAt(request.x, request.y, request.heading);
+        plan->use_goal_heading = request.use_heading;
+        for (const auto& ring : drivable) plan->drivable_areas.push_back(ToPolygon(ring));
+        for (const auto& ring : obstacles) plan->obstacles.push_back(ToPolygon(ring));
+        plan->max_outside = transit_max_outside_;
+        drive_ = Drive();
+        drive_.seq = ++drive_seq_;
+        drive_.header = header;
+        drive_.planning = true;
+        drive_.sent = now();
+        drive_.allowed = plan->drivable_areas;
+        drive_.obstacles = plan->obstacles;
+        const uint64_t seq = drive_.seq;
+        drive_.request_id =
+            transit_client_
+                ->async_send_request(plan,
+                                     [this, seq](rclcpp::Client<mowbite_planner_interfaces::srv::PlanTransit>::SharedFuture f) {
+                                       OnTransit(seq, *f.get());
+                                     })
+                .request_id;
+        RCLCPP_INFO(get_logger(), "Drive to (%.2f, %.2f): planning the way", request.x, request.y);
+      }
+    }
+    Flush();
+  }
+
+  void OnTransit(uint64_t seq, const mowbite_planner_interfaces::srv::PlanTransit::Response& response) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (seq != drive_.seq || !drive_.planning) return;
+      drive_.planning = false;
+      if (!response.success) {
+        EndDrive(false, "transit planning failed: " + response.message);
+      } else if (response.path.poses.empty()) {
+        // Already there; the planner says so in its message.
+        RespondDrive(drive_.header, true, "already there: " + response.message);
+        drive_.header.reset();
+        EndDrive(true, "already there");
+      } else {
+        FollowPath::Goal goal;
+        for (const auto& pose : response.path.poses) goal.poses.push_back(pose.pose);
+        goal.allowed_areas = drive_.allowed;
+        goal.obstacles = drive_.obstacles;
+        const double length = response.path_length;
+        typename rclcpp_action::Client<FollowPath>::SendGoalOptions options;
+        options.goal_response_callback = [this, seq, length](const FollowHandle::SharedPtr& handle) {
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (seq != drive_.seq) return;
+            if (!handle) {
+              EndDrive(false, "the follower did not take the path");
+            } else {
+              drive_.handle = handle;
+              char text[64];
+              std::snprintf(text, sizeof(text), "driving %.1f m", length);
+              RCLCPP_INFO(get_logger(), "Drive: %s", text);
+              RespondDrive(drive_.header, true, text);
+              drive_.header.reset();
+              // An emergency while the goal was on its way.
+              if (drive_.cancel_pending) follow_client_->async_cancel_goal(handle);
+            }
+          }
+          Flush();
+        };
+        options.result_callback = [this, seq](const FollowHandle::WrappedResult& wrapped) {
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (seq != drive_.seq) return;
+            const auto& result = wrapped.result;
+            const bool arrived = result && result->reason == FollowPath::Result::REASON_DONE;
+            std::string why = result ? result->message : "no result from the follower";
+            if (!drive_.cancel_reason.empty()) why = drive_.cancel_reason + " (" + why + ")";
+            EndDrive(arrived, why);
+          }
+          Flush();
+        };
+        follow_client_->async_send_goal(goal, options);
+      }
+    }
+    Flush();
+  }
+
+  // Stops the drive: cancels the follower, or drops the way still being planned. Called with the mutex held.
+  void CancelDrive(const std::string& why) {
+    if (!core_.Driving()) return;
+    drive_.cancel_reason = why;
+    if (drive_.planning) {
+      transit_client_->remove_pending_request(drive_.request_id);
+      drive_.planning = false;
+      EndDrive(false, why);
+    } else if (drive_.handle) {
+      follow_client_->async_cancel_goal(drive_.handle);
+    } else {
+      drive_.cancel_pending = true;
+    }
+  }
+
+  // Called with the mutex held.
+  void EndDrive(bool arrived, const std::string& message) {
+    if (drive_.header) RespondDrive(drive_.header, false, message);
+    if (arrived) {
+      RCLCPP_INFO(get_logger(), "Drive: arrived");
+    } else {
+      RCLCPP_WARN(get_logger(), "Drive ended: %s", message.c_str());
+    }
+    core_.OnDriveEnded(arrived, message);
+    drive_ = Drive();
+  }
+
+  void RespondDrive(const std::shared_ptr<rmw_request_id_t>& header, bool success, const std::string& message) {
+    if (!header) return;
+    mowbite_msgs::srv::DriveTo::Response response;
+    response.success = success;
+    response.message = message;
+    drive_srv_->send_response(*header, response);
+  }
+
   void OnStateTimer() {
     RobotStateData state;
     {
@@ -411,6 +598,9 @@ class LogicNode : public rclcpp::Node {
     std::vector<std::string> expired;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (drive_.planning && (now() - drive_.sent).seconds() > plan_timeout_s_) {
+        CancelDrive("No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s");
+      }
       for (auto it = pending_plans_.begin(); it != pending_plans_.end();) {
         if ((now() - it->second.sent).seconds() > plan_timeout_s_) {
           plan_client_->remove_pending_request(it->second.request_id);
@@ -574,6 +764,7 @@ class LogicNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       events = core_.TakeEvents();
       actions_changed = core_.TakeActionsChanged();
+      if (core_.TakeDriveCancel()) CancelDrive("stopped by the logic: emergency, no pose or no safety measurement");
       stop = core_.TakeStopRequest();
       reasons = core_.TakeReasonChanges();
       notices = core_.TakeNotices();
@@ -631,6 +822,24 @@ class LogicNode : public rclcpp::Node {
     }
   }
 
+  using FollowPath = mowbite_msgs::action::FollowPath;
+  using FollowHandle = rclcpp_action::ClientGoalHandle<FollowPath>;
+
+  // The drive to a pose: its number tells late answers apart, the request waits for its answer until the follower
+  // has taken the path.
+  struct Drive {
+    uint64_t seq = 0;
+    std::shared_ptr<rmw_request_id_t> header;
+    bool planning = false;
+    int64_t request_id = 0;
+    rclcpp::Time sent{0, 0, RCL_ROS_TIME};
+    std::vector<geometry_msgs::msg::Polygon> allowed;
+    std::vector<geometry_msgs::msg::Polygon> obstacles;
+    FollowHandle::SharedPtr handle;
+    bool cancel_pending = false;
+    std::string cancel_reason;
+  };
+
   // A mowing.plan request on its way to the planner.
   struct PendingPlan {
     std::string rpc_id;
@@ -641,6 +850,9 @@ class LogicNode : public rclcpp::Node {
 
   std::mutex mutex_;
   LogicCore core_;
+  Drive drive_;
+  uint64_t drive_seq_ = 0;
+  double transit_max_outside_ = 0.3;
   MowingPlanner planner_;
   std::map<uint64_t, PendingPlan> pending_plans_;
   uint64_t plan_seq_ = 0;
@@ -678,6 +890,12 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::MapStatus>::SharedPtr map_status_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr action_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr teleop_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr follower_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
+  rclcpp::Client<mowbite_planner_interfaces::srv::PlanTransit>::SharedPtr transit_client_;
+  rclcpp_action::Client<FollowPath>::SharedPtr follow_client_;
+  rclcpp::Service<mowbite_msgs::srv::DriveTo>::SharedPtr drive_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_drive_srv_;
   rclcpp::TimerBase::SharedPtr state_timer_;
   rclcpp::TimerBase::SharedPtr sensor_timer_;
   rclcpp::TimerBase::SharedPtr overlay_timer_;

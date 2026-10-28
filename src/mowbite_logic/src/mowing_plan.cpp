@@ -205,6 +205,20 @@ void MowingPlanner::SetMap(const std::string& text) {
   map_readable_ = true;
 }
 
+std::string MowingPlanner::TransitAreas(std::vector<Ring>* drivable, std::vector<Ring>* obstacles) const {
+  drivable->clear();
+  obstacles->clear();
+  if (!map_fits_) return "Cannot drive on the map: " + map_reason_;
+  if (!map_readable_) return "Cannot drive on the map: map/json is not readable";
+  for (const auto& area : map_) {
+    if (!area.active) continue;
+    if (area.type == "mow" || area.type == "nav") drivable->push_back(area.outline);
+    if (area.type == "obstacle") obstacles->push_back(area.outline);
+  }
+  if (drivable->empty()) return "The map has no active mowing or navigation area";
+  return "";
+}
+
 void MowingPlanner::SetMapStatus(bool fits, const std::string& reason) {
   map_fits_ = fits;
   map_reason_ = reason.empty() ? "The map does not fit the datum in use" : reason;

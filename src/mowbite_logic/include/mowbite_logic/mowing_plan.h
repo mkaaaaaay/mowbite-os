@@ -118,6 +118,9 @@ class MowingPlanner {
   // The result of the RPC: {area_id, angle, paths: [{is_outline, points, pose_index}], fingerprint}; points in m,
   // simplified to 1 cm and rounded to mm, pose_index the index of each point in its path.
   json Result(const PlanQuestion& question, const CoverageAnswer& answer) const;
+  // Where a drive between areas may go: the active mow and nav areas (also those not to be mowed) and the active
+  // obstacles. Empty if the map allows it, else why not.
+  std::string TransitAreas(std::vector<Ring>* drivable, std::vector<Ring>* obstacles) const;
 
  private:
   struct MapArea {

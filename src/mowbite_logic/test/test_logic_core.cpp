@@ -476,3 +476,160 @@ TEST(Logic, EventsWithoutAnyPoseAreAtZero) {
   ASSERT_EQ(events.size(), 1u);
   EXPECT_DOUBLE_EQ(events[0].details["x"].get<double>(), 0.0);
 }
+
+namespace {
+
+PoseSnapshot GoodPose() {
+  PoseSnapshot pose;
+  pose.x = 1;
+  pose.y = 2;
+  pose.position_accuracy = 0.02f;
+  pose.orientation_accuracy = 0.01f;
+  pose.orientation_valid = true;
+  return pose;
+}
+
+// Idle, healthy, with a good pose and a safety measurement: a drive may start.
+LogicCore ReadyToDrive() {
+  LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
+  core.OnHardwareStatus(Healthy());
+  core.OnCapabilities(true);
+  core.OnPose(GoodPose());
+  core.TakeEvents();
+  return core;
+}
+
+bool HasEvent(const std::vector<Event>& events, const std::string& type) {
+  return std::any_of(events.begin(), events.end(), [&](const Event& e) { return e.type == type; });
+}
+
+}  // namespace
+
+TEST(LogicDrive, StartsFromIdleAndShowsDriving) {
+  LogicCore core = ReadyToDrive();
+  EXPECT_FALSE(core.FollowerActive());
+  EXPECT_EQ(core.StartDrive(5, 3), "");
+  EXPECT_TRUE(core.Driving());
+  EXPECT_TRUE(core.FollowerActive());
+  EXPECT_EQ(core.RobotState().state, "IDLE");
+  EXPECT_EQ(core.RobotState().sub_state, "DRIVING");
+  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0].type, "STATE");
+  EXPECT_EQ(events[0].details["sub_state"], "DRIVING");
+  EXPECT_EQ(events[1].type, "DRIVE");
+  EXPECT_EQ(events[1].details["phase"], "start");
+  EXPECT_EQ(events[1].details["goal_x"], 5.0);
+  // No second drive and no recording meanwhile.
+  EXPECT_EQ(core.StartDrive(6, 3), "The mower is busy: driving");
+  EXPECT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kRejected);
+}
+
+TEST(LogicDrive, EndStopsTheWheelsAndGoesBackToIdle) {
+  LogicCore core = ReadyToDrive();
+  ASSERT_EQ(core.StartDrive(5, 3), "");
+  core.TakeEvents();
+  core.TakeStopRequest();
+  core.OnDriveEnded(false, "position accuracy 0.30 m worse than 0.10 m");
+  EXPECT_FALSE(core.Driving());
+  EXPECT_FALSE(core.FollowerActive());
+  EXPECT_TRUE(core.TakeStopRequest());
+  EXPECT_EQ(core.RobotState().sub_state, "");
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0].type, "DRIVE");
+  EXPECT_EQ(events[0].details["arrived"], false);
+  EXPECT_EQ(events[0].details["reason"], "position accuracy 0.30 m worse than 0.10 m");
+  EXPECT_EQ(events[1].type, "STATE");
+  EXPECT_EQ(events[1].details["state"], "IDLE");
+  // A late end changes nothing.
+  core.OnDriveEnded(true, "done");
+  EXPECT_TRUE(core.TakeEvents().empty());
+}
+
+TEST(LogicDrive, RefusedWithAReason) {
+  {
+    LogicCore core = ReadyToDrive();
+    core.OnCapabilities(false);
+    EXPECT_EQ(core.StartDrive(5, 3), "No safety measurement of this platform (hw/capabilities): remote control only");
+    EXPECT_TRUE(HasEvent(core.TakeEvents(), "DRIVE_REFUSED"));
+  }
+  {
+    LogicCore core = ReadyToDrive();
+    core.OnHardwareStatus(Stopped(kEmergencyLatch | kEmergencyStop));
+    EXPECT_EQ(core.StartDrive(5, 3), "Emergency: reset it first");
+  }
+  {
+    LogicCore core = ReadyToDrive();
+    core.OnPoseTimeout();
+    EXPECT_EQ(core.StartDrive(5, 3), "No position from the localization");
+  }
+  {
+    LogicCore core = ReadyToDrive();
+    PoseSnapshot pose = GoodPose();
+    pose.position_accuracy = 0.3f;
+    core.OnPose(pose);
+    EXPECT_EQ(core.StartDrive(5, 3), "Position accuracy 0.30 m is worse than 0.10 m");
+  }
+  {
+    LogicCore core = ReadyToDrive();
+    PoseSnapshot pose = GoodPose();
+    pose.orientation_valid = false;
+    core.OnPose(pose);
+    EXPECT_EQ(core.StartDrive(5, 3), "The heading is not aligned yet: drive a few metres by remote control");
+  }
+  {
+    LogicCore core = ReadyToDrive();
+    ASSERT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
+    EXPECT_EQ(core.StartDrive(5, 3), "The mower is busy: AREA_RECORDING");
+    EXPECT_FALSE(core.Driving());
+  }
+}
+
+TEST(LogicDrive, EmergencyCutsTheFollowerOffAtOnceAndCancels) {
+  LogicCore core = ReadyToDrive();
+  ASSERT_EQ(core.StartDrive(5, 3), "");
+  EXPECT_FALSE(core.TakeDriveCancel());
+  core.OnHardwareStatus(Stopped(kEmergencyLatch | kEmergencyCollision));
+  EXPECT_FALSE(core.FollowerActive());
+  EXPECT_TRUE(core.TakeDriveCancel());
+  EXPECT_FALSE(core.TakeDriveCancel());
+  // Driving until the follower has answered, then idle; the emergency stays.
+  EXPECT_TRUE(core.Driving());
+  core.OnDriveEnded(false, "emergency");
+  EXPECT_FALSE(core.Driving());
+  // After the release the follower stays off: a new drive needs a new request.
+  core.OnHardwareStatus(Healthy());
+  EXPECT_FALSE(core.FollowerActive());
+}
+
+TEST(LogicDrive, LostTelemetryPoseOrSafetyMeasurementCancel) {
+  {
+    LogicCore core = ReadyToDrive();
+    ASSERT_EQ(core.StartDrive(5, 3), "");
+    core.OnHardwareTimeout();
+    EXPECT_FALSE(core.FollowerActive());
+    EXPECT_TRUE(core.TakeDriveCancel());
+  }
+  {
+    LogicCore core = ReadyToDrive();
+    ASSERT_EQ(core.StartDrive(5, 3), "");
+    core.OnPoseTimeout();
+    EXPECT_TRUE(core.TakeDriveCancel());
+  }
+  {
+    LogicCore core = ReadyToDrive();
+    ASSERT_EQ(core.StartDrive(5, 3), "");
+    core.OnCapabilities(false);
+    EXPECT_TRUE(core.TakeDriveCancel());
+  }
+}
+
+TEST(LogicDrive, TeleopNeverReachesTheWheelsWhileDriving) {
+  LogicCore core = ReadyToDrive();
+  ASSERT_EQ(core.StartDrive(5, 3), "");
+  EXPECT_FALSE(core.OnTeleop(0.0, 0.0, 10.0).has_value());
+  EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 12.0).has_value());
+}

@@ -142,7 +142,8 @@ std::string EmergencyReasonNames(int reason);
 // The app repeats teleop every 100 ms while the joystick is held and sends one zero when it is let go.
 constexpr double kTeleopQuietS = 1.0;
 
-// Mower states and actions: IDLE and AREA_RECORDING (remote control and recording of areas), emergency and sensors.
+// Mower states and actions: IDLE, AREA_RECORDING (remote control and recording of areas) and driving to a pose,
+// emergency and sensors.
 class LogicCore {
  public:
   explicit LogicCore(const LogicConfig& config);
@@ -165,6 +166,20 @@ class LogicCore {
   // change it waits for a zero command or a pause of kTeleopQuietS, so a held joystick does not move the mower.
   // now_s is a monotonic clock.
   std::optional<std::pair<double, double>> OnTeleop(double vx, double vz, double now_s);
+
+  // hw/capabilities: whether the platform has a safety measurement. Without one only remote control, no driving.
+  void OnCapabilities(bool safety_measured);
+  // Starts a drive to (x, y): empty if it may start, else why not. Shown as IDLE with the sub state DRIVING; the node
+  // plans the way and hands it to the follower.
+  std::string StartDrive(double x, double y);
+  // The drive is over: arrived, or why not.
+  void OnDriveEnded(bool arrived, const std::string& message);
+  bool Driving() const;
+  // The commands of the follower reach the wheels only while driving and without emergency; teleop only while
+  // recording. So hw/cmd_vel has one source at a time.
+  bool FollowerActive() const;
+  // True once when a drive has to stop at once (emergency, no pose, no safety measurement): the node cancels it.
+  bool TakeDriveCancel();
 
   RobotStateData RobotState() const;
   std::vector<ActionGroup> Actions() const;
@@ -191,7 +206,7 @@ class LogicCore {
   }
 
  private:
-  enum class State { kIdle, kAreaRecording };
+  enum class State { kIdle, kAreaRecording, kDriving };
 
   void SetState(State state);
   // Moves the events of the recorder into the events of the logic, at the current position.
@@ -217,6 +232,8 @@ class LogicCore {
   bool actions_changed_ = true;
   bool stop_requested_ = false;
   bool teleop_armed_ = false;
+  bool safety_measured_ = false;
+  bool drive_cancel_ = false;
   double last_teleop_s_ = -std::numeric_limits<double>::infinity();
   std::vector<Event> events_;
   AreaRecorder recorder_;

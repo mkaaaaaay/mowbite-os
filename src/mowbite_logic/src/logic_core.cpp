@@ -1,6 +1,7 @@
 #include "mowbite_logic/logic_core.h"
 
 #include <algorithm>
+#include <cstdio>
 
 namespace mowbite_logic {
 
@@ -101,6 +102,7 @@ void LogicCore::OnPose(const PoseSnapshot& pose) {
 
 void LogicCore::OnPoseTimeout() {
   pose_.reset();
+  if (state_ == State::kDriving) drive_cancel_ = true;
   recorder_.OnPoseLost();
   PullRecorder();
 }
@@ -181,6 +183,7 @@ void LogicCore::UpdateEmergency() {
   if (emergency != emergency_) {
     emergency_ = emergency;
     if (emergency) teleop_armed_ = false;
+    if (emergency && state_ == State::kDriving) drive_cancel_ = true;
     AddEvent("EMERGENCY", {{"emergency", emergency}, {"reason", reason_}});
     actions_changed_ = true;
   }
@@ -228,21 +231,79 @@ std::optional<std::pair<double, double>> LogicCore::OnTeleop(double vx, double v
   return std::make_pair(vx, vz);
 }
 
+void LogicCore::OnCapabilities(bool safety_measured) {
+  safety_measured_ = safety_measured;
+  if (!safety_measured && state_ == State::kDriving) drive_cancel_ = true;
+}
+
+std::string LogicCore::StartDrive(double x, double y) {
+  std::string why;
+  char text[160];
+  if (state_ != State::kIdle) {
+    why = std::string("The mower is busy: ") + (state_ == State::kDriving ? "driving" : StateName(state_));
+  } else if (emergency_) {
+    why = "Emergency: reset it first";
+  } else if (!safety_measured_) {
+    why = "No safety measurement of this platform (hw/capabilities): remote control only";
+  } else if (!pose_) {
+    why = "No position from the localization";
+  } else if (!(pose_->position_accuracy <= config_.max_position_accuracy)) {
+    std::snprintf(text, sizeof(text), "Position accuracy %.2f m is worse than %.2f m", pose_->position_accuracy,
+                  config_.max_position_accuracy);
+    why = text;
+  } else if (!pose_->orientation_valid) {
+    why = "The heading is not aligned yet: drive a few metres by remote control";
+  }
+  if (!why.empty()) {
+    AddEvent("DRIVE_REFUSED", {{"reason", why}});
+    return why;
+  }
+  drive_cancel_ = false;
+  SetState(State::kDriving);
+  AddEvent("DRIVE", {{"phase", "start"}, {"goal_x", x}, {"goal_y", y}});
+  return "";
+}
+
+void LogicCore::OnDriveEnded(bool arrived, const std::string& message) {
+  if (state_ != State::kDriving) return;
+  AddEvent("DRIVE", {{"phase", "end"}, {"arrived", arrived}, {"reason", message}});
+  drive_cancel_ = false;
+  SetState(State::kIdle);
+}
+
+bool LogicCore::Driving() const {
+  return state_ == State::kDriving;
+}
+
+bool LogicCore::FollowerActive() const {
+  return state_ == State::kDriving && !emergency_;
+}
+
+bool LogicCore::TakeDriveCancel() {
+  const bool cancel = drive_cancel_;
+  drive_cancel_ = false;
+  return cancel;
+}
+
 void LogicCore::SetState(State state) {
   if (state == state_) return;
-  if (state_ == State::kAreaRecording) stop_requested_ = true;
+  if (state_ == State::kAreaRecording || state_ == State::kDriving) stop_requested_ = true;
   // Entering and leaving both start from nothing; what was not saved is gone, like with OpenMower.
   recorder_.Reset();
   recorder_.TakeActionsChanged();
   state_ = state;
   teleop_armed_ = false;
-  AddEvent("STATE", {{"state", StateName(state)}});
+  json details = {{"state", StateName(state)}};
+  if (state == State::kDriving) details["sub_state"] = "DRIVING";
+  AddEvent("STATE", std::move(details));
   actions_changed_ = true;
 }
 
 const char* LogicCore::StateName(State state) {
   switch (state) {
     case State::kAreaRecording: return "AREA_RECORDING";
+    // OpenMower has no state for driving without mowing; the sub state tells.
+    case State::kDriving:
     case State::kIdle:
     default: return "IDLE";
   }
@@ -252,6 +313,7 @@ RobotStateData LogicCore::RobotState() const {
   RobotStateData s;
   s.state = StateName(state_);
   if (state_ == State::kAreaRecording) s.sub_state = recorder_.SubState();
+  if (state_ == State::kDriving) s.sub_state = "DRIVING";
   s.emergency = emergency_;
   s.emergency_reason = reason_;
   s.is_charging = hw_.battery_ok && hw_.dock_contact;

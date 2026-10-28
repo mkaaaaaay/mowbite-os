@@ -27,7 +27,8 @@ def generate_launch_description():
                           "datum_lat": datum_lat, "datum_long": datum_long, "datum_height": datum_height,
                           "mqtt_host": LaunchConfiguration("mqtt_host"),
                           "mqtt_port": LaunchConfiguration("mqtt_port"),
-                          "data_dir": LaunchConfiguration("data_dir")}.items())
+                          "data_dir": LaunchConfiguration("data_dir"),
+                          "extra_config": LaunchConfiguration("extra_config")}.items())
     return LaunchDescription([
         DeclareLaunchArgument("link", default_value="/tmp/mowbite_sim_mcu"),
         DeclareLaunchArgument("gnss_link", default_value="/tmp/mowbite_sim_gnss"),
@@ -42,6 +43,8 @@ def generate_launch_description():
         DeclareLaunchArgument("mqtt_host", default_value="127.0.0.1"),
         DeclareLaunchArgument("mqtt_port", default_value="1883"),
         DeclareLaunchArgument("data_dir", default_value="/tmp/mowbite_sim_data"),
+        DeclareLaunchArgument("extra_config", default_value=PathJoinSubstitution(
+            [FindPackageShare("mowbite_sim"), "config", "sim.yaml"])),
         fake_tron,
         # The pty has to exist before the driver looks for it.
         TimerAction(period=1.0, actions=[stack]),

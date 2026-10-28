@@ -1,0 +1,15 @@
+# Drives the mower to a pose through the mowing and navigation areas of the map (mowbite_logic): the MowBite Planner
+# plans the way (~/plan_transit), mowbite_follower drives it. Only from IDLE, without emergency, with a good position
+# and heading, a map that fits the datum and a safety measurement of the platform. The answer comes once the drive has
+# started or was refused; how it ended is a DRIVE event.
+
+# m and rad in the map frame, base_link
+float64 x
+float64 y
+float64 heading
+# true: arrive facing heading
+bool use_heading
+---
+bool success
+# why not, or the length of the way
+string message

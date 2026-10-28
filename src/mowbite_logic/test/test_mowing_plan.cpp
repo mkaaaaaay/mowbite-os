@@ -466,3 +466,35 @@ TEST(MowingPlanResult, SegmentsBeyondThePosesAreLeftOut) {
   AddSegment(answer, kSegmentLane, 0, 9);
   EXPECT_TRUE(planner.Result(q, answer)["paths"].empty());
 }
+
+TEST(MowingPlanTransit, DrivesOnTheActiveMowAndNavAreasAroundTheActiveObstacles) {
+  MowingPlanner planner = PlannerWithMap();
+  std::vector<Ring> drivable;
+  std::vector<Ring> obstacles;
+  ASSERT_EQ(planner.TransitAreas(&drivable, &obstacles), "");
+  // lawn, path, back (not mowed, still drivable), side; not the inactive bed nor the draft
+  ASSERT_EQ(drivable.size(), 4u);
+  EXPECT_EQ(drivable[1].front().x, 10.0);
+  EXPECT_EQ(drivable[2].front().x, 14.0);
+  ASSERT_EQ(obstacles.size(), 1u);
+  EXPECT_EQ(obstacles[0].front().x, 4.0);
+  // Open rings like everywhere in the logic.
+  EXPECT_EQ(drivable[0].size(), 4u);
+}
+
+TEST(MowingPlanTransit, NeedsAMapThatFitsAndAnArea) {
+  MowingPlanner planner(PlanSettings{});
+  std::vector<Ring> drivable;
+  std::vector<Ring> obstacles;
+  EXPECT_EQ(planner.TransitAreas(&drivable, &obstacles), "Cannot drive on the map: The map status is not known yet");
+  planner.SetMapStatus(true, "");
+  EXPECT_EQ(planner.TransitAreas(&drivable, &obstacles), "Cannot drive on the map: map/json is not readable");
+  planner.SetMap(R"({"areas": [{"id": "t", "properties": {"type": "obstacle"},
+                    "outline": [{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 1, "y": 1}]}]})");
+  EXPECT_EQ(planner.TransitAreas(&drivable, &obstacles), "The map has no active mowing or navigation area");
+  planner.SetMap(kMap);
+  planner.SetMapStatus(false, "The map was recorded for another datum");
+  EXPECT_EQ(planner.TransitAreas(&drivable, &obstacles),
+            "Cannot drive on the map: The map was recorded for another datum");
+  EXPECT_TRUE(drivable.empty());
+}
