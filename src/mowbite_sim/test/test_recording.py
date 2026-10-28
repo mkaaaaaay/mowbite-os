@@ -122,6 +122,8 @@ class Probe:
         time.sleep(0.2)
 
     def act(self, action):
+        # The first action may come before the logic has subscribed; it would be lost.
+        self.wait(lambda: self.action_pub.get_subscription_count() > 0)
         self.action_pub.publish(String(data=action))
 
     def wait(self, getter, timeout=10.0):
