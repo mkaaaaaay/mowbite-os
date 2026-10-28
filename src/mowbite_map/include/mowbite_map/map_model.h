@@ -71,6 +71,10 @@ std::string ToText(const MapData& map);
 // The area properties this version stores, the answer of map.area_properties.
 const std::vector<std::string>& AreaPropertyNames();
 
+// The area properties the MowBite Planner reads from the map itself. They are kept always, and reported by
+// map.area_properties only while some node offers planner.settings.
+const std::vector<std::string>& PlannerPropertyNames();
+
 bool IsAreaType(const std::string& type);
 
 }  // namespace mowbite_map

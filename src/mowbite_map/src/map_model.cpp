@@ -182,6 +182,11 @@ const std::vector<std::string>& AreaPropertyNames() {
   return names;
 }
 
+const std::vector<std::string>& PlannerPropertyNames() {
+  static const std::vector<std::string> names = {"mow_around", "angle_min", "angle_max"};
+  return names;
+}
+
 bool IsAreaType(const std::string& type) {
   for (const auto& known : kAreaTypes) {
     if (known == type) return true;

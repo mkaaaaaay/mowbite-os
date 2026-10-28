@@ -112,6 +112,19 @@ TEST(MapService, ReportsWhatItStores) {
   }
 }
 
+TEST(MapService, ReportsThePlannerPropertiesOnlyWhilePlannerSettingsIsOffered) {
+  TempDir dir;
+  MapService service = Started(ConfigFor(dir));
+  const auto names = [&] { return service.Call("map.area_properties", json())->result; };
+  EXPECT_EQ(names().size(), 8u);
+  service.SetPlannerSettingsOffered(true);
+  const json offered = {"name",          "type",          "active",    "mowable",   "angle",     "outline_count",
+                        "outline_overlap_count", "outline_offset", "mow_around", "angle_min", "angle_max"};
+  EXPECT_EQ(names(), offered);
+  service.SetPlannerSettingsOffered(false);
+  EXPECT_EQ(names().size(), 8u);
+}
+
 TEST(MapService, StartsWithAnEmptyMapWithoutAFile) {
   TempDir dir;
   MapService service(ConfigFor(dir));

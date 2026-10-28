@@ -312,6 +312,11 @@ TEST(MapModel, TextIsIndentedByTwoLikeOpenMower) {
   EXPECT_EQ(json::parse(text), ToJson(*ParseMap(SampleMap()).map));
 }
 
+TEST(MapModel, NamesThePropertiesOfThePlanner) {
+  const std::vector<std::string> expected = {"mow_around", "angle_min", "angle_max"};
+  EXPECT_EQ(mowbite_map::PlannerPropertyNames(), expected);
+}
+
 TEST(MapModel, ReportsTheStoredAreaProperties) {
   const std::vector<std::string> expected = {"name",  "type", "active", "mowable", "angle", "outline_count",
                                              "outline_overlap_count", "outline_offset"};

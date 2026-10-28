@@ -123,8 +123,10 @@ std::vector<Event> MapService::TakeEvents() {
 }
 
 RpcOutcome MapService::AreaProperties() const {
+  std::vector<std::string> names = AreaPropertyNames();
+  if (planner_offered_) names.insert(names.end(), PlannerPropertyNames().begin(), PlannerPropertyNames().end());
   RpcOutcome outcome;
-  outcome.result = AreaPropertyNames();
+  outcome.result = names;
   return outcome;
 }
 

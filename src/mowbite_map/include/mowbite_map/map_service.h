@@ -99,6 +99,12 @@ class MapService {
   // For the logic: the docking station becomes the only one, with a new id, like with OpenMower.
   EditResult SetDock(const Point& position, double heading);
 
+  // Whether a node offers planner.settings: then the app learns from map.area_properties that the map keeps the
+  // settings of the planner (they are kept either way).
+  void SetPlannerSettingsOffered(bool offered) {
+    planner_offered_ = offered;
+  }
+
   // The datum tron_gnss works in. Checks the map against it, and ties a first map to it.
   void SetDatum(const Datum& datum);
 
@@ -146,6 +152,7 @@ class MapService {
   bool on_disk_ = false;
   bool changed_ = false;
   bool status_changed_ = false;
+  bool planner_offered_ = false;
   std::vector<Notice> notices_;
   std::vector<Event> events_;
 };
