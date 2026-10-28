@@ -58,6 +58,7 @@ class McuNode : public rclcpp::Node {
  public:
   explicit McuNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_mcu", options), control_(LoadConfig()) {
     port_name_ = declare_parameter("port", "/dev/ttyS9");
+    blade_lease_max_s_ = get_parameter("blade_lease_max").as_double();
     measured_linear_scale_ = declare_parameter("measured_linear_scale", 1.0);
     measured_angular_scale_ = declare_parameter("measured_angular_scale", 1.0);
     drive_current_scale_ = declare_parameter("drive_current_scale", 0.001);
@@ -98,6 +99,7 @@ class McuNode : public rclcpp::Node {
     config.allow_blade = declare_parameter("allow_blade", false);
     config.blade_speed_percent = static_cast<uint16_t>(declare_parameter("blade_speed_percent", 100));
     config.mow_height_mm = static_cast<uint16_t>(declare_parameter("mow_height_mm", 60));
+    config.blade_lease_max_s = declare_parameter("blade_lease_max", config.blade_lease_max_s);
     config.bumper_latches_emergency = declare_parameter("bumper_latches_emergency", true);
     config.expected_cutter_version = declare_parameter("expected_cutter_version", "");
     config.expected_chassis_version = declare_parameter("expected_chassis_version", "");
@@ -388,8 +390,13 @@ class McuNode : public rclcpp::Node {
 
   void OnBlade(const std_srvs::srv::SetBool::Request& req, std_srvs::srv::SetBool::Response& res) {
     std::lock_guard<std::mutex> lock(mutex_);
-    res.success = control_.SetBlade(req.data);
-    res.message = res.success ? "ok" : "allow_blade is false";
+    // Until hw/blade takes over, an on request holds for the longest lease.
+    tron::BladeRequest request;
+    request.on = req.data;
+    request.lease_s = blade_lease_max_s_;
+    auto result = control_.SetBlade(request, MonotonicSeconds());
+    res.success = result == tron::BladeResult::kOk;
+    res.message = tron::BladeResultText(result);
   }
 
   std::mutex mutex_;
@@ -409,6 +416,7 @@ class McuNode : public rclcpp::Node {
   std::atomic<bool> running_{true};
   std::thread io_thread_;
 
+  double blade_lease_max_s_;
   double measured_linear_scale_;
   double measured_angular_scale_;
   double drive_current_scale_;

@@ -14,8 +14,11 @@ tron_mcu:
     cmd_vel_timeout: 0.5
     telemetry_timeout: 1.0
     allow_blade: false
+    # Defaults for blade requests that leave speed or height at 0.
     blade_speed_percent: 100
     mow_height_mm: 60
+    # Longest blade lease in s; without a renewal the blade goes off when it runs out.
+    blade_lease_max: 2.0
     bumper_latches_emergency: true
     # Set after reading the versions of this Tron in phase 4.
     expected_cutter_version: ""

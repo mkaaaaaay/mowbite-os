@@ -21,8 +21,11 @@ struct McuControlConfig {
   int dock_debounce_samples = 3;
   double charge_resend_s = 30.0;
   bool allow_blade = false;
+  // Defaults for a blade request that leaves speed or height at 0.
   uint16_t blade_speed_percent = 100;
   uint16_t mow_height_mm = 60;
+  // Longest lease a blade request may ask for; without a renewal the blade goes off when it runs out.
+  double blade_lease_max_s = 2.0;
   uint16_t blade_off_height_mm = 90;
   bool bumper_latches_emergency = true;
   // A release waits this long for lift, stop and bumper to drop after the clear frame.
@@ -36,6 +39,30 @@ struct McuControlConfig {
   std::string expected_chassis_version;
 };
 
+// Why the blade went off the last time it was requested or running.
+enum class BladeOffReason : uint8_t {
+  kNone = 0,
+  kRequest = 1,
+  kLeaseExpired = 2,
+  kBlocked = 3,
+  kDock = 4,
+  kReconnect = 5,
+};
+
+struct BladeRequest {
+  bool on = false;
+  // 0 takes blade_speed_percent of the config, otherwise 1-100.
+  uint16_t speed_percent = 0;
+  // 0 takes mow_height_mm of the config, otherwise within the cutter height range.
+  uint16_t height_mm = 0;
+  // The blade goes off unless the next request comes within this time; at most blade_lease_max_s.
+  double lease_s = 0;
+};
+
+enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked };
+
+const char* BladeResultText(BladeResult result);
+
 struct McuControlStatus {
   bool latched = false;
   bool lift = false;
@@ -44,6 +71,7 @@ struct McuControlStatus {
   bool telemetry_stale = true;
   bool moving = false;
   bool blade_on = false;
+  BladeOffReason blade_off_reason = BladeOffReason::kNone;
   bool dock_contact = false;
   // No version frame since the port opened, or one that does not match.
   bool firmware_incompatible = false;
@@ -67,8 +95,9 @@ class McuControl {
   void LatchEmergency();
   // Clears a latched lift or stop on the MCU and releases the emergency once the flags are gone.
   void ReleaseEmergency(double now);
-  // Returns false if the blade is not allowed by the configuration.
-  bool SetBlade(bool on);
+  // Switching off always works. Switching on, or renewing the lease with the same or another setting, is refused when
+  // the configuration forbids the blade, the request is out of range, the mower is blocked or on the dock.
+  BladeResult SetBlade(const BladeRequest& request, double now);
   // The MCU state is unknown after the port (re)opens: the blade goes off and moving wheels get a stop.
   void OnConnected(double now);
 
@@ -82,6 +111,24 @@ class McuControl {
     double next_s = 0;
   };
 
+  struct BladeSetting {
+    uint16_t speed_percent;
+    uint16_t height_mm;
+    bool operator==(const BladeSetting& other) const {
+      return speed_percent == other.speed_percent && height_mm == other.height_mm;
+    }
+    bool operator!=(const BladeSetting& other) const {
+      return !(*this == other);
+    }
+  };
+  struct BladeLease {
+    BladeSetting setting;
+    double until_s;
+  };
+
+  bool Blocked(double now) const;
+  bool DockContact() const;
+  void DropBlade(BladeOffReason reason);
   bool TelemetryStale(double now) const;
   bool FirmwareIncompatible() const;
   bool Lift(double now) const;
@@ -111,8 +158,10 @@ class McuControl {
   std::optional<double> release_until_s_;
   std::optional<double> last_clear_s_;
 
-  bool blade_request_ = false;
-  bool blade_on_ = false;
+  std::optional<BladeLease> blade_request_;
+  // Setting of the last on frame, empty while the blade is off.
+  std::optional<BladeSetting> blade_on_;
+  BladeOffReason blade_off_reason_ = BladeOffReason::kNone;
 
   int dock_samples_ = 0;
   bool charge_sent_ = false;

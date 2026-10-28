@@ -1,6 +1,7 @@
 #include "tron_mcu/mcu_control.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace tron {
 
@@ -14,6 +15,19 @@ bool VersionMatches(const std::string& expected, const Version& version) {
 }
 
 }  // namespace
+
+const char* BladeResultText(BladeResult result) {
+  switch (result) {
+    case BladeResult::kOk: return "ok";
+    case BladeResult::kNotAllowed: return "blade not allowed by the configuration";
+    case BladeResult::kInvalidLease: return "lease out of range";
+    case BladeResult::kInvalidSpeed: return "speed out of range";
+    case BladeResult::kInvalidHeight: return "height out of range";
+    case BladeResult::kBlocked: return "mower blocked";
+    case BladeResult::kDocked: return "mower on the dock";
+  }
+  return "unknown";
+}
 
 McuControl::McuControl(const McuControlConfig& config) : config_(config) {
 }
@@ -55,24 +69,63 @@ void McuControl::ReleaseEmergency(double now) {
   release_until_s_ = now + config_.release_window_s;
 }
 
-bool McuControl::SetBlade(bool on) {
-  if (on && !config_.allow_blade) return false;
-  blade_request_ = on;
-  return true;
+BladeResult McuControl::SetBlade(const BladeRequest& request, double now) {
+  if (!request.on) {
+    DropBlade(BladeOffReason::kRequest);
+    return BladeResult::kOk;
+  }
+  if (!config_.allow_blade) return BladeResult::kNotAllowed;
+  if (!std::isfinite(request.lease_s) || request.lease_s <= 0 ||
+      request.lease_s > config_.blade_lease_max_s + kTimeEpsilon) {
+    return BladeResult::kInvalidLease;
+  }
+  if (request.speed_percent > 100) return BladeResult::kInvalidSpeed;
+  if (request.height_mm != 0 &&
+      (request.height_mm < kMinCutterHeightMm || request.height_mm > kMaxCutterHeightMm)) {
+    return BladeResult::kInvalidHeight;
+  }
+  // A refused renewal also ends a running lease, so the blade never outlives a refusal.
+  if (Blocked(now)) {
+    DropBlade(BladeOffReason::kBlocked);
+    return BladeResult::kBlocked;
+  }
+  if (DockContact()) {
+    DropBlade(BladeOffReason::kDock);
+    return BladeResult::kDocked;
+  }
+  BladeSetting setting;
+  setting.speed_percent = request.speed_percent ? request.speed_percent : config_.blade_speed_percent;
+  setting.height_mm = request.height_mm ? request.height_mm : config_.mow_height_mm;
+  blade_request_ = BladeLease{setting, now + request.lease_s};
+  return BladeResult::kOk;
+}
+
+void McuControl::DropBlade(BladeOffReason reason) {
+  if (blade_request_) blade_off_reason_ = reason;
+  blade_request_.reset();
 }
 
 void McuControl::OnConnected(double now) {
   started_ = false;
   next_heartbeat_s_.reset();
   pending_cmd_.reset();
-  blade_request_ = false;
-  blade_on_ = false;
+  DropBlade(BladeOffReason::kReconnect);
+  // The start of the next tick sends the off frames.
+  blade_on_.reset();
   // After the port reopens the MCU might run another firmware, e.g. after an update.
   firmware_ok_.reset();
   if (moving_) {
     moving_ = false;
     StartRepeat(stop_repeat_, ZeroSpeed(), now);
   }
+}
+
+bool McuControl::Blocked(double now) const {
+  return latched_ || TelemetryStale(now) || FirmwareIncompatible();
+}
+
+bool McuControl::DockContact() const {
+  return dock_samples_ >= config_.dock_debounce_samples;
 }
 
 bool McuControl::TelemetryStale(double now) const {
@@ -160,8 +213,8 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     }
   }
 
-  const bool blocked = latched_ || TelemetryStale(now) || FirmwareIncompatible();
-  const bool dock_contact = dock_samples_ >= config_.dock_debounce_samples;
+  const bool blocked = Blocked(now);
+  const bool dock_contact = DockContact();
 
   if (blocked) {
     pending_cmd_.reset();
@@ -192,17 +245,20 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   }
 
   // A blocked or docked mower drops the blade request, it has to be made again afterwards.
-  if (blocked || dock_contact) blade_request_ = false;
-  if (blade_request_ && !blade_on_) {
+  if (blocked) DropBlade(BladeOffReason::kBlocked);
+  if (dock_contact) DropBlade(BladeOffReason::kDock);
+  // Blade watchdog: a lease that was not renewed in time switches the blade off.
+  if (blade_request_ && now + kTimeEpsilon >= blade_request_->until_s) DropBlade(BladeOffReason::kLeaseExpired);
+  if (blade_request_ && blade_on_ != blade_request_->setting) {
     CutterCommand command;
     command.blade_on = true;
-    command.blade_speed_percent = config_.blade_speed_percent;
-    command.height_mm = config_.mow_height_mm;
+    command.blade_speed_percent = blade_request_->setting.speed_percent;
+    command.height_mm = blade_request_->setting.height_mm;
     blade_off_repeat_.remaining = 0;
     out.push_back(CutterPacket(command));
-    blade_on_ = true;
+    blade_on_ = blade_request_->setting;
   } else if (!blade_request_ && blade_on_) {
-    blade_on_ = false;
+    blade_on_.reset();
     StartRepeat(blade_off_repeat_, BladeOff(), now);
   }
 
@@ -235,8 +291,9 @@ McuControlStatus McuControl::Status(double now) const {
   status.bumper = Bumper(now);
   status.telemetry_stale = TelemetryStale(now);
   status.moving = moving_;
-  status.blade_on = blade_on_;
-  status.dock_contact = dock_samples_ >= config_.dock_debounce_samples;
+  status.blade_on = blade_on_.has_value();
+  status.blade_off_reason = blade_off_reason_;
+  status.dock_contact = DockContact();
   status.firmware_incompatible = FirmwareIncompatible();
   return status;
 }

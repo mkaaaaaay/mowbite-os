@@ -42,6 +42,17 @@ uint16_t CutterHeight(const SubPacket& packet) {
   return packet.payload[10] | (packet.payload[11] << 8);
 }
 
+BladeRequest BladeOn(double lease_s = 2.0, uint16_t speed_percent = 0, uint16_t height_mm = 0) {
+  BladeRequest request;
+  request.on = true;
+  request.lease_s = lease_s;
+  request.speed_percent = speed_percent;
+  request.height_mm = height_mm;
+  return request;
+}
+
+const BladeRequest kBladeOff{};
+
 // Runs the controller in 10 ms steps and records every packet with its time.
 class ControlTest : public ::testing::Test {
  protected:
@@ -110,7 +121,7 @@ class FirmwareControlTest : public ControlTest {
   bool DrivesOrMows(double until) {
     const size_t before = sent_.size();
     control_.OnCmdVel(0.2f, 0.0f, now_);
-    control_.SetBlade(true);
+    control_.SetBlade(BladeOn(), now_);
     Run(until);
     for (size_t i = before; i < sent_.size(); i++) {
       if (IsMovingSpeed(sent_[i].packet) || IsBladeOn(sent_[i].packet)) return true;
@@ -411,30 +422,100 @@ TEST_F(FirmwareControlTest, ReconnectForgetsTheVersion) {
 }
 
 TEST_F(ControlTest, BladeRefusedByDefault) {
-  EXPECT_FALSE(control_.SetBlade(true));
+  Run(0.1);
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kNotAllowed);
+  EXPECT_EQ(control_.SetBlade(kBladeOff, now_), BladeResult::kOk);
   Run(1.0);
   EXPECT_TRUE(Times(IsBladeOn).empty());
 }
 
 TEST_F(BladeControlTest, BladeOnOnceOffThreeTimes) {
   Run(0.5);
-  EXPECT_TRUE(control_.SetBlade(true));
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
   Run(1.0);
-  EXPECT_TRUE(control_.SetBlade(false));
+  EXPECT_EQ(control_.SetBlade(kBladeOff, now_), BladeResult::kOk);
   Run(2.0);
   auto on = Times(IsBladeOn);
   ASSERT_EQ(on.size(), 1u);
   for (const auto& s : sent_) {
     if (IsBladeOn(s.packet)) {
       EXPECT_EQ(CutterHeight(s.packet), 45);
+      EXPECT_EQ(s.packet.payload[2], 100);
     }
   }
   EXPECT_EQ(Times(IsBladeOff, on[0]).size(), 3u);
+  EXPECT_EQ(control_.Status(now_).blade_off_reason, BladeOffReason::kRequest);
+}
+
+TEST_F(BladeControlTest, LeaseRunsOutWithoutRenewal) {
+  Run(0.5);
+  ASSERT_EQ(control_.SetBlade(BladeOn(0.5), now_), BladeResult::kOk);
+  Run(0.99);
+  EXPECT_TRUE(control_.Status(now_).blade_on);
+  Run(2.0);
+  auto on = Times(IsBladeOn);
+  ASSERT_EQ(on.size(), 1u);
+  auto off = Times(IsBladeOff, on[0]);
+  ASSERT_EQ(off.size(), 3u);
+  EXPECT_NEAR(off[0], 1.0, 0.011);
+  EXPECT_NEAR(off[2] - off[0], 0.2, 1e-6);
+  EXPECT_FALSE(control_.Status(now_).blade_on);
+  EXPECT_EQ(control_.Status(now_).blade_off_reason, BladeOffReason::kLeaseExpired);
+}
+
+TEST_F(BladeControlTest, RenewedLeaseKeepsOneOnFrame) {
+  Run(0.5);
+  for (int i = 0; i < 10; i++) {
+    ASSERT_EQ(control_.SetBlade(BladeOn(0.5), now_), BladeResult::kOk);
+    Run(now_ + 0.3);
+  }
+  EXPECT_TRUE(control_.Status(now_).blade_on);
+  EXPECT_EQ(Times(IsBladeOn).size(), 1u);
+  EXPECT_TRUE(Times(IsBladeOff, 0.5).empty());
+  // The last renewal at 3.2 s holds until 3.7 s.
+  Run(4.0);
+  auto off = Times(IsBladeOff, 0.5);
+  ASSERT_EQ(off.size(), 3u);
+  EXPECT_NEAR(off[0], 3.7, 0.011);
+}
+
+TEST_F(BladeControlTest, NewSettingSendsOneNewOnFrame) {
+  Run(0.5);
+  control_.SetBlade(BladeOn(1.0, 80, 40), now_);
+  Run(0.6);
+  control_.SetBlade(BladeOn(1.0, 80, 40), now_);
+  Run(0.7);
+  control_.SetBlade(BladeOn(1.0, 60, 70), now_);
+  Run(0.8);
+  std::vector<SubPacket> on;
+  for (const auto& s : sent_) {
+    if (IsBladeOn(s.packet)) on.push_back(s.packet);
+  }
+  ASSERT_EQ(on.size(), 2u);
+  EXPECT_EQ(on[0].payload[2], 80);
+  EXPECT_EQ(CutterHeight(on[0]), 40);
+  EXPECT_EQ(on[1].payload[2], 60);
+  EXPECT_EQ(CutterHeight(on[1]), 70);
+  EXPECT_TRUE(Times(IsBladeOff, 0.5).empty());
+}
+
+TEST_F(BladeControlTest, OutOfRangeRequestsAreRefused) {
+  Run(0.5);
+  EXPECT_EQ(control_.SetBlade(BladeOn(0.0), now_), BladeResult::kInvalidLease);
+  EXPECT_EQ(control_.SetBlade(BladeOn(-1.0), now_), BladeResult::kInvalidLease);
+  EXPECT_EQ(control_.SetBlade(BladeOn(2.5), now_), BladeResult::kInvalidLease);
+  EXPECT_EQ(control_.SetBlade(BladeOn(std::nan("")), now_), BladeResult::kInvalidLease);
+  EXPECT_EQ(control_.SetBlade(BladeOn(INFINITY), now_), BladeResult::kInvalidLease);
+  EXPECT_EQ(control_.SetBlade(BladeOn(1.0, 101), now_), BladeResult::kInvalidSpeed);
+  EXPECT_EQ(control_.SetBlade(BladeOn(1.0, 0, 29), now_), BladeResult::kInvalidHeight);
+  EXPECT_EQ(control_.SetBlade(BladeOn(1.0, 0, 91), now_), BladeResult::kInvalidHeight);
+  Run(1.0);
+  EXPECT_TRUE(Times(IsBladeOn).empty());
 }
 
 TEST_F(BladeControlTest, BladeOffOnLiftAndNotBackOn) {
   Run(0.5);
-  control_.SetBlade(true);
+  control_.SetBlade(BladeOn(), now_);
   Run(1.0);
   sensor_.lift = true;
   Run(1.5);
@@ -444,15 +525,41 @@ TEST_F(BladeControlTest, BladeOffOnLiftAndNotBackOn) {
   ASSERT_EQ(on.size(), 1u);
   EXPECT_EQ(Times(IsBladeOff, on[0]).size(), 3u);
   EXPECT_FALSE(control_.Status(now_).blade_on);
+  EXPECT_EQ(control_.Status(now_).blade_off_reason, BladeOffReason::kBlocked);
+}
+
+TEST_F(BladeControlTest, RenewalWhileBlockedEndsTheLease) {
+  Run(0.5);
+  control_.SetBlade(BladeOn(), now_);
+  Run(1.0);
+  control_.LatchEmergency();
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kBlocked);
+  Run(1.5);
+  EXPECT_FALSE(control_.Status(now_).blade_on);
+  EXPECT_EQ(Times(IsBladeOff, 0.5).size(), 3u);
 }
 
 TEST_F(BladeControlTest, BladeRefusedWithoutTelemetryOrOnDock) {
-  control_.SetBlade(true);
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kBlocked);
   Run(0.5, false);
   for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
-  control_.SetBlade(true);
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kBlocked);
   Run(1.0);
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kDocked);
+  Run(1.5);
   EXPECT_TRUE(Times(IsBladeOn).empty());
+}
+
+TEST_F(BladeControlTest, ReconnectEndsTheLease) {
+  Run(0.5);
+  control_.SetBlade(BladeOn(), now_);
+  Run(1.0);
+  control_.OnConnected(now_);
+  Run(2.0);
+  EXPECT_EQ(Times(IsBladeOn).size(), 1u);
+  EXPECT_EQ(Times(IsBladeOff, 1.0).size(), 3u);
+  EXPECT_FALSE(control_.Status(now_).blade_on);
+  EXPECT_EQ(control_.Status(now_).blade_off_reason, BladeOffReason::kReconnect);
 }
 
 TEST_F(ControlTest, ChargeOnlyOnDebouncedContact) {
@@ -495,7 +602,7 @@ TEST_F(BladeControlTest, NeverSendsPowerOff) {
   for (int i = 0; i < 200; i++) {
     control_.OnCmdVel(i % 3 ? 0.3f : 0.0f, i % 5 ? -0.3f : 0.0f, now_);
     if (i % 7 == 0) control_.ReleaseEmergency(now_);
-    if (i % 11 == 0) control_.SetBlade(i % 22 == 0);
+    if (i % 11 == 0) control_.SetBlade(i % 22 == 0 ? BladeOn(0.3) : kBladeOff, now_);
     if (i % 13 == 0) control_.LatchEmergency();
     control_.OnDockContactSample(i % 17 < 5);
     sensor_.lift = i % 19 == 0;
