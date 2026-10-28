@@ -36,6 +36,9 @@ mowbite_localization:
     # GPS antenna relative to the point of rotation (x forward, y left), measured on the device in phase 7.
     antenna_offset_x: 0.0
     antenna_offset_y: 0.0
+    # Without a fix the accuracy grows by this much per m driven and per s. Assumptions until measured in phase 7.
+    accuracy_growth_per_m: 0.05
+    accuracy_growth_per_s: 0.01
 
 mowbite_logic:
   ros__parameters:

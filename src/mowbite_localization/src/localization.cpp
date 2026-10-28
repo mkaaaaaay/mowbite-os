@@ -2,6 +2,7 @@
 // Elflein. See LICENSE.xbot_positioning.
 #include "mowbite_localization/localization.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace mowbite_localization {
@@ -17,6 +18,12 @@ constexpr int kOutliersBeforeReset = 10;
 constexpr double kInitVariance = 0.001;
 constexpr double kPositionVariance = 500.0;
 constexpr double kMotionVariance = 10000.0;
+
+// The heading counts as aligned after this many motion vectors in a row within kAlignMaxError of the motion the
+// filter expects, both at least kAlignMinSpeed.
+constexpr int kAlignSamples = 5;
+constexpr double kAlignMaxError = 10.0 * M_PI / 180.0;
+constexpr double kAlignMinSpeed = 0.1;
 
 }  // namespace
 
@@ -41,7 +48,7 @@ Localization::Localization(const LocalizationConfig& config) : config_(config) {
   speed_model_.setCovariance(r);
   position_model_.antenna_offset_x = motion_model_.antenna_offset_x = config_.antenna_offset_x;
   position_model_.antenna_offset_y = motion_model_.antenna_offset_y = config_.antenna_offset_y;
-  SetPose(0.0, 0.0, 0.0);
+  Reset(0.0, 0.0, 0.0);
 }
 
 bool Localization::AddImu(double stamp_s, double gyro_z, double now_s) {
@@ -65,6 +72,7 @@ bool Localization::AddImu(double stamp_s, double gyro_z, double now_s) {
 
   const double rate = gyro_z - gyro_offset_;
   const double vx = WheelSpeed(now_s);
+  distance_since_fix_ += std::abs(vx) * dt;
   system_.SetDt(dt);
   Control<double> u;
   u.v() = vx;
@@ -145,12 +153,27 @@ GpsResult Localization::AddGps(const GpsFix& fix, double now_s) {
   }
   UpdatePosition(fix.x, fix.y, kPositionVariance);
   if (fix.motion_valid && std::hypot(fix.motion_x, fix.motion_y) >= config_.min_speed) {
+    CheckHeading(fix.motion_x, fix.motion_y);
     UpdateMotion(fix.motion_x, fix.motion_y, kMotionVariance);
   }
   return GpsResult::kFused;
 }
 
+void Localization::CheckHeading(double vx, double vy) {
+  const auto expected = ExpectedMotion();
+  // Slow motion gives no usable course, it neither counts nor breaks a run.
+  if (std::hypot(vx, vy) < kAlignMinSpeed || std::hypot(expected.x(), expected.y()) < kAlignMinSpeed) return;
+  const double error = NormalizeAngle(std::atan2(vy, vx) - std::atan2(expected.y(), expected.x()));
+  heading_agreements_ = std::abs(error) <= kAlignMaxError ? heading_agreements_ + 1 : 0;
+  if (heading_agreements_ >= kAlignSamples) heading_valid_ = true;
+}
+
 void Localization::SetPose(double x, double y, double theta) {
+  Reset(x, y, theta);
+  heading_valid_ = true;
+}
+
+void Localization::Reset(double x, double y, double theta) {
   StateT s;
   s.setZero();
   s.x() = x;
@@ -172,6 +195,7 @@ void Localization::UpdatePosition(double x, double y, double variance) {
   z.y() = y;
   ekf_.update(position_model_, z);
   KeepAngleWrapped();
+  distance_since_fix_ = 0.0;
 }
 
 void Localization::UpdateMotion(double vx, double vy, double variance) {
@@ -216,7 +240,8 @@ bool Localization::RecentGps(double now_s) const {
 
 double Localization::PositionAccuracy(double now_s) const {
   if (!has_gps_ || !RecentGps(now_s)) return kNoAccuracy;
-  return last_gps_.accuracy;
+  return last_gps_.accuracy + config_.accuracy_growth_per_m * distance_since_fix_ +
+         config_.accuracy_growth_per_s * std::max(0.0, now_s - last_gps_time_s_);
 }
 
 MotionMeasurement<double> Localization::ExpectedMotion() const {

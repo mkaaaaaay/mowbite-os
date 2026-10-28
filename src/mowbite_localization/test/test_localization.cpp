@@ -228,7 +228,9 @@ TEST(Localization, GapOfFiveSecondsStartsTheWarmupAgain) {
 }
 
 TEST(Localization, AccuracyExpiresTenSecondsAfterTheLastFix) {
-  Localization loc({});
+  LocalizationConfig config;
+  config.accuracy_growth_per_s = 0.0;
+  Localization loc(config);
   double t = 100;
   Calibrate(loc, t);
   InitGps(loc, t, 10, 20);
@@ -236,6 +238,30 @@ TEST(Localization, AccuracyExpiresTenSecondsAfterTheLastFix) {
   EXPECT_TRUE(loc.RecentGps(t + 9.9));
   EXPECT_EQ(loc.PositionAccuracy(t + 10.0), kNoAccuracy);
   EXPECT_FALSE(loc.RecentGps(t + 10.0));
+}
+
+TEST(Localization, AccuracyGrowsWithDistanceAndTimeWithoutAFix) {
+  LocalizationConfig config;
+  config.accuracy_growth_per_m = 0.05;
+  config.accuracy_growth_per_s = 0.01;
+  Localization loc(config);
+  double t = 100;
+  Calibrate(loc, t);
+  InitGps(loc, t, 10, 20);
+  EXPECT_NEAR(loc.PositionAccuracy(t), 0.02, 1e-6);
+  // 2 s standing: time only.
+  Step(loc, t, 2.0, 0.0, 0.0);
+  EXPECT_NEAR(loc.PositionAccuracy(t), 0.02 + 0.02, 1e-6);
+  // 2 s at 0.3 m/s: 0.6 m more.
+  Step(loc, t, 2.0, 0.0, 0.3);
+  EXPECT_NEAR(loc.PositionAccuracy(t), 0.02 + 0.04 + 0.03, 1e-3);
+  // Reversing counts the same.
+  Step(loc, t, 1.0, 0.0, -0.3);
+  EXPECT_NEAR(loc.PositionAccuracy(t), 0.02 + 0.05 + 0.045, 1e-3);
+  // The next fused fix starts again from its own accuracy.
+  GpsFix fix = Fixed(loc.GetEstimate().x, loc.GetEstimate().y);
+  EXPECT_EQ(loc.AddGps(fix, t), GpsResult::kFused);
+  EXPECT_NEAR(loc.PositionAccuracy(t), 0.02, 1e-6);
 }
 
 TEST(Localization, OutliersAreIgnoredUntilTheEleventh) {
@@ -299,6 +325,80 @@ TEST(Localization, MotionVectorCorrectsTheHeading) {
   EXPECT_NEAR(e.theta, M_PI / 2, 0.05);
   EXPECT_NEAR(e.x, 0.0, 0.1);
   EXPECT_NEAR(e.y, north, 0.1);
+}
+
+namespace {
+
+// Drives straight at speed along course (rad, from east) for the given number of fixes at 10 Hz, with a motion
+// vector of the true course in every fix. Position follows the true course.
+void DriveWithCourse(Localization& loc, double& t, double& x, double& y, double course, double speed, int fixes) {
+  for (int i = 0; i < fixes; ++i) {
+    for (int k = 0; k < 5; ++k) {
+      t += kStep;
+      x += speed * kStep * std::cos(course);
+      y += speed * kStep * std::sin(course);
+      loc.AddWheelSpeed(speed, t);
+      loc.AddImu(t, 0.0, t);
+    }
+    GpsFix fix = Fixed(x, y);
+    fix.motion_valid = true;
+    fix.motion_x = speed * std::cos(course);
+    fix.motion_y = speed * std::sin(course);
+    loc.AddGps(fix, t);
+  }
+}
+
+}  // namespace
+
+TEST(Localization, HeadingIsNotValidBeforeTheFirstAlignment) {
+  Localization loc({});
+  double t = 100;
+  EXPECT_FALSE(loc.heading_valid());
+  Calibrate(loc, t);
+  InitGps(loc, t, 0, 0);
+  // Standing with fixes does not align, neither does driving below 0.1 m/s.
+  for (int i = 0; i < 50; ++i) {
+    Step(loc, t, 0.1, 0.0, 0.0);
+    loc.AddGps(Fixed(0, 0), t);
+  }
+  EXPECT_FALSE(loc.heading_valid());
+  double x = 0, y = 0;
+  DriveWithCourse(loc, t, x, y, 0.0, 0.05, 50);
+  EXPECT_FALSE(loc.heading_valid());
+}
+
+TEST(Localization, HeadingIsValidAfterFiveAgreeingMotionVectors) {
+  Localization loc({});
+  double t = 100;
+  Calibrate(loc, t);
+  InitGps(loc, t, 0, 0);
+  double x = 0, y = 0;
+  // The filter faces east and the mower drives east: four agreeing vectors are not enough, the fifth is.
+  DriveWithCourse(loc, t, x, y, 0.0, 0.3, 4);
+  EXPECT_FALSE(loc.heading_valid());
+  DriveWithCourse(loc, t, x, y, 0.0, 0.3, 1);
+  EXPECT_TRUE(loc.heading_valid());
+}
+
+TEST(Localization, WrongHeadingIsValidOnlyOnceTheFilterTurned) {
+  Localization loc({});
+  double t = 100;
+  Calibrate(loc, t);
+  InitGps(loc, t, 0, 0);
+  double x = 0, y = 0;
+  // The filter faces east while the mower drives north.
+  DriveWithCourse(loc, t, x, y, M_PI / 2, 0.3, 20);
+  EXPECT_FALSE(loc.heading_valid());
+  DriveWithCourse(loc, t, x, y, M_PI / 2, 0.3, 300);
+  EXPECT_TRUE(loc.heading_valid());
+  EXPECT_NEAR(loc.GetEstimate().theta, M_PI / 2, 10.0 * M_PI / 180.0);
+}
+
+TEST(Localization, SetPoseAlignsTheHeading) {
+  Localization loc({});
+  EXPECT_FALSE(loc.heading_valid());
+  loc.SetPose(1, 2, 0.5);
+  EXPECT_TRUE(loc.heading_valid());
 }
 
 TEST(Localization, SlowMotionVectorIsIgnored) {

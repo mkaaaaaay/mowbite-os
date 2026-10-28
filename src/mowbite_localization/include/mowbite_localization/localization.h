@@ -36,6 +36,9 @@ struct LocalizationConfig {
   double wheel_timeout_s = 0.5;
   // Gyro samples further apart than this restart the integration instead of predicting over the gap.
   double max_imu_gap_s = 0.5;
+  // Without a fix the accuracy grows by this much per m driven and per s. Assumptions until measured on the device.
+  double accuracy_growth_per_m = 0.05;
+  double accuracy_growth_per_s = 0.01;
 };
 
 enum class GpsResult {
@@ -84,11 +87,13 @@ class Localization {
   void SetGpsEnabled(bool enabled) {
     gps_enabled_ = enabled;
   }
-  // Restarts the filter at this pose with zero speed.
+  // Restarts the filter at this pose with zero speed. The caller knows the heading, e.g. from the dock, so it counts
+  // as aligned.
   void SetPose(double x, double y, double theta);
 
   Estimate GetEstimate() const;
-  // Accuracy of the last fix, kNoAccuracy before the filter took GPS or 10 s after the last fix.
+  // Accuracy of the last fix, growing with distance and time without a fix. kNoAccuracy before the filter took GPS
+  // or 10 s after the last fix.
   double PositionAccuracy(double now_s) const;
   // True within 10 s after the last usable fix.
   bool RecentGps(double now_s) const;
@@ -107,11 +112,18 @@ class Localization {
   bool gps_valid() const {
     return has_gps_;
   }
+  // False until the GPS course and the motion the filter expects agree several times in a row while driving, or
+  // until SetPose. The heading of the filter is arbitrary before.
+  bool heading_valid() const {
+    return heading_valid_;
+  }
 
  private:
   using StateT = State<double>;
 
+  void Reset(double x, double y, double theta);
   bool Calibrate(double stamp_s, double gyro_z, double now_s);
+  void CheckHeading(double vx, double vy);
   double WheelSpeed(double now_s) const;
   void UpdatePosition(double x, double y, double variance);
   void UpdateMotion(double vx, double vy, double variance);
@@ -141,6 +153,10 @@ class Localization {
   double last_gps_time_s_ = -std::numeric_limits<double>::infinity();
   int valid_gps_samples_ = 0;
   int gps_outliers_ = 0;
+  double distance_since_fix_ = 0.0;
+
+  bool heading_valid_ = false;
+  int heading_agreements_ = 0;
 };
 
 }  // namespace mowbite_localization

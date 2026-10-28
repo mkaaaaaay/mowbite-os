@@ -167,6 +167,8 @@ class TestSensorChain(unittest.TestCase):
         self.assertLess(msg.position_accuracy, 0.1)
         self.assertAlmostEqual(msg.pose.pose.position.x, 0.0, delta=0.05)
         self.assertAlmostEqual(msg.pose.pose.position.y, 0.0, delta=0.05)
+        # Standing still gives no course: the heading stays unaligned.
+        self.assertEqual(msg.orientation_valid, 0)
         odom = self.probe.wait(lambda: self.probe.ros.get("odom"))
         self.assertIsNotNone(odom, "no odom")
         self.assertEqual(odom.child_frame_id, "base_link")

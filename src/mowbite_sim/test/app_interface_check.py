@@ -131,6 +131,8 @@ check("robot_state compact", state is not None and b'"current_state":"IDLE"' in 
 s = json.loads(state)
 check("robot_state values", s["emergency"] == 0 and s["is_charging"] == 0 and abs(s["battery_percentage"] - 0.8) < 1e-6,
       f'emergency={s["emergency"]} charging={s["is_charging"]} battery={s["battery_percentage"]}')
+check("standing since the start: heading not aligned, GPS 0", s["pose"]["heading_valid"] == 0 and s["gps_percentage"] == 0,
+      f'heading_valid={s["pose"]["heading_valid"]} gps={s["gps_percentage"]} acc={s["pose"]["pos_accuracy"]}')
 v = wait_for(lambda: latest("sensors/om_v_battery/data"))
 check("sensor value text", v == b"24.500000", str(v))
 cs = wait_for(lambda: latest("sensors/om_charge_state/data"))
@@ -236,6 +238,10 @@ check("exit_recording_mode stops at once: 3 zeros within 0.3 s", last_moving is 
       and zeros[0] - last_moving < 0.3, f"last moving {last_moving}, zeros {zeros}")
 state = wait_for(lambda: b'"current_state":"IDLE"' in (latest("robot_state/json") or b""), 3)
 check("state IDLE", bool(state))
+s = json.loads(wait_for(lambda: latest("robot_state/json") if b'"heading_valid":1' in (latest("robot_state/json") or b"")
+                        else None, 3) or latest("robot_state/json"))
+check("heading aligned after driving, GPS above 0", s["pose"]["heading_valid"] == 1 and s["gps_percentage"] > 0.5,
+      f'heading_valid={s["pose"]["heading_valid"]} gps={s["gps_percentage"]} acc={s["pose"]["pos_accuracy"]}')
 with open(LOG) as f:
     clears = [json.loads(l) for l in f if '"mod": 10' in l and '"type": 0,' in l]
 check("clear frame sent", len(clears) == 1 and clears[0]["hex"] == "00" * 8, str(clears))

@@ -47,6 +47,8 @@ class LocalizationNode : public rclcpp::Node {
     config.process_noise = declare_parameter("process_noise", config.process_noise);
     config.wheel_timeout_s = declare_parameter("wheel_timeout", config.wheel_timeout_s);
     config.max_imu_gap_s = declare_parameter("max_imu_gap", config.max_imu_gap_s);
+    config.accuracy_growth_per_m = declare_parameter("accuracy_growth_per_m", config.accuracy_growth_per_m);
+    config.accuracy_growth_per_s = declare_parameter("accuracy_growth_per_s", config.accuracy_growth_per_s);
     frame_id_ = declare_parameter("frame_id", "map");
     child_frame_id_ = declare_parameter("child_frame_id", "base_link");
     const bool publish_tf = declare_parameter("publish_tf", true);
@@ -126,7 +128,11 @@ class LocalizationNode : public rclcpp::Node {
     fix.motion_valid = msg.motion_vector_valid != 0;
     fix.motion_x = msg.motion_vector.x;
     fix.motion_y = msg.motion_vector.y;
+    const bool was_aligned = localization_->heading_valid();
     const auto result = localization_->AddGps(fix, MonotonicSeconds());
+    if (!was_aligned && localization_->heading_valid()) {
+      RCLCPP_INFO(get_logger(), "Heading aligned with the GPS course");
+    }
     switch (result) {
       case GpsResult::kNotFixed:
         RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 10000, "Dropped GPS update, not RTK fixed");
@@ -203,11 +209,11 @@ class LocalizationNode : public rclcpp::Node {
     if (localization_->RecentGps(now_s)) {
       pose.flags |= mowbite_msgs::msg::AbsolutePose::FLAG_SENSOR_FUSION_RECENT_ABSOLUTE_POSE;
     }
-    pose.orientation_valid = 1;
+    pose.orientation_valid = localization_->heading_valid() ? 1 : 0;
     pose.motion_vector_valid = 0;
     pose.position_accuracy = static_cast<float>(localization_->PositionAccuracy(now_s));
-    // Fixed value as in the original until the filter variance is calibrated against the device.
-    pose.orientation_accuracy = 0.01f;
+    // Fixed value as in the original once aligned, until the filter variance is calibrated against the device.
+    pose.orientation_accuracy = localization_->heading_valid() ? 0.01f : static_cast<float>(kNoAccuracy);
     pose.pose = odom.pose;
     pose.vehicle_heading = e.theta;
     pose.motion_heading = e.theta;
