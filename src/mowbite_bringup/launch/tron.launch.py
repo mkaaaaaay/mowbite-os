@@ -13,6 +13,15 @@ def generate_launch_description():
     mcu = ComposableNode(
         package="tron_mcu", plugin="tron_mcu::McuNode", name="tron_mcu",
         parameters=[config, {"port": LaunchConfiguration("mcu_port")}])
+    gnss = ComposableNode(
+        package="tron_gnss", plugin="tron_gnss::GnssNode", name="tron_gnss",
+        parameters=[config, {"port": LaunchConfiguration("gnss_port")}])
+    imu = ComposableNode(
+        package="tron_imu", plugin="tron_imu::ImuNode", name="tron_imu",
+        parameters=[config, {"port": LaunchConfiguration("imu_port")}])
+    localization = ComposableNode(
+        package="mowbite_localization", plugin="mowbite_localization::LocalizationNode", name="mowbite_localization",
+        parameters=[config])
     logic = ComposableNode(
         package="mowbite_logic", plugin="mowbite_logic::LogicNode", name="mowbite_logic", parameters=[config])
     bridge = ComposableNode(
@@ -22,11 +31,13 @@ def generate_launch_description():
                              "data_dir": LaunchConfiguration("data_dir")}])
     container = ComposableNodeContainer(
         name="mowbite", namespace="", package="rclcpp_components", executable="component_container",
-        composable_node_descriptions=[mcu, logic, bridge], output="screen")
+        composable_node_descriptions=[mcu, gnss, imu, localization, logic, bridge], output="screen")
     return LaunchDescription([
         DeclareLaunchArgument("config", default_value=PathJoinSubstitution(
             [FindPackageShare("mowbite_bringup"), "config", "tron.yaml"])),
         DeclareLaunchArgument("mcu_port", default_value="/dev/ttyS9"),
+        DeclareLaunchArgument("gnss_port", default_value="/dev/ttyS4"),
+        DeclareLaunchArgument("imu_port", default_value="/dev/ttyS1"),
         DeclareLaunchArgument("mqtt_host", default_value="127.0.0.1"),
         DeclareLaunchArgument("mqtt_port", default_value="1883"),
         DeclareLaunchArgument("data_dir", default_value="/userdata/mowbite"),

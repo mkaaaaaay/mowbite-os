@@ -14,6 +14,29 @@ tron_mcu:
     expected_cutter_version: ""
     expected_chassis_version: ""
 
+tron_gnss:
+  ros__parameters:
+    port: /dev/ttyS4
+    # Assumption from the reference documentation, checked on the device.
+    baud: 115200
+    # datum_lat, datum_long and datum_height of the garden go into the parameter file on the Tron, not here.
+
+tron_imu:
+  ros__parameters:
+    port: /dev/ttyS1
+    # Assumptions: baud rate and the sensor mounted upside down, checked on the device.
+    baud: 115200
+    mount_roll_deg: 180.0
+
+mowbite_localization:
+  ros__parameters:
+    gyro_calibration_time: 5.0
+    min_speed: 0.01
+    max_gps_accuracy: 0.1
+    # GPS antenna relative to the point of rotation (x forward, y left), measured on the device in phase 7.
+    antenna_offset_x: 0.0
+    antenna_offset_y: 0.0
+
 mowbite_logic:
   ros__parameters:
     # Assumption for 6S Li-ion until the discharge curve is measured.
