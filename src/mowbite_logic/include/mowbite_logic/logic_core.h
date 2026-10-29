@@ -155,6 +155,8 @@ constexpr int kEmergencyLift = 1 << 3;
 constexpr int kEmergencyCollision = 1 << 5;
 constexpr int kEmergencyHighLevel = 1 << 7;
 constexpr int kEmergencyFirmwareIncompatible = 1 << 12;
+constexpr int kEmergencyImuTimeout = 1 << 16;
+constexpr int kEmergencyMowerNotStopped = 1 << 17;
 
 // "LATCH, LIFT": the names of the bits as OpenMower logs them, in bit order.
 std::string EmergencyReasonNames(int reason);

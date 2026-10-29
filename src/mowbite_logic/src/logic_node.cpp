@@ -909,7 +909,7 @@ class LogicNode : public rclcpp::Node {
     msg.current_path_index = static_cast<int16_t>(state.current_path_index);
     msg.battery_percentage = state.battery_percentage;
     msg.emergency = state.emergency;
-    msg.emergency_reason = static_cast<uint16_t>(state.emergency_reason);
+    msg.emergency_reason = static_cast<uint32_t>(state.emergency_reason);
     msg.is_charging = state.is_charging;
     msg.rain_detected = state.rain_detected;
     msg.gps_percentage = state.gps_percentage;

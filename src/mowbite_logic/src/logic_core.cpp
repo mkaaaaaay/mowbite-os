@@ -24,7 +24,7 @@ std::string NewId() {
   return id;
 }
 
-// EmergencyReason of OpenMower, one name per bit.
+// EmergencyReason of OpenMower up to bit 12, then the own bits of hw/status, one name per bit.
 const char* const kReasonNames[] = {"LATCH",
                                     "TIMEOUT_INPUTS",
                                     "STOP",
@@ -37,7 +37,12 @@ const char* const kReasonNames[] = {"LATCH",
                                     "COLLISION_MULTIPLE",
                                     "MOWER_RPM_TIMEOUT",
                                     "MOWER_RPM_LIMIT",
-                                    "FIRMWARE_INCOMPATIBLE"};
+                                    "FIRMWARE_INCOMPATIBLE",
+                                    "TILT",
+                                    "FENCE",
+                                    "STUCK",
+                                    "IMU_TIMEOUT",
+                                    "MOWER_NOT_STOPPED"};
 
 // SensorInfo value descriptions
 constexpr uint8_t kTemperature = 1;

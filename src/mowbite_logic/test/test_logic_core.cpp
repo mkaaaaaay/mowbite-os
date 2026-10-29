@@ -162,6 +162,19 @@ TEST(Logic, ReasonNamesAsOpenMowerLogsThem) {
   EXPECT_EQ(EmergencyReasonNames(kEmergencyTimeoutInputs | kEmergencyStop | kEmergencyCollision),
             "TIMEOUT_INPUTS, STOP, COLLISION");
   EXPECT_EQ(EmergencyReasonNames(kEmergencyFirmwareIncompatible), "FIRMWARE_INCOMPATIBLE");
+  EXPECT_EQ(EmergencyReasonNames(kEmergencyLatch | kEmergencyImuTimeout), "LATCH, IMU_TIMEOUT");
+  EXPECT_EQ(EmergencyReasonNames(kEmergencyMowerNotStopped), "MOWER_NOT_STOPPED");
+  EXPECT_EQ(EmergencyReasonNames((1 << 13) | (1 << 14) | (1 << 15)), "TILT, FENCE, STUCK");
+}
+
+TEST(Logic, OwnReasonBitsReachTheRobotState) {
+  LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
+  core.OnHardwareStatus(Stopped(kEmergencyLatch | kEmergencyMowerNotStopped));
+  EXPECT_EQ(core.RobotState().emergency_reason, kEmergencyLatch | kEmergencyMowerNotStopped);
+  auto changes = core.TakeReasonChanges();
+  ASSERT_FALSE(changes.empty());
+  EXPECT_EQ(EmergencyReasonNames(changes.back().to), "LATCH, MOWER_NOT_STOPPED");
 }
 
 TEST(Logic, TelemetryTimeoutIsEmergency) {
