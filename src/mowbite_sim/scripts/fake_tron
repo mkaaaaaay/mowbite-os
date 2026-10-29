@@ -5,8 +5,9 @@ The MCU pty sends sensor, speed, battery, version and motor frames like the real
 unicycle model of the base frame. The speed drops to 0 after --host-timeout seconds without any frame from the host and
 while the lift or stop flag is set; it stays 0 until the next SpeedData. The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an upside-down mounted sensor.
-Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality) is read on every cycle, every received
-sub packet goes to a JSON lines log, and --state writes the true pose as JSON.
+Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, yaw_drift) is read on every
+cycle, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON. gnss_noise is the
+standard deviation (m) of the antenna position, yaw_drift the yaw error (rad) per metre driven, as omni wheels slip.
 """
 import argparse
 import atexit
@@ -14,6 +15,7 @@ import datetime
 import json
 import math
 import os
+import random
 import select
 import signal
 import struct
@@ -126,15 +128,18 @@ class Pose:
 
     def __init__(self, x=0.0, y=0.0, yaw=0.0):
         self.x, self.y, self.yaw = x, y, yaw
-        self.linear = self.angular = 0.0
+        self.linear = self.angular = self.slip = 0.0
 
-    def step(self, dt, linear, angular):
+    def step(self, dt, linear, angular, drift=0.0):
+        """Advances by dt; drift (rad per m driven) turns the base on top of the commanded rate."""
         self.linear, self.angular = linear, angular
+        self.slip = drift * linear
+        turn = angular + self.slip
         # Midpoint heading keeps circles closed.
-        mid = self.yaw + 0.5 * angular * dt
+        mid = self.yaw + 0.5 * turn * dt
         self.x += linear * math.cos(mid) * dt
         self.y += linear * math.sin(mid) * dt
-        self.yaw = math.atan2(math.sin(self.yaw + angular * dt), math.cos(self.yaw + angular * dt))
+        self.yaw = math.atan2(math.sin(self.yaw + turn * dt), math.cos(self.yaw + turn * dt))
 
     def antenna(self, ax, ay):
         c, s = math.cos(self.yaw), math.sin(self.yaw)
@@ -270,7 +275,8 @@ def wit_frames(pose, mount_rpy_deg, gyro_bias_dps=0.0):
     to_sensor = transpose(mount)
     # A level base without acceleration: the accelerometer reads 1 g up, the gyro the yaw rate.
     acc = [to_sensor[i][2] for i in range(3)]
-    rate = [math.degrees(to_sensor[i][2] * pose.angular) + (gyro_bias_dps if i == 2 else 0.0) for i in range(3)]
+    turn = pose.angular + pose.slip
+    rate = [math.degrees(to_sensor[i][2] * turn) + (gyro_bias_dps if i == 2 else 0.0) for i in range(3)]
     r_sensor = matmul(rotation_rpy(0.0, 0.0, pose.yaw), mount)
     roll = math.degrees(math.atan2(r_sensor[2][1], r_sensor[2][2]))
     pitch = math.degrees(math.asin(max(-1.0, min(1.0, -r_sensor[2][0]))))
@@ -278,6 +284,13 @@ def wit_frames(pose, mount_rpy_deg, gyro_bias_dps=0.0):
     return (wit_frame(0x51, [wit_scaled(a, 16.0) for a in acc] + [0]) +
             wit_frame(0x52, [wit_scaled(r, 2000.0) for r in rate] + [0]) +
             wit_frame(0x53, [wit_scaled(a, 180.0) for a in (roll, pitch, yaw)] + [0]))
+
+
+def noisy(rng, sigma, east, north):
+    """The antenna position with a normal error of sigma metres on each axis."""
+    if sigma <= 0.0:
+        return east, north
+    return east + rng.gauss(0.0, sigma), north + rng.gauss(0.0, sigma)
 
 
 def open_pty(link):
@@ -327,7 +340,8 @@ def main():
     parser.add_argument("--link", default="/tmp/mowbite_sim_mcu", help="symlink to the MCU pty the driver opens")
     parser.add_argument("--gnss-link", default="/tmp/mowbite_sim_gnss", help="symlink to the GNSS pty")
     parser.add_argument("--imu-link", default="/tmp/mowbite_sim_imu", help="symlink to the IMU pty")
-    parser.add_argument("--flags", help="JSON file with lift, stop, bumper, rain, dock, gnss_quality")
+    parser.add_argument("--flags", help="JSON file with lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, "
+                        "yaw_drift")
     parser.add_argument("--log", help="JSON lines log of received sub packets")
     parser.add_argument("--log-max-mb", type=float, default=20.0)
     parser.add_argument("--state", help="JSON file with the true pose, written 5 times a second")
@@ -339,6 +353,9 @@ def main():
     parser.add_argument("--mount-rpy-deg", type=float, nargs=3, default=[180.0, 0.0, 0.0],
                         help="IMU mount rotation, upside down by default")
     parser.add_argument("--gyro-bias-dps", type=float, default=0.0, help="constant yaw rate error of the sensor")
+    parser.add_argument("--gnss-noise-m", type=float, default=0.0, help="standard deviation of the antenna position")
+    parser.add_argument("--yaw-drift", type=float, default=0.0, help="yaw error in rad per metre driven (slip)")
+    parser.add_argument("--seed", type=int, default=1, help="seed of the position noise")
     args = parser.parse_args()
 
     # SIGTERM from launch or docker has to reach the finally block that removes the symlinks.
@@ -350,6 +367,7 @@ def main():
     log = Log(args.log, int(args.log_max_mb * 1e6))
     decoder = Decoder()
     pose = Pose(args.start[0], args.start[1], math.radians(args.start[2]))
+    rng = random.Random(args.seed)
     host = HostLink(args.host_timeout)
     course = None
     # Cutter: on with a speed in percent from the last cutter frame; it stops with the wheels (lift, stop, no host).
@@ -364,7 +382,7 @@ def main():
             flags = read_flags(args.flags)
             blocked = bool(flags.get("lift", 0) or flags.get("stop", 0))
             linear, angular = host.setpoint(now, blocked)
-            pose.step(now - last, linear, angular)
+            pose.step(now - last, linear, angular, float(flags.get("yaw_drift", args.yaw_drift)))
             last = now
 
             if now >= next_sensor:
@@ -390,7 +408,8 @@ def main():
                                   (FROM_MCU, 13, cutter + motor * 3)]))
             if now >= next_gnss:
                 next_gnss = now + GNSS_PERIOD
-                ax, ay = pose.antenna(*args.antenna_offset)
+                sigma = float(flags.get("gnss_noise", args.gnss_noise_m))
+                ax, ay = noisy(rng, sigma, *pose.antenna(*args.antenna_offset))
                 vx, vy = pose.antenna_velocity(*args.antenna_offset)
                 speed = math.hypot(vx, vy)
                 if speed > 0.01:

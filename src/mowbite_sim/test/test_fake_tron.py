@@ -80,6 +80,38 @@ class PoseTest(unittest.TestCase):
         self.assertAlmostEqual((y1 - y0) / 1e-6, vy, places=4)
 
 
+class SlipAndNoiseTest(unittest.TestCase):
+    def test_drift_turns_the_base_while_driving_straight(self):
+        pose = ft.Pose()
+        for _ in range(1000):
+            pose.step(0.01, 0.2, 0.0, 0.05)
+        # 2 m driven at 0.05 rad/m
+        self.assertAlmostEqual(pose.yaw, 0.1, places=6)
+        self.assertEqual(pose.angular, 0.0)
+
+    def test_no_drift_without_driving(self):
+        pose = ft.Pose()
+        pose.step(1.0, 0.0, 0.0, 0.05)
+        self.assertEqual(pose.yaw, 0.0)
+
+    def test_gyro_sees_the_slip(self):
+        pose = ft.Pose()
+        pose.step(0.01, 0.2, 0.0, 0.05)
+        rate_z = parse_wit(ft.wit_frames(pose, (0.0, 0.0, 0.0)))[1][1][2]
+        self.assertAlmostEqual(rate_z * 2000.0 / 32768.0, math.degrees(0.01), delta=0.07)
+
+    def test_noise_is_seeded_and_scaled(self):
+        a, b = ft.random.Random(1), ft.random.Random(1)
+        self.assertEqual(ft.noisy(a, 0.02, 1.0, 2.0), ft.noisy(b, 0.02, 1.0, 2.0))
+        self.assertEqual(ft.noisy(a, 0.0, 1.0, 2.0), (1.0, 2.0))
+        rng = ft.random.Random(2)
+        errors = [ft.noisy(rng, 0.02, 0.0, 0.0)[0] for _ in range(4000)]
+        mean = sum(errors) / len(errors)
+        sigma = math.sqrt(sum((e - mean) ** 2 for e in errors) / len(errors))
+        self.assertAlmostEqual(sigma, 0.02, delta=0.002)
+        self.assertAlmostEqual(mean, 0.0, delta=0.002)
+
+
 class HostLinkTest(unittest.TestCase):
     def test_no_traffic_no_motion(self):
         host = ft.HostLink(2.0)
@@ -365,6 +397,17 @@ class ProcessTest(unittest.TestCase):
         read_available(self.fds["gnss"], 0.1)
         lines = read_available(self.fds["gnss"], 0.5).decode().splitlines()
         self.assertEqual([l for l in lines if l[3:6] == "GGA"][-1].split(",")[6], "5")
+        self.set_flags()
+
+    def test_2b_gnss_noise_flag(self):
+        def latitudes():
+            read_available(self.fds["gnss"], 0.1)
+            lines = read_available(self.fds["gnss"], 1.2).decode().splitlines()
+            return {l.split(",")[2] for l in lines if l[3:6] == "GGA"}
+        self.set_flags()
+        self.assertEqual(len(latitudes()), 1)
+        self.set_flags(gnss_noise=0.5)
+        self.assertGreater(len(latitudes()), 3)
         self.set_flags()
 
     def test_3_imu_rate_and_content(self):
