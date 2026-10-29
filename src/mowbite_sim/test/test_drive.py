@@ -228,9 +228,14 @@ class TestDrive(unittest.TestCase):
         self.assertIn("STATE", types)
 
     def test_03_a_goal_off_the_map_is_refused(self):
+        since = len(self.probe.events)
         answer = self.probe.drive(30, 30)
         self.assertFalse(answer.success)
         self.assertIn("Transit planning failed", answer.message)
+        # Its end event has to be in before the next drive, which looks for the first end after its start.
+        ended = self.probe.drive_ended(since, 5)
+        self.assertIsNotNone(ended, "no DRIVE end for the refused goal")
+        self.assertEqual(ended["reason"], "TRANSIT_FAILED")
 
     def test_04_stop_drive_stops_the_mower(self):
         p = self.probe

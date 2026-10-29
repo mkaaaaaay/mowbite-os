@@ -5,9 +5,11 @@ The MCU pty sends sensor, speed, battery, version and motor frames like the real
 unicycle model of the base frame. The speed drops to 0 after --host-timeout seconds without any frame from the host and
 while the lift or stop flag is set; it stays 0 until the next SpeedData. The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an upside-down mounted sensor.
-Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, yaw_drift) is read on every
-cycle, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON. gnss_noise is the
-standard deviation (m) of the antenna position, yaw_drift the yaw error (rad) per metre driven, as omni wheels slip.
+Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, gnss_age, yaw_drift, imu_off,
+cutter_ignores_off) is read on every cycle, every received sub packet goes to a JSON lines log, and --state writes the
+true pose as JSON. gnss_noise is the standard deviation (m) of the antenna position, gnss_age the age of the corrections
+in GGA (s, default 1.0, null leaves the field empty), yaw_drift the yaw error (rad) per metre driven, as omni wheels slip.
+imu_off stops the IMU frames, cutter_ignores_off keeps the blade turning on off frames.
 """
 import argparse
 import atexit
@@ -214,15 +216,17 @@ def nmea_coordinate(value, positive, negative, degree_digits):
     return f"{degrees:0{degree_digits}d}{minutes:010.7f}", hemisphere
 
 
-def gnss_sentences(utc, lat, lon, height, quality, speed, course):
-    """GGA, RMC and VTG as bytes. Quality 0 gives no position, a missing course leaves the course fields empty."""
+def gnss_sentences(utc, lat, lon, height, quality, speed, course, age=1.0):
+    """GGA, RMC and VTG as bytes. Quality 0 gives no position, a missing course leaves the course fields empty, a missing
+    age the age and station of the corrections."""
     stamp = utc.strftime("%H%M%S.") + f"{utc.microsecond // 10000:02d}"
     date = utc.strftime("%d%m%y")
     if quality in (1, 2, 4, 5, 6):
         la, ns = nmea_coordinate(lat, "N", "S", 2)
         lo, ew = nmea_coordinate(lon, "E", "W", 3)
         position = f"{la},{ns},{lo},{ew}"
-        gga = f"GNGGA,{stamp},{position},{quality},24,0.6,{height:.3f},M,0.0,M,1.0,0000"
+        corrections = "," if age is None else f"{age:.1f},0000"
+        gga = f"GNGGA,{stamp},{position},{quality},24,0.6,{height:.3f},M,0.0,M,{corrections}"
         status, mode = "A", "R" if quality in (4, 5) else "A"
     else:
         gga = f"GNGGA,{stamp},,,,,0,00,99.99,,,,,,"
@@ -415,11 +419,14 @@ def main():
                 if speed > 0.01:
                     course = math.degrees(math.atan2(vx, vy)) % 360.0
                 lat, lon, height = enu_to_geodetic(args.datum, ax, ay, 0.0)
+                age = flags.get("gnss_age", 1.0)
                 send(gnss, gnss_sentences(datetime.datetime.now(datetime.timezone.utc), lat, lon, height,
-                                          int(flags.get("gnss_quality", 4)), speed, course))
+                                          int(flags.get("gnss_quality", 4)), speed, course,
+                                          None if age is None else float(age)))
             if now >= next_imu:
                 next_imu = now + IMU_PERIOD
-                send(imu, wit_frames(pose, args.mount_rpy_deg, args.gyro_bias_dps))
+                if not flags.get("imu_off", 0):
+                    send(imu, wit_frames(pose, args.mount_rpy_deg, args.gyro_bias_dps))
             if args.state and now >= next_state:
                 next_state = now + 0.2
                 write_state(args.state, now, pose)
@@ -446,7 +453,8 @@ def main():
                         entry["speed"] = [round(v, 3) for v in speed_cmd]
                     if packet_type == TO_MCU and module == 11 and len(payload) >= 4:
                         on = payload[0] == 1
-                        cutter_percent = min(100, struct.unpack("<H", payload[2:4])[0]) if on and not blocked else 0
+                        if on or not flags.get("cutter_ignores_off", 0):
+                            cutter_percent = min(100, struct.unpack("<H", payload[2:4])[0]) if on and not blocked else 0
                         entry["cutter"] = cutter_percent
                     log.write(entry)
     finally:

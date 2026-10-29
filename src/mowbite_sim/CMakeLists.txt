@@ -16,6 +16,7 @@ if(BUILD_TESTING)
   add_launch_test(test/test_drive.py TIMEOUT 400)
   add_launch_test(test/test_mowing.py TIMEOUT 900)
   add_launch_test(test/test_follower_stall.py TIMEOUT 240)
+  add_launch_test(test/test_safety_inputs.py TIMEOUT 120)
 endif()
 
 ament_package()

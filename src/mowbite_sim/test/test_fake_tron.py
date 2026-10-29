@@ -195,6 +195,14 @@ class NmeaTest(unittest.TestCase):
         self.assertAlmostEqual(int(f[4][:3]) + float(f[4][3:]) / 60.0, 9.0004, places=9)
         self.assertEqual(f[6], "4")
 
+    def test_gga_age_of_corrections(self):
+        def fields(**kw):
+            return self.sentences(**kw)[0].split("*")[0].split(",")
+        self.assertEqual(fields()[13:15], ["1.0", "0000"])
+        self.assertEqual(fields(age=45.0)[13:15], ["45.0", "0000"])
+        self.assertEqual(fields(age=None)[13:15], ["", ""])
+        self.assertTrue(all(nmea_ok(l) for l in self.sentences(age=None)))
+
     def test_southwest_hemispheres(self):
         f = self.sentences(lat=-33.5, lon=-151.25)[0].split(",")
         self.assertEqual((f[3], f[5]), ("S", "W"))
