@@ -267,6 +267,9 @@ if offers("logs.recent"):
 if offers("map.area_properties"):
     r = rpc("map.area_properties", None, "4")
     expected = ["name", "type", "active", "mowable", "angle", "outline_count", "outline_overlap_count", "outline_offset"]
+    # mowbite_map adds the planner's keys while a node offers planner.settings
+    if methods is not None and "planner.settings" in methods:
+        expected += ["mow_around", "angle_min", "angle_max"]
     check("map.area_properties", r and isinstance(r.get("result"), list) and (r["result"] == expected
                                                                               or args.target != "mowbite-os"),
           json.dumps(r and r.get("result")))
@@ -349,7 +352,7 @@ else:
 # The map the way the app saves it: open rings, settings of its own, a property the mower does not know.
 APP_MAP = {
     "areas": [
-        {"id": "lawn", "properties": {"name": "Front", "type": "mow", "angle": 0.35, "planner": {"pattern": "stripes"}},
+        {"id": "lawn", "properties": {"name": "Front", "type": "mow", "angle": 0.35, "planner": {"fill_pattern": "lanes"}},
          "outline": [{"x": 0, "y": 0}, {"x": 10, "y": 0}, {"x": 10, "y": 6}, {"x": 0, "y": 6}]},
         {"id": "tree", "properties": {"type": "obstacle", "pin": True},
          "outline": [{"x": 4, "y": 2}, {"x": 5, "y": 2}, {"x": 5, "y": 3}]},
@@ -363,7 +366,7 @@ saved = json.loads(published) if published else {"areas": [], "docking_stations"
 check("map/json: rings closed, unknown properties kept",
       len(saved["areas"]) == 2 and len(saved["areas"][0]["outline"]) == 5
       and saved["areas"][0]["outline"][0] == saved["areas"][0]["outline"][-1]
-      and saved["areas"][0]["properties"].get("planner") == {"pattern": "stripes"}
+      and saved["areas"][0]["properties"].get("planner") == {"fill_pattern": "lanes"}
       and saved["areas"][1]["properties"].get("pin") is True, json.dumps(saved)[:200])
 bad = json.loads(json.dumps(APP_MAP))
 bad["areas"][0]["outline"] = bad["areas"][0]["outline"][:2]
