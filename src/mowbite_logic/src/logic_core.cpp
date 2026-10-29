@@ -592,7 +592,7 @@ Reason LogicCore::Unsafe() const {
   if (emergency_) return Reason("EMERGENCY", "Emergency: reset it first");
   if (!safety_measured_) {
     return Reason("NO_SAFETY_MEASUREMENT",
-                  "No safety measurement of this platform (hw/capabilities): remote control only");
+                  "No safety measurement of this platform (hw/capabilities): mowing and driving are blocked");
   }
   return {};
 }

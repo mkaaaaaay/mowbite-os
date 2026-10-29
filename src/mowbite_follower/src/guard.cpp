@@ -81,7 +81,8 @@ std::string Geofence::Check(double x, double y) const {
 
 GuardResult CheckGuard(const GuardConfig& config, const GuardInput& in, const Geofence& fence) {
   if (!in.safety_measured) {
-    return {StopReason::kNotAllowed, "no safety measurement of this platform (hw/capabilities): remote control only"};
+    return {StopReason::kNotAllowed,
+            "no safety measurement of this platform (hw/capabilities): mowing and driving are blocked"};
   }
   if (in.hw_age > config.hw_timeout) return {StopReason::kEmergency, "no hw/status from the driver"};
   if (in.emergency) return {StopReason::kEmergency, "emergency"};
