@@ -116,7 +116,7 @@ mowbite_follower:
 mowbite_map:
   ros__parameters:
     # Largest map.json in bytes (MQTT drops messages from about 2 MB) and the distance in m under which two datums count
-    # as the same. The map is kept in data_dir, which tron.launch.py sets for the bridge, the map and the logic.
+    # as the same. The map is kept in data_dir, which tron.launch.py sets for the nodes that keep files.
     max_map_bytes: 1500000
     datum_tolerance: 0.01
 
@@ -155,3 +155,6 @@ mowbite_planner:
     blade_ahead: 0.0
     # Nobody listens to ~/coverage_path, so do not publish every plan.
     publish_path: false
+    # data_dir/planner (tron.launch.py sets data_dir): plans kept and maps before at most this many days and MB.
+    keep_days: 60
+    keep_mb: 50.0

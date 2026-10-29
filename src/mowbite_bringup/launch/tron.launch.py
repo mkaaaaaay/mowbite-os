@@ -47,7 +47,8 @@ def generate_launch_description():
         composable_node_descriptions=[mcu, gnss, imu, localization, logic, bridge, map_node, follower], output="screen")
     # Plans the mowing paths for mowing.plan; a crash only costs the plans until it is back.
     planner = Node(package="mowbite_planner", executable="mowbite_planner_node", name="mowbite_planner",
-                   parameters=[config, extra], output="screen", respawn=True, respawn_delay=5.0)
+                   parameters=[config, extra, {"data_dir": LaunchConfiguration("data_dir")}], output="screen",
+                   respawn=True, respawn_delay=5.0)
     return LaunchDescription([
         DeclareLaunchArgument("config", default_value=PathJoinSubstitution(
             [FindPackageShare("mowbite_bringup"), "config", "tron.yaml"])),
