@@ -96,8 +96,12 @@ void PathTracker::Fail(const std::string& why) {
   SetPhase(Phase::kFailed);
 }
 
-bool PathTracker::CornerAt(size_t i) const {
-  return i + 1 < poses_.size() && std::abs(NormalizeAngle(poses_[i + 1].yaw - poses_[i].yaw)) > config_.corner_angle;
+bool PathTracker::SpinAt(size_t i) const {
+  return i > 0 && i < poses_.size() && std::abs(NormalizeAngle(poses_[i].yaw - poses_[i - 1].yaw)) > config_.spin_angle;
+}
+
+double PathTracker::ArrivalYaw(size_t i) const {
+  return SpinAt(i) ? poses_[i - 1].yaw : poses_[i].yaw;
 }
 
 double PathTracker::StraightAhead() const {
@@ -123,16 +127,11 @@ void PathTracker::AdvanceControlPoint(double dt) {
   double distance = dt * speed_;
   double angle = dt * config_.turn_rate;
   while (distance > 0 && angle > 0 && index_ + 1 < poses_.size()) {
-    // A corner: the control point waits on it until the mower got there and turned.
-    if (progress_ == 0 && corner_done_ != index_ && CornerAt(index_)) {
-      control_ = poses_[index_];
-      SetPhase(Phase::kCornerApproach);
-      return;
-    }
     const Pose2& a = poses_[index_];
     const Pose2& b = poses_[index_ + 1];
     const double d = std::hypot(b.x - a.x, b.y - a.y);
-    const double turn = std::abs(NormalizeAngle(b.yaw - a.yaw));
+    // Towards a turn on the spot the heading stays the one before it.
+    const double turn = SpinAt(index_ + 1) ? 0.0 : std::abs(NormalizeAngle(b.yaw - a.yaw));
     const double rest_d = d * (1.0 - progress_);
     const double rest_turn = turn * (1.0 - progress_);
     if (rest_d < distance && rest_turn < angle) {
@@ -140,6 +139,13 @@ void PathTracker::AdvanceControlPoint(double dt) {
       progress_ = 0;
       distance -= rest_d;
       angle -= rest_turn;
+      // A turn on the spot: the control point waits on it until the mower got there and turned.
+      if (index_ + 1 < poses_.size() && corner_done_ != index_ && SpinAt(index_)) {
+        control_ = poses_[index_];
+        control_.yaw = ArrivalYaw(index_);
+        SetPhase(Phase::kCornerApproach);
+        return;
+      }
       continue;
     }
     const double by_distance = (d * progress_ + distance) / d;
@@ -155,7 +161,7 @@ void PathTracker::AdvanceControlPoint(double dt) {
   const Pose2& b = poses_[index_ + 1];
   control_.x = a.x + progress_ * (b.x - a.x);
   control_.y = a.y + progress_ * (b.y - a.y);
-  control_.yaw = NormalizeAngle(a.yaw + progress_ * NormalizeAngle(b.yaw - a.yaw));
+  control_.yaw = SpinAt(index_ + 1) ? a.yaw : NormalizeAngle(a.yaw + progress_ * NormalizeAngle(b.yaw - a.yaw));
 }
 
 double PathTracker::CrossTrack(const Pose2& pose) const {
@@ -199,6 +205,7 @@ PathTracker::Command PathTracker::Step(const Pose2& pose, double dt) {
         return cmd;
       }
       control_ = poses_[index_];
+      control_.yaw = ArrivalYaw(index_);
       break;
     case Phase::kCornerRotate:
       if (phase_time_ > config_.phase_timeout) {
@@ -206,7 +213,6 @@ PathTracker::Command PathTracker::Step(const Pose2& pose, double dt) {
         return cmd;
       }
       control_ = poses_[index_];
-      control_.yaw = poses_[index_ + 1].yaw;
       break;
     case Phase::kGoalApproach:
       if (phase_time_ > config_.phase_timeout) {
@@ -214,6 +220,7 @@ PathTracker::Command PathTracker::Step(const Pose2& pose, double dt) {
         return cmd;
       }
       control_ = poses_.back();
+      control_.yaw = ArrivalYaw(poses_.size() - 1);
       break;
     case Phase::kPostRotate:
       if (phase_time_ > config_.phase_timeout) {
@@ -248,6 +255,8 @@ PathTracker::Command PathTracker::Step(const Pose2& pose, double dt) {
     return Command();
   } else if (phase_ == Phase::kCornerRotate && std::abs(angle_error_) < config_.max_goal_angle_error) {
     corner_done_ = index_;
+    // The mower stood still: the control point starts from standstill too.
+    speed_ = 0;
     SetPhase(Phase::kFollowing);
     return Command();
   }

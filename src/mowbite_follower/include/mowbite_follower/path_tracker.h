@@ -32,8 +32,9 @@ struct TrackerConfig {
   double fast_distance = 1.0;
   double fast_angle = 20.0 * M_PI / 180.0;
   double acceleration = 0.1;
-  // rad/s the control point turns at most, so that it never turns faster than the mower can.
-  double turn_rate = 0.3;
+  // rad/s the control point turns at most: below max_angular, so that the mower has some left to correct with on the
+  // tightest arcs.
+  double turn_rate = 0.25;
   // Limits of the command, the driver's limits on the Tron.
   double max_linear = 0.3;
   double max_angular = 0.3;
@@ -57,9 +58,10 @@ struct TrackerConfig {
   double max_goal_angle_error = 20.0 * M_PI / 180.0;
   // The goal counts as reached this close (m).
   double max_goal_distance_error = 0.1;
-  // A heading change of more than this (rad) from one pose to the next is a corner: the mower stops on it and turns on
-  // the spot, like before the start.
-  double corner_angle = 45.0 * M_PI / 180.0;
+  // A pose's heading is the one the mower leaves it with. A pose whose heading differs from the one before by more than
+  // this (rad) is a turn on the spot, the planner's rule (its arcs turn at most 10 deg per pose): the mower arrives
+  // with the heading before, stops on it and turns the shorter way.
+  double spin_angle = 15.0 * M_PI / 180.0;
   // Forwards only while the heading is within this (rad) of the control point's; beyond it the mower turns first.
   double max_drive_angle_error = 45.0 * M_PI / 180.0;
   // s for turning before the start, approaching the goal or a corner and turning there.
@@ -123,8 +125,10 @@ class PathTracker {
 
  private:
   void AdvanceControlPoint(double dt);
-  // Whether the stretch from poses_[i] to the next turns by more than corner_angle.
-  bool CornerAt(size_t i) const;
+  // Whether the mower turns on the spot at poses_[i].
+  bool SpinAt(size_t i) const;
+  // The heading the mower arrives at poses_[i] with.
+  double ArrivalYaw(size_t i) const;
   // m the poses from the control point on stay straight, up to fast_distance.
   double StraightAhead() const;
   void SetPhase(Phase phase);
@@ -151,7 +155,7 @@ class PathTracker {
   double i_lat_ = 0;
   double i_angle_ = 0;
   bool first_step_ = true;
-  // The corner at this pose is turned already; SIZE_MAX: none.
+  // The turn on the spot at this pose is done already; SIZE_MAX: none.
   size_t corner_done_ = SIZE_MAX;
 };
 

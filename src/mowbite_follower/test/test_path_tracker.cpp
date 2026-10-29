@@ -26,13 +26,15 @@ std::vector<Pose2> Line(double x, double y, double yaw, double length, double sp
   return poses;
 }
 
-// An arc of radius r (left turn for angle > 0) from pose p, poses every spacing m.
+// An arc of radius r (left turn for angle > 0) from pose p, poses every spacing m and at most every 10 deg like the
+// planner's.
 std::vector<Pose2> Arc(const Pose2& p, double r, double angle, double spacing = 0.1) {
   std::vector<Pose2> poses;
   const double sign = angle > 0 ? 1.0 : -1.0;
   const double cx = p.x - sign * r * std::sin(p.yaw);
   const double cy = p.y + sign * r * std::cos(p.yaw);
-  const int n = std::max(2, static_cast<int>(std::ceil(std::abs(angle) * r / spacing)));
+  const int n = std::max({2, static_cast<int>(std::ceil(std::abs(angle) * r / spacing)),
+                          static_cast<int>(std::ceil(std::abs(angle) / (10.0 * M_PI / 180.0) - 1e-9))});
   for (int i = 1; i <= n; i++) {
     const double yaw = p.yaw + angle * i / n;
     poses.push_back({cx + sign * r * std::sin(yaw), cy - sign * r * std::cos(yaw), NormalizeAngle(yaw)});
@@ -191,12 +193,13 @@ TEST(PathTracker, TurnsOnTheSpotBeforeTheStart) {
 }
 
 // The way into the lanes of a small lawn (sim, 28.10.): a transit heading 114 deg, then a lane heading 0 deg from the
-// pose where it ends. Before, the mower cut this corner on a wide arc and stopped 0.5 m off the lane.
+// pose where it ends, which the mower leaves with 0 deg. Before, it cut this corner on a wide arc and stopped 0.5 m off
+// the lane.
 TEST(PathTracker, StopsOnACornerAndTurnsOnTheSpot) {
   const double in = 113.9 * M_PI / 180.0;
   std::vector<Pose2> path = Line(0.047, 0.329, in, 0.4);
   const Pose2 corner{path.back().x, path.back().y, 0.0};
-  path.back().yaw = in;
+  path.back().yaw = 0.0;
   Append(path, Line(corner.x, corner.y, 0.0, 2.0), true);
   PathTracker tracker{TrackerConfig()};
   ASSERT_EQ(tracker.Start(path, {}, 0), "");
@@ -301,4 +304,143 @@ TEST(PathTracker, NeverExceedsTheLimitsEvenFarOff) {
   Drive(tracker, robot, 120);
   EXPECT_LE(robot.max_linear, config.max_linear + 1e-9);
   EXPECT_LE(robot.max_angular, config.max_angular + 1e-9);
+}
+
+namespace {
+
+// What the planner does where no arc fits: straight on, a pose 2.5 cm before the turn with the heading before, the pose
+// of the turn with the new heading, then straight on from there.
+std::vector<Pose2> SpinPath(double turn) {
+  std::vector<Pose2> path = Line(0, 0, 0, 1.0);
+  path.push_back({1.025, 0.0, NormalizeAngle(turn)});
+  Append(path, Line(1.025, 0.0, NormalizeAngle(turn), 1.5), true);
+  return path;
+}
+
+}  // namespace
+
+// Pose 59 of the small lawn with turn_radius 0.44 (sim, 29.10.): the mower swung back to the old heading after turning,
+// then drove across the lanes and stopped 0.51 m off the path.
+TEST(PathTracker, TurnsOnTheSpotWhereThePlannerDoes) {
+  for (const double degrees : {135.9, -169.4, 16.0}) {
+    SCOPED_TRACE(degrees);
+    const double turn = degrees * M_PI / 180.0;
+    PathTracker tracker{TrackerConfig()};
+    ASSERT_EQ(tracker.Start(SpinPath(turn), {}, 0), "");
+    Robot robot;
+    bool turned = false;
+    bool after = false;
+    Pose2 turned_at;
+    double after_time = 0;
+    double control_first_second = 0;
+    double worst_heading = 0;
+    double t = 0;
+    while (t < 120 && tracker.phase() != Phase::kDone && tracker.phase() != Phase::kFailed) {
+      const auto cmd = tracker.Step(robot.pose, kDt);
+      if (tracker.phase() == Phase::kCornerRotate) {
+        if (!turned) turned_at = robot.pose;
+        turned = true;
+        EXPECT_EQ(cmd.linear, 0.0);
+        EXPECT_LE(std::abs(cmd.angular), 0.3 + 1e-9);
+      } else if (turned && tracker.phase() == Phase::kFollowing) {
+        after = true;
+      }
+      if (tracker.OnPath()) robot.max_cross = std::max(robot.max_cross, std::abs(tracker.CrossTrack(robot.pose)));
+      robot.Move(cmd, kDt);
+      if (after) {
+        // Once turned, the heading only comes closer to the new one, give or take what the PID needs for the line.
+        worst_heading = std::max(worst_heading, std::abs(NormalizeAngle(robot.pose.yaw - turn)));
+        if (after_time < 1.0) {
+          const Pose2 control = tracker.ControlPoint();
+          control_first_second = std::hypot(control.x - 1.025, control.y);
+        }
+        after_time += kDt;
+      }
+      t += kDt;
+    }
+    EXPECT_EQ(tracker.phase(), Phase::kDone) << tracker.failure();
+    EXPECT_TRUE(turned);
+    // Within 10 cm before the pose of the turn, where the planner checked it, never past it.
+    EXPECT_LE(turned_at.x, 1.025 + 0.01);
+    EXPECT_GE(turned_at.x, 1.025 - 0.1);
+    EXPECT_LT(std::abs(turned_at.y), 0.02);
+    EXPECT_LT(worst_heading, 25.0 * M_PI / 180.0);
+    EXPECT_LT(robot.max_cross, 0.1);
+    // From standstill: 0.1 m/s² takes the control point 5 cm from the pose of the turn in the first second.
+    EXPECT_LT(control_first_second, 0.07);
+    EXPECT_LT(t, 60.0);
+  }
+}
+
+TEST(PathTracker, TurnsTheShorterWay) {
+  for (const double degrees : {135.9, -135.9}) {
+    PathTracker tracker{TrackerConfig()};
+    ASSERT_EQ(tracker.Start(SpinPath(degrees * M_PI / 180.0), {}, 0), "");
+    Robot robot;
+    double angular = 0;
+    double t = 0;
+    while (t < 60 && tracker.phase() != Phase::kDone && tracker.phase() != Phase::kFailed) {
+      const auto cmd = tracker.Step(robot.pose, kDt);
+      if (tracker.phase() == Phase::kCornerRotate) angular += cmd.angular * kDt;
+      robot.Move(cmd, kDt);
+      t += kDt;
+    }
+    EXPECT_EQ(tracker.phase(), Phase::kDone) << tracker.failure();
+    EXPECT_GT(angular * degrees, 0.0) << degrees;
+  }
+}
+
+TEST(PathTracker, ArcsOfTheTurnRadiusDoNotStop) {
+  // The way round a corner of the small lawn with turn_radius 0.44: 210 deg on one arc, 10 deg per pose.
+  std::vector<Pose2> path = Line(0, 0, 0, 1.0);
+  Append(path, Arc(path.back(), 0.44, 210.0 * M_PI / 180.0));
+  Append(path, Line(path.back().x, path.back().y, path.back().yaw, 1.0), true);
+  PathTracker tracker{TrackerConfig()};
+  ASSERT_EQ(tracker.Start(path, {}, 0), "");
+  Robot robot;
+  bool stopped = false;
+  double t = 0;
+  while (t < 300 && tracker.phase() != Phase::kDone && tracker.phase() != Phase::kFailed) {
+    const auto cmd = tracker.Step(robot.pose, kDt);
+    if (tracker.phase() == Phase::kCornerApproach || tracker.phase() == Phase::kCornerRotate) stopped = true;
+    if (tracker.OnPath()) robot.max_cross = std::max(robot.max_cross, std::abs(tracker.CrossTrack(robot.pose)));
+    robot.Move(cmd, kDt);
+    t += kDt;
+  }
+  EXPECT_EQ(tracker.phase(), Phase::kDone) << tracker.failure();
+  EXPECT_FALSE(stopped);
+  EXPECT_LT(robot.max_cross, 0.05);
+  EXPECT_LE(robot.max_angular, 0.3 + 1e-9);
+}
+
+TEST(PathTracker, ArrivesAtAGoalThatTurnsWithTheHeadingBefore) {
+  // The last pose turns on the spot: straight onto it, then the turn at the goal.
+  std::vector<Pose2> path = Line(0, 0, 0, 1.0);
+  path.push_back({1.025, 0.0, M_PI / 2});
+  PathTracker tracker{TrackerConfig()};
+  ASSERT_EQ(tracker.Start(path, {}, 0), "");
+  Robot robot;
+  Drive(tracker, robot);
+  EXPECT_EQ(tracker.phase(), Phase::kDone) << tracker.failure();
+  EXPECT_NEAR(robot.pose.x, 1.025, 0.1);
+  EXPECT_LT(std::abs(robot.pose.y), 0.02);
+  EXPECT_LT(std::abs(NormalizeAngle(robot.pose.yaw - M_PI / 2)), 20.0 * M_PI / 180.0 + 1e-9);
+}
+
+// The loop of the small lawn with turn_radius 0.44 (sim, 29.10.): a turn on the spot by 76.6 deg, then 290 deg on an arc
+// of 0.44 m. With the control point turning at max_angular the mower had nothing left to correct with, fell behind,
+// sped up and drifted out to 0.5 m off the path.
+TEST(PathTracker, SpinIntoAnArcOfTheTurnRadius) {
+  std::vector<Pose2> path = Line(0, 0, 0, 1.0);
+  const double out = -76.6 * M_PI / 180.0;
+  path.push_back({1.025, 0.0, out});
+  Append(path, Arc(path.back(), 0.44, -290.0 * M_PI / 180.0));
+  Append(path, Line(path.back().x, path.back().y, path.back().yaw, 1.0), true);
+  PathTracker tracker{TrackerConfig()};
+  ASSERT_EQ(tracker.Start(path, {}, 0), "");
+  Robot robot;
+  Drive(tracker, robot);
+  EXPECT_EQ(tracker.phase(), Phase::kDone) << tracker.failure();
+  EXPECT_LT(robot.max_cross, 0.06);
+  EXPECT_LE(robot.max_angular, 0.3 + 1e-9);
 }

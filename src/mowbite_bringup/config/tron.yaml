@@ -105,6 +105,9 @@ mowbite_follower:
     speed_turn: 0.1
     max_linear: 0.3
     max_angular: 0.3
+    # rad/s the control point turns at most, below max_angular so that the mower can still correct on arcs of
+    # turn_radius (0.25 * 0.44 = 0.11 m/s there).
+    turn_rate: 0.25
     # Stops: no pose for pose_timeout s, base_link further than max_cross_track m from the path or geofence_margin m
     # outside of the allowed areas, more than max_follow_distance m behind the control point (stuck). Assumptions.
     pose_timeout: 0.5

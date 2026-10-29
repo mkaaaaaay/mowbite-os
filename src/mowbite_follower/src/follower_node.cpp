@@ -125,6 +125,8 @@ class FollowerNode : public rclcpp::Node {
     TrackerConfig config = tracker_config_;
     config.max_linear = std::min(config.max_linear, driver_max_linear_);
     config.max_angular = std::min(config.max_angular, driver_max_angular_);
+    // The control point keeps its share of max_angular when the driver allows less.
+    config.turn_rate *= config.max_angular / tracker_config_.max_angular;
     config.speed_fast = std::min(config.speed_fast, config.max_linear);
     tracker_ = std::make_unique<PathTracker>(config);
     fence_ = Geofence(std::move(allowed), std::move(obstacles), geofence_margin_);
