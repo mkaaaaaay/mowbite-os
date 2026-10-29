@@ -169,7 +169,7 @@ class LogicNode : public rclcpp::Node {
 
  public:
   explicit LogicNode(const rclcpp::NodeOptions& options)
-      : rclcpp::Node("mowbite_logic", options), core_(LoadConfig()), planner_(LoadPlanSettings()) {
+      : rclcpp::Node("mowbite_logic", options), core_(LoadConfig()) {
     hw_timeout_s_ = declare_parameter("hw_status_timeout", 2.0);
     pose_timeout_s_ = declare_parameter("pose_timeout", 2.0);
     // mowbite_map answers at once; a recording waits this long (s) before it counts as not saved.
@@ -343,21 +343,6 @@ class LogicNode : public rclcpp::Node {
     config.approach_distance = declare_parameter("approach_distance", config.approach_distance);
     config.checkpoint_period = declare_parameter("checkpoint_period", config.checkpoint_period);
     return config;
-  }
-
-  // The parameters of /mower_logic in OpenMower that shape a plan, same names.
-  PlanSettings LoadPlanSettings() {
-    PlanSettings settings;
-    settings.tool_width = declare_parameter("tool_width", settings.tool_width);
-    settings.mower_width = declare_parameter("mower_width", settings.mower_width);
-    settings.outline_count = static_cast<int>(declare_parameter("outline_count", static_cast<int64_t>(settings.outline_count)));
-    settings.outline_overlap_count =
-        static_cast<int>(declare_parameter("outline_overlap_count", static_cast<int64_t>(settings.outline_overlap_count)));
-    const double offset = declare_parameter("outline_offset", std::numeric_limits<double>::quiet_NaN());
-    if (std::isfinite(offset)) settings.outline_offset = offset;
-    settings.mow_angle_offset = declare_parameter("mow_angle_offset", settings.mow_angle_offset);
-    settings.mow_angle_offset_is_absolute = declare_parameter("mow_angle_offset_is_absolute", false);
-    return settings;
   }
 
   void OnHardwareStatus(const mowbite_msgs::msg::HardwareStatus& msg) {
@@ -816,7 +801,6 @@ class LogicNode : public rclcpp::Node {
     RCLCPP_INFO(get_logger(), "Checkpoint: job %s, area %d, path %d, index %d", progress->job_id.c_str(), progress->area,
                 progress->path, progress->index);
     core_.RestoreJob(*progress);
-    planner_.settings().angle_increment_sum = progress->angle_increment_sum;
   }
 
   void SaveCheckpoint(const std::string& text) {
@@ -992,14 +976,11 @@ class LogicNode : public rclcpp::Node {
     request->boundary = ToPolygon(r.boundary);
     for (const auto& ring : r.obstacles) request->obstacles.push_back(ToPolygon(ring));
     for (const auto& ring : r.drivable_areas) request->drivable_areas.push_back(ToPolygon(ring));
-    request->mower_width = r.mower_width;
-    request->overlap = r.overlap;
     request->perimeter_passes = r.perimeter_passes;
     request->use_angle = r.use_angle;
     request->angle = r.angle;
-    request->overrides.push_back(IntegerParameter("lane_overlap_passes", r.lane_overlap_passes));
+    if (r.lane_overlap_passes) request->overrides.push_back(IntegerParameter("lane_overlap_passes", *r.lane_overlap_passes));
     if (r.perimeter_offset) request->overrides.push_back(DoubleParameter("perimeter_offset", *r.perimeter_offset));
-    if (r.angle_offset_deg) request->overrides.push_back(DoubleParameter("angle_offset_deg", *r.angle_offset_deg));
     return request;
   }
 
@@ -1141,7 +1122,6 @@ class LogicNode : public rclcpp::Node {
       reasons = core_.TakeReasonChanges();
       notices = core_.TakeNotices();
       checkpoint = core_.TakeCheckpoint();
-      planner_.settings().angle_increment_sum = core_.AngleIncrementSum();
     }
     if (checkpoint) SaveCheckpoint(*checkpoint);
     for (const auto& line : notices) RCLCPP_INFO(get_logger(), "%s", line.c_str());

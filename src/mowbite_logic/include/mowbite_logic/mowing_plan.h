@@ -24,39 +24,20 @@ constexpr uint8_t kSegmentTransit = 3;
 // A path of the answer has at most this many poses, like the planner's own export: OpenMower counts them in an int16.
 constexpr size_t kMaxPathPoses = 30000;
 
-// The parameters of /mower_logic that shape a plan, with the names and the meaning of OpenMower.
-struct PlanSettings {
-  // m, distance of neighbouring lanes
-  double tool_width = 0.187;
-  // m, cutting width; the planner takes the lane distance as an overlap of it
-  double mower_width = 0.22;
-  int outline_count = 3;
-  int outline_overlap_count = 0;
-  // m; nothing: the perimeter_offset of the planner (half the cutting width). Negative: the same.
-  std::optional<double> outline_offset;
-  // deg
-  double mow_angle_offset = 0;
-  bool mow_angle_offset_is_absolute = false;
-  // deg, the mow_angle_increment of the mows finished in the job so far (no job yet: 0)
-  double angle_increment_sum = 0;
-};
-
-// What ~/plan_coverage of the planner is asked, without ROS types.
+// What ~/plan_coverage of the planner is asked, without ROS types. What the request leaves at its default (-1, false,
+// nothing) the planner takes from its settings and from the properties of the area in the map.
 struct CoverageRequest {
   // Open rings in the map frame
   Ring boundary;
   std::vector<Ring> obstacles;
   std::vector<Ring> drivable_areas;
-  double mower_width = 0;
-  double overlap = 0;
-  int perimeter_passes = 0;
+  int perimeter_passes = -1;
   bool use_angle = false;
   // rad
   double angle = 0;
   // Parameters of the planner node, set for this request only
-  int lane_overlap_passes = 0;
+  std::optional<int> lane_overlap_passes;
   std::optional<double> perimeter_offset;
-  std::optional<double> angle_offset_deg;
 };
 
 // The route the planner answered ~/plan_coverage with.
@@ -113,18 +94,14 @@ std::vector<size_t> SimplifiedIndices(const std::vector<Point2>& points, double 
 // mowing.plan: plans an area the way mowing would, without starting anything. Not thread safe.
 class MowingPlanner {
  public:
-  explicit MowingPlanner(const PlanSettings& settings) : settings_(settings) {}
 
   // The text of map/json.
   void SetMap(const std::string& text);
   // map/status: planning from the map needs a map that fits the datum in use.
   void SetMapStatus(bool fits, const Reason& reason);
-  PlanSettings& settings() {
-    return settings_;
-  }
 
   // params of the RPC: an object with area_id, or outline and obstacles ({x, y} points), and angle, outline_count,
-  // outline_overlap_count, outline_offset to override the settings of the area.
+  // outline_overlap_count, outline_offset to override the planner's values for this plan.
   PlanQuestion Prepare(const json& params) const;
   // The result of the RPC: {area_id, angle, paths: [{is_outline, points, pose_index}], fingerprint}; points in m,
   // simplified to 1 cm and rounded to mm, pose_index the index of each point in its path.
@@ -145,13 +122,8 @@ class MowingPlanner {
     bool active = true;
     bool mowable = true;
     Ring outline;
-    std::optional<double> angle;
-    std::optional<int> outline_count;
-    std::optional<int> outline_overlap_count;
-    std::optional<double> outline_offset;
   };
 
-  PlanSettings settings_;
   std::vector<MapArea> map_;
   bool map_readable_ = false;
   bool map_fits_ = false;

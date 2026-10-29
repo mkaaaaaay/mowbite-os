@@ -8,7 +8,6 @@ namespace mowbite_logic {
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 // 1 cm off the planned line and mm precision are plenty, and keep the answer small
 constexpr double kSimplifyTolerance = 0.01;
 
@@ -67,20 +66,6 @@ int RequireCount(const json& params, const char* key) {
 Ring Opened(Ring ring) {
   if (ring.size() > 1 && ring.front().x == ring.back().x && ring.front().y == ring.back().y) ring.pop_back();
   return ring;
-}
-
-std::optional<double> OptionalNumber(const json& properties, const char* key) {
-  const auto it = properties.find(key);
-  if (it == properties.end() || !IsNumber(*it)) return std::nullopt;
-  return it->get<double>();
-}
-
-std::optional<int> OptionalCount(const json& properties, const char* key) {
-  const auto it = properties.find(key);
-  if (it == properties.end() || !it->is_number_integer() || it->get<double>() < 0 || it->get<double>() > 255) {
-    return std::nullopt;
-  }
-  return it->get<int>();
 }
 
 }  // namespace
@@ -188,10 +173,6 @@ void MowingPlanner::SetMap(const std::string& text) {
       area.name = properties.value("name", "");
       area.active = properties.value("active", true);
       area.mowable = properties.value("mowable", true);
-      area.angle = OptionalNumber(properties, "angle");
-      area.outline_count = OptionalCount(properties, "outline_count");
-      area.outline_overlap_count = OptionalCount(properties, "outline_overlap_count");
-      area.outline_offset = OptionalNumber(properties, "outline_offset");
       area.outline = Opened(RequirePoints(entry["outline"], "outline"));
       map_.push_back(std::move(area));
     }
@@ -245,7 +226,7 @@ PlanQuestion MowingPlanner::Prepare(const json& params) const {
   try {
     if (!params.is_object()) Invalid("parameters must be an object");
     CoverageRequest& request = question.request;
-    // Counts and offset: the request, then the area, then the settings.
+    // Only what the request sets goes to the planner, which reads the area's own values from the map.
     std::optional<double> angle;
     std::optional<int> outline_count;
     std::optional<int> outline_overlap_count;
@@ -264,10 +245,6 @@ PlanQuestion MowingPlanner::Prepare(const json& params) const {
       }
       if (!found) Invalid("no mowing area with id: " + question.area_id);
       request.boundary = found->outline;
-      angle = found->angle;
-      outline_count = found->outline_count;
-      outline_overlap_count = found->outline_overlap_count;
-      outline_offset = found->outline_offset;
       // Where the mower may drive between the parts of the area; the area itself is not one of them.
       for (const auto& area : map_) {
         if (&area != found && area.active && (area.type == "mow" || area.type == "nav")) {
@@ -291,28 +268,12 @@ PlanQuestion MowingPlanner::Prepare(const json& params) const {
     if (params.contains("outline_offset")) outline_offset = RequireNumber(params, "outline_offset");
     if (request.boundary.size() < 3) Invalid("the area needs at least 3 outline points (area_id or outline)");
 
-    request.perimeter_passes = outline_count.value_or(settings_.outline_count);
-    request.lane_overlap_passes = outline_overlap_count.value_or(settings_.outline_overlap_count);
-    request.perimeter_offset = outline_offset ? outline_offset : settings_.outline_offset;
-
-    // The planner takes the lane distance as an overlap of the cutting width, like OpenMower's PlanPath of the planner.
-    const double width = std::max(settings_.mower_width, settings_.tool_width);
-    request.mower_width = width;
-    request.overlap = 1.0 - settings_.tool_width / width;
-
-    // The offset of the angle counts from -180 to 180 deg, with the increments of the finished mows.
-    double offset = std::fmod(settings_.mow_angle_offset + settings_.angle_increment_sum + 180.0, 360.0);
-    if (offset < 0) offset += 360.0;
-    offset -= 180.0;
-    if (settings_.mow_angle_offset_is_absolute) {
+    if (outline_count) request.perimeter_passes = *outline_count;
+    request.lane_overlap_passes = outline_overlap_count;
+    request.perimeter_offset = outline_offset;
+    if (angle) {
       request.use_angle = true;
-      request.angle = offset * (kPi / 180.0);
-    } else if (angle) {
-      request.use_angle = true;
-      request.angle = *angle + offset * (kPi / 180.0);
-    } else if (offset != 0.0) {
-      // No angle for the area: the planner picks the lane direction, with the offset on top.
-      request.angle_offset_deg = offset;
+      request.angle = *angle;
     }
     question.ok = true;
   } catch (const PlanError& e) {

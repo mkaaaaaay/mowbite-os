@@ -8,8 +8,6 @@ using namespace mowbite_logic;
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
-
 // A garden: a lawn with a tree on it, a path (nav) beside it, a second lawn that is not mowed, a bed that is not active.
 const char* kMap = R"({
   "areas": [
@@ -33,8 +31,8 @@ const char* kMap = R"({
   "docking_stations": []
 })";
 
-MowingPlanner PlannerWithMap(const PlanSettings& settings = PlanSettings()) {
-  MowingPlanner planner(settings);
+MowingPlanner PlannerWithMap() {
+  MowingPlanner planner;
   planner.SetMap(kMap);
   planner.SetMapStatus(true, Reason());
   return planner;
@@ -108,7 +106,7 @@ TEST(MowingPlanMap, TakesTheAreaItsObstaclesAndWhereTheMowerMayDrive) {
 }
 
 TEST(MowingPlanMap, NeedsAMapThatFitsTheDatum) {
-  MowingPlanner planner(PlanSettings{});
+  MowingPlanner planner;
   planner.SetMap(kMap);
   // No status yet
   PlanQuestion q = planner.Prepare(Params(R"({"area_id": "lawn"})"));
@@ -132,7 +130,7 @@ TEST(MowingPlanMap, NeedsAMapThatFitsTheDatum) {
 }
 
 TEST(MowingPlanMap, AnOutlineInTheRequestNeedsNoMap) {
-  MowingPlanner planner(PlanSettings{});
+  MowingPlanner planner;
   const PlanQuestion q = planner.Prepare(Params(R"({
     "outline": [{"x": 0, "y": 0}, {"x": 4, "y": 0}, {"x": 4, "y": 3}, {"x": 0, "y": 3}, {"x": 0, "y": 0}],
     "obstacles": [[{"x": 1, "y": 1}, {"x": 2, "y": 1}, {"x": 2, "y": 2}]]})"));
@@ -167,7 +165,7 @@ TEST(MowingPlanMap, ANewMapReplacesTheOldOne) {
 }
 
 TEST(MowingPlanMap, AMapWithTheWrongTypeOfAPropertyIsNotPlannedFrom) {
-  MowingPlanner planner(PlanSettings{});
+  MowingPlanner planner;
   planner.SetMapStatus(true, Reason());
   planner.SetMap(R"({"areas": [{"id": "lawn", "properties": {"type": "mow", "active": "yes"},
                                 "outline": [{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 1, "y": 1}]}]})");
@@ -178,120 +176,47 @@ TEST(MowingPlanMap, AMapWithTheWrongTypeOfAPropertyIsNotPlannedFrom) {
   EXPECT_TRUE(planner.Prepare(Params(R"({"outline": [{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 1, "y": 1}]})")).ok);
 }
 
-TEST(MowingPlanSettings, CountsAndOffsetComeFromTheRequestThenTheAreaThenTheSettings) {
-  PlanSettings settings;
-  settings.outline_count = 4;
-  settings.outline_overlap_count = 2;
-  MowingPlanner planner = PlannerWithMap(settings);
+TEST(MowingPlanRequest, CarriesOnlyWhatTheRequestSets) {
+  MowingPlanner planner = PlannerWithMap();
+  // The areas have an angle, counts and an offset in the map: the planner reads those itself.
+  for (const char* area : {"lawn", "side"}) {
+    const PlanQuestion q = planner.Prepare(json{{"area_id", area}});
+    ASSERT_TRUE(q.ok) << q.message;
+    EXPECT_EQ(q.request.perimeter_passes, -1) << area;
+    EXPECT_FALSE(q.request.lane_overlap_passes.has_value()) << area;
+    EXPECT_FALSE(q.request.perimeter_offset.has_value()) << area;
+    EXPECT_FALSE(q.request.use_angle) << area;
+  }
+  const PlanQuestion outline = planner.Prepare(Params(R"({"outline": [{"x": 0, "y": 0}, {"x": 2, "y": 0}, {"x": 2, "y": 2}]})"));
+  ASSERT_TRUE(outline.ok);
+  EXPECT_EQ(outline.request.perimeter_passes, -1);
+  EXPECT_FALSE(outline.request.lane_overlap_passes.has_value());
+  EXPECT_FALSE(outline.request.perimeter_offset.has_value());
+  EXPECT_FALSE(outline.request.use_angle);
+}
 
-  // the area "lawn" has outline_count 2 of its own, "side" has outline_overlap_count 1 and outline_offset 0.05
-  PlanQuestion q = planner.Prepare(Params(R"({"area_id": "lawn"})"));
-  EXPECT_EQ(q.request.perimeter_passes, 2);
-  EXPECT_EQ(q.request.lane_overlap_passes, 2);
-  EXPECT_FALSE(q.request.perimeter_offset.has_value());
-  q = planner.Prepare(Params(R"({"area_id": "side"})"));
-  EXPECT_EQ(q.request.perimeter_passes, 4);
-  EXPECT_EQ(q.request.lane_overlap_passes, 1);
-  ASSERT_TRUE(q.request.perimeter_offset.has_value());
-  EXPECT_DOUBLE_EQ(*q.request.perimeter_offset, 0.05);
-  q = planner.Prepare(Params(R"({"area_id": "side", "outline_count": 0, "outline_overlap_count": 0, "outline_offset": 0.2})"));
+TEST(MowingPlanRequest, PassesOnCountsOffsetAndAngleOfTheRequest) {
+  MowingPlanner planner = PlannerWithMap();
+  PlanQuestion q = planner.Prepare(
+      Params(R"({"area_id": "side", "outline_count": 0, "outline_overlap_count": 0, "outline_offset": 0.2, "angle": -1.25})"));
+  ASSERT_TRUE(q.ok) << q.message;
   EXPECT_EQ(q.request.perimeter_passes, 0);
-  EXPECT_EQ(q.request.lane_overlap_passes, 0);
+  ASSERT_TRUE(q.request.lane_overlap_passes.has_value());
+  EXPECT_EQ(*q.request.lane_overlap_passes, 0);
+  ASSERT_TRUE(q.request.perimeter_offset.has_value());
   EXPECT_DOUBLE_EQ(*q.request.perimeter_offset, 0.2);
-}
-
-TEST(MowingPlanSettings, TheOffsetOfTheSettingsAppliesWhenNothingElseSaysSo) {
-  PlanSettings settings;
-  settings.outline_offset = 0.1;
-  MowingPlanner planner = PlannerWithMap(settings);
-  EXPECT_DOUBLE_EQ(*planner.Prepare(Params(R"({"area_id": "lawn"})")).request.perimeter_offset, 0.1);
-  EXPECT_DOUBLE_EQ(*planner.Prepare(Params(R"({"area_id": "side"})")).request.perimeter_offset, 0.05);
-}
-
-TEST(MowingPlanSettings, TheLaneDistanceBecomesAnOverlapOfTheCuttingWidth) {
-  PlanSettings settings;
-  MowingPlanner planner = PlannerWithMap(settings);
-  PlanQuestion q = planner.Prepare(Params(R"({"area_id": "lawn"})"));
-  EXPECT_DOUBLE_EQ(q.request.mower_width, 0.22);
-  EXPECT_NEAR(q.request.overlap, 0.15, 1e-12);
-
-  // Lanes further apart than the cutting width: the width grows to the distance, no overlap.
-  settings.tool_width = 0.3;
-  MowingPlanner wide = PlannerWithMap(settings);
-  q = wide.Prepare(Params(R"({"area_id": "lawn"})"));
-  EXPECT_DOUBLE_EQ(q.request.mower_width, 0.3);
-  EXPECT_DOUBLE_EQ(q.request.overlap, 0.0);
-
-  // OpenMower's default of 0.14 m
-  settings.tool_width = 0.14;
-  MowingPlanner dense = PlannerWithMap(settings);
-  q = dense.Prepare(Params(R"({"area_id": "lawn"})"));
-  EXPECT_DOUBLE_EQ(q.request.mower_width, 0.22);
-  EXPECT_NEAR(q.request.overlap, 1.0 - 0.14 / 0.22, 1e-12);
-}
-
-TEST(MowingPlanAngle, LeavesTheDirectionToThePlannerWhenTheAreaHasNone) {
-  MowingPlanner planner = PlannerWithMap();
-  const PlanQuestion q = planner.Prepare(Params(R"({"outline": [{"x": 0, "y": 0}, {"x": 2, "y": 0}, {"x": 2, "y": 2}]})"));
-  ASSERT_TRUE(q.ok);
-  EXPECT_FALSE(q.request.use_angle);
-  EXPECT_FALSE(q.request.angle_offset_deg.has_value());
-}
-
-TEST(MowingPlanAngle, TakesTheAngleOfTheAreaOrTheRequest) {
-  MowingPlanner planner = PlannerWithMap();
-  PlanQuestion q = planner.Prepare(Params(R"({"area_id": "lawn"})"));
-  EXPECT_TRUE(q.request.use_angle);
-  EXPECT_DOUBLE_EQ(q.request.angle, 0.5);
-  EXPECT_FALSE(q.request.angle_offset_deg.has_value());
-  q = planner.Prepare(Params(R"({"area_id": "lawn", "angle": -1.25})"));
   EXPECT_TRUE(q.request.use_angle);
   EXPECT_DOUBLE_EQ(q.request.angle, -1.25);
-}
 
-TEST(MowingPlanAngle, AddsTheOffsetToTheAngleOrToWhatThePlannerPicks) {
-  PlanSettings settings;
-  settings.mow_angle_offset = 90;
-  MowingPlanner planner = PlannerWithMap(settings);
-  PlanQuestion q = planner.Prepare(Params(R"({"area_id": "lawn"})"));
-  EXPECT_DOUBLE_EQ(q.request.angle, 0.5 + kPi / 2);
-  q = planner.Prepare(Params(R"({"outline": [{"x": 0, "y": 0}, {"x": 2, "y": 0}, {"x": 2, "y": 2}]})"));
+  // each one alone
+  q = planner.Prepare(Params(R"({"area_id": "lawn", "outline_count": 5})"));
+  EXPECT_EQ(q.request.perimeter_passes, 5);
+  EXPECT_FALSE(q.request.lane_overlap_passes.has_value());
+  EXPECT_FALSE(q.request.perimeter_offset.has_value());
   EXPECT_FALSE(q.request.use_angle);
-  ASSERT_TRUE(q.request.angle_offset_deg.has_value());
-  EXPECT_DOUBLE_EQ(*q.request.angle_offset_deg, 90.0);
-}
-
-TEST(MowingPlanAngle, AnAbsoluteOffsetIsTheAngle) {
-  PlanSettings settings;
-  settings.mow_angle_offset = 45;
-  settings.mow_angle_offset_is_absolute = true;
-  MowingPlanner planner = PlannerWithMap(settings);
-  for (const char* text : {R"({"area_id": "lawn"})", R"({"outline": [{"x": 0, "y": 0}, {"x": 2, "y": 0}, {"x": 2, "y": 2}]})"}) {
-    const PlanQuestion q = planner.Prepare(Params(text));
-    EXPECT_TRUE(q.request.use_angle) << text;
-    EXPECT_DOUBLE_EQ(q.request.angle, kPi / 4) << text;
-  }
-}
-
-TEST(MowingPlanAngle, AddsTheIncrementsOfTheFinishedMowsAndWrapsInto180Degrees) {
-  PlanSettings settings;
-  settings.mow_angle_offset = 170;
-  settings.angle_increment_sum = 20;
-  MowingPlanner planner = PlannerWithMap(settings);
-  PlanQuestion q = planner.Prepare(Params(R"({"outline": [{"x": 0, "y": 0}, {"x": 2, "y": 0}, {"x": 2, "y": 2}]})"));
-  ASSERT_TRUE(q.request.angle_offset_deg.has_value());
-  EXPECT_NEAR(*q.request.angle_offset_deg, -170.0, 1e-9);
-
-  planner.settings().mow_angle_offset = -170;
-  planner.settings().angle_increment_sum = -30;
-  q = planner.Prepare(Params(R"({"outline": [{"x": 0, "y": 0}, {"x": 2, "y": 0}, {"x": 2, "y": 2}]})"));
-  EXPECT_NEAR(*q.request.angle_offset_deg, 160.0, 1e-9);
-
-  // a whole turn is no offset
-  planner.settings().mow_angle_offset = 180;
-  planner.settings().angle_increment_sum = 180;
-  q = planner.Prepare(Params(R"({"outline": [{"x": 0, "y": 0}, {"x": 2, "y": 0}, {"x": 2, "y": 2}]})"));
-  EXPECT_FALSE(q.request.angle_offset_deg.has_value());
+  q = planner.Prepare(Params(R"({"area_id": "lawn", "outline_overlap_count": 2})"));
+  EXPECT_EQ(q.request.perimeter_passes, -1);
+  EXPECT_EQ(*q.request.lane_overlap_passes, 2);
 }
 
 namespace {
@@ -448,7 +373,7 @@ TEST(MowingPlanResult, ListsThePathsLikeOpenMowerDoes) {
 }
 
 TEST(MowingPlanResult, AnOutlineGivenInTheRequestHasNoAreaId) {
-  MowingPlanner planner(PlanSettings{});
+  MowingPlanner planner;
   const PlanQuestion q = planner.Prepare(Params(R"({"outline": [{"x": 0, "y": 0}, {"x": 2, "y": 0}, {"x": 2, "y": 2}]})"));
   CoverageAnswer answer = Route(5);
   answer.section_start = {0};
@@ -460,7 +385,7 @@ TEST(MowingPlanResult, AnOutlineGivenInTheRequestHasNoAreaId) {
 }
 
 TEST(MowingPlanResult, SegmentsBeyondThePosesAreLeftOut) {
-  MowingPlanner planner(PlanSettings{});
+  MowingPlanner planner;
   const PlanQuestion q = planner.Prepare(Params(R"({"outline": [{"x": 0, "y": 0}, {"x": 2, "y": 0}, {"x": 2, "y": 2}]})"));
   CoverageAnswer answer = Route(5);
   answer.section_start = {0};
@@ -484,7 +409,7 @@ TEST(MowingPlanTransit, DrivesOnTheActiveMowAndNavAreasAroundTheActiveObstacles)
 }
 
 TEST(MowingPlanTransit, NeedsAMapThatFitsAndAnArea) {
-  MowingPlanner planner(PlanSettings{});
+  MowingPlanner planner;
   std::vector<Ring> drivable;
   std::vector<Ring> obstacles;
   Reason why = planner.TransitAreas(&drivable, &obstacles);

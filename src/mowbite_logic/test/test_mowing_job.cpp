@@ -235,7 +235,7 @@ TEST(MowingJob, SkipPathAndCompleteAndReset) {
 }
 
 TEST(MowingJob, MowAreasOfTheMapInMapOrder) {
-  MowingPlanner planner{PlanSettings()};
+  MowingPlanner planner;
   EXPECT_TRUE(planner.MowAreas().empty());
   planner.SetMap(R"({"areas": [
     {"id": "a", "properties": {"type": "mow", "name": "A"}, "outline": [{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 1, "y": 1}]},
