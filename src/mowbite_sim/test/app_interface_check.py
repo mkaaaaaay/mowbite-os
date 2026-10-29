@@ -253,6 +253,22 @@ if offers("system.info"):
     info = (r or {}).get("result") or {}
     check("system.info", info.get("name") == "mowbite-os" and info.get("version") and info.get("platform")
           and isinstance(info.get("schema"), int), json.dumps(info))
+if offers("sensors.list"):
+    # Every sensor of sensor_infos/json with its fields unchanged, the last value and its time (null before one came).
+    r = rpc("sensors.list", None, "sensors")
+    listed = (r or {}).get("result")
+    info_of = {i["sensor_id"]: i for i in infos}
+    check("sensors.list", isinstance(listed, list) and sorted(e.get("sensor_id") for e in listed) == ids
+          and all({k: v for k, v in e.items() if k not in ("value", "stamp")} == info_of.get(e.get("sensor_id"))
+                  and (e.get("value") is None) == (e.get("stamp") is None) for e in listed)
+          and any(e["sensor_id"] == "om_v_battery" and isinstance(e.get("value"), (int, float))
+                  and isinstance(e.get("stamp"), (int, float)) for e in listed), json.dumps(r)[:300])
+    r = rpc("sensors.list", {"ids": ["om_v_battery", "no_such_sensor"]}, "sensors_ids")
+    check("sensors.list with ids", [e.get("sensor_id") for e in (r or {}).get("result") or []] == ["om_v_battery"],
+          json.dumps(r)[:200])
+    r = rpc("sensors.list", {"ids": "om_v_battery"}, "sensors_bad")
+    check("sensors.list refuses ids that are no list -32602", bool(r) and r.get("error", {}).get("code") == -32602,
+          json.dumps(r and r.get("error")))
 for method in ("map.replace", "mowing.plan"):
     offers(method)
 if offers("events.history"):

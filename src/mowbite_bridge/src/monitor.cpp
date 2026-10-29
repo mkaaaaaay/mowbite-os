@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <random>
+#include <set>
+#include <stdexcept>
 
 namespace mowbite_bridge {
 
@@ -143,6 +145,30 @@ const char* ValueDescriptionName(uint8_t value_description) {
     case 8: return "REVOLUTIONS";
     default: return "UNKNOWN";
   }
+}
+
+json SensorList(const std::vector<SensorEntry>& sensors, const json& params) {
+  const bool all =
+      params.is_null() || (params.is_array() && params.empty()) || (params.is_object() && !params.contains("ids"));
+  std::set<std::string> wanted;
+  if (!all) {
+    if (!params.is_object() || !params.at("ids").is_array()) {
+      throw std::invalid_argument("ids must be a list of sensor ids");
+    }
+    for (const auto& id : params.at("ids")) {
+      if (!id.is_string()) throw std::invalid_argument("ids must be a list of sensor ids");
+      wanted.insert(id.get<std::string>());
+    }
+  }
+  json out = json::array();
+  for (const auto& sensor : sensors) {
+    if (!all && wanted.count(sensor.info.value("sensor_id", "")) == 0) continue;
+    json entry = sensor.info;
+    entry["value"] = sensor.value;
+    entry["stamp"] = sensor.stamp;
+    out.push_back(std::move(entry));
+  }
+  return out;
 }
 
 }  // namespace mowbite_bridge

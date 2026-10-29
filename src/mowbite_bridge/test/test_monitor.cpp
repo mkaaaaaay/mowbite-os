@@ -160,6 +160,48 @@ TEST(Sensors, ValueDescriptionNames) {
   EXPECT_STREQ(ValueDescriptionName(7), "UNKNOWN");
 }
 
+namespace {
+
+std::vector<SensorEntry> TwoSensors() {
+  SensorEntry battery;
+  battery.info = {{"sensor_id", "om_v_battery"}, {"sensor_name", "Battery"}, {"value_type", "DOUBLE"}, {"unit", "V"}};
+  battery.value = 24.5;
+  battery.stamp = 1793290000.25;
+  SensorEntry state;
+  state.info = {{"sensor_id", "om_charge_state"}, {"sensor_name", "Charge state"}, {"value_type", "STRING"}};
+  return {battery, state};
+}
+
+}  // namespace
+
+TEST(Sensors, ListGivesEveryEntryWithItsValueAndStamp) {
+  const json all = SensorList(TwoSensors(), nullptr);
+  ASSERT_EQ(all.size(), 2u);
+  EXPECT_EQ(all[0]["sensor_id"], "om_v_battery");
+  EXPECT_EQ(all[0]["unit"], "V");
+  EXPECT_DOUBLE_EQ(all[0]["value"].get<double>(), 24.5);
+  EXPECT_DOUBLE_EQ(all[0]["stamp"].get<double>(), 1793290000.25);
+  // The fields of sensor_infos/json first and unchanged, then value and stamp.
+  EXPECT_EQ(all[0].size(), 6u);
+  EXPECT_EQ(std::next(all[0].begin(), 4).key(), "value");
+  // No value yet: both null.
+  EXPECT_TRUE(all[1]["value"].is_null());
+  EXPECT_TRUE(all[1]["stamp"].is_null());
+  EXPECT_EQ(SensorList(TwoSensors(), json::object()), all);
+  EXPECT_EQ(SensorList(TwoSensors(), json::array()), all);
+}
+
+TEST(Sensors, ListOnlyTheIdsAskedFor) {
+  const json some = SensorList(TwoSensors(), json{{"ids", {"om_charge_state", "no_such_sensor"}}});
+  ASSERT_EQ(some.size(), 1u);
+  EXPECT_EQ(some[0]["sensor_id"], "om_charge_state");
+  EXPECT_TRUE(SensorList(TwoSensors(), json{{"ids", json::array()}}).empty());
+  for (const json& bad : {json{{"ids", "om_v_battery"}}, json{{"ids", {1, 2}}}, json{{"ids", nullptr}},
+                          json::array({"om_v_battery"}), json("om_v_battery")}) {
+    EXPECT_THROW(SensorList(TwoSensors(), bad), std::invalid_argument) << bad.dump();
+  }
+}
+
 TEST(SystemInfo, FieldsForTheApp) {
   auto info = SystemInfo("1.2.3", "airseekers_tron");
   EXPECT_EQ(info["name"], "mowbite-os");

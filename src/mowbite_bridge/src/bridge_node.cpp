@@ -78,6 +78,26 @@ class BridgeNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       return SystemInfo(version_, platform_);
     };
+    local_methods_["sensors.list"] = [this](const json& params) {
+      std::vector<SensorEntry> entries;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& [id, s] : sensors_) {
+          SensorEntry entry{SensorInfoJson(s)};
+          auto last = sensor_values_.find(id);
+          if (last != sensor_values_.end()) {
+            entry.value = last->second.first;
+            entry.stamp = last->second.second;
+          }
+          entries.push_back(std::move(entry));
+        }
+      }
+      try {
+        return SensorList(entries, params);
+      } catch (const std::invalid_argument& e) {
+        throw RpcException(kRpcInvalidParams, e.what());
+      }
+    };
     local_methods_["events.history"] = [this](const json& params) {
       if (params.is_object() && params.contains("date") && params["date"].is_string()) {
         return event_history_.getAll(params["date"].get<std::string>());
@@ -422,8 +442,30 @@ class BridgeNode : public rclcpp::Node {
       auto it = sensors_.find(msg.sensor_id);
       if (it == sensors_.end()) return;
       is_text = it->second.value_type == mowbite_msgs::msg::SensorInfo::TYPE_STRING;
+      // For sensors.list: the last value with its type and its time, like t of the events.
+      sensor_values_[msg.sensor_id] = {is_text ? json(msg.text) : json(msg.value), now().seconds()};
     }
     TryPublish("sensors/" + msg.sensor_id + "/data", is_text ? msg.text : std::to_string(msg.value));
+  }
+
+  // A sensor's entry of sensor_infos/json, also the start of its entry in sensors.list.
+  static json SensorInfoJson(const mowbite_msgs::msg::SensorInfo& s) {
+    json info;
+    info["sensor_id"] = s.sensor_id;
+    info["sensor_name"] = s.sensor_name;
+    info["value_type"] = s.value_type == mowbite_msgs::msg::SensorInfo::TYPE_STRING   ? "STRING"
+                         : s.value_type == mowbite_msgs::msg::SensorInfo::TYPE_DOUBLE ? "DOUBLE"
+                                                                                      : "UNKNOWN";
+    info["value_description"] = ValueDescriptionName(s.value_description);
+    info["unit"] = s.unit;
+    info["has_min_max"] = s.has_min_max ? 1 : 0;
+    info["min_value"] = s.min_value;
+    info["max_value"] = s.max_value;
+    info["has_critical_low"] = s.has_critical_low ? 1 : 0;
+    info["lower_critical_value"] = s.lower_critical_value;
+    info["has_critical_high"] = s.has_critical_high ? 1 : 0;
+    info["upper_critical_value"] = s.upper_critical_value;
+    return info;
   }
 
   void PublishSensorInfos() {
@@ -431,24 +473,7 @@ class BridgeNode : public rclcpp::Node {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (sensors_.empty()) return;
-      for (const auto& [_, s] : sensors_) {
-        json info;
-        info["sensor_id"] = s.sensor_id;
-        info["sensor_name"] = s.sensor_name;
-        info["value_type"] = s.value_type == mowbite_msgs::msg::SensorInfo::TYPE_STRING   ? "STRING"
-                             : s.value_type == mowbite_msgs::msg::SensorInfo::TYPE_DOUBLE ? "DOUBLE"
-                                                                                          : "UNKNOWN";
-        info["value_description"] = ValueDescriptionName(s.value_description);
-        info["unit"] = s.unit;
-        info["has_min_max"] = s.has_min_max ? 1 : 0;
-        info["min_value"] = s.min_value;
-        info["max_value"] = s.max_value;
-        info["has_critical_low"] = s.has_critical_low ? 1 : 0;
-        info["lower_critical_value"] = s.lower_critical_value;
-        info["has_critical_high"] = s.has_critical_high ? 1 : 0;
-        info["upper_critical_value"] = s.upper_critical_value;
-        infos.push_back(info);
-      }
+      for (const auto& [_, s] : sensors_) infos.push_back(SensorInfoJson(s));
     }
     TryPublish("sensor_infos/json", infos.dump(), true);
   }
@@ -509,6 +534,8 @@ class BridgeNode : public rclcpp::Node {
   std::map<std::string, std::vector<std::string>> methods_;
   std::map<std::string, std::vector<mowbite_msgs::msg::ActionInfo>> actions_;
   std::map<std::string, mowbite_msgs::msg::SensorInfo> sensors_;
+  // The last value of each sensor and its time (Unix s).
+  std::map<std::string, std::pair<json, double>> sensor_values_;
   std::string map_;
 
   std::map<std::string, std::function<json(const json&)>> local_methods_;
