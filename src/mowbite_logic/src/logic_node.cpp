@@ -362,7 +362,7 @@ class LogicNode : public rclcpp::Node {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       core_.OnHardwareStatus(hw);
-      last_hw_ = now();
+      last_hw_ = MonotonicSeconds();
     }
     Flush();
   }
@@ -377,7 +377,7 @@ class LogicNode : public rclcpp::Node {
     pose.orientation_valid = msg.orientation_valid;
     std::lock_guard<std::mutex> lock(mutex_);
     core_.OnPose(pose);
-    last_pose_ = now();
+    last_pose_ = MonotonicSeconds();
   }
 
   void OnAction(const std::string& action_id) {
@@ -467,7 +467,7 @@ class LogicNode : public rclcpp::Node {
         drive_.active = true;
         drive_.header = header;
         drive_.planning = true;
-        drive_.sent = now();
+        drive_.sent = MonotonicSeconds();
         drive_.allowed = plan->drivable_areas;
         drive_.obstacles = plan->obstacles;
         const uint64_t seq = drive_.seq;
@@ -628,7 +628,7 @@ class LogicNode : public rclcpp::Node {
     const uint64_t seq = ++plan_seq_;
     job_plan_.active = true;
     job_plan_.seq = seq;
-    job_plan_.sent = now();
+    job_plan_.sent = MonotonicSeconds();
     job_plan_.request_id =
         plan_client_
             ->async_send_request(ToServiceRequest(question.request),
@@ -680,7 +680,7 @@ class LogicNode : public rclcpp::Node {
     drive_.seq = ++drive_seq_;
     drive_.active = true;
     drive_.planning = true;
-    drive_.sent = now();
+    drive_.sent = MonotonicSeconds();
     drive_.allowed = plan->drivable_areas;
     drive_.obstacles = plan->obstacles;
     const uint64_t seq = drive_.seq;
@@ -728,7 +728,7 @@ class LogicNode : public rclcpp::Node {
     for (const auto& ring : obstacles) goal.obstacles.push_back(ToPolygon(ring));
     drive_.seq = ++drive_seq_;
     drive_.active = true;
-    drive_.sent = now();
+    drive_.sent = MonotonicSeconds();
     char text[64];
     std::snprintf(text, sizeof(text), "%zu poses from %zu", path.poses.size(), start_index);
     SendFollow(goal, text);
@@ -829,10 +829,11 @@ class LogicNode : public rclcpp::Node {
     RobotStateData state;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (!last_hw_ || (now() - *last_hw_).seconds() > hw_timeout_s_) core_.OnHardwareTimeout();
-      if (!last_pose_ || (now() - *last_pose_).seconds() > pose_timeout_s_) core_.OnPoseTimeout();
-      core_.OnTick(MonotonicSeconds());
-      if (edit_sent_ && (now() - *edit_sent_).seconds() > map_edit_timeout_s_) {
+      const double t = MonotonicSeconds();
+      if (!last_hw_ || t - *last_hw_ > hw_timeout_s_) core_.OnHardwareTimeout();
+      if (!last_pose_ || t - *last_pose_ > pose_timeout_s_) core_.OnPoseTimeout();
+      core_.OnTick(t);
+      if (edit_sent_ && t - *edit_sent_ > map_edit_timeout_s_) {
         edit_sent_.reset();
         if (edit_request_id_) {
           if (edit_is_dock_) {
@@ -897,7 +898,7 @@ class LogicNode : public rclcpp::Node {
     auto& pending = pending_plans_[seq];
     pending.rpc_id = request.id;
     pending.question = question;
-    pending.sent = now();
+    pending.sent = MonotonicSeconds();
     pending.request_id =
         plan_client_
             ->async_send_request(ToServiceRequest(question.request),
@@ -925,7 +926,7 @@ class LogicNode : public rclcpp::Node {
     }
     const json result = planner_.Result(pending.question, answer);
     RCLCPP_INFO(get_logger(), "mowing.plan %s: %zu paths from %zu poses in %.1f s", pending.question.area_id.c_str(),
-                result["paths"].size(), answer.poses.size(), (now() - pending.sent).seconds());
+                result["paths"].size(), answer.poses.size(), MonotonicSeconds() - pending.sent);
     mowbite_msgs::msg::RpcResponse msg;
     msg.result = result.dump();
     msg.id = pending.rpc_id;
@@ -937,17 +938,18 @@ class LogicNode : public rclcpp::Node {
     std::vector<std::string> expired;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (drive_.planning && (now() - drive_.sent).seconds() > plan_timeout_s_) {
+      const double t = MonotonicSeconds();
+      if (drive_.planning && t - drive_.sent > plan_timeout_s_) {
         CancelDrive(Reason("PLANNER_TIMEOUT",
                            "No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s"));
       }
-      if (job_plan_.active && (now() - job_plan_.sent).seconds() > plan_timeout_s_) {
+      if (job_plan_.active && t - job_plan_.sent > plan_timeout_s_) {
         plan_client_->remove_pending_request(job_plan_.request_id);
         job_plan_ = JobPlan();
         core_.OnJobPlanFailed("No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s");
       }
       for (auto it = pending_plans_.begin(); it != pending_plans_.end();) {
-        if ((now() - it->second.sent).seconds() > plan_timeout_s_) {
+        if (t - it->second.sent > plan_timeout_s_) {
           plan_client_->remove_pending_request(it->second.request_id);
           expired.push_back(it->second.rpc_id);
           it = pending_plans_.erase(it);
@@ -1055,7 +1057,7 @@ class LogicNode : public rclcpp::Node {
       request->x = edit.x;
       request->y = edit.y;
       request->heading = edit.heading;
-      edit_sent_ = now();
+      edit_sent_ = MonotonicSeconds();
       edit_request_id_ = set_dock_client_
                              ->async_send_request(request,
                                                   [answer](rclcpp::Client<mowbite_msgs::srv::SetDock>::SharedFuture f) {
@@ -1077,7 +1079,7 @@ class LogicNode : public rclcpp::Node {
       for (const auto& p : ring) outline.points.push_back(ToPoint(p));
       request->obstacles.push_back(std::move(outline));
     }
-    edit_sent_ = now();
+    edit_sent_ = MonotonicSeconds();
     edit_request_id_ = add_area_client_
                            ->async_send_request(request,
                                                 [answer](rclcpp::Client<mowbite_msgs::srv::AddArea>::SharedFuture f) {
@@ -1194,7 +1196,8 @@ class LogicNode : public rclcpp::Node {
     std::shared_ptr<rmw_request_id_t> header;
     bool planning = false;
     int64_t request_id = 0;
-    rclcpp::Time sent{0, 0, RCL_ROS_TIME};
+    // MonotonicSeconds() when the request went out, like every time the node measures against a limit.
+    double sent = 0;
     std::vector<geometry_msgs::msg::Polygon> allowed;
     std::vector<geometry_msgs::msg::Polygon> obstacles;
     FollowHandle::SharedPtr handle;
@@ -1206,7 +1209,7 @@ class LogicNode : public rclcpp::Node {
   struct JobPlan {
     bool active = false;
     uint64_t seq = 0;
-    rclcpp::Time sent{0, 0, RCL_ROS_TIME};
+    double sent = 0;
     int64_t request_id = 0;
   };
 
@@ -1214,7 +1217,7 @@ class LogicNode : public rclcpp::Node {
   struct PendingPlan {
     std::string rpc_id;
     PlanQuestion question;
-    rclcpp::Time sent{0, 0, RCL_ROS_TIME};
+    double sent = 0;
     int64_t request_id = 0;
   };
 
@@ -1234,13 +1237,14 @@ class LogicNode : public rclcpp::Node {
   std::map<uint64_t, PendingPlan> pending_plans_;
   uint64_t plan_seq_ = 0;
   double plan_timeout_s_ = 30.0;
-  std::optional<rclcpp::Time> last_hw_;
-  std::optional<rclcpp::Time> last_pose_;
+  // MonotonicSeconds() of the last hw/status and localization/pose: a step of the system clock moves no limit.
+  std::optional<double> last_hw_;
+  std::optional<double> last_pose_;
   double hw_timeout_s_;
   double pose_timeout_s_;
   double map_edit_timeout_s_;
   // The map edit on its way: when it went out, its request, and a number that tells a late answer apart.
-  std::optional<rclcpp::Time> edit_sent_;
+  std::optional<double> edit_sent_;
   std::optional<int64_t> edit_request_id_;
   bool edit_is_dock_ = false;
   uint64_t edit_seq_ = 0;
