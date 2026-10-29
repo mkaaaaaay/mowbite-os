@@ -164,8 +164,13 @@ class TestRecording(unittest.TestCase):
         self.assertTrue(self.probe.wait(lambda: self.probe.status is not None
                                         and self.probe.status.datum_state == MapStatus.DATUM_UNKNOWN, 15))
         self.assertTrue(self.enabled("mower_logic:idle/start_area_recording", False))
-        self.probe.act("mower_logic:idle/start_area_recording")
-        refused = self.probe.wait(lambda: self.probe.events_of("RECORDING_REFUSED"))
+        # Until its first hw/status the logic may be in the emergency of the start, which refuses without an event.
+        refused = None
+        for _ in range(10):
+            self.probe.act("mower_logic:idle/start_area_recording")
+            refused = self.probe.wait(lambda: self.probe.events_of("RECORDING_REFUSED"), 1.0)
+            if refused:
+                break
         self.assertIsNotNone(refused, "no RECORDING_REFUSED")
         self.assertEqual(refused[-1]["action"], "start_area_recording")
 
