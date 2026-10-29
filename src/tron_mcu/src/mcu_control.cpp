@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace tron {
 
@@ -46,8 +47,23 @@ void McuControl::OnDockContactSample(bool contact) {
   dock_samples_ = contact ? std::min(dock_samples_ + 1, config_.dock_debounce_samples) : 0;
 }
 
-void McuControl::OnImu(const ImuCounts& imu) {
+void McuControl::OnImu(const ImuCounts& imu, double now) {
   pending_imu_ = imu;
+  last_imu_sample_s_ = now;
+}
+
+void McuControl::OnBladeRpm(int rpm, double now) {
+  // Only a blade that should have stopped by now counts: not while it is on, not while it runs down.
+  if (blade_on_ || !blade_off_since_s_ || config_.blade_stop_time_s <= 0 ||
+      now - *blade_off_since_s_ < config_.blade_stop_time_s) {
+    blade_turning_ = false;
+    return;
+  }
+  blade_turning_ = std::abs(rpm) >= config_.blade_still_rpm;
+  if (!blade_turning_) return;
+  LatchEmergency(kReasonMowerNotStopped);
+  // A lost off frame is the likely cause, so the off frames go out again with every such report.
+  StartRepeat(blade_off_repeat_, BladeOff(), now);
 }
 
 bool McuControl::OnVersions(const VersionInfo& versions) {
@@ -122,7 +138,7 @@ void McuControl::OnConnected(double now) {
 }
 
 bool McuControl::Blocked(double now) const {
-  return latched_ || TelemetryStale(now) || FirmwareIncompatible();
+  return latched_ || TelemetryStale(now) || NoImuYet() || FirmwareIncompatible();
 }
 
 uint32_t McuControl::EmergencyReason(double now) const {
@@ -134,6 +150,7 @@ uint32_t McuControl::EmergencyReason(double now) const {
   if (Lift(now)) reason |= kReasonLift;
   if (config_.bumper_latches_emergency && Bumper(now)) reason |= kReasonCollision;
   if (FirmwareIncompatible()) reason |= kReasonFirmwareIncompatible;
+  if (NoImuYet()) reason |= kReasonImuTimeout;
   return reason;
 }
 
@@ -143,6 +160,15 @@ bool McuControl::DockContact() const {
 
 bool McuControl::TelemetryStale(double now) const {
   return !sensor_ || now - last_sensor_s_ > config_.telemetry_timeout_s;
+}
+
+bool McuControl::ImuStale(double now) const {
+  return config_.imu_timeout_s > 0 && (!last_imu_sample_s_ || now - *last_imu_sample_s_ > config_.imu_timeout_s);
+}
+
+// Before its first sample the IMU blocks without a latch; a later gap latches in Tick, like lift.
+bool McuControl::NoImuYet() const {
+  return config_.imu_timeout_s > 0 && !last_imu_sample_s_;
 }
 
 bool McuControl::FirmwareIncompatible() const {
@@ -192,6 +218,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   if (!started_) {
     started_ = true;
     StartRepeat(blade_off_repeat_, BladeOff(), now);
+    blade_off_since_s_ = now;
   }
 
   if (!next_heartbeat_s_ || now + kTimeEpsilon >= *next_heartbeat_s_) {
@@ -209,6 +236,11 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     latched_ = true;
     latch_reason_ |= flags;
   }
+  // A gap in the IMU latches like the flags; before the first sample it only blocks.
+  if (last_imu_sample_s_ && ImuStale(now)) {
+    latched_ = true;
+    latch_reason_ |= kReasonImuTimeout;
+  }
 
   if (release_requested_) {
     release_requested_ = false;
@@ -223,7 +255,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     }
   }
   if (release_until_s_) {
-    if (!lift && !stop && !bumper && !TelemetryStale(now)) {
+    if (!lift && !stop && !bumper && !TelemetryStale(now) && !ImuStale(now) && !blade_turning_) {
       latched_ = false;
       latch_reason_ = 0;
       release_until_s_.reset();
@@ -276,9 +308,11 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     blade_off_repeat_.remaining = 0;
     out.push_back(CutterPacket(command));
     blade_on_ = blade_request_->setting;
+    blade_off_since_s_.reset();
   } else if (!blade_request_ && blade_on_) {
     blade_on_.reset();
     StartRepeat(blade_off_repeat_, BladeOff(), now);
+    blade_off_since_s_ = now;
   }
 
   if (dock_contact) {

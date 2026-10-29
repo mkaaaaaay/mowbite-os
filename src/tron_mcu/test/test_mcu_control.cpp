@@ -68,6 +68,7 @@ class ControlTest : public ::testing::Test {
     while (now_ < until - 1e-9) {
       now_ = ++step_ * 0.01;
       if (feed_sensor) control_.OnSensorInfo(sensor_, now_);
+      if (feed_imu_) control_.OnImu(ImuCounts{}, now_);
       for (auto& packet : control_.Tick(now_, kWall)) sent_.push_back({now_, packet});
     }
   }
@@ -81,8 +82,22 @@ class ControlTest : public ::testing::Test {
     return times;
   }
 
+  // Commands motion and blade, runs on and tells whether either reached the MCU.
+  bool DrivesOrMows(double until) {
+    const size_t before = sent_.size();
+    control_.OnCmdVel(0.2f, 0.0f, now_);
+    control_.SetBlade(BladeOn(), now_);
+    Run(until);
+    for (size_t i = before; i < sent_.size(); i++) {
+      if (IsMovingSpeed(sent_[i].packet) || IsBladeOn(sent_[i].packet)) return true;
+    }
+    return false;
+  }
+
   McuControl control_;
   SensorInfo sensor_;
+  // An IMU sample with every step.
+  bool feed_imu_ = false;
   int step_ = 0;
   double now_ = 0;
   std::vector<Sent> sent_;
@@ -117,16 +132,29 @@ class FirmwareControlTest : public ControlTest {
     v.chassis_board = {0, 6, chassis_patch};
     return v;
   }
-  // Commands motion and blade, runs on and tells whether either reached the MCU.
-  bool DrivesOrMows(double until) {
-    const size_t before = sent_.size();
-    control_.OnCmdVel(0.2f, 0.0f, now_);
-    control_.SetBlade(BladeOn(), now_);
-    Run(until);
-    for (size_t i = before; i < sent_.size(); i++) {
-      if (IsMovingSpeed(sent_[i].packet) || IsBladeOn(sent_[i].packet)) return true;
-    }
-    return false;
+};
+
+class ImuControlTest : public ControlTest {
+ protected:
+  static McuControlConfig ImuConfig() {
+    McuControlConfig config;
+    config.allow_blade = true;
+    config.imu_timeout_s = 0.5;
+    return config;
+  }
+  ImuControlTest() : ControlTest(ImuConfig()) {
+  }
+};
+
+class BladeStopTest : public ControlTest {
+ protected:
+  static McuControlConfig StopConfig() {
+    McuControlConfig config;
+    config.allow_blade = true;
+    config.blade_stop_time_s = 3.0;
+    return config;
+  }
+  BladeStopTest() : ControlTest(StopConfig()) {
   }
 };
 
@@ -647,7 +675,7 @@ TEST_F(ControlTest, ImuSamplesForwardedOnceAndRateLimited) {
   for (int i = 0; i < 100; i++) {
     ImuCounts imu;
     imu.yaw = static_cast<int16_t>(i);
-    control_.OnImu(imu);
+    control_.OnImu(imu, now_);
     Run(now_ + 0.01);
   }
   // The last sample goes out on the next free slot.
@@ -658,6 +686,120 @@ TEST_F(ControlTest, ImuSamplesForwardedOnceAndRateLimited) {
   // IMU stops, nothing stale is repeated.
   Run(now_ + 1.0);
   EXPECT_EQ(Times([](const SubPacket& p) { return IsModule(p, Module::kImu); }).size(), forwarded);
+}
+
+TEST_F(ControlTest, WithoutImuTimeoutNoImuIsNeeded) {
+  EXPECT_TRUE(DrivesOrMows(0.5));
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+}
+
+TEST_F(ImuControlTest, BlockedWithoutLatchUntilTheFirstSample) {
+  Run(1.0);
+  auto status = control_.Status(now_);
+  EXPECT_TRUE(status.blocked);
+  EXPECT_FALSE(status.latched);
+  EXPECT_EQ(status.emergency_reason, kReasonImuTimeout);
+  EXPECT_FALSE(DrivesOrMows(1.2));
+  feed_imu_ = true;
+  Run(1.3);
+  EXPECT_FALSE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+  EXPECT_TRUE(DrivesOrMows(1.5));
+}
+
+TEST_F(ImuControlTest, GapLatchesAndStopsWheelsAndBlade) {
+  feed_imu_ = true;
+  Run(0.5);
+  ASSERT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(0.6);
+  feed_imu_ = false;
+  for (int i = 0; i < 10; i++) {
+    control_.OnCmdVel(0.2f, 0.0f, now_);
+    Run(now_ + 0.1);
+  }
+  auto status = control_.Status(now_);
+  EXPECT_TRUE(status.latched);
+  EXPECT_FALSE(status.blade_on);
+  EXPECT_EQ(status.emergency_reason, kReasonLatch | kReasonImuTimeout);
+  auto zeros = Times(IsZeroSpeed);
+  ASSERT_EQ(zeros.size(), 3u);
+  // The last sample came at 0.6 s.
+  EXPECT_NEAR(zeros[0], 1.1, 0.02);
+  EXPECT_TRUE(Times(IsMovingSpeed, zeros[0]).empty());
+  EXPECT_EQ(Times(IsBladeOff, 0.5).size(), 3u);
+}
+
+TEST_F(ImuControlTest, ReleaseOnlyOnceTheImuIsBack) {
+  feed_imu_ = true;
+  Run(0.5);
+  feed_imu_ = false;
+  Run(1.5);
+  control_.ReleaseEmergency(now_);
+  Run(3.0);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  feed_imu_ = true;
+  Run(3.5);
+  // Back again, the gap stays latched until released.
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonImuTimeout);
+  EXPECT_FALSE(DrivesOrMows(3.8));
+  control_.ReleaseEmergency(now_);
+  Run(4.0);
+  EXPECT_FALSE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+  EXPECT_TRUE(DrivesOrMows(4.3));
+}
+
+TEST_F(BladeStopTest, ABladeThatRunsDownInTimeIsFine) {
+  Run(0.5);
+  control_.SetBlade(BladeOn(), now_);
+  Run(1.0);
+  control_.OnBladeRpm(2800, now_);
+  control_.SetBlade(kBladeOff, now_);
+  Run(1.5);
+  control_.OnBladeRpm(2000, now_);
+  // Off went out at 1.01 s, so 3.9 s is still within the 3 s to run down.
+  Run(3.9);
+  control_.OnBladeRpm(300, now_);
+  Run(4.5);
+  control_.OnBladeRpm(0, now_);
+  Run(5.0);
+  EXPECT_FALSE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+}
+
+TEST_F(BladeStopTest, ABladeStillTurningLatchesAndIsSentOffAgain) {
+  Run(0.5);
+  control_.SetBlade(BladeOn(), now_);
+  Run(1.0);
+  control_.SetBlade(kBladeOff, now_);
+  Run(4.5);
+  control_.OnBladeRpm(1500, now_);
+  auto status = control_.Status(now_);
+  EXPECT_TRUE(status.blocked);
+  EXPECT_EQ(status.emergency_reason, kReasonLatch | kReasonMowerNotStopped);
+  Run(5.0);
+  EXPECT_EQ(Times(IsBladeOff, 4.5).size(), 3u);
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kBlocked);
+  // While it turns a release does not lift the block, and the next report sends off again.
+  control_.ReleaseEmergency(now_);
+  Run(5.5);
+  control_.OnBladeRpm(1500, now_);
+  Run(7.0);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  EXPECT_EQ(Times(IsBladeOff, 4.5).size(), 6u);
+  control_.OnBladeRpm(0, now_);
+  control_.ReleaseEmergency(now_);
+  Run(7.2);
+  EXPECT_FALSE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+}
+
+TEST_F(BladeStopTest, ABladeTurningAtTheStartLatches) {
+  // Never switched on from here; the start sent it off at 0.01 s.
+  Run(3.5);
+  control_.OnBladeRpm(2800, now_);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonMowerNotStopped);
 }
 
 TEST_F(BladeControlTest, NeverSendsPowerOff) {

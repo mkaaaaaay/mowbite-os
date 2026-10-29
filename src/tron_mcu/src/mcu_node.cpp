@@ -37,6 +37,8 @@ static_assert(tron::kReasonLift == HardwareStatus::REASON_LIFT);
 static_assert(tron::kReasonCollision == HardwareStatus::REASON_COLLISION);
 static_assert(tron::kReasonHighLevel == HardwareStatus::REASON_HIGH_LEVEL);
 static_assert(tron::kReasonFirmwareIncompatible == HardwareStatus::REASON_FIRMWARE_INCOMPATIBLE);
+static_assert(tron::kReasonImuTimeout == HardwareStatus::REASON_IMU_TIMEOUT);
+static_assert(tron::kReasonMowerNotStopped == HardwareStatus::REASON_MOWER_NOT_STOPPED);
 static_assert(static_cast<uint8_t>(tron::BladeOffReason::kLeaseExpired) == HardwareStatus::BLADE_OFF_LEASE_EXPIRED);
 static_assert(static_cast<uint8_t>(tron::BladeOffReason::kReconnect) == HardwareStatus::BLADE_OFF_RECONNECT);
 
@@ -91,6 +93,7 @@ class McuNode : public rclcpp::Node {
   explicit McuNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_mcu", options), control_(LoadConfig()) {
     port_name_ = declare_parameter("port", "/dev/ttyS9");
     blade_lease_max_s_ = get_parameter("blade_lease_max").as_double();
+    imu_timeout_s_ = get_parameter("imu_timeout").as_double();
     measured_linear_scale_ = declare_parameter("measured_linear_scale", 1.0);
     measured_angular_scale_ = declare_parameter("measured_angular_scale", 1.0);
     drive_current_scale_ = declare_parameter("drive_current_scale", 0.001);
@@ -109,7 +112,7 @@ class McuNode : public rclcpp::Node {
 
     cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
         "hw/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) { OnCmdVel(*msg); });
-    if (declare_parameter("send_imu", true)) {
+    if (get_parameter("send_imu").as_bool()) {
       imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
           "imu/data", rclcpp::SensorDataQoS(), [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) { OnImu(*msg); });
     }
@@ -140,6 +143,12 @@ class McuNode : public rclcpp::Node {
     config.mow_height_mm = static_cast<uint16_t>(declare_parameter("mow_height_mm", 60));
     config.blade_lease_max_s = declare_parameter("blade_lease_max", config.blade_lease_max_s);
     config.bumper_latches_emergency = declare_parameter("bumper_latches_emergency", true);
+    const bool send_imu = declare_parameter("send_imu", true);
+    const double imu_timeout = declare_parameter("imu_timeout", 0.5);
+    // Without forwarding the MCU gets no IMU from here, so there is nothing to wait for.
+    config.imu_timeout_s = send_imu ? imu_timeout : 0.0;
+    config.blade_stop_time_s = declare_parameter("blade_stop_time", config.blade_stop_time_s);
+    config.blade_still_rpm = static_cast<int>(declare_parameter("blade_still_rpm", config.blade_still_rpm));
     config.expected_cutter_version = declare_parameter("expected_cutter_version", "");
     config.expected_chassis_version = declare_parameter("expected_chassis_version", "");
     RCLCPP_INFO(get_logger(), "allow_blade: %d, cmd_vel_timeout: %.2f s, mow_height: %u mm", config.allow_blade,
@@ -291,6 +300,7 @@ class McuNode : public rclcpp::Node {
         if (auto motors = tron::DecodeMotors(packet.payload)) {
           motors_ = *motors;
           motors_s_ = now;
+          control_.OnBladeRpm(motors->cutter.rpm, now);
         }
         break;
       case Module::kVersion:
@@ -393,6 +403,16 @@ class McuNode : public rclcpp::Node {
       msg.emergency = state.blocked;
       msg.emergency_latched = state.latched;
       msg.emergency_reason = state.emergency_reason;
+      const uint32_t added = state.emergency_reason & ~logged_reason_;
+      logged_reason_ = state.emergency_reason;
+      // Before its first sample the IMU only blocks, that is no gap.
+      if ((added & tron::kReasonImuTimeout) && imu_seen_) {
+        RCLCPP_ERROR(get_logger(), "No IMU sample for %.1f s: motion and blade blocked until released", imu_timeout_s_);
+      }
+      if (added & tron::kReasonMowerNotStopped) {
+        RCLCPP_ERROR(get_logger(), "Blade still at %d rpm after it was switched off: blocked, off sent again",
+                     motors_.cutter.rpm);
+      }
       msg.telemetry_ok = !state.telemetry_stale;
       msg.lift = state.lift;
       msg.stop = state.stop;
@@ -460,7 +480,8 @@ class McuNode : public rclcpp::Node {
         pitch * kRadToDeg + imu_pitch_offset_deg_, roll * kRadToDeg + imu_roll_offset_deg_, yaw * kRadToDeg,
         {a.x / kStandardGravity, a.y / kStandardGravity, a.z / kStandardGravity}, {0.0, 0.0, 0.0});
     std::lock_guard<std::mutex> lock(mutex_);
-    control_.OnImu(counts);
+    control_.OnImu(counts, MonotonicSeconds());
+    imu_seen_ = true;
   }
 
   void OnEmergency(const mowbite_msgs::srv::SetEmergency::Request& req,
@@ -514,6 +535,9 @@ class McuNode : public rclcpp::Node {
   double failsafe_without_host_s_;
   std::string safety_measurement_date_;
   bool blade_on_logged_ = false;
+  uint32_t logged_reason_ = 0;
+  double imu_timeout_s_;
+  bool imu_seen_ = false;
   double measured_linear_scale_;
   double measured_angular_scale_;
   double drive_current_scale_;

@@ -18,6 +18,9 @@ struct McuControlConfig {
   int repeat_count = 3;
   double repeat_interval_s = 0.1;
   double imu_min_period_s = 0.02;
+  // Without an IMU sample for this long, motion and blade are blocked: the MCU knows the tilt only from the IMU the host
+  // forwards. Before the first sample this only blocks, a later gap latches. 0 when the IMU is not forwarded.
+  double imu_timeout_s = 0;
   int dock_debounce_samples = 3;
   double charge_resend_s = 30.0;
   bool allow_blade = false;
@@ -27,6 +30,10 @@ struct McuControlConfig {
   // Longest lease a blade request may ask for; without a renewal the blade goes off when it runs out.
   double blade_lease_max_s = 2.0;
   uint16_t blade_off_height_mm = 90;
+  // The MCU does not confirm an off frame. A blade it still reports at blade_still_rpm or more this long after it went
+  // off latches the emergency, and the off frames go out again. 0 turns the check off.
+  double blade_stop_time_s = 5.0;
+  int blade_still_rpm = 100;
   bool bumper_latches_emergency = true;
   // A release waits this long for lift, stop and bumper to drop after the clear frame.
   double release_window_s = 1.0;
@@ -47,6 +54,9 @@ constexpr uint32_t kReasonLift = 1u << 3;
 constexpr uint32_t kReasonCollision = 1u << 5;
 constexpr uint32_t kReasonHighLevel = 1u << 7;
 constexpr uint32_t kReasonFirmwareIncompatible = 1u << 12;
+// Own bits of hw/status.
+constexpr uint32_t kReasonImuTimeout = 1u << 16;
+constexpr uint32_t kReasonMowerNotStopped = 1u << 17;
 
 // Why the blade went off the last time it was requested or running.
 enum class BladeOffReason : uint8_t {
@@ -73,7 +83,7 @@ enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvali
 const char* BladeResultText(BladeResult result);
 
 struct McuControlStatus {
-  // Motion and blade are blocked: latched, stale telemetry or incompatible firmware.
+  // Motion and blade are blocked: latched, stale telemetry, no IMU or incompatible firmware.
   bool blocked = false;
   // Reason bits while blocked, 0 otherwise. A cause that latched stays in it until the release.
   uint32_t emergency_reason = 0;
@@ -99,8 +109,10 @@ class McuControl {
   void OnCmdVel(float linear, float angular, double now);
   void OnSensorInfo(const SensorInfo& info, double now);
   void OnDockContactSample(bool contact);
-  // Every sample is forwarded at most once, so a dead IMU stops the stream.
-  void OnImu(const ImuCounts& imu);
+  // Every sample is forwarded at most once, so a dead IMU stops the stream; imu_timeout_s counts from the last one.
+  void OnImu(const ImuCounts& imu, double now);
+  // Speed of the blade motor as the MCU reports it (motors frame, about once a second).
+  void OnBladeRpm(int rpm, double now);
   // Version frame of the MCU, about once a second. Returns false if it does not match the expected firmware.
   bool OnVersions(const VersionInfo& versions);
 
@@ -144,6 +156,8 @@ class McuControl {
   bool DockContact() const;
   void DropBlade(BladeOffReason reason);
   bool TelemetryStale(double now) const;
+  bool ImuStale(double now) const;
+  bool NoImuYet() const;
   bool FirmwareIncompatible() const;
   bool Lift(double now) const;
   bool Stop(double now) const;
@@ -178,6 +192,10 @@ class McuControl {
   // Setting of the last on frame, empty while the blade is off.
   std::optional<BladeSetting> blade_on_;
   BladeOffReason blade_off_reason_ = BladeOffReason::kNone;
+  // When the blade was last sent off, by request or at the start; empty while it is on.
+  std::optional<double> blade_off_since_s_;
+  // The last blade report after blade_stop_time_s still showed it turning; only a slower report clears it.
+  bool blade_turning_ = false;
 
   int dock_samples_ = 0;
   bool charge_sent_ = false;
@@ -187,7 +205,9 @@ class McuControl {
   std::optional<bool> firmware_ok_;
 
   std::optional<ImuCounts> pending_imu_;
+  // Last forward to the MCU and last sample from the IMU.
   std::optional<double> last_imu_s_;
+  std::optional<double> last_imu_sample_s_;
 
   std::optional<double> next_heartbeat_s_;
   bool started_ = false;
