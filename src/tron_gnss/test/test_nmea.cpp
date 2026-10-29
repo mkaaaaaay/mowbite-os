@@ -64,6 +64,25 @@ TEST(Nmea, SouthWestIsNegative) {
   EXPECT_EQ(out[0].gga.quality, 4);
 }
 
+TEST(Nmea, GgaCarriesTheAgeOfTheCorrections) {
+  NmeaParser parser;
+  auto out = Parse(parser, Sentence("GNGGA,120000.00,5200.0,N,00900.0,E,4,20,0.6,50.0,M,0.0,M,2.5,0000"));
+  ASSERT_EQ(out.size(), 1u);
+  ASSERT_TRUE(out[0].gga.correction_age_s);
+  EXPECT_DOUBLE_EQ(*out[0].gga.correction_age_s, 2.5);
+  // Empty without corrections, a negative age is none either.
+  out = Parse(parser, Sentence("GNGGA,120001.00,5200.0,N,00900.0,E,4,20,0.6,50.0,M,0.0,M,,"));
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_FALSE(out[0].gga.correction_age_s);
+  out = Parse(parser, Sentence("GNGGA,120002.00,5200.0,N,00900.0,E,4,20,0.6,50.0,M,0.0,M,-1.0,0000"));
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_FALSE(out[0].gga.correction_age_s);
+  // Cut off before field 13.
+  out = Parse(parser, Sentence("GNGGA,120003.00,5200.0,N,00900.0,E,4,20,0.6,50.0"));
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_FALSE(out[0].gga.correction_age_s);
+}
+
 TEST(Nmea, AnyTalkerIsAccepted) {
   NmeaParser parser;
   EXPECT_EQ(Parse(parser, Sentence("GLGGA,120000,5200.0,N,01000.0,E,1,05,1.0,50.0,M,0,M,,")).size(), 1u);

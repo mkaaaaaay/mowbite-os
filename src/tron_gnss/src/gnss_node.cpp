@@ -47,6 +47,8 @@ class GnssNode : public rclcpp::Node {
     config.accuracy_dgps_m = declare_parameter("accuracy_dgps", config.accuracy_dgps_m);
     config.accuracy_single_m = declare_parameter("accuracy_single", config.accuracy_single_m);
     config.motion_max_age_s = declare_parameter("motion_max_age", config.motion_max_age_s);
+    config.max_correction_age_s = declare_parameter("max_correction_age", config.max_correction_age_s);
+    max_correction_age_s_ = config.max_correction_age_s;
 
     if (!std::isfinite(lat) || !std::isfinite(lon) || !std::isfinite(height) || std::abs(lat) > 90.0 ||
         std::abs(lon) > 180.0) {
@@ -149,6 +151,17 @@ class GnssNode : public rclcpp::Node {
                            "GGA time does not advance, %lu sentences dropped so far; receiver hanging?",
                            static_cast<unsigned long>(reported_stale_));
     }
+    if (tracker_->old_corrections() != reported_old_corrections_) {
+      reported_old_corrections_ = tracker_->old_corrections();
+      if (auto age = tracker_->last_old_correction_age()) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                             "RTK fixed on corrections %.1f s old (limit %.0f s): counted as float", *age,
+                             max_correction_age_s_);
+      } else {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                             "RTK fixed without the age of its corrections (GGA field 13): counted as float");
+      }
+    }
     if (parser_.checksum_errors() + parser_.malformed() != reported_errors_) {
       reported_errors_ = parser_.checksum_errors() + parser_.malformed();
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 30000, "NMEA errors so far: %lu checksum, %lu malformed",
@@ -188,6 +201,8 @@ class GnssNode : public rclcpp::Node {
   std::optional<tron::GnssTracker> tracker_;
   uint64_t reported_errors_ = 0;
   uint64_t reported_stale_ = 0;
+  uint64_t reported_old_corrections_ = 0;
+  double max_correction_age_s_ = 0;
   rclcpp::Publisher<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_pub_;
   rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr datum_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;

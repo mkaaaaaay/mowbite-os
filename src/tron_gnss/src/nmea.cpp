@@ -77,6 +77,10 @@ bool ParseGga(const std::vector<std::string>& f, GgaData& out) {
   out.satellites = sats ? static_cast<int>(*sats) : 0;
   out.hdop = Number(f[8]);
   out.altitude_m = Number(f[9]);
+  if (f.size() > 13) {
+    auto age = Number(f[13]);
+    if (age && *age >= 0) out.correction_age_s = age;
+  }
   return true;
 }
 

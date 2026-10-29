@@ -39,6 +39,9 @@ tron_gnss:
     port: /dev/ttyS4
     # Assumption from the reference documentation, checked on the device.
     baud: 115200
+    # RTK fixed on corrections older than max_correction_age s, or without their age in GGA, counts as float (G7).
+    # Assumption until phase 7.
+    max_correction_age: 30.0
     # datum_lat, datum_long and datum_height of the garden go into the parameter file on the Tron, not here.
 
 tron_imu:

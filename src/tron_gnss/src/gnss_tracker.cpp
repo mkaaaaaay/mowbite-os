@@ -52,9 +52,15 @@ std::optional<GnssPose> GnssTracker::Update(const NmeaMessage& message, double n
     case static_cast<int>(FixQuality::kSingle): pose.accuracy_m = config_.accuracy_single_m; break;
     case static_cast<int>(FixQuality::kDgps): pose.accuracy_m = config_.accuracy_dgps_m; break;
     case static_cast<int>(FixQuality::kRtkFixed):
-      pose.flags = kFlagRtk | kFlagRtkFixed;
-      pose.accuracy_m = config_.accuracy_rtk_fixed_m;
-      break;
+      if (gga.correction_age_s && *gga.correction_age_s <= config_.max_correction_age_s) {
+        pose.flags = kFlagRtk | kFlagRtkFixed;
+        pose.accuracy_m = config_.accuracy_rtk_fixed_m;
+        break;
+      }
+      // Without fresh corrections the fix may rest on old data: worth no more than float.
+      old_corrections_++;
+      last_old_correction_age_ = gga.correction_age_s;
+      [[fallthrough]];
     case static_cast<int>(FixQuality::kRtkFloat):
       pose.flags = kFlagRtk | kFlagRtkFloat;
       pose.accuracy_m = config_.accuracy_rtk_float_m;

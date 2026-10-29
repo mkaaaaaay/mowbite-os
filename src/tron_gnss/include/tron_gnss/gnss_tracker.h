@@ -24,6 +24,9 @@ struct GnssConfig {
   double accuracy_dead_reckoning_m = 5.0;
   // Speed and course older than this are not used as motion vector.
   double motion_max_age_s = 1.0;
+  // A receiver can hold RTK fixed for a while after its corrections stop. Fixed counts as float when the corrections are
+  // older than this or of unknown age.
+  double max_correction_age_s = 30.0;
 };
 
 struct GnssPose {
@@ -53,6 +56,14 @@ class GnssTracker {
     return stale_gga_;
   }
 
+  // Fixed solutions counted as float for old or missing corrections, and the age of the last one (empty if missing).
+  uint64_t old_corrections() const {
+    return old_corrections_;
+  }
+  std::optional<double> last_old_correction_age() const {
+    return last_old_correction_age_;
+  }
+
  private:
   struct Motion {
     double speed_mps;
@@ -66,6 +77,8 @@ class GnssTracker {
   std::optional<Motion> motion_;
   std::optional<double> last_gga_utc_s_;
   uint64_t stale_gga_ = 0;
+  uint64_t old_corrections_ = 0;
+  std::optional<double> last_old_correction_age_;
 };
 
 }  // namespace tron

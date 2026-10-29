@@ -1,14 +1,16 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <optional>
 
 #include "tron_gnss/gnss_tracker.h"
 
 namespace tron {
 namespace {
 
-// Without a time each GGA is 0.2 s after the one before, as from a receiver at 5 Hz.
-NmeaMessage Gga(int quality, double lat, double lon, double alt = 60.0, double utc = -1.0) {
+// Without a time each GGA is 0.2 s after the one before, as from a receiver at 5 Hz. Corrections 1 s old by default.
+NmeaMessage Gga(int quality, double lat, double lon, double alt = 60.0, double utc = -1.0,
+                std::optional<double> age = 1.0) {
   static double next_utc = 43200.0;
   if (utc < 0) utc = next_utc += 0.2;
   NmeaMessage m;
@@ -19,6 +21,7 @@ NmeaMessage Gga(int quality, double lat, double lon, double alt = 60.0, double u
   m.gga.altitude_m = alt;
   m.gga.utc_s = utc;
   m.gga.satellites = 18;
+  m.gga.correction_age_s = age;
   return m;
 }
 
@@ -168,6 +171,51 @@ TEST_F(TrackerTest, GgaWithoutFixStillCountsForTheTime) {
   EXPECT_FALSE(tracker.Update(Gga(0, 52.0, 9.0, 60.0, 50000.0), 0));
   EXPECT_FALSE(tracker.Update(Gga(4, 52.0, 9.0, 60.0, 50000.0), 0.2));
   EXPECT_TRUE(tracker.Update(Gga(4, 52.0, 9.0, 60.0, 50000.2), 0.4));
+}
+
+TEST_F(TrackerTest, FixedOnOldCorrectionsCountsAsFloat) {
+  auto fresh = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 30.0), 0);
+  ASSERT_TRUE(fresh);
+  EXPECT_EQ(fresh->flags, kFlagRtk | kFlagRtkFixed);
+  auto old = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 30.5), 0.2);
+  ASSERT_TRUE(old);
+  EXPECT_EQ(old->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_DOUBLE_EQ(old->accuracy_m, 0.3);
+  EXPECT_EQ(tracker.old_corrections(), 1u);
+  ASSERT_TRUE(tracker.last_old_correction_age());
+  EXPECT_DOUBLE_EQ(*tracker.last_old_correction_age(), 30.5);
+  // Fresh corrections again: fixed with the next sentence.
+  auto again = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0.4);
+  ASSERT_TRUE(again);
+  EXPECT_EQ(again->flags, kFlagRtk | kFlagRtkFixed);
+}
+
+TEST_F(TrackerTest, FixedWithoutCorrectionAgeCountsAsFloat) {
+  auto p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, std::nullopt), 0);
+  ASSERT_TRUE(p);
+  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_DOUBLE_EQ(p->accuracy_m, 0.3);
+  EXPECT_EQ(tracker.old_corrections(), 1u);
+  EXPECT_FALSE(tracker.last_old_correction_age());
+}
+
+TEST_F(TrackerTest, CorrectionAgeLeavesOtherFixTypesAlone) {
+  auto flt = tracker.Update(Gga(5, 52.0, 9.0, 60.0, -1.0, 90.0), 0);
+  ASSERT_TRUE(flt);
+  EXPECT_EQ(flt->flags, kFlagRtk | kFlagRtkFloat);
+  auto single = tracker.Update(Gga(1, 52.0, 9.0, 60.0, -1.0, std::nullopt), 0);
+  ASSERT_TRUE(single);
+  EXPECT_DOUBLE_EQ(single->accuracy_m, 3.0);
+  EXPECT_EQ(tracker.old_corrections(), 0u);
+}
+
+TEST(Tracker, CorrectionAgeLimitIsAParameter) {
+  GnssConfig config;
+  config.max_correction_age_s = 10.0;
+  GnssTracker tracker{config, LocalFrame(52.0, 9.0, 60.0)};
+  auto p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 12.0), 0);
+  ASSERT_TRUE(p);
+  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFloat);
 }
 
 TEST_F(TrackerTest, MissingCourseGivesNoMotion) {

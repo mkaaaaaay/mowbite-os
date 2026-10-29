@@ -26,7 +26,8 @@ struct GgaData {
   int quality = 0;  // raw field, see FixQuality
   int satellites = 0;
   std::optional<double> hdop;
-  std::optional<double> altitude_m;  // above mean sea level
+  std::optional<double> altitude_m;        // above mean sea level
+  std::optional<double> correction_age_s;  // age of the differential corrections, empty without
 };
 
 struct RmcData {
