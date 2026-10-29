@@ -34,6 +34,9 @@ services:
     environment:
       - ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
     command: ["ros2", "launch", "mowbite_sim", "sim.launch.py"]
+    # SIGINT so that launch stops every node and tron_mcu switches the blade off (it ignores SIGTERM as PID 1).
+    stop_signal: SIGINT
+    stop_grace_period: 20s
   mowbite:
     image: ${OMTRON_APP_IMAGE:-ghcr.io/mkaaaaaay/mowbite:1.4.0-beta.16}
     labels:
