@@ -284,6 +284,20 @@ TEST(LogicMowing, EmergencyPausesAndWaitsForContinueAfterTheReset) {
   EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kFollow);
 }
 
+TEST(LogicMowing, TheGpsPauseCarriesTheAccuracyAndTheLimit) {
+  LogicConfig config;
+  LogicCore core = Following(config);
+  core.OnPose(PoseAt(1, 2, 0.3f));
+  core.TakeEvents();
+  core.OnLegEnded(LegEnd::kGps, 2, Reason("POSITION_ACCURACY", "Position accuracy 0.30 m"));
+  const auto events = core.TakeEvents();
+  const Event* state = Find(events, "STATE");
+  ASSERT_TRUE(state);
+  EXPECT_EQ(state->details["reason"], "POSITION_ACCURACY");
+  EXPECT_NEAR(state->details["accuracy"].get<double>(), 0.3, 1e-6);
+  EXPECT_NEAR(state->details["limit"].get<double>(), config.max_position_accuracy, 1e-6);
+}
+
 TEST(LogicMowing, AfterBadGpsItGoesOnByItselfOnceThePositionIsGoodLongEnough) {
   LogicConfig config;
   config.gps_wait_time = 10;

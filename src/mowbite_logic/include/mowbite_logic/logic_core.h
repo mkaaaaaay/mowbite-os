@@ -299,6 +299,7 @@ class LogicCore {
   // POSITION_ACCURACY or NO_HEADING.
   Reason Busy() const;
   Reason Unsafe() const;
+  Reason AccuracyReason(float accuracy) const;
   Reason PositionProblem() const;
   ActionResult OnMowingAction(const std::string& name);
   void StartMowing();

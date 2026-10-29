@@ -591,7 +591,7 @@ TEST(LogicDrive, RefusedWithAReason) {
     EXPECT_EQ(why.code, "POSITION_ACCURACY");
     EXPECT_FLOAT_EQ(why.fields["accuracy"].get<float>(), 0.3f);
     EXPECT_DOUBLE_EQ(why.fields["limit"].get<double>(), 0.1);
-    EXPECT_EQ(why.message, "Position accuracy 0.30 m is worse than 0.10 m");
+    EXPECT_EQ(why.message, "Position accuracy 0.300 m is worse than 0.100 m");
   }
   {
     LogicCore core = ReadyToDrive();

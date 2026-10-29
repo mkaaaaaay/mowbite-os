@@ -597,18 +597,20 @@ Reason LogicCore::Unsafe() const {
   return {};
 }
 
+Reason LogicCore::AccuracyReason(float accuracy) const {
+  char text[160];
+  std::snprintf(text, sizeof(text), "Position accuracy %.3f m is worse than %.3f m", accuracy,
+                config_.max_position_accuracy);
+  return Reason("POSITION_ACCURACY", text).With("accuracy", accuracy).With("limit", config_.max_position_accuracy);
+}
+
 Reason LogicCore::PositionProblem() const {
   if (!pose_) return Reason("NO_POSITION", "No position from the localization");
   if (!(pose_->position_accuracy <= config_.max_position_accuracy)) {
-    char text[160];
-    std::snprintf(text, sizeof(text), "Position accuracy %.2f m is worse than %.2f m", pose_->position_accuracy,
-                  config_.max_position_accuracy);
-    return Reason("POSITION_ACCURACY", text)
-        .With("accuracy", pose_->position_accuracy)
-        .With("limit", config_.max_position_accuracy);
+    return AccuracyReason(pose_->position_accuracy);
   }
   if (!pose_->orientation_valid) {
-    return Reason("NO_HEADING", "The heading is not aligned yet: drive a few metres by remote control");
+    return Reason("NO_HEADING", "The heading is not aligned yet");
   }
   return {};
 }
@@ -840,7 +842,14 @@ void LogicCore::OnLegEnded(LegEnd end, size_t index, const Reason& reason) {
       }
       break;
     case LegEnd::kCanceled: approached_ = false; break;
-    case LegEnd::kGps: Pause(kPauseGps, reason); break;
+    case LegEnd::kGps:
+      // The follower's text carries no numbers: the event gets the accuracy and the limit like a refused start.
+      if (reason.code == "POSITION_ACCURACY" && pose_ && !(pose_->position_accuracy <= config_.max_position_accuracy)) {
+        Pause(kPauseGps, AccuracyReason(pose_->position_accuracy));
+      } else {
+        Pause(kPauseGps, reason);
+      }
+      break;
     case LegEnd::kEmergency: Pause(kPauseEmergency, reason); break;
     case LegEnd::kFailed:
       approached_ = false;
