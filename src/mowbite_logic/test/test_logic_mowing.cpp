@@ -538,6 +538,35 @@ TEST(LogicMowing, AFailedPlanOrLegPausesUntilContinue) {
   EXPECT_EQ(core.RobotState().state, "PAUSED");
 }
 
+TEST(LogicMowing, AFollowerThatStopsAnsweringPausesWithTheBladeOff) {
+  // G22: the node ends the leg itself with FOLLOWER_MISSING; the job waits for the user, the blade is off.
+  LogicConfig config;
+  config.mow_with_blade = true;
+  LogicCore core = Following(config);
+  core.OnJobProgress(1);
+  ASSERT_TRUE(core.BladeWanted());
+  core.OnLegEnded(LegEnd::kFailed, 3,
+                  Reason("FOLLOWER_MISSING", "No answer from the follower for 2.1 s").With("seconds", 2.1).With("limit", 2.0));
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_EQ(core.RobotState().current_path_index, 3);
+  EXPECT_FALSE(core.BladeWanted());
+  EXPECT_FALSE(core.FollowerActive());
+  const auto events = core.TakeEvents();
+  const Event* paused = Find(events, "STATE");
+  ASSERT_TRUE(paused);
+  EXPECT_EQ(paused->details["state"], "PAUSED");
+  EXPECT_EQ(paused->details["reason"], "FOLLOWER_MISSING");
+  EXPECT_DOUBLE_EQ(paused->details["seconds"].get<double>(), 2.1);
+  EXPECT_DOUBLE_EQ(paused->details["limit"].get<double>(), 2.0);
+  EXPECT_EQ(paused->details["severity"], "error");
+  EXPECT_EQ(paused->details["resume"], "user");
+  // Continue goes on from where it stopped.
+  core.OnPose(PoseAt(2.5, 2));
+  core.OnAction(kMowing + "continue");
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kFollow);
+  EXPECT_EQ(core.RobotState().current_path_index, 3);
+}
+
 TEST(LogicMowing, ALowBatteryEndsMowingAfterAWhile) {
   LogicCore core = Following();
   auto hw = Healthy();

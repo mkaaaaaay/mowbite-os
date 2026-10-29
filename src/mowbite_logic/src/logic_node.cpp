@@ -179,6 +179,9 @@ class LogicNode : public rclcpp::Node {
     // The blade: a lease of blade_lease (s), renewed every blade_renew (s) while the logic wants it to turn.
     blade_lease_s_ = declare_parameter("blade_lease", 1.0);
     blade_renew_s_ = declare_parameter("blade_renew", 0.5);
+    // G22: no sign of the follower (goal taken, feedback every 0.5 s) for this long (s) while it has a path: the path
+    // ends here, without waiting for the follower, and the mower and the blade stop.
+    follower_timeout_s_ = declare_parameter("follower_timeout", 2.0);
     blade_client_ = create_client<mowbite_msgs::srv::SetBlade>("hw/blade");
     RestoreCheckpoint();
 
@@ -523,6 +526,7 @@ class LogicNode : public rclcpp::Node {
                    FollowPath::Result::REASON_INVALID, 0);
         } else {
           drive_.handle = handle;
+          drive_.follower_sign = MonotonicSeconds();
           RCLCPP_INFO(get_logger(), "%s: %s", PurposeName(drive_.purpose), what.c_str());
           RespondDrive(drive_.header, true, what);
           drive_.header.reset();
@@ -534,7 +538,10 @@ class LogicNode : public rclcpp::Node {
     };
     options.feedback_callback = [this, seq](FollowHandle::SharedPtr, const std::shared_ptr<const FollowPath::Feedback> feedback) {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (seq != drive_.seq || drive_.purpose != Purpose::kMow) return;
+      if (seq != drive_.seq) return;
+      drive_.follower_sign = MonotonicSeconds();
+      drive_.follower_index = feedback->index;
+      if (drive_.purpose != Purpose::kMow) return;
       core_.OnJobProgress(drive_.PathIndex(feedback->index));
     };
     options.result_callback = [this, seq](const FollowHandle::WrappedResult& wrapped) {
@@ -542,17 +549,54 @@ class LogicNode : public rclcpp::Node {
         std::lock_guard<std::mutex> lock(mutex_);
         if (seq != drive_.seq) return;
         const auto& result = wrapped.result;
-        const uint8_t reason = result ? result->reason : FollowPath::Result::REASON_CANCELED;
-        Reason why(FollowerCode(reason), result ? result->message : "No result from the follower");
-        // Stopped from here: the cause, not the cancel of the follower.
-        if (drive_.cancel_reason && reason == FollowPath::Result::REASON_CANCELED) {
-          why = Reason(*drive_.cancel_reason).WithMessage(drive_.cancel_reason->message + " (" + why.message + ")");
+        uint8_t reason = result ? result->reason : FollowPath::Result::REASON_CANCELED;
+        uint32_t index = result ? result->index : drive_.follower_index;
+        std::string message = result ? result->message : "No result from the follower";
+        // A goal the follower dropped without ending it (gone, or another goal took its place) comes back canceled
+        // with an empty result: never a path done.
+        if (wrapped.code != rclcpp_action::ResultCode::SUCCEEDED && reason == FollowPath::Result::REASON_DONE) {
+          reason = FollowPath::Result::REASON_CANCELED;
+          index = drive_.follower_index;
+          message = "no result from the follower";
         }
-        EndDrive(reason == FollowPath::Result::REASON_DONE, why, reason, result ? result->index : 0);
+        Reason why(FollowerCode(reason), message);
+        if (reason == FollowPath::Result::REASON_CANCELED && drive_.cancel_reason) {
+          // Stopped from here: the cause, not the cancel of the follower.
+          why = Reason(*drive_.cancel_reason).WithMessage(drive_.cancel_reason->message + " (" + message + ")");
+        } else if (reason == FollowPath::Result::REASON_CANCELED) {
+          // A cancel the logic did not ask for (G22): the path stops for the user, as when the follower does not answer.
+          why = Reason("FOLLOWER_MISSING", "The follower dropped the path (" + message + ")");
+          reason = FollowPath::Result::REASON_TIMEOUT;
+        }
+        EndDrive(reason == FollowPath::Result::REASON_DONE, why, reason, index);
       }
       Flush();
     };
+    drive_.follower_sign = MonotonicSeconds();
+    drive_.follower_index = goal.start_index;
     follow_client_->async_send_goal(goal, options);
+  }
+
+  // G22: a follower that stops answering ends its path here, without waiting for its result, so that the logic does
+  // not keep the blade turning on the spot. True when it ended one. Called with the mutex held.
+  bool CheckFollowerLocked() {
+    if (!drive_.active || drive_.planning || drive_.follower_sign <= 0) return false;
+    const double quiet = MonotonicSeconds() - drive_.follower_sign;
+    if (quiet <= follower_timeout_s_) return false;
+    char text[96];
+    std::snprintf(text, sizeof(text), "No answer from the follower for %.1f s", quiet);
+    // Stopped from here already: the cause stays, the follower only never confirmed it.
+    const bool canceled = drive_.cancel_reason.has_value();
+    Reason why = Reason("FOLLOWER_MISSING", text).With("seconds", quiet).With("limit", follower_timeout_s_);
+    if (canceled) why = Reason(*drive_.cancel_reason).WithMessage(drive_.cancel_reason->message + " (" + text + ")");
+    try {
+      if (drive_.handle) follow_client_->async_cancel_goal(drive_.handle);
+    } catch (const rclcpp_action::exceptions::UnknownGoalHandleError&) {
+      // The client has dropped the goal already; there is nothing left to cancel.
+    }
+    EndDrive(false, why, canceled ? FollowPath::Result::REASON_CANCELED : FollowPath::Result::REASON_TIMEOUT,
+             drive_.follower_index);
+    return true;
   }
 
   // Stops the drive: cancels the follower, or drops the way still being planned. Called with the mutex held.
@@ -734,10 +778,19 @@ class LogicNode : public rclcpp::Node {
     SendFollow(goal, text);
   }
 
-  // Keeps the lease of hw/blade alive while the logic wants the blade, and switches it off at once when not.
+  // Every 100 ms: first the follower's sign of life (G22), then the lease of hw/blade, kept alive while the logic
+  // wants the blade and switched off at once when not.
   void UpdateBlade() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    UpdateBladeLocked();
+    bool stalled;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stalled = CheckFollowerLocked();
+      UpdateBladeLocked();
+    }
+    if (!stalled) return;
+    // One zero command: the follower sends none any more, the driver's watchdog would stop the wheels only later.
+    cmd_vel_pub_->publish(geometry_msgs::msg::Twist());
+    Flush();
   }
 
   void UpdateBladeLocked() {
@@ -1203,6 +1256,10 @@ class LogicNode : public rclcpp::Node {
     FollowHandle::SharedPtr handle;
     bool cancel_pending = false;
     std::optional<Reason> cancel_reason;
+    // MonotonicSeconds() of the follower's last sign for this drive (goal sent or taken, feedback; 0: no goal out
+    // yet) and the pose of its path it got to.
+    double follower_sign = 0;
+    uint32_t follower_index = 0;
   };
 
   // The plan of the job's area on its way to the planner.
@@ -1242,6 +1299,7 @@ class LogicNode : public rclcpp::Node {
   std::optional<double> last_pose_;
   double hw_timeout_s_;
   double pose_timeout_s_;
+  double follower_timeout_s_ = 2.0;
   double map_edit_timeout_s_;
   // The map edit on its way: when it went out, its request, and a number that tells a late answer apart.
   std::optional<double> edit_sent_;

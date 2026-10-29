@@ -560,6 +560,28 @@ TEST(LogicDrive, EndStopsTheWheelsAndGoesBackToIdle) {
   EXPECT_TRUE(core.TakeEvents().empty());
 }
 
+TEST(LogicDrive, AFollowerThatStopsAnsweringEndsTheDrive) {
+  // G22: the node ends the drive itself; the wheels get a stop and the event says why, with the seconds.
+  LogicCore core = ReadyToDrive();
+  ASSERT_TRUE(core.StartDrive(5, 3).empty());
+  core.TakeEvents();
+  core.TakeStopRequest();
+  core.OnDriveEnded(false, Reason("FOLLOWER_MISSING", "No answer from the follower for 2.0 s")
+                               .With("seconds", 2.04)
+                               .With("limit", 2.0));
+  EXPECT_FALSE(core.Driving());
+  EXPECT_FALSE(core.FollowerActive());
+  EXPECT_TRUE(core.TakeStopRequest());
+  const auto events = core.TakeEvents();
+  ASSERT_FALSE(events.empty());
+  EXPECT_EQ(events[0].type, "DRIVE");
+  EXPECT_EQ(events[0].details["phase"], "end");
+  EXPECT_EQ(events[0].details["reason"], "FOLLOWER_MISSING");
+  EXPECT_DOUBLE_EQ(events[0].details["seconds"].get<double>(), 2.04);
+  EXPECT_EQ(events[0].details["severity"], "error");
+  EXPECT_EQ(events[0].details["resume"], "user");
+}
+
 TEST(LogicDrive, RefusedWithAReason) {
   {
     LogicCore core = ReadyToDrive();
