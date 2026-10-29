@@ -707,6 +707,43 @@ TEST_F(ImuControlTest, BlockedWithoutLatchUntilTheFirstSample) {
   EXPECT_TRUE(DrivesOrMows(1.5));
 }
 
+TEST_F(ImuControlTest, StillDueAfterTheStartHoldsWithoutAnEmergency) {
+  Run(0.4);
+  auto status = control_.Status(now_);
+  EXPECT_FALSE(status.blocked);
+  EXPECT_FALSE(status.latched);
+  EXPECT_EQ(status.emergency_reason, 0u);
+  // Held all the same; the first tick was at 0.01 s.
+  EXPECT_FALSE(DrivesOrMows(0.5));
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+  Run(0.53);
+  status = control_.Status(now_);
+  EXPECT_TRUE(status.blocked);
+  EXPECT_FALSE(status.latched);
+  EXPECT_EQ(status.emergency_reason, kReasonImuTimeout);
+}
+
+TEST_F(ImuControlTest, FirstSampleWithinTheStartTimeIsNeverReported) {
+  for (int i = 0; i < 30; i++) {
+    Run(now_ + 0.01);
+    EXPECT_EQ(control_.Status(now_).emergency_reason, 0u) << now_;
+    EXPECT_FALSE(control_.Status(now_).blocked) << now_;
+  }
+  feed_imu_ = true;
+  for (int i = 0; i < 100; i++) {
+    Run(now_ + 0.01);
+    EXPECT_EQ(control_.Status(now_).emergency_reason, 0u) << now_;
+  }
+  EXPECT_TRUE(DrivesOrMows(1.5));
+}
+
+TEST_F(ImuControlTest, ReconnectDoesNotRestartTheStartTime) {
+  Run(0.7);
+  control_.OnConnected(now_);
+  Run(0.8);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonImuTimeout);
+}
+
 TEST_F(ImuControlTest, GapLatchesAndStopsWheelsAndBlade) {
   feed_imu_ = true;
   Run(0.5);

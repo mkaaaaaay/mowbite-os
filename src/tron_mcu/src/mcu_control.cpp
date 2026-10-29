@@ -141,8 +141,13 @@ bool McuControl::Blocked(double now) const {
   return latched_ || TelemetryStale(now) || NoImuYet() || FirmwareIncompatible();
 }
 
+// As hw/status shows it: an IMU still due after the start blocks without an emergency.
+bool McuControl::Reported(double now) const {
+  return latched_ || TelemetryStale(now) || (NoImuYet() && !ImuStarting(now)) || FirmwareIncompatible();
+}
+
 uint32_t McuControl::EmergencyReason(double now) const {
-  if (!Blocked(now)) return 0;
+  if (!Reported(now)) return 0;
   uint32_t reason = latch_reason_;
   if (latched_) reason |= kReasonLatch;
   if (TelemetryStale(now)) reason |= kReasonTimeoutInputs;
@@ -150,7 +155,7 @@ uint32_t McuControl::EmergencyReason(double now) const {
   if (Lift(now)) reason |= kReasonLift;
   if (config_.bumper_latches_emergency && Bumper(now)) reason |= kReasonCollision;
   if (FirmwareIncompatible()) reason |= kReasonFirmwareIncompatible;
-  if (NoImuYet()) reason |= kReasonImuTimeout;
+  if (NoImuYet() && !ImuStarting(now)) reason |= kReasonImuTimeout;
   return reason;
 }
 
@@ -169,6 +174,11 @@ bool McuControl::ImuStale(double now) const {
 // Before its first sample the IMU blocks without a latch; a later gap latches in Tick, like lift.
 bool McuControl::NoImuYet() const {
   return config_.imu_timeout_s > 0 && !last_imu_sample_s_;
+}
+
+// No sample yet, within imu_timeout_s of the first tick.
+bool McuControl::ImuStarting(double now) const {
+  return NoImuYet() && (!start_s_ || now - *start_s_ <= config_.imu_timeout_s + kTimeEpsilon);
 }
 
 bool McuControl::FirmwareIncompatible() const {
@@ -217,6 +227,8 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   // The blade state of the MCU is unknown when the driver takes over.
   if (!started_) {
     started_ = true;
+    // A reconnect resends the off frames but does not restart the time the IMU has.
+    if (!start_s_) start_s_ = now;
     StartRepeat(blade_off_repeat_, BladeOff(), now);
     blade_off_since_s_ = now;
   }
@@ -338,7 +350,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
 
 McuControlStatus McuControl::Status(double now) const {
   McuControlStatus status;
-  status.blocked = Blocked(now);
+  status.blocked = Reported(now);
   status.emergency_reason = EmergencyReason(now);
   status.latched = latched_;
   status.lift = Lift(now);

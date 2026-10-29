@@ -19,7 +19,8 @@ struct McuControlConfig {
   double repeat_interval_s = 0.1;
   double imu_min_period_s = 0.02;
   // Without an IMU sample for this long, motion and blade are blocked: the MCU knows the tilt only from the IMU the host
-  // forwards. Before the first sample this only blocks, a later gap latches. 0 when the IMU is not forwarded.
+  // forwards. Before the first sample this only blocks, unreported for this long from the first tick; a later gap
+  // latches. 0 when the IMU is not forwarded.
   double imu_timeout_s = 0;
   int dock_debounce_samples = 3;
   double charge_resend_s = 30.0;
@@ -83,7 +84,8 @@ enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvali
 const char* BladeResultText(BladeResult result);
 
 struct McuControlStatus {
-  // Motion and blade are blocked: latched, stale telemetry, no IMU or incompatible firmware.
+  // Motion and blade are blocked: latched, stale telemetry, no IMU or incompatible firmware. While the IMU is still
+  // due after the start, motion and blade are held without this.
   bool blocked = false;
   // Reason bits while blocked, 0 otherwise. A cause that latched stays in it until the release.
   uint32_t emergency_reason = 0;
@@ -152,12 +154,14 @@ class McuControl {
   };
 
   bool Blocked(double now) const;
+  bool Reported(double now) const;
   uint32_t EmergencyReason(double now) const;
   bool DockContact() const;
   void DropBlade(BladeOffReason reason);
   bool TelemetryStale(double now) const;
   bool ImuStale(double now) const;
   bool NoImuYet() const;
+  bool ImuStarting(double now) const;
   bool FirmwareIncompatible() const;
   bool Lift(double now) const;
   bool Stop(double now) const;
@@ -211,6 +215,8 @@ class McuControl {
 
   std::optional<double> next_heartbeat_s_;
   bool started_ = false;
+  // First tick after the node started.
+  std::optional<double> start_s_;
 
   Repeat stop_repeat_;
   Repeat blade_off_repeat_;
