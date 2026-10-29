@@ -240,6 +240,25 @@ TEST(Localization, AccuracyExpiresTenSecondsAfterTheLastFix) {
   EXPECT_FALSE(loc.RecentGps(t + 10.0));
 }
 
+TEST(Localization, GpsLimitsOfTheLogicTakeOverTimeoutAndAccuracy) {
+  LocalizationConfig config;
+  config.accuracy_growth_per_s = 0.0;
+  Localization loc(config);
+  double t = 100;
+  Calibrate(loc, t);
+  InitGps(loc, t, 10, 20);
+  loc.SetGpsLimits(0.1, 3.0);
+  EXPECT_NEAR(loc.PositionAccuracy(t + 2.9), 0.02, 1e-6);
+  EXPECT_EQ(loc.PositionAccuracy(t + 3.0), kNoAccuracy);
+  EXPECT_FALSE(loc.RecentGps(t + 3.0));
+  // A fix of 0.02 m is too coarse for a limit of 0.01 m.
+  loc.SetGpsLimits(0.01, 3.0);
+  Step(loc, t, 0.1, 0.0, 0.0);
+  EXPECT_EQ(loc.AddGps(Fixed(10, 20), t), GpsResult::kInaccurate);
+  loc.SetGpsLimits(0.1, 30.0);
+  EXPECT_NEAR(loc.PositionAccuracy(t + 20.0), 0.02, 1e-6);
+}
+
 TEST(Localization, AccuracyGrowsWithDistanceAndTimeWithoutAFix) {
   LocalizationConfig config;
   config.accuracy_growth_per_m = 0.05;

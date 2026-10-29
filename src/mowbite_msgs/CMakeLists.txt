@@ -27,6 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MqttPublish.msg"
   "msg/PositionJump.msg"
   "msg/Outline.msg"
+  "msg/GpsLimits.msg"
   "srv/AddArea.srv"
   "srv/ReplaceMap.srv"
   "srv/SetBlade.srv"

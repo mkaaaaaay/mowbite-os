@@ -4,8 +4,10 @@
 /**:
   ros__parameters:
     # GPS counts as good up to this accuracy in m: the localization fuses only such fixes, the logic works only with
-    # such a position.
+    # such a position. Without a usable fix for gps_timeout s the position counts as lost. Start values: what an app
+    # sets with params.set is saved by the logic and sent to the localization and the follower.
     max_position_accuracy: 0.1
+    gps_timeout: 10.0
 tron_mcu:
   ros__parameters:
     port: /dev/ttyS9

@@ -4,6 +4,7 @@
 #include <memory>
 #include <mowbite_msgs/action/follow_path.hpp>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
+#include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mutex>
@@ -86,6 +87,17 @@ class FollowerNode : public rclcpp::Node {
           // The tighter of the driver's limits and our own.
           if (msg->max_linear_speed > 0) driver_max_linear_ = msg->max_linear_speed;
           if (msg->max_angular_speed > 0) driver_max_angular_ = msg->max_angular_speed;
+        });
+    // max_position_accuracy of tron.yaml holds until the logic tells its own (params.set).
+    limits_sub_ = create_subscription<mowbite_msgs::msg::GpsLimits>(
+        "logic/gps_limits", rclcpp::QoS(1).reliable().transient_local(),
+        [this](mowbite_msgs::msg::GpsLimits::ConstSharedPtr msg) {
+          if (!(msg->max_position_accuracy > 0) || !std::isfinite(msg->max_position_accuracy)) {
+            RCLCPP_ERROR(get_logger(), "Ignored accuracy limit %g m from the logic", msg->max_position_accuracy);
+            return;
+          }
+          std::lock_guard<std::mutex> lock(mutex_);
+          guard_config_.max_position_accuracy = msg->max_position_accuracy;
         });
 
     server_ = rclcpp_action::create_server<FollowPath>(
@@ -236,6 +248,7 @@ class FollowerNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;
   rclcpp_action::Server<FollowPath>::SharedPtr server_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

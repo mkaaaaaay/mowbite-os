@@ -11,7 +11,6 @@ namespace {
 
 // Gating and variances as tuned in xbot_positioning.
 constexpr double kGpsGapS = 5.0;
-constexpr double kRecentGpsS = 10.0;
 constexpr double kOutlierDistanceM = 5.0;
 constexpr int kInliersBeforeInit = 10;
 constexpr int kOutliersBeforeReset = 10;
@@ -242,7 +241,7 @@ Estimate Localization::GetEstimate() const {
 }
 
 bool Localization::RecentGps(double now_s) const {
-  return now_s - last_gps_time_s_ < kRecentGpsS;
+  return now_s - last_gps_time_s_ < config_.gps_timeout_s;
 }
 
 double Localization::PositionAccuracy(double now_s) const {

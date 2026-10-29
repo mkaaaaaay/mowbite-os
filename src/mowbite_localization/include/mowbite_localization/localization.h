@@ -28,6 +28,8 @@ struct LocalizationConfig {
   double min_speed = 0.01;
   // Fixes with a worse accuracy are dropped.
   double max_position_accuracy = 0.1;
+  // Without a usable fix for this long the position counts as lost (gps_timeout of the logic).
+  double gps_timeout_s = 10.0;
   // GPS antenna relative to the point of rotation, x forward, y left.
   double antenna_offset_x = 0.0;
   double antenna_offset_y = 0.0;
@@ -96,15 +98,20 @@ class Localization {
   void SetGpsEnabled(bool enabled) {
     gps_enabled_ = enabled;
   }
+  // The GPS settings of the logic, taken from the next fix and the next accuracy on.
+  void SetGpsLimits(double max_position_accuracy, double gps_timeout_s) {
+    config_.max_position_accuracy = max_position_accuracy;
+    config_.gps_timeout_s = gps_timeout_s;
+  }
   // Restarts the filter at this pose with zero speed. The caller knows the heading, e.g. from the dock, so it counts
   // as aligned.
   void SetPose(double x, double y, double theta);
 
   Estimate GetEstimate() const;
   // Accuracy of the last fix, growing with distance and time without a fix. kNoAccuracy before the filter took GPS
-  // or 10 s after the last fix.
+  // or gps_timeout_s after the last fix.
   double PositionAccuracy(double now_s) const;
-  // True within 10 s after the last usable fix.
+  // True within gps_timeout_s after the last usable fix.
   bool RecentGps(double now_s) const;
   // Antenna velocity the filter expects, compared with the GPS motion vector.
   MotionMeasurement<double> ExpectedMotion() const;

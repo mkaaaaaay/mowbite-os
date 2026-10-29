@@ -10,6 +10,7 @@
 #include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <memory>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
+#include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/position_jump.hpp>
 #include <mowbite_msgs/srv/set_pose.hpp>
 #include <nav_msgs/msg/odometry.hpp>
@@ -43,6 +44,7 @@ class LocalizationNode : public rclcpp::Node {
     config.gyro_offset = declare_parameter("gyro_offset", config.gyro_offset);
     config.min_speed = declare_parameter("min_speed", config.min_speed);
     config.max_position_accuracy = declare_parameter("max_position_accuracy", config.max_position_accuracy);
+    config.gps_timeout_s = declare_parameter("gps_timeout", config.gps_timeout_s);
     config.antenna_offset_x = declare_parameter("antenna_offset_x", config.antenna_offset_x);
     config.antenna_offset_y = declare_parameter("antenna_offset_y", config.antenna_offset_y);
     config.process_noise = declare_parameter("process_noise", config.process_noise);
@@ -91,6 +93,10 @@ class LocalizationNode : public rclcpp::Node {
         });
     gps_sub_ = create_subscription<mowbite_msgs::msg::AbsolutePose>(
         "gps/absolute_pose", 10, [this](const mowbite_msgs::msg::AbsolutePose& msg) { OnGps(msg); });
+    // The values of tron.yaml hold until the logic tells its own (params.set, saved in its data_dir).
+    limits_sub_ = create_subscription<mowbite_msgs::msg::GpsLimits>(
+        "logic/gps_limits", rclcpp::QoS(1).reliable().transient_local(),
+        [this](const mowbite_msgs::msg::GpsLimits& msg) { OnGpsLimits(msg); });
 
     gps_srv_ = create_service<std_srvs::srv::SetBool>(
         "localization/set_gps_state", [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
@@ -118,6 +124,19 @@ class LocalizationNode : public rclcpp::Node {
       RCLCPP_INFO(get_logger(), "Gyro offset: %.5f rad/s", localization_->gyro_offset());
     }
     if (advanced) Publish(msg.header.stamp);
+  }
+
+  void OnGpsLimits(const mowbite_msgs::msg::GpsLimits& msg) {
+    if (!(msg.max_position_accuracy > 0) || !(msg.gps_timeout > 0) || !std::isfinite(msg.max_position_accuracy) ||
+        !std::isfinite(msg.gps_timeout)) {
+      RCLCPP_ERROR(get_logger(), "Ignored GPS limits %g m, %g s from the logic", msg.max_position_accuracy,
+                   msg.gps_timeout);
+      return;
+    }
+    localization_->SetGpsLimits(msg.max_position_accuracy, msg.gps_timeout);
+    max_position_accuracy_ = msg.max_position_accuracy;
+    RCLCPP_INFO(get_logger(), "GPS limits: accuracy %.3f m, timeout %.1f s", msg.max_position_accuracy,
+                msg.gps_timeout);
   }
 
   void OnGps(const mowbite_msgs::msg::AbsolutePose& msg) {
@@ -254,6 +273,7 @@ class LocalizationNode : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr wheel_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr gps_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr gps_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetPose>::SharedPtr pose_srv_;
 };
