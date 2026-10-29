@@ -7,11 +7,13 @@ RUN apt-get update \
       git python3-shapely \
  && rm -rf /var/lib/apt/lists/*
 
-# The MowBite Planner (own process of the stack) at a fixed commit, plan-transit on top of main 026e17a.
+# The MowBite Planner (own process of the stack) at a fixed commit of its branch tron, taken from a local clone:
+#   docker buildx build --load --build-context planer=/home/mkay/tron-projekt/planer -f docker/dev.Dockerfile ...
 # Source it after ROS: . /opt/ros/jazzy/setup.bash && . /opt/mowbite_planner/setup.bash
-ARG PLANNER_COMMIT=8ff8f7315563eafff81625c07193837be5f5cfe3
-RUN git init -q /tmp/planner && cd /tmp/planner \
- && git fetch -q --depth 1 https://github.com/mkaaaaaay/mowbite-planner.git "$PLANNER_COMMIT" \
+ARG PLANNER_COMMIT=7b38a5421ce28584be35c1aed2c3e7f9bccb482a
+RUN --mount=type=bind,from=planer,target=/src/planer \
+    git init -q /tmp/planner && cd /tmp/planner \
+ && git -c safe.directory='*' fetch -q --depth 1 /src/planer "$PLANNER_COMMIT" \
  && git checkout -q FETCH_HEAD \
  && test "$(git rev-parse HEAD)" = "$PLANNER_COMMIT" \
  && . /opt/ros/jazzy/setup.sh \
