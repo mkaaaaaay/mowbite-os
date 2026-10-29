@@ -49,5 +49,8 @@ services:
       - MOWER_MQTT_PORT=1883
     volumes:
       - mowbite_data:/data
+      # The mower's network for /cgi-bin/system of the app (wifi_signal). On the Tron the host's /proc/1/net goes there;
+      # the PC has no wifi, so the simulation only has a fixed wlan0 at -56 dBm (no file can be mounted over procfs).
+      - ./host-net:/host-net:ro
 volumes:
   mowbite_data:
