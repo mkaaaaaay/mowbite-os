@@ -143,8 +143,10 @@ mowbite_planner:
     mower_width: 0.22
     overlap: 0.15
     # Turns forwards only, every lane change a U-turn of turn_radius with the lanes 2 * turn_radius apart (lane_order skip).
-    # No turning on the spot: the nose swings out about 56 cm. Assumptions until driven in phase 7.
-    turn_radius: 0.27
+    # Turning on the spot only where no arc fits: the nose swings out about 56 cm. On 0.44 the inner wheel runs
+    # 0.06 m/s at the follower's turn_rate 0.25 rad/s, about its dead band (estimated). Assumptions until driven in
+    # phase 6 and 7.
+    turn_radius: 0.44
     lane_order: skip
     turn_on_spot: false
     turn_types: [u_turn, bulb, detour]
