@@ -58,8 +58,7 @@ std::string CheckpointText(const JobProgress& p) {
               {"area_id", p.area_id},
               {"path", p.path},
               {"index", p.index},
-              {"fingerprint", p.fingerprint},
-              {"angle_increment_sum", p.angle_increment_sum}}
+              {"fingerprint", p.fingerprint}}
       .dump();
 }
 
@@ -74,11 +73,10 @@ std::optional<JobProgress> ParseCheckpoint(const std::string& text) {
     p.path = j.at("path").get<int>();
     p.index = j.at("index").get<int>();
     p.fingerprint = j.at("fingerprint").get<std::string>();
-    p.angle_increment_sum = j.at("angle_increment_sum").get<double>();
   } catch (const json::exception&) {
     return std::nullopt;
   }
-  if (p.area < 0 || p.path < 0 || p.index < 0 || !std::isfinite(p.angle_increment_sum)) return std::nullopt;
+  if (p.area < 0 || p.path < 0 || p.index < 0) return std::nullopt;
   return p;
 }
 
@@ -181,16 +179,12 @@ void MowingJob::NextArea() {
   has_plan_ = false;
 }
 
-void MowingJob::Complete(double angle_increment_deg) {
-  const double sum = std::fmod(progress_.angle_increment_sum + angle_increment_deg, 360.0);
+void MowingJob::Complete() {
   Reset();
-  progress_.angle_increment_sum = sum < 0 ? sum + 360.0 : sum;
 }
 
 void MowingJob::Reset() {
-  const double sum = progress_.angle_increment_sum;
   progress_ = JobProgress();
-  progress_.angle_increment_sum = sum;
   paths_.clear();
   has_plan_ = false;
 }

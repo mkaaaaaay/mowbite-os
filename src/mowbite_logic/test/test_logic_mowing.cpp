@@ -170,9 +170,7 @@ TEST(LogicMowing, StartOpensAJobAndASessionCarriedByEveryEvent) {
 }
 
 TEST(LogicMowing, PlansEachMowableAreaFollowsItsPathsAndCompletesTheJob) {
-  LogicConfig config;
-  config.mow_angle_increment = 30;
-  LogicCore core = Ready(config);
+  LogicCore core = Ready();
   core.OnAction(kStart);
   const std::string job = core.TakeEvents()[0].details["job_id"];
   JobStep step = core.NextJobStep(0);
@@ -221,12 +219,10 @@ TEST(LogicMowing, PlansEachMowableAreaFollowsItsPathsAndCompletesTheJob) {
   EXPECT_FALSE(events[1].details.contains("job_id"));
   EXPECT_FALSE(events[1].details.contains("session_id"));
   EXPECT_TRUE(core.TakeStopRequest());
-  EXPECT_DOUBLE_EQ(core.AngleIncrementSum(), 30);
   const auto saved = ParseCheckpoint(*core.TakeCheckpoint());
   ASSERT_TRUE(saved);
   EXPECT_EQ(saved->job_id, "");
   EXPECT_EQ(saved->area, 0);
-  EXPECT_DOUBLE_EQ(saved->angle_increment_sum, 30);
   EXPECT_FALSE(Enabled(core, "mower_logic:idle", "reset_job"));
 }
 
@@ -505,11 +501,9 @@ TEST(LogicMowing, GoesOnFromARestoredCheckpoint) {
   saved.path = 1;
   saved.index = 3;
   saved.fingerprint = "fp";
-  saved.angle_increment_sum = 60;
   LogicCore core = Ready();
   core.RestoreJob(saved);
   EXPECT_TRUE(Enabled(core, "mower_logic:idle", "reset_job"));
-  EXPECT_DOUBLE_EQ(core.AngleIncrementSum(), 60);
   core.OnPose(PoseAt(2.5, 2));
   core.OnAction(kStart);
   EXPECT_EQ(core.TakeEvents()[0].details["job_id"], "J");

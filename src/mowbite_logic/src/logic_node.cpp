@@ -339,7 +339,6 @@ class LogicNode : public rclcpp::Node {
     config.gps_wait_time = declare_parameter("gps_wait_time", config.gps_wait_time);
     config.battery_critical_voltage = declare_parameter("battery_critical_voltage", config.battery_critical_voltage);
     config.battery_critical_time = declare_parameter("battery_critical_time", config.battery_critical_time);
-    config.mow_angle_increment = declare_parameter("mow_angle_increment", config.mow_angle_increment);
     config.approach_distance = declare_parameter("approach_distance", config.approach_distance);
     config.checkpoint_period = declare_parameter("checkpoint_period", config.checkpoint_period);
     return config;

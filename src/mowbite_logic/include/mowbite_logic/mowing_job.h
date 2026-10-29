@@ -42,8 +42,6 @@ struct JobProgress {
   int index = 0;
   // Of the plan the path and index belong to.
   std::string fingerprint;
-  // deg, the mow_angle_increment of all finished jobs, from 0 to 360.
-  double angle_increment_sum = 0;
 };
 
 std::string CheckpointText(const JobProgress& progress);
@@ -86,9 +84,9 @@ class MowingJob {
   void PathDone();
   void SkipPath();
   void SkipArea();
-  // All areas mowed: back to the first, the angle increment added.
-  void Complete(double angle_increment_deg);
-  // Drops the progress and the job id, the angle increment stays.
+  // All areas mowed: back to the first.
+  void Complete();
+  // Drops the progress and the job id.
   void Reset();
 
  private:

@@ -746,7 +746,7 @@ void LogicCore::EndJob(bool finished) {
   if (state_ != State::kMowing) return;
   if (finished) {
     AddEvent("JOB_COMPLETE", json::object());
-    job_.Complete(config_.mow_angle_increment);
+    job_.Complete();
   }
   SetState(State::kIdle);
   CheckpointNow();
@@ -911,10 +911,6 @@ std::optional<std::string> LogicCore::TakeCheckpoint() {
   if (!checkpoint_due_) return std::nullopt;
   checkpoint_due_ = false;
   return CheckpointText(job_.progress());
-}
-
-double LogicCore::AngleIncrementSum() const {
-  return job_.progress().angle_increment_sum;
 }
 
 }  // namespace mowbite_logic

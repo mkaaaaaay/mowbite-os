@@ -95,7 +95,6 @@ TEST(MowingJobCheckpoint, RoundTrip) {
   p.path = 3;
   p.index = 41;
   p.fingerprint = "f00";
-  p.angle_increment_sum = 30;
   const auto back = ParseCheckpoint(CheckpointText(p));
   ASSERT_TRUE(back);
   EXPECT_EQ(back->job_id, "abc");
@@ -104,13 +103,21 @@ TEST(MowingJobCheckpoint, RoundTrip) {
   EXPECT_EQ(back->path, 3);
   EXPECT_EQ(back->index, 41);
   EXPECT_EQ(back->fingerprint, "f00");
-  EXPECT_DOUBLE_EQ(back->angle_increment_sum, 30);
+}
+
+TEST(MowingJobCheckpoint, AnOldOneWithAnAngleIncrementIsReadAndTheFieldDropped) {
+  const auto back = ParseCheckpoint(
+      R"({"version":1,"job_id":"abc","area":1,"area_id":"back","path":2,"index":5,"fingerprint":"f00","angle_increment_sum":30})");
+  ASSERT_TRUE(back);
+  EXPECT_EQ(back->job_id, "abc");
+  EXPECT_EQ(back->index, 5);
+  EXPECT_EQ(CheckpointText(*back).find("angle_increment_sum"), std::string::npos);
 }
 
 TEST(MowingJobCheckpoint, RefusesWhatIsNotOne) {
   for (const char* text : {"", "{", "[]", "{\"version\": 2}", R"({"version": 1, "area": 0})",
-                           R"({"version":1,"job_id":"","area":-1,"area_id":"","path":0,"index":0,"fingerprint":"","angle_increment_sum":0})",
-                           R"({"version":1,"job_id":3,"area":0,"area_id":"","path":0,"index":0,"fingerprint":"","angle_increment_sum":0})"}) {
+                           R"({"version":1,"job_id":"","area":-1,"area_id":"","path":0,"index":0,"fingerprint":""})",
+                           R"({"version":1,"job_id":3,"area":0,"area_id":"","path":0,"index":0,"fingerprint":""})"}) {
     EXPECT_FALSE(ParseCheckpoint(text)) << text;
   }
 }
@@ -220,9 +227,7 @@ TEST(MowingJob, SkipPathAndCompleteAndReset) {
   job.SkipPath();
   EXPECT_EQ(job.progress().path, 1);
   EXPECT_EQ(job.progress().index, 0);
-  job.Complete(100);
-  job.Complete(300);
-  EXPECT_DOUBLE_EQ(job.progress().angle_increment_sum, 40);
+  job.Complete();
   EXPECT_EQ(job.progress().job_id, "");
   EXPECT_FALSE(job.Unfinished());
   job.SetJobId("k");
@@ -231,7 +236,6 @@ TEST(MowingJob, SkipPathAndCompleteAndReset) {
   job.Reset();
   EXPECT_FALSE(job.Unfinished());
   EXPECT_EQ(job.progress().job_id, "");
-  EXPECT_DOUBLE_EQ(job.progress().angle_increment_sum, 40);
 }
 
 TEST(MowingJob, MowAreasOfTheMapInMapOrder) {

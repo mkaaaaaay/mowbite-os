@@ -73,8 +73,6 @@ struct LogicConfig {
   // measured: 3.5 V per cell.
   double battery_critical_voltage = 21.0;
   double battery_critical_time = 10.0;
-  // deg added to the mow angle after every finished job.
-  double mow_angle_increment = 0;
   // m: farther from the start of a path the mower first drives there over the drivable areas.
   double approach_distance = 0.5;
   // s between checkpoints while a path is mowed.
@@ -252,7 +250,6 @@ class LogicCore {
   void OnBladeRefused(const std::string& message);
   // The checkpoint to save, once after each change worth keeping.
   std::optional<std::string> TakeCheckpoint();
-  double AngleIncrementSum() const;
 
   RobotStateData RobotState() const;
   std::vector<ActionGroup> Actions() const;
