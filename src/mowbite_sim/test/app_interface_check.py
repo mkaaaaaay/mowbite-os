@@ -408,6 +408,29 @@ r = rpc("mowing.plan", {"outline": [{"x": 0, "y": 0}, {"x": 4, "y": 0}, {"x": 4,
                         "outline_count": 1, "angle": 0.0}, "10", 30)
 free = (r or {}).get("result") or {}
 check("mowing.plan: an outline in the request", bool(free.get("paths")) and free.get("area_id") == "", json.dumps(r)[:200])
+if args.target == "mowbite-os" and offers("planner.settings"):
+    # Only MowBite OS's schedule starts the mower: the planner's own leftovers_auto is off and cannot be set.
+    r = rpc("planner.settings", None, "12", 10)
+    entry = (((r or {}).get("result") or {}).get("settings") or {}).get("leftovers_auto") or {}
+    check("planner.settings: leftovers_auto is off and not settable", entry.get("value") is False
+          and entry.get("settable") is False, json.dumps(entry))
+    r = rpc("planner.settings.set", {"leftovers_auto": True}, "13", 10)
+    check("planner.settings.set refuses leftovers_auto", bool(r and r.get("error"))
+          and "leftovers_auto" in r["error"].get("message", ""), json.dumps(r and (r.get("error") or r.get("result")))[:200])
+
+    # One place for the planning values: what the planner is set to counts for a plan, mowbite_logic adds nothing.
+    def outline_poses(rid):
+        res = (rpc("mowing.plan", {"outline": [{"x": 0, "y": 0}, {"x": 4, "y": 0}, {"x": 4, "y": 3}, {"x": 0, "y": 3}],
+                                   "obstacles": []}, rid, 30) or {}).get("result") or {}
+        return sum(p["pose_index"][-1] + 1 for p in res.get("paths", []) if p["is_outline"])
+
+    before = outline_poses("14")
+    rpc("planner.settings.set", {"perimeter_passes": 1}, "15", 10)
+    fewer = outline_poses("16")
+    rpc("planner.settings.set", {"perimeter_passes": None}, "17", 10)
+    check("planner.settings perimeter_passes counts for a plan of mowing.plan", 0 < fewer < before
+          and outline_poses("18") == before, f"3 passes {before} poses, 1 pass {fewer}")
+
 for params, message in ((None, "parameters must be an object"), ({"area_id": "nobody"}, "no mowing area with id: nobody"),
                         ({"area_id": "tree"}, "no mowing area with id: tree"),
                         ({"area_id": "lawn", "outline_count": 300}, "parameter is not a whole number from 0 to 255: outline_count")):
