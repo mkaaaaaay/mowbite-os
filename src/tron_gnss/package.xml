@@ -3,7 +3,7 @@
 <package format="3">
   <name>tron_gnss</name>
   <version>0.0.0</version>
-  <description>Reads the UM960 of the Airseekers Tron (NMEA on ttyS4) and publishes the absolute pose</description>
+  <description>Reads the UM960 of the Airseekers Tron (NMEA on ttyS4), publishes the absolute pose and passes RTCM to its RTK board</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
   <license>GPL-3.0</license>
 

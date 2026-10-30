@@ -14,7 +14,7 @@ find_package(mowbite_msgs REQUIRED)
 find_package(tron_mcu REQUIRED)
 
 # NMEA parser and geodesy without ROS, testable on any machine.
-add_library(tron_gnss_core STATIC src/nmea.cpp src/geodesy.cpp src/gnss_tracker.cpp)
+add_library(tron_gnss_core STATIC src/nmea.cpp src/geodesy.cpp src/gnss_tracker.cpp src/board_link.cpp)
 target_include_directories(tron_gnss_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -36,7 +36,8 @@ install(TARGETS tron_gnss_core tron_gnss_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(tron_gnss_test test/test_nmea.cpp test/test_geodesy.cpp test/test_gnss_tracker.cpp)
+  ament_add_gtest(tron_gnss_test test/test_nmea.cpp test/test_geodesy.cpp test/test_gnss_tracker.cpp
+    test/test_board_link.cpp)
   target_link_libraries(tron_gnss_test tron_gnss_core)
 endif()
 

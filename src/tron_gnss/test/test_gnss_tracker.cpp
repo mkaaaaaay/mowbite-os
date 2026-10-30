@@ -227,5 +227,30 @@ TEST_F(TrackerTest, MissingCourseGivesNoMotion) {
   EXPECT_FALSE(p->motion_valid);
 }
 
+TEST_F(TrackerTest, HostAgeOfTheCorrectionsCountsWhenLarger) {
+  tracker.SetHostCorrectionAge(31.0);
+  auto p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0);
+  ASSERT_TRUE(p);
+  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFloat);
+  ASSERT_TRUE(tracker.last_old_correction_age());
+  EXPECT_DOUBLE_EQ(*tracker.last_old_correction_age(), 31.0);
+  tracker.SetHostCorrectionAge(0.5);
+  p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 2.0), 0.2);
+  ASSERT_TRUE(p);
+  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFixed);
+  // The receiver's age stays the stricter one, and fixed without it counts as float as before.
+  p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 40.0), 0.4);
+  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFloat);
+  p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, std::nullopt), 0.6);
+  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFloat);
+}
+
+TEST_F(TrackerTest, BoardReportGivesNoPose) {
+  NmeaMessage m;
+  m.type = NmeaMessage::Type::kBoardRtk;
+  m.board.on = true;
+  EXPECT_FALSE(tracker.Update(m, 0));
+}
+
 }  // namespace
 }  // namespace tron

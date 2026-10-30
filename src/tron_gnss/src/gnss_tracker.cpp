@@ -1,5 +1,6 @@
 #include "tron_gnss/gnss_tracker.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace tron {
@@ -36,6 +37,7 @@ std::optional<GnssPose> GnssTracker::Update(const NmeaMessage& message, double n
     case NmeaMessage::Type::kVtg:
       SetMotion(message.vtg.valid, message.vtg.speed_mps, message.vtg.course_deg, now_s);
       return std::nullopt;
+    case NmeaMessage::Type::kBoardRtk: return std::nullopt;
     case NmeaMessage::Type::kGga: break;
   }
 
@@ -51,16 +53,19 @@ std::optional<GnssPose> GnssTracker::Update(const NmeaMessage& message, double n
   switch (gga.quality) {
     case static_cast<int>(FixQuality::kSingle): pose.accuracy_m = config_.accuracy_single_m; break;
     case static_cast<int>(FixQuality::kDgps): pose.accuracy_m = config_.accuracy_dgps_m; break;
-    case static_cast<int>(FixQuality::kRtkFixed):
-      if (gga.correction_age_s && *gga.correction_age_s <= config_.max_correction_age_s) {
+    case static_cast<int>(FixQuality::kRtkFixed): {
+      std::optional<double> age = gga.correction_age_s;
+      if (age && host_correction_age_s_) age = std::max(*age, *host_correction_age_s_);
+      if (age && *age <= config_.max_correction_age_s) {
         pose.flags = kFlagRtk | kFlagRtkFixed;
         pose.accuracy_m = config_.accuracy_rtk_fixed_m;
         break;
       }
       // Without fresh corrections the fix may rest on old data: worth no more than float.
       old_corrections_++;
-      last_old_correction_age_ = gga.correction_age_s;
+      last_old_correction_age_ = age;
       [[fallthrough]];
+    }
     case static_cast<int>(FixQuality::kRtkFloat):
       pose.flags = kFlagRtk | kFlagRtkFloat;
       pose.accuracy_m = config_.accuracy_rtk_float_m;

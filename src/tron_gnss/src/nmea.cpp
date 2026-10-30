@@ -183,6 +183,11 @@ void NmeaParser::HandleLine(const std::string& line, std::vector<NmeaMessage>& o
   } else if (kind == "VTG") {
     message.type = NmeaMessage::Type::kVtg;
     ok = ParseVtg(fields, message.vtg);
+  } else if (kind == "RTK") {
+    // Format assumed as the command the board takes ($GNRTK,ON / OFF), checked on the device in phase 5.
+    message.type = NmeaMessage::Type::kBoardRtk;
+    ok = fields.size() >= 2 && (fields[1] == "ON" || fields[1] == "OFF");
+    message.board.on = ok && fields[1] == "ON";
   } else {
     ignored_++;
     return;
@@ -192,6 +197,7 @@ void NmeaParser::HandleLine(const std::string& line, std::vector<NmeaMessage>& o
     return;
   }
   decoded_++;
+  message.sentence = line;
   out.push_back(message);
 }
 

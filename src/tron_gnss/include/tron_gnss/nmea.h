@@ -43,15 +43,24 @@ struct VtgData {
   std::optional<double> course_deg;
 };
 
+// $GNRTK of the RTK board (AT32 in front of the UM960): whether it passes the host's corrections (network RTK, ON) or
+// uses its LoRa radio (OFF).
+struct BoardRtkData {
+  bool on = false;
+};
+
 struct NmeaMessage {
-  enum class Type { kGga, kRmc, kVtg } type = Type::kGga;
+  enum class Type { kGga, kRmc, kVtg, kBoardRtk } type = Type::kGga;
   GgaData gga;
   RmcData rmc;
   VtgData vtg;
+  BoardRtkData board;
+  // The sentence as received, without line end.
+  std::string sentence;
 };
 
-// Splits a byte stream into lines, checks the checksum and decodes GGA, RMC and VTG of any talker. Other sentences
-// are counted and dropped. Lines longer than kMaxLine are discarded up to their end.
+// Splits a byte stream into lines, checks the checksum and decodes GGA, RMC and VTG of any talker and the board's RTK
+// report. Other sentences are counted and dropped. Lines longer than kMaxLine are discarded up to their end.
 class NmeaParser {
  public:
   static constexpr size_t kMaxLine = 256;

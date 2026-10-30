@@ -6,6 +6,10 @@
 #include <limits>
 #include <memory>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
+#include <mowbite_msgs/msg/rtcm.hpp>
+#include <mowbite_msgs/msg/sensor_info.hpp>
+#include <mowbite_msgs/msg/sensor_value.hpp>
+#include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
@@ -14,6 +18,7 @@
 #include <thread>
 #include <vector>
 
+#include "tron_gnss/board_link.h"
 #include "tron_gnss/gnss_tracker.h"
 #include "tron_gnss/nmea.h"
 #include "tron_mcu/serial_port.h"
@@ -27,12 +32,17 @@ double MonotonicSeconds() {
   return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
+const char kAgeSensor[] = "os_correction_age";
+// RTCM waiting for the port; beyond this the newest is dropped (the receiver wants fresh corrections, not all of them).
+constexpr size_t kMaxQueue = 32 * 1024;
+
 }  // namespace
 
-// Reads NMEA from the receiver and publishes gps/absolute_pose. Never writes to the port.
+// Reads NMEA from the receiver and publishes gps/absolute_pose and gnss/gga. Writes to the port only the RTK board's
+// handshake and the RTCM from gnss/rtcm, as the port's only writer.
 class GnssNode : public rclcpp::Node {
  public:
-  explicit GnssNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_gnss", options) {
+  explicit GnssNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_gnss", options), board_(tron::BoardConfig()) {
     port_name_ = declare_parameter("port", "/dev/ttyS4");
     baud_ = static_cast<int>(declare_parameter("baud", 115200));
     frame_id_ = declare_parameter("frame_id", "map");
@@ -49,6 +59,12 @@ class GnssNode : public rclcpp::Node {
     config.motion_max_age_s = declare_parameter("motion_max_age", config.motion_max_age_s);
     config.max_correction_age_s = declare_parameter("max_correction_age", config.max_correction_age_s);
     max_correction_age_s_ = config.max_correction_age_s;
+    tron::BoardConfig board;
+    board.keepalive_s = declare_parameter("board_keepalive", board.keepalive_s);
+    board.active_window_s = declare_parameter("board_active_window", board.active_window_s);
+    board.reset_on_off = declare_parameter("board_reset_on_off", board.reset_on_off);
+    board.gate = declare_parameter("board_gate", board.gate);
+    board_ = tron::BoardLink(board);
 
     if (!std::isfinite(lat) || !std::isfinite(lon) || !std::isfinite(height) || std::abs(lat) > 90.0 ||
         std::abs(lon) > 180.0) {
@@ -81,6 +97,21 @@ class GnssNode : public rclcpp::Node {
       msg.data = text;
       params_pub_->publish(msg);
     }
+    gga_pub_ = create_publisher<std_msgs::msg::String>("gnss/gga", 10);
+    rtcm_sub_ = create_subscription<mowbite_msgs::msg::Rtcm>(
+        "gnss/rtcm", rclcpp::QoS(50).reliable(), [this](mowbite_msgs::msg::Rtcm::ConstSharedPtr msg) { OnRtcm(*msg); });
+    sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorInfo>(
+        "bridge/sensor_info", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().transient_local());
+    sensor_value_pub_ = create_publisher<mowbite_msgs::msg::SensorValue>("bridge/sensor_value", 100);
+    mowbite_msgs::msg::SensorInfo info;
+    info.sensor_id = kAgeSensor;
+    info.sensor_name = "RTK Correction Age";
+    info.value_type = mowbite_msgs::msg::SensorInfo::TYPE_DOUBLE;
+    info.value_description = mowbite_msgs::msg::SensorInfo::VALUE_DESCRIPTION_UNKNOWN;
+    info.unit = "s";
+    info.has_critical_high = true;
+    info.upper_critical_value = max_correction_age_s_;
+    sensor_info_pub_->publish(info);
     io_thread_ = std::thread([this] { IoLoop(); });
   }
 
@@ -105,13 +136,18 @@ class GnssNode : public rclcpp::Node {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         continue;
       }
-      ssize_t n = port_.Read(buffer, sizeof(buffer), 100);
+      ssize_t n = port_.Read(buffer, sizeof(buffer), 50);
       if (n < 0) {
         RCLCPP_ERROR(get_logger(), "Read error on %s, closing", port_name_.c_str());
-        port_.Close();
+        ClosePort();
         continue;
       }
       now = MonotonicSeconds();
+      if (!WritePending(now)) {
+        RCLCPP_ERROR(get_logger(), "Write error on %s, closing", port_name_.c_str());
+        ClosePort();
+        continue;
+      }
       if (n > 0) {
         last_data = now;
         HandleBytes(buffer, static_cast<size_t>(n), now);
@@ -134,13 +170,72 @@ class GnssNode : public rclcpp::Node {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Cannot open %s: %s", port_name_.c_str(), error.c_str());
       return;
     }
-    RCLCPP_INFO(get_logger(), "Opened %s at %d baud, read only", port_name_.c_str(), baud_);
+    RCLCPP_INFO(get_logger(), "Opened %s at %d baud", port_name_.c_str(), baud_);
+    std::lock_guard<std::mutex> lock(board_mutex_);
+    board_.OnPortOpened();
+    queue_.clear();
+    port_open_ = true;
+  }
+
+  void ClosePort() {
+    port_.Close();
+    std::lock_guard<std::mutex> lock(board_mutex_);
+    port_open_ = false;
+    queue_.clear();
+  }
+
+  void OnRtcm(const mowbite_msgs::msg::Rtcm& msg) {
+    const double now = MonotonicSeconds();
+    std::lock_guard<std::mutex> lock(board_mutex_);
+    if (!port_open_) return;
+    if (!board_.OnRtcm(msg.data.size(), now)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                           "RTCM held back until the RTK board reports network RTK ON (%lu bytes so far)",
+                           static_cast<unsigned long>(board_.dropped_bytes()));
+      return;
+    }
+    if (queue_.size() + msg.data.size() > kMaxQueue) {
+      queue_dropped_ += msg.data.size();
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "RTCM queue full, %lu bytes dropped so far",
+                           static_cast<unsigned long>(queue_dropped_));
+      return;
+    }
+    queue_.insert(queue_.end(), msg.data.begin(), msg.data.end());
+  }
+
+  // Board commands first, then the queued RTCM. False on a write error.
+  bool WritePending(double now) {
+    std::vector<uint8_t> out;
+    {
+      std::lock_guard<std::mutex> lock(board_mutex_);
+      const std::string commands = board_.Poll(now);
+      if (commands.find(tron::kBoardReset) != std::string::npos) {
+        RCLCPP_WARN(get_logger(), "RTK board fell back from network RTK: RTKRESET and ON");
+      }
+      out.assign(commands.begin(), commands.end());
+      out.insert(out.end(), queue_.begin(), queue_.end());
+      queue_.clear();
+    }
+    return out.empty() || port_.Write(out);
   }
 
   void HandleBytes(const uint8_t* data, size_t size, double now) {
     std::vector<tron::NmeaMessage> messages;
     parser_.Feed(data, size, messages);
+    std::optional<double> host_age;
+    for (const auto& message : messages) {
+      if (message.type == tron::NmeaMessage::Type::kBoardRtk) {
+        OnBoardReport(message.board.on, now);
+        continue;
+      }
+      if (message.type == tron::NmeaMessage::Type::kGga) OnGga(message, now);
+    }
+    {
+      std::lock_guard<std::mutex> lock(board_mutex_);
+      host_age = board_.host_correction_age(now);
+    }
     if (!tracker_) return;
+    tracker_->SetHostCorrectionAge(host_age);
     for (const auto& message : messages) {
       auto pose = tracker_->Update(message, now);
       if (pose) Publish(*pose);
@@ -167,6 +262,37 @@ class GnssNode : public rclcpp::Node {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 30000, "NMEA errors so far: %lu checksum, %lu malformed",
                            static_cast<unsigned long>(parser_.checksum_errors()),
                            static_cast<unsigned long>(parser_.malformed()));
+    }
+  }
+
+  void OnBoardReport(bool on, double now) {
+    std::lock_guard<std::mutex> lock(board_mutex_);
+    const tron::BoardState before = board_.state();
+    board_.OnBoardReport(on, now);
+    if (board_.state() != before) {
+      RCLCPP_INFO(get_logger(), "RTK board reports network RTK %s", on ? "ON" : "OFF (LoRa)");
+    }
+  }
+
+  // GGA with a position goes to the NTRIP client (VRS needs it) once a second; the age of the corrections to the sensor.
+  void OnGga(const tron::NmeaMessage& message, double now) {
+    const tron::GgaData& gga = message.gga;
+    if (gga.quality <= 0 || !gga.lat_deg || !gga.lon_deg || now - last_gga_published_ < 1.0) return;
+    last_gga_published_ = now;
+    std_msgs::msg::String text;
+    text.data = message.sentence;
+    gga_pub_->publish(text);
+    // The larger of the receiver's and the host's age, as the tracker counts it.
+    std::optional<double> age = gga.correction_age_s;
+    {
+      std::lock_guard<std::mutex> lock(board_mutex_);
+      if (auto host = board_.host_correction_age(now)) age = age ? std::max(*age, *host) : host;
+    }
+    if (age) {
+      mowbite_msgs::msg::SensorValue value;
+      value.sensor_id = kAgeSensor;
+      value.value = *age;
+      sensor_value_pub_->publish(value);
     }
   }
 
@@ -199,6 +325,13 @@ class GnssNode : public rclcpp::Node {
   tron::SerialPort port_;
   tron::NmeaParser parser_;
   std::optional<tron::GnssTracker> tracker_;
+  // Guards board_, queue_ and port_open_ between the RTCM callback and the port thread.
+  std::mutex board_mutex_;
+  tron::BoardLink board_;
+  std::vector<uint8_t> queue_;
+  bool port_open_ = false;
+  uint64_t queue_dropped_ = 0;
+  double last_gga_published_ = -1e9;
   uint64_t reported_errors_ = 0;
   uint64_t reported_stale_ = 0;
   uint64_t reported_old_corrections_ = 0;
@@ -206,6 +339,10 @@ class GnssNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_pub_;
   rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr datum_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr gga_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::SensorInfo>::SharedPtr sensor_info_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_pub_;
+  rclcpp::Subscription<mowbite_msgs::msg::Rtcm>::SharedPtr rtcm_sub_;
   std::atomic<bool> running_{true};
   std::thread io_thread_;
 };

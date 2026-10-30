@@ -198,5 +198,29 @@ TEST(Nmea, GarbageNeverProducesMessages) {
   EXPECT_TRUE(out.empty());
 }
 
+TEST(Nmea, TheBoardCommandHasItsChecksum) {
+  // The board compares "$GNRTK,ON*69" as text; the checksum in it is the NMEA one.
+  EXPECT_EQ(NmeaChecksum("GNRTK,ON"), 0x69);
+}
+
+TEST(Nmea, BoardReports) {
+  NmeaParser parser;
+  auto out = Parse(parser, Sentence("GNRTK,ON") + Sentence("GNRTK,OFF") + Sentence("GNRTK,MAYBE"));
+  ASSERT_EQ(out.size(), 2u);
+  EXPECT_EQ(out[0].type, NmeaMessage::Type::kBoardRtk);
+  EXPECT_TRUE(out[0].board.on);
+  EXPECT_EQ(out[0].sentence, "$GNRTK,ON*69");
+  EXPECT_EQ(out[1].type, NmeaMessage::Type::kBoardRtk);
+  EXPECT_FALSE(out[1].board.on);
+  EXPECT_EQ(parser.malformed(), 1u);
+}
+
+TEST(Nmea, SentenceIsKeptWithoutLineEnd) {
+  NmeaParser parser;
+  auto out = Parse(parser, "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n");
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].sentence, "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47");
+}
+
 }  // namespace
 }  // namespace tron

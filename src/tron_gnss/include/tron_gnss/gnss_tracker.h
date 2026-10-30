@@ -51,6 +51,12 @@ class GnssTracker {
   // now_s is a monotonic clock, only differences are used.
   std::optional<GnssPose> Update(const NmeaMessage& message, double now_s);
 
+  // The host's own age of the corrections (s since it last passed RTCM to the receiver), nullopt if it never did. While
+  // set, the larger of it and the receiver's age counts against max_correction_age.
+  void SetHostCorrectionAge(const std::optional<double>& age_s) {
+    host_correction_age_s_ = age_s;
+  }
+
   // GGA sentences dropped because their time did not advance.
   uint64_t stale_gga() const {
     return stale_gga_;
@@ -79,6 +85,7 @@ class GnssTracker {
   uint64_t stale_gga_ = 0;
   uint64_t old_corrections_ = 0;
   std::optional<double> last_old_correction_age_;
+  std::optional<double> host_correction_age_s_;
 };
 
 }  // namespace tron
