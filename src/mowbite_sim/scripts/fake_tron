@@ -7,8 +7,10 @@ did. The speed drops to 0 after --host-timeout seconds without any frame from th
 while the lift or stop flag is set; it stays 0 until the next SpeedData. The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an upside-down mounted sensor.
 Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, gnss_age, gnss_delay,
-yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off) is read on every cycle, every received sub packet goes to a JSON lines log, and --state writes the
-true pose as JSON. gnss_noise is the standard deviation (m) of the antenna position, gnss_age the age of the corrections
+yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, gnss_rtcm) is read on every cycle, every received sub packet goes to a JSON lines log, and --state writes the
+true pose as JSON. The GNSS pty also plays the RTK board in front of the receiver (Board). gnss_rtcm true makes the fix
+depend on the RTCM the board passes: RTK fixed with the real age while corrections are at most 120 s old, otherwise
+single without age. gnss_noise is the standard deviation (m) of the antenna position, gnss_age the age of the corrections
 in GGA (s, default 1.0, null leaves the field empty), gnss_delay how old (s) the position is when it is sent, yaw_drift
 the yaw error (rad) per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below which a wheel stands,
 odom_scale the factor between the reported and the real wheel speed, track the real track (m). imu_off stops the IMU frames, cutter_ignores_off keeps the blade turning on off frames.
@@ -282,6 +284,93 @@ def gnss_sentences(utc, lat, lon, height, quality, speed, course, age=1.0):
     return nmea(gga) + nmea(rmc) + nmea(vtg)
 
 
+BOARD_ON = b"$GNRTK,ON*69\r\n"
+BOARD_RESET = b"RTKRESET\r\n"
+# The board falls back to LoRa after this long without a byte from the host.
+BOARD_TIMEOUT = 6.0
+BOARD_REPORT_PERIOD = 1.0
+# The receiver keeps RTK fixed on corrections this old.
+RECEIVER_MAX_AGE = 120.0
+
+
+def crc24q(data):
+    crc = 0
+    for byte in data:
+        crc ^= byte << 16
+        for _ in range(8):
+            crc <<= 1
+            if crc & 0x1000000:
+                crc ^= 0x1864CFB
+    return crc & 0xFFFFFF
+
+
+class Board:
+    """The RTK board (AT32) between host and receiver: in LoRa mode (OFF) at the start, network RTK (ON) after the exact
+    bytes of BOARD_ON, OFF again after BOARD_TIMEOUT s without any byte from the host. Only while ON it passes RTCM
+    frames with a valid CRC to the receiver. RTKRESET restarts the receiver: its corrections are gone. Reports
+    $GNRTK,ON / OFF on each change and every BOARD_REPORT_PERIOD s (format assumed until phase 5)."""
+
+    def __init__(self):
+        self.on = False
+        self.buffer = b""
+        self.last_host = None
+        self.last_rtcm = None
+        self.frames = self.dropped = self.resets = 0
+
+    def feed(self, now, data):
+        """Bytes from the host; returns log entries."""
+        self.last_host = now
+        self.buffer += data
+        entries = []
+        while self.buffer:
+            if self.buffer.startswith(BOARD_ON):
+                self.buffer = self.buffer[len(BOARD_ON):]
+                entries.append({"board": "on_command"})
+                self.on = True
+            elif self.buffer.startswith(BOARD_RESET):
+                self.buffer = self.buffer[len(BOARD_RESET):]
+                self.resets += 1
+                self.last_rtcm = None
+                entries.append({"board": "reset"})
+            elif self.buffer[0] == 0xD3:
+                if len(self.buffer) < 3:
+                    break
+                total = 3 + (((self.buffer[1] & 0x03) << 8) | self.buffer[2]) + 3
+                if len(self.buffer) < total:
+                    break
+                frame, self.buffer = self.buffer[:total], self.buffer[total:]
+                if crc24q(frame[:-3]) != int.from_bytes(frame[-3:], "big"):
+                    entries.append({"board": "bad_rtcm"})
+                elif self.on:
+                    self.frames += 1
+                    self.last_rtcm = now
+                    entries.append({"rtcm": (frame[3] << 4) | (frame[4] >> 4) if total > 7 else 0})
+                else:
+                    self.dropped += 1
+                    entries.append({"board": "rtcm_dropped"})
+            elif BOARD_ON.startswith(self.buffer) or BOARD_RESET.startswith(self.buffer):
+                break
+            else:
+                self.buffer = self.buffer[1:]
+        return entries
+
+    def tick(self, now):
+        """True if the board fell back to LoRa just now."""
+        if self.on and (self.last_host is None or now - self.last_host > BOARD_TIMEOUT):
+            self.on = False
+            return True
+        return False
+
+    def report(self):
+        return nmea("GNRTK," + ("ON" if self.on else "OFF"))
+
+    def fix(self, now):
+        """(quality, age) of the receiver from the corrections it got."""
+        if self.last_rtcm is None or now - self.last_rtcm > RECEIVER_MAX_AGE:
+            return 1, None
+        return 4, round(now - self.last_rtcm, 1)
+
+
 def wit_frame(frame_type, values):
     body = bytearray([0x55, frame_type])
     for v in values:
@@ -419,6 +508,9 @@ def main():
     imu = open_pty(args.imu_link)
     log = Log(args.log, int(args.log_max_mb * 1e6))
     decoder = Decoder()
+    board = Board()
+    board_on = None
+    next_report = gnss_quiet_until = 0.0
     pose = Pose(args.start[0], args.start[1], math.radians(args.start[2]))
     rng = random.Random(args.seed)
     host = HostLink(args.host_timeout)
@@ -476,10 +568,19 @@ def main():
                     course = math.degrees(math.atan2(vx, vy)) % 360.0
                 lat, lon, height = enu_to_geodetic(args.datum, ax, ay, 0.0)
                 age = flags.get("gnss_age", 1.0)
+                quality = int(flags.get("gnss_quality", 4))
+                if flags.get("gnss_rtcm", 0):
+                    quality, age = board.fix(now)
                 epoch = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=delay)
-                send(gnss, gnss_sentences(epoch, lat, lon, height,
-                                          int(flags.get("gnss_quality", 4)), speed, course,
+                send(gnss, gnss_sentences(epoch, lat, lon, height, quality, speed, course,
                                           None if age is None else float(age)))
+            board.tick(now)
+            if board.on != board_on or now >= next_report:
+                if board.on != board_on:
+                    log.write({"t": round(now, 3), "board": "on" if board.on else "off"})
+                board_on = board.on
+                next_report = now + BOARD_REPORT_PERIOD
+                send(gnss, board.report())
             if now >= next_imu:
                 next_imu = now + IMU_PERIOD
                 if not flags.get("imu_off", 0):
@@ -488,8 +589,15 @@ def main():
                 next_state = now + 0.2
                 write_state(args.state, now, pose)
 
-            ready, _, _ = select.select([mcu], [], [], 0.005)
-            if not ready:
+            # Without a driver on it a pty reads as an error at once: then look again only after 0.1 s.
+            ready, _, _ = select.select([mcu, gnss] if now >= gnss_quiet_until else [mcu], [], [], 0.005)
+            if gnss in ready:
+                try:
+                    for entry in board.feed(now, os.read(gnss, 4096)):
+                        log.write({"t": round(now, 3), **entry})
+                except OSError:
+                    gnss_quiet_until = now + 0.1
+            if mcu not in ready:
                 continue
             try:
                 data = os.read(mcu, 4096)

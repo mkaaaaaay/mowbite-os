@@ -350,6 +350,62 @@ def read_available(fd, seconds):
     return data
 
 
+def rtcm_frame(message, length=19):
+    """A RTCM 3 frame of that message number with a valid CRC."""
+    payload = bytes([message >> 4, (message & 0x0F) << 4]) + bytes(range(length - 2))
+    frame = bytes([0xD3, length >> 8, length & 0xFF]) + payload
+    return frame + ft.crc24q(frame).to_bytes(3, "big")
+
+
+class BoardTest(unittest.TestCase):
+    def test_crc24q_check_value(self):
+        self.assertEqual(ft.crc24q(b"123456789"), 0xCDE703)
+
+    def test_off_until_the_exact_command(self):
+        board = ft.Board()
+        self.assertFalse(board.on)
+        self.assertEqual(board.report(), b"$GNRTK,OFF*27\r\n")
+        board.feed(0.0, b"$GNRTK,ON*70\r\n$GNRTK,O")
+        self.assertFalse(board.on)
+        board.feed(0.1, b"N*69\r\n")
+        self.assertTrue(board.on)
+        self.assertEqual(board.report(), ft.BOARD_ON)
+
+    def test_rtcm_only_while_on(self):
+        board = ft.Board()
+        entries = board.feed(0.0, rtcm_frame(1005))
+        self.assertEqual(entries, [{"board": "rtcm_dropped"}])
+        self.assertEqual(board.fix(0.0), (1, None))
+        board.feed(0.5, ft.BOARD_ON)
+        frame = rtcm_frame(1077, 120)
+        self.assertEqual(board.feed(1.0, frame[:50]), [])
+        self.assertEqual(board.feed(1.0, frame[50:] + b"\x00junk"), [{"rtcm": 1077}])
+        self.assertEqual(board.fix(3.0), (4, 2.0))
+        self.assertEqual(board.fix(121.5), (1, None))
+        bad = bytearray(rtcm_frame(1005))
+        bad[6] ^= 1
+        self.assertEqual(board.feed(2.0, bytes(bad)), [{"board": "bad_rtcm"}])
+
+    def test_falls_back_without_host_bytes(self):
+        board = ft.Board()
+        board.feed(0.0, ft.BOARD_ON)
+        self.assertFalse(board.tick(5.9))
+        # RTCM alone keeps it on, like the keep-alive.
+        board.feed(5.9, rtcm_frame(1005))
+        self.assertFalse(board.tick(11.8))
+        self.assertTrue(board.tick(12.0))
+        self.assertFalse(board.on)
+        self.assertFalse(board.tick(13.0))
+
+    def test_reset_drops_the_corrections(self):
+        board = ft.Board()
+        board.feed(0.0, ft.BOARD_ON + rtcm_frame(1005))
+        self.assertEqual(board.fix(1.0)[0], 4)
+        self.assertEqual(board.feed(2.0, ft.BOARD_RESET + ft.BOARD_ON), [{"board": "reset"}, {"board": "on_command"}])
+        self.assertEqual(board.fix(2.0), (1, None))
+        self.assertEqual(board.resets, 1)
+
+
 class ProcessTest(unittest.TestCase):
     """fake_tron as a process on ptys, with a host that writes frames like the driver."""
 
@@ -451,7 +507,8 @@ class ProcessTest(unittest.TestCase):
         before = self.state()
         lines = read_available(self.fds["gnss"], 0.6).decode().splitlines()
         self.assertTrue(lines and all(nmea_ok(l) for l in lines))
-        self.assertEqual({l[3:6] for l in lines}, {"GGA", "RMC", "VTG"})
+        # Besides the receiver's sentences the board's report.
+        self.assertEqual({l[3:6] for l in lines} - {"RTK"}, {"GGA", "RMC", "VTG"})
         gga = [l for l in lines if l[3:6] == "GGA"][-1].split(",")
         lat = int(gga[2][:2]) + float(gga[2][2:]) / 60.0
         lon = int(gga[4][:3]) + float(gga[4][3:]) / 60.0
@@ -499,6 +556,24 @@ class ProcessTest(unittest.TestCase):
         self.assertAlmostEqual(late, 0.5, delta=0.3)
         self.set_flags()
         read_available(self.fds["mcu"], 0.9)
+
+    def test_2d_board_and_rtcm_fix(self):
+        self.set_flags(gnss_rtcm=1)
+        read_available(self.fds["gnss"], 0.3)
+        lines = read_available(self.fds["gnss"], 1.2).decode().splitlines()
+        self.assertIn("$GNRTK,OFF*27", lines)
+        self.assertEqual([l for l in lines if l[3:6] == "GGA"][-1].split(",")[6], "1")
+        os.write(self.fds["gnss"], ft.BOARD_ON)
+        time.sleep(0.2)
+        os.write(self.fds["gnss"], rtcm_frame(1005))
+        read_available(self.fds["gnss"], 0.3)
+        # The report comes once a second.
+        lines = read_available(self.fds["gnss"], 1.2).decode(errors="replace").splitlines()
+        self.assertIn("$GNRTK,ON*69", lines)
+        gga = [l for l in lines if l[3:6] == "GGA"][-1].split(",")
+        self.assertEqual(gga[6], "4")
+        self.assertLess(float(gga[13]), 1.5)
+        self.set_flags()
 
     def test_3_imu_rate_and_content(self):
         read_available(self.fds["imu"], 0.2)
