@@ -293,15 +293,26 @@ BOARD_REPORT_PERIOD = 1.0
 RECEIVER_MAX_AGE = 120.0
 
 
-def crc24q(data):
-    crc = 0
-    for byte in data:
-        crc ^= byte << 16
+def _crc24q_table():
+    """Remainder of each top byte under the RTCM 3 polynomial 0x1864CFB."""
+    table = []
+    for top in range(256):
+        value = top << 16
         for _ in range(8):
-            crc <<= 1
-            if crc & 0x1000000:
-                crc ^= 0x1864CFB
-    return crc & 0xFFFFFF
+            value = (value << 1) ^ (0x1864CFB if value & 0x800000 else 0)
+        table.append(value & 0xFFFFFF)
+    return table
+
+
+CRC24Q_TABLE = _crc24q_table()
+
+
+def crc24q(data):
+    """CRC-24Q of RTCM 3, a byte at a time from the table."""
+    remainder = 0
+    for value in data:
+        remainder = ((remainder << 8) & 0xFFFFFF) ^ CRC24Q_TABLE[(remainder >> 16) ^ value]
+    return remainder
 
 
 class Board:

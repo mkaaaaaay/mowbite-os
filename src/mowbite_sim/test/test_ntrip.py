@@ -6,6 +6,8 @@ user and password show up nowhere.
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_ntrip.py
 """
 import base64
+import importlib.machinery
+import importlib.util
 import json
 import os
 import shutil
@@ -36,26 +38,21 @@ USER = "rover"
 PASSWORD = "pw.of#the.test"
 WRONG = "not.the#pw"
 MAX_AGE = 5.0
-LOST_AFTER = 4.0
 FIXED = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FIXED
 FLOAT = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FLOAT
 
 
-def crc24q(data):
-    crc = 0
-    for byte in data:
-        crc ^= byte << 16
-        for _ in range(8):
-            crc <<= 1
-            if crc & 0x1000000:
-                crc ^= 0x1864CFB
-    return crc & 0xFFFFFF
+# The CRC of fake_tron, so there is one in the sim.
+_loader = importlib.machinery.SourceFileLoader(
+    "fake_tron", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "fake_tron"))
+ft = importlib.util.module_from_spec(importlib.util.spec_from_loader("fake_tron", _loader))
+_loader.exec_module(ft)
 
 
 def rtcm_frame(message, length):
     payload = bytes([message >> 4, (message & 0x0F) << 4]) + bytes((i * 7) & 0xFF for i in range(length - 2))
     frame = bytes([0xD3, length >> 8, length & 0xFF]) + payload
-    return frame + crc24q(frame).to_bytes(3, "big")
+    return frame + ft.crc24q(frame).to_bytes(3, "big")
 
 
 class Caster:
@@ -106,8 +103,8 @@ class Caster:
             if down:
                 return
             if not login:
-                conn.sendall(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"/" + mount.encode() +
-                             b"\"\r\n\r\n")
+                refusal = f'HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="{mount}"\r\n\r\n'
+                conn.sendall(refusal.encode())
                 return
             if mount == "V2":
                 conn.sendall(b"HTTP/1.1 200 OK\r\nNtrip-Version: Ntrip/2.0\r\nTransfer-Encoding: chunked\r\n"
@@ -178,7 +175,7 @@ def generate_test_description():
     ntrip = Node(package="mowbite_ntrip", executable="mowbite_ntrip_node", output="screen",
                  parameters=[{"data_dir": WORK, "config_check": 1.0, "first_retry": 1.0, "max_retry": 4.0,
                               "rejected_retry": 8.0, "data_timeout": 3.0, "gga_interval": 2.0,
-                              "lost_after": LOST_AFTER}])
+                              "max_correction_age": MAX_AGE}])
     # The ptys have to exist before the driver looks for them.
     return launch.LaunchDescription([
         fake_tron,
@@ -310,9 +307,9 @@ class TestNtrip(unittest.TestCase):
         start = time.time()
         # Past the age limit the fix counts as float, although the receiver still says fixed.
         self.assertTrue(p.wait(lambda p: p.pose and p.pose.flags == FLOAT, MAX_AGE + 6), "still fixed")
-        lost = p.wait(lambda p: [e for e in p.corrections_events(since) if e["reason"] == "LOST"], LOST_AFTER + 6)
+        lost = p.wait(lambda p: [e for e in p.corrections_events(since) if e["reason"] == "LOST"], MAX_AGE + 6)
         self.assertTrue(lost, p.corrections_events(since))
-        self.assertEqual((lost[0]["severity"], lost[0]["resume"], lost[0]["limit"]), ("warning", "auto", LOST_AFTER))
+        self.assertEqual((lost[0]["severity"], lost[0]["resume"], lost[0]["limit"]), ("warning", "auto", MAX_AGE))
         # Without RTCM the keep-alive stops after its window (10 s) and the board falls back to LoRa 6 s later.
         self.assertTrue(p.wait(lambda p: any(e.get("board") == "off" for e in board_log()[board_since:]), 25),
                         "board stayed on")

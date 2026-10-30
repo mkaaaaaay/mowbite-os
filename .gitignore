@@ -4,3 +4,5 @@ log/
 .env
 __pycache__/
 core.*
+# Access to an NTRIP caster stays on the mower.
+ntrip.yaml
