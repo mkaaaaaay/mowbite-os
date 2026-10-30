@@ -115,6 +115,9 @@ def rpc(method, params=None, rid="1", timeout=5.0):
 
 
 REC = "mower_logic:area_recording/"
+LOGIC_SETTINGS = ["rain_mode", "rain_delay_minutes", "rain_check_seconds", "automatic_mode", "gps_timeout",
+                  "max_position_accuracy", "gps_wait_time", "docking_approach_distance", "docking_distance",
+                  "docking_retry_count", "undock_distance", "motor_hot_temperature", "motor_cold_temperature"]
 
 
 def enabled(action_id):
@@ -289,6 +292,10 @@ if offers("map.area_properties"):
     check("map.area_properties", r and isinstance(r.get("result"), list) and (r["result"] == expected
                                                                               or args.target != "mowbite-os"),
           json.dumps(r and r.get("result")))
+if offers("params.set") and args.target == "mowbite-os":
+    p = json.loads(latest("params/json") or "{}")
+    logic = sorted(k[len("/mower_logic/"):] for k in p if k.startswith("/mower_logic/"))
+    check("params/json has the settings of params.set", logic == sorted(LOGIC_SETTINGS), ",".join(logic))
 r = rpc("no.such.method", None, "3")
 check("unknown method -32601", r and r.get("error", {}).get("code") == -32601, json.dumps(r and r.get("error")))
 c.publish("rpc/request", "{broken")
@@ -350,6 +357,22 @@ c.publish("action", "mower_logic:idle/start_mowing")
 refused = wait_for(lambda: events_of("MOWING_REFUSED", mark), 3)
 check("MOWING_REFUSED with a fixed reason", fixed_reason(refused[-1] if refused else None, "user"),
       json.dumps(refused[-1] if refused else None), point="3.1a MOWING_REFUSED")
+
+
+if methods is not None and "params.set" in methods:
+    # In IDLE: a value out of range goes to the bound and shows in params/json, an unknown name changes nothing.
+    wait = json.loads(latest("params/json"))["/mower_logic/gps_wait_time"]
+    r = rpc("params.set", {"params": {"/mower_logic/gps_wait_time": 99}}, "pset")
+    check("params.set answers the value taken", r and r.get("result") == {"/mower_logic/gps_wait_time": 60.0},
+          json.dumps(r))
+    shown = wait_for(lambda: json.loads(latest("params/json")).get("/mower_logic/gps_wait_time") == 60.0)
+    check("params.set shows in params/json", bool(shown), (latest("params/json") or b"")[:200].decode())
+    r = rpc("params.set", {"params": {"/mower_logic/gps_wait_time": 5, "/mower_logic/tool_width": 0.2}}, "pset_bad")
+    check("params.set refuses a planning value -32602", bool(r) and r.get("error", {}).get("code") == -32602,
+          json.dumps(r and r.get("error")))
+    r = rpc("params.set", {"params": {"/mower_logic/gps_wait_time": wait}}, "pset_back")
+    check("params.set back to the start value", r and r.get("result") == {"/mower_logic/gps_wait_time": wait},
+          json.dumps(r))
 
 
 def planner_services():
