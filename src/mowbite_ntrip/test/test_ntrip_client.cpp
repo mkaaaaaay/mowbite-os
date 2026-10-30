@@ -175,13 +175,13 @@ TEST_F(Fixture, LostAfterTheGraceThenRestoredOnce) {
     client.OnClosed(now, "connect: Connection refused");
     client.Tick(now);
   }
-  ASSERT_GT(now, 60.0);
+  ASSERT_GT(now, 30.0);
   auto events = client.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].reason, "LOST");
   EXPECT_EQ(events[0].severity, "warning");
   EXPECT_EQ(events[0].resume, "auto");
-  EXPECT_EQ(events[0].limit, 60.0);
+  EXPECT_EQ(events[0].limit, 30.0);
   client.Tick(now + 100);
   EXPECT_TRUE(client.TakeEvents().empty());
   now += client.retry_in(now);
@@ -197,9 +197,9 @@ TEST_F(Fixture, LostAfterTheGraceThenRestoredOnce) {
 TEST_F(Fixture, ShortGapGivesNoEvent) {
   client.SetConfig(Config(), 0);
   Stream(0);
-  client.OnClosed(30, "closed by the caster");
-  Stream(35);
-  client.Tick(40);
+  client.OnClosed(20, "closed by the caster");
+  Stream(25);
+  client.Tick(30);
   EXPECT_TRUE(client.TakeEvents().empty());
 }
 

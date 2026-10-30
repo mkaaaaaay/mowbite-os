@@ -22,8 +22,8 @@ struct ClientTiming {
   double data_timeout_s = 15.0;
   // GGA to the caster, the first right after its answer; VRS mountpoints need the rover's position.
   double gga_interval_s = 10.0;
-  // No frame for this long after there were some gives the LOST event.
-  double lost_after_s = 60.0;
+  // No frame for this long after there were some gives the LOST event: max_correction_age, when the fix counts as float.
+  double lost_after_s = 30.0;
 };
 
 enum class ClientState { kOff, kWaiting, kConnecting, kConnected, kRejected };

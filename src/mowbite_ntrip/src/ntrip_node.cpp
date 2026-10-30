@@ -110,7 +110,8 @@ class NtripNode : public rclcpp::Node {
     t.rejected_retry_s = declare_parameter("rejected_retry", t.rejected_retry_s);
     t.data_timeout_s = declare_parameter("data_timeout", t.data_timeout_s);
     t.gga_interval_s = declare_parameter("gga_interval", t.gga_interval_s);
-    t.lost_after_s = declare_parameter("lost_after", t.lost_after_s);
+    // The same parameter as tron_gnss: LOST comes when the fix starts to count as float.
+    t.lost_after_s = declare_parameter("max_correction_age", t.lost_after_s);
     return t;
   }
 

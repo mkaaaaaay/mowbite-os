@@ -8,6 +8,9 @@
     # sets with params.set is saved by the logic and sent to the localization and the follower.
     max_position_accuracy: 0.1
     gps_timeout: 10.0
+    # RTK fixed on corrections older than max_correction_age s, or without their age in GGA, counts as float (G7);
+    # mowbite_ntrip reports CORRECTIONS LOST at the same age. Assumption until phase 7.
+    max_correction_age: 30.0
 tron_mcu:
   ros__parameters:
     port: /dev/ttyS9
@@ -41,9 +44,7 @@ tron_gnss:
     port: /dev/ttyS4
     # Assumption from the reference documentation, checked on the device.
     baud: 115200
-    # RTK fixed on corrections older than max_correction_age s, or without their age in GGA, counts as float (G7).
-    # Assumption until phase 7.
-    max_correction_age: 30.0
+    # max_correction_age: under /** above.
     # RTK board in front of the UM960: $GNRTK,ON every board_keepalive s while RTCM came within board_active_window s,
     # RTKRESET when it falls back from ON on its own. RTCM goes to the port only while it reports ON (board_gate).
     board_keepalive: 4.0
@@ -65,8 +66,8 @@ mowbite_ntrip:
     rejected_retry: 300.0
     data_timeout: 15.0
     gga_interval: 10.0
-    # The CORRECTIONS event LOST after this long without corrections, RESTORED once when they are back.
-    lost_after: 60.0
+    # The CORRECTIONS event LOST after max_correction_age (/** above) without corrections, RESTORED once when they are
+    # back.
 
 tron_imu:
   ros__parameters:
