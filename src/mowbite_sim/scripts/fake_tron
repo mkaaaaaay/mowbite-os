@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """Simulated Airseekers Tron on three ptys: MCU (ttyS9), GNSS (ttyS4) and WIT IMU (ttyS1).
 
-The MCU pty sends sensor, speed, battery, version and motor frames like the real MCU. SpeedData (linear, angular) drives a
-unicycle model of the base frame. The speed drops to 0 after --host-timeout seconds without any frame from the host and
+The MCU pty sends sensor, speed, battery, version and motor frames like the real MCU. SpeedData (linear, angular) drives two
+wheels: the MCU splits it on --mcu-track, the base turns on the real --track, and the speed frame reports what the wheels
+did. The speed drops to 0 after --host-timeout seconds without any frame from the host and
 while the lift or stop flag is set; it stays 0 until the next SpeedData. The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an upside-down mounted sensor.
-Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, gnss_age, yaw_drift, imu_off,
-cutter_ignores_off) is read on every cycle, every received sub packet goes to a JSON lines log, and --state writes the
+Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, gnss_age, gnss_delay,
+yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off) is read on every cycle, every received sub packet goes to a JSON lines log, and --state writes the
 true pose as JSON. gnss_noise is the standard deviation (m) of the antenna position, gnss_age the age of the corrections
-in GGA (s, default 1.0, null leaves the field empty), yaw_drift the yaw error (rad) per metre driven, as omni wheels slip.
-imu_off stops the IMU frames, cutter_ignores_off keeps the blade turning on off frames.
+in GGA (s, default 1.0, null leaves the field empty), gnss_delay how old (s) the position is when it is sent, yaw_drift
+the yaw error (rad) per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below which a wheel stands,
+odom_scale the factor between the reported and the real wheel speed, track the real track (m). imu_off stops the IMU frames, cutter_ignores_off keeps the blade turning on off frames.
 """
 import argparse
 import atexit
+import collections
 import datetime
 import json
 import math
@@ -173,6 +176,47 @@ class HostLink:
         if silent or blocked:
             self.linear = self.angular = 0.0
         return self.linear, self.angular
+
+
+class Drive:
+    """Two wheels: the MCU splits a setpoint on mcu_track, the base turns on the real track."""
+
+    def __init__(self, mcu_track, track):
+        self.mcu_track, self.track = mcu_track, track
+        self.left = self.right = 0.0
+
+    def move(self, linear, angular, deadband=0.0):
+        """The (linear, angular) the base drives for a setpoint; a wheel slower than the deadband stands."""
+        half = angular * self.mcu_track / 2.0
+        self.left, self.right = (0.0 if abs(v) < deadband else v for v in (linear - half, linear + half))
+        return (self.left + self.right) / 2.0, (self.right - self.left) / self.track
+
+    def measured(self, scale=1.0):
+        """The (linear, angular) the MCU reports: its wheel speeds times scale, on its own track."""
+        return scale * (self.left + self.right) / 2.0, scale * (self.right - self.left) / self.mcu_track
+
+
+class History:
+    """Values of the last limit seconds, to send them late."""
+
+    def __init__(self, limit=1.0):
+        self.limit = limit
+        self.items = collections.deque()
+
+    def push(self, now, value):
+        self.items.append((now, value))
+        while len(self.items) > 1 and self.items[1][0] <= now - self.limit:
+            self.items.popleft()
+
+    def get(self, now, delay):
+        """The newest value at least delay seconds old, else the oldest one kept."""
+        due = now - min(max(delay, 0.0), self.limit)
+        result = self.items[0][1]
+        for t, value in self.items:
+            if t > due:
+                break
+            result = value
+        return result
 
 
 def enu_to_geodetic(datum, east, north, up):
@@ -345,7 +389,7 @@ def main():
     parser.add_argument("--gnss-link", default="/tmp/mowbite_sim_gnss", help="symlink to the GNSS pty")
     parser.add_argument("--imu-link", default="/tmp/mowbite_sim_imu", help="symlink to the IMU pty")
     parser.add_argument("--flags", help="JSON file with lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, "
-                        "yaw_drift")
+                        "gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off")
     parser.add_argument("--log", help="JSON lines log of received sub packets")
     parser.add_argument("--log-max-mb", type=float, default=20.0)
     parser.add_argument("--state", help="JSON file with the true pose, written 5 times a second")
@@ -360,6 +404,11 @@ def main():
     parser.add_argument("--gnss-noise-m", type=float, default=0.0, help="standard deviation of the antenna position")
     parser.add_argument("--yaw-drift", type=float, default=0.0, help="yaw error in rad per metre driven (slip)")
     parser.add_argument("--seed", type=int, default=1, help="seed of the position noise")
+    parser.add_argument("--gnss-delay", type=float, default=0.0, help="age (s, at most 1) of the position when sent")
+    parser.add_argument("--mcu-track", type=float, default=0.40, help="track (m) the MCU splits and reports on")
+    parser.add_argument("--track", type=float, help="real track (m) the base turns on, default --mcu-track")
+    parser.add_argument("--wheel-deadband", type=float, default=0.0, help="m/s below which a wheel stands")
+    parser.add_argument("--odom-scale", type=float, default=1.0, help="reported / real wheel speed")
     args = parser.parse_args()
 
     # SIGTERM from launch or docker has to reach the finally block that removes the symlinks.
@@ -373,6 +422,8 @@ def main():
     pose = Pose(args.start[0], args.start[1], math.radians(args.start[2]))
     rng = random.Random(args.seed)
     host = HostLink(args.host_timeout)
+    drive = Drive(args.mcu_track, args.track or args.mcu_track)
+    antenna_history = History()
     course = None
     # Cutter: on with a speed in percent from the last cutter frame; it stops with the wheels (lift, stop, no host).
     cutter_percent = 0
@@ -385,9 +436,12 @@ def main():
             now = time.monotonic() - t0
             flags = read_flags(args.flags)
             blocked = bool(flags.get("lift", 0) or flags.get("stop", 0))
-            linear, angular = host.setpoint(now, blocked)
+            drive.track = float(flags.get("track", args.track or args.mcu_track))
+            linear, angular = drive.move(*host.setpoint(now, blocked),
+                                         float(flags.get("wheel_deadband", args.wheel_deadband)))
             pose.step(now - last, linear, angular, float(flags.get("yaw_drift", args.yaw_drift)))
             last = now
+            antenna_history.push(now, (pose.antenna(*args.antenna_offset), pose.antenna_velocity(*args.antenna_offset)))
 
             if now >= next_sensor:
                 next_sensor = now + SENSOR_PERIOD
@@ -395,8 +449,8 @@ def main():
                 # bumper, rain, lift, stop, power_off, battery_gate, cutter_size (2 = large), press_module, right, left
                 sensor = bytes([bumper, int(flags.get("rain", 0)), int(flags.get("lift", 0)),
                                 int(flags.get("stop", 0)), 0, 0, 2, 0, bumper, 0])
-                send(mcu, encode([(FROM_MCU, 10, sensor), (FROM_MCU, 4, struct.pack("<ff", pose.linear,
-                                                                                    pose.angular))]))
+                measured = drive.measured(float(flags.get("odom_scale", args.odom_scale)))
+                send(mcu, encode([(FROM_MCU, 10, sensor), (FROM_MCU, 4, struct.pack("<ff", *measured))]))
             if now >= next_status:
                 next_status = now + 1.0
                 dock = int(flags.get("dock", 0))
@@ -413,14 +467,17 @@ def main():
             if now >= next_gnss:
                 next_gnss = now + GNSS_PERIOD
                 sigma = float(flags.get("gnss_noise", args.gnss_noise_m))
-                ax, ay = noisy(rng, sigma, *pose.antenna(*args.antenna_offset))
-                vx, vy = pose.antenna_velocity(*args.antenna_offset)
+                # The receiver sends the position of an earlier epoch, with the time of that epoch.
+                delay = min(max(float(flags.get("gnss_delay", args.gnss_delay)), 0.0), antenna_history.limit)
+                antenna, (vx, vy) = antenna_history.get(now, delay)
+                ax, ay = noisy(rng, sigma, *antenna)
                 speed = math.hypot(vx, vy)
                 if speed > 0.01:
                     course = math.degrees(math.atan2(vx, vy)) % 360.0
                 lat, lon, height = enu_to_geodetic(args.datum, ax, ay, 0.0)
                 age = flags.get("gnss_age", 1.0)
-                send(gnss, gnss_sentences(datetime.datetime.now(datetime.timezone.utc), lat, lon, height,
+                epoch = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=delay)
+                send(gnss, gnss_sentences(epoch, lat, lon, height,
                                           int(flags.get("gnss_quality", 4)), speed, course,
                                           None if age is None else float(age)))
             if now >= next_imu:

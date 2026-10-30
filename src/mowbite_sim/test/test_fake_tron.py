@@ -112,6 +112,66 @@ class SlipAndNoiseTest(unittest.TestCase):
         self.assertAlmostEqual(mean, 0.0, delta=0.002)
 
 
+class DriveTest(unittest.TestCase):
+    def test_ideal_wheels_pass_the_setpoint(self):
+        drive = ft.Drive(0.40, 0.40)
+        self.assertEqual(tuple(round(v, 12) for v in drive.move(0.2, 0.3)), (0.2, 0.3))
+        self.assertEqual(tuple(round(v, 12) for v in drive.measured()), (0.2, 0.3))
+        self.assertAlmostEqual(drive.left, 0.14)
+        self.assertAlmostEqual(drive.right, 0.26)
+
+    def test_real_track_turns_the_base_faster(self):
+        drive = ft.Drive(0.40, 0.395)
+        linear, angular = drive.move(0.0, 0.3)
+        self.assertEqual(linear, 0.0)
+        self.assertAlmostEqual(angular, 0.3 * 0.40 / 0.395)
+        # The MCU counts on its own track and reports what it commanded.
+        self.assertAlmostEqual(drive.measured()[1], 0.3)
+
+    def test_inner_wheel_below_the_deadband_stands(self):
+        drive = ft.Drive(0.40, 0.40)
+        # r 0.27 at 0.3 rad/s: the inner wheel would run 0.021 m/s, the base pivots on it.
+        linear, angular = drive.move(0.081, 0.3, 0.06)
+        self.assertEqual(drive.left, 0.0)
+        self.assertAlmostEqual(drive.right, 0.141)
+        self.assertAlmostEqual(linear / angular, 0.20)
+        self.assertEqual(drive.measured(), (linear, angular))
+
+    def test_slow_pivot_below_the_deadband_does_not_turn(self):
+        drive = ft.Drive(0.40, 0.40)
+        self.assertEqual(drive.move(0.0, 0.25, 0.06), (0.0, 0.0))
+        self.assertEqual(drive.measured(), (0.0, 0.0))
+        # 0.3 rad/s gives 0.06 m/s on each wheel: the edge, it turns.
+        self.assertAlmostEqual(drive.move(0.0, 0.3, 0.06)[1], 0.3)
+
+    def test_odometry_scale_changes_only_the_report(self):
+        drive = ft.Drive(0.40, 0.40)
+        self.assertAlmostEqual(drive.move(0.2, 0.1)[0], 0.2)
+        linear, angular = drive.measured(0.94)
+        self.assertAlmostEqual(linear, 0.188)
+        self.assertAlmostEqual(angular, 0.094)
+
+
+class HistoryTest(unittest.TestCase):
+    def test_late_values_and_the_limit(self):
+        history = ft.History(limit=1.0)
+        # Steps of 1/64 s are exact in binary.
+        for i in range(97):
+            history.push(i / 64.0, i)
+        # now 1.5 s: 0.125 s late is the value of 1.375 s, everything older than 1 s is gone.
+        self.assertEqual(history.get(1.5, 0.0), 96)
+        self.assertEqual(history.get(1.5, 0.125), 88)
+        self.assertEqual(history.get(1.5, 5.0), 32)
+        self.assertEqual(history.get(1.5, -1.0), 96)
+        self.assertEqual(len(history.items), 65)
+
+    def test_too_young_history_gives_the_oldest(self):
+        history = ft.History()
+        history.push(0.0, "a")
+        history.push(0.01, "b")
+        self.assertEqual(history.get(0.01, 0.5), "a")
+
+
 class HostLinkTest(unittest.TestCase):
     def test_no_traffic_no_motion(self):
         host = ft.HostLink(2.0)
@@ -417,6 +477,28 @@ class ProcessTest(unittest.TestCase):
         self.set_flags(gnss_noise=0.5)
         self.assertGreater(len(latitudes()), 3)
         self.set_flags()
+
+    def test_2c_wheel_odometry_and_delay_flags(self):
+        self.set_flags(odom_scale=0.94)
+        speeds = self.speed_frames(self.drive(0.2, 0.0, 0.5))
+        self.assertAlmostEqual(speeds[-1][0], 0.188, places=5)
+        # A slow pivot below the deadband: the wheels stand, the report says so.
+        self.set_flags(wheel_deadband=0.06)
+        start = self.state()
+        speeds = self.speed_frames(self.drive(0.0, 0.25, 0.6))
+        self.assertEqual(speeds[-1], (0.0, 0.0))
+        self.assertAlmostEqual(self.state()["yaw"], start["yaw"], places=9)
+        # The position is sent 0.5 s late with the time of its epoch.
+        self.set_flags(gnss_delay=0.5)
+        read_available(self.fds["gnss"], 0.3)
+        lines = read_available(self.fds["gnss"], 0.5).decode().splitlines()
+        now = datetime.datetime.now(datetime.timezone.utc)
+        hhmmss = [l for l in lines if l[3:6] == "GGA"][-1].split(",")[1]
+        sent = now.replace(hour=int(hhmmss[:2]), minute=int(hhmmss[2:4]), second=0, microsecond=0)
+        late = (now - sent).total_seconds() - float(hhmmss[4:])
+        self.assertAlmostEqual(late, 0.5, delta=0.3)
+        self.set_flags()
+        read_available(self.fds["mcu"], 0.9)
 
     def test_3_imu_rate_and_content(self):
         read_available(self.fds["imu"], 0.2)
