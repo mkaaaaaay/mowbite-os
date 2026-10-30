@@ -78,6 +78,8 @@ class World:
         with self.lock:
             self.x, self.y, self.yaw = x, y, yaw
             self.v = self.w = 0.0
+        # The follower checks the next goal against the pose it has; under load the new one takes a while.
+        time.sleep(0.3)
 
     def _cmd(self, msg):
         with self.lock:
