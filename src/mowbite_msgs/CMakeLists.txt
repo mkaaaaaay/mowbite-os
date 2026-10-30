@@ -28,6 +28,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PositionJump.msg"
   "msg/Outline.msg"
   "msg/GpsLimits.msg"
+  "msg/Rtcm.msg"
+  "msg/NtripStatus.msg"
   "srv/AddArea.srv"
   "srv/ReplaceMap.srv"
   "srv/SetBlade.srv"
