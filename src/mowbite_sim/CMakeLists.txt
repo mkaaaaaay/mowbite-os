@@ -18,6 +18,8 @@ if(BUILD_TESTING)
   add_launch_test(test/test_follower_stall.py TIMEOUT 240)
   add_launch_test(test/test_safety_inputs.py TIMEOUT 120)
   add_launch_test(test/test_params.py TIMEOUT 120)
+  add_launch_test(test/test_full_run.py TARGET test_full_run_ideal TIMEOUT 1200)
+  add_launch_test(test/test_full_run.py TARGET test_full_run_real TIMEOUT 1200 ENV MOWBITE_FULL_RUN=real)
 endif()
 
 ament_package()

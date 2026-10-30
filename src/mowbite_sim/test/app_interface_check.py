@@ -1,7 +1,9 @@
 """Checks a mower against the OpenMower app interface the way the app uses it (masterplan 3.8).
 
 Read-only by default: what the mower publishes and answers without being asked to act. --write adds the steps that act
-(map.replace, actions, teleop, flags); it needs the simulated MowBite OS, which alone offers the RPC sim.flags.
+(map.replace, actions, teleop, flags); it needs the simulated MowBite OS, which alone offers the RPC sim.flags, freshly
+started: it checks the state since the start and reads the frames from --sim-log, which fake_tron stops writing at its
+--log-max-mb (20 MB, about an hour).
 stdout: one JSON document with a status (ok, missing, different, skipped) per point; PASS/FAIL/SKIP lines go to stderr.
 Exit 0 without missing or different, 1 with, 2 for a wrong call or a mower that cannot be reached.
 """
