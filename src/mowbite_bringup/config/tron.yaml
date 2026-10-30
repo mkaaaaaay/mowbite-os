@@ -44,7 +44,29 @@ tron_gnss:
     # RTK fixed on corrections older than max_correction_age s, or without their age in GGA, counts as float (G7).
     # Assumption until phase 7.
     max_correction_age: 30.0
+    # RTK board in front of the UM960: $GNRTK,ON every board_keepalive s while RTCM came within board_active_window s,
+    # RTKRESET when it falls back from ON on its own. RTCM goes to the port only while it reports ON (board_gate).
+    board_keepalive: 4.0
+    board_active_window: 10.0
+    board_reset_on_off: true
+    board_gate: true
     # datum_lat, datum_long and datum_height of the garden go into the parameter file on the Tron, not here.
+
+mowbite_ntrip:
+  ros__parameters:
+    # Access in data_dir/ntrip.yaml (host, port, mountpoint, user, password, version), filled in by the user on the
+    # mower, mode 600; template in mowbite_bringup/config/ntrip.yaml.example. Read every config_check s.
+    config_check: 5.0
+    connect_timeout: 10.0
+    # After a failure the next attempt after first_retry s, doubled up to max_retry; after a refused login rejected_retry
+    # (or at once when the file changes). No byte for data_timeout s ends a connection. GGA every gga_interval s.
+    first_retry: 5.0
+    max_retry: 300.0
+    rejected_retry: 300.0
+    data_timeout: 15.0
+    gga_interval: 10.0
+    # The CORRECTIONS event LOST after this long without corrections, RESTORED once when they are back.
+    lost_after: 60.0
 
 tron_imu:
   ros__parameters:

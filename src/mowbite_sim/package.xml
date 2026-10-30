@@ -33,6 +33,7 @@
   <test_depend>mowbite_bridge</test_depend>
   <test_depend>mowbite_map</test_depend>
   <test_depend>mowbite_follower</test_depend>
+  <test_depend>mowbite_ntrip</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
