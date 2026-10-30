@@ -3,3 +3,9 @@ tron_mcu:
   ros__parameters:
     # fake_tron stands in for the safety measurement, so that the simulation drives on its own. Never on a device.
     safety_measurement_date: "simulation"
+
+mowbite_localization:
+  ros__parameters:
+    # fake_tron puts the antenna 0.098 m ahead of the base (its --antenna-offset); the localization has to know it.
+    antenna_offset_x: 0.098
+    antenna_offset_y: 0.0
