@@ -55,8 +55,8 @@ struct LogicConfig {
   double battery_full_voltage = 25.2;
   // The MCU reports no charge voltage, dock contact stands in for it.
   double dock_charge_voltage = 28.0;
-  // GPS counts as good up to this accuracy (m), like max_position_accuracy of OpenMower. The localization reads the
-  // same parameter (tron.yaml, /**).
+  // GPS counts as good up to this accuracy (m), like max_position_accuracy of OpenMower. The localization and the
+  // follower take it from the logic (logic/gps_limits).
   double max_position_accuracy = 0.1;
   // Its max_position_accuracy is the one above.
   RecorderConfig recorder;
@@ -233,6 +233,10 @@ class LogicCore {
   // A start refused by the node (planner or follower missing): event MOWING_REFUSED.
   void RefuseStart(const Reason& why);
   bool Mowing() const;
+  // IDLE without a drive: no recording, no job (also paused). Settings change only then.
+  bool Idle() const;
+  // GPS settings of params.set for the position, the recording and mowing on after a bad position.
+  void SetGpsSettings(double max_position_accuracy, double gps_wait_time);
   // Called whenever the node has nothing on its way for the job; the step it returns is on its way until its result
   // comes back. now_s is a monotonic clock.
   JobStep NextJobStep(double now_s);

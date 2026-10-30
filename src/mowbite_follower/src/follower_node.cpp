@@ -96,8 +96,11 @@ class FollowerNode : public rclcpp::Node {
             RCLCPP_ERROR(get_logger(), "Ignored accuracy limit %g m from the logic", msg->max_position_accuracy);
             return;
           }
-          std::lock_guard<std::mutex> lock(mutex_);
-          guard_config_.max_position_accuracy = msg->max_position_accuracy;
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            guard_config_.max_position_accuracy = msg->max_position_accuracy;
+          }
+          RCLCPP_INFO(get_logger(), "Accuracy limit %.3f m", msg->max_position_accuracy);
         });
 
     server_ = rclcpp_action::create_server<FollowPath>(

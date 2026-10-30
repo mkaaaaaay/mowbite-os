@@ -654,6 +654,16 @@ bool LogicCore::Mowing() const {
   return state_ == State::kMowing;
 }
 
+bool LogicCore::Idle() const {
+  return state_ == State::kIdle;
+}
+
+void LogicCore::SetGpsSettings(double max_position_accuracy, double gps_wait_time) {
+  config_.max_position_accuracy = max_position_accuracy;
+  config_.gps_wait_time = gps_wait_time;
+  recorder_.SetMaxPositionAccuracy(max_position_accuracy);
+}
+
 void LogicCore::StartMowing() {
   // Planned anew on every start, the map may have changed; the fingerprint keeps the place if the plan is the same.
   job_.Restore(job_.progress());

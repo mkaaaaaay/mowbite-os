@@ -65,6 +65,11 @@ class AreaRecorder {
 
   explicit AreaRecorder(const RecorderConfig& config);
 
+  // From the next point on.
+  void SetMaxPositionAccuracy(double accuracy) {
+    config_.max_position_accuracy = accuracy;
+  }
+
   // Drops everything recorded and not saved; an edit on its way is still reported when it is answered.
   void Reset();
   // An action of mower_logic:area_recording without the prefix, except exit_recording_mode.

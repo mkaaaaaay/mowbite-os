@@ -322,6 +322,36 @@ TEST(LogicMowing, AfterBadGpsItGoesOnByItselfOnceThePositionIsGoodLongEnough) {
   EXPECT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kRejected);
 }
 
+TEST(LogicMowing, GpsSettingsCountAtOnceAndOnlyIdleTakesSettings) {
+  LogicCore core = Ready();
+  EXPECT_TRUE(core.Idle());
+  // The pose is at 0.02 m.
+  core.SetGpsSettings(0.01, 10);
+  const Reason problem = core.StartProblem();
+  EXPECT_EQ(problem.code, "POSITION_ACCURACY");
+  EXPECT_DOUBLE_EQ(problem.fields["limit"].get<double>(), 0.01);
+  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_mowing"));
+  core.SetGpsSettings(0.1, 10);
+  EXPECT_TRUE(core.StartProblem().empty());
+  EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  EXPECT_FALSE(core.Idle());
+  core.OnAction(kMowing + "pause");
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_FALSE(core.Idle());
+}
+
+TEST(LogicMowing, GpsWaitTimeOfTheSettings) {
+  LogicCore core = Following();
+  core.SetGpsSettings(0.1, 3);
+  core.OnLegEnded(LegEnd::kGps, 2, Reason("POSITION_ACCURACY", "Position accuracy 0.30 m"));
+  core.OnPose(PoseAt(2, 2));
+  core.OnTick(200);
+  core.OnTick(202.9);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  core.OnTick(203);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+}
+
 TEST(LogicMowing, TheBladeOnlyOnMowSegmentsAndOnlyWhenAllowed) {
   LogicCore off = Following();
   off.OnJobProgress(2);

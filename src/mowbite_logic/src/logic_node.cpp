@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -12,6 +13,7 @@
 #include <mowbite_msgs/action/follow_path.hpp>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
+#include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/map_status.hpp>
@@ -45,6 +47,7 @@
 
 #include "mowbite_bridge/monitor.h"
 #include "mowbite_logic/logic_core.h"
+#include "mowbite_logic/logic_params.h"
 #include "mowbite_logic/mowing_plan.h"
 
 namespace mowbite_logic {
@@ -174,8 +177,10 @@ class LogicNode : public rclcpp::Node {
     pose_timeout_s_ = declare_parameter("pose_timeout", 2.0);
     // mowbite_map answers at once; a recording waits this long (s) before it counts as not saved.
     map_edit_timeout_s_ = declare_parameter("map_edit_timeout", 5.0);
-    // The checkpoint of the mowing job; empty: none, a restart starts over.
+    // The checkpoint of the mowing job and the settings of params.set; empty: none, a restart starts over with
+    // tron.yaml.
     data_dir_ = declare_parameter("data_dir", std::string());
+    LoadLogicParams();
     // The blade: a lease of blade_lease (s), renewed every blade_renew (s) while the logic wants it to turn.
     blade_lease_s_ = declare_parameter("blade_lease", 1.0);
     blade_renew_s_ = declare_parameter("blade_renew", 0.5);
@@ -199,6 +204,12 @@ class LogicNode : public rclcpp::Node {
     std_msgs::msg::String board_msg;
     board_msg.data = nlohmann::json{{"node", "/ll"}, {"params", {{"board", declare_parameter("board", "Tron")}}}}.dump();
     params_pub_->publish(board_msg);
+    // Publishers of their own, so a run of params.set never pushes /ll/board out of the history above.
+    logic_params_pub_ = create_publisher<std_msgs::msg::String>(
+        "bridge/params", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+    gps_limits_pub_ =
+        create_publisher<mowbite_msgs::msg::GpsLimits>("logic/gps_limits", rclcpp::QoS(1).reliable().transient_local());
+    PublishLogicParams();
     emergency_client_ = create_client<mowbite_msgs::srv::SetEmergency>("hw/emergency");
     add_area_client_ = create_client<mowbite_msgs::srv::AddArea>("map/add_area");
     set_dock_client_ = create_client<mowbite_msgs::srv::SetDock>("map/set_dock");
@@ -222,7 +233,7 @@ class LogicNode : public rclcpp::Node {
         });
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_logic";
-    methods.methods = {"mowing.plan"};
+    methods.methods = {"mowing.plan", "params.set"};
     rpc_methods_pub_->publish(methods);
 
     hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
@@ -924,6 +935,10 @@ class LogicNode : public rclcpp::Node {
 
   void OnRpcRequest(const mowbite_msgs::msg::RpcRequest& request) {
     // The bridge hands every registered method to every node, the others answer theirs.
+    if (request.method == "params.set") {
+      OnParamsSet(request);
+      return;
+    }
     if (request.method != "mowing.plan") return;
     json params;
     if (!request.params.empty()) {
@@ -959,6 +974,116 @@ class LogicNode : public rclcpp::Node {
                                    OnPlanAnswer(seq, *f.get());
                                  })
             .request_id;
+  }
+
+  // Only in IDLE and all or nothing; a change counts once it is saved.
+  void OnParamsSet(const mowbite_msgs::msg::RpcRequest& request) {
+    using mowbite_msgs::msg::RpcError;
+    json params;
+    if (!request.params.empty()) {
+      params = json::parse(request.params, nullptr, false);
+      if (params.is_discarded()) {
+        PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS, "The parameters are not valid JSON");
+        return;
+      }
+    }
+    ParamsResult result;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!core_.Idle()) {
+        PublishRpcError(request.id, RpcError::ERROR_INVALID_REQUEST,
+                        "Settings change only in IDLE, not while recording, driving or mowing");
+        return;
+      }
+      LogicParams changed = logic_params_;
+      result = changed.Set(params);
+      if (!result.ok) {
+        PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS, result.message);
+        return;
+      }
+      std::string error;
+      if (!SaveLogicParams(changed, error)) {
+        RCLCPP_ERROR(get_logger(), "params.set: %s", error.c_str());
+        PublishRpcError(request.id, RpcError::ERROR_INTERNAL, "Cannot save the settings: " + error);
+        return;
+      }
+      logic_params_ = std::move(changed);
+      core_.SetGpsSettings(logic_params_.Get("max_position_accuracy"), logic_params_.Get("gps_wait_time"));
+    }
+    RCLCPP_INFO(get_logger(), "params.set: %s", result.applied.dump().c_str());
+    PublishLogicParams();
+    Flush();
+    mowbite_msgs::msg::RpcResponse msg;
+    msg.result = result.applied.dump();
+    msg.id = request.id;
+    rpc_response_pub_->publish(msg);
+  }
+
+  // <data_dir>/params/mower_logic.json, written like the checkpoint.
+  std::string LogicParamsPath() const {
+    return data_dir_.empty() ? "" : data_dir_ + "/params/mower_logic.json";
+  }
+
+  // tron.yaml, then what params.set saved. A file that cannot be read stays as it is, tron.yaml holds.
+  void LoadLogicParams() {
+    json base = json::object();
+    base["max_position_accuracy"] = get_parameter("max_position_accuracy").as_double();
+    base["gps_wait_time"] = get_parameter("gps_wait_time").as_double();
+    base["gps_timeout"] = declare_parameter("gps_timeout", 10.0);
+    logic_params_ = LogicParams(base);
+    const std::string path = LogicParamsPath();
+    if (path.empty()) {
+      RCLCPP_WARN(get_logger(), "No data_dir: what params.set changes is gone after a restart");
+    } else if (std::ifstream in(path); in) {
+      std::stringstream text;
+      text << in.rdbuf();
+      if (logic_params_.Load(text.str())) {
+        RCLCPP_INFO(get_logger(), "Settings from %s", path.c_str());
+      } else {
+        RCLCPP_ERROR(get_logger(), "%s is not valid, the settings of tron.yaml hold", path.c_str());
+      }
+    }
+    core_.SetGpsSettings(logic_params_.Get("max_position_accuracy"), logic_params_.Get("gps_wait_time"));
+  }
+
+  bool SaveLogicParams(const LogicParams& params, std::string& error) {
+    const std::string path = LogicParamsPath();
+    if (path.empty()) return true;
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+    if (ec) {
+      error = "cannot create the folder of " + path + ": " + ec.message();
+      return false;
+    }
+    const std::string temp = path + ".new";
+    {
+      std::ofstream out(temp, std::ios::trunc);
+      out << params.Text();
+      if (!out.flush()) {
+        error = "cannot write " + temp;
+        return false;
+      }
+    }
+    if (std::rename(temp.c_str(), path.c_str()) != 0) {
+      error = "cannot replace " + path;
+      return false;
+    }
+    return true;
+  }
+
+  void PublishLogicParams() {
+    LogicParams params;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      params = logic_params_;
+    }
+    std_msgs::msg::String msg;
+    msg.data = json{{"node", kLogicParamsNode}, {"params", params.Values()}}.dump();
+    logic_params_pub_->publish(msg);
+    mowbite_msgs::msg::GpsLimits limits;
+    limits.max_position_accuracy = params.Get("max_position_accuracy");
+    limits.gps_timeout = params.Get("gps_timeout");
+    gps_limits_pub_->publish(limits);
   }
 
   void OnPlanAnswer(uint64_t seq, const mowbite_planner_interfaces::srv::PlanCoverage::Response& response) {
@@ -1283,6 +1408,7 @@ class LogicNode : public rclcpp::Node {
   Drive drive_;
   JobPlan job_plan_;
   std::string data_dir_;
+  LogicParams logic_params_;
   double blade_lease_s_ = 1.0;
   double blade_renew_s_ = 0.5;
   float blade_lease_max_s_ = 0;
@@ -1313,6 +1439,8 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr logic_params_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::GpsLimits>::SharedPtr gps_limits_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp::Client<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_client_;
   rclcpp::Client<mowbite_msgs::srv::SetBlade>::SharedPtr blade_client_;
