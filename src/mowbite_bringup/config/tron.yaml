@@ -70,7 +70,8 @@ mowbite_ntrip:
     data_timeout: 15.0
     gga_interval: 10.0
     # The CORRECTIONS event LOST after max_correction_age (/** above) without corrections, RESTORED once when they are
-    # back.
+    # back, SOURCE_CHANGED with the first corrections from another caster, port or mountpoint than the ones used last
+    # (data_dir/ntrip_source.json, kept over restarts and ntrip.delete).
 
 tron_imu:
   ros__parameters:

@@ -61,8 +61,8 @@ TEST(NtripConfig, Errors) {
       {"host: h\nmountpoint: M\nport: 70000\n", "line 3, port: not a port number"},
       {"host: h\nmountpoint: M\nport: 21x\n", "line 3, port: not a port number"},
       {"host: h\nmountpoint: M\nversion: 3\n", "line 3, version: 1 or 2"},
-      {"host: a b\nmountpoint: M\n", "line 1, host: empty or with spaces"},
-      {"host: h\nmountpoint: \n", "line 2, mountpoint: empty or with spaces"},
+      {"host: a b\nmountpoint: M\n", "line 1, host: empty, with spaces or not printable ASCII"},
+      {"host: h\nmountpoint: \n", "line 2, mountpoint: empty, with spaces or not printable ASCII"},
       {"host: h\nmountpoint: M\npassword: \"open\n", "line 3, password: unclosed quote or text after it"},
       {"host: h\nmountpoint: M\nsecret123\n", "line 3: expected key: value"},
   };
@@ -76,6 +76,9 @@ TEST(NtripConfig, Errors) {
 TEST(NtripConfig, UnknownKeyIsNotNamed) {
   std::string error;
   EXPECT_FALSE(ParseNtripConfig("host: h\nmountpoint: M\nhunter2pass: x\n", error));
+  EXPECT_EQ(error, "line 3: unknown key");
+  // Also with an unclosed quote.
+  EXPECT_FALSE(ParseNtripConfig("host: h\nmountpoint: M\nhunter2pass: 'x\n", error));
   EXPECT_EQ(error, "line 3: unknown key");
 }
 
@@ -100,13 +103,26 @@ TEST(NtripConfig, DoubledQuoteInSingleQuotes) {
 
 TEST(NtripConfig, CheckValue) {
   EXPECT_EQ(CheckValue("host", "sapos-ni-ntrip.de"), "");
-  EXPECT_EQ(CheckValue("host", ""), "empty or with spaces");
-  EXPECT_EQ(CheckValue("mountpoint", "VRS 3"), "empty or with spaces");
+  EXPECT_EQ(CheckValue("host", ""), "empty, with spaces or not printable ASCII");
+  EXPECT_EQ(CheckValue("mountpoint", "VRS 3"), "empty, with spaces or not printable ASCII");
   EXPECT_EQ(CheckValue("user", ""), "");
   EXPECT_EQ(CheckValue("password", "with space and 'quote'"), "");
   EXPECT_EQ(CheckValue("password", "line\nbreak"), "control characters");
   EXPECT_EQ(CheckValue("password", std::string(255, 'a')), "");
   EXPECT_EQ(CheckValue("host", std::string(256, 'a')), "longer than 255 bytes");
+  // Host and mountpoint go into JSON: no byte above 0x7E, also where char has no sign (arm64).
+  const std::string not_ascii = "empty, with spaces or not printable ASCII";
+  EXPECT_EQ(CheckValue("host", "caster\xe4.example"), not_ascii);
+  EXPECT_EQ(CheckValue("host", "caster\xc3\xa4.example"), not_ascii);
+  EXPECT_EQ(CheckValue("mountpoint", "VRS\x7f"), not_ascii);
+  EXPECT_EQ(CheckValue("password", "p\xe4ss"), "");
+}
+
+TEST(NtripConfig, NormalMountpoint) {
+  EXPECT_EQ(NormalMountpoint("/VRS"), "VRS");
+  EXPECT_EQ(NormalMountpoint("VRS"), "VRS");
+  EXPECT_EQ(NormalMountpoint("//VRS"), "/VRS");
+  EXPECT_EQ(NormalMountpoint(""), "");
 }
 
 NtripConfig Tricky() {

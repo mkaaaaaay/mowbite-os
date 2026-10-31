@@ -13,10 +13,10 @@ find_package(mowbite_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(mowbite_bridge REQUIRED)
 
-# Access file and its RPC, NTRIP protocol, RTCM frames and the client's states without ROS and sockets, testable on any
-# machine.
-add_library(mowbite_ntrip_core STATIC src/rtcm.cpp src/ntrip_config.cpp src/ntrip_access.cpp src/ntrip_protocol.cpp
-  src/ntrip_client.cpp)
+# Access file and its RPC, the source used last, NTRIP protocol, RTCM frames and the client's states without ROS and
+# sockets, testable on any machine.
+add_library(mowbite_ntrip_core STATIC src/rtcm.cpp src/ntrip_config.cpp src/ntrip_access.cpp src/ntrip_source.cpp
+  src/ntrip_protocol.cpp src/ntrip_client.cpp)
 target_include_directories(mowbite_ntrip_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -40,7 +40,7 @@ install(TARGETS mowbite_ntrip_core mowbite_ntrip_component
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(mowbite_ntrip_test test/test_rtcm.cpp test/test_ntrip_config.cpp test/test_ntrip_access.cpp
-    test/test_ntrip_protocol.cpp test/test_ntrip_client.cpp)
+    test/test_ntrip_source.cpp test/test_ntrip_protocol.cpp test/test_ntrip_client.cpp)
   target_link_libraries(mowbite_ntrip_test mowbite_ntrip_core)
 endif()
 

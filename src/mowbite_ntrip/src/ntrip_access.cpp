@@ -60,7 +60,7 @@ AccessChange ChangeAccess(const json& params, const std::optional<NtripConfig>& 
     if (!params.contains(key)) return refuse(key + ": missing");
     if (!params[key].is_string()) return refuse(key + ": not a text");
     std::string value = params[key].get<std::string>();
-    if (key == "mountpoint" && !value.empty() && value[0] == '/') value.erase(0, 1);
+    if (key == "mountpoint") value = NormalMountpoint(value);
     const std::string problem = CheckValue(key, value);
     if (!problem.empty()) return refuse(key + ": " + problem);
     (key == "host" ? config.host : config.mountpoint) = value;

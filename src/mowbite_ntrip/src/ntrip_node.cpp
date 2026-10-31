@@ -28,6 +28,7 @@
 #include "mowbite_ntrip/ntrip_access.h"
 #include "mowbite_ntrip/ntrip_client.h"
 #include "mowbite_ntrip/ntrip_config.h"
+#include "mowbite_ntrip/ntrip_source.h"
 
 namespace mowbite_ntrip {
 
@@ -63,18 +64,30 @@ bool SendAll(int fd, const std::string& data, int timeout_ms) {
   return true;
 }
 
+// host, port and mountpoint of SOURCE_CHANGED, with prefix "" or "previous_".
+void PutSource(mowbite_bridge::json& details, const std::string& prefix, const CorrectionSource& source) {
+  details[prefix + "host"] = source.host;
+  details[prefix + "port"] = source.port;
+  details[prefix + "mountpoint"] = source.mountpoint;
+}
+
+std::string SourceText(const CorrectionSource& source) {
+  return source.host + ":" + std::to_string(source.port) + "/" + source.mountpoint;
+}
+
 }  // namespace
 
 // NTRIP client: reads the access from <data_dir>/ntrip.yaml, publishes the caster's RTCM frames on gnss/rtcm for the
 // GNSS driver and sends the receiver's GGA (gnss/gga) back. Status on gnss/ntrip_status, the sensor os_ntrip_state and
 // CORRECTIONS events; none of them carries user or password, nor do the answers of ntrip.get, ntrip.set and
-// ntrip.delete.
+// ntrip.delete. The source used last stays in <data_dir>/ntrip_source.json, also over restarts and ntrip.delete.
 class NtripNode : public rclcpp::Node {
  public:
   explicit NtripNode(const rclcpp::NodeOptions& options) : rclcpp::Node("mowbite_ntrip", options), client_(Timing()) {
     const std::string data_dir = declare_parameter("data_dir", "/userdata/mowbite");
     file_ = declare_parameter("access_file", "");
     if (file_.empty()) file_ = (std::filesystem::path(data_dir) / "ntrip.yaml").string();
+    source_file_ = (std::filesystem::path(data_dir) / "ntrip_source.json").string();
     connect_timeout_s_ = declare_parameter("connect_timeout", 10.0);
     config_check_s_ = declare_parameter("config_check", 5.0);
     access_over_rpc_ = declare_parameter("access_over_rpc", false);
@@ -109,6 +122,12 @@ class NtripNode : public rclcpp::Node {
     info.value_description = mowbite_msgs::msg::SensorInfo::VALUE_DESCRIPTION_UNKNOWN;
     sensor_info_pub_->publish(info);
 
+    const SourceFile last = ReadSourceFile(source_file_);
+    if (last.exists && !last.source) {
+      RCLCPP_WARN(get_logger(), "%s: %s; the next corrections replace it without SOURCE_CHANGED", source_file_.c_str(),
+                  last.error.c_str());
+    }
+    client_.SetLastSource(last.source);
     io_thread_ = std::thread([this] { Loop(); });
   }
 
@@ -372,18 +391,31 @@ class NtripNode : public rclcpp::Node {
   void OnBytes(const uint8_t* data, size_t size, double now) {
     std::vector<std::vector<uint8_t>> frames;
     bool connected_now = false;
+    std::optional<CorrectionSource> used;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       const ClientState before = client_.state();
       client_.OnBytes(data, size, now, frames);
       connected_now = before != ClientState::kConnected && client_.state() == ClientState::kConnected;
+      used = client_.TakeSourceToSave();
     }
     if (connected_now) RCLCPP_INFO(get_logger(), "NTRIP connected, corrections follow");
-    if (frames.empty()) return;
-    mowbite_msgs::msg::Rtcm msg;
-    msg.header.stamp = this->now();
-    for (const auto& frame : frames) msg.data.insert(msg.data.end(), frame.begin(), frame.end());
-    rtcm_pub_->publish(msg);
+    if (!frames.empty()) {
+      mowbite_msgs::msg::Rtcm msg;
+      msg.header.stamp = this->now();
+      for (const auto& frame : frames) msg.data.insert(msg.data.end(), frame.begin(), frame.end());
+      rtcm_pub_->publish(msg);
+    }
+    // After the frames, which need not wait for the disk.
+    if (used) SaveSource(*used);
+  }
+
+  // The next change, also after a restart, is compared with this source.
+  void SaveSource(const CorrectionSource& source) {
+    std::string error;
+    if (!WriteSourceFile(source_file_, source, error)) {
+      RCLCPP_ERROR(get_logger(), "Cannot save the source of the corrections: %s", error.c_str());
+    }
   }
 
   void SendGga(double now) {
@@ -428,16 +460,21 @@ class NtripNode : public rclcpp::Node {
       return;
     }
     for (const auto& event : pending_) {
-      mowbite_bridge::json details = {{"reason", event.reason},
-                                      {"message", event.message},
-                                      {"severity", event.severity},
-                                      {"resume", event.resume}};
+      mowbite_bridge::json details = {
+          {"reason", event.reason}, {"message", event.message}, {"severity", event.severity}};
+      if (!event.resume.empty()) details["resume"] = event.resume;
       if (event.code) details["code"] = event.code;
       if (event.limit > 0) details["limit"] = event.limit;
+      std::string text = event.message;
+      if (event.source && event.previous) {
+        PutSource(details, "", *event.source);
+        PutSource(details, "previous_", *event.previous);
+        text += " (" + SourceText(*event.previous) + " before, now " + SourceText(*event.source) + ")";
+      }
       if (event.severity == "info") {
-        RCLCPP_INFO(get_logger(), "Corrections: %s", event.message.c_str());
+        RCLCPP_INFO(get_logger(), "Corrections: %s", text.c_str());
       } else {
-        RCLCPP_WARN(get_logger(), "Corrections: %s", event.message.c_str());
+        RCLCPP_WARN(get_logger(), "Corrections: %s", text.c_str());
       }
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "events/json";
@@ -448,6 +485,7 @@ class NtripNode : public rclcpp::Node {
   }
 
   std::string file_;
+  std::string source_file_;
   double connect_timeout_s_ = 10.0;
   double config_check_s_ = 5.0;
   // ntrip.set and ntrip.delete; off until MQTT writes need a login and rpc/request is not readable without one (G13).

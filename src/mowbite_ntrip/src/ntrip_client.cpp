@@ -12,6 +12,11 @@ bool IsGga(const std::string& s) {
          s[s.size() - 3] == '*' && s.find_first_of("\r\n") == std::string::npos;
 }
 
+// "may": the new source can just as well have the same reference.
+const char kSourceChanged[] =
+    "Corrections from another caster or mountpoint: positions may be offset from the map if its reference differs; a "
+    "change between sources with the same reference moves nothing";
+
 }  // namespace
 
 const char* StateName(ClientState state) {
@@ -28,6 +33,7 @@ const char* StateName(ClientState state) {
 void NtripClient::SetConfig(const std::optional<NtripConfig>& config, double now) {
   if (config == config_) return;
   config_ = config;
+  source_checked_ = false;
   retry_delay_ = timing_.first_retry_s;
   next_attempt_ = now;
   // A new access may be refused again: that is worth an event again.
@@ -102,6 +108,7 @@ void NtripClient::OnBytes(const uint8_t* data, size_t size, double now, std::vec
     retry_delay_ = timing_.first_retry_s;
     last_error_.clear();
     rejected_reported_ = false;
+    if (!source_checked_ && config_) UseSource();
     if (lost_reported_) {
       lost_reported_ = false;
       events_.push_back({"RESTORED", "Corrections from the NTRIP caster again", "info", "auto", 0, 0});
@@ -169,6 +176,31 @@ std::vector<ClientEvent> NtripClient::TakeEvents() {
   std::vector<ClientEvent> events;
   events.swap(events_);
   return events;
+}
+
+void NtripClient::SetLastSource(const std::optional<CorrectionSource>& source) {
+  last_source_ = source;
+}
+
+std::optional<CorrectionSource> NtripClient::TakeSourceToSave() {
+  std::optional<CorrectionSource> source;
+  source.swap(source_to_save_);
+  return source;
+}
+
+void NtripClient::UseSource() {
+  source_checked_ = true;
+  const CorrectionSource source = SourceOf(*config_);
+  if (last_source_ && !SameSource(*last_source_, source)) {
+    ClientEvent event{"SOURCE_CHANGED", kSourceChanged, "warning", ""};
+    event.source = source;
+    event.previous = last_source_;
+    events_.push_back(event);
+  }
+  if (last_source_ != source) {
+    last_source_ = source;
+    source_to_save_ = source;
+  }
 }
 
 std::optional<double> NtripClient::last_frame_age(double now) const {

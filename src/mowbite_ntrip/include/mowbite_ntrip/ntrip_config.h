@@ -1,6 +1,8 @@
 #ifndef MOWBITE_NTRIP_NTRIP_CONFIG_H
 #define MOWBITE_NTRIP_NTRIP_CONFIG_H
 
+#include <sys/types.h>
+
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -30,12 +32,16 @@ struct NtripConfig {
 constexpr size_t kMaxValueLength = 255;
 
 // What is wrong with a host, mountpoint (without its leading '/'), user or password given as key; empty if nothing.
-// Never contains the value.
+// Host and mountpoint are printable ASCII without spaces. Never contains the value.
 std::string CheckValue(const std::string& key, const std::string& value);
+
+// The mountpoint as the file and ntrip.set store it: a leading '/' falls away.
+std::string NormalMountpoint(const std::string& mountpoint);
 
 // Reads the flat file: one "key: value" per line, the value optionally in single or double quotes ('' in single quotes
 // stands for one, as in YAML), '#' starts a comment outside of quotes. Keys: host, port, mountpoint, user, password,
-// version. Unknown keys and invalid values are errors; error names the line and the key, never a value.
+// version. Unknown keys and invalid values are errors; error names the line and a known key, never a value or an
+// unknown key.
 std::optional<NtripConfig> ParseNtripConfig(const std::string& text, std::string& error);
 
 // The file text of config, which ParseNtripConfig reads back as the same config.
@@ -53,9 +59,11 @@ struct AccessFile {
 };
 AccessFile ReadAccessFile(const std::string& path);
 
-// Writes config to path with mode 600: a new file beside it, synced, then renamed over the old one. error names the
-// file and the cause, never a value.
+// Writes config to path with mode 600 by ReplaceFile. error names the file and the cause, never a value.
 bool WriteAccessFile(const std::string& path, const NtripConfig& config, std::string& error);
+// Writes text to path: a new file beside it with mode from the start, synced, then renamed over the old one. error
+// names the file and the cause.
+bool ReplaceFile(const std::string& path, const std::string& text, mode_t mode, std::string& error);
 // Removes the file; true when it is gone, also when there was none.
 bool RemoveAccessFile(const std::string& path, std::string& error);
 

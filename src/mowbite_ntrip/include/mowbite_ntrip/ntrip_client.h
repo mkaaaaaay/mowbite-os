@@ -8,6 +8,7 @@
 
 #include "mowbite_ntrip/ntrip_config.h"
 #include "mowbite_ntrip/ntrip_protocol.h"
+#include "mowbite_ntrip/ntrip_source.h"
 #include "mowbite_ntrip/rtcm.h"
 
 namespace mowbite_ntrip {
@@ -31,15 +32,19 @@ enum class ClientState { kOff, kWaiting, kConnecting, kConnected, kRejected };
 // Name in gnss/ntrip_status and the sensor: off, waiting, connecting, connected, rejected.
 const char* StateName(ClientState state);
 
-// For events/json: reason LOST, RESTORED or REJECTED with the fields of contract 3.1a.
+// For events/json: reason LOST, RESTORED, REJECTED or SOURCE_CHANGED with the fields of contract 3.1a.
 struct ClientEvent {
   std::string reason;
   std::string message;
   std::string severity;
+  // Empty for none: SOURCE_CHANGED holds nothing up.
   std::string resume;
   // REJECTED: the HTTP status; LOST: the limit in s. 0: not set.
   int code = 0;
   double limit = 0;
+  // SOURCE_CHANGED: the source now in use and the one used before.
+  std::optional<CorrectionSource> source = std::nullopt;
+  std::optional<CorrectionSource> previous = std::nullopt;
 };
 
 // The NTRIP client without sockets and clocks: the node opens and closes the connection, passes the bytes and the
@@ -75,6 +80,12 @@ class NtripClient {
   void Tick(double now);
   std::vector<ClientEvent> TakeEvents();
 
+  // The source whose corrections were used last, as saved; nullopt before the first. The first frame of an access from
+  // another source gives SOURCE_CHANGED once; the first source of all gives none.
+  void SetLastSource(const std::optional<CorrectionSource>& source);
+  // The source to save, once its first frame came and it differs from the last one in any way, also only in spelling.
+  std::optional<CorrectionSource> TakeSourceToSave();
+
   ClientState state() const {
     return state_;
   }
@@ -99,6 +110,9 @@ class NtripClient {
   double retry_in(double now) const;
 
  private:
+  // With the first frame of an access: SOURCE_CHANGED against the source used last, which it then replaces.
+  void UseSource();
+
   ClientTiming timing_;
   std::optional<NtripConfig> config_;
   ClientState state_ = ClientState::kOff;
@@ -122,6 +136,10 @@ class NtripClient {
   uint64_t crc_errors_ = 0;
   bool lost_reported_ = false;
   bool rejected_reported_ = false;
+  std::optional<CorrectionSource> last_source_;
+  std::optional<CorrectionSource> source_to_save_;
+  // The frames of this access were compared with last_source_.
+  bool source_checked_ = false;
   std::vector<ClientEvent> events_;
 };
 
