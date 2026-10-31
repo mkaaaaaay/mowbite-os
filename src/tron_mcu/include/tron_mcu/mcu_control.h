@@ -129,6 +129,9 @@ class McuControl {
   // Switching off always works. Switching on, or renewing the lease with the same or another setting, is refused when
   // the configuration forbids the blade, the request is out of range, the mower is blocked or on the dock.
   BladeResult SetBlade(const BladeRequest& request, double now);
+  // Not allowed: Charge 0 at once, repeat_count times, and no Charge 1 until allowed again or the contact ends, so
+  // that the mower leaves the station without charging. Allowed: Charge 1 at the next tick while there is contact.
+  void SetCharging(bool allowed, double now);
   // The MCU state is unknown after the port (re)opens: the blade goes off and moving wheels get a stop.
   void OnConnected(double now);
 
@@ -209,6 +212,8 @@ class McuControl {
   bool dock_raw_ = false;
   bool charge_sent_ = false;
   double last_charge_s_ = 0;
+  // Charging was stopped on request; it stays off while this contact lasts.
+  bool charge_stopped_ = false;
 
   // Unknown until the first version frame after the port opened.
   std::optional<bool> firmware_ok_;
@@ -225,6 +230,7 @@ class McuControl {
 
   Repeat stop_repeat_;
   Repeat blade_off_repeat_;
+  Repeat charge_off_repeat_;
 };
 
 }  // namespace tron

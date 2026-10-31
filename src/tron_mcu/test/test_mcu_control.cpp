@@ -682,6 +682,81 @@ TEST_F(ControlTest, ChargeOnlyOnDebouncedContact) {
   EXPECT_EQ(Times([](const SubPacket& p) { return IsModule(p, Module::kCharge); }).size(), 3u);
 }
 
+bool IsChargeOn(const SubPacket& packet) {
+  return IsModule(packet, Module::kCharge) && packet.payload[0] == 1;
+}
+
+bool IsChargeOff(const SubPacket& packet) {
+  return IsModule(packet, Module::kCharge) && packet.payload[0] == 0;
+}
+
+TEST_F(ControlTest, ChargingOffOnRequestUntilTheContactEnds) {
+  Run(0.1);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  Run(1.0);
+  ASSERT_EQ(Times(IsChargeOn).size(), 1u);
+  control_.SetCharging(false, now_);
+  Run(70.0);
+  // Three off frames 100 ms apart, then no Charge 1 while this contact lasts, not even after charge_resend_s.
+  const auto offs = Times(IsChargeOff);
+  ASSERT_EQ(offs.size(), 3u);
+  EXPECT_NEAR(offs[0], 1.01, 0.005);
+  EXPECT_NEAR(offs[2] - offs[0], 0.2, 0.005);
+  EXPECT_EQ(Times(IsChargeOn).size(), 1u);
+  EXPECT_TRUE(control_.Status(now_).dock_contact);
+  // The contact ends and a new one begins: charging as before.
+  control_.OnDockContactSample(false);
+  Run(71.0);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  Run(72.0);
+  EXPECT_EQ(Times(IsChargeOn, 71.0).size(), 1u);
+  EXPECT_EQ(Times(IsChargeOff).size(), 3u);
+}
+
+TEST_F(ControlTest, ChargingAllowedAgainOnTheContactsStartsAtOnce) {
+  Run(0.1);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  Run(1.0);
+  control_.SetCharging(false, now_);
+  Run(1.05);
+  control_.SetCharging(true, now_);
+  Run(2.0);
+  // The off frames still due are dropped, Charge 1 follows in the next tick.
+  EXPECT_EQ(Times(IsChargeOff).size(), 1u);
+  const auto ons = Times(IsChargeOn);
+  ASSERT_EQ(ons.size(), 2u);
+  EXPECT_NEAR(ons[1], 1.06, 0.005);
+}
+
+TEST_F(ControlTest, ChargingOffGoesOutBeforeTheFirstMotion) {
+  Run(0.1);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  Run(1.0);
+  control_.SetCharging(false, now_);
+  control_.OnCmdVel(0.15f, 0.0f, now_);
+  const size_t before = sent_.size();
+  Run(now_ + 0.01);
+  size_t off = sent_.size();
+  size_t motion = sent_.size();
+  for (size_t i = before; i < sent_.size(); i++) {
+    if (IsChargeOff(sent_[i].packet) && off == sent_.size()) off = i;
+    if (IsMovingSpeed(sent_[i].packet) && motion == sent_.size()) motion = i;
+  }
+  ASSERT_LT(off, sent_.size());
+  ASSERT_LT(motion, sent_.size());
+  EXPECT_LT(off, motion);
+}
+
+TEST_F(ControlTest, ChargingOffWithoutContactHoldsNothingBack) {
+  Run(0.1);
+  control_.SetCharging(false, now_);
+  Run(1.0);
+  EXPECT_EQ(Times(IsChargeOff).size(), 3u);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  Run(1.5);
+  EXPECT_EQ(Times(IsChargeOn).size(), 1u);
+}
+
 TEST_F(ControlTest, RawContactFollowsEachSampleTheDebouncedOneThree) {
   Run(0.1);
   control_.OnDockContactSample(true);

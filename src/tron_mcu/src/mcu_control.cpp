@@ -118,6 +118,16 @@ BladeResult McuControl::SetBlade(const BladeRequest& request, double now) {
   return BladeResult::kOk;
 }
 
+void McuControl::SetCharging(bool allowed, double now) {
+  charge_sent_ = false;
+  charge_stopped_ = !allowed;
+  if (allowed) {
+    charge_off_repeat_.remaining = 0;
+    return;
+  }
+  StartRepeat(charge_off_repeat_, ChargePacket(false), now);
+}
+
 void McuControl::DropBlade(BladeOffReason reason) {
   if (blade_request_) blade_off_reason_ = reason;
   blade_request_.reset();
@@ -281,6 +291,10 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   const bool blocked = Blocked(now);
   const bool dock_contact = DockContact();
 
+  // Charging stopped on request stays off while this contact lasts; its off frames go out before any motion.
+  if (!dock_contact) charge_stopped_ = false;
+  EmitRepeat(charge_off_repeat_, now, out);
+
   if (blocked) {
     pending_cmd_.reset();
     if (moving_) {
@@ -329,7 +343,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     blade_off_since_s_ = now;
   }
 
-  if (dock_contact) {
+  if (dock_contact && !charge_stopped_) {
     if (!charge_sent_ || now - last_charge_s_ + kTimeEpsilon >= config_.charge_resend_s) {
       out.push_back(ChargePacket(true));
       charge_sent_ = true;

@@ -10,6 +10,7 @@
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/srv/set_blade.hpp>
+#include <mowbite_msgs/srv/set_charge.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mutex>
 #include <optional>
@@ -122,6 +123,9 @@ class McuNode : public rclcpp::Node {
     blade_srv_ = create_service<mowbite_msgs::srv::SetBlade>(
         "hw/blade", [this](const mowbite_msgs::srv::SetBlade::Request::SharedPtr req,
                            mowbite_msgs::srv::SetBlade::Response::SharedPtr res) { OnBlade(*req, *res); });
+    charge_srv_ = create_service<mowbite_msgs::srv::SetCharge>(
+        "hw/charge", [this](const mowbite_msgs::srv::SetCharge::Request::SharedPtr req,
+                            mowbite_msgs::srv::SetCharge::Response::SharedPtr res) { OnCharge(*req, *res); });
     status_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { PublishStatus(); });
     LogTimeZone();
 
@@ -518,6 +522,22 @@ class McuNode : public rclcpp::Node {
     }
   }
 
+  // Charging follows the contact; the host only stops it, before leaving the station, or allows it again.
+  void OnCharge(const mowbite_msgs::srv::SetCharge::Request& req, mowbite_msgs::srv::SetCharge::Response& res) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      control_.SetCharging(req.on, MonotonicSeconds());
+    }
+    if (req.on) {
+      RCLCPP_INFO(get_logger(), "Charging allowed again: Charge 1 while there is dock contact");
+      res.message = "charging follows the dock contact";
+    } else {
+      RCLCPP_INFO(get_logger(), "Charging off on request: Charge 0, no Charge 1 until the contact ends");
+      res.message = "charging off";
+    }
+    res.success = true;
+  }
+
   std::mutex mutex_;
   tron::McuControl control_;
   tron::FrameParser parser_;
@@ -555,6 +575,7 @@ class McuNode : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Service<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetBlade>::SharedPtr blade_srv_;
+  rclcpp::Service<mowbite_msgs::srv::SetCharge>::SharedPtr charge_srv_;
   rclcpp::TimerBase::SharedPtr status_timer_;
 };
 
