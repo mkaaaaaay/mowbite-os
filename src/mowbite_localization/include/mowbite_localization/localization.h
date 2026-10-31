@@ -72,6 +72,10 @@ struct PositionJump {
   double distance() const;
 };
 
+struct Position {
+  double x = 0.0, y = 0.0;
+};
+
 struct Estimate {
   double x = 0.0, y = 0.0, theta = 0.0, vx = 0.0, vr = 0.0;
   // Row-major covariance of x, y, theta.
@@ -106,6 +110,9 @@ class Localization {
   // Restarts the filter at this pose with zero speed. The caller knows the heading, e.g. from the dock, so it counts
   // as aligned.
   void SetPose(double x, double y, double theta);
+  // Restarts the filter facing theta with base_link where the last fix and the antenna offset put it for that heading,
+  // and returns that position. Nothing changes without a recent fix the filter has taken (gps_valid).
+  std::optional<Position> SetHeading(double theta, double now_s);
 
   Estimate GetEstimate() const;
   // Accuracy of the last fix, growing with distance and time without a fix. kNoAccuracy before the filter took GPS

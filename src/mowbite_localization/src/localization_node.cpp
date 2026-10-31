@@ -12,6 +12,7 @@
 #include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/position_jump.hpp>
+#include <mowbite_msgs/srv/set_heading.hpp>
 #include <mowbite_msgs/srv/set_pose.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -112,6 +113,26 @@ class LocalizationNode : public rclcpp::Node {
           const double yaw = YawFromQuaternion(p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w);
           localization_->SetPose(p.position.x, p.position.y, yaw);
           RCLCPP_INFO(get_logger(), "Pose set to %.2f, %.2f, %.3f rad", p.position.x, p.position.y, yaw);
+        });
+    // The logic on the docking station: the heading of the mower there, the position from the last fix, so that a fix
+    // in another reference shows as a distance to the recorded docking station instead of being covered up.
+    heading_srv_ = create_service<mowbite_msgs::srv::SetHeading>(
+        "localization/set_heading", [this](const std::shared_ptr<mowbite_msgs::srv::SetHeading::Request> request,
+                                           std::shared_ptr<mowbite_msgs::srv::SetHeading::Response> response) {
+          const double now_s = MonotonicSeconds();
+          const auto base = localization_->SetHeading(request->heading, now_s);
+          response->success = base.has_value();
+          if (!base) {
+            response->message = "No recent RTK fixed position to put base_link at";
+            response->position_accuracy = static_cast<float>(kNoAccuracy);
+            RCLCPP_WARN(get_logger(), "Heading not set: no recent RTK fixed position");
+            return;
+          }
+          response->x = base->x;
+          response->y = base->y;
+          response->position_accuracy = static_cast<float>(localization_->PositionAccuracy(now_s));
+          RCLCPP_INFO(get_logger(), "Heading set to %.3f rad, base_link at %.3f, %.3f from the last fix", request->heading,
+                      base->x, base->y);
         });
   }
 
@@ -276,6 +297,7 @@ class LocalizationNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr gps_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetPose>::SharedPtr pose_srv_;
+  rclcpp::Service<mowbite_msgs::srv::SetHeading>::SharedPtr heading_srv_;
 };
 
 }  // namespace mowbite_localization
