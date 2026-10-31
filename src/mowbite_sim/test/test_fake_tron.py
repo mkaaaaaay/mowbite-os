@@ -510,6 +510,44 @@ class DockTest(unittest.TestCase):
         self.assertAlmostEqual(pose.x, 2.0, places=9)
         self.assertTrue(self.dock.contact)
 
+    def leave(self, pose, seconds, linear, dt=0.01):
+        """Drives straight like the loop of fake_tron, both wheels at linear; returns the steps the hollows held."""
+        held = 0
+        for _ in range(int(round(seconds / dt))):
+            self.t += dt
+            before = ft.Pose(pose.x, pose.y, pose.yaw)
+            pose.step(dt, linear, 0.0)
+            held += self.dock.hold(before, pose, abs(linear))
+            self.dock.update(self.t, pose, False)
+        return held
+
+    def test_the_hollows_hold_a_crawling_mower(self):
+        pose = ft.Pose(-1.0, 0.0, 0.0)
+        self.assertTrue(self.dock.settle(pose))
+        self.assertEqual(self.leave(pose, 3.0, 0.06), 300)
+        self.assertAlmostEqual(pose.x, -1.0, places=9)
+        self.assertTrue(self.dock.contact)
+
+    def test_out_of_the_hollows_fast_enough(self):
+        pose = ft.Pose(-1.0, 0.0, 0.0)
+        self.assertTrue(self.dock.settle(pose))
+        self.assertEqual(self.leave(pose, 3.0, ft.DOCK_HOLLOW_SPEED + 0.05), 0)
+        self.assertAlmostEqual(pose.x, -0.55, places=6)
+        self.assertFalse(self.dock.contact)
+
+    def test_into_the_hollows_freely_and_off_beyond_them(self):
+        # Backing in drops into them.
+        pose = ft.Pose(-0.98, 0.0, 0.0)
+        self.assertEqual(self.leave(pose, 0.2, -0.05), 0)
+        self.assertAlmostEqual(pose.x, -0.99, places=6)
+        # 0.1 m out of the station the wheels are on the plate, a crawl drives on.
+        pose = ft.Pose(-0.9, 0.0, 0.0)
+        self.assertEqual(self.leave(pose, 1.0, 0.03), 0)
+        self.assertAlmostEqual(pose.x, -0.87, places=6)
+        # Beside the station there are no hollows.
+        pose = ft.Pose(-1.0, 0.2, 0.0)
+        self.assertEqual(self.leave(pose, 1.0, 0.03), 0)
+
 
 class ProcessTest(unittest.TestCase):
     """fake_tron as a process on ptys, with a host that writes frames like the driver."""
@@ -787,6 +825,48 @@ class DockProcessTest(unittest.TestCase):
         self.assertGreater(self.batteries(2.2)[-1][0], 0)
         with open(self.paths["state"]) as f:
             self.assertTrue(json.load(f)["dock_ok"])
+
+    def drive(self, linear, seconds):
+        """SpeedData like the driver every 100 ms, which also keeps the host link alive."""
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            os.write(self.fd, ft.encode([(ft.TO_MCU, 4, struct.pack("<ff", linear, 0.0))]))
+            read_available(self.fd, 0.1)
+
+    def state(self):
+        time.sleep(0.3)
+        with open(self.paths["state"]) as f:
+            return json.load(f)
+
+    def test_hollows_hold_a_crawl_and_let_the_undock_speed_out(self):
+        self.drive(0.06, 1.0)
+        held = self.state()
+        self.assertAlmostEqual(held["x"], -1.0, places=3)
+        self.assertTrue(held["dock_ok"])
+        # Stuck for good with the flag.
+        with open(self.paths["flags"], "w") as f:
+            json.dump({"dock_hollow_speed": 9.0}, f)
+        self.drive(0.15, 1.0)
+        self.assertAlmostEqual(self.state()["x"], -1.0, places=3)
+        with open(self.paths["flags"], "w") as f:
+            json.dump({}, f)
+        self.drive(0.15, 1.5)
+        self.drive(0.0, 0.3)
+        out = self.state()
+        self.assertGreater(out["x"], -0.9)
+        self.assertFalse(out["dock_ok"])
+
+    def test_placed_back_on_the_station_by_hand(self):
+        with open(self.paths["flags"], "w") as f:
+            json.dump({"place": [-1.0, 0.0, 0.0]}, f)
+        back = self.state()
+        self.assertAlmostEqual(back["x"], -1.0, places=6)
+        self.assertAlmostEqual(back["y"], 0.0, places=6)
+        self.assertTrue(back["dock_ok"])
+        # Once per value: driving off again works with the flag still set.
+        self.drive(0.15, 1.0)
+        self.drive(0.0, 0.3)
+        self.assertGreater(self.state()["x"], -0.95)
 
 
 # Opens the port given like a driver does and holds it.
