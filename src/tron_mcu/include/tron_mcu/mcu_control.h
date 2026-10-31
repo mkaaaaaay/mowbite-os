@@ -100,6 +100,8 @@ struct McuControlStatus {
   bool blade_on = false;
   BladeOffReason blade_off_reason = BladeOffReason::kNone;
   bool dock_contact = false;
+  // The last sample, not debounced.
+  bool dock_contact_raw = false;
   // No version frame since the port opened, or one that does not match.
   bool firmware_incompatible = false;
 };
@@ -204,6 +206,7 @@ class McuControl {
   bool blade_turning_ = false;
 
   int dock_samples_ = 0;
+  bool dock_raw_ = false;
   bool charge_sent_ = false;
   double last_charge_s_ = 0;
 
