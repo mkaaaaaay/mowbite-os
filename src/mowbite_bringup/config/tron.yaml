@@ -114,6 +114,13 @@ mowbite_logic:
     recording_max_points: 5000
     recording_min_dock_distance: 0.5
     map_edit_timeout: 5.0
+    # The charging contacts of the Tron lie about 0.18 m behind base_link: it backs onto the docking station and faces
+    # away from it there (assumption, measured in phase 6). On the contacts mowing and drives start only after the
+    # reference check (G24): position accuracy at least dock_max_position_accuracy m, then with the heading of the
+    # station set, base_link within dock_reference_limit m of the recorded station (assumptions until phase 7).
+    dock_contact_x: -0.18
+    dock_max_position_accuracy: 0.03
+    dock_reference_limit: 0.10
     # mowing.plan and the job ask the planner for a plan and set only what the request carries: width, passes and angle
     # are the planner's (mowbite_planner below). plan_timeout in s.
     plan_timeout: 30.0

@@ -109,7 +109,8 @@ TEST(LogicMowing, StartRefusedWithAReasonAndAnEvent) {
   const std::vector<Case> cases = {
       {"EMERGENCY", [](LogicCore& c) { auto hw = Healthy(); hw.emergency = true; c.OnHardwareStatus(hw); }},
       {"NO_SAFETY_MEASUREMENT", [](LogicCore& c) { c.OnCapabilities(false); }},
-      {"ON_DOCK", [](LogicCore& c) { auto hw = Healthy(); hw.dock_contact = true; c.OnHardwareStatus(hw); }},
+      // On the contacts without a docking station in the map.
+      {"NO_DOCK", [](LogicCore& c) { auto hw = Healthy(); hw.dock_contact = true; c.OnHardwareStatus(hw); }},
       {"RAIN", [](LogicCore& c) { auto hw = Healthy(); hw.rain = true; c.OnHardwareStatus(hw); }},
       {"BATTERY_LOW", [](LogicCore& c) { auto hw = Healthy(); hw.battery_voltage = 20; c.OnHardwareStatus(hw); }},
       {"NO_POSITION", [](LogicCore& c) { c.OnPoseTimeout(); }},

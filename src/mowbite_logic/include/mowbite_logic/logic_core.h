@@ -77,6 +77,14 @@ struct LogicConfig {
   double approach_distance = 0.5;
   // s between checkpoints while a path is mowed.
   double checkpoint_period = 30.0;
+  // m ahead of base_link where the charging contacts of the mower are. Below 0 they are behind it: it backs onto the
+  // docking station and stands there facing away from the heading of the station in the map.
+  double dock_contact_x = 0;
+  // On the docking station mowing and drives start only after the reference check (G24): a position at least
+  // dock_max_position_accuracy (m) and, with the heading of the station set, base_link within dock_reference_limit (m)
+  // of the recorded station.
+  double dock_max_position_accuracy = 0.03;
+  double dock_reference_limit = 0.10;
 };
 
 struct Action {
@@ -226,6 +234,21 @@ class LogicCore {
 
   // The mow areas of the map and why mowing may not plan from it (empty if it may).
   void OnMowMap(std::vector<JobArea> areas, const Reason& problem);
+  // The docking station of the map, none without one.
+  void OnMapDock(const std::optional<DockPose>& dock);
+  // The driver reports a debounced contact with the docking station.
+  bool DockContact() const;
+  // On the docking station mowing (start_mowing) and drives start only after the reference check (G24): the node sets
+  // the heading TakeDockCheck returns, once per check, with localization/set_heading and hands the answer to
+  // OnDockCheck. A drive asks for its check here, after DriveProblem found nothing.
+  void CheckDockBeforeDrive();
+  std::optional<double> TakeDockCheck();
+  bool DockCheckPending() const;
+  // The answer of localization/set_heading: base_link with the heading of the station and its accuracy; ok false
+  // without a recent fix or without an answer (message says which). Returns why mowing or the drive does not start,
+  // which also goes out as MOWING_REFUSED or DRIVE_REFUSED. Undocking comes with the next step of stage 4: until
+  // then a check that passes ends in ON_DOCK as well.
+  Reason OnDockCheck(bool ok, double x, double y, float accuracy, const std::string& message);
   // The checkpoint read at the start.
   void RestoreJob(const JobProgress& progress);
   // Why mowing cannot start now, empty if it can.
@@ -299,11 +322,18 @@ class LogicCore {
   static const char* StateName(State state);
   std::string CurrentStateName() const;
   // Each empty if nothing stands in the way: BUSY; EMERGENCY or NO_SAFETY_MEASUREMENT; NO_POSITION,
-  // POSITION_ACCURACY or NO_HEADING.
+  // POSITION_ACCURACY or NO_HEADING (on the docking station the stricter accuracy of the reference check and no
+  // heading); NO_DOCK.
   Reason Busy() const;
   Reason Unsafe() const;
-  Reason AccuracyReason(float accuracy) const;
+  Reason AccuracyReason(float accuracy, double limit) const;
   Reason PositionProblem() const;
+  Reason DockProblem() const;
+  double DockAccuracyLimit() const;
+  // The heading of the mower on the docking station.
+  double DockedHeading() const;
+  enum class DockCheck { kNone, kMowing, kDrive };
+  void BeginDockCheck(DockCheck purpose);
   ActionResult OnMowingAction(const std::string& name);
   void StartMowing();
   void Pause(int why, const Reason& reason);
@@ -343,6 +373,10 @@ class LogicCore {
 
   MowingJob job_;
   Reason mow_map_problem_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
+  std::optional<DockPose> dock_;
+  // The reference check on its way: what for, and whether the node has taken it yet.
+  DockCheck dock_check_ = DockCheck::kNone;
+  bool dock_check_due_ = false;
   std::string session_id_;
   int pause_ = 0;
   Reason pause_reason_;

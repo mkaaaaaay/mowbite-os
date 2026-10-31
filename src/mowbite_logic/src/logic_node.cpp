@@ -32,6 +32,7 @@
 #include <mowbite_msgs/srv/set_blade.hpp>
 #include <mowbite_msgs/srv/set_dock.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
+#include <mowbite_msgs/srv/set_heading.hpp>
 #include <map>
 #include <mowbite_planner_interfaces/srv/plan_coverage.hpp>
 #include <mowbite_planner_interfaces/srv/plan_transit.hpp>
@@ -216,6 +217,9 @@ class LogicNode : public rclcpp::Node {
     emergency_client_ = create_client<mowbite_msgs::srv::SetEmergency>("hw/emergency");
     add_area_client_ = create_client<mowbite_msgs::srv::AddArea>("map/add_area");
     set_dock_client_ = create_client<mowbite_msgs::srv::SetDock>("map/set_dock");
+    // The reference check on the docking station (G24); without an answer in dock_check_timeout s nothing starts.
+    set_heading_client_ = create_client<mowbite_msgs::srv::SetHeading>("localization/set_heading");
+    dock_check_timeout_s_ = declare_parameter("dock_check_timeout", 2.0);
 
     // mowing.plan: asks the planner process for the paths of an area, answers through the bridge.
     plan_timeout_s_ = declare_parameter("plan_timeout", 30.0);
@@ -231,6 +235,7 @@ class LogicNode : public rclcpp::Node {
             std::lock_guard<std::mutex> lock(mutex_);
             planner_.SetMap(msg->data);
             core_.OnMowMap(planner_.MowAreas(), planner_.MapProblem());
+            core_.OnMapDock(planner_.Dock());
           }
           Flush();
         });
@@ -359,6 +364,9 @@ class LogicNode : public rclcpp::Node {
     config.battery_critical_time = declare_parameter("battery_critical_time", config.battery_critical_time);
     config.approach_distance = declare_parameter("approach_distance", config.approach_distance);
     config.checkpoint_period = declare_parameter("checkpoint_period", config.checkpoint_period);
+    config.dock_contact_x = declare_parameter("dock_contact_x", config.dock_contact_x);
+    config.dock_max_position_accuracy = declare_parameter("dock_max_position_accuracy", config.dock_max_position_accuracy);
+    config.dock_reference_limit = declare_parameter("dock_reference_limit", config.dock_reference_limit);
     return config;
   }
 
@@ -462,15 +470,22 @@ class LogicNode : public rclcpp::Node {
       if (why.empty()) why = planner_.TransitAreas(&drivable, &obstacles);
       if (why.empty() && !transit_client_->service_is_ready()) why = PlannerMissing();
       if (why.empty() && !follow_client_->action_server_is_ready()) why = FollowerMissing();
+      const bool from_dock = why.empty() && core_.DockContact();
       if (!why.empty()) {
         core_.RefuseDrive(why);
+      } else if (from_dock) {
+        // From the docking station the reference check comes first; the request is answered with its outcome.
+        core_.CheckDockBeforeDrive();
+        dock_drive_header_ = header;
+        RCLCPP_INFO(get_logger(), "Drive to (%.2f, %.2f) from the docking station: checking the position first",
+                    request.x, request.y);
       } else {
         why = core_.StartDrive(request.x, request.y);
       }
       if (!why.empty()) {
         RCLCPP_WARN(get_logger(), "Drive refused: %s (%s)", why.code.c_str(), why.message.c_str());
         RespondDrive(header, false, why.message);
-      } else {
+      } else if (!from_dock) {
         const RobotStateData state = core_.RobotState();
         auto plan = std::make_shared<mowbite_planner_interfaces::srv::PlanTransit::Request>();
         plan->start = PoseAt(state.pose_x, state.pose_y, state.pose_heading);
@@ -913,6 +928,10 @@ class LogicNode : public rclcpp::Node {
         }
         core_.OnMapEditResult(false, "", "NO_ANSWER", "No answer from mowbite_map; look at the map before saving again");
       }
+      if (dock_check_sent_ && t - *dock_check_sent_ > dock_check_timeout_s_) {
+        set_heading_client_->remove_pending_request(dock_check_request_id_);
+        FinishDockCheck(false, 0, 0, 999.0f, "No answer from the localization (localization/set_heading)");
+      }
       state = core_.RobotState();
     }
     Flush();
@@ -1271,6 +1290,52 @@ class LogicNode : public rclcpp::Node {
                            .request_id;
   }
 
+  // Sets the heading of the mower on the docking station in the localization, whose answer decides the reference check.
+  // Called with the mutex held.
+  void SendDockCheck(double heading) {
+    const uint64_t seq = ++dock_check_seq_;
+    if (!set_heading_client_->service_is_ready()) {
+      FinishDockCheck(false, 0, 0, 999.0f, "The localization does not offer localization/set_heading");
+      return;
+    }
+    auto request = std::make_shared<mowbite_msgs::srv::SetHeading::Request>();
+    request->heading = heading;
+    dock_check_sent_ = MonotonicSeconds();
+    dock_check_request_id_ =
+        set_heading_client_
+            ->async_send_request(request,
+                                 [this, seq](rclcpp::Client<mowbite_msgs::srv::SetHeading>::SharedFuture f) {
+                                   {
+                                     std::lock_guard<std::mutex> lock(mutex_);
+                                     // A late answer after the timeout is not the current one any more.
+                                     if (seq != dock_check_seq_ || !dock_check_sent_) return;
+                                     const auto r = f.get();
+                                     FinishDockCheck(r->success, r->x, r->y, r->position_accuracy, r->message);
+                                   }
+                                   Flush();
+                                 })
+            .request_id;
+    RCLCPP_INFO(get_logger(), "Reference check on the docking station: heading %.3f rad", heading);
+  }
+
+  // Called with the mutex held.
+  void FinishDockCheck(bool ok, double x, double y, float accuracy, const std::string& message) {
+    dock_check_sent_.reset();
+    const Reason why = core_.OnDockCheck(ok, x, y, accuracy, message);
+    const bool drive = dock_drive_header_ != nullptr;
+    if (why.code == "ON_DOCK") {
+      RCLCPP_INFO(get_logger(), "%s from the docking station refused: %s (%s)", drive ? "Drive" : "Mowing",
+                  why.code.c_str(), why.message.c_str());
+    } else {
+      RCLCPP_WARN(get_logger(), "%s from the docking station refused: %s (%s)", drive ? "Drive" : "Mowing",
+                  why.code.c_str(), why.message.c_str());
+    }
+    if (drive) {
+      RespondDrive(dock_drive_header_, false, why.message);
+      dock_drive_header_.reset();
+    }
+  }
+
   static geometry_msgs::msg::Point ToPoint(const Point2& p) {
     geometry_msgs::msg::Point point;
     point.x = p.x;
@@ -1284,6 +1349,7 @@ class LogicNode : public rclcpp::Node {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (auto edit = core_.TakeMapEdit()) SendMapEdit(*edit);
+      if (auto heading = core_.TakeDockCheck()) SendDockCheck(*heading);
     }
     std::vector<Event> events;
     bool actions_changed;
@@ -1448,6 +1514,12 @@ class LogicNode : public rclcpp::Node {
   std::optional<int64_t> edit_request_id_;
   bool edit_is_dock_ = false;
   uint64_t edit_seq_ = 0;
+  // The reference check on its way to the localization, and the drive request that waits for it.
+  std::optional<double> dock_check_sent_;
+  int64_t dock_check_request_id_ = 0;
+  uint64_t dock_check_seq_ = 0;
+  double dock_check_timeout_s_ = 2.0;
+  std::shared_ptr<rmw_request_id_t> dock_drive_header_;
 
   rclcpp::Publisher<mowbite_msgs::msg::RobotState>::SharedPtr robot_state_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::ActionList>::SharedPtr actions_pub_;
@@ -1464,6 +1536,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Client<mowbite_msgs::srv::SetBlade>::SharedPtr blade_client_;
   rclcpp::Client<mowbite_msgs::srv::AddArea>::SharedPtr add_area_client_;
   rclcpp::Client<mowbite_msgs::srv::SetDock>::SharedPtr set_dock_client_;
+  rclcpp::Client<mowbite_msgs::srv::SetHeading>::SharedPtr set_heading_client_;
   rclcpp::Client<mowbite_planner_interfaces::srv::PlanCoverage>::SharedPtr plan_client_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcResponse>::SharedPtr rpc_response_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcError>::SharedPtr rpc_error_pub_;

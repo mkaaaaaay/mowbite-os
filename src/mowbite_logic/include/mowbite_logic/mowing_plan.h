@@ -113,6 +113,8 @@ class MowingPlanner {
   std::vector<JobArea> MowAreas() const;
   // Whether mowing may plan from the map: readable and fitting the datum in use; else why not (MAP_*).
   Reason MapProblem() const;
+  // The first active docking station of the map, none while the map is not readable.
+  std::optional<DockPose> Dock() const;
 
  private:
   struct MapArea {
@@ -125,6 +127,7 @@ class MowingPlanner {
   };
 
   std::vector<MapArea> map_;
+  std::optional<DockPose> dock_;
   bool map_readable_ = false;
   bool map_fits_ = false;
   Reason map_reason_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");

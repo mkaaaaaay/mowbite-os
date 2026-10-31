@@ -88,7 +88,14 @@ namespace {
 RecorderConfig RecorderConfigOf(const LogicConfig& config) {
   RecorderConfig recorder = config.recorder;
   recorder.max_position_accuracy = config.max_position_accuracy;
+  recorder.dock_backwards = config.dock_contact_x < 0;
   return recorder;
+}
+
+std::string Metres(double value) {
+  char text[32];
+  std::snprintf(text, sizeof(text), "%.2f", value);
+  return text;
 }
 
 }  // namespace
@@ -100,7 +107,7 @@ LogicCore::LogicCore(const LogicConfig& config) : config_(config), recorder_(Rec
 
 void LogicCore::OnHardwareStatus(const HardwareSnapshot& hw) {
   hw_ = hw;
-  recorder_.SetDockContact(hw.telemetry_ok && hw.dock_contact);
+  recorder_.SetDockContact(DockContact());
   UpdateEmergency();
   // From the rpm the MCU reports, not from what was asked for.
   const bool running = hw.telemetry_ok && hw.blade.ok && std::abs(hw.blade.rpm) >= config_.blade_running_rpm;
@@ -239,6 +246,10 @@ ActionResult LogicCore::OnAction(const std::string& action_id) {
       RefuseStart(why);
       return ActionResult::kRejected;
     }
+    if (DockContact()) {
+      BeginDockCheck(DockCheck::kMowing);
+      return ActionResult::kDone;
+    }
     StartMowing();
     return ActionResult::kDone;
   }
@@ -310,6 +321,7 @@ Reason LogicCore::DriveProblem() const {
   Reason why = Busy();
   if (why.empty()) why = Unsafe();
   if (why.empty()) why = PositionProblem();
+  if (why.empty()) why = DockProblem();
   return why;
 }
 
@@ -590,7 +602,10 @@ bool LogicCore::PoseGood() const {
 }
 
 Reason LogicCore::Busy() const {
-  if (state_ == State::kIdle) return {};
+  if (state_ == State::kIdle) {
+    if (dock_check_ == DockCheck::kNone) return {};
+    return Reason("BUSY", "The mower is busy: checking its position on the docking station").With("state", "checking");
+  }
   const std::string state = state_ == State::kDriving ? "driving" : CurrentStateName();
   return Reason("BUSY", "The mower is busy: " + state).With("state", state);
 }
@@ -604,32 +619,119 @@ Reason LogicCore::Unsafe() const {
   return {};
 }
 
-Reason LogicCore::AccuracyReason(float accuracy) const {
+Reason LogicCore::AccuracyReason(float accuracy, double limit) const {
   char text[160];
-  std::snprintf(text, sizeof(text), "Position accuracy %.3f m is worse than %.3f m", accuracy,
-                config_.max_position_accuracy);
-  return Reason("POSITION_ACCURACY", text).With("accuracy", accuracy).With("limit", config_.max_position_accuracy);
+  std::snprintf(text, sizeof(text), "Position accuracy %.3f m is worse than %.3f m", accuracy, limit);
+  return Reason("POSITION_ACCURACY", text).With("accuracy", accuracy).With("limit", limit);
 }
 
 Reason LogicCore::PositionProblem() const {
   if (!pose_) return Reason("NO_POSITION", "No position from the localization");
-  if (!(pose_->position_accuracy <= config_.max_position_accuracy)) {
-    return AccuracyReason(pose_->position_accuracy);
+  // On the docking station the reference check sets the heading, and it wants a better position.
+  const double limit = DockContact() ? DockAccuracyLimit() : config_.max_position_accuracy;
+  if (!(pose_->position_accuracy <= limit)) {
+    Reason why = AccuracyReason(pose_->position_accuracy, limit);
+    if (DockContact()) why.message += " on the docking station";
+    return why;
   }
-  if (!pose_->orientation_valid) {
+  if (!pose_->orientation_valid && !DockContact()) {
     return Reason("NO_HEADING", "The heading is not aligned yet");
   }
   return {};
+}
+
+Reason LogicCore::DockProblem() const {
+  if (!DockContact() || dock_) return {};
+  return Reason("NO_DOCK", "The mower is on a docking station, but the map has none: record it first");
+}
+
+double LogicCore::DockAccuracyLimit() const {
+  return std::min(config_.dock_max_position_accuracy, config_.max_position_accuracy);
+}
+
+bool LogicCore::DockContact() const {
+  return hw_.telemetry_ok && hw_.dock_contact;
+}
+
+void LogicCore::OnMapDock(const std::optional<DockPose>& dock) {
+  dock_ = dock;
+}
+
+double LogicCore::DockedHeading() const {
+  const double heading = dock_ ? dock_->heading : 0.0;
+  const double facing = config_.dock_contact_x < 0 ? heading + M_PI : heading;
+  return std::atan2(std::sin(facing), std::cos(facing));
+}
+
+void LogicCore::BeginDockCheck(DockCheck purpose) {
+  dock_check_ = purpose;
+  dock_check_due_ = true;
+  actions_changed_ = true;
+  notices_.push_back("On the docking station: checking the position against the recorded one first");
+}
+
+void LogicCore::CheckDockBeforeDrive() {
+  BeginDockCheck(DockCheck::kDrive);
+}
+
+std::optional<double> LogicCore::TakeDockCheck() {
+  if (!dock_check_due_) return std::nullopt;
+  dock_check_due_ = false;
+  return DockedHeading();
+}
+
+bool LogicCore::DockCheckPending() const {
+  return dock_check_ != DockCheck::kNone;
+}
+
+Reason LogicCore::OnDockCheck(bool ok, double x, double y, float accuracy, const std::string& message) {
+  const DockCheck purpose = dock_check_;
+  if (purpose == DockCheck::kNone) return Reason("STOPPED", "No reference check was on its way");
+  dock_check_ = DockCheck::kNone;
+  dock_check_due_ = false;
+  actions_changed_ = true;
+  // What changed meanwhile comes first: an emergency, the contact, then the rest of a start or a drive.
+  Reason why = Unsafe();
+  if (why.empty() && !DockContact()) {
+    why = Reason("NO_DOCK_CONTACT", "The contact with the docking station ended during the reference check");
+  }
+  if (why.empty()) why = purpose == DockCheck::kMowing ? StartProblem() : DriveProblem();
+  if (why.empty() && !ok) why = Reason("NO_POSITION", message.empty() ? "No answer from the localization" : message);
+  if (why.empty() && !(accuracy <= DockAccuracyLimit())) {
+    why = AccuracyReason(accuracy, DockAccuracyLimit());
+    why.message += " on the docking station";
+  }
+  if (why.empty()) {
+    const double distance = std::hypot(x - dock_->x, y - dock_->y);
+    const double limit = config_.dock_reference_limit;
+    if (distance > limit) {
+      why = Reason("REFERENCE_MISMATCH", "On the docking station the position is " + Metres(distance) +
+                                             " m from the recorded one, at most " + Metres(limit) +
+                                             " m allowed: the corrections may have another reference, or the "
+                                             "station was moved")
+                .With("distance", distance)
+                .With("limit", limit);
+    } else {
+      notices_.push_back("Reference check on the docking station passed: " + Metres(distance) +
+                         " m from the recorded position");
+      why = Reason("ON_DOCK", "The position on the docking station fits, but undocking is not built yet: drive the "
+                              "mower off by remote control first")
+                .With("distance", distance)
+                .With("limit", limit);
+    }
+  }
+  if (purpose == DockCheck::kMowing) {
+    RefuseStart(why);
+  } else {
+    RefuseDrive(why);
+  }
+  return why;
 }
 
 Reason LogicCore::StartProblem() const {
   Reason why = Busy();
   if (why.empty()) why = Unsafe();
   if (!why.empty()) return why;
-  // Undocking comes with docking (stage 4).
-  if (hw_.dock_contact) {
-    return Reason("ON_DOCK", "The mower is on the docking station: drive it off by remote control first");
-  }
   if (hw_.rain) return Reason("RAIN", "Rain detected");
   if (hw_.battery_ok && hw_.battery_voltage < config_.battery_critical_voltage) {
     char text[160];
@@ -643,7 +745,7 @@ Reason LogicCore::StartProblem() const {
   if (!why.empty()) return why;
   if (!mow_map_problem_.empty()) return mow_map_problem_;
   if (!job_.HasMowableArea()) return Reason("NO_MOWING_AREA", "The map has no active mowing area");
-  return {};
+  return DockProblem();
 }
 
 void LogicCore::RefuseStart(const Reason& why) {
@@ -862,7 +964,7 @@ void LogicCore::OnLegEnded(LegEnd end, size_t index, const Reason& reason) {
     case LegEnd::kGps:
       // The follower's text carries no numbers: the event gets the accuracy and the limit like a refused start.
       if (reason.code == "POSITION_ACCURACY" && pose_ && !(pose_->position_accuracy <= config_.max_position_accuracy)) {
-        Pause(kPauseGps, AccuracyReason(pose_->position_accuracy));
+        Pause(kPauseGps, AccuracyReason(pose_->position_accuracy, config_.max_position_accuracy));
       } else {
         Pause(kPauseGps, reason);
       }

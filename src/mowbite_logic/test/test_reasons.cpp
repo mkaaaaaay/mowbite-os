@@ -27,6 +27,17 @@ TEST(Reasons, RefusalsAlwaysWaitForTheUser) {
   ExpectRating("RECORDING_REFUSED", "STILL_SAVING", "info", "user");
 }
 
+TEST(Reasons, TheDockingStationWaitsForTheUser) {
+  for (const char* event : {"MOWING_REFUSED", "DRIVE_REFUSED"}) {
+    ExpectRating(event, "REFERENCE_MISMATCH", "warning", "user");
+    ExpectRating(event, "NO_DOCK", "warning", "user");
+    ExpectRating(event, "NO_DOCK_CONTACT", "warning", "user");
+    ExpectRating(event, "ON_DOCK", "info", "user");
+  }
+  ExpectRating("RECORDING_REFUSED", "NO_DOCK_CONTACT", "warning", "user", "record_dock");
+  ExpectRating("RECORDING_REFUSED", "NO_HEADING", "warning", "user", "record_dock");
+}
+
 TEST(Reasons, AutomaticPointsGoOnOnceTheyAreAccurate) {
   ExpectRating("RECORDING_REFUSED", "POSITION_ACCURACY", "warning", "auto", "point");
   ExpectRating("RECORDING_REFUSED", "POSITION_ACCURACY", "warning", "user", "collect_point");
