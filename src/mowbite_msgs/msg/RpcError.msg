@@ -8,3 +8,5 @@ int16 ERROR_INTERNAL=-32603
 int16 code
 string message
 string id
+# JSON text for the data of the error, e.g. {"reason": ..., "message": ...} of a refusal; empty: none.
+string data
