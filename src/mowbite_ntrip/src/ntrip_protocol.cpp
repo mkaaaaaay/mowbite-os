@@ -15,11 +15,13 @@ std::string Lower(std::string s) {
   return s;
 }
 
+// Printable ASCII only: the cut at 80 bytes can then split no character, and logs and JSON get no broken one.
 std::string Printable(const std::string& s) {
   std::string out;
   for (char c : s) {
     if (out.size() >= 80) break;
-    out.push_back(static_cast<unsigned char>(c) >= ' ' && c != 0x7F ? c : '?');
+    const auto byte = static_cast<unsigned char>(c);
+    out.push_back(byte >= ' ' && byte < 0x7F ? c : '?');
   }
   return out;
 }

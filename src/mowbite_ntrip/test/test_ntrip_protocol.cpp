@@ -135,6 +135,17 @@ TEST(Response, StatusLineIsCutAndPrintable) {
   EXPECT_EQ(reader.status_line().size(), 80u);
 }
 
+TEST(Response, StatusLineIsAsciiOnly) {
+  ResponseReader a, b;
+  std::vector<uint8_t> body;
+  // The cut after 80 bytes used to keep the first byte of this Ä.
+  const std::string head = "HTTP/1.1 500 " + std::string(66, 'e');
+  Feed(a, head + "\xc3\x84rger\r\n\r\n", body);
+  EXPECT_EQ(a.status_line(), head + "?");
+  Feed(b, "HTTP/1.1 503 Gr\xc3\xbc\xc3\x9f" "e \xe4\x7f\r\n\r\n", body);
+  EXPECT_EQ(b.status_line(), "HTTP/1.1 503 Gr????e ??");
+}
+
 TEST(Response, BadChunkSize) {
   ResponseReader reader;
   std::vector<uint8_t> body;
