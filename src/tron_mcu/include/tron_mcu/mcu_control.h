@@ -19,9 +19,11 @@ struct McuControlConfig {
   double repeat_interval_s = 0.1;
   double imu_min_period_s = 0.02;
   // Without an IMU sample for this long, motion and blade are blocked: the MCU knows the tilt only from the IMU the host
-  // forwards. Before the first sample this only blocks, unreported for this long from the first tick; a later gap
-  // latches. 0 when the IMU is not forwarded.
+  // forwards. Before the first sample this only blocks, unreported for imu_start_timeout_s from the first tick; a
+  // later gap latches. 0 when the IMU is not forwarded.
   double imu_timeout_s = 0;
+  // The first sample may take this long after the first tick, at least imu_timeout_s: the IMU runs in another process.
+  double imu_start_timeout_s = 0;
   int dock_debounce_samples = 3;
   double charge_resend_s = 30.0;
   bool allow_blade = false;

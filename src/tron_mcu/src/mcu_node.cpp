@@ -145,8 +145,10 @@ class McuNode : public rclcpp::Node {
     config.bumper_latches_emergency = declare_parameter("bumper_latches_emergency", true);
     const bool send_imu = declare_parameter("send_imu", true);
     const double imu_timeout = declare_parameter("imu_timeout", 0.5);
+    const double imu_start_timeout = declare_parameter("imu_start_timeout", 2.0);
     // Without forwarding the MCU gets no IMU from here, so there is nothing to wait for.
     config.imu_timeout_s = send_imu ? imu_timeout : 0.0;
+    config.imu_start_timeout_s = send_imu ? imu_start_timeout : 0.0;
     config.blade_stop_time_s = declare_parameter("blade_stop_time", config.blade_stop_time_s);
     config.blade_still_rpm = static_cast<int>(declare_parameter("blade_still_rpm", config.blade_still_rpm));
     config.expected_cutter_version = declare_parameter("expected_cutter_version", "");
