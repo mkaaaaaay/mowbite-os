@@ -94,7 +94,7 @@ TEST(DockStart, OnTheContactsNoHeadingIsNeededButAStricterPosition) {
   EXPECT_NE(why.message.find("on the docking station"), std::string::npos);
   EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_mowing"));
   // A limit of params.set below the one of the station holds there as well.
-  core.SetGpsSettings(0.02, 10.0);
+  core.SetGpsSettings(0.02, 10.0, 10.0);
   core.OnPose(PoseAt(kDock.x, kDock.y, 0.025f, false));
   EXPECT_DOUBLE_EQ(core.StartProblem().fields["limit"].get<double>(), 0.02);
 }

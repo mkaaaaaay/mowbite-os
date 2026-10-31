@@ -40,6 +40,12 @@ TEST(Reasons, TheDockingStationWaitsForTheUser) {
   // OpenMower's reason values.
   ExpectRating("UNDOCKING_FAILED", "path_failed", "error", "user");
   ExpectRating("UNDOCKING_FAILED", "no_gps", "error", "user");
+  for (const char* code : {"approach_failed", "dock_failed"}) {
+    ExpectRating("DOCKING_RETRY", code, "warning", "auto");
+    ExpectRating("DOCKING_FAILED", code, "error", "user");
+  }
+  // docking.start on the contacts.
+  ExpectRating("DRIVE_REFUSED", "ALREADY_THERE", "info", "user");
 }
 
 TEST(Reasons, AutomaticPointsGoOnOnceTheyAreAccurate) {

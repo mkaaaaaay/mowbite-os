@@ -26,7 +26,8 @@ Rating RateReason(const std::string& event, const std::string& code, const std::
   if (event == "MOWING_REFUSED" || event == "DRIVE_REFUSED" || event == "RECORDING_REFUSED") {
     // Points are taken again by themselves once the position is accurate.
     if (event == "RECORDING_REFUSED" && action == "point" && code == "POSITION_ACCURACY") return {kWarning, kAuto};
-    static const std::set<std::string> info = {"BUSY", "STILL_STOPPING", "STILL_SAVING", "ON_DOCK", "RAIN"};
+    static const std::set<std::string> info = {"BUSY", "STILL_STOPPING", "STILL_SAVING", "ON_DOCK", "RAIN",
+                                               "ALREADY_THERE"};
     static const std::set<std::string> error = {"EMERGENCY",       "NO_SAFETY_MEASUREMENT", "MAP_MISMATCH",
                                                 "MAP_UNREADABLE",  "MAP_UNKNOWN",           "PLANNER_MISSING",
                                                 "FOLLOWER_MISSING", "SAVE_FAILED"};
@@ -49,6 +50,9 @@ Rating RateReason(const std::string& event, const std::string& code, const std::
   if (event == "AREA_SKIPPED") return {kInfo, kAuto};
   // With OpenMower's reason values path_failed and no_gps; the mower stays where it stopped.
   if (event == "UNDOCKING_FAILED") return {kError, kUser};
+  // approach_failed or dock_failed: the next try follows by itself, after the last one the mower waits.
+  if (event == "DOCKING_RETRY") return {kWarning, kAuto};
+  if (event == "DOCKING_FAILED") return {kError, kUser};
   return {kWarning, kUser};
 }
 

@@ -132,6 +132,25 @@ mowbite_logic:
     undock_speed: 0.15
     undock_stall_time: 2.0
     undock_course_limit: 10.0
+    # Docking after JOB_COMPLETE, abort_mowing and on docking.start: over the drivable areas to the point
+    # docking_approach_distance m in front of the station, facing away from it, then backwards along its line at
+    # docking_speed m/s, steered by RTK (the camera takes over the last part in O8). dock_gate_distance m before the
+    # station the mower stops: base_link at most dock_gate_lateral m beside the line, the heading within
+    # dock_gate_heading degrees and the position at least dock_max_position_accuracy, else the try fails. Then at
+    # contact_speed m/s up to dock_overshoot m past the station: the first raw contact stops it (three zero frames, then
+    # nothing, G18), the debounced one is DOCKED. Standing contact_timeout s there without it, or undock_stall_time s
+    # before the gate, fails the try: forwards out to the approach point like undocking, DOCKING_RETRY, after
+    # docking_retry_count retries DOCKING_FAILED. docking_approach_distance (0.5 to 2 m) and docking_retry_count (0 to
+    # 5) are settings of params.set. Assumptions until phase 7.
+    docking_approach_distance: 0.8
+    docking_retry_count: 4
+    docking_speed: 0.1
+    contact_speed: 0.06
+    dock_gate_distance: 0.25
+    dock_gate_lateral: 0.02
+    dock_gate_heading: 8.0
+    dock_overshoot: 0.05
+    contact_timeout: 10.0
     # mowing.plan and the job ask the planner for a plan and set only what the request carries: width, passes and angle
     # are the planner's (mowbite_planner below). plan_timeout in s.
     plan_timeout: 30.0
