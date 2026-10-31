@@ -1,5 +1,5 @@
-# All of MowBite OS in one process: one ROS context and one DDS participant for every node. Only the MowBite Planner
-# (Python, shapely) runs as a process of its own.
+# All nodes of MowBite OS in one process (one ROS context, one DDS participant) except two: tron_mcu, so that a crash of
+# any other node leaves its watchdogs running (G25), and the MowBite Planner (Python, shapely).
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
@@ -13,9 +13,11 @@ def generate_launch_description():
     config = LaunchConfiguration("config")
     # Values on top of config, e.g. those of the simulation; by default config once more.
     extra = LaunchConfiguration("extra_config")
-    mcu = ComposableNode(
-        package="tron_mcu", plugin="tron_mcu::McuNode", name="tron_mcu",
-        parameters=[config, extra, {"port": LaunchConfiguration("mcu_port")}])
+    # Should the container die, the driver stops the wheels after cmd_vel_timeout, the blade lease runs out and the
+    # missing IMU latches IMU_TIMEOUT. With the namespace the dict goes under the full name; without it, under /**,
+    # the port in the node's own section of config would win.
+    mcu = Node(package="tron_mcu", executable="tron_mcu_node", name="tron_mcu", namespace="/",
+               parameters=[config, extra, {"port": LaunchConfiguration("mcu_port")}], output="screen")
     gnss = ComposableNode(
         package="tron_gnss", plugin="tron_gnss::GnssNode", name="tron_gnss",
         parameters=[config, extra, {"port": LaunchConfiguration("gnss_port"),
@@ -48,10 +50,10 @@ def generate_launch_description():
         parameters=[config, extra, {"data_dir": LaunchConfiguration("data_dir")}])
     container = ComposableNodeContainer(
         name="mowbite", namespace="", package="rclcpp_components", executable="component_container",
-        composable_node_descriptions=[mcu, gnss, imu, localization, logic, bridge, map_node, follower,
-                                      ntrip], output="screen")
-    # Plans the mowing paths for mowing.plan; a crash only costs the plans until it is back.
-    planner = Node(package="mowbite_planner", executable="mowbite_planner_node", name="mowbite_planner",
+        composable_node_descriptions=[gnss, imu, localization, logic, bridge, map_node, follower, ntrip],
+        output="screen")
+    # Plans the mowing paths for mowing.plan; a crash only costs the plans until it is back. Namespace as for tron_mcu.
+    planner = Node(package="mowbite_planner", executable="mowbite_planner_node", name="mowbite_planner", namespace="/",
                    parameters=[config, extra, {"data_dir": LaunchConfiguration("data_dir")}], output="screen",
                    respawn=True, respawn_delay=5.0)
     return LaunchDescription([
@@ -75,6 +77,7 @@ def generate_launch_description():
         # which launch_ros creates only to load the components.
         SetEnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE",
                                EnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE", default_value="LOCALHOST")),
+        mcu,
         container,
         planner,
     ])

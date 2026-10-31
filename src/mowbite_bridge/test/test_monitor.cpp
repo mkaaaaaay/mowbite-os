@@ -60,6 +60,21 @@ TEST(Rpc, ResultJson) {
   EXPECT_EQ(bad["error"]["code"], kRpcInternal);
 }
 
+TEST(Rpc, BytesThatAreNotUtf8AreReplaced) {
+  // A lone 0xE4 (ä in Latin-1) in the text of a node and in an id.
+  auto error = json::parse(RpcErrorJson(kRpcInvalidParams, "caster Gr\xe4" "fin", json("i\xff")));
+  EXPECT_EQ(error["error"]["message"], "caster Gr\xef\xbf\xbd" "fin");
+  EXPECT_EQ(error["id"], "i\xef\xbf\xbd");
+  EXPECT_EQ(json::parse(RpcResultJson("i\xff", "{}"))["id"], "i\xef\xbf\xbd");
+  // The parse error quotes the bytes it read last, here the lone one.
+  std::string text;
+  ASSERT_NO_THROW(text = RpcResultJson("9", "{\"a\": \"Gr\xe4" "fin\"}"));
+  auto bad = json::parse(text);
+  EXPECT_EQ(bad["error"]["code"], kRpcInternal);
+  EXPECT_NE(bad["error"]["message"].get<std::string>().find("Gr\xef\xbf\xbd"), std::string::npos)
+      << bad["error"]["message"];
+}
+
 TEST(Rpc, NestingSkipsStrings) {
   EXPECT_EQ(JsonNesting(R"({"a":"[[[[","b":[{}]})"), 3u);
   EXPECT_EQ(JsonNesting(R"(["\"[["])"), 1u);
@@ -151,6 +166,24 @@ TEST(Logs, LevelsAndRedaction) {
   EXPECT_EQ(all[1]["level"], "ERROR");
   EXPECT_EQ(logs.get(0, LogBuffer::ERROR, 10).size(), 1u);
   EXPECT_EQ(logs.get(2.5, LogBuffer::WARN, 10).size(), 1u);
+}
+
+TEST(Logs, BytesThatAreNotUtf8AreReplacedOnTheWayIn) {
+  LogBuffer logs(10);
+  // A lone 0xE4, an Ä without its second byte at the end, an overlong '/' next to a whole Ä, and lone bytes where the
+  // cut after 2000 bytes falls.
+  logs.add(1.0, LogBuffer::WARN, "n\xff", "caster Gr\xe4" "fin");
+  logs.add(2.0, LogBuffer::WARN, "n", "cut \xc3");
+  logs.add(3.0, LogBuffer::ERROR, "n", "overlong \xc0\xaf ok \xc3\x84");
+  logs.add(4.0, LogBuffer::WARN, "n", std::string(1999, 'x') + "\xe4\xe4\xe4");
+  const auto all = logs.get(0, LogBuffer::WARN, 10);
+  ASSERT_EQ(all.size(), 4u);
+  EXPECT_NO_THROW(all.dump());
+  EXPECT_EQ(all[0]["node"], "n\xef\xbf\xbd");
+  EXPECT_EQ(all[0]["msg"], "caster Gr\xef\xbf\xbd" "fin");
+  EXPECT_EQ(all[1]["msg"], "cut \xef\xbf\xbd");
+  EXPECT_EQ(all[2]["msg"], "overlong \xef\xbf\xbd\xef\xbf\xbd ok \xc3\x84");
+  EXPECT_EQ(all[3]["msg"], std::string(1999, 'x') + "\xef\xbf\xbd...");
 }
 
 TEST(Sensors, ValueDescriptionNames) {
