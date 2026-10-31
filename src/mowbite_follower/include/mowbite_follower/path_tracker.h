@@ -74,8 +74,14 @@ struct TrackerConfig {
   double stall_distance = 0.05;
   double stall_speed = 0.03;
   // A straight line driven without steering: no turning on the spot, angular always 0, done once base_link got along
-  // the line to within max_goal_distance_error of its end.
+  // the line to within max_goal_distance_error (or end_tolerance) of its end.
   bool straight = false;
+  // Backwards: the poses face the way the mower faces, it moves against it. The control runs on the mirrored headings
+  // and negates linear; angular stays.
+  bool reverse = false;
+  // m: done once base_link got along the last stretch to this much before the last pose, without turning there; 0:
+  // within max_goal_distance_error of the last pose, then turned to its heading.
+  double end_tolerance = 0;
 };
 
 enum class Phase {
@@ -93,7 +99,7 @@ enum class Phase {
 const char* PhaseName(Phase phase);
 
 // Follow the carrot: a control point runs along the path at the speed the path allows, the mower follows it with a
-// PID on its errors. Forwards only. Not thread safe.
+// PID on its errors. Forwards, or backwards as a whole path. Not thread safe.
 class PathTracker {
  public:
   explicit PathTracker(const TrackerConfig& config) : config_(config) {}
@@ -141,6 +147,9 @@ class PathTracker {
   double StraightAhead() const;
   // Fails the path when the mower stands still while linear asks it to move (stall_time).
   void CheckStall(const Pose2& pose, double linear, double dt);
+  // m base_link still has to go to the last pose along the line (straight) or the last stretch, once the control point
+  // is on it; infinity before.
+  double RemainingAlong(const Pose2& pose) const;
   void SetPhase(Phase phase);
   void Fail(const std::string& why);
 

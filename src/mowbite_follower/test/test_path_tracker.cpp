@@ -545,3 +545,93 @@ TEST(PathTracker, StandingStillIsNotCheckedWithoutAStallTime) {
   EXPECT_NE(tracker.failure().find("stays behind"), std::string::npos) << tracker.failure();
   EXPECT_GT(t, 3.0);
 }
+
+// Onto a docking station with the contacts at the back: the poses face east, the mower backs west along them from 5 cm
+// beside the line and a little turned, steering onto it.
+TEST(PathTracker, BackwardsOntoALine) {
+  TrackerConfig config;
+  config.reverse = true;
+  config.max_linear = 0.1;
+  PathTracker tracker{config};
+  std::vector<Pose2> path = Line(0, 0, M_PI, 0.8);
+  for (auto& p : path) p.yaw = 0;
+  ASSERT_EQ(tracker.Start(path, {}, 0), "");
+  Robot robot;
+  robot.pose = {0.0, 0.05, 0.05};
+  double forwards = 0;
+  double t = 0;
+  while (t < 60 && tracker.phase() != Phase::kDone && tracker.phase() != Phase::kFailed) {
+    const auto cmd = tracker.Step(robot.pose, kDt);
+    forwards = std::max(forwards, cmd.linear);
+    robot.Move(cmd, kDt);
+    t += kDt;
+  }
+  EXPECT_EQ(tracker.phase(), Phase::kDone) << tracker.failure();
+  EXPECT_EQ(forwards, 0.0);
+  EXPECT_LE(robot.max_linear, 0.1 + 1e-9);
+  EXPECT_LE(robot.max_angular, 0.3 + 1e-9);
+  // Within max_goal_distance_error of the end, back on the line and facing east.
+  EXPECT_LT(std::hypot(robot.pose.x + 0.8, robot.pose.y), 0.1);
+  EXPECT_LT(std::abs(robot.pose.y), 0.01);
+  EXPECT_LT(std::abs(robot.pose.yaw), 2.0 * M_PI / 180.0);
+}
+
+// The last 0.25 m onto the station: the line reaches 0.05 m past where the station stops the mower. With end_tolerance
+// the path is never done there; the mower pushes at the speed of the goal until it counts as stuck.
+TEST(PathTracker, BackwardsAgainstAStopIsNeverDone) {
+  TrackerConfig config;
+  config.reverse = true;
+  config.max_linear = 0.06;
+  config.stall_time = 10.0;
+  config.end_tolerance = 0.005;
+  PathTracker tracker{config};
+  std::vector<Pose2> path = Line(-0.55, 0, M_PI, 0.3);
+  for (auto& p : path) p.yaw = 0;
+  ASSERT_EQ(tracker.Start(path, {}, 0), "");
+  Robot robot;
+  robot.pose = {-0.55, 0.0, 0.0};
+  double t = 0;
+  double stopped_at = -1;
+  while (t < 60 && tracker.phase() != Phase::kDone && tracker.phase() != Phase::kFailed) {
+    robot.Move(tracker.Step(robot.pose, kDt), kDt);
+    // The station: base_link gets no further west than -0.8.
+    if (robot.pose.x < -0.8) {
+      robot.pose.x = -0.8;
+      if (stopped_at < 0) stopped_at = t;
+    }
+    t += kDt;
+  }
+  EXPECT_EQ(tracker.phase(), Phase::kFailed);
+  EXPECT_NE(tracker.failure().find("does not move"), std::string::npos) << tracker.failure();
+  ASSERT_GT(stopped_at, 0);
+  // Counted from the last 5 cm it moved: up to 0.8 s before the stop at 0.06 m/s.
+  EXPECT_GT(t - stopped_at, 9.0);
+  EXPECT_LT(t - stopped_at, 10.5);
+  EXPECT_LE(robot.max_linear, 0.06 + 1e-9);
+
+  // Without the station it gets to the end and is done there, 5 mm before the last pose.
+  ASSERT_EQ(tracker.Start(path, {}, 0), "");
+  Robot free;
+  free.pose = {-0.55, 0.0, 0.0};
+  Drive(tracker, free, 60);
+  EXPECT_EQ(tracker.phase(), Phase::kDone) << tracker.failure();
+  EXPECT_LT(free.pose.x, -0.845 + 1e-3);
+}
+
+// Done along the last stretch, whatever the mower's distance across it and without turning at the end.
+TEST(PathTracker, EndToleranceCountsAlongTheLastStretch) {
+  TrackerConfig config;
+  config.end_tolerance = 0.02;
+  PathTracker tracker{config};
+  std::vector<Pose2> path = Line(0, 0, 0, 1.0);
+  path.back().yaw = 1.0;
+  ASSERT_EQ(tracker.Start(path, {}, 0), "");
+  Robot robot;
+  robot.pose = {0.0, 0.03, 0.0};
+  Drive(tracker, robot, 60);
+  EXPECT_EQ(tracker.phase(), Phase::kDone) << tracker.failure();
+  EXPECT_GE(robot.pose.x, 0.98 - 1e-3);
+  EXPECT_LT(robot.pose.x, 1.0);
+  // Not turned to the heading of the last pose.
+  EXPECT_LT(std::abs(robot.pose.yaw), 0.2);
+}
