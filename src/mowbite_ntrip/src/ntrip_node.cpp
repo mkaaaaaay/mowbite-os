@@ -1,8 +1,6 @@
-#include <fcntl.h>
 #include <netdb.h>
 #include <poll.h>
 #include <sys/socket.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -10,20 +8,24 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <mowbite_bridge/monitor.h>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/ntrip_status.hpp>
+#include <mowbite_msgs/msg/rpc_error.hpp>
+#include <mowbite_msgs/msg/rpc_methods.hpp>
+#include <mowbite_msgs/msg/rpc_request.hpp>
+#include <mowbite_msgs/msg/rpc_response.hpp>
 #include <mowbite_msgs/msg/rtcm.hpp>
 #include <mowbite_msgs/msg/sensor_info.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
-#include <sstream>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <thread>
 
+#include "mowbite_ntrip/ntrip_access.h"
 #include "mowbite_ntrip/ntrip_client.h"
 #include "mowbite_ntrip/ntrip_config.h"
 
@@ -65,7 +67,8 @@ bool SendAll(int fd, const std::string& data, int timeout_ms) {
 
 // NTRIP client: reads the access from <data_dir>/ntrip.yaml, publishes the caster's RTCM frames on gnss/rtcm for the
 // GNSS driver and sends the receiver's GGA (gnss/gga) back. Status on gnss/ntrip_status, the sensor os_ntrip_state and
-// CORRECTIONS events; none of them carries user or password.
+// CORRECTIONS events; none of them carries user or password, nor do the answers of ntrip.get, ntrip.set and
+// ntrip.delete.
 class NtripNode : public rclcpp::Node {
  public:
   explicit NtripNode(const rclcpp::NodeOptions& options) : rclcpp::Node("mowbite_ntrip", options), client_(Timing()) {
@@ -74,6 +77,7 @@ class NtripNode : public rclcpp::Node {
     if (file_.empty()) file_ = (std::filesystem::path(data_dir) / "ntrip.yaml").string();
     connect_timeout_s_ = declare_parameter("connect_timeout", 10.0);
     config_check_s_ = declare_parameter("config_check", 5.0);
+    access_over_rpc_ = declare_parameter("access_over_rpc", false);
 
     rtcm_pub_ = create_publisher<mowbite_msgs::msg::Rtcm>("gnss/rtcm", rclcpp::QoS(50).reliable());
     status_pub_ = create_publisher<mowbite_msgs::msg::NtripStatus>("gnss/ntrip_status", 10);
@@ -85,6 +89,18 @@ class NtripNode : public rclcpp::Node {
           std::lock_guard<std::mutex> lock(mutex_);
           client_.SetGga(msg->data);
         });
+
+    rpc_response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
+    rpc_error_pub_ = create_publisher<mowbite_msgs::msg::RpcError>("bridge/rpc/error", 100);
+    rpc_methods_pub_ = create_publisher<mowbite_msgs::msg::RpcMethods>("bridge/rpc/methods", LatchedQos(50));
+    rpc_sub_ = create_subscription<mowbite_msgs::msg::RpcRequest>(
+        "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRpcRequest(*msg); });
+    idle_sub_ = create_subscription<std_msgs::msg::Bool>(
+        "logic/idle", LatchedQos(1), [this](std_msgs::msg::Bool::ConstSharedPtr msg) { idle_ = msg->data ? 1 : 0; });
+    mowbite_msgs::msg::RpcMethods methods;
+    methods.node_id = "mowbite_ntrip";
+    methods.methods = AccessMethods(access_over_rpc_);
+    rpc_methods_pub_->publish(methods);
 
     mowbite_msgs::msg::SensorInfo info;
     info.sensor_id = kStateSensor;
@@ -120,7 +136,8 @@ class NtripNode : public rclcpp::Node {
     std::vector<uint8_t> buffer(4096);
     while (running_ && rclcpp::ok()) {
       double now = MonotonicSeconds();
-      if (now >= next_check) {
+      const bool changed = reload_now_.exchange(false);
+      if (changed || now >= next_check) {
         next_check = now + config_check_s_;
         ReloadConfig(now);
       }
@@ -167,33 +184,27 @@ class NtripNode : public rclcpp::Node {
 
   // Reads the access file; logs once per change what is wrong with it, never a value from it.
   void ReloadConfig(double now) {
-    std::optional<NtripConfig> config;
+    const AccessFile file = ReadAccessFile(file_);
+    const std::optional<NtripConfig>& config = file.config;
     std::string problem;
-    struct stat st;
-    if (::stat(file_.c_str(), &st) != 0) {
+    if (!file.exists) {
       problem = "No NTRIP access file " + file_ + ", no corrections";
+    } else if (!config) {
+      problem = file_ + ": " + file.error + "; no corrections";
+    } else if (file.readable_by_others) {
+      // Usable, but others may read the password.
+      if (!warned_mode_) RCLCPP_WARN(get_logger(), "%s can be read by others; chmod 600 it", file_.c_str());
+      warned_mode_ = true;
     } else {
-      std::ifstream in(file_);
-      std::stringstream text;
-      text << in.rdbuf();
-      std::string error;
-      if (!in) {
-        problem = "Cannot read " + file_ + ", no corrections";
-      } else if (!(config = ParseNtripConfig(text.str(), error))) {
-        problem = file_ + ": " + error + "; no corrections";
-      } else if (st.st_mode & 077) {
-        // Usable, but others may read the password.
-        if (!warned_mode_) RCLCPP_WARN(get_logger(), "%s can be read by others; chmod 600 it", file_.c_str());
-        warned_mode_ = true;
-      }
+      warned_mode_ = false;
     }
     if (problem != reported_problem_) {
       reported_problem_ = problem;
       if (!problem.empty()) {
-        if (::stat(file_.c_str(), &st) != 0) {
-          RCLCPP_INFO(get_logger(), "%s", problem.c_str());
-        } else {
+        if (file.exists) {
           RCLCPP_ERROR(get_logger(), "%s", problem.c_str());
+        } else {
+          RCLCPP_INFO(get_logger(), "%s", problem.c_str());
         }
       }
     }
@@ -203,6 +214,75 @@ class NtripNode : public rclcpp::Node {
                   config->mountpoint.c_str(), config->version, config->user.empty() ? ", no login" : "");
     }
     client_.SetConfig(config, now);
+  }
+
+  // ntrip.get, ntrip.set and ntrip.delete; the bridge hands every node all methods, the others answer theirs. The
+  // params of ntrip.set hold the password: they are never logged, and no answer carries user or password.
+  void OnRpcRequest(const mowbite_msgs::msg::RpcRequest& request) {
+    using mowbite_msgs::msg::RpcError;
+    if (request.method == kGetMethod) {
+      Answer(request.id, AccessSummary(ReadAccessFile(file_)));
+      return;
+    }
+    if (request.method != kSetMethod && request.method != kDeleteMethod) return;
+    if (!access_over_rpc_) {
+      AnswerError(request.id, RpcError::ERROR_METHOD_NOT_FOUND, "Method \"" + request.method + "\" not found");
+      return;
+    }
+    // Like params.set: a new caster in the middle of a job would move or cut off the corrections the mower drives on.
+    if (idle_ != 1) {
+      AnswerError(request.id, RpcError::ERROR_INVALID_REQUEST,
+                  idle_ < 0 ? "The NTRIP access changes only in IDLE, and the state of the mower is not known yet"
+                            : "The NTRIP access changes only in IDLE, not while recording, driving or mowing");
+      return;
+    }
+    std::string error;
+    if (request.method == kDeleteMethod) {
+      if (!RemoveAccessFile(file_, error)) {
+        RCLCPP_ERROR(get_logger(), "ntrip.delete: %s", error.c_str());
+        AnswerError(request.id, RpcError::ERROR_INTERNAL, "Cannot remove the access: " + error);
+        return;
+      }
+      RCLCPP_INFO(get_logger(), "ntrip.delete: access removed");
+    } else {
+      nlohmann::ordered_json params;
+      if (!request.params.empty()) {
+        params = nlohmann::ordered_json::parse(request.params, nullptr, false);
+        if (params.is_discarded()) {
+          AnswerError(request.id, RpcError::ERROR_INVALID_PARAMS, "The parameters are not valid JSON");
+          return;
+        }
+      }
+      const AccessChange change = ChangeAccess(params, ReadAccessFile(file_).config);
+      if (!change.config) {
+        AnswerError(request.id, RpcError::ERROR_INVALID_PARAMS, change.error);
+        return;
+      }
+      if (!WriteAccessFile(file_, *change.config, error)) {
+        RCLCPP_ERROR(get_logger(), "ntrip.set: %s", error.c_str());
+        AnswerError(request.id, RpcError::ERROR_INTERNAL, "Cannot save the access: " + error);
+        return;
+      }
+      RCLCPP_INFO(get_logger(), "ntrip.set: access saved to %s", file_.c_str());
+    }
+    reload_now_ = true;
+    // Read back from disk, so the answer shows what the client will use.
+    Answer(request.id, AccessSummary(ReadAccessFile(file_)));
+  }
+
+  void Answer(const std::string& id, const nlohmann::ordered_json& result) {
+    mowbite_msgs::msg::RpcResponse msg;
+    msg.result = result.dump();
+    msg.id = id;
+    rpc_response_pub_->publish(msg);
+  }
+
+  void AnswerError(const std::string& id, int16_t code, const std::string& message) {
+    mowbite_msgs::msg::RpcError msg;
+    msg.code = code;
+    msg.message = message;
+    msg.id = id;
+    rpc_error_pub_->publish(msg);
   }
 
   void Connect() {
@@ -370,6 +450,12 @@ class NtripNode : public rclcpp::Node {
   std::string file_;
   double connect_timeout_s_ = 10.0;
   double config_check_s_ = 5.0;
+  // ntrip.set and ntrip.delete; off until MQTT writes need a login and rpc/request is not readable without one (G13).
+  bool access_over_rpc_ = false;
+  // 1 while the logic is in IDLE, 0 otherwise, -1 until it said.
+  std::atomic<int> idle_{-1};
+  // An RPC changed the file: the loop reads it at once.
+  std::atomic<bool> reload_now_{false};
   std::mutex mutex_;
   NtripClient client_;
   int fd_ = -1;
@@ -381,7 +467,12 @@ class NtripNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::SensorInfo>::SharedPtr sensor_info_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::RpcResponse>::SharedPtr rpc_response_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::RpcError>::SharedPtr rpc_error_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::RpcMethods>::SharedPtr rpc_methods_pub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr gga_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr rpc_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr idle_sub_;
   std::atomic<bool> running_{true};
   std::thread io_thread_;
 };

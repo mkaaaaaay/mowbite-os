@@ -1,6 +1,7 @@
 # Access to an NTRIP caster for mowbite_ntrip. Copy to <data_dir>/ntrip.yaml (on the Tron /userdata/mowbite/ntrip.yaml),
 # fill in on the mower and protect it: chmod 600. The file is read every few seconds, a change takes effect at once.
-# Values may stand in single or double quotes (needed when they contain '#' or start with a quote or space).
+# Values may stand in single or double quotes (needed when they contain '#' or start with a quote or space); in single
+# quotes '' stands for one '. Where access_over_rpc is on, ntrip.set writes this file.
 #
 # Example SAPOS Niedersachsen (check against the current LGLN page): host sapos-ni-ntrip.de, port 2101, a VRS
 # mountpoint such as VRS_3_4G_NI; VRS needs the rover's position, which the client sends from the receiver's GGA.
