@@ -298,6 +298,17 @@ if offers("params.set") and args.target == "mowbite-os":
     p = json.loads(latest("params/json") or "{}")
     logic = sorted(k[len("/mower_logic/"):] for k in p if k.startswith("/mower_logic/"))
     check("params/json has the settings of params.set", logic == sorted(LOGIC_SETTINGS), ",".join(logic))
+ACCESS_FIELDS = ["configured", "host", "port", "mountpoint", "version", "has_user", "has_password"]
+if args.target == "mowbite-os" and offers("ntrip.get"):
+    # The NTRIP access without user and password; only the names of the fields go into the report.
+    r = rpc("ntrip.get", None, "ntrip_get")
+    access = (r or {}).get("result")
+    fields = list(access) if isinstance(access, dict) else []
+    expected = ACCESS_FIELDS if access and access.get("configured") is True else (
+        ["configured", "error"] if "error" in fields else ["configured"])
+    check("ntrip.get without user and password", fields == expected, json.dumps(fields or r))
+    writable = [m for m in ("ntrip.set", "ntrip.delete") if m in methods]
+    check("ntrip.set and ntrip.delete only together", len(writable) in (0, 2), ",".join(writable))
 r = rpc("no.such.method", None, "3")
 check("unknown method -32601", r and r.get("error", {}).get("code") == -32601, json.dumps(r and r.get("error")))
 c.publish("rpc/request", "{broken")
@@ -375,6 +386,26 @@ if methods is not None and "params.set" in methods:
     r = rpc("params.set", {"params": {"/mower_logic/gps_wait_time": wait}}, "pset_back")
     check("params.set back to the start value", r and r.get("result") == {"/mower_logic/gps_wait_time": wait},
           json.dumps(r))
+
+# Test access only, the broker of the simulation is open. Port 9 of the simulation's own host has no caster: the client
+# only waits.
+TEST_ACCESS = {"host": "127.0.0.1", "port": 9, "mountpoint": "/CHECK", "user": "check", "password": "check-only"}
+ntrip_write = methods is not None and "ntrip.set" in methods
+if ntrip_write and ((rpc("ntrip.get", None, "ntrip_before") or {}).get("result") or {}).get("configured") is not False:
+    skip("ntrip.set", "the simulation has an NTRIP access, it stays as it is")
+    ntrip_write = False
+if ntrip_write:
+    r = rpc("ntrip.set", TEST_ACCESS, "ntrip_set")
+    check("ntrip.set answers like ntrip.get", (r or {}).get("result") == {
+        "configured": True, "host": "127.0.0.1", "port": 9, "mountpoint": "CHECK", "version": 2, "has_user": True,
+        "has_password": True}, json.dumps(r))
+    r = rpc("ntrip.set", {"host": "localhost", "port": 9, "mountpoint": "CHECK"}, "ntrip_move")
+    check("ntrip.set keeps no login for another caster -32602", bool(r) and r.get("error", {}).get("code") == -32602,
+          json.dumps(r and r.get("error")))
+    r = rpc("ntrip.set", dict(TEST_ACCESS, pin="1234"), "ntrip_unknown")
+    check("ntrip.set refuses an unknown field -32602 without naming it", bool(r)
+          and r.get("error", {}).get("code") == -32602 and "pin" not in r["error"].get("message", ""),
+          json.dumps(r and r.get("error")))
 
 
 def planner_services():
@@ -491,6 +522,10 @@ check_log("teleop ignored in IDLE", not sent_speeds(t0), str(sent_speeds(t0)))
 c.publish("action", "mower_logic:idle/start_area_recording")
 state = wait_for(lambda: b'"current_state":"AREA_RECORDING"' in (latest("robot_state/json") or b""), 3)
 check("state AREA_RECORDING", bool(state))
+if ntrip_write:
+    r = rpc("ntrip.delete", None, "ntrip_recording")
+    check("ntrip.delete only in IDLE -32600", bool(r) and r.get("error", {}).get("code") == -32600,
+          json.dumps(r and r.get("error")))
 check("first recording step: start_recording and record_dock", bool(wait_for(
     lambda: enabled(REC + "start_recording") == 1 and enabled(REC + "record_dock") == 1
     and enabled(REC + "stop_recording") == 0, 3)))
@@ -583,6 +618,11 @@ check_log("exit_recording_mode stops at once: 3 zeros within 0.3 s", last_moving
       and zeros[0] - last_moving < 0.3, f"last moving {last_moving}, zeros {zeros}")
 state = wait_for(lambda: b'"current_state":"IDLE"' in (latest("robot_state/json") or b""), 3)
 check("state IDLE", bool(state))
+if ntrip_write:
+    r = rpc("ntrip.delete", None, "ntrip_delete")
+    check("ntrip.delete in IDLE", (r or {}).get("result") == {"configured": False}, json.dumps(r))
+    off = wait_for(lambda: latest("sensors/os_ntrip_state/data") == b"off", 8)
+    check("os_ntrip_state off after ntrip.delete", bool(off), str(latest("sensors/os_ntrip_state/data")))
 check("map_overlay empty after leaving", bool(wait_for(
     lambda: latest("map_overlay/json") is not None and json.loads(latest("map_overlay/json"))["polygons"] == [], 3)))
 s = json.loads(wait_for(lambda: latest("robot_state/json") if b'"heading_valid":1' in (latest("robot_state/json") or b"")
