@@ -204,7 +204,8 @@ else:
 
 infos = json.loads(latest("sensor_infos/json") or "[]")
 ids = sorted(i["sensor_id"] for i in infos)
-check("sensor ids", "om_v_battery" in ids and "om_gps_accuracy" in ids and (len(ids) == 11 or args.target != "mowbite-os"),
+# MowBite OS: 11 of the driver and the logic, os_ntrip_state and os_correction_age of the corrections.
+check("sensor ids", "om_v_battery" in ids and "om_gps_accuracy" in ids and (len(ids) == 13 or args.target != "mowbite-os"),
       ",".join(ids), missing=True)
 battery_info = next((i for i in infos if i["sensor_id"] == "om_v_battery"), {})
 if args.target == "mowbite-os":
