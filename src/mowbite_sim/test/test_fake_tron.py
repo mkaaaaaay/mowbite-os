@@ -406,6 +406,111 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(board.resets, 1)
 
 
+class DockTest(unittest.TestCase):
+    """The charging station: 1 m behind a mower at the origin facing east, it backs in going west."""
+
+    def setUp(self):
+        self.dock = ft.Dock(-1.0, 0.0, math.pi, -0.18)
+        self.t = 0.0
+
+    def run_for(self, pose, seconds, linear, angular=0.0, dt=0.01):
+        """Steps like the loop of fake_tron; returns how many steps the station stopped."""
+        stopped = 0
+        for _ in range(int(round(seconds / dt))):
+            self.t += dt
+            before = ft.Pose(pose.x, pose.y, pose.yaw)
+            pose.step(dt, linear, angular)
+            pushing = self.dock.stop(before, pose)
+            stopped += pushing
+            self.dock.update(self.t, pose, pushing)
+        return stopped
+
+    def test_backing_in_stops_on_the_contacts(self):
+        pose = ft.Pose()
+        self.assertGreater(self.run_for(pose, 15.0, -0.1), 0)
+        self.assertAlmostEqual(pose.x, -1.0, places=9)
+        self.assertAlmostEqual(pose.y, 0.0, places=9)
+
+    def test_contact_after_a_second_of_pushing(self):
+        pose = ft.Pose()
+        self.run_for(pose, 10.0, -0.1)
+        self.assertFalse(self.dock.contact)
+        self.run_for(pose, 0.9, -0.1)
+        self.assertFalse(self.dock.contact)
+        self.run_for(pose, 0.3, -0.1)
+        self.assertTrue(self.dock.contact)
+
+    def test_a_short_push_and_a_pause_do_not_add_up(self):
+        pose = ft.Pose()
+        self.run_for(pose, 10.6, -0.1)
+        self.run_for(pose, 0.5, 0.0)
+        self.run_for(pose, 0.6, -0.1)
+        self.assertFalse(self.dock.contact)
+
+    def test_contact_holds_standing_and_ends_driving_off(self):
+        pose = ft.Pose()
+        self.run_for(pose, 12.5, -0.1)
+        self.assertTrue(self.dock.contact)
+        self.run_for(pose, 5.0, 0.0)
+        self.assertTrue(self.dock.contact)
+        self.run_for(pose, 0.2, 0.1)
+        self.assertFalse(self.dock.contact)
+
+    def test_off_across_the_housing_stops_without_contact(self):
+        pose = ft.Pose(0.0, 0.05, 0.0)
+        self.assertGreater(self.run_for(pose, 15.0, -0.1), 0)
+        self.assertAlmostEqual(pose.x, -1.0, places=9)
+        self.assertFalse(self.dock.contact)
+
+    def test_beside_the_housing_no_stop(self):
+        pose = ft.Pose(0.0, 0.15, 0.0)
+        self.assertEqual(self.run_for(pose, 15.0, -0.1), 0)
+        self.assertAlmostEqual(pose.x, -1.5, places=6)
+
+    def test_turned_on_the_station_contact_only_within_five_degrees(self):
+        self.assertTrue(self.dock.settle(ft.Pose(-1.0, 0.0, math.radians(4.0))))
+        self.assertFalse(self.dock.settle(ft.Pose(-1.0, 0.0, math.radians(6.0))))
+
+    def test_backing_in_at_an_angle_misses_the_contacts(self):
+        # 4 degrees off over 1 m: the contacts meet the plane about 0.08 m to the side, the housing still stops it.
+        pose = ft.Pose(0.0, 0.0, math.radians(4.0))
+        self.assertGreater(self.run_for(pose, 15.0, -0.1), 0)
+        along, across, _ = self.dock.place(pose)
+        self.assertAlmostEqual(along, 0.0, places=9)
+        self.assertAlmostEqual(abs(across), 0.0825, delta=0.002)
+        self.assertFalse(self.dock.contact)
+
+    def test_placed_on_the_station(self):
+        self.assertTrue(self.dock.settle(ft.Pose(-1.0, 0.0, 0.0)))
+        self.assertFalse(ft.Dock(-1.0, 0.0, math.pi, -0.18).settle(ft.Pose(-0.9, 0.0, 0.0)))
+
+    def test_moving_the_station_takes_a_docked_mower_along(self):
+        pose = ft.Pose(-1.0, 0.0, 0.0)
+        self.dock.settle(pose)
+        self.dock.move((0.2, 0.1), pose)
+        self.assertAlmostEqual(pose.x, -0.8, places=9)
+        self.assertAlmostEqual(pose.y, 0.1, places=9)
+        self.assertTrue(self.dock.update(1.0, pose, False))
+        # Without contact the station moves alone.
+        free = ft.Pose(0.0, 0.0, 0.0)
+        other = ft.Dock(-1.0, 0.0, math.pi, -0.18)
+        other.move((0.3, 0.0), free)
+        self.assertEqual((free.x, free.y), (0.0, 0.0))
+        self.run_for_dock(other, free)
+        self.assertAlmostEqual(free.x, -0.7, places=9)
+
+    def run_for_dock(self, dock, pose):
+        self.dock = dock
+        self.run_for(pose, 15.0, -0.1)
+
+    def test_contacts_ahead_drive_in_forwards(self):
+        self.dock = ft.Dock(2.0, 0.0, 0.0, 0.3)
+        pose = ft.Pose()
+        self.run_for(pose, 25.0, 0.1)
+        self.assertAlmostEqual(pose.x, 2.0, places=9)
+        self.assertTrue(self.dock.contact)
+
+
 class ProcessTest(unittest.TestCase):
     """fake_tron as a process on ptys, with a host that writes frames like the driver."""
 
@@ -572,7 +677,8 @@ class ProcessTest(unittest.TestCase):
         self.assertIn("$GNRTK,ON*69", lines)
         gga = [l for l in lines if l[3:6] == "GGA"][-1].split(",")
         self.assertEqual(gga[6], "4")
-        self.assertLess(float(gga[13]), 1.5)
+        # The last GGA of the window comes up to 1.5 s after the frame.
+        self.assertLess(float(gga[13]), 2.0)
         self.set_flags()
 
     def test_3_imu_rate_and_content(self):
@@ -628,6 +734,59 @@ class ProcessTest(unittest.TestCase):
             for name in os.listdir(d):
                 os.remove(os.path.join(d, name))
             os.rmdir(d)
+
+
+class DockProcessTest(unittest.TestCase):
+    """fake_tron started on its charging station: contact at once, a charge current only after Charge 1."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp(prefix="fake_tron_dock_")
+        cls.paths = {k: os.path.join(cls.dir, k) for k in ("mcu", "gnss", "imu", "flags", "state", "log")}
+        cls.proc = subprocess.Popen(
+            [sys.executable, "-I", SCRIPT, "--link", cls.paths["mcu"], "--gnss-link", cls.paths["gnss"],
+             "--imu-link", cls.paths["imu"], "--flags", cls.paths["flags"], "--state", cls.paths["state"],
+             "--log", cls.paths["log"], "--start", "-1.0", "0.0", "0.0", "--dock", "-1.0", "0.0", "180.0"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        for _ in range(100):
+            if os.path.lexists(cls.paths["mcu"]):
+                break
+            time.sleep(0.05)
+        cls.fd = os.open(cls.paths["mcu"], os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        import tty
+        tty.setraw(cls.fd)
+
+    @classmethod
+    def tearDownClass(cls):
+        os.close(cls.fd)
+        cls.proc.terminate()
+        cls.proc.wait(timeout=5)
+        cls.err = cls.proc.stderr.read()
+        cls.proc.stderr.close()
+
+    def batteries(self, seconds):
+        """(current A, dock_ok) of the battery reports within seconds."""
+        out = []
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            for packets in ft.Decoder().feed(read_available(self.fd, 0.1)):
+                for t, m, payload in packets or []:
+                    if t == ft.FROM_MCU and m == 5:
+                        current, dock_ok = struct.unpack("<HhBbbI", payload)[1], payload[5]
+                        out.append((current / 10.0, dock_ok))
+        return out
+
+    def test_contact_at_once_and_current_only_after_charge_on(self):
+        before = self.batteries(2.2)
+        self.assertTrue(before and all(ok == 1 for _, ok in before), before)
+        self.assertTrue(all(current > 0 for current, _ in before), before)
+        os.write(self.fd, ft.encode([(ft.TO_MCU, 3, bytes([1]))]))
+        after = self.batteries(2.2)
+        self.assertTrue(after and after[-1] == (-3.0, 1), after)
+        os.write(self.fd, ft.encode([(ft.TO_MCU, 3, bytes([0]))]))
+        self.assertGreater(self.batteries(2.2)[-1][0], 0)
+        with open(self.paths["state"]) as f:
+            self.assertTrue(json.load(f)["dock_ok"])
 
 
 # Opens the port given like a driver does and holds it.

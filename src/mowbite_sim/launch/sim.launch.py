@@ -1,9 +1,32 @@
 # MowBite OS against the simulated Tron (MCU, GNSS, IMU), e.g. on the PC with a local mosquitto.
+import yaml
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, OpaqueFunction, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
+
+
+# fake_tron with the charging station of the section fake_tron in extra_config, if it has one (sim.yaml does).
+def fake_tron_setup(context):
+    try:
+        with open(LaunchConfiguration("extra_config").perform(context)) as f:
+            values = (yaml.safe_load(f) or {}).get("fake_tron", {}).get("ros__parameters", {})
+    except (OSError, yaml.YAMLError, AttributeError):
+        values = {}
+    station = []
+    if "dock" in values:
+        station = ["--dock", *(str(float(v)) for v in values["dock"]),
+                   "--dock-contact-x", str(float(values.get("dock_contact_x", -0.18)))]
+    return [ExecuteProcess(
+        cmd=[PathJoinSubstitution([FindPackagePrefix("mowbite_sim"), "lib", "mowbite_sim", "fake_tron"]),
+             "--link", LaunchConfiguration("link"), "--gnss-link", LaunchConfiguration("gnss_link"),
+             "--imu-link", LaunchConfiguration("imu_link"),
+             "--flags", LaunchConfiguration("flags"), "--log", LaunchConfiguration("log"),
+             "--state", LaunchConfiguration("state"),
+             "--datum", LaunchConfiguration("datum_lat"), LaunchConfiguration("datum_long"),
+             LaunchConfiguration("datum_height"), *station],
+        output="screen")]
 
 
 def generate_launch_description():
@@ -13,13 +36,6 @@ def generate_launch_description():
     datum_lat = LaunchConfiguration("datum_lat")
     datum_long = LaunchConfiguration("datum_long")
     datum_height = LaunchConfiguration("datum_height")
-    fake_tron = ExecuteProcess(
-        cmd=[PathJoinSubstitution([FindPackagePrefix("mowbite_sim"), "lib", "mowbite_sim", "fake_tron"]),
-             "--link", link, "--gnss-link", gnss_link, "--imu-link", imu_link,
-             "--flags", LaunchConfiguration("flags"), "--log", LaunchConfiguration("log"),
-             "--state", LaunchConfiguration("state"),
-             "--datum", datum_lat, datum_long, datum_height],
-        output="screen")
     sim_control = ExecuteProcess(
         cmd=[PathJoinSubstitution([FindPackagePrefix("mowbite_sim"), "lib", "mowbite_sim", "sim_control"]),
              "--flags", LaunchConfiguration("flags")],
@@ -49,7 +65,7 @@ def generate_launch_description():
         DeclareLaunchArgument("data_dir", default_value="/tmp/mowbite_sim_data"),
         DeclareLaunchArgument("extra_config", default_value=PathJoinSubstitution(
             [FindPackageShare("mowbite_sim"), "config", "sim.yaml"])),
-        fake_tron,
+        OpaqueFunction(function=fake_tron_setup),
         sim_control,
         # The pty has to exist before the driver looks for it.
         TimerAction(period=1.0, actions=[stack]),
