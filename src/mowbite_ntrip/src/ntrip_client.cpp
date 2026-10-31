@@ -15,7 +15,7 @@ bool IsGga(const std::string& s) {
 // "may": the new source can just as well have the same reference.
 const char kSourceChanged[] =
     "Corrections from another caster or mountpoint: positions may be offset from the map if its reference differs; a "
-    "change within SAPOS moves nothing";
+    "change between sources with the same reference moves nothing";
 
 }  // namespace
 
