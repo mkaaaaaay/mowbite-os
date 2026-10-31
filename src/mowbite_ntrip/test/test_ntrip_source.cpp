@@ -6,7 +6,9 @@
 #include <fstream>
 #include <sstream>
 
+#include "mowbite_ntrip/ntrip_client.h"
 #include "mowbite_ntrip/ntrip_source.h"
+#include "rtcm_frames.h"
 
 namespace mowbite_ntrip {
 namespace {
@@ -152,6 +154,38 @@ TEST_F(SourceFileTest, NeverWritesWhatReadsBackOtherwise) {
   EXPECT_FALSE(fs::exists(path_));
   EXPECT_FALSE(WriteSourceFile((dir_ / "missing" / "ntrip_source.json").string(), {"h", 2101, "M"}, error));
   EXPECT_NE(error.find("cannot create"), std::string::npos) << error;
+}
+
+// As the node does it: the source read before the start, saved after its first frame.
+std::vector<ClientEvent> RunOnce(const std::string& path, const NtripConfig& access) {
+  NtripClient client{ClientTiming()};
+  client.SetLastSource(ReadSourceFile(path).source);
+  client.SetConfig(access, 0);
+  client.BeginAttempt(0);
+  std::vector<std::vector<uint8_t>> frames;
+  const std::string header = "ICY 200 OK\r\n";
+  client.OnBytes(reinterpret_cast<const uint8_t*>(header.data()), header.size(), 0, frames);
+  const auto frame = MakeFrame(1005, 19);
+  client.OnBytes(frame.data(), frame.size(), 0, frames);
+  std::string error;
+  if (const auto used = client.TakeSourceToSave()) {
+    EXPECT_TRUE(WriteSourceFile(path, *used, error)) << error;
+  }
+  return client.TakeEvents();
+}
+
+TEST_F(SourceFileTest, ChangeOverARestart) {
+  EXPECT_TRUE(RunOnce(path_, Access("sapos-ni-ntrip.de", 2101, "VRS_3_4G_NI")).empty());
+  EXPECT_TRUE(RunOnce(path_, Access("SAPOS-NI-NTRIP.DE", 2101, "VRS_3_4G_NI")).empty());
+  const auto events = RunOnce(path_, Access("caster.example", 2101, "BASE"));
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].reason, "SOURCE_CHANGED");
+  EXPECT_EQ(*events[0].previous, (CorrectionSource{"SAPOS-NI-NTRIP.DE", 2101, "VRS_3_4G_NI"}));
+  EXPECT_EQ(*events[0].source, (CorrectionSource{"caster.example", 2101, "BASE"}));
+  EXPECT_TRUE(RunOnce(path_, Access("caster.example", 2101, "BASE")).empty());
+  // The file never holds the login.
+  EXPECT_EQ(Text().find(kUser), std::string::npos);
+  EXPECT_EQ(Text().find(kPassword), std::string::npos);
 }
 
 }  // namespace

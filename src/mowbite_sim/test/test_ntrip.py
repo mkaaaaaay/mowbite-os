@@ -1,7 +1,8 @@
 """Corrections from a caster to the receiver: mowbite_ntrip against a test caster on 127.0.0.1 (NTRIP 2.0 chunked and
 1.0, a refused login, an outage), tron_gnss with the RTK board's handshake against fake_tron, whose receiver reports
 RTK fixed only while the board passes RTCM. Checks the fix, the age limit, the CORRECTIONS events, the sensors, the
-access over RPC (the test plays the bridge and the logic's logic/idle) and that user and password show up nowhere.
+access over RPC (the test plays the bridge and the logic's logic/idle), SOURCE_CHANGED against the source used last and
+that user and password show up nowhere.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_ntrip.py
 """
@@ -35,6 +36,7 @@ LINKS = {name: os.path.join(WORK, name) for name in ("mcu", "gnss", "imu")}
 FLAGS = os.path.join(WORK, "flags.json")
 LOG = os.path.join(WORK, "rx.jsonl")
 ACCESS = os.path.join(WORK, "ntrip.yaml")
+SOURCE = os.path.join(WORK, "ntrip_source.json")
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 HISTORY = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 # Test values only, they must never appear in a status, a log line, an event or an answer.
@@ -198,6 +200,15 @@ def board_log():
     return out
 
 
+def saved_source():
+    """The source of the corrections used last, as mowbite_ntrip saved it; None without the file."""
+    try:
+        with open(SOURCE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
 class Probe:
     def __init__(self):
         # Reentrant: wait() holds it while a predicate may call corrections_events().
@@ -299,6 +310,9 @@ class Probe:
         with self.lock:
             return [e for e in self.events[since:] if e["type"] == "CORRECTIONS"]
 
+    def source_changes(self, since=0):
+        return [e for e in self.corrections_events(since) if e["reason"] == "SOURCE_CHANGED"]
+
     def stop(self):
         self.running = False
         time.sleep(0.2)
@@ -321,6 +335,22 @@ class TestNtrip(unittest.TestCase):
         return self.probe.wait(lambda p: p.status and p.status.state == "connected" and p.status.frames > 0 and
                                0 <= p.status.last_frame_age < 2.0, timeout)
 
+    def assert_source_changed(self, since, before, now):
+        """One SOURCE_CHANGED since the index, from mountpoint before to now on the test caster, and now saved."""
+        p = self.probe
+        changed = p.wait(lambda p: p.source_changes(since), 5)
+        self.assertTrue(changed, p.corrections_events(since))
+        self.assertEqual(len(changed), 1, changed)
+        event = changed[0]
+        names = ("severity", "host", "port", "mountpoint", "previous_host", "previous_port", "previous_mountpoint")
+        self.assertEqual({k: event.get(k) for k in names},
+                         {"severity": "warning", "host": "127.0.0.1", "port": CASTER.port, "mountpoint": now,
+                          "previous_host": "127.0.0.1", "previous_port": CASTER.port, "previous_mountpoint": before})
+        # Holds nothing up.
+        self.assertNotIn("resume", event)
+        self.assertIn("may be offset", event["message"])
+        self.assertTrue(p.wait(lambda p: (saved_source() or {}).get("mountpoint") == now, 5), saved_source())
+
     def test_1_ntrip2_gives_rtk_fixed(self):
         p = self.probe
         self.assertTrue(self.connected_with_frames(), f"status: {p.status}")
@@ -339,6 +369,9 @@ class TestNtrip(unittest.TestCase):
                                p.sensors["os_ntrip_state"].text == "connected"))
         self.assertTrue(p.wait(lambda p: p.sensors.get("os_correction_age") and
                                p.sensors["os_correction_age"].value < 2.0))
+        # The first source of all is saved without the login and gives no event.
+        self.assertTrue(p.wait(lambda p: saved_source(), 5), "no ntrip_source.json")
+        self.assertEqual(saved_source(), {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V2"})
         self.assertEqual(p.corrections_events(), [])
 
     def test_2_outage_float_lost_then_restored(self):
@@ -392,6 +425,7 @@ class TestNtrip(unittest.TestCase):
 
     def test_4_ntrip1(self):
         p = self.probe
+        since = len(p.events)
         write_access(mountpoint="V1", version=1)
         self.assertTrue(p.wait(lambda p: any(a[1] == "V1" and a[3] for a in CASTER.attempts()), 10))
         self.assertTrue(self.connected_with_frames(10), f"status: {p.status}")
@@ -399,12 +433,18 @@ class TestNtrip(unittest.TestCase):
         self.assertIn("HTTP/1.0", v1.split("\r\n")[0])
         self.assertNotIn("Ntrip-Version", v1)
         self.assertTrue(p.wait(lambda p: p.pose and p.pose.flags == FIXED, 15))
+        # Another mountpoint in the file by hand.
+        self.assert_source_changed(since, "V2", "V1")
 
     def test_5_without_access_file_off(self):
         p = self.probe
+        since = len(p.events)
         os.remove(ACCESS)
         self.assertTrue(p.wait(lambda p: p.status and p.status.state == "off", 10), f"status: {p.status}")
         self.assertTrue(p.wait(lambda p: p.sensors["os_ntrip_state"].text == "off"))
+        # No event for switching off, and the source used last stays for the next comparison.
+        self.assertEqual(p.corrections_events(since), [])
+        self.assertEqual(saved_source(), {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V1"})
 
     def test_6_access_over_rpc(self):
         p = self.probe
@@ -428,20 +468,25 @@ class TestNtrip(unittest.TestCase):
         self.assertFalse(os.path.exists(ACCESS))
 
         start = time.time()
+        since = len(p.events)
         r = p.rpc("ntrip.set", login)
         self.assertEqual(r, {"result": {"configured": True, "host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V2",
                                         "version": 2, "has_user": True, "has_password": True}})
         self.assertEqual(stat.S_IMODE(os.stat(ACCESS).st_mode), 0o600)
         self.assertTrue(self.connected_with_frames(10), f"status: {p.status}")
         self.assertTrue([a for a in CASTER.attempts() if a[0] >= start and a[1] == "V2" and a[3]])
+        # Compared with the source used last (V1 in test_4), the removed access does not count.
+        self.assert_source_changed(since, "V1", "V2")
 
         # On the same caster user and password stay when left out.
         start = time.time()
+        since = len(p.events)
         r = p.rpc("ntrip.set", {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "/V1", "version": 1})
         self.assertEqual(r and (r["result"]["mountpoint"], r["result"]["version"], r["result"]["has_password"]),
                          ("V1", 1, True), r)
         self.assertTrue(p.wait(lambda p: [a for a in CASTER.attempts() if a[0] >= start and a[1] == "V1" and a[3]], 10))
         self.assertTrue(self.connected_with_frames(10), f"status: {p.status}")
+        self.assert_source_changed(since, "V2", "V1")
 
         # Another caster gets no stored login; a refusal leaves the file as it is.
         with open(ACCESS) as f:
@@ -467,6 +512,8 @@ class TestNtrip(unittest.TestCase):
         r = p.rpc("ntrip.set", {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V2", "password": PASSWORD})
         self.assertTrue(r and r["result"]["configured"], r)
         self.assertTrue(self.connected_with_frames(6), f"status: {p.status}")
+        # The refused login used nothing: compared with V1, not with the refused V2.
+        self.assert_source_changed(since, "V1", "V2")
 
         self.assertEqual(p.rpc("ntrip.delete"), {"result": {"configured": False}})
         self.assertFalse(os.path.exists(ACCESS))
@@ -479,6 +526,15 @@ class TestNtrip(unittest.TestCase):
         with p.lock:
             texts = list(p.logs) + [json.dumps(e) for e in p.events] + [s.last_error for s in p.statuses]
         texts += p.answer_texts()
+        with open(SOURCE) as f:
+            texts.append(f.read())
         token = base64.b64encode(f"{USER}:{PASSWORD}".encode()).decode()
         for secret in (USER, PASSWORD, WRONG, token):
             self.assertFalse([t for t in texts if secret in t], secret)
+
+    def test_8_one_source_changed_per_change(self):
+        p = self.probe
+        # V2 first (none), V1 by hand, then over RPC V2, V1 and V2 after the refused login; switching off gave none.
+        changes = [(e["previous_mountpoint"], e["mountpoint"]) for e in p.source_changes()]
+        self.assertEqual(changes, [("V2", "V1"), ("V1", "V2"), ("V2", "V1"), ("V1", "V2")])
+        self.assertEqual(saved_source(), {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V2"})

@@ -257,6 +257,133 @@ TEST_F(Fixture, CrcErrorsAreCounted) {
   EXPECT_EQ(client.frames(), 1u);
 }
 
+TEST_F(Fixture, FirstSourceGivesNoEventAndIsSaved) {
+  client.SetConfig(Config(), 0);
+  Stream(0);
+  EXPECT_TRUE(client.TakeEvents().empty());
+  const auto saved = client.TakeSourceToSave();
+  ASSERT_TRUE(saved);
+  EXPECT_EQ(*saved, (CorrectionSource{"h", 2101, "M"}));
+  EXPECT_FALSE(client.TakeSourceToSave());
+  // More frames and a new connection to the same source change nothing.
+  Bytes(MakeFrame(1005, 19), 1);
+  client.OnClosed(2, "closed by the caster");
+  Stream(7);
+  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_FALSE(client.TakeSourceToSave());
+}
+
+TEST_F(Fixture, AnotherSourceGivesOneEventWithBoth) {
+  client.SetLastSource(CorrectionSource{"caster.example", 2102, "OLD"});
+  client.SetConfig(Config("NEW"), 0);
+  client.BeginAttempt(0);
+  Bytes("ICY 200 OK\r\n", 0);
+  // Not before the first frame: only then do its corrections reach the receiver.
+  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_FALSE(client.TakeSourceToSave());
+  Bytes(MakeFrame(1005, 19), 0.5);
+  auto events = client.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].reason, "SOURCE_CHANGED");
+  EXPECT_EQ(events[0].severity, "warning");
+  EXPECT_EQ(events[0].resume, "");
+  EXPECT_NE(events[0].message.find("may be offset"), std::string::npos);
+  ASSERT_TRUE(events[0].source && events[0].previous);
+  EXPECT_EQ(*events[0].source, (CorrectionSource{"h", 2101, "NEW"}));
+  EXPECT_EQ(*events[0].previous, (CorrectionSource{"caster.example", 2102, "OLD"}));
+  EXPECT_EQ(client.TakeSourceToSave(), (CorrectionSource{"h", 2101, "NEW"}));
+  // Once per change.
+  Bytes(MakeFrame(1005, 19), 1);
+  client.OnClosed(2, "closed by the caster");
+  Stream(7);
+  EXPECT_TRUE(client.TakeEvents().empty());
+}
+
+TEST_F(Fixture, SameSourceInOtherSpellingVersionOrLoginGivesNoEvent) {
+  client.SetLastSource(CorrectionSource{"H", 2101, "/M"});
+  NtripConfig config = Config();
+  config.version = 1;
+  client.SetConfig(config, 0);
+  Stream(0);
+  EXPECT_TRUE(client.TakeEvents().empty());
+  // Saved again as now spelled.
+  EXPECT_EQ(client.TakeSourceToSave(), (CorrectionSource{"h", 2101, "M"}));
+  config.user = "v";
+  client.SetConfig(config, 1);
+  client.OnClosed(1, "");
+  Stream(1);
+  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_FALSE(client.TakeSourceToSave());
+}
+
+TEST_F(Fixture, SourceWithoutFramesChangesNothing) {
+  // A typo that never streams: the source used last stays.
+  client.SetLastSource(CorrectionSource{"h", 2101, "M"});
+  client.SetConfig(Config("TYPO"), 0);
+  client.BeginAttempt(0);
+  Bytes("HTTP/1.1 401 Unauthorized\r\n\r\n", 0);
+  client.OnClosed(0, "");
+  auto events = client.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].reason, "REJECTED");
+  EXPECT_FALSE(client.TakeSourceToSave());
+  client.SetConfig(Config(), 1);
+  Stream(1);
+  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_FALSE(client.TakeSourceToSave());
+}
+
+TEST_F(Fixture, RemovedAccessKeepsTheSourceUsedLast) {
+  client.SetConfig(Config(), 0);
+  Stream(0);
+  client.TakeSourceToSave();
+  // Removing gives no event, nor does the same source again; another one does.
+  client.SetConfig(std::nullopt, 1);
+  client.OnClosed(1, "");
+  client.SetConfig(Config(), 2);
+  Stream(2);
+  EXPECT_TRUE(client.TakeEvents().empty());
+  client.SetConfig(std::nullopt, 3);
+  client.OnClosed(3, "");
+  client.SetConfig(Config("N"), 4);
+  Stream(4);
+  auto events = client.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].reason, "SOURCE_CHANGED");
+  EXPECT_EQ(events[0].previous->mountpoint, "M");
+  EXPECT_EQ(events[0].source->mountpoint, "N");
+}
+
+TEST_F(Fixture, ChangeWhileConnectedCountsFromTheNewFrames) {
+  client.SetConfig(Config(), 0);
+  Stream(0);
+  client.TakeSourceToSave();
+  client.SetConfig(Config("N"), 5);
+  // Frames still coming on the old connection count for nothing.
+  Bytes(MakeFrame(1005, 19), 5);
+  EXPECT_EQ(frames.size(), 1u);
+  EXPECT_TRUE(client.TakeEvents().empty());
+  client.OnClosed(5, "");
+  Stream(5);
+  auto events = client.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].previous->mountpoint, "M");
+}
+
+TEST_F(Fixture, LostThenAnotherSourceGivesBoth) {
+  client.SetConfig(Config(), 0);
+  Stream(0);
+  client.OnClosed(1, "closed by the caster");
+  client.Tick(40);
+  ASSERT_EQ(client.TakeEvents().size(), 1u);
+  client.SetConfig(Config("N"), 40);
+  Stream(40);
+  auto events = client.TakeEvents();
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0].reason, "SOURCE_CHANGED");
+  EXPECT_EQ(events[1].reason, "RESTORED");
+}
+
 TEST_F(Fixture, ErrorsNeverCarryTheAccess) {
   NtripConfig c = Config();
   c.password = "s3c.r3t.pw";
