@@ -44,6 +44,7 @@ void McuControl::OnSensorInfo(const SensorInfo& info, double now) {
 }
 
 void McuControl::OnDockContactSample(bool contact) {
+  dock_raw_ = contact;
   dock_samples_ = contact ? std::min(dock_samples_ + 1, config_.dock_debounce_samples) : 0;
 }
 
@@ -362,6 +363,7 @@ McuControlStatus McuControl::Status(double now) const {
   status.blade_on = blade_on_.has_value();
   status.blade_off_reason = blade_off_reason_;
   status.dock_contact = DockContact();
+  status.dock_contact_raw = dock_raw_;
   status.firmware_incompatible = FirmwareIncompatible();
   return status;
 }

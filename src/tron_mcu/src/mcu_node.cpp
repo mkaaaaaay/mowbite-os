@@ -438,6 +438,8 @@ class McuNode : public rclcpp::Node {
       }
 
       if (battery_s_ && now_s - *battery_s_ < kReportMaxAge) {
+        // The battery report carries the contact.
+        msg.dock_contact_raw = state.dock_contact_raw;
         msg.battery_source = HardwareStatus::BATTERY_SOURCE_BMS;
         msg.battery_voltage = static_cast<float>(battery_.voltage_v);
         msg.battery_current = static_cast<float>(battery_.current_a);

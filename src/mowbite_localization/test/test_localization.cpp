@@ -503,5 +503,59 @@ TEST(Localization, SetPoseRestartsTheFilter) {
   EXPECT_DOUBLE_EQ(e.pose_covariance[8], 1.0);
 }
 
+TEST(Localization, SetHeadingNeedsAFixTheFilterTook) {
+  Localization loc({});
+  double t = 100;
+  Calibrate(loc, t);
+  EXPECT_FALSE(loc.SetHeading(1.0, t));
+  // Ten inliers are the warmup, the filter has not taken GPS yet.
+  for (int i = 0; i < 10; ++i) {
+    Step(loc, t, 0.1, 0.0, 0.0);
+    loc.AddGps(Fixed(3, 4), t);
+  }
+  EXPECT_FALSE(loc.SetHeading(1.0, t));
+  EXPECT_FALSE(loc.heading_valid());
+  EXPECT_DOUBLE_EQ(loc.GetEstimate().theta, 0.0);
+}
+
+TEST(Localization, SetHeadingPutsBaseLinkBehindTheAntennaOfTheLastFix) {
+  LocalizationConfig config;
+  config.antenna_offset_x = 0.3;
+  config.antenna_offset_y = 0.1;
+  Localization loc(config);
+  double t = 100;
+  Calibrate(loc, t);
+  // The filter took these fixes facing east (theta 0): its own base_link is off by the turned offset.
+  InitGps(loc, t, 10, 5);
+  const auto base = loc.SetHeading(M_PI / 2, t);
+  ASSERT_TRUE(base);
+  // Facing north the antenna is 0.3 m north and 0.1 m west of base_link.
+  EXPECT_NEAR(base->x, 10.1, 1e-9);
+  EXPECT_NEAR(base->y, 4.7, 1e-9);
+  const Estimate e = loc.GetEstimate();
+  EXPECT_NEAR(e.x, 10.1, 1e-9);
+  EXPECT_NEAR(e.y, 4.7, 1e-9);
+  EXPECT_NEAR(e.theta, M_PI / 2, 1e-12);
+  EXPECT_DOUBLE_EQ(e.vx, 0);
+  EXPECT_TRUE(loc.heading_valid());
+  // The accuracy stays that of the fix.
+  EXPECT_NEAR(loc.PositionAccuracy(t), 0.02, 1e-6);
+}
+
+TEST(Localization, SetHeadingWithoutARecentFixChangesNothing) {
+  LocalizationConfig config;
+  config.gps_timeout_s = 2.0;
+  Localization loc(config);
+  double t = 100;
+  Calibrate(loc, t);
+  InitGps(loc, t, 1, 1);
+  EXPECT_FALSE(loc.SetHeading(std::nan(""), t));
+  Step(loc, t, 2.5, 0.0, 0.0);
+  const Estimate before = loc.GetEstimate();
+  EXPECT_FALSE(loc.SetHeading(2.0, t));
+  EXPECT_DOUBLE_EQ(loc.GetEstimate().theta, before.theta);
+  EXPECT_FALSE(loc.heading_valid());
+}
+
 }  // namespace
 }  // namespace mowbite_localization

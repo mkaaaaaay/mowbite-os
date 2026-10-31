@@ -682,6 +682,19 @@ TEST_F(ControlTest, ChargeOnlyOnDebouncedContact) {
   EXPECT_EQ(Times([](const SubPacket& p) { return IsModule(p, Module::kCharge); }).size(), 3u);
 }
 
+TEST_F(ControlTest, RawContactFollowsEachSampleTheDebouncedOneThree) {
+  Run(0.1);
+  control_.OnDockContactSample(true);
+  EXPECT_TRUE(control_.Status(now_).dock_contact_raw);
+  EXPECT_FALSE(control_.Status(now_).dock_contact);
+  control_.OnDockContactSample(true);
+  control_.OnDockContactSample(true);
+  EXPECT_TRUE(control_.Status(now_).dock_contact);
+  control_.OnDockContactSample(false);
+  EXPECT_FALSE(control_.Status(now_).dock_contact_raw);
+  EXPECT_FALSE(control_.Status(now_).dock_contact);
+}
+
 TEST_F(ControlTest, ImuSamplesForwardedOnceAndRateLimited) {
   Run(0.1);
   // 100 Hz IMU into a 100 Hz loop, forwarded at most every 20 ms.

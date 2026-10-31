@@ -36,6 +36,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetDock.srv"
   "srv/SetEmergency.srv"
   "srv/SetPose.srv"
+  "srv/SetHeading.srv"
   "srv/DriveTo.srv"
   "action/FollowPath.action"
   DEPENDENCIES builtin_interfaces std_msgs geometry_msgs diagnostic_msgs action_msgs

@@ -54,6 +54,8 @@ tron_gnss:
     board_active_window: 10.0
     board_reset_on_off: true
     board_gate: true
+    # With data_dir/ntrip.yaml (tron.launch.py sets data_dir) RTK fixed counts as float until the first NTRIP
+    # corrections went to the receiver: before that a LoRa base with a reference of its own may give the fix (G24).
     # datum_lat, datum_long and datum_height of the garden go into the parameter file on the Tron, not here.
 
 mowbite_ntrip:
@@ -106,11 +108,19 @@ mowbite_logic:
     # itself and stops the mower and the blade (G22). Assumption until phase 6.
     follower_timeout: 2.0
     # Area recording: smallest area in m², most points of one recording (the map must fit one MQTT message), distance
-    # in m between the two points of the docking station, and how long (s) a save waits for mowbite_map.
+    # in m between the two points of the docking station, and how long (s) a save waits for mowbite_map. Both points of
+    # the station need a valid heading, the one on the contacts the contact.
     recording_min_area: 0.05
     recording_max_points: 5000
-    recording_min_dock_distance: 0.3
+    recording_min_dock_distance: 0.5
     map_edit_timeout: 5.0
+    # The charging contacts of the Tron lie about 0.18 m behind base_link: it backs onto the docking station and faces
+    # away from it there (assumption, measured in phase 6). On the contacts mowing and drives start only after the
+    # reference check (G24): position accuracy at least dock_max_position_accuracy m, then with the heading of the
+    # station set, base_link within dock_reference_limit m of the recorded station (assumptions until phase 7).
+    dock_contact_x: -0.18
+    dock_max_position_accuracy: 0.03
+    dock_reference_limit: 0.10
     # mowing.plan and the job ask the planner for a plan and set only what the request carries: width, passes and angle
     # are the planner's (mowbite_planner below). plan_timeout in s.
     plan_timeout: 30.0

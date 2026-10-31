@@ -427,3 +427,24 @@ TEST(MowingPlanTransit, NeedsAMapThatFitsAndAnArea) {
   EXPECT_EQ(why.message, "Cannot drive on the map: The map was recorded for another datum");
   EXPECT_TRUE(drivable.empty());
 }
+
+TEST(MowingPlanDock, TheFirstActiveStationOfTheMap) {
+  MowingPlanner planner;
+  EXPECT_FALSE(planner.Dock());
+  planner.SetMap(kMap);
+  EXPECT_FALSE(planner.Dock());
+  planner.SetMap(R"({"areas": [], "docking_stations": [
+    {"id": "old", "properties": {"active": false}, "position": {"x": 9, "y": 9}, "heading": 0.0},
+    {"id": "dock", "properties": {"name": "Docking Station"}, "position": {"x": -1.5, "y": 3.0}, "heading": 3.14},
+    {"id": "other", "position": {"x": 5, "y": 5}, "heading": 1.0}]})");
+  const auto dock = planner.Dock();
+  ASSERT_TRUE(dock);
+  EXPECT_DOUBLE_EQ(dock->x, -1.5);
+  EXPECT_DOUBLE_EQ(dock->y, 3.0);
+  EXPECT_DOUBLE_EQ(dock->heading, 3.14);
+  // A station without a usable heading makes the map unreadable, like a broken outline.
+  planner.SetMap(R"({"areas": [], "docking_stations": [{"id": "dock", "position": {"x": 1, "y": 2}, "heading": "n"}]})");
+  EXPECT_FALSE(planner.Dock());
+  planner.SetMapStatus(true, Reason());
+  EXPECT_EQ(planner.MapProblem().code, "MAP_UNREADABLE");
+}

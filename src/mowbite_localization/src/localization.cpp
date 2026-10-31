@@ -179,6 +179,16 @@ void Localization::SetPose(double x, double y, double theta) {
   heading_valid_ = true;
 }
 
+std::optional<Position> Localization::SetHeading(double theta, double now_s) {
+  if (!has_gps_ || !RecentGps(now_s) || !std::isfinite(theta)) return std::nullopt;
+  const double c = std::cos(theta), s = std::sin(theta);
+  Position base;
+  base.x = last_gps_.x - (c * config_.antenna_offset_x - s * config_.antenna_offset_y);
+  base.y = last_gps_.y - (s * config_.antenna_offset_x + c * config_.antenna_offset_y);
+  SetPose(base.x, base.y, theta);
+  return base;
+}
+
 void Localization::Reset(double x, double y, double theta) {
   StateT s;
   s.setZero();

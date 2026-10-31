@@ -7,13 +7,18 @@ did. The speed drops to 0 after --host-timeout seconds without any frame from th
 while the lift or stop flag is set; it stays 0 until the next SpeedData. The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an upside-down mounted sensor.
 Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, gnss_age, gnss_delay,
-yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, gnss_rtcm) is read on every cycle, every received sub packet goes to a JSON lines log, and --state writes the
-true pose as JSON. The GNSS pty also plays the RTK board in front of the receiver (Board). gnss_rtcm true makes the fix
-depend on the RTCM the board passes: RTK fixed with the real age while corrections are at most 120 s old, otherwise
-single without age. gnss_noise is the standard deviation (m) of the antenna position, gnss_age the age of the corrections
-in GGA (s, default 1.0, null leaves the field empty), gnss_delay how old (s) the position is when it is sent, yaw_drift
-the yaw error (rad) per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below which a wheel stands,
-odom_scale the factor between the reported and the real wheel speed, track the real track (m). imu_off stops the IMU frames, cutter_ignores_off keeps the blade turning on off frames.
+yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, gnss_rtcm, dock_shift_x, dock_shift_y) is
+read on every cycle, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON. The
+GNSS pty also plays the RTK board in front of the receiver (Board). gnss_rtcm true makes the fix depend on the RTCM the
+board passes: RTK fixed with the real age while corrections are at most 120 s old, otherwise single without age.
+gnss_noise is the standard deviation (m) of the antenna position, gnss_age the age of the corrections in GGA (s, default
+1.0, null leaves the field empty), gnss_delay how old (s) the position is when it is sent, yaw_drift the yaw error (rad)
+per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below which a wheel stands, odom_scale the factor
+between the reported and the real wheel speed, track the real track (m). imu_off stops the IMU frames,
+cutter_ignores_off keeps the blade turning on off frames.
+--dock places a charging station (Dock): the mower stops at it, gets contact there (dock_ok in the battery report) and a
+charge current only after the host sent Charge 1. The flag dock forces the contact anywhere; dock_shift_x and
+dock_shift_y move the station (m), the mower with it while it has contact.
 """
 import argparse
 import atexit
@@ -196,6 +201,83 @@ class Drive:
     def measured(self, scale=1.0):
         """The (linear, angular) the MCU reports: its wheel speeds times scale, on its own track."""
         return scale * (self.left + self.right) / 2.0, scale * (self.right - self.left) / self.mcu_track
+
+
+# The charging station: the stop (its housing) holds the mower up to DOCK_STOP_ACROSS m to the side of the contacts;
+# contact needs the mower's contacts within DOCK_CONTACT_ACROSS m across and its heading within DOCK_CONTACT_YAW of the
+# docked one after DOCK_PUSH_TIME s of pushing, and holds while they stay within DOCK_CONTACT_GAP m of the station's.
+# Assumptions until measured in phase 7.
+DOCK_STOP_ACROSS = 0.10
+DOCK_CONTACT_ACROSS = 0.02
+DOCK_CONTACT_YAW = math.radians(5.0)
+DOCK_PUSH_TIME = 1.0
+DOCK_CONTACT_GAP = 0.005
+
+
+class Dock:
+    """A charging station placed like one of map.json: base_link of the docked mower at (x, y), heading the way the
+    mower drives in. The mower's contacts lie contact_x m ahead of its base (negative: behind, it backs in and faces the
+    other way on the station). The station's contacts span a plane across the heading that stops the base."""
+
+    def __init__(self, x, y, heading, contact_x):
+        self.x, self.y, self.heading, self.contact_x = x, y, heading, contact_x
+        self.shift = (0.0, 0.0)
+        self.contact = False
+        self.pushing_since = None
+
+    def docked_yaw(self):
+        return self.heading + (math.pi if self.contact_x < 0 else 0.0)
+
+    def place(self, pose):
+        """(along, across, yaw error) of the mower's contacts to the station's; along > 0 is past them."""
+        yaw = self.docked_yaw()
+        cx = self.x + self.shift[0] + self.contact_x * math.cos(yaw)
+        cy = self.y + self.shift[1] + self.contact_x * math.sin(yaw)
+        dx = pose.x + self.contact_x * math.cos(pose.yaw) - cx
+        dy = pose.y + self.contact_x * math.sin(pose.yaw) - cy
+        hx, hy = math.cos(self.heading), math.sin(self.heading)
+        error = pose.yaw - yaw
+        return dx * hx + dy * hy, dy * hx - dx * hy, math.atan2(math.sin(error), math.cos(error))
+
+    def stop(self, before, pose):
+        """Ends a step from before that runs into the station where the mower's contacts reach the plane: no sliding
+        along the housing, no turning. True if it did."""
+        along_before, _, _ = self.place(before)
+        along, across, _ = self.place(pose)
+        if along_before > 1e-6 or along <= 0.0 or abs(across) > DOCK_STOP_ACROSS:
+            return False
+        pose.x = before.x - along_before * math.cos(self.heading)
+        pose.y = before.y - along_before * math.sin(self.heading)
+        pose.yaw = before.yaw
+        return True
+
+    def update(self, now, pose, pushing):
+        """The contact for the mower at pose; pushing: the station stopped it just now."""
+        along, across, error = self.place(pose)
+        if abs(along) > DOCK_CONTACT_GAP or abs(across) > DOCK_CONTACT_ACROSS or abs(error) > DOCK_CONTACT_YAW:
+            self.contact = False
+            self.pushing_since = None
+        elif not self.contact and pushing:
+            if self.pushing_since is None:
+                self.pushing_since = now
+            self.contact = now - self.pushing_since >= DOCK_PUSH_TIME
+        elif not pushing:
+            self.pushing_since = None
+        return self.contact
+
+    def settle(self, pose):
+        """A mower placed on the station has contact at once."""
+        along, across, error = self.place(pose)
+        self.contact = (abs(along) <= DOCK_CONTACT_GAP and abs(across) <= DOCK_CONTACT_ACROSS and
+                        abs(error) <= DOCK_CONTACT_YAW)
+        return self.contact
+
+    def move(self, shift, pose):
+        """Moves the station to shift (m from where it was placed), the mower with it while it has contact."""
+        if self.contact:
+            pose.x += shift[0] - self.shift[0]
+            pose.y += shift[1] - self.shift[1]
+        self.shift = shift
 
 
 class History:
@@ -501,11 +583,11 @@ def send(fd, data):
                   flush=True)
 
 
-def write_state(path, now, pose):
+def write_state(path, now, pose, dock_ok=False):
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump({"t": round(now, 3), "x": pose.x, "y": pose.y, "yaw": pose.yaw, "linear": pose.linear,
-                   "angular": pose.angular}, f)
+                   "angular": pose.angular, "dock_ok": dock_ok}, f)
     os.replace(tmp, path)
 
 
@@ -515,7 +597,8 @@ def main():
     parser.add_argument("--gnss-link", default="/tmp/mowbite_sim_gnss", help="symlink to the GNSS pty")
     parser.add_argument("--imu-link", default="/tmp/mowbite_sim_imu", help="symlink to the IMU pty")
     parser.add_argument("--flags", help="JSON file with lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, "
-                        "gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off")
+                        "gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, "
+                        "gnss_rtcm, dock_shift_x, dock_shift_y")
     parser.add_argument("--log", help="JSON lines log of received sub packets")
     parser.add_argument("--log-max-mb", type=float, default=20.0)
     parser.add_argument("--state", help="JSON file with the true pose, written 5 times a second")
@@ -535,6 +618,10 @@ def main():
     parser.add_argument("--track", type=float, help="real track (m) the base turns on, default --mcu-track")
     parser.add_argument("--wheel-deadband", type=float, default=0.0, help="m/s below which a wheel stands")
     parser.add_argument("--odom-scale", type=float, default=1.0, help="reported / real wheel speed")
+    parser.add_argument("--dock", type=float, nargs=3, metavar=("X", "Y", "HEADING_DEG"),
+                        help="charging station like one of map.json: the docked base_link and the way in")
+    parser.add_argument("--dock-contact-x", type=float, default=-0.18,
+                        help="the mower's contacts ahead of base_link (m), negative: it backs onto the station")
     args = parser.parse_args()
 
     # SIGTERM from launch or docker has to reach the finally block that removes the symlinks.
@@ -556,6 +643,11 @@ def main():
     course = None
     # Cutter: on with a speed in percent from the last cutter frame; it stops with the wheels (lift, stop, no host).
     cutter_percent = 0
+    dock = Dock(args.dock[0], args.dock[1], math.radians(args.dock[2]), args.dock_contact_x) if args.dock else None
+    if dock and dock.settle(pose):
+        print("fake_tron: the mower starts on the docking station", file=sys.stderr, flush=True)
+    # Charge from the last Charge frame of the host; the station only gives current while the mower has contact.
+    charging = dock_ok = False
 
     t0 = time.monotonic()
     last = 0.0
@@ -568,8 +660,23 @@ def main():
             drive.track = float(flags.get("track", args.track or args.mcu_track))
             linear, angular = drive.move(*host.setpoint(now, blocked),
                                          float(flags.get("wheel_deadband", args.wheel_deadband)))
+            before = Pose(pose.x, pose.y, pose.yaw)
             pose.step(now - last, linear, angular, float(flags.get("yaw_drift", args.yaw_drift)))
             last = now
+            pushing = False
+            if dock:
+                dock.move((float(flags.get("dock_shift_x", 0.0)), float(flags.get("dock_shift_y", 0.0))), pose)
+                pushing = dock.stop(before, pose)
+                if pushing:
+                    # The wheels stall against the station.
+                    pose.linear = pose.slip = 0.0
+                    drive.left = drive.right = 0.0
+                had_contact = dock.contact
+                if dock.update(now, pose, pushing) != had_contact:
+                    log.write({"t": round(now, 3), "dock": "contact" if dock.contact else "free"})
+            dock_ok = bool(flags.get("dock", 0)) or bool(dock and dock.contact)
+            if not dock_ok:
+                charging = False
             antenna_history.push(now, (pose.antenna(*args.antenna_offset), pose.antenna_velocity(*args.antenna_offset)))
 
             if now >= next_sensor:
@@ -582,9 +689,8 @@ def main():
                 send(mcu.fd, encode([(FROM_MCU, 10, sensor), (FROM_MCU, 4, struct.pack("<ff", *measured))]))
             if now >= next_status:
                 next_status = now + 1.0
-                dock = int(flags.get("dock", 0))
-                # 24.5 V, -3.0 A charging on the dock or 1.2 A discharging, 80 %, 30 degC
-                battery = struct.pack("<HhBbbI", 245, -30 if dock else 12, 80, dock, 30, 0)
+                # 24.5 V, -3.0 A charging on the dock after Charge 1 or 1.2 A discharging, 80 %, 30 degC
+                battery = struct.pack("<HhBbbI", 245, -30 if charging else 12, 80, int(dock_ok), 30, 0)
                 motor = struct.pack("<hhhbb", 0, 0, 2450, 30, 0)
                 if blocked or host.last_rx is None or now - host.last_rx > args.host_timeout:
                     cutter_percent = 0
@@ -624,7 +730,7 @@ def main():
                     send(imu.fd, wit_frames(pose, args.mount_rpy_deg, args.gyro_bias_dps))
             if args.state and now >= next_state:
                 next_state = now + 0.2
-                write_state(args.state, now, pose)
+                write_state(args.state, now, pose, dock_ok)
 
             if now >= next_port_check:
                 next_port_check = now + 0.1
@@ -659,6 +765,9 @@ def main():
                         if not blocked:
                             host.on_speed(*speed_cmd)
                         entry["speed"] = [round(v, 3) for v in speed_cmd]
+                    if packet_type == TO_MCU and module == 3 and len(payload) >= 1:
+                        charging = payload[0] == 1 and dock_ok
+                        entry["charge"] = payload[0]
                     if packet_type == TO_MCU and module == 11 and len(payload) >= 4:
                         on = payload[0] == 1
                         if on or not flags.get("cutter_ignores_off", 0):

@@ -159,10 +159,22 @@ std::vector<size_t> SimplifiedIndices(const std::vector<Point2>& points, double 
 
 void MowingPlanner::SetMap(const std::string& text) {
   map_.clear();
+  dock_.reset();
   map_readable_ = false;
   const json j = json::parse(text, nullptr, false);
   if (j.is_discarded() || !j.is_object() || !j.contains("areas") || !j["areas"].is_array()) return;
   try {
+    if (j.contains("docking_stations") && j["docking_stations"].is_array()) {
+      for (const auto& entry : j["docking_stations"]) {
+        if (!entry.is_object() || !entry.contains("position") || !entry.contains("heading")) continue;
+        const json properties =
+            entry.contains("properties") && entry["properties"].is_object() ? entry["properties"] : json::object();
+        if (!properties.value("active", true)) continue;
+        const Ring position = RequirePoints(json::array({entry["position"]}), "docking_stations");
+        dock_ = DockPose{position[0].x, position[0].y, RequireNumber(entry, "heading")};
+        break;
+      }
+    }
     for (const auto& entry : j["areas"]) {
       if (!entry.is_object() || !entry.contains("id") || !entry["id"].is_string() || !entry.contains("outline")) continue;
       MapArea area;
@@ -178,13 +190,19 @@ void MowingPlanner::SetMap(const std::string& text) {
     }
   } catch (const PlanError&) {
     map_.clear();
+    dock_.reset();
     return;
   } catch (const json::exception&) {
     // a property of another type than the map writes it: not a map to plan from
     map_.clear();
+    dock_.reset();
     return;
   }
   map_readable_ = true;
+}
+
+std::optional<DockPose> MowingPlanner::Dock() const {
+  return map_readable_ ? dock_ : std::nullopt;
 }
 
 Reason MowingPlanner::TransitAreas(std::vector<Ring>* drivable, std::vector<Ring>* obstacles) const {
