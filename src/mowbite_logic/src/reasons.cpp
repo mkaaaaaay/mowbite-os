@@ -47,6 +47,8 @@ Rating RateReason(const std::string& event, const std::string& code, const std::
   }
   if (event == "POSITION_JUMP") return {kWarning, kAuto};
   if (event == "AREA_SKIPPED") return {kInfo, kAuto};
+  // With OpenMower's reason values path_failed and no_gps; the mower stays where it stopped.
+  if (event == "UNDOCKING_FAILED") return {kError, kUser};
   return {kWarning, kUser};
 }
 

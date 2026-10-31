@@ -11,6 +11,7 @@
 #include "mowbite_logic/area_recorder.h"
 #include "mowbite_logic/mowing_job.h"
 #include "mowbite_logic/reasons.h"
+#include "mowbite_logic/undocking.h"
 
 namespace mowbite_logic {
 
@@ -85,6 +86,17 @@ struct LogicConfig {
   // of the recorded station.
   double dock_max_position_accuracy = 0.03;
   double dock_reference_limit = 0.10;
+  // After the reference check the mower leaves the station before mowing or a drive starts (contacts behind base_link
+  // only; it drives forwards out of the station).
+  UndockConfig undock;
+};
+
+// How an undocking ended, for the node: undocked or not, whether a drive waits for it, and why the drive or mowing
+// after it did not start (empty if it did).
+struct UndockOutcome {
+  bool undocked = false;
+  bool for_drive = false;
+  Reason why;
 };
 
 struct Action {
@@ -188,8 +200,8 @@ struct JobStep {
 // The app repeats teleop every 100 ms while the joystick is held and sends one zero when it is let go.
 constexpr double kTeleopQuietS = 1.0;
 
-// Mower states and actions: IDLE, AREA_RECORDING (remote control and recording of areas), driving to a pose, MOWING
-// and PAUSED, emergency and sensors.
+// Mower states and actions: IDLE, AREA_RECORDING (remote control and recording of areas), driving to a pose,
+// UNDOCKING, MOWING and PAUSED, emergency and sensors.
 class LogicCore {
  public:
   explicit LogicCore(const LogicConfig& config);
@@ -200,6 +212,9 @@ class LogicCore {
   void OnPose(const PoseSnapshot& pose);
   // localization/pose stopped coming; events keep the last position.
   void OnPoseTimeout();
+  // An RTK fixed position of the GNSS antenna (gps/absolute_pose). The course probe of undocking measures the way the
+  // mower moves with these: the fused pose starts from the very heading of the station the probe checks.
+  void OnGnssFix(double x, double y);
   // The localization moved its estimate onto GPS again by distance_m, the event is at the new position.
   void OnPositionJump(double to_x, double to_y, double distance_m, bool after_outliers);
   ActionResult OnAction(const std::string& action_id);
@@ -236,19 +251,36 @@ class LogicCore {
   void OnMowMap(std::vector<JobArea> areas, const Reason& problem);
   // The docking station of the map, none without one.
   void OnMapDock(const std::optional<DockPose>& dock);
+  // Where base_link may end leaving the station: the active mow and navigation areas, outside of the obstacles.
+  void OnDrivableAreas(std::vector<Ring> drivable, std::vector<Ring> obstacles);
+  // undock_distance of params.set.
+  void SetUndockDistance(double distance);
   // The driver reports a debounced contact with the docking station.
   bool DockContact() const;
   // On the docking station mowing (start_mowing) and drives start only after the reference check (G24): the node sets
   // the heading TakeDockCheck returns, once per check, with localization/set_heading and hands the answer to
-  // OnDockCheck. A drive asks for its check here, after DriveProblem found nothing.
-  void CheckDockBeforeDrive();
+  // OnDockCheck. A drive to (x, y) asks for its check here, after DriveProblem found nothing.
+  void CheckDockBeforeDrive(double x, double y);
   std::optional<double> TakeDockCheck();
   bool DockCheckPending() const;
   // The answer of localization/set_heading: base_link with the heading of the station and its accuracy; ok false
-  // without a recent fix or without an answer (message says which). Returns why mowing or the drive does not start,
-  // which also goes out as MOWING_REFUSED or DRIVE_REFUSED. Undocking comes with the next step of stage 4: until
-  // then a check that passes ends in ON_DOCK as well.
+  // without a recent fix or without an answer (message says which). Empty when the check passed and undocking
+  // starts, else why mowing or the drive does not start, which also goes out as MOWING_REFUSED or DRIVE_REFUSED.
   Reason OnDockCheck(bool ok, double x, double y, float accuracy, const std::string& message);
+  // UNDOCKING: first charging off (the node calls hw/charge when TakeChargeOff says so, once, and hands the answer to
+  // OnChargeOff), then the path of TakeUndockPath to the follower, whose end goes to OnUndockEnded. After UNDOCKED
+  // mowing or the drive starts like away from the station. Charging is allowed again (TakeChargeOn) when undocking
+  // ends otherwise, as the mower may still stand on the contacts. TakeUndockOutcome tells the node once how it ended.
+  bool Undocking() const;
+  bool UndockingForDrive() const;
+  bool TakeChargeOff();
+  void OnChargeOff(bool ok, const std::string& message);
+  std::optional<UndockPath> TakeUndockPath();
+  void OnUndockEnded(LegEnd end, const Reason& reason);
+  bool TakeChargeOn();
+  std::optional<UndockOutcome> TakeUndockOutcome();
+  // Stops undocking without UNDOCKING_FAILED, like abort_undocking (also logic/stop_drive for a drive).
+  void AbortUndocking(const Reason& why);
   // The checkpoint read at the start.
   void RestoreJob(const JobProgress& progress);
   // Why mowing cannot start now, empty if it can.
@@ -305,7 +337,7 @@ class LogicCore {
   }
 
  private:
-  enum class State { kIdle, kAreaRecording, kDriving, kMowing };
+  enum class State { kIdle, kAreaRecording, kDriving, kMowing, kUndocking };
   // Why mowing pauses; manual, emergency and fault wait for continue, GPS goes on by itself.
   static constexpr int kPauseManual = 1 << 0;
   static constexpr int kPauseEmergency = 1 << 1;
@@ -323,17 +355,28 @@ class LogicCore {
   std::string CurrentStateName() const;
   // Each empty if nothing stands in the way: BUSY; EMERGENCY or NO_SAFETY_MEASUREMENT; NO_POSITION,
   // POSITION_ACCURACY or NO_HEADING (on the docking station the stricter accuracy of the reference check and no
-  // heading); NO_DOCK.
+  // heading); NO_DOCK or DOCK_UNREACHABLE; what else keeps mowing or a drive from starting, busy or not.
   Reason Busy() const;
   Reason Unsafe() const;
   Reason AccuracyReason(float accuracy, double limit) const;
   Reason PositionProblem() const;
   Reason DockProblem() const;
+  Reason MowProblem() const;
+  Reason MoveProblem() const;
+  // DOCK_UNREACHABLE when the way out from base_link at (x, y) on the station ends outside of the drivable areas.
+  Reason UndockEndProblem(double x, double y) const;
   double DockAccuracyLimit() const;
   // The heading of the mower on the docking station.
   double DockedHeading() const;
   enum class DockCheck { kNone, kMowing, kDrive };
   void BeginDockCheck(DockCheck purpose);
+  void BeginDrive(double x, double y);
+  // Undocking from base_link at (x, y) for mowing or the drive: charging off first.
+  void StartUndocking(DockCheck purpose, double x, double y);
+  // Stops the follower on its way out; undocking ends once it stopped, with UNDOCKING_FAILED if failure is set.
+  void StopUndocking(const std::optional<Reason>& failure, const Reason& why);
+  void EndUndocking(const std::optional<Reason>& failure, const Reason& why);
+  void Undocked();
   ActionResult OnMowingAction(const std::string& name);
   void StartMowing();
   void Pause(int why, const Reason& reason);
@@ -377,6 +420,27 @@ class LogicCore {
   // The reference check on its way: what for, and whether the node has taken it yet.
   DockCheck dock_check_ = DockCheck::kNone;
   bool dock_check_due_ = false;
+  // The goal of a drive from the station, for after undocking.
+  double drive_x_ = 0;
+  double drive_y_ = 0;
+  std::vector<Ring> drivable_;
+  std::vector<Ring> obstacles_;
+  // Undocking: what for, where it started and the way it faces, what the node does next for it, and once it is
+  // stopping, whether that ends in UNDOCKING_FAILED.
+  enum class UndockStep { kChargeOff, kDrive };
+  DockCheck undock_for_ = DockCheck::kNone;
+  UndockStep undock_step_ = UndockStep::kChargeOff;
+  double undock_x_ = 0;
+  double undock_y_ = 0;
+  double undock_heading_ = 0;
+  std::optional<Point2> undock_fix_start_;
+  bool charge_off_due_ = false;
+  bool charge_on_due_ = false;
+  std::optional<UndockPath> undock_path_due_;
+  bool undock_stopping_ = false;
+  std::optional<Reason> undock_failure_;
+  Reason undock_stop_why_;
+  std::optional<UndockOutcome> undock_outcome_;
   std::string session_id_;
   int pause_ = 0;
   Reason pause_reason_;

@@ -14,6 +14,8 @@ const std::string kRec = "mower_logic:area_recording/";
 
 // The station of the map: the mower backs in going north, so on the contacts it faces south.
 const DockPose kDock{-1.0, 2.0, M_PI / 2};
+// The lawn in front of it, where undocking 0.8 m south ends.
+const Ring kLawn{{-3.0, -3.0}, {3.0, -3.0}, {3.0, 1.9}, {-3.0, 1.9}};
 
 HardwareSnapshot Healthy(bool contact) {
   HardwareSnapshot hw;
@@ -50,6 +52,7 @@ LogicCore Docked(LogicConfig config = Tron()) {
   core.OnPose(PoseAt(kDock.x, kDock.y, 0.02f, false));
   core.OnMowMap({{"front", "Front", true}}, Reason());
   core.OnMapDock(kDock);
+  core.OnDrivableAreas({kLawn}, {});
   core.TakeEvents();
   core.TakeNotices();
   core.TakeActionsChanged();
@@ -158,20 +161,17 @@ TEST(DockStart, FarFromTheRecordedStationIsAReferenceMismatch) {
   EXPECT_TRUE(core.TakeDockCheck());
 }
 
-TEST(DockStart, ACheckThatPassesEndsOnTheStationUntilUndockingIsBuilt) {
+TEST(DockStart, ACheckThatPassesLeadsToUndocking) {
   LogicCore core = Docked();
   StartChecking(core);
   core.TakeDockCheck();
   core.TakeNotices();
   const Reason why = core.OnDockCheck(true, kDock.x + 0.03, kDock.y, 0.022f, "");
-  EXPECT_EQ(why.code, "ON_DOCK");
+  EXPECT_TRUE(why.empty()) << why.code;
+  EXPECT_TRUE(core.Undocking());
   EXPECT_FALSE(core.Mowing());
   const auto events = core.TakeEvents();
-  const Event* refused = Find(events, "MOWING_REFUSED");
-  ASSERT_TRUE(refused);
-  EXPECT_EQ(refused->details["reason"], "ON_DOCK");
-  EXPECT_NEAR(refused->details["distance"].get<double>(), 0.03, 1e-9);
-  EXPECT_EQ(refused->details["severity"], "info");
+  EXPECT_FALSE(Find(events, "MOWING_REFUSED"));
   const auto notices = core.TakeNotices();
   EXPECT_NE(std::find(notices.begin(), notices.end(),
                       "Reference check on the docking station passed: 0.03 m from the recorded position"),
@@ -216,6 +216,14 @@ TEST(DockStart, ContactsInFrontFaceTheWayIn) {
   LogicCore core = Docked(config);
   StartChecking(core);
   EXPECT_NEAR(core.TakeDockCheck().value_or(99), M_PI / 2, 1e-12);
+  // Undocking backwards is not built: a check that passes ends on the station.
+  core.TakeEvents();
+  EXPECT_EQ(core.OnDockCheck(true, kDock.x, kDock.y, 0.02f, "").code, "ON_DOCK");
+  EXPECT_FALSE(core.Undocking());
+  const auto events = core.TakeEvents();
+  const Event* refused = Find(events, "MOWING_REFUSED");
+  ASSERT_TRUE(refused);
+  EXPECT_EQ(refused->details["severity"], "info");
 }
 
 TEST(DockStart, OffTheStationNoCheck) {
@@ -237,7 +245,7 @@ TEST(DockStart, AnAnswerWithoutACheckChangesNothing) {
 TEST(DockDrive, ADriveFromTheStationIsCheckedFirst) {
   LogicCore core = Docked();
   ASSERT_TRUE(core.DriveProblem().empty()) << core.DriveProblem().code;
-  core.CheckDockBeforeDrive();
+  core.CheckDockBeforeDrive(2.0, 0.0);
   EXPECT_FALSE(core.Driving());
   EXPECT_EQ(core.DriveProblem().code, "BUSY");
   EXPECT_NEAR(core.TakeDockCheck().value_or(99), -M_PI / 2, 1e-12);

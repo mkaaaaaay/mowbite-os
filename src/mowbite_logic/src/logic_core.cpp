@@ -13,6 +13,7 @@ const std::string kRootPrefix = "mower_logic";
 const std::string kIdlePrefix = "mower_logic:idle";
 const std::string kRecordingPrefix = "mower_logic:area_recording";
 const std::string kMowingPrefix = "mower_logic:mowing";
+const std::string kUndockingPrefix = "mower_logic:undocking";
 
 // 32 letters and digits, random: the ids of jobs and sessions.
 std::string NewId() {
@@ -98,6 +99,12 @@ std::string Metres(double value) {
   return text;
 }
 
+std::string Degrees(double radians) {
+  char text[32];
+  std::snprintf(text, sizeof(text), "%.0f", radians * 180.0 / M_PI);
+  return text;
+}
+
 }  // namespace
 
 LogicCore::LogicCore(const LogicConfig& config) : config_(config), recorder_(RecorderConfigOf(config)) {
@@ -133,10 +140,31 @@ void LogicCore::OnPose(const PoseSnapshot& pose) {
   PullRecorder();
 }
 
+void LogicCore::OnGnssFix(double x, double y) {
+  if (state_ != State::kUndocking || undock_stopping_) return;
+  // The first fix of the undocking is where the course is measured from; the mower stands or drives straight.
+  if (!undock_fix_start_) {
+    undock_fix_start_ = Point2{x, y};
+    return;
+  }
+  if (undock_step_ != UndockStep::kDrive) return;
+  const auto error = CourseError(undock_fix_start_->x, undock_fix_start_->y, undock_heading_, x, y,
+                                 config_.undock.course_distance);
+  if (!error || std::abs(*error) <= config_.undock.course_limit) return;
+  const std::string text = "Undocking stopped: the mower drove " + Degrees(std::abs(*error)) +
+                           " deg off the line of the docking station, at most " + Degrees(config_.undock.course_limit) +
+                           " deg allowed: the station may be turned, or its heading was recorded wrong";
+  StopUndocking(Reason("path_failed", text), Reason("STOPPED", text));
+}
+
 void LogicCore::OnPoseTimeout() {
   pose_.reset();
   if (state_ == State::kDriving) CancelDrive(Reason("POSE_LOST", "No position from the localization"));
   if (state_ == State::kMowing) Pause(kPauseGps, Reason("NO_POSITION", "No position from the localization"));
+  if (state_ == State::kUndocking) {
+    StopUndocking(Reason("no_gps", "Undocking stopped: no position from the localization"),
+                  Reason("POSE_LOST", "No position from the localization"));
+  }
   recorder_.OnPoseLost();
   PullRecorder();
 }
@@ -229,6 +257,8 @@ void LogicCore::UpdateEmergency() {
     const Reason why("EMERGENCY", "Emergency: " + EmergencyReasonNames(reason_));
     if (emergency && state_ == State::kDriving) CancelDrive(why);
     if (emergency && state_ == State::kMowing) Pause(kPauseEmergency, why);
+    // Like OpenMower: the emergency tells, no UNDOCKING_FAILED.
+    if (emergency && state_ == State::kUndocking) StopUndocking(std::nullopt, why);
     // reason stays the bits of OpenMower; resetting is up to the user.
     AddEvent("EMERGENCY", {{"emergency", emergency},
                            {"reason", reason_},
@@ -266,6 +296,11 @@ ActionResult LogicCore::OnAction(const std::string& action_id) {
     if (state_ != State::kMowing) return ActionResult::kRejected;
     return OnMowingAction(action_id.substr(kMowingPrefix.size() + 1));
   }
+  if (action_id == kUndockingPrefix + "/abort_undocking") {
+    if (state_ != State::kUndocking) return ActionResult::kRejected;
+    AbortUndocking(Reason("STOPPED", "Aborted by the app"));
+    return ActionResult::kDone;
+  }
   if (action_id == kIdlePrefix + "/start_area_recording") {
     if (state_ != State::kIdle || emergency_) return ActionResult::kRejected;
     if (!map_writable_) {
@@ -288,8 +323,9 @@ ActionResult LogicCore::OnAction(const std::string& action_id) {
     if (result == AreaRecorder::Result::kDone) return ActionResult::kDone;
     if (result == AreaRecorder::Result::kRefused) return ActionResult::kRejected;
   }
-  const bool known_prefix =
-      action_id.rfind(kIdlePrefix + "/", 0) == 0 || action_id.rfind(kRecordingPrefix + "/", 0) == 0;
+  const bool known_prefix = action_id.rfind(kIdlePrefix + "/", 0) == 0 ||
+                            action_id.rfind(kRecordingPrefix + "/", 0) == 0 ||
+                            action_id.rfind(kUndockingPrefix + "/", 0) == 0;
   return known_prefix ? ActionResult::kRejected : ActionResult::kUnknown;
 }
 
@@ -314,12 +350,20 @@ void LogicCore::OnCapabilities(bool safety_measured) {
   if (state_ == State::kDriving) {
     CancelDrive(Reason("NOT_ALLOWED", "No safety measurement of this platform (hw/capabilities)"));
   }
+  if (state_ == State::kUndocking) {
+    const std::string text = "Undocking stopped: no safety measurement of this platform (hw/capabilities)";
+    StopUndocking(Reason("path_failed", text), Reason("NOT_ALLOWED", text));
+  }
   Pause(kPauseFault, Reason("NO_SAFETY_MEASUREMENT", "No safety measurement of this platform (hw/capabilities)"));
 }
 
 Reason LogicCore::DriveProblem() const {
-  Reason why = Busy();
-  if (why.empty()) why = Unsafe();
+  const Reason why = Busy();
+  return why.empty() ? MoveProblem() : why;
+}
+
+Reason LogicCore::MoveProblem() const {
+  Reason why = Unsafe();
   if (why.empty()) why = PositionProblem();
   if (why.empty()) why = DockProblem();
   return why;
@@ -331,11 +375,15 @@ Reason LogicCore::StartDrive(double x, double y) {
     RefuseDrive(why);
     return why;
   }
+  BeginDrive(x, y);
+  return {};
+}
+
+void LogicCore::BeginDrive(double x, double y) {
   drive_cancel_ = false;
   cancel_reason_.reset();
   SetState(State::kDriving);
   AddEvent("DRIVE", {{"phase", "start"}, {"goal_x", x}, {"goal_y", y}});
-  return {};
 }
 
 void LogicCore::RefuseDrive(const Reason& why) {
@@ -361,6 +409,7 @@ bool LogicCore::Driving() const {
 bool LogicCore::FollowerActive() const {
   if (emergency_) return false;
   if (state_ == State::kDriving) return true;
+  if (state_ == State::kUndocking) return undock_step_ == UndockStep::kDrive && !undock_stopping_;
   return state_ == State::kMowing && pause_ == 0 && (leg_ == Leg::kApproach || leg_ == Leg::kFollow);
 }
 
@@ -379,7 +428,10 @@ void LogicCore::CancelDrive(const Reason& reason) {
 
 void LogicCore::SetState(State state) {
   if (state == state_) return;
-  if (state_ == State::kAreaRecording || state_ == State::kDriving || state_ == State::kMowing) stop_requested_ = true;
+  if (state_ == State::kAreaRecording || state_ == State::kDriving || state_ == State::kMowing ||
+      state_ == State::kUndocking) {
+    stop_requested_ = true;
+  }
   // A session is one run of mowing; the job lasts until it is finished or reset.
   if (state == State::kMowing) {
     if (job_.progress().job_id.empty()) job_.SetJobId(NewId());
@@ -416,6 +468,7 @@ const char* LogicCore::StateName(State state) {
   switch (state) {
     case State::kAreaRecording: return "AREA_RECORDING";
     case State::kMowing: return "MOWING";
+    case State::kUndocking: return "UNDOCKING";
     // OpenMower has no state for driving without mowing; the sub state tells.
     case State::kDriving:
     case State::kIdle:
@@ -473,6 +526,7 @@ std::vector<ActionGroup> LogicCore::Actions() const {
                      {"abort_mowing", "Stop Mowing", mowing},
                      {"skip_area", "Skip Area", mowing},
                      {"skip_path", "Skip Path", mowing}}});
+  groups.push_back({kUndockingPrefix, {{"abort_undocking", "Stop Undocking", state_ == State::kUndocking}}});
   // The recorder decides while recording; outside of it all are off.
   const std::vector<bool> enabled = recorder_.Enabled();
   const std::vector<std::string> names = {"Start Recording",
@@ -641,8 +695,30 @@ Reason LogicCore::PositionProblem() const {
 }
 
 Reason LogicCore::DockProblem() const {
-  if (!DockContact() || dock_) return {};
-  return Reason("NO_DOCK", "The mower is on a docking station, but the map has none: record it first");
+  if (!DockContact()) return {};
+  if (!dock_) return Reason("NO_DOCK", "The mower is on a docking station, but the map has none: record it first");
+  return UndockEndProblem(dock_->x, dock_->y);
+}
+
+Reason LogicCore::UndockEndProblem(double x, double y) const {
+  // Contacts in front: undocking backwards is not built, the reference check ends in ON_DOCK.
+  if (config_.dock_contact_x >= 0) return {};
+  const double heading = DockedHeading();
+  const double distance = config_.undock.distance;
+  if (Reachable(drivable_, obstacles_, x + distance * std::cos(heading), y + distance * std::sin(heading))) return {};
+  return Reason("DOCK_UNREACHABLE", "Leaving the docking station " + Metres(distance) +
+                                        " m straight ahead ends outside of the mowing and navigation areas: let an "
+                                        "area reach there, or place the station closer to one")
+      .With("distance", distance);
+}
+
+void LogicCore::OnDrivableAreas(std::vector<Ring> drivable, std::vector<Ring> obstacles) {
+  drivable_ = std::move(drivable);
+  obstacles_ = std::move(obstacles);
+}
+
+void LogicCore::SetUndockDistance(double distance) {
+  config_.undock.distance = distance;
 }
 
 double LogicCore::DockAccuracyLimit() const {
@@ -670,7 +746,9 @@ void LogicCore::BeginDockCheck(DockCheck purpose) {
   notices_.push_back("On the docking station: checking the position against the recorded one first");
 }
 
-void LogicCore::CheckDockBeforeDrive() {
+void LogicCore::CheckDockBeforeDrive(double x, double y) {
+  drive_x_ = x;
+  drive_y_ = y;
   BeginDockCheck(DockCheck::kDrive);
 }
 
@@ -714,11 +792,20 @@ Reason LogicCore::OnDockCheck(bool ok, double x, double y, float accuracy, const
     } else {
       notices_.push_back("Reference check on the docking station passed: " + Metres(distance) +
                          " m from the recorded position");
-      why = Reason("ON_DOCK", "The position on the docking station fits, but undocking is not built yet: drive the "
-                              "mower off by remote control first")
-                .With("distance", distance)
-                .With("limit", limit);
+      if (config_.dock_contact_x >= 0) {
+        why = Reason("ON_DOCK", "The position on the docking station fits, but undocking backwards is not built yet: "
+                                "drive the mower off by remote control first")
+                  .With("distance", distance)
+                  .With("limit", limit);
+      } else {
+        // The way out from where the mower stands.
+        why = UndockEndProblem(x, y);
+      }
     }
+  }
+  if (why.empty()) {
+    StartUndocking(purpose, x, y);
+    return why;
   }
   if (purpose == DockCheck::kMowing) {
     RefuseStart(why);
@@ -728,9 +815,156 @@ Reason LogicCore::OnDockCheck(bool ok, double x, double y, float accuracy, const
   return why;
 }
 
+void LogicCore::StartUndocking(DockCheck purpose, double x, double y) {
+  undock_for_ = purpose;
+  undock_step_ = UndockStep::kChargeOff;
+  undock_x_ = x;
+  undock_y_ = y;
+  undock_heading_ = DockedHeading();
+  undock_fix_start_.reset();
+  charge_off_due_ = true;
+  undock_path_due_.reset();
+  undock_stopping_ = false;
+  undock_failure_.reset();
+  undock_stop_why_ = Reason();
+  notices_.push_back("Undocking: charging off, then " + Metres(config_.undock.distance) + " m straight ahead");
+  SetState(State::kUndocking);
+}
+
+bool LogicCore::Undocking() const {
+  return state_ == State::kUndocking;
+}
+
+bool LogicCore::UndockingForDrive() const {
+  return state_ == State::kUndocking && undock_for_ == DockCheck::kDrive;
+}
+
+bool LogicCore::TakeChargeOff() {
+  const bool due = charge_off_due_;
+  charge_off_due_ = false;
+  return due;
+}
+
+void LogicCore::OnChargeOff(bool ok, const std::string& message) {
+  if (state_ != State::kUndocking || undock_step_ != UndockStep::kChargeOff) return;
+  if (!ok) {
+    const std::string text = "Undocking failed: charging could not be switched off (" + message + ")";
+    EndUndocking(Reason("path_failed", text), Reason("STOPPED", text));
+    return;
+  }
+  undock_step_ = UndockStep::kDrive;
+  undock_path_due_ = PlanUndock(undock_x_, undock_y_, undock_heading_, config_.undock);
+}
+
+std::optional<UndockPath> LogicCore::TakeUndockPath() {
+  std::optional<UndockPath> path;
+  path.swap(undock_path_due_);
+  return path;
+}
+
+void LogicCore::StopUndocking(const std::optional<Reason>& failure, const Reason& why) {
+  if (state_ != State::kUndocking || undock_stopping_) return;
+  // Before the path went to the follower nothing moves: it ends at once.
+  if (undock_step_ == UndockStep::kChargeOff || undock_path_due_) {
+    EndUndocking(failure, why);
+    return;
+  }
+  undock_stopping_ = true;
+  undock_failure_ = failure;
+  undock_stop_why_ = why;
+  undock_path_due_.reset();
+  CancelDrive(why);
+  stop_requested_ = true;
+  actions_changed_ = true;
+}
+
+void LogicCore::AbortUndocking(const Reason& why) {
+  StopUndocking(std::nullopt, why);
+}
+
+void LogicCore::OnUndockEnded(LegEnd end, const Reason& reason) {
+  if (state_ != State::kUndocking || undock_step_ != UndockStep::kDrive) return;
+  if (end == LegEnd::kDone && !undock_stopping_) {
+    Undocked();
+    return;
+  }
+  // Stopped from here: the cause decided already. Otherwise the follower's: an emergency tells by itself.
+  if (undock_stopping_) {
+    EndUndocking(undock_failure_, undock_stop_why_);
+  } else if (end == LegEnd::kEmergency) {
+    EndUndocking(std::nullopt, reason);
+  } else if (end == LegEnd::kGps) {
+    const Reason failure("no_gps", "Undocking stopped: " + reason.message);
+    EndUndocking(failure, failure);
+  } else {
+    const Reason failure("path_failed", "Undocking failed: " + reason.message);
+    EndUndocking(failure, failure);
+  }
+}
+
+void LogicCore::EndUndocking(const std::optional<Reason>& failure, const Reason& why) {
+  if (failure) {
+    json details = json::object();
+    PutReason(&details, "UNDOCKING_FAILED", *failure);
+    AddEvent("UNDOCKING_FAILED", std::move(details));
+  }
+  if (!failure) notices_.push_back("Undocking stopped: " + why.message);
+  UndockOutcome outcome;
+  outcome.for_drive = undock_for_ == DockCheck::kDrive;
+  outcome.why = failure.value_or(why);
+  undock_outcome_ = outcome;
+  // The mower may still stand on the contacts.
+  charge_on_due_ = true;
+  charge_off_due_ = false;
+  undock_path_due_.reset();
+  undock_stopping_ = false;
+  undock_for_ = DockCheck::kNone;
+  SetState(State::kIdle);
+}
+
+void LogicCore::Undocked() {
+  AddEvent("UNDOCKED", json::object());
+  notices_.push_back("Undocked");
+  UndockOutcome outcome;
+  outcome.undocked = true;
+  outcome.for_drive = undock_for_ == DockCheck::kDrive;
+  undock_for_ = DockCheck::kNone;
+  // On like a start away from the station; what changed meanwhile comes first.
+  outcome.why = outcome.for_drive ? MoveProblem() : MowProblem();
+  if (!outcome.why.empty()) {
+    if (outcome.for_drive) {
+      RefuseDrive(outcome.why);
+    } else {
+      RefuseStart(outcome.why);
+    }
+    SetState(State::kIdle);
+  } else if (outcome.for_drive) {
+    BeginDrive(drive_x_, drive_y_);
+  } else {
+    StartMowing();
+  }
+  undock_outcome_ = outcome;
+}
+
+bool LogicCore::TakeChargeOn() {
+  const bool due = charge_on_due_;
+  charge_on_due_ = false;
+  return due;
+}
+
+std::optional<UndockOutcome> LogicCore::TakeUndockOutcome() {
+  std::optional<UndockOutcome> outcome;
+  outcome.swap(undock_outcome_);
+  return outcome;
+}
+
 Reason LogicCore::StartProblem() const {
-  Reason why = Busy();
-  if (why.empty()) why = Unsafe();
+  const Reason why = Busy();
+  return why.empty() ? MowProblem() : why;
+}
+
+Reason LogicCore::MowProblem() const {
+  Reason why = Unsafe();
   if (!why.empty()) return why;
   if (hw_.rain) return Reason("RAIN", "Rain detected");
   if (hw_.battery_ok && hw_.battery_voltage < config_.battery_critical_voltage) {

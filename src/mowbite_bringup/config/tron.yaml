@@ -122,6 +122,16 @@ mowbite_logic:
     dock_contact_x: -0.10
     dock_max_position_accuracy: 0.03
     dock_reference_limit: 0.10
+    # After the check charging goes off (hw/charge), then the mower leaves the station undock_distance m straight
+    # ahead without steering, at most undock_speed m/s: its wheels climb out of the 10 mm hollows of the station, a
+    # crawl would stay in them. Standing undock_stall_time s while driven, or the way the GNSS antenna moves (RTK
+    # fixed, from 0.3 m on) turning more than undock_course_limit degrees off the line of the station in the map, ends
+    # undocking (UNDOCKING_FAILED).
+    # undock_distance is a setting of params.set (0.5 to 2 m), the 0.8 m of the vendor. Assumptions until phase 7.
+    undock_distance: 0.8
+    undock_speed: 0.15
+    undock_stall_time: 2.0
+    undock_course_limit: 10.0
     # mowing.plan and the job ask the planner for a plan and set only what the request carries: width, passes and angle
     # are the planner's (mowbite_planner below). plan_timeout in s.
     plan_timeout: 30.0
