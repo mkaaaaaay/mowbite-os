@@ -33,6 +33,8 @@ bool bumper_right
 bool rain
 # Debounced contact with the charging station.
 bool dock_contact
+# The contact as the last report had it, not debounced: a mower driving onto the station stops at the first one.
+bool dock_contact_raw
 
 # Wheels commanded to move.
 bool moving

@@ -1,0 +1,16 @@
+# Sets the heading of the localization, e.g. the one of the mower on the docking station, and puts base_link where the
+# last GPS fix and the antenna offset say for that heading. The answer is that pose, so a caller can compare it with a
+# known place without a heading of its own.
+
+# rad in the map frame, the way the mower faces
+float64 heading
+---
+# false without a recent usable fix: nothing changed
+bool success
+# Why not, empty on success
+string message
+# base_link in the map frame (m)
+float64 x
+float64 y
+# m, as in localization/pose
+float32 position_accuracy
