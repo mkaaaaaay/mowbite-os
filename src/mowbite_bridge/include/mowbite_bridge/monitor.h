@@ -21,7 +21,9 @@ constexpr int16_t kRpcInternal = -32603;
 // Deepest nesting of [ and { in a JSON text, strings skipped.
 size_t JsonNesting(const std::string& text);
 
-std::string RpcErrorJson(int16_t code, const std::string& message, const json& id = nullptr);
+// data (JSON-RPC 2.0 allows it in an error, e.g. the reason of a refusal) only when it is not null.
+std::string RpcErrorJson(int16_t code, const std::string& message, const json& id = nullptr,
+                         const json& data = nullptr);
 
 // result is JSON text; an unparsable result becomes an internal error.
 std::string RpcResultJson(const std::string& id, const std::string& result);

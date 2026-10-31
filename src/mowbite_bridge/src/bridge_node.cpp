@@ -190,7 +190,10 @@ class BridgeNode : public rclcpp::Node {
         });
     rpc_error_sub_ = create_subscription<mowbite_msgs::msg::RpcError>(
         "bridge/rpc/error", 100, [this](mowbite_msgs::msg::RpcError::ConstSharedPtr msg) {
-          TryPublish("rpc/response", RpcErrorJson(msg->code, msg->message, msg->id));
+          // data is JSON text of the node; what is not JSON is left out.
+          json data = msg->data.empty() ? json() : json::parse(msg->data, nullptr, false);
+          if (data.is_discarded()) data = nullptr;
+          TryPublish("rpc/response", RpcErrorJson(msg->code, msg->message, msg->id, data));
         });
     publish_sub_ = create_subscription<mowbite_msgs::msg::MqttPublish>(
         "bridge/publish", 100, [this](mowbite_msgs::msg::MqttPublish::ConstSharedPtr msg) {
