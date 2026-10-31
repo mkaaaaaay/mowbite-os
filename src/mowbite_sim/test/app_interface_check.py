@@ -407,6 +407,12 @@ if ntrip_write:
     check("ntrip.set refuses an unknown field -32602 without naming it", bool(r)
           and r.get("error", {}).get("code") == -32602 and "pin" not in r["error"].get("message", ""),
           json.dumps(r and r.get("error")))
+    # Gone again at once: with an access file RTK fixed counts only after corrections from NTRIP (G24), which the
+    # test caster never sends, and the checks below need a good position.
+    r = rpc("ntrip.delete", None, "ntrip_delete")
+    check("ntrip.delete in IDLE", (r or {}).get("result") == {"configured": False}, json.dumps(r))
+    off = wait_for(lambda: latest("sensors/os_ntrip_state/data") == b"off", 8)
+    check("os_ntrip_state off after ntrip.delete", bool(off), str(latest("sensors/os_ntrip_state/data")))
 
 
 def planner_services():
@@ -556,7 +562,8 @@ check_log("teleop drives, clamped to 0.3", len(moving) >= 8 and all(s[0] == 0.3 
 check_log("stop after teleop: 3 zeros", len(zeros) == 3, str(zeros))
 line = wait_for(lambda: [p for p in overlay_lines("blue") if len(p["poly"]) >= 2], 3)
 check("map_overlay: the open line, in both formats", bool(line) and line[0]["is_closed"] == 0 and line[0]["closed"] == 0
-      and line[0]["polygon"]["points"] == line[0]["poly"], json.dumps(line[0] if line else latest("map_overlay/json"))[:200])
+      and line[0]["polygon"]["points"] == line[0]["poly"],
+      json.dumps(line[0]) if line else str(latest("map_overlay/json"))[:200])
 
 set_flags(lift=1)
 state = wait_for(lambda: b'"emergency":1' in (latest("robot_state/json") or b""), 3)
@@ -619,11 +626,6 @@ check_log("exit_recording_mode stops at once: 3 zeros within 0.3 s", last_moving
       and zeros[0] - last_moving < 0.3, f"last moving {last_moving}, zeros {zeros}")
 state = wait_for(lambda: b'"current_state":"IDLE"' in (latest("robot_state/json") or b""), 3)
 check("state IDLE", bool(state))
-if ntrip_write:
-    r = rpc("ntrip.delete", None, "ntrip_delete")
-    check("ntrip.delete in IDLE", (r or {}).get("result") == {"configured": False}, json.dumps(r))
-    off = wait_for(lambda: latest("sensors/os_ntrip_state/data") == b"off", 8)
-    check("os_ntrip_state off after ntrip.delete", bool(off), str(latest("sensors/os_ntrip_state/data")))
 check("map_overlay empty after leaving", bool(wait_for(
     lambda: latest("map_overlay/json") is not None and json.loads(latest("map_overlay/json"))["polygons"] == [], 3)))
 s = json.loads(wait_for(lambda: latest("robot_state/json") if b'"heading_valid":1' in (latest("robot_state/json") or b"")
