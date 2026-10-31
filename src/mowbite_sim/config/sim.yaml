@@ -9,3 +9,9 @@ mowbite_localization:
     # fake_tron puts the antenna 0.098 m ahead of the base (its --antenna-offset); the localization has to know it.
     antenna_offset_x: 0.098
     antenna_offset_y: 0.0
+
+mowbite_ntrip:
+  ros__parameters:
+    # The access over RPC, for the app and app_interface_check. The broker of the simulation is open: test access only,
+    # never the real one.
+    access_over_rpc: true

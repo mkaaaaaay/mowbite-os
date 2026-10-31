@@ -58,6 +58,9 @@ mowbite_ntrip:
     # Access in data_dir/ntrip.yaml (host, port, mountpoint, user, password, version), filled in by the user on the
     # mower, mode 600; template in mowbite_bringup/config/ntrip.yaml.example. Read every config_check s.
     config_check: 5.0
+    # ntrip.set and ntrip.delete (the access over RPC, only in IDLE); ntrip.get is always there. Off until MQTT writes
+    # need a login and rpc/request cannot be read without one (G13): the password goes through rpc/request.
+    access_over_rpc: false
     connect_timeout: 10.0
     # After a failure the next attempt after first_retry s, doubled up to max_retry; after a refused login rejected_retry
     # (or at once when the file changes). No byte for data_timeout s ends a connection. GGA every gga_interval s.

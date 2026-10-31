@@ -1,7 +1,7 @@
 """Corrections from a caster to the receiver: mowbite_ntrip against a test caster on 127.0.0.1 (NTRIP 2.0 chunked and
 1.0, a refused login, an outage), tron_gnss with the RTK board's handshake against fake_tron, whose receiver reports
-RTK fixed only while the board passes RTCM. Checks the fix, the age limit, the CORRECTIONS events, the sensors and that
-user and password show up nowhere.
+RTK fixed only while the board passes RTCM. Checks the fix, the age limit, the CORRECTIONS events, the sensors, the
+access over RPC (the test plays the bridge and the logic's logic/idle) and that user and password show up nowhere.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_ntrip.py
 """
@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 import tempfile
 import threading
 import time
@@ -23,18 +24,21 @@ import rclpy
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix
-from mowbite_msgs.msg import AbsolutePose, MqttPublish, NtripStatus, SensorValue
+from mowbite_msgs.msg import AbsolutePose, MqttPublish, NtripStatus, RpcError, RpcMethods, RpcRequest, RpcResponse
+from mowbite_msgs.msg import SensorValue
 from rcl_interfaces.msg import Log
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 WORK = tempfile.mkdtemp(prefix="mowbite_ntrip_")
 LINKS = {name: os.path.join(WORK, name) for name in ("mcu", "gnss", "imu")}
 FLAGS = os.path.join(WORK, "flags.json")
 LOG = os.path.join(WORK, "rx.jsonl")
 ACCESS = os.path.join(WORK, "ntrip.yaml")
-USER = "rover"
-# Test values only, they must never appear in a status, a log line or an event.
+LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+HISTORY = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+# Test values only, they must never appear in a status, a log line, an event or an answer.
+USER = "rover.of.the.test"
 PASSWORD = "pw.of#the.test"
 WRONG = "not.the#pw"
 MAX_AGE = 5.0
@@ -175,7 +179,7 @@ def generate_test_description():
     ntrip = Node(package="mowbite_ntrip", executable="mowbite_ntrip_node", output="screen",
                  parameters=[{"data_dir": WORK, "config_check": 1.0, "first_retry": 1.0, "max_retry": 4.0,
                               "rejected_retry": 8.0, "data_timeout": 3.0, "gga_interval": 2.0,
-                              "max_correction_age": MAX_AGE}])
+                              "max_correction_age": MAX_AGE, "access_over_rpc": True}])
     # The ptys have to exist before the driver looks for them.
     return launch.LaunchDescription([
         fake_tron,
@@ -204,6 +208,8 @@ class Probe:
         self.events = []
         self.sensors = {}
         self.statuses = []
+        self.methods = {}
+        self.answers = {}
         self.node = rclpy.create_node("ntrip_probe")
         self.node.create_subscription(NtripStatus, "gnss/ntrip_status", self._status, 10)
         self.node.create_subscription(AbsolutePose, "gps/absolute_pose", self._pose, 10)
@@ -213,6 +219,12 @@ class Probe:
         rosout_qos = QoSProfile(depth=1000, reliability=ReliabilityPolicy.RELIABLE,
                                 durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.node.create_subscription(Log, "/rosout", self._log, rosout_qos)
+        self.node.create_subscription(RpcMethods, "bridge/rpc/methods", self._methods, HISTORY)
+        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
+        self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
+        self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
+        self.idle_pub = self.node.create_publisher(Bool, "logic/idle", LATCHED)
+        self.rpc_count = 0
         self.running = True
         threading.Thread(target=self._spin, daemon=True).start()
 
@@ -241,6 +253,37 @@ class Probe:
     def _log(self, msg):
         with self.lock:
             self.logs.append(msg.msg)
+
+    def _methods(self, msg):
+        with self.lock:
+            self.methods[msg.node_id] = list(msg.methods)
+
+    def _response(self, msg):
+        with self.lock:
+            self.answers[msg.id] = {"result": json.loads(msg.result)}
+
+    def _error(self, msg):
+        with self.lock:
+            self.answers[msg.id] = {"error": {"code": msg.code, "message": msg.message}}
+
+    def rpc(self, method, params=None, raw=None, timeout=5.0):
+        """What the node answers, as the bridge would pass it on: {"result": ...} or {"error": {code, message}}."""
+        self.wait(lambda p: p.rpc_pub.get_subscription_count() > 0)
+        with self.lock:
+            self.rpc_count += 1
+            rid = f"r{self.rpc_count}"
+        text = raw if raw is not None else ("" if params is None else json.dumps(params))
+        self.rpc_pub.publish(RpcRequest(method=method, params=text, id=rid))
+        return self.wait(lambda p: p.answers.get(rid), timeout)
+
+    def set_idle(self, idle):
+        self.wait(lambda p: p.idle_pub.get_subscription_count() > 0)
+        self.idle_pub.publish(Bool(data=idle))
+        time.sleep(0.5)
+
+    def answer_texts(self):
+        with self.lock:
+            return [json.dumps(a) for a in self.answers.values()]
 
     def wait(self, pred, timeout=10.0):
         end = time.time() + timeout
@@ -363,10 +406,79 @@ class TestNtrip(unittest.TestCase):
         self.assertTrue(p.wait(lambda p: p.status and p.status.state == "off", 10), f"status: {p.status}")
         self.assertTrue(p.wait(lambda p: p.sensors["os_ntrip_state"].text == "off"))
 
-    def test_6_access_data_appear_nowhere(self):
+    def test_6_access_over_rpc(self):
+        p = self.probe
+        self.assertTrue(p.wait(lambda p: p.methods.get("mowbite_ntrip"), 5), p.methods)
+        self.assertEqual(sorted(p.methods["mowbite_ntrip"]), ["ntrip.delete", "ntrip.get", "ntrip.set"])
+        self.assertEqual(p.rpc("ntrip.get"), {"result": {"configured": False}})
+        login = {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V2", "user": USER, "password": PASSWORD}
+        # Changes only in IDLE, and not before the logic said it is; reading always.
+        r = p.rpc("ntrip.set", login)
+        self.assertEqual(r and r["error"]["code"], -32600, r)
+        self.assertIn("not known", r["error"]["message"])
+        p.set_idle(False)
+        for method, params in (("ntrip.set", login), ("ntrip.delete", None)):
+            r = p.rpc(method, params)
+            self.assertEqual(r and r["error"]["code"], -32600, r)
+        self.assertEqual(p.rpc("ntrip.get"), {"result": {"configured": False}})
+        self.assertFalse(os.path.exists(ACCESS))
+        p.set_idle(True)
+        r = p.rpc("ntrip.set", {k: v for k, v in login.items() if k not in ("user", "password")})
+        self.assertEqual(r and r.get("error"), {"code": -32602, "message": 'user: needed for a new caster ("" for none)'})
+        self.assertFalse(os.path.exists(ACCESS))
+
+        start = time.time()
+        r = p.rpc("ntrip.set", login)
+        self.assertEqual(r, {"result": {"configured": True, "host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V2",
+                                        "version": 2, "has_user": True, "has_password": True}})
+        self.assertEqual(stat.S_IMODE(os.stat(ACCESS).st_mode), 0o600)
+        self.assertTrue(self.connected_with_frames(10), f"status: {p.status}")
+        self.assertTrue([a for a in CASTER.attempts() if a[0] >= start and a[1] == "V2" and a[3]])
+
+        # On the same caster user and password stay when left out.
+        start = time.time()
+        r = p.rpc("ntrip.set", {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "/V1", "version": 1})
+        self.assertEqual(r and (r["result"]["mountpoint"], r["result"]["version"], r["result"]["has_password"]),
+                         ("V1", 1, True), r)
+        self.assertTrue(p.wait(lambda p: [a for a in CASTER.attempts() if a[0] >= start and a[1] == "V1" and a[3]], 10))
+        self.assertTrue(self.connected_with_frames(10), f"status: {p.status}")
+
+        # Another caster gets no stored login; a refusal leaves the file as it is.
+        with open(ACCESS) as f:
+            saved = f.read()
+        for params, raw, message in (
+                ({"host": "localhost", "port": CASTER.port, "mountpoint": "V1"}, None, "user: needed for a new caster"),
+                ({"host": "127.0.0.1", "port": str(CASTER.port), "mountpoint": "V1"}, None, "port: not a port number"),
+                ({"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V1", "pass": PASSWORD}, None, "unknown field"),
+                (None, '{"host": "127.0.0.1", "password": "' + PASSWORD, "The parameters are not valid JSON")):
+            r = p.rpc("ntrip.set", params, raw)
+            self.assertEqual(r and r["error"]["code"], -32602, r)
+            self.assertTrue(r["error"]["message"].startswith(message), r)
+        with open(ACCESS) as f:
+            self.assertEqual(f.read(), saved)
+
+        # A wrong password: the caster refuses it once; the right one ends the wait at once.
+        since = len(p.events)
+        r = p.rpc("ntrip.set", {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V2", "password": WRONG})
+        self.assertTrue(r and r["result"]["configured"], r)
+        self.assertTrue(p.wait(lambda p: p.status and p.status.state == "rejected", 10), f"status: {p.status}")
+        self.assertTrue(p.wait(lambda p: p.corrections_events(since), 5))
+        self.assertEqual([e["reason"] for e in p.corrections_events(since)], ["REJECTED"])
+        r = p.rpc("ntrip.set", {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V2", "password": PASSWORD})
+        self.assertTrue(r and r["result"]["configured"], r)
+        self.assertTrue(self.connected_with_frames(6), f"status: {p.status}")
+
+        self.assertEqual(p.rpc("ntrip.delete"), {"result": {"configured": False}})
+        self.assertFalse(os.path.exists(ACCESS))
+        self.assertTrue(p.wait(lambda p: p.status and p.status.state == "off", 5), f"status: {p.status}")
+        self.assertEqual(p.rpc("ntrip.get"), {"result": {"configured": False}})
+        self.assertEqual(p.rpc("ntrip.delete"), {"result": {"configured": False}})
+
+    def test_7_access_data_appear_nowhere(self):
         p = self.probe
         with p.lock:
             texts = list(p.logs) + [json.dumps(e) for e in p.events] + [s.last_error for s in p.statuses]
+        texts += p.answer_texts()
         token = base64.b64encode(f"{USER}:{PASSWORD}".encode()).decode()
-        for secret in (PASSWORD, WRONG, token):
+        for secret in (USER, PASSWORD, WRONG, token):
             self.assertFalse([t for t in texts if secret in t], secret)
