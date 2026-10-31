@@ -620,7 +620,7 @@ def main():
     parser.add_argument("--odom-scale", type=float, default=1.0, help="reported / real wheel speed")
     parser.add_argument("--dock", type=float, nargs=3, metavar=("X", "Y", "HEADING_DEG"),
                         help="charging station like one of map.json: the docked base_link and the way in")
-    parser.add_argument("--dock-contact-x", type=float, default=-0.18,
+    parser.add_argument("--dock-contact-x", type=float, default=-0.10,
                         help="the mower's contacts ahead of base_link (m), negative: it backs onto the station")
     args = parser.parse_args()
 

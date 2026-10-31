@@ -410,7 +410,7 @@ class DockTest(unittest.TestCase):
     """The charging station: 1 m behind a mower at the origin facing east, it backs in going west."""
 
     def setUp(self):
-        self.dock = ft.Dock(-1.0, 0.0, math.pi, -0.18)
+        self.dock = ft.Dock(-1.0, 0.0, math.pi, -0.10)
         self.t = 0.0
 
     def run_for(self, pose, seconds, linear, angular=0.0, dt=0.01):
@@ -477,12 +477,12 @@ class DockTest(unittest.TestCase):
         self.assertGreater(self.run_for(pose, 15.0, -0.1), 0)
         along, across, _ = self.dock.place(pose)
         self.assertAlmostEqual(along, 0.0, places=9)
-        self.assertAlmostEqual(abs(across), 0.0825, delta=0.002)
+        self.assertAlmostEqual(abs(across), 0.0769, delta=0.002)
         self.assertFalse(self.dock.contact)
 
     def test_placed_on_the_station(self):
         self.assertTrue(self.dock.settle(ft.Pose(-1.0, 0.0, 0.0)))
-        self.assertFalse(ft.Dock(-1.0, 0.0, math.pi, -0.18).settle(ft.Pose(-0.9, 0.0, 0.0)))
+        self.assertFalse(ft.Dock(-1.0, 0.0, math.pi, -0.10).settle(ft.Pose(-0.9, 0.0, 0.0)))
 
     def test_moving_the_station_takes_a_docked_mower_along(self):
         pose = ft.Pose(-1.0, 0.0, 0.0)
@@ -493,7 +493,7 @@ class DockTest(unittest.TestCase):
         self.assertTrue(self.dock.update(1.0, pose, False))
         # Without contact the station moves alone.
         free = ft.Pose(0.0, 0.0, 0.0)
-        other = ft.Dock(-1.0, 0.0, math.pi, -0.18)
+        other = ft.Dock(-1.0, 0.0, math.pi, -0.10)
         other.move((0.3, 0.0), free)
         self.assertEqual((free.x, free.y), (0.0, 0.0))
         self.run_for_dock(other, free)

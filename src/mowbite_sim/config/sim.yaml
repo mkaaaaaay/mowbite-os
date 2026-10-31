@@ -23,4 +23,4 @@ mowbite_ntrip:
 fake_tron:
   ros__parameters:
     dock: [-1.0, 0.0, 180.0]
-    dock_contact_x: -0.18
+    dock_contact_x: -0.10

@@ -53,7 +53,7 @@ with open(CONFIG, "w") as f:
             # The antenna of fake_tron, as in sim.yaml, which this file replaces.
             "mowbite_localization:\n  ros__parameters:\n    antenna_offset_x: 0.098\n    antenna_offset_y: 0.0\n"
             # The station of sim.yaml: the docked mower at (-1, 0), backing in going west.
-            "fake_tron:\n  ros__parameters:\n    dock: [-1.0, 0.0, 180.0]\n    dock_contact_x: -0.18\n")
+            "fake_tron:\n  ros__parameters:\n    dock: [-1.0, 0.0, 180.0]\n    dock_contact_x: -0.10\n")
 
 
 def generate_test_description():

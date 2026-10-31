@@ -37,7 +37,7 @@ PoseSnapshot PoseAt(double x, double y, float accuracy = 0.02f, bool heading = t
 
 LogicConfig Tron() {
   LogicConfig config;
-  config.dock_contact_x = -0.18;
+  config.dock_contact_x = -0.10;
   return config;
 }
 

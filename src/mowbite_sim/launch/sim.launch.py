@@ -17,7 +17,7 @@ def fake_tron_setup(context):
     station = []
     if "dock" in values:
         station = ["--dock", *(str(float(v)) for v in values["dock"]),
-                   "--dock-contact-x", str(float(values.get("dock_contact_x", -0.18)))]
+                   "--dock-contact-x", str(float(values.get("dock_contact_x", -0.10)))]
     return [ExecuteProcess(
         cmd=[PathJoinSubstitution([FindPackagePrefix("mowbite_sim"), "lib", "mowbite_sim", "fake_tron"]),
              "--link", LaunchConfiguration("link"), "--gnss-link", LaunchConfiguration("gnss_link"),
