@@ -21,7 +21,7 @@ from mowbite_msgs.msg import RpcResponse
 from rcl_interfaces.msg import Log
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import NavSatFix
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 DATUM = (52.0, 9.0, 50.0)
 WORK = tempfile.mkdtemp(prefix="mowbite_params_")
@@ -56,6 +56,7 @@ class Probe:
         self.limits = None
         self.actions = {}
         self.logs = []
+        self.idle = []
         self.node = rclpy.create_node("params_probe")
         self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
         self.hw_pub = self.node.create_publisher(HardwareStatus, "hw/status", 10)
@@ -69,6 +70,7 @@ class Probe:
         self.node.create_subscription(GpsLimits, "logic/gps_limits", self._limits, LATCHED)
         self.node.create_subscription(ActionList, "bridge/actions", self._actions, HISTORY)
         self.node.create_subscription(Log, "/rosout", self._log, ROSOUT)
+        self.node.create_subscription(Bool, "logic/idle", self._idle, LATCHED)
         self.running = True
         threading.Thread(target=self._spin, daemon=True).start()
         threading.Thread(target=self._keepalive, daemon=True).start()
@@ -122,6 +124,10 @@ class Probe:
     def _log(self, msg):
         with self.lock:
             self.logs.append(msg.msg)
+
+    def _idle(self, msg):
+        with self.lock:
+            self.idle.append(msg.data)
 
     def wait(self, getter, timeout=10.0):
         end = time.time() + timeout
@@ -215,14 +221,18 @@ class TestParams(unittest.TestCase):
         self.probe.datum_pub.publish(NavSatFix(latitude=DATUM[0], longitude=DATUM[1], altitude=DATUM[2]))
         start = "mower_logic:idle/start_area_recording"
         self.assertTrue(self.probe.wait(lambda: self.probe.actions.get(start)), "start_area_recording stays off")
+        # logic/idle tells the other nodes with settings (the NTRIP access) the same, once per change.
+        self.assertTrue(self.probe.wait(lambda: self.probe.idle == [True]), self.probe.idle)
         self.probe.act(start)
         self.assertTrue(self.probe.wait(lambda: self.probe.actions.get("mower_logic:area_recording/start_recording")))
+        self.assertTrue(self.probe.wait(lambda: self.probe.idle == [True, False]), self.probe.idle)
         answer = self.probe.set_params("recording", {"params": {P + "gps_wait_time": 5}})
         self.assertEqual(answer, (RpcError.ERROR_INVALID_REQUEST,
                                   "Settings change only in IDLE, not while recording, driving or mowing"))
         self.assertNotEqual(saved()["gps_wait_time"], 5)
         self.probe.act("mower_logic:area_recording/exit_recording_mode")
         self.assertTrue(self.probe.wait(lambda: self.probe.actions.get(start)))
+        self.assertTrue(self.probe.wait(lambda: self.probe.idle == [True, False, True]), self.probe.idle)
         self.assertEqual(self.probe.set_params("idle", {"params": {P + "gps_wait_time": 5}}), {P + "gps_wait_time": 5.0})
         self.assertEqual(saved()["gps_wait_time"], 5.0)
 

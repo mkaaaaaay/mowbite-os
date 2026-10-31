@@ -42,6 +42,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
@@ -209,6 +210,8 @@ class LogicNode : public rclcpp::Node {
         "bridge/params", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
     gps_limits_pub_ =
         create_publisher<mowbite_msgs::msg::GpsLimits>("logic/gps_limits", rclcpp::QoS(1).reliable().transient_local());
+    // Settings of other nodes (the NTRIP access) change only while this is true, like params.set.
+    idle_pub_ = create_publisher<std_msgs::msg::Bool>("logic/idle", rclcpp::QoS(1).reliable().transient_local());
     PublishLogicParams();
     emergency_client_ = create_client<mowbite_msgs::srv::SetEmergency>("hw/emergency");
     add_area_client_ = create_client<mowbite_msgs::srv::AddArea>("map/add_area");
@@ -331,6 +334,7 @@ class LogicNode : public rclcpp::Node {
     });
     blade_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { UpdateBlade(); });
     PublishActionsIfChanged();
+    PublishIdleIfChanged();
   }
 
  private:
@@ -1325,6 +1329,18 @@ class LogicNode : public rclcpp::Node {
       publish_pub_->publish(msg);
     }
     if (actions_changed) PublishActions();
+    PublishIdleIfChanged();
+  }
+
+  void PublishIdleIfChanged() {
+    std_msgs::msg::Bool msg;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      msg.data = core_.Idle();
+      if (published_idle_ == msg.data) return;
+      published_idle_ = msg.data;
+    }
+    idle_pub_->publish(msg);
   }
 
   void PublishActionsIfChanged() {
@@ -1441,6 +1457,8 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr logic_params_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::GpsLimits>::SharedPtr gps_limits_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr idle_pub_;
+  std::optional<bool> published_idle_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp::Client<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_client_;
   rclcpp::Client<mowbite_msgs::srv::SetBlade>::SharedPtr blade_client_;
