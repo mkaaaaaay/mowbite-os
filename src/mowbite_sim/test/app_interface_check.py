@@ -10,6 +10,7 @@ Exit 0 without missing or different, 1 with, 2 for a wrong call or a mower that 
 import argparse
 import datetime
 import json
+import math
 import os
 import shutil
 import struct
@@ -229,6 +230,12 @@ check("sensor value text", battery_ok, str(v), missing=True)
 actions = json.loads(latest("actions/json") or "[]")
 by_id = {a["action_id"]: a["enabled"] for a in actions}
 check("actions", "mower_logic/reset_emergency" in by_id, f"{len(actions)} actions", missing=True)
+if args.target == "mowbite-os":
+    # The ids of OpenMower; OpenMower itself registers them only once it undocks or docks.
+    check("actions abort_undocking and abort_docking", "mower_logic:undocking/abort_undocking" in by_id
+          and "mower_logic:docking/abort_docking" in by_id, ",".join(a for a in by_id if "dock" in a))
+else:
+    skip("actions abort_undocking and abort_docking", "MowBite OS only")
 
 r = rpc("rpc.methods")
 methods = r["result"] if r and isinstance(r.get("result"), list) else None
@@ -277,6 +284,9 @@ if offers("sensors.list"):
           json.dumps(r and r.get("error")))
 for method in ("map.replace", "mowing.plan"):
     offers(method)
+if args.target == "mowbite-os":
+    # "Home" from IDLE where the OS docks: the Tron and its simulation back onto the station.
+    offers("docking.start")
 if offers("events.history"):
     r = rpc("events.history", None, "2")
     types = [e.get("type") for e in (r or {}).get("result", [])]
@@ -350,8 +360,9 @@ check("sensor value 24.5", v == b"24.500000", str(v))
 cs = wait_for(lambda: latest("sensors/om_charge_state/data"))
 check("charge state", cs == b"Not Charging", str(cs))
 check("actions enabled at the start", by_id.get("mower_logic/reset_emergency") == 1
-      and by_id.get("mower_logic:idle/start_area_recording") == 1 and by_id.get("mower_logic:idle/start_mowing") == 0,
-      f"{len(actions)} actions")
+      and by_id.get("mower_logic:idle/start_area_recording") == 1 and by_id.get("mower_logic:idle/start_mowing") == 0
+      and by_id.get("mower_logic:undocking/abort_undocking") == 0
+      and by_id.get("mower_logic:docking/abort_docking") == 0, f"{len(actions)} actions")
 
 
 def events_of(kind, since=0):
@@ -672,6 +683,54 @@ try:
 except ValueError:
     skew = None
 check_log("heartbeat in local time", skew is not None and skew < 5, f"{b.hex()} in {zone}, skew {skew}")
+
+# Docking onto the station of the simulation (sim.yaml: the docked mower at (-1, 0), backing in going west), from where
+# the mower stands after the steps above.
+if methods is not None and "docking.start" in methods:
+    r = rpc("map.replace", [{"areas": APP_MAP["areas"], "docking_stations": []}], "dock_none_map")
+    wait_for(lambda: b'"docking_stations": []' in (latest("map/json") or b"") or b'"docking_stations":[]' in
+             (latest("map/json") or b""), 5)
+    time.sleep(0.5)
+    mark = len(msgs)
+    r = rpc("docking.start", None, "dock_none")
+    error = (r or {}).get("error") or {}
+    data = error.get("data") or {}
+    check("docking.start refused -32600 with reason and message in data", error.get("code") == -32600
+          and data.get("reason") == "NO_DOCK" and data.get("message") == error.get("message"), json.dumps(r),
+          point="3.1a docking.start")
+    refused = wait_for(lambda: events_of("DRIVE_REFUSED", mark), 3)
+    last = refused[-1] if refused else None
+    check("docking.start refused: DRIVE_REFUSED with the same reason", bool(last) and last["reason"] == "NO_DOCK"
+          and fixed_reason(last, "user"), json.dumps(last), point="3.1a DRIVE_REFUSED")
+    YARD = [(-0.5, -2.0), (4.0, -2.0), (4.0, 2.0), (-0.5, 2.0)]
+    DOCK_MAP = {"areas": [{"id": "yard", "properties": {"type": "nav", "name": "Yard"},
+                           "outline": [{"x": x, "y": y} for x, y in YARD]}],
+                "docking_stations": [{"id": "dock", "position": {"x": -1.0, "y": 0.0}, "heading": math.pi}]}
+    r = rpc("map.replace", [DOCK_MAP], "dock_map")
+    wait_for(lambda: b'"yard"' in (latest("map/json") or b""), 5)
+    time.sleep(0.5)
+    mark = len(msgs)
+    r = rpc("docking.start", None, "dock_start")
+    check("docking.start answers the state", (r or {}).get("result") == {"state": "DOCKING"}, json.dumps(r))
+    state = wait_for(lambda: b'"current_state":"DOCKING"' in (latest("robot_state/json") or b""), 3)
+    check("robot_state DOCKING", bool(state))
+    check("abort_docking enabled while docking",
+          bool(wait_for(lambda: enabled("mower_logic:docking/abort_docking") == 1, 3)))
+    docked = wait_for(lambda: events_of("DOCKED", mark) or events_of("DOCKING_FAILED", mark), 150)
+    since = [json.loads(p)["type"] for _, top, p, _ in msgs[mark:] if top == "events/json"]
+    check("DOCKED like OpenMower, without reason", bool(docked) and docked[-1]["type"] == "DOCKED"
+          and "reason" not in docked[-1], json.dumps(docked[-1] if docked else since))
+    states = [json.loads(p).get("state") for _, top, p, _ in msgs[mark:]
+              if top == "events/json" and json.loads(p)["type"] == "STATE"]
+    check("STATE DOCKING, then IDLE", states[:1] == ["DOCKING"] and bool(wait_for(
+        lambda: b'"current_state":"IDLE"' in (latest("robot_state/json") or b""), 5)), ",".join(map(str, states)))
+    charging = wait_for(lambda: b'"is_charging":1' in (latest("robot_state/json") or b""), 6)
+    check("docked -> is_charging", bool(charging))
+    r = rpc("docking.start", None, "dock_there")
+    data = ((r or {}).get("error") or {}).get("data") or {}
+    check("docking.start on the contacts: ALREADY_THERE", data.get("reason") == "ALREADY_THERE", json.dumps(r))
+elif args.target == "mowbite-os":
+    skip("docking.start", "not in rpc.methods")
 
 r = rpc("map.replace", [{"areas": [], "docking_stations": []}], "10")
 check("an empty map empties it", r and "(0 areas)" in str(r.get("result")), json.dumps(r))

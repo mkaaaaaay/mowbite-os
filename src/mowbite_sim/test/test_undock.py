@@ -289,8 +289,11 @@ class TestUndock(unittest.TestCase):
         self.assertLess(truth["x"], -0.18, truth)
         self.assertLess(abs(truth["y"]), 0.01, truth)
         self.assertFalse(truth["dock_ok"], truth)
+        # Stopping the job docks again (test_dock.py); here it is stopped on the way.
         since = len(p.events)
         p.act("mower_logic:mowing/abort_mowing")
+        self.assertIsNotNone(p.event(since, "STATE", 10, state="DOCKING"), p.events[since:])
+        p.act("mower_logic:docking/abort_docking")
         self.assertIsNotNone(p.event(since, "STATE", 10, state="IDLE"), p.events[since:])
 
     def test_04_a_drive_from_the_station_goes_on_after_undocking(self):
