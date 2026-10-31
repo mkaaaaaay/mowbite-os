@@ -30,6 +30,7 @@
 #include <mowbite_msgs/srv/add_area.hpp>
 #include <mowbite_msgs/srv/drive_to.hpp>
 #include <mowbite_msgs/srv/set_blade.hpp>
+#include <mowbite_msgs/srv/set_charge.hpp>
 #include <mowbite_msgs/srv/set_dock.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mowbite_msgs/srv/set_heading.hpp>
@@ -220,6 +221,9 @@ class LogicNode : public rclcpp::Node {
     // The reference check on the docking station (G24); without an answer in dock_check_timeout s nothing starts.
     set_heading_client_ = create_client<mowbite_msgs::srv::SetHeading>("localization/set_heading");
     dock_check_timeout_s_ = declare_parameter("dock_check_timeout", 2.0);
+    // Charging off before undocking; without an answer in charge_timeout s the mower stays on the station.
+    charge_client_ = create_client<mowbite_msgs::srv::SetCharge>("hw/charge");
+    charge_timeout_s_ = declare_parameter("charge_timeout", 2.0);
 
     // mowing.plan: asks the planner process for the paths of an area, answers through the bridge.
     plan_timeout_s_ = declare_parameter("plan_timeout", 30.0);
@@ -236,6 +240,7 @@ class LogicNode : public rclcpp::Node {
             planner_.SetMap(msg->data);
             core_.OnMowMap(planner_.MowAreas(), planner_.MapProblem());
             core_.OnMapDock(planner_.Dock());
+            UpdateDrivableAreas();
           }
           Flush();
         });
@@ -248,6 +253,18 @@ class LogicNode : public rclcpp::Node {
         "hw/status", 10, [this](mowbite_msgs::msg::HardwareStatus::ConstSharedPtr msg) { OnHardwareStatus(*msg); });
     pose_sub_ = create_subscription<mowbite_msgs::msg::AbsolutePose>(
         "localization/pose", 10, [this](mowbite_msgs::msg::AbsolutePose::ConstSharedPtr msg) { OnPose(*msg); });
+    // RTK fixed positions of the antenna for the course probe of undocking.
+    gnss_sub_ = create_subscription<mowbite_msgs::msg::AbsolutePose>(
+        "gps/absolute_pose", 10, [this](mowbite_msgs::msg::AbsolutePose::ConstSharedPtr msg) {
+          if ((msg->flags & mowbite_msgs::msg::AbsolutePose::FLAG_GPS_RTK_FIXED) == 0) return;
+          bool undocking;
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            undocking = core_.Undocking();
+            core_.OnGnssFix(msg->pose.pose.position.x, msg->pose.pose.position.y);
+          }
+          if (undocking) Flush();
+        });
     jump_sub_ = create_subscription<mowbite_msgs::msg::PositionJump>(
         "localization/jump", 10, [this](mowbite_msgs::msg::PositionJump::ConstSharedPtr msg) {
           {
@@ -265,6 +282,7 @@ class LogicNode : public rclcpp::Node {
             planner_.SetMapStatus(msg->mowing_allowed,
                                   msg->mowing_allowed ? Reason() : MapReason(ToDatum(msg->datum_state), msg->reason));
             core_.OnMowMap(planner_.MowAreas(), planner_.MapProblem());
+            UpdateDrivableAreas();
           }
           Flush();
         });
@@ -305,9 +323,15 @@ class LogicNode : public rclcpp::Node {
                                    std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
           {
             std::lock_guard<std::mutex> lock(mutex_);
-            response->success = core_.Driving() && drive_.purpose == Purpose::kDriveTo;
+            // Leaving the station for a drive is part of the drive.
+            const bool undocking = core_.UndockingForDrive();
+            response->success = undocking || (core_.Driving() && drive_.purpose == Purpose::kDriveTo);
             response->message = response->success ? "stopping" : "not driving";
-            if (response->success) CancelDrive(Reason("STOPPED", "Stopped by logic/stop_drive"));
+            if (undocking) {
+              core_.AbortUndocking(Reason("STOPPED", "Stopped by logic/stop_drive"));
+            } else if (response->success) {
+              CancelDrive(Reason("STOPPED", "Stopped by logic/stop_drive"));
+            }
           }
           Flush();
         });
@@ -367,6 +391,12 @@ class LogicNode : public rclcpp::Node {
     config.dock_contact_x = declare_parameter("dock_contact_x", config.dock_contact_x);
     config.dock_max_position_accuracy = declare_parameter("dock_max_position_accuracy", config.dock_max_position_accuracy);
     config.dock_reference_limit = declare_parameter("dock_reference_limit", config.dock_reference_limit);
+    // undock_distance is a setting of params.set (LoadLogicParams), the rest is the platform's.
+    config.undock.distance = declare_parameter("undock_distance", config.undock.distance);
+    config.undock.speed = declare_parameter("undock_speed", config.undock.speed);
+    config.undock.stall_time = declare_parameter("undock_stall_time", config.undock.stall_time);
+    config.undock.course_limit =
+        declare_parameter("undock_course_limit", config.undock.course_limit * 180.0 / M_PI) * M_PI / 180.0;
     return config;
   }
 
@@ -474,9 +504,10 @@ class LogicNode : public rclcpp::Node {
       if (!why.empty()) {
         core_.RefuseDrive(why);
       } else if (from_dock) {
-        // From the docking station the reference check comes first; the request is answered with its outcome.
-        core_.CheckDockBeforeDrive();
-        dock_drive_header_ = header;
+        // From the docking station the reference check and undocking come first; the request is answered once the
+        // drive is on its way after them, or with why not.
+        core_.CheckDockBeforeDrive(request.x, request.y);
+        dock_drive_ = DockDrive{header, request};
         RCLCPP_INFO(get_logger(), "Drive to (%.2f, %.2f) from the docking station: checking the position first",
                     request.x, request.y);
       } else {
@@ -486,35 +517,62 @@ class LogicNode : public rclcpp::Node {
         RCLCPP_WARN(get_logger(), "Drive refused: %s (%s)", why.code.c_str(), why.message.c_str());
         RespondDrive(header, false, why.message);
       } else if (!from_dock) {
-        const RobotStateData state = core_.RobotState();
-        auto plan = std::make_shared<mowbite_planner_interfaces::srv::PlanTransit::Request>();
-        plan->start = PoseAt(state.pose_x, state.pose_y, state.pose_heading);
-        plan->goal = PoseAt(request.x, request.y, request.heading);
-        plan->use_goal_heading = request.use_heading;
-        for (const auto& ring : drivable) plan->drivable_areas.push_back(ToPolygon(ring));
-        for (const auto& ring : obstacles) plan->obstacles.push_back(ToPolygon(ring));
-        plan->max_outside = transit_max_outside_;
-        drive_ = Drive();
-        drive_.purpose = Purpose::kDriveTo;
-        drive_.seq = ++drive_seq_;
-        drive_.active = true;
-        drive_.header = header;
-        drive_.planning = true;
-        drive_.sent = MonotonicSeconds();
-        drive_.allowed = plan->drivable_areas;
-        drive_.obstacles = plan->obstacles;
-        const uint64_t seq = drive_.seq;
-        drive_.request_id =
-            transit_client_
-                ->async_send_request(plan,
-                                     [this, seq](rclcpp::Client<mowbite_planner_interfaces::srv::PlanTransit>::SharedFuture f) {
-                                       OnTransit(seq, *f.get());
-                                     })
-                .request_id;
-        RCLCPP_INFO(get_logger(), "Drive to (%.2f, %.2f): planning the way", request.x, request.y);
+        PlanDrive(request, header);
       }
     }
     Flush();
+  }
+
+  // Plans the way of the drive the core has started (state DRIVING). Called with the mutex held.
+  void PlanDrive(const mowbite_msgs::srv::DriveTo::Request& request, const std::shared_ptr<rmw_request_id_t>& header) {
+    std::vector<Ring> drivable;
+    std::vector<Ring> obstacles;
+    Reason why = planner_.TransitAreas(&drivable, &obstacles);
+    if (why.empty() && !transit_client_->service_is_ready()) why = PlannerMissing();
+    if (!why.empty()) {
+      RCLCPP_WARN(get_logger(), "Drive ended: %s (%s)", why.code.c_str(), why.message.c_str());
+      RespondDrive(header, false, why.message);
+      core_.OnDriveEnded(false, why);
+      return;
+    }
+    const RobotStateData state = core_.RobotState();
+    auto plan = std::make_shared<mowbite_planner_interfaces::srv::PlanTransit::Request>();
+    plan->start = PoseAt(state.pose_x, state.pose_y, state.pose_heading);
+    plan->goal = PoseAt(request.x, request.y, request.heading);
+    plan->use_goal_heading = request.use_heading;
+    for (const auto& ring : drivable) plan->drivable_areas.push_back(ToPolygon(ring));
+    for (const auto& ring : obstacles) plan->obstacles.push_back(ToPolygon(ring));
+    plan->max_outside = transit_max_outside_;
+    drive_ = Drive();
+    drive_.purpose = Purpose::kDriveTo;
+    drive_.seq = ++drive_seq_;
+    drive_.active = true;
+    drive_.header = header;
+    drive_.planning = true;
+    drive_.sent = MonotonicSeconds();
+    drive_.allowed = plan->drivable_areas;
+    drive_.obstacles = plan->obstacles;
+    const uint64_t seq = drive_.seq;
+    drive_.request_id =
+        transit_client_
+            ->async_send_request(plan,
+                                 [this, seq](rclcpp::Client<mowbite_planner_interfaces::srv::PlanTransit>::SharedFuture f) {
+                                   OnTransit(seq, *f.get());
+                                 })
+            .request_id;
+    RCLCPP_INFO(get_logger(), "Drive to (%.2f, %.2f): planning the way", request.x, request.y);
+  }
+
+  // The drivable areas of the map for the core, which lets undocking end only in one of them. Called with the mutex
+  // held.
+  void UpdateDrivableAreas() {
+    std::vector<Ring> drivable;
+    std::vector<Ring> obstacles;
+    if (!planner_.TransitAreas(&drivable, &obstacles).empty()) {
+      drivable.clear();
+      obstacles.clear();
+    }
+    core_.OnDrivableAreas(std::move(drivable), std::move(obstacles));
   }
 
   void OnTransit(uint64_t seq, const mowbite_planner_interfaces::srv::PlanTransit::Response& response) {
@@ -660,6 +718,10 @@ class LogicNode : public rclcpp::Node {
       core_.OnDriveEnded(arrived, why);
       return;
     }
+    if (ended.purpose == Purpose::kUndock) {
+      core_.OnUndockEnded(ToLegEnd(reason), why);
+      return;
+    }
     // In a job the way to the start of a path failed, or the follower did not take a path of the plan.
     Reason leg = why;
     const bool way = why.code == "TRANSIT_FAILED" || why.code == "PLANNER_TIMEOUT" || why.code == "FOLLOWER_REFUSED";
@@ -672,6 +734,7 @@ class LogicNode : public rclcpp::Node {
     switch (purpose) {
       case 1: return "Approach";
       case 2: return "Mow path";
+      case 3: return "Undocking";
       default: return "Drive";
     }
   }
@@ -932,6 +995,11 @@ class LogicNode : public rclcpp::Node {
         set_heading_client_->remove_pending_request(dock_check_request_id_);
         FinishDockCheck(false, 0, 0, 999.0f, "No answer from the localization (localization/set_heading)");
       }
+      if (charge_sent_ && t - *charge_sent_ > charge_timeout_s_) {
+        charge_client_->remove_pending_request(charge_request_id_);
+        charge_sent_.reset();
+        core_.OnChargeOff(false, "no answer from hw/charge");
+      }
       state = core_.RobotState();
     }
     Flush();
@@ -1031,7 +1099,7 @@ class LogicNode : public rclcpp::Node {
         return;
       }
       logic_params_ = std::move(changed);
-      core_.SetGpsSettings(logic_params_.Get("max_position_accuracy"), logic_params_.Get("gps_wait_time"));
+      ApplyLogicParams();
     }
     RCLCPP_INFO(get_logger(), "params.set: %s", result.applied.dump().c_str());
     PublishLogicParams();
@@ -1053,6 +1121,7 @@ class LogicNode : public rclcpp::Node {
     base["max_position_accuracy"] = get_parameter("max_position_accuracy").as_double();
     base["gps_wait_time"] = get_parameter("gps_wait_time").as_double();
     base["gps_timeout"] = declare_parameter("gps_timeout", 10.0);
+    base["undock_distance"] = get_parameter("undock_distance").as_double();
     logic_params_ = LogicParams(base);
     const std::string path = LogicParamsPath();
     if (path.empty()) {
@@ -1066,7 +1135,13 @@ class LogicNode : public rclcpp::Node {
         RCLCPP_ERROR(get_logger(), "%s is not valid, the settings of tron.yaml hold", path.c_str());
       }
     }
+    ApplyLogicParams();
+  }
+
+  // What of the settings of params.set the core uses. Called with the mutex held, or before the node runs.
+  void ApplyLogicParams() {
     core_.SetGpsSettings(logic_params_.Get("max_position_accuracy"), logic_params_.Get("gps_wait_time"));
+    core_.SetUndockDistance(logic_params_.Get("undock_distance"));
   }
 
   bool SaveLogicParams(const LogicParams& params, std::string& error) {
@@ -1322,7 +1397,12 @@ class LogicNode : public rclcpp::Node {
   void FinishDockCheck(bool ok, double x, double y, float accuracy, const std::string& message) {
     dock_check_sent_.reset();
     const Reason why = core_.OnDockCheck(ok, x, y, accuracy, message);
-    const bool drive = dock_drive_header_ != nullptr;
+    const bool drive = dock_drive_.has_value();
+    if (why.empty()) {
+      RCLCPP_INFO(get_logger(), "%s from the docking station: reference check passed, undocking",
+                  drive ? "Drive" : "Mowing");
+      return;
+    }
     if (why.code == "ON_DOCK") {
       RCLCPP_INFO(get_logger(), "%s from the docking station refused: %s (%s)", drive ? "Drive" : "Mowing",
                   why.code.c_str(), why.message.c_str());
@@ -1331,8 +1411,85 @@ class LogicNode : public rclcpp::Node {
                   why.code.c_str(), why.message.c_str());
     }
     if (drive) {
-      RespondDrive(dock_drive_header_, false, why.message);
-      dock_drive_header_.reset();
+      RespondDrive(dock_drive_->header, false, why.message);
+      dock_drive_.reset();
+    }
+  }
+
+  // hw/charge: off before undocking, the answer goes to the core; on again after an undocking that ended on the
+  // station. Called with the mutex held.
+  void SendCharge(bool on) {
+    const uint64_t seq = ++charge_seq_;
+    charge_sent_.reset();
+    if (!charge_client_->service_is_ready()) {
+      if (on) {
+        RCLCPP_WARN(get_logger(), "hw/charge is not available, charging stays as the driver has it");
+      } else {
+        core_.OnChargeOff(false, "the driver does not offer hw/charge");
+      }
+      return;
+    }
+    auto request = std::make_shared<mowbite_msgs::srv::SetCharge::Request>();
+    request->on = on;
+    if (!on) charge_sent_ = MonotonicSeconds();
+    charge_request_id_ =
+        charge_client_
+            ->async_send_request(request,
+                                 [this, seq, on](rclcpp::Client<mowbite_msgs::srv::SetCharge>::SharedFuture f) {
+                                   const auto r = f.get();
+                                   if (on) {
+                                     if (!r->success) RCLCPP_WARN(get_logger(), "hw/charge on: %s", r->message.c_str());
+                                     return;
+                                   }
+                                   {
+                                     std::lock_guard<std::mutex> lock(mutex_);
+                                     // A late answer after the timeout is not the current one any more.
+                                     if (seq != charge_seq_ || !charge_sent_) return;
+                                     charge_sent_.reset();
+                                     core_.OnChargeOff(r->success, r->message);
+                                   }
+                                   Flush();
+                                 })
+            .request_id;
+    RCLCPP_INFO(get_logger(), "Charging %s", on ? "allowed again" : "off before undocking");
+  }
+
+  // Hands the way out of the station to the follower: straight, without steering, at the speed of undocking. Besides
+  // the drivable areas base_link may be in the corridor along it. Called with the mutex held.
+  void SendUndock(const UndockPath& path) {
+    std::vector<Ring> drivable;
+    std::vector<Ring> obstacles;
+    planner_.TransitAreas(&drivable, &obstacles);
+    FollowPath::Goal goal;
+    for (const auto& p : path.poses) goal.poses.push_back(PoseAt(p.x, p.y, p.heading));
+    goal.start_index = 0;
+    for (const auto& ring : drivable) goal.allowed_areas.push_back(ToPolygon(ring));
+    goal.allowed_areas.push_back(ToPolygon(path.corridor));
+    for (const auto& ring : obstacles) goal.obstacles.push_back(ToPolygon(ring));
+    goal.max_speed = static_cast<float>(path.speed);
+    goal.stall_time = static_cast<float>(path.stall_time);
+    goal.straight = true;
+    drive_ = Drive();
+    drive_.purpose = Purpose::kUndock;
+    drive_.seq = ++drive_seq_;
+    drive_.active = true;
+    drive_.sent = MonotonicSeconds();
+    const auto& end = path.poses.back();
+    char text[96];
+    std::snprintf(text, sizeof(text), "%.2f m straight ahead to (%.2f, %.2f) at %.2f m/s",
+                  std::hypot(end.x - path.poses.front().x, end.y - path.poses.front().y), end.x, end.y, path.speed);
+    SendFollow(goal, text);
+  }
+
+  // After undocking for a drive: the drive goes on, or its request gets why not. Called with the mutex held.
+  void OnUndockOutcome(const UndockOutcome& outcome) {
+    if (!outcome.for_drive || !dock_drive_) return;
+    const DockDrive pending = *dock_drive_;
+    dock_drive_.reset();
+    if (outcome.undocked && outcome.why.empty() && core_.Driving()) {
+      PlanDrive(pending.request, pending.header);
+    } else {
+      RespondDrive(pending.header, false, outcome.why.message);
     }
   }
 
@@ -1350,6 +1507,11 @@ class LogicNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       if (auto edit = core_.TakeMapEdit()) SendMapEdit(*edit);
       if (auto heading = core_.TakeDockCheck()) SendDockCheck(*heading);
+      // Undocking: charging off, then the way out; after it the drive that waited, or charging on again.
+      if (core_.TakeChargeOff()) SendCharge(false);
+      if (auto path = core_.TakeUndockPath()) SendUndock(*path);
+      if (core_.TakeChargeOn()) SendCharge(true);
+      if (auto outcome = core_.TakeUndockOutcome()) OnUndockOutcome(*outcome);
     }
     std::vector<Event> events;
     bool actions_changed;
@@ -1388,6 +1550,10 @@ class LogicNode : public rclcpp::Node {
       if (event.type == "RECORDING_REFUSED") {
         RCLCPP_WARN(get_logger(), "Recording: %s refused: %s", event.details.value("action", "").c_str(),
                     event.details.value("reason", "").c_str());
+      }
+      if (event.type == "UNDOCKING_FAILED") {
+        RCLCPP_WARN(get_logger(), "UNDOCKING_FAILED %s: %s", event.details.value("reason", "").c_str(),
+                    event.details.value("message", "").c_str());
       }
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "events/json";
@@ -1440,8 +1606,8 @@ class LogicNode : public rclcpp::Node {
 
   // The drive to a pose: its number tells late answers apart, the request waits for its answer until the follower
   // has taken the path.
-  // What the follower drives for: logic/drive_to, the approach to a path of the job, or that path.
-  enum Purpose { kDriveTo = 0, kApproach = 1, kMow = 2 };
+  // What the follower drives for: logic/drive_to, the approach to a path of the job, that path, or out of the station.
+  enum Purpose { kDriveTo = 0, kApproach = 1, kMow = 2, kUndock = 3 };
 
   struct Drive {
     Purpose purpose = Purpose::kDriveTo;
@@ -1514,12 +1680,21 @@ class LogicNode : public rclcpp::Node {
   std::optional<int64_t> edit_request_id_;
   bool edit_is_dock_ = false;
   uint64_t edit_seq_ = 0;
-  // The reference check on its way to the localization, and the drive request that waits for it.
+  // The reference check on its way to the localization, and the drive request that waits for it and for undocking.
   std::optional<double> dock_check_sent_;
   int64_t dock_check_request_id_ = 0;
   uint64_t dock_check_seq_ = 0;
   double dock_check_timeout_s_ = 2.0;
-  std::shared_ptr<rmw_request_id_t> dock_drive_header_;
+  struct DockDrive {
+    std::shared_ptr<rmw_request_id_t> header;
+    mowbite_msgs::srv::DriveTo::Request request;
+  };
+  std::optional<DockDrive> dock_drive_;
+  // Charging off on its way to the driver before undocking.
+  std::optional<double> charge_sent_;
+  int64_t charge_request_id_ = 0;
+  uint64_t charge_seq_ = 0;
+  double charge_timeout_s_ = 2.0;
 
   rclcpp::Publisher<mowbite_msgs::msg::RobotState>::SharedPtr robot_state_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::ActionList>::SharedPtr actions_pub_;
@@ -1537,6 +1712,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Client<mowbite_msgs::srv::AddArea>::SharedPtr add_area_client_;
   rclcpp::Client<mowbite_msgs::srv::SetDock>::SharedPtr set_dock_client_;
   rclcpp::Client<mowbite_msgs::srv::SetHeading>::SharedPtr set_heading_client_;
+  rclcpp::Client<mowbite_msgs::srv::SetCharge>::SharedPtr charge_client_;
   rclcpp::Client<mowbite_planner_interfaces::srv::PlanCoverage>::SharedPtr plan_client_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcResponse>::SharedPtr rpc_response_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcError>::SharedPtr rpc_error_pub_;
@@ -1545,6 +1721,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr map_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr gnss_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::PositionJump>::SharedPtr jump_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::MapStatus>::SharedPtr map_status_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr action_sub_;

@@ -32,10 +32,14 @@ TEST(Reasons, TheDockingStationWaitsForTheUser) {
     ExpectRating(event, "REFERENCE_MISMATCH", "warning", "user");
     ExpectRating(event, "NO_DOCK", "warning", "user");
     ExpectRating(event, "NO_DOCK_CONTACT", "warning", "user");
+    ExpectRating(event, "DOCK_UNREACHABLE", "warning", "user");
     ExpectRating(event, "ON_DOCK", "info", "user");
   }
   ExpectRating("RECORDING_REFUSED", "NO_DOCK_CONTACT", "warning", "user", "record_dock");
   ExpectRating("RECORDING_REFUSED", "NO_HEADING", "warning", "user", "record_dock");
+  // OpenMower's reason values.
+  ExpectRating("UNDOCKING_FAILED", "path_failed", "error", "user");
+  ExpectRating("UNDOCKING_FAILED", "no_gps", "error", "user");
 }
 
 TEST(Reasons, AutomaticPointsGoOnOnceTheyAreAccurate) {

@@ -33,6 +33,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/AddArea.srv"
   "srv/ReplaceMap.srv"
   "srv/SetBlade.srv"
+  "srv/SetCharge.srv"
   "srv/SetDock.srv"
   "srv/SetEmergency.srv"
   "srv/SetPose.srv"

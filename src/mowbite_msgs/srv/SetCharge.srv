@@ -1,0 +1,7 @@
+# Charging on the docking station (hw/charge). on = false stops charging at once, e.g. before the mower leaves the
+# station, and keeps it off until on = true or the contact ends. on = true allows it again; where the driver charges by
+# itself (host_charge_control false) it starts again while the mower has contact.
+bool on
+---
+bool success
+string message

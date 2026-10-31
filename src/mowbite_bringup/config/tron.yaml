@@ -114,13 +114,24 @@ mowbite_logic:
     recording_max_points: 5000
     recording_min_dock_distance: 0.5
     map_edit_timeout: 5.0
-    # The charging contacts of the Tron lie about 0.18 m behind base_link: it backs onto the docking station and faces
-    # away from it there (assumption, measured in phase 6). On the contacts mowing and drives start only after the
-    # reference check (G24): position accuracy at least dock_max_position_accuracy m, then with the heading of the
-    # station set, base_link within dock_reference_limit m of the recorded station (assumptions until phase 7).
-    dock_contact_x: -0.18
+    # The charging contacts of the Tron lie 0.10 m behind base_link (measured by the user from the axle of the drive
+    # wheels): it backs onto the docking station and faces away from it there. On the contacts mowing and drives start
+    # only after the reference check (G24): position accuracy at least dock_max_position_accuracy m, then with the
+    # heading of the station set, base_link within dock_reference_limit m of the recorded station (assumptions until
+    # phase 7).
+    dock_contact_x: -0.10
     dock_max_position_accuracy: 0.03
     dock_reference_limit: 0.10
+    # After the check charging goes off (hw/charge), then the mower leaves the station undock_distance m straight
+    # ahead without steering, at most undock_speed m/s: its wheels climb out of the 10 mm hollows of the station, a
+    # crawl would stay in them. Standing undock_stall_time s while driven, or the way the GNSS antenna moves (RTK
+    # fixed, from 0.3 m on) turning more than undock_course_limit degrees off the line of the station in the map, ends
+    # undocking (UNDOCKING_FAILED).
+    # undock_distance is a setting of params.set (0.5 to 2 m), the 0.8 m of the vendor. Assumptions until phase 7.
+    undock_distance: 0.8
+    undock_speed: 0.15
+    undock_stall_time: 2.0
+    undock_course_limit: 10.0
     # mowing.plan and the job ask the planner for a plan and set only what the request carries: width, passes and angle
     # are the planner's (mowbite_planner below). plan_timeout in s.
     plan_timeout: 30.0
@@ -198,14 +209,15 @@ mowbite_planner:
     lane_order: skip
     turn_on_spot: false
     turn_types: [u_turn, bulb, detour]
-    # Body around base_link (x forward, y left) from mowerBody.ts of the app, to be measured on the device. Without a body
+    # Body around base_link (x forward, y left), measured by the user: 0.47 m over the drive wheels, the front 0.60 m
+    # ahead of their axle, behind it the wheels (radius 0.1125 m) and the charging contacts (0.10 m). Without a body
     # mop_up and body_fit do nothing.
     robot_width: 0.47
-    robot_front: 0.54
-    robot_rear: 0.178
-    # The blade centre lies 0.16 or 0.23 m ahead of base_link (open question 11); lanes start and end that much earlier
-    # once it is measured. perimeter_offset stays at half the cutting width (-1.0).
-    blade_ahead: 0.0
+    robot_front: 0.60
+    robot_rear: 0.12
+    # The centre of the blade lies 0.23 m ahead of base_link (measured by the user): lanes start and end that much
+    # earlier. perimeter_offset stays at half the cutting width (-1.0).
+    blade_ahead: 0.23
     # Nobody listens to ~/coverage_path, so do not publish every plan.
     publish_path: false
     # data_dir/planner (tron.launch.py sets data_dir): plans kept and maps before at most this many days and MB.

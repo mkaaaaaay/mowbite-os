@@ -17,7 +17,7 @@ const std::vector<ParamSpec>& LogicParamSpecs() {
       {"docking_approach_distance", ParamType::kDouble, 0.0, 5.0, 1.5},
       {"docking_distance", ParamType::kDouble, 0.0, 100.0, 2.0},
       {"docking_retry_count", ParamType::kInt, 0, 50, 4},
-      {"undock_distance", ParamType::kDouble, 0.0, 100.0, 2.0},
+      {"undock_distance", ParamType::kDouble, 0.5, 2.0, 2.0},
       {"motor_hot_temperature", ParamType::kDouble, 20.0, 150.0, 70.0},
       {"motor_cold_temperature", ParamType::kDouble, 20.0, 150.0, 40.0},
   };

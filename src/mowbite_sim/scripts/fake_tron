@@ -7,7 +7,8 @@ did. The speed drops to 0 after --host-timeout seconds without any frame from th
 while the lift or stop flag is set; it stays 0 until the next SpeedData. The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an upside-down mounted sensor.
 Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, gnss_age, gnss_delay,
-yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, gnss_rtcm, dock_shift_x, dock_shift_y) is
+yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, gnss_rtcm, dock_shift_x, dock_shift_y,
+dock_hollow_speed, place) is
 read on every cycle, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON. The
 GNSS pty also plays the RTK board in front of the receiver (Board). gnss_rtcm true makes the fix depend on the RTCM the
 board passes: RTK fixed with the real age while corrections are at most 120 s old, otherwise single without age.
@@ -17,8 +18,10 @@ per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below whic
 between the reported and the real wheel speed, track the real track (m). imu_off stops the IMU frames,
 cutter_ignores_off keeps the blade turning on off frames.
 --dock places a charging station (Dock): the mower stops at it, gets contact there (dock_ok in the battery report) and a
-charge current only after the host sent Charge 1. The flag dock forces the contact anywhere; dock_shift_x and
-dock_shift_y move the station (m), the mower with it while it has contact.
+charge current only after the host sent Charge 1. Its wheels leave the hollows of the station only at
+--dock-hollow-speed or faster. The flag dock forces the contact anywhere; dock_shift_x and dock_shift_y move the station
+(m), the mower with it while it has contact; dock_hollow_speed overrides --dock-hollow-speed. place [x, y, yaw_deg]
+puts the mower there by hand, once per new value.
 """
 import argparse
 import atexit
@@ -206,12 +209,15 @@ class Drive:
 # The charging station: the stop (its housing) holds the mower up to DOCK_STOP_ACROSS m to the side of the contacts;
 # contact needs the mower's contacts within DOCK_CONTACT_ACROSS m across and its heading within DOCK_CONTACT_YAW of the
 # docked one after DOCK_PUSH_TIME s of pushing, and holds while they stay within DOCK_CONTACT_GAP m of the station's.
-# Assumptions until measured in phase 7.
+# The drive wheels stand in hollows (10 mm deep, measured): base_link within DOCK_HOLLOW m of where it stands docked
+# leaves them only while the slower wheel turns at DOCK_HOLLOW_SPEED m/s or more. Assumptions until measured in phase 7.
 DOCK_STOP_ACROSS = 0.10
 DOCK_CONTACT_ACROSS = 0.02
 DOCK_CONTACT_YAW = math.radians(5.0)
 DOCK_PUSH_TIME = 1.0
 DOCK_CONTACT_GAP = 0.005
+DOCK_HOLLOW = 0.05
+DOCK_HOLLOW_SPEED = 0.10
 
 
 class Dock:
@@ -249,6 +255,17 @@ class Dock:
         pose.x = before.x - along_before * math.cos(self.heading)
         pose.y = before.y - along_before * math.sin(self.heading)
         pose.yaw = before.yaw
+        return True
+
+    def hold(self, before, pose, wheel_speed, hollow_speed=DOCK_HOLLOW_SPEED):
+        """Ends a step from before that takes the wheels out of the hollows while the slower of them (wheel_speed, m/s
+        either way) turns slower than hollow_speed: they stand at the edge. True if it did."""
+        along_before, across, _ = self.place(before)
+        along, _, _ = self.place(pose)
+        in_hollow = -DOCK_HOLLOW < along_before <= DOCK_CONTACT_GAP and abs(across) <= DOCK_STOP_ACROSS
+        if not in_hollow or along >= along_before or wheel_speed >= hollow_speed:
+            return False
+        pose.x, pose.y, pose.yaw = before.x, before.y, before.yaw
         return True
 
     def update(self, now, pose, pushing):
@@ -598,7 +615,7 @@ def main():
     parser.add_argument("--imu-link", default="/tmp/mowbite_sim_imu", help="symlink to the IMU pty")
     parser.add_argument("--flags", help="JSON file with lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, "
                         "gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, "
-                        "gnss_rtcm, dock_shift_x, dock_shift_y")
+                        "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place")
     parser.add_argument("--log", help="JSON lines log of received sub packets")
     parser.add_argument("--log-max-mb", type=float, default=20.0)
     parser.add_argument("--state", help="JSON file with the true pose, written 5 times a second")
@@ -620,8 +637,10 @@ def main():
     parser.add_argument("--odom-scale", type=float, default=1.0, help="reported / real wheel speed")
     parser.add_argument("--dock", type=float, nargs=3, metavar=("X", "Y", "HEADING_DEG"),
                         help="charging station like one of map.json: the docked base_link and the way in")
-    parser.add_argument("--dock-contact-x", type=float, default=-0.18,
+    parser.add_argument("--dock-contact-x", type=float, default=-0.10,
                         help="the mower's contacts ahead of base_link (m), negative: it backs onto the station")
+    parser.add_argument("--dock-hollow-speed", type=float, default=DOCK_HOLLOW_SPEED,
+                        help="m/s the slower wheel needs to climb out of the hollows of the station")
     args = parser.parse_args()
 
     # SIGTERM from launch or docker has to reach the finally block that removes the symlinks.
@@ -648,6 +667,7 @@ def main():
         print("fake_tron: the mower starts on the docking station", file=sys.stderr, flush=True)
     # Charge from the last Charge frame of the host; the station only gives current while the mower has contact.
     charging = dock_ok = False
+    placed = None
 
     t0 = time.monotonic()
     last = 0.0
@@ -656,6 +676,17 @@ def main():
         while True:
             now = time.monotonic() - t0
             flags = read_flags(args.flags)
+            # Somebody puts the mower down there by hand, once for each new value of the flag; lifting it drops the
+            # setpoint the MCU held.
+            place = flags.get("place")
+            if place != placed:
+                placed = place
+                if place:
+                    pose = Pose(float(place[0]), float(place[1]), math.radians(float(place[2])))
+                    host.linear = host.angular = 0.0
+                    log.write({"t": round(now, 3), "placed": [round(float(v), 3) for v in place]})
+                    if dock and dock.settle(pose):
+                        log.write({"t": round(now, 3), "dock": "contact"})
             blocked = bool(flags.get("lift", 0) or flags.get("stop", 0))
             drive.track = float(flags.get("track", args.track or args.mcu_track))
             linear, angular = drive.move(*host.setpoint(now, blocked),
@@ -667,8 +698,10 @@ def main():
             if dock:
                 dock.move((float(flags.get("dock_shift_x", 0.0)), float(flags.get("dock_shift_y", 0.0))), pose)
                 pushing = dock.stop(before, pose)
-                if pushing:
-                    # The wheels stall against the station.
+                held = not pushing and dock.hold(before, pose, min(abs(drive.left), abs(drive.right)),
+                                                 float(flags.get("dock_hollow_speed", args.dock_hollow_speed)))
+                if pushing or held:
+                    # The wheels stall against the station or at the edge of its hollows.
                     pose.linear = pose.slip = 0.0
                     drive.left = drive.right = 0.0
                 had_contact = dock.contact

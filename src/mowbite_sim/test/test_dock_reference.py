@@ -1,9 +1,8 @@
 """The docking station in the simulation (stage 4, step 1): the whole stack of sim.launch.py with the station of
 fake_tron 1 m behind the start. The test records the station like a user with the remote control (a point in front,
 then backwards onto the contacts until the driver reports them), then starts mowing on the contacts: the logic sets the
-heading of the station in the localization and compares the position with the recorded one (G24). Undocking comes in
-the next step, so a check that passes ends in ON_DOCK; a moved station or a poor position refuses the start, all
-without the mower moving.
+heading of the station in the localization and compares the position with the recorded one (G24). A check that passes
+leads to undocking (test_undock.py); a moved station or a poor position refuses the start, without the mower moving.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_dock_reference.py
 """
@@ -37,9 +36,11 @@ CONFIG = os.path.join(WORK, "dock.yaml")
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 REC = "mower_logic:area_recording/"
 START = "mower_logic:idle/start_mowing"
+ABORT = "mower_logic:undocking/abort_undocking"
 
-# A lawn in front of the station; the station itself is not in the map until the test records it.
-LAWN = [(0.0, -2.0), (4.0, -2.0), (4.0, 2.0), (0.0, 2.0)]
+# A lawn in front of the station that the way out reaches; the station itself is not in the map until the test records
+# it.
+LAWN = [(-0.5, -2.0), (4.0, -2.0), (4.0, 2.0), (-0.5, 2.0)]
 
 
 def garden(docks):
@@ -53,7 +54,7 @@ with open(CONFIG, "w") as f:
             # The antenna of fake_tron, as in sim.yaml, which this file replaces.
             "mowbite_localization:\n  ros__parameters:\n    antenna_offset_x: 0.098\n    antenna_offset_y: 0.0\n"
             # The station of sim.yaml: the docked mower at (-1, 0), backing in going west.
-            "fake_tron:\n  ros__parameters:\n    dock: [-1.0, 0.0, 180.0]\n    dock_contact_x: -0.18\n")
+            "fake_tron:\n  ros__parameters:\n    dock: [-1.0, 0.0, 180.0]\n    dock_contact_x: -0.10\n")
 
 
 def generate_test_description():
@@ -291,21 +292,23 @@ class TestDockReference(unittest.TestCase):
         self.assertTrue(p.wait(lambda: p.hw.battery_current < 0, 5), p.hw.battery_current)
         self.assertTrue(any(e.get("charge") == 1 for e in received(0)))
 
-    def test_03_a_check_that_passes_ends_on_the_station(self):
+    def test_03_a_check_that_passes_leads_to_undocking(self):
         p = self.probe
         self.assertTrue(p.wait(lambda: p.pose.position_accuracy <= 0.03, 10))
-        before, sim_since, since = p.truth(), sim_time(), len(p.events)
+        since = len(p.events)
         p.act(START)
-        refused = self.refused(since)
-        self.assertEqual(refused["reason"], "ON_DOCK", refused)
-        self.assertLess(refused["distance"], 0.05)
-        self.assertEqual(refused["limit"], 0.1)
-        self.assertEqual(refused["severity"], "info")
+        self.assertIsNotNone(p.event(since, "STATE", 10, state="UNDOCKING"), p.events[since:])
+        self.assertFalse([e for e in p.events[since:] if e["type"] == "MOWING_REFUSED"])
         # The heading of the station: the mower backed in going west and faces east.
         self.assertTrue(p.wait(lambda: p.pose.orientation_valid and abs(p.pose.vehicle_heading) < math.radians(3), 5),
                         p.pose.vehicle_heading)
-        time.sleep(1.0)
-        self.assert_still(before, sim_since)
+        p.act(ABORT)
+        self.assertIsNotNone(p.event(since, "STATE", 5, state="IDLE"), p.events[since:])
+        # Back onto the contacts by hand for the checks that follow.
+        p.flags(place=[-1.0, 0.0, 0.0])
+        self.assertTrue(p.wait(lambda: p.hw.dock_contact and abs(p.truth()["x"] + 1.0) < 0.001, 10), p.truth())
+        self.assertTrue(p.wait(lambda: p.pose.position_accuracy <= 0.03
+                               and abs(p.pose.pose.pose.position.x + 1.0) < 0.05, 20), p.pose.pose.pose.position)
 
     def test_04_a_moved_station_is_a_reference_mismatch(self):
         p = self.probe

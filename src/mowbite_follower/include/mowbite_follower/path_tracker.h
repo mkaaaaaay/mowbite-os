@@ -68,6 +68,14 @@ struct TrackerConfig {
   double phase_timeout = 20.0;
   // m between base_link and the control point; further means the mower stays behind (stuck).
   double max_follow_distance = 1.0;
+  // Standing still while driven: base_link got no further than stall_distance (m) from where it stood for stall_time
+  // s of commands of at least stall_speed (m/s), e.g. wheels that cannot climb out of a hollow. 0: no such check.
+  double stall_time = 0;
+  double stall_distance = 0.05;
+  double stall_speed = 0.03;
+  // A straight line driven without steering: no turning on the spot, angular always 0, done once base_link got along
+  // the line to within max_goal_distance_error of its end.
+  bool straight = false;
 };
 
 enum class Phase {
@@ -131,6 +139,8 @@ class PathTracker {
   double ArrivalYaw(size_t i) const;
   // m the poses from the control point on stay straight, up to fast_distance.
   double StraightAhead() const;
+  // Fails the path when the mower stands still while linear asks it to move (stall_time).
+  void CheckStall(const Pose2& pose, double linear, double dt);
   void SetPhase(Phase phase);
   void Fail(const std::string& why);
 
@@ -157,6 +167,10 @@ class PathTracker {
   bool first_step_ = true;
   // The turn on the spot at this pose is done already; SIZE_MAX: none.
   size_t corner_done_ = SIZE_MAX;
+  // Where the mower stood when the commands to move began, and for how long (s) it has not got away from there.
+  bool stall_anchored_ = false;
+  Pose2 stall_anchor_;
+  double stall_s_ = 0;
 };
 
 }  // namespace mowbite_follower

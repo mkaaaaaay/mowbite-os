@@ -444,3 +444,104 @@ TEST(PathTracker, SpinIntoAnArcOfTheTurnRadius) {
   EXPECT_LT(robot.max_cross, 0.06);
   EXPECT_LE(robot.max_angular, 0.3 + 1e-9);
 }
+
+// Out of the docking station: straight ahead without steering, at most the speed of the goal. A mower facing a little
+// off the line keeps its heading and ends beside the line.
+TEST(PathTracker, StraightDrivesOnWithoutSteering) {
+  TrackerConfig config;
+  config.straight = true;
+  config.max_linear = 0.15;
+  config.speed_slow = 0.15;
+  PathTracker tracker{config};
+  ASSERT_EQ(tracker.Start(Line(0, 0, 0, 0.8), {}, 0), "");
+  Robot robot;
+  robot.pose = {0, 0, 0.1};
+  Drive(tracker, robot);
+  EXPECT_EQ(tracker.phase(), Phase::kDone) << tracker.failure();
+  EXPECT_EQ(robot.max_angular, 0.0);
+  EXPECT_LE(robot.max_linear, 0.15 + 1e-9);
+  EXPECT_NEAR(robot.pose.yaw, 0.1, 1e-12);
+  // Done within max_goal_distance_error along the line, 0.07 m beside it.
+  EXPECT_GE(robot.pose.x, 0.7 - 1e-9);
+  EXPECT_LT(robot.pose.x, 0.8);
+  EXPECT_NEAR(robot.pose.y, robot.pose.x * std::tan(0.1), 0.01);
+}
+
+TEST(PathTracker, StraightNeverTurnsOnTheSpotAtTheStart) {
+  TrackerConfig config;
+  config.straight = true;
+  PathTracker tracker{config};
+  ASSERT_EQ(tracker.Start(Line(0, 0, 0, 0.8), {}, 0), "");
+  const auto cmd = tracker.Step({0, 0, 30.0 * M_PI / 180.0}, kDt);
+  EXPECT_EQ(tracker.phase(), Phase::kFailed);
+  EXPECT_NE(tracker.failure().find("start of the path"), std::string::npos) << tracker.failure();
+  EXPECT_NE(tracker.failure().find("30 deg"), std::string::npos) << tracker.failure();
+  EXPECT_EQ(cmd.linear, 0.0);
+  EXPECT_EQ(cmd.angular, 0.0);
+}
+
+TEST(PathTracker, StraightOnlyOnALine) {
+  TrackerConfig config;
+  config.straight = true;
+  PathTracker tracker{config};
+  std::vector<Pose2> bent = Line(0, 0, 0, 0.5);
+  Append(bent, Arc(bent.back(), 0.5, 0.5));
+  EXPECT_EQ(tracker.Start(bent, {}, 0), "a straight path must lie on one line, its poses facing along it");
+  std::vector<Pose2> askew = Line(0, 0, 0, 0.8);
+  askew[3].yaw = 0.1;
+  EXPECT_EQ(tracker.Start(askew, {}, 0), "a straight path must lie on one line, its poses facing along it");
+  std::vector<Pose2> back = Line(0, 0, 0, 0.8);
+  std::reverse(back.begin(), back.end());
+  EXPECT_EQ(tracker.Start(back, {}, 0), "a straight path must lie on one line, its poses facing along it");
+  EXPECT_EQ(tracker.Start(Line(0, 0, 2.0, 0.8), {}, 0), "");
+}
+
+// Wheels that cannot climb out of the hollow of the station: driven at full speed, the mower stays where it is.
+TEST(PathTracker, StandingStillWhileDrivenEndsThePath) {
+  TrackerConfig config;
+  config.straight = true;
+  config.max_linear = 0.15;
+  config.stall_time = 2.0;
+  PathTracker tracker{config};
+  ASSERT_EQ(tracker.Start(Line(0, 0, 0, 0.8), {}, 0), "");
+  const Pose2 stuck;
+  double t = 0;
+  double max_linear = 0;
+  while (t < 10 && tracker.phase() != Phase::kFailed) {
+    max_linear = std::max(max_linear, tracker.Step(stuck, kDt).linear);
+    t += kDt;
+  }
+  EXPECT_EQ(tracker.phase(), Phase::kFailed);
+  EXPECT_NE(tracker.failure().find("does not move"), std::string::npos) << tracker.failure();
+  EXPECT_GT(t, 2.0);
+  EXPECT_LT(t, 3.0);
+  // It never pushed harder than the speed of the goal.
+  EXPECT_NEAR(max_linear, 0.15, 1e-9);
+  EXPECT_EQ(tracker.Step(stuck, kDt).linear, 0.0);
+}
+
+TEST(PathTracker, StandingStillCountsOnlyWhileDrivenForwards) {
+  TrackerConfig config;
+  config.stall_time = 1.5;
+  PathTracker tracker{config};
+  // A quarter turn on the spot first: 5 s without forward motion, then the drive speeding up from standstill.
+  ASSERT_EQ(tracker.Start(Line(0, 0, M_PI / 2, 2.0), {}, 0), "");
+  Robot robot;
+  Drive(tracker, robot);
+  EXPECT_EQ(tracker.phase(), Phase::kDone) << tracker.failure();
+  EXPECT_NEAR(robot.pose.y, 2.0, 0.1);
+}
+
+TEST(PathTracker, StandingStillIsNotCheckedWithoutAStallTime) {
+  // The control point runs away until max_follow_distance, as before.
+  PathTracker tracker{TrackerConfig()};
+  ASSERT_EQ(tracker.Start(Line(0, 0, 0, 10.0), {}, 0), "");
+  const Pose2 stuck;
+  double t = 0;
+  while (t < 60 && tracker.phase() != Phase::kFailed) {
+    tracker.Step(stuck, kDt);
+    t += kDt;
+  }
+  EXPECT_NE(tracker.failure().find("stays behind"), std::string::npos) << tracker.failure();
+  EXPECT_GT(t, 3.0);
+}

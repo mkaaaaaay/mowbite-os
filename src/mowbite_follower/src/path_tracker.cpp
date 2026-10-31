@@ -2,6 +2,7 @@
 #include "mowbite_follower/path_tracker.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <limits>
 
 namespace mowbite_follower {
@@ -31,6 +32,16 @@ namespace {
 
 double Clamp(double v, double limit) {
   return std::clamp(v, -limit, limit);
+}
+
+// A straight path: every pose within this (m) of the line of the first one and facing along it within kStraightAngle.
+constexpr double kStraightOffset = 0.01;
+constexpr double kStraightAngle = 1.0 * M_PI / 180.0;
+
+std::string Format(const char* format, double a, double b, double c) {
+  char text[160];
+  std::snprintf(text, sizeof(text), format, a, b, c);
+  return text;
 }
 
 // Signed distance of p to the segment a-b, left of a->b positive, and how far along it the closest point lies (0..1).
@@ -67,6 +78,21 @@ std::string PathTracker::Start(const std::vector<Pose2>& poses, const std::vecto
       return "pose " + std::to_string(i) + " lies on the one before";
     }
   }
+  if (config_.straight) {
+    const double c = std::cos(poses[0].yaw);
+    const double s = std::sin(poses[0].yaw);
+    double along_before = 0;
+    for (size_t i = 1; i < poses.size(); i++) {
+      const double dx = poses[i].x - poses[0].x;
+      const double dy = poses[i].y - poses[0].y;
+      const double along = c * dx + s * dy;
+      if (std::abs(c * dy - s * dx) > kStraightOffset || along <= along_before ||
+          std::abs(NormalizeAngle(poses[i].yaw - poses[0].yaw)) > kStraightAngle) {
+        return "a straight path must lie on one line, its poses facing along it";
+      }
+      along_before = along;
+    }
+  }
   poses_ = poses;
   kinds_ = kinds.empty() ? std::vector<Kind>(poses.size(), Kind::kTransit) : kinds;
   index_ = start_index;
@@ -76,6 +102,8 @@ std::string PathTracker::Start(const std::vector<Pose2>& poses, const std::vecto
   i_lon_ = i_lat_ = i_angle_ = 0;
   first_step_ = true;
   corner_done_ = SIZE_MAX;
+  stall_anchored_ = false;
+  stall_s_ = 0;
   SetPhase(Phase::kPreRotate);
   return "";
 }
@@ -164,6 +192,23 @@ void PathTracker::AdvanceControlPoint(double dt) {
   control_.yaw = SpinAt(index_ + 1) ? a.yaw : NormalizeAngle(a.yaw + progress_ * NormalizeAngle(b.yaw - a.yaw));
 }
 
+void PathTracker::CheckStall(const Pose2& pose, double linear, double dt) {
+  if (config_.stall_time <= 0) return;
+  const bool driven = std::abs(linear) >= config_.stall_speed;
+  const bool moved = stall_anchored_ && std::hypot(pose.x - stall_anchor_.x, pose.y - stall_anchor_.y) >=
+                                            config_.stall_distance;
+  if (!driven || !stall_anchored_ || moved) {
+    stall_anchored_ = driven;
+    stall_anchor_ = pose;
+    stall_s_ = 0;
+    return;
+  }
+  stall_s_ += dt;
+  if (stall_s_ < config_.stall_time) return;
+  Fail(Format("the mower does not move: %.2f m in %.1f s while driven at %.2f m/s, stuck?",
+              std::hypot(pose.x - stall_anchor_.x, pose.y - stall_anchor_.y), stall_s_, std::abs(linear)));
+}
+
 double PathTracker::CrossTrack(const Pose2& pose) const {
   if (poses_.size() < 2) return 0;
   // The segments a few poses around the control point: the mower lags behind it a little.
@@ -246,6 +291,26 @@ PathTracker::Command PathTracker::Step(const Pose2& pose, double dt) {
     Fail("the mower stays behind the path (" + std::to_string(distance).substr(0, 4) + " m), stuck?");
     return Command();
   }
+  if (config_.straight) {
+    if (phase_ == Phase::kPreRotate && !(std::abs(angle_error_) < config_.max_goal_angle_error)) {
+      char text[160];
+      std::snprintf(text, sizeof(text),
+                    "the mower faces %.0f deg off the start of the path, which it drives straight (limit %.0f deg)",
+                    std::abs(angle_error_) * 180.0 / M_PI, config_.max_goal_angle_error * 180.0 / M_PI);
+      Fail(text);
+      return Command();
+    }
+    // Along the line, wherever the mower is across it: it does not steer back onto it.
+    const Pose2& a = poses_.front();
+    const Pose2& b = poses_.back();
+    const double length = std::hypot(b.x - a.x, b.y - a.y);
+    const double along = ((pose.x - a.x) * (b.x - a.x) + (pose.y - a.y) * (b.y - a.y)) / length;
+    if ((phase_ == Phase::kFollowing || phase_ == Phase::kGoalApproach) &&
+        along >= length - config_.max_goal_distance_error) {
+      SetPhase(Phase::kDone);
+      return Command();
+    }
+  }
   if (phase_ == Phase::kPreRotate && std::abs(angle_error_) < config_.max_goal_angle_error) {
     SetPhase(Phase::kFollowing);
   } else if (phase_ == Phase::kGoalApproach && distance < config_.max_goal_distance_error) {
@@ -297,6 +362,9 @@ PathTracker::Command PathTracker::Step(const Pose2& pose, double dt) {
     // Turning on the spot before the start, on a corner and at the goal.
     cmd.angular = Clamp(angular, config_.max_angular);
   }
+  if (config_.straight) cmd.angular = 0;
+  CheckStall(pose, cmd.linear, dt);
+  if (phase_ == Phase::kFailed) return Command();
   return cmd;
 }
 
