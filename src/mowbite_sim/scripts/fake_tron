@@ -453,6 +453,32 @@ def open_pty(link):
     return master
 
 
+class Port:
+    """A serial port of the Tron as the master of a pty. A driver that dies leaves its TIOCEXCL on the pty, which a real
+    port drops with its last close, so once the driver that had it open is gone a new pty takes the link."""
+
+    def __init__(self, link):
+        self.link = link
+        self.fd = open_pty(link)
+        self.used = False
+        self.poll = select.poll()
+        self.poll.register(self.fd, select.POLLHUP)
+
+    def renew_if_left(self):
+        """True when the driver left and the pty was replaced; without an open slave the master reports a hangup."""
+        if not self.poll.poll(0):
+            self.used = True
+            return False
+        if not self.used:
+            return False
+        self.poll.unregister(self.fd)
+        os.close(self.fd)
+        self.fd = open_pty(self.link)
+        self.poll.register(self.fd, select.POLLHUP)
+        self.used = False
+        return True
+
+
 def remove_links(links):
     for link in links:
         if os.path.islink(link):
@@ -514,9 +540,9 @@ def main():
     # SIGTERM from launch or docker has to reach the finally block that removes the symlinks.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     atexit.register(remove_links, (args.link, args.gnss_link, args.imu_link))
-    mcu = open_pty(args.link)
-    gnss = open_pty(args.gnss_link)
-    imu = open_pty(args.imu_link)
+    mcu = Port(args.link)
+    gnss = Port(args.gnss_link)
+    imu = Port(args.imu_link)
     log = Log(args.log, int(args.log_max_mb * 1e6))
     decoder = Decoder()
     board = Board()
@@ -533,7 +559,7 @@ def main():
 
     t0 = time.monotonic()
     last = 0.0
-    next_sensor = next_status = next_gnss = next_imu = next_state = 0.0
+    next_sensor = next_status = next_gnss = next_imu = next_state = next_port_check = 0.0
     try:
         while True:
             now = time.monotonic() - t0
@@ -553,7 +579,7 @@ def main():
                 sensor = bytes([bumper, int(flags.get("rain", 0)), int(flags.get("lift", 0)),
                                 int(flags.get("stop", 0)), 0, 0, 2, 0, bumper, 0])
                 measured = drive.measured(float(flags.get("odom_scale", args.odom_scale)))
-                send(mcu, encode([(FROM_MCU, 10, sensor), (FROM_MCU, 4, struct.pack("<ff", *measured))]))
+                send(mcu.fd, encode([(FROM_MCU, 10, sensor), (FROM_MCU, 4, struct.pack("<ff", *measured))]))
             if now >= next_status:
                 next_status = now + 1.0
                 dock = int(flags.get("dock", 0))
@@ -565,7 +591,7 @@ def main():
                 # Assumed 2800 rpm at full speed, 0.8 A while turning (10 mA steps).
                 cutter = struct.pack("<hhhbb", 28 * cutter_percent, 80 if cutter_percent else 0, 2450, 30, 0)
                 version = bytes([0, 6, 36, 0, 6, 34, 0, 0, 0])
-                send(mcu, encode([(FROM_MCU, 5, battery), (FROM_MCU, 12, version),
+                send(mcu.fd, encode([(FROM_MCU, 5, battery), (FROM_MCU, 12, version),
                                   (FROM_MCU, 13, cutter + motor * 3)]))
             if now >= next_gnss:
                 next_gnss = now + GNSS_PERIOD
@@ -583,7 +609,7 @@ def main():
                 if flags.get("gnss_rtcm", 0):
                     quality, age = board.fix(now)
                 epoch = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=delay)
-                send(gnss, gnss_sentences(epoch, lat, lon, height, quality, speed, course,
+                send(gnss.fd, gnss_sentences(epoch, lat, lon, height, quality, speed, course,
                                           None if age is None else float(age)))
             board.tick(now)
             if board.on != board_on or now >= next_report:
@@ -591,27 +617,33 @@ def main():
                     log.write({"t": round(now, 3), "board": "on" if board.on else "off"})
                 board_on = board.on
                 next_report = now + BOARD_REPORT_PERIOD
-                send(gnss, board.report())
+                send(gnss.fd, board.report())
             if now >= next_imu:
                 next_imu = now + IMU_PERIOD
                 if not flags.get("imu_off", 0):
-                    send(imu, wit_frames(pose, args.mount_rpy_deg, args.gyro_bias_dps))
+                    send(imu.fd, wit_frames(pose, args.mount_rpy_deg, args.gyro_bias_dps))
             if args.state and now >= next_state:
                 next_state = now + 0.2
                 write_state(args.state, now, pose)
 
+            if now >= next_port_check:
+                next_port_check = now + 0.1
+                for name, port in (("mcu", mcu), ("gnss", gnss), ("imu", imu)):
+                    if port.renew_if_left():
+                        log.write({"t": round(now, 3), "renewed": name})
+
             # Without a driver on it a pty reads as an error at once: then look again only after 0.1 s.
-            ready, _, _ = select.select([mcu, gnss] if now >= gnss_quiet_until else [mcu], [], [], 0.005)
-            if gnss in ready:
+            ready, _, _ = select.select([mcu.fd, gnss.fd] if now >= gnss_quiet_until else [mcu.fd], [], [], 0.005)
+            if gnss.fd in ready:
                 try:
-                    for entry in board.feed(now, os.read(gnss, 4096)):
+                    for entry in board.feed(now, os.read(gnss.fd, 4096)):
                         log.write({"t": round(now, 3), **entry})
                 except OSError:
                     gnss_quiet_until = now + 0.1
-            if mcu not in ready:
+            if mcu.fd not in ready:
                 continue
             try:
-                data = os.read(mcu, 4096)
+                data = os.read(mcu.fd, 4096)
             except OSError:
                 continue
             for packets in decoder.feed(data):
