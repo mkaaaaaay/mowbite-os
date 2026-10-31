@@ -139,10 +139,15 @@ class FollowerNode : public rclcpp::Node {
     std::lock_guard<std::mutex> lock(mutex_);
     TrackerConfig config = tracker_config_;
     config.max_linear = std::min(config.max_linear, driver_max_linear_);
+    if (goal->max_speed > 0) config.max_linear = std::min(config.max_linear, static_cast<double>(goal->max_speed));
     config.max_angular = std::min(config.max_angular, driver_max_angular_);
     // The control point keeps its share of max_angular when the driver allows less.
     config.turn_rate *= config.max_angular / tracker_config_.max_angular;
     config.speed_fast = std::min(config.speed_fast, config.max_linear);
+    config.speed_slow = std::min(config.speed_slow, config.max_linear);
+    config.speed_turn = std::min(config.speed_turn, config.max_linear);
+    config.stall_time = goal->stall_time > 0 ? goal->stall_time : 0.0;
+    config.straight = goal->straight;
     tracker_ = std::make_unique<PathTracker>(config);
     fence_ = Geofence(std::move(allowed), std::move(obstacles), geofence_margin_);
     if (problem.empty()) problem = fence_.Problem();
@@ -154,7 +159,8 @@ class FollowerNode : public rclcpp::Node {
       Finish(FollowPath::Result::REASON_INVALID, "invalid path: " + problem, goal->start_index);
       return;
     }
-    RCLCPP_INFO(get_logger(), "Following %zu poses from %u", poses.size(), goal->start_index);
+    RCLCPP_INFO(get_logger(), "Following %zu poses from %u%s, at most %.2f m/s", poses.size(), goal->start_index,
+                goal->straight ? " straight without steering" : "", config.max_linear);
   }
 
   void OnTimer() {

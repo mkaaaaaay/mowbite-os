@@ -16,6 +16,14 @@ uint32 start_index
 geometry_msgs/Polygon[] allowed_areas
 # Where base_link must never be.
 geometry_msgs/Polygon[] obstacles
+# m/s at most on this path, below the limits of the follower and the driver; 0: those limits.
+float32 max_speed
+# s the mower may stand while the follower drives it, then the path ends as stuck (REASON_TIMEOUT); 0: no such check.
+float32 stall_time
+# Straight ahead without steering, e.g. out of the docking station, where the wheels sit between guides: the poses
+# lie on one line the mower faces at the start (else REASON_INVALID), it neither turns on the spot nor steers back
+# onto the line; the path is done once the mower got along it to the last pose.
+bool straight
 ---
 uint8 REASON_DONE=0
 uint8 REASON_CANCELED=1
