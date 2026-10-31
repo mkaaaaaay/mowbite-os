@@ -176,9 +176,10 @@ bool McuControl::NoImuYet() const {
   return config_.imu_timeout_s > 0 && !last_imu_sample_s_;
 }
 
-// No sample yet, within imu_timeout_s of the first tick.
+// No sample yet, within the start time of the first tick.
 bool McuControl::ImuStarting(double now) const {
-  return NoImuYet() && (!start_s_ || now - *start_s_ <= config_.imu_timeout_s + kTimeEpsilon);
+  const double start_time = std::max(config_.imu_timeout_s, config_.imu_start_timeout_s);
+  return NoImuYet() && (!start_s_ || now - *start_s_ <= start_time + kTimeEpsilon);
 }
 
 bool McuControl::FirmwareIncompatible() const {

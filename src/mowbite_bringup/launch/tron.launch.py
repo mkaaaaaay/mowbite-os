@@ -1,65 +1,121 @@
 # All nodes of MowBite OS in one process (one ROS context, one DDS participant) except two: tron_mcu, so that a crash of
 # any other node leaves its watchdogs running (G25), and the MowBite Planner (Python, shapely).
+import json
+import os
+import time
+
+import launch.logging
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
+from launch.actions import (DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, SetEnvironmentVariable,
+                            TimerAction)
+from launch.event_handlers import OnProcessExit
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
-from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
+# After a crash the container starts again at most this often, each time after RESTART_DELAY s, then it stays down
+# until the next start by hand.
+CONTAINER_RESTARTS = 3
+RESTART_DELAY = 2.0
+# In data_dir: how the container ended, written before it starts again, for its bridge to log.
+EXIT_NOTE = "container_exit.json"
 
-def generate_launch_description():
-    config = LaunchConfiguration("config")
+
+# The nodes with the values of the launch arguments taken now: the components are loaded again after a crash of the
+# container, when the arguments of an including launch may be out of scope (sim.launch.py has them in a TimerAction).
+def launch_setup(context):
+    def arg(name):
+        return LaunchConfiguration(name).perform(context)
+
+    config = arg("config")
     # Values on top of config, e.g. those of the simulation; by default config once more.
-    extra = LaunchConfiguration("extra_config")
+    extra = arg("extra_config")
+    data_dir = arg("data_dir")
+    logger = launch.logging.get_logger("tron.launch")
     # Should the container die, the driver stops the wheels after cmd_vel_timeout, the blade lease runs out and the
     # missing IMU latches IMU_TIMEOUT. With the namespace the dict goes under the full name; without it, under /**,
     # the port in the node's own section of config would win.
     mcu = Node(package="tron_mcu", executable="tron_mcu_node", name="tron_mcu", namespace="/",
-               parameters=[config, extra, {"port": LaunchConfiguration("mcu_port")}], output="screen")
+               parameters=[config, extra, {"port": arg("mcu_port")}], output="screen")
     gnss = ComposableNode(
         package="tron_gnss", plugin="tron_gnss::GnssNode", name="tron_gnss",
-        parameters=[config, extra, {"port": LaunchConfiguration("gnss_port"),
-                             "datum_lat": ParameterValue(LaunchConfiguration("datum_lat"), value_type=float),
-                             "datum_long": ParameterValue(LaunchConfiguration("datum_long"), value_type=float),
-                             "datum_height": ParameterValue(LaunchConfiguration("datum_height"), value_type=float)}])
+        parameters=[config, extra, {"port": arg("gnss_port"), "datum_lat": float(arg("datum_lat")),
+                                    "datum_long": float(arg("datum_long")),
+                                    "datum_height": float(arg("datum_height"))}])
     imu = ComposableNode(
         package="tron_imu", plugin="tron_imu::ImuNode", name="tron_imu",
-        parameters=[config, extra, {"port": LaunchConfiguration("imu_port")}])
+        parameters=[config, extra, {"port": arg("imu_port")}])
     localization = ComposableNode(
         package="mowbite_localization", plugin="mowbite_localization::LocalizationNode", name="mowbite_localization",
         parameters=[config, extra])
     logic = ComposableNode(
         package="mowbite_logic", plugin="mowbite_logic::LogicNode", name="mowbite_logic",
-        parameters=[config, extra, {"data_dir": LaunchConfiguration("data_dir")}])
+        parameters=[config, extra, {"data_dir": data_dir}])
     bridge = ComposableNode(
         package="mowbite_bridge", plugin="mowbite_bridge::BridgeNode", name="mowbite_bridge",
-        parameters=[config, extra, {"mqtt_host": LaunchConfiguration("mqtt_host"),
-                             "mqtt_port": ParameterValue(LaunchConfiguration("mqtt_port"), value_type=int),
-                             "data_dir": LaunchConfiguration("data_dir")}])
+        parameters=[config, extra, {"mqtt_host": arg("mqtt_host"), "mqtt_port": int(arg("mqtt_port")),
+                                    "data_dir": data_dir}])
     map_node = ComposableNode(
         package="mowbite_map", plugin="mowbite_map::MapNode", name="mowbite_map",
-        parameters=[config, extra, {"data_dir": LaunchConfiguration("data_dir")}])
+        parameters=[config, extra, {"data_dir": data_dir}])
     follower = ComposableNode(
         package="mowbite_follower", plugin="mowbite_follower::FollowerNode", name="mowbite_follower",
         parameters=[config, extra])
     # Corrections from <data_dir>/ntrip.yaml for tron_gnss; without the file it only reports "off".
     ntrip = ComposableNode(
         package="mowbite_ntrip", plugin="mowbite_ntrip::NtripNode", name="mowbite_ntrip",
-        parameters=[config, extra, {"data_dir": LaunchConfiguration("data_dir")}])
-    container = ComposableNodeContainer(
-        name="mowbite", namespace="", package="rclcpp_components", executable="component_container",
-        composable_node_descriptions=[gnss, imu, localization, logic, bridge, map_node, follower, ntrip],
-        output="screen")
+        parameters=[config, extra, {"data_dir": data_dir}])
+    components = [gnss, imu, localization, logic, bridge, map_node, follower, ntrip]
+    note = os.path.join(data_dir, EXIT_NOTE)
+    # A start by hand begins without restarts.
+    try:
+        os.remove(note)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        logger.error(f"Cannot remove {note}: {error}")
+
+    # Started again after a crash. tron_mcu goes on meanwhile and keeps motion and blade blocked until a release; the
+    # logic comes back idle. Every restart is a new container with a name of its own: DDS knows the load service of a
+    # crashed one for a while, and launch_ros would wait for its answer for ever.
+    def container(restart):
+        action = ComposableNodeContainer(
+            name="mowbite" if restart == 0 else f"mowbite_{restart}", namespace="", package="rclcpp_components",
+            executable="component_container", composable_node_descriptions=components, output="screen")
+        return [RegisterEventHandler(OnProcessExit(target_action=action,
+                                                   on_exit=lambda event, context: crashed(restart, event, context))),
+                action]
+
+    def crashed(restart, event, context):
+        # At the end of the launch the container is stopped, it did not crash.
+        if context.is_shutdown:
+            return None
+        if restart >= CONTAINER_RESTARTS:
+            logger.error(f"The container ended with exit code {event.returncode} after {CONTAINER_RESTARTS} restarts "
+                         "and stays down until the next start")
+            return None
+        try:
+            with open(note + ".tmp", "w") as f:
+                json.dump({"exit_code": event.returncode, "restart": restart + 1,
+                           "max_restarts": CONTAINER_RESTARTS, "t": time.time()}, f)
+            os.replace(note + ".tmp", note)
+        except OSError as error:
+            logger.error(f"Cannot write {note}: {error}")
+        return [TimerAction(period=RESTART_DELAY, actions=container(restart + 1))]
+
     # Plans the mowing paths for mowing.plan; a crash only costs the plans until it is back. Namespace as for tron_mcu.
     planner = Node(package="mowbite_planner", executable="mowbite_planner_node", name="mowbite_planner", namespace="/",
-                   parameters=[config, extra, {"data_dir": LaunchConfiguration("data_dir")}], output="screen",
-                   respawn=True, respawn_delay=5.0)
+                   parameters=[config, extra, {"data_dir": data_dir}], output="screen", respawn=True,
+                   respawn_delay=5.0)
+    return [mcu, *container(0), planner]
+
+
+def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("config", default_value=PathJoinSubstitution(
             [FindPackageShare("mowbite_bringup"), "config", "tron.yaml"])),
-        DeclareLaunchArgument("extra_config", default_value=config),
+        DeclareLaunchArgument("extra_config", default_value=LaunchConfiguration("config")),
         DeclareLaunchArgument("mcu_port", default_value="/dev/ttyS9"),
         DeclareLaunchArgument("gnss_port", default_value="/dev/ttyS4"),
         DeclareLaunchArgument("imu_port", default_value="/dev/ttyS1"),
@@ -77,7 +133,5 @@ def generate_launch_description():
         # which launch_ros creates only to load the components.
         SetEnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE",
                                EnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE", default_value="LOCALHOST")),
-        mcu,
-        container,
-        planner,
+        OpaqueFunction(function=launch_setup),
     ])

@@ -2,7 +2,9 @@
 in test_follower_stall.py. Once the blade turns and the mower drives on a path, the container with every node but
 tron_mcu is killed (SIGKILL: no node shuts down on its own). fake_tron goes on getting the heartbeat, so like the MCU it
 holds the last setpoint and the blade. tron_mcu runs in a process of its own and has to stop both by itself: speed 0
-after cmd_vel_timeout, the blade off once its lease ran out or the missing IMU latched IMU_TIMEOUT.
+after cmd_vel_timeout, the blade off once its lease ran out or the missing IMU latched IMU_TIMEOUT. tron.launch.py
+then starts the container again: the logic comes back idle, the bridge logs why, the driver keeps motion and blade
+blocked until a release, and after the fourth crash the container stays down.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_stack_crash.py
 """
@@ -24,8 +26,9 @@ from launch.actions import IncludeLaunchDescription
 from launch.events.process import ProcessStarted
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
-from mowbite_msgs.msg import AbsolutePose, HardwareStatus, MapStatus, MqttPublish
-from mowbite_msgs.srv import ReplaceMap, SetPose
+from mowbite_msgs.msg import AbsolutePose, HardwareStatus, MapStatus, MqttPublish, RobotState
+from mowbite_msgs.srv import ReplaceMap, SetEmergency, SetPose
+from rcl_interfaces.msg import Log
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
@@ -42,6 +45,9 @@ CMD_VEL_TIMEOUT = 0.5
 BLADE_LEASE = 1.0
 HOST_TIMEOUT = 2.0
 HEARTBEAT = 0xFF
+# tron.launch.py: restarts of the container and the wait before each.
+RESTARTS = 3
+RESTART_DELAY = 2.0
 # SpeedData 0, 0 as sent.
 ZERO = "00" * 8
 
@@ -76,15 +82,23 @@ class Probe:
         self.status = None
         self.pose = None
         self.hw = None
+        self.robot = None
         self.events = []
+        self.logs = []
         self.node = rclpy.create_node("crash_probe")
         self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
         self.node.create_subscription(AbsolutePose, "localization/pose", self._pose, 10)
         self.node.create_subscription(HardwareStatus, "hw/status", self._hw, 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
+        self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
+        # Like the rosout publishers, so lines logged before the match with a node still come in.
+        rosout_qos = QoSProfile(depth=1000, reliability=ReliabilityPolicy.RELIABLE,
+                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.node.create_subscription(Log, "/rosout", self._log, rosout_qos)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
+        self.emergency = self.node.create_client(SetEmergency, "hw/emergency")
         self.running = True
         threading.Thread(target=self._spin, daemon=True).start()
 
@@ -103,6 +117,14 @@ class Probe:
     def _hw(self, msg):
         with self.lock:
             self.hw = msg
+
+    def _robot(self, msg):
+        with self.lock:
+            self.robot = msg
+
+    def _log(self, msg):
+        with self.lock:
+            self.logs.append(msg.msg)
 
     def _publish(self, msg):
         if msg.topic != "events/json":
@@ -135,6 +157,9 @@ class Probe:
             time.sleep(0.05)
         assert future.done(), f"no answer from {client.srv_name}"
         return future.result()
+
+    def logged(self, text, timeout):
+        return self.wait(lambda: any(text in line for line in self.logs), timeout)
 
     def act(self, action):
         self.action_pub.publish(String(data=action))
@@ -188,6 +213,26 @@ class Probe:
         self.node.destroy_node()
 
 
+def container_pid(proc_info):
+    """The pid of the container that runs now; tron.launch.py starts a new one after each crash."""
+    for action in proc_info.processes():
+        event = proc_info[action]
+        if "component_container" in action.process_details["name"] and isinstance(event, ProcessStarted):
+            return event.pid
+    return None
+
+
+def restarted(proc_info, pid, timeout):
+    """The pid of the container once one runs again after pid, else None."""
+    end = time.time() + timeout
+    while time.time() < end:
+        now = container_pid(proc_info)
+        if now is not None and now != pid:
+            return now
+        time.sleep(0.1)
+    return None
+
+
 class TestStackCrash(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -228,11 +273,12 @@ class TestStackCrash(unittest.TestCase):
     def test_03_without_the_container_the_driver_stops_mower_and_blade(self, proc_info):
         p = self.probe
         self.assertIsInstance(proc_info["tron_mcu_node"], ProcessStarted)
-        container = proc_info["component_container"].pid
+        container = container_pid(proc_info)
         # Not in a stop at a corner: fake_tron holds a setpoint that moves the mower.
         t0 = p.wait(p.driving_now, 30)
         self.assertTrue(t0, "the mower does not drive")
         os.kill(container, signal.SIGKILL)
+        TestStackCrash.crash = (container, t0)
         # Long enough for fake_tron to drop setpoint and blade by itself, were the heartbeat gone.
         time.sleep(HOST_TIMEOUT + 1.0)
         rx = p.received(t0)
@@ -240,6 +286,7 @@ class TestStackCrash(unittest.TestCase):
         zeros = [e for e in speeds if e["hex"] == ZERO]
         self.assertTrue(zeros, f"no stop after the crash: {speeds[-5:]}")
         stop = zeros[0]["t"]
+        TestStackCrash.stop = stop
         self.assertLess(stop - t0, CMD_VEL_TIMEOUT + 0.5, f"stop {stop - t0:.2f} s after the crash")
         after = [e for e in speeds if e["t"] >= stop]
         self.assertTrue(all(e["hex"] == ZERO for e in after), after)
@@ -276,11 +323,60 @@ class TestStackCrash(unittest.TestCase):
         self.assertTrue(p.hw.emergency and p.hw.emergency_reason & HardwareStatus.REASON_IMU_TIMEOUT, p.hw)
         self.assertIsInstance(proc_info["tron_mcu_node"], ProcessStarted)
 
+    def test_05_the_container_comes_back_idle_and_says_why(self, proc_info):
+        p = self.probe
+        pid, t0 = TestStackCrash.crash
+        self.assertTrue(restarted(proc_info, pid, RESTART_DELAY + 10), "the container did not start again")
+        self.assertTrue(p.logged(f"its container ended with exit code -9 (restart 1 of {RESTARTS})", 15),
+                        [line for line in p.logs if "restart" in line])
+        self.assertTrue(p.wait(lambda: p.robot is not None and p.robot.current_state == "IDLE", 10), p.robot)
+        # Back with its IMU, the driver keeps the latch until a release.
+        self.assertTrue(p.hw.emergency_latched and p.hw.emergency_reason & HardwareStatus.REASON_IMU_TIMEOUT, p.hw)
+        speeds = [e for e in p.received(TestStackCrash.stop) if "speed" in e]
+        self.assertTrue(all(e["hex"] == ZERO for e in speeds) and len(speeds) <= 3, speeds)
+        self.assertFalse([e for e in p.received(t0) if e.get("cutter", 0) != 0], "the blade on again")
+
+    def test_06_a_release_leaves_the_mower_standing(self):
+        p = self.probe
+        answer = p.call(p.emergency, SetEmergency.Request(latch=False, reason="stack crash test"))
+        self.assertTrue(answer.success, answer.message)
+        self.assertTrue(p.wait(lambda: not p.hw.emergency, 5), p.hw)
+        t2 = p.sim_time()
+        time.sleep(3.0)
+        self.assertEqual(p.robot.current_state, "IDLE")
+        rx = p.received(t2)
+        self.assertFalse([e for e in rx if "speed" in e and e["hex"] != ZERO], "it drove again")
+        self.assertFalse([e for e in rx if e.get("cutter", 0) != 0], "the blade on again")
+        still, poses = p.standing()
+        self.assertTrue(still, poses)
+
+    def test_07_after_three_restarts_the_container_stays_down(self, proc_info):
+        p = self.probe
+        pid = container_pid(proc_info)
+        for restart in range(2, RESTARTS + 1):
+            os.kill(pid, signal.SIGKILL)
+            pid = restarted(proc_info, pid, RESTART_DELAY + 10)
+            self.assertTrue(pid, f"no restart {restart}")
+            # Loaded once the bridge says so; only then the next crash.
+            self.assertTrue(p.logged(f"exit code -9 (restart {restart} of {RESTARTS})", 15))
+        t3 = p.sim_time()
+        os.kill(pid, signal.SIGKILL)
+        self.assertIsNone(restarted(proc_info, pid, RESTART_DELAY + 4), "a restart more than allowed")
+        self.assertIsNone(container_pid(proc_info))
+        self.assertIsInstance(proc_info["tron_mcu_node"], ProcessStarted)
+        rx = p.received(t3)
+        self.assertFalse([e for e in rx if "speed" in e and e["hex"] != ZERO], "it drove again")
+        self.assertGreaterEqual(len([e for e in rx if e["type"] == HEARTBEAT]), 30, "the heartbeat stopped")
+        self.assertTrue(p.hw.emergency and p.hw.emergency_reason & HardwareStatus.REASON_IMU_TIMEOUT, p.hw)
+
 
 @launch_testing.post_shutdown_test()
 class TestShutdown(unittest.TestCase):
-    def test_only_the_container_was_killed(self, proc_info):
+    def test_the_container_was_killed_last_and_the_driver_ended_cleanly(self, proc_info):
+        # The first one and its three successors.
         launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[-signal.SIGKILL],
-                                               process="component_container")
+                                               process="component_container", strict_proc_matching=False)
+        self.assertEqual(len([a for a in proc_info.processes()
+                              if "component_container" in a.process_details["name"]]), RESTARTS + 1)
         launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -2, -15, 130, 143],
                                                process="tron_mcu_node")

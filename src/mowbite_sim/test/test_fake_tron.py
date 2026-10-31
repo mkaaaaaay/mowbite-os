@@ -600,6 +600,42 @@ class ProcessTest(unittest.TestCase):
         p.wait(timeout=5)
         self.assertFalse(any(os.path.lexists(l) for l in links))
 
+    def test_5_a_port_is_free_again_after_its_driver_died(self):
+        # A driver killed with TIOCEXCL set would leave the pty busy for every later open.
+        d = tempfile.mkdtemp(prefix="fake_tron_renew_")
+        links = [os.path.join(d, n) for n in ("a", "b", "c")]
+        log = os.path.join(d, "log")
+        p = subprocess.Popen([sys.executable, "-I", SCRIPT, "--link", links[0], "--gnss-link", links[1],
+                              "--imu-link", links[2], "--log", log], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        try:
+            for _ in range(100):
+                if all(os.path.lexists(l) for l in links):
+                    break
+                time.sleep(0.05)
+            driver = subprocess.Popen([sys.executable, "-I", "-c", HOLD_EXCLUSIVE, links[2]])
+            time.sleep(0.5)
+            driver.kill()
+            driver.wait(timeout=5)
+            time.sleep(0.5)
+            fd = os.open(links[2], os.O_RDWR | os.O_NOCTTY)
+            os.close(fd)
+            with open(log) as f:
+                self.assertIn("imu", [json.loads(line).get("renewed") for line in f])
+        finally:
+            p.terminate()
+            p.wait(timeout=5)
+            for name in os.listdir(d):
+                os.remove(os.path.join(d, name))
+            os.rmdir(d)
+
+
+# Opens the port given like a driver does and holds it.
+HOLD_EXCLUSIVE = ("import fcntl, os, sys, termios, time\n"
+                  "fd = os.open(sys.argv[1], os.O_RDWR | os.O_NOCTTY)\n"
+                  "fcntl.ioctl(fd, termios.TIOCEXCL)\n"
+                  "time.sleep(30)\n")
+
 
 if __name__ == "__main__":
     unittest.main()

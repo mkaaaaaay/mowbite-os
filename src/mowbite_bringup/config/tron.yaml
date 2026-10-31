@@ -26,9 +26,12 @@ tron_mcu:
     blade_lease_max: 2.0
     bumper_latches_emergency: true
     # The MCU tells tilt only from the forwarded IMU: without a sample for imu_timeout s motion and blade are blocked
-    # (G1, G10). An off frame is not confirmed: a blade still at blade_still_rpm or more blade_stop_time s after it went
-    # off blocks as well and is sent off again (G23). Assumptions until the run-down time is measured in phase 6.
+    # (G1, G10). The first sample may take imu_start_timeout s after the start (the IMU runs in another process, G25),
+    # blocked as well but without an emergency. An off frame is not confirmed: a blade still at blade_still_rpm or more
+    # blade_stop_time s after it went off blocks as well and is sent off again (G23). Assumptions until measured on the
+    # Tron in phases 5 and 6.
     imu_timeout: 0.5
+    imu_start_timeout: 2.0
     blade_stop_time: 5.0
     blade_still_rpm: 100
     # Set after reading the versions of this Tron in phase 4.

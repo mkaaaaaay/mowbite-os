@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <geometry_msgs/msg/twist.hpp>
 #include <map>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
@@ -206,6 +207,11 @@ class BridgeNode : public rclcpp::Node {
         "/rosout", 100, [this](rcl_interfaces::msg::Log::ConstSharedPtr msg) {
           log_buffer_.add(rclcpp::Time(msg->stamp).seconds(), msg->level, msg->name, msg->msg);
         });
+    // A second later, so that the own subscription above gets the warning into logs.recent.
+    restart_timer_ = create_wall_timer(std::chrono::seconds(1), [this, data_dir] {
+      restart_timer_->cancel();
+      LogRestart(data_dir);
+    });
 
     client_ = std::make_shared<mqtt::async_client>("tcp://" + host + ":" + std::to_string(port), kNodeId);
     client_->set_callback(callback_);
@@ -508,6 +514,20 @@ class BridgeNode : public rclcpp::Node {
     TryPublish("map/json", pretty, true);
   }
 
+  // tron.launch.py notes in data_dir how the container ended before it starts it again (G25). Only a warning until the
+  // app interface names an event for it.
+  void LogRestart(const std::string& data_dir) {
+    std::ifstream in(std::filesystem::path(data_dir) / "container_exit.json");
+    if (!in) return;
+    const json note = json::parse(in, nullptr, false);
+    auto number = [&note](const char* key) {
+      return note.is_object() && note.contains(key) && note[key].is_number_integer() ? note[key].get<int>() : 0;
+    };
+    RCLCPP_WARN(get_logger(),
+                "MowBite OS restarted after a crash: its container ended with exit code %d (restart %d of %d)",
+                number("exit_code"), number("restart"), number("max_restarts"));
+  }
+
   void PublishEvent(const std::string& type) {
     const std::string payload = EventPayload(type, nullptr, now().seconds()).dump();
     TryPublish(kEventsTopic, payload);
@@ -564,6 +584,7 @@ class BridgeNode : public rclcpp::Node {
   rclcpp::TimerBase::SharedPtr position_timer_;
   rclcpp::TimerBase::SharedPtr position_flush_timer_;
   rclcpp::TimerBase::SharedPtr reconnect_timer_;
+  rclcpp::TimerBase::SharedPtr restart_timer_;
 };
 
 }  // namespace mowbite_bridge

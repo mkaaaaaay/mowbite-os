@@ -140,9 +140,22 @@ class ImuControlTest : public ControlTest {
     McuControlConfig config;
     config.allow_blade = true;
     config.imu_timeout_s = 0.5;
+    config.imu_start_timeout_s = 2.0;
     return config;
   }
   ImuControlTest() : ControlTest(ImuConfig()) {
+  }
+};
+
+class ShortImuStartTest : public ControlTest {
+ protected:
+  static McuControlConfig ShortStartConfig() {
+    McuControlConfig config;
+    config.imu_timeout_s = 0.5;
+    config.imu_start_timeout_s = 0.2;
+    return config;
+  }
+  ShortImuStartTest() : ControlTest(ShortStartConfig()) {
   }
 };
 
@@ -694,29 +707,29 @@ TEST_F(ControlTest, WithoutImuTimeoutNoImuIsNeeded) {
 }
 
 TEST_F(ImuControlTest, BlockedWithoutLatchUntilTheFirstSample) {
-  Run(1.0);
+  Run(2.5);
   auto status = control_.Status(now_);
   EXPECT_TRUE(status.blocked);
   EXPECT_FALSE(status.latched);
   EXPECT_EQ(status.emergency_reason, kReasonImuTimeout);
-  EXPECT_FALSE(DrivesOrMows(1.2));
+  EXPECT_FALSE(DrivesOrMows(2.7));
   feed_imu_ = true;
-  Run(1.3);
+  Run(2.8);
   EXPECT_FALSE(control_.Status(now_).blocked);
   EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
-  EXPECT_TRUE(DrivesOrMows(1.5));
+  EXPECT_TRUE(DrivesOrMows(3.0));
 }
 
 TEST_F(ImuControlTest, StillDueAfterTheStartHoldsWithoutAnEmergency) {
-  Run(0.4);
+  Run(1.9);
   auto status = control_.Status(now_);
   EXPECT_FALSE(status.blocked);
   EXPECT_FALSE(status.latched);
   EXPECT_EQ(status.emergency_reason, 0u);
   // Held all the same; the first tick was at 0.01 s.
-  EXPECT_FALSE(DrivesOrMows(0.5));
+  EXPECT_FALSE(DrivesOrMows(2.0));
   EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
-  Run(0.53);
+  Run(2.03);
   status = control_.Status(now_);
   EXPECT_TRUE(status.blocked);
   EXPECT_FALSE(status.latched);
@@ -724,7 +737,7 @@ TEST_F(ImuControlTest, StillDueAfterTheStartHoldsWithoutAnEmergency) {
 }
 
 TEST_F(ImuControlTest, FirstSampleWithinTheStartTimeIsNeverReported) {
-  for (int i = 0; i < 30; i++) {
+  for (int i = 0; i < 190; i++) {
     Run(now_ + 0.01);
     EXPECT_EQ(control_.Status(now_).emergency_reason, 0u) << now_;
     EXPECT_FALSE(control_.Status(now_).blocked) << now_;
@@ -734,17 +747,25 @@ TEST_F(ImuControlTest, FirstSampleWithinTheStartTimeIsNeverReported) {
     Run(now_ + 0.01);
     EXPECT_EQ(control_.Status(now_).emergency_reason, 0u) << now_;
   }
-  EXPECT_TRUE(DrivesOrMows(1.5));
+  EXPECT_TRUE(DrivesOrMows(3.1));
 }
 
 TEST_F(ImuControlTest, ReconnectDoesNotRestartTheStartTime) {
-  Run(0.7);
+  Run(2.2);
   control_.OnConnected(now_);
-  Run(0.8);
+  Run(2.3);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonImuTimeout);
+}
+
+TEST_F(ShortImuStartTest, TheStartTimeIsAtLeastTheImuTimeout) {
+  Run(0.5);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+  Run(0.53);
   EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonImuTimeout);
 }
 
 TEST_F(ImuControlTest, GapLatchesAndStopsWheelsAndBlade) {
+  // Within the start time as well: once the first sample came, a gap latches after imu_timeout_s.
   feed_imu_ = true;
   Run(0.5);
   ASSERT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
