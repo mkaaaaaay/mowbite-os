@@ -1,6 +1,7 @@
 #ifndef MOWBITE_NTRIP_NTRIP_CONFIG_H
 #define MOWBITE_NTRIP_NTRIP_CONFIG_H
 
+#include <cstddef>
 #include <optional>
 #include <string>
 
@@ -25,10 +26,38 @@ struct NtripConfig {
   }
 };
 
-// Reads the flat file: one "key: value" per line, the value optionally in single or double quotes, '#' starts a comment
-// outside of quotes. Keys: host, port, mountpoint, user, password, version. Unknown keys and invalid values are errors;
-// error names the line and the key, never a value.
+// Longest host, mountpoint, user or password in bytes.
+constexpr size_t kMaxValueLength = 255;
+
+// What is wrong with a host, mountpoint (without its leading '/'), user or password given as key; empty if nothing.
+// Never contains the value.
+std::string CheckValue(const std::string& key, const std::string& value);
+
+// Reads the flat file: one "key: value" per line, the value optionally in single or double quotes ('' in single quotes
+// stands for one, as in YAML), '#' starts a comment outside of quotes. Keys: host, port, mountpoint, user, password,
+// version. Unknown keys and invalid values are errors; error names the line and the key, never a value.
 std::optional<NtripConfig> ParseNtripConfig(const std::string& text, std::string& error);
+
+// The file text of config, which ParseNtripConfig reads back as the same config.
+std::string FormatNtripConfig(const NtripConfig& config);
+
+// The access file as found.
+struct AccessFile {
+  bool exists = false;
+  // nullopt when missing, unreadable or invalid.
+  std::optional<NtripConfig> config;
+  // Why an existing file cannot be used, never with a value from it.
+  std::string error;
+  // Group or others may read it.
+  bool readable_by_others = false;
+};
+AccessFile ReadAccessFile(const std::string& path);
+
+// Writes config to path with mode 600: a new file beside it, synced, then renamed over the old one. error names the
+// file and the cause, never a value.
+bool WriteAccessFile(const std::string& path, const NtripConfig& config, std::string& error);
+// Removes the file; true when it is gone, also when there was none.
+bool RemoveAccessFile(const std::string& path, std::string& error);
 
 }  // namespace mowbite_ntrip
 
