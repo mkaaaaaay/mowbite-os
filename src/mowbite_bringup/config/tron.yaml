@@ -54,6 +54,8 @@ tron_gnss:
     board_active_window: 10.0
     board_reset_on_off: true
     board_gate: true
+    # With data_dir/ntrip.yaml (tron.launch.py sets data_dir) RTK fixed counts as float until the first NTRIP
+    # corrections went to the receiver: before that a LoRa base with a reference of its own may give the fix (G24).
     # datum_lat, datum_long and datum_height of the garden go into the parameter file on the Tron, not here.
 
 mowbite_ntrip:

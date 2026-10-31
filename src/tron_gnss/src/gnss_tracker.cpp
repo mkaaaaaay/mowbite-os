@@ -56,14 +56,20 @@ std::optional<GnssPose> GnssTracker::Update(const NmeaMessage& message, double n
     case static_cast<int>(FixQuality::kRtkFixed): {
       std::optional<double> age = gga.correction_age_s;
       if (age && host_correction_age_s_) age = std::max(*age, *host_correction_age_s_);
-      if (age && *age <= config_.max_correction_age_s) {
+      const bool before_host = host_required_ && !host_correction_age_s_;
+      if (!before_host && age && *age <= config_.max_correction_age_s) {
         pose.flags = kFlagRtk | kFlagRtkFixed;
         pose.accuracy_m = config_.accuracy_rtk_fixed_m;
         break;
       }
-      // Without fresh corrections the fix may rest on old data: worth no more than float.
-      old_corrections_++;
-      last_old_correction_age_ = age;
+      // Without fresh corrections from the expected source the fix may rest on old or other data: worth no more than
+      // float.
+      if (before_host) {
+        fixed_before_host_++;
+      } else {
+        old_corrections_++;
+        last_old_correction_age_ = age;
+      }
       [[fallthrough]];
     }
     case static_cast<int>(FixQuality::kRtkFloat):

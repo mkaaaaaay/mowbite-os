@@ -245,6 +245,40 @@ TEST_F(TrackerTest, HostAgeOfTheCorrectionsCountsWhenLarger) {
   EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFloat);
 }
 
+TEST_F(TrackerTest, WithNtripSetUpFixedWaitsForCorrectionsFromTheHost) {
+  tracker.SetHostCorrectionsRequired(true);
+  // Fixed with fresh corrections of the receiver's own, e.g. from a LoRa base.
+  auto p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0);
+  ASSERT_TRUE(p);
+  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_DOUBLE_EQ(p->accuracy_m, 0.3);
+  EXPECT_EQ(tracker.fixed_before_host(), 1u);
+  EXPECT_EQ(tracker.old_corrections(), 0u);
+  // The first corrections from NTRIP went to the receiver.
+  tracker.SetHostCorrectionAge(0.2);
+  p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0.2);
+  ASSERT_TRUE(p);
+  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFixed);
+  EXPECT_EQ(tracker.fixed_before_host(), 1u);
+  // Other fix types stay as they are.
+  p = tracker.Update(Gga(1, 52.0, 9.0, 60.0, -1.0, std::nullopt), 0.4);
+  ASSERT_TRUE(p);
+  EXPECT_DOUBLE_EQ(p->accuracy_m, 3.0);
+}
+
+TEST_F(TrackerTest, WithoutNtripFixedNeedsNoCorrectionsFromTheHost) {
+  auto p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0);
+  ASSERT_TRUE(p);
+  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFixed);
+  // Set up and removed again, e.g. ntrip.delete.
+  tracker.SetHostCorrectionsRequired(true);
+  tracker.SetHostCorrectionsRequired(false);
+  p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0.2);
+  ASSERT_TRUE(p);
+  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFixed);
+  EXPECT_EQ(tracker.fixed_before_host(), 0u);
+}
+
 TEST_F(TrackerTest, BoardReportGivesNoPose) {
   NmeaMessage m;
   m.type = NmeaMessage::Type::kBoardRtk;

@@ -56,6 +56,11 @@ class GnssTracker {
   void SetHostCorrectionAge(const std::optional<double>& age_s) {
     host_correction_age_s_ = age_s;
   }
+  // While set, RTK fixed counts as float until the host has passed on corrections: with NTRIP set up a fix before
+  // that may rest on a LoRa base, which has a reference of its own (G24).
+  void SetHostCorrectionsRequired(bool required) {
+    host_required_ = required;
+  }
 
   // GGA sentences dropped because their time did not advance.
   uint64_t stale_gga() const {
@@ -68,6 +73,10 @@ class GnssTracker {
   }
   std::optional<double> last_old_correction_age() const {
     return last_old_correction_age_;
+  }
+  // Fixed solutions counted as float because the host had not passed on corrections yet.
+  uint64_t fixed_before_host() const {
+    return fixed_before_host_;
   }
 
  private:
@@ -86,6 +95,8 @@ class GnssTracker {
   uint64_t old_corrections_ = 0;
   std::optional<double> last_old_correction_age_;
   std::optional<double> host_correction_age_s_;
+  bool host_required_ = false;
+  uint64_t fixed_before_host_ = 0;
 };
 
 }  // namespace tron

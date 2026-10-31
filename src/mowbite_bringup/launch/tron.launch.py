@@ -42,7 +42,7 @@ def launch_setup(context):
         package="tron_gnss", plugin="tron_gnss::GnssNode", name="tron_gnss",
         parameters=[config, extra, {"port": arg("gnss_port"), "datum_lat": float(arg("datum_lat")),
                                     "datum_long": float(arg("datum_long")),
-                                    "datum_height": float(arg("datum_height"))}])
+                                    "datum_height": float(arg("datum_height")), "data_dir": data_dir}])
     imu = ComposableNode(
         package="tron_imu", plugin="tron_imu::ImuNode", name="tron_imu",
         parameters=[config, extra, {"port": arg("imu_port")}])

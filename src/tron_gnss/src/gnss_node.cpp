@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
@@ -65,6 +66,10 @@ class GnssNode : public rclcpp::Node {
     board.reset_on_off = declare_parameter("board_reset_on_off", board.reset_on_off);
     board.gate = declare_parameter("board_gate", board.gate);
     board_ = tron::BoardLink(board);
+    // With <data_dir>/ntrip.yaml (the access of mowbite_ntrip) RTK fixed counts only once NTRIP corrections went to
+    // the receiver (G24). Empty: no such rule.
+    const std::string data_dir = declare_parameter("data_dir", std::string());
+    if (!data_dir.empty()) access_file_ = (std::filesystem::path(data_dir) / "ntrip.yaml").string();
 
     if (!std::isfinite(lat) || !std::isfinite(lon) || !std::isfinite(height) || std::abs(lat) > 90.0 ||
         std::abs(lon) > 180.0) {
@@ -124,9 +129,14 @@ class GnssNode : public rclcpp::Node {
   void IoLoop() {
     uint8_t buffer[512];
     double next_open = 0;
+    double next_access_check = 0;
     double last_data = MonotonicSeconds();
     while (running_ && rclcpp::ok()) {
       double now = MonotonicSeconds();
+      if (now >= next_access_check) {
+        next_access_check = now + 1.0;
+        CheckAccessFile();
+      }
       if (!port_.IsOpen()) {
         if (now >= next_open) {
           next_open = now + 1.0;
@@ -155,6 +165,23 @@ class GnssNode : public rclcpp::Node {
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "No data from %s for %.0f s", port_name_.c_str(),
                              now - last_data);
       }
+    }
+  }
+
+  // Whether NTRIP is set up decides which RTK fixed counts; looked at once a second from the port thread, which alone
+  // uses the tracker.
+  void CheckAccessFile() {
+    if (access_file_.empty() || !tracker_) return;
+    std::error_code ec;
+    const bool required = std::filesystem::exists(access_file_, ec);
+    tracker_->SetHostCorrectionsRequired(required);
+    if (host_required_ && *host_required_ == required) return;
+    host_required_ = required;
+    if (required) {
+      RCLCPP_INFO(get_logger(), "%s is there: RTK fixed counts once corrections from NTRIP went to the receiver",
+                  access_file_.c_str());
+    } else {
+      RCLCPP_INFO(get_logger(), "No %s: RTK fixed counts with corrections from any source", access_file_.c_str());
     }
   }
 
@@ -257,6 +284,12 @@ class GnssNode : public rclcpp::Node {
                              "RTK fixed without the age of its corrections (GGA field 13): counted as float");
       }
     }
+    if (tracker_->fixed_before_host() != reported_before_host_) {
+      reported_before_host_ = tracker_->fixed_before_host();
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                           "RTK fixed before any NTRIP corrections went to the receiver (another source such as a LoRa "
+                           "base may give it): counted as float");
+    }
     if (parser_.checksum_errors() + parser_.malformed() != reported_errors_) {
       reported_errors_ = parser_.checksum_errors() + parser_.malformed();
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 30000, "NMEA errors so far: %lu checksum, %lu malformed",
@@ -335,7 +368,11 @@ class GnssNode : public rclcpp::Node {
   uint64_t reported_errors_ = 0;
   uint64_t reported_stale_ = 0;
   uint64_t reported_old_corrections_ = 0;
+  uint64_t reported_before_host_ = 0;
   double max_correction_age_s_ = 0;
+  std::string access_file_;
+  // Whether access_file_ was there at the last look, unknown before the first.
+  std::optional<bool> host_required_;
   rclcpp::Publisher<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_pub_;
   rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr datum_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
