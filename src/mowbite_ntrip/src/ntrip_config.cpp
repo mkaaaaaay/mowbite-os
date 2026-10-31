@@ -4,11 +4,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 
 namespace mowbite_ntrip {
@@ -17,6 +19,8 @@ namespace {
 
 // A larger file is no access file; it is not read.
 constexpr off_t kMaxFileBytes = 64 * 1024;
+
+const char* const kKeys[] = {"host", "port", "mountpoint", "user", "password", "version"};
 
 std::string Trim(const std::string& s) {
   const size_t first = s.find_first_not_of(" \t\r");
@@ -53,11 +57,12 @@ std::optional<std::string> Value(const std::string& raw) {
   return Trim(s);
 }
 
-// Host and mountpoint go into the request line and the Host header: printable, no spaces.
+// Host and mountpoint go into the request line, the Host header and JSON: printable ASCII, no spaces.
 bool Plain(const std::string& s) {
   if (s.empty()) return false;
   for (char c : s) {
-    if (c <= ' ' || c == 0x7F) return false;
+    const auto byte = static_cast<unsigned char>(c);
+    if (byte <= ' ' || byte >= 0x7F) return false;
   }
   return true;
 }
@@ -105,7 +110,7 @@ void SyncFolder(const std::string& path) {
 
 std::string CheckValue(const std::string& key, const std::string& value) {
   if (value.size() > kMaxValueLength) return "longer than " + std::to_string(kMaxValueLength) + " bytes";
-  if (key == "host" || key == "mountpoint") return Plain(value) ? "" : "empty or with spaces";
+  if (key == "host" || key == "mountpoint") return Plain(value) ? "" : "empty, with spaces or not printable ASCII";
   return Printable(value) ? "" : "control characters";
 }
 
@@ -125,6 +130,11 @@ std::optional<NtripConfig> ParseNtripConfig(const std::string& text, std::string
       return std::nullopt;
     }
     const std::string key = Trim(trimmed.substr(0, colon));
+    if (std::find(std::begin(kKeys), std::end(kKeys), key) == std::end(kKeys)) {
+      // The key is not named: a password typed into the wrong place would end up in the log.
+      error = "line " + std::to_string(number) + ": unknown key";
+      return std::nullopt;
+    }
     const auto value = Value(trimmed.substr(colon + 1));
     const std::string where = "line " + std::to_string(number) + ", " + key + ": ";
     if (!value) {
@@ -162,10 +172,6 @@ std::optional<NtripConfig> ParseNtripConfig(const std::string& text, std::string
         return std::nullopt;
       }
       config.version = *version;
-    } else {
-      // The key is not named: a password typed into the wrong place would end up in the log.
-      error = "line " + std::to_string(number) + ": unknown key";
-      return std::nullopt;
     }
   }
   if (!has_host || !has_mountpoint) {

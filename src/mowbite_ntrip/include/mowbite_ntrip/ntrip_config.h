@@ -30,12 +30,13 @@ struct NtripConfig {
 constexpr size_t kMaxValueLength = 255;
 
 // What is wrong with a host, mountpoint (without its leading '/'), user or password given as key; empty if nothing.
-// Never contains the value.
+// Host and mountpoint are printable ASCII without spaces. Never contains the value.
 std::string CheckValue(const std::string& key, const std::string& value);
 
 // Reads the flat file: one "key: value" per line, the value optionally in single or double quotes ('' in single quotes
 // stands for one, as in YAML), '#' starts a comment outside of quotes. Keys: host, port, mountpoint, user, password,
-// version. Unknown keys and invalid values are errors; error names the line and the key, never a value.
+// version. Unknown keys and invalid values are errors; error names the line and a known key, never a value or an
+// unknown key.
 std::optional<NtripConfig> ParseNtripConfig(const std::string& text, std::string& error);
 
 // The file text of config, which ParseNtripConfig reads back as the same config.
