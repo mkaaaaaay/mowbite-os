@@ -34,9 +34,10 @@ json SystemInfo(const std::string& version, const std::string& platform) {
   return json{{"name", "mowbite-os"}, {"version", version}, {"platform", platform}, {"schema", kDataSchema}};
 }
 
+// Texts of other nodes and parse errors that quote their input may hold bytes that aren't UTF-8: they become U+FFFD.
 std::string RpcErrorJson(int16_t code, const std::string& message, const json& id) {
   json err = {{"jsonrpc", "2.0"}, {"error", {{"code", code}, {"message", message}}}, {"id", id}};
-  return err.dump(2);
+  return err.dump(2, ' ', false, json::error_handler_t::replace);
 }
 
 std::string RpcResultJson(const std::string& id, const std::string& result) {
@@ -47,7 +48,7 @@ std::string RpcResultJson(const std::string& id, const std::string& result) {
     return RpcErrorJson(kRpcInternal, "Internal error while parsing result JSON: " + std::string(e.what()), id);
   }
   json j = {{"jsonrpc", "2.0"}, {"result", parsed}, {"id", id}};
-  return j.dump(2);
+  return j.dump(2, ' ', false, json::error_handler_t::replace);
 }
 
 RpcParseResult ParseRpcRequest(const std::string& payload) {

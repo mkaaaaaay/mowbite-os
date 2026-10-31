@@ -28,7 +28,7 @@ class LogBuffer {
   void add(double t, uint8_t level, const std::string& node, const std::string& msg) {
     if (level < WARN) return;
     std::lock_guard<std::mutex> lk(mutex_);
-    entries_.push_back({t, level, node, redact(msg)});
+    entries_.push_back({t, level, valid_utf8(node), valid_utf8(redact(msg))});
     if (entries_.size() > capacity_) entries_.pop_front();
   }
 
@@ -107,6 +107,12 @@ class LogBuffer {
     std::string out = std::regex_replace(msg, url_login, "$1***@");
     out = std::regex_replace(out, bearer, "$1 ***");
     return std::regex_replace(out, secret, "$1$2***");
+  }
+
+  // A byte that isn't UTF-8 would make every answer of logs.recent fail until newer lines push it out, so it becomes
+  // U+FFFD on the way in, by the same rules the json writer checks
+  static std::string valid_utf8(const std::string& text) {
+    return json::parse(json(text).dump(-1, ' ', false, json::error_handler_t::replace)).get<std::string>();
   }
 
   const size_t capacity_;
