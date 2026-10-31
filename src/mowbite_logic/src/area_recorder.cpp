@@ -219,6 +219,7 @@ AreaRecorder::Result AreaRecorder::Finish(const std::string& action, const std::
 }
 
 // Like OpenMower: a point in front of the station, then one on the contacts; the way between them is the heading.
+// Both are base_link, which is only where the mower is with a valid heading; the second one only with the contact.
 AreaRecorder::Result AreaRecorder::RecordDock() {
   const std::string action = "record_dock";
   if (!map_writable_) return Refuse(action, map_reason_);
@@ -230,11 +231,22 @@ AreaRecorder::Result AreaRecorder::RecordDock() {
                               .With("accuracy", pose_->accuracy)
                               .With("limit", config_.max_position_accuracy));
   }
+  if (!pose_->heading_valid) {
+    return Refuse(action, Reason("NO_HEADING",
+                                 "The heading is not aligned yet, drive straight for a few metres first: without it "
+                                 "the point may be off by the antenna offset"));
+  }
+  const std::string onto = config_.dock_backwards ? "backwards onto the contacts" : "onto the contacts";
   const Point2 here{pose_->x, pose_->y};
   if (!dock_first_) {
     dock_first_ = here;
-    notices_.push_back("Recorded the point in front of the docking station, now drive onto the contacts");
+    notices_.push_back("Recorded the point in front of the docking station, now drive " + onto);
     return Result::kDone;
+  }
+  if (!dock_contact_) {
+    // The first point stays, driving on is enough.
+    return Refuse(action, Reason("NO_DOCK_CONTACT", "No contact with the docking station: drive " + onto +
+                                                        " until the mower reports it"));
   }
   const double distance = std::hypot(here.x - dock_first_->x, here.y - dock_first_->y);
   if (distance < config_.min_dock_distance) {
@@ -320,8 +332,8 @@ void AreaRecorder::AddPoint(double x, double y) {
   overlay_changed_ = true;
 }
 
-void AreaRecorder::OnPose(double x, double y, float position_accuracy) {
-  pose_ = Pose{x, y, position_accuracy};
+void AreaRecorder::OnPose(double x, double y, float position_accuracy, bool heading_valid) {
+  pose_ = Pose{x, y, position_accuracy, heading_valid};
   if (!recording_) return;
   if (!(position_accuracy <= config_.max_position_accuracy)) {
     const Reason reason = Reason("POSITION_ACCURACY", "Position accuracy " + Metres(position_accuracy) +

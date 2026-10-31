@@ -47,6 +47,7 @@ class Probe:
         self.overlay = None
         self.x = 0.0
         self.y = 0.0
+        self.contact = False
         self.node = rclpy.create_node("recording_probe")
         self.datum_pub = self.node.create_publisher(NavSatFix, "gps/datum", LATCHED)
         self.hw_pub = self.node.create_publisher(HardwareStatus, "hw/status", 10)
@@ -72,6 +73,7 @@ class Probe:
             hw.battery_source = HardwareStatus.BATTERY_SOURCE_BMS
             hw.battery_voltage = 24.5
             hw.battery_percentage = 80
+            hw.dock_contact = self.contact
             self.hw_pub.publish(hw)
             self.pose(self.x, self.y)
             time.sleep(0.2)
@@ -212,6 +214,13 @@ class TestRecording(unittest.TestCase):
         self.probe.act(REC + "record_dock")
         self.assertTrue(self.enabled(REC + "start_recording", False))
         self.probe.drive([(-1, 2.0), (-1, 1.0)])
+        # The point on the contacts needs the contact.
+        self.probe.act(REC + "record_dock")
+        refused = self.probe.wait(lambda: [e for e in self.probe.events_of("RECORDING_REFUSED")
+                                           if e.get("reason") == "NO_DOCK_CONTACT"])
+        self.assertTrue(refused, self.probe.events_of("RECORDING_REFUSED"))
+        self.probe.contact = True
+        time.sleep(0.5)
         self.probe.act(REC + "record_dock")
         saved = self.probe.wait(lambda: self.probe.map if self.probe.map and self.probe.map["docking_stations"]
                                 else None)
@@ -224,6 +233,7 @@ class TestRecording(unittest.TestCase):
         self.assertIsNotNone(recorded)
         self.assertEqual(recorded[-1]["dock_id"], dock["id"])
         self.assertTrue(self.enabled(REC + "start_recording"))
+        self.probe.contact = False
 
     def test_04_another_datum_keeps_the_area_open(self):
         self.probe.act(REC + "start_recording")

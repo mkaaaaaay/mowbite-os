@@ -108,10 +108,11 @@ mowbite_logic:
     # itself and stops the mower and the blade (G22). Assumption until phase 6.
     follower_timeout: 2.0
     # Area recording: smallest area in m², most points of one recording (the map must fit one MQTT message), distance
-    # in m between the two points of the docking station, and how long (s) a save waits for mowbite_map.
+    # in m between the two points of the docking station, and how long (s) a save waits for mowbite_map. Both points of
+    # the station need a valid heading, the one on the contacts the contact.
     recording_min_area: 0.05
     recording_max_points: 5000
-    recording_min_dock_distance: 0.3
+    recording_min_dock_distance: 0.5
     map_edit_timeout: 5.0
     # mowing.plan and the job ask the planner for a plan and set only what the request carries: width, passes and angle
     # are the planner's (mowbite_planner below). plan_timeout in s.

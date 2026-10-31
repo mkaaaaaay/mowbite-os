@@ -100,6 +100,7 @@ LogicCore::LogicCore(const LogicConfig& config) : config_(config), recorder_(Rec
 
 void LogicCore::OnHardwareStatus(const HardwareSnapshot& hw) {
   hw_ = hw;
+  recorder_.SetDockContact(hw.telemetry_ok && hw.dock_contact);
   UpdateEmergency();
   // From the rpm the MCU reports, not from what was asked for.
   const bool running = hw.telemetry_ok && hw.blade.ok && std::abs(hw.blade.rpm) >= config_.blade_running_rpm;
@@ -112,6 +113,7 @@ void LogicCore::OnHardwareStatus(const HardwareSnapshot& hw) {
 void LogicCore::OnHardwareTimeout() {
   hw_.telemetry_ok = false;
   hw_.battery_ok = false;
+  recorder_.SetDockContact(false);
   UpdateEmergency();
 }
 
@@ -120,7 +122,7 @@ void LogicCore::OnPose(const PoseSnapshot& pose) {
   last_x_ = pose.x;
   last_y_ = pose.y;
   if (state_ != State::kAreaRecording) return;
-  recorder_.OnPose(pose.x, pose.y, pose.position_accuracy);
+  recorder_.OnPose(pose.x, pose.y, pose.position_accuracy, pose.orientation_valid);
   PullRecorder();
 }
 

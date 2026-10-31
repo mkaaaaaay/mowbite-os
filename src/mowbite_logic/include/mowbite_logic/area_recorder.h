@@ -20,6 +20,13 @@ struct Point2 {
   double y = 0;
 };
 
+// The docking station as map.json has it: base_link of the mower on the contacts, and the heading it drives in with.
+struct DockPose {
+  double x = 0;
+  double y = 0;
+  double heading = 0;
+};
+
 // Open: the last point does not repeat the first.
 using Ring = std::vector<Point2>;
 
@@ -39,8 +46,11 @@ struct RecorderConfig {
   double min_area = 0.05;
   // All rings of one recording together; the map must fit into one MQTT message.
   size_t max_points = 5000;
-  // The two points of the docking station must be this far apart (m) for a usable heading.
-  double min_dock_distance = 0.3;
+  // The two points of the docking station must be this far apart (m) for a usable heading: 2 cm across between them
+  // turn it by 2.3 degrees at 0.5 m, by 3.8 at 0.3 m.
+  double min_dock_distance = 0.5;
+  // The mower backs onto the contacts (dock_contact_x below 0), for the hint in the log.
+  bool dock_backwards = false;
 };
 
 // A change of the map the recording asks mowbite_map for.
@@ -74,11 +84,16 @@ class AreaRecorder {
   void Reset();
   // An action of mower_logic:area_recording without the prefix, except exit_recording_mode.
   Result OnAction(const std::string& name);
-  void OnPose(double x, double y, float position_accuracy);
+  // heading_valid: the localization has its heading, else base_link may be off by the antenna offset.
+  void OnPose(double x, double y, float position_accuracy, bool heading_valid);
   // The pose got too old.
   void OnPoseLost();
   // Whether mowbite_map takes changes now, and why not.
   void SetMapWritable(bool writable, const Reason& reason);
+  // The debounced contact with the docking station, which the point on the contacts needs.
+  void SetDockContact(bool contact) {
+    dock_contact_ = contact;
+  }
 
   // The edit to send, once.
   std::optional<MapEdit> TakeMapEdit();
@@ -143,11 +158,13 @@ class AreaRecorder {
     double x;
     double y;
     float accuracy;
+    bool heading_valid;
   };
   std::optional<Pose> pose_;
   bool accuracy_blocked_ = false;
   bool full_reported_ = false;
   bool map_writable_ = false;
+  bool dock_contact_ = false;
   Reason map_reason_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
   // The edit waiting for its answer, and the one not yet taken by the node.
   std::optional<MapEdit> pending_;
