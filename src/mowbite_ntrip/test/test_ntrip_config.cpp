@@ -118,6 +118,13 @@ TEST(NtripConfig, CheckValue) {
   EXPECT_EQ(CheckValue("password", "p\xe4ss"), "");
 }
 
+TEST(NtripConfig, NormalMountpoint) {
+  EXPECT_EQ(NormalMountpoint("/VRS"), "VRS");
+  EXPECT_EQ(NormalMountpoint("VRS"), "VRS");
+  EXPECT_EQ(NormalMountpoint("//VRS"), "/VRS");
+  EXPECT_EQ(NormalMountpoint(""), "");
+}
+
 NtripConfig Tricky() {
   NtripConfig config;
   config.host = "caster.example.org";

@@ -114,6 +114,10 @@ std::string CheckValue(const std::string& key, const std::string& value) {
   return Printable(value) ? "" : "control characters";
 }
 
+std::string NormalMountpoint(const std::string& mountpoint) {
+  return !mountpoint.empty() && mountpoint[0] == '/' ? mountpoint.substr(1) : mountpoint;
+}
+
 std::optional<NtripConfig> ParseNtripConfig(const std::string& text, std::string& error) {
   NtripConfig config;
   bool has_host = false, has_mountpoint = false;
@@ -143,7 +147,7 @@ std::optional<NtripConfig> ParseNtripConfig(const std::string& text, std::string
     }
     if (key == "host" || key == "mountpoint" || key == "user" || key == "password") {
       std::string text_value = *value;
-      if (key == "mountpoint" && !text_value.empty() && text_value[0] == '/') text_value.erase(0, 1);
+      if (key == "mountpoint") text_value = NormalMountpoint(text_value);
       const std::string problem = CheckValue(key, text_value);
       if (!problem.empty()) {
         error = where + problem;
@@ -224,10 +228,14 @@ bool WriteAccessFile(const std::string& path, const NtripConfig& config, std::st
     error = "the access would not read back the same" + (problem.empty() ? "" : " (" + problem + ")");
     return false;
   }
+  // Mode 600 from the start, so others never get a moment to read it.
+  return ReplaceFile(path, text, 0600, error);
+}
+
+bool ReplaceFile(const std::string& path, const std::string& text, mode_t mode, std::string& error) {
   const std::string temp = path + ".new";
   ::unlink(temp.c_str());
-  // Mode 600 from the start, so others never get a moment to read it.
-  const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+  const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode);
   if (fd < 0) {
     error = Errno("cannot create " + temp);
     return false;
