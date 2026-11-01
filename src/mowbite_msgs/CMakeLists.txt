@@ -30,6 +30,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GpsLimits.msg"
   "msg/Rtcm.msg"
   "msg/NtripStatus.msg"
+  "msg/DriveCommand.msg"
+  "msg/SafetyStatus.msg"
   "srv/AddArea.srv"
   "srv/ReplaceMap.srv"
   "srv/SetBlade.srv"
