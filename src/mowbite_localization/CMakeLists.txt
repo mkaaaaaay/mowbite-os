@@ -16,6 +16,7 @@ find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(mowbite_msgs REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 # Filter and gating without ROS, testable on any machine. The Kalman headers (MIT) come unchanged from
 # xbot_positioning and are only used inside this package.
@@ -28,7 +29,7 @@ target_link_libraries(mowbite_localization_core Eigen3::Eigen)
 set_target_properties(mowbite_localization_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_localization_component SHARED src/localization_node.cpp)
-target_link_libraries(mowbite_localization_component mowbite_localization_core)
+target_link_libraries(mowbite_localization_component mowbite_localization_core nlohmann_json::nlohmann_json)
 ament_target_dependencies(mowbite_localization_component rclcpp rclcpp_components geometry_msgs nav_msgs sensor_msgs
   std_msgs std_srvs tf2_ros mowbite_msgs)
 rclcpp_components_register_node(mowbite_localization_component

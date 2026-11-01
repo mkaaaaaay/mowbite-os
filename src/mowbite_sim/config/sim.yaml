@@ -4,11 +4,12 @@ tron_mcu:
     # fake_tron stands in for the safety measurement, so that the simulation drives on its own. Never on a device.
     safety_measurement_date: "simulation"
 
-mowbite_localization:
+mowbite_logic:
   ros__parameters:
-    # fake_tron puts the antenna 0.098 m ahead of the base (its --antenna-offset); the localization has to know it.
-    antenna_offset_x: 0.098
-    antenna_offset_y: 0.0
+    geometry:
+      # fake_tron puts the antenna 0.098 m ahead of the base (its --antenna-offset); the localization has to know it.
+      antenna_x: 0.098
+      antenna_y: 0.0
 
 mowbite_ntrip:
   ros__parameters:
@@ -19,7 +20,7 @@ mowbite_ntrip:
 # The charging station of fake_tron, which is no ROS node: sim.launch.py passes it on. Placed like one of map.json:
 # base_link of the docked mower (m) and the way in (degrees). 1 m behind the start the mower backs in going west and
 # faces east on the contacts. dock_contact_x is where the simulated Tron has its contacts; mowbite_logic has the same
-# value from tron.yaml.
+# value from config/geometry/tron.yaml.
 fake_tron:
   ros__parameters:
     dock: [-1.0, 0.0, 180.0]

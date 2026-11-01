@@ -63,7 +63,7 @@ with open(CONFIG, "w") as f:
     f.write("tron_mcu:\n  ros__parameters:\n    safety_measurement_date: \"simulation\"\n    allow_blade: true\n"
             "mowbite_logic:\n  ros__parameters:\n    mow_with_blade: true\n    gps_wait_time: 2.0\n"
             # The antenna of fake_tron, as in sim.yaml, which this file replaces.
-            "mowbite_localization:\n  ros__parameters:\n    antenna_offset_x: 0.098\n    antenna_offset_y: 0.0\n")
+            "    geometry:\n      antenna_x: 0.098\n      antenna_y: 0.0\n")
 
 
 def generate_test_description():

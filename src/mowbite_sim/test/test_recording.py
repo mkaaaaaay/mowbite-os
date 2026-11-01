@@ -16,6 +16,7 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
 from mowbite_msgs.msg import AbsolutePose, ActionList, HardwareStatus, MapStatus, MqttPublish
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -29,11 +30,15 @@ ACTIONS_QOS = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durab
 REC = "mower_logic:area_recording/"
 
 
+# The dimensions of the platform, which the logic needs to start.
+GEOMETRY = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
+
+
 def generate_test_description():
     map_node = Node(package="mowbite_map", executable="mowbite_map_node", output="screen",
                     parameters=[{"data_dir": WORK}])
     logic = Node(package="mowbite_logic", executable="mowbite_logic_node", output="screen",
-                 parameters=[{"map_edit_timeout": 3.0}])
+                 parameters=[GEOMETRY, {"map_edit_timeout": 3.0}])
     return launch.LaunchDescription([map_node, logic, launch_testing.actions.ReadyToTest()]), {}
 
 

@@ -1,10 +1,16 @@
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <sstream>
+#include <stdexcept>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/point32.hpp>
 #include <geometry_msgs/msg/polygon.hpp>
@@ -49,6 +55,7 @@
 #include <std_srvs/srv/trigger.hpp>
 
 #include "mowbite_bridge/monitor.h"
+#include "mowbite_logic/geometry.h"
 #include "mowbite_logic/logic_core.h"
 #include "mowbite_logic/logic_params.h"
 #include "mowbite_logic/mowing_plan.h"
@@ -64,6 +71,50 @@ rclcpp::QoS LatchedQos(size_t depth) {
 double MonotonicSeconds() {
   using namespace std::chrono;
   return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+// The text becomes the file whole or not at all: written next to it, synced, renamed over it, the folder synced.
+bool WriteFileSafely(const std::string& path, const std::string& text, std::string* error) {
+  std::error_code ec;
+  const std::filesystem::path folder = std::filesystem::path(path).parent_path();
+  std::filesystem::create_directories(folder, ec);
+  if (ec) {
+    *error = "cannot create the folder of " + path + ": " + ec.message();
+    return false;
+  }
+  const std::string temp = path + ".new";
+  const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) {
+    *error = "cannot write " + temp + ": " + std::strerror(errno);
+    return false;
+  }
+  size_t done = 0;
+  while (done < text.size()) {
+    const ssize_t n = ::write(fd, text.data() + done, text.size() - done);
+    if (n < 0 && errno == EINTR) continue;
+    if (n < 0) {
+      *error = "cannot write " + temp + ": " + std::strerror(errno);
+      ::close(fd);
+      return false;
+    }
+    done += static_cast<size_t>(n);
+  }
+  const bool synced = ::fsync(fd) == 0;
+  ::close(fd);
+  if (!synced) {
+    *error = "cannot sync " + temp + ": " + std::strerror(errno);
+    return false;
+  }
+  if (std::rename(temp.c_str(), path.c_str()) != 0) {
+    *error = "cannot replace " + path + ": " + std::strerror(errno);
+    return false;
+  }
+  const int folder_fd = ::open(folder.c_str(), O_RDONLY | O_DIRECTORY);
+  if (folder_fd >= 0) {
+    ::fsync(folder_fd);
+    ::close(folder_fd);
+  }
+  return true;
 }
 
 MapDatum ToDatum(uint8_t state) {
@@ -178,7 +229,7 @@ class LogicNode : public rclcpp::Node {
 
  public:
   explicit LogicNode(const rclcpp::NodeOptions& options)
-      : rclcpp::Node("mowbite_logic", options), core_(LoadConfig()) {
+      : rclcpp::Node("mowbite_logic", options), core_(LoadConfig()), geometry_(FactoryGeometry()) {
     hw_timeout_s_ = declare_parameter("hw_status_timeout", 2.0);
     pose_timeout_s_ = declare_parameter("pose_timeout", 2.0);
     // mowbite_map answers at once; a recording waits this long (s) before it counts as not saved.
@@ -187,6 +238,7 @@ class LogicNode : public rclcpp::Node {
     // tron.yaml.
     data_dir_ = declare_parameter("data_dir", std::string());
     LoadLogicParams();
+    LoadGeometryEntries();
     // The blade: a lease of blade_lease (s), renewed every blade_renew (s) while the logic wants it to turn.
     blade_lease_s_ = declare_parameter("blade_lease", 1.0);
     blade_renew_s_ = declare_parameter("blade_renew", 0.5);
@@ -213,11 +265,15 @@ class LogicNode : public rclcpp::Node {
     // Publishers of their own, so a run of params.set never pushes /ll/board out of the history above.
     logic_params_pub_ = create_publisher<std_msgs::msg::String>(
         "bridge/params", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+    // The dimensions of the mower for the planner and the localization, latched: whoever starts later gets the last.
+    geometry_pub_ = create_publisher<std_msgs::msg::String>(
+        "bridge/params", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
     gps_limits_pub_ =
         create_publisher<mowbite_msgs::msg::GpsLimits>("logic/gps_limits", rclcpp::QoS(1).reliable().transient_local());
     // Settings of other nodes (the NTRIP access) change only while this is true, like params.set.
     idle_pub_ = create_publisher<std_msgs::msg::Bool>("logic/idle", rclcpp::QoS(1).reliable().transient_local());
     PublishLogicParams();
+    PublishGeometry();
     emergency_client_ = create_client<mowbite_msgs::srv::SetEmergency>("hw/emergency");
     add_area_client_ = create_client<mowbite_msgs::srv::AddArea>("map/add_area");
     set_dock_client_ = create_client<mowbite_msgs::srv::SetDock>("map/set_dock");
@@ -249,7 +305,7 @@ class LogicNode : public rclcpp::Node {
         });
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_logic";
-    methods.methods = {"mowing.plan", "params.set"};
+    methods.methods = {"mowing.plan", "params.set", "robot.geometry.get", "robot.geometry.set"};
     // "Home" from IDLE, only where the OS docks (contacts at the back).
     if (core_.CanDock()) methods.methods.push_back("docking.start");
     rpc_methods_pub_->publish(methods);
@@ -393,7 +449,8 @@ class LogicNode : public rclcpp::Node {
     config.battery_critical_time = declare_parameter("battery_critical_time", config.battery_critical_time);
     config.approach_distance = declare_parameter("approach_distance", config.approach_distance);
     config.checkpoint_period = declare_parameter("checkpoint_period", config.checkpoint_period);
-    config.dock_contact_x = declare_parameter("dock_contact_x", config.dock_contact_x);
+    // Where the charging contacts are belongs to the dimensions of the platform (geometry.dock_contact_x).
+    config.dock_contact_x = GeometryNumber("dock_contact_x");
     config.dock_max_position_accuracy = declare_parameter("dock_max_position_accuracy", config.dock_max_position_accuracy);
     config.dock_reference_limit = declare_parameter("dock_reference_limit", config.dock_reference_limit);
     // undock_distance is a setting of params.set (LoadLogicParams), the rest is the platform's.
@@ -1108,6 +1165,14 @@ class LogicNode : public rclcpp::Node {
       OnParamsSet(request);
       return;
     }
+    if (request.method == "robot.geometry.get") {
+      OnGeometryGet(request);
+      return;
+    }
+    if (request.method == "robot.geometry.set") {
+      OnGeometrySet(request);
+      return;
+    }
     if (request.method == "docking.start") {
       OnDockingStart(request);
       return;
@@ -1303,6 +1368,141 @@ class LogicNode : public rclcpp::Node {
     limits.max_position_accuracy = params.Get("max_position_accuracy");
     limits.gps_timeout = params.Get("gps_timeout");
     gps_limits_pub_->publish(limits);
+  }
+
+  // A number of the platform's file (parameters geometry.*); one that is missing stops the start.
+  double GeometryNumber(const std::string& key) {
+    const std::string name = "geometry." + key;
+    if (!has_parameter(name)) declare_parameter(name, std::numeric_limits<double>::quiet_NaN());
+    const double value = get_parameter(name).as_double();
+    if (std::isnan(value)) throw std::invalid_argument(key + " is missing in the geometry file of the platform");
+    return value;
+  }
+
+  // The dimensions of the platform (mowbite_bringup/config/geometry/<platform>.yaml); the entries of the user follow.
+  Geometry FactoryGeometry() {
+    json factory = json::object();
+    for (const auto& key : GeometryKeys()) {
+      if (key.type == GeometryType::kNumber) factory[key.name] = GeometryNumber(key.name);
+    }
+    // The outline of the body, if the platform has one: x0, y0, x1, y1, ...
+    const std::vector<double> flat = declare_parameter("geometry.robot_outline", std::vector<double>());
+    if (flat.size() % 2 != 0) throw std::invalid_argument("geometry.robot_outline needs pairs of x and y");
+    if (!flat.empty()) {
+      json points = json::array();
+      for (size_t i = 0; i < flat.size(); i += 2) points.push_back(json::array({flat[i], flat[i + 1]}));
+      factory["robot_outline"] = std::move(points);
+    }
+    return Geometry(declare_parameter("geometry.platform", std::string("tron")), factory);
+  }
+
+  std::string GeometryPath() const {
+    return data_dir_.empty() ? "" : data_dir_ + "/geometry.json";
+  }
+
+  // What robot.geometry.set saved. A file that cannot be read stays as it is, the dimensions of the platform hold.
+  void LoadGeometryEntries() {
+    const std::string path = GeometryPath();
+    if (path.empty()) {
+      RCLCPP_WARN(get_logger(), "No data_dir: what robot.geometry.set changes is gone after a restart");
+      return;
+    }
+    std::ifstream in(path);
+    if (!in) return;
+    std::stringstream text;
+    text << in.rdbuf();
+    std::string why;
+    if (geometry_.Load(text.str(), &why)) {
+      RCLCPP_INFO(get_logger(), "Dimensions of the mower from %s (version %d)", path.c_str(), geometry_.version());
+    } else {
+      RCLCPP_ERROR(get_logger(), "%s is not valid (%s), the dimensions of the platform hold", path.c_str(),
+                   why.c_str());
+    }
+  }
+
+  void PublishGeometry() {
+    json params;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      params = geometry_.Params();
+    }
+    std_msgs::msg::String msg;
+    msg.data = json{{"node", kGeometryNode}, {"params", params}}.dump();
+    geometry_pub_->publish(msg);
+  }
+
+  void OnGeometryGet(const mowbite_msgs::msg::RpcRequest& request) {
+    json answer;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      answer = geometry_.Get();
+    }
+    mowbite_msgs::msg::RpcResponse msg;
+    msg.result = answer.dump();
+    msg.id = request.id;
+    rpc_response_pub_->publish(msg);
+  }
+
+  // Only in IDLE and all or nothing; a change counts once it is saved. The answer is the new robot.geometry.get.
+  void OnGeometrySet(const mowbite_msgs::msg::RpcRequest& request) {
+    using mowbite_msgs::msg::RpcError;
+    json params;
+    if (!request.params.empty()) {
+      params = json::parse(request.params, nullptr, false);
+      if (params.is_discarded()) {
+        PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS, "The parameters are not valid JSON");
+        return;
+      }
+    }
+    GeometryChange change;
+    json answer;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!core_.Idle()) {
+        PublishRpcError(request.id, RpcError::ERROR_INVALID_REQUEST,
+                        "The dimensions change only in IDLE, not while recording, driving or mowing",
+                        json{{"reason", "BUSY"}}.dump());
+        return;
+      }
+      Geometry changed = geometry_;
+      change = changed.Set(params);
+      if (!change.ok) {
+        json data = json::object();
+        data["reason"] = change.problem.reason;
+        data["message"] = change.problem.message;
+        if (!change.problem.key.empty()) data["key"] = change.problem.key;
+        for (const auto& item : change.problem.data.items()) data[item.key()] = item.value();
+        PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS, change.problem.message, data.dump());
+        return;
+      }
+      if (change.stored) {
+        std::string error;
+        if (!SaveGeometry(changed, &error)) {
+          RCLCPP_ERROR(get_logger(), "robot.geometry.set: %s", error.c_str());
+          PublishRpcError(request.id, RpcError::ERROR_INTERNAL, "Cannot save the dimensions: " + error);
+          return;
+        }
+        geometry_ = std::move(changed);
+        // Only a value that is another now is news; a key entered with the platform's own value is not.
+        if (!change.changed.empty()) core_.GeometryChanged(change.changed, change.below_default, geometry_.version());
+      }
+      answer = geometry_.Get();
+    }
+    if (change.stored) {
+      RCLCPP_INFO(get_logger(), "robot.geometry.set: version %d, changed %zu key(s)", answer["version"].get<int>(),
+                  change.changed.size());
+      PublishGeometry();
+      Flush();
+    }
+    mowbite_msgs::msg::RpcResponse msg;
+    msg.result = answer.dump();
+    msg.id = request.id;
+    rpc_response_pub_->publish(msg);
+  }
+
+  bool SaveGeometry(const Geometry& geometry, std::string* error) {
+    const std::string path = GeometryPath();
+    return path.empty() || WriteFileSafely(path, geometry.Text(), error);
   }
 
   void OnPlanAnswer(uint64_t seq, const mowbite_planner_interfaces::srv::PlanCoverage::Response& response) {
@@ -1773,6 +1973,7 @@ class LogicNode : public rclcpp::Node {
 
   std::mutex mutex_;
   LogicCore core_;
+  Geometry geometry_;
   Drive drive_;
   JobPlan job_plan_;
   std::string data_dir_;
@@ -1823,6 +2024,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr logic_params_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr geometry_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::GpsLimits>::SharedPtr gps_limits_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr idle_pub_;
   std::optional<bool> published_idle_;

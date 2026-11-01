@@ -89,9 +89,7 @@ mowbite_localization:
   ros__parameters:
     gyro_calibration_time: 5.0
     min_speed: 0.01
-    # GPS antenna relative to the point of rotation (x forward, y left), measured on the device in phase 7.
-    antenna_offset_x: 0.0
-    antenna_offset_y: 0.0
+    # The antenna offset is part of the geometry (config/geometry/tron.yaml, robot.geometry), measured in phase 7.
     # Without a fix the accuracy grows by this much per m driven and per s. Assumptions until measured in phase 7.
     accuracy_growth_per_m: 0.05
     accuracy_growth_per_s: 0.01
@@ -114,12 +112,10 @@ mowbite_logic:
     recording_max_points: 5000
     recording_min_dock_distance: 0.5
     map_edit_timeout: 5.0
-    # The charging contacts of the Tron lie 0.10 m behind base_link (measured by the user from the axle of the drive
-    # wheels): it backs onto the docking station and faces away from it there. On the contacts mowing and drives start
-    # only after the reference check (G24): position accuracy at least dock_max_position_accuracy m, then with the
-    # heading of the station set, base_link within dock_reference_limit m of the recorded station (assumptions until
-    # phase 7).
-    dock_contact_x: -0.10
+    # The charging contacts lie 0.10 m behind base_link (geometry.dock_contact_x): the Tron backs onto the docking
+    # station and faces away from it there. On the contacts mowing and drives start only after the reference check
+    # (G24): position accuracy at least dock_max_position_accuracy m, then with the heading of the station set,
+    # base_link within dock_reference_limit m of the recorded station (assumptions until phase 7).
     dock_max_position_accuracy: 0.03
     dock_reference_limit: 0.10
     # After the check charging goes off (hw/charge), then the mower leaves the station undock_distance m straight
@@ -228,14 +224,15 @@ mowbite_planner:
     lane_order: skip
     turn_on_spot: false
     turn_types: [u_turn, bulb, detour]
-    # Body around base_link (x forward, y left), measured by the user: 0.47 m over the drive wheels, the front 0.60 m
-    # ahead of their axle, behind it the wheels (radius 0.1125 m) and the charging contacts (0.10 m). Without a body
-    # mop_up and body_fit do nothing.
+    # Body around base_link (x forward, y left), measured by the user. Without a body mop_up and body_fit do nothing.
+    # The dimensions below (also mower_width above) are those of config/geometry/tron.yaml, checked by
+    # test_config_consistency.py, until the planner takes them from /mowbite_geometry (bridge/params): what
+    # robot.geometry.set changes does not reach it before.
     robot_width: 0.47
     robot_front: 0.60
     robot_rear: 0.12
-    # The centre of the blade lies 0.23 m ahead of base_link (measured by the user): lanes start and end that much
-    # earlier. perimeter_offset stays at half the cutting width (-1.0).
+    # The centre of the blade lies ahead of base_link: lanes start and end that much earlier. perimeter_offset stays at
+    # half the cutting width (-1.0).
     blade_ahead: 0.23
     # Nobody listens to ~/coverage_path, so do not publish every plan.
     publish_path: false

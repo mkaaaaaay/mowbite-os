@@ -1,0 +1,27 @@
+# The dimensions of the Tron: the values of robot.geometry, read by mowbite_logic as the parameters geometry.*. What the
+# user enters with robot.geometry.set goes to data_dir/geometry.json and counts before these. base_link is the middle of
+# the axle of the drive wheels, x points forward and y to the left, everything in m. Another platform brings a file like
+# this one with its driver.
+mowbite_logic:
+  ros__parameters:
+    geometry:
+      # As the driver reports it (hw/capabilities, system.info).
+      platform: airseekers_tron
+      # The body: 0.47 m over the drive wheels, the front 0.60 m ahead of their axle, behind it the wheels and the
+      # charging contacts at 0.12 m (measured by the user). The planner keeps its margins to the lines by it.
+      robot_width: 0.47
+      robot_front: 0.60
+      robot_rear: 0.12
+      # Cutting width of the small deck; the big one (0.27 to 0.30 m) only after measuring.
+      mower_width: 0.22
+      # The centre of the blade 0.23 m ahead of the axle (measured by the user), none to the side.
+      blade_ahead: 0.23
+      blade_offset: 0.0
+      # The GPS antenna, measured on the device in phase 7 (until then at base_link).
+      antenna_x: 0.0
+      antenna_y: 0.0
+      # Only this file sets these: 0.395 m between the middles of the drive wheels (the MCU computes with 0.40 m), the
+      # radius of the wheels, and the charging contacts 0.10 m behind base_link (the Tron backs onto its station).
+      track: 0.395
+      wheel_radius: 0.1125
+      dock_contact_x: -0.10

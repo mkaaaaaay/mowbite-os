@@ -15,6 +15,7 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix
@@ -35,6 +36,10 @@ FIXED = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FIXED
 FLOAT = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FLOAT
 
 
+# The dimensions of the platform, which the logic needs to start.
+GEOMETRY = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
+
+
 def generate_test_description():
     fake_tron = ExecuteProcess(
         cmd=[os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_tron"),
@@ -47,7 +52,7 @@ def generate_test_description():
                                "blade_lease_max": 2.0, "blade_stop_time": BLADE_STOP_TIME}])
     gnss = Node(package="tron_gnss", executable="tron_gnss_node", output="screen",
                 parameters=[{"port": LINKS["gnss"], "datum_lat": 52.0, "datum_long": 9.0, "datum_height": 50.0}])
-    logic = Node(package="mowbite_logic", executable="mowbite_logic_node", output="screen")
+    logic = Node(package="mowbite_logic", executable="mowbite_logic_node", output="screen", parameters=[GEOMETRY])
     # The ptys have to exist before the drivers look for them.
     return launch.LaunchDescription([
         fake_tron,
