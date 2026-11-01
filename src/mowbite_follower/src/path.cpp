@@ -8,8 +8,9 @@ namespace mowbite_follower {
 
 namespace {
 
-// Poses closer than this (m) count as one.
-constexpr double kSamePosition = 1e-3;
+// Poses closer than this (m) are merged, at the same position they are refused.
+constexpr double kMerge = 1e-3;
+constexpr double kSamePosition = 1e-9;
 
 }  // namespace
 
@@ -33,15 +34,31 @@ std::string Path::Build(const std::vector<Pose2>& poses, const std::vector<Kind>
       return "pose " + std::to_string(i) + " lies on the one before";
     }
   }
-  const size_t n = poses.size();
-  poses_ = poses;
-  kinds_ = kinds.empty() ? std::vector<Kind>(n, Kind::kTransit) : kinds;
+  for (size_t i = 0; i < poses.size(); i++) {
+    const Kind kind = kinds.empty() ? Kind::kTransit : kinds[i];
+    if (i > 0 && std::hypot(poses[i].x - poses_.back().x, poses[i].y - poses_.back().y) < kMerge) {
+      // The end stays where the path ends, with the heading of its last pose.
+      if (i + 1 == poses.size() && poses_.size() > 1) {
+        poses_.back() = poses[i];
+        source_.back() = i;
+      }
+      continue;
+    }
+    poses_.push_back(poses[i]);
+    kinds_.push_back(kind);
+    source_.push_back(i);
+  }
+  if (poses_.size() < 2) {
+    *this = Path();
+    return "the poses of the path lie on one point";
+  }
+  const size_t n = poses_.size();
   s_.assign(n, 0.0);
   length_.assign(n - 1, 0.0);
   direction_.assign(n - 1, 0.0);
   for (size_t i = 0; i + 1 < n; i++) {
-    const double dx = poses[i + 1].x - poses[i].x;
-    const double dy = poses[i + 1].y - poses[i].y;
+    const double dx = poses_[i + 1].x - poses_[i].x;
+    const double dy = poses_[i + 1].y - poses_[i].y;
     length_[i] = std::hypot(dx, dy);
     direction_[i] = std::atan2(dy, dx);
     s_[i + 1] = s_[i] + length_[i];
@@ -67,6 +84,12 @@ std::string Path::Build(const std::vector<Pose2>& poses, const std::vector<Kind>
     curvature_[i] = NormalizeAngle(heading_in_[i + 1] - heading_out_[i]) / length_[i];
   }
   return "";
+}
+
+size_t Path::Merged(size_t given) const {
+  size_t i = 0;
+  while (i + 1 < source_.size() && source_[i + 1] <= given) i++;
+  return i;
 }
 
 size_t Path::NextStop(size_t i) const {

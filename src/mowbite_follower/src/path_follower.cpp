@@ -35,17 +35,17 @@ std::string PathFollower::Start(const std::vector<Pose2>& poses, const std::vect
   phase_ = Phase::kIdle;
   std::string problem = path_.Build(poses, kinds, config_.corner_angle);
   if (!problem.empty()) return problem;
-  if (start_index + 1 >= path_.size()) return "start_index must lie before the last pose";
+  if (start_index + 1 >= poses.size()) return "start_index must lie before the last pose";
   if (config_.straight) {
-    const Pose2& a = poses.front();
-    const Pose2& b = poses.back();
+    const Pose2& a = path_.pose(0);
+    const Pose2& b = path_.pose(path_.size() - 1);
     const double line = std::atan2(b.y - a.y, b.x - a.x);
     const double facing = config_.reverse ? NormalizeAngle(line + M_PI) : line;
-    for (size_t i = 0; i < poses.size(); i++) {
-      const double side = std::cos(line) * (poses[i].y - a.y) - std::sin(line) * (poses[i].x - a.x);
-      const bool along = i + 1 == poses.size() || std::abs(NormalizeAngle(path_.direction(i) - line)) <= kStraightAngle;
-      if (std::abs(side) > kStraightOffset || !along ||
-          std::abs(NormalizeAngle(poses[i].yaw - facing)) > kStraightAngle) {
+    for (size_t i = 0; i < path_.size(); i++) {
+      const Pose2& p = path_.pose(i);
+      const double side = std::cos(line) * (p.y - a.y) - std::sin(line) * (p.x - a.x);
+      const bool along = i + 1 == path_.size() || std::abs(NormalizeAngle(path_.direction(i) - line)) <= kStraightAngle;
+      if (std::abs(side) > kStraightOffset || !along || std::abs(NormalizeAngle(p.yaw - facing)) > kStraightAngle) {
         return "a straight path must lie on one line, its poses facing along it";
       }
     }
@@ -55,9 +55,9 @@ std::string PathFollower::Start(const std::vector<Pose2>& poses, const std::vect
   failure_.clear();
   begun_ = false;
   joined_ = false;
-  segment_ = start_index;
-  stop_ = path_.NextStop(start_index);
-  along_ = path_.s(start_index);
+  segment_ = std::min(path_.Merged(start_index), path_.size() - 2);
+  stop_ = path_.NextStop(segment_);
+  along_ = path_.s(segment_);
   time_ = 0;
   speed_ = 0;
   phase_ = Phase::kFollowing;
@@ -171,7 +171,10 @@ void PathFollower::Cancel() {
   speed_ = 0;
 }
 
-size_t PathFollower::index() const { return phase_ == Phase::kDone ? path_.size() - 1 : segment_; }
+size_t PathFollower::index() const {
+  if (path_.size() == 0) return 0;
+  return path_.source(phase_ == Phase::kDone ? path_.size() - 1 : segment_);
+}
 
 bool PathFollower::OnPath() const {
   return joined_ && (phase_ == Phase::kFollowing || phase_ == Phase::kCornerTurn || phase_ == Phase::kRealign ||

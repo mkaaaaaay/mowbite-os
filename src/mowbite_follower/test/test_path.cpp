@@ -39,6 +39,7 @@ TEST(Path, RejectsUnusablePoses) {
   auto doubled = line;
   doubled.insert(doubled.begin() + 3, doubled[2]);
   EXPECT_EQ(path.Build(doubled, {}, kCorner), "pose 3 lies on the one before");
+  EXPECT_EQ(path.Build({{0, 0, 0}, {0.0005, 0, 0}, {0.0009, 0, 0}}, {}, kCorner), "the poses of the path lie on one point");
   auto broken = line;
   broken[4].x = std::nan("");
   EXPECT_EQ(path.Build(broken, {}, kCorner), "pose 4 is not finite");
@@ -50,6 +51,26 @@ TEST(Path, RejectsUnusablePoses) {
   EXPECT_EQ(path.kind(3), Kind::kLane);
   EXPECT_EQ(path.Build(line, {}, kCorner), "");
   EXPECT_EQ(path.kind(3), Kind::kTransit);
+}
+
+// A pose within 1 mm of the one before is merged into it, the last one into the one before; indexes map back.
+TEST(Path, MergesPosesWithinAMillimetre) {
+  auto poses = Line(0, 0, 0, 1.0);
+  poses.insert(poses.begin() + 4, {0.3004, 0.0003, 1.0});
+  poses.push_back({1.0006, 0.0, M_PI / 2});
+  Path path;
+  ASSERT_EQ(path.Build(poses, {}, kCorner), "");
+  EXPECT_EQ(path.size(), 11u);
+  for (size_t i = 0; i < path.size(); i++) EXPECT_FALSE(path.corner(i)) << i;
+  EXPECT_EQ(path.source(3), 3u);
+  EXPECT_EQ(path.source(4), 5u);
+  EXPECT_EQ(path.source(10), 12u);
+  EXPECT_NEAR(path.pose(10).yaw, M_PI / 2, 1e-12);
+  EXPECT_NEAR(path.pose(10).x, 1.0006, 1e-12);
+  EXPECT_EQ(path.Merged(4), 3u);
+  EXPECT_EQ(path.Merged(5), 4u);
+  EXPECT_EQ(path.Merged(11), 9u);
+  EXPECT_EQ(path.Merged(12), 10u);
 }
 
 TEST(Path, LengthsAndDirectionsOfTravel) {

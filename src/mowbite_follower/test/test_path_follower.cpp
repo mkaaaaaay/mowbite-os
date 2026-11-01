@@ -125,6 +125,24 @@ TEST(PathFollower, StraightOnlyOnALine) {
   EXPECT_EQ(backwards.Start(back, {}, 0), "");
 }
 
+// F1: what the planner may send, two poses less than 1 mm apart (pose 132 of the full run, 01.11.), is followed and
+// the index counts the poses as sent.
+TEST(PathFollower, FollowsPosesLessThanAMillimetreApart) {
+  auto poses = Line(0, 0, 0, 3.0);
+  poses.insert(poses.begin() + 13, {1.2002, 0.0, 0.0});
+  PathFollower follower{FollowerConfig()};
+  ASSERT_EQ(follower.Start(poses, {}, 0), "");
+  Robot robot;
+  Drive(follower, robot);
+  EXPECT_EQ(follower.phase(), Phase::kDone) << follower.failure();
+  EXPECT_EQ(follower.index(), poses.size() - 1);
+  EXPECT_LT(robot.max_cross, 0.001);
+  ASSERT_EQ(follower.Start(poses, {}, 20), "");
+  robot.pose = {1.9, 0.0, 0.0};
+  Drive(follower, robot);
+  EXPECT_EQ(follower.phase(), Phase::kDone) << follower.failure();
+}
+
 // F2
 TEST(PathFollower, RefusesAStartFarFromThePath) {
   PathFollower follower{FollowerConfig()};

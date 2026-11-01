@@ -38,12 +38,17 @@ struct Projection {
 };
 
 // The poses of a path as a line of segments: lengths, directions of travel, corners and a smoothed heading. The
-// direction of travel is the way from one pose to the next, so a path driven backwards has the same geometry.
+// direction of travel is the way from one pose to the next, so a path driven backwards has the same geometry. A pose
+// within 1 mm of the one before adds no segment: it is merged into that one, the last pose into the one before it.
 class Path {
  public:
   // Empty if the poses make a path, else why not. A corner is a pose where the direction of travel turns by more
   // than corner_angle (rad); there the mower stops and turns on the spot.
   std::string Build(const std::vector<Pose2>& poses, const std::vector<Kind>& kinds, double corner_angle);
+
+  // The index of pose i among the poses given to Build, and the pose an index given to Build is merged into.
+  size_t source(size_t i) const { return source_[i]; }
+  size_t Merged(size_t given) const;
 
   size_t size() const { return poses_.size(); }
   const Pose2& pose(size_t i) const { return poses_[i]; }
@@ -65,6 +70,7 @@ class Path {
  private:
   std::vector<Pose2> poses_;
   std::vector<Kind> kinds_;
+  std::vector<size_t> source_;
   std::vector<double> s_;
   std::vector<double> length_;
   std::vector<double> direction_;
