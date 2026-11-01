@@ -375,6 +375,34 @@ TEST(L8Heading, NotValidStandingOrCreeping) {
   EXPECT_EQ(w.est.HeadingAccuracy(), kNoAccuracy);
 }
 
+TEST(L8Heading, PausesDoNotBreakTheRun) {
+  World w;
+  w.Ready();
+  // Short pushes of the joystick with stops between them, as in the app.
+  w.Run(0.6, 0.3, 0.0);
+  w.Run(2.0, 0.0, 0.0);
+  w.Run(0.2, 0.3, 0.1);
+  EXPECT_FALSE(w.est.heading_valid());
+  w.Run(1.0, 0.0, 0.0);
+  w.Run(0.2, 0.3, 0.0);
+  EXPECT_TRUE(w.est.heading_valid());
+  EXPECT_LT(std::abs(w.HeadingError()), 0.5 * kDeg);
+}
+
+TEST(L8Heading, AnInconsistentCourseBreaksTheRun) {
+  World w;
+  w.Ready();
+  w.Run(0.8, 0.3, 0.0);
+  // The wheels report three times the speed the antenna moves at: the four courses before do not count either.
+  w.odom_scale = 3.0;
+  w.Run(0.2, 0.3, 0.0);
+  w.odom_scale = 1.0;
+  w.Run(0.8, 0.3, 0.0);
+  EXPECT_FALSE(w.est.heading_valid());
+  w.Run(0.2, 0.3, 0.0);
+  EXPECT_TRUE(w.est.heading_valid());
+}
+
 TEST(L8Heading, ValidWithTheFifthAgreeingCourseAndThenStays) {
   World w;
   w.Ready();

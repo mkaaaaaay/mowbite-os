@@ -120,8 +120,8 @@ class Estimator {
   // Puts base_link behind the antenna of a fix; at the end of a warmup it may be a jump.
   void SetOntoFix(const Eigen::Vector2d& antenna, double accuracy, const Moment& then, double t, bool warmup_end);
   void Fuse(const Eigen::Vector2d& antenna, double accuracy, const Moment& then, double t);
-  // True when the course set the heading.
-  bool Course(const GnssFix& fix, const Moment& then);
+  // True when the course of a fix at t set the heading.
+  bool Course(const GnssFix& fix, const Moment& then, double t);
 
   EstimatorConfig config_;
   GyroBias bias_;

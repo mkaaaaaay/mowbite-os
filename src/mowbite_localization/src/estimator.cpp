@@ -72,26 +72,23 @@ FixResult Estimator::AddFix(const GnssFix& fix, double t) {
   if (!bias_.calibrated()) return FixResult::kNotReady;
   if (!gps_enabled_) return FixResult::kDisabled;
   if (!geometry_known_) return FixResult::kNoGeometry;
-  if (auto rejected = gate_.Reject(fix)) {
-    course_.Clear();
-    return *rejected;
-  }
+  if (auto rejected = gate_.Reject(fix)) return *rejected;
   const Eigen::Vector2d antenna(fix.x, fix.y);
   const double then_time = t - config_.gnss_latency;
   const FixResult result = gate_.Classify(t, antenna, AntennaPosition(MomentAt(then_time).state, lever_));
   switch (result) {
     case FixResult::kRestarted:
     case FixResult::kWarmup:
-      Course(fix, MomentAt(then_time));
+      Course(fix, MomentAt(then_time), t);
       break;
     case FixResult::kInitialized:
-      Course(fix, MomentAt(then_time));
+      Course(fix, MomentAt(then_time), t);
       SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t, true);
       break;
     case FixResult::kFused: {
       // Without a heading, and when the course just set it, the dead reckoning since the last fix went the wrong
       // way: the fix sets the position.
-      const bool turned = Course(fix, MomentAt(then_time));
+      const bool turned = Course(fix, MomentAt(then_time), t);
       if (turned || !heading_valid_) {
         SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t, false);
       } else {
@@ -137,21 +134,18 @@ void Estimator::Fuse(const Eigen::Vector2d& antenna, double accuracy, const Mome
   last_innovation_ = innovation;
 }
 
-bool Estimator::Course(const GnssFix& fix, const Moment& then) {
-  if (!fix.motion_valid) {
-    course_.Clear();
-    return false;
-  }
+bool Estimator::Course(const GnssFix& fix, const Moment& then, double t) {
+  // Without a velocity, or too slow, a fix says nothing about the heading; an inconsistent course breaks the run.
+  if (!fix.motion_valid) return false;
   const Eigen::Vector2d velocity(fix.motion_x, fix.motion_y);
-  const std::optional<double> heading = HeadingFromCourse(velocity, speed_, turn_rate_, lever_, config_.course);
-  if (!heading) {
-    course_.Clear();
-    return false;
-  }
+  const CourseHeading course = HeadingFromCourse(velocity, speed_, turn_rate_, lever_, config_.course);
+  if (course.kind == CourseKind::kInconsistent) course_.Clear();
+  if (course.kind != CourseKind::kUsable) return false;
+  const std::optional<double> heading = course.heading;
   const double variance = CourseVariance(velocity.norm(), config_.course);
   const double heading_variance = filter_.covariance()(2, 2);
   // On the gyro alone the courses of a run agree whatever the estimate did meanwhile.
-  const std::optional<double> run = course_.Add(WrapAngle(*heading - then.gyro_heading));
+  const std::optional<double> run = course_.Add(WrapAngle(*heading - then.gyro_heading), t);
   if (run) {
     // The heading the run says for now, against the estimate.
     const double from_run = WrapAngle(gyro_heading_ + *run);
