@@ -64,6 +64,7 @@ class FollowerNode : public rclcpp::Node {
     // Angles in degrees.
     c.corner_angle = Radians(declare_parameter("corner_angle", Degrees(c.corner_angle)));
     c.max_drive_angle = Radians(declare_parameter("max_drive_angle", Degrees(c.max_drive_angle)));
+    c.min_arc_radius = declare_parameter("min_arc_radius", c.min_arc_radius);
     c.steering.approach_distance = declare_parameter("approach_distance", c.steering.approach_distance);
     c.steering.approach_angle = Radians(declare_parameter("approach_angle", Degrees(c.steering.approach_angle)));
     c.steering.heading_gain = declare_parameter("heading_gain", c.steering.heading_gain);

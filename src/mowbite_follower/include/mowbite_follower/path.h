@@ -43,8 +43,9 @@ struct Projection {
 class Path {
  public:
   // Empty if the poses make a path, else why not. A corner is a pose where the direction of travel turns by more
-  // than corner_angle (rad); there the mower stops and turns on the spot.
-  std::string Build(const std::vector<Pose2>& poses, const std::vector<Kind>& kinds, double corner_angle);
+  // than corner_angle (rad), or bends tighter than min_radius (m); there the mower stops and turns on the spot.
+  std::string Build(const std::vector<Pose2>& poses, const std::vector<Kind>& kinds, double corner_angle,
+                    double min_radius = 0.0);
 
   // The index of pose i among the poses given to Build, and the pose an index given to Build is merged into.
   size_t source(size_t i) const { return source_[i]; }

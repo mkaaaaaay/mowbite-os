@@ -201,6 +201,9 @@ mowbite_follower:
     # the spot) and more than max_drive_angle degrees off the course, the mower turns on the spot.
     corner_angle: 15.0
     max_drive_angle: 45.0
+    # Arcs tighter than min_arc_radius m are taken as corners too: below about 0.4 m the inner wheel would run under
+    # its dead band at turn_rate (the bulb turns of the planner, 0.13 m). Assumption until phase 6.
+    min_arc_radius: 0.3
     # A path starts at most max_start_distance m from its first pose and ends within goal_tolerance m of its last.
     max_start_distance: 1.0
     goal_tolerance: 0.1

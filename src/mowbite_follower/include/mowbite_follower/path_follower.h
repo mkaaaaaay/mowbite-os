@@ -28,6 +28,8 @@ struct FollowerConfig {
   double goal_tolerance = 0.1;
   // rad the direction of travel turns by at a corner, which the mower takes by turning on the spot.
   double corner_angle = 15.0 * M_PI / 180.0;
+  // m: arcs tighter than this are taken as corners too, since the inner wheel would stand in its dead band.
+  double min_arc_radius = 0.3;
   // rad off the course at most to drive; further off it turns on the spot first.
   double max_drive_angle = 45.0 * M_PI / 180.0;
   // s a turn on the spot may take.

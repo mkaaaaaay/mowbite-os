@@ -21,7 +21,8 @@ double NormalizeAngle(double angle) {
   return angle;
 }
 
-std::string Path::Build(const std::vector<Pose2>& poses, const std::vector<Kind>& kinds, double corner_angle) {
+std::string Path::Build(const std::vector<Pose2>& poses, const std::vector<Kind>& kinds, double corner_angle,
+                        double min_radius) {
   *this = Path();
   if (poses.size() < 3) return "a path needs at least 3 poses";
   if (!kinds.empty() && kinds.size() != poses.size()) return "kinds must be empty or one per pose";
@@ -70,7 +71,9 @@ std::string Path::Build(const std::vector<Pose2>& poses, const std::vector<Kind>
   heading_in_[n - 1] = direction_[n - 2];
   for (size_t i = 1; i + 1 < n; i++) {
     const double turn = NormalizeAngle(direction_[i] - direction_[i - 1]);
-    corner_[i] = std::abs(turn) > corner_angle;
+    // The radius of the bend: half of the two segments over the turn.
+    const double around = 0.5 * (length_[i - 1] + length_[i]);
+    corner_[i] = std::abs(turn) > corner_angle || around < min_radius * std::abs(turn);
     if (corner_[i]) {
       heading_in_[i] = direction_[i - 1];
       heading_out_[i] = direction_[i];

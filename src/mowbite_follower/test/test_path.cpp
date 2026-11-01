@@ -97,6 +97,25 @@ TEST(Path, CornersOverFifteenDegrees) {
   }
 }
 
+// F4: an arc tighter than min_radius is a row of corners, one of the turn radius 0.44 is not.
+TEST(Path, ArcsTighterThanTheMinimumRadiusAreCorners) {
+  std::vector<Pose2> poses = Line(0, 0, 0, 1.0);
+  Append(poses, Arc(poses.back(), 0.13, -M_PI));
+  Append(poses, Line(poses.back().x, poses.back().y, poses.back().yaw, 1.0), true);
+  Path path;
+  ASSERT_EQ(path.Build(poses, {}, kCorner, 0.3), "");
+  int corners = 0;
+  for (size_t i = 0; i < path.size(); i++) corners += path.corner(i) ? 1 : 0;
+  EXPECT_GE(corners, 17);
+  EXPECT_FALSE(path.corner(5));
+  ASSERT_EQ(path.Build(poses, {}, kCorner, 0.0), "");
+  for (size_t i = 0; i < path.size(); i++) EXPECT_FALSE(path.corner(i)) << i;
+  std::vector<Pose2> wide = Line(0, 0, 0, 1.0);
+  Append(wide, Arc(wide.back(), 0.44, M_PI));
+  ASSERT_EQ(path.Build(wide, {}, kCorner, 0.3), "");
+  for (size_t i = 0; i < path.size(); i++) EXPECT_FALSE(path.corner(i)) << i;
+}
+
 TEST(Path, ArcsOfTenDegreesPerPoseHaveNoCorners) {
   std::vector<Pose2> poses = Line(0, 0, 0, 1.0);
   Append(poses, Arc(poses.back(), 0.44, 210.0 * kDeg));

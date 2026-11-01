@@ -299,27 +299,33 @@ TEST(PathFollower, ArcOfTheTurnRadius) {
 TEST(PathFollower, UTurnBetweenLanesSlowerOnTheTurn) {
   std::vector<Kind> kinds;
   const auto path = UTurn(&kinds);
-  PathFollower follower{FollowerConfig()};
-  ASSERT_EQ(follower.Start(path, kinds, 0), "");
-  Robot robot;
-  double turn_speed = 0;
-  double t = 0;
-  while (t < 300 && Running(follower)) {
-    const auto cmd = follower.Step(robot.pose, kDt);
-    if (follower.OnPath()) {
-      robot.max_cross = std::max(robot.max_cross, std::abs(follower.CrossTrack(robot.pose)));
-      if (robot.pose.x > 3.05) turn_speed = std::max(turn_speed, cmd.linear);
+  // Driven as an arc, and as the row of corners an arc of 0.27 m is below min_arc_radius.
+  for (const double min_arc_radius : {0.0, FollowerConfig().min_arc_radius}) {
+    SCOPED_TRACE(min_arc_radius);
+    FollowerConfig config;
+    config.min_arc_radius = min_arc_radius;
+    PathFollower follower{config};
+    ASSERT_EQ(follower.Start(path, kinds, 0), "");
+    Robot robot;
+    double turn_speed = 0;
+    double t = 0;
+    while (t < 300 && Running(follower)) {
+      const auto cmd = follower.Step(robot.pose, kDt);
+      if (follower.OnPath()) {
+        robot.max_cross = std::max(robot.max_cross, std::abs(follower.CrossTrack(robot.pose)));
+        if (robot.pose.x > 3.05) turn_speed = std::max(turn_speed, cmd.linear);
+      }
+      robot.Move(cmd, kDt);
+      t += kDt;
     }
-    robot.Move(cmd, kDt);
-    t += kDt;
+    EXPECT_EQ(follower.phase(), Phase::kDone) << follower.failure();
+    EXPECT_NEAR(robot.pose.y, 0.54, 0.01);
+    EXPECT_NEAR(robot.pose.x, 0.0, 0.02);
+    // Before: under 8 cm.
+    EXPECT_LT(robot.max_cross, 0.01);
+    // As an arc 0.25 rad/s on 0.27 m: about 0.07 m/s; between corners at most speed_turn.
+    EXPECT_LT(turn_speed, min_arc_radius > 0 ? 0.1 + 1e-9 : 0.075);
   }
-  EXPECT_EQ(follower.phase(), Phase::kDone) << follower.failure();
-  EXPECT_NEAR(robot.pose.y, 0.54, 0.01);
-  EXPECT_NEAR(robot.pose.x, 0.0, 0.02);
-  // Before: under 8 cm.
-  EXPECT_LT(robot.max_cross, 0.01);
-  // 0.25 rad/s on 0.27 m: about 0.07 m/s on the arc.
-  EXPECT_LT(turn_speed, 0.075);
 }
 
 // F4: the way into the lanes of a small lawn (sim, 28.10.): a transit heading 114 deg, then a lane heading 0 deg from
@@ -826,8 +832,12 @@ TEST(PathFollower, WithTheDeadBandOfTheWheels) {
     std::vector<Kind> kinds;
     double limit;
   };
+  // The loop of a bulb turn of the planner (full run, 01.11.): 0.13 m, far tighter than the inner wheel allows.
+  std::vector<Pose2> bulb = Line(0, 0, 0, 1.0);
+  Append(bulb, Arc(bulb.back(), 0.13, -M_PI));
+  Append(bulb, Line(bulb.back().x, bulb.back().y, bulb.back().yaw, 1.0), true);
   for (const Case& c : {Case{"u-turn", uturn, kinds, 0.03}, Case{"loop", loop, {}, 0.03},
-                        Case{"corner", SpinPath(135.9 * kDeg), {}, 0.02}}) {
+                        Case{"corner", SpinPath(135.9 * kDeg), {}, 0.02}, Case{"bulb", bulb, {}, 0.015}}) {
     SCOPED_TRACE(c.name);
     PathFollower follower{FollowerConfig()};
     ASSERT_EQ(follower.Start(c.poses, c.kinds, 0), "");

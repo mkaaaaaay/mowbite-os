@@ -33,7 +33,7 @@ bool Turning(Phase phase) {
 
 std::string PathFollower::Start(const std::vector<Pose2>& poses, const std::vector<Kind>& kinds, size_t start_index) {
   phase_ = Phase::kIdle;
-  std::string problem = path_.Build(poses, kinds, config_.corner_angle);
+  std::string problem = path_.Build(poses, kinds, config_.corner_angle, config_.straight ? 0.0 : config_.min_arc_radius);
   if (!problem.empty()) return problem;
   if (start_index + 1 >= poses.size()) return "start_index must lie before the last pose";
   if (config_.straight) {
