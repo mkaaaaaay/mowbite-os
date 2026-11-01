@@ -1,6 +1,8 @@
-# latch = true latches the emergency (reason HIGH_LEVEL). latch = false asks for a release, which takes effect once
-# lift, stop and bumper are free; hw/status shows the outcome.
+# latch = true latches the emergency with the reason bits in bits, 0 meaning HIGH_LEVEL; a driver takes HIGH_LEVEL,
+# TILT, FENCE and STUCK and refuses any other bit. latch = false asks for a release, which takes effect once lift, stop
+# and bumper are free; hw/status shows the outcome.
 bool latch
+uint32 bits
 # Why, for the log of the driver.
 string reason
 ---

@@ -1,8 +1,7 @@
 # State of the mower hardware, published by the platform driver on hw/status at 10 Hz.
 builtin_interfaces/Time stamp
 
-# Emergency reason bits, numbered like EmergencyReason of OpenMower; own bits start at 1 << 13 (13 to 15 are kept for
-# TILT, FENCE and STUCK, which no node sets yet).
+# Emergency reason bits, numbered like EmergencyReason of OpenMower; own bits start at 1 << 13.
 uint32 REASON_LATCH = 1
 uint32 REASON_TIMEOUT_INPUTS = 2
 uint32 REASON_STOP = 4
@@ -10,6 +9,11 @@ uint32 REASON_LIFT = 8
 uint32 REASON_COLLISION = 32
 uint32 REASON_HIGH_LEVEL = 128
 uint32 REASON_FIRMWARE_INCOMPATIBLE = 4096
+# Latched by mowbite_safety over hw/emergency: the body tilted beyond the limit, an autonomous drive with base_link
+# outside of the allowed areas. STUCK is kept for the check of the wheels against GNSS.
+uint32 REASON_TILT = 8192
+uint32 REASON_FENCE = 16384
+uint32 REASON_STUCK = 32768
 # No IMU sample to forward to the MCU, whose tilt detection depends on it.
 uint32 REASON_IMU_TIMEOUT = 65536
 # The blade still turns after it was switched off.
