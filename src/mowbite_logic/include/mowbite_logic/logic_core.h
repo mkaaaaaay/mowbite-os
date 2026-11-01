@@ -313,6 +313,11 @@ class LogicCore {
   Reason StartProblem() const;
   // A start refused by the node (planner or follower missing): event MOWING_REFUSED.
   void RefuseStart(const Reason& why);
+  // robot.geometry.set changed the dimensions: event GEOMETRY_CHANGED with the keys that are other now and the keys of
+  // the body below the platform's value; with the latter it is a warning with the reason BELOW_DEFAULT, else info. It
+  // stops nothing, so it has no resume.
+  void GeometryChanged(const std::vector<std::string>& changed, const std::vector<std::string>& below_default,
+                       int version);
   bool Mowing() const;
   // IDLE without a drive: no recording, no job (also paused). Settings change only then.
   bool Idle() const;

@@ -3,6 +3,7 @@
 #include <stdexcept>
 
 #include "mowbite_logic/geometry.h"
+#include "mowbite_logic/logic_core.h"
 
 namespace mowbite_logic {
 namespace {
@@ -364,6 +365,38 @@ TEST(Geometry, AFileThatIsWrongChangesNothing) {
     EXPECT_EQ(geometry.Text(), text) << text_in;
   }
   EXPECT_FALSE(geometry.Load("not json", nullptr));
+}
+
+TEST(GeometryEvent, NamesWhatChangedAndStaysInfoWithoutASmallerBody) {
+  LogicCore core{LogicConfig{}};
+  core.GeometryChanged({"blade_ahead", "antenna_x"}, {}, 3);
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].type, "GEOMETRY_CHANGED");
+  const json& details = events[0].details;
+  EXPECT_EQ(details["changed"], json::array({"blade_ahead", "antenna_x"}));
+  EXPECT_EQ(details["below_default"], json::array());
+  EXPECT_EQ(details["version"], 3);
+  EXPECT_EQ(details["severity"], "info");
+  EXPECT_FALSE(details.contains("reason"));
+  EXPECT_FALSE(details.contains("resume"));
+  EXPECT_EQ(details["message"], "The dimensions of the mower changed: blade_ahead, antenna_x");
+  EXPECT_TRUE(details.contains("x"));
+}
+
+TEST(GeometryEvent, WarnsWithTheReasonWhenTheBodyIsBelowThePlatformsValue) {
+  LogicCore core{LogicConfig{}};
+  core.GeometryChanged({"robot_width", "robot_rear"}, {"robot_width"}, 4);
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  const json& details = events[0].details;
+  EXPECT_EQ(details["reason"], "BELOW_DEFAULT");
+  EXPECT_EQ(details["severity"], "warning");
+  EXPECT_EQ(details["below_default"], json::array({"robot_width"}));
+  EXPECT_FALSE(details.contains("resume"));
+  EXPECT_EQ(details["message"],
+            "The dimensions of the mower changed: robot_width, robot_rear. robot_width below the platform's value: "
+            "check the measurement");
 }
 
 }  // namespace
