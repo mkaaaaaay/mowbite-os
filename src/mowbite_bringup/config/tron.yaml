@@ -93,6 +93,12 @@ mowbite_localization:
     # Without a fix the accuracy grows by this much per m driven and per s. Assumptions until measured in phase 7.
     accuracy_growth_per_m: 0.05
     accuracy_growth_per_s: 0.01
+    # Random walk of the filter: position in m per square root of m driven, heading in rad per square root of s the
+    # gyro integrates. How old (s) a GNSS position is when it arrives, 0 until the UM960 is measured in phase 7.
+    # Assumptions until phases 6 and 7.
+    odometry_noise: 0.03
+    gyro_noise: 0.005
+    gnss_latency: 0.0
 
 mowbite_logic:
   ros__parameters:
