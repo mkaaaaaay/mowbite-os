@@ -29,6 +29,8 @@ def launch_setup(context):
         return LaunchConfiguration(name).perform(context)
 
     config = arg("config")
+    # The dimensions of the platform; config and extra come after it and can change single values (the simulation does).
+    geometry = arg("geometry")
     # Values on top of config, e.g. those of the simulation; by default config once more.
     extra = arg("extra_config")
     data_dir = arg("data_dir")
@@ -51,7 +53,7 @@ def launch_setup(context):
         parameters=[config, extra])
     logic = ComposableNode(
         package="mowbite_logic", plugin="mowbite_logic::LogicNode", name="mowbite_logic",
-        parameters=[config, extra, {"data_dir": data_dir}])
+        parameters=[geometry, config, extra, {"data_dir": data_dir}])
     bridge = ComposableNode(
         package="mowbite_bridge", plugin="mowbite_bridge::BridgeNode", name="mowbite_bridge",
         parameters=[config, extra, {"mqtt_host": arg("mqtt_host"), "mqtt_port": int(arg("mqtt_port")),
@@ -116,6 +118,8 @@ def generate_launch_description():
         DeclareLaunchArgument("config", default_value=PathJoinSubstitution(
             [FindPackageShare("mowbite_bringup"), "config", "tron.yaml"])),
         DeclareLaunchArgument("extra_config", default_value=LaunchConfiguration("config")),
+        DeclareLaunchArgument("geometry", default_value=PathJoinSubstitution(
+            [FindPackageShare("mowbite_bringup"), "config", "geometry", "tron.yaml"])),
         DeclareLaunchArgument("mcu_port", default_value="/dev/ttyS9"),
         DeclareLaunchArgument("gnss_port", default_value="/dev/ttyS4"),
         DeclareLaunchArgument("imu_port", default_value="/dev/ttyS1"),

@@ -15,6 +15,7 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
 from mowbite_msgs.msg import AbsolutePose, ActionList, GpsLimits, HardwareStatus, RpcError, RpcMethods, RpcRequest
 from mowbite_msgs.msg import RpcResponse
@@ -32,6 +33,10 @@ ROSOUT = QoSProfile(depth=1000, reliability=ReliabilityPolicy.RELIABLE, durabili
 P = "/mower_logic/"
 
 
+# The dimensions of the platform, which the logic needs to start.
+GEOMETRY = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
+
+
 def generate_test_description():
     os.makedirs(os.path.dirname(SAVED))
     with open(SAVED, "w") as f:
@@ -39,7 +44,7 @@ def generate_test_description():
     nodes = [
         Node(package="mowbite_map", executable="mowbite_map_node", output="screen", parameters=[{"data_dir": WORK}]),
         Node(package="mowbite_logic", executable="mowbite_logic_node", output="screen",
-             parameters=[{"data_dir": WORK}]),
+             parameters=[GEOMETRY, {"data_dir": WORK}]),
         Node(package="mowbite_localization", executable="mowbite_localization_node", output="screen"),
         Node(package="mowbite_follower", executable="mowbite_follower_node", output="screen"),
     ]

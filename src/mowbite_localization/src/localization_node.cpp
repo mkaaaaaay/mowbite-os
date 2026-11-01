@@ -15,6 +15,7 @@
 #include <mowbite_msgs/srv/set_heading.hpp>
 #include <mowbite_msgs/srv/set_pose.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <nlohmann/json.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -46,8 +47,6 @@ class LocalizationNode : public rclcpp::Node {
     config.min_speed = declare_parameter("min_speed", config.min_speed);
     config.max_position_accuracy = declare_parameter("max_position_accuracy", config.max_position_accuracy);
     config.gps_timeout_s = declare_parameter("gps_timeout", config.gps_timeout_s);
-    config.antenna_offset_x = declare_parameter("antenna_offset_x", config.antenna_offset_x);
-    config.antenna_offset_y = declare_parameter("antenna_offset_y", config.antenna_offset_y);
     config.process_noise = declare_parameter("process_noise", config.process_noise);
     config.wheel_timeout_s = declare_parameter("wheel_timeout", config.wheel_timeout_s);
     config.max_imu_gap_s = declare_parameter("max_imu_gap", config.max_imu_gap_s);
@@ -60,23 +59,20 @@ class LocalizationNode : public rclcpp::Node {
     max_position_accuracy_ = config.max_position_accuracy;
     localization_ = std::make_unique<Localization>(config);
 
-    RCLCPP_INFO(get_logger(), "Antenna offset: %.3f, %.3f", config.antenna_offset_x, config.antenna_offset_y);
     if (config.skip_gyro_calibration) {
       RCLCPP_WARN(get_logger(), "Skipping the gyro calibration, offset %.5f rad/s", config.gyro_offset);
     } else {
       RCLCPP_INFO(get_logger(), "Gyro calibration: keep the mower still for %.0f s", config.gyro_calibration_s);
     }
 
-    // The app shows the antenna offset from params/json, the bridge collects it from this latched topic.
+    // The antenna offset is part of the dimensions of the mower, which the logic publishes (latched) under
+    // /mowbite_geometry. No fix is taken before it is known. The app shows the offset from params/json, the bridge
+    // collects it from the same topic, where it is published again for the app once known.
     params_pub_ = create_publisher<std_msgs::msg::String>(
         "bridge/params", rclcpp::QoS(rclcpp::KeepLast(50)).reliable().transient_local());
-    char text[160];
-    std::snprintf(text, sizeof(text),
-                  "{\"node\":\"/xbot_positioning\",\"params\":{\"antenna_offset_x\":%.15g,\"antenna_offset_y\":%.15g}}",
-                  config.antenna_offset_x, config.antenna_offset_y);
-    std_msgs::msg::String params_msg;
-    params_msg.data = text;
-    params_pub_->publish(params_msg);
+    params_sub_ = create_subscription<std_msgs::msg::String>(
+        "bridge/params", rclcpp::QoS(rclcpp::KeepLast(50)).reliable().transient_local(),
+        [this](const std_msgs::msg::String& msg) { OnParams(msg.data); });
 
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
     pose_pub_ = create_publisher<mowbite_msgs::msg::AbsolutePose>("localization/pose", 10);
@@ -149,6 +145,41 @@ class LocalizationNode : public rclcpp::Node {
     if (advanced) Publish(msg.header.stamp);
   }
 
+  // Only the entry of the geometry counts; the entries of the others, also the one published here, are left alone.
+  void OnParams(const std::string& text) {
+    const auto parsed = nlohmann::json::parse(text, nullptr, false);
+    if (!parsed.is_object() || !parsed.contains("node") || parsed["node"] != "/mowbite_geometry" ||
+        !parsed.contains("params") || !parsed["params"].is_object()) {
+      return;
+    }
+    const auto& params = parsed["params"];
+    if (!params.contains("antenna_x") || !params.contains("antenna_y") || !params["antenna_x"].is_number() ||
+        !params["antenna_y"].is_number()) {
+      RCLCPP_ERROR(get_logger(), "The geometry has no antenna_x and antenna_y: %.120s", text.c_str());
+      return;
+    }
+    const double x = params["antenna_x"].get<double>();
+    const double y = params["antenna_y"].get<double>();
+    if (!std::isfinite(x) || !std::isfinite(y)) {
+      RCLCPP_ERROR(get_logger(), "Ignored the antenna offset %g, %g of the geometry", x, y);
+      return;
+    }
+    if (geometry_known_ && x == antenna_x_ && y == antenna_y_) return;
+    const bool first = !geometry_known_;
+    geometry_known_ = true;
+    antenna_x_ = x;
+    antenna_y_ = y;
+    localization_->SetAntennaOffset(x, y, MonotonicSeconds());
+    RCLCPP_INFO(get_logger(), "Antenna offset: %.3f, %.3f%s", x, y, first ? "" : " (the geometry changed)");
+    char json[160];
+    std::snprintf(json, sizeof(json),
+                  "{\"node\":\"/xbot_positioning\",\"params\":{\"antenna_offset_x\":%.15g,\"antenna_offset_y\":%.15g}}",
+                  x, y);
+    std_msgs::msg::String params_msg;
+    params_msg.data = json;
+    params_pub_->publish(params_msg);
+  }
+
   void OnGpsLimits(const mowbite_msgs::msg::GpsLimits& msg) {
     if (!(msg.max_position_accuracy > 0) || !(msg.gps_timeout > 0) || !std::isfinite(msg.max_position_accuracy) ||
         !std::isfinite(msg.gps_timeout)) {
@@ -163,6 +194,11 @@ class LocalizationNode : public rclcpp::Node {
   }
 
   void OnGps(const mowbite_msgs::msg::AbsolutePose& msg) {
+    if (!geometry_known_) {
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 10000,
+                           "Dropped GPS update, the antenna offset of the geometry is not known yet");
+      return;
+    }
     GpsFix fix;
     fix.flags = msg.flags;
     fix.accuracy = msg.position_accuracy;
@@ -287,10 +323,14 @@ class LocalizationNode : public rclcpp::Node {
   double max_position_accuracy_ = 0.0;
   bool debug_ = false;
   bool had_fix_ = false;
+  bool geometry_known_ = false;
+  double antenna_x_ = 0.0;
+  double antenna_y_ = 0.0;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::PositionJump>::SharedPtr jump_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr params_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr motion_pub_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;

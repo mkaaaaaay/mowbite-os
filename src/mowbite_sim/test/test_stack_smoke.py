@@ -22,6 +22,7 @@ from mowbite_msgs.msg import AbsolutePose
 from nav_msgs.msg import Odometry
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import Imu, NavSatFix
+from std_msgs.msg import String
 
 MQTT_PORT = 18831
 DATUM = (52.0, 9.0, 50.0)
@@ -49,7 +50,7 @@ def generate_test_description():
         Node(package="tron_imu", executable="tron_imu_node", output="screen",
              parameters=[{"port": LINKS["imu"], "mount_roll_deg": 180.0}]),
         Node(package="mowbite_localization", executable="mowbite_localization_node", output="screen",
-             parameters=[{"gyro_calibration_time": 2.0, "antenna_offset_x": ANTENNA_X}]),
+             parameters=[{"gyro_calibration_time": 2.0}]),
     ]
     bridge = Node(package="mowbite_bridge", executable="mowbite_bridge_node", output="screen",
                   parameters=[{"mqtt_host": "127.0.0.1", "mqtt_port": MQTT_PORT, "data_dir": WORK}])
@@ -76,6 +77,11 @@ class Collector:
         self.node.create_subscription(Imu, "imu/data", lambda m: self._ros("imu", m), qos_profile_sensor_data)
         self.node.create_subscription(AbsolutePose, "localization/pose", lambda m: self._ros("pose", m), 10)
         self.node.create_subscription(Odometry, "odom", lambda m: self._ros("odom", m), 10)
+        # The logic is not part of this launch: the probe stands in for it with the antenna in the dimensions of the
+        # mower, which the localization waits for before it takes a fix.
+        self.geometry = self.node.create_publisher(String, "bridge/params", LATCHED)
+        self.geometry.publish(String(data=json.dumps(
+            {"node": "/mowbite_geometry", "params": {"antenna_x": ANTENNA_X, "antenna_y": 0.0, "version": 0}})))
         try:
             self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "stack_smoke")
         except AttributeError:

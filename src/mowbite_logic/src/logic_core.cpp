@@ -1281,6 +1281,29 @@ void LogicCore::RefuseStart(const Reason& why) {
   AddEvent("MOWING_REFUSED", std::move(details));
 }
 
+void LogicCore::GeometryChanged(const std::vector<std::string>& changed, const std::vector<std::string>& below_default,
+                                int version) {
+  const auto list = [](const std::vector<std::string>& names) {
+    std::string text;
+    for (const auto& name : names) text += (text.empty() ? "" : ", ") + name;
+    return text;
+  };
+  json details = json::object();
+  details["changed"] = changed;
+  details["below_default"] = below_default;
+  details["version"] = version;
+  std::string message = "The dimensions of the mower changed: " + list(changed);
+  if (below_default.empty()) {
+    details["severity"] = "info";
+  } else {
+    details["reason"] = "BELOW_DEFAULT";
+    details["severity"] = "warning";
+    message += ". " + list(below_default) + " below the platform's value: check the measurement";
+  }
+  details["message"] = message;
+  AddEvent("GEOMETRY_CHANGED", std::move(details));
+}
+
 bool LogicCore::Mowing() const {
   return state_ == State::kMowing;
 }

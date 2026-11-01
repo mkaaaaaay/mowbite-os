@@ -113,6 +113,10 @@ class Localization {
   // Restarts the filter facing theta with base_link where the last fix and the antenna offset put it for that heading,
   // and returns that position. Nothing changes without a recent fix the filter has taken (gps_valid).
   std::optional<Position> SetHeading(double theta, double now_s);
+  // Another antenna offset (the dimensions of the mower changed). The models take it at once; with a recent fix the
+  // filter restarts where that fix and the new offset put base_link for its heading, which keeps its validity. Without
+  // one the next fix corrects the position.
+  void SetAntennaOffset(double x, double y, double now_s);
 
   Estimate GetEstimate() const;
   // Accuracy of the last fix, growing with distance and time without a fix. kNoAccuracy before the filter took GPS

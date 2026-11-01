@@ -121,6 +121,8 @@ REC = "mower_logic:area_recording/"
 LOGIC_SETTINGS = ["rain_mode", "rain_delay_minutes", "rain_check_seconds", "automatic_mode", "gps_timeout",
                   "max_position_accuracy", "gps_wait_time", "docking_approach_distance", "docking_distance",
                   "docking_retry_count", "undock_distance", "motor_hot_temperature", "motor_cold_temperature"]
+GEOMETRY_KEYS = ["robot_width", "robot_front", "robot_rear", "robot_outline", "mower_width", "blade_ahead",
+                 "blade_offset", "antenna_x", "antenna_y", "track", "wheel_radius", "dock_contact_x"]
 
 
 def enabled(action_id):
@@ -309,6 +311,35 @@ if offers("params.set") and args.target == "mowbite-os":
     p = json.loads(latest("params/json") or "{}")
     logic = sorted(k[len("/mower_logic/"):] for k in p if k.startswith("/mower_logic/"))
     check("params/json has the settings of params.set", logic == sorted(LOGIC_SETTINGS), ",".join(logic))
+if args.target == "mowbite-os" and offers("robot.geometry.set") and offers("robot.geometry.get"):
+    # The dimensions of the mower: every key with value, default, stored and whether the user can set it, the version
+    # and the platform; the same values with the version in params/json for the planner.
+    r = rpc("robot.geometry.get", None, "geo_get")
+    answer = (r or {}).get("result") or {}
+    settings = answer.get("settings") or {}
+    check("robot.geometry.get has every key in order", list(settings) == GEOMETRY_KEYS, ",".join(settings))
+    fields = ("value", "default", "stored", "type", "unit", "settable")
+    check("robot.geometry.get has the fields of planner.settings", all(
+        all(f in entry for f in fields) for entry in settings.values()), json.dumps(settings)[:200])
+    check("robot.geometry.get has version and platform", isinstance(answer.get("version"), int) and
+          isinstance(answer.get("platform"), str) and bool(answer.get("platform")),
+          json.dumps({k: answer.get(k) for k in ("version", "platform")}))
+    r = rpc("system.info", None, "geo_info")
+    check("robot.geometry.get names the platform of system.info",
+          answer.get("platform") == ((r or {}).get("result") or {}).get("platform"),
+          f'{answer.get("platform")} / {((r or {}).get("result") or {}).get("platform")}')
+    check("robot.geometry.get: only the platform sets track, wheel_radius and dock_contact_x", all(
+        settings.get(k, {}).get("settable") is False for k in ("track", "wheel_radius", "dock_contact_x")) and all(
+        settings.get(k, {}).get("settable") is True for k in GEOMETRY_KEYS[:9]), "")
+    p = json.loads(latest("params/json") or "{}")
+    shown = {k: p.get("/mowbite_geometry/" + k) for k in GEOMETRY_KEYS}
+    check("params/json has the dimensions of the mower with the version", None not in shown.values() and
+          p.get("/mowbite_geometry/version") == answer.get("version") and all(
+              shown[k] == settings[k]["value"] for k in GEOMETRY_KEYS if k in settings), json.dumps(shown)[:200])
+    check("params/json has the antenna offset of the localization from the geometry",
+          p.get("/xbot_positioning/antenna_offset_x") == settings.get("antenna_x", {}).get("value") and
+          p.get("/xbot_positioning/antenna_offset_y") == settings.get("antenna_y", {}).get("value"),
+          f'{p.get("/xbot_positioning/antenna_offset_x")}, {p.get("/xbot_positioning/antenna_offset_y")}')
 ACCESS_FIELDS = ["configured", "host", "port", "mountpoint", "version", "has_user", "has_password"]
 if args.target == "mowbite-os" and offers("ntrip.get"):
     # The NTRIP access without user and password; only the names of the fields go into the report.
@@ -398,6 +429,49 @@ if methods is not None and "params.set" in methods:
     r = rpc("params.set", {"params": {"/mower_logic/gps_wait_time": wait}}, "pset_back")
     check("params.set back to the start value", r and r.get("result") == {"/mower_logic/gps_wait_time": wait},
           json.dumps(r))
+
+if methods is not None and "robot.geometry.set" in methods:
+    # In IDLE: a value changes the answer, params/json and an event, one out of the range or with an old version is
+    # refused, and what the user had comes back.
+    r = rpc("robot.geometry.get", None, "geo_start")
+    start = (r or {}).get("result") or {}
+    blade = start.get("settings", {}).get("blade_ahead", {})
+    version = start.get("version")
+    new_blade = round(blade.get("value", 0.0) + 0.02, 3)
+    mark = len(msgs)
+    r = rpc("robot.geometry.set", {"version": version, "settings": {"blade_ahead": new_blade}}, "geo_set")
+    changed = (r or {}).get("result") or {}
+    check("robot.geometry.set answers like get with the new value and version",
+          changed.get("version") == version + 1 and
+          changed.get("settings", {}).get("blade_ahead", {}).get("value") == new_blade and
+          changed["settings"]["blade_ahead"].get("stored") is True and
+          changed["settings"]["blade_ahead"].get("default") == blade.get("default"), json.dumps(r)[:200])
+    shown = wait_for(
+        lambda: json.loads(latest("params/json") or "{}").get("/mowbite_geometry/blade_ahead") == new_blade)
+    check("robot.geometry.set shows in params/json", bool(shown), "")
+    ev = wait_for(lambda: events_of("GEOMETRY_CHANGED", mark))
+    check("GEOMETRY_CHANGED after robot.geometry.set", bool(ev) and ev[-1].get("changed") == ["blade_ahead"] and
+          ev[-1].get("version") == version + 1 and ev[-1].get("severity") == "info" and "reason" not in ev[-1] and
+          "resume" not in ev[-1] and ev[-1].get("below_default") == [] and bool(ev[-1].get("message")),
+          json.dumps(ev and ev[-1]), point="3.1a GEOMETRY_CHANGED")
+    r = rpc("robot.geometry.set", {"version": version, "settings": {"blade_ahead": blade.get("value")}}, "geo_old")
+    check("robot.geometry.set with an old version -32602 VERSION",
+          bool(r) and r.get("error", {}).get("code") == -32602 and
+          r["error"].get("data", {}).get("reason") == "VERSION" and r["error"]["data"].get("version") == version + 1,
+          json.dumps(r and r.get("error")))
+    r = rpc("robot.geometry.set", {"version": version + 1, "settings": {"robot_width": 47}}, "geo_range")
+    check("robot.geometry.set refuses a value out of the range -32602 OUT_OF_RANGE", bool(r) and
+          r.get("error", {}).get("code") == -32602 and r["error"].get("data", {}).get("reason") == "OUT_OF_RANGE" and
+          r["error"]["data"].get("key") == "robot_width", json.dumps(r and r.get("error")))
+    r = rpc("robot.geometry.set", {"version": version + 1, "settings": {"track": 0.4}}, "geo_track")
+    check("robot.geometry.set refuses the track of the platform -32602 NOT_SETTABLE", bool(r) and
+          r.get("error", {}).get("code") == -32602 and r["error"].get("data", {}).get("reason") == "NOT_SETTABLE",
+          json.dumps(r and r.get("error")))
+    # Back to what it was: the user's own value, or the platform's.
+    back = {"settings": {"blade_ahead": blade.get("value")}} if blade.get("stored") else {"reset": ["blade_ahead"]}
+    r = rpc("robot.geometry.set", {"version": version + 1, **back}, "geo_back")
+    check("robot.geometry.set back to the start value", ((r or {}).get("result") or {}).get("settings", {}).get(
+        "blade_ahead", {}).get("value") == blade.get("value"), json.dumps(r)[:200])
 
 # Test access only, the broker of the simulation is open. Port 9 of the simulation's own host has no caster: the client
 # only waits.
@@ -669,6 +743,9 @@ check("dock -> is_charging", bool(state))
 cs = wait_for(lambda: latest("sensors/om_charge_state/data") == b"Fast Charge" or None, 3)
 check("charge state Fast Charge", bool(cs), str(latest("sensors/om_charge_state/data")))
 set_flags()
+# The contact ends with the next battery report; the steps below start with the mower off the station.
+state = wait_for(lambda: b'"is_charging":0' in (latest("robot_state/json") or b""), 6)
+check("no contact -> not charging", bool(state))
 
 # The heartbeat carries the local time of TZ (default of tron.launch.py: Europe/Berlin), not UTC.
 beats = []
