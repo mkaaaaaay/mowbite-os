@@ -1,6 +1,7 @@
 """The whole way of the app in the simulation: an area recorded by teleop, map/json, mowing.plan, start_mowing, the
 blade, pause, abort and a new start from the checkpoint until the job completes. The test compares where the simulated
-mower really went (the state file of fake_tron) with the paths mowing.plan answered, while the blade turns.
+mower really went (the state file of fake_tron) with the paths mowing.plan answered, while the blade turns, and reports
+the position and heading error of the localization against it and how long the job took.
 
 MOWBITE_FULL_RUN=real gives fake_tron the faults of a real Tron (assumptions until the measurements of phase 6 and 7):
 RTK noise, a fix sent late, odometry 6 % short, a wheel deadband, the real track and the slip of the omni wheels.
@@ -8,6 +9,7 @@ Without it wheels and GNSS are ideal.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_full_run.py
 """
+import bisect
 import json
 import math
 import os
@@ -88,6 +90,9 @@ class Probe:
         # (arrival time, event) and (read time, true pose) for the blade windows
         self.events = []
         self.track = []
+        # (stamp, x, y, yaw) of localization/pose, and (write time, true pose, estimate then or None)
+        self.estimates = []
+        self.paired = []
         self.node = rclpy.create_node("full_run_probe")
         self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
         self.node.create_subscription(String, "map/json", self._map, LATCHED)
@@ -117,9 +122,15 @@ class Probe:
     def _pose(self, msg):
         # The localization turns about z only.
         yaw = 2.0 * math.atan2(msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
+        now = time.time()
+        stamp = msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec
+        if abs(stamp - now) > 0.5:
+            stamp = now
         with self.lock:
             self.pose = (msg.pose.pose.position.x, msg.pose.pose.position.y, yaw, msg.position_accuracy,
                          msg.orientation_valid)
+            if msg.orientation_valid and (not self.estimates or stamp > self.estimates[-1][0]):
+                self.estimates.append((stamp, msg.pose.pose.position.x, msg.pose.pose.position.y, yaw))
 
     def _publish(self, msg):
         if msg.topic != "events/json":
@@ -131,14 +142,37 @@ class Probe:
         with self.lock:
             self.answers[msg.id] = json.loads(msg.result)
 
+    def estimate_at(self, t):
+        """The estimate with a valid heading at wall time t, linear between the two around it."""
+        with self.lock:
+            i = bisect.bisect_left(self.estimates, (t,))
+            if i == 0 or i >= len(self.estimates):
+                return None
+            a, b = self.estimates[i - 1], self.estimates[i]
+        if b[0] - a[0] > 0.2:
+            return None
+        f = (t - a[0]) / (b[0] - a[0])
+        turn = math.atan2(math.sin(b[3] - a[3]), math.cos(b[3] - a[3]))
+        return a[1] + f * (b[1] - a[1]), a[2] + f * (b[2] - a[2]), a[3] + f * turn
+
     def _record(self):
         last = None
         while self.running:
+            try:
+                written = os.stat(STATE).st_mtime
+            except OSError:
+                written = None
             truth = self.truth()
             if truth and truth["t"] != last:
                 last = truth["t"]
                 with self.lock:
                     self.track.append((time.time(), truth))
+                if written is not None:
+                    # The newest estimate has to be past the moment of the truth before the two are paired.
+                    time.sleep(0.06)
+                    estimate = self.estimate_at(written)
+                    with self.lock:
+                        self.paired.append((written, truth, estimate))
             time.sleep(0.05)
 
     def truth(self):
@@ -311,6 +345,7 @@ class TestFullRun(unittest.TestCase):
         state = p.event(since, "STATE", 10, state="MOWING")
         self.assertIsNotNone(state, [e["type"] for _, e in p.events[since:]])
         type(self).job = state["job_id"]
+        type(self).job_start = time.time()
         self.assertIsNotNone(p.event(since, "BLADES", 90, enabled=True), "the blade never ran")
 
     def test_05_pause_and_continue(self):
@@ -354,6 +389,8 @@ class TestFullRun(unittest.TestCase):
         self.assertEqual(done["job_id"], self.job)
         self.assertTrue(p.wait(p.blade_off, 5), "the blade kept running")
         end = time.time()
+        print(f"\nfull run {'real' if REAL else 'ideal'}: the job took {end - self.job_start:.0f} s from the first "
+              "start, with the pause and the abort", flush=True)
         with p.lock:
             track = list(p.track)
         # The first second after the blade comes on and the last before it goes off are left out (event delay).
@@ -364,6 +401,17 @@ class TestFullRun(unittest.TestCase):
         median, p95, worst = quantile(errors, 0.5), quantile(errors, 0.95), max(errors)
         print(f"\nfull run {'real' if REAL else 'ideal'}: {len(mowing)} poses with the blade, cross track median "
               f"{median:.3f} m, 95 % {p95:.3f} m, worst {worst:.3f} m", flush=True)
+        # The localization against the truth over the whole job, wherever its heading was valid.
+        with p.lock:
+            paired = [(t, e) for when, t, e in p.paired if e is not None and self.job_start <= when <= end]
+        if paired:
+            position = [math.hypot(e[0] - t["x"], e[1] - t["y"]) for t, e in paired]
+            heading = [abs(math.degrees(math.atan2(math.sin(e[2] - t["yaw"]), math.cos(e[2] - t["yaw"]))))
+                       for t, e in paired]
+            print(f"full run {'real' if REAL else 'ideal'}: localization over {len(paired)} poses, position error "
+                  f"median {quantile(position, 0.5):.3f} m, 95 % {quantile(position, 0.95):.3f} m, worst "
+                  f"{max(position):.3f} m; heading error median {quantile(heading, 0.5):.2f} deg, 95 % "
+                  f"{quantile(heading, 0.95):.2f} deg, worst {max(heading):.2f} deg", flush=True)
         self.assertLess(median, LIMITS[0])
         self.assertLess(p95, LIMITS[1])
         self.assertLess(worst, LIMITS[2])
