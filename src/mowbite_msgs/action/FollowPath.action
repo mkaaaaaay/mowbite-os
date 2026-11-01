@@ -24,6 +24,12 @@ float32 stall_time
 # lie on one line the mower faces at the start (else REASON_INVALID), it neither turns on the spot nor steers back
 # onto the line; the path is done once the mower got along it to the last pose.
 bool straight
+# Backwards, e.g. onto a docking station with the contacts at the back: the poses still face the way the mower faces,
+# it moves against that way and steers like forwards.
+bool reverse
+# m: the path is done once base_link got along the last stretch to this much before the last pose, without turning
+# there; 0: once it is within the follower's goal distance of the last pose, then turned to its heading.
+float32 end_tolerance
 ---
 uint8 REASON_DONE=0
 uint8 REASON_CANCELED=1

@@ -60,6 +60,15 @@ TEST(Rpc, ResultJson) {
   EXPECT_EQ(bad["error"]["code"], kRpcInternal);
 }
 
+TEST(Rpc, ErrorWithData) {
+  auto refused = json::parse(RpcErrorJson(kRpcInvalidRequest, "No docking station", "7",
+                                          json{{"reason", "NO_DOCK"}, {"message", "No docking station"}}));
+  EXPECT_EQ(refused["error"]["code"], kRpcInvalidRequest);
+  EXPECT_EQ(refused["error"]["data"]["reason"], "NO_DOCK");
+  EXPECT_EQ(refused["error"]["data"]["message"], "No docking station");
+  EXPECT_FALSE(json::parse(RpcErrorJson(kRpcInvalidRequest, "busy", "7"))["error"].contains("data"));
+}
+
 TEST(Rpc, BytesThatAreNotUtf8AreReplaced) {
   // A lone 0xE4 (ä in Latin-1) in the text of a node and in an id.
   auto error = json::parse(RpcErrorJson(kRpcInvalidParams, "caster Gr\xe4" "fin", json("i\xff")));

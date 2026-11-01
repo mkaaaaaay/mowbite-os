@@ -131,6 +131,8 @@ class LocalizationNode : public rclcpp::Node {
           response->x = base->x;
           response->y = base->y;
           response->position_accuracy = static_cast<float>(localization_->PositionAccuracy(now_s));
+          // The pose with the heading before the answer, not with the next IMU sample: undocking may start at once.
+          Publish(now());
           RCLCPP_INFO(get_logger(), "Heading set to %.3f rad, base_link at %.3f, %.3f from the last fix", request->heading,
                       base->x, base->y);
         });

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mowbite_logic/area_recorder.h"
+#include "mowbite_logic/docking.h"
 #include "mowbite_logic/mowing_job.h"
 #include "mowbite_logic/reasons.h"
 #include "mowbite_logic/undocking.h"
@@ -23,6 +24,8 @@ struct HardwareSnapshot {
   int emergency_reason = 0;
   bool rain = false;
   bool dock_contact = false;
+  // The contact as the last report had it, not debounced: docking stops at the first one.
+  bool dock_contact_raw = false;
   bool battery_ok = false;
   float battery_voltage = 0;
   // Positive while discharging.
@@ -68,8 +71,10 @@ struct LogicConfig {
   double mower_spinup_timeout = 10.0;
   // The blade counts as running from this rpm on, for BLADES events.
   int blade_running_rpm = 100;
-  // s with a good position before mowing goes on after the GPS got bad.
+  // s with a good position before mowing or docking goes on after the GPS got bad; docking fails after gps_timeout s
+  // without one.
   double gps_wait_time = 10.0;
+  double gps_timeout = 10.0;
   // Mowing ends below this voltage (V), held for battery_critical_time (s). Assumption until the discharge curve is
   // measured: 3.5 V per cell.
   double battery_critical_voltage = 21.0;
@@ -89,6 +94,9 @@ struct LogicConfig {
   // After the reference check the mower leaves the station before mowing or a drive starts (contacts behind base_link
   // only; it drives forwards out of the station).
   UndockConfig undock;
+  // After JOB_COMPLETE, abort_mowing and on docking.start the mower backs onto the station (contacts behind base_link
+  // only); a try that fails also drives out like undocking.
+  DockConfig dock;
 };
 
 // How an undocking ended, for the node: undocked or not, whether a drive waits for it, and why the drive or mowing
@@ -201,7 +209,7 @@ struct JobStep {
 constexpr double kTeleopQuietS = 1.0;
 
 // Mower states and actions: IDLE, AREA_RECORDING (remote control and recording of areas), driving to a pose,
-// UNDOCKING, MOWING and PAUSED, emergency and sensors.
+// UNDOCKING, MOWING and PAUSED, DOCKING, emergency and sensors.
 class LogicCore {
  public:
   explicit LogicCore(const LogicConfig& config);
@@ -251,8 +259,9 @@ class LogicCore {
   void OnMowMap(std::vector<JobArea> areas, const Reason& problem);
   // The docking station of the map, none without one.
   void OnMapDock(const std::optional<DockPose>& dock);
-  // Where base_link may end leaving the station: the active mow and navigation areas, outside of the obstacles.
-  void OnDrivableAreas(std::vector<Ring> drivable, std::vector<Ring> obstacles);
+  // Where base_link may end leaving the station and where docking begins: the active mow and navigation areas, outside
+  // of the obstacles; problem: why the map gives none (MAP_*), empty if it does.
+  void OnDrivableAreas(std::vector<Ring> drivable, std::vector<Ring> obstacles, const Reason& problem = Reason());
   // undock_distance of params.set.
   void SetUndockDistance(double distance);
   // The driver reports a debounced contact with the docking station.
@@ -281,6 +290,23 @@ class LogicCore {
   std::optional<UndockOutcome> TakeUndockOutcome();
   // Stops undocking without UNDOCKING_FAILED, like abort_undocking (also logic/stop_drive for a drive).
   void AbortUndocking(const Reason& why);
+  // DOCKING: back onto the station of the map after JOB_COMPLETE and abort_mowing, or on docking.start, where the
+  // contacts are at the back (CanDock); else IDLE as before. The node hands the leg of TakeDockingLeg to the follower,
+  // once and when nothing else is on its way, and its end to OnDockingLegEnded. On the way onto the station the first
+  // raw contact stops the mower (one zero command, G18) and the debounced one ends in DOCKED. A failed try drives out
+  // to the approach point, then DOCKING_RETRY or after docking_retry_count DOCKING_FAILED; a bad position waits like
+  // mowing, at most gps_timeout. An emergency and abort_docking end it without DOCKING_FAILED.
+  bool CanDock() const;
+  bool Docking() const;
+  // Why docking.start cannot start now, empty if it can: BUSY, ALREADY_THERE on the contacts, EMERGENCY or
+  // NO_SAFETY_MEASUREMENT, the position, MAP_*, NO_DOCK, DOCK_UNREACHABLE.
+  Reason DockingProblem() const;
+  // docking.start: empty when DOCKING began, else why not (also as DRIVE_REFUSED).
+  Reason StartDocking();
+  std::optional<DockingLeg> TakeDockingLeg();
+  void OnDockingLegEnded(LegEnd end, const Reason& reason);
+  // docking_approach_distance and docking_retry_count of params.set, for the next docking.
+  void SetDockingSettings(double approach_distance, int retry_count);
   // The checkpoint read at the start.
   void RestoreJob(const JobProgress& progress);
   // Why mowing cannot start now, empty if it can.
@@ -290,8 +316,8 @@ class LogicCore {
   bool Mowing() const;
   // IDLE without a drive: no recording, no job (also paused). Settings change only then.
   bool Idle() const;
-  // GPS settings of params.set for the position, the recording and mowing on after a bad position.
-  void SetGpsSettings(double max_position_accuracy, double gps_wait_time);
+  // GPS settings of params.set for the position, the recording, and mowing or docking on after a bad position.
+  void SetGpsSettings(double max_position_accuracy, double gps_wait_time, double gps_timeout);
   // Called whenever the node has nothing on its way for the job; the step it returns is on its way until its result
   // comes back. now_s is a monotonic clock.
   JobStep NextJobStep(double now_s);
@@ -337,7 +363,7 @@ class LogicCore {
   }
 
  private:
-  enum class State { kIdle, kAreaRecording, kDriving, kMowing, kUndocking };
+  enum class State { kIdle, kAreaRecording, kDriving, kMowing, kUndocking, kDocking };
   // Why mowing pauses; manual, emergency and fault wait for continue, GPS goes on by itself.
   static constexpr int kPauseManual = 1 << 0;
   static constexpr int kPauseEmergency = 1 << 1;
@@ -365,6 +391,8 @@ class LogicCore {
   Reason MoveProblem() const;
   // DOCK_UNREACHABLE when the way out from base_link at (x, y) on the station ends outside of the drivable areas.
   Reason UndockEndProblem(double x, double y) const;
+  // DOCK_UNREACHABLE when the line onto the station begins outside of the drivable areas.
+  Reason ApproachProblem() const;
   double DockAccuracyLimit() const;
   // The heading of the mower on the docking station.
   double DockedHeading() const;
@@ -377,6 +405,25 @@ class LogicCore {
   void StopUndocking(const std::optional<Reason>& failure, const Reason& why);
   void EndUndocking(const std::optional<Reason>& failure, const Reason& why);
   void Undocked();
+  // Docking with the current settings onto the station of the map.
+  DockingSequence NewDocking() const;
+  // After JOB_COMPLETE and abort_mowing: DOCKING where the platform docks and the map has a station, else IDLE.
+  void GoHome();
+  void BeginDocking();
+  // The first leg of the next try from where the mower stands, or the wait for a good position.
+  void NextDockingTry();
+  void OnDockingContact();
+  // A try failed: counted at once, or once the mower drove out to the approach point when it stands on the line.
+  void DockingTryFailed(const std::string& code, const std::string& message);
+  // DOCKING_RETRY and the next try, or DOCKING_FAILED and IDLE (also when last). A copy: why may be the failure kept.
+  void CountDockingFailure(Reason why, bool last = false);
+  void WaitForDockingGps();
+  void TickDocking(double now_s);
+  // Stops the leg on its way, if any.
+  void CancelDockingLeg(const Reason& why);
+  void Docked();
+  // IDLE; a leg on its way stops with why.
+  void EndDocking(const Reason& why);
   ActionResult OnMowingAction(const std::string& name);
   void StartMowing();
   void Pause(int why, const Reason& reason);
@@ -384,8 +431,8 @@ class LogicCore {
   void CancelDrive(const Reason& reason);
   void Unpause(int why);
   void ApplySkips();
-  // Ends the job: finished (JOB_COMPLETE) or not (it goes on from the checkpoint next time).
-  void EndJob(bool finished);
+  // Ends the job: finished (JOB_COMPLETE) or not (it goes on from the checkpoint next time); home: docking after it.
+  void EndJob(bool finished, bool home);
   bool PoseGood() const;
   void CheckpointNow();
 
@@ -425,6 +472,7 @@ class LogicCore {
   double drive_y_ = 0;
   std::vector<Ring> drivable_;
   std::vector<Ring> obstacles_;
+  Reason drivable_problem_;
   // Undocking: what for, where it started and the way it faces, what the node does next for it, and once it is
   // stopping, whether that ends in UNDOCKING_FAILED.
   enum class UndockStep { kChargeOff, kDrive };
@@ -441,6 +489,17 @@ class LogicCore {
   std::optional<Reason> undock_failure_;
   Reason undock_stop_why_;
   std::optional<UndockOutcome> undock_outcome_;
+  // Docking: its tries, the leg due for the node and the kind of the one on its way (and of the last one), stopped at a
+  // first contact, a failed try waiting for the mower to drive out, and the wait for a good position.
+  DockingSequence docking_;
+  std::optional<DockingLeg> docking_leg_due_;
+  std::optional<DockingLeg::Kind> docking_leg_;
+  DockingLeg::Kind docking_last_kind_ = DockingLeg::Kind::kApproach;
+  bool docking_hold_ = false;
+  std::optional<Reason> docking_failure_;
+  bool docking_gps_wait_ = false;
+  std::optional<double> docking_gps_since_;
+  std::optional<double> docking_gps_good_since_;
   std::string session_id_;
   int pause_ = 0;
   Reason pause_reason_;

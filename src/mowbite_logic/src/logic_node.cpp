@@ -172,6 +172,9 @@ HardwareSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
 class LogicNode : public rclcpp::Node {
   using FollowPath = mowbite_msgs::action::FollowPath;
   using FollowHandle = rclcpp_action::ClientGoalHandle<FollowPath>;
+  // What the follower drives for: logic/drive_to, the approach to a path of the job, that path, out of the station, or
+  // a leg of docking.
+  enum Purpose { kDriveTo = 0, kApproach = 1, kMow = 2, kUndock = 3, kDock = 4 };
 
  public:
   explicit LogicNode(const rclcpp::NodeOptions& options)
@@ -247,6 +250,8 @@ class LogicNode : public rclcpp::Node {
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_logic";
     methods.methods = {"mowing.plan", "params.set"};
+    // "Home" from IDLE, only where the OS docks (contacts at the back).
+    if (core_.CanDock()) methods.methods.push_back("docking.start");
     rpc_methods_pub_->publish(methods);
 
     hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
@@ -397,6 +402,18 @@ class LogicNode : public rclcpp::Node {
     config.undock.stall_time = declare_parameter("undock_stall_time", config.undock.stall_time);
     config.undock.course_limit =
         declare_parameter("undock_course_limit", config.undock.course_limit * 180.0 / M_PI) * M_PI / 180.0;
+    // docking_approach_distance and docking_retry_count are settings of params.set (LoadLogicParams).
+    config.dock.approach_distance = declare_parameter("docking_approach_distance", config.dock.approach_distance);
+    config.dock.retry_count = static_cast<int>(
+        declare_parameter("docking_retry_count", static_cast<int64_t>(config.dock.retry_count)));
+    config.dock.speed = declare_parameter("docking_speed", config.dock.speed);
+    config.dock.contact_speed = declare_parameter("contact_speed", config.dock.contact_speed);
+    config.dock.gate_distance = declare_parameter("dock_gate_distance", config.dock.gate_distance);
+    config.dock.gate_lateral = declare_parameter("dock_gate_lateral", config.dock.gate_lateral);
+    config.dock.gate_heading =
+        declare_parameter("dock_gate_heading", config.dock.gate_heading * 180.0 / M_PI) * M_PI / 180.0;
+    config.dock.overshoot = declare_parameter("dock_overshoot", config.dock.overshoot);
+    config.dock.contact_timeout = declare_parameter("contact_timeout", config.dock.contact_timeout);
     return config;
   }
 
@@ -407,6 +424,7 @@ class LogicNode : public rclcpp::Node {
     hw.emergency_reason = static_cast<int>(msg.emergency_reason);
     hw.rain = msg.rain;
     hw.dock_contact = msg.dock_contact;
+    hw.dock_contact_raw = msg.dock_contact_raw;
     hw.battery_ok = msg.battery_source != mowbite_msgs::msg::HardwareStatus::BATTERY_SOURCE_NONE;
     hw.battery_voltage = msg.battery_voltage;
     hw.battery_current = msg.battery_current;
@@ -563,16 +581,17 @@ class LogicNode : public rclcpp::Node {
     RCLCPP_INFO(get_logger(), "Drive to (%.2f, %.2f): planning the way", request.x, request.y);
   }
 
-  // The drivable areas of the map for the core, which lets undocking end only in one of them. Called with the mutex
-  // held.
+  // The drivable areas of the map for the core, which lets undocking end and docking begin only in one of them. Called
+  // with the mutex held.
   void UpdateDrivableAreas() {
     std::vector<Ring> drivable;
     std::vector<Ring> obstacles;
-    if (!planner_.TransitAreas(&drivable, &obstacles).empty()) {
+    const Reason problem = planner_.TransitAreas(&drivable, &obstacles);
+    if (!problem.empty()) {
       drivable.clear();
       obstacles.clear();
     }
-    core_.OnDrivableAreas(std::move(drivable), std::move(obstacles));
+    core_.OnDrivableAreas(std::move(drivable), std::move(obstacles), problem);
   }
 
   void OnTransit(uint64_t seq, const mowbite_planner_interfaces::srv::PlanTransit::Response& response) {
@@ -722,6 +741,10 @@ class LogicNode : public rclcpp::Node {
       core_.OnUndockEnded(ToLegEnd(reason), why);
       return;
     }
+    if (ended.purpose == Purpose::kDock) {
+      core_.OnDockingLegEnded(ToLegEnd(reason), why);
+      return;
+    }
     // In a job the way to the start of a path failed, or the follower did not take a path of the plan.
     Reason leg = why;
     const bool way = why.code == "TRANSIT_FAILED" || why.code == "PLANNER_TIMEOUT" || why.code == "FOLLOWER_REFUSED";
@@ -735,6 +758,7 @@ class LogicNode : public rclcpp::Node {
       case 1: return "Approach";
       case 2: return "Mow path";
       case 3: return "Undocking";
+      case 4: return "Docking";
       default: return "Drive";
     }
   }
@@ -794,26 +818,33 @@ class LogicNode : public rclcpp::Node {
 
   // Drives to the start of a path over the drivable areas, the blade off. Called with the mutex held.
   void Approach(const JobPose& goal) {
-    std::vector<Ring> drivable;
-    std::vector<Ring> obstacles;
-    Reason why = planner_.TransitAreas(&drivable, &obstacles);
-    if (why.empty() && !transit_client_->service_is_ready()) {
-      why = Reason("APPROACH_FAILED", "The planner is not running");
-    }
+    Reason why = PlanWay(Purpose::kApproach, goal.x, goal.y, goal.heading);
+    if (why.code == "PLANNER_MISSING") why = Reason("APPROACH_FAILED", why.message);
     if (!why.empty()) {
       core_.OnLegEnded(LegEnd::kFailed, 0, why);
       return;
     }
+    RCLCPP_INFO(get_logger(), "Mowing: approaching (%.2f, %.2f)", goal.x, goal.y);
+  }
+
+  // Plans the way to (x, y) facing heading over the drivable areas, which the follower then drives (OnTransit): the
+  // approach to a path of the job or to the docking station. Empty, or why not. Called with the mutex held.
+  Reason PlanWay(Purpose purpose, double x, double y, double heading) {
+    std::vector<Ring> drivable;
+    std::vector<Ring> obstacles;
+    const Reason why = planner_.TransitAreas(&drivable, &obstacles);
+    if (!why.empty()) return why;
+    if (!transit_client_->service_is_ready()) return PlannerMissing();
     const RobotStateData state = core_.RobotState();
     auto plan = std::make_shared<mowbite_planner_interfaces::srv::PlanTransit::Request>();
     plan->start = PoseAt(state.pose_x, state.pose_y, state.pose_heading);
-    plan->goal = PoseAt(goal.x, goal.y, goal.heading);
+    plan->goal = PoseAt(x, y, heading);
     plan->use_goal_heading = true;
     for (const auto& ring : drivable) plan->drivable_areas.push_back(ToPolygon(ring));
     for (const auto& ring : obstacles) plan->obstacles.push_back(ToPolygon(ring));
     plan->max_outside = transit_max_outside_;
     drive_ = Drive();
-    drive_.purpose = Purpose::kApproach;
+    drive_.purpose = purpose;
     drive_.seq = ++drive_seq_;
     drive_.active = true;
     drive_.planning = true;
@@ -828,7 +859,54 @@ class LogicNode : public rclcpp::Node {
                                    OnTransit(seq, *f.get());
                                  })
             .request_id;
-    RCLCPP_INFO(get_logger(), "Mowing: approaching (%.2f, %.2f)", goal.x, goal.y);
+    return {};
+  }
+
+  // The next leg of docking, once nothing else is on its way. Called with the mutex held.
+  void PumpDocking() {
+    if (drive_.active || job_plan_.active) return;
+    if (auto leg = core_.TakeDockingLeg()) SendDockingLeg(*leg);
+  }
+
+  // The way to the docking station over the drivable areas, or a line for the follower: besides the drivable areas
+  // base_link may be in the corridor along it. Called with the mutex held.
+  void SendDockingLeg(const DockingLeg& leg) {
+    if (leg.kind == DockingLeg::Kind::kApproach) {
+      const Reason why = PlanWay(Purpose::kDock, leg.goal.x, leg.goal.y, leg.goal.heading);
+      if (!why.empty()) {
+        core_.OnDockingLegEnded(LegEnd::kFailed, why);
+        return;
+      }
+      RCLCPP_INFO(get_logger(), "Docking: the way to (%.2f, %.2f) in front of the docking station", leg.goal.x,
+                  leg.goal.y);
+      return;
+    }
+    std::vector<Ring> drivable;
+    std::vector<Ring> obstacles;
+    planner_.TransitAreas(&drivable, &obstacles);
+    FollowPath::Goal goal;
+    for (const auto& p : leg.poses) goal.poses.push_back(PoseAt(p.x, p.y, p.heading));
+    goal.start_index = 0;
+    for (const auto& ring : drivable) goal.allowed_areas.push_back(ToPolygon(ring));
+    goal.allowed_areas.push_back(ToPolygon(leg.corridor));
+    for (const auto& ring : obstacles) goal.obstacles.push_back(ToPolygon(ring));
+    goal.max_speed = static_cast<float>(leg.speed);
+    goal.stall_time = static_cast<float>(leg.stall_time);
+    goal.straight = leg.straight;
+    goal.reverse = leg.reverse;
+    goal.end_tolerance = static_cast<float>(leg.end_tolerance);
+    drive_ = Drive();
+    drive_.purpose = Purpose::kDock;
+    drive_.seq = ++drive_seq_;
+    drive_.active = true;
+    drive_.sent = MonotonicSeconds();
+    const auto& from = leg.poses.front();
+    const auto& to = leg.poses.back();
+    char text[128];
+    std::snprintf(text, sizeof(text), "%s, %.2f m %s to (%.2f, %.2f) at %.2f m/s", DockingLegName(leg.kind),
+                  std::hypot(to.x - from.x, to.y - from.y), leg.reverse ? "backwards" : "forwards", to.x, to.y,
+                  leg.speed);
+    SendFollow(goal, text);
   }
 
   // Hands a path of the plan to the follower from start_index on. Poses on the one before are left out, the follower
@@ -1030,6 +1108,10 @@ class LogicNode : public rclcpp::Node {
       OnParamsSet(request);
       return;
     }
+    if (request.method == "docking.start") {
+      OnDockingStart(request);
+      return;
+    }
     if (request.method != "mowing.plan") return;
     json params;
     if (!request.params.empty()) {
@@ -1110,6 +1192,40 @@ class LogicNode : public rclcpp::Node {
     rpc_response_pub_->publish(msg);
   }
 
+  // "Home" from IDLE: {"state": "DOCKING"} once docking began, else -32600 with the reason, its message and fields as
+  // data, and DRIVE_REFUSED. Parameters are not needed.
+  void OnDockingStart(const mowbite_msgs::msg::RpcRequest& request) {
+    Reason why;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      why = core_.DockingProblem();
+      if (why.empty() && !transit_client_->service_is_ready()) why = PlannerMissing();
+      if (why.empty() && !follow_client_->action_server_is_ready()) why = FollowerMissing();
+      if (why.empty() && (drive_.active || job_plan_.active)) {
+        why = Reason("STILL_STOPPING", "The last drive is still stopping, try again in a moment");
+      }
+      if (why.empty()) {
+        why = core_.StartDocking();
+      } else {
+        core_.RefuseDrive(why);
+      }
+    }
+    if (why.empty()) {
+      RCLCPP_INFO(get_logger(), "docking.start: docking");
+      mowbite_msgs::msg::RpcResponse msg;
+      msg.result = json{{"state", "DOCKING"}}.dump();
+      msg.id = request.id;
+      rpc_response_pub_->publish(msg);
+    } else {
+      RCLCPP_WARN(get_logger(), "docking.start refused: %s (%s)", why.code.c_str(), why.message.c_str());
+      json data = {{"reason", why.code}, {"message", why.message}};
+      for (const auto& [key, value] : why.fields.items()) data[key] = value;
+      PublishRpcError(request.id, mowbite_msgs::msg::RpcError::ERROR_INVALID_REQUEST, why.message,
+                      data.dump(-1, ' ', false, json::error_handler_t::replace));
+    }
+    Flush();
+  }
+
   // <data_dir>/params/mower_logic.json, written like the checkpoint.
   std::string LogicParamsPath() const {
     return data_dir_.empty() ? "" : data_dir_ + "/params/mower_logic.json";
@@ -1122,6 +1238,8 @@ class LogicNode : public rclcpp::Node {
     base["gps_wait_time"] = get_parameter("gps_wait_time").as_double();
     base["gps_timeout"] = declare_parameter("gps_timeout", 10.0);
     base["undock_distance"] = get_parameter("undock_distance").as_double();
+    base["docking_approach_distance"] = get_parameter("docking_approach_distance").as_double();
+    base["docking_retry_count"] = get_parameter("docking_retry_count").as_int();
     logic_params_ = LogicParams(base);
     const std::string path = LogicParamsPath();
     if (path.empty()) {
@@ -1140,8 +1258,11 @@ class LogicNode : public rclcpp::Node {
 
   // What of the settings of params.set the core uses. Called with the mutex held, or before the node runs.
   void ApplyLogicParams() {
-    core_.SetGpsSettings(logic_params_.Get("max_position_accuracy"), logic_params_.Get("gps_wait_time"));
+    core_.SetGpsSettings(logic_params_.Get("max_position_accuracy"), logic_params_.Get("gps_wait_time"),
+                         logic_params_.Get("gps_timeout"));
     core_.SetUndockDistance(logic_params_.Get("undock_distance"));
+    core_.SetDockingSettings(logic_params_.Get("docking_approach_distance"),
+                             static_cast<int>(logic_params_.Get("docking_retry_count")));
   }
 
   bool SaveLogicParams(const LogicParams& params, std::string& error) {
@@ -1240,11 +1361,12 @@ class LogicNode : public rclcpp::Node {
     }
   }
 
-  void PublishRpcError(const std::string& id, int code, const std::string& message) {
+  void PublishRpcError(const std::string& id, int code, const std::string& message, const std::string& data = "") {
     mowbite_msgs::msg::RpcError msg;
     msg.code = static_cast<int16_t>(code);
     msg.message = message;
     msg.id = id;
+    msg.data = data;
     rpc_error_pub_->publish(msg);
   }
 
@@ -1526,6 +1648,7 @@ class LogicNode : public rclcpp::Node {
       UpdateBladeLocked();
       PumpJob();
       if (auto why = core_.TakeDriveCancel()) CancelDrive(*why);
+      PumpDocking();
       UpdateBladeLocked();
       events = core_.TakeEvents();
       actions_changed = core_.TakeActionsChanged();
@@ -1606,9 +1729,6 @@ class LogicNode : public rclcpp::Node {
 
   // The drive to a pose: its number tells late answers apart, the request waits for its answer until the follower
   // has taken the path.
-  // What the follower drives for: logic/drive_to, the approach to a path of the job, that path, or out of the station.
-  enum Purpose { kDriveTo = 0, kApproach = 1, kMow = 2, kUndock = 3 };
-
   struct Drive {
     Purpose purpose = Purpose::kDriveTo;
     bool active = false;

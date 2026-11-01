@@ -35,8 +35,9 @@ json SystemInfo(const std::string& version, const std::string& platform) {
 }
 
 // Texts of other nodes and parse errors that quote their input may hold bytes that aren't UTF-8: they become U+FFFD.
-std::string RpcErrorJson(int16_t code, const std::string& message, const json& id) {
+std::string RpcErrorJson(int16_t code, const std::string& message, const json& id, const json& data) {
   json err = {{"jsonrpc", "2.0"}, {"error", {{"code", code}, {"message", message}}}, {"id", id}};
+  if (!data.is_null()) err["error"]["data"] = data;
   return err.dump(2, ' ', false, json::error_handler_t::replace);
 }
 

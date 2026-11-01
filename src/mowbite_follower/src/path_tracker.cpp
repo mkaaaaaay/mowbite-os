@@ -78,22 +78,27 @@ std::string PathTracker::Start(const std::vector<Pose2>& poses, const std::vecto
       return "pose " + std::to_string(i) + " lies on the one before";
     }
   }
+  // Backwards the control runs on the headings of a mower driving the same way forwards.
+  std::vector<Pose2> driven = poses;
+  if (config_.reverse) {
+    for (auto& p : driven) p.yaw = NormalizeAngle(p.yaw + M_PI);
+  }
   if (config_.straight) {
-    const double c = std::cos(poses[0].yaw);
-    const double s = std::sin(poses[0].yaw);
+    const double c = std::cos(driven[0].yaw);
+    const double s = std::sin(driven[0].yaw);
     double along_before = 0;
-    for (size_t i = 1; i < poses.size(); i++) {
-      const double dx = poses[i].x - poses[0].x;
-      const double dy = poses[i].y - poses[0].y;
+    for (size_t i = 1; i < driven.size(); i++) {
+      const double dx = driven[i].x - driven[0].x;
+      const double dy = driven[i].y - driven[0].y;
       const double along = c * dx + s * dy;
       if (std::abs(c * dy - s * dx) > kStraightOffset || along <= along_before ||
-          std::abs(NormalizeAngle(poses[i].yaw - poses[0].yaw)) > kStraightAngle) {
+          std::abs(NormalizeAngle(driven[i].yaw - driven[0].yaw)) > kStraightAngle) {
         return "a straight path must lie on one line, its poses facing along it";
       }
       along_before = along;
     }
   }
-  poses_ = poses;
+  poses_ = std::move(driven);
   kinds_ = kinds.empty() ? std::vector<Kind>(poses.size(), Kind::kTransit) : kinds;
   index_ = start_index;
   progress_ = 0;
@@ -209,6 +214,15 @@ void PathTracker::CheckStall(const Pose2& pose, double linear, double dt) {
               std::hypot(pose.x - stall_anchor_.x, pose.y - stall_anchor_.y), stall_s_, std::abs(linear)));
 }
 
+double PathTracker::RemainingAlong(const Pose2& pose) const {
+  const size_t n = poses_.size();
+  if (!config_.straight && index_ + 2 < n) return std::numeric_limits<double>::infinity();
+  const Pose2& a = config_.straight ? poses_.front() : poses_[n - 2];
+  const Pose2& b = poses_.back();
+  const double length = std::hypot(b.x - a.x, b.y - a.y);
+  return ((b.x - pose.x) * (b.x - a.x) + (b.y - pose.y) * (b.y - a.y)) / length;
+}
+
 double PathTracker::CrossTrack(const Pose2& pose) const {
   if (poses_.size() < 2) return 0;
   // The segments a few poses around the control point: the mower lags behind it a little.
@@ -222,11 +236,12 @@ double PathTracker::CrossTrack(const Pose2& pose) const {
   return std::isfinite(best) ? best : 0;
 }
 
-PathTracker::Command PathTracker::Step(const Pose2& pose, double dt) {
+PathTracker::Command PathTracker::Step(const Pose2& measured, double dt) {
   Command cmd;
   if (phase_ == Phase::kIdle || phase_ == Phase::kDone || phase_ == Phase::kFailed) return cmd;
   if (!(dt > 0)) dt = 1e-3;
   phase_time_ += dt;
+  const Pose2 pose{measured.x, measured.y, config_.reverse ? NormalizeAngle(measured.yaw + M_PI) : measured.yaw};
 
   switch (phase_) {
     case Phase::kPreRotate:
@@ -291,29 +306,25 @@ PathTracker::Command PathTracker::Step(const Pose2& pose, double dt) {
     Fail("the mower stays behind the path (" + std::to_string(distance).substr(0, 4) + " m), stuck?");
     return Command();
   }
-  if (config_.straight) {
-    if (phase_ == Phase::kPreRotate && !(std::abs(angle_error_) < config_.max_goal_angle_error)) {
-      char text[160];
-      std::snprintf(text, sizeof(text),
-                    "the mower faces %.0f deg off the start of the path, which it drives straight (limit %.0f deg)",
-                    std::abs(angle_error_) * 180.0 / M_PI, config_.max_goal_angle_error * 180.0 / M_PI);
-      Fail(text);
-      return Command();
-    }
-    // Along the line, wherever the mower is across it: it does not steer back onto it.
-    const Pose2& a = poses_.front();
-    const Pose2& b = poses_.back();
-    const double length = std::hypot(b.x - a.x, b.y - a.y);
-    const double along = ((pose.x - a.x) * (b.x - a.x) + (pose.y - a.y) * (b.y - a.y)) / length;
-    if ((phase_ == Phase::kFollowing || phase_ == Phase::kGoalApproach) &&
-        along >= length - config_.max_goal_distance_error) {
-      SetPhase(Phase::kDone);
-      return Command();
-    }
+  if (config_.straight && phase_ == Phase::kPreRotate && !(std::abs(angle_error_) < config_.max_goal_angle_error)) {
+    char text[160];
+    std::snprintf(text, sizeof(text),
+                  "the mower faces %.0f deg off the start of the path, which it drives straight (limit %.0f deg)",
+                  std::abs(angle_error_) * 180.0 / M_PI, config_.max_goal_angle_error * 180.0 / M_PI);
+    Fail(text);
+    return Command();
+  }
+  // Along the line or the last stretch, wherever the mower is across it.
+  const bool along_end = config_.straight || config_.end_tolerance > 0;
+  const double tolerance = config_.end_tolerance > 0 ? config_.end_tolerance : config_.max_goal_distance_error;
+  if (along_end && (phase_ == Phase::kFollowing || phase_ == Phase::kGoalApproach) &&
+      RemainingAlong(pose) <= tolerance) {
+    SetPhase(Phase::kDone);
+    return Command();
   }
   if (phase_ == Phase::kPreRotate && std::abs(angle_error_) < config_.max_goal_angle_error) {
     SetPhase(Phase::kFollowing);
-  } else if (phase_ == Phase::kGoalApproach && distance < config_.max_goal_distance_error) {
+  } else if (phase_ == Phase::kGoalApproach && !along_end && distance < config_.max_goal_distance_error) {
     SetPhase(Phase::kPostRotate);
   } else if (phase_ == Phase::kCornerApproach && distance < config_.max_goal_distance_error) {
     SetPhase(Phase::kCornerRotate);
@@ -365,6 +376,7 @@ PathTracker::Command PathTracker::Step(const Pose2& pose, double dt) {
   if (config_.straight) cmd.angular = 0;
   CheckStall(pose, cmd.linear, dt);
   if (phase_ == Phase::kFailed) return Command();
+  if (config_.reverse) cmd.linear = -cmd.linear;
   return cmd;
 }
 

@@ -148,6 +148,8 @@ class FollowerNode : public rclcpp::Node {
     config.speed_turn = std::min(config.speed_turn, config.max_linear);
     config.stall_time = goal->stall_time > 0 ? goal->stall_time : 0.0;
     config.straight = goal->straight;
+    config.reverse = goal->reverse;
+    config.end_tolerance = goal->end_tolerance > 0 ? goal->end_tolerance : 0.0;
     tracker_ = std::make_unique<PathTracker>(config);
     fence_ = Geofence(std::move(allowed), std::move(obstacles), geofence_margin_);
     if (problem.empty()) problem = fence_.Problem();
@@ -159,8 +161,9 @@ class FollowerNode : public rclcpp::Node {
       Finish(FollowPath::Result::REASON_INVALID, "invalid path: " + problem, goal->start_index);
       return;
     }
-    RCLCPP_INFO(get_logger(), "Following %zu poses from %u%s, at most %.2f m/s", poses.size(), goal->start_index,
-                goal->straight ? " straight without steering" : "", config.max_linear);
+    RCLCPP_INFO(get_logger(), "Following %zu poses from %u%s%s, at most %.2f m/s", poses.size(), goal->start_index,
+                goal->reverse ? " backwards" : "", goal->straight ? " straight without steering" : "",
+                config.max_linear);
   }
 
   void OnTimer() {

@@ -59,6 +59,17 @@ TEST(LogicParams, OutOfRangeGoesToTheBound) {
   EXPECT_DOUBLE_EQ(params.Get("max_position_accuracy"), 0.3);
 }
 
+TEST(LogicParams, DockingWithinTheBoundsOfMowBiteOs) {
+  LogicParams params;
+  const auto result = params.Set(Request({{"/mower_logic/docking_approach_distance", 0.2},
+                                          {"/mower_logic/docking_retry_count", 9}}));
+  ASSERT_TRUE(result.ok) << result.message;
+  EXPECT_DOUBLE_EQ(result.applied["/mower_logic/docking_approach_distance"].get<double>(), 0.5);
+  EXPECT_EQ(result.applied["/mower_logic/docking_retry_count"], 5);
+  ASSERT_TRUE(params.Set(Request({{"/mower_logic/docking_approach_distance", 3.0}})).ok);
+  EXPECT_DOUBLE_EQ(params.Get("docking_approach_distance"), 2.0);
+}
+
 TEST(LogicParams, AnyBadNameOrValueChangesNothing) {
   LogicParams params;
   const json before = params.Values();
