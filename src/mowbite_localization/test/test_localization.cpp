@@ -557,5 +557,74 @@ TEST(Localization, SetHeadingWithoutARecentFixChangesNothing) {
   EXPECT_FALSE(loc.heading_valid());
 }
 
+TEST(Localization, SetAntennaOffsetMovesBaseLinkBehindTheLastFixAndKeepsTheHeading) {
+  LocalizationConfig config;
+  config.antenna_offset_x = 0.3;
+  Localization loc(config);
+  double t = 100;
+  Calibrate(loc, t);
+  InitGps(loc, t, 10, 5);
+  EXPECT_NEAR(loc.GetEstimate().x, 9.7, 1e-3);
+  loc.SetAntennaOffset(0.1, 0.05, t);
+  const Estimate e = loc.GetEstimate();
+  EXPECT_NEAR(e.x, 9.9, 1e-9);
+  EXPECT_NEAR(e.y, 4.95, 1e-9);
+  EXPECT_DOUBLE_EQ(e.theta, 0.0);
+  // Standing still gives no course: the heading was not aligned and is not now.
+  EXPECT_FALSE(loc.heading_valid());
+  EXPECT_NEAR(loc.PositionAccuracy(t), 0.02, 1e-6);
+}
+
+TEST(Localization, SetAntennaOffsetKeepsAValidHeadingAndTurnsTheOffset) {
+  LocalizationConfig config;
+  config.antenna_offset_x = 0.3;
+  Localization loc(config);
+  double t = 100;
+  Calibrate(loc, t);
+  InitGps(loc, t, 10, 5);
+  ASSERT_TRUE(loc.SetHeading(M_PI / 2, t));
+  ASSERT_TRUE(loc.heading_valid());
+  loc.SetAntennaOffset(0.2, -0.1, t);
+  const Estimate e = loc.GetEstimate();
+  // Facing north the antenna is 0.2 m north and 0.1 m east of base_link.
+  EXPECT_NEAR(e.x, 9.9, 1e-9);
+  EXPECT_NEAR(e.y, 4.8, 1e-9);
+  EXPECT_NEAR(e.theta, M_PI / 2, 1e-12);
+  EXPECT_TRUE(loc.heading_valid());
+}
+
+TEST(Localization, SetAntennaOffsetWithoutARecentFixOnlyChangesTheOffset) {
+  LocalizationConfig config;
+  config.gps_timeout_s = 2.0;
+  config.antenna_offset_x = 0.3;
+  Localization loc(config);
+  double t = 100;
+  Calibrate(loc, t);
+  InitGps(loc, t, 1, 1);
+  Step(loc, t, 2.5, 0.0, 0.0);
+  const Estimate before = loc.GetEstimate();
+  loc.SetAntennaOffset(0.5, 0.0, t);
+  EXPECT_DOUBLE_EQ(loc.GetEstimate().x, before.x);
+  EXPECT_DOUBLE_EQ(loc.GetEstimate().y, before.y);
+  EXPECT_DOUBLE_EQ(loc.GetEstimate().theta, before.theta);
+}
+
+TEST(Localization, TheNewOffsetCountsForTheFixesThatFollow) {
+  LocalizationConfig config;
+  config.antenna_offset_x = 0.3;
+  Localization loc(config);
+  double t = 100;
+  Calibrate(loc, t);
+  InitGps(loc, t, 10, 5);
+  loc.SetAntennaOffset(0.0, 0.0, t);
+  // The same fixes, the antenna is at base_link now: the filter must not be pulled back to the old place.
+  for (int i = 0; i < 30; ++i) {
+    Step(loc, t, 0.1, 0.0, 0.0);
+    loc.AddGps(Fixed(10, 5), t);
+  }
+  EXPECT_NEAR(loc.GetEstimate().x, 10.0, 1e-3);
+  EXPECT_NEAR(loc.GetEstimate().y, 5.0, 1e-3);
+}
+
 }  // namespace
 }  // namespace mowbite_localization

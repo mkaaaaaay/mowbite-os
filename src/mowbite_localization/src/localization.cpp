@@ -189,6 +189,15 @@ std::optional<Position> Localization::SetHeading(double theta, double now_s) {
   return base;
 }
 
+void Localization::SetAntennaOffset(double x, double y, double now_s) {
+  config_.antenna_offset_x = position_model_.antenna_offset_x = motion_model_.antenna_offset_x = x;
+  config_.antenna_offset_y = position_model_.antenna_offset_y = motion_model_.antenna_offset_y = y;
+  if (!has_gps_ || !RecentGps(now_s)) return;
+  const double theta = GetEstimate().theta;
+  const double c = std::cos(theta), s = std::sin(theta);
+  Reset(last_gps_.x - (c * x - s * y), last_gps_.y - (s * x + c * y), theta);
+}
+
 void Localization::Reset(double x, double y, double theta) {
   StateT s;
   s.setZero();
