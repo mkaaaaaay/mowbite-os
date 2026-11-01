@@ -272,7 +272,7 @@ TEST_F(FilterTest, AutonomousDrivesNeedPoseAccuracyHeadingMapAndMeasurement) {
     Run(now_ + 1.1);
   };
   accuracy_ = 0.3;
-  refused("position accuracy 0.30 m, 0.10 m needed");
+  refused("position accuracy 0.300 m, 0.100 m needed");
   filter_.SetMaxPositionAccuracy(0.5);
   Run(now_ + 0.1);
   EXPECT_TRUE(Moves(Cmd(Source::kFollower, 0.2))) << filter_.LastRefusal();

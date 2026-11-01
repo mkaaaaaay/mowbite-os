@@ -131,7 +131,7 @@ std::string SafetyFilter::AutonomousProblem(double now) const {
   if (!capabilities_ || !safety_measured_) return "no safety measurement of this platform (hw/capabilities)";
   if (!pose_ || now - pose_->s > config_.pose_timeout + kTimeEpsilon) return "no recent pose from the localization";
   if (!(pose_->accuracy <= config_.max_position_accuracy)) {
-    return Format("position accuracy %.2f m, %.2f m needed", pose_->accuracy, config_.max_position_accuracy);
+    return Format("position accuracy %.3f m, %.3f m needed", pose_->accuracy, config_.max_position_accuracy);
   }
   if (!pose_->heading_valid) return "the heading is not aligned";
   if (!region_) return region_error_;
