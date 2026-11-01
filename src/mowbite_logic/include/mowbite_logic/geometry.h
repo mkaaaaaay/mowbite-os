@@ -68,7 +68,7 @@ class Geometry {
   bool Load(const std::string& text, std::string* why);
   std::string Text() const;
 
-  // Counts up with every change of the entries.
+  // Counts up with every change of a value; entering or resetting a value that equals the platform's keeps it.
   int version() const {
     return version_;
   }

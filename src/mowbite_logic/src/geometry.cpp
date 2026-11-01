@@ -414,8 +414,9 @@ GeometryChange Geometry::Set(const json& request) {
   }
   entries_ = std::move(entries);
   now_ = values;
-  ++version_;
   change.stored = true;
+  // The version counts a change of a value, so the event and the new version always come together.
+  if (!change.changed.empty()) ++version_;
   change.below_default = Below(factory_, now_);
   return change;
 }

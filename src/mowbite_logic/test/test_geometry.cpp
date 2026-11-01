@@ -135,7 +135,21 @@ TEST(Geometry, TheValueOfThePlatformEnteredByHandIsStoredButChangesNothing) {
   EXPECT_TRUE(change.stored);
   EXPECT_TRUE(change.changed.empty());
   EXPECT_TRUE(geometry.Get()["settings"]["blade_ahead"]["stored"].get<bool>());
-  EXPECT_EQ(geometry.version(), 1);
+  // No value changed, so the version stays; the entry is kept all the same.
+  EXPECT_EQ(geometry.version(), 0);
+  EXPECT_EQ(json::parse(geometry.Text())["entries"].size(), 1u);
+}
+
+TEST(Geometry, ResettingAValueThatEqualsThePlatformsKeepsTheVersion) {
+  Geometry geometry = Tron();
+  ASSERT_TRUE(geometry.Set(Request(geometry, {{"blade_ahead", 0.23}})).ok);
+  const GeometryChange change = geometry.Set(Request(geometry, json::object(), {"blade_ahead"}));
+  ASSERT_TRUE(change.ok);
+  EXPECT_TRUE(change.stored);
+  EXPECT_TRUE(change.changed.empty());
+  EXPECT_FALSE(geometry.Get()["settings"]["blade_ahead"]["stored"].get<bool>());
+  EXPECT_EQ(geometry.version(), 0);
+  EXPECT_TRUE(json::parse(geometry.Text())["entries"].empty());
 }
 
 TEST(Geometry, ResetGoesBackToThePlatformsValue) {
