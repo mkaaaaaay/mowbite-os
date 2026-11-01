@@ -7,8 +7,9 @@ mowbite_logic:
     geometry:
       # As the driver reports it (hw/capabilities, system.info).
       platform: airseekers_tron
-      # The body: 0.47 m over the drive wheels, the front 0.60 m ahead of their axle, behind it the wheels and the
-      # charging contacts at 0.12 m (measured by the user). The planner keeps its margins to the lines by it.
+      # The body: 0.47 m over the drive wheels, the front 0.60 m ahead of their axle (set by the user), behind it the
+      # wheels (radius 0.1125 m) and the charging contacts (0.10 m), rounded to 0.12 m. The planner keeps its margins to
+      # the lines by it.
       robot_width: 0.47
       robot_front: 0.60
       robot_rear: 0.12
