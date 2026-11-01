@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "mowbite_follower/path_tracker.h"
+#include "mowbite_follower/path.h"
 
 namespace mowbite_follower {
 

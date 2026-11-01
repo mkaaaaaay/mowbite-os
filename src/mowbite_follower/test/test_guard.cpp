@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "mowbite_follower/guard.h"
 
 using mowbite_follower::CheckGuard;
