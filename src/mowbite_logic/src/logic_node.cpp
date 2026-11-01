@@ -518,6 +518,10 @@ class LogicNode : public rclcpp::Node {
       if (why.empty()) why = planner_.TransitAreas(&drivable, &obstacles);
       if (why.empty() && !transit_client_->service_is_ready()) why = PlannerMissing();
       if (why.empty() && !follow_client_->action_server_is_ready()) why = FollowerMissing();
+      // The follower may still be letting go of the last path (right after docking): a new one would be refused.
+      if (why.empty() && (drive_.active || job_plan_.active)) {
+        why = Reason("STILL_STOPPING", "The last drive is still stopping, try again in a moment");
+      }
       const bool from_dock = why.empty() && core_.DockContact();
       if (!why.empty()) {
         core_.RefuseDrive(why);

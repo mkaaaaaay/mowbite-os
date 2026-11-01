@@ -253,7 +253,12 @@ class Probe:
         request = DriveTo.Request()
         request.x, request.y = x, y
         since = len(self.events)
-        answer = self.call(self.drive_to, request)
+        # Right after docking the follower may still be letting go of its last path: the logic refuses for a moment.
+        for _ in range(10):
+            answer = self.call(self.drive_to, request)
+            if answer.success or "still stopping" not in answer.message:
+                break
+            time.sleep(0.3)
         if not answer.success:
             return None
         end = self.event(since, "DRIVE", 90, phase="end")
@@ -389,7 +394,10 @@ class TestDock(Base):
 
     def test_05_abort_docking(self):
         p = self.probe
+        before = len(p.events)
         self.assertIsNotNone(p.drive(1.5, -0.8), "the drive did not end")
+        # A request right after DOCKED is refused for a moment, it does not fail the undocking.
+        self.assertNotIn("UNDOCKING_FAILED", [e["type"] for e in p.events[before:]])
         since = len(p.events)
         self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING"}})
         # On the line, backwards.
