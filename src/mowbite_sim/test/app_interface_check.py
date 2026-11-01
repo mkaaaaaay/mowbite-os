@@ -696,6 +696,20 @@ time.sleep(0.5)
 check_log("teleop drives again after a zero", len([s for t, s in sent_speeds(t0) if s != [0.0, 0.0]]) >= 4,
       str(sent_speeds(t0)[:3]))
 
+# The safety filter latches TILT (bit 13) for a tilted mower and keeps it until the mower is level again.
+set_flags(tilt_roll=35)
+tilt = wait_for(lambda: [e for e in (json.loads(p) for _, top, p, _ in msgs if top == "events/json")
+                         if e["type"] == "EMERGENCY" and e["emergency"] and e["reason"] == 8193], 5)
+c.publish("action", "mower_logic/reset_emergency")
+time.sleep(1.0)
+kept = b'"emergency":1' in (latest("robot_state/json") or b"")
+set_flags()
+time.sleep(0.5)
+c.publish("action", "mower_logic/reset_emergency")
+cleared = wait_for(lambda: b'"emergency":0' in (latest("robot_state/json") or b""), 4)
+check("tilt -> EMERGENCY with TILT, kept while tilted, cleared once level", bool(tilt) and kept and bool(cleared),
+      f"event {bool(tilt)}, kept {kept}, cleared {bool(cleared)}", point="3.1a EMERGENCY TILT")
+
 # Leaving the recording mode while the joystick is held stops at once, not after the 0.5 s watchdog.
 t0 = sim_time()
 hold = Hold(0.2, 0.0)
