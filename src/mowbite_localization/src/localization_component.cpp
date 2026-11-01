@@ -161,6 +161,9 @@ class LocalizationNode : public rclcpp::Node {
     } else if (result == FixResult::kOutlierReset) {
       RCLCPP_WARN(get_logger(), "GPS disagreed with the estimate %d times in a row, waiting for %d fixes that agree",
                   gate.outlier_reset, gate.warmup_fixes);
+    } else if (result == FixResult::kContradictionReset) {
+      RCLCPP_WARN(get_logger(), "GPS contradicted the estimate %d times in a row: position set onto GPS",
+                  EstimatorConfig().contradiction_reset);
     } else if (result == FixResult::kInitialized) {
       had_gps_ = true;
       const Pose2 pose = estimator_.pose();

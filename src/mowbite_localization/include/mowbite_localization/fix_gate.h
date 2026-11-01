@@ -33,6 +33,9 @@ enum class FixResult {
   kFused,         // corrected the estimate
   kOutlier,       // too far from the estimate, dropped
   kOutlierReset,  // one outlier too many: a new warmup starts with it
+  // Set by the estimator, which knows its covariance:
+  kContradicting,      // nearer than an outlier but too far for the covariance of the estimate, dropped
+  kContradictionReset, // one contradicting fix too many: the estimate was set onto it
 };
 
 // Why GNSS sets the estimate again at the end of a warmup.

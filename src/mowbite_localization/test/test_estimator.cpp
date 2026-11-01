@@ -308,6 +308,58 @@ TEST(L5Outliers, AreDroppedUntilTheEleventhAndThenAJump) {
   EXPECT_FALSE(w.est.TakeJump());
 }
 
+// L5: carried by hand less than an outlier's distance while the heading is valid: the fixes contradict the
+// covariance, the fifth in a row sets the position onto GNSS as a jump.
+TEST(L5Outliers, ContradictingFixesSetThePositionAfterFiveInARow) {
+  World w;
+  w.Aligned();
+  w.Run(20.0, 0.0, 0.0);
+  const Pose2 before = w.est.pose();
+  w.Place(w.x - 2.0, w.y + 0.5, w.heading);
+  w.Run(0.8, 0.0, 0.0);
+  EXPECT_EQ(w.last(), FixResult::kContradicting);
+  EXPECT_DOUBLE_EQ(w.est.pose().x, before.x);
+  EXPECT_FALSE(w.est.TakeJump());
+  w.Run(0.2, 0.0, 0.0);
+  EXPECT_EQ(w.last(), FixResult::kContradictionReset);
+  EXPECT_LT(w.PositionError(), 0.03);
+  EXPECT_TRUE(w.est.gps_valid());
+  EXPECT_TRUE(w.est.heading_valid());
+  EXPECT_LT(w.est.PositionAccuracy(w.t), 0.05);
+  const auto jump = w.est.TakeJump();
+  ASSERT_TRUE(jump);
+  EXPECT_EQ(jump->reason, WarmupReason::kOutliers);
+  EXPECT_NEAR(jump->distance(), std::hypot(2.0, 0.5), 0.03);
+  w.Run(1.0, 0.0, 0.0);
+  EXPECT_EQ(w.last(), FixResult::kFused);
+}
+
+// L5: a single fix 0.5 m off is dropped, and fixes within max_position_accuracy are fused whatever the covariance.
+TEST(L5Outliers, SingleContradictionsAndSmallOnesAreNoJump) {
+  World w;
+  w.Aligned();
+  w.Run(20.0, 0.0, 0.0);
+  const Pose2 before = w.est.pose();
+  w.fix_offset = Eigen::Vector2d(0.5, 0.0);
+  w.Run(0.2, 0.0, 0.0);
+  EXPECT_EQ(w.last(), FixResult::kContradicting);
+  w.fix_offset = Eigen::Vector2d::Zero();
+  w.Run(0.2, 0.0, 0.0);
+  EXPECT_EQ(w.last(), FixResult::kFused);
+  for (int i = 0; i < 4; i++) {
+    w.fix_offset = Eigen::Vector2d(0.5, 0.0);
+    w.Run(0.2 * 4, 0.0, 0.0);
+    w.fix_offset = Eigen::Vector2d::Zero();
+    w.Run(0.2, 0.0, 0.0);
+  }
+  EXPECT_FALSE(w.est.TakeJump());
+  EXPECT_NEAR(w.est.pose().x, before.x, 0.01);
+  w.fix_offset = Eigen::Vector2d(0.08, 0.0);
+  w.Run(2.0, 0.0, 0.0);
+  EXPECT_EQ(w.last(), FixResult::kFused);
+  EXPECT_FALSE(w.est.TakeJump());
+}
+
 TEST(L6Jumps, AfterAGapOnlyIfTheEstimateMoved) {
   World w;
   w.Ready();

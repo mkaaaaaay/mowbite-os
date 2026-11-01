@@ -1,5 +1,6 @@
 #include "mowbite_localization/estimator.h"
 
+#include <Eigen/Cholesky>
 #include <algorithm>
 #include <cmath>
 #include <iterator>
@@ -75,7 +76,8 @@ FixResult Estimator::AddFix(const GnssFix& fix, double t) {
   if (auto rejected = gate_.Reject(fix)) return *rejected;
   const Eigen::Vector2d antenna(fix.x, fix.y);
   const double then_time = t - config_.gnss_latency;
-  const FixResult result = gate_.Classify(t, antenna, AntennaPosition(MomentAt(then_time).state, lever_));
+  FixResult result = gate_.Classify(t, antenna, AntennaPosition(MomentAt(then_time).state, lever_));
+  if (result != FixResult::kFused) contradictions_ = 0;
   switch (result) {
     case FixResult::kRestarted:
     case FixResult::kWarmup:
@@ -83,16 +85,25 @@ FixResult Estimator::AddFix(const GnssFix& fix, double t) {
       break;
     case FixResult::kInitialized:
       Course(fix, MomentAt(then_time), t);
-      SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t, true);
+      SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t,
+                 gate_.reason() == WarmupReason::kFirst ? std::nullopt : std::optional(gate_.reason()));
       break;
     case FixResult::kFused: {
       // Without a heading, and when the course just set it, the dead reckoning since the last fix went the wrong
       // way: the fix sets the position.
       const bool turned = Course(fix, MomentAt(then_time), t);
       if (turned || !heading_valid_) {
-        SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t, false);
-      } else {
+        contradictions_ = 0;
+        SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t, std::nullopt);
+      } else if (!Contradicts(antenna, fix.accuracy, MomentAt(then_time))) {
+        contradictions_ = 0;
         Fuse(antenna, fix.accuracy, MomentAt(then_time), t);
+      } else if (++contradictions_ < config_.contradiction_reset) {
+        result = FixResult::kContradicting;
+      } else {
+        contradictions_ = 0;
+        SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t, WarmupReason::kOutliers);
+        result = FixResult::kContradictionReset;
       }
       break;
     }
@@ -104,7 +115,7 @@ FixResult Estimator::AddFix(const GnssFix& fix, double t) {
 }
 
 void Estimator::SetOntoFix(const Eigen::Vector2d& antenna, double accuracy, const Moment& then, double t,
-                           bool warmup_end) {
+                           std::optional<WarmupReason> jump_reason) {
   const State before = filter_.state();
   // base_link behind the antenna at the moment of the fix, moved on by what the estimate did since.
   const Eigen::Vector2d base =
@@ -113,14 +124,23 @@ void Estimator::SetOntoFix(const Eigen::Vector2d& antenna, double accuracy, cons
   ShiftHistory(before);
   accuracy_.OnFix(accuracy, t);
   last_fix_ = LastFix{antenna, t};
-  if (!warmup_end || gate_.reason() == WarmupReason::kFirst) return;
+  if (!jump_reason) return;
   Jump jump;
-  jump.reason = gate_.reason();
+  jump.reason = *jump_reason;
   jump.from_x = before(0);
   jump.from_y = before(1);
   jump.to_x = base(0);
   jump.to_y = base(1);
   if (jump.distance() > config_.gate.max_accuracy) jump_ = jump;
+}
+
+bool Estimator::Contradicts(const Eigen::Vector2d& antenna, double accuracy, const Moment& then) const {
+  const Eigen::Vector2d innovation = antenna - AntennaPosition(then.state, lever_);
+  if (innovation.norm() <= config_.gate.max_accuracy) return false;
+  const AntennaJacobian h = AntennaPositionJacobian(then.state, lever_);
+  const double sigma = std::max(accuracy, 0.005);
+  const Eigen::Matrix2d s = h * filter_.covariance() * h.transpose() + sigma * sigma * Eigen::Matrix2d::Identity();
+  return innovation.dot(s.ldlt().solve(innovation)) > config_.contradiction_chi2;
 }
 
 void Estimator::Fuse(const Eigen::Vector2d& antenna, double accuracy, const Moment& then, double t) {
@@ -202,6 +222,7 @@ void Estimator::SetPose(const Pose2& pose) {
   course_.Clear();
   history_.clear();
   last_fix_.reset();
+  contradictions_ = 0;
   jump_.reset();
 }
 

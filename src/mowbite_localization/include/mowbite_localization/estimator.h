@@ -30,6 +30,11 @@ struct EstimatorConfig {
   // A valid heading that run courses in a row contradict by more than this (rad) and by more than three standard
   // deviations is set from them; a single course that far off is not fused.
   double heading_reset_angle = 5.0 * M_PI / 180.0;
+  // A fix further from the expected antenna position than its covariance allows (chi-square of two axes above
+  // contradiction_chi2, 99.9 %) and by more than max_position_accuracy is not fused; contradiction_reset of them in a
+  // row set the position onto GNSS, e.g. after the mower was carried less than an outlier's distance.
+  double contradiction_chi2 = 13.8;
+  int contradiction_reset = 5;
   // Variances after set_pose (m², rad²) and of a heading given by set_heading (rad²).
   double pose_variance = 1.0;
   double pose_heading_variance = 0.0025;
@@ -117,8 +122,11 @@ class Estimator {
   Moment MomentAt(double t) const;
   void Remember(double t);
   void ShiftHistory(const State& before);
-  // Puts base_link behind the antenna of a fix; at the end of a warmup it may be a jump.
-  void SetOntoFix(const Eigen::Vector2d& antenna, double accuracy, const Moment& then, double t, bool warmup_end);
+  // Puts base_link behind the antenna of a fix; with a reason it may be a jump.
+  void SetOntoFix(const Eigen::Vector2d& antenna, double accuracy, const Moment& then, double t,
+                  std::optional<WarmupReason> jump_reason);
+  // The fix lies further from the estimate than its covariance allows and than max_position_accuracy.
+  bool Contradicts(const Eigen::Vector2d& antenna, double accuracy, const Moment& then) const;
   void Fuse(const Eigen::Vector2d& antenna, double accuracy, const Moment& then, double t);
   // True when the course of a fix at t set the heading.
   bool Course(const GnssFix& fix, const Moment& then, double t);
@@ -143,6 +151,7 @@ class Estimator {
   // The gyro integrated since the start, never corrected: courses in a row are compared on it.
   double gyro_heading_ = 0.0;
   std::optional<LastFix> last_fix_;
+  int contradictions_ = 0;
   std::optional<Jump> jump_;
   std::optional<Eigen::Vector2d> last_innovation_;
   // The last moments, to compare late GNSS data with.
