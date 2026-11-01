@@ -263,6 +263,23 @@ class TestHardwareContract(unittest.TestCase):
         self.assertTrue(self.release(), "release failed")
         self.assertEqual(self.probe.status.emergency_reason, 0)
 
+    def test_i_host_latches_with_its_own_bits_only(self):
+        # The bits of the safety filter stay until the release; a node above the driver cannot fake a lift.
+        tilt = SetEmergency.Request(latch=True, bits=HardwareStatus.REASON_TILT, reason="hw contract test")
+        self.assertTrue(self.probe.call(self.probe.emergency, tilt).success)
+        fence = SetEmergency.Request(latch=True, bits=HardwareStatus.REASON_FENCE, reason="hw contract test")
+        self.assertTrue(self.probe.call(self.probe.emergency, fence).success)
+        both = HardwareStatus.REASON_LATCH | HardwareStatus.REASON_TILT | HardwareStatus.REASON_FENCE
+        self.assertTrue(self.probe.wait(lambda p: p.status.emergency_reason == both, 2), "bits not shown")
+        self.assertTrue(self.release(), "release failed")
+        self.assertEqual(self.probe.status.emergency_reason, 0)
+        lift = SetEmergency.Request(latch=True, bits=HardwareStatus.REASON_LIFT, reason="hw contract test")
+        answer = self.probe.call(self.probe.emergency, lift)
+        self.assertFalse(answer.success)
+        self.assertIn("only HIGH_LEVEL, TILT, FENCE and STUCK", answer.message)
+        time.sleep(0.3)
+        self.assertFalse(self.probe.status.emergency)
+
 
 @launch_testing.post_shutdown_test()
 class TestShutdown(unittest.TestCase):
