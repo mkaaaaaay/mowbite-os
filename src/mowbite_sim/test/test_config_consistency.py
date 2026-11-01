@@ -1,6 +1,7 @@
 """The dimensions of the platform stand in one file, config/geometry/tron.yaml. Two places repeat them for now: the
 planner section of tron.yaml, until the planner takes the body from /mowbite_geometry, and the station of fake_tron in
 sim.yaml. They have to agree, and no node may be given an antenna offset or contact position of its own any more.
+The fence of mowbite_safety lies beyond the one of the follower, so that it acts only when the follower does not.
 
 Run in a sourced workspace: python3 /ws/src/mowbite_sim/test/test_config_consistency.py
 """
@@ -30,6 +31,11 @@ class ConfigConsistency(unittest.TestCase):
         planner = self.tron["mowbite_planner"]["ros__parameters"]
         for key in ("robot_width", "robot_front", "robot_rear", "mower_width", "blade_ahead"):
             self.assertAlmostEqual(planner[key], self.geometry[key], msg=key)
+
+    def test_the_fence_of_the_safety_filter_lies_beyond_the_one_of_the_follower(self):
+        safety = self.tron["mowbite_safety"]["ros__parameters"]
+        self.assertGreater(safety["fence_margin"], self.tron["mowbite_follower"]["ros__parameters"]["geofence_margin"])
+        self.assertLess(safety["tilt_release"], safety["tilt_limit"])
 
     def test_the_station_of_the_simulation_has_the_contacts_of_the_platform(self):
         self.assertAlmostEqual(self.sim["fake_tron"]["ros__parameters"]["dock_contact_x"],
