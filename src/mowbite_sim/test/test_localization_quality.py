@@ -5,7 +5,7 @@ the logic (the geometry on bridge/params) and drives on hw/cmd_vel, steered by t
 drives the same way. It measures: the heading alignment from the start heading and from a heading 90 degrees off (time
 and distance until the heading is good), the position and heading error on a square, the error after 8 s without GNSS
 at 0.3 m/s, and the heading drift standing for 60 s after the gyro bias changed. Every value is printed as one line
-"quality: ..."; the limits are the targets of the localization.
+"quality: ...".
 
 MOWBITE_GNSS_LATENCY=<s> gives the localization that gnss_latency.
 
@@ -50,15 +50,16 @@ GOOD_HEADING = math.radians(5.0)
 SPEED = 0.3
 # A gyro bias that changes by this much (deg/s) while the mower stands, e.g. as the sensor warms up.
 BIAS_STEP_DPS = 0.3
-# Limits; None only reports the value.
+# Limits: the targets of O19a (alignment within 3 s of driving from any heading, less than 0.5 deg/min of drift at
+# rest) and room above what the localization reaches.
 LIMITS = {
-    "align_s": 30.0,
-    "align_wrong_s": None,
-    "square_position_p95_m": 0.2,
-    "square_heading_p95_deg": None,
-    "outage_position_m": 0.5,
-    "outage_heading_deg": None,
-    "drift_deg_per_min": None,
+    "align_s": 3.0,
+    "align_wrong_s": 3.0,
+    "square_position_p95_m": 0.08,
+    "square_heading_p95_deg": 1.5,
+    "outage_position_m": 0.3,
+    "outage_heading_deg": 1.0,
+    "drift_deg_per_min": 0.5,
 }
 
 
