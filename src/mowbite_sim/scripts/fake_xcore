@@ -9,9 +9,11 @@ firmware does: inputs with their delay latch STOP, LIFT or COLLISION, a second w
 TIMEOUT_HIGH_LEVEL, a missing service SERVICE_NOT_READY; any reason zeroes wheels and blade. The diff drive applies the
 twist as duty (left v - w*d/2, right mirrored), the wheels turn at duty * --full-duty-speed, the counters run free (the
 right one falls going forward). IMU at 100 Hz through the configured axis remap of a sensor mounted upside down, power
-every second, GPS at 5 Hz, inputs every 200 ms.
+every second, GPS at 5 Hz, inputs every 200 ms. RTCM to the GPS service is counted per datagram, with a CRC-32 over
+the stream.
 A JSON file with flags (stop, rear_stop, lift, lift_left, lift_right, bumper, bumper_left, bumper_right, dock,
-battery_voltage, major_version, firmware, restart, cutter_ignores_off, drive_status) is read on every cycle; restart
+battery_voltage, major_version, firmware, restart, cutter_ignores_off, drive_status, gps_fix (fix, float, none or off),
+gps_accuracy) is read on every cycle; restart
 restarts the board whenever its value changes, as does a GPS configuration other than the first one. Every datagram from
 the host goes to a JSON lines log, --state writes the board as JSON.
 """
@@ -26,6 +28,7 @@ import socket
 import struct
 import sys
 import time
+import zlib
 
 HEADER = struct.Struct("<BBBBHBBHHQI")
 MAX_DATAGRAM = 1472
@@ -224,7 +227,7 @@ class Board:
         self.restart_flag = None
         self.socket = None
         self.counters = {"claims": {}, "short_emergency_inputs": 0, "rejected_configs": 0, "gps_restarts": 0,
-                         "rtcm_bytes": 0, "rpc_calls": 0, "meta_names": []}
+                         "rtcm_bytes": 0, "rtcm_datagrams": 0, "rtcm_max_datagram": 0, "rtcm_crc": 0, "rpc_calls": 0, "meta_names": []}
         self.x = self.y = self.yaw = 0.0
         self.ticks = [args.ticks_start % 2**32 + 0.0, args.ticks_start % 2**32 + 0.0]
         self.boot()
@@ -483,6 +486,9 @@ class Board:
             self.mower_set_at = now
         elif sid == GPS and channel == 0:
             self.counters["rtcm_bytes"] += len(value)
+            self.counters["rtcm_datagrams"] += 1
+            self.counters["rtcm_max_datagram"] = max(self.counters["rtcm_max_datagram"], len(value))
+            self.counters["rtcm_crc"] = zlib.crc32(value, self.counters["rtcm_crc"])
 
     def rpc(self, service, function, call):
         self.counters["rpc_calls"] += 1
@@ -658,17 +664,25 @@ class Board:
                             (7, struct.pack("<f", voltage)), (6, struct.pack("<f", charge_voltage)),
                             (8, struct.pack("<f", 0.5))])
 
-    def update_gps(self, now):
+    def update_gps(self, now, flags):
         service = self.services.get(GPS)
         if not service or not service.running or now < self.next_gps_out:
             return
         self.next_gps_out = now + 0.2
+        fix = flags.get("gps_fix", "fix")
+        if fix == "off":
+            return
         lat0, lon0 = self.args.origin
         lat = lat0 + math.degrees(self.y / 6378137.0)
         lon = lon0 + math.degrees(self.x / (6378137.0 * math.cos(math.radians(lat0))))
         v = getattr(self, "v", 0.0)
-        self.output(GPS, [(0, doubles(lat, lon, 80.0)), (1, doubles(0.012)), (2, doubles(0.02)), (3, b"FIX"),
-                          (4, doubles(v * math.cos(self.yaw), v * math.sin(self.yaw), 0.0))])
+        accuracy = float(flags.get("gps_accuracy", {"fix": 0.012, "float": 0.25}.get(fix, 1.5)))
+        values = [(0, doubles(lat, lon, 80.0)), (1, doubles(accuracy)), (2, doubles(2 * accuracy))]
+        # Without RTK the board leaves the fix type out.
+        if fix in ("fix", "float"):
+            values.append((3, b"FIX" if fix == "fix" else b"FLOAT"))
+        values.append((4, doubles(v * math.cos(self.yaw), v * math.sin(self.yaw), 0.0)))
+        self.output(GPS, values)
 
     def cycle(self, dt):
         now = self.now()
@@ -695,7 +709,7 @@ class Board:
         self.update_mower(flags, dt, now)
         self.update_imu(now)
         self.update_power(flags, now)
-        self.update_gps(now)
+        self.update_gps(now, flags)
 
     def state(self):
         def reg(sid, rid, fmt):
