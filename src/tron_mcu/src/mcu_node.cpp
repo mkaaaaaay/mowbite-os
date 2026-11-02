@@ -525,7 +525,7 @@ class McuNode : public rclcpp::Node {
     request.height_mm = req.height_mm;
     request.lease_s = req.lease_s;
     std::lock_guard<std::mutex> lock(mutex_);
-    auto result = control_.SetBlade(request, MonotonicSeconds());
+    auto result = control_.SetBlade(request, MonotonicSeconds(), &res.emergency_reason);
     res.success = result == tron::BladeResult::kOk;
     res.message = tron::BladeResultText(result);
     if (!res.success) {
