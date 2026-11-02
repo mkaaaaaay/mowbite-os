@@ -674,9 +674,7 @@ class Board:
         now = self.now()
         flags = read_flags(self.args.flags)
         restart = flags.get("restart")
-        if self.restart_flag is None:
-            self.restart_flag = restart
-        elif restart != self.restart_flag:
+        if restart != self.restart_flag:
             self.restart_flag = restart
             self.restarts += 1
             self.boot()
@@ -765,9 +763,12 @@ def main():
             last = now
         if args.state and now >= next_state:
             next_state = now + 0.1
-            with open(args.state + ".tmp", "w") as f:
-                json.dump(board.state(), f)
-            os.replace(args.state + ".tmp", args.state)
+            try:
+                with open(args.state + ".tmp", "w") as f:
+                    json.dump(board.state(), f)
+                os.replace(args.state + ".tmp", args.state)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":
