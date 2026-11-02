@@ -1073,12 +1073,13 @@ class LogicNode : public rclcpp::Node {
     blade_client_->async_send_request(request, [this, on](rclcpp::Client<mowbite_msgs::srv::SetBlade>::SharedFuture f) {
       const auto response = f.get();
       if (response->success) return;
-      RCLCPP_WARN(get_logger(), "hw/blade refused %s: %s", on ? "on" : "off", response->message.c_str());
+      RCLCPP_WARN(get_logger(), "hw/blade refused %s: %s (reason bits 0x%x)", on ? "on" : "off",
+                  response->message.c_str(), response->emergency_reason);
       if (!on) return;
       {
         std::lock_guard<std::mutex> lock(mutex_);
         blade_on_requested_ = false;
-        core_.OnBladeRefused(response->message);
+        core_.OnBladeRefused(response->message, static_cast<int>(response->emergency_reason));
       }
       Flush();
     });
