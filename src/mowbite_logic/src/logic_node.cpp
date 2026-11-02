@@ -55,7 +55,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
-#include "mowbite_bridge/monitor.h"
+#include "mowbite_bridge/event_builder.h"
 #include "mowbite_logic/geometry.h"
 #include "mowbite_logic/logic_core.h"
 #include "mowbite_logic/logic_params.h"
@@ -1903,7 +1903,7 @@ class LogicNode : public rclcpp::Node {
       }
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "events/json";
-      msg.payload = mowbite_bridge::EventPayload(event.type, event.details, now().seconds()).dump();
+      msg.payload = mowbite_bridge::BuildEvent(event.type, event.details, now().seconds()).dump();
       publish_pub_->publish(msg);
     }
     if (actions_changed) PublishActions();

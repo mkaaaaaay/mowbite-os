@@ -10,7 +10,7 @@ namespace mowbite_bridge {
 // object, and their keys id, t and type, are left out.
 nlohmann::ordered_json BuildEvent(const std::string& type, const nlohmann::ordered_json& details, double t);
 
-// Random letters and digits (A-Z, a-z, 0-9).
+// Random digits and letters (0-9, A-Z, a-z).
 std::string RandomId(std::size_t length = 32);
 
 }  // namespace mowbite_bridge

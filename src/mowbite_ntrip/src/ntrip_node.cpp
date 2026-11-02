@@ -8,7 +8,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
-#include <mowbite_bridge/monitor.h>
+#include <mowbite_bridge/event_builder.h>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/ntrip_status.hpp>
 #include <mowbite_msgs/msg/rpc_error.hpp>
@@ -65,7 +65,7 @@ bool SendAll(int fd, const std::string& data, int timeout_ms) {
 }
 
 // host, port and mountpoint of SOURCE_CHANGED, with prefix "" or "previous_".
-void PutSource(mowbite_bridge::json& details, const std::string& prefix, const CorrectionSource& source) {
+void PutSource(nlohmann::ordered_json& details, const std::string& prefix, const CorrectionSource& source) {
   details[prefix + "host"] = source.host;
   details[prefix + "port"] = source.port;
   details[prefix + "mountpoint"] = source.mountpoint;
@@ -460,7 +460,7 @@ class NtripNode : public rclcpp::Node {
       return;
     }
     for (const auto& event : pending_) {
-      mowbite_bridge::json details = {
+      nlohmann::ordered_json details = {
           {"reason", event.reason}, {"message", event.message}, {"severity", event.severity}};
       if (!event.resume.empty()) details["resume"] = event.resume;
       if (event.code) details["code"] = event.code;
@@ -478,7 +478,7 @@ class NtripNode : public rclcpp::Node {
       }
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "events/json";
-      msg.payload = mowbite_bridge::EventPayload("CORRECTIONS", details, this->now().seconds()).dump();
+      msg.payload = mowbite_bridge::BuildEvent("CORRECTIONS", details, this->now().seconds()).dump();
       publish_pub_->publish(msg);
     }
     pending_.clear();

@@ -16,7 +16,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <vector>
 
-#include "mowbite_bridge/monitor.h"
+#include "mowbite_bridge/event_builder.h"
 #include "mowbite_map/map_service.h"
 
 namespace mowbite_map {
@@ -175,7 +175,7 @@ class MapNode : public rclcpp::Node {
       for (const auto& event : pending_events_) {
         mowbite_msgs::msg::MqttPublish msg;
         msg.topic = "events/json";
-        msg.payload = mowbite_bridge::EventPayload(event.type, event.details, now().seconds()).dump();
+        msg.payload = mowbite_bridge::BuildEvent(event.type, event.details, now().seconds()).dump();
         publish_pub_->publish(msg);
       }
       pending_events_.clear();

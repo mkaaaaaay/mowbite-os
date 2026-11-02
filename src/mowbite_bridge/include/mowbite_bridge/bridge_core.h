@@ -92,6 +92,8 @@ class BridgeCore {
   void OnRpcResponse(const std::string& id, std::string_view result);
   void OnRpcError(const std::string& id, int code, std::string_view message, std::string_view data);
   void OnLog(double t, int level, std::string_view node, std::string_view message);
+  // position/json, from the node's timer.
+  void SendPosition(double x, double y, double heading, const PoseAttributes& attributes);
 
   Outbox Take();
 

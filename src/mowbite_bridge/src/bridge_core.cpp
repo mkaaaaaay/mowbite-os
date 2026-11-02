@@ -216,6 +216,10 @@ void BridgeCore::OnLog(double t, int level, std::string_view node, std::string_v
   Guard("log", [&] { warnings_.Add(t, level, node, message); });
 }
 
+void BridgeCore::SendPosition(double x, double y, double heading, const PoseAttributes& attributes) {
+  Guard("position", [&] { Send("position/json", PositionText(x, y, heading, attributes), false); });
+}
+
 Outbox BridgeCore::Take() {
   Outbox taken;
   std::swap(taken, out_);

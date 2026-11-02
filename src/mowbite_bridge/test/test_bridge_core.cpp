@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <set>
+
 #include "mowbite_bridge/bridge_core.h"
 #include "mowbite_bridge/event_builder.h"
 
@@ -394,6 +396,12 @@ TEST(EventBuilder, RandomIdsOfLettersAndDigits) {
   for (const char c : id) EXPECT_TRUE(std::isalnum(static_cast<unsigned char>(c))) << c;
   EXPECT_NE(RandomId(), RandomId());
   EXPECT_EQ(RandomId(8).size(), 8u);
+  EXPECT_EQ(RandomId(25).size(), 25u);
+  std::set<char> seen;
+  for (int i = 0; i < 200; ++i) {
+    for (const char c : RandomId()) seen.insert(c);
+  }
+  EXPECT_EQ(seen.size(), 62u);
 }
 
 // B21
