@@ -1,0 +1,117 @@
+# Builds docker/os.Dockerfile natively for amd64 and arm64; pushes to ghcr.io only when started by hand with push.
+name: os image
+
+on:
+  push:
+    branches: [os-image]
+  workflow_dispatch:
+    inputs:
+      push:
+        description: Push the image to ghcr.io/mkaaaaaay/mowbite-os
+        type: boolean
+        default: false
+
+concurrency:
+  group: os-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/mkaaaaaay/mowbite-os
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Planner commit of the Dockerfile
+        id: planner
+        run: echo "commit=$(sed -n 's/^ARG PLANNER_COMMIT=//p' docker/os.Dockerfile)" >> "$GITHUB_OUTPUT"
+
+      # The planner branch tron lives in a private repo; a read-only deploy key opens it.
+      - uses: actions/checkout@v7
+        with:
+          repository: mkaaaaaay/mowbite-planner-tron
+          ref: ${{ steps.planner.outputs.commit }}
+          ssh-key: ${{ secrets.PLANNER_DEPLOY_KEY }}
+          persist-credentials: false
+          path: planer
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to ghcr.io
+        if: inputs.push
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Short commit
+        id: rev
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/os.Dockerfile
+          build-contexts: planer=planer
+          build-args: SOURCE_COMMIT=${{ github.sha }}
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          push: ${{ inputs.push == true }}
+          provenance: false
+          tags: ${{ env.IMAGE }}:${{ steps.rev.outputs.short }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=os-${{ matrix.arch }}
+          cache-to: type=gha,scope=os-${{ matrix.arch }},mode=max
+
+      - name: Check and measure the image
+        env:
+          TAG: ${{ env.IMAGE }}:${{ steps.rev.outputs.short }}-${{ matrix.arch }}
+        run: |
+          docker run --rm "$TAG" ros2 pkg list > pkgs.txt
+          grep -E '^(mowbite_|tron_|xcore_)' pkgs.txt
+          if grep -q '^mowbite_sim$' pkgs.txt; then echo "mowbite_sim must not be in the image"; exit 1; fi
+          docker run --rm "$TAG" python3 -c 'import mowbite_planner.node'
+          size=$(docker image inspect --format '{{.Size}}' "$TAG")
+          packed=$(docker save "$TAG" | gzip -1 | wc -c)
+          {
+            echo "### ${{ matrix.arch }}"
+            echo "- image: \`$TAG\`"
+            echo "- size unpacked: $((size / 1000000)) MB, saved and gzipped: $((packed / 1000000)) MB"
+            echo "- packages: $(grep -cE '^(mowbite_|tron_|xcore_)' pkgs.txt)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  manifest:
+    if: inputs.push
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: One tag for both architectures
+        run: |
+          short=${GITHUB_SHA::7}
+          docker buildx imagetools create -t "$IMAGE:$short" "$IMAGE:$short-amd64" "$IMAGE:$short-arm64"
+          docker buildx imagetools inspect "$IMAGE:$short"
