@@ -4,16 +4,18 @@
 #include <cstdint>
 #include <optional>
 
-#include "tron_gnss/geodesy.h"
+#include "mowbite_gnss/flags.h"
+#include "mowbite_gnss/geodesy.h"
 #include "tron_gnss/nmea.h"
 
 namespace tron {
 
-// Flags and source as in mowbite_msgs/AbsolutePose.
-constexpr uint16_t kFlagRtk = 1;
-constexpr uint16_t kFlagRtkFixed = 2;
-constexpr uint16_t kFlagRtkFloat = 4;
-constexpr uint16_t kFlagDeadReckoning = 8;
+using mowbite_gnss::Enu;
+using mowbite_gnss::kFlagDeadReckoning;
+using mowbite_gnss::kFlagRtk;
+using mowbite_gnss::kFlagRtkFixed;
+using mowbite_gnss::kFlagRtkFloat;
+using mowbite_gnss::LocalFrame;
 
 struct GnssConfig {
   // Accuracy assumed per fix type until BESTNAVA sigmas are logged on the device.

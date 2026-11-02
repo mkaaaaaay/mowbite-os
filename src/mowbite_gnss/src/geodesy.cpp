@@ -1,8 +1,8 @@
-#include "tron_gnss/geodesy.h"
+#include "mowbite_gnss/geodesy.h"
 
 #include <cmath>
 
-namespace tron {
+namespace mowbite_gnss {
 
 namespace {
 
@@ -45,4 +45,4 @@ Enu LocalFrame::ToEnu(double lat_deg, double lon_deg, double height_m) const {
   return enu;
 }
 
-}  // namespace tron
+}  // namespace mowbite_gnss

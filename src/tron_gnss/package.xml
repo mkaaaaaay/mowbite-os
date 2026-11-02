@@ -14,6 +14,7 @@
   <depend>std_msgs</depend>
   <depend>mowbite_msgs</depend>
   <depend>tron_mcu</depend>
+  <depend>mowbite_gnss</depend>
   <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
