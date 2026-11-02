@@ -99,8 +99,9 @@ TEST(XcoreControl, BlockedUntilServicesAndTelemetry) {
   control.SetServicesReady(true, true);
   control.OnOutput(kEmergencyService, emergency::kOutReason, U16(0), 0, 0);
   EXPECT_FALSE(control.Status(0.5).blocked);
-  // The board falls silent.
-  EXPECT_EQ(control.Status(1.1).emergency_reason, kReasonTimeoutInputs);
+  // The board falls silent; it reports every second.
+  EXPECT_FALSE(control.Status(2.4).blocked);
+  EXPECT_EQ(control.Status(2.6).emergency_reason, kReasonTimeoutInputs);
   control.SetServicesReady(true, false);
   EXPECT_TRUE(control.Status(0.5).emergency_reason & kReasonFirmwareIncompatible);
 }
@@ -121,8 +122,10 @@ TEST(XcoreControl, DriveIsLimitedAndStopsAfterSilence) {
   auto drive = Of(f.control.Tick(0), kDiffDriveService);
   ASSERT_EQ(drive.size(), 1u);
   auto twist = TwistOf(drive[0]);
-  EXPECT_DOUBLE_EQ(twist[0], 0.3);
-  EXPECT_DOUBLE_EQ(twist[5], -0.3);
+  // 0.3 m/s and -0.3 rad/s, as duty: the outer wheel at the duty limit, the inner one slower.
+  double half = ControlConfig{}.regulator.wheel_distance / 2;
+  EXPECT_NEAR(twist[0] - twist[5] * half, 0.3, 1e-9);
+  EXPECT_NEAR(twist[0] + twist[5] * half, 0.3 - 0.3 * half, 1e-9);
   EXPECT_EQ(twist[1] + twist[2] + twist[3] + twist[4], 0);
   EXPECT_TRUE(f.control.Status(0).moving);
   // Resent every 0.1 s until cmd_vel falls silent for 0.5 s, then three stops 0.1 s apart, then nothing.
@@ -236,7 +239,7 @@ TEST(XcoreControl, BladeStillTurningLatches) {
   // The board gets a high level emergency, the blade more offs.
   auto out = f.control.Tick(5.2);
   ASSERT_FALSE(Of(out, kEmergencyService).empty());
-  EXPECT_EQ(EmergencyOf(Of(out, kEmergencyService)[0]).first, reason::kHighLevel);
+  EXPECT_EQ(EmergencyOf(Of(out, kEmergencyService)[0]).first, reason::kHighLevel | reason::kLatch);
   ASSERT_FALSE(Of(out, kMowerService).empty());
   // A release while it still turns keeps the latch, a slow report lets it go.
   f.Board(0, 5.3);
@@ -255,7 +258,7 @@ TEST(XcoreControl, HostLatchAndRelease) {
   EXPECT_EQ(s.emergency_reason, kReasonTilt | kReasonLatch);
   auto out = Of(f.control.Tick(0), kEmergencyService);
   ASSERT_EQ(out.size(), 1u);
-  EXPECT_EQ(EmergencyOf(out[0]), std::make_pair(reason::kHighLevel, uint16_t{0}));
+  EXPECT_EQ(EmergencyOf(out[0]), std::make_pair(uint16_t(reason::kHighLevel | reason::kLatch), uint16_t{0}));
   EXPECT_TRUE(f.control.LatchEmergency(0));
   EXPECT_EQ(f.control.Status(0).emergency_reason, kReasonTilt | kReasonHighLevel | kReasonLatch);
   // Release: three clears 0.1 s apart, then plain heartbeats again.
@@ -271,8 +274,8 @@ TEST(XcoreControl, HostLatchAndRelease) {
   for (int i = 0; i < 3; i++) {
     EXPECT_NEAR(sent[i].first, 0.05 + 0.1 * i, 1e-9);
     EXPECT_EQ(sent[i].second.first, 0);
-    EXPECT_TRUE(sent[i].second.second & reason::kLatch);
-    EXPECT_FALSE(sent[i].second.second & reason::kFirmwareIncompatible);
+    EXPECT_EQ(sent[i].second.second,
+              reason::kLatch | reason::kHighLevel | reason::kMowerRpmTimeout | reason::kMowerRpmLimit);
   }
   EXPECT_EQ(sent[3].second, std::make_pair(uint16_t{0}, uint16_t{0}));
 }
@@ -285,7 +288,7 @@ TEST(XcoreControl, InputsAndDock) {
   EXPECT_FALSE(s.lift);
   EXPECT_TRUE(s.bumper_right);
   EXPECT_FALSE(s.bumper_left);
-  for (int i = 0; i < 2; i++) {
+  for (int i = 1; i < 2; i++) {
     f.Board(0, i);
     f.control.OnOutput(kPowerService, power::kOutChargeVoltage, F32(29.0f), 0, i);
   }
@@ -302,17 +305,56 @@ TEST(XcoreControl, InputsAndDock) {
   EXPECT_FALSE(s.dock_contact);
 }
 
-TEST(XcoreControl, ChargingAllowedFollowsTheRequest) {
+TEST(XcoreControl, ChargingIsLeftToTheBoard) {
   Fixture f;
-  auto out = Of(f.control.Tick(0), kPowerService);
+  for (int i = 0; i < 30; i++) EXPECT_TRUE(Of(f.control.Tick(i * 0.1), kPowerService).empty());
+}
+
+TEST(XcoreControl, LostMessagesLatch) {
+  // Before the first message arrives the board reports TIMEOUT_HIGH_LEVEL; that does not latch.
+  XcoreControl control(Fixture::Config(), Inputs());
+  control.SetServicesReady(true, true);
+  control.OnOutput(kEmergencyService, emergency::kOutReason, U16(reason::kTimeoutHighLevel), 0, 0);
+  control.OnOutput(kEmergencyService, emergency::kOutReason, U16(0), 0, 0.5);
+  EXPECT_FALSE(control.Status(0.5).blocked);
+  // Later it means the board missed the host for a second: the driver keeps it stopped until a release.
+  control.OnOutput(kEmergencyService, emergency::kOutReason, U16(reason::kTimeoutHighLevel), 0, 1);
+  control.OnOutput(kEmergencyService, emergency::kOutReason, U16(0), 0, 1.5);
+  auto s = control.Status(1.5);
+  EXPECT_TRUE(s.blocked);
+  EXPECT_TRUE(s.latched);
+  EXPECT_TRUE(s.emergency_reason & reason::kTimeoutHighLevel);
+  auto out = Of(control.Tick(1.5), kEmergencyService);
   ASSERT_EQ(out.size(), 1u);
-  EXPECT_EQ(out[0].value, Bytes{1});
-  f.control.SetCharging(false);
-  out = Of(f.control.Tick(0.1), kPowerService);
-  ASSERT_EQ(out.size(), 1u);
-  EXPECT_EQ(out[0].value, Bytes{0});
-  EXPECT_TRUE(Of(f.control.Tick(0.5), kPowerService).empty());
-  EXPECT_EQ(Of(f.control.Tick(1.1), kPowerService).size(), 1u);
+  EXPECT_EQ(EmergencyOf(out[0]).first, reason::kHighLevel | reason::kLatch);
+  control.ReleaseEmergency(1.6);
+  EXPECT_FALSE(control.Status(1.6).blocked);
+}
+
+TEST(XcoreControl, WheelAgainstItsSetpointLatches) {
+  Fixture f;
+  f.control.OnCmdVel(0.2, 0, 0);
+  Writer w0;
+  w0.U32(1000);
+  w0.U32(1000);
+  f.control.OnOutput(kDiffDriveService, diff_drive::kOutTicks, w0.Take(), 0, 0);
+  uint32_t left = 1000;
+  for (int i = 1; i <= 20; i++) {
+    double t = i * 0.04;
+    // The left wheel runs backwards, the right one forward (its counter falls).
+    left -= 20;
+    Writer w;
+    w.U32(left);
+    w.U32(1000 - 16 * i);
+    f.Board(0, t);
+    f.control.OnCmdVel(0.2, 0, t);
+    f.control.OnOutput(kDiffDriveService, diff_drive::kOutTicks, w.Take(), static_cast<uint64_t>(t * 1e6), t);
+    f.control.Tick(t);
+  }
+  auto s = f.control.Status(0.8);
+  EXPECT_TRUE(s.blocked);
+  EXPECT_TRUE(s.latched);
+  EXPECT_FALSE(s.moving);
 }
 
 TEST(XcoreControl, BatteryAndOdometry) {
@@ -331,7 +373,7 @@ TEST(XcoreControl, BatteryAndOdometry) {
   EXPECT_FALSE(f.control.OnOutput(kDiffDriveService, diff_drive::kOutTicks, w.Take(), 1000000, 0));
   Writer w2;
   w2.U32(81);
-  w2.U32(81);
+  w2.U32(static_cast<uint32_t>(-81));
   auto twist = f.control.OnOutput(kDiffDriveService, diff_drive::kOutTicks, w2.Take(), 1040000, 0.04);
   ASSERT_TRUE(twist);
   EXPECT_NEAR(twist->linear, 81 / 2025.0 / 0.04, 1e-9);

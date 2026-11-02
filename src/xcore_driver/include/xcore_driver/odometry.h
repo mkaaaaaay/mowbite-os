@@ -10,9 +10,10 @@ struct OdometryConfig {
   double ticks_per_meter = 2025.0;
   // Between the wheel contact points, in m.
   double wheel_distance = 0.3556;
-  // +1 if the counter grows while the wheel turns forward, -1 if it falls; to be checked on the device.
+  // +1 if the counter grows while the wheel turns forward, -1 if it falls. The right motor is mounted mirrored, its
+  // counter falls going forward (from the firmware; to be checked on the device).
   int left_sign = 1;
-  int right_sign = 1;
+  int right_sign = -1;
   // A pair of samples further apart than this, or not after each other, gives no speed; the next pair counts again.
   double max_gap_s = 0.5;
 };

@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "xcore_driver/drive_regulator.h"
 #include "xcore_driver/odometry.h"
 #include "xcore_driver/wire.h"
 
@@ -22,8 +23,8 @@ struct ControlConfig {
   double repeat_interval_s = 0.1;
   double max_linear_speed = 0.3;
   double max_angular_speed = 0.3;
-  // Without an output of the emergency service for this long, motion and blade are blocked.
-  double telemetry_timeout_s = 1.0;
+  // Without an output of the emergency service for this long, motion and blade are blocked; it reports every second.
+  double telemetry_timeout_s = 2.5;
 
   bool allow_blade = false;
   uint16_t blade_speed_percent = 100;
@@ -34,15 +35,14 @@ struct ControlConfig {
   double blade_stop_time_s = 5.0;
   double blade_still_rpm = 100;
 
-  // The station delivers this charge voltage or more while the mower stands on its contacts.
-  double dock_voltage = 20.0;
-  int dock_debounce_samples = 3;
-  // Charging allowed goes out this often.
-  double charge_period_s = 1.0;
+  // The station delivers this charge voltage or more while the mower stands on its contacts; reported every second.
+  double dock_voltage = 5.0;
+  int dock_debounce_samples = 2;
   // Without a battery report for this long the battery fields read as unknown.
   double battery_timeout_s = 5.0;
 
   OdometryConfig odometry;
+  RegulatorConfig regulator;
 };
 
 // Bits of the emergency reason in hw/status. 0 to 12 come from the board with its numbers; the others are the driver's.
@@ -95,7 +95,7 @@ struct Battery {
   double voltage = 0;
   double charge_voltage = 0;
   double charge_current = 0;
-  // 0-1 as the board reports it.
+  // 0-1 as the board reports it, linear between the empty and the full voltage.
   double fraction = 0;
   std::string charging_status;
 };
@@ -148,9 +148,8 @@ class XcoreControl {
   BladeResult SetBlade(const BladeRequest& request, double now);
   // Bits must be within kHostLatchReasons; 0 means HIGH_LEVEL. Returns false for other bits.
   bool LatchEmergency(uint32_t bits);
-  // Clears the host's own latches and asks the board to clear its own; the board keeps a cause that is still there.
+  // Clears the host's own latches and asks the board to clear its own; the board sets a cause again that is still there.
   void ReleaseEmergency(double now);
-  void SetCharging(bool allowed);
   // All services the driver needs are claimed and configured, and their firmware fits; false blocks.
   void SetServicesReady(bool ready, bool firmware_compatible);
 
@@ -217,8 +216,10 @@ class XcoreControl {
   Repeat blade_off_repeat_;
   std::optional<double> next_blade_s_;
 
-  bool charging_allowed_ = true;
-  std::optional<double> next_charge_s_;
+  // The board reported no TIMEOUT_HIGH_LEVEL since the emergency service came up; a later one means lost messages.
+  bool board_heard_us_ = false;
+  bool link_lost_ = false;
+
   int dock_samples_ = 0;
   bool dock_raw_ = false;
 
@@ -229,6 +230,8 @@ class XcoreControl {
   MotorReport right_motor_;
 
   TickOdometry odometry_;
+  DriveRegulator regulator_;
+  bool drive_fault_ = false;
 };
 
 }  // namespace xcore

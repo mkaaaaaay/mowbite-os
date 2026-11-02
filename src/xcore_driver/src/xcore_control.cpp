@@ -49,7 +49,7 @@ const char* BladeResultText(BladeResult result) {
 }
 
 XcoreControl::XcoreControl(const ControlConfig& config, const InputMap& inputs)
-    : config_(config), inputs_(inputs), odometry_(config.odometry) {
+    : config_(config), inputs_(inputs), odometry_(config.odometry), regulator_(config.regulator) {
 }
 
 void XcoreControl::OnCmdVel(double linear, double angular, double now) {
@@ -112,13 +112,11 @@ bool XcoreControl::LatchEmergency(uint32_t bits) {
 void XcoreControl::ReleaseEmergency(double now) {
   host_latch_ = 0;
   if (!blade_turning_) mower_not_stopped_ = false;
+  link_lost_ = false;
+  drive_fault_ = false;
+  regulator_.ClearFault();
   clear_remaining_ = config_.repeat_count;
   next_emergency_s_ = now;
-}
-
-void XcoreControl::SetCharging(bool allowed) {
-  if (allowed != charging_allowed_) next_charge_s_.reset();
-  charging_allowed_ = allowed;
 }
 
 void XcoreControl::SetServicesReady(bool ready, bool firmware_compatible) {
@@ -133,6 +131,12 @@ std::optional<WheelTwist> XcoreControl::OnOutput(uint16_t service_id, uint16_t c
       if (channel_id == emergency::kOutReason && value.size() == 2) {
         board_reason_ = Reader(value).U16();
         last_emergency_s_ = now;
+        // The board stops without the host's messages but lets go again once they come; the host keeps it stopped.
+        if (*board_reason_ & reason::kTimeoutHighLevel) {
+          if (board_heard_us_) link_lost_ = true;
+        } else {
+          board_heard_us_ = true;
+        }
       }
       break;
     case kDiffDriveService: {
@@ -144,7 +148,9 @@ std::optional<WheelTwist> XcoreControl::OnOutput(uint16_t service_id, uint16_t c
             Reader r(value);
             uint32_t l = r.U32();
             uint32_t rt = r.U32();
-            return odometry_.OnTicks(l, rt, board_time_us);
+            auto twist = odometry_.OnTicks(l, rt, board_time_us);
+            if (twist) regulator_.OnMeasured(twist->left, twist->right, now);
+            return twist;
           }
           break;
         case diff_drive::kOutLeftStatus:
@@ -247,9 +253,11 @@ void XcoreControl::OnServiceRestart(uint16_t service_id, double now) {
       board_reason_.reset();
       last_emergency_s_.reset();
       next_emergency_s_.reset();
+      board_heard_us_ = false;
       break;
     case kDiffDriveService:
       odometry_.Reset();
+      regulator_.Reset();
       if (moving_) stop_repeat_ = Repeat{config_.repeat_count, now};
       moving_ = false;
       command_.reset();
@@ -263,7 +271,6 @@ void XcoreControl::OnServiceRestart(uint16_t service_id, double now) {
       last_battery_s_.reset();
       dock_samples_ = 0;
       dock_raw_ = false;
-      next_charge_s_.reset();
       break;
     case kInputService:
       active_inputs_.reset();
@@ -280,6 +287,7 @@ bool XcoreControl::Due(std::optional<double>& next, double period, double now) {
 }
 
 InputValue XcoreControl::Twist(double linear, double angular) const {
+  // The board turns index 0 and 5 into the duty of each wheel.
   return InputValue{kDiffDriveService, diff_drive::kInTwist, EncodeDoubles({linear, 0, 0, 0, 0, angular})};
 }
 
@@ -291,14 +299,17 @@ InputValue XcoreControl::MowerSpeed(float speed) const {
 
 std::vector<InputValue> XcoreControl::Tick(double now) {
   std::vector<InputValue> out;
+  if (regulator_.fault()) drive_fault_ = true;
   bool blocked = Blocked(now);
 
   // Emergency: the host's latch, a pending release, and in any case the heartbeat for the board.
   if (Due(next_emergency_s_, config_.emergency_period_s, now)) {
-    uint16_t set = host_latch_ || mower_not_stopped_ ? reason::kHighLevel : 0;
+    bool hold = host_latch_ || mower_not_stopped_ || link_lost_ || drive_fault_;
+    uint16_t set = hold ? reason::kHighLevel | reason::kLatch : 0;
     uint16_t clear = 0;
     if (clear_remaining_ > 0 && !set) {
-      clear = static_cast<uint16_t>(kBoardReasons & ~kReasonFirmwareIncompatible);
+      // The board computes the other bits itself on every pass.
+      clear = reason::kLatch | reason::kHighLevel | reason::kMowerRpmTimeout | reason::kMowerRpmLimit;
       clear_remaining_--;
       if (clear_remaining_ > 0) next_emergency_s_ = now + config_.repeat_interval_s;
     }
@@ -311,12 +322,14 @@ std::vector<InputValue> XcoreControl::Tick(double now) {
   // Drive: setpoints while commanded, a few stops after, then silence.
   if (command_ && (blocked || now - last_cmd_s_ > config_.cmd_vel_timeout_s + kTimeEpsilon)) {
     command_.reset();
+    regulator_.Reset();
     if (moving_) stop_repeat_ = Repeat{config_.repeat_count, now};
     moving_ = false;
   }
   if (command_) {
     if (Due(next_drive_s_, config_.drive_period_s, now)) {
-      out.push_back(Twist(command_->linear, command_->angular));
+      DutyTwist duty = regulator_.Update(command_->linear, command_->angular, now);
+      out.push_back(Twist(duty.linear, duty.angular));
       moving_ = true;
     }
   } else if (stop_repeat_.remaining > 0 && now + kTimeEpsilon >= stop_repeat_.next_s) {
@@ -342,9 +355,6 @@ std::vector<InputValue> XcoreControl::Tick(double now) {
     if (!blade_off_since_s_) blade_off_since_s_ = now;
   }
 
-  if (Due(next_charge_s_, config_.charge_period_s, now)) {
-    out.push_back(InputValue{kPowerService, power::kInChargingAllowed, Bytes{charging_allowed_ ? uint8_t{1} : uint8_t{0}}});
-  }
   return out;
 }
 
@@ -368,6 +378,8 @@ uint32_t XcoreControl::Reason(double now) const {
   uint32_t bits = host_latch_;
   if (board_reason_) bits |= *board_reason_ & kBoardReasons;
   if (mower_not_stopped_) bits |= kReasonMowerNotStopped | kReasonLatch;
+  if (link_lost_) bits |= reason::kTimeoutHighLevel | kReasonLatch;
+  if (drive_fault_) bits |= kReasonHighLevel | kReasonLatch;
   if (host_latch_) bits |= kReasonLatch;
   if (TelemetryStale(now)) bits |= kReasonTimeoutInputs;
   if (!services_ready_) bits |= reason::kServiceNotReady;
