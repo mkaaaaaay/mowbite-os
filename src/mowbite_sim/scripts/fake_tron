@@ -222,6 +222,13 @@ DOCK_HOLLOW = 0.05
 DOCK_HOLLOW_SPEED = 0.10
 
 
+def stall(pose, drive):
+    """The wheels stall against the station or at the edge of its hollows: the base neither drives nor turns, so the
+    gyro, the GNSS velocity and the wheel report see no motion."""
+    pose.linear = pose.angular = pose.slip = 0.0
+    drive.left = drive.right = 0.0
+
+
 class Dock:
     """A charging station placed like one of map.json: base_link of the docked mower at (x, y), heading the way the
     mower drives in. The mower's contacts lie contact_x m ahead of its base (negative: behind, it backs in and faces the
@@ -705,9 +712,7 @@ def main():
                 held = not pushing and dock.hold(before, pose, min(abs(drive.left), abs(drive.right)),
                                                  float(flags.get("dock_hollow_speed", args.dock_hollow_speed)))
                 if pushing or held:
-                    # The wheels stall against the station or at the edge of its hollows.
-                    pose.linear = pose.slip = 0.0
-                    drive.left = drive.right = 0.0
+                    stall(pose, drive)
                 had_contact = dock.contact
                 if dock.update(now, pose, pushing) != had_contact:
                     log.write({"t": round(now, 3), "dock": "contact" if dock.contact else "free"})

@@ -152,6 +152,17 @@ class DriveTest(unittest.TestCase):
         self.assertAlmostEqual(angular, 0.094)
 
 
+class StallTest(unittest.TestCase):
+    def test_a_stalled_base_turns_for_no_sensor(self):
+        pose, drive = ft.Pose(), ft.Drive(0.40, 0.40)
+        pose.step(0.02, *drive.move(-0.06, 0.05), 0.01)
+        ft.stall(pose, drive)
+        rate_z = parse_wit(ft.wit_frames(pose, (0.0, 0.0, 0.0)))[1][1][2]
+        self.assertEqual(rate_z, 0)
+        self.assertEqual(pose.antenna_velocity(0.098, 0.0), (0.0, 0.0))
+        self.assertEqual(drive.measured(), (0.0, 0.0))
+
+
 class HistoryTest(unittest.TestCase):
     def test_late_values_and_the_limit(self):
         history = ft.History(limit=1.0)
