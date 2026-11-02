@@ -8,7 +8,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 find_package(ament_cmake REQUIRED)
 
 # Frames, CBOR, service descriptions and control logic without ROS, testable on any machine.
-add_library(xcore_core STATIC src/wire.cpp src/cbor.cpp)
+add_library(xcore_core STATIC src/wire.cpp src/cbor.cpp src/schema.cpp src/services.cpp)
 target_include_directories(xcore_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -23,7 +23,7 @@ install(TARGETS xcore_core
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(xcore_test test/test_wire.cpp test/test_cbor.cpp)
+  ament_add_gtest(xcore_test test/test_wire.cpp test/test_cbor.cpp test/test_schema.cpp)
   target_link_libraries(xcore_test xcore_core)
 endif()
 
