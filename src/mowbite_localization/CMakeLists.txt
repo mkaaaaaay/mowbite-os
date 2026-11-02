@@ -34,7 +34,6 @@ rclcpp_components_register_node(mowbite_localization_component
   PLUGIN "mowbite_localization::LocalizationNode"
   EXECUTABLE mowbite_localization_node)
 
-install(FILES LICENSE.xbot_positioning DESTINATION share/${PROJECT_NAME})
 install(TARGETS mowbite_localization_component
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib

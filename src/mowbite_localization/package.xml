@@ -6,7 +6,6 @@
   <description>2D localization of base_link from gyro, wheel speed and RTK GNSS with its own extended Kalman filter</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
   <license>GPL-3.0</license>
-  <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <build_depend>eigen</build_depend>

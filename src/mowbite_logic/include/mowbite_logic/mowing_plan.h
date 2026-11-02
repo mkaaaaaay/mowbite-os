@@ -85,7 +85,7 @@ struct Piece {
 
 // The route cut into the paths of OpenMower: a new one for every section, where the route changes between the perimeter
 // loops and the rest (a transit goes with what follows it) and when one gets longer than max_poses. Runs of fewer than 3
-// poses are left out, FTC needs 3.
+// poses are left out, the follower needs 3.
 std::vector<Piece> CutIntoPieces(const CoverageAnswer& answer, size_t max_poses = kMaxPathPoses);
 
 // Indices of the points Douglas-Peucker keeps within tolerance (m), the first and the last always.
