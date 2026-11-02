@@ -19,7 +19,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix
-from mowbite_msgs.msg import AbsolutePose, HardwareStatus
+from mowbite_msgs.msg import GnssFix, HardwareStatus
 from mowbite_msgs.srv import SetBlade, SetEmergency
 from rcl_interfaces.msg import Log
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -32,8 +32,8 @@ CUTTER = 11
 BLADE_STOP_TIME = 2.0
 IMU_GAP = HardwareStatus.REASON_LATCH | HardwareStatus.REASON_IMU_TIMEOUT
 NOT_STOPPED = HardwareStatus.REASON_LATCH | HardwareStatus.REASON_MOWER_NOT_STOPPED
-FIXED = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FIXED
-FLOAT = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FLOAT
+FIXED = GnssFix.RTK_FIXED
+FLOAT = GnssFix.RTK_FLOAT
 
 
 # The dimensions of the platform, which the logic needs to start.
@@ -91,7 +91,7 @@ class Probe:
         self.logs = []
         self.node = rclpy.create_node("safety_inputs_probe")
         self.node.create_subscription(HardwareStatus, "hw/status", self._status, 10)
-        self.node.create_subscription(AbsolutePose, "gps/absolute_pose", self._pose, 10)
+        self.node.create_subscription(GnssFix, "gps/absolute_pose", self._pose, 10)
         # Like the rosout publishers, so lines logged before the match with a node still come in.
         rosout_qos = QoSProfile(depth=1000, reliability=ReliabilityPolicy.RELIABLE,
                                 durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -214,19 +214,19 @@ class TestSafetyInputs(unittest.TestCase):
                         [line for line in self.probe.logs if "Emergency" in line])
 
     def test_3_old_or_missing_corrections_count_as_float(self):
-        self.assertTrue(self.probe.wait(lambda p: p.pose is not None and p.pose.flags == FIXED, 5), "never fixed")
+        self.assertTrue(self.probe.wait(lambda p: p.pose is not None and p.pose.solution == FIXED, 5), "never fixed")
         set_flags(gnss_age=45.0)
-        p = self.probe.wait(lambda p: p.pose.flags == FLOAT and p.pose, 3)
+        p = self.probe.wait(lambda p: p.pose.solution == FLOAT and p.pose, 3)
         self.assertTrue(p, "old corrections stayed fixed")
-        self.assertAlmostEqual(p.position_accuracy, 0.3, places=5)
+        self.assertAlmostEqual(p.accuracy, 0.3, places=5)
         self.assertTrue(self.probe.logged("RTK fixed on corrections 45.0 s old (limit 30 s): counted as float"))
         set_flags()
-        self.assertTrue(self.probe.wait(lambda p: p.pose.flags == FIXED, 3), "fresh corrections did not fix again")
+        self.assertTrue(self.probe.wait(lambda p: p.pose.solution == FIXED, 3), "fresh corrections did not fix again")
         set_flags(gnss_age=None)
-        self.assertTrue(self.probe.wait(lambda p: p.pose.flags == FLOAT, 3), "missing age stayed fixed")
+        self.assertTrue(self.probe.wait(lambda p: p.pose.solution == FLOAT, 3), "missing age stayed fixed")
         self.assertTrue(self.probe.logged("RTK fixed without the age of its corrections"))
         set_flags()
-        self.assertTrue(self.probe.wait(lambda p: p.pose.flags == FIXED, 3))
+        self.assertTrue(self.probe.wait(lambda p: p.pose.solution == FIXED, 3))
 
 
 @launch_testing.post_shutdown_test()

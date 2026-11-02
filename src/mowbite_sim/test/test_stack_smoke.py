@@ -18,7 +18,7 @@ import rclpy
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix
-from mowbite_msgs.msg import AbsolutePose
+from mowbite_msgs.msg import GnssFix, RobotPose
 from nav_msgs.msg import Odometry
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import Imu, NavSatFix
@@ -72,10 +72,10 @@ class Collector:
         self.rpc_ids = []
         self.lock = threading.Lock()
         self.node = rclpy.create_node("stack_smoke_probe")
-        self.node.create_subscription(AbsolutePose, "gps/absolute_pose", lambda m: self._ros("gps", m), 10)
+        self.node.create_subscription(GnssFix, "gps/absolute_pose", lambda m: self._ros("gps", m), 10)
         self.node.create_subscription(NavSatFix, "gps/datum", lambda m: self._ros("datum", m), LATCHED)
         self.node.create_subscription(Imu, "imu/data", lambda m: self._ros("imu", m), qos_profile_sensor_data)
-        self.node.create_subscription(AbsolutePose, "localization/pose", lambda m: self._ros("pose", m), 10)
+        self.node.create_subscription(RobotPose, "localization/pose", lambda m: self._ros("pose", m), 10)
         self.node.create_subscription(Odometry, "odom", lambda m: self._ros("odom", m), 10)
         # The logic is not part of this launch: the probe stands in for it with the antenna in the dimensions of the
         # mower, which the localization waits for before it takes a fix.
@@ -154,11 +154,10 @@ class TestSensorChain(unittest.TestCase):
     def test_gnss_fix_at_antenna(self):
         msg = self.probe.wait(lambda: self.probe.ros.get("gps"))
         self.assertIsNotNone(msg, "no gps/absolute_pose")
-        self.assertEqual(msg.source, AbsolutePose.SOURCE_GPS)
-        self.assertTrue(msg.flags & AbsolutePose.FLAG_GPS_RTK_FIXED)
-        self.assertLess(msg.position_accuracy, 0.1)
-        self.assertAlmostEqual(msg.pose.pose.position.x, ANTENNA_X, delta=0.05)
-        self.assertAlmostEqual(msg.pose.pose.position.y, 0.0, delta=0.05)
+        self.assertEqual(msg.solution, GnssFix.RTK_FIXED)
+        self.assertLess(msg.accuracy, 0.1)
+        self.assertAlmostEqual(msg.x, ANTENNA_X, delta=0.05)
+        self.assertAlmostEqual(msg.y, 0.0, delta=0.05)
 
     def test_gnss_publishes_its_datum_latched(self):
         # Latched, so the map finds it however late it starts.
@@ -177,12 +176,11 @@ class TestSensorChain(unittest.TestCase):
         msg = self.probe.wait(lambda: self.probe.ros.get("pose") if self.probe.ros.get("pose") is not None
                               and self.probe.ros["pose"].position_accuracy < 0.1 else None, timeout=40.0)
         self.assertIsNotNone(msg, "no localization/pose with a fix")
-        self.assertEqual(msg.source, AbsolutePose.SOURCE_SENSOR_FUSION)
         self.assertLess(msg.position_accuracy, 0.1)
-        self.assertAlmostEqual(msg.pose.pose.position.x, 0.0, delta=0.05)
-        self.assertAlmostEqual(msg.pose.pose.position.y, 0.0, delta=0.05)
+        self.assertAlmostEqual(msg.x, 0.0, delta=0.05)
+        self.assertAlmostEqual(msg.y, 0.0, delta=0.05)
         # Standing still gives no course: the heading stays unaligned.
-        self.assertEqual(msg.orientation_valid, 0)
+        self.assertFalse(msg.heading_valid)
         odom = self.probe.wait(lambda: self.probe.ros.get("odom"))
         self.assertIsNotNone(odom, "no odom")
         self.assertEqual(odom.child_frame_id, "base_link")

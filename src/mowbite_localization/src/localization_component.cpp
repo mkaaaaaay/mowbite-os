@@ -3,9 +3,10 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <memory>
-#include <mowbite_msgs/msg/absolute_pose.hpp>
+#include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/position_jump.hpp>
+#include <mowbite_msgs/msg/robot_pose.hpp>
 #include <mowbite_msgs/srv/set_heading.hpp>
 #include <mowbite_msgs/srv/set_pose.hpp>
 #include <mutex>
@@ -25,7 +26,10 @@ namespace mowbite_localization {
 
 namespace {
 
-using mowbite_msgs::msg::AbsolutePose;
+using GnssMsg = mowbite_msgs::msg::GnssFix;
+using PoseMsg = mowbite_msgs::msg::RobotPose;
+static_assert(kSolutionRtkFixed == GnssMsg::RTK_FIXED);
+static_assert(kSolutionRtkFloat == GnssMsg::RTK_FLOAT);
 using mowbite_msgs::msg::PositionJump;
 using GyroMsg = sensor_msgs::msg::Imu;
 using OdometryMsg = nav_msgs::msg::Odometry;
@@ -65,7 +69,7 @@ class LocalizationNode : public rclcpp::Node {
     child_frame_id_ = declare_parameter("child_frame_id", "base_link");
     if (declare_parameter("publish_tf", true)) tf_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
-    pose_pub_ = create_publisher<AbsolutePose>("localization/pose", 10);
+    pose_pub_ = create_publisher<PoseMsg>("localization/pose", 10);
     odometry_pub_ = create_publisher<OdometryMsg>("odom", 10);
     jump_pub_ = create_publisher<PositionJump>("localization/jump", 10);
     params_pub_ = create_publisher<std_msgs::msg::String>("bridge/params", LatchedQos(1));
@@ -77,8 +81,8 @@ class LocalizationNode : public rclcpp::Node {
           std::lock_guard<std::mutex> lock(mutex_);
           estimator_.AddWheels(MonotonicSeconds(), msg->twist.linear.x, msg->twist.angular.z);
         });
-    gps_sub_ = create_subscription<AbsolutePose>(
-        "gps/absolute_pose", 10, [this](AbsolutePose::ConstSharedPtr msg) { OnGps(*msg); });
+    gps_sub_ = create_subscription<GnssMsg>(
+        "gps/absolute_pose", 10, [this](GnssMsg::ConstSharedPtr msg) { OnGps(*msg); });
     limits_sub_ = create_subscription<mowbite_msgs::msg::GpsLimits>(
         "logic/gps_limits", LatchedQos(1), [this](mowbite_msgs::msg::GpsLimits::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -144,16 +148,16 @@ class LocalizationNode : public rclcpp::Node {
     if (moved) Publish(now);
   }
 
-  void OnGps(const AbsolutePose& msg) {
+  void OnGps(const GnssMsg& msg) {
     std::lock_guard<std::mutex> lock(mutex_);
     GnssFix fix;
-    fix.flags = msg.flags;
-    fix.accuracy = msg.position_accuracy;
-    fix.x = msg.pose.pose.position.x;
-    fix.y = msg.pose.pose.position.y;
-    fix.motion_valid = msg.motion_vector_valid != 0;
-    fix.motion_x = msg.motion_vector.x;
-    fix.motion_y = msg.motion_vector.y;
+    fix.solution = msg.solution;
+    fix.accuracy = msg.accuracy;
+    fix.x = msg.x;
+    fix.y = msg.y;
+    fix.motion_valid = msg.velocity_valid;
+    fix.motion_x = msg.velocity_east;
+    fix.motion_y = msg.velocity_north;
     const FixResult result = estimator_.AddFix(fix, MonotonicSeconds());
     const GateConfig gate;
     if (result == FixResult::kRestarted && had_gps_) {
@@ -232,36 +236,34 @@ class LocalizationNode : public rclcpp::Node {
     const Covariance& p = estimator_.covariance();
     const rclcpp::Time stamp = this->now();
 
-    AbsolutePose msg;
+    PoseMsg msg;
     msg.header.stamp = stamp;
     msg.header.frame_id = frame_id_;
-    msg.source = AbsolutePose::SOURCE_SENSOR_FUSION;
-    msg.flags = AbsolutePose::FLAG_SENSOR_FUSION_DEAD_RECKONING;
-    if (estimator_.RecentGps(now)) msg.flags |= AbsolutePose::FLAG_SENSOR_FUSION_RECENT_ABSOLUTE_POSE;
-    msg.orientation_valid = estimator_.heading_valid() ? 1 : 0;
-    msg.motion_vector_valid = msg.orientation_valid;
+    msg.x = pose.x;
+    msg.y = pose.y;
+    msg.heading = WrapAngle(pose.heading);
+    msg.heading_valid = estimator_.heading_valid();
     msg.position_accuracy = static_cast<float>(estimator_.PositionAccuracy(now));
-    msg.orientation_accuracy = static_cast<float>(estimator_.HeadingAccuracy());
-    msg.pose.pose.position.x = pose.x;
-    msg.pose.pose.position.y = pose.y;
-    msg.pose.pose.orientation = YawQuaternion(pose.heading);
-    // x, y and yaw of the 6 x 6 covariance (x, y, z, roll, pitch, yaw).
-    const int index[3] = {0, 1, 5};
+    msg.heading_accuracy = static_cast<float>(estimator_.HeadingAccuracy());
+    msg.gnss_recent = estimator_.RecentGps(now);
+    msg.speed = estimator_.speed();
     for (int r = 0; r < 3; ++r) {
-      for (int c = 0; c < 3; ++c) msg.pose.covariance[6 * index[r] + index[c]] = p(r, c);
+      for (int c = 0; c < 3; ++c) msg.covariance[3 * r + c] = p(r, c);
     }
-    const double speed = estimator_.speed();
-    msg.motion_vector.x = speed * std::cos(pose.heading);
-    msg.motion_vector.y = speed * std::sin(pose.heading);
-    msg.vehicle_heading = pose.heading;
-    msg.motion_heading = speed < 0.0 ? WrapAngle(pose.heading + M_PI) : pose.heading;
     pose_pub_->publish(msg);
 
     OdometryMsg odometry;
     odometry.header = msg.header;
     odometry.child_frame_id = child_frame_id_;
-    odometry.pose = msg.pose;
-    odometry.twist.twist.linear.x = speed;
+    odometry.pose.pose.position.x = pose.x;
+    odometry.pose.pose.position.y = pose.y;
+    odometry.pose.pose.orientation = YawQuaternion(pose.heading);
+    // x, y and yaw of the 6 x 6 covariance (x, y, z, roll, pitch, yaw).
+    const int index[3] = {0, 1, 5};
+    for (int r = 0; r < 3; ++r) {
+      for (int c = 0; c < 3; ++c) odometry.pose.covariance[6 * index[r] + index[c]] = p(r, c);
+    }
+    odometry.twist.twist.linear.x = msg.speed;
     odometry.twist.twist.angular.z = estimator_.turn_rate();
     odometry_pub_->publish(odometry);
 
@@ -271,7 +273,7 @@ class LocalizationNode : public rclcpp::Node {
       tf.child_frame_id = child_frame_id_;
       tf.transform.translation.x = pose.x;
       tf.transform.translation.y = pose.y;
-      tf.transform.rotation = msg.pose.pose.orientation;
+      tf.transform.rotation = odometry.pose.pose.orientation;
       tf_->sendTransform(tf);
     }
   }
@@ -297,13 +299,13 @@ class LocalizationNode : public rclcpp::Node {
   std::string frame_id_;
   std::string child_frame_id_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_;
-  rclcpp::Publisher<AbsolutePose>::SharedPtr pose_pub_;
+  rclcpp::Publisher<PoseMsg>::SharedPtr pose_pub_;
   rclcpp::Publisher<OdometryMsg>::SharedPtr odometry_pub_;
   rclcpp::Publisher<PositionJump>::SharedPtr jump_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   rclcpp::Subscription<GyroMsg>::SharedPtr gyro_sub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr wheel_sub_;
-  rclcpp::Subscription<AbsolutePose>::SharedPtr gps_sub_;
+  rclcpp::Subscription<GnssMsg>::SharedPtr gps_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr params_sub_;
   rclcpp::Service<mowbite_msgs::srv::SetPose>::SharedPtr set_pose_srv_;

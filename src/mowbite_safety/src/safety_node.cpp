@@ -2,7 +2,7 @@
 #include <cmath>
 #include <geometry_msgs/msg/twist.hpp>
 #include <memory>
-#include <mowbite_msgs/msg/absolute_pose.hpp>
+#include <mowbite_msgs/msg/robot_pose.hpp>
 #include <mowbite_msgs/msg/drive_command.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
@@ -77,11 +77,10 @@ class SafetyNode : public rclcpp::Node {
         });
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
         "imu/data", rclcpp::SensorDataQoS(), [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) { OnImu(*msg); });
-    pose_sub_ = create_subscription<mowbite_msgs::msg::AbsolutePose>(
-        "localization/pose", 10, [this](mowbite_msgs::msg::AbsolutePose::ConstSharedPtr msg) {
+    pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
+        "localization/pose", 10, [this](mowbite_msgs::msg::RobotPose::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          filter_.OnPose(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->position_accuracy,
-                         msg->orientation_valid != 0, MonotonicSeconds());
+          filter_.OnPose(msg->x, msg->y, msg->position_accuracy, msg->heading_valid, MonotonicSeconds());
         });
     map_sub_ = create_subscription<std_msgs::msg::String>(
         "map/json", LatchedQos(), [this](std_msgs::msg::String::ConstSharedPtr msg) {
@@ -266,7 +265,7 @@ class SafetyNode : public rclcpp::Node {
   rclcpp::Subscription<HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
-  rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr pose_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr map_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::MapStatus>::SharedPtr map_status_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;

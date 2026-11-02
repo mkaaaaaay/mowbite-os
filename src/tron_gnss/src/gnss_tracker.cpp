@@ -51,14 +51,20 @@ std::optional<GnssPose> GnssTracker::Update(const NmeaMessage& message, double n
   if (!gga.lat_deg || !gga.lon_deg) return std::nullopt;
   GnssPose pose;
   switch (gga.quality) {
-    case static_cast<int>(FixQuality::kSingle): pose.accuracy_m = config_.accuracy_single_m; break;
-    case static_cast<int>(FixQuality::kDgps): pose.accuracy_m = config_.accuracy_dgps_m; break;
+    case static_cast<int>(FixQuality::kSingle):
+      pose.solution = Solution::kSingle;
+      pose.accuracy_m = config_.accuracy_single_m;
+      break;
+    case static_cast<int>(FixQuality::kDgps):
+      pose.solution = Solution::kDgps;
+      pose.accuracy_m = config_.accuracy_dgps_m;
+      break;
     case static_cast<int>(FixQuality::kRtkFixed): {
       std::optional<double> age = gga.correction_age_s;
       if (age && host_correction_age_s_) age = std::max(*age, *host_correction_age_s_);
       const bool before_host = host_required_ && !host_correction_age_s_;
       if (!before_host && age && *age <= config_.max_correction_age_s) {
-        pose.flags = kFlagRtk | kFlagRtkFixed;
+        pose.solution = Solution::kRtkFixed;
         pose.accuracy_m = config_.accuracy_rtk_fixed_m;
         break;
       }
@@ -73,11 +79,11 @@ std::optional<GnssPose> GnssTracker::Update(const NmeaMessage& message, double n
       [[fallthrough]];
     }
     case static_cast<int>(FixQuality::kRtkFloat):
-      pose.flags = kFlagRtk | kFlagRtkFloat;
+      pose.solution = Solution::kRtkFloat;
       pose.accuracy_m = config_.accuracy_rtk_float_m;
       break;
     case static_cast<int>(FixQuality::kDeadReckoning):
-      pose.flags = kFlagDeadReckoning;
+      pose.solution = Solution::kDeadReckoning;
       pose.accuracy_m = config_.accuracy_dead_reckoning_m;
       break;
     default: return std::nullopt;

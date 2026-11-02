@@ -7,12 +7,13 @@
 
 namespace mowbite_localization {
 
-// Flag of AbsolutePose for an RTK fixed solution.
-constexpr uint16_t kFlagRtkFixed = 2;
+// Kinds of solution as numbered in mowbite_msgs/GnssFix; only RTK fixed counts.
+constexpr uint8_t kSolutionRtkFloat = 3;
+constexpr uint8_t kSolutionRtkFixed = 4;
 
 // A GNSS position of the antenna in the map frame, with the velocity of the antenna if the receiver gave one.
 struct GnssFix {
-  uint16_t flags = 0;
+  uint8_t solution = 0;
   double accuracy = 0.0;
   double x = 0.0;
   double y = 0.0;

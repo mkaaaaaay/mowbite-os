@@ -17,9 +17,9 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <mowbite_msgs/action/follow_path.hpp>
-#include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
 #include <mowbite_msgs/msg/drive_command.hpp>
+#include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
@@ -27,12 +27,13 @@
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/outline.hpp>
 #include <mowbite_msgs/msg/position_jump.hpp>
+#include <mowbite_msgs/msg/robot_pose.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
 #include <mowbite_msgs/msg/rpc_error.hpp>
 #include <mowbite_msgs/msg/rpc_methods.hpp>
 #include <mowbite_msgs/msg/rpc_request.hpp>
 #include <mowbite_msgs/msg/rpc_response.hpp>
-#include <mowbite_msgs/msg/sensor_info.hpp>
+#include <mowbite_msgs/msg/sensor_spec.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
 #include <mowbite_msgs/srv/add_area.hpp>
 #include <mowbite_msgs/srv/drive_to.hpp>
@@ -64,6 +65,14 @@
 namespace mowbite_logic {
 
 namespace {
+
+using mowbite_msgs::msg::SensorSpec;
+static_assert(static_cast<uint8_t>(SensorMeaning::kUnknown) == SensorSpec::MEANING_UNKNOWN);
+static_assert(static_cast<uint8_t>(SensorMeaning::kVoltage) == SensorSpec::MEANING_VOLTAGE);
+static_assert(static_cast<uint8_t>(SensorMeaning::kCurrent) == SensorSpec::MEANING_CURRENT);
+static_assert(static_cast<uint8_t>(SensorMeaning::kTemperature) == SensorSpec::MEANING_TEMPERATURE);
+static_assert(static_cast<uint8_t>(SensorMeaning::kRevolutions) == SensorSpec::MEANING_REVOLUTIONS);
+static_assert(static_cast<uint8_t>(SensorMeaning::kDistance) == SensorSpec::MEANING_DISTANCE);
 
 rclcpp::QoS LatchedQos(size_t depth) {
   return rclcpp::QoS(rclcpp::KeepLast(depth)).reliable().transient_local();
@@ -251,7 +260,7 @@ class LogicNode : public rclcpp::Node {
 
     robot_state_pub_ = create_publisher<mowbite_msgs::msg::RobotState>("bridge/robot_state", 10);
     actions_pub_ = create_publisher<mowbite_msgs::msg::ActionList>("bridge/actions", LatchedQos(50));
-    sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorInfo>("bridge/sensor_info", LatchedQos(100));
+    sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorSpec>("bridge/sensor_info", LatchedQos(100));
     sensor_value_pub_ = create_publisher<mowbite_msgs::msg::SensorValue>("bridge/sensor_value", 100);
     publish_pub_ = create_publisher<mowbite_msgs::msg::MqttPublish>("bridge/publish", 100);
     // Every drive command goes to mowbite_safety (S2), the only writer of hw/cmd_vel, with its source: teleop while
@@ -315,17 +324,17 @@ class LogicNode : public rclcpp::Node {
 
     hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
         "hw/status", 10, [this](mowbite_msgs::msg::HardwareStatus::ConstSharedPtr msg) { OnHardwareStatus(*msg); });
-    pose_sub_ = create_subscription<mowbite_msgs::msg::AbsolutePose>(
-        "localization/pose", 10, [this](mowbite_msgs::msg::AbsolutePose::ConstSharedPtr msg) { OnPose(*msg); });
+    pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
+        "localization/pose", 10, [this](mowbite_msgs::msg::RobotPose::ConstSharedPtr msg) { OnPose(*msg); });
     // RTK fixed positions of the antenna for the course probe of undocking.
-    gnss_sub_ = create_subscription<mowbite_msgs::msg::AbsolutePose>(
-        "gps/absolute_pose", 10, [this](mowbite_msgs::msg::AbsolutePose::ConstSharedPtr msg) {
-          if ((msg->flags & mowbite_msgs::msg::AbsolutePose::FLAG_GPS_RTK_FIXED) == 0) return;
+    gnss_sub_ = create_subscription<mowbite_msgs::msg::GnssFix>(
+        "gps/absolute_pose", 10, [this](mowbite_msgs::msg::GnssFix::ConstSharedPtr msg) {
+          if (msg->solution != mowbite_msgs::msg::GnssFix::RTK_FIXED) return;
           bool undocking;
           {
             std::lock_guard<std::mutex> lock(mutex_);
             undocking = core_.Undocking();
-            core_.OnGnssFix(msg->pose.pose.position.x, msg->pose.pose.position.y);
+            core_.OnGnssFix(msg->x, msg->y);
           }
           if (undocking) Flush();
         });
@@ -401,20 +410,17 @@ class LogicNode : public rclcpp::Node {
         });
 
     for (const auto& sensor : core_.Sensors()) {
-      mowbite_msgs::msg::SensorInfo info;
-      info.sensor_id = sensor.id;
-      info.sensor_name = sensor.name;
-      info.value_type = sensor.value_type;
-      info.value_description = sensor.value_description;
-      info.unit = sensor.unit;
-      info.has_min_max = sensor.has_min_max;
-      info.min_value = sensor.min_value;
-      info.max_value = sensor.max_value;
-      info.has_critical_low = sensor.has_critical_low;
-      info.lower_critical_value = sensor.lower_critical_value;
-      info.has_critical_high = sensor.has_critical_high;
-      info.upper_critical_value = sensor.upper_critical_value;
-      sensor_info_pub_->publish(info);
+      mowbite_msgs::msg::SensorSpec spec;
+      spec.id = sensor.id;
+      spec.name = sensor.name;
+      spec.kind = sensor.text ? mowbite_msgs::msg::SensorSpec::KIND_TEXT : mowbite_msgs::msg::SensorSpec::KIND_NUMBER;
+      spec.meaning = static_cast<uint8_t>(sensor.meaning);
+      spec.unit = sensor.unit;
+      spec.min = sensor.min;
+      spec.max = sensor.max;
+      spec.critical_low = sensor.critical_low;
+      spec.critical_high = sensor.critical_high;
+      sensor_info_pub_->publish(spec);
     }
 
     state_timer_ = create_wall_timer(std::chrono::seconds(1), [this] { OnStateTimer(); });
@@ -501,14 +507,14 @@ class LogicNode : public rclcpp::Node {
     Flush();
   }
 
-  void OnPose(const mowbite_msgs::msg::AbsolutePose& msg) {
+  void OnPose(const mowbite_msgs::msg::RobotPose& msg) {
     PoseSnapshot pose;
-    pose.x = msg.pose.pose.position.x;
-    pose.y = msg.pose.pose.position.y;
-    pose.heading = msg.vehicle_heading;
+    pose.x = msg.x;
+    pose.y = msg.y;
+    pose.heading = msg.heading;
     pose.position_accuracy = msg.position_accuracy;
-    pose.orientation_accuracy = msg.orientation_accuracy;
-    pose.orientation_valid = msg.orientation_valid;
+    pose.orientation_accuracy = msg.heading_accuracy;
+    pose.orientation_valid = msg.heading_valid;
     std::lock_guard<std::mutex> lock(mutex_);
     core_.OnPose(pose);
     last_pose_ = MonotonicSeconds();
@@ -1164,9 +1170,9 @@ class LogicNode : public rclcpp::Node {
     mowbite_msgs::msg::RobotState msg;
     msg.current_state = state.state;
     msg.current_sub_state = state.sub_state;
-    msg.current_area = static_cast<int16_t>(state.current_area);
-    msg.current_path = static_cast<int16_t>(state.current_path);
-    msg.current_path_index = static_cast<int16_t>(state.current_path_index);
+    msg.current_area = state.current_area;
+    msg.current_path = state.current_path;
+    msg.current_path_index = state.current_path_index;
     msg.battery_percentage = state.battery_percentage;
     msg.emergency = state.emergency;
     msg.emergency_reason = static_cast<uint32_t>(state.emergency_reason);
@@ -1940,11 +1946,11 @@ class LogicNode : public rclcpp::Node {
       mowbite_msgs::msg::ActionList msg;
       msg.node_prefix = group.prefix;
       for (const auto& action : group.actions) {
-        mowbite_msgs::msg::ActionInfo info;
-        info.action_id = action.id;
-        info.action_name = action.name;
-        info.enabled = action.enabled;
-        msg.actions.push_back(info);
+        mowbite_msgs::msg::ActionEntry entry;
+        entry.id = action.id;
+        entry.name = action.name;
+        entry.enabled = action.enabled;
+        msg.actions.push_back(entry);
       }
       actions_pub_->publish(msg);
     }
@@ -2042,7 +2048,7 @@ class LogicNode : public rclcpp::Node {
 
   rclcpp::Publisher<mowbite_msgs::msg::RobotState>::SharedPtr robot_state_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::ActionList>::SharedPtr actions_pub_;
-  rclcpp::Publisher<mowbite_msgs::msg::SensorInfo>::SharedPtr sensor_info_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::SensorSpec>::SharedPtr sensor_info_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
@@ -2065,8 +2071,8 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr rpc_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr map_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
-  rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_sub_;
-  rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr gnss_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr pose_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::GnssFix>::SharedPtr gnss_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::PositionJump>::SharedPtr jump_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::MapStatus>::SharedPtr map_status_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr action_sub_;

@@ -29,7 +29,7 @@ from geometry_msgs.msg import Twist
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix
-from mowbite_msgs.msg import AbsolutePose
+from mowbite_msgs.msg import RobotPose
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
@@ -112,11 +112,11 @@ class Probe:
         # (stamp s, x, y, yaw) of localization/pose, and the newest message
         self.estimates = []
         self.pose = None
-        # (wall time, truth dict, estimate (x, y, yaw) or None, the AbsolutePose of that moment)
+        # (wall time, truth dict, estimate (x, y, yaw) or None, the RobotPose of that moment)
         self.samples = []
         self.setpoint = (0.0, 0.0)
         self.node = rclpy.create_node("localization_quality_probe")
-        self.node.create_subscription(AbsolutePose, "localization/pose", self._pose, 50)
+        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 50)
         self.cmd_pub = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
         # The logic is not part of this launch: the probe sends the antenna offset of the mower.
         self.geometry = self.node.create_publisher(String, "bridge/params", LATCHED)
@@ -136,11 +136,11 @@ class Probe:
         # A stamp far from the arrival is no clock of this host: the arrival stands in.
         if abs(stamp - now) > 0.5:
             stamp = now
-        yaw = 2.0 * math.atan2(msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
+        yaw = msg.heading
         with self.lock:
             self.pose = msg
             if not self.estimates or stamp > self.estimates[-1][0]:
-                self.estimates.append((stamp, msg.pose.pose.position.x, msg.pose.pose.position.y, yaw))
+                self.estimates.append((stamp, msg.x, msg.y, yaw))
 
     def estimate_at(self, t):
         """The estimate at wall time t, linear between the two around it."""
@@ -273,13 +273,13 @@ class TestLocalizationQuality(unittest.TestCase):
         p = self.probe
         good = p.wait(lambda: p.pose if p.pose is not None and p.pose.position_accuracy < 0.1 else None, 60)
         self.assertIsNotNone(good, "no localization/pose with a fix")
-        self.assertEqual(good.orientation_valid, 0)
+        self.assertFalse(good.heading_valid)
 
     def test_02_alignment_from_the_start_heading(self):
         p = self.probe
         start = p.truth()
         t0 = time.time()
-        found = p.straight(30.0, until=lambda s: s[3] is not None and s[3].orientation_valid)
+        found = p.straight(30.0, until=lambda s: s[3] is not None and s[3].heading_valid)
         aligned = found[0] - t0 if found else None
         distance = math.hypot(found[1]["x"] - start["x"], found[1]["y"] - start["y"]) if found else None
         heading = math.degrees(abs(errors(found)[1])) if found and found[2] else None
@@ -341,7 +341,7 @@ class TestLocalizationQuality(unittest.TestCase):
         found = p.straight(40.0, until=good) and run[0]
         aligned = found[0] - t0 if found else None
         distance = math.hypot(found[1]["x"] - start["x"], found[1]["y"] - start["y"]) if found else None
-        valid = p.pose.orientation_valid
+        valid = p.pose.heading_valid
         p.stop_driving()
         report("align_wrong_s", aligned, "s")
         report("align_wrong_m", distance, "m")

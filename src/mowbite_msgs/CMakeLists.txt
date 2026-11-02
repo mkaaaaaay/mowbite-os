@@ -10,15 +10,16 @@ find_package(diagnostic_msgs REQUIRED)
 find_package(action_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/AbsolutePose.msg"
+  "msg/GnssFix.msg"
+  "msg/RobotPose.msg"
   "msg/HardwareCapabilities.msg"
   "msg/HardwareStatus.msg"
   "msg/MapStatus.msg"
   "msg/MotorState.msg"
   "msg/RobotState.msg"
-  "msg/SensorInfo.msg"
+  "msg/SensorSpec.msg"
   "msg/SensorValue.msg"
-  "msg/ActionInfo.msg"
+  "msg/ActionEntry.msg"
   "msg/ActionList.msg"
   "msg/RpcMethods.msg"
   "msg/RpcRequest.msg"
@@ -44,8 +45,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/FollowPath.action"
   DEPENDENCIES builtin_interfaces std_msgs geometry_msgs diagnostic_msgs action_msgs
 )
-
-install(FILES LICENSE.xbot_monitoring DESTINATION share/${PROJECT_NAME})
 
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()

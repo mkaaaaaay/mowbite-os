@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -21,16 +22,16 @@
 #include "mowbite_bridge/event_log.h"
 #include "mowbite_bridge/pose_window.h"
 #include "mowbite_bridge/track.h"
-#include "mowbite_msgs/msg/absolute_pose.hpp"
 #include "mowbite_msgs/msg/action_list.hpp"
 #include "mowbite_msgs/msg/hardware_capabilities.hpp"
 #include "mowbite_msgs/msg/mqtt_publish.hpp"
+#include "mowbite_msgs/msg/robot_pose.hpp"
 #include "mowbite_msgs/msg/robot_state.hpp"
 #include "mowbite_msgs/msg/rpc_error.hpp"
 #include "mowbite_msgs/msg/rpc_methods.hpp"
 #include "mowbite_msgs/msg/rpc_request.hpp"
 #include "mowbite_msgs/msg/rpc_response.hpp"
-#include "mowbite_msgs/msg/sensor_info.hpp"
+#include "mowbite_msgs/msg/sensor_spec.hpp"
 #include "mowbite_msgs/msg/sensor_value.hpp"
 
 namespace mowbite_bridge {
@@ -58,30 +59,35 @@ rclcpp::QoS Latched(std::size_t depth) {
   return rclcpp::QoS(depth).reliable().transient_local();
 }
 
-// value_description of SensorInfo; distances (7) count as unknown for the app.
-Meaning MeaningOf(uint8_t description) {
-  switch (description) {
-    case 1: return Meaning::kTemperature;
-    case 4: return Meaning::kVoltage;
-    case 5: return Meaning::kCurrent;
-    case 8: return Meaning::kRevolutions;
+// Distances count as unknown for the app.
+Meaning MeaningOf(uint8_t meaning) {
+  switch (meaning) {
+    case msg::SensorSpec::MEANING_VOLTAGE: return Meaning::kVoltage;
+    case msg::SensorSpec::MEANING_CURRENT: return Meaning::kCurrent;
+    case msg::SensorSpec::MEANING_TEMPERATURE: return Meaning::kTemperature;
+    case msg::SensorSpec::MEANING_REVOLUTIONS: return Meaning::kRevolutions;
     default: return Meaning::kUnknown;
   }
 }
 
-SensorDescription Describe(const msg::SensorInfo& info) {
+std::optional<double> Limit(double value) {
+  if (std::isfinite(value)) return value;
+  return std::nullopt;
+}
+
+SensorDescription Describe(const msg::SensorSpec& spec) {
   SensorDescription s;
-  s.id = info.sensor_id;
-  s.name = info.sensor_name;
-  s.is_text = info.value_type == msg::SensorInfo::TYPE_STRING;
-  s.meaning = MeaningOf(info.value_description);
-  s.unit = info.unit;
-  if (info.has_min_max) {
-    s.min = info.min_value;
-    s.max = info.max_value;
+  s.id = spec.id;
+  s.name = spec.name;
+  s.is_text = spec.kind == msg::SensorSpec::KIND_TEXT;
+  s.meaning = MeaningOf(spec.meaning);
+  s.unit = spec.unit;
+  if (std::isfinite(spec.min) && std::isfinite(spec.max)) {
+    s.min = spec.min;
+    s.max = spec.max;
   }
-  if (info.has_critical_low) s.critical_low = info.lower_critical_value;
-  if (info.has_critical_high) s.critical_high = info.upper_critical_value;
+  s.critical_low = Limit(spec.critical_low);
+  s.critical_high = Limit(spec.critical_high);
   return s;
 }
 
@@ -151,8 +157,8 @@ class BridgeNode : public rclcpp::Node {
     Subscribe<msg::RobotState>("bridge/robot_state", rclcpp::QoS(10), [this](const msg::RobotState& m) {
       core_.OnRobotState(View(m));
     });
-    Subscribe<msg::SensorInfo>("bridge/sensor_info", Latched(100), [this](const msg::SensorInfo& m) {
-      text_sensors_[m.sensor_id] = m.value_type == msg::SensorInfo::TYPE_STRING;
+    Subscribe<msg::SensorSpec>("bridge/sensor_info", Latched(100), [this](const msg::SensorSpec& m) {
+      text_sensors_[m.id] = m.kind == msg::SensorSpec::KIND_TEXT;
       core_.OnSensor(Describe(m));
     });
     Subscribe<msg::SensorValue>("bridge/sensor_value", rclcpp::QoS(100), [this](const msg::SensorValue& m) {
@@ -162,7 +168,7 @@ class BridgeNode : public rclcpp::Node {
     });
     Subscribe<msg::ActionList>("bridge/actions", Latched(50), [this](const msg::ActionList& m) {
       std::vector<ActionItem> items;
-      for (const auto& a : m.actions) items.push_back({a.action_id, a.action_name, a.enabled});
+      for (const auto& a : m.actions) items.push_back({a.id, a.name, a.enabled});
       core_.OnActions(m.node_prefix, items);
     });
     Subscribe<std_msgs::msg::String>("bridge/params", Latched(50),
@@ -179,8 +185,8 @@ class BridgeNode : public rclcpp::Node {
     Subscribe<msg::RpcError>("bridge/rpc/error", rclcpp::QoS(100), [this](const msg::RpcError& m) {
       core_.OnRpcError(m.id, m.code, m.message, m.data);
     });
-    Subscribe<msg::AbsolutePose>("localization/pose", rclcpp::QoS(10), [this](const msg::AbsolutePose& m) {
-      const PlanePose pose{m.pose.pose.position.x, m.pose.pose.position.y, m.vehicle_heading};
+    Subscribe<msg::RobotPose>("localization/pose", rclcpp::QoS(10), [this](const msg::RobotPose& m) {
+      const PlanePose pose{m.x, m.y, m.heading};
       if (std::isfinite(pose.x) && std::isfinite(pose.y) && std::isfinite(pose.heading)) window_.Add(pose);
     });
     Subscribe<std_msgs::msg::String>("map/json", Latched(1),

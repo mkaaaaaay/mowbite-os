@@ -18,7 +18,7 @@ import launch_testing.actions
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
-from mowbite_msgs.msg import AbsolutePose, ActionList, HardwareStatus, MapStatus, MqttPublish
+from mowbite_msgs.msg import ActionList, HardwareStatus, MapStatus, MqttPublish, RobotPose
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
@@ -56,7 +56,7 @@ class Probe:
         self.node = rclpy.create_node("recording_probe")
         self.datum_pub = self.node.create_publisher(NavSatFix, "gps/datum", LATCHED)
         self.hw_pub = self.node.create_publisher(HardwareStatus, "hw/status", 10)
-        self.pose_pub = self.node.create_publisher(AbsolutePose, "localization/pose", 10)
+        self.pose_pub = self.node.create_publisher(RobotPose, "localization/pose", 10)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.node.create_subscription(String, "map/json", self._map, LATCHED)
         self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
@@ -94,7 +94,7 @@ class Probe:
     def _actions(self, msg):
         with self.lock:
             for a in msg.actions:
-                self.actions[msg.node_prefix + "/" + a.action_id] = a.enabled
+                self.actions[msg.node_prefix + "/" + a.id] = a.enabled
 
     def _publish(self, msg):
         with self.lock:
@@ -109,12 +109,12 @@ class Probe:
         self.datum_pub.publish(msg)
 
     def pose(self, x, y, accuracy=0.02):
-        msg = AbsolutePose()
-        msg.pose.pose.position.x = x
-        msg.pose.pose.position.y = y
+        msg = RobotPose()
+        msg.x = x
+        msg.y = y
         msg.position_accuracy = accuracy
-        msg.orientation_accuracy = 0.05
-        msg.orientation_valid = 1
+        msg.heading_accuracy = 0.05
+        msg.heading_valid = True
         self.pose_pub.publish(msg)
 
     def drive(self, corners):

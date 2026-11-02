@@ -25,7 +25,7 @@ import rclpy
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix
-from mowbite_msgs.msg import AbsolutePose, MqttPublish, NtripStatus, RpcError, RpcMethods, RpcRequest, RpcResponse
+from mowbite_msgs.msg import GnssFix, MqttPublish, NtripStatus, RpcError, RpcMethods, RpcRequest, RpcResponse
 from mowbite_msgs.msg import SensorValue
 from rcl_interfaces.msg import Log
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -44,8 +44,8 @@ USER = "rover.of.the.test"
 PASSWORD = "pw.of#the.test"
 WRONG = "not.the#pw"
 MAX_AGE = 5.0
-FIXED = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FIXED
-FLOAT = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FLOAT
+FIXED = GnssFix.RTK_FIXED
+FLOAT = GnssFix.RTK_FLOAT
 
 
 # The CRC of fake_tron, so there is one in the sim.
@@ -223,7 +223,7 @@ class Probe:
         self.answers = {}
         self.node = rclpy.create_node("ntrip_probe")
         self.node.create_subscription(NtripStatus, "gnss/ntrip_status", self._status, 10)
-        self.node.create_subscription(AbsolutePose, "gps/absolute_pose", self._pose, 10)
+        self.node.create_subscription(GnssFix, "gps/absolute_pose", self._pose, 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.node.create_subscription(SensorValue, "bridge/sensor_value", self._sensor, 100)
         self.node.create_subscription(String, "gnss/gga", lambda m: None, 10)
@@ -354,7 +354,7 @@ class TestNtrip(unittest.TestCase):
     def test_1_ntrip2_gives_rtk_fixed(self):
         p = self.probe
         self.assertTrue(self.connected_with_frames(), f"status: {p.status}")
-        self.assertTrue(p.wait(lambda p: p.pose and p.pose.flags == FIXED, 20), f"pose flags {p.pose and p.pose.flags}")
+        self.assertTrue(p.wait(lambda p: p.pose and p.pose.solution == FIXED, 20), f"pose solution {p.pose and p.pose.solution}")
         attempt = [a for a in CASTER.attempts() if a[3]][0]
         self.assertEqual(attempt[1:], ("V2", "Ntrip/2.0", True))
         self.assertIn("User-Agent: NTRIP ", CASTER.requests[0])
@@ -382,7 +382,7 @@ class TestNtrip(unittest.TestCase):
             CASTER.down = True
         start = time.time()
         # Past the age limit the fix counts as float, although the receiver still says fixed.
-        self.assertTrue(p.wait(lambda p: p.pose and p.pose.flags == FLOAT, MAX_AGE + 6), "still fixed")
+        self.assertTrue(p.wait(lambda p: p.pose and p.pose.solution == FLOAT, MAX_AGE + 6), "still fixed")
         lost = p.wait(lambda p: [e for e in p.corrections_events(since) if e["reason"] == "LOST"], MAX_AGE + 6)
         self.assertTrue(lost, p.corrections_events(since))
         self.assertEqual((lost[0]["severity"], lost[0]["resume"], lost[0]["limit"]), ("warning", "auto", MAX_AGE))
@@ -398,7 +398,7 @@ class TestNtrip(unittest.TestCase):
         with CASTER.lock:
             CASTER.down = False
         self.assertTrue(self.connected_with_frames(15), f"status: {p.status}")
-        self.assertTrue(p.wait(lambda p: p.pose and p.pose.flags == FIXED, 15), "no fix after the outage")
+        self.assertTrue(p.wait(lambda p: p.pose and p.pose.solution == FIXED, 15), "no fix after the outage")
         events = [e["reason"] for e in p.corrections_events(since)]
         self.assertEqual(events, ["LOST", "RESTORED"])
         # The board came back on with the next RTCM, without a reset (it fell back while nothing was wanted).
@@ -432,7 +432,7 @@ class TestNtrip(unittest.TestCase):
         v1 = [r for r in CASTER.requests if r.startswith("GET /V1 ")][-1]
         self.assertIn("HTTP/1.0", v1.split("\r\n")[0])
         self.assertNotIn("Ntrip-Version", v1)
-        self.assertTrue(p.wait(lambda p: p.pose and p.pose.flags == FIXED, 15))
+        self.assertTrue(p.wait(lambda p: p.pose and p.pose.solution == FIXED, 15))
         # Another mountpoint in the file by hand.
         self.assert_source_changed(since, "V2", "V1")
 
