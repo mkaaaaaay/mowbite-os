@@ -719,6 +719,24 @@ TEST(E4GnssLatency, LateFixesDoNotHoldTheEstimateBack) {
   EXPECT_LT(std::abs(known.HeadingError()), 0.2 * kDeg);
 }
 
+// E4: fixes later than gnss_latency say do not hold a turn back, on the spot or on an arc, with the wheels reporting
+// too little (the docking rate of 02.11.: about 2 degrees after the arcs and the turn in front of the station).
+TEST(E4GnssLatency, LateFixesDoNotHoldTurnsBack) {
+  for (const double turn : {0.25, -0.25}) {
+    World w;
+    w.gnss_delay = 0.1;
+    w.odom_scale = 0.94;
+    w.Aligned();
+    w.Run(2.0, 0.3, 0.0);
+    ASSERT_LT(std::abs(w.HeadingError()), 0.3 * kDeg);
+    w.Run(12.6, 0.11, turn);
+    EXPECT_LT(std::abs(w.HeadingError()), 0.2 * kDeg) << turn;
+    w.Run(12.6, 0.0, turn);
+    w.Run(0.4, 0.0, 0.0);
+    EXPECT_LT(std::abs(w.HeadingError()), 0.2 * kDeg) << turn;
+  }
+}
+
 // The covariance fits the errors: noise as the filter assumes it, the normalized error squared averages about 3.
 TEST(Consistency, CovarianceMatchesTheErrorsOfRandomRuns) {
   std::mt19937 rng(7);

@@ -147,7 +147,8 @@ void Estimator::Fuse(const Eigen::Vector2d& antenna, double accuracy, const Mome
   const State before = filter_.state();
   const Eigen::Vector2d innovation = antenna - AntennaPosition(then.state, lever_);
   const double sigma = std::max(accuracy, 0.005);
-  filter_.UpdatePosition(innovation, AntennaPositionJacobian(then.state, lever_), sigma * sigma);
+  filter_.UpdatePosition(innovation, AntennaPositionJacobian(then.state, lever_), sigma * sigma,
+                         std::abs(turn_rate_) <= config_.steady_turn_rate);
   ShiftHistory(before);
   accuracy_.OnFix(accuracy, t);
   last_fix_ = LastFix{antenna, t};
@@ -183,7 +184,7 @@ bool Estimator::Course(const GnssFix& fix, const Moment& then, double t) {
       return true;
     }
   }
-  if (!heading_valid_) return false;
+  if (!heading_valid_ || std::abs(turn_rate_) > config_.steady_turn_rate) return false;
   const double difference = WrapAngle(*heading - then.state(2));
   if (std::abs(difference) > std::max(config_.heading_reset_angle, 3.0 * std::sqrt(heading_variance + variance))) {
     return false;

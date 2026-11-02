@@ -34,8 +34,9 @@ class PoseFilter {
   // Moves distance m along the mean heading of a turn by turn rad; gyro_time s of gyro integration add their noise.
   void Predict(double distance, double turn, double gyro_time);
   // A position of the antenna: innovation is the measured minus the expected position, jacobian the one of the
-  // expected position, variance that of each axis.
-  void UpdatePosition(const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian, double variance);
+  // expected position, variance that of each axis. Without correct_heading only the position moves.
+  void UpdatePosition(const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian, double variance,
+                      bool correct_heading = true);
   // A heading: innovation is the measured minus the expected heading.
   void UpdateHeading(double innovation, double variance);
   // Sets the position and its variance, keeps the heading; the two are no longer correlated.
@@ -51,7 +52,7 @@ class PoseFilter {
  private:
   template <int N>
   void Update(const Eigen::Matrix<double, N, 1>& innovation, const Eigen::Matrix<double, N, 3>& jacobian,
-              const Eigen::Matrix<double, N, N>& noise);
+              const Eigen::Matrix<double, N, N>& noise, bool correct_heading = true);
 
   FilterNoise noise_;
   State state_ = State::Zero();

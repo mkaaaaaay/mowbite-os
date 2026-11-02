@@ -50,9 +50,10 @@ void PoseFilter::Predict(double distance, double turn, double gyro_time) {
 
 template <int N>
 void PoseFilter::Update(const Eigen::Matrix<double, N, 1>& innovation, const Eigen::Matrix<double, N, 3>& jacobian,
-                        const Eigen::Matrix<double, N, N>& noise) {
+                        const Eigen::Matrix<double, N, N>& noise, bool correct_heading) {
   const Eigen::Matrix<double, N, N> s = jacobian * covariance_ * jacobian.transpose() + noise;
-  const Eigen::Matrix<double, 3, N> gain = covariance_ * jacobian.transpose() * s.inverse();
+  Eigen::Matrix<double, 3, N> gain = covariance_ * jacobian.transpose() * s.inverse();
+  if (!correct_heading) gain.row(2).setZero();
   const Covariance keep = Covariance::Identity() - gain * jacobian;
   covariance_ = keep * covariance_ * keep.transpose() + gain * noise * gain.transpose();
   covariance_ = 0.5 * (covariance_ + covariance_.transpose());
@@ -60,8 +61,9 @@ void PoseFilter::Update(const Eigen::Matrix<double, N, 1>& innovation, const Eig
   state_(2) = WrapAngle(state_(2));
 }
 
-void PoseFilter::UpdatePosition(const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian, double variance) {
-  Update<2>(innovation, jacobian, Eigen::Matrix2d::Identity() * variance);
+void PoseFilter::UpdatePosition(const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian, double variance,
+                                bool correct_heading) {
+  Update<2>(innovation, jacobian, Eigen::Matrix2d::Identity() * variance, correct_heading);
 }
 
 void PoseFilter::UpdateHeading(double innovation, double variance) {

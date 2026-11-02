@@ -105,6 +105,20 @@ TEST(Update, TheLeverMakesTheHeadingObservable) {
   EXPECT_NEAR(filter.state()(1), 0.0, 0.002);
 }
 
+TEST(Update, WithoutCorrectHeadingOnlyThePositionMoves) {
+  PoseFilter filter({});
+  Covariance covariance = Eigen::Vector3d(0.01, 0.01, 0.01).asDiagonal();
+  covariance(1, 2) = covariance(2, 1) = 0.005;
+  filter.Reset(State(0.0, 0.0, 0.0), covariance);
+  const Eigen::Vector2d lever(0.5, 0.0);
+  filter.UpdatePosition(Eigen::Vector2d(0.0, 0.05), AntennaPositionJacobian(filter.state(), lever), 1e-4, false);
+  EXPECT_GT(filter.state()(1), 0.01);
+  EXPECT_DOUBLE_EQ(filter.state()(2), 0.0);
+  EXPECT_DOUBLE_EQ(filter.covariance()(2, 2), 0.01);
+  EXPECT_LT(filter.covariance()(1, 1), 0.01);
+  EXPECT_GT(filter.covariance().determinant(), 0.0);
+}
+
 TEST(Update, HeadingWrapsAcrossPi) {
   PoseFilter filter({});
   filter.Reset(State(0.0, 0.0, M_PI - 0.05), Covariance::Identity() * 0.01);
