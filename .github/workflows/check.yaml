@@ -1,0 +1,94 @@
+# Unit tests natively on arm64 (the mowers) for every push that changes the code, on amd64 too for main;
+# the app interface check against the simulation for main.
+name: check
+
+on:
+  push:
+    paths: ['src/**', 'docker/**', '.github/**']
+  workflow_dispatch:
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ github.ref == 'refs/heads/main' && fromJSON('["arm64", "amd64"]') || fromJSON('["arm64"]') }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/dev-image
+        with:
+          planner-key: ${{ secrets.PLANNER_DEPLOY_KEY }}
+
+      - name: Build and run the unit tests
+        run: |
+          mkdir -p out
+          docker run --rm -v "$PWD/src:/ws/src:ro" -v "$PWD/out:/out" mowbite-os-dev:jazzy bash -c '
+            . /opt/ros/jazzy/setup.sh && . /opt/mowbite_planner/setup.sh && cd /ws
+            colcon build --packages-skip mowbite_sim --event-handlers console_direct+ \
+              --cmake-args -DCMAKE_BUILD_TYPE=Release 2>&1 | tee /out/build.txt
+            test "${PIPESTATUS[0]}" -eq 0 || exit 1
+            colcon test --packages-skip mowbite_sim --return-code-on-test-failure > /out/test.txt 2>&1; rc=$?
+            colcon test-result | tee /out/result.txt
+            exit $rc'
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### unit tests ${{ matrix.arch }}"
+            echo "- compiler warnings: $(grep -c 'warning:' out/build.txt 2>/dev/null || true)"
+            echo "- $(grep '^Summary:' out/result.txt 2>/dev/null || echo 'no test result')"
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -B2 -A6 'warning:' out/build.txt 2>/dev/null | head -60 || true
+
+  app-check:
+    # main and, until this workflow is in main, the branch that brings it
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/os-image' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/dev-image
+        with:
+          planner-key: ${{ secrets.PLANNER_DEPLOY_KEY }}
+
+      - name: Start the simulation
+        run: |
+          docker compose -f docker/sim/compose.yaml up -d --build mosquitto mowbite_os
+          timeout 180 docker exec omtron-mowbite_os-1 mosquitto_sub -h 127.0.0.1 -t robot_state/json -C 1 > /dev/null
+
+      # On a freshly started simulation only: it checks the state since the start.
+      - name: App interface check
+        run: |
+          docker exec omtron-mowbite_os-1 bash -c 'source /ws/install/setup.bash && python3 \
+            /ws/src/mowbite_sim/test/app_interface_check.py --host 127.0.0.1 --port 1883 --target mowbite-os \
+            --write --sim-log /tmp/mowbite_sim_rx.jsonl' > app_check.json 2> app_check.txt && rc=0 || rc=$?
+          cat app_check.txt
+          {
+            echo "### app interface check"
+            echo "- exit $rc, PASS $(grep -c '^PASS' app_check.txt), FAIL $(grep -c '^FAIL' app_check.txt), SKIP $(grep -c '^SKIP' app_check.txt)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Logs of the simulation
+        if: failure()
+        run: docker compose -f docker/sim/compose.yaml logs --tail 300 mowbite_os
+
+      - name: Stop the simulation
+        if: always()
+        run: docker compose -f docker/sim/compose.yaml down -v
