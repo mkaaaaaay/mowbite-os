@@ -160,7 +160,12 @@ TEST(BridgeFuzz, NoInputThrowsAndEveryAnswerIsJson) {
                       false);
       }
     });
-    for (const auto& msg : core.Take().mqtt) {
+    const Outbox out = core.Take();
+    // ROS strings never carry a NUL byte.
+    for (const auto& text : out.actions) ASSERT_EQ(text.find('\0'), std::string::npos);
+    for (const auto& r : out.requests) ASSERT_EQ(r.id.find('\0'), std::string::npos);
+    for (const auto& r : out.requests) ASSERT_EQ(r.params.find('\0'), std::string::npos);
+    for (const auto& msg : out.mqtt) {
       if (msg.topic != "rpc/response") continue;
       ++answers;
       ASSERT_EQ(CleanUtf8(msg.payload), msg.payload);

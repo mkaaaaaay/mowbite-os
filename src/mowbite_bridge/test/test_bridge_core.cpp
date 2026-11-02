@@ -187,6 +187,16 @@ TEST_F(Core, ActionTextAndTeleopGoToTheNodes) {
   EXPECT_TRUE(out.mqtt.empty());
 }
 
+TEST_F(Core, ActionWithANulByteIsDropped) {
+  core_.OnMqtt("action", std::string("mower_logic/a\0b", 15), false);
+  core_.OnMqtt("action", "mower_logic/a", false);
+  const Outbox out = core_.Take();
+  EXPECT_EQ(out.actions, (std::vector<std::string>{"mower_logic/a"}));
+  ASSERT_EQ(out.logs.size(), 1u);
+  EXPECT_EQ(out.logs[0].level, kLogWarn);
+  EXPECT_EQ(out.logs[0].text, "Bridge: an action with a NUL byte was dropped");
+}
+
 // B7
 TEST_F(Core, RequestErrorsAreAnsweredAndMetaNever) {
   EXPECT_EQ(Ask(core_, "{broken")["error"]["code"], kParseError);
@@ -244,6 +254,14 @@ TEST_F(Core, MethodsOfTheNodesAreForwardedAsTheyCame) {
   EXPECT_EQ(out.requests[0].id, "7");
   EXPECT_EQ(out.requests[1].params, "");
   EXPECT_EQ(out.requests[1].id, "");
+
+  // An id with a NUL byte is refused; the node never sees the request.
+  core_.OnMqtt("rpc/request", R"({"jsonrpc":"2.0","method":"params.set","id":"a\u0000b"})", false);
+  out = core_.Take();
+  EXPECT_TRUE(out.requests.empty());
+  ASSERT_EQ(out.mqtt.size(), 1u);
+  EXPECT_EQ(out.mqtt[0].payload,
+            R"({"jsonrpc":"2.0","error":{"code":-32600,"message":"The id must not contain a NUL byte"},"id":"a\u0000b"})");
 
   // An empty list removes the node's methods.
   core_.OnRpcMethods("mowbite_planner", {});

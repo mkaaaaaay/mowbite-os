@@ -100,7 +100,12 @@ void BridgeCore::OnMqtt(const std::string& topic, std::string_view payload, bool
   if (retained) return;
   Guard("MQTT input", [&] {
     if (topic == "action") {
-      out_.actions.push_back(CleanUtf8(payload));
+      // A NUL byte breaks the ROS publisher for good; no action id has one.
+      if (payload.find('\0') != std::string_view::npos) {
+        Log(kLogWarn, "Bridge: an action with a NUL byte was dropped");
+      } else {
+        out_.actions.push_back(CleanUtf8(payload));
+      }
     } else if (topic == "teleop") {
       if (auto teleop = ReadTeleop(payload)) out_.teleop.push_back(*teleop);
     } else if (topic == kRequestTopic) {
@@ -125,6 +130,11 @@ void BridgeCore::Answer(const RpcCall& call) {
       }
       return;
     case Route::kNode:
+      // Like an action: the id goes out as a ROS string.
+      if (call.id.is_string() && call.id.get<std::string>().find('\0') != std::string::npos) {
+        Send(kResponseTopic, ErrorReply(call.id, kInvalidRequest, "The id must not contain a NUL byte"), false);
+        return;
+      }
       out_.requests.push_back({call.method, call.params.is_null() ? "" : call.params.dump(),
                                call.id.is_string() ? call.id.get<std::string>() : ""});
       return;
