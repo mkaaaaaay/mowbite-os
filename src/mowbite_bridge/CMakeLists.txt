@@ -23,6 +23,15 @@ target_include_directories(mowbite_bridge_core PUBLIC
 target_link_libraries(mowbite_bridge_core nlohmann_json::nlohmann_json)
 set_target_properties(mowbite_bridge_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# The new core, replacing the one above step by step.
+add_library(mowbite_bridge_next STATIC src/text.cpp src/json_rpc.cpp src/method_table.cpp src/app_json.cpp
+  src/param_table.cpp src/event_builder.cpp src/warn_log.cpp src/bridge_core.cpp)
+target_include_directories(mowbite_bridge_next PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(mowbite_bridge_next nlohmann_json::nlohmann_json)
+set_target_properties(mowbite_bridge_next PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_library(mowbite_bridge_component SHARED src/bridge_node.cpp)
 target_link_libraries(mowbite_bridge_component mowbite_bridge_core PahoMqttCpp::paho-mqttpp3)
 ament_target_dependencies(mowbite_bridge_component rclcpp rclcpp_components rcl_interfaces geometry_msgs std_msgs mowbite_msgs)
@@ -42,6 +51,9 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(mowbite_bridge_test test/test_monitor.cpp test/test_position.cpp)
   target_link_libraries(mowbite_bridge_test mowbite_bridge_core)
+  ament_add_gtest(mowbite_bridge_next_test test/test_text.cpp test/test_json_rpc.cpp test/test_app_json.cpp
+    test/test_param_table.cpp test/test_warn_log.cpp test/test_bridge_core.cpp test/test_bridge_fuzz.cpp)
+  target_link_libraries(mowbite_bridge_next_test mowbite_bridge_next)
 endif()
 
 ament_export_targets(export_mowbite_bridge HAS_LIBRARY_TARGET)
