@@ -95,7 +95,7 @@ jobs:
             echo "- image: \`$TAG\`"
             echo "- size unpacked: $((size / 1000000)) MB, saved and gzipped: $((packed / 1000000)) MB"
             echo "- packages: $(grep -cE '^(mowbite_|tron_|xcore_)' pkgs.txt)"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   manifest:
     if: inputs.push

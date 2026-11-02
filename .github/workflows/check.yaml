@@ -40,7 +40,7 @@ jobs:
               --cmake-args -DCMAKE_BUILD_TYPE=Release 2>&1 | tee /out/build.txt
             test "${PIPESTATUS[0]}" -eq 0 || exit 1
             colcon test --packages-skip mowbite_sim --return-code-on-test-failure > /out/test.txt 2>&1; rc=$?
-            colcon test-result | tee /out/result.txt
+            colcon test-result --verbose | tee /out/result.txt
             exit $rc'
 
       - name: Summary
