@@ -38,7 +38,9 @@ RUN . /opt/ros/$ROS_DISTRO/setup.sh && . /opt/mowbite_planner/setup.sh && cd /ws
  && rm -rf /ws/build /ws/log
 
 # Runtime packages of all installed packages: ROS keys by name, other keys mapped here, an unknown key stops the build.
-RUN rosdep keys --from-paths /ws/install /opt/mowbite_planner --ignore-src -t exec | sort -u > /tmp/keys \
+# Each package directory on its own: rosdep skips the install bases, colcon marks them with COLCON_IGNORE.
+RUN rosdep keys --from-paths /ws/install/*/ /opt/mowbite_planner/*/ --ignore-src -t exec | sort -u > /tmp/keys \
+ && grep -qx rclcpp /tmp/keys \
  && for k in $(cat /tmp/keys); do \
       if [ -f /opt/ros/$ROS_DISTRO/share/$k/package.xml ]; then echo "ros-$ROS_DISTRO-$(echo $k | tr _ -)"; \
       else case $k in \
