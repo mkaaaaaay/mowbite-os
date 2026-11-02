@@ -3,6 +3,7 @@
 #include <deque>
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -15,6 +16,7 @@
 #include <mqtt/async_client.h>
 #include <rcl_interfaces/msg/log.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp/waitable.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <std_msgs/msg/string.hpp>
 
@@ -42,7 +44,6 @@ using namespace std::chrono_literals;
 namespace msg = mowbite_msgs::msg;
 
 constexpr auto kRetryCheck = 1s;
-constexpr auto kInboxPeriod = 20ms;
 constexpr std::size_t kMaxInbox = 1000;
 constexpr double kRetrySeconds = 5.0;
 constexpr auto kPositionPeriod = 150ms;
@@ -116,6 +117,36 @@ RobotStateView View(const msg::RobotState& m) {
 std::string JoinPath(const std::string& dir, const std::string& name) {
   return dir.empty() ? "" : dir + "/" + name;
 }
+
+// Runs a callback in the executor once another thread has called Wake().
+class Wakeup : public rclcpp::Waitable {
+ public:
+  Wakeup(rclcpp::Context::SharedPtr context, std::function<void()> callback)
+      : condition_(std::move(context)), callback_(std::move(callback)) {}
+
+  // Called from the MQTT client's thread, so it must not throw there; the next wake drains what is left.
+  void Wake() noexcept {
+    try {
+      condition_.trigger();
+    } catch (...) {
+    }
+  }
+
+  size_t get_number_of_ready_guard_conditions() override { return 1; }
+  void add_to_wait_set(rcl_wait_set_t& wait_set) override { condition_.add_to_wait_set(wait_set); }
+  bool is_ready(const rcl_wait_set_t& wait_set) override {
+    for (size_t i = 0; i < wait_set.size_of_guard_conditions; ++i) {
+      if (wait_set.guard_conditions[i] == &condition_.get_rcl_guard_condition()) return true;
+    }
+    return false;
+  }
+  std::shared_ptr<void> take_data() override { return nullptr; }
+  void execute(const std::shared_ptr<void>&) override { callback_(); }
+
+ private:
+  rclcpp::GuardCondition condition_;
+  std::function<void()> callback_;
+};
 
 }  // namespace
 
@@ -212,14 +243,15 @@ class BridgeNode : public rclcpp::Node {
       ReportRestart();
     });
 
+    wakeup_ = std::make_shared<Wakeup>(get_node_base_interface()->get_context(), [this] { Drain(); });
+    get_node_waitables_interface()->add_waitable(wakeup_, nullptr);
     client_ = std::make_unique<mqtt::async_client>("tcp://" + host_ + ":" + std::to_string(port_), kClientId);
-    // The client's thread only queues; the client is called from the executor alone.
+    // The client's thread only queues and wakes the executor; the client is called from the executor alone.
     client_->set_connected_handler([this](const std::string&) { Post({Arrival::kConnected, "", "", false}); });
     client_->set_connection_lost_handler([this](const std::string&) { Post({Arrival::kLost, "", "", false}); });
     client_->set_message_callback([this](mqtt::const_message_ptr m) {
       if (m) Post({Arrival::kMessage, m->get_topic(), m->get_payload_str(), m->is_retained()});
     });
-    inbox_timer_ = create_wall_timer(kInboxPeriod, [this] { Drain(); });
     retry_timer_ = create_wall_timer(kRetryCheck, [this] { TryConnect(); });
     TryConnect();
   }
@@ -236,6 +268,7 @@ class BridgeNode : public rclcpp::Node {
       RCLCPP_WARN(get_logger(), "MQTT disconnect: %s", e.what());
     }
     client_.reset();
+    get_node_waitables_interface()->remove_waitable(wakeup_, nullptr);
   }
 
  private:
@@ -249,9 +282,12 @@ class BridgeNode : public rclcpp::Node {
 
   // Beyond kMaxInbox waiting messages new ones are dropped; connection changes always go in.
   void Post(Arrival arrival) {
-    std::lock_guard<std::mutex> lock(inbox_mutex_);
-    if (arrival.kind == Arrival::kMessage && inbox_.size() >= kMaxInbox) return;
-    inbox_.push_back(std::move(arrival));
+    {
+      std::lock_guard<std::mutex> lock(inbox_mutex_);
+      if (arrival.kind == Arrival::kMessage && inbox_.size() >= kMaxInbox) return;
+      inbox_.push_back(std::move(arrival));
+    }
+    wakeup_->Wake();
   }
 
   void Drain() {
@@ -414,6 +450,7 @@ class BridgeNode : public rclcpp::Node {
   std::atomic<bool> connecting_{false};
   double last_attempt_ = -1e9;
   ConnectWatch connect_watch_{connecting_};
+  std::shared_ptr<Wakeup> wakeup_;
   std::unique_ptr<mqtt::async_client> client_;
 
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr action_pub_;
@@ -424,7 +461,6 @@ class BridgeNode : public rclcpp::Node {
   rclcpp::TimerBase::SharedPtr save_timer_;
   rclcpp::TimerBase::SharedPtr restart_timer_;
   rclcpp::TimerBase::SharedPtr retry_timer_;
-  rclcpp::TimerBase::SharedPtr inbox_timer_;
 };
 
 }  // namespace mowbite_bridge
