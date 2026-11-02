@@ -27,6 +27,12 @@ jobs:
         with:
           persist-credentials: false
 
+      # Every package with its own C++ code builds without fused multiply-add, so the mower computes like the PC.
+      - name: Floating-point contraction off in every C++ package
+        run: |
+          missing=$(grep -L -e '-ffp-contract=off' $(grep -lE 'add_(library|executable)\(' src/*/CMakeLists.txt) || true)
+          if [ -n "$missing" ]; then echo "::error::-ffp-contract=off missing in: $missing"; exit 1; fi
+
       - uses: ./.github/actions/dev-image
         with:
           planner-key: ${{ secrets.PLANNER_DEPLOY_KEY }}
