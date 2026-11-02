@@ -209,6 +209,16 @@ TEST(Link, NewEndpointIsARestart) {
   EXPECT_EQ(h.link.dropped(), 1u);
 }
 
+TEST(Link, NeverClaimsOnADebugOrBootPort) {
+  for (uint16_t port : {8007, 10000, 65102, 65103, 65104}) {
+    Harness h;
+    h.Announce(kEmergencyService, ExpectedEmergency(), 0, port);
+    EXPECT_TRUE(h.Has(LinkEvent::Kind::kIncompatible, kEmergencyService)) << port;
+    EXPECT_EQ(h.link.State(kEmergencyService), ServiceState::kIncompatible);
+    EXPECT_TRUE(h.link.Tick(0, h.events).empty()) << port;
+  }
+}
+
 TEST(Link, InputsAndOutputsAreChecked) {
   Harness h;
   h.Announce(kEmergencyService, ExpectedEmergency(), 0);

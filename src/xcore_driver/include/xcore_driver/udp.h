@@ -19,9 +19,15 @@ struct Endpoint {
   }
 };
 
+// Ports of the board that are never sent to: 8007 restarts it into the bootloader, 10000 and 65102-65104 pass raw
+// bytes to the GPS and the motor controllers, the latter ignoring every duty of the firmware while connected.
+bool ForbiddenPort(uint16_t port);
+
 // "172.16.78.1" to host byte order; false for anything else.
 bool ParseIpv4(const std::string& text, uint32_t& ip);
 std::string Ipv4Text(uint32_t ip);
+// The IPv4 address of a network interface such as "eth0"; false if it has none.
+bool InterfaceAddress(const std::string& name, uint32_t& ip);
 
 // A non-blocking UDP socket. Sockets close themselves.
 class UdpSocket {
@@ -37,6 +43,7 @@ class UdpSocket {
   bool JoinGroup(const std::string& group, uint32_t interface_ip, std::string& error);
   // Waits up to timeout_ms for a datagram; returns its size, 0 on timeout, -1 on error.
   long Receive(uint8_t* buffer, size_t size, Endpoint& from, int timeout_ms);
+  // Refuses a forbidden port.
   bool Send(const uint8_t* data, size_t size, const Endpoint& to);
   // The port the socket is bound to.
   uint16_t LocalPort() const;

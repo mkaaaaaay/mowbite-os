@@ -45,3 +45,27 @@ TEST(Udp, SharedPort) {
   UdpSocket c;
   EXPECT_FALSE(c.Bind(any, a.LocalPort(), false, error));
 }
+
+TEST(Udp, ForbiddenPortsAreNeverSentTo) {
+  EXPECT_TRUE(ForbiddenPort(8007));
+  EXPECT_TRUE(ForbiddenPort(10000));
+  EXPECT_TRUE(ForbiddenPort(65102));
+  EXPECT_TRUE(ForbiddenPort(65103));
+  EXPECT_TRUE(ForbiddenPort(65104));
+  EXPECT_FALSE(ForbiddenPort(4242));
+  EXPECT_FALSE(ForbiddenPort(49154));
+  uint32_t loopback = 0x7F000001;
+  std::string error;
+  UdpSocket a;
+  ASSERT_TRUE(a.Bind(loopback, 0, false, error)) << error;
+  uint8_t text[5] = {'R', 'E', 'S', 'E', 'T'};
+  EXPECT_FALSE(a.Send(text, sizeof(text), {loopback, 8007}));
+  EXPECT_FALSE(a.Send(text, sizeof(text), {loopback, 65103}));
+}
+
+TEST(Udp, InterfaceAddress) {
+  uint32_t ip = 0;
+  ASSERT_TRUE(InterfaceAddress("lo", ip));
+  EXPECT_EQ(ip, 0x7F000001u);
+  EXPECT_FALSE(InterfaceAddress("no-such-interface", ip));
+}

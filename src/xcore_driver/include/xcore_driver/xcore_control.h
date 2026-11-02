@@ -108,6 +108,17 @@ struct MotorReport {
   float rpm = 0;
 };
 
+// Status of a motor controller as the board reports it.
+constexpr uint8_t kEscDisconnected = 99;
+constexpr uint8_t kEscFault = 100;
+constexpr uint8_t kEscBlocked = 150;
+constexpr uint8_t kEscOk = 200;
+constexpr uint8_t kEscRunning = 201;
+
+// The code of hw/status for a controller status: fault -1, disconnected -2, other unknown values -3, idle 0,
+// running 1, blocked 2.
+int8_t MotorStatusCode(uint8_t esc_status);
+
 struct ControlStatus {
   bool blocked = true;
   uint32_t emergency_reason = 0;
@@ -160,6 +171,8 @@ class XcoreControl {
   void OnServiceRestart(uint16_t service_id, double now);
 
   std::vector<InputValue> Tick(double now);
+  // Wheels and blade to 0 once, for a driver that stops; the board's own timeouts follow.
+  std::vector<InputValue> StopInputs() const;
   ControlStatus Status(double now) const;
 
  private:

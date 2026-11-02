@@ -81,8 +81,10 @@ void XcoreLink::OnAnnouncement(const uint8_t* data, size_t size, double now, std
   if (s.state != ServiceState::kUnseen && s.state != ServiceState::kIncompatible && endpoint == s.endpoint) return;
 
   std::vector<std::string> problems;
+  if (ForbiddenPort(endpoint.port)) problems.push_back("announced on port " + std::to_string(endpoint.port) +
+                                                        ", a debug or boot channel of the board");
   const ExpectedService* expected = ExpectedFor(id);
-  if (expected) problems = CheckDescription(*expected, announcement->description);
+  if (expected && problems.empty()) problems = CheckDescription(*expected, announcement->description);
   if (problems.empty()) problems = CheckConfig(id, announcement->description);
   if (!problems.empty()) {
     std::string text;

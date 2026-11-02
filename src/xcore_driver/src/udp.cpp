@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -24,6 +25,10 @@ sockaddr_in Address(uint32_t ip, uint16_t port) {
 
 }  // namespace
 
+bool ForbiddenPort(uint16_t port) {
+  return port == 8007 || port == 10000 || (port >= 65102 && port <= 65104);
+}
+
 bool ParseIpv4(const std::string& text, uint32_t& ip) {
   in_addr addr{};
   if (inet_pton(AF_INET, text.c_str(), &addr) != 1) return false;
@@ -37,6 +42,20 @@ std::string Ipv4Text(uint32_t ip) {
   char text[INET_ADDRSTRLEN] = {};
   inet_ntop(AF_INET, &addr, text, sizeof(text));
   return text;
+}
+
+bool InterfaceAddress(const std::string& name, uint32_t& ip) {
+  ifaddrs* list = nullptr;
+  if (::getifaddrs(&list) != 0) return false;
+  bool found = false;
+  for (ifaddrs* entry = list; entry; entry = entry->ifa_next) {
+    if (!entry->ifa_addr || entry->ifa_addr->sa_family != AF_INET || name != entry->ifa_name) continue;
+    ip = ntohl(reinterpret_cast<sockaddr_in*>(entry->ifa_addr)->sin_addr.s_addr);
+    found = true;
+    break;
+  }
+  ::freeifaddrs(list);
+  return found;
 }
 
 UdpSocket::~UdpSocket() {
@@ -101,7 +120,7 @@ long UdpSocket::Receive(uint8_t* buffer, size_t size, Endpoint& from, int timeou
 }
 
 bool UdpSocket::Send(const uint8_t* data, size_t size, const Endpoint& to) {
-  if (fd_ < 0) return false;
+  if (fd_ < 0 || ForbiddenPort(to.port)) return false;
   sockaddr_in addr = Address(to.ip, to.port);
   ssize_t n = ::sendto(fd_, data, size, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
   return n == static_cast<ssize_t>(size);

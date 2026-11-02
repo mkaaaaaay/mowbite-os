@@ -48,6 +48,23 @@ const char* BladeResultText(BladeResult result) {
   return "unknown";
 }
 
+int8_t MotorStatusCode(uint8_t esc_status) {
+  switch (esc_status) {
+    case kEscOk:
+      return 0;
+    case kEscRunning:
+      return 1;
+    case kEscBlocked:
+      return 2;
+    case kEscFault:
+      return -1;
+    case kEscDisconnected:
+      return -2;
+    default:
+      return -3;
+  }
+}
+
 XcoreControl::XcoreControl(const ControlConfig& config, const InputMap& inputs)
     : config_(config), inputs_(inputs), odometry_(config.odometry), regulator_(config.regulator) {
 }
@@ -256,6 +273,8 @@ void XcoreControl::OnServiceRestart(uint16_t service_id, double now) {
       board_heard_us_ = false;
       break;
     case kDiffDriveService:
+      left_motor_ = MotorReport{};
+      right_motor_ = MotorReport{};
       odometry_.Reset();
       regulator_.Reset();
       if (moving_) stop_repeat_ = Repeat{config_.repeat_count, now};
@@ -263,6 +282,7 @@ void XcoreControl::OnServiceRestart(uint16_t service_id, double now) {
       command_.reset();
       break;
     case kMowerService:
+      blade_motor_ = MotorReport{};
       DropBlade(BladeOffReason::kReconnect);
       blade_off_repeat_ = Repeat{config_.repeat_count, now};
       break;
@@ -356,6 +376,10 @@ std::vector<InputValue> XcoreControl::Tick(double now) {
   }
 
   return out;
+}
+
+std::vector<InputValue> XcoreControl::StopInputs() const {
+  return {Twist(0, 0), MowerSpeed(0)};
 }
 
 void XcoreControl::DropBlade(BladeOffReason reason) {

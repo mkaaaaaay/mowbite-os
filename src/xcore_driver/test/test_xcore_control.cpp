@@ -389,3 +389,35 @@ TEST(XcoreControl, RestartOfTheMowerServiceSendsOff) {
   EXPECT_EQ(SpeedOf(out[0]), 0);
   EXPECT_EQ(f.control.Status(0.1).blade_off_reason, BladeOffReason::kReconnect);
 }
+
+TEST(XcoreControl, RestartForgetsTheMotors) {
+  Fixture f;
+  Bytes status{kEscRunning};
+  f.control.OnOutput(kDiffDriveService, diff_drive::kOutLeftStatus, status, 0, 0);
+  f.control.OnOutput(kMowerService, mower::kOutStatus, status, 0, 0);
+  EXPECT_TRUE(f.control.Status(0).left_motor.known);
+  EXPECT_TRUE(f.control.Status(0).blade_motor.known);
+  f.control.OnServiceRestart(kDiffDriveService, 0.1);
+  f.control.OnServiceRestart(kMowerService, 0.1);
+  EXPECT_FALSE(f.control.Status(0.1).left_motor.known);
+  EXPECT_FALSE(f.control.Status(0.1).blade_motor.known);
+}
+
+TEST(XcoreControl, StopInputs) {
+  Fixture f;
+  auto out = f.control.StopInputs();
+  ASSERT_EQ(out.size(), 2u);
+  EXPECT_EQ(out[0].service_id, kDiffDriveService);
+  EXPECT_EQ(TwistOf(out[0]), std::vector<double>(6, 0.0));
+  EXPECT_EQ(out[1].service_id, kMowerService);
+  EXPECT_EQ(SpeedOf(out[1]), 0);
+}
+
+TEST(XcoreControl, MotorStatusCodes) {
+  EXPECT_EQ(MotorStatusCode(kEscOk), 0);
+  EXPECT_EQ(MotorStatusCode(kEscRunning), 1);
+  EXPECT_EQ(MotorStatusCode(kEscBlocked), 2);
+  EXPECT_EQ(MotorStatusCode(kEscFault), -1);
+  EXPECT_EQ(MotorStatusCode(kEscDisconnected), -2);
+  EXPECT_EQ(MotorStatusCode(7), -3);
+}
