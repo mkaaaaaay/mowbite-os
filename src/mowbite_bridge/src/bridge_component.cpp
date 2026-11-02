@@ -119,8 +119,7 @@ std::string JoinPath(const std::string& dir, const std::string& name) {
 
 }  // namespace
 
-// The bridge between the nodes and MQTT: BridgeCore does the work, this node only carries messages to and from it.
-// Core and MQTT client are used from the executor only; the client's own thread just queues what arrives.
+// Carries messages between the nodes, MQTT and BridgeCore; the core is used from the executor only.
 class BridgeNode : public rclcpp::Node {
  public:
   explicit BridgeNode(const rclcpp::NodeOptions& options)

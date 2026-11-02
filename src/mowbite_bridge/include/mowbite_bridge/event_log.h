@@ -9,15 +9,13 @@
 
 namespace mowbite_bridge {
 
-// The events of events/json on disk, one JSONL file per day of local time: <dir>/YYYYMMDD.jsonl. Nothing of a day is
-// held in memory; a request reads the file.
+// The events of events/json on disk, one JSONL file per local day: <dir>/YYYYMMDD.jsonl.
 class EventLog {
  public:
   // Without a directory nothing is kept. At most max_days files (the oldest go first) and max_bytes over all of them.
   EventLog(std::string dir, std::size_t max_days, std::uintmax_t max_bytes);
 
-  // Appends one event (an object) to the file of the day of now. Over the byte limit older days go first; today does
-  // not grow past it.
+  // Appends one event to the file of today; over the byte limit older days go first.
   void Write(const Json& event, double now);
 
   // events.history: params {"date": "YYYYMMDD"} or ["YYYYMMDD"], none for today; an unknown or invalid day gives [].

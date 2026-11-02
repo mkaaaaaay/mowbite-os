@@ -9,15 +9,13 @@
 
 namespace mowbite_bridge {
 
-// params/json: one flat object "<node>/<name>" over all nodes, keys sorted, values as the node sent them, every name
-// with "password" in it as null.
+// params/json: one flat object "<node>/<name>" over all nodes, names with "password" as null.
 class ParamTable {
  public:
   // The object to start from (parameter params_json); text that is not an object counts as {}.
   explicit ParamTable(std::string_view base = "{}");
 
-  // One message of bridge/params, {"node": "/name", "params": {...}}: the node's whole list, replacing the one before.
-  // Returns whether params/json changed; a message of another shape changes nothing.
+  // Applies one bridge/params message, replacing the node's list; returns whether params/json changed.
   bool Apply(std::string_view message);
 
   const std::string& Text() const {

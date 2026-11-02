@@ -85,8 +85,7 @@ struct SensorReading {
   double stamp = 0.0;
 };
 
-// sensors.list: the entries of sensor_infos/json with value and stamp (null before the first value). params null,
-// {} or [] give all, {"ids": [...]} those of the list that exist; other params throw std::invalid_argument.
+// sensors.list: sensor_infos/json entries with value and stamp; params {"ids": [...]} select, other shapes throw.
 Json SensorList(const std::map<std::string, SensorDescription>& sensors,
                 const std::map<std::string, SensorReading>& readings, const Json& params);
 

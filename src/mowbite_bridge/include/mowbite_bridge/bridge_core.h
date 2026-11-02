@@ -49,9 +49,7 @@ struct BridgeConfig {
   std::string params_json = "{}";
 };
 
-// The bridge between the nodes and MQTT without ROS and without an MQTT client: takes what arrives on either side and
-// collects what to send. Retained texts are kept and sent again after every connect; while there is no connection,
-// everything else is dropped. No input throws: a failure becomes a WARN line.
+// The bridge between the nodes and MQTT without ROS or MQTT client; retained texts are resent after every connect.
 class BridgeCore {
  public:
   using LocalMethod = std::function<Json(const Json& params)>;

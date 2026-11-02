@@ -6,8 +6,7 @@
 
 namespace mowbite_bridge {
 
-// An event for events/json: id, t (seconds), type, then the details in their own order. Details that are not an
-// object, and their keys id, t and type, are left out.
+// An event for events/json: id, t, type, then the details; non-object details and their keys id, t, type are dropped.
 nlohmann::ordered_json BuildEvent(const std::string& type, const nlohmann::ordered_json& details, double t);
 
 // Random digits and letters (0-9, A-Z, a-z).

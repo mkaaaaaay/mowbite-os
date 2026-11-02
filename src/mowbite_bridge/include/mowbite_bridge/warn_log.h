@@ -23,8 +23,7 @@ class WarnLog {
 
   void Add(double t, int level, std::string_view node, std::string_view message);
 
-  // params: since (only newer lines), level (lowest level by name, unknown counts as WARN), limit (the newest n;
-  // missing, negative or not a number: all). Anything but an object counts as none.
+  // params: since, level (lowest by name, unknown counts as WARN), limit (the newest n; otherwise all).
   Json Recent(const Json& params) const;
 
  private:

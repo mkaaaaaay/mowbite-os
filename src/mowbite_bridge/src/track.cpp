@@ -14,8 +14,7 @@ namespace mowbite_bridge {
 
 namespace {
 
-// A point is kept once the line from the last kept one to the newest position misses a point between by more than
-// this; straight stretches are bounded by kMaxOpen points.
+// A point is kept once the line to the newest position misses a point between by more than this.
 constexpr double kTolerance = 0.05;
 constexpr std::size_t kMaxOpen = 80;
 // Kept points of one job in memory; beyond, the job records no more.

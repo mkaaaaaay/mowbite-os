@@ -12,8 +12,7 @@ std::string CleanUtf8(std::string_view text);
 // Deepest nesting of [ and { outside of strings, without parsing; tells a payload too deep to parse safely.
 std::size_t NestingDepth(std::string_view text);
 
-// Login details in a log line hidden: user:password@ of a URL and the value after password, token or secret with
-// = or :.
+// Hides user:password@ of a URL and the value after password, token or secret in a log line.
 std::string HideSecrets(std::string_view text);
 
 }  // namespace mowbite_bridge

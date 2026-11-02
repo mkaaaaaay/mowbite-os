@@ -9,9 +9,7 @@
 
 namespace mowbite_bridge {
 
-// The mowing track of position.history: the points of each job while a session runs, as runs with the same job,
-// session and blade state. Kept on disk as <dir>/<epoch>_<job_id>.jsonl, one line per new run ("new_segment") or per
-// save of points to the last one ("append_points").
+// The mowing track of position.history, kept on disk as <dir>/<epoch>_<job_id>.jsonl.
 class MowTrack {
  public:
   // Files older than max_days and the oldest over max_bytes go, never the one of the current job.

@@ -80,8 +80,7 @@ int Rounds(int normal) {
   return wanted ? std::atoi(wanted) : normal;
 }
 
-// Parses a mangled text when it is JSON, otherwise keeps it as a string. Like every input that reaches the stores it
-// is valid UTF-8: events and params come parsed.
+// Parses the text when it is JSON, otherwise keeps it as a clean string.
 Json Loose(const std::string& text) {
   const Json j = Json::parse(text, nullptr, false);
   return j.is_discarded() ? Json(CleanUtf8(text)) : j;
@@ -179,8 +178,7 @@ TEST(BridgeFuzz, NoInputThrowsAndEveryAnswerIsJson) {
   EXPECT_EQ(out.mqtt.back().payload, R"({"jsonrpc":"2.0","result":"pong","id":"end"})");
 }
 
-// B18, B20, B23: event history and track take any event, position and request, and broken files, without throwing;
-// every answer is JSON.
+// B18, B20, B23: event history and track take any input and broken files without throwing.
 TEST(BridgeFuzz, HistoryAndTrackTakeAnyInput) {
   const fs::path dir = fs::temp_directory_path() / ("mowbite_fuzz_" + std::to_string(::getpid()));
   fs::remove_all(dir);

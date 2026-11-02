@@ -20,8 +20,7 @@ class PoseWindow {
 
   // Beyond the capacity the oldest pose goes.
   void Add(const PlanePose& pose);
-  // The middle pose of the window, then an empty window; nothing without a pose since the last call. Headings count
-  // from the first one, so values on both sides of +-pi stay together; of an even count the upper middle value.
+  // The middle pose of the window, then empties it; headings are taken relative to the first, so +-pi stays together.
   std::optional<PlanePose> Take();
 
  private:
