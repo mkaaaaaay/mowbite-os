@@ -1,0 +1,717 @@
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <diagnostic_msgs/msg/key_value.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
+#include <limits>
+#include <mowbite_msgs/msg/hardware_capabilities.hpp>
+#include <mowbite_msgs/msg/hardware_status.hpp>
+#include <mowbite_msgs/srv/set_blade.hpp>
+#include <mowbite_msgs/srv/set_charge.hpp>
+#include <mowbite_msgs/srv/set_emergency.hpp>
+#include <mutex>
+#include <optional>
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_components/register_node_macro.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include <stdexcept>
+#include <thread>
+
+#include "xcore_driver/input_config.h"
+#include "xcore_driver/link.h"
+#include "xcore_driver/services.h"
+#include "xcore_driver/udp.h"
+#include "xcore_driver/xcore_control.h"
+
+namespace xcore_driver {
+
+namespace {
+
+using mowbite_msgs::msg::HardwareStatus;
+using xcore::Bytes;
+using xcore::Section;
+
+// The core numbers its reasons like the contract.
+static_assert(xcore::kReasonLatch == HardwareStatus::REASON_LATCH);
+static_assert(xcore::kReasonTimeoutInputs == HardwareStatus::REASON_TIMEOUT_INPUTS);
+static_assert(xcore::kReasonStop == HardwareStatus::REASON_STOP);
+static_assert(xcore::kReasonLift == HardwareStatus::REASON_LIFT);
+static_assert(xcore::kReasonCollision == HardwareStatus::REASON_COLLISION);
+static_assert(xcore::kReasonHighLevel == HardwareStatus::REASON_HIGH_LEVEL);
+static_assert(xcore::kReasonFirmwareIncompatible == HardwareStatus::REASON_FIRMWARE_INCOMPATIBLE);
+static_assert(xcore::kReasonTilt == HardwareStatus::REASON_TILT);
+static_assert(xcore::kReasonFence == HardwareStatus::REASON_FENCE);
+static_assert(xcore::kReasonStuck == HardwareStatus::REASON_STUCK);
+static_assert(xcore::kReasonMowerNotStopped == HardwareStatus::REASON_MOWER_NOT_STOPPED);
+static_assert(static_cast<uint8_t>(xcore::BladeOffReason::kLeaseExpired) == HardwareStatus::BLADE_OFF_LEASE_EXPIRED);
+static_assert(static_cast<uint8_t>(xcore::BladeOffReason::kReconnect) == HardwareStatus::BLADE_OFF_RECONNECT);
+
+// Functions of the meta service.
+constexpr uint8_t kGetFirmwareVersion = 0;
+constexpr uint8_t kGetMajorVersion = 1;
+// A firmware question without an answer is asked again after this long.
+constexpr double kRpcRetryS = 5.0;
+constexpr double kTickS = 0.01;
+
+rclcpp::QoS LatchedQos() {
+  return rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
+}
+
+double MonotonicSeconds() {
+  using namespace std::chrono;
+  return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+const char* ServiceName(uint16_t id) {
+  switch (id) {
+    case xcore::kEmergencyService: return "emergency";
+    case xcore::kDiffDriveService: return "diff drive";
+    case xcore::kMowerService: return "mower";
+    case xcore::kImuService: return "imu";
+    case xcore::kPowerService: return "power";
+    case xcore::kGpsService: return "gps";
+    case xcore::kInputService: return "input";
+    case xcore::kMetaService: return "meta";
+  }
+  return "unknown";
+}
+
+const char* BladeOffText(xcore::BladeOffReason reason) {
+  switch (reason) {
+    case xcore::BladeOffReason::kNone: return "none";
+    case xcore::BladeOffReason::kRequest: return "request";
+    case xcore::BladeOffReason::kLeaseExpired: return "lease expired";
+    case xcore::BladeOffReason::kBlocked: return "blocked";
+    case xcore::BladeOffReason::kDock: return "dock contact";
+    case xcore::BladeOffReason::kReconnect: return "service restarted";
+  }
+  return "unknown";
+}
+
+Bytes F32(double value) {
+  xcore::Writer w;
+  w.F32(static_cast<float>(value));
+  return w.Take();
+}
+
+Bytes F64(double value) {
+  xcore::Writer w;
+  w.F64(value);
+  return w.Take();
+}
+
+}  // namespace
+
+// Driver of an OpenMower v2 mower with xCore board behind the hardware contract hw/* of MowBite OS: claims the
+// services of the board over UDP, configures them from the platform parameters and passes their values on.
+class XcoreNode : public rclcpp::Node {
+ public:
+  explicit XcoreNode(const rclcpp::NodeOptions& options)
+      : rclcpp::Node("xcore_driver", options), inputs_(LoadInputs()), control_(LoadControl(), xcore::InputMapOf(inputs_)) {
+    blade_lease_max_s_ = get_parameter("blade_lease_max").as_double();
+    max_linear_speed_ = std::min(get_parameter("max_linear_speed").as_double(), 0.3);
+    max_angular_speed_ = std::min(get_parameter("max_angular_speed").as_double(), 0.3);
+    platform_ = declare_parameter("platform", "openmower_v2");
+    interface_ = declare_parameter("interface", "eth0");
+    bind_ip_text_ = declare_parameter("bind_ip", "172.16.78.1");
+    group_ = declare_parameter("announcement_group", std::string(xcore::kAnnouncementGroup));
+    group_port_ = static_cast<uint16_t>(declare_parameter("announcement_port", int{xcore::kAnnouncementPort}));
+    expected_major_ = static_cast<uint16_t>(declare_parameter("expected_major_version", 1));
+    imu_frame_id_ = declare_parameter("imu_frame_id", "base_link");
+    gnss_source_ = declare_parameter("gnss_source", "");
+    failsafe_without_host_s_ = declare_parameter("failsafe_without_host", -1.0);
+    safety_measurement_date_ = declare_parameter("safety_measurement_date", "");
+    if (!xcore::ParseIpv4(bind_ip_text_, bind_ip_)) throw std::invalid_argument("bind_ip is no IPv4 address");
+    services_ = LoadServices();
+    if (safety_measurement_date_.empty()) {
+      RCLCPP_WARN(get_logger(), "No safety measurement of this mower yet: remote control only");
+    }
+
+    twist_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("hw/wheel_odom", 10);
+    imu_pub_ = create_publisher<sensor_msgs::msg::Imu>("imu/data", rclcpp::SensorDataQoS());
+    status_pub_ = create_publisher<HardwareStatus>("hw/status", 10);
+    capabilities_pub_ = create_publisher<mowbite_msgs::msg::HardwareCapabilities>("hw/capabilities", LatchedQos());
+    PublishCapabilities();
+
+    cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
+        "hw/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) { OnCmdVel(*msg); });
+    emergency_srv_ = create_service<mowbite_msgs::srv::SetEmergency>(
+        "hw/emergency", [this](const mowbite_msgs::srv::SetEmergency::Request::SharedPtr req,
+                               mowbite_msgs::srv::SetEmergency::Response::SharedPtr res) { OnEmergency(*req, *res); });
+    blade_srv_ = create_service<mowbite_msgs::srv::SetBlade>(
+        "hw/blade", [this](const mowbite_msgs::srv::SetBlade::Request::SharedPtr req,
+                           mowbite_msgs::srv::SetBlade::Response::SharedPtr res) { OnBlade(*req, *res); });
+    charge_srv_ = create_service<mowbite_msgs::srv::SetCharge>(
+        "hw/charge", [this](const mowbite_msgs::srv::SetCharge::Request::SharedPtr req,
+                            mowbite_msgs::srv::SetCharge::Response::SharedPtr res) { OnCharge(*req, *res); });
+    status_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { PublishStatus(); });
+
+    io_thread_ = std::thread([this] { IoLoop(); });
+  }
+
+  ~XcoreNode() override {
+    running_ = false;
+    if (io_thread_.joinable()) io_thread_.join();
+  }
+
+ private:
+  xcore::InputConfig LoadInputs() {
+    auto lines = declare_parameter("inputs.gpio_lines", std::vector<std::string>{});
+    auto active_high = declare_parameter("inputs.gpio_active_high", std::vector<bool>{});
+    auto reasons = declare_parameter("inputs.gpio_reasons", std::vector<std::string>{});
+    auto delays = declare_parameter("inputs.gpio_delays_ms", std::vector<int64_t>{});
+    auto roles = declare_parameter("inputs.gpio_roles", std::vector<std::string>{});
+    auto cover = declare_parameter("inputs.cover", std::vector<std::string>{});
+    const size_t n = lines.size();
+    if (active_high.size() != n || reasons.size() != n || delays.size() != n || roles.size() != n) {
+      throw std::invalid_argument("inputs.gpio_* need one entry per line");
+    }
+    xcore::InputConfig config;
+    for (size_t i = 0; i < n; i++) {
+      if (delays[i] < 0 || delays[i] > 65535) throw std::invalid_argument("inputs.gpio_delays_ms out of range");
+      // "none" stands for an input without emergency reason or role, as a list cannot hold empty strings everywhere.
+      auto none = [](const std::string& text) { return text == "none" ? std::string() : text; };
+      config.gpio.push_back(xcore::GpioInput{lines[i], active_high[i], none(reasons[i]),
+                                             static_cast<uint16_t>(delays[i]), none(roles[i])});
+    }
+    for (const auto& entry : cover) {
+      auto equals = entry.find('=');
+      if (equals == std::string::npos) throw std::invalid_argument("inputs.cover entries are id=value");
+      config.cover.push_back(xcore::CoverSetting{entry.substr(0, equals), entry.substr(equals + 1)});
+    }
+    if (auto problem = xcore::CheckInputConfig(config)) throw std::invalid_argument("inputs: " + *problem);
+    return config;
+  }
+
+  xcore::ControlConfig LoadControl() {
+    xcore::ControlConfig c;
+    c.cmd_vel_timeout_s = declare_parameter("cmd_vel_timeout", c.cmd_vel_timeout_s);
+    c.max_linear_speed = std::min(declare_parameter("max_linear_speed", c.max_linear_speed), 0.3);
+    c.max_angular_speed = std::min(declare_parameter("max_angular_speed", c.max_angular_speed), 0.3);
+    c.allow_blade = declare_parameter("allow_blade", false);
+    c.blade_speed_percent = static_cast<uint16_t>(std::clamp<int64_t>(declare_parameter("blade_speed_percent", 100), 1, 100));
+    c.blade_lease_max_s = declare_parameter("blade_lease_max", c.blade_lease_max_s);
+    c.blade_stop_time_s = declare_parameter("blade_stop_time", c.blade_stop_time_s);
+    c.blade_still_rpm = declare_parameter("blade_still_rpm", c.blade_still_rpm);
+    c.dock_voltage = declare_parameter("dock_voltage", c.dock_voltage);
+    c.odometry.ticks_per_meter = declare_parameter("ticks_per_meter", c.odometry.ticks_per_meter);
+    c.odometry.wheel_distance = declare_parameter("wheel_distance", c.odometry.wheel_distance);
+    c.odometry.left_sign = declare_parameter("left_ticks_sign", c.odometry.left_sign) < 0 ? -1 : 1;
+    c.odometry.right_sign = declare_parameter("right_ticks_sign", c.odometry.right_sign) < 0 ? -1 : 1;
+    c.regulator.wheel_distance = c.odometry.wheel_distance;
+    c.regulator.full_duty_speed = declare_parameter("full_duty_speed", c.regulator.full_duty_speed);
+    c.regulator.max_duty = std::clamp(declare_parameter("max_duty", c.regulator.max_duty), 0.0, 1.0);
+    c.regulator.feedback = declare_parameter("regulator_feedback", c.regulator.feedback);
+    if (!(c.odometry.ticks_per_meter > 0) || !(c.odometry.wheel_distance > 0) || !(c.regulator.full_duty_speed > 0)) {
+      throw std::invalid_argument("ticks_per_meter, wheel_distance and full_duty_speed must be positive");
+    }
+    RCLCPP_INFO(get_logger(), "allow_blade: %d, cmd_vel_timeout: %.2f s, max_duty: %.2f, feedback: %d", c.allow_blade,
+                c.cmd_vel_timeout_s, c.regulator.max_duty, c.regulator.feedback);
+    return c;
+  }
+
+  // The registers of every service the driver claims, in the order of the announced descriptions.
+  std::map<uint16_t, std::vector<Section>> LoadServices() {
+    std::map<uint16_t, std::vector<Section>> services;
+    using namespace xcore;
+
+    const std::string firmware = declare_parameter("robot_firmware", "YardForce");
+    if (firmware.empty() || firmware.size() > 50) throw std::invalid_argument("robot_firmware takes 1 to 50 characters");
+    // Without a null byte: the board compares the name with exactly the bytes it gets.
+    services[kMetaService] = {{meta::kRegRobotFirmware, Bytes(firmware.begin(), firmware.end())}};
+
+    services[kEmergencyService] = {};
+    services[kMowerService] = {};
+    services[kDiffDriveService] = {{diff_drive::kRegTicksPerMeter, F64(get_parameter("ticks_per_meter").as_double())},
+                                   {diff_drive::kRegWheelDistance, F64(get_parameter("wheel_distance").as_double())}};
+
+    auto remap = declare_parameter("imu_axis_remap", std::vector<int64_t>{1, -2, -3});
+    if (remap.size() != 3) throw std::invalid_argument("imu_axis_remap takes three axes");
+    Bytes axes;
+    for (int64_t axis : remap) {
+      if (axis == 0 || axis < -3 || axis > 3) throw std::invalid_argument("imu_axis_remap takes ±1, ±2 or ±3");
+      axes.push_back(static_cast<uint8_t>(static_cast<int8_t>(axis)));
+    }
+    services[kImuService] = {{imu::kRegAxisRemap, axes}};
+
+    const double empty = declare_parameter("battery_empty_voltage", 0.0);
+    const double full = declare_parameter("battery_full_voltage", 0.0);
+    const double low = declare_parameter("battery_critical_low_voltage", 0.0);
+    const double high = declare_parameter("battery_critical_high_voltage", 0.0);
+    if (!(low > 0) || !(empty > low) || !(full > empty) || !(high > full)) {
+      throw std::invalid_argument("battery voltages need 0 < critical low < empty < full < critical high");
+    }
+    std::vector<Section> power = {{power::kRegEmptyVoltage, F32(empty)},
+                                  {power::kRegFullVoltage, F32(full)},
+                                  {power::kRegCriticalLowVoltage, F32(low)},
+                                  {power::kRegCriticalHighVoltage, F32(high)}};
+    // Optional; left out at 0 so that the board keeps its own value.
+    const double charge_voltage = declare_parameter("charge_voltage", 0.0);
+    const double termination_current = declare_parameter("charge_termination_current", 0.0);
+    if (charge_voltage > 0) power.push_back({power::kRegChargeVoltage, F32(charge_voltage)});
+    if (termination_current > 0) power.push_back({power::kRegTerminationCurrent, F32(termination_current)});
+    services[kPowerService] = power;
+
+    // A value other than the one the board started with restarts it: these must be what the mower always had.
+    const int64_t uart = declare_parameter("gps_uart", int64_t{-1});
+    const int64_t baudrate = declare_parameter("gps_baudrate", int64_t{0});
+    const std::string protocol = declare_parameter("gps_protocol", "");
+    if (uart < 0 || uart > 255 || baudrate <= 0 || baudrate > 4000000 || (protocol != "nmea" && protocol != "ubx")) {
+      throw std::invalid_argument("gps_uart, gps_baudrate and gps_protocol (nmea or ubx) must be set");
+    }
+    Writer baud;
+    baud.U32(static_cast<uint32_t>(baudrate));
+    services[kGpsService] = {{gps::kRegBaudrate, baud.Take()},
+                             {gps::kRegProtocol, Bytes{static_cast<uint8_t>(protocol == "nmea" ? 1 : 0)}},
+                             {gps::kRegUart, Bytes{static_cast<uint8_t>(uart)}}};
+
+    services[kInputService] = {{input::kRegConfigs, HeatshrinkLiterals(InputConfigJson(inputs_))}};
+    RCLCPP_INFO(get_logger(), "Robot '%s', GPS on UART %ld at %ld baud (%s), inputs %s", firmware.c_str(), uart,
+                baudrate, protocol.c_str(), InputConfigJson(inputs_).c_str());
+    return services;
+  }
+
+  // Opens both sockets and starts a new link; false while the interface has no address.
+  bool Open() {
+    uint32_t interface_ip = 0;
+    std::string error;
+    if (!xcore::InterfaceAddress(interface_, interface_ip)) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Interface %s has no IPv4 address", interface_.c_str());
+      return false;
+    }
+    uint32_t group_ip = 0;
+    if (!xcore::ParseIpv4(group_, group_ip) || !announcements_.Bind(group_ip, group_port_, true, error) ||
+        !announcements_.JoinGroup(group_, interface_ip, error)) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Cannot listen to %s:%u on %s: %s", group_.c_str(),
+                            group_port_, interface_.c_str(), error.c_str());
+      announcements_.Close();
+      return false;
+    }
+    if (!service_socket_.Bind(bind_ip_, 0, false, error)) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Cannot bind to %s: %s", bind_ip_text_.c_str(),
+                            error.c_str());
+      announcements_.Close();
+      return false;
+    }
+    xcore::LinkConfig config;
+    config.host = {bind_ip_, service_socket_.LocalPort()};
+    config.services = services_;
+    std::lock_guard<std::mutex> lock(mutex_);
+    link_.emplace(config);
+    for (const auto& entry : services_) control_.OnServiceRestart(entry.first, MonotonicSeconds());
+    RCLCPP_INFO(get_logger(), "Listening for the board on %s:%u via %s (%s), services answer to %s:%u", group_.c_str(),
+                group_port_, interface_.c_str(), xcore::Ipv4Text(interface_ip).c_str(), bind_ip_text_.c_str(),
+                service_socket_.LocalPort());
+    return true;
+  }
+
+  // Owns both sockets: reads announcements and service datagrams, runs link and control every 10 ms.
+  void IoLoop() {
+    uint8_t buffer[xcore::kMaxDatagram + 1];
+    double next_tick = 0;
+    double next_open = 0;
+    while (running_ && rclcpp::ok()) {
+      double now = MonotonicSeconds();
+      if (!service_socket_.IsOpen()) {
+        if (now >= next_open) {
+          next_open = now + 1.0;
+          Open();
+        }
+        if (!service_socket_.IsOpen()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+          continue;
+        }
+      }
+      xcore::Endpoint from;
+      long n;
+      while ((n = announcements_.Receive(buffer, sizeof(buffer), from, 0)) > 0) {
+        if (static_cast<size_t>(n) > xcore::kMaxDatagram) continue;
+        std::vector<xcore::LinkEvent> events;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          link_->OnAnnouncement(buffer, static_cast<size_t>(n), MonotonicSeconds(), events);
+        }
+        HandleEvents(events);
+      }
+      int wait_ms = std::clamp(static_cast<int>((next_tick - now) * 1000.0), 0, 5);
+      n = service_socket_.Receive(buffer, sizeof(buffer), from, wait_ms);
+      if (n < 0) {
+        RCLCPP_ERROR(get_logger(), "Receive error on the service socket, opening it again");
+        Close();
+        continue;
+      }
+      if (n > 0 && static_cast<size_t>(n) <= xcore::kMaxDatagram) HandleDatagram(buffer, static_cast<size_t>(n), from);
+
+      now = MonotonicSeconds();
+      if (now >= next_tick) {
+        next_tick = now + kTickS;
+        Tick(now);
+      }
+    }
+    Shutdown();
+  }
+
+  void Close() {
+    announcements_.Close();
+    service_socket_.Close();
+  }
+
+  void HandleDatagram(const uint8_t* data, size_t size, const xcore::Endpoint& from) {
+    std::vector<xcore::Output> outputs;
+    std::vector<xcore::LinkEvent> events;
+    std::vector<xcore::WheelTwist> twists;
+    std::vector<std::vector<double>> imu;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const double now = MonotonicSeconds();
+      link_->OnDatagram(data, size, from, now, outputs, events);
+      for (const auto& out : outputs) {
+        if (out.service_id == xcore::kImuService && out.channel_id == xcore::imu::kOutAxes) {
+          if (auto axes = xcore::DecodeDoubles(out.value, 9)) imu.push_back(*axes);
+          continue;
+        }
+        if (auto twist = control_.OnOutput(out.service_id, out.channel_id, out.value, out.board_time_us, now)) {
+          twists.push_back(*twist);
+        }
+      }
+    }
+    HandleEvents(events);
+    for (const auto& twist : twists) PublishTwist(twist);
+    for (const auto& axes : imu) PublishImu(axes);
+  }
+
+  void Tick(double now) {
+    std::vector<xcore::Datagram> datagrams;
+    std::vector<xcore::LinkEvent> events;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (major_ == std::nullopt && next_rpc_s_ && now >= *next_rpc_s_) AskFirmware(now);
+      datagrams = link_->Tick(now, events);
+      control_.SetServicesReady(link_->AllRunning() && major_ == expected_major_,
+                                !major_ || *major_ == expected_major_);
+      for (const auto& value : control_.Tick(now)) {
+        if (auto datagram = link_->Input(value.service_id, value.channel_id, value.value)) {
+          datagrams.push_back(*datagram);
+        }
+      }
+    }
+    Send(datagrams);
+    HandleEvents(events);
+  }
+
+  void Send(const std::vector<xcore::Datagram>& datagrams) {
+    for (const auto& d : datagrams) {
+      if (!service_socket_.Send(d.bytes.data(), d.bytes.size(), d.to)) {
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Cannot send to %s:%u",
+                              xcore::Ipv4Text(d.to.ip).c_str(), d.to.port);
+      }
+    }
+  }
+
+  // Called with mutex_ held.
+  void AskFirmware(double now) {
+    next_rpc_s_.reset();
+    bool asked = link_->CallRpc(xcore::kMetaService, kGetMajorVersion, now);
+    asked = link_->CallRpc(xcore::kMetaService, kGetFirmwareVersion, now) && asked;
+    if (!asked) next_rpc_s_ = now + kRpcRetryS;
+  }
+
+  void HandleEvents(const std::vector<xcore::LinkEvent>& events) {
+    using Kind = xcore::LinkEvent::Kind;
+    bool capabilities = false;
+    for (const auto& e : events) {
+      const char* name = ServiceName(e.service_id);
+      std::lock_guard<std::mutex> lock(mutex_);
+      const double now = MonotonicSeconds();
+      switch (e.kind) {
+        case Kind::kRunning:
+          RCLCPP_INFO(get_logger(), "Service %s (%u) runs", name, e.service_id);
+          if (e.service_id == xcore::kMetaService) AskFirmware(now);
+          break;
+        case Kind::kLost:
+        case Kind::kRestarted:
+          RCLCPP_WARN(get_logger(), "Service %s (%u) %s: %s", name, e.service_id,
+                      e.kind == Kind::kLost ? "lost" : "restarted", e.text.c_str());
+          control_.OnServiceRestart(e.service_id, now);
+          if (e.service_id == xcore::kMetaService) {
+            // The board may come back with other firmware.
+            major_.reset();
+            next_rpc_s_.reset();
+          }
+          break;
+        case Kind::kIncompatible:
+          RCLCPP_ERROR(get_logger(), "Service %s (%u) is not claimed: %s", name, e.service_id, e.text.c_str());
+          break;
+        case Kind::kRpcResult:
+          capabilities |= OnFirmwareAnswer(e, now);
+          break;
+        case Kind::kRpcFailed:
+          RCLCPP_WARN(get_logger(), "Firmware question %u to the board failed: %s", e.function_id, e.text.c_str());
+          if (!next_rpc_s_) next_rpc_s_ = now + kRpcRetryS;
+          break;
+      }
+    }
+    if (capabilities) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      PublishCapabilities();
+    }
+  }
+
+  // Called with mutex_ held; true when the capabilities changed.
+  bool OnFirmwareAnswer(const xcore::LinkEvent& e, double now) {
+    if (e.service_id != xcore::kMetaService) return false;
+    if (e.status != 0) {
+      RCLCPP_WARN(get_logger(), "Firmware question %u answered with status %u", e.function_id, e.status);
+      if (!next_rpc_s_) next_rpc_s_ = now + kRpcRetryS;
+      return false;
+    }
+    if (e.function_id == kGetMajorVersion) {
+      if (e.value.size() != 2) return false;
+      major_ = xcore::Reader(e.value).U16();
+      if (*major_ == expected_major_) {
+        RCLCPP_INFO(get_logger(), "Firmware major version %u as expected", *major_);
+      } else {
+        RCLCPP_ERROR(get_logger(), "Firmware major version %u, expected %u: motion and blade stay blocked", *major_,
+                     expected_major_);
+      }
+      return true;
+    }
+    if (e.function_id == kGetFirmwareVersion) {
+      std::string version = xcore::DecodeText(e.value);
+      if (version == firmware_version_) return false;
+      firmware_version_ = version;
+      RCLCPP_INFO(get_logger(), "xCore firmware %s", version.c_str());
+      return true;
+    }
+    return false;
+  }
+
+  void Shutdown() {
+    std::vector<xcore::Datagram> datagrams;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (link_) {
+        for (const auto& value : control_.StopInputs()) {
+          if (auto datagram = link_->Input(value.service_id, value.channel_id, value.value)) {
+            datagrams.push_back(*datagram);
+          }
+        }
+      }
+    }
+    Send(datagrams);
+    Close();
+  }
+
+  void PublishTwist(const xcore::WheelTwist& twist) {
+    geometry_msgs::msg::TwistStamped msg;
+    msg.header.stamp = now();
+    msg.header.frame_id = "base_link";
+    msg.twist.linear.x = twist.linear;
+    msg.twist.angular.z = twist.angular;
+    twist_pub_->publish(msg);
+  }
+
+  void PublishImu(const std::vector<double>& axes) {
+    sensor_msgs::msg::Imu msg;
+    msg.header.stamp = now();
+    msg.header.frame_id = imu_frame_id_;
+    // No orientation: the board has no fusion, users take the tilt from gravity.
+    msg.orientation_covariance[0] = -1.0;
+    msg.linear_acceleration.x = axes[0];
+    msg.linear_acceleration.y = axes[1];
+    msg.linear_acceleration.z = axes[2];
+    msg.angular_velocity.x = axes[3];
+    msg.angular_velocity.y = axes[4];
+    msg.angular_velocity.z = axes[5];
+    imu_pub_->publish(msg);
+  }
+
+  // Called with mutex_ held, or before the I/O thread starts.
+  void PublishCapabilities() {
+    mowbite_msgs::msg::HardwareCapabilities msg;
+    msg.platform = platform_;
+    diagnostic_msgs::msg::KeyValue firmware;
+    firmware.key = "xcore";
+    firmware.value = firmware_version_;
+    msg.firmware.push_back(firmware);
+    msg.blade_speed_control = true;
+    msg.blade_height_control = false;
+    msg.blade_height_min_mm = 0;
+    msg.blade_height_max_mm = 0;
+    msg.blade_lease_max_s = static_cast<float>(blade_lease_max_s_);
+    // The board charges by itself and ignores the host: there is nothing to start or stop.
+    msg.host_charge_control = false;
+    msg.rain_sensor = false;
+    msg.separate_bumpers = true;
+    msg.wheel_ticks = true;
+    msg.imu_source = "xcore_driver";
+    msg.gnss_source = gnss_source_;
+    msg.max_linear_speed = static_cast<float>(max_linear_speed_);
+    msg.max_angular_speed = static_cast<float>(max_angular_speed_);
+    msg.failsafe_without_host_s = static_cast<float>(failsafe_without_host_s_);
+    msg.safety_measurement_date = safety_measurement_date_;
+    capabilities_pub_->publish(msg);
+  }
+
+  static mowbite_msgs::msg::MotorState MotorMessage(const xcore::MotorReport& motor) {
+    mowbite_msgs::msg::MotorState msg;
+    msg.ok = motor.known && motor.status != xcore::kEscDisconnected;
+    if (!motor.known) return msg;
+    const double rpm = std::isfinite(motor.rpm) ? motor.rpm : 0.0;
+    msg.rpm = static_cast<int16_t>(std::clamp<double>(rpm, std::numeric_limits<int16_t>::min(),
+                                                      std::numeric_limits<int16_t>::max()));
+    msg.current = std::isfinite(motor.current) ? motor.current : 0.0f;
+    const double temperature = std::isfinite(motor.temperature) ? motor.temperature : 0.0;
+    msg.temperature = static_cast<int8_t>(std::clamp(std::lround(temperature), -128L, 127L));
+    msg.status = xcore::MotorStatusCode(motor.status);
+    return msg;
+  }
+
+  void PublishStatus() {
+    HardwareStatus msg;
+    msg.stamp = now();
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const auto s = control_.Status(MonotonicSeconds());
+      msg.emergency = s.blocked;
+      msg.emergency_latched = s.latched;
+      msg.emergency_reason = s.emergency_reason;
+      msg.telemetry_ok = s.telemetry_ok;
+      msg.lift = s.lift;
+      msg.stop = s.stop;
+      msg.bumper_left = s.bumper_left;
+      msg.bumper_right = s.bumper_right;
+      msg.bumper = s.bumper_left || s.bumper_right;
+      msg.rain = s.rain;
+      msg.dock_contact = s.dock_contact;
+      msg.dock_contact_raw = s.dock_contact_raw;
+      msg.moving = s.moving;
+      msg.blade_on = s.blade_on;
+      msg.blade_off_reason = static_cast<uint8_t>(s.blade_off_reason);
+      if (s.blade_on != blade_on_logged_) {
+        blade_on_logged_ = s.blade_on;
+        if (s.blade_on) {
+          RCLCPP_INFO(get_logger(), "Blade on");
+        } else {
+          RCLCPP_INFO(get_logger(), "Blade off: %s", BladeOffText(s.blade_off_reason));
+        }
+      }
+      if (s.emergency_reason != logged_reason_) {
+        logged_reason_ = s.emergency_reason;
+        RCLCPP_INFO(get_logger(), "Emergency reason 0x%x", s.emergency_reason);
+      }
+      if (s.battery.known) {
+        // The percentage follows the voltage linearly between empty and full.
+        msg.battery_source = HardwareStatus::BATTERY_SOURCE_ESTIMATE;
+        msg.battery_voltage = static_cast<float>(s.battery.voltage);
+        // Only the charge current is known: negative while charging, 0 otherwise.
+        msg.battery_current = s.battery.charge_current > 0 ? static_cast<float>(-s.battery.charge_current) : 0.0f;
+        msg.battery_percentage = static_cast<uint8_t>(std::lround(s.battery.fraction * 100.0));
+      }
+      msg.blade_motor = MotorMessage(s.blade_motor);
+      msg.left_motor = MotorMessage(s.left_motor);
+      msg.right_motor = MotorMessage(s.right_motor);
+      if (link_) {
+        msg.link_messages_ok = link_->received();
+        msg.link_errors = link_->dropped();
+      }
+    }
+    status_pub_->publish(msg);
+  }
+
+  void OnCmdVel(const geometry_msgs::msg::Twist& msg) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    control_.OnCmdVel(msg.linear.x, msg.angular.z, MonotonicSeconds());
+  }
+
+  void OnEmergency(const mowbite_msgs::srv::SetEmergency::Request& req,
+                   mowbite_msgs::srv::SetEmergency::Response& res) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (req.latch) {
+      const uint32_t bits = req.bits ? req.bits : xcore::kReasonHighLevel;
+      if (!control_.LatchEmergency(bits)) {
+        RCLCPP_ERROR(get_logger(), "Refused to latch with reason bits 0x%x: only HIGH_LEVEL, TILT, FENCE and STUCK",
+                     bits);
+        res.success = false;
+        res.message = "only HIGH_LEVEL, TILT, FENCE and STUCK can be latched by request";
+        return;
+      }
+      RCLCPP_WARN(get_logger(), "Emergency latched by request (bits 0x%x): %s", bits, req.reason.c_str());
+      res.message = "latched";
+    } else {
+      RCLCPP_INFO(get_logger(), "Emergency release requested: %s", req.reason.c_str());
+      control_.ReleaseEmergency(MonotonicSeconds());
+      res.message = "release requested";
+    }
+    res.success = true;
+  }
+
+  void OnBlade(const mowbite_msgs::srv::SetBlade::Request& req, mowbite_msgs::srv::SetBlade::Response& res) {
+    xcore::BladeRequest request;
+    request.on = req.on;
+    request.speed_percent = req.speed_percent;
+    request.height_mm = req.height_mm;
+    request.lease_s = req.lease_s;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto result = control_.SetBlade(request, MonotonicSeconds());
+    res.success = result == xcore::BladeResult::kOk;
+    res.message = xcore::BladeResultText(result);
+    if (!res.success) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Blade request refused: %s", res.message.c_str());
+    }
+  }
+
+  // The board charges whenever the station delivers and has no input to stop it (charge_stop false).
+  void OnCharge(const mowbite_msgs::srv::SetCharge::Request& req, mowbite_msgs::srv::SetCharge::Response& res) {
+    RCLCPP_WARN(get_logger(), "hw/charge %s refused: the board controls charging", req.on ? "on" : "off");
+    res.success = false;
+    res.message = "charging is controlled by the board";
+  }
+
+  xcore::InputConfig inputs_;
+  std::mutex mutex_;
+  xcore::XcoreControl control_;
+  std::optional<xcore::XcoreLink> link_;
+  std::map<uint16_t, std::vector<Section>> services_;
+  std::optional<uint16_t> major_;
+  std::optional<double> next_rpc_s_;
+  std::string firmware_version_;
+
+  xcore::UdpSocket announcements_;
+  xcore::UdpSocket service_socket_;
+  std::atomic<bool> running_{true};
+  std::thread io_thread_;
+
+  std::string platform_;
+  std::string interface_;
+  std::string bind_ip_text_;
+  uint32_t bind_ip_ = 0;
+  std::string group_;
+  uint16_t group_port_ = 0;
+  uint16_t expected_major_ = 1;
+  std::string imu_frame_id_;
+  std::string gnss_source_;
+  double blade_lease_max_s_ = 0;
+  double max_linear_speed_ = 0;
+  double max_angular_speed_ = 0;
+  double failsafe_without_host_s_ = -1;
+  std::string safety_measurement_date_;
+  bool blade_on_logged_ = false;
+  uint32_t logged_reason_ = 0;
+
+  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
+  rclcpp::Publisher<HardwareStatus>::SharedPtr status_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr capabilities_pub_;
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
+  rclcpp::Service<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_srv_;
+  rclcpp::Service<mowbite_msgs::srv::SetBlade>::SharedPtr blade_srv_;
+  rclcpp::Service<mowbite_msgs::srv::SetCharge>::SharedPtr charge_srv_;
+  rclcpp::TimerBase::SharedPtr status_timer_;
+};
+
+}  // namespace xcore_driver
+
+RCLCPP_COMPONENTS_REGISTER_NODE(xcore_driver::XcoreNode)

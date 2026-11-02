@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(mowbite_msgs REQUIRED)
 
 # Frames, CBOR, service descriptions and control logic without ROS, testable on any machine.
 add_library(xcore_core STATIC src/wire.cpp src/cbor.cpp src/schema.cpp src/services.cpp src/odometry.cpp src/xcore_control.cpp src/udp.cpp src/drive_regulator.cpp src/input_config.cpp src/link.cpp)
@@ -14,8 +20,16 @@ target_include_directories(xcore_core PUBLIC
   $<INSTALL_INTERFACE:include>)
 set_target_properties(xcore_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+add_library(xcore_driver_component SHARED src/xcore_node.cpp)
+target_link_libraries(xcore_driver_component xcore_core)
+ament_target_dependencies(xcore_driver_component rclcpp rclcpp_components geometry_msgs sensor_msgs diagnostic_msgs mowbite_msgs)
+rclcpp_components_register_node(xcore_driver_component
+  PLUGIN "xcore_driver::XcoreNode"
+  EXECUTABLE xcore_driver_node)
+
 install(DIRECTORY include/ DESTINATION include)
-install(TARGETS xcore_core
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+install(TARGETS xcore_core xcore_driver_component
   EXPORT export_xcore_driver
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib

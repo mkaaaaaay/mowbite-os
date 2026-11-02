@@ -75,6 +75,8 @@ constexpr uint16_t kRegEmptyVoltage = 1;
 constexpr uint16_t kRegFullVoltage = 2;
 constexpr uint16_t kRegCriticalLowVoltage = 3;
 constexpr uint16_t kRegCriticalHighVoltage = 4;
+constexpr uint16_t kRegChargeVoltage = 6;
+constexpr uint16_t kRegTerminationCurrent = 7;
 }  // namespace power
 
 namespace gps {
