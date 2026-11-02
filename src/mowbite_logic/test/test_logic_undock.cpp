@@ -488,3 +488,36 @@ TEST(Undock, CheckedAgainFromWhereTheMowerStands) {
   ASSERT_TRUE(refused);
   EXPECT_EQ(refused->details["reason"], "DOCK_UNREACHABLE");
 }
+
+TEST(Undock, HardwareThatChargesByItselfLeavesWithoutChargingOff) {
+  LogicCore core = Docked();
+  core.OnCapabilities(true, false);
+  StartUndocking(core);
+  EXPECT_TRUE(core.Undocking());
+  EXPECT_FALSE(core.TakeChargeOff());
+  const auto path = core.TakeUndockPath();
+  ASSERT_TRUE(path);
+  EXPECT_EQ(path->poses.size(), 9u);
+  EXPECT_TRUE(core.FollowerActive());
+  // A late answer of a driver changes nothing.
+  core.OnChargeOff(false, "charging is controlled by the board");
+  EXPECT_TRUE(core.Undocking());
+  core.TakeStopRequest();
+  ASSERT_EQ(core.OnAction(kAbort), ActionResult::kDone);
+  core.OnUndockEnded(LegEnd::kCanceled, Reason("STOPPED", "Aborted by the app (canceled)"));
+  EXPECT_TRUE(core.Idle());
+  // Nothing to allow again either.
+  EXPECT_FALSE(core.TakeChargeOn());
+}
+
+TEST(Undock, ADriverThatCanStopChargingIsWaitedFor) {
+  LogicCore core = Docked();
+  core.OnCapabilities(true, false);
+  core.OnCapabilities(true, true);
+  StartUndocking(core);
+  EXPECT_FALSE(core.TakeUndockPath());
+  EXPECT_TRUE(core.TakeChargeOff());
+  core.OnChargeOff(false, "no answer from hw/charge");
+  EXPECT_TRUE(core.Idle());
+  EXPECT_TRUE(core.TakeChargeOn());
+}

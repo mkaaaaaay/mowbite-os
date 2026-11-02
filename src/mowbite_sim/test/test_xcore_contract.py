@@ -208,6 +208,7 @@ class TestXcoreContract(unittest.TestCase):
         self.assertFalse(caps.blade_height_control)
         self.assertAlmostEqual(caps.blade_lease_max_s, 2.0)
         self.assertFalse(caps.host_charge_control)
+        self.assertFalse(caps.charge_stop)
         self.assertTrue(caps.wheel_ticks)
         self.assertTrue(caps.separate_bumpers)
         self.assertEqual(caps.imu_source, "xcore_driver")
