@@ -5,9 +5,14 @@
 #include <diagnostic_msgs/msg/key_value.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
+#include <cstdio>
 #include <limits>
+#include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
+#include <mowbite_msgs/msg/rtcm.hpp>
+#include <mowbite_msgs/msg/sensor_info.hpp>
+#include <mowbite_msgs/msg/sensor_value.hpp>
 #include <mowbite_msgs/srv/set_blade.hpp>
 #include <mowbite_msgs/srv/set_charge.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
@@ -16,9 +21,13 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <stdexcept>
 #include <thread>
 
+#include "mowbite_gnss/gga.h"
+#include "xcore_driver/gnss.h"
 #include "xcore_driver/input_config.h"
 #include "xcore_driver/link.h"
 #include "xcore_driver/services.h"
@@ -54,6 +63,7 @@ constexpr uint8_t kGetMajorVersion = 1;
 // A firmware question without an answer is asked again after this long.
 constexpr double kRpcRetryS = 5.0;
 constexpr double kTickS = 0.01;
+const char kAgeSensor[] = "os_correction_age";
 
 rclcpp::QoS LatchedQos() {
   return rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
@@ -62,6 +72,12 @@ rclcpp::QoS LatchedQos() {
 double MonotonicSeconds() {
   using namespace std::chrono;
   return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+double UtcSecondsOfDay() {
+  using namespace std::chrono;
+  const double s = duration<double>(system_clock::now().time_since_epoch()).count();
+  return std::fmod(s, 86400.0);
 }
 
 const char* ServiceName(uint16_t id) {
@@ -120,7 +136,7 @@ class XcoreNode : public rclcpp::Node {
     group_port_ = static_cast<uint16_t>(declare_parameter("announcement_port", int{xcore::kAnnouncementPort}));
     expected_major_ = static_cast<uint16_t>(declare_parameter("expected_major_version", 1));
     imu_frame_id_ = declare_parameter("imu_frame_id", "base_link");
-    gnss_source_ = declare_parameter("gnss_source", "");
+    gnss_source_ = declare_parameter("gnss_source", "xcore_driver");
     failsafe_without_host_s_ = declare_parameter("failsafe_without_host", -1.0);
     safety_measurement_date_ = declare_parameter("safety_measurement_date", "");
     if (!xcore::ParseIpv4(bind_ip_text_, bind_ip_)) throw std::invalid_argument("bind_ip is no IPv4 address");
@@ -134,6 +150,11 @@ class XcoreNode : public rclcpp::Node {
     status_pub_ = create_publisher<HardwareStatus>("hw/status", 10);
     capabilities_pub_ = create_publisher<mowbite_msgs::msg::HardwareCapabilities>("hw/capabilities", LatchedQos());
     PublishCapabilities();
+    if (gnss_source_ == get_name()) {
+      SetUpGnss();
+    } else {
+      RCLCPP_INFO(get_logger(), "GNSS from %s, the board's GPS service is not passed on", gnss_source_.c_str());
+    }
 
     cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
         "hw/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) { OnCmdVel(*msg); });
@@ -157,6 +178,67 @@ class XcoreNode : public rclcpp::Node {
   }
 
  private:
+  // Poses from the board's GPS service in the frame of the datum, RTCM from gnss/rtcm to it, and a GGA for the caster.
+  void SetUpGnss() {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double lat = declare_parameter("datum_lat", nan);
+    const double lon = declare_parameter("datum_long", nan);
+    const double height = declare_parameter("datum_height", nan);
+    xcore::GnssConfig config;
+    config.accuracy_rtk_fixed_m = declare_parameter("accuracy_rtk_fixed", config.accuracy_rtk_fixed_m);
+    config.accuracy_rtk_float_m = declare_parameter("accuracy_rtk_float", config.accuracy_rtk_float_m);
+    config.accuracy_single_m = declare_parameter("accuracy_single", config.accuracy_single_m);
+    config.min_accuracy_m = declare_parameter("min_accuracy", config.min_accuracy_m);
+    config.max_correction_age_s = declare_parameter("max_correction_age", config.max_correction_age_s);
+    max_correction_age_s_ = config.max_correction_age_s;
+    gnss_frame_id_ = declare_parameter("gnss_frame_id", gnss_frame_id_);
+
+    gga_pub_ = create_publisher<std_msgs::msg::String>("gnss/gga", 10);
+    rtcm_sub_ = create_subscription<mowbite_msgs::msg::Rtcm>(
+        "gnss/rtcm", rclcpp::QoS(50).reliable(), [this](mowbite_msgs::msg::Rtcm::ConstSharedPtr msg) { OnRtcm(*msg); });
+    sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorInfo>(
+        "bridge/sensor_info", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().transient_local());
+    sensor_value_pub_ = create_publisher<mowbite_msgs::msg::SensorValue>("bridge/sensor_value", 100);
+    mowbite_msgs::msg::SensorInfo info;
+    info.sensor_id = kAgeSensor;
+    info.sensor_name = "RTK Correction Age";
+    info.value_type = mowbite_msgs::msg::SensorInfo::TYPE_DOUBLE;
+    info.value_description = mowbite_msgs::msg::SensorInfo::VALUE_DESCRIPTION_UNKNOWN;
+    info.unit = "s";
+    info.has_critical_high = true;
+    info.upper_critical_value = max_correction_age_s_;
+    sensor_info_pub_->publish(info);
+    gnss_enabled_ = true;
+
+    if (!std::isfinite(lat) || !std::isfinite(lon) || !std::isfinite(height) || std::abs(lat) > 90.0 ||
+        std::abs(lon) > 180.0) {
+      RCLCPP_ERROR(get_logger(), "datum_lat, datum_long and datum_height are not set, no pose is published");
+      return;
+    }
+    gnss_.emplace(config, mowbite_gnss::LocalFrame(lat, lon, height));
+    pose_pub_ = create_publisher<mowbite_msgs::msg::AbsolutePose>("gps/absolute_pose", 10);
+    // The datum for the map, which belongs to it: the origin of the poses above, not a measured fix.
+    datum_pub_ = create_publisher<sensor_msgs::msg::NavSatFix>("gps/datum", LatchedQos());
+    sensor_msgs::msg::NavSatFix datum;
+    datum.header.stamp = now();
+    datum.header.frame_id = gnss_frame_id_;
+    datum.status.status = sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX;
+    datum.latitude = lat;
+    datum.longitude = lon;
+    datum.altitude = height;
+    datum.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN;
+    datum_pub_->publish(datum);
+    // The app reads the datum from params/json, the bridge collects it from this latched topic.
+    params_pub_ = create_publisher<std_msgs::msg::String>(
+        "bridge/params", rclcpp::QoS(rclcpp::KeepLast(50)).reliable().transient_local());
+    char text[160];
+    std::snprintf(text, sizeof(text), "{\"node\":\"%s\",\"params\":{\"datum_lat\":%.15g,\"datum_long\":%.15g}}",
+                  get_fully_qualified_name(), lat, lon);
+    std_msgs::msg::String msg;
+    msg.data = text;
+    params_pub_->publish(msg);
+  }
+
   xcore::InputConfig LoadInputs() {
     auto lines = declare_parameter("inputs.gpio_lines", std::vector<std::string>{});
     auto active_high = declare_parameter("inputs.gpio_active_high", std::vector<bool>{});
@@ -363,13 +445,20 @@ class XcoreNode : public rclcpp::Node {
     std::vector<xcore::LinkEvent> events;
     std::vector<xcore::WheelTwist> twists;
     std::vector<std::vector<double>> imu;
+    std::vector<xcore::Output> gps;
+    std::optional<double> correction_age;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       const double now = MonotonicSeconds();
       link_->OnDatagram(data, size, from, now, outputs, events);
+      if (last_rtcm_s_) correction_age = now - *last_rtcm_s_;
       for (const auto& out : outputs) {
         if (out.service_id == xcore::kImuService && out.channel_id == xcore::imu::kOutAxes) {
           if (auto axes = xcore::DecodeDoubles(out.value, 9)) imu.push_back(*axes);
+          continue;
+        }
+        if (out.service_id == xcore::kGpsService) {
+          gps.push_back(out);
           continue;
         }
         if (auto twist = control_.OnOutput(out.service_id, out.channel_id, out.value, out.board_time_us, now)) {
@@ -380,6 +469,94 @@ class XcoreNode : public rclcpp::Node {
     HandleEvents(events);
     for (const auto& twist : twists) PublishTwist(twist);
     for (const auto& axes : imu) PublishImu(axes);
+    if (gnss_enabled_ && !gps.empty()) OnGnss(gps, correction_age);
+  }
+
+  // Called from the I/O thread only, which alone uses the converter.
+  void OnGnss(const std::vector<xcore::Output>& outputs, const std::optional<double>& correction_age) {
+    auto solution = xcore::DecodeGnss(outputs);
+    if (!solution) return;
+    const double now = MonotonicSeconds();
+    if (now - last_gga_s_ >= 1.0) {
+      last_gga_s_ = now;
+      std_msgs::msg::String gga;
+      gga.data = mowbite_gnss::BuildGga(xcore::GgaOf(*solution, UtcSecondsOfDay()));
+      gga_pub_->publish(gga);
+      if (correction_age) {
+        mowbite_msgs::msg::SensorValue value;
+        value.sensor_id = kAgeSensor;
+        value.value = *correction_age;
+        sensor_value_pub_->publish(value);
+      }
+    }
+    if (!gnss_) return;
+    auto pose = gnss_->Convert(*solution, correction_age);
+    if (gnss_->fixed_without_corrections() != reported_downgrades_) {
+      reported_downgrades_ = gnss_->fixed_without_corrections();
+      if (auto age = gnss_->last_downgrade_age()) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                             "RTK fixed on corrections passed %.1f s ago (limit %.0f s): counted as float", *age,
+                             max_correction_age_s_);
+      } else {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                             "RTK fixed before the host passed any corrections to the board: counted as float");
+      }
+    }
+    if (gnss_->repeated() != reported_repeats_) {
+      reported_repeats_ = gnss_->repeated();
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "GPS solution with the board time of the one before, "
+                           "%lu dropped so far", static_cast<unsigned long>(reported_repeats_));
+    }
+    if (pose) PublishPose(*pose);
+  }
+
+  void PublishPose(const xcore::GnssPose& pose) {
+    mowbite_msgs::msg::AbsolutePose msg;
+    msg.header.stamp = now();
+    msg.header.frame_id = gnss_frame_id_;
+    msg.sensor_stamp = pose.sensor_stamp_ms;
+    msg.received_stamp = static_cast<uint32_t>(MonotonicSeconds() * 1000.0);
+    msg.source = mowbite_msgs::msg::AbsolutePose::SOURCE_GPS;
+    msg.flags = pose.flags;
+    msg.orientation_valid = 0;
+    msg.motion_vector_valid = pose.motion_valid ? 1 : 0;
+    msg.position_accuracy = static_cast<float>(pose.accuracy_m);
+    msg.orientation_accuracy = 0.0f;
+    msg.pose.pose.position.x = pose.position.east;
+    msg.pose.pose.position.y = pose.position.north;
+    msg.pose.pose.position.z = pose.position.up;
+    msg.pose.pose.orientation.w = 1.0;
+    msg.motion_vector.x = pose.motion_east_mps;
+    msg.motion_vector.y = pose.motion_north_mps;
+    msg.vehicle_heading = 0.0;
+    msg.motion_heading = pose.motion_heading;
+    pose_pub_->publish(msg);
+  }
+
+  void OnRtcm(const mowbite_msgs::msg::Rtcm& msg) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!rtcm_.Push(msg.data.data(), msg.data.size())) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "RTCM queue full, %lu bytes dropped so far",
+                           static_cast<unsigned long>(rtcm_.dropped_bytes()));
+    }
+  }
+
+  // Called with mutex_ held: the queued RTCM to a running GPS service, dropped while it does not run.
+  void PassRtcm(double now, std::vector<xcore::Datagram>& datagrams) {
+    if (rtcm_.size() == 0) return;
+    if (link_->State(xcore::kGpsService) != xcore::ServiceState::kRunning) {
+      rtcm_.Clear();
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                           "RTCM dropped while the GPS service does not run, %lu bytes so far",
+                           static_cast<unsigned long>(rtcm_.dropped_bytes()));
+      return;
+    }
+    for (const auto& piece : rtcm_.Take()) {
+      if (auto datagram = link_->Input(xcore::kGpsService, xcore::gps::kInRtcm, piece)) {
+        datagrams.push_back(*datagram);
+        last_rtcm_s_ = now;
+      }
+    }
   }
 
   void Tick(double now) {
@@ -396,6 +573,7 @@ class XcoreNode : public rclcpp::Node {
           datagrams.push_back(*datagram);
         }
       }
+      PassRtcm(now, datagrams);
     }
     Send(datagrams);
     HandleEvents(events);
@@ -694,6 +872,16 @@ class XcoreNode : public rclcpp::Node {
   uint16_t expected_major_ = 1;
   std::string imu_frame_id_;
   std::string gnss_source_;
+  std::string gnss_frame_id_ = "map";
+  // GNSS: the converter belongs to the I/O thread; queue and time of the last RTCM passed on are guarded by mutex_.
+  bool gnss_enabled_ = false;
+  std::optional<xcore::GnssConverter> gnss_;
+  xcore::RtcmQueue rtcm_;
+  std::optional<double> last_rtcm_s_;
+  double max_correction_age_s_ = 0;
+  double last_gga_s_ = -1e9;
+  uint64_t reported_downgrades_ = 0;
+  uint64_t reported_repeats_ = 0;
   double blade_lease_max_s_ = 0;
   double max_linear_speed_ = 0;
   double max_angular_speed_ = 0;
@@ -706,6 +894,13 @@ class XcoreNode : public rclcpp::Node {
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
   rclcpp::Publisher<HardwareStatus>::SharedPtr status_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr capabilities_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr datum_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr gga_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::SensorInfo>::SharedPtr sensor_info_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_pub_;
+  rclcpp::Subscription<mowbite_msgs::msg::Rtcm>::SharedPtr rtcm_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
   rclcpp::Service<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetBlade>::SharedPtr blade_srv_;

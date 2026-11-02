@@ -48,7 +48,12 @@ xcore_driver:
     gps_uart: 6
     gps_baudrate: 460800
     gps_protocol: nmea
-    gnss_source: ""
+    # The board evaluates the receiver itself; this driver passes its solutions on as gps/absolute_pose and RTCM from
+    # gnss/rtcm to it. datum_lat, datum_long and datum_height of the garden go into the parameter file on the mower,
+    # not here; without them no pose is published.
+    gnss_source: xcore_driver
+    # The board tells no age of its corrections: RTK fixed counts only while this driver passed RTCM within this many s.
+    max_correction_age: 30.0
 
     # One entry per GPIO input, in this order on the board; "none" for no emergency reason or role.
     inputs:
