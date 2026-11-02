@@ -58,6 +58,8 @@ constexpr uint32_t kReasonTilt = 1u << 13;
 constexpr uint32_t kReasonFence = 1u << 14;
 constexpr uint32_t kReasonStuck = 1u << 15;
 constexpr uint32_t kReasonMowerNotStopped = 1u << 17;
+// Causes the board latches; the driver keeps them in its reason until the release, also across a restart of the board.
+constexpr uint32_t kLatchedCauses = (1u << 2) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 9) | (1u << 10) | (1u << 11);
 // The bits a node above the driver may latch with over hw/emergency.
 constexpr uint32_t kHostLatchReasons = kReasonHighLevel | kReasonTilt | kReasonFence | kReasonStuck;
 
@@ -200,6 +202,8 @@ class XcoreControl {
   std::optional<uint16_t> board_reason_;
   std::optional<double> last_emergency_s_;
   uint32_t host_latch_ = 0;
+  // Causes the board reported with its latch, held until a release.
+  uint32_t latched_causes_ = 0;
   // A release asks the board to clear this many more times.
   int clear_remaining_ = 0;
   std::optional<double> next_emergency_s_;

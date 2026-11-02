@@ -128,6 +128,7 @@ bool XcoreControl::LatchEmergency(uint32_t bits) {
 
 void XcoreControl::ReleaseEmergency(double now) {
   host_latch_ = 0;
+  latched_causes_ = 0;
   if (!blade_turning_) mower_not_stopped_ = false;
   link_lost_ = false;
   drive_fault_ = false;
@@ -148,6 +149,7 @@ std::optional<WheelTwist> XcoreControl::OnOutput(uint16_t service_id, uint16_t c
       if (channel_id == emergency::kOutReason && value.size() == 2) {
         board_reason_ = Reader(value).U16();
         last_emergency_s_ = now;
+        if (*board_reason_ & reason::kLatch) latched_causes_ |= *board_reason_ & kLatchedCauses;
         // The board stops without the host's messages but lets go again once they come; the host keeps it stopped.
         if (*board_reason_ & reason::kTimeoutHighLevel) {
           if (board_heard_us_) link_lost_ = true;
@@ -326,6 +328,8 @@ std::vector<InputValue> XcoreControl::Tick(double now) {
   if (Due(next_emergency_s_, config_.emergency_period_s, now)) {
     bool hold = host_latch_ || mower_not_stopped_ || link_lost_ || drive_fault_;
     uint16_t set = hold ? reason::kHighLevel | reason::kLatch : 0;
+    // A board that lost its latch in a restart gets it back.
+    if (!set && latched_causes_) set = reason::kLatch;
     uint16_t clear = 0;
     if (clear_remaining_ > 0 && !set) {
       // The board computes the other bits itself on every pass.
@@ -404,7 +408,8 @@ uint32_t XcoreControl::Reason(double now) const {
   if (mower_not_stopped_) bits |= kReasonMowerNotStopped | kReasonLatch;
   if (link_lost_) bits |= reason::kTimeoutHighLevel | kReasonLatch;
   if (drive_fault_) bits |= kReasonHighLevel | kReasonLatch;
-  if (host_latch_) bits |= kReasonLatch;
+  if (host_latch_ || latched_causes_) bits |= kReasonLatch;
+  bits |= latched_causes_;
   if (TelemetryStale(now)) bits |= kReasonTimeoutInputs;
   if (!services_ready_) bits |= reason::kServiceNotReady;
   if (!firmware_compatible_) bits |= kReasonFirmwareIncompatible;

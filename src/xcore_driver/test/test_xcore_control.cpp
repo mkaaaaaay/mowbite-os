@@ -421,3 +421,37 @@ TEST(XcoreControl, MotorStatusCodes) {
   EXPECT_EQ(MotorStatusCode(kEscDisconnected), -2);
   EXPECT_EQ(MotorStatusCode(7), -3);
 }
+
+TEST(XcoreControl, LatchedCauseStaysUntilRelease) {
+  Fixture f;
+  f.Board(reason::kLift | reason::kLatch, 0);
+  EXPECT_EQ(f.control.Status(0).emergency_reason, kReasonLift | kReasonLatch);
+  // The lift is free again; the board keeps only its latch, the driver the cause as well.
+  f.Board(reason::kLatch, 0.5);
+  EXPECT_EQ(f.control.Status(0.5).emergency_reason, kReasonLift | kReasonLatch);
+  // The board restarts and forgets its latch: the driver sets it again.
+  f.control.OnServiceRestart(kEmergencyService, 1);
+  f.Board(reason::kTimeoutHighLevel, 1.1);
+  EXPECT_TRUE(f.control.Status(1.1).emergency_reason & kReasonLift);
+  auto out = Of(f.control.Tick(1.1), kEmergencyService);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(EmergencyOf(out[0]).first, reason::kLatch);
+  f.Board(reason::kLatch, 1.3);
+  f.control.ReleaseEmergency(1.4);
+  out = Of(f.control.Tick(1.4), kEmergencyService);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(EmergencyOf(out[0]).first, 0);
+  EXPECT_TRUE(EmergencyOf(out[0]).second & reason::kLatch);
+  f.Board(0, 1.5);
+  EXPECT_FALSE(f.control.Status(1.5).blocked);
+}
+
+TEST(XcoreControl, CauseStillThereLatchesAgainAfterRelease) {
+  Fixture f;
+  f.Board(reason::kStop | reason::kLatch, 0);
+  f.control.ReleaseEmergency(0.1);
+  f.Board(reason::kStop | reason::kLatch, 0.2);
+  EXPECT_EQ(f.control.Status(0.2).emergency_reason, kReasonStop | kReasonLatch);
+  f.Board(reason::kLatch, 0.3);
+  EXPECT_EQ(f.control.Status(0.3).emergency_reason, kReasonStop | kReasonLatch);
+}
