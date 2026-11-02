@@ -1,0 +1,774 @@
+#!/usr/bin/env python3
+"""Simulated xCore board of an OpenMower v2 mower (YardForce carrier) on UDP, for the xcore_driver.
+
+The board announces its services by multicast with the descriptions captured on the NX60i (--services). At first only
+the meta service runs; once it is configured with the carrier's name the others start. A claim (10 bytes: host address
+as a number, port, heartbeat interval) points a service at the host, stops it and resets its registers; services with
+registers ask for their configuration every second until one fits. The emergency service computes its reason like the
+firmware does: inputs with their delay latch STOP, LIFT or COLLISION, a second without a message from the host gives
+TIMEOUT_HIGH_LEVEL, a missing service SERVICE_NOT_READY; any reason zeroes wheels and blade. The diff drive applies the
+twist as duty (left v - w*d/2, right mirrored), the wheels turn at duty * --full-duty-speed, the counters run free (the
+right one falls going forward). IMU at 100 Hz through the configured axis remap of a sensor mounted upside down, power
+every second, GPS at 5 Hz, inputs every 200 ms.
+A JSON file with flags (stop, rear_stop, lift, lift_left, lift_right, bumper, bumper_left, bumper_right, dock,
+battery_voltage, major_version, firmware, restart, cutter_ignores_off, drive_status) is read on every cycle; restart
+restarts the board whenever its value changes, as does a GPS configuration other than the first one. Every datagram from
+the host goes to a JSON lines log, --state writes the board as JSON.
+"""
+import argparse
+import json
+import math
+import os
+import random
+import select
+import signal
+import socket
+import struct
+import sys
+import time
+
+HEADER = struct.Struct("<BBBBHBBHHQI")
+MAX_DATAGRAM = 1472
+MAX_PAYLOAD = MAX_DATAGRAM - HEADER.size
+
+DATA, CONFIG_REQUEST, CLAIM, HEARTBEAT, TRANSACTION, RPC_REQUEST, RPC_RESPONSE, LOG, ANNOUNCE = (
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x7F, 0x80)
+
+EMERGENCY, DIFF_DRIVE, MOWER, IMU, POWER, GPS, INPUT, HIGH_LEVEL, META = 1, 2, 3, 4, 5, 6, 7, 8, 11
+
+LATCH, TIMEOUT_INPUTS, STOP, LIFT, LIFT_MULTIPLE, COLLISION = 1, 2, 4, 8, 16, 32
+TIMEOUT_HIGH_LEVEL, HIGH_LEVEL, SERVICE_NOT_READY, COLLISION_MULTIPLE = 64, 128, 256, 512
+HOST_BITS = LATCH | HIGH_LEVEL | 1024 | 2048 | 4096
+REASON_OF = {"stop": STOP, "lift": LIFT, "collision": COLLISION}
+
+CARRIER_NAMES = ("YardForce",)
+ESC_OK, ESC_RUNNING = 200, 201
+GRAVITY = 9.80665
+# Wiring of the NX60i: which flag makes which line active.
+LINE_FLAGS = {"GPIO1": ("stop",), "GPIO5": ("rear_stop",), "GPIO10": ("lift", "lift_left"),
+              "GPIO11": ("lift", "lift_right"), "GPIO12": ("bumper", "bumper_right"),
+              "GPIO13": ("bumper", "bumper_left")}
+
+
+def cbor(value):
+    """Own CBOR encoder for what a description holds: maps, arrays, text, integers, booleans, floats."""
+    def head(major, n):
+        if n < 24:
+            return bytes([major << 5 | n])
+        for ai, size in ((24, 1), (25, 2), (26, 4), (27, 8)):
+            if n < 1 << (8 * size):
+                return bytes([major << 5 | ai]) + n.to_bytes(size, "big")
+        raise ValueError("integer too large")
+    if value is True:
+        return b"\xf5"
+    if value is False:
+        return b"\xf4"
+    if value is None:
+        return b"\xf6"
+    if isinstance(value, int):
+        return head(0, value) if value >= 0 else head(1, -1 - value)
+    if isinstance(value, float):
+        return b"\xfb" + struct.pack(">d", value)
+    if isinstance(value, str):
+        raw = value.encode()
+        return head(3, len(raw)) + raw
+    if isinstance(value, bytes):
+        return head(2, len(value)) + value
+    if isinstance(value, list):
+        return head(4, len(value)) + b"".join(cbor(v) for v in value)
+    if isinstance(value, dict):
+        return head(5, len(value)) + b"".join(cbor(k) + cbor(v) for k, v in value.items())
+    raise TypeError(type(value))
+
+
+def heatshrink_decode(stream):
+    """Literals (flag 1, 8 bits) and back references (flag 0, 9 bits distance - 1, 5 bits count - 1), MSB first."""
+    bits = "".join(f"{b:08b}" for b in stream)
+    out = bytearray()
+    at = 0
+    while at < len(bits):
+        flag = bits[at]
+        at += 1
+        if flag == "1":
+            if at + 8 > len(bits):
+                break
+            out.append(int(bits[at:at + 8], 2))
+            at += 8
+            continue
+        if at + 14 > len(bits):
+            break
+        distance = int(bits[at:at + 9], 2) + 1
+        count = int(bits[at + 9:at + 14], 2) + 1
+        at += 14
+        for _ in range(count):
+            out.append(out[-distance] if distance <= len(out) else 0)
+    return bytes(out)
+
+
+SCALARS = {"uint8_t": ("B", 1), "int8_t": ("b", 1), "uint16_t": ("H", 2), "int16_t": ("h", 2),
+           "uint32_t": ("I", 4), "int32_t": ("i", 4), "uint64_t": ("Q", 8), "int64_t": ("q", 8),
+           "float": ("f", 4), "double": ("d", 8), "char": ("c", 1)}
+
+
+def parse_type(text, enums):
+    """(format, element size, count or None for a scalar), or ("blob", 1, None)."""
+    if text == "blob":
+        return "blob", 1, None
+    count = None
+    if text.endswith("]"):
+        text, n = text[:-1].split("[")
+        count = int(n)
+    if text in enums:
+        text = enums[text]
+    fmt, size = SCALARS[text]
+    return fmt, size, count
+
+
+def fits(kind, length):
+    fmt, size, count = kind
+    if fmt == "blob":
+        return True
+    if count is None:
+        return length == size
+    return length % size == 0 and length <= size * count
+
+
+def sections(payload):
+    out = []
+    at = 0
+    while at < len(payload):
+        if at + 8 > len(payload):
+            return None
+        sid, _, length = struct.unpack_from("<HHI", payload, at)
+        at += 8
+        if at + length > len(payload):
+            return None
+        out.append((sid, payload[at:at + length]))
+        at += length
+    return out
+
+
+def encode_sections(values):
+    return b"".join(struct.pack("<HHI", i, 0, len(v)) + v for i, v in values)
+
+
+def doubles(*values):
+    return struct.pack(f"<{len(values)}d", *values)
+
+
+def read_flags(path):
+    if not path:
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+class Log:
+    """JSON lines, stops writing at max_bytes."""
+
+    def __init__(self, path, max_bytes):
+        self.file = open(path, "w") if path else None
+        self.left = max_bytes
+
+    def write(self, entry):
+        if not self.file or self.left <= 0:
+            return
+        line = json.dumps(entry) + "\n"
+        self.left -= len(line)
+        self.file.write(line)
+        self.file.flush()
+
+
+class Service:
+    def __init__(self, sid, desc, now):
+        self.sid = sid
+        self.desc = desc
+        enums = {e["id"]: e["base_type"] for e in desc.get("enums") or []}
+        self.inputs = {c["id"]: parse_type(c["type"], enums) for c in desc.get("inputs", [])}
+        self.outputs = {c["id"]: parse_type(c["type"], enums) for c in desc.get("outputs", [])}
+        self.registers = {c["id"]: (parse_type(c["type"], enums), c) for c in desc.get("registers", [])}
+        self.functions = {f["id"]: f for f in desc.get("functions", [])}
+        self.started = now
+        self.target = None
+        self.heartbeat = 0.0
+        self.next_heartbeat = None
+        self.next_announce = now
+        self.next_request = None
+        self.values = {}
+        self.configured = not self.registers
+        self.sequence = 0
+
+    @property
+    def running(self):
+        return self.configured
+
+    def required_missing(self, values):
+        for rid, (kind, channel) in self.registers.items():
+            if kind[0] == "blob" or channel.get("optional") or "default" in channel:
+                continue
+            if rid not in values:
+                return channel["name"]
+        return None
+
+
+class Board:
+    def __init__(self, args):
+        self.args = args
+        self.descriptions = {int(k): v for k, v in json.load(open(args.services))["services"].items()}
+        self.log = Log(args.log, args.log_max_mb * 1024 * 1024)
+        self.t0 = time.monotonic()
+        self.restarts = 0
+        self.restart_flag = None
+        self.socket = None
+        self.counters = {"claims": {}, "short_emergency_inputs": 0, "rejected_configs": 0, "gps_restarts": 0,
+                         "rtcm_bytes": 0, "rpc_calls": 0, "meta_names": []}
+        self.x = self.y = self.yaw = 0.0
+        self.ticks = [args.ticks_start % 2**32 + 0.0, args.ticks_start % 2**32 + 0.0]
+        self.boot()
+
+    def now(self):
+        return time.monotonic() - self.t0
+
+    def boot(self):
+        """A start of the board: new port, every service reset, only meta runs."""
+        if self.socket:
+            self.socket.close()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind((self.args.ip, 0))
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(self.args.ip))
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+        sock.setblocking(False)
+        self.socket = sock
+        self.port = sock.getsockname()[1]
+        self.boot_time = self.now()
+        now = self.now()
+        self.services = {META: Service(META, self.descriptions[META], now)}
+        self.carrier_up = False
+        self.gps_started = None
+        self.host_bits = 0
+        self.reason = TIMEOUT_INPUTS | TIMEOUT_HIGH_LEVEL
+        self.last_emergency_input = None
+        self.next_reason_out = 0.0
+        self.reported_reason = None
+        self.duty = [0.0, 0.0]
+        self.drive_set_at = None
+        self.next_drive_out = 0.0
+        self.drive_sent_once = False
+        self.mower_speed = 0.0
+        self.mower_set_at = None
+        self.mower_rpm = 0.0
+        self.next_mower_out = 0.0
+        self.input_config = None
+        self.input_active_since = {}
+        self.inputs_mask = None
+        self.next_inputs_out = 0.0
+        self.next_power_out = 0.0
+        self.next_gps_out = 0.0
+        self.next_imu = 0.0
+        self.log.write({"t": now, "event": "boot", "port": self.port})
+
+    def board_time(self):
+        """µs since the start, in steps of 100 µs, 32 bits wide."""
+        return (int((self.now() - self.boot_time) * 1e4) * 100) & 0xFFFFFFFF
+
+    # Sending ------------------------------------------------------------------------------------------------------
+
+    def send(self, service, msg_type, arg1=0, arg2=0, payload=b"", to=None):
+        to = to or service.target
+        if to is None:
+            return
+        if msg_type != ANNOUNCE:
+            service.sequence = (service.sequence + 1) & 0xFFFF
+        header = HEADER.pack(1, msg_type, 1, 0, 0 if msg_type == ANNOUNCE else service.sid, arg1, 0, arg2,
+                             0 if msg_type == ANNOUNCE else service.sequence, self.board_time(), len(payload))
+        try:
+            self.socket.sendto(header + payload, to)
+        except OSError:
+            pass
+
+    def output(self, sid, values):
+        """Values of a running, claimed service as one transaction."""
+        service = self.services.get(sid)
+        if service and service.running and service.target:
+            self.send(service, TRANSACTION, 0, 0, encode_sections(values))
+
+    def output_data(self, sid, channel, value):
+        service = self.services.get(sid)
+        if service and service.running and service.target:
+            self.send(service, DATA, 0, channel, value)
+
+    def announce(self, service):
+        payload = cbor({"sid": service.sid, "endpoint": {"ip": self.args.ip, "port": self.port}, "desc": service.desc})
+        self.send(service, ANNOUNCE, payload=payload, to=(self.args.group, self.args.group_port))
+
+    # Receiving ----------------------------------------------------------------------------------------------------
+
+    def receive(self, data, sender):
+        now = self.now()
+        if len(data) < HEADER.size:
+            return
+        version, msg_type, flags, _, sid, arg1, _, arg2, sequence, stamp, length = HEADER.unpack_from(data)
+        payload = data[HEADER.size:]
+        entry = {"t": now, "sid": sid, "type": msg_type, "arg1": arg1, "arg2": arg2, "len": length,
+                 "hex": payload[:600].hex()}
+        if version != 1 or length != len(payload):
+            entry["dropped"] = "length" if version == 1 else "version"
+            self.log.write(entry)
+            return
+        self.log.write(entry)
+        service = self.services.get(sid)
+        if service is None:
+            return
+        if msg_type == CLAIM:
+            self.claim(service, payload, now)
+        elif msg_type == TRANSACTION and arg1 == 1:
+            self.configure(service, payload, now)
+        elif msg_type == TRANSACTION and arg1 == 0 and service.running:
+            for channel, value in sections(payload) or []:
+                self.input(service, channel, value, now)
+        elif msg_type == DATA and service.running:
+            self.input(service, arg2, payload, now)
+        elif msg_type == RPC_REQUEST and service.running:
+            self.rpc(service, arg1, arg2)
+
+    def claim(self, service, payload, now):
+        if len(payload) != 10:
+            return
+        ip, port, interval = struct.unpack("<IHI", payload)
+        self.counters["claims"][str(service.sid)] = self.counters["claims"].get(str(service.sid), 0) + 1
+        self.stop_service(service, now)
+        service.target = (socket.inet_ntoa(struct.pack(">I", ip)), port)
+        period = (interval - 100000) / 2 if interval > 100000 else interval / 2
+        service.heartbeat = period / 1e6
+        service.next_heartbeat = now + service.heartbeat if period else None
+        self.send(service, CLAIM, 1)
+        service.values = {}
+        if service.registers:
+            service.configured = False
+            service.next_request = now + 1.0
+        else:
+            service.configured = True
+
+    def stop_service(self, service, now):
+        if service.sid == EMERGENCY:
+            self.last_emergency_input = None
+        elif service.sid == DIFF_DRIVE:
+            self.duty = [0.0, 0.0]
+            self.drive_set_at = None
+            self.drive_sent_once = False
+        elif service.sid == MOWER:
+            self.mower_speed = 0.0
+
+    def configure(self, service, payload, now):
+        parts = sections(payload)
+        values = {}
+        problem = None if parts is not None else "sections do not add up"
+        for rid, value in parts or []:
+            if rid not in service.registers:
+                continue
+            kind, channel = service.registers[rid]
+            if not fits(kind, len(value)):
+                problem = f"register {rid} ({channel['name']}) with {len(value)} bytes"
+                break
+            values[rid] = value
+        if problem is None:
+            missing = service.required_missing(values)
+            if missing:
+                problem = f"required register {missing} missing"
+        if problem is None:
+            problem = self.check_service(service, values, now)
+        if problem == "restart":
+            return
+        if problem:
+            self.counters["rejected_configs"] += 1
+            self.log.write({"t": now, "event": "config rejected", "sid": service.sid, "why": problem})
+            service.configured = False
+            service.next_request = now + 1.0
+            return
+        self.stop_service(service, now)
+        service.values = values
+        service.configured = True
+        service.next_request = None
+        self.log.write({"t": now, "event": "configured", "sid": service.sid})
+        if service.sid == META and not self.carrier_up:
+            self.carrier_up = True
+            for sid, desc in self.descriptions.items():
+                if sid != META:
+                    self.services[sid] = Service(sid, desc, now)
+
+    def check_service(self, service, values, now):
+        """Checks of the service itself; a problem text, "restart" or None."""
+        if service.sid == META:
+            name = values.get(0, b"").decode("ascii", "replace")
+            self.counters["meta_names"].append(name)
+            if not self.carrier_up and name not in CARRIER_NAMES:
+                return f"robot firmware '{name}' does not fit the carrier"
+        elif service.sid == DIFF_DRIVE:
+            if struct.unpack("<d", values[0])[0] == 0 or struct.unpack("<d", values[1])[0] == 0:
+                return "ticks per meter and wheel distance must not be 0"
+        elif service.sid == IMU:
+            if any(v == 0 or abs(v) > 3 for v in struct.unpack("<3b", values[0])):
+                return "axis remap out of range"
+        elif service.sid == GPS:
+            setting = (values.get(0), values.get(1), values.get(2))
+            if self.gps_started is None:
+                self.gps_started = setting
+            elif setting != self.gps_started:
+                self.counters["gps_restarts"] += 1
+                self.log.write({"t": now, "event": "gps settings changed, restart"})
+                self.restarts += 1
+                self.boot()
+                return "restart"
+        elif service.sid == INPUT:
+            if 0 in values:
+                config, problem = self.parse_inputs(values[0])
+                if problem:
+                    return problem
+                self.input_config = config
+        return None
+
+    def parse_inputs(self, blob):
+        try:
+            doc = json.loads(heatshrink_decode(blob).decode())
+        except (ValueError, UnicodeDecodeError) as e:
+            return None, f"inputs: {e}"
+        if not isinstance(doc, dict):
+            return None, "inputs: no object"
+        entries = []
+        for driver, items in doc.items():
+            if driver not in ("gpio", "yf_cover_ui"):
+                continue
+            for item in items:
+                keys = set(item)
+                allowed = {"invert", "redundancy_group", "emergency"}
+                allowed |= {"line", "active"} if driver == "gpio" else {"channel", "button_id", "id", "value"}
+                if keys - allowed:
+                    return None, f"inputs: unknown keys {sorted(keys - allowed)}"
+                emergency = item.get("emergency")
+                if emergency and set(emergency) - {"reason", "delay", "latch"}:
+                    return None, "inputs: unknown emergency keys"
+                entries.append({"driver": driver, "line": item.get("line"),
+                                "invert": item.get("active") == "low" or item.get("invert", False),
+                                "emergency": emergency})
+        if len(entries) > 30:
+            return None, "inputs: more than 30"
+        return entries, None
+
+    def input(self, service, channel, value, now):
+        sid = service.sid
+        if sid == EMERGENCY and channel == 0:
+            self.last_emergency_input = now
+            if len(value) != 4:
+                self.counters["short_emergency_inputs"] += 1
+                value = (value + b"\xaa\xaa\xaa\xaa")[:4]
+            set_bits, clear_bits = struct.unpack("<HH", value)
+            self.host_bits &= ~(clear_bits & ~SERVICE_NOT_READY)
+            self.host_bits |= set_bits & HOST_BITS
+        elif sid == DIFF_DRIVE and channel == 0 and len(value) == 48:
+            twist = struct.unpack("<6d", value)
+            if self.reason:
+                return
+            distance = struct.unpack("<d", service.values[1])[0]
+            v, w = twist[0], twist[5]
+            self.duty = [max(-1.0, min(1.0, v - 0.5 * distance * w)), max(-1.0, min(1.0, -(v + 0.5 * distance * w)))]
+            self.drive_set_at = now
+        elif sid == MOWER and channel == 0 and len(value) == 4:
+            if self.reason:
+                return
+            self.mower_speed = max(-1.0, min(1.0, struct.unpack("<f", value)[0]))
+            self.mower_set_at = now
+        elif sid == GPS and channel == 0:
+            self.counters["rtcm_bytes"] += len(value)
+
+    def rpc(self, service, function, call):
+        self.counters["rpc_calls"] += 1
+        flags = read_flags(self.args.flags)
+        if function not in service.functions:
+            self.send(service, RPC_RESPONSE, 2, call)
+        elif service.sid == META and function == 0:
+            self.send(service, RPC_RESPONSE, 0, call, flags.get("firmware", self.args.firmware).encode())
+        elif service.sid == META and function == 1:
+            self.send(service, RPC_RESPONSE, 0, call, struct.pack("<H", int(flags.get("major_version",
+                                                                                      self.args.major))))
+        else:
+            self.send(service, RPC_RESPONSE, 2, call)
+
+    # Cycle --------------------------------------------------------------------------------------------------------
+
+    def healthy(self):
+        need = (INPUT, DIFF_DRIVE, MOWER, IMU, POWER)
+        if not all(sid in self.services and self.services[sid].running for sid in need):
+            return False
+        return self.input_config is not None
+
+    def line_active(self, entry, flags):
+        names = LINE_FLAGS.get(entry["line"], ())
+        level = any(flags.get(name) for name in names)
+        return level
+
+    def update_inputs(self, flags, now):
+        if self.input_config is None:
+            self.inputs_mask = None
+            return 0
+        mask = 0
+        bits = 0
+        lifts = collisions = 0
+        for index, entry in enumerate(self.input_config):
+            active = entry["driver"] == "gpio" and self.line_active(entry, flags)
+            if active:
+                mask |= 1 << index
+                since = self.input_active_since.setdefault(index, now)
+            else:
+                self.input_active_since.pop(index, None)
+                continue
+            emergency = entry.get("emergency")
+            if not emergency or emergency.get("reason") not in REASON_OF:
+                continue
+            if emergency["reason"] == "lift":
+                lifts += 1
+            if emergency["reason"] == "collision":
+                collisions += 1
+            if (now - since) * 1000 >= emergency.get("delay", 0):
+                bits |= REASON_OF[emergency["reason"]]
+                if emergency.get("latch", True):
+                    self.host_bits |= LATCH
+        if lifts >= 2:
+            bits |= LIFT_MULTIPLE
+            self.host_bits |= LATCH
+        if collisions >= 2:
+            bits |= COLLISION_MULTIPLE
+            self.host_bits |= LATCH
+        changed = mask != self.inputs_mask
+        self.inputs_mask = mask
+        service = self.services.get(INPUT)
+        if service and service.running and (changed or now >= self.next_inputs_out):
+            self.next_inputs_out = now + 0.2
+            self.output_data(INPUT, 0, struct.pack("<Q", mask))
+        return bits
+
+    def update_emergency(self, flags, now):
+        if not self.carrier_up:
+            return
+        input_bits = self.update_inputs(flags, now)
+        reason = self.host_bits | input_bits
+        if self.last_emergency_input is None or now - self.last_emergency_input >= 1.0:
+            reason |= TIMEOUT_HIGH_LEVEL
+        if not self.healthy():
+            reason |= SERVICE_NOT_READY
+        if reason and not self.reason:
+            self.duty = [0.0, 0.0]
+            self.drive_set_at = None
+            self.mower_speed = 0.0
+        self.reason = reason
+        service = self.services[EMERGENCY]
+        if service.target and (reason != self.reported_reason or now >= self.next_reason_out):
+            self.reported_reason = reason
+            self.next_reason_out = now + 1.0
+            self.output(EMERGENCY, [(0, struct.pack("<H", reason))])
+
+    def update_drive(self, flags, dt, now):
+        service = self.services.get(DIFF_DRIVE)
+        if not service or not service.running:
+            return
+        if self.drive_set_at is not None and now - self.drive_set_at > 1.0:
+            self.duty = [0.0, 0.0]
+            self.drive_set_at = None
+        full = self.args.full_duty_speed
+        left = self.duty[0] * full
+        right = -self.duty[1] * full
+        tpm = struct.unpack("<d", service.values[0])[0]
+        self.ticks[0] += left * tpm * dt
+        self.ticks[1] -= right * tpm * dt
+        v = (left + right) / 2
+        w = (right - left) / self.args.track
+        self.yaw = math.atan2(math.sin(self.yaw + w * dt), math.cos(self.yaw + w * dt))
+        self.x += v * math.cos(self.yaw) * dt
+        self.y += v * math.sin(self.yaw) * dt
+        self.v, self.w = v, w
+        if now < self.next_drive_out:
+            return
+        self.next_drive_out = now + 0.04
+        status = int(flags.get("drive_status", ESC_RUNNING if any(self.duty) else ESC_OK))
+        values = [(1, bytes([status])), (2, struct.pack("<f", 31.0)), (3, struct.pack("<f", abs(left) * 2)),
+                  (4, bytes([status])), (5, struct.pack("<f", 32.0)), (6, struct.pack("<f", abs(right) * 2))]
+        if self.drive_sent_once:
+            ticks = [int(t) & 0xFFFFFFFF for t in self.ticks]
+            values.insert(0, (0, doubles(v, 0, 0, 0, 0, w * self.args.track / 2)))
+            values.append((7, struct.pack("<2I", *ticks)))
+        self.drive_sent_once = True
+        self.output(DIFF_DRIVE, values)
+
+    def update_mower(self, flags, dt, now):
+        service = self.services.get(MOWER)
+        if not service or not service.running:
+            return
+        if self.mower_set_at is not None and now - self.mower_set_at > 10.0:
+            self.mower_speed = 0.0
+            self.mower_set_at = None
+        target = self.mower_speed * 3500.0
+        if flags.get("cutter_ignores_off") and self.mower_rpm and not self.mower_speed:
+            target = self.mower_rpm
+        self.mower_rpm += (target - self.mower_rpm) * min(1.0, dt / 0.3)
+        if abs(self.mower_rpm) < 1:
+            self.mower_rpm = 0.0
+        if now < self.next_mower_out:
+            return
+        self.next_mower_out = now + 0.5
+        running = self.mower_rpm != 0
+        self.output(MOWER, [(0, bytes([ESC_RUNNING if running else ESC_OK])), (1, b"\x00"), (2, bytes([running])),
+                            (3, struct.pack("<f", 35.0)), (4, struct.pack("<f", 40.0)),
+                            (5, struct.pack("<f", abs(self.mower_rpm) / 1000)), (6, struct.pack("<f", self.mower_rpm))])
+
+    def update_imu(self, now):
+        service = self.services.get(IMU)
+        if not service or not service.running or now < self.next_imu:
+            return
+        self.next_imu = max(self.next_imu + 0.01, now - 0.05)
+        noise = lambda s: random.gauss(0.0, s)
+        body_acc = (noise(0.02), noise(0.02), GRAVITY + noise(0.02))
+        body_rate = (noise(0.001), noise(0.001), getattr(self, "w", 0.0) + noise(0.001))
+        # The sensor lies upside down: its y and z point against the body's.
+        raw_acc = (body_acc[0], -body_acc[1], -body_acc[2])
+        raw_rate = (body_rate[0], -body_rate[1], -body_rate[2])
+        remap = struct.unpack("<3b", service.values[0])
+        acc = [math.copysign(1, r) * raw_acc[abs(r) - 1] for r in remap]
+        rate = [math.copysign(1, r) * raw_rate[abs(r) - 1] for r in remap]
+        self.output_data(IMU, 0, doubles(*acc, *rate, 0.0, 0.0, 0.0))
+
+    def update_power(self, flags, now):
+        service = self.services.get(POWER)
+        if not service or not service.running or now < self.next_power_out:
+            return
+        self.next_power_out = now + 1.0
+        empty = struct.unpack("<f", service.values[1])[0]
+        full = struct.unpack("<f", service.values[2])[0]
+        voltage = float(flags.get("battery_voltage", 26.5))
+        docked = bool(flags.get("dock"))
+        charge_voltage = 29.8 if docked else 0.0
+        charge_current = 0.8 if docked and voltage < full else 0.0
+        status = ("Fast Charge (CC)" if charge_current else "Done") if docked else "Not Charging"
+        percent = max(0.0, min(1.0, (voltage - empty) / (full - empty)))
+        self.output(POWER, [(3, status.encode()), (2, struct.pack("<f", voltage)),
+                            (0, struct.pack("<f", charge_voltage)), (1, struct.pack("<f", charge_current)),
+                            (4, b"\x01"), (5, struct.pack("<f", percent)), (9, struct.pack("<f", float("nan"))),
+                            (7, struct.pack("<f", voltage)), (6, struct.pack("<f", charge_voltage)),
+                            (8, struct.pack("<f", 0.5))])
+
+    def update_gps(self, now):
+        service = self.services.get(GPS)
+        if not service or not service.running or now < self.next_gps_out:
+            return
+        self.next_gps_out = now + 0.2
+        lat0, lon0 = self.args.origin
+        lat = lat0 + math.degrees(self.y / 6378137.0)
+        lon = lon0 + math.degrees(self.x / (6378137.0 * math.cos(math.radians(lat0))))
+        v = getattr(self, "v", 0.0)
+        self.output(GPS, [(0, doubles(lat, lon, 80.0)), (1, doubles(0.012)), (2, doubles(0.02)), (3, b"FIX"),
+                          (4, doubles(v * math.cos(self.yaw), v * math.sin(self.yaw), 0.0))])
+
+    def cycle(self, dt):
+        now = self.now()
+        flags = read_flags(self.args.flags)
+        restart = flags.get("restart")
+        if self.restart_flag is None:
+            self.restart_flag = restart
+        elif restart != self.restart_flag:
+            self.restart_flag = restart
+            self.restarts += 1
+            self.boot()
+            return
+        for service in list(self.services.values()):
+            if now >= service.next_announce:
+                self.announce(service)
+                young = service.target is None and now - service.started < 60
+                service.next_announce = now + (1.0 if young else 10.0)
+            if service.next_heartbeat is not None and now >= service.next_heartbeat:
+                self.send(service, HEARTBEAT)
+                service.next_heartbeat = now + service.heartbeat
+            if service.target and not service.configured and service.next_request and now >= service.next_request:
+                self.send(service, CONFIG_REQUEST)
+                service.next_request = now + 1.0
+        self.update_emergency(flags, now)
+        self.update_drive(flags, dt, now)
+        self.update_mower(flags, dt, now)
+        self.update_imu(now)
+        self.update_power(flags, now)
+        self.update_gps(now)
+
+    def state(self):
+        def reg(sid, rid, fmt):
+            service = self.services.get(sid)
+            if not service or rid not in service.values:
+                return None
+            value = service.values[rid]
+            return value.decode("ascii", "replace") if fmt == "text" else list(struct.unpack(fmt, value))
+        input_json = None
+        service = self.services.get(INPUT)
+        if service and 0 in service.values:
+            input_json = heatshrink_decode(service.values[0]).decode("ascii", "replace")
+        return {
+            "t": self.now(), "port": self.port, "restarts": self.restarts, "carrier_up": self.carrier_up,
+            "reason": self.reason, "host_bits": self.host_bits, "duty": self.duty,
+            "mower_speed": self.mower_speed, "mower_rpm": self.mower_rpm, "x": self.x, "y": self.y, "yaw": self.yaw,
+            "ticks": [int(t) & 0xFFFFFFFF for t in self.ticks],
+            "running": sorted(sid for sid, s in self.services.items() if s.running),
+            "claimed": sorted(sid for sid, s in self.services.items() if s.target),
+            "meta_name": reg(META, 0, "text"), "gps": [reg(GPS, 0, "<I"), reg(GPS, 1, "<B"), reg(GPS, 2, "<B")],
+            "imu_remap": reg(IMU, 0, "<3b"), "diff_drive": [reg(DIFF_DRIVE, 0, "<d"), reg(DIFF_DRIVE, 1, "<d")],
+            "power": {str(rid): reg(POWER, rid, "<f") for rid in range(0, 9)},
+            "inputs": input_json, "inputs_mask": self.inputs_mask, **self.counters}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--services", required=True, help="JSON with the service descriptions to announce")
+    parser.add_argument("--ip", default="127.0.0.1", help="address of the board, also for the multicast")
+    parser.add_argument("--group", default="233.255.255.0")
+    parser.add_argument("--group-port", type=int, default=4242)
+    parser.add_argument("--firmware", default="v1.4.3")
+    parser.add_argument("--major", type=int, default=1)
+    parser.add_argument("--full-duty-speed", type=float, default=0.9, help="wheel speed at full duty in m/s")
+    parser.add_argument("--track", type=float, default=0.3556, help="real distance of the wheels in m")
+    parser.add_argument("--ticks-start", type=int, default=2**32 - 3000, help="start value of both counters")
+    parser.add_argument("--origin", type=float, nargs=2, default=[52.0, 7.6])
+    parser.add_argument("--flags")
+    parser.add_argument("--log")
+    parser.add_argument("--log-max-mb", type=int, default=20)
+    parser.add_argument("--state")
+    args = parser.parse_args()
+    if args.group_port in (8007, 10000) or 65102 <= args.group_port <= 65104:
+        sys.exit("refusing a port of the real board's debug or boot channels")
+
+    board = Board(args)
+    stop = []
+    signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+    signal.signal(signal.SIGINT, lambda *_: stop.append(1))
+    last = time.monotonic()
+    next_state = 0.0
+    while not stop:
+        ready, _, _ = select.select([board.socket], [], [], 0.002)
+        if ready:
+            try:
+                while True:
+                    data, sender = board.socket.recvfrom(MAX_DATAGRAM + 1)
+                    if len(data) <= MAX_DATAGRAM:
+                        board.receive(data, sender)
+            except BlockingIOError:
+                pass
+        now = time.monotonic()
+        if now - last >= 0.005:
+            board.cycle(now - last)
+            last = now
+        if args.state and now >= next_state:
+            next_state = now + 0.1
+            with open(args.state + ".tmp", "w") as f:
+                json.dump(board.state(), f)
+            os.replace(args.state + ".tmp", args.state)
+
+
+if __name__ == "__main__":
+    main()

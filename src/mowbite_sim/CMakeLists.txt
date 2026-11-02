@@ -3,7 +3,7 @@ project(mowbite_sim)
 
 find_package(ament_cmake REQUIRED)
 
-install(PROGRAMS scripts/fake_tron scripts/sim_control DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/fake_tron scripts/fake_xcore scripts/sim_control DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
