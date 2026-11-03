@@ -1,7 +1,8 @@
 # gps/absolute_pose: one solution of the GNSS receiver for its antenna, in the map frame (x east, y north, z up).
 # header.stamp is when the driver read it.
 std_msgs/Header header
-# UTC time of day of the solution by the receiver's clock, ms.
+# Time of the solution by the clock that made it, ms: UTC time of day of the receiver (Tron), or the board's time,
+# which wraps after about 71 min (xCore).
 uint32 receiver_time_ms
 
 uint8 NONE=0

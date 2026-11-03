@@ -4,7 +4,6 @@
 #include <cmath>
 #include <string>
 
-#include "mowbite_gnss/flags.h"
 #include "xcore_driver/services.h"
 
 namespace xcore {
@@ -43,8 +42,8 @@ std::optional<GnssSolution> DecodeGnss(const std::vector<Output>& outputs) {
       }
       case gps::kOutFixType: {
         const std::string text = DecodeText(out.value);
-        if (text == "FIX") solution.fix = GnssFix::kFixed;
-        if (text == "FLOAT") solution.fix = GnssFix::kFloat;
+        if (text == "FIX") solution.fix = BoardFix::kFixed;
+        if (text == "FLOAT") solution.fix = BoardFix::kFloat;
         break;
       }
       case gps::kOutMotionEnu: {
@@ -77,23 +76,25 @@ std::optional<GnssPose> GnssConverter::Convert(const GnssSolution& solution,
   if (solution.horizontal_accuracy_m) board = std::max(*solution.horizontal_accuracy_m, config_.min_accuracy_m);
   GnssPose pose;
   switch (solution.fix) {
-    case GnssFix::kFixed:
+    case BoardFix::kFixed:
       if (host_correction_age_s && *host_correction_age_s <= config_.max_correction_age_s) {
-        pose.flags = mowbite_gnss::kFlagRtk | mowbite_gnss::kFlagRtkFixed;
+        pose.solution = mowbite_gnss::Solution::kRtkFixed;
         pose.accuracy_m = board.value_or(config_.accuracy_rtk_fixed_m);
         break;
       }
       // Corrections the host did not pass on, or old ones: the fix may rest on data nobody checks.
       fixed_without_corrections_++;
       last_downgrade_age_ = host_correction_age_s;
-      pose.flags = mowbite_gnss::kFlagRtk | mowbite_gnss::kFlagRtkFloat;
+      pose.solution = mowbite_gnss::Solution::kRtkFloat;
       pose.accuracy_m = std::max(board.value_or(0.0), config_.accuracy_rtk_float_m);
       break;
-    case GnssFix::kFloat:
-      pose.flags = mowbite_gnss::kFlagRtk | mowbite_gnss::kFlagRtkFloat;
+    case BoardFix::kFloat:
+      pose.solution = mowbite_gnss::Solution::kRtkFloat;
       pose.accuracy_m = board.value_or(config_.accuracy_rtk_float_m);
       break;
-    case GnssFix::kNone:
+    case BoardFix::kNone:
+      // A position without RTK: the board does not tell single from DGPS.
+      pose.solution = mowbite_gnss::Solution::kSingle;
       pose.accuracy_m = board.value_or(config_.accuracy_single_m);
       break;
   }
@@ -115,9 +116,9 @@ mowbite_gnss::GgaFields GgaOf(const GnssSolution& solution, double utc_s) {
   f.lon_deg = solution.lon_deg;
   f.altitude_m = solution.height_m;
   switch (solution.fix) {
-    case GnssFix::kFixed: f.quality = mowbite_gnss::GgaQuality::kRtkFixed; break;
-    case GnssFix::kFloat: f.quality = mowbite_gnss::GgaQuality::kRtkFloat; break;
-    case GnssFix::kNone: f.quality = mowbite_gnss::GgaQuality::kSingle; break;
+    case BoardFix::kFixed: f.quality = mowbite_gnss::GgaQuality::kRtkFixed; break;
+    case BoardFix::kFloat: f.quality = mowbite_gnss::GgaQuality::kRtkFloat; break;
+    case BoardFix::kNone: f.quality = mowbite_gnss::GgaQuality::kSingle; break;
   }
   f.satellites = kGgaSatellites;
   f.hdop = kGgaHdop;

@@ -25,7 +25,7 @@ import rclpy
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
-from mowbite_msgs.msg import AbsolutePose, HardwareCapabilities, Rtcm, SensorValue
+from mowbite_msgs.msg import GnssFix, HardwareCapabilities, Rtcm, SensorValue
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
@@ -43,8 +43,8 @@ MAX_AGE = 3.0
 DATUM = (52.0, 9.0, 80.0)
 # Where fake_xcore puts the mower: about 11 m north and 14 m east of the datum, at the datum's height.
 ORIGIN = (52.0001, 9.0002)
-FIXED = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FIXED
-FLOAT = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FLOAT
+FIXED = GnssFix.RTK_FIXED
+FLOAT = GnssFix.RTK_FLOAT
 MAX_PIECE = 1448
 
 # The caster of test_ntrip and the CRC of fake_tron, so that there is one of each in the sim.
@@ -118,7 +118,7 @@ class Probe:
         self.rtcm_bytes = 0
         self.rtcm_crc = 0
         self.node = rclpy.create_node("xcore_gnss_probe")
-        self.node.create_subscription(AbsolutePose, "gps/absolute_pose", self._pose, 50)
+        self.node.create_subscription(GnssFix, "gps/absolute_pose", self._pose, 50)
         self.node.create_subscription(NavSatFix, "gps/datum", self._datum, LATCHED)
         self.node.create_subscription(String, "bridge/params", self._params, HISTORY)
         self.node.create_subscription(String, "gnss/gga", self._gga, 10)
@@ -185,8 +185,8 @@ class Probe:
         self.node.destroy_node()
 
 
-def latest_flags(p):
-    return p.poses[-1][1].flags if p.poses else None
+def latest_solution(p):
+    return p.poses[-1][1].solution if p.poses else None
 
 
 class TestXcoreGnss(unittest.TestCase):
@@ -220,8 +220,8 @@ class TestXcoreGnss(unittest.TestCase):
         time.sleep(1.0)
         poses = p.poses_since(since)
         self.assertGreaterEqual(len(poses), 3)
-        self.assertTrue(all(m.flags == FLOAT for m in poses), [m.flags for m in poses])
-        self.assertTrue(all(m.position_accuracy >= 0.3 - 1e-6 for m in poses))
+        self.assertTrue(all(m.solution == FLOAT for m in poses), [m.solution for m in poses])
+        self.assertTrue(all(m.accuracy >= 0.3 - 1e-6 for m in poses))
         # The caster gets a GGA anyway: VRS mountpoints stream only after one.
         gga = p.wait(lambda p: p.gga[-1] if p.gga else None, 5)
         self.assertTrue(gga.startswith("$GPGGA,"), gga)
@@ -244,20 +244,19 @@ class TestXcoreGnss(unittest.TestCase):
         north = math.radians(ORIGIN[0] - DATUM[0]) * 6378137.0
         east = math.radians(ORIGIN[1] - DATUM[1]) * 6378137.0 * math.cos(math.radians(ORIGIN[0]))
         # fake_xcore uses a sphere, the driver the ellipsoid: a few dm over this distance.
-        self.assertAlmostEqual(pose.pose.pose.position.y, north, delta=0.15)
-        self.assertAlmostEqual(pose.pose.pose.position.x, east, delta=0.15)
-        self.assertAlmostEqual(pose.pose.pose.position.z, 0.0, delta=0.05)
-        self.assertEqual(pose.source, AbsolutePose.SOURCE_GPS)
+        self.assertAlmostEqual(pose.y, north, delta=0.15)
+        self.assertAlmostEqual(pose.x, east, delta=0.15)
+        self.assertAlmostEqual(pose.z, 0.0, delta=0.05)
         self.assertEqual(pose.header.frame_id, "map")
-        self.assertEqual(pose.motion_vector_valid, 1)
+        self.assertTrue(pose.velocity_valid)
 
     def test_4_corrections_from_the_caster_give_fixed(self):
         p = self.probe
         CASTER.down = False
-        self.assertTrue(p.wait(lambda p: latest_flags(p) == FIXED, 30), f"flags {latest_flags(p)}")
+        self.assertTrue(p.wait(lambda p: latest_solution(p) == FIXED, 30), f"solution {latest_solution(p)}")
         pose = p.poses[-1][1]
         # The board's accuracy, not the table.
-        self.assertAlmostEqual(pose.position_accuracy, 0.012, places=5)
+        self.assertAlmostEqual(pose.accuracy, 0.012, places=5)
         with CASTER.lock:
             gga = list(CASTER.gga)
         self.assertTrue(gga and gga[0].startswith("$GPGGA,"), gga)
@@ -286,19 +285,19 @@ class TestXcoreGnss(unittest.TestCase):
     def test_6_old_corrections_count_as_float(self):
         p = self.probe
         CASTER.down = True
-        self.assertTrue(p.wait(lambda p: latest_flags(p) == FLOAT, MAX_AGE + 5), f"flags {latest_flags(p)}")
+        self.assertTrue(p.wait(lambda p: latest_solution(p) == FLOAT, MAX_AGE + 5), f"solution {latest_solution(p)}")
         self.assertTrue(p.wait(lambda p: p.age is not None and p.age > MAX_AGE, 3), p.age)
         CASTER.down = False
-        self.assertTrue(p.wait(lambda p: latest_flags(p) == FIXED, 30), f"flags {latest_flags(p)}")
+        self.assertTrue(p.wait(lambda p: latest_solution(p) == FIXED, 30), f"solution {latest_solution(p)}")
 
     def test_7_float_and_no_rtk_as_reported(self):
         p = self.probe
         set_flags(gps_fix="float")
-        self.assertTrue(p.wait(lambda p: latest_flags(p) == FLOAT, 5))
-        self.assertAlmostEqual(p.poses[-1][1].position_accuracy, 0.25, places=5)
+        self.assertTrue(p.wait(lambda p: latest_solution(p) == FLOAT, 5))
+        self.assertAlmostEqual(p.poses[-1][1].accuracy, 0.25, places=5)
         set_flags(gps_fix="none")
-        self.assertTrue(p.wait(lambda p: latest_flags(p) == 0, 5))
-        self.assertAlmostEqual(p.poses[-1][1].position_accuracy, 1.5, places=5)
+        self.assertTrue(p.wait(lambda p: latest_solution(p) == GnssFix.SINGLE, 5))
+        self.assertAlmostEqual(p.poses[-1][1].accuracy, 1.5, places=5)
         gga = p.wait(lambda p: p.gga[-1].split(",")[6] == "1" and p.gga[-1], 5)
         self.assertTrue(gga, p.gga[-1:])
 
@@ -310,7 +309,7 @@ class TestXcoreGnss(unittest.TestCase):
         time.sleep(1.5)
         self.assertEqual(p.poses_since(since), [])
         set_flags(gps_fix="fix")
-        self.assertTrue(p.wait(lambda p: latest_flags(p) == FIXED, 10), f"flags {latest_flags(p)}")
+        self.assertTrue(p.wait(lambda p: latest_solution(p) == FIXED, 10), f"solution {latest_solution(p)}")
 
 
 @launch_testing.post_shutdown_test()

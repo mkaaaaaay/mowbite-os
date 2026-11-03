@@ -10,12 +10,14 @@
 
 #include "mowbite_gnss/geodesy.h"
 #include "mowbite_gnss/gga.h"
+#include "mowbite_gnss/solution.h"
 #include "xcore_driver/link.h"
 #include "xcore_driver/wire.h"
 
 namespace xcore {
 
-enum class GnssFix { kNone, kFloat, kFixed };
+// Fix type as the board's GPS service reports it.
+enum class BoardFix { kNone, kFloat, kFixed };
 
 // One solution of the receiver as the GPS service of the board reports it.
 struct GnssSolution {
@@ -23,7 +25,7 @@ struct GnssSolution {
   double lon_deg = 0;
   double height_m = 0;  // above mean sea level
   std::optional<double> horizontal_accuracy_m;
-  GnssFix fix = GnssFix::kNone;
+  BoardFix fix = BoardFix::kNone;
   std::optional<std::array<double, 3>> motion_enu;  // m/s
   uint64_t board_time_us = 0;
 };
@@ -46,7 +48,7 @@ struct GnssConfig {
 
 struct GnssPose {
   uint32_t sensor_stamp_ms = 0;  // board time, wraps after about 71 min
-  uint16_t flags = 0;
+  mowbite_gnss::Solution solution = mowbite_gnss::Solution::kNone;
   double accuracy_m = 0;
   mowbite_gnss::Enu position;
   bool motion_valid = false;
@@ -55,8 +57,7 @@ struct GnssPose {
   double motion_heading = 0;  // yaw, counter-clockwise from east
 };
 
-// Board solutions to poses in the local frame of the datum, with flags and accuracy as mowbite_msgs/AbsolutePose has
-// them.
+// Board solutions to poses in the local frame of the datum, with kind and accuracy as mowbite_msgs/GnssFix has them.
 class GnssConverter {
  public:
   GnssConverter(const GnssConfig& config, const mowbite_gnss::LocalFrame& frame) : config_(config), frame_(frame) {

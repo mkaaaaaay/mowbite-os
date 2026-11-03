@@ -3,14 +3,12 @@
 #include <cmath>
 #include <string>
 
-#include "mowbite_gnss/flags.h"
 #include "xcore_driver/gnss.h"
 #include "xcore_driver/services.h"
 
 using namespace xcore;
-using mowbite_gnss::kFlagRtk;
-using mowbite_gnss::kFlagRtkFixed;
-using mowbite_gnss::kFlagRtkFloat;
+constexpr auto kRtkFixed = mowbite_gnss::Solution::kRtkFixed;
+constexpr auto kRtkFloat = mowbite_gnss::Solution::kRtkFloat;
 
 namespace {
 
@@ -51,14 +49,14 @@ TEST(Gnss, DecodesOneTransaction) {
   EXPECT_DOUBLE_EQ(s->height_m, 61.5);
   ASSERT_TRUE(s->horizontal_accuracy_m);
   EXPECT_DOUBLE_EQ(*s->horizontal_accuracy_m, 0.014);
-  EXPECT_EQ(s->fix, GnssFix::kFixed);
+  EXPECT_EQ(s->fix, BoardFix::kFixed);
   ASSERT_TRUE(s->motion_enu);
   EXPECT_DOUBLE_EQ((*s->motion_enu)[0], 0.3);
   EXPECT_EQ(s->board_time_us, 5000000u);
-  EXPECT_EQ(DecodeGnss(Solution("FLOAT"))->fix, GnssFix::kFloat);
+  EXPECT_EQ(DecodeGnss(Solution("FLOAT"))->fix, BoardFix::kFloat);
   // Without RTK the board leaves the fix type out.
-  EXPECT_EQ(DecodeGnss(Solution(nullptr))->fix, GnssFix::kNone);
-  EXPECT_EQ(DecodeGnss(Solution("SOMETHING"))->fix, GnssFix::kNone);
+  EXPECT_EQ(DecodeGnss(Solution(nullptr))->fix, BoardFix::kNone);
+  EXPECT_EQ(DecodeGnss(Solution("SOMETHING"))->fix, BoardFix::kNone);
 }
 
 TEST(Gnss, NoPositionNoSolution) {
@@ -94,24 +92,24 @@ TEST(Gnss, FixedNeedsTheHostsFreshCorrections) {
   auto c = Converter();
   auto pose = c.Convert(*DecodeGnss(Solution("FIX", 0.014, 1000)), 1.0);
   ASSERT_TRUE(pose);
-  EXPECT_EQ(pose->flags, kFlagRtk | kFlagRtkFixed);
+  EXPECT_EQ(pose->solution, kRtkFixed);
   EXPECT_DOUBLE_EQ(pose->accuracy_m, 0.014);
   EXPECT_EQ(c.fixed_without_corrections(), 0u);
 
   // Never passed any: float.
   pose = c.Convert(*DecodeGnss(Solution("FIX", 0.014, 2000)), std::nullopt);
-  EXPECT_EQ(pose->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_EQ(pose->solution, kRtkFloat);
   EXPECT_DOUBLE_EQ(pose->accuracy_m, 0.3);
   EXPECT_EQ(c.fixed_without_corrections(), 1u);
   EXPECT_FALSE(c.last_downgrade_age());
 
   // Older than the limit: float; at the limit still fixed.
   pose = c.Convert(*DecodeGnss(Solution("FIX", 0.014, 3000)), 30.5);
-  EXPECT_EQ(pose->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_EQ(pose->solution, kRtkFloat);
   EXPECT_EQ(c.fixed_without_corrections(), 2u);
   EXPECT_DOUBLE_EQ(*c.last_downgrade_age(), 30.5);
   pose = c.Convert(*DecodeGnss(Solution("FIX", 0.014, 4000)), 30.0);
-  EXPECT_EQ(pose->flags, kFlagRtk | kFlagRtkFixed);
+  EXPECT_EQ(pose->solution, kRtkFixed);
 }
 
 TEST(Gnss, DowngradedFixKeepsAWorseBoardAccuracy) {
@@ -123,10 +121,10 @@ TEST(Gnss, DowngradedFixKeepsAWorseBoardAccuracy) {
 TEST(Gnss, FloatAndSingle) {
   auto c = Converter();
   auto pose = c.Convert(*DecodeGnss(Solution("FLOAT", 0.12, 1000)), 1.0);
-  EXPECT_EQ(pose->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_EQ(pose->solution, kRtkFloat);
   EXPECT_DOUBLE_EQ(pose->accuracy_m, 0.12);
   pose = c.Convert(*DecodeGnss(Solution(nullptr, 1.8, 2000)), 1.0);
-  EXPECT_EQ(pose->flags, 0);
+  EXPECT_EQ(pose->solution, mowbite_gnss::Solution::kSingle);
   EXPECT_DOUBLE_EQ(pose->accuracy_m, 1.8);
   EXPECT_EQ(c.fixed_without_corrections(), 0u);
 }
@@ -185,9 +183,9 @@ TEST(Gnss, GgaOfTheSolution) {
   EXPECT_DOUBLE_EQ(f.lat_deg, 52.0001);
   EXPECT_DOUBLE_EQ(f.altitude_m, 61.5);
   EXPECT_GT(f.satellites, 4);
-  s.fix = GnssFix::kFloat;
+  s.fix = BoardFix::kFloat;
   EXPECT_EQ(GgaOf(s, 0).quality, mowbite_gnss::GgaQuality::kRtkFloat);
-  s.fix = GnssFix::kNone;
+  s.fix = BoardFix::kNone;
   EXPECT_EQ(GgaOf(s, 0).quality, mowbite_gnss::GgaQuality::kSingle);
   EXPECT_EQ(mowbite_gnss::BuildGga(GgaOf(s, 0)).compare(0, 7, "$GPGGA,"), 0);
 }
