@@ -35,6 +35,8 @@ FLAGS = os.path.join(WORK, "flags.json")
 STATE = os.path.join(WORK, "state.json")
 ACCESS = os.path.join(WORK, "ntrip.yaml")
 GROUP_PORT = random.randint(42000, 48000)
+# An address of its own for the driver: it does not start beside another host at its bind_ip.
+BIND_IP = f"127.{random.randint(1, 250)}.{random.randint(1, 250)}.{random.randint(2, 250)}"
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 HISTORY = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 MAX_AGE = 3.0
@@ -87,7 +89,7 @@ def generate_test_description():
         output="screen")
     config = os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "config", "nx60i.yaml")
     driver = Node(package="xcore_driver", executable="xcore_driver_node", output="screen",
-                  parameters=[config, {"interface": "lo", "bind_ip": "127.0.0.1", "announcement_port": GROUP_PORT,
+                  parameters=[config, {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT,
                                        "datum_lat": DATUM[0], "datum_long": DATUM[1], "datum_height": DATUM[2],
                                        "max_correction_age": MAX_AGE}])
     ntrip = Node(package="mowbite_ntrip", executable="mowbite_ntrip_node", output="screen",
@@ -259,8 +261,9 @@ class TestXcoreGnss(unittest.TestCase):
         with CASTER.lock:
             gga = list(CASTER.gga)
         self.assertTrue(gga and gga[0].startswith("$GPGGA,"), gga)
-        b = board()
-        self.assertGreater(b["rtcm_bytes"], 0)
+        # fake_xcore writes its state every 0.1 s, it may lag behind the pose.
+        b = p.wait(lambda p: (lambda b: b if b["rtcm_bytes"] > 0 else None)(board()), 2)
+        self.assertTrue(b, "no RTCM at the board")
         self.assertLessEqual(b["rtcm_max_datagram"], MAX_PIECE)
         self.assertTrue(p.wait(lambda p: p.age is not None and 0 <= p.age < MAX_AGE, 5), p.age)
         self.assertEqual(b["gps_restarts"], 0)

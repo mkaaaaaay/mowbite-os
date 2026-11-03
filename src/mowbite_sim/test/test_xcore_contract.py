@@ -32,6 +32,8 @@ LOG = os.path.join(WORK, "rx.jsonl")
 STATE = os.path.join(WORK, "state.json")
 # A port of its own, so that tests running side by side do not hear each other's board.
 GROUP_PORT = random.randint(42000, 48000)
+# An address of its own for the driver: it does not start beside another host at its bind_ip.
+BIND_IP = f"127.{random.randint(1, 250)}.{random.randint(1, 250)}.{random.randint(2, 250)}"
 EMERGENCY, DIFF_DRIVE, MOWER = 1, 2, 3
 DATA = 1
 LATCH, LIFT, LIFT_MULTIPLE = HardwareStatus.REASON_LATCH, HardwareStatus.REASON_LIFT, 16
@@ -46,7 +48,7 @@ def generate_test_description():
         output="screen")
     config = os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "config", "nx60i.yaml")
     driver = Node(package="xcore_driver", executable="xcore_driver_node", output="screen",
-                  parameters=[config, {"interface": "lo", "bind_ip": "127.0.0.1", "announcement_port": GROUP_PORT,
+                  parameters=[config, {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT,
                                        "allow_blade": True}])
     return launch.LaunchDescription([
         fake_xcore,
@@ -188,7 +190,9 @@ class TestXcoreContract(unittest.TestCase):
         self.assertEqual(b["imu_remap"], [1, -2, -3])
         self.assertEqual(b["diff_drive"], [[2025.0], [0.3556]])
         power = {k: round(v[0], 3) for k, v in b["power"].items() if v}
-        self.assertEqual(power, {"1": 24.5, "2": 28.2, "3": 23.0, "4": 29.9, "6": 29.8, "7": 0.1})
+        # No termination current (7) and never the override of the charge current limit (10).
+        self.assertEqual(power, {"1": 24.5, "2": 28.2, "3": 23.0, "4": 29.9, "6": 29.8})
+        self.assertIsNone(b["power_override"])
         inputs = json.loads(b["inputs"])
         self.assertEqual([i["line"] for i in inputs["gpio"]], ["GPIO1", "GPIO5", "GPIO10", "GPIO11", "GPIO12", "GPIO13"])
         self.assertEqual(inputs["yf_cover_ui"], [{"id": "hall_mux", "value": "om"}])
