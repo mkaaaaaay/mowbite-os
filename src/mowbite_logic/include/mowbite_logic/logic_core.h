@@ -53,6 +53,16 @@ struct PoseSnapshot {
   bool orientation_valid = false;
 };
 
+// The calibration drive: before a start a position this accurate (m) with a heading and min_battery percent of
+// charge; the status of the program counts for status_timeout (s), and without a sign of the drive for timeout (s) the
+// logic ends it.
+struct CalibrationConfig {
+  double max_position_accuracy = 0.03;
+  int min_battery = 30;
+  double status_timeout = 2.0;
+  double timeout = 2.0;
+};
+
 struct LogicConfig {
   // 6S Li-ion; empty is an assumption until the discharge curve of the Tron is measured.
   double battery_empty_voltage = 19.2;
@@ -97,6 +107,32 @@ struct LogicConfig {
   // After JOB_COMPLETE, abort_mowing and on docking.start the mower backs onto the station (contacts behind base_link
   // only); a try that fails also drives out like undocking.
   DockConfig dock;
+  CalibrationConfig calibration;
+};
+
+// calibration/status: the problems of the program against a drive from here (room, sensors, map) and the lane it
+// would take (lane_length 0 without one), with the strip it needs.
+struct CalibrationStatus {
+  std::vector<Reason> problems;
+  double heading = 0;
+  double lane_length = 0;
+  double strip_length = 0;
+  double strip_width = 0;
+  bool running = false;
+};
+
+// The goal for calibration/run: the lane of the status the start was checked with.
+struct CalibrationGoal {
+  double heading = 0;
+  double lane_length = 0;
+};
+
+// How the program ended a drive: DONE with the status and summary of the result, else why it stopped.
+struct CalibrationOutcome {
+  std::string reason;
+  std::string message;
+  std::string status;
+  std::string summary;
 };
 
 // How an undocking ended, for the node: undocked or not, whether a drive waits for it, and why the drive or mowing
@@ -254,6 +290,36 @@ class LogicCore {
   // abort): the node cancels it, and a drive ends with this reason.
   std::optional<Reason> TakeDriveCancel();
 
+  // The calibration drive (mowbite_calibration): IDLE with the sub state CALIBRATING. It starts only on
+  // calibration.start, never by itself; the program drives on calibration/cmd_vel, which reaches the wheels only while
+  // calibrating and without emergency (SOURCE_CALIBRATION), and never with the blade. It ends with one zero at an
+  // emergency, without a pose or a safety measurement, on a low battery, on calibration.abort (the mower stays where
+  // it is) and after CalibrationConfig::timeout without a sign of the program; jumps of the position do not end it.
+  void OnCalibrationStatus(const CalibrationStatus& status, double now_s);
+  // Every reason against a start now, the logic's first, then the program's (calibration.check); empty: it may start.
+  std::vector<Reason> CalibrationProblems(double now_s) const;
+  // The program's status while it counts, none without one.
+  std::optional<CalibrationStatus> CalibrationStatusNow(double now_s) const;
+  // calibration.start: empty when CALIBRATING began, else the first reason against it (also CALIBRATION_REFUSED).
+  Reason StartCalibration(double now_s);
+  // A start refused by the node (no program, the last drive still stopping): CALIBRATION_REFUSED.
+  void RefuseCalibration(const Reason& why);
+  // The goal for calibration/run, once after the start.
+  std::optional<CalibrationGoal> TakeCalibrationGoal();
+  // A sign of the program: the goal taken, or feedback, which also tells the phase (event CALIBRATION when it changes).
+  void OnCalibrationSign(double now_s);
+  void OnCalibrationFeedback(const std::string& phase, int index, double now_s);
+  // The program ended the drive: CALIBRATED or CALIBRATION_FAILED, then IDLE.
+  void OnCalibrationEnded(const CalibrationOutcome& outcome);
+  // calibration.abort: true when a drive was running; it stops here without the program and the mower stays there.
+  bool AbortCalibration(const Reason& why);
+  // The watchdog of the program and the battery while it drives; true when the drive ended now.
+  bool TickCalibration(double now_s);
+  bool Calibrating() const;
+  bool CalibrationActive() const;
+  // True once when the node has to cancel the goal of calibration/run.
+  bool TakeCalibrationCancel();
+
   // The mow areas of the map and why mowing may not plan from it (empty if it may).
   void OnMowMap(std::vector<JobArea> areas, const Reason& problem);
   // The docking station of the map, none without one.
@@ -367,7 +433,7 @@ class LogicCore {
   }
 
  private:
-  enum class State { kIdle, kAreaRecording, kDriving, kMowing, kUndocking, kDocking };
+  enum class State { kIdle, kAreaRecording, kDriving, kMowing, kUndocking, kDocking, kCalibrating };
   // Why mowing pauses; manual, emergency and fault wait for continue, GPS goes on by itself.
   static constexpr int kPauseManual = 1 << 0;
   static constexpr int kPauseEmergency = 1 << 1;
@@ -439,6 +505,8 @@ class LogicCore {
   void EndJob(bool finished, bool home);
   bool PoseGood() const;
   void CheckpointNow();
+  // Ends a calibration drive here: CALIBRATION_FAILED unless done, CALIBRATION end, IDLE; cancel: the program too.
+  void EndCalibration(const std::optional<Reason>& failure, bool cancel);
 
   LogicConfig config_;
   HardwareSnapshot hw_;
@@ -522,6 +590,16 @@ class LogicCore {
   bool blades_running_ = false;
   bool last_start_ok_ = false;
   std::vector<std::string> notices_;
+  // Calibration: the program's status and when it came, the goal due for the node, the cancel of the program, its last
+  // sign, the phase it reported last, and since when the battery is low.
+  std::optional<CalibrationStatus> calibration_status_;
+  double calibration_status_s_ = 0;
+  std::optional<CalibrationGoal> calibration_goal_due_;
+  bool calibration_cancel_ = false;
+  double calibration_sign_s_ = 0;
+  std::string calibration_phase_;
+  int calibration_index_ = 0;
+  std::optional<double> calibration_battery_since_;
 };
 
 }  // namespace mowbite_logic

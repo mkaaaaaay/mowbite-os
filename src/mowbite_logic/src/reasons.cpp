@@ -35,6 +35,22 @@ Rating RateReason(const std::string& event, const std::string& code, const std::
     if (In(error, code)) return {kError, kUser};
     return {kWarning, kUser};
   }
+  if (event == "CALIBRATION_REFUSED") {
+    static const std::set<std::string> info = {"BUSY", "STILL_STOPPING", "ON_DOCK"};
+    static const std::set<std::string> error = {"EMERGENCY",      "NO_SAFETY_MEASUREMENT", "MAP_MISMATCH",
+                                                "MAP_UNREADABLE", "MAP_UNKNOWN",           "CALIBRATION_MISSING",
+                                                "SENSOR_MISSING", "IMU_GRAVITY"};
+    if (In(info, code)) return {kInfo, kUser};
+    if (In(error, code)) return {kError, kUser};
+    return {kWarning, kUser};
+  }
+  // Nothing goes on by itself after a calibration drive stopped.
+  if (event == "CALIBRATION_FAILED") {
+    static const std::set<std::string> warning = {"NO_RTK", "BATTERY_LOW", "NO_ROOM", "SLOPE"};
+    if (code == "STOPPED") return {kInfo, kUser};
+    if (In(kPositionCodes, code) || In(warning, code)) return {kWarning, kUser};
+    return {kError, kUser};
+  }
   if (event == "STATE") {
     if (code == "MANUAL") return {kInfo, kUser};
     if (In(kPositionCodes, code)) return {kWarning, kAuto};
