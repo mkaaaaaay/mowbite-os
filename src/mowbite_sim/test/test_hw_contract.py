@@ -232,7 +232,9 @@ class TestHardwareContract(unittest.TestCase):
         self.assertEqual(len([e for e in frames if e["hex"][:2] == "00"]), 3, str(frames))
 
     def test_f_blade_requests_out_of_range_refused(self):
-        self.assertFalse(self.probe.set_blade(True, lease_s=2.5).success)
+        r = self.probe.set_blade(True, lease_s=2.5)
+        self.assertFalse(r.success)
+        self.assertEqual(r.emergency_reason, 0)
         self.assertFalse(self.probe.set_blade(True, lease_s=0.0).success)
         self.assertFalse(self.probe.set_blade(True, lease_s=1.0, height=20).success)
         self.assertFalse(self.probe.set_blade(True, lease_s=1.0, speed=150).success)
@@ -246,6 +248,8 @@ class TestHardwareContract(unittest.TestCase):
         r = self.probe.set_blade(True, lease_s=1.0)
         self.assertFalse(r.success)
         self.assertIn("blocked", r.message)
+        # The refusal names the emergency, so the logic need not wait for the status.
+        self.assertEqual(r.emergency_reason, HardwareStatus.REASON_LATCH | HardwareStatus.REASON_HIGH_LEVEL)
         self.assertTrue(self.release(), "release failed")
         self.assertEqual(self.probe.status.emergency_reason, 0)
 

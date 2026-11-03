@@ -10,3 +10,5 @@ float32 lease_s
 ---
 bool success
 string message
+# Refused because the mower is blocked by an emergency: its reason bits as in hw/status (REASON_*), else 0.
+uint32 emergency_reason

@@ -336,8 +336,8 @@ class LogicCore {
   // Whether the blade should turn now: mowing, not paused, a mow segment (or spinning up for one), mow_with_blade, a
   // safety measurement, telemetry and not on the dock. The node keeps the lease of hw/blade alive only while it is.
   bool BladeWanted() const;
-  // hw/blade refused while the blade was wanted: mowing pauses.
-  void OnBladeRefused(const std::string& message);
+  // hw/blade refused while the blade was wanted: mowing pauses, with reason bits of the answer as for that emergency.
+  void OnBladeRefused(const std::string& message, int emergency_reason = 0);
   // The checkpoint to save, once after each change worth keeping.
   std::optional<std::string> TakeCheckpoint();
 

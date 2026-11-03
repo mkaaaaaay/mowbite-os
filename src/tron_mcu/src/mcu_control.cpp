@@ -87,7 +87,8 @@ void McuControl::ReleaseEmergency(double now) {
   release_until_s_ = now + config_.release_window_s;
 }
 
-BladeResult McuControl::SetBlade(const BladeRequest& request, double now) {
+BladeResult McuControl::SetBlade(const BladeRequest& request, double now, uint32_t* emergency_reason) {
+  if (emergency_reason) *emergency_reason = 0;
   if (!request.on) {
     DropBlade(BladeOffReason::kRequest);
     return BladeResult::kOk;
@@ -105,6 +106,8 @@ BladeResult McuControl::SetBlade(const BladeRequest& request, double now) {
   // A refused renewal also ends a running lease, so the blade never outlives a refusal.
   if (Blocked(now)) {
     DropBlade(BladeOffReason::kBlocked);
+    // 0 while the IMU is still due after the start: blocked, but no emergency.
+    if (emergency_reason) *emergency_reason = EmergencyReason(now);
     return BladeResult::kBlocked;
   }
   if (DockContact()) {

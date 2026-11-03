@@ -78,6 +78,11 @@ std::string EmergencyReasonNames(int reason) {
 
 namespace {
 
+// Why mowing pauses or a drive ends for an emergency, worded alike whether hw/status or a refused blade told it.
+Reason EmergencyWhy(int reason) {
+  return Reason("EMERGENCY", "Emergency: " + EmergencyReasonNames(reason));
+}
+
 RecorderConfig RecorderConfigOf(const LogicConfig& config) {
   RecorderConfig recorder = config.recorder;
   recorder.max_position_accuracy = config.max_position_accuracy;
@@ -251,7 +256,7 @@ void LogicCore::UpdateEmergency() {
   if (emergency != emergency_) {
     emergency_ = emergency;
     if (emergency) teleop_armed_ = false;
-    const Reason why("EMERGENCY", "Emergency: " + EmergencyReasonNames(reason_));
+    const Reason why = EmergencyWhy(reason_);
     if (emergency && state_ == State::kDriving) CancelDrive(why);
     if (emergency && state_ == State::kMowing) Pause(kPauseEmergency, why);
     // Like OpenMower: the emergency tells, no UNDOCKING_FAILED or DOCKING_FAILED.
@@ -1565,8 +1570,13 @@ bool LogicCore::BladeWanted() const {
   return leg_ == Leg::kFollow && pose && IsMowKind(pose->kind);
 }
 
-void LogicCore::OnBladeRefused(const std::string& message) {
+void LogicCore::OnBladeRefused(const std::string& message, int emergency_reason) {
   if (!BladeWanted()) return;
+  // The driver blocked before hw/status showed it: the pause of that emergency, its flag and event follow hw/status.
+  if (emergency_reason != 0) {
+    Pause(kPauseEmergency, EmergencyWhy(emergency_reason));
+    return;
+  }
   Pause(kPauseFault, Reason("BLADE_REFUSED", "The blade was refused: " + message));
 }
 

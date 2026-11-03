@@ -132,8 +132,9 @@ class McuControl {
   // Clears a latched lift or stop on the MCU and releases the emergency once the flags are gone.
   void ReleaseEmergency(double now);
   // Switching off always works. Switching on, or renewing the lease with the same or another setting, is refused when
-  // the configuration forbids the blade, the request is out of range, the mower is blocked or on the dock.
-  BladeResult SetBlade(const BladeRequest& request, double now);
+  // the configuration forbids the blade, the request is out of range, the mower is blocked or on the dock. A refusal
+  // because of an emergency sets emergency_reason to its bits as hw/status shows them, every other answer to 0.
+  BladeResult SetBlade(const BladeRequest& request, double now, uint32_t* emergency_reason = nullptr);
   // Not allowed: Charge 0 at once, repeat_count times, and no Charge 1 until allowed again or the contact ends, so
   // that the mower leaves the station without charging. Allowed: Charge 1 at the next tick while there is contact.
   void SetCharging(bool allowed, double now);
