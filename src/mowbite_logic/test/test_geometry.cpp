@@ -11,7 +11,8 @@ namespace {
 json TronValues() {
   return json{{"robot_width", 0.47}, {"robot_front", 0.60},    {"robot_rear", 0.12},     {"mower_width", 0.22},
               {"blade_ahead", 0.23}, {"blade_offset", 0.0},    {"antenna_x", 0.0},       {"antenna_y", 0.0},
-              {"track", 0.395},      {"wheel_radius", 0.1125}, {"dock_contact_x", -0.10}};
+              {"track", 0.395},      {"wheel_radius", 0.1125}, {"dock_contact_x", -0.10}, {"ticks_per_m", 1000.0},
+              {"imu_roll", 0.0},     {"imu_pitch", 0.0}};
 }
 
 Geometry Tron() {
@@ -49,7 +50,8 @@ TEST(Geometry, GetListsEveryKeyInOrderWithItsRules) {
   for (const auto& item : answer["settings"].items()) names.push_back(item.key());
   EXPECT_EQ(names, (std::vector<std::string>{"robot_width", "robot_front", "robot_rear", "robot_outline", "mower_width",
                                              "blade_ahead", "blade_offset", "antenna_x", "antenna_y", "track",
-                                             "wheel_radius", "dock_contact_x"}));
+                                             "wheel_radius", "dock_contact_x", "ticks_per_m", "imu_roll",
+                                             "imu_pitch"}));
   const json& width = answer["settings"]["robot_width"];
   EXPECT_DOUBLE_EQ(width["value"].get<double>(), 0.47);
   EXPECT_DOUBLE_EQ(width["default"].get<double>(), 0.47);
@@ -63,10 +65,14 @@ TEST(Geometry, GetListsEveryKeyInOrderWithItsRules) {
   EXPECT_EQ(outline["type"], "points");
   EXPECT_EQ(outline["value"], json::array());
   EXPECT_FALSE(outline["stored"].get<bool>());
-  for (const char* name : {"track", "wheel_radius", "dock_contact_x"}) {
+  for (const char* name : {"wheel_radius", "dock_contact_x"}) {
     EXPECT_FALSE(answer["settings"][name]["settable"].get<bool>()) << name;
   }
-  EXPECT_TRUE(answer["settings"]["antenna_x"]["settable"].get<bool>());
+  for (const char* name : {"antenna_x", "track", "ticks_per_m", "imu_roll", "imu_pitch"}) {
+    EXPECT_TRUE(answer["settings"][name]["settable"].get<bool>()) << name;
+  }
+  EXPECT_EQ(answer["settings"]["ticks_per_m"]["unit"], "1/m");
+  EXPECT_EQ(answer["settings"]["imu_pitch"]["unit"], "rad");
 }
 
 TEST(Geometry, ParamsCarryEveryKeyAndTheVersion) {
@@ -75,7 +81,8 @@ TEST(Geometry, ParamsCarryEveryKeyAndTheVersion) {
   EXPECT_DOUBLE_EQ(params["dock_contact_x"].get<double>(), -0.10);
   EXPECT_EQ(params["robot_outline"], json::array());
   EXPECT_EQ(params["version"], 0);
-  EXPECT_EQ(params.size(), 13u);
+  EXPECT_EQ(params["stored"], json::array());
+  EXPECT_EQ(params.size(), 17u);
 }
 
 TEST(Geometry, ThePlatformsFileHasToBeWholeAndKeepTheRules) {
@@ -194,7 +201,7 @@ TEST(Geometry, AStaleVersionIsRefusedWithTheCurrentOne) {
 TEST(Geometry, KeysAndValuesAreChecked) {
   Geometry geometry = Tron();
   ExpectRefused(geometry, Request(geometry, {{"antenna_z", 0.1}}), "UNKNOWN_KEY", "antenna_z");
-  ExpectRefused(geometry, Request(geometry, {{"track", 0.4}}), "NOT_SETTABLE", "track");
+  ExpectRefused(geometry, Request(geometry, {{"wheel_radius", 0.1}}), "NOT_SETTABLE", "wheel_radius");
   ExpectRefused(geometry, Request(geometry, {{"dock_contact_x", -0.2}}), "NOT_SETTABLE", "dock_contact_x");
   ExpectRefused(geometry, Request(geometry, json::object(), {"wheel_radius"}), "NOT_SETTABLE", "wheel_radius");
   ExpectRefused(geometry, Request(geometry, json::object(), {"nope"}), "UNKNOWN_KEY", "nope");
@@ -224,6 +231,47 @@ TEST(Geometry, ValuesOutsideTheRangeAreRefusedNotCut) {
                   .ok);
 }
 
+TEST(Geometry, TheCalibratedValuesHaveTheirOwnRanges) {
+  Geometry geometry = Tron();
+  ExpectRefused(geometry, Request(geometry, {{"ticks_per_m", 99}}), "OUT_OF_RANGE", "ticks_per_m");
+  ExpectRefused(geometry, Request(geometry, {{"ticks_per_m", 10001}}), "OUT_OF_RANGE", "ticks_per_m");
+  ExpectRefused(geometry, Request(geometry, {{"track", 0.14}}), "OUT_OF_RANGE", "track");
+  ExpectRefused(geometry, Request(geometry, {{"track", 0.81}}), "OUT_OF_RANGE", "track");
+  ExpectRefused(geometry, Request(geometry, {{"antenna_x", 0.61}}), "OUT_OF_RANGE", "antenna_x");
+  ExpectRefused(geometry, Request(geometry, {{"antenna_y", 0.31}}), "OUT_OF_RANGE", "antenna_y");
+  ExpectRefused(geometry, Request(geometry, {{"imu_roll", 0.09}}), "OUT_OF_RANGE", "imu_roll");
+  ExpectRefused(geometry, Request(geometry, {{"imu_pitch", -0.09}}), "OUT_OF_RANGE", "imu_pitch");
+  const GeometryChange change = geometry.Set(Request(geometry, {{"ticks_per_m", 50}}));
+  EXPECT_DOUBLE_EQ(change.problem.data["min"].get<double>(), 100.0);
+  EXPECT_NE(change.problem.message.find("1/m"), std::string::npos);
+  const GeometryChange done = geometry.Set(
+      Request(geometry, {{"ticks_per_m", 940}, {"track", 0.4}, {"imu_roll", 0.03}, {"imu_pitch", -0.087}}));
+  ASSERT_TRUE(done.ok) << done.problem.message;
+  EXPECT_DOUBLE_EQ(geometry.Value("track"), 0.4);
+  EXPECT_DOUBLE_EQ(geometry.Value("imu_pitch"), -0.087);
+  EXPECT_EQ(geometry.Params()["stored"], json::array({"track", "ticks_per_m", "imu_roll", "imu_pitch"}));
+  EXPECT_TRUE(geometry.Get()["settings"]["imu_roll"]["stored"].get<bool>());
+}
+
+TEST(Geometry, TheMountingOfTheImuMayDifferFromThePlatformsByFiveDegrees) {
+  // The IMU of the NX60i sits about 4.5 degrees nose up: its range lies around that.
+  json values = TronValues();
+  values["imu_pitch"] = 0.079;
+  Geometry geometry("yardforce_nx60i", values);
+  const json pitch = geometry.Get()["settings"]["imu_pitch"];
+  EXPECT_DOUBLE_EQ(pitch["default"].get<double>(), 0.079);
+  EXPECT_NEAR(pitch["min"].get<double>(), -0.008, 1e-12);
+  EXPECT_NEAR(pitch["max"].get<double>(), 0.166, 1e-12);
+  EXPECT_DOUBLE_EQ(geometry.Get()["settings"]["imu_roll"]["max"].get<double>(), 0.087);
+  EXPECT_TRUE(geometry.Set(Request(geometry, {{"imu_pitch", 0.16}})).ok);
+  ExpectRefused(geometry, Request(geometry, {{"imu_pitch", -0.01}}), "OUT_OF_RANGE", "imu_pitch");
+  // A file entry outside of it is not taken.
+  std::string why;
+  Geometry other("yardforce_nx60i", values);
+  EXPECT_FALSE(other.Load(R"({"entries": {"imu_pitch": 0.17}})", &why));
+  EXPECT_TRUE(other.Load(R"({"entries": {"imu_pitch": 0.0}})", &why)) << why;
+}
+
 TEST(Geometry, TheBodyIsNotLongerOrWiderThanPossible) {
   Geometry geometry = Tron();
   ExpectRefused(geometry, Request(geometry, {{"robot_front", 1.5}}), "OUT_OF_RANGE", "robot_front");
@@ -237,14 +285,15 @@ TEST(Geometry, BladeAndAntennaSitOnTheBodyAndTheCutIsNotWiderThanIt) {
   // A sign slip: the blade 0.23 m behind base_link is outside of the body, which reaches back 0.12 m.
   ExpectRefused(geometry, Request(geometry, {{"blade_ahead", -0.23}}), "OUTSIDE_BODY", "blade_ahead");
   ExpectRefused(geometry, Request(geometry, {{"blade_offset", 0.3}}), "OUTSIDE_BODY", "blade_offset");
-  ExpectRefused(geometry, Request(geometry, {{"antenna_x", 0.7}}), "OUTSIDE_BODY", "antenna_x");
+  ExpectRefused(geometry, Request(geometry, {{"antenna_x", -0.2}}), "OUTSIDE_BODY", "antenna_x");
   ExpectRefused(geometry, Request(geometry, {{"antenna_y", -0.3}}), "OUTSIDE_BODY", "antenna_y");
   ExpectRefused(geometry, Request(geometry, {{"mower_width", 0.5}}), "OUTSIDE_BODY", "mower_width");
   // The body is checked together with the rest: a smaller body that leaves the blade out is refused ...
   ExpectRefused(geometry, Request(geometry, {{"robot_front", 0.2}}), "OUTSIDE_BODY", "blade_ahead");
   // ... unless the blade moves with it.
   EXPECT_TRUE(geometry.Set(Request(geometry, {{"robot_front", 0.2}, {"blade_ahead", 0.1}})).ok);
-  const GeometryChange change = geometry.Set(Request(geometry, {{"antenna_x", 0.7}}));
+  const GeometryChange change = geometry.Set(Request(geometry, {{"antenna_x", 0.5}}));
+  EXPECT_EQ(change.problem.reason, "OUTSIDE_BODY");
   EXPECT_DOUBLE_EQ(change.problem.data["max"].get<double>(), 0.2);
   EXPECT_DOUBLE_EQ(change.problem.data["min"].get<double>(), -0.12);
 }
@@ -364,7 +413,8 @@ TEST(Geometry, AFileThatIsWrongChangesNothing) {
       R"({"version": "1"})",
       R"({"entries": []})",
       R"({"entries": {"antenna_z": 1}})",
-      R"({"entries": {"track": 0.4}})",
+      R"({"entries": {"wheel_radius": 0.1}})",
+      R"({"entries": {"imu_pitch": 0.1}})",
       R"({"entries": {"blade_ahead": "x"}})",
       R"({"entries": {"robot_width": 47}})",
       R"({"entries": {"blade_ahead": -0.5}})",

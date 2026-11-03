@@ -122,7 +122,8 @@ LOGIC_SETTINGS = ["rain_mode", "rain_delay_minutes", "rain_check_seconds", "auto
                   "max_position_accuracy", "gps_wait_time", "docking_approach_distance", "docking_distance",
                   "docking_retry_count", "undock_distance", "motor_hot_temperature", "motor_cold_temperature"]
 GEOMETRY_KEYS = ["robot_width", "robot_front", "robot_rear", "robot_outline", "mower_width", "blade_ahead",
-                 "blade_offset", "antenna_x", "antenna_y", "track", "wheel_radius", "dock_contact_x"]
+                 "blade_offset", "antenna_x", "antenna_y", "track", "wheel_radius", "dock_contact_x", "ticks_per_m",
+                 "imu_roll", "imu_pitch"]
 
 
 def enabled(action_id):
@@ -331,9 +332,10 @@ if args.target == "mowbite-os" and offers("robot.geometry.set") and offers("robo
     check("robot.geometry.get names the platform of system.info",
           answer.get("platform") == ((r or {}).get("result") or {}).get("platform"),
           f'{answer.get("platform")} / {((r or {}).get("result") or {}).get("platform")}')
-    check("robot.geometry.get: only the platform sets track, wheel_radius and dock_contact_x", all(
-        settings.get(k, {}).get("settable") is False for k in ("track", "wheel_radius", "dock_contact_x")) and all(
-        settings.get(k, {}).get("settable") is True for k in GEOMETRY_KEYS[:9]), "")
+    fixed = ("wheel_radius", "dock_contact_x")
+    check("robot.geometry.get: only the platform sets wheel_radius and dock_contact_x", all(
+        settings.get(k, {}).get("settable") is False for k in fixed) and all(
+        settings.get(k, {}).get("settable") is True for k in GEOMETRY_KEYS if k not in fixed), "")
     p = json.loads(latest("params/json") or "{}")
     shown = {k: p.get("/mowbite_geometry/" + k) for k in GEOMETRY_KEYS}
     check("params/json has the dimensions of the mower with the version", None not in shown.values() and
@@ -466,8 +468,8 @@ if methods is not None and "robot.geometry.set" in methods:
     check("robot.geometry.set refuses a value out of the range -32602 OUT_OF_RANGE", bool(r) and
           r.get("error", {}).get("code") == -32602 and r["error"].get("data", {}).get("reason") == "OUT_OF_RANGE" and
           r["error"]["data"].get("key") == "robot_width", json.dumps(r and r.get("error")))
-    r = rpc("robot.geometry.set", {"version": version + 1, "settings": {"track": 0.4}}, "geo_track")
-    check("robot.geometry.set refuses the track of the platform -32602 NOT_SETTABLE", bool(r) and
+    r = rpc("robot.geometry.set", {"version": version + 1, "settings": {"wheel_radius": 0.1}}, "geo_track")
+    check("robot.geometry.set refuses the wheel radius of the platform -32602 NOT_SETTABLE", bool(r) and
           r.get("error", {}).get("code") == -32602 and r["error"].get("data", {}).get("reason") == "NOT_SETTABLE",
           json.dumps(r and r.get("error")))
     # Back to what it was: the user's own value, or the platform's.

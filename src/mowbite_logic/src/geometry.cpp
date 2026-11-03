@@ -10,7 +10,8 @@ namespace mowbite_logic {
 
 const std::vector<GeometryKey>& GeometryKeys() {
   // Ranges are against slips of the pen (cm for m, a wrong sign), not against the platform's values: a measured body
-  // may be smaller than the one of the platform's file.
+  // may be smaller than the one of the platform's file. The calibration drive sets track, the antenna, ticks_per_m and
+  // the mounting of the IMU, which may differ from the platform's by 5 degrees at most.
   static const std::vector<GeometryKey> keys = {
       {"robot_width", GeometryType::kNumber, true, 0.1, 1.5},
       {"robot_front", GeometryType::kNumber, true, 0.0, 1.5},
@@ -19,11 +20,14 @@ const std::vector<GeometryKey>& GeometryKeys() {
       {"mower_width", GeometryType::kNumber, true, 0.05, 1.5},
       {"blade_ahead", GeometryType::kNumber, true, -1.5, 1.5},
       {"blade_offset", GeometryType::kNumber, true, -0.75, 0.75},
-      {"antenna_x", GeometryType::kNumber, true, -1.5, 1.5},
-      {"antenna_y", GeometryType::kNumber, true, -0.75, 0.75},
-      {"track", GeometryType::kNumber, false, 0.1, 1.5},
+      {"antenna_x", GeometryType::kNumber, true, -0.6, 0.6},
+      {"antenna_y", GeometryType::kNumber, true, -0.3, 0.3},
+      {"track", GeometryType::kNumber, true, 0.15, 0.8},
       {"wheel_radius", GeometryType::kNumber, false, 0.02, 0.5},
       {"dock_contact_x", GeometryType::kNumber, false, -1.5, 1.5},
+      {"ticks_per_m", GeometryType::kNumber, true, 100.0, 10000.0, "1/m"},
+      {"imu_roll", GeometryType::kNumber, true, -0.087, 0.087, "rad", true},
+      {"imu_pitch", GeometryType::kNumber, true, -0.087, 0.087, "rad", true},
   };
   return keys;
 }
@@ -143,14 +147,22 @@ Geometry::Values Geometry::Effective(const Entries& entries) const {
   return values;
 }
 
-std::optional<GeometryProblem> Geometry::Check(const Values& values) {
+std::pair<double, double> Geometry::Range(const GeometryKey& key) const {
+  if (!key.relative) return {key.min, key.max};
+  const double base = factory_.numbers.at(key.name);
+  return {base + key.min, base + key.max};
+}
+
+std::optional<GeometryProblem> Geometry::Check(const Values& values) const {
   for (const auto& key : GeometryKeys()) {
     if (key.type != GeometryType::kNumber) continue;
     const double x = values.numbers.at(key.name);
-    if (!std::isfinite(x) || x < key.min - kEps || x > key.max + kEps) {
+    const auto [min, max] = Range(key);
+    if (!std::isfinite(x) || x < min - kEps || x > max + kEps) {
+      const std::string unit = std::string(" ") + key.unit;
       return OutOfRange(key.name,
-                        key.name + " " + Num(x) + " m is outside " + Num(key.min) + " to " + Num(key.max) + " m",
-                        key.min, key.max);
+                        key.name + " " + Num(x) + unit + " is outside " + Num(min) + " to " + Num(max) + unit, min,
+                        max);
     }
   }
   if (!values.outline.empty()) {
@@ -295,10 +307,11 @@ json Geometry::Get() const {
       entry["value"] = now_.numbers.at(key.name);
       entry["default"] = factory_.numbers.at(key.name);
       entry["stored"] = entries_.numbers.count(key.name) != 0;
+      const auto [min, max] = Range(key);
       entry["type"] = "number";
-      entry["unit"] = "m";
-      entry["min"] = key.min;
-      entry["max"] = key.max;
+      entry["unit"] = key.unit;
+      entry["min"] = min;
+      entry["max"] = max;
     } else {
       entry["value"] = PointsJson(now_.outline);
       entry["default"] = PointsJson(factory_.outline);
@@ -322,6 +335,13 @@ json Geometry::Params() const {
     out[key.name] = key.type == GeometryType::kNumber ? json(now_.numbers.at(key.name)) : PointsJson(now_.outline);
   }
   out["version"] = version_;
+  json stored = json::array();
+  for (const auto& key : GeometryKeys()) {
+    if (key.type == GeometryType::kNumber ? entries_.numbers.count(key.name) != 0 : entries_.outline.has_value()) {
+      stored.push_back(key.name);
+    }
+  }
+  out["stored"] = std::move(stored);
   return out;
 }
 

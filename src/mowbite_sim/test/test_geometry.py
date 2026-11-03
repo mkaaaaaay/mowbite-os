@@ -214,9 +214,9 @@ class TestGeometry(unittest.TestCase):
         self.assertEqual(settings["robot_width"]["min"], 0.1)
         self.assertEqual(settings["robot_width"]["max"], 1.5)
         self.assertEqual(settings["robot_outline"]["type"], "points")
-        for name in ("track", "wheel_radius", "dock_contact_x"):
+        for name in ("wheel_radius", "dock_contact_x"):
             self.assertFalse(settings[name]["settable"], name)
-        for name in ("robot_width", "mower_width", "antenna_x", "blade_offset"):
+        for name in ("robot_width", "mower_width", "antenna_x", "blade_offset", "track", "ticks_per_m", "imu_pitch"):
             self.assertTrue(settings[name]["settable"], name)
         self.assertEqual(list(settings)[:4], ["robot_width", "robot_front", "robot_rear", "robot_outline"])
 
@@ -274,7 +274,7 @@ class TestGeometry(unittest.TestCase):
         cases = {
             "stale": ({"version": 3, "settings": {"blade_ahead": 0.2}}, "VERSION", "version"),
             "range": ({"version": 10, "settings": {"robot_width": 47}}, "OUT_OF_RANGE", "robot_width"),
-            "track": ({"version": 10, "settings": {"track": 0.4}}, "NOT_SETTABLE", "track"),
+            "fixed": ({"version": 10, "settings": {"wheel_radius": 0.1}}, "NOT_SETTABLE", "wheel_radius"),
             "unknown": ({"version": 10, "settings": {"nope": 1}}, "UNKNOWN_KEY", "nope"),
             "text": ({"version": 10, "settings": {"blade_ahead": "0.2"}}, "INVALID_VALUE", "blade_ahead"),
             "sign": ({"version": 10, "settings": {"blade_ahead": -0.23}}, "OUTSIDE_BODY", "blade_ahead"),
