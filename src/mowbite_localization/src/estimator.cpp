@@ -65,8 +65,14 @@ bool Estimator::AddImu(double t, double rate) {
 void Estimator::AddWheels(double t, double speed, double turn_rate) {
   if (!std::isfinite(t) || !std::isfinite(speed) || !std::isfinite(turn_rate)) return;
   wheel_time_ = t;
-  wheel_speed_ = speed;
-  wheel_turn_ = turn_rate;
+  wheel_speed_ = speed * wheel_scale_;
+  wheel_turn_ = turn_rate * wheel_scale_;
+}
+
+void Estimator::SetWheelScale(double driver_ticks_per_m, double ticks_per_m) {
+  const bool known = std::isfinite(driver_ticks_per_m) && std::isfinite(ticks_per_m) && driver_ticks_per_m > 0 &&
+                     ticks_per_m > 0;
+  wheel_scale_ = known ? driver_ticks_per_m / ticks_per_m : 1.0;
 }
 
 FixResult Estimator::AddFix(const GnssFix& fix, double t) {

@@ -5,6 +5,7 @@
 #include <memory>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
+#include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/position_jump.hpp>
 #include <mowbite_msgs/msg/robot_pose.hpp>
 #include <mowbite_msgs/srv/set_heading.hpp>
@@ -89,6 +90,13 @@ class LocalizationNode : public rclcpp::Node {
           estimator_.SetGpsLimits(msg->max_position_accuracy, msg->gps_timeout);
           RCLCPP_INFO(get_logger(), "GPS limits: accuracy %.3f m, timeout %.1f s", msg->max_position_accuracy,
                       msg->gps_timeout);
+        });
+    // The ticks per m the driver computes the wheel speeds with; robot.geometry holds the true ones.
+    caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
+        "hw/capabilities", LatchedQos(1), [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          driver_ticks_per_m_ = msg->wheel_ticks_per_m;
+          ApplyWheelScale();
         });
     // Several nodes leave their parameters latched here; the geometry of the logic is the one that counts.
     params_sub_ = create_subscription<std_msgs::msg::String>(
@@ -190,6 +198,10 @@ class LocalizationNode : public rclcpp::Node {
     bool known, changed;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (params.contains("ticks_per_m") && params["ticks_per_m"].is_number()) {
+        ticks_per_m_ = params["ticks_per_m"].get<double>();
+        ApplyWheelScale();
+      }
       known = estimator_.geometry_known();
       changed = !known || estimator_.antenna_offset() != Eigen::Vector2d(x, y);
       estimator_.SetAntennaOffset(x, y, MonotonicSeconds());
@@ -203,6 +215,16 @@ class LocalizationNode : public rclcpp::Node {
     std_msgs::msg::String msg;
     msg.data = own.dump();
     params_pub_->publish(msg);
+  }
+
+  // Called with the mutex held.
+  void ApplyWheelScale() {
+    const double before = estimator_.wheel_scale();
+    estimator_.SetWheelScale(driver_ticks_per_m_, ticks_per_m_);
+    if (estimator_.wheel_scale() != before) {
+      RCLCPP_INFO(get_logger(), "Wheel speeds count %.4f times (driver %.1f, geometry %.1f ticks per m)",
+                  estimator_.wheel_scale(), driver_ticks_per_m_, ticks_per_m_);
+    }
   }
 
   void OnSetPose(const mowbite_msgs::srv::SetPose::Request& req) {
@@ -308,6 +330,9 @@ class LocalizationNode : public rclcpp::Node {
   rclcpp::Subscription<GnssMsg>::SharedPtr gps_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr params_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
+  double driver_ticks_per_m_ = 0;
+  double ticks_per_m_ = 0;
   rclcpp::Service<mowbite_msgs::srv::SetPose>::SharedPtr set_pose_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetHeading>::SharedPtr set_heading_srv_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_gps_srv_;
