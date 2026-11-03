@@ -4,10 +4,13 @@
 #include <cstdint>
 #include <optional>
 
-#include "tron_gnss/geodesy.h"
+#include "mowbite_gnss/geodesy.h"
 #include "tron_gnss/nmea.h"
 
 namespace tron {
+
+using mowbite_gnss::Enu;
+using mowbite_gnss::LocalFrame;
 
 // Kind of a solution, numbered as in mowbite_msgs/GnssFix.
 enum class Solution : uint8_t { kNone = 0, kSingle = 1, kDgps = 2, kRtkFloat = 3, kRtkFixed = 4, kDeadReckoning = 5 };

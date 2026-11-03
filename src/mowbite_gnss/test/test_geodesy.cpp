@@ -2,9 +2,9 @@
 
 #include <cmath>
 
-#include "tron_gnss/geodesy.h"
+#include "mowbite_gnss/geodesy.h"
 
-namespace tron {
+namespace mowbite_gnss {
 namespace {
 
 constexpr double kDeg = M_PI / 180.0;
@@ -64,4 +64,4 @@ TEST(Geodesy, DistanceIsPreservedOverAGarden) {
 }
 
 }  // namespace
-}  // namespace tron
+}  // namespace mowbite_gnss
