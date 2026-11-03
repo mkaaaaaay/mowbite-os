@@ -38,6 +38,9 @@ static_assert(tron::kReasonLift == HardwareStatus::REASON_LIFT);
 static_assert(tron::kReasonCollision == HardwareStatus::REASON_COLLISION);
 static_assert(tron::kReasonHighLevel == HardwareStatus::REASON_HIGH_LEVEL);
 static_assert(tron::kReasonFirmwareIncompatible == HardwareStatus::REASON_FIRMWARE_INCOMPATIBLE);
+static_assert(tron::kReasonTilt == HardwareStatus::REASON_TILT);
+static_assert(tron::kReasonFence == HardwareStatus::REASON_FENCE);
+static_assert(tron::kReasonStuck == HardwareStatus::REASON_STUCK);
 static_assert(tron::kReasonImuTimeout == HardwareStatus::REASON_IMU_TIMEOUT);
 static_assert(tron::kReasonMowerNotStopped == HardwareStatus::REASON_MOWER_NOT_STOPPED);
 static_assert(static_cast<uint8_t>(tron::BladeOffReason::kLeaseExpired) == HardwareStatus::BLADE_OFF_LEASE_EXPIRED);
@@ -496,8 +499,16 @@ class McuNode : public rclcpp::Node {
                    mowbite_msgs::srv::SetEmergency::Response& res) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (req.latch) {
-      RCLCPP_WARN(get_logger(), "Emergency latched by request: %s", req.reason.c_str());
-      control_.LatchEmergency(tron::kReasonHighLevel);
+      const uint32_t bits = req.bits ? req.bits : tron::kReasonHighLevel;
+      if (bits & ~tron::kHostLatchReasons) {
+        RCLCPP_ERROR(get_logger(), "Refused to latch with reason bits 0x%x: only HIGH_LEVEL, TILT, FENCE and STUCK",
+                     bits);
+        res.success = false;
+        res.message = "only HIGH_LEVEL, TILT, FENCE and STUCK can be latched by request";
+        return;
+      }
+      RCLCPP_WARN(get_logger(), "Emergency latched by request (bits 0x%x): %s", bits, req.reason.c_str());
+      control_.LatchEmergency(bits);
       res.message = "latched";
     } else {
       RCLCPP_INFO(get_logger(), "Emergency release requested: %s", req.reason.c_str());

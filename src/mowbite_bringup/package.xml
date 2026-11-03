@@ -19,6 +19,7 @@
   <exec_depend>mowbite_bridge</exec_depend>
   <exec_depend>mowbite_map</exec_depend>
   <exec_depend>mowbite_follower</exec_depend>
+  <exec_depend>mowbite_safety</exec_depend>
   <exec_depend>mowbite_ntrip</exec_depend>
   <exec_depend>mowbite_planner</exec_depend>
 

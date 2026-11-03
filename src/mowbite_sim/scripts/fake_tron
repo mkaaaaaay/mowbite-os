@@ -8,7 +8,7 @@ while the lift or stop flag is set; it stays 0 until the next SpeedData. The GNS
 antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an upside-down mounted sensor.
 Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, gnss_age, gnss_delay,
 yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, gnss_rtcm, dock_shift_x, dock_shift_y,
-dock_hollow_speed, place) is
+dock_hollow_speed, place, tilt_roll, tilt_pitch) is
 read on every cycle, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON. The
 GNSS pty also plays the RTK board in front of the receiver (Board). gnss_rtcm true makes the fix depend on the RTCM the
 board passes: RTK fixed with the real age while corrections are at most 120 s old, otherwise single without age.
@@ -16,7 +16,8 @@ gnss_noise is the standard deviation (m) of the antenna position, gnss_age the a
 1.0, null leaves the field empty), gnss_delay how old (s) the position is when it is sent, yaw_drift the yaw error (rad)
 per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below which a wheel stands, odom_scale the factor
 between the reported and the real wheel speed, track the real track (m). imu_off stops the IMU frames,
-cutter_ignores_off keeps the blade turning on off frames.
+cutter_ignores_off keeps the blade turning on off frames. tilt_roll and tilt_pitch (degrees) stand the base on a slope
+for the IMU; the wheels and the GNSS do not notice it.
 --dock places a charging station (Dock): the mower stops at it, gets contact there (dock_ok in the battery report) and a
 charge current only after the host sent Charge 1. Its wheels leave the hollows of the station only at
 --dock-hollow-speed or faster. The flag dock forces the contact anywhere; dock_shift_x and dock_shift_y move the station
@@ -513,18 +514,20 @@ def transpose(a):
     return [list(col) for col in zip(*a)]
 
 
-def wit_frames(pose, mount_rpy_deg, gyro_bias_dps=0.0):
-    """Acceleration, rate and angle frames of a level base with the sensor turned by the mount rotation.
+def wit_frames(pose, mount_rpy_deg, gyro_bias_dps=0.0, tilt_deg=(0.0, 0.0)):
+    """Acceleration, rate and angle frames of the base, tilted by roll and pitch, with the sensor turned by the mount
+    rotation.
 
     The driver turns sensor to base with R_mount; so the sensor sees the base through its transpose.
     """
     mount = rotation_rpy(*(math.radians(a) for a in mount_rpy_deg))
     to_sensor = transpose(mount)
-    # A level base without acceleration: the accelerometer reads 1 g up, the gyro the yaw rate.
-    acc = [to_sensor[i][2] for i in range(3)]
+    r_sensor = matmul(rotation_rpy(math.radians(tilt_deg[0]), math.radians(tilt_deg[1]), pose.yaw), mount)
+    # Without acceleration the accelerometer reads 1 g up, in the frame of the sensor; the gyro the yaw rate about the
+    # axis of the base.
+    acc = [r_sensor[2][i] for i in range(3)]
     turn = pose.angular + pose.slip
     rate = [math.degrees(to_sensor[i][2] * turn) + (gyro_bias_dps if i == 2 else 0.0) for i in range(3)]
-    r_sensor = matmul(rotation_rpy(0.0, 0.0, pose.yaw), mount)
     roll = math.degrees(math.atan2(r_sensor[2][1], r_sensor[2][2]))
     pitch = math.degrees(math.asin(max(-1.0, min(1.0, -r_sensor[2][0]))))
     yaw = math.degrees(math.atan2(r_sensor[1][0], r_sensor[0][0]))
@@ -615,7 +618,7 @@ def main():
     parser.add_argument("--imu-link", default="/tmp/mowbite_sim_imu", help="symlink to the IMU pty")
     parser.add_argument("--flags", help="JSON file with lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, "
                         "gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, "
-                        "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place")
+                        "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch")
     parser.add_argument("--log", help="JSON lines log of received sub packets")
     parser.add_argument("--log-max-mb", type=float, default=20.0)
     parser.add_argument("--state", help="JSON file with the true pose, written 5 times a second")
@@ -760,7 +763,8 @@ def main():
             if now >= next_imu:
                 next_imu = now + IMU_PERIOD
                 if not flags.get("imu_off", 0):
-                    send(imu.fd, wit_frames(pose, args.mount_rpy_deg, args.gyro_bias_dps))
+                    tilt = (float(flags.get("tilt_roll", 0.0)), float(flags.get("tilt_pitch", 0.0)))
+                    send(imu.fd, wit_frames(pose, args.mount_rpy_deg, args.gyro_bias_dps, tilt))
             if args.state and now >= next_state:
                 next_state = now + 0.2
                 write_state(args.state, now, pose, dock_ok)

@@ -40,7 +40,7 @@ Ring ToRing(const geometry_msgs::msg::Polygon& polygon) {
 
 }  // namespace
 
-// Follows the paths of the follow_path action on follower/cmd_vel; the logic passes them on to hw/cmd_vel. Stops by
+// Follows the paths of the follow_path action on follower/cmd_vel; the logic passes them on to mowbite_safety. Stops by
 // sending one zero and then nothing, the cmd_vel watchdog of the driver does the rest.
 class FollowerNode : public rclcpp::Node {
  public:

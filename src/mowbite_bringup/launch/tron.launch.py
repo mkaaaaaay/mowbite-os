@@ -68,7 +68,11 @@ def launch_setup(context):
     ntrip = ComposableNode(
         package="mowbite_ntrip", plugin="mowbite_ntrip::NtripNode", name="mowbite_ntrip",
         parameters=[config, extra, {"data_dir": data_dir}])
-    components = [gnss, imu, localization, logic, bridge, map_node, follower, ntrip]
+    # S2 between the logic and the driver, the only writer of hw/cmd_vel.
+    safety = ComposableNode(
+        package="mowbite_safety", plugin="mowbite_safety::SafetyNode", name="mowbite_safety",
+        parameters=[config, extra])
+    components = [gnss, imu, localization, safety, logic, bridge, map_node, follower, ntrip]
     note = os.path.join(data_dir, EXIT_NOTE)
     # A start by hand begins without restarts.
     try:

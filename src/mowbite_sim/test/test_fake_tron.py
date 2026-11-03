@@ -334,6 +334,19 @@ class WitTest(unittest.TestCase):
         self.assertEqual(ft.wit_scaled(180.0, 180.0), 32767)
         self.assertEqual(ft.wit_scaled(-180.0, 180.0), -32768)
 
+    def test_tilted_base(self):
+        # Upright, a roll of the base is the roll of the sensor, and gravity leans with it.
+        frames = parse_wit(ft.wit_frames(ft.Pose(), (0.0, 0.0, 0.0), tilt_deg=(20.0, 0.0)))
+        acc = [v / 32768.0 * 16.0 for v in frames[0][1][:3]]
+        self.assertAlmostEqual(acc[1], math.sin(math.radians(20.0)), places=3)
+        self.assertAlmostEqual(acc[2], math.cos(math.radians(20.0)), places=3)
+        self.assertAlmostEqual(frames[2][1][0] / 32768.0 * 180.0, 20.0, delta=0.01)
+        # Upside down, gravity is off the axis of the base by the whole tilt of roll and pitch.
+        frames = parse_wit(ft.wit_frames(ft.Pose(yaw=1.0), (180.0, 0.0, 0.0), tilt_deg=(10.0, 10.0)))
+        acc = [v / 32768.0 * 16.0 for v in frames[0][1][:3]]
+        expected = math.degrees(math.acos(math.cos(math.radians(10.0)) ** 2))
+        self.assertAlmostEqual(math.degrees(math.acos(-acc[2])), expected, delta=0.05)
+
 
 def read_available(fd, seconds):
     end = time.monotonic() + seconds

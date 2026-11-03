@@ -324,6 +324,23 @@ TEST_F(ControlTest, EmergencyLatchesUntilReleased) {
   EXPECT_TRUE(Times(IsClear).empty());
 }
 
+TEST_F(ControlTest, RequestedBitsStayUntilReleased) {
+  Run(0.1);
+  control_.LatchEmergency(kReasonTilt);
+  Run(0.2);
+  EXPECT_TRUE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonTilt);
+  control_.LatchEmergency(kReasonFence);
+  Run(0.3);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonTilt | kReasonFence);
+  EXPECT_FALSE(DrivesOrMows(0.5));
+  control_.ReleaseEmergency(now_);
+  Run(0.6);
+  EXPECT_FALSE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+  EXPECT_EQ(kHostLatchReasons & (kReasonLift | kReasonStop | kReasonCollision | kReasonImuTimeout), 0u);
+}
+
 TEST_F(ControlTest, LiftStaysLatchedAfterFlagDrops) {
   Run(0.1);
   sensor_.lift = true;

@@ -19,6 +19,7 @@
 #include <mowbite_msgs/action/follow_path.hpp>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
+#include <mowbite_msgs/msg/drive_command.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
@@ -253,8 +254,9 @@ class LogicNode : public rclcpp::Node {
     sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorInfo>("bridge/sensor_info", LatchedQos(100));
     sensor_value_pub_ = create_publisher<mowbite_msgs::msg::SensorValue>("bridge/sensor_value", 100);
     publish_pub_ = create_publisher<mowbite_msgs::msg::MqttPublish>("bridge/publish", 100);
-    // The only writer of hw/cmd_vel: teleop while recording, the follower while driving (LogicCore decides).
-    cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("hw/cmd_vel", 10);
+    // Every drive command goes to mowbite_safety (S2), the only writer of hw/cmd_vel, with its source: teleop while
+    // recording, the follower while driving (LogicCore decides), stops of the logic.
+    drive_pub_ = create_publisher<mowbite_msgs::msg::DriveCommand>("safety/drive", 10);
 
     // The app container rates the battery by /ll/board; any value except YardForce makes it show battery_percentage.
     params_pub_ = create_publisher<std_msgs::msg::String>(
@@ -274,7 +276,8 @@ class LogicNode : public rclcpp::Node {
     idle_pub_ = create_publisher<std_msgs::msg::Bool>("logic/idle", rclcpp::QoS(1).reliable().transient_local());
     PublishLogicParams();
     PublishGeometry();
-    emergency_client_ = create_client<mowbite_msgs::srv::SetEmergency>("hw/emergency");
+    // Releases go through mowbite_safety, which keeps the emergency while the mower is tilted.
+    emergency_client_ = create_client<mowbite_msgs::srv::SetEmergency>("safety/release_emergency");
     add_area_client_ = create_client<mowbite_msgs::srv::AddArea>("map/add_area");
     set_dock_client_ = create_client<mowbite_msgs::srv::SetDock>("map/set_dock");
     // The reference check on the docking station (G24); without an answer in dock_check_timeout s nothing starts.
@@ -358,7 +361,7 @@ class LogicNode : public rclcpp::Node {
             std::lock_guard<std::mutex> lock(mutex_);
             active = core_.FollowerActive();
           }
-          if (active) cmd_vel_pub_->publish(*msg);
+          if (active) SendDrive(mowbite_msgs::msg::DriveCommand::SOURCE_FOLLOWER, *msg);
         });
     caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
         "hw/capabilities", LatchedQos(1), [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
@@ -542,14 +545,30 @@ class LogicNode : public rclcpp::Node {
 
   void ReleaseEmergency() {
     if (!emergency_client_->service_is_ready()) {
-      RCLCPP_ERROR(get_logger(), "hw/emergency is not available, emergency stays");
+      RCLCPP_ERROR(get_logger(), "safety/release_emergency is not available, emergency stays");
       return;
     }
     auto request = std::make_shared<mowbite_msgs::srv::SetEmergency::Request>();
     request->latch = false;
     request->reason = "reset_emergency from the app";
-    emergency_client_->async_send_request(request);
+    emergency_client_->async_send_request(
+        request, [this](rclcpp::Client<mowbite_msgs::srv::SetEmergency>::SharedFuture future) {
+          const auto response = future.get();
+          if (!response->success) RCLCPP_WARN(get_logger(), "Emergency stays: %s", response->message.c_str());
+        });
     RCLCPP_INFO(get_logger(), "Emergency release requested");
+  }
+
+  void SendDrive(uint8_t source, const geometry_msgs::msg::Twist& twist) {
+    mowbite_msgs::msg::DriveCommand msg;
+    msg.source = source;
+    msg.twist = twist;
+    drive_pub_->publish(msg);
+  }
+
+  // A zero command at once instead of waiting for the cmd_vel watchdog of the driver.
+  void SendStop() {
+    SendDrive(mowbite_msgs::msg::DriveCommand::SOURCE_STOP, geometry_msgs::msg::Twist());
   }
 
   void OnTeleop(const geometry_msgs::msg::Twist& msg) {
@@ -562,7 +581,7 @@ class LogicNode : public rclcpp::Node {
     geometry_msgs::msg::Twist out;
     out.linear.x = cmd->first;
     out.angular.z = cmd->second;
-    cmd_vel_pub_->publish(out);
+    SendDrive(mowbite_msgs::msg::DriveCommand::SOURCE_TELEOP, out);
   }
 
   void OnDriveTo(const std::shared_ptr<rmw_request_id_t>& header, const mowbite_msgs::srv::DriveTo::Request& request) {
@@ -1021,7 +1040,7 @@ class LogicNode : public rclcpp::Node {
     }
     if (!stalled) return;
     // One zero command: the follower sends none any more, the driver's watchdog would stop the wheels only later.
-    cmd_vel_pub_->publish(geometry_msgs::msg::Twist());
+    SendStop();
     Flush();
   }
 
@@ -1863,7 +1882,7 @@ class LogicNode : public rclcpp::Node {
     }
     if (checkpoint) SaveCheckpoint(*checkpoint);
     for (const auto& line : notices) RCLCPP_INFO(get_logger(), "%s", line.c_str());
-    if (stop) cmd_vel_pub_->publish(geometry_msgs::msg::Twist());
+    if (stop) SendStop();
     // The app shows the reasons of an active emergency from this line, like with mower_comms_v2 of OpenMower.
     for (const auto& change : reasons) {
       if (change.to == 0) {
@@ -2032,7 +2051,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::GpsLimits>::SharedPtr gps_limits_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr idle_pub_;
   std::optional<bool> published_idle_;
-  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::DriveCommand>::SharedPtr drive_pub_;
   rclcpp::Client<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_client_;
   rclcpp::Client<mowbite_msgs::srv::SetBlade>::SharedPtr blade_client_;
   rclcpp::Client<mowbite_msgs::srv::AddArea>::SharedPtr add_area_client_;

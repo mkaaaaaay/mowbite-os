@@ -249,7 +249,7 @@ class LogicCore {
   void OnDriveEnded(bool arrived, const Reason& reason);
   bool Driving() const;
   // The commands of the follower reach the wheels only while driving, or mowing on a leg and not paused, and without
-  // emergency; teleop only while recording. So hw/cmd_vel has one source at a time.
+  // emergency; teleop only while recording. So safety/drive has one source at a time.
   bool FollowerActive() const;
   // Once when a drive or a leg of the job has to stop at once (emergency, no pose, no safety measurement, pause, skip,
   // abort): the node cancels it, and a drive ends with this reason.

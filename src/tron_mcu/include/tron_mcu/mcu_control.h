@@ -58,8 +58,13 @@ constexpr uint32_t kReasonCollision = 1u << 5;
 constexpr uint32_t kReasonHighLevel = 1u << 7;
 constexpr uint32_t kReasonFirmwareIncompatible = 1u << 12;
 // Own bits of hw/status.
+constexpr uint32_t kReasonTilt = 1u << 13;
+constexpr uint32_t kReasonFence = 1u << 14;
+constexpr uint32_t kReasonStuck = 1u << 15;
 constexpr uint32_t kReasonImuTimeout = 1u << 16;
 constexpr uint32_t kReasonMowerNotStopped = 1u << 17;
+// The bits a node above the driver may latch with over hw/emergency.
+constexpr uint32_t kHostLatchReasons = kReasonHighLevel | kReasonTilt | kReasonFence | kReasonStuck;
 
 // Why the blade went off the last time it was requested or running.
 enum class BladeOffReason : uint8_t {
