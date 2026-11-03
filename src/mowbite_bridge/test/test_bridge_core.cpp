@@ -277,6 +277,9 @@ TEST_F(Core, AnswersOfTheNodes) {
   core_.OnRpcError("9", kInvalidRequest, "No docking station", R"({"reason":"NO_DOCK"})");
   core_.OnRpcError("10", kInvalidParams, "bad", "");
   core_.OnRpcError("11", kInternalError, "Gr\xe4" "fin", "not json");
+  // Calls between nodes stay off MQTT.
+  core_.OnRpcResponse("os/calibration/1", R"({"ready":true})");
+  core_.OnRpcError("os/calibration/2", kInvalidParams, "bad", "");
   const Outbox out = core_.Take();
   ASSERT_EQ(out.mqtt.size(), 6u);
   EXPECT_EQ(out.mqtt[0].payload, R"({"jsonrpc":"2.0","result":{"ok":true},"id":"7"})");

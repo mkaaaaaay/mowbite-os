@@ -16,6 +16,9 @@
 
 namespace mowbite_bridge {
 
+// Prefix of the ids of calls between nodes on bridge/rpc/request (e.g. the calibration asking the planner).
+constexpr char kInternalCall[] = "os/";
+
 struct MqttMessage {
   std::string topic;
   std::string payload;
@@ -87,6 +90,7 @@ class BridgeCore {
   void OnMap(const std::string& text);
   void OnPlatform(const std::string& platform);
   void OnRpcMethods(const std::string& node, const std::vector<std::string>& methods);
+  // Answers of the nodes for MQTT; calls one node makes of another (ids beginning with kInternalCall) stay in ROS.
   void OnRpcResponse(const std::string& id, std::string_view result);
   void OnRpcError(const std::string& id, int code, std::string_view message, std::string_view data);
   void OnLog(double t, int level, std::string_view node, std::string_view message);

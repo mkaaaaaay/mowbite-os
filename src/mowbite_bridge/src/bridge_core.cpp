@@ -208,10 +208,12 @@ void BridgeCore::OnRpcMethods(const std::string& node, const std::vector<std::st
 }
 
 void BridgeCore::OnRpcResponse(const std::string& id, std::string_view result) {
+  if (id.rfind(kInternalCall, 0) == 0) return;
   Guard("rpc response", [&] { Send(kResponseTopic, ResultReplyFromText(IdOf(id), result), false); });
 }
 
 void BridgeCore::OnRpcError(const std::string& id, int code, std::string_view message, std::string_view data) {
+  if (id.rfind(kInternalCall, 0) == 0) return;
   Guard("rpc error", [&] {
     Json details;
     if (!data.empty()) {
