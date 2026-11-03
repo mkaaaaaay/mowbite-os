@@ -73,6 +73,21 @@ bool Program::Hold::Failing(bool now_failing, double now, double hold_time) {
 Program::Program(const ProgramConfig& config) : config_(config) {
 }
 
+void Program::SetSpeedLimits(double max_linear, double max_angular) {
+  if (max_linear > 0) {
+    config_.line_speed = std::min(config_.line_speed, max_linear);
+    config_.max_speed = std::min(config_.max_speed, max_linear);
+    config_.line_min_speed = std::min(config_.line_min_speed, config_.line_speed);
+  }
+  if (max_angular > 0) config_.spin_rate = std::min(config_.spin_rate, max_angular);
+}
+
+void Program::SetMounting(double roll, double pitch, double allowance) {
+  config_.imu_roll = roll;
+  config_.imu_pitch = pitch;
+  config_.mount_allowance = allowance;
+}
+
 void Program::OnImu(const ImuSample& sample, double now) {
   if (running_ && imu_s_) {
     const double dt = now - *imu_s_;
@@ -81,6 +96,10 @@ void Program::OnImu(const ImuSample& sample, double now) {
     if (current == Phase::kStand && now - step_s_ >= kSettle) {
       gyro_sum_ += sample.gz;
       gyro_count_++;
+      stand_sum_[0] += sample.ax;
+      stand_sum_[1] += sample.ay;
+      stand_sum_[2] += sample.az;
+      stand_count_++;
     }
   }
   imu_s_ = now;
@@ -137,20 +156,24 @@ void Program::OnEmergency(bool emergency, double /*now*/) {
   emergency_ = emergency;
 }
 
-std::optional<Problem> Program::Gravity(double since, double now) const {
-  double ax = 0, ay = 0, az = 0;
+std::optional<std::array<double, 3>> Program::MeanGravity(double since, double now) const {
+  std::array<double, 3> sum{};
   size_t n = 0;
   for (const auto& [t, sample] : accel_) {
     if (t < since - kTimeEpsilon || t > now + kTimeEpsilon) continue;
-    ax += sample.ax;
-    ay += sample.ay;
-    az += sample.az;
+    sum[0] += sample.ax;
+    sum[1] += sample.ay;
+    sum[2] += sample.az;
     n++;
   }
   if (n < kMinGravitySamples) return std::nullopt;
-  ax /= n;
-  ay /= n;
-  az /= n;
+  return std::array<double, 3>{sum[0] / n, sum[1] / n, sum[2] / n};
+}
+
+std::optional<Problem> Program::Gravity(double since, double now, bool paired) const {
+  const auto mean = MeanGravity(since, now);
+  if (!mean) return std::nullopt;
+  const auto [ax, ay, az] = *mean;
   const double norm = std::sqrt(ax * ax + ay * ay + az * az);
   const double tilt = norm > 0 ? std::acos(std::clamp(az / norm, -1.0, 1.0)) : M_PI;
   if (!(norm > 0) || std::abs(norm - config_.gravity) > config_.gravity_tolerance * config_.gravity ||
@@ -159,9 +182,33 @@ std::optional<Problem> Program::Gravity(double since, double now) const {
                 Text("Gravity %.2f m/s2 at %.0f deg from +z: is the IMU mounted as configured?", norm, Deg(tilt)),
                 {{"gravity", norm}, {"tilt", Deg(tilt)}});
   }
-  if (tilt > config_.max_slope) {
-    return Make("SLOPE", Text("Tilted by %.1f deg, at most %.0f deg for a calibration", Deg(tilt), Deg(config_.max_slope)),
-                {{"slope", Deg(tilt)}, {"limit", Deg(config_.max_slope)}});
+  // A stand where the mower stood facing the other way: the mounting turns with the mower, the slope does not.
+  if (paired && pose_s_) {
+    for (const auto& stand : stands_) {
+      if (std::hypot(stand.x - pose_.x, stand.y - pose_.y) > config_.pair_distance) continue;
+      if (std::abs(std::abs(Wrap(stand.heading - pose_.heading)) - M_PI) > config_.pair_angle) continue;
+      const auto& g = stand.g;
+      const double other = std::sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+      if (!(other > 0)) continue;
+      const double cos_both = (ax * g[0] + ay * g[1] + az * g[2]) / (norm * other);
+      const double slope = 0.5 * std::acos(std::clamp(cos_both, -1.0, 1.0));
+      if (slope <= config_.max_slope) return std::nullopt;
+      return Make("SLOPE",
+                  Text("The ground slopes by %.1f deg, at most %.0f deg for a calibration", Deg(slope),
+                       Deg(config_.max_slope)),
+                  {{"slope", Deg(slope)}, {"limit", Deg(config_.max_slope)}});
+    }
+  }
+  // Else against what the IMU reads on level ground as stored, with the allowance while that is not measured.
+  const double level_x = -std::sin(config_.imu_pitch);
+  const double level_y = std::cos(config_.imu_pitch) * std::sin(config_.imu_roll);
+  const double level_z = std::cos(config_.imu_pitch) * std::cos(config_.imu_roll);
+  const double slope =
+      std::acos(std::clamp((ax * level_x + ay * level_y + az * level_z) / norm, -1.0, 1.0));
+  const double limit = config_.max_slope + config_.mount_allowance;
+  if (slope > limit) {
+    return Make("SLOPE", Text("Tilted by %.1f deg, at most %.0f deg for a calibration", Deg(slope), Deg(limit)),
+                {{"slope", Deg(slope)}, {"limit", Deg(limit)}});
   }
   return std::nullopt;
 }
@@ -198,7 +245,7 @@ std::vector<Problem> Program::Readiness(double now) const {
                               {{"rate", rate}, {"limit", config_.min_gnss_rate}}));
     }
   }
-  if (auto level = Gravity(now - kGravityWindow, now)) problems.push_back(*level);
+  if (auto level = Gravity(now - kGravityWindow, now, false)) problems.push_back(*level);
   return problems;
 }
 
@@ -215,6 +262,7 @@ bool Program::Start(const Lane& lane, double now) {
   pivot_.reset();
   pivot_drift_ = 0;
   antenna_origin_.reset();
+  stands_.clear();
   const double spin_up = config_.spin_rate / config_.spin_accel;
   const double off = pose_s_ ? std::abs(Wrap(lane.heading - pose_.heading)) : M_PI / 2;
   steps_.push_back({Phase::kStart, 0, 0.0});
@@ -255,6 +303,8 @@ void Program::Begin(size_t index, double now) {
     case Phase::kStand:
       gyro_sum_ = 0;
       gyro_count_ = 0;
+      stand_sum_ = {};
+      stand_count_ = 0;
       break;
     case Phase::kLine:
       line_x_ = pose_.x;
@@ -282,6 +332,10 @@ std::optional<Twist2> Program::Next(double now, bool moved) {
   const Step& step = steps_[index_];
   // The offset of the gyro for the turns: the mean of the stand that ends.
   if (step.phase == Phase::kStand && gyro_count_ >= kMinBiasSamples) gyro_bias_ = gyro_sum_ / gyro_count_;
+  if (step.phase == Phase::kStand && stand_count_ >= kMinGravitySamples && pose_s_) {
+    const double n = static_cast<double>(stand_count_);
+    stands_.push_back({pose_.x, pose_.y, pose_.heading, {stand_sum_[0] / n, stand_sum_[1] / n, stand_sum_[2] / n}});
+  }
   if (index_ + 1 >= steps_.size()) {
     running_ = false;
     outcome_ = Make("DONE", "The calibration drive ran to its end");
@@ -338,7 +392,7 @@ std::optional<Twist2> Program::Tick(double now) {
       if (now - step_s_ + kTimeEpsilon >= config_.start_timeout) return Abort(*missing, now);
       return std::nullopt;
     }
-    if (auto level = Gravity(now - kGravityWindow, now)) return Abort(*level, now);
+    if (auto level = Gravity(now - kGravityWindow, now, false)) return Abort(*level, now);
     return Next(now, false);
   }
   if (auto problem = Common(now)) return Abort(*problem, now);
@@ -404,7 +458,7 @@ std::optional<Problem> Program::Common(double now) {
 
 std::optional<Problem> Program::StandChecks(double now) const {
   if (now - step_s_ < kSettle) return std::nullopt;
-  return Gravity(now - kGravityWindow, now);
+  return Gravity(now - kGravityWindow, now, true);
 }
 
 double Program::CommandPeak(bool angular, double now) const {

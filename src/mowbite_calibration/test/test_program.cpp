@@ -38,6 +38,11 @@ struct Mower {
   double gyro_sign = 1;
   double gyro_bias = 0;
   double tilt = 0;
+  // The IMU mounted nose up (rad, gravity reads -sin on x on level ground), and the ground sloping up towards
+  // slope_heading (map frame) by slope (rad).
+  double mount_pitch = 0;
+  double slope = 0;
+  double slope_heading = 0;
   double gravity = 9.80665;
   bool fixed = true;
   double accuracy = 0.012;
@@ -108,8 +113,16 @@ class ProgramTest : public ::testing::Test {
       if (step_ % static_cast<long>(std::lround(mower_.imu_period / 0.01)) == 0 && mower_.imu_on) {
         ImuSample imu;
         imu.gz = mower_.gyro_sign * mower_.w + mower_.gyro_bias;
-        imu.ax = mower_.gravity * std::sin(mower_.tilt);
-        imu.az = mower_.gravity * std::cos(mower_.tilt);
+        // Up of the ground in the frame of the mower, then turned into the IMU's frame by its mounting.
+        const double up_ahead = -std::sin(mower_.slope) * std::cos(mower_.heading - mower_.slope_heading);
+        const double up_left = std::sin(mower_.slope) * std::sin(mower_.heading - mower_.slope_heading);
+        const double up_z = std::cos(mower_.slope);
+        const double m = -mower_.mount_pitch;
+        const double gx = up_ahead * std::cos(m) + up_z * std::sin(m);
+        const double gz = -up_ahead * std::sin(m) + up_z * std::cos(m);
+        imu.ax = mower_.gravity * (gx * std::cos(mower_.tilt) + gz * std::sin(mower_.tilt));
+        imu.ay = mower_.gravity * up_left;
+        imu.az = mower_.gravity * (-gx * std::sin(mower_.tilt) + gz * std::cos(mower_.tilt));
         program_.OnImu(imu, now_);
       }
       if (step_ % 2 == 0 && mower_.pose_on) {
@@ -449,6 +462,49 @@ TEST_F(ProgramTest, GravityAndSlopeAtTheStartAndInAStand) {
   mower_.tilt = 7 * kDeg;
   EXPECT_EQ(EndsWith(3.0), "SLOPE");
   EXPECT_EQ(edges_.back().phase, Phase::kStand);
+}
+
+TEST_F(ProgramTest, TheSlopeCountsFromTheStoredMounting) {
+  // The IMU sits 7 degrees nose up. Stored as level and measured, that is a slope of 7 degrees.
+  mower_.mount_pitch = 7 * kDeg;
+  Run(now_ + 2.0);
+  ASSERT_EQ(program_.Readiness(now_).size(), 1u);
+  EXPECT_EQ(program_.Readiness(now_)[0].reason, "SLOPE");
+  // Stored as it is: level.
+  program_.SetMounting(0.0, 7 * kDeg, 0.0);
+  EXPECT_TRUE(program_.Readiness(now_).empty());
+  // Stored as level but not measured yet: the allowance of the mounting is added to the limit.
+  program_.SetMounting(0.0, 0.0, 5 * kDeg);
+  EXPECT_TRUE(program_.Readiness(now_).empty());
+  mower_.mount_pitch = 11 * kDeg;
+  Run(now_ + 1.0);
+  ASSERT_EQ(program_.Readiness(now_).size(), 1u);
+  EXPECT_EQ(program_.Readiness(now_)[0].reason, "SLOPE");
+  EXPECT_NEAR(program_.Readiness(now_)[0].numbers[1].second, 10.0, 1e-9);
+}
+
+TEST_F(ProgramTest, StandsFacingTheOtherWayTellTheSlopeWithoutTheMounting) {
+  // Unknown mounting of 6 degrees on ground sloping 3 degrees: the start passes on the allowance, the stands half a
+  // turn apart find the slope of 3 degrees, and the drive runs to its end.
+  mower_.mount_pitch = 6 * kDeg;
+  mower_.slope = 3 * kDeg;
+  mower_.slope_heading = 0.7;
+  program_.SetMounting(0.0, 0.0, 5 * kDeg);
+  StartOn(Lane{2, 3, 0.0, 3.0});
+  EXPECT_EQ(EndsWith(400), "DONE");
+  // On 6 degrees the first stand with a partner ends it: the far end, after the first turn.
+  Rebuild();
+  mower_ = Mower();
+  mower_.slope = 6 * kDeg;
+  mower_.slope_heading = 0.0;
+  program_.SetMounting(0.0, 0.0, 5 * kDeg);
+  StartOn(Lane{2, 3, 0.0, 3.0});
+  EXPECT_EQ(EndsWith(400), "SLOPE");
+  EXPECT_NE(program_.outcome()->message.find("ground slopes"), std::string::npos);
+  EXPECT_NEAR(program_.outcome()->numbers[0].second, 6.0, 0.2);
+  EXPECT_EQ(edges_.back().phase, Phase::kStand);
+  EXPECT_EQ(edges_.back().round, 1);
+  EXPECT_EQ(EdgeNames(true).size(), 5u);
 }
 
 TEST_F(ProgramTest, TimeoutOfAPhase) {

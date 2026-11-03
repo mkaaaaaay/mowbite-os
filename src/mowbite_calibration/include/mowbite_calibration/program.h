@@ -1,6 +1,7 @@
 #ifndef MOWBITE_CALIBRATION_PROGRAM_H
 #define MOWBITE_CALIBRATION_PROGRAM_H
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <deque>
@@ -68,11 +69,20 @@ struct ProgramConfig {
   // GYRO_SIGN: wheels and gyro both turn faster than gyro_sign_min (rad/s), in opposite directions.
   double gyro_sign_min = 0.05;
   // IMU_GRAVITY: gravity in a stand more than gravity_tolerance (share) off gravity (m/s²), or more than
-  // gravity_max_tilt (rad) off +z. SLOPE: tilted more than max_slope (rad) in a stand.
+  // gravity_max_tilt (rad) off +z. SLOPE: the ground slopes more than max_slope (rad). The slope counts from the IMU's
+  // mounting as stored (imu_roll, imu_pitch: what it reads on level ground, robot.geometry), with mount_allowance
+  // (rad) more allowed while that mounting is not measured. Once a stand has a partner, a stand where the mower stood
+  // within pair_distance (m) facing the other way (within pair_angle, rad), the slope is half the angle between
+  // their gravities and the mounting does not count.
   double gravity = 9.80665;
   double gravity_tolerance = 0.05;
   double gravity_max_tilt = 30.0 * M_PI / 180.0;
   double max_slope = 5.0 * M_PI / 180.0;
+  double imu_roll = 0.0;
+  double imu_pitch = 0.0;
+  double mount_allowance = 0.0;
+  double pair_distance = 0.5;
+  double pair_angle = 20.0 * M_PI / 180.0;
   // TIMEOUT: a phase longer than timeout_factor times its expected time plus timeout_extra (s).
   double timeout_factor = 2.0;
   double timeout_extra = 5.0;
@@ -137,6 +147,12 @@ class Program {
  public:
   explicit Program(const ProgramConfig& config);
 
+  // The mounting of the IMU as stored, and the allowance while it is not measured (rad); for the next checks.
+  void SetMounting(double roll, double pitch, double allowance);
+  // The limits of the driver (m/s, rad/s; 0 or less: none): lines and turns of the next drive stay within them.
+  void SetSpeedLimits(double max_linear, double max_angular);
+  const ProgramConfig& config() const { return config_; }
+
   void OnImu(const ImuSample& sample, double now);
   void OnWheels(double linear, double angular, double now);
   void OnGnss(const GnssSample& sample, double now);
@@ -170,6 +186,13 @@ class Program {
     // s it should take, and for a stand how long it is.
     double expected;
   };
+  // The mean gravity of a stand, where and which way the mower stood.
+  struct StandGravity {
+    double x;
+    double y;
+    double heading;
+    std::array<double, 3> g;
+  };
   struct Fix {
     double t;
     double x;
@@ -186,7 +209,10 @@ class Program {
   std::optional<Problem> StandChecks(double now) const;
   std::optional<Problem> TurnChecks(double rate_cmd, double now);
   std::optional<Problem> LineChecks(double now);
-  std::optional<Problem> Gravity(double since, double now) const;
+  // Mean of the accelerations between since and now, none with too few samples.
+  std::optional<std::array<double, 3>> MeanGravity(double since, double now) const;
+  // IMU_GRAVITY, else SLOPE against the stored mounting, or against a stand facing the other way with paired.
+  std::optional<Problem> Gravity(double since, double now, bool paired) const;
   std::optional<double> AntennaSpeed(double now) const;
   void Begin(size_t index, double now);
   std::optional<Twist2> Next(double now, bool moved);
@@ -216,6 +242,10 @@ class Program {
   double gyro_bias_ = 0;
   double gyro_sum_ = 0;
   size_t gyro_count_ = 0;
+  // Gravity of the stand that runs, from its settling on, and of the stands before.
+  std::array<double, 3> stand_sum_{};
+  size_t stand_count_ = 0;
+  std::vector<StandGravity> stands_;
   double turned_ = 0;
 
   bool running_ = false;
