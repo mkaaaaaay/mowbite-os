@@ -16,8 +16,10 @@
 #include <geometry_msgs/msg/polygon.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/pose.hpp>
+#include <mowbite_msgs/action/calibrate.hpp>
 #include <mowbite_msgs/action/follow_path.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
+#include <mowbite_msgs/msg/calibration_status.hpp>
 #include <mowbite_msgs/msg/drive_command.hpp>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
@@ -77,6 +79,9 @@ static_assert(static_cast<uint8_t>(SensorMeaning::kDistance) == SensorSpec::MEAN
 rclcpp::QoS LatchedQos(size_t depth) {
   return rclcpp::QoS(rclcpp::KeepLast(depth)).reliable().transient_local();
 }
+
+// s a calibration program has to confirm a stop before its goal no longer blocks the next start.
+constexpr double kCalibrationStopWaitS = 10.0;
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -233,6 +238,8 @@ HardwareSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
 class LogicNode : public rclcpp::Node {
   using FollowPath = mowbite_msgs::action::FollowPath;
   using FollowHandle = rclcpp_action::ClientGoalHandle<FollowPath>;
+  using Calibrate = mowbite_msgs::action::Calibrate;
+  using CalibrateHandle = rclcpp_action::ClientGoalHandle<Calibrate>;
   // What the follower drives for: logic/drive_to, the approach to a path of the job, that path, out of the station, or
   // a leg of docking.
   enum Purpose { kDriveTo = 0, kApproach = 1, kMow = 2, kUndock = 3, kDock = 4 };
@@ -315,12 +322,22 @@ class LogicNode : public rclcpp::Node {
           }
           Flush();
         });
-    mowbite_msgs::msg::RpcMethods methods;
-    methods.node_id = "mowbite_logic";
-    methods.methods = {"mowing.plan", "params.set", "robot.geometry.get", "robot.geometry.set"};
-    // "Home" from IDLE, only where the OS docks (contacts at the back).
-    if (core_.CanDock()) methods.methods.push_back("docking.start");
-    rpc_methods_pub_->publish(methods);
+    // The calibration drive: the status of the program for calibration.check and .start, its commands while
+    // calibrating.
+    calibration_client_ = rclcpp_action::create_client<Calibrate>(this, "calibration/run");
+    calibration_status_sub_ = create_subscription<mowbite_msgs::msg::CalibrationStatus>(
+        "calibration/status", 10,
+        [this](mowbite_msgs::msg::CalibrationStatus::ConstSharedPtr msg) { OnCalibrationStatus(*msg); });
+    calibration_cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(
+        "calibration/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) {
+          bool active;
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            active = core_.CalibrationActive();
+          }
+          if (active) SendDrive(mowbite_msgs::msg::DriveCommand::SOURCE_CALIBRATION, *msg);
+        });
+    PublishRpcMethods();
 
     hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
         "hw/status", 10, [this](mowbite_msgs::msg::HardwareStatus::ConstSharedPtr msg) { OnHardwareStatus(*msg); });
@@ -480,6 +497,14 @@ class LogicNode : public rclcpp::Node {
         declare_parameter("dock_gate_heading", config.dock.gate_heading * 180.0 / M_PI) * M_PI / 180.0;
     config.dock.overshoot = declare_parameter("dock_overshoot", config.dock.overshoot);
     config.dock.contact_timeout = declare_parameter("contact_timeout", config.dock.contact_timeout);
+    // The calibration drive: what a start needs, and how long the program may be silent.
+    config.calibration.max_position_accuracy =
+        declare_parameter("calibration_max_position_accuracy", config.calibration.max_position_accuracy);
+    config.calibration.min_battery = static_cast<int>(
+        declare_parameter("calibration_min_battery", static_cast<int64_t>(config.calibration.min_battery)));
+    config.calibration.status_timeout =
+        declare_parameter("calibration_status_timeout", config.calibration.status_timeout);
+    config.calibration.timeout = declare_parameter("calibration_timeout", config.calibration.timeout);
     return config;
   }
 
@@ -1039,14 +1064,17 @@ class LogicNode : public rclcpp::Node {
   // wants the blade and switched off at once when not.
   void UpdateBlade() {
     bool stalled;
+    bool calibration_ended;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       stalled = CheckFollowerLocked();
+      // The calibration program's sign of life and the battery while it drives.
+      calibration_ended = core_.TickCalibration(MonotonicSeconds());
       UpdateBladeLocked();
     }
-    if (!stalled) return;
+    if (!stalled && !calibration_ended) return;
     // One zero command: the follower sends none any more, the driver's watchdog would stop the wheels only later.
-    SendStop();
+    if (stalled) SendStop();
     Flush();
   }
 
@@ -1165,8 +1193,13 @@ class LogicNode : public rclcpp::Node {
         charge_sent_.reset();
         core_.OnChargeOff(false, "no answer from hw/charge");
       }
+      // A program that never confirmed a stop does not block the next start for long.
+      if (calibration_.active && calibration_.cancel_s > 0 && t - calibration_.cancel_s > kCalibrationStopWaitS) {
+        calibration_ = Calibration();
+      }
       state = core_.RobotState();
     }
+    if (calibration_client_->action_server_is_ready() != calibration_offered_) PublishRpcMethods();
     Flush();
     mowbite_msgs::msg::RobotState msg;
     msg.current_state = state.state;
@@ -1205,6 +1238,18 @@ class LogicNode : public rclcpp::Node {
     }
     if (request.method == "docking.start") {
       OnDockingStart(request);
+      return;
+    }
+    if (request.method == "calibration.check") {
+      OnCalibrationCheck(request);
+      return;
+    }
+    if (request.method == "calibration.start") {
+      OnCalibrationStart(request);
+      return;
+    }
+    if (request.method == "calibration.abort") {
+      OnCalibrationAbort(request);
       return;
     }
     if (request.method != "mowing.plan") return;
@@ -1319,6 +1364,204 @@ class LogicNode : public rclcpp::Node {
                       data.dump(-1, ' ', false, json::error_handler_t::replace));
     }
     Flush();
+  }
+
+  // The methods of the logic; calibration.* only while calibration/run is there.
+  void PublishRpcMethods() {
+    mowbite_msgs::msg::RpcMethods methods;
+    methods.node_id = "mowbite_logic";
+    methods.methods = {"mowing.plan", "params.set", "robot.geometry.get", "robot.geometry.set"};
+    // "Home" from IDLE, only where the OS docks (contacts at the back).
+    if (core_.CanDock()) methods.methods.push_back("docking.start");
+    calibration_offered_ = calibration_client_->action_server_is_ready();
+    if (calibration_offered_) {
+      for (const char* name : {"calibration.check", "calibration.start", "calibration.abort"}) {
+        methods.methods.push_back(name);
+      }
+    }
+    rpc_methods_pub_->publish(methods);
+  }
+
+  void OnCalibrationStatus(const mowbite_msgs::msg::CalibrationStatus& msg) {
+    CalibrationStatus status;
+    for (const auto& problem : msg.problems) {
+      Reason why(problem.reason, problem.message);
+      const json fields = json::parse(problem.fields.empty() ? "{}" : problem.fields, nullptr, false);
+      if (fields.is_object()) why.fields = fields;
+      status.problems.push_back(why);
+    }
+    status.heading = msg.heading;
+    status.lane_length = msg.lane_length;
+    status.strip_length = msg.strip_length;
+    status.strip_width = msg.strip_width;
+    status.running = msg.running;
+    std::lock_guard<std::mutex> lock(mutex_);
+    core_.OnCalibrationStatus(status, MonotonicSeconds());
+  }
+
+  // What the core finds against a calibration drive, then what only the node knows. Called with the mutex held.
+  std::vector<Reason> CalibrationProblemsLocked(double t) const {
+    std::vector<Reason> problems = core_.CalibrationProblems(t);
+    const auto has = [&problems](const std::string& code) {
+      for (const auto& why : problems) {
+        if (why.code == code) return true;
+      }
+      return false;
+    };
+    if (calibration_.active && !core_.Calibrating() && !has("STILL_STOPPING")) {
+      problems.push_back(Reason("STILL_STOPPING", "The last calibration drive is still stopping, try again in a moment"));
+    }
+    if (!calibration_client_->action_server_is_ready() && !has("CALIBRATION_MISSING")) {
+      problems.push_back(Reason("CALIBRATION_MISSING", "The calibration program is not running"));
+    }
+    return problems;
+  }
+
+  static json ReasonJson(const Reason& why) {
+    json out = {{"reason", why.code}, {"message", why.message}};
+    for (const auto& [key, value] : why.fields.items()) out[key] = value;
+    return out;
+  }
+
+  // {ok, problems: [{reason, message, ...}], space: {length, width, lane_length, heading} or null}, without a drive.
+  void OnCalibrationCheck(const mowbite_msgs::msg::RpcRequest& request) {
+    std::vector<Reason> problems;
+    std::optional<CalibrationStatus> status;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const double t = MonotonicSeconds();
+      problems = CalibrationProblemsLocked(t);
+      status = core_.CalibrationStatusNow(t);
+    }
+    json result = {{"ok", problems.empty()}, {"problems", json::array()}, {"space", nullptr}};
+    for (const auto& why : problems) result["problems"].push_back(ReasonJson(why));
+    if (status && status->lane_length > 0) {
+      result["space"] = {{"length", status->strip_length},
+                         {"width", status->strip_width},
+                         {"lane_length", status->lane_length},
+                         {"heading", status->heading}};
+    }
+    mowbite_msgs::msg::RpcResponse msg;
+    msg.result = result.dump(-1, ' ', false, json::error_handler_t::replace);
+    msg.id = request.id;
+    rpc_response_pub_->publish(msg);
+  }
+
+  // {"state": "CALIBRATING"} once the drive began, else -32600 with the reason, its message and fields as data, and
+  // CALIBRATION_REFUSED. Parameters are not needed.
+  void OnCalibrationStart(const mowbite_msgs::msg::RpcRequest& request) {
+    Reason why;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const double t = MonotonicSeconds();
+      const std::vector<Reason> problems = CalibrationProblemsLocked(t);
+      if (!problems.empty()) {
+        why = problems.front();
+        core_.RefuseCalibration(why);
+      } else {
+        why = core_.StartCalibration(t);
+      }
+    }
+    if (why.empty()) {
+      RCLCPP_INFO(get_logger(), "calibration.start: calibrating");
+      mowbite_msgs::msg::RpcResponse msg;
+      msg.result = json{{"state", "CALIBRATING"}}.dump();
+      msg.id = request.id;
+      rpc_response_pub_->publish(msg);
+    } else {
+      RCLCPP_WARN(get_logger(), "calibration.start refused: %s (%s)", why.code.c_str(), why.message.c_str());
+      PublishRpcError(request.id, mowbite_msgs::msg::RpcError::ERROR_INVALID_REQUEST, why.message,
+                      ReasonJson(why).dump(-1, ' ', false, json::error_handler_t::replace));
+    }
+    Flush();
+  }
+
+  // The app and HA (pause, dock): {"ok": true} when a drive was running; the mower stops where it is.
+  void OnCalibrationAbort(const mowbite_msgs::msg::RpcRequest& request) {
+    bool ok;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      ok = core_.AbortCalibration(Reason("STOPPED", "Stopped by calibration.abort"));
+    }
+    if (ok) RCLCPP_INFO(get_logger(), "calibration.abort: stopped");
+    mowbite_msgs::msg::RpcResponse msg;
+    msg.result = json{{"ok", ok}}.dump();
+    msg.id = request.id;
+    rpc_response_pub_->publish(msg);
+    Flush();
+  }
+
+  // Hands the lane to the program. Called with the mutex held.
+  void SendCalibration(const CalibrationGoal& goal) {
+    if (!calibration_client_->action_server_is_ready()) {
+      core_.OnCalibrationEnded({"CALIBRATION_MISSING", "The calibration program is not running", "", ""});
+      return;
+    }
+    calibration_ = Calibration();
+    calibration_.active = true;
+    calibration_.seq = ++calibration_seq_;
+    const uint64_t seq = calibration_.seq;
+    Calibrate::Goal msg;
+    msg.heading = goal.heading;
+    msg.lane_length = goal.lane_length;
+    rclcpp_action::Client<Calibrate>::SendGoalOptions options;
+    options.goal_response_callback = [this, seq](const CalibrateHandle::SharedPtr& handle) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (seq != calibration_.seq) return;
+        if (!handle) {
+          calibration_ = Calibration();
+          core_.OnCalibrationEnded({"CALIBRATION_MISSING", "The calibration program did not take the drive", "", ""});
+        } else {
+          calibration_.handle = handle;
+          core_.OnCalibrationSign(MonotonicSeconds());
+          // Stopped here while the goal was on its way.
+          if (calibration_.cancel_pending) calibration_client_->async_cancel_goal(handle);
+        }
+      }
+      Flush();
+    };
+    options.feedback_callback = [this, seq](CalibrateHandle::SharedPtr,
+                                            const std::shared_ptr<const Calibrate::Feedback> feedback) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (seq != calibration_.seq) return;
+        core_.OnCalibrationFeedback(feedback->phase, feedback->index, MonotonicSeconds());
+      }
+      Flush();
+    };
+    options.result_callback = [this, seq](const CalibrateHandle::WrappedResult& wrapped) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (seq != calibration_.seq) return;
+        calibration_ = Calibration();
+        CalibrationOutcome outcome;
+        if (wrapped.result) {
+          outcome = {wrapped.result->reason, wrapped.result->message, wrapped.result->status, wrapped.result->summary};
+        }
+        // Dropped without an end of its own (gone, or another goal took its place): never done.
+        if (wrapped.code != rclcpp_action::ResultCode::SUCCEEDED && outcome.reason == "DONE") outcome.reason.clear();
+        if (outcome.reason.empty()) outcome.message = "The calibration program dropped the drive";
+        core_.OnCalibrationEnded(outcome);
+      }
+      Flush();
+    };
+    calibration_client_->async_send_goal(msg, options);
+  }
+
+  // Stops the program after the logic ended its drive. Called with the mutex held.
+  void CancelCalibration() {
+    if (!calibration_.active) return;
+    calibration_.cancel_s = MonotonicSeconds();
+    if (!calibration_.handle) {
+      calibration_.cancel_pending = true;
+      return;
+    }
+    try {
+      calibration_client_->async_cancel_goal(calibration_.handle);
+    } catch (const rclcpp_action::exceptions::UnknownGoalHandleError&) {
+      // The client has dropped the goal already; there is nothing left to cancel.
+    }
   }
 
   // <data_dir>/params/mower_logic.json, written like the checkpoint.
@@ -1864,6 +2107,8 @@ class LogicNode : public rclcpp::Node {
       if (auto path = core_.TakeUndockPath()) SendUndock(*path);
       if (core_.TakeChargeOn()) SendCharge(true);
       if (auto outcome = core_.TakeUndockOutcome()) OnUndockOutcome(*outcome);
+      if (core_.TakeCalibrationCancel()) CancelCalibration();
+      if (auto goal = core_.TakeCalibrationGoal()) SendCalibration(*goal);
     }
     std::vector<Event> events;
     bool actions_changed;
@@ -1985,6 +2230,16 @@ class LogicNode : public rclcpp::Node {
     uint32_t follower_index = 0;
   };
 
+  // The goal of calibration/run on its way or running; its number tells late answers apart.
+  struct Calibration {
+    bool active = false;
+    uint64_t seq = 0;
+    CalibrateHandle::SharedPtr handle;
+    bool cancel_pending = false;
+    // MonotonicSeconds() when the logic stopped it; the program has kCalibrationStopWaitS to confirm.
+    double cancel_s = 0;
+  };
+
   // The plan of the job's area on its way to the planner.
   struct JobPlan {
     bool active = false;
@@ -2082,6 +2337,13 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
   rclcpp::Client<mowbite_planner_interfaces::srv::PlanTransit>::SharedPtr transit_client_;
   rclcpp_action::Client<FollowPath>::SharedPtr follow_client_;
+  rclcpp_action::Client<Calibrate>::SharedPtr calibration_client_;
+  rclcpp::Subscription<mowbite_msgs::msg::CalibrationStatus>::SharedPtr calibration_status_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr calibration_cmd_sub_;
+  // The goal of calibration/run, whether calibration.* is in rpc.methods, and the numbers of the goals.
+  Calibration calibration_;
+  bool calibration_offered_ = false;
+  uint64_t calibration_seq_ = 0;
   rclcpp::Service<mowbite_msgs::srv::DriveTo>::SharedPtr drive_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_drive_srv_;
   rclcpp::TimerBase::SharedPtr state_timer_;
