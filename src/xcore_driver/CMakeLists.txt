@@ -30,7 +30,7 @@ rclcpp_components_register_node(xcore_driver_component
   EXECUTABLE xcore_driver_node)
 
 install(DIRECTORY include/ DESTINATION include)
-install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 install(TARGETS xcore_core xcore_driver_component
   EXPORT export_xcore_driver
   ARCHIVE DESTINATION lib
