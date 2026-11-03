@@ -33,6 +33,7 @@ static_assert(kReasonFence == HardwareStatus::REASON_FENCE);
 static_assert(static_cast<uint8_t>(Source::kStop) == DriveCommand::SOURCE_STOP);
 static_assert(static_cast<uint8_t>(Source::kTeleop) == DriveCommand::SOURCE_TELEOP);
 static_assert(static_cast<uint8_t>(Source::kFollower) == DriveCommand::SOURCE_FOLLOWER);
+static_assert(static_cast<uint8_t>(Source::kCalibration) == DriveCommand::SOURCE_CALIBRATION);
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -129,12 +130,13 @@ class SafetyNode : public rclcpp::Node {
   }
 
   void OnDrive(const DriveCommand& msg) {
-    if (msg.source > DriveCommand::SOURCE_FOLLOWER) {
+    if (msg.source > DriveCommand::SOURCE_CALIBRATION) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "Drive command of unknown source %u: stopped",
                             msg.source);
     }
     // An unknown source stops like the logic.
-    const Source source = msg.source > DriveCommand::SOURCE_FOLLOWER ? Source::kStop : static_cast<Source>(msg.source);
+    const Source source =
+        msg.source > DriveCommand::SOURCE_CALIBRATION ? Source::kStop : static_cast<Source>(msg.source);
     Decision decision;
     std::optional<LatchRequest> latch;
     {

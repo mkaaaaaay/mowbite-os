@@ -29,6 +29,7 @@ const char* SourceName(Source source) {
     case Source::kStop: return "stop";
     case Source::kTeleop: return "remote control";
     case Source::kFollower: return "follower";
+    case Source::kCalibration: return "calibration";
   }
   return "unknown source";
 }
@@ -168,8 +169,10 @@ std::string SafetyFilter::FenceProblem(double x, double y) const {
   return "";
 }
 
-std::string SafetyFilter::MoveProblem(Source source, double quiet, double now, bool* conflict) {
+std::string SafetyFilter::MoveProblem(Source source, double linear, double quiet, double now, bool* conflict) {
   if (emergency_) return "emergency";
+  // Backwards it would leave the strip it checked (G9: behind the mower is not watched everywhere).
+  if (source == Source::kCalibration && linear < 0) return "the calibration drives forward only";
   if (owner_ != Source::kStop && owner_ != source && now - owner_s_ <= config_.owner_timeout + kTimeEpsilon) {
     *conflict = true;
     return std::string("the ") + SourceName(owner_) + " drives";
@@ -183,7 +186,7 @@ std::string SafetyFilter::MoveProblem(Source source, double quiet, double now, b
   }
   if (!capabilities_) return "no hw/capabilities from the driver";
   if (!ImuFresh(now)) return imu_s_ ? Format("no IMU sample for %.1f s", now - *imu_s_) : "no IMU sample yet";
-  if (source != Source::kFollower) return "";
+  if (source != Source::kFollower && source != Source::kCalibration) return "";
   const std::string problem = AutonomousProblem(now);
   if (!problem.empty()) return problem;
   const std::string fence = FenceProblem(pose_->x, pose_->y);
@@ -226,7 +229,7 @@ Decision SafetyFilter::OnCommand(Source source, double linear, double angular, d
     }
     return decision;
   }
-  const std::string problem = MoveProblem(source, quiet, now, &decision.conflict);
+  const std::string problem = MoveProblem(source, linear, quiet, now, &decision.conflict);
   if (!problem.empty()) {
     refused_++;
     last_refusal_ = std::string(SourceName(source)) + ": " + problem;
