@@ -5,5 +5,7 @@ uint8 SOURCE_STOP=0
 uint8 SOURCE_TELEOP=1
 # The follower: mowing, transit, drive_to, undocking and docking.
 uint8 SOURCE_FOLLOWER=2
+# The calibration drive (mowbite_calibration), forward only.
+uint8 SOURCE_CALIBRATION=3
 uint8 source
 geometry_msgs/Twist twist
