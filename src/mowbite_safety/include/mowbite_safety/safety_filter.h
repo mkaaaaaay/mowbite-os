@@ -173,9 +173,10 @@ class SafetyFilter {
 const char* SourceName(Source source);
 
 // Angle of the body to the vertical in degrees, from the orientation of an IMU sample (normalized here) or from
-// gravity in its acceleration; NaN for an orientation or acceleration of length 0.
-double TiltFromOrientation(double x, double y, double z, double w);
-double TiltFromGravity(double ax, double ay, double az);
+// gravity in its acceleration, with the IMU mounted at roll and pitch (rad, robot.geometry imu_roll and imu_pitch:
+// what it reads on level ground); NaN for an orientation or acceleration of length 0.
+double TiltFromOrientation(double x, double y, double z, double w, double roll = 0.0, double pitch = 0.0);
+double TiltFromGravity(double ax, double ay, double az, double roll = 0.0, double pitch = 0.0);
 
 }  // namespace mowbite_safety
 

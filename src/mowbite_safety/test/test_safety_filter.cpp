@@ -96,6 +96,26 @@ TEST(Tilt, FromOrientationAndGravity) {
   EXPECT_TRUE(std::isnan(TiltFromGravity(0, 0, 0)));
 }
 
+TEST(Tilt, CountsFromTheMountingOfTheImu) {
+  const double deg = M_PI / 180.0;
+  // An IMU 4.5 degrees nose up on level ground reads gravity tilted back: that is level for the mower.
+  const double pitch = 4.5 * deg;
+  const double ax = -9.81 * std::sin(pitch), az = 9.81 * std::cos(pitch);
+  EXPECT_NEAR(TiltFromGravity(ax, 0, az), 4.5, 1e-9);
+  EXPECT_NEAR(TiltFromGravity(ax, 0, az, 0.0, pitch), 0, 1e-9);
+  // The mower 30 degrees nose down on a slope: 30 degrees off the mounting, whichever way.
+  const double down = pitch - 30 * deg;
+  EXPECT_NEAR(TiltFromGravity(-9.81 * std::sin(down), 0, 9.81 * std::cos(down), 0.0, pitch), 30, 1e-9);
+  const double up = pitch + 30 * deg;
+  EXPECT_NEAR(TiltFromGravity(-9.81 * std::sin(up), 0, 9.81 * std::cos(up), 0.0, pitch), 30, 1e-9);
+  // Roll in the convention of the planner: atan2(ay, az).
+  const double roll = -2.0 * deg;
+  EXPECT_NEAR(TiltFromGravity(0, 9.81 * std::sin(roll), 9.81 * std::cos(roll), roll, 0.0), 0, 1e-9);
+  // The orientation of an IMU that reads its mounting on level ground: turned by pitch about y.
+  EXPECT_NEAR(TiltFromOrientation(0, std::sin(pitch / 2), 0, std::cos(pitch / 2), 0.0, pitch), 0, 1e-9);
+  EXPECT_NEAR(TiltFromOrientation(0, std::sin(pitch / 2), 0, std::cos(pitch / 2)), 4.5, 1e-9);
+}
+
 TEST_F(FilterTest, PassesBothSourcesWithinTheLimitsOfTheDriver) {
   Decision d = Cmd(Source::kTeleop, 1.0, -2.0);
   ASSERT_TRUE(Moves(d)) << d.refusal;
