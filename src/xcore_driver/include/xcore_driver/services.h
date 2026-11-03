@@ -77,6 +77,8 @@ constexpr uint16_t kRegCriticalLowVoltage = 3;
 constexpr uint16_t kRegCriticalHighVoltage = 4;
 constexpr uint16_t kRegChargeVoltage = 6;
 constexpr uint16_t kRegTerminationCurrent = 7;
+// Lifts the charge current limit of the charger chip; never sent.
+constexpr uint16_t kRegOverrideChargeCurrentLimit = 10;
 }  // namespace power
 
 namespace gps {
@@ -134,6 +136,9 @@ const ExpectedService& ExpectedInput();
 const ExpectedService& ExpectedMeta();
 // nullptr for a service the driver does not claim.
 const ExpectedService* ExpectedFor(uint16_t service_id);
+
+// Registers the driver never writes, whatever the configuration holds.
+bool ForbiddenRegister(uint16_t service_id, uint16_t register_id);
 
 }  // namespace xcore
 

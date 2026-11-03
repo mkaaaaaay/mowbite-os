@@ -42,7 +42,12 @@ const char* ServiceStateText(ServiceState state) {
 }
 
 XcoreLink::XcoreLink(const LinkConfig& config) : config_(config) {
-  for (const auto& entry : config_.services) services_[entry.first];
+  for (auto& [id, sections] : config_.services) {
+    sections.erase(std::remove_if(sections.begin(), sections.end(),
+                                  [id = id](const Section& s) { return ForbiddenRegister(id, s.id); }),
+                   sections.end());
+    services_[id];
+  }
 }
 
 bool XcoreLink::NeedsConfig(uint16_t id) const {
@@ -113,8 +118,22 @@ void XcoreLink::SetRunning(uint16_t id, Service& s, std::vector<LinkEvent>& even
   events.push_back(Event(LinkEvent::Kind::kRunning, id, ""));
 }
 
-void XcoreLink::Lose(uint16_t id, Service& s, const std::string& why, std::vector<LinkEvent>& events) {
+void XcoreLink::Lose(uint16_t id, Service& s, const std::string& why, double now, std::vector<LinkEvent>& events) {
   events.push_back(Event(LinkEvent::Kind::kLost, id, why));
+  if (s.state == ServiceState::kRunning) {
+    auto& losses = s.running_losses_s;
+    losses.erase(std::remove_if(losses.begin(), losses.end(),
+                                [&](double t) { return now - t > config_.contest_window_s; }),
+                 losses.end());
+    losses.push_back(now);
+    if (static_cast<int>(losses.size()) >= config_.contest_losses) {
+      events.push_back(Event(LinkEvent::Kind::kContested, id,
+                             "lost while running " + std::to_string(losses.size()) + " times within " +
+                                 std::to_string(static_cast<int>(config_.contest_window_s)) +
+                                 " s at the same endpoint: another host claims it"));
+      losses.clear();
+    }
+  }
   for (const auto& rpc : s.rpcs) {
     LinkEvent e = Event(LinkEvent::Kind::kRpcFailed, id, "service lost");
     e.function_id = rpc.function_id;
@@ -226,7 +245,7 @@ std::vector<Datagram> XcoreLink::Tick(double now, std::vector<LinkEvent>& events
   for (auto& [id, s] : services_) {
     bool claimed = s.state == ServiceState::kConfiguring || s.state == ServiceState::kRunning;
     if (claimed && now - s.last_heard_s > config_.service_timeout_s) {
-      Lose(id, s, "silent for " + std::to_string(now - s.last_heard_s).substr(0, 4) + " s", events);
+      Lose(id, s, "silent for " + std::to_string(now - s.last_heard_s).substr(0, 4) + " s", now, events);
       claimed = false;
     }
     if (s.state == ServiceState::kClaiming && now >= s.next_claim_s) {

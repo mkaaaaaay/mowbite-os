@@ -40,7 +40,7 @@ xcore_driver:
     battery_critical_low_voltage: 23.0
     battery_critical_high_voltage: 29.9
     charge_voltage: 29.8
-    charge_termination_current: 0.1
+    # No termination current: OpenMower never sent one (its key was not read), the charger chip keeps its own.
     # The station delivers this charge voltage or more while the mower stands on its contacts.
     dock_voltage: 5.0
 
@@ -64,6 +64,27 @@ xcore_driver:
       # Top stop, rear stop, lift front left and right, bumper rear right and left.
       gpio_roles: [stop, stop, lift, lift, bumper_right, bumper_left]
       cover: [hall_mux=om]
+
+    # Checks of the driver itself, assumptions until the safety measurement. Tilt from gravity in the IMU: above
+    # tilt_limit deg for tilt_time s latches TILT, a release needs a fresh sample below tilt_release deg.
+    tilt_limit: 40.0
+    tilt_time: 0.5
+    tilt_release: 26.0
+    imu_fresh: 0.5
+    # Up to uncommanded_window s after the last drive setpoint other than 0: a wheel faster than uncommanded_speed
+    # for uncommanded_time s, uncommanded_after s or more after that setpoint, latches; so does a wheel faster than
+    # overspeed_factor x (max_linear_speed + max_angular_speed x wheel_distance / 2) for overspeed_time s.
+    uncommanded_speed: 0.1
+    uncommanded_after: 1.0
+    uncommanded_window: 5.0
+    uncommanded_time: 0.2
+    overspeed_factor: 1.3
+    overspeed_time: 0.5
+    # A gap this long in the driver's own I/O thread counts as a lost link (the board stops after 1.0 s).
+    io_stall: 0.8
+    # A running service lost this often within contest_window s at the same endpoint means another host claims it.
+    contest_losses: 2
+    contest_window: 10.0
 
     # Set after the safety measurement of this mower: the time the board keeps the last setpoint without the host in
     # s (-1 unknown), and the date. Without the date only remote control.

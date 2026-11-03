@@ -15,7 +15,7 @@ find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_gnss REQUIRED)
 
 # Frames, CBOR, service descriptions and control logic without ROS, testable on any machine.
-add_library(xcore_core STATIC src/wire.cpp src/cbor.cpp src/schema.cpp src/services.cpp src/odometry.cpp src/xcore_control.cpp src/udp.cpp src/drive_regulator.cpp src/input_config.cpp src/link.cpp src/gnss.cpp)
+add_library(xcore_core STATIC src/wire.cpp src/cbor.cpp src/schema.cpp src/services.cpp src/odometry.cpp src/xcore_control.cpp src/udp.cpp src/drive_regulator.cpp src/input_config.cpp src/link.cpp src/gnss.cpp src/socket_table.cpp)
 target_include_directories(xcore_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -39,7 +39,7 @@ install(TARGETS xcore_core xcore_driver_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(xcore_test test/test_wire.cpp test/test_cbor.cpp test/test_schema.cpp test/test_odometry.cpp test/test_xcore_control.cpp test/test_udp.cpp test/test_drive_regulator.cpp test/test_input_config.cpp test/test_link.cpp test/test_gnss.cpp)
+  ament_add_gtest(xcore_test test/test_wire.cpp test/test_cbor.cpp test/test_schema.cpp test/test_odometry.cpp test/test_xcore_control.cpp test/test_udp.cpp test/test_drive_regulator.cpp test/test_input_config.cpp test/test_link.cpp test/test_gnss.cpp test/test_socket_table.cpp)
   target_link_libraries(xcore_test xcore_core)
 endif()
 

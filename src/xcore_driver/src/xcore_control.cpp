@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 #include "xcore_driver/services.h"
 
@@ -10,6 +11,7 @@ namespace xcore {
 namespace {
 
 constexpr double kTimeEpsilon = 1e-6;
+constexpr double kDegreesPerRadian = 180.0 / M_PI;
 
 double Clamp(double value, double limit) {
   if (!std::isfinite(value)) return 0;
@@ -126,7 +128,23 @@ bool XcoreControl::LatchEmergency(uint32_t bits) {
   return true;
 }
 
-void XcoreControl::ReleaseEmergency(double now) {
+std::optional<std::string> XcoreControl::ReleaseEmergency(double now) {
+  if (tilt_latched_) {
+    char text[120];
+    if (!last_imu_s_ || now - *last_imu_s_ > config_.imu_fresh_s + kTimeEpsilon) {
+      return std::string("tilt latched and no fresh IMU sample to check the mower stands level");
+    }
+    if (tilt_deg_ >= config_.tilt_release_deg) {
+      std::snprintf(text, sizeof(text), "still tilted %.0f deg, a release needs less than %.0f deg", tilt_deg_,
+                    config_.tilt_release_deg);
+      return std::string(text);
+    }
+  }
+  tilt_latched_ = false;
+  tilted_since_s_.reset();
+  fault_latched_ = false;
+  uncommanded_since_s_.reset();
+  overspeed_since_s_.reset();
   host_latch_ = 0;
   latched_causes_ = 0;
   if (!blade_turning_) mower_not_stopped_ = false;
@@ -135,6 +153,100 @@ void XcoreControl::ReleaseEmergency(double now) {
   regulator_.ClearFault();
   clear_remaining_ = config_.repeat_count;
   next_emergency_s_ = now;
+  return std::nullopt;
+}
+
+void XcoreControl::Fault(const std::string& why, double now) {
+  if (fault_latched_) return;
+  fault_latched_ = true;
+  errors_.push_back(why);
+  // The wheels may turn without a setpoint of the driver: stops go out in any case, the latch with the next tick.
+  stop_repeat_ = Repeat{config_.repeat_count, now};
+  next_emergency_s_.reset();
+}
+
+void XcoreControl::LatchFault(const std::string& why, double now) {
+  Fault(why, now);
+}
+
+void XcoreControl::OnImu(double ax, double ay, double az, double now) {
+  if (!std::isfinite(ax) || !std::isfinite(ay) || !std::isfinite(az)) return;
+  // The angle between the body's z axis and gravity; past 90 deg the mower lies on its back.
+  tilt_deg_ = std::atan2(std::hypot(ax, ay), az) * kDegreesPerRadian;
+  last_imu_s_ = now;
+  if (tilt_deg_ <= config_.tilt_limit_deg) {
+    tilted_since_s_.reset();
+    return;
+  }
+  if (!tilted_since_s_) tilted_since_s_ = now;
+  if (tilt_latched_ || now - *tilted_since_s_ < config_.tilt_time_s - kTimeEpsilon) return;
+  tilt_latched_ = true;
+  char text[120];
+  std::snprintf(text, sizeof(text), "tilted %.0f deg for %.1f s (limit %.0f deg): latched TILT", tilt_deg_,
+                now - *tilted_since_s_, config_.tilt_limit_deg);
+  errors_.push_back(text);
+  next_emergency_s_.reset();
+}
+
+void XcoreControl::CheckWheels(const WheelTwist& twist, double now) {
+  const double fastest = std::max(std::fabs(twist.left), std::fabs(twist.right));
+  const bool watched = last_drive_s_ && now - *last_drive_s_ <= config_.uncommanded_window_s + kTimeEpsilon;
+  if (!watched) {
+    uncommanded_since_s_.reset();
+    overspeed_since_s_.reset();
+    return;
+  }
+  char text[160];
+  const double limit = config_.overspeed_factor *
+                       (config_.max_linear_speed + config_.max_angular_speed * config_.odometry.wheel_distance / 2);
+  if (fastest > limit) {
+    if (!overspeed_since_s_) overspeed_since_s_ = now;
+    if (now - *overspeed_since_s_ >= config_.overspeed_time_s - kTimeEpsilon) {
+      std::snprintf(text, sizeof(text), "wheel at %.2f m/s for %.1f s, above %.2f m/s: duty and speed do not fit",
+                    fastest, now - *overspeed_since_s_, limit);
+      Fault(text, now);
+    }
+  } else {
+    overspeed_since_s_.reset();
+  }
+  const bool idle = !command_ && now - *last_drive_s_ >= config_.uncommanded_after_s - kTimeEpsilon;
+  if (idle && fastest > config_.uncommanded_speed) {
+    if (!uncommanded_since_s_) uncommanded_since_s_ = now;
+    if (now - *uncommanded_since_s_ >= config_.uncommanded_time_s - kTimeEpsilon) {
+      std::snprintf(text, sizeof(text), "wheel turns at %.2f m/s %.1f s after the last drive setpoint: no stop",
+                    fastest, now - *last_drive_s_);
+      Fault(text, now);
+    }
+  } else {
+    uncommanded_since_s_.reset();
+  }
+}
+
+void XcoreControl::CheckStall(double now) {
+  const bool stalled = last_alive_s_ && now - *last_alive_s_ > config_.io_stall_s + kTimeEpsilon;
+  if (stalled && !link_lost_) {
+    char text[120];
+    std::snprintf(text, sizeof(text), "I/O thread stalled for %.2f s: link counted as lost, setpoints dropped",
+                  now - *last_alive_s_);
+    errors_.push_back(text);
+    link_lost_ = true;
+    if (command_ || moving_) stop_repeat_ = Repeat{config_.repeat_count, now};
+    command_.reset();
+    moving_ = false;
+    DropBlade(BladeOffReason::kBlocked);
+    next_emergency_s_.reset();
+  }
+  last_alive_s_ = now;
+}
+
+void XcoreControl::Alive(double now) {
+  last_alive_s_ = now;
+}
+
+std::vector<std::string> XcoreControl::TakeErrors() {
+  std::vector<std::string> out;
+  out.swap(errors_);
+  return out;
 }
 
 void XcoreControl::SetServicesReady(bool ready, bool firmware_compatible) {
@@ -168,7 +280,10 @@ std::optional<WheelTwist> XcoreControl::OnOutput(uint16_t service_id, uint16_t c
             uint32_t l = r.U32();
             uint32_t rt = r.U32();
             auto twist = odometry_.OnTicks(l, rt, board_time_us);
-            if (twist) regulator_.OnMeasured(twist->left, twist->right, now);
+            if (twist) {
+              regulator_.OnMeasured(twist->left, twist->right, now);
+              CheckWheels(*twist, now);
+            }
             return twist;
           }
           break;
@@ -321,12 +436,14 @@ InputValue XcoreControl::MowerSpeed(float speed) const {
 
 std::vector<InputValue> XcoreControl::Tick(double now) {
   std::vector<InputValue> out;
+  // Before anything goes out: after a stall of this thread the board may have stopped on its own.
+  CheckStall(now);
   if (regulator_.fault()) drive_fault_ = true;
   bool blocked = Blocked(now);
 
   // Emergency: the host's latch, a pending release, and in any case the heartbeat for the board.
   if (Due(next_emergency_s_, config_.emergency_period_s, now)) {
-    bool hold = host_latch_ || mower_not_stopped_ || link_lost_ || drive_fault_;
+    bool hold = host_latch_ || mower_not_stopped_ || link_lost_ || drive_fault_ || fault_latched_ || tilt_latched_;
     uint16_t set = hold ? reason::kHighLevel | reason::kLatch : 0;
     // A board that lost its latch in a restart gets it back.
     if (!set && latched_causes_) set = reason::kLatch;
@@ -354,6 +471,7 @@ std::vector<InputValue> XcoreControl::Tick(double now) {
     if (Due(next_drive_s_, config_.drive_period_s, now)) {
       DutyTwist duty = regulator_.Update(command_->linear, command_->angular, now);
       out.push_back(Twist(duty.linear, duty.angular));
+      if (duty.linear != 0 || duty.angular != 0) last_drive_s_ = now;
       moving_ = true;
     }
   } else if (stop_repeat_.remaining > 0 && now + kTimeEpsilon >= stop_repeat_.next_s) {
@@ -407,7 +525,8 @@ uint32_t XcoreControl::Reason(double now) const {
   if (board_reason_) bits |= *board_reason_ & kBoardReasons;
   if (mower_not_stopped_) bits |= kReasonMowerNotStopped | kReasonLatch;
   if (link_lost_) bits |= reason::kTimeoutHighLevel | kReasonLatch;
-  if (drive_fault_) bits |= kReasonHighLevel | kReasonLatch;
+  if (drive_fault_ || fault_latched_) bits |= kReasonHighLevel | kReasonLatch;
+  if (tilt_latched_) bits |= kReasonTilt | kReasonLatch;
   if (host_latch_ || latched_causes_) bits |= kReasonLatch;
   bits |= latched_causes_;
   if (TelemetryStale(now)) bits |= kReasonTimeoutInputs;

@@ -25,8 +25,12 @@ struct LinkConfig {
   double config_settle_s = 1.5;
   double rpc_timeout_s = 1.0;
   int rpc_attempts = 3;
+  // A running service lost this often within contest_window_s, without announcing a new endpoint in between, has
+  // another host claiming it: the board answers whoever claimed last.
+  int contest_losses = 2;
+  double contest_window_s = 10.0;
   // The services to claim, each with its configuration in register order; an empty list for services without
-  // registers. Services not listed are left alone.
+  // registers. Services not listed are left alone. Forbidden registers (ForbiddenRegister) are dropped.
   std::map<uint16_t, std::vector<Section>> services;
 };
 
@@ -35,7 +39,7 @@ enum class ServiceState { kUnseen, kClaiming, kConfiguring, kRunning, kIncompati
 const char* ServiceStateText(ServiceState state);
 
 struct LinkEvent {
-  enum class Kind { kRunning, kLost, kRestarted, kIncompatible, kRpcResult, kRpcFailed };
+  enum class Kind { kRunning, kLost, kRestarted, kIncompatible, kRpcResult, kRpcFailed, kContested };
   Kind kind = Kind::kRunning;
   uint16_t service_id = 0;
   std::string text;
@@ -103,12 +107,14 @@ class XcoreLink {
     double last_request_s = 0;
     std::vector<Rpc> rpcs;
     std::string incompatible;
+    // When the service was lost while running, since its last announcement.
+    std::vector<double> running_losses_s;
   };
 
   Datagram Make(const Service& service, uint16_t service_id, MessageType type, uint8_t arg1, uint16_t arg2,
                 const Bytes& payload);
   void SetRunning(uint16_t id, Service& service, std::vector<LinkEvent>& events);
-  void Lose(uint16_t id, Service& service, const std::string& why, std::vector<LinkEvent>& events);
+  void Lose(uint16_t id, Service& service, const std::string& why, double now, std::vector<LinkEvent>& events);
   bool NeedsConfig(uint16_t id) const;
   // Problems of the configuration against the announced registers.
   std::vector<std::string> CheckConfig(uint16_t id, const ServiceDescription& description) const;

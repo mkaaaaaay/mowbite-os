@@ -2,10 +2,14 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <dirent.h>
+#include <unistd.h>
+
 #include <diagnostic_msgs/msg/key_value.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <cstdio>
+#include <fstream>
 #include <limits>
 #include <mowbite_msgs/msg/absolute_pose.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
@@ -19,6 +23,8 @@
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
+#include <set>
+#include <sstream>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
@@ -31,6 +37,7 @@
 #include "xcore_driver/input_config.h"
 #include "xcore_driver/link.h"
 #include "xcore_driver/services.h"
+#include "xcore_driver/socket_table.h"
 #include "xcore_driver/udp.h"
 #include "xcore_driver/xcore_control.h"
 
@@ -63,6 +70,10 @@ constexpr uint8_t kGetMajorVersion = 1;
 // A firmware question without an answer is asked again after this long.
 constexpr double kRpcRetryS = 5.0;
 constexpr double kTickS = 0.01;
+// Datagrams computed this long before they would go out are dropped: the thread stalled in between.
+constexpr double kStaleSendS = 0.1;
+// While the board is claimed, the sockets of other programs are checked this often.
+constexpr double kForeignCheckS = 5.0;
 const char kAgeSensor[] = "os_correction_age";
 
 rclcpp::QoS LatchedQos() {
@@ -137,6 +148,9 @@ class XcoreNode : public rclcpp::Node {
     expected_major_ = static_cast<uint16_t>(declare_parameter("expected_major_version", 1));
     imu_frame_id_ = declare_parameter("imu_frame_id", "base_link");
     gnss_source_ = declare_parameter("gnss_source", "xcore_driver");
+    contest_losses_ = static_cast<int>(declare_parameter("contest_losses", int64_t{2}));
+    contest_window_s_ = declare_parameter("contest_window", 10.0);
+    if (contest_losses_ < 2 || !(contest_window_s_ > 0)) throw std::invalid_argument("contest parameters out of range");
     failsafe_without_host_s_ = declare_parameter("failsafe_without_host", -1.0);
     safety_measurement_date_ = declare_parameter("safety_measurement_date", "");
     if (!xcore::ParseIpv4(bind_ip_text_, bind_ip_)) throw std::invalid_argument("bind_ip is no IPv4 address");
@@ -278,6 +292,22 @@ class XcoreNode : public rclcpp::Node {
     c.blade_stop_time_s = declare_parameter("blade_stop_time", c.blade_stop_time_s);
     c.blade_still_rpm = declare_parameter("blade_still_rpm", c.blade_still_rpm);
     c.dock_voltage = declare_parameter("dock_voltage", c.dock_voltage);
+    c.tilt_limit_deg = declare_parameter("tilt_limit", c.tilt_limit_deg);
+    c.tilt_time_s = declare_parameter("tilt_time", c.tilt_time_s);
+    c.tilt_release_deg = std::min(declare_parameter("tilt_release", c.tilt_release_deg), c.tilt_limit_deg);
+    c.imu_fresh_s = declare_parameter("imu_fresh", c.imu_fresh_s);
+    c.uncommanded_speed = declare_parameter("uncommanded_speed", c.uncommanded_speed);
+    c.uncommanded_after_s = declare_parameter("uncommanded_after", c.uncommanded_after_s);
+    c.uncommanded_window_s = declare_parameter("uncommanded_window", c.uncommanded_window_s);
+    c.uncommanded_time_s = declare_parameter("uncommanded_time", c.uncommanded_time_s);
+    c.overspeed_factor = declare_parameter("overspeed_factor", c.overspeed_factor);
+    c.overspeed_time_s = declare_parameter("overspeed_time", c.overspeed_time_s);
+    c.io_stall_s = declare_parameter("io_stall", c.io_stall_s);
+    // The board stops after 1.0 s without the host; a stall must count as lost before that.
+    if (!(c.tilt_limit_deg > 0) || !(c.tilt_time_s >= 0) || !(c.uncommanded_speed > 0) || !(c.overspeed_factor >= 1) ||
+        !(c.io_stall_s > 0) || c.io_stall_s >= 1.0) {
+      throw std::invalid_argument("tilt, wheel or stall parameters out of range");
+    }
     c.odometry.ticks_per_meter = declare_parameter("ticks_per_meter", c.odometry.ticks_per_meter);
     c.odometry.wheel_distance = declare_parameter("wheel_distance", c.odometry.wheel_distance);
     c.odometry.left_sign = declare_parameter("left_ticks_sign", c.odometry.left_sign) < 0 ? -1 : 1;
@@ -291,6 +321,10 @@ class XcoreNode : public rclcpp::Node {
     }
     RCLCPP_INFO(get_logger(), "allow_blade: %d, cmd_vel_timeout: %.2f s, max_duty: %.2f, feedback: %d", c.allow_blade,
                 c.cmd_vel_timeout_s, c.regulator.max_duty, c.regulator.feedback);
+    RCLCPP_INFO(get_logger(), "tilt %.0f deg for %.1f s, release below %.0f deg; wheels %.2f m/s %.1f-%.1f s after a "
+                "setpoint, %.1fx the fastest wheel; I/O stall %.2f s", c.tilt_limit_deg, c.tilt_time_s,
+                c.tilt_release_deg, c.uncommanded_speed, c.uncommanded_after_s, c.uncommanded_window_s,
+                c.overspeed_factor, c.io_stall_s);
     return c;
   }
 
@@ -355,6 +389,46 @@ class XcoreNode : public rclcpp::Node {
     return services;
   }
 
+  // Why another host could talk to the board from this machine: UDP sockets of other programs at bind_ip or at the
+  // announcement port, in the network namespace of this process. nullopt when there are none.
+  std::optional<std::string> ForeignHosts() const {
+    std::vector<xcore::ForeignSocket> found;
+    std::vector<std::string> tables;
+    for (const char* path : {"/proc/net/udp", "/proc/net/udp6"}) {
+      std::ifstream file(path);
+      if (!file && std::string(path) == "/proc/net/udp") return std::string("cannot read /proc/net/udp");
+      std::stringstream text;
+      text << file.rdbuf();
+      tables.push_back(text.str());
+    }
+    // Own sockets after the tables: one opened in between is not in them.
+    std::set<uint64_t> own;
+    if (DIR* dir = opendir("/proc/self/fd")) {
+      while (const dirent* entry = readdir(dir)) {
+        char path[300];
+        char target[64];
+        std::snprintf(path, sizeof(path), "/proc/self/fd/%s", entry->d_name);
+        const ssize_t n = readlink(path, target, sizeof(target) - 1);
+        if (n <= 0) continue;
+        target[n] = '\0';
+        unsigned long long inode = 0;
+        if (std::sscanf(target, "socket:[%llu]", &inode) == 1) own.insert(inode);
+      }
+      closedir(dir);
+    } else {
+      return std::string("cannot read /proc/self/fd");
+    }
+    for (const auto& table : tables) {
+      auto sockets = xcore::ForeignSockets(table, bind_ip_, group_port_, own);
+      found.insert(found.end(), sockets.begin(), sockets.end());
+    }
+    if (found.empty()) return std::nullopt;
+    std::string text = "another program holds UDP sockets at " + bind_ip_text_ + " or port " +
+                       std::to_string(group_port_) + ":";
+    for (const auto& socket : found) text += " " + xcore::ForeignSocketText(socket);
+    return text;
+  }
+
   // Opens both sockets and starts a new link; false while the interface has no address.
   bool Open() {
     uint32_t interface_ip = 0;
@@ -380,6 +454,8 @@ class XcoreNode : public rclcpp::Node {
     xcore::LinkConfig config;
     config.host = {bind_ip_, service_socket_.LocalPort()};
     config.services = services_;
+    config.contest_losses = contest_losses_;
+    config.contest_window_s = contest_window_s_;
     std::lock_guard<std::mutex> lock(mutex_);
     link_.emplace(config);
     for (const auto& entry : services_) control_.OnServiceRestart(entry.first, MonotonicSeconds());
@@ -394,16 +470,34 @@ class XcoreNode : public rclcpp::Node {
     uint8_t buffer[xcore::kMaxDatagram + 1];
     double next_tick = 0;
     double next_open = 0;
+    double next_foreign_check = 0;
     while (running_ && rclcpp::ok()) {
       double now = MonotonicSeconds();
       if (!service_socket_.IsOpen()) {
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          control_.Alive(now);
+        }
         if (now >= next_open) {
           next_open = now + 1.0;
-          Open();
+          // A second host at the board takes over whatever this driver claims: no start beside one.
+          if (auto foreign = ForeignHosts()) {
+            RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Board not claimed, checking again: %s",
+                                  foreign->c_str());
+          } else if (Open()) {
+            next_foreign_check = now + kForeignCheckS;
+          }
         }
         if (!service_socket_.IsOpen()) {
           std::this_thread::sleep_for(std::chrono::milliseconds(50));
           continue;
+        }
+      }
+      if (now >= next_foreign_check) {
+        next_foreign_check = now + kForeignCheckS;
+        if (auto foreign = ForeignHosts()) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          control_.LatchFault(*foreign, now);
         }
       }
       xcore::Endpoint from;
@@ -454,7 +548,10 @@ class XcoreNode : public rclcpp::Node {
       if (last_rtcm_s_) correction_age = now - *last_rtcm_s_;
       for (const auto& out : outputs) {
         if (out.service_id == xcore::kImuService && out.channel_id == xcore::imu::kOutAxes) {
-          if (auto axes = xcore::DecodeDoubles(out.value, 9)) imu.push_back(*axes);
+          if (auto axes = xcore::DecodeDoubles(out.value, 9)) {
+            control_.OnImu((*axes)[0], (*axes)[1], (*axes)[2], now);
+            imu.push_back(*axes);
+          }
           continue;
         }
         if (out.service_id == xcore::kGpsService) {
@@ -562,6 +659,7 @@ class XcoreNode : public rclcpp::Node {
   void Tick(double now) {
     std::vector<xcore::Datagram> datagrams;
     std::vector<xcore::LinkEvent> events;
+    std::vector<std::string> errors;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (major_ == std::nullopt && next_rpc_s_ && now >= *next_rpc_s_) AskFirmware(now);
@@ -574,13 +672,22 @@ class XcoreNode : public rclcpp::Node {
         }
       }
       PassRtcm(now, datagrams);
+      errors = control_.TakeErrors();
     }
-    Send(datagrams);
+    for (const auto& error : errors) RCLCPP_ERROR(get_logger(), "Emergency latched: %s", error.c_str());
+    Send(datagrams, now);
     HandleEvents(events);
   }
 
-  void Send(const std::vector<xcore::Datagram>& datagrams) {
-    for (const auto& d : datagrams) {
+  // Datagrams computed at `computed` go out only while fresh: after a stall the next tick latches before anything else.
+  void Send(const std::vector<xcore::Datagram>& datagrams, std::optional<double> computed = std::nullopt) {
+    for (size_t i = 0; i < datagrams.size(); i++) {
+      const auto& d = datagrams[i];
+      const double age = computed ? MonotonicSeconds() - *computed : 0.0;
+      if (age > kStaleSendS) {
+        RCLCPP_WARN(get_logger(), "Dropped %zu datagrams computed %.2f s ago", datagrams.size() - i, age);
+        return;
+      }
       if (!service_socket_.Send(d.bytes.data(), d.bytes.size(), d.to)) {
         RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Cannot send to %s:%u",
                               xcore::Ipv4Text(d.to.ip).c_str(), d.to.port);
@@ -621,6 +728,11 @@ class XcoreNode : public rclcpp::Node {
           break;
         case Kind::kIncompatible:
           RCLCPP_ERROR(get_logger(), "Service %s (%u) is not claimed: %s", name, e.service_id, e.text.c_str());
+          break;
+        case Kind::kContested:
+          // The driver keeps claiming: each claim stops the service at the board, and the latch reaches the board
+          // whenever the emergency service is ours, where only a release clears it.
+          control_.LatchFault(std::string("service ") + name + " " + e.text, now);
           break;
         case Kind::kRpcResult:
           capabilities |= OnFirmwareAnswer(e, now);
@@ -821,7 +933,14 @@ class XcoreNode : public rclcpp::Node {
       res.message = "latched";
     } else {
       RCLCPP_INFO(get_logger(), "Emergency release requested: %s", req.reason.c_str());
-      control_.ReleaseEmergency(MonotonicSeconds());
+      std::optional<std::string> refused = ForeignHosts();
+      if (!refused) refused = control_.ReleaseEmergency(MonotonicSeconds());
+      if (refused) {
+        RCLCPP_ERROR(get_logger(), "Emergency release refused: %s", refused->c_str());
+        res.success = false;
+        res.message = "release refused: " + *refused;
+        return;
+      }
       res.message = "release requested";
     }
     res.success = true;
@@ -872,6 +991,8 @@ class XcoreNode : public rclcpp::Node {
   uint16_t expected_major_ = 1;
   std::string imu_frame_id_;
   std::string gnss_source_;
+  int contest_losses_ = 2;
+  double contest_window_s_ = 10.0;
   std::string gnss_frame_id_ = "map";
   // GNSS: the converter belongs to the I/O thread; queue and time of the last RTCM passed on are guarded by mutex_.
   bool gnss_enabled_ = false;

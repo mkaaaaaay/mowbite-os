@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <string>
 
 #include "xcore_driver/services.h"
 #include "xcore_driver/xcore_control.h"
@@ -236,7 +237,8 @@ TEST(XcoreControl, BladeStillTurningLatches) {
   auto s = f.control.Status(5.2);
   EXPECT_TRUE(s.blocked);
   EXPECT_TRUE(s.emergency_reason & kReasonMowerNotStopped);
-  // The board gets a high level emergency, the blade more offs.
+  // The board gets a high level emergency, the blade more offs. The I/O thread ran in between.
+  f.control.Alive(5.2);
   auto out = f.control.Tick(5.2);
   ASSERT_FALSE(Of(out, kEmergencyService).empty());
   EXPECT_EQ(EmergencyOf(Of(out, kEmergencyService)[0]).first, reason::kHighLevel | reason::kLatch);
@@ -454,4 +456,248 @@ TEST(XcoreControl, CauseStillThereLatchesAgainAfterRelease) {
   EXPECT_EQ(f.control.Status(0.2).emergency_reason, kReasonStop | kReasonLatch);
   f.Board(reason::kLatch, 0.3);
   EXPECT_EQ(f.control.Status(0.3).emergency_reason, kReasonStop | kReasonLatch);
+}
+
+namespace {
+
+constexpr double kG = 9.80665;
+
+// Feeds the IMU with gravity tilted by deg about the x axis.
+void Tilt(XcoreControl& control, double deg, double now) {
+  const double r = deg * M_PI / 180.0;
+  control.OnImu(0, kG * std::sin(r), kG * std::cos(r), now);
+}
+
+// Counters of the board for wheel speeds in m/s, forward positive; the right one falls going forward.
+struct Wheels {
+  double left = 0;
+  double right = 0;
+  double board_s = 100;
+  Bytes Step(double v_left, double v_right, double dt) {
+    left += v_left * 2025.0 * dt;
+    right -= v_right * 2025.0 * dt;
+    board_s += dt;
+    Writer w;
+    w.U32(static_cast<uint32_t>(static_cast<int64_t>(std::llround(left))));
+    w.U32(static_cast<uint32_t>(static_cast<int64_t>(std::llround(right))));
+    return w.Take();
+  }
+  uint64_t us() const {
+    return static_cast<uint64_t>(board_s * 1e6);
+  }
+};
+
+// Runs the control up to t1 in steps of 10 ms with fresh board reports, ticks at 40 ms and the IMU level.
+struct DriveRun {
+  Fixture f;
+  Wheels wheels;
+  std::vector<InputValue> sent;
+  double t = 0;
+  void Until(double t1, double v_left, double v_right, bool command = false, double v_command = 0.1) {
+    for (; t < t1 - 1e-9; t += 0.01) {
+      f.Board(0, t);
+      Tilt(f.control, 0, t);
+      if (command) f.control.OnCmdVel(v_command, 0, t);
+      if (std::lround(t * 100) % 4 == 0) {
+        f.control.OnOutput(kDiffDriveService, diff_drive::kOutTicks, wheels.Step(v_left, v_right, 0.04),
+                           wheels.us(), t);
+      }
+      auto out = f.control.Tick(t);
+      sent.insert(sent.end(), out.begin(), out.end());
+    }
+  }
+};
+
+bool HighLevelLatch(const std::vector<InputValue>& out) {
+  for (const auto& v : Of(out, kEmergencyService)) {
+    if (EmergencyOf(v).first == (reason::kHighLevel | reason::kLatch)) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+TEST(XcoreControl, TiltLatchesAfterHalfASecond) {
+  Fixture f;
+  ASSERT_EQ(f.control.SetBlade({true, 0, 0, 2.0}, 0), BladeResult::kOk);
+  // 0.3 s over the limit and back: nothing.
+  for (double t = 0; t < 0.3; t += 0.01) Tilt(f.control, 45, t);
+  Tilt(f.control, 30, 0.3);
+  EXPECT_FALSE(f.control.Status(0.3).blocked);
+  for (double t = 0.4; t < 0.89; t += 0.01) {
+    f.Board(0, t);
+    Tilt(f.control, 45, t);
+    f.control.Tick(t);
+  }
+  EXPECT_FALSE(f.control.Status(0.88).blocked);
+  Tilt(f.control, 45, 0.9);
+  auto s = f.control.Status(0.9);
+  EXPECT_EQ(s.emergency_reason, kReasonTilt | kReasonLatch);
+  auto out = f.control.Tick(0.9);
+  EXPECT_TRUE(HighLevelLatch(out));
+  ASSERT_EQ(Of(out, kMowerService).size(), 1u);
+  EXPECT_EQ(SpeedOf(Of(out, kMowerService)[0]), 0);
+  EXPECT_FALSE(f.control.Status(0.9).blade_on);
+  auto errors = f.control.TakeErrors();
+  ASSERT_EQ(errors.size(), 1u);
+  EXPECT_NE(errors[0].find("tilted 45 deg"), std::string::npos);
+  EXPECT_TRUE(f.control.TakeErrors().empty());
+}
+
+TEST(XcoreControl, TiltReleaseOnlyLevelAndFresh) {
+  Fixture f;
+  for (double t = 0; t <= 0.6; t += 0.01) Tilt(f.control, 50, t);
+  ASSERT_TRUE(f.control.Status(0.6).emergency_reason & kReasonTilt);
+  Tilt(f.control, 30, 0.7);
+  auto refused = f.control.ReleaseEmergency(0.7);
+  ASSERT_TRUE(refused);
+  EXPECT_NE(refused->find("still tilted 30 deg"), std::string::npos);
+  EXPECT_TRUE(f.control.Status(0.7).emergency_reason & kReasonTilt);
+  // Level but the last sample is old.
+  Tilt(f.control, 5, 0.8);
+  refused = f.control.ReleaseEmergency(1.5);
+  ASSERT_TRUE(refused);
+  EXPECT_NE(refused->find("no fresh IMU"), std::string::npos);
+  // A refused release leaves the other latches as they were.
+  f.control.LatchEmergency(kReasonFence);
+  Tilt(f.control, 30, 1.6);
+  EXPECT_TRUE(f.control.ReleaseEmergency(1.6));
+  EXPECT_TRUE(f.control.Status(1.6).emergency_reason & kReasonFence);
+  Tilt(f.control, 5, 1.7);
+  EXPECT_FALSE(f.control.ReleaseEmergency(1.7));
+  f.Board(0, 1.8);
+  EXPECT_FALSE(f.control.Status(1.8).blocked);
+}
+
+TEST(XcoreControl, UpsideDownIsTilted) {
+  Fixture f;
+  for (double t = 0; t <= 0.6; t += 0.01) f.control.OnImu(0, 0, -kG, t);
+  EXPECT_TRUE(f.control.Status(0.6).emergency_reason & kReasonTilt);
+  // Values that are no numbers change nothing.
+  f.control.OnImu(std::nan(""), 0, kG, 0.65);
+  EXPECT_TRUE(f.control.ReleaseEmergency(0.65));
+}
+
+TEST(XcoreControl, WheelTurningAfterTheStopLatches) {
+  DriveRun r;
+  r.Until(1.0, 0.1, 0.1, true);
+  r.f.control.OnCmdVel(0, 0, 1.0);
+  // Coasting in the first second after the last setpoint is allowed.
+  r.Until(1.9, 0.2, 0.2);
+  EXPECT_FALSE(r.f.control.Status(r.t).blocked);
+  r.Until(2.0, 0, 0);
+  r.sent.clear();
+  // Turning again for less than 0.2 s.
+  r.Until(2.15, 0.2, 0.2);
+  EXPECT_FALSE(r.f.control.Status(r.t).blocked);
+  r.Until(2.5, 0.2, 0.2);
+  auto s = r.f.control.Status(r.t);
+  EXPECT_EQ(s.emergency_reason, kReasonHighLevel | kReasonLatch);
+  EXPECT_TRUE(HighLevelLatch(r.sent));
+  // Stops go out although the driver sent none since its last setpoint.
+  int stops = 0;
+  for (const auto& v : Of(r.sent, kDiffDriveService)) stops += TwistOf(v)[0] == 0;
+  EXPECT_EQ(stops, 3);
+  auto errors = r.f.control.TakeErrors();
+  ASSERT_EQ(errors.size(), 1u);
+  EXPECT_NE(errors[0].find("after the last drive setpoint"), std::string::npos);
+  EXPECT_FALSE(r.f.control.ReleaseEmergency(r.t));
+}
+
+TEST(XcoreControl, PushingByHandLatchesNothing) {
+  DriveRun r;
+  r.Until(2.0, 0.3, 0.3);
+  EXPECT_FALSE(r.f.control.Status(r.t).blocked);
+  r.Until(3.0, 0.1, 0.1, true);
+  r.f.control.OnCmdVel(0, 0, 3.0);
+  r.Until(8.1, 0, 0);
+  // Later than 5 s after the last setpoint, also faster than the overspeed limit.
+  r.Until(10.0, 0.8, 0.8);
+  EXPECT_FALSE(r.f.control.Status(r.t).blocked);
+  EXPECT_TRUE(r.f.control.TakeErrors().empty());
+}
+
+TEST(XcoreControl, OverspeedStopsAndLatches) {
+  DriveRun r;
+  // 1.3 x (0.3 + 0.3 x 0.1778) = 0.459 m/s.
+  r.Until(1.0, 0.45, 0.45, true, 0.3);
+  EXPECT_FALSE(r.f.control.Status(r.t).blocked);
+  r.Until(1.45, 0.6, 0.6, true, 0.3);
+  EXPECT_FALSE(r.f.control.Status(r.t).blocked);
+  r.sent.clear();
+  r.Until(1.6, 0.6, 0.6, true, 0.3);
+  EXPECT_EQ(r.f.control.Status(r.t).emergency_reason, kReasonHighLevel | kReasonLatch);
+  EXPECT_TRUE(HighLevelLatch(r.sent));
+  auto errors = r.f.control.TakeErrors();
+  ASSERT_EQ(errors.size(), 1u);
+  EXPECT_NE(errors[0].find("above 0.46 m/s"), std::string::npos);
+  // Commands stay without effect until a release.
+  r.sent.clear();
+  r.Until(2.0, 0, 0, true, 0.3);
+  for (const auto& v : Of(r.sent, kDiffDriveService)) EXPECT_EQ(TwistOf(v)[0], 0);
+}
+
+TEST(XcoreControl, StalledThreadLatchesBeforeTheNextFrame) {
+  Fixture f;
+  double t = 0;
+  for (; t < 1.0; t += 0.01) {
+    f.Board(0, t);
+    f.control.OnCmdVel(0.2, 0, t);
+    f.control.SetBlade({true, 0, 0, 2.0}, t);
+    f.control.Tick(t);
+  }
+  // A gap of 0.7 s is no stall.
+  f.Board(0, 1.7);
+  f.control.OnCmdVel(0.2, 0, 1.7);
+  f.control.Tick(1.7);
+  EXPECT_FALSE(f.control.Status(1.7).blocked);
+  // 1.2 s: what arrived meanwhile comes first, then the tick.
+  f.control.OnCmdVel(0.2, 0, 2.9);
+  ASSERT_EQ(f.control.SetBlade({true, 0, 0, 2.0}, 2.9), BladeResult::kOk);
+  auto out = f.control.Tick(2.9);
+  auto emergency = Of(out, kEmergencyService);
+  ASSERT_EQ(emergency.size(), 1u);
+  EXPECT_EQ(EmergencyOf(emergency[0]).first, reason::kHighLevel | reason::kLatch);
+  for (const auto& v : Of(out, kDiffDriveService)) EXPECT_EQ(TwistOf(v)[0], 0);
+  for (const auto& v : Of(out, kMowerService)) EXPECT_EQ(SpeedOf(v), 0);
+  auto s = f.control.Status(2.9);
+  EXPECT_TRUE(s.emergency_reason & reason::kTimeoutHighLevel);
+  EXPECT_TRUE(s.latched);
+  EXPECT_FALSE(s.blade_on);
+  EXPECT_EQ(f.control.TakeErrors().size(), 1u);
+  // The board lets go once it hears the host again; the driver holds until a release and a new command.
+  f.Board(0, 3.0);
+  f.control.OnCmdVel(0.2, 0, 3.0);
+  for (const auto& v : f.control.Tick(3.0)) {
+    if (v.service_id == kDiffDriveService) {
+      EXPECT_EQ(TwistOf(v)[0], 0);
+    }
+    if (v.service_id == kMowerService) {
+      EXPECT_EQ(SpeedOf(v), 0);
+    }
+  }
+  EXPECT_FALSE(f.control.ReleaseEmergency(3.1));
+  f.Board(0, 3.2);
+  EXPECT_FALSE(f.control.Status(3.2).blocked);
+}
+
+TEST(XcoreControl, AliveWithoutLinkIsNoStall) {
+  Fixture f;
+  f.control.Tick(0);
+  for (double t = 0.05; t < 3.0; t += 0.05) f.control.Alive(t);
+  f.Board(0, 3.0);
+  f.control.Tick(3.0);
+  EXPECT_FALSE(f.control.Status(3.0).blocked);
+}
+
+TEST(XcoreControl, FaultHoldsUntilRelease) {
+  Fixture f;
+  f.control.LatchFault("another host", 0);
+  f.control.LatchFault("again", 0.1);
+  EXPECT_EQ(f.control.TakeErrors(), std::vector<std::string>{"another host"});
+  EXPECT_TRUE(HighLevelLatch(f.control.Tick(0.1)));
+  f.Board(0, 0.2);
+  EXPECT_EQ(f.control.Status(0.2).emergency_reason, kReasonHighLevel | kReasonLatch);
+  EXPECT_FALSE(f.control.ReleaseEmergency(0.2));
+  EXPECT_FALSE(f.control.Status(0.2).blocked);
 }

@@ -123,4 +123,8 @@ const ExpectedService* ExpectedFor(uint16_t service_id) {
   }
 }
 
+bool ForbiddenRegister(uint16_t service_id, uint16_t register_id) {
+  return service_id == kPowerService && register_id == power::kRegOverrideChargeCurrentLimit;
+}
+
 }  // namespace xcore

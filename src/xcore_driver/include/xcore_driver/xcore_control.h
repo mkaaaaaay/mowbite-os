@@ -41,6 +41,26 @@ struct ControlConfig {
   // Without a battery report for this long the battery fields read as unknown.
   double battery_timeout_s = 5.0;
 
+  // Tilt from gravity in the board's IMU after the remap: above tilt_limit_deg for tilt_time_s latches TILT; a release
+  // needs a sample younger than imu_fresh_s below tilt_release_deg.
+  double tilt_limit_deg = 40.0;
+  double tilt_time_s = 0.5;
+  double tilt_release_deg = 26.0;
+  double imu_fresh_s = 0.5;
+  // Wheels against the command, checked until uncommanded_window_s after the last drive setpoint other than 0: a wheel
+  // above uncommanded_speed for uncommanded_time_s, uncommanded_after_s or more after that setpoint, latches; so does a
+  // wheel above overspeed_factor times the fastest commandable wheel speed for overspeed_time_s. Later, pushing the
+  // mower by hand latches nothing.
+  double uncommanded_speed = 0.1;
+  double uncommanded_after_s = 1.0;
+  double uncommanded_window_s = 5.0;
+  double uncommanded_time_s = 0.2;
+  double overspeed_factor = 1.3;
+  double overspeed_time_s = 0.5;
+  // A gap this long between two passes of the I/O thread counts as a lost link: the board may have stopped and would
+  // otherwise take the next setpoints.
+  double io_stall_s = 0.8;
+
   OdometryConfig odometry;
   RegulatorConfig regulator;
 };
@@ -162,7 +182,16 @@ class XcoreControl {
   // Bits must be within kHostLatchReasons; 0 means HIGH_LEVEL. Returns false for other bits.
   bool LatchEmergency(uint32_t bits);
   // Clears the host's own latches and asks the board to clear its own; the board sets a cause again that is still there.
-  void ReleaseEmergency(double now);
+  // Returns why a release is refused (the mower still tilted, or no fresh IMU after a tilt); nothing is cleared then.
+  std::optional<std::string> ReleaseEmergency(double now);
+  // Latches HIGH_LEVEL for a fault the node found, such as another host at the board; the text goes to TakeErrors.
+  void LatchFault(const std::string& why, double now);
+  // Acceleration in m/s² in the body frame from the board's IMU.
+  void OnImu(double ax, double ay, double az, double now);
+  // The I/O thread is alive without a link to tick.
+  void Alive(double now);
+  // Texts of the faults latched since the last call, for the log.
+  std::vector<std::string> TakeErrors();
   // All services the driver needs are claimed and configured, and their firmware fits; false blocks.
   void SetServicesReady(bool ready, bool firmware_compatible);
 
@@ -184,6 +213,9 @@ class XcoreControl {
   };
 
   bool Blocked(double now) const;
+  void Fault(const std::string& why, double now);
+  void CheckWheels(const WheelTwist& twist, double now);
+  void CheckStall(double now);
   bool TelemetryStale(double now) const;
   uint32_t Reason(double now) const;
   bool InputActive(const std::vector<int>& indices) const;
@@ -249,6 +281,22 @@ class XcoreControl {
   TickOdometry odometry_;
   DriveRegulator regulator_;
   bool drive_fault_ = false;
+
+  // A fault of the driver's own checks (wheels, another host), held until a release.
+  bool fault_latched_ = false;
+  std::vector<std::string> errors_;
+
+  bool tilt_latched_ = false;
+  double tilt_deg_ = 0;
+  std::optional<double> last_imu_s_;
+  std::optional<double> tilted_since_s_;
+
+  // When a drive setpoint other than 0 went out last.
+  std::optional<double> last_drive_s_;
+  std::optional<double> uncommanded_since_s_;
+  std::optional<double> overspeed_since_s_;
+
+  std::optional<double> last_alive_s_;
 };
 
 }  // namespace xcore

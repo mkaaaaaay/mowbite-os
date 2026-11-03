@@ -292,3 +292,93 @@ TEST(Link, Rpc) {
   EXPECT_EQ(sent, 3);
   EXPECT_TRUE(h.Has(LinkEvent::Kind::kRpcFailed, kEmergencyService));
 }
+
+namespace {
+
+// Claims the emergency service at the given board port and lets it run; returns the time after.
+double RunEmergency(Harness& h, double now, uint16_t port = kBoard.port) {
+  h.link.Tick(now, h.events);
+  h.Receive(FromBoard(kEmergencyService, MessageType::kClaim, kClaimAck), now + 0.1, Endpoint{kBoard.ip, port});
+  EXPECT_EQ(h.link.State(kEmergencyService), ServiceState::kRunning);
+  return now + 0.1;
+}
+
+int Count(const Harness& h, LinkEvent::Kind kind) {
+  int n = 0;
+  for (const auto& e : h.events) n += e.kind == kind;
+  return n;
+}
+
+}  // namespace
+
+TEST(Link, TwoLossesAtTheSameEndpointMeanAnotherHost) {
+  Harness h;
+  h.Announce(kEmergencyService, ExpectedEmergency(), 0);
+  double t = RunEmergency(h, 0);
+  // Another host claims it: the board answers there, this side hears nothing for 1.5 s.
+  h.Tick(t + 1.6);
+  EXPECT_EQ(Count(h, LinkEvent::Kind::kLost), 1);
+  EXPECT_EQ(Count(h, LinkEvent::Kind::kContested), 0);
+  t = RunEmergency(h, t + 1.6);
+  h.Tick(t + 1.6);
+  ASSERT_EQ(Count(h, LinkEvent::Kind::kContested), 1);
+  for (const auto& e : h.events) {
+    if (e.kind == LinkEvent::Kind::kContested) {
+      EXPECT_NE(e.text.find("another host"), std::string::npos);
+    }
+  }
+}
+
+TEST(Link, LossesAfterARestartOrFarApartAreNoContest) {
+  Harness h;
+  h.Announce(kEmergencyService, ExpectedEmergency(), 0);
+  double t = RunEmergency(h, 0);
+  h.Tick(t + 1.6);
+  // The board restarts and announces a new endpoint: the count starts again.
+  h.Announce(kEmergencyService, ExpectedEmergency(), t + 2, 49160);
+  t = RunEmergency(h, t + 2, 49160);
+  h.link.Tick(t + 1.6, h.events);
+  EXPECT_EQ(Count(h, LinkEvent::Kind::kContested), 0);
+  // A loss while only claiming counts not; nor does one more than 10 s after the last.
+  h.link.Tick(t + 5, h.events);
+  t = RunEmergency(h, t + 11, 49160);
+  h.link.Tick(t + 1.6, h.events);
+  EXPECT_EQ(Count(h, LinkEvent::Kind::kLost), 3);
+  EXPECT_EQ(Count(h, LinkEvent::Kind::kContested), 0);
+}
+
+TEST(Link, NeverWritesTheChargeCurrentOverride) {
+  LinkConfig c = Config();
+  Writer empty;
+  empty.F32(24.5f);
+  c.services[kPowerService] = {{power::kRegEmptyVoltage, empty.Take()},
+                               {power::kRegOverrideChargeCurrentLimit, Bytes{1}}};
+  XcoreLink link(c);
+  ServiceDescription d = ExpectedPower();
+  d.registers.push_back(Channel{power::kRegOverrideChargeCurrentLimit, "override", *ParseValueType("uint8_t")});
+  Announcement a;
+  a.service_id = kPowerService;
+  a.ip = "172.16.78.150";
+  a.port = kBoard.port;
+  a.description = d;
+  Header header;
+  header.type = MessageType::kAdvertisement;
+  auto bytes = EncodePacket(header, EncodeAnnouncement(a));
+  std::vector<LinkEvent> events;
+  std::vector<Output> outputs;
+  link.OnAnnouncement(bytes.data(), bytes.size(), 0, events);
+  link.Tick(0, events);
+  auto ack = FromBoard(kPowerService, MessageType::kClaim, kClaimAck);
+  link.OnDatagram(ack.data(), ack.size(), kBoard, 0.1, outputs, events);
+  auto out = link.Tick(0.1, events);
+  ASSERT_EQ(out.size(), 1u);
+  auto packet = DecodePacket(out[0].bytes.data(), out[0].bytes.size());
+  ASSERT_TRUE(packet);
+  EXPECT_EQ(packet->header.arg1, kTransactionConfig);
+  auto sections = DecodeSections(packet->payload);
+  ASSERT_TRUE(sections);
+  ASSERT_EQ(sections->size(), 1u);
+  EXPECT_EQ((*sections)[0].id, power::kRegEmptyVoltage);
+  EXPECT_TRUE(ForbiddenRegister(kPowerService, 10));
+  EXPECT_FALSE(ForbiddenRegister(kDiffDriveService, 10));
+}
