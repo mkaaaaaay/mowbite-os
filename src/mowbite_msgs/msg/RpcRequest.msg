@@ -1,5 +1,7 @@
-# Based on xbot_msgs/xbot_mqtt (OpenMower), MIT License, Copyright (c) 2022 Clemens Elflein. See LICENSE.xbot_monitoring.
+# bridge/rpc/request: a JSON-RPC call for a method a node registered on bridge/rpc/methods. Every node gets every
+# call and answers only its own methods.
 string method
-# JSON text, empty without params
+# The params as JSON text, empty without params.
 string params
+# Empty when the caller sent no id.
 string id

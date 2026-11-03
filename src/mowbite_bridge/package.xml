@@ -3,10 +3,9 @@
 <package format="3">
   <name>mowbite_bridge</name>
   <version>0.0.0</version>
-  <description>MQTT bridge of MowBite OS with the app interface of OpenMower's xbot_monitoring</description>
+  <description>MQTT bridge of MowBite OS: the app's MQTT topics and JSON-RPC, event history and mowing track</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
   <license>GPL-3.0</license>
-  <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend>

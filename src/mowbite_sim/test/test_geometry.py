@@ -18,7 +18,7 @@ import rclpy
 from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
 from mowbite_msgs.msg import ActionList, HardwareStatus, MqttPublish, RpcError, RpcMethods, RpcRequest, RpcResponse
-from mowbite_msgs.msg import AbsolutePose
+from mowbite_msgs.msg import RobotPose
 from rcl_interfaces.msg import Log
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import NavSatFix
@@ -60,7 +60,7 @@ class Probe:
         self.node = rclpy.create_node("geometry_probe")
         self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
         self.hw_pub = self.node.create_publisher(HardwareStatus, "hw/status", 10)
-        self.pose_pub = self.node.create_publisher(AbsolutePose, "localization/pose", 10)
+        self.pose_pub = self.node.create_publisher(RobotPose, "localization/pose", 10)
         self.datum_pub = self.node.create_publisher(NavSatFix, "gps/datum", LATCHED)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
@@ -86,10 +86,10 @@ class Probe:
             hw.battery_voltage = 24.5
             hw.battery_percentage = 80
             self.hw_pub.publish(hw)
-            pose = AbsolutePose()
+            pose = RobotPose()
             pose.position_accuracy = 0.02
-            pose.orientation_accuracy = 0.05
-            pose.orientation_valid = 1
+            pose.heading_accuracy = 0.05
+            pose.heading_valid = True
             self.pose_pub.publish(pose)
             time.sleep(0.2)
 
@@ -114,7 +114,7 @@ class Probe:
     def _actions(self, msg):
         with self.lock:
             for a in msg.actions:
-                self.actions[msg.node_prefix + "/" + a.action_id] = a.enabled
+                self.actions[msg.node_prefix + "/" + a.id] = a.enabled
 
     def _publish(self, msg):
         if msg.topic == "events/json":

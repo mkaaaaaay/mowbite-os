@@ -8,7 +8,8 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
-#include <mowbite_bridge/monitor.h>
+#include <limits>
+#include <mowbite_bridge/event_builder.h>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/ntrip_status.hpp>
 #include <mowbite_msgs/msg/rpc_error.hpp>
@@ -16,7 +17,7 @@
 #include <mowbite_msgs/msg/rpc_request.hpp>
 #include <mowbite_msgs/msg/rpc_response.hpp>
 #include <mowbite_msgs/msg/rtcm.hpp>
-#include <mowbite_msgs/msg/sensor_info.hpp>
+#include <mowbite_msgs/msg/sensor_spec.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
@@ -65,7 +66,7 @@ bool SendAll(int fd, const std::string& data, int timeout_ms) {
 }
 
 // host, port and mountpoint of SOURCE_CHANGED, with prefix "" or "previous_".
-void PutSource(mowbite_bridge::json& details, const std::string& prefix, const CorrectionSource& source) {
+void PutSource(nlohmann::ordered_json& details, const std::string& prefix, const CorrectionSource& source) {
   details[prefix + "host"] = source.host;
   details[prefix + "port"] = source.port;
   details[prefix + "mountpoint"] = source.mountpoint;
@@ -95,7 +96,7 @@ class NtripNode : public rclcpp::Node {
     rtcm_pub_ = create_publisher<mowbite_msgs::msg::Rtcm>("gnss/rtcm", rclcpp::QoS(50).reliable());
     status_pub_ = create_publisher<mowbite_msgs::msg::NtripStatus>("gnss/ntrip_status", 10);
     publish_pub_ = create_publisher<mowbite_msgs::msg::MqttPublish>("bridge/publish", 100);
-    sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorInfo>("bridge/sensor_info", LatchedQos(10));
+    sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorSpec>("bridge/sensor_info", LatchedQos(10));
     sensor_value_pub_ = create_publisher<mowbite_msgs::msg::SensorValue>("bridge/sensor_value", 100);
     gga_sub_ = create_subscription<std_msgs::msg::String>(
         "gnss/gga", 10, [this](std_msgs::msg::String::ConstSharedPtr msg) {
@@ -115,12 +116,17 @@ class NtripNode : public rclcpp::Node {
     methods.methods = AccessMethods(access_over_rpc_);
     rpc_methods_pub_->publish(methods);
 
-    mowbite_msgs::msg::SensorInfo info;
-    info.sensor_id = kStateSensor;
-    info.sensor_name = "NTRIP";
-    info.value_type = mowbite_msgs::msg::SensorInfo::TYPE_STRING;
-    info.value_description = mowbite_msgs::msg::SensorInfo::VALUE_DESCRIPTION_UNKNOWN;
-    sensor_info_pub_->publish(info);
+    const double none = std::numeric_limits<double>::quiet_NaN();
+    mowbite_msgs::msg::SensorSpec spec;
+    spec.id = kStateSensor;
+    spec.name = "NTRIP";
+    spec.kind = mowbite_msgs::msg::SensorSpec::KIND_TEXT;
+    spec.meaning = mowbite_msgs::msg::SensorSpec::MEANING_UNKNOWN;
+    spec.min = none;
+    spec.max = none;
+    spec.critical_low = none;
+    spec.critical_high = none;
+    sensor_info_pub_->publish(spec);
 
     const SourceFile last = ReadSourceFile(source_file_);
     if (last.exists && !last.source) {
@@ -460,7 +466,7 @@ class NtripNode : public rclcpp::Node {
       return;
     }
     for (const auto& event : pending_) {
-      mowbite_bridge::json details = {
+      nlohmann::ordered_json details = {
           {"reason", event.reason}, {"message", event.message}, {"severity", event.severity}};
       if (!event.resume.empty()) details["resume"] = event.resume;
       if (event.code) details["code"] = event.code;
@@ -478,7 +484,7 @@ class NtripNode : public rclcpp::Node {
       }
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "events/json";
-      msg.payload = mowbite_bridge::EventPayload("CORRECTIONS", details, this->now().seconds()).dump();
+      msg.payload = mowbite_bridge::BuildEvent("CORRECTIONS", details, this->now().seconds()).dump();
       publish_pub_->publish(msg);
     }
     pending_.clear();
@@ -503,7 +509,7 @@ class NtripNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::Rtcm>::SharedPtr rtcm_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::NtripStatus>::SharedPtr status_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_pub_;
-  rclcpp::Publisher<mowbite_msgs::msg::SensorInfo>::SharedPtr sensor_info_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::SensorSpec>::SharedPtr sensor_info_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcResponse>::SharedPtr rpc_response_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcError>::SharedPtr rpc_error_pub_;

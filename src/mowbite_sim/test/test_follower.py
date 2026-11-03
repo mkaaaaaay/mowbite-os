@@ -14,7 +14,7 @@ import rclpy
 from geometry_msgs.msg import Point32, Polygon, Pose, Twist
 from launch_ros.actions import Node
 from mowbite_msgs.action import FollowPath
-from mowbite_msgs.msg import AbsolutePose, HardwareCapabilities, HardwareStatus
+from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus, RobotPose
 from rclpy.action import ActionClient
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
@@ -59,7 +59,7 @@ class World:
         self.node = rclpy.create_node("follower_world")
         self.caps_pub = self.node.create_publisher(HardwareCapabilities, "hw/capabilities", LATCHED)
         self.hw_pub = self.node.create_publisher(HardwareStatus, "hw/status", 10)
-        self.pose_pub = self.node.create_publisher(AbsolutePose, "localization/pose", 10)
+        self.pose_pub = self.node.create_publisher(RobotPose, "localization/pose", 10)
         self.node.create_subscription(Twist, "follower/cmd_vel", self._cmd, 50)
         self.client = ActionClient(self.node, FollowPath, "follow_path")
         self.running = True
@@ -104,12 +104,12 @@ class World:
                 hw = HardwareStatus()
                 hw.telemetry_ok = True
                 hw.emergency = self.emergency
-                pose = AbsolutePose()
-                pose.pose.pose.position.x = self.x
-                pose.pose.pose.position.y = self.y
-                pose.vehicle_heading = self.yaw
+                pose = RobotPose()
+                pose.x = self.x
+                pose.y = self.y
+                pose.heading = self.yaw
                 pose.position_accuracy = self.accuracy
-                pose.orientation_valid = 1
+                pose.heading_valid = True
                 publish_pose = self.publish_pose
             self.hw_pub.publish(hw)
             if publish_pose:

@@ -247,6 +247,9 @@ elif args.target == "mowbite-os":
     check("rpc.methods", False, "no answer", missing=True)
 else:
     skip("rpc.methods", "no answer, older mowers have none")
+# A planner that cannot load the message types registers no method; like offers(), a point only when they are missing.
+if args.target == "mowbite-os" and methods is not None and not any(m.startswith("planner.") for m in methods):
+    check("planner.* in rpc.methods", False, "no planner.* method: the planner did not register", missing=True)
 if args.write and (methods is None or "sim.flags" not in methods):
     print("refusing --write: the mower does not offer sim.flags, so it is not a simulation", file=sys.stderr)
     sys.exit(2)

@@ -6,9 +6,9 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
-#include <mowbite_msgs/msg/absolute_pose.hpp>
+#include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/rtcm.hpp>
-#include <mowbite_msgs/msg/sensor_info.hpp>
+#include <mowbite_msgs/msg/sensor_spec.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
 #include <mutex>
 #include <optional>
@@ -34,6 +34,14 @@ double MonotonicSeconds() {
 }
 
 const char kAgeSensor[] = "os_correction_age";
+
+using mowbite_msgs::msg::GnssFix;
+static_assert(static_cast<uint8_t>(tron::Solution::kNone) == GnssFix::NONE);
+static_assert(static_cast<uint8_t>(tron::Solution::kSingle) == GnssFix::SINGLE);
+static_assert(static_cast<uint8_t>(tron::Solution::kDgps) == GnssFix::DGPS);
+static_assert(static_cast<uint8_t>(tron::Solution::kRtkFloat) == GnssFix::RTK_FLOAT);
+static_assert(static_cast<uint8_t>(tron::Solution::kRtkFixed) == GnssFix::RTK_FIXED);
+static_assert(static_cast<uint8_t>(tron::Solution::kDeadReckoning) == GnssFix::DEAD_RECKONING);
 // RTCM waiting for the port; beyond this the newest is dropped (the receiver wants fresh corrections, not all of them).
 constexpr size_t kMaxQueue = 32 * 1024;
 
@@ -78,7 +86,7 @@ class GnssNode : public rclcpp::Node {
       tracker_.emplace(config, tron::LocalFrame(lat, lon, height));
     }
 
-    pose_pub_ = create_publisher<mowbite_msgs::msg::AbsolutePose>("gps/absolute_pose", 10);
+    pose_pub_ = create_publisher<GnssFix>("gps/absolute_pose", 10);
     // The app reads the datum from params/json, the bridge collects it from this latched topic.
     if (std::isfinite(lat) && std::isfinite(lon) && std::abs(lat) <= 90.0 && std::abs(lon) <= 180.0) {
       // The datum for the map, which belongs to it: the origin of the poses above, not a measured fix.
@@ -105,18 +113,21 @@ class GnssNode : public rclcpp::Node {
     gga_pub_ = create_publisher<std_msgs::msg::String>("gnss/gga", 10);
     rtcm_sub_ = create_subscription<mowbite_msgs::msg::Rtcm>(
         "gnss/rtcm", rclcpp::QoS(50).reliable(), [this](mowbite_msgs::msg::Rtcm::ConstSharedPtr msg) { OnRtcm(*msg); });
-    sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorInfo>(
+    sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorSpec>(
         "bridge/sensor_info", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().transient_local());
     sensor_value_pub_ = create_publisher<mowbite_msgs::msg::SensorValue>("bridge/sensor_value", 100);
-    mowbite_msgs::msg::SensorInfo info;
-    info.sensor_id = kAgeSensor;
-    info.sensor_name = "RTK Correction Age";
-    info.value_type = mowbite_msgs::msg::SensorInfo::TYPE_DOUBLE;
-    info.value_description = mowbite_msgs::msg::SensorInfo::VALUE_DESCRIPTION_UNKNOWN;
-    info.unit = "s";
-    info.has_critical_high = true;
-    info.upper_critical_value = max_correction_age_s_;
-    sensor_info_pub_->publish(info);
+    const double none = std::numeric_limits<double>::quiet_NaN();
+    mowbite_msgs::msg::SensorSpec spec;
+    spec.id = kAgeSensor;
+    spec.name = "RTK Correction Age";
+    spec.kind = mowbite_msgs::msg::SensorSpec::KIND_NUMBER;
+    spec.meaning = mowbite_msgs::msg::SensorSpec::MEANING_UNKNOWN;
+    spec.unit = "s";
+    spec.min = none;
+    spec.max = none;
+    spec.critical_low = none;
+    spec.critical_high = max_correction_age_s_;
+    sensor_info_pub_->publish(spec);
     io_thread_ = std::thread([this] { IoLoop(); });
   }
 
@@ -330,25 +341,18 @@ class GnssNode : public rclcpp::Node {
   }
 
   void Publish(const tron::GnssPose& pose) {
-    mowbite_msgs::msg::AbsolutePose msg;
+    GnssFix msg;
     msg.header.stamp = now();
     msg.header.frame_id = frame_id_;
-    msg.sensor_stamp = pose.sensor_stamp_ms;
-    msg.received_stamp = static_cast<uint32_t>(MonotonicSeconds() * 1000.0);
-    msg.source = mowbite_msgs::msg::AbsolutePose::SOURCE_GPS;
-    msg.flags = pose.flags;
-    msg.orientation_valid = 0;
-    msg.motion_vector_valid = pose.motion_valid ? 1 : 0;
-    msg.position_accuracy = static_cast<float>(pose.accuracy_m);
-    msg.orientation_accuracy = 0.0f;
-    msg.pose.pose.position.x = pose.position.east;
-    msg.pose.pose.position.y = pose.position.north;
-    msg.pose.pose.position.z = pose.position.up;
-    msg.pose.pose.orientation.w = 1.0;
-    msg.motion_vector.x = pose.motion_east_mps;
-    msg.motion_vector.y = pose.motion_north_mps;
-    msg.vehicle_heading = 0.0;
-    msg.motion_heading = pose.motion_heading;
+    msg.receiver_time_ms = pose.sensor_stamp_ms;
+    msg.solution = static_cast<uint8_t>(pose.solution);
+    msg.x = pose.position.east;
+    msg.y = pose.position.north;
+    msg.z = pose.position.up;
+    msg.accuracy = static_cast<float>(pose.accuracy_m);
+    msg.velocity_valid = pose.motion_valid;
+    msg.velocity_east = pose.motion_east_mps;
+    msg.velocity_north = pose.motion_north_mps;
     pose_pub_->publish(msg);
   }
 
@@ -373,11 +377,11 @@ class GnssNode : public rclcpp::Node {
   std::string access_file_;
   // Whether access_file_ was there at the last look, unknown before the first.
   std::optional<bool> host_required_;
-  rclcpp::Publisher<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_pub_;
+  rclcpp::Publisher<GnssFix>::SharedPtr pose_pub_;
   rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr datum_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr gga_pub_;
-  rclcpp::Publisher<mowbite_msgs::msg::SensorInfo>::SharedPtr sensor_info_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::SensorSpec>::SharedPtr sensor_info_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_pub_;
   rclcpp::Subscription<mowbite_msgs::msg::Rtcm>::SharedPtr rtcm_sub_;
   std::atomic<bool> running_{true};

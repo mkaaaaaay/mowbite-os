@@ -372,7 +372,7 @@ TEST(Logic, SensorDefinitionsMatchTheApp) {
   EXPECT_FALSE(std::any_of(sensors.begin(), sensors.end(), [](const auto& s) { return s.id == "om_mow_esc_temp"; }));
   auto battery = std::find_if(sensors.begin(), sensors.end(), [](const auto& s) { return s.id == "om_v_battery"; });
   // The app derives the cell count from max_value: 25.2 V / 4.2 V = 6.
-  EXPECT_DOUBLE_EQ(battery->max_value, 25.2);
+  EXPECT_DOUBLE_EQ(battery->max, 25.2);
 }
 
 namespace {

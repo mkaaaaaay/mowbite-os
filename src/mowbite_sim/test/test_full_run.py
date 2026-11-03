@@ -26,7 +26,7 @@ from geometry_msgs.msg import Twist
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
-from mowbite_msgs.msg import AbsolutePose, MapStatus, MqttPublish, RpcRequest, RpcResponse
+from mowbite_msgs.msg import MapStatus, MqttPublish, RobotPose, RpcRequest, RpcResponse
 from mowbite_msgs.srv import SetPose
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
@@ -96,7 +96,7 @@ class Probe:
         self.node = rclpy.create_node("full_run_probe")
         self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
         self.node.create_subscription(String, "map/json", self._map, LATCHED)
-        self.node.create_subscription(AbsolutePose, "localization/pose", self._pose, 10)
+        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._answer, 10)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
@@ -121,16 +121,16 @@ class Probe:
 
     def _pose(self, msg):
         # The localization turns about z only.
-        yaw = 2.0 * math.atan2(msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
+        yaw = msg.heading
         now = time.time()
         stamp = msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec
         if abs(stamp - now) > 0.5:
             stamp = now
         with self.lock:
-            self.pose = (msg.pose.pose.position.x, msg.pose.pose.position.y, yaw, msg.position_accuracy,
-                         msg.orientation_valid)
-            if msg.orientation_valid and (not self.estimates or stamp > self.estimates[-1][0]):
-                self.estimates.append((stamp, msg.pose.pose.position.x, msg.pose.pose.position.y, yaw))
+            self.pose = (msg.x, msg.y, yaw, msg.position_accuracy,
+                         msg.heading_valid)
+            if msg.heading_valid and (not self.estimates or stamp > self.estimates[-1][0]):
+                self.estimates.append((stamp, msg.x, msg.y, yaw))
 
     def _publish(self, msg):
         if msg.topic != "events/json":

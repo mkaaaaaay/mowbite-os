@@ -1,4 +1,4 @@
-# Based on xbot_msgs/xbot_mqtt (OpenMower), MIT License, Copyright (c) 2022 Clemens Elflein. See LICENSE.xbot_monitoring.
-# result is JSON text
+# bridge/rpc/response: the result of a call.
+# As JSON text.
 string result
 string id

@@ -24,9 +24,8 @@ struct BadMap : std::runtime_error {
 };
 
 Point2 ToPoint(const json& p, const std::string& where) {
-  if (!p.is_object() || !p.contains("x") || !p.contains("y") || !p["x"].is_number() || !p["y"].is_number()) {
-    throw BadMap(where + ": a point without numeric x and y");
-  }
+  const bool numeric = p.is_object() && p.contains("x") && p.contains("y") && p["x"].is_number() && p["y"].is_number();
+  if (!numeric) throw BadMap(where + ": a point without numeric x and y");
   const Point2 point{p["x"].get<double>(), p["y"].get<double>()};
   if (!std::isfinite(point.x) || !std::isfinite(point.y)) throw BadMap(where + ": a point out of range");
   return point;
@@ -60,7 +59,7 @@ bool InsideRing(const Ring& ring, double x, double y) {
 
 double DistanceToRing(const Ring& ring, double x, double y) {
   const size_t n = OpenSize(ring);
-  double nearest = std::numeric_limits<double>::infinity();
+  double closest = std::numeric_limits<double>::infinity();
   for (size_t i = 0; i < n; i++) {
     const Point2& a = ring[i];
     const Point2& b = ring[(i + 1) % n];
@@ -68,9 +67,9 @@ double DistanceToRing(const Ring& ring, double x, double y) {
     const double dy = b.y - a.y;
     const double length2 = dx * dx + dy * dy;
     const double t = length2 > 0 ? std::clamp(((x - a.x) * dx + (y - a.y) * dy) / length2, 0.0, 1.0) : 0.0;
-    nearest = std::min(nearest, std::hypot(a.x + t * dx - x, a.y + t * dy - y));
+    closest = std::min(closest, std::hypot(a.x + t * dx - x, a.y + t * dy - y));
   }
-  return nearest;
+  return closest;
 }
 
 std::optional<Region> ParseRegion(const std::string& map_json, std::string* error) {

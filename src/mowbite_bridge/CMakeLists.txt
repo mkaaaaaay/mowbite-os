@@ -15,15 +15,18 @@ find_package(mowbite_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(PahoMqttCpp REQUIRED)
 
-# Payloads and RPC handling without ROS and MQTT, testable on any machine.
-add_library(mowbite_bridge_core STATIC src/monitor.cpp src/params_store.cpp)
+# Everything of the bridge without ROS and without an MQTT client, testable on any machine; the nodes that send
+# events link it for BuildEvent.
+add_library(mowbite_bridge_core STATIC src/text.cpp src/json_rpc.cpp src/method_table.cpp src/app_json.cpp
+  src/param_table.cpp src/event_builder.cpp src/warn_log.cpp src/bridge_core.cpp src/event_log.cpp src/track.cpp
+  src/pose_window.cpp)
 target_include_directories(mowbite_bridge_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(mowbite_bridge_core nlohmann_json::nlohmann_json)
 set_target_properties(mowbite_bridge_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-add_library(mowbite_bridge_component SHARED src/bridge_node.cpp)
+add_library(mowbite_bridge_component SHARED src/bridge_component.cpp)
 target_link_libraries(mowbite_bridge_component mowbite_bridge_core PahoMqttCpp::paho-mqttpp3)
 ament_target_dependencies(mowbite_bridge_component rclcpp rclcpp_components rcl_interfaces geometry_msgs std_msgs mowbite_msgs)
 rclcpp_components_register_node(mowbite_bridge_component
@@ -31,7 +34,6 @@ rclcpp_components_register_node(mowbite_bridge_component
   EXECUTABLE mowbite_bridge_node)
 
 install(DIRECTORY include/ DESTINATION include)
-install(FILES LICENSE.xbot_monitoring DESTINATION share/${PROJECT_NAME})
 install(TARGETS mowbite_bridge_core mowbite_bridge_component
   EXPORT export_mowbite_bridge
   ARCHIVE DESTINATION lib
@@ -40,7 +42,9 @@ install(TARGETS mowbite_bridge_core mowbite_bridge_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(mowbite_bridge_test test/test_monitor.cpp test/test_position.cpp)
+  ament_add_gtest(mowbite_bridge_test test/test_text.cpp test/test_json_rpc.cpp test/test_app_json.cpp
+    test/test_param_table.cpp test/test_warn_log.cpp test/test_bridge_core.cpp test/test_bridge_fuzz.cpp
+    test/test_pose_window.cpp test/test_event_log.cpp test/test_track.cpp)
   target_link_libraries(mowbite_bridge_test mowbite_bridge_core)
 endif()
 

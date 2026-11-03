@@ -19,7 +19,7 @@ import rclpy
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
-from mowbite_msgs.msg import AbsolutePose, MapStatus, MqttPublish
+from mowbite_msgs.msg import MapStatus, MqttPublish, RobotPose
 from mowbite_msgs.srv import DriveTo, ReplaceMap, SetPose
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_srvs.srv import Trigger
@@ -90,7 +90,7 @@ class Probe:
         self.track = []
         self.node = rclpy.create_node("drive_probe")
         self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
-        self.node.create_subscription(AbsolutePose, "localization/pose", self._pose, 10)
+        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
@@ -199,7 +199,7 @@ class TestDrive(unittest.TestCase):
         request = SetPose.Request()
         request.pose.orientation.w = 1.0
         p.call(p.set_pose, request)
-        self.assertTrue(p.wait(lambda: p.pose is not None and p.pose.orientation_valid
+        self.assertTrue(p.wait(lambda: p.pose is not None and p.pose.heading_valid
                                and p.pose.position_accuracy < 0.1, 30), "no good pose with a heading")
 
     def test_02_drive_from_the_front_lawn_to_the_back_over_the_path(self):

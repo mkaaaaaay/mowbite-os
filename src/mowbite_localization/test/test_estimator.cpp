@@ -114,7 +114,7 @@ class World {
       if (it->t <= t - gnss_delay + 1e-9) break;
     }
     GnssFix fix;
-    fix.flags = 1 | kFlagRtkFixed;
+    fix.solution = kSolutionRtkFixed;
     fix.accuracy = accuracy;
     fix.x = then->antenna(0) + fix_offset(0);
     fix.y = then->antenna(1) + fix_offset(1);
@@ -239,7 +239,7 @@ TEST(L3FixesThatCount, NeedCalibrationGeometryAndGnssOn) {
   w.Run(0.2, 0.0, 0.0);
   EXPECT_EQ(w.last(), FixResult::kInaccurate);
   GnssFix fix;
-  fix.flags = 1 | 4;
+  fix.solution = kSolutionRtkFloat;
   fix.accuracy = 0.02;
   EXPECT_EQ(w.est.AddFix(fix, w.t), FixResult::kNotFixed);
 }
@@ -770,7 +770,7 @@ TEST(Consistency, CovarianceMatchesTheErrorsOfRandomRuns) {
       const Eigen::Vector2d velocity =
           AntennaPosition(State(0.0, 0.0, truth(2)), Eigen::Vector2d(speed - turn * lever(1), turn * lever(0)));
       GnssFix fix;
-      fix.flags = kFlagRtkFixed;
+      fix.solution = kSolutionRtkFixed;
       fix.accuracy = 0.02;
       fix.x = antenna(0) + 0.02 * normal(rng);
       fix.y = antenna(1) + 0.02 * normal(rng);

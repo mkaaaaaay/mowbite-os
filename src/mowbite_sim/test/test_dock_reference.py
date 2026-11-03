@@ -22,7 +22,7 @@ from geometry_msgs.msg import Twist
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
-from mowbite_msgs.msg import AbsolutePose, HardwareStatus, MapStatus, MqttPublish, RobotState
+from mowbite_msgs.msg import HardwareStatus, MapStatus, MqttPublish, RobotPose, RobotState
 from mowbite_msgs.srv import DriveTo, ReplaceMap
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
@@ -104,7 +104,7 @@ class Probe:
         self.node = rclpy.create_node("dock_probe")
         self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
         self.node.create_subscription(String, "map/json", self._map, LATCHED)
-        self.node.create_subscription(AbsolutePose, "localization/pose", self._pose, 10)
+        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
         self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
         self.node.create_subscription(HardwareStatus, "hw/status", self._hw, 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
@@ -259,7 +259,7 @@ class TestDockReference(unittest.TestCase):
         self.assertTrue(p.wait(lambda: p.robot and p.robot.current_state == "AREA_RECORDING", 10))
         # Forwards and back: the GPS course aligns the heading, which both points need.
         p.teleop(0.2, 2.5)
-        self.assertTrue(p.wait(lambda: p.pose.orientation_valid, 10), "the heading did not align")
+        self.assertTrue(p.wait(lambda: p.pose.heading_valid, 10), "the heading did not align")
         p.teleop(-0.2, 2.5)
         since = len(p.events)
         p.act(REC + "record_dock")
@@ -300,15 +300,15 @@ class TestDockReference(unittest.TestCase):
         self.assertIsNotNone(p.event(since, "STATE", 10, state="UNDOCKING"), p.events[since:])
         self.assertFalse([e for e in p.events[since:] if e["type"] == "MOWING_REFUSED"])
         # The heading of the station: the mower backed in going west and faces east.
-        self.assertTrue(p.wait(lambda: p.pose.orientation_valid and abs(p.pose.vehicle_heading) < math.radians(3), 5),
-                        p.pose.vehicle_heading)
+        self.assertTrue(p.wait(lambda: p.pose.heading_valid and abs(p.pose.heading) < math.radians(3), 5),
+                        p.pose.heading)
         p.act(ABORT)
         self.assertIsNotNone(p.event(since, "STATE", 5, state="IDLE"), p.events[since:])
         # Back onto the contacts by hand for the checks that follow.
         p.flags(place=[-1.0, 0.0, 0.0])
         self.assertTrue(p.wait(lambda: p.hw.dock_contact and abs(p.truth()["x"] + 1.0) < 0.001, 10), p.truth())
         self.assertTrue(p.wait(lambda: p.pose.position_accuracy <= 0.03
-                               and abs(p.pose.pose.pose.position.x + 1.0) < 0.05, 20), p.pose.pose.pose.position)
+                               and abs(p.pose.x + 1.0) < 0.05, 20), (p.pose.x, p.pose.y))
 
     def test_04_a_moved_station_is_a_reference_mismatch(self):
         p = self.probe

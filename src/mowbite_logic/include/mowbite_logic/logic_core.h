@@ -143,22 +143,20 @@ struct RobotStateData {
   int current_path_index = -1;
 };
 
-constexpr uint8_t kSensorTypeString = 1;
-constexpr uint8_t kSensorTypeDouble = 2;
+// What a sensor value means, numbered as in mowbite_msgs/SensorSpec.
+enum class SensorMeaning : uint8_t { kUnknown = 0, kVoltage, kCurrent, kTemperature, kRevolutions, kDistance };
 
 struct SensorDefinition {
   std::string id;
   std::string name;
   std::string unit;
-  uint8_t value_type = kSensorTypeDouble;
-  uint8_t value_description = 0;
-  bool has_min_max = false;
-  double min_value = 0;
-  double max_value = 0;
-  bool has_critical_low = false;
-  double lower_critical_value = 0;
-  bool has_critical_high = false;
-  double upper_critical_value = 0;
+  bool text = false;
+  SensorMeaning meaning = SensorMeaning::kUnknown;
+  // NaN where there is no limit.
+  double min = std::numeric_limits<double>::quiet_NaN();
+  double max = std::numeric_limits<double>::quiet_NaN();
+  double critical_low = std::numeric_limits<double>::quiet_NaN();
+  double critical_high = std::numeric_limits<double>::quiet_NaN();
 };
 
 struct SensorReading {

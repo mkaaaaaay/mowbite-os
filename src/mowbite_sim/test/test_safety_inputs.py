@@ -19,10 +19,11 @@ from ament_index_python.packages import get_package_share_directory
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix
-from mowbite_msgs.msg import AbsolutePose, HardwareStatus
+from mowbite_msgs.msg import GnssFix, HardwareStatus
 from mowbite_msgs.srv import SetBlade, SetEmergency
 from rcl_interfaces.msg import Log
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from sensor_msgs.msg import Imu
 
 WORK = tempfile.mkdtemp(prefix="mowbite_safety_")
 LINKS = {name: os.path.join(WORK, name) for name in ("mcu", "gnss", "imu")}
@@ -32,8 +33,8 @@ CUTTER = 11
 BLADE_STOP_TIME = 2.0
 IMU_GAP = HardwareStatus.REASON_LATCH | HardwareStatus.REASON_IMU_TIMEOUT
 NOT_STOPPED = HardwareStatus.REASON_LATCH | HardwareStatus.REASON_MOWER_NOT_STOPPED
-FIXED = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FIXED
-FLOAT = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FLOAT
+FIXED = GnssFix.RTK_FIXED
+FLOAT = GnssFix.RTK_FLOAT
 
 
 # The dimensions of the platform, which the logic needs to start.
@@ -88,10 +89,12 @@ class Probe:
         self.lock = threading.Lock()
         self.status = None
         self.pose = None
+        self.imu_seen = False
         self.logs = []
         self.node = rclpy.create_node("safety_inputs_probe")
         self.node.create_subscription(HardwareStatus, "hw/status", self._status, 10)
-        self.node.create_subscription(AbsolutePose, "gps/absolute_pose", self._pose, 10)
+        self.node.create_subscription(GnssFix, "gps/absolute_pose", self._pose, 10)
+        self.node.create_subscription(Imu, "imu/data", self._imu, qos_profile_sensor_data)
         # Like the rosout publishers, so lines logged before the match with a node still come in.
         rosout_qos = QoSProfile(depth=1000, reliability=ReliabilityPolicy.RELIABLE,
                                 durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -113,6 +116,10 @@ class Probe:
     def _pose(self, msg):
         with self.lock:
             self.pose = msg
+
+    def _imu(self, msg):
+        with self.lock:
+            self.imu_seen = True
 
     def _log(self, msg):
         with self.lock:
@@ -158,8 +165,12 @@ class TestSafetyInputs(unittest.TestCase):
         set_flags()
         cls.probe = Probe()
         # Free once telemetry and the first IMU samples arrived.
-        ready = cls.probe.wait(lambda p: p.status is not None and p.status.telemetry_ok and not p.status.emergency, 20)
+        ready = cls.probe.wait(
+            lambda p: p.imu_seen and p.status is not None and p.status.telemetry_ok and not p.status.emergency, 20)
         assert ready, "driver never ready"
+        # The IMU start time of the driver (2 s) has passed, so an IMU that never reached it shows as a block.
+        time.sleep(2.5)
+        assert cls.probe.wait(lambda p: not p.status.emergency, 5), "driver never got an IMU sample"
 
     @classmethod
     def tearDownClass(cls):
@@ -214,19 +225,19 @@ class TestSafetyInputs(unittest.TestCase):
                         [line for line in self.probe.logs if "Emergency" in line])
 
     def test_3_old_or_missing_corrections_count_as_float(self):
-        self.assertTrue(self.probe.wait(lambda p: p.pose is not None and p.pose.flags == FIXED, 5), "never fixed")
+        self.assertTrue(self.probe.wait(lambda p: p.pose is not None and p.pose.solution == FIXED, 5), "never fixed")
         set_flags(gnss_age=45.0)
-        p = self.probe.wait(lambda p: p.pose.flags == FLOAT and p.pose, 3)
+        p = self.probe.wait(lambda p: p.pose.solution == FLOAT and p.pose, 3)
         self.assertTrue(p, "old corrections stayed fixed")
-        self.assertAlmostEqual(p.position_accuracy, 0.3, places=5)
+        self.assertAlmostEqual(p.accuracy, 0.3, places=5)
         self.assertTrue(self.probe.logged("RTK fixed on corrections 45.0 s old (limit 30 s): counted as float"))
         set_flags()
-        self.assertTrue(self.probe.wait(lambda p: p.pose.flags == FIXED, 3), "fresh corrections did not fix again")
+        self.assertTrue(self.probe.wait(lambda p: p.pose.solution == FIXED, 3), "fresh corrections did not fix again")
         set_flags(gnss_age=None)
-        self.assertTrue(self.probe.wait(lambda p: p.pose.flags == FLOAT, 3), "missing age stayed fixed")
+        self.assertTrue(self.probe.wait(lambda p: p.pose.solution == FLOAT, 3), "missing age stayed fixed")
         self.assertTrue(self.probe.logged("RTK fixed without the age of its corrections"))
         set_flags()
-        self.assertTrue(self.probe.wait(lambda p: p.pose.flags == FIXED, 3))
+        self.assertTrue(self.probe.wait(lambda p: p.pose.solution == FIXED, 3))
 
 
 @launch_testing.post_shutdown_test()

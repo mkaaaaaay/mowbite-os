@@ -46,30 +46,21 @@ const char* const kReasonNames[] = {"LATCH",
                                     "IMU_TIMEOUT",
                                     "MOWER_NOT_STOPPED"};
 
-// SensorInfo value descriptions
-constexpr uint8_t kTemperature = 1;
-constexpr uint8_t kVoltage = 4;
-constexpr uint8_t kCurrent = 5;
-constexpr uint8_t kDistance = 7;
-constexpr uint8_t kRpm = 8;
-
-SensorDefinition Range(std::string id, std::string name, std::string unit, uint8_t description, double min,
+SensorDefinition Range(std::string id, std::string name, std::string unit, SensorMeaning meaning, double min,
                        double max) {
   SensorDefinition s;
   s.id = std::move(id);
   s.name = std::move(name);
   s.unit = std::move(unit);
-  s.value_description = description;
-  s.has_min_max = true;
-  s.min_value = min;
-  s.max_value = max;
+  s.meaning = meaning;
+  s.min = min;
+  s.max = max;
   return s;
 }
 
 SensorDefinition Temperature(std::string id, std::string name, double min, double max, double critical_high) {
-  SensorDefinition s = Range(std::move(id), std::move(name), "deg.C", kTemperature, min, max);
-  s.has_critical_high = true;
-  s.upper_critical_value = critical_high;
+  SensorDefinition s = Range(std::move(id), std::move(name), "deg.C", SensorMeaning::kTemperature, min, max);
+  s.critical_high = critical_high;
   return s;
 }
 
@@ -580,27 +571,28 @@ std::vector<ActionGroup> LogicCore::Actions() const {
 std::vector<SensorDefinition> LogicCore::Sensors() const {
   std::vector<SensorDefinition> sensors;
   SensorDefinition battery =
-      Range("om_v_battery", "V Battery", "V", kVoltage, config_.battery_empty_voltage, config_.battery_full_voltage);
-  battery.has_critical_low = true;
-  battery.lower_critical_value = config_.battery_empty_voltage;
+      Range("om_v_battery", "V Battery", "V", SensorMeaning::kVoltage, config_.battery_empty_voltage,
+            config_.battery_full_voltage);
+  battery.critical_low = config_.battery_empty_voltage;
   sensors.push_back(battery);
   // The MCU reports neither a charge voltage nor a charger state: both are derived, the names say so.
-  sensors.push_back(Range("om_v_charge", "V Charge (dock contact)", "V", kVoltage, 0, config_.dock_charge_voltage + 2));
-  sensors.push_back(Range("om_charge_current", "Charge Current", "A", kCurrent, 0, 7));
+  sensors.push_back(
+      Range("om_v_charge", "V Charge (dock contact)", "V", SensorMeaning::kVoltage, 0, config_.dock_charge_voltage + 2));
+  sensors.push_back(Range("om_charge_current", "Charge Current", "A", SensorMeaning::kCurrent, 0, 7));
   SensorDefinition charge_state;
   charge_state.id = "om_charge_state";
   charge_state.name = "Charge State (derived)";
-  charge_state.value_type = kSensorTypeString;
+  charge_state.text = true;
   sensors.push_back(charge_state);
-  sensors.push_back(Range("om_mow_motor_rpm", "Mow Motor Revolutions", "rpm", kRpm, 0, 3500));
-  sensors.push_back(Range("om_mow_motor_current", "Mow Motor Current", "A", kCurrent, 0, 5));
+  sensors.push_back(Range("om_mow_motor_rpm", "Mow Motor Revolutions", "rpm", SensorMeaning::kRevolutions, 0, 3500));
+  sensors.push_back(Range("om_mow_motor_current", "Mow Motor Current", "A", SensorMeaning::kCurrent, 0, 5));
   // One temperature per motor board, so no separate mow ESC temperature. Own limits: the drive motors hold position
   // up to 68 degC, warn above 80.
   SensorDefinition gps_accuracy;
   gps_accuracy.id = "om_gps_accuracy";
   gps_accuracy.name = "GPS Accuracy";
   gps_accuracy.unit = "m";
-  gps_accuracy.value_description = kDistance;
+  gps_accuracy.meaning = SensorMeaning::kDistance;
   sensors.push_back(gps_accuracy);
   sensors.push_back(Temperature("om_mow_motor_temp", "Mow Motor Temp", 0, 100, 80));
   sensors.push_back(Temperature("om_left_esc_temp", "Left ESC Temp", 0, 100, 80));

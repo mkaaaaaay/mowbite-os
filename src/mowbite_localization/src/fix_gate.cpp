@@ -8,7 +8,7 @@ FixGate::FixGate(const GateConfig& config) : config_(config) {
 }
 
 std::optional<FixResult> FixGate::Reject(const GnssFix& fix) const {
-  if ((fix.flags & kFlagRtkFixed) == 0) return FixResult::kNotFixed;
+  if (fix.solution != kSolutionRtkFixed) return FixResult::kNotFixed;
   if (!(fix.accuracy <= config_.max_accuracy) || !std::isfinite(fix.x) || !std::isfinite(fix.y)) {
     return FixResult::kInaccurate;
   }
