@@ -522,19 +522,36 @@ def transpose(a):
     return [list(col) for col in zip(*a)]
 
 
-def wit_frames(pose, mount_rpy_deg, gyro_bias_dps=0.0, tilt_deg=(0.0, 0.0)):
-    """Acceleration, rate and angle frames of the base, tilted by roll and pitch, with the sensor turned by the mount
-    rotation.
+def ground(slope_deg, slope_heading_deg):
+    """The turn of a ground that rises by slope_deg towards slope_heading_deg (map frame): about the level axis across
+    that heading."""
+    axis = math.radians(slope_heading_deg) + math.pi / 2
+    angle = -math.radians(slope_deg)
+    # Rodrigues for the unit axis (cos a, sin a, 0).
+    ux, uy = math.cos(axis), math.sin(axis)
+    c, s = math.cos(angle), math.sin(angle)
+    return [[c + ux * ux * (1 - c), ux * uy * (1 - c), uy * s],
+            [uy * ux * (1 - c), c + uy * uy * (1 - c), -ux * s],
+            [-uy * s, ux * s, c]]
 
-    The driver turns sensor to base with R_mount; so the sensor sees the base through its transpose.
+
+def wit_frames(pose, mount_rpy_deg, gyro_bias_dps=0.0, tilt_deg=(0.0, 0.0), error_rpy_deg=(0.0, 0.0, 0.0),
+               slope=(0.0, 0.0), gyro_scale=1.0):
+    """Acceleration, rate and angle frames of the base, tilted by roll and pitch (in the frame of the base) and standing
+    on the slope (in the map frame), with the sensor turned by the mount rotation and off it by the error rotation.
+
+    The driver turns sensor to base with R_mount; so the sensor sees the base through its transpose. The error is the
+    mounting the calibration drive finds: on level ground the driver's IMU reads gravity turned by it.
     """
-    mount = rotation_rpy(*(math.radians(a) for a in mount_rpy_deg))
+    mount = matmul(rotation_rpy(*(math.radians(a) for a in error_rpy_deg)),
+                   rotation_rpy(*(math.radians(a) for a in mount_rpy_deg)))
     to_sensor = transpose(mount)
-    r_sensor = matmul(rotation_rpy(math.radians(tilt_deg[0]), math.radians(tilt_deg[1]), pose.yaw), mount)
+    base = matmul(ground(*slope), rotation_rpy(math.radians(tilt_deg[0]), math.radians(tilt_deg[1]), pose.yaw))
+    r_sensor = matmul(base, mount)
     # Without acceleration the accelerometer reads 1 g up, in the frame of the sensor; the gyro the yaw rate about the
-    # axis of the base.
+    # axis of the base, gyro_scale times.
     acc = [r_sensor[2][i] for i in range(3)]
-    turn = pose.angular + pose.slip
+    turn = (pose.angular + pose.slip) * gyro_scale
     rate = [math.degrees(to_sensor[i][2] * turn) + (gyro_bias_dps if i == 2 else 0.0) for i in range(3)]
     roll = math.degrees(math.atan2(r_sensor[2][1], r_sensor[2][2]))
     pitch = math.degrees(math.asin(max(-1.0, min(1.0, -r_sensor[2][0]))))
@@ -638,6 +655,11 @@ def main():
     parser.add_argument("--mount-rpy-deg", type=float, nargs=3, default=[180.0, 0.0, 0.0],
                         help="IMU mount rotation, upside down by default")
     parser.add_argument("--gyro-bias-dps", type=float, default=0.0, help="constant yaw rate error of the sensor")
+    parser.add_argument("--gyro-scale", type=float, default=1.0, help="measured / true yaw rate of the sensor")
+    parser.add_argument("--imu-error-rpy-deg", type=float, nargs=3, default=[0.0, 0.0, 0.0],
+                        help="the sensor turned off its configured mount: what the calibration measures")
+    parser.add_argument("--slope", type=float, nargs=2, default=[0.0, 0.0], metavar=("DEG", "HEADING_DEG"),
+                        help="the ground rises by DEG towards HEADING_DEG (map frame) everywhere")
     parser.add_argument("--gnss-noise-m", type=float, default=0.0, help="standard deviation of the antenna position")
     parser.add_argument("--yaw-drift", type=float, default=0.0, help="yaw error in rad per metre driven (slip)")
     parser.add_argument("--seed", type=int, default=1, help="seed of the position noise")
@@ -771,7 +793,8 @@ def main():
                 if not flags.get("imu_off", 0):
                     tilt = (float(flags.get("tilt_roll", 0.0)), float(flags.get("tilt_pitch", 0.0)))
                     bias = float(flags.get("gyro_bias_dps", args.gyro_bias_dps))
-                    send(imu.fd, wit_frames(pose, args.mount_rpy_deg, bias, tilt))
+                    send(imu.fd, wit_frames(pose, args.mount_rpy_deg, bias, tilt, args.imu_error_rpy_deg,
+                                            (args.slope[0], args.slope[1]), args.gyro_scale))
             if args.state and now >= next_state:
                 next_state = now + 0.2
                 write_state(args.state, now, pose, dock_ok)
