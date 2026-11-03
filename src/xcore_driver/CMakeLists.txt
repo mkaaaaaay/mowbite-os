@@ -4,6 +4,8 @@ project(xcore_driver)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-Wall -Wextra -Wpedantic)
+# No fused multiply-add, so amd64 and arm64 compute the same results
+add_compile_options(-ffp-contract=off)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
