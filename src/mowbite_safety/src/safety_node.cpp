@@ -75,7 +75,7 @@ class SafetyNode : public rclcpp::Node {
           std::lock_guard<std::mutex> lock(mutex_);
           filter_.OnCapabilities(!msg->safety_measurement_date.empty(), msg->max_linear_speed, msg->max_angular_speed);
         });
-    imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
+    imu_in_ = create_subscription<sensor_msgs::msg::Imu>(
         "imu/data", rclcpp::SensorDataQoS(), [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) { OnImu(*msg); });
     pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
         "localization/pose", 10, [this](mowbite_msgs::msg::RobotPose::ConstSharedPtr msg) {
@@ -264,7 +264,7 @@ class SafetyNode : public rclcpp::Node {
   rclcpp::Subscription<DriveCommand>::SharedPtr drive_sub_;
   rclcpp::Subscription<HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
-  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_in_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr pose_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr map_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::MapStatus>::SharedPtr map_status_sub_;
