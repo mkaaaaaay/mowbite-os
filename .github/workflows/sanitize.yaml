@@ -1,0 +1,50 @@
+# The unit tests built with AddressSanitizer and UndefinedBehaviorSanitizer, once a week and by hand.
+name: sanitize
+
+on:
+  schedule:
+    - cron: '30 1 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/dev-image
+        with:
+          planner-key: ${{ secrets.PLANNER_DEPLOY_KEY }}
+
+      # Leaks off: ROS keeps singletons until exit; every other finding fails its test.
+      - name: Build and run the unit tests with sanitizers
+        run: |
+          mkdir -p out
+          docker run --rm -v "$PWD/src:/ws/src:ro" -v "$PWD/out:/out" \
+            -e ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 -e UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+            mowbite-os-dev:jazzy bash -c '
+            . /opt/ros/jazzy/setup.sh && . /opt/mowbite_planner/setup.sh && cd /ws
+            san="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
+            colcon build --packages-skip mowbite_sim --cmake-args -DCMAKE_BUILD_TYPE=Debug \
+              "-DCMAKE_C_FLAGS=$san" "-DCMAKE_CXX_FLAGS=$san" \
+              "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined" \
+              "-DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address,undefined" > /out/build.txt 2>&1 || exit 1
+            colcon test --packages-skip mowbite_sim --return-code-on-test-failure > /out/test.txt 2>&1; rc=$?
+            colcon test-result --verbose | tee /out/result.txt
+            exit $rc'
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### sanitizers"
+            echo "- $(grep '^Summary:' out/result.txt 2>/dev/null || echo 'no test result, see the build')"
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E -A20 'ERROR: AddressSanitizer|runtime error:' out/test.txt 2>/dev/null | head -80 || true
+          tail -40 out/build.txt 2>/dev/null || true
