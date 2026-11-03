@@ -21,6 +21,9 @@ SERVICES = {"1": {"type": "EmergencyService", "version": 2, "inputs": [{"id": 0,
                   "outputs": [{"id": 0, "name": "Emergency Reason", "type": "uint16_t"}],
                   "enums": [{"id": "EmergencyReason", "base_type": "uint16_t", "bitmask": True,
                              "values": {name: bit for name, bit in xc.REASON_BITS.items()}}]},
+            "2": {"type": "DiffDriveService", "version": 1,
+                  "inputs": [{"id": 0, "name": "Control Twist", "type": "double[6]"}],
+                  "outputs": [{"id": 7, "name": "Wheel Ticks", "type": "uint32_t[2]"}]},
             "4": {"type": "ImuService", "version": 1, "outputs": [{"id": 0, "name": "Axes", "type": "double[9]"}]},
             "7": {"type": "InputService", "version": 1,
                   "outputs": [{"id": 0, "name": "Active Inputs", "type": "uint64_t"},
@@ -293,6 +296,50 @@ class Files(unittest.TestCase):
         yaw, = imu["yaw_episodes"]
         self.assertEqual(yaw["sign"], "+")
         self.assertAlmostEqual(yaw["angle_deg"], math.degrees(0.5 * 0.99), delta=0.6)
+
+    def test_wheel_runs_and_full_duty_speed(self):
+        s = Session()
+        tpm = 2025.0
+
+        def twist(board_t, v):
+            s.host(s.t0 + board_t - s.board0, message(xc.DATA, 2, struct.pack("<6d", v, 0, 0, 0, 0, 0), arg2=0))
+        left = right = 2 ** 32 - 500.0
+        t = 100.0
+        while t < 116.0:
+            speed = 0.0
+            if 100.2 <= t < 104.0:
+                speed = 0.09
+            elif 106.0 <= t < 106.5:
+                speed = 0.05
+            elif 110.0 <= t < 112.04:
+                speed = 0.045
+            left += speed * tpm * 0.04
+            right -= speed * tpm * 0.04
+            s.board(t, lambda st, l=int(left) % 2 ** 32, r=int(right) % 2 ** 32:
+                    transaction(2, st, (7, struct.pack("<2I", l, r))))
+            t = round(t + 0.04, 6)
+        for k in range(30):
+            twist(100.1 + 0.1 * k, 0.1)
+        for k in range(20):
+            twist(110.0 + 0.1 * k, 0.05)
+        for k in range(3):
+            twist(112.0 + 0.1 * k, 0.0)
+        path = os.path.join(self.dir, "drive.pcap")
+        s.write(path).close()
+        drive = self.report(path)["boots"][0]["drive"]
+        first, second, third = drive["runs"]
+        self.assertTrue(first["fresh_command"])
+        self.assertAlmostEqual(first["host_silent_s"], 1.0, delta=0.05)
+        self.assertAlmostEqual(first["since_last_command_s"], 1.0, delta=0.05)
+        self.assertIsNone(first["since_zero_command_s"])
+        self.assertFalse(second["fresh_command"])
+        self.assertTrue(third["fresh_command"])
+        self.assertAlmostEqual(third["since_zero_command_s"], 0.04, delta=0.045)
+        self.assertEqual(third["zeros_after_last_command"], 3)
+        steady = drive["steady"][0]
+        self.assertAlmostEqual(steady["per_duty_left"], 0.9, delta=0.02)
+        self.assertAlmostEqual(steady["per_duty_right"], 0.9, delta=0.02)
+        self.assertIn("WARNING", xc.text_report(self.report(path)))
 
     def test_text_report_renders(self):
         path = os.path.join(self.dir, "text.pcap")

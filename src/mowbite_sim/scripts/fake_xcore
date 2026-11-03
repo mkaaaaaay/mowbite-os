@@ -19,7 +19,8 @@ gps_accuracy) is read on every cycle; restart
 restarts the board whenever its value changes, as does a GPS configuration other than the first one. Flags for what
 the mower may do wrong: rpm_zero (the blade reports 0 rpm), wheel_speed (both wheels turn forward at this many m/s
 whatever the duty), zero_duty_ignored (a duty of 0, the drive timeout and an emergency leave the wheels at the last duty
-other than 0), roll and pitch (tilt of the body in degrees, seen by the IMU), foreign_host (another host claims every
+other than 0), roll and pitch (tilt of the body in degrees, seen by the IMU), yaw_rate (rad/s the body turns, as by
+hand, seen by the IMU), foreign_host (another host claims every
 claimed service again this many seconds after this host claimed it; the board then answers it, not this host).
 Every datagram from the host goes to a JSON lines log, --state writes the board as JSON, --pcap every datagram in both
 directions with one clock, as tcpdump would see it on the host's interface.
@@ -259,7 +260,7 @@ class Board:
         self.args = args
         self.descriptions = {int(k): v for k, v in json.load(open(args.services))["services"].items()}
         self.log = Log(args.log, args.log_max_mb * 1024 * 1024)
-        self.pcap = Pcap(args.pcap, args.pcap_max_mb * 1024 * 1024)
+        self.pcap = Pcap(args.pcap, int(args.pcap_max_mb * 1024 * 1024))
         self.t0 = time.monotonic()
         self.restarts = 0
         self.restart_flag = None
@@ -694,7 +695,8 @@ class Board:
         gravity = (-GRAVITY * math.sin(pitch), GRAVITY * math.sin(roll) * math.cos(pitch),
                    GRAVITY * math.cos(roll) * math.cos(pitch))
         body_acc = (gravity[0] + noise(0.02), gravity[1] + noise(0.02), gravity[2] + noise(0.02))
-        body_rate = (noise(0.001), noise(0.001), getattr(self, "w", 0.0) + noise(0.001))
+        yaw = getattr(self, "w", 0.0) + float(flags.get("yaw_rate", 0.0))
+        body_rate = (noise(0.001), noise(0.001), yaw + noise(0.001))
         # The sensor lies upside down: its y and z point against the body's.
         raw_acc = (body_acc[0], -body_acc[1], -body_acc[2])
         raw_rate = (body_rate[0], -body_rate[1], -body_rate[2])
@@ -820,7 +822,7 @@ def main():
     parser.add_argument("--log")
     parser.add_argument("--log-max-mb", type=int, default=20)
     parser.add_argument("--pcap", help="capture of every datagram in both directions")
-    parser.add_argument("--pcap-max-mb", type=int, default=50)
+    parser.add_argument("--pcap-max-mb", type=float, default=50.0)
     parser.add_argument("--state")
     args = parser.parse_args()
     if args.group_port in (8007, 10000) or 65102 <= args.group_port <= 65104:

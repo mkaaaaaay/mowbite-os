@@ -4,6 +4,10 @@
 Reads a pcap (tcpdump -w, any byte order, µs or ns, Ethernet, Linux cooked v1/v2 or raw IP), finds the board by its
 announcements (or its heartbeats), decodes what the board sends with its own clock (µs since its start, 32 bits) and
 what the host sends, and reports:
+  - every run of the wheels (from the ticks): how it started (with a fresh command or not) and how long after its
+    cause it stood (the host falling silent, a command of 0, an emergency reason), the zeros the host sent after its
+    last command, and per steady command the wheel speed per unit of duty (full_duty_speed);
+  - every run of the blade (from its rpm) with the same causes;
   - every press of an input: the delay from the input mask (or the input event) to the emergency report that carries
     the matching reason, in board time; whether the reason stays latched after the release, and who cleared it;
   - the emergency reasons over time;
@@ -57,7 +61,10 @@ NX60I_INPUTS = [
 DEFAULT_SERVICES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src", "mowbite_sim",
                                 "config", "xcore_nx60i_services.json")
 GRAVITY = 9.80665
+# The NX60i: ticks per m and wheel distance as configured, the right counter falls going forward.
+DRIVE_DEFAULTS = {"ticks_per_meter": 2025.0, "wheel_distance": 0.3556, "right_sign": -1}
 RELEASE_SETTLE = 0.25
+HOST_GAP = 0.3
 
 
 # Capture file ---------------------------------------------------------------------------------------------------------
@@ -346,6 +353,7 @@ class Boot:
         self.last_raw = None
         self.wraps = 0
         self.last_pair = None
+        self.pairs = []
 
     def board_time(self, raw, capture_t):
         raw &= 0xFFFFFFFF
@@ -354,7 +362,16 @@ class Boot:
         self.last_raw = raw
         t = (self.wraps * (1 << 32) + raw) / 1e6
         self.last_pair = (capture_t, t)
+        if not self.pairs or capture_t - self.pairs[-1][0] >= 0.2:
+            self.pairs.append((capture_t, t))
         return t
+
+    def at_capture_time(self, capture_t):
+        """Board time of any moment of the capture clock (the host's wall clock) while this run lasts."""
+        i = bisect.bisect_right([p[0] for p in self.pairs], capture_t) - 1
+        if i < 0:
+            return None
+        return self.pairs[i][1] + capture_t - self.pairs[i][0]
 
     def estimate(self, capture_t):
         """Board time of a host datagram from the board datagram seen last before it (the IMU comes every 10 ms)."""
@@ -374,6 +391,12 @@ class Capture:
         self.input_events = []   # (boot, board_t, capture_t, byte0, byte1)
         self.imu = []            # (boot, board_t, capture_t, values)
         self.host_emergency = []  # (boot, board_t estimate, capture_t, set bits, clear bits)
+        self.ticks = []          # (boot, board_t, capture_t, left, right)
+        self.blade_rpm = []      # (boot, board_t, capture_t, rpm)
+        self.twists = []         # (boot, board_t estimate, capture_t, v, w)
+        self.blade_set = []      # (boot, board_t estimate, capture_t, speed)
+        self.host_times = []     # (boot, board_t estimate) of every datagram from the host
+        self.drive_config = {}
         self.input_config = None
         self.multiple_delays = {}
         self.dangerous = Counter()
@@ -467,6 +490,8 @@ def load_capture(path, services_path):
                 record_outputs(cap, boot, sid, values, board_t, p.t)
         else:
             board_t = boot.estimate(p.t)
+            if board_t is not None:
+                cap.host_times.append((boot.index, board_t))
             if msg_type in (DATA, TRANSACTION):
                 values = [(arg2, body)] if msg_type == DATA else sections(body)
                 if values is None:
@@ -498,16 +523,32 @@ def record_outputs(cap, boot, sid, values, board_t, capture_t):
             cap.input_events.append((boot.index, board_t, capture_t, value[0], value[1]))
         elif sid == IMU and cid == 0 and len(value) >= 6:
             cap.imu.append((boot.index, board_t, capture_t, value))
+        elif sid == DIFF_DRIVE and cid == 7 and len(value) == 2:
+            cap.ticks.append((boot.index, board_t, capture_t, value[0], value[1]))
+        elif sid == MOWER and cid == 6:
+            cap.blade_rpm.append((boot.index, board_t, capture_t, value))
 
 
 def record_inputs(cap, boot, sid, values, board_t, capture_t):
     for cid, raw in values:
+        if board_t is None:
+            continue
         if sid == EMERGENCY and cid == 0 and len(raw) == 4:
             set_bits, clear_bits = struct.unpack("<HH", raw)
             cap.host_emergency.append((boot.index, board_t, capture_t, set_bits, clear_bits))
+        elif sid == DIFF_DRIVE and cid == 0 and len(raw) == 48:
+            twist = struct.unpack("<6d", raw)
+            cap.twists.append((boot.index, board_t, capture_t, twist[0], twist[5]))
+        elif sid == MOWER and cid == 0 and len(raw) == 4:
+            cap.blade_set.append((boot.index, board_t, capture_t, struct.unpack("<f", raw)[0]))
 
 
 def record_configuration(cap, sid, values):
+    if sid == DIFF_DRIVE:
+        for cid, raw in values:
+            if cid in (0, 1) and len(raw) == 8:
+                cap.drive_config["ticks_per_meter" if cid == 0 else "wheel_distance"] = struct.unpack("<d", raw)[0]
+        return
     if sid != INPUT:
         return
     for cid, raw in values:
@@ -676,7 +717,8 @@ def analyse_imu(cap, boot, tilt_limits, report_tilt, yaw_threshold):
     times = [t for t, _ in samples]
     gaps = [b - a for a, b in zip(times, times[1:])]
     span = times[-1] - times[0]
-    out.update(rate_hz=(len(samples) - 1) / span if span > 0 else None, median_gap_ms=sorted(gaps)[len(gaps) // 2] * 1e3,
+    out.update(rate_hz=(len(samples) - 1) / span if span > 0 else None,
+               median_gap_ms=sorted(gaps)[len(gaps) // 2] * 1e3,
                max_gap_ms=max(gaps) * 1e3, max_gap_at=times[gaps.index(max(gaps)) + 1], board_span_s=span)
     tilt, roll, pitch, rest = [], [], [], []
     for _, v in samples:
@@ -768,6 +810,165 @@ def yaw_episodes(times, rates, threshold):
     return out
 
 
+def last_before(samples, t):
+    """Index of the last sample (sorted by time in [0]) at or before t, or None."""
+    i = bisect.bisect_right([s[0] for s in samples], t) - 1
+    return i if i >= 0 else None
+
+
+def first_reason_in(reports, start, end, names):
+    """First report in (start, end] that sets a bit other than the ones already set at start."""
+    before = 0
+    for t, value in reports:
+        if t <= start:
+            before = value
+            continue
+        if t > end:
+            break
+        new = value & ~before & ~LATCH
+        if new:
+            return t, reason_names(new, names)
+        before = value
+    return None, None
+
+
+def cause_times(stop, run_start, twists, host_times, reports, names, active, emergency_inputs):
+    """How long before `stop` the host fell silent, sent its last emergency input (the board's 1.0 s count from
+    it), its last command and its first 0, and a reason came."""
+    out = {"host_silent_s": None}
+    i = last_before(emergency_inputs, stop)
+    out["since_emergency_input_s"] = None if i is None else stop - emergency_inputs[i][0]
+    # The host fell silent: its last datagram before a gap of HOST_GAP s or more that began in the run.
+    i = last_before(host_times, stop)
+    while i is not None and i >= 0 and host_times[i][0] >= run_start - HOST_GAP:
+        following = host_times[i + 1][0] if i + 1 < len(host_times) else float("inf")
+        if following - host_times[i][0] >= HOST_GAP:
+            out["host_silent_s"] = stop - host_times[i][0]
+            break
+        i -= 1
+    last_cmd = next((t for t, value in reversed(twists) if t <= stop and active(value)), None)
+    out["since_last_command_s"] = None if last_cmd is None else stop - last_cmd
+    zero = None if last_cmd is None else next((t for t, value in twists if last_cmd < t <= stop and not active(value)),
+                                              None)
+    out["since_zero_command_s"] = None if zero is None else stop - zero
+    t_reason, reason = first_reason_in(reports, run_start, stop, names)
+    out["reason"] = reason
+    out["since_reason_s"] = None if t_reason is None else stop - t_reason
+    return out
+
+
+def runs(series, moving, still_s):
+    """(start, stop) of each stretch in which `moving` holds, split by still periods of still_s or more."""
+    out, start, last_move = [], None, None
+    for t, value in series:
+        if not moving(value):
+            continue
+        if start is not None and t - last_move >= still_s:
+            out.append((start, last_move))
+            start = None
+        if start is None:
+            start = t
+        last_move = t
+    if start is not None:
+        out.append((start, last_move))
+    return out
+
+
+def analyse_drive(cap, boot, names, ticks_per_meter, wheel_distance, right_sign):
+    ticks = [(t[1], t[3], t[4]) for t in cap.ticks if t[0] == boot]
+    twists = [(t[1], (t[3], t[4])) for t in cap.twists if t[0] == boot]
+    host_times = [(t[1],) for t in cap.host_times if t[0] == boot]
+    reports = [(e[1], e[3]) for e in cap.emergency if e[0] == boot]
+    emergency_inputs = [(h[1],) for h in cap.host_emergency if h[0] == boot]
+    out = {"ticks_per_meter": ticks_per_meter, "wheel_distance": wheel_distance, "runs": [], "steady": []}
+    speeds = []
+    for (t0, l0, r0), (t1, l1, r1) in zip(ticks, ticks[1:]):
+        if t1 <= t0:
+            continue
+        dl = ((l1 - l0 + (1 << 31)) % (1 << 32)) - (1 << 31)
+        dr = ((r1 - r0 + (1 << 31)) % (1 << 32)) - (1 << 31)
+        speeds.append((t1, (dl, dr, dl / ticks_per_meter / (t1 - t0), right_sign * dr / ticks_per_meter / (t1 - t0))))
+    out["samples"] = len(speeds)
+
+    def active(value):
+        return abs(value[0]) > 1e-6 or abs(value[1]) > 1e-6
+
+    for start, last_move in runs(speeds, lambda v: v[0] != 0 or v[1] != 0, 0.3):
+        if speeds[-1][0] - last_move < 0.3:
+            out["runs"].append({"start": start, "stop": None, "ongoing_at_end": True})
+            continue
+        # The wheels stood at the latest by the first interval without a tick: the safe side of the stop.
+        last_tick = next(t for t, _ in speeds if t > last_move)
+        i = last_before(twists, start)
+        command = None if i is None else {"age_s": start - twists[i][0], "v": twists[i][1][0], "w": twists[i][1][1]}
+        fresh = command is not None and active((command["v"], command["w"])) and command["age_s"] <= 0.25
+        run = {"start": start, "stop": last_tick, "last_tick": last_move, "seconds": last_tick - start,
+               "command_at_start": command,
+               "fresh_command": fresh,
+               **cause_times(last_tick, start, twists, host_times, reports, names, active, emergency_inputs)}
+        zeros = None
+        if run["since_last_command_s"] is not None:
+            last_command = last_tick - run["since_last_command_s"]
+            zeros = 0
+            for t, value in twists:
+                if t <= last_command:
+                    continue
+                if active(value):
+                    break
+                zeros += 1
+        run["zeros_after_last_command"] = zeros
+        out["runs"].append(run)
+    # Steady commands: the same twist for 1.5 s or more; the speed is taken after 0.7 s.
+    groups, current = [], None
+    for t, value in twists:
+        key = (round(value[0], 4), round(value[1], 4))
+        if current and current["key"] == key and t - current["last"] < 0.5:
+            current["last"] = t
+            continue
+        current = {"key": key, "first": t, "last": t}
+        groups.append(current)
+    for g in groups:
+        v, w = g["key"]
+        if not active((v, w)) or g["last"] - g["first"] < 1.5:
+            continue
+        window = [s for t, s in speeds if g["first"] + 0.7 <= t <= g["last"]]
+        if not window:
+            continue
+        left = sum(s[2] for s in window) / len(window)
+        right = sum(s[3] for s in window) / len(window)
+        duty = (v - w * wheel_distance / 2, v + w * wheel_distance / 2)
+        out["steady"].append({"from": g["first"], "seconds": g["last"] - g["first"], "v": v, "w": w,
+                              "duty_left": duty[0], "duty_right": duty[1], "speed_left": left, "speed_right": right,
+                              "per_duty_left": left / duty[0] if abs(duty[0]) > 0.005 else None,
+                              "per_duty_right": right / duty[1] if abs(duty[1]) > 0.005 else None})
+    return out
+
+
+def analyse_blade(cap, boot, names, spinning_rpm):
+    rpm = [(b[1], b[3]) for b in cap.blade_rpm if b[0] == boot]
+    sets = [(b[1], b[3]) for b in cap.blade_set if b[0] == boot]
+    host_times = [(t[1],) for t in cap.host_times if t[0] == boot]
+    reports = [(e[1], e[3]) for e in cap.emergency if e[0] == boot]
+    emergency_inputs = [(h[1],) for h in cap.host_emergency if h[0] == boot]
+    out = {"samples": len(rpm), "runs": []}
+
+    def active(value):
+        return abs(value) > 1e-6
+
+    for start, last in runs(rpm, lambda r: abs(r) >= spinning_rpm, 0.6):
+        i = last_before(sets, start)
+        setpoint = None if i is None else {"age_s": start - sets[i][0], "speed": sets[i][1]}
+        below = next(((t, r) for t, r in rpm if t > last), None)
+        zero = next((t for t, r in rpm if t > last and r == 0), None)
+        stop = below[0] if below else None
+        run = {"start": start, "last_spinning": last, "below_at": stop, "zero_at": zero, "setpoint_at_start": setpoint,
+               "fresh_setpoint": setpoint is not None and active(setpoint["speed"]) and setpoint["age_s"] <= 1.0}
+        if stop is not None:
+            run.update(cause_times(stop, start, sets, host_times, reports, names, active, emergency_inputs))
+        out["runs"].append(run)
+    return out
+
+
 def reason_changes(cap, boot, names):
     out, previous = [], None
     for b, t, ct, value in cap.emergency:
@@ -789,7 +990,52 @@ def host_clears(cap, boot, names):
     return out
 
 
-def analyse(cap, inputs, tilt_limits, report_tilt, yaw_threshold):
+def load_marks(path):
+    """Marks, signals, aborts and findings of a recording of measure.py: (wall clock, kind, text)."""
+    out = []
+    with open(path) as f:
+        for line in f:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            kind = entry.get("kind")
+            if kind == "mark":
+                out.append((entry["wall"], kind, f"{entry['step']} {entry['text']}"))
+            elif kind == "signal":
+                out.append((entry["wall"], kind, entry["signal"]))
+            elif kind in ("abort", "finding"):
+                out.append((entry["wall"], kind, entry.get("why") or entry.get("text", "")))
+            elif kind == "cmd":
+                out.append((entry["wall"], kind, (entry["v"], entry["w"])))
+    return out
+
+
+def place_marks(cap, boot, marks):
+    """Marks within this run of the board, in board time."""
+    starts = [b.first_seen for b in cap.boots]
+    end = starts[boot.index + 1] if boot.index + 1 < len(starts) else float("inf")
+    out = []
+    for wall, kind, text in marks:
+        if boot.first_seen <= wall < end:
+            t = boot.at_capture_time(wall)
+            if t is not None:
+                out.append({"board_t": t, "kind": kind, "text": text})
+    return out
+
+
+def step_at(marks, t):
+    step = None
+    for m in marks:
+        if m["kind"] == "mark" and m["board_t"] <= t:
+            step = m["text"]
+    return step
+
+
+def analyse(cap, inputs, tilt_limits, report_tilt, yaw_threshold, drive=None, blade_rpm=100.0, marks=None):
+    """drive: ticks_per_meter, wheel_distance (the configuration in the capture wins) and right_sign; marks from
+    load_marks."""
+    drive = {**DRIVE_DEFAULTS, **(drive or {}), **cap.drive_config}
     names = (cap.descriptions[EMERGENCY].reason_bits if EMERGENCY in cap.descriptions else {}) or REASON_BITS
     if cap.input_config:
         inputs, inputs_from = cap.input_config, "the input configuration in the capture"
@@ -801,7 +1047,9 @@ def analyse(cap, inputs, tilt_limits, report_tilt, yaw_threshold):
                           if cap.span[0] is not None else 0, **cap.stats_info,
                           "malformed": dict(cap.malformed),
                           "dangerous_ports": {f"{p} {port}": n for (p, port), n in cap.dangerous.items()}},
-              "inputs_from": inputs_from, "multiple_delays_ms": cap.multiple_delays, "boots": []}
+              "inputs_from": inputs_from, "multiple_delays_ms": cap.multiple_delays,
+              "drive_from": "the configuration in the capture" if cap.drive_config else "defaults or arguments",
+              "boots": []}
     report["datagrams"] = {f"{d} {sid} {TYPE_NAMES.get(mt, hex(mt))}": n
                            for (d, sid, mt), n in sorted(cap.counts.items())}
     for boot in cap.boots:
@@ -811,7 +1059,21 @@ def analyse(cap, inputs, tilt_limits, report_tilt, yaw_threshold):
             "first_seen_capture_t": boot.first_seen, "input_event_layout": layout,
             "presses": rows, "reasons": reason_changes(cap, boot.index, names),
             "host_emergency": host_clears(cap, boot.index, names),
-            "imu": analyse_imu(cap, boot.index, tilt_limits, report_tilt, yaw_threshold)})
+            "imu": analyse_imu(cap, boot.index, tilt_limits, report_tilt, yaw_threshold),
+            "drive": analyse_drive(cap, boot.index, names, drive["ticks_per_meter"], drive["wheel_distance"],
+                                   drive["right_sign"]),
+            "blade": analyse_blade(cap, boot.index, names, blade_rpm)})
+        entry = report["boots"][-1]
+        entry["marks"] = place_marks(cap, boot, marks or [])
+        for press in entry["presses"]:
+            press["step"] = step_at(entry["marks"], press["pressed_at"])
+        for run in entry["drive"]["runs"] + entry["blade"]["runs"]:
+            run["step"] = step_at(entry["marks"], run["start"])
+        commands = [m["board_t"] for m in entry["marks"] if m["kind"] == "cmd" and any(m["text"])]
+        for run in entry["drive"]["runs"]:
+            i = bisect.bisect_right(commands, run["stop"]) - 1 if run["stop"] is not None else -1
+            run["since_script_command_s"] = run["stop"] - commands[i] if i >= 0 else None
+        entry["marks"] = [m for m in entry["marks"] if m["kind"] != "cmd"]
     return report
 
 
@@ -828,6 +1090,60 @@ def table(headers, rows):
 
 def num(value, digits=3):
     return "-" if value is None else f"{value:.{digits}f}"
+
+
+def seconds(value):
+    return "-" if value is None else f"{value:.2f}"
+
+
+def drive_text(drive):
+    out = ["", f"Wheels: {drive['samples']} tick intervals, {drive['ticks_per_meter']:g} ticks/m, wheel distance "
+               f"{drive['wheel_distance']:g} m"]
+    rows = []
+    for r in drive["runs"]:
+        if r.get("ongoing_at_end"):
+            rows.append([num(r["start"]), "-", r.get("step") or "-", "turning at the end"] + ["-"] * 8)
+            continue
+        c = r["command_at_start"]
+        start = "fresh" if r["fresh_command"] else (
+            "WARNING no command" if c is None
+            else f"WARNING last command {c['v']:.3f}/{c['w']:.3f} {c['age_s']:.2f} s old")
+        rows.append([num(r["start"]), num(r["stop"]), r.get("step") or "-", start, seconds(r["host_silent_s"]),
+                     seconds(r["since_emergency_input_s"]), seconds(r.get("since_script_command_s")),
+                     seconds(r["since_last_command_s"]),
+                     seconds(r["since_zero_command_s"]),
+                     r["reason"] or "-", seconds(r["since_reason_s"]),
+                     "-" if r["zeros_after_last_command"] is None else r["zeros_after_last_command"]])
+    if rows:
+        out.append("Runs (stop = first tick interval without a tick, ~40 ms; times are stop minus the cause; script "
+                   "= last command of measure.py, cmd = last command and first 0 of the host to the board):")
+        out.append(table(["start", "stop", "step", "start with", "host silent", "emerg in", "script", "last cmd",
+                          "cmd 0", "reason", "reason s", "zeros after"], rows))
+    if drive["steady"]:
+        out.append("Steady commands (speed per unit of duty = full_duty_speed):")
+        out.append(table(["from", "s", "v", "w", "duty L", "duty R", "m/s L", "m/s R", "per duty L", "per duty R"],
+                         [[num(g["from"]), num(g["seconds"], 1), num(g["v"]), num(g["w"]), num(g["duty_left"]),
+                           num(g["duty_right"]), num(g["speed_left"]), num(g["speed_right"]),
+                           num(g["per_duty_left"]), num(g["per_duty_right"])] for g in drive["steady"]]))
+    return out
+
+
+def blade_text(blade):
+    if not blade["runs"]:
+        return ["", f"Blade: {blade['samples']} rpm reports, no run."]
+    rows = []
+    for r in blade["runs"]:
+        s = r["setpoint_at_start"]
+        start = "fresh" if r["fresh_setpoint"] else (
+            "WARNING no setpoint" if s is None else f"WARNING last setpoint {s['speed']:.2f} {s['age_s']:.2f} s old")
+        rows.append([num(r["start"]), num(r["below_at"]), num(r["zero_at"]), r.get("step") or "-", start,
+                     seconds(r.get("host_silent_s")), seconds(r.get("since_emergency_input_s")),
+                     seconds(r.get("since_last_command_s")), seconds(r.get("since_zero_command_s")),
+                     r.get("reason") or "-", seconds(r.get("since_reason_s"))])
+    return ["", f"Blade runs (rpm every 0.5 s; times are 'below' minus the cause):",
+            table(["start", "below", "rpm 0", "step", "start with", "host silent", "emerg in", "last on", "set 0",
+                   "reason", "reason s"],
+                  rows)]
 
 
 def text_report(report):
@@ -851,7 +1167,8 @@ def text_report(report):
         for p in boot["presses"]:
             delay = "-" if p["reason"] is None else (
                 f"{p['delay_min_ms']:.0f}" if p["edge_exact"] or p["delay_max_ms"] is None
-                or abs(p["delay_max_ms"] - p["delay_min_ms"]) < 1 else f"{p['delay_min_ms']:.0f}..{p['delay_max_ms']:.0f}")
+                or abs(p["delay_max_ms"] - p["delay_min_ms"]) < 1
+                else f"{p['delay_min_ms']:.0f}..{p['delay_max_ms']:.0f}")
             if p["reason"] is None:
                 latch = "-"
             elif p["released_at"] is None:
@@ -875,6 +1192,13 @@ def text_report(report):
             out.append("Emergency input of the host (changes; board time estimated from the capture clock):")
             out.append(table(["board s", "set", "clear"], [[num(h["board_t"]), h["set"], h["clear"]]
                                                            for h in boot["host_emergency"]]))
+        if boot["marks"]:
+            out.append("")
+            out.append("Marks of the measurement script:")
+            out.append(table(["board s", "kind", "text"], [[num(m["board_t"]), m["kind"], m["text"]]
+                                                          for m in boot["marks"]]))
+        out.extend(drive_text(boot["drive"]))
+        out.extend(blade_text(boot["blade"]))
         imu = boot["imu"]
         out.append("")
         if imu["samples"] < 2:
@@ -885,7 +1209,8 @@ def text_report(report):
                    f"{imu['max_gap_at']:.3f}")
         rest = imu.get("rest")
         if rest:
-            out.append(f"At rest and level ({rest['samples']} samples): a_z {rest['a_z']:.3f} ± {rest['a_z_std']:.3f} m/s², "
+            out.append(f"At rest and level ({rest['samples']} samples): a_z {rest['a_z']:.3f} ± "
+                       f"{rest['a_z_std']:.3f} m/s², "
                        f"|a| {rest['a_norm']:.3f}, a_x {rest['a_x']:.3f}, a_y {rest['a_y']:.3f}, tilt "
                        f"{rest['tilt']:.1f} deg, gyro bias " + ", ".join(f"{g:.4f}" for g in rest["gyro_bias"])
                        + " rad/s")
@@ -921,6 +1246,12 @@ def main(argv=None):
                         help="tilt check of mowbite_safety (tilt_limit, tilt_time)")
     parser.add_argument("--report-tilt", type=float, default=15.0, help="tilt in deg above which an episode starts")
     parser.add_argument("--yaw-threshold", type=float, default=0.1, help="yaw rate in rad/s for a turn episode")
+    parser.add_argument("--ticks-per-meter", type=float, default=DRIVE_DEFAULTS["ticks_per_meter"],
+                        help="used when the capture holds no configuration of the diff drive")
+    parser.add_argument("--wheel-distance", type=float, default=DRIVE_DEFAULTS["wheel_distance"])
+    parser.add_argument("--right-sign", type=int, choices=(1, -1), default=DRIVE_DEFAULTS["right_sign"])
+    parser.add_argument("--blade-rpm", type=float, default=100.0, help="rpm above which the blade counts as turning")
+    parser.add_argument("--marks", help="recording of measure.py (JSON lines) whose marks go into the report")
     parser.add_argument("--json", help="also write the whole report as JSON to this file")
     args = parser.parse_args(argv)
     if args.inputs:
@@ -933,7 +1264,10 @@ def main(argv=None):
     except (CaptureError, OSError) as e:
         sys.exit(f"xcore_capture: {e}")
     report = analyse(cap, inputs, {"driver": tuple(args.driver_tilt), "safety": tuple(args.safety_tilt)},
-                     args.report_tilt, args.yaw_threshold)
+                     args.report_tilt, args.yaw_threshold,
+                     {"ticks_per_meter": args.ticks_per_meter, "wheel_distance": args.wheel_distance,
+                      "right_sign": args.right_sign}, args.blade_rpm,
+                     load_marks(args.marks) if args.marks else None)
     print(text_report(report))
     if args.json:
         with open(args.json, "w") as f:
