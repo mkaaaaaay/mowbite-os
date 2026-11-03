@@ -281,6 +281,57 @@ TEST(LogicMowing, EmergencyPausesAndWaitsForContinueAfterTheReset) {
   EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kFollow);
 }
 
+TEST(LogicMowing, ABladeRefusedForAnEmergencyPausesAsTheEmergencyDoes) {
+  LogicConfig config;
+  config.mow_with_blade = true;
+  // The same stop, once told by hw/status, once first by the answer of hw/blade.
+  LogicCore by_status = Following(config);
+  LogicCore by_blade = Following(config);
+  by_status.OnJobProgress(1);
+  by_blade.OnJobProgress(1);
+  ASSERT_TRUE(by_blade.BladeWanted());
+  auto hw = Healthy();
+  hw.emergency = true;
+  hw.emergency_reason = kEmergencyLatch | kEmergencyStop;
+  by_status.OnHardwareStatus(hw);
+  by_blade.OnBladeRefused("mower blocked", kEmergencyLatch | kEmergencyStop);
+  EXPECT_EQ(by_blade.RobotState().state, "PAUSED");
+  EXPECT_FALSE(by_blade.BladeWanted());
+  EXPECT_TRUE(by_blade.TakeDriveCancel());
+  const auto told_by_status = by_status.TakeEvents();
+  const auto told_by_blade = by_blade.TakeEvents();
+  const Event* paused = Find(told_by_blade, "STATE");
+  const Event* expected = Find(told_by_status, "STATE");
+  ASSERT_NE(paused, nullptr);
+  ASSERT_NE(expected, nullptr);
+  EXPECT_EQ(paused->details.at("reason"), "EMERGENCY");
+  EXPECT_EQ(paused->details.at("message"), "Emergency: LATCH, STOP");
+  for (const char* key : {"state", "reason", "message", "severity", "resume"}) {
+    EXPECT_EQ(paused->details.at(key), expected->details.at(key)) << key;
+  }
+  // Flag and event of the emergency come with hw/status, which also refuses continue until the reset.
+  EXPECT_EQ(Find(told_by_blade, "EMERGENCY"), nullptr);
+  EXPECT_FALSE(by_blade.RobotState().emergency);
+  by_blade.OnHardwareStatus(hw);
+  EXPECT_EQ(Types(by_blade.TakeEvents()), std::vector<std::string>{"EMERGENCY"});
+  EXPECT_TRUE(by_blade.RobotState().emergency);
+  EXPECT_EQ(by_blade.RobotState().emergency_reason, kEmergencyLatch | kEmergencyStop);
+  EXPECT_EQ(by_blade.OnAction(kMowing + "continue"), ActionResult::kRejected);
+  by_blade.OnLegEnded(LegEnd::kEmergency, 1, Reason("EMERGENCY", ""));
+  by_blade.OnHardwareStatus(Healthy());
+  EXPECT_EQ(by_blade.RobotState().state, "PAUSED");
+  EXPECT_EQ(by_blade.OnAction(kMowing + "continue"), ActionResult::kDone);
+  EXPECT_EQ(by_blade.RobotState().state, "MOWING");
+  // Without reason bits a refusal stays a fault of its own.
+  LogicCore refused = Following(config);
+  refused.OnJobProgress(1);
+  refused.OnBladeRefused("mower on the dock", 0);
+  const auto events = refused.TakeEvents();
+  ASSERT_NE(Find(events, "STATE"), nullptr);
+  EXPECT_EQ(Find(events, "STATE")->details.at("reason"), "BLADE_REFUSED");
+  EXPECT_EQ(Find(events, "STATE")->details.at("message"), "The blade was refused: mower on the dock");
+}
+
 TEST(LogicMowing, TheGpsPauseCarriesTheAccuracyAndTheLimit) {
   LogicConfig config;
   LogicCore core = Following(config);

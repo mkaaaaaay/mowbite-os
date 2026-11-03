@@ -72,6 +72,11 @@ double MonotonicSeconds() {
   return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
+// The part of hw/status that goes out at once when it changes: emergency, latch and reason bits.
+uint64_t BlockOf(const tron::McuControlStatus& state) {
+  return state.emergency_reason | (uint64_t{state.blocked} << 32) | (uint64_t{state.latched} << 33);
+}
+
 tron::WallClock LocalWallClock() {
   using namespace std::chrono;
   auto now = system_clock::now();
@@ -221,8 +226,15 @@ class McuNode : public rclcpp::Node {
         }
         Send(packets);
       }
+      // So that the logic learns of a block before a blade request it refuses, not only at the next status tick.
+      if (BlockChanged()) PublishStatus();
     }
     SendShutdownFrames();
+  }
+
+  bool BlockChanged() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return BlockOf(control_.Status(MonotonicSeconds())) != published_block_;
   }
 
   void TryOpen() {
@@ -403,13 +415,16 @@ class McuNode : public rclcpp::Node {
     return msg;
   }
 
+  // Called by the timer and by the I/O thread, one at a time, so that the messages go out in the order they were made.
   void PublishStatus() {
+    std::lock_guard<std::mutex> publish_lock(publish_mutex_);
     HardwareStatus msg;
     msg.stamp = now();
     {
       std::lock_guard<std::mutex> lock(mutex_);
       double now_s = MonotonicSeconds();
       const auto state = control_.Status(now_s);
+      published_block_ = BlockOf(state);
       msg.emergency = state.blocked;
       msg.emergency_latched = state.latched;
       msg.emergency_reason = state.emergency_reason;
@@ -526,7 +541,7 @@ class McuNode : public rclcpp::Node {
     request.height_mm = req.height_mm;
     request.lease_s = req.lease_s;
     std::lock_guard<std::mutex> lock(mutex_);
-    auto result = control_.SetBlade(request, MonotonicSeconds());
+    auto result = control_.SetBlade(request, MonotonicSeconds(), &res.emergency_reason);
     res.success = result == tron::BladeResult::kOk;
     res.message = tron::BladeResultText(result);
     if (!res.success) {
@@ -550,6 +565,8 @@ class McuNode : public rclcpp::Node {
     res.success = true;
   }
 
+  // One PublishStatus at a time; taken before mutex_, never while mutex_ is held.
+  std::mutex publish_mutex_;
   std::mutex mutex_;
   tron::McuControl control_;
   tron::FrameParser parser_;
@@ -572,6 +589,8 @@ class McuNode : public rclcpp::Node {
   std::string safety_measurement_date_;
   bool blade_on_logged_ = false;
   uint32_t logged_reason_ = 0;
+  // BlockOf the last hw/status, under mutex_.
+  uint64_t published_block_ = 0;
   double imu_timeout_s_;
   bool imu_seen_ = false;
   double measured_linear_scale_;

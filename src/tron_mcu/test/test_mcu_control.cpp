@@ -660,6 +660,35 @@ TEST_F(BladeControlTest, RenewalWhileBlockedEndsTheLease) {
   EXPECT_EQ(Times(IsBladeOff, 0.5).size(), 3u);
 }
 
+TEST_F(BladeControlTest, ARefusalForAnEmergencyCarriesItsReasonBits) {
+  uint32_t reason = 1;
+  // No telemetry yet: blocked by the input timeout, which is no latch.
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_, &reason), BladeResult::kBlocked);
+  EXPECT_EQ(reason, kReasonTimeoutInputs);
+  Run(0.5);
+  ASSERT_EQ(control_.SetBlade(BladeOn(), now_, &reason), BladeResult::kOk);
+  EXPECT_EQ(reason, 0u);
+  Run(1.0);
+  // The stop button latches with the next tick; the renewal right after it is refused with the bits of hw/status.
+  sensor_.stop = true;
+  Run(1.01);
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_, &reason), BladeResult::kBlocked);
+  EXPECT_EQ(reason, kReasonLatch | kReasonStop);
+  EXPECT_EQ(reason, control_.Status(now_).emergency_reason);
+  EXPECT_EQ(control_.SetBlade(kBladeOff, now_, &reason), BladeResult::kOk);
+  EXPECT_EQ(reason, 0u);
+  // Other refusals carry none.
+  EXPECT_EQ(control_.SetBlade(BladeOn(2.5), now_, &reason), BladeResult::kInvalidLease);
+  EXPECT_EQ(reason, 0u);
+  sensor_.stop = false;
+  control_.ReleaseEmergency(now_);
+  Run(1.5);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  reason = 1;
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_, &reason), BladeResult::kDocked);
+  EXPECT_EQ(reason, 0u);
+}
+
 TEST_F(BladeControlTest, BladeRefusedWithoutTelemetryOrOnDock) {
   EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kBlocked);
   Run(0.5, false);
@@ -823,6 +852,17 @@ TEST_F(ImuControlTest, BlockedWithoutLatchUntilTheFirstSample) {
   EXPECT_FALSE(control_.Status(now_).blocked);
   EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
   EXPECT_TRUE(DrivesOrMows(3.0));
+}
+
+TEST_F(ImuControlTest, ARefusalWhileTheImuIsStillDueCarriesNoReason) {
+  Run(0.5);
+  uint32_t reason = 1;
+  // Held, but no emergency: the logic may not pause for one.
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_, &reason), BladeResult::kBlocked);
+  EXPECT_EQ(reason, 0u);
+  Run(2.5);
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_, &reason), BladeResult::kBlocked);
+  EXPECT_EQ(reason, kReasonImuTimeout);
 }
 
 TEST_F(ImuControlTest, StillDueAfterTheStartHoldsWithoutAnEmergency) {

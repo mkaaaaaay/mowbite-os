@@ -201,6 +201,15 @@ class Probe:
     def sim_time(self):
         return self.recent()[-1]["t"]
 
+    def clock_offset(self, reads=40):
+        """time.monotonic() minus the time of fake_tron, from the read that found its newest entry the freshest."""
+        offsets = []
+        for _ in range(reads):
+            now = time.monotonic()
+            offsets.append(now - self.recent(4096)[-1]["t"])
+            time.sleep(0.01)
+        return min(offsets)
+
     def driving_now(self):
         """fake_tron time of its newest entry if the newest setpoint it got moves the mower."""
         entries = self.recent()
@@ -274,9 +283,12 @@ class TestStackCrash(unittest.TestCase):
         p = self.probe
         self.assertIsInstance(proc_info["tron_mcu_node"], ProcessStarted)
         container = container_pid(proc_info)
+        offset = p.clock_offset()
         # Not in a stop at a corner: fake_tron holds a setpoint that moves the mower.
         t0 = p.wait(p.driving_now, 30)
         self.assertTrue(t0, "the mower does not drive")
+        # Stop and blade off count from the kill in the time of fake_tron; t0 is only its newest entry read before.
+        kill = time.monotonic() - offset
         os.kill(container, signal.SIGKILL)
         TestStackCrash.crash = (container, t0)
         # Long enough for fake_tron to drop setpoint and blade by itself, were the heartbeat gone.
@@ -287,7 +299,7 @@ class TestStackCrash(unittest.TestCase):
         self.assertTrue(zeros, f"no stop after the crash: {speeds[-5:]}")
         stop = zeros[0]["t"]
         TestStackCrash.stop = stop
-        self.assertLess(stop - t0, CMD_VEL_TIMEOUT + 0.5, f"stop {stop - t0:.2f} s after the crash")
+        self.assertLess(stop - kill, CMD_VEL_TIMEOUT + 0.5, f"stop {stop - kill:.2f} s after the crash")
         after = [e for e in speeds if e["t"] >= stop]
         self.assertTrue(all(e["hex"] == ZERO for e in after), after)
         # The stop burst and no stream of zero setpoints.
@@ -296,7 +308,7 @@ class TestStackCrash(unittest.TestCase):
         self.assertTrue(cutter, "no blade frame after the crash")
         off = next((e["t"] for e in cutter if e["cutter"] == 0), None)
         self.assertIsNotNone(off, cutter)
-        self.assertLess(off - t0, BLADE_LEASE + 0.5, f"blade off {off - t0:.2f} s after the crash")
+        self.assertLess(off - kill, BLADE_LEASE + 0.5, f"blade off {off - kill:.2f} s after the crash")
         self.assertFalse([e for e in cutter if e["t"] >= off and e["cutter"] != 0], cutter)
         # The driver went on talking, so it was its own frames that stopped the setpoint and the blade.
         beats = [e for e in rx if e["type"] == HEARTBEAT and e["t"] > t0 + HOST_TIMEOUT]
@@ -309,8 +321,9 @@ class TestStackCrash(unittest.TestCase):
         self.assertTrue(hw.emergency and hw.emergency_latched, hw)
         self.assertTrue(hw.emergency_reason & HardwareStatus.REASON_IMU_TIMEOUT, hw.emergency_reason)
         self.assertFalse(hw.blade_on or hw.moving, hw)
-        print(f"after the crash: stop {stop - t0:.2f} s, blade off {off - t0:.2f} s, "
-              f"{len(after)} zero setpoints, reason {hw.emergency_reason:#x}", flush=True)
+        print(f"after the crash: stop {stop - kill:.2f} s, blade off {off - kill:.2f} s, "
+              f"kill {kill - t0:.3f} s after t0, {len(after)} zero setpoints, "
+              f"reason {hw.emergency_reason:#x}", flush=True)
 
     def test_04_the_driver_keeps_the_mower_blocked(self, proc_info):
         p = self.probe
