@@ -391,6 +391,7 @@ class McuNode : public rclcpp::Node {
     msg.blade_lease_max_s = static_cast<float>(blade_lease_max_s_);
     // The driver sends Charge itself after a debounced dock contact.
     msg.host_charge_control = false;
+    msg.charge_stop = true;
     msg.rain_sensor = true;
     msg.separate_bumpers = true;
     msg.wheel_ticks = false;

@@ -354,8 +354,9 @@ std::optional<std::pair<double, double>> LogicCore::OnTeleop(double vx, double v
   return std::make_pair(vx, vz);
 }
 
-void LogicCore::OnCapabilities(bool safety_measured) {
+void LogicCore::OnCapabilities(bool safety_measured, bool charge_stop) {
   safety_measured_ = safety_measured;
+  charge_stop_ = charge_stop;
   if (safety_measured) return;
   if (state_ == State::kDriving) {
     CancelDrive(Reason("NOT_ALLOWED", "No safety measurement of this platform (hw/capabilities)"));
@@ -843,12 +844,19 @@ void LogicCore::StartUndocking(DockCheck purpose, double x, double y) {
   undock_y_ = y;
   undock_heading_ = DockedHeading();
   undock_fix_start_.reset();
-  charge_off_due_ = true;
+  charge_off_due_ = charge_stop_;
   undock_path_due_.reset();
   undock_stopping_ = false;
   undock_failure_.reset();
   undock_stop_why_ = Reason();
-  notices_.push_back("Undocking: charging off, then " + Metres(config_.undock.distance) + " m straight ahead");
+  if (charge_stop_) {
+    notices_.push_back("Undocking: charging off, then " + Metres(config_.undock.distance) + " m straight ahead");
+  } else {
+    // The hardware charges by itself and cannot stop it: straight to the path.
+    notices_.push_back("Undocking: " + Metres(config_.undock.distance) + " m straight ahead");
+    undock_step_ = UndockStep::kDrive;
+    undock_path_due_ = PlanUndock(undock_x_, undock_y_, undock_heading_, config_.undock);
+  }
   SetState(State::kUndocking);
 }
 
@@ -935,7 +943,7 @@ void LogicCore::EndUndocking(const std::optional<Reason>& failure, const Reason&
   outcome.why = failure.value_or(why);
   undock_outcome_ = outcome;
   // The mower may still stand on the contacts.
-  charge_on_due_ = true;
+  charge_on_due_ = charge_stop_;
   charge_off_due_ = false;
   undock_path_due_.reset();
   undock_stopping_ = false;

@@ -376,7 +376,7 @@ class LogicNode : public rclcpp::Node {
         "hw/capabilities", LatchedQos(1), [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
           {
             std::lock_guard<std::mutex> lock(mutex_);
-            core_.OnCapabilities(!msg->safety_measurement_date.empty());
+            core_.OnCapabilities(!msg->safety_measurement_date.empty(), msg->charge_stop);
             blade_lease_max_s_ = msg->blade_lease_max_s;
           }
           Flush();

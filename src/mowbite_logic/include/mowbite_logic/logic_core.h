@@ -234,8 +234,9 @@ class LogicCore {
   // now_s is a monotonic clock.
   std::optional<std::pair<double, double>> OnTeleop(double vx, double vz, double now_s);
 
-  // hw/capabilities: whether the platform has a safety measurement. Without one only remote control, no driving.
-  void OnCapabilities(bool safety_measured);
+  // hw/capabilities: whether the platform has a safety measurement (without one only remote control, no driving) and
+  // whether its driver can stop charging (charge_stop; without it undocking leaves out that step).
+  void OnCapabilities(bool safety_measured, bool charge_stop = true);
   // Why a drive cannot start now (BUSY, EMERGENCY, NO_SAFETY_MEASUREMENT, position), empty if it can.
   Reason DriveProblem() const;
   // Starts a drive to (x, y): empty if it may start, else why not (event DRIVE_REFUSED). Shown as IDLE with the sub
@@ -274,8 +275,8 @@ class LogicCore {
   // without a recent fix or without an answer (message says which). Empty when the check passed and undocking
   // starts, else why mowing or the drive does not start, which also goes out as MOWING_REFUSED or DRIVE_REFUSED.
   Reason OnDockCheck(bool ok, double x, double y, float accuracy, const std::string& message);
-  // UNDOCKING: first charging off (the node calls hw/charge when TakeChargeOff says so, once, and hands the answer to
-  // OnChargeOff), then the path of TakeUndockPath to the follower, whose end goes to OnUndockEnded. After UNDOCKED
+  // UNDOCKING: first charging off where the driver can stop it (the node calls hw/charge when TakeChargeOff says so,
+  // once, and hands the answer to OnChargeOff), then the path of TakeUndockPath to the follower, whose end goes to OnUndockEnded. After UNDOCKED
   // mowing or the drive starts like away from the station. Charging is allowed again (TakeChargeOn) when undocking
   // ends otherwise, as the mower may still stand on the contacts. TakeUndockOutcome tells the node once how it ended.
   bool Undocking() const;
@@ -456,6 +457,8 @@ class LogicCore {
   bool stop_requested_ = false;
   bool teleop_armed_ = false;
   bool safety_measured_ = false;
+  // Until the driver says otherwise, undocking waits for charging to be off.
+  bool charge_stop_ = true;
   bool drive_cancel_ = false;
   std::optional<Reason> cancel_reason_;
   double last_teleop_s_ = -std::numeric_limits<double>::infinity();

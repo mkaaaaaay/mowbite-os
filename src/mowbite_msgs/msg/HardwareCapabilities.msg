@@ -12,9 +12,11 @@ uint16 blade_height_max_mm
 # Longest lease hw/blade accepts.
 float32 blade_lease_max_s
 
-# The host starts charging over hw/charge; false where the driver or the hardware does it. Every driver offers
-# hw/charge to stop charging before the mower leaves the station.
+# The host starts charging over hw/charge; false where the driver or the hardware does it.
 bool host_charge_control
+# hw/charge can stop charging, and the logic does so before the mower leaves the station. False where the hardware
+# charges by itself and offers no way to stop it: undocking then leaves without that step.
+bool charge_stop
 bool rain_sensor
 bool separate_bumpers
 bool wheel_ticks

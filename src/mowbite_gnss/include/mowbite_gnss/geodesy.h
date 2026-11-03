@@ -1,7 +1,7 @@
-#ifndef TRON_GNSS_GEODESY_H
-#define TRON_GNSS_GEODESY_H
+#ifndef MOWBITE_GNSS_GEODESY_H
+#define MOWBITE_GNSS_GEODESY_H
 
-namespace tron {
+namespace mowbite_gnss {
 
 struct Enu {
   double east = 0;
@@ -21,6 +21,6 @@ class LocalFrame {
   double x0_, y0_, z0_;
 };
 
-}  // namespace tron
+}  // namespace mowbite_gnss
 
-#endif  // TRON_GNSS_GEODESY_H
+#endif  // MOWBITE_GNSS_GEODESY_H

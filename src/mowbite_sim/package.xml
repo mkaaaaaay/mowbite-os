@@ -27,6 +27,7 @@
   <test_depend>mowbite_msgs</test_depend>
   <test_depend>geometry_msgs</test_depend>
   <test_depend>tron_mcu</test_depend>
+  <test_depend>xcore_driver</test_depend>
   <test_depend>tron_gnss</test_depend>
   <test_depend>tron_imu</test_depend>
   <test_depend>mowbite_localization</test_depend>
