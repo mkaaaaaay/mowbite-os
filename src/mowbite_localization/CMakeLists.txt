@@ -18,17 +18,15 @@ find_package(tf2_ros REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
-# Filter and gating without ROS, testable on any machine. The Kalman headers (MIT) come unchanged from
-# xbot_positioning and are only used inside this package.
-add_library(mowbite_localization_core STATIC src/localization.cpp)
+# Filter, gyro offset, GNSS gate and heading from the course without ROS, testable on any machine.
+add_library(mowbite_localization_core STATIC src/gyro_bias.cpp src/pose_filter.cpp src/fix_gate.cpp
+  src/course_alignment.cpp src/estimator.cpp)
 target_include_directories(mowbite_localization_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-target_include_directories(mowbite_localization_core SYSTEM PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/kalman/include>)
 target_link_libraries(mowbite_localization_core Eigen3::Eigen)
 set_target_properties(mowbite_localization_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-add_library(mowbite_localization_component SHARED src/localization_node.cpp)
+add_library(mowbite_localization_component SHARED src/localization_component.cpp)
 target_link_libraries(mowbite_localization_component mowbite_localization_core nlohmann_json::nlohmann_json)
 ament_target_dependencies(mowbite_localization_component rclcpp rclcpp_components geometry_msgs nav_msgs sensor_msgs
   std_msgs std_srvs tf2_ros mowbite_msgs)
@@ -36,7 +34,6 @@ rclcpp_components_register_node(mowbite_localization_component
   PLUGIN "mowbite_localization::LocalizationNode"
   EXECUTABLE mowbite_localization_node)
 
-install(FILES LICENSE.xbot_positioning DESTINATION share/${PROJECT_NAME})
 install(TARGETS mowbite_localization_component
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -44,7 +41,8 @@ install(TARGETS mowbite_localization_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(mowbite_localization_test test/test_models.cpp test/test_localization.cpp)
+  ament_add_gtest(mowbite_localization_test test/test_gyro_bias.cpp test/test_pose_filter.cpp test/test_fix_gate.cpp
+    test/test_course_alignment.cpp test/test_estimator.cpp)
   target_link_libraries(mowbite_localization_test mowbite_localization_core)
 endif()
 

@@ -93,6 +93,12 @@ mowbite_localization:
     # Without a fix the accuracy grows by this much per m driven and per s. Assumptions until measured in phase 7.
     accuracy_growth_per_m: 0.05
     accuracy_growth_per_s: 0.01
+    # Random walk of the filter: position in m per square root of m driven, heading in rad per square root of s the
+    # gyro integrates. How old (s) a GNSS position is when it arrives, 0 until the UM960 is measured in phase 7.
+    # Assumptions until phases 6 and 7.
+    odometry_noise: 0.03
+    gyro_noise: 0.005
+    gnss_latency: 0.0
 
 mowbite_logic:
   ros__parameters:
@@ -170,22 +176,45 @@ mowbite_logic:
 
 mowbite_follower:
   ros__parameters:
-    # m/s on straight stretches, elsewhere and on turns, and the limits of every command (the lower of these and the
-    # limits in hw/capabilities). Raised only after the driving tests of phase 6 and 7.
+    # m/s where the next metre of the path runs straight (within 20 degrees), elsewhere and on turns, and the limits
+    # of every command (the lower of these and the limits in hw/capabilities); speeding up and braking at
+    # acceleration m/s². Raised only after the driving tests of phase 6 and 7.
     speed_fast: 0.3
     speed_slow: 0.15
     speed_turn: 0.1
     max_linear: 0.3
     max_angular: 0.3
-    # rad/s the control point turns at most, below max_angular so that the mower can still correct on arcs of
+    acceleration: 0.1
+    # rad/s an arc of the path asks for at most, below max_angular so that the mower can still correct on arcs of
     # turn_radius (0.25 * 0.44 = 0.11 m/s there).
     turn_rate: 0.25
+    # Above the dead band of the wheels (~0.05 m/s each, estimated): creeping onto corners and the end at creep_speed
+    # m/s, turning on the spot at min_turn_rate rad/s or faster (0.28 * 0.2 = 0.056 m/s per wheel).
+    creep_speed: 0.06
+    min_turn_rate: 0.28
+    # Steering: beside the path the mower heads towards it at half of approach_angle degrees approach_distance m off;
+    # heading errors decay at heading_gain 1/s.
+    approach_distance: 0.15
+    approach_angle: 45.0
+    heading_gain: 2.0
+    # Where the path turns by more than corner_angle degrees from one pose to the next (as where the planner turns on
+    # the spot) and more than max_drive_angle degrees off the course, the mower turns on the spot.
+    corner_angle: 15.0
+    max_drive_angle: 45.0
+    # Arcs tighter than min_arc_radius m are taken as corners too: below about 0.4 m the inner wheel would run under
+    # its dead band at turn_rate (the bulb turns of the planner, 0.13 m). Assumption until phase 6.
+    min_arc_radius: 0.3
+    # A path starts at most max_start_distance m from its first pose and ends within goal_tolerance m of its last.
+    max_start_distance: 1.0
+    goal_tolerance: 0.1
     # Stops: no pose for pose_timeout s, base_link further than max_cross_track m from the path or geofence_margin m
-    # outside of the allowed areas, more than max_follow_distance m behind the control point (stuck). Assumptions.
+    # outside of the allowed areas, a turn on the spot longer than phase_timeout s, less than 5 cm of progress along
+    # the path in progress_timeout s (stuck). Assumptions.
     pose_timeout: 0.5
     max_cross_track: 0.5
     geofence_margin: 0.5
-    max_follow_distance: 1.0
+    phase_timeout: 20.0
+    progress_timeout: 10.0
     control_rate: 20.0
 
 mowbite_safety:

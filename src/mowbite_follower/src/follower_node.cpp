@@ -14,7 +14,7 @@
 #include <rclcpp_components/register_node_macro.hpp>
 
 #include "mowbite_follower/guard.h"
-#include "mowbite_follower/path_tracker.h"
+#include "mowbite_follower/path_follower.h"
 
 namespace mowbite_follower {
 
@@ -32,6 +32,9 @@ double Yaw(const geometry_msgs::msg::Quaternion& q) {
   return std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
 }
 
+double Degrees(double radians) { return radians * 180.0 / M_PI; }
+double Radians(double degrees) { return degrees * M_PI / 180.0; }
+
 Ring ToRing(const geometry_msgs::msg::Polygon& polygon) {
   Ring ring;
   for (const auto& p : polygon.points) ring.push_back({p.x, p.y});
@@ -45,17 +48,28 @@ Ring ToRing(const geometry_msgs::msg::Polygon& polygon) {
 class FollowerNode : public rclcpp::Node {
  public:
   explicit FollowerNode(const rclcpp::NodeOptions& options) : rclcpp::Node("mowbite_follower", options) {
-    TrackerConfig& t = tracker_config_;
-    t.speed_fast = declare_parameter("speed_fast", t.speed_fast);
-    t.speed_slow = declare_parameter("speed_slow", t.speed_slow);
-    t.speed_turn = declare_parameter("speed_turn", t.speed_turn);
-    t.acceleration = declare_parameter("acceleration", t.acceleration);
-    t.turn_rate = declare_parameter("turn_rate", t.turn_rate);
-    t.max_linear = declare_parameter("max_linear", t.max_linear);
-    t.max_angular = declare_parameter("max_angular", t.max_angular);
-    t.max_follow_distance = declare_parameter("max_follow_distance", t.max_follow_distance);
-    t.max_goal_distance_error = declare_parameter("max_goal_distance_error", t.max_goal_distance_error);
-    t.phase_timeout = declare_parameter("phase_timeout", t.phase_timeout);
+    FollowerConfig& c = follower_config_;
+    SpeedLimits& v = c.speed;
+    v.speed_fast = declare_parameter("speed_fast", v.speed_fast);
+    v.speed_slow = declare_parameter("speed_slow", v.speed_slow);
+    v.speed_turn = declare_parameter("speed_turn", v.speed_turn);
+    v.acceleration = declare_parameter("acceleration", v.acceleration);
+    v.turn_rate = declare_parameter("turn_rate", v.turn_rate);
+    v.max_linear = declare_parameter("max_linear", v.max_linear);
+    v.creep_speed = declare_parameter("creep_speed", v.creep_speed);
+    c.max_angular = declare_parameter("max_angular", c.max_angular);
+    c.min_turn_rate = declare_parameter("min_turn_rate", c.min_turn_rate);
+    c.max_start_distance = declare_parameter("max_start_distance", c.max_start_distance);
+    c.goal_tolerance = declare_parameter("goal_tolerance", c.goal_tolerance);
+    // Angles in degrees.
+    c.corner_angle = Radians(declare_parameter("corner_angle", Degrees(c.corner_angle)));
+    c.max_drive_angle = Radians(declare_parameter("max_drive_angle", Degrees(c.max_drive_angle)));
+    c.min_arc_radius = declare_parameter("min_arc_radius", c.min_arc_radius);
+    c.steering.approach_distance = declare_parameter("approach_distance", c.steering.approach_distance);
+    c.steering.approach_angle = Radians(declare_parameter("approach_angle", Degrees(c.steering.approach_angle)));
+    c.steering.heading_gain = declare_parameter("heading_gain", c.steering.heading_gain);
+    c.phase_timeout = declare_parameter("phase_timeout", c.phase_timeout);
+    c.progress_timeout = declare_parameter("progress_timeout", c.progress_timeout);
     guard_config_.pose_timeout = declare_parameter("pose_timeout", guard_config_.pose_timeout);
     guard_config_.hw_timeout = declare_parameter("hw_status_timeout", guard_config_.hw_timeout);
     guard_config_.max_position_accuracy = declare_parameter("max_position_accuracy", guard_config_.max_position_accuracy);
@@ -137,23 +151,21 @@ class FollowerNode : public rclcpp::Node {
     for (const auto& p : goal->obstacles) obstacles.push_back(ToRing(p));
 
     std::lock_guard<std::mutex> lock(mutex_);
-    TrackerConfig config = tracker_config_;
-    config.max_linear = std::min(config.max_linear, driver_max_linear_);
-    if (goal->max_speed > 0) config.max_linear = std::min(config.max_linear, static_cast<double>(goal->max_speed));
+    FollowerConfig config = follower_config_;
+    SpeedLimits& v = config.speed;
+    v.max_linear = std::min(v.max_linear, driver_max_linear_);
+    if (goal->max_speed > 0) v.max_linear = std::min(v.max_linear, static_cast<double>(goal->max_speed));
     config.max_angular = std::min(config.max_angular, driver_max_angular_);
-    // The control point keeps its share of max_angular when the driver allows less.
-    config.turn_rate *= config.max_angular / tracker_config_.max_angular;
-    config.speed_fast = std::min(config.speed_fast, config.max_linear);
-    config.speed_slow = std::min(config.speed_slow, config.max_linear);
-    config.speed_turn = std::min(config.speed_turn, config.max_linear);
+    // The path keeps its share of max_angular when the driver allows less.
+    v.turn_rate *= config.max_angular / follower_config_.max_angular;
     config.stall_time = goal->stall_time > 0 ? goal->stall_time : 0.0;
     config.straight = goal->straight;
     config.reverse = goal->reverse;
     config.end_tolerance = goal->end_tolerance > 0 ? goal->end_tolerance : 0.0;
-    tracker_ = std::make_unique<PathTracker>(config);
+    follower_ = std::make_unique<PathFollower>(config);
     fence_ = Geofence(std::move(allowed), std::move(obstacles), geofence_margin_);
     if (problem.empty()) problem = fence_.Problem();
-    if (problem.empty()) problem = tracker_->Start(poses, kinds, goal->start_index);
+    if (problem.empty()) problem = follower_->Start(poses, kinds, goal->start_index);
     active_ = handle;
     last_step_ = MonotonicSeconds();
     last_feedback_ = 0;
@@ -163,7 +175,7 @@ class FollowerNode : public rclcpp::Node {
     }
     RCLCPP_INFO(get_logger(), "Following %zu poses from %u%s%s, at most %.2f m/s", poses.size(), goal->start_index,
                 goal->reverse ? " backwards" : "", goal->straight ? " straight without steering" : "",
-                config.max_linear);
+                config.speed.max_linear);
   }
 
   void OnTimer() {
@@ -173,7 +185,7 @@ class FollowerNode : public rclcpp::Node {
     const double dt = now - last_step_;
     last_step_ = now;
     if (active_->is_canceling()) {
-      Finish(FollowPath::Result::REASON_CANCELED, "canceled", tracker_->index());
+      Finish(FollowPath::Result::REASON_CANCELED, "canceled", follower_->index());
       return;
     }
     GuardInput in;
@@ -184,22 +196,22 @@ class FollowerNode : public rclcpp::Node {
     in.pose = pose_;
     in.position_accuracy = position_accuracy_;
     in.heading_valid = heading_valid_;
-    // Off the path counts only while on it; before the start the tracker checks the distance itself.
-    in.cross_track = tracker_->OnPath() ? tracker_->CrossTrack(pose_) : 0.0;
+    // Off the path counts only while on it; before the start the follower checks the distance itself.
+    in.cross_track = follower_->OnPath() ? follower_->CrossTrack(pose_) : 0.0;
     const GuardResult guard = CheckGuard(guard_config_, in, fence_);
     if (guard.reason != StopReason::kNone) {
-      Finish(static_cast<uint8_t>(guard.reason), guard.message, tracker_->index());
+      Finish(static_cast<uint8_t>(guard.reason), guard.message, follower_->index());
       return;
     }
-    const PathTracker::Command cmd = tracker_->Step(pose_, dt);
-    if (tracker_->phase() == Phase::kFailed) {
-      const bool start = tracker_->failure().find("start of the path") != std::string::npos;
-      Finish(start ? FollowPath::Result::REASON_INVALID : FollowPath::Result::REASON_TIMEOUT, tracker_->failure(),
-             tracker_->index());
+    const PathFollower::Command cmd = follower_->Step(pose_, dt);
+    if (follower_->phase() == Phase::kFailed) {
+      const bool start = follower_->failure_kind() == Failure::kStart;
+      Finish(start ? FollowPath::Result::REASON_INVALID : FollowPath::Result::REASON_TIMEOUT, follower_->failure(),
+             follower_->index());
       return;
     }
-    if (tracker_->phase() == Phase::kDone) {
-      Finish(FollowPath::Result::REASON_DONE, "done", tracker_->index());
+    if (follower_->phase() == Phase::kDone) {
+      Finish(FollowPath::Result::REASON_DONE, "done", follower_->index());
       return;
     }
     geometry_msgs::msg::Twist twist;
@@ -209,8 +221,8 @@ class FollowerNode : public rclcpp::Node {
     if (now - last_feedback_ >= 0.5) {
       last_feedback_ = now;
       auto feedback = std::make_shared<FollowPath::Feedback>();
-      feedback->index = static_cast<uint32_t>(tracker_->index());
-      feedback->cross_track = static_cast<float>(tracker_->CrossTrack(pose_));
+      feedback->index = static_cast<uint32_t>(follower_->index());
+      feedback->cross_track = static_cast<float>(follower_->CrossTrack(pose_));
       active_->publish_feedback(feedback);
     }
   }
@@ -218,7 +230,7 @@ class FollowerNode : public rclcpp::Node {
   // Ends the active goal with one zero command. Called with the mutex held.
   void Finish(uint8_t reason, const std::string& message, size_t index) {
     cmd_pub_->publish(geometry_msgs::msg::Twist());
-    tracker_->Cancel();
+    follower_->Cancel();
     auto result = std::make_shared<FollowPath::Result>();
     result->reason = reason;
     result->message = message;
@@ -237,10 +249,10 @@ class FollowerNode : public rclcpp::Node {
   }
 
   std::mutex mutex_;
-  TrackerConfig tracker_config_;
+  FollowerConfig follower_config_;
   GuardConfig guard_config_;
   double geofence_margin_ = 0.5;
-  std::unique_ptr<PathTracker> tracker_;
+  std::unique_ptr<PathFollower> follower_;
   Geofence fence_;
   std::shared_ptr<GoalHandle> active_;
   double last_step_ = 0;

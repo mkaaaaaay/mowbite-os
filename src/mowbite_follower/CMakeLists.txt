@@ -13,7 +13,8 @@ find_package(geometry_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 
 # Path tracking and its checks without ROS, testable on any machine.
-add_library(mowbite_follower_core STATIC src/path_tracker.cpp src/guard.cpp)
+add_library(mowbite_follower_core STATIC src/path.cpp src/speed_plan.cpp src/steering.cpp src/path_follower.cpp
+  src/guard.cpp)
 target_include_directories(mowbite_follower_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -35,7 +36,8 @@ install(TARGETS mowbite_follower_core mowbite_follower_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(mowbite_follower_test test/test_path_tracker.cpp test/test_guard.cpp)
+  ament_add_gtest(mowbite_follower_test test/test_path.cpp test/test_speed_plan.cpp test/test_steering.cpp
+    test/test_path_follower.cpp test/test_guard.cpp)
   target_link_libraries(mowbite_follower_test mowbite_follower_core)
 endif()
 
