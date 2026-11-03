@@ -7,7 +7,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 
 find_package(ament_cmake REQUIRED)
 
-# Geodesy and NMEA sentences shared by the GNSS drivers of all platforms, without ROS.
+# Geodesy, kinds of a solution and NMEA sentences shared by the GNSS drivers of all platforms, without ROS.
 add_library(mowbite_gnss_core STATIC src/geodesy.cpp src/gga.cpp)
 target_include_directories(mowbite_gnss_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

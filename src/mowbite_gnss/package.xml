@@ -3,7 +3,7 @@
 <package format="3">
   <name>mowbite_gnss</name>
   <version>0.0.0</version>
-  <description>Geodesy and NMEA sentences shared by the GNSS drivers of all platforms, without ROS</description>
+  <description>Geodesy, kinds of a solution and NMEA sentences shared by the GNSS drivers of all platforms, without ROS</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
   <license>GPL-3.0</license>
 
