@@ -838,6 +838,8 @@ class XcoreNode : public rclcpp::Node {
     msg.rain_sensor = false;
     msg.separate_bumpers = true;
     msg.wheel_ticks = true;
+    msg.wheel_ticks_per_m = get_parameter("ticks_per_meter").as_double();
+    msg.wheel_distance = get_parameter("wheel_distance").as_double();
     msg.imu_source = "xcore_driver";
     msg.gnss_source = gnss_source_;
     msg.max_linear_speed = static_cast<float>(max_linear_speed_);

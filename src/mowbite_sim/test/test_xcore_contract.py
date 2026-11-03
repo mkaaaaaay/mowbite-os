@@ -214,6 +214,8 @@ class TestXcoreContract(unittest.TestCase):
         self.assertFalse(caps.host_charge_control)
         self.assertFalse(caps.charge_stop)
         self.assertTrue(caps.wheel_ticks)
+        self.assertAlmostEqual(caps.wheel_ticks_per_m, 2025.0)
+        self.assertAlmostEqual(caps.wheel_distance, 0.3556)
         self.assertTrue(caps.separate_bumpers)
         self.assertEqual(caps.imu_source, "xcore_driver")
         self.assertAlmostEqual(caps.max_linear_speed, 0.3, places=5)
