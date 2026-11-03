@@ -1,0 +1,43 @@
+#include <gtest/gtest.h>
+
+#include "mowbite_bridge/text.h"
+
+using namespace mowbite_bridge;
+
+namespace {
+const std::string kR = "\xef\xbf\xbd";
+}
+
+TEST(CleanUtf8, KeepsValidText) {
+  const std::string text = "Gr\xc3\xa4" "fin \xe2\x82\xac \xf0\x9f\x8c\xb1 plain";
+  EXPECT_EQ(CleanUtf8(text), text);
+  EXPECT_EQ(CleanUtf8(""), "");
+}
+
+TEST(CleanUtf8, LoneAndBrokenBytesBecomeOneReplacementEach) {
+  // A lone 0xE4 (Latin-1), an Ä cut off at the end, an overlong '/', a surrogate, bytes above U+10FFFF.
+  EXPECT_EQ(CleanUtf8("Gr\xe4" "fin"), "Gr" + kR + "fin");
+  EXPECT_EQ(CleanUtf8("cut \xc3"), "cut " + kR);
+  EXPECT_EQ(CleanUtf8("\xc0\xaf ok \xc3\x84"), kR + kR + " ok \xc3\x84");
+  EXPECT_EQ(CleanUtf8("\xed\xa0\x80"), kR + kR + kR);
+  EXPECT_EQ(CleanUtf8("\xf4\x90\x80\x80"), kR + kR + kR + kR);
+  EXPECT_EQ(CleanUtf8("\xff\xfe"), kR + kR);
+  // A valid start of a three byte sign that breaks off is one replacement.
+  EXPECT_EQ(CleanUtf8("\xe2\x82x"), kR + "x");
+}
+
+TEST(NestingDepth, CountsBracketsOutsideStrings) {
+  EXPECT_EQ(NestingDepth(R"({"a":"[[[[","b":[{}]})"), 3u);
+  EXPECT_EQ(NestingDepth(R"(["\"[["])"), 1u);
+  EXPECT_EQ(NestingDepth("plain"), 0u);
+  EXPECT_EQ(NestingDepth(std::string(500, '[')), 500u);
+}
+
+TEST(HideSecrets, LoginsInUrlsAndValuesAfterKeyWords) {
+  EXPECT_EQ(HideSecrets("ntrip://user:secret@caster:2101/MOUNT"), "ntrip://***@caster:2101/MOUNT");
+  EXPECT_EQ(HideSecrets("password=hunter2 token: abc"), "password=*** token: ***");
+  EXPECT_EQ(HideSecrets("Password = x1 SECRET:y"), "Password = *** SECRET:***");
+  // Nothing to hide.
+  EXPECT_EQ(HideSecrets("http://caster:2101/MOUNT and a@b"), "http://caster:2101/MOUNT and a@b");
+  EXPECT_EQ(HideSecrets("password missing"), "password missing");
+}

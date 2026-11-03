@@ -1,20 +1,21 @@
-# Based on xbot_msgs/xbot_mqtt (OpenMower), MIT License, Copyright (c) 2022 Clemens Elflein. See LICENSE.xbot_monitoring.
-# What the app shows from robot_state/json, sent by mowbite_logic about once a second.
+# bridge/robot_state, once a second from the logic; the bridge sends it on as robot_state/json.
 string current_state
 string current_sub_state
-int16 current_area
-int16 current_path
-int16 current_path_index
-float32 current_action_progress
 # 0..1
 float32 battery_percentage
+# 0..1, 0 without a recent pose or heading.
 float32 gps_percentage
 bool emergency
-# Not in OpenMower: bits as in EMERGENCY events (EmergencyReason), 0 without emergency.
+# Bits as in EMERGENCY events, 0 without emergency.
 uint32 emergency_reason
 bool is_charging
 bool rain_detected
+# While mowing: the area, the path of its plan and the pose in it; otherwise -1.
+int32 current_area
+int32 current_path
+int32 current_path_index
 
+# The pose of the mower for the app.
 float64 pose_x
 float64 pose_y
 float64 pose_heading

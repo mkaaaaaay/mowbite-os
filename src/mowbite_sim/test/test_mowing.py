@@ -20,7 +20,7 @@ import rclpy
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
-from mowbite_msgs.msg import AbsolutePose, MapStatus, MqttPublish, RobotState
+from mowbite_msgs.msg import MapStatus, MqttPublish, RobotPose, RobotState
 from mowbite_msgs.srv import ReplaceMap, SetPose
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
@@ -92,7 +92,7 @@ class Probe:
         self.accuracy = []
         self.node = rclpy.create_node("mowing_probe")
         self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
-        self.node.create_subscription(AbsolutePose, "localization/pose", self._pose, 10)
+        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
         self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
@@ -228,7 +228,7 @@ class TestMowing(unittest.TestCase):
         request = SetPose.Request()
         request.pose.orientation.w = 1.0
         p.call(p.set_pose, request)
-        self.assertTrue(p.wait(lambda: p.pose is not None and p.pose.orientation_valid
+        self.assertTrue(p.wait(lambda: p.pose is not None and p.pose.heading_valid
                                and p.pose.position_accuracy < 0.1, 30), "no good pose with a heading")
         # Before the start no cutter frame turns the blade on.
         self.assertFalse(any(f["cutter"] > 0 for f in p.cutter_frames()))

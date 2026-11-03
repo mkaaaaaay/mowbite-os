@@ -22,7 +22,7 @@ from geometry_msgs.msg import Twist
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
-from mowbite_msgs.msg import AbsolutePose, DriveCommand, HardwareStatus, MapStatus, MqttPublish, SafetyStatus
+from mowbite_msgs.msg import DriveCommand, HardwareStatus, MapStatus, MqttPublish, RobotPose, SafetyStatus
 from mowbite_msgs.srv import DriveTo, ReplaceMap, SetPose
 from rcl_interfaces.msg import Log
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -66,7 +66,7 @@ class Probe:
         self.logs = []
         self.node = rclpy.create_node("safety_filter_probe")
         self.node.create_subscription(MapStatus, "map/status", self._map_status, LATCHED)
-        self.node.create_subscription(AbsolutePose, "localization/pose", self._pose, 10)
+        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
         self.node.create_subscription(HardwareStatus, "hw/status", self._hw, 10)
         self.node.create_subscription(SafetyStatus, "safety/status", self._safety, 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
@@ -181,9 +181,9 @@ class Probe:
         request.pose.orientation.z = math.sin(math.radians(yaw_deg) / 2)
         request.pose.orientation.w = math.cos(math.radians(yaw_deg) / 2)
         self.call(self.set_pose, request)
-        return self.wait(lambda: self.pose is not None and self.pose.orientation_valid
+        return self.wait(lambda: self.pose is not None and self.pose.heading_valid
                          and self.pose.position_accuracy < 0.1
-                         and math.hypot(self.pose.pose.pose.position.x - x, self.pose.pose.pose.position.y - y) < 0.1,
+                         and math.hypot(self.pose.x - x, self.pose.y - y) < 0.1,
                          30)
 
     def reset(self):

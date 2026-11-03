@@ -9,11 +9,8 @@
 
 namespace tron {
 
-// Flags and source as in mowbite_msgs/AbsolutePose.
-constexpr uint16_t kFlagRtk = 1;
-constexpr uint16_t kFlagRtkFixed = 2;
-constexpr uint16_t kFlagRtkFloat = 4;
-constexpr uint16_t kFlagDeadReckoning = 8;
+// Kind of a solution, numbered as in mowbite_msgs/GnssFix.
+enum class Solution : uint8_t { kNone = 0, kSingle = 1, kDgps = 2, kRtkFloat = 3, kRtkFixed = 4, kDeadReckoning = 5 };
 
 struct GnssConfig {
   // Accuracy assumed per fix type until BESTNAVA sigmas are logged on the device.
@@ -31,7 +28,7 @@ struct GnssConfig {
 
 struct GnssPose {
   uint32_t sensor_stamp_ms = 0;  // UTC time of day of the fix
-  uint16_t flags = 0;
+  Solution solution = Solution::kNone;
   double accuracy_m = 0;
   Enu position;
   bool motion_valid = false;

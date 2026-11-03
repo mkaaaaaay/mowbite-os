@@ -26,7 +26,7 @@ import rclpy
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
-from mowbite_msgs.msg import AbsolutePose, HardwareStatus, MapStatus, MqttPublish, RobotState, RpcError, RpcRequest
+from mowbite_msgs.msg import HardwareStatus, MapStatus, MqttPublish, RobotPose, RobotState, RpcError, RpcRequest
 from mowbite_msgs.msg import RpcResponse
 from mowbite_msgs.srv import DriveTo, ReplaceMap
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -123,7 +123,7 @@ class Probe:
         self.node = rclpy.create_node("dock_probe")
         self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
         self.node.create_subscription(String, "map/json", self._map, LATCHED)
-        self.node.create_subscription(AbsolutePose, "localization/pose", self._pose, 10)
+        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
         self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
         self.node.create_subscription(HardwareStatus, "hw/status", self._hw, 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
@@ -244,7 +244,7 @@ class Probe:
         self.flags(place=DOCKED, **flags)
         assert self.wait(lambda: self.hw and self.hw.dock_contact, 10), "no contact on the station"
         assert self.wait(lambda: self.pose and self.pose.position_accuracy <= 0.03
-                         and abs(self.pose.pose.pose.position.x + 1.0) < 0.05, 30), "no RTK position there"
+                         and abs(self.pose.x + 1.0) < 0.05, 30), "no RTK position there"
         assert self.wait(lambda: self.robot and self.robot.current_state == "IDLE", 10)
         self.flags(**flags)
 

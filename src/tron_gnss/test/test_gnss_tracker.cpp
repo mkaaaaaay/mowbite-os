@@ -48,30 +48,30 @@ class TrackerTest : public ::testing::Test {
   GnssTracker tracker{GnssConfig{}, LocalFrame(52.0, 9.0, 60.0)};
 };
 
-TEST_F(TrackerTest, FixTypesGiveFlagsAndAccuracy) {
+TEST_F(TrackerTest, FixTypesGiveSolutionAndAccuracy) {
   auto fixed = tracker.Update(Gga(4, 52.0, 9.0), 0);
   ASSERT_TRUE(fixed);
-  EXPECT_EQ(fixed->flags, kFlagRtk | kFlagRtkFixed);
+  EXPECT_EQ(fixed->solution, Solution::kRtkFixed);
   EXPECT_DOUBLE_EQ(fixed->accuracy_m, 0.02);
 
   auto flt = tracker.Update(Gga(5, 52.0, 9.0), 0);
   ASSERT_TRUE(flt);
-  EXPECT_EQ(flt->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_EQ(flt->solution, Solution::kRtkFloat);
   EXPECT_DOUBLE_EQ(flt->accuracy_m, 0.3);
 
   auto dgps = tracker.Update(Gga(2, 52.0, 9.0), 0);
   ASSERT_TRUE(dgps);
-  EXPECT_EQ(dgps->flags, 0);
+  EXPECT_EQ(dgps->solution, Solution::kDgps);
   EXPECT_DOUBLE_EQ(dgps->accuracy_m, 1.0);
 
   auto single = tracker.Update(Gga(1, 52.0, 9.0), 0);
   ASSERT_TRUE(single);
-  EXPECT_EQ(single->flags, 0);
+  EXPECT_EQ(single->solution, Solution::kSingle);
   EXPECT_DOUBLE_EQ(single->accuracy_m, 3.0);
 
   auto dr = tracker.Update(Gga(6, 52.0, 9.0), 0);
   ASSERT_TRUE(dr);
-  EXPECT_EQ(dr->flags, kFlagDeadReckoning);
+  EXPECT_EQ(dr->solution, Solution::kDeadReckoning);
 }
 
 TEST_F(TrackerTest, NoPoseWithoutFixOrPosition) {
@@ -176,10 +176,10 @@ TEST_F(TrackerTest, GgaWithoutFixStillCountsForTheTime) {
 TEST_F(TrackerTest, FixedOnOldCorrectionsCountsAsFloat) {
   auto fresh = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 30.0), 0);
   ASSERT_TRUE(fresh);
-  EXPECT_EQ(fresh->flags, kFlagRtk | kFlagRtkFixed);
+  EXPECT_EQ(fresh->solution, Solution::kRtkFixed);
   auto old = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 30.5), 0.2);
   ASSERT_TRUE(old);
-  EXPECT_EQ(old->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_EQ(old->solution, Solution::kRtkFloat);
   EXPECT_DOUBLE_EQ(old->accuracy_m, 0.3);
   EXPECT_EQ(tracker.old_corrections(), 1u);
   ASSERT_TRUE(tracker.last_old_correction_age());
@@ -187,13 +187,13 @@ TEST_F(TrackerTest, FixedOnOldCorrectionsCountsAsFloat) {
   // Fresh corrections again: fixed with the next sentence.
   auto again = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0.4);
   ASSERT_TRUE(again);
-  EXPECT_EQ(again->flags, kFlagRtk | kFlagRtkFixed);
+  EXPECT_EQ(again->solution, Solution::kRtkFixed);
 }
 
 TEST_F(TrackerTest, FixedWithoutCorrectionAgeCountsAsFloat) {
   auto p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, std::nullopt), 0);
   ASSERT_TRUE(p);
-  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_EQ(p->solution, Solution::kRtkFloat);
   EXPECT_DOUBLE_EQ(p->accuracy_m, 0.3);
   EXPECT_EQ(tracker.old_corrections(), 1u);
   EXPECT_FALSE(tracker.last_old_correction_age());
@@ -202,7 +202,7 @@ TEST_F(TrackerTest, FixedWithoutCorrectionAgeCountsAsFloat) {
 TEST_F(TrackerTest, CorrectionAgeLeavesOtherFixTypesAlone) {
   auto flt = tracker.Update(Gga(5, 52.0, 9.0, 60.0, -1.0, 90.0), 0);
   ASSERT_TRUE(flt);
-  EXPECT_EQ(flt->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_EQ(flt->solution, Solution::kRtkFloat);
   auto single = tracker.Update(Gga(1, 52.0, 9.0, 60.0, -1.0, std::nullopt), 0);
   ASSERT_TRUE(single);
   EXPECT_DOUBLE_EQ(single->accuracy_m, 3.0);
@@ -215,7 +215,7 @@ TEST(Tracker, CorrectionAgeLimitIsAParameter) {
   GnssTracker tracker{config, LocalFrame(52.0, 9.0, 60.0)};
   auto p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 12.0), 0);
   ASSERT_TRUE(p);
-  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_EQ(p->solution, Solution::kRtkFloat);
 }
 
 TEST_F(TrackerTest, MissingCourseGivesNoMotion) {
@@ -231,18 +231,18 @@ TEST_F(TrackerTest, HostAgeOfTheCorrectionsCountsWhenLarger) {
   tracker.SetHostCorrectionAge(31.0);
   auto p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0);
   ASSERT_TRUE(p);
-  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_EQ(p->solution, Solution::kRtkFloat);
   ASSERT_TRUE(tracker.last_old_correction_age());
   EXPECT_DOUBLE_EQ(*tracker.last_old_correction_age(), 31.0);
   tracker.SetHostCorrectionAge(0.5);
   p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 2.0), 0.2);
   ASSERT_TRUE(p);
-  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFixed);
+  EXPECT_EQ(p->solution, Solution::kRtkFixed);
   // The receiver's age stays the stricter one, and fixed without it counts as float as before.
   p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 40.0), 0.4);
-  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_EQ(p->solution, Solution::kRtkFloat);
   p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, std::nullopt), 0.6);
-  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_EQ(p->solution, Solution::kRtkFloat);
 }
 
 TEST_F(TrackerTest, WithNtripSetUpFixedWaitsForCorrectionsFromTheHost) {
@@ -250,7 +250,7 @@ TEST_F(TrackerTest, WithNtripSetUpFixedWaitsForCorrectionsFromTheHost) {
   // Fixed with fresh corrections of the receiver's own, e.g. from a LoRa base.
   auto p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0);
   ASSERT_TRUE(p);
-  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFloat);
+  EXPECT_EQ(p->solution, Solution::kRtkFloat);
   EXPECT_DOUBLE_EQ(p->accuracy_m, 0.3);
   EXPECT_EQ(tracker.fixed_before_host(), 1u);
   EXPECT_EQ(tracker.old_corrections(), 0u);
@@ -258,7 +258,7 @@ TEST_F(TrackerTest, WithNtripSetUpFixedWaitsForCorrectionsFromTheHost) {
   tracker.SetHostCorrectionAge(0.2);
   p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0.2);
   ASSERT_TRUE(p);
-  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFixed);
+  EXPECT_EQ(p->solution, Solution::kRtkFixed);
   EXPECT_EQ(tracker.fixed_before_host(), 1u);
   // Other fix types stay as they are.
   p = tracker.Update(Gga(1, 52.0, 9.0, 60.0, -1.0, std::nullopt), 0.4);
@@ -269,13 +269,13 @@ TEST_F(TrackerTest, WithNtripSetUpFixedWaitsForCorrectionsFromTheHost) {
 TEST_F(TrackerTest, WithoutNtripFixedNeedsNoCorrectionsFromTheHost) {
   auto p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0);
   ASSERT_TRUE(p);
-  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFixed);
+  EXPECT_EQ(p->solution, Solution::kRtkFixed);
   // Set up and removed again, e.g. ntrip.delete.
   tracker.SetHostCorrectionsRequired(true);
   tracker.SetHostCorrectionsRequired(false);
   p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0.2);
   ASSERT_TRUE(p);
-  EXPECT_EQ(p->flags, kFlagRtk | kFlagRtkFixed);
+  EXPECT_EQ(p->solution, Solution::kRtkFixed);
   EXPECT_EQ(tracker.fixed_before_host(), 0u);
 }
 

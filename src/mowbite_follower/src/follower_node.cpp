@@ -3,7 +3,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <memory>
 #include <mowbite_msgs/action/follow_path.hpp>
-#include <mowbite_msgs/msg/absolute_pose.hpp>
+#include <mowbite_msgs/msg/robot_pose.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
@@ -78,12 +78,12 @@ class FollowerNode : public rclcpp::Node {
     const double rate = declare_parameter("control_rate", 20.0);
 
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("follower/cmd_vel", 10);
-    pose_sub_ = create_subscription<mowbite_msgs::msg::AbsolutePose>(
-        "localization/pose", 10, [this](mowbite_msgs::msg::AbsolutePose::ConstSharedPtr msg) {
+    pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
+        "localization/pose", 10, [this](mowbite_msgs::msg::RobotPose::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          pose_ = Pose2{msg->pose.pose.position.x, msg->pose.pose.position.y, msg->vehicle_heading};
+          pose_ = Pose2{msg->x, msg->y, msg->heading};
           position_accuracy_ = msg->position_accuracy;
-          heading_valid_ = msg->orientation_valid != 0;
+          heading_valid_ = msg->heading_valid;
           pose_time_ = MonotonicSeconds();
         });
     hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
@@ -269,7 +269,7 @@ class FollowerNode : public rclcpp::Node {
   double driver_max_angular_ = 1e9;
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
-  rclcpp::Subscription<mowbite_msgs::msg::AbsolutePose>::SharedPtr pose_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr pose_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;

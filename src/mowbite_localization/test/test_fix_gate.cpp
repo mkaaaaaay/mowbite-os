@@ -11,7 +11,7 @@ namespace {
 
 GnssFix Fixed(double x, double y, double accuracy = 0.02) {
   GnssFix fix;
-  fix.flags = 1 | kFlagRtkFixed;
+  fix.solution = kSolutionRtkFixed;
   fix.accuracy = accuracy;
   fix.x = x;
   fix.y = y;
@@ -33,7 +33,7 @@ TEST(L3FixesThatCount, OnlyRtkFixedWithinTheAccuracy) {
   FixGate gate({});
   EXPECT_FALSE(gate.Reject(Fixed(1, 1)));
   GnssFix fl = Fixed(1, 1);
-  fl.flags = 1 | 4;
+  fl.solution = kSolutionRtkFloat;
   EXPECT_EQ(gate.Reject(fl), FixResult::kNotFixed);
   EXPECT_EQ(gate.Reject(Fixed(1, 1, 0.11)), FixResult::kInaccurate);
   EXPECT_EQ(gate.Reject(Fixed(1, 1, std::numeric_limits<double>::quiet_NaN())), FixResult::kInaccurate);

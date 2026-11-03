@@ -20,7 +20,7 @@ import rclpy
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix
-from mowbite_msgs.msg import AbsolutePose, Rtcm
+from mowbite_msgs.msg import GnssFix, Rtcm
 from rcl_interfaces.msg import Log
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
@@ -29,8 +29,8 @@ LINKS = {name: os.path.join(WORK, name) for name in ("mcu", "gnss", "imu")}
 FLAGS = os.path.join(WORK, "flags.json")
 LOG = os.path.join(WORK, "rx.jsonl")
 ACCESS = os.path.join(WORK, "ntrip.yaml")
-FIXED = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FIXED
-FLOAT = AbsolutePose.FLAG_GPS_RTK | AbsolutePose.FLAG_GPS_RTK_FLOAT
+FIXED = GnssFix.RTK_FIXED
+FLOAT = GnssFix.RTK_FLOAT
 
 # The CRC of fake_tron, so there is one in the sim.
 _loader = importlib.machinery.SourceFileLoader(
@@ -70,7 +70,7 @@ class Probe:
         self.flags = []
         self.logs = []
         self.node = rclpy.create_node("lora_probe")
-        self.node.create_subscription(AbsolutePose, "gps/absolute_pose", self._pose, 10)
+        self.node.create_subscription(GnssFix, "gps/absolute_pose", self._pose, 10)
         self.node.create_subscription(Log, "/rosout", self._log, 100)
         self.rtcm_pub = self.node.create_publisher(Rtcm, "gnss/rtcm", QoSProfile(depth=50,
                                                                               reliability=ReliabilityPolicy.RELIABLE))
@@ -83,7 +83,7 @@ class Probe:
 
     def _pose(self, msg):
         with self.lock:
-            self.flags.append((time.time(), msg.flags))
+            self.flags.append((time.time(), msg.solution))
 
     def _log(self, msg):
         if msg.name == "tron_gnss":
