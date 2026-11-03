@@ -1,0 +1,40 @@
+# The build and test image of docker/dev.Dockerfile for the runner's architecture, loaded as mowbite-os-dev:jazzy.
+name: dev image
+description: Builds mowbite-os-dev:jazzy with the planner of its pin and a cache per architecture.
+inputs:
+  planner-key:
+    description: Read-only deploy key of mkaaaaaay/mowbite-planner-tron
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Planner commit of the Dockerfile
+      id: planner
+      shell: bash
+      run: echo "commit=$(sed -n 's/^ARG PLANNER_COMMIT=//p' docker/dev.Dockerfile)" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/checkout@v7
+      with:
+        repository: mkaaaaaay/mowbite-planner-tron
+        ref: ${{ steps.planner.outputs.commit }}
+        ssh-key: ${{ inputs.planner-key }}
+        persist-credentials: false
+        path: planer
+
+    # Not the default builder: images built later with docker build must see this one.
+    - uses: docker/setup-buildx-action@v4
+      id: buildx
+      with:
+        use: false
+
+    - uses: docker/build-push-action@v7
+      with:
+        builder: ${{ steps.buildx.outputs.name }}
+        context: .
+        file: docker/dev.Dockerfile
+        build-contexts: planer=planer
+        load: true
+        provenance: false
+        tags: mowbite-os-dev:jazzy
+        cache-from: type=gha,scope=dev-${{ runner.arch }}
+        cache-to: type=gha,scope=dev-${{ runner.arch }},mode=max
