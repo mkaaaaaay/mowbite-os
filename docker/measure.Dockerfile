@@ -6,6 +6,10 @@
 ARG ROS_DISTRO=jazzy
 
 FROM ros:${ROS_DISTRO}-ros-base AS build
+# mowbite_hold, which xcore_driver links, reads its file with nlohmann-json (headers only, nothing at run time).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends nlohmann-json3-dev \
+ && rm -rf /var/lib/apt/lists/*
 ARG BUILD_JOBS=2
 COPY src /ws/src
 RUN . /opt/ros/$ROS_DISTRO/setup.sh && cd /ws \
