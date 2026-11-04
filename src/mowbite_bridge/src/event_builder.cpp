@@ -5,8 +5,9 @@
 
 namespace mowbite_bridge {
 
-nlohmann::ordered_json BuildEvent(const std::string& type, const nlohmann::ordered_json& details, double t) {
-  nlohmann::ordered_json event = {{"id", RandomId()}, {"t", t}, {"type", type}};
+nlohmann::ordered_json BuildEvent(const std::string& type, const nlohmann::ordered_json& details, double t,
+                                  const std::string& id) {
+  nlohmann::ordered_json event = {{"id", id.empty() ? RandomId() : id}, {"t", t}, {"type", type}};
   if (!details.is_object()) return event;
   for (const auto& [key, value] : details.items()) {
     if (key != "id" && key != "t" && key != "type") event[key] = value;
