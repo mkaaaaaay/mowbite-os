@@ -341,6 +341,62 @@ class Files(unittest.TestCase):
         self.assertAlmostEqual(steady["per_duty_right"], 0.9, delta=0.02)
         self.assertIn("WARNING", xc.text_report(self.report(path)))
 
+    def test_wheel_settling_back_after_the_stop(self):
+        # As in M4 frozen run 3 on the NX60i: the wheels stand, 0.2 s later one tick back on the left; then a slow run
+        # with single ticks keeps its end.
+        s = Session()
+        tpm = 1815.1
+        left = right = 2 ** 32 - 500.0
+        t = 100.0
+        while t < 112.0:
+            speed = 0.047 if 100.2 <= t < 102.0 else 0.007 if 106.0 <= t < 108.0 else 0.0
+            left += speed * tpm * 0.04
+            right -= speed * tpm * 0.04
+            if abs(t - 102.24) < 1e-6:
+                left -= 1
+            s.board(t, lambda st, l=int(left) % 2 ** 32, r=int(right) % 2 ** 32:
+                    transaction(2, st, (7, struct.pack("<2I", l, r))))
+            t = round(t + 0.04, 6)
+        path = os.path.join(self.dir, "settle.pcap")
+        s.write(path).close()
+        report = xc.analyse(xc.load_capture(path, self.services), (xc.NX60I_INPUTS, "test"),
+                            {"driver": (40.0, 0.5), "safety": (31.0, 1.0)}, 15.0, 0.1,
+                            drive={"ticks_per_meter": tpm, "wheel_distance": 0.3014, "right_sign": -1})
+        fast, slow = report["boots"][0]["drive"]["runs"]
+        self.assertAlmostEqual(fast["stop"], 102.28, delta=0.001)
+        self.assertAlmostEqual(fast["first_still"], 102.04, delta=0.045)
+        self.assertAlmostEqual(fast["still_before_stop_s"], 0.24, delta=0.045)
+        self.assertEqual(fast["settle_ticks"], 1)
+        self.assertEqual(slow["still_before_stop_s"], 0.0)
+        self.assertEqual(slow["settle_ticks"], 0)
+        self.assertIn("settle", xc.text_report(report))
+
+    def test_gap_without_wheel_reports(self):
+        # The inner network down for 5 s: the wheels turned on for 1.1 s of it; the counters show how far.
+        s = Session()
+        tpm = 1815.1
+        left = right = 1000.0
+        t = 100.0
+        while t < 110.0:
+            dt = 0.04
+            speed = 0.1 if t < 103.1 else 0.0
+            left += speed * tpm * dt
+            right -= speed * tpm * dt
+            if not 102.0 < t < 107.0:
+                s.board(t, lambda st, l=int(left), r=int(right): transaction(2, st, (7, struct.pack("<2I", l, r))))
+            t = round(t + dt, 6)
+        path = os.path.join(self.dir, "gap.pcap")
+        s.write(path).close()
+        report = xc.analyse(xc.load_capture(path, self.services), (xc.NX60I_INPUTS, "test"),
+                            {"driver": (40.0, 0.5), "safety": (31.0, 1.0)}, 15.0, 0.1,
+                            drive={"ticks_per_meter": tpm, "wheel_distance": 0.3014, "right_sign": -1})
+        gap, = report["boots"][0]["drive"]["gaps"]
+        self.assertAlmostEqual(gap["from"], 102.0, delta=0.001)
+        self.assertAlmostEqual(gap["to"], 107.0, delta=0.001)
+        self.assertAlmostEqual(gap["speed_before"][0], 0.1, delta=0.005)
+        self.assertAlmostEqual(gap["turning_s"], 1.1, delta=0.05)
+        self.assertIn("Gaps without wheel reports", xc.text_report(report))
+
     def test_text_report_renders(self):
         path = os.path.join(self.dir, "text.pcap")
         stop_session(with_events=True).write(path).close()
