@@ -894,7 +894,8 @@ def main():
     parser.add_argument("--group-port", type=int, default=4242)
     parser.add_argument("--firmware", default="v1.4.3")
     parser.add_argument("--major", type=int, default=1)
-    parser.add_argument("--full-duty-speed", type=float, default=0.9, help="wheel speed at full duty in m/s")
+    parser.add_argument("--full-duty-speed", type=float, default=0.47,
+                        help="wheel speed per unit of duty in m/s (NX60i in the air at duty 0.1, as in nx60i.yaml)")
     parser.add_argument("--track", type=float, default=0.3556, help="real distance of the wheels in m")
     parser.add_argument("--ticks-start", type=int, default=2**32 - 3000, help="start value of both counters")
     parser.add_argument("--ticks-scale", type=float, default=1.0, help="true ticks per metre / configured ones")

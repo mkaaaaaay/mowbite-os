@@ -1,7 +1,7 @@
 """V1 and V5 of the safety measurement against fake_xcore: measure.py runs M1-M8 through the minimal launch, the person's
 actions go to the fake's flags, and xcore_capture must find the fake's known values in its capture (STOP 10 ms, lift
 2.5 s, collision 0.5 s, both sensors at once after 10 ms, wheels stand 1.0 s after the host fell silent plus their
-run-down, 0.9 m/s at full duty, three stops of the driver's watchdog, every start with a fresh command, the blade below
+run-down, 0.47 m/s per duty, three stops of the driver's watchdog, every start with a fresh command, the blade below
 100 rpm about 2 s after off). Then the limits of the recording,
 of the fake's capture and of the run time.
 
@@ -36,7 +36,8 @@ GROUP_PORT = random.randint(42000, 48000)
 BIND_IP = f"127.{random.randint(1, 250)}.{random.randint(1, 250)}.{random.randint(2, 250)}"
 SERVICES = os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "config", "xcore_nx60i_services.json")
 FAKE = os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_xcore")
-FULL_DUTY_SPEED = 0.9
+# As nx60i.yaml, so that the wheels turn as fast as the driver commands.
+FULL_DUTY_SPEED = 0.47
 
 
 def generate_test_description():
