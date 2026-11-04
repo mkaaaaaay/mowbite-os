@@ -11,8 +11,8 @@ import sys
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LAUNCH_DIR = os.path.normpath(os.path.join(HERE, "..", "launch"))
-sys.path.insert(0, LAUNCH_DIR)
+STORE_FOLDER = os.path.normpath(os.path.join(HERE, "..", "launch"))
+sys.path.insert(0, STORE_FOLDER)
 import data_store  # noqa: E402
 from data_store import Halt, prepare  # noqa: E402
 

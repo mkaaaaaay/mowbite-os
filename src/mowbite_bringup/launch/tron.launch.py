@@ -17,8 +17,8 @@ from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
 
 # data_store.py lies next to this file, in the source tree and in the install space alike.
-LAUNCH_DIR = os.path.dirname(os.path.realpath(__file__))
-sys.path.insert(0, LAUNCH_DIR)
+STORE_FOLDER = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, STORE_FOLDER)
 import data_store  # noqa: E402
 
 # After a crash the container starts again at most this often, each time after RESTART_DELAY s, then it stays down
