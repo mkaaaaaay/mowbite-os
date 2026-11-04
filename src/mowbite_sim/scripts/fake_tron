@@ -9,7 +9,8 @@ antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz
 Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, gnss_age, gnss_delay,
 yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, gnss_rtcm, dock_shift_x, dock_shift_y,
 dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps) is
-read on every cycle, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON. The
+read every 10 ms, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON; a thread
+of its own does all of this file work, so a slow disk never holds the ptys (Files). The
 GNSS pty also plays the RTK board in front of the receiver (Board). gnss_rtcm true makes the fix depend on the RTCM the
 board passes: RTK fixed with the real age while corrections are at most 120 s old, otherwise single without age.
 gnss_noise is the standard deviation (m) of the antenna position, gnss_age the age of the corrections in GGA (s, default
@@ -32,11 +33,13 @@ import datetime
 import json
 import math
 import os
+import queue
 import random
 import select
 import signal
 import struct
 import sys
+import threading
 import time
 import tty
 
@@ -116,20 +119,92 @@ def read_flags(path):
         return {}
 
 
-class Log:
-    """JSON lines, stops writing at max_bytes."""
+FILES_PERIOD = 0.01
+FILES_QUEUE = 100000
 
-    def __init__(self, path, max_bytes):
+
+class Files:
+    """Reads the flags and writes the log and the state on a thread of its own: a slow disk (up to 3.3 s under load)
+    must not hold the loop that serves the ptys. The loop takes the flags last read, queues what it writes and hands over
+    its newest state, both already serialised; what does not fit the queue is dropped and counted."""
+
+    def __init__(self, flags_path, state_path):
+        self.flags_path = flags_path
+        self.state_path = state_path
+        self.flags = read_flags(flags_path)
+        self.dropped = self.errors = 0
+        self._queue = queue.Queue(FILES_QUEUE)
+        self._state = None
+        self._closing = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="files", daemon=True)
+        self._thread.start()
+
+    def write(self, file, data):
+        try:
+            self._queue.put_nowait((file, data))
+        except queue.Full:
+            self.dropped += 1
+
+    def state(self, text):
+        self._state = text
+
+    def close(self, timeout=2.0):
+        """Writes what is still queued, for at most timeout s, and tells what got lost."""
+        self._closing.set()
+        self._thread.join(timeout)
+        if self.dropped or self.errors or self._thread.is_alive():
+            print(f"fake_tron: file work lost {self.dropped} queued writes, {self.errors} failed, "
+                  f"{'still busy' if self._thread.is_alive() else 'done'} at the end", file=sys.stderr, flush=True)
+
+    def _run(self):
+        written_state = None
+        while True:
+            closing = self._closing.is_set()
+            self.flags = read_flags(self.flags_path)
+            end = time.monotonic() + FILES_PERIOD
+            touched = set()
+            while True:
+                try:
+                    file, data = self._queue.get(timeout=max(0.0, end - time.monotonic()))
+                except queue.Empty:
+                    break
+                try:
+                    file.write(data)
+                    touched.add(file)
+                except OSError:
+                    self.errors += 1
+                if time.monotonic() >= end:
+                    break
+            for file in touched:
+                try:
+                    file.flush()
+                except OSError:
+                    self.errors += 1
+            state = self._state
+            if state is not None and state is not written_state and self.state_path:
+                written_state = state
+                try:
+                    write_state(self.state_path, state)
+                except OSError:
+                    self.errors += 1
+            if closing and self._queue.empty():
+                return
+
+
+class Log:
+    """JSON lines through Files, stops writing at max_bytes."""
+
+    def __init__(self, path, max_bytes, files):
         self.file = open(path, "w") if path else None
         self.left = max_bytes
+        self.files = files
 
     def write(self, entry):
         if not self.file or self.left <= 0:
             return
         line = json.dumps(entry) + "\n"
         self.left -= len(line)
-        self.file.write(line)
-        self.file.flush()
+        self.files.write(self.file, line)
 
 
 WGS84_A = 6378137.0
@@ -628,11 +703,15 @@ def send(fd, data):
                   flush=True)
 
 
-def write_state(path, now, pose, dock_ok=False):
+def state_text(now, pose, dock_ok=False):
+    return json.dumps({"t": round(now, 3), "x": pose.x, "y": pose.y, "yaw": pose.yaw, "linear": pose.linear,
+                       "angular": pose.angular, "dock_ok": dock_ok})
+
+
+def write_state(path, text):
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
-        json.dump({"t": round(now, 3), "x": pose.x, "y": pose.y, "yaw": pose.yaw, "linear": pose.linear,
-                   "angular": pose.angular, "dock_ok": dock_ok}, f)
+        f.write(text)
     os.replace(tmp, path)
 
 
@@ -682,7 +761,8 @@ def main():
     mcu = Port(args.link)
     gnss = Port(args.gnss_link)
     imu = Port(args.imu_link)
-    log = Log(args.log, int(args.log_max_mb * 1e6))
+    files = Files(args.flags, args.state)
+    log = Log(args.log, int(args.log_max_mb * 1e6), files)
     decoder = Decoder()
     board = Board()
     board_on = None
@@ -708,7 +788,7 @@ def main():
     try:
         while True:
             now = time.monotonic() - t0
-            flags = read_flags(args.flags)
+            flags = files.flags
             # Somebody puts the mower down there by hand, once for each new value of the flag; lifting it drops the
             # setpoint the MCU held.
             place = flags.get("place")
@@ -797,7 +877,7 @@ def main():
                                             (args.slope[0], args.slope[1]), args.gyro_scale))
             if args.state and now >= next_state:
                 next_state = now + 0.2
-                write_state(args.state, now, pose, dock_ok)
+                files.state(state_text(now, pose, dock_ok))
 
             if now >= next_port_check:
                 next_port_check = now + 0.1
@@ -843,6 +923,7 @@ def main():
                     log.write(entry)
     finally:
         remove_links((args.link, args.gnss_link, args.imu_link))
+        files.close()
 
 
 if __name__ == "__main__":
