@@ -5,7 +5,8 @@ string map
 string expected_sha256
 ---
 bool success
-# 0, -32602 (invalid map or request), -32000 (datum), -32001 (the map changed meanwhile), -32603 (disk)
+# 0, -32602 (invalid map or request), -32000 (datum), -32001 (the map changed meanwhile), -32004 (an update holds the
+# mower), -32603 (disk)
 int32 code
 # Why the map was refused, "Successfully stored map (N areas)" if it was stored
 string message

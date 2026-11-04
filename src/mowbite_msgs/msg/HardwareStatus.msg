@@ -32,6 +32,9 @@ bool emergency_latched
 uint32 emergency_reason
 # Sensor data from the hardware within the timeout of the driver.
 bool telemetry_ok
+# An update holds the mower (<data_dir>/hold.json, also one the driver cannot read): motion and blade are blocked
+# without an emergency, charging goes on.
+bool hold
 
 # Live sensor flags, false without telemetry.
 bool lift
