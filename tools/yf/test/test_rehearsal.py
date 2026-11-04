@@ -167,7 +167,7 @@ class TestRehearsal(unittest.TestCase):
         gap, = [g for g in self.boot()["drive"]["gaps"] if g["turning_s"] is not None]
         self.assertGreater(gap["turning_s"], 0.6)
         self.assertLess(gap["turning_s"], 1.3)
-        self.assertIn("M4 inner network down", self.output)
+        self.assertIn("[M4] inner network down", self.output)
         ended, = [r for r in runs if "SIGINT" in r["step"]]
         self.assertLess(ended["since_zero_command_s"], 0.2)
 
@@ -222,14 +222,14 @@ class TestRehearsal(unittest.TestCase):
         backward = [r for r in runs if "backward" in r["step"]][0]
         self.assertTrue(backward["reason"].startswith("COLLISION"))
         # The driver keeps 0.3 m/s: the fast runs wait for raised limits.
-        self.assertIn("fast runs: the driver allows 0.3", self.output)
+        self.assertIn("fast runs: the driver allows 0.30 m/s", self.output)
         self.assertFalse([r for r in runs if "fast" in (r["step"] or "")])
         stopping = [json.loads(line) for line in open(self.recording) if '"kind": "stopping"' in line]
         self.assertEqual(len(stopping), 3)  # STOP, no command, backward; not the killed driver
         self.assertTrue(all(0.0 <= s["odometry_m"] < 0.3 for s in stopping), stopping)
-        # Without a command the wheels go on for the driver's 0.5 s at 0.27 m/s (duty 0.3 at the fake's 0.9).
+        # Without a command the wheels go on for the driver's 0.5 s at 0.14 m/s (duty 0.3 at 0.47 m/s per duty).
         quiet, = [s for s in stopping if "no command" in s["text"]]
-        self.assertGreater(quiet["odometry_m"], 0.05)
+        self.assertGreater(quiet["odometry_m"], 0.03)
 
     def test_k_recording_limit(self):
         record = os.path.join(WORK, "small")

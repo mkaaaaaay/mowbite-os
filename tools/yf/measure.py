@@ -829,7 +829,8 @@ class Measurement:
         # Speed per duty at high duty and the stopping distance at 0.4-0.5 m/s (own word, raised limits).
         limit = self.mower.max_linear_speed
         if limit is None or limit < 0.4 - 1e-6:
-            print(f"\n{step} fast runs: the driver allows {limit} m/s; they need its limits raised to 0.4 m/s or more "
+            shown = "no" if limit is None else f"{limit:.2f}"
+            print(f"\n{step} fast runs: the driver allows {shown} m/s; they need its limits raised to 0.4 m/s or more "
                   "(own word of the user) and are skipped.")
             return
         fast = min(FAST_WHEEL_SPEED, limit)
@@ -871,8 +872,8 @@ class Measurement:
             # A killed driver sees nothing until its successor runs; the counters in the capture tell that distance.
             if how != "kill":
                 metres = self.mower.travelled(cause)
-                print(f"     odometry: {metres:.3f} m from the {'emergency' if fake else 'last command'} until it "
-                      "stood")
+                print(f"     odometry (the driver's view): {metres:.3f} m from the "
+                      f"{'emergency' if fake else 'last command'} until it stood")
                 self.rec.write("stopping", step=step, text=text, odometry_m=metres)
             chalk = self.person.number("stopping distance at the chalk line in m")
             if chalk is not None:
