@@ -20,6 +20,7 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import ExecuteProcess, IncludeLaunchDescription, TimerAction
 from launch.events.process import ProcessStarted
@@ -57,9 +58,11 @@ def generate_test_description():
              "--state", os.path.join(WORK, "xstate.json")],
         output="screen")
     config = os.path.join(get_package_share_directory("xcore_driver"), "config", "nx60i.yaml")
-    # In a namespace of its own, beside tron_mcu.
+    with open(config) as f:
+        params = yaml.safe_load(f)["xcore_driver"]["ros__parameters"]
+    # In a namespace of its own, beside tron_mcu; the file is keyed by the bare node name, so its values go in as a dict.
     driver = Node(package="xcore_driver", executable="xcore_driver_node", namespace="xcore", output="screen",
-                  parameters=[config, {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT}])
+                  parameters=[params, {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT}])
     return launch.LaunchDescription([
         sim, fake_xcore,
         TimerAction(period=0.5, actions=[driver]),
@@ -108,8 +111,10 @@ def udp_sockets(pid):
 
 
 def shared_memory(pid):
+    """Segments of Fast DDS in /dev/shm the process maps (not its typesupport libraries)."""
     with open(f"/proc/{pid}/maps") as f:
-        return sorted({line.split()[-1] for line in f if "fastrtps" in line or "fast_datasharing" in line})
+        paths = {line.split()[-1] for line in f}
+    return sorted(p for p in paths if p.startswith("/dev/shm/") and ("fastrtps" in p or "fast_datasharing" in p))
 
 
 def run_until_halt(cmd, seconds=30):
