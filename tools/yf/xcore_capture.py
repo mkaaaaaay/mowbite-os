@@ -922,7 +922,8 @@ def analyse_drive(cap, boot, names, ticks_per_meter, wheel_distance, right_sign)
     out = {"ticks_per_meter": ticks_per_meter, "wheel_distance": wheel_distance, "runs": [], "steady": []}
     speeds = []
     for (t0, l0, r0), (t1, l1, r1) in zip(ticks, ticks[1:]):
-        if t1 <= t0:
+        # Across a gap the wheels are unseen: tick_gaps tells that distance, it starts no run.
+        if t1 <= t0 or t1 - t0 >= TICK_GAP:
             continue
         dl = ((l1 - l0 + (1 << 31)) % (1 << 32)) - (1 << 31)
         dr = ((r1 - r0 + (1 << 31)) % (1 << 32)) - (1 << 31)

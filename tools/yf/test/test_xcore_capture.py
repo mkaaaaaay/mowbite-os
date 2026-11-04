@@ -396,6 +396,9 @@ class Files(unittest.TestCase):
         self.assertAlmostEqual(gap["speed_before"][0], 0.1, delta=0.005)
         self.assertAlmostEqual(gap["turning_s"], 1.1, delta=0.05)
         self.assertIn("Gaps without wheel reports", xc.text_report(report))
+        # The counters across the gap start no run of their own.
+        run, = report["boots"][0]["drive"]["runs"]
+        self.assertLess(run["start"], 102.0)
 
     def test_text_report_renders(self):
         path = os.path.join(self.dir, "text.pcap")
