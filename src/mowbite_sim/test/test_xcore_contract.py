@@ -265,15 +265,15 @@ class TestXcoreContract(unittest.TestCase):
         moving = [(t, v) for t, v in twists if v[0] != 0 or v[5] != 0]
         zeros = [t for t, v in twists if v[0] == 0 and v[5] == 0]
         self.assertGreaterEqual(len(moving), 8)
-        # 0.3 m/s at full_duty_speed 1.0 is a duty of 0.3, the most the driver gives.
+        # 0.3 m/s at full_duty_speed 0.47 would be a duty of 0.64; max_duty 0.3 is the most the driver gives.
         self.assertTrue(all(abs(v[0] - 0.3) < 1e-6 and abs(v[5]) < 1e-6 for _, v in moving), str(moving[:3]))
         self.assertEqual(len(zeros), 3, str(twists[-5:]))
         # The setpoint goes out every 0.1 s until cmd_vel has been silent for 0.5 s: commands for 1.0 s, then 0.5 s.
         self.assertAlmostEqual(zeros[0] - moving[0][0], 1.4, delta=0.2)
         self.assertLess(zeros[0] - moving[-1][0], 0.15)
         self.assertAlmostEqual(zeros[2] - zeros[0], 0.2, delta=0.06)
-        # The fake's wheels reach 0.9 m/s at full duty: the ticks show 0.27 m/s forward, also on the falling counter.
-        self.assertAlmostEqual(moving_odom, 0.27, delta=0.03)
+        # The fake's wheels turn at 0.47 m/s per duty: the ticks show 0.14 m/s forward, also on the falling counter.
+        self.assertAlmostEqual(moving_odom, 0.141, delta=0.02)
         self.assertGreater(board()["x"] - x0, 0.2)
         self.assertEqual(board()["duty"], [0.0, 0.0])
 
