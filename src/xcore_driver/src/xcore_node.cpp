@@ -20,6 +20,7 @@
 #include <mowbite_msgs/srv/set_blade.hpp>
 #include <mowbite_msgs/srv/set_charge.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
+#include <mowbite_hold/hold.h>
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -83,6 +84,8 @@ constexpr double kStaleSendS = 0.1;
 constexpr double kForeignCheckS = 5.0;
 // Without a socket the loop waits this long before it tries again.
 constexpr double kClosedWaitS = 0.05;
+// hold.json is looked at this often.
+constexpr double kHoldPollS = 0.5;
 const char kAgeSensor[] = "os_correction_age";
 
 rclcpp::QoS LatchedQos() {
@@ -92,6 +95,11 @@ rclcpp::QoS LatchedQos() {
 double MonotonicSeconds() {
   using namespace std::chrono;
   return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+int64_t WallSeconds() {
+  using namespace std::chrono;
+  return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
 }
 
 double UtcSecondsOfDay() {
@@ -114,9 +122,10 @@ const char* ServiceName(uint16_t id) {
   return "unknown";
 }
 
-// The part of hw/status that goes out at once when it changes: emergency, latch and reason bits.
+// The part of hw/status that goes out at once when it changes: emergency, latch, reason bits and the hold.
 uint64_t BlockOf(const xcore::ControlStatus& status) {
-  return status.emergency_reason | (uint64_t{status.blocked} << 32) | (uint64_t{status.latched} << 33);
+  return status.emergency_reason | (uint64_t{status.blocked} << 32) | (uint64_t{status.latched} << 33) |
+         (uint64_t{status.held} << 34);
 }
 
 const char* BladeOffText(xcore::BladeOffReason reason) {
@@ -172,6 +181,10 @@ class XcoreNode : public rclcpp::Node {
     if (safety_measurement_date_.empty()) {
       RCLCPP_WARN(get_logger(), "No safety measurement of this mower yet: remote control only");
     }
+    // <data_dir>/hold.json of the logic; empty: no hold.
+    hold_watch_.emplace(declare_parameter("hold_file", ""));
+    if (hold_watch_->path().empty()) RCLCPP_WARN(get_logger(), "No hold_file: an update cannot hold this driver");
+    PollHold();
 
     twist_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("hw/wheel_odom", 10);
     imu_pub_ = create_publisher<sensor_msgs::msg::Imu>("imu/data", rclcpp::SensorDataQoS());
@@ -487,8 +500,13 @@ class XcoreNode : public rclcpp::Node {
     double next_tick = 0;
     double next_open = 0;
     double next_foreign_check = 0;
+    double next_hold = 0;
     while (running_ && rclcpp::ok()) {
       double now = MonotonicSeconds();
+      if (now >= next_hold) {
+        next_hold = now + kHoldPollS;
+        PollHold();
+      }
       if (!service_socket_.IsOpen()) {
         {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -546,6 +564,29 @@ class XcoreNode : public rclcpp::Node {
       if (BlockChanged()) PublishStatus();
     }
     Shutdown();
+  }
+
+  // The hold of an update, from hold.json itself: it stands without the logic and right after a restart.
+  void PollHold() {
+    const mowbite_hold::HoldView view = hold_watch_->Poll(MonotonicSeconds(), WallSeconds());
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      control_.SetHold(view.held);
+    }
+    if (view.held == hold_logged_.held && view.unreadable == hold_logged_.unreadable &&
+        view.until == hold_logged_.until) {
+      return;
+    }
+    if (view.unreadable) {
+      RCLCPP_ERROR(get_logger(), "Held: %s; motion and blade stay blocked until it is readable or gone",
+                   view.error.c_str());
+    } else if (view.held) {
+      RCLCPP_INFO(get_logger(), "Held for an update until %lld (unix s): motion and blade blocked",
+                  static_cast<long long>(view.until));
+    } else if (hold_logged_.held) {
+      RCLCPP_INFO(get_logger(), "Hold ended: motion and blade allowed again");
+    }
+    hold_logged_ = view;
   }
 
   bool BlockChanged() {
@@ -890,6 +931,7 @@ class XcoreNode : public rclcpp::Node {
       msg.emergency_latched = s.latched;
       msg.emergency_reason = s.emergency_reason;
       msg.telemetry_ok = s.telemetry_ok;
+      msg.hold = s.held;
       msg.lift = s.lift;
       msg.stop = s.stop;
       msg.bumper_left = s.bumper_left;
@@ -995,6 +1037,9 @@ class XcoreNode : public rclcpp::Node {
     res.message = "charging is controlled by the board";
   }
 
+  std::optional<mowbite_hold::HoldWatch> hold_watch_;
+  // What PollHold logged last, only for the I/O thread after the start.
+  mowbite_hold::HoldView hold_logged_;
   xcore::InputConfig inputs_;
   // One PublishStatus at a time; taken before mutex_, never while mutex_ is held.
   std::mutex publish_mutex_;

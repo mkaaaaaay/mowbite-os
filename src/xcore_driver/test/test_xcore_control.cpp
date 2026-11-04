@@ -751,3 +751,70 @@ TEST(XcoreControl, WheelAgainstTheCommandLatches) {
   EXPECT_FALSE(r.f.control.ReleaseEmergency(r.t));
   EXPECT_FALSE(r.f.control.Status(r.t).blocked);
 }
+
+TEST(XcoreControl, HoldStopsWheelsAndBladeWithoutEmergency) {
+  Fixture f;
+  f.control.OnCmdVel(0.2, 0, 0);
+  ASSERT_EQ(f.control.SetBlade({true, 0, 0, 1.0}, 0), BladeResult::kOk);
+  f.control.Tick(0);
+  f.control.SetHold(true);
+  f.Board(0, 0.05);
+  auto out = f.control.Tick(0.05);
+  ASSERT_EQ(Of(out, kDiffDriveService).size(), 1u);
+  EXPECT_EQ(TwistOf(Of(out, kDiffDriveService)[0])[0], 0);
+  ASSERT_EQ(Of(out, kMowerService).size(), 1u);
+  EXPECT_EQ(SpeedOf(Of(out, kMowerService)[0]), 0);
+  // No latch for the board: the emergency input stays clear.
+  for (const auto& v : Of(out, kEmergencyService)) EXPECT_EQ(EmergencyOf(v).first, 0);
+  auto s = f.control.Status(0.05);
+  EXPECT_TRUE(s.held);
+  EXPECT_FALSE(s.blocked);
+  EXPECT_FALSE(s.latched);
+  EXPECT_EQ(s.emergency_reason, 0u);
+  EXPECT_EQ(s.blade_off_reason, BladeOffReason::kBlocked);
+  // Commands and blade requests while held do nothing.
+  for (int i = 6; i < 300; i++) {
+    const double t = i * 0.01;
+    f.Board(0, t);
+    f.control.OnCmdVel(0.2, 0, t);
+    uint32_t bits = 7;
+    EXPECT_EQ(f.control.SetBlade({true, 0, 0, 1.0}, t, &bits), BladeResult::kHeld);
+    EXPECT_EQ(bits, 0u);
+    const auto values = f.control.Tick(t);
+    for (const auto& v : Of(values, kDiffDriveService)) EXPECT_EQ(TwistOf(v)[0], 0);
+    for (const auto& v : Of(values, kMowerService)) EXPECT_EQ(SpeedOf(v), 0);
+    for (const auto& v : Of(values, kEmergencyService)) EXPECT_EQ(EmergencyOf(v).first, 0);
+  }
+  EXPECT_FALSE(f.control.Status(3.0).moving);
+  // The hold ends without a release.
+  f.control.SetHold(false);
+  f.Board(0, 3.0);
+  f.control.OnCmdVel(0.2, 0, 3.0);
+  EXPECT_EQ(f.control.SetBlade({true, 0, 0, 1.0}, 3.0), BladeResult::kOk);
+  const auto again = f.control.Tick(3.0);
+  ASSERT_EQ(Of(again, kDiffDriveService).size(), 1u);
+  EXPECT_GT(TwistOf(Of(again, kDiffDriveService)[0])[0], 0);
+  ASSERT_EQ(Of(again, kMowerService).size(), 1u);
+  EXPECT_GT(SpeedOf(Of(again, kMowerService)[0]), 0);
+}
+
+TEST(XcoreControl, AnEmergencyDuringAHoldIsReportedAsSuch) {
+  Fixture f;
+  f.control.SetHold(true);
+  f.Board(reason::kLatch | reason::kStop, 0);
+  uint32_t bits = 0;
+  EXPECT_EQ(f.control.SetBlade({true, 0, 0, 1.0}, 0, &bits), BladeResult::kBlocked);
+  EXPECT_EQ(bits & (reason::kLatch | reason::kStop), reason::kLatch | reason::kStop);
+  EXPECT_TRUE(f.control.Status(0).blocked);
+  EXPECT_TRUE(f.control.Status(0).held);
+}
+
+TEST(XcoreControl, HoldWithoutMotionSendsNoDrive) {
+  Fixture f;
+  f.control.SetHold(true);
+  for (int i = 0; i < 200; i++) {
+    const double t = i * 0.01;
+    f.Board(0, t);
+    EXPECT_TRUE(Of(f.control.Tick(t), kDiffDriveService).empty());
+  }
+}

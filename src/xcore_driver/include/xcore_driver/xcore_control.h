@@ -106,7 +106,7 @@ struct BladeRequest {
   double lease_s = 0;
 };
 
-enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked };
+enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked, kHeld };
 
 const char* BladeResultText(BladeResult result);
 
@@ -159,6 +159,8 @@ int8_t MotorStatusCode(uint8_t esc_status);
 
 struct ControlStatus {
   bool blocked = true;
+  // An update holds the mower: motion and blade blocked without an emergency.
+  bool held = false;
   uint32_t emergency_reason = 0;
   bool latched = false;
   bool telemetry_ok = false;
@@ -212,6 +214,9 @@ class XcoreControl {
   std::vector<std::string> TakeErrors();
   // All services the driver needs are claimed and configured, and their firmware fits; false blocks.
   void SetServicesReady(bool ready, bool firmware_compatible);
+  // The hold of an update (hold.json): motion and blade blocked without an emergency and without a latch on the board;
+  // moving wheels get their stops, the blade goes off. The board charges on its own as before.
+  void SetHold(bool held);
 
   // An output of a service, with the board's time stamp. Returns a wheel twist when ticks gave one.
   std::optional<WheelTwist> OnOutput(uint16_t service_id, uint16_t channel_id, const Bytes& value,
@@ -250,6 +255,7 @@ class XcoreControl {
 
   bool services_ready_ = false;
   bool firmware_compatible_ = true;
+  bool held_ = false;
 
   std::optional<uint16_t> board_reason_;
   std::optional<double> last_emergency_s_;

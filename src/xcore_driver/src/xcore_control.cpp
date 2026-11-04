@@ -46,6 +46,8 @@ const char* BladeResultText(BladeResult result) {
       return "blocked by the emergency";
     case BladeResult::kDocked:
       return "on the dock";
+    case BladeResult::kHeld:
+      return "held for an update";
   }
   return "unknown";
 }
@@ -104,6 +106,8 @@ BladeResult XcoreControl::SetBlade(const BladeRequest& request, double now, uint
   // A refused renewal also ends a running lease, so the blade never outlives a refusal.
   if (Blocked(now)) {
     DropBlade(BladeOffReason::kBlocked);
+    // An emergency says more than the hold.
+    if (held_ && Reason(now) == 0) return BladeResult::kHeld;
     if (emergency_reason) *emergency_reason = Reason(now);
     return BladeResult::kBlocked;
   }
@@ -530,8 +534,12 @@ bool XcoreControl::TelemetryStale(double now) const {
   return !last_emergency_s_ || now - *last_emergency_s_ > config_.telemetry_timeout_s;
 }
 
+void XcoreControl::SetHold(bool held) {
+  held_ = held;
+}
+
 bool XcoreControl::Blocked(double now) const {
-  return Reason(now) != 0;
+  return held_ || Reason(now) != 0;
 }
 
 bool XcoreControl::HoldsBoard() const {
@@ -580,6 +588,7 @@ ControlStatus XcoreControl::Status(double now) const {
   ControlStatus s;
   s.emergency_reason = Reason(now);
   s.blocked = s.emergency_reason != 0;
+  s.held = held_;
   s.latched = (s.emergency_reason & kReasonLatch) != 0;
   s.telemetry_ok = !TelemetryStale(now);
   s.lift = InputActive(inputs_.lift);

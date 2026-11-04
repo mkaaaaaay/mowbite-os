@@ -1022,3 +1022,82 @@ TEST_F(BladeControlTest, NeverSendsPowerOff) {
                  s.packet.payload == power_off.payload);
   }
 }
+
+TEST_F(BladeControlTest, HoldBlocksMotionAndBladeWithoutEmergency) {
+  Run(0.5);
+  control_.SetHold(true);
+  EXPECT_FALSE(DrivesOrMows(2.0));
+  uint32_t reason = 99;
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_, &reason), BladeResult::kHeld);
+  EXPECT_EQ(reason, 0u);
+  const McuControlStatus status = control_.Status(now_);
+  EXPECT_TRUE(status.held);
+  EXPECT_FALSE(status.blocked);
+  EXPECT_EQ(status.emergency_reason, 0u);
+  EXPECT_FALSE(status.latched);
+  // Ends without a release: the next command drives again.
+  control_.SetHold(false);
+  EXPECT_FALSE(control_.Status(now_).held);
+  EXPECT_TRUE(DrivesOrMows(3.0));
+}
+
+TEST_F(BladeControlTest, HoldStopsAMovingMowerAndTheBlade) {
+  Run(0.1);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  control_.SetBlade(BladeOn(), now_);
+  Run(0.2);
+  ASSERT_EQ(Times(IsMovingSpeed).size(), 1u);
+  ASSERT_EQ(Times(IsBladeOn).size(), 1u);
+  control_.SetHold(true);
+  for (int i = 0; i < 10; i++) {
+    control_.OnCmdVel(0.2f, 0.0f, now_);
+    control_.SetBlade(BladeOn(), now_);
+    Run(now_ + 0.1);
+  }
+  EXPECT_EQ(Times(IsMovingSpeed).size(), 1u);
+  EXPECT_EQ(Times(IsZeroSpeed, 0.2).size(), 3u);
+  EXPECT_EQ(Times(IsBladeOff, 0.2).size(), 3u);
+  EXPECT_EQ(Times(IsBladeOn).size(), 1u);
+  EXPECT_FALSE(control_.Status(now_).moving);
+  EXPECT_EQ(control_.Status(now_).blade_off_reason, BladeOffReason::kBlocked);
+}
+
+TEST_F(BladeControlTest, AnEmergencyDuringAHoldIsReportedAsSuch) {
+  Run(0.5);
+  control_.SetHold(true);
+  sensor_.lift = true;
+  Run(0.6);
+  uint32_t reason = 0;
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_, &reason), BladeResult::kBlocked);
+  EXPECT_NE(reason & kReasonLift, 0u);
+  EXPECT_TRUE(control_.Status(now_).blocked);
+  EXPECT_TRUE(control_.Status(now_).held);
+}
+
+TEST_F(ControlTest, HoldLetsChargingGoOn) {
+  control_.SetHold(true);
+  Run(0.1);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  Run(31.0);
+  EXPECT_EQ(Times(IsChargeOn).size(), 2u);
+  EXPECT_TRUE(Times([](const SubPacket& p) { return IsModule(p, Module::kSpeed); }).empty());
+}
+
+TEST_F(ControlTest, HoldKeepsTheHeartbeat) {
+  control_.SetHold(true);
+  Run(1.0);
+  EXPECT_EQ(Times(IsHeartbeat).size(), 10u);
+}
+
+TEST_F(ControlTest, HoldOnTheDockSendsNoSpeedData) {
+  Run(0.1);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  control_.SetHold(true);
+  for (int i = 0; i < 20; i++) {
+    control_.OnCmdVel(0.0f, 0.0f, now_);
+    Run(now_ + 0.1);
+  }
+  control_.SetHold(false);
+  Run(now_ + 1.0);
+  EXPECT_TRUE(Times([](const SubPacket& p) { return IsModule(p, Module::kSpeed); }).empty());
+}

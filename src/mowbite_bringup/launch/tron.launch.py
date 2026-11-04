@@ -84,8 +84,10 @@ def launch_setup(context):
     # Should the container die, the driver stops the wheels after cmd_vel_timeout, the blade lease runs out and the
     # missing IMU latches IMU_TIMEOUT. With the namespace the dict goes under the full name; without it, under /**,
     # the port in the node's own section of config would win.
+    # The driver reads the hold of an update itself, also without the logic and right after its own restart.
+    hold_file = os.path.join(data_dir, data_store.HOLD_FILE) if data_dir else ""
     mcu = Node(package="tron_mcu", executable="tron_mcu_node", name="tron_mcu", namespace="/",
-               parameters=[config, extra, {"port": arg("mcu_port")}], output="screen")
+               parameters=[config, extra, {"port": arg("mcu_port"), "hold_file": hold_file}], output="screen")
     gnss = ComposableNode(
         package="tron_gnss", plugin="tron_gnss::GnssNode", name="tron_gnss",
         parameters=[config, extra, {"port": arg("gnss_port"), "datum_lat": float(arg("datum_lat")),
