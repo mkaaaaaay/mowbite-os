@@ -10,7 +10,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 1;
+constexpr int kApi = 2;
 
 // The JSON type of a field; kNumber takes whole numbers as well, kInteger also 2.0.
 enum class Type { kString, kNumber, kInteger, kBoolean, kObject, kArray };
@@ -29,6 +29,8 @@ struct Field {
   bool nullable = false;
   // The fields of an object, none for an object of any fields.
   std::vector<Field> fields;
+  // ECMA regular expression a text has to match, empty for any.
+  std::string pattern;
 };
 
 // A reason as events and refusals carry it: reason, message, severity, resume and its own fields.
@@ -64,15 +66,24 @@ struct EmergencyBit {
   std::string text;
 };
 
-// An RPC method of the interface; action is the action id it stands for, empty for none.
+// An action of actions/json that does what a command does with these params.
+struct CommandAction {
+  CommandAction(std::string action_in, Json params_in = Json::object())
+      : action(std::move(action_in)), params(std::move(params_in)) {}
+  std::string action;
+  Json params;
+};
+
+// An RPC method of the interface; actions are the action ids it stands for, none for a method without one.
 struct Command {
   std::string name;
   std::string text;
   std::vector<Field> params;
   std::vector<Field> result;
-  // The event type whose reasons a refusal (-32600 with data) carries, empty when it is never refused.
+  // The event type whose reasons a refusal (-32600 with data) carries, empty when it is never refused. Reasons of
+  // COMMAND_REFUSED (Refusals) may come with any command.
   std::string refused;
-  std::string action;
+  std::vector<CommandAction> actions;
 };
 
 // The fields of robot_state/json.
@@ -85,16 +96,26 @@ const std::vector<Field>& Envelope();
 const std::vector<Field>& LogicFields();
 const std::vector<EmergencyBit>& EmergencyBits();
 const std::vector<Command>& Commands();
+// Groups of reasons only answers carry, never an event: COMMAND_REFUSED.
+const std::vector<EventEntry>& Refusals();
 
 // The event of this type, nullptr for a type the catalog does not know.
 const EventEntry* FindEvent(const std::string& type);
+// The event or the group of answers of this type, nullptr for neither.
+const EventEntry* FindReasonGroup(const std::string& type);
+const Command* FindCommand(const std::string& name);
+// The command an action stands for, with the params it means; nullptr for an action without one.
+const Command* CommandOfAction(const std::string& action, Json* params);
+
+// The text of the client field the command RPCs take: [a-z][a-z0-9_-]{0,15}.
+constexpr char kClientPattern[] = "^[a-z][a-z0-9_-]{0,15}$";
 
 struct Rating {
   const char* severity;
   const char* resume;
 };
 
-// severity and resume of a reason of an event; action only for RECORDING_REFUSED.
+// severity and resume of a reason of an event or of a group of answers; action only for RECORDING_REFUSED.
 Rating RateReason(const std::string& event, const std::string& code, const std::string& action = "");
 
 // The names of the set emergency bits, "LATCH, LIFT"; bits without a name are left out.
@@ -107,6 +128,10 @@ const Json& Schema();
 // wrong type or value, a reason the event does not know, severity or resume other than the catalog's. details may
 // hold the envelope; empty when all is well.
 std::vector<std::string> CheckEvent(const std::string& type, const Json& details, bool strict = true);
+
+// What is wrong with the params of a command: not an object, a field it does not take, a missing one, a wrong type,
+// value or text. Empty when all is well; field names the first field at fault.
+std::string CheckParams(const Command& command, const Json& params, std::string* field);
 
 // What in the newer schema takes away from the older one: a definition, field, type, value, reason, emergency bit or
 // command gone, a field of robot_state or an event no longer always there, a parameter newly required.

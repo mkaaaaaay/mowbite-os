@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:mowbite-os:api:1",
+  "$id": "urn:mowbite-os:api:2",
   "title": "MowBite OS app interface",
-  "description": "robot_state, events and RPC methods of MowBite OS over MQTT, as system.api gives them. x-reasons has severity and resume of every reason by event, x-emergency-bits the bits of emergency, x-commands the methods with params, result and the event of their refusal.",
-  "x-api": 1,
+  "description": "robot_state, events and RPC methods of MowBite OS over MQTT, as system.api gives them. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED only in refusals), x-emergency-bits the bits of emergency, x-commands the methods with params, result, the event of their refusal and the actions that do the same.",
+  "x-api": 2,
   "$defs": {
     "robot_state": {
       "type": "object",
@@ -206,6 +206,11 @@
           "type": "string",
           "description": "The session of the logic since its start"
         },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
         "state": {
           "type": "string",
           "enum": [
@@ -342,6 +347,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         },
         "reason": {
           "type": "string",
@@ -485,6 +495,11 @@
           "type": "string",
           "description": "The session of the logic since its start"
         },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
         "reason": {
           "type": "string",
           "description": "Why: a fixed name in capitals, rated in x-reasons",
@@ -616,6 +631,11 @@
           "type": "string",
           "description": "The session of the logic since its start"
         },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
         "action": {
           "type": "string",
           "enum": [
@@ -642,6 +662,7 @@
             "POSITION_ACCURACY",
             "HOLD",
             "STILL_SAVING",
+            "EMERGENCY",
             "MAP_UNKNOWN",
             "MAP_MISMATCH",
             "SAVE_FAILED",
@@ -773,6 +794,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         },
         "reason": {
           "type": "string",
@@ -956,6 +982,11 @@
           "type": "string",
           "description": "The session of the logic since its start"
         },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
         "phase": {
           "type": "string",
           "enum": [
@@ -1021,6 +1052,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         },
         "status": {
           "type": "string",
@@ -1091,6 +1127,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         },
         "reason": {
           "type": "string",
@@ -1249,6 +1290,11 @@
           "type": "string",
           "description": "The session of the logic since its start"
         },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
         "phase": {
           "type": "string",
           "enum": [
@@ -1388,6 +1434,11 @@
           "type": "string",
           "description": "The session of the logic since its start"
         },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
         "reason": {
           "type": "string",
           "description": "Why: a fixed name in capitals, rated in x-reasons",
@@ -1471,6 +1522,11 @@
           "type": "string",
           "description": "The session of the logic since its start"
         },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
         "emergency": {
           "type": "boolean",
           "description": "Whether an emergency stops the mower now"
@@ -1494,6 +1550,14 @@
             "user"
           ],
           "description": "user while it lasts, auto once it ended"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "rpc",
+            "button"
+          ],
+          "description": "Who released it: rpc for a command over MQTT (action or RPC), button; none when not known"
         }
       },
       "required": [
@@ -1544,6 +1608,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         },
         "reason": {
           "type": "string",
@@ -1642,6 +1711,11 @@
           "type": "string",
           "description": "The session of the logic since its start"
         },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
         "enabled": {
           "type": "boolean",
           "description": "Whether the blade runs"
@@ -1692,6 +1766,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         },
         "battery_voltage": {
           "type": "number",
@@ -1751,6 +1830,11 @@
           "type": "string",
           "description": "The session of the logic since its start"
         },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
         "area_id": {
           "type": "string",
           "description": "Id of the area"
@@ -1806,6 +1890,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         },
         "area_id": {
           "type": "string",
@@ -1893,6 +1982,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         }
       },
       "required": [
@@ -1939,6 +2033,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         }
       },
       "required": [
@@ -1985,6 +2084,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         }
       },
       "required": [
@@ -2031,6 +2135,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         }
       },
       "required": [
@@ -2077,6 +2186,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         },
         "reason": {
           "type": "string",
@@ -2155,6 +2269,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         }
       },
       "required": [
@@ -2201,6 +2320,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         },
         "reason": {
           "type": "string",
@@ -2284,6 +2408,11 @@
           "type": "string",
           "description": "The session of the logic since its start"
         },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
         "reason": {
           "type": "string",
           "description": "Why: a fixed name in capitals, rated in x-reasons",
@@ -2366,6 +2495,11 @@
           "type": "string",
           "description": "The session of the logic since its start"
         },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
         "dock_id": {
           "type": "string",
           "description": "Id of the docking station"
@@ -2422,6 +2556,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         },
         "area_id": {
           "type": "string",
@@ -2498,6 +2637,11 @@
         "session_id": {
           "type": "string",
           "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
         },
         "changed": {
           "type": "array",
@@ -2711,6 +2855,61 @@
       ],
       "additionalProperties": false,
       "x-emitter": "ntrip"
+    },
+    "refusal": {
+      "type": "object",
+      "description": "data of the -32600 of a refused command; event names the group of its reason in x-reasons",
+      "properties": {
+        "event": {
+          "type": "string",
+          "description": "The event whose texts the reason has: a *_REFUSED type or COMMAND_REFUSED"
+        },
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state; BUSY brings its own"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state"
+        },
+        "event_id": {
+          "type": "string",
+          "description": "id of the event the refusal also went out as, none without one"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons"
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        }
+      },
+      "required": [
+        "event",
+        "state",
+        "sub_state",
+        "reason",
+        "severity",
+        "resume"
+      ]
     },
     "event.other": {
       "type": "object",
@@ -2939,10 +3138,373 @@
       ],
       "additionalProperties": false
     },
+    "emergency.reset.params": {
+      "type": "object",
+      "description": "The params of emergency.reset",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "emergency.reset.result": {
+      "type": "object",
+      "description": "The result of emergency.reset",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        },
+        "released": {
+          "type": "boolean",
+          "description": "Always true: released; a reason the board still holds keeps it"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state",
+        "released"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.start.params": {
+      "type": "object",
+      "description": "The params of mowing.start",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "areas": {
+          "type": "array",
+          "description": "Ids of the areas to mow in this order (open_mower_ros #359); not yet: -32602 with data field areas"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.start.result": {
+      "type": "object",
+      "description": "The result of mowing.start",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        },
+        "check": {
+          "type": "boolean",
+          "description": "True when the reference check on the docking station comes first; its refusal comes as MOWING_REFUSED event"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state",
+        "check"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.reset_job.params": {
+      "type": "object",
+      "description": "The params of mowing.reset_job",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.reset_job.result": {
+      "type": "object",
+      "description": "The result of mowing.reset_job",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "Id of the dropped job"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state",
+        "job_id"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.pause.params": {
+      "type": "object",
+      "description": "The params of mowing.pause",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.pause.result": {
+      "type": "object",
+      "description": "The result of mowing.pause",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.continue.params": {
+      "type": "object",
+      "description": "The params of mowing.continue",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.continue.result": {
+      "type": "object",
+      "description": "The result of mowing.continue",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.abort.params": {
+      "type": "object",
+      "description": "The params of mowing.abort",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.abort.result": {
+      "type": "object",
+      "description": "The result of mowing.abort",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.skip_area.params": {
+      "type": "object",
+      "description": "The params of mowing.skip_area",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "area": {
+          "type": "integer",
+          "description": "current_area of robot_state the client saw; another one now gives CHANGED"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.skip_area.result": {
+      "type": "object",
+      "description": "The result of mowing.skip_area",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        },
+        "area": {
+          "type": "integer",
+          "description": "The area skipped, current_area before"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state",
+        "area"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.skip_path.params": {
+      "type": "object",
+      "description": "The params of mowing.skip_path",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "path": {
+          "type": "integer",
+          "description": "current_path of robot_state the client saw; another one now gives CHANGED"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.skip_path.result": {
+      "type": "object",
+      "description": "The result of mowing.skip_path",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        },
+        "path": {
+          "type": "integer",
+          "description": "The path skipped, current_path before"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "undocking.abort.params": {
+      "type": "object",
+      "description": "The params of undocking.abort",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "undocking.abort.result": {
+      "type": "object",
+      "description": "The result of undocking.abort",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "docking.abort.params": {
+      "type": "object",
+      "description": "The params of docking.abort",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "docking.abort.result": {
+      "type": "object",
+      "description": "The result of docking.abort",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
     "docking.start.params": {
       "type": "object",
       "description": "The params of docking.start",
-      "properties": {},
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
       "required": [],
       "additionalProperties": false
     },
@@ -2955,11 +3517,320 @@
           "enum": [
             "DOCKING"
           ],
-          "description": "The state after the start"
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
         }
       },
       "required": [
-        "state"
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.start.params": {
+      "type": "object",
+      "description": "The params of recording.start",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.start.result": {
+      "type": "object",
+      "description": "The result of recording.start",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.exit.params": {
+      "type": "object",
+      "description": "The params of recording.exit",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.exit.result": {
+      "type": "object",
+      "description": "The result of recording.exit",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.ring_start.params": {
+      "type": "object",
+      "description": "The params of recording.ring_start",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.ring_start.result": {
+      "type": "object",
+      "description": "The result of recording.ring_start",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.ring_stop.params": {
+      "type": "object",
+      "description": "The params of recording.ring_stop",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.ring_stop.result": {
+      "type": "object",
+      "description": "The result of recording.ring_stop",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.save.params": {
+      "type": "object",
+      "description": "The params of recording.save",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "mow",
+            "nav"
+          ],
+          "description": "mow for a mowing area, nav for a navigation area"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "recording.save.result": {
+      "type": "object",
+      "description": "The result of recording.save",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.discard.params": {
+      "type": "object",
+      "description": "The params of recording.discard",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.discard.result": {
+      "type": "object",
+      "description": "The result of recording.discard",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.dock.params": {
+      "type": "object",
+      "description": "The params of recording.dock",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.dock.result": {
+      "type": "object",
+      "description": "The result of recording.dock",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.auto_points.params": {
+      "type": "object",
+      "description": "The params of recording.auto_points",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "True: a point every few centimetres by itself; false: only recording.point"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": false
+    },
+    "recording.auto_points.result": {
+      "type": "object",
+      "description": "The result of recording.auto_points",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.point.params": {
+      "type": "object",
+      "description": "The params of recording.point",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.point.result": {
+      "type": "object",
+      "description": "The result of recording.point",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
       ],
       "additionalProperties": false
     }
@@ -3430,6 +4301,12 @@
         "severity": "info",
         "resume": "user",
         "description": "The last change of the map is still being saved",
+        "fields": {}
+      },
+      "EMERGENCY": {
+        "severity": "error",
+        "resume": "user",
+        "description": "An emergency stops the mower",
         "fields": {}
       },
       "MAP_UNKNOWN": {
@@ -4145,6 +5022,32 @@
           "previous_mountpoint": ""
         }
       }
+    },
+    "COMMAND_REFUSED": {
+      "WRONG_STATE": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The command does not fit the state of the mower; its action would not be enabled",
+        "fields": {
+          "state": "",
+          "sub_state": ""
+        }
+      },
+      "NO_JOB": {
+        "severity": "info",
+        "resume": "user",
+        "description": "There is no unfinished job",
+        "fields": {}
+      },
+      "CHANGED": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The area or path is another one than the client saw: nothing was skipped",
+        "fields": {
+          "area": "",
+          "path": ""
+        }
+      }
     }
   },
   "x-emergency-bits": [
@@ -4260,21 +5163,287 @@
       "params": "#/$defs/system.info.params",
       "result": "#/$defs/system.info.result",
       "refused": null,
-      "action": null
+      "action": null,
+      "actions": []
     },
     "system.api": {
       "description": "This interface as JSON Schema with its version",
       "params": "#/$defs/system.api.params",
       "result": "#/$defs/system.api.result",
       "refused": null,
-      "action": null
+      "action": null,
+      "actions": []
+    },
+    "emergency.reset": {
+      "description": "Asks the safety node to release the emergency and answers with its answer, after at most 3 s",
+      "params": "#/$defs/emergency.reset.params",
+      "result": "#/$defs/emergency.reset.result",
+      "refused": "EMERGENCY_RESET_REFUSED",
+      "action": "mower_logic/reset_emergency",
+      "actions": [
+        {
+          "action": "mower_logic/reset_emergency",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.start": {
+      "description": "Starts or continues the job of mowing from IDLE",
+      "params": "#/$defs/mowing.start.params",
+      "result": "#/$defs/mowing.start.result",
+      "refused": "MOWING_REFUSED",
+      "action": "mower_logic:idle/start_mowing",
+      "actions": [
+        {
+          "action": "mower_logic:idle/start_mowing",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.reset_job": {
+      "description": "Drops the unfinished job in IDLE",
+      "params": "#/$defs/mowing.reset_job.params",
+      "result": "#/$defs/mowing.reset_job.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:idle/reset_job",
+      "actions": [
+        {
+          "action": "mower_logic:idle/reset_job",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.pause": {
+      "description": "Pauses mowing",
+      "params": "#/$defs/mowing.pause.params",
+      "result": "#/$defs/mowing.pause.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:mowing/pause",
+      "actions": [
+        {
+          "action": "mower_logic:mowing/pause",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.continue": {
+      "description": "Continues mowing after a pause that waits for the user",
+      "params": "#/$defs/mowing.continue.params",
+      "result": "#/$defs/mowing.continue.result",
+      "refused": "MOWING_REFUSED",
+      "action": "mower_logic:mowing/continue",
+      "actions": [
+        {
+          "action": "mower_logic:mowing/continue",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.abort": {
+      "description": "Ends mowing; the mower goes home where it docks by itself",
+      "params": "#/$defs/mowing.abort.params",
+      "result": "#/$defs/mowing.abort.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:mowing/abort_mowing",
+      "actions": [
+        {
+          "action": "mower_logic:mowing/abort_mowing",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.skip_area": {
+      "description": "Skips the area being mowed",
+      "params": "#/$defs/mowing.skip_area.params",
+      "result": "#/$defs/mowing.skip_area.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:mowing/skip_area",
+      "actions": [
+        {
+          "action": "mower_logic:mowing/skip_area",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.skip_path": {
+      "description": "Skips the path being mowed",
+      "params": "#/$defs/mowing.skip_path.params",
+      "result": "#/$defs/mowing.skip_path.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:mowing/skip_path",
+      "actions": [
+        {
+          "action": "mower_logic:mowing/skip_path",
+          "params": {}
+        }
+      ]
+    },
+    "undocking.abort": {
+      "description": "Stops leaving the docking station",
+      "params": "#/$defs/undocking.abort.params",
+      "result": "#/$defs/undocking.abort.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:undocking/abort_undocking",
+      "actions": [
+        {
+          "action": "mower_logic:undocking/abort_undocking",
+          "params": {}
+        }
+      ]
+    },
+    "docking.abort": {
+      "description": "Stops docking",
+      "params": "#/$defs/docking.abort.params",
+      "result": "#/$defs/docking.abort.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:docking/abort_docking",
+      "actions": [
+        {
+          "action": "mower_logic:docking/abort_docking",
+          "params": {}
+        }
+      ]
     },
     "docking.start": {
       "description": "Drives home from IDLE to the docking station where the OS docks by itself; offered only there",
       "params": "#/$defs/docking.start.params",
       "result": "#/$defs/docking.start.result",
       "refused": "DRIVE_REFUSED",
-      "action": null
+      "action": null,
+      "actions": []
+    },
+    "recording.start": {
+      "description": "Enters the recording of areas from IDLE",
+      "params": "#/$defs/recording.start.params",
+      "result": "#/$defs/recording.start.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:idle/start_area_recording",
+      "actions": [
+        {
+          "action": "mower_logic:idle/start_area_recording",
+          "params": {}
+        }
+      ]
+    },
+    "recording.exit": {
+      "description": "Leaves the recording; what was not saved is gone",
+      "params": "#/$defs/recording.exit.params",
+      "result": "#/$defs/recording.exit.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:area_recording/exit_recording_mode",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/exit_recording_mode",
+          "params": {}
+        }
+      ]
+    },
+    "recording.ring_start": {
+      "description": "Starts recording a ring: the outline, after it an obstacle",
+      "params": "#/$defs/recording.ring_start.params",
+      "result": "#/$defs/recording.ring_start.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/start_recording",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/start_recording",
+          "params": {}
+        }
+      ]
+    },
+    "recording.ring_stop": {
+      "description": "Closes the ring being recorded",
+      "params": "#/$defs/recording.ring_stop.params",
+      "result": "#/$defs/recording.ring_stop.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/stop_recording",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/stop_recording",
+          "params": {}
+        }
+      ]
+    },
+    "recording.save": {
+      "description": "Saves the outline and its obstacles as an area; AREA_RECORDED follows",
+      "params": "#/$defs/recording.save.params",
+      "result": "#/$defs/recording.save.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/finish_mowing_area",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/finish_mowing_area",
+          "params": {
+            "type": "mow"
+          }
+        },
+        {
+          "action": "mower_logic:area_recording/finish_navigation_area",
+          "params": {
+            "type": "nav"
+          }
+        }
+      ]
+    },
+    "recording.discard": {
+      "description": "Drops what was recorded and not saved",
+      "params": "#/$defs/recording.discard.params",
+      "result": "#/$defs/recording.discard.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/finish_discard",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/finish_discard",
+          "params": {}
+        }
+      ]
+    },
+    "recording.dock": {
+      "description": "Records a point of the docking station: first in front of it, then on the contacts; DOCK_RECORDED follows",
+      "params": "#/$defs/recording.dock.params",
+      "result": "#/$defs/recording.dock.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/record_dock",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/record_dock",
+          "params": {}
+        }
+      ]
+    },
+    "recording.auto_points": {
+      "description": "Switches the automatic points of the ring on or off",
+      "params": "#/$defs/recording.auto_points.params",
+      "result": "#/$defs/recording.auto_points.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/auto_point_collecting_enable",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/auto_point_collecting_enable",
+          "params": {
+            "enabled": true
+          }
+        },
+        {
+          "action": "mower_logic:area_recording/auto_point_collecting_disable",
+          "params": {
+            "enabled": false
+          }
+        }
+      ]
+    },
+    "recording.point": {
+      "description": "Takes the next position as a point of the ring",
+      "params": "#/$defs/recording.point.params",
+      "result": "#/$defs/recording.point.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/collect_point",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/collect_point",
+          "params": {}
+        }
+      ]
     }
   }
 }

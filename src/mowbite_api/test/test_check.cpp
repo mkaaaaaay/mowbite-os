@@ -131,3 +131,20 @@ TEST(CheckEvent, EveryReasonOfTheCatalogPassesWithItsRating) {
     }
   }
 }
+
+// The events of a command carry its client; the end of an emergency who released it.
+TEST(CheckEvent, ClientAndSource) {
+  const Json state{{"x", 0.0}, {"y", 0.0}, {"state", "MOWING"}, {"client", "app"}};
+  EXPECT_TRUE(CheckEvent("STATE", state).empty());
+  Json odd = state;
+  odd["client"] = "App";
+  EXPECT_TRUE(Has(CheckEvent("STATE", odd), "does not match"));
+  const Json released{{"x", 0.0},          {"y", 0.0},      {"emergency", false}, {"reason", 0},
+                      {"severity", "info"}, {"resume", "auto"}, {"source", "rpc"},  {"client", "ha"}};
+  EXPECT_TRUE(CheckEvent("EMERGENCY", released).empty());
+  Json ble = released;
+  ble["source"] = "ble";
+  EXPECT_TRUE(Has(CheckEvent("EMERGENCY", ble), "source: value"));
+  // Never an event.
+  EXPECT_TRUE(Has(CheckEvent("COMMAND_REFUSED", Json::object()), "does not know"));
+}

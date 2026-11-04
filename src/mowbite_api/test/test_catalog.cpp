@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -138,7 +139,7 @@ TEST(Catalog, EntriesAreWellFormed) {
     EXPECT_TRUE(names.insert(command.name).second) << command.name;
     EXPECT_FALSE(command.text.empty()) << command.name;
     if (!command.refused.empty()) {
-      EXPECT_NE(FindEvent(command.refused), nullptr) << command.name;
+      EXPECT_NE(FindReasonGroup(command.refused), nullptr) << command.name;
     }
   }
   for (const auto& field : RobotState()) EXPECT_FALSE(field.text.empty()) << field.name;
@@ -163,6 +164,9 @@ TEST(Catalog, EveryReasonOfTheSources) {
   for (const auto& event : Events()) {
     for (const auto& reason : event.reasons) codes.insert(reason.code);
   }
+  for (const auto& group : Refusals()) {
+    for (const auto& reason : group.reasons) codes.insert(reason.code);
+  }
   const std::regex literal(R"(Reason\("([A-Za-z_]+)\")");
   int found = 0;
   const std::filesystem::path root = std::filesystem::canonical(MOWBITE_SOURCE_ROOT);
@@ -181,4 +185,69 @@ TEST(Catalog, EveryReasonOfTheSources) {
     }
   }
   EXPECT_GT(found, 40);
+}
+
+// COMMAND_REFUSED is a group of answers only: rated like an event, but never one.
+TEST(Catalog, RefusalsAreNoEvents) {
+  ASSERT_EQ(Refusals().size(), 1u);
+  const EventEntry& answers = Refusals().front();
+  EXPECT_EQ(answers.type, "COMMAND_REFUSED");
+  EXPECT_EQ(FindEvent("COMMAND_REFUSED"), nullptr);
+  EXPECT_EQ(FindReasonGroup("COMMAND_REFUSED"), &answers);
+  for (const char* code : {"WRONG_STATE", "NO_JOB", "CHANGED"}) {
+    const Rating rating = RateReason("COMMAND_REFUSED", code);
+    EXPECT_STREQ(rating.severity, "info") << code;
+    EXPECT_STREQ(rating.resume, "user") << code;
+  }
+}
+
+// Every action of the logic but manual mowing stands for exactly one command, with params that command takes.
+TEST(Catalog, ActionsAndCommands) {
+  std::set<std::string> actions;
+  for (const auto& command : Commands()) {
+    const bool logic = std::any_of(command.params.begin(), command.params.end(),
+                                   [](const Field& param) { return param.name == "client"; });
+    EXPECT_EQ(logic, command.name.rfind("system.", 0) != 0) << command.name;
+    for (const auto& entry : command.actions) {
+      EXPECT_TRUE(actions.insert(entry.action).second) << entry.action;
+      Json params;
+      EXPECT_EQ(CommandOfAction(entry.action, &params), &command) << entry.action;
+      EXPECT_EQ(params, entry.params) << entry.action;
+      std::string field;
+      EXPECT_EQ(CheckParams(command, params, &field), "") << entry.action;
+    }
+  }
+  EXPECT_EQ(actions.size(), 21u);
+  EXPECT_EQ(CommandOfAction("mower_logic:area_recording/start_manual_mowing", nullptr), nullptr);
+  EXPECT_EQ(FindCommand("mowing.start")->actions[0].action, "mower_logic:idle/start_mowing");
+  EXPECT_EQ(FindCommand("no.such"), nullptr);
+}
+
+TEST(Catalog, ParamsOfACommand) {
+  const Command& save = *FindCommand("recording.save");
+  std::string field;
+  EXPECT_EQ(CheckParams(save, Json{{"type", "mow"}, {"client", "ha"}}, &field), "");
+  EXPECT_NE(CheckParams(save, Json::object(), &field), "");
+  EXPECT_EQ(field, "type");
+  EXPECT_NE(CheckParams(save, Json{{"type", "lawn"}}, &field), "");
+  EXPECT_EQ(field, "type");
+  EXPECT_NE(CheckParams(save, Json{{"type", "mow"}, {"area", 1}}, &field), "");
+  EXPECT_EQ(field, "area");
+  EXPECT_NE(CheckParams(save, Json::array({"mow"}), &field), "");
+  EXPECT_EQ(field, "");
+  const Command& pause = *FindCommand("mowing.pause");
+  for (const char* good : {"app", "ha", "a", "mowbite-app_2", "abcdefghijklmnop"}) {
+    EXPECT_EQ(CheckParams(pause, Json{{"client", good}}, &field), "") << good;
+  }
+  for (const Json& bad : {Json("App"), Json("1app"), Json(""), Json("abcdefghijklmnopq"), Json("a b"), Json("a/b"),
+                          Json(7)}) {
+    EXPECT_NE(CheckParams(pause, Json{{"client", bad}}, &field), "") << bad.dump();
+    EXPECT_EQ(field, "client");
+  }
+  const Command& skip = *FindCommand("mowing.skip_area");
+  EXPECT_EQ(CheckParams(skip, Json{{"area", 2}}, &field), "");
+  EXPECT_EQ(CheckParams(skip, Json{{"area", 2.0}}, &field), "");
+  EXPECT_NE(CheckParams(skip, Json{{"area", 2.5}}, &field), "");
+  EXPECT_NE(CheckParams(*FindCommand("recording.auto_points"), Json{{"enabled", 1}}, &field), "");
+  EXPECT_EQ(CheckParams(*FindCommand("mowing.start"), Json{{"areas", Json::array({"front"})}}, &field), "");
 }

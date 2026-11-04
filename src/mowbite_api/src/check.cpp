@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <regex>
 #include <set>
 
 #include "mowbite_api/catalog.h"
@@ -44,6 +45,10 @@ void CheckField(const std::string& where, const Field& field, const Json& value,
   }
   if (!field.values.empty() && std::find(field.values.begin(), field.values.end(), value) == field.values.end()) {
     problems->push_back(where + "." + field.name + ": value " + value.dump() + " is not one of the catalog's");
+  }
+  if (!field.pattern.empty() && value.is_string() &&
+      !std::regex_search(value.get<std::string>(), std::regex(field.pattern, std::regex::ECMAScript))) {
+    problems->push_back(where + "." + field.name + ": " + value.dump() + " does not match " + field.pattern);
   }
   if (field.type != Type::kObject || field.fields.empty()) return;
   std::set<std::string> known;
@@ -124,6 +129,28 @@ std::vector<std::string> CheckEvent(const std::string& type, const Json& details
     if (!known.count(key)) problems.push_back(type + ": field " + key + " is not in the catalog");
   }
   return problems;
+}
+
+std::string CheckParams(const Command& command, const Json& params, std::string* field) {
+  const auto fail = [field](const std::string& name, const std::string& text) {
+    if (field) *field = name;
+    return text;
+  };
+  if (!params.is_object()) return fail("", command.name + ": the params are not an object");
+  for (const auto& [key, value] : params.items()) {
+    const auto entry = std::find_if(command.params.begin(), command.params.end(),
+                                    [&key](const Field& param) { return param.name == key; });
+    if (entry == command.params.end()) return fail(key, command.name + " takes no " + key);
+    std::vector<std::string> problems;
+    CheckField(command.name, *entry, value, &problems);
+    if (!problems.empty()) return fail(key, problems.front());
+  }
+  for (const auto& param : command.params) {
+    if (param.required && !params.contains(param.name)) {
+      return fail(param.name, command.name + "." + param.name + " is missing");
+    }
+  }
+  return "";
 }
 
 }  // namespace mowbite_api

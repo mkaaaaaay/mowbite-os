@@ -7,23 +7,23 @@ namespace mowbite_api {
 namespace {
 
 Field Number(std::string name, std::string unit, std::string text, bool required = false) {
-  return {std::move(name), Type::kNumber, std::move(unit), required, std::move(text), {}, false, {}};
+  return {std::move(name), Type::kNumber, std::move(unit), required, std::move(text), {}, false, {}, ""};
 }
 
 Field Integer(std::string name, std::string unit, std::string text, bool required = false) {
-  return {std::move(name), Type::kInteger, std::move(unit), required, std::move(text), {}, false, {}};
+  return {std::move(name), Type::kInteger, std::move(unit), required, std::move(text), {}, false, {}, ""};
 }
 
 Field Text(std::string name, std::string text, bool required = false, std::vector<std::string> values = {}) {
-  return {std::move(name), Type::kString, "", required, std::move(text), std::move(values), false, {}};
+  return {std::move(name), Type::kString, "", required, std::move(text), std::move(values), false, {}, ""};
 }
 
 Field Bool(std::string name, std::string text, bool required = true) {
-  return {std::move(name), Type::kBoolean, "", required, std::move(text), {}, false, {}};
+  return {std::move(name), Type::kBoolean, "", required, std::move(text), {}, false, {}, ""};
 }
 
 Field List(std::string name, std::string text, bool required = true) {
-  return {std::move(name), Type::kArray, "", required, std::move(text), {}, false, {}};
+  return {std::move(name), Type::kArray, "", required, std::move(text), {}, false, {}, ""};
 }
 
 Field Limit(std::string unit) {
@@ -68,6 +68,9 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"BUSY", {"The mower is busy with something else", {Text("state", "What it is busy with")}}},
       {"CALIBRATION_MISSING", {"The calibration program is not running or gave no sign", {Seconds(), Limit("s")}}},
       {"CANCELED", {"The drive was canceled", {}}},
+      {"CHANGED",
+       {"The area or path is another one than the client saw: nothing was skipped",
+        {Integer("area", "", "current_area now"), Integer("path", "", "current_path now")}}},
       {"CROSS_TRACK", {"The mower got too far off its path", {}}},
       {"DOCK_TOO_CLOSE", {"The two points of the docking station are too close together", {Distance(), Limit("m")}}},
       {"DOCK_UNREACHABLE",
@@ -104,6 +107,7 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"NO_DOCK", {"The map has no docking station", {}}},
       {"NO_DOCK_CONTACT", {"No contact with the docking station", {}}},
       {"NO_HEADING", {"The heading is not known yet", {}}},
+      {"NO_JOB", {"There is no unfinished job", {}}},
       {"NO_MOWING_AREA", {"The map has no active mowing area", {}}},
       {"NO_OUTLINE", {"There is no outline yet", {}}},
       {"NO_POSITION", {"No position from the localization", {}}},
@@ -148,6 +152,9 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"TIMEOUT", {"It took too long", {}}},
       {"TOO_MANY_POINTS", {"The ring has too many points", {Limit("")}}},
       {"TRANSIT_FAILED", {"No way to the goal", {}}},
+      {"WRONG_STATE",
+       {"The command does not fit the state of the mower; its action would not be enabled",
+        {Text("state", "current_state of robot_state"), Text("sub_state", "current_sub_state of robot_state")}}},
       {"approach_failed", {"The approach to the docking station failed (value of OpenMower)",
                            {Integer("attempts", "", "Tries so far")}}},
       {"dock_failed", {"The last part onto the contacts failed (value of OpenMower)",
@@ -272,6 +279,7 @@ const std::vector<EventEntry>& Events() {
               std::vector<ReasonEntry> reasons = {R("POSITION_ACCURACY", "warning", "auto", "point")};
               for (auto& reason : User({{"HOLD", "info"},
                                         {"STILL_SAVING", "info"},
+                                        {"EMERGENCY", "error"},
                                         {"MAP_UNKNOWN", "error"},
                                         {"MAP_MISMATCH", "error"},
                                         {"SAVE_FAILED", "error"},
@@ -374,7 +382,9 @@ const std::vector<EventEntry>& Events() {
             {Bool("emergency", "Whether an emergency stops the mower now"),
              Integer("reason", "", "The bits of the emergency (x-emergency-bits), 0 once it ended", true),
              Text("severity", "error while it lasts, info once it ended", true, {"info", "error"}),
-             Text("resume", "user while it lasts, auto once it ended", true, {"auto", "user"})}),
+             Text("resume", "user while it lasts, auto once it ended", true, {"auto", "user"}),
+             Text("source", "Who released it: rpc for a command over MQTT (action or RPC), button; none when not known",
+                  false, {"rpc", "button"})}),
       Event("EMERGENCY_RESET_REFUSED", "logic", "A reset of the emergency was refused", Rated(true),
             User({{"STILL_TILTED", "warning"},
                   {"TILT_UNKNOWN", "error"},
@@ -432,6 +442,20 @@ const std::vector<EventEntry>& Events() {
              R("SOURCE_CHANGED", "warning", "auto")}),
   };
   return events;
+}
+
+const std::vector<EventEntry>& Refusals() {
+  static const std::vector<EventEntry> groups = {
+      Event("COMMAND_REFUSED", "answer",
+            "A command was refused for a reason no event tells: the data of its -32600, never an event",
+            Rated(true, {Text("event", "The event whose texts the reason has: a *_REFUSED type or COMMAND_REFUSED",
+                              true),
+                         Text("state", "current_state of robot_state; BUSY brings its own", true),
+                         Text("sub_state", "current_sub_state of robot_state", true),
+                         Text("event_id", "id of the event the refusal also went out as, none without one")}),
+            User({{"WRONG_STATE", "info"}, {"NO_JOB", "info"}, {"CHANGED", "info"}})),
+  };
+  return groups;
 }
 
 }  // namespace mowbite_api

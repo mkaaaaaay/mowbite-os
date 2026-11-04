@@ -32,6 +32,7 @@ Json Property(const Field& field) {
     property["enum"] = field.values;
     if (field.nullable) property["enum"].push_back(nullptr);
   }
+  if (!field.pattern.empty()) property["pattern"] = field.pattern;
   property["description"] = field.text;
   if (!field.unit.empty()) property["x-unit"] = field.unit;
   if (!field.fields.empty()) {
@@ -143,6 +144,10 @@ Json BuildSchema(const Json& planner) {
     known.push_back(event.type);
     if (!event.reasons.empty()) reasons[event.type] = Reasons(event);
   }
+  for (const auto& group : Refusals()) reasons[group.type] = Reasons(group);
+  // The data of a refusal, whatever its group: the fields of COMMAND_REFUSED and, open, those of its reason.
+  defs["refusal"] = Object("data of the -32600 of a refused command; event names the group of its reason in x-reasons",
+                           Pointers(Refusals().front().fields), false);
   if (planner.is_object()) {
     const Json events = planner.value("events", Json::object());
     for (const auto& [type, part] : events.items()) {
@@ -168,11 +173,14 @@ Json BuildSchema(const Json& planner) {
   for (const auto& command : Commands()) {
     defs[command.name + ".params"] = Object("The params of " + command.name, Pointers(command.params), true);
     defs[command.name + ".result"] = Object("The result of " + command.name, Pointers(command.result), true);
+    Json actions = Json::array();
+    for (const auto& entry : command.actions) actions.push_back({{"action", entry.action}, {"params", entry.params}});
     commands[command.name] = {{"description", command.text},
                               {"params", "#/$defs/" + command.name + ".params"},
                               {"result", "#/$defs/" + command.name + ".result"},
                               {"refused", command.refused.empty() ? Json() : Json(command.refused)},
-                              {"action", command.action.empty() ? Json() : Json(command.action)}};
+                              {"action", command.actions.empty() ? Json() : Json(command.actions[0].action)},
+                              {"actions", actions}};
   }
   Json bits = Json::array();
   for (const auto& bit : EmergencyBits()) {
@@ -183,8 +191,9 @@ Json BuildSchema(const Json& planner) {
                  {"title", "MowBite OS app interface"},
                  {"description",
                   "robot_state, events and RPC methods of MowBite OS over MQTT, as system.api gives them. "
-                  "x-reasons has severity and resume of every reason by event, x-emergency-bits the bits of "
-                  "emergency, x-commands the methods with params, result and the event of their refusal."},
+                  "x-reasons has severity and resume of every reason by event (COMMAND_REFUSED only in refusals), "
+                  "x-emergency-bits the bits of emergency, x-commands the methods with params, result, the event "
+                  "of their refusal and the actions that do the same."},
                  {"x-api", kApi},
                  {"$defs", defs},
                  {"x-reasons", reasons},

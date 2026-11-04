@@ -88,6 +88,21 @@ TEST(Schema, CommandsAndBits) {
   }
   EXPECT_EQ(schema["x-emergency-bits"].size(), EmergencyBits().size());
   EXPECT_EQ(schema["$defs"]["system.info.result"]["properties"]["api"]["type"], "integer");
+  // Action and RPC: recording.save stands for both finish actions, with its type.
+  const Json& save = schema["x-commands"]["recording.save"];
+  EXPECT_EQ(save["refused"], "RECORDING_REFUSED");
+  EXPECT_EQ(save["actions"], Json::parse(R"([
+      {"action": "mower_logic:area_recording/finish_mowing_area", "params": {"type": "mow"}},
+      {"action": "mower_logic:area_recording/finish_navigation_area", "params": {"type": "nav"}}])"));
+  EXPECT_EQ(schema["x-commands"]["docking.start"]["actions"], Json::array());
+  EXPECT_EQ(schema["$defs"]["mowing.pause.params"]["properties"]["client"]["pattern"], kClientPattern);
+  EXPECT_EQ(schema["$defs"]["mowing.reset_job.result"]["required"], Json({"state", "sub_state", "job_id"}));
+  // COMMAND_REFUSED only in x-reasons and in the data of a refusal, never an event.
+  EXPECT_TRUE(schema["x-reasons"]["COMMAND_REFUSED"].contains("WRONG_STATE"));
+  EXPECT_FALSE(schema["$defs"].contains("event.COMMAND_REFUSED"));
+  const Json& refusal = schema["$defs"]["refusal"];
+  EXPECT_EQ(refusal["required"], Json({"event", "state", "sub_state", "reason", "severity", "resume"}));
+  EXPECT_FALSE(refusal.contains("additionalProperties"));
 }
 
 TEST(Additive, WhatIsTakenAwayIsFound) {
