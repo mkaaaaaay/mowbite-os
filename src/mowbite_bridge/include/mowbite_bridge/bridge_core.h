@@ -125,6 +125,10 @@ class BridgeCore {
 // The WARN line for <data_dir>/container_exit.json, written by the launch before it starts the container again.
 std::string RestartWarning(std::string_view note);
 
+// The WARN line for <data_dir>/data_rollback.json: the launch took the data back to an older schema for an older image,
+// the changes since the update wait in a backup.
+std::string RollbackWarning(std::string_view note);
+
 }  // namespace mowbite_bridge
 
 #endif  // MOWBITE_BRIDGE_BRIDGE_CORE_H

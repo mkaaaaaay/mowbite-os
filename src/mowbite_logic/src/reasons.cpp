@@ -28,7 +28,7 @@ Rating RateReason(const std::string& event, const std::string& code, const std::
     // Points are taken again by themselves once the position is accurate.
     if (event == "RECORDING_REFUSED" && action == "point" && code == "POSITION_ACCURACY") return {kWarning, kAuto};
     static const std::set<std::string> info = {"BUSY", "STILL_STOPPING", "STILL_SAVING", "ON_DOCK", "RAIN",
-                                               "ALREADY_THERE"};
+                                               "ALREADY_THERE", "HOLD"};
     static const std::set<std::string> error = {"EMERGENCY",       "NO_SAFETY_MEASUREMENT", "MAP_MISMATCH",
                                                 "MAP_UNREADABLE",  "MAP_UNKNOWN",           "PLANNER_MISSING",
                                                 "FOLLOWER_MISSING", "SAVE_FAILED"};

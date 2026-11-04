@@ -1,18 +1,25 @@
 # All nodes of MowBite OS in one process (one ROS context, one DDS participant) except two: tron_mcu, so that a crash of
 # any other node leaves its watchdogs running (G25), and the MowBite Planner (Python, shapely).
+import asyncio
 import json
 import os
+import sys
 import time
 
 import launch.logging
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, SetEnvironmentVariable,
-                            TimerAction)
+from launch.actions import (DeclareLaunchArgument, OpaqueCoroutine, OpaqueFunction, RegisterEventHandler,
+                            SetEnvironmentVariable, TimerAction)
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
+
+# data_store.py lies next to this file, in the source tree and in the install space alike.
+STORE_FOLDER = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, STORE_FOLDER)
+import data_store  # noqa: E402
 
 # After a crash the container starts again at most this often, each time after RESTART_DELAY s, then it stays down
 # until the next start by hand.
@@ -22,24 +29,65 @@ RESTART_DELAY = 2.0
 EXIT_NOTE = "container_exit.json"
 
 
+# Stands in for the nodes after a halt, so that the launch stays without a restart loop until SIGINT.
+async def halted(context):
+    await asyncio.Event().wait()
+
+
+# data_dir for this image before any node starts (data_store.py): None to go on, else the halt.
+def prepare_data_dir(data_dir, logger):
+    halt_file = os.environ.get("MOWBITE_HALT_FILE") or data_store.HALT_FILE
+    try:
+        os.remove(halt_file)
+    except FileNotFoundError:
+        pass
+    if not data_dir:
+        return None
+    schema = "-"
+    try:
+        schema, _ = data_store.image_schema()
+        # The lock stays open until this process ends, after its nodes have stopped writing.
+        _, note = data_store.prepare(data_dir, schema, os.environ.get("MOWBITE_OS_REVISION") or "unknown")
+    except data_store.Halt as halt:
+        line = halt.line(schema)
+    except (OSError, ValueError, KeyError, LookupError) as error:
+        line = data_store.Halt("DATA_ERROR", f"The data schema of the image cannot be read: {error}.").line(schema)
+    else:
+        if note:
+            logger.warning(f"data_dir went back from schema {note['from']} to {note['to']}, the changes since the "
+                           f"update are in {os.path.join(data_dir, note['backup'])}")
+        return None
+    print(line, file=sys.stderr, flush=True)
+    try:
+        data_store.write_halt(halt_file, line)
+    except OSError as error:
+        logger.error(f"Cannot write {halt_file}: {error}")
+    return [OpaqueCoroutine(coroutine=halted)]
+
+
 # The nodes with the values of the launch arguments taken now: the components are loaded again after a crash of the
 # container, when the arguments of an including launch may be out of scope (sim.launch.py has them in a TimerAction).
 def launch_setup(context):
     def arg(name):
         return LaunchConfiguration(name).perform(context)
 
+    logger = launch.logging.get_logger("tron.launch")
+    data_dir = arg("data_dir")
+    halt = prepare_data_dir(data_dir, logger)
+    if halt:
+        return halt
     config = arg("config")
     # The dimensions of the platform; config and extra come after it and can change single values (the simulation does).
     geometry = arg("geometry")
     # Values on top of config, e.g. those of the simulation; by default config once more.
     extra = arg("extra_config")
-    data_dir = arg("data_dir")
-    logger = launch.logging.get_logger("tron.launch")
     # Should the container die, the driver stops the wheels after cmd_vel_timeout, the blade lease runs out and the
     # missing IMU latches IMU_TIMEOUT. With the namespace the dict goes under the full name; without it, under /**,
     # the port in the node's own section of config would win.
+    # The driver reads the hold of an update itself, also without the logic and right after its own restart.
+    hold_file = os.path.join(data_dir, data_store.HOLD_FILE) if data_dir else ""
     mcu = Node(package="tron_mcu", executable="tron_mcu_node", name="tron_mcu", namespace="/",
-               parameters=[config, extra, {"port": arg("mcu_port")}], output="screen")
+               parameters=[config, extra, {"port": arg("mcu_port"), "hold_file": hold_file}], output="screen")
     gnss = ComposableNode(
         package="tron_gnss", plugin="tron_gnss::GnssNode", name="tron_gnss",
         parameters=[config, extra, {"port": arg("gnss_port"), "datum_lat": float(arg("datum_lat")),
@@ -131,8 +179,12 @@ def generate_launch_description():
         DeclareLaunchArgument("datum_lat", default_value="nan"),
         DeclareLaunchArgument("datum_long", default_value="nan"),
         DeclareLaunchArgument("datum_height", default_value="0.0"),
-        DeclareLaunchArgument("mqtt_host", default_value="127.0.0.1"),
-        DeclareLaunchArgument("mqtt_port", default_value="1883"),
+        # The broker of the OS, the same one mowbite_health asks.
+        DeclareLaunchArgument("mqtt_host", default_value=EnvironmentVariable("MOWBITE_MQTT_HOST",
+                                                                             default_value="127.0.0.1")),
+        DeclareLaunchArgument("mqtt_port", default_value=EnvironmentVariable("MOWBITE_MQTT_PORT",
+                                                                             default_value="1883")),
+        # Without it nothing is kept; with it, it is prepared for the data schema of the image before any node starts.
         DeclareLaunchArgument("data_dir", default_value="/userdata/mowbite"),
         # Local time for the heartbeat of the MCU (and later the schedules); a TZ from the environment wins.
         DeclareLaunchArgument("tz", default_value=EnvironmentVariable("TZ", default_value="Europe/Berlin")),

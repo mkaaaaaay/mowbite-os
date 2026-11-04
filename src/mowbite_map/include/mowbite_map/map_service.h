@@ -20,6 +20,8 @@ constexpr int kRpcInternal = -32603;
 constexpr int kRpcRefused = -32000;
 // The map is not the one the caller last read (map/replace with expected_sha256)
 constexpr int kRpcMapChanged = -32001;
+// An update holds the mower (system.hold): a rollback would drop the change without a word
+constexpr int kRpcHold = -32004;
 
 // The answer of an RPC method: a result, or an error with its code.
 struct RpcOutcome {
@@ -27,6 +29,8 @@ struct RpcOutcome {
   json result;
   int code = 0;
   std::string message;
+  // Details of an error for the caller, null for none.
+  json data;
 };
 
 // The answer to an edit for the logic: the id of what was added, or why it was refused.
@@ -117,6 +121,11 @@ class MapService {
 
   // The datum tron_gnss works in. Checks the map against it, and ties a first map to it.
   void SetDatum(const Datum& datum);
+  // The hold of an update (logic/hold), until in unix s, 0 for none: map.replace and map/replace are refused with
+  // kRpcHold and data {"reason": "HOLD", "until"} while it lasts.
+  void SetHold(int64_t until) {
+    hold_until_ = until;
+  }
 
   const MapData& map() const {
     return map_;
@@ -140,6 +149,8 @@ class MapService {
   // Checks and stores a map of map.replace or map/replace.
   RpcOutcome ReplaceMap(const json& map);
   RpcOutcome AreaProperties() const;
+  // kRpcHold while an update holds the mower.
+  std::optional<RpcOutcome> HoldRefusal() const;
   // Stores the map and makes it the current one. replaces: the whole map is sent again (map.replace).
   RpcOutcome Commit(MapData candidate, bool replaces);
   // Checks a map made by an edit the way a replaced map is checked, then stores it.
@@ -166,6 +177,7 @@ class MapService {
   bool changed_ = false;
   bool status_changed_ = false;
   bool planner_offered_ = false;
+  int64_t hold_until_ = 0;
   std::vector<Notice> notices_;
   std::vector<Event> events_;
 };

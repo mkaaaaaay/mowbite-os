@@ -51,6 +51,8 @@ constexpr auto kSavePeriod = 30s;
 constexpr auto kRestartNoteDelay = 1s;
 constexpr char kClientId[] = "mowbite_bridge";
 constexpr char kRestartNote[] = "container_exit.json";
+// Left by tron.launch.py after it took data_dir back for an older image.
+constexpr char kRollbackNote[] = "data_rollback.json";
 
 double WallNow() {
   return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -424,13 +426,18 @@ class BridgeNode : public rclcpp::Node {
   }
 
   void ReportRestart() {
-    const std::string path = JoinPath(data_dir_, kRestartNote);
+    ReportNote(kRestartNote, RestartWarning);
+    ReportNote(kRollbackNote, RollbackWarning);
+  }
+
+  void ReportNote(const char* name, std::string (*warning)(std::string_view)) {
+    const std::string path = JoinPath(data_dir_, name);
     if (path.empty()) return;
     std::ifstream in(path);
     if (!in) return;
     std::ostringstream text;
     text << in.rdbuf();
-    RCLCPP_WARN(get_logger(), "%s", RestartWarning(text.str()).c_str());
+    RCLCPP_WARN(get_logger(), "%s", warning(text.str()).c_str());
   }
 
   const std::string host_;

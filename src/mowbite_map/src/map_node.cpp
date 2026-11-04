@@ -13,6 +13,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
+#include <std_msgs/msg/int64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <vector>
 
@@ -64,6 +65,9 @@ class MapNode : public rclcpp::Node {
           for (const auto& [_, offered] : offers_planner_) any = any || offered;
           service_.SetPlannerSettingsOffered(any);
         });
+    // The hold of an update, from the logic: no change of the map while it lasts.
+    hold_sub_ = create_subscription<std_msgs::msg::Int64>(
+        "logic/hold", LatchedQos(1), [this](std_msgs::msg::Int64::ConstSharedPtr msg) { service_.SetHold(msg->data); });
     datum_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
         "gps/datum", LatchedQos(1), [this](sensor_msgs::msg::NavSatFix::ConstSharedPtr msg) {
           service_.SetDatum({msg->latitude, msg->longitude, msg->altitude});
@@ -133,7 +137,7 @@ class MapNode : public rclcpp::Node {
     if (params.is_discarded()) {
       if (std::find(MapService::Methods().begin(), MapService::Methods().end(), request.method) !=
           MapService::Methods().end()) {
-        outcome = RpcOutcome{false, json(), kRpcInvalidParams, "The parameters are not valid JSON"};
+        outcome = RpcOutcome{false, json(), kRpcInvalidParams, "The parameters are not valid JSON", json()};
       }
     } else {
       outcome = service_.Call(request.method, params);
@@ -150,6 +154,7 @@ class MapNode : public rclcpp::Node {
       error.code = static_cast<int16_t>(outcome->code);
       error.message = outcome->message;
       error.id = request.id;
+      if (!outcome->data.is_null()) error.data = outcome->data.dump();
       error_pub_->publish(error);
     }
     Flush();
@@ -206,6 +211,7 @@ class MapNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr request_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RpcMethods>::SharedPtr methods_sub_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr datum_sub_;
+  rclcpp::Subscription<std_msgs::msg::Int64>::SharedPtr hold_sub_;
   rclcpp::Service<mowbite_msgs::srv::AddArea>::SharedPtr add_area_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetDock>::SharedPtr set_dock_srv_;
   rclcpp::Service<mowbite_msgs::srv::ReplaceMap>::SharedPtr replace_srv_;

@@ -86,7 +86,7 @@ struct BladeRequest {
   double lease_s = 0;
 };
 
-enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked };
+enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked, kHeld };
 
 const char* BladeResultText(BladeResult result);
 
@@ -109,6 +109,8 @@ struct McuControlStatus {
   bool dock_contact_raw = false;
   // No version frame since the port opened, or one that does not match.
   bool firmware_incompatible = false;
+  // An update holds the mower: motion and blade blocked without an emergency.
+  bool held = false;
 };
 
 // Decides what goes to the MCU and when. Time is passed in (monotonic seconds), nothing here touches the port.
@@ -140,6 +142,9 @@ class McuControl {
   void SetCharging(bool allowed, double now);
   // The MCU state is unknown after the port (re)opens: the blade goes off and moving wheels get a stop.
   void OnConnected(double now);
+  // The hold of an update (hold.json): motion and blade blocked like before the first IMU sample, without an
+  // emergency; a moving mower gets a stop, the blade goes off. Charging goes on.
+  void SetHold(bool held);
 
   std::vector<SubPacket> Tick(double now, const WallClock& wall);
   McuControlStatus Status(double now) const;
@@ -223,6 +228,8 @@ class McuControl {
 
   // Unknown until the first version frame after the port opened.
   std::optional<bool> firmware_ok_;
+
+  bool held_ = false;
 
   std::optional<ImuCounts> pending_imu_;
   // Last forward to the MCU and last sample from the IMU.

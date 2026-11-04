@@ -26,6 +26,7 @@ const char* BladeResultText(BladeResult result) {
     case BladeResult::kInvalidHeight: return "height out of range";
     case BladeResult::kBlocked: return "mower blocked";
     case BladeResult::kDocked: return "mower on the dock";
+    case BladeResult::kHeld: return "mower held for an update";
   }
   return "unknown";
 }
@@ -106,6 +107,8 @@ BladeResult McuControl::SetBlade(const BladeRequest& request, double now, uint32
   // A refused renewal also ends a running lease, so the blade never outlives a refusal.
   if (Blocked(now)) {
     DropBlade(BladeOffReason::kBlocked);
+    // An emergency says more than the hold.
+    if (held_ && !Reported(now)) return BladeResult::kHeld;
     // 0 while the IMU is still due after the start: blocked, but no emergency.
     if (emergency_reason) *emergency_reason = EmergencyReason(now);
     return BladeResult::kBlocked;
@@ -151,8 +154,12 @@ void McuControl::OnConnected(double now) {
   }
 }
 
+void McuControl::SetHold(bool held) {
+  held_ = held;
+}
+
 bool McuControl::Blocked(double now) const {
-  return latched_ || TelemetryStale(now) || NoImuYet() || FirmwareIncompatible();
+  return held_ || latched_ || TelemetryStale(now) || NoImuYet() || FirmwareIncompatible();
 }
 
 // As hw/status shows it: an IMU still due after the start blocks without an emergency.
@@ -382,6 +389,7 @@ McuControlStatus McuControl::Status(double now) const {
   status.dock_contact = DockContact();
   status.dock_contact_raw = dock_raw_;
   status.firmware_incompatible = FirmwareIncompatible();
+  status.held = held_;
   return status;
 }
 

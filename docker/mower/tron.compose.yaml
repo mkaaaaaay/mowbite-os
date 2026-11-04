@@ -1,0 +1,67 @@
+# MowBite OS on the Airseekers Tron: broker, OS and app on the host network. A proposal until Phase 5 has checked the
+# Docker version, data-root, paths and the time a stop takes. On the mower as /opt/stacks/mowbite-os/compose.yaml with
+# mosquitto.conf and a .env from env.example; the updater stays a stack of its own.
+#   docker compose up -d        docker compose down
+# No label mowbite.update=on yet: an updater without the kind for the OS would treat it as a plain container (no
+# system.hold, IDLE also while driving). Until it has that kind, the OS is updated by hand.
+name: mowbite-os
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mowbite-mosquitto
+    restart: unless-stopped
+    network_mode: host
+    logging: *logging
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+  os:
+    image: ghcr.io/mkaaaaaay/mowbite-os:${MOWBITE_OS_TAG:?set MOWBITE_OS_TAG in .env}
+    # One OS per mower: the updater stops this one by name before it starts another (G12).
+    container_name: mowbite-os
+    restart: unless-stopped
+    network_mode: host
+    logging: *logging
+    labels:
+      - mowbite.update.name=mowbite-os
+    devices:
+      # MCU, GNSS board and IMU.
+      - /dev/ttyS9
+      - /dev/ttyS4
+      - /dev/ttyS1
+    volumes:
+      # data_dir at the same path inside and out.
+      - /userdata/mowbite:/userdata/mowbite
+    environment:
+      - TZ=${TZ:-Europe/Berlin}
+      - ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+      - ROS_LOG_DIR=/tmp/ros_log
+    # The log files of ROS stay in memory, at most 20 MB.
+    tmpfs:
+      - /tmp/ros_log:size=20m
+    command: ["ros2", "launch", "mowbite_bringup", "tron.launch.py", "data_dir:=/userdata/mowbite",
+              "datum_lat:=${MOWBITE_DATUM_LAT:?}", "datum_long:=${MOWBITE_DATUM_LONG:?}",
+              "datum_height:=${MOWBITE_DATUM_HEIGHT:?}"]
+    # SIGINT so that launch stops every node and tron_mcu switches the blade off; it ignores SIGTERM as PID 1.
+    stop_signal: SIGINT
+    stop_grace_period: 20s
+    ulimits:
+      core: 0
+  mowbite:
+    image: ghcr.io/mkaaaaaay/mowbite:${MOWBITE_APP_TAG:?set MOWBITE_APP_TAG in .env}
+    container_name: mowbite
+    restart: unless-stopped
+    network_mode: host
+    logging: *logging
+    environment:
+      - MOWER_MQTT_WS_URL=ws://${MOWER_HOST:?set MOWER_HOST in .env}:9001
+      - MOWER_MQTT_HOST=localhost
+      - MOWER_MQTT_PORT=1883
+    volumes:
+      - /userdata/mowbite-app:/data
+      # The host's network for /cgi-bin/system of the app (wifi_signal).
+      - /proc/1/net:/host-net:ro

@@ -107,6 +107,9 @@ std::string VersionText(const std::string& version);
 // system.info.
 Json SystemInfo(const std::string& version, const std::string& platform);
 
+// The schema of data_dir this image writes, from data_schema.json of the package (tron.launch.py reads the same file).
+int DataSchema();
+
 }  // namespace mowbite_bridge
 
 #endif  // MOWBITE_BRIDGE_APP_JSON_H

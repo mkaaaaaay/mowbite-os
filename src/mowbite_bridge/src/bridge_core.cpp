@@ -272,4 +272,16 @@ std::string RestartWarning(std::string_view note) {
   return text;
 }
 
+std::string RollbackWarning(std::string_view note) {
+  const Json j = NestingDepth(note) > kMaxDataDepth ? Json() : Json::parse(note.begin(), note.end(), nullptr, false);
+  const auto value = [&](const char* key, bool text) -> std::string {
+    if (!j.is_object() || !j.contains(key)) return "?";
+    if (text) return j[key].is_string() ? CleanUtf8(j[key].get<std::string>()) : "?";
+    return j[key].is_number_integer() ? std::to_string(j[key].get<long long>()) : "?";
+  };
+  return "MowBite OS went back to an older image: data_dir is back at schema " + value("to", false) +
+         " from its backup, the changes since the update (schema " + value("from", false) + ") are in " +
+         value("backup", true);
+}
+
 }  // namespace mowbite_bridge

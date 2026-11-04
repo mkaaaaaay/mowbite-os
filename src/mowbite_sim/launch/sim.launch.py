@@ -3,7 +3,7 @@ import yaml
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, OpaqueFunction, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
 
 
@@ -60,8 +60,10 @@ def generate_launch_description():
         DeclareLaunchArgument("state", default_value="/tmp/mowbite_sim_state.json"),
         DeclareLaunchArgument("flags", default_value="/tmp/mowbite_sim_flags.json"),
         DeclareLaunchArgument("log", default_value="/tmp/mowbite_sim_rx.jsonl"),
-        DeclareLaunchArgument("mqtt_host", default_value="127.0.0.1"),
-        DeclareLaunchArgument("mqtt_port", default_value="1883"),
+        DeclareLaunchArgument("mqtt_host", default_value=EnvironmentVariable("MOWBITE_MQTT_HOST",
+                                                                             default_value="127.0.0.1")),
+        DeclareLaunchArgument("mqtt_port", default_value=EnvironmentVariable("MOWBITE_MQTT_PORT",
+                                                                             default_value="1883")),
         DeclareLaunchArgument("data_dir", default_value="/tmp/mowbite_sim_data"),
         DeclareLaunchArgument("extra_config", default_value=PathJoinSubstitution(
             [FindPackageShare("mowbite_sim"), "config", "sim.yaml"])),

@@ -164,6 +164,7 @@ TEST(Fixed, CapabilitiesVersionAndSystemInfo) {
   EXPECT_EQ(VersionText(""), R"({"version":"UNKNOWN VERSION"})");
   EXPECT_EQ(VersionText("1.2.3"), R"({"version":"1.2.3"})");
   EXPECT_EQ(SystemInfo("", "airseekers_tron").dump(),
-            R"({"name":"mowbite-os","version":"UNKNOWN VERSION","platform":"airseekers_tron","schema":1})");
+            R"({"name":"mowbite-os","version":"UNKNOWN VERSION","platform":"airseekers_tron","schema":)" +
+                std::to_string(DataSchema()) + "}");
   EXPECT_EQ(SystemInfo("1.2.3", "")["platform"], "");
 }

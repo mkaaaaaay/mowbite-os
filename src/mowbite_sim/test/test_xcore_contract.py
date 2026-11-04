@@ -30,6 +30,7 @@ WORK = tempfile.mkdtemp(prefix="mowbite_xcore_")
 FLAGS = os.path.join(WORK, "flags.json")
 LOG = os.path.join(WORK, "rx.jsonl")
 STATE = os.path.join(WORK, "state.json")
+HOLD = os.path.join(WORK, "hold.json")
 # A port of its own, so that tests running side by side do not hear each other's board.
 GROUP_PORT = random.randint(42000, 48000)
 # An address of its own for the driver: it does not start beside another host at its bind_ip.
@@ -49,7 +50,7 @@ def generate_test_description():
     config = os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "config", "nx60i.yaml")
     driver = Node(package="xcore_driver", executable="xcore_driver_node", output="screen",
                   parameters=[config, {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT,
-                                       "allow_blade": True}])
+                                       "allow_blade": True, "hold_file": HOLD}])
     return launch.LaunchDescription([
         fake_xcore,
         TimerAction(period=0.5, actions=[driver, launch_testing.actions.ReadyToTest()]),
@@ -367,6 +368,41 @@ class TestXcoreContract(unittest.TestCase):
         self.assertFalse(self.probe.set_blade(True, lease_s=1.0).success)
         set_flags()
         self.assertTrue(self.probe.wait(lambda p: not p.status.dock_contact_raw, 3))
+
+    def test_ka_hold_blocks_without_emergency(self):
+        now = int(time.time())
+        with open(HOLD + ".new", "w") as f:
+            json.dump({"until": now + 600, "set_at": now}, f)
+        os.replace(HOLD + ".new", HOLD)
+        s = self.probe.wait(lambda p: p.status.hold and p.status, 2)
+        self.assertTrue(s, "hold.json not seen")
+        self.assertFalse(s.emergency)
+        self.assertEqual(s.emergency_reason, 0)
+        t0 = board_time()
+        for _ in range(10):
+            self.probe.cmd_vel.publish(Twist(linear=Vector3(x=0.2)))
+            time.sleep(0.1)
+        r = self.probe.set_blade(True, lease_s=1.0)
+        self.assertFalse(r.success)
+        self.assertIn("held", r.message)
+        self.assertEqual(r.emergency_reason, 0)
+        time.sleep(0.3)
+        twists = [struct.unpack("<6d", bytes.fromhex(e["hex"])) for e in received(t0, DIFF_DRIVE, DATA, 0)]
+        self.assertEqual([v for v in twists if v[0] != 0 or v[5] != 0], [])
+        speeds = [struct.unpack("<f", bytes.fromhex(e["hex"]))[0] for e in received(t0, MOWER, DATA, 0)]
+        self.assertEqual([v for v in speeds if v != 0], [])
+        # No latch for the board: the emergency input stays clear.
+        sets = [struct.unpack("<HH", bytes.fromhex(e["hex"]))[0] for e in received(t0, EMERGENCY, DATA, 0)]
+        self.assertTrue(sets and all(v == 0 for v in sets), str(sets))
+        os.remove(HOLD)
+        self.assertTrue(self.probe.wait(lambda p: not p.status.hold, 2), "still held after the file went")
+        t1 = board_time()
+        for _ in range(5):
+            self.probe.cmd_vel.publish(Twist(linear=Vector3(x=0.2)))
+            time.sleep(0.1)
+        time.sleep(0.8)
+        twists = [struct.unpack("<6d", bytes.fromhex(e["hex"])) for e in received(t1, DIFF_DRIVE, DATA, 0)]
+        self.assertGreater(len([v for v in twists if v[0] != 0]), 2)
 
     def test_l_board_restart(self):
         port = board()["port"]
