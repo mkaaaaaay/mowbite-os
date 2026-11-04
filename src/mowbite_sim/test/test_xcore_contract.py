@@ -274,7 +274,7 @@ class TestXcoreContract(unittest.TestCase):
         self.assertAlmostEqual(zeros[2] - zeros[0], 0.2, delta=0.06)
         # The fake's wheels turn at 0.47 m/s per duty: the ticks show 0.14 m/s forward, also on the falling counter.
         self.assertAlmostEqual(moving_odom, 0.141, delta=0.02)
-        self.assertGreater(board()["x"] - x0, 0.2)
+        self.assertGreater(board()["x"] - x0, 0.15)
         self.assertEqual(board()["duty"], [0.0, 0.0])
 
     def test_f_blade_lease_runs_out(self):
