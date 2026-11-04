@@ -72,7 +72,7 @@ class TestRehearsal(unittest.TestCase):
         time.sleep(5.0)  # claim and configuration
         record = os.path.join(WORK, "record")
         cls.code, cls.output = measure("--steps", "M1,M2,M3,M4,M5,M6,M7,M8", "--repeats", "1", "--blade", "--ground",
-                                       "--record-dir", record, timeout=1500)
+                                       "--fast", "--record-dir", record, timeout=1500)
         print(cls.output)
         cls.recording, = glob.glob(os.path.join(record, "measure-*.jsonl"))
         cap = xc.load_capture(PCAP, SERVICES)
@@ -161,6 +161,12 @@ class TestRehearsal(unittest.TestCase):
                 self.assertLess(r["since_emergency_input_s"], 1.2)
                 self.assertGreater(r["host_silent_s"], 0.7)
                 self.assertLess(r["host_silent_s"], 1.2)
+        # The inner network down: the script commands until the driver reports the loss; the capture sees nothing
+        # meanwhile, the counters tell how long the wheels turned after it went down (board 1.0 s, run-down).
+        gap, = [g for g in self.boot()["drive"]["gaps"] if g["turning_s"] is not None]
+        self.assertGreater(gap["turning_s"], 0.6)
+        self.assertLess(gap["turning_s"], 1.3)
+        self.assertIn("M4 inner network down", self.output)
         ended, = [r for r in runs if "SIGINT" in r["step"]]
         self.assertLess(ended["since_zero_command_s"], 0.2)
 
@@ -214,6 +220,15 @@ class TestRehearsal(unittest.TestCase):
         self.assertLess(killed["since_emergency_input_s"], 1.25)
         backward = [r for r in runs if "backward" in r["step"]][0]
         self.assertTrue(backward["reason"].startswith("COLLISION"))
+        # The driver keeps 0.3 m/s: the fast runs wait for raised limits.
+        self.assertIn("fast runs: the driver allows 0.3", self.output)
+        self.assertFalse([r for r in runs if "fast" in (r["step"] or "")])
+        stopping = [json.loads(line) for line in open(self.recording) if '"kind": "stopping"' in line]
+        self.assertEqual(len(stopping), 3)  # STOP, no command, backward; not the killed driver
+        self.assertTrue(all(0.0 <= s["odometry_m"] < 0.3 for s in stopping), stopping)
+        # Without a command the wheels go on for the driver's 0.5 s at 0.27 m/s (duty 0.3 at the fake's 0.9).
+        quiet, = [s for s in stopping if "no command" in s["text"]]
+        self.assertGreater(quiet["odometry_m"], 0.05)
 
     def test_k_recording_limit(self):
         record = os.path.join(WORK, "small")
