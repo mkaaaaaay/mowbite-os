@@ -33,6 +33,10 @@ set_target_properties(xcore_io PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(xcore_driver_component SHARED src/xcore_node.cpp)
 target_link_libraries(xcore_driver_component xcore_io mowbite_hold::mowbite_hold_core)
+# Only the image of the safety measurement (docker/measure.Dockerfile): the driver takes measurement_speed_limit as its
+# cap for driving, up to 0.6 m/s; every other build drives at most 0.3 m/s.
+option(XCORE_MEASUREMENT_BUILD "driver of the measurement image, see docker/measure.Dockerfile" OFF)
+target_compile_definitions(xcore_driver_component PRIVATE XCORE_MEASUREMENT_BUILD=$<BOOL:${XCORE_MEASUREMENT_BUILD}>)
 ament_target_dependencies(xcore_driver_component rclcpp rclcpp_components geometry_msgs sensor_msgs diagnostic_msgs mowbite_msgs)
 rclcpp_components_register_node(xcore_driver_component
   PLUGIN "xcore_driver::XcoreNode"
