@@ -191,8 +191,8 @@ Json BuildSchema(const Json& planner) {
                  {"title", "MowBite OS app interface"},
                  {"description",
                   "robot_state, events and RPC methods of MowBite OS over MQTT, as system.api gives them. "
-                  "x-reasons has severity and resume of every reason by event (COMMAND_REFUSED only in refusals), "
-                  "x-emergency-bits the bits of emergency, x-commands the methods with params, result, the event "
+                  "x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED "
+                  "only in refusals), x-emergency-bits the bits of emergency, x-commands the methods with params, result, the event "
                   "of their refusal and the actions that do the same."},
                  {"x-api", kApi},
                  {"$defs", defs},

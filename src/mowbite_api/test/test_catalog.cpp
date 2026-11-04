@@ -187,9 +187,9 @@ TEST(Catalog, EveryReasonOfTheSources) {
   EXPECT_GT(found, 40);
 }
 
-// COMMAND_REFUSED is a group of answers only: rated like an event, but never one.
+// COMMAND_REFUSED and REQUEST_REFUSED are groups of answers only: rated like an event, but never one.
 TEST(Catalog, RefusalsAreNoEvents) {
-  ASSERT_EQ(Refusals().size(), 1u);
+  ASSERT_EQ(Refusals().size(), 2u);
   const EventEntry& answers = Refusals().front();
   EXPECT_EQ(answers.type, "COMMAND_REFUSED");
   EXPECT_EQ(FindEvent("COMMAND_REFUSED"), nullptr);
@@ -197,6 +197,22 @@ TEST(Catalog, RefusalsAreNoEvents) {
   for (const char* code : {"WRONG_STATE", "NO_JOB", "CHANGED"}) {
     const Rating rating = RateReason("COMMAND_REFUSED", code);
     EXPECT_STREQ(rating.severity, "info") << code;
+    EXPECT_STREQ(rating.resume, "user") << code;
+  }
+  const EventEntry& requests = Refusals().back();
+  EXPECT_EQ(requests.type, "REQUEST_REFUSED");
+  EXPECT_EQ(FindEvent("REQUEST_REFUSED"), nullptr);
+  EXPECT_EQ(FindReasonGroup("REQUEST_REFUSED"), &requests);
+  // The fields of COMMAND_REFUSED but event_id, so one reader takes the data of both.
+  std::vector<std::string> names, expected;
+  for (const auto& field : requests.fields) names.push_back(field.name + (field.required ? "!" : ""));
+  for (const auto& field : answers.fields) {
+    if (field.name != "event_id") expected.push_back(field.name + (field.required ? "!" : ""));
+  }
+  EXPECT_EQ(names, expected);
+  for (const char* code : {"RESPONSE_TOPIC", "CORRELATION_DATA"}) {
+    const Rating rating = RateReason("REQUEST_REFUSED", code);
+    EXPECT_STREQ(rating.severity, "error") << code;
     EXPECT_STREQ(rating.resume, "user") << code;
   }
 }

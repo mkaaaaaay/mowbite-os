@@ -142,7 +142,9 @@ const std::vector<Command>& Commands() {
        {Text("name", "Always mowbite-os"), Text("version", "Version of the OS image"),
         Text("platform", "The platform its driver reports, empty until it did"),
         Integer("schema", "Version of the data in data_dir"),
-        Integer("api", "Version of this interface, the x-api of the schema system.api gives")},
+        Integer("api", "Version of this interface, the x-api of the schema system.api gives"),
+        Integer("mqtt", "MQTT version of the bridge at the broker: 5 sends each answer to the response topic of its "
+                        "request, 3 sends all to rpc/response")},
        "",
        {}},
       {"system.api",

@@ -10,7 +10,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 2;
+constexpr int kApi = 3;
 
 // The JSON type of a field; kNumber takes whole numbers as well, kInteger also 2.0.
 enum class Type { kString, kNumber, kInteger, kBoolean, kObject, kArray };
@@ -96,7 +96,7 @@ const std::vector<Field>& Envelope();
 const std::vector<Field>& LogicFields();
 const std::vector<EmergencyBit>& EmergencyBits();
 const std::vector<Command>& Commands();
-// Groups of reasons only answers carry, never an event: COMMAND_REFUSED.
+// Groups of reasons only answers carry, never an event: COMMAND_REFUSED and REQUEST_REFUSED.
 const std::vector<EventEntry>& Refusals();
 
 // The event of this type, nullptr for a type the catalog does not know.

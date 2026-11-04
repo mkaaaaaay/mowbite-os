@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:mowbite-os:api:2",
+  "$id": "urn:mowbite-os:api:3",
   "title": "MowBite OS app interface",
-  "description": "robot_state, events and RPC methods of MowBite OS over MQTT, as system.api gives them. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED only in refusals), x-emergency-bits the bits of emergency, x-commands the methods with params, result, the event of their refusal and the actions that do the same.",
-  "x-api": 2,
+  "description": "robot_state, events and RPC methods of MowBite OS over MQTT, as system.api gives them. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals), x-emergency-bits the bits of emergency, x-commands the methods with params, result, the event of their refusal and the actions that do the same.",
+  "x-api": 3,
   "$defs": {
     "robot_state": {
       "type": "object",
@@ -3101,6 +3101,10 @@
         "api": {
           "type": "integer",
           "description": "Version of this interface, the x-api of the schema system.api gives"
+        },
+        "mqtt": {
+          "type": "integer",
+          "description": "MQTT version of the bridge at the broker: 5 sends each answer to the response topic of its request, 3 sends all to rpc/response"
         }
       },
       "required": [
@@ -3108,7 +3112,8 @@
         "version",
         "platform",
         "schema",
-        "api"
+        "api",
+        "mqtt"
       ],
       "additionalProperties": false
     },
@@ -5046,6 +5051,22 @@
         "fields": {
           "area": "",
           "path": ""
+        }
+      }
+    },
+    "REQUEST_REFUSED": {
+      "RESPONSE_TOPIC": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The response topic of the request is not rpc/response/<token> with a token of 1 to 64 of A-Z, a-z, 0-9, dot, underscore and hyphen: nothing was done",
+        "fields": {}
+      },
+      "CORRELATION_DATA": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The correlation data of the request is longer than 1024 bytes: nothing was done",
+        "fields": {
+          "limit": "bytes"
         }
       }
     }

@@ -88,6 +88,7 @@ TEST(Schema, CommandsAndBits) {
   }
   EXPECT_EQ(schema["x-emergency-bits"].size(), EmergencyBits().size());
   EXPECT_EQ(schema["$defs"]["system.info.result"]["properties"]["api"]["type"], "integer");
+  EXPECT_EQ(schema["$defs"]["system.info.result"]["properties"]["mqtt"]["type"], "integer");
   // Action and RPC: recording.save stands for both finish actions, with its type.
   const Json& save = schema["x-commands"]["recording.save"];
   EXPECT_EQ(save["refused"], "RECORDING_REFUSED");
@@ -100,6 +101,10 @@ TEST(Schema, CommandsAndBits) {
   // COMMAND_REFUSED only in x-reasons and in the data of a refusal, never an event.
   EXPECT_TRUE(schema["x-reasons"]["COMMAND_REFUSED"].contains("WRONG_STATE"));
   EXPECT_FALSE(schema["$defs"].contains("event.COMMAND_REFUSED"));
+  // REQUEST_REFUSED: the bridge's refusal of an MQTT 5 request, in the same form.
+  EXPECT_TRUE(schema["x-reasons"]["REQUEST_REFUSED"].contains("RESPONSE_TOPIC"));
+  EXPECT_TRUE(schema["x-reasons"]["REQUEST_REFUSED"].contains("CORRELATION_DATA"));
+  EXPECT_FALSE(schema["$defs"].contains("event.REQUEST_REFUSED"));
   const Json& refusal = schema["$defs"]["refusal"];
   EXPECT_EQ(refusal["required"], Json({"event", "state", "sub_state", "reason", "severity", "resume"}));
   EXPECT_FALSE(refusal.contains("additionalProperties"));

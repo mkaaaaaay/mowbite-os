@@ -71,6 +71,9 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"CHANGED",
        {"The area or path is another one than the client saw: nothing was skipped",
         {Integer("area", "", "current_area now"), Integer("path", "", "current_path now")}}},
+      {"CORRELATION_DATA",
+       {"The correlation data of the request is longer than 1024 bytes: nothing was done",
+        {Limit("bytes")}}},
       {"CROSS_TRACK", {"The mower got too far off its path", {}}},
       {"DOCK_TOO_CLOSE", {"The two points of the docking station are too close together", {Distance(), Limit("m")}}},
       {"DOCK_UNREACHABLE",
@@ -132,6 +135,10 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
         {Number("accuracy", "m", "Expected error of the position"), Limit("m")}}},
       {"RAIN", {"It rains", {}}},
       {"REFERENCE_MISMATCH", {"The docking station is not where the map has it", {Distance(), Limit("m")}}},
+      {"RESPONSE_TOPIC",
+       {"The response topic of the request is not rpc/response/<token> with a token of 1 to 64 of A-Z, a-z, 0-9, "
+        "dot, underscore and hyphen: nothing was done",
+        {}}},
       {"RING_CROSSES_ITSELF", {"The ring crosses itself", {}}},
       {"RING_FEW_POINTS", {"The ring has too few points", {Integer("points", "", "Points of the ring"), Limit("")}}},
       {"RING_TOO_SMALL",
@@ -454,6 +461,12 @@ const std::vector<EventEntry>& Refusals() {
                          Text("sub_state", "current_sub_state of robot_state", true),
                          Text("event_id", "id of the event the refusal also went out as, none without one")}),
             User({{"WRONG_STATE", "info"}, {"NO_JOB", "info"}, {"CHANGED", "info"}})),
+      Event("REQUEST_REFUSED", "answer",
+            "The bridge refused a request over MQTT 5 before any method saw it: the data of its -32600, never an event",
+            Rated(true, {Text("event", "Always REQUEST_REFUSED", true),
+                         Text("state", "current_state of robot_state, empty before the first", true),
+                         Text("sub_state", "current_sub_state of robot_state", true)}),
+            User({{"RESPONSE_TOPIC", "error"}, {"CORRELATION_DATA", "error"}})),
   };
   return groups;
 }
