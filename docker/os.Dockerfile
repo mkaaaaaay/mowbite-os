@@ -66,6 +66,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /opt/mowbite_planner /opt/mowbite_planner
 COPY --from=build /ws/install /ws/install
+# DDS on the loopback only, without shared memory (fastdds_loopback.xml of mowbite_bringup); the launch halts without it.
+COPY src/mowbite_bringup/config/fastdds_loopback.xml /etc/mowbite/fastdds_loopback.xml
+ENV ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT FASTRTPS_DEFAULT_PROFILES_FILE=/etc/mowbite/fastdds_loopback.xml
 # Every library a binary of the image links must be there.
 RUN . /ws/install/setup.sh \
  && find /ws/install /opt/mowbite_planner -type f | while read -r f; do \

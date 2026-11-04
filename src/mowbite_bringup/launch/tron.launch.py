@@ -38,17 +38,36 @@ async def halted(context):
         pass
 
 
-# data_dir for this image before any node starts (data_store.py): None to go on, else the halt.
+# DDS of this launch and every node it starts, before the first of them: the loopback profile of the image
+# (fastdds_loopback.xml) under SYSTEM_DEFAULT, else the halt; LOCALHOST or SUBNET from the environment start with a
+# warning. Without the file Fast DDS would fall back to multicast on every interface and to shared memory.
+def check_dds(logger):
+    scope = os.environ.get("ROS_AUTOMATIC_DISCOVERY_RANGE", "")
+    profile = os.environ.get("FASTRTPS_DEFAULT_PROFILES_FILE", "")
+    if scope == "SYSTEM_DEFAULT":
+        if profile and os.path.isfile(profile) and os.access(profile, os.R_OK):
+            return
+        raise data_store.Halt("DDS_PROFILE", f"ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT needs the profile of the "
+                                             f"image in FASTRTPS_DEFAULT_PROFILES_FILE, '{profile}' is not readable.")
+    if not scope:
+        # Outside the image: DDS stays on the machine, as before the profile.
+        scope = os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"] = "LOCALHOST"
+    logger.warning(f"ROS_AUTOMATIC_DISCOVERY_RANGE={scope} instead of the loopback profile: DDS uses shared memory "
+                   "and listens on every interface")
+
+
+# DDS and data_dir for this image before any node starts (data_store.py): None to go on, else the halt.
 def prepare_data_dir(data_dir, logger):
     halt_file = os.environ.get("MOWBITE_HALT_FILE") or data_store.HALT_FILE
     try:
         os.remove(halt_file)
     except FileNotFoundError:
         pass
-    if not data_dir:
-        return None
     schema = "-"
     try:
+        check_dds(logger)
+        if not data_dir:
+            return None
         schema, _ = data_store.image_schema()
         # The lock stays open until this process ends, after its nodes have stopped writing.
         _, note = data_store.prepare(data_dir, schema, os.environ.get("MOWBITE_OS_REVISION") or "unknown")
@@ -197,9 +216,5 @@ def generate_launch_description():
         # Local time for the heartbeat of the MCU (and later the schedules); a TZ from the environment wins.
         DeclareLaunchArgument("tz", default_value=EnvironmentVariable("TZ", default_value="Europe/Berlin")),
         SetEnvironmentVariable("TZ", LaunchConfiguration("tz")),
-        # DDS stays on the mower unless the environment says otherwise. Set before the first ROS node of this launch,
-        # which launch_ros creates only to load the components.
-        SetEnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE",
-                               EnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE", default_value="LOCALHOST")),
         OpaqueFunction(function=launch_setup),
     ])
