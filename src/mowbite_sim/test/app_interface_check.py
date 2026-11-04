@@ -32,13 +32,29 @@ parser.add_argument("--app-url", help="accepted for the common call of the test 
 parser.add_argument("--seconds", type=float, default=2.0, help="how long to collect what the mower publishes")
 parser.add_argument("--write", action="store_true", help="also act on the mower; simulated MowBite OS only")
 parser.add_argument("--sim-log", help="JSON lines log of the simulated MCU, for the checks of the frames it received")
+parser.add_argument("--mqtt", type=int, choices=[3, 5], default=3,
+                    help="5: connect with MQTT 5 and ask every RPC with a response topic and correlation data (AS4)")
+parser.add_argument("--bridge-mqtt", type=int, choices=[3, 5], default=5,
+                    help="with --mqtt 5: what system.info.mqtt is to say; 3 for a bridge behind a broker of 3.1.1")
 args = parser.parse_args()
 if args.write and args.target != "mowbite-os":
     parser.error("--write is implemented for --target mowbite-os only")
+if args.mqtt == 5 and args.target != "mowbite-os":
+    parser.error("--mqtt 5 is for --target mowbite-os only")
+if args.mqtt == 5:
+    from paho.mqtt.packettypes import PacketTypes
+    from paho.mqtt.properties import Properties
 
 LOG = args.sim_log
 msgs = []
 results = []
+# With --mqtt 5: the correlation data that came with the message at that index of msgs.
+correlations = {}
+RESPONSE = "rpc/response/stack_test"
+# With --mqtt 5: (id, topic, correlation sent, correlation back) of every answer rpc() took.
+routes = []
+# (method, answer) of every command, for the check against the schema at the end.
+COMMAND_ANSWERS = []
 
 
 def record(point, status, example=""):
@@ -64,6 +80,8 @@ def check_log(name, cond, detail="", point=None):
 
 
 def finish(code=None):
+    if args.mqtt == 5:
+        check_routes()
     summary = {k: sum(r["status"] == k for r in results) for k in ("ok", "missing", "different", "skipped")}
     print(json.dumps({"target": args.target, "host": args.host, "write": args.write, "points": results,
                       "summary": summary}, indent=1))
@@ -75,6 +93,10 @@ def finish(code=None):
 
 
 def on_message(_c, _u, m):
+    props = getattr(m, "properties", None)
+    correlation = getattr(props, "CorrelationData", None) if props else None
+    if correlation is not None:
+        correlations[len(msgs)] = correlation
     msgs.append((time.time(), m.topic, m.payload, m.retain))
 
 
@@ -100,18 +122,29 @@ def set_flags(**flags):
     assert r and "result" in r, f"sim.flags failed: {r}"
 
 
-def rpc(method, params=None, rid="1", timeout=5.0):
+def rpc(method, params=None, rid="1", timeout=5.0, response_topic=RESPONSE, correlation=None):
+    """With --mqtt 5 asked with a response topic and correlation data; the answer is taken from there or from
+    rpc/response, check_routes() tells whether it came where it should."""
     req = {"jsonrpc": "2.0", "method": method, "id": rid}
     if params is not None:
         req["params"] = params
     start = len(msgs)
-    c.publish("rpc/request", json.dumps(req))
+    props = None
+    if args.mqtt == 5:
+        correlation = correlation if correlation is not None else ("c-" + json.dumps(rid)).encode()
+        props = Properties(PacketTypes.PUBLISH)
+        props.ResponseTopic = response_topic
+        props.CorrelationData = correlation
+    c.publish("rpc/request", json.dumps(req), properties=props)
 
     def answer():
-        for _, top, p, _ in msgs[start:]:
-            if top == "rpc/response":
+        for i in range(start, len(msgs)):
+            _, top, p, _ = msgs[i]
+            if top in ("rpc/response", response_topic):
                 j = json.loads(p)
                 if j.get("id") == rid:
+                    if args.mqtt == 5 and response_topic == RESPONSE:
+                        routes.append((rid, top, correlation, correlations.get(i)))
                     return j
         return None
     return wait_for(answer, timeout)
@@ -178,14 +211,17 @@ def sim_time():
     return json.loads(lines[-1])["t"] if lines else 0.0
 
 
-c = mqtt.Client("stack_test")
+c = mqtt.Client("stack_test", protocol=mqtt.MQTTv5 if args.mqtt == 5 else mqtt.MQTTv311)
 if args.user:
     c.username_pw_set(args.user, args.password)
 connected = []
-c.on_connect = lambda _c, _u, _f, rc: connected.append(rc)
+c.on_connect = lambda _c, _u, _f, rc, *_: connected.append(getattr(rc, "value", rc))
 c.on_message = on_message
 try:
-    c.connect(args.host, args.port)
+    if args.mqtt == 5:
+        c.connect(args.host, args.port, clean_start=True)
+    else:
+        c.connect(args.host, args.port)
 except OSError as e:
     print(f"cannot reach {args.host}:{args.port}: {e}", file=sys.stderr)
     sys.exit(2)
@@ -437,6 +473,84 @@ r = wait_for(lambda: (latest("rpc/response") and json.loads(latest("rpc/response
 check("invalid json -32700", bool(r))
 
 
+def check_mqtt5():
+    """AS4 with --mqtt 5: system.info.mqtt, refused response topics, correlation data up to 1 KB."""
+    r = rpc("system.info", None, "mqtt5-info")
+    mqtt_version = ((r or {}).get("result") or {}).get("mqtt")
+    check(f"system.info.mqtt is {args.bridge_mqtt}", mqtt_version == args.bridge_mqtt,
+          json.dumps(r and r.get("result")), point="AS4 system.info.mqtt")
+    # A command where it may act (the simulation); a bridge on 3.1.1 runs it, in IDLE it is refused with WRONG_STATE.
+    method, params = ("mowing.pause", {"client": "check"}) if args.write else ("rpc.ping", None)
+    for i, topic in enumerate(["map/json", "robot_state/json", "rpc/response", "rpc/response/a/b", "rpc/response/+",
+                               "rpc/response/" + "t" * 65]):
+        rid = f"bad-topic-{i}"
+        start = len(msgs)
+        r = rpc(method, params, rid, response_topic=topic)
+        time.sleep(0.5 if i else 1.5)
+        seen = []
+        for _, top, p, _ in msgs[start:]:
+            if top == "rpc/request":
+                continue
+            try:
+                if json.loads(p).get("id") == rid:
+                    seen.append(top)
+            except (ValueError, AttributeError):
+                pass
+        if args.bridge_mqtt == 5:
+            error = (r or {}).get("error") or {}
+            data = error.get("data") or {}
+            COMMAND_ANSWERS.append((method, r))
+            check(f"response topic {topic[:24]} refused on rpc/response, nothing done",
+                  error.get("code") == -32600 and data.get("event") == "REQUEST_REFUSED"
+                  and data.get("reason") == "RESPONSE_TOPIC" and seen == ["rpc/response"],
+                  f"{json.dumps(r)[:200]} on {seen}", point="AS4 response topic")
+        else:
+            # A bridge on 3.1.1 does not see the response topic: it answers as before.
+            check(f"response topic {topic[:24]} unseen by a 3.1.1 bridge", r is not None and seen == ["rpc/response"],
+                  f"{json.dumps(r)[:200]} on {seen}", point="AS4 fallback")
+    if args.bridge_mqtt == 5:
+        most = b"\x00k" * 512
+        start = len(msgs)
+        r = rpc("rpc.ping", None, "corr-most", correlation=most)
+        check("1024 bytes of correlation data come back", (r or {}).get("result") == "pong" and routes
+              and routes[-1][3] == most, json.dumps(r), point="AS4 correlation")
+        r = rpc("rpc.ping", None, "corr-long", correlation=most + b"k")
+        data = ((r or {}).get("error") or {}).get("data") or {}
+        back = [correlations.get(i) for i in range(start, len(msgs)) if msgs[i][1] == RESPONSE
+                and json.loads(msgs[i][2]).get("id") == "corr-long"]
+        check("1025 bytes of correlation data refused to the response topic",
+              data.get("reason") == "CORRELATION_DATA" and data.get("limit") == 1024 and back == [None],
+              json.dumps(r)[:200], point="AS4 correlation")
+        COMMAND_ANSWERS.append(("rpc.ping", r))
+
+
+def check_routes():
+    """AS4 with --mqtt 5: every answer rpc() took came only to the response topic with its correlation data, or with a
+    bridge on 3.1.1 to rpc/response without; nothing of them on rpc/response."""
+    if args.bridge_mqtt == 5:
+        # Correlation data over 1 KB is refused and not sent back.
+        wrong = [f"{rid}: {top}" for rid, top, sent, back in routes
+                 if top != RESPONSE or back != (None if rid == "corr-long" else sent)]
+        own = {json.dumps(rid) for rid, _, _, _ in routes}
+        leaked = []
+        for _, top, p, _ in msgs:
+            if top != "rpc/response":
+                continue
+            rid = json.loads(p).get("id")
+            if rid is not None and not str(rid).startswith("bad-topic-") and json.dumps(rid) in own:
+                leaked.append(json.dumps(rid))
+        check(f"every answer ({len(routes)}) only on {RESPONSE} with its correlation data", routes and not wrong
+              and not leaked, "; ".join(wrong[:3] + leaked[:3]), point="AS4 routing")
+    else:
+        wrong = [f"{rid}: {top}" for rid, top, _, back in routes if top != "rpc/response" or back is not None]
+        check(f"every answer ({len(routes)}) of the 3.1.1 bridge on rpc/response", routes and not wrong,
+              "; ".join(wrong[:3]), point="AS4 fallback")
+
+
+if args.mqtt == 5:
+    check_mqtt5()
+
+
 def late_phone_gets_map(name, expected):
     late = []
     phone = mqtt.Client("late_phone")
@@ -498,8 +612,6 @@ action_refusal = refused[-1] if refused else {}
 COMMANDS = [] if API_SCHEMA is None else [
     name for name in API_SCHEMA.get("x-commands", {})
     if "client" in API_SCHEMA["$defs"].get(name + ".params", {}).get("properties", {})]
-# (method, answer) of every command, for the check against the schema at the end.
-COMMAND_ANSWERS = []
 
 
 def command(method, params=None, rid=None, timeout=5.0):
