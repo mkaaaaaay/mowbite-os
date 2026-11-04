@@ -253,6 +253,10 @@ class TestSafetyFilter(unittest.TestCase):
         # Still tilted: the release is refused and says why.
         p.act(RESET)
         self.assertTrue(p.logged("Emergency stays: still tilted by 35 deg, below 26 deg needed", logs))
+        refused = p.event(since, lambda e: e["type"] == "EMERGENCY_RESET_REFUSED", 3)
+        self.assertIsNotNone(refused, "no EMERGENCY_RESET_REFUSED")
+        self.assertEqual((refused["reason"], refused["limit"], refused["severity"]), ("STILL_TILTED", 26.0, "warning"))
+        self.assertAlmostEqual(refused["angle"], 35.0, delta=1.0)
         time.sleep(1.0)
         self.assertTrue(p.hw.emergency)
         p.flags(tilt_roll=10.0)

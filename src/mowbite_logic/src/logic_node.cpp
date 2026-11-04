@@ -74,6 +74,9 @@ static_assert(static_cast<uint8_t>(SensorMeaning::kTemperature) == SensorSpec::M
 static_assert(static_cast<uint8_t>(SensorMeaning::kRevolutions) == SensorSpec::MEANING_REVOLUTIONS);
 static_assert(static_cast<uint8_t>(SensorMeaning::kDistance) == SensorSpec::MEANING_DISTANCE);
 
+// S2 answers a release within 2 s (its own limit for the driver); later counts as no answer.
+constexpr double kReleaseTimeoutS = 3.0;
+
 rclcpp::QoS LatchedQos(size_t depth) {
   return rclcpp::QoS(rclcpp::KeepLast(depth)).reliable().transient_local();
 }
@@ -549,19 +552,36 @@ class LogicNode : public rclcpp::Node {
     Flush();
   }
 
+  // The answer comes from S2 once the driver answered; a refusal goes to the app as EMERGENCY_RESET_REFUSED.
   void ReleaseEmergency() {
     if (!emergency_client_->service_is_ready()) {
       RCLCPP_ERROR(get_logger(), "safety/release_emergency is not available, emergency stays");
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        core_.RefuseReset(Reason("SAFETY_MISSING", "safety/release_emergency is not available"));
+      }
+      Flush();
       return;
     }
     auto request = std::make_shared<mowbite_msgs::srv::SetEmergency::Request>();
     request->latch = false;
     request->reason = "reset_emergency from the app";
-    emergency_client_->async_send_request(
+    std::lock_guard<std::mutex> lock(mutex_);
+    // A second reset while one is pending replaces it; only the newest answer counts.
+    if (release_sent_) emergency_client_->remove_pending_request(release_request_id_);
+    release_sent_ = MonotonicSeconds();
+    release_request_id_ = emergency_client_->async_send_request(
         request, [this](rclcpp::Client<mowbite_msgs::srv::SetEmergency>::SharedFuture future) {
           const auto response = future.get();
-          if (!response->success) RCLCPP_WARN(get_logger(), "Emergency stays: %s", response->message.c_str());
-        });
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            release_sent_.reset();
+            if (response->success) return;
+            RCLCPP_WARN(get_logger(), "Emergency stays (%s): %s", response->code.c_str(), response->message.c_str());
+            core_.RefuseReset(ResetRefusal(response->code, response->message, response->value, response->limit));
+          }
+          Flush();
+        }).request_id;
     RCLCPP_INFO(get_logger(), "Emergency release requested");
   }
 
@@ -1159,6 +1179,12 @@ class LogicNode : public rclcpp::Node {
       if (dock_check_sent_ && t - *dock_check_sent_ > dock_check_timeout_s_) {
         set_heading_client_->remove_pending_request(dock_check_request_id_);
         FinishDockCheck(false, 0, 0, 999.0f, "No answer from the localization (localization/set_heading)");
+      }
+      if (release_sent_ && t - *release_sent_ > kReleaseTimeoutS) {
+        emergency_client_->remove_pending_request(release_request_id_);
+        release_sent_.reset();
+        RCLCPP_WARN(get_logger(), "Emergency stays: no answer from safety/release_emergency");
+        core_.RefuseReset(Reason("NO_ANSWER", "No answer to the release from mowbite_safety"));
       }
       if (charge_sent_ && t - *charge_sent_ > charge_timeout_s_) {
         charge_client_->remove_pending_request(charge_request_id_);
@@ -2029,6 +2055,9 @@ class LogicNode : public rclcpp::Node {
   // The map edit on its way: when it went out, its request, and a number that tells a late answer apart.
   std::optional<double> edit_sent_;
   std::optional<int64_t> edit_request_id_;
+  // The release asked of S2, under mutex_.
+  std::optional<double> release_sent_;
+  int64_t release_request_id_ = 0;
   bool edit_is_dock_ = false;
   uint64_t edit_seq_ = 0;
   // The reference check on its way to the localization, and the drive request that waits for it and for undocking.

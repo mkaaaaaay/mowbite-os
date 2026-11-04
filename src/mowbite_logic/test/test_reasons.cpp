@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "mowbite_logic/reasons.h"
 
 namespace mowbite_logic {
@@ -46,6 +48,29 @@ TEST(Reasons, TheDockingStationWaitsForTheUser) {
   }
   // docking.start on the contacts.
   ExpectRating("DRIVE_REFUSED", "ALREADY_THERE", "info", "user");
+}
+
+TEST(Reasons, ARefusedResetWaitsForTheUser) {
+  ExpectRating("EMERGENCY_RESET_REFUSED", "STILL_TILTED", "warning", "user");
+  for (const char* code : {"TILT_UNKNOWN", "FOREIGN_HOST", "DRIVER_MISSING", "SAFETY_MISSING", "NO_ANSWER"}) {
+    ExpectRating("EMERGENCY_RESET_REFUSED", code, "error", "user");
+  }
+}
+
+TEST(Reasons, ARefusedResetCarriesItsNumbers) {
+  json details = json::object();
+  PutReason(&details, "EMERGENCY_RESET_REFUSED", ResetRefusal("STILL_TILTED", "still tilted", 31.5, 26));
+  EXPECT_EQ(details["reason"], "STILL_TILTED");
+  EXPECT_EQ(details["angle"], 31.5);
+  EXPECT_EQ(details["limit"], 26.0);
+  EXPECT_EQ(details["message"], "still tilted");
+  EXPECT_EQ(details["severity"], "warning");
+  EXPECT_EQ(details["resume"], "user");
+  Reason unknown = ResetRefusal("TILT_UNKNOWN", "no IMU", std::nan(""), std::nan(""));
+  EXPECT_TRUE(unknown.fields.empty());
+  EXPECT_EQ(ResetRefusal("TILT_UNKNOWN", "no IMU", 1.25, std::nan("")).fields["seconds"], 1.25);
+  EXPECT_TRUE(ResetRefusal("FOREIGN_HOST", "udp 192.0.2.7:5000", 0, 0).fields.empty());
+  EXPECT_EQ(ResetRefusal("", "", 0, 0).code, "NO_ANSWER");
 }
 
 TEST(Reasons, AutomaticPointsGoOnOnceTheyAreAccurate) {

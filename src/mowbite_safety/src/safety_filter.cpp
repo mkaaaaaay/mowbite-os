@@ -279,11 +279,16 @@ std::optional<LatchRequest> SafetyFilter::TakeLatchRequest(double now) {
 
 Release SafetyFilter::OnRelease(double now) {
   if (!ImuFresh(now)) {
-    return {false, imu_s_ ? Format("no IMU sample for %.1f s, the tilt is unknown", now - *imu_s_)
-                          : "no IMU sample yet, the tilt is unknown"};
+    Release refused{false, "no IMU sample yet, the tilt is unknown", "TILT_UNKNOWN"};
+    if (imu_s_) {
+      refused.message = Format("no IMU sample for %.1f s, the tilt is unknown", now - *imu_s_);
+      refused.value = now - *imu_s_;
+    }
+    return refused;
   }
   if (!(tilt_deg_ < config_.tilt_release)) {
-    return {false, Format("still tilted by %.0f deg, below %.0f deg needed", tilt_deg_, config_.tilt_release)};
+    return {false, Format("still tilted by %.0f deg, below %.0f deg needed", tilt_deg_, config_.tilt_release),
+            "STILL_TILTED", tilt_deg_, config_.tilt_release};
   }
   latched_ = 0;
   latch_reason_.clear();
@@ -294,7 +299,7 @@ Release SafetyFilter::OnRelease(double now) {
   moving_.reset();
   DisarmAll();
   UpdateEmergency(now);
-  return {true, ""};
+  return {true, "", ""};
 }
 
 uint32_t SafetyFilter::Latched() const {

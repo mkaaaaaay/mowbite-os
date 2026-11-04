@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <geometry_msgs/msg/twist.hpp>
@@ -17,6 +18,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <stdexcept>
 #include <std_msgs/msg/string.hpp>
+#include <vector>
 
 #include "mowbite_safety/safety_filter.h"
 
@@ -27,6 +29,9 @@ namespace {
 using mowbite_msgs::msg::DriveCommand;
 using mowbite_msgs::msg::HardwareStatus;
 using mowbite_msgs::srv::SetEmergency;
+
+// The driver answers a release at once; the logic waits a little longer for this answer.
+constexpr double kDriverAnswerS = 2.0;
 
 static_assert(kReasonTilt == HardwareStatus::REASON_TILT);
 static_assert(kReasonFence == HardwareStatus::REASON_FENCE);
@@ -54,7 +59,7 @@ std::string BitNames(uint32_t bits) {
 
 // S2, the only writer of hw/cmd_vel: passes the drive commands of the logic (safety/drive) that SafetyFilter allows,
 // latches TILT and FENCE over hw/emergency, and lets a release of the logic (safety/release_emergency) through to the
-// driver only while the mower is not tilted.
+// driver only while the mower is not tilted; the driver's answer is the answer to the logic.
 class SafetyNode : public rclcpp::Node {
  public:
   explicit SafetyNode(const rclcpp::NodeOptions& options)
@@ -100,8 +105,8 @@ class SafetyNode : public rclcpp::Node {
         });
     release_srv_ = create_service<SetEmergency>(
         "safety/release_emergency",
-        [this](const SetEmergency::Request::SharedPtr req, SetEmergency::Response::SharedPtr res) {
-          OnRelease(*req, *res);
+        [this](std::shared_ptr<rmw_request_id_t> header, const SetEmergency::Request::SharedPtr req) {
+          OnRelease(header, *req);
         });
     timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { OnTimer(); });
   }
@@ -174,35 +179,71 @@ class SafetyNode : public rclcpp::Node {
     if (latch) SendLatch(*latch);
   }
 
-  void OnRelease(const SetEmergency::Request& req, SetEmergency::Response& res) {
+  // Answered once the driver answered, or with the refusal of the filter at once.
+  void OnRelease(const std::shared_ptr<rmw_request_id_t>& header, const SetEmergency::Request& req) {
+    SetEmergency::Response res;
+    res.success = false;
     if (req.latch) {
-      res.success = false;
       res.message = "safety/release_emergency only releases";
+      release_srv_->send_response(*header, res);
       return;
     }
     if (!emergency_client_->service_is_ready()) {
       RCLCPP_ERROR(get_logger(), "hw/emergency is not available, emergency stays");
-      res.success = false;
       res.message = "hw/emergency is not available";
+      res.code = "DRIVER_MISSING";
+      release_srv_->send_response(*header, res);
       return;
     }
-    Release release;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      release = filter_.OnRelease(MonotonicSeconds());
-    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    const double now = MonotonicSeconds();
+    const Release release = filter_.OnRelease(now);
     if (!release.allowed) {
       RCLCPP_WARN(get_logger(), "Emergency stays: %s", release.message.c_str());
-      res.success = false;
       res.message = release.message;
+      res.code = release.code;
+      res.value = static_cast<float>(release.value);
+      res.limit = static_cast<float>(release.limit);
+      release_srv_->send_response(*header, res);
       return;
     }
     auto request = std::make_shared<SetEmergency::Request>();
     request->latch = false;
     request->reason = req.reason;
-    emergency_client_->async_send_request(request);
-    res.success = true;
-    res.message = "release requested";
+    auto sent = emergency_client_->async_send_request(
+        request, [this, header](rclcpp::Client<SetEmergency>::SharedFuture future) { OnDriverAnswer(header, future); });
+    pending_.push_back({header, sent.request_id, now});
+  }
+
+  void OnDriverAnswer(const std::shared_ptr<rmw_request_id_t>& header,
+                      rclcpp::Client<SetEmergency>::SharedFuture future) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = std::find_if(pending_.begin(), pending_.end(),
+                           [&](const PendingRelease& p) { return p.header == header; });
+    // Answered already as NO_ANSWER.
+    if (it == pending_.end()) return;
+    pending_.erase(it);
+    const auto response = future.get();
+    if (!response->success) RCLCPP_WARN(get_logger(), "The driver refused the release: %s", response->message.c_str());
+    release_srv_->send_response(*header, *response);
+  }
+
+  // Called with mutex_ held: releases the driver did not answer in time.
+  void ExpirePending(double now) {
+    for (auto it = pending_.begin(); it != pending_.end();) {
+      if (now - it->sent_s <= kDriverAnswerS) {
+        ++it;
+        continue;
+      }
+      emergency_client_->remove_pending_request(it->request_id);
+      RCLCPP_ERROR(get_logger(), "hw/emergency did not answer the release, emergency stays");
+      SetEmergency::Response res;
+      res.success = false;
+      res.message = "hw/emergency did not answer";
+      res.code = "NO_ANSWER";
+      release_srv_->send_response(*it->header, res);
+      it = pending_.erase(it);
+    }
   }
 
   void OnTimer() {
@@ -212,6 +253,7 @@ class SafetyNode : public rclcpp::Node {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       const double now = MonotonicSeconds();
+      ExpirePending(now);
       stop = filter_.Tick(now);
       latch = filter_.TakeLatchRequest(now);
       status.latched = filter_.Latched();
@@ -256,8 +298,16 @@ class SafetyNode : public rclcpp::Node {
     });
   }
 
+  struct PendingRelease {
+    std::shared_ptr<rmw_request_id_t> header;
+    int64_t request_id;
+    double sent_s;
+  };
+
   std::mutex mutex_;
   SafetyFilter filter_;
+  // Releases of the logic waiting for the driver's answer.
+  std::vector<PendingRelease> pending_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::SafetyStatus>::SharedPtr status_pub_;
   rclcpp::Client<SetEmergency>::SharedPtr emergency_client_;

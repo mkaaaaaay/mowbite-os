@@ -1,5 +1,6 @@
 #include "mowbite_logic/reasons.h"
 
+#include <cmath>
 #include <set>
 
 namespace mowbite_logic {
@@ -53,6 +54,8 @@ Rating RateReason(const std::string& event, const std::string& code, const std::
   // approach_failed or dock_failed: the next try follows by itself, after the last one the mower waits.
   if (event == "DOCKING_RETRY") return {kWarning, kAuto};
   if (event == "DOCKING_FAILED") return {kError, kUser};
+  // Tilted: level the mower and reset again. Everything else needs a look at the mower or its software.
+  if (event == "EMERGENCY_RESET_REFUSED") return {code == "STILL_TILTED" ? kWarning : kError, kUser};
   return {kWarning, kUser};
 }
 
@@ -64,6 +67,15 @@ void PutReason(json* details, const std::string& event, const Reason& reason) {
   const Rating rating = RateReason(event, reason.code, action);
   (*details)["severity"] = rating.severity;
   (*details)["resume"] = rating.resume;
+}
+
+Reason ResetRefusal(const std::string& code, const std::string& message, double value, double limit) {
+  Reason why(code.empty() ? "NO_ANSWER" : code, message);
+  if (code == "STILL_TILTED" && std::isfinite(value) && std::isfinite(limit)) {
+    why.With("angle", value).With("limit", limit);
+  }
+  if (code == "TILT_UNKNOWN" && std::isfinite(value)) why.With("seconds", value);
+  return why;
 }
 
 Reason MapReason(MapDatum datum, const std::string& message) {
