@@ -2,14 +2,11 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <dirent.h>
-#include <unistd.h>
 
 #include <diagnostic_msgs/msg/key_value.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <cstdio>
-#include <fstream>
 #include <limits>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
@@ -24,8 +21,6 @@
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
-#include <set>
-#include <sstream>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
@@ -38,9 +33,9 @@
 #include "xcore_driver/input_config.h"
 #include "xcore_driver/link.h"
 #include "xcore_driver/services.h"
-#include "xcore_driver/socket_table.h"
 #include "xcore_driver/udp.h"
 #include "xcore_driver/xcore_control.h"
+#include "xcore_driver/xcore_io.h"
 
 namespace xcore_driver {
 
@@ -72,60 +67,36 @@ static_assert(static_cast<uint8_t>(mowbite_gnss::Solution::kSingle) == GnssFix::
 static_assert(static_cast<uint8_t>(mowbite_gnss::Solution::kRtkFloat) == GnssFix::RTK_FLOAT);
 static_assert(static_cast<uint8_t>(mowbite_gnss::Solution::kRtkFixed) == GnssFix::RTK_FIXED);
 
-// Functions of the meta service.
-constexpr uint8_t kGetFirmwareVersion = 0;
-constexpr uint8_t kGetMajorVersion = 1;
-// A firmware question without an answer is asked again after this long.
-constexpr double kRpcRetryS = 5.0;
-constexpr double kTickS = 0.01;
-// Datagrams computed this long before they would go out are dropped: the thread stalled in between.
-constexpr double kStaleSendS = 0.1;
-// While the board is claimed, the sockets of other programs are checked this often.
+// While the board is claimed, the output thread checks the sockets of other programs this often.
 constexpr double kForeignCheckS = 5.0;
-// Without a socket the loop waits this long before it tries again.
-constexpr double kClosedWaitS = 0.05;
 // hold.json is looked at this often.
 constexpr double kHoldPollS = 0.5;
+// hw/status goes out at least this often, at once when a block changes.
+constexpr double kStatusPeriodS = 0.1;
+// Counts of frequent events become one line per this long at most.
+constexpr double kCountLogS = 10.0;
 const char kAgeSensor[] = "os_correction_age";
 
 rclcpp::QoS LatchedQos() {
   return rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
 }
 
-double MonotonicSeconds() {
-  using namespace std::chrono;
-  return duration<double>(steady_clock::now().time_since_epoch()).count();
-}
+using xcore::MonotonicSeconds;
 
 int64_t WallSeconds() {
   using namespace std::chrono;
   return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
 }
 
-double UtcSecondsOfDay() {
-  using namespace std::chrono;
-  const double s = duration<double>(system_clock::now().time_since_epoch()).count();
-  return std::fmod(s, 86400.0);
+double UtcSecondsOfDay(int64_t wall_ns) {
+  return std::fmod(static_cast<double>(wall_ns) * 1e-9, 86400.0);
 }
 
-const char* ServiceName(uint16_t id) {
-  switch (id) {
-    case xcore::kEmergencyService: return "emergency";
-    case xcore::kDiffDriveService: return "diff drive";
-    case xcore::kMowerService: return "mower";
-    case xcore::kImuService: return "imu";
-    case xcore::kPowerService: return "power";
-    case xcore::kGpsService: return "gps";
-    case xcore::kInputService: return "input";
-    case xcore::kMetaService: return "meta";
-  }
-  return "unknown";
-}
-
-// The part of hw/status that goes out at once when it changes: emergency, latch, reason bits and the hold.
-uint64_t BlockOf(const xcore::ControlStatus& status) {
-  return status.emergency_reason | (uint64_t{status.blocked} << 32) | (uint64_t{status.latched} << 33) |
-         (uint64_t{status.held} << 34);
+builtin_interfaces::msg::Time Stamp(int64_t wall_ns) {
+  builtin_interfaces::msg::Time stamp;
+  stamp.sec = static_cast<int32_t>(wall_ns / 1000000000);
+  stamp.nanosec = static_cast<uint32_t>(wall_ns % 1000000000);
+  return stamp;
 }
 
 const char* BladeOffText(xcore::BladeOffReason reason) {
@@ -155,50 +126,63 @@ Bytes F64(double value) {
 }  // namespace
 
 // Driver of an OpenMower v2 mower with xCore board behind the hardware contract hw/* of MowBite OS: claims the
-// services of the board over UDP, configures them from the platform parameters and passes their values on.
+// services of the board over UDP, configures them from the platform parameters and passes their values on. The I/O
+// thread (xcore::XcoreIo) keeps the board's period and only fills the outbox; the output thread of this node
+// publishes, logs and makes the slow checks, and may block without holding up the board.
 class XcoreNode : public rclcpp::Node {
  public:
   explicit XcoreNode(const rclcpp::NodeOptions& options)
-      : rclcpp::Node("xcore_driver", options), inputs_(LoadInputs()), control_(LoadControl(), xcore::InputMapOf(inputs_)) {
+      : rclcpp::Node("xcore_driver", options), inputs_(LoadInputs()) {
+    const xcore::ControlConfig control = LoadControl();
     blade_lease_max_s_ = get_parameter("blade_lease_max").as_double();
     max_linear_speed_ = std::min(get_parameter("max_linear_speed").as_double(), 0.3);
     max_angular_speed_ = std::min(get_parameter("max_angular_speed").as_double(), 0.3);
     platform_ = declare_parameter("platform", "openmower_v2");
-    interface_ = declare_parameter("interface", "eth0");
-    bind_ip_text_ = declare_parameter("bind_ip", "172.16.78.1");
-    group_ = declare_parameter("announcement_group", std::string(xcore::kAnnouncementGroup));
-    group_port_ = static_cast<uint16_t>(declare_parameter("announcement_port", int{xcore::kAnnouncementPort}));
-    expected_major_ = static_cast<uint16_t>(declare_parameter("expected_major_version", 1));
+    xcore::IoConfig io;
+    io.interface = declare_parameter("interface", "eth0");
+    const std::string bind_ip = declare_parameter("bind_ip", "172.16.78.1");
+    io.group = declare_parameter("announcement_group", std::string(xcore::kAnnouncementGroup));
+    io.group_port = static_cast<uint16_t>(declare_parameter("announcement_port", int{xcore::kAnnouncementPort}));
+    io.expected_major = static_cast<uint16_t>(declare_parameter("expected_major_version", 1));
     imu_frame_id_ = declare_parameter("imu_frame_id", "base_link");
     gnss_source_ = declare_parameter("gnss_source", "xcore_driver");
-    contest_losses_ = static_cast<int>(declare_parameter("contest_losses", int64_t{2}));
-    contest_window_s_ = declare_parameter("contest_window", 10.0);
-    if (contest_losses_ < 2 || !(contest_window_s_ > 0)) throw std::invalid_argument("contest parameters out of range");
+    io.contest_losses = static_cast<int>(declare_parameter("contest_losses", int64_t{2}));
+    io.contest_window_s = declare_parameter("contest_window", 10.0);
+    if (io.contest_losses < 2 || !(io.contest_window_s > 0)) {
+      throw std::invalid_argument("contest parameters out of range");
+    }
     failsafe_without_host_s_ = declare_parameter("failsafe_without_host", -1.0);
     safety_measurement_date_ = declare_parameter("safety_measurement_date", "");
-    if (!xcore::ParseIpv4(bind_ip_text_, bind_ip_)) throw std::invalid_argument("bind_ip is no IPv4 address");
-    services_ = LoadServices();
+    if (!xcore::ParseIpv4(bind_ip, io.bind_ip)) throw std::invalid_argument("bind_ip is no IPv4 address");
+    bind_ip_ = io.bind_ip;
+    group_port_ = io.group_port;
+    io.services = LoadServices();
     if (safety_measurement_date_.empty()) {
       RCLCPP_WARN(get_logger(), "No safety measurement of this mower yet: remote control only");
     }
-    // <data_dir>/hold.json of the logic; empty: no hold.
-    hold_watch_.emplace(declare_parameter("hold_file", ""));
-    if (hold_watch_->path().empty()) RCLCPP_WARN(get_logger(), "No hold_file: an update cannot hold this driver");
-    PollHold();
 
     twist_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("hw/wheel_odom", 10);
     imu_pub_ = create_publisher<sensor_msgs::msg::Imu>("imu/data", rclcpp::SensorDataQoS());
     status_pub_ = create_publisher<HardwareStatus>("hw/status", 10);
     capabilities_pub_ = create_publisher<mowbite_msgs::msg::HardwareCapabilities>("hw/capabilities", LatchedQos());
-    PublishCapabilities();
+    PublishCapabilities("");
     if (gnss_source_ == get_name()) {
       SetUpGnss();
     } else {
       RCLCPP_INFO(get_logger(), "GNSS from %s, the board's GPS service is not passed on", gnss_source_.c_str());
     }
+    io.gnss = gnss_enabled_;
+    io_.emplace(io, control, xcore::InputMapOf(inputs_));
+
+    // <data_dir>/hold.json of the logic; empty: no hold.
+    hold_watch_.emplace(declare_parameter("hold_file", ""));
+    if (hold_watch_->path().empty()) RCLCPP_WARN(get_logger(), "No hold_file: an update cannot hold this driver");
+    PollHold();
 
     cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-        "hw/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) { OnCmdVel(*msg); });
+        "hw/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) {
+          io_->OnCmdVel(msg->linear.x, msg->angular.z);
+        });
     emergency_srv_ = create_service<mowbite_msgs::srv::SetEmergency>(
         "hw/emergency", [this](const mowbite_msgs::srv::SetEmergency::Request::SharedPtr req,
                                mowbite_msgs::srv::SetEmergency::Response::SharedPtr res) { OnEmergency(*req, *res); });
@@ -208,14 +192,19 @@ class XcoreNode : public rclcpp::Node {
     charge_srv_ = create_service<mowbite_msgs::srv::SetCharge>(
         "hw/charge", [this](const mowbite_msgs::srv::SetCharge::Request::SharedPtr req,
                             mowbite_msgs::srv::SetCharge::Response::SharedPtr res) { OnCharge(*req, *res); });
-    status_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { PublishStatus(); });
 
-    io_thread_ = std::thread([this] { IoLoop(); });
+    // At the end of the process the loop sends its stop inputs before the node goes away.
+    context_ = get_node_base_interface()->get_context();
+    on_shutdown_ = context_->add_on_shutdown_callback([this] { io_->RequestStop(); });
+    io_->Start();
+    output_thread_ = std::thread([this] { OutputLoop(); });
   }
 
   ~XcoreNode() override {
-    running_ = false;
-    if (io_thread_.joinable()) io_thread_.join();
+    context_->remove_on_shutdown_callback(on_shutdown_);
+    io_->Stop();
+    io_->outbox().wakeup.Stop();
+    if (output_thread_.joinable()) output_thread_.join();
   }
 
  private:
@@ -418,161 +407,100 @@ class XcoreNode : public rclcpp::Node {
     return services;
   }
 
-  // Why another host could talk to the board from this machine: UDP sockets of other programs at bind_ip or at the
-  // announcement port, in the network namespace of this process. nullopt when there are none.
-  std::optional<std::string> ForeignHosts() const {
-    std::vector<xcore::ForeignSocket> found;
-    std::vector<std::string> tables;
-    for (const char* path : {"/proc/net/udp", "/proc/net/udp6"}) {
-      std::ifstream file(path);
-      if (!file && std::string(path) == "/proc/net/udp") return std::string("cannot read /proc/net/udp");
-      std::stringstream text;
-      text << file.rdbuf();
-      tables.push_back(text.str());
-    }
-    // Own sockets after the tables: one opened in between is not in them.
-    std::set<uint64_t> own;
-    if (DIR* dir = opendir("/proc/self/fd")) {
-      while (const dirent* entry = readdir(dir)) {
-        char path[300];
-        char target[64];
-        std::snprintf(path, sizeof(path), "/proc/self/fd/%s", entry->d_name);
-        const ssize_t n = readlink(path, target, sizeof(target) - 1);
-        if (n <= 0) continue;
-        target[n] = '\0';
-        unsigned long long inode = 0;
-        if (std::sscanf(target, "socket:[%llu]", &inode) == 1) own.insert(inode);
+  // Publishes, logs and makes the slow checks, in this order of each round: a changed block first, then the
+  // capabilities, the readings in their order, the log lines, the counts, hold.json and the sockets of other programs.
+  void OutputLoop() {
+    auto& out = io_->outbox();
+    double now = MonotonicSeconds();
+    double next_status = now;
+    double next_hold = now + kHoldPollS;
+    double next_foreign = now + kForeignCheckS;
+    while (!out.wakeup.stopped()) {
+      const double wait = std::max(0.0, std::min(next_status, next_hold) - MonotonicSeconds());
+      out.wakeup.WaitFor(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(wait)));
+      now = MonotonicSeconds();
+      if (out.status_due.exchange(false) || now >= next_status) {
+        next_status = now + kStatusPeriodS;
+        PublishStatus(io_->Snapshot());
       }
-      closedir(dir);
-    } else {
-      return std::string("cannot read /proc/self/fd");
-    }
-    for (const auto& table : tables) {
-      auto sockets = xcore::ForeignSockets(table, bind_ip_, group_port_, own);
-      found.insert(found.end(), sockets.begin(), sockets.end());
-    }
-    if (found.empty()) return std::nullopt;
-    std::string text = "another program holds UDP sockets at " + bind_ip_text_ + " or port " +
-                       std::to_string(group_port_) + ":";
-    for (const auto& socket : found) text += " " + xcore::ForeignSocketText(socket);
-    return text;
-  }
-
-  // Opens both sockets and starts a new link; false while the interface has no address.
-  bool Open() {
-    uint32_t interface_ip = 0;
-    std::string error;
-    if (!xcore::InterfaceAddress(interface_, interface_ip)) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Interface %s has no IPv4 address", interface_.c_str());
-      return false;
-    }
-    uint32_t group_ip = 0;
-    if (!xcore::ParseIpv4(group_, group_ip) || !announcements_.Bind(group_ip, group_port_, true, error) ||
-        !announcements_.JoinGroup(group_, interface_ip, error)) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Cannot listen to %s:%u on %s: %s", group_.c_str(),
-                            group_port_, interface_.c_str(), error.c_str());
-      announcements_.Close();
-      return false;
-    }
-    if (!service_socket_.Bind(bind_ip_, 0, false, error)) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Cannot bind to %s: %s", bind_ip_text_.c_str(),
-                            error.c_str());
-      announcements_.Close();
-      return false;
-    }
-    xcore::LinkConfig config;
-    config.host = {bind_ip_, service_socket_.LocalPort()};
-    config.services = services_;
-    config.contest_losses = contest_losses_;
-    config.contest_window_s = contest_window_s_;
-    std::lock_guard<std::mutex> lock(mutex_);
-    link_.emplace(config);
-    for (const auto& entry : services_) control_.OnServiceRestart(entry.first, MonotonicSeconds());
-    RCLCPP_INFO(get_logger(), "Listening for the board on %s:%u via %s (%s), services answer to %s:%u", group_.c_str(),
-                group_port_, interface_.c_str(), xcore::Ipv4Text(interface_ip).c_str(), bind_ip_text_.c_str(),
-                service_socket_.LocalPort());
-    return true;
-  }
-
-  // Owns both sockets: reads announcements and service datagrams, runs link and control every 10 ms.
-  void IoLoop() {
-    uint8_t buffer[xcore::kMaxDatagram + 1];
-    double next_tick = 0;
-    double next_open = 0;
-    double next_foreign_check = 0;
-    double next_hold = 0;
-    while (running_ && rclcpp::ok()) {
-      double now = MonotonicSeconds();
+      if (out.capabilities_due.exchange(false)) PublishCapabilities(io_->Snapshot().firmware_version);
+      for (const auto& reading : out.twists.TakeAll()) PublishTwist(reading);
+      for (const auto& reading : out.imu.TakeAll()) PublishImu(reading);
+      for (const auto& reading : out.gps.TakeAll()) OnGnss(reading);
+      for (const auto& line : out.log.TakeAll()) Log(line);
+      ReportCounts(now);
       if (now >= next_hold) {
         next_hold = now + kHoldPollS;
         PollHold();
       }
-      if (!service_socket_.IsOpen()) {
-        {
-          std::lock_guard<std::mutex> lock(mutex_);
-          control_.Alive(now);
-        }
-        if (now >= next_open) {
-          next_open = now + 1.0;
-          // A second host at the board takes over whatever this driver claims: no start beside one.
-          if (auto foreign = ForeignHosts()) {
-            RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Board not claimed, checking again: %s",
-                                  foreign->c_str());
-          } else if (Open()) {
-            next_foreign_check = now + kForeignCheckS;
-          }
-        }
-        if (!service_socket_.IsOpen()) {
-          if (BlockChanged()) PublishStatus();
-          std::this_thread::sleep_for(std::chrono::duration<double>(kClosedWaitS));
-          continue;
-        }
+      // While the board is claimed, a second host beside this driver latches (FOREIGN_HOST).
+      if (!io_->open()) {
+        next_foreign = now + kForeignCheckS;
+      } else if (now >= next_foreign) {
+        next_foreign = now + kForeignCheckS;
+        if (auto foreign = xcore::ForeignHosts(bind_ip_, group_port_)) io_->LatchForeignHost(*foreign);
       }
-      if (now >= next_foreign_check) {
-        next_foreign_check = now + kForeignCheckS;
-        if (auto foreign = ForeignHosts()) {
-          std::lock_guard<std::mutex> lock(mutex_);
-          control_.LatchForeignHost(*foreign, now);
-        }
-      }
-      xcore::Endpoint from;
-      long n;
-      while ((n = announcements_.Receive(buffer, sizeof(buffer), from, 0)) > 0) {
-        if (static_cast<size_t>(n) > xcore::kMaxDatagram) continue;
-        std::vector<xcore::LinkEvent> events;
-        {
-          std::lock_guard<std::mutex> lock(mutex_);
-          link_->OnAnnouncement(buffer, static_cast<size_t>(n), MonotonicSeconds(), events);
-        }
-        HandleEvents(events);
-      }
-      int wait_ms = std::clamp(static_cast<int>((next_tick - now) * 1000.0), 0, 5);
-      n = service_socket_.Receive(buffer, sizeof(buffer), from, wait_ms);
-      if (n < 0) {
-        RCLCPP_ERROR(get_logger(), "Receive error on the service socket, opening it again");
-        Close();
-        continue;
-      }
-      if (n > 0 && static_cast<size_t>(n) <= xcore::kMaxDatagram) HandleDatagram(buffer, static_cast<size_t>(n), from);
-
-      now = MonotonicSeconds();
-      if (now >= next_tick) {
-        next_tick = now + kTickS;
-        Tick(now);
-      }
-      // So that the logic learns of a block before a blade request it refuses, not only at the next status tick.
-      if (BlockChanged()) PublishStatus();
     }
-    Shutdown();
+  }
+
+  void Log(const mowbite_outbox::LogLine& line) {
+    using Level = mowbite_outbox::LogLine::Level;
+    switch (line.level) {
+      case Level::kDebug: RCLCPP_DEBUG(get_logger(), "%s", line.text.c_str()); break;
+      case Level::kInfo: RCLCPP_INFO(get_logger(), "%s", line.text.c_str()); break;
+      case Level::kWarn: RCLCPP_WARN(get_logger(), "%s", line.text.c_str()); break;
+      case Level::kError: RCLCPP_ERROR(get_logger(), "%s", line.text.c_str()); break;
+    }
+  }
+
+  // Counts of the I/O thread and of what the outbox gave up, as throttled lines.
+  void ReportCounts(double now) {
+    auto& out = io_->outbox();
+    send_failed_ += out.send_failed.Take();
+    if (send_failed_ > 0 && send_failed_log_.Allow(now)) {
+      RCLCPP_ERROR(get_logger(), "Cannot send to the board: %lu datagrams not sent",
+                   static_cast<unsigned long>(std::exchange(send_failed_, 0)));
+    }
+    const auto late = out.late_ticks.Take();
+    late_ticks_ += late.count;
+    late_max_s_ = std::max(late_max_s_, late.max);
+    if (late_ticks_ > 0 && late_tick_log_.Allow(now)) {
+      RCLCPP_WARN(get_logger(), "I/O thread: %lu ticks more than %.0f ms late, the latest %.3f s",
+                  static_cast<unsigned long>(std::exchange(late_ticks_, 0)), xcore::XcoreIo::kLateTickS * 1000,
+                  std::exchange(late_max_s_, 0.0));
+    }
+    const uint64_t rtcm_closed = out.rtcm_dropped_closed.Take();
+    rtcm_closed_total_ += rtcm_closed;
+    if (rtcm_closed > 0) rtcm_closed_pending_ = true;
+    if (rtcm_closed_pending_ && rtcm_closed_log_.Allow(now)) {
+      rtcm_closed_pending_ = false;
+      RCLCPP_WARN(get_logger(), "RTCM dropped while the GPS service does not run, %lu bytes so far",
+                  static_cast<unsigned long>(rtcm_closed_total_));
+    }
+    if (rtcm_full_.exchange(false)) rtcm_full_pending_ = true;
+    if (rtcm_full_pending_ && rtcm_full_log_.Allow(now)) {
+      rtcm_full_pending_ = false;
+      RCLCPP_WARN(get_logger(), "RTCM queue full, %lu bytes dropped so far",
+                  static_cast<unsigned long>(io_->rtcm_dropped_bytes()));
+    }
+    // Only after a hang of this thread: the I/O thread went on, what did not fit is gone.
+    dropped_twists_ += out.twists.TakeDropped();
+    dropped_imu_ += out.imu.TakeDropped();
+    dropped_gps_ += out.gps.TakeDropped();
+    dropped_lines_ += out.log.TakeDropped();
+    if (dropped_twists_ + dropped_imu_ + dropped_gps_ + dropped_lines_ > 0 && dropped_log_.Allow(now)) {
+      RCLCPP_WARN(get_logger(), "Output fell behind: %lu odometry, %lu IMU and %lu GPS readings and %lu log lines "
+                  "dropped", static_cast<unsigned long>(std::exchange(dropped_twists_, 0)),
+                  static_cast<unsigned long>(std::exchange(dropped_imu_, 0)),
+                  static_cast<unsigned long>(std::exchange(dropped_gps_, 0)),
+                  static_cast<unsigned long>(std::exchange(dropped_lines_, 0)));
+    }
   }
 
   // The hold of an update, from hold.json itself: it stands without the logic and right after a restart.
   void PollHold() {
     const mowbite_hold::HoldView view = hold_watch_->Poll(MonotonicSeconds(), WallSeconds());
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      control_.SetHold(view.held);
-    }
+    io_->SetHold(view.held);
     if (view.held == hold_logged_.held && view.unreadable == hold_logged_.unreadable &&
         view.until == hold_logged_.until) {
       return;
@@ -589,70 +517,25 @@ class XcoreNode : public rclcpp::Node {
     hold_logged_ = view;
   }
 
-  bool BlockChanged() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return BlockOf(control_.Status(MonotonicSeconds())) != published_block_;
-  }
-
-  void Close() {
-    announcements_.Close();
-    service_socket_.Close();
-  }
-
-  void HandleDatagram(const uint8_t* data, size_t size, const xcore::Endpoint& from) {
-    std::vector<xcore::Output> outputs;
-    std::vector<xcore::LinkEvent> events;
-    std::vector<xcore::WheelTwist> twists;
-    std::vector<std::vector<double>> imu;
-    std::vector<xcore::Output> gps;
-    std::optional<double> correction_age;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      const double now = MonotonicSeconds();
-      link_->OnDatagram(data, size, from, now, outputs, events);
-      if (last_rtcm_s_) correction_age = now - *last_rtcm_s_;
-      for (const auto& out : outputs) {
-        if (out.service_id == xcore::kImuService && out.channel_id == xcore::imu::kOutAxes) {
-          if (auto axes = xcore::DecodeDoubles(out.value, 9)) {
-            control_.OnImu((*axes)[0], (*axes)[1], (*axes)[2], now);
-            imu.push_back(*axes);
-          }
-          continue;
-        }
-        if (out.service_id == xcore::kGpsService) {
-          gps.push_back(out);
-          continue;
-        }
-        if (auto twist = control_.OnOutput(out.service_id, out.channel_id, out.value, out.board_time_us, now)) {
-          twists.push_back(*twist);
-        }
-      }
-    }
-    HandleEvents(events);
-    for (const auto& twist : twists) PublishTwist(twist);
-    for (const auto& axes : imu) PublishImu(axes);
-    if (gnss_enabled_ && !gps.empty()) OnGnss(gps, correction_age);
-  }
-
-  // Called from the I/O thread only, which alone uses the converter.
-  void OnGnss(const std::vector<xcore::Output>& outputs, const std::optional<double>& correction_age) {
-    auto solution = xcore::DecodeGnss(outputs);
+  // In the output thread, which alone uses the converter.
+  void OnGnss(const xcore::GpsReading& reading) {
+    auto solution = xcore::DecodeGnss(reading.outputs);
     if (!solution) return;
     const double now = MonotonicSeconds();
     if (now - last_gga_s_ >= 1.0) {
       last_gga_s_ = now;
       std_msgs::msg::String gga;
-      gga.data = mowbite_gnss::BuildGga(xcore::GgaOf(*solution, UtcSecondsOfDay()));
+      gga.data = mowbite_gnss::BuildGga(xcore::GgaOf(*solution, UtcSecondsOfDay(reading.stamp_ns)));
       gga_pub_->publish(gga);
-      if (correction_age) {
+      if (reading.correction_age_s) {
         mowbite_msgs::msg::SensorValue value;
         value.sensor_id = kAgeSensor;
-        value.value = *correction_age;
+        value.value = *reading.correction_age_s;
         sensor_value_pub_->publish(value);
       }
     }
     if (!gnss_) return;
-    auto pose = gnss_->Convert(*solution, correction_age);
+    auto pose = gnss_->Convert(*solution, reading.correction_age_s);
     if (gnss_->fixed_without_corrections() != reported_downgrades_) {
       reported_downgrades_ = gnss_->fixed_without_corrections();
       if (auto age = gnss_->last_downgrade_age()) {
@@ -669,12 +552,12 @@ class XcoreNode : public rclcpp::Node {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "GPS solution with the board time of the one before, "
                            "%lu dropped so far", static_cast<unsigned long>(reported_repeats_));
     }
-    if (pose) PublishPose(*pose);
+    if (pose) PublishPose(*pose, reading.stamp_ns);
   }
 
-  void PublishPose(const xcore::GnssPose& pose) {
+  void PublishPose(const xcore::GnssPose& pose, int64_t stamp_ns) {
     GnssFix msg;
-    msg.header.stamp = now();
+    msg.header.stamp = Stamp(stamp_ns);
     msg.header.frame_id = gnss_frame_id_;
     msg.receiver_time_ms = pose.sensor_stamp_ms;
     msg.solution = static_cast<uint8_t>(pose.solution);
@@ -688,201 +571,37 @@ class XcoreNode : public rclcpp::Node {
     pose_pub_->publish(msg);
   }
 
-  void OnRtcm(const mowbite_msgs::msg::Rtcm& msg) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!rtcm_.Push(msg.data.data(), msg.data.size())) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "RTCM queue full, %lu bytes dropped so far",
-                           static_cast<unsigned long>(rtcm_.dropped_bytes()));
-    }
-  }
-
-  // Called with mutex_ held: the queued RTCM to a running GPS service, dropped while it does not run.
-  void PassRtcm(double now, std::vector<xcore::Datagram>& datagrams) {
-    if (rtcm_.size() == 0) return;
-    if (link_->State(xcore::kGpsService) != xcore::ServiceState::kRunning) {
-      rtcm_.Clear();
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
-                           "RTCM dropped while the GPS service does not run, %lu bytes so far",
-                           static_cast<unsigned long>(rtcm_.dropped_bytes()));
-      return;
-    }
-    for (const auto& piece : rtcm_.Take()) {
-      if (auto datagram = link_->Input(xcore::kGpsService, xcore::gps::kInRtcm, piece)) {
-        datagrams.push_back(*datagram);
-        last_rtcm_s_ = now;
-      }
-    }
-  }
-
-  void Tick(double now) {
-    std::vector<xcore::Datagram> datagrams;
-    std::vector<xcore::LinkEvent> events;
-    std::vector<std::string> errors;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (major_ == std::nullopt && next_rpc_s_ && now >= *next_rpc_s_) AskFirmware(now);
-      datagrams = link_->Tick(now, events);
-      control_.SetServicesReady(link_->AllRunning() && major_ == expected_major_,
-                                !major_ || *major_ == expected_major_);
-      for (const auto& value : control_.Tick(now)) {
-        if (auto datagram = link_->Input(value.service_id, value.channel_id, value.value)) {
-          datagrams.push_back(*datagram);
-        }
-      }
-      PassRtcm(now, datagrams);
-      errors = control_.TakeErrors();
-    }
-    for (const auto& error : errors) RCLCPP_ERROR(get_logger(), "Emergency latched: %s", error.c_str());
-    Send(datagrams, now);
-    HandleEvents(events);
-  }
-
-  // Datagrams computed at `computed` go out only while fresh: after a stall the next tick latches before anything else.
-  void Send(const std::vector<xcore::Datagram>& datagrams, std::optional<double> computed = std::nullopt) {
-    for (size_t i = 0; i < datagrams.size(); i++) {
-      const auto& d = datagrams[i];
-      const double age = computed ? MonotonicSeconds() - *computed : 0.0;
-      if (age > kStaleSendS) {
-        RCLCPP_WARN(get_logger(), "Dropped %zu datagrams computed %.2f s ago", datagrams.size() - i, age);
-        return;
-      }
-      if (!service_socket_.Send(d.bytes.data(), d.bytes.size(), d.to)) {
-        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Cannot send to %s:%u",
-                              xcore::Ipv4Text(d.to.ip).c_str(), d.to.port);
-      }
-    }
-  }
-
-  // Called with mutex_ held.
-  void AskFirmware(double now) {
-    next_rpc_s_.reset();
-    bool asked = link_->CallRpc(xcore::kMetaService, kGetMajorVersion, now);
-    asked = link_->CallRpc(xcore::kMetaService, kGetFirmwareVersion, now) && asked;
-    if (!asked) next_rpc_s_ = now + kRpcRetryS;
-  }
-
-  void HandleEvents(const std::vector<xcore::LinkEvent>& events) {
-    using Kind = xcore::LinkEvent::Kind;
-    bool capabilities = false;
-    for (const auto& e : events) {
-      const char* name = ServiceName(e.service_id);
-      std::lock_guard<std::mutex> lock(mutex_);
-      const double now = MonotonicSeconds();
-      switch (e.kind) {
-        case Kind::kRunning:
-          RCLCPP_INFO(get_logger(), "Service %s (%u) runs", name, e.service_id);
-          if (e.service_id == xcore::kMetaService) AskFirmware(now);
-          break;
-        case Kind::kLost:
-        case Kind::kRestarted:
-          RCLCPP_WARN(get_logger(), "Service %s (%u) %s: %s", name, e.service_id,
-                      e.kind == Kind::kLost ? "lost" : "restarted", e.text.c_str());
-          control_.OnServiceRestart(e.service_id, now);
-          if (e.service_id == xcore::kMetaService) {
-            // The board may come back with other firmware.
-            major_.reset();
-            next_rpc_s_.reset();
-          }
-          break;
-        case Kind::kIncompatible:
-          RCLCPP_ERROR(get_logger(), "Service %s (%u) is not claimed: %s", name, e.service_id, e.text.c_str());
-          break;
-        case Kind::kContested:
-          // The driver keeps claiming: each claim stops the service at the board, and the latch reaches the board
-          // whenever the emergency service is ours, where only a release clears it.
-          control_.LatchForeignHost(std::string("service ") + name + " " + e.text, now);
-          break;
-        case Kind::kRpcResult:
-          capabilities |= OnFirmwareAnswer(e, now);
-          break;
-        case Kind::kRpcFailed:
-          RCLCPP_WARN(get_logger(), "Firmware question %u to the board failed: %s", e.function_id, e.text.c_str());
-          if (!next_rpc_s_) next_rpc_s_ = now + kRpcRetryS;
-          break;
-      }
-    }
-    if (capabilities) {
-      std::lock_guard<std::mutex> lock(mutex_);
-      PublishCapabilities();
-    }
-  }
-
-  // Called with mutex_ held; true when the capabilities changed.
-  bool OnFirmwareAnswer(const xcore::LinkEvent& e, double now) {
-    if (e.service_id != xcore::kMetaService) return false;
-    if (e.status != 0) {
-      RCLCPP_WARN(get_logger(), "Firmware question %u answered with status %u", e.function_id, e.status);
-      if (!next_rpc_s_) next_rpc_s_ = now + kRpcRetryS;
-      return false;
-    }
-    if (e.function_id == kGetMajorVersion) {
-      if (e.value.size() != 2) return false;
-      major_ = xcore::Reader(e.value).U16();
-      if (*major_ == expected_major_) {
-        RCLCPP_INFO(get_logger(), "Firmware major version %u as expected", *major_);
-      } else {
-        RCLCPP_ERROR(get_logger(), "Firmware major version %u, expected %u: motion and blade stay blocked", *major_,
-                     expected_major_);
-      }
-      return true;
-    }
-    if (e.function_id == kGetFirmwareVersion) {
-      std::string version = xcore::DecodeText(e.value);
-      if (version == firmware_version_) return false;
-      firmware_version_ = version;
-      RCLCPP_INFO(get_logger(), "xCore firmware %s", version.c_str());
-      return true;
-    }
-    return false;
-  }
-
-  void Shutdown() {
-    std::vector<xcore::Datagram> datagrams;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (link_) {
-        for (const auto& value : control_.StopInputs()) {
-          if (auto datagram = link_->Input(value.service_id, value.channel_id, value.value)) {
-            datagrams.push_back(*datagram);
-          }
-        }
-      }
-    }
-    Send(datagrams);
-    Close();
-  }
-
-  void PublishTwist(const xcore::WheelTwist& twist) {
+  void PublishTwist(const xcore::TwistReading& reading) {
     geometry_msgs::msg::TwistStamped msg;
-    msg.header.stamp = now();
+    msg.header.stamp = Stamp(reading.stamp_ns);
     msg.header.frame_id = "base_link";
-    msg.twist.linear.x = twist.linear;
-    msg.twist.angular.z = twist.angular;
+    msg.twist.linear.x = reading.twist.linear;
+    msg.twist.angular.z = reading.twist.angular;
     twist_pub_->publish(msg);
   }
 
-  void PublishImu(const std::vector<double>& axes) {
+  void PublishImu(const xcore::ImuReading& reading) {
     sensor_msgs::msg::Imu msg;
-    msg.header.stamp = now();
+    msg.header.stamp = Stamp(reading.stamp_ns);
     msg.header.frame_id = imu_frame_id_;
     // No orientation: the board has no fusion, users take the tilt from gravity.
     msg.orientation_covariance[0] = -1.0;
-    msg.linear_acceleration.x = axes[0];
-    msg.linear_acceleration.y = axes[1];
-    msg.linear_acceleration.z = axes[2];
-    msg.angular_velocity.x = axes[3];
-    msg.angular_velocity.y = axes[4];
-    msg.angular_velocity.z = axes[5];
+    msg.linear_acceleration.x = reading.axes[0];
+    msg.linear_acceleration.y = reading.axes[1];
+    msg.linear_acceleration.z = reading.axes[2];
+    msg.angular_velocity.x = reading.axes[3];
+    msg.angular_velocity.y = reading.axes[4];
+    msg.angular_velocity.z = reading.axes[5];
     imu_pub_->publish(msg);
   }
 
-  // Called with mutex_ held, or before the I/O thread starts.
-  void PublishCapabilities() {
+  // Before the threads start, then only in the output thread.
+  void PublishCapabilities(const std::string& firmware_version) {
     mowbite_msgs::msg::HardwareCapabilities msg;
     msg.platform = platform_;
     diagnostic_msgs::msg::KeyValue firmware;
     firmware.key = "xcore";
-    firmware.value = firmware_version_;
+    firmware.value = firmware_version;
     msg.firmware.push_back(firmware);
     msg.blade_speed_control = true;
     msg.blade_height_control = false;
@@ -920,91 +639,83 @@ class XcoreNode : public rclcpp::Node {
     return msg;
   }
 
-  // Called by the timer and by the I/O thread, one at a time, so that the messages go out in the order they were made.
-  void PublishStatus() {
-    std::lock_guard<std::mutex> publish_lock(publish_mutex_);
+  // Only in the output thread, so that the messages go out in the order they were made.
+  void PublishStatus(const xcore::IoSnapshot& snapshot) {
+    const auto& s = snapshot.status;
     HardwareStatus msg;
     msg.stamp = now();
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      const auto s = control_.Status(MonotonicSeconds());
-      published_block_ = BlockOf(s);
-      msg.emergency = s.blocked;
-      msg.emergency_latched = s.latched;
-      msg.emergency_reason = s.emergency_reason;
-      msg.telemetry_ok = s.telemetry_ok;
-      msg.hold = s.held;
-      msg.lift = s.lift;
-      msg.stop = s.stop;
-      msg.bumper_left = s.bumper_left;
-      msg.bumper_right = s.bumper_right;
-      msg.bumper = s.bumper_left || s.bumper_right;
-      msg.rain = s.rain;
-      msg.dock_contact = s.dock_contact;
-      msg.dock_contact_raw = s.dock_contact_raw;
-      msg.moving = s.moving;
-      msg.blade_on = s.blade_on;
-      msg.blade_off_reason = static_cast<uint8_t>(s.blade_off_reason);
-      if (s.blade_on != blade_on_logged_) {
-        blade_on_logged_ = s.blade_on;
-        if (s.blade_on) {
-          RCLCPP_INFO(get_logger(), "Blade on");
-        } else {
-          RCLCPP_INFO(get_logger(), "Blade off: %s", BladeOffText(s.blade_off_reason));
-        }
-      }
-      if (s.emergency_reason != logged_reason_) {
-        logged_reason_ = s.emergency_reason;
-        RCLCPP_INFO(get_logger(), "Emergency reason 0x%x", s.emergency_reason);
-      }
-      if (s.battery.known) {
-        // The percentage follows the voltage linearly between empty and full.
-        msg.battery_source = HardwareStatus::BATTERY_SOURCE_ESTIMATE;
-        msg.battery_voltage = static_cast<float>(s.battery.voltage);
-        // Only the charge current is known: negative while charging, 0 otherwise.
-        msg.battery_current = s.battery.charge_current > 0 ? static_cast<float>(-s.battery.charge_current) : 0.0f;
-        msg.battery_percentage = static_cast<uint8_t>(std::lround(s.battery.fraction * 100.0));
-      }
-      msg.blade_motor = MotorMessage(s.blade_motor);
-      msg.left_motor = MotorMessage(s.left_motor);
-      msg.right_motor = MotorMessage(s.right_motor);
-      if (link_) {
-        msg.link_messages_ok = link_->received();
-        msg.link_errors = link_->dropped();
-      }
+    msg.emergency = s.blocked;
+    msg.emergency_latched = s.latched;
+    msg.emergency_reason = s.emergency_reason;
+    msg.telemetry_ok = s.telemetry_ok;
+    msg.hold = s.held;
+    msg.lift = s.lift;
+    msg.stop = s.stop;
+    msg.bumper_left = s.bumper_left;
+    msg.bumper_right = s.bumper_right;
+    msg.bumper = s.bumper_left || s.bumper_right;
+    msg.rain = s.rain;
+    msg.dock_contact = s.dock_contact;
+    msg.dock_contact_raw = s.dock_contact_raw;
+    msg.moving = s.moving;
+    msg.blade_on = s.blade_on;
+    msg.blade_off_reason = static_cast<uint8_t>(s.blade_off_reason);
+    if (s.battery.known) {
+      // The percentage follows the voltage linearly between empty and full.
+      msg.battery_source = HardwareStatus::BATTERY_SOURCE_ESTIMATE;
+      msg.battery_voltage = static_cast<float>(s.battery.voltage);
+      // Only the charge current is known: negative while charging, 0 otherwise.
+      msg.battery_current = s.battery.charge_current > 0 ? static_cast<float>(-s.battery.charge_current) : 0.0f;
+      msg.battery_percentage = static_cast<uint8_t>(std::lround(s.battery.fraction * 100.0));
+    }
+    msg.blade_motor = MotorMessage(s.blade_motor);
+    msg.left_motor = MotorMessage(s.left_motor);
+    msg.right_motor = MotorMessage(s.right_motor);
+    if (snapshot.linked) {
+      msg.link_messages_ok = snapshot.link_received;
+      msg.link_errors = snapshot.link_dropped;
     }
     status_pub_->publish(msg);
+    if (s.blade_on != blade_on_logged_) {
+      blade_on_logged_ = s.blade_on;
+      if (s.blade_on) {
+        RCLCPP_INFO(get_logger(), "Blade on");
+      } else {
+        RCLCPP_INFO(get_logger(), "Blade off: %s", BladeOffText(s.blade_off_reason));
+      }
+    }
+    if (s.emergency_reason != logged_reason_) {
+      logged_reason_ = s.emergency_reason;
+      RCLCPP_INFO(get_logger(), "Emergency reason 0x%x", s.emergency_reason);
+    }
   }
 
-  void OnCmdVel(const geometry_msgs::msg::Twist& msg) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    control_.OnCmdVel(msg.linear.x, msg.angular.z, MonotonicSeconds());
-  }
-
+  // Executor callbacks: computing under the lock of the I/O core, their lines through the outbox.
   void OnEmergency(const mowbite_msgs::srv::SetEmergency::Request& req,
                    mowbite_msgs::srv::SetEmergency::Response& res) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    auto& log = io_->outbox().log;
     if (req.latch) {
       const uint32_t bits = req.bits ? req.bits : xcore::kReasonHighLevel;
-      if (!control_.LatchEmergency(bits)) {
-        RCLCPP_ERROR(get_logger(), "Refused to latch with reason bits 0x%x: only HIGH_LEVEL, TILT, FENCE and STUCK",
-                     bits);
+      if (!io_->LatchEmergency(bits)) {
+        log.Error(mowbite_outbox::Format(
+            "Refused to latch with reason bits 0x%x: only HIGH_LEVEL, TILT, FENCE and STUCK", bits));
         res.success = false;
         res.message = "only HIGH_LEVEL, TILT, FENCE and STUCK can be latched by request";
         return;
       }
-      RCLCPP_WARN(get_logger(), "Emergency latched by request (bits 0x%x): %s", bits, req.reason.c_str());
+      log.Warn(mowbite_outbox::Format("Emergency latched by request (bits 0x%x): %s", bits, req.reason.c_str()));
       res.message = "latched";
     } else {
-      RCLCPP_INFO(get_logger(), "Emergency release requested: %s", req.reason.c_str());
+      log.Info("Emergency release requested: " + req.reason);
       std::optional<xcore::ReleaseRefusal> refused;
-      if (auto foreign = ForeignHosts()) {
+      // /proc before the lock: the I/O thread does not wait for it.
+      if (auto foreign = xcore::ForeignHosts(bind_ip_, group_port_)) {
         refused = xcore::ReleaseRefusal{"FOREIGN_HOST", *foreign};
       } else {
-        refused = control_.ReleaseEmergency(MonotonicSeconds());
+        refused = io_->ReleaseEmergency();
       }
       if (refused) {
-        RCLCPP_ERROR(get_logger(), "Emergency release refused: %s", refused->message.c_str());
+        log.Error("Emergency release refused: " + refused->message);
         res.success = false;
         res.message = "release refused: " + refused->message;
         res.code = refused->code;
@@ -1023,58 +734,47 @@ class XcoreNode : public rclcpp::Node {
     request.speed_percent = req.speed_percent;
     request.height_mm = req.height_mm;
     request.lease_s = req.lease_s;
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto result = control_.SetBlade(request, MonotonicSeconds(), &res.emergency_reason);
+    auto result = io_->SetBlade(request, &res.emergency_reason);
     res.success = result == xcore::BladeResult::kOk;
     res.message = xcore::BladeResultText(result);
-    if (!res.success) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Blade request refused: %s", res.message.c_str());
+    if (!res.success && blade_refused_log_.Allow(MonotonicSeconds())) {
+      io_->outbox().log.Warn("Blade request refused: " + res.message);
     }
   }
 
   // The board charges whenever the station delivers and has no input to stop it (charge_stop false).
   void OnCharge(const mowbite_msgs::srv::SetCharge::Request& req, mowbite_msgs::srv::SetCharge::Response& res) {
-    RCLCPP_WARN(get_logger(), "hw/charge %s refused: the board controls charging", req.on ? "on" : "off");
+    io_->outbox().log.Warn(std::string("hw/charge ") + (req.on ? "on" : "off") +
+                           " refused: the board controls charging");
     res.success = false;
     res.message = "charging is controlled by the board";
   }
 
+  void OnRtcm(const mowbite_msgs::msg::Rtcm& msg) {
+    if (!io_->PushRtcm(msg.data.data(), msg.data.size())) {
+      rtcm_full_ = true;
+      io_->outbox().wakeup.Notify();
+    }
+  }
+
   std::optional<mowbite_hold::HoldWatch> hold_watch_;
-  // What PollHold logged last, only for the I/O thread after the start.
+  // What PollHold logged last, only for the output thread after the start.
   mowbite_hold::HoldView hold_logged_;
   xcore::InputConfig inputs_;
-  // One PublishStatus at a time; taken before mutex_, never while mutex_ is held.
-  std::mutex publish_mutex_;
-  std::mutex mutex_;
-  xcore::XcoreControl control_;
-  std::optional<xcore::XcoreLink> link_;
-  std::map<uint16_t, std::vector<Section>> services_;
-  std::optional<uint16_t> major_;
-  std::optional<double> next_rpc_s_;
-  std::string firmware_version_;
-
-  xcore::UdpSocket announcements_;
-  xcore::UdpSocket service_socket_;
-  std::atomic<bool> running_{true};
-  std::thread io_thread_;
+  std::optional<xcore::XcoreIo> io_;
+  std::thread output_thread_;
+  rclcpp::Context::SharedPtr context_;
+  rclcpp::OnShutdownCallbackHandle on_shutdown_;
 
   std::string platform_;
-  std::string interface_;
-  std::string bind_ip_text_;
   uint32_t bind_ip_ = 0;
-  std::string group_;
   uint16_t group_port_ = 0;
-  uint16_t expected_major_ = 1;
   std::string imu_frame_id_;
   std::string gnss_source_;
-  int contest_losses_ = 2;
-  double contest_window_s_ = 10.0;
   std::string gnss_frame_id_ = "map";
-  // GNSS: the converter belongs to the I/O thread; queue and time of the last RTCM passed on are guarded by mutex_.
+  // GNSS: the converter and what was reported of it belong to the output thread.
   bool gnss_enabled_ = false;
   std::optional<xcore::GnssConverter> gnss_;
-  xcore::RtcmQueue rtcm_;
-  std::optional<double> last_rtcm_s_;
   double max_correction_age_s_ = 0;
   double last_gga_s_ = -1e9;
   uint64_t reported_downgrades_ = 0;
@@ -1084,10 +784,28 @@ class XcoreNode : public rclcpp::Node {
   double max_angular_speed_ = 0;
   double failsafe_without_host_s_ = -1;
   std::string safety_measurement_date_;
+  // Only the output thread.
   bool blade_on_logged_ = false;
   uint32_t logged_reason_ = 0;
-  // BlockOf the last hw/status, under mutex_.
-  uint64_t published_block_ = 0;
+  uint64_t send_failed_ = 0;
+  uint64_t late_ticks_ = 0;
+  double late_max_s_ = 0;
+  uint64_t rtcm_closed_total_ = 0;
+  bool rtcm_closed_pending_ = false;
+  bool rtcm_full_pending_ = false;
+  uint64_t dropped_twists_ = 0;
+  uint64_t dropped_imu_ = 0;
+  uint64_t dropped_gps_ = 0;
+  uint64_t dropped_lines_ = 0;
+  mowbite_outbox::Throttle send_failed_log_{kCountLogS};
+  mowbite_outbox::Throttle late_tick_log_{kCountLogS};
+  mowbite_outbox::Throttle rtcm_closed_log_{kCountLogS};
+  mowbite_outbox::Throttle rtcm_full_log_{kCountLogS};
+  mowbite_outbox::Throttle dropped_log_{kCountLogS};
+  // Set by the executor, read by the output thread.
+  std::atomic<bool> rtcm_full_{false};
+  // Only the executor, whose callbacks run one at a time.
+  mowbite_outbox::Throttle blade_refused_log_{5.0};
 
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
@@ -1104,7 +822,6 @@ class XcoreNode : public rclcpp::Node {
   rclcpp::Service<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetBlade>::SharedPtr blade_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetCharge>::SharedPtr charge_srv_;
-  rclcpp::TimerBase::SharedPtr status_timer_;
 };
 
 }  // namespace xcore_driver

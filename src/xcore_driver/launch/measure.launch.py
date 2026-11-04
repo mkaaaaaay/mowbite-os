@@ -6,10 +6,12 @@ respawn_delay s (M4, M7, M8 with the driver killed).
 
   ros2 launch xcore_driver measure.launch.py mower_params:=/data/nx60i.yaml respawn:=true
 """
+import asyncio
 import os
+import sys
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueCoroutine, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -26,7 +28,36 @@ ARGUMENTS = {
 }
 
 
+# Stands in for the driver after a halt, until SIGINT; ends quietly when the shutdown cancels it.
+async def halted(context):
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        pass
+
+
+# The loopback profile of the image (fastdds_loopback.xml) under SYSTEM_DEFAULT, else no driver; LOCALHOST or SUBNET
+# from the environment start with a warning. Without the file Fast DDS would use every interface and shared memory.
+def dds_problem():
+    scope = os.environ.get("ROS_AUTOMATIC_DISCOVERY_RANGE", "")
+    profile = os.environ.get("FASTRTPS_DEFAULT_PROFILES_FILE", "")
+    if scope == "SYSTEM_DEFAULT":
+        if profile and os.path.isfile(profile) and os.access(profile, os.R_OK):
+            return None
+        return (f"ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT needs the profile of the image in "
+                f"FASTRTPS_DEFAULT_PROFILES_FILE, '{profile}' is not readable.")
+    if not scope:
+        scope = os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"] = "LOCALHOST"
+    print(f"[WARN] ROS_AUTOMATIC_DISCOVERY_RANGE={scope} instead of the loopback profile: DDS uses shared memory and "
+          "listens on every interface", file=sys.stderr, flush=True)
+    return None
+
+
 def driver(context):
+    problem = dds_problem()
+    if problem:
+        print(f"MOWBITE_OS_HALT reason=DDS_PROFILE data_schema=- image_schema=- {problem}", file=sys.stderr, flush=True)
+        return [OpaqueCoroutine(coroutine=halted)]
     value = {name: LaunchConfiguration(name).perform(context) for name in ARGUMENTS}
     files = [value["params"] or os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "config",
                                              "nx60i.yaml")]
