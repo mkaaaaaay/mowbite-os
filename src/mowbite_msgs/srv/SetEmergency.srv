@@ -8,3 +8,9 @@ string reason
 ---
 bool success
 string message
+# Why a release was refused, empty otherwise: STILL_TILTED, TILT_UNKNOWN, FOREIGN_HOST, DRIVER_MISSING, NO_ANSWER.
+string code
+# STILL_TILTED: the angle and the release limit in degrees; TILT_UNKNOWN: seconds since the last IMU sample, NaN
+# without one. Not used with the other codes.
+float32 value
+float32 limit

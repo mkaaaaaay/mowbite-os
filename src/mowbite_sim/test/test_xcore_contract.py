@@ -276,7 +276,9 @@ class TestXcoreContract(unittest.TestCase):
 
     def test_f_blade_lease_runs_out(self):
         t0 = board_time()
-        self.assertFalse(self.probe.set_blade(True, lease_s=0.5, height=40).success)
+        r = self.probe.set_blade(True, lease_s=0.5, height=40)
+        self.assertFalse(r.success)
+        self.assertEqual(r.emergency_reason, 0)
         r = self.probe.set_blade(True, lease_s=0.5)
         self.assertTrue(r.success, r.message)
         self.assertTrue(self.probe.wait(lambda p: p.status.blade_on, 2), "blade_on not reported")
@@ -303,6 +305,9 @@ class TestXcoreContract(unittest.TestCase):
         r = self.probe.set_blade(True, lease_s=1.0)
         self.assertFalse(r.success)
         self.assertIn("blocked", r.message)
+        # The refusal names the emergency, so the logic need not wait for the status.
+        self.assertEqual(r.emergency_reason & (LATCH | HardwareStatus.REASON_HIGH_LEVEL),
+                         LATCH | HardwareStatus.REASON_HIGH_LEVEL)
         self.assertTrue(self.release(), "release failed")
         self.assertEqual(self.probe.status.emergency_reason, 0)
         time.sleep(0.4)

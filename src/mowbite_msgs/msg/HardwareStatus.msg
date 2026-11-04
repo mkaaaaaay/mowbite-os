@@ -18,6 +18,11 @@ uint32 REASON_STUCK = 32768
 uint32 REASON_IMU_TIMEOUT = 65536
 # The blade still turns after it was switched off.
 uint32 REASON_MOWER_NOT_STOPPED = 131072
+# Latched by the driver itself: a wheel turned against the drive command (after the stop, faster than any command,
+# against its direction), another host talks to the board, the driver's own I/O stalled.
+uint32 REASON_WHEEL_RUNAWAY = 262144
+uint32 REASON_FOREIGN_HOST = 524288
+uint32 REASON_DRIVER_STALL = 1048576
 
 # Motion and blade are blocked by the driver: latched, stale telemetry or incompatible firmware.
 bool emergency
