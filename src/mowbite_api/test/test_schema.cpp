@@ -1,0 +1,148 @@
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <string>
+
+#include "mowbite_api/catalog.h"
+#include "mowbite_api/planner_schema.h"
+
+using namespace mowbite_api;
+
+namespace {
+
+Json Read(const std::filesystem::path& file) {
+  std::ifstream in(file);
+  return Json::parse(in, nullptr, false);
+}
+
+bool Has(const std::vector<std::string>& problems, const std::string& part) {
+  for (const auto& problem : problems) {
+    if (problem.find(part) != std::string::npos) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+TEST(Schema, TheFileInTheRepoIsTheGeneratedOne) {
+  const Json file = Read(std::filesystem::path(MOWBITE_API_DIR) / "api.schema.json");
+  ASSERT_FALSE(file.is_discarded()) << "api.schema.json is not JSON";
+  if (file == Schema()) return;
+  if (file.value("x-api", 0) == kApi) {
+    FAIL() << "The catalog changed: raise kApi in catalog.h, then mowbite_api_schema --write " MOWBITE_API_DIR;
+  }
+  FAIL() << "api.schema.json is of api " << file.value("x-api", 0) << ": mowbite_api_schema --write " MOWBITE_API_DIR;
+}
+
+// Every older version stays in schema/api-<N>.schema.json, and the current one only adds to it.
+TEST(Schema, OlderVersionsAreOnlyAddedTo) {
+  const std::filesystem::path dir = std::filesystem::path(MOWBITE_API_DIR) / "schema";
+  if (!std::filesystem::exists(dir)) {
+    EXPECT_EQ(kApi, 1) << "api " << kApi << " without the older versions in " << dir;
+    return;
+  }
+  int older = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+    const Json old = Read(entry.path());
+    ASSERT_FALSE(old.is_discarded()) << entry.path();
+    EXPECT_EQ(entry.path().filename(), "api-" + std::to_string(old.value("x-api", 0)) + ".schema.json");
+    EXPECT_LT(old.value("x-api", 0), kApi) << entry.path();
+    for (const auto& problem : CheckAdditive(old, Schema())) ADD_FAILURE() << entry.path() << ": " << problem;
+    older++;
+  }
+  EXPECT_EQ(older, kApi - 1);
+}
+
+TEST(Schema, IdAndVersion) {
+  const Json& schema = Schema();
+  EXPECT_EQ(schema["$schema"], "https://json-schema.org/draft/2020-12/schema");
+  EXPECT_EQ(schema["$id"], "urn:mowbite-os:api:" + std::to_string(kApi));
+  EXPECT_EQ(schema["x-api"], kApi);
+}
+
+// Every event of the catalog by its type, any other type only with the envelope.
+TEST(Schema, EventsOneOfByType) {
+  const Json& defs = Schema()["$defs"];
+  const Json& one_of = defs["event"]["oneOf"];
+  for (const auto& event : Events()) {
+    const std::string ref = "#/$defs/event." + event.type;
+    EXPECT_NE(std::find(one_of.begin(), one_of.end(), Json{{"$ref", ref}}), one_of.end()) << event.type;
+    EXPECT_EQ(defs["event." + event.type]["properties"]["type"]["const"], event.type);
+    EXPECT_EQ(defs["event." + event.type]["additionalProperties"], false);
+    const Json& known = defs["event.other"]["properties"]["type"]["not"]["enum"];
+    EXPECT_NE(std::find(known.begin(), known.end(), event.type), known.end());
+  }
+  EXPECT_EQ(defs["event.other"]["required"], Json({"id", "t", "type"}));
+  EXPECT_FALSE(defs["event.other"].contains("additionalProperties"));
+}
+
+TEST(Schema, CommandsAndBits) {
+  const Json& schema = Schema();
+  for (const auto& command : Commands()) {
+    EXPECT_TRUE(schema["x-commands"].contains(command.name)) << command.name;
+    EXPECT_TRUE(schema["$defs"].contains(command.name + ".params")) << command.name;
+    EXPECT_TRUE(schema["$defs"].contains(command.name + ".result")) << command.name;
+  }
+  EXPECT_EQ(schema["x-emergency-bits"].size(), EmergencyBits().size());
+  EXPECT_EQ(schema["$defs"]["system.info.result"]["properties"]["api"]["type"], "integer");
+}
+
+TEST(Additive, WhatIsTakenAwayIsFound) {
+  const Json older = Schema();
+  const auto changed = [&older](const std::function<void(Json&)>& change) {
+    Json newer = older;
+    change(newer);
+    return CheckAdditive(older, newer);
+  };
+  EXPECT_TRUE(CheckAdditive(older, older).empty());
+  EXPECT_TRUE(Has(changed([](Json& s) { s["$defs"]["robot_state"]["properties"].erase("current_state"); }),
+                  "robot_state.current_state: gone"));
+  EXPECT_TRUE(Has(changed([](Json& s) {
+                    s["$defs"]["robot_state"]["properties"]["current_state"]["type"] = "integer";
+                  }),
+                  "type string gone"));
+  EXPECT_TRUE(Has(changed([](Json& s) { s["$defs"].erase("event.STATE"); }), "event.STATE: gone"));
+  EXPECT_TRUE(Has(changed([](Json& s) { s["$defs"]["event.STATE"]["properties"]["state"]["enum"].erase(0); }),
+                  "gone"));
+  EXPECT_TRUE(Has(changed([](Json& s) { s["x-reasons"]["STATE"].erase("MANUAL"); }), "x-reasons.STATE.MANUAL"));
+  EXPECT_TRUE(Has(changed([](Json& s) { s["x-emergency-bits"][3]["name"] = "LIFTED"; }), "x-emergency-bits"));
+  EXPECT_TRUE(Has(changed([](Json& s) { s["x-commands"].erase("docking.start"); }), "x-commands.docking.start"));
+  EXPECT_TRUE(Has(changed([](Json& s) { s["$defs"]["robot_state"]["required"] = Json::array(); }),
+                  "no longer always there"));
+  EXPECT_TRUE(Has(changed([](Json& s) {
+                    s["$defs"]["docking.start.params"]["properties"]["client"] = {{"type", "string"}};
+                    s["$defs"]["docking.start.params"]["required"].push_back("client");
+                  }),
+                  "newly required"));
+  // Adding is fine: a field, a value, a reason, an event, a command.
+  EXPECT_TRUE(changed([](Json& s) {
+                s["$defs"]["robot_state"]["properties"]["new_value"] = {{"type", "number"}};
+                s["$defs"]["event.STATE"]["properties"]["state"]["enum"].push_back("NEW_STATE");
+                s["x-reasons"]["STATE"]["NEW_REASON"] = {{"severity", "info"}, {"resume", "user"}};
+                s["$defs"]["event.NEW"] = {{"type", "object"}};
+                s["$defs"]["event"]["oneOf"].push_back({{"$ref", "#/$defs/event.NEW"}});
+                s["x-commands"]["new.command"] = Json::object();
+                s["$defs"]["docking.start.params"]["properties"]["client"] = {{"type", "string"}};
+              }).empty());
+}
+
+// The planner's part, once its pin has one: its events become known types, its topics definitions.
+TEST(Schema, WithThePartOfThePlanner) {
+  const Json part = {{"version", 2},
+                     {"events", {{"LEFTOVERS_ARMED", {{"description", "Leftovers are armed"},
+                                                      {"properties", {{"area_id", {{"type", "string"}}}}},
+                                                      {"required", {"area_id"}}}}}},
+                     {"topics", {{"mowbite/planner/progress", {{"type", "object"}}}}}};
+  const Json schema = SchemaWithPlanner(part);
+  const Json& defs = schema["$defs"];
+  EXPECT_EQ(defs["event.LEFTOVERS_ARMED"]["properties"]["type"]["const"], "LEFTOVERS_ARMED");
+  EXPECT_EQ(defs["event.LEFTOVERS_ARMED"]["required"], Json({"id", "t", "type", "area_id"}));
+  const Json& known = defs["event.other"]["properties"]["type"]["not"]["enum"];
+  EXPECT_NE(std::find(known.begin(), known.end(), "LEFTOVERS_ARMED"), known.end());
+  EXPECT_EQ(defs["topic.mowbite/planner/progress"], Json({{"type", "object"}}));
+  EXPECT_EQ(schema["x-planner"]["version"], 2);
+  EXPECT_TRUE(CheckAdditive(SchemaWithPlanner(nullptr), schema).empty());
+}
