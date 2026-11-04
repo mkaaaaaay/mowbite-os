@@ -1298,7 +1298,7 @@ class LogicNode : public rclcpp::Node {
     ParamsResult result;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (core_.Held()) {
+      if (core_.HoldUntil() > 0) {
         PublishHoldRefusal(request.id, "Settings change after it");
         return;
       }
@@ -1439,7 +1439,8 @@ class LogicNode : public rclcpp::Node {
     return core_.HoldUntil();
   }
 
-  // A change of data in the hold: a rollback of the update would drop it without a word. Called with the mutex held.
+  // A change of data in the hold of the logic: a rollback of the update would drop it without a word. The driver's own
+  // hold, still shown for up to 0.5 s after it ended, refuses none. Called with the mutex held.
   void PublishHoldRefusal(const std::string& id, const std::string& what) {
     const int64_t until = HoldUntilLocked();
     PublishRpcError(id, mowbite_msgs::msg::RpcError::ERROR_HOLD, "An update holds the mower. " + what,
@@ -1470,7 +1471,7 @@ class LogicNode : public rclcpp::Node {
   // The hold ran out: S3 lets go and the file goes, again at the next tick if it cannot. Called with the mutex held.
   void ExpireHoldLocked(double t) {
     if (!hold_.record() || hold_.Active(t)) return;
-    if (core_.Held()) {
+    if (core_.HoldUntil() > 0) {
       core_.SetHold(0);
       hold_mirror_due_ = true;
       RCLCPP_INFO(get_logger(), "Hold ended: its time ran out");
@@ -1660,7 +1661,7 @@ class LogicNode : public rclcpp::Node {
     json answer;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (core_.Held()) {
+      if (core_.HoldUntil() > 0) {
         PublishHoldRefusal(request.id, "The dimensions change after it");
         return;
       }
