@@ -1,0 +1,57 @@
+# MowBite OS on the YardForce NX60i (OpenMower v2, xCore over Ethernet): broker, OS and app on the host network. A
+# proposal until Phase 5 of the NX60i: the launch and parameter file of this mower are still open, so the OS only
+# starts with the profile os (docker compose --profile os up -d) once they are in the image. OpenMower and its broker
+# are stopped first; never two programs at the board.
+# No label mowbite.update=on yet, as on the Tron.
+name: mowbite-os
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mowbite-mosquitto
+    restart: unless-stopped
+    network_mode: host
+    logging: *logging
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+  os:
+    profiles: ["os"]
+    image: ghcr.io/mkaaaaaay/mowbite-os:${MOWBITE_OS_TAG:?set MOWBITE_OS_TAG in .env}
+    container_name: mowbite-os
+    restart: unless-stopped
+    # The xCore announces its services by multicast and talks UDP on eth0.
+    network_mode: host
+    logging: *logging
+    labels:
+      - mowbite.update.name=mowbite-os
+    volumes:
+      - ${MOWBITE_DATA_DIR:?set MOWBITE_DATA_DIR in .env}:${MOWBITE_DATA_DIR}
+    environment:
+      - TZ=${TZ:-Europe/Berlin}
+      - ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+      - ROS_LOG_DIR=/tmp/ros_log
+    tmpfs:
+      - /tmp/ros_log:size=20m
+    # The launch of the NX60i (xcore_driver with hold_file <data_dir>/hold.json) comes with its parameter file.
+    command: ["false"]
+    stop_signal: SIGINT
+    stop_grace_period: 20s
+    ulimits:
+      core: 0
+  mowbite:
+    image: ghcr.io/mkaaaaaay/mowbite:${MOWBITE_APP_TAG:?set MOWBITE_APP_TAG in .env}
+    container_name: mowbite
+    restart: unless-stopped
+    network_mode: host
+    logging: *logging
+    environment:
+      - MOWER_MQTT_WS_URL=ws://${MOWER_HOST:?set MOWER_HOST in .env}:9001
+      - MOWER_MQTT_HOST=localhost
+      - MOWER_MQTT_PORT=1883
+    volumes:
+      - /opt/stacks/mowbite-os/app-data:/data
+      - /proc/1/net:/host-net:ro
