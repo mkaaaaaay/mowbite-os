@@ -31,10 +31,13 @@ from sensor_msgs.msg import Imu
 
 AIR_WHEEL_SPEED = 0.1
 GROUND_WHEEL_SPEED = 0.3
-REASONS = {1: "LATCH", 2: "TIMEOUT_INPUTS", 4: "STOP", 8: "LIFT", 16: "LIFT_MULTIPLE", 32: "COLLISION",
-           64: "TIMEOUT_HIGH_LEVEL", 128: "HIGH_LEVEL", 256: "SERVICE_NOT_READY", 512: "COLLISION_MULTIPLE",
-           4096: "FIRMWARE_INCOMPATIBLE", 8192: "TILT", 16384: "FENCE", 32768: "STUCK", 65536: "IMU_TIMEOUT",
-           131072: "MOWER_NOT_STOPPED", 262144: "WHEEL_RUNAWAY", 524288: "FOREIGN_HOST", 1048576: "DRIVER_STALL"}
+# Emergency bits of hw/status by bit number, named as in the catalog of mowbite_api (x-emergency-bits);
+# test/test_names.py holds them against the catalog, the message and the board's own names.
+EMERGENCY_BITS = {0: "LATCH", 1: "TIMEOUT_INPUTS", 2: "STOP", 3: "LIFT", 4: "LIFT_MULTIPLE", 5: "COLLISION",
+                  6: "TIMEOUT_HIGH_LEVEL", 7: "HIGH_LEVEL", 8: "SERVICE_NOT_READY", 9: "COLLISION_MULTIPLE",
+                  10: "MOWER_RPM_TIMEOUT", 11: "MOWER_RPM_LIMIT", 12: "FIRMWARE_INCOMPATIBLE", 13: "TILT",
+                  14: "FENCE", 15: "STUCK", 16: "IMU_TIMEOUT", 17: "MOWER_NOT_STOPPED", 18: "WHEEL_RUNAWAY",
+                  19: "FOREIGN_HOST", 20: "DRIVER_STALL"}
 DRIVER = "xcore_driver_node"
 SERVICE_NOT_READY = 256
 
@@ -48,7 +51,10 @@ class Quit(Exception):
 
 
 def reason_text(bits):
-    names = [name for bit, name in REASONS.items() if bits & bit]
+    """Names of the set bits in their order; set bits without a name add UNKNOWN once at the end."""
+    names = [name for bit, name in sorted(EMERGENCY_BITS.items()) if bits >> bit & 1]
+    if bits & ~sum(1 << bit for bit in EMERGENCY_BITS):
+        names.append("UNKNOWN")
     return "|".join(names) if names else "0"
 
 
@@ -234,7 +240,12 @@ class Mower:
 
     def release(self):
         answer = self.call(self.emergency, SetEmergency.Request(latch=False, reason="measurement"))
-        self.rec.write("release", success=bool(answer and answer.success), message=answer.message if answer else "")
+        refusal = {}
+        if answer is not None and answer.code:
+            refusal = {"code": answer.code, "value": answer.value if math.isfinite(answer.value) else None,
+                       "limit": answer.limit if math.isfinite(answer.limit) else None}
+        self.rec.write("release", success=bool(answer and answer.success), message=answer.message if answer else "",
+                       **refusal)
         return answer
 
     def set_blade(self, on, lease_s=2.0):
@@ -433,8 +444,10 @@ class Measurement:
             return True
         print("     sending hw/emergency release")
         answer = self.mower.release()
-        if answer is None or not answer.success:
-            print(f"     release refused: {answer.message if answer else 'no answer'}")
+        if answer is None:
+            print("     release refused: no answer")
+        elif not answer.success:
+            print(f"     {answer.message}" + (f" [{answer.code}]" if answer.code else ""))
         if self.wait(5.0, self.healthy):
             return True
         self.show("still in emergency")

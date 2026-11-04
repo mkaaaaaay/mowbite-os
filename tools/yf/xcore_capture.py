@@ -579,8 +579,11 @@ def inputs_from_config(doc):
 # Analysis -------------------------------------------------------------------------------------------------------------
 
 def reason_names(bits, names=None):
+    """Names of the set bits in their order; set bits without a name add UNKNOWN once at the end."""
     names = names or REASON_BITS
     out = [name for name, bit in sorted(names.items(), key=lambda kv: kv[1]) if bits >> bit & 1]
+    if bits & ~sum(1 << bit for bit in set(names.values())):
+        out.append("UNKNOWN")
     return "|".join(out) if out else "0"
 
 
