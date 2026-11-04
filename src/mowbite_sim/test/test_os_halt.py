@@ -1,7 +1,8 @@
 """tron.launch.py halts when data_dir does not fit the image: no node starts, one MOWBITE_OS_HALT line, the launch stays
 without nodes until SIGINT (no restart loop under restart: unless-stopped) and mowbite_health reports the line, even
 with the broker up. Here inside sim.launch.py with data newer than the image and no backup to go back to; then
-ros2 launch of tron.launch.py on its own for the same case and for a data_dir another OS holds.
+ros2 launch of tron.launch.py on its own for the same case and for a data_dir another OS holds. At the end every process
+of the launch has ended, the broker and the simulation beside the halt included.
 
 Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite_sim/test/test_os_halt.py
 """
@@ -16,10 +17,12 @@ import time
 import unittest
 
 import launch
+import launch_testing
 import launch_testing.actions
 import rclpy
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch.actions import ExecuteProcess, IncludeLaunchDescription, TimerAction
+from launch.events.process import ProcessExited
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 MQTT_PORT = 18842
@@ -148,7 +151,7 @@ class TestHalt(unittest.TestCase):
         self.assertTrue(running, output)
         self.assertTrue(line.startswith("MOWBITE_OS_HALT reason=SCHEMA_NEWER"), output)
         self.assertEqual(output.count("MOWBITE_OS_HALT"), 1, output)
-        self.assertIsNotNone(code, "SIGINT did not end it")
+        self.assertEqual(code, 0, output)
         self.assertNotIn("tron_mcu_node", output)
 
     def test_04_a_data_dir_held_by_another_os_halts_after_the_wait(self):
@@ -168,5 +171,14 @@ class TestHalt(unittest.TestCase):
         self.assertTrue(line.startswith(f"MOWBITE_OS_HALT reason=DATA_DIR_LOCKED data_schema=- "
                                         f"image_schema={IMAGE_SCHEMA} "), output)
         self.assertGreaterEqual(took, 29.0)
-        self.assertIsNotNone(code, "SIGINT did not end it")
+        self.assertEqual(code, 0, output)
         self.assertFalse(os.path.exists(os.path.join(data, "data_schema.json")))
+
+
+@launch_testing.post_shutdown_test()
+class TestHaltShutdown(unittest.TestCase):
+    def test_every_process_of_the_launch_ended(self, proc_info):
+        names = sorted(info.process_name for info in proc_info)
+        self.assertTrue(any(name.startswith("sim_control") for name in names), names)
+        running = sorted(info.process_name for info in proc_info if not isinstance(info, ProcessExited))
+        self.assertEqual(running, [], names)
