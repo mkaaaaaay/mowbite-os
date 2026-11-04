@@ -387,7 +387,7 @@ class TestDock(Base):
         p.replace()
         since = len(p.events)
         answer = p.rpc("docking.start")
-        self.assertEqual(answer, {"result": {"state": "DOCKING"}})
+        self.assertEqual(answer, {"result": {"state": "DOCKING", "sub_state": ""}})
         self.assertIsNotNone(p.event(since, "STATE", 5, state="DOCKING"))
         self.assertIsNotNone(p.event(since, "DOCKED", 120), p.events[since:])
         self.on_the_station()
@@ -399,7 +399,7 @@ class TestDock(Base):
         # A request right after DOCKED is refused for a moment, it does not fail the undocking.
         self.assertNotIn("UNDOCKING_FAILED", [e["type"] for e in p.events[before:]])
         since = len(p.events)
-        self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING"}})
+        self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING", "sub_state": ""}})
         # On the line, backwards.
         self.assertTrue(p.wait(lambda: p.truth()["x"] < -0.3, 90), p.events[since:])
         p.act(ABORT)
@@ -414,7 +414,7 @@ class TestDock(Base):
         p = self.probe
         since = len(p.events)
         # From where abort_docking left it, on the line: out to the approach point first.
-        self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING"}})
+        self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING", "sub_state": ""}})
         self.assertTrue(p.wait(lambda: p.truth()["x"] < -0.4 and p.truth()["linear"] < 0, 60), p.events[since:])
         p.flags(stop=1)
         self.assertIsNotNone(p.event(since, "EMERGENCY", 3, emergency=True), p.events[since:])
@@ -435,7 +435,7 @@ class TestDock(Base):
         self.assertEqual(answer, {"result": {"/mower_logic/docking_retry_count": 1}})
         p.flags(dock_shift_y=0.04)
         sim_since, since = sim_time(), len(p.events)
-        self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING"}})
+        self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING", "sub_state": ""}})
         retry = p.event(since, "DOCKING_RETRY", 120)
         self.assertIsNotNone(retry, p.events[since:])
         self.assertEqual((retry["reason"], retry["attempts"]), ("dock_failed", 1), retry)
@@ -477,7 +477,7 @@ class TestDockRate(Base):
             else:
                 self.fail(f"run {run}: no drive to ({x}, {y})")
             since = len(p.events)
-            self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING"}}, f"run {run}")
+            self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING", "sub_state": ""}}, f"run {run}")
             end = p.wait(lambda: next((e for e in p.events[since:] if e["type"] in ("DOCKED", "DOCKING_FAILED")),
                                       None), 180)
             self.assertIsNotNone(end, f"run {run}: {p.events[since:]}")
