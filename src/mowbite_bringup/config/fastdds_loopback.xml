@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- DDS of MowBite OS: UDPv4 on the loopback only, no shared memory, no multicast, peers on 127.0.0.1, announced every second.
+     Active with ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT and FASTRTPS_DEFAULT_PROFILES_FILE pointing here; LOCALHOST would
+     bring shared memory back and open the ports on every interface. -->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <profiles>
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>udp_loopback</transport_id>
+        <type>UDPv4</type>
+        <interfaceWhiteList>
+          <address>127.0.0.1</address>
+        </interfaceWhiteList>
+        <maxInitialPeersRange>32</maxInitialPeersRange>
+      </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="loopback_only" is_default_profile="true">
+      <rtps>
+        <useBuiltinTransports>false</useBuiltinTransports>
+        <userTransports>
+          <transport_id>udp_loopback</transport_id>
+        </userTransports>
+        <builtin>
+          <discovery_config>
+            <leaseAnnouncement><sec>1</sec></leaseAnnouncement>
+          </discovery_config>
+          <metatrafficUnicastLocatorList>
+            <locator><udpv4><address>127.0.0.1</address></udpv4></locator>
+          </metatrafficUnicastLocatorList>
+          <initialPeersList>
+            <locator><udpv4><address>127.0.0.1</address></udpv4></locator>
+          </initialPeersList>
+        </builtin>
+        <defaultUnicastLocatorList>
+          <locator><udpv4><address>127.0.0.1</address></udpv4></locator>
+        </defaultUnicastLocatorList>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>

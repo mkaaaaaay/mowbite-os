@@ -1,6 +1,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -564,51 +565,135 @@ class LogicNode : public rclcpp::Node {
     last_pose_ = MonotonicSeconds();
   }
 
-  void OnAction(const std::string& action_id) {
-    ActionResult result;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      Reason missing;
-      if (action_id == "mower_logic:idle/start_mowing" && core_.StartProblem().empty()) {
-        if (!plan_client_->service_is_ready() || !transit_client_->service_is_ready()) missing = PlannerMissing();
-        if (!follow_client_->action_server_is_ready()) missing = FollowerMissing();
-        // The node still ends a leg of the last job.
-        if (drive_.active || job_plan_.active) {
-          missing = Reason("STILL_STOPPING", "The last job is still stopping, try again in a moment");
-        }
-      }
-      if (!missing.empty()) {
-        core_.RefuseStart(missing);
-        result = ActionResult::kRejected;
-      } else {
-        result = core_.OnAction(action_id);
+  // What only the node knows against a start, for the core to weigh after its own reasons. Called with the mutex held.
+  Reason NodeProblemLocked(const std::string& command) const {
+    Reason why;
+    if (command == "mowing.start") {
+      if (!plan_client_->service_is_ready() || !transit_client_->service_is_ready()) why = PlannerMissing();
+      if (!follow_client_->action_server_is_ready()) why = FollowerMissing();
+      // The node still ends a leg of the last job.
+      if (drive_.active || job_plan_.active) {
+        why = Reason("STILL_STOPPING", "The last job is still stopping, try again in a moment");
       }
     }
-    switch (result) {
-      case ActionResult::kReleaseEmergency: ReleaseEmergency(); break;
-      case ActionResult::kRejected: RCLCPP_WARN(get_logger(), "Action %s not possible now", action_id.c_str()); break;
-      case ActionResult::kUnknown: RCLCPP_DEBUG(get_logger(), "Ignoring action %s", action_id.c_str()); break;
-      case ActionResult::kDone: RCLCPP_INFO(get_logger(), "Action %s", action_id.c_str()); break;
+    if (command == "docking.start") {
+      if (!transit_client_->service_is_ready()) why = PlannerMissing();
+      if (why.empty() && !follow_client_->action_server_is_ready()) why = FollowerMissing();
+      if (why.empty() && (drive_.active || job_plan_.active)) {
+        why = Reason("STILL_STOPPING", "The last drive is still stopping, try again in a moment");
+      }
+    }
+    return why;
+  }
+
+  // One way for both: an action runs the command it stands for, like its RPC without client and without an answer.
+  void OnAction(const std::string& action_id) {
+    json params;
+    const mowbite_api::Command* command = mowbite_api::CommandOfAction(action_id, &params);
+    if (!command) {
+      ActionResult result;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        result = core_.OnAction(action_id);
+      }
+      if (result == ActionResult::kRejected) RCLCPP_WARN(get_logger(), "Action %s not possible", action_id.c_str());
+      if (result == ActionResult::kUnknown) RCLCPP_DEBUG(get_logger(), "Ignoring action %s", action_id.c_str());
+      Flush();
+      return;
+    }
+    CommandOutcome outcome;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      outcome = core_.Command(command->name, params, NodeProblemLocked(command->name));
+    }
+    if (outcome.release) {
+      RCLCPP_INFO(get_logger(), "Action %s", action_id.c_str());
+      ReleaseEmergency();
+    } else if (outcome.accepted) {
+      RCLCPP_INFO(get_logger(), "Action %s", action_id.c_str());
+    } else {
+      RCLCPP_WARN(get_logger(), "Action %s refused: %s (%s)", action_id.c_str(), outcome.why.code.c_str(),
+                  outcome.why.message.c_str());
     }
     Flush();
   }
 
-  // The answer comes from S2 once the driver answered; a refusal goes to the app as EMERGENCY_RESET_REFUSED.
-  void ReleaseEmergency() {
+  // A command of the catalog over RPC: -32602 for params that do not fit, the answer, or -32600 with the refusal;
+  // emergency.reset answers once the safety node did.
+  void OnCommandRpc(const mowbite_msgs::msg::RpcRequest& request, const mowbite_api::Command& command) {
+    using mowbite_msgs::msg::RpcError;
+    const json params = request.params.empty() ? json::object() : json::parse(request.params, nullptr, false);
+    if (params.is_discarded()) {
+      PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS, "The parameters are not valid JSON");
+      return;
+    }
+    CommandOutcome outcome;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      outcome = core_.Command(command.name, params, NodeProblemLocked(command.name));
+    }
+    const std::string client = outcome.invalid.empty() && params.is_object() ? params.value("client", "") : "";
+    const std::string by = client.empty() ? "" : " (client " + client + ")";
+    if (!outcome.invalid.empty()) {
+      RCLCPP_WARN(get_logger(), "%s: %s", command.name.c_str(), outcome.invalid.c_str());
+      PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS, outcome.invalid,
+                      json{{"field", outcome.invalid_field}}.dump());
+    } else if (outcome.release) {
+      RCLCPP_INFO(get_logger(), "%s%s", command.name.c_str(), by.c_str());
+      ReleaseEmergency(request.id);
+    } else if (outcome.accepted) {
+      RCLCPP_INFO(get_logger(), "%s%s: %s", command.name.c_str(), by.c_str(), outcome.result.dump().c_str());
+      mowbite_msgs::msg::RpcResponse msg;
+      msg.result = outcome.result.dump(-1, ' ', false, json::error_handler_t::replace);
+      msg.id = request.id;
+      rpc_response_pub_->publish(msg);
+    } else {
+      RCLCPP_WARN(get_logger(), "%s%s refused: %s (%s)", command.name.c_str(), by.c_str(), outcome.why.code.c_str(),
+                  outcome.why.message.c_str());
+      PublishRpcError(request.id, RpcError::ERROR_INVALID_REQUEST, outcome.why.message,
+                      outcome.data.dump(-1, ' ', false, json::error_handler_t::replace));
+    }
+    Flush();
+  }
+
+  // Answers every emergency.reset waiting for the safety node: released, or the refusal and the id of its event.
+  // Called with the mutex held.
+  void AnswerReleaseLocked(bool released, const Reason& why = Reason(), const std::string& event_id = "") {
+    for (const auto& id : release_rpc_ids_) {
+      if (released) {
+        mowbite_msgs::msg::RpcResponse msg;
+        msg.result = core_.CommandAnswer(json{{"released", true}}).dump();
+        msg.id = id;
+        rpc_response_pub_->publish(msg);
+      } else {
+        PublishRpcError(id, mowbite_msgs::msg::RpcError::ERROR_INVALID_REQUEST, why.message,
+                        core_.RefusalData("EMERGENCY_RESET_REFUSED", why, event_id)
+                            .dump(-1, ' ', false, json::error_handler_t::replace));
+      }
+    }
+    release_rpc_ids_.clear();
+  }
+
+  // Called with the mutex held: refused here, the event and the answers to the RPCs waiting for it.
+  void RefuseReleaseLocked(const Reason& why) {
+    const std::string event_id = core_.RefuseReset(why);
+    AnswerReleaseLocked(false, why, event_id);
+  }
+
+  // The answer comes from S2 once the driver answered; a refusal goes to the app as EMERGENCY_RESET_REFUSED and to the
+  // RPCs waiting for it (rpc_id: the one of emergency.reset, empty for the action).
+  void ReleaseEmergency(const std::string& rpc_id = "") {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!rpc_id.empty()) release_rpc_ids_.push_back(rpc_id);
     if (!emergency_client_->service_is_ready()) {
       RCLCPP_ERROR(get_logger(), "safety/release_emergency is not available, emergency stays");
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        core_.RefuseReset(Reason("SAFETY_MISSING", "safety/release_emergency is not available"));
-      }
-      Flush();
+      RefuseReleaseLocked(Reason("SAFETY_MISSING", "safety/release_emergency is not available"));
       return;
     }
     auto request = std::make_shared<mowbite_msgs::srv::SetEmergency::Request>();
     request->latch = false;
     request->reason = "reset_emergency from the app";
-    std::lock_guard<std::mutex> lock(mutex_);
-    // A second reset while one is pending replaces it; only the newest answer counts.
+    // A second reset while one is pending replaces it; only the newest answer counts, for all that wait.
     if (release_sent_) emergency_client_->remove_pending_request(release_request_id_);
     release_sent_ = MonotonicSeconds();
     release_request_id_ = emergency_client_->async_send_request(
@@ -617,9 +702,13 @@ class LogicNode : public rclcpp::Node {
           {
             std::lock_guard<std::mutex> lock(mutex_);
             release_sent_.reset();
-            if (response->success) return;
-            RCLCPP_WARN(get_logger(), "Emergency stays (%s): %s", response->code.c_str(), response->message.c_str());
-            core_.RefuseReset(ResetRefusal(response->code, response->message, response->value, response->limit));
+            if (response->success) {
+              core_.OnReleaseAnswered(MonotonicSeconds());
+              AnswerReleaseLocked(true);
+            } else {
+              RCLCPP_WARN(get_logger(), "Emergency stays (%s): %s", response->code.c_str(), response->message.c_str());
+              RefuseReleaseLocked(ResetRefusal(response->code, response->message, response->value, response->limit));
+            }
           }
           Flush();
         }).request_id;
@@ -813,11 +902,9 @@ class LogicNode : public rclcpp::Node {
           index = drive_.follower_index;
           message = "no result from the follower";
         }
-        Reason why(FollowerCode(reason), message);
-        if (reason == FollowPath::Result::REASON_CANCELED && drive_.cancel_reason) {
-          // Stopped from here: the cause, not the cancel of the follower.
-          why = Reason(*drive_.cancel_reason).WithMessage(drive_.cancel_reason->message + " (" + message + ")");
-        } else if (reason == FollowPath::Result::REASON_CANCELED) {
+        // Stopped from here: the cause, not the cancel of the follower nor its own stop for the same emergency.
+        Reason why = FollowerEndReason(FollowerCode(reason), message, drive_.cancel_reason);
+        if (reason == FollowPath::Result::REASON_CANCELED && !drive_.cancel_reason) {
           // A cancel the logic did not ask for (G22): the path stops for the user, as when the follower does not answer.
           why = Reason("FOLLOWER_MISSING", "The follower dropped the path (" + message + ")");
           reason = FollowPath::Result::REASON_TIMEOUT;
@@ -1220,7 +1307,7 @@ class LogicNode : public rclcpp::Node {
         emergency_client_->remove_pending_request(release_request_id_);
         release_sent_.reset();
         RCLCPP_WARN(get_logger(), "Emergency stays: no answer from safety/release_emergency");
-        core_.RefuseReset(Reason("NO_ANSWER", "No answer to the release from mowbite_safety"));
+        RefuseReleaseLocked(Reason("NO_ANSWER", "No answer to the release from mowbite_safety"));
       }
       if (charge_sent_ && t - *charge_sent_ > charge_timeout_s_) {
         charge_client_->remove_pending_request(charge_request_id_);
@@ -1260,6 +1347,10 @@ class LogicNode : public rclcpp::Node {
 
   void OnRpcRequest(const mowbite_msgs::msg::RpcRequest& request) {
     // The bridge hands every registered method to every node, the others answer theirs.
+    if (const mowbite_api::Command* command = mowbite_api::FindCommand(request.method); command && Ours(*command)) {
+      OnCommandRpc(request, *command);
+      return;
+    }
     if (request.method == "params.set") {
       OnParamsSet(request);
       return;
@@ -1270,10 +1361,6 @@ class LogicNode : public rclcpp::Node {
     }
     if (request.method == "robot.geometry.set") {
       OnGeometrySet(request);
-      return;
-    }
-    if (request.method == "docking.start") {
-      OnDockingStart(request);
       return;
     }
     if (request.method == "system.hold") {
@@ -1374,40 +1461,6 @@ class LogicNode : public rclcpp::Node {
     msg.result = result.applied.dump();
     msg.id = request.id;
     rpc_response_pub_->publish(msg);
-  }
-
-  // "Home" from IDLE: {"state": "DOCKING"} once docking began, else -32600 with the reason, its message and fields as
-  // data, and DRIVE_REFUSED. Parameters are not needed.
-  void OnDockingStart(const mowbite_msgs::msg::RpcRequest& request) {
-    Reason why;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      why = core_.DockingProblem();
-      if (why.empty() && !transit_client_->service_is_ready()) why = PlannerMissing();
-      if (why.empty() && !follow_client_->action_server_is_ready()) why = FollowerMissing();
-      if (why.empty() && (drive_.active || job_plan_.active)) {
-        why = Reason("STILL_STOPPING", "The last drive is still stopping, try again in a moment");
-      }
-      if (why.empty()) {
-        why = core_.StartDocking();
-      } else {
-        core_.RefuseDrive(why);
-      }
-    }
-    if (why.empty()) {
-      RCLCPP_INFO(get_logger(), "docking.start: docking");
-      mowbite_msgs::msg::RpcResponse msg;
-      msg.result = json{{"state", "DOCKING"}}.dump();
-      msg.id = request.id;
-      rpc_response_pub_->publish(msg);
-    } else {
-      RCLCPP_WARN(get_logger(), "docking.start refused: %s (%s)", why.code.c_str(), why.message.c_str());
-      json data = {{"reason", why.code}, {"message", why.message}};
-      for (const auto& [key, value] : why.fields.items()) data[key] = value;
-      PublishRpcError(request.id, mowbite_msgs::msg::RpcError::ERROR_INVALID_REQUEST, why.message,
-                      data.dump(-1, ' ', false, json::error_handler_t::replace));
-    }
-    Flush();
   }
 
   // system.hold {"seconds": 0..1800} of the updater: granted only in IDLE with nothing on its way, else none; 0 lets go
@@ -1559,13 +1612,22 @@ class LogicNode : public rclcpp::Node {
     publish_pub_->publish(msg);
   }
 
+  // The commands of the catalog are the logic's: they take client.
+  static bool Ours(const mowbite_api::Command& command) {
+    return std::any_of(command.params.begin(), command.params.end(),
+                       [](const mowbite_api::Field& param) { return param.name == "client"; });
+  }
+
   // The methods of the logic; calibration.* only while calibration/run is there.
   void PublishRpcMethods() {
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_logic";
     methods.methods = {"mowing.plan", "params.set", "robot.geometry.get", "robot.geometry.set", "system.hold"};
-    // "Home" from IDLE, only where the OS docks (contacts at the back).
-    if (core_.CanDock()) methods.methods.push_back("docking.start");
+    for (const auto& command : mowbite_api::Commands()) {
+      // "Home" from IDLE, only where the OS docks (contacts at the back).
+      if (!Ours(command) || (command.name == "docking.start" && !core_.CanDock())) continue;
+      methods.methods.push_back(command.name);
+    }
     calibration_offered_ = calibration_client_->action_server_is_ready();
     if (calibration_offered_) {
       for (const char* name : {"calibration.check", "calibration.start", "calibration.abort"}) {
@@ -2332,7 +2394,7 @@ class LogicNode : public rclcpp::Node {
       }
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "events/json";
-      msg.payload = mowbite_bridge::BuildEvent(event.type, event.details, now().seconds()).dump();
+      msg.payload = mowbite_bridge::BuildEvent(event.type, event.details, now().seconds(), event.id).dump();
       publish_pub_->publish(msg);
     }
     if (actions_changed) PublishActions();
@@ -2471,6 +2533,8 @@ class LogicNode : public rclcpp::Node {
   std::optional<int64_t> edit_request_id_;
   // The release asked of S2, under mutex_.
   std::optional<double> release_sent_;
+  // ids of the emergency.reset calls that wait for the safety node.
+  std::vector<std::string> release_rpc_ids_;
   int64_t release_request_id_ = 0;
   bool edit_is_dock_ = false;
   uint64_t edit_seq_ = 0;

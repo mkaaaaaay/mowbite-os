@@ -15,6 +15,7 @@
   <depend>mowbite_msgs</depend>
   <depend>mowbite_bridge</depend>
   <depend>mowbite_hold</depend>
+  <depend>mowbite_api</depend>
   <depend>mowbite_planner_interfaces</depend>
   <depend>rcl_interfaces</depend>
   <depend>rclcpp_action</depend>

@@ -38,7 +38,6 @@ services:
       - /userdata/mowbite:/userdata/mowbite
     environment:
       - TZ=${TZ:-Europe/Berlin}
-      - ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
       - ROS_LOG_DIR=/tmp/ros_log
     # The log files of ROS stay in memory, at most 20 MB.
     tmpfs:

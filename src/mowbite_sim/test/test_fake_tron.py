@@ -605,8 +605,7 @@ class ProcessTest(unittest.TestCase):
         cls.proc.stderr.close()
 
     def set_flags(self, **flags):
-        with open(self.paths["flags"], "w") as f:
-            json.dump(flags, f)
+        write_flags(self.paths["flags"], flags)
 
     def speed_frames(self, data):
         """Speed values (mod 4) of the MCU frames in data."""
@@ -798,6 +797,15 @@ class ProcessTest(unittest.TestCase):
             os.rmdir(d)
 
 
+def write_flags(path, flags):
+    """Replaces the flags file in one step and waits until fake_tron, which reads it every FILES_PERIOD s on a thread of
+    its own, has taken it."""
+    with open(path + ".tmp", "w") as f:
+        json.dump(flags, f)
+    os.replace(path + ".tmp", path)
+    time.sleep(5 * ft.FILES_PERIOD)
+
+
 class DockProcessTest(unittest.TestCase):
     """fake_tron started on its charging station: contact at once, a charge current only after Charge 1."""
 
@@ -868,12 +876,10 @@ class DockProcessTest(unittest.TestCase):
         self.assertAlmostEqual(held["x"], -1.0, places=3)
         self.assertTrue(held["dock_ok"])
         # Stuck for good with the flag.
-        with open(self.paths["flags"], "w") as f:
-            json.dump({"dock_hollow_speed": 9.0}, f)
+        write_flags(self.paths["flags"], {"dock_hollow_speed": 9.0})
         self.drive(0.15, 1.0)
         self.assertAlmostEqual(self.state()["x"], -1.0, places=3)
-        with open(self.paths["flags"], "w") as f:
-            json.dump({}, f)
+        write_flags(self.paths["flags"], {})
         self.drive(0.15, 1.5)
         self.drive(0.0, 0.3)
         out = self.state()
@@ -881,8 +887,7 @@ class DockProcessTest(unittest.TestCase):
         self.assertFalse(out["dock_ok"])
 
     def test_placed_back_on_the_station_by_hand(self):
-        with open(self.paths["flags"], "w") as f:
-            json.dump({"place": [-1.0, 0.0, 0.0]}, f)
+        write_flags(self.paths["flags"], {"place": [-1.0, 0.0, 0.0]})
         back = self.state()
         self.assertAlmostEqual(back["x"], -1.0, places=6)
         self.assertAlmostEqual(back["y"], 0.0, places=6)

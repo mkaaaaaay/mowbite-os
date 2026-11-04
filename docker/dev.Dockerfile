@@ -4,7 +4,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libpaho-mqttpp-dev libpaho-mqtt-dev nlohmann-json3-dev \
       mosquitto mosquitto-clients python3-paho-mqtt \
-      git python3-shapely \
+      git python3-shapely python3-jsonschema \
  && rm -rf /var/lib/apt/lists/*
 
 # The MowBite Planner (own process of the stack) at a fixed commit of its branch tron, taken from a local clone:
@@ -23,3 +23,6 @@ RUN --mount=type=bind,from=planer,target=/src/planer \
  && . /opt/mowbite_planner/setup.sh \
  && ros2 pkg prefix mowbite_planner_interfaces > /dev/null && ros2 pkg prefix mowbite_planner > /dev/null \
  && rm -rf /tmp/planner /tmp/planner_build /tmp/planner_log
+# DDS on the loopback only, without shared memory (fastdds_loopback.xml of mowbite_bringup); the launch halts without it.
+COPY src/mowbite_bringup/config/fastdds_loopback.xml /etc/mowbite/fastdds_loopback.xml
+ENV ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT FASTRTPS_DEFAULT_PROFILES_FILE=/etc/mowbite/fastdds_loopback.xml

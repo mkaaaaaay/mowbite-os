@@ -51,6 +51,14 @@ jobs:
             echo "only xcore_driver and its dependencies belong in the image"; exit 1
           fi
           docker run --rm "$TAG" ros2 launch xcore_driver measure.launch.py --show-args > /dev/null
+          # DDS on the loopback profile of the image; without the file the launch halts and no driver starts.
+          docker run --rm "$TAG" bash -c 'test "$ROS_AUTOMATIC_DISCOVERY_RANGE" = SYSTEM_DEFAULT \
+            && grep -q 127.0.0.1 "$FASTRTPS_DEFAULT_PROFILES_FILE"'
+          cid=$(docker run -d -e FASTRTPS_DEFAULT_PROFILES_FILE=/nonexistent "$TAG" ros2 launch xcore_driver measure.launch.py)
+          sleep 8
+          out=$(docker logs "$cid" 2>&1); docker stop "$cid" > /dev/null; docker rm "$cid" > /dev/null
+          echo "$out" | grep -q 'MOWBITE_OS_HALT reason=DDS_PROFILE' || { echo "$out"; echo "no halt without the profile"; exit 1; }
+          if echo "$out" | grep -q 'process started'; then echo "$out"; echo "a driver started without the profile"; exit 1; fi
           docker run --rm "$TAG" python3 /ws/tools/measure.py --help > /dev/null
           docker run --rm "$TAG" python3 /ws/tools/xcore_capture.py --help > /dev/null
           docker save "$TAG" | gzip -6 > "mowbite-measure-${{ steps.rev.outputs.short }}-arm64.tar.gz"

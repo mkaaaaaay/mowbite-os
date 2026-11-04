@@ -1,0 +1,2 @@
+// Written by CMake from @MOWBITE_PLANNER_SCHEMA_FILE@, empty without one.
+constexpr char kPlannerSchemaText[] = R"planner_part(@MOWBITE_PLANNER_SCHEMA_TEXT@)planner_part";

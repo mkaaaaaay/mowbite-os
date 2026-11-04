@@ -24,13 +24,14 @@ struct RpcCall {
   std::string method;
   // null when the request has none.
   Json params;
-  // A string, or null when the request has none.
+  // Of any JSON type as the client sent it, null when the request has none.
   Json id;
 };
 
 // What a payload on rpc/request asks for: a call, nothing (meta.* and ext.*), or an error to send back at once.
 struct RpcReading {
   enum class Kind { kCall, kSilent, kError } kind = Kind::kSilent;
+  // With kError only the id, null when the request has none or could not be read.
   RpcCall call;
   // The whole error answer for kError.
   std::string reply;

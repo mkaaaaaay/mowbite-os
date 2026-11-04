@@ -15,7 +15,7 @@ the counters run free (the right one falls going forward). Motor controllers rep
 200 ms. RTCM to the GPS service is counted per datagram, with a CRC-32 over the stream.
 A JSON file with flags (stop, rear_stop, lift, lift_left, lift_right, bumper, bumper_left, bumper_right, dock,
 battery_voltage, major_version, firmware, restart, cutter_ignores_off, drive_status, gps_fix (fix, float, none or off),
-gps_accuracy) is read on every cycle; restart
+gps_accuracy) is read every 10 ms; restart
 restarts the board whenever its value changes, as does a GPS configuration other than the first one. Flags for what
 the mower may do wrong: rpm_zero (the blade reports 0 rpm), wheel_speed (both wheels turn forward at this many m/s
 whatever the duty), zero_duty_ignored (a duty of 0, the drive timeout and an emergency leave the wheels at the last duty
@@ -27,18 +27,21 @@ configured ones), --track (the true distance of the wheels), --antenna-offset of
 --gnss-noise-m and --gnss-delay, --imu-error-rpy-deg (the sensor turned off its mounting), --slope (the ground rising
 towards a heading), --wheel-deadband and --gyro-scale.
 Every datagram from the host goes to a JSON lines log, --state writes the board as JSON, --pcap every datagram in both
-directions with one clock, as tcpdump would see it on the host's interface.
+directions with one clock, as tcpdump would see it on the host's interface. A thread of its own does all of this file
+work, so a slow disk never holds the board (Files).
 """
 import argparse
 import json
 import math
 import os
+import queue
 import random
 import select
 import signal
 import socket
 import struct
 import sys
+import threading
 import time
 import zlib
 
@@ -183,28 +186,107 @@ def read_flags(path):
         return {}
 
 
-class Log:
-    """JSON lines, stops writing at max_bytes."""
+FILES_PERIOD = 0.01
+FILES_QUEUE = 100000
 
-    def __init__(self, path, max_bytes):
+
+def write_state(path, text):
+    with open(path + ".tmp", "w") as f:
+        f.write(text)
+    os.replace(path + ".tmp", path)
+
+
+class Files:
+    """Reads the flags and writes the log, the capture and the state on a thread of its own: a slow disk (up to 3.15 s
+    under load) must not hold the board. The board takes the flags last read, queues what it writes and hands over its
+    newest state, both already serialised; what does not fit the queue is dropped and counted."""
+
+    def __init__(self, flags_path, state_path):
+        self.flags_path = flags_path
+        self.state_path = state_path
+        self.flags = read_flags(flags_path)
+        self.dropped = self.errors = 0
+        self._queue = queue.Queue(FILES_QUEUE)
+        self._state = None
+        self._closing = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="files", daemon=True)
+        self._thread.start()
+
+    def write(self, file, data):
+        try:
+            self._queue.put_nowait((file, data))
+        except queue.Full:
+            self.dropped += 1
+
+    def state(self, text):
+        self._state = text
+
+    def close(self, timeout=2.0):
+        """Writes what is still queued, for at most timeout s, and tells what got lost."""
+        self._closing.set()
+        self._thread.join(timeout)
+        if self.dropped or self.errors or self._thread.is_alive():
+            print(f"fake_xcore: file work lost {self.dropped} queued writes, {self.errors} failed, "
+                  f"{'still busy' if self._thread.is_alive() else 'done'} at the end", file=sys.stderr, flush=True)
+
+    def _run(self):
+        written_state = None
+        while True:
+            closing = self._closing.is_set()
+            self.flags = read_flags(self.flags_path)
+            end = time.monotonic() + FILES_PERIOD
+            touched = set()
+            while True:
+                try:
+                    file, data = self._queue.get(timeout=max(0.0, end - time.monotonic()))
+                except queue.Empty:
+                    break
+                try:
+                    file.write(data)
+                    touched.add(file)
+                except OSError:
+                    self.errors += 1
+                if time.monotonic() >= end:
+                    break
+            for file in touched:
+                try:
+                    file.flush()
+                except OSError:
+                    self.errors += 1
+            state = self._state
+            if state is not None and state is not written_state and self.state_path:
+                written_state = state
+                try:
+                    write_state(self.state_path, state)
+                except OSError:
+                    self.errors += 1
+            if closing and self._queue.empty():
+                return
+
+
+class Log:
+    """JSON lines through Files, stops writing at max_bytes."""
+
+    def __init__(self, path, max_bytes, files):
         self.file = open(path, "w") if path else None
         self.left = max_bytes
+        self.files = files
 
     def write(self, entry):
         if not self.file or self.left <= 0:
             return
         line = json.dumps(entry) + "\n"
         self.left -= len(line)
-        self.file.write(line)
-        self.file.flush()
+        self.files.write(self.file, line)
 
 
 class Pcap:
-    """Datagrams as Ethernet frames in a pcap file (µs), stops writing at max_bytes."""
+    """Datagrams as Ethernet frames in a pcap file (µs) through Files, stops writing at max_bytes."""
 
-    def __init__(self, path, max_bytes):
+    def __init__(self, path, max_bytes, files):
         self.file = open(path, "wb") if path else None
         self.left = max_bytes
+        self.files = files
         if self.file:
             self.file.write(struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1))
 
@@ -222,8 +304,7 @@ class Pcap:
         stamp = time.time()
         record = struct.pack("<IIII", int(stamp), int(stamp % 1 * 1e6), len(frame), len(frame)) + frame
         self.left -= len(record)
-        self.file.write(record)
-        self.file.flush()
+        self.files.write(self.file, record)
 
 
 class Service:
@@ -282,11 +363,12 @@ def ground(slope_deg, slope_heading_deg):
 
 
 class Board:
-    def __init__(self, args):
+    def __init__(self, args, files):
         self.args = args
+        self.files = files
         self.descriptions = {int(k): v for k, v in json.load(open(args.services))["services"].items()}
-        self.log = Log(args.log, args.log_max_mb * 1024 * 1024)
-        self.pcap = Pcap(args.pcap, int(args.pcap_max_mb * 1024 * 1024))
+        self.log = Log(args.log, args.log_max_mb * 1024 * 1024, files)
+        self.pcap = Pcap(args.pcap, int(args.pcap_max_mb * 1024 * 1024), files)
         self.t0 = time.monotonic()
         self.restarts = 0
         self.restart_flag = None
@@ -563,7 +645,7 @@ class Board:
 
     def rpc(self, service, function, call):
         self.counters["rpc_calls"] += 1
-        flags = read_flags(self.args.flags)
+        flags = self.files.flags
         if function not in service.functions:
             self.send(service, RPC_RESPONSE, 2, call)
         elif service.sid == META and function == 0:
@@ -794,7 +876,7 @@ class Board:
 
     def cycle(self, dt):
         now = self.now()
-        flags = read_flags(self.args.flags)
+        flags = self.files.flags
         restart = flags.get("restart")
         if restart != self.restart_flag:
             self.restart_flag = restart
@@ -890,7 +972,8 @@ def main():
     if args.group_port in (8007, 10000) or 65102 <= args.group_port <= 65104:
         sys.exit("refusing a port of the real board's debug or boot channels")
 
-    board = Board(args)
+    files = Files(args.flags, args.state)
+    board = Board(args, files)
     stop = []
     signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
     signal.signal(signal.SIGINT, lambda *_: stop.append(1))
@@ -912,12 +995,8 @@ def main():
             last = now
         if args.state and now >= next_state:
             next_state = now + 0.1
-            try:
-                with open(args.state + ".tmp", "w") as f:
-                    json.dump(board.state(), f)
-                os.replace(args.state + ".tmp", args.state)
-            except OSError:
-                pass
+            files.state(json.dumps(board.state()))
+    files.close()
 
 
 if __name__ == "__main__":

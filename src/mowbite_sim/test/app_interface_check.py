@@ -32,13 +32,29 @@ parser.add_argument("--app-url", help="accepted for the common call of the test 
 parser.add_argument("--seconds", type=float, default=2.0, help="how long to collect what the mower publishes")
 parser.add_argument("--write", action="store_true", help="also act on the mower; simulated MowBite OS only")
 parser.add_argument("--sim-log", help="JSON lines log of the simulated MCU, for the checks of the frames it received")
+parser.add_argument("--mqtt", type=int, choices=[3, 5], default=3,
+                    help="5: connect with MQTT 5 and ask every RPC with a response topic and correlation data (AS4)")
+parser.add_argument("--bridge-mqtt", type=int, choices=[3, 5], default=5,
+                    help="with --mqtt 5: what system.info.mqtt is to say; 3 for a bridge behind a broker of 3.1.1")
 args = parser.parse_args()
 if args.write and args.target != "mowbite-os":
     parser.error("--write is implemented for --target mowbite-os only")
+if args.mqtt == 5 and args.target != "mowbite-os":
+    parser.error("--mqtt 5 is for --target mowbite-os only")
+if args.mqtt == 5:
+    from paho.mqtt.packettypes import PacketTypes
+    from paho.mqtt.properties import Properties
 
 LOG = args.sim_log
 msgs = []
 results = []
+# With --mqtt 5: the correlation data that came with the message at that index of msgs.
+correlations = {}
+RESPONSE = "rpc/response/stack_test"
+# With --mqtt 5: (id, topic, correlation sent, correlation back) of every answer rpc() took.
+routes = []
+# (method, answer) of every command, for the check against the schema at the end.
+COMMAND_ANSWERS = []
 
 
 def record(point, status, example=""):
@@ -64,6 +80,8 @@ def check_log(name, cond, detail="", point=None):
 
 
 def finish(code=None):
+    if args.mqtt == 5:
+        check_routes()
     summary = {k: sum(r["status"] == k for r in results) for k in ("ok", "missing", "different", "skipped")}
     print(json.dumps({"target": args.target, "host": args.host, "write": args.write, "points": results,
                       "summary": summary}, indent=1))
@@ -75,6 +93,10 @@ def finish(code=None):
 
 
 def on_message(_c, _u, m):
+    props = getattr(m, "properties", None)
+    correlation = getattr(props, "CorrelationData", None) if props else None
+    if correlation is not None:
+        correlations[len(msgs)] = correlation
     msgs.append((time.time(), m.topic, m.payload, m.retain))
 
 
@@ -100,18 +122,29 @@ def set_flags(**flags):
     assert r and "result" in r, f"sim.flags failed: {r}"
 
 
-def rpc(method, params=None, rid="1", timeout=5.0):
+def rpc(method, params=None, rid="1", timeout=5.0, response_topic=RESPONSE, correlation=None):
+    """With --mqtt 5 asked with a response topic and correlation data; the answer is taken from there or from
+    rpc/response, check_routes() tells whether it came where it should."""
     req = {"jsonrpc": "2.0", "method": method, "id": rid}
     if params is not None:
         req["params"] = params
     start = len(msgs)
-    c.publish("rpc/request", json.dumps(req))
+    props = None
+    if args.mqtt == 5:
+        correlation = correlation if correlation is not None else ("c-" + json.dumps(rid)).encode()
+        props = Properties(PacketTypes.PUBLISH)
+        props.ResponseTopic = response_topic
+        props.CorrelationData = correlation
+    c.publish("rpc/request", json.dumps(req), properties=props)
 
     def answer():
-        for _, top, p, _ in msgs[start:]:
-            if top == "rpc/response":
+        for i in range(start, len(msgs)):
+            _, top, p, _ = msgs[i]
+            if top in ("rpc/response", response_topic):
                 j = json.loads(p)
                 if j.get("id") == rid:
+                    if args.mqtt == 5 and response_topic == RESPONSE:
+                        routes.append((rid, top, correlation, correlations.get(i)))
                     return j
         return None
     return wait_for(answer, timeout)
@@ -178,14 +211,17 @@ def sim_time():
     return json.loads(lines[-1])["t"] if lines else 0.0
 
 
-c = mqtt.Client("stack_test")
+c = mqtt.Client("stack_test", protocol=mqtt.MQTTv5 if args.mqtt == 5 else mqtt.MQTTv311)
 if args.user:
     c.username_pw_set(args.user, args.password)
 connected = []
-c.on_connect = lambda _c, _u, _f, rc: connected.append(rc)
+c.on_connect = lambda _c, _u, _f, rc, *_: connected.append(getattr(rc, "value", rc))
 c.on_message = on_message
 try:
-    c.connect(args.host, args.port)
+    if args.mqtt == 5:
+        c.connect(args.host, args.port, clean_start=True)
+    else:
+        c.connect(args.host, args.port)
 except OSError as e:
     print(f"cannot reach {args.host}:{args.port}: {e}", file=sys.stderr)
     sys.exit(2)
@@ -272,6 +308,31 @@ if offers("system.info"):
     info = (r or {}).get("result") or {}
     check("system.info", info.get("name") == "mowbite-os" and info.get("version") and info.get("platform")
           and isinstance(info.get("schema"), int), json.dumps(info))
+API_SCHEMA = None
+if args.target == "mowbite-os":
+    # AS3: the version of the interface in system.info, the schema itself over system.api.
+    api_version = info.get("api") if offers("system.info") else None
+    check("system.info.api is the version of the interface", isinstance(api_version, int) and api_version >= 1,
+          json.dumps(api_version), point="AS3 system.info.api")
+    if offers("system.api"):
+        r = rpc("system.api", None, "api")
+        api = (r or {}).get("result") or {}
+        API_SCHEMA = api.get("json_schema") if isinstance(api.get("json_schema"), dict) else None
+        check("system.api gives api and json_schema of the version of system.info",
+              api.get("api") == api_version and bool(API_SCHEMA) and API_SCHEMA.get("x-api") == api_version
+              and API_SCHEMA.get("$id") == f"urn:mowbite-os:api:{api_version}",
+              json.dumps({k: v for k, v in api.items() if k != "json_schema"}), point="AS3 system.api")
+    # AM4: an id comes back as it was sent, also a number, from the bridge and from a node.
+    r = rpc("rpc.ping", None, 42)
+    check("a number id comes back as a number (bridge)", bool(r) and r.get("id") == 42 and r.get("result") == "pong",
+          json.dumps(r), point="AM4 ids")
+    if offers("robot.geometry.get"):
+        r = rpc("robot.geometry.get", None, 4711)
+        check("a number id comes back as a number (node)", bool(r) and r.get("id") == 4711 and "result" in r,
+              json.dumps(r)[:200], point="AM4 ids")
+        r = rpc("robot.geometry.get", None, {"client": "check", "n": 1})
+        check("an object id comes back as it was sent (node)", bool(r) and "result" in r, json.dumps(r)[:200],
+              point="AM4 ids")
 if offers("sensors.list"):
     # Every sensor of sensor_infos/json with its fields unchanged, the last value and its time (null before one came).
     r = rpc("sensors.list", None, "sensors")
@@ -412,6 +473,84 @@ r = wait_for(lambda: (latest("rpc/response") and json.loads(latest("rpc/response
 check("invalid json -32700", bool(r))
 
 
+def check_mqtt5():
+    """AS4 with --mqtt 5: system.info.mqtt, refused response topics, correlation data up to 1 KB."""
+    r = rpc("system.info", None, "mqtt5-info")
+    mqtt_version = ((r or {}).get("result") or {}).get("mqtt")
+    check(f"system.info.mqtt is {args.bridge_mqtt}", mqtt_version == args.bridge_mqtt,
+          json.dumps(r and r.get("result")), point="AS4 system.info.mqtt")
+    # A command where it may act (the simulation); a bridge on 3.1.1 runs it, in IDLE it is refused with WRONG_STATE.
+    method, params = ("mowing.pause", {"client": "check"}) if args.write else ("rpc.ping", None)
+    for i, topic in enumerate(["map/json", "robot_state/json", "rpc/response", "rpc/response/a/b", "rpc/response/+",
+                               "rpc/response/" + "t" * 65]):
+        rid = f"bad-topic-{i}"
+        start = len(msgs)
+        r = rpc(method, params, rid, response_topic=topic)
+        time.sleep(0.5 if i else 1.5)
+        seen = []
+        for _, top, p, _ in msgs[start:]:
+            if top == "rpc/request":
+                continue
+            try:
+                if json.loads(p).get("id") == rid:
+                    seen.append(top)
+            except (ValueError, AttributeError):
+                pass
+        if args.bridge_mqtt == 5:
+            error = (r or {}).get("error") or {}
+            data = error.get("data") or {}
+            COMMAND_ANSWERS.append((method, r))
+            check(f"response topic {topic[:24]} refused on rpc/response, nothing done",
+                  error.get("code") == -32600 and data.get("event") == "REQUEST_REFUSED"
+                  and data.get("reason") == "RESPONSE_TOPIC" and seen == ["rpc/response"],
+                  f"{json.dumps(r)[:200]} on {seen}", point="AS4 response topic")
+        else:
+            # A bridge on 3.1.1 does not see the response topic: it answers as before.
+            check(f"response topic {topic[:24]} unseen by a 3.1.1 bridge", r is not None and seen == ["rpc/response"],
+                  f"{json.dumps(r)[:200]} on {seen}", point="AS4 fallback")
+    if args.bridge_mqtt == 5:
+        most = b"\x00k" * 512
+        start = len(msgs)
+        r = rpc("rpc.ping", None, "corr-most", correlation=most)
+        check("1024 bytes of correlation data come back", (r or {}).get("result") == "pong" and routes
+              and routes[-1][3] == most, json.dumps(r), point="AS4 correlation")
+        r = rpc("rpc.ping", None, "corr-long", correlation=most + b"k")
+        data = ((r or {}).get("error") or {}).get("data") or {}
+        back = [correlations.get(i) for i in range(start, len(msgs)) if msgs[i][1] == RESPONSE
+                and json.loads(msgs[i][2]).get("id") == "corr-long"]
+        check("1025 bytes of correlation data refused to the response topic",
+              data.get("reason") == "CORRELATION_DATA" and data.get("limit") == 1024 and back == [None],
+              json.dumps(r)[:200], point="AS4 correlation")
+        COMMAND_ANSWERS.append(("rpc.ping", r))
+
+
+def check_routes():
+    """AS4 with --mqtt 5: every answer rpc() took came only to the response topic with its correlation data, or with a
+    bridge on 3.1.1 to rpc/response without; nothing of them on rpc/response."""
+    if args.bridge_mqtt == 5:
+        # Correlation data over 1 KB is refused and not sent back.
+        wrong = [f"{rid}: {top}" for rid, top, sent, back in routes
+                 if top != RESPONSE or back != (None if rid == "corr-long" else sent)]
+        own = {json.dumps(rid) for rid, _, _, _ in routes}
+        leaked = []
+        for _, top, p, _ in msgs:
+            if top != "rpc/response":
+                continue
+            rid = json.loads(p).get("id")
+            if rid is not None and not str(rid).startswith("bad-topic-") and json.dumps(rid) in own:
+                leaked.append(json.dumps(rid))
+        check(f"every answer ({len(routes)}) only on {RESPONSE} with its correlation data", routes and not wrong
+              and not leaked, "; ".join(wrong[:3] + leaked[:3]), point="AS4 routing")
+    else:
+        wrong = [f"{rid}: {top}" for rid, top, _, back in routes if top != "rpc/response" or back is not None]
+        check(f"every answer ({len(routes)}) of the 3.1.1 bridge on rpc/response", routes and not wrong,
+              "; ".join(wrong[:3]), point="AS4 fallback")
+
+
+if args.mqtt == 5:
+    check_mqtt5()
+
+
 def late_phone_gets_map(name, expected):
     late = []
     phone = mqtt.Client("late_phone")
@@ -467,6 +606,78 @@ c.publish("action", "mower_logic:idle/start_mowing")
 refused = wait_for(lambda: events_of("MOWING_REFUSED", mark), 3)
 check("MOWING_REFUSED with a fixed reason", fixed_reason(refused[-1] if refused else None, "user"),
       json.dumps(refused[-1] if refused else None), point="3.1a MOWING_REFUSED")
+action_refusal = refused[-1] if refused else {}
+
+# AS2: every command as an RPC with an answer. The commands of the logic are those of system.api that take client.
+COMMANDS = [] if API_SCHEMA is None else [
+    name for name in API_SCHEMA.get("x-commands", {})
+    if "client" in API_SCHEMA["$defs"].get(name + ".params", {}).get("properties", {})]
+
+
+def command(method, params=None, rid=None, timeout=5.0):
+    r = rpc(method, params, rid or "cmd-" + method, timeout)
+    COMMAND_ANSWERS.append((method, r))
+    return r
+
+
+def refused_with(r, event, reason, sent=None, since=0):
+    """-32600 with data {event, reason, message, severity, resume, state, sub_state}; sent: the event went out too,
+    with the id in event_id and the client check."""
+    error = (r or {}).get("error") or {}
+    data = error.get("data") or {}
+    ok = (error.get("code") == -32600 and data.get("event") == event and data.get("reason") == reason
+          and data.get("message") == error.get("message") and data.get("severity") in ("info", "warning", "error")
+          and data.get("resume") in ("auto", "user") and isinstance(data.get("state"), str)
+          and isinstance(data.get("sub_state"), str))
+    if sent is None:
+        return ok
+    if not sent:
+        return ok and "event_id" not in data
+    found = wait_for(lambda: [e for e in events_of(event, since) if e["id"] == data.get("event_id")], 3)
+    return ok and bool(found) and found[0].get("reason") == reason and found[0].get("client") == "check"
+
+
+if args.target == "mowbite-os" and COMMANDS:
+    missing = [m for m in COMMANDS if m != "docking.start" and (methods is None or m not in methods)]
+    check("rpc.methods names every command of system.api", not missing and len(COMMANDS) >= 19,
+          f"{len(COMMANDS)} commands, missing {missing}", point="AS2 commands")
+    # The same refusal as the action, with the id of its event, and a number id back as a number.
+    mark = len(msgs)
+    r = command("mowing.start", {"client": "check"}, 4711)
+    check("mowing.start refused like start_mowing, with the id of its MOWING_REFUSED",
+          bool(r) and r.get("id") == 4711 and refused_with(r, "MOWING_REFUSED", action_refusal.get("reason"), True,
+                                                           mark), json.dumps(r)[:400], point="AS2 refusals")
+    # Commands that do not fit IDLE: WRONG_STATE only in the answer, and the actions as silent as before.
+    wrong = ["mowing.pause", "mowing.continue", "mowing.abort", "mowing.skip_area", "mowing.skip_path",
+             "undocking.abort", "docking.abort", "recording.exit", "recording.ring_start", "recording.discard"]
+    mark = len(msgs)
+    bad = [m for m in wrong if not refused_with(command(m, {"client": "check"}), "COMMAND_REFUSED", "WRONG_STATE",
+                                                False)]
+    for action in ("mower_logic:mowing/pause", "mower_logic:mowing/skip_area", "mower_logic:docking/abort_docking",
+                   REC + "start_recording"):
+        c.publish("action", action)
+    time.sleep(1.0)
+    seen = [json.loads(p)["type"] for _, top, p, _ in msgs[mark:] if top == "events/json"]
+    check("WRONG_STATE in IDLE without an event, by RPC and by action", not bad and not seen
+          and json.loads(latest("robot_state/json") or "{}").get("current_state") == "IDLE",
+          f"refused otherwise: {bad}, events: {seen}", point="AS2 WRONG_STATE")
+    r = command("mowing.reset_job", {"client": "check"})
+    check("mowing.reset_job without a job: NO_JOB", refused_with(r, "COMMAND_REFUSED", "NO_JOB", False),
+          json.dumps(r)[:300], point="AS2 NO_JOB")
+    # params that do not fit: -32602 with the field, nothing happens.
+    for method, params, field in (("mowing.start", {"areas": ["lawn"]}, "areas"),
+                                  ("mowing.start", {"client": "Check"}, "client"),
+                                  ("recording.save", {"type": "pond"}, "type"),
+                                  ("recording.auto_points", {}, "enabled"),
+                                  ("mowing.pause", {"speed": 1}, "speed")):
+        r = rpc(method, params, "bad-" + field)
+        error = (r or {}).get("error") or {}
+        check(f"{method} {json.dumps(params)}: -32602 with field {field}", error.get("code") == -32602
+              and (error.get("data") or {}).get("field") == field, json.dumps(r), point="AS2 params")
+    check("still IDLE after the refused commands",
+          json.loads(latest("robot_state/json") or "{}").get("current_state") == "IDLE", "", point="AS2 params")
+elif args.target == "mowbite-os":
+    check("commands of system.api", False, "system.api names none", point="AS2 commands")
 
 
 if methods is not None and "params.set" in methods:
@@ -590,13 +801,23 @@ if methods is not None and "system.hold" in methods:
         check(kind + " HOLD with until", fixed_reason(event, "user") and event.get("reason") == "HOLD"
               and event.get("until") == hold_until and event.get("severity") == "info", json.dumps(event),
               point="3.5 " + kind + " HOLD")
+    for method, kind in (("mowing.start", "MOWING_REFUSED"), ("recording.start", "RECORDING_REFUSED")):
+        if method not in methods:
+            continue
+        mark = len(msgs)
+        r = command(method, {"client": "check"}, "hold_" + method)
+        check(method + " refused -32600 HOLD with until and the id of its " + kind,
+              refused_with(r, kind, "HOLD", True, mark)
+              and ((r.get("error") or {}).get("data") or {}).get("until") == hold_until, json.dumps(r)[:300],
+              point="AS2 HOLD")
     check("still IDLE after the refused starts",
           json.loads(latest("robot_state/json") or "{}").get("current_state") == "IDLE", "")
     if "docking.start" in methods:
-        r = rpc("docking.start", None, "hold_dock")
+        mark = len(msgs)
+        r = command("docking.start", {"client": "check"}, "hold_dock")
         data = ((r or {}).get("error") or {}).get("data") or {}
-        check("docking.start refused HOLD", data.get("reason") == "HOLD" and data.get("until") == hold_until,
-              json.dumps(r and r.get("error")))
+        check("docking.start refused HOLD", data.get("reason") == "HOLD" and data.get("until") == hold_until
+              and refused_with(r, "DRIVE_REFUSED", "HOLD", True, mark), json.dumps(r and r.get("error")))
     if "calibration.start" in methods:
         r = rpc("calibration.start", None, "hold_calibration")
         data = ((r or {}).get("error") or {}).get("data") or {}
@@ -833,6 +1054,13 @@ tilt = wait_for(lambda: [e for e in (json.loads(p) for _, top, p, _ in msgs if t
 c.publish("action", "mower_logic/reset_emergency")
 time.sleep(1.0)
 kept = b'"emergency":1' in (latest("robot_state/json") or b"")
+if "emergency.reset" in COMMANDS:
+    # AS2: the RPC answers with the refusal of the safety node and the id of its event.
+    mark = len(msgs)
+    r = command("emergency.reset", {"client": "check"}, "reset_tilted")
+    check("emergency.reset while tilted: -32600 EMERGENCY_RESET_REFUSED STILL_TILTED with its event",
+          refused_with(r, "EMERGENCY_RESET_REFUSED", "STILL_TILTED", True, mark), json.dumps(r)[:400],
+          point="AS2 emergency.reset")
 set_flags()
 time.sleep(0.5)
 c.publish("action", "mower_logic/reset_emergency")
@@ -843,7 +1071,8 @@ refused = [e for e in (json.loads(p) for _, top, p, _ in msgs if top == "events/
            if e["type"] == "EMERGENCY_RESET_REFUSED"]
 r = refused[0] if refused else {}
 check("reset while tilted -> EMERGENCY_RESET_REFUSED STILL_TILTED with angle and limit in deg, warning/user",
-      len(refused) == 1 and r.get("reason") == "STILL_TILTED" and abs(r.get("angle", 0) - 35) < 1.5
+      len(refused) == (2 if "emergency.reset" in COMMANDS else 1) and "client" not in r
+      and r.get("reason") == "STILL_TILTED" and abs(r.get("angle", 0) - 35) < 1.5
       and r.get("limit") == 26 and r.get("severity") == "warning" and r.get("resume") == "user"
       and bool(r.get("message")), json.dumps(refused), point="3.1a EMERGENCY_RESET_REFUSED STILL_TILTED")
 
@@ -883,9 +1112,25 @@ time.sleep(1.5)
 s = json.loads(latest("robot_state/json"))
 check("bumper let go: emergency and reason LATCH|COLLISION stay", s["emergency"] == 1 and s.get("emergency_reason") == 33,
       f'emergency={s["emergency"]} reason={s.get("emergency_reason")}')
+mark = len(msgs)
 c.publish("action", "mower_logic/reset_emergency")
 state = wait_for(lambda: b'"emergency":0' in (latest("robot_state/json") or b""), 4)
 check("reset after the bumper clears", bool(state) and json.loads(latest("robot_state/json")).get("emergency_reason") == 0)
+if args.target == "mowbite-os":
+    ended = wait_for(lambda: [e for e in events_of("EMERGENCY", mark) if e["emergency"] is False], 3)
+    check("the end after reset_emergency: source rpc, no client", bool(ended) and ended[-1].get("source") == "rpc"
+          and "client" not in ended[-1], json.dumps(ended), point="3.1a EMERGENCY source")
+if "emergency.reset" in COMMANDS:
+    set_flags(bumper=1)
+    wait_for(lambda: b'"emergency":1' in (latest("robot_state/json") or b""), 3)
+    set_flags()
+    mark = len(msgs)
+    r = command("emergency.reset", {"client": "check"}, "reset_bumper")
+    check("emergency.reset answers once released: released, state", ((r or {}).get("result") or {}).get("released")
+          is True and r["result"].get("state") == "IDLE", json.dumps(r), point="AS2 emergency.reset")
+    ended = wait_for(lambda: [e for e in events_of("EMERGENCY", mark) if e["emergency"] is False], 3)
+    check("the end after emergency.reset: source rpc and the client", bool(ended) and ended[-1].get("source") == "rpc"
+          and ended[-1].get("client") == "check", json.dumps(ended), point="3.1a EMERGENCY source")
 
 # Charging follows the debounced dock contact of the driver (3 battery reports at 1 Hz).
 set_flags(dock=1)
@@ -897,6 +1142,39 @@ set_flags()
 # The contact ends with the next battery report; the steps below start with the mower off the station.
 state = wait_for(lambda: b'"is_charging":0' in (latest("robot_state/json") or b""), 6)
 check("no contact -> not charging", bool(state))
+
+if "recording.start" in COMMANDS:
+    # AS2: the recording over its RPCs, as the actions did above.
+    mark = len(msgs)
+    r = command("recording.start", {"client": "check"})
+    entered = wait_for(lambda: [e for e in events_of("STATE", mark) if e.get("state") == "AREA_RECORDING"], 3)
+    check("recording.start answers AREA_RECORDING, STATE with the client", ((r or {}).get("result") or {}).get("state")
+          == "AREA_RECORDING" and bool(entered) and entered[-1].get("client") == "check", json.dumps(r),
+          point="AS2 recording")
+    steps = [("recording.ring_start", {}), ("recording.auto_points", {"enabled": False}), ("recording.point", {}),
+             ("recording.auto_points", {"enabled": True})]
+    answers = [command(m, dict(p, client="check")) for m, p in steps]
+    check("ring_start, auto_points off, point, auto_points on: accepted while recording",
+          all((a or {}).get("result", {}).get("state") == "AREA_RECORDING" for a in answers),
+          json.dumps(answers)[:400], point="AS2 recording")
+    mark = len(msgs)
+    r = command("recording.ring_stop", {"client": "check"})
+    data = ((r or {}).get("error") or {}).get("data") or {}
+    check("recording.ring_stop standing still: RECORDING_REFUSED RING_FEW_POINTS with its event and action",
+          refused_with(r, "RECORDING_REFUSED", "RING_FEW_POINTS", True, mark)
+          and data.get("action") == "stop_recording",
+          json.dumps(r)[:400], point="AS2 recording")
+    r = command("recording.discard", {"client": "check"})
+    check("recording.discard", ((r or {}).get("result") or {}).get("state") == "AREA_RECORDING", json.dumps(r),
+          point="AS2 recording")
+    r = command("recording.save", {"type": "mow", "client": "check"})
+    check("recording.save without an outline: WRONG_STATE", refused_with(r, "COMMAND_REFUSED", "WRONG_STATE", False)
+          and r["error"]["data"].get("state") == "AREA_RECORDING", json.dumps(r)[:300], point="AS2 recording")
+    mark = len(msgs)
+    r = command("recording.exit", {"client": "check"})
+    check("recording.exit answers IDLE", ((r or {}).get("result") or {}).get("state") == "IDLE"
+          and bool(wait_for(lambda: b'"current_state":"IDLE"' in (latest("robot_state/json") or b""), 3)),
+          json.dumps(r), point="AS2 recording")
 
 # The heartbeat carries the local time of TZ (default of tron.launch.py: Europe/Berlin), not UTC.
 beats = []
@@ -938,8 +1216,9 @@ if methods is not None and "docking.start" in methods:
     wait_for(lambda: b'"yard"' in (latest("map/json") or b""), 5)
     time.sleep(0.5)
     mark = len(msgs)
-    r = rpc("docking.start", None, "dock_start")
-    check("docking.start answers the state", (r or {}).get("result") == {"state": "DOCKING"}, json.dumps(r))
+    r = command("docking.start", None, "dock_start")
+    check("docking.start answers the state", (r or {}).get("result") == {"state": "DOCKING", "sub_state": ""},
+          json.dumps(r))
     state = wait_for(lambda: b'"current_state":"DOCKING"' in (latest("robot_state/json") or b""), 3)
     check("robot_state DOCKING", bool(state))
     check("abort_docking enabled while docking",
@@ -954,9 +1233,10 @@ if methods is not None and "docking.start" in methods:
         lambda: b'"current_state":"IDLE"' in (latest("robot_state/json") or b""), 5)), ",".join(map(str, states)))
     charging = wait_for(lambda: b'"is_charging":1' in (latest("robot_state/json") or b""), 6)
     check("docked -> is_charging", bool(charging))
-    r = rpc("docking.start", None, "dock_there")
+    r = command("docking.start", None, "dock_there")
     data = ((r or {}).get("error") or {}).get("data") or {}
-    check("docking.start on the contacts: ALREADY_THERE", data.get("reason") == "ALREADY_THERE", json.dumps(r))
+    check("docking.start on the contacts: ALREADY_THERE", data.get("reason") == "ALREADY_THERE"
+          and refused_with(r, "DRIVE_REFUSED", "ALREADY_THERE"), json.dumps(r))
 elif args.target == "mowbite-os":
     skip("docking.start", "not in rpc.methods")
 
@@ -985,4 +1265,59 @@ if args.write and args.target == "mowbite-os" and len(calibration_offered) == 3:
 r = rpc("map.replace", [{"areas": [], "docking_stations": []}], "10")
 check("an empty map empties it", r and "(0 areas)" in str(r.get("result")), json.dumps(r))
 
+
+def check_against_schema():
+    """AS3: everything seen on robot_state/json and events/json against the schema of system.api."""
+    if API_SCHEMA is None:
+        return
+    try:
+        import jsonschema
+    except ImportError:
+        skip("everything seen against system.api", "python3-jsonschema is missing", point="AS3 schema")
+        return
+    try:
+        jsonschema.Draft202012Validator.check_schema(API_SCHEMA)
+        check("system.api is a valid JSON Schema 2020-12", True, point="AS3 schema")
+    except jsonschema.SchemaError as e:
+        check("system.api is a valid JSON Schema 2020-12", False, str(e)[:200], point="AS3 schema")
+        return
+    defs = API_SCHEMA.get("$defs", {})
+
+    def validator(name):
+        return jsonschema.Draft202012Validator(dict(API_SCHEMA, **{"$ref": "#/$defs/" + name}))
+    for topic, kind in (("robot_state/json", "robot_state"), ("events/json", "event")):
+        payloads = [p for _, top, p, _ in msgs if top == topic and p]
+        bad, whole, own = [], validator(kind), {}
+        for p in payloads:
+            item = json.loads(p)
+            name = f"event.{item.get('type')}" if kind == "event" else kind
+            name = name if name in defs else "event.other"
+            if name not in own:
+                own[name] = validator(name)
+            errors = list(own[name].iter_errors(item)) or list(whole.iter_errors(item))
+            if errors:
+                bad.append(f"{item.get('type', kind)}: {errors[0].message[:160]}")
+        check(f"every {kind} seen ({len(payloads)}) as in system.api", bool(payloads) and not bad,
+              "; ".join(sorted(set(bad))[:4]), point="AS3 schema " + kind)
+    r = rpc("system.info", None, "info_schema")
+    errors = list(validator("system.info.result").iter_errors((r or {}).get("result")))
+    check("system.info as in system.api", bool(r) and not errors, errors[0].message[:200] if errors else "",
+          point="AS3 schema system.info")
+    # AS2: the answers of the commands and the data of their refusals.
+    bad = []
+    for method, r in COMMAND_ANSWERS:
+        if r and "result" in r:
+            errors = list(validator(method + ".result").iter_errors(r["result"]))
+        elif r and (r.get("error") or {}).get("code") == -32600:
+            errors = list(validator("refusal").iter_errors(r["error"].get("data")))
+        else:
+            errors = []
+        if errors:
+            bad.append(f"{method}: {errors[0].message[:160]}")
+    if COMMAND_ANSWERS:
+        check(f"every answer of a command ({len(COMMAND_ANSWERS)}) as in system.api", not bad, "; ".join(bad[:4]),
+              point="AS3 schema commands")
+
+
+check_against_schema()
 finish()

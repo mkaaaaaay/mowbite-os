@@ -2,6 +2,7 @@
 #define MOWBITE_LOGIC_REASONS_H
 
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -38,7 +39,7 @@ struct Rating {
   const char* resume;
 };
 
-// The one table of severity and resume per event and reason. action only for RECORDING_REFUSED.
+// severity and resume per event and reason from the catalog (mowbite_api). action only for RECORDING_REFUSED.
 Rating RateReason(const std::string& event, const std::string& code, const std::string& action = "");
 
 // Puts reason, its fields, message, severity and resume into the details of an event of this type.
@@ -53,6 +54,11 @@ Reason ResetRefusal(const std::string& code, const std::string& message, double 
 
 // Why the map cannot be used in this datum state; message is the text of mowbite_map.
 Reason MapReason(MapDatum datum, const std::string& message);
+
+// How a path of the follower ended; code is the name of its result (DONE, CANCELED, EMERGENCY, ...). A path the logic
+// stopped tells the cause, the follower's message in brackets, also when the follower stopped for the same emergency
+// before the cancel reached it.
+Reason FollowerEndReason(const std::string& code, const std::string& message, const std::optional<Reason>& cancel);
 
 }  // namespace mowbite_logic
 

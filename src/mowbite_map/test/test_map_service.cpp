@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_map/map_service.h"
 #include "mowbite_map/sha256.h"
 
@@ -19,6 +20,14 @@ using mowbite_map::Notice;
 namespace fs = std::filesystem;
 
 namespace {
+
+// The events of the service, each checked against the catalog of the interface as events/json gets it.
+std::vector<mowbite_map::Event> Checked(std::vector<mowbite_map::Event> events) {
+  for (const auto& event : events) {
+    for (const auto& problem : mowbite_api::CheckEvent(event.type, event.details)) ADD_FAILURE() << problem;
+  }
+  return events;
+}
 
 class TempDir {
  public:
@@ -54,7 +63,7 @@ MapService Started(const MapService::Config& config) {
   service.TakeChanged();
   service.TakeStatusChanged();
   service.TakeNotices();
-  service.TakeEvents();
+  Checked(service.TakeEvents());
   return service;
 }
 
@@ -566,7 +575,7 @@ TEST(MapDatum, AnEmptyMapHasNothingToTie) {
   EXPECT_FALSE(service.status().mowing_allowed);
   EXPECT_TRUE(service.TakeStatusChanged());
   EXPECT_FALSE(service.TakeStatusChanged());
-  EXPECT_TRUE(service.TakeEvents().empty());
+  EXPECT_TRUE(Checked(service.TakeEvents()).empty());
 }
 
 TEST(MapDatum, TiesAStoredMapToTheDatumInUse) {
@@ -595,7 +604,7 @@ TEST(MapDatum, KeepsTheTieAcrossARestart) {
   again.SetDatum(kDatum);
   EXPECT_EQ(again.status().datum, DatumState::kMatch);
   EXPECT_TRUE(again.status().mowing_allowed);
-  EXPECT_TRUE(again.TakeEvents().empty());
+  EXPECT_TRUE(Checked(again.TakeEvents()).empty());
   EXPECT_TRUE(Mentions(again.TakeNotices(), Notice::Level::kInfo, "The map belongs to the datum in use"));
 }
 
@@ -611,7 +620,7 @@ TEST(MapDatum, StopsMowingWhenTheDatumChanged) {
   EXPECT_NE(status.reason.find("recorded for the datum 52.0000000, 9.0000000"), std::string::npos) << status.reason;
   EXPECT_NE(status.reason.find("1000.00 m apart"), std::string::npos) << status.reason;
   EXPECT_TRUE(Mentions(again.TakeNotices(), Notice::Level::kError, "No mowing, the map does not fit the datum"));
-  const auto events = again.TakeEvents();
+  const auto events = Checked(again.TakeEvents());
   ASSERT_EQ(events.size(), 1u);
   EXPECT_TRUE(HasEvent(events, "mismatch"));
   EXPECT_EQ(events[0].details["reason"], "MAP_MISMATCH");
@@ -620,7 +629,7 @@ TEST(MapDatum, StopsMowingWhenTheDatumChanged) {
   EXPECT_NE(events[0].details["message"].get<std::string>().find("m apart"), std::string::npos);
   // The same datum again is nothing new.
   again.SetDatum(Moved(1000.0));
-  EXPECT_TRUE(again.TakeEvents().empty());
+  EXPECT_TRUE(Checked(again.TakeEvents()).empty());
   EXPECT_TRUE(again.TakeNotices().empty());
 }
 
@@ -682,7 +691,7 @@ TEST(MapDatum, AMapWithoutARecordedDatumIsNotTrusted) {
   service.SetDatum(kDatum);
   EXPECT_EQ(service.status().datum, DatumState::kUnbound);
   EXPECT_FALSE(service.status().mowing_allowed);
-  EXPECT_TRUE(HasEvent(service.TakeEvents(), "unbound"));
+  EXPECT_TRUE(HasEvent(Checked(service.TakeEvents()), "unbound"));
   EXPECT_TRUE(Mentions(service.TakeNotices(), Notice::Level::kError, "The map has no recorded datum"));
 
   // Areas cannot be added to a map nobody can vouch for ...
