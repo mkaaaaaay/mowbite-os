@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <random>
 
+#include "mowbite_api/catalog.h"
+
 namespace mowbite_logic {
 
 namespace {
@@ -26,29 +28,6 @@ std::string NewId() {
   return id;
 }
 
-// EmergencyReason of OpenMower up to bit 12, then the own bits of hw/status, one name per bit.
-const char* const kReasonNames[] = {"LATCH",
-                                    "TIMEOUT_INPUTS",
-                                    "STOP",
-                                    "LIFT",
-                                    "LIFT_MULTIPLE",
-                                    "COLLISION",
-                                    "TIMEOUT_HIGH_LEVEL",
-                                    "HIGH_LEVEL",
-                                    "SERVICE_NOT_READY",
-                                    "COLLISION_MULTIPLE",
-                                    "MOWER_RPM_TIMEOUT",
-                                    "MOWER_RPM_LIMIT",
-                                    "FIRMWARE_INCOMPATIBLE",
-                                    "TILT",
-                                    "FENCE",
-                                    "STUCK",
-                                    "IMU_TIMEOUT",
-                                    "MOWER_NOT_STOPPED",
-                                    "WHEEL_RUNAWAY",
-                                    "FOREIGN_HOST",
-                                    "DRIVER_STALL"};
-
 SensorDefinition Range(std::string id, std::string name, std::string unit, SensorMeaning meaning, double min,
                        double max) {
   SensorDefinition s;
@@ -69,14 +48,18 @@ SensorDefinition Temperature(std::string id, std::string name, double min, doubl
 
 }  // namespace
 
+namespace {
+
+EventObserver event_observer = nullptr;
+
+}  // namespace
+
 std::string EmergencyReasonNames(int reason) {
-  std::string names;
-  for (size_t bit = 0; bit < sizeof(kReasonNames) / sizeof(kReasonNames[0]); bit++) {
-    if ((reason & (1 << bit)) == 0) continue;
-    if (!names.empty()) names += ", ";
-    names += kReasonNames[bit];
-  }
-  return names;
+  return mowbite_api::EmergencyNames(reason);
+}
+
+void SetEventObserver(EventObserver observer) {
+  event_observer = observer;
 }
 
 namespace {
@@ -226,13 +209,17 @@ void LogicCore::OnPositionJump(double to_x, double to_y, double distance_m, bool
   AddEvent("POSITION_JUMP", std::move(details));
 }
 
-// Every event carries the position where it happened.
-void LogicCore::AddEvent(const std::string& type, json details) {
+// Every event carries the position where it happened, and the client of the command that caused it.
+std::string LogicCore::AddEvent(const std::string& type, json details) {
   details["x"] = last_x_;
   details["y"] = last_y_;
   if (!job_.progress().job_id.empty()) details["job_id"] = job_.progress().job_id;
   if (!session_id_.empty()) details["session_id"] = session_id_;
-  events_.push_back({type, std::move(details)});
+  if (!client_.empty() && !details.contains("client")) details["client"] = client_;
+  if (event_observer) event_observer(type, details);
+  std::string id = NewId();
+  events_.push_back({type, std::move(details), id});
+  return id;
 }
 
 bool LogicCore::Emergency() const {
@@ -269,86 +256,252 @@ void LogicCore::UpdateEmergency() {
     if (emergency && state_ == State::kDocking) EndDocking(why);
     if (emergency && state_ == State::kCalibrating) EndCalibration(why, true);
     // reason stays the bits of OpenMower; resetting is up to the user.
-    AddEvent("EMERGENCY", {{"emergency", emergency},
-                           {"reason", reason_},
-                           {"severity", emergency ? "error" : "info"},
-                           {"resume", emergency ? "user" : "auto"}});
+    json details = {{"emergency", emergency},
+                    {"reason", reason_},
+                    {"severity", emergency ? "error" : "info"},
+                    {"resume", emergency ? "user" : "auto"}};
+    // The end after emergency.reset tells who released it (masterplan 3.1a); a new emergency drops the request.
+    if (!emergency && release_pending_) {
+      details["source"] = "rpc";
+      if (!release_client_.empty()) details["client"] = release_client_;
+    }
+    release_pending_ = false;
+    release_answered_s_.reset();
+    AddEvent("EMERGENCY", std::move(details));
     actions_changed_ = true;
   }
 }
 
 ActionResult LogicCore::OnAction(const std::string& action_id) {
-  if (action_id == kRootPrefix + "/reset_emergency") return ActionResult::kReleaseEmergency;
-  if (action_id == kIdlePrefix + "/start_mowing") {
-    const Reason why = StartProblem();
-    if (!why.empty()) {
-      RefuseStart(why);
-      return ActionResult::kRejected;
-    }
-    if (DockContact()) {
-      BeginDockCheck(DockCheck::kMowing);
-      return ActionResult::kDone;
-    }
-    StartMowing();
-    return ActionResult::kDone;
+  json params;
+  if (const mowbite_api::Command* command = mowbite_api::CommandOfAction(action_id, &params)) {
+    const CommandOutcome outcome = Command(command->name, params);
+    if (outcome.release) return ActionResult::kReleaseEmergency;
+    return outcome.accepted ? ActionResult::kDone : ActionResult::kRejected;
   }
-  if (action_id == kIdlePrefix + "/reset_job") {
-    if (state_ != State::kIdle || !job_.Unfinished()) return ActionResult::kRejected;
-    // The event carries the id of the dropped job, the checkpoint is saved without it.
-    AddEvent("JOB_RESET", json::object());
-    job_.Reset();
-    CheckpointNow();
-    actions_changed_ = true;
-    return ActionResult::kDone;
-  }
-  if (action_id.rfind(kMowingPrefix + "/", 0) == 0) {
-    if (state_ != State::kMowing) return ActionResult::kRejected;
-    return OnMowingAction(action_id.substr(kMowingPrefix.size() + 1));
-  }
-  if (action_id == kUndockingPrefix + "/abort_undocking") {
-    if (state_ != State::kUndocking) return ActionResult::kRejected;
-    AbortUndocking(Reason("STOPPED", "Aborted by the app"));
-    return ActionResult::kDone;
-  }
-  if (action_id == kDockingPrefix + "/abort_docking") {
-    if (state_ != State::kDocking) return ActionResult::kRejected;
-    notices_.push_back("Docking stopped: aborted by the app");
-    EndDocking(Reason("STOPPED", "Aborted by the app"));
-    return ActionResult::kDone;
-  }
-  if (action_id == kIdlePrefix + "/start_area_recording") {
-    if (state_ != State::kIdle || emergency_) return ActionResult::kRejected;
-    if (Held()) {
-      json details = {{"action", "start_area_recording"}};
-      PutReason(&details, "RECORDING_REFUSED", HoldProblem());
-      AddEvent("RECORDING_REFUSED", std::move(details));
-      return ActionResult::kRejected;
-    }
-    if (!map_writable_) {
-      json details = {{"action", "start_area_recording"}};
-      PutReason(&details, "RECORDING_REFUSED", map_reason_);
-      AddEvent("RECORDING_REFUSED", std::move(details));
-      return ActionResult::kRejected;
-    }
-    SetState(State::kAreaRecording);
-    return ActionResult::kDone;
-  }
-  if (action_id == kRecordingPrefix + "/exit_recording_mode") {
-    if (state_ != State::kAreaRecording) return ActionResult::kRejected;
-    SetState(State::kIdle);
-    return ActionResult::kDone;
-  }
-  if (action_id.rfind(kRecordingPrefix + "/", 0) == 0 && state_ == State::kAreaRecording) {
-    const AreaRecorder::Result result = recorder_.OnAction(action_id.substr(kRecordingPrefix.size() + 1));
-    PullRecorder();
-    if (result == AreaRecorder::Result::kDone) return ActionResult::kDone;
-    if (result == AreaRecorder::Result::kRefused) return ActionResult::kRejected;
-  }
+  // start_manual_mowing and stop_manual_mowing have no command: the blade comes after phase 7.
   const bool known_prefix = action_id.rfind(kIdlePrefix + "/", 0) == 0 ||
                             action_id.rfind(kRecordingPrefix + "/", 0) == 0 ||
                             action_id.rfind(kUndockingPrefix + "/", 0) == 0 ||
                             action_id.rfind(kDockingPrefix + "/", 0) == 0;
   return known_prefix ? ActionResult::kRejected : ActionResult::kUnknown;
+}
+
+CommandOutcome LogicCore::Command(const std::string& name, const json& params, const Reason& node_problem) {
+  CommandOutcome out;
+  const mowbite_api::Command* command = mowbite_api::FindCommand(name);
+  if (!command) {
+    out.invalid = "No command " + name;
+    return out;
+  }
+  out.invalid = mowbite_api::CheckParams(*command, params, &out.invalid_field);
+  // open_mower_ros #359: the areas of the job in order; the OS keeps no such list yet.
+  if (out.invalid.empty() && name == "mowing.start" && params.contains("areas")) {
+    out.invalid = "areas: this OS keeps no list of areas yet, start without it";
+    out.invalid_field = "areas";
+  }
+  if (!out.invalid.empty()) return out;
+  client_ = params.is_object() ? params.value("client", "") : "";
+  const size_t first_event = events_.size();
+  const Reason why = RunCommand(*command, params, node_problem, &out);
+  client_.clear();
+  if (why.empty()) {
+    out.accepted = true;
+    out.result = CommandAnswer(out.result);
+    return out;
+  }
+  out.why = why;
+  // The refusal that went out as an event of its own names the group; else the group whose reason it is.
+  std::string group;
+  std::string event_id;
+  json action;
+  for (size_t i = first_event; i < events_.size(); i++) {
+    const Event& event = events_[i];
+    const bool refused = event.type.size() > 8 && event.type.compare(event.type.size() - 8, 8, "_REFUSED") == 0;
+    if (!refused || event.details.value("reason", "") != why.code) continue;
+    group = event.type;
+    event_id = event.id;
+    if (event.details.contains("action")) action = event.details["action"];
+  }
+  if (group.empty()) {
+    const mowbite_api::EventEntry* answers = mowbite_api::FindReasonGroup("COMMAND_REFUSED");
+    for (const auto& reason : answers->reasons) {
+      if (reason.code == why.code) group = "COMMAND_REFUSED";
+    }
+  }
+  if (group.empty()) group = command->refused.empty() ? "COMMAND_REFUSED" : command->refused;
+  out.data = RefusalData(group, why, event_id);
+  if (!action.is_null()) out.data["action"] = action;
+  return out;
+}
+
+json LogicCore::CommandAnswer(const json& fields) const {
+  const RobotStateData state = RobotState();
+  json answer = {{"state", state.state}, {"sub_state", state.sub_state}};
+  for (const auto& [key, value] : fields.items()) answer[key] = value;
+  return answer;
+}
+
+json LogicCore::RefusalData(const std::string& group, const Reason& why, const std::string& event_id) const {
+  json data = {{"event", group}};
+  PutReason(&data, group, why);
+  // BUSY brings its own state, what the mower is busy with.
+  const RobotStateData state = RobotState();
+  if (!data.contains("state")) data["state"] = state.state;
+  if (!data.contains("sub_state")) data["sub_state"] = state.sub_state;
+  if (!event_id.empty()) data["event_id"] = event_id;
+  return data;
+}
+
+Reason LogicCore::WrongState() const {
+  const RobotStateData state = RobotState();
+  const std::string now = state.state + (state.sub_state.empty() ? "" : " " + state.sub_state);
+  return Reason("WRONG_STATE", "Not now: the mower is " + now)
+      .With("state", state.state)
+      .With("sub_state", state.sub_state);
+}
+
+Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& params, const Reason& node_problem,
+                             CommandOutcome* out) {
+  const std::string& name = command.name;
+  if (name == "emergency.reset") {
+    release_pending_ = true;
+    release_client_ = client_;
+    release_answered_s_.reset();
+    out->release = true;
+    return {};
+  }
+  if (name == "mowing.start") {
+    Reason why = StartProblem();
+    if (why.empty()) why = node_problem;
+    if (!why.empty()) {
+      RefuseStart(why);
+      return why;
+    }
+    // On the docking station the reference check comes first; its refusal is an event of its own.
+    out->result["check"] = DockContact();
+    if (DockContact()) {
+      BeginDockCheck(DockCheck::kMowing);
+    } else {
+      StartMowing();
+    }
+    return {};
+  }
+  if (name == "mowing.reset_job") {
+    if (state_ != State::kIdle) return WrongState();
+    if (!job_.Unfinished()) return Reason("NO_JOB", "There is no unfinished job");
+    out->result["job_id"] = job_.progress().job_id;
+    // The event carries the id of the dropped job, the checkpoint is saved without it.
+    AddEvent("JOB_RESET", json::object());
+    job_.Reset();
+    CheckpointNow();
+    actions_changed_ = true;
+    return {};
+  }
+  if (name.rfind("mowing.", 0) == 0) {
+    if (state_ != State::kMowing) return WrongState();
+    const int waiting = kPauseManual | kPauseEmergency | kPauseFault;
+    if (name == "mowing.pause") {
+      if (pause_ & kPauseManual) return WrongState();
+      Pause(kPauseManual, Reason("MANUAL", "Paused by the app"));
+      return {};
+    }
+    if (name == "mowing.continue") {
+      if ((pause_ & waiting) == 0) return WrongState();
+      // The EMERGENCY event told already: no MOWING_REFUSED.
+      if (emergency_) return Reason("EMERGENCY", "Emergency: reset it first");
+      if (Held()) {
+        const Reason why = HoldProblem();
+        RefuseStart(why);
+        return why;
+      }
+      // Without GPS it still waits for a good position.
+      Unpause(waiting);
+      return {};
+    }
+    if (name == "mowing.abort") {
+      EndJob(false, true);
+      return {};
+    }
+    // skip_area, skip_path: only the area or path the client saw.
+    const bool area = name == "mowing.skip_area";
+    const char* key = area ? "area" : "path";
+    const int now = area ? job_.progress().area : job_.progress().path;
+    if (params.contains(key) && params[key].get<double>() != now) {
+      return Reason("CHANGED", std::string("The ") + key + " changed meanwhile: nothing was skipped").With(key, now);
+    }
+    out->result[key] = now;
+    (area ? skip_area_ : skip_path_) = true;
+    skip_client_ = client_;
+    // A leg on its way ends first, its index counts.
+    if (leg_ == Leg::kApproach || leg_ == Leg::kFollow) {
+      CancelDrive(Reason("STOPPED", "Skipped by the app"));
+      stop_requested_ = true;
+    } else {
+      ApplySkips();
+    }
+    return {};
+  }
+  if (name == "undocking.abort") {
+    if (state_ != State::kUndocking) return WrongState();
+    AbortUndocking(Reason("STOPPED", "Aborted by the app"));
+    return {};
+  }
+  if (name == "docking.abort") {
+    if (state_ != State::kDocking) return WrongState();
+    notices_.push_back("Docking stopped: aborted by the app");
+    EndDocking(Reason("STOPPED", "Aborted by the app"));
+    return {};
+  }
+  if (name == "docking.start") {
+    Reason why = DockingProblem();
+    if (why.empty()) why = node_problem;
+    if (!why.empty()) {
+      RefuseDrive(why);
+      return why;
+    }
+    return StartDocking();
+  }
+  if (name == "recording.start") {
+    if (state_ != State::kIdle) return WrongState();
+    // The EMERGENCY event told already: no RECORDING_REFUSED.
+    if (emergency_) return Reason("EMERGENCY", "Emergency: reset it first");
+    const Reason why = Held() ? HoldProblem() : map_writable_ ? Reason() : map_reason_;
+    if (!why.empty()) {
+      json details = {{"action", "start_area_recording"}};
+      PutReason(&details, "RECORDING_REFUSED", why);
+      AddEvent("RECORDING_REFUSED", std::move(details));
+      return why;
+    }
+    SetState(State::kAreaRecording);
+    return {};
+  }
+  if (name == "recording.exit") {
+    if (state_ != State::kAreaRecording) return WrongState();
+    SetState(State::kIdle);
+    return {};
+  }
+  return RecordingCommand(command, params);
+}
+
+// A step of the recording: the recorder decides by the action the command stands for.
+Reason LogicCore::RecordingCommand(const mowbite_api::Command& command, const json& params) {
+  if (state_ != State::kAreaRecording) return WrongState();
+  std::string action;
+  for (const auto& entry : command.actions) {
+    bool fits = true;
+    for (const auto& [key, value] : entry.params.items()) fits = fits && params.value(key, json()) == value;
+    if (fits) {
+      action = entry.action;
+      break;
+    }
+  }
+  if (action.rfind(kRecordingPrefix + "/", 0) != 0) return WrongState();
+  Reason why;
+  const AreaRecorder::Result result = recorder_.OnAction(action.substr(kRecordingPrefix.size() + 1), &why);
+  PullRecorder();
+  if (result == AreaRecorder::Result::kDone) return {};
+  return why.empty() ? WrongState() : why;
 }
 
 std::optional<std::pair<double, double>> LogicCore::OnTeleop(double vx, double vz, double now_s) {
@@ -1491,10 +1644,21 @@ void LogicCore::RefuseStart(const Reason& why) {
   AddEvent("MOWING_REFUSED", std::move(details));
 }
 
-void LogicCore::RefuseReset(const Reason& why) {
+std::string LogicCore::RefuseReset(const Reason& why) {
   json details = json::object();
   PutReason(&details, "EMERGENCY_RESET_REFUSED", why);
-  AddEvent("EMERGENCY_RESET_REFUSED", std::move(details));
+  // The refusal carries the client of the request it answers.
+  const std::string client = client_;
+  if (release_pending_) client_ = release_client_;
+  release_pending_ = false;
+  release_answered_s_.reset();
+  const std::string id = AddEvent("EMERGENCY_RESET_REFUSED", std::move(details));
+  client_ = client;
+  return id;
+}
+
+void LogicCore::OnReleaseAnswered(double now_s) {
+  if (release_pending_) release_answered_s_ = now_s;
 }
 
 void LogicCore::GeometryChanged(const std::vector<std::string>& changed, const std::vector<std::string>& below_default,
@@ -1567,42 +1731,10 @@ void LogicCore::StartMowing() {
   CheckpointNow();
 }
 
-ActionResult LogicCore::OnMowingAction(const std::string& name) {
-  if (name == "pause") {
-    if (pause_ & kPauseManual) return ActionResult::kRejected;
-    Pause(kPauseManual, Reason("MANUAL", "Paused by the app"));
-    return ActionResult::kDone;
-  }
-  if (name == "continue") {
-    const int waiting = kPauseManual | kPauseEmergency | kPauseFault;
-    if (emergency_ || (pause_ & waiting) == 0) return ActionResult::kRejected;
-    if (Held()) {
-      RefuseStart(HoldProblem());
-      return ActionResult::kRejected;
-    }
-    // Without GPS it still waits for a good position.
-    Unpause(waiting);
-    return ActionResult::kDone;
-  }
-  if (name == "abort_mowing") {
-    EndJob(false, true);
-    return ActionResult::kDone;
-  }
-  if (name == "skip_area" || name == "skip_path") {
-    (name == "skip_area" ? skip_area_ : skip_path_) = true;
-    // A leg on its way ends first, its index counts.
-    if (leg_ == Leg::kApproach || leg_ == Leg::kFollow) {
-      CancelDrive(Reason("STOPPED", "Skipped by the app"));
-      stop_requested_ = true;
-    } else {
-      ApplySkips();
-    }
-    return ActionResult::kDone;
-  }
-  return ActionResult::kUnknown;
-}
-
 void LogicCore::ApplySkips() {
+  // Its events carry the client of the skip, also after the leg stopped.
+  const std::string client = client_;
+  if (client_.empty()) client_ = skip_client_;
   if (skip_area_) {
     if (const JobArea* area = job_.CurrentArea()) {
       json details = {{"area_id", area->id}, {"area_name", area->name}};
@@ -1621,6 +1753,8 @@ void LogicCore::ApplySkips() {
     CheckpointNow();
   }
   skip_area_ = skip_path_ = false;
+  skip_client_.clear();
+  client_ = client;
 }
 
 void LogicCore::Pause(int why, const Reason& reason) {
@@ -1776,6 +1910,10 @@ void LogicCore::OnLegEnded(LegEnd end, size_t index, const Reason& reason) {
 }
 
 void LogicCore::OnTick(double now_s) {
+  if (release_answered_s_ && now_s - *release_answered_s_ > kReleaseSourceS) {
+    release_pending_ = false;
+    release_answered_s_.reset();
+  }
   if (state_ == State::kDocking) TickDocking(now_s);
   if (state_ != State::kMowing) return;
   if (pause_ & kPauseGps) {

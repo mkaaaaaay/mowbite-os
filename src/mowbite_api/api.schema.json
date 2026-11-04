@@ -1,0 +1,5470 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mowbite-os:api:3",
+  "title": "MowBite OS app interface",
+  "description": "robot_state, events and RPC methods of MowBite OS over MQTT, as system.api gives them. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals), x-emergency-bits the bits of emergency, x-commands the methods with params, result, the event of their refusal and the actions that do the same.",
+  "x-api": 3,
+  "$defs": {
+    "robot_state": {
+      "type": "object",
+      "description": "robot_state/json, retained: the state of the mower for the app",
+      "properties": {
+        "battery_percentage": {
+          "type": "number",
+          "description": "Charge of the battery from 0 to 1"
+        },
+        "gps_percentage": {
+          "type": "number",
+          "description": "Quality of the position from 0 to 1, 0 without a recent pose or heading"
+        },
+        "current_action_progress": {
+          "type": "number",
+          "description": "Always 0, kept for the app of OpenMower"
+        },
+        "current_state": {
+          "type": "string",
+          "description": "State of the logic: IDLE, MOWING, DOCKING, UNDOCKING, AREA_RECORDING and the like"
+        },
+        "current_sub_state": {
+          "type": "string",
+          "description": "What the state does right now, empty for nothing in particular"
+        },
+        "current_area": {
+          "type": "integer",
+          "description": "While mowing the index of the area in the plan, otherwise -1"
+        },
+        "current_path": {
+          "type": "integer",
+          "description": "While mowing the index of the path in the plan of the area, otherwise -1"
+        },
+        "current_path_index": {
+          "type": "integer",
+          "description": "While mowing the index of the pose in the path, otherwise -1"
+        },
+        "emergency": {
+          "type": "integer",
+          "description": "1 while an emergency stops motion and blade"
+        },
+        "emergency_reason": {
+          "type": "integer",
+          "description": "The bits of the emergency (x-emergency-bits), 0 without one"
+        },
+        "is_charging": {
+          "type": "integer",
+          "description": "1 while the mower charges on the docking station"
+        },
+        "rain_detected": {
+          "type": "integer",
+          "description": "1 while the rain sensor reports rain"
+        },
+        "pose": {
+          "type": "object",
+          "description": "The pose of the mower in the map",
+          "properties": {
+            "x": {
+              "type": "number",
+              "description": "East of the datum of the map",
+              "x-unit": "m"
+            },
+            "y": {
+              "type": "number",
+              "description": "North of the datum of the map",
+              "x-unit": "m"
+            },
+            "heading": {
+              "type": "number",
+              "description": "Counter-clockwise from east, -pi to pi",
+              "x-unit": "rad"
+            },
+            "pos_accuracy": {
+              "type": "number",
+              "description": "Expected error of the position",
+              "x-unit": "m"
+            },
+            "heading_accuracy": {
+              "type": "number",
+              "description": "Expected error of the heading",
+              "x-unit": "rad"
+            },
+            "heading_valid": {
+              "type": "integer",
+              "description": "1 once the heading is known"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "heading",
+            "pos_accuracy",
+            "heading_accuracy",
+            "heading_valid"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "battery_percentage",
+        "gps_percentage",
+        "current_action_progress",
+        "current_state",
+        "current_sub_state",
+        "current_area",
+        "current_path",
+        "current_path_index",
+        "emergency",
+        "emergency_reason",
+        "is_charging",
+        "rain_detected",
+        "pose"
+      ],
+      "additionalProperties": false
+    },
+    "event.BOOTED": {
+      "type": "object",
+      "description": "The OS started; sent again with the same id after the first connect",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "BOOTED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "bridge"
+    },
+    "event.SHUTDOWN": {
+      "type": "object",
+      "description": "The OS stops",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "SHUTDOWN",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "bridge"
+    },
+    "event.STATE": {
+      "type": "object",
+      "description": "The state changed; a pause carries its reason",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "STATE",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "IDLE",
+            "AREA_RECORDING",
+            "MOWING",
+            "PAUSED",
+            "UNDOCKING",
+            "DOCKING"
+          ],
+          "description": "The new state"
+        },
+        "sub_state": {
+          "type": "string",
+          "enum": [
+            "DRIVING",
+            "CALIBRATING"
+          ],
+          "description": "What IDLE does: a drive or a calibration drive"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "MANUAL",
+            "NO_POSITION",
+            "POSE_LOST",
+            "POSITION_ACCURACY",
+            "HEADING",
+            "NO_HEADING",
+            "EMERGENCY",
+            "NO_SAFETY_MEASUREMENT",
+            "MAP_UNKNOWN",
+            "NO_MOWING_AREA",
+            "MAP_MISMATCH",
+            "MAP_UNREADABLE",
+            "BLADE_SPINUP_FAILED",
+            "BLADE_REFUSED",
+            "PLANNING_FAILED",
+            "INVALID",
+            "NOT_ALLOWED",
+            "CROSS_TRACK",
+            "OUTSIDE",
+            "TIMEOUT",
+            "APPROACH_FAILED",
+            "FOLLOWER_MISSING"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "accuracy": {
+          "type": "number",
+          "description": "Expected error of the position",
+          "x-unit": "m"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The limit the value went past, in the unit of the value"
+        },
+        "datum_state": {
+          "type": "string",
+          "enum": [
+            "unbound"
+          ],
+          "description": "unbound when the map has no recorded datum"
+        },
+        "seconds": {
+          "type": "number",
+          "description": "How long it lasted",
+          "x-unit": "s"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "state"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.MOWING_REFUSED": {
+      "type": "object",
+      "description": "A start of mowing was refused",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "MOWING_REFUSED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "BUSY",
+            "HOLD",
+            "RAIN",
+            "ON_DOCK",
+            "STILL_STOPPING",
+            "EMERGENCY",
+            "NO_SAFETY_MEASUREMENT",
+            "MAP_UNKNOWN",
+            "MAP_MISMATCH",
+            "MAP_UNREADABLE",
+            "PLANNER_MISSING",
+            "FOLLOWER_MISSING",
+            "BATTERY_LOW",
+            "NO_POSITION",
+            "POSITION_ACCURACY",
+            "NO_HEADING",
+            "NO_MOWING_AREA",
+            "NO_DOCK",
+            "DOCK_UNREACHABLE",
+            "NO_DOCK_CONTACT",
+            "REFERENCE_MISMATCH"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "state": {
+          "type": "string",
+          "description": "What it is busy with"
+        },
+        "until": {
+          "type": "integer",
+          "description": "When the hold of the logic ends; none for the hold of the driver",
+          "x-unit": "unix s"
+        },
+        "distance": {
+          "type": "number",
+          "description": "The distance the reason is about",
+          "x-unit": "m"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The limit the value went past, in the unit of the value"
+        },
+        "datum_state": {
+          "type": "string",
+          "enum": [
+            "unbound"
+          ],
+          "description": "unbound when the map has no recorded datum"
+        },
+        "seconds": {
+          "type": "number",
+          "description": "How long it lasted",
+          "x-unit": "s"
+        },
+        "battery_voltage": {
+          "type": "number",
+          "description": "Voltage of the battery",
+          "x-unit": "V"
+        },
+        "battery_percentage": {
+          "type": "integer",
+          "description": "Charge of the battery",
+          "x-unit": "%"
+        },
+        "accuracy": {
+          "type": "number",
+          "description": "Expected error of the position",
+          "x-unit": "m"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.DRIVE_REFUSED": {
+      "type": "object",
+      "description": "A drive (to a point or home) was refused",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "DRIVE_REFUSED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "BUSY",
+            "HOLD",
+            "ON_DOCK",
+            "STILL_STOPPING",
+            "ALREADY_THERE",
+            "EMERGENCY",
+            "NO_SAFETY_MEASUREMENT",
+            "MAP_UNKNOWN",
+            "MAP_MISMATCH",
+            "MAP_UNREADABLE",
+            "PLANNER_MISSING",
+            "FOLLOWER_MISSING",
+            "NO_POSITION",
+            "POSITION_ACCURACY",
+            "NO_HEADING",
+            "NO_MOWING_AREA",
+            "NO_DOCK",
+            "DOCK_UNREACHABLE",
+            "NO_DOCK_CONTACT",
+            "REFERENCE_MISMATCH"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "state": {
+          "type": "string",
+          "description": "What it is busy with"
+        },
+        "until": {
+          "type": "integer",
+          "description": "When the hold of the logic ends; none for the hold of the driver",
+          "x-unit": "unix s"
+        },
+        "distance": {
+          "type": "number",
+          "description": "The distance the reason is about",
+          "x-unit": "m"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The limit the value went past, in the unit of the value"
+        },
+        "datum_state": {
+          "type": "string",
+          "enum": [
+            "unbound"
+          ],
+          "description": "unbound when the map has no recorded datum"
+        },
+        "seconds": {
+          "type": "number",
+          "description": "How long it lasted",
+          "x-unit": "s"
+        },
+        "accuracy": {
+          "type": "number",
+          "description": "Expected error of the position",
+          "x-unit": "m"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.RECORDING_REFUSED": {
+      "type": "object",
+      "description": "A step of the recording of an area was refused",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "RECORDING_REFUSED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "start_area_recording",
+            "start_recording",
+            "stop_recording",
+            "finish_navigation_area",
+            "finish_mowing_area",
+            "finish_discard",
+            "record_dock",
+            "auto_point_collecting_enable",
+            "auto_point_collecting_disable",
+            "collect_point",
+            "start_manual_mowing",
+            "stop_manual_mowing",
+            "point"
+          ],
+          "description": "The step that was refused; point for an automatic point"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "POSITION_ACCURACY",
+            "HOLD",
+            "STILL_SAVING",
+            "EMERGENCY",
+            "MAP_UNKNOWN",
+            "MAP_MISMATCH",
+            "SAVE_FAILED",
+            "NO_POSITION",
+            "NO_HEADING",
+            "NO_DOCK_CONTACT",
+            "DOCK_TOO_CLOSE",
+            "NO_OUTLINE",
+            "RING_FEW_POINTS",
+            "RING_CROSSES_ITSELF",
+            "RING_TOO_SMALL",
+            "TOO_MANY_POINTS",
+            "POINT_TOO_CLOSE"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "accuracy": {
+          "type": "number",
+          "description": "Expected error of the position",
+          "x-unit": "m"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The limit the value went past, in the unit of the value"
+        },
+        "until": {
+          "type": "integer",
+          "description": "When the hold of the logic ends; none for the hold of the driver",
+          "x-unit": "unix s"
+        },
+        "datum_state": {
+          "type": "string",
+          "enum": [
+            "unbound"
+          ],
+          "description": "unbound when the map has no recorded datum"
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "INVALID",
+            "DATUM",
+            "TOO_LARGE",
+            "STORAGE",
+            "NO_ANSWER"
+          ],
+          "description": "What went wrong"
+        },
+        "distance": {
+          "type": "number",
+          "description": "The distance the reason is about",
+          "x-unit": "m"
+        },
+        "points": {
+          "type": "integer",
+          "description": "Points of the ring"
+        },
+        "area": {
+          "type": "number",
+          "description": "Area of the ring",
+          "x-unit": "m2"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "action",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.CALIBRATION_REFUSED": {
+      "type": "object",
+      "description": "A start of the calibration drive was refused",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "CALIBRATION_REFUSED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "BUSY",
+            "HOLD",
+            "ON_DOCK",
+            "STILL_STOPPING",
+            "EMERGENCY",
+            "NO_SAFETY_MEASUREMENT",
+            "MAP_UNKNOWN",
+            "MAP_MISMATCH",
+            "MAP_UNREADABLE",
+            "CALIBRATION_MISSING",
+            "SENSOR_MISSING",
+            "IMU_GRAVITY",
+            "NO_POSITION",
+            "POSITION_ACCURACY",
+            "NO_HEADING",
+            "BATTERY_LOW",
+            "NO_MOWING_AREA",
+            "NO_ROOM",
+            "NO_RTK",
+            "GNSS_RATE",
+            "SLOPE"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "state": {
+          "type": "string",
+          "description": "What it is busy with"
+        },
+        "until": {
+          "type": "integer",
+          "description": "When the hold of the logic ends; none for the hold of the driver",
+          "x-unit": "unix s"
+        },
+        "distance": {
+          "type": "number",
+          "description": "The distance the reason is about",
+          "x-unit": "m"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The limit the value went past, in the unit of the value"
+        },
+        "datum_state": {
+          "type": "string",
+          "enum": [
+            "unbound"
+          ],
+          "description": "unbound when the map has no recorded datum"
+        },
+        "seconds": {
+          "type": "number",
+          "description": "How long it lasted",
+          "x-unit": "s"
+        },
+        "rate": {
+          "type": "number",
+          "description": "How often it reports",
+          "x-unit": "1/s"
+        },
+        "gravity": {
+          "type": "number",
+          "description": "The gravity it measures",
+          "x-unit": "m/s2"
+        },
+        "tilt": {
+          "type": "number",
+          "description": "The tilt it measures",
+          "x-unit": "deg"
+        },
+        "accuracy": {
+          "type": "number",
+          "description": "Expected error of the position",
+          "x-unit": "m"
+        },
+        "battery_voltage": {
+          "type": "number",
+          "description": "Voltage of the battery",
+          "x-unit": "V"
+        },
+        "battery_percentage": {
+          "type": "integer",
+          "description": "Charge of the battery",
+          "x-unit": "%"
+        },
+        "free_length": {
+          "type": "number",
+          "description": "The free length in front of the mower",
+          "x-unit": "m"
+        },
+        "length": {
+          "type": "number",
+          "description": "The length the drive needs",
+          "x-unit": "m"
+        },
+        "strip_length": {
+          "type": "number",
+          "description": "Length of the strip",
+          "x-unit": "m"
+        },
+        "strip_width": {
+          "type": "number",
+          "description": "Width of the strip",
+          "x-unit": "m"
+        },
+        "slope": {
+          "type": "number",
+          "description": "Slope of the ground",
+          "x-unit": "deg"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.CALIBRATION": {
+      "type": "object",
+      "description": "A phase of the calibration drive began",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "CALIBRATION",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "start",
+            "align",
+            "stand",
+            "line",
+            "spin_left",
+            "spin_right",
+            "evaluate",
+            "end"
+          ],
+          "description": "The phase"
+        },
+        "index": {
+          "type": "integer",
+          "description": "Which round of the phase"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "phase",
+        "index"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.CALIBRATED": {
+      "type": "object",
+      "description": "The calibration drive ended with its result",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "CALIBRATED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "done",
+            "not_evaluated",
+            "failed"
+          ],
+          "description": "How far the evaluation got"
+        },
+        "summary": {
+          "type": "string",
+          "description": "English text of the result"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning"
+          ],
+          "description": "info when evaluated, else warning"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "status",
+        "summary",
+        "severity"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.CALIBRATION_FAILED": {
+      "type": "object",
+      "description": "The calibration drive stopped before its end",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "CALIBRATION_FAILED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "STOPPED",
+            "POSE_LOST",
+            "BATTERY_LOW",
+            "NO_RTK",
+            "NO_ROOM",
+            "SLOPE",
+            "EMERGENCY",
+            "NO_SAFETY_MEASUREMENT",
+            "CALIBRATION_MISSING",
+            "SENSOR_MISSING",
+            "IMU_GRAVITY",
+            "TIMEOUT",
+            "GYRO_SIGN",
+            "NOT_TURNING",
+            "OVERSPEED",
+            "LEFT_LANE",
+            "NOT_MOVING",
+            "BUSY"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "battery_voltage": {
+          "type": "number",
+          "description": "Voltage of the battery",
+          "x-unit": "V"
+        },
+        "battery_percentage": {
+          "type": "integer",
+          "description": "Charge of the battery",
+          "x-unit": "%"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The limit the value went past, in the unit of the value"
+        },
+        "free_length": {
+          "type": "number",
+          "description": "The free length in front of the mower",
+          "x-unit": "m"
+        },
+        "length": {
+          "type": "number",
+          "description": "The length the drive needs",
+          "x-unit": "m"
+        },
+        "strip_length": {
+          "type": "number",
+          "description": "Length of the strip",
+          "x-unit": "m"
+        },
+        "strip_width": {
+          "type": "number",
+          "description": "Width of the strip",
+          "x-unit": "m"
+        },
+        "slope": {
+          "type": "number",
+          "description": "Slope of the ground",
+          "x-unit": "deg"
+        },
+        "seconds": {
+          "type": "number",
+          "description": "How long it lasted",
+          "x-unit": "s"
+        },
+        "rate": {
+          "type": "number",
+          "description": "How often it reports",
+          "x-unit": "1/s"
+        },
+        "gravity": {
+          "type": "number",
+          "description": "The gravity it measures",
+          "x-unit": "m/s2"
+        },
+        "tilt": {
+          "type": "number",
+          "description": "The tilt it measures",
+          "x-unit": "deg"
+        },
+        "state": {
+          "type": "string",
+          "description": "What it is busy with"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.DRIVE": {
+      "type": "object",
+      "description": "A drive to a point began or ended; the end carries how",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "DRIVE",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "start",
+            "end"
+          ],
+          "description": "Begin or end of the drive"
+        },
+        "goal_x": {
+          "type": "number",
+          "description": "The goal, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "goal_y": {
+          "type": "number",
+          "description": "The goal, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "arrived": {
+          "type": "boolean",
+          "description": "Whether the mower got there"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "DONE",
+            "ALREADY_THERE",
+            "STOPPED",
+            "CANCELED",
+            "POSE_LOST",
+            "POSITION_ACCURACY",
+            "HEADING",
+            "TRANSIT_FAILED",
+            "FOLLOWER_REFUSED",
+            "FOLLOWER_MISSING",
+            "PLANNER_TIMEOUT",
+            "PLANNER_MISSING",
+            "EMERGENCY",
+            "NOT_ALLOWED",
+            "INVALID",
+            "CROSS_TRACK",
+            "OUTSIDE",
+            "TIMEOUT",
+            "MAP_UNKNOWN",
+            "NO_MOWING_AREA",
+            "MAP_MISMATCH",
+            "MAP_UNREADABLE"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "accuracy": {
+          "type": "number",
+          "description": "Expected error of the position",
+          "x-unit": "m"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The limit the value went past, in the unit of the value"
+        },
+        "seconds": {
+          "type": "number",
+          "description": "How long it lasted",
+          "x-unit": "s"
+        },
+        "datum_state": {
+          "type": "string",
+          "enum": [
+            "unbound"
+          ],
+          "description": "unbound when the map has no recorded datum"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "phase"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.POSITION_JUMP": {
+      "type": "object",
+      "description": "The position jumped back onto GPS",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "POSITION_JUMP",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "OUTLIERS",
+            "GAP"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "distance": {
+          "type": "number",
+          "description": "The distance the reason is about",
+          "x-unit": "m"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.EMERGENCY": {
+      "type": "object",
+      "description": "The emergency began or ended",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "EMERGENCY",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "emergency": {
+          "type": "boolean",
+          "description": "Whether an emergency stops the mower now"
+        },
+        "reason": {
+          "type": "integer",
+          "description": "The bits of the emergency (x-emergency-bits), 0 once it ended"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "error"
+          ],
+          "description": "error while it lasts, info once it ended"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "user while it lasts, auto once it ended"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "rpc",
+            "button"
+          ],
+          "description": "Who released it: rpc for a command over MQTT (action or RPC), button; none when not known"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "emergency",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.EMERGENCY_RESET_REFUSED": {
+      "type": "object",
+      "description": "A reset of the emergency was refused",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "EMERGENCY_RESET_REFUSED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "STILL_TILTED",
+            "TILT_UNKNOWN",
+            "FOREIGN_HOST",
+            "DRIVER_MISSING",
+            "NO_ANSWER",
+            "SAFETY_MISSING"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "angle": {
+          "type": "number",
+          "description": "Its tilt",
+          "x-unit": "deg"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The limit the value went past, in the unit of the value",
+          "x-unit": "deg"
+        },
+        "seconds": {
+          "type": "number",
+          "description": "How long it lasted",
+          "x-unit": "s"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.BLADES": {
+      "type": "object",
+      "description": "The blade started or stopped, as its speed shows",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "BLADES",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the blade runs"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "enabled"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.BATTERY_LOW": {
+      "type": "object",
+      "description": "The battery stayed below its critical voltage: the mower goes home",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "BATTERY_LOW",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "battery_voltage": {
+          "type": "number",
+          "description": "Voltage of the battery",
+          "x-unit": "V"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The critical voltage",
+          "x-unit": "V"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "battery_voltage",
+        "limit"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.AREA": {
+      "type": "object",
+      "description": "Mowing began in an area",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "AREA",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "area_id": {
+          "type": "string",
+          "description": "Id of the area"
+        },
+        "area_name": {
+          "type": "string",
+          "description": "Name of the area"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "area_id",
+        "area_name"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.AREA_SKIPPED": {
+      "type": "object",
+      "description": "An area was skipped",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "AREA_SKIPPED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "area_id": {
+          "type": "string",
+          "description": "Id of the area"
+        },
+        "area_name": {
+          "type": "string",
+          "description": "Name of the area"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "MANUAL"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "area_id",
+        "area_name",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.JOB_COMPLETE": {
+      "type": "object",
+      "description": "The job of mowing is done",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "JOB_COMPLETE",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.JOB_RESET": {
+      "type": "object",
+      "description": "The job of mowing was dropped; job_id names the dropped one",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "JOB_RESET",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.MOW_MOTOR_SPINUP_FAILED": {
+      "type": "object",
+      "description": "The blade did not come up to speed; mowing pauses",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "MOW_MOTOR_SPINUP_FAILED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.UNDOCKED": {
+      "type": "object",
+      "description": "The mower left the docking station",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "UNDOCKED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.UNDOCKING_FAILED": {
+      "type": "object",
+      "description": "Leaving the docking station failed; the mower stays where it stopped",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "UNDOCKING_FAILED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "path_failed",
+            "no_gps"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.DOCKED": {
+      "type": "object",
+      "description": "The mower is on the contacts of the docking station",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "DOCKED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.DOCKING_RETRY": {
+      "type": "object",
+      "description": "Docking failed, the next try follows by itself",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "DOCKING_RETRY",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "approach_failed",
+            "dock_failed"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "attempts": {
+          "type": "integer",
+          "description": "Tries so far"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.DOCKING_FAILED": {
+      "type": "object",
+      "description": "Docking failed for good; the mower waits",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "DOCKING_FAILED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "approach_failed",
+            "dock_failed"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "attempts": {
+          "type": "integer",
+          "description": "Tries so far"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.DOCK_RECORDED": {
+      "type": "object",
+      "description": "The docking station was recorded",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "DOCK_RECORDED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "dock_id": {
+          "type": "string",
+          "description": "Id of the docking station"
+        },
+        "heading": {
+          "type": "number",
+          "description": "The heading it drives in with, counter-clockwise from east",
+          "x-unit": "rad"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "dock_id",
+        "heading"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.AREA_RECORDED": {
+      "type": "object",
+      "description": "An area was recorded and saved",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "AREA_RECORDED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "area_id": {
+          "type": "string",
+          "description": "Id of the area"
+        },
+        "area_type": {
+          "type": "string",
+          "enum": [
+            "mow",
+            "nav"
+          ],
+          "description": "mow for a mowing area, nav for a navigation area"
+        },
+        "obstacles": {
+          "type": "integer",
+          "description": "Obstacles in it"
+        },
+        "points": {
+          "type": "integer",
+          "description": "Points of its outline"
+        },
+        "area_m2": {
+          "type": "number",
+          "description": "Its area",
+          "x-unit": "m2"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "area_id",
+        "area_type",
+        "obstacles",
+        "points",
+        "area_m2"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.GEOMETRY_CHANGED": {
+      "type": "object",
+      "description": "The dimensions of the mower changed",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "GEOMETRY_CHANGED",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "changed": {
+          "type": "array",
+          "description": "The keys whose value is another now"
+        },
+        "below_default": {
+          "type": "array",
+          "description": "Keys of the body now below the value of the platform"
+        },
+        "version": {
+          "type": "integer",
+          "description": "Version of the dimensions after the change"
+        },
+        "reason": {
+          "type": "string",
+          "description": "BELOW_DEFAULT when below_default is not empty",
+          "enum": [
+            "BELOW_DEFAULT"
+          ]
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning"
+          ],
+          "description": "warning with BELOW_DEFAULT, else info"
+        },
+        "message": {
+          "type": "string",
+          "description": "English text naming the keys"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "changed",
+        "below_default",
+        "version",
+        "severity",
+        "message"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.MAP_DATUM": {
+      "type": "object",
+      "description": "The map does not fit the datum of the GNSS: no mowing",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "MAP_DATUM",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "mismatch",
+            "unbound"
+          ],
+          "description": "How it does not fit"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "MAP_MISMATCH"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "datum_state": {
+          "type": "string",
+          "enum": [
+            "unbound"
+          ],
+          "description": "unbound when the map has no recorded datum"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "state",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "map"
+    },
+    "event.CORRECTIONS": {
+      "type": "object",
+      "description": "The RTK corrections from the NTRIP caster changed",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "CORRECTIONS",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "reason": {
+          "type": "string",
+          "description": "What changed (x-reasons)",
+          "enum": [
+            "LOST",
+            "RESTORED",
+            "REJECTED",
+            "SOURCE_CHANGED"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The limit the value went past, in the unit of the value",
+          "x-unit": "s"
+        },
+        "code": {
+          "type": "integer",
+          "description": "The HTTP status of the caster"
+        },
+        "host": {
+          "type": "string",
+          "description": "The caster now in use"
+        },
+        "port": {
+          "type": "integer",
+          "description": "Its port"
+        },
+        "mountpoint": {
+          "type": "string",
+          "description": "Its mountpoint"
+        },
+        "previous_host": {
+          "type": "string",
+          "description": "The caster used before"
+        },
+        "previous_port": {
+          "type": "integer",
+          "description": "Its port"
+        },
+        "previous_mountpoint": {
+          "type": "string",
+          "description": "Its mountpoint"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "reason",
+        "message",
+        "severity"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "ntrip"
+    },
+    "refusal": {
+      "type": "object",
+      "description": "data of the -32600 of a refused command; event names the group of its reason in x-reasons",
+      "properties": {
+        "event": {
+          "type": "string",
+          "description": "The event whose texts the reason has: a *_REFUSED type or COMMAND_REFUSED"
+        },
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state; BUSY brings its own"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state"
+        },
+        "event_id": {
+          "type": "string",
+          "description": "id of the event the refusal also went out as, none without one"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons"
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        }
+      },
+      "required": [
+        "event",
+        "state",
+        "sub_state",
+        "reason",
+        "severity",
+        "resume"
+      ]
+    },
+    "event.other": {
+      "type": "object",
+      "description": "An event of a type this version does not know, from the planner or a newer OS: only the envelope is fixed",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "type": "string",
+          "description": "What happened; a type this version does not know carries only the envelope for sure",
+          "not": {
+            "enum": [
+              "BOOTED",
+              "SHUTDOWN",
+              "STATE",
+              "MOWING_REFUSED",
+              "DRIVE_REFUSED",
+              "RECORDING_REFUSED",
+              "CALIBRATION_REFUSED",
+              "CALIBRATION",
+              "CALIBRATED",
+              "CALIBRATION_FAILED",
+              "DRIVE",
+              "POSITION_JUMP",
+              "EMERGENCY",
+              "EMERGENCY_RESET_REFUSED",
+              "BLADES",
+              "BATTERY_LOW",
+              "AREA",
+              "AREA_SKIPPED",
+              "JOB_COMPLETE",
+              "JOB_RESET",
+              "MOW_MOTOR_SPINUP_FAILED",
+              "UNDOCKED",
+              "UNDOCKING_FAILED",
+              "DOCKED",
+              "DOCKING_RETRY",
+              "DOCKING_FAILED",
+              "DOCK_RECORDED",
+              "AREA_RECORDED",
+              "GEOMETRY_CHANGED",
+              "MAP_DATUM",
+              "CORRECTIONS"
+            ]
+          }
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type"
+      ]
+    },
+    "event": {
+      "description": "events/json: one event, of a known type or only with the envelope",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/event.BOOTED"
+        },
+        {
+          "$ref": "#/$defs/event.SHUTDOWN"
+        },
+        {
+          "$ref": "#/$defs/event.STATE"
+        },
+        {
+          "$ref": "#/$defs/event.MOWING_REFUSED"
+        },
+        {
+          "$ref": "#/$defs/event.DRIVE_REFUSED"
+        },
+        {
+          "$ref": "#/$defs/event.RECORDING_REFUSED"
+        },
+        {
+          "$ref": "#/$defs/event.CALIBRATION_REFUSED"
+        },
+        {
+          "$ref": "#/$defs/event.CALIBRATION"
+        },
+        {
+          "$ref": "#/$defs/event.CALIBRATED"
+        },
+        {
+          "$ref": "#/$defs/event.CALIBRATION_FAILED"
+        },
+        {
+          "$ref": "#/$defs/event.DRIVE"
+        },
+        {
+          "$ref": "#/$defs/event.POSITION_JUMP"
+        },
+        {
+          "$ref": "#/$defs/event.EMERGENCY"
+        },
+        {
+          "$ref": "#/$defs/event.EMERGENCY_RESET_REFUSED"
+        },
+        {
+          "$ref": "#/$defs/event.BLADES"
+        },
+        {
+          "$ref": "#/$defs/event.BATTERY_LOW"
+        },
+        {
+          "$ref": "#/$defs/event.AREA"
+        },
+        {
+          "$ref": "#/$defs/event.AREA_SKIPPED"
+        },
+        {
+          "$ref": "#/$defs/event.JOB_COMPLETE"
+        },
+        {
+          "$ref": "#/$defs/event.JOB_RESET"
+        },
+        {
+          "$ref": "#/$defs/event.MOW_MOTOR_SPINUP_FAILED"
+        },
+        {
+          "$ref": "#/$defs/event.UNDOCKED"
+        },
+        {
+          "$ref": "#/$defs/event.UNDOCKING_FAILED"
+        },
+        {
+          "$ref": "#/$defs/event.DOCKED"
+        },
+        {
+          "$ref": "#/$defs/event.DOCKING_RETRY"
+        },
+        {
+          "$ref": "#/$defs/event.DOCKING_FAILED"
+        },
+        {
+          "$ref": "#/$defs/event.DOCK_RECORDED"
+        },
+        {
+          "$ref": "#/$defs/event.AREA_RECORDED"
+        },
+        {
+          "$ref": "#/$defs/event.GEOMETRY_CHANGED"
+        },
+        {
+          "$ref": "#/$defs/event.MAP_DATUM"
+        },
+        {
+          "$ref": "#/$defs/event.CORRECTIONS"
+        },
+        {
+          "$ref": "#/$defs/event.other"
+        }
+      ]
+    },
+    "system.info.params": {
+      "type": "object",
+      "description": "The params of system.info",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "system.info.result": {
+      "type": "object",
+      "description": "The result of system.info",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Always mowbite-os"
+        },
+        "version": {
+          "type": "string",
+          "description": "Version of the OS image"
+        },
+        "platform": {
+          "type": "string",
+          "description": "The platform its driver reports, empty until it did"
+        },
+        "schema": {
+          "type": "integer",
+          "description": "Version of the data in data_dir"
+        },
+        "api": {
+          "type": "integer",
+          "description": "Version of this interface, the x-api of the schema system.api gives"
+        },
+        "mqtt": {
+          "type": "integer",
+          "description": "MQTT version of the bridge at the broker: 5 sends each answer to the response topic of its request, 3 sends all to rpc/response"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "platform",
+        "schema",
+        "api",
+        "mqtt"
+      ],
+      "additionalProperties": false
+    },
+    "system.api.params": {
+      "type": "object",
+      "description": "The params of system.api",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "system.api.result": {
+      "type": "object",
+      "description": "The result of system.api",
+      "properties": {
+        "api": {
+          "type": "integer",
+          "description": "Version of this interface"
+        },
+        "json_schema": {
+          "type": "object",
+          "description": "This schema"
+        }
+      },
+      "required": [
+        "api",
+        "json_schema"
+      ],
+      "additionalProperties": false
+    },
+    "emergency.reset.params": {
+      "type": "object",
+      "description": "The params of emergency.reset",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "emergency.reset.result": {
+      "type": "object",
+      "description": "The result of emergency.reset",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        },
+        "released": {
+          "type": "boolean",
+          "description": "Always true: released; a reason the board still holds keeps it"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state",
+        "released"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.start.params": {
+      "type": "object",
+      "description": "The params of mowing.start",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "areas": {
+          "type": "array",
+          "description": "Ids of the areas to mow in this order (open_mower_ros #359); not yet: -32602 with data field areas"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.start.result": {
+      "type": "object",
+      "description": "The result of mowing.start",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        },
+        "check": {
+          "type": "boolean",
+          "description": "True when the reference check on the docking station comes first; its refusal comes as MOWING_REFUSED event"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state",
+        "check"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.reset_job.params": {
+      "type": "object",
+      "description": "The params of mowing.reset_job",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.reset_job.result": {
+      "type": "object",
+      "description": "The result of mowing.reset_job",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "Id of the dropped job"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state",
+        "job_id"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.pause.params": {
+      "type": "object",
+      "description": "The params of mowing.pause",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.pause.result": {
+      "type": "object",
+      "description": "The result of mowing.pause",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.continue.params": {
+      "type": "object",
+      "description": "The params of mowing.continue",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.continue.result": {
+      "type": "object",
+      "description": "The result of mowing.continue",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.abort.params": {
+      "type": "object",
+      "description": "The params of mowing.abort",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.abort.result": {
+      "type": "object",
+      "description": "The result of mowing.abort",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.skip_area.params": {
+      "type": "object",
+      "description": "The params of mowing.skip_area",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "area": {
+          "type": "integer",
+          "description": "current_area of robot_state the client saw; another one now gives CHANGED"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.skip_area.result": {
+      "type": "object",
+      "description": "The result of mowing.skip_area",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        },
+        "area": {
+          "type": "integer",
+          "description": "The area skipped, current_area before"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state",
+        "area"
+      ],
+      "additionalProperties": false
+    },
+    "mowing.skip_path.params": {
+      "type": "object",
+      "description": "The params of mowing.skip_path",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "path": {
+          "type": "integer",
+          "description": "current_path of robot_state the client saw; another one now gives CHANGED"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "mowing.skip_path.result": {
+      "type": "object",
+      "description": "The result of mowing.skip_path",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        },
+        "path": {
+          "type": "integer",
+          "description": "The path skipped, current_path before"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "undocking.abort.params": {
+      "type": "object",
+      "description": "The params of undocking.abort",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "undocking.abort.result": {
+      "type": "object",
+      "description": "The result of undocking.abort",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "docking.abort.params": {
+      "type": "object",
+      "description": "The params of docking.abort",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "docking.abort.result": {
+      "type": "object",
+      "description": "The result of docking.abort",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "docking.start.params": {
+      "type": "object",
+      "description": "The params of docking.start",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "docking.start.result": {
+      "type": "object",
+      "description": "The result of docking.start",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "DOCKING"
+          ],
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.start.params": {
+      "type": "object",
+      "description": "The params of recording.start",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.start.result": {
+      "type": "object",
+      "description": "The result of recording.start",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.exit.params": {
+      "type": "object",
+      "description": "The params of recording.exit",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.exit.result": {
+      "type": "object",
+      "description": "The result of recording.exit",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.ring_start.params": {
+      "type": "object",
+      "description": "The params of recording.ring_start",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.ring_start.result": {
+      "type": "object",
+      "description": "The result of recording.ring_start",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.ring_stop.params": {
+      "type": "object",
+      "description": "The params of recording.ring_stop",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.ring_stop.result": {
+      "type": "object",
+      "description": "The result of recording.ring_stop",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.save.params": {
+      "type": "object",
+      "description": "The params of recording.save",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "mow",
+            "nav"
+          ],
+          "description": "mow for a mowing area, nav for a navigation area"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "recording.save.result": {
+      "type": "object",
+      "description": "The result of recording.save",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.discard.params": {
+      "type": "object",
+      "description": "The params of recording.discard",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.discard.result": {
+      "type": "object",
+      "description": "The result of recording.discard",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.dock.params": {
+      "type": "object",
+      "description": "The params of recording.dock",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.dock.result": {
+      "type": "object",
+      "description": "The result of recording.dock",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.auto_points.params": {
+      "type": "object",
+      "description": "The params of recording.auto_points",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "True: a point every few centimetres by itself; false: only recording.point"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": false
+    },
+    "recording.auto_points.result": {
+      "type": "object",
+      "description": "The result of recording.auto_points",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    },
+    "recording.point.params": {
+      "type": "object",
+      "description": "The params of recording.point",
+      "properties": {
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "recording.point.result": {
+      "type": "object",
+      "description": "The result of recording.point",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "current_state of robot_state right after the command"
+        },
+        "sub_state": {
+          "type": "string",
+          "description": "current_sub_state of robot_state right after the command"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "x-reasons": {
+    "STATE": {
+      "MANUAL": {
+        "severity": "info",
+        "resume": "user",
+        "description": "By the user",
+        "fields": {}
+      },
+      "NO_POSITION": {
+        "severity": "warning",
+        "resume": "auto",
+        "description": "No position from the localization",
+        "fields": {}
+      },
+      "POSE_LOST": {
+        "severity": "warning",
+        "resume": "auto",
+        "description": "The position stopped coming",
+        "fields": {}
+      },
+      "POSITION_ACCURACY": {
+        "severity": "warning",
+        "resume": "auto",
+        "description": "The position is not accurate enough",
+        "fields": {
+          "accuracy": "m",
+          "limit": "m"
+        }
+      },
+      "HEADING": {
+        "severity": "warning",
+        "resume": "auto",
+        "description": "The heading is not good enough",
+        "fields": {}
+      },
+      "NO_HEADING": {
+        "severity": "warning",
+        "resume": "auto",
+        "description": "The heading is not known yet",
+        "fields": {}
+      },
+      "EMERGENCY": {
+        "severity": "error",
+        "resume": "user",
+        "description": "An emergency stops the mower",
+        "fields": {}
+      },
+      "NO_SAFETY_MEASUREMENT": {
+        "severity": "error",
+        "resume": "user",
+        "description": "This platform has no safety measurement yet, so it does not drive by itself",
+        "fields": {}
+      },
+      "MAP_UNKNOWN": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The datum of the GNSS is not known yet",
+        "fields": {}
+      },
+      "NO_MOWING_AREA": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map has no active mowing area",
+        "fields": {}
+      },
+      "MAP_MISMATCH": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map does not fit the datum in use",
+        "fields": {
+          "datum_state": ""
+        }
+      },
+      "MAP_UNREADABLE": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map cannot be read",
+        "fields": {}
+      },
+      "BLADE_SPINUP_FAILED": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The blade did not come up to speed",
+        "fields": {}
+      },
+      "BLADE_REFUSED": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The driver refused to start the blade",
+        "fields": {}
+      },
+      "PLANNING_FAILED": {
+        "severity": "error",
+        "resume": "user",
+        "description": "No plan for the area",
+        "fields": {}
+      },
+      "INVALID": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The path or the request was not valid",
+        "fields": {}
+      },
+      "NOT_ALLOWED": {
+        "severity": "error",
+        "resume": "user",
+        "description": "Outside of the areas the mower may drive in",
+        "fields": {}
+      },
+      "CROSS_TRACK": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The mower got too far off its path",
+        "fields": {}
+      },
+      "OUTSIDE": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The mower left the allowed area",
+        "fields": {}
+      },
+      "TIMEOUT": {
+        "severity": "error",
+        "resume": "user",
+        "description": "It took too long",
+        "fields": {}
+      },
+      "APPROACH_FAILED": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The approach to the docking station failed",
+        "fields": {}
+      },
+      "FOLLOWER_MISSING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The path follower does not answer",
+        "fields": {
+          "seconds": "s",
+          "limit": "s"
+        }
+      }
+    },
+    "MOWING_REFUSED": {
+      "BUSY": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The mower is busy with something else",
+        "fields": {
+          "state": ""
+        }
+      },
+      "HOLD": {
+        "severity": "info",
+        "resume": "user",
+        "description": "An update holds the mower: nothing starts until it is done",
+        "fields": {
+          "until": "unix s"
+        }
+      },
+      "RAIN": {
+        "severity": "info",
+        "resume": "user",
+        "description": "It rains",
+        "fields": {}
+      },
+      "ON_DOCK": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The mower is on the docking station",
+        "fields": {
+          "distance": "m",
+          "limit": "m"
+        }
+      },
+      "STILL_STOPPING": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The last drive is still stopping",
+        "fields": {}
+      },
+      "EMERGENCY": {
+        "severity": "error",
+        "resume": "user",
+        "description": "An emergency stops the mower",
+        "fields": {}
+      },
+      "NO_SAFETY_MEASUREMENT": {
+        "severity": "error",
+        "resume": "user",
+        "description": "This platform has no safety measurement yet, so it does not drive by itself",
+        "fields": {}
+      },
+      "MAP_UNKNOWN": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The datum of the GNSS is not known yet",
+        "fields": {}
+      },
+      "MAP_MISMATCH": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map does not fit the datum in use",
+        "fields": {
+          "datum_state": ""
+        }
+      },
+      "MAP_UNREADABLE": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map cannot be read",
+        "fields": {}
+      },
+      "PLANNER_MISSING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The planner is not running",
+        "fields": {}
+      },
+      "FOLLOWER_MISSING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The path follower does not answer",
+        "fields": {
+          "seconds": "s",
+          "limit": "s"
+        }
+      },
+      "BATTERY_LOW": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The battery is too low",
+        "fields": {
+          "battery_voltage": "V",
+          "battery_percentage": "%",
+          "limit": "V"
+        }
+      },
+      "NO_POSITION": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "No position from the localization",
+        "fields": {}
+      },
+      "POSITION_ACCURACY": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The position is not accurate enough",
+        "fields": {
+          "accuracy": "m",
+          "limit": "m"
+        }
+      },
+      "NO_HEADING": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The heading is not known yet",
+        "fields": {}
+      },
+      "NO_MOWING_AREA": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The map has no active mowing area",
+        "fields": {}
+      },
+      "NO_DOCK": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The map has no docking station",
+        "fields": {}
+      },
+      "DOCK_UNREACHABLE": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The docking station is outside of the areas the mower may drive in",
+        "fields": {
+          "distance": "m"
+        }
+      },
+      "NO_DOCK_CONTACT": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "No contact with the docking station",
+        "fields": {}
+      },
+      "REFERENCE_MISMATCH": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The docking station is not where the map has it",
+        "fields": {
+          "distance": "m",
+          "limit": "m"
+        }
+      }
+    },
+    "DRIVE_REFUSED": {
+      "BUSY": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The mower is busy with something else",
+        "fields": {
+          "state": ""
+        }
+      },
+      "HOLD": {
+        "severity": "info",
+        "resume": "user",
+        "description": "An update holds the mower: nothing starts until it is done",
+        "fields": {
+          "until": "unix s"
+        }
+      },
+      "ON_DOCK": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The mower is on the docking station",
+        "fields": {
+          "distance": "m",
+          "limit": "m"
+        }
+      },
+      "STILL_STOPPING": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The last drive is still stopping",
+        "fields": {}
+      },
+      "ALREADY_THERE": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The mower is there already",
+        "fields": {}
+      },
+      "EMERGENCY": {
+        "severity": "error",
+        "resume": "user",
+        "description": "An emergency stops the mower",
+        "fields": {}
+      },
+      "NO_SAFETY_MEASUREMENT": {
+        "severity": "error",
+        "resume": "user",
+        "description": "This platform has no safety measurement yet, so it does not drive by itself",
+        "fields": {}
+      },
+      "MAP_UNKNOWN": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The datum of the GNSS is not known yet",
+        "fields": {}
+      },
+      "MAP_MISMATCH": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map does not fit the datum in use",
+        "fields": {
+          "datum_state": ""
+        }
+      },
+      "MAP_UNREADABLE": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map cannot be read",
+        "fields": {}
+      },
+      "PLANNER_MISSING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The planner is not running",
+        "fields": {}
+      },
+      "FOLLOWER_MISSING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The path follower does not answer",
+        "fields": {
+          "seconds": "s",
+          "limit": "s"
+        }
+      },
+      "NO_POSITION": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "No position from the localization",
+        "fields": {}
+      },
+      "POSITION_ACCURACY": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The position is not accurate enough",
+        "fields": {
+          "accuracy": "m",
+          "limit": "m"
+        }
+      },
+      "NO_HEADING": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The heading is not known yet",
+        "fields": {}
+      },
+      "NO_MOWING_AREA": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The map has no active mowing area",
+        "fields": {}
+      },
+      "NO_DOCK": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The map has no docking station",
+        "fields": {}
+      },
+      "DOCK_UNREACHABLE": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The docking station is outside of the areas the mower may drive in",
+        "fields": {
+          "distance": "m"
+        }
+      },
+      "NO_DOCK_CONTACT": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "No contact with the docking station",
+        "fields": {}
+      },
+      "REFERENCE_MISMATCH": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The docking station is not where the map has it",
+        "fields": {
+          "distance": "m",
+          "limit": "m"
+        }
+      }
+    },
+    "RECORDING_REFUSED": {
+      "POSITION_ACCURACY": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The position is not accurate enough",
+        "fields": {
+          "accuracy": "m",
+          "limit": "m"
+        },
+        "when": [
+          {
+            "action": "point",
+            "severity": "warning",
+            "resume": "auto"
+          }
+        ]
+      },
+      "HOLD": {
+        "severity": "info",
+        "resume": "user",
+        "description": "An update holds the mower: nothing starts until it is done",
+        "fields": {
+          "until": "unix s"
+        }
+      },
+      "STILL_SAVING": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The last change of the map is still being saved",
+        "fields": {}
+      },
+      "EMERGENCY": {
+        "severity": "error",
+        "resume": "user",
+        "description": "An emergency stops the mower",
+        "fields": {}
+      },
+      "MAP_UNKNOWN": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The datum of the GNSS is not known yet",
+        "fields": {}
+      },
+      "MAP_MISMATCH": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map does not fit the datum in use",
+        "fields": {
+          "datum_state": ""
+        }
+      },
+      "SAVE_FAILED": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map could not be saved",
+        "fields": {
+          "code": ""
+        }
+      },
+      "NO_POSITION": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "No position from the localization",
+        "fields": {}
+      },
+      "NO_HEADING": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The heading is not known yet",
+        "fields": {}
+      },
+      "NO_DOCK_CONTACT": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "No contact with the docking station",
+        "fields": {}
+      },
+      "DOCK_TOO_CLOSE": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The two points of the docking station are too close together",
+        "fields": {
+          "distance": "m",
+          "limit": "m"
+        }
+      },
+      "NO_OUTLINE": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "There is no outline yet",
+        "fields": {}
+      },
+      "RING_FEW_POINTS": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The ring has too few points",
+        "fields": {
+          "points": "",
+          "limit": ""
+        }
+      },
+      "RING_CROSSES_ITSELF": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The ring crosses itself",
+        "fields": {}
+      },
+      "RING_TOO_SMALL": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The ring encloses too small an area",
+        "fields": {
+          "area": "m2",
+          "limit": "m2"
+        }
+      },
+      "TOO_MANY_POINTS": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The ring has too many points",
+        "fields": {
+          "limit": ""
+        }
+      },
+      "POINT_TOO_CLOSE": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The point is too close to the last one",
+        "fields": {
+          "distance": "m",
+          "limit": "m"
+        }
+      }
+    },
+    "CALIBRATION_REFUSED": {
+      "BUSY": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The mower is busy with something else",
+        "fields": {
+          "state": ""
+        }
+      },
+      "HOLD": {
+        "severity": "info",
+        "resume": "user",
+        "description": "An update holds the mower: nothing starts until it is done",
+        "fields": {
+          "until": "unix s"
+        }
+      },
+      "ON_DOCK": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The mower is on the docking station",
+        "fields": {
+          "distance": "m",
+          "limit": "m"
+        }
+      },
+      "STILL_STOPPING": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The last drive is still stopping",
+        "fields": {}
+      },
+      "EMERGENCY": {
+        "severity": "error",
+        "resume": "user",
+        "description": "An emergency stops the mower",
+        "fields": {}
+      },
+      "NO_SAFETY_MEASUREMENT": {
+        "severity": "error",
+        "resume": "user",
+        "description": "This platform has no safety measurement yet, so it does not drive by itself",
+        "fields": {}
+      },
+      "MAP_UNKNOWN": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The datum of the GNSS is not known yet",
+        "fields": {}
+      },
+      "MAP_MISMATCH": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map does not fit the datum in use",
+        "fields": {
+          "datum_state": ""
+        }
+      },
+      "MAP_UNREADABLE": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map cannot be read",
+        "fields": {}
+      },
+      "CALIBRATION_MISSING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The calibration program is not running or gave no sign",
+        "fields": {
+          "seconds": "s",
+          "limit": "s"
+        }
+      },
+      "SENSOR_MISSING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "A sensor the calibration needs does not report",
+        "fields": {
+          "rate": "1/s",
+          "limit": "1/s"
+        }
+      },
+      "IMU_GRAVITY": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The IMU does not measure gravity as it should",
+        "fields": {
+          "gravity": "m/s2",
+          "tilt": "deg"
+        }
+      },
+      "NO_POSITION": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "No position from the localization",
+        "fields": {}
+      },
+      "POSITION_ACCURACY": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The position is not accurate enough",
+        "fields": {
+          "accuracy": "m",
+          "limit": "m"
+        }
+      },
+      "NO_HEADING": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The heading is not known yet",
+        "fields": {}
+      },
+      "BATTERY_LOW": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The battery is too low",
+        "fields": {
+          "battery_voltage": "V",
+          "battery_percentage": "%",
+          "limit": "V"
+        }
+      },
+      "NO_MOWING_AREA": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The map has no active mowing area",
+        "fields": {}
+      },
+      "NO_ROOM": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "No room for a calibration drive here",
+        "fields": {
+          "free_length": "m",
+          "length": "m",
+          "strip_length": "m",
+          "strip_width": "m"
+        }
+      },
+      "NO_RTK": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "No RTK fix",
+        "fields": {
+          "limit": "m"
+        }
+      },
+      "GNSS_RATE": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The GNSS reports too seldom",
+        "fields": {
+          "rate": "1/s",
+          "limit": "1/s"
+        }
+      },
+      "SLOPE": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The ground is too steep",
+        "fields": {
+          "slope": "deg",
+          "limit": "deg"
+        }
+      }
+    },
+    "CALIBRATION_FAILED": {
+      "STOPPED": {
+        "severity": "info",
+        "resume": "user",
+        "description": "Stopped by the app or by the logic",
+        "fields": {}
+      },
+      "POSE_LOST": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The position stopped coming",
+        "fields": {}
+      },
+      "BATTERY_LOW": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The battery is too low",
+        "fields": {
+          "battery_voltage": "V",
+          "battery_percentage": "%",
+          "limit": "V"
+        }
+      },
+      "NO_RTK": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "No RTK fix",
+        "fields": {
+          "limit": "m"
+        }
+      },
+      "NO_ROOM": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "No room for a calibration drive here",
+        "fields": {
+          "free_length": "m",
+          "length": "m",
+          "strip_length": "m",
+          "strip_width": "m"
+        }
+      },
+      "SLOPE": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The ground is too steep",
+        "fields": {
+          "slope": "deg",
+          "limit": "deg"
+        }
+      },
+      "EMERGENCY": {
+        "severity": "error",
+        "resume": "user",
+        "description": "An emergency stops the mower",
+        "fields": {}
+      },
+      "NO_SAFETY_MEASUREMENT": {
+        "severity": "error",
+        "resume": "user",
+        "description": "This platform has no safety measurement yet, so it does not drive by itself",
+        "fields": {}
+      },
+      "CALIBRATION_MISSING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The calibration program is not running or gave no sign",
+        "fields": {
+          "seconds": "s",
+          "limit": "s"
+        }
+      },
+      "SENSOR_MISSING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "A sensor the calibration needs does not report",
+        "fields": {
+          "rate": "1/s",
+          "limit": "1/s"
+        }
+      },
+      "IMU_GRAVITY": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The IMU does not measure gravity as it should",
+        "fields": {
+          "gravity": "m/s2",
+          "tilt": "deg"
+        }
+      },
+      "TIMEOUT": {
+        "severity": "error",
+        "resume": "user",
+        "description": "It took too long",
+        "fields": {}
+      },
+      "GYRO_SIGN": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The gyro turns the other way than the wheels",
+        "fields": {}
+      },
+      "NOT_TURNING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The mower does not turn",
+        "fields": {}
+      },
+      "OVERSPEED": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The mower drove faster than it should",
+        "fields": {}
+      },
+      "LEFT_LANE": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The mower left its lane",
+        "fields": {}
+      },
+      "NOT_MOVING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The mower does not move",
+        "fields": {}
+      },
+      "BUSY": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The mower is busy with something else",
+        "fields": {
+          "state": ""
+        }
+      }
+    },
+    "DRIVE": {
+      "DONE": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The drive arrived",
+        "fields": {}
+      },
+      "ALREADY_THERE": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The mower is there already",
+        "fields": {}
+      },
+      "STOPPED": {
+        "severity": "info",
+        "resume": "user",
+        "description": "Stopped by the app or by the logic",
+        "fields": {}
+      },
+      "CANCELED": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The drive was canceled",
+        "fields": {}
+      },
+      "POSE_LOST": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The position stopped coming",
+        "fields": {}
+      },
+      "POSITION_ACCURACY": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The position is not accurate enough",
+        "fields": {
+          "accuracy": "m",
+          "limit": "m"
+        }
+      },
+      "HEADING": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The heading is not good enough",
+        "fields": {}
+      },
+      "TRANSIT_FAILED": {
+        "severity": "error",
+        "resume": "user",
+        "description": "No way to the goal",
+        "fields": {}
+      },
+      "FOLLOWER_REFUSED": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The path follower refused the path",
+        "fields": {}
+      },
+      "FOLLOWER_MISSING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The path follower does not answer",
+        "fields": {
+          "seconds": "s",
+          "limit": "s"
+        }
+      },
+      "PLANNER_TIMEOUT": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The planner took too long",
+        "fields": {}
+      },
+      "PLANNER_MISSING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The planner is not running",
+        "fields": {}
+      },
+      "EMERGENCY": {
+        "severity": "error",
+        "resume": "user",
+        "description": "An emergency stops the mower",
+        "fields": {}
+      },
+      "NOT_ALLOWED": {
+        "severity": "error",
+        "resume": "user",
+        "description": "Outside of the areas the mower may drive in",
+        "fields": {}
+      },
+      "INVALID": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The path or the request was not valid",
+        "fields": {}
+      },
+      "CROSS_TRACK": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The mower got too far off its path",
+        "fields": {}
+      },
+      "OUTSIDE": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The mower left the allowed area",
+        "fields": {}
+      },
+      "TIMEOUT": {
+        "severity": "error",
+        "resume": "user",
+        "description": "It took too long",
+        "fields": {}
+      },
+      "MAP_UNKNOWN": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The datum of the GNSS is not known yet",
+        "fields": {}
+      },
+      "NO_MOWING_AREA": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map has no active mowing area",
+        "fields": {}
+      },
+      "MAP_MISMATCH": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map does not fit the datum in use",
+        "fields": {
+          "datum_state": ""
+        }
+      },
+      "MAP_UNREADABLE": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map cannot be read",
+        "fields": {}
+      }
+    },
+    "POSITION_JUMP": {
+      "OUTLIERS": {
+        "severity": "warning",
+        "resume": "auto",
+        "description": "Back on GPS after outliers",
+        "fields": {
+          "distance": "m"
+        }
+      },
+      "GAP": {
+        "severity": "warning",
+        "resume": "auto",
+        "description": "Back on GPS after a gap",
+        "fields": {
+          "distance": "m"
+        }
+      }
+    },
+    "EMERGENCY_RESET_REFUSED": {
+      "STILL_TILTED": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The mower is still tilted",
+        "fields": {
+          "angle": "deg",
+          "limit": "deg"
+        }
+      },
+      "TILT_UNKNOWN": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The tilt of the mower is not known",
+        "fields": {
+          "seconds": "s"
+        }
+      },
+      "FOREIGN_HOST": {
+        "severity": "error",
+        "resume": "user",
+        "description": "Another host talks to the board",
+        "fields": {}
+      },
+      "DRIVER_MISSING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The driver of the platform does not answer",
+        "fields": {}
+      },
+      "NO_ANSWER": {
+        "severity": "error",
+        "resume": "user",
+        "description": "No answer in time",
+        "fields": {}
+      },
+      "SAFETY_MISSING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The safety node does not answer",
+        "fields": {}
+      }
+    },
+    "AREA_SKIPPED": {
+      "MANUAL": {
+        "severity": "info",
+        "resume": "auto",
+        "description": "By the user",
+        "fields": {}
+      }
+    },
+    "UNDOCKING_FAILED": {
+      "path_failed": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The way off the docking station failed (value of OpenMower)",
+        "fields": {}
+      },
+      "no_gps": {
+        "severity": "error",
+        "resume": "user",
+        "description": "No GPS for the way off the docking station (value of OpenMower)",
+        "fields": {}
+      }
+    },
+    "DOCKING_RETRY": {
+      "approach_failed": {
+        "severity": "warning",
+        "resume": "auto",
+        "description": "The approach to the docking station failed (value of OpenMower)",
+        "fields": {
+          "attempts": ""
+        }
+      },
+      "dock_failed": {
+        "severity": "warning",
+        "resume": "auto",
+        "description": "The last part onto the contacts failed (value of OpenMower)",
+        "fields": {
+          "attempts": ""
+        }
+      }
+    },
+    "DOCKING_FAILED": {
+      "approach_failed": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The approach to the docking station failed (value of OpenMower)",
+        "fields": {
+          "attempts": ""
+        }
+      },
+      "dock_failed": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The last part onto the contacts failed (value of OpenMower)",
+        "fields": {
+          "attempts": ""
+        }
+      }
+    },
+    "GEOMETRY_CHANGED": {
+      "BELOW_DEFAULT": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "A dimension of the body is now below the value of the platform: check the measurement",
+        "fields": {}
+      }
+    },
+    "MAP_DATUM": {
+      "MAP_MISMATCH": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The map does not fit the datum in use",
+        "fields": {
+          "datum_state": ""
+        }
+      }
+    },
+    "CORRECTIONS": {
+      "LOST": {
+        "severity": "warning",
+        "resume": "auto",
+        "description": "No corrections from the NTRIP caster",
+        "fields": {
+          "limit": "s"
+        }
+      },
+      "RESTORED": {
+        "severity": "info",
+        "resume": "auto",
+        "description": "Corrections from the NTRIP caster again",
+        "fields": {}
+      },
+      "REJECTED": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The NTRIP caster refused the login",
+        "fields": {
+          "code": ""
+        }
+      },
+      "SOURCE_CHANGED": {
+        "severity": "warning",
+        "resume": "auto",
+        "description": "Corrections from another caster or mountpoint than before",
+        "fields": {
+          "host": "",
+          "port": "",
+          "mountpoint": "",
+          "previous_host": "",
+          "previous_port": "",
+          "previous_mountpoint": ""
+        }
+      }
+    },
+    "COMMAND_REFUSED": {
+      "WRONG_STATE": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The command does not fit the state of the mower; its action would not be enabled",
+        "fields": {
+          "state": "",
+          "sub_state": ""
+        }
+      },
+      "NO_JOB": {
+        "severity": "info",
+        "resume": "user",
+        "description": "There is no unfinished job",
+        "fields": {}
+      },
+      "CHANGED": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The area or path is another one than the client saw: nothing was skipped",
+        "fields": {
+          "area": "",
+          "path": ""
+        }
+      }
+    },
+    "REQUEST_REFUSED": {
+      "RESPONSE_TOPIC": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The response topic of the request is not rpc/response/<token> with a token of 1 to 64 of A-Z, a-z, 0-9, dot, underscore and hyphen: nothing was done",
+        "fields": {}
+      },
+      "CORRELATION_DATA": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The correlation data of the request is longer than 1024 bytes: nothing was done",
+        "fields": {
+          "limit": "bytes"
+        }
+      }
+    }
+  },
+  "x-emergency-bits": [
+    {
+      "bit": 0,
+      "name": "LATCH",
+      "description": "The emergency holds until it is reset"
+    },
+    {
+      "bit": 1,
+      "name": "TIMEOUT_INPUTS",
+      "description": "The inputs of the board did not report in time"
+    },
+    {
+      "bit": 2,
+      "name": "STOP",
+      "description": "A stop button was pressed"
+    },
+    {
+      "bit": 3,
+      "name": "LIFT",
+      "description": "The mower was lifted"
+    },
+    {
+      "bit": 4,
+      "name": "LIFT_MULTIPLE",
+      "description": "More than one lift sensor triggered"
+    },
+    {
+      "bit": 5,
+      "name": "COLLISION",
+      "description": "A bumper hit something"
+    },
+    {
+      "bit": 6,
+      "name": "TIMEOUT_HIGH_LEVEL",
+      "description": "The board heard nothing from the OS in time"
+    },
+    {
+      "bit": 7,
+      "name": "HIGH_LEVEL",
+      "description": "The OS asked for the emergency"
+    },
+    {
+      "bit": 8,
+      "name": "SERVICE_NOT_READY",
+      "description": "A service of the board was not ready"
+    },
+    {
+      "bit": 9,
+      "name": "COLLISION_MULTIPLE",
+      "description": "More than one bumper triggered"
+    },
+    {
+      "bit": 10,
+      "name": "MOWER_RPM_TIMEOUT",
+      "description": "The blade motor did not report its speed in time"
+    },
+    {
+      "bit": 11,
+      "name": "MOWER_RPM_LIMIT",
+      "description": "The blade motor turned outside its limits"
+    },
+    {
+      "bit": 12,
+      "name": "FIRMWARE_INCOMPATIBLE",
+      "description": "The firmware of the board does not fit the driver"
+    },
+    {
+      "bit": 13,
+      "name": "TILT",
+      "description": "The body tilted beyond its limit"
+    },
+    {
+      "bit": 14,
+      "name": "FENCE",
+      "description": "An autonomous drive took the mower outside of the allowed areas"
+    },
+    {
+      "bit": 15,
+      "name": "STUCK",
+      "description": "The wheels do not move the mower as GNSS shows it"
+    },
+    {
+      "bit": 16,
+      "name": "IMU_TIMEOUT",
+      "description": "No IMU sample for the board, whose tilt detection depends on it"
+    },
+    {
+      "bit": 17,
+      "name": "MOWER_NOT_STOPPED",
+      "description": "The blade still turns after it was switched off"
+    },
+    {
+      "bit": 18,
+      "name": "WHEEL_RUNAWAY",
+      "description": "A wheel turned against the drive command"
+    },
+    {
+      "bit": 19,
+      "name": "FOREIGN_HOST",
+      "description": "Another host talks to the board"
+    },
+    {
+      "bit": 20,
+      "name": "DRIVER_STALL",
+      "description": "The input and output of the driver stalled"
+    }
+  ],
+  "x-commands": {
+    "system.info": {
+      "description": "Name, version and platform of the OS with the versions of its data and of this interface",
+      "params": "#/$defs/system.info.params",
+      "result": "#/$defs/system.info.result",
+      "refused": null,
+      "action": null,
+      "actions": []
+    },
+    "system.api": {
+      "description": "This interface as JSON Schema with its version",
+      "params": "#/$defs/system.api.params",
+      "result": "#/$defs/system.api.result",
+      "refused": null,
+      "action": null,
+      "actions": []
+    },
+    "emergency.reset": {
+      "description": "Asks the safety node to release the emergency and answers with its answer, after at most 3 s",
+      "params": "#/$defs/emergency.reset.params",
+      "result": "#/$defs/emergency.reset.result",
+      "refused": "EMERGENCY_RESET_REFUSED",
+      "action": "mower_logic/reset_emergency",
+      "actions": [
+        {
+          "action": "mower_logic/reset_emergency",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.start": {
+      "description": "Starts or continues the job of mowing from IDLE",
+      "params": "#/$defs/mowing.start.params",
+      "result": "#/$defs/mowing.start.result",
+      "refused": "MOWING_REFUSED",
+      "action": "mower_logic:idle/start_mowing",
+      "actions": [
+        {
+          "action": "mower_logic:idle/start_mowing",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.reset_job": {
+      "description": "Drops the unfinished job in IDLE",
+      "params": "#/$defs/mowing.reset_job.params",
+      "result": "#/$defs/mowing.reset_job.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:idle/reset_job",
+      "actions": [
+        {
+          "action": "mower_logic:idle/reset_job",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.pause": {
+      "description": "Pauses mowing",
+      "params": "#/$defs/mowing.pause.params",
+      "result": "#/$defs/mowing.pause.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:mowing/pause",
+      "actions": [
+        {
+          "action": "mower_logic:mowing/pause",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.continue": {
+      "description": "Continues mowing after a pause that waits for the user",
+      "params": "#/$defs/mowing.continue.params",
+      "result": "#/$defs/mowing.continue.result",
+      "refused": "MOWING_REFUSED",
+      "action": "mower_logic:mowing/continue",
+      "actions": [
+        {
+          "action": "mower_logic:mowing/continue",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.abort": {
+      "description": "Ends mowing; the mower goes home where it docks by itself",
+      "params": "#/$defs/mowing.abort.params",
+      "result": "#/$defs/mowing.abort.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:mowing/abort_mowing",
+      "actions": [
+        {
+          "action": "mower_logic:mowing/abort_mowing",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.skip_area": {
+      "description": "Skips the area being mowed",
+      "params": "#/$defs/mowing.skip_area.params",
+      "result": "#/$defs/mowing.skip_area.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:mowing/skip_area",
+      "actions": [
+        {
+          "action": "mower_logic:mowing/skip_area",
+          "params": {}
+        }
+      ]
+    },
+    "mowing.skip_path": {
+      "description": "Skips the path being mowed",
+      "params": "#/$defs/mowing.skip_path.params",
+      "result": "#/$defs/mowing.skip_path.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:mowing/skip_path",
+      "actions": [
+        {
+          "action": "mower_logic:mowing/skip_path",
+          "params": {}
+        }
+      ]
+    },
+    "undocking.abort": {
+      "description": "Stops leaving the docking station",
+      "params": "#/$defs/undocking.abort.params",
+      "result": "#/$defs/undocking.abort.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:undocking/abort_undocking",
+      "actions": [
+        {
+          "action": "mower_logic:undocking/abort_undocking",
+          "params": {}
+        }
+      ]
+    },
+    "docking.abort": {
+      "description": "Stops docking",
+      "params": "#/$defs/docking.abort.params",
+      "result": "#/$defs/docking.abort.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:docking/abort_docking",
+      "actions": [
+        {
+          "action": "mower_logic:docking/abort_docking",
+          "params": {}
+        }
+      ]
+    },
+    "docking.start": {
+      "description": "Drives home from IDLE to the docking station where the OS docks by itself; offered only there",
+      "params": "#/$defs/docking.start.params",
+      "result": "#/$defs/docking.start.result",
+      "refused": "DRIVE_REFUSED",
+      "action": null,
+      "actions": []
+    },
+    "recording.start": {
+      "description": "Enters the recording of areas from IDLE",
+      "params": "#/$defs/recording.start.params",
+      "result": "#/$defs/recording.start.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:idle/start_area_recording",
+      "actions": [
+        {
+          "action": "mower_logic:idle/start_area_recording",
+          "params": {}
+        }
+      ]
+    },
+    "recording.exit": {
+      "description": "Leaves the recording; what was not saved is gone",
+      "params": "#/$defs/recording.exit.params",
+      "result": "#/$defs/recording.exit.result",
+      "refused": "COMMAND_REFUSED",
+      "action": "mower_logic:area_recording/exit_recording_mode",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/exit_recording_mode",
+          "params": {}
+        }
+      ]
+    },
+    "recording.ring_start": {
+      "description": "Starts recording a ring: the outline, after it an obstacle",
+      "params": "#/$defs/recording.ring_start.params",
+      "result": "#/$defs/recording.ring_start.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/start_recording",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/start_recording",
+          "params": {}
+        }
+      ]
+    },
+    "recording.ring_stop": {
+      "description": "Closes the ring being recorded",
+      "params": "#/$defs/recording.ring_stop.params",
+      "result": "#/$defs/recording.ring_stop.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/stop_recording",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/stop_recording",
+          "params": {}
+        }
+      ]
+    },
+    "recording.save": {
+      "description": "Saves the outline and its obstacles as an area; AREA_RECORDED follows",
+      "params": "#/$defs/recording.save.params",
+      "result": "#/$defs/recording.save.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/finish_mowing_area",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/finish_mowing_area",
+          "params": {
+            "type": "mow"
+          }
+        },
+        {
+          "action": "mower_logic:area_recording/finish_navigation_area",
+          "params": {
+            "type": "nav"
+          }
+        }
+      ]
+    },
+    "recording.discard": {
+      "description": "Drops what was recorded and not saved",
+      "params": "#/$defs/recording.discard.params",
+      "result": "#/$defs/recording.discard.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/finish_discard",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/finish_discard",
+          "params": {}
+        }
+      ]
+    },
+    "recording.dock": {
+      "description": "Records a point of the docking station: first in front of it, then on the contacts; DOCK_RECORDED follows",
+      "params": "#/$defs/recording.dock.params",
+      "result": "#/$defs/recording.dock.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/record_dock",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/record_dock",
+          "params": {}
+        }
+      ]
+    },
+    "recording.auto_points": {
+      "description": "Switches the automatic points of the ring on or off",
+      "params": "#/$defs/recording.auto_points.params",
+      "result": "#/$defs/recording.auto_points.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/auto_point_collecting_enable",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/auto_point_collecting_enable",
+          "params": {
+            "enabled": true
+          }
+        },
+        {
+          "action": "mower_logic:area_recording/auto_point_collecting_disable",
+          "params": {
+            "enabled": false
+          }
+        }
+      ]
+    },
+    "recording.point": {
+      "description": "Takes the next position as a point of the ring",
+      "params": "#/$defs/recording.point.params",
+      "result": "#/$defs/recording.point.result",
+      "refused": "RECORDING_REFUSED",
+      "action": "mower_logic:area_recording/collect_point",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/collect_point",
+          "params": {}
+        }
+      ]
+    }
+  }
+}

@@ -105,7 +105,7 @@ std::string CapabilitiesText();
 std::string VersionText(const std::string& version);
 
 // system.info.
-Json SystemInfo(const std::string& version, const std::string& platform);
+Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version);
 
 // The schema of data_dir this image writes, from data_schema.json of the package (tron.launch.py reads the same file).
 int DataSchema();

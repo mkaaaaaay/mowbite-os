@@ -1,6 +1,7 @@
 """Mowing a small lawn in the simulation: the whole stack of sim.launch.py with the blade allowed (allow_blade of
 tron_mcu, mow_with_blade of the logic). start_mowing plans the lawn, the follower drives its paths, the blade turns
-only on mow segments; pause, the stop button and continue, then the job completes. The test checks where the
+only on mow segments; pause, the stop button and continue, then the job completes. Pause, the reset of the emergency,
+continue and skipping a path go over their RPCs as well (AS2), with client. The test checks where the
 simulated mower really went (the state file of fake_tron) and what reached the MCU (its log).
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_mowing.py
@@ -20,7 +21,7 @@ import rclpy
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
-from mowbite_msgs.msg import MapStatus, MqttPublish, RobotPose, RobotState
+from mowbite_msgs.msg import MapStatus, MqttPublish, RobotPose, RobotState, RpcError, RpcRequest, RpcResponse
 from mowbite_msgs.srv import ReplaceMap, SetPose
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
@@ -96,6 +97,10 @@ class Probe:
         self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
+        self.answers = {}
+        self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
+        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._answer, 10)
+        self.node.create_subscription(RpcError, "bridge/rpc/error", self._answer, 10)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
         self.running = True
@@ -121,6 +126,14 @@ class Probe:
             values = [(t, a) for t, a in self.accuracy if t >= since]
         bad = [(round(t - since, 1), round(a, 3)) for t, a in values if a > 0.1]
         return f"{len(values)} poses, worst {max((a for _, a in values), default=0):.3f} m, above 0.1 m: {bad[:20]}"
+
+    def _answer(self, msg):
+        with self.lock:
+            if isinstance(msg, RpcResponse):
+                self.answers[msg.id] = {"result": json.loads(msg.result)}
+            else:
+                self.answers[msg.id] = {"error": {"code": msg.code, "message": msg.message,
+                                                  "data": json.loads(msg.data) if msg.data else None}}
 
     def _robot(self, msg):
         with self.lock:
@@ -168,6 +181,12 @@ class Probe:
 
     def act(self, action):
         self.action_pub.publish(String(data=action))
+
+    def rpc(self, method, params, timeout=10.0):
+        """A command as the app sends it, past the bridge: its answer, or None."""
+        request = RpcRequest(method=method, params=json.dumps(params), id=f"mowing-{method}-{time.time()}")
+        self.rpc_pub.publish(request)
+        return self.wait(lambda: self.answers.get(request.id), timeout)
 
     def event(self, since, type_, timeout, **match):
         """The first event of that type since index since whose fields match."""
@@ -259,9 +278,11 @@ class TestMowing(unittest.TestCase):
         p = self.probe
         time.sleep(3.0)
         since = len(p.events)
-        p.act("mower_logic:mowing/pause")
+        answer = p.rpc("mowing.pause", {"client": "test"})
+        self.assertEqual(answer, {"result": {"state": "PAUSED", "sub_state": ""}})
         paused = p.event(since, "STATE", 5, state="PAUSED")
         self.assertIsNotNone(paused)
+        self.assertEqual(paused["client"], "test")
         self.assertEqual(paused["reason"], "MANUAL")
         self.assertEqual(paused["resume"], "user")
         self.assertIsNotNone(p.event(since, "BLADES", 5, enabled=False), "the blade kept running")
@@ -273,6 +294,13 @@ class TestMowing(unittest.TestCase):
             checkpoint = json.load(f)
         self.assertEqual(checkpoint["job_id"], self.job)
         self.assertEqual(checkpoint["area_id"], "lawn")
+        # Paused already: a second pause is refused, without an event.
+        since = len(p.events)
+        error = (p.rpc("mowing.pause", {"client": "test"}) or {}).get("error") or {}
+        self.assertEqual(error.get("code"), -32600)
+        self.assertEqual(error["data"]["reason"], "WRONG_STATE")
+        self.assertEqual(error["data"]["state"], "PAUSED")
+        self.assertEqual([e["type"] for e in p.events[since:]], [])
         since = len(p.events)
         t0 = time.time() - 10.0
         p.act("mower_logic:mowing/continue")
@@ -293,17 +321,41 @@ class TestMowing(unittest.TestCase):
         time.sleep(1.0)
         still, poses = p.standing()
         self.assertTrue(still, poses)
+        # In the emergency continue is refused without a second event.
+        error = (p.rpc("mowing.continue", {}) or {}).get("error") or {}
+        self.assertEqual(error["data"]["reason"], "EMERGENCY")
+        self.assertEqual(error["data"]["event"], "MOWING_REFUSED")
+        self.assertNotIn("event_id", error["data"])
         p.flags()
-        p.act("mower_logic/reset_emergency")
+        since = len(p.events)
+        answer = p.rpc("emergency.reset", {"client": "test"})
+        self.assertEqual((answer or {}).get("result", {}).get("released"), True, answer)
         self.assertTrue(p.wait(lambda: not p.robot.emergency, 10), "the emergency stayed")
+        released = p.event(since, "EMERGENCY", 5, emergency=False)
+        self.assertIsNotNone(released)
+        self.assertEqual(released.get("source"), "rpc")
+        self.assertEqual(released.get("client"), "test")
         # Reset, but it stays where it is until continue.
         time.sleep(2.0)
         still, poses = p.standing()
         self.assertTrue(still, poses)
         self.assertEqual(p.robot.current_state, "PAUSED")
         since = len(p.events)
-        p.act("mower_logic:mowing/continue")
-        self.assertIsNotNone(p.event(since, "STATE", 5, state="MOWING"))
+        answer = p.rpc("mowing.continue", {"client": "test"})
+        self.assertEqual(answer, {"result": {"state": "MOWING", "sub_state": ""}})
+        self.assertEqual(p.event(since, "STATE", 5, state="MOWING").get("client"), "test")
+        # A path the app saw before is not skipped; the one mowed now is.
+        path = p.robot.current_path
+        error = (p.rpc("mowing.skip_path", {"path": path + 7}) or {}).get("error") or {}
+        self.assertEqual(error["data"]["reason"], "CHANGED")
+        path = error["data"]["path"]
+        # The path may end between the answer and the next call: then the answer names the new one.
+        for _ in range(3):
+            answer = p.rpc("mowing.skip_path", {"path": path, "client": "test"}) or {}
+            if "result" in answer:
+                break
+            path = answer["error"]["data"]["path"]
+        self.assertEqual(answer.get("result", {}).get("path"), path, answer)
 
     def test_06_the_job_completes_on_the_lawn(self):
         p = self.probe

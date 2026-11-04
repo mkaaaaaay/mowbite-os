@@ -428,8 +428,9 @@ class TestCalibration(unittest.TestCase):
     def test_05_no_room(self):
         p = self.probe
         p.replace(SMALL)
+        # Only NO_ROOM: the rate of RTK fixes counts over 2 s and may still be short after test_04.
         self.assertTrue(p.wait(lambda: p.status and p.status.lane_length == 0
-                               and any(x.reason == "NO_ROOM" for x in p.status.problems), 10))
+                               and [x.reason for x in p.status.problems] == ["NO_ROOM"], 15))
         since = len(p.events)
         answer = p.rpc("calibration.start")
         self.assertEqual(answer[0], "error", answer)

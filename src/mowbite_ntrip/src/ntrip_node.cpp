@@ -66,13 +66,6 @@ bool SendAll(int fd, const std::string& data, int timeout_ms) {
   return true;
 }
 
-// host, port and mountpoint of SOURCE_CHANGED, with prefix "" or "previous_".
-void PutSource(nlohmann::ordered_json& details, const std::string& prefix, const CorrectionSource& source) {
-  details[prefix + "host"] = source.host;
-  details[prefix + "port"] = source.port;
-  details[prefix + "mountpoint"] = source.mountpoint;
-}
-
 std::string SourceText(const CorrectionSource& source) {
   return source.host + ":" + std::to_string(source.port) + "/" + source.mountpoint;
 }
@@ -477,15 +470,9 @@ class NtripNode : public rclcpp::Node {
       return;
     }
     for (const auto& event : pending_) {
-      nlohmann::ordered_json details = {
-          {"reason", event.reason}, {"message", event.message}, {"severity", event.severity}};
-      if (!event.resume.empty()) details["resume"] = event.resume;
-      if (event.code) details["code"] = event.code;
-      if (event.limit > 0) details["limit"] = event.limit;
+      const nlohmann::ordered_json details = CorrectionsDetails(event);
       std::string text = event.message;
       if (event.source && event.previous) {
-        PutSource(details, "", *event.source);
-        PutSource(details, "previous_", *event.previous);
         text += " (" + SourceText(*event.previous) + " before, now " + SourceText(*event.source) + ")";
       }
       if (event.severity == "info") {

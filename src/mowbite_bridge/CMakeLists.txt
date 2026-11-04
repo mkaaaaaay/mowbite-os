@@ -16,6 +16,7 @@ find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(PahoMqttCpp REQUIRED)
+find_package(mowbite_api REQUIRED)
 
 # The schema of data_dir this image writes: one file for system.info here and for tron.launch.py, installed with
 # the package.
@@ -31,7 +32,7 @@ add_library(mowbite_bridge_core STATIC src/text.cpp src/json_rpc.cpp src/method_
 target_include_directories(mowbite_bridge_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(mowbite_bridge_core nlohmann_json::nlohmann_json)
+target_link_libraries(mowbite_bridge_core mowbite_api::mowbite_api_core nlohmann_json::nlohmann_json)
 target_compile_definitions(mowbite_bridge_core PRIVATE MOWBITE_DATA_SCHEMA=${DATA_SCHEMA})
 set_target_properties(mowbite_bridge_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
@@ -64,4 +65,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_mowbite_bridge HAS_LIBRARY_TARGET)
+ament_export_dependencies(mowbite_api)
 ament_package()

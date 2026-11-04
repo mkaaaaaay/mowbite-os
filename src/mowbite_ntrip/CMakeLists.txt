@@ -41,9 +41,10 @@ install(TARGETS mowbite_ntrip_core mowbite_ntrip_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(mowbite_api REQUIRED)
   ament_add_gtest(mowbite_ntrip_test test/test_rtcm.cpp test/test_ntrip_config.cpp test/test_ntrip_access.cpp
     test/test_ntrip_source.cpp test/test_ntrip_protocol.cpp test/test_ntrip_client.cpp)
-  target_link_libraries(mowbite_ntrip_test mowbite_ntrip_core)
+  target_link_libraries(mowbite_ntrip_test mowbite_ntrip_core mowbite_api::mowbite_api_core)
 endif()
 
 ament_export_targets(export_mowbite_ntrip HAS_LIBRARY_TARGET)

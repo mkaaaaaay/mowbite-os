@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_logic/area_recorder.h"
 #include "mowbite_logic/docking.h"
 #include "mowbite_logic/mowing_job.h"
@@ -205,6 +206,21 @@ struct SensorReading {
 
 enum class ActionResult { kUnknown, kRejected, kDone, kReleaseEmergency };
 
+// How a command of the catalog (mowbite_api::Commands) went, the same whether its action or its RPC sent it.
+struct CommandOutcome {
+  // The params do not fit (-32602), with the field at fault; nothing happened.
+  std::string invalid;
+  std::string invalid_field;
+  bool accepted = false;
+  // emergency.reset: the node asks the safety node, whose answer decides.
+  bool release = false;
+  // The answer: state and sub_state right after it and the fields of the command.
+  json result = json::object();
+  // Why not, and the data of the -32600: event names the group of its texts, event_id the event it also went out as.
+  Reason why;
+  json data = json::object();
+};
+
 struct ReasonChange {
   int from = 0;
   int to = 0;
@@ -222,8 +238,12 @@ constexpr int kEmergencyFirmwareIncompatible = 1 << 12;
 constexpr int kEmergencyImuTimeout = 1 << 16;
 constexpr int kEmergencyMowerNotStopped = 1 << 17;
 
-// "LATCH, LIFT": the names of the bits as OpenMower logs them, in bit order.
+// "LATCH, LIFT": the names of the bits from the catalog in bit order, one UNKNOWN for all bits without a name.
 std::string EmergencyReasonNames(int reason);
+
+// Called with every event the core adds, before it is queued; for the tests against the catalog, none by default.
+using EventObserver = void (*)(const std::string& type, const json& details);
+void SetEventObserver(EventObserver observer);
 
 // How a drive of the follower for a job ended.
 enum class LegEnd { kDone, kCanceled, kGps, kEmergency, kFailed };
@@ -240,6 +260,9 @@ struct JobStep {
   JobPath path;
   size_t start_index = 0;
 };
+
+// s after the answer of the safety node within which the end of the emergency counts as released by the command.
+constexpr double kReleaseSourceS = 2.0;
 
 // The app repeats teleop every 100 ms while the joystick is held and sends one zero when it is let go.
 constexpr double kTeleopQuietS = 1.0;
@@ -261,7 +284,17 @@ class LogicCore {
   void OnGnssFix(double x, double y);
   // The localization moved its estimate onto GPS again by distance_m, the event is at the new position.
   void OnPositionJump(double to_x, double to_y, double distance_m, bool after_outliers);
+  // The command the action stands for, as its RPC without client; kUnknown for an action that is not the logic's.
   ActionResult OnAction(const std::string& action_id);
+  // A command by its RPC name with its params (client among them). node_problem: what only the node knows against a
+  // start (planner, follower, the last drive still stopping), taken after the logic's own reasons. The events of this
+  // step carry client.
+  CommandOutcome Command(const std::string& name, const json& params, const Reason& node_problem = Reason());
+  // The answer to an accepted command: state and sub_state as robot_state has them now, then fields.
+  json CommandAnswer(const json& fields = json::object()) const;
+  // The data of a refusal: event (the group of the reason), the reason with its rating and fields, state, sub_state
+  // and event_id when the refusal went out as that event too.
+  json RefusalData(const std::string& group, const Reason& why, const std::string& event_id = "") const;
   // Recording starts and saves only while the map fits the datum in use, or is still empty and takes it.
   void OnMapStatus(MapDatum datum, const std::string& reason);
   // The change of the map a recording asks for, once; the node sends it to mowbite_map.
@@ -380,8 +413,12 @@ class LogicCore {
   Reason StartProblem() const;
   // A start refused by the node (planner or follower missing): event MOWING_REFUSED.
   void RefuseStart(const Reason& why);
-  // reset_emergency did not release: EMERGENCY_RESET_REFUSED with the reason of the driver, of S2 or of the node.
-  void RefuseReset(const Reason& why);
+  // reset_emergency did not release: EMERGENCY_RESET_REFUSED with the reason of the driver, of S2 or of the node;
+  // returns the id of the event.
+  std::string RefuseReset(const Reason& why);
+  // The safety node released after emergency.reset (now_s monotonic): the end of the emergency that follows within
+  // kReleaseSourceS carries source rpc and the client of the command.
+  void OnReleaseAnswered(double now_s);
   // robot.geometry.set changed the dimensions: event GEOMETRY_CHANGED with the keys that are other now and the keys of
   // the body below the platform's value; with the latter it is a warning with the reason BELOW_DEFAULT, else info. It
   // stops nothing, so it has no resume.
@@ -459,9 +496,17 @@ class LogicCore {
   enum class Leg { kNone, kPlanning, kApproach, kFollow };
 
   void SetState(State state);
+  // The command after its params were checked: empty when accepted, else why not; extra fields of the answer go to
+  // out->result.
+  Reason RunCommand(const mowbite_api::Command& command, const json& params, const Reason& node_problem,
+                    CommandOutcome* out);
+  Reason RecordingCommand(const mowbite_api::Command& command, const json& params);
+  // WRONG_STATE with state and sub_state of robot_state.
+  Reason WrongState() const;
   // Moves the events of the recorder into the events of the logic, at the current position.
   void PullRecorder();
-  void AddEvent(const std::string& type, json details);
+  // Returns the id of the event.
+  std::string AddEvent(const std::string& type, json details);
   void UpdateEmergency();
   int EmergencyReason() const;
   static const char* StateName(State state);
@@ -511,7 +556,6 @@ class LogicCore {
   void Docked();
   // IDLE; a leg on its way stops with why.
   void EndDocking(const Reason& why);
-  ActionResult OnMowingAction(const std::string& name);
   void StartMowing();
   void Pause(int why, const Reason& reason);
   // Stops a drive or a leg on its way; a drive ends with the first reason given.
@@ -618,6 +662,14 @@ class LogicCore {
   int calibration_index_ = 0;
   std::optional<double> calibration_battery_since_;
   int64_t hold_until_ = 0;
+  // The client of the command being run, for its events; the one of a skip that waits for the leg to stop.
+  std::string client_;
+  std::string skip_client_;
+  // emergency.reset asked the safety node: the end of the emergency carries source rpc and its client, until a
+  // refusal, a new emergency or kReleaseSourceS after the answer.
+  bool release_pending_ = false;
+  std::string release_client_;
+  std::optional<double> release_answered_s_;
 };
 
 }  // namespace mowbite_logic

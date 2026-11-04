@@ -20,6 +20,7 @@ find_package(rclcpp_action REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(mowbite_hold REQUIRED)
+find_package(mowbite_api REQUIRED)
 
 # States, actions and sensors without ROS, testable on any machine.
 add_library(mowbite_logic_core STATIC src/reasons.cpp src/logic_core.cpp src/area_recorder.cpp src/mowing_plan.cpp src/mowing_job.cpp
@@ -27,7 +28,7 @@ add_library(mowbite_logic_core STATIC src/reasons.cpp src/logic_core.cpp src/are
 target_include_directories(mowbite_logic_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(mowbite_logic_core nlohmann_json::nlohmann_json)
+target_link_libraries(mowbite_logic_core mowbite_api::mowbite_api_core nlohmann_json::nlohmann_json)
 set_target_properties(mowbite_logic_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_logic_component SHARED src/logic_node.cpp)
@@ -51,9 +52,11 @@ if(BUILD_TESTING)
   ament_add_gtest(mowbite_logic_test test/test_logic_core.cpp test/test_area_recorder.cpp test/test_mowing_plan.cpp
     test/test_mowing_job.cpp test/test_logic_mowing.cpp test/test_reasons.cpp test/test_logic_params.cpp
     test/test_logic_dock.cpp test/test_logic_undock.cpp test/test_logic_docking.cpp test/test_geometry.cpp
-    test/test_logic_hold.cpp test/test_logic_calibration.cpp)
+    test/test_logic_hold.cpp test/test_logic_calibration.cpp test/test_event_catalog.cpp
+    test/test_logic_commands.cpp)
   target_link_libraries(mowbite_logic_test mowbite_logic_core)
 endif()
 
 ament_export_targets(export_mowbite_logic HAS_LIBRARY_TARGET)
+ament_export_dependencies(mowbite_api)
 ament_package()

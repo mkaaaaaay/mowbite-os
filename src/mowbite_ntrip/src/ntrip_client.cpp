@@ -17,7 +17,26 @@ const char kSourceChanged[] =
     "Corrections from another caster or mountpoint: positions may be offset from the map if its reference differs; a "
     "change between sources with the same reference moves nothing";
 
+// host, port and mountpoint of SOURCE_CHANGED, with prefix "" or "previous_".
+void PutSource(nlohmann::ordered_json& details, const std::string& prefix, const CorrectionSource& source) {
+  details[prefix + "host"] = source.host;
+  details[prefix + "port"] = source.port;
+  details[prefix + "mountpoint"] = source.mountpoint;
+}
+
 }  // namespace
+
+nlohmann::ordered_json CorrectionsDetails(const ClientEvent& event) {
+  nlohmann::ordered_json details = {{"reason", event.reason}, {"message", event.message}, {"severity", event.severity}};
+  if (!event.resume.empty()) details["resume"] = event.resume;
+  if (event.code) details["code"] = event.code;
+  if (event.limit > 0) details["limit"] = event.limit;
+  if (event.source && event.previous) {
+    PutSource(details, "", *event.source);
+    PutSource(details, "previous_", *event.previous);
+  }
+  return details;
+}
 
 const char* StateName(ClientState state) {
   switch (state) {

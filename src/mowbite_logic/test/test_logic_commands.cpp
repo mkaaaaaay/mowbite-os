@@ -1,0 +1,565 @@
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <cmath>
+#include <functional>
+
+#include "mowbite_api/catalog.h"
+#include "mowbite_logic/logic_core.h"
+
+using namespace mowbite_logic;
+
+namespace {
+
+const std::string kStart = "mower_logic:idle/start_mowing";
+
+// The station of the field: backing in going west, the lawn east of it.
+const DockPose kDock{-1.0, 0.0, M_PI};
+const Ring kLawn{{-0.5, -2.0}, {4.0, -2.0}, {4.0, 2.0}, {-0.5, 2.0}};
+// The station of the start on the contacts: backing in going north, the lawn south of it.
+const DockPose kHome{-1.0, 2.0, M_PI / 2};
+const Ring kHomeLawn{{-3.0, -3.0}, {3.0, -3.0}, {3.0, 1.9}, {-3.0, 1.9}};
+
+HardwareSnapshot Healthy(bool contact = false) {
+  HardwareSnapshot hw;
+  hw.telemetry_ok = true;
+  hw.battery_ok = true;
+  hw.battery_voltage = 24.5f;
+  hw.battery_percentage = 80;
+  hw.dock_contact = contact;
+  hw.dock_contact_raw = contact;
+  return hw;
+}
+
+HardwareSnapshot InEmergency() {
+  HardwareSnapshot hw = Healthy();
+  hw.emergency = true;
+  hw.emergency_reason = kEmergencyLatch | kEmergencyStop;
+  return hw;
+}
+
+PoseSnapshot PoseAt(double x, double y, double heading = M_PI, bool valid = true) {
+  PoseSnapshot pose;
+  pose.x = x;
+  pose.y = y;
+  pose.heading = heading;
+  pose.position_accuracy = 0.02f;
+  pose.orientation_accuracy = valid ? 0.01f : 999.0f;
+  pose.orientation_valid = valid;
+  return pose;
+}
+
+LogicConfig Tron() {
+  LogicConfig config;
+  config.dock_contact_x = -0.10;
+  return config;
+}
+
+void Settle(LogicCore& core) {
+  core.TakeEvents();
+  core.TakeNotices();
+  core.TakeActionsChanged();
+  core.TakeDriveCancel();
+  core.TakeStopRequest();
+  core.TakeCheckpoint();
+  core.TakeMapEdit();
+}
+
+// IDLE in the field, 2 m east of the station, with the station and the lawn in the map.
+LogicCore Idle() {
+  LogicCore core{Tron()};
+  core.OnMapStatus(MapDatum::kMatch, "");
+  core.OnHardwareStatus(Healthy());
+  core.OnCapabilities(true);
+  core.OnPose(PoseAt(2.0, 0.5));
+  core.OnMowMap({{"lawn", "Lawn", true}}, Reason());
+  core.OnMapDock(kDock);
+  core.OnDrivableAreas({kLawn}, {});
+  Settle(core);
+  return core;
+}
+
+LogicCore Mowing() {
+  LogicCore core = Idle();
+  EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  Settle(core);
+  return core;
+}
+
+// Mowing a lane in front of the mower: a skip waits for the leg to stop.
+LogicCore Following() {
+  LogicCore core = Mowing();
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
+  JobPath path;
+  for (int i = 0; i < 5; ++i) {
+    JobPose pose;
+    pose.x = 2.0 + 0.5 * i;
+    pose.y = 0.5;
+    pose.kind = i == 0 ? kSegmentTransit : kSegmentLane;
+    path.poses.push_back(pose);
+  }
+  core.OnJobPlanned({path, path}, "fp");
+  const JobStep step = core.NextJobStep(0);
+  EXPECT_TRUE(step.kind == JobStep::Kind::kFollow || step.kind == JobStep::Kind::kApproach);
+  Settle(core);
+  return core;
+}
+
+LogicCore Paused() {
+  LogicCore core = Mowing();
+  EXPECT_EQ(core.OnAction("mower_logic:mowing/pause"), ActionResult::kDone);
+  Settle(core);
+  return core;
+}
+
+LogicCore PausedInEmergency() {
+  LogicCore core = Mowing();
+  core.OnHardwareStatus(InEmergency());
+  Settle(core);
+  return core;
+}
+
+LogicCore Held(LogicCore core) {
+  core.SetHold(2000000000);
+  Settle(core);
+  return core;
+}
+
+// After abort_mowing on a planned path the mower goes home; the job stays unfinished.
+LogicCore Docking() {
+  LogicCore core = Following();
+  EXPECT_EQ(core.OnAction("mower_logic:mowing/abort_mowing"), ActionResult::kDone);
+  EXPECT_TRUE(core.Docking());
+  Settle(core);
+  return core;
+}
+
+LogicCore IdleWithJob() {
+  LogicCore core = Docking();
+  EXPECT_EQ(core.OnAction("mower_logic:docking/abort_docking"), ActionResult::kDone);
+  Settle(core);
+  return core;
+}
+
+LogicCore Recording() {
+  LogicCore core = Idle();
+  EXPECT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
+  Settle(core);
+  return core;
+}
+
+// Recording a ring of three points.
+LogicCore Ring3() {
+  LogicCore core = Recording();
+  EXPECT_EQ(core.OnAction("mower_logic:area_recording/start_recording"), ActionResult::kDone);
+  core.OnPose(PoseAt(2.0, 0.5));
+  core.OnPose(PoseAt(3.0, 0.5));
+  core.OnPose(PoseAt(3.0, 1.5));
+  Settle(core);
+  return core;
+}
+
+LogicCore Unwritable() {
+  LogicCore core = Idle();
+  core.OnMapStatus(MapDatum::kMismatch, "");
+  Settle(core);
+  return core;
+}
+
+// On the contacts of the recorded station, the heading not aligned yet, as after a start there.
+LogicCore OnDock() {
+  LogicCore core{Tron()};
+  core.OnMapStatus(MapDatum::kMatch, "");
+  core.OnHardwareStatus(Healthy(true));
+  core.OnCapabilities(true);
+  core.OnPose(PoseAt(kHome.x, kHome.y, 0, false));
+  core.OnMowMap({{"front", "Front", true}}, Reason());
+  core.OnMapDock(kHome);
+  core.OnDrivableAreas({kHomeLawn}, {});
+  Settle(core);
+  return core;
+}
+
+LogicCore Checking() {
+  LogicCore core = OnDock();
+  EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  EXPECT_TRUE(core.DockCheckPending());
+  Settle(core);
+  return core;
+}
+
+LogicCore Undocking() {
+  LogicCore core = Checking();
+  core.TakeDockCheck();
+  EXPECT_TRUE(core.OnDockCheck(true, kHome.x + 0.03, kHome.y, 0.022f, "").empty());
+  EXPECT_TRUE(core.Undocking());
+  Settle(core);
+  return core;
+}
+
+struct Scenario {
+  const char* name;
+  std::function<LogicCore()> make;
+};
+
+const std::vector<Scenario>& Scenarios() {
+  static const std::vector<Scenario> scenarios = {
+      {"idle", Idle},
+      {"idle_job", IdleWithJob},
+      {"mowing", Mowing},
+      {"following", Following},
+      {"paused", Paused},
+      {"paused_emergency", PausedInEmergency},
+      {"held_idle", [] { return Held(Idle()); }},
+      {"held_paused", [] { return Held(Paused()); }},
+      {"emergency_idle",
+       [] {
+         LogicCore core = Idle();
+         core.OnHardwareStatus(InEmergency());
+         Settle(core);
+         return core;
+       }},
+      {"docking", Docking},
+      {"recording", Recording},
+      {"ring", Ring3},
+      {"unwritable", Unwritable},
+      {"on_dock", OnDock},
+      {"checking", Checking},
+      {"undocking", Undocking},
+  };
+  return scenarios;
+}
+
+bool Enabled(const LogicCore& core, const std::string& action_id) {
+  for (const auto& group : core.Actions()) {
+    for (const auto& action : group.actions) {
+      if (group.prefix + "/" + action.id == action_id) return action.enabled;
+    }
+  }
+  ADD_FAILURE() << "missing action " << action_id;
+  return false;
+}
+
+// The details of an event without what differs between two cores or two ways: random ids and the client.
+json Comparable(json details) {
+  for (const char* key : {"job_id", "session_id", "client"}) details.erase(key);
+  return details;
+}
+
+const Event* Find(const std::vector<Event>& events, const std::string& type) {
+  auto it = std::find_if(events.begin(), events.end(), [&](const Event& e) { return e.type == type; });
+  return it == events.end() ? nullptr : &*it;
+}
+
+CommandOutcome Rpc(LogicCore& core, const std::string& name, json params = json::object(),
+                   const Reason& node_problem = Reason()) {
+  params["client"] = "app";
+  return core.Command(name, params, node_problem);
+}
+
+}  // namespace
+
+// One way: every action and its RPC do the same in every state, events and all, but for client.
+TEST(LogicCommands, ActionAndRpcAlikeInEveryState) {
+  int compared = 0;
+  for (const auto& scenario : Scenarios()) {
+    for (const auto& command : mowbite_api::Commands()) {
+      for (const auto& entry : command.actions) {
+        const std::string where = std::string(scenario.name) + " " + entry.action;
+        LogicCore by_action = scenario.make();
+        LogicCore by_rpc = scenario.make();
+        const bool enabled = Enabled(by_action, entry.action);
+        const ActionResult result = by_action.OnAction(entry.action);
+        const CommandOutcome outcome = Rpc(by_rpc, command.name, entry.params);
+        ASSERT_TRUE(outcome.invalid.empty()) << where << ": " << outcome.invalid;
+        const ActionResult same = outcome.release    ? ActionResult::kReleaseEmergency
+                                  : outcome.accepted ? ActionResult::kDone
+                                                     : ActionResult::kRejected;
+        EXPECT_EQ(result, same) << where;
+        // WRONG_STATE: the action would not have been enabled.
+        if (outcome.why.code == "WRONG_STATE") {
+          EXPECT_FALSE(enabled) << where;
+        }
+        const auto action_events = by_action.TakeEvents();
+        const auto rpc_events = by_rpc.TakeEvents();
+        ASSERT_EQ(action_events.size(), rpc_events.size()) << where;
+        for (size_t i = 0; i < rpc_events.size(); i++) {
+          EXPECT_EQ(action_events[i].type, rpc_events[i].type) << where;
+          EXPECT_EQ(Comparable(action_events[i].details), Comparable(rpc_events[i].details)) << where;
+          EXPECT_FALSE(action_events[i].details.contains("client")) << where;
+          EXPECT_EQ(rpc_events[i].details.value("client", ""), "app") << where << " " << rpc_events[i].type;
+        }
+        EXPECT_EQ(by_action.RobotState().state, by_rpc.RobotState().state) << where;
+        EXPECT_EQ(by_action.RobotState().sub_state, by_rpc.RobotState().sub_state) << where;
+        for (const auto& group : by_rpc.Actions()) {
+          for (const auto& action : group.actions) {
+            EXPECT_EQ(Enabled(by_action, group.prefix + "/" + action.id), action.enabled)
+                << where << ": " << action.id;
+          }
+        }
+        EXPECT_EQ(by_action.TakeDriveCancel().has_value(), by_rpc.TakeDriveCancel().has_value()) << where;
+        EXPECT_EQ(by_action.TakeStopRequest(), by_rpc.TakeStopRequest()) << where;
+        EXPECT_EQ(by_action.TakeCheckpoint().has_value(), by_rpc.TakeCheckpoint().has_value()) << where;
+        EXPECT_EQ(by_action.TakeMapEdit().has_value(), by_rpc.TakeMapEdit().has_value()) << where;
+        EXPECT_EQ(by_action.DockCheckPending(), by_rpc.DockCheckPending()) << where;
+        // The answer: state as robot_state has it now; a refusal names its group and the event it went out as.
+        if (outcome.accepted) {
+          EXPECT_EQ(outcome.result["state"], by_rpc.RobotState().state) << where;
+          EXPECT_EQ(outcome.result["sub_state"], by_rpc.RobotState().sub_state) << where;
+        } else {
+          EXPECT_EQ(outcome.data["reason"], outcome.why.code) << where;
+          const std::string group = outcome.data["event"];
+          EXPECT_TRUE(group == command.refused || group == "COMMAND_REFUSED") << where << " " << group;
+          EXPECT_NE(mowbite_api::FindReasonGroup(group), nullptr) << where;
+          if (outcome.data.contains("event_id")) {
+            const auto event = std::find_if(rpc_events.begin(), rpc_events.end(),
+                                            [&](const Event& e) { return e.id == outcome.data["event_id"]; });
+            ASSERT_NE(event, rpc_events.end()) << where;
+            EXPECT_EQ(event->type, group) << where;
+          }
+        }
+        compared++;
+      }
+    }
+  }
+  EXPECT_EQ(compared, 21 * static_cast<int>(Scenarios().size()));
+}
+
+TEST(LogicCommands, ARefusalNamesTheEventItWentOutAs) {
+  LogicCore core = Idle();
+  core.OnHardwareStatus(InEmergency());
+  Settle(core);
+  const CommandOutcome outcome = Rpc(core, "mowing.start");
+  EXPECT_FALSE(outcome.accepted);
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].type, "MOWING_REFUSED");
+  EXPECT_EQ(events[0].details["client"], "app");
+  EXPECT_EQ(outcome.data["event"], "MOWING_REFUSED");
+  EXPECT_EQ(outcome.data["reason"], "EMERGENCY");
+  EXPECT_EQ(outcome.data["severity"], "error");
+  EXPECT_EQ(outcome.data["resume"], "user");
+  EXPECT_EQ(outcome.data["state"], "IDLE");
+  EXPECT_EQ(outcome.data["sub_state"], "");
+  EXPECT_EQ(outcome.data["event_id"], events[0].id);
+  EXPECT_EQ(events[0].id.size(), 32u);
+}
+
+TEST(LogicCommands, WrongStateGoesOutOnlyAsTheAnswer) {
+  LogicCore core = Idle();
+  for (const char* name : {"mowing.pause", "mowing.continue", "mowing.abort", "mowing.skip_area", "mowing.skip_path",
+                           "undocking.abort", "docking.abort", "recording.exit", "recording.ring_start"}) {
+    const CommandOutcome outcome = Rpc(core, name);
+    EXPECT_FALSE(outcome.accepted) << name;
+    EXPECT_EQ(outcome.why.code, "WRONG_STATE") << name;
+    EXPECT_EQ(outcome.data,
+              json::parse(R"({"event": "COMMAND_REFUSED", "reason": "WRONG_STATE", "state": "IDLE", "sub_state": "",
+                              "message": "Not now: the mower is IDLE", "severity": "info", "resume": "user"})"))
+        << name << " " << outcome.data.dump();
+  }
+  EXPECT_TRUE(core.TakeEvents().empty());
+  // While recording, a step the recorder has off: WRONG_STATE with its sub state.
+  LogicCore recording = Recording();
+  const CommandOutcome outcome = Rpc(recording, "recording.ring_stop");
+  EXPECT_EQ(outcome.why.code, "WRONG_STATE");
+  EXPECT_EQ(outcome.data["state"], "AREA_RECORDING");
+  EXPECT_TRUE(recording.TakeEvents().empty());
+}
+
+TEST(LogicCommands, ResetJobOnlyWithAJob) {
+  LogicCore core = Idle();
+  CommandOutcome outcome = Rpc(core, "mowing.reset_job");
+  EXPECT_EQ(outcome.why.code, "NO_JOB");
+  EXPECT_EQ(outcome.data["event"], "COMMAND_REFUSED");
+  EXPECT_FALSE(outcome.data.contains("event_id"));
+  core = IdleWithJob();
+  outcome = Rpc(core, "mowing.reset_job");
+  ASSERT_TRUE(outcome.accepted);
+  const auto events = core.TakeEvents();
+  const Event* reset = Find(events, "JOB_RESET");
+  ASSERT_TRUE(reset);
+  EXPECT_EQ(outcome.result["job_id"], reset->details["job_id"]);
+  EXPECT_EQ(outcome.result["state"], "IDLE");
+  EXPECT_EQ(reset->details["client"], "app");
+  EXPECT_EQ(Rpc(core, "mowing.reset_job").why.code, "NO_JOB");
+}
+
+TEST(LogicCommands, SkipOnlyWhatTheClientSaw) {
+  LogicCore core = Following();
+  ASSERT_EQ(core.RobotState().current_area, 0);
+  CommandOutcome outcome = Rpc(core, "mowing.skip_area", {{"area", 1}});
+  EXPECT_EQ(outcome.why.code, "CHANGED");
+  EXPECT_EQ(outcome.data["area"], 0);
+  EXPECT_EQ(outcome.data["event"], "COMMAND_REFUSED");
+  EXPECT_FALSE(core.TakeDriveCancel().has_value());
+  outcome = Rpc(core, "mowing.skip_path", {{"path", 3}});
+  EXPECT_EQ(outcome.why.code, "CHANGED");
+  EXPECT_EQ(outcome.data["path"], core.RobotState().current_path);
+  EXPECT_TRUE(core.TakeEvents().empty());
+  // The area it saw: skipped once the leg stopped, AREA_SKIPPED with the client of the skip.
+  outcome = Rpc(core, "mowing.skip_area", {{"area", 0}});
+  ASSERT_TRUE(outcome.accepted);
+  EXPECT_EQ(outcome.result["area"], 0);
+  EXPECT_TRUE(core.TakeDriveCancel().has_value());
+  EXPECT_TRUE(core.TakeEvents().empty());
+  core.OnLegEnded(LegEnd::kCanceled, 0, Reason("STOPPED", "Skipped by the app"));
+  const auto events = core.TakeEvents();
+  const Event* skipped = Find(events, "AREA_SKIPPED");
+  ASSERT_TRUE(skipped);
+  EXPECT_EQ(skipped->details["client"], "app");
+}
+
+TEST(LogicCommands, ParamsThatDoNotFitChangeNothing) {
+  LogicCore core = Idle();
+  CommandOutcome outcome = core.Command("mowing.start", {{"areas", {"lawn"}}});
+  EXPECT_EQ(outcome.invalid_field, "areas");
+  EXPECT_FALSE(outcome.accepted);
+  outcome = core.Command("mowing.start", {{"client", "App"}});
+  EXPECT_EQ(outcome.invalid_field, "client");
+  outcome = core.Command("recording.save", json::object());
+  EXPECT_EQ(outcome.invalid_field, "type");
+  outcome = core.Command("mowing.start", {{"speed", 1}});
+  EXPECT_EQ(outcome.invalid_field, "speed");
+  EXPECT_FALSE(core.Command("no.such", json::object()).invalid.empty());
+  EXPECT_FALSE(core.Mowing());
+  EXPECT_TRUE(core.TakeEvents().empty());
+}
+
+TEST(LogicCommands, StartAnswersWithTheState) {
+  LogicCore core = Idle();
+  CommandOutcome outcome = Rpc(core, "mowing.start");
+  ASSERT_TRUE(outcome.accepted);
+  EXPECT_EQ(outcome.result, json::parse(R"({"state": "MOWING", "sub_state": "", "check": false})"));
+  // On the station the reference check comes first.
+  core = OnDock();
+  outcome = Rpc(core, "mowing.start");
+  ASSERT_TRUE(outcome.accepted);
+  EXPECT_EQ(outcome.result, json::parse(R"({"state": "IDLE", "sub_state": "", "check": true})"));
+  // What only the node knows comes after the logic's own reasons, as MOWING_REFUSED.
+  core = Idle();
+  outcome = Rpc(core, "mowing.start", json::object(), Reason("PLANNER_MISSING", "The planner is not running"));
+  EXPECT_EQ(outcome.why.code, "PLANNER_MISSING");
+  EXPECT_EQ(outcome.data["event"], "MOWING_REFUSED");
+  EXPECT_TRUE(outcome.data.contains("event_id"));
+  core.OnHardwareStatus(InEmergency());
+  core.TakeEvents();
+  outcome = Rpc(core, "mowing.start", json::object(), Reason("PLANNER_MISSING", "The planner is not running"));
+  EXPECT_EQ(outcome.why.code, "EMERGENCY");
+}
+
+TEST(LogicCommands, DockingStart) {
+  LogicCore core = Idle();
+  CommandOutcome outcome = Rpc(core, "docking.start");
+  ASSERT_TRUE(outcome.accepted) << outcome.why.code;
+  EXPECT_EQ(outcome.result, json::parse(R"({"state": "DOCKING", "sub_state": ""})"));
+  core = Idle();
+  outcome = Rpc(core, "docking.start", json::object(), Reason("STILL_STOPPING", "The last drive is still stopping"));
+  EXPECT_EQ(outcome.data["event"], "DRIVE_REFUSED");
+  EXPECT_EQ(outcome.data["reason"], "STILL_STOPPING");
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(outcome.data["event_id"], events[0].id);
+}
+
+TEST(LogicCommands, TheHoldRefusesEveryStartWithHold) {
+  LogicCore core = Held(Idle());
+  for (const auto& [name, group] : std::vector<std::pair<std::string, std::string>>{
+           {"mowing.start", "MOWING_REFUSED"},
+           {"recording.start", "RECORDING_REFUSED"},
+           {"docking.start", "DRIVE_REFUSED"}}) {
+    const CommandOutcome outcome = Rpc(core, name);
+    EXPECT_EQ(outcome.why.code, "HOLD") << name;
+    EXPECT_EQ(outcome.data["event"], group) << name;
+    EXPECT_EQ(outcome.data["until"], 2000000000) << name;
+    EXPECT_TRUE(outcome.data.contains("event_id")) << name;
+  }
+  core = Held(Paused());
+  const CommandOutcome outcome = Rpc(core, "mowing.continue");
+  EXPECT_EQ(outcome.data["event"], "MOWING_REFUSED");
+  EXPECT_EQ(outcome.why.code, "HOLD");
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+}
+
+TEST(LogicCommands, InAnEmergencyNoSecondEvent) {
+  LogicCore core = PausedInEmergency();
+  CommandOutcome outcome = Rpc(core, "mowing.continue");
+  EXPECT_EQ(outcome.why.code, "EMERGENCY");
+  EXPECT_EQ(outcome.data["event"], "MOWING_REFUSED");
+  EXPECT_FALSE(outcome.data.contains("event_id"));
+  core = Idle();
+  core.OnHardwareStatus(InEmergency());
+  core.TakeEvents();
+  outcome = Rpc(core, "recording.start");
+  EXPECT_EQ(outcome.why.code, "EMERGENCY");
+  EXPECT_EQ(outcome.data["event"], "RECORDING_REFUSED");
+  EXPECT_EQ(outcome.data["severity"], "error");
+  EXPECT_TRUE(core.TakeEvents().empty());
+}
+
+TEST(LogicCommands, RecordingRefusalCarriesItsAction) {
+  LogicCore core = Recording();
+  // Without an outline the recorder has saving off: WRONG_STATE, no event.
+  CommandOutcome outcome = Rpc(core, "recording.save", {{"type", "mow"}});
+  EXPECT_EQ(outcome.why.code, "WRONG_STATE");
+  core = Ring3();
+  core.OnMapStatus(MapDatum::kMismatch, "");
+  core.TakeEvents();
+  outcome = Rpc(core, "recording.save", {{"type", "nav"}});
+  EXPECT_EQ(outcome.why.code, "MAP_MISMATCH");
+  EXPECT_EQ(outcome.data["event"], "RECORDING_REFUSED");
+  EXPECT_EQ(outcome.data["action"], "finish_navigation_area");
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(outcome.data["event_id"], events[0].id);
+  EXPECT_EQ(events[0].details["client"], "app");
+}
+
+// The end of the emergency after emergency.reset tells who released it (masterplan 3.1a).
+TEST(LogicCommands, ReleaseCarriesSourceAndClient) {
+  LogicCore core = Idle();
+  core.OnHardwareStatus(InEmergency());
+  core.TakeEvents();
+  CommandOutcome outcome = Rpc(core, "emergency.reset");
+  EXPECT_TRUE(outcome.accepted);
+  EXPECT_TRUE(outcome.release);
+  core.OnReleaseAnswered(10.0);
+  core.OnHardwareStatus(Healthy());
+  auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].details["emergency"], false);
+  EXPECT_EQ(events[0].details["source"], "rpc");
+  EXPECT_EQ(events[0].details["client"], "app");
+  // By the action: source rpc without a client.
+  core.OnHardwareStatus(InEmergency());
+  core.TakeEvents();
+  EXPECT_EQ(core.OnAction("mower_logic/reset_emergency"), ActionResult::kReleaseEmergency);
+  core.OnHardwareStatus(Healthy());
+  events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].details["source"], "rpc");
+  EXPECT_FALSE(events[0].details.contains("client"));
+  // An end long after the answer, or without a request, does not say who.
+  core.OnHardwareStatus(InEmergency());
+  Rpc(core, "emergency.reset");
+  core.OnReleaseAnswered(20.0);
+  core.OnTick(20.0 + kReleaseSourceS + 0.1);
+  core.OnHardwareStatus(Healthy());
+  events = core.TakeEvents();
+  ASSERT_FALSE(events.empty());
+  EXPECT_FALSE(events.back().details.contains("source"));
+  // A refusal is the event with the client of the request, and its id for the answer.
+  core.OnHardwareStatus(InEmergency());
+  core.TakeEvents();
+  Rpc(core, "emergency.reset");
+  const std::string id = core.RefuseReset(Reason("STILL_TILTED", "Still tilted"));
+  events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].id, id);
+  EXPECT_EQ(events[0].details["client"], "app");
+  const json data = core.RefusalData("EMERGENCY_RESET_REFUSED", Reason("STILL_TILTED", "Still tilted"), id);
+  EXPECT_EQ(data["severity"], "warning");
+  EXPECT_EQ(data["event_id"], id);
+  // After the refusal the end of the emergency has no source.
+  core.OnHardwareStatus(Healthy());
+  EXPECT_FALSE(core.TakeEvents().back().details.contains("source"));
+}

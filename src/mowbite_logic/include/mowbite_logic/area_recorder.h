@@ -13,6 +13,8 @@ namespace mowbite_logic {
 struct Event {
   std::string type;
   json details;
+  // The id the event goes out with; the logic sets it.
+  std::string id;
 };
 
 struct Point2 {
@@ -82,8 +84,9 @@ class AreaRecorder {
 
   // Drops everything recorded and not saved; an edit on its way is still reported when it is answered.
   void Reset();
-  // An action of mower_logic:area_recording without the prefix, except exit_recording_mode.
-  Result OnAction(const std::string& name);
+  // An action of mower_logic:area_recording without the prefix, except exit_recording_mode; why: the reason of a
+  // refusal that went out as RECORDING_REFUSED, empty for one without an event (the action is not enabled).
+  Result OnAction(const std::string& name, Reason* why = nullptr);
   // heading_valid: the localization has its heading, else base_link may be off by the antenna offset.
   void OnPose(double x, double y, float position_accuracy, bool heading_valid);
   // The pose got too old.
@@ -137,6 +140,7 @@ class AreaRecorder {
 
  private:
   Result Refuse(const std::string& action, const Reason& reason);
+  Result Act(const std::string& name);
   // Ends the open ring: the outline if there is none yet, else an obstacle.
   bool CloseRing(const std::string& action);
   Result Finish(const std::string& action, const std::string& type);
@@ -170,6 +174,8 @@ class AreaRecorder {
   std::optional<MapEdit> pending_;
   bool edit_untaken_ = false;
   std::vector<Event> events_;
+  // The reason of the last Refuse, for OnAction.
+  Reason refusal_;
   std::vector<std::string> notices_;
   bool actions_changed_ = true;
   bool overlay_changed_ = true;

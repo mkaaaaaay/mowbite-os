@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <deque>
 #include <cmath>
@@ -11,6 +12,11 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include <netdb.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include <geometry_msgs/msg/twist.hpp>
 #include <mqtt/async_client.h>
@@ -49,6 +55,7 @@ constexpr double kRetrySeconds = 5.0;
 constexpr auto kPositionPeriod = 150ms;
 constexpr auto kSavePeriod = 30s;
 constexpr auto kRestartNoteDelay = 1s;
+constexpr int kReachableTimeoutMs = 1000;
 constexpr char kClientId[] = "mowbite_bridge";
 constexpr char kRestartNote[] = "container_exit.json";
 // Left by tron.launch.py after it took data_dir back for an older image.
@@ -118,6 +125,32 @@ RobotStateView View(const msg::RobotState& m) {
 
 std::string JoinPath(const std::string& dir, const std::string& name) {
   return dir.empty() ? "" : dir + "/" + name;
+}
+
+// Whether the broker takes a TCP connection within kReachableTimeoutMs; it tells a broker that dropped a connect from
+// one that cannot be reached.
+bool TakesTcp(const std::string& host, int64_t port) {
+  addrinfo hints{};
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo* found = nullptr;
+  if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &found) != 0) return false;
+  bool reached = false;
+  for (addrinfo* a = found; a && !reached; a = a->ai_next) {
+    const int fd = socket(a->ai_family, a->ai_socktype | SOCK_NONBLOCK | SOCK_CLOEXEC, a->ai_protocol);
+    if (fd < 0) continue;
+    if (connect(fd, a->ai_addr, a->ai_addrlen) == 0) {
+      reached = true;
+    } else if (errno == EINPROGRESS) {
+      pollfd p{fd, POLLOUT, 0};
+      int error = 0;
+      socklen_t length = sizeof(error);
+      reached = poll(&p, 1, kReachableTimeoutMs) == 1 && getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 &&
+                error == 0;
+    }
+    close(fd);
+  }
+  freeaddrinfo(found);
+  return reached;
 }
 
 // Runs a callback in the executor once another thread has called Wake().
@@ -247,13 +280,7 @@ class BridgeNode : public rclcpp::Node {
 
     wakeup_ = std::make_shared<Wakeup>(get_node_base_interface()->get_context(), [this] { Drain(); });
     get_node_waitables_interface()->add_waitable(wakeup_, nullptr);
-    client_ = std::make_unique<mqtt::async_client>("tcp://" + host_ + ":" + std::to_string(port_), kClientId);
-    // The client's thread only queues and wakes the executor; the client is called from the executor alone.
-    client_->set_connected_handler([this](const std::string&) { Post({Arrival::kConnected, "", "", false}); });
-    client_->set_connection_lost_handler([this](const std::string&) { Post({Arrival::kLost, "", "", false}); });
-    client_->set_message_callback([this](mqtt::const_message_ptr m) {
-      if (m) Post({Arrival::kMessage, m->get_topic(), m->get_payload_str(), m->is_retained()});
-    });
+    MakeClient();
     retry_timer_ = create_wall_timer(kRetryCheck, [this] { TryConnect(); });
     TryConnect();
   }
@@ -270,17 +297,46 @@ class BridgeNode : public rclcpp::Node {
       RCLCPP_WARN(get_logger(), "MQTT disconnect: %s", e.what());
     }
     client_.reset();
+    retired_client_.reset();
     get_node_waitables_interface()->remove_waitable(wakeup_, nullptr);
   }
 
  private:
-  // What the MQTT client's thread hands over to the executor.
+  // What the MQTT client's thread hands over to the executor; code and reachable only with kConnectFailed.
   struct Arrival {
-    enum Kind { kMessage, kConnected, kLost } kind;
+    enum Kind { kMessage, kConnected, kLost, kConnectFailed } kind;
     std::string topic;
     std::string payload;
-    bool retained;
+    bool retained = false;
+    ResponseRoute route;
+    int code = 0;
+    bool reachable = false;
   };
+
+  // A client for version_; the old one of a fallback is kept until the end, its thread may still be in a callback.
+  void MakeClient() {
+    if (client_) retired_client_ = std::move(client_);
+    const int version = version_.version() == 5 ? MQTTVERSION_5 : MQTTVERSION_3_1_1;
+    client_ = std::make_unique<mqtt::async_client>("tcp://" + host_ + ":" + std::to_string(port_), kClientId,
+                                                   mqtt::create_options(version));
+    // The client's thread only queues and wakes the executor; the client is called from the executor alone.
+    client_->set_connected_handler(
+        [this](const std::string&) { Post({Arrival::kConnected, "", "", false, {}, 0, false}); });
+    client_->set_connection_lost_handler(
+        [this](const std::string&) { Post({Arrival::kLost, "", "", false, {}, 0, false}); });
+    client_->set_message_callback([this](mqtt::const_message_ptr m) {
+      if (!m) return;
+      Arrival arrival{Arrival::kMessage, m->get_topic(), m->get_payload_str(), m->is_retained(), {}, 0, false};
+      const mqtt::properties& props = m->get_properties();
+      if (props.contains(mqtt::property::RESPONSE_TOPIC)) {
+        arrival.route.topic = mqtt::get<std::string>(props, mqtt::property::RESPONSE_TOPIC);
+      }
+      if (props.contains(mqtt::property::CORRELATION_DATA)) {
+        arrival.route.correlation = mqtt::get<std::string>(props, mqtt::property::CORRELATION_DATA);
+      }
+      Post(std::move(arrival));
+    });
+  }
 
   // Beyond kMaxInbox waiting messages new ones are dropped; connection changes always go in.
   void Post(Arrival arrival) {
@@ -302,26 +358,32 @@ class BridgeNode : public rclcpp::Node {
       switch (a.kind) {
         case Arrival::kConnected: OnConnected(); break;
         case Arrival::kLost: OnConnectionLost(); break;
+        case Arrival::kConnectFailed: OnConnectFailed(a.code, a.reachable); break;
         case Arrival::kMessage:
-          Locked("MQTT input", [&] { core_.OnMqtt(a.topic, a.payload, a.retained); });
+          Locked("MQTT input", [&] { core_.OnMqtt(a.topic, a.payload, a.retained, a.route); });
           break;
       }
     }
   }
 
-  // Ends a pending connect attempt either way; the connected handler does the rest.
+  // Ends a pending connect attempt; the connected handler does the rest after a success, OnConnectFailed after a
+  // failure, which also ends the attempt.
   class ConnectWatch : public mqtt::iaction_listener {
    public:
-    explicit ConnectWatch(std::atomic<bool>& pending) : pending_(pending) {}
-    void on_failure(const mqtt::token&) override {
-      pending_ = false;
+    explicit ConnectWatch(BridgeNode& node) : node_(node) {}
+    void on_failure(const mqtt::token& token) override {
+      const int code = token.get_return_code();
+      // Only a failure of the client itself can be a broker that dropped the connect; the probe waits here, not in
+      // the executor.
+      const bool reachable = code == MQTTASYNC_FAILURE && TakesTcp(node_.host_, node_.port_);
+      node_.Post({Arrival::kConnectFailed, "", "", false, {}, code, reachable});
     }
     void on_success(const mqtt::token&) override {
-      pending_ = false;
+      node_.connecting_ = false;
     }
 
    private:
-    std::atomic<bool>& pending_;
+    BridgeNode& node_;
   };
 
   template <typename M, typename F>
@@ -350,7 +412,14 @@ class BridgeNode : public rclcpp::Node {
     Outbox out = core_.Take();
     for (const auto& m : out.mqtt) {
       try {
-        if (client_ && connected_) client_->publish(m.topic, m.payload.data(), m.payload.size(), m.qos, m.retain);
+        if (!client_ || !connected_) continue;
+        if (m.correlation) {
+          mqtt::properties props;
+          props.add(mqtt::property(mqtt::property::CORRELATION_DATA, *m.correlation));
+          client_->publish(mqtt::message::create(m.topic, m.payload.data(), m.payload.size(), m.qos, m.retain, props));
+        } else {
+          client_->publish(m.topic, m.payload.data(), m.payload.size(), m.qos, m.retain);
+        }
       } catch (const mqtt::exception& e) {
         RCLCPP_DEBUG(get_logger(), "MQTT publish of %s: %s", m.topic.c_str(), e.what());
       }
@@ -391,8 +460,16 @@ class BridgeNode : public rclcpp::Node {
     connecting_ = true;
     try {
       mqtt::connect_options options;
-      options.set_mqtt_version(MQTTVERSION_3_1_1);
-      options.set_clean_session(true);
+      if (version_.version() == 5) {
+        options.set_mqtt_version(MQTTVERSION_5);
+        options.set_clean_start(true);
+        mqtt::properties props;
+        props.add(mqtt::property(mqtt::property::SESSION_EXPIRY_INTERVAL, 0));
+        options.set_properties(props);
+      } else {
+        options.set_mqtt_version(MQTTVERSION_3_1_1);
+        options.set_clean_session(true);
+      }
       options.set_keep_alive_interval(30);
       options.set_connect_timeout(4);
       options.set_automatic_reconnect(false);
@@ -403,8 +480,23 @@ class BridgeNode : public rclcpp::Node {
     }
   }
 
+  void OnConnectFailed(int code, bool reachable) {
+    connecting_ = false;
+    const auto failure = MqttVersion::Classify(code, reachable);
+    if (stopping_ || !version_.OnFailure(failure)) {
+      RCLCPP_DEBUG(get_logger(), "MQTT connect failed with %d", code);
+      return;
+    }
+    RCLCPP_WARN(get_logger(), "MQTT: the broker at %s:%ld %s MQTT 5, the bridge uses 3.1.1 until it restarts: answers "
+                "go to rpc/response only", host_.c_str(), static_cast<long>(port_),
+                failure == MqttVersion::Failure::kRefused ? "refused" : "twice dropped the connect of");
+    MakeClient();
+    last_attempt_ = -1e9;
+  }
+
   void OnConnected() {
     if (stopping_) return;
+    version_.OnConnected();
     Locked("connect", [&] {
       connected_ = true;
       for (const auto& topic : BridgeCore::CommandTopics()) {
@@ -414,7 +506,7 @@ class BridgeNode : public rclcpp::Node {
           RCLCPP_WARN(get_logger(), "MQTT subscribe to %s: %s", topic.c_str(), e.what());
         }
       }
-      core_.Connected();
+      core_.Connected(version_.version());
     });
   }
 
@@ -456,9 +548,11 @@ class BridgeNode : public rclcpp::Node {
   std::atomic<bool> connected_{false};
   std::atomic<bool> connecting_{false};
   double last_attempt_ = -1e9;
-  ConnectWatch connect_watch_{connecting_};
+  MqttVersion version_;
+  ConnectWatch connect_watch_{*this};
   std::shared_ptr<Wakeup> wakeup_;
   std::unique_ptr<mqtt::async_client> client_;
+  std::unique_ptr<mqtt::async_client> retired_client_;
 
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr action_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr teleop_pub_;

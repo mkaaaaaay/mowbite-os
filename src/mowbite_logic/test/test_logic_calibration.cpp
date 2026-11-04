@@ -275,11 +275,11 @@ TEST(Calibration, EveryReasonAgainstAStart) {
     // Room and sensors come from the program, with their numbers.
     LogicCore core = Ready();
     CalibrationStatus status = Lane(0, 0);
-    status.problems.push_back(Reason("NO_ROOM", "No room").With("length", 1.4).With("limit", 2.0));
+    status.problems.push_back(Reason("NO_ROOM", "No room").With("free_length", 1.4).With("length", 2.0));
     status.problems.push_back(Reason("SLOPE", "Tilted by 7 deg").With("slope", 7.0).With("limit", 5.0));
     core.OnCalibrationStatus(status, 10.5);
     const Event e = refused(core, "NO_ROOM");
-    EXPECT_DOUBLE_EQ(e.details["length"].get<double>(), 1.4);
+    EXPECT_DOUBLE_EQ(e.details["free_length"].get<double>(), 1.4);
     EXPECT_EQ(e.details["severity"], "warning");
     EXPECT_EQ(Codes(core.CalibrationProblems(11.0)), (std::vector<std::string>{"NO_ROOM", "SLOPE"}));
     // Without a lane and without a reason from the program.

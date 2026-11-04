@@ -2,6 +2,8 @@
 
 #include <cstdio>
 
+#include "mowbite_api/catalog.h"
+
 namespace mowbite_bridge {
 
 namespace {
@@ -148,11 +150,13 @@ std::string VersionText(const std::string& version) {
   return Dump(Json{{"version", version.empty() ? "UNKNOWN VERSION" : version}});
 }
 
-Json SystemInfo(const std::string& version, const std::string& platform) {
+Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version) {
   return Json{{"name", "mowbite-os"},
               {"version", version.empty() ? "UNKNOWN VERSION" : version},
               {"platform", platform},
-              {"schema", DataSchema()}};
+              {"schema", DataSchema()},
+              {"api", mowbite_api::kApi},
+              {"mqtt", mqtt_version}};
 }
 
 int DataSchema() {

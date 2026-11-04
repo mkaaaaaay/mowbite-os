@@ -141,11 +141,19 @@ void AreaRecorder::Reset() {
 AreaRecorder::Result AreaRecorder::Refuse(const std::string& action, const Reason& reason) {
   json details = {{"action", action}};
   PutReason(&details, "RECORDING_REFUSED", reason);
-  events_.push_back({"RECORDING_REFUSED", std::move(details)});
+  events_.push_back({"RECORDING_REFUSED", std::move(details), ""});
+  refusal_ = reason;
   return Result::kRefused;
 }
 
-AreaRecorder::Result AreaRecorder::OnAction(const std::string& name) {
+AreaRecorder::Result AreaRecorder::OnAction(const std::string& name, Reason* why) {
+  refusal_ = Reason();
+  const Result result = Act(name);
+  if (why) *why = result == Result::kRefused ? refusal_ : Reason();
+  return result;
+}
+
+AreaRecorder::Result AreaRecorder::Act(const std::string& name) {
   const auto& names = ActionNames();
   const auto it = std::find(names.begin(), names.end(), name);
   if (it == names.end() || name == "exit_recording_mode") return Result::kUnknown;
@@ -286,7 +294,7 @@ void AreaRecorder::OnMapEditResult(bool ok, const std::string& id, const std::st
       Refuse("record_dock", failed);
       return;
     }
-    events_.push_back({"DOCK_RECORDED", {{"dock_id", id}, {"heading", edit.heading}}});
+    events_.push_back({"DOCK_RECORDED", {{"dock_id", id}, {"heading", edit.heading}}, ""});
     notices_.push_back("Saved the docking station " + id);
     dock_first_.reset();
     return;
@@ -305,7 +313,8 @@ void AreaRecorder::OnMapEditResult(bool ok, const std::string& id, const std::st
                       {"area_type", edit.type},
                       {"obstacles", edit.obstacles.size()},
                       {"points", points},
-                      {"area_m2", std::round(RingArea(edit.outline) * 10) / 10}}});
+                      {"area_m2", std::round(RingArea(edit.outline) * 10) / 10}},
+                     ""});
   notices_.push_back("Saved the " + std::string(edit.type == "nav" ? "navigation" : "mowing") + " area " + id);
   outline_.reset();
   obstacles_.clear();
