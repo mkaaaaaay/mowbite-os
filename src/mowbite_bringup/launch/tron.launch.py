@@ -29,9 +29,13 @@ RESTART_DELAY = 2.0
 EXIT_NOTE = "container_exit.json"
 
 
-# Stands in for the nodes after a halt, so that the launch stays without a restart loop until SIGINT.
+# Stands in for the nodes after a halt, so that the launch stays without a restart loop until SIGINT. It ends quietly
+# when the shutdown cancels it: a cancelled task would end the launch before it stops the processes beside it.
 async def halted(context):
-    await asyncio.Event().wait()
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        pass
 
 
 # data_dir for this image before any node starts (data_store.py): None to go on, else the halt.
