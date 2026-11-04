@@ -1,78 +1,15 @@
 #include "mowbite_logic/reasons.h"
 
 #include <cmath>
-#include <set>
+
+#include "mowbite_api/catalog.h"
 
 namespace mowbite_logic {
 
-namespace {
-
-constexpr const char* kInfo = "info";
-constexpr const char* kWarning = "warning";
-constexpr const char* kError = "error";
-constexpr const char* kAuto = "auto";
-constexpr const char* kUser = "user";
-
-bool In(const std::set<std::string>& names, const std::string& code) {
-  return names.count(code) != 0;
-}
-
-// The position or the heading is not good enough; it may get better by itself.
-const std::set<std::string> kPositionCodes = {"NO_POSITION", "POSE_LOST", "POSITION_ACCURACY", "HEADING",
-                                              "NO_HEADING"};
-
-}  // namespace
-
+// The one table of severity and resume is the catalog of the interface.
 Rating RateReason(const std::string& event, const std::string& code, const std::string& action) {
-  if (event == "MOWING_REFUSED" || event == "DRIVE_REFUSED" || event == "RECORDING_REFUSED") {
-    // Points are taken again by themselves once the position is accurate.
-    if (event == "RECORDING_REFUSED" && action == "point" && code == "POSITION_ACCURACY") return {kWarning, kAuto};
-    static const std::set<std::string> info = {"BUSY", "STILL_STOPPING", "STILL_SAVING", "ON_DOCK", "RAIN",
-                                               "ALREADY_THERE", "HOLD"};
-    static const std::set<std::string> error = {"EMERGENCY",       "NO_SAFETY_MEASUREMENT", "MAP_MISMATCH",
-                                                "MAP_UNREADABLE",  "MAP_UNKNOWN",           "PLANNER_MISSING",
-                                                "FOLLOWER_MISSING", "SAVE_FAILED"};
-    if (In(info, code)) return {kInfo, kUser};
-    if (In(error, code)) return {kError, kUser};
-    return {kWarning, kUser};
-  }
-  if (event == "CALIBRATION_REFUSED") {
-    static const std::set<std::string> info = {"BUSY", "STILL_STOPPING", "ON_DOCK", "HOLD"};
-    static const std::set<std::string> error = {"EMERGENCY",      "NO_SAFETY_MEASUREMENT", "MAP_MISMATCH",
-                                                "MAP_UNREADABLE", "MAP_UNKNOWN",           "CALIBRATION_MISSING",
-                                                "SENSOR_MISSING", "IMU_GRAVITY"};
-    if (In(info, code)) return {kInfo, kUser};
-    if (In(error, code)) return {kError, kUser};
-    return {kWarning, kUser};
-  }
-  // Nothing goes on by itself after a calibration drive stopped.
-  if (event == "CALIBRATION_FAILED") {
-    static const std::set<std::string> warning = {"NO_RTK", "BATTERY_LOW", "NO_ROOM", "SLOPE"};
-    if (code == "STOPPED") return {kInfo, kUser};
-    if (In(kPositionCodes, code) || In(warning, code)) return {kWarning, kUser};
-    return {kError, kUser};
-  }
-  if (event == "STATE") {
-    if (code == "MANUAL") return {kInfo, kUser};
-    if (In(kPositionCodes, code)) return {kWarning, kAuto};
-    return {kError, kUser};
-  }
-  if (event == "DRIVE") {
-    static const std::set<std::string> info = {"DONE", "ALREADY_THERE", "STOPPED", "CANCELED"};
-    if (In(info, code)) return {kInfo, kUser};
-    if (In(kPositionCodes, code)) return {kWarning, kUser};
-    return {kError, kUser};
-  }
-  if (event == "POSITION_JUMP") return {kWarning, kAuto};
-  if (event == "AREA_SKIPPED") return {kInfo, kAuto};
-  // With OpenMower's reason values path_failed and no_gps; the mower stays where it stopped.
-  if (event == "UNDOCKING_FAILED") return {kError, kUser};
-  // approach_failed or dock_failed: the next try follows by itself, after the last one the mower waits.
-  if (event == "DOCKING_RETRY") return {kWarning, kAuto};
-  if (event == "DOCKING_FAILED") return {kError, kUser};
-  // Tilted: level the mower and reset again. Everything else needs a look at the mower or its software.
-  if (event == "EMERGENCY_RESET_REFUSED") return {code == "STILL_TILTED" ? kWarning : kError, kUser};
-  return {kWarning, kUser};
+  const mowbite_api::Rating rating = mowbite_api::RateReason(event, code, action);
+  return {rating.severity, rating.resume};
 }
 
 void PutReason(json* details, const std::string& event, const Reason& reason) {

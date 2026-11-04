@@ -225,6 +225,10 @@ constexpr int kEmergencyMowerNotStopped = 1 << 17;
 // "LATCH, LIFT": the names of the bits as OpenMower logs them, in bit order.
 std::string EmergencyReasonNames(int reason);
 
+// Called with every event the core adds, before it is queued; for the tests against the catalog, none by default.
+using EventObserver = void (*)(const std::string& type, const json& details);
+void SetEventObserver(EventObserver observer);
+
 // How a drive of the follower for a job ended.
 enum class LegEnd { kDone, kCanceled, kGps, kEmergency, kFailed };
 

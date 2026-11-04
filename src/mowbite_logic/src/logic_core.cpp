@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <random>
 
+#include "mowbite_api/catalog.h"
+
 namespace mowbite_logic {
 
 namespace {
@@ -26,29 +28,6 @@ std::string NewId() {
   return id;
 }
 
-// EmergencyReason of OpenMower up to bit 12, then the own bits of hw/status, one name per bit.
-const char* const kReasonNames[] = {"LATCH",
-                                    "TIMEOUT_INPUTS",
-                                    "STOP",
-                                    "LIFT",
-                                    "LIFT_MULTIPLE",
-                                    "COLLISION",
-                                    "TIMEOUT_HIGH_LEVEL",
-                                    "HIGH_LEVEL",
-                                    "SERVICE_NOT_READY",
-                                    "COLLISION_MULTIPLE",
-                                    "MOWER_RPM_TIMEOUT",
-                                    "MOWER_RPM_LIMIT",
-                                    "FIRMWARE_INCOMPATIBLE",
-                                    "TILT",
-                                    "FENCE",
-                                    "STUCK",
-                                    "IMU_TIMEOUT",
-                                    "MOWER_NOT_STOPPED",
-                                    "WHEEL_RUNAWAY",
-                                    "FOREIGN_HOST",
-                                    "DRIVER_STALL"};
-
 SensorDefinition Range(std::string id, std::string name, std::string unit, SensorMeaning meaning, double min,
                        double max) {
   SensorDefinition s;
@@ -69,14 +48,18 @@ SensorDefinition Temperature(std::string id, std::string name, double min, doubl
 
 }  // namespace
 
+namespace {
+
+EventObserver event_observer = nullptr;
+
+}  // namespace
+
 std::string EmergencyReasonNames(int reason) {
-  std::string names;
-  for (size_t bit = 0; bit < sizeof(kReasonNames) / sizeof(kReasonNames[0]); bit++) {
-    if ((reason & (1 << bit)) == 0) continue;
-    if (!names.empty()) names += ", ";
-    names += kReasonNames[bit];
-  }
-  return names;
+  return mowbite_api::EmergencyNames(reason);
+}
+
+void SetEventObserver(EventObserver observer) {
+  event_observer = observer;
 }
 
 namespace {
@@ -232,6 +215,7 @@ void LogicCore::AddEvent(const std::string& type, json details) {
   details["y"] = last_y_;
   if (!job_.progress().job_id.empty()) details["job_id"] = job_.progress().job_id;
   if (!session_id_.empty()) details["session_id"] = session_id_;
+  if (event_observer) event_observer(type, details);
   events_.push_back({type, std::move(details)});
 }
 

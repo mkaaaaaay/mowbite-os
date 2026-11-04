@@ -16,14 +16,19 @@ void ExpectRating(const std::string& event, const std::string& code, const std::
 
 TEST(Reasons, RefusalsAlwaysWaitForTheUser) {
   for (const char* event : {"MOWING_REFUSED", "DRIVE_REFUSED", "RECORDING_REFUSED"}) {
-    ExpectRating(event, "BUSY", "info", "user");
-    ExpectRating(event, "RAIN", "info", "user");
-    ExpectRating(event, "EMERGENCY", "error", "user");
-    ExpectRating(event, "NO_SAFETY_MEASUREMENT", "error", "user");
+    ExpectRating(event, "HOLD", "info", "user");
     ExpectRating(event, "MAP_MISMATCH", "error", "user");
     ExpectRating(event, "POSITION_ACCURACY", "warning", "user");
+    // A reason the catalog does not list for the event waits for the user as well.
     ExpectRating(event, "BATTERY_LOW", "warning", "user");
   }
+  // The recorder refuses for the hold, the map and its points, never for the emergency or the safety measurement.
+  for (const char* event : {"MOWING_REFUSED", "DRIVE_REFUSED"}) {
+    ExpectRating(event, "BUSY", "info", "user");
+    ExpectRating(event, "EMERGENCY", "error", "user");
+    ExpectRating(event, "NO_SAFETY_MEASUREMENT", "error", "user");
+  }
+  ExpectRating("MOWING_REFUSED", "RAIN", "info", "user");
   ExpectRating("MOWING_REFUSED", "PLANNER_MISSING", "error", "user");
   ExpectRating("RECORDING_REFUSED", "SAVE_FAILED", "error", "user");
   ExpectRating("RECORDING_REFUSED", "STILL_SAVING", "info", "user");

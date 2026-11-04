@@ -38,7 +38,7 @@ struct Rating {
   const char* resume;
 };
 
-// The one table of severity and resume per event and reason. action only for RECORDING_REFUSED.
+// severity and resume per event and reason from the catalog (mowbite_api). action only for RECORDING_REFUSED.
 Rating RateReason(const std::string& event, const std::string& code, const std::string& action = "");
 
 // Puts reason, its fields, message, severity and resume into the details of an event of this type.
