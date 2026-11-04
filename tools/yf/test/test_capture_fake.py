@@ -171,9 +171,9 @@ class TestCaptureOfFake(unittest.TestCase):
         names = [x["input"] for x in p]
         self.assertEqual(names, ["gpio GPIO1", "gpio GPIO5", "gpio GPIO10", "gpio GPIO11", "gpio GPIO10",
                                  "gpio GPIO11", "gpio GPIO13", "gpio GPIO12", "gpio GPIO12", "gpio GPIO13"])
-        expected = [("STOP", 10), ("STOP", 10), ("LIFT", 2500), (None, None), ("LIFT_MULTIPLE", 0),
-                    ("LIFT_MULTIPLE", 0), ("COLLISION", 500), (None, None), ("COLLISION_MULTIPLE", 0),
-                    ("COLLISION_MULTIPLE", 0)]
+        expected = [("STOP", 10), ("STOP", 10), ("LIFT", 2500), (None, None), ("LIFT_MULTIPLE", 10),
+                    ("LIFT_MULTIPLE", 10), ("COLLISION", 500), (None, None), ("COLLISION_MULTIPLE", 10),
+                    ("COLLISION_MULTIPLE", 10)]
         for press, (reason, delay) in zip(p, expected):
             with self.subTest(press["input"], at=press["pressed_at"]):
                 self.assertEqual(press["reason"], reason)
