@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -155,7 +156,94 @@ TEST(Catalog, EmergencyBits) {
   EXPECT_EQ(EmergencyNames((1 << 0) | (1 << 3)), "LATCH, LIFT");
   EXPECT_EQ(EmergencyNames((1 << 13) | (1 << 14) | (1 << 15)), "TILT, FENCE, STUCK");
   EXPECT_EQ(EmergencyNames((1 << 18) | (1 << 19) | (1 << 20)), "WHEEL_RUNAWAY, FOREIGN_HOST, DRIVER_STALL");
-  EXPECT_EQ(EmergencyNames(1 << 25), "");
+}
+
+// Home Assistant reads the names from the log line with [A-Z_, ]: each bit, set alone, gives a name that fits it.
+TEST(Catalog, EmergencyNamesOfEachBit) {
+  const std::regex line("^[A-Z_, ]+$");
+  std::set<std::string> names;
+  for (const auto& bit : EmergencyBits()) {
+    EXPECT_TRUE(std::regex_match(bit.name, std::regex("^[A-Z_]+$"))) << bit.name;
+    EXPECT_NE(bit.name, kUnknownEmergency);
+    EXPECT_TRUE(names.insert(bit.name).second) << bit.name;
+  }
+  for (int i = 0; i < 32; i++) {
+    const int bits = static_cast<int>(1u << i);
+    const std::string expected = i < static_cast<int>(EmergencyBits().size()) ? EmergencyBits()[i].name : "UNKNOWN";
+    EXPECT_EQ(EmergencyNames(bits), expected) << i;
+    EXPECT_TRUE(std::regex_match(EmergencyNames(bits), line)) << i;
+  }
+  // One UNKNOWN for any number of bits without a name, after the named ones.
+  EXPECT_EQ(EmergencyNames((1 << 21) | (1 << 25) | static_cast<int>(1u << 31)), "UNKNOWN");
+  EXPECT_EQ(EmergencyNames((1 << 0) | (1 << 25) | (1 << 3) | (1 << 30)), "LATCH, LIFT, UNKNOWN");
+  const std::string all = EmergencyNames(-1);
+  EXPECT_TRUE(std::regex_match(all, line));
+  EXPECT_EQ(all.substr(all.size() - 9), ", UNKNOWN");
+  EXPECT_EQ(std::count(all.begin(), all.end(), ','), static_cast<long>(EmergencyBits().size()));
+}
+
+// Every bit the message of hw/status or a driver, the safety filter or the logic defines has the same name in the
+// catalog: REASON_IMU_TIMEOUT and kReasonImuTimeout are bit 16, IMU_TIMEOUT.
+TEST(Catalog, EmergencyNamesOfTheSources) {
+  const auto name_of = [](int bit) {
+    for (const auto& entry : EmergencyBits()) {
+      if (entry.bit == bit) return entry.name;
+    }
+    return std::string();
+  };
+  const std::filesystem::path root = std::filesystem::canonical(MOWBITE_SOURCE_ROOT);
+  const auto read = [](const std::filesystem::path& path) {
+    std::ifstream in(path);
+    std::stringstream text;
+    text << in.rdbuf();
+    return text.str();
+  };
+
+  const std::string msg = read(root / "mowbite_msgs/msg/HardwareStatus.msg");
+  const std::regex constant(R"(uint32 REASON_([A-Z_]+) = (\d+))");
+  int in_msg = 0;
+  for (std::sregex_iterator it(msg.begin(), msg.end(), constant), end; it != end; ++it) {
+    const unsigned long value = std::stoul((*it)[2]);
+    ASSERT_TRUE(value != 0 && (value & (value - 1)) == 0) << (*it)[1] << " is no single bit";
+    int bit = 0;
+    while ((1ul << bit) != value) bit++;
+    EXPECT_EQ(name_of(bit), (*it)[1].str()) << "REASON_" << (*it)[1] << " = 1 << " << bit;
+    in_msg++;
+  }
+  EXPECT_GE(in_msg, 15);
+
+  // kReasonTilt = 1u << 13 and kEmergencyLift = 1 << 3, kLift = 1u << 3 in a namespace reason; the name in CamelCase.
+  const std::regex shift(R"(k(?:Reason|Emergency)([A-Z][A-Za-z]*) = 1u? << (\d+);)");
+  const std::regex in_namespace(R"(namespace reason \{([^}]*)\})");
+  const std::regex plain(R"(k([A-Z][A-Za-z]*) = 1u? << (\d+);)");
+  const auto upper_snake = [](const std::string& camel) {
+    std::string out;
+    for (char c : camel) {
+      if (std::isupper(static_cast<unsigned char>(c)) && !out.empty()) out += '_';
+      out += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    return out;
+  };
+  int in_sources = 0;
+  for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
+    const std::string path = "/" + std::filesystem::relative(entry.path(), root).string();
+    const std::string ext = entry.path().extension().string();
+    if (!entry.is_regular_file() || (ext != ".cpp" && ext != ".h")) continue;
+    if (path.find("/test/") != std::string::npos) continue;
+    const std::string source = read(entry.path());
+    const auto check = [&](const std::string& text, const std::regex& pattern) {
+      for (std::sregex_iterator it(text.begin(), text.end(), pattern), end; it != end; ++it) {
+        const int bit = std::stoi((*it)[2]);
+        EXPECT_EQ(name_of(bit), upper_snake((*it)[1])) << path << ": " << (*it)[0];
+        in_sources++;
+      }
+    };
+    check(source, shift);
+    for (std::sregex_iterator it(source.begin(), source.end(), in_namespace), end; it != end; ++it) {
+      check((*it)[1].str(), plain);
+    }
+  }
+  EXPECT_GE(in_sources, 50);
 }
 
 // Every Reason("NAME") in the sources of the OS is in the catalog, for some event.

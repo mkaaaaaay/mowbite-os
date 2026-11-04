@@ -118,7 +118,10 @@ struct Rating {
 // severity and resume of a reason of an event or of a group of answers; action only for RECORDING_REFUSED.
 Rating RateReason(const std::string& event, const std::string& code, const std::string& action = "");
 
-// The names of the set emergency bits, "LATCH, LIFT"; bits without a name are left out.
+// The name EmergencyNames gives all set bits without a name together.
+constexpr char kUnknownEmergency[] = "UNKNOWN";
+
+// The names of the set emergency bits in bit order, "LATCH, LIFT"; set bits without a name add one UNKNOWN at the end.
 std::string EmergencyNames(int bits);
 
 // The JSON Schema 2020-12 of the interface with the catalog in x-reasons, x-emergency-bits and x-commands.

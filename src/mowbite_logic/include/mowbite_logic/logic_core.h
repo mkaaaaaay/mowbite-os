@@ -238,7 +238,7 @@ constexpr int kEmergencyFirmwareIncompatible = 1 << 12;
 constexpr int kEmergencyImuTimeout = 1 << 16;
 constexpr int kEmergencyMowerNotStopped = 1 << 17;
 
-// "LATCH, LIFT": the names of the bits as OpenMower logs them, in bit order.
+// "LATCH, LIFT": the names of the bits from the catalog in bit order, one UNKNOWN for all bits without a name.
 std::string EmergencyReasonNames(int reason);
 
 // Called with every event the core adds, before it is queued; for the tests against the catalog, none by default.

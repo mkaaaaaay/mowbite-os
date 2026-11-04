@@ -182,6 +182,7 @@ TEST(Logic, ReasonNamesAsOpenMowerLogsThem) {
   EXPECT_EQ(EmergencyReasonNames(kEmergencyMowerNotStopped), "MOWER_NOT_STOPPED");
   EXPECT_EQ(EmergencyReasonNames((1 << 13) | (1 << 14) | (1 << 15)), "TILT, FENCE, STUCK");
   EXPECT_EQ(EmergencyReasonNames((1 << 18) | (1 << 19) | (1 << 20)), "WHEEL_RUNAWAY, FOREIGN_HOST, DRIVER_STALL");
+  EXPECT_EQ(EmergencyReasonNames(kEmergencyLatch | (1 << 21) | (1 << 28)), "LATCH, UNKNOWN");
 }
 
 TEST(Logic, OwnReasonBitsReachTheRobotState) {

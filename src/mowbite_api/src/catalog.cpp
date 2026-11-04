@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <map>
 
 #include "mowbite_api/catalog.h"
@@ -264,12 +265,16 @@ Rating RateReason(const std::string& event, const std::string& code, const std::
 }
 
 std::string EmergencyNames(int bits) {
+  const uint32_t set = static_cast<uint32_t>(bits);
+  uint32_t named = 0;
   std::string names;
   for (const auto& bit : EmergencyBits()) {
-    if ((bits & (1 << bit.bit)) == 0) continue;
+    named |= 1u << bit.bit;
+    if ((set & (1u << bit.bit)) == 0) continue;
     if (!names.empty()) names += ", ";
     names += bit.name;
   }
+  if ((set & ~named) != 0) names += names.empty() ? kUnknownEmergency : std::string(", ") + kUnknownEmergency;
   return names;
 }
 
