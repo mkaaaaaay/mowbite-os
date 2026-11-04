@@ -15,6 +15,7 @@
   <depend>diagnostic_msgs</depend>
   <depend>mowbite_msgs</depend>
   <depend>mowbite_hold</depend>
+  <depend>mowbite_outbox</depend>
   <depend>mowbite_gnss</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>

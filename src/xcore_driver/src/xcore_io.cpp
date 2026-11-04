@@ -1,0 +1,495 @@
+#include "xcore_driver/xcore_io.h"
+
+#include <dirent.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <fstream>
+#include <set>
+#include <sstream>
+
+#include "xcore_driver/services.h"
+#include "xcore_driver/socket_table.h"
+
+namespace xcore {
+
+namespace {
+
+using mowbite_outbox::Format;
+
+// Functions of the meta service.
+constexpr uint8_t kGetFirmwareVersion = 0;
+constexpr uint8_t kGetMajorVersion = 1;
+// A firmware question without an answer is asked again after this long.
+constexpr double kRpcRetryS = 5.0;
+// Datagrams computed this long before they would go out are dropped: the thread stalled in between.
+constexpr double kStaleSendS = 0.1;
+// Without a socket the loop waits this long before it tries again.
+constexpr double kClosedWaitS = 0.05;
+
+const char* ServiceName(uint16_t id) {
+  switch (id) {
+    case kEmergencyService: return "emergency";
+    case kDiffDriveService: return "diff drive";
+    case kMowerService: return "mower";
+    case kImuService: return "imu";
+    case kPowerService: return "power";
+    case kGpsService: return "gps";
+    case kInputService: return "input";
+    case kMetaService: return "meta";
+  }
+  return "unknown";
+}
+
+}  // namespace
+
+double MonotonicSeconds() {
+  using namespace std::chrono;
+  return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+int64_t WallNanoseconds() {
+  using namespace std::chrono;
+  return duration_cast<nanoseconds>(system_clock::now().time_since_epoch()).count();
+}
+
+uint64_t BlockOf(const ControlStatus& status) {
+  return status.emergency_reason | (uint64_t{status.blocked} << 32) | (uint64_t{status.latched} << 33) |
+         (uint64_t{status.held} << 34);
+}
+
+std::optional<std::string> ForeignHosts(uint32_t bind_ip, uint16_t group_port) {
+  std::vector<ForeignSocket> found;
+  std::vector<std::string> tables;
+  for (const char* path : {"/proc/net/udp", "/proc/net/udp6"}) {
+    std::ifstream file(path);
+    if (!file && std::string(path) == "/proc/net/udp") return std::string("cannot read /proc/net/udp");
+    std::stringstream text;
+    text << file.rdbuf();
+    tables.push_back(text.str());
+  }
+  // Own sockets after the tables: one opened in between is not in them.
+  std::set<uint64_t> own;
+  if (DIR* dir = opendir("/proc/self/fd")) {
+    while (const dirent* entry = readdir(dir)) {
+      char path[300];
+      char target[64];
+      std::snprintf(path, sizeof(path), "/proc/self/fd/%s", entry->d_name);
+      const ssize_t n = readlink(path, target, sizeof(target) - 1);
+      if (n <= 0) continue;
+      target[n] = '\0';
+      unsigned long long inode = 0;
+      if (std::sscanf(target, "socket:[%llu]", &inode) == 1) own.insert(inode);
+    }
+    closedir(dir);
+  } else {
+    return std::string("cannot read /proc/self/fd");
+  }
+  for (const auto& table : tables) {
+    auto sockets = ForeignSockets(table, bind_ip, group_port, own);
+    found.insert(found.end(), sockets.begin(), sockets.end());
+  }
+  if (found.empty()) return std::nullopt;
+  std::string text = "another program holds UDP sockets at " + Ipv4Text(bind_ip) + " or port " +
+                     std::to_string(group_port) + ":";
+  for (const auto& socket : found) text += " " + ForeignSocketText(socket);
+  return text;
+}
+
+XcoreIo::XcoreIo(const IoConfig& config, const ControlConfig& control, const InputMap& inputs)
+    : config_(config), control_(control, inputs) {
+}
+
+XcoreIo::~XcoreIo() {
+  Stop();
+}
+
+void XcoreIo::Start() {
+  thread_ = std::thread([this] { Loop(); });
+}
+
+void XcoreIo::RequestStop() {
+  running_ = false;
+}
+
+void XcoreIo::Stop() {
+  RequestStop();
+  if (thread_.joinable()) thread_.join();
+}
+
+void XcoreIo::OnCmdVel(double linear, double angular) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  control_.OnCmdVel(linear, angular, MonotonicSeconds());
+}
+
+bool XcoreIo::LatchEmergency(uint32_t bits) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return control_.LatchEmergency(bits);
+}
+
+std::optional<ReleaseRefusal> XcoreIo::ReleaseEmergency() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return control_.ReleaseEmergency(MonotonicSeconds());
+}
+
+BladeResult XcoreIo::SetBlade(const BladeRequest& request, uint32_t* emergency_reason) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return control_.SetBlade(request, MonotonicSeconds(), emergency_reason);
+}
+
+bool XcoreIo::PushRtcm(const uint8_t* data, size_t size) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return rtcm_.Push(data, size);
+}
+
+uint64_t XcoreIo::rtcm_dropped_bytes() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return rtcm_.dropped_bytes();
+}
+
+void XcoreIo::SetHold(bool held) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  control_.SetHold(held);
+}
+
+void XcoreIo::LatchForeignHost(const std::string& why) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  control_.LatchForeignHost(why, MonotonicSeconds());
+}
+
+IoSnapshot XcoreIo::Snapshot() {
+  IoSnapshot snapshot;
+  std::lock_guard<std::mutex> lock(mutex_);
+  snapshot.status = control_.Status(MonotonicSeconds());
+  if (link_) {
+    snapshot.linked = true;
+    snapshot.link_received = link_->received();
+    snapshot.link_dropped = link_->dropped();
+  }
+  snapshot.firmware_version = firmware_version_;
+  return snapshot;
+}
+
+void XcoreIo::CheckBlock() {
+  uint64_t block;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    block = BlockOf(control_.Status(MonotonicSeconds()));
+  }
+  if (block == requested_block_) return;
+  requested_block_ = block;
+  outbox_.status_due = true;
+  outbox_.wakeup.Notify();
+}
+
+bool XcoreIo::Open(double now) {
+  uint32_t interface_ip = 0;
+  std::string error;
+  if (!InterfaceAddress(config_.interface, interface_ip)) {
+    if (open_problem_.Allow(now)) outbox_.log.Error("Interface " + config_.interface + " has no IPv4 address");
+    return false;
+  }
+  uint32_t group_ip = 0;
+  if (!ParseIpv4(config_.group, group_ip) || !announcements_.Bind(group_ip, config_.group_port, true, error) ||
+      !announcements_.JoinGroup(config_.group, interface_ip, error)) {
+    if (open_problem_.Allow(now)) {
+      outbox_.log.Error(Format("Cannot listen to %s:%u on %s: %s", config_.group.c_str(), config_.group_port,
+                               config_.interface.c_str(), error.c_str()));
+    }
+    announcements_.Close();
+    return false;
+  }
+  if (!service_socket_.Bind(config_.bind_ip, 0, false, error)) {
+    if (open_problem_.Allow(now)) {
+      outbox_.log.Error(Format("Cannot bind to %s: %s", Ipv4Text(config_.bind_ip).c_str(), error.c_str()));
+    }
+    announcements_.Close();
+    return false;
+  }
+  LinkConfig link;
+  link.host = {config_.bind_ip, service_socket_.LocalPort()};
+  link.services = config_.services;
+  link.contest_losses = config_.contest_losses;
+  link.contest_window_s = config_.contest_window_s;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    link_.emplace(link);
+    for (const auto& entry : config_.services) control_.OnServiceRestart(entry.first, MonotonicSeconds());
+  }
+  open_ = true;
+  outbox_.log.Info(Format("Listening for the board on %s:%u via %s (%s), services answer to %s:%u",
+                          config_.group.c_str(), config_.group_port, config_.interface.c_str(),
+                          Ipv4Text(interface_ip).c_str(), Ipv4Text(config_.bind_ip).c_str(),
+                          service_socket_.LocalPort()));
+  return true;
+}
+
+void XcoreIo::Close() {
+  open_ = false;
+  announcements_.Close();
+  service_socket_.Close();
+}
+
+void XcoreIo::Loop() {
+  uint8_t buffer[kMaxDatagram + 1];
+  // 0: no tick due yet, so the first one after a start or a closed socket counts as on time.
+  double next_tick = 0;
+  double next_open = 0;
+  while (running_) {
+    double now = MonotonicSeconds();
+    if (!service_socket_.IsOpen()) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        control_.Alive(now);
+      }
+      if (now >= next_open) {
+        next_open = now + 1.0;
+        // A second host at the board takes over whatever this driver claims: no start beside one. The board is
+        // not claimed yet, so reading /proc here holds up nothing.
+        if (auto foreign = ForeignHosts(config_.bind_ip, config_.group_port)) {
+          if (foreign_at_start_.Allow(now)) outbox_.log.Error("Board not claimed, checking again: " + *foreign);
+        } else {
+          Open(now);
+        }
+      }
+      if (!service_socket_.IsOpen()) {
+        CheckBlock();
+        next_tick = 0;
+        std::this_thread::sleep_for(std::chrono::duration<double>(kClosedWaitS));
+        continue;
+      }
+    }
+    Endpoint from;
+    long n;
+    while ((n = announcements_.Receive(buffer, sizeof(buffer), from, 0)) > 0) {
+      if (static_cast<size_t>(n) > kMaxDatagram) continue;
+      std::vector<LinkEvent> events;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        link_->OnAnnouncement(buffer, static_cast<size_t>(n), MonotonicSeconds(), events);
+      }
+      HandleEvents(events);
+    }
+    int wait_ms = std::clamp(static_cast<int>((next_tick - now) * 1000.0), 0, 5);
+    n = service_socket_.Receive(buffer, sizeof(buffer), from, wait_ms);
+    if (n < 0) {
+      outbox_.log.Error("Receive error on the service socket, opening it again");
+      Close();
+      continue;
+    }
+    if (n > 0 && static_cast<size_t>(n) <= kMaxDatagram) HandleDatagram(buffer, static_cast<size_t>(n), from);
+
+    now = MonotonicSeconds();
+    if (now >= next_tick) {
+      if (next_tick > 0 && now - next_tick > kLateTickS) outbox_.late_ticks.Add(now - next_tick);
+      next_tick = now + kTickS;
+      Tick(now);
+    }
+    // So that the logic learns of a block before a blade request it refuses, not only at the next status.
+    CheckBlock();
+  }
+  Shutdown();
+}
+
+void XcoreIo::HandleDatagram(const uint8_t* data, size_t size, const Endpoint& from) {
+  std::vector<Output> outputs;
+  std::vector<LinkEvent> events;
+  std::vector<WheelTwist> twists;
+  std::vector<ImuReading> imu;
+  GpsReading gps;
+  const int64_t stamp = WallNanoseconds();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const double now = MonotonicSeconds();
+    link_->OnDatagram(data, size, from, now, outputs, events);
+    for (auto& out : outputs) {
+      if (out.service_id == kImuService && out.channel_id == imu::kOutAxes) {
+        if (auto axes = DecodeDoubles(out.value, 9)) {
+          control_.OnImu((*axes)[0], (*axes)[1], (*axes)[2], now);
+          ImuReading reading;
+          reading.stamp_ns = stamp;
+          std::copy_n(axes->begin(), 6, reading.axes.begin());
+          imu.push_back(reading);
+        }
+        continue;
+      }
+      if (out.service_id == kGpsService) {
+        if (config_.gnss) gps.outputs.push_back(std::move(out));
+        continue;
+      }
+      if (auto twist = control_.OnOutput(out.service_id, out.channel_id, out.value, out.board_time_us, now)) {
+        twists.push_back(*twist);
+      }
+    }
+    if (!gps.outputs.empty() && last_rtcm_s_) gps.correction_age_s = now - *last_rtcm_s_;
+  }
+  HandleEvents(events);
+  const bool any = !twists.empty() || !imu.empty() || !gps.outputs.empty();
+  for (const auto& twist : twists) outbox_.twists.Push(TwistReading{stamp, twist});
+  for (const auto& reading : imu) outbox_.imu.Push(reading);
+  if (!gps.outputs.empty()) {
+    gps.stamp_ns = stamp;
+    outbox_.gps.Push(std::move(gps));
+  }
+  if (any) outbox_.wakeup.Notify();
+}
+
+void XcoreIo::Tick(double now) {
+  std::vector<Datagram> datagrams;
+  std::vector<LinkEvent> events;
+  std::vector<std::string> errors;
+  uint64_t rtcm_dropped = 0;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (major_ == std::nullopt && next_rpc_s_ && now >= *next_rpc_s_) AskFirmware(now);
+    datagrams = link_->Tick(now, events);
+    control_.SetServicesReady(link_->AllRunning() && major_ == config_.expected_major,
+                              !major_ || *major_ == config_.expected_major);
+    for (const auto& value : control_.Tick(now)) {
+      if (auto datagram = link_->Input(value.service_id, value.channel_id, value.value)) {
+        datagrams.push_back(*datagram);
+      }
+    }
+    // The queued RTCM to a running GPS service, dropped while it does not run.
+    if (rtcm_.size() > 0) {
+      if (link_->State(kGpsService) != ServiceState::kRunning) {
+        rtcm_dropped = rtcm_.size();
+        rtcm_.Clear();
+      } else {
+        for (const auto& piece : rtcm_.Take()) {
+          if (auto datagram = link_->Input(kGpsService, gps::kInRtcm, piece)) {
+            datagrams.push_back(*datagram);
+            last_rtcm_s_ = now;
+          }
+        }
+      }
+    }
+    errors = control_.TakeErrors();
+  }
+  if (rtcm_dropped > 0) outbox_.rtcm_dropped_closed.Add(rtcm_dropped);
+  for (const auto& error : errors) outbox_.log.Error("Emergency latched: " + error);
+  Send(datagrams, now);
+  HandleEvents(events);
+}
+
+void XcoreIo::Send(const std::vector<Datagram>& datagrams, std::optional<double> computed) {
+  for (size_t i = 0; i < datagrams.size(); i++) {
+    const auto& d = datagrams[i];
+    const double age = computed ? MonotonicSeconds() - *computed : 0.0;
+    if (age > kStaleSendS) {
+      outbox_.log.Warn(Format("Dropped %zu datagrams computed %.2f s ago", datagrams.size() - i, age));
+      return;
+    }
+    if (!service_socket_.Send(d.bytes.data(), d.bytes.size(), d.to)) outbox_.send_failed.Add();
+  }
+}
+
+// Called with mutex_ held.
+void XcoreIo::AskFirmware(double now) {
+  next_rpc_s_.reset();
+  bool asked = link_->CallRpc(kMetaService, kGetMajorVersion, now);
+  asked = link_->CallRpc(kMetaService, kGetFirmwareVersion, now) && asked;
+  if (!asked) next_rpc_s_ = now + kRpcRetryS;
+}
+
+void XcoreIo::HandleEvents(const std::vector<LinkEvent>& events) {
+  using Kind = LinkEvent::Kind;
+  bool capabilities = false;
+  std::vector<mowbite_outbox::LogLine> lines;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const double now = MonotonicSeconds();
+    for (const auto& e : events) {
+      const char* name = ServiceName(e.service_id);
+      switch (e.kind) {
+        case Kind::kRunning:
+          lines.push_back({mowbite_outbox::LogLine::Level::kInfo, Format("Service %s (%u) runs", name, e.service_id)});
+          if (e.service_id == kMetaService) AskFirmware(now);
+          break;
+        case Kind::kLost:
+        case Kind::kRestarted:
+          lines.push_back({mowbite_outbox::LogLine::Level::kWarn,
+                           Format("Service %s (%u) %s: %s", name, e.service_id,
+                                  e.kind == Kind::kLost ? "lost" : "restarted", e.text.c_str())});
+          control_.OnServiceRestart(e.service_id, now);
+          if (e.service_id == kMetaService) {
+            // The board may come back with other firmware.
+            major_.reset();
+            next_rpc_s_.reset();
+          }
+          break;
+        case Kind::kIncompatible:
+          lines.push_back({mowbite_outbox::LogLine::Level::kError,
+                           Format("Service %s (%u) is not claimed: %s", name, e.service_id, e.text.c_str())});
+          break;
+        case Kind::kContested:
+          // The driver keeps claiming: each claim stops the service at the board, and the latch reaches the board
+          // whenever the emergency service is ours, where only a release clears it.
+          control_.LatchForeignHost(std::string("service ") + name + " " + e.text, now);
+          break;
+        case Kind::kRpcResult:
+          capabilities |= OnFirmwareAnswer(e, now);
+          break;
+        case Kind::kRpcFailed:
+          lines.push_back({mowbite_outbox::LogLine::Level::kWarn,
+                           Format("Firmware question %u to the board failed: %s", e.function_id, e.text.c_str())});
+          if (!next_rpc_s_) next_rpc_s_ = now + kRpcRetryS;
+          break;
+      }
+    }
+  }
+  for (auto& line : lines) outbox_.log.Add(line.level, std::move(line.text));
+  if (capabilities) {
+    outbox_.capabilities_due = true;
+    outbox_.wakeup.Notify();
+  }
+}
+
+// Called with mutex_ held; true when the capabilities changed. Its lines go to the outbox, which never waits.
+bool XcoreIo::OnFirmwareAnswer(const LinkEvent& e, double now) {
+  if (e.service_id != kMetaService) return false;
+  if (e.status != 0) {
+    outbox_.log.Warn(Format("Firmware question %u answered with status %u", e.function_id, e.status));
+    if (!next_rpc_s_) next_rpc_s_ = now + kRpcRetryS;
+    return false;
+  }
+  if (e.function_id == kGetMajorVersion) {
+    if (e.value.size() != 2) return false;
+    major_ = Reader(e.value).U16();
+    if (*major_ == config_.expected_major) {
+      outbox_.log.Info(Format("Firmware major version %u as expected", *major_));
+    } else {
+      outbox_.log.Error(Format("Firmware major version %u, expected %u: motion and blade stay blocked", *major_,
+                               config_.expected_major));
+    }
+    return true;
+  }
+  if (e.function_id == kGetFirmwareVersion) {
+    std::string version = DecodeText(e.value);
+    if (version == firmware_version_) return false;
+    firmware_version_ = version;
+    outbox_.log.Info("xCore firmware " + version);
+    return true;
+  }
+  return false;
+}
+
+void XcoreIo::Shutdown() {
+  std::vector<Datagram> datagrams;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (link_ && service_socket_.IsOpen()) {
+      for (const auto& value : control_.StopInputs()) {
+        if (auto datagram = link_->Input(value.service_id, value.channel_id, value.value)) {
+          datagrams.push_back(*datagram);
+        }
+      }
+    }
+  }
+  Send(datagrams);
+  Close();
+}
+
+}  // namespace xcore
