@@ -2,11 +2,23 @@
 
 #include <string>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_ntrip/ntrip_client.h"
 #include "rtcm_frames.h"
 
 namespace mowbite_ntrip {
 namespace {
+
+// The events of the client; each goes out as CORRECTIONS and is checked against the catalog of the interface.
+std::vector<ClientEvent> Take(NtripClient& client) {
+  std::vector<ClientEvent> events = client.TakeEvents();
+  for (const auto& event : events) {
+    for (const auto& problem : mowbite_api::CheckEvent("CORRECTIONS", CorrectionsDetails(event))) {
+      ADD_FAILURE() << problem;
+    }
+  }
+  return events;
+}
 
 const char kGga[] = "$GNGGA,120001.00,5200.0000,N,00900.0000,E,4,20,0.6,50.0,M,0.0,M,1.0,0000*5C";
 
@@ -66,7 +78,7 @@ TEST_F(Fixture, ConnectsAtOnceAndStreams) {
   EXPECT_NEAR(*client.last_frame_age(12), 1.0, 1e-9);
   EXPECT_EQ(client.attempts(), 1u);
   EXPECT_FALSE(client.CloseReason(25));
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
 }
 
 TEST_F(Fixture, NoAnswerOrNoDataCloses) {
@@ -109,7 +121,7 @@ TEST_F(Fixture, RejectedWaitsLongAndReportsOnce) {
   EXPECT_EQ(client.last_error(), "login refused (401)");
   EXPECT_NEAR(client.retry_in(0.2), 300.0, 1e-9);
   EXPECT_FALSE(client.ShouldConnect(300));
-  auto events = client.TakeEvents();
+  auto events = Take(client);
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].reason, "REJECTED");
   EXPECT_EQ(events[0].severity, "error");
@@ -120,7 +132,7 @@ TEST_F(Fixture, RejectedWaitsLongAndReportsOnce) {
   client.BeginAttempt(300.2);
   Bytes("HTTP/1.1 401 Unauthorized\r\n\r\n", 300.3);
   client.OnClosed(300.3, "");
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
   EXPECT_EQ(client.state(), ClientState::kRejected);
 }
 
@@ -129,7 +141,7 @@ TEST_F(Fixture, ChangedAccessEndsTheWaitAndMayBeReportedAgain) {
   client.BeginAttempt(0);
   Bytes("HTTP/1.1 401 Unauthorized\r\n\r\n", 0);
   client.OnClosed(0, "");
-  client.TakeEvents();
+  Take(client);
   client.SetConfig(Config(), 10);  // the same: nothing changes
   EXPECT_FALSE(client.ShouldConnect(10));
   client.SetConfig(Config("N"), 10);
@@ -137,7 +149,7 @@ TEST_F(Fixture, ChangedAccessEndsTheWaitAndMayBeReportedAgain) {
   ASSERT_TRUE(client.ShouldConnect(10));
   client.BeginAttempt(10);
   Bytes("HTTP/1.1 401 Unauthorized\r\n\r\n", 10);
-  EXPECT_EQ(client.TakeEvents().size(), 1u);
+  EXPECT_EQ(Take(client).size(), 1u);
 }
 
 TEST_F(Fixture, ChangedAccessWhileConnectedReconnectsAtOnce) {
@@ -160,7 +172,7 @@ TEST_F(Fixture, RemovedAccessSwitchesOffWithoutLost) {
   EXPECT_EQ(client.state(), ClientState::kOff);
   EXPECT_FALSE(client.ShouldConnect(500));
   client.Tick(500);
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
 }
 
 TEST_F(Fixture, LostAfterTheGraceThenRestoredOnce) {
@@ -176,22 +188,22 @@ TEST_F(Fixture, LostAfterTheGraceThenRestoredOnce) {
     client.Tick(now);
   }
   ASSERT_GT(now, 30.0);
-  auto events = client.TakeEvents();
+  auto events = Take(client);
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].reason, "LOST");
   EXPECT_EQ(events[0].severity, "warning");
   EXPECT_EQ(events[0].resume, "auto");
   EXPECT_EQ(events[0].limit, 30.0);
   client.Tick(now + 100);
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
   now += client.retry_in(now);
   Stream(now);
-  events = client.TakeEvents();
+  events = Take(client);
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].reason, "RESTORED");
   EXPECT_EQ(events[0].severity, "info");
   Bytes(MakeFrame(1005, 19), now + 1);
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
 }
 
 TEST_F(Fixture, ShortGapGivesNoEvent) {
@@ -200,7 +212,7 @@ TEST_F(Fixture, ShortGapGivesNoEvent) {
   client.OnClosed(20, "closed by the caster");
   Stream(25);
   client.Tick(30);
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
 }
 
 TEST_F(Fixture, RejectedAfterStreamingGivesNoLost) {
@@ -211,7 +223,7 @@ TEST_F(Fixture, RejectedAfterStreamingGivesNoLost) {
   Bytes("HTTP/1.1 401 Unauthorized\r\n\r\n", 6);
   client.OnClosed(6, "");
   client.Tick(200);
-  auto events = client.TakeEvents();
+  auto events = Take(client);
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].reason, "REJECTED");
 }
@@ -260,7 +272,7 @@ TEST_F(Fixture, CrcErrorsAreCounted) {
 TEST_F(Fixture, FirstSourceGivesNoEventAndIsSaved) {
   client.SetConfig(Config(), 0);
   Stream(0);
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
   const auto saved = client.TakeSourceToSave();
   ASSERT_TRUE(saved);
   EXPECT_EQ(*saved, (CorrectionSource{"h", 2101, "M"}));
@@ -269,7 +281,7 @@ TEST_F(Fixture, FirstSourceGivesNoEventAndIsSaved) {
   Bytes(MakeFrame(1005, 19), 1);
   client.OnClosed(2, "closed by the caster");
   Stream(7);
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
   EXPECT_FALSE(client.TakeSourceToSave());
 }
 
@@ -279,10 +291,10 @@ TEST_F(Fixture, AnotherSourceGivesOneEventWithBoth) {
   client.BeginAttempt(0);
   Bytes("ICY 200 OK\r\n", 0);
   // Not before the first frame: only then do its corrections reach the receiver.
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
   EXPECT_FALSE(client.TakeSourceToSave());
   Bytes(MakeFrame(1005, 19), 0.5);
-  auto events = client.TakeEvents();
+  auto events = Take(client);
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].reason, "SOURCE_CHANGED");
   EXPECT_EQ(events[0].severity, "warning");
@@ -296,7 +308,7 @@ TEST_F(Fixture, AnotherSourceGivesOneEventWithBoth) {
   Bytes(MakeFrame(1005, 19), 1);
   client.OnClosed(2, "closed by the caster");
   Stream(7);
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
 }
 
 TEST_F(Fixture, SameSourceInOtherSpellingVersionOrLoginGivesNoEvent) {
@@ -305,14 +317,14 @@ TEST_F(Fixture, SameSourceInOtherSpellingVersionOrLoginGivesNoEvent) {
   config.version = 1;
   client.SetConfig(config, 0);
   Stream(0);
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
   // Saved again as now spelled.
   EXPECT_EQ(client.TakeSourceToSave(), (CorrectionSource{"h", 2101, "M"}));
   config.user = "v";
   client.SetConfig(config, 1);
   client.OnClosed(1, "");
   Stream(1);
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
   EXPECT_FALSE(client.TakeSourceToSave());
 }
 
@@ -323,13 +335,13 @@ TEST_F(Fixture, SourceWithoutFramesChangesNothing) {
   client.BeginAttempt(0);
   Bytes("HTTP/1.1 401 Unauthorized\r\n\r\n", 0);
   client.OnClosed(0, "");
-  auto events = client.TakeEvents();
+  auto events = Take(client);
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].reason, "REJECTED");
   EXPECT_FALSE(client.TakeSourceToSave());
   client.SetConfig(Config(), 1);
   Stream(1);
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
   EXPECT_FALSE(client.TakeSourceToSave());
 }
 
@@ -342,12 +354,12 @@ TEST_F(Fixture, RemovedAccessKeepsTheSourceUsedLast) {
   client.OnClosed(1, "");
   client.SetConfig(Config(), 2);
   Stream(2);
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
   client.SetConfig(std::nullopt, 3);
   client.OnClosed(3, "");
   client.SetConfig(Config("N"), 4);
   Stream(4);
-  auto events = client.TakeEvents();
+  auto events = Take(client);
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].reason, "SOURCE_CHANGED");
   EXPECT_EQ(events[0].previous->mountpoint, "M");
@@ -362,10 +374,10 @@ TEST_F(Fixture, ChangeWhileConnectedCountsFromTheNewFrames) {
   // Frames still coming on the old connection count for nothing.
   Bytes(MakeFrame(1005, 19), 5);
   EXPECT_EQ(frames.size(), 1u);
-  EXPECT_TRUE(client.TakeEvents().empty());
+  EXPECT_TRUE(Take(client).empty());
   client.OnClosed(5, "");
   Stream(5);
-  auto events = client.TakeEvents();
+  auto events = Take(client);
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].previous->mountpoint, "M");
 }
@@ -375,10 +387,10 @@ TEST_F(Fixture, LostThenAnotherSourceGivesBoth) {
   Stream(0);
   client.OnClosed(1, "closed by the caster");
   client.Tick(40);
-  ASSERT_EQ(client.TakeEvents().size(), 1u);
+  ASSERT_EQ(Take(client).size(), 1u);
   client.SetConfig(Config("N"), 40);
   Stream(40);
-  auto events = client.TakeEvents();
+  auto events = Take(client);
   ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[0].reason, "SOURCE_CHANGED");
   EXPECT_EQ(events[1].reason, "RESTORED");

@@ -2,6 +2,7 @@
 #define MOWBITE_NTRIP_NTRIP_CLIENT_H
 
 #include <cstdint>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <vector>
@@ -46,6 +47,10 @@ struct ClientEvent {
   std::optional<CorrectionSource> source = std::nullopt;
   std::optional<CorrectionSource> previous = std::nullopt;
 };
+
+// The details of its CORRECTIONS event: reason, message, severity, resume, code, limit and the sources of
+// SOURCE_CHANGED as host, port, mountpoint and previous_host, previous_port, previous_mountpoint.
+nlohmann::ordered_json CorrectionsDetails(const ClientEvent& event);
 
 // The NTRIP client without sockets and clocks: the node opens and closes the connection, passes the bytes and the
 // monotonic time and sends what this class returns.

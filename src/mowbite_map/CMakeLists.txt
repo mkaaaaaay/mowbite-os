@@ -41,9 +41,10 @@ install(TARGETS mowbite_map_core mowbite_map_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(mowbite_api REQUIRED)
   ament_add_gtest(mowbite_map_test test/test_map_model.cpp test/test_map_store.cpp test/test_map_service.cpp
     test/test_sha256.cpp)
-  target_link_libraries(mowbite_map_test mowbite_map_core)
+  target_link_libraries(mowbite_map_test mowbite_map_core mowbite_api::mowbite_api_core)
 endif()
 
 ament_export_targets(export_mowbite_map HAS_LIBRARY_TARGET)
