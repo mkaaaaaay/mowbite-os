@@ -1,7 +1,8 @@
 """V1 and V5 of the safety measurement against fake_xcore: measure.py runs M1-M8 through the minimal launch, the person's
 actions go to the fake's flags, and xcore_capture must find the fake's known values in its capture (STOP 10 ms, lift
-2.5 s, collision 0.5 s, both sensors at once without delay, wheels stand 1.0 s after the host fell silent, 0.9 m/s at
-full duty, three stops of the driver's watchdog, every start with a fresh command). Then the limits of the recording,
+2.5 s, collision 0.5 s, both sensors at once after 10 ms, wheels stand 1.0 s after the host fell silent plus their
+run-down, 0.9 m/s at full duty, three stops of the driver's watchdog, every start with a fresh command, the blade below
+100 rpm about 2 s after off). Then the limits of the recording,
 of the fake's capture and of the run time.
 
 Run in a sourced workspace: launch_test tools/yf/test/test_rehearsal.py
@@ -103,9 +104,9 @@ class TestRehearsal(unittest.TestCase):
 
     def test_b_m1_inputs(self):
         presses = self.of_step(self.boot()["presses"], "M1")
-        expected = [("STOP", 10), ("STOP", 10), ("LIFT", 2500), (None, None), ("LIFT", 2500), ("LIFT_MULTIPLE", 0),
-                    ("LIFT_MULTIPLE", 0), ("COLLISION", 500), ("COLLISION", 500), ("COLLISION_MULTIPLE", 0),
-                    ("COLLISION_MULTIPLE", 0), ("STOP", 10)]
+        expected = [("STOP", 10), ("STOP", 10), ("LIFT", 2500), (None, None), ("LIFT", 2500), ("LIFT_MULTIPLE", 10),
+                    ("LIFT_MULTIPLE", 10), ("COLLISION", 500), ("COLLISION", 500), ("COLLISION_MULTIPLE", 10),
+                    ("COLLISION_MULTIPLE", 10), ("STOP", 10)]
         self.assertEqual([p["reason"] for p in presses], [e[0] for e in expected])
         for press, (reason, delay) in zip(presses, expected):
             if reason is None:
@@ -154,13 +155,14 @@ class TestRehearsal(unittest.TestCase):
         self.assertEqual(len(lost), 2)
         for r in lost:
             with self.subTest(r["step"]):
-                # The board counts its 1.0 s from the host's last emergency input; a tick interval is 40 ms.
+                # The board counts its 1.0 s from the host's last emergency input, then the wheels run down (NX60i
+                # 0.07-0.12 s); a tick interval is 40 ms.
                 self.assertGreater(r["since_emergency_input_s"], 0.98)
-                self.assertLess(r["since_emergency_input_s"], 1.1)
+                self.assertLess(r["since_emergency_input_s"], 1.2)
                 self.assertGreater(r["host_silent_s"], 0.7)
-                self.assertLess(r["host_silent_s"], 1.1)
+                self.assertLess(r["host_silent_s"], 1.2)
         ended, = [r for r in runs if "SIGINT" in r["step"]]
-        self.assertLess(ended["since_zero_command_s"], 0.1)
+        self.assertLess(ended["since_zero_command_s"], 0.2)
 
     def test_g_m5_reasons_stop_the_wheels(self):
         runs = [r for r in self.of_step(self.boot()["drive"]["runs"], "M5") if r["reason"]]
@@ -168,8 +170,8 @@ class TestRehearsal(unittest.TestCase):
                          ["STOP", "LIFT", "LIFT_MULTIPLE", "COLLISION_MULTIPLE", "COLLISION", "HIGH_LEVEL"])
         for r in runs:
             with self.subTest(r["step"]):
-                # The fake stops at once; the first interval without a tick ends at most two intervals (80 ms) later.
-                self.assertLess(r["since_reason_s"], 0.1)
+                # The wheels run down (NX60i 0.07-0.12 s); the first interval without a tick ends up to 40 ms later.
+                self.assertLess(r["since_reason_s"], 0.18)
         lift = runs[1]
         self.assertGreater(lift["seconds"], 2.5)
 
@@ -177,9 +179,9 @@ class TestRehearsal(unittest.TestCase):
         runs = self.of_step(self.boot()["drive"]["runs"], "M6")
         quiet = [r for r in runs if "command stops" in r["step"]][0]
         self.assertEqual(quiet["zeros_after_last_command"], 3)
-        # The driver's watchdog (0.5 s) and the stop within one tick interval.
+        # The driver's watchdog (0.5 s), the run-down and the stop within one tick interval.
         self.assertGreater(quiet["since_script_command_s"], 0.45)
-        self.assertLess(quiet["since_script_command_s"], 0.7)
+        self.assertLess(quiet["since_script_command_s"], 0.8)
         by_hand = [r for r in runs if "wheel by hand" in r["step"]]
         self.assertTrue(by_hand and not by_hand[-1]["fresh_command"])
         self.assertNotIn("Finding", self.output)
@@ -192,12 +194,15 @@ class TestRehearsal(unittest.TestCase):
                 self.assertTrue(r["fresh_setpoint"])
                 self.assertIsNotNone(r["zero_at"])
         off, lease, stop, lift, bumper, frozen, killed = runs
-        self.assertLess(off["since_zero_command_s"], 1.6)
+        # As on the NX60i without the disc: 0.5 s until the controller follows, then 2000 rpm/s from 2800; the
+        # rpm comes every 0.5 s.
+        self.assertGreater(off["since_zero_command_s"], 1.4)
+        self.assertLess(off["since_zero_command_s"], 2.5)
         for r, reason in ((stop, "STOP"), (lift, "LIFT"), (bumper, "COLLISION_MULTIPLE")):
             self.assertTrue(r["reason"].startswith(reason))
-            self.assertLess(r["since_reason_s"], 1.7)
+            self.assertLess(r["since_reason_s"], 2.5)
         for r in (frozen, killed):
-            self.assertLess(r["host_silent_s"], 2.7)
+            self.assertLess(r["host_silent_s"], 3.5)
             self.assertIn("TIMEOUT_HIGH_LEVEL", r["reason"])
 
     def test_j_m8_ground(self):
@@ -206,7 +211,7 @@ class TestRehearsal(unittest.TestCase):
         self.assertTrue(stop["reason"].startswith("STOP"))
         killed = [r for r in runs if "killed" in r["step"]][0]
         self.assertGreater(killed["since_emergency_input_s"], 0.98)
-        self.assertLess(killed["since_emergency_input_s"], 1.1)
+        self.assertLess(killed["since_emergency_input_s"], 1.25)
         backward = [r for r in runs if "backward" in r["step"]][0]
         self.assertTrue(backward["reason"].startswith("COLLISION"))
 

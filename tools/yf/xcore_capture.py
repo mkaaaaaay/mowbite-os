@@ -65,6 +65,10 @@ GRAVITY = 9.80665
 DRIVE_DEFAULTS = {"ticks_per_meter": 2025.0, "wheel_distance": 0.3556, "right_sign": -1}
 RELEASE_SETTLE = 0.25
 HOST_GAP = 0.3
+# Single ticks after the wheels stood, at most this many intervals with them, count as settling back, not as a run.
+SETTLE_INTERVALS = 2
+# Wheel reports come every 40 ms; a longer silence is a gap in the capture.
+TICK_GAP = 0.3
 
 
 # Capture file ---------------------------------------------------------------------------------------------------------
@@ -877,6 +881,38 @@ def runs(series, moving, still_s):
     return out
 
 
+def tick_gaps(ticks, speeds, ticks_per_meter, right_sign):
+    """Gaps without wheel reports (the inner network down, as the capture on the host sees it): the ticks the counters
+    moved across the gap and, at the speed before it, how long the wheels went on turning (an estimate)."""
+    out = []
+    for (t0, l0, r0), (t1, l1, r1) in zip(ticks, ticks[1:]):
+        if t1 - t0 < TICK_GAP:
+            continue
+        dl = ((l1 - l0 + (1 << 31)) % (1 << 32)) - (1 << 31)
+        dr = right_sign * (((r1 - r0 + (1 << 31)) % (1 << 32)) - (1 << 31))
+        before = [v for t, v in speeds if t0 - 0.5 <= t <= t0]
+        speed = [sum(v[2 + k] for v in before) / len(before) if before else 0.0 for k in (0, 1)]
+        turning = [abs(d) / ticks_per_meter / abs(v) for d, v in zip((dl, dr), speed) if abs(v) > 0.01]
+        out.append({"from": t0, "to": t1, "ticks_left": dl, "ticks_right": dr, "speed_before": speed,
+                    "turning_s": max(turning) if turning else None})
+    return out
+
+
+def first_still(speeds, start, stop):
+    """The first interval without a tick after which the run has only single ticks left (a wheel settling back),
+    at most SETTLE_INTERVALS of them; `stop` itself when there is none. Slow runs with single ticks keep `stop`."""
+    window = [(t, v) for t, v in speeds if start < t <= stop]
+    for i, (t, v) in enumerate(window):
+        if v[0] or v[1]:
+            continue
+        rest = [w for _, w in window[i + 1:] if w[0] or w[1]]
+        if len(rest) <= SETTLE_INTERVALS and all(abs(w[0]) <= 1 and abs(w[1]) <= 1 for w in rest) and \
+                any(abs(w[0]) > 1 or abs(w[1]) > 1 for _, w in window[:i]):
+            return {"first_still": t, "still_before_stop_s": stop - t,
+                    "settle_ticks": sum(abs(w[0]) + abs(w[1]) for w in rest)}
+    return {"first_still": stop, "still_before_stop_s": 0.0, "settle_ticks": 0}
+
+
 def analyse_drive(cap, boot, names, ticks_per_meter, wheel_distance, right_sign):
     ticks = [(t[1], t[3], t[4]) for t in cap.ticks if t[0] == boot]
     twists = [(t[1], (t[3], t[4])) for t in cap.twists if t[0] == boot]
@@ -892,6 +928,7 @@ def analyse_drive(cap, boot, names, ticks_per_meter, wheel_distance, right_sign)
         dr = ((r1 - r0 + (1 << 31)) % (1 << 32)) - (1 << 31)
         speeds.append((t1, (dl, dr, dl / ticks_per_meter / (t1 - t0), right_sign * dr / ticks_per_meter / (t1 - t0))))
     out["samples"] = len(speeds)
+    out["gaps"] = tick_gaps(ticks, speeds, ticks_per_meter, right_sign)
 
     def active(value):
         return abs(value[0]) > 1e-6 or abs(value[1]) > 1e-6
@@ -920,6 +957,7 @@ def analyse_drive(cap, boot, names, ticks_per_meter, wheel_distance, right_sign)
                     break
                 zeros += 1
         run["zeros_after_last_command"] = zeros
+        run.update(first_still(speeds, start, last_tick))
         out["runs"].append(run)
     # Steady commands: the same twist for 1.5 s or more; the speed is taken after 0.7 s.
     groups, current = [], None
@@ -1105,7 +1143,7 @@ def drive_text(drive):
     rows = []
     for r in drive["runs"]:
         if r.get("ongoing_at_end"):
-            rows.append([num(r["start"]), "-", r.get("step") or "-", "turning at the end"] + ["-"] * 8)
+            rows.append([num(r["start"]), "-", r.get("step") or "-", "turning at the end"] + ["-"] * 9)
             continue
         c = r["command_at_start"]
         start = "fresh" if r["fresh_command"] else (
@@ -1116,12 +1154,20 @@ def drive_text(drive):
                      seconds(r["since_last_command_s"]),
                      seconds(r["since_zero_command_s"]),
                      r["reason"] or "-", seconds(r["since_reason_s"]),
-                     "-" if r["zeros_after_last_command"] is None else r["zeros_after_last_command"]])
+                     "-" if r["zeros_after_last_command"] is None else r["zeros_after_last_command"],
+                     f"-{r['still_before_stop_s']:.2f} s, {r['settle_ticks']} ticks" if r["settle_ticks"] else "-"])
     if rows:
         out.append("Runs (stop = first tick interval without a tick, ~40 ms; times are stop minus the cause; script "
-                   "= last command of measure.py, cmd = last command and first 0 of the host to the board):")
+                   "= last command of measure.py, cmd = last command and first 0 of the host to the board; settle = "
+                   "the wheels stood this much before the stop, single ticks after it count as settling back):")
         out.append(table(["start", "stop", "step", "start with", "host silent", "emerg in", "script", "last cmd",
-                          "cmd 0", "reason", "reason s", "zeros after"], rows))
+                          "cmd 0", "reason", "reason s", "zeros after", "settle"], rows))
+    if drive.get("gaps"):
+        out.append("Gaps without wheel reports (ticks across the gap; turning = their distance at the speed before it, "
+                   "an estimate):")
+        out.append(table(["from", "to", "ticks L", "ticks R", "m/s L before", "m/s R before", "turning s"],
+                         [[num(g["from"]), num(g["to"]), g["ticks_left"], g["ticks_right"], num(g["speed_before"][0]),
+                           num(g["speed_before"][1]), seconds(g["turning_s"])] for g in drive["gaps"]]))
     if drive["steady"]:
         out.append("Steady commands (speed per unit of duty = full_duty_speed):")
         out.append(table(["from", "s", "v", "w", "duty L", "duty R", "m/s L", "m/s R", "per duty L", "per duty R"],

@@ -16,8 +16,11 @@ xcore_driver:
     # From the firmware: the right counter falls going forward. Checked in the air.
     left_ticks_sign: 1
     right_ticks_sign: -1
-    # Wheel speed at full duty in m/s, assumption until measured in the air; the duty stays at max_duty or below.
-    full_duty_speed: 1.0
+    # Wheel speed per unit of duty in m/s, measured in the air at duty 0.1 (left 0.47, right 0.46; firmware
+    # v1.4.0-47): the faster wheel, so neither wheel gets more duty than its speed needs there. The wheels stand up
+    # to duty 0.02; above, in the air, about 0.58 x (duty - 0.019): below duty 0.1 they turn slower than commanded,
+    # above it faster. The duty stays at max_duty or below.
+    full_duty_speed: 0.47
     max_duty: 0.3
     regulator_feedback: false
     max_linear_speed: 0.3
