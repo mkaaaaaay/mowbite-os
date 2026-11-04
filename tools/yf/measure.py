@@ -2,15 +2,18 @@
 """Safety measurement of a mower with xcore_driver (programme M1-M8 of the NX60i), next to the minimal launch.
 
 Asks before every step and shows what it will send. In the air the wheels get at most 0.1 m/s each, on the ground in
-M8 (only with --ground) 0.3 m/s. Any key while a step runs aborts it: three stops on hw/cmd_vel, the blade off, the emergency latched
-over hw/emergency. Records hw/status, hw/wheel_odom, imu/data, hw/capabilities and its own commands as JSON lines with a
-size and a time limit. The capture of the inner network (tcpdump on the host) is the second record; the report on both
+M8 (only with --ground) 0.3 m/s, in the fast runs of M8 (only with --fast as well, and only up to the limit the driver
+reports) 0.5 m/s. Any key while a step runs aborts it: three stops on hw/cmd_vel, the blade off, the emergency latched
+over hw/emergency; keys within 0.4 s after an answer are dropped, so a double tap does not abort the step it started.
+Records hw/status, hw/wheel_odom, imu/data, hw/capabilities and its own commands as JSON lines with a size and a time
+limit. The capture of the inner network (tcpdump on the host) is the second record; the report on both
 comes from xcore_capture.py.
 
 With --fake-flags the actions of the person (press STOP, lift, tilt, turn a wheel) go to fake_xcore's flag file
 instead, for the rehearsal against the simulated board.
 """
 import argparse
+import collections
 import json
 import math
 import os
@@ -31,6 +34,9 @@ from sensor_msgs.msg import Imu
 
 AIR_WHEEL_SPEED = 0.1
 GROUND_WHEEL_SPEED = 0.3
+FAST_WHEEL_SPEED = 0.5
+# Keys this soon after an answer belong to it (a double tap on a phone), not to the step it starts.
+KEY_SETTLE_S = 0.4
 # Emergency bits of hw/status by bit number, named as in the catalog of mowbite_api (x-emergency-bits);
 # test/test_names.py holds them against the catalog, the message and the board's own names.
 EMERGENCY_BITS = {0: "LATCH", 1: "TIMEOUT_INPUTS", 2: "STOP", 3: "LIFT", 4: "LIFT_MULTIPLE", 5: "COLLISION",
@@ -120,6 +126,13 @@ class Keys:
         while self.tty and select.select([sys.stdin], [], [], 0)[0]:
             os.read(sys.stdin.fileno(), 64)
 
+    def settle(self):
+        """Drops the keys of KEY_SETTLE_S after an answer; the wheels stand meanwhile."""
+        end = time.monotonic() + KEY_SETTLE_S
+        while self.tty and time.monotonic() < end:
+            self.drain()
+            time.sleep(0.02)
+
     def pressed(self):
         if self.abort_file and os.path.exists(self.abort_file):
             return True
@@ -158,6 +171,9 @@ class Mower:
         self.odom = (0.0, 0.0)
         self.odom_at = 0.0
         self.max_tilt = 0.0
+        self.max_linear_speed = None
+        self.emergency_since = None
+        self.odom_log = collections.deque(maxlen=3000)
         self.node = rclpy.create_node("yf_measure")
         self.node.create_subscription(HardwareStatus, "hw/status", self._status, 10)
         self.node.create_subscription(TwistStamped, "hw/wheel_odom", self._odom, 20)
@@ -177,6 +193,8 @@ class Mower:
 
     def _status(self, msg):
         with self.lock:
+            if msg.emergency and not (self.status is not None and self.status.emergency):
+                self.emergency_since = time.monotonic()
             self.status, self.status_at = msg, time.monotonic()
         self.rec.write("status", emergency=msg.emergency, latched=msg.emergency_latched,
                        reason=msg.emergency_reason, telemetry_ok=msg.telemetry_ok, stop=msg.stop, lift=msg.lift,
@@ -186,6 +204,7 @@ class Mower:
     def _odom(self, msg):
         with self.lock:
             self.odom, self.odom_at = (msg.twist.linear.x, msg.twist.angular.z), time.monotonic()
+            self.odom_log.append((self.odom_at, msg.twist.linear.x))
         self.rec.write("odom", v=msg.twist.linear.x, w=msg.twist.angular.z)
 
     def _imu(self, msg):
@@ -197,7 +216,16 @@ class Mower:
         self.rec.imu(a=list(acc), g=list(rate))
 
     def _capabilities(self, msg):
-        self.rec.write("capabilities", firmware={kv.key: kv.value for kv in msg.firmware})
+        with self.lock:
+            self.max_linear_speed = msg.max_linear_speed
+        self.rec.write("capabilities", firmware={kv.key: kv.value for kv in msg.firmware},
+                       max_linear_speed=msg.max_linear_speed, max_angular_speed=msg.max_angular_speed)
+
+    def travelled(self, since):
+        """Metres the odometry went since `since` (monotonic), forward and back counted alike."""
+        with self.lock:
+            log = [entry for entry in self.odom_log if entry[0] >= since]
+        return sum(abs(b[1]) * (b[0] - a[0]) for a, b in zip(log, log[1:]))
 
     def snapshot(self):
         with self.lock:
@@ -300,6 +328,7 @@ class Person:
                 print(key)
                 if key == "q":
                     raise Quit()
+                self.keys.settle()
                 return key == "y"
 
     def act(self, text, fake=None, hold=0.0):
@@ -318,6 +347,7 @@ class Person:
         print()
         if key.lower() == "q":
             raise Abort()
+        self.keys.settle()
         return True
 
     def act_later(self, text, fake=None, after=1.0, hold=1.0):
@@ -585,8 +615,9 @@ class Measurement:
                                "full, OpenMower and the updater stopped as agreed): start?"):
             return
         d = self.mower.wheel_distance
-        items = [("forward 0.05 m/s for 3 s: do both wheels turn forward?", 0.05, 0.0, 3.0, True),
-                 ("turn left: left wheel back, right wheel forward, 0.05 m/s each, 3 s", 0.0, 0.1 / d, 3.0, True)]
+        # Long enough to see the direction (3 s at 0.05 m/s is a quarter turn of the wheel).
+        items = [("forward 0.05 m/s for 8 s: do both wheels turn forward?", 0.05, 0.0, 8.0, True),
+                 ("turn left: left wheel back, right wheel forward, 0.05 m/s each, 8 s", 0.0, 0.1 / d, 8.0, True)]
         items += [(f"straight at {v:.2f} m/s for 3 s (speed per duty)", v, 0.0, 3.0, False)
                   for v in (0.02, 0.03, 0.05, 0.07, 0.1)]
         for text, v, w, seconds, question in items:
@@ -615,14 +646,15 @@ class Measurement:
                  ("inner network down (typed by the person on the CM4)", "link"),
                  ("ended normally (SIGINT)", "sigint")]
         for text, mode in modes:
-            if mode == "link" and self.person.fake:
-                continue
             for n in range(self.args.repeats):
                 if not self.ask(f"{step} failsafe without host, run {n + 1}/{self.args.repeats}: wheels at "
                                        f"0.1 m/s, then the driver {text}; no command afterwards"):
                     break
                 self.ready(step)
                 self.mark(step, f"{text}, run {n + 1}")
+                if mode == "link":
+                    self.link_down(step)
+                    continue
                 self.drive(0.1, 0.0, 2.0, until=self.in_emergency)
                 if mode == "freeze":
                     pid = self.signal_driver(step, signal.SIGSTOP)
@@ -636,13 +668,35 @@ class Measurement:
                     pid = self.signal_driver(step, signal.SIGKILL if mode == "kill" else signal.SIGINT)
                     self.wait(3.0)
                     self.wait_for_driver(step, pid, self.args.restart_wait)
-                else:
-                    self.person.act("on the CM4: sudo ip link set eth0 down; sleep 3; sudo ip link set eth0 up")
-                    self.wait(3.0)
                 self.no_motion(step, 3.0, "after the driver came back without a new command")
                 self.show("after")
                 self.release(step)
                 self.no_motion(step, 2.0, "after the release without a new command")
+
+    def link_down(self, step):
+        """M4 with the inner network down: the commands go on until the driver loses the board, so the board's own
+        timeout is what stops the wheels; then the link comes back without a new command."""
+        print("  -> in a second terminal on the CM4, while the wheels turn: "
+              "sudo ip link set eth0 down; sleep 5; sudo ip link set eth0 up")
+        print("     (the wheels turn at 0.1 m/s until the driver reports the loss, at most 120 s)")
+        if self.person.fake:
+            self.person.act_later("inner network down", {"link_down": True}, after=2.0, hold=5.0)
+        started = time.monotonic()
+        if not self.drive(0.1, 0.0, 120.0, until=lambda: not self.healthy() and time.monotonic() - started > 0.5):
+            self.finding(step, "the driver reported no loss of the board within 120 s")
+            self.mower.stop_wheels()
+            return
+        self.rec.write("link_lost", after_s=time.monotonic() - started)
+        self.show("board lost")
+        print("     no more commands; waiting for the board to come back (eth0 up)")
+        if not self.wait(60.0, lambda: (s := self.status()) is not None and s.telemetry_ok
+                         and not s.emergency_reason & SERVICE_NOT_READY):
+            self.finding(step, "the board did not come back within 60 s")
+            raise Quit()
+        self.no_motion(step, 3.0, "after the link came back without a new command")
+        self.show("after")
+        self.release(step)
+        self.no_motion(step, 2.0, "after the release without a new command")
 
     def m5(self):
         step = "M5"
@@ -749,6 +803,8 @@ class Measurement:
                 self.wait_for_driver(step, pid, self.args.restart_wait)
             self.wait(6.0)
             self.show("after")
+            if how == "input" and not self.person.fake:
+                self.person.act("let go of the input; STOP top locks: unlock it by hand")
             self.release(step)
             self.wait(1.0)
             s = self.status()
@@ -766,27 +822,66 @@ class Measurement:
                  ("0.1 m/s backward against a soft obstacle for up to 10 s", -0.1, 0.0, {"bumper": True}, None),
                  ("turn on the spot at 0.3 rad/s for 5 s", 0.0, 0.3, None, "quiet")]
         for text, v, w, fake, how in items:
-            if not self.ask(f"{step} on the ground: {text}"):
-                continue
-            self.ready(step)
-            self.mark(step, text)
-            if fake is not None:
-                self.person.act_later(text, fake, after=2.0, hold=1.0)
-                if not self.drive(v, w, 10.0, until=self.in_emergency):
-                    self.finding(step, f"no emergency: {text}")
-                    self.mower.stop_wheels()
-            elif how == "kill":
-                self.drive(v, w, 2.0, until=self.in_emergency)
-                pid = self.signal_driver(step, signal.SIGKILL)
-                self.wait(3.0)
-                self.wait_for_driver(step, pid, self.args.restart_wait)
-            else:
-                self.drive(v, w, 3.0 if w == 0 else 5.0, until=self.in_emergency)
-            self.wait(2.0)
-            self.no_motion(step, 1.0, "after the stop")
-            if not self.person.fake and fake is not None:
-                self.person.act("let go")
-            self.release(step)
+            if self.ask(f"{step} on the ground: {text}"):
+                self.ground_run(step, text, v, w, fake, how)
+        if not self.args.fast:
+            return
+        # Speed per duty at high duty and the stopping distance at 0.4-0.5 m/s (own word, raised limits).
+        limit = self.mower.max_linear_speed
+        if limit is None or limit < 0.4 - 1e-6:
+            shown = "no" if limit is None else f"{limit:.2f}"
+            print(f"\n{step} fast runs: the driver allows {shown} m/s; they need its limits raised to 0.4 m/s or more "
+                  "(own word of the user) and are skipped.")
+            return
+        fast = min(FAST_WHEEL_SPEED, limit)
+        self.mower.wheel_limit = fast
+        print(f"\n{step} fast runs up to {fast:.2f} m/s: a straight lane of 5 m or more, nobody in it")
+        items = [("0.4 m/s straight, press STOP top after about 2 s", 0.4, {"stop": True}, None),
+                 (f"{fast:.2f} m/s straight, press STOP top after about 2 s", fast, {"stop": True}, None),
+                 (f"{fast:.2f} m/s straight for 3 s, then no command (driver stops)", fast, None, "quiet"),
+                 (f"{fast:.2f} m/s straight for 2 s, then the driver killed", fast, None, "kill")]
+        for text, v, fake, how in items:
+            if self.ask(f"{step} on the ground, fast: {text}"):
+                self.ground_run(step, text, v, 0.0, fake, how)
+        self.mower.wheel_limit = GROUND_WHEEL_SPEED
+
+    def ground_run(self, step, text, v, w, fake, how):
+        """One run of M8: drive, the cause, the distance until the wheels stood (odometry), then the release."""
+        self.ready(step)
+        self.mark(step, text)
+        if fake is not None:
+            self.person.act_later(text, fake, after=2.0, hold=1.0)
+            started = time.monotonic()
+            if not self.drive(v, w, 10.0, until=self.in_emergency):
+                self.finding(step, f"no emergency: {text}")
+                self.mower.stop_wheels()
+            # The script sees the emergency up to 0.1 s late; the distance counts from its first status.
+            since = self.mower.emergency_since
+            cause = since if since is not None and since >= started else time.monotonic()
+        elif how == "kill":
+            self.drive(v, w, 2.0, until=self.in_emergency)
+            cause = time.monotonic()
+            pid = self.signal_driver(step, signal.SIGKILL)
+            self.wait(3.0)
+            self.wait_for_driver(step, pid, self.args.restart_wait)
+        else:
+            self.drive(v, w, 3.0 if w == 0 else 5.0, until=self.in_emergency)
+            cause = time.monotonic()
+        self.wait(2.0)
+        if w == 0:
+            # A killed driver sees nothing until its successor runs; the counters in the capture tell that distance.
+            if how != "kill":
+                metres = self.mower.travelled(cause)
+                print(f"     odometry (the driver's view): {metres:.3f} m from the "
+                      f"{'emergency' if fake else 'last command'} until it stood")
+                self.rec.write("stopping", step=step, text=text, odometry_m=metres)
+            chalk = self.person.number("stopping distance at the chalk line in m")
+            if chalk is not None:
+                self.rec.write("stopping_chalk", step=step, text=text, metres=chalk)
+        self.no_motion(step, 1.0, "after the stop")
+        if not self.person.fake and fake is not None:
+            self.person.act("let go")
+        self.release(step)
 
     STEPS = {"M1": m1, "M2": m2, "M3": m3, "M4": m4, "M5": m5, "M6": m6, "M7": m7, "M8": m8}
 
@@ -821,6 +916,8 @@ def main(argv=None):
     parser.add_argument("--restart-wait", type=float, default=120.0, help="s to wait for a restarted driver")
     parser.add_argument("--blade", action="store_true", help="allow M7 (blade)")
     parser.add_argument("--ground", action="store_true", help="allow M8 on the ground, 0.3 m/s per wheel")
+    parser.add_argument("--fast", action="store_true",
+                        help="with --ground: the fast runs of M8 up to 0.5 m/s, if the driver's limits allow it")
     parser.add_argument("--yes", action="store_true", help="answer every question with yes (rehearsal)")
     parser.add_argument("--fake-flags", help="flag file of fake_xcore: the person's actions go there")
     parser.add_argument("--abort-file", help="abort the running step once this file exists (rehearsal)")
@@ -831,6 +928,8 @@ def main(argv=None):
         sys.exit(f"unknown steps: {unknown}")
     if "M8" in steps and not args.ground:
         sys.exit("M8 needs --ground")
+    if args.fast and not args.ground:
+        sys.exit("--fast needs --ground")
     os.makedirs(args.record_dir, exist_ok=True)
     path = os.path.join(args.record_dir, time.strftime("measure-%Y%m%d-%H%M%S.jsonl"))
     rec = Recorder(path, int(args.max_mb * 1024 * 1024), args.max_minutes * 60, max(1, args.imu_every))

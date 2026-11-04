@@ -1,5 +1,7 @@
 # Builds docker/measure.Dockerfile natively for arm64 when the branch measure-image is pushed. The image goes nowhere
-# but into an artifact of the run (docker save, gzip, kept 5 days): it reaches a mower only by hand, over ssh.
+# but into an artifact of the run (docker save, layers repacked with gzip, kept 5 days): it reaches a mower only by
+# hand, over ssh (docker load < the .tar). Gzip layers, because the containerd store of the mower keeps the layers as
+# they come and unpacked beside them: the plain archive of docker save took twice the image's size there.
 name: measure image
 
 on:
@@ -61,19 +63,28 @@ jobs:
           if echo "$out" | grep -q 'process started'; then echo "$out"; echo "a driver started without the profile"; exit 1; fi
           docker run --rm "$TAG" python3 /ws/tools/measure.py --help > /dev/null
           docker run --rm "$TAG" python3 /ws/tools/xcore_capture.py --help > /dev/null
-          docker save "$TAG" | gzip -6 > "mowbite-measure-${{ steps.rev.outputs.short }}-arm64.tar.gz"
+          # docker exec does not pass the entrypoint: the command measure sources the workspace itself.
+          docker run --rm --entrypoint /usr/local/bin/measure "$TAG" --help > /dev/null
+          docker save "$TAG" | gzip -1 > saved.tar.gz
+          python3 -I tools/yf/repack_gzip.py saved.tar.gz repacked
+          mv repacked/image.tar "mowbite-measure-${{ steps.rev.outputs.short }}-arm64.tar"
+          rm -r saved.tar.gz repacked
+          # The repacked archive loads back to the same image.
+          docker rmi "$TAG" > /dev/null
+          docker load -i "mowbite-measure-${{ steps.rev.outputs.short }}-arm64.tar"
+          docker run --rm "$TAG" python3 /ws/tools/measure.py --help > /dev/null
           size=$(docker image inspect --format '{{.Size}}' "$TAG")
           {
             echo "### arm64"
             echo "- image: \`$TAG\`"
-            echo "- size unpacked: $((size / 1000000)) MB, saved and gzipped: $(( $(stat -c %s mowbite-measure-*.tar.gz) / 1000000 )) MB"
-            echo "- sha256: $(sha256sum mowbite-measure-*.tar.gz | cut -d' ' -f1)"
+            echo "- size unpacked: $((size / 1000000)) MB, archive with gzip layers: $(( $(stat -c %s mowbite-measure-*.tar) / 1000000 )) MB"
+            echo "- sha256: $(sha256sum mowbite-measure-*.tar | cut -d' ' -f1)"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v7
         with:
           name: mowbite-measure-${{ steps.rev.outputs.short }}-arm64
-          path: mowbite-measure-${{ steps.rev.outputs.short }}-arm64.tar.gz
+          path: mowbite-measure-${{ steps.rev.outputs.short }}-arm64.tar
           retention-days: 5
           compression-level: 0
           if-no-files-found: error

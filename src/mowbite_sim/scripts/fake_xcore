@@ -9,17 +9,23 @@ firmware does: inputs with their delay latch STOP, LIFT or COLLISION, a second w
 TIMEOUT_HIGH_LEVEL, a missing service SERVICE_NOT_READY. Like the firmware v1.4.3, wheels and blade stand while there
 is a reason; every change to another reason other than 0 zeroes the stored setpoints, but setpoints that arrive during
 the emergency are stored and run as soon as the reason clears (wheels if younger than 1 s, blade if younger than 10 s).
-The diff drive applies the twist as duty (left v - w*d/2, right mirrored), the wheels turn at duty * --full-duty-speed,
-the counters run free (the right one falls going forward). Motor controllers report the status 200 (ok) only. IMU at
-100 Hz through the configured axis remap of a sensor mounted upside down, power every second, GPS at 5 Hz, inputs every
-200 ms. RTCM to the GPS service is counted per datagram, with a CRC-32 over the stream.
+The diff drive applies the twist as duty (left v - w*d/2, right mirrored), the wheels head for duty *
+--full-duty-speed with the time constant --wheel-tau (run-down of 0.07-0.12 s from 0.047 m/s as measured in the air on
+the NX60i), the counters run free (the right one falls going forward). Two lift or two collision inputs give the
+MULTIPLE reason after --multiple-delay-ms (10, the firmware's register). The blade heads for the setpoint *
+--blade-rpm after --blade-delay, rising by --blade-accel and falling by --blade-decel rpm/s (NX60i without the disc:
+2800 rpm, about 0.5 s, 3500 and 2000 rpm/s, below 100 rpm about 2 s after off). The NX60i in the air turned at about
+0.58 x (duty - 0.019) m/s, so --full-duty-speed 0.47 matches it at duty 0.1 only. Motor controllers report the status
+200 (ok) only. IMU at 100 Hz through the configured axis remap of a sensor mounted upside down, power every second,
+GPS at 5 Hz, inputs every 200 ms. RTCM to the GPS service is counted per datagram, with a CRC-32 over the stream.
 A JSON file with flags (stop, rear_stop, lift, lift_left, lift_right, bumper, bumper_left, bumper_right, dock,
 battery_voltage, major_version, firmware, restart, cutter_ignores_off, drive_status, gps_fix (fix, float, none or off),
 gps_accuracy) is read every 10 ms; restart
 restarts the board whenever its value changes, as does a GPS configuration other than the first one. Flags for what
 the mower may do wrong: rpm_zero (the blade reports 0 rpm), wheel_speed (both wheels turn forward at this many m/s
 whatever the duty), zero_duty_ignored (a duty of 0, the drive timeout and an emergency leave the wheels at the last duty
-other than 0), roll and pitch (tilt of the body in degrees, seen by the IMU), yaw_rate (rad/s the body turns, as by
+other than 0), link_down (the inner network is down: nothing goes out or comes in, as with eth0 down on the host),
+roll and pitch (tilt of the body in degrees, seen by the IMU), yaw_rate (rad/s the body turns, as by
 hand, seen by the IMU), foreign_host (another host claims every
 claimed service again this many seconds after this host claimed it; the board then answers it, not this host).
 For the calibration drive the mower can be off what the driver assumes: --ticks-scale (true ticks per metre over the
@@ -381,6 +387,7 @@ class Board:
         self.rng = random.Random(args.seed)
         # The antenna over the last second, for the delay of the GPS.
         self.antenna_history = []
+        self.link_down = False
         self.boot()
 
     def now(self):
@@ -417,9 +424,12 @@ class Board:
         self.mower_speed = 0.0
         self.mower_set_at = None
         self.mower_rpm = 0.0
+        self.mower_targets = []
         self.next_mower_out = 0.0
+        self.wheel_speed = [0.0, 0.0]
         self.input_config = None
         self.input_active_since = {}
+        self.multiple_since = {}
         self.inputs_mask = None
         self.next_inputs_out = 0.0
         self.next_power_out = 0.0
@@ -435,7 +445,7 @@ class Board:
 
     def send(self, service, msg_type, arg1=0, arg2=0, payload=b"", to=None):
         to = to or service.target
-        if to is None:
+        if to is None or self.link_down:
             return
         if msg_type != ANNOUNCE:
             service.sequence = (service.sequence + 1) & 0xFFFF
@@ -465,6 +475,8 @@ class Board:
     # Receiving ----------------------------------------------------------------------------------------------------
 
     def receive(self, data, sender):
+        if self.link_down:
+            return
         now = self.now()
         self.pcap.write(sender, (self.args.ip, self.port), data)
         if len(data) < HEADER.size:
@@ -695,12 +707,12 @@ class Board:
                 bits |= REASON_OF[emergency["reason"]]
                 if emergency.get("latch", True):
                     self.host_bits |= LATCH
-        if lifts >= 2:
-            bits |= LIFT_MULTIPLE
-            self.host_bits |= LATCH
-        if collisions >= 2:
-            bits |= COLLISION_MULTIPLE
-            self.host_bits |= LATCH
+        for kind, count, bit in (("lift", lifts, LIFT_MULTIPLE), ("collision", collisions, COLLISION_MULTIPLE)):
+            if count < 2:
+                self.multiple_since.pop(kind, None)
+            elif (now - self.multiple_since.setdefault(kind, now)) * 1000 >= self.args.multiple_delay_ms:
+                bits |= bit
+                self.host_bits |= LATCH
         changed = mask != self.inputs_mask
         self.inputs_mask = mask
         service = self.services.get(INPUT)
@@ -749,11 +761,17 @@ class Board:
         full = self.args.full_duty_speed
         left = duty[0] * full
         right = -duty[1] * full
-        if "wheel_speed" in flags:
-            left = right = float(flags["wheel_speed"])
         deadband = self.args.wheel_deadband
         left = 0.0 if abs(left) < deadband else left
         right = 0.0 if abs(right) < deadband else right
+        # The wheels follow with a time constant and stand once close to a target of 0.
+        follow = 1.0 if self.args.wheel_tau <= 0 else min(1.0, dt / self.args.wheel_tau)
+        for i, target in enumerate((left, right)):
+            speed = self.wheel_speed[i] + (target - self.wheel_speed[i]) * follow
+            self.wheel_speed[i] = 0.0 if target == 0 and abs(speed) < 0.005 else speed
+        left, right = self.wheel_speed
+        if "wheel_speed" in flags:
+            left = right = float(flags["wheel_speed"])
         # The counters run at the true ticks per metre, which may be off the configured ones.
         tpm = struct.unpack("<d", service.values[0])[0] * self.args.ticks_scale
         self.ticks[0] += left * tpm * dt
@@ -786,10 +804,20 @@ class Board:
         if self.mower_set_at is not None and now - self.mower_set_at > 10.0:
             self.mower_speed = 0.0
             self.mower_set_at = None
-        target = (0.0 if self.reason else self.mower_speed) * 3500.0
+        # The motor controller takes a new setpoint only after --blade-delay, then ramps towards it.
+        wanted = (0.0 if self.reason else self.mower_speed) * self.args.blade_rpm
+        if not self.mower_targets or self.mower_targets[-1][1] != wanted:
+            self.mower_targets.append((now, wanted))
+        while len(self.mower_targets) > 1 and self.mower_targets[1][0] <= now - self.args.blade_delay:
+            self.mower_targets.pop(0)
+        at, target = self.mower_targets[0]
+        if at > now - self.args.blade_delay:
+            target = self.mower_rpm
         if flags.get("cutter_ignores_off") and self.mower_rpm and not self.mower_speed:
             target = self.mower_rpm
-        self.mower_rpm += (target - self.mower_rpm) * min(1.0, dt / 0.3)
+        rising = abs(target) > abs(self.mower_rpm) and target * self.mower_rpm >= 0
+        step = (self.args.blade_accel if rising else self.args.blade_decel) * dt
+        self.mower_rpm += max(-step, min(step, target - self.mower_rpm))
         if abs(self.mower_rpm) < 1:
             self.mower_rpm = 0.0
         if now < self.next_mower_out:
@@ -877,6 +905,7 @@ class Board:
     def cycle(self, dt):
         now = self.now()
         flags = self.files.flags
+        self.link_down = bool(flags.get("link_down"))
         restart = flags.get("restart")
         if restart != self.restart_flag:
             self.restart_flag = restart
@@ -947,7 +976,8 @@ def main():
     parser.add_argument("--group-port", type=int, default=4242)
     parser.add_argument("--firmware", default="v1.4.3")
     parser.add_argument("--major", type=int, default=1)
-    parser.add_argument("--full-duty-speed", type=float, default=0.9, help="wheel speed at full duty in m/s")
+    parser.add_argument("--full-duty-speed", type=float, default=0.47,
+                        help="wheel speed per unit of duty in m/s (NX60i in the air at duty 0.1, as in nx60i.yaml)")
     parser.add_argument("--track", type=float, default=0.3556, help="real distance of the wheels in m")
     parser.add_argument("--ticks-start", type=int, default=2**32 - 3000, help="start value of both counters")
     parser.add_argument("--ticks-scale", type=float, default=1.0, help="true ticks per metre / configured ones")
@@ -959,6 +989,13 @@ def main():
     parser.add_argument("--slope", type=float, nargs=2, default=[0.0, 0.0], metavar=("DEG", "HEADING_DEG"),
                         help="the ground rises by DEG towards HEADING_DEG (map frame) everywhere")
     parser.add_argument("--wheel-deadband", type=float, default=0.0, help="m/s below which a wheel stands")
+    parser.add_argument("--wheel-tau", type=float, default=0.03, help="time constant of the wheels in s")
+    parser.add_argument("--multiple-delay-ms", type=float, default=10.0,
+                        help="two lift or two collision inputs this long give the MULTIPLE reason")
+    parser.add_argument("--blade-rpm", type=float, default=2800.0, help="blade speed at the setpoint 1.0")
+    parser.add_argument("--blade-delay", type=float, default=0.5, help="s until the blade follows a new setpoint")
+    parser.add_argument("--blade-accel", type=float, default=3500.0, help="rpm/s the blade speeds up")
+    parser.add_argument("--blade-decel", type=float, default=2000.0, help="rpm/s the blade slows down")
     parser.add_argument("--gyro-scale", type=float, default=1.0, help="measured / true yaw rate")
     parser.add_argument("--seed", type=int, default=1, help="seed of the position noise")
     parser.add_argument("--origin", type=float, nargs=2, default=[52.0, 7.6])
