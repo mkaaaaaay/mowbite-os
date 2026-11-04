@@ -44,7 +44,10 @@ const char* const kReasonNames[] = {"LATCH",
                                     "FENCE",
                                     "STUCK",
                                     "IMU_TIMEOUT",
-                                    "MOWER_NOT_STOPPED"};
+                                    "MOWER_NOT_STOPPED",
+                                    "WHEEL_RUNAWAY",
+                                    "FOREIGN_HOST",
+                                    "DRIVER_STALL"};
 
 SensorDefinition Range(std::string id, std::string name, std::string unit, SensorMeaning meaning, double min,
                        double max) {
@@ -1284,6 +1287,12 @@ void LogicCore::RefuseStart(const Reason& why) {
   json details = json::object();
   PutReason(&details, "MOWING_REFUSED", why);
   AddEvent("MOWING_REFUSED", std::move(details));
+}
+
+void LogicCore::RefuseReset(const Reason& why) {
+  json details = json::object();
+  PutReason(&details, "EMERGENCY_RESET_REFUSED", why);
+  AddEvent("EMERGENCY_RESET_REFUSED", std::move(details));
 }
 
 void LogicCore::GeometryChanged(const std::vector<std::string>& changed, const std::vector<std::string>& below_default,

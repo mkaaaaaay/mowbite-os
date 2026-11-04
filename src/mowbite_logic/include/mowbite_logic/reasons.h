@@ -47,6 +47,10 @@ void PutReason(json* details, const std::string& event, const Reason& reason);
 // map/status of mowbite_map: whether the map fits the datum of the GNSS.
 enum class MapDatum { kUnknown, kEmpty, kMatch, kMismatch, kUnbound };
 
+// A release refused by the driver or by S2 (SetEmergency): angle and limit in degrees for STILL_TILTED, seconds for
+// TILT_UNKNOWN when the driver knows them.
+Reason ResetRefusal(const std::string& code, const std::string& message, double value, double limit);
+
 // Why the map cannot be used in this datum state; message is the text of mowbite_map.
 Reason MapReason(MapDatum datum, const std::string& message);
 

@@ -182,12 +182,17 @@ TEST_F(FilterTest, ReleaseWaitsUntilTheMowerIsLevelAndTheImuSpeaks) {
   Release release = filter_.OnRelease(now_);
   EXPECT_FALSE(release.allowed);
   EXPECT_EQ(release.message, "still tilted by 30 deg, below 26 deg needed");
+  EXPECT_EQ(release.code, "STILL_TILTED");
+  EXPECT_NEAR(release.value, 30, 1e-6);
+  EXPECT_EQ(release.limit, 26);
   imu_ = false;
   tilt_ = 10;
   Run(now_ + 0.6);
   release = filter_.OnRelease(now_);
   EXPECT_FALSE(release.allowed);
   EXPECT_NE(release.message.find("the tilt is unknown"), std::string::npos) << release.message;
+  EXPECT_EQ(release.code, "TILT_UNKNOWN");
+  EXPECT_GT(release.value, 0.5);
   imu_ = true;
   Run(now_ + 0.1);
   release = filter_.OnRelease(now_);

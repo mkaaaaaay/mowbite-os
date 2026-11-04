@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -69,6 +70,11 @@ struct LatchRequest {
 struct Release {
   bool allowed = false;
   std::string message;
+  // Why not: STILL_TILTED with the angle and the limit in degrees, or TILT_UNKNOWN with the seconds since the last
+  // IMU sample (NaN without one).
+  std::string code;
+  double value = std::numeric_limits<double>::quiet_NaN();
+  double limit = std::numeric_limits<double>::quiet_NaN();
 };
 
 // S2 between all sources of drive commands and the driver: one source at a time, armed after every emergency, a

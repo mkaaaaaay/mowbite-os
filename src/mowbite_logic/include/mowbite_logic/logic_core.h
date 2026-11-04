@@ -312,6 +312,8 @@ class LogicCore {
   Reason StartProblem() const;
   // A start refused by the node (planner or follower missing): event MOWING_REFUSED.
   void RefuseStart(const Reason& why);
+  // reset_emergency did not release: EMERGENCY_RESET_REFUSED with the reason of the driver, of S2 or of the node.
+  void RefuseReset(const Reason& why);
   // robot.geometry.set changed the dimensions: event GEOMETRY_CHANGED with the keys that are other now and the keys of
   // the body below the platform's value; with the latter it is a warning with the reason BELOW_DEFAULT, else info. It
   // stops nothing, so it has no resume.

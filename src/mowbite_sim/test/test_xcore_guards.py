@@ -40,6 +40,9 @@ CLAIM, DATA = 3, 1
 LATCH = HardwareStatus.REASON_LATCH
 HIGH_LEVEL = HardwareStatus.REASON_HIGH_LEVEL
 TILT = HardwareStatus.REASON_TILT
+WHEEL_RUNAWAY = HardwareStatus.REASON_WHEEL_RUNAWAY
+FOREIGN_HOST = HardwareStatus.REASON_FOREIGN_HOST
+DRIVER_STALL = HardwareStatus.REASON_DRIVER_STALL
 TIMEOUT_HIGH_LEVEL, SERVICE_NOT_READY = 64, 256
 
 
@@ -209,6 +212,9 @@ class TestXcoreGuards(unittest.TestCase):
         answer = self.probe.set_emergency(False)
         self.assertFalse(answer.success)
         self.assertIn("still tilted 30 deg", answer.message)
+        self.assertEqual(answer.code, "STILL_TILTED")
+        self.assertAlmostEqual(answer.value, 30.0, delta=1.0)
+        self.assertEqual(answer.limit, 26.0)
         self.assertTrue(self.probe.status.emergency_reason & TILT)
         set_flags()
         time.sleep(0.3)
@@ -222,7 +228,7 @@ class TestXcoreGuards(unittest.TestCase):
         s = self.probe.wait(lambda p: p.status.emergency and p.status, 2)
         set_flags()
         self.assertTrue(s, "no latch")
-        self.assertEqual(s.emergency_reason & (HIGH_LEVEL | LATCH), HIGH_LEVEL | LATCH)
+        self.assertEqual(s.emergency_reason & (WHEEL_RUNAWAY | LATCH | HIGH_LEVEL), WHEEL_RUNAWAY | LATCH)
         time.sleep(0.3)
         self.assertTrue(self.release(), "release failed")
 
@@ -242,14 +248,14 @@ class TestXcoreGuards(unittest.TestCase):
         s = self.probe.status
         set_flags()
         self.assertTrue(s.emergency, "no latch")
-        self.assertEqual(s.emergency_reason & (HIGH_LEVEL | LATCH), HIGH_LEVEL | LATCH)
+        self.assertEqual(s.emergency_reason & (WHEEL_RUNAWAY | LATCH | HIGH_LEVEL), WHEEL_RUNAWAY | LATCH)
         proc_output.assertWaitFor("above 0.46 m/s", process=driver, timeout=1)
         self.assertTrue(self.release(), "release failed")
 
     def test_f_another_host_claiming_latches(self, proc_output, driver):
         claims_before = board()["claims"]["1"]
         set_flags(foreign_host=2.0)
-        s = self.probe.wait(lambda p: p.status.emergency_reason & HIGH_LEVEL and p.status, 15)
+        s = self.probe.wait(lambda p: p.status.emergency_reason & FOREIGN_HOST and p.status, 15)
         self.assertTrue(s, "no latch")
         self.assertTrue(s.emergency_latched)
         proc_output.assertWaitFor("another host claims it", process=driver, timeout=1)
@@ -260,7 +266,7 @@ class TestXcoreGuards(unittest.TestCase):
         self.assertTrue(self.probe.wait(lambda p: p.status.telemetry_ok and
                                         not p.status.emergency_reason & SERVICE_NOT_READY, 10))
         time.sleep(1.0)
-        self.assertTrue(self.probe.status.emergency_reason & HIGH_LEVEL, "latch did not hold")
+        self.assertTrue(self.probe.status.emergency_reason & FOREIGN_HOST, "latch did not hold")
         self.assertTrue(self.release(), "release failed")
 
     def test_g_frozen_driver_sends_no_setpoint_before_its_latch(self, proc_output, driver, proc_info):
@@ -310,7 +316,7 @@ class TestXcoreGuards(unittest.TestCase):
         self.assertLess(abs(during["mower_rpm"]), 100)
         s = self.probe.status
         self.assertTrue(s.emergency_latched)
-        self.assertTrue(s.emergency_reason & TIMEOUT_HIGH_LEVEL)
+        self.assertTrue(s.emergency_reason & DRIVER_STALL)
         self.assertFalse(s.blade_on)
         self.assertTrue(self.release(), "release failed")
         time.sleep(1.0)

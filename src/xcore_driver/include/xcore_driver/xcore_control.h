@@ -2,6 +2,7 @@
 #define XCORE_DRIVER_XCORE_CONTROL_H
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -78,6 +79,10 @@ constexpr uint32_t kReasonTilt = 1u << 13;
 constexpr uint32_t kReasonFence = 1u << 14;
 constexpr uint32_t kReasonStuck = 1u << 15;
 constexpr uint32_t kReasonMowerNotStopped = 1u << 17;
+// The driver's own checks: a wheel against the drive command, another host at the board, a stall of the I/O thread.
+constexpr uint32_t kReasonWheelRunaway = 1u << 18;
+constexpr uint32_t kReasonForeignHost = 1u << 19;
+constexpr uint32_t kReasonDriverStall = 1u << 20;
 // Causes the board latches; the driver keeps them in its reason until the release, also across a restart of the board.
 constexpr uint32_t kLatchedCauses = (1u << 2) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 9) | (1u << 10) | (1u << 11);
 // The bits a node above the driver may latch with over hw/emergency.
@@ -104,6 +109,17 @@ struct BladeRequest {
 enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked };
 
 const char* BladeResultText(BladeResult result);
+
+// Why a release over hw/emergency is refused; nothing is cleared then.
+struct ReleaseRefusal {
+  // STILL_TILTED, TILT_UNKNOWN or FOREIGN_HOST.
+  std::string code;
+  std::string message;
+  // STILL_TILTED: the angle and the release limit in degrees; TILT_UNKNOWN: seconds since the last IMU sample. NaN
+  // where there is none.
+  double value = std::numeric_limits<double>::quiet_NaN();
+  double limit = std::numeric_limits<double>::quiet_NaN();
+};
 
 // A value for an input of a service.
 struct InputValue {
@@ -178,14 +194,16 @@ class XcoreControl {
   XcoreControl(const ControlConfig& config, const InputMap& inputs);
 
   void OnCmdVel(double linear, double angular, double now);
-  BladeResult SetBlade(const BladeRequest& request, double now);
+  // A refusal because of an emergency sets emergency_reason to its bits as hw/status shows them, any other answer
+  // to 0.
+  BladeResult SetBlade(const BladeRequest& request, double now, uint32_t* emergency_reason = nullptr);
   // Bits must be within kHostLatchReasons; 0 means HIGH_LEVEL. Returns false for other bits.
   bool LatchEmergency(uint32_t bits);
   // Clears the host's own latches and asks the board to clear its own; the board sets a cause again that is still there.
   // Returns why a release is refused (the mower still tilted, or no fresh IMU after a tilt); nothing is cleared then.
-  std::optional<std::string> ReleaseEmergency(double now);
-  // Latches HIGH_LEVEL for a fault the node found, such as another host at the board; the text goes to TakeErrors.
-  void LatchFault(const std::string& why, double now);
+  std::optional<ReleaseRefusal> ReleaseEmergency(double now);
+  // Latches FOREIGN_HOST for another host the node found at the board; the text goes to TakeErrors.
+  void LatchForeignHost(const std::string& why, double now);
   // Acceleration in m/s² in the body frame from the board's IMU.
   void OnImu(double ax, double ay, double az, double now);
   // The I/O thread is alive without a link to tick.
@@ -213,7 +231,9 @@ class XcoreControl {
   };
 
   bool Blocked(double now) const;
-  void Fault(const std::string& why, double now);
+  // The driver sends HIGH_LEVEL|LATCH to the board: a latch from above or one of its own causes.
+  bool HoldsBoard() const;
+  void Fault(uint32_t bit, const std::string& why, double now);
   void CheckWheels(const WheelTwist& twist, double now);
   void CheckStall(double now);
   bool TelemetryStale(double now) const;
@@ -268,6 +288,8 @@ class XcoreControl {
   // The board reported no TIMEOUT_HIGH_LEVEL since the emergency service came up; a later one means lost messages.
   bool board_heard_us_ = false;
   bool link_lost_ = false;
+  // The link counts as lost because the I/O thread stalled, not because the board missed messages.
+  bool stalled_ = false;
 
   int dock_samples_ = 0;
   bool dock_raw_ = false;
@@ -282,8 +304,8 @@ class XcoreControl {
   DriveRegulator regulator_;
   bool drive_fault_ = false;
 
-  // A fault of the driver's own checks (wheels, another host), held until a release.
-  bool fault_latched_ = false;
+  // Bits of the driver's own checks (wheels, another host) that latched, held until a release.
+  uint32_t fault_bits_ = 0;
   std::vector<std::string> errors_;
 
   bool tilt_latched_ = false;

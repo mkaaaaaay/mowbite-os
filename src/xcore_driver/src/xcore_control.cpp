@@ -88,7 +88,8 @@ void XcoreControl::OnCmdVel(double linear, double angular, double now) {
   if (changed) next_drive_s_.reset();
 }
 
-BladeResult XcoreControl::SetBlade(const BladeRequest& request, double now) {
+BladeResult XcoreControl::SetBlade(const BladeRequest& request, double now, uint32_t* emergency_reason) {
+  if (emergency_reason) *emergency_reason = 0;
   if (!request.on) {
     DropBlade(BladeOffReason::kRequest);
     return BladeResult::kOk;
@@ -103,6 +104,7 @@ BladeResult XcoreControl::SetBlade(const BladeRequest& request, double now) {
   // A refused renewal also ends a running lease, so the blade never outlives a refusal.
   if (Blocked(now)) {
     DropBlade(BladeOffReason::kBlocked);
+    if (emergency_reason) *emergency_reason = Reason(now);
     return BladeResult::kBlocked;
   }
   if (DockContact()) {
@@ -128,27 +130,36 @@ bool XcoreControl::LatchEmergency(uint32_t bits) {
   return true;
 }
 
-std::optional<std::string> XcoreControl::ReleaseEmergency(double now) {
+std::optional<ReleaseRefusal> XcoreControl::ReleaseEmergency(double now) {
   if (tilt_latched_) {
-    char text[120];
+    ReleaseRefusal refusal;
     if (!last_imu_s_ || now - *last_imu_s_ > config_.imu_fresh_s + kTimeEpsilon) {
-      return std::string("tilt latched and no fresh IMU sample to check the mower stands level");
+      refusal.code = "TILT_UNKNOWN";
+      refusal.message = "tilt latched and no fresh IMU sample to check the mower stands level";
+      if (last_imu_s_) refusal.value = now - *last_imu_s_;
+      return refusal;
     }
     if (tilt_deg_ >= config_.tilt_release_deg) {
+      char text[120];
       std::snprintf(text, sizeof(text), "still tilted %.0f deg, a release needs less than %.0f deg", tilt_deg_,
                     config_.tilt_release_deg);
-      return std::string(text);
+      refusal.code = "STILL_TILTED";
+      refusal.message = text;
+      refusal.value = tilt_deg_;
+      refusal.limit = config_.tilt_release_deg;
+      return refusal;
     }
   }
   tilt_latched_ = false;
   tilted_since_s_.reset();
-  fault_latched_ = false;
+  fault_bits_ = 0;
   uncommanded_since_s_.reset();
   overspeed_since_s_.reset();
   host_latch_ = 0;
   latched_causes_ = 0;
   if (!blade_turning_) mower_not_stopped_ = false;
   link_lost_ = false;
+  stalled_ = false;
   drive_fault_ = false;
   regulator_.ClearFault();
   clear_remaining_ = config_.repeat_count;
@@ -156,17 +167,17 @@ std::optional<std::string> XcoreControl::ReleaseEmergency(double now) {
   return std::nullopt;
 }
 
-void XcoreControl::Fault(const std::string& why, double now) {
-  if (fault_latched_) return;
-  fault_latched_ = true;
+void XcoreControl::Fault(uint32_t bit, const std::string& why, double now) {
+  if (fault_bits_ & bit) return;
+  fault_bits_ |= bit;
   errors_.push_back(why);
   // The wheels may turn without a setpoint of the driver: stops go out in any case, the latch with the next tick.
   stop_repeat_ = Repeat{config_.repeat_count, now};
   next_emergency_s_.reset();
 }
 
-void XcoreControl::LatchFault(const std::string& why, double now) {
-  Fault(why, now);
+void XcoreControl::LatchForeignHost(const std::string& why, double now) {
+  Fault(kReasonForeignHost, why, now);
 }
 
 void XcoreControl::OnImu(double ax, double ay, double az, double now) {
@@ -204,7 +215,7 @@ void XcoreControl::CheckWheels(const WheelTwist& twist, double now) {
     if (now - *overspeed_since_s_ >= config_.overspeed_time_s - kTimeEpsilon) {
       std::snprintf(text, sizeof(text), "wheel at %.2f m/s for %.1f s, above %.2f m/s: duty and speed do not fit",
                     fastest, now - *overspeed_since_s_, limit);
-      Fault(text, now);
+      Fault(kReasonWheelRunaway, text, now);
     }
   } else {
     overspeed_since_s_.reset();
@@ -215,7 +226,7 @@ void XcoreControl::CheckWheels(const WheelTwist& twist, double now) {
     if (now - *uncommanded_since_s_ >= config_.uncommanded_time_s - kTimeEpsilon) {
       std::snprintf(text, sizeof(text), "wheel turns at %.2f m/s %.1f s after the last drive setpoint: no stop",
                     fastest, now - *last_drive_s_);
-      Fault(text, now);
+      Fault(kReasonWheelRunaway, text, now);
     }
   } else {
     uncommanded_since_s_.reset();
@@ -230,6 +241,7 @@ void XcoreControl::CheckStall(double now) {
                   now - *last_alive_s_);
     errors_.push_back(text);
     link_lost_ = true;
+    stalled_ = true;
     if (command_ || moving_) stop_repeat_ = Repeat{config_.repeat_count, now};
     command_.reset();
     moving_ = false;
@@ -438,13 +450,15 @@ std::vector<InputValue> XcoreControl::Tick(double now) {
   std::vector<InputValue> out;
   // Before anything goes out: after a stall of this thread the board may have stopped on its own.
   CheckStall(now);
-  if (regulator_.fault()) drive_fault_ = true;
+  if (regulator_.fault() && !drive_fault_) {
+    drive_fault_ = true;
+    errors_.push_back("wheel turns against the drive command: latched");
+  }
   bool blocked = Blocked(now);
 
   // Emergency: the host's latch, a pending release, and in any case the heartbeat for the board.
   if (Due(next_emergency_s_, config_.emergency_period_s, now)) {
-    bool hold = host_latch_ || mower_not_stopped_ || link_lost_ || drive_fault_ || fault_latched_ || tilt_latched_;
-    uint16_t set = hold ? reason::kHighLevel | reason::kLatch : 0;
+    uint16_t set = HoldsBoard() ? reason::kHighLevel | reason::kLatch : 0;
     // A board that lost its latch in a restart gets it back.
     if (!set && latched_causes_) set = reason::kLatch;
     uint16_t clear = 0;
@@ -520,12 +534,27 @@ bool XcoreControl::Blocked(double now) const {
   return Reason(now) != 0;
 }
 
+bool XcoreControl::HoldsBoard() const {
+  return host_latch_ || mower_not_stopped_ || link_lost_ || drive_fault_ || fault_bits_ || tilt_latched_;
+}
+
 uint32_t XcoreControl::Reason(double now) const {
   uint32_t bits = host_latch_;
-  if (board_reason_) bits |= *board_reason_ & kBoardReasons;
+  if (board_reason_) {
+    uint32_t board = *board_reason_ & kBoardReasons;
+    // The board echoes the HIGH_LEVEL the driver sends: the driver's own bits say why, HIGH_LEVEL stays for a latch
+    // from above with it.
+    if (HoldsBoard() && !(host_latch_ & kReasonHighLevel)) board &= ~kReasonHighLevel;
+    bits |= board;
+  }
   if (mower_not_stopped_) bits |= kReasonMowerNotStopped | kReasonLatch;
-  if (link_lost_) bits |= reason::kTimeoutHighLevel | kReasonLatch;
-  if (drive_fault_ || fault_latched_) bits |= kReasonHighLevel | kReasonLatch;
+  if (stalled_) {
+    bits |= kReasonDriverStall | kReasonLatch;
+  } else if (link_lost_) {
+    bits |= reason::kTimeoutHighLevel | kReasonLatch;
+  }
+  if (drive_fault_) bits |= kReasonWheelRunaway | kReasonLatch;
+  if (fault_bits_) bits |= fault_bits_ | kReasonLatch;
   if (tilt_latched_) bits |= kReasonTilt | kReasonLatch;
   if (host_latch_ || latched_causes_) bits |= kReasonLatch;
   bits |= latched_causes_;

@@ -83,6 +83,22 @@ TEST(Logic, EmergencyEventsCarryReasonBits) {
   EXPECT_EQ(events[0].details["resume"], "auto");
 }
 
+TEST(Logic, RefusedResetIsAnEvent) {
+  LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
+  core.OnHardwareStatus(Stopped(kEmergencyLatch | (1 << 13)));
+  core.TakeEvents();
+  core.RefuseReset(Reason("FOREIGN_HOST", "another host"));
+  auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].type, "EMERGENCY_RESET_REFUSED");
+  EXPECT_EQ(events[0].details["reason"], "FOREIGN_HOST");
+  EXPECT_EQ(events[0].details["message"], "another host");
+  EXPECT_EQ(events[0].details["severity"], "error");
+  EXPECT_EQ(events[0].details["resume"], "user");
+  EXPECT_TRUE(core.RobotState().emergency);
+}
+
 TEST(Logic, IncompatibleFirmwareIsEmergencyWithItsOwnBit) {
   LogicCore core{LogicConfig{}};
   core.OnMapStatus(MapDatum::kMatch, "");
@@ -165,6 +181,7 @@ TEST(Logic, ReasonNamesAsOpenMowerLogsThem) {
   EXPECT_EQ(EmergencyReasonNames(kEmergencyLatch | kEmergencyImuTimeout), "LATCH, IMU_TIMEOUT");
   EXPECT_EQ(EmergencyReasonNames(kEmergencyMowerNotStopped), "MOWER_NOT_STOPPED");
   EXPECT_EQ(EmergencyReasonNames((1 << 13) | (1 << 14) | (1 << 15)), "TILT, FENCE, STUCK");
+  EXPECT_EQ(EmergencyReasonNames((1 << 18) | (1 << 19) | (1 << 20)), "WHEEL_RUNAWAY, FOREIGN_HOST, DRIVER_STALL");
 }
 
 TEST(Logic, OwnReasonBitsReachTheRobotState) {

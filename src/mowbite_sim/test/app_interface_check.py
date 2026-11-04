@@ -712,6 +712,13 @@ c.publish("action", "mower_logic/reset_emergency")
 cleared = wait_for(lambda: b'"emergency":0' in (latest("robot_state/json") or b""), 4)
 check("tilt -> EMERGENCY with TILT, kept while tilted, cleared once level", bool(tilt) and kept and bool(cleared),
       f"event {bool(tilt)}, kept {kept}, cleared {bool(cleared)}", point="3.1a EMERGENCY TILT")
+refused = [e for e in (json.loads(p) for _, top, p, _ in msgs if top == "events/json")
+           if e["type"] == "EMERGENCY_RESET_REFUSED"]
+r = refused[0] if refused else {}
+check("reset while tilted -> EMERGENCY_RESET_REFUSED STILL_TILTED with angle and limit in deg, warning/user",
+      len(refused) == 1 and r.get("reason") == "STILL_TILTED" and abs(r.get("angle", 0) - 35) < 1.5
+      and r.get("limit") == 26 and r.get("severity") == "warning" and r.get("resume") == "user"
+      and bool(r.get("message")), json.dumps(refused), point="3.1a EMERGENCY_RESET_REFUSED STILL_TILTED")
 
 # Leaving the recording mode while the joystick is held stops at once, not after the 0.5 s watchdog.
 t0 = sim_time()

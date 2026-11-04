@@ -62,6 +62,9 @@ static_assert(xcore::kReasonTilt == HardwareStatus::REASON_TILT);
 static_assert(xcore::kReasonFence == HardwareStatus::REASON_FENCE);
 static_assert(xcore::kReasonStuck == HardwareStatus::REASON_STUCK);
 static_assert(xcore::kReasonMowerNotStopped == HardwareStatus::REASON_MOWER_NOT_STOPPED);
+static_assert(xcore::kReasonWheelRunaway == HardwareStatus::REASON_WHEEL_RUNAWAY);
+static_assert(xcore::kReasonForeignHost == HardwareStatus::REASON_FOREIGN_HOST);
+static_assert(xcore::kReasonDriverStall == HardwareStatus::REASON_DRIVER_STALL);
 static_assert(static_cast<uint8_t>(xcore::BladeOffReason::kLeaseExpired) == HardwareStatus::BLADE_OFF_LEASE_EXPIRED);
 static_assert(static_cast<uint8_t>(xcore::BladeOffReason::kReconnect) == HardwareStatus::BLADE_OFF_RECONNECT);
 static_assert(static_cast<uint8_t>(mowbite_gnss::Solution::kSingle) == GnssFix::SINGLE);
@@ -109,6 +112,11 @@ const char* ServiceName(uint16_t id) {
     case xcore::kMetaService: return "meta";
   }
   return "unknown";
+}
+
+// The part of hw/status that goes out at once when it changes: emergency, latch and reason bits.
+uint64_t BlockOf(const xcore::ControlStatus& status) {
+  return status.emergency_reason | (uint64_t{status.blocked} << 32) | (uint64_t{status.latched} << 33);
 }
 
 const char* BladeOffText(xcore::BladeOffReason reason) {
@@ -497,6 +505,7 @@ class XcoreNode : public rclcpp::Node {
           }
         }
         if (!service_socket_.IsOpen()) {
+          if (BlockChanged()) PublishStatus();
           std::this_thread::sleep_for(std::chrono::duration<double>(kClosedWaitS));
           continue;
         }
@@ -505,7 +514,7 @@ class XcoreNode : public rclcpp::Node {
         next_foreign_check = now + kForeignCheckS;
         if (auto foreign = ForeignHosts()) {
           std::lock_guard<std::mutex> lock(mutex_);
-          control_.LatchFault(*foreign, now);
+          control_.LatchForeignHost(*foreign, now);
         }
       }
       xcore::Endpoint from;
@@ -533,8 +542,15 @@ class XcoreNode : public rclcpp::Node {
         next_tick = now + kTickS;
         Tick(now);
       }
+      // So that the logic learns of a block before a blade request it refuses, not only at the next status tick.
+      if (BlockChanged()) PublishStatus();
     }
     Shutdown();
+  }
+
+  bool BlockChanged() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return BlockOf(control_.Status(MonotonicSeconds())) != published_block_;
   }
 
   void Close() {
@@ -733,7 +749,7 @@ class XcoreNode : public rclcpp::Node {
         case Kind::kContested:
           // The driver keeps claiming: each claim stops the service at the board, and the latch reaches the board
           // whenever the emergency service is ours, where only a release clears it.
-          control_.LatchFault(std::string("service ") + name + " " + e.text, now);
+          control_.LatchForeignHost(std::string("service ") + name + " " + e.text, now);
           break;
         case Kind::kRpcResult:
           capabilities |= OnFirmwareAnswer(e, now);
@@ -861,12 +877,15 @@ class XcoreNode : public rclcpp::Node {
     return msg;
   }
 
+  // Called by the timer and by the I/O thread, one at a time, so that the messages go out in the order they were made.
   void PublishStatus() {
+    std::lock_guard<std::mutex> publish_lock(publish_mutex_);
     HardwareStatus msg;
     msg.stamp = now();
     {
       std::lock_guard<std::mutex> lock(mutex_);
       const auto s = control_.Status(MonotonicSeconds());
+      published_block_ = BlockOf(s);
       msg.emergency = s.blocked;
       msg.emergency_latched = s.latched;
       msg.emergency_reason = s.emergency_reason;
@@ -934,12 +953,19 @@ class XcoreNode : public rclcpp::Node {
       res.message = "latched";
     } else {
       RCLCPP_INFO(get_logger(), "Emergency release requested: %s", req.reason.c_str());
-      std::optional<std::string> refused = ForeignHosts();
-      if (!refused) refused = control_.ReleaseEmergency(MonotonicSeconds());
+      std::optional<xcore::ReleaseRefusal> refused;
+      if (auto foreign = ForeignHosts()) {
+        refused = xcore::ReleaseRefusal{"FOREIGN_HOST", *foreign};
+      } else {
+        refused = control_.ReleaseEmergency(MonotonicSeconds());
+      }
       if (refused) {
-        RCLCPP_ERROR(get_logger(), "Emergency release refused: %s", refused->c_str());
+        RCLCPP_ERROR(get_logger(), "Emergency release refused: %s", refused->message.c_str());
         res.success = false;
-        res.message = "release refused: " + *refused;
+        res.message = "release refused: " + refused->message;
+        res.code = refused->code;
+        res.value = static_cast<float>(refused->value);
+        res.limit = static_cast<float>(refused->limit);
         return;
       }
       res.message = "release requested";
@@ -954,7 +980,7 @@ class XcoreNode : public rclcpp::Node {
     request.height_mm = req.height_mm;
     request.lease_s = req.lease_s;
     std::lock_guard<std::mutex> lock(mutex_);
-    auto result = control_.SetBlade(request, MonotonicSeconds());
+    auto result = control_.SetBlade(request, MonotonicSeconds(), &res.emergency_reason);
     res.success = result == xcore::BladeResult::kOk;
     res.message = xcore::BladeResultText(result);
     if (!res.success) {
@@ -970,6 +996,8 @@ class XcoreNode : public rclcpp::Node {
   }
 
   xcore::InputConfig inputs_;
+  // One PublishStatus at a time; taken before mutex_, never while mutex_ is held.
+  std::mutex publish_mutex_;
   std::mutex mutex_;
   xcore::XcoreControl control_;
   std::optional<xcore::XcoreLink> link_;
@@ -1011,6 +1039,8 @@ class XcoreNode : public rclcpp::Node {
   std::string safety_measurement_date_;
   bool blade_on_logged_ = false;
   uint32_t logged_reason_ = 0;
+  // BlockOf the last hw/status, under mutex_.
+  uint64_t published_block_ = 0;
 
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
