@@ -1,9 +1,11 @@
 #ifndef MOWBITE_BRIDGE_BRIDGE_CORE_H
 #define MOWBITE_BRIDGE_BRIDGE_CORE_H
 
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,6 +20,12 @@ namespace mowbite_bridge {
 
 // Prefix of the ids of calls between nodes on bridge/rpc/request (e.g. the calibration asking the planner).
 constexpr char kInternalCall[] = "os/";
+
+// A call forwarded to a node waits this long for its answer, at most this many at once; ids of a call longer than this
+// as JSON are refused.
+constexpr double kCallWaitS = 900;
+constexpr std::size_t kMaxOpenCalls = 512;
+constexpr std::size_t kMaxIdBytes = 1024;
 
 struct MqttMessage {
   std::string topic;
@@ -50,6 +58,8 @@ struct Outbox {
 struct BridgeConfig {
   std::string software_version;
   std::string params_json = "{}";
+  // Monotonic seconds for the open calls; the steady clock without one.
+  std::function<double()> clock = nullptr;
 };
 
 // The bridge between the nodes and MQTT without ROS or MQTT client; retained texts are resent after every connect.
@@ -90,7 +100,8 @@ class BridgeCore {
   void OnMap(const std::string& text);
   void OnPlatform(const std::string& platform);
   void OnRpcMethods(const std::string& node, const std::vector<std::string>& methods);
-  // Answers of the nodes for MQTT; calls one node makes of another (ids beginning with kInternalCall) stay in ROS.
+  // Answers of the nodes for MQTT under the id the client sent; calls one node makes of another (ids beginning with
+  // kInternalCall) stay in ROS, an answer to a call no longer open or to an id the bridge did not give is dropped.
   void OnRpcResponse(const std::string& id, std::string_view result);
   void OnRpcError(const std::string& id, int code, std::string_view message, std::string_view data);
   void OnLog(double t, int level, std::string_view node, std::string_view message);
@@ -107,6 +118,11 @@ class BridgeCore {
   void Keep(const std::string& topic, const std::string& payload);
   void Event(const Json& event);
   void Log(int level, std::string text);
+  double Now() const;
+  // The id for the node of a call with this id of the client.
+  std::string Open(const Json& id, const std::string& method);
+  // The client's id of the call with this id for the node; false when it is not open.
+  bool Close(const std::string& node_id, Json* id);
 
   BridgeConfig config_;
   bool connected_ = false;
@@ -123,6 +139,17 @@ class BridgeCore {
   std::vector<std::string> kept_order_;
   std::map<std::string, std::string> kept_;
   std::optional<std::string> booted_;
+  // The calls at the nodes by their number: the client's id, the method and since when; the node gets tag_ + number.
+  struct OpenCall {
+    Json id;
+    std::string method;
+    double since = 0;
+  };
+  std::map<uint64_t, OpenCall> open_;
+  std::string tag_;
+  uint64_t next_call_ = 0;
+  // Each problem of an event against the catalog is logged once.
+  std::set<std::string> event_problems_;
   Outbox out_;
 };
 

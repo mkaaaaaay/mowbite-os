@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <vector>
+
 #include "mowbite_bridge/json_rpc.h"
 
 using namespace mowbite_bridge;
@@ -58,11 +60,19 @@ TEST(ReadRequest, InvalidRequests) {
   check(R"({"jsonrpc":"1.0","method":"rpc.ping","id":"n1"})", "Invalid JSON-RPC version", nullptr);
   check(R"({"jsonrpc":"2.0","method":7,"id":"n2"})", "Method is not a string", "n2");
   check(R"({"jsonrpc":"2.0","id":"d3"})", "Method is not a string", "d3");
-  // The id comes back as it was sent.
-  check(R"({"jsonrpc":"2.0","method":"rpc.ping","id":5})", "ID is not a string", 5);
-  check(R"({"jsonrpc":"2.0","method":"rpc.ping","id":{"a":1}})", "ID is not a string", Json{{"a", 1}});
   check(R"({"jsonrpc":"2.0","method":"x","id":"1","params":)" + std::string(200, '[') + std::string(200, ']') + "}",
         "Request is nested too deep", nullptr);
+}
+
+// Any JSON value is an id, kept as it came for the answer.
+TEST(ReadRequest, IdsOfAnyType) {
+  const std::vector<Json> ids = {Json(5), Json(2.5), Json(true), Json{{"a", 1}}, Json::array({1, "x"}),
+                                 Json(std::string("t\0x", 3))};
+  for (const Json& id : ids) {
+    const RpcReading r = ReadRequest(Json{{"jsonrpc", "2.0"}, {"method", "rpc.ping"}, {"id", id}}.dump());
+    EXPECT_EQ(r.kind, RpcReading::Kind::kCall) << id.dump();
+    EXPECT_EQ(r.call.id, id);
+  }
 }
 
 TEST(ReadRequest, MetaAndExtAreNeverAnswered) {

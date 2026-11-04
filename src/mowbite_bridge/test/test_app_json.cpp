@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_bridge/app_json.h"
 
 using namespace mowbite_bridge;
@@ -165,6 +166,6 @@ TEST(Fixed, CapabilitiesVersionAndSystemInfo) {
   EXPECT_EQ(VersionText("1.2.3"), R"({"version":"1.2.3"})");
   EXPECT_EQ(SystemInfo("", "airseekers_tron").dump(),
             R"({"name":"mowbite-os","version":"UNKNOWN VERSION","platform":"airseekers_tron","schema":)" +
-                std::to_string(DataSchema()) + "}");
+                std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) + "}");
   EXPECT_EQ(SystemInfo("1.2.3", "")["platform"], "");
 }

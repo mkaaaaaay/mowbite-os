@@ -24,7 +24,7 @@ struct RpcCall {
   std::string method;
   // null when the request has none.
   Json params;
-  // A string, or null when the request has none.
+  // Of any JSON type as the client sent it, null when the request has none.
   Json id;
 };
 

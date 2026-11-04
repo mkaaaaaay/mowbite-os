@@ -42,7 +42,6 @@ RpcReading ReadRequest(std::string_view payload) {
   RpcReading reading;
   reading.call.method = method->get<std::string>();
   if (StartsWith(reading.call.method, "meta.") || StartsWith(reading.call.method, "ext.")) return reading;
-  if (!id.is_null() && !id.is_string()) return Refuse(id, kInvalidRequest, "ID is not a string");
   reading.kind = RpcReading::Kind::kCall;
   reading.call.params = request.value("params", Json());
   reading.call.id = id;

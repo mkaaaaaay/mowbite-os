@@ -2,6 +2,7 @@
 
 #include <set>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_bridge/bridge_core.h"
 #include "mowbite_bridge/event_builder.h"
 
@@ -157,6 +158,10 @@ TEST(BridgeCoreConnection, BootedIntoTheSinkAtOnceAndLiveOnceAfterTheFirstConnec
   EXPECT_EQ(shutdown["type"], "SHUTDOWN");
   ASSERT_EQ(sunk.size(), 2u);
   EXPECT_EQ(sunk[1], shutdown);
+  // Both as the catalog of the interface has them.
+  for (const auto& event : sunk) {
+    EXPECT_TRUE(mowbite_api::CheckEvent(event["type"].get<std::string>(), event).empty()) << event.dump();
+  }
 }
 
 // B4
@@ -214,11 +219,16 @@ TEST_F(Core, LocalMethods) {
             R"({"jsonrpc":"2.0","result":"pong","id":null})");
   const Json info = Call(core_, "system.info", Json{{"x", 1}})["result"];
   EXPECT_EQ(info.dump(), R"({"name":"mowbite-os","version":"1.2.3","platform":"","schema":)" +
-                             std::to_string(DataSchema()) + "}");
+                             std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) + "}");
   core_.OnPlatform("airseekers_tron");
   EXPECT_EQ(Call(core_, "system.info")["result"]["platform"], "airseekers_tron");
   EXPECT_EQ(Call(core_, "rpc.methods", Json::array())["result"],
-            Json({"logs.recent", "rpc.methods", "rpc.ping", "sensors.list", "system.info"}));
+            Json({"logs.recent", "rpc.methods", "rpc.ping", "sensors.list", "system.api", "system.info"}));
+  // The schema of the interface with its version, the same as system.info.api.
+  const Json api = Call(core_, "system.api", Json::object())["result"];
+  EXPECT_EQ(api["api"], mowbite_api::kApi);
+  EXPECT_EQ(api["json_schema"], mowbite_api::Schema());
+  EXPECT_EQ(api["json_schema"]["x-api"], mowbite_api::kApi);
 }
 
 TEST_F(Core, AddedLocalMethodsAndTheirErrors) {
@@ -243,7 +253,7 @@ TEST_F(Core, MethodsOfTheNodesAreForwardedAsTheyCame) {
   EXPECT_EQ(out.logs[0].text, "mowbite_logic registered 2 methods");
   EXPECT_EQ(Call(core_, "rpc.methods")["result"],
             Json({"docking.start", "logs.recent", "params.set", "planner.plan", "rpc.methods", "rpc.ping",
-                  "sensors.list", "system.info"}));
+                  "sensors.list", "system.api", "system.info"}));
 
   core_.OnMqtt("rpc/request", R"({"jsonrpc":"2.0","method":"params.set","params":{"b":1,"a":[2]},"id":"7"})", false);
   core_.OnMqtt("rpc/request", R"({"jsonrpc":"2.0","method":"docking.start"})", false);
@@ -252,17 +262,21 @@ TEST_F(Core, MethodsOfTheNodesAreForwardedAsTheyCame) {
   ASSERT_EQ(out.requests.size(), 2u);
   EXPECT_EQ(out.requests[0].method, "params.set");
   EXPECT_EQ(out.requests[0].params, R"({"b":1,"a":[2]})");
-  EXPECT_EQ(out.requests[0].id, "7");
+  // The node gets an id of the bridge, never one of an internal call; without an id it gets none.
+  EXPECT_NE(out.requests[0].id, "7");
+  EXPECT_FALSE(out.requests[0].id.empty());
+  EXPECT_NE(out.requests[0].id.rfind(kInternalCall, 0), 0u);
   EXPECT_EQ(out.requests[1].params, "");
   EXPECT_EQ(out.requests[1].id, "");
 
-  // An id with a NUL byte is refused; the node never sees the request.
-  core_.OnMqtt("rpc/request", R"({"jsonrpc":"2.0","method":"params.set","id":"a\u0000b"})", false);
+  // An id longer than kMaxIdBytes as JSON is refused; the node never sees the request.
+  const std::string long_id(kMaxIdBytes, 'i');
+  core_.OnMqtt("rpc/request", Json{{"jsonrpc", "2.0"}, {"method", "params.set"}, {"id", long_id}}.dump(), false);
   out = core_.Take();
   EXPECT_TRUE(out.requests.empty());
   ASSERT_EQ(out.mqtt.size(), 1u);
-  EXPECT_EQ(out.mqtt[0].payload,
-            R"({"jsonrpc":"2.0","error":{"code":-32600,"message":"The id must not contain a NUL byte"},"id":"a\u0000b"})");
+  EXPECT_EQ(Json::parse(out.mqtt[0].payload)["error"]["code"], kInvalidRequest);
+  EXPECT_EQ(Json::parse(out.mqtt[0].payload)["id"], long_id);
 
   // An empty list removes the node's methods.
   core_.OnRpcMethods("mowbite_planner", {});
@@ -272,12 +286,23 @@ TEST_F(Core, MethodsOfTheNodesAreForwardedAsTheyCame) {
 
 // B10
 TEST_F(Core, AnswersOfTheNodes) {
-  core_.OnRpcResponse("7", R"({"ok":true})");
-  core_.OnRpcResponse("", R"("x")");
-  core_.OnRpcResponse("8", "{broken");
-  core_.OnRpcError("9", kInvalidRequest, "No docking station", R"({"reason":"NO_DOCK"})");
-  core_.OnRpcError("10", kInvalidParams, "bad", "");
-  core_.OnRpcError("11", kInternalError, "Gr\xe4" "fin", "not json");
+  core_.OnRpcMethods("mowbite_logic", {"x"});
+  core_.Take();
+  const auto forward = [this](const Json& id) {
+    Json request = {{"jsonrpc", "2.0"}, {"method", "x"}};
+    if (!id.is_null()) request["id"] = id;
+    core_.OnMqtt("rpc/request", request.dump(), false);
+    const Outbox out = core_.Take();
+    EXPECT_EQ(out.requests.size(), 1u);
+    return out.requests.empty() ? std::string("?") : out.requests[0].id;
+  };
+  const std::string ids[] = {forward("7"), forward(nullptr), forward("8"), forward("9"), forward("10"), forward("11")};
+  core_.OnRpcResponse(ids[0], R"({"ok":true})");
+  core_.OnRpcResponse(ids[1], R"("x")");
+  core_.OnRpcResponse(ids[2], "{broken");
+  core_.OnRpcError(ids[3], kInvalidRequest, "No docking station", R"({"reason":"NO_DOCK"})");
+  core_.OnRpcError(ids[4], kInvalidParams, "bad", "");
+  core_.OnRpcError(ids[5], kInternalError, "Gr\xe4" "fin", "not json");
   // Calls between nodes stay off MQTT.
   core_.OnRpcResponse("os/calibration/1", R"({"ready":true})");
   core_.OnRpcError("os/calibration/2", kInvalidParams, "bad", "");
@@ -294,6 +319,95 @@ TEST_F(Core, AnswersOfTheNodes) {
   EXPECT_EQ(last["error"]["message"], "Gr\xef\xbf\xbd" "fin");
   EXPECT_EQ(last["error"]["data"], "not json");
   for (const auto& m : out.mqtt) EXPECT_EQ(m.topic, "rpc/response");
+}
+
+// AM4: the client gets its own id back, of any type, also when two clients send the same.
+TEST_F(Core, AnswersOfTheNodesUnderTheIdsOfTheClients) {
+  core_.OnRpcMethods("mowbite_logic", {"params.set"});
+  core_.Take();
+  const std::vector<Json> ids = {Json("7"), Json(7), Json("7"), Json{{"n", 1}}, Json(std::string("a\0b", 3))};
+  for (const auto& id : ids) {
+    core_.OnMqtt("rpc/request", Json{{"jsonrpc", "2.0"}, {"method", "params.set"}, {"id", id}}.dump(), false);
+  }
+  Outbox out = core_.Take();
+  ASSERT_EQ(out.requests.size(), ids.size());
+  std::set<std::string> distinct;
+  for (const auto& request : out.requests) {
+    distinct.insert(request.id);
+    EXPECT_EQ(request.id.find('\0'), std::string::npos);
+  }
+  EXPECT_EQ(distinct.size(), ids.size());
+  // Answered in the other order.
+  for (size_t i = ids.size(); i-- > 0;) core_.OnRpcResponse(out.requests[i].id, std::to_string(i));
+  const std::vector<RpcForward> requests = out.requests;
+  out = core_.Take();
+  ASSERT_EQ(out.mqtt.size(), ids.size());
+  for (size_t i = 0; i < ids.size(); i++) {
+    const Json reply = Json::parse(out.mqtt[i].payload);
+    const size_t call = ids.size() - 1 - i;
+    EXPECT_EQ(reply["id"], ids[call]);
+    EXPECT_EQ(reply["result"], call);
+  }
+  // A second answer to the same call is dropped with a warning, one to an id the bridge never gave without.
+  core_.OnRpcResponse(requests[0].id, "0");
+  core_.OnRpcError("7", kInvalidParams, "bad", "");
+  core_.OnRpcResponse("calib_test_3", "{}");
+  out = core_.Take();
+  EXPECT_TRUE(out.mqtt.empty());
+  ASSERT_EQ(out.logs.size(), 1u);
+  EXPECT_EQ(out.logs[0].level, kLogWarn);
+}
+
+TEST(BridgeCoreCalls, OpenCallsWaitAtMostAndAreBounded) {
+  double now = 100;
+  BridgeConfig config;
+  config.clock = [&now] { return now; };
+  BridgeCore core(config);
+  core.Connected();
+  core.OnRpcMethods("mowbite_logic", {"x"});
+  core.Take();
+  const auto forward = [&core](int id) {
+    core.OnMqtt("rpc/request", Json{{"jsonrpc", "2.0"}, {"method", "x"}, {"id", id}}.dump(), false);
+    const Outbox out = core.Take();
+    EXPECT_EQ(out.requests.size(), 1u);
+    return out.requests.empty() ? std::string("?") : out.requests[0].id;
+  };
+  const std::string first = forward(1);
+  now += kCallWaitS - 1;
+  const std::string second = forward(2);
+  // The first is past its wait once the next call comes.
+  now += 2;
+  const std::string third = forward(3);
+  core.OnRpcResponse(first, "1");
+  core.OnRpcResponse(second, "2");
+  Outbox out = core.Take();
+  ASSERT_EQ(out.mqtt.size(), 1u);
+  EXPECT_EQ(Json::parse(out.mqtt[0].payload)["id"], 2);
+  // With kMaxOpenCalls open the oldest goes.
+  std::string last;
+  for (size_t i = 0; i < kMaxOpenCalls; i++) last = forward(1000 + static_cast<int>(i));
+  core.OnRpcResponse(third, "3");
+  core.OnRpcResponse(last, "4");
+  out = core.Take();
+  ASSERT_EQ(out.mqtt.size(), 1u);
+  EXPECT_EQ(Json::parse(out.mqtt[0].payload)["id"], 1000 + static_cast<int>(kMaxOpenCalls) - 1);
+}
+
+// Events against the catalog: each problem once as an ERROR, the event goes out all the same.
+TEST_F(Core, EventsAreCheckedAgainstTheCatalog) {
+  std::vector<Json> seen;
+  core_.SetEventSink([&seen](const Json& event) { seen.push_back(event); });
+  const std::string odd = BuildEvent("BOOTED", Json{{"odd", 1}}, 5).dump();
+  core_.OnPublish("events/json", odd, false);
+  core_.OnPublish("events/json", odd, false);
+  core_.OnPublish("events/json", BuildEvent("BOOTED", Json::object(), 6).dump(), false);
+  core_.OnPublish("events/json", BuildEvent("PLANNER_THING", Json{{"any", 1}}, 7).dump(), false);
+  const Outbox out = core_.Take();
+  EXPECT_EQ(seen.size(), 4u);
+  EXPECT_EQ(out.mqtt.size(), 4u);
+  ASSERT_EQ(out.logs.size(), 1u);
+  EXPECT_EQ(out.logs[0].level, kLogError);
+  EXPECT_NE(out.logs[0].text.find("odd"), std::string::npos);
 }
 
 // B11

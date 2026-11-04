@@ -2,6 +2,8 @@
 
 #include <cstdio>
 
+#include "mowbite_api/catalog.h"
+
 namespace mowbite_bridge {
 
 namespace {
@@ -152,7 +154,8 @@ Json SystemInfo(const std::string& version, const std::string& platform) {
   return Json{{"name", "mowbite-os"},
               {"version", version.empty() ? "UNKNOWN VERSION" : version},
               {"platform", platform},
-              {"schema", DataSchema()}};
+              {"schema", DataSchema()},
+              {"api", mowbite_api::kApi}};
 }
 
 int DataSchema() {

@@ -1,7 +1,9 @@
 #include "mowbite_bridge/bridge_core.h"
 
 #include <algorithm>
+#include <chrono>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_bridge/event_builder.h"
 #include "mowbite_bridge/text.h"
 
@@ -14,16 +16,17 @@ constexpr char kResponseTopic[] = "rpc/response";
 constexpr char kEventsTopic[] = "events/json";
 constexpr std::size_t kMaxDataDepth = 64;
 
-Json IdOf(const std::string& id) {
-  return id.empty() ? Json() : Json(id);
-}
-
 }  // namespace
 
-BridgeCore::BridgeCore(BridgeConfig config) : config_(std::move(config)), params_(config_.params_json) {
+BridgeCore::BridgeCore(BridgeConfig config)
+    : config_(std::move(config)), params_(config_.params_json), tag_(RandomId(8) + "/") {
   local_["rpc.ping"] = [](const Json&) { return Json("pong"); };
   local_["rpc.methods"] = [this](const Json&) { return Json(methods_.All()); };
   local_["system.info"] = [this](const Json&) { return SystemInfo(config_.software_version, platform_); };
+  // The catalog of the interface as JSON Schema; system.info.api tells whether a client knows it already.
+  local_["system.api"] = [](const Json&) {
+    return Json{{"api", mowbite_api::kApi}, {"json_schema", mowbite_api::Schema()}};
+  };
   local_["sensors.list"] = [this](const Json& params) { return SensorList(sensors_, readings_, params); };
   local_["logs.recent"] = [this](const Json& params) { return warnings_.Recent(params); };
   for (const auto& [name, method] : local_) methods_.AddLocal(name);
@@ -129,15 +132,18 @@ void BridgeCore::Answer(const RpcCall& call) {
         Send(kResponseTopic, ErrorReply(call.id, kInternalError, e.what()), false);
       }
       return;
-    case Route::kNode:
-      // Like an action: the id goes out as a ROS string.
-      if (call.id.is_string() && call.id.get<std::string>().find('\0') != std::string::npos) {
-        Send(kResponseTopic, ErrorReply(call.id, kInvalidRequest, "The id must not contain a NUL byte"), false);
+    case Route::kNode: {
+      // The node gets an id of the bridge, the answer goes out with the client's; without an id it gets none.
+      if (call.id.dump().size() > kMaxIdBytes) {
+        Send(kResponseTopic,
+             ErrorReply(call.id, kInvalidRequest, "The id is longer than " + std::to_string(kMaxIdBytes) + " bytes"),
+             false);
         return;
       }
-      out_.requests.push_back({call.method, call.params.is_null() ? "" : call.params.dump(),
-                               call.id.is_string() ? call.id.get<std::string>() : ""});
+      const std::string id = call.id.is_null() ? "" : Open(call.id, call.method);
+      out_.requests.push_back({call.method, call.params.is_null() ? "" : call.params.dump(), id});
       return;
+    }
     case Route::kUnknown:
       Send(kResponseTopic, ErrorReply(call.id, kMethodNotFound, "Method \"" + call.method + "\" not found"), false);
       return;
@@ -209,18 +215,23 @@ void BridgeCore::OnRpcMethods(const std::string& node, const std::vector<std::st
 
 void BridgeCore::OnRpcResponse(const std::string& id, std::string_view result) {
   if (id.rfind(kInternalCall, 0) == 0) return;
-  Guard("rpc response", [&] { Send(kResponseTopic, ResultReplyFromText(IdOf(id), result), false); });
+  Guard("rpc response", [&] {
+    Json client_id;
+    if (Close(id, &client_id)) Send(kResponseTopic, ResultReplyFromText(client_id, result), false);
+  });
 }
 
 void BridgeCore::OnRpcError(const std::string& id, int code, std::string_view message, std::string_view data) {
   if (id.rfind(kInternalCall, 0) == 0) return;
   Guard("rpc error", [&] {
+    Json client_id;
+    if (!Close(id, &client_id)) return;
     Json details;
     if (!data.empty()) {
       details = NestingDepth(data) > kMaxDataDepth ? Json() : Json::parse(data.begin(), data.end(), nullptr, false);
       if (details.is_discarded() || details.is_null()) details = Json(CleanUtf8(data));
     }
-    Send(kResponseTopic, ErrorReply(IdOf(id), code, message, details), false);
+    Send(kResponseTopic, ErrorReply(client_id, code, message, details), false);
   });
 }
 
@@ -254,11 +265,60 @@ void BridgeCore::Keep(const std::string& topic, const std::string& payload) {
 }
 
 void BridgeCore::Event(const Json& event) {
+  // Against the catalog, never in the way of the event: each problem once as an ERROR in the log.
+  if (event.contains("type") && event["type"].is_string()) {
+    for (const auto& problem : mowbite_api::CheckEvent(event["type"].get<std::string>(), event, false)) {
+      if (event_problems_.size() < 256 && event_problems_.insert(problem).second) {
+        Log(kLogError, "Bridge: event not as in the catalog: " + CleanUtf8(problem));
+      }
+    }
+  }
   if (sink_) sink_(event);
 }
 
 void BridgeCore::Log(int level, std::string text) {
   out_.logs.push_back({level, std::move(text)});
+}
+
+double BridgeCore::Now() const {
+  if (config_.clock) return config_.clock();
+  using Seconds = std::chrono::duration<double>;
+  return Seconds(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+std::string BridgeCore::Open(const Json& id, const std::string& method) {
+  const double now = Now();
+  while (!open_.empty() && now - open_.begin()->second.since > kCallWaitS) open_.erase(open_.begin());
+  if (open_.size() >= kMaxOpenCalls) {
+    Log(kLogWarn, "Bridge: " + std::to_string(kMaxOpenCalls) + " calls are open, the oldest (" +
+                      CleanUtf8(open_.begin()->second.method) + ") gets no answer");
+    open_.erase(open_.begin());
+  }
+  const uint64_t number = ++next_call_;
+  open_[number] = {id, method, now};
+  return tag_ + std::to_string(number);
+}
+
+bool BridgeCore::Close(const std::string& node_id, Json* id) {
+  if (node_id.empty()) {
+    *id = nullptr;
+    return true;
+  }
+  // Not an id of this bridge: a call of a test or a tool straight over ROS, its answer is not for MQTT.
+  if (node_id.rfind(tag_, 0) != 0) return false;
+  std::optional<uint64_t> number;
+  if (node_id.size() > tag_.size() && node_id.size() <= tag_.size() + 19 &&
+      node_id.find_first_not_of("0123456789", tag_.size()) == std::string::npos) {
+    number = std::stoull(node_id.substr(tag_.size()));
+  }
+  const auto open = number ? open_.find(*number) : open_.end();
+  if (open == open_.end()) {
+    Log(kLogWarn, "Bridge: an answer to " + CleanUtf8(node_id) + " was dropped, that call is not open (any more)");
+    return false;
+  }
+  *id = std::move(open->second.id);
+  open_.erase(open);
+  return true;
 }
 
 std::string RestartWarning(std::string_view note) {
