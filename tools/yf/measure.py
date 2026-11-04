@@ -3,7 +3,10 @@
 
 Asks before every step and shows what it will send. In the air the wheels get at most 0.1 m/s each, on the ground in
 M8 (only with --ground) 0.3 m/s, in the fast runs of M8 (only with --fast as well, and only up to the limit the driver
-reports) 0.5 m/s. Any key while a step runs aborts it: three stops on hw/cmd_vel, the blade off, the emergency latched
+reports) 0.5 m/s. The fast runs need the raised start of the measurement image (speed_limit of measure.launch.py);
+a driver reporting more than 0.3 m/s takes nothing else. They go in stages, 0.4 m/s first, and stop at their limits:
+a wheel above 0.6 m/s for 0.2 s, the wheels standing late or after too long a way, runs of a case too far apart.
+Any key while a step runs aborts it: three stops on hw/cmd_vel, the blade off, the emergency latched
 over hw/emergency; keys within 0.4 s after an answer are dropped, so a double tap does not abort the step it started.
 Records hw/status, hw/wheel_odom, imu/data, hw/capabilities and its own commands as JSON lines with a size and a time
 limit. The capture of the inner network (tcpdump on the host) is the second record; the report on both
@@ -35,6 +38,19 @@ from sensor_msgs.msg import Imu
 AIR_WHEEL_SPEED = 0.1
 GROUND_WHEEL_SPEED = 0.3
 FAST_WHEEL_SPEED = 0.5
+# Fast runs of M8: first at FAST_FIRST_SPEED; the top speed only if the first one went slow enough that the top one, as
+# much faster as its command, stays at FAST_ABORT_SPEED or below. A wheel above FAST_ABORT_SPEED for FAST_ABORT_S aborts.
+FAST_FIRST_SPEED = 0.4
+FAST_ABORT_SPEED = 0.6
+FAST_ABORT_S = 0.2
+FAST_REPEATS = 3
+# Limits of a fast run: the wheels stand within FAST_STAND_S of the cause (STOP pressed, or the last command), after at
+# most FAST_DISTANCE_M in the driver's odometry; the runs of one case lie within FAST_SPREAD_M of each other.
+FAST_STAND_S = {"stop": 0.5, "quiet": 1.0}
+FAST_DISTANCE_M = {"stop": 0.30, "quiet": 0.60}
+FAST_SPREAD_M = 0.15
+# A wheel this slow stands.
+STILL_SPEED = 0.005
 # Keys this soon after an answer belong to it (a double tap on a phone), not to the step it starts.
 KEY_SETTLE_S = 0.4
 # Emergency bits of hw/status by bit number, named as in the catalog of mowbite_api (x-emergency-bits);
@@ -62,6 +78,65 @@ def reason_text(bits):
     if bits & ~sum(1 << bit for bit in EMERGENCY_BITS):
         names.append("UNKNOWN")
     return "|".join(names) if names else "0"
+
+
+def fastest_wheel(v, w, wheel_distance):
+    return max(abs(v - w * wheel_distance / 2), abs(v + w * wheel_distance / 2))
+
+
+def steady_speed(log, start, end, wheel_distance):
+    """Mean speed of the faster wheel over the samples (t, v, w) from start to end; None without one."""
+    speeds = [fastest_wheel(v, w, wheel_distance) for t, v, w in log if start <= t <= end]
+    return sum(speeds) / len(speeds) if speeds else None
+
+
+def still_after(log, since, wheel_distance):
+    """Time of the first sample (t, v, w) at or after `since` with both wheels standing; None if there is none."""
+    for t, v, w in log:
+        if t >= since and fastest_wheel(v, w, wheel_distance) <= STILL_SPEED:
+            return t
+    return None
+
+
+def fast_run_problems(kind, stand_s, metres):
+    """What a fast run of kind "stop" or "quiet" did beyond its limits, as texts."""
+    problems = []
+    if stand_s is None or stand_s > FAST_STAND_S[kind]:
+        shown = "never" if stand_s is None else f"after {stand_s:.2f} s"
+        problems.append(f"the wheels stood {shown}, limit {FAST_STAND_S[kind]:.1f} s")
+    if metres > FAST_DISTANCE_M[kind]:
+        problems.append(f"{metres:.2f} m until they stood, limit {FAST_DISTANCE_M[kind]:.2f} m")
+    return problems
+
+
+def spread_problem(metres):
+    """The runs of one case further apart than FAST_SPREAD_M, as a text; None otherwise."""
+    if len(metres) < 2 or max(metres) - min(metres) <= FAST_SPREAD_M:
+        return None
+    return f"stopping distances {min(metres):.2f}-{max(metres):.2f} m, spread above {FAST_SPREAD_M:.2f} m"
+
+
+def top_speed_allowed(first_steady, top):
+    """The top speed runs only if the speed at FAST_FIRST_SPEED, scaled like the command, stays within the abort."""
+    return first_steady is not None and first_steady * top / FAST_FIRST_SPEED <= FAST_ABORT_SPEED + 1e-9
+
+
+class SpeedGuard:
+    """Trips once a wheel stays above `limit` m/s for `hold` s."""
+
+    def __init__(self, limit, hold):
+        self.limit, self.hold = limit, hold
+        self.since = None
+        self.tripped = None
+
+    def update(self, t, fastest):
+        if fastest <= self.limit:
+            self.since = None
+            return
+        if self.since is None:
+            self.since = t
+        if self.tripped is None and t - self.since >= self.hold - 1e-9:
+            self.tripped = (fastest, t - self.since)
 
 
 class Recorder:
@@ -173,6 +248,9 @@ class Mower:
         self.max_tilt = 0.0
         self.max_linear_speed = None
         self.emergency_since = None
+        self.last_cmd_at = None
+        self.guard = None
+        # (t, v, w) of hw/wheel_odom.
         self.odom_log = collections.deque(maxlen=3000)
         self.node = rclpy.create_node("yf_measure")
         self.node.create_subscription(HardwareStatus, "hw/status", self._status, 10)
@@ -204,7 +282,9 @@ class Mower:
     def _odom(self, msg):
         with self.lock:
             self.odom, self.odom_at = (msg.twist.linear.x, msg.twist.angular.z), time.monotonic()
-            self.odom_log.append((self.odom_at, msg.twist.linear.x))
+            self.odom_log.append((self.odom_at, msg.twist.linear.x, msg.twist.angular.z))
+            if self.guard is not None:
+                self.guard.update(self.odom_at, fastest_wheel(*self.odom, self.wheel_distance))
         self.rec.write("odom", v=msg.twist.linear.x, w=msg.twist.angular.z)
 
     def _imu(self, msg):
@@ -227,6 +307,18 @@ class Mower:
             log = [entry for entry in self.odom_log if entry[0] >= since]
         return sum(abs(b[1]) * (b[0] - a[0]) for a, b in zip(log, log[1:]))
 
+    def odometry(self):
+        with self.lock:
+            return list(self.odom_log)
+
+    def set_guard(self, guard):
+        with self.lock:
+            self.guard = guard
+
+    def tripped(self):
+        with self.lock:
+            return self.guard.tripped if self.guard is not None else None
+
     def snapshot(self):
         with self.lock:
             return self.status, time.monotonic() - self.status_at, self.odom, time.monotonic() - self.odom_at
@@ -244,6 +336,7 @@ class Mower:
     def drive(self, v, w):
         v, w = self.clamp(v, w)
         self.cmd_vel.publish(Twist(linear=Vector3(x=v), angular=Vector3(z=w)))
+        self.last_cmd_at = time.monotonic()
         self.rec.write("cmd", v=v, w=w)
 
     def stop_wheels(self):
@@ -416,6 +509,11 @@ class Measurement:
 
     def check_keys(self):
         if self.keys.pressed():
+            raise Abort()
+        tripped = self.mower.tripped()
+        if tripped is not None:
+            self.finding("M8", f"a wheel at {tripped[0]:.2f} m/s for {tripped[1]:.2f} s, above {FAST_ABORT_SPEED} m/s")
+            self.mower.set_guard(None)
             raise Abort()
 
     def wait(self, seconds, until=None):
@@ -816,37 +914,75 @@ class Measurement:
         if not self.args.ground:
             print(f"\n{step} needs --ground (own word of the user, on the ground, blade disc off).")
             return
+        limit = self.mower.max_linear_speed
+        raised = limit is not None and limit > GROUND_WHEEL_SPEED + 1e-6
         items = [("0.3 m/s straight, press STOP top after about 2 s", 0.3, 0.0, {"stop": True}, None),
                  ("0.3 m/s straight for 3 s, then no command (driver stops)", 0.3, 0.0, None, "quiet"),
                  ("0.3 m/s straight for 2 s, then the driver killed", 0.3, 0.0, None, "kill"),
                  ("0.1 m/s backward against a soft obstacle for up to 10 s", -0.1, 0.0, {"bumper": True}, None),
                  ("turn on the spot at 0.3 rad/s for 5 s", 0.0, 0.3, None, "quiet")]
-        for text, v, w, fake, how in items:
-            if self.ask(f"{step} on the ground: {text}"):
-                self.ground_run(step, text, v, w, fake, how)
+        if raised:
+            # Its max_duty may be raised as well: 0.3 m/s could then turn the wheels faster than its word says.
+            print(f"\n{step} at 0.3 m/s: skipped, the driver runs in the raised start ({limit:.2f} m/s); run it in "
+                  "the normal start.")
+        else:
+            for text, v, w, fake, how in items:
+                if self.ask(f"{step} on the ground: {text}"):
+                    self.ground_run(step, text, v, w, fake, how)
         if not self.args.fast:
             return
-        # Speed per duty at high duty and the stopping distance at 0.4-0.5 m/s (own word, raised limits).
-        limit = self.mower.max_linear_speed
-        if limit is None or limit < 0.4 - 1e-6:
+        if limit is None or limit < FAST_FIRST_SPEED - 1e-6:
             shown = "no" if limit is None else f"{limit:.2f}"
             print(f"\n{step} fast runs: the driver allows {shown} m/s; they need its limits raised to 0.4 m/s or more "
                   "(own word of the user) and are skipped.")
             return
-        fast = min(FAST_WHEEL_SPEED, limit)
-        self.mower.wheel_limit = fast
-        print(f"\n{step} fast runs up to {fast:.2f} m/s: a straight lane of 5 m or more, nobody in it")
-        items = [("0.4 m/s straight, press STOP top after about 2 s", 0.4, {"stop": True}, None),
-                 (f"{fast:.2f} m/s straight, press STOP top after about 2 s", fast, {"stop": True}, None),
-                 (f"{fast:.2f} m/s straight for 3 s, then no command (driver stops)", fast, None, "quiet"),
-                 (f"{fast:.2f} m/s straight for 2 s, then the driver killed", fast, None, "kill")]
-        for text, v, fake, how in items:
-            if self.ask(f"{step} on the ground, fast: {text}"):
-                self.ground_run(step, text, v, 0.0, fake, how)
-        self.mower.wheel_limit = GROUND_WHEEL_SPEED
+        top = min(FAST_WHEEL_SPEED, limit)
+        self.mower.wheel_limit = top
+        self.mower.set_guard(SpeedGuard(FAST_ABORT_SPEED, FAST_ABORT_S))
+        try:
+            self.fast_runs(step, top)
+        finally:
+            self.mower.set_guard(None)
+            self.mower.wheel_limit = GROUND_WHEEL_SPEED
 
-    def ground_run(self, step, text, v, w, fake, how):
-        """One run of M8: drive, the cause, the distance until the wheels stood (odometry), then the release."""
+    def fast_runs(self, step, top):
+        """Speed per duty at high duty and the stopping distance at 0.4-0.5 m/s (own word, raised start), in stages."""
+        n = max(1, min(self.args.repeats, FAST_REPEATS))
+        print(f"\n{step} fast runs, {n}x each, {FAST_FIRST_SPEED} m/s first, then up to {top:.2f} m/s: a straight "
+              f"lane of 5 m or more, nobody in it; a wheel above {FAST_ABORT_SPEED} m/s for {FAST_ABORT_S} s aborts")
+        first = self.fast_case(step, f"{FAST_FIRST_SPEED:.2f} m/s straight, press STOP top after about 2 s",
+                               FAST_FIRST_SPEED, "stop", n)
+        steady = [r["steady"] for r in first if r["steady"] is not None]
+        first_steady = max(steady) if steady else None
+        if not top_speed_allowed(first_steady, top):
+            shown = "unknown" if first_steady is None else f"{first_steady:.2f} m/s"
+            print(f"\n{step} at {FAST_FIRST_SPEED:.2f} m/s the faster wheel went {shown}: {top:.2f} m/s would go "
+                  f"above {FAST_ABORT_SPEED} m/s, the top speed is skipped.")
+            self.rec.write("fast_top_skipped", step=step, first_steady=first_steady, top=top)
+            return
+        for text, how in ((f"{top:.2f} m/s straight, press STOP top after about 2 s", "stop"),
+                          (f"{top:.2f} m/s straight for 3 s, then no command (driver stops)", "quiet"),
+                          (f"{top:.2f} m/s straight for 2 s, then the driver killed", "kill")):
+            self.fast_case(step, text, top, how, n)
+
+    def fast_case(self, step, text, v, how, n):
+        """Up to n runs of one fast case, each checked against its limits, then their spread; the results of the runs."""
+        results = []
+        for i in range(n):
+            label = f"fast {text}" + (f", run {i + 1} of {n}" if n > 1 else "")
+            if not self.ask(f"{step} on the ground, {label}"):
+                continue
+            results.append(self.ground_run(step, label, v, 0.0, {"stop": True} if how == "stop" else None,
+                                           None if how == "stop" else how, fast=True))
+        problem = spread_problem([r["metres"] for r in results if r.get("metres") is not None])
+        if problem:
+            self.finding(step, f"fast {text}: {problem}")
+            raise Abort()
+        return results
+
+    def ground_run(self, step, text, v, w, fake, how, fast=False):
+        """One run of M8: drive, the cause, the distance until the wheels stood (odometry), then the release. A fast
+        run beyond its limits aborts, before the release."""
         self.ready(step)
         self.mark(step, text)
         if fake is not None:
@@ -866,26 +1002,55 @@ class Measurement:
             self.wait_for_driver(step, pid, self.args.restart_wait)
         else:
             self.drive(v, w, 3.0 if w == 0 else 5.0, until=self.in_emergency)
-            cause = time.monotonic()
+            cause = self.mower.last_cmd_at or time.monotonic()
         self.wait(2.0)
+        log = self.mower.odometry()
+        result = {"steady": steady_speed(log, cause - 0.6, cause - 0.1, self.mower.wheel_distance)}
         if w == 0:
             # A killed driver sees nothing until its successor runs; the counters in the capture tell that distance.
             if how != "kill":
-                metres = self.mower.travelled(cause)
-                print(f"     odometry (the driver's view): {metres:.3f} m from the "
-                      f"{'emergency' if fake else 'last command'} until it stood")
-                self.rec.write("stopping", step=step, text=text, odometry_m=metres)
+                still = still_after(log, cause, self.mower.wheel_distance)
+                result.update(metres=self.mower.travelled(cause), stand_s=None if still is None else still - cause)
+                stood = "never" if still is None else f"after {still - cause:.2f} s"
+                steady = "-" if result["steady"] is None else f"{result['steady']:.2f}"
+                print(f"     odometry (the driver's view): {result['metres']:.3f} m from the "
+                      f"{'emergency' if fake else 'last command'} until it stood ({stood}); before: {steady} m/s")
+                self.rec.write("stopping", step=step, text=text, odometry_m=result["metres"],
+                               stand_s=result["stand_s"], steady=result["steady"])
             chalk = self.person.number("stopping distance at the chalk line in m")
             if chalk is not None:
                 self.rec.write("stopping_chalk", step=step, text=text, metres=chalk)
         self.no_motion(step, 1.0, "after the stop")
+        if fast and how != "kill":
+            problems = fast_run_problems("stop" if fake else how, result["stand_s"], result["metres"])
+            for problem in problems:
+                self.finding(step, f"{text}: {problem}")
+            if problems:
+                raise Abort()
         if not self.person.fake and fake is not None:
-            self.person.act("let go")
+            self.person.act("let go; STOP top locks: unlock it by hand" if fake.get("stop") else "let go")
         self.release(step)
+        return result
 
     STEPS = {"M1": m1, "M2": m2, "M3": m3, "M4": m4, "M5": m5, "M6": m6, "M7": m7, "M8": m8}
 
+    def capabilities(self, seconds=10.0):
+        """The driver's limit for driving from hw/capabilities, waiting for them up to `seconds`; None without them."""
+        end = time.monotonic() + seconds
+        while self.mower.max_linear_speed is None and time.monotonic() < end:
+            time.sleep(0.05)
+        return self.mower.max_linear_speed
+
     def run(self, steps):
+        limit = self.capabilities()
+        if limit is None:
+            self.finding("start", "no hw/capabilities from the driver within 10 s")
+            return False
+        if limit > GROUND_WHEEL_SPEED + 1e-6 and not (steps == ["M8"] and self.args.fast):
+            print(f"\nThe driver allows {limit:.2f} m/s: the raised start is only for --steps M8 --ground --fast. Start "
+                  "it again without speed_limit and max_duty for any other step.")
+            self.findings.append(f"start: raised start ({limit:.2f} m/s) for {','.join(steps)}")
+            return False
         for name in steps:
             self.mower.wheel_limit = GROUND_WHEEL_SPEED if name == "M8" else AIR_WHEEL_SPEED
             print(f"\n== {name}, wheels at most {self.mower.wheel_limit} m/s ==")
@@ -917,7 +1082,8 @@ def main(argv=None):
     parser.add_argument("--blade", action="store_true", help="allow M7 (blade)")
     parser.add_argument("--ground", action="store_true", help="allow M8 on the ground, 0.3 m/s per wheel")
     parser.add_argument("--fast", action="store_true",
-                        help="with --ground: the fast runs of M8 up to 0.5 m/s, if the driver's limits allow it")
+                        help="with --ground: the fast runs of M8 up to 0.5 m/s in stages, in the raised start of the "
+                             "measurement image only (speed_limit of measure.launch.py)")
     parser.add_argument("--yes", action="store_true", help="answer every question with yes (rehearsal)")
     parser.add_argument("--fake-flags", help="flag file of fake_xcore: the person's actions go there")
     parser.add_argument("--abort-file", help="abort the running step once this file exists (rehearsal)")

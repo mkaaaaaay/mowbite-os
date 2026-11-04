@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 
 #include "xcore_driver/services.h"
 
@@ -29,6 +30,20 @@ std::optional<uint8_t> U8(const Bytes& value) {
 }
 
 }  // namespace
+
+double MeasurementSpeedCap(double measurement_speed_limit) {
+  if (!(measurement_speed_limit >= 0 && measurement_speed_limit <= kMeasurementSpeedCapMax)) {
+    char text[120];
+    std::snprintf(text, sizeof(text), "measurement_speed_limit takes 0 to %.1f m/s", kMeasurementSpeedCapMax);
+    throw std::invalid_argument(text);
+  }
+  return measurement_speed_limit;
+}
+
+double CappedLimit(const char* name, double value, double cap) {
+  if (!(value >= 0)) throw std::invalid_argument(std::string(name) + " must be a number of 0 or more");
+  return std::min(value, cap);
+}
 
 const char* BladeResultText(BladeResult result) {
   switch (result) {

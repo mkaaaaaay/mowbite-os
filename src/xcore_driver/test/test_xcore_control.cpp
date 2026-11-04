@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <stdexcept>
 #include <string>
 
 #include "xcore_driver/services.h"
@@ -654,6 +655,52 @@ TEST(XcoreControl, OverspeedStopsAndLatches) {
   r.sent.clear();
   r.Until(2.0, 0, 0, true, 0.3);
   for (const auto& v : Of(r.sent, kDiffDriveService)) EXPECT_EQ(TwistOf(v)[0], 0);
+}
+
+TEST(XcoreControl, OverspeedFollowsTheRaisedLimit) {
+  ControlConfig config = Fixture::Config();
+  config.max_linear_speed = MeasurementSpeedCap(0.5);
+  config.regulator.max_duty = 1.0;
+  DriveRun r(config);
+  // 1.3 x (0.5 + 0.3 x 0.1778) = 0.719 m/s; the command of 0.5 m/s goes out as such.
+  r.Until(1.0, 0.7, 0.7, true, 0.5);
+  EXPECT_FALSE(r.f.control.Status(r.t).blocked);
+  auto drive = Of(r.sent, kDiffDriveService);
+  ASSERT_FALSE(drive.empty());
+  EXPECT_NEAR(TwistOf(drive.back())[0], 0.5, 1e-9);
+  r.Until(1.6, 0.75, 0.75, true, 0.6);
+  EXPECT_EQ(r.f.control.Status(r.t).emergency_reason, kReasonWheelRunaway | kReasonLatch);
+  auto errors = r.f.control.TakeErrors();
+  ASSERT_EQ(errors.size(), 1u);
+  EXPECT_NE(errors[0].find("above 0.72 m/s"), std::string::npos);
+}
+
+TEST(SpeedCaps, MeasurementLimitFromZeroToSixTenths) {
+  EXPECT_EQ(MeasurementSpeedCap(0.5), 0.5);
+  EXPECT_EQ(MeasurementSpeedCap(0.6), 0.6);
+  EXPECT_EQ(MeasurementSpeedCap(0.0), 0.0);
+  EXPECT_THROW(MeasurementSpeedCap(0.61), std::invalid_argument);
+  EXPECT_THROW(MeasurementSpeedCap(-0.1), std::invalid_argument);
+  EXPECT_THROW(MeasurementSpeedCap(std::nan("")), std::invalid_argument);
+  EXPECT_THROW(MeasurementSpeedCap(INFINITY), std::invalid_argument);
+}
+
+TEST(SpeedCaps, LimitsStayUnderTheirCap) {
+  EXPECT_EQ(CappedLimit("max_linear_speed", 0.5, kLinearSpeedCap), 0.3);
+  EXPECT_EQ(CappedLimit("max_linear_speed", 0.2, kLinearSpeedCap), 0.2);
+  EXPECT_EQ(CappedLimit("max_linear_speed", 0.0, kLinearSpeedCap), 0.0);
+  EXPECT_EQ(CappedLimit("max_duty", 1.5, 1.0), 1.0);
+  EXPECT_EQ(CappedLimit("max_linear_speed", INFINITY, kLinearSpeedCap), 0.3);
+  // NaN would pass every comparison of the clamps after it, a negative value inverts them.
+  EXPECT_THROW(CappedLimit("max_linear_speed", std::nan(""), kLinearSpeedCap), std::invalid_argument);
+  EXPECT_THROW(CappedLimit("max_angular_speed", -0.1, kAngularSpeedCap), std::invalid_argument);
+  EXPECT_THROW(CappedLimit("max_duty", std::nan(""), 1.0), std::invalid_argument);
+  try {
+    CappedLimit("max_duty", -1.0, 1.0);
+    FAIL();
+  } catch (const std::invalid_argument& e) {
+    EXPECT_NE(std::string(e.what()).find("max_duty"), std::string::npos);
+  }
 }
 
 TEST(XcoreControl, StalledThreadLatchesBeforeTheNextFrame) {

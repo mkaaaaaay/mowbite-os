@@ -2,11 +2,16 @@
 
 Parameters: the platform file (default nx60i.yaml of this package), then the parameter file of the mower if given
 (datum, measured values), then the overrides given here. respawn:=true starts a killed or ended driver again after
-respawn_delay s (M4, M7, M8 with the driver killed).
+respawn_delay s (M4, M7, M8 with the driver killed). speed_limit and max_duty hold for this start only: without them
+the files hold (driving at most 0.3 m/s). speed_limit above 0.3, with max_duty above 0.3 if wanted, is the raised start
+for the fast runs of M8 (own word of the user): only the driver of the measurement image starts with it. max_duty:=0
+locks the wheels (M7 with the disc).
 
   ros2 launch xcore_driver measure.launch.py mower_params:=/data/nx60i.yaml respawn:=true
+  ros2 launch xcore_driver measure.launch.py mower_params:=/data/nx60i.yaml respawn:=true speed_limit:=0.5 max_duty:=1.0
 """
 import asyncio
+import math
 import os
 import sys
 
@@ -23,6 +28,9 @@ ARGUMENTS = {
     "bind_ip": ("", "address of the host at the board, empty = from the files"),
     "announcement_port": ("", "port of the board's announcements, empty = from the files"),
     "allow_blade": ("false", "true only for M7, on the user's own word"),
+    "speed_limit": ("", "m/s the driver drives at most in this start, 0 to 0.6, empty = the files; above 0.3 only the "
+                        "measurement image, for the fast runs of M8 on the user's own word"),
+    "max_duty": ("", "largest duty of either wheel in this start, 0 to 1, empty = the files; 0 locks the wheels"),
     "respawn": ("false", "start the driver again after it ended"),
     "respawn_delay": ("3.0", "s before a new start"),
 }
@@ -53,6 +61,17 @@ def dds_problem():
     return None
 
 
+# A number argument from low to high; anything else ends the launch before a driver starts.
+def number(value, name, low, high):
+    try:
+        x = float(value[name])
+    except ValueError:
+        x = math.nan
+    if not low <= x <= high:
+        raise RuntimeError(f"{name}:={value[name]} is no number from {low:g} to {high:g}")
+    return x
+
+
 def driver(context):
     problem = dds_problem()
     if problem:
@@ -69,6 +88,15 @@ def driver(context):
             overrides[name] = value[name]
     if value["announcement_port"]:
         overrides["announcement_port"] = int(value["announcement_port"])
+    if value["speed_limit"]:
+        overrides["max_linear_speed"] = number(value, "speed_limit", 0.0, 0.6)
+        if overrides["max_linear_speed"] > 0.3:
+            overrides["measurement_speed_limit"] = overrides["max_linear_speed"]
+    if value["max_duty"]:
+        overrides["max_duty"] = number(value, "max_duty", 0.0, 1.0)
+        # Else the steps at 0.3 m/s would run at a higher duty than their word.
+        if overrides["max_duty"] > 0.3 and overrides.get("max_linear_speed", 0.0) <= 0.3:
+            raise RuntimeError("max_duty above 0.3 belongs to the raised start: give speed_limit above 0.3 as well")
     return [Node(package="xcore_driver", executable="xcore_driver_node", name="xcore_driver", output="screen",
                  namespace="/", parameters=files + [overrides], respawn=value["respawn"].lower() == "true",
                  respawn_delay=float(value["respawn_delay"]))]

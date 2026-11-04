@@ -12,9 +12,11 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 ARG BUILD_JOBS=2
 COPY src /ws/src
+# The measurement build of the driver: measurement_speed_limit raises its cap for driving, up to 0.6 m/s (fast runs of
+# M8, on the user's own word); no other image has it.
 RUN . /opt/ros/$ROS_DISTRO/setup.sh && cd /ws \
  && MAKEFLAGS=-j$BUILD_JOBS colcon build --packages-up-to xcore_driver \
-      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DXCORE_MEASUREMENT_BUILD=ON \
  && rm -rf /ws/build /ws/log
 
 FROM ros:${ROS_DISTRO}-ros-core

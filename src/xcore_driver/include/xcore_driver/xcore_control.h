@@ -13,6 +13,20 @@
 
 namespace xcore {
 
+// Caps of the speed limits in every build: driving at most 0.3 m/s, turning at most 0.3 rad/s. Only the measurement
+// build (CMake option XCORE_MEASUREMENT_BUILD, the image of the safety measurement) takes measurement_speed_limit as
+// the cap for driving instead, up to kMeasurementSpeedCapMax.
+constexpr double kLinearSpeedCap = 0.3;
+constexpr double kAngularSpeedCap = 0.3;
+constexpr double kMeasurementSpeedCapMax = 0.6;
+
+// measurement_speed_limit as the cap for driving; throws std::invalid_argument unless it is a number from 0 to
+// kMeasurementSpeedCapMax.
+double MeasurementSpeedCap(double measurement_speed_limit);
+// A limit of the parameters under its cap. Throws std::invalid_argument for a negative value or one that is no number,
+// as either would undo the clamping it is meant for.
+double CappedLimit(const char* name, double value, double cap);
+
 struct ControlConfig {
   // The emergency input goes out this often; the board latches TIMEOUT_HIGH_LEVEL after 1 s without one.
   double emergency_period_s = 0.25;

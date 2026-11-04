@@ -37,6 +37,10 @@
 #include "xcore_driver/xcore_control.h"
 #include "xcore_driver/xcore_io.h"
 
+#ifndef XCORE_MEASUREMENT_BUILD
+#define XCORE_MEASUREMENT_BUILD 0
+#endif
+
 namespace xcore_driver {
 
 namespace {
@@ -67,6 +71,8 @@ static_assert(static_cast<uint8_t>(mowbite_gnss::Solution::kSingle) == GnssFix::
 static_assert(static_cast<uint8_t>(mowbite_gnss::Solution::kRtkFloat) == GnssFix::RTK_FLOAT);
 static_assert(static_cast<uint8_t>(mowbite_gnss::Solution::kRtkFixed) == GnssFix::RTK_FIXED);
 
+// Built for the safety measurement only (CMake option XCORE_MEASUREMENT_BUILD): takes measurement_speed_limit.
+constexpr bool kMeasurementBuild = XCORE_MEASUREMENT_BUILD != 0;
 // While the board is claimed, the output thread checks the sockets of other programs this often.
 constexpr double kForeignCheckS = 5.0;
 // hold.json is looked at this often.
@@ -135,8 +141,8 @@ class XcoreNode : public rclcpp::Node {
       : rclcpp::Node("xcore_driver", options), inputs_(LoadInputs()) {
     const xcore::ControlConfig control = LoadControl();
     blade_lease_max_s_ = get_parameter("blade_lease_max").as_double();
-    max_linear_speed_ = std::min(get_parameter("max_linear_speed").as_double(), 0.3);
-    max_angular_speed_ = std::min(get_parameter("max_angular_speed").as_double(), 0.3);
+    max_linear_speed_ = control.max_linear_speed;
+    max_angular_speed_ = control.max_angular_speed;
     platform_ = declare_parameter("platform", "openmower_v2");
     xcore::IoConfig io;
     io.interface = declare_parameter("interface", "eth0");
@@ -299,11 +305,37 @@ class XcoreNode : public rclcpp::Node {
     return config;
   }
 
+  // The cap for driving: 0.3 m/s; only the measurement build takes measurement_speed_limit, read-only, up to 0.6 m/s.
+  // Any other build does not start with it: the raised start of the measurement would otherwise run half raised.
+  double LinearCap() {
+    const char* name = "measurement_speed_limit";
+    if (!kMeasurementBuild) {
+      if (get_node_parameters_interface()->get_parameter_overrides().count(name)) {
+        throw std::invalid_argument(std::string(name) + " is for the measurement image only: this build drives at "
+                                    "most 0.3 m/s and does not start with it");
+      }
+      return xcore::kLinearSpeedCap;
+    }
+    rcl_interfaces::msg::ParameterDescriptor fixed;
+    fixed.read_only = true;
+    fixed.description = "cap for driving in m/s (0 to 0.6), only for the fast runs of M8";
+    const double cap = xcore::MeasurementSpeedCap(declare_parameter(name, xcore::kLinearSpeedCap, fixed));
+    if (cap > xcore::kLinearSpeedCap) {
+      RCLCPP_WARN(get_logger(), "Measurement build: driving capped at %.2f m/s by %s, only for the fast runs of M8",
+                  cap, name);
+    } else {
+      RCLCPP_INFO(get_logger(), "Measurement build: driving capped at %.2f m/s", cap);
+    }
+    return cap;
+  }
+
   xcore::ControlConfig LoadControl() {
     xcore::ControlConfig c;
     c.cmd_vel_timeout_s = declare_parameter("cmd_vel_timeout", c.cmd_vel_timeout_s);
-    c.max_linear_speed = std::min(declare_parameter("max_linear_speed", c.max_linear_speed), 0.3);
-    c.max_angular_speed = std::min(declare_parameter("max_angular_speed", c.max_angular_speed), 0.3);
+    c.max_linear_speed =
+        xcore::CappedLimit("max_linear_speed", declare_parameter("max_linear_speed", c.max_linear_speed), LinearCap());
+    c.max_angular_speed = xcore::CappedLimit(
+        "max_angular_speed", declare_parameter("max_angular_speed", c.max_angular_speed), xcore::kAngularSpeedCap);
     c.allow_blade = declare_parameter("allow_blade", false);
     c.blade_speed_percent = static_cast<uint16_t>(std::clamp<int64_t>(declare_parameter("blade_speed_percent", 100), 1, 100));
     c.blade_lease_max_s = declare_parameter("blade_lease_max", c.blade_lease_max_s);
@@ -332,13 +364,14 @@ class XcoreNode : public rclcpp::Node {
     c.odometry.right_sign = declare_parameter("right_ticks_sign", c.odometry.right_sign) < 0 ? -1 : 1;
     c.regulator.wheel_distance = c.odometry.wheel_distance;
     c.regulator.full_duty_speed = declare_parameter("full_duty_speed", c.regulator.full_duty_speed);
-    c.regulator.max_duty = std::clamp(declare_parameter("max_duty", c.regulator.max_duty), 0.0, 1.0);
+    c.regulator.max_duty = xcore::CappedLimit("max_duty", declare_parameter("max_duty", c.regulator.max_duty), 1.0);
     c.regulator.feedback = declare_parameter("regulator_feedback", c.regulator.feedback);
     if (!(c.odometry.ticks_per_meter > 0) || !(c.odometry.wheel_distance > 0) || !(c.regulator.full_duty_speed > 0)) {
       throw std::invalid_argument("ticks_per_meter, wheel_distance and full_duty_speed must be positive");
     }
-    RCLCPP_INFO(get_logger(), "allow_blade: %d, cmd_vel_timeout: %.2f s, max_duty: %.2f, feedback: %d", c.allow_blade,
-                c.cmd_vel_timeout_s, c.regulator.max_duty, c.regulator.feedback);
+    RCLCPP_INFO(get_logger(), "allow_blade: %d, cmd_vel_timeout: %.2f s, at most %.2f m/s and %.2f rad/s, max_duty: "
+                "%.2f, feedback: %d", c.allow_blade, c.cmd_vel_timeout_s, c.max_linear_speed, c.max_angular_speed,
+                c.regulator.max_duty, c.regulator.feedback);
     RCLCPP_INFO(get_logger(), "tilt %.0f deg for %.1f s, release below %.0f deg; wheels %.2f m/s %.1f-%.1f s after a "
                 "setpoint, %.1fx the fastest wheel; I/O stall %.2f s", c.tilt_limit_deg, c.tilt_time_s,
                 c.tilt_release_deg, c.uncommanded_speed, c.uncommanded_after_s, c.uncommanded_window_s,
