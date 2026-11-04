@@ -65,13 +65,19 @@ jobs:
         id: rev
         run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
+      - name: Oldest app for this OS
+        id: min_app
+        run: echo "version=$(cat docker/min_app)" >> "$GITHUB_OUTPUT"
+
       - name: Build
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/os.Dockerfile
           build-contexts: planer=planer
-          build-args: SOURCE_COMMIT=${{ github.sha }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+            MIN_APP=${{ steps.min_app.outputs.version }}
           platforms: linux/${{ matrix.arch }}
           load: true
           push: ${{ inputs.push == true }}
@@ -88,6 +94,18 @@ jobs:
           grep -E '^(mowbite_|tron_|xcore_)' pkgs.txt
           if grep -q '^mowbite_sim$' pkgs.txt; then echo "mowbite_sim must not be in the image"; exit 1; fi
           docker run --rm "$TAG" python3 -c 'import mowbite_planner.node'
+          # The label the updater reads, as in docker/min_app and in its form.
+          min_app=$(docker image inspect --format '{{ index .Config.Labels "mowbite.min_app" }}' "$TAG")
+          if [ "$min_app" != "$(cat docker/min_app)" ] \
+             || ! printf '%s' "$min_app" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?'; then
+            echo "::error::label mowbite.min_app is '$min_app'"; exit 1
+          fi
+          docker image inspect --format '{{json .Config.Healthcheck}}' "$TAG" | grep -q mowbite_health
+          # Without a broker the health check runs and says why it fails.
+          health=/ws/install/mowbite_bridge/lib/mowbite_bridge/mowbite_health
+          rc=0; docker run --rm --network none --entrypoint "$health" "$TAG" > health.txt || rc=$?
+          cat health.txt
+          if [ "$rc" -ne 1 ] || ! grep -q '^MQTT_UNREACHABLE 127.0.0.1:1883' health.txt; then exit 1; fi
           size=$(docker image inspect --format '{{.Size}}' "$TAG")
           packed=$(docker save "$TAG" | gzip -1 | wc -c)
           {
@@ -95,6 +113,7 @@ jobs:
             echo "- image: \`$TAG\`"
             echo "- size unpacked: $((size / 1000000)) MB, saved and gzipped: $((packed / 1000000)) MB"
             echo "- packages: $(grep -cE '^(mowbite_|tron_|xcore_)' pkgs.txt)"
+            echo "- mowbite.min_app: $min_app"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
   manifest:

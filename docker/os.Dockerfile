@@ -1,7 +1,8 @@
 # MowBite OS for the mower, one image for every platform (launch and configuration choose the platform).
 # Built from a clean tree that has src/ at its top, e.g. for arm64 on the PC (qemu):
 #   docker buildx build --platform linux/arm64 --load --build-context planer=/home/mkay/tron-projekt/planer \
-#     --build-arg SOURCE_COMMIT=<commit> -f docker/os.Dockerfile -t local/mowbite-os:arm64-<commit> <tree>
+#     --build-arg SOURCE_COMMIT=<commit> --build-arg MIN_APP=$(cat <tree>/docker/min_app) \
+#     -f docker/os.Dockerfile -t local/mowbite-os:arm64-<commit> <tree>
 # No simulation, no tests, no models in it.
 ARG ROS_DISTRO=jazzy
 
@@ -32,10 +33,14 @@ RUN --mount=type=bind,from=planer,target=/src/planer \
 # Every package but the simulation; PACKAGES narrows it (colcon selection, e.g. "--packages-up-to xcore_driver").
 ARG PACKAGES="--packages-skip mowbite_sim"
 COPY src /ws/src
+# The FILES_VERSION of the pinned planner has to be the one data_schema.json of mowbite_bridge expects.
 RUN . /opt/ros/$ROS_DISTRO/setup.sh && . /opt/mowbite_planner/setup.sh && cd /ws \
  && MAKEFLAGS=-j$BUILD_JOBS colcon build $PACKAGES --parallel-workers $BUILD_WORKERS \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
- && rm -rf /ws/build /ws/log
+ && rm -rf /ws/build /ws/log \
+ && . /ws/install/setup.sh \
+ && if [ -d /ws/install/mowbite_bringup ]; then \
+      python3 /ws/install/mowbite_bringup/share/mowbite_bringup/launch/data_store.py --check-planner; fi
 
 # Runtime packages of all installed packages: ROS keys by name, other keys mapped here, an unknown key stops the build.
 # Each package directory on its own: rosdep skips the install bases, colcon marks them with COLCON_IGNORE.
@@ -68,7 +73,22 @@ RUN . /ws/install/setup.sh \
  && if [ -s /tmp/missing ]; then cat /tmp/missing; exit 1; fi \
  && rm /tmp/missing
 ARG SOURCE_COMMIT=unknown
-LABEL org.opencontainers.image.title="mowbite-os" org.opencontainers.image.revision="$SOURCE_COMMIT"
+# The oldest MowBite app that handles this OS (label mowbite.min_app for the updater): the value of docker/min_app,
+# X.Y.Z or X.Y.Z-beta.N. No image without it; checked here, so that the layers above stay cached.
+ARG MIN_APP
+RUN --mount=type=bind,source=docker/min_app,target=/tmp/min_app \
+    if ! printf '%s' "$MIN_APP" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?' \
+       || [ "$MIN_APP" != "$(cat /tmp/min_app)" ]; then \
+      echo "MIN_APP '$MIN_APP' has to be the value of docker/min_app, X.Y.Z or X.Y.Z-beta.N" >&2; exit 1; \
+    fi
+LABEL org.opencontainers.image.title="mowbite-os" org.opencontainers.image.revision="$SOURCE_COMMIT" \
+      mowbite.min_app="$MIN_APP"
+# Who wrote data_schema.json in data_dir.
+ENV MOWBITE_OS_REVISION=$SOURCE_COMMIT
 # ros2 launch catches only SIGINT; as PID 1 it ignores SIGTERM and docker stop would kill it without blade off.
 STOPSIGNAL SIGINT
+# Healthy while the broker of the OS (MOWBITE_MQTT_HOST, MOWBITE_MQTT_PORT) passes on robot_state/json of the logic;
+# after a halt of the launch over data_dir unhealthy, with its MOWBITE_OS_HALT line in Health.Log.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --start-interval=5s --retries=3 \
+  CMD ["/ws/install/mowbite_bridge/lib/mowbite_bridge/mowbite_health"]
 ENTRYPOINT ["/bin/bash", "-c", "source /ws/install/setup.bash && exec \"$@\"", "--"]
