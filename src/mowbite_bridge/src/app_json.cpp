@@ -152,7 +152,11 @@ Json SystemInfo(const std::string& version, const std::string& platform) {
   return Json{{"name", "mowbite-os"},
               {"version", version.empty() ? "UNKNOWN VERSION" : version},
               {"platform", platform},
-              {"schema", 1}};
+              {"schema", DataSchema()}};
+}
+
+int DataSchema() {
+  return MOWBITE_DATA_SCHEMA;
 }
 
 }  // namespace mowbite_bridge

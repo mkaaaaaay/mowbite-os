@@ -213,7 +213,8 @@ TEST_F(Core, LocalMethods) {
   EXPECT_EQ(Ask(core_, R"({"jsonrpc":"2.0","method":"rpc.ping"})").dump(),
             R"({"jsonrpc":"2.0","result":"pong","id":null})");
   const Json info = Call(core_, "system.info", Json{{"x", 1}})["result"];
-  EXPECT_EQ(info.dump(), R"({"name":"mowbite-os","version":"1.2.3","platform":"","schema":1})");
+  EXPECT_EQ(info.dump(), R"({"name":"mowbite-os","version":"1.2.3","platform":"","schema":)" +
+                             std::to_string(DataSchema()) + "}");
   core_.OnPlatform("airseekers_tron");
   EXPECT_EQ(Call(core_, "system.info")["result"]["platform"], "airseekers_tron");
   EXPECT_EQ(Call(core_, "rpc.methods", Json::array())["result"],
@@ -436,6 +437,15 @@ TEST(RestartWarning, TextOfTheNote) {
             "MowBite OS restarted after a crash: its container ended with exit code -9 (restart 1 of 3)");
   EXPECT_EQ(RestartWarning(R"({"exit_code": 0})"), "MowBite OS restarted after a crash: its container ended with exit code 0");
   EXPECT_EQ(RestartWarning("broken"), "MowBite OS restarted after a crash");
+}
+
+TEST(RollbackWarning, TextOfTheNote) {
+  EXPECT_EQ(RollbackWarning(R"({"from": 3, "to": 2, "backup": "backup-3", "t": 1.0})"),
+            "MowBite OS went back to an older image: data_dir is back at schema 2 from its backup, the changes since "
+            "the update (schema 3) are in backup-3");
+  EXPECT_EQ(RollbackWarning("broken"),
+            "MowBite OS went back to an older image: data_dir is back at schema ? from its backup, the changes since "
+            "the update (schema ?) are in ?");
 }
 
 // B23
