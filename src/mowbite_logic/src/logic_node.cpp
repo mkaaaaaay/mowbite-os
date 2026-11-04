@@ -1136,16 +1136,8 @@ class LogicNode : public rclcpp::Node {
   void SaveCheckpoint(const std::string& text) {
     const std::string path = CheckpointPath();
     if (path.empty()) return;
-    const std::string temp = path + ".new";
-    {
-      std::ofstream out(temp, std::ios::trunc);
-      out << text;
-      if (!out.flush()) {
-        RCLCPP_ERROR(get_logger(), "Cannot write %s", temp.c_str());
-        return;
-      }
-    }
-    if (std::rename(temp.c_str(), path.c_str()) != 0) RCLCPP_ERROR(get_logger(), "Cannot replace %s", path.c_str());
+    std::string error;
+    if (!WriteFileSafely(path, text, &error)) RCLCPP_ERROR(get_logger(), "Checkpoint: %s", error.c_str());
   }
 
   void RespondDrive(const std::shared_ptr<rmw_request_id_t>& header, bool success, const std::string& message) {
@@ -1388,27 +1380,7 @@ class LogicNode : public rclcpp::Node {
 
   bool SaveLogicParams(const LogicParams& params, std::string& error) {
     const std::string path = LogicParamsPath();
-    if (path.empty()) return true;
-    std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-    if (ec) {
-      error = "cannot create the folder of " + path + ": " + ec.message();
-      return false;
-    }
-    const std::string temp = path + ".new";
-    {
-      std::ofstream out(temp, std::ios::trunc);
-      out << params.Text();
-      if (!out.flush()) {
-        error = "cannot write " + temp;
-        return false;
-      }
-    }
-    if (std::rename(temp.c_str(), path.c_str()) != 0) {
-      error = "cannot replace " + path;
-      return false;
-    }
-    return true;
+    return path.empty() || WriteFileSafely(path, params.Text(), &error);
   }
 
   void PublishLogicParams() {
