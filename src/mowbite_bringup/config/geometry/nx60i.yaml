@@ -1,0 +1,23 @@
+# The dimensions of the YardForce NX60i (OpenMower v2 carrier), read by mowbite_logic as the parameters geometry.*,
+# like tron.yaml. base_link is the middle of the axle of the drive wheels, x points forward and y to the left, in m.
+# The body, the blade, the wheel radius and the contacts are assumptions until they are measured on the device (before
+# M9); antenna, track and ticks are those OpenMower drives it with.
+mowbite_logic:
+  ros__parameters:
+    geometry:
+      platform: yardforce_nx60i
+      robot_width: 0.41
+      robot_front: 0.43
+      robot_rear: 0.12
+      mower_width: 0.18
+      blade_ahead: 0.20
+      blade_offset: 0.0
+      antenna_x: -0.10
+      antenna_y: 0.0
+      track: 0.3556
+      wheel_radius: 0.10
+      dock_contact_x: 0.35
+      ticks_per_m: 2025.0
+      # The IMU sits about 4.5 degrees nose up (gravity at rest, M2 03.11.); roll level.
+      imu_roll: 0.0
+      imu_pitch: 0.079

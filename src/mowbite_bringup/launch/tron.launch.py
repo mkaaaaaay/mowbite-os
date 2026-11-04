@@ -120,7 +120,11 @@ def launch_setup(context):
     safety = ComposableNode(
         package="mowbite_safety", plugin="mowbite_safety::SafetyNode", name="mowbite_safety",
         parameters=[config, extra])
-    components = [gnss, imu, localization, safety, logic, bridge, map_node, follower, ntrip]
+    # The calibration drive: its program, recording and result; it moves only through the logic and S2.
+    calibration = ComposableNode(
+        package="mowbite_calibration", plugin="mowbite_calibration::CalibrationNode", name="mowbite_calibration",
+        parameters=[config, extra, {"data_dir": data_dir}])
+    components = [gnss, imu, localization, safety, logic, bridge, map_node, follower, ntrip, calibration]
     note = os.path.join(data_dir, EXIT_NOTE)
     # A start by hand begins without restarts.
     try:

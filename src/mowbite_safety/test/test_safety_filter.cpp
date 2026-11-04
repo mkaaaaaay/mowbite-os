@@ -96,6 +96,26 @@ TEST(Tilt, FromOrientationAndGravity) {
   EXPECT_TRUE(std::isnan(TiltFromGravity(0, 0, 0)));
 }
 
+TEST(Tilt, CountsFromTheMountingOfTheImu) {
+  const double deg = M_PI / 180.0;
+  // An IMU 4.5 degrees nose up on level ground reads gravity tilted back: that is level for the mower.
+  const double pitch = 4.5 * deg;
+  const double ax = -9.81 * std::sin(pitch), az = 9.81 * std::cos(pitch);
+  EXPECT_NEAR(TiltFromGravity(ax, 0, az), 4.5, 1e-9);
+  EXPECT_NEAR(TiltFromGravity(ax, 0, az, 0.0, pitch), 0, 1e-9);
+  // The mower 30 degrees nose down on a slope: 30 degrees off the mounting, whichever way.
+  const double down = pitch - 30 * deg;
+  EXPECT_NEAR(TiltFromGravity(-9.81 * std::sin(down), 0, 9.81 * std::cos(down), 0.0, pitch), 30, 1e-9);
+  const double up = pitch + 30 * deg;
+  EXPECT_NEAR(TiltFromGravity(-9.81 * std::sin(up), 0, 9.81 * std::cos(up), 0.0, pitch), 30, 1e-9);
+  // Roll in the convention of the planner: atan2(ay, az).
+  const double roll = -2.0 * deg;
+  EXPECT_NEAR(TiltFromGravity(0, 9.81 * std::sin(roll), 9.81 * std::cos(roll), roll, 0.0), 0, 1e-9);
+  // The orientation of an IMU that reads its mounting on level ground: turned by pitch about y.
+  EXPECT_NEAR(TiltFromOrientation(0, std::sin(pitch / 2), 0, std::cos(pitch / 2), 0.0, pitch), 0, 1e-9);
+  EXPECT_NEAR(TiltFromOrientation(0, std::sin(pitch / 2), 0, std::cos(pitch / 2)), 4.5, 1e-9);
+}
+
 TEST_F(FilterTest, PassesBothSourcesWithinTheLimitsOfTheDriver) {
   Decision d = Cmd(Source::kTeleop, 1.0, -2.0);
   ASSERT_TRUE(Moves(d)) << d.refusal;
@@ -363,4 +383,80 @@ TEST_F(FilterTest, StopAndAnyZeroStopWhateverMoves) {
   const Decision d = Cmd(Source::kFollower, std::nan(""));
   EXPECT_TRUE(Stops(d));
   EXPECT_EQ(d.refusal, "a command that is not a number, stopped");
+}
+
+TEST_F(FilterTest, CalibrationDrivesLikeTheFollowerForwardOnly) {
+  Decision d = Cmd(Source::kCalibration, 0.2, 0.05);
+  ASSERT_TRUE(Moves(d)) << d.refusal;
+  EXPECT_EQ(filter_.Owner(now_), Source::kCalibration);
+  // Turning on the spot is no backwards.
+  EXPECT_TRUE(Moves(Cmd(Source::kCalibration, 0, -0.3)));
+  // Backwards is refused with its reason, and the motion of the calibration stops at once.
+  d = Cmd(Source::kCalibration, -0.1, 0.0);
+  EXPECT_EQ(d.refusal, "the calibration drives forward only");
+  EXPECT_TRUE(Stops(d));
+  EXPECT_FALSE(d.conflict);
+  EXPECT_EQ(filter_.Latched(), 0u);
+  EXPECT_EQ(filter_.LastRefusal(), "calibration: the calibration drives forward only");
+  // Even standing still.
+  Run(now_ + 1.1);
+  EXPECT_EQ(Cmd(Source::kCalibration, -0.05, 0.3).refusal, "the calibration drives forward only");
+  EXPECT_TRUE(Moves(Cmd(Source::kCalibration, 0.2))) << filter_.LastRefusal();
+}
+
+TEST_F(FilterTest, CalibrationNeedsWhatAutonomousDrivesNeed) {
+  const auto refused = [this](const std::string& why) {
+    Run(now_ + 0.1);
+    EXPECT_EQ(Cmd(Source::kCalibration, 0.2).refusal, why);
+    EXPECT_EQ(filter_.Latched(), 0u);
+    EXPECT_TRUE(Stops(Cmd(Source::kCalibration, 0)));
+  };
+  accuracy_ = 0.3;
+  refused("position accuracy 0.300 m, 0.100 m needed");
+  accuracy_ = 0.02;
+  heading_valid_ = false;
+  refused("the heading is not aligned");
+  heading_valid_ = true;
+  filter_.SetMapFits(false);
+  refused("the map does not fit the datum (map/status)");
+  filter_.SetMapFits(true);
+  filter_.OnCapabilities(false, 0.3, 0.3);
+  refused("no safety measurement of this platform (hw/capabilities)");
+  filter_.OnCapabilities(true, 0.15, 0.3);
+  Run(now_ + 0.1);
+  // Within the limits of the driver.
+  const Decision d = Cmd(Source::kCalibration, 0.2, 0.5);
+  ASSERT_TRUE(Moves(d)) << d.refusal;
+  EXPECT_DOUBLE_EQ(d.out->linear, 0.15);
+  EXPECT_DOUBLE_EQ(d.out->angular, 0.3);
+}
+
+TEST_F(FilterTest, CalibrationOutsideTheAreasLatchesFence) {
+  x_ = -0.7;
+  y_ = 1;
+  Run(now_ + 0.1);
+  const Decision d = Cmd(Source::kCalibration, 0.2);
+  EXPECT_EQ(d.refusal, "base_link is 0.70 m outside of the allowed areas at (-0.70, 1.00)");
+  EXPECT_EQ(filter_.Latched(), kReasonFence);
+}
+
+TEST_F(FilterTest, CalibrationIsOneSourceAmongOthers) {
+  ASSERT_TRUE(Moves(Cmd(Source::kFollower, 0.2)));
+  Decision d = Cmd(Source::kCalibration, 0.2);
+  EXPECT_TRUE(d.conflict);
+  EXPECT_EQ(d.refusal, "the follower drives");
+  EXPECT_TRUE(Stops(Cmd(Source::kStop, 0)));
+  Run(now_ + 1.1);
+  ASSERT_TRUE(Moves(Cmd(Source::kCalibration, 0.2))) << filter_.LastRefusal();
+  d = Cmd(Source::kTeleop, 0.2);
+  EXPECT_TRUE(d.conflict);
+  EXPECT_EQ(d.refusal, "the calibration drives");
+  // After an emergency the calibration has to arm again like any source.
+  hw_emergency_ = true;
+  Run(now_ + 0.2);
+  hw_emergency_ = false;
+  Run(now_ + 0.1);
+  EXPECT_EQ(Cmd(Source::kCalibration, 0.2).refusal, "waits for a zero or 1.0 s without commands");
+  EXPECT_TRUE(Stops(Cmd(Source::kCalibration, 0)));
+  EXPECT_TRUE(Moves(Cmd(Source::kCalibration, 0.2))) << filter_.LastRefusal();
 }

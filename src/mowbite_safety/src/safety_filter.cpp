@@ -29,22 +29,39 @@ const char* SourceName(Source source) {
     case Source::kStop: return "stop";
     case Source::kTeleop: return "remote control";
     case Source::kFollower: return "follower";
+    case Source::kCalibration: return "calibration";
   }
   return "unknown source";
 }
 
-double TiltFromOrientation(double x, double y, double z, double w) {
-  const double n = x * x + y * y + z * z + w * w;
+namespace {
+
+// The angle (degrees) between a direction of gravity in the IMU's frame and the one it reads on level ground with the
+// mounting roll and pitch: roll atan2(ay, az), pitch atan2(-ax, hypot(ay, az)).
+double TiltFromMounting(double gx, double gy, double gz, double roll, double pitch) {
+  const double n = std::sqrt(gx * gx + gy * gy + gz * gz);
   if (!(n > 0) || !std::isfinite(n)) return kNaN;
-  // The z axis of the body against the vertical: element (2, 2) of the rotation.
-  const double cos_tilt = 1.0 - 2.0 * (x * x + y * y) / n;
+  const double level_x = -std::sin(pitch);
+  const double level_y = std::cos(pitch) * std::sin(roll);
+  const double level_z = std::cos(pitch) * std::cos(roll);
+  const double cos_tilt = (gx * level_x + gy * level_y + gz * level_z) / n;
   return std::acos(std::clamp(cos_tilt, -1.0, 1.0)) * kRadToDeg;
 }
 
-double TiltFromGravity(double ax, double ay, double az) {
-  const double n = std::sqrt(ax * ax + ay * ay + az * az);
+}  // namespace
+
+double TiltFromOrientation(double x, double y, double z, double w, double roll, double pitch) {
+  const double n = x * x + y * y + z * z + w * w;
   if (!(n > 0) || !std::isfinite(n)) return kNaN;
-  return std::acos(std::clamp(az / n, -1.0, 1.0)) * kRadToDeg;
+  // The vertical in the frame of the IMU: the last row of the rotation.
+  const double gx = 2.0 * (x * z - w * y) / n;
+  const double gy = 2.0 * (y * z + w * x) / n;
+  const double gz = 1.0 - 2.0 * (x * x + y * y) / n;
+  return TiltFromMounting(gx, gy, gz, roll, pitch);
+}
+
+double TiltFromGravity(double ax, double ay, double az, double roll, double pitch) {
+  return TiltFromMounting(ax, ay, az, roll, pitch);
 }
 
 SafetyFilter::SafetyFilter(const SafetyConfig& config) : config_(config) {
@@ -168,8 +185,10 @@ std::string SafetyFilter::FenceProblem(double x, double y) const {
   return "";
 }
 
-std::string SafetyFilter::MoveProblem(Source source, double quiet, double now, bool* conflict) {
+std::string SafetyFilter::MoveProblem(Source source, double linear, double quiet, double now, bool* conflict) {
   if (emergency_) return "emergency";
+  // Backwards it would leave the strip it checked (G9: behind the mower is not watched everywhere).
+  if (source == Source::kCalibration && linear < 0) return "the calibration drives forward only";
   if (owner_ != Source::kStop && owner_ != source && now - owner_s_ <= config_.owner_timeout + kTimeEpsilon) {
     *conflict = true;
     return std::string("the ") + SourceName(owner_) + " drives";
@@ -183,7 +202,7 @@ std::string SafetyFilter::MoveProblem(Source source, double quiet, double now, b
   }
   if (!capabilities_) return "no hw/capabilities from the driver";
   if (!ImuFresh(now)) return imu_s_ ? Format("no IMU sample for %.1f s", now - *imu_s_) : "no IMU sample yet";
-  if (source != Source::kFollower) return "";
+  if (source != Source::kFollower && source != Source::kCalibration) return "";
   const std::string problem = AutonomousProblem(now);
   if (!problem.empty()) return problem;
   const std::string fence = FenceProblem(pose_->x, pose_->y);
@@ -226,7 +245,7 @@ Decision SafetyFilter::OnCommand(Source source, double linear, double angular, d
     }
     return decision;
   }
-  const std::string problem = MoveProblem(source, quiet, now, &decision.conflict);
+  const std::string problem = MoveProblem(source, linear, quiet, now, &decision.conflict);
   if (!problem.empty()) {
     refused_++;
     last_refusal_ = std::string(SourceName(source)) + ": " + problem;

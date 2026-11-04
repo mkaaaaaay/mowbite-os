@@ -436,6 +436,8 @@ class McuNode : public rclcpp::Node {
     msg.rain_sensor = true;
     msg.separate_bumpers = true;
     msg.wheel_ticks = false;
+    msg.wheel_ticks_per_m = tron::kMcuTicksPerMeter;
+    msg.wheel_distance = tron::kMcuWheelDistance;
     msg.imu_source = "tron_imu";
     msg.gnss_source = "tron_gnss";
     msg.max_linear_speed = tron::kMaxLinearSpeed;

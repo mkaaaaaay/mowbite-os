@@ -21,8 +21,16 @@ mowbite_logic:
       # The GPS antenna, measured on the device in phase 7 (until then at base_link).
       antenna_x: 0.0
       antenna_y: 0.0
-      # Only this file sets these: 0.395 m between the middles of the drive wheels (the MCU computes with 0.40 m), the
-      # radius of the wheels, and the charging contacts 0.10 m behind base_link (the Tron backs onto its station).
+      # 0.395 m between the middles of the drive wheels (the MCU computes with 0.40 m); the calibration drive measures
+      # the one that acts.
       track: 0.395
+      # Only this file sets these: the radius of the wheels, and the charging contacts 0.10 m behind base_link (the Tron
+      # backs onto its station).
       wheel_radius: 0.1125
       dock_contact_x: -0.10
+      # The Tron reports wheel speed, not ticks: 1000 per m is its scale (mm), the calibration drive measures the true
+      # one. The IMU as mounted (rad, gravity read on level ground: roll atan2(ay, az), pitch atan2(-ax, hypot(ay,
+      # az))), level until measured; robot.geometry allows 0.087 rad (5 degrees) around these.
+      ticks_per_m: 1000.0
+      imu_roll: 0.0
+      imu_pitch: 0.0

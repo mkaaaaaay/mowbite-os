@@ -122,7 +122,8 @@ LOGIC_SETTINGS = ["rain_mode", "rain_delay_minutes", "rain_check_seconds", "auto
                   "max_position_accuracy", "gps_wait_time", "docking_approach_distance", "docking_distance",
                   "docking_retry_count", "undock_distance", "motor_hot_temperature", "motor_cold_temperature"]
 GEOMETRY_KEYS = ["robot_width", "robot_front", "robot_rear", "robot_outline", "mower_width", "blade_ahead",
-                 "blade_offset", "antenna_x", "antenna_y", "track", "wheel_radius", "dock_contact_x"]
+                 "blade_offset", "antenna_x", "antenna_y", "track", "wheel_radius", "dock_contact_x", "ticks_per_m",
+                 "imu_roll", "imu_pitch"]
 
 
 def enabled(action_id):
@@ -337,9 +338,10 @@ if args.target == "mowbite-os" and offers("robot.geometry.set") and offers("robo
     check("robot.geometry.get names the platform of system.info",
           answer.get("platform") == ((r or {}).get("result") or {}).get("platform"),
           f'{answer.get("platform")} / {((r or {}).get("result") or {}).get("platform")}')
-    check("robot.geometry.get: only the platform sets track, wheel_radius and dock_contact_x", all(
-        settings.get(k, {}).get("settable") is False for k in ("track", "wheel_radius", "dock_contact_x")) and all(
-        settings.get(k, {}).get("settable") is True for k in GEOMETRY_KEYS[:9]), "")
+    fixed = ("wheel_radius", "dock_contact_x")
+    check("robot.geometry.get: only the platform sets wheel_radius and dock_contact_x", all(
+        settings.get(k, {}).get("settable") is False for k in fixed) and all(
+        settings.get(k, {}).get("settable") is True for k in GEOMETRY_KEYS if k not in fixed), "")
     p = json.loads(latest("params/json") or "{}")
     shown = {k: p.get("/mowbite_geometry/" + k) for k in GEOMETRY_KEYS}
     check("params/json has the dimensions of the mower with the version", None not in shown.values() and
@@ -349,6 +351,16 @@ if args.target == "mowbite-os" and offers("robot.geometry.set") and offers("robo
           p.get("/xbot_positioning/antenna_offset_x") == settings.get("antenna_x", {}).get("value") and
           p.get("/xbot_positioning/antenna_offset_y") == settings.get("antenna_y", {}).get("value"),
           f'{p.get("/xbot_positioning/antenna_offset_x")}, {p.get("/xbot_positioning/antenna_offset_y")}')
+    # The keys of the calibration drive: ranges as the effective min and max, units of the new values.
+    new_numbers = {"ticks_per_m": "1/m", "imu_roll": "rad", "imu_pitch": "rad"}
+    check("robot.geometry.get: the calibrated keys carry unit, min and max around their value", all(
+        settings.get(k, {}).get("unit") == unit and settings[k].get("settable") is True and
+        all(isinstance(settings[k].get(f), (int, float)) for f in ("value", "min", "max")) and
+        settings[k]["min"] <= settings[k]["value"] <= settings[k]["max"] for k, unit in new_numbers.items()),
+        json.dumps({k: settings.get(k) for k in new_numbers})[:300])
+    check("robot.geometry.get: track, antenna_x and antenna_y have a range", all(
+        isinstance(settings.get(k, {}).get("min"), (int, float)) and isinstance(settings[k].get("max"), (int, float))
+        and settings[k]["min"] < settings[k]["max"] for k in ("track", "antenna_x", "antenna_y")), "")
 ACCESS_FIELDS = ["configured", "host", "port", "mountpoint", "version", "has_user", "has_password"]
 if args.target == "mowbite-os" and offers("ntrip.get"):
     # The NTRIP access without user and password; only the names of the fields go into the report.
@@ -360,6 +372,39 @@ if args.target == "mowbite-os" and offers("ntrip.get"):
     check("ntrip.get without user and password", fields == expected, json.dumps(fields or r))
     writable = [m for m in ("ntrip.set", "ntrip.delete") if m in methods]
     check("ntrip.set and ntrip.delete only together", len(writable) in (0, 2), ",".join(writable))
+CALIBRATION_METHODS = ["calibration.check", "calibration.start", "calibration.abort"]
+calibration_offered = [m for m in CALIBRATION_METHODS if methods is not None and m in methods]
+if args.target == "mowbite-os":
+    # The self-measurement drive: offered only while its program is ready; check, start and abort come together.
+    check("calibration.check, .start and .abort only together", len(calibration_offered) in (0, 3),
+          ",".join(calibration_offered))
+    if len(calibration_offered) == 3:
+        r = rpc("calibration.check", None, "cal_check")
+        answer = (r or {}).get("result") or {}
+        problems = answer.get("problems")
+        check("calibration.check answers ok, problems and space", sorted(answer) == ["ok", "problems", "space"] and
+              isinstance(answer.get("ok"), bool) and isinstance(problems, list) and answer["ok"] == (not problems),
+              json.dumps(r)[:300])
+        check("calibration.check names every problem with reason and message", isinstance(problems, list) and all(
+            isinstance(p, dict) and isinstance(p.get("reason"), str) and p["reason"] == p["reason"].upper() and
+            bool(p["reason"]) and isinstance(p.get("message"), str) and bool(p["message"]) for p in problems),
+              json.dumps(problems)[:300])
+        space = answer.get("space")
+        check("calibration.check: space is null or has length, width, lane_length and heading", space is None or (
+            isinstance(space, dict) and sorted(space) == ["heading", "lane_length", "length", "width"] and
+            all(isinstance(v, (int, float)) for v in space.values())), json.dumps(space))
+    else:
+        skip("calibration.check", "not in rpc.methods: the program is not ready")
+    if methods is not None and "calibration.result" in methods:
+        # null before the first drive, else the evaluation with a status, a summary and the values to take over.
+        r = rpc("calibration.result", None, "cal_result")
+        stored = (r or {}).get("result", "absent")
+        check("calibration.result is null or a result with status, summary and values", stored is None or (
+            isinstance(stored, dict) and stored.get("status") in ("done", "not_evaluated", "failed") and
+            isinstance(stored.get("summary"), str) and isinstance(stored.get("values"), list) and
+            isinstance(stored.get("station_again"), bool) and "recording" in stored), json.dumps(stored)[:300])
+    else:
+        skip("calibration.result", "not in rpc.methods")
 r = rpc("no.such.method", None, "3")
 check("unknown method -32601", r and r.get("error", {}).get("code") == -32601, json.dumps(r and r.get("error")))
 c.publish("rpc/request", "{broken")
@@ -472,8 +517,8 @@ if methods is not None and "robot.geometry.set" in methods:
     check("robot.geometry.set refuses a value out of the range -32602 OUT_OF_RANGE", bool(r) and
           r.get("error", {}).get("code") == -32602 and r["error"].get("data", {}).get("reason") == "OUT_OF_RANGE" and
           r["error"]["data"].get("key") == "robot_width", json.dumps(r and r.get("error")))
-    r = rpc("robot.geometry.set", {"version": version + 1, "settings": {"track": 0.4}}, "geo_track")
-    check("robot.geometry.set refuses the track of the platform -32602 NOT_SETTABLE", bool(r) and
+    r = rpc("robot.geometry.set", {"version": version + 1, "settings": {"wheel_radius": 0.1}}, "geo_track")
+    check("robot.geometry.set refuses the wheel radius of the platform -32602 NOT_SETTABLE", bool(r) and
           r.get("error", {}).get("code") == -32602 and r["error"].get("data", {}).get("reason") == "NOT_SETTABLE",
           json.dumps(r and r.get("error")))
     # Back to what it was: the user's own value, or the platform's.
@@ -551,6 +596,11 @@ if methods is not None and "system.hold" in methods:
         r = rpc("docking.start", None, "hold_dock")
         data = ((r or {}).get("error") or {}).get("data") or {}
         check("docking.start refused HOLD", data.get("reason") == "HOLD" and data.get("until") == hold_until,
+              json.dumps(r and r.get("error")))
+    if "calibration.start" in methods:
+        r = rpc("calibration.start", None, "hold_calibration")
+        data = ((r or {}).get("error") or {}).get("data") or {}
+        check("calibration.start refused HOLD", data.get("reason") == "HOLD" and data.get("until") == hold_until,
               json.dumps(r and r.get("error")))
     if "params.set" in methods:
         r = rpc("params.set", {"params": {"/mower_logic/gps_wait_time": 20}}, "hold_params")
@@ -909,6 +959,28 @@ if methods is not None and "docking.start" in methods:
     check("docking.start on the contacts: ALREADY_THERE", data.get("reason") == "ALREADY_THERE", json.dumps(r))
 elif args.target == "mowbite-os":
     skip("docking.start", "not in rpc.methods")
+
+if args.write and args.target == "mowbite-os" and len(calibration_offered) == 3:
+    # Only while calibration.check names a problem: a start that would be accepted would drive the simulated mower.
+    r = rpc("calibration.check", None, "cal_check_w")
+    problems = ((r or {}).get("result") or {}).get("problems") or []
+    if problems:
+        mark = len(msgs)
+        r = rpc("calibration.start", None, "cal_start")
+        data = ((r or {}).get("error") or {}).get("data") or {}
+        check("calibration.start refused -32600 with reason and message of the first problem",
+              bool(r) and r.get("error", {}).get("code") == -32600 and data.get("reason") == problems[0].get("reason")
+              and bool(data.get("message")), json.dumps(r)[:300])
+        refused = wait_for(lambda: events_of("CALIBRATION_REFUSED", mark), 3)
+        check("CALIBRATION_REFUSED with the reason", bool(refused) and refused[-1].get("reason") == data.get("reason"),
+              json.dumps(refused[-1] if refused else None))
+        check("a refused calibration.start leaves the state alone",
+              b'"current_state":"CALIBRATING"' not in (latest("robot_state/json") or b""), "")
+    else:
+        skip("calibration.start", "calibration.check names no problem: a start would drive")
+    r = rpc("calibration.abort", None, "cal_abort")
+    check("calibration.abort without a drive answers ok false", (r or {}).get("result") == {"ok": False},
+          json.dumps(r))
 
 r = rpc("map.replace", [{"areas": [], "docking_stations": []}], "10")
 check("an empty map empties it", r and "(0 areas)" in str(r.get("result")), json.dumps(r))

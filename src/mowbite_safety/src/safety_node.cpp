@@ -12,6 +12,7 @@
 #include <mowbite_msgs/msg/safety_status.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
@@ -38,14 +39,15 @@ static_assert(kReasonFence == HardwareStatus::REASON_FENCE);
 static_assert(static_cast<uint8_t>(Source::kStop) == DriveCommand::SOURCE_STOP);
 static_assert(static_cast<uint8_t>(Source::kTeleop) == DriveCommand::SOURCE_TELEOP);
 static_assert(static_cast<uint8_t>(Source::kFollower) == DriveCommand::SOURCE_FOLLOWER);
+static_assert(static_cast<uint8_t>(Source::kCalibration) == DriveCommand::SOURCE_CALIBRATION);
 
 double MonotonicSeconds() {
   using namespace std::chrono;
   return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
-rclcpp::QoS LatchedQos() {
-  return rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
+rclcpp::QoS LatchedQos(size_t depth = 1) {
+  return rclcpp::QoS(rclcpp::KeepLast(depth)).reliable().transient_local();
 }
 
 std::string BitNames(uint32_t bits) {
@@ -103,6 +105,9 @@ class SafetyNode : public rclcpp::Node {
           std::lock_guard<std::mutex> lock(mutex_);
           filter_.SetMaxPositionAccuracy(msg->max_position_accuracy);
         });
+    // The mounting of the IMU (robot.geometry imu_roll, imu_pitch): the tilt counts from it.
+    params_sub_ = create_subscription<std_msgs::msg::String>(
+        "bridge/params", LatchedQos(50), [this](std_msgs::msg::String::ConstSharedPtr msg) { OnParams(msg->data); });
     release_srv_ = create_service<SetEmergency>(
         "safety/release_emergency",
         [this](std::shared_ptr<rmw_request_id_t> header, const SetEmergency::Request::SharedPtr req) {
@@ -134,12 +139,13 @@ class SafetyNode : public rclcpp::Node {
   }
 
   void OnDrive(const DriveCommand& msg) {
-    if (msg.source > DriveCommand::SOURCE_FOLLOWER) {
+    if (msg.source > DriveCommand::SOURCE_CALIBRATION) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "Drive command of unknown source %u: stopped",
                             msg.source);
     }
     // An unknown source stops like the logic.
-    const Source source = msg.source > DriveCommand::SOURCE_FOLLOWER ? Source::kStop : static_cast<Source>(msg.source);
+    const Source source =
+        msg.source > DriveCommand::SOURCE_CALIBRATION ? Source::kStop : static_cast<Source>(msg.source);
     Decision decision;
     std::optional<LatchRequest> latch;
     {
@@ -160,16 +166,39 @@ class SafetyNode : public rclcpp::Node {
     }
   }
 
+  void OnParams(const std::string& text) {
+    const nlohmann::json json = nlohmann::json::parse(text, nullptr, false);
+    if (!json.is_object() || json.value("node", "") != "/mowbite_geometry" || !json.contains("params")) return;
+    const nlohmann::json& params = json["params"];
+    if (!params.is_object() || !params.contains("imu_roll") || !params.contains("imu_pitch") ||
+        !params["imu_roll"].is_number() || !params["imu_pitch"].is_number()) {
+      return;
+    }
+    const double roll = params["imu_roll"].get<double>();
+    const double pitch = params["imu_pitch"].get<double>();
+    if (!std::isfinite(roll) || !std::isfinite(pitch)) return;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (roll == imu_roll_ && pitch == imu_pitch_) return;
+      imu_roll_ = roll;
+      imu_pitch_ = pitch;
+    }
+    RCLCPP_INFO(get_logger(), "The tilt counts from the IMU's mounting: roll %.2f deg, pitch %.2f deg",
+                roll * 180.0 / M_PI, pitch * 180.0 / M_PI);
+  }
+
   void OnImu(const sensor_msgs::msg::Imu& msg) {
-    // Without an orientation in the message: the tilt from gravity.
-    const double tilt =
-        msg.orientation_covariance[0] >= 0
-            ? TiltFromOrientation(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
-            : TiltFromGravity(msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z);
     std::optional<Twist2> stop;
     std::optional<LatchRequest> latch;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      // Without an orientation in the message: the tilt from gravity.
+      const double tilt =
+          msg.orientation_covariance[0] >= 0
+              ? TiltFromOrientation(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w,
+                                    imu_roll_, imu_pitch_)
+              : TiltFromGravity(msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
+                                imu_roll_, imu_pitch_);
       const double now = MonotonicSeconds();
       filter_.OnTilt(tilt, now);
       stop = filter_.Tick(now);
@@ -319,7 +348,11 @@ class SafetyNode : public rclcpp::Node {
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr map_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::MapStatus>::SharedPtr map_status_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr params_sub_;
   rclcpp::Service<SetEmergency>::SharedPtr release_srv_;
+  // Level until the geometry is there.
+  double imu_roll_ = 0.0;
+  double imu_pitch_ = 0.0;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

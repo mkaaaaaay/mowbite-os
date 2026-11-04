@@ -12,8 +12,9 @@
 
 namespace mowbite_safety {
 
-// Sources of drive commands, numbered like DriveCommand; kStop is the logic stopping the mower.
-enum class Source : uint8_t { kStop = 0, kTeleop = 1, kFollower = 2 };
+// Sources of drive commands, numbered like DriveCommand; kStop is the logic stopping the mower. The calibration drive
+// moves autonomously like the follower, and forward only.
+enum class Source : uint8_t { kStop = 0, kTeleop = 1, kFollower = 2, kCalibration = 3 };
 
 // The reason bits of hw/status the filter latches over hw/emergency.
 constexpr uint32_t kReasonTilt = 1u << 13;
@@ -140,7 +141,7 @@ class SafetyFilter {
   // Empty if base_link may be at (x, y), else why not.
   std::string FenceProblem(double x, double y) const;
   // Why a moving command of source may not pass, empty if it may; latches FENCE.
-  std::string MoveProblem(Source source, double quiet, double now, bool* conflict);
+  std::string MoveProblem(Source source, double linear, double quiet, double now, bool* conflict);
   void Latch(uint32_t bits, const std::string& reason);
   SourceState& State(Source source);
 
@@ -162,7 +163,7 @@ class SafetyFilter {
   std::vector<Ring> allowed_;
   std::string region_error_ = "no map yet";
   bool map_fits_ = false;
-  std::array<SourceState, 3> sources_;
+  std::array<SourceState, 4> sources_;
   Source owner_ = Source::kStop;
   double owner_s_ = 0;
   // The source whose moving command went out last, empty after a stop.
@@ -178,9 +179,10 @@ class SafetyFilter {
 const char* SourceName(Source source);
 
 // Angle of the body to the vertical in degrees, from the orientation of an IMU sample (normalized here) or from
-// gravity in its acceleration; NaN for an orientation or acceleration of length 0.
-double TiltFromOrientation(double x, double y, double z, double w);
-double TiltFromGravity(double ax, double ay, double az);
+// gravity in its acceleration, with the IMU mounted at roll and pitch (rad, robot.geometry imu_roll and imu_pitch:
+// what it reads on level ground); NaN for an orientation or acceleration of length 0.
+double TiltFromOrientation(double x, double y, double z, double w, double roll = 0.0, double pitch = 0.0);
+double TiltFromGravity(double ax, double ay, double az, double roll = 0.0, double pitch = 0.0);
 
 }  // namespace mowbite_safety
 

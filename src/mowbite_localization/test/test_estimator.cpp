@@ -184,6 +184,26 @@ TEST(L2Prediction, StraightAndAQuarterCircle) {
   EXPECT_NEAR(w.est.turn_rate(), M_PI / 10, 1e-12);
 }
 
+TEST(L2Prediction, TheWheelScaleOfTheGeometryCorrectsTheDriversSpeed) {
+  // The driver computes with 1000 ticks per m, the wheels really make 940: its speeds are 1000/940 too slow.
+  World w;
+  w.Geometry();
+  w.Calibrate();
+  w.gnss = false;
+  w.odom_scale = 0.94;
+  w.est.SetWheelScale(1000.0, 940.0);
+  EXPECT_NEAR(w.est.wheel_scale(), 1000.0 / 940.0, 1e-12);
+  w.Run(5.0, 0.2, 0.0);
+  EXPECT_NEAR(w.est.pose().x, w.x, 1e-9);
+  EXPECT_NEAR(w.est.speed(), 0.2, 1e-12);
+  // Unknown or nonsense values count as 1.
+  const std::vector<std::pair<double, double>> wrong = {{0.0, 940.0}, {1000.0, 0.0}, {-1.0, 940.0}, {NAN, 940.0}};
+  for (const auto& [driver, geometry] : wrong) {
+    w.est.SetWheelScale(driver, geometry);
+    EXPECT_DOUBLE_EQ(w.est.wheel_scale(), 1.0);
+  }
+}
+
 TEST(L2Prediction, AStaleWheelSpeedCountsAsZero) {
   Estimator est({});
   double t = 100.0;

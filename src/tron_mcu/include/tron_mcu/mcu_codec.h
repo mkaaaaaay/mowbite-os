@@ -48,6 +48,9 @@ constexpr float kMaxLinearSpeed = 0.3f;
 constexpr float kMaxAngularSpeed = 0.3f;
 constexpr uint16_t kMinCutterHeightMm = 30;
 constexpr uint16_t kMaxCutterHeightMm = 90;
+// The MCU turns speed and turn rate into wheel speeds with 0.40 m between the wheels and reports them in mm/s.
+constexpr double kMcuWheelDistance = 0.40;
+constexpr double kMcuTicksPerMeter = 1000.0;
 
 // --- Framing ---
 

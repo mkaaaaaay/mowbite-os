@@ -1,0 +1,25 @@
+# calibration/run of mowbite_calibration: the calibration drive. The logic sends the goal in CALIBRATING and passes
+# calibration/cmd_vel to mowbite_safety as SOURCE_CALIBRATION while the drive lasts.
+
+# The lane of calibration/status the logic checked: heading of its first line (rad, map frame) and its length (m). The
+# program drives it only where exactly this lane still fits, else it ends at once with NO_ROOM.
+float64 heading
+float64 lane_length
+---
+# DONE when the drive ran to its end, else why it stopped as in CALIBRATION_FAILED (STOPPED, EMERGENCY, NO_RTK,
+# POSE_LOST, LEFT_LANE, NOT_TURNING, NOT_MOVING, OVERSPEED, GYRO_SIGN, IMU_GRAVITY, SLOPE, TIMEOUT, SENSOR_MISSING,
+# NO_ROOM), with an English message.
+string reason
+string message
+# After DONE: done, not_evaluated or failed (calibration.result), and a short English summary for CALIBRATED such as
+# "4 of 4 values ok".
+string status
+string summary
+# The recording (mowbite-calib/1) in data_dir, empty without one.
+string recording
+---
+# At least every 0.5 s: the phase (align, stand, line, spin_left, spin_right, evaluate), its round (0 before the first
+# line, then 1 to 4) and the share of the drive done (0 to 1).
+string phase
+uint8 index
+float32 progress

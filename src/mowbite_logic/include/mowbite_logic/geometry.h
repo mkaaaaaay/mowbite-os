@@ -1,6 +1,7 @@
 // The dimensions of the mower (robot.geometry): the values of the platform's file, the entries of the user on top of
 // them, the rules the entries keep, and the JSON of robot.geometry.get, of bridge/params and of the file of the
-// entries. x points forward and y to the left of base_link, everything in m.
+// entries. x points forward and y to the left of base_link, lengths in m; ticks_per_m in 1/m and the mounting of the
+// IMU (imu_roll, imu_pitch) in rad.
 #ifndef MOWBITE_LOGIC_GEOMETRY_H
 #define MOWBITE_LOGIC_GEOMETRY_H
 
@@ -9,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace mowbite_logic {
@@ -23,11 +25,13 @@ enum class GeometryType { kNumber, kPoints };
 struct GeometryKey {
   std::string name;
   GeometryType type;
-  // The user can set it; track, wheel_radius and dock_contact_x are the platform's alone.
+  // The user can set it; wheel_radius and dock_contact_x are the platform's alone.
   bool settable;
-  // The range of a number (m).
+  // The range of a number in its unit; with relative, around the platform's value.
   double min;
   double max;
+  const char* unit = "m";
+  bool relative = false;
 };
 
 // All keys in the order of the answers; robot_outline is the only list.
@@ -77,11 +81,14 @@ class Geometry {
   }
   // A number key, as it counts now.
   double Value(const std::string& key) const;
+  // The range of a number key: min and max, around the platform's value for a relative key.
+  std::pair<double, double> Range(const GeometryKey& key) const;
 
   // robot.geometry.get: {"settings": {key: {value, default, stored, type, unit, min, max, settable}}, "version",
   // "platform"}.
   json Get() const;
-  // The "params" of the bridge/params entry: every key as it counts now (robot_outline [] without one) and version.
+  // The "params" of the bridge/params entry: every key as it counts now (robot_outline [] without one), version, and
+  // stored: the keys the user entered.
   json Params() const;
 
   // robot.geometry.set: {"version": N, "settings": {key: value}, "reset": [key]}. All or nothing: a version that is not
@@ -105,7 +112,7 @@ class Geometry {
   };
 
   Values Effective(const Entries& entries) const;
-  static std::optional<GeometryProblem> Check(const Values& values);
+  std::optional<GeometryProblem> Check(const Values& values) const;
   static std::vector<std::string> Below(const Values& factory, const Values& now);
   static json PointsJson(const std::vector<Point>& points);
 

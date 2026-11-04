@@ -22,6 +22,10 @@ whatever the duty), zero_duty_ignored (a duty of 0, the drive timeout and an eme
 other than 0), roll and pitch (tilt of the body in degrees, seen by the IMU), yaw_rate (rad/s the body turns, as by
 hand, seen by the IMU), foreign_host (another host claims every
 claimed service again this many seconds after this host claimed it; the board then answers it, not this host).
+For the calibration drive the mower can be off what the driver assumes: --ticks-scale (true ticks per metre over the
+configured ones), --track (the true distance of the wheels), --antenna-offset of the GPS antenna from base_link with
+--gnss-noise-m and --gnss-delay, --imu-error-rpy-deg (the sensor turned off its mounting), --slope (the ground rising
+towards a heading), --wheel-deadband and --gyro-scale.
 Every datagram from the host goes to a JSON lines log, --state writes the board as JSON, --pcap every datagram in both
 directions with one clock, as tcpdump would see it on the host's interface.
 """
@@ -255,6 +259,28 @@ class Service:
         return None
 
 
+def matmul(a, b):
+    columns = list(zip(*b))
+    return [[sum(x * y for x, y in zip(row, col)) for col in columns] for row in a]
+
+
+def rotation_rpy(roll, pitch, yaw):
+    """The turn about z by yaw after the one about y by pitch after the one about x by roll."""
+    about_x = [[1.0, 0.0, 0.0], [0.0, math.cos(roll), -math.sin(roll)], [0.0, math.sin(roll), math.cos(roll)]]
+    about_y = [[math.cos(pitch), 0.0, math.sin(pitch)], [0.0, 1.0, 0.0], [-math.sin(pitch), 0.0, math.cos(pitch)]]
+    about_z = [[math.cos(yaw), -math.sin(yaw), 0.0], [math.sin(yaw), math.cos(yaw), 0.0], [0.0, 0.0, 1.0]]
+    return matmul(about_z, matmul(about_y, about_x))
+
+
+def ground(slope_deg, slope_heading_deg):
+    """The turn of a ground rising by slope_deg towards slope_heading_deg (map frame)."""
+    ux, uy = math.cos(math.radians(slope_heading_deg) + math.pi / 2), math.sin(math.radians(slope_heading_deg) + math.pi / 2)
+    c, s = math.cos(-math.radians(slope_deg)), math.sin(-math.radians(slope_deg))
+    return [[c + ux * ux * (1 - c), ux * uy * (1 - c), uy * s],
+            [uy * ux * (1 - c), c + uy * uy * (1 - c), -ux * s],
+            [-uy * s, ux * s, c]]
+
+
 class Board:
     def __init__(self, args):
         self.args = args
@@ -270,6 +296,9 @@ class Board:
                          "rtcm_bytes": 0, "rtcm_datagrams": 0, "rtcm_max_datagram": 0, "rtcm_crc": 0, "rpc_calls": 0, "meta_names": []}
         self.x = self.y = self.yaw = 0.0
         self.ticks = [args.ticks_start % 2**32 + 0.0, args.ticks_start % 2**32 + 0.0]
+        self.rng = random.Random(args.seed)
+        # The antenna over the last second, for the delay of the GPS.
+        self.antenna_history = []
         self.boot()
 
     def now(self):
@@ -640,7 +669,11 @@ class Board:
         right = -duty[1] * full
         if "wheel_speed" in flags:
             left = right = float(flags["wheel_speed"])
-        tpm = struct.unpack("<d", service.values[0])[0]
+        deadband = self.args.wheel_deadband
+        left = 0.0 if abs(left) < deadband else left
+        right = 0.0 if abs(right) < deadband else right
+        # The counters run at the true ticks per metre, which may be off the configured ones.
+        tpm = struct.unpack("<d", service.values[0])[0] * self.args.ticks_scale
         self.ticks[0] += left * tpm * dt
         self.ticks[1] -= right * tpm * dt
         v = (left + right) / 2
@@ -657,7 +690,9 @@ class Board:
                   (4, bytes([status])), (5, struct.pack("<f", 32.0)), (6, struct.pack("<f", abs(right) * 2))]
         if self.drive_sent_once:
             ticks = [int(t) & 0xFFFFFFFF for t in self.ticks]
-            values.insert(0, (0, doubles(v, 0, 0, 0, 0, w * self.args.track / 2)))
+            # The board computes its twist from the counters with the configured ticks per metre.
+            scale = self.args.ticks_scale
+            values.insert(0, (0, doubles(v * scale, 0, 0, 0, 0, w * self.args.track / 2 * scale)))
             values.append((7, struct.pack("<2I", *ticks)))
         self.drive_sent_once = True
         self.output(DIFF_DRIVE, values)
@@ -692,10 +727,12 @@ class Board:
         noise = lambda s: random.gauss(0.0, s)
         roll = math.radians(float(flags.get("roll", 0.0)))
         pitch = math.radians(float(flags.get("pitch", 0.0)))
-        gravity = (-GRAVITY * math.sin(pitch), GRAVITY * math.sin(roll) * math.cos(pitch),
-                   GRAVITY * math.cos(roll) * math.cos(pitch))
+        # The body tilted by roll and pitch on the slope, the sensor turned off its mounting by the error: what reads up.
+        body = matmul(ground(*self.args.slope), rotation_rpy(roll, pitch, self.yaw))
+        sensor = matmul(body, rotation_rpy(*(math.radians(a) for a in self.args.imu_error_rpy_deg)))
+        gravity = tuple(GRAVITY * sensor[2][i] for i in range(3))
         body_acc = (gravity[0] + noise(0.02), gravity[1] + noise(0.02), gravity[2] + noise(0.02))
-        yaw = getattr(self, "w", 0.0) + float(flags.get("yaw_rate", 0.0))
+        yaw = (getattr(self, "w", 0.0) + float(flags.get("yaw_rate", 0.0))) * self.args.gyro_scale
         body_rate = (noise(0.001), noise(0.001), yaw + noise(0.001))
         # The sensor lies upside down: its y and z point against the body's.
         raw_acc = (body_acc[0], -body_acc[1], -body_acc[2])
@@ -732,16 +769,27 @@ class Board:
         fix = flags.get("gps_fix", "fix")
         if fix == "off":
             return
+        # The antenna as it was --gnss-delay ago, with noise.
+        then = self.antenna_history[0] if self.antenna_history else (now, self.x, self.y, self.yaw, 0.0, 0.0)
+        for entry in self.antenna_history:
+            if entry[0] <= now - self.args.gnss_delay + 1e-9:
+                then = entry
+        _, bx, by, byaw, v, w = then
+        ox, oy = self.args.antenna_offset
+        east = bx + math.cos(byaw) * ox - math.sin(byaw) * oy + self.rng.gauss(0.0, self.args.gnss_noise_m)
+        north = by + math.sin(byaw) * ox + math.cos(byaw) * oy + self.rng.gauss(0.0, self.args.gnss_noise_m)
         lat0, lon0 = self.args.origin
-        lat = lat0 + math.degrees(self.y / 6378137.0)
-        lon = lon0 + math.degrees(self.x / (6378137.0 * math.cos(math.radians(lat0))))
-        v = getattr(self, "v", 0.0)
+        lat = lat0 + math.degrees(north / 6378137.0)
+        lon = lon0 + math.degrees(east / (6378137.0 * math.cos(math.radians(lat0))))
         accuracy = float(flags.get("gps_accuracy", {"fix": 0.012, "float": 0.25}.get(fix, 1.5)))
         values = [(0, doubles(lat, lon, 80.0)), (1, doubles(accuracy)), (2, doubles(2 * accuracy))]
         # Without RTK the board leaves the fix type out.
         if fix in ("fix", "float"):
             values.append((3, b"FIX" if fix == "fix" else b"FLOAT"))
-        values.append((4, doubles(v * math.cos(self.yaw), v * math.sin(self.yaw), 0.0)))
+        # The velocity of the antenna: of base_link plus the turn about it.
+        ve = v * math.cos(byaw) - w * (math.sin(byaw) * ox + math.cos(byaw) * oy)
+        vn = v * math.sin(byaw) + w * (math.cos(byaw) * ox - math.sin(byaw) * oy)
+        values.append((4, doubles(ve, vn, 0.0)))
         self.output(GPS, values)
 
     def cycle(self, dt):
@@ -776,6 +824,9 @@ class Board:
         self.update_emergency(flags, now)
         self.update_drive(flags, dt, now)
         self.update_mower(flags, dt, now)
+        self.antenna_history.append((now, self.x, self.y, self.yaw, getattr(self, "v", 0.0), getattr(self, "w", 0.0)))
+        while self.antenna_history and self.antenna_history[0][0] < now - 1.0:
+            self.antenna_history.pop(0)
         self.update_imu(flags, now)
         self.update_power(flags, now)
         self.update_gps(now, flags)
@@ -817,6 +868,17 @@ def main():
     parser.add_argument("--full-duty-speed", type=float, default=0.9, help="wheel speed at full duty in m/s")
     parser.add_argument("--track", type=float, default=0.3556, help="real distance of the wheels in m")
     parser.add_argument("--ticks-start", type=int, default=2**32 - 3000, help="start value of both counters")
+    parser.add_argument("--ticks-scale", type=float, default=1.0, help="true ticks per metre / configured ones")
+    parser.add_argument("--antenna-offset", type=float, nargs=2, default=[0.0, 0.0], metavar=("X", "Y"))
+    parser.add_argument("--gnss-noise-m", type=float, default=0.0, help="standard deviation of the antenna position")
+    parser.add_argument("--gnss-delay", type=float, default=0.0, help="age (s, at most 1) of the position when sent")
+    parser.add_argument("--imu-error-rpy-deg", type=float, nargs=3, default=[0.0, 0.0, 0.0],
+                        help="the sensor turned off its mounting: what the calibration measures")
+    parser.add_argument("--slope", type=float, nargs=2, default=[0.0, 0.0], metavar=("DEG", "HEADING_DEG"),
+                        help="the ground rises by DEG towards HEADING_DEG (map frame) everywhere")
+    parser.add_argument("--wheel-deadband", type=float, default=0.0, help="m/s below which a wheel stands")
+    parser.add_argument("--gyro-scale", type=float, default=1.0, help="measured / true yaw rate")
+    parser.add_argument("--seed", type=int, default=1, help="seed of the position noise")
     parser.add_argument("--origin", type=float, nargs=2, default=[52.0, 7.6])
     parser.add_argument("--flags")
     parser.add_argument("--log")

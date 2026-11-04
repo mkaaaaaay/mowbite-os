@@ -71,8 +71,12 @@ class Estimator {
 
   // A yaw rate (rad/s) at t; true when it moved the estimate, from the sample after the gyro calibration on.
   bool AddImu(double t, double rate);
-  // Wheel speed (m/s) and turn rate (rad/s) at t.
+  // Wheel speed (m/s) and turn rate (rad/s) at t, as the driver computed them; the wheel scale corrects both.
   void AddWheels(double t, double speed, double turn_rate);
+  // The ticks per m the driver computes with against those of robot.geometry: the driver's speeds count times
+  // driver/geometry. Values that are not positive leave the scale at 1.
+  void SetWheelScale(double driver_ticks_per_m, double ticks_per_m);
+  double wheel_scale() const { return wheel_scale_; }
   FixResult AddFix(const GnssFix& fix, double t);
 
   void SetGpsEnabled(bool enabled) { gps_enabled_ = enabled; }
@@ -143,6 +147,7 @@ class Estimator {
   FixAccuracy accuracy_;
   Eigen::Vector2d lever_ = Eigen::Vector2d::Zero();
   bool geometry_known_ = false;
+  double wheel_scale_ = 1.0;
   bool gps_enabled_ = true;
   bool heading_valid_ = false;
   bool aligned_ = false;

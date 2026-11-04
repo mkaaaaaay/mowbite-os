@@ -24,6 +24,12 @@ bool wheel_ticks
 string imu_source
 string gnss_source
 
+# What the driver computes speed and turn rate of hw/wheel_odom and hw/cmd_vel with: ticks of the wheels per m (a
+# driver that reports speed gives its scale, 1000 for mm) and the distance between the drive wheels (m). The
+# calibration drive and the localization compare these with what robot.geometry holds.
+float64 wheel_ticks_per_m
+float64 wheel_distance
+
 # Limits the driver enforces on hw/cmd_vel.
 float32 max_linear_speed
 float32 max_angular_speed

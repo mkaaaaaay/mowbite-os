@@ -168,6 +168,8 @@ class TestHardwareContract(unittest.TestCase):
         self.assertAlmostEqual(caps.blade_lease_max_s, 2.0)
         self.assertFalse(caps.host_charge_control)
         self.assertTrue(caps.charge_stop)
+        self.assertAlmostEqual(caps.wheel_ticks_per_m, 1000.0)
+        self.assertAlmostEqual(caps.wheel_distance, 0.40)
         self.assertAlmostEqual(caps.max_linear_speed, 0.3, places=5)
         self.assertLess(caps.failsafe_without_host_s, 0)
         self.assertEqual(caps.safety_measurement_date, "")

@@ -33,6 +33,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/NtripStatus.msg"
   "msg/DriveCommand.msg"
   "msg/SafetyStatus.msg"
+  "msg/CalibrationProblem.msg"
+  "msg/CalibrationStatus.msg"
   "srv/AddArea.srv"
   "srv/ReplaceMap.srv"
   "srv/SetBlade.srv"
@@ -43,6 +45,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetHeading.srv"
   "srv/DriveTo.srv"
   "action/FollowPath.action"
+  "action/Calibrate.action"
   DEPENDENCIES builtin_interfaces std_msgs geometry_msgs diagnostic_msgs action_msgs
 )
 
