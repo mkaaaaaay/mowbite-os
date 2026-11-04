@@ -902,11 +902,9 @@ class LogicNode : public rclcpp::Node {
           index = drive_.follower_index;
           message = "no result from the follower";
         }
-        Reason why(FollowerCode(reason), message);
-        if (reason == FollowPath::Result::REASON_CANCELED && drive_.cancel_reason) {
-          // Stopped from here: the cause, not the cancel of the follower.
-          why = Reason(*drive_.cancel_reason).WithMessage(drive_.cancel_reason->message + " (" + message + ")");
-        } else if (reason == FollowPath::Result::REASON_CANCELED) {
+        // Stopped from here: the cause, not the cancel of the follower nor its own stop for the same emergency.
+        Reason why = FollowerEndReason(FollowerCode(reason), message, drive_.cancel_reason);
+        if (reason == FollowPath::Result::REASON_CANCELED && !drive_.cancel_reason) {
           // A cancel the logic did not ask for (G22): the path stops for the user, as when the follower does not answer.
           why = Reason("FOLLOWER_MISSING", "The follower dropped the path (" + message + ")");
           reason = FollowPath::Result::REASON_TIMEOUT;

@@ -46,4 +46,12 @@ Reason MapReason(MapDatum datum, const std::string& message) {
   }
 }
 
+Reason FollowerEndReason(const std::string& code, const std::string& message, const std::optional<Reason>& cancel) {
+  const bool same_emergency = code == "EMERGENCY" && cancel && cancel->code == "EMERGENCY";
+  if (cancel && (code == "CANCELED" || same_emergency)) {
+    return Reason(*cancel).WithMessage(cancel->message + " (" + message + ")");
+  }
+  return Reason(code, message);
+}
+
 }  // namespace mowbite_logic

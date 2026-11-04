@@ -127,5 +127,27 @@ TEST(Reasons, MapReasonFromTheDatumState) {
   EXPECT_EQ(unbound.fields["datum_state"], "unbound");
 }
 
+TEST(Reasons, APathTheLogicStoppedTellsTheCause) {
+  const Reason tilt = Reason("EMERGENCY", "Emergency: LATCH, TILT").With("limit", 31.0);
+  // Whether the cancel reached the follower first or it stopped for the same emergency itself: the same text.
+  for (const char* code : {"CANCELED", "EMERGENCY"}) {
+    const Reason why = FollowerEndReason(code, "x", tilt);
+    EXPECT_EQ(why.code, "EMERGENCY") << code;
+    EXPECT_EQ(why.message, "Emergency: LATCH, TILT (x)") << code;
+    EXPECT_DOUBLE_EQ(why.fields["limit"].get<double>(), 31.0) << code;
+  }
+  const Reason skip("STOPPED", "Skipped by the app");
+  EXPECT_EQ(FollowerEndReason("CANCELED", "canceled", skip).message, "Skipped by the app (canceled)");
+  // Without a cancel of the logic, or stopped for something else than the cause: the follower's own result.
+  for (const auto& cancel : {std::optional<Reason>(), std::optional<Reason>(skip)}) {
+    const Reason why = FollowerEndReason("EMERGENCY", "emergency", cancel);
+    EXPECT_EQ(why.code, "EMERGENCY");
+    EXPECT_EQ(why.message, "emergency");
+  }
+  EXPECT_EQ(FollowerEndReason("CROSS_TRACK", "off the path", tilt).code, "CROSS_TRACK");
+  EXPECT_EQ(FollowerEndReason("CANCELED", "canceled", std::nullopt).code, "CANCELED");
+  EXPECT_EQ(FollowerEndReason("DONE", "done", std::nullopt).code, "DONE");
+}
+
 }  // namespace
 }  // namespace mowbite_logic
