@@ -272,6 +272,31 @@ if offers("system.info"):
     info = (r or {}).get("result") or {}
     check("system.info", info.get("name") == "mowbite-os" and info.get("version") and info.get("platform")
           and isinstance(info.get("schema"), int), json.dumps(info))
+API_SCHEMA = None
+if args.target == "mowbite-os":
+    # AS3: the version of the interface in system.info, the schema itself over system.api.
+    api_version = info.get("api") if offers("system.info") else None
+    check("system.info.api is the version of the interface", isinstance(api_version, int) and api_version >= 1,
+          json.dumps(api_version), point="AS3 system.info.api")
+    if offers("system.api"):
+        r = rpc("system.api", None, "api")
+        api = (r or {}).get("result") or {}
+        API_SCHEMA = api.get("json_schema") if isinstance(api.get("json_schema"), dict) else None
+        check("system.api gives api and json_schema of the version of system.info",
+              api.get("api") == api_version and bool(API_SCHEMA) and API_SCHEMA.get("x-api") == api_version
+              and API_SCHEMA.get("$id") == f"urn:mowbite-os:api:{api_version}",
+              json.dumps({k: v for k, v in api.items() if k != "json_schema"}), point="AS3 system.api")
+    # AM4: an id comes back as it was sent, also a number, from the bridge and from a node.
+    r = rpc("rpc.ping", None, 42)
+    check("a number id comes back as a number (bridge)", bool(r) and r.get("id") == 42 and r.get("result") == "pong",
+          json.dumps(r), point="AM4 ids")
+    if offers("robot.geometry.get"):
+        r = rpc("robot.geometry.get", None, 4711)
+        check("a number id comes back as a number (node)", bool(r) and r.get("id") == 4711 and "result" in r,
+              json.dumps(r)[:200], point="AM4 ids")
+        r = rpc("robot.geometry.get", None, {"client": "check", "n": 1})
+        check("an object id comes back as it was sent (node)", bool(r) and "result" in r, json.dumps(r)[:200],
+              point="AM4 ids")
 if offers("sensors.list"):
     # Every sensor of sensor_infos/json with its fields unchanged, the last value and its time (null before one came).
     r = rpc("sensors.list", None, "sensors")
@@ -985,4 +1010,45 @@ if args.write and args.target == "mowbite-os" and len(calibration_offered) == 3:
 r = rpc("map.replace", [{"areas": [], "docking_stations": []}], "10")
 check("an empty map empties it", r and "(0 areas)" in str(r.get("result")), json.dumps(r))
 
+
+def check_against_schema():
+    """AS3: everything seen on robot_state/json and events/json against the schema of system.api."""
+    if API_SCHEMA is None:
+        return
+    try:
+        import jsonschema
+    except ImportError:
+        skip("everything seen against system.api", "python3-jsonschema is missing", point="AS3 schema")
+        return
+    try:
+        jsonschema.Draft202012Validator.check_schema(API_SCHEMA)
+        check("system.api is a valid JSON Schema 2020-12", True, point="AS3 schema")
+    except jsonschema.SchemaError as e:
+        check("system.api is a valid JSON Schema 2020-12", False, str(e)[:200], point="AS3 schema")
+        return
+    defs = API_SCHEMA.get("$defs", {})
+
+    def validator(name):
+        return jsonschema.Draft202012Validator(dict(API_SCHEMA, **{"$ref": "#/$defs/" + name}))
+    for topic, kind in (("robot_state/json", "robot_state"), ("events/json", "event")):
+        payloads = [p for _, top, p, _ in msgs if top == topic and p]
+        bad, whole, own = [], validator(kind), {}
+        for p in payloads:
+            item = json.loads(p)
+            name = f"event.{item.get('type')}" if kind == "event" else kind
+            name = name if name in defs else "event.other"
+            if name not in own:
+                own[name] = validator(name)
+            errors = list(own[name].iter_errors(item)) or list(whole.iter_errors(item))
+            if errors:
+                bad.append(f"{item.get('type', kind)}: {errors[0].message[:160]}")
+        check(f"every {kind} seen ({len(payloads)}) as in system.api", bool(payloads) and not bad,
+              "; ".join(sorted(set(bad))[:4]), point="AS3 schema " + kind)
+    r = rpc("system.info", None, "info_schema")
+    errors = list(validator("system.info.result").iter_errors((r or {}).get("result")))
+    check("system.info as in system.api", bool(r) and not errors, errors[0].message[:200] if errors else "",
+          point="AS3 schema system.info")
+
+
+check_against_schema()
 finish()
