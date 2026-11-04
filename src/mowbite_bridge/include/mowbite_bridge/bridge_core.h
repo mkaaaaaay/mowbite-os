@@ -26,12 +26,53 @@ constexpr char kInternalCall[] = "os/";
 constexpr double kCallWaitS = 900;
 constexpr std::size_t kMaxOpenCalls = 512;
 constexpr std::size_t kMaxIdBytes = 1024;
+// Correlation data of an MQTT 5 request longer than this is refused.
+constexpr std::size_t kMaxCorrelationBytes = 1024;
 
 struct MqttMessage {
   std::string topic;
   std::string payload;
   bool retain = false;
   int qos = 0;
+  // MQTT 5 correlation data of the request this answers, sent back unchanged.
+  std::optional<std::string> correlation;
+};
+
+// The MQTT 5 properties of a request that say where its answer goes; both empty over 3.1.1.
+struct ResponseRoute {
+  std::optional<std::string> topic;
+  std::optional<std::string> correlation;
+};
+
+// True for rpc/response/<token> with a token of 1 to 64 of A-Z, a-z, 0-9, '.', '_' and '-'.
+bool ValidResponseTopic(std::string_view topic);
+
+// The MQTT version the bridge connects with: 5 until the broker refuses that protocol, then 3 (3.1.1) for as long as
+// the process runs.
+class MqttVersion {
+ public:
+  enum class Failure {
+    // No TCP connection to the broker, or a refusal for another reason: try again with the same version.
+    kNetwork,
+    // A CONNACK refusing the protocol: 1 of 3.1.1 or 0x84 of 5.
+    kRefused,
+    // The broker took the TCP connection and ended it before any CONNACK.
+    kDropped,
+  };
+
+  // From the return code of the failed connect and whether the broker takes TCP connections right after.
+  static Failure Classify(int return_code, bool broker_reachable);
+
+  int version() const {
+    return version_;
+  }
+  // True when this failure switches to 3: a refusal at once, an end before the CONNACK the second time in a row.
+  bool OnFailure(Failure failure);
+  void OnConnected();
+
+ private:
+  int version_ = 5;
+  int dropped_ = 0;
 };
 
 // A call for the nodes on bridge/rpc/request: params as JSON text ("" without), id "" without.
@@ -82,14 +123,16 @@ class BridgeCore {
   void Start(double t);
   // SHUTDOWN live and into the sink.
   void Stop(double t);
-  void Connected();
+  // mqtt_version for system.info: 5 or 3.
+  void Connected(int mqtt_version = 5);
   void ConnectionLost();
   bool connected() const {
     return connected_;
   }
 
-  // A message from the broker; retained marks one the broker kept, not one sent live.
-  void OnMqtt(const std::string& topic, std::string_view payload, bool retained);
+  // A message from the broker; retained marks one the broker kept, not one sent live. A request with a response topic
+  // is answered only there, with its correlation data; one with an invalid response topic is refused on rpc/response.
+  void OnMqtt(const std::string& topic, std::string_view payload, bool retained, const ResponseRoute& route = {});
 
   void OnRobotState(const RobotStateView& state);
   void OnSensor(const SensorDescription& sensor);
@@ -100,8 +143,9 @@ class BridgeCore {
   void OnMap(const std::string& text);
   void OnPlatform(const std::string& platform);
   void OnRpcMethods(const std::string& node, const std::vector<std::string>& methods);
-  // Answers of the nodes for MQTT under the id the client sent; calls one node makes of another (ids beginning with
-  // kInternalCall) stay in ROS, an answer to a call no longer open or to an id the bridge did not give is dropped.
+  // Answers of the nodes for MQTT under the id the client sent, to where its request wanted them; calls one node makes
+  // of another (ids beginning with kInternalCall) stay in ROS, an answer to a call no longer open or to an id the
+  // bridge did not give is dropped.
   void OnRpcResponse(const std::string& id, std::string_view result);
   void OnRpcError(const std::string& id, int code, std::string_view message, std::string_view data);
   void OnLog(double t, int level, std::string_view node, std::string_view message);
@@ -111,22 +155,36 @@ class BridgeCore {
   Outbox Take();
 
  private:
+  // Where the answer to a request goes.
+  struct Reply {
+    std::string topic;
+    std::optional<std::string> correlation;
+  };
+
   template <typename F>
   void Guard(const char* where, F&& f);
-  void Answer(const RpcCall& call);
+  void Request(std::string_view payload, const ResponseRoute& route);
+  void Answer(const RpcCall& call, const Reply& to);
+  // -32600 with data {event REQUEST_REFUSED, reason, ...}.
+  std::string RefuseRequest(const Json& id, const std::string& reason, const std::string& message, Json fields = {});
   void Send(const std::string& topic, const std::string& payload, bool retain);
+  void SendReply(const Reply& to, const std::string& payload);
   void Keep(const std::string& topic, const std::string& payload);
   void Event(const Json& event);
   void Log(int level, std::string text);
   double Now() const;
   // The id for the node of a call with this id of the client.
-  std::string Open(const Json& id, const std::string& method);
-  // The client's id of the call with this id for the node; false when it is not open.
-  bool Close(const std::string& node_id, Json* id);
+  std::string Open(const Json& id, const std::string& method, const Reply& to);
+  // The client's id of the call with this id for the node and where its answer goes; false when it is not open.
+  bool Close(const std::string& node_id, Json* id, Reply* to);
 
   BridgeConfig config_;
   bool connected_ = false;
+  int mqtt_version_ = 5;
   std::string platform_;
+  // current_state and current_sub_state of the last robot_state, for refused requests.
+  std::string state_;
+  std::string sub_state_;
   MethodTable methods_;
   std::map<std::string, LocalMethod> local_;
   EventSink sink_;
@@ -139,11 +197,13 @@ class BridgeCore {
   std::vector<std::string> kept_order_;
   std::map<std::string, std::string> kept_;
   std::optional<std::string> booted_;
-  // The calls at the nodes by their number: the client's id, the method and since when; the node gets tag_ + number.
+  // The calls at the nodes by their number: the client's id, the method, since when and where the answer goes; the
+  // node gets tag_ + number.
   struct OpenCall {
     Json id;
     std::string method;
     double since = 0;
+    Reply to;
   };
   std::map<uint64_t, OpenCall> open_;
   std::string tag_;

@@ -219,7 +219,8 @@ TEST_F(Core, LocalMethods) {
             R"({"jsonrpc":"2.0","result":"pong","id":null})");
   const Json info = Call(core_, "system.info", Json{{"x", 1}})["result"];
   EXPECT_EQ(info.dump(), R"({"name":"mowbite-os","version":"1.2.3","platform":"","schema":)" +
-                             std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) + "}");
+                             std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) +
+                             R"(,"mqtt":5})");
   core_.OnPlatform("airseekers_tron");
   EXPECT_EQ(Call(core_, "system.info")["result"]["platform"], "airseekers_tron");
   EXPECT_EQ(Call(core_, "rpc.methods", Json::array())["result"],
@@ -391,6 +392,208 @@ TEST(BridgeCoreCalls, OpenCallsWaitAtMostAndAreBounded) {
   out = core.Take();
   ASSERT_EQ(out.mqtt.size(), 1u);
   EXPECT_EQ(Json::parse(out.mqtt[0].payload)["id"], 1000 + static_cast<int>(kMaxOpenCalls) - 1);
+}
+
+// AS4: only rpc/response/<token> with a token of 1 to 64 of [A-Za-z0-9._-].
+TEST(ResponseTopic, OnlyAPlainTokenUnderRpcResponse) {
+  for (const std::string& topic : std::vector<std::string>{"rpc/response/a", "rpc/response/mowbite-app_1.2",
+                                                           "rpc/response/" + std::string(64, 'Z')}) {
+    EXPECT_TRUE(ValidResponseTopic(topic)) << topic;
+  }
+  for (const std::string& topic : std::vector<std::string>{
+           "", "rpc/response", "rpc/response/", "rpc/response/" + std::string(65, 'a'), "rpc/response/a/b",
+        "rpc/response/+", "rpc/response/#", "rpc/response/$x", "rpc/response/a b", "rpc/response/\xc3\xa4",
+        "map/json", "robot_state/json", "rpc/responsex/a", "/rpc/response/a", std::string("rpc/response/a\0b", 16)}) {
+    EXPECT_FALSE(ValidResponseTopic(topic)) << topic;
+  }
+}
+
+namespace {
+
+ResponseRoute To(const std::string& topic, std::optional<std::string> correlation = std::nullopt) {
+  return {topic, std::move(correlation)};
+}
+
+}  // namespace
+
+// AS4: an answer goes only to the response topic of its request, QoS 0, not retained, the correlation data unchanged.
+TEST_F(Core, AnswersGoToTheResponseTopicWithTheCorrelation) {
+  const std::string correlation("c\0\xff" "1", 4);
+  core_.OnMqtt("rpc/request", R"({"jsonrpc":"2.0","method":"rpc.ping","id":"1"})", false,
+               To("rpc/response/app-1", correlation));
+  core_.OnMqtt("rpc/request", R"({"jsonrpc":"2.0","method":"rpc.ping","id":"2"})", false, To("rpc/response/ha"));
+  core_.OnMqtt("rpc/request", R"({"jsonrpc":"2.0","method":"rpc.ping","id":"3"})", false);
+  // Correlation without a response topic: as over 3.1.1.
+  core_.OnMqtt("rpc/request", R"({"jsonrpc":"2.0","method":"rpc.ping","id":"4"})", false, {std::nullopt, "x"});
+  const Outbox out = core_.Take();
+  ASSERT_EQ(out.mqtt.size(), 4u);
+  EXPECT_EQ(out.mqtt[0].topic, "rpc/response/app-1");
+  EXPECT_EQ(out.mqtt[0].correlation, correlation);
+  EXPECT_EQ(out.mqtt[0].payload, R"({"jsonrpc":"2.0","result":"pong","id":"1"})");
+  EXPECT_EQ(out.mqtt[1].topic, "rpc/response/ha");
+  EXPECT_EQ(out.mqtt[1].correlation, std::nullopt);
+  for (int i : {2, 3}) {
+    EXPECT_EQ(out.mqtt[i].topic, "rpc/response");
+    EXPECT_EQ(out.mqtt[i].correlation, std::nullopt);
+  }
+  for (const auto& m : out.mqtt) {
+    EXPECT_EQ(m.qos, 0);
+    EXPECT_FALSE(m.retain);
+  }
+}
+
+// AS4: an invalid response topic is refused on rpc/response with REQUEST_REFUSED and nothing is done.
+TEST_F(Core, AnInvalidResponseTopicIsRefusedAndNothingDone) {
+  core_.OnRpcMethods("mowbite_logic", {"mowing.start"});
+  RobotStateView state;
+  state.current_state = "IDLE";
+  core_.OnRobotState(state);
+  core_.Take();
+  for (const std::string topic : {"map/json", "robot_state/json", "rpc/response/+", "rpc/response", ""}) {
+    for (const char* method : {"mowing.start", "rpc.ping", "nothing.here"}) {
+      core_.OnMqtt("rpc/request", Json{{"jsonrpc", "2.0"}, {"method", method}, {"id", 5}}.dump(), false,
+                   To(topic, "c"));
+      const Outbox out = core_.Take();
+      EXPECT_TRUE(out.requests.empty()) << topic << " " << method;
+      EXPECT_TRUE(out.actions.empty());
+      ASSERT_EQ(out.mqtt.size(), 1u) << topic << " " << method;
+      EXPECT_EQ(out.mqtt[0].topic, "rpc/response");
+      EXPECT_EQ(out.mqtt[0].correlation, std::nullopt);
+      const Json answer = Json::parse(out.mqtt[0].payload);
+      EXPECT_EQ(answer["id"], 5);
+      EXPECT_EQ(answer["error"]["code"], kInvalidRequest);
+      const Json& data = answer["error"]["data"];
+      EXPECT_EQ(data["event"], "REQUEST_REFUSED");
+      EXPECT_EQ(data["reason"], "RESPONSE_TOPIC");
+      EXPECT_EQ(data["severity"], "error");
+      EXPECT_EQ(data["resume"], "user");
+      EXPECT_EQ(data["state"], "IDLE");
+      EXPECT_EQ(data["sub_state"], "");
+      for (const auto& field : mowbite_api::FindReasonGroup("REQUEST_REFUSED")->fields) {
+        EXPECT_TRUE(!field.required || data.contains(field.name)) << field.name;
+      }
+    }
+  }
+  // A request that cannot be read is refused the same; meta.* stays unanswered.
+  core_.OnMqtt("rpc/request", "{broken", false, To("map/json"));
+  core_.OnMqtt("rpc/request", R"({"jsonrpc":"2.0","method":"meta.x","id":1})", false, To("map/json"));
+  const Outbox out = core_.Take();
+  ASSERT_EQ(out.mqtt.size(), 1u);
+  EXPECT_EQ(Json::parse(out.mqtt[0].payload)["error"]["data"]["reason"], "RESPONSE_TOPIC");
+  EXPECT_EQ(Json::parse(out.mqtt[0].payload)["id"], nullptr);
+}
+
+// AS4: correlation data up to 1 KB comes back, longer is refused to the response topic.
+TEST_F(Core, CorrelationDataUpToOneKilobyte) {
+  core_.OnRpcMethods("mowbite_logic", {"x"});
+  core_.Take();
+  const std::string most(kMaxCorrelationBytes, 'k');
+  core_.OnMqtt("rpc/request", R"({"jsonrpc":"2.0","method":"rpc.ping","id":1})", false, To("rpc/response/a", most));
+  core_.OnMqtt("rpc/request", R"({"jsonrpc":"2.0","method":"x","id":2})", false, To("rpc/response/a", most + "k"));
+  const Outbox out = core_.Take();
+  EXPECT_TRUE(out.requests.empty());
+  ASSERT_EQ(out.mqtt.size(), 2u);
+  EXPECT_EQ(out.mqtt[0].correlation, most);
+  EXPECT_EQ(out.mqtt[1].topic, "rpc/response/a");
+  EXPECT_EQ(out.mqtt[1].correlation, std::nullopt);
+  const Json data = Json::parse(out.mqtt[1].payload)["error"]["data"];
+  EXPECT_EQ(data["reason"], "CORRELATION_DATA");
+  EXPECT_EQ(data["limit"], kMaxCorrelationBytes);
+  EXPECT_EQ(data["severity"], "error");
+}
+
+// AS4: the answers of the nodes find their way by the bridge's own ids, with response topic and correlation of each
+// open call; a client on 3.1.1 with the same id gets its own on rpc/response.
+TEST_F(Core, AnswersOfTheNodesGoWhereTheirRequestsWanted) {
+  core_.OnRpcMethods("mowbite_logic", {"x"});
+  core_.Take();
+  const auto forward = [this](const Json& id, const ResponseRoute& route) {
+    Json request = {{"jsonrpc", "2.0"}, {"method", "x"}};
+    if (!id.is_null()) request["id"] = id;
+    core_.OnMqtt("rpc/request", request.dump(), false, route);
+    const Outbox out = core_.Take();
+    EXPECT_TRUE(out.mqtt.empty());
+    EXPECT_EQ(out.requests.size(), 1u);
+    return out.requests.empty() ? std::string("?") : out.requests[0].id;
+  };
+  const std::string app = forward("1", To("rpc/response/app", "A"));
+  const std::string ha = forward("1", To("rpc/response/ha"));
+  const std::string old = forward("1", {});
+  // Without an id the node gets one all the same, so the answer can go to the response topic.
+  const std::string quiet = forward(nullptr, To("rpc/response/app", "Q"));
+  EXPECT_FALSE(quiet.empty());
+  EXPECT_EQ(forward(nullptr, {}), "");
+  core_.OnRpcResponse(old, "3");
+  core_.OnRpcError(ha, kInvalidParams, "bad", "");
+  core_.OnRpcResponse(app, "1");
+  core_.OnRpcResponse(quiet, "4");
+  const Outbox out = core_.Take();
+  ASSERT_EQ(out.mqtt.size(), 4u);
+  EXPECT_EQ(out.mqtt[0].topic, "rpc/response");
+  EXPECT_EQ(out.mqtt[0].correlation, std::nullopt);
+  EXPECT_EQ(out.mqtt[0].payload, R"({"jsonrpc":"2.0","result":3,"id":"1"})");
+  EXPECT_EQ(out.mqtt[1].topic, "rpc/response/ha");
+  EXPECT_EQ(Json::parse(out.mqtt[1].payload)["error"]["code"], kInvalidParams);
+  EXPECT_EQ(out.mqtt[2].topic, "rpc/response/app");
+  EXPECT_EQ(out.mqtt[2].correlation, "A");
+  EXPECT_EQ(out.mqtt[2].payload, R"({"jsonrpc":"2.0","result":1,"id":"1"})");
+  EXPECT_EQ(out.mqtt[3].topic, "rpc/response/app");
+  EXPECT_EQ(out.mqtt[3].correlation, "Q");
+  EXPECT_EQ(out.mqtt[3].payload, R"({"jsonrpc":"2.0","result":4,"id":null})");
+  // Errors before a node: an id too long goes to the response topic too.
+  core_.OnMqtt("rpc/request",
+               Json{{"jsonrpc", "2.0"}, {"method", "x"}, {"id", std::string(kMaxIdBytes, 'i')}}.dump(), false,
+               To("rpc/response/app", "L"));
+  core_.OnMqtt("rpc/request", "{broken", false, To("rpc/response/app", "P"));
+  const Outbox errors = core_.Take();
+  ASSERT_EQ(errors.mqtt.size(), 2u);
+  for (const auto& m : errors.mqtt) EXPECT_EQ(m.topic, "rpc/response/app");
+  EXPECT_EQ(Json::parse(errors.mqtt[0].payload)["error"]["code"], kInvalidRequest);
+  EXPECT_EQ(errors.mqtt[1].correlation, "P");
+  EXPECT_EQ(Json::parse(errors.mqtt[1].payload)["error"]["code"], kParseError);
+}
+
+// AS4: system.info.mqtt is the version of the last connect.
+TEST(BridgeCoreConnection, SystemInfoTellsTheMqttVersion) {
+  BridgeCore core({});
+  core.Connected(5);
+  EXPECT_EQ(Call(core, "system.info")["result"]["mqtt"], 5);
+  core.ConnectionLost();
+  core.Connected(3);
+  EXPECT_EQ(Call(core, "system.info")["result"]["mqtt"], 3);
+}
+
+// AS4: a refusal of the protocol switches to 3.1.1 at once, a dropped connect the second time in a row, network
+// errors never; once on 3.1.1 it stays.
+TEST(MqttVersionChoice, FallsBackOnlyWhenTheBrokerRefusesTheProtocol) {
+  using F = MqttVersion::Failure;
+  EXPECT_EQ(MqttVersion::Classify(1, true), F::kRefused);
+  EXPECT_EQ(MqttVersion::Classify(0x84, false), F::kRefused);
+  EXPECT_EQ(MqttVersion::Classify(-1, true), F::kDropped);
+  EXPECT_EQ(MqttVersion::Classify(-1, false), F::kNetwork);
+  for (int code : {2, 3, 4, 5, 0x80, 0x86, 0x87, 0x88, -3}) EXPECT_EQ(MqttVersion::Classify(code, true), F::kNetwork);
+
+  MqttVersion refused;
+  EXPECT_EQ(refused.version(), 5);
+  EXPECT_TRUE(refused.OnFailure(F::kRefused));
+  EXPECT_EQ(refused.version(), 3);
+  EXPECT_FALSE(refused.OnFailure(F::kRefused));
+  refused.OnConnected();
+  EXPECT_EQ(refused.version(), 3);
+
+  MqttVersion dropped;
+  EXPECT_FALSE(dropped.OnFailure(F::kDropped));
+  EXPECT_FALSE(dropped.OnFailure(F::kNetwork));
+  EXPECT_FALSE(dropped.OnFailure(F::kDropped));
+  dropped.OnConnected();
+  EXPECT_FALSE(dropped.OnFailure(F::kDropped));
+  EXPECT_EQ(dropped.version(), 5);
+  EXPECT_TRUE(dropped.OnFailure(F::kDropped));
+  EXPECT_EQ(dropped.version(), 3);
+
+  MqttVersion network;
+  for (int i = 0; i < 10; i++) EXPECT_FALSE(network.OnFailure(F::kNetwork));
+  EXPECT_EQ(network.version(), 5);
 }
 
 // Events against the catalog: each problem once as an ERROR, the event goes out all the same.

@@ -14,6 +14,7 @@ RpcReading Refuse(const Json& id, int code, const std::string& message) {
   RpcReading reading;
   reading.kind = RpcReading::Kind::kError;
   reading.reply = ErrorReply(id, code, message);
+  reading.call.id = id;
   return reading;
 }
 

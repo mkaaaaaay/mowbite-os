@@ -13,16 +13,56 @@ namespace {
 
 constexpr char kRequestTopic[] = "rpc/request";
 constexpr char kResponseTopic[] = "rpc/response";
+constexpr char kRequestRefused[] = "REQUEST_REFUSED";
+constexpr std::size_t kMaxTokenBytes = 64;
+// Return codes of a failed connect of the Paho client: its own failure, the CONNACK refusals of the protocol.
+constexpr int kClientFailure = -1;
+constexpr int kRefusedProtocol311 = 1;
+constexpr int kRefusedProtocol5 = 0x84;
 constexpr char kEventsTopic[] = "events/json";
 constexpr std::size_t kMaxDataDepth = 64;
 
 }  // namespace
 
+bool ValidResponseTopic(std::string_view topic) {
+  const std::string_view prefix = "rpc/response/";
+  if (topic.substr(0, prefix.size()) != prefix) return false;
+  const std::string_view token = topic.substr(prefix.size());
+  if (token.empty() || token.size() > kMaxTokenBytes) return false;
+  return std::all_of(token.begin(), token.end(), [](char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_' ||
+           c == '-';
+  });
+}
+
+MqttVersion::Failure MqttVersion::Classify(int return_code, bool broker_reachable) {
+  if (return_code == kRefusedProtocol311 || return_code == kRefusedProtocol5) return Failure::kRefused;
+  if (return_code == kClientFailure && broker_reachable) return Failure::kDropped;
+  return Failure::kNetwork;
+}
+
+bool MqttVersion::OnFailure(Failure failure) {
+  if (version_ != 5) return false;
+  if (failure == Failure::kNetwork) {
+    dropped_ = 0;
+    return false;
+  }
+  if (failure == Failure::kDropped && ++dropped_ < 2) return false;
+  version_ = 3;
+  return true;
+}
+
+void MqttVersion::OnConnected() {
+  dropped_ = 0;
+}
+
 BridgeCore::BridgeCore(BridgeConfig config)
     : config_(std::move(config)), params_(config_.params_json), tag_(RandomId(8) + "/") {
   local_["rpc.ping"] = [](const Json&) { return Json("pong"); };
   local_["rpc.methods"] = [this](const Json&) { return Json(methods_.All()); };
-  local_["system.info"] = [this](const Json&) { return SystemInfo(config_.software_version, platform_); };
+  local_["system.info"] = [this](const Json&) {
+    return SystemInfo(config_.software_version, platform_, mqtt_version_);
+  };
   // The catalog of the interface as JSON Schema; system.info.api tells whether a client knows it already.
   local_["system.api"] = [](const Json&) {
     return Json{{"api", mowbite_api::kApi}, {"json_schema", mowbite_api::Schema()}};
@@ -79,16 +119,17 @@ void BridgeCore::Stop(double t) {
   });
 }
 
-void BridgeCore::Connected() {
+void BridgeCore::Connected(int mqtt_version) {
   connected_ = true;
-  Log(kLogInfo, "MQTT connected");
+  mqtt_version_ = mqtt_version;
+  Log(kLogInfo, mqtt_version == 5 ? "MQTT connected" : "MQTT connected with 3.1.1");
   for (const auto& topic : kept_order_) {
     const auto text = kept_.find(topic);
-    if (text != kept_.end()) out_.mqtt.push_back({topic, text->second, true, 1});
+    if (text != kept_.end()) out_.mqtt.push_back({topic, text->second, true, 1, std::nullopt});
   }
   // BOOTED once per start, after the first connect.
   if (booted_) {
-    out_.mqtt.push_back({kEventsTopic, *booted_, false, 0});
+    out_.mqtt.push_back({kEventsTopic, *booted_, false, 0, std::nullopt});
     booted_.reset();
   }
 }
@@ -98,7 +139,7 @@ void BridgeCore::ConnectionLost() {
   connected_ = false;
 }
 
-void BridgeCore::OnMqtt(const std::string& topic, std::string_view payload, bool retained) {
+void BridgeCore::OnMqtt(const std::string& topic, std::string_view payload, bool retained, const ResponseRoute& route) {
   // A command the broker kept from earlier would act again at every connect.
   if (retained) return;
   Guard("MQTT input", [&] {
@@ -112,45 +153,86 @@ void BridgeCore::OnMqtt(const std::string& topic, std::string_view payload, bool
     } else if (topic == "teleop") {
       if (auto teleop = ReadTeleop(payload)) out_.teleop.push_back(*teleop);
     } else if (topic == kRequestTopic) {
-      const RpcReading reading = ReadRequest(payload);
-      if (reading.kind == RpcReading::Kind::kError) Send(kResponseTopic, reading.reply, false);
-      if (reading.kind == RpcReading::Kind::kCall) Answer(reading.call);
+      Request(payload, route);
     }
   });
 }
 
-void BridgeCore::Answer(const RpcCall& call) {
+void BridgeCore::Request(std::string_view payload, const ResponseRoute& route) {
+  const RpcReading reading = ReadRequest(payload);
+  // meta.* and ext.* stay unanswered, whatever their properties.
+  if (reading.kind == RpcReading::Kind::kSilent) return;
+  Reply to{kResponseTopic, std::nullopt};
+  if (route.topic) {
+    // Checked before anything else: no request puts an answer on map/json or robot_state/json.
+    if (!ValidResponseTopic(*route.topic)) {
+      Send(kResponseTopic,
+           RefuseRequest(reading.call.id, "RESPONSE_TOPIC",
+                         "The response topic is not rpc/response/<token> with a token of 1 to 64 of [A-Za-z0-9._-]"),
+           false);
+      return;
+    }
+    to.topic = *route.topic;
+    if (route.correlation && route.correlation->size() > kMaxCorrelationBytes) {
+      SendReply(to, RefuseRequest(reading.call.id, "CORRELATION_DATA",
+                                  "The correlation data is longer than " + std::to_string(kMaxCorrelationBytes) +
+                                      " bytes",
+                                  {{"limit", kMaxCorrelationBytes}}));
+      return;
+    }
+    to.correlation = route.correlation;
+  }
+  if (reading.kind == RpcReading::Kind::kError) {
+    SendReply(to, reading.reply);
+  } else {
+    Answer(reading.call, to);
+  }
+}
+
+void BridgeCore::Answer(const RpcCall& call, const Reply& to) {
   switch (methods_.Find(call.method)) {
     case Route::kLocal:
       try {
-        Send(kResponseTopic, ResultReply(call.id, local_.at(call.method)(call.params)), false);
+        SendReply(to, ResultReply(call.id, local_.at(call.method)(call.params)));
       } catch (const RpcFailure& e) {
-        Send(kResponseTopic, ErrorReply(call.id, e.code, e.what()), false);
+        SendReply(to, ErrorReply(call.id, e.code, e.what()));
       } catch (const std::invalid_argument& e) {
-        Send(kResponseTopic, ErrorReply(call.id, kInvalidParams, e.what()), false);
+        SendReply(to, ErrorReply(call.id, kInvalidParams, e.what()));
       } catch (const std::exception& e) {
-        Send(kResponseTopic, ErrorReply(call.id, kInternalError, e.what()), false);
+        SendReply(to, ErrorReply(call.id, kInternalError, e.what()));
       }
       return;
     case Route::kNode: {
-      // The node gets an id of the bridge, the answer goes out with the client's; without an id it gets none.
+      // The node gets an id of the bridge, the answer goes out with the client's. Without an id it gets none, unless
+      // the answer has a response topic to go to.
       if (call.id.dump().size() > kMaxIdBytes) {
-        Send(kResponseTopic,
-             ErrorReply(call.id, kInvalidRequest, "The id is longer than " + std::to_string(kMaxIdBytes) + " bytes"),
-             false);
+        SendReply(to, ErrorReply(call.id, kInvalidRequest,
+                                 "The id is longer than " + std::to_string(kMaxIdBytes) + " bytes"));
         return;
       }
-      const std::string id = call.id.is_null() ? "" : Open(call.id, call.method);
+      const bool open = !call.id.is_null() || to.topic != kResponseTopic;
+      const std::string id = open ? Open(call.id, call.method, to) : "";
       out_.requests.push_back({call.method, call.params.is_null() ? "" : call.params.dump(), id});
       return;
     }
     case Route::kUnknown:
-      Send(kResponseTopic, ErrorReply(call.id, kMethodNotFound, "Method \"" + call.method + "\" not found"), false);
+      SendReply(to, ErrorReply(call.id, kMethodNotFound, "Method \"" + call.method + "\" not found"));
       return;
   }
 }
 
+std::string BridgeCore::RefuseRequest(const Json& id, const std::string& reason, const std::string& message,
+                                      Json fields) {
+  const mowbite_api::Rating rating = mowbite_api::RateReason(kRequestRefused, reason);
+  Json data = {{"event", kRequestRefused}, {"state", state_}, {"sub_state", sub_state_}, {"reason", reason},
+               {"message", message},       {"severity", rating.severity}, {"resume", rating.resume}};
+  for (auto& [key, value] : fields.items()) data[key] = value;
+  return ErrorReply(id, kInvalidRequest, message, data);
+}
+
 void BridgeCore::OnRobotState(const RobotStateView& state) {
+  state_ = state.current_state;
+  sub_state_ = state.current_sub_state;
   Guard("robot state", [&] { Send("robot_state/json", RobotStateText(state), false); });
 }
 
@@ -217,7 +299,8 @@ void BridgeCore::OnRpcResponse(const std::string& id, std::string_view result) {
   if (id.rfind(kInternalCall, 0) == 0) return;
   Guard("rpc response", [&] {
     Json client_id;
-    if (Close(id, &client_id)) Send(kResponseTopic, ResultReplyFromText(client_id, result), false);
+    Reply to;
+    if (Close(id, &client_id, &to)) SendReply(to, ResultReplyFromText(client_id, result));
   });
 }
 
@@ -225,13 +308,14 @@ void BridgeCore::OnRpcError(const std::string& id, int code, std::string_view me
   if (id.rfind(kInternalCall, 0) == 0) return;
   Guard("rpc error", [&] {
     Json client_id;
-    if (!Close(id, &client_id)) return;
+    Reply to;
+    if (!Close(id, &client_id, &to)) return;
     Json details;
     if (!data.empty()) {
       details = NestingDepth(data) > kMaxDataDepth ? Json() : Json::parse(data.begin(), data.end(), nullptr, false);
       if (details.is_discarded() || details.is_null()) details = Json(CleanUtf8(data));
     }
-    Send(kResponseTopic, ErrorReply(client_id, code, message, details), false);
+    SendReply(to, ErrorReply(client_id, code, message, details));
   });
 }
 
@@ -250,7 +334,11 @@ Outbox BridgeCore::Take() {
 }
 
 void BridgeCore::Send(const std::string& topic, const std::string& payload, bool retain) {
-  if (connected_) out_.mqtt.push_back({topic, payload, retain, retain ? 1 : 0});
+  if (connected_) out_.mqtt.push_back({topic, payload, retain, retain ? 1 : 0, std::nullopt});
+}
+
+void BridgeCore::SendReply(const Reply& to, const std::string& payload) {
+  if (connected_) out_.mqtt.push_back({to.topic, payload, false, 0, to.correlation});
 }
 
 void BridgeCore::Keep(const std::string& topic, const std::string& payload) {
@@ -286,7 +374,7 @@ double BridgeCore::Now() const {
   return Seconds(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-std::string BridgeCore::Open(const Json& id, const std::string& method) {
+std::string BridgeCore::Open(const Json& id, const std::string& method, const Reply& to) {
   const double now = Now();
   while (!open_.empty() && now - open_.begin()->second.since > kCallWaitS) open_.erase(open_.begin());
   if (open_.size() >= kMaxOpenCalls) {
@@ -295,13 +383,14 @@ std::string BridgeCore::Open(const Json& id, const std::string& method) {
     open_.erase(open_.begin());
   }
   const uint64_t number = ++next_call_;
-  open_[number] = {id, method, now};
+  open_[number] = {id, method, now, to};
   return tag_ + std::to_string(number);
 }
 
-bool BridgeCore::Close(const std::string& node_id, Json* id) {
+bool BridgeCore::Close(const std::string& node_id, Json* id, Reply* to) {
   if (node_id.empty()) {
     *id = nullptr;
+    *to = {kResponseTopic, std::nullopt};
     return true;
   }
   // Not an id of this bridge: a call of a test or a tool straight over ROS, its answer is not for MQTT.
@@ -317,6 +406,7 @@ bool BridgeCore::Close(const std::string& node_id, Json* id) {
     return false;
   }
   *id = std::move(open->second.id);
+  *to = std::move(open->second.to);
   open_.erase(open);
   return true;
 }
