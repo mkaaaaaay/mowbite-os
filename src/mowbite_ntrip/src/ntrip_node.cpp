@@ -23,6 +23,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/int64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <thread>
 
@@ -111,6 +112,9 @@ class NtripNode : public rclcpp::Node {
         "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRpcRequest(*msg); });
     idle_sub_ = create_subscription<std_msgs::msg::Bool>(
         "logic/idle", LatchedQos(1), [this](std_msgs::msg::Bool::ConstSharedPtr msg) { idle_ = msg->data ? 1 : 0; });
+    // The hold of an update, from the logic: the access does not change while it lasts.
+    hold_sub_ = create_subscription<std_msgs::msg::Int64>(
+        "logic/hold", LatchedQos(1), [this](std_msgs::msg::Int64::ConstSharedPtr msg) { hold_until_ = msg->data; });
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_ntrip";
     methods.methods = AccessMethods(access_over_rpc_);
@@ -254,6 +258,12 @@ class NtripNode : public rclcpp::Node {
       AnswerError(request.id, RpcError::ERROR_METHOD_NOT_FOUND, "Method \"" + request.method + "\" not found");
       return;
     }
+    // A rollback of the update would drop the change without a word.
+    if (const int64_t until = hold_until_; until > 0) {
+      AnswerError(request.id, RpcError::ERROR_HOLD, "An update holds the mower. The NTRIP access changes after it",
+                  nlohmann::json{{"reason", "HOLD"}, {"until", until}}.dump());
+      return;
+    }
     // Like params.set: a new caster in the middle of a job would move or cut off the corrections the mower drives on.
     if (idle_ != 1) {
       AnswerError(request.id, RpcError::ERROR_INVALID_REQUEST,
@@ -302,11 +312,12 @@ class NtripNode : public rclcpp::Node {
     rpc_response_pub_->publish(msg);
   }
 
-  void AnswerError(const std::string& id, int16_t code, const std::string& message) {
+  void AnswerError(const std::string& id, int16_t code, const std::string& message, const std::string& data = "") {
     mowbite_msgs::msg::RpcError msg;
     msg.code = code;
     msg.message = message;
     msg.id = id;
+    msg.data = data;
     rpc_error_pub_->publish(msg);
   }
 
@@ -498,6 +509,8 @@ class NtripNode : public rclcpp::Node {
   bool access_over_rpc_ = false;
   // 1 while the logic is in IDLE, 0 otherwise, -1 until it said.
   std::atomic<int> idle_{-1};
+  // until of logic/hold in unix s, 0 without a hold.
+  std::atomic<int64_t> hold_until_{0};
   // An RPC changed the file: the loop reads it at once.
   std::atomic<bool> reload_now_{false};
   std::mutex mutex_;
@@ -517,6 +530,7 @@ class NtripNode : public rclcpp::Node {
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr gga_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr rpc_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr idle_sub_;
+  rclcpp::Subscription<std_msgs::msg::Int64>::SharedPtr hold_sub_;
   std::atomic<bool> running_{true};
   std::thread io_thread_;
 };

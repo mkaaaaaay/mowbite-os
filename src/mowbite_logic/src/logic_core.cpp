@@ -113,6 +113,7 @@ LogicCore::LogicCore(const LogicConfig& config) : config_(config), recorder_(Rec
 }
 
 void LogicCore::OnHardwareStatus(const HardwareSnapshot& hw) {
+  if (hw.hold != hw_.hold) actions_changed_ = true;
   hw_ = hw;
   recorder_.SetDockContact(DockContact());
   UpdateEmergency();
@@ -315,6 +316,12 @@ ActionResult LogicCore::OnAction(const std::string& action_id) {
   }
   if (action_id == kIdlePrefix + "/start_area_recording") {
     if (state_ != State::kIdle || emergency_) return ActionResult::kRejected;
+    if (Held()) {
+      json details = {{"action", "start_area_recording"}};
+      PutReason(&details, "RECORDING_REFUSED", HoldProblem());
+      AddEvent("RECORDING_REFUSED", std::move(details));
+      return ActionResult::kRejected;
+    }
     if (!map_writable_) {
       json details = {{"action", "start_area_recording"}};
       PutReason(&details, "RECORDING_REFUSED", map_reason_);
@@ -378,7 +385,8 @@ void LogicCore::OnCapabilities(bool safety_measured, bool charge_stop) {
 }
 
 Reason LogicCore::DriveProblem() const {
-  const Reason why = Busy();
+  Reason why = Busy();
+  if (why.empty()) why = HoldProblem();
   return why.empty() ? MoveProblem() : why;
 }
 
@@ -538,13 +546,13 @@ std::vector<ActionGroup> LogicCore::Actions() const {
   groups.push_back({kRootPrefix, {{"reset_emergency", "Reset Emergency", true}}});
   groups.push_back({kIdlePrefix,
                     {{"start_mowing", "Start Mowing", StartProblem().empty()},
-                     {"start_area_recording", "Start Area Recording", idle && !emergency_ && map_writable_},
+                     {"start_area_recording", "Start Area Recording", idle && !emergency_ && map_writable_ && !Held()},
                      {"reset_job", "Reset Job", idle && job_.Unfinished()}}});
   // Pause and continue take turns, like in OpenMower; continue waits for the emergency to be reset.
   const bool waits = (pause_ & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
   groups.push_back({kMowingPrefix,
                     {{"pause", "Pause Mowing", mowing && !waits},
-                     {"continue", "Continue Mowing", mowing && waits && !emergency_},
+                     {"continue", "Continue Mowing", mowing && waits && !emergency_ && !Held()},
                      {"abort_mowing", "Stop Mowing", mowing},
                      {"skip_area", "Skip Area", mowing},
                      {"skip_path", "Skip Path", mowing}}});
@@ -1019,6 +1027,7 @@ Reason LogicCore::ApproachProblem() const {
 
 Reason LogicCore::DockingProblem() const {
   Reason why = Busy();
+  if (why.empty()) why = HoldProblem();
   if (!why.empty()) return why;
   if (DockContact()) return Reason("ALREADY_THERE", "The mower is on the docking station already");
   why = Unsafe();
@@ -1260,7 +1269,8 @@ void LogicCore::EndDocking(const Reason& why) {
 }
 
 Reason LogicCore::StartProblem() const {
-  const Reason why = Busy();
+  Reason why = Busy();
+  if (why.empty()) why = HoldProblem();
   return why.empty() ? MowProblem() : why;
 }
 
@@ -1326,6 +1336,28 @@ bool LogicCore::Idle() const {
   return state_ == State::kIdle;
 }
 
+void LogicCore::SetHold(int64_t until) {
+  if (until == hold_until_) return;
+  hold_until_ = until;
+  actions_changed_ = true;
+}
+
+bool LogicCore::Held() const {
+  return hold_until_ > 0 || hw_.hold;
+}
+
+Reason LogicCore::HoldProblem() const {
+  if (hold_until_ > 0) {
+    return Reason("HOLD", "An update holds the mower: nothing starts until it is done").With("until", hold_until_);
+  }
+  if (hw_.hold) return Reason("HOLD", "The driver holds the mower for an update: nothing starts until it is done");
+  return {};
+}
+
+bool LogicCore::HoldAllowed() const {
+  return state_ == State::kIdle && dock_check_ == DockCheck::kNone;
+}
+
 void LogicCore::SetGpsSettings(double max_position_accuracy, double gps_wait_time, double gps_timeout) {
   config_.max_position_accuracy = max_position_accuracy;
   config_.gps_wait_time = gps_wait_time;
@@ -1352,6 +1384,10 @@ ActionResult LogicCore::OnMowingAction(const std::string& name) {
   if (name == "continue") {
     const int waiting = kPauseManual | kPauseEmergency | kPauseFault;
     if (emergency_ || (pause_ & waiting) == 0) return ActionResult::kRejected;
+    if (Held()) {
+      RefuseStart(HoldProblem());
+      return ActionResult::kRejected;
+    }
     // Without GPS it still waits for a good position.
     Unpause(waiting);
     return ActionResult::kDone;

@@ -42,6 +42,7 @@
 #include <mowbite_msgs/srv/set_dock.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mowbite_msgs/srv/set_heading.hpp>
+#include <mowbite_hold/hold.h>
 #include <map>
 #include <mowbite_planner_interfaces/srv/plan_coverage.hpp>
 #include <mowbite_planner_interfaces/srv/plan_transit.hpp>
@@ -53,6 +54,7 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/int64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
@@ -76,6 +78,8 @@ static_assert(static_cast<uint8_t>(SensorMeaning::kDistance) == SensorSpec::MEAN
 
 // S2 answers a release within 2 s (its own limit for the driver); later counts as no answer.
 constexpr double kReleaseTimeoutS = 3.0;
+// mowbite/hold goes out again this often while nothing changes.
+constexpr double kHoldMirrorS = 30.0;
 
 rclcpp::QoS LatchedQos(size_t depth) {
   return rclcpp::QoS(rclcpp::KeepLast(depth)).reliable().transient_local();
@@ -84,6 +88,11 @@ rclcpp::QoS LatchedQos(size_t depth) {
 double MonotonicSeconds() {
   using namespace std::chrono;
   return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+int64_t WallSeconds() {
+  using namespace std::chrono;
+  return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
 }
 
 // The text becomes the file whole or not at all: written next to it, synced, renamed over it, the folder synced.
@@ -250,6 +259,9 @@ class LogicNode : public rclcpp::Node {
     // The checkpoint of the mowing job and the settings of params.set; empty: none, a restart starts over with
     // tron.yaml.
     data_dir_ = declare_parameter("data_dir", std::string());
+    // system.hold of the updater; the drivers read the same file themselves.
+    hold_path_ = data_dir_.empty() ? "" : data_dir_ + "/hold.json";
+    RestoreHold();
     LoadLogicParams();
     LoadGeometryEntries();
     // The blade: a lease of blade_lease (s), renewed every blade_renew (s) while the logic wants it to turn.
@@ -286,6 +298,8 @@ class LogicNode : public rclcpp::Node {
         create_publisher<mowbite_msgs::msg::GpsLimits>("logic/gps_limits", rclcpp::QoS(1).reliable().transient_local());
     // Settings of other nodes (the NTRIP access) change only while this is true, like params.set.
     idle_pub_ = create_publisher<std_msgs::msg::Bool>("logic/idle", rclcpp::QoS(1).reliable().transient_local());
+    // The hold of an update for nodes that refuse changes of data in it (map, NTRIP access): until in unix s, 0 none.
+    hold_pub_ = create_publisher<std_msgs::msg::Int64>("logic/hold", LatchedQos(1));
     PublishLogicParams();
     PublishGeometry();
     // Releases go through mowbite_safety, which keeps the emergency while the mower is tilted.
@@ -320,7 +334,7 @@ class LogicNode : public rclcpp::Node {
         });
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_logic";
-    methods.methods = {"mowing.plan", "params.set", "robot.geometry.get", "robot.geometry.set"};
+    methods.methods = {"mowing.plan", "params.set", "robot.geometry.get", "robot.geometry.set", "system.hold"};
     // "Home" from IDLE, only where the OS docks (contacts at the back).
     if (core_.CanDock()) methods.methods.push_back("docking.start");
     rpc_methods_pub_->publish(methods);
@@ -437,6 +451,7 @@ class LogicNode : public rclcpp::Node {
     blade_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { UpdateBlade(); });
     PublishActionsIfChanged();
     PublishIdleIfChanged();
+    PublishHoldIfChanged();
   }
 
  private:
@@ -494,6 +509,7 @@ class LogicNode : public rclcpp::Node {
     hw.rain = msg.rain;
     hw.dock_contact = msg.dock_contact;
     hw.dock_contact_raw = msg.dock_contact_raw;
+    hw.hold = msg.hold;
     hw.battery_ok = msg.battery_source != mowbite_msgs::msg::HardwareStatus::BATTERY_SOURCE_NONE;
     hw.battery_voltage = msg.battery_voltage;
     hw.battery_current = msg.battery_current;
@@ -1183,9 +1199,11 @@ class LogicNode : public rclcpp::Node {
         charge_sent_.reset();
         core_.OnChargeOff(false, "no answer from hw/charge");
       }
+      ExpireHoldLocked(t);
       state = core_.RobotState();
     }
     Flush();
+    MirrorHold();
     mowbite_msgs::msg::RobotState msg;
     msg.current_state = state.state;
     msg.current_sub_state = state.sub_state;
@@ -1223,6 +1241,10 @@ class LogicNode : public rclcpp::Node {
     }
     if (request.method == "docking.start") {
       OnDockingStart(request);
+      return;
+    }
+    if (request.method == "system.hold") {
+      OnSystemHold(request);
       return;
     }
     if (request.method != "mowing.plan") return;
@@ -1276,6 +1298,10 @@ class LogicNode : public rclcpp::Node {
     ParamsResult result;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (core_.Held()) {
+        PublishHoldRefusal(request.id, "Settings change after it");
+        return;
+      }
       if (!core_.Idle()) {
         PublishRpcError(request.id, RpcError::ERROR_INVALID_REQUEST,
                         "Settings change only in IDLE, not while recording, driving or mowing");
@@ -1337,6 +1363,154 @@ class LogicNode : public rclcpp::Node {
                       data.dump(-1, ' ', false, json::error_handler_t::replace));
     }
     Flush();
+  }
+
+  // system.hold {"seconds": 0..1800} of the updater: granted only in IDLE with nothing on its way, else none; 0 lets go
+  // and a new call replaces the old one. The answer holds what the gate of the updater looks at.
+  void OnSystemHold(const mowbite_msgs::msg::RpcRequest& request) {
+    using mowbite_msgs::msg::RpcError;
+    const json params = request.params.empty() ? json() : json::parse(request.params, nullptr, false);
+    const auto seconds = params.is_object() && params.contains("seconds") ? params["seconds"] : json();
+    if (!seconds.is_number_integer() || seconds.get<int64_t>() < 0 ||
+        seconds.get<int64_t>() > mowbite_hold::kMaxHoldSeconds) {
+      PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS,
+                      "seconds: a whole number from 0 to " + std::to_string(mowbite_hold::kMaxHoldSeconds));
+      return;
+    }
+    const int64_t wanted = seconds.get<int64_t>();
+    std::string error;
+    json answer;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const double t = MonotonicSeconds();
+      const int64_t wall = WallSeconds();
+      if (wanted > 0 && core_.HoldAllowed()) {
+        const mowbite_hold::HoldRecord record{wall + wanted, wall};
+        if (hold_path_.empty() || mowbite_hold::WriteHoldFile(hold_path_, record, &error)) {
+          hold_.Start(record, t, wall);
+          core_.SetHold(record.until);
+        }
+      } else if (hold_path_.empty() || mowbite_hold::RemoveHoldFile(hold_path_, &error)) {
+        hold_.Clear();
+        core_.SetHold(0);
+      }
+      if (error.empty()) answer = HoldAnswerLocked();
+    }
+    if (!error.empty()) {
+      RCLCPP_ERROR(get_logger(), "system.hold %lld: %s", static_cast<long long>(wanted), error.c_str());
+      PublishRpcError(request.id, RpcError::ERROR_INTERNAL, "Cannot change the hold: " + error);
+    } else {
+      const int64_t until = answer["hold_until"].get<int64_t>();
+      if (until > 0) {
+        RCLCPP_INFO(get_logger(), "system.hold: held for %lld s until %lld (unix s), nothing starts",
+                    static_cast<long long>(wanted), static_cast<long long>(until));
+      } else if (wanted > 0) {
+        RCLCPP_WARN(get_logger(), "system.hold %lld: not granted, the mower is %s %s", static_cast<long long>(wanted),
+                    answer["state"].get<std::string>().c_str(), answer["sub_state"].get<std::string>().c_str());
+      } else {
+        RCLCPP_INFO(get_logger(), "system.hold 0: no hold");
+      }
+      mowbite_msgs::msg::RpcResponse msg;
+      msg.result = answer.dump();
+      msg.id = request.id;
+      rpc_response_pub_->publish(msg);
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      hold_mirror_due_ = true;
+    }
+    Flush();
+    MirrorHold();
+  }
+
+  // Called with the mutex held.
+  json HoldAnswerLocked() const {
+    const RobotStateData state = core_.RobotState();
+    return json{{"state", state.state},
+                {"is_charging", state.is_charging},
+                {"hold_until", HoldUntilLocked()},
+                {"sub_state", state.sub_state},
+                {"idle", core_.HoldAllowed()},
+                {"emergency_reason", state.emergency_reason}};
+  }
+
+  // unix s while the logic holds, else 0. Called with the mutex held.
+  int64_t HoldUntilLocked() const {
+    return core_.HoldUntil();
+  }
+
+  // A change of data in the hold: a rollback of the update would drop it without a word. Called with the mutex held.
+  void PublishHoldRefusal(const std::string& id, const std::string& what) {
+    const int64_t until = HoldUntilLocked();
+    PublishRpcError(id, mowbite_msgs::msg::RpcError::ERROR_HOLD, "An update holds the mower. " + what,
+                    json{{"reason", "HOLD"}, {"until", until}}.dump());
+  }
+
+  // A hold from before the restart stands for what is left of it, at most kMaxHoldSeconds from now; a file that cannot
+  // be read holds as long and is removed after it, like the drivers hold until it is gone.
+  void RestoreHold() {
+    if (hold_path_.empty()) return;
+    const mowbite_hold::HoldFile file = mowbite_hold::ReadHoldFile(hold_path_);
+    if (file.state == mowbite_hold::HoldFile::State::kMissing) return;
+    const double t = MonotonicSeconds();
+    const int64_t wall = WallSeconds();
+    if (file.state == mowbite_hold::HoldFile::State::kUnreadable) {
+      RCLCPP_ERROR(get_logger(), "%s: held for %lld s, then it is removed", file.error.c_str(),
+                   static_cast<long long>(mowbite_hold::kMaxHoldSeconds));
+      hold_.Start({wall + mowbite_hold::kMaxHoldSeconds, wall}, t, wall);
+    } else {
+      hold_.Start(file.record, t, wall);
+    }
+    if (!hold_.Active(t)) return;
+    core_.SetHold(hold_.record()->until);
+    RCLCPP_INFO(get_logger(), "Held for an update until %lld (unix s): nothing starts",
+                static_cast<long long>(hold_.record()->until));
+  }
+
+  // The hold ran out: S3 lets go and the file goes, again at the next tick if it cannot. Called with the mutex held.
+  void ExpireHoldLocked(double t) {
+    if (!hold_.record() || hold_.Active(t)) return;
+    if (core_.Held()) {
+      core_.SetHold(0);
+      hold_mirror_due_ = true;
+      RCLCPP_INFO(get_logger(), "Hold ended: its time ran out");
+    }
+    std::string error;
+    if (!hold_path_.empty() && !mowbite_hold::RemoveHoldFile(hold_path_, &error)) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 60000, "Hold: %s", error.c_str());
+      return;
+    }
+    hold_.Clear();
+  }
+
+  void PublishHoldIfChanged() {
+    std_msgs::msg::Int64 msg;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      msg.data = HoldUntilLocked();
+      if (published_hold_ == msg.data) return;
+      published_hold_ = msg.data;
+    }
+    hold_pub_->publish(msg);
+  }
+
+  // mowbite/hold for scheduler.sh, the planner, App and HA, the OS its only writer on its host: {"until"} retained while
+  // held, again every kHoldMirrorS, and empty once after it and after the start. It waits for the bridge.
+  void MirrorHold() {
+    if (publish_pub_->get_subscription_count() == 0) return;
+    mowbite_msgs::msg::MqttPublish msg;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const double t = MonotonicSeconds();
+      const int64_t until = HoldUntilLocked();
+      if (!hold_mirror_due_ && (until == 0 || t - hold_mirrored_s_ < kHoldMirrorS)) return;
+      hold_mirror_due_ = false;
+      hold_mirrored_s_ = t;
+      msg.payload = until > 0 ? json{{"until", until}}.dump() : "";
+    }
+    msg.topic = "mowbite/hold";
+    msg.retain = true;
+    publish_pub_->publish(msg);
   }
 
   // <data_dir>/params/mower_logic.json, written like the checkpoint.
@@ -1486,6 +1660,10 @@ class LogicNode : public rclcpp::Node {
     json answer;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (core_.Held()) {
+        PublishHoldRefusal(request.id, "The dimensions change after it");
+        return;
+      }
       if (!core_.Idle()) {
         PublishRpcError(request.id, RpcError::ERROR_INVALID_REQUEST,
                         "The dimensions change only in IDLE, not while recording, driving or mowing",
@@ -1913,6 +2091,7 @@ class LogicNode : public rclcpp::Node {
     }
     if (actions_changed) PublishActions();
     PublishIdleIfChanged();
+    PublishHoldIfChanged();
   }
 
   void PublishIdleIfChanged() {
@@ -2001,6 +2180,13 @@ class LogicNode : public rclcpp::Node {
 
   std::mutex mutex_;
   LogicCore core_;
+  // system.hold: <data_dir>/hold.json (empty without data_dir), its time on the monotonic clock, what logic/hold said
+  // last and when mowbite/hold went out.
+  std::string hold_path_;
+  mowbite_hold::HoldTimer hold_;
+  std::optional<int64_t> published_hold_;
+  bool hold_mirror_due_ = true;
+  double hold_mirrored_s_ = 0;
   Geometry geometry_;
   Drive drive_;
   JobPlan job_plan_;
@@ -2058,6 +2244,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr geometry_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::GpsLimits>::SharedPtr gps_limits_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr idle_pub_;
+  rclcpp::Publisher<std_msgs::msg::Int64>::SharedPtr hold_pub_;
   std::optional<bool> published_idle_;
   rclcpp::Publisher<mowbite_msgs::msg::DriveCommand>::SharedPtr drive_pub_;
   rclcpp::Client<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_client_;

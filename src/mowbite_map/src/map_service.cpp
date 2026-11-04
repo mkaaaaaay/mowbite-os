@@ -141,13 +141,22 @@ RpcOutcome MapService::AreaProperties() const {
   return outcome;
 }
 
+std::optional<RpcOutcome> MapService::HoldRefusal() const {
+  if (hold_until_ <= 0) return std::nullopt;
+  RpcOutcome outcome = Failure(kRpcHold, "An update holds the mower. The map changes after it");
+  outcome.data = json{{"reason", "HOLD"}, {"until", hold_until_}};
+  return outcome;
+}
+
 // params is [map], the same shape as map/json, like with OpenMower.
 RpcOutcome MapService::Replace(const json& params) {
+  if (auto held = HoldRefusal()) return *held;
   if (!params.is_array() || params.size() != 1) return Failure(kRpcInvalidParams, "Missing map parameter");
   return ReplaceMap(params[0]);
 }
 
 RpcOutcome MapService::ReplaceChecked(const std::string& map, const std::string& expected_sha256) {
+  if (auto held = HoldRefusal()) return *held;
   if (!expected_sha256.empty()) {
     if (!IsSha256Hex(expected_sha256)) return Failure(kRpcInvalidParams, "expected_sha256 is not 64 lower-case hex digits");
     const std::string current = Sha256Hex(text_);

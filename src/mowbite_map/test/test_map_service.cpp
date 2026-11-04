@@ -874,3 +874,43 @@ TEST(MapReplaceChecked, ReportsADiskThatCannotBeWritten) {
   EXPECT_EQ(answer.code, -32603);
   EXPECT_TRUE(service.map().Empty());
 }
+
+TEST(MapServiceHold, RefusesEveryReplaceAndChangesNothing) {
+  TempDir dir;
+  MapService service = Started(ConfigFor(dir));
+  ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
+  service.TakeChanged();
+  const std::string before = service.map_text();
+  const std::string read = mowbite_map::Sha256Hex(before);
+  service.SetHold(1800000900);
+  json other = AppMap();
+  other["areas"][0]["properties"]["name"] = "Back";
+  const auto app = service.Call("map.replace", json::array({other}));
+  ASSERT_TRUE(app.has_value());
+  EXPECT_FALSE(app->ok);
+  EXPECT_EQ(app->code, mowbite_map::kRpcHold);
+  EXPECT_EQ(app->code, -32004);
+  EXPECT_EQ(app->data, json::parse(R"({"reason": "HOLD", "until": 1800000900})"));
+  const auto planner = service.ReplaceChecked(other.dump(), read);
+  EXPECT_FALSE(planner.ok);
+  EXPECT_EQ(planner.code, -32004);
+  EXPECT_EQ(planner.data["reason"], "HOLD");
+  EXPECT_FALSE(service.TakeChanged());
+  EXPECT_EQ(service.map_text(), before);
+  EXPECT_EQ(ReadAll(dir.path() / "map.json"), before);
+  // Reading goes on.
+  EXPECT_TRUE(service.Call("map.area_properties", json())->ok);
+  // After the hold the change goes through.
+  service.SetHold(0);
+  EXPECT_TRUE(service.ReplaceChecked(other.dump(), read).ok);
+  EXPECT_TRUE(service.TakeChanged());
+}
+
+TEST(MapServiceHold, OtherErrorsCarryNoData) {
+  TempDir dir;
+  MapService service = Started(ConfigFor(dir));
+  const auto answer = service.Call("map.replace", json::array());
+  ASSERT_TRUE(answer.has_value());
+  EXPECT_EQ(answer->code, mowbite_map::kRpcInvalidParams);
+  EXPECT_TRUE(answer->data.is_null());
+}

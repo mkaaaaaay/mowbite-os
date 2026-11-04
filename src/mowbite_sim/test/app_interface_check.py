@@ -292,6 +292,12 @@ for method in ("map.replace", "mowing.plan"):
 if args.target == "mowbite-os":
     # "Home" from IDLE where the OS docks: the Tron and its simulation back onto the station.
     offers("docking.start")
+if args.target == "mowbite-os" and offers("system.hold"):
+    # Only the updater holds; a call out of range changes nothing, so it is checked here as well.
+    for bad in ({"seconds": 1801}, {"seconds": -1}, {"seconds": 1.5}, {"seconds": "60"}, {}, [60]):
+        r = rpc("system.hold", bad, "hold_bad")
+        check("system.hold refuses " + json.dumps(bad) + " -32602",
+              bool(r) and r.get("error", {}).get("code") == -32602, json.dumps(r and r.get("error")))
 if offers("events.history"):
     r = rpc("events.history", None, "2")
     types = [e.get("type") for e in (r or {}).get("result", [])]
@@ -501,6 +507,77 @@ if ntrip_write:
     check("ntrip.delete in IDLE", (r or {}).get("result") == {"configured": False}, json.dumps(r))
     off = wait_for(lambda: latest("sensors/os_ntrip_state/data") == b"off", 8)
     check("os_ntrip_state off after ntrip.delete", bool(off), str(latest("sensors/os_ntrip_state/data")))
+
+
+HOLD_ANSWER = {"state", "is_charging", "hold_until", "sub_state", "idle", "emergency_reason"}
+
+
+def hold_refused(r):
+    """-32004 with data {"reason": "HOLD", "until"}: no change of data while an update holds the mower."""
+    error = (r or {}).get("error") or {}
+    data = error.get("data") or {}
+    return error.get("code") == -32004 and data.get("reason") == "HOLD" and data.get("until") == hold_until
+
+
+if methods is not None and "system.hold" in methods:
+    # Updater contract 3.5: in IDLE the hold is granted, nothing starts and no data changes while it lasts, 0 lets go.
+    mark = len(msgs)
+    r = rpc("system.hold", {"seconds": 120}, "hold")
+    answer = (r or {}).get("result") or {}
+    hold_until = answer.get("hold_until")
+    check("system.hold in IDLE: hold_until about now + 120 and the state for the gate",
+          set(answer) == HOLD_ANSWER and answer.get("state") == "IDLE" and answer.get("idle") is True
+          and isinstance(hold_until, int) and abs(hold_until - (time.time() + 120)) < 5
+          and isinstance(answer.get("is_charging"), bool) and isinstance(answer.get("emergency_reason"), int),
+          json.dumps(r), point="3.5 system.hold")
+    mirrored = wait_for(lambda: latest("mowbite/hold"), 5)
+    check("mowbite/hold retained with until", bool(mirrored) and json.loads(mirrored) == {"until": hold_until}
+          and any(top == "mowbite/hold" and p for _, top, p, _ in msgs[mark:]), str(mirrored), point="3.5 mowbite/hold")
+    off = wait_for(lambda: enabled("mower_logic:idle/start_area_recording") == 0, 3)
+    check("start_area_recording and start_mowing off while held",
+          bool(off) and enabled("mower_logic:idle/start_mowing") == 0, str(latest("actions/json"))[:120])
+    for action, kind in (("mower_logic:idle/start_mowing", "MOWING_REFUSED"),
+                         ("mower_logic:idle/start_area_recording", "RECORDING_REFUSED")):
+        mark = len(msgs)
+        c.publish("action", action)
+        refused = wait_for(lambda: events_of(kind, mark), 3)
+        event = refused[-1] if refused else {}
+        check(kind + " HOLD with until", fixed_reason(event, "user") and event.get("reason") == "HOLD"
+              and event.get("until") == hold_until and event.get("severity") == "info", json.dumps(event),
+              point="3.5 " + kind + " HOLD")
+    check("still IDLE after the refused starts",
+          json.loads(latest("robot_state/json") or "{}").get("current_state") == "IDLE", "")
+    if "docking.start" in methods:
+        r = rpc("docking.start", None, "hold_dock")
+        data = ((r or {}).get("error") or {}).get("data") or {}
+        check("docking.start refused HOLD", data.get("reason") == "HOLD" and data.get("until") == hold_until,
+              json.dumps(r and r.get("error")))
+    if "params.set" in methods:
+        r = rpc("params.set", {"params": {"/mower_logic/gps_wait_time": 20}}, "hold_params")
+        check("params.set refused -32004 HOLD", hold_refused(r), json.dumps(r and r.get("error")))
+    if "robot.geometry.set" in methods:
+        version = (((rpc("robot.geometry.get", None, "hold_geo_get") or {}).get("result")) or {}).get("version")
+        r = rpc("robot.geometry.set", {"version": version, "settings": {"blade_ahead": 0.2}}, "hold_geo")
+        check("robot.geometry.set refused -32004 HOLD", hold_refused(r), json.dumps(r and r.get("error")))
+    map_before = latest("map/json")
+    r = rpc("map.replace", [json.loads(map_before or '{"areas": [], "docking_stations": []}')], "hold_map")
+    check("map.replace refused -32004 HOLD", hold_refused(r), json.dumps(r and r.get("error")))
+    if "ntrip.set" in methods:
+        r = rpc("ntrip.set", TEST_ACCESS, "hold_ntrip")
+        check("ntrip.set refused -32004 HOLD", hold_refused(r), json.dumps(r and r.get("error")))
+    r = rpc("system.hold", {"seconds": 300}, "hold_again")
+    again = ((r or {}).get("result") or {}).get("hold_until")
+    check("system.hold again replaces the hold", isinstance(again, int) and again >= hold_until + 170, json.dumps(r))
+    mark = len(msgs)
+    r = rpc("system.hold", {"seconds": 0}, "hold_off")
+    check("system.hold 0 lets go", ((r or {}).get("result") or {}).get("hold_until") == 0, json.dumps(r))
+    cleared = wait_for(lambda: any(top == "mowbite/hold" and p == b"" for _, top, p, _ in msgs[mark:]), 5)
+    check("mowbite/hold empty after the hold", bool(cleared), str(latest("mowbite/hold")), point="3.5 mowbite/hold")
+    back = wait_for(lambda: enabled("mower_logic:idle/start_area_recording") == 1, 3)
+    check("start_area_recording on again after the hold", bool(back), "")
+    r = rpc("params.set", {"params": {"/mower_logic/gps_wait_time": json.loads(latest("params/json"))[
+        "/mower_logic/gps_wait_time"]}}, "hold_params_after")
+    check("params.set after the hold", bool(r) and "result" in r, json.dumps(r))
 
 
 def planner_services():

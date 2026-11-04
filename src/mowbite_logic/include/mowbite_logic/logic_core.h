@@ -26,6 +26,8 @@ struct HardwareSnapshot {
   bool dock_contact = false;
   // The contact as the last report had it, not debounced: docking stops at the first one.
   bool dock_contact_raw = false;
+  // The driver holds motion and blade for an update (hold.json), also one it cannot read.
+  bool hold = false;
   bool battery_ok = false;
   float battery_voltage = 0;
   // Positive while discharging.
@@ -322,6 +324,19 @@ class LogicCore {
   bool Mowing() const;
   // IDLE without a drive: no recording, no job (also paused). Settings change only then.
   bool Idle() const;
+  // The hold of an update (system.hold), until in unix s, 0 for none. While it or the hold the driver reports in
+  // hw/status lasts, nothing starts the wheels or the blade: start_mowing, continue, start_area_recording, drives and
+  // docking.start are refused with the reason HOLD.
+  void SetHold(int64_t until);
+  // until of the logic's own hold, 0 without one.
+  int64_t HoldUntil() const {
+    return hold_until_;
+  }
+  bool Held() const;
+  // HOLD while held, with until when the logic holds, else empty.
+  Reason HoldProblem() const;
+  // A hold is granted only in IDLE with nothing on its way, not even the reference check on the docking station.
+  bool HoldAllowed() const;
   // GPS settings of params.set for the position, the recording, and mowing or docking on after a bad position.
   void SetGpsSettings(double max_position_accuracy, double gps_wait_time, double gps_timeout);
   // Called whenever the node has nothing on its way for the job; the step it returns is on its way until its result
@@ -524,6 +539,7 @@ class LogicCore {
   bool blades_running_ = false;
   bool last_start_ok_ = false;
   std::vector<std::string> notices_;
+  int64_t hold_until_ = 0;
 };
 
 }  // namespace mowbite_logic
