@@ -11,6 +11,7 @@ import glob
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -245,7 +246,11 @@ class TestRehearsalFast(unittest.TestCase):
         code, output = self.guard
         self.assertNotEqual(code, 0)
         self.assertIn("ABORT", output)
-        self.assertIn("a wheel at 0.65 m/s", output)
+        # The guard reads the driver's odometry, whole ticks: the fake's 0.65 m/s comes out at 0.64 to 0.67.
+        found = re.search(r"a wheel at (\d+\.\d+) m/s", output)
+        self.assertIsNotNone(found, output)
+        self.assertGreater(float(found.group(1)), m.FAST_ABORT_SPEED)
+        self.assertLessEqual(float(found.group(1)), 0.7)
         abort, = [e["t"] for e in entries("guard", "abort")]
         after = [e for e in entries("guard", "cmd") if e["t"] > abort]
         self.assertEqual([(e["v"], e["w"]) for e in after][:3], [(0.0, 0.0)] * 3)
