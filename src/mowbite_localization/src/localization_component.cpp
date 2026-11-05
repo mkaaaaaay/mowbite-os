@@ -20,9 +20,11 @@
 #include <std_srvs/srv/set_bool.hpp>
 #include <stdexcept>
 #include <string>
+#include <mowbite_journal/node_options.h>
 #include <tf2_ros/transform_broadcaster.h>
 
 #include "mowbite_localization/estimator.h"
+#include "mowbite_localization/estimator_journal.h"
 
 namespace mowbite_localization {
 
@@ -66,7 +68,11 @@ double YawOf(const geometry_msgs::msg::Quaternion& q) {
 class LocalizationNode : public rclcpp::Node {
  public:
   explicit LocalizationNode(const rclcpp::NodeOptions& options)
-      : Node("mowbite_localization", options), estimator_(ReadConfig()) {
+      : Node("mowbite_localization", options),
+        journal_(mowbite_journal::OpenFromParameters(*this)),
+        estimator_(journal_, ReadConfig()),
+        journal_watch_(journal_) {
+    journal_timer_ = create_wall_timer(std::chrono::seconds(10), [this] { journal_watch_.Check(get_logger()); });
     frame_id_ = declare_parameter("frame_id", "map");
     child_frame_id_ = declare_parameter("child_frame_id", "base_link");
     if (declare_parameter("publish_tf", true)) tf_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -81,14 +87,14 @@ class LocalizationNode : public rclcpp::Node {
     wheel_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
         "hw/wheel_odom", 10, [this](geometry_msgs::msg::TwistStamped::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          estimator_.AddWheels(MonotonicSeconds(), msg->twist.linear.x, msg->twist.angular.z);
+          estimator_.Call<&Estimator::AddWheels>(MonotonicSeconds(), msg->twist.linear.x, msg->twist.angular.z);
         });
     gps_sub_ = create_subscription<GnssMsg>(
         "gps/absolute_pose", 10, [this](GnssMsg::ConstSharedPtr msg) { OnGps(*msg); });
     limits_sub_ = create_subscription<mowbite_msgs::msg::GpsLimits>(
         "logic/gps_limits", LatchedQos(1), [this](mowbite_msgs::msg::GpsLimits::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          estimator_.SetGpsLimits(msg->max_position_accuracy, msg->gps_timeout);
+          estimator_.Call<&Estimator::SetGpsLimits>(msg->max_position_accuracy, msg->gps_timeout);
           RCLCPP_INFO(get_logger(), "GPS limits: accuracy %.3f m, timeout %.1f s", msg->max_position_accuracy,
                       msg->gps_timeout);
         });
@@ -115,14 +121,16 @@ class LocalizationNode : public rclcpp::Node {
         "localization/set_gps_state", [this](const std_srvs::srv::SetBool::Request::SharedPtr req,
                                              std_srvs::srv::SetBool::Response::SharedPtr res) {
           std::lock_guard<std::mutex> lock(mutex_);
-          estimator_.SetGpsEnabled(req->data);
+          estimator_.Call<&Estimator::SetGpsEnabled>(req->data);
           res->success = true;
           res->message = req->data ? "GPS on" : "GPS off";
           RCLCPP_INFO(get_logger(), "GPS %s", req->data ? "on" : "off");
         });
 
-    for (const auto& warning : estimator_.TakeGyroWarnings()) RCLCPP_WARN(get_logger(), "%s", warning.c_str());
-    if (!estimator_.calibrated()) {
+    for (const auto& warning : estimator_.Call<&Estimator::TakeGyroWarnings>()) {
+      RCLCPP_WARN(get_logger(), "%s", warning.c_str());
+    }
+    if (!estimator_.View().calibrated()) {
       RCLCPP_INFO(get_logger(), "Gyro calibration: keep the mower still for %.0f s",
                   get_parameter("gyro_calibration_time").as_double());
     }
@@ -157,11 +165,13 @@ class LocalizationNode : public rclcpp::Node {
   void OnImu(const GyroMsg& msg) {
     std::lock_guard<std::mutex> lock(mutex_);
     const double now = MonotonicSeconds();
-    const bool was_calibrated = estimator_.calibrated();
-    const bool moved = estimator_.AddImu(now, msg.angular_velocity.z);
-    for (const auto& warning : estimator_.TakeGyroWarnings()) RCLCPP_WARN(get_logger(), "%s", warning.c_str());
-    if (!was_calibrated && estimator_.calibrated()) {
-      RCLCPP_INFO(get_logger(), "Gyro offset: %.5f rad/s", estimator_.gyro_offset());
+    const bool was_calibrated = estimator_.View().calibrated();
+    const bool moved = estimator_.Call<&Estimator::AddImu>(now, msg.angular_velocity.z);
+    for (const auto& warning : estimator_.Call<&Estimator::TakeGyroWarnings>()) {
+      RCLCPP_WARN(get_logger(), "%s", warning.c_str());
+    }
+    if (!was_calibrated && estimator_.View().calibrated()) {
+      RCLCPP_INFO(get_logger(), "Gyro offset: %.5f rad/s", estimator_.View().gyro_offset());
     }
     if (moved) Publish(now);
   }
@@ -176,7 +186,7 @@ class LocalizationNode : public rclcpp::Node {
     fix.motion_valid = msg.velocity_valid;
     fix.motion_x = msg.velocity_east;
     fix.motion_y = msg.velocity_north;
-    const FixResult result = estimator_.AddFix(fix, MonotonicSeconds());
+    const FixResult result = estimator_.Call<&Estimator::AddFix>(fix, MonotonicSeconds());
     const GateConfig gate;
     if (result == FixResult::kRestarted && had_gps_) {
       RCLCPP_WARN(get_logger(), "GPS warmup again: waiting for %d fixes that agree", gate.warmup_fixes);
@@ -188,11 +198,11 @@ class LocalizationNode : public rclcpp::Node {
                   EstimatorConfig().contradiction_reset);
     } else if (result == FixResult::kInitialized) {
       had_gps_ = true;
-      const Pose2 pose = estimator_.pose();
+      const Pose2 pose = estimator_.View().pose();
       RCLCPP_INFO(get_logger(), "Position set onto GPS: %.3f, %.3f", pose.x, pose.y);
     }
-    if (estimator_.TakeAligned()) RCLCPP_INFO(get_logger(), "Heading aligned with the GPS course");
-    if (auto jump = estimator_.TakeJump()) PublishJump(*jump);
+    if (estimator_.Call<&Estimator::TakeAligned>()) RCLCPP_INFO(get_logger(), "Heading aligned with the GPS course");
+    if (auto jump = estimator_.Call<&Estimator::TakeJump>()) PublishJump(*jump);
   }
 
   void OnParams(const std::string& text) {
@@ -212,9 +222,9 @@ class LocalizationNode : public rclcpp::Node {
         ticks_per_m_ = params["ticks_per_m"].get<double>();
         ApplyWheelScale();
       }
-      known = estimator_.geometry_known();
-      changed = !known || estimator_.antenna_offset() != Eigen::Vector2d(x, y);
-      estimator_.SetAntennaOffset(x, y, MonotonicSeconds());
+      known = estimator_.View().geometry_known();
+      changed = !known || estimator_.View().antenna_offset() != Eigen::Vector2d(x, y);
+      estimator_.Call<&Estimator::SetAntennaOffset>(x, y, MonotonicSeconds());
     }
     if (changed) {
       RCLCPP_INFO(get_logger(), "Antenna offset: %.3f, %.3f%s", x, y, known ? " (the geometry changed)" : "");
@@ -229,18 +239,18 @@ class LocalizationNode : public rclcpp::Node {
 
   // Called with the mutex held.
   void ApplyWheelScale() {
-    const double before = estimator_.wheel_scale();
-    estimator_.SetWheelScale(driver_ticks_per_m_, ticks_per_m_);
-    if (estimator_.wheel_scale() != before) {
+    const double before = estimator_.View().wheel_scale();
+    estimator_.Call<&Estimator::SetWheelScale>(driver_ticks_per_m_, ticks_per_m_);
+    if (estimator_.View().wheel_scale() != before) {
       RCLCPP_INFO(get_logger(), "Wheel speeds count %.4f times (driver %.1f, geometry %.1f ticks per m)",
-                  estimator_.wheel_scale(), driver_ticks_per_m_, ticks_per_m_);
+                  estimator_.View().wheel_scale(), driver_ticks_per_m_, ticks_per_m_);
     }
   }
 
   void OnSetPose(const mowbite_msgs::srv::SetPose::Request& req) {
     std::lock_guard<std::mutex> lock(mutex_);
-    estimator_.SetPose(Pose2{req.pose.position.x, req.pose.position.y, YawOf(req.pose.orientation)});
-    const Pose2 pose = estimator_.pose();
+    estimator_.Call<&Estimator::SetPose>(Pose2{req.pose.position.x, req.pose.position.y, YawOf(req.pose.orientation)});
+    const Pose2 pose = estimator_.View().pose();
     RCLCPP_INFO(get_logger(), "Pose set to %.3f, %.3f, heading %.3f", pose.x, pose.y, pose.heading);
     Publish(MonotonicSeconds());
   }
@@ -248,7 +258,7 @@ class LocalizationNode : public rclcpp::Node {
   void OnSetHeading(const mowbite_msgs::srv::SetHeading::Request& req, mowbite_msgs::srv::SetHeading::Response& res) {
     std::lock_guard<std::mutex> lock(mutex_);
     const double now = MonotonicSeconds();
-    const std::optional<Pose2> pose = estimator_.SetHeading(req.heading, now);
+    const std::optional<Pose2> pose = estimator_.Call<&Estimator::SetHeading>(req.heading, now);
     if (!pose) {
       res.success = false;
       res.message = std::isfinite(req.heading) ? "no recent RTK fix taken by the localization"
@@ -258,14 +268,14 @@ class LocalizationNode : public rclcpp::Node {
     res.success = true;
     res.x = pose->x;
     res.y = pose->y;
-    res.position_accuracy = static_cast<float>(estimator_.PositionAccuracy(now));
+    res.position_accuracy = static_cast<float>(estimator_.View().PositionAccuracy(now));
     RCLCPP_INFO(get_logger(), "Heading set to %.3f, base_link at %.3f, %.3f", pose->heading, pose->x, pose->y);
     Publish(now);
   }
 
   void Publish(double now) {
-    const Pose2 pose = estimator_.pose();
-    const Covariance& p = estimator_.covariance();
+    const Pose2 pose = estimator_.View().pose();
+    const Covariance& p = estimator_.View().covariance();
     const rclcpp::Time stamp = this->now();
 
     PoseMsg msg;
@@ -274,11 +284,11 @@ class LocalizationNode : public rclcpp::Node {
     msg.x = pose.x;
     msg.y = pose.y;
     msg.heading = WrapAngle(pose.heading);
-    msg.heading_valid = estimator_.heading_valid();
-    msg.position_accuracy = static_cast<float>(estimator_.PositionAccuracy(now));
-    msg.heading_accuracy = static_cast<float>(estimator_.HeadingAccuracy());
-    msg.gnss_recent = estimator_.RecentGps(now);
-    msg.speed = estimator_.speed();
+    msg.heading_valid = estimator_.View().heading_valid();
+    msg.position_accuracy = static_cast<float>(estimator_.View().PositionAccuracy(now));
+    msg.heading_accuracy = static_cast<float>(estimator_.View().HeadingAccuracy());
+    msg.gnss_recent = estimator_.View().RecentGps(now);
+    msg.speed = estimator_.View().speed();
     for (int r = 0; r < 3; ++r) {
       for (int c = 0; c < 3; ++c) msg.covariance[3 * r + c] = p(r, c);
     }
@@ -296,7 +306,7 @@ class LocalizationNode : public rclcpp::Node {
       for (int c = 0; c < 3; ++c) odometry.pose.covariance[6 * index[r] + index[c]] = p(r, c);
     }
     odometry.twist.twist.linear.x = msg.speed;
-    odometry.twist.twist.angular.z = estimator_.turn_rate();
+    odometry.twist.twist.angular.z = estimator_.View().turn_rate();
     odometry_pub_->publish(odometry);
 
     if (tf_) {
@@ -326,7 +336,11 @@ class LocalizationNode : public rclcpp::Node {
   }
 
   std::mutex mutex_;
-  Estimator estimator_;
+  // Null without journal_dir.
+  mowbite_journal::Journal* journal_;
+  mowbite_journal::Journaled<Estimator> estimator_;
+  mowbite_journal::JournalWatch journal_watch_;
+  rclcpp::TimerBase::SharedPtr journal_timer_;
   bool had_gps_ = false;
   std::string frame_id_;
   std::string child_frame_id_;

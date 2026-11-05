@@ -39,8 +39,10 @@ def launch_setup(context):
     # the port in the node's own section of config would win.
     # The driver reads the hold of an update itself, also without the logic and right after its own restart.
     hold_file = os.path.join(data_dir, data_store.HOLD_FILE) if data_dir else ""
+    journal = stack.journal_dir(arg("journal_dir"), data_dir, logger)
     mcu = Node(package="tron_mcu", executable="tron_mcu_node", name="tron_mcu", namespace="/",
-               parameters=[config, extra, {"port": arg("mcu_port"), "hold_file": hold_file}], output="screen")
+               parameters=[config, extra, {"port": arg("mcu_port"), "hold_file": hold_file, "journal_dir": journal}],
+               output="screen")
     gnss = ComposableNode(
         package="tron_gnss", plugin="tron_gnss::GnssNode", name="tron_gnss",
         parameters=[config, extra, {"port": arg("gnss_port"), "datum_lat": float(arg("datum_lat")),
@@ -49,7 +51,7 @@ def launch_setup(context):
     imu = ComposableNode(
         package="tron_imu", plugin="tron_imu::ImuNode", name="tron_imu",
         parameters=[config, extra, {"port": arg("imu_port")}])
-    nodes = stack.components([config, extra], geometry, data_dir, arg("mqtt_host"), arg("mqtt_port"))
+    nodes = stack.components([config, extra], geometry, data_dir, arg("mqtt_host"), arg("mqtt_port"), journal)
     return [mcu, *stack.container_and_planner([gnss, imu, *nodes], data_dir, [config, extra], logger)]
 
 

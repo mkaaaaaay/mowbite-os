@@ -1,5 +1,6 @@
 # Unit tests natively on arm64 (the mowers) for every push that changes the code, on amd64 too for main;
-# the app interface check against the simulation for every branch push that changes the code, not for tags.
+# the app interface check against the simulation on both for every branch push that changes the code, not for tags,
+# and after it the journal of the simulation has to replay bit-identically.
 name: check
 
 on:
@@ -61,7 +62,11 @@ jobs:
 
   app-check:
     if: startsWith(github.ref, 'refs/heads/') || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -85,10 +90,34 @@ jobs:
             --write --sim-log /tmp/mowbite_sim_rx.jsonl' > app_check.json 2> app_check.txt && rc=0 || rc=$?
           cat app_check.txt
           {
-            echo "### app interface check"
+            echo "### app interface check ${{ matrix.arch }}"
             echo "- exit $rc, PASS $(grep -c '^PASS' app_check.txt), FAIL $(grep -c '^FAIL' app_check.txt), SKIP $(grep -c '^SKIP' app_check.txt)"
           } >> "$GITHUB_STEP_SUMMARY"
           exit $rc
+
+      # The running simulation: what was written up to now replays core by core.
+      - name: Replay of the journal
+        if: always()
+        run: |
+          docker exec omtron-mowbite_os-1 bash -c 'source /ws/install/setup.bash && \
+            mowbite_replay check /tmp/mowbite_sim_journal' > replay.txt 2>&1 && rc=0 || rc=$?
+          cat replay.txt
+          {
+            echo "### journal replay ${{ matrix.arch }}"
+            echo "- exit $rc"
+            sed 's/^/- /' replay.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+          docker cp omtron-mowbite_os-1:/tmp/mowbite_sim_journal journal || true
+          exit $rc
+
+      # For replays on another architecture; only simulated data, no garden.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: journal-${{ matrix.arch }}
+          path: journal
+          retention-days: 3
+          if-no-files-found: ignore
 
       - name: Logs of the simulation
         if: failure()

@@ -13,6 +13,7 @@
 #include <mowbite_msgs/srv/set_charge.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mowbite_hold/hold.h>
+#include <mowbite_journal/node_options.h>
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -22,6 +23,7 @@
 
 #include "tron_mcu/mcu_codec.h"
 #include "tron_mcu/mcu_control.h"
+#include "tron_mcu/mcu_journal.h"
 #include "tron_mcu/serial_port.h"
 
 namespace tron_mcu {
@@ -30,6 +32,7 @@ namespace {
 
 using mowbite_msgs::msg::HardwareStatus;
 using tron::Module;
+using C = tron::McuControl;
 
 // The core numbers its reasons like the contract.
 static_assert(tron::kReasonLatch == HardwareStatus::REASON_LATCH);
@@ -108,7 +111,16 @@ tron::WallClock LocalWallClock() {
 // Driver of the Tron behind the hardware contract hw/* of MowBite OS.
 class McuNode : public rclcpp::Node {
  public:
-  explicit McuNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_mcu", options), control_(LoadConfig()) {
+  explicit McuNode(const rclcpp::NodeOptions& options)
+      : rclcpp::Node("tron_mcu", options),
+        journal_(mowbite_journal::OpenFromParameters(*this)),
+        control_(journal_, LoadConfig()),
+        journal_watch_(journal_) {
+    // The bytes on the port as they were read and written, beside the calls of the core.
+    if (journal_) {
+      rx_stream_ = journal_->Define({{"name", "mcu.rx"}, {"kind", "raw"}});
+      tx_stream_ = journal_->Define({{"name", "mcu.tx"}, {"kind", "raw"}});
+    }
     port_name_ = declare_parameter("port", "/dev/ttyS9");
     blade_lease_max_s_ = get_parameter("blade_lease_max").as_double();
     imu_timeout_s_ = get_parameter("imu_timeout").as_double();
@@ -148,6 +160,7 @@ class McuNode : public rclcpp::Node {
         "hw/charge", [this](const mowbite_msgs::srv::SetCharge::Request::SharedPtr req,
                             mowbite_msgs::srv::SetCharge::Response::SharedPtr res) { OnCharge(*req, *res); });
     status_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { PublishStatus(); });
+    journal_timer_ = create_wall_timer(std::chrono::seconds(10), [this] { journal_watch_.Check(get_logger()); });
     LogTimeZone();
 
     io_thread_ = std::thread([this] { IoLoop(); });
@@ -240,7 +253,7 @@ class McuNode : public rclcpp::Node {
         std::vector<tron::SubPacket> packets;
         {
           std::lock_guard<std::mutex> lock(mutex_);
-          packets = control_.Tick(now, LocalWallClock());
+          packets = control_.Call<&C::Tick>(now, LocalWallClock());
         }
         Send(packets);
       }
@@ -255,7 +268,7 @@ class McuNode : public rclcpp::Node {
     const mowbite_hold::HoldView view = hold_watch_->Poll(MonotonicSeconds(), WallSeconds());
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      control_.SetHold(view.held);
+      control_.Call<&C::SetHold>(view.held);
     }
     if (view.held == hold_logged_.held && view.unreadable == hold_logged_.unreadable &&
         view.until == hold_logged_.until) {
@@ -275,7 +288,7 @@ class McuNode : public rclcpp::Node {
 
   bool BlockChanged() {
     std::lock_guard<std::mutex> lock(mutex_);
-    return BlockOf(control_.Status(MonotonicSeconds())) != published_block_;
+    return BlockOf(control_.View().Status(MonotonicSeconds())) != published_block_;
   }
 
   void TryOpen() {
@@ -292,14 +305,16 @@ class McuNode : public rclcpp::Node {
     }
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      control_.OnConnected(MonotonicSeconds());
+      control_.Call<&C::OnConnected>(MonotonicSeconds());
     }
     RCLCPP_INFO(get_logger(), "Opened %s", port_name_.c_str());
   }
 
   void Send(const std::vector<tron::SubPacket>& packets) {
     for (const auto& packet : packets) {
-      if (!port_.Write(tron::EncodeFrame({packet}))) {
+      const std::vector<uint8_t> frame = tron::EncodeFrame({packet});
+      if (journal_) journal_->Append(tx_stream_, mowbite_journal::kRawBytes, frame.data(), frame.size());
+      if (!port_.Write(frame)) {
         RCLCPP_ERROR(get_logger(), "Write error on %s, closing", port_name_.c_str());
         port_.Close();
         return;
@@ -313,7 +328,7 @@ class McuNode : public rclcpp::Node {
     std::vector<tron::SubPacket> packets;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (control_.Status(MonotonicSeconds()).moving) packets.push_back(*tron::SpeedPacket(0.0f, 0.0f));
+      if (control_.View().Status(MonotonicSeconds()).moving) packets.push_back(*tron::SpeedPacket(0.0f, 0.0f));
     }
     packets.push_back(tron::CutterPacket(tron::CutterCommand{}));
     Send(packets);
@@ -321,6 +336,7 @@ class McuNode : public rclcpp::Node {
   }
 
   void HandleBytes(const uint8_t* data, size_t length) {
+    if (journal_) journal_->Append(rx_stream_, mowbite_journal::kRawBytes, data, length);
     std::vector<tron::MeasuredSpeed> speeds;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -344,7 +360,7 @@ class McuNode : public rclcpp::Node {
     switch (static_cast<Module>(packet.module)) {
       case Module::kSensor:
         if (auto info = tron::DecodeSensorInfo(packet.payload)) {
-          control_.OnSensorInfo(*info, now);
+          control_.Call<&C::OnSensorInfo>(*info, now);
           if (info->cutter_size != sensor_.cutter_size) {
             RCLCPP_INFO(get_logger(), "Mowing deck: %u (1 small, 2 large)", info->cutter_size);
           }
@@ -353,7 +369,7 @@ class McuNode : public rclcpp::Node {
         break;
       case Module::kBattery:
         if (auto battery = tron::DecodeBattery(packet.payload)) {
-          control_.OnDockContactSample(battery->dock_ok == 1);
+          control_.Call<&C::OnDockContactSample>(battery->dock_ok == 1);
           battery_ = *battery;
           battery_s_ = now;
         }
@@ -362,7 +378,7 @@ class McuNode : public rclcpp::Node {
         if (auto motors = tron::DecodeMotors(packet.payload)) {
           motors_ = *motors;
           motors_s_ = now;
-          control_.OnBladeRpm(motors->cutter.rpm, now);
+          control_.Call<&C::OnBladeRpm>(motors->cutter.rpm, now);
         }
         break;
       case Module::kVersion:
@@ -396,7 +412,7 @@ class McuNode : public rclcpp::Node {
       chassis_version_ = chassis;
       PublishCapabilities();
     }
-    if (!control_.OnVersions(versions)) {
+    if (!control_.Call<&C::OnVersions>(versions)) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000,
                             "Unexpected MCU firmware: cutter %s, chassis %s; motion and blade stay blocked",
                             cutter.c_str(), chassis.c_str());
@@ -466,7 +482,7 @@ class McuNode : public rclcpp::Node {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       double now_s = MonotonicSeconds();
-      const auto state = control_.Status(now_s);
+      const auto state = control_.View().Status(now_s);
       published_block_ = BlockOf(state);
       msg.emergency = state.blocked;
       msg.emergency_latched = state.latched;
@@ -530,7 +546,8 @@ class McuNode : public rclcpp::Node {
 
   void OnCmdVel(const geometry_msgs::msg::Twist& msg) {
     std::lock_guard<std::mutex> lock(mutex_);
-    control_.OnCmdVel(static_cast<float>(msg.linear.x), static_cast<float>(msg.angular.z), MonotonicSeconds());
+    control_.Call<&C::OnCmdVel>(static_cast<float>(msg.linear.x), static_cast<float>(msg.angular.z),
+                                MonotonicSeconds());
   }
 
   void OnImu(const sensor_msgs::msg::Imu& msg) {
@@ -551,7 +568,7 @@ class McuNode : public rclcpp::Node {
         pitch * kRadToDeg + imu_pitch_offset_deg_, roll * kRadToDeg + imu_roll_offset_deg_, yaw * kRadToDeg,
         {a.x / kStandardGravity, a.y / kStandardGravity, a.z / kStandardGravity}, {0.0, 0.0, 0.0});
     std::lock_guard<std::mutex> lock(mutex_);
-    control_.OnImu(counts, MonotonicSeconds());
+    control_.Call<&C::OnImu>(counts, MonotonicSeconds());
     imu_seen_ = true;
   }
 
@@ -568,11 +585,11 @@ class McuNode : public rclcpp::Node {
         return;
       }
       RCLCPP_WARN(get_logger(), "Emergency latched by request (bits 0x%x): %s", bits, req.reason.c_str());
-      control_.LatchEmergency(bits);
+      control_.Call<&C::LatchEmergency>(bits);
       res.message = "latched";
     } else {
       RCLCPP_INFO(get_logger(), "Emergency release requested: %s", req.reason.c_str());
-      control_.ReleaseEmergency(MonotonicSeconds());
+      control_.Call<&C::ReleaseEmergency>(MonotonicSeconds());
       res.message = "release requested";
     }
     res.success = true;
@@ -585,7 +602,7 @@ class McuNode : public rclcpp::Node {
     request.height_mm = req.height_mm;
     request.lease_s = req.lease_s;
     std::lock_guard<std::mutex> lock(mutex_);
-    auto result = control_.SetBlade(request, MonotonicSeconds(), &res.emergency_reason);
+    auto result = control_.Call<&C::SetBlade>(request, MonotonicSeconds(), &res.emergency_reason);
     res.success = result == tron::BladeResult::kOk;
     res.message = tron::BladeResultText(result);
     if (!res.success) {
@@ -597,7 +614,7 @@ class McuNode : public rclcpp::Node {
   void OnCharge(const mowbite_msgs::srv::SetCharge::Request& req, mowbite_msgs::srv::SetCharge::Response& res) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      control_.SetCharging(req.on, MonotonicSeconds());
+      control_.Call<&C::SetCharging>(req.on, MonotonicSeconds());
     }
     if (req.on) {
       RCLCPP_INFO(get_logger(), "Charging allowed again: Charge 1 while there is dock contact");
@@ -612,7 +629,12 @@ class McuNode : public rclcpp::Node {
   // One PublishStatus at a time; taken before mutex_, never while mutex_ is held.
   std::mutex publish_mutex_;
   std::mutex mutex_;
-  tron::McuControl control_;
+  // Null without journal_dir.
+  mowbite_journal::Journal* journal_;
+  uint16_t rx_stream_ = 0;
+  uint16_t tx_stream_ = 0;
+  mowbite_journal::Journaled<tron::McuControl> control_;
+  mowbite_journal::JournalWatch journal_watch_;
   tron::FrameParser parser_;
   tron::SensorInfo sensor_;
   tron::BatteryInfo battery_;
@@ -656,6 +678,7 @@ class McuNode : public rclcpp::Node {
   rclcpp::Service<mowbite_msgs::srv::SetBlade>::SharedPtr blade_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetCharge>::SharedPtr charge_srv_;
   rclcpp::TimerBase::SharedPtr status_timer_;
+  rclcpp::TimerBase::SharedPtr journal_timer_;
 };
 
 }  // namespace tron_mcu

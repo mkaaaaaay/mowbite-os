@@ -85,6 +85,17 @@ def prepare_data_dir(data_dir, logger):
     return [OpaqueCoroutine(coroutine=halted)]
 
 
+# journal_dir as given, or empty with an error when it lies in data_dir: the backup of data_dir would take it along
+# (contract 3.5 (7)), and the journal has limits of its own.
+def journal_dir(path, data_dir, logger):
+    if path and data_dir:
+        root = os.path.realpath(data_dir)
+        if os.path.commonpath([os.path.realpath(path), root]) == root:
+            logger.error(f"journal_dir {path} lies in data_dir {data_dir}: no journal")
+            return ""
+    return path
+
+
 # The arguments every platform shares, after its own.
 def arguments():
     return [
@@ -96,18 +107,22 @@ def arguments():
         # Local time for the heartbeat of the MCU (and later the schedules); a TZ from the environment wins.
         DeclareLaunchArgument("tz", default_value=EnvironmentVariable("TZ", default_value="Europe/Berlin")),
         SetEnvironmentVariable("TZ", LaunchConfiguration("tz")),
+        # The journal of the cores (mowbite_journal), outside of data_dir; empty: none. Its limits are in the config.
+        DeclareLaunchArgument("journal_dir", default_value=EnvironmentVariable("MOWBITE_JOURNAL_DIR",
+                                                                               default_value="")),
     ]
 
 
 # The nodes above the hardware contract, the same on every platform; files are the parameter files of the platform in
 # their order (later ones change single values), geometry its dimensions.
-def components(files, geometry, data_dir, mqtt_host, mqtt_port):
+def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal):
+    journal_dir = {"journal_dir": journal}
     localization = ComposableNode(
         package="mowbite_localization", plugin="mowbite_localization::LocalizationNode", name="mowbite_localization",
-        parameters=[*files])
+        parameters=[*files, journal_dir])
     logic = ComposableNode(
         package="mowbite_logic", plugin="mowbite_logic::LogicNode", name="mowbite_logic",
-        parameters=[geometry, *files, {"data_dir": data_dir}])
+        parameters=[geometry, *files, {"data_dir": data_dir}, journal_dir])
     bridge = ComposableNode(
         package="mowbite_bridge", plugin="mowbite_bridge::BridgeNode", name="mowbite_bridge",
         parameters=[*files, {"mqtt_host": mqtt_host, "mqtt_port": int(mqtt_port), "data_dir": data_dir}])
@@ -124,7 +139,7 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port):
     # S2 between the logic and the driver, the only writer of hw/cmd_vel.
     safety = ComposableNode(
         package="mowbite_safety", plugin="mowbite_safety::SafetyNode", name="mowbite_safety",
-        parameters=[*files])
+        parameters=[*files, journal_dir])
     # The calibration drive: its program, recording and result; it moves only through the logic and S2.
     calibration = ComposableNode(
         package="mowbite_calibration", plugin="mowbite_calibration::CalibrationNode", name="mowbite_calibration",

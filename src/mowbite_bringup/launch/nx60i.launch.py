@@ -102,7 +102,8 @@ def launch_setup(context):
             logger.error(f"Cannot write {note}: {error}")
         return [TimerAction(period=DRIVER_RESTART_DELAY, actions=driver(restart + 1))]
 
-    nodes = stack.components(files, arg("geometry"), data_dir, arg("mqtt_host"), arg("mqtt_port"))
+    journal = stack.journal_dir(arg("journal_dir"), data_dir, logger)
+    nodes = stack.components(files, arg("geometry"), data_dir, arg("mqtt_host"), arg("mqtt_port"), journal)
     return [*driver(0), *stack.container_and_planner(nodes, data_dir, files, logger)]
 
 

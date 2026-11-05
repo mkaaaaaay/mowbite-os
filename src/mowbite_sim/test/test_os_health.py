@@ -1,6 +1,7 @@
 """mowbite_health (HEALTHCHECK of the image) against the whole stack of sim.launch.py on a private mosquitto: healthy
 once robot_state/json comes, unhealthy with the reason once the broker is gone. tron.launch.py has prepared data_dir
-for the image and holds its lock.
+for the image and holds its lock. With MOWBITE_JOURNAL_DIR the journal of the stack carries nothing of a decoy NTRIP
+access that stood in data_dir while it ran.
 
 Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite_sim/test/test_os_health.py
 """
@@ -15,6 +16,7 @@ import time
 import unittest
 
 import launch
+import launch_testing
 import launch_testing.actions
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch.actions import ExecuteProcess, IncludeLaunchDescription, TimerAction
@@ -28,6 +30,9 @@ HALT = os.path.join(WORK, "halt")
 HEALTH = os.path.join(get_package_prefix("mowbite_bridge"), "lib", "mowbite_bridge", "mowbite_health")
 # The launch runs in this process and reads it from here.
 os.environ["MOWBITE_HALT_FILE"] = HALT
+JOURNAL = os.environ.get("MOWBITE_JOURNAL_DIR", "")
+DECOY_USER = "decoy.user.of.the.journal"
+DECOY_PASSWORD = "decoy.pw#of.the.journal"
 
 
 def generate_test_description():
@@ -104,3 +109,23 @@ class TestHealth(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertTrue(line.startswith(f"MQTT_UNREACHABLE 127.0.0.1:{MQTT_PORT}: "), line)
         self.assertLess(took, 6.0)
+
+    def test_05_a_decoy_ntrip_access_is_read(self):
+        path = os.path.join(DATA, "ntrip.yaml")
+        with open(path, "w") as f:
+            f.write(f"host: 127.0.0.1\nport: 9\nmountpoint: DECOY\nuser: '{DECOY_USER}'\n"
+                    f"password: '{DECOY_PASSWORD}'\nversion: 2\n")
+        os.chmod(path, 0o600)
+        # mowbite_ntrip looks at the file every 5 s.
+        time.sleep(8.0)
+
+
+@launch_testing.post_shutdown_test()
+class TestJournal(unittest.TestCase):
+    def test_no_segment_carries_the_ntrip_access(self):
+        if not JOURNAL:
+            self.skipTest("no MOWBITE_JOURNAL_DIR")
+        raw = subprocess.run(["mowbite_replay", "cat", JOURNAL], capture_output=True, check=True, timeout=120).stdout
+        self.assertGreater(len(raw), 0)
+        self.assertNotIn(DECOY_PASSWORD.encode(), raw)
+        self.assertNotIn(DECOY_USER.encode(), raw)
