@@ -413,6 +413,8 @@ class LogicNode : public rclcpp::Node {
             std::lock_guard<std::mutex> lock(mutex_);
             core_.OnCapabilities(!msg->safety_measurement_date.empty(), msg->charge_stop);
             blade_lease_max_s_ = msg->blade_lease_max_s;
+            rain_sensor_ = msg->rain_sensor;
+            TellRainWithoutSensor();
           }
           Flush();
         });
@@ -1880,6 +1882,19 @@ class LogicNode : public rclcpp::Node {
                              static_cast<int>(logic_params_.Get("docking_retry_count")));
     core_.SetHomeSettings(static_cast<int>(logic_params_.Get("rain_mode")), logic_params_.Get("rain_check_seconds"),
                           logic_params_.Get("motor_hot_temperature"), logic_params_.Get("motor_cold_temperature"));
+    TellRainWithoutSensor();
+  }
+
+  // rain_mode other than 0 does nothing on a platform without a rain sensor: told once, again after it was 0.
+  void TellRainWithoutSensor() {
+    const int mode = static_cast<int>(logic_params_.Get("rain_mode"));
+    if (mode == 0 || !rain_sensor_ || *rain_sensor_) {
+      rain_told_ = false;
+      return;
+    }
+    if (rain_told_) return;
+    rain_told_ = true;
+    RCLCPP_WARN(get_logger(), "rain_mode %d has no effect: this platform has no rain sensor (hw/capabilities)", mode);
   }
 
   bool SaveLogicParams(const LogicParams& params, std::string& error) {
@@ -2538,6 +2553,9 @@ class LogicNode : public rclcpp::Node {
   double blade_lease_s_ = 1.0;
   double blade_renew_s_ = 0.5;
   float blade_lease_max_s_ = 0;
+  // rain_sensor of hw/capabilities, unknown until they came; whether the useless rain_mode was told.
+  std::optional<bool> rain_sensor_;
+  bool rain_told_ = false;
   bool blade_on_requested_ = false;
   double blade_sent_s_ = 0;
   uint64_t drive_seq_ = 0;
