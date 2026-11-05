@@ -21,6 +21,7 @@ const Ring kTree = {{4, 2}, {5, 2}, {5, 3}, {4, 3}};
 GuardInput Healthy() {
   GuardInput in;
   in.safety_measured = true;
+  in.driver_moves = true;
   in.hw_age = 0.1;
   in.emergency = false;
   in.pose_age = 0.05;
@@ -74,6 +75,9 @@ TEST(Guard, EachCheckStops) {
   };
   GuardInput in = Healthy();
   in.safety_measured = false;
+  expect(in, StopReason::kNotAllowed);
+  in = Healthy();
+  in.driver_moves = false;
   expect(in, StopReason::kNotAllowed);
   in = Healthy();
   in.hw_age = 1.5;

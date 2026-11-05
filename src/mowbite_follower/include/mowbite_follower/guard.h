@@ -68,6 +68,8 @@ struct GuardConfig {
 struct GuardInput {
   // hw/capabilities has a safety measurement of the platform.
   bool safety_measured = false;
+  // The driver's limits on hw/capabilities let the wheels move (both above 0).
+  bool driver_moves = false;
   double hw_age = 1e9;
   bool emergency = true;
   double pose_age = 1e9;

@@ -79,10 +79,10 @@ class FollowerNode : public rclcpp::Node {
     const double rate = declare_parameter("control_rate", 20.0);
 
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("follower/cmd_vel", 10);
-    // The speeds the planner plans with, latched: whoever starts later gets the last.
+    // The speeds the planner plans with, latched: whoever starts later gets the last. Sent once the driver's limits
+    // are known, so the planner never sees the follower's own ones above them.
     params_pub_ = create_publisher<std_msgs::msg::String>(
         "bridge/params", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
-    PublishParams();
     pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
         "localization/pose", 10, [this](mowbite_msgs::msg::RobotPose::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -103,10 +103,17 @@ class FollowerNode : public rclcpp::Node {
         [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
           safety_measured_ = !msg->safety_measurement_date.empty();
+          // A limit of 0 (max_duty 0) lets nothing move: the guard stops every path, the planner gets no speeds.
+          driver_moves_ = msg->max_linear_speed > 0 && msg->max_angular_speed > 0;
           // The tighter of the driver's limits and our own.
           if (msg->max_linear_speed > 0) driver_max_linear_ = msg->max_linear_speed;
           if (msg->max_angular_speed > 0) driver_max_angular_ = msg->max_angular_speed;
-          PublishParams();
+          if (driver_moves_) {
+            PublishParams();
+          } else {
+            RCLCPP_WARN(get_logger(), "The driver allows no speed (%.3f m/s, %.3f rad/s): no paths, no planner speeds",
+                        msg->max_linear_speed, msg->max_angular_speed);
+          }
         });
     // max_position_accuracy of tron.yaml holds until the logic tells its own (params.set).
     limits_sub_ = create_subscription<mowbite_msgs::msg::GpsLimits>(
@@ -207,6 +214,7 @@ class FollowerNode : public rclcpp::Node {
     }
     GuardInput in;
     in.safety_measured = safety_measured_;
+    in.driver_moves = driver_moves_;
     in.hw_age = hw_time_ ? now - *hw_time_ : 1e9;
     in.emergency = emergency_;
     in.pose_age = pose_time_ ? now - *pose_time_ : 1e9;
@@ -282,6 +290,7 @@ class FollowerNode : public rclcpp::Node {
   bool emergency_ = true;
   std::optional<double> hw_time_;
   bool safety_measured_ = false;
+  bool driver_moves_ = false;
   double driver_max_linear_ = 1e9;
   double driver_max_angular_ = 1e9;
 

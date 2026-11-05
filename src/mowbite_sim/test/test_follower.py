@@ -66,11 +66,11 @@ class World:
         threading.Thread(target=self._spin, daemon=True).start()
         threading.Thread(target=self._world, daemon=True).start()
 
-    def capabilities(self, date):
+    def capabilities(self, date, max_linear=0.3, max_angular=0.3):
         caps = HardwareCapabilities()
         caps.platform = "test"
-        caps.max_linear_speed = 0.3
-        caps.max_angular_speed = 0.3
+        caps.max_linear_speed = max_linear
+        caps.max_angular_speed = max_angular
         caps.safety_measurement_date = date
         self.caps_pub.publish(caps)
 
@@ -177,6 +177,15 @@ class TestFollower(unittest.TestCase):
         t = time.time()
         result = self.world.follow(line_poses(0, 0, 0, 2.0))
         self.assertEqual(result.reason, Result.REASON_NOT_ALLOWED, result.message)
+        self.assertTrue(all(v == 0 and w == 0 for _, v, w in self.world.commands_since(t)))
+
+    def test_01b_no_driving_when_the_driver_allows_no_speed(self):
+        self.world.capabilities("2026-01-01", max_linear=0.0, max_angular=0.0)
+        time.sleep(0.3)
+        t = time.time()
+        result = self.world.follow(line_poses(0, 0, 0, 2.0))
+        self.assertEqual(result.reason, Result.REASON_NOT_ALLOWED, result.message)
+        self.assertIn("no speed", result.message)
         self.assertTrue(all(v == 0 and w == 0 for _, v, w in self.world.commands_since(t)))
 
     def test_02_follows_a_line_and_stops_sending(self):
