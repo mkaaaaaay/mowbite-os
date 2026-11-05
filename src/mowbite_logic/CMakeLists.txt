@@ -21,6 +21,7 @@ find_package(std_srvs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(mowbite_hold REQUIRED)
 find_package(mowbite_api REQUIRED)
+find_package(mowbite_journal REQUIRED)
 
 # States, actions and sensors without ROS, testable on any machine.
 add_library(mowbite_logic_core STATIC src/reasons.cpp src/logic_core.cpp src/area_recorder.cpp src/mowing_plan.cpp src/mowing_job.cpp
@@ -33,7 +34,7 @@ set_target_properties(mowbite_logic_core PROPERTIES POSITION_INDEPENDENT_CODE ON
 
 add_library(mowbite_logic_component SHARED src/logic_node.cpp)
 target_link_libraries(mowbite_logic_component mowbite_logic_core mowbite_bridge::mowbite_bridge_core
-  mowbite_hold::mowbite_hold_core)
+  mowbite_hold::mowbite_hold_core mowbite_journal::mowbite_journal)
 ament_target_dependencies(mowbite_logic_component rclcpp rclcpp_components rclcpp_action geometry_msgs std_msgs
   std_srvs mowbite_msgs mowbite_planner_interfaces rcl_interfaces)
 rclcpp_components_register_node(mowbite_logic_component

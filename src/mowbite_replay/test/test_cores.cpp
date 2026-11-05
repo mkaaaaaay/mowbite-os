@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include <mowbite_localization/estimator_journal.h>
+#include <mowbite_logic/logic_journal.h>
 #include <mowbite_safety/safety_journal.h>
 #include <tron_mcu/mcu_journal.h>
 
@@ -151,6 +152,56 @@ TEST_F(CoreReplay, Estimator) {
   const auto report = Replay();
   EXPECT_EQ(report.outcome, CheckOutcome::kSame) << Text(report);
   EXPECT_NE(Text(report).find("localization: bit-identical, 2556 calls"), std::string::npos) << Text(report);
+}
+
+TEST_F(CoreReplay, LogicCore) {
+  using L = mowbite_logic::LogicCore;
+  using namespace mowbite_logic;
+  LogicConfig config;
+  config.id_seed = 42;
+  config.mow_with_blade = true;
+  {
+    Journaled<L> logic(journal_.get(), config, {{"api", 6}});
+    HardwareSnapshot hw;
+    hw.telemetry_ok = true;
+    hw.battery_ok = true;
+    hw.battery_voltage = 24.5f;
+    hw.battery_percentage = 80;
+    hw.blade.ok = hw.left.ok = hw.right.ok = true;
+    PoseSnapshot pose;
+    pose.x = 1;
+    pose.y = 2;
+    pose.position_accuracy = 0.02f;
+    pose.orientation_accuracy = 0.01f;
+    pose.orientation_valid = true;
+    logic.Call<&L::OnMapStatus>(MapDatum::kMatch, std::string());
+    logic.Call<&L::OnCapabilities>(true, true);
+    logic.Call<&L::OnMowMap>(std::vector<JobArea>{{"front", "Front", true}, {"bed", "Bed", false}}, Reason());
+    for (int i = 0; i < 100; ++i) {
+      const double now = 0.1 * i;
+      hw.time_s = now;
+      hw.emergency = i >= 40 && i < 45;
+      hw.emergency_reason = hw.emergency ? kEmergencyLift : 0;
+      logic.Call<&L::OnHardwareStatus>(hw);
+      pose.x = 1 + 0.01 * i;
+      logic.Call<&L::OnPose>(pose);
+      logic.Call<&L::OnTick>(now);
+      if (i == 10) logic.Call<&L::OnAction>(std::string("mower_logic:idle/start_mowing"));
+      if (i == 50) logic.Call<&L::Command>(std::string("emergency.reset"), json::object(), Reason());
+      if (i == 51) logic.Call<&L::OnReleaseAnswered>(now);
+      if (i == 60) logic.Call<&L::Command>(std::string("mowing.start"), json{{"areas", {"front"}}}, Reason());
+      logic.Call<&L::NextJobStep>(now);
+      logic.Call<&L::TakeEvents>();
+      logic.Call<&L::TakeActionsChanged>();
+      logic.Call<&L::TakeReasonChanges>();
+      logic.Call<&L::TakeStopRequest>();
+      logic.Call<&L::TakeNotices>();
+      logic.Call<&L::TakeCheckpoint>();
+    }
+  }
+  const auto report = Replay();
+  EXPECT_EQ(report.outcome, CheckOutcome::kSame) << Text(report);
+  EXPECT_NE(Text(report).find("logic: bit-identical"), std::string::npos) << Text(report);
 }
 
 }  // namespace

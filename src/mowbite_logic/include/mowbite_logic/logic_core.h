@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -126,6 +127,8 @@ struct LogicConfig {
   // DOCKED only with the charge confirmed on the contacts, CHARGING_LOST in IDLE on the station (G19).
   ChargeConfig charge;
   CalibrationConfig calibration;
+  // Seed of the job, session and event ids; the node draws it, the journal keeps it.
+  uint64_t id_seed = 0;
 };
 
 // Why the battery voltages of the config do not fit (critical < empty < full), empty when they do.
@@ -540,6 +543,8 @@ class LogicCore {
   void PullRecorder();
   // Returns the id of the event.
   std::string AddEvent(const std::string& type, json details);
+  // 32 letters and digits from id_seed: the ids of jobs, sessions and events.
+  std::string NewId();
   void UpdateEmergency();
   int EmergencyReason() const;
   static const char* StateName(State state);
@@ -626,6 +631,7 @@ class LogicCore {
   void EndCalibration(const std::optional<Reason>& failure, bool cancel);
 
   LogicConfig config_;
+  std::mt19937_64 ids_;
   HardwareSnapshot hw_;
   State state_ = State::kIdle;
   bool emergency_ = false;

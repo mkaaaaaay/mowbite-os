@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <random>
 
 #include "mowbite_api/catalog.h"
 
@@ -17,16 +16,6 @@ const std::string kRecordingPrefix = "mower_logic:area_recording";
 const std::string kMowingPrefix = "mower_logic:mowing";
 const std::string kUndockingPrefix = "mower_logic:undocking";
 const std::string kDockingPrefix = "mower_logic:docking";
-
-// 32 letters and digits, random: the ids of jobs and sessions.
-std::string NewId() {
-  static const char kAlphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-  thread_local std::mt19937 rng{std::random_device{}()};
-  std::uniform_int_distribution<size_t> pick(0, sizeof(kAlphabet) - 2);
-  std::string id(32, '0');
-  for (auto& c : id) c = kAlphabet[pick(rng)];
-  return id;
-}
 
 SensorDefinition Range(std::string id, std::string name, std::string unit, SensorMeaning meaning, double min,
                        double max) {
@@ -112,7 +101,11 @@ std::string BatteryVoltagesProblem(const LogicConfig& config) {
 }
 
 LogicCore::LogicCore(const LogicConfig& config)
-    : config_(config), recorder_(RecorderConfigOf(config)), charge_watch_(config.charge), home_(HomeRules()) {
+    : config_(config),
+      ids_(config.id_seed),
+      recorder_(RecorderConfigOf(config)),
+      charge_watch_(config.charge),
+      home_(HomeRules()) {
   // Without telemetry the mower counts as stopped until the driver reports.
   emergency_ = true;
 }
@@ -243,6 +236,14 @@ std::string LogicCore::AddEvent(const std::string& type, json details) {
   if (event_observer) event_observer(type, details);
   std::string id = NewId();
   events_.push_back({type, std::move(details), id});
+  return id;
+}
+
+std::string LogicCore::NewId() {
+  static const char kAlphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  std::uniform_int_distribution<size_t> pick(0, sizeof(kAlphabet) - 2);
+  std::string id(32, '0');
+  for (auto& c : id) c = kAlphabet[pick(ids_)];
   return id;
 }
 
