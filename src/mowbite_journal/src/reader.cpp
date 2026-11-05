@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
-#include <iterator>
 
 #include "mowbite_journal/format.h"
 
@@ -19,7 +18,10 @@ bool ReadSegment(const std::string& path, Segment* segment, std::string* error) 
     if (error) *error = "cannot open " + path;
     return false;
   }
-  const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  file.seekg(0, std::ios::end);
+  std::vector<uint8_t> bytes(static_cast<size_t>(file.tellg()));
+  file.seekg(0);
+  file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
   if (bytes.size() < kFileHeaderSize || std::memcmp(bytes.data(), kMagic, 4) != 0) {
     if (error) *error = path + " is no journal segment";
     return false;
@@ -31,7 +33,6 @@ bool ReadSegment(const std::string& path, Segment* segment, std::string* error) 
                         std::to_string(kFormatVersion);
     return false;
   }
-  segment->path = path;
   segment->raw.clear();
   segment->records.clear();
   segment->problem.clear();
@@ -62,20 +63,13 @@ bool ReadSegment(const std::string& path, Segment* segment, std::string* error) 
   size_t pos = 0;
   const auto& raw = segment->raw;
   while (pos + kRecordHeaderSize <= raw.size()) {
-    Record record;
-    uint32_t size;
-    std::memcpy(&record.stream, raw.data() + pos, 2);
-    std::memcpy(&record.method, raw.data() + pos + 2, 2);
-    std::memcpy(&record.t_ns, raw.data() + pos + 4, 8);
-    std::memcpy(&size, raw.data() + pos + 12, 4);
-    if (raw.size() - pos - kRecordHeaderSize < size) {
+    const RecordHeader h = GetRecordHeader(raw.data() + pos);
+    if (raw.size() - pos - kRecordHeaderSize < h.size) {
       segment->problem = "record beyond its block";
       break;
     }
-    record.data = raw.data() + pos + kRecordHeaderSize;
-    record.size = size;
-    segment->records.push_back(record);
-    pos += kRecordHeaderSize + size;
+    segment->records.push_back({h.stream, h.method, h.t_ns, raw.data() + pos + kRecordHeaderSize, h.size});
+    pos += kRecordHeaderSize + h.size;
   }
   return true;
 }

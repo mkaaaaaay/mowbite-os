@@ -40,7 +40,6 @@ struct StreamStats {
 };
 
 struct Stats {
-  bool writing = false;
   std::string run_dir;
   // Why nothing is written right now, empty while it is.
   std::string problem;

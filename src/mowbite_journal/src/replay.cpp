@@ -44,17 +44,6 @@ std::string TableChecksum(const std::vector<std::string>& names, const std::vect
   return text;
 }
 
-std::string Hex(const uint8_t* data, size_t size) {
-  std::string hex;
-  hex.reserve(2 * size);
-  char byte[3];
-  for (size_t i = 0; i < size; ++i) {
-    std::snprintf(byte, sizeof(byte), "%02x", data[i]);
-    hex += byte;
-  }
-  return hex;
-}
-
 }  // namespace detail
 
 namespace {
@@ -90,7 +79,7 @@ struct Stream {
 // Walks the records of a run in order and keeps the streams it defines.
 class RunWalk {
  public:
-  RunWalk(const ReplayRegistry& registry, bool replay) : registry_(registry), replay_(replay) {}
+  explicit RunWalk(const ReplayRegistry& registry) : registry_(registry) {}
 
   std::map<uint16_t, Stream>& streams() {
     return streams_;
@@ -112,11 +101,10 @@ class RunWalk {
       Define(value);
     } else if (record.method == kGap) {
       const std::string why = value.value("why", "");
-      const bool all = value.value("all", false);
       std::set<uint16_t> hit;
       for (const auto& entry : value.value("dropped", json::array())) hit.insert(entry.at(0).get<uint16_t>());
       for (auto& [id, stream] : streams_) {
-        if ((all || hit.count(id)) && stream.stopped.empty()) {
+        if (hit.count(id) && stream.stopped.empty()) {
           stream.stopped = "gap in the journal (" + why + ")";
         }
       }
@@ -144,15 +132,6 @@ class RunWalk {
       stream.stopped = "this tool has no replay of core " + stream.name;
       return;
     }
-    if (!replay_) {
-      // Decoding needs the core only for its types; a failed build of it is no reason to skip the export.
-      try {
-        stream.replay = factory->second(definition);
-      } catch (const std::exception& e) {
-        stream.stopped = e.what();
-      }
-      return;
-    }
     try {
       stream.replay = factory->second(definition);
     } catch (const std::exception& e) {
@@ -161,7 +140,6 @@ class RunWalk {
   }
 
   const ReplayRegistry& registry_;
-  bool replay_;
   std::map<uint16_t, Stream> streams_;
   int64_t start_ns_ = 0;
   bool ended_ = false;
@@ -173,57 +151,33 @@ std::string Seconds(int64_t t_ns, int64_t start_ns) {
   return text;
 }
 
-void Worse(CheckReport& report, CheckOutcome outcome) {
-  auto rank = [](CheckOutcome o) {
-    switch (o) {
-      case CheckOutcome::kSame: return 0;
-      case CheckOutcome::kNotReplayable: return 1;
-      case CheckOutcome::kError: return 2;
-      case CheckOutcome::kDiffers: return 3;
-    }
-    return 0;
-  };
-  if (rank(outcome) > rank(report.outcome)) report.outcome = outcome;
-}
-
 void CheckRun(const std::string& dir, const ReplayRegistry& registry, CheckReport& report) {
+  auto fail = [&report](CheckOutcome outcome, const std::string& line) {
+    report.lines.push_back(line);
+    report.outcome = Worse(report.outcome, outcome);
+  };
   const RunFiles files = ListRun(dir);
-  if (!files.missing.empty()) {
-    report.lines.push_back(dir + ": not replayable, " + files.missing);
-    Worse(report, CheckOutcome::kNotReplayable);
-    return;
-  }
-  RunWalk walk(registry, true);
+  if (!files.missing.empty()) return fail(CheckOutcome::kNotReplayable, dir + ": not replayable, " + files.missing);
+  RunWalk walk(registry);
   for (size_t s = 0; s < files.segments.size(); ++s) {
     Segment segment;
     std::string error;
-    if (!ReadSegment(files.segments[s], &segment, &error)) {
-      report.lines.push_back(dir + ": " + error);
-      Worse(report, CheckOutcome::kError);
-      return;
-    }
+    if (!ReadSegment(files.segments[s], &segment, &error)) return fail(CheckOutcome::kError, dir + ": " + error);
     for (size_t i = 0; i < segment.records.size(); ++i) {
       const Record& record = segment.records[i];
+      const std::string where = files.segments[s] + " record " + std::to_string(i);
       if (record.stream == kJournalStream) {
         try {
-          if (!walk.Journal(record, &error)) {
-            report.lines.push_back(dir + ": " + error);
-            Worse(report, CheckOutcome::kError);
-            return;
-          }
+          if (!walk.Journal(record, &error)) return fail(CheckOutcome::kError, dir + ": " + error);
         } catch (const std::exception& e) {
-          report.lines.push_back(files.segments[s] + " record " + std::to_string(i) + ": " + e.what());
-          Worse(report, CheckOutcome::kError);
-          return;
+          return fail(CheckOutcome::kError, where + ": " + e.what());
         }
         continue;
       }
       auto found = walk.streams().find(record.stream);
       if (found == walk.streams().end()) {
-        report.lines.push_back(files.segments[s] + " record " + std::to_string(i) + ": stream " +
-                               std::to_string(record.stream) + " is not defined");
-        Worse(report, CheckOutcome::kError);
-        return;
+        return fail(CheckOutcome::kError,
+                    where + ": stream " + std::to_string(record.stream) + " is not defined");
       }
       Stream& stream = found->second;
       if (!stream.replay || !stream.stopped.empty()) continue;
@@ -260,11 +214,11 @@ void CheckRun(const std::string& dir, const ReplayRegistry& registry, CheckRepor
     if (stream.differs) {
       report.lines.push_back(dir + " " + stream.name + ": differs after " + std::to_string(stream.calls) +
                              " calls, " + stream.stopped);
-      Worse(report, CheckOutcome::kDiffers);
+      report.outcome = Worse(report.outcome, CheckOutcome::kDiffers);
     } else if (!stream.stopped.empty()) {
       report.lines.push_back(dir + " " + stream.name + ": not replayable, " + stream.stopped + " (after " +
                              std::to_string(stream.calls) + " calls)");
-      Worse(report, CheckOutcome::kNotReplayable);
+      report.outcome = Worse(report.outcome, CheckOutcome::kNotReplayable);
     } else {
       report.lines.push_back(dir + " " + stream.name + ": bit-identical, " + std::to_string(stream.calls) + " calls");
     }
@@ -277,7 +231,7 @@ template <typename F>
 bool Walk(const std::string& dir, const ReplayRegistry& registry, F&& f, std::string* error) {
   for (const auto& run : ListRuns(dir)) {
     const RunFiles files = ListRun(run);
-    RunWalk walk(registry, false);
+    RunWalk walk(registry);
     for (size_t s = 0; s < files.segments.size(); ++s) {
       Segment segment;
       if (!ReadSegment(files.segments[s], &segment, error)) return false;
@@ -291,24 +245,30 @@ bool Walk(const std::string& dir, const ReplayRegistry& registry, F&& f, std::st
   return true;
 }
 
-json DecodeRecord(const Record& record, RunWalk& walk, std::string* stream_name, std::string* method_name) {
-  if (record.stream == kJournalStream) {
-    *stream_name = "journal";
-    *method_name = JournalMethodName(record.method);
-    return {{"value", json::from_cbor(record.data, record.data + record.size)}};
-  }
+// Stream and method of a record by name, known before anything is decoded.
+std::pair<std::string, std::string> Names(const Record& record, RunWalk& walk) {
+  if (record.stream == kJournalStream) return {"journal", JournalMethodName(record.method)};
   auto found = walk.streams().find(record.stream);
   if (found == walk.streams().end()) {
-    *stream_name = "#" + std::to_string(record.stream);
-    *method_name = "#" + std::to_string(record.method);
-    return {{"hex", detail::Hex(record.data, record.size)}};
+    return {"#" + std::to_string(record.stream), "#" + std::to_string(record.method)};
   }
-  const Stream& stream = found->second;
-  *stream_name = stream.name;
-  *method_name = stream.MethodName(record.method);
-  if (stream.kind == "raw" || !stream.replay) return {{"hex", detail::Hex(record.data, record.size)}};
-  if (record.method == kViewMethod) return {{"view", stream.replay->DecodeView(record.data, record.size)}};
-  return stream.replay->Decode(record.method, record.data, record.size);
+  return {found->second.name, found->second.MethodName(record.method)};
+}
+
+// The record as JSON; one that cannot be decoded gives its error and hex.
+json DecodeRecord(const Record& record, RunWalk& walk) {
+  try {
+    if (record.stream == kJournalStream) {
+      return {{"value", json::from_cbor(record.data, record.data + record.size)}};
+    }
+    auto found = walk.streams().find(record.stream);
+    if (found == walk.streams().end() || !found->second.replay) return {{"hex", Hex(record.data, record.size)}};
+    const CoreReplay& replay = *found->second.replay;
+    if (record.method == kViewMethod) return {{"view", replay.DecodeView(record.data, record.size)}};
+    return replay.Decode(record.method, record.data, record.size);
+  } catch (const std::exception& e) {
+    return {{"error", e.what()}, {"hex", Hex(record.data, record.size)}};
+  }
 }
 
 bool Passes(const ExportFilter& filter, const std::string& stream, const std::string& method) {
@@ -341,6 +301,19 @@ std::string CsvField(const json& value) {
 
 }  // namespace
 
+CheckOutcome Worse(CheckOutcome a, CheckOutcome b) {
+  auto rank = [](CheckOutcome o) {
+    switch (o) {
+      case CheckOutcome::kSame: return 0;
+      case CheckOutcome::kNotReplayable: return 1;
+      case CheckOutcome::kError: return 2;
+      case CheckOutcome::kDiffers: return 3;
+    }
+    return 0;
+  };
+  return rank(b) > rank(a) ? b : a;
+}
+
 CheckReport CheckRuns(const std::string& dir, const ReplayRegistry& registry) {
   CheckReport report;
   const auto runs = ListRuns(dir);
@@ -358,14 +331,9 @@ bool ExportJsonl(const std::string& dir, const ReplayRegistry& registry, const E
   return Walk(
       dir, registry,
       [&](const std::string& run, unsigned segment, size_t index, const Record& record, RunWalk& walk) {
-        std::string stream_name, method_name;
-        json line;
-        try {
-          line = DecodeRecord(record, walk, &stream_name, &method_name);
-        } catch (const std::exception& e) {
-          line = {{"error", e.what()}, {"hex", detail::Hex(record.data, record.size)}};
-        }
+        const auto [stream_name, method_name] = Names(record, walk);
         if (!Passes(filter, stream_name, method_name)) return;
+        json line = DecodeRecord(record, walk);
         line["run"] = run.substr(run.find_last_of('/') + 1);
         line["segment"] = segment;
         line["record"] = index;
@@ -387,14 +355,9 @@ bool ExportCsv(const std::string& dir, const ReplayRegistry& registry, const Exp
   return Walk(
       dir, registry,
       [&](const std::string&, unsigned, size_t, const Record& record, RunWalk& walk) {
-        std::string stream_name, method_name;
-        json decoded;
-        try {
-          decoded = DecodeRecord(record, walk, &stream_name, &method_name);
-        } catch (const std::exception&) {
-          return;
-        }
+        const auto [stream_name, method_name] = Names(record, walk);
         if (!Passes(filter, stream_name, method_name)) return;
+        const json decoded = DecodeRecord(record, walk);
         std::vector<std::pair<std::string, json>> leaves;
         Flatten(decoded, "", leaves);
         if (columns.empty()) {

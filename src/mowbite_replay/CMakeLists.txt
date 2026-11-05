@@ -17,8 +17,12 @@ find_package(tron_mcu REQUIRED)
 # The cores this tool knows, also for the tests.
 add_library(mowbite_replay_cores STATIC src/cores.cpp)
 target_include_directories(mowbite_replay_cores PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-target_link_libraries(mowbite_replay_cores PUBLIC mowbite_journal::mowbite_journal
-  mowbite_localization::mowbite_localization_core mowbite_logic::mowbite_logic_core mowbite_safety::mowbite_safety_core tron_mcu::tron_mcu_core)
+target_link_libraries(mowbite_replay_cores PUBLIC
+  mowbite_journal::mowbite_journal
+  mowbite_localization::mowbite_localization_core
+  mowbite_logic::mowbite_logic_core
+  mowbite_safety::mowbite_safety_core
+  tron_mcu::tron_mcu_core)
 
 add_executable(mowbite_replay src/main.cpp)
 target_link_libraries(mowbite_replay mowbite_replay_cores)

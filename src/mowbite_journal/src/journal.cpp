@@ -95,13 +95,7 @@ json BuildIds() {
             const auto* note = reinterpret_cast<const ElfW(Nhdr)*>(at);
             const uint8_t* desc = at + sizeof(ElfW(Nhdr)) + ((note->n_namesz + 3) & ~3u);
             if (note->n_type == NT_GNU_BUILD_ID && desc + note->n_descsz <= end) {
-              std::string hex;
-              char byte[3];
-              for (size_t k = 0; k < note->n_descsz; ++k) {
-                std::snprintf(byte, sizeof(byte), "%02x", desc[k]);
-                hex += byte;
-              }
-              (*static_cast<json*>(data))[name] = hex;
+              (*static_cast<json*>(data))[name] = Hex(desc, note->n_descsz);
             }
             at = desc + ((note->n_descsz + 3) & ~3u);
           }
@@ -130,13 +124,17 @@ void PutRecord(std::vector<uint8_t>& out, uint16_t stream, uint16_t method, int6
                size_t size) {
   const size_t at = out.size();
   out.resize(at + kRecordHeaderSize + size);
-  uint8_t* p = out.data() + at;
-  const uint32_t size32 = static_cast<uint32_t>(size);
-  std::memcpy(p, &stream, 2);
-  std::memcpy(p + 2, &method, 2);
-  std::memcpy(p + 4, &t_ns, 8);
-  std::memcpy(p + 12, &size32, 4);
-  if (size > 0) std::memcpy(p + kRecordHeaderSize, data, size);
+  PutRecordHeader(out.data() + at, {stream, method, t_ns, static_cast<uint32_t>(size)});
+  if (size > 0) std::memcpy(out.data() + at + kRecordHeaderSize, data, size);
+}
+
+std::string EnvOr(const char* name, const char* fallback) {
+  const char* value = std::getenv(name);
+  return value && *value ? value : fallback;
+}
+
+std::string IsoUtc(std::time_t t) {
+  return UtcText(t, "%Y-%m-%dT%H:%M:%SZ");
 }
 
 void PutCbor(std::vector<uint8_t>& out, uint16_t method, const json& value) {
@@ -208,8 +206,9 @@ class Journal::Impl {
     }
     mkdir(options_.dir.c_str(), 0755);
     start_ns_ = MonotonicNs();
-    start_utc_ = std::time(nullptr);
-    run_name_ = UtcText(start_utc_, "%Y%m%dT%H%M%SZ") + "_" + ProcessName() + "_" + std::to_string(getpid());
+    const std::time_t start_utc = std::time(nullptr);
+    const std::string process = ProcessName();
+    run_name_ = UtcText(start_utc, "%Y%m%dT%H%M%SZ") + "_" + process + "_" + std::to_string(getpid());
     run_dir_ = options_.dir + "/" + run_name_;
     if (mkdir(run_dir_.c_str(), 0755) != 0) {
       if (error) *error = "cannot create " + run_dir_ + ": " + std::strerror(errno);
@@ -225,16 +224,16 @@ class Journal::Impl {
     standby_.reset(new uint8_t[capacity_]);
     head_ = {{"format", kFormatVersion},
              {"run", run_name_},
-             {"process", ProcessName()},
+             {"process", process},
              {"pid", getpid()},
-             {"os_revision", std::getenv("MOWBITE_OS_REVISION") ? std::getenv("MOWBITE_OS_REVISION") : "unknown"},
-             {"image", std::getenv("MOWBITE_OS_IMAGE") ? std::getenv("MOWBITE_OS_IMAGE") : "unknown"},
+             {"os_revision", EnvOr("MOWBITE_OS_REVISION", "unknown")},
+             {"image", EnvOr("MOWBITE_OS_IMAGE", "unknown")},
              {"arch", Architecture()},
              {"compiler", __VERSION__},
              {"platform", options_.platform},
              {"boot_id", ReadFirstLine("/proc/sys/kernel/random/boot_id")},
              {"start_ns", start_ns_},
-             {"start_utc", UtcText(start_utc_, "%Y-%m-%dT%H:%M:%SZ")},
+             {"start_utc", IsoUtc(start_utc)},
              {"build_ids", BuildIds()}};
     zstd_ = ZSTD_createCCtx();
     ZSTD_CCtx_setParameter(zstd_, ZSTD_c_compressionLevel, 3);
@@ -294,11 +293,7 @@ class Journal::Impl {
       return;
     }
     uint8_t* p = active_.get() + active_size_;
-    const uint32_t size32 = static_cast<uint32_t>(size);
-    std::memcpy(p, &stream, 2);
-    std::memcpy(p + 2, &method, 2);
-    std::memcpy(p + 4, &t_ns, 8);
-    std::memcpy(p + 12, &size32, 4);
+    PutRecordHeader(p, {stream, method, t_ns, static_cast<uint32_t>(size)});
     if (size > 0) std::memcpy(p + kRecordHeaderSize, data, size);
     active_size_ += need;
     ++records_[stream];
@@ -361,7 +356,6 @@ class Journal::Impl {
     problem_ = problem;
     std::lock_guard<std::mutex> lock(stats_mutex_);
     stats_.problem = problem;
-    stats_.writing = problem.empty();
   }
 
   // Swaps the buffers and writes the full one as a block, with the head and the definitions first in a new segment and
@@ -382,31 +376,23 @@ class Journal::Impl {
     }
     const uint8_t* data = standby_.get();
     if (!problem_.empty()) {
-      // Nothing is written: every record of the block counts as dropped.
-      CountRecords(data, size, dropped);
-      for (size_t i = 0; i < kMaxStreams; ++i) pending_gap_[i] += dropped[i];
-      pending_why_ = problem_;
+      Lose(data, size, dropped, problem_);
       return;
     }
     prefix_.clear();
     suffix_.clear();
     if (fd_ < 0) {
       if (!OpenSegment()) {
-        CountRecords(data, size, dropped);
-        for (size_t i = 0; i < kMaxStreams; ++i) pending_gap_[i] += dropped[i];
-        pending_why_ = problem_;
+        Lose(data, size, dropped, problem_);
         return;
       }
       for (const auto& definition : definitions) {
         PutRecord(prefix_, kJournalStream, kDefine, MonotonicNs(), definition.data(), definition.size());
       }
     }
-    if (HasAny(pending_gap_) || pending_all_) {
-      json gap = GapJson(pending_gap_, pending_why_);
-      gap["all"] = pending_all_;
-      PutCbor(prefix_, kGap, gap);
+    if (HasAny(pending_gap_)) {
+      PutCbor(prefix_, kGap, GapJson(pending_gap_, pending_why_));
       pending_gap_.fill(0);
-      pending_all_ = false;
     }
     if (HasAny(dropped)) PutCbor(suffix_, kGap, GapJson(dropped, "buffer full"));
     if (prefix_.empty() && size == 0 && suffix_.empty()) return;
@@ -420,13 +406,19 @@ class Journal::Impl {
   static void CountRecords(const uint8_t* data, size_t size, std::array<uint64_t, kMaxStreams>& counts) {
     size_t at = 0;
     while (at + kRecordHeaderSize <= size) {
-      uint16_t stream;
-      uint32_t length;
-      std::memcpy(&stream, data + at, 2);
-      std::memcpy(&length, data + at + 12, 4);
-      if (stream < kMaxStreams) ++counts[stream];
-      at += kRecordHeaderSize + length;
+      const RecordHeader h = GetRecordHeader(data + at);
+      if (h.stream < kMaxStreams) ++counts[h.stream];
+      at += kRecordHeaderSize + h.size;
     }
+  }
+
+  // Records that are not written: counted by stream for the gap record of the next block.
+  void Lose(const uint8_t* data, size_t size, const std::array<uint64_t, kMaxStreams>& dropped,
+            const std::string& why) {
+    std::array<uint64_t, kMaxStreams> counts = dropped;
+    CountRecords(data, size, counts);
+    for (size_t i = 0; i < kMaxStreams; ++i) pending_gap_[i] += counts[i];
+    pending_why_ = why;
   }
 
   json GapJson(const std::array<uint64_t, kMaxStreams>& counts, const std::string& why) const {
@@ -490,8 +482,7 @@ class Journal::Impl {
       stats_.problem = std::string("write: ") + std::strerror(errno);
       close(fd_);
       fd_ = -1;
-      pending_all_ = true;
-      pending_why_ = stats_.problem;
+      for (const auto& part : parts) Lose(part.data, part.size, {}, stats_.problem);
       return;
     }
     stats_.raw_bytes += raw;
@@ -535,12 +526,11 @@ class Journal::Impl {
     json head = head_;
     head["segment"] = segment_index_;
     head["segment_start_ns"] = MonotonicNs();
-    head["segment_start_utc"] = UtcText(std::time(nullptr), "%Y-%m-%dT%H:%M:%SZ");
+    head["segment_start_utc"] = IsoUtc(std::time(nullptr));
     PutCbor(prefix_, kHead, head);
     ++segment_index_;
     std::lock_guard<std::mutex> lock(stats_mutex_);
     stats_.segments = segment_index_;
-    stats_.writing = true;
     stats_.problem.clear();
     return true;
   }
@@ -605,7 +595,7 @@ class Journal::Impl {
         run.bytes += file.bytes;
         run.newest = std::max(run.newest, file.mtime);
       }
-      if (!run.active && (run.segments.empty() ? false : static_cast<double>(now - run.newest) > max_age_s)) {
+      if (!run.active && !run.segments.empty() && static_cast<double>(now - run.newest) > max_age_s) {
         RemoveRun(run.path);
         continue;
       }
@@ -643,7 +633,6 @@ class Journal::Impl {
   std::string run_dir_;
   json head_;
   int64_t start_ns_ = 0;
-  std::time_t start_utc_ = 0;
   int lock_fd_ = -1;
 
   // Guards the buffers, the counters and the definitions; held only for copies.
@@ -674,8 +663,6 @@ class Journal::Impl {
   std::vector<uint8_t> suffix_;
   std::string problem_;
   std::array<uint64_t, kMaxStreams> pending_gap_{};
-  // A block was lost in a failed write: every stream has a gap.
-  bool pending_all_ = false;
   std::string pending_why_;
   std::array<uint64_t, kMaxStreams> total_dropped_{};
 

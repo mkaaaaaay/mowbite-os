@@ -35,10 +35,7 @@ int Check(std::vector<std::string> dirs) {
     }
     const auto report = mowbite_journal::CheckRuns(dir, registry);
     for (const auto& line : report.lines) std::cout << line << '\n';
-    if (static_cast<int>(report.outcome) != 0 &&
-        (worst == mowbite_journal::CheckOutcome::kSame || report.outcome == mowbite_journal::CheckOutcome::kDiffers)) {
-      worst = report.outcome;
-    }
+    worst = mowbite_journal::Worse(worst, report.outcome);
   }
   return static_cast<int>(worst);
 }

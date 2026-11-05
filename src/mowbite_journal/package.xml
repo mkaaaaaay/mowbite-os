@@ -3,7 +3,7 @@
 <package format="3">
   <name>mowbite_journal</name>
   <version>0.0.0</version>
-  <description>Journal of the cores of MowBite OS and their replay, without ROS: every change of a core in the order of its calls</description>
+  <description>Journal of the cores of MowBite OS and their replay, without ROS</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
   <license>GPL-3.0</license>
 

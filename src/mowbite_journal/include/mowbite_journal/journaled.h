@@ -154,6 +154,7 @@ class Journaled {
     constexpr size_t kIndex = detail::IndexOf<M>(typename Traits::Methods());
     static_assert(kIndex < Traits::Methods::kSize, "the method is not in the journal table of its core");
     static_assert(sizeof...(A) == std::tuple_size_v<Params>, "every argument has to be given, also the defaults");
+    static_assert(!Pod<std::decay_t<R>>::value, "a result is compared byte for byte: no plain struct with padding");
     if (!journal_) return (core_.*M)(std::forward<A>(args)...);
     Out& out = detail::CallScratch();
     out.Clear();
@@ -173,9 +174,6 @@ class Journaled {
 
   const Core& View() const {
     return core_;
-  }
-  uint16_t stream() const {
-    return stream_;
   }
 
  private:

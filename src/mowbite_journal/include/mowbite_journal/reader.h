@@ -19,8 +19,6 @@ struct Record {
 // One segment file unpacked: its records in order. Reading stops at the first block that is cut off or broken, as
 // after a crash; problem says so.
 struct Segment {
-  std::string path;
-  unsigned index = 0;
   std::vector<uint8_t> raw;
   std::vector<Record> records;
   std::string problem;

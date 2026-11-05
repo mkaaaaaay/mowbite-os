@@ -28,7 +28,6 @@ struct Mismatch {
 class CoreReplay {
  public:
   virtual ~CoreReplay() = default;
-  virtual size_t MethodCount() const = 0;
   // Calls the method with the recorded arguments and compares result and out parameters byte for byte.
   virtual std::optional<Mismatch> Apply(uint16_t method, const uint8_t* data, size_t size) = 0;
   // The view the core has now against a recorded one.
@@ -61,8 +60,6 @@ decltype(auto) Pass(Stored<P>& stored) {
   }
 }
 
-std::string Hex(const uint8_t* data, size_t size);
-
 }  // namespace detail
 
 template <typename Core>
@@ -79,10 +76,6 @@ class Replayer : public CoreReplay {
                                expected.at("table").get<std::string>() + " here: another build of " + Traits::kName);
     }
     UpdateView();
-  }
-
-  size_t MethodCount() const override {
-    return Methods::kSize;
   }
 
   std::optional<Mismatch> Apply(uint16_t method, const uint8_t* data, size_t size) override {
@@ -109,7 +102,7 @@ class Replayer : public CoreReplay {
       In in(data, size);
       return json(Read<decltype(Traits::View(std::declval<const Core&>()))>(in));
     } else {
-      return detail::Hex(data, size);
+      return Hex(data, size);
     }
   }
 
@@ -203,7 +196,7 @@ class Replayer : public CoreReplay {
       if (!outs.empty()) tail["out"] = outs;
       return tail;
     } catch (const std::exception&) {
-      return detail::Hex(start, size);
+      return Hex(start, size);
     }
   }
 
@@ -279,6 +272,8 @@ void Register(ReplayRegistry& registry) {
 }
 
 enum class CheckOutcome { kSame = 0, kDiffers = 1, kNotReplayable = 2, kError = 3 };
+// The worse of two: a difference over an error over a run that cannot be replayed.
+CheckOutcome Worse(CheckOutcome a, CheckOutcome b);
 
 struct CheckReport {
   CheckOutcome outcome = CheckOutcome::kSame;

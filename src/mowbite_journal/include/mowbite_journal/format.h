@@ -3,6 +3,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <string>
 
 namespace mowbite_journal {
 
@@ -35,6 +37,39 @@ enum JournalMethod : uint16_t {
 constexpr uint16_t kViewMethod = 0xFFFF;
 // A raw stream (bytes on a port) has one method, the bytes themselves.
 constexpr uint16_t kRawBytes = 0;
+
+struct RecordHeader {
+  uint16_t stream = 0;
+  uint16_t method = 0;
+  int64_t t_ns = 0;
+  uint32_t size = 0;
+};
+
+inline void PutRecordHeader(uint8_t* at, const RecordHeader& h) {
+  std::memcpy(at, &h.stream, 2);
+  std::memcpy(at + 2, &h.method, 2);
+  std::memcpy(at + 4, &h.t_ns, 8);
+  std::memcpy(at + 12, &h.size, 4);
+}
+
+inline RecordHeader GetRecordHeader(const uint8_t* at) {
+  RecordHeader h;
+  std::memcpy(&h.stream, at, 2);
+  std::memcpy(&h.method, at + 2, 2);
+  std::memcpy(&h.t_ns, at + 4, 8);
+  std::memcpy(&h.size, at + 12, 4);
+  return h;
+}
+
+inline std::string Hex(const uint8_t* data, size_t size) {
+  static const char kDigits[] = "0123456789abcdef";
+  std::string hex(2 * size, '0');
+  for (size_t i = 0; i < size; ++i) {
+    hex[2 * i] = kDigits[data[i] >> 4];
+    hex[2 * i + 1] = kDigits[data[i] & 15];
+  }
+  return hex;
+}
 
 }  // namespace mowbite_journal
 

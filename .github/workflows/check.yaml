@@ -102,7 +102,11 @@ jobs:
           docker exec omtron-mowbite_os-1 bash -c 'source /ws/install/setup.bash && \
             mowbite_replay check /tmp/mowbite_sim_journal' > replay.txt 2>&1 && rc=0 || rc=$?
           cat replay.txt
-          { echo "### journal replay ${{ matrix.arch }}"; echo "- exit $rc"; sed 's/^/- /' replay.txt; } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### journal replay ${{ matrix.arch }}"
+            echo "- exit $rc"
+            sed 's/^/- /' replay.txt
+          } >> "$GITHUB_STEP_SUMMARY"
           docker cp omtron-mowbite_os-1:/tmp/mowbite_sim_journal journal || true
           exit $rc
 
