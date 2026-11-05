@@ -6,29 +6,20 @@
 #include <set>
 #include <stdexcept>
 
+#include "mowbite_api/catalog.h"
+
 namespace mowbite_logic {
 
 const std::vector<GeometryKey>& GeometryKeys() {
-  // Ranges are against slips of the pen (cm for m, a wrong sign), not against the platform's values: a measured body
-  // may be smaller than the one of the platform's file. The calibration drive sets track, the antenna, ticks_per_m and
-  // the mounting of the IMU, which may differ from the platform's by 5 degrees at most.
-  static const std::vector<GeometryKey> keys = {
-      {"robot_width", GeometryType::kNumber, true, 0.1, 1.5},
-      {"robot_front", GeometryType::kNumber, true, 0.0, 1.5},
-      {"robot_rear", GeometryType::kNumber, true, 0.0, 1.5},
-      {"robot_outline", GeometryType::kPoints, true, 0.0, 0.0},
-      {"mower_width", GeometryType::kNumber, true, 0.05, 1.5},
-      {"blade_ahead", GeometryType::kNumber, true, -1.5, 1.5},
-      {"blade_offset", GeometryType::kNumber, true, -0.75, 0.75},
-      {"antenna_x", GeometryType::kNumber, true, -0.6, 0.6},
-      {"antenna_y", GeometryType::kNumber, true, -0.3, 0.3},
-      {"track", GeometryType::kNumber, true, 0.15, 0.8},
-      {"wheel_radius", GeometryType::kNumber, false, 0.02, 0.5},
-      {"dock_contact_x", GeometryType::kNumber, false, -1.5, 1.5},
-      {"ticks_per_m", GeometryType::kNumber, true, 100.0, 10000.0, "1/m"},
-      {"imu_roll", GeometryType::kNumber, true, -0.087, 0.087, "rad", true},
-      {"imu_pitch", GeometryType::kNumber, true, -0.087, 0.087, "rad", true},
-  };
+  // The keys and ranges are the interface's (x-geometry).
+  static const std::vector<GeometryKey> keys = [] {
+    std::vector<GeometryKey> out;
+    for (const auto& key : mowbite_api::GeometryKeys()) {
+      out.push_back({key.name, key.points ? GeometryType::kPoints : GeometryType::kNumber, key.settable, key.min,
+                     key.max, key.unit.c_str(), key.relative});
+    }
+    return out;
+  }();
   return keys;
 }
 

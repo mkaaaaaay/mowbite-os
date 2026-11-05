@@ -17,13 +17,16 @@ const char* TypeName(Type type) {
     case Type::kBoolean: return "boolean";
     case Type::kObject: return "object";
     case Type::kArray: return "array";
+    case Type::kAny: return "any";
   }
   return "string";
 }
 
 Json Property(const Field& field) {
   Json property = Json::object();
-  if (field.nullable) {
+  if (field.type == Type::kAny) {
+    // Any value, null included.
+  } else if (field.nullable) {
     property["type"] = Json::array({TypeName(field.type), "null"});
   } else {
     property["type"] = TypeName(field.type);
@@ -35,6 +38,18 @@ Json Property(const Field& field) {
   if (!field.pattern.empty()) property["pattern"] = field.pattern;
   property["description"] = field.text;
   if (!field.unit.empty()) property["x-unit"] = field.unit;
+  if (field.type == Type::kArray && (!field.fields.empty() || field.items)) {
+    Field item = field;
+    item.type = field.fields.empty() ? *field.items : Type::kObject;
+    item.items.reset();
+    item.nullable = false;
+    item.values.clear();
+    item.pattern.clear();
+    item.unit.clear();
+    item.text = "One item";
+    property["items"] = Property(item);
+    return property;
+  }
   if (!field.fields.empty()) {
     Json properties = Json::object();
     Json required = Json::array();
@@ -131,6 +146,30 @@ Json Reasons(const EventEntry& event) {
   return out;
 }
 
+// Every object with its keys in order, so the file only changes where the catalog does.
+Json Sorted(const Json& value) {
+  if (value.is_array()) {
+    Json out = Json::array();
+    for (const auto& item : value) out.push_back(Sorted(item));
+    return out;
+  }
+  if (!value.is_object()) return value;
+  std::vector<std::string> keys;
+  for (const auto& [key, item] : value.items()) keys.push_back(key);
+  std::sort(keys.begin(), keys.end());
+  Json out = Json::object();
+  for (const auto& key : keys) out[key] = Sorted(value[key]);
+  return out;
+}
+
+Field Text(std::string name, std::string text, bool required) {
+  return {std::move(name), Type::kString, "", required, std::move(text), {}, false, {}, ""};
+}
+
+const Field kActionId = Text("action_id", "<prefix>/<id>, what the app sends on action", true);
+const Field kActionName = Text("action_name", "Name to show", true);
+const Field kActionEnabled = {"enabled", Type::kInteger, "", true, "1 when the action works now, else 0", {}, false, {}, ""};
+
 Json BuildSchema(const Json& planner) {
   Json defs = Json::object();
   defs["robot_state"] = Object("robot_state/json, retained: the state of the mower for the app", Pointers(RobotState()),
@@ -182,6 +221,66 @@ Json BuildSchema(const Json& planner) {
                               {"action", command.actions.empty() ? Json() : Json(command.actions[0].action)},
                               {"actions", actions}};
   }
+  Json methods = Json::object();
+  for (const auto& command : Commands()) {
+    methods[command.name] = {{"node", NodeOf(command.name)},
+                             {"description", command.text},
+                             {"params", "#/$defs/" + command.name + ".params"},
+                             {"result", "#/$defs/" + command.name + ".result"},
+                             {"offered", command.name == "docking.start" ? "only where the OS docks by itself" : ""}};
+  }
+  for (const auto& method : Methods()) {
+    Json params = Property(method.params);
+    params["description"] = "The params of " + method.name + ": " + method.params.text;
+    Json result = Property(method.result);
+    result["description"] = "The result of " + method.name + ": " + method.result.text;
+    defs[method.name + ".params"] = params;
+    defs[method.name + ".result"] = result;
+    methods[method.name] = {{"node", method.node},
+                            {"description", method.text},
+                            {"params", "#/$defs/" + method.name + ".params"},
+                            {"result", "#/$defs/" + method.name + ".result"},
+                            {"offered", method.offered}};
+  }
+  // actions/json: start_mowing carries the reason of MOWING_REFUSED it would get, only while it is off.
+  Json start_reasons = Json::array();
+  for (const auto& reason : FindEvent("MOWING_REFUSED")->reasons) {
+    if (std::find(start_reasons.begin(), start_reasons.end(), reason.code) == start_reasons.end()) {
+      start_reasons.push_back(reason.code);
+    }
+  }
+  Field action_reason = Text("reason",
+                             "Only at mower_logic:idle/start_mowing while enabled is 0: the reason of MOWING_REFUSED a "
+                             "start would get now, without its numbers. Shown only, the start checks again",
+                             false);
+  Json action = Object("An action of actions/json",
+                       {&kActionId, &kActionName, &kActionEnabled, &action_reason}, true);
+  action["properties"]["reason"]["enum"] = start_reasons;
+  defs["actions"] = {{"type", "array"},
+                     {"description", "actions/json, retained: the actions the app offers, with whether they work now"},
+                     {"items", action}};
+  Json sensors = Json::object();
+  for (const auto& sensor : Sensors()) {
+    sensors[sensor.id] = {{"name", sensor.name}, {"unit", sensor.unit}, {"kind", sensor.text ? "text" : "number"},
+                          {"source", sensor.source}, {"description", sensor.description}};
+  }
+  Json settings = Json::object();
+  for (const auto& setting : LogicSettings()) {
+    settings[setting.name] = {{"type", setting.integer ? "integer" : "number"}, {"min", setting.min},
+                              {"max", setting.max}, {"default", setting.def}, {"unit", setting.unit},
+                              {"description", setting.text}};
+  }
+  Json geometry = Json::object();
+  for (const auto& key : GeometryKeys()) {
+    Json entry = {{"type", key.points ? "points" : "number"}, {"unit", key.unit}, {"settable", key.settable},
+                  {"description", key.text}};
+    if (!key.points) {
+      entry["min"] = key.min;
+      entry["max"] = key.max;
+      entry["relative"] = key.relative;
+    }
+    geometry[key.name] = entry;
+  }
   Json bits = Json::array();
   for (const auto& bit : EmergencyBits()) {
     bits.push_back({{"bit", bit.bit}, {"name", bit.name}, {"description", bit.text}});
@@ -190,17 +289,25 @@ Json BuildSchema(const Json& planner) {
                  {"$id", "urn:mowbite-os:api:" + std::to_string(kApi)},
                  {"title", "MowBite OS app interface"},
                  {"description",
-                  "robot_state, events and RPC methods of MowBite OS over MQTT, as system.api gives them. "
-                  "x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED "
-                  "only in refusals), x-emergency-bits the bits of emergency, x-commands the methods with params, result, the event "
-                  "of their refusal and the actions that do the same."},
+                  "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; "
+                  "made from the code, objects sorted by key. x-reasons has severity and resume of every reason by "
+                  "event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals), x-emergency-bits the bits of "
+                  "emergency, x-commands the commands with params, result, the event of their refusal and the actions "
+                  "that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, "
+                  "sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set "
+                  "with the ranges of the OS, x-geometry the keys of robot.geometry."},
                  {"x-api", kApi},
+                 {"x-owner", kOwner},
                  {"$defs", defs},
                  {"x-reasons", reasons},
                  {"x-emergency-bits", bits},
-                 {"x-commands", commands}};
+                 {"x-commands", commands},
+                 {"x-methods", methods},
+                 {"x-sensors", sensors},
+                 {"x-settings", settings},
+                 {"x-geometry", geometry}};
   if (planner.is_object()) schema["x-planner"] = {{"version", planner.value("version", 0)}};
-  return schema;
+  return Sorted(schema);
 }
 
 std::set<std::string> Types(const Json& schema) {

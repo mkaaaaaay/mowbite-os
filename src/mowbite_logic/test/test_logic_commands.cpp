@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <set>
 
 #include "mowbite_api/catalog.h"
 #include "mowbite_logic/logic_core.h"
@@ -563,3 +564,39 @@ TEST(LogicCommands, ReleaseCarriesSourceAndClient) {
   core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.TakeEvents().back().details.contains("source"));
 }
+
+// I2: start_mowing carries a reason exactly while it is off, the one MOWING_REFUSED gets when it is pressed anyway.
+TEST(LogicCommands, StartMowingShowsTheReasonOfItsRefusal) {
+  const mowbite_api::EventEntry* refused = mowbite_api::FindEvent("MOWING_REFUSED");
+  ASSERT_NE(refused, nullptr);
+  std::set<std::string> reasons;
+  for (const auto& scenario : Scenarios()) {
+    LogicCore core = scenario.make();
+    const Action* start = nullptr;
+    std::vector<ActionGroup> groups = core.Actions();
+    for (const auto& group : groups) {
+      for (const auto& action : group.actions) {
+        EXPECT_TRUE(action.reason.empty() || action.id == "start_mowing") << scenario.name << " " << action.id;
+        if (group.prefix == "mower_logic:idle" && action.id == "start_mowing") start = &action;
+      }
+    }
+    ASSERT_NE(start, nullptr) << scenario.name;
+    EXPECT_EQ(start->enabled, start->reason.empty()) << scenario.name << " " << start->reason;
+    if (start->enabled) continue;
+    reasons.insert(start->reason);
+    EXPECT_TRUE(std::any_of(refused->reasons.begin(), refused->reasons.end(),
+                            [&](const mowbite_api::ReasonEntry& r) { return r.code == start->reason; }))
+        << scenario.name << " " << start->reason;
+    core.TakeEvents();
+    EXPECT_EQ(core.OnAction("mower_logic:idle/start_mowing"), ActionResult::kRejected) << scenario.name;
+    const auto events = core.TakeEvents();
+    const auto event = std::find_if(events.begin(), events.end(), [](const Event& e) { return e.type == "MOWING_REFUSED"; });
+    ASSERT_NE(event, events.end()) << scenario.name;
+    EXPECT_EQ(event->details.value("reason", ""), start->reason) << scenario.name;
+  }
+  // Busy, held and in an emergency at least.
+  EXPECT_TRUE(reasons.count("BUSY"));
+  EXPECT_TRUE(reasons.count("HOLD"));
+  EXPECT_TRUE(reasons.count("EMERGENCY"));
+}
+

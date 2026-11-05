@@ -50,3 +50,20 @@ TEST(EventCatalog, FindsAnEventOutsideOfIt) {
   EXPECT_FALSE(mowbite_api::CheckEvent("STATE", json{{"state", "IDLE"}, {"x", 0.0}, {"y", 0.0}, {"odd", 1}}).empty());
   EXPECT_FALSE(mowbite_api::CheckEvent("NOT_A_TYPE", json::object()).empty());
 }
+
+// The sensors of the logic are those of the interface with source logic, with the same name, unit and kind.
+TEST(EventCatalog, SensorsOfTheLogicAreThoseOfTheInterface) {
+  LogicCore core{LogicConfig()};
+  size_t logic = 0;
+  for (const auto& sensor : mowbite_api::Sensors()) logic += sensor.source == "logic" ? 1 : 0;
+  const auto sensors = core.Sensors();
+  EXPECT_EQ(sensors.size(), logic);
+  for (const auto& sensor : sensors) {
+    const mowbite_api::SensorEntry* entry = mowbite_api::FindSensor(sensor.id);
+    ASSERT_NE(entry, nullptr) << sensor.id;
+    EXPECT_EQ(entry->source, "logic") << sensor.id;
+    EXPECT_EQ(entry->name, sensor.name) << sensor.id;
+    EXPECT_EQ(entry->unit, sensor.unit) << sensor.id;
+    EXPECT_EQ(entry->text, sensor.text) << sensor.id;
+  }
+}

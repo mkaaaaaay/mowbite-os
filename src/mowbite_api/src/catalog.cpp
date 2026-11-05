@@ -55,6 +55,55 @@ Field Switch(std::string name, std::string text) {
   return {std::move(name), Type::kInteger, "", true, std::move(text), {}, false, {}, ""};
 }
 
+Field Object(std::string name, std::string text, std::vector<Field> fields = {}, bool required = true) {
+  return {std::move(name), Type::kObject, "", required, std::move(text), {}, false, std::move(fields), ""};
+}
+
+// A list of values of one type.
+Field List(std::string name, std::string text, Type items, bool required = true) {
+  Field field = {std::move(name), Type::kArray, "", required, std::move(text), {}, false, {}, ""};
+  field.items = items;
+  return field;
+}
+
+// A list of objects of these fields.
+Field Rows(std::string name, std::string text, std::vector<Field> fields, bool required = true) {
+  return {std::move(name), Type::kArray, "", required, std::move(text), {}, false, std::move(fields), ""};
+}
+
+Field Nullable(Field field) {
+  field.nullable = true;
+  return field;
+}
+
+Field NoParams() {
+  return Object("params", "None", {}, false);
+}
+
+// The answer of ntrip.get, .set and .delete.
+Field NtripAccess() {
+  return Object("result", "The stored access to the caster; of user and password only whether they are set",
+                {Bool("configured", "Whether an access is stored"),
+                 Text("host", "Host of the caster", false), Integer("port", "Port of the caster", false),
+                 Text("mountpoint", "Mountpoint at the caster", false),
+                 Integer("version", "NTRIP version, 1 or 2", false), Bool("has_user", "A user is stored", false),
+                 Bool("has_password", "A password is stored", false),
+                 Text("error", "Why a stored file cannot be used", false)});
+}
+
+Field Deleted() {
+  return Object("result", "How many were deleted", {Integer("deleted", "Number of files deleted")});
+}
+
+Field GeometryAnswer() {
+  return Object("result", "The geometry now",
+                {Object("settings",
+                        "By key of x-geometry: value, default (the platform's), stored (entered by the user), type "
+                        "(number or points), unit, min and max of a number, settable"),
+                 Integer("version", "Goes up with every change; robot.geometry.set needs the one read last"),
+                 Text("platform", "The platform whose file gives the defaults")});
+}
+
 }  // namespace
 
 const std::vector<Field>& RobotState() {
@@ -215,6 +264,227 @@ const std::vector<Command>& Commands() {
             {{kRecord + "collect_point"}}),
   };
   return commands;
+}
+
+const std::vector<Method>& Methods() {
+  static const std::vector<Method> methods = {
+      {"rpc.ping", "mowbite_bridge", "Answers pong", NoParams(), Text("result", "Always pong", true, {"pong"}), ""},
+      {"rpc.methods", "mowbite_bridge", "The methods offered right now, of the OS and the planner", NoParams(),
+       List("result", "Method names", Type::kString), ""},
+      {"sensors.list", "mowbite_bridge",
+       "Every sensor of sensor_infos/json with its last value; ids selects some, unknown ids are left out",
+       Object("params", "None for all", {List("ids", "Sensor ids of x-sensors", Type::kString, false)}, false),
+       Rows("result", "An entry of sensor_infos/json with value and stamp",
+            {Text("sensor_id", "Id of x-sensors"), Text("sensor_name", "Name to show"),
+             Text("value_type", "STRING or DOUBLE", true, {"STRING", "DOUBLE"}),
+             Text("value_description", "What it measures", true,
+                  {"VOLTAGE", "CURRENT", "TEMPERATURE", "REVOLUTIONS", "UNKNOWN"}),
+             Text("unit", "Unit of the value, empty for none"), Switch("has_min_max", "1 with a range"),
+             Number("min_value", "", "Low end of the range, 0 without one"),
+             Number("max_value", "", "High end of the range, 0 without one"),
+             Switch("has_critical_low", "1 with a lower critical value"),
+             Number("lower_critical_value", "", "Below this the value is critical, 0 without one"),
+             Switch("has_critical_high", "1 with an upper critical value"),
+             Number("upper_critical_value", "", "Above this the value is critical, 0 without one"),
+             Nullable({"value", Type::kAny, "", true, "The last value, a text for a text sensor; null before one came",
+                       {}, false, {}, ""}),
+             Nullable(Number("stamp", "unix s", "When the last value came, null before one came"))}),
+       ""},
+      {"logs.recent", "mowbite_bridge", "The last log lines from WARN on, oldest first, logins hidden",
+       Object("params", "All optional",
+              {Number("since", "unix s", "Only lines after this time", false),
+               Text("level", "Lowest level: DEBUG, INFO, WARN, ERROR or FATAL; another counts as WARN", false),
+               Integer("limit", "Only the newest lines", false)},
+              false),
+       Rows("result", "A log line",
+            {Number("t", "unix s", "When it was logged"), Text("level", "Its level", true, {"WARN", "ERROR", "FATAL"}),
+             Text("node", "The node that logged it"), Text("msg", "The text, cut after 2000 bytes")}),
+       ""},
+      {"events.history", "mowbite_bridge", "The events of one local day as events/json sent them",
+       Object("params", "None for today; [\"YYYYMMDD\"] works as well",
+              {Text("date", "The day as YYYYMMDD", false)}, false),
+       List("result", "Events, oldest first; none for an unknown day", Type::kObject), ""},
+      {"events.history.list", "mowbite_bridge", "The days with events", NoParams(),
+       List("result", "Days as YYYYMMDD, newest first", Type::kString), ""},
+      {"events.history.delete", "mowbite_bridge", "Deletes the events of one day, without a day of all",
+       Object("params", "None for every day", {Text("date", "The day as YYYYMMDD", false)}, false), Deleted(), ""},
+      {"position.history", "mowbite_bridge", "The track of a job of mowing",
+       Object("params", "None for the current job", {Text("job_id", "The job", false)}, false),
+       Object("result", "The track, or error for an unknown job",
+              {Rows("segments", "A stretch with the same job, session and blade",
+                    {Object("attributes", "What the stretch belongs to",
+                            {Text("job_id", "The job"), Text("session_id", "The session of the logic"),
+                             Bool("blades", "Whether the blade ran")}),
+                     List("points", "Points [x, y] in m", Type::kArray)},
+                    false),
+               List("buffer", "Points [x, y] in m not yet in a segment", Type::kArray, false),
+               Text("error", "not found for an unknown job", false, {"not found"})}),
+       ""},
+      {"position.history.list", "mowbite_bridge", "The jobs with a track", NoParams(),
+       Rows("result", "A job with a track, newest first",
+            {Text("job_id", "The job"), Integer("timestamp", "When its track began, unix s")}),
+       ""},
+      {"position.history.delete", "mowbite_bridge", "Deletes the track of a job, without a job all but the current one",
+       Object("params", "None for all", {Text("job_id", "The job", false)}, false), Deleted(), ""},
+      {"mowing.plan", "mowbite_logic", "Asks the planner for the paths of an area without mowing it",
+       Object("params", "area_id, or outline with obstacles; the rest overrides the planner's values for this plan",
+              {Text("area_id", "A mowing area of the map", false),
+               List("outline", "Points {x, y} in m", Type::kObject, false),
+               List("obstacles", "Rings of points {x, y} in m", Type::kArray, false),
+               Number("angle", "rad", "Direction of the lanes, 0 east, counter-clockwise", false),
+               Integer("outline_count", "Loops along the outline", false),
+               Integer("outline_overlap_count", "Lanes that overlap the loops", false),
+               Number("outline_offset", "m", "Distance of the first loop from the outline", false)}),
+       Object("result", "The plan",
+              {Text("area_id", "The area, empty for an outline"),
+               Number("angle", "rad", "Direction of the lanes the planner used"),
+               Rows("paths", "A path of the plan",
+                    {Bool("is_outline", "A loop along the outline"),
+                     List("points", "Points [x, y] in m, simplified to 1 cm", Type::kArray),
+                     List("pose_index", "Index of each point in its path", Type::kInteger)}),
+               Text("fingerprint", "The planner's fingerprint of the plan")}),
+       ""},
+      {"params.set", "mowbite_logic",
+       "Changes settings of x-settings in IDLE, all or nothing; a value outside its range is set to the bound",
+       Object("params", "The settings by full name",
+              {Object("params", "\"/mower_logic/<name>\": number, for names of x-settings")}),
+       Object("result", "The values taken by full name, those outside the range at the bound"), ""},
+      {"robot.geometry.get", "mowbite_logic", "The dimensions of the mower, keys of x-geometry", NoParams(),
+       GeometryAnswer(), ""},
+      {"robot.geometry.set", "mowbite_logic", "Changes dimensions in IDLE, all or nothing; GEOMETRY_CHANGED follows",
+       Object("params", "The change",
+              {Integer("version", "version of the last robot.geometry.get"),
+               Object("settings", "Values by key of x-geometry", {}, false),
+               List("reset", "Keys back to the platform's value", Type::kString, false)}),
+       GeometryAnswer(), ""},
+      {"system.hold", "mowbite_logic",
+       "Holds the mower for an update: granted only in IDLE with nothing on its way, 0 lets go",
+       Object("params", "The hold", {Integer("seconds", "0 to 1800")}),
+       Object("result", "What the gate of the updater looks at",
+              {Text("state", "current_state of robot_state"), Text("sub_state", "current_sub_state of robot_state"),
+               Bool("is_charging", "On the charging contacts"),
+               Integer("hold_until", "End of the hold in unix s, 0 without one"),
+               Bool("idle", "Whether a hold can be granted now"),
+               Integer("emergency_reason", "The bits of the emergency, 0 without one")}),
+       ""},
+      {"calibration.check", "mowbite_logic", "Whether a calibration drive could start here, without a drive",
+       NoParams(),
+       Object("result", "The check",
+              {Bool("ok", "No problem"),
+               List("problems", "Each with reason, message and its fields", Type::kObject),
+               Nullable(Object("space", "Room for the drive, null without one",
+                               {Number("length", "m", "Length of the strip"), Number("width", "m", "Width of the strip"),
+                                Number("lane_length", "m", "Length of a lane"),
+                                Number("heading", "rad", "Direction of the lanes")}))}),
+       "while the calibration program runs"},
+      {"calibration.start", "mowbite_logic", "Starts the calibration drive; a refusal carries reason and message",
+       NoParams(), Object("result", "The drive began", {Text("state", "Always CALIBRATING", true, {"CALIBRATING"})}),
+       "while the calibration program runs"},
+      {"calibration.abort", "mowbite_logic", "Stops the calibration drive where the mower is", NoParams(),
+       Object("result", "Whether a drive ran", {Bool("ok", "A drive was stopped")}),
+       "while the calibration program runs"},
+      {"calibration.result", "mowbite_calibration", "The result of the last calibration, null before one",
+       NoParams(), Nullable(Object("result", "As the calibration wrote it")), ""},
+      {"map.replace", "mowbite_map", "Replaces the map with the one given, in the shape of map/json",
+       List("params", "[map]", Type::kObject), Text("result", "Successfully stored map (n areas)"), ""},
+      {"map.area_properties", "mowbite_map", "The properties an area of the map may have", NoParams(),
+       List("result", "Property names", Type::kString), ""},
+      {"ntrip.get", "mowbite_ntrip", "The access to the caster for corrections, without user and password",
+       NoParams(), NtripAccess(), ""},
+      {"ntrip.set", "mowbite_ntrip",
+       "Stores the access in IDLE, all or nothing; a stored login stays only for the same host and port",
+       Object("params", "The access",
+              {Text("host", "Host of the caster"), Text("mountpoint", "Mountpoint"),
+               Integer("port", "Port, 2101 without one", false), Integer("version", "1 or 2, 2 without one", false),
+               Text("user", "User", false), Text("password", "Password", false)}),
+       NtripAccess(), "only with access_over_rpc"},
+      {"ntrip.delete", "mowbite_ntrip", "Removes the access in IDLE", NoParams(), NtripAccess(),
+       "only with access_over_rpc"},
+  };
+  return methods;
+}
+
+std::string NodeOf(const std::string& method) {
+  for (const auto& entry : Methods()) {
+    if (entry.name == method) return entry.node;
+  }
+  if (method.rfind("system.", 0) == 0 && FindCommand(method)) return "mowbite_bridge";
+  return FindCommand(method) ? "mowbite_logic" : "";
+}
+
+const std::vector<SensorEntry>& Sensors() {
+  static const std::vector<SensorEntry> sensors = {
+      {"om_v_battery", "V Battery", "V", false, "logic", "Voltage of the battery"},
+      {"om_v_charge", "V Charge (dock contact)", "V", false, "logic",
+       "The charge voltage while on the contacts, else 0; derived, the board reports none"},
+      {"om_charge_current", "Charge Current", "A", false, "logic", "Current into the battery"},
+      {"om_charge_state", "Charge State (derived)", "", true, "logic",
+       "Not Charging, Fast Charge or Done, derived from contact, current and charge"},
+      {"om_mow_motor_rpm", "Mow Motor Revolutions", "rpm", false, "logic", "Speed of the blade motor"},
+      {"om_mow_motor_current", "Mow Motor Current", "A", false, "logic", "Current of the blade motor"},
+      {"om_gps_accuracy", "GPS Accuracy", "m", false, "logic", "Expected error of the position"},
+      {"om_mow_motor_temp", "Mow Motor Temp", "deg.C", false, "logic", "Temperature of the blade motor"},
+      {"om_left_esc_temp", "Left ESC Temp", "deg.C", false, "logic", "Temperature of the left motor board"},
+      {"om_right_esc_temp", "Right ESC Temp", "deg.C", false, "logic", "Temperature of the right motor board"},
+      {"battery_temp", "Battery Temp", "deg.C", false, "logic", "Temperature of the battery from its BMS"},
+      {"os_correction_age", "RTK Correction Age", "s", false, "gnss", "Age of the last RTK correction"},
+      {"os_ntrip_state", "NTRIP", "", true, "ntrip", "State of the connection to the caster"},
+  };
+  return sensors;
+}
+
+const SensorEntry* FindSensor(const std::string& id) {
+  for (const auto& sensor : Sensors()) {
+    if (sensor.id == id) return &sensor;
+  }
+  return nullptr;
+}
+
+const std::vector<SettingEntry>& LogicSettings() {
+  // Bounds of MowBite OS beyond MowerLogic.cfg: max_position_accuracy at most 0.3 m, gps_timeout at least 1 s,
+  // docking_approach_distance and undock_distance 0.5 to 2 m, docking_retry_count at most 5.
+  static const std::vector<SettingEntry> settings = {
+      {"rain_mode", true, 0, 3, 0, "", "What rain does, as in OpenMower"},
+      {"rain_delay_minutes", true, 30, 1440, 30, "min", "How long to wait after rain"},
+      {"rain_check_seconds", true, 20, 300, 20, "s", "How long rain has to last to count"},
+      {"automatic_mode", true, 0, 2, 0, "", "Automatic mowing, as in OpenMower"},
+      {"gps_timeout", false, 1.0, 60.0, 10.0, "s", "Without a position this long the mower stops"},
+      {"max_position_accuracy", false, 0.01, 0.3, 0.1, "m", "Worst expected error of the position to mow"},
+      {"gps_wait_time", false, 0.0, 60.0, 10.0, "s", "How long the position has to be good again to go on"},
+      {"docking_approach_distance", false, 0.5, 2.0, 1.5, "m", "Distance of the point in front of the station"},
+      {"docking_distance", false, 0.0, 100.0, 2.0, "m", "Distance of the drive onto the station, as in OpenMower"},
+      {"docking_retry_count", true, 0, 5, 4, "", "Tries of docking after the first"},
+      {"undock_distance", false, 0.5, 2.0, 2.0, "m", "How far the mower backs off the station"},
+      {"motor_hot_temperature", false, 20.0, 150.0, 70.0, "deg.C", "The blade motor is too hot from here"},
+      {"motor_cold_temperature", false, 20.0, 150.0, 40.0, "deg.C",
+       "The blade motor may run again below this; below motor_hot_temperature"},
+  };
+  return settings;
+}
+
+const std::vector<GeometryEntry>& GeometryKeys() {
+  // Ranges are against slips of the pen (cm for m, a wrong sign), not against the platform's values: a measured body
+  // may be smaller than the one of the platform's file. The calibration drive sets track, the antenna, ticks_per_m and
+  // the mounting of the IMU, which may differ from the platform's by 5 degrees at most.
+  static const std::vector<GeometryEntry> keys = {
+      {"robot_width", false, true, 0.1, 1.5, "m", false, "Width of the body"},
+      {"robot_front", false, true, 0.0, 1.5, "m", false, "Front of the body ahead of the drive axle (base_link)"},
+      {"robot_rear", false, true, 0.0, 1.5, "m", false, "Rear of the body behind the drive axle"},
+      {"robot_outline", true, true, 0.0, 0.0, "m", false,
+       "Outline of the body as points [x, y] from the drive axle, each at most 1.5 m away"},
+      {"mower_width", false, true, 0.05, 1.5, "m", false, "Width the blade cuts"},
+      {"blade_ahead", false, true, -1.5, 1.5, "m", false, "Centre of the blade ahead of the drive axle"},
+      {"blade_offset", false, true, -0.75, 0.75, "m", false, "Centre of the blade left of the middle"},
+      {"antenna_x", false, true, -0.6, 0.6, "m", false, "GNSS antenna ahead of the drive axle"},
+      {"antenna_y", false, true, -0.3, 0.3, "m", false, "GNSS antenna left of the middle"},
+      {"track", false, true, 0.15, 0.8, "m", false, "Distance between the wheels"},
+      {"wheel_radius", false, false, 0.02, 0.5, "m", false, "Radius of the drive wheels"},
+      {"dock_contact_x", false, false, -1.5, 1.5, "m", false, "Charging contacts ahead of the drive axle"},
+      {"ticks_per_m", false, true, 100.0, 10000.0, "1/m", false, "Wheel ticks per metre"},
+      {"imu_roll", false, true, -0.087, 0.087, "rad", true, "Roll of the IMU against the platform's value"},
+      {"imu_pitch", false, true, -0.087, 0.087, "rad", true, "Pitch of the IMU against the platform's value"},
+  };
+  return keys;
 }
 
 const EventEntry* FindEvent(const std::string& type) {

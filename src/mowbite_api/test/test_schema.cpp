@@ -166,3 +166,39 @@ TEST(Schema, WithThePartOfThePlanner) {
   EXPECT_EQ(schema["x-planner"]["version"], 2);
   EXPECT_TRUE(CheckAdditive(SchemaWithPlanner(nullptr), schema).empty());
 }
+
+// I1: the file's head names version and owner, every method is in x-methods, and every object is sorted by key.
+TEST(Schema, HeadMethodsAndOrder) {
+  const Json& schema = Schema();
+  EXPECT_EQ(schema["x-owner"], kOwner);
+  for (const auto& command : Commands()) EXPECT_TRUE(schema["x-methods"].contains(command.name)) << command.name;
+  for (const auto& method : Methods()) {
+    ASSERT_TRUE(schema["x-methods"].contains(method.name)) << method.name;
+    EXPECT_EQ(schema["x-methods"][method.name]["node"], method.node);
+    EXPECT_TRUE(schema["$defs"].contains(method.name + ".result")) << method.name;
+  }
+  EXPECT_EQ(schema["x-methods"].size(), Commands().size() + Methods().size());
+  EXPECT_EQ(schema["x-sensors"].size(), Sensors().size());
+  EXPECT_EQ(schema["x-sensors"]["os_ntrip_state"]["kind"], "text");
+  EXPECT_EQ(schema["x-settings"]["undock_distance"]["min"], 0.5);
+  EXPECT_EQ(schema["x-settings"]["docking_retry_count"]["type"], "integer");
+  EXPECT_EQ(schema["x-geometry"]["robot_outline"]["type"], "points");
+  EXPECT_FALSE(schema["x-geometry"]["dock_contact_x"]["settable"].get<bool>());
+  // actions/json: reason only with the names of MOWING_REFUSED.
+  const Json& reason = schema["$defs"]["actions"]["items"]["properties"]["reason"];
+  EXPECT_EQ(reason["enum"].size(), schema["x-reasons"]["MOWING_REFUSED"].size());
+  EXPECT_EQ(schema["$defs"]["actions"]["items"]["required"], Json({"action_id", "action_name", "enabled"}));
+  std::function<void(const Json&, const std::string&)> sorted = [&](const Json& value, const std::string& path) {
+    if (value.is_array()) {
+      for (const auto& item : value) sorted(item, path + "[]");
+    }
+    if (!value.is_object()) return;
+    std::string last;
+    for (const auto& [key, item] : value.items()) {
+      EXPECT_LT(last, key) << path;
+      last = key;
+      sorted(item, path + "." + key);
+    }
+  };
+  sorted(schema, "");
+}

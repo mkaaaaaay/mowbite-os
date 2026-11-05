@@ -55,6 +55,8 @@ RESPONSE = "rpc/response/stack_test"
 routes = []
 # (method, answer) of every command, for the check against the schema at the end.
 COMMAND_ANSWERS = []
+# Every answer of rpc() with its method, for AS3 against the results of x-methods.
+RPC_ANSWERS = []
 
 
 def record(point, status, example=""):
@@ -147,7 +149,9 @@ def rpc(method, params=None, rid="1", timeout=5.0, response_topic=RESPONSE, corr
                         routes.append((rid, top, correlation, correlations.get(i)))
                     return j
         return None
-    return wait_for(answer, timeout)
+    r = wait_for(answer, timeout)
+    RPC_ANSWERS.append((method, r))
+    return r
 
 
 REC = "mower_logic:area_recording/"
@@ -333,6 +337,28 @@ if args.target == "mowbite-os":
         r = rpc("robot.geometry.get", None, {"client": "check", "n": 1})
         check("an object id comes back as it was sent (node)", bool(r) and "result" in r, json.dumps(r)[:200],
               point="AM4 ids")
+    if API_SCHEMA is not None:
+        # I1: the names of the interface file against what the OS offers and sends.
+        listed = API_SCHEMA.get("x-methods", {})
+        offered = [m for m in methods or [] if not m.startswith(("planner.", "sim."))]
+        unknown = [m for m in offered if m not in listed]
+        absent = [m for m, e in listed.items() if not e.get("offered") and m not in (methods or [])]
+        check("rpc.methods and x-methods name the same methods", bool(listed) and not unknown and not absent,
+              f"not in x-methods {unknown}, not offered {absent}", point="I1 methods")
+        known = API_SCHEMA.get("x-sensors", {})
+        bad = [i["sensor_id"] for i in infos if i["sensor_id"] not in known
+               or known[i["sensor_id"]].get("name") != i.get("sensor_name")
+               or known[i["sensor_id"]].get("unit") != i.get("unit")
+               or (known[i["sensor_id"]].get("kind") == "text") != (i.get("value_type") == "STRING")]
+        check("every sensor of sensor_infos/json as in x-sensors", bool(infos) and not bad, ",".join(bad),
+              point="I1 sensors")
+        mow_refused = API_SCHEMA.get("x-reasons", {}).get("MOWING_REFUSED", {})
+        start = next((a for a in actions if a["action_id"] == "mower_logic:idle/start_mowing"), {})
+        others = [a["action_id"] for a in actions if "reason" in a and a["action_id"] != start.get("action_id")]
+        check("actions/json: reason only at start_mowing while it is off, a name of MOWING_REFUSED",
+              bool(start) and ("reason" in start) == (start.get("enabled") == 0) and not others
+              and (start.get("enabled") == 1 or start.get("reason") in mow_refused),
+              json.dumps(start) + (f" others {others}" if others else ""), point="I2 start_mowing")
 if offers("sensors.list"):
     # Every sensor of sensor_infos/json with its fields unchanged, the last value and its time (null before one came).
     r = rpc("sensors.list", None, "sensors")
@@ -601,11 +627,15 @@ def fixed_reason(event, resume=None):
             and event.get("resume") == (resume or event.get("resume")) and event.get("resume") in ("auto", "user"))
 
 
+shown = next((a.get("reason") for a in json.loads(latest("actions/json") or "[]")
+              if a["action_id"] == "mower_logic:idle/start_mowing"), None)
 mark = len(msgs)
 c.publish("action", "mower_logic:idle/start_mowing")
 refused = wait_for(lambda: events_of("MOWING_REFUSED", mark), 3)
 check("MOWING_REFUSED with a fixed reason", fixed_reason(refused[-1] if refused else None, "user"),
       json.dumps(refused[-1] if refused else None), point="3.1a MOWING_REFUSED")
+check("start_mowing showed the reason of its MOWING_REFUSED", bool(refused) and shown == refused[-1].get("reason"),
+      f"shown {shown}, refused {refused[-1].get('reason') if refused else None}", point="I2 start_mowing")
 action_refusal = refused[-1] if refused else {}
 
 # AS2: every command as an RPC with an answer. The commands of the logic are those of system.api that take client.
@@ -792,6 +822,9 @@ if methods is not None and "system.hold" in methods:
     off = wait_for(lambda: enabled("mower_logic:idle/start_area_recording") == 0, 3)
     check("start_area_recording and start_mowing off while held",
           bool(off) and enabled("mower_logic:idle/start_mowing") == 0, str(latest("actions/json"))[:120])
+    held_reason = next((a.get("reason") for a in json.loads(latest("actions/json") or "[]")
+                        if a["action_id"] == "mower_logic:idle/start_mowing"), None)
+    check("start_mowing shows HOLD while held", held_reason == "HOLD", str(held_reason), point="I2 start_mowing")
     for action, kind in (("mower_logic:idle/start_mowing", "MOWING_REFUSED"),
                          ("mower_logic:idle/start_area_recording", "RECORDING_REFUSED")):
         mark = len(msgs)
@@ -1325,6 +1358,24 @@ def check_against_schema():
     if COMMAND_ANSWERS:
         check(f"every answer of a command ({len(COMMAND_ANSWERS)}) as in system.api", not bad, "; ".join(bad[:4]),
               point="AS3 schema commands")
+    # I1: the results of the other methods of x-methods.
+    commands = API_SCHEMA.get("x-commands", {})
+    bad, seen = [], 0
+    for method, r in RPC_ANSWERS:
+        if method in commands or method not in API_SCHEMA.get("x-methods", {}) or not r or "result" not in r:
+            continue
+        seen += 1
+        errors = list(validator(method + ".result").iter_errors(r["result"]))
+        if errors:
+            bad.append(f"{method}: {errors[0].message[:160]}")
+    check(f"every result of another method ({seen}) as in x-methods", seen > 0 and not bad, "; ".join(bad[:4]),
+          point="I1 methods")
+    payloads = [p for _, top, p, _ in msgs if top == "actions/json" and p]
+    bad = []
+    for p in payloads:
+        bad += [e.message[:160] for e in validator("actions").iter_errors(json.loads(p))]
+    check(f"every actions/json seen ({len(payloads)}) as in system.api", bool(payloads) and not bad,
+          "; ".join(sorted(set(bad))[:4]), point="I2 actions")
 
 
 check_against_schema()

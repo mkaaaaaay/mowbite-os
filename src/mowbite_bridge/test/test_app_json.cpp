@@ -159,6 +159,18 @@ TEST(Actions, GroupsSortedByPrefixItemsInTheirOrder) {
   EXPECT_EQ(ActionsText({}), "[]");
 }
 
+// I2: the reason of an action that is off, never of one that works.
+TEST(Actions, ReasonOnlyWhileOff) {
+  const std::map<std::string, std::vector<ActionItem>> off = {
+      {"mower_logic:idle", {{"start_mowing", "Start Mowing", false, "NO_POSITION"}}}};
+  EXPECT_EQ(ActionsText(off), R"([{"action_id":"mower_logic:idle/start_mowing","action_name":"Start Mowing",)"
+                              R"("enabled":0,"reason":"NO_POSITION"}])");
+  const std::map<std::string, std::vector<ActionItem>> on = {
+      {"mower_logic:idle", {{"start_mowing", "Start Mowing", true, "NO_POSITION"}}}};
+  EXPECT_EQ(ActionsText(on), R"([{"action_id":"mower_logic:idle/start_mowing","action_name":"Start Mowing",)"
+                             R"("enabled":1}])");
+}
+
 // B16, B8
 TEST(Fixed, CapabilitiesVersionAndSystemInfo) {
   EXPECT_EQ(CapabilitiesText(), "{\n  \"rpc\": 1,\n  \"map:json\": 1,\n  \"events\": 1\n}");

@@ -732,8 +732,9 @@ std::vector<ActionGroup> LogicCore::Actions() const {
   const bool mowing = state_ == State::kMowing;
   std::vector<ActionGroup> groups;
   groups.push_back({kRootPrefix, {{"reset_emergency", "Reset Emergency", true}}});
+  const Reason start = StartProblem();
   groups.push_back({kIdlePrefix,
-                    {{"start_mowing", "Start Mowing", StartProblem().empty()},
+                    {{"start_mowing", "Start Mowing", start.empty(), start.code},
                      {"start_area_recording", "Start Area Recording", idle && !emergency_ && map_writable_ && !Held()},
                      {"reset_job", "Reset Job", idle && job_.Unfinished()}}});
   // Pause and continue take turns, like in OpenMower; continue waits for the emergency to be reset.
@@ -839,10 +840,10 @@ std::vector<Event> LogicCore::TakeEvents() {
 bool LogicCore::TakeActionsChanged() {
   bool changed = actions_changed_;
   actions_changed_ = false;
-  // Start Mowing follows the position, the battery and more, which change without an event.
-  const bool start_ok = StartProblem().empty();
-  if (start_ok != last_start_ok_) {
-    last_start_ok_ = start_ok;
+  // Start Mowing and its reason follow the position, the battery and more, which change without an event.
+  const std::string start_reason = StartProblem().code;
+  if (start_reason != last_start_reason_) {
+    last_start_reason_ = start_reason;
     changed = true;
   }
   return changed;
