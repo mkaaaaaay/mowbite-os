@@ -2,6 +2,7 @@
 #define MOWBITE_API_CATALOG_H
 
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -10,10 +11,13 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 5;
+constexpr int kApi = 6;
 
-// The JSON type of a field; kNumber takes whole numbers as well, kInteger also 2.0.
-enum class Type { kString, kNumber, kInteger, kBoolean, kObject, kArray };
+// Who owns the names of the interface file; readers keep a copy of it.
+constexpr char kOwner[] = "mowbite-os";
+
+// The JSON type of a field; kNumber takes whole numbers as well, kInteger also 2.0, kAny every value.
+enum class Type { kString, kNumber, kInteger, kBoolean, kObject, kArray, kAny };
 
 struct Field {
   std::string name;
@@ -31,6 +35,8 @@ struct Field {
   std::vector<Field> fields;
   // ECMA regular expression a text has to match, empty for any.
   std::string pattern;
+  // The type of the items of an array without fields; with fields they are objects of these fields.
+  std::optional<Type> items = std::nullopt;
 };
 
 // A reason as events and refusals carry it: reason, message, severity, resume and its own fields.
@@ -86,6 +92,57 @@ struct Command {
   std::vector<CommandAction> actions;
 };
 
+// Another RPC method of the OS: what it takes and gives, and which node answers it.
+struct Method {
+  std::string name;
+  // mowbite_bridge, mowbite_logic, mowbite_map, mowbite_ntrip or mowbite_calibration.
+  std::string node;
+  std::string text;
+  // The params as one value, mostly an object of fields.
+  Field params;
+  Field result;
+  // When rpc.methods lists it, empty for always.
+  std::string offered;
+};
+
+// A sensor of sensor_infos/json and sensors.list: its id, name and unit; ranges depend on the platform.
+struct SensorEntry {
+  std::string id;
+  std::string name;
+  // Empty for a text or a number without a unit.
+  std::string unit;
+  bool text = false;
+  // What sends it: logic, gnss (the GNSS driver of the platform) or ntrip.
+  std::string source;
+  std::string description;
+};
+
+// A setting of /mower_logic for params.set; a value outside the range is set to the bound.
+struct SettingEntry {
+  std::string name;
+  bool integer = false;
+  double min = 0;
+  double max = 0;
+  double def = 0;
+  std::string unit;
+  std::string text;
+};
+
+// A key of robot.geometry.get and .set; a number outside the range is refused.
+struct GeometryEntry {
+  std::string name;
+  // A list of points (robot_outline), else a number.
+  bool points = false;
+  // The user can set it; wheel_radius and dock_contact_x are the platform's alone.
+  bool settable = true;
+  // The range of a number in its unit; with relative, around the platform's value.
+  double min = 0;
+  double max = 0;
+  std::string unit = "m";
+  bool relative = false;
+  std::string text;
+};
+
 // The fields of robot_state/json.
 const std::vector<Field>& RobotState();
 // Every event the OS sends on events/json; types not in it may come from the planner and carry the envelope.
@@ -98,6 +155,16 @@ const std::vector<EmergencyBit>& EmergencyBits();
 const std::vector<Command>& Commands();
 // Groups of reasons only answers carry, never an event: COMMAND_REFUSED and REQUEST_REFUSED.
 const std::vector<EventEntry>& Refusals();
+// The RPC methods of the OS beyond Commands(); planner.* are the planner's, sim.* only in the simulation.
+const std::vector<Method>& Methods();
+// The node that answers a command or method, empty for a name the catalog does not know.
+std::string NodeOf(const std::string& method);
+const std::vector<SensorEntry>& Sensors();
+const SensorEntry* FindSensor(const std::string& id);
+// The settings of /mower_logic in the order of the app's groups.
+const std::vector<SettingEntry>& LogicSettings();
+// The keys of the geometry in the order of the answers; robot_outline is the only list.
+const std::vector<GeometryEntry>& GeometryKeys();
 
 // The event of this type, nullptr for a type the catalog does not know.
 const EventEntry* FindEvent(const std::string& type);
@@ -124,7 +191,8 @@ constexpr char kUnknownEmergency[] = "UNKNOWN";
 // The names of the set emergency bits in bit order, "LATCH, LIFT"; set bits without a name add one UNKNOWN at the end.
 std::string EmergencyNames(int bits);
 
-// The JSON Schema 2020-12 of the interface with the catalog in x-reasons, x-emergency-bits and x-commands.
+// The JSON Schema 2020-12 of the interface with the catalog in x-reasons, x-emergency-bits, x-commands, x-methods,
+// x-sensors, x-settings and x-geometry; every object sorted by key.
 const Json& Schema();
 
 // What is wrong with an event against the catalog: an unknown type (strict only), a missing or unknown field, a

@@ -363,3 +363,44 @@ TEST(Catalog, ParamsOfACommand) {
   EXPECT_NE(CheckParams(*FindCommand("recording.auto_points"), Json{{"enabled", 1}}, &field), "");
   EXPECT_EQ(CheckParams(*FindCommand("mowing.start"), Json{{"areas", Json::array({"front"})}}, &field), "");
 }
+
+// Every RPC method once, each with its node; the commands are none of them.
+TEST(Catalog, MethodsSensorsSettingsAndGeometry) {
+  const std::set<std::string> nodes = {"mowbite_bridge", "mowbite_logic", "mowbite_map", "mowbite_ntrip",
+                                       "mowbite_calibration"};
+  std::set<std::string> names;
+  for (const auto& command : Commands()) names.insert(command.name);
+  for (const auto& method : Methods()) {
+    EXPECT_TRUE(names.insert(method.name).second) << method.name;
+    EXPECT_TRUE(nodes.count(method.node)) << method.name << " " << method.node;
+    EXPECT_FALSE(method.text.empty()) << method.name;
+    EXPECT_EQ(method.name.rfind("planner.", 0), std::string::npos) << method.name;
+    EXPECT_EQ(method.name.rfind("sim.", 0), std::string::npos) << method.name;
+    EXPECT_EQ(NodeOf(method.name), method.node);
+  }
+  EXPECT_EQ(NodeOf("system.info"), "mowbite_bridge");
+  EXPECT_EQ(NodeOf("mowing.start"), "mowbite_logic");
+  EXPECT_EQ(NodeOf("no.such"), "");
+  std::set<std::string> ids;
+  for (const auto& sensor : Sensors()) {
+    EXPECT_TRUE(ids.insert(sensor.id).second) << sensor.id;
+    EXPECT_TRUE(sensor.source == "logic" || sensor.source == "gnss" || sensor.source == "ntrip") << sensor.id;
+    EXPECT_EQ(FindSensor(sensor.id), &sensor);
+  }
+  EXPECT_EQ(Sensors().size(), 13u);
+  EXPECT_EQ(FindSensor("no_such"), nullptr);
+  std::set<std::string> settings;
+  for (const auto& setting : LogicSettings()) {
+    EXPECT_TRUE(settings.insert(setting.name).second) << setting.name;
+    EXPECT_LE(setting.min, setting.def) << setting.name;
+    EXPECT_LE(setting.def, setting.max) << setting.name;
+  }
+  EXPECT_EQ(settings.size(), 13u);
+  std::set<std::string> keys;
+  for (const auto& key : GeometryKeys()) {
+    EXPECT_TRUE(keys.insert(key.name).second) << key.name;
+    if (!key.points) {
+      EXPECT_LT(key.min, key.max) << key.name;
+    }
+  }
+}

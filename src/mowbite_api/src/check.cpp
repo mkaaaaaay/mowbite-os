@@ -20,6 +20,7 @@ bool HasType(const Json& value, Type type) {
     case Type::kBoolean: return value.is_boolean();
     case Type::kObject: return value.is_object();
     case Type::kArray: return value.is_array();
+    case Type::kAny: return true;
   }
   return false;
 }
@@ -32,6 +33,7 @@ const char* TypeName(Type type) {
     case Type::kBoolean: return "boolean";
     case Type::kObject: return "object";
     case Type::kArray: return "array";
+    case Type::kAny: return "any";
   }
   return "?";
 }
