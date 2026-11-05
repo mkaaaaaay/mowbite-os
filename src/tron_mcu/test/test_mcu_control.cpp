@@ -1120,3 +1120,527 @@ TEST_F(ControlTest, HoldOnTheDockSendsNoSpeedData) {
   Run(now_ + 1.0);
   EXPECT_TRUE(Times([](const SubPacket& p) { return IsModule(p, Module::kSpeed); }).empty());
 }
+
+// Cases the mutation tests of the safety code found uncovered. Times on the 10 ms grid are chosen where a limit falls
+// exactly on a tick, or just off it by rounding.
+
+TEST_F(ControlTest, ALatchBetweenReleaseAndTickStays) {
+  Run(0.1);
+  control_.LatchEmergency(kReasonHighLevel);
+  Run(0.2);
+  control_.ReleaseEmergency(now_);
+  control_.LatchEmergency(kReasonTilt);
+  Run(0.5);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonHighLevel | kReasonTilt);
+}
+
+TEST_F(ControlTest, ALiftRightAfterAReleaseStaysLatched) {
+  Run(0.1);
+  control_.LatchEmergency(kReasonHighLevel);
+  Run(0.2);
+  control_.ReleaseEmergency(now_);
+  Run(0.3);
+  ASSERT_FALSE(control_.Status(now_).latched);
+  // A short lift within the second after the release.
+  sensor_.lift = true;
+  Run(0.32);
+  sensor_.lift = false;
+  Run(0.6);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonLift);
+}
+
+TEST_F(ControlTest, OneReleaseSendsOneClearWhileTheLiftStays) {
+  Run(0.1);
+  sensor_.lift = true;
+  Run(0.5);
+  control_.ReleaseEmergency(now_);
+  Run(5.0);
+  EXPECT_EQ(Times(IsClear).size(), 1u);
+  EXPECT_TRUE(control_.Status(now_).latched);
+}
+
+TEST_F(ControlTest, ZerosFollowAClearOnlyAfterRecentMotion) {
+  Run(6.0);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(6.2);
+  control_.OnCmdVel(0.0f, 0.0f, now_);
+  Run(7.0);
+  sensor_.lift = true;
+  Run(8.0);
+  control_.ReleaseEmergency(now_);
+  Run(8.5);
+  auto clears = Times(IsClear);
+  ASSERT_EQ(clears.size(), 1u);
+  // 2 s after the last motion: three zeros after the clear.
+  EXPECT_EQ(Times(IsZeroSpeed, clears[0]).size(), 3u);
+  sensor_.lift = false;
+  Run(14.0);
+  sensor_.lift = true;
+  Run(15.0);
+  control_.ReleaseEmergency(now_);
+  Run(15.5);
+  clears = Times(IsClear);
+  ASSERT_EQ(clears.size(), 2u);
+  // 9 s after it: none.
+  EXPECT_TRUE(Times(IsZeroSpeed, clears[1]).empty());
+}
+
+TEST_F(ControlTest, NoZerosAfterAClearExactlyFiveSecondsAfterTheMotion) {
+  Run(0.02);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(0.1);
+  control_.OnCmdVel(0.0f, 0.0f, now_);
+  Run(1.0);
+  sensor_.lift = true;
+  Run(5.02);
+  // The motion went out at 0.03 s, the clear goes out at 5.03 s.
+  control_.ReleaseEmergency(now_);
+  Run(5.5);
+  auto clears = Times(IsClear);
+  ASSERT_EQ(clears.size(), 1u);
+  EXPECT_NEAR(clears[0], 5.03, 1e-9);
+  EXPECT_TRUE(Times(IsZeroSpeed, clears[0]).empty());
+}
+
+TEST_F(ControlTest, ASecondClearAfterTheMinimumInterval) {
+  Run(0.1);
+  sensor_.lift = true;
+  Run(0.15);
+  control_.ReleaseEmergency(now_);
+  // Clears at 0.16 s and 1.16 s, 0.9999999999999999 s apart in doubles.
+  Run(1.15);
+  control_.ReleaseEmergency(now_);
+  Run(1.5);
+  auto clears = Times(IsClear);
+  ASSERT_EQ(clears.size(), 2u);
+  EXPECT_NEAR(clears[1], 1.16, 1e-9);
+}
+
+TEST_F(ControlTest, TheReleaseWindowLastsUpToItsEnd) {
+  sensor_.lift = true;
+  Run(0.01);
+  control_.ReleaseEmergency(now_);
+  // The window ends at exactly 1.01 s, the lift drops right after.
+  Run(1.01);
+  sensor_.lift = false;
+  Run(1.02);
+  EXPECT_FALSE(control_.Status(now_).latched);
+}
+
+TEST_F(ControlTest, ACommandBeforeAReconnectIsDropped) {
+  Run(0.1);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  control_.OnConnected(now_);
+  Run(1.0);
+  EXPECT_TRUE(Times(IsMovingSpeed).empty());
+}
+
+TEST_F(ControlTest, AReconnectStopsAMovingMowerAtOnceAndAStandingOneGetsNoZeros) {
+  Run(0.1);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(0.2);
+  control_.OnConnected(now_);
+  Run(0.25);
+  auto zeros = Times(IsZeroSpeed);
+  ASSERT_FALSE(zeros.empty());
+  EXPECT_NEAR(zeros[0], 0.21, 1e-9);
+  Run(5.0);
+  control_.OnConnected(now_);
+  Run(6.0);
+  EXPECT_TRUE(Times(IsZeroSpeed, 5.0).empty());
+}
+
+TEST_F(ControlTest, AReconnectSendsAHeartbeatAtOnce) {
+  Run(0.15);
+  control_.OnConnected(now_);
+  Run(0.16);
+  EXPECT_EQ(Times(IsHeartbeat, 0.155, 0.16).size(), 1u);
+}
+
+TEST_F(ControlTest, HeartbeatKeepsTenHertzOnLateTicks) {
+  // Ticks every 70 ms: a heartbeat is due every 100 ms of the schedule, not 100 ms after the last late one.
+  for (int i = 1; i <= 100; i++) {
+    control_.OnSensorInfo(sensor_, i * 0.07);
+    for (auto& packet : control_.Tick(i * 0.07, kWall)) sent_.push_back({i * 0.07, packet});
+  }
+  const size_t beats = Times(IsHeartbeat).size();
+  EXPECT_GE(beats, 69u);
+  EXPECT_LE(beats, 71u);
+}
+
+TEST_F(ControlTest, HeartbeatEvery100msForLong) {
+  Run(30.0);
+  auto times = Times(IsHeartbeat);
+  ASSERT_EQ(times.size(), 300u);
+  for (size_t i = 1; i < times.size(); i++) EXPECT_NEAR(times[i] - times[i - 1], 0.1, 1e-6);
+}
+
+TEST_F(ControlTest, TheFirstTicksSendOnlyHeartbeatAndBladeOff) {
+  Run(0.5);
+  for (const auto& s : sent_) EXPECT_TRUE(IsHeartbeat(s.packet) || IsBladeOff(s.packet)) << s.t;
+}
+
+TEST_F(ControlTest, TelemetryExactlyAtTheTimeoutIsStillFresh) {
+  Run(0.01);
+  Run(1.01, false);
+  EXPECT_FALSE(control_.Status(now_).telemetry_stale);
+  Run(1.02, false);
+  EXPECT_TRUE(control_.Status(now_).telemetry_stale);
+}
+
+TEST_F(ControlTest, StatusShowsTheFlagsAndFreshTelemetry) {
+  Run(0.1);
+  EXPECT_FALSE(control_.Status(now_).telemetry_stale);
+  sensor_.stop = true;
+  Run(0.2);
+  EXPECT_TRUE(control_.Status(now_).stop);
+}
+
+TEST_F(ControlTest, BetweenSensorInfoAndTick) {
+  Run(0.1);
+  // Not blocked yet: no reason.
+  SensorInfo lifted = sensor_;
+  lifted.lift = true;
+  control_.OnSensorInfo(lifted, now_);
+  EXPECT_FALSE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+  control_.OnSensorInfo(sensor_, now_);
+  control_.LatchEmergency(kReasonHighLevel);
+  Run(0.2);
+  // Blocked already: the new flags show before the tick latches them.
+  SensorInfo flags = sensor_;
+  flags.stop = true;
+  flags.lift = true;
+  flags.bumper = true;
+  control_.OnSensorInfo(flags, now_);
+  EXPECT_EQ(control_.Status(now_).emergency_reason,
+            kReasonLatch | kReasonHighLevel | kReasonStop | kReasonLift | kReasonCollision);
+}
+
+TEST_F(ControlTest, StaleTelemetryAddsItsBitToTheLatchedOnes) {
+  Run(0.1);
+  control_.LatchEmergency(kReasonTilt);
+  Run(0.2);
+  Run(1.5, false);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonTilt | kReasonTimeoutInputs);
+}
+
+TEST_F(ControlTest, ABumperAddsItsBitToTheLatchedOnes) {
+  Run(0.1);
+  control_.LatchEmergency(kReasonFence);
+  Run(0.2);
+  sensor_.bumper = true;
+  Run(0.3);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonFence | kReasonCollision);
+}
+
+TEST_F(ControlTest, AfterAReleaseOnlyTheNewCauseShows) {
+  Run(0.1);
+  control_.LatchEmergency(kReasonHighLevel);
+  Run(0.2);
+  control_.ReleaseEmergency(now_);
+  Run(0.3);
+  Run(1.5, false);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonTimeoutInputs);
+}
+
+TEST_F(ControlTest, TheDebounceStartsAgainAfterALostSample) {
+  Run(0.1);
+  control_.OnDockContactSample(true);
+  control_.OnDockContactSample(true);
+  control_.OnDockContactSample(false);
+  control_.OnDockContactSample(true);
+  control_.OnDockContactSample(true);
+  Run(0.5);
+  EXPECT_FALSE(control_.Status(now_).dock_contact);
+  EXPECT_TRUE(Times(IsChargeOn).empty());
+  control_.OnDockContactSample(true);
+  Run(0.6);
+  EXPECT_TRUE(control_.Status(now_).dock_contact);
+  EXPECT_EQ(Times(IsChargeOn).size(), 1u);
+}
+
+TEST_F(ControlTest, AContactAgainSoonChargesAtOnce) {
+  Run(0.1);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  Run(1.0);
+  control_.OnDockContactSample(false);
+  Run(2.0);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  Run(2.1);
+  auto charges = Times(IsChargeOn);
+  ASSERT_EQ(charges.size(), 2u);
+  EXPECT_NEAR(charges[1], 2.01, 1e-9);
+}
+
+TEST_F(ControlTest, AllowingChargingAgainSendsItAtOnce) {
+  Run(0.1);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  Run(1.0);
+  control_.SetCharging(true, now_);
+  Run(1.1);
+  auto charges = Times(IsChargeOn);
+  ASSERT_EQ(charges.size(), 2u);
+  EXPECT_NEAR(charges[1], 1.01, 1e-9);
+}
+
+TEST_F(ControlTest, ChargeResentAfterThirtySecondsOnTheTick) {
+  Run(2.0);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  // Charge 1 at 2.01 s and 32.01 s, 29.999999999999996 s apart in doubles.
+  Run(32.05);
+  auto charges = Times(IsChargeOn);
+  ASSERT_EQ(charges.size(), 2u);
+  EXPECT_NEAR(charges[1], 32.01, 1e-9);
+}
+
+TEST_F(ControlTest, ImuForwardedEveryTwentyMilliseconds) {
+  for (int i = 1; i <= 10; i++) {
+    control_.OnImu(ImuCounts{}, i * 0.01);
+    Run(i * 0.01);
+  }
+  auto imu = Times([](const SubPacket& p) { return IsModule(p, Module::kImu); });
+  ASSERT_EQ(imu.size(), 5u);
+  for (size_t i = 0; i < imu.size(); i++) EXPECT_NEAR(imu[i], 0.01 + 0.02 * i, 1e-9);
+}
+
+TEST_F(BladeControlTest, ContactWhileTheBladeTurnsSwitchesItOff) {
+  Run(0.5);
+  control_.SetBlade(BladeOn(), now_);
+  Run(1.0);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  Run(1.01);
+  EXPECT_FALSE(control_.Status(now_).blade_on);
+  EXPECT_EQ(control_.Status(now_).blade_off_reason, BladeOffReason::kDock);
+  EXPECT_EQ(Times(IsBladeOff, 1.0).size(), 1u);
+}
+
+TEST_F(BladeControlTest, ARefusalEndsTheLeaseAlsoWhenItsCauseEndsBeforeTheTick) {
+  Run(0.5);
+  control_.SetBlade(BladeOn(), now_);
+  Run(1.0);
+  control_.SetHold(true);
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kHeld);
+  control_.SetHold(false);
+  Run(1.1);
+  EXPECT_FALSE(control_.Status(now_).blade_on);
+  EXPECT_EQ(control_.Status(now_).blade_off_reason, BladeOffReason::kBlocked);
+  // The same on the dock, with a contact that bounces before the tick.
+  control_.SetBlade(BladeOn(), now_);
+  Run(1.5);
+  ASSERT_TRUE(control_.Status(now_).blade_on);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kDocked);
+  control_.OnDockContactSample(false);
+  Run(1.6);
+  EXPECT_FALSE(control_.Status(now_).blade_on);
+  EXPECT_EQ(control_.Status(now_).blade_off_reason, BladeOffReason::kDock);
+}
+
+TEST_F(BladeControlTest, TheBladeOnDuringTheStartBurstCancelsTheRestOfIt) {
+  Run(0.05);
+  control_.SetBlade(BladeOn(), now_);
+  Run(1.0);
+  auto on = Times(IsBladeOn);
+  ASSERT_EQ(on.size(), 1u);
+  EXPECT_TRUE(Times(IsBladeOff, on[0]).empty());
+}
+
+TEST_F(BladeControlTest, AnOffRightAfterABurstGoesOutAtOnce) {
+  // The start burst sent off at 0.01, 0.11 and 0.21 s.
+  Run(0.22);
+  control_.SetBlade(BladeOn(), now_);
+  Run(0.23);
+  control_.SetBlade(kBladeOff, now_);
+  Run(0.3);
+  auto offs = Times(IsBladeOff, 0.225);
+  ASSERT_FALSE(offs.empty());
+  EXPECT_NEAR(offs[0], 0.24, 1e-9);
+}
+
+TEST_F(BladeControlTest, TheLeaseEndsOnTheTickOfItsEnd) {
+  Run(0.41);
+  control_.SetBlade(BladeOn(1.0), now_);
+  // It ends at 1.4100000000000001 s; the tick at 1.41 s is within the tolerance.
+  Run(1.45);
+  auto offs = Times(IsBladeOff, 0.5);
+  ASSERT_FALSE(offs.empty());
+  EXPECT_NEAR(offs[0], 1.41, 1e-9);
+}
+
+TEST_F(BladeControlTest, RequestsAtTheLimitsAreAccepted) {
+  Run(0.1);
+  EXPECT_EQ(control_.SetBlade(BladeOn(2.0, 100, 30), now_), BladeResult::kOk);
+  EXPECT_EQ(control_.SetBlade(BladeOn(2.0, 1, 90), now_), BladeResult::kOk);
+}
+
+class FloatLeaseTest : public ControlTest {
+ protected:
+  static McuControlConfig FloatLeaseConfig() {
+    McuControlConfig config;
+    config.allow_blade = true;
+    config.blade_lease_max_s = 1.1;
+    return config;
+  }
+  FloatLeaseTest() : ControlTest(FloatLeaseConfig()) {
+  }
+};
+
+TEST_F(FloatLeaseTest, TheLongestLeaseAfterAFloatRoundTripIsAccepted) {
+  Run(0.1);
+  EXPECT_EQ(control_.SetBlade(BladeOn(static_cast<float>(1.1)), now_), BladeResult::kOk);
+}
+
+class OffHeightTest : public ControlTest {
+ protected:
+  static McuControlConfig OffHeightConfig() {
+    McuControlConfig config;
+    config.blade_off_height_mm = 70;
+    return config;
+  }
+  OffHeightTest() : ControlTest(OffHeightConfig()) {
+  }
+};
+
+TEST_F(OffHeightTest, OffFramesCarryTheConfiguredHeight) {
+  Run(0.5);
+  auto offs = Times(IsBladeOff);
+  ASSERT_EQ(offs.size(), 3u);
+  for (const auto& s : sent_) {
+    if (IsBladeOff(s.packet)) {
+      EXPECT_EQ(CutterHeight(s.packet), 70);
+    }
+  }
+}
+
+class OneVersionTest : public ControlTest {
+ protected:
+  static McuControlConfig OneVersionConfig() {
+    McuControlConfig config;
+    config.expected_chassis_version = "0.6.34";
+    return config;
+  }
+  OneVersionTest() : ControlTest(OneVersionConfig()) {
+  }
+};
+
+TEST_F(OneVersionTest, OneExpectedVersionIsCheckedAsWell) {
+  Run(0.5);
+  EXPECT_TRUE(control_.Status(now_).firmware_incompatible);
+  EXPECT_FALSE(DrivesOrMows(1.0));
+  VersionInfo versions;
+  versions.chassis_board = {0, 6, 34};
+  versions.cutter_board = {9, 9, 9};
+  EXPECT_TRUE(control_.OnVersions(versions));
+  EXPECT_FALSE(control_.Status(now_).firmware_incompatible);
+}
+
+TEST_F(FirmwareControlTest, BeforeTheFirstVersionFrameTheReasonSaysFirmware) {
+  Run(0.5);
+  EXPECT_TRUE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonFirmwareIncompatible);
+}
+
+TEST_F(ImuControlTest, AnImuThatNeverCameAddsItsBitToTheLatchedOnes) {
+  Run(2.5);
+  control_.LatchEmergency(kReasonFence);
+  Run(2.6);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonFence | kReasonImuTimeout);
+}
+
+TEST_F(ImuControlTest, AnImuGapKeepsTheOtherLatchedReasons) {
+  feed_imu_ = true;
+  Run(0.5);
+  control_.LatchEmergency(kReasonTilt);
+  Run(0.6);
+  feed_imu_ = false;
+  Run(1.5);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonTilt | kReasonImuTimeout);
+}
+
+TEST_F(ImuControlTest, AnImuSampleExactlyTheTimeoutAgoIsNoGap) {
+  feed_imu_ = true;
+  Run(0.01);
+  feed_imu_ = false;
+  Run(0.51);
+  EXPECT_FALSE(control_.Status(now_).latched);
+  Run(0.52);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonImuTimeout);
+}
+
+TEST_F(ImuControlTest, TheStartTimeIncludesItsLastTick) {
+  // The first tick at 0.01 s; 2.01 s is 2.0000000000000004 s later in doubles.
+  Run(2.01);
+  EXPECT_FALSE(control_.Status(now_).blocked);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+  Run(2.02);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonImuTimeout);
+}
+
+TEST_F(BladeStopTest, AReportExactlyAtTheStopTimeCounts) {
+  Run(0.01);
+  control_.SetBlade(BladeOn(), now_);
+  Run(0.03);
+  control_.SetBlade(kBladeOff, now_);
+  // Off went out at 0.04 s, the report comes exactly 3 s later.
+  Run(3.04);
+  control_.OnBladeRpm(1500, now_);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonMowerNotStopped);
+}
+
+TEST_F(BladeStopTest, ExactlyTheStillRpmCounts) {
+  Run(3.5);
+  control_.OnBladeRpm(100, now_);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonMowerNotStopped);
+}
+
+TEST_F(BladeStopTest, AReleaseDuringTheRunDownGoesThrough) {
+  Run(0.5);
+  control_.SetBlade(BladeOn(), now_);
+  Run(1.0);
+  control_.LatchEmergency(kReasonHighLevel);
+  Run(1.5);
+  control_.OnBladeRpm(2000, now_);
+  Run(2.0);
+  control_.OnBladeRpm(50, now_);
+  control_.ReleaseEmergency(now_);
+  Run(2.1);
+  EXPECT_FALSE(control_.Status(now_).latched);
+}
+
+class NoBladeStopCheckTest : public ControlTest {
+ protected:
+  static McuControlConfig NoCheckConfig() {
+    McuControlConfig config;
+    config.blade_stop_time_s = 0;
+    return config;
+  }
+  NoBladeStopCheckTest() : ControlTest(NoCheckConfig()) {
+  }
+};
+
+TEST_F(NoBladeStopCheckTest, AStopTimeOfZeroTurnsTheCheckOff) {
+  Run(3.5);
+  control_.OnBladeRpm(2800, now_);
+  Run(4.0);
+  EXPECT_FALSE(control_.Status(now_).blocked);
+}
+
+class ShortBladeStopTest : public ControlTest {
+ protected:
+  static McuControlConfig ShortStopConfig() {
+    McuControlConfig config;
+    config.blade_stop_time_s = 0.5;
+    return config;
+  }
+  ShortBladeStopTest() : ControlTest(ShortStopConfig()) {
+  }
+};
+
+TEST_F(ShortBladeStopTest, AShortStopTimeStillChecks) {
+  Run(1.0);
+  control_.OnBladeRpm(2800, now_);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonMowerNotStopped);
+}
