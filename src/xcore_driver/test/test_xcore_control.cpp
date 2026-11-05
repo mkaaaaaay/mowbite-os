@@ -891,3 +891,23 @@ TEST(XcoreControl, HoldWithoutMotionSendsNoDrive) {
     EXPECT_TRUE(Of(f.control.Tick(t), kDiffDriveService).empty());
   }
 }
+
+// A driver started again after its predecessor ended (start_latched): the board is held from the first frame on, and
+// commands stay without effect until a release.
+TEST(XcoreControl, LatchedBeforeTheFirstFrame) {
+  XcoreControl control(Fixture::Config(), Inputs());
+  ASSERT_TRUE(control.LatchEmergency(0));
+  control.SetServicesReady(true, true);
+  auto first = Of(control.Tick(0), kEmergencyService);
+  ASSERT_FALSE(first.empty());
+  EXPECT_EQ(EmergencyOf(first[0]).first, reason::kHighLevel | reason::kLatch);
+  control.OnOutput(kEmergencyService, emergency::kOutReason, U16(reason::kHighLevel | reason::kLatch), 0, 0.01);
+  EXPECT_TRUE(control.Status(0.01).blocked);
+  control.OnCmdVel(0.1, 0, 0.02);
+  for (double t = 0.05; t < 1.0; t += 0.05) {
+    for (const auto& v : Of(control.Tick(t), kDiffDriveService)) EXPECT_EQ(TwistOf(v)[0], 0);
+  }
+  EXPECT_FALSE(control.ReleaseEmergency(1.0));
+  control.OnOutput(kEmergencyService, emergency::kOutReason, U16(0), 0, 1.05);
+  EXPECT_FALSE(control.Status(1.05).blocked);
+}

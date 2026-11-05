@@ -179,6 +179,13 @@ class XcoreNode : public rclcpp::Node {
     }
     io.gnss = gnss_enabled_;
     io_.emplace(io, control, xcore::InputMapOf(inputs_));
+    // Started again by the launch after the last driver ended: it took the board without a latch (M4), so this one
+    // holds it from the first frame until a release by the app or a key.
+    if (declare_parameter("start_latched", false)) {
+      io_->LatchEmergency(xcore::kReasonHighLevel);
+      RCLCPP_WARN(get_logger(), "Started again after the last driver ended: emergency latched from the first frame on, "
+                  "motion and blade wait for a release");
+    }
 
     // <data_dir>/hold.json of the logic; empty: no hold.
     hold_watch_.emplace(declare_parameter("hold_file", ""));
