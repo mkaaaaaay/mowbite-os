@@ -11,9 +11,10 @@
 namespace {
 
 int Usage() {
-  std::cerr << "mowbite_replay check <journal_dir or run>...\n"
+  std::cerr << "mowbite_replay check [--if-any] <journal_dir or run>...\n"
                "  replays every core from the start of its process; exit 0 bit-identical, 1 differs,\n"
-               "  2 not replayable (gap, missing segments, unknown core), 3 unreadable\n"
+               "  2 not replayable (gap, missing segments, unknown core), 3 unreadable or no journal\n"
+               "  (--if-any: a folder without a journal passes)\n"
                "mowbite_replay export --jsonl|--csv [--stream <name>] [--method <name>] <journal_dir or run>\n"
                "  the records as JSON lines, or one method of one stream as a table (--csv needs both)\n"
                "mowbite_replay cat <journal_dir or run>\n"
@@ -21,10 +22,17 @@ int Usage() {
   return 3;
 }
 
-int Check(const std::vector<std::string>& dirs) {
+int Check(std::vector<std::string> dirs) {
+  const bool if_any = !dirs.empty() && dirs.front() == "--if-any";
+  if (if_any) dirs.erase(dirs.begin());
+  if (dirs.empty()) return Usage();
   const auto registry = mowbite_replay::Cores();
   mowbite_journal::CheckOutcome worst = mowbite_journal::CheckOutcome::kSame;
   for (const auto& dir : dirs) {
+    if (if_any && mowbite_journal::ListRuns(dir).empty()) {
+      std::cout << dir << ": no journal\n";
+      continue;
+    }
     const auto report = mowbite_journal::CheckRuns(dir, registry);
     for (const auto& line : report.lines) std::cout << line << '\n';
     if (static_cast<int>(report.outcome) != 0 &&

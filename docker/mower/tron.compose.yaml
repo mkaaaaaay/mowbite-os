@@ -36,13 +36,17 @@ services:
     volumes:
       # data_dir at the same path inside and out.
       - /userdata/mowbite:/userdata/mowbite
+      # The journal of the cores, outside of data_dir (its backup leaves it out); limits in tron.yaml.
+      - /userdata/mowbite-journal:/userdata/mowbite-journal
     environment:
       - TZ=${TZ:-Europe/Berlin}
+      - MOWBITE_OS_IMAGE=ghcr.io/mkaaaaaay/mowbite-os:${MOWBITE_OS_TAG}
       - ROS_LOG_DIR=/tmp/ros_log
     # The log files of ROS stay in memory, at most 20 MB.
     tmpfs:
       - /tmp/ros_log:size=20m
     command: ["ros2", "launch", "mowbite_bringup", "tron.launch.py", "data_dir:=/userdata/mowbite",
+              "journal_dir:=/userdata/mowbite-journal",
               "datum_lat:=${MOWBITE_DATUM_LAT:?}", "datum_long:=${MOWBITE_DATUM_LONG:?}",
               "datum_height:=${MOWBITE_DATUM_HEIGHT:?}"]
     # SIGINT so that launch stops every node and tron_mcu switches the blade off; it ignores SIGTERM as PID 1.

@@ -1,6 +1,7 @@
 #ifndef MOWBITE_JOURNAL_NODE_OPTIONS_H
 #define MOWBITE_JOURNAL_NODE_OPTIONS_H
 
+#include <cstdlib>
 #include <rclcpp/rclcpp.hpp>
 #include <string>
 
@@ -10,12 +11,13 @@ namespace mowbite_journal {
 
 // For nodes; header only, so that the library needs no ROS.
 
-// The journal of the process from the parameters of a node (journal_dir and the limits of the platform config under
-// /**), opened by the first node that asks; a problem goes to the node's log.
+// The journal of the process from the parameters of a node (journal_dir, else MOWBITE_JOURNAL_DIR, and the limits of
+// the platform config under /**), opened by the first node that asks; a problem goes to the node's log.
 template <typename Node>
 Journal* OpenFromParameters(Node& node) {
   Options options;
-  options.dir = node.declare_parameter("journal_dir", std::string());
+  const char* env = std::getenv("MOWBITE_JOURNAL_DIR");
+  options.dir = node.declare_parameter("journal_dir", std::string(env ? env : ""));
   options.platform = node.declare_parameter("journal_platform", std::string());
   options.max_mb = node.declare_parameter("journal_max_mb", options.max_mb);
   options.max_days = node.declare_parameter("journal_max_days", options.max_days);

@@ -31,6 +31,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(mowbite_replay_test test/test_cores.cpp)
   target_link_libraries(mowbite_replay_test mowbite_replay_cores)
+  add_test(NAME test_core_rules COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/test/test_core_rules.py)
 endif()
 
 ament_package()

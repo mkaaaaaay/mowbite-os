@@ -11,6 +11,12 @@
     # RTK fixed on corrections older than max_correction_age s, or without their age in GGA, counts as float (G7);
     # mowbite_ntrip reports CORRECTIONS LOST at the same age. Assumption until phase 7.
     max_correction_age: 30.0
+    # The journal in journal_dir (launch argument): all runs of all processes together at most journal_max_mb and
+    # journal_max_days (whole old runs go first); below journal_reserve_mb free on its file system nothing is written.
+    journal_platform: tron
+    journal_max_mb: 2048.0
+    journal_max_days: 14.0
+    journal_reserve_mb: 1024.0
 tron_mcu:
   ros__parameters:
     port: /dev/ttyS9

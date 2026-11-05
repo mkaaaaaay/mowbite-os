@@ -1,6 +1,14 @@
 # Parameters of MowBite OS on the YardForce NX60i on top of tron.yaml (nx60i.launch.py loads tron.yaml, then this
 # file). The driver has its own file, config/nx60i.yaml of xcore_driver; the dimensions are in geometry/nx60i.yaml.
 
+/**:
+  ros__parameters:
+    # The journal on the CM4: much less room than on the Tron (tron.yaml has the meaning of the values).
+    journal_platform: nx60i
+    journal_max_mb: 64.0
+    journal_max_days: 3.0
+    journal_reserve_mb: 200.0
+
 mowbite_logic:
   ros__parameters:
     # 7S pack, as the battery voltages of the driver (xcore_driver/config/nx60i.yaml): mowing goes home below 24.5 V
