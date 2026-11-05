@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
+#include <utility>
 
 #include "mowbite_safety/safety_filter.h"
 
@@ -19,6 +21,15 @@ const char* kMap = R"({
      "properties": {"type": "obstacle"}}
   ],
   "docking_stations": [{"position": {"x": -1, "y": 3}, "heading": 3.141592653589793}]
+})";
+
+// The lawn alone with the station 5 m west of it, so that the zone of the station stands apart.
+const char* kFarStation = R"({
+  "areas": [
+    {"id": "a", "outline": [{"x": 0, "y": 0}, {"x": 10, "y": 0}, {"x": 10, "y": 6}, {"x": 0, "y": 6}],
+     "properties": {"type": "mow"}}
+  ],
+  "docking_stations": [{"position": {"x": -5, "y": 3}, "heading": 3.141592653589793}]
 })";
 
 // Runs the filter in steps of 20 ms with the inputs below, like the IMU and the pose arrive.
@@ -62,6 +73,22 @@ class FilterTest : public ::testing::Test {
 
   static bool Stops(const Decision& d) {
     return d.out && d.out->linear == 0 && d.out->angular == 0;
+  }
+
+  // A filter that may drive at t: capabilities, the map, and hw/status, a level IMU sample and an accurate pose at t.
+  static SafetyFilter Ready(double t, const SafetyConfig& config = SafetyConfig{}, const char* map = kMap) {
+    SafetyFilter filter{config};
+    filter.OnCapabilities(true, 0.3, 0.3);
+    filter.SetMap(map);
+    filter.SetMapFits(true);
+    Feed(filter, t);
+    return filter;
+  }
+
+  static void Feed(SafetyFilter& filter, double t) {
+    filter.OnHardware(false, 0, t);
+    filter.OnTilt(2.0, t);
+    filter.OnPose(2, 2, 0.02, true, t);
   }
 
   SafetyFilter filter_;
@@ -114,6 +141,22 @@ TEST(Tilt, CountsFromTheMountingOfTheImu) {
   // The orientation of an IMU that reads its mounting on level ground: turned by pitch about y.
   EXPECT_NEAR(TiltFromOrientation(0, std::sin(pitch / 2), 0, std::cos(pitch / 2), 0.0, pitch), 0, 1e-9);
   EXPECT_NEAR(TiltFromOrientation(0, std::sin(pitch / 2), 0, std::cos(pitch / 2)), 4.5, 1e-9);
+}
+
+TEST(Tilt, AnInfiniteLengthIsNoNumber) {
+  // Every component finite, the length not.
+  EXPECT_TRUE(std::isnan(TiltFromGravity(1e200, 0, 0)));
+  EXPECT_TRUE(std::isnan(TiltFromOrientation(0, 0, 1e200, 0)));
+}
+
+TEST(Tilt, LevelAndUpsideDownForAnyMountingAlsoWhenRoundingPassesOne) {
+  for (int i = 0; i < 400; i++) {
+    const double roll = (i % 41 - 20) * 0.003;
+    const double pitch = (i % 37 - 18) * 0.005;
+    const double x = -std::sin(pitch), y = std::cos(pitch) * std::sin(roll), z = std::cos(pitch) * std::cos(roll);
+    EXPECT_NEAR(TiltFromGravity(9.81 * x, 9.81 * y, 9.81 * z, roll, pitch), 0, 1e-5) << roll << " " << pitch;
+    EXPECT_NEAR(TiltFromGravity(-9.81 * x, -9.81 * y, -9.81 * z, roll, pitch), 180, 1e-5) << roll << " " << pitch;
+  }
 }
 
 TEST_F(FilterTest, PassesBothSourcesWithinTheLimitsOfTheDriver) {
@@ -459,4 +502,277 @@ TEST_F(FilterTest, CalibrationIsOneSourceAmongOthers) {
   EXPECT_EQ(Cmd(Source::kCalibration, 0.2).refusal, "waits for a zero or 1.0 s without commands");
   EXPECT_TRUE(Stops(Cmd(Source::kCalibration, 0)));
   EXPECT_TRUE(Moves(Cmd(Source::kCalibration, 0.2))) << filter_.LastRefusal();
+}
+
+TEST_F(FilterTest, ATiltOfNoNumberIsNoSample) {
+  ASSERT_TRUE(Moves(Cmd(Source::kTeleop, 0.2)));
+  tilt_ = std::nan("");
+  Run(now_ + 0.6);
+  EXPECT_EQ(stops_, 1);
+  EXPECT_NE(Cmd(Source::kTeleop, 0.2).refusal.find("no IMU sample for"), std::string::npos);
+}
+
+TEST_F(FilterTest, ATiltExactlyAtTheLimitDoesNotCount) {
+  tilt_ = 31.0;
+  Run(now_ + 1.5);
+  EXPECT_EQ(filter_.Latched(), 0u);
+}
+
+TEST_F(FilterTest, TiltCountsFromTheFirstSampleOverTheLimit) {
+  SafetyFilter filter = Ready(1.0);
+  filter.OnTilt(35.0, 1.02);
+  filter.OnTilt(35.0, 2.0);
+  EXPECT_EQ(filter.Latched(), 0u);
+  filter.OnTilt(35.0, 2.02);
+  EXPECT_EQ(filter.Latched(), kReasonTilt);
+}
+
+// Limits at exact times, and just off them by rounding: 1.13 - 0.13 is just under 1 s, 1.07 - 0.57 just over 0.5 s.
+
+TEST_F(FilterTest, TiltForExactlyTiltTimeLatches) {
+  for (const auto& [since, now] : {std::pair{0.5, 1.5}, std::pair{0.13, 1.13}}) {
+    SafetyFilter filter = Ready(0.0);
+    filter.OnTilt(35.0, since);
+    filter.OnTilt(35.0, now);
+    EXPECT_EQ(filter.Latched(), kReasonTilt) << since;
+  }
+}
+
+TEST_F(FilterTest, AnImuSampleExactlyImuTimeoutOldIsFresh) {
+  for (const auto& [sample, now] : {std::pair{1.0, 1.5}, std::pair{0.57, 1.07}}) {
+    SafetyFilter filter = Ready(sample);
+    EXPECT_FALSE(std::isnan(filter.TiltDeg(now))) << sample;
+    EXPECT_TRUE(Moves(filter.OnCommand(Source::kTeleop, 0.1, 0, now))) << sample;
+  }
+}
+
+TEST_F(FilterTest, APoseExactlyPoseTimeoutOldIsRecent) {
+  for (const auto& [pose, now] : {std::pair{1.0, 1.5}, std::pair{0.57, 1.07}}) {
+    SafetyFilter filter = Ready(pose);
+    filter.OnHardware(false, 0, now);
+    filter.OnTilt(2.0, now);
+    EXPECT_NEAR(filter.FenceDistance(now), 0, 1e-9) << pose;
+    EXPECT_TRUE(filter.AutonomousOk(now)) << pose;
+    EXPECT_TRUE(Moves(filter.OnCommand(Source::kFollower, 0.1, 0, now))) << pose;
+  }
+}
+
+TEST_F(FilterTest, HwStatusExactlyHwTimeoutOldIsNoEmergency) {
+  SafetyFilter filter = Ready(1.0);
+  filter.OnTilt(2.0, 2.0);
+  EXPECT_TRUE(Moves(filter.OnCommand(Source::kTeleop, 0.1, 0, 2.0)));
+  EXPECT_EQ(filter.OnCommand(Source::kTeleop, 0.1, 0, 2.02).refusal, "emergency");
+}
+
+TEST_F(FilterTest, TheOwnerKeepsTheDriveForExactlyOwnerTimeout) {
+  for (const auto& [last, now] : {std::pair{1.0, 1.5}, std::pair{0.57, 1.07}}) {
+    SafetyFilter filter = Ready(last);
+    ASSERT_TRUE(Moves(filter.OnCommand(Source::kTeleop, 0.1, 0, last)));
+    Feed(filter, now);
+    EXPECT_EQ(filter.Owner(now), Source::kTeleop) << last;
+    EXPECT_TRUE(filter.OnCommand(Source::kFollower, 0.1, 0, now).conflict) << last;
+    // Also between ticks.
+    EXPECT_EQ(filter.Owner(now + 0.1), Source::kStop) << last;
+  }
+}
+
+TEST_F(FilterTest, AnOwnerThatResumesAfterItsDriveEndedTakesItAnew) {
+  // The follower drives at `last`, remote control arms with a zero, a tick comes; then the follower goes on and
+  // stops. Remote control may move without another zero only if the follower kept the drive through the tick.
+  const auto teleop_moves = [](double last, double tick) {
+    SafetyFilter filter = Ready(last);
+    EXPECT_TRUE(Moves(filter.OnCommand(Source::kFollower, 0.1, 0, last)));
+    filter.OnCommand(Source::kTeleop, 0, 0, last + 0.01);
+    Feed(filter, tick);
+    filter.Tick(tick);
+    Feed(filter, tick + 0.01);
+    EXPECT_TRUE(Moves(filter.OnCommand(Source::kFollower, 0.1, 0, tick + 0.01)));
+    filter.OnCommand(Source::kFollower, 0, 0, tick + 0.02);
+    return Moves(filter.OnCommand(Source::kTeleop, 0.1, 0, tick + 0.03));
+  };
+  EXPECT_TRUE(teleop_moves(1.0, 1.2));
+  EXPECT_TRUE(teleop_moves(1.0, 1.5));
+  EXPECT_TRUE(teleop_moves(0.57, 1.07));
+  EXPECT_FALSE(teleop_moves(1.0, 1.6));
+}
+
+TEST_F(FilterTest, ASourceQuietForArmQuietArms) {
+  SafetyFilter filter = Ready(0.13);
+  filter.OnHardware(true, 1, 0.13);
+  EXPECT_EQ(filter.OnCommand(Source::kTeleop, 0.1, 0, 0.13).refusal, "emergency");
+  Feed(filter, 1.13);
+  EXPECT_TRUE(Moves(filter.OnCommand(Source::kTeleop, 0.1, 0, 1.13))) << filter.LastRefusal();
+}
+
+TEST_F(FilterTest, ALatchIsAskedForAgainAfterOneSecond) {
+  SafetyFilter filter = Ready(0.13);
+  filter.OnPose(-0.7, 1, 0.02, true, 0.13);
+  filter.OnCommand(Source::kFollower, 0.1, 0, 0.13);
+  ASSERT_TRUE(filter.TakeLatchRequest(0.13).has_value());
+  EXPECT_FALSE(filter.TakeLatchRequest(1.12).has_value());
+  const auto again = filter.TakeLatchRequest(1.13);
+  ASSERT_TRUE(again.has_value());
+  EXPECT_TRUE(again->again);
+}
+
+TEST_F(FilterTest, SilentHwStatusStopsAtTheNextTick) {
+  SafetyFilter filter = Ready(1.0);
+  ASSERT_TRUE(Moves(filter.OnCommand(Source::kTeleop, 0.2, 0, 1.0)));
+  filter.OnTilt(2.0, 1.9);
+  ASSERT_TRUE(Moves(filter.OnCommand(Source::kTeleop, 0.2, 0, 1.9)));
+  filter.OnTilt(2.0, 2.0);
+  EXPECT_FALSE(filter.Tick(2.0).has_value());
+  filter.OnTilt(2.0, 2.01);
+  const auto stop = filter.Tick(2.01);
+  ASSERT_TRUE(stop.has_value());
+  EXPECT_EQ(stop->linear, 0);
+}
+
+TEST_F(FilterTest, AnEmergencyBetweenTwoTicksStillDisarms) {
+  ASSERT_TRUE(Moves(Cmd(Source::kTeleop, 0.2)));
+  filter_.OnHardware(true, 1, now_);
+  filter_.OnHardware(false, 0, now_);
+  EXPECT_EQ(Cmd(Source::kTeleop, 0.2).refusal, "waits for a zero or 1.0 s without commands");
+}
+
+TEST_F(FilterTest, LimitsOfNoNumberLetNothingMove) {
+  filter_.OnCapabilities(true, std::nan(""), std::numeric_limits<double>::infinity());
+  const Decision d = Cmd(Source::kTeleop, 0.2, 0.2);
+  ASSERT_TRUE(d.out.has_value());
+  EXPECT_EQ(d.out->linear, 0);
+  EXPECT_EQ(d.out->angular, 0);
+}
+
+TEST_F(FilterTest, AnAccuracyLimitOfZeroOrNoNumberIsIgnored) {
+  filter_.SetMaxPositionAccuracy(0);
+  filter_.SetMaxPositionAccuracy(-1);
+  filter_.SetMaxPositionAccuracy(std::numeric_limits<double>::infinity());
+  filter_.SetMaxPositionAccuracy(std::nan(""));
+  // Exactly the limit is enough.
+  accuracy_ = 0.1;
+  Run(now_ + 0.1);
+  EXPECT_TRUE(Moves(Cmd(Source::kFollower, 0.2))) << filter_.LastRefusal();
+  accuracy_ = 0.3;
+  Run(now_ + 0.1);
+  EXPECT_EQ(Cmd(Source::kFollower, 0.2).refusal, "position accuracy 0.300 m, 0.100 m needed");
+}
+
+TEST_F(FilterTest, FenceDistanceIsNoNumberWithoutAMapThatFitsOrARecentPose) {
+  Run(1.0);
+  EXPECT_NEAR(filter_.FenceDistance(now_), 0, 1e-9);
+  filter_.SetMapFits(false);
+  EXPECT_TRUE(std::isnan(filter_.FenceDistance(now_)));
+  filter_.SetMapFits(true);
+  filter_.SetMap(R"({"areas": []})");
+  EXPECT_TRUE(std::isnan(filter_.FenceDistance(now_)));
+  filter_.SetMap(kMap);
+  pose_ = false;
+  Run(now_ + 0.6);
+  EXPECT_TRUE(std::isnan(filter_.FenceDistance(now_)));
+}
+
+TEST_F(FilterTest, MarginsOfFenceAndObstacles) {
+  // Exactly fence_margin outside still drives.
+  x_ = -0.6;
+  y_ = 1.5;
+  Run(now_ + 0.1);
+  EXPECT_DOUBLE_EQ(filter_.FenceDistance(now_), 0.6);
+  EXPECT_TRUE(Moves(Cmd(Source::kFollower, 0.2))) << filter_.LastRefusal();
+  x_ = 4.15;
+  y_ = 2.5;
+  Run(now_ + 0.1);
+  EXPECT_EQ(Cmd(Source::kFollower, 0.2).refusal, "base_link is 0.15 m inside an obstacle at (4.15, 2.50)");
+  // Exactly obstacle_margin deep still drives.
+  SafetyConfig config;
+  config.obstacle_margin = 0.125;
+  SafetyFilter filter = Ready(1.0, config);
+  filter.OnPose(4.125, 2.5, 0.02, true, 1.0);
+  EXPECT_TRUE(Moves(filter.OnCommand(Source::kFollower, 0.1, 0, 1.0))) << filter.LastRefusal();
+}
+
+TEST_F(FilterTest, TheZoneOfTheStation) {
+  // 2.1 m ahead of the station (east, where the mower leaves), 0.15 m behind it and 0.1 m to each side of its line.
+  SafetyFilter filter = Ready(1.0, SafetyConfig{}, kFarStation);
+  const auto distance = [&filter](double x, double y) {
+    filter.OnPose(x, y, 0.02, true, 1.0);
+    return filter.FenceDistance(1.0);
+  };
+  EXPECT_NEAR(distance(-3.0, 3), 0, 1e-9);
+  EXPECT_NEAR(distance(-2.5, 3), 0.4, 1e-9);
+  EXPECT_NEAR(distance(-5.5, 3), 0.35, 1e-9);
+  EXPECT_NEAR(distance(-4, 3.5), 0.4, 1e-9);
+}
+
+TEST_F(FilterTest, TiltDuringAFenceLatchAddsItsBit) {
+  x_ = -0.7;
+  y_ = 1;
+  Run(now_ + 0.1);
+  Cmd(Source::kFollower, 0.2);
+  ASSERT_EQ(filter_.Latched(), kReasonFence);
+  tilt_ = 35;
+  Run(now_ + 1.1);
+  EXPECT_EQ(filter_.Latched(), kReasonFence | kReasonTilt);
+}
+
+TEST_F(FilterTest, AStopAZeroOrASilentSourceGetNoFurtherZero) {
+  // A later emergency finds nothing moving.
+  const auto emergency = [this] {
+    hw_emergency_ = true;
+    Run(now_ + 0.1);
+    hw_emergency_ = false;
+    Run(now_ + 1.1);
+  };
+  ASSERT_TRUE(Moves(Cmd(Source::kTeleop, 0.2)));
+  EXPECT_TRUE(Stops(Cmd(Source::kStop, 0)));
+  emergency();
+  ASSERT_TRUE(Moves(Cmd(Source::kTeleop, 0.2)));
+  EXPECT_TRUE(Stops(Cmd(Source::kTeleop, 0)));
+  emergency();
+  // Gone silent, the cmd_vel timeout of the driver stopped it.
+  ASSERT_TRUE(Moves(Cmd(Source::kTeleop, 0.2)));
+  Run(now_ + 0.6);
+  emergency();
+  EXPECT_EQ(stops_, 0);
+}
+
+TEST_F(FilterTest, ARefusedMovingSourceStopsOnce) {
+  ASSERT_TRUE(Moves(Cmd(Source::kCalibration, 0.2)));
+  EXPECT_TRUE(Stops(Cmd(Source::kCalibration, -0.1)));
+  EXPECT_FALSE(Cmd(Source::kCalibration, -0.1).out.has_value());
+}
+
+TEST_F(FilterTest, AReleaseDisarmsEverySource) {
+  ASSERT_TRUE(Moves(Cmd(Source::kTeleop, 0.2)));
+  ASSERT_TRUE(filter_.OnRelease(now_).allowed);
+  const Decision d = Cmd(Source::kTeleop, 0.2);
+  EXPECT_EQ(d.refusal, "waits for a zero or 1.0 s without commands");
+  EXPECT_FALSE(d.out.has_value());
+}
+
+TEST_F(FilterTest, ASourceThatTakesTheDriveDisarmsTheOthers) {
+  EXPECT_TRUE(Stops(Cmd(Source::kTeleop, 0)));
+  ASSERT_TRUE(Moves(Cmd(Source::kFollower, 0.2))) << filter_.LastRefusal();
+  EXPECT_TRUE(Stops(Cmd(Source::kFollower, 0)));
+  // Remote control armed before the follower drove, so it has to show a zero again.
+  EXPECT_EQ(Cmd(Source::kTeleop, 0.2).refusal, "waits for a zero or 1.0 s without commands");
+}
+
+TEST_F(FilterTest, CountsRefusalsAndKeepsTheLast) {
+  Cmd(Source::kFollower, std::nan(""));
+  EXPECT_EQ(filter_.Refused(), 1u);
+  EXPECT_EQ(filter_.LastRefusal(), "follower: a command that is not a number, stopped");
+  Cmd(Source::kCalibration, -0.1);
+  EXPECT_EQ(filter_.Refused(), 2u);
+  EXPECT_EQ(filter_.LastRefusal(), "calibration: the calibration drives forward only");
+}
+
+TEST_F(FilterTest, AReleaseNamesTheAgeOfTheLastSampleAndNeedsLessThanTheReleaseAngle) {
+  SafetyFilter filter = Ready(1.0);
+  Release release = filter.OnRelease(1.7);
+  EXPECT_EQ(release.message, "no IMU sample for 0.7 s, the tilt is unknown");
+  EXPECT_DOUBLE_EQ(release.value, 0.7);
+  filter.OnTilt(26.0, 1.8);
+  release = filter.OnRelease(1.8);
+  EXPECT_FALSE(release.allowed);
+  EXPECT_EQ(release.code, "STILL_TILTED");
 }

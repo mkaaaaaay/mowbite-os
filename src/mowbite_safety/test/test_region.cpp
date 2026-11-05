@@ -81,6 +81,12 @@ TEST(Region, MalformedEntriesGiveNoRegion) {
       R"({"areas": [{"outline": [], "properties": {"type": 3}}]})",
       R"({"areas": [], "docking_stations": [{"position": {"x": 0, "y": 0}}]})",
       R"({"areas": [], "docking_stations": {"position": {"x": 0, "y": 0}, "heading": 0}})",
+      R"({"areas": [5]})",
+      R"({"areas": [{"outline": [{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 0, "y": 0}],
+                     "properties": {"type": "mow"}}]})",
+      R"({"areas": [], "docking_stations": {}})",
+      R"({"areas": [], "docking_stations": [{"heading": 0}]})",
+      R"({"areas": [], "docking_stations": [{"position": {"x": 0, "y": 0}, "heading": 0, "properties": 5}]})",
   };
   for (const char* text : bad) {
     std::string error;
@@ -98,4 +104,45 @@ TEST(Region, StationZoneRunsAgainstTheHeading) {
   EXPECT_FALSE(InsideRing(zone, 1.2, 3));
   EXPECT_FALSE(InsideRing(zone, 0, 3.15));
   EXPECT_NEAR(DistanceToRing(zone, 0, 3.6), 0.5, 1e-9);
+}
+
+TEST(Region, TheErrorNamesTheEntry) {
+  std::string error;
+  ParseRegion(R"({"areas": [{"outline": [], "properties": {"type": "mow", "active": "yes"}}]})", &error);
+  EXPECT_EQ(error, "map/json: area 0: active is not true or false");
+  ParseRegion(R"({"areas": [{"outline": [], "properties": {"type": 3}}]})", &error);
+  EXPECT_EQ(error, "map/json: area 0: type is not a text");
+}
+
+TEST(Region, TrianglesAndNotConvexAreas) {
+  std::string error;
+  const auto region = ParseRegion(R"({"areas": [{"outline": [{"x": 0, "y": 0}, {"x": 4, "y": 0}, {"x": 0, "y": 4}],
+                                                  "properties": {"type": "mow"}}]})",
+                                  &error);
+  ASSERT_TRUE(region.has_value()) << error;
+  ASSERT_EQ(region->allowed.size(), 1u);
+  EXPECT_TRUE(InsideRing(region->allowed[0], 1, 1));
+  EXPECT_FALSE(InsideRing(region->allowed[0], 3, 3));
+  // An L: the notch is outside.
+  const Ring l = {{0, 0}, {4, 0}, {4, 2}, {2, 2}, {2, 4}, {0, 4}};
+  EXPECT_TRUE(InsideRing(l, 1, 3));
+  EXPECT_FALSE(InsideRing(l, 3, 3));
+}
+
+TEST(Region, AnyOrderOfPoints) {
+  // The first and the last point share y.
+  const Ring lawn = {{0, 0}, {0, 6}, {10, 6}, {10, 0}};
+  EXPECT_TRUE(InsideRing(lawn, 8, 1));
+  EXPECT_NEAR(DistanceToRing(lawn, 8, -0.5), 0.5, 1e-9);
+}
+
+TEST(Region, PointsOnTheEdgeCountHalfOpen) {
+  // On the west edge inside, on the east edge outside; S2 measures 0 to both.
+  const Ring lawn = {{0, 0}, {10, 0}, {10, 6}, {0, 6}};
+  EXPECT_TRUE(InsideRing(lawn, 0, 3));
+  EXPECT_FALSE(InsideRing(lawn, 10, 3));
+}
+
+TEST(Region, ARingOfOnePointMeasuresToIt) {
+  EXPECT_NEAR(DistanceToRing({{2, 2}, {2, 2}, {2, 2}, {2, 2}}, 2, 3), 1.0, 1e-9);
 }
