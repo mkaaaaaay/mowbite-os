@@ -19,8 +19,8 @@ the NX60i in the air (M3 of M-A). Motor controllers report the status
 200 (ok) only. IMU at 100 Hz through the configured axis remap of a sensor mounted upside down, power every second,
 GPS at 5 Hz, inputs every 200 ms. RTCM to the GPS service is counted per datagram, with a CRC-32 over the stream.
 A JSON file with flags (stop, rear_stop, lift, lift_left, lift_right, bumper, bumper_left, bumper_right, dock,
-battery_voltage, charge_current, major_version, firmware, restart, cutter_ignores_off, drive_status, gps_fix (fix, float, none or off),
-gps_accuracy) is read every 10 ms; restart
+battery_voltage, charge_current, blade_temperature (degC of the blade motor, 25), major_version, firmware, restart,
+cutter_ignores_off, drive_status, gps_fix (fix, float, none or off), gps_accuracy) is read every 10 ms; restart
 restarts the board whenever its value changes, as does a GPS configuration other than the first one. Flags for what
 the mower may do wrong: rpm_zero (the blade reports 0 rpm), wheel_speed (both wheels turn forward at this many m/s
 whatever the duty), zero_duty_ignored (a duty of 0, the drive timeout and an emergency leave the wheels at the last duty
@@ -830,7 +830,8 @@ class Board:
         running = self.mower_rpm != 0
         rpm = 0.0 if flags.get("rpm_zero") else self.mower_rpm
         self.output(MOWER, [(0, bytes([ESC_OK])), (1, b"\x00"), (2, bytes([running])),
-                            (3, struct.pack("<f", 35.0)), (4, struct.pack("<f", 40.0)),
+                            (3, struct.pack("<f", 35.0)),
+                            (4, struct.pack("<f", float(flags.get("blade_temperature", 25.0)))),
                             (5, struct.pack("<f", abs(self.mower_rpm) / 1000)), (6, struct.pack("<f", rpm))])
 
     def update_imu(self, flags, now):
