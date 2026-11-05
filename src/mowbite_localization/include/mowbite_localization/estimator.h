@@ -5,6 +5,8 @@
 #include <cmath>
 #include <deque>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "mowbite_localization/course_alignment.h"
 #include "mowbite_localization/fix_gate.h"
@@ -101,6 +103,8 @@ class Estimator {
   double turn_rate() const { return turn_rate_; }
   bool calibrated() const { return bias_.calibrated(); }
   double gyro_offset() const { return bias_.offset(); }
+  // Calibration windows of the gyro thrown away since the last call, for the log.
+  std::vector<std::string> TakeGyroWarnings() { return bias_.TakeWarnings(); }
   bool holding() const { return bias_.holding(); }
   bool heading_valid() const { return heading_valid_; }
   // Standard deviation (rad) of the heading, kNoAccuracy while it is not valid.

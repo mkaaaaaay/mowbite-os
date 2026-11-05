@@ -167,6 +167,25 @@ TEST(L1GyroCalibration, SkippedItTakesTheOffsetAndTheFirstSampleOnlyStarts) {
   EXPECT_NEAR(est.pose().heading, 0.1, 1e-9);
 }
 
+// L1: without wheel reports nobody knows the mower stands, so the gyro offset is not measured and nothing moves.
+TEST(L1GyroCalibration, NoWheelReportsNoCalibration) {
+  Estimator est({});
+  double t = 100.0;
+  for (int i = 0; i < 1000; ++i) {
+    t += kStep;
+    EXPECT_FALSE(est.AddImu(t, 0.001));
+  }
+  EXPECT_FALSE(est.calibrated());
+  // Wheel reports that stand, from now on: 5 s later the offset is known.
+  for (int i = 0; i < 260; ++i) {
+    t += kStep;
+    est.AddWheels(t, 0.0, 0.0);
+    est.AddImu(t, 0.001);
+  }
+  EXPECT_TRUE(est.calibrated());
+  EXPECT_NEAR(est.gyro_offset(), 0.001, 1e-9);
+}
+
 // L2: each gyro sample moves the estimate by the wheel speed along the heading.
 TEST(L2Prediction, StraightAndAQuarterCircle) {
   World w;
@@ -207,7 +226,10 @@ TEST(L2Prediction, TheWheelScaleOfTheGeometryCorrectsTheDriversSpeed) {
 TEST(L2Prediction, AStaleWheelSpeedCountsAsZero) {
   Estimator est({});
   double t = 100.0;
-  for (int i = 0; i < 300; ++i) est.AddImu(t += kStep, 0.0);
+  for (int i = 0; i < 300; ++i) {
+    est.AddWheels(t += kStep, 0.0, 0.0);
+    est.AddImu(t, 0.0);
+  }
   ASSERT_TRUE(est.calibrated());
   est.AddWheels(t, 0.3, 0.0);
   for (int i = 0; i < 100; ++i) est.AddImu(t += kStep, 0.0);
@@ -218,7 +240,12 @@ TEST(L2Prediction, AStaleWheelSpeedCountsAsZero) {
 TEST(L2Prediction, GapsNanAndTimeGoingBackAreNotIntegrated) {
   Estimator est({});
   double t = 100.0;
-  for (int i = 0; i < 300; ++i) est.AddImu(t += kStep, 0.0);
+  // Standing wheels for the calibration only, so that nothing is held afterwards.
+  for (int i = 0; i < 300; ++i) {
+    if (i < 260) est.AddWheels(t + kStep, 0.0, 0.0);
+    est.AddImu(t += kStep, 0.0);
+  }
+  ASSERT_TRUE(est.calibrated());
   t += 0.6;
   EXPECT_FALSE(est.AddImu(t, 1.0));
   EXPECT_FALSE(est.AddImu(t + kStep, std::numeric_limits<double>::quiet_NaN()));

@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <limits>
+#include <string>
 
 #include "mowbite_localization/gyro_bias.h"
 
@@ -58,6 +59,54 @@ TEST(L1GyroCalibration, NanAndBadStepsAreIgnored) {
   EXPECT_NEAR(bias.offset(), 0.01, 1e-9);
 }
 
+TEST(L1GyroCalibration, AWindowThatScattersIsThrownAway) {
+  GyroBias bias({});
+  // Turned by 0.05 rad/s for a moment while the wheels stood: off its mean by more than 0.02.
+  Feed(bias, 2.0, 0.002, true);
+  Feed(bias, 0.2, 0.05, true);
+  Feed(bias, 2.8, 0.002, true);
+  EXPECT_FALSE(bias.calibrated());
+  auto warnings = bias.TakeWarnings();
+  ASSERT_EQ(warnings.size(), 1u);
+  EXPECT_NE(warnings[0].find("did not stand"), std::string::npos);
+  EXPECT_TRUE(bias.TakeWarnings().empty());
+  // The next quiet window counts on its own.
+  Feed(bias, 5.0, 0.0025, true);
+  ASSERT_TRUE(bias.calibrated());
+  EXPECT_NEAR(bias.offset(), 0.0025, 1e-9);
+  EXPECT_TRUE(bias.TakeWarnings().empty());
+}
+
+TEST(L1GyroCalibration, AnOffsetAboveTheLimitIsThrownAway) {
+  GyroBiasConfig config;
+  config.offset_limit = 0.02;
+  GyroBias bias(config);
+  // Quiet, but turning steadily at 0.03 rad/s, e.g. on a turntable.
+  Feed(bias, 5.0, 0.03, true);
+  EXPECT_FALSE(bias.calibrated());
+  auto warnings = bias.TakeWarnings();
+  ASSERT_EQ(warnings.size(), 1u);
+  EXPECT_NE(warnings[0].find("above the limit"), std::string::npos);
+  Feed(bias, 5.0, -0.019, true);
+  ASSERT_TRUE(bias.calibrated());
+  EXPECT_NEAR(bias.offset(), -0.019, 1e-9);
+}
+
+TEST(L1GyroCalibration, WithoutStillWheelsNothingIsMeasured) {
+  GyroBias bias({});
+  Feed(bias, 20.0, 0.001, false);
+  EXPECT_FALSE(bias.calibrated());
+  EXPECT_TRUE(bias.TakeWarnings().empty());
+}
+
+TEST(L1GyroCalibration, TheGivenOffsetStaysWithinTheLimit) {
+  GyroBiasConfig config;
+  config.skip_calibration = true;
+  config.initial_offset = 0.05;
+  config.offset_limit = 0.02;
+  EXPECT_DOUBLE_EQ(GyroBias(config).offset(), 0.02);
+}
+
 GyroBias Calibrated(double offset) {
   GyroBias bias({});
   Feed(bias, 5.0, offset, true);
@@ -92,6 +141,14 @@ TEST(E2StandingStill, MovingWheelsEndIt) {
   bias.Add(0.001, kDt, false);
   EXPECT_FALSE(bias.holding());
   EXPECT_DOUBLE_EQ(bias.Corrected(0.001), 0.001);
+}
+
+TEST(E2StandingStill, FollowingStopsAtTheLimit) {
+  GyroBias bias = Calibrated(0.015);
+  // The gyro creeps to 0.03 rad/s at rest, below still_rate: the offset follows up to 0.02 only.
+  Feed(bias, 120.0, 0.03, true);
+  EXPECT_TRUE(bias.holding());
+  EXPECT_DOUBLE_EQ(bias.offset(), 0.02);
 }
 
 TEST(E2StandingStill, TurningByHandIsNotStanding) {
