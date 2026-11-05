@@ -52,6 +52,7 @@ RUN rosdep keys --from-paths /ws/install/*/ /opt/mowbite_planner/*/ --ignore-src
         libpaho-mqttpp-dev) echo libpaho-mqttpp3-1 ;; \
         libssl-dev) echo libssl3t64 ;; \
         zlib) echo zlib1g ;; \
+        libzstd-dev) echo libzstd1 ;; \
         python3-shapely|python3-paho-mqtt) echo $k ;; \
         nlohmann-json-dev|eigen) ;; \
         *) echo "unknown runtime key $k" >&2; exit 1 ;; \
