@@ -205,5 +205,8 @@ class TestSensorChain(unittest.TestCase):
 @launch_testing.post_shutdown_test()
 class TestShutdown(unittest.TestCase):
     def test_processes_exit_cleanly(self, proc_info):
-        # SIGINT from launch is a normal stop for every process of the chain.
-        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -2, -15, 130, 143])
+        # SIGINT from launch is a normal stop for every process of the chain; ros2 topic pub ends on it with 2.
+        for action in proc_info.processes():
+            name = action.process_details["name"]
+            allowed = [0, -2, -15, 130, 143] + ([2] if name.startswith("ros2") else [])
+            self.assertIn(proc_info[action].returncode, allowed, name)
