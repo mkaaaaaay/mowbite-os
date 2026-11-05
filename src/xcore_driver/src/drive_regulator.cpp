@@ -74,6 +74,8 @@ DutyTwist DriveRegulator::Update(double linear, double angular, double now) {
   }
   double dt = last_update_ < 0 ? 0 : std::clamp(now - last_update_, 0.0, 0.2);
   last_update_ = now;
+  // A setpoint that is no number stops both wheels.
+  if (!std::isfinite(linear) || !std::isfinite(angular)) linear = angular = 0;
   bool fresh = last_measured_ >= 0 && now - last_measured_ <= kMeasuredMaxAge;
   double half = config_.wheel_distance / 2;
   out.left_duty = Duty(left_, linear - angular * half, dt, fresh, now);

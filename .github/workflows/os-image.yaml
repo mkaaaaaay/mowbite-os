@@ -1,4 +1,7 @@
 # Builds docker/os.Dockerfile natively for amd64 and arm64; pushes to ghcr.io only when started by hand with push.
+# The arm64 image also goes into an artifact of the run (docker save, layers repacked with gzip, kept 5 days), the way
+# to a mower by hand over ssh (docker load < the .tar) without ghcr: gzip layers, because the containerd store of the
+# mower keeps the layers as they come and unpacked beside them.
 name: os image
 
 on:
@@ -106,6 +109,10 @@ jobs:
           rc=0; docker run --rm --network none --entrypoint "$health" "$TAG" > health.txt || rc=$?
           cat health.txt
           if [ "$rc" -ne 1 ] || ! grep -q '^MQTT_UNREACHABLE 127.0.0.1:1883' health.txt; then exit 1; fi
+          docker run --rm "$TAG" python3 /ws/tools/measure.py --help > /dev/null
+          docker run --rm "$TAG" python3 /ws/tools/xcore_capture.py --help > /dev/null
+          # docker exec does not pass the entrypoint: the command measure sources the workspace itself.
+          docker run --rm --entrypoint /usr/local/bin/measure "$TAG" --help > /dev/null
           size=$(docker image inspect --format '{{.Size}}' "$TAG")
           packed=$(docker save "$TAG" | gzip -1 | wc -c)
           {
@@ -115,6 +122,36 @@ jobs:
             echo "- packages: $(grep -cE '^(mowbite_|tron_|xcore_)' pkgs.txt)"
             echo "- mowbite.min_app: $min_app"
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Save the image with gzip layers
+        if: matrix.arch == 'arm64'
+        env:
+          TAG: ${{ env.IMAGE }}:${{ steps.rev.outputs.short }}-${{ matrix.arch }}
+          ARCHIVE: mowbite-os-${{ steps.rev.outputs.short }}-${{ matrix.arch }}.tar
+        run: |
+          docker save "$TAG" | gzip -1 > saved.tar.gz
+          python3 -I tools/yf/repack_gzip.py saved.tar.gz repacked
+          mv repacked/image.tar "$ARCHIVE"
+          rm -r saved.tar.gz repacked
+          # The repacked archive loads back with the same layers.
+          layers=$(docker image inspect --format '{{json .RootFS.Layers}}' "$TAG")
+          docker rmi "$TAG" > /dev/null
+          docker load -i "$ARCHIVE"
+          test "$(docker image inspect --format '{{json .RootFS.Layers}}' "$TAG")" = "$layers"
+          docker run --rm "$TAG" python3 /ws/tools/measure.py --help > /dev/null
+          {
+            echo "- archive with gzip layers: \`$ARCHIVE\`, $(( $(stat -c %s "$ARCHIVE") / 1000000 )) MB"
+            echo "- sha256: $(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        if: matrix.arch == 'arm64'
+        with:
+          name: mowbite-os-${{ steps.rev.outputs.short }}-${{ matrix.arch }}
+          path: mowbite-os-${{ steps.rev.outputs.short }}-${{ matrix.arch }}.tar
+          retention-days: 5
+          compression-level: 0
+          if-no-files-found: error
 
   manifest:
     if: inputs.push

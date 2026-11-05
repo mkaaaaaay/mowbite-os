@@ -30,7 +30,7 @@ string gnss_source
 float64 wheel_ticks_per_m
 float64 wheel_distance
 
-# Limits the driver enforces on hw/cmd_vel.
+# Limits the driver enforces on hw/cmd_vel; 0 lets nothing move (wheels locked, xCore max_duty 0).
 float32 max_linear_speed
 float32 max_angular_speed
 

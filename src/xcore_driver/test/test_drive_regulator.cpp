@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <utility>
+#include <vector>
 
 #include "xcore_driver/drive_regulator.h"
 
@@ -72,6 +74,42 @@ TEST(DriveRegulator, SaturationKeepsTheCurvature) {
   EXPECT_EQ(d.right_duty, 0);
   EXPECT_EQ(d.linear, 0);
   EXPECT_EQ(d.angular, 0);
+}
+
+TEST(DriveRegulator, NoDutyWithMaxDutyZeroEvenWithFeedback) {
+  RegulatorConfig config;
+  config.feedback = true;
+  config.max_duty = 0;
+  DriveRegulator r(config);
+  // The wheels stand while the twist asks for full speed: the integral grows, the duty stays 0.
+  for (int i = 0; i < 20; i++) {
+    const double t = i * 0.1;
+    r.OnMeasured(0, 0, t);
+    for (const auto& d : {r.Update(0.3, 0, t), r.Update(0, 0.3, t + 0.01), r.Update(-0.3, -0.3, t + 0.02)}) {
+      EXPECT_EQ(d.left_duty, 0);
+      EXPECT_EQ(d.right_duty, 0);
+    }
+  }
+}
+
+TEST(DriveRegulator, SetpointsThatAreNoNumberStop) {
+  RegulatorConfig config;
+  config.feedback = true;
+  config.max_duty = 1.0;
+  DriveRegulator r(config);
+  r.OnMeasured(0, 0, 0);
+  EXPECT_GT(r.Update(0.2, 0, 0).left_duty, 0);
+  for (const auto& [linear, angular] : std::vector<std::pair<double, double>>{
+           {NAN, 0}, {0.2, NAN}, {INFINITY, 0}, {0.2, -INFINITY}, {NAN, NAN}}) {
+    const auto d = r.Update(linear, angular, 0.1);
+    EXPECT_EQ(d.left_duty, 0) << linear << " " << angular;
+    EXPECT_EQ(d.right_duty, 0) << linear << " " << angular;
+    EXPECT_EQ(d.linear, 0);
+    EXPECT_EQ(d.angular, 0);
+  }
+  // The integral starts again from 0: the next duty is feed forward only.
+  r.OnMeasured(0.2, 0.2, 0.2);
+  EXPECT_NEAR(r.Update(0.2, 0, 0.2).left_duty, 0.2, 1e-9);
 }
 
 TEST(DriveRegulator, SpeedModelCheckAndReach) {

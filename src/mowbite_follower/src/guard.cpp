@@ -84,6 +84,9 @@ GuardResult CheckGuard(const GuardConfig& config, const GuardInput& in, const Ge
     return {StopReason::kNotAllowed,
             "no safety measurement of this platform (hw/capabilities): mowing and driving are blocked"};
   }
+  if (!in.driver_moves) {
+    return {StopReason::kNotAllowed, "the driver allows no speed (hw/capabilities): driving is blocked"};
+  }
   if (in.hw_age > config.hw_timeout) return {StopReason::kEmergency, "no hw/status from the driver"};
   if (in.emergency) return {StopReason::kEmergency, "emergency"};
   if (in.pose_age > config.pose_timeout) {

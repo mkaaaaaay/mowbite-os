@@ -32,7 +32,7 @@ class GyroBias {
   // A sample of rate (rad/s) that covers dt s; wheels_still: a fresh wheel report says the wheels stand (no report
   // counts as moving). NaN is ignored.
   void Add(double rate, double dt, bool wheels_still);
-  // Why calibration windows were thrown away since the last call, for the log.
+  // For the log since the last call: why calibration windows were thrown away, an offset from the file clamped.
   std::vector<std::string> TakeWarnings();
   // The rate the mower turns at: rate minus the offset, 0 while it stands.
   double Corrected(double rate) const;
