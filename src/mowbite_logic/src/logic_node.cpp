@@ -1646,7 +1646,9 @@ class LogicNode : public rclcpp::Node {
   void PublishRpcMethods() {
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_logic";
-    methods.methods = {"mowing.plan", "params.set", "robot.geometry.get", "robot.geometry.set", "system.hold"};
+    for (const auto& method : mowbite_api::Methods()) {
+      if (method.node == "mowbite_logic" && method.offered.empty()) methods.methods.push_back(method.name);
+    }
     for (const auto& command : mowbite_api::Commands()) {
       // "Home" from IDLE, only where the OS docks (contacts at the back).
       if (!Ours(command) || (command.name == "docking.start" && !core_.CanDock())) continue;
@@ -1654,8 +1656,10 @@ class LogicNode : public rclcpp::Node {
     }
     calibration_offered_ = calibration_client_->action_server_is_ready();
     if (calibration_offered_) {
-      for (const char* name : {"calibration.check", "calibration.start", "calibration.abort"}) {
-        methods.methods.push_back(name);
+      for (const auto& method : mowbite_api::Methods()) {
+        if (method.node == "mowbite_logic" && method.name.rfind("calibration.", 0) == 0) {
+          methods.methods.push_back(method.name);
+        }
       }
     }
     rpc_methods_pub_->publish(methods);
@@ -2476,6 +2480,7 @@ class LogicNode : public rclcpp::Node {
         entry.id = action.id;
         entry.name = action.name;
         entry.enabled = action.enabled;
+        entry.reason = action.reason;
         msg.actions.push_back(entry);
       }
       actions_pub_->publish(msg);

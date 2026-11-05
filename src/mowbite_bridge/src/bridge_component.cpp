@@ -233,7 +233,7 @@ class BridgeNode : public rclcpp::Node {
     });
     Subscribe<msg::ActionList>("bridge/actions", Latched(50), [this](const msg::ActionList& m) {
       std::vector<ActionItem> items;
-      for (const auto& a : m.actions) items.push_back({a.id, a.name, a.enabled});
+      for (const auto& a : m.actions) items.push_back({a.id, a.name, a.enabled, a.reason});
       core_.OnActions(m.node_prefix, items);
     });
     Subscribe<std_msgs::msg::String>("bridge/params", Latched(50),

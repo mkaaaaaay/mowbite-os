@@ -24,9 +24,9 @@ struct ParamSpec {
   double def;
 };
 
-// The 13 settings in the order of the app's groups. max_position_accuracy at most 0.3 m, gps_timeout at least 1 s,
-// docking_approach_distance and undock_distance 0.5 to 2 m and docking_retry_count at most 5 are bounds of MowBite OS;
-// MowerLogic.cfg allows 1 m, 0 s, 0 to 5 m, 0 to 100 m and 50.
+// The 13 settings of mowbite_api::LogicSettings() in the order of the app's groups. max_position_accuracy at most 0.3 m,
+// gps_timeout at least 1 s, docking_approach_distance and undock_distance 0.5 to 2 m and docking_retry_count at most 5
+// are bounds of MowBite OS; MowerLogic.cfg allows 1 m, 0 s, 0 to 5 m, 0 to 100 m and 50.
 const std::vector<ParamSpec>& LogicParamSpecs();
 
 struct ParamsResult {

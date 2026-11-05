@@ -168,6 +168,8 @@ struct Action {
   std::string id;
   std::string name;
   bool enabled = false;
+  // Only start_mowing while off: the reason of MOWING_REFUSED a start would get now.
+  std::string reason = "";
 };
 
 struct ActionGroup {
@@ -714,7 +716,8 @@ class LogicCore {
   double last_checkpoint_s_ = 0;
   bool checkpoint_due_ = false;
   bool blades_running_ = false;
-  bool last_start_ok_ = false;
+  // The reason of StartProblem() at the last actions, empty while a start would go.
+  std::string last_start_reason_ = "-";
   std::vector<std::string> notices_;
   // Calibration: the program's status and when it came, the goal due for the node, the cancel of the program, its last
   // sign and the phase it reported last.
