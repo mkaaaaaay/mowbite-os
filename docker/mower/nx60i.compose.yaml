@@ -30,8 +30,9 @@ services:
       - mowbite.update.name=mowbite-os
     volumes:
       - ${MOWBITE_DATA_DIR:?set MOWBITE_DATA_DIR in .env}:${MOWBITE_DATA_DIR}
-      # The journal of the cores, outside of data_dir; limits in nx60i.yaml of mowbite_bringup.
-      - ${MOWBITE_JOURNAL_DIR:?set MOWBITE_JOURNAL_DIR in .env}:${MOWBITE_JOURNAL_DIR}
+      # The journal of the cores, outside of data_dir; limits in nx60i.yaml of mowbite_bringup (writing stops below 200 MB
+      # free there). An .env from before the journal works with the default.
+      - ${MOWBITE_JOURNAL_DIR:-/var/lib/mowbite-journal}:/var/lib/mowbite-journal
     environment:
       - TZ=${TZ:-Europe/Berlin}
       - MOWBITE_OS_IMAGE=ghcr.io/mkaaaaaay/mowbite-os:${MOWBITE_OS_TAG}
@@ -40,7 +41,7 @@ services:
       - /tmp/ros_log:size=20m
     # xcore_driver with hold_file <data_dir>/hold.json, the parameter file of this mower and the datum of the garden.
     command: ["ros2", "launch", "mowbite_bringup", "nx60i.launch.py", "data_dir:=${MOWBITE_DATA_DIR}",
-              "journal_dir:=${MOWBITE_JOURNAL_DIR}",
+              "journal_dir:=/var/lib/mowbite-journal",
               "mower_params:=${MOWBITE_DATA_DIR}/nx60i.yaml", "datum_lat:=${MOWBITE_DATUM_LAT:?}",
               "datum_long:=${MOWBITE_DATUM_LONG:?}", "datum_height:=${MOWBITE_DATUM_HEIGHT:?}"]
     # SIGINT so that launch stops every node and xcore_driver sends its stops; it ignores SIGTERM as PID 1.
