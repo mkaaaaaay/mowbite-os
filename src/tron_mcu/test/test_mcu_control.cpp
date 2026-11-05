@@ -1017,6 +1017,27 @@ TEST_F(BladeStopTest, ABladeStillTurningStaysLatchedAfterAReconnect) {
   EXPECT_FALSE(DrivesOrMows(6.5));
 }
 
+TEST_F(BladeStopTest, AfterAReconnectOnlyAReportBelowTheStillRpmClears) {
+  Run(0.5);
+  control_.SetBlade(BladeOn(), now_);
+  Run(1.0);
+  control_.SetBlade(kBladeOff, now_);
+  Run(4.5);
+  control_.OnBladeRpm(1500, now_);
+  Run(5.0);
+  control_.OnConnected(now_);
+  Run(5.5);
+  // Within the new run-down: exactly the still rpm still turns, one less is still.
+  control_.OnBladeRpm(100, now_);
+  control_.ReleaseEmergency(now_);
+  Run(6.0);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  control_.OnBladeRpm(99, now_);
+  control_.ReleaseEmergency(now_);
+  Run(6.5);
+  EXPECT_FALSE(control_.Status(now_).latched);
+}
+
 TEST_F(BladeStopTest, ABladeTurningAtTheStartLatches) {
   // Never switched on from here; the start sent it off at 0.01 s.
   Run(3.5);
@@ -1121,8 +1142,7 @@ TEST_F(ControlTest, HoldOnTheDockSendsNoSpeedData) {
   EXPECT_TRUE(Times([](const SubPacket& p) { return IsModule(p, Module::kSpeed); }).empty());
 }
 
-// Cases the mutation tests of the safety code found uncovered. Times on the 10 ms grid are chosen where a limit falls
-// exactly on a tick, or just off it by rounding.
+// Limits on the 10 ms grid: times where a limit falls exactly on a tick, or just off it by rounding.
 
 TEST_F(ControlTest, ALatchBetweenReleaseAndTickStays) {
   Run(0.1);
