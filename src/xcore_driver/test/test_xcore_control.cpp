@@ -124,10 +124,10 @@ TEST(XcoreControl, DriveIsLimitedAndStopsAfterSilence) {
   auto drive = Of(f.control.Tick(0), kDiffDriveService);
   ASSERT_EQ(drive.size(), 1u);
   auto twist = TwistOf(drive[0]);
-  // 0.3 m/s and -0.3 rad/s, as duty: the outer wheel at the duty limit, the inner one slower.
+  // 0.3 m/s and -0.3 rad/s, as duty: the outer wheel at the duty limit, the inner one shortened by the same factor.
   double half = ControlConfig{}.regulator.wheel_distance / 2;
   EXPECT_NEAR(twist[0] - twist[5] * half, 0.3, 1e-9);
-  EXPECT_NEAR(twist[0] + twist[5] * half, 0.3 - 0.3 * half, 1e-9);
+  EXPECT_NEAR(twist[0] + twist[5] * half, (0.3 - 0.3 * half) * 0.3 / (0.3 + 0.3 * half), 1e-9);
   EXPECT_EQ(twist[1] + twist[2] + twist[3] + twist[4], 0);
   EXPECT_TRUE(f.control.Status(0).moving);
   // Resent every 0.1 s until cmd_vel falls silent for 0.5 s, then three stops 0.1 s apart, then nothing.
@@ -673,6 +673,32 @@ TEST(XcoreControl, OverspeedFollowsTheRaisedLimit) {
   auto errors = r.f.control.TakeErrors();
   ASSERT_EQ(errors.size(), 1u);
   EXPECT_NE(errors[0].find("above 0.72 m/s"), std::string::npos);
+}
+
+TEST(SpeedCaps, ReachableSpeedsLowerTheLimits) {
+  ControlConfig config;
+  config.regulator.wheel_distance = 0.3556;
+  config.regulator.duty_slope = 0.58;
+  config.regulator.duty_deadband = 0.019;
+  config.regulator.max_duty = 0.3;
+  ApplyReachableSpeeds(config);
+  // A wheel reaches 0.58 x 0.281 = 0.163 m/s; turning on the spot 2 x 0.163 / 0.3556 = 0.917 rad/s, above the cap.
+  EXPECT_NEAR(config.max_linear_speed, 0.16298, 1e-9);
+  EXPECT_EQ(config.max_angular_speed, 0.3);
+  // The raised start of M8: 0.5 m/s stays, as 0.9 reaches 0.511 m/s.
+  config.max_linear_speed = 0.5;
+  config.regulator.max_duty = 0.9;
+  ApplyReachableSpeeds(config);
+  EXPECT_EQ(config.max_linear_speed, 0.5);
+  // A small max_duty lowers the turning as well; max_duty 0 lets nothing move.
+  config.regulator.max_duty = 0.05;
+  ApplyReachableSpeeds(config);
+  EXPECT_NEAR(config.max_linear_speed, 0.58 * 0.031, 1e-12);
+  EXPECT_NEAR(config.max_angular_speed, 2 * 0.58 * 0.031 / 0.3556, 1e-12);
+  config.regulator.max_duty = 0;
+  ApplyReachableSpeeds(config);
+  EXPECT_EQ(config.max_linear_speed, 0);
+  EXPECT_EQ(config.max_angular_speed, 0);
 }
 
 TEST(SpeedCaps, MeasurementLimitFromZeroToSixTenths) {

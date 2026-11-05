@@ -36,8 +36,9 @@ GROUP_PORT = random.randint(42000, 48000)
 BIND_IP = f"127.{random.randint(1, 250)}.{random.randint(1, 250)}.{random.randint(2, 250)}"
 SERVICES = os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "config", "xcore_nx60i_services.json")
 FAKE = os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_xcore")
-# As nx60i.yaml, so that the wheels turn as fast as the driver commands.
-FULL_DUTY_SPEED = 0.47
+# The fake's speed model by default, as in nx60i.yaml: the wheels turn as fast as the driver commands.
+DUTY_SLOPE = 0.58
+DUTY_DEADBAND = 0.019
 
 
 def generate_test_description():
@@ -45,7 +46,7 @@ def generate_test_description():
         json.dump({}, f)
     fake_xcore = ExecuteProcess(
         cmd=[FAKE, "--services", SERVICES, "--group-port", str(GROUP_PORT), "--flags", FLAGS, "--pcap", PCAP,
-             "--pcap-max-mb", "80", "--full-duty-speed", str(FULL_DUTY_SPEED)],
+             "--pcap-max-mb", "80"],
         output="screen")
     driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "launch",
@@ -137,10 +138,13 @@ class TestRehearsal(unittest.TestCase):
         drive = self.boot()["drive"]
         straight = [g for g in drive["steady"] if g["w"] == 0 and g["v"] > 0]
         self.assertGreaterEqual(len(straight), 6)
-        for g in straight:
-            with self.subTest(v=g["v"]):
-                self.assertAlmostEqual(g["per_duty_left"], FULL_DUTY_SPEED, delta=0.05)
-                self.assertAlmostEqual(g["per_duty_right"], FULL_DUTY_SPEED, delta=0.05)
+        # The steady runs at their duties give back the fake's speed model.
+        for side in ("left", "right"):
+            with self.subTest(side):
+                model = drive["duty_model"][side]
+                self.assertGreaterEqual(model["duties"], 5)
+                self.assertAlmostEqual(model["slope"], DUTY_SLOPE, delta=0.03)
+                self.assertAlmostEqual(model["deadband"], DUTY_DEADBAND, delta=0.004)
         self.assertTrue(all(abs(g["v"]) <= 0.3 + 1e-6 for g in drive["steady"]))
 
     def test_e_every_start_has_a_fresh_command(self):
@@ -221,13 +225,13 @@ class TestRehearsal(unittest.TestCase):
         self.assertLess(killed["since_emergency_input_s"], 1.25)
         backward = [r for r in runs if "backward" in r["step"]][0]
         self.assertTrue(backward["reason"].startswith("COLLISION"))
-        # The driver keeps 0.3 m/s: the fast runs wait for raised limits.
-        self.assertIn("fast runs: the driver allows 0.30 m/s", self.output)
+        # max_duty 0.3 reaches 0.163 m/s: the fast runs wait for raised limits.
+        self.assertIn("fast runs: the driver allows 0.16 m/s", self.output)
         self.assertFalse([r for r in runs if "fast" in (r["step"] or "")])
         stopping = [json.loads(line) for line in open(self.recording) if '"kind": "stopping"' in line]
         self.assertEqual(len(stopping), 3)  # STOP, no command, backward; not the killed driver
         self.assertTrue(all(0.0 <= s["odometry_m"] < 0.3 for s in stopping), stopping)
-        # Without a command the wheels go on for the driver's 0.5 s at 0.14 m/s (duty 0.3 at 0.47 m/s per duty).
+        # Without a command the wheels go on for the driver's 0.5 s at 0.163 m/s (0.3 m/s cut to what duty 0.3 reaches).
         quiet, = [s for s in stopping if "no command" in s["text"]]
         self.assertGreater(quiet["odometry_m"], 0.03)
 

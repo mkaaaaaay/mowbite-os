@@ -45,6 +45,12 @@ double CappedLimit(const char* name, double value, double cap) {
   return std::min(value, cap);
 }
 
+void ApplyReachableSpeeds(ControlConfig& config) {
+  const double wheel = ReachableWheelSpeed(config.regulator);
+  config.max_linear_speed = std::min(config.max_linear_speed, wheel);
+  config.max_angular_speed = std::min(config.max_angular_speed, 2 * wheel / config.regulator.wheel_distance);
+}
+
 const char* BladeResultText(BladeResult result) {
   switch (result) {
     case BladeResult::kOk:

@@ -80,6 +80,10 @@ struct ControlConfig {
   RegulatorConfig regulator;
 };
 
+// Lowers max_linear_speed and max_angular_speed to what the speed model reaches within max_duty: a wheel at most
+// ReachableWheelSpeed, driving straight or turning on the spot. The capabilities and the wheel checks use the result.
+void ApplyReachableSpeeds(ControlConfig& config);
+
 // Bits of the emergency reason in hw/status. 0 to 12 come from the board with its numbers; the others are the driver's.
 constexpr uint32_t kReasonLatch = 1u << 0;
 constexpr uint32_t kReasonTimeoutInputs = 1u << 1;

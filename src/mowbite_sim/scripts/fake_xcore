@@ -9,13 +9,13 @@ firmware does: inputs with their delay latch STOP, LIFT or COLLISION, a second w
 TIMEOUT_HIGH_LEVEL, a missing service SERVICE_NOT_READY. Like the firmware v1.4.3, wheels and blade stand while there
 is a reason; every change to another reason other than 0 zeroes the stored setpoints, but setpoints that arrive during
 the emergency are stored and run as soon as the reason clears (wheels if younger than 1 s, blade if younger than 10 s).
-The diff drive applies the twist as duty (left v - w*d/2, right mirrored), the wheels head for duty *
---full-duty-speed with the time constant --wheel-tau (run-down of 0.07-0.12 s from 0.047 m/s as measured in the air on
+The diff drive applies the twist as duty (left v - w*d/2, right mirrored), the wheels head for --duty-slope x (duty -
+--duty-deadband) m/s (0 within the deadband) with the time constant --wheel-tau (run-down of 0.07-0.12 s from 0.047 m/s as measured in the air on
 the NX60i), the counters run free (the right one falls going forward). Two lift or two collision inputs give the
 MULTIPLE reason after --multiple-delay-ms (10, the firmware's register). The blade heads for the setpoint *
 --blade-rpm after --blade-delay, rising by --blade-accel and falling by --blade-decel rpm/s (NX60i without the disc:
-2800 rpm, about 0.5 s, 3500 and 2000 rpm/s, below 100 rpm about 2 s after off). The NX60i in the air turned at about
-0.58 x (duty - 0.019) m/s, so --full-duty-speed 0.47 matches it at duty 0.1 only. Motor controllers report the status
+2800 rpm, about 0.5 s, 3500 and 2000 rpm/s, below 100 rpm about 2 s after off). The defaults of the speed model are
+the NX60i in the air (M3 of M-A). Motor controllers report the status
 200 (ok) only. IMU at 100 Hz through the configured axis remap of a sensor mounted upside down, power every second,
 GPS at 5 Hz, inputs every 200 ms. RTCM to the GPS service is counted per datagram, with a CRC-32 over the stream.
 A JSON file with flags (stop, rear_stop, lift, lift_left, lift_right, bumper, bumper_left, bumper_right, dock,
@@ -745,6 +745,11 @@ class Board:
             self.next_reason_out = now + 1.0
             self.output(EMERGENCY, [(0, struct.pack("<H", reason))])
 
+    def wheel_target(self, duty):
+        """Speed in m/s a wheel heads for at this duty: --duty-slope x (|duty| - --duty-deadband), 0 within it."""
+        turning = abs(duty) - self.args.duty_deadband
+        return math.copysign(self.args.duty_slope * turning, duty) if turning > 0 else 0.0
+
     def update_drive(self, flags, dt, now):
         service = self.services.get(DIFF_DRIVE)
         if not service or not service.running:
@@ -758,9 +763,8 @@ class Board:
         if flags.get("zero_duty_ignored"):
             duty = list(self.held_duty)
         self.applied_duty = duty
-        full = self.args.full_duty_speed
-        left = duty[0] * full
-        right = -duty[1] * full
+        left = self.wheel_target(duty[0])
+        right = -self.wheel_target(duty[1])
         deadband = self.args.wheel_deadband
         left = 0.0 if abs(left) < deadband else left
         right = 0.0 if abs(right) < deadband else right
@@ -976,8 +980,9 @@ def main():
     parser.add_argument("--group-port", type=int, default=4242)
     parser.add_argument("--firmware", default="v1.4.3")
     parser.add_argument("--major", type=int, default=1)
-    parser.add_argument("--full-duty-speed", type=float, default=0.47,
-                        help="wheel speed per unit of duty in m/s (NX60i in the air at duty 0.1, as in nx60i.yaml)")
+    parser.add_argument("--duty-slope", type=float, default=0.58,
+                        help="m/s of a wheel per unit of duty above the deadband (NX60i in the air, as in nx60i.yaml)")
+    parser.add_argument("--duty-deadband", type=float, default=0.019, help="duty up to which a wheel stands")
     parser.add_argument("--track", type=float, default=0.3556, help="real distance of the wheels in m")
     parser.add_argument("--ticks-start", type=int, default=2**32 - 3000, help="start value of both counters")
     parser.add_argument("--ticks-scale", type=float, default=1.0, help="true ticks per metre / configured ones")
