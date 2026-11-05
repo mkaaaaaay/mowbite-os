@@ -1,7 +1,8 @@
 """MowBite OS on the NX60i as nx60i.launch.py starts it, against fake_xcore on UDP over the loopback: the stack comes up
 IDLE with the capabilities of the speed model and the speeds for the planner on bridge/params, the gyro calibrates on
 the wheel reports of the driver; without a safety measurement mowing and drives are refused; the emergency stop latches
-and is released; a killed driver stands the wheels (the board's own timeout) and its successor holds the board from its
+and is released; on the station the charge of the board is confirmed (DOCKED) and its loss told (CHARGING_LOST), with
+the values of the NX60i; a killed driver stands the wheels (the board's own timeout) and its successor holds the board from its
 first frame until a release; a crashed container comes back beside the running driver; after three restarts the driver
 stays down. Prints the RSS of driver, container and planner.
 
@@ -283,6 +284,36 @@ class TestNx60iStack(unittest.TestCase):
         self.assertTrue(p.status.emergency_latched)
         self.assertTrue(p.release().success)
         self.assertTrue(p.wait(lambda: not p.status.emergency, 3), p.status)
+
+    def test_3b_charging_on_the_station_is_confirmed_and_its_loss_told(self):
+        p = self.probe
+        # On the station at 26.5 V (54 %) the board charges with 0.88 A by itself: DOCKED once it held 5 s.
+        since = len(p.events)
+        set_flags(dock=1)
+        self.assertTrue(p.wait(lambda: p.status.dock_contact and p.status.battery_current < -0.8, 5), p.status)
+        self.assertTrue(p.event(since, "DOCKED", 15), p.events[since:])
+        # The current stops below 75 %: CHARGING_LOST after 10 s, the mower stays where it is.
+        since = len(p.events)
+        set_flags(dock=1, charge_current=0.0)
+        lost = p.event(since, "CHARGING_LOST", 20, reason="NO_CHARGE_CURRENT")
+        self.assertTrue(lost, p.events[since:])
+        self.assertEqual((lost["severity"], lost["resume"]), ("warning", "user"))
+        self.assertEqual(lost["battery_percentage"], 54)
+        # Charging again: DOCKED; off the station: CHARGING_LOST NO_DOCK_CONTACT.
+        since = len(p.events)
+        set_flags(dock=1)
+        self.assertTrue(p.event(since, "DOCKED", 15), p.events[since:])
+        since = len(p.events)
+        set_flags()
+        self.assertTrue(p.event(since, "CHARGING_LOST", 20, reason="NO_DOCK_CONTACT"), p.events[since:])
+        # Full, the charger done without a current: the contact alone, then off again.
+        since = len(p.events)
+        set_flags(dock=1, battery_voltage=28.3)
+        self.assertTrue(p.event(since, "DOCKED", 15), p.events[since:])
+        since = len(p.events)
+        set_flags()
+        self.assertTrue(p.event(since, "CHARGING_LOST", 20, reason="NO_DOCK_CONTACT"), p.events[since:])
+        self.assertEqual(p.robot.current_state, "IDLE")
 
     def test_4_a_killed_driver_leaves_a_latched_successor(self, proc_info):
         p = self.probe

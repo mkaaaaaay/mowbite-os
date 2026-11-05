@@ -846,6 +846,32 @@ class DockProcessTest(unittest.TestCase):
                         out.append((current / 10.0, dock_ok))
         return out
 
+    def reports(self, seconds):
+        """(current A, percentage) of the battery reports within seconds."""
+        out = []
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            for packets in ft.Decoder().feed(read_available(self.fd, 0.1)):
+                for t, m, payload in packets or []:
+                    if t == ft.FROM_MCU and m == 5:
+                        _, current, percentage = struct.unpack("<HhBbbI", payload)[:3]
+                        out.append((current / 10.0, percentage))
+        return out
+
+    def test_charge_current_and_percentage_from_the_flags(self):
+        os.write(self.fd, ft.encode([(ft.TO_MCU, 3, bytes([1]))]))
+        self.assertEqual(self.reports(2.2)[-1], (-3.0, 80))
+        write_flags(self.paths["flags"], {"charge_current": 1.5, "battery_percentage": 60})
+        self.assertEqual(self.reports(2.2)[-1], (-1.5, 60))
+        # Contacts that do not charge, and a full battery: no charge current.
+        write_flags(self.paths["flags"], {"charge_current": 0.0})
+        self.assertEqual(self.reports(2.2)[-1], (1.2, 80))
+        write_flags(self.paths["flags"], {"battery_percentage": 100})
+        self.assertEqual(self.reports(2.2)[-1], (1.2, 100))
+        write_flags(self.paths["flags"], {})
+        os.write(self.fd, ft.encode([(ft.TO_MCU, 3, bytes([0]))]))
+        self.assertGreater(self.reports(2.2)[-1][0], 0)
+
     def test_contact_at_once_and_current_only_after_charge_on(self):
         before = self.batteries(2.2)
         self.assertTrue(before and all(ok == 1 for _, ok in before), before)
