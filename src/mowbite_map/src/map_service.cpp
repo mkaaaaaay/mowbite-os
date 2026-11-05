@@ -219,7 +219,7 @@ EditResult MapService::Apply(const MapData& candidate, const std::string& id, co
   RpcOutcome outcome = Commit(std::move(*parsed.map), false);
   if (!outcome.ok) return {false, "", outcome.message, SaveFailedCode(outcome.code)};
   notices_.push_back({Notice::Level::kInfo, "Stored the " + what + ", id " + id});
-  return {true, id, ""};
+  return {true, id, "", ""};
 }
 
 std::string MapService::NewId(const MapData& taken) const {
