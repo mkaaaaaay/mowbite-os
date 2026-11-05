@@ -396,9 +396,8 @@ TEST(Calibration, PoseLostMeasurementLostAndAbort) {
 }
 
 TEST(Calibration, LowBatteryHeldLikeWhileMowing) {
-  LogicConfig config;
-  config.battery_critical_time = 10.0;
-  LogicCore core = Calibrating(config);
+  // Below empty (21.0 V) the highest voltage of 20 s counts; a voltage above it within the window keeps it going.
+  LogicCore core = Calibrating();
   HardwareSnapshot hw = Healthy();
   hw.battery_voltage = 20.5f;
   core.OnHardwareStatus(hw);
@@ -406,16 +405,16 @@ TEST(Calibration, LowBatteryHeldLikeWhileMowing) {
     core.OnCalibrationFeedback("line", 1, t);
     ASSERT_FALSE(core.TickCalibration(t)) << t;
   }
-  // A dip under load does not count.
   core.OnHardwareStatus(Healthy());
-  core.OnCalibrationFeedback("line", 1, 20.4);
-  EXPECT_FALSE(core.TickCalibration(20.5));
+  core.OnCalibrationFeedback("line", 1, 20.0);
+  EXPECT_FALSE(core.TickCalibration(20.0));
   core.OnHardwareStatus(hw);
-  core.OnCalibrationFeedback("line", 1, 21.0);
-  EXPECT_FALSE(core.TickCalibration(21.0));
-  for (double t = 21.5; t < 30.9; t += 0.5) core.OnCalibrationFeedback("line", 1, t);
-  EXPECT_FALSE(core.TickCalibration(30.9));
-  EXPECT_TRUE(core.TickCalibration(31.0));
+  for (double t = 20.5; t < 40.0; t += 0.5) {
+    core.OnCalibrationFeedback("line", 1, t);
+    ASSERT_FALSE(core.TickCalibration(t)) << t;
+  }
+  core.OnCalibrationFeedback("line", 1, 40.0);
+  EXPECT_TRUE(core.TickCalibration(40.5));
   const auto events = core.TakeEvents();
   const Event* failed = Find(events, "CALIBRATION_FAILED");
   ASSERT_TRUE(failed);
@@ -423,6 +422,30 @@ TEST(Calibration, LowBatteryHeldLikeWhileMowing) {
   EXPECT_NEAR(failed->details["battery_voltage"].get<double>(), 20.5, 1e-6);
   EXPECT_DOUBLE_EQ(failed->details["limit"].get<double>(), 21.0);
   EXPECT_TRUE(core.TakeCalibrationCancel());
+}
+
+TEST(Calibration, CriticalBatteryAfterItsHoldTime) {
+  LogicCore core = Calibrating();
+  HardwareSnapshot hw = Healthy();
+  hw.battery_voltage = 19.5f;
+  const auto tick = [&core](double t) {
+    core.OnCalibrationFeedback("line", 1, t);
+    return core.TickCalibration(t);
+  };
+  core.OnHardwareStatus(hw);
+  EXPECT_FALSE(tick(10.5));
+  // A dip under load does not count.
+  core.OnHardwareStatus(Healthy());
+  EXPECT_FALSE(tick(11.5));
+  core.OnHardwareStatus(hw);
+  EXPECT_FALSE(tick(12.0));
+  EXPECT_FALSE(tick(13.5));
+  EXPECT_TRUE(tick(14.0));
+  const auto taken = core.TakeEvents();
+  const Event* failed = Find(taken, "CALIBRATION_FAILED");
+  ASSERT_TRUE(failed);
+  EXPECT_EQ(failed->details["reason"], "BATTERY_LOW");
+  EXPECT_DOUBLE_EQ(failed->details["limit"].get<double>(), 19.7);
 }
 
 TEST(Calibration, WatchdogOfTheProgram) {

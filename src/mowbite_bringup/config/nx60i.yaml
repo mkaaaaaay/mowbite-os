@@ -3,7 +3,8 @@
 
 mowbite_logic:
   ros__parameters:
-    # 7S pack, as the battery voltages of the driver (xcore_driver/config/nx60i.yaml): mowing ends below 23.0 V.
+    # 7S pack, as the battery voltages of the driver (xcore_driver/config/nx60i.yaml): mowing goes home below 24.5 V
+    # (the highest voltage of 20 s), at once below 23.0 V; no battery temperature, so battery_hot_temperature stays 0.
     battery_empty_voltage: 24.5
     battery_full_voltage: 28.2
     battery_critical_voltage: 23.0

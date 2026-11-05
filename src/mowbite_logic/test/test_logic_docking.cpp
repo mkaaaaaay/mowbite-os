@@ -332,7 +332,10 @@ TEST(Docking, AbortMowingDocksToo) {
   EXPECT_TRUE(core.Docking());
   const auto events = core.TakeEvents();
   EXPECT_FALSE(Find(events, "JOB_COMPLETE"));
-  ASSERT_TRUE(Find(events, "STATE"));
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING", "STATE"}));
+  EXPECT_EQ(events[0].details["reason"], "MANUAL");
+  EXPECT_EQ(events[0].details["severity"], "info");
+  EXPECT_EQ(events[0].details["resume"], "user");
   EXPECT_EQ(Find(events, "STATE")->details["state"], "DOCKING");
   Take(core, DockingLeg::Kind::kApproach);
 }
@@ -561,7 +564,8 @@ TEST(Docking, APositionThatStaysBadEndsDocking) {
   const auto events = core.TakeEvents();
   const Event* failed = Find(events, "DOCKING_FAILED");
   ASSERT_TRUE(failed);
-  EXPECT_EQ(failed->details["reason"], "dock_failed");
+  EXPECT_EQ(failed->details["reason"], "NO_POSITION");
+  EXPECT_EQ(failed->details["severity"], "error");
   EXPECT_EQ(failed->details["attempts"], 1);
   EXPECT_NE(failed->details["message"].get<std::string>().find("no good position for 10 s"), std::string::npos);
 }
@@ -627,8 +631,9 @@ TEST(DockingStart, DocksFromIdle) {
   EXPECT_TRUE(core.StartDocking().empty());
   EXPECT_TRUE(core.Docking());
   const auto events = core.TakeEvents();
-  ASSERT_EQ(Types(events), (std::vector<std::string>{"STATE"}));
-  EXPECT_EQ(events[0].details["state"], "DOCKING");
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING", "STATE"}));
+  EXPECT_EQ(events[0].details["reason"], "MANUAL");
+  EXPECT_EQ(events[1].details["state"], "DOCKING");
   // The approach point of the setting.
   const DockingLeg leg = Take(core, DockingLeg::Kind::kApproach);
   EXPECT_NEAR(leg.goal.x, 0.2, 1e-9);

@@ -492,6 +492,15 @@ class LogicNode : public rclcpp::Node {
     config.gps_wait_time = declare_parameter("gps_wait_time", config.gps_wait_time);
     config.battery_critical_voltage = declare_parameter("battery_critical_voltage", config.battery_critical_voltage);
     config.battery_critical_time = declare_parameter("battery_critical_time", config.battery_critical_time);
+    config.battery_low_window = declare_parameter("battery_low_window", config.battery_low_window);
+    config.battery_hot_temperature = declare_parameter("battery_hot_temperature", config.battery_hot_temperature);
+    const std::string battery = BatteryVoltagesProblem(config);
+    if (!battery.empty()) throw std::invalid_argument(battery);
+    if (!(config.battery_critical_time > 0) || !(config.battery_low_window > 0) ||
+        !(config.battery_hot_temperature >= 0)) {
+      throw std::invalid_argument(
+          "battery_critical_time and battery_low_window need to be above 0, battery_hot_temperature 0 or above");
+    }
     config.approach_distance = declare_parameter("approach_distance", config.approach_distance);
     config.checkpoint_period = declare_parameter("checkpoint_period", config.checkpoint_period);
     // Where the charging contacts are belongs to the dimensions of the platform (geometry.dock_contact_x).
@@ -1869,6 +1878,8 @@ class LogicNode : public rclcpp::Node {
     core_.SetUndockDistance(logic_params_.Get("undock_distance"));
     core_.SetDockingSettings(logic_params_.Get("docking_approach_distance"),
                              static_cast<int>(logic_params_.Get("docking_retry_count")));
+    core_.SetHomeSettings(static_cast<int>(logic_params_.Get("rain_mode")), logic_params_.Get("rain_check_seconds"),
+                          logic_params_.Get("motor_hot_temperature"), logic_params_.Get("motor_cold_temperature"));
   }
 
   bool SaveLogicParams(const LogicParams& params, std::string& error) {

@@ -107,9 +107,12 @@ mowbite_localization:
 
 mowbite_logic:
   ros__parameters:
-    # Assumption for 6S Li-ion until the discharge curve is measured.
-    battery_empty_voltage: 19.2
+    # 6S Li-ion. empty is 0 % for the app and where mowing goes home: the highest voltage of battery_low_window s below
+    # it (assumption, 3.5 V per cell, until the discharge curve is measured). The start checks
+    # critical < empty < full.
+    battery_empty_voltage: 21.0
     battery_full_voltage: 25.2
+    battery_low_window: 20.0
     dock_charge_voltage: 28.0
     # localization/pose older than this (s) counts as lost: accuracy 999, GPS 0.
     pose_timeout: 2.0
@@ -176,7 +179,9 @@ mowbite_logic:
     # Mowing. The blade turns only with mow_with_blade here and allow_blade of tron_mcu, and only on mow segments. It runs
     # on a lease of blade_lease s, renewed every blade_renew s. mower_spinup_rpm 0: no wait for the blade (Tron rpm not
     # measured yet); BLADES events from blade_running_rpm on. gps_wait_time s of good position before mowing goes on.
-    # Below battery_critical_voltage for battery_critical_time s mowing ends (assumption, 3.5 V per cell). A path that
+    # Below battery_critical_voltage for battery_critical_time s mowing goes home at once. ASSUMPTION until the
+    # discharge curve and question 47 (iv): 3.28 V per cell, 2 s against dips under load. battery_hot_temperature (°C)
+    # sends mowing home and stops a start, 0 for never (until question 47 (ii)). A path that
     # starts farther than approach_distance m away is reached over the drivable areas first. The checkpoint in data_dir
     # is written every checkpoint_period s while mowing.
     mow_with_blade: false
@@ -186,8 +191,9 @@ mowbite_logic:
     mower_spinup_timeout: 10.0
     blade_running_rpm: 100
     gps_wait_time: 10.0
-    battery_critical_voltage: 21.0
-    battery_critical_time: 10.0
+    battery_critical_voltage: 19.7
+    battery_critical_time: 2.0
+    battery_hot_temperature: 0.0
     approach_distance: 0.5
     checkpoint_period: 30.0
 

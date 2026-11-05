@@ -11,6 +11,7 @@
 #include "mowbite_api/catalog.h"
 #include "mowbite_logic/area_recorder.h"
 #include "mowbite_logic/docking.h"
+#include "mowbite_logic/home_watch.h"
 #include "mowbite_logic/mowing_job.h"
 #include "mowbite_logic/reasons.h"
 #include "mowbite_logic/undocking.h"
@@ -69,9 +70,11 @@ struct CalibrationConfig {
 };
 
 struct LogicConfig {
-  // 6S Li-ion; empty is an assumption until the discharge curve of the Tron is measured.
-  double battery_empty_voltage = 19.2;
+  // 6S Li-ion; empty is 0 % for the app and where mowing goes home (the highest voltage of battery_low_window s below
+  // it). Assumption until the discharge curve of the Tron is measured: 3.5 V per cell.
+  double battery_empty_voltage = 21.0;
   double battery_full_voltage = 25.2;
+  double battery_low_window = 20.0;
   // The MCU reports no charge voltage, dock contact stands in for it.
   double dock_charge_voltage = 28.0;
   // GPS counts as good up to this accuracy (m), like max_position_accuracy of OpenMower. The localization and the
@@ -90,10 +93,18 @@ struct LogicConfig {
   // without one.
   double gps_wait_time = 10.0;
   double gps_timeout = 10.0;
-  // Mowing ends below this voltage (V), held for battery_critical_time (s). Assumption until the discharge curve is
-  // measured: 3.5 V per cell.
-  double battery_critical_voltage = 21.0;
-  double battery_critical_time = 10.0;
+  // Mowing goes home below this voltage (V), held for battery_critical_time (s) against dips under load; below empty.
+  // Assumption until the discharge curve is measured: 3.28 V per cell.
+  double battery_critical_voltage = 19.7;
+  double battery_critical_time = 2.0;
+  // Mowing goes home with the battery this hot (°C), 0 for never, and does not start then.
+  double battery_hot_temperature = 0;
+  // Settings of params.set: the blade motor this hot (°C) sends mowing home, a start needs it below cold; rain_mode
+  // other than 0 sends it home after rain_check_seconds of rain.
+  double motor_hot_temperature = 70.0;
+  double motor_cold_temperature = 40.0;
+  int rain_mode = 0;
+  double rain_check_seconds = 20.0;
   // m: farther from the start of a path the mower first drives there over the drivable areas.
   double approach_distance = 0.5;
   // s between checkpoints while a path is mowed.
@@ -116,6 +127,9 @@ struct LogicConfig {
   ChargeConfig charge;
   CalibrationConfig calibration;
 };
+
+// Why the battery voltages of the config do not fit (critical < empty < full), empty when they do.
+std::string BatteryVoltagesProblem(const LogicConfig& config);
 
 // calibration/status: the problems of the program against a drive from here (room, sensors, map) and the lane it
 // would take (lane_length 0 without one), with the strip it needs.
@@ -395,16 +409,18 @@ class LogicCore {
   std::optional<UndockOutcome> TakeUndockOutcome();
   // Stops undocking without UNDOCKING_FAILED, like abort_undocking (also logic/stop_drive for a drive).
   void AbortUndocking(const Reason& why);
-  // DOCKING: back onto the station of the map after JOB_COMPLETE and abort_mowing, or on docking.start, where the
-  // contacts are at the back (CanDock); else IDLE as before. The node hands the leg of TakeDockingLeg to the follower,
+  // DOCKING: back onto the station of the map after JOB_COMPLETE, abort_mowing or a reason of HomeWatch, or on
+  // docking.start, where the contacts are at the back (CanDock); else IDLE as before. Each but JOB_COMPLETE begins with
+  // the event DOCKING and its reason. The node hands the leg of TakeDockingLeg to the follower,
   // once and when nothing else is on its way, and its end to OnDockingLegEnded. On the way onto the station the first
   // raw contact stops the mower (one zero command, G18); the debounced one, also at the end of a leg that failed,
   // starts the check of the charge (ChargeCheck), and only a confirmed charge ends in DOCKED. A failed try drives out
   // to the approach point, off the contacts with charging off first where the driver can stop it, then DOCKING_RETRY
   // or after docking_retry_count DOCKING_FAILED; the last try without a charge current (NO_CHARGE_CURRENT) leaves the
   // mower on the contacts, and a stable charge current there later still ends in DOCKED. A bad position waits like
-  // mowing, at most gps_timeout. An emergency and abort_docking end it without DOCKING_FAILED. In IDLE on the contacts
-  // CHARGING_LOST tells when the contact or the charge current goes away (ChargeConfig); the mower stays.
+  // mowing, at most gps_timeout, then DOCKING_FAILED NO_POSITION, NO_HEADING or POSITION_ACCURACY. An emergency and
+  // abort_docking end it without DOCKING_FAILED. In IDLE on the contacts CHARGING_LOST tells when the contact or the
+  // charge current goes away (ChargeConfig); the mower stays.
   bool CanDock() const;
   bool Docking() const;
   // Why docking.start cannot start now, empty if it can: BUSY, ALREADY_THERE on the contacts, EMERGENCY or
@@ -416,6 +432,9 @@ class LogicCore {
   void OnDockingLegEnded(LegEnd end, const Reason& reason);
   // docking_approach_distance and docking_retry_count of params.set, for the next docking.
   void SetDockingSettings(double approach_distance, int retry_count);
+  // rain_mode, rain_check_seconds and the temperatures of the blade motor of params.set, for the next run.
+  void SetHomeSettings(int rain_mode, double rain_check_seconds, double motor_hot_temperature,
+                       double motor_cold_temperature);
   // The checkpoint read at the start.
   void RestoreJob(const JobProgress& progress);
   // Why mowing cannot start now, empty if it can.
@@ -461,7 +480,10 @@ class LogicCore {
   void OnJobProgress(size_t index);
   // The approach or path ended; index is the pose of the path it got to (kFollow only), reason why it ended.
   void OnLegEnded(LegEnd end, size_t index, const Reason& reason);
-  // Timers of the job: GPS back, battery, checkpoint period.
+  // Timers of the job: GPS back, going home (HomeWatch), checkpoint period. While mowing and not waiting for the user
+  // the first reason that holds sends the mower home with the event DOCKING; without a way home only the battery
+  // ends mowing (BATTERY_LOW, IDLE). A pause that waits for the user (manual, emergency, fault) never goes home: there
+  // only the battery ends it the same way.
   void OnTick(double now_s);
   // Whether the blade should turn now: mowing, not paused, a mow segment (or spinning up for one), mow_with_blade, a
   // safety measurement, telemetry and not on the dock. The node keeps the lease of hw/blade alive only while it is.
@@ -548,8 +570,18 @@ class LogicCore {
   void Undocked();
   // Docking with the current settings onto the station of the map.
   DockingSequence NewDocking() const;
-  // After JOB_COMPLETE and abort_mowing: DOCKING where the platform docks and the map has a station, else IDLE.
-  void GoHome();
+  // After JOB_COMPLETE, abort_mowing and a reason to go home: DOCKING where the platform docks and the map has a
+  // station, else IDLE. why: the reason of the event DOCKING, none after JOB_COMPLETE.
+  void GoHome(const Reason& why = Reason());
+  // Whether mowing can go home from here: a station the platform docks onto, a way to it, safe, not on it already.
+  bool HomeReachable() const;
+  HomeConfig HomeRules() const;
+  // Samples the rules of going home while mowing and acts on the first reason that holds.
+  void WatchHome(double now_s);
+  // The reason of the event DOCKING for a rule of HomeWatch.
+  Reason HomeWhy(HomeReason reason) const;
+  // The battery ends the run where it cannot go home: BATTERY_LOW with the limit it fell below, IDLE.
+  void BatteryEndsMowing(HomeReason reason);
   void BeginDocking();
   // The first leg of the next try from where the mower stands, or the wait for a good position.
   void NextDockingTry();
@@ -583,8 +615,9 @@ class LogicCore {
   void CancelDrive(const Reason& reason);
   void Unpause(int why);
   void ApplySkips();
-  // Ends the job: finished (JOB_COMPLETE) or not (it goes on from the checkpoint next time); home: docking after it.
-  void EndJob(bool finished, bool home);
+  // Ends the job: finished (JOB_COMPLETE) or not (it goes on from the checkpoint next time); home: docking after it,
+  // with why as the reason of the event DOCKING.
+  void EndJob(bool finished, bool home, const Reason& why = Reason());
   bool PoseGood() const;
   void CheckpointNow();
   // Ends a calibration drive here: CALIBRATION_FAILED unless done, CALIBRATION end, IDLE; cancel: the program too.
@@ -675,14 +708,16 @@ class LogicCore {
   std::string announced_area_;
   std::optional<double> spinup_since_;
   std::optional<double> gps_good_since_;
-  std::optional<double> battery_low_since_;
+  // The rules of going home while mowing or calibrating, and the reasons told once without a way home.
+  HomeWatch home_;
+  int home_told_ = 0;
   double last_checkpoint_s_ = 0;
   bool checkpoint_due_ = false;
   bool blades_running_ = false;
   bool last_start_ok_ = false;
   std::vector<std::string> notices_;
   // Calibration: the program's status and when it came, the goal due for the node, the cancel of the program, its last
-  // sign, the phase it reported last, and since when the battery is low.
+  // sign and the phase it reported last.
   std::optional<CalibrationStatus> calibration_status_;
   double calibration_status_s_ = 0;
   std::optional<CalibrationGoal> calibration_goal_due_;
@@ -690,7 +725,6 @@ class LogicCore {
   double calibration_sign_s_ = 0;
   std::string calibration_phase_;
   int calibration_index_ = 0;
-  std::optional<double> calibration_battery_since_;
   int64_t hold_until_ = 0;
   // The client of the command being run, for its events; the one of a skip that waits for the leg to stop.
   std::string client_;

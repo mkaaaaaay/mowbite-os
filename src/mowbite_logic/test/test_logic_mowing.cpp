@@ -649,17 +649,22 @@ TEST(LogicMowing, AFollowerThatStopsAnsweringPausesWithTheBladeOff) {
   EXPECT_EQ(core.RobotState().current_path_index, 3);
 }
 
+// Without a docking station in the map: BATTERY_LOW and IDLE once the highest voltage of 20 s is below empty.
 TEST(LogicMowing, ALowBatteryEndsMowingAfterAWhile) {
   LogicCore core = Following();
   auto hw = Healthy();
   hw.battery_voltage = 20.5f;
   core.OnHardwareStatus(hw);
-  core.OnTick(100);
-  core.OnTick(109);
+  for (double t = 100; t < 120; t += 1) core.OnTick(t);
   EXPECT_TRUE(core.Mowing());
-  core.OnTick(110);
+  core.OnTick(120);
   EXPECT_FALSE(core.Mowing());
-  EXPECT_TRUE(Find(core.TakeEvents(), "BATTERY_LOW"));
+  const auto events = core.TakeEvents();
+  const Event* low = Find(events, "BATTERY_LOW");
+  ASSERT_TRUE(low);
+  EXPECT_NEAR(low->details["battery_voltage"].get<double>(), 20.5, 1e-6);
+  EXPECT_DOUBLE_EQ(low->details["limit"].get<double>(), 21.0);
+  EXPECT_FALSE(Find(events, "DOCKING"));
   EXPECT_TRUE(core.TakeDriveCancel());
 }
 

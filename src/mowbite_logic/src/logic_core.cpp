@@ -88,10 +88,31 @@ std::string Degrees(double radians) {
   return text;
 }
 
+HomeSample HomeSampleOf(const HardwareSnapshot& hw, double now_s) {
+  HomeSample sample;
+  sample.time = now_s;
+  sample.telemetry_ok = hw.telemetry_ok;
+  sample.battery_ok = hw.battery_ok;
+  sample.battery_voltage = hw.battery_voltage;
+  sample.battery_temperature = hw.battery_temperature;
+  sample.blade_ok = hw.blade.ok;
+  sample.blade_temperature = hw.blade.temperature;
+  sample.rain = hw.rain;
+  return sample;
+}
+
 }  // namespace
 
+std::string BatteryVoltagesProblem(const LogicConfig& config) {
+  if (config.battery_critical_voltage > 0 && config.battery_critical_voltage < config.battery_empty_voltage &&
+      config.battery_empty_voltage < config.battery_full_voltage) {
+    return "";
+  }
+  return "battery voltages need 0 < battery_critical_voltage < battery_empty_voltage < battery_full_voltage";
+}
+
 LogicCore::LogicCore(const LogicConfig& config)
-    : config_(config), recorder_(RecorderConfigOf(config)), charge_watch_(config.charge) {
+    : config_(config), recorder_(RecorderConfigOf(config)), charge_watch_(config.charge), home_(HomeRules()) {
   // Without telemetry the mower counts as stopped until the driver reports.
   emergency_ = true;
 }
@@ -423,7 +444,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
       return {};
     }
     if (name == "mowing.abort") {
-      EndJob(false, true);
+      EndJob(false, true, Reason("MANUAL", "Going home: mowing stopped by the app"));
       return {};
     }
     // skip_area, skip_path: only the area or path the client saw.
@@ -636,7 +657,10 @@ void LogicCore::SetState(State state) {
     skip_path_ = skip_area_ = false;
     spinup_since_.reset();
     gps_good_since_.reset();
-    battery_low_since_.reset();
+  }
+  if (state_ == State::kMowing || state == State::kMowing) {
+    home_.Reset();
+    home_told_ = 0;
   }
   // Entering and leaving both start from nothing; what was not saved is gone, like with OpenMower.
   recorder_.Reset();
@@ -907,7 +931,7 @@ Reason LogicCore::StartCalibration(double now_s) {
   calibration_sign_s_ = now_s;
   calibration_phase_ = "start";
   calibration_index_ = 0;
-  calibration_battery_since_.reset();
+  home_.Reset();
   SetState(State::kCalibrating);
   AddEvent("CALIBRATION", {{"phase", "start"}, {"index", 0}});
   notices_.push_back("Calibration: lanes of " + Metres(status.lane_length) + " m, heading " +
@@ -970,21 +994,16 @@ bool LogicCore::TickCalibration(double now_s) {
                    true);
     return true;
   }
-  // Held like while mowing: a voltage dips under load.
-  if (hw_.battery_ok && hw_.battery_voltage < config_.battery_critical_voltage) {
-    if (!calibration_battery_since_) calibration_battery_since_ = now_s;
-    if (now_s - *calibration_battery_since_ >= config_.battery_critical_time) {
-      char text[160];
-      std::snprintf(text, sizeof(text), "Battery %.1f V is below %.1f V", hw_.battery_voltage,
-                    config_.battery_critical_voltage);
-      EndCalibration(Reason("BATTERY_LOW", text)
-                         .With("battery_voltage", hw_.battery_voltage)
-                         .With("limit", config_.battery_critical_voltage),
-                     true);
-      return true;
-    }
-  } else {
-    calibration_battery_since_.reset();
+  // The battery rules of mowing: a voltage dips under load.
+  home_.OnSample(HomeSampleOf(hw_, now_s));
+  const bool critical = home_.Holds(HomeReason::kBatteryCritical);
+  if (critical || home_.Holds(HomeReason::kBatteryLow)) {
+    const double voltage = critical ? hw_.battery_voltage : home_.WindowVoltage();
+    const double limit = critical ? config_.battery_critical_voltage : config_.battery_empty_voltage;
+    char text[160];
+    std::snprintf(text, sizeof(text), "Battery %.1f V is below %.1f V", voltage, limit);
+    EndCalibration(Reason("BATTERY_LOW", text).With("battery_voltage", voltage).With("limit", limit), true);
+    return true;
   }
   return false;
 }
@@ -1013,7 +1032,7 @@ void LogicCore::EndCalibration(const std::optional<Reason>& failure, bool cancel
   AddEvent("CALIBRATION", {{"phase", "end"}, {"index", calibration_index_}});
   calibration_cancel_ = calibration_cancel_ || cancel;
   calibration_goal_due_.reset();
-  calibration_battery_since_.reset();
+  home_.Reset();
   // One zero follows from leaving the state; the mower stays where it stopped.
   SetState(State::kIdle);
 }
@@ -1397,11 +1416,14 @@ Reason LogicCore::StartDocking() {
     RefuseDrive(why);
     return why;
   }
+  json details = json::object();
+  PutReason(&details, "DOCKING", Reason("MANUAL", "Going home: sent by the app"));
+  AddEvent("DOCKING", std::move(details));
   BeginDocking();
   return {};
 }
 
-void LogicCore::GoHome() {
+void LogicCore::GoHome(const Reason& home_why) {
   // Never after an emergency or without the safety measurement: the mower does not drive off by itself then.
   if (!CanDock() || !dock_ || !Unsafe().empty()) {
     SetState(State::kIdle);
@@ -1424,7 +1446,109 @@ void LogicCore::GoHome() {
     SetState(State::kIdle);
     return;
   }
+  if (!home_why.empty()) {
+    json details = json::object();
+    PutReason(&details, "DOCKING", home_why);
+    AddEvent("DOCKING", std::move(details));
+    notices_.push_back(home_why.message);
+  }
   BeginDocking();
+}
+
+bool LogicCore::HomeReachable() const {
+  return CanDock() && dock_ && Unsafe().empty() && !DockContact() && drivable_problem_.empty() &&
+         ApproachProblem().empty();
+}
+
+HomeConfig LogicCore::HomeRules() const {
+  HomeConfig rules;
+  rules.critical_voltage = config_.battery_critical_voltage;
+  rules.critical_time = config_.battery_critical_time;
+  rules.empty_voltage = config_.battery_empty_voltage;
+  rules.low_window = config_.battery_low_window;
+  rules.battery_hot_temperature = config_.battery_hot_temperature;
+  rules.motor_hot_temperature = config_.motor_hot_temperature;
+  rules.rain_mode = config_.rain_mode;
+  rules.rain_check_seconds = config_.rain_check_seconds;
+  return rules;
+}
+
+void LogicCore::SetHomeSettings(int rain_mode, double rain_check_seconds, double motor_hot_temperature,
+                                double motor_cold_temperature) {
+  config_.rain_mode = rain_mode;
+  config_.rain_check_seconds = rain_check_seconds;
+  config_.motor_hot_temperature = motor_hot_temperature;
+  config_.motor_cold_temperature = motor_cold_temperature;
+  home_.SetConfig(HomeRules());
+}
+
+Reason LogicCore::HomeWhy(HomeReason reason) const {
+  char text[160];
+  switch (reason) {
+    case HomeReason::kBatteryCritical:
+      std::snprintf(text, sizeof(text), "the battery at %.1f V stayed below %.1f V for %.0f s",
+                    hw_.battery_voltage, config_.battery_critical_voltage, config_.battery_critical_time);
+      return Reason("BATTERY_CRITICAL", text)
+          .With("battery_voltage", hw_.battery_voltage)
+          .With("limit", config_.battery_critical_voltage);
+    case HomeReason::kBatteryHot:
+      std::snprintf(text, sizeof(text), "the battery at %d °C, %.0f °C or more", hw_.battery_temperature,
+                    config_.battery_hot_temperature);
+      return Reason("BATTERY_HOT", text)
+          .With("temperature", static_cast<int>(hw_.battery_temperature))
+          .With("limit", config_.battery_hot_temperature);
+    case HomeReason::kBatteryLow:
+      std::snprintf(text, sizeof(text), "the battery stayed below %.1f V for %.0f s (at most %.1f V)",
+                    config_.battery_empty_voltage, config_.battery_low_window, home_.WindowVoltage());
+      return Reason("BATTERY_LOW", text)
+          .With("battery_voltage", home_.WindowVoltage())
+          .With("limit", config_.battery_empty_voltage);
+    case HomeReason::kMotorHot:
+      std::snprintf(text, sizeof(text), "the blade motor at %d °C, %.0f °C or more",
+                    hw_.blade.temperature, config_.motor_hot_temperature);
+      return Reason("MOTOR_HOT", text)
+          .With("temperature", static_cast<int>(hw_.blade.temperature))
+          .With("limit", config_.motor_hot_temperature);
+    case HomeReason::kRain:
+    default:
+      std::snprintf(text, sizeof(text), "rain for %.0f s", config_.rain_check_seconds);
+      return Reason("RAIN", text);
+  }
+}
+
+void LogicCore::BatteryEndsMowing(HomeReason reason) {
+  const bool critical = reason == HomeReason::kBatteryCritical;
+  const double voltage = critical ? hw_.battery_voltage : home_.WindowVoltage();
+  const double limit = critical ? config_.battery_critical_voltage : config_.battery_empty_voltage;
+  AddEvent("BATTERY_LOW", {{"battery_voltage", voltage}, {"limit", limit}});
+  notices_.push_back("Mowing ends: the battery is low and the mower cannot go home");
+  EndJob(false, false);
+}
+
+void LogicCore::WatchHome(double now_s) {
+  home_.OnSample(HomeSampleOf(hw_, now_s));
+  const std::vector<HomeReason> due = home_.Due();
+  if (due.empty()) return;
+  const auto battery = [](HomeReason r) { return r == HomeReason::kBatteryCritical || r == HomeReason::kBatteryLow; };
+  // A pause that waits for the user never goes home: the user may stand at the mower (G11).
+  const bool waits_for_user = (pause_ & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
+  if (!waits_for_user && HomeReachable()) {
+    Reason why = HomeWhy(due.front());
+    why.message = "Going home: " + why.message;
+    EndJob(false, true, why);
+    return;
+  }
+  for (HomeReason reason : due) {
+    if (battery(reason)) {
+      BatteryEndsMowing(reason);
+      return;
+    }
+  }
+  // Without a way home heat and rain change nothing yet (O11, question 47 iii); told once per run.
+  const int bit = 1 << static_cast<int>(due.front());
+  if (waits_for_user || (home_told_ & bit) != 0) return;
+  home_told_ |= bit;
+  notices_.push_back("Mowing goes on, it cannot go home: " + HomeWhy(due.front()).message);
 }
 
 void LogicCore::BeginDocking() {
@@ -1731,10 +1855,19 @@ void LogicCore::TickDocking(double now_s) {
   }
   docking_gps_good_since_.reset();
   if (now_s - *docking_gps_since_ < config_.gps_timeout) return;
-  char text[96];
+  // Why it waited in vain, with the names of a refused start.
+  char text[128];
   std::snprintf(text, sizeof(text), "Docking failed: no good position for %.0f s", config_.gps_timeout);
-  const bool approach = docking_last_kind_ == DockingLeg::Kind::kApproach;
-  CountDockingFailure(Reason(approach ? "approach_failed" : "dock_failed", text), true);
+  Reason why;
+  if (!pose_) {
+    why = Reason("NO_POSITION", std::string(text) + ": no position from the localization");
+  } else if (!pose_->orientation_valid) {
+    why = Reason("NO_HEADING", std::string(text) + ": the heading is not known");
+  } else {
+    why = AccuracyReason(pose_->position_accuracy, config_.max_position_accuracy);
+    why.message = std::string(text) + ": " + why.message;
+  }
+  CountDockingFailure(why, true);
 }
 
 void LogicCore::CancelDockingLeg(const Reason& why) {
@@ -1815,13 +1948,30 @@ Reason LogicCore::MowProblem() const {
   Reason why = Unsafe();
   if (!why.empty()) return why;
   if (hw_.rain) return Reason("RAIN", "Rain detected");
-  if (hw_.battery_ok && hw_.battery_voltage < config_.battery_critical_voltage) {
-    char text[160];
+  char text[160];
+  // Below empty mowing would go home at once.
+  if (hw_.battery_ok && hw_.battery_voltage < config_.battery_empty_voltage) {
     std::snprintf(text, sizeof(text), "Battery %.1f V is below %.1f V", hw_.battery_voltage,
-                  config_.battery_critical_voltage);
+                  config_.battery_empty_voltage);
     return Reason("BATTERY_LOW", text)
         .With("battery_voltage", hw_.battery_voltage)
-        .With("limit", config_.battery_critical_voltage);
+        .With("limit", config_.battery_empty_voltage);
+  }
+  if (hw_.battery_ok && config_.battery_hot_temperature > 0 &&
+      hw_.battery_temperature >= config_.battery_hot_temperature) {
+    std::snprintf(text, sizeof(text), "The battery at %d °C is too hot to start (%.0f °C or more)",
+                  hw_.battery_temperature, config_.battery_hot_temperature);
+    return Reason("BATTERY_HOT", text)
+        .With("temperature", static_cast<int>(hw_.battery_temperature))
+        .With("limit", config_.battery_hot_temperature);
+  }
+  // Like OpenMower: hot at motor_hot_temperature, on again below motor_cold_temperature.
+  if (hw_.blade.ok && hw_.blade.temperature >= config_.motor_cold_temperature) {
+    std::snprintf(text, sizeof(text), "The blade motor at %d °C has to cool below %.0f °C first",
+                  hw_.blade.temperature, config_.motor_cold_temperature);
+    return Reason("MOTOR_HOT", text)
+        .With("temperature", static_cast<int>(hw_.blade.temperature))
+        .With("limit", config_.motor_cold_temperature);
   }
   why = PositionProblem();
   if (!why.empty()) return why;
@@ -1980,14 +2130,14 @@ void LogicCore::Unpause(int why) {
   AddEvent("STATE", {{"state", "MOWING"}});
 }
 
-void LogicCore::EndJob(bool finished, bool home) {
+void LogicCore::EndJob(bool finished, bool home, const Reason& why) {
   if (state_ != State::kMowing) return;
   if (finished) {
     AddEvent("JOB_COMPLETE", json::object());
     job_.Complete();
   }
   if (home) {
-    GoHome();
+    GoHome(why);
   } else {
     SetState(State::kIdle);
   }
@@ -2118,17 +2268,8 @@ void LogicCore::OnTick(double now_s) {
       Unpause(kPauseGps);
     }
   }
-  if (hw_.battery_ok && hw_.battery_voltage < config_.battery_critical_voltage) {
-    if (!battery_low_since_) battery_low_since_ = now_s;
-    if (now_s - *battery_low_since_ >= config_.battery_critical_time) {
-      AddEvent("BATTERY_LOW", {{"battery_voltage", hw_.battery_voltage}, {"limit", config_.battery_critical_voltage}});
-      notices_.push_back("Mowing ends: the battery is low");
-      EndJob(false, false);
-      return;
-    }
-  } else {
-    battery_low_since_.reset();
-  }
+  WatchHome(now_s);
+  if (state_ != State::kMowing) return;
   if (leg_ == Leg::kFollow && now_s - last_checkpoint_s_ >= config_.checkpoint_period) {
     last_checkpoint_s_ = now_s;
     CheckpointNow();
