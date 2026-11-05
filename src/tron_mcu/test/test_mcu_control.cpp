@@ -998,6 +998,25 @@ TEST_F(BladeStopTest, ABladeStillTurningLatchesAndIsSentOffAgain) {
   EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
 }
 
+TEST_F(BladeStopTest, ABladeStillTurningStaysLatchedAfterAReconnect) {
+  Run(0.5);
+  control_.SetBlade(BladeOn(), now_);
+  Run(1.0);
+  control_.SetBlade(kBladeOff, now_);
+  Run(4.5);
+  control_.OnBladeRpm(1500, now_);
+  Run(5.0);
+  // The port reopens: the off frames go out again, the blade keeps turning.
+  control_.OnConnected(now_);
+  Run(5.5);
+  control_.OnBladeRpm(1500, now_);
+  control_.ReleaseEmergency(now_);
+  Run(6.0);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonMowerNotStopped);
+  EXPECT_FALSE(DrivesOrMows(6.5));
+}
+
 TEST_F(BladeStopTest, ABladeTurningAtTheStartLatches) {
   // Never switched on from here; the start sent it off at 0.01 s.
   Run(3.5);

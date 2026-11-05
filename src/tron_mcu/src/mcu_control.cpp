@@ -58,7 +58,8 @@ void McuControl::OnBladeRpm(int rpm, double now) {
   // Only a blade that should have stopped by now counts: not while it is on, not while it runs down.
   if (blade_on_ || !blade_off_since_s_ || config_.blade_stop_time_s <= 0 ||
       now - *blade_off_since_s_ < config_.blade_stop_time_s) {
-    blade_turning_ = false;
+    // Only a slower report clears a turning blade, also in the new run-down after a reconnect.
+    if (std::abs(rpm) < config_.blade_still_rpm) blade_turning_ = false;
     return;
   }
   blade_turning_ = std::abs(rpm) >= config_.blade_still_rpm;
