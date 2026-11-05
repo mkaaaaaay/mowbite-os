@@ -627,11 +627,20 @@ def fixed_reason(event, resume=None):
             and event.get("resume") == (resume or event.get("resume")) and event.get("resume") in ("auto", "user"))
 
 
-shown = next((a.get("reason") for a in json.loads(latest("actions/json") or "[]")
-              if a["action_id"] == "mower_logic:idle/start_mowing"), None)
-mark = len(msgs)
-c.publish("action", "mower_logic:idle/start_mowing")
-refused = wait_for(lambda: events_of("MOWING_REFUSED", mark), 3)
+def start_refused():
+    """The reason actions/json shows for start_mowing, then the MOWING_REFUSED events of a start."""
+    shown = next((a.get("reason") for a in json.loads(latest("actions/json") or "[]")
+                  if a["action_id"] == "mower_logic:idle/start_mowing"), None)
+    mark = len(msgs)
+    c.publish("action", "mower_logic:idle/start_mowing")
+    return shown, wait_for(lambda: events_of("MOWING_REFUSED", mark), 3)
+
+
+shown, refused = start_refused()
+if refused and shown != refused[-1].get("reason"):
+    # The conditions changed between the two (the first fix of the simulation): once more after they settle.
+    time.sleep(1.0)
+    shown, refused = start_refused()
 check("MOWING_REFUSED with a fixed reason", fixed_reason(refused[-1] if refused else None, "user"),
       json.dumps(refused[-1] if refused else None), point="3.1a MOWING_REFUSED")
 check("start_mowing showed the reason of its MOWING_REFUSED", bool(refused) and shown == refused[-1].get("reason"),
