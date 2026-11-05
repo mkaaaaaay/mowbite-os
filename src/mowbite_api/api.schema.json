@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:mowbite-os:api:3",
+  "$id": "urn:mowbite-os:api:4",
   "title": "MowBite OS app interface",
   "description": "robot_state, events and RPC methods of MowBite OS over MQTT, as system.api gives them. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals), x-emergency-bits the bits of emergency, x-commands the methods with params, result, the event of their refusal and the actions that do the same.",
-  "x-api": 3,
+  "x-api": 4,
   "$defs": {
     "robot_state": {
       "type": "object",
@@ -2331,7 +2331,8 @@
           "description": "Why: a fixed name in capitals, rated in x-reasons",
           "enum": [
             "approach_failed",
-            "dock_failed"
+            "dock_failed",
+            "charge_failed"
           ]
         },
         "message": {
@@ -2358,6 +2359,16 @@
         "attempts": {
           "type": "integer",
           "description": "Tries so far"
+        },
+        "current": {
+          "type": "number",
+          "description": "The largest charge current seen",
+          "x-unit": "A"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The limit the value went past, in the unit of the value",
+          "x-unit": "A"
         }
       },
       "required": [
@@ -2418,7 +2429,8 @@
           "description": "Why: a fixed name in capitals, rated in x-reasons",
           "enum": [
             "approach_failed",
-            "dock_failed"
+            "dock_failed",
+            "charge_failed"
           ]
         },
         "message": {
@@ -2445,6 +2457,114 @@
         "attempts": {
           "type": "integer",
           "description": "Tries so far"
+        },
+        "current": {
+          "type": "number",
+          "description": "The largest charge current seen",
+          "x-unit": "A"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The limit the value went past, in the unit of the value",
+          "x-unit": "A"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
+    "event.CHARGING_LOST": {
+      "type": "object",
+      "description": "Charging stopped while the mower stood on the docking station; it stays there",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "CHARGING_LOST",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "battery_percentage": {
+          "type": "integer",
+          "description": "Charge of the battery",
+          "x-unit": "%"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "NO_DOCK_CONTACT",
+            "NO_CHARGE_CURRENT"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "current": {
+          "type": "number",
+          "description": "The charge current seen last",
+          "x-unit": "A"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The limit the value went past, in the unit of the value",
+          "x-unit": "A"
         }
       },
       "required": [
@@ -2955,6 +3075,7 @@
               "DOCKED",
               "DOCKING_RETRY",
               "DOCKING_FAILED",
+              "CHARGING_LOST",
               "DOCK_RECORDED",
               "AREA_RECORDED",
               "GEOMETRY_CHANGED",
@@ -3050,6 +3171,9 @@
         },
         {
           "$ref": "#/$defs/event.DOCKING_FAILED"
+        },
+        {
+          "$ref": "#/$defs/event.CHARGING_LOST"
         },
         {
           "$ref": "#/$defs/event.DOCK_RECORDED"
@@ -4953,6 +5077,16 @@
         "fields": {
           "attempts": ""
         }
+      },
+      "charge_failed": {
+        "severity": "warning",
+        "resume": "auto",
+        "description": "Contact with the docking station, but no charge current",
+        "fields": {
+          "current": "A",
+          "limit": "A",
+          "attempts": ""
+        }
       }
     },
     "DOCKING_FAILED": {
@@ -4970,6 +5104,33 @@
         "description": "The last part onto the contacts failed (value of OpenMower)",
         "fields": {
           "attempts": ""
+        }
+      },
+      "charge_failed": {
+        "severity": "error",
+        "resume": "user",
+        "description": "Contact with the docking station, but no charge current",
+        "fields": {
+          "current": "A",
+          "limit": "A",
+          "attempts": ""
+        }
+      }
+    },
+    "CHARGING_LOST": {
+      "NO_DOCK_CONTACT": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "No contact with the docking station",
+        "fields": {}
+      },
+      "NO_CHARGE_CURRENT": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "Contact with the docking station, but no charge current",
+        "fields": {
+          "current": "A",
+          "limit": "A"
         }
       }
     },
