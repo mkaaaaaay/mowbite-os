@@ -31,6 +31,23 @@ bool Turning(Phase phase) {
 
 }  // namespace
 
+EffectiveSpeeds Effective(const FollowerConfig& config, double driver_max_linear, double driver_max_angular) {
+  auto under = [](double value, double limit) { return limit > 0 && std::isfinite(limit) ? std::min(value, limit) : value; };
+  const double linear = under(config.speed.max_linear, driver_max_linear);
+  EffectiveSpeeds out;
+  out.speed_fast = std::min(config.speed.speed_fast, linear);
+  out.speed_slow = std::min(config.speed.speed_slow, linear);
+  out.max_angular = under(config.max_angular, driver_max_angular);
+  return out;
+}
+
+std::string ParamsJson(const std::string& node, const EffectiveSpeeds& speeds) {
+  char text[200];
+  std::snprintf(text, sizeof(text), "{\"node\":\"%s\",\"params\":{\"speed_fast\":%.6g,\"speed_slow\":%.6g,"
+                "\"max_angular\":%.6g}}", node.c_str(), speeds.speed_fast, speeds.speed_slow, speeds.max_angular);
+  return text;
+}
+
 std::string PathFollower::Start(const std::vector<Pose2>& poses, const std::vector<Kind>& kinds, size_t start_index) {
   phase_ = Phase::kIdle;
   std::string problem = path_.Build(poses, kinds, config_.corner_angle, config_.straight ? 0.0 : config_.min_arc_radius);

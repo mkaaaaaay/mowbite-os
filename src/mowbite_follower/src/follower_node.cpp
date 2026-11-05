@@ -12,6 +12,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include "mowbite_follower/guard.h"
 #include "mowbite_follower/path_follower.h"
@@ -78,6 +79,10 @@ class FollowerNode : public rclcpp::Node {
     const double rate = declare_parameter("control_rate", 20.0);
 
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("follower/cmd_vel", 10);
+    // The speeds the planner plans with, latched: whoever starts later gets the last.
+    params_pub_ = create_publisher<std_msgs::msg::String>(
+        "bridge/params", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+    PublishParams();
     pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
         "localization/pose", 10, [this](mowbite_msgs::msg::RobotPose::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -101,6 +106,7 @@ class FollowerNode : public rclcpp::Node {
           // The tighter of the driver's limits and our own.
           if (msg->max_linear_speed > 0) driver_max_linear_ = msg->max_linear_speed;
           if (msg->max_angular_speed > 0) driver_max_angular_ = msg->max_angular_speed;
+          PublishParams();
         });
     // max_position_accuracy of tron.yaml holds until the logic tells its own (params.set).
     limits_sub_ = create_subscription<mowbite_msgs::msg::GpsLimits>(
@@ -135,6 +141,17 @@ class FollowerNode : public rclcpp::Node {
   }
 
  private:
+  // Publishes the effective speeds when they differ from the last ones sent.
+  void PublishParams() {
+    std_msgs::msg::String msg;
+    msg.data = ParamsJson(get_fully_qualified_name(),
+                          Effective(follower_config_, driver_max_linear_, driver_max_angular_));
+    if (msg.data == last_params_) return;
+    last_params_ = msg.data;
+    params_pub_->publish(msg);
+    RCLCPP_INFO(get_logger(), "Planner speeds %s", msg.data.c_str());
+  }
+
   void OnAccepted(const std::shared_ptr<GoalHandle>& handle) {
     const auto goal = handle->get_goal();
     std::vector<Pose2> poses;
@@ -269,6 +286,8 @@ class FollowerNode : public rclcpp::Node {
   double driver_max_angular_ = 1e9;
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
+  std::string last_params_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr pose_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;

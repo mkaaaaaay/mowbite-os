@@ -13,6 +13,7 @@ find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 
 # Path tracking and its checks without ROS, testable on any machine.
 add_library(mowbite_follower_core STATIC src/path.cpp src/speed_plan.cpp src/steering.cpp src/path_follower.cpp
@@ -24,7 +25,8 @@ set_target_properties(mowbite_follower_core PROPERTIES POSITION_INDEPENDENT_CODE
 
 add_library(mowbite_follower_component SHARED src/follower_node.cpp)
 target_link_libraries(mowbite_follower_component mowbite_follower_core)
-ament_target_dependencies(mowbite_follower_component rclcpp rclcpp_action rclcpp_components geometry_msgs mowbite_msgs)
+ament_target_dependencies(mowbite_follower_component rclcpp rclcpp_action rclcpp_components geometry_msgs mowbite_msgs
+  std_msgs)
 rclcpp_components_register_node(mowbite_follower_component
   PLUGIN "mowbite_follower::FollowerNode"
   EXECUTABLE mowbite_follower_node)
