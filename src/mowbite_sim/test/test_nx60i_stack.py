@@ -355,7 +355,8 @@ class TestNx60iStack(unittest.TestCase):
         os.kill(driver, signal.SIGKILL)
         time.sleep(4.0)
         self.assertEqual(running(proc_info, "xcore_driver_node"), [])
-        self.assertEqual(len(pids(proc_info, "xcore_driver_node")), 1 + DRIVER_RESTARTS)
+        started = [a for a in proc_info.processes() if "xcore_driver_node" in a.process_details["name"]]
+        self.assertEqual(len(started), 1 + DRIVER_RESTARTS)
         self.assertTrue(p.wait(lambda: board()["reason"] & 64, 3), board())
 
 
