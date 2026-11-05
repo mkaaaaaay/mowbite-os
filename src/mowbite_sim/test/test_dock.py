@@ -288,6 +288,14 @@ def g18(test, rx, docked_at, stood_until):
     test.assertGreater(stood_until - docked_at, 4.0)
 
 
+def going_home(test, events):
+    """Sent home by hand: exactly one event DOCKING MANUAL (api 5), before STATE DOCKING."""
+    going = [e for e in events if e["type"] == "DOCKING" or (e["type"] == "STATE" and e["state"] == "DOCKING")]
+    test.assertEqual([e["type"] for e in going[:2]], ["DOCKING", "STATE"], going)
+    test.assertEqual((going[0]["reason"], going[0]["severity"], going[0]["resume"]), ("MANUAL", "info", "user"))
+    test.assertEqual(len([e for e in events if e["type"] == "DOCKING"]), 1, events)
+
+
 class Base(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -344,6 +352,8 @@ class TestDock(Base):
         self.assertEqual(states[-2:], ["DOCKING", "IDLE"], states)
         self.assertFalse([e for e in after if e["type"] in ("DOCKING_RETRY", "DOCKING_FAILED", "UNDOCKING_FAILED")],
                          after)
+        # Home after JOB_COMPLETE without an event DOCKING, as OpenMower.
+        self.assertNotIn("DOCKING", [e["type"] for e in after])
         self.on_the_station()
         # Backwards onto the station: never faster than docking_speed, the last stretch at contact_speed.
         time.sleep(5.0)
@@ -371,6 +381,7 @@ class TestDock(Base):
         self.assertIsNotNone(p.event(since, "DOCKED", 120), p.events[since:])
         types = [e["type"] for e in p.events[since:]]
         self.assertNotIn("JOB_COMPLETE", types)
+        going_home(self, p.events[since:])
         self.on_the_station()
 
     def test_04_docking_start_from_the_field(self):
@@ -398,6 +409,7 @@ class TestDock(Base):
         self.assertEqual(answer, {"result": {"state": "DOCKING", "sub_state": ""}})
         self.assertIsNotNone(p.event(since, "STATE", 5, state="DOCKING"))
         self.assertIsNotNone(p.event(since, "DOCKED", 120), p.events[since:])
+        going_home(self, p.events[since:])
         self.on_the_station()
 
     def test_05_abort_docking(self):
