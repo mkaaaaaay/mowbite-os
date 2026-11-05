@@ -6,7 +6,8 @@ announcements (or its heartbeats), decodes what the board sends with its own clo
 what the host sends, and reports:
   - every run of the wheels (from the ticks): how it started (with a fresh command or not) and how long after its
     cause it stood (the host falling silent, a command of 0, an emergency reason), the zeros the host sent after its
-    last command, and per steady command the wheel speed per unit of duty (full_duty_speed);
+    last command, per steady command the wheel speed per unit of duty, and from all steady commands the speed model
+    of each wheel (duty_slope and duty_deadband: speed = slope x (duty - deadband));
   - every run of the blade (from its rpm) with the same causes;
   - every press of an input: the delay from the input mask (or the input event) to the emergency report that carries
     the matching reason, in board time; whether the reason stays latched after the release, and who cleared it;
@@ -983,7 +984,27 @@ def analyse_drive(cap, boot, names, ticks_per_meter, wheel_distance, right_sign)
                               "duty_left": duty[0], "duty_right": duty[1], "speed_left": left, "speed_right": right,
                               "per_duty_left": left / duty[0] if abs(duty[0]) > 0.005 else None,
                               "per_duty_right": right / duty[1] if abs(duty[1]) > 0.005 else None})
+    out["duty_model"] = {side: duty_model([(g[f"duty_{side}"], g[f"speed_{side}"]) for g in out["steady"]])
+                         for side in ("left", "right")}
     return out
+
+
+def duty_model(points):
+    """Least squares of |speed| over |duty| for the steady commands in which the wheel turned with its duty: slope (m/s
+    per duty) and deadband (duty at speed 0), or None with fewer than two different duties."""
+    used = [(abs(d), abs(v)) for d, v in points if abs(d) > 0.005 and abs(v) > 0.002 and d * v > 0]
+    duties = {round(d, 4) for d, _ in used}
+    if len(duties) < 2:
+        return None
+    n = len(used)
+    mean_d = sum(d for d, _ in used) / n
+    mean_v = sum(v for _, v in used) / n
+    slope = sum((d - mean_d) * (v - mean_v) for d, v in used) / sum((d - mean_d) ** 2 for d, _ in used)
+    if slope <= 0:
+        return None
+    deadband = mean_d - mean_v / slope
+    worst = max(abs(v - slope * (d - deadband)) for d, v in used)
+    return {"slope": slope, "deadband": deadband, "points": n, "duties": len(duties), "worst_m_s": worst}
 
 
 def analyse_blade(cap, boot, names, spinning_rpm):
@@ -1170,11 +1191,19 @@ def drive_text(drive):
                          [[num(g["from"]), num(g["to"]), g["ticks_left"], g["ticks_right"], num(g["speed_before"][0]),
                            num(g["speed_before"][1]), seconds(g["turning_s"])] for g in drive["gaps"]]))
     if drive["steady"]:
-        out.append("Steady commands (speed per unit of duty = full_duty_speed):")
+        out.append("Steady commands (m/s per unit of duty at that duty):")
         out.append(table(["from", "s", "v", "w", "duty L", "duty R", "m/s L", "m/s R", "per duty L", "per duty R"],
                          [[num(g["from"]), num(g["seconds"], 1), num(g["v"]), num(g["w"]), num(g["duty_left"]),
                            num(g["duty_right"]), num(g["speed_left"]), num(g["speed_right"]),
                            num(g["per_duty_left"]), num(g["per_duty_right"])] for g in drive["steady"]]))
+        for side in ("left", "right"):
+            model = drive["duty_model"][side]
+            if model is None:
+                out.append(f"Speed model {side}: needs steady runs at two duties or more.")
+            else:
+                out.append(f"Speed model {side}: duty_slope {model['slope']:.3f}, duty_deadband {model['deadband']:.4f} "
+                           f"({model['points']} runs at {model['duties']} duties, worst {model['worst_m_s']:.3f} m/s "
+                           "off the line)")
     return out
 
 

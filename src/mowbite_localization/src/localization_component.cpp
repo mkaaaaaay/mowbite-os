@@ -18,6 +18,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/set_bool.hpp>
+#include <stdexcept>
 #include <string>
 #include <tf2_ros/transform_broadcaster.h>
 
@@ -132,6 +133,12 @@ class LocalizationNode : public rclcpp::Node {
     config.gyro.calibration_time = declare_parameter("gyro_calibration_time", config.gyro.calibration_time);
     config.gyro.skip_calibration = declare_parameter("skip_gyro_calibration", config.gyro.skip_calibration);
     config.gyro.initial_offset = declare_parameter("gyro_offset", config.gyro.initial_offset);
+    config.gyro.still_spread = declare_parameter("gyro_still_spread", config.gyro.still_spread);
+    config.gyro.offset_limit = declare_parameter("gyro_offset_limit", config.gyro.offset_limit);
+    if (!(config.gyro.still_spread > 0) || !(config.gyro.offset_limit >= 0) ||
+        !std::isfinite(config.gyro.offset_limit)) {
+      throw std::invalid_argument("gyro_still_spread must be above 0 and gyro_offset_limit a number of 0 or more");
+    }
     config.max_imu_gap = declare_parameter("max_imu_gap", config.max_imu_gap);
     config.wheel_timeout = declare_parameter("wheel_timeout", config.wheel_timeout);
     config.min_speed = declare_parameter("min_speed", config.min_speed);
@@ -150,6 +157,7 @@ class LocalizationNode : public rclcpp::Node {
     const double now = MonotonicSeconds();
     const bool was_calibrated = estimator_.calibrated();
     const bool moved = estimator_.AddImu(now, msg.angular_velocity.z);
+    for (const auto& warning : estimator_.TakeGyroWarnings()) RCLCPP_WARN(get_logger(), "%s", warning.c_str());
     if (!was_calibrated && estimator_.calibrated()) {
       RCLCPP_INFO(get_logger(), "Gyro offset: %.5f rad/s", estimator_.gyro_offset());
     }

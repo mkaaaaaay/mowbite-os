@@ -849,3 +849,34 @@ TEST(PathFollower, WithTheDeadBandOfTheWheels) {
     EXPECT_LT(std::hypot(robot.pose.x - c.poses.back().x, robot.pose.y - c.poses.back().y), 0.03);
   }
 }
+
+TEST(PlannerSpeeds, UnderTheDriversLimits) {
+  FollowerConfig config;
+  config.speed.speed_fast = 0.3;
+  config.speed.speed_slow = 0.15;
+  config.speed.max_linear = 0.3;
+  config.max_angular = 0.3;
+  // Without capabilities the follower's own values.
+  auto speeds = mowbite_follower::Effective(config, 1e9, 1e9);
+  EXPECT_EQ(speeds.speed_fast, 0.3);
+  EXPECT_EQ(speeds.speed_slow, 0.15);
+  EXPECT_EQ(speeds.max_angular, 0.3);
+  // The NX60i at max_duty 0.3: 0.163 m/s cuts speed_fast only.
+  speeds = mowbite_follower::Effective(config, 0.16298, 0.3);
+  EXPECT_EQ(speeds.speed_fast, 0.16298);
+  EXPECT_EQ(speeds.speed_slow, 0.15);
+  EXPECT_EQ(speeds.max_angular, 0.3);
+  speeds = mowbite_follower::Effective(config, 0.1, 0.2);
+  EXPECT_EQ(speeds.speed_fast, 0.1);
+  EXPECT_EQ(speeds.speed_slow, 0.1);
+  EXPECT_EQ(speeds.max_angular, 0.2);
+  // A limit of the follower below the driver's holds; a limit that is no number above 0 counts as none.
+  config.speed.max_linear = 0.12;
+  speeds = mowbite_follower::Effective(config, std::nan(""), 0.0);
+  EXPECT_EQ(speeds.speed_fast, 0.12);
+  EXPECT_EQ(speeds.speed_slow, 0.12);
+  EXPECT_EQ(speeds.max_angular, 0.3);
+  EXPECT_EQ(mowbite_follower::ParamsJson("/mowbite_follower", {0.16298, 0.15, 0.3}),
+            "{\"node\":\"/mowbite_follower\",\"params\":{\"speed_fast\":0.16298,\"speed_slow\":0.15,"
+            "\"max_angular\":0.3}}");
+}

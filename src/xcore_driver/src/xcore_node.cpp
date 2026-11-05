@@ -179,6 +179,13 @@ class XcoreNode : public rclcpp::Node {
     }
     io.gnss = gnss_enabled_;
     io_.emplace(io, control, xcore::InputMapOf(inputs_));
+    // Started again by the launch after the last driver ended: it took the board without a latch (M4), so this one
+    // holds it from the first frame until a release by the app or a key.
+    if (declare_parameter("start_latched", false)) {
+      io_->LatchEmergency(xcore::kReasonHighLevel);
+      RCLCPP_WARN(get_logger(), "Started again after the last driver ended: emergency latched from the first frame on, "
+                  "motion and blade wait for a release");
+    }
 
     // <data_dir>/hold.json of the logic; empty: no hold.
     hold_watch_.emplace(declare_parameter("hold_file", ""));
@@ -363,14 +370,30 @@ class XcoreNode : public rclcpp::Node {
     c.odometry.left_sign = declare_parameter("left_ticks_sign", c.odometry.left_sign) < 0 ? -1 : 1;
     c.odometry.right_sign = declare_parameter("right_ticks_sign", c.odometry.right_sign) < 0 ? -1 : 1;
     c.regulator.wheel_distance = c.odometry.wheel_distance;
-    c.regulator.full_duty_speed = declare_parameter("full_duty_speed", c.regulator.full_duty_speed);
+    // A file of the old speed model would otherwise drive with the defaults of the new one.
+    if (get_node_parameters_interface()->get_parameter_overrides().count("full_duty_speed")) {
+      throw std::invalid_argument("full_duty_speed is gone: give duty_slope and duty_deadband instead");
+    }
+    c.regulator.duty_slope = declare_parameter("duty_slope", c.regulator.duty_slope);
+    c.regulator.duty_deadband = declare_parameter("duty_deadband", c.regulator.duty_deadband);
     c.regulator.max_duty = xcore::CappedLimit("max_duty", declare_parameter("max_duty", c.regulator.max_duty), 1.0);
     c.regulator.feedback = declare_parameter("regulator_feedback", c.regulator.feedback);
-    if (!(c.odometry.ticks_per_meter > 0) || !(c.odometry.wheel_distance > 0) || !(c.regulator.full_duty_speed > 0)) {
-      throw std::invalid_argument("ticks_per_meter, wheel_distance and full_duty_speed must be positive");
+    if (!(c.odometry.ticks_per_meter > 0) || !(c.odometry.wheel_distance > 0)) {
+      throw std::invalid_argument("ticks_per_meter and wheel_distance must be positive");
     }
-    RCLCPP_INFO(get_logger(), "allow_blade: %d, cmd_vel_timeout: %.2f s, at most %.2f m/s and %.2f rad/s, max_duty: "
-                "%.2f, feedback: %d", c.allow_blade, c.cmd_vel_timeout_s, c.max_linear_speed, c.max_angular_speed,
+    if (auto problem = xcore::CheckSpeedModel(c.regulator)) throw std::invalid_argument(*problem);
+    const double parameter_linear = c.max_linear_speed;
+    const double parameter_angular = c.max_angular_speed;
+    xcore::ApplyReachableSpeeds(c);
+    if (c.max_linear_speed < parameter_linear || c.max_angular_speed < parameter_angular) {
+      RCLCPP_INFO(get_logger(), "max_duty %.2f reaches %.3f m/s per wheel: driving at most %.3f m/s instead of %.2f, "
+                  "turning at most %.3f rad/s instead of %.2f", c.regulator.max_duty,
+                  xcore::ReachableWheelSpeed(c.regulator), c.max_linear_speed, parameter_linear, c.max_angular_speed,
+                  parameter_angular);
+    }
+    RCLCPP_INFO(get_logger(), "allow_blade: %d, cmd_vel_timeout: %.2f s, at most %.3f m/s and %.3f rad/s, duty = v / "
+                "%.3f + %.3f up to max_duty %.2f, feedback: %d", c.allow_blade, c.cmd_vel_timeout_s,
+                c.max_linear_speed, c.max_angular_speed, c.regulator.duty_slope, c.regulator.duty_deadband,
                 c.regulator.max_duty, c.regulator.feedback);
     RCLCPP_INFO(get_logger(), "tilt %.0f deg for %.1f s, release below %.0f deg; wheels %.2f m/s %.1f-%.1f s after a "
                 "setpoint, %.1fx the fastest wheel; I/O stall %.2f s", c.tilt_limit_deg, c.tilt_time_s,

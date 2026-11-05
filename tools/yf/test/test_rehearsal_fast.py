@@ -1,7 +1,7 @@
 """V1 of the fast runs of M8 against fake_xcore, the driver in the raised start of measure.launch.py (speed_limit:=0.5
 max_duty:=1.0). Measurement build: the driver reports 0.5 m/s and keeps measurement_speed_limit read-only; measure.py
-takes nothing but M8 --fast, runs 0.4 m/s with STOP, then the top speed (duty 1.0 = 0.47 m/s at the fake's 0.47 m/s
-per duty) with STOP, without a command and with the driver killed, each within its limits; the capture shows no duty
+takes nothing but M8 --fast, runs 0.4 m/s with STOP, then the top speed (0.5 m/s, duty 0.881 in the speed model of
+nx60i.yaml, which the fake follows) with STOP, without a command and with the driver killed, each within its limits; the capture shows no duty
 above 1.0 and the board's 1.0 s for the killed driver; a wheel above 0.6 m/s aborts. Any other build: the driver does
 not start in the raised start, measure.py finds no capabilities.
 
@@ -44,7 +44,8 @@ GROUP_PORT = random.randint(42000, 48000)
 BIND_IP = f"127.{random.randint(1, 250)}.{random.randint(1, 250)}.{random.randint(2, 250)}"
 SERVICES = os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "config", "xcore_nx60i_services.json")
 FAKE = os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_xcore")
-FULL_DUTY_SPEED = 0.47
+# The driver and the fake share the speed model of nx60i.yaml: 0.5 m/s needs duty 0.881, below max_duty 1.0.
+TOP_SPEED = 0.5
 REFUSED = "is for the measurement image only"
 
 
@@ -53,7 +54,7 @@ def generate_test_description():
         json.dump({}, f)
     fake_xcore = ExecuteProcess(
         cmd=[FAKE, "--services", SERVICES, "--group-port", str(GROUP_PORT), "--flags", FLAGS, "--pcap", PCAP,
-             "--pcap-max-mb", "60", "--full-duty-speed", str(FULL_DUTY_SPEED)],
+             "--pcap-max-mb", "60"],
         output="screen")
     driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "launch",
@@ -205,16 +206,15 @@ class TestRehearsalFast(unittest.TestCase):
         self.assertEqual((len(first), len(top_stop), len(quiet)), (3, 3, 3), stopping)
         for s in first:
             self.assertAlmostEqual(s["steady"], 0.4, delta=0.03)
-        # 0.5 m/s is a duty of 1.06 at 0.47 m/s per duty: max_duty 1.0 holds it at 0.47 m/s.
         for s in top_stop + quiet:
-            self.assertAlmostEqual(s["steady"], FULL_DUTY_SPEED, delta=0.03)
+            self.assertAlmostEqual(s["steady"], TOP_SPEED, delta=0.03)
         for s in first + top_stop:
             self.assertLessEqual(s["stand_s"], m.FAST_STAND_S["stop"])
             self.assertLessEqual(s["odometry_m"], m.FAST_DISTANCE_M["stop"])
         for s in quiet:
             self.assertLessEqual(s["stand_s"], m.FAST_STAND_S["quiet"])
             self.assertLessEqual(s["odometry_m"], m.FAST_DISTANCE_M["quiet"])
-            # The driver's 0.5 s at 0.47 m/s, then its stop.
+            # The driver's 0.5 s at 0.5 m/s, then its stop.
             self.assertGreater(s["odometry_m"], 0.2)
         marks = [e["text"] for e in entries("fast", "mark")]
         self.assertEqual(len(marks), 12)

@@ -124,10 +124,10 @@ TEST(XcoreControl, DriveIsLimitedAndStopsAfterSilence) {
   auto drive = Of(f.control.Tick(0), kDiffDriveService);
   ASSERT_EQ(drive.size(), 1u);
   auto twist = TwistOf(drive[0]);
-  // 0.3 m/s and -0.3 rad/s, as duty: the outer wheel at the duty limit, the inner one slower.
+  // 0.3 m/s and -0.3 rad/s, as duty: the outer wheel at the duty limit, the inner one shortened by the same factor.
   double half = ControlConfig{}.regulator.wheel_distance / 2;
   EXPECT_NEAR(twist[0] - twist[5] * half, 0.3, 1e-9);
-  EXPECT_NEAR(twist[0] + twist[5] * half, 0.3 - 0.3 * half, 1e-9);
+  EXPECT_NEAR(twist[0] + twist[5] * half, (0.3 - 0.3 * half) * 0.3 / (0.3 + 0.3 * half), 1e-9);
   EXPECT_EQ(twist[1] + twist[2] + twist[3] + twist[4], 0);
   EXPECT_TRUE(f.control.Status(0).moving);
   // Resent every 0.1 s until cmd_vel falls silent for 0.5 s, then three stops 0.1 s apart, then nothing.
@@ -675,6 +675,32 @@ TEST(XcoreControl, OverspeedFollowsTheRaisedLimit) {
   EXPECT_NE(errors[0].find("above 0.72 m/s"), std::string::npos);
 }
 
+TEST(SpeedCaps, ReachableSpeedsLowerTheLimits) {
+  ControlConfig config;
+  config.regulator.wheel_distance = 0.3556;
+  config.regulator.duty_slope = 0.58;
+  config.regulator.duty_deadband = 0.019;
+  config.regulator.max_duty = 0.3;
+  ApplyReachableSpeeds(config);
+  // A wheel reaches 0.58 x 0.281 = 0.163 m/s; turning on the spot 2 x 0.163 / 0.3556 = 0.917 rad/s, above the cap.
+  EXPECT_NEAR(config.max_linear_speed, 0.16298, 1e-9);
+  EXPECT_EQ(config.max_angular_speed, 0.3);
+  // The raised start of M8: 0.5 m/s stays, as 0.9 reaches 0.511 m/s.
+  config.max_linear_speed = 0.5;
+  config.regulator.max_duty = 0.9;
+  ApplyReachableSpeeds(config);
+  EXPECT_EQ(config.max_linear_speed, 0.5);
+  // A small max_duty lowers the turning as well; max_duty 0 lets nothing move.
+  config.regulator.max_duty = 0.05;
+  ApplyReachableSpeeds(config);
+  EXPECT_NEAR(config.max_linear_speed, 0.58 * 0.031, 1e-12);
+  EXPECT_NEAR(config.max_angular_speed, 2 * 0.58 * 0.031 / 0.3556, 1e-12);
+  config.regulator.max_duty = 0;
+  ApplyReachableSpeeds(config);
+  EXPECT_EQ(config.max_linear_speed, 0);
+  EXPECT_EQ(config.max_angular_speed, 0);
+}
+
 TEST(SpeedCaps, MeasurementLimitFromZeroToSixTenths) {
   EXPECT_EQ(MeasurementSpeedCap(0.5), 0.5);
   EXPECT_EQ(MeasurementSpeedCap(0.6), 0.6);
@@ -864,4 +890,24 @@ TEST(XcoreControl, HoldWithoutMotionSendsNoDrive) {
     f.Board(0, t);
     EXPECT_TRUE(Of(f.control.Tick(t), kDiffDriveService).empty());
   }
+}
+
+// A driver started again after its predecessor ended (start_latched): the board is held from the first frame on, and
+// commands stay without effect until a release.
+TEST(XcoreControl, LatchedBeforeTheFirstFrame) {
+  XcoreControl control(Fixture::Config(), Inputs());
+  ASSERT_TRUE(control.LatchEmergency(0));
+  control.SetServicesReady(true, true);
+  auto first = Of(control.Tick(0), kEmergencyService);
+  ASSERT_FALSE(first.empty());
+  EXPECT_EQ(EmergencyOf(first[0]).first, reason::kHighLevel | reason::kLatch);
+  control.OnOutput(kEmergencyService, emergency::kOutReason, U16(reason::kHighLevel | reason::kLatch), 0, 0.01);
+  EXPECT_TRUE(control.Status(0.01).blocked);
+  control.OnCmdVel(0.1, 0, 0.02);
+  for (double t = 0.05; t < 1.0; t += 0.05) {
+    for (const auto& v : Of(control.Tick(t), kDiffDriveService)) EXPECT_EQ(TwistOf(v)[0], 0);
+  }
+  EXPECT_FALSE(control.ReleaseEmergency(1.0));
+  control.OnOutput(kEmergencyService, emergency::kOutReason, U16(0), 0, 1.05);
+  EXPECT_FALSE(control.Status(1.05).blocked);
 }

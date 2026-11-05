@@ -16,11 +16,12 @@ xcore_driver:
     # From the firmware: the right counter falls going forward. Checked in the air.
     left_ticks_sign: 1
     right_ticks_sign: -1
-    # Wheel speed per unit of duty in m/s, measured in the air at duty 0.1 (left 0.47, right 0.46; firmware
-    # v1.4.0-47): the faster wheel, so neither wheel gets more duty than its speed needs there. The wheels stand up
-    # to duty 0.02; above, in the air, about 0.58 x (duty - 0.019): below duty 0.1 they turn slower than commanded,
-    # above it faster. The duty stays at max_duty or below.
-    full_duty_speed: 0.47
+    # Speed model of the wheels, measured in the air at duties 0.02 to 0.1 (firmware v1.4.0-47): they stand at duty
+    # 0.02 and turn at about 0.58 x (duty - 0.019) m/s above (right about 5 % slower). A wheel speed v gets duty v / duty_slope + duty_deadband;
+    # a duty above max_duty shortens both wheels by the same factor. With max_duty 0.3 a wheel reaches 0.163 m/s, and
+    # max_linear_speed and max_angular_speed in hw/capabilities are lowered to that. M8 measures both on the ground.
+    duty_slope: 0.58
+    duty_deadband: 0.019
     max_duty: 0.3
     regulator_feedback: false
     max_linear_speed: 0.3
@@ -42,7 +43,7 @@ xcore_driver:
     battery_full_voltage: 28.2
     battery_critical_low_voltage: 23.0
     battery_critical_high_voltage: 29.9
-    charge_voltage: 29.8
+    charge_voltage: 29.4
     # No termination current: OpenMower never sent one (its key was not read), the charger chip keeps its own.
     # The station delivers this charge voltage or more while the mower stands on its contacts.
     dock_voltage: 5.0

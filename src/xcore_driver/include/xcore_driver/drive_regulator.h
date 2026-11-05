@@ -1,14 +1,19 @@
 #ifndef XCORE_DRIVER_DRIVE_REGULATOR_H
 #define XCORE_DRIVER_DRIVE_REGULATOR_H
 
+#include <optional>
+#include <string>
+
 namespace xcore {
 
 struct RegulatorConfig {
   // The distance the board was configured with; it splits the twist into the wheels the same way.
   double wheel_distance = 0.3556;
-  // Wheel speed in m/s at full duty, to be measured with the wheels in the air. The firmware treats 1 m/s as full duty.
-  double full_duty_speed = 1.0;
-  // Largest duty either wheel gets.
+  // A wheel turns at duty_slope x (duty - duty_deadband) m/s above the deadband and stands below it; the duty for a
+  // wheel speed v is v / duty_slope + duty_deadband. The firmware treats 1 m/s as full duty.
+  double duty_slope = 1.0;
+  double duty_deadband = 0.0;
+  // Largest duty either wheel gets; a larger one shortens both duties by the same factor.
   double max_duty = 0.3;
   // Correction on the measured wheel speed; off until the ticks are checked on the device.
   bool feedback = false;
@@ -27,6 +32,12 @@ struct DutyTwist {
   double left_duty = 0;
   double right_duty = 0;
 };
+
+// Why the speed model cannot drive, or nothing: a slope of 0 or less, a deadband below 0 or not below max_duty (other
+// than with max_duty 0, which locks the wheels), or a value that is no number.
+std::optional<std::string> CheckSpeedModel(const RegulatorConfig& config);
+// The fastest wheel speed in m/s the model reaches within max_duty, 0 if it reaches none.
+double ReachableWheelSpeed(const RegulatorConfig& config);
 
 // Turns a wanted twist in m/s and rad/s into the duty twist the board applies to its motors, with feed forward and,
 // once enabled, a PI correction per wheel on the speeds from the ticks.

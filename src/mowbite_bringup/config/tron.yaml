@@ -88,6 +88,11 @@ tron_imu:
 mowbite_localization:
   ros__parameters:
     gyro_calibration_time: 5.0
+    # A calibration window counts only with the wheels reported still, no sample more than gyro_still_spread rad/s
+    # off its mean and an offset of gyro_offset_limit rad/s or less; following at rest stays within the limit too.
+    # Assumptions for the Tron until phase 5.
+    gyro_still_spread: 0.02
+    gyro_offset_limit: 0.02
     min_speed: 0.01
     # The antenna offset is part of the geometry (config/geometry/tron.yaml, robot.geometry), measured in phase 7.
     # Without a fix the accuracy grows by this much per m driven and per s. Assumptions until measured in phase 7.

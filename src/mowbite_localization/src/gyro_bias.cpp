@@ -2,13 +2,21 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 namespace mowbite_localization {
 
 GyroBias::GyroBias(const GyroBiasConfig& config)
     : config_(config),
       calibrated_(config.skip_calibration),
-      offset_(config.skip_calibration ? config.initial_offset : 0.0) {
+      offset_(config.skip_calibration ? std::clamp(config.initial_offset, -config.offset_limit, config.offset_limit)
+                                      : 0.0) {
+}
+
+std::vector<std::string> GyroBias::TakeWarnings() {
+  std::vector<std::string> out;
+  out.swap(warnings_);
+  return out;
 }
 
 void GyroBias::Add(double rate, double dt, bool wheels_still) {
@@ -19,11 +27,28 @@ void GyroBias::Add(double rate, double dt, bool wheels_still) {
       sum_ = time_ = 0.0;
       return;
     }
+    min_ = time_ > 0.0 ? std::min(min_, rate) : rate;
+    max_ = time_ > 0.0 ? std::max(max_, rate) : rate;
     sum_ += rate * dt;
     time_ += dt;
     if (time_ >= config_.calibration_time - 1e-9) {
-      offset_ = sum_ / time_;
-      calibrated_ = true;
+      const double mean = sum_ / time_;
+      const double spread = std::max(max_ - mean, mean - min_);
+      char text[200];
+      if (spread > config_.still_spread) {
+        std::snprintf(text, sizeof(text), "gyro calibration: rate %.4f to %.4f rad/s over %.1f s, more than %.4f off "
+                      "its mean %.4f: the mower did not stand, new window", min_, max_, time_, config_.still_spread,
+                      mean);
+        warnings_.push_back(text);
+      } else if (std::abs(mean) > config_.offset_limit) {
+        std::snprintf(text, sizeof(text), "gyro calibration: offset %.4f rad/s above the limit %.4f (spread %.4f): "
+                      "new window", mean, config_.offset_limit, spread);
+        warnings_.push_back(text);
+      } else {
+        offset_ = mean;
+        calibrated_ = true;
+      }
+      sum_ = time_ = 0.0;
     }
     return;
   }
@@ -32,7 +57,10 @@ void GyroBias::Add(double rate, double dt, bool wheels_still) {
   } else {
     still_for_ = 0.0;
   }
-  if (holding()) offset_ += (rate - offset_) * std::min(1.0, dt / config_.tracking_time);
+  if (holding()) {
+    offset_ += (rate - offset_) * std::min(1.0, dt / config_.tracking_time);
+    offset_ = std::clamp(offset_, -config_.offset_limit, config_.offset_limit);
+  }
 }
 
 double GyroBias::Corrected(double rate) const {

@@ -1,5 +1,5 @@
-"""Smoke tests of the sensor chain on ptys: fake_tron feeds tron_gnss and tron_imu, mowbite_localization fuses them and
-mowbite_bridge publishes the result on a private mosquitto.
+"""Smoke tests of the sensor chain on ptys: fake_tron feeds tron_gnss and tron_imu, mowbite_localization fuses them with
+standing wheels on hw/wheel_odom and mowbite_bridge publishes the result on a private mosquitto.
 
 Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite_sim/test/test_stack_smoke.py
 """
@@ -51,6 +51,9 @@ def generate_test_description():
              parameters=[{"port": LINKS["imu"], "mount_roll_deg": 180.0}]),
         Node(package="mowbite_localization", executable="mowbite_localization_node", output="screen",
              parameters=[{"gyro_calibration_time": 2.0}]),
+        # Standing wheels, as a driver reports them: without a wheel report the gyro does not calibrate.
+        ExecuteProcess(cmd=["ros2", "topic", "pub", "-r", "20", "hw/wheel_odom", "geometry_msgs/msg/TwistStamped",
+                            "{}"], output="log"),
     ]
     bridge = Node(package="mowbite_bridge", executable="mowbite_bridge_node", output="screen",
                   parameters=[{"mqtt_host": "127.0.0.1", "mqtt_port": MQTT_PORT, "data_dir": WORK}])
@@ -202,5 +205,8 @@ class TestSensorChain(unittest.TestCase):
 @launch_testing.post_shutdown_test()
 class TestShutdown(unittest.TestCase):
     def test_processes_exit_cleanly(self, proc_info):
-        # SIGINT from launch is a normal stop for every process of the chain.
-        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -2, -15, 130, 143])
+        # SIGINT from launch is a normal stop for every process of the chain; ros2 topic pub ends on it with 2.
+        for action in proc_info.processes():
+            name = action.process_details["name"]
+            allowed = [0, -2, -15, 130, 143] + ([2] if name.startswith("ros2") else [])
+            self.assertIn(proc_info[action].returncode, allowed, name)

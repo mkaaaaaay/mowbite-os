@@ -1,0 +1,24 @@
+# Parameters of MowBite OS on the YardForce NX60i on top of tron.yaml (nx60i.launch.py loads tron.yaml, then this
+# file). The driver has its own file, config/nx60i.yaml of xcore_driver; the dimensions are in geometry/nx60i.yaml.
+
+mowbite_logic:
+  ros__parameters:
+    # 7S pack, as the battery voltages of the driver (xcore_driver/config/nx60i.yaml): mowing ends below 23.0 V.
+    battery_empty_voltage: 24.5
+    battery_full_voltage: 28.2
+    battery_critical_voltage: 23.0
+
+mowbite_localization:
+  ros__parameters:
+    # The gyro of the xCore read about 0.0025 rad/s at rest (M-A, raw z); assumptions until the safety measurement.
+    gyro_still_spread: 0.02
+    gyro_offset_limit: 0.02
+
+mowbite_planner:
+  ros__parameters:
+    # The body and the blade of config/geometry/nx60i.yaml, checked by test_config_consistency.py.
+    mower_width: 0.18
+    robot_width: 0.41
+    robot_front: 0.43
+    robot_rear: 0.12
+    blade_ahead: 0.20

@@ -339,7 +339,27 @@ class Files(unittest.TestCase):
         steady = drive["steady"][0]
         self.assertAlmostEqual(steady["per_duty_left"], 0.9, delta=0.02)
         self.assertAlmostEqual(steady["per_duty_right"], 0.9, delta=0.02)
-        self.assertIn("WARNING", xc.text_report(self.report(path)))
+        # Two duties, 0.1 and 0.05, on one line through 0: slope 0.9, no deadband.
+        for side in ("left", "right"):
+            model = drive["duty_model"][side]
+            self.assertEqual(model["duties"], 2)
+            self.assertAlmostEqual(model["slope"], 0.9, delta=0.03)
+            self.assertAlmostEqual(model["deadband"], 0.0, delta=0.003)
+        text = xc.text_report(self.report(path))
+        self.assertIn("WARNING", text)
+        self.assertIn("Speed model left: duty_slope 0.8", text)
+
+    def test_duty_model_from_steady_runs(self):
+        # The NX60i in the air: 0.58 x (duty - 0.019); a wheel that stands or turns against its duty is left out.
+        points = [(d, 0.58 * (d - 0.019)) for d in (0.03, 0.05, 0.07, 0.1)] + [(0.02, 0.0), (0.05, -0.01)]
+        model = xc.duty_model(points)
+        self.assertAlmostEqual(model["slope"], 0.58, places=6)
+        self.assertAlmostEqual(model["deadband"], 0.019, places=6)
+        self.assertEqual(model["points"], 4)
+        backwards = xc.duty_model([(-d, -v) for d, v in points])
+        self.assertAlmostEqual(backwards["slope"], 0.58, places=6)
+        self.assertIsNone(xc.duty_model([(0.1, 0.048), (0.1, 0.047)]))
+        self.assertIsNone(xc.duty_model([]))
 
     def test_wheel_settling_back_after_the_stop(self):
         # As in M4 frozen run 3 on the NX60i: the wheels stand, 0.2 s later one tick back on the left; then a slow run

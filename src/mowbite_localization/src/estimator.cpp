@@ -47,7 +47,8 @@ bool Estimator::AddImu(double t, double rate) {
   const bool fresh = wheel_time_ && t - *wheel_time_ <= config_.wheel_timeout;
   const double speed = fresh ? wheel_speed_ : 0.0;
   const double wheel_turn = fresh ? wheel_turn_ : 0.0;
-  const bool still = std::abs(speed) < config_.min_speed && std::abs(wheel_turn) < config_.min_speed;
+  // Without a fresh wheel report nobody knows the mower stands: the gyro offset is neither measured nor followed.
+  const bool still = fresh && std::abs(speed) < config_.min_speed && std::abs(wheel_turn) < config_.min_speed;
   const bool was_calibrated = bias_.calibrated();
   bias_.Add(rate, dt, still);
   // The sample that ends the calibration only starts the integration.

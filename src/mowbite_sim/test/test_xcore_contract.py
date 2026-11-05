@@ -191,8 +191,9 @@ class TestXcoreContract(unittest.TestCase):
         self.assertEqual(b["imu_remap"], [1, -2, -3])
         self.assertEqual(b["diff_drive"], [[2025.0], [0.3556]])
         power = {k: round(v[0], 3) for k, v in b["power"].items() if v}
-        # No termination current (7) and never the override of the charge current limit (10).
-        self.assertEqual(power, {"1": 24.5, "2": 28.2, "3": 23.0, "4": 29.9, "6": 29.8})
+        # No termination current (7) and never the override of the charge current limit (10); the charge voltage at
+        # 29.4 V (G29), below the 29.8 V of OpenMower.
+        self.assertEqual(power, {"1": 24.5, "2": 28.2, "3": 23.0, "4": 29.9, "6": 29.4})
         self.assertIsNone(b["power_override"])
         inputs = json.loads(b["inputs"])
         self.assertEqual([i["line"] for i in inputs["gpio"]], ["GPIO1", "GPIO5", "GPIO10", "GPIO11", "GPIO12", "GPIO13"])
@@ -219,7 +220,8 @@ class TestXcoreContract(unittest.TestCase):
         self.assertAlmostEqual(caps.wheel_distance, 0.3556)
         self.assertTrue(caps.separate_bumpers)
         self.assertEqual(caps.imu_source, "xcore_driver")
-        self.assertAlmostEqual(caps.max_linear_speed, 0.3, places=5)
+        # max_duty 0.3 reaches 0.58 x (0.3 - 0.019) = 0.163 m/s per wheel; turning on the spot stays at its cap.
+        self.assertAlmostEqual(caps.max_linear_speed, 0.16298, places=4)
         self.assertAlmostEqual(caps.max_angular_speed, 0.3, places=5)
         self.assertLess(caps.failsafe_without_host_s, 0)
         self.assertEqual(caps.safety_measurement_date, "")
@@ -265,15 +267,15 @@ class TestXcoreContract(unittest.TestCase):
         moving = [(t, v) for t, v in twists if v[0] != 0 or v[5] != 0]
         zeros = [t for t, v in twists if v[0] == 0 and v[5] == 0]
         self.assertGreaterEqual(len(moving), 8)
-        # 0.3 m/s at full_duty_speed 0.47 would be a duty of 0.64; max_duty 0.3 is the most the driver gives.
+        # 0.5 m/s is cut to the 0.163 m/s that max_duty 0.3 reaches: duty 0.163 / 0.58 + 0.019 = 0.3.
         self.assertTrue(all(abs(v[0] - 0.3) < 1e-6 and abs(v[5]) < 1e-6 for _, v in moving), str(moving[:3]))
         self.assertEqual(len(zeros), 3, str(twists[-5:]))
         # The setpoint goes out every 0.1 s until cmd_vel has been silent for 0.5 s: commands for 1.0 s, then 0.5 s.
         self.assertAlmostEqual(zeros[0] - moving[0][0], 1.4, delta=0.2)
         self.assertLess(zeros[0] - moving[-1][0], 0.15)
         self.assertAlmostEqual(zeros[2] - zeros[0], 0.2, delta=0.06)
-        # The fake's wheels turn at 0.47 m/s per duty: the ticks show 0.14 m/s forward, also on the falling counter.
-        self.assertAlmostEqual(moving_odom, 0.141, delta=0.02)
+        # The fake's wheels follow the same model: the ticks show 0.163 m/s forward, also on the falling counter.
+        self.assertAlmostEqual(moving_odom, 0.163, delta=0.02)
         self.assertGreater(board()["x"] - x0, 0.15)
         self.assertEqual(board()["duty"], [0.0, 0.0])
 

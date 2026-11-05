@@ -44,6 +44,19 @@ struct FollowerConfig {
   double end_tolerance = 0;
 };
 
+// The speeds the follower drives at most under the driver's limits (hw/capabilities): what the planner plans with.
+struct EffectiveSpeeds {
+  double speed_fast = 0;
+  double speed_slow = 0;
+  double max_angular = 0;
+};
+
+// The follower's own values, each under max_linear or max_angular and under the driver's limit; a limit of the driver
+// that is no number above 0 counts as none.
+EffectiveSpeeds Effective(const FollowerConfig& config, double driver_max_linear, double driver_max_angular);
+// The message for bridge/params: {"node":"<node>","params":{"speed_fast":…,"speed_slow":…,"max_angular":…}}.
+std::string ParamsJson(const std::string& node, const EffectiveSpeeds& speeds);
+
 enum class Phase {
   kIdle,
   kStartTurn,   // on the spot towards the path before driving
