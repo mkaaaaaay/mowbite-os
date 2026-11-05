@@ -76,7 +76,8 @@ Program::Program(const ProgramConfig& config) : config_(config) {
 void Program::SetSpeedLimits(double max_linear, double max_angular) {
   if (max_linear > 0) {
     config_.line_speed = std::min(config_.line_speed, max_linear);
-    config_.max_speed = std::min(config_.max_speed, max_linear);
+    // The driver's limit is what it commands at most; the wheels may run a little faster than its speed model says.
+    config_.max_speed = std::min(config_.max_speed, config_.overspeed_ratio * max_linear + config_.overspeed_floor);
     config_.line_min_speed = std::min(config_.line_min_speed, config_.line_speed);
   }
   if (max_angular > 0) config_.spin_rate = std::min(config_.spin_rate, max_angular);

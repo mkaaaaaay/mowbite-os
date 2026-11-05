@@ -149,7 +149,8 @@ class Program {
 
   // The mounting of the IMU as stored, and the allowance while it is not measured (rad); for the next checks.
   void SetMounting(double roll, double pitch, double allowance);
-  // The limits of the driver (m/s, rad/s; 0 or less: none): lines and turns of the next drive stay within them.
+  // The limits of the driver (m/s, rad/s; 0 or less: none): lines and turns of the next drive stay within them, and
+  // max_speed within overspeed_ratio times the linear one plus overspeed_floor.
   void SetSpeedLimits(double max_linear, double max_angular);
   const ProgramConfig& config() const { return config_; }
 

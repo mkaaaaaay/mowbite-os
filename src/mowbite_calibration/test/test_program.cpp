@@ -552,3 +552,21 @@ TEST_F(ProgramTest, ReadinessNamesWhatIsMissing) {
   Run(now_ + 2.0);
   EXPECT_EQ(reasons(), std::vector<std::string>{"IMU_GRAVITY"});
 }
+
+// The driver's limits cap the lines; the bound for OVERSPEED keeps the margin of the check above them.
+TEST(ProgramLimits, SpeedLimitsOfTheDriver) {
+  Program program{ProgramConfig{}};
+  program.SetSpeedLimits(0.16298, 0.3);
+  EXPECT_DOUBLE_EQ(program.config().line_speed, 0.16298);
+  EXPECT_DOUBLE_EQ(program.config().max_speed, 1.3 * 0.16298 + 0.05);
+  EXPECT_LE(program.config().line_min_speed, 0.16298);
+  // At 0.3 m/s the bound stays at its own 0.3.
+  Program tron{ProgramConfig{}};
+  tron.SetSpeedLimits(0.3, 0.3);
+  EXPECT_DOUBLE_EQ(tron.config().line_speed, 0.2);
+  EXPECT_DOUBLE_EQ(tron.config().max_speed, 0.3);
+  // No limit leaves the configuration as it is.
+  Program none{ProgramConfig{}};
+  none.SetSpeedLimits(0, 0);
+  EXPECT_DOUBLE_EQ(none.config().max_speed, 0.3);
+}
