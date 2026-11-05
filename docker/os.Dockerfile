@@ -1,5 +1,5 @@
 # MowBite OS for the mower, one image for every platform (launch and configuration choose the platform).
-# Built from a clean tree that has src/ at its top, e.g. for arm64 on the PC (qemu):
+# Built from a clean tree that has src/ and tools/ at its top, e.g. for arm64 on the PC (qemu):
 #   docker buildx build --platform linux/arm64 --load --build-context planer=/home/mkay/tron-projekt/planer \
 #     --build-arg SOURCE_COMMIT=<commit> --build-arg MIN_APP=$(cat <tree>/docker/min_app) \
 #     -f docker/os.Dockerfile -t local/mowbite-os:arm64-<commit> <tree>
@@ -66,6 +66,11 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /opt/mowbite_planner /opt/mowbite_planner
 COPY --from=build /ws/install /ws/install
+# The safety measurement runs on the image that drives (the driver's normal caps, no fast runs of M8).
+COPY tools/yf/measure.py tools/yf/xcore_capture.py /ws/tools/
+# For docker exec, which skips the entrypoint: docker exec -it <container> measure --steps ...
+RUN printf '#!/bin/bash\nsource /ws/install/setup.bash\nexec python3 /ws/tools/measure.py "$@"\n' > /usr/local/bin/measure \
+ && chmod 755 /usr/local/bin/measure
 # DDS on the loopback only, without shared memory (fastdds_loopback.xml of mowbite_bringup); the launch halts without it.
 COPY src/mowbite_bringup/config/fastdds_loopback.xml /etc/mowbite/fastdds_loopback.xml
 ENV ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT FASTRTPS_DEFAULT_PROFILES_FILE=/etc/mowbite/fastdds_loopback.xml
