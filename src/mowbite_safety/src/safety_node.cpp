@@ -10,6 +10,7 @@
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/map_status.hpp>
 #include <mowbite_msgs/msg/safety_status.hpp>
+#include <mowbite_journal/node_options.h>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -22,6 +23,7 @@
 #include <vector>
 
 #include "mowbite_safety/safety_filter.h"
+#include "mowbite_safety/safety_journal.h"
 
 namespace mowbite_safety {
 
@@ -65,7 +67,11 @@ std::string BitNames(uint32_t bits) {
 class SafetyNode : public rclcpp::Node {
  public:
   explicit SafetyNode(const rclcpp::NodeOptions& options)
-      : rclcpp::Node("mowbite_safety", options), filter_(LoadConfig()) {
+      : rclcpp::Node("mowbite_safety", options),
+        journal_(mowbite_journal::OpenFromParameters(*this)),
+        filter_(journal_, LoadConfig()),
+        journal_watch_(journal_) {
+    journal_timer_ = create_wall_timer(std::chrono::seconds(10), [this] { journal_watch_.Check(get_logger()); });
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("hw/cmd_vel", 10);
     status_pub_ = create_publisher<mowbite_msgs::msg::SafetyStatus>("safety/status", 10);
     emergency_client_ = create_client<SetEmergency>("hw/emergency");
@@ -75,35 +81,38 @@ class SafetyNode : public rclcpp::Node {
     hw_sub_ = create_subscription<HardwareStatus>("hw/status", 10, [this](HardwareStatus::ConstSharedPtr msg) {
       std::lock_guard<std::mutex> lock(mutex_);
       // Without telemetry the driver cannot stop the mower either.
-      filter_.OnHardware(msg->emergency || !msg->telemetry_ok, msg->emergency_reason, MonotonicSeconds());
+      filter_.Call<&SafetyFilter::OnHardware>(msg->emergency || !msg->telemetry_ok, msg->emergency_reason,
+                                              MonotonicSeconds());
     });
     caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
         "hw/capabilities", LatchedQos(), [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          filter_.OnCapabilities(!msg->safety_measurement_date.empty(), msg->max_linear_speed, msg->max_angular_speed);
+          filter_.Call<&SafetyFilter::OnCapabilities>(!msg->safety_measurement_date.empty(), msg->max_linear_speed,
+                                                      msg->max_angular_speed);
         });
     imu_in_ = create_subscription<sensor_msgs::msg::Imu>(
         "imu/data", rclcpp::SensorDataQoS(), [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) { OnImu(*msg); });
     pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
         "localization/pose", 10, [this](mowbite_msgs::msg::RobotPose::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          filter_.OnPose(msg->x, msg->y, msg->position_accuracy, msg->heading_valid, MonotonicSeconds());
+          filter_.Call<&SafetyFilter::OnPose>(msg->x, msg->y, msg->position_accuracy, msg->heading_valid,
+                                              MonotonicSeconds());
         });
     map_sub_ = create_subscription<std_msgs::msg::String>(
         "map/json", LatchedQos(), [this](std_msgs::msg::String::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          filter_.SetMap(msg->data);
+          filter_.Call<&SafetyFilter::SetMap>(msg->data);
         });
     map_status_sub_ = create_subscription<mowbite_msgs::msg::MapStatus>(
         "map/status", LatchedQos(), [this](mowbite_msgs::msg::MapStatus::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          filter_.SetMapFits(msg->datum_state == mowbite_msgs::msg::MapStatus::DATUM_MATCH);
+          filter_.Call<&SafetyFilter::SetMapFits>(msg->datum_state == mowbite_msgs::msg::MapStatus::DATUM_MATCH);
         });
     // max_position_accuracy of tron.yaml holds until the logic tells its own (params.set).
     limits_sub_ = create_subscription<mowbite_msgs::msg::GpsLimits>(
         "logic/gps_limits", LatchedQos(), [this](mowbite_msgs::msg::GpsLimits::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          filter_.SetMaxPositionAccuracy(msg->max_position_accuracy);
+          filter_.Call<&SafetyFilter::SetMaxPositionAccuracy>(msg->max_position_accuracy);
         });
     // The mounting of the IMU (robot.geometry imu_roll, imu_pitch): the tilt counts from it.
     params_sub_ = create_subscription<std_msgs::msg::String>(
@@ -151,8 +160,8 @@ class SafetyNode : public rclcpp::Node {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       const double now = MonotonicSeconds();
-      decision = filter_.OnCommand(source, msg.twist.linear.x, msg.twist.angular.z, now);
-      latch = filter_.TakeLatchRequest(now);
+      decision = filter_.Call<&SafetyFilter::OnCommand>(source, msg.twist.linear.x, msg.twist.angular.z, now);
+      latch = filter_.Call<&SafetyFilter::TakeLatchRequest>(now);
     }
     if (decision.out) Publish(*decision.out);
     if (latch) SendLatch(*latch);
@@ -200,9 +209,9 @@ class SafetyNode : public rclcpp::Node {
               : TiltFromGravity(msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
                                 imu_roll_, imu_pitch_);
       const double now = MonotonicSeconds();
-      filter_.OnTilt(tilt, now);
-      stop = filter_.Tick(now);
-      latch = filter_.TakeLatchRequest(now);
+      filter_.Call<&SafetyFilter::OnTilt>(tilt, now);
+      stop = filter_.Call<&SafetyFilter::Tick>(now);
+      latch = filter_.Call<&SafetyFilter::TakeLatchRequest>(now);
     }
     if (stop) Publish(*stop);
     if (latch) SendLatch(*latch);
@@ -226,7 +235,7 @@ class SafetyNode : public rclcpp::Node {
     }
     std::lock_guard<std::mutex> lock(mutex_);
     const double now = MonotonicSeconds();
-    const Release release = filter_.OnRelease(now);
+    const Release release = filter_.Call<&SafetyFilter::OnRelease>(now);
     if (!release.allowed) {
       RCLCPP_WARN(get_logger(), "Emergency stays: %s", release.message.c_str());
       res.message = release.message;
@@ -283,15 +292,15 @@ class SafetyNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       const double now = MonotonicSeconds();
       ExpirePending(now);
-      stop = filter_.Tick(now);
-      latch = filter_.TakeLatchRequest(now);
-      status.latched = filter_.Latched();
-      status.tilt_deg = static_cast<float>(filter_.TiltDeg(now));
-      status.fence_distance = static_cast<float>(filter_.FenceDistance(now));
-      status.autonomous_ok = filter_.AutonomousOk(now);
-      status.owner = static_cast<uint8_t>(filter_.Owner(now));
-      status.refused = filter_.Refused();
-      status.last_refusal = filter_.LastRefusal();
+      stop = filter_.Call<&SafetyFilter::Tick>(now);
+      latch = filter_.Call<&SafetyFilter::TakeLatchRequest>(now);
+      status.latched = filter_.View().Latched();
+      status.tilt_deg = static_cast<float>(filter_.View().TiltDeg(now));
+      status.fence_distance = static_cast<float>(filter_.View().FenceDistance(now));
+      status.autonomous_ok = filter_.View().AutonomousOk(now);
+      status.owner = static_cast<uint8_t>(filter_.View().Owner(now));
+      status.refused = filter_.View().Refused();
+      status.last_refusal = filter_.View().LastRefusal();
     }
     if (stop) Publish(*stop);
     if (latch) SendLatch(*latch);
@@ -334,7 +343,11 @@ class SafetyNode : public rclcpp::Node {
   };
 
   std::mutex mutex_;
-  SafetyFilter filter_;
+  // Null without journal_dir.
+  mowbite_journal::Journal* journal_;
+  mowbite_journal::Journaled<SafetyFilter> filter_;
+  mowbite_journal::JournalWatch journal_watch_;
+  rclcpp::TimerBase::SharedPtr journal_timer_;
   // Releases of the logic waiting for the driver's answer.
   std::vector<PendingRelease> pending_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
