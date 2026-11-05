@@ -13,8 +13,9 @@ mowbite_logic:
       robot_width: 0.47
       robot_front: 0.60
       robot_rear: 0.12
-      # Cutting width of the small deck; the big one (0.27 to 0.30 m) only after measuring.
-      mower_width: 0.22
+      # Cutting width of the big deck: its radius 0.1225 m plus the blades, which stand at most 0.018 m over it, both
+      # sides (measured by the user, 05.11.); the label allows 0.30 m.
+      mower_width: 0.281
       # The centre of the blade 0.23 m ahead of the axle (measured by the user), none to the side.
       blade_ahead: 0.23
       blade_offset: 0.0
