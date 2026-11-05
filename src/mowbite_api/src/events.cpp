@@ -48,6 +48,11 @@ std::vector<Field> Rated(bool always, std::vector<Field> fields = {}) {
   return fields;
 }
 
+// The tries of docking in DOCKING_RETRY and DOCKING_FAILED, whatever the reason.
+std::vector<Field> DockingTries() {
+  return Rated(true, {Integer("attempts", "", "Tries of docking so far")});
+}
+
 struct ReasonText {
   std::string text;
   std::vector<Field> fields;
@@ -109,7 +114,7 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"NO_ANSWER", {"No answer in time", {}}},
       {"NO_CHARGE_CURRENT",
        {"Contact with the docking station, but no charge current",
-        {Number("current", "A", "The charge current seen last"), Limit("A")}}},
+        {Number("current", "A", "The charge current seen; while docking the largest one of the check"), Limit("A")}}},
       {"NO_DOCK", {"The map has no docking station", {}}},
       {"NO_DOCK_CONTACT", {"No contact with the docking station", {}}},
       {"NO_HEADING", {"The heading is not known yet", {}}},
@@ -165,14 +170,8 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"WRONG_STATE",
        {"The command does not fit the state of the mower; its action would not be enabled",
         {Text("state", "current_state of robot_state"), Text("sub_state", "current_sub_state of robot_state")}}},
-      {"approach_failed", {"The approach to the docking station failed (value of OpenMower)",
-                           {Integer("attempts", "", "Tries so far")}}},
-      {"charge_failed",
-       {"Contact with the docking station, but no charge current",
-        {Number("current", "A", "The largest charge current seen"), Limit("A"),
-         Integer("attempts", "", "Tries so far")}}},
-      {"dock_failed", {"The last part onto the contacts failed (value of OpenMower)",
-                       {Integer("attempts", "", "Tries so far")}}},
+      {"approach_failed", {"The approach to the docking station failed (value of OpenMower)", {}}},
+      {"dock_failed", {"The last part onto the contacts failed (value of OpenMower)", {}}},
       {"no_gps", {"No GPS for the way off the docking station (value of OpenMower)", {}}},
       {"path_failed", {"The way off the docking station failed (value of OpenMower)", {}}},
       {"LOST", {"No corrections from the NTRIP caster", {Limit("s")}}},
@@ -424,12 +423,12 @@ const std::vector<EventEntry>& Events() {
       Event("UNDOCKING_FAILED", "logic", "Leaving the docking station failed; the mower stays where it stopped",
             Rated(true), User({{"path_failed", "error"}, {"no_gps", "error"}}), "error", "user"),
       Event("DOCKED", "logic", "The mower is on the contacts of the docking station"),
-      Event("DOCKING_RETRY", "logic", "Docking failed, the next try follows by itself", Rated(true),
+      Event("DOCKING_RETRY", "logic", "Docking failed, the next try follows by itself", DockingTries(),
             {R("approach_failed", "warning", "auto"), R("dock_failed", "warning", "auto"),
-             R("charge_failed", "warning", "auto")},
+             R("NO_CHARGE_CURRENT", "warning", "auto")},
             "warning", "auto"),
-      Event("DOCKING_FAILED", "logic", "Docking failed for good; the mower waits", Rated(true),
-            User({{"approach_failed", "error"}, {"dock_failed", "error"}, {"charge_failed", "error"}}),
+      Event("DOCKING_FAILED", "logic", "Docking failed for good; the mower waits", DockingTries(),
+            User({{"approach_failed", "error"}, {"dock_failed", "error"}, {"NO_CHARGE_CURRENT", "error"}}),
             "error", "user"),
       Event("CHARGING_LOST", "logic", "Charging stopped while the mower stood on the docking station; it stays there",
             Rated(true, {Integer("battery_percentage", "%", "Charge of the battery")}),

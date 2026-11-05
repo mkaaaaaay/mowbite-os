@@ -401,7 +401,7 @@ class LogicCore {
   // raw contact stops the mower (one zero command, G18); the debounced one, also at the end of a leg that failed,
   // starts the check of the charge (ChargeCheck), and only a confirmed charge ends in DOCKED. A failed try drives out
   // to the approach point, off the contacts with charging off first where the driver can stop it, then DOCKING_RETRY
-  // or after docking_retry_count DOCKING_FAILED; the last try without a charge current (charge_failed) leaves the
+  // or after docking_retry_count DOCKING_FAILED; the last try without a charge current (NO_CHARGE_CURRENT) leaves the
   // mower on the contacts, and a stable charge current there later still ends in DOCKED. A bad position waits like
   // mowing, at most gps_timeout. An emergency and abort_docking end it without DOCKING_FAILED. In IDLE on the contacts
   // CHARGING_LOST tells when the contact or the charge current goes away (ChargeConfig); the mower stays.

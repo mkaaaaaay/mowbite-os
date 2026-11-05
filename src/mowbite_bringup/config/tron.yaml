@@ -160,7 +160,7 @@ mowbite_logic:
     contact_timeout: 10.0
     # The debounced contact is not DOCKED yet (G19): contact and a charge current of at least charge_confirm_current A
     # have to hold charge_confirm_time s without a gap, at charge_expected_below percent or more the contact alone, as
-    # the charger stays off near full. Without either within charge_confirm_timeout s the try fails (charge_failed):
+    # the charger stays off near full. Without either within charge_confirm_timeout s the try fails (NO_CHARGE_CURRENT):
     # charging off over hw/charge, out to the approach point, the next try; after the last one the mower stays on the
     # contacts (DOCKING_FAILED). In IDLE on the station CHARGING_LOST tells when the contact, or the current it had
     # below charge_expected_below, is gone for charge_lost_time s. The Tron charges with 3.3 to 4.2 A and draws 0.6 A

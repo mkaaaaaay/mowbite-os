@@ -775,7 +775,7 @@ TEST(Docking, AContactWithoutAChargeCurrentFailsTheTry) {
   const auto events = core.TakeEvents();
   ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_RETRY"}));
   const auto& retry = events[0].details;
-  EXPECT_EQ(retry["reason"], "charge_failed");
+  EXPECT_EQ(retry["reason"], "NO_CHARGE_CURRENT");
   EXPECT_EQ(retry["attempts"], 1);
   EXPECT_EQ(retry["severity"], "warning");
   EXPECT_EQ(retry["resume"], "auto");
@@ -798,7 +798,7 @@ TEST(Docking, TheLastTryWithoutAChargeCurrentLeavesTheMowerOnTheContacts) {
   EXPECT_FALSE(core.TakeChargeOn());
   const auto events = core.TakeEvents();
   ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_FAILED", "STATE"}));
-  EXPECT_EQ(events[0].details["reason"], "charge_failed");
+  EXPECT_EQ(events[0].details["reason"], "NO_CHARGE_CURRENT");
   EXPECT_EQ(events[0].details["attempts"], 1);
   EXPECT_EQ(events[0].details["severity"], "error");
   EXPECT_EQ(events[0].details["resume"], "user");
@@ -838,7 +838,7 @@ TEST(Docking, ChargingThatCannotBeSwitchedOffKeepsTheMowerOnTheContacts) {
   const auto events = core.TakeEvents();
   const Event* failed = Find(events, "DOCKING_FAILED");
   ASSERT_TRUE(failed);
-  EXPECT_EQ(failed->details["reason"], "charge_failed");
+  EXPECT_EQ(failed->details["reason"], "NO_CHARGE_CURRENT");
   EXPECT_EQ(failed->details["attempts"], 1);
   EXPECT_NE(failed->details["message"].get<std::string>().find("could not be switched off (no answer from hw/charge)"),
             std::string::npos)

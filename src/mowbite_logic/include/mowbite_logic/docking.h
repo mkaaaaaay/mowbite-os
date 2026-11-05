@@ -185,7 +185,7 @@ class ChargeWatch {
   void OnBusy(bool contact_ended);
   // Docking confirmed the charge.
   void Confirm();
-  // Docking ended on the contacts without a confirmed charge; told: its lack was told already (charge_failed).
+  // Docking ended on the contacts without a confirmed charge; told: its lack was told already (NO_CHARGE_CURRENT).
   void Unconfirm(bool told);
   bool confirmed() const {
     return confirmed_;

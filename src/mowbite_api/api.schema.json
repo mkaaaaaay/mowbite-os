@@ -2326,13 +2326,17 @@
           "pattern": "^[a-z][a-z0-9_-]{0,15}$",
           "description": "Who sent the command (app, ha), for the log and the events of its step"
         },
+        "attempts": {
+          "type": "integer",
+          "description": "Tries of docking so far"
+        },
         "reason": {
           "type": "string",
           "description": "Why: a fixed name in capitals, rated in x-reasons",
           "enum": [
             "approach_failed",
             "dock_failed",
-            "charge_failed"
+            "NO_CHARGE_CURRENT"
           ]
         },
         "message": {
@@ -2356,13 +2360,9 @@
           ],
           "description": "auto when it goes on by itself, user when it waits for the user"
         },
-        "attempts": {
-          "type": "integer",
-          "description": "Tries so far"
-        },
         "current": {
           "type": "number",
-          "description": "The largest charge current seen",
+          "description": "The charge current seen; while docking the largest one of the check",
           "x-unit": "A"
         },
         "limit": {
@@ -2424,13 +2424,17 @@
           "pattern": "^[a-z][a-z0-9_-]{0,15}$",
           "description": "Who sent the command (app, ha), for the log and the events of its step"
         },
+        "attempts": {
+          "type": "integer",
+          "description": "Tries of docking so far"
+        },
         "reason": {
           "type": "string",
           "description": "Why: a fixed name in capitals, rated in x-reasons",
           "enum": [
             "approach_failed",
             "dock_failed",
-            "charge_failed"
+            "NO_CHARGE_CURRENT"
           ]
         },
         "message": {
@@ -2454,13 +2458,9 @@
           ],
           "description": "auto when it goes on by itself, user when it waits for the user"
         },
-        "attempts": {
-          "type": "integer",
-          "description": "Tries so far"
-        },
         "current": {
           "type": "number",
-          "description": "The largest charge current seen",
+          "description": "The charge current seen; while docking the largest one of the check",
           "x-unit": "A"
         },
         "limit": {
@@ -2558,7 +2558,7 @@
         },
         "current": {
           "type": "number",
-          "description": "The charge current seen last",
+          "description": "The charge current seen; while docking the largest one of the check",
           "x-unit": "A"
         },
         "limit": {
@@ -5066,26 +5066,21 @@
         "severity": "warning",
         "resume": "auto",
         "description": "The approach to the docking station failed (value of OpenMower)",
-        "fields": {
-          "attempts": ""
-        }
+        "fields": {}
       },
       "dock_failed": {
         "severity": "warning",
         "resume": "auto",
         "description": "The last part onto the contacts failed (value of OpenMower)",
-        "fields": {
-          "attempts": ""
-        }
+        "fields": {}
       },
-      "charge_failed": {
+      "NO_CHARGE_CURRENT": {
         "severity": "warning",
         "resume": "auto",
         "description": "Contact with the docking station, but no charge current",
         "fields": {
           "current": "A",
-          "limit": "A",
-          "attempts": ""
+          "limit": "A"
         }
       }
     },
@@ -5094,26 +5089,21 @@
         "severity": "error",
         "resume": "user",
         "description": "The approach to the docking station failed (value of OpenMower)",
-        "fields": {
-          "attempts": ""
-        }
+        "fields": {}
       },
       "dock_failed": {
         "severity": "error",
         "resume": "user",
         "description": "The last part onto the contacts failed (value of OpenMower)",
-        "fields": {
-          "attempts": ""
-        }
+        "fields": {}
       },
-      "charge_failed": {
+      "NO_CHARGE_CURRENT": {
         "severity": "error",
         "resume": "user",
         "description": "Contact with the docking station, but no charge current",
         "fields": {
           "current": "A",
-          "limit": "A",
-          "attempts": ""
+          "limit": "A"
         }
       }
     },

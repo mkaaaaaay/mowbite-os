@@ -6,7 +6,7 @@ and then nothing while it stands (G18). docking.start is refused with the reason
 DRIVE_REFUSED; abort_docking and an emergency stop it without DOCKING_FAILED; a station 4 cm beside its place in the
 map gets DOCKING_RETRY and DOCKING_FAILED (docking_retry_count of params.set), the mower waits at the approach point.
 DOCKED comes only once the charge current held on the contacts (G19): contacts that do not charge fail the try with
-charge_failed, the way out begins after Charge 0, and the last try leaves the mower on them; a current that comes later
+NO_CHARGE_CURRENT, the way out begins after Charge 0, and the last try leaves the mower on them; a current that comes later
 docks it after all, as does a nearly full battery with the contact alone. Taken off the station by hand it tells
 CHARGING_LOST.
 
@@ -474,13 +474,13 @@ class TestDock(Base):
         self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING", "sub_state": ""}})
         retry = p.event(since, "DOCKING_RETRY", 150)
         self.assertIsNotNone(retry, p.events[since:])
-        self.assertEqual((retry["reason"], retry["attempts"]), ("charge_failed", 1), retry)
+        self.assertEqual((retry["reason"], retry["attempts"]), ("NO_CHARGE_CURRENT", 1), retry)
         self.assertEqual((retry["severity"], retry["resume"]), ("warning", "auto"))
         self.assertEqual(retry["limit"], 0.5, retry)
         self.assertIn("no charge current on the contacts within 20 s", retry["message"])
         failed = p.event(since, "DOCKING_FAILED", 150)
         self.assertIsNotNone(failed, p.events[since:])
-        self.assertEqual((failed["reason"], failed["attempts"]), ("charge_failed", 2), failed)
+        self.assertEqual((failed["reason"], failed["attempts"]), ("NO_CHARGE_CURRENT", 2), failed)
         self.assertEqual((failed["severity"], failed["resume"]), ("error", "user"))
         self.assertIsNotNone(p.event(since, "STATE", 5, state="IDLE"))
         # The last try left it on the contacts.

@@ -1615,7 +1615,7 @@ void LogicCore::DockingChargeOff(bool ok, const std::string& message) {
   why.message += "; charging could not be switched off (" + message + "), the mower stays on the docking station";
   notices_.push_back(why.message);
   CountDockingFailure(why, true);
-  charge_watch_.Unconfirm(why.code == "charge_failed");
+  charge_watch_.Unconfirm(why.code == "NO_CHARGE_CURRENT");
 }
 
 void LogicCore::AllowChargeAgain() {
@@ -1675,7 +1675,7 @@ void LogicCore::OnChargeResult(ChargeCheck::Result result) {
                     config_.charge.timeout, check.max_current(), config_.charge.current,
                     config_.charge.expected_below, check.percentage());
       const Reason why =
-          Reason("charge_failed", text).With("current", check.max_current()).With("limit", config_.charge.current);
+          Reason("NO_CHARGE_CURRENT", text).With("current", check.max_current()).With("limit", config_.charge.current);
       if (!docking_.LastTry()) {
         DockingTryFailed(why);
         return;
