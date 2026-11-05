@@ -88,9 +88,31 @@ std::string Degrees(double radians) {
   return text;
 }
 
+HomeSample HomeSampleOf(const HardwareSnapshot& hw, double now_s) {
+  HomeSample sample;
+  sample.time = now_s;
+  sample.telemetry_ok = hw.telemetry_ok;
+  sample.battery_ok = hw.battery_ok;
+  sample.battery_voltage = hw.battery_voltage;
+  sample.battery_temperature = hw.battery_temperature;
+  sample.blade_ok = hw.blade.ok;
+  sample.blade_temperature = hw.blade.temperature;
+  sample.rain = hw.rain;
+  return sample;
+}
+
 }  // namespace
 
-LogicCore::LogicCore(const LogicConfig& config) : config_(config), recorder_(RecorderConfigOf(config)) {
+std::string BatteryVoltagesProblem(const LogicConfig& config) {
+  if (config.battery_critical_voltage > 0 && config.battery_critical_voltage < config.battery_empty_voltage &&
+      config.battery_empty_voltage < config.battery_full_voltage) {
+    return "";
+  }
+  return "battery voltages need 0 < battery_critical_voltage < battery_empty_voltage < battery_full_voltage";
+}
+
+LogicCore::LogicCore(const LogicConfig& config)
+    : config_(config), recorder_(RecorderConfigOf(config)), charge_watch_(config.charge), home_(HomeRules()) {
   // Without telemetry the mower counts as stopped until the driver reports.
   emergency_ = true;
 }
@@ -101,6 +123,7 @@ void LogicCore::OnHardwareStatus(const HardwareSnapshot& hw) {
   recorder_.SetDockContact(DockContact());
   UpdateEmergency();
   if (state_ == State::kDocking) OnDockingContact();
+  WatchCharge();
   // From the rpm the MCU reports, not from what was asked for.
   const bool running = hw.telemetry_ok && hw.blade.ok && std::abs(hw.blade.rpm) >= config_.blade_running_rpm;
   if (running != blades_running_) {
@@ -113,6 +136,7 @@ void LogicCore::OnHardwareTimeout() {
   hw_.telemetry_ok = false;
   hw_.battery_ok = false;
   recorder_.SetDockContact(false);
+  charge_watch_.OnBusy(false);
   UpdateEmergency();
 }
 
@@ -420,7 +444,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
       return {};
     }
     if (name == "mowing.abort") {
-      EndJob(false, true);
+      EndJob(false, true, Reason("MANUAL", "Going home: mowing stopped by the app"));
       return {};
     }
     // skip_area, skip_path: only the area or path the client saw.
@@ -633,7 +657,10 @@ void LogicCore::SetState(State state) {
     skip_path_ = skip_area_ = false;
     spinup_since_.reset();
     gps_good_since_.reset();
-    battery_low_since_.reset();
+  }
+  if (state_ == State::kMowing || state == State::kMowing) {
+    home_.Reset();
+    home_told_ = 0;
   }
   // Entering and leaving both start from nothing; what was not saved is gone, like with OpenMower.
   recorder_.Reset();
@@ -904,7 +931,7 @@ Reason LogicCore::StartCalibration(double now_s) {
   calibration_sign_s_ = now_s;
   calibration_phase_ = "start";
   calibration_index_ = 0;
-  calibration_battery_since_.reset();
+  home_.Reset();
   SetState(State::kCalibrating);
   AddEvent("CALIBRATION", {{"phase", "start"}, {"index", 0}});
   notices_.push_back("Calibration: lanes of " + Metres(status.lane_length) + " m, heading " +
@@ -967,21 +994,16 @@ bool LogicCore::TickCalibration(double now_s) {
                    true);
     return true;
   }
-  // Held like while mowing: a voltage dips under load.
-  if (hw_.battery_ok && hw_.battery_voltage < config_.battery_critical_voltage) {
-    if (!calibration_battery_since_) calibration_battery_since_ = now_s;
-    if (now_s - *calibration_battery_since_ >= config_.battery_critical_time) {
-      char text[160];
-      std::snprintf(text, sizeof(text), "Battery %.1f V is below %.1f V", hw_.battery_voltage,
-                    config_.battery_critical_voltage);
-      EndCalibration(Reason("BATTERY_LOW", text)
-                         .With("battery_voltage", hw_.battery_voltage)
-                         .With("limit", config_.battery_critical_voltage),
-                     true);
-      return true;
-    }
-  } else {
-    calibration_battery_since_.reset();
+  // The battery rules of mowing: a voltage dips under load.
+  home_.OnSample(HomeSampleOf(hw_, now_s));
+  const bool critical = home_.Holds(HomeReason::kBatteryCritical);
+  if (critical || home_.Holds(HomeReason::kBatteryLow)) {
+    const double voltage = critical ? hw_.battery_voltage : home_.WindowVoltage();
+    const double limit = critical ? config_.battery_critical_voltage : config_.battery_empty_voltage;
+    char text[160];
+    std::snprintf(text, sizeof(text), "Battery %.1f V is below %.1f V", voltage, limit);
+    EndCalibration(Reason("BATTERY_LOW", text).With("battery_voltage", voltage).With("limit", limit), true);
+    return true;
   }
   return false;
 }
@@ -1010,7 +1032,7 @@ void LogicCore::EndCalibration(const std::optional<Reason>& failure, bool cancel
   AddEvent("CALIBRATION", {{"phase", "end"}, {"index", calibration_index_}});
   calibration_cancel_ = calibration_cancel_ || cancel;
   calibration_goal_due_.reset();
-  calibration_battery_since_.reset();
+  home_.Reset();
   // One zero follows from leaving the state; the mower stays where it stopped.
   SetState(State::kIdle);
 }
@@ -1231,6 +1253,10 @@ bool LogicCore::TakeChargeOff() {
 }
 
 void LogicCore::OnChargeOff(bool ok, const std::string& message) {
+  if (state_ == State::kDocking && docking_out_after_charge_off_) {
+    DockingChargeOff(ok, message);
+    return;
+  }
   if (state_ != State::kUndocking || undock_step_ != UndockStep::kChargeOff) return;
   if (!ok) {
     const std::string text = "Undocking failed: charging could not be switched off (" + message + ")";
@@ -1390,19 +1416,22 @@ Reason LogicCore::StartDocking() {
     RefuseDrive(why);
     return why;
   }
+  json details = json::object();
+  PutReason(&details, "DOCKING", Reason("MANUAL", "Going home: sent by the app"));
+  AddEvent("DOCKING", std::move(details));
   BeginDocking();
   return {};
 }
 
-void LogicCore::GoHome() {
+void LogicCore::GoHome(const Reason& home_why) {
   // Never after an emergency or without the safety measurement: the mower does not drive off by itself then.
   if (!CanDock() || !dock_ || !Unsafe().empty()) {
     SetState(State::kIdle);
     return;
   }
-  // On the contacts already, like OpenMower.
+  // On the contacts already: DOCKED once the watch confirms the charge there, as for any stay on the station.
   if (DockContact()) {
-    AddEvent("DOCKED", json::object());
+    charge_watch_.Unconfirm(false);
     SetState(State::kIdle);
     return;
   }
@@ -1417,7 +1446,109 @@ void LogicCore::GoHome() {
     SetState(State::kIdle);
     return;
   }
+  if (!home_why.empty()) {
+    json details = json::object();
+    PutReason(&details, "DOCKING", home_why);
+    AddEvent("DOCKING", std::move(details));
+    notices_.push_back(home_why.message);
+  }
   BeginDocking();
+}
+
+bool LogicCore::HomeReachable() const {
+  return CanDock() && dock_ && Unsafe().empty() && !DockContact() && drivable_problem_.empty() &&
+         ApproachProblem().empty();
+}
+
+HomeConfig LogicCore::HomeRules() const {
+  HomeConfig rules;
+  rules.critical_voltage = config_.battery_critical_voltage;
+  rules.critical_time = config_.battery_critical_time;
+  rules.empty_voltage = config_.battery_empty_voltage;
+  rules.low_window = config_.battery_low_window;
+  rules.battery_hot_temperature = config_.battery_hot_temperature;
+  rules.motor_hot_temperature = config_.motor_hot_temperature;
+  rules.rain_mode = config_.rain_mode;
+  rules.rain_check_seconds = config_.rain_check_seconds;
+  return rules;
+}
+
+void LogicCore::SetHomeSettings(int rain_mode, double rain_check_seconds, double motor_hot_temperature,
+                                double motor_cold_temperature) {
+  config_.rain_mode = rain_mode;
+  config_.rain_check_seconds = rain_check_seconds;
+  config_.motor_hot_temperature = motor_hot_temperature;
+  config_.motor_cold_temperature = motor_cold_temperature;
+  home_.SetConfig(HomeRules());
+}
+
+Reason LogicCore::HomeWhy(HomeReason reason) const {
+  char text[160];
+  switch (reason) {
+    case HomeReason::kBatteryCritical:
+      std::snprintf(text, sizeof(text), "the battery at %.1f V stayed below %.1f V for %.0f s",
+                    hw_.battery_voltage, config_.battery_critical_voltage, config_.battery_critical_time);
+      return Reason("BATTERY_CRITICAL", text)
+          .With("battery_voltage", hw_.battery_voltage)
+          .With("limit", config_.battery_critical_voltage);
+    case HomeReason::kBatteryHot:
+      std::snprintf(text, sizeof(text), "the battery at %d °C, %.0f °C or more", hw_.battery_temperature,
+                    config_.battery_hot_temperature);
+      return Reason("BATTERY_HOT", text)
+          .With("temperature", static_cast<int>(hw_.battery_temperature))
+          .With("limit", config_.battery_hot_temperature);
+    case HomeReason::kBatteryLow:
+      std::snprintf(text, sizeof(text), "the battery stayed below %.1f V for %.0f s (at most %.1f V)",
+                    config_.battery_empty_voltage, config_.battery_low_window, home_.WindowVoltage());
+      return Reason("BATTERY_LOW", text)
+          .With("battery_voltage", home_.WindowVoltage())
+          .With("limit", config_.battery_empty_voltage);
+    case HomeReason::kMotorHot:
+      std::snprintf(text, sizeof(text), "the blade motor at %d °C, %.0f °C or more",
+                    hw_.blade.temperature, config_.motor_hot_temperature);
+      return Reason("MOTOR_HOT", text)
+          .With("temperature", static_cast<int>(hw_.blade.temperature))
+          .With("limit", config_.motor_hot_temperature);
+    case HomeReason::kRain:
+    default:
+      std::snprintf(text, sizeof(text), "rain for %.0f s", config_.rain_check_seconds);
+      return Reason("RAIN", text);
+  }
+}
+
+void LogicCore::BatteryEndsMowing(HomeReason reason) {
+  const bool critical = reason == HomeReason::kBatteryCritical;
+  const double voltage = critical ? hw_.battery_voltage : home_.WindowVoltage();
+  const double limit = critical ? config_.battery_critical_voltage : config_.battery_empty_voltage;
+  AddEvent("BATTERY_LOW", {{"battery_voltage", voltage}, {"limit", limit}});
+  notices_.push_back("Mowing ends: the battery is low and the mower cannot go home");
+  EndJob(false, false);
+}
+
+void LogicCore::WatchHome(double now_s) {
+  home_.OnSample(HomeSampleOf(hw_, now_s));
+  const std::vector<HomeReason> due = home_.Due();
+  if (due.empty()) return;
+  const auto battery = [](HomeReason r) { return r == HomeReason::kBatteryCritical || r == HomeReason::kBatteryLow; };
+  // A pause that waits for the user never goes home: the user may stand at the mower (G11).
+  const bool waits_for_user = (pause_ & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
+  if (!waits_for_user && HomeReachable()) {
+    Reason why = HomeWhy(due.front());
+    why.message = "Going home: " + why.message;
+    EndJob(false, true, why);
+    return;
+  }
+  for (HomeReason reason : due) {
+    if (battery(reason)) {
+      BatteryEndsMowing(reason);
+      return;
+    }
+  }
+  // Without a way home heat and rain change nothing yet (O11, question 47 iii); told once per run.
+  const int bit = 1 << static_cast<int>(due.front());
+  if (waits_for_user || (home_told_ & bit) != 0) return;
+  home_told_ |= bit;
+  notices_.push_back("Mowing goes on, it cannot go home: " + HomeWhy(due.front()).message);
 }
 
 void LogicCore::BeginDocking() {
@@ -1430,6 +1561,11 @@ void LogicCore::BeginDocking() {
   docking_gps_wait_ = false;
   docking_gps_since_.reset();
   docking_gps_good_since_.reset();
+  docking_charge_.reset();
+  docking_checked_ = false;
+  docking_out_after_charge_off_.reset();
+  docking_charge_touched_ = false;
+  docking_charge_stopped_ = false;
   SetState(State::kDocking);
   const Point2 p = docking_.ApproachPoint();
   notices_.push_back("Docking: to (" + Metres(p.x) + ", " + Metres(p.y) +
@@ -1447,11 +1583,19 @@ void LogicCore::NextDockingTry() {
     CountDockingFailure(*docking_failure_);
     return;
   }
-  docking_leg_due_ = docking_.FirstLeg(pose_->x, pose_->y, pose_->heading);
+  docking_checked_ = false;
+  SetDockingLeg(docking_.FirstLeg(pose_->x, pose_->y, pose_->heading));
 }
 
 std::optional<DockingLeg> LogicCore::TakeDockingLeg() {
   if (state_ != State::kDocking || !docking_leg_due_) return std::nullopt;
+  // A contact that came after the way out was set: charging off first all the same.
+  if (docking_leg_due_->kind == DockingLeg::Kind::kOut) {
+    DockingLeg out = std::move(*docking_leg_due_);
+    docking_leg_due_.reset();
+    SetDockingLeg(std::move(out));
+    if (!docking_leg_due_) return std::nullopt;
+  }
   std::optional<DockingLeg> leg;
   leg.swap(docking_leg_due_);
   docking_leg_ = leg->kind;
@@ -1461,12 +1605,32 @@ std::optional<DockingLeg> LogicCore::TakeDockingLeg() {
 }
 
 void LogicCore::OnDockingContact() {
+  if (docking_charge_) {
+    OnChargeResult(docking_charge_->OnSample(ChargeSampleNow()));
+    return;
+  }
+  // A leg onto the station failed, and before the way out the contact is there after all: the charge decides, once
+  // per try. Charging that went off for the way out is allowed again.
+  const bool failed_onto =
+      docking_last_kind_ == DockingLeg::Kind::kLine || docking_last_kind_ == DockingLeg::Kind::kContact;
+  if (DockContact() && docking_failure_ && !docking_leg_ && failed_onto && !docking_checked_) {
+    docking_leg_due_.reset();
+    docking_out_after_charge_off_.reset();
+    docking_failure_.reset();
+    if (charge_off_due_) {
+      charge_off_due_ = false;
+      docking_charge_touched_ = false;
+    }
+    AllowChargeAgain();
+    BeginChargeCheck();
+    return;
+  }
   // On the way onto the station, or waiting there for a good position; driving out starts on the contacts.
   const bool onto =
       docking_leg_ && (*docking_leg_ == DockingLeg::Kind::kLine || *docking_leg_ == DockingLeg::Kind::kContact);
   if (!onto && !docking_gps_wait_) return;
   if (DockContact()) {
-    Docked();
+    BeginChargeCheck();
     return;
   }
   if (!onto) return;
@@ -1492,19 +1656,21 @@ void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
     EndDocking(reason);
     return;
   }
+  if (kind == DockingLeg::Kind::kOut) AllowChargeAgain();
   if (end == LegEnd::kGps) {
     WaitForDockingGps();
     return;
   }
   if (end != LegEnd::kDone) {
     if (kind == DockingLeg::Kind::kApproach) {
-      DockingTryFailed("approach_failed", "The way to the docking station failed: " + reason.message);
+      DockingTryFailed(Reason("approach_failed", "The way to the docking station failed: " + reason.message));
     } else if (kind == DockingLeg::Kind::kOut && docking_failure_) {
-      CountDockingFailure(
-          Reason(docking_failure_->code, docking_failure_->message + "; then driving out failed: " + reason.message));
+      Reason why = *docking_failure_;
+      why.message += "; then driving out failed: " + reason.message;
+      CountDockingFailure(why);
     } else {
-      DockingTryFailed("dock_failed", std::string("Docking failed on the ") + DockingLegName(kind) + ": " +
-                                          reason.message);
+      DockingTryFailed(Reason("dock_failed", std::string("Docking failed on the ") + DockingLegName(kind) + ": " +
+                                                 reason.message));
     }
     return;
   }
@@ -1525,26 +1691,126 @@ void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
         notices_.push_back("Docking: through the gate, onto the contacts");
         docking_leg_due_ = docking_.Contact();
       } else {
-        DockingTryFailed("dock_failed", "Docking failed: " + gate);
+        DockingTryFailed(Reason("dock_failed", "Docking failed: " + gate));
       }
       break;
     }
     case DockingLeg::Kind::kContact:
-      DockingTryFailed("dock_failed", "Docking failed: no contact with the docking station up to " +
-                                          Metres(config_.dock.overshoot) + " m past it");
+      DockingTryFailed(Reason("dock_failed", "Docking failed: no contact with the docking station up to " +
+                                                 Metres(config_.dock.overshoot) + " m past it"));
       break;
   }
 }
 
-void LogicCore::DockingTryFailed(const std::string& code, const std::string& message) {
-  notices_.push_back(message);
+void LogicCore::DockingTryFailed(const Reason& why) {
+  notices_.push_back(why.message);
   // Out to the approach point first; the try counts once the mower got there.
   if (pose_ && docking_last_kind_ != DockingLeg::Kind::kOut && docking_.OnLine(pose_->x, pose_->y)) {
-    docking_failure_ = Reason(code, message);
-    docking_leg_due_ = docking_.Out(pose_->x, pose_->y, pose_->heading);
+    docking_failure_ = why;
+    SetDockingLeg(docking_.Out(pose_->x, pose_->y, pose_->heading));
     return;
   }
-  CountDockingFailure(Reason(code, message));
+  CountDockingFailure(why);
+}
+
+void LogicCore::SetDockingLeg(DockingLeg leg) {
+  // Off the contacts only with charging off where the driver can stop it, like undocking (G19).
+  const bool on_contacts = hw_.telemetry_ok && (hw_.dock_contact || hw_.dock_contact_raw);
+  if (leg.kind == DockingLeg::Kind::kOut && charge_stop_ && on_contacts && !docking_charge_stopped_) {
+    docking_out_after_charge_off_ = std::move(leg);
+    docking_charge_touched_ = true;
+    charge_off_due_ = true;
+    notices_.push_back("Docking: charging off, then out of the docking station");
+    return;
+  }
+  docking_leg_due_ = std::move(leg);
+}
+
+void LogicCore::DockingChargeOff(bool ok, const std::string& message) {
+  DockingLeg out = std::move(*docking_out_after_charge_off_);
+  docking_out_after_charge_off_.reset();
+  if (ok) {
+    docking_charge_stopped_ = true;
+    docking_leg_due_ = std::move(out);
+    return;
+  }
+  // Not off the contacts while they may still charge: docking ends where the mower stands.
+  Reason why = docking_failure_.value_or(Reason("dock_failed", "Docking failed"));
+  why.message += "; charging could not be switched off (" + message + "), the mower stays on the docking station";
+  notices_.push_back(why.message);
+  CountDockingFailure(why, true);
+  charge_watch_.Unconfirm(why.code == "NO_CHARGE_CURRENT");
+}
+
+void LogicCore::AllowChargeAgain() {
+  if (!docking_charge_touched_) return;
+  docking_charge_touched_ = false;
+  docking_charge_stopped_ = false;
+  charge_on_due_ = true;
+}
+
+ChargeSample LogicCore::ChargeSampleNow() const {
+  ChargeSample sample;
+  sample.time = hw_.time_s;
+  sample.contact = DockContact();
+  sample.battery_ok = hw_.battery_ok;
+  sample.charge_current = hw_.battery_current < 0 ? -hw_.battery_current : 0.0;
+  sample.percentage = hw_.battery_percentage;
+  return sample;
+}
+
+void LogicCore::BeginChargeCheck() {
+  // The mower stands since the first raw contact: the leg ends, nothing drives while the charge is checked.
+  CancelDockingLeg(Reason("STOPPED", "Contact with the docking station"));
+  docking_gps_wait_ = false;
+  docking_checked_ = true;
+  docking_charge_.emplace(config_.charge, hw_.time_s);
+  notices_.push_back("Docking: contact with the docking station, checking the charge");
+  OnChargeResult(docking_charge_->OnSample(ChargeSampleNow()));
+}
+
+void LogicCore::OnChargeResult(ChargeCheck::Result result) {
+  if (result == ChargeCheck::Result::kWaiting) return;
+  const ChargeCheck check = *docking_charge_;
+  docking_charge_.reset();
+  char text[240];
+  switch (result) {
+    case ChargeCheck::Result::kCharging:
+      std::snprintf(text, sizeof(text), "Docking: charging at %.2f A", check.max_current());
+      notices_.push_back(text);
+      Docked();
+      return;
+    case ChargeCheck::Result::kFull:
+      std::snprintf(text, sizeof(text), "Docking: the contact held, the battery at %d %% needs no charge current",
+                    check.percentage());
+      notices_.push_back(text);
+      Docked();
+      return;
+    case ChargeCheck::Result::kContactLost:
+      DockingTryFailed(
+          Reason("dock_failed", "Docking failed: the contact with the docking station went away while the charge "
+                                "was checked"));
+      return;
+    case ChargeCheck::Result::kNoCharge:
+    default: {
+      std::snprintf(text, sizeof(text),
+                    "Docking failed: no charge current on the contacts within %.0f s (at most %.2f A, %.2f A "
+                    "needed below %.0f %%, the battery at %d %%)",
+                    config_.charge.timeout, check.max_current(), config_.charge.current,
+                    config_.charge.expected_below, check.percentage());
+      const Reason why =
+          Reason("NO_CHARGE_CURRENT", text).With("current", check.max_current()).With("limit", config_.charge.current);
+      if (!docking_.LastTry()) {
+        DockingTryFailed(why);
+        return;
+      }
+      // The last try leaves the mower on the contacts: a person has to look anyway, and charging may still begin.
+      notices_.push_back(why.message);
+      CountDockingFailure(why, true);
+      charge_watch_.Unconfirm(true);
+      return;
+    }
+  }
 }
 
 void LogicCore::CountDockingFailure(Reason why, bool last) {
@@ -1573,6 +1839,10 @@ void LogicCore::WaitForDockingGps() {
 }
 
 void LogicCore::TickDocking(double now_s) {
+  if (docking_charge_) {
+    OnChargeResult(docking_charge_->OnTick(now_s));
+    return;
+  }
   if (!docking_gps_wait_) return;
   if (!docking_gps_since_) docking_gps_since_ = now_s;
   if (PoseGood()) {
@@ -1585,10 +1855,19 @@ void LogicCore::TickDocking(double now_s) {
   }
   docking_gps_good_since_.reset();
   if (now_s - *docking_gps_since_ < config_.gps_timeout) return;
-  char text[96];
+  // Why it waited in vain, with the names of a refused start.
+  char text[128];
   std::snprintf(text, sizeof(text), "Docking failed: no good position for %.0f s", config_.gps_timeout);
-  const bool approach = docking_last_kind_ == DockingLeg::Kind::kApproach;
-  CountDockingFailure(Reason(approach ? "approach_failed" : "dock_failed", text), true);
+  Reason why;
+  if (!pose_) {
+    why = Reason("NO_POSITION", std::string(text) + ": no position from the localization");
+  } else if (!pose_->orientation_valid) {
+    why = Reason("NO_HEADING", std::string(text) + ": the heading is not known");
+  } else {
+    why = AccuracyReason(pose_->position_accuracy, config_.max_position_accuracy);
+    why.message = std::string(text) + ": " + why.message;
+  }
+  CountDockingFailure(why, true);
 }
 
 void LogicCore::CancelDockingLeg(const Reason& why) {
@@ -1601,6 +1880,7 @@ void LogicCore::CancelDockingLeg(const Reason& why) {
 }
 
 void LogicCore::Docked() {
+  charge_watch_.Confirm();
   AddEvent("DOCKED", json::object());
   notices_.push_back("Docked");
   EndDocking(Reason("STOPPED", "Docked"));
@@ -1610,7 +1890,52 @@ void LogicCore::EndDocking(const Reason& why) {
   CancelDockingLeg(why);
   docking_failure_.reset();
   docking_gps_wait_ = false;
+  docking_charge_.reset();
+  docking_out_after_charge_off_.reset();
+  AllowChargeAgain();
   SetState(State::kIdle);
+}
+
+void LogicCore::WatchCharge() {
+  if (state_ != State::kIdle || !hw_.telemetry_ok) {
+    charge_watch_.OnBusy(hw_.telemetry_ok && !hw_.dock_contact);
+    return;
+  }
+  const ChargeSample now = ChargeSampleNow();
+  const ChargeConfig& c = config_.charge;
+  char text[200];
+  switch (charge_watch_.OnSample(now, emergency_)) {
+    case ChargeWatch::Change::kConfirmed:
+      AddEvent("DOCKED", json::object());
+      notices_.push_back("Docked: charging confirmed on the docking station");
+      return;
+    case ChargeWatch::Change::kContactLost:
+      ChargingLost(Reason("NO_DOCK_CONTACT", "The mower lost the contact with the docking station"));
+      return;
+    case ChargeWatch::Change::kCurrentLost:
+      std::snprintf(text, sizeof(text),
+                    "The charge current on the docking station stopped for %.0f s (below %.2f A, the battery at "
+                    "%d %%)",
+                    c.lost_time, c.current, now.percentage);
+      ChargingLost(Reason("NO_CHARGE_CURRENT", text).With("current", now.charge_current).With("limit", c.current));
+      return;
+    case ChargeWatch::Change::kNoCurrent:
+      std::snprintf(text, sizeof(text),
+                    "On the docking station, but no charge current for %.0f s (at least %.2f A, the battery at %d %%)",
+                    c.timeout, c.current, now.percentage);
+      ChargingLost(Reason("NO_CHARGE_CURRENT", text).With("current", now.charge_current).With("limit", c.current));
+      return;
+    case ChargeWatch::Change::kNone:
+    default: return;
+  }
+}
+
+void LogicCore::ChargingLost(const Reason& why) {
+  json details = json::object();
+  PutReason(&details, "CHARGING_LOST", why);
+  if (hw_.battery_ok) details["battery_percentage"] = hw_.battery_percentage;
+  AddEvent("CHARGING_LOST", std::move(details));
+  notices_.push_back("Charging lost: " + why.message);
 }
 
 Reason LogicCore::StartProblem() const {
@@ -1623,13 +1948,30 @@ Reason LogicCore::MowProblem() const {
   Reason why = Unsafe();
   if (!why.empty()) return why;
   if (hw_.rain) return Reason("RAIN", "Rain detected");
-  if (hw_.battery_ok && hw_.battery_voltage < config_.battery_critical_voltage) {
-    char text[160];
+  char text[160];
+  // Below empty mowing would go home at once.
+  if (hw_.battery_ok && hw_.battery_voltage < config_.battery_empty_voltage) {
     std::snprintf(text, sizeof(text), "Battery %.1f V is below %.1f V", hw_.battery_voltage,
-                  config_.battery_critical_voltage);
+                  config_.battery_empty_voltage);
     return Reason("BATTERY_LOW", text)
         .With("battery_voltage", hw_.battery_voltage)
-        .With("limit", config_.battery_critical_voltage);
+        .With("limit", config_.battery_empty_voltage);
+  }
+  if (hw_.battery_ok && config_.battery_hot_temperature > 0 &&
+      hw_.battery_temperature >= config_.battery_hot_temperature) {
+    std::snprintf(text, sizeof(text), "The battery at %d °C is too hot to start (%.0f °C or more)",
+                  hw_.battery_temperature, config_.battery_hot_temperature);
+    return Reason("BATTERY_HOT", text)
+        .With("temperature", static_cast<int>(hw_.battery_temperature))
+        .With("limit", config_.battery_hot_temperature);
+  }
+  // Like OpenMower: hot at motor_hot_temperature, on again below motor_cold_temperature.
+  if (hw_.blade.ok && hw_.blade.temperature >= config_.motor_cold_temperature) {
+    std::snprintf(text, sizeof(text), "The blade motor at %d °C has to cool below %.0f °C first",
+                  hw_.blade.temperature, config_.motor_cold_temperature);
+    return Reason("MOTOR_HOT", text)
+        .With("temperature", static_cast<int>(hw_.blade.temperature))
+        .With("limit", config_.motor_cold_temperature);
   }
   why = PositionProblem();
   if (!why.empty()) return why;
@@ -1788,14 +2130,14 @@ void LogicCore::Unpause(int why) {
   AddEvent("STATE", {{"state", "MOWING"}});
 }
 
-void LogicCore::EndJob(bool finished, bool home) {
+void LogicCore::EndJob(bool finished, bool home, const Reason& why) {
   if (state_ != State::kMowing) return;
   if (finished) {
     AddEvent("JOB_COMPLETE", json::object());
     job_.Complete();
   }
   if (home) {
-    GoHome();
+    GoHome(why);
   } else {
     SetState(State::kIdle);
   }
@@ -1926,17 +2268,8 @@ void LogicCore::OnTick(double now_s) {
       Unpause(kPauseGps);
     }
   }
-  if (hw_.battery_ok && hw_.battery_voltage < config_.battery_critical_voltage) {
-    if (!battery_low_since_) battery_low_since_ = now_s;
-    if (now_s - *battery_low_since_ >= config_.battery_critical_time) {
-      AddEvent("BATTERY_LOW", {{"battery_voltage", hw_.battery_voltage}, {"limit", config_.battery_critical_voltage}});
-      notices_.push_back("Mowing ends: the battery is low");
-      EndJob(false, false);
-      return;
-    }
-  } else {
-    battery_low_since_.reset();
-  }
+  WatchHome(now_s);
+  if (state_ != State::kMowing) return;
   if (leg_ == Leg::kFollow && now_s - last_checkpoint_s_ >= config_.checkpoint_period) {
     last_checkpoint_s_ = now_s;
     CheckpointNow();

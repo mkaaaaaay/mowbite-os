@@ -8,8 +8,8 @@ while the lift or stop flag is set; it stays 0 until the next SpeedData. The GNS
 antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an upside-down mounted sensor.
 Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, gnss_age, gnss_delay,
 yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, gnss_rtcm, dock_shift_x, dock_shift_y,
-dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps) is
-read every 10 ms, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON; a thread
+dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps, charge_current, battery_percentage, battery_voltage,
+battery_temperature, blade_temperature) is read every 10 ms, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON; a thread
 of its own does all of this file work, so a slow disk never holds the ptys (Files). The
 GNSS pty also plays the RTK board in front of the receiver (Board). gnss_rtcm true makes the fix depend on the RTCM the
 board passes: RTK fixed with the real age while corrections are at most 120 s old, otherwise single without age.
@@ -19,9 +19,11 @@ per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below whic
 between the reported and the real wheel speed, track the real track (m). imu_off stops the IMU frames,
 cutter_ignores_off keeps the blade turning on off frames. tilt_roll and tilt_pitch (degrees) stand the base on a slope
 for the IMU; the wheels and the GNSS do not notice it. gyro_bias_dps overrides --gyro-bias-dps, e.g. a bias that changes
-with the temperature.
+with the temperature. battery_voltage (V, 24.5), battery_temperature and blade_temperature (degC, 30) go into the battery
+and the blade motor report.
 --dock places a charging station (Dock): the mower stops at it, gets contact there (dock_ok in the battery report) and a
-charge current only after the host sent Charge 1. Its wheels leave the hollows of the station only at
+charge current only after the host sent Charge 1: charge_current A (3.0; 0 for a contact that does not charge), none
+once battery_percentage (80) reaches 100. Its wheels leave the hollows of the station only at
 --dock-hollow-speed or faster. The flag dock forces the contact anywhere; dock_shift_x and dock_shift_y move the station
 (m), the mower with it while it has contact; dock_hollow_speed overrides --dock-hollow-speed. place [x, y, yaw_deg]
 puts the mower there by hand, once per new value.
@@ -51,6 +53,11 @@ ESCAPED_BYTE = {code: raw for raw, code in ESCAPE_CODE.items()}
 
 TO_MCU = 0x00
 FROM_MCU = 0x08
+
+
+def celsius(value):
+    """A temperature flag as the signed byte of the MCU."""
+    return max(-128, min(127, int(round(float(value)))))
 
 
 def encode(subpackets):
@@ -722,7 +729,8 @@ def main():
     parser.add_argument("--imu-link", default="/tmp/mowbite_sim_imu", help="symlink to the IMU pty")
     parser.add_argument("--flags", help="JSON file with lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, "
                         "gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, "
-                        "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps")
+                        "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps, "
+                        "charge_current, battery_percentage, battery_voltage, battery_temperature, blade_temperature")
     parser.add_argument("--log", help="JSON lines log of received sub packets")
     parser.add_argument("--log-max-mb", type=float, default=20.0)
     parser.add_argument("--state", help="JSON file with the true pose, written 5 times a second")
@@ -833,13 +841,19 @@ def main():
                 send(mcu.fd, encode([(FROM_MCU, 10, sensor), (FROM_MCU, 4, struct.pack("<ff", *measured))]))
             if now >= next_status:
                 next_status = now + 1.0
-                # 24.5 V, -3.0 A charging on the dock after Charge 1 or 1.2 A discharging, 80 %, 30 degC
-                battery = struct.pack("<HhBbbI", 245, -30 if charging else 12, 80, int(dock_ok), 30, 0)
+                # 0.1 V steps, charging on the dock after Charge 1 (0.1 A steps, negative) or 1.2 A discharging
+                percentage = max(0, min(100, int(flags.get("battery_percentage", 80))))
+                amps = float(flags.get("charge_current", 3.0)) if charging and percentage < 100 else 0.0
+                current = -int(round(amps * 10)) if amps > 0 else 12
+                decivolts = max(0, min(0xFFFF, int(round(float(flags.get("battery_voltage", 24.5)) * 10))))
+                battery = struct.pack("<HhBbbI", decivolts, current, percentage, int(dock_ok),
+                                      celsius(flags.get("battery_temperature", 30)), 0)
                 motor = struct.pack("<hhhbb", 0, 0, 2450, 30, 0)
                 if blocked or host.last_rx is None or now - host.last_rx > args.host_timeout:
                     cutter_percent = 0
                 # Assumed 2800 rpm at full speed, 0.8 A while turning (10 mA steps).
-                cutter = struct.pack("<hhhbb", 28 * cutter_percent, 80 if cutter_percent else 0, 2450, 30, 0)
+                cutter = struct.pack("<hhhbb", 28 * cutter_percent, 80 if cutter_percent else 0, 2450,
+                                     celsius(flags.get("blade_temperature", 30)), 0)
                 version = bytes([0, 6, 36, 0, 6, 34, 0, 0, 0])
                 send(mcu.fd, encode([(FROM_MCU, 5, battery), (FROM_MCU, 12, version),
                                   (FROM_MCU, 13, cutter + motor * 3)]))

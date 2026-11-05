@@ -19,8 +19,8 @@ the NX60i in the air (M3 of M-A). Motor controllers report the status
 200 (ok) only. IMU at 100 Hz through the configured axis remap of a sensor mounted upside down, power every second,
 GPS at 5 Hz, inputs every 200 ms. RTCM to the GPS service is counted per datagram, with a CRC-32 over the stream.
 A JSON file with flags (stop, rear_stop, lift, lift_left, lift_right, bumper, bumper_left, bumper_right, dock,
-battery_voltage, major_version, firmware, restart, cutter_ignores_off, drive_status, gps_fix (fix, float, none or off),
-gps_accuracy) is read every 10 ms; restart
+battery_voltage, charge_current, blade_temperature (degC of the blade motor, 25), major_version, firmware, restart,
+cutter_ignores_off, drive_status, gps_fix (fix, float, none or off), gps_accuracy) is read every 10 ms; restart
 restarts the board whenever its value changes, as does a GPS configuration other than the first one. Flags for what
 the mower may do wrong: rpm_zero (the blade reports 0 rpm), wheel_speed (both wheels turn forward at this many m/s
 whatever the duty), zero_duty_ignored (a duty of 0, the drive timeout and an emergency leave the wheels at the last duty
@@ -830,7 +830,8 @@ class Board:
         running = self.mower_rpm != 0
         rpm = 0.0 if flags.get("rpm_zero") else self.mower_rpm
         self.output(MOWER, [(0, bytes([ESC_OK])), (1, b"\x00"), (2, bytes([running])),
-                            (3, struct.pack("<f", 35.0)), (4, struct.pack("<f", 40.0)),
+                            (3, struct.pack("<f", 35.0)),
+                            (4, struct.pack("<f", float(flags.get("blade_temperature", 25.0)))),
                             (5, struct.pack("<f", abs(self.mower_rpm) / 1000)), (6, struct.pack("<f", rpm))])
 
     def update_imu(self, flags, now):
@@ -865,9 +866,17 @@ class Board:
         full = struct.unpack("<f", service.values[2])[0]
         voltage = float(flags.get("battery_voltage", 26.5))
         docked = bool(flags.get("dock"))
-        charge_voltage = 29.8 if docked else 0.0
-        charge_current = 0.8 if docked and voltage < full else 0.0
-        status = ("Fast Charge (CC)" if charge_current else "Done") if docked else "Not Charging"
+        # As the NX60i charged under OpenMower: 0.87-0.89 A constant current until full, then done and exactly 0; the
+        # station gives 31.8-32.1 V without load, 28.8-29.4 V while charging. charge_current overrides the current, 0
+        # for a contact that does not charge.
+        charge_current = float(flags.get("charge_current", 0.88)) if docked and voltage < full else 0.0
+        charge_voltage = (29.3 if charge_current > 0 else 32.0) if docked else 0.0
+        if not docked:
+            status = "Not Charging"
+        elif charge_current > 0:
+            status = "Fast Charge (CC)"
+        else:
+            status = "Done" if voltage >= full else "Not Charging"
         percent = max(0.0, min(1.0, (voltage - empty) / (full - empty)))
         self.output(POWER, [(3, status.encode()), (2, struct.pack("<f", voltage)),
                             (0, struct.pack("<f", charge_voltage)), (1, struct.pack("<f", charge_current)),

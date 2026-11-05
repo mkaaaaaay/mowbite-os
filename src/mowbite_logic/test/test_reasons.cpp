@@ -47,10 +47,13 @@ TEST(Reasons, TheDockingStationWaitsForTheUser) {
   // OpenMower's reason values.
   ExpectRating("UNDOCKING_FAILED", "path_failed", "error", "user");
   ExpectRating("UNDOCKING_FAILED", "no_gps", "error", "user");
-  for (const char* code : {"approach_failed", "dock_failed"}) {
+  for (const char* code : {"approach_failed", "dock_failed", "NO_CHARGE_CURRENT"}) {
     ExpectRating("DOCKING_RETRY", code, "warning", "auto");
     ExpectRating("DOCKING_FAILED", code, "error", "user");
   }
+  // Charging that stopped on the station.
+  ExpectRating("CHARGING_LOST", "NO_DOCK_CONTACT", "warning", "user");
+  ExpectRating("CHARGING_LOST", "NO_CHARGE_CURRENT", "warning", "user");
   // docking.start on the contacts.
   ExpectRating("DRIVE_REFUSED", "ALREADY_THERE", "info", "user");
 }

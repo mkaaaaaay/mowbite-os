@@ -24,7 +24,7 @@ find_package(mowbite_api REQUIRED)
 
 # States, actions and sensors without ROS, testable on any machine.
 add_library(mowbite_logic_core STATIC src/reasons.cpp src/logic_core.cpp src/area_recorder.cpp src/mowing_plan.cpp src/mowing_job.cpp
-  src/logic_params.cpp src/undocking.cpp src/docking.cpp src/geometry.cpp)
+  src/logic_params.cpp src/undocking.cpp src/docking.cpp src/geometry.cpp src/home_watch.cpp src/sun.cpp)
 target_include_directories(mowbite_logic_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -53,7 +53,7 @@ if(BUILD_TESTING)
     test/test_mowing_job.cpp test/test_logic_mowing.cpp test/test_reasons.cpp test/test_logic_params.cpp
     test/test_logic_dock.cpp test/test_logic_undock.cpp test/test_logic_docking.cpp test/test_geometry.cpp
     test/test_logic_hold.cpp test/test_logic_calibration.cpp test/test_event_catalog.cpp
-    test/test_logic_commands.cpp)
+    test/test_logic_commands.cpp test/test_home_watch.cpp test/test_sun.cpp test/test_logic_home.cpp)
   target_link_libraries(mowbite_logic_test mowbite_logic_core)
 endif()
 

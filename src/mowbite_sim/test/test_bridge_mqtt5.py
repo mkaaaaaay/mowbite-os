@@ -7,6 +7,7 @@ Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite
 """
 import json
 import os
+import re
 import tempfile
 import threading
 import time
@@ -30,6 +31,10 @@ BROKERS = {"a": 18851, "b": 18852, "c": 18853}
 GATES = {"b": (18862, "connack"), "c": (18863, "close")}
 LATCHED = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 WARN = "the bridge uses 3.1.1 until it restarts"
+# The api version the bridge reports: kApi of the source tree next to this test.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mowbite_api", "include", "mowbite_api",
+                       "catalog.h")) as f:
+    API = int(re.search(r"constexpr int kApi = (\d+);", f.read()).group(1))
 
 
 def generate_test_description():
@@ -202,7 +207,7 @@ class TestBridgeMqtt5(unittest.TestCase):
         got = wait_for(lambda: answers(self.five, "info"))
         self.assertTrue(got, "no answer on rpc/response/five")
         self.assertEqual(got[0][1]["result"]["mqtt"], 5)
-        self.assertEqual(got[0][1]["result"]["api"], 3)
+        self.assertEqual(got[0][1]["result"]["api"], API)
 
     def test_2_answer_only_to_the_response_topic_with_correlation(self):
         correlation = b"\x00\x01corr\xff"

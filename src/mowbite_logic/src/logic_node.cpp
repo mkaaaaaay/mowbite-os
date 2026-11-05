@@ -413,6 +413,8 @@ class LogicNode : public rclcpp::Node {
             std::lock_guard<std::mutex> lock(mutex_);
             core_.OnCapabilities(!msg->safety_measurement_date.empty(), msg->charge_stop);
             blade_lease_max_s_ = msg->blade_lease_max_s;
+            rain_sensor_ = msg->rain_sensor;
+            TellRainWithoutSensor();
           }
           Flush();
         });
@@ -492,6 +494,15 @@ class LogicNode : public rclcpp::Node {
     config.gps_wait_time = declare_parameter("gps_wait_time", config.gps_wait_time);
     config.battery_critical_voltage = declare_parameter("battery_critical_voltage", config.battery_critical_voltage);
     config.battery_critical_time = declare_parameter("battery_critical_time", config.battery_critical_time);
+    config.battery_low_window = declare_parameter("battery_low_window", config.battery_low_window);
+    config.battery_hot_temperature = declare_parameter("battery_hot_temperature", config.battery_hot_temperature);
+    const std::string battery = BatteryVoltagesProblem(config);
+    if (!battery.empty()) throw std::invalid_argument(battery);
+    if (!(config.battery_critical_time > 0) || !(config.battery_low_window > 0) ||
+        !(config.battery_hot_temperature >= 0)) {
+      throw std::invalid_argument(
+          "battery_critical_time and battery_low_window need to be above 0, battery_hot_temperature 0 or above");
+    }
     config.approach_distance = declare_parameter("approach_distance", config.approach_distance);
     config.checkpoint_period = declare_parameter("checkpoint_period", config.checkpoint_period);
     // Where the charging contacts are belongs to the dimensions of the platform (geometry.dock_contact_x).
@@ -516,6 +527,18 @@ class LogicNode : public rclcpp::Node {
         declare_parameter("dock_gate_heading", config.dock.gate_heading * 180.0 / M_PI) * M_PI / 180.0;
     config.dock.overshoot = declare_parameter("dock_overshoot", config.dock.overshoot);
     config.dock.contact_timeout = declare_parameter("contact_timeout", config.dock.contact_timeout);
+    // The charge that confirms docking and whose loss on the station is told, the platform's.
+    config.charge.current = declare_parameter("charge_confirm_current", config.charge.current);
+    config.charge.time = declare_parameter("charge_confirm_time", config.charge.time);
+    config.charge.timeout = declare_parameter("charge_confirm_timeout", config.charge.timeout);
+    config.charge.expected_below = declare_parameter("charge_expected_below", config.charge.expected_below);
+    config.charge.lost_time = declare_parameter("charge_lost_time", config.charge.lost_time);
+    if (!(config.charge.current > 0) || !(config.charge.time >= 0) || !(config.charge.timeout > config.charge.time) ||
+        !(config.charge.lost_time > 0)) {
+      throw std::invalid_argument(
+          "charge_confirm_current and charge_lost_time need to be above 0, charge_confirm_timeout above "
+          "charge_confirm_time");
+    }
     // The calibration drive: what a start needs, and how long the program may be silent.
     config.calibration.max_position_accuracy =
         declare_parameter("calibration_max_position_accuracy", config.calibration.max_position_accuracy);
@@ -544,10 +567,11 @@ class LogicNode : public rclcpp::Node {
     hw.blade = ToMotor(msg.blade_motor);
     hw.left = ToMotor(msg.left_motor);
     hw.right = ToMotor(msg.right_motor);
+    hw.time_s = MonotonicSeconds();
     {
       std::lock_guard<std::mutex> lock(mutex_);
       core_.OnHardwareStatus(hw);
-      last_hw_ = MonotonicSeconds();
+      last_hw_ = hw.time_s;
     }
     Flush();
   }
@@ -1856,6 +1880,21 @@ class LogicNode : public rclcpp::Node {
     core_.SetUndockDistance(logic_params_.Get("undock_distance"));
     core_.SetDockingSettings(logic_params_.Get("docking_approach_distance"),
                              static_cast<int>(logic_params_.Get("docking_retry_count")));
+    core_.SetHomeSettings(static_cast<int>(logic_params_.Get("rain_mode")), logic_params_.Get("rain_check_seconds"),
+                          logic_params_.Get("motor_hot_temperature"), logic_params_.Get("motor_cold_temperature"));
+    TellRainWithoutSensor();
+  }
+
+  // rain_mode other than 0 does nothing on a platform without a rain sensor: told once, again after it was 0.
+  void TellRainWithoutSensor() {
+    const int mode = static_cast<int>(logic_params_.Get("rain_mode"));
+    if (mode == 0 || !rain_sensor_ || *rain_sensor_) {
+      rain_told_ = false;
+      return;
+    }
+    if (rain_told_) return;
+    rain_told_ = true;
+    RCLCPP_WARN(get_logger(), "rain_mode %d has no effect: this platform has no rain sensor (hw/capabilities)", mode);
   }
 
   bool SaveLogicParams(const LogicParams& params, std::string& error) {
@@ -2250,8 +2289,8 @@ class LogicNode : public rclcpp::Node {
     }
   }
 
-  // hw/charge: off before undocking, the answer goes to the core; on again after an undocking that ended on the
-  // station. Called with the mutex held.
+  // hw/charge: off before the mower leaves the contacts (undocking, a docking that failed there), the answer goes to
+  // the core; on again after it. Called with the mutex held.
   void SendCharge(bool on) {
     const uint64_t seq = ++charge_seq_;
     charge_sent_.reset();
@@ -2285,7 +2324,7 @@ class LogicNode : public rclcpp::Node {
                                    Flush();
                                  })
             .request_id;
-    RCLCPP_INFO(get_logger(), "Charging %s", on ? "allowed again" : "off before undocking");
+    RCLCPP_INFO(get_logger(), "Charging %s", on ? "allowed again" : "off before leaving the docking station");
   }
 
   // Hands the way out of the station to the follower: straight, without steering, at the speed of undocking. Besides
@@ -2341,7 +2380,8 @@ class LogicNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       if (auto edit = core_.TakeMapEdit()) SendMapEdit(*edit);
       if (auto heading = core_.TakeDockCheck()) SendDockCheck(*heading);
-      // Undocking: charging off, then the way out; after it the drive that waited, or charging on again.
+      // Undocking (and docking that leaves the contacts): charging off, then the way out; after it the drive that
+      // waited, or charging on again.
       if (core_.TakeChargeOff()) SendCharge(false);
       if (auto path = core_.TakeUndockPath()) SendUndock(*path);
       if (core_.TakeChargeOn()) SendCharge(true);
@@ -2513,6 +2553,9 @@ class LogicNode : public rclcpp::Node {
   double blade_lease_s_ = 1.0;
   double blade_renew_s_ = 0.5;
   float blade_lease_max_s_ = 0;
+  // rain_sensor of hw/capabilities, unknown until they came; whether the useless rain_mode was told.
+  std::optional<bool> rain_sensor_;
+  bool rain_told_ = false;
   bool blade_on_requested_ = false;
   double blade_sent_s_ = 0;
   uint64_t drive_seq_ = 0;

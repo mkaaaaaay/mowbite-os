@@ -42,6 +42,12 @@ class ConfigConsistency(unittest.TestCase):
         self.assertGreater(safety["fence_margin"], self.tron["mowbite_follower"]["ros__parameters"]["geofence_margin"])
         self.assertLess(safety["tilt_release"], safety["tilt_limit"])
 
+    def test_the_battery_voltages_go_critical_empty_full(self):
+        logic = self.tron["mowbite_logic"]["ros__parameters"]
+        self.assertLess(0, logic["battery_critical_voltage"])
+        self.assertLess(logic["battery_critical_voltage"], logic["battery_empty_voltage"])
+        self.assertLess(logic["battery_empty_voltage"], logic["battery_full_voltage"])
+
     def test_the_station_of_the_simulation_has_the_contacts_of_the_platform(self):
         self.assertAlmostEqual(self.sim["fake_tron"]["ros__parameters"]["dock_contact_x"],
                                self.geometry["dock_contact_x"])
@@ -78,6 +84,8 @@ class Nx60iConsistency(unittest.TestCase):
         self.assertEqual(logic["battery_empty_voltage"], self.driver["battery_empty_voltage"])
         self.assertEqual(logic["battery_full_voltage"], self.driver["battery_full_voltage"])
         self.assertEqual(logic["battery_critical_voltage"], self.driver["battery_critical_low_voltage"])
+        self.assertLess(logic["battery_critical_voltage"], logic["battery_empty_voltage"])
+        self.assertLess(logic["battery_empty_voltage"], logic["battery_full_voltage"])
 
     def test_only_known_nodes_and_keys_change(self):
         for node, section in self.nx60i.items():

@@ -5,6 +5,10 @@ at the gate, creeps onto the contacts and stops at the first raw contact: after 
 and then nothing while it stands (G18). docking.start is refused with the reason in the data of the error and as
 DRIVE_REFUSED; abort_docking and an emergency stop it without DOCKING_FAILED; a station 4 cm beside its place in the
 map gets DOCKING_RETRY and DOCKING_FAILED (docking_retry_count of params.set), the mower waits at the approach point.
+DOCKED comes only once the charge current held on the contacts (G19): contacts that do not charge fail the try with
+NO_CHARGE_CURRENT, the way out begins after Charge 0, and the last try leaves the mower on them; a current that comes later
+docks it after all, as does a nearly full battery with the contact alone. Taken off the station by hand it tells
+CHARGING_LOST.
 
 MOWBITE_DOCK_RATE=20 instead counts how many of 20 tries dock with the faults of a real Tron in fake_tron (RTK noise, a
 late fix, wheels reporting too little, a dead band, slip): a first answer to open question 10, for the simulation only.
@@ -238,7 +242,9 @@ class Probe:
         time.sleep(0.5)
 
     def put_on_the_station(self, **flags):
-        """Carried onto the contacts; waits for the debounced contact and an RTK position fit for the check."""
+        """Carried onto the contacts; waits for the debounced contact, an RTK position fit for the check and the DOCKED
+        of the charge confirmed there."""
+        since = len(self.events)
         self.flags()
         time.sleep(0.3)
         self.flags(place=DOCKED, **flags)
@@ -247,6 +253,7 @@ class Probe:
                          and abs(self.pose.x + 1.0) < 0.05, 30), "no RTK position there"
         assert self.wait(lambda: self.robot and self.robot.current_state == "IDLE", 10)
         self.flags(**flags)
+        assert self.event(since, "DOCKED", 20), "no DOCKED on the station"
 
     def drive(self, x, y):
         """logic/drive_to (from the station after undocking): the end of the drive once it arrived, else None."""
@@ -279,6 +286,14 @@ def g18(test, rx, docked_at, stood_until):
     test.assertTrue(all(e["speed"] == [0.0, 0.0] for e in after), after)
     test.assertLess(after[-1]["t"], docked_at, (after, docked_at))
     test.assertGreater(stood_until - docked_at, 4.0)
+
+
+def going_home(test, events):
+    """Sent home by hand: exactly one event DOCKING MANUAL (api 5), before STATE DOCKING."""
+    going = [e for e in events if e["type"] == "DOCKING" or (e["type"] == "STATE" and e["state"] == "DOCKING")]
+    test.assertEqual([e["type"] for e in going[:2]], ["DOCKING", "STATE"], going)
+    test.assertEqual((going[0]["reason"], going[0]["severity"], going[0]["resume"]), ("MANUAL", "info", "user"))
+    test.assertEqual(len([e for e in events if e["type"] == "DOCKING"]), 1, events)
 
 
 class Base(unittest.TestCase):
@@ -337,6 +352,8 @@ class TestDock(Base):
         self.assertEqual(states[-2:], ["DOCKING", "IDLE"], states)
         self.assertFalse([e for e in after if e["type"] in ("DOCKING_RETRY", "DOCKING_FAILED", "UNDOCKING_FAILED")],
                          after)
+        # Home after JOB_COMPLETE without an event DOCKING, as OpenMower.
+        self.assertNotIn("DOCKING", [e["type"] for e in after])
         self.on_the_station()
         # Backwards onto the station: never faster than docking_speed, the last stretch at contact_speed.
         time.sleep(5.0)
@@ -347,9 +364,10 @@ class TestDock(Base):
         last = [e["speed"][0] for e in back if e["t"] >= back[-1]["t"] - 2.0]
         self.assertTrue(all(-0.06 - 1e-3 <= v <= 0 for v in last), last)
         g18(self, rx, docked_at, sim_time())
-        # Charging after the debounced contact.
-        self.assertTrue(p.wait(lambda: any(e.get("charge") == 1 and e["t"] >= docked_at - 1.0
-                                           for e in received(sim_since)), 5))
+        # Charging since the debounced contact; DOCKED once the charge current held 5 s.
+        charge_on = next((e["t"] for e in rx if e.get("charge") == 1 and e["t"] >= start), None)
+        self.assertIsNotNone(charge_on, rx[-20:])
+        self.assertGreaterEqual(docked_at - charge_on, 5.0, (charge_on, docked_at))
         self.assertTrue(p.wait(lambda: p.hw.battery_current < 0, 5), p.hw.battery_current)
 
     def test_03_abort_mowing_docks(self):
@@ -363,6 +381,7 @@ class TestDock(Base):
         self.assertIsNotNone(p.event(since, "DOCKED", 120), p.events[since:])
         types = [e["type"] for e in p.events[since:]]
         self.assertNotIn("JOB_COMPLETE", types)
+        going_home(self, p.events[since:])
         self.on_the_station()
 
     def test_04_docking_start_from_the_field(self):
@@ -390,6 +409,7 @@ class TestDock(Base):
         self.assertEqual(answer, {"result": {"state": "DOCKING", "sub_state": ""}})
         self.assertIsNotNone(p.event(since, "STATE", 5, state="DOCKING"))
         self.assertIsNotNone(p.event(since, "DOCKED", 120), p.events[since:])
+        going_home(self, p.events[since:])
         self.on_the_station()
 
     def test_05_abort_docking(self):
@@ -456,6 +476,60 @@ class TestDock(Base):
         p.flags()
         answer = p.rpc("params.set", {"params": {"/mower_logic/docking_retry_count": 4}})
         self.assertEqual(answer, {"result": {"/mower_logic/docking_retry_count": 4}})
+
+    def test_08_contacts_that_do_not_charge(self):
+        p = self.probe
+        answer = p.rpc("params.set", {"params": {"/mower_logic/docking_retry_count": 1}})
+        self.assertEqual(answer, {"result": {"/mower_logic/docking_retry_count": 1}})
+        p.flags(charge_current=0.0)
+        sim_since, since = sim_time(), len(p.events)
+        self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING", "sub_state": ""}})
+        retry = p.event(since, "DOCKING_RETRY", 150)
+        self.assertIsNotNone(retry, p.events[since:])
+        self.assertEqual((retry["reason"], retry["attempts"]), ("NO_CHARGE_CURRENT", 1), retry)
+        self.assertEqual((retry["severity"], retry["resume"]), ("warning", "auto"))
+        self.assertEqual(retry["limit"], 0.5, retry)
+        self.assertIn("no charge current on the contacts within 20 s", retry["message"])
+        failed = p.event(since, "DOCKING_FAILED", 150)
+        self.assertIsNotNone(failed, p.events[since:])
+        self.assertEqual((failed["reason"], failed["attempts"]), ("NO_CHARGE_CURRENT", 2), failed)
+        self.assertEqual((failed["severity"], failed["resume"]), ("error", "user"))
+        self.assertIsNotNone(p.event(since, "STATE", 5, state="IDLE"))
+        # The last try left it on the contacts.
+        self.on_the_station()
+        self.assertNotIn("DOCKED", [e["type"] for e in p.events[since:]])
+        # The way out of the first try began only after Charge 0 (G19).
+        rx = received(sim_since)
+        charge_on = next(e["t"] for e in rx if e.get("charge") == 1)
+        out = next(e for e in rx if e["t"] > charge_on and moving(e) and e["speed"][0] > 0)
+        self.assertTrue([e for e in rx if e.get("charge") == 0 and charge_on < e["t"] < out["t"]], rx[:40])
+        # The charge comes after all: DOCKED, and it stays IDLE.
+        since = len(p.events)
+        p.flags()
+        self.assertIsNotNone(p.event(since, "DOCKED", 20), p.events[since:])
+        # Taken off the station by hand: CHARGING_LOST after 10 s, it does not drive.
+        since = len(p.events)
+        p.flags(place=[0.5, 0.0, 0.0])
+        lost = p.event(since, "CHARGING_LOST", 20, reason="NO_DOCK_CONTACT")
+        self.assertIsNotNone(lost, p.events[since:])
+        self.assertEqual((lost["severity"], lost["resume"]), ("warning", "user"))
+        self.assertEqual(lost["battery_percentage"], 80)
+        self.assertEqual(p.robot.current_state, "IDLE")
+        p.flags()
+        answer = p.rpc("params.set", {"params": {"/mower_logic/docking_retry_count": 4}})
+        self.assertEqual(answer, {"result": {"/mower_logic/docking_retry_count": 4}})
+
+    def test_09_a_nearly_full_battery_needs_no_charge_current(self):
+        p = self.probe
+        p.flags(battery_percentage=97, charge_current=0.0)
+        self.assertTrue(p.wait(lambda: p.pose and p.pose.position_accuracy < 0.03 and abs(p.pose.x - 0.5) < 0.05, 30),
+                        p.pose)
+        since = len(p.events)
+        self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING", "sub_state": ""}})
+        self.assertIsNotNone(p.event(since, "DOCKED", 150), p.events[since:])
+        self.assertFalse([e for e in p.events[since:] if e["type"] in ("DOCKING_RETRY", "DOCKING_FAILED")])
+        self.on_the_station()
+        p.flags()
 
 
 @unittest.skipUnless(RATE, "MOWBITE_DOCK_RATE only")

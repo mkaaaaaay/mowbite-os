@@ -39,6 +39,20 @@ HardwareSnapshot Healthy(bool contact = false, bool raw = false) {
   return hw;
 }
 
+// The report at t s (monotonic).
+HardwareSnapshot At(HardwareSnapshot hw, double t) {
+  hw.time_s = t;
+  return hw;
+}
+
+// On the contacts at t s with amps A into the battery at percentage.
+HardwareSnapshot Charging(double t, float amps = 3.0f, int percentage = 80) {
+  HardwareSnapshot hw = At(Healthy(true), t);
+  hw.battery_current = -amps;
+  hw.battery_percentage = percentage;
+  return hw;
+}
+
 PoseSnapshot PoseAt(double x, double y, double heading = 0.0, float accuracy = 0.02f, bool valid = true) {
   PoseSnapshot pose;
   pose.x = x;
@@ -267,21 +281,36 @@ TEST(Docking, AfterTheJobTheMowerBacksOntoTheStation) {
   core.OnHardwareStatus(Healthy(false, true));
   EXPECT_FALSE(core.TakeStopRequest());
 
-  // Confirmed: DOCKED without fields, IDLE, the follower stops.
+  // The debounced contact ends the leg; the charge current has to hold 5 s before DOCKED.
   core.TakeEvents();
-  core.OnHardwareStatus(Healthy(true));
+  core.OnHardwareStatus(At(Healthy(true), 100.0));
+  EXPECT_TRUE(core.Docking());
+  EXPECT_TRUE(core.TakeDriveCancel());
+  EXPECT_FALSE(core.FollowerActive());
+  EXPECT_FALSE(core.TakeDockingLeg());
+  EXPECT_TRUE(Enabled(core, "mower_logic:docking", "abort_docking"));
+  // The late end of the follower changes nothing.
+  core.OnDockingLegEnded(LegEnd::kCanceled, Reason("STOPPED", "Contact (canceled)"));
+  EXPECT_TRUE(core.Docking());
+  core.OnHardwareStatus(Charging(101.0));
+  core.OnTick(105.0);
+  core.OnHardwareStatus(Charging(105.9));
+  EXPECT_TRUE(core.Docking());
+  EXPECT_TRUE(core.TakeEvents().empty());
+  // Confirmed: DOCKED without fields, IDLE.
+  core.OnHardwareStatus(Charging(106.0));
   EXPECT_TRUE(core.Idle());
   events = core.TakeEvents();
   ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKED", "STATE"}));
   EXPECT_FALSE(events[0].details.contains("reason"));
   EXPECT_EQ(events[1].details["state"], "IDLE");
-  EXPECT_TRUE(core.TakeDriveCancel());
+  EXPECT_FALSE(core.TakeDriveCancel());
+  EXPECT_FALSE(core.TakeChargeOff());
+  EXPECT_FALSE(core.TakeChargeOn());
   EXPECT_FALSE(core.FollowerActive());
   EXPECT_FALSE(Enabled(core, "mower_logic:docking", "abort_docking"));
   EXPECT_TRUE(core.RobotState().is_charging);
-  // The late end of the follower changes nothing.
-  core.OnDockingLegEnded(LegEnd::kCanceled, Reason("STOPPED", "Docked (canceled)"));
-  EXPECT_TRUE(core.Idle());
+  core.OnHardwareStatus(Charging(120.0));
   EXPECT_TRUE(core.TakeEvents().empty());
 }
 
@@ -303,7 +332,10 @@ TEST(Docking, AbortMowingDocksToo) {
   EXPECT_TRUE(core.Docking());
   const auto events = core.TakeEvents();
   EXPECT_FALSE(Find(events, "JOB_COMPLETE"));
-  ASSERT_TRUE(Find(events, "STATE"));
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING", "STATE"}));
+  EXPECT_EQ(events[0].details["reason"], "MANUAL");
+  EXPECT_EQ(events[0].details["severity"], "info");
+  EXPECT_EQ(events[0].details["resume"], "user");
   EXPECT_EQ(Find(events, "STATE")->details["state"], "DOCKING");
   Take(core, DockingLeg::Kind::kApproach);
 }
@@ -340,16 +372,20 @@ TEST(Docking, AnApproachPointOutsideOfTheAreasFailsAtOnce) {
   EXPECT_FALSE(core.TakeDockingLeg());
 }
 
-TEST(Docking, OnTheContactsAtTheEndOfTheJobItIsDocked) {
+TEST(Docking, OnTheContactsAtTheEndOfTheJobItIsDockedOnceTheChargeHolds) {
   LogicCore core = Ready();
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
-  core.OnHardwareStatus(Healthy(true));
+  core.OnHardwareStatus(At(Healthy(true), 10.0));
   core.TakeEvents();
   core.OnJobPlanned({}, "fp");
   core.NextJobStep(0);
   EXPECT_TRUE(core.Idle());
-  EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"JOB_COMPLETE", "DOCKED", "STATE"}));
+  EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"JOB_COMPLETE", "STATE"}));
+  EXPECT_FALSE(core.TakeDockingLeg());
+  core.OnHardwareStatus(Charging(11.0));
+  core.OnHardwareStatus(Charging(16.0));
+  EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"DOCKED"}));
 }
 
 TEST(Docking, MissingTheGateDrivesOutAndTriesAgain) {
@@ -528,7 +564,8 @@ TEST(Docking, APositionThatStaysBadEndsDocking) {
   const auto events = core.TakeEvents();
   const Event* failed = Find(events, "DOCKING_FAILED");
   ASSERT_TRUE(failed);
-  EXPECT_EQ(failed->details["reason"], "dock_failed");
+  EXPECT_EQ(failed->details["reason"], "NO_POSITION");
+  EXPECT_EQ(failed->details["severity"], "error");
   EXPECT_EQ(failed->details["attempts"], 1);
   EXPECT_NE(failed->details["message"].get<std::string>().find("no good position for 10 s"), std::string::npos);
 }
@@ -594,8 +631,9 @@ TEST(DockingStart, DocksFromIdle) {
   EXPECT_TRUE(core.StartDocking().empty());
   EXPECT_TRUE(core.Docking());
   const auto events = core.TakeEvents();
-  ASSERT_EQ(Types(events), (std::vector<std::string>{"STATE"}));
-  EXPECT_EQ(events[0].details["state"], "DOCKING");
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING", "STATE"}));
+  EXPECT_EQ(events[0].details["reason"], "MANUAL");
+  EXPECT_EQ(events[1].details["state"], "DOCKING");
   // The approach point of the setting.
   const DockingLeg leg = Take(core, DockingLeg::Kind::kApproach);
   EXPECT_NEAR(leg.goal.x, 0.2, 1e-9);
@@ -615,4 +653,389 @@ TEST(DockingStart, WithABadPositionItWaitsForAGoodOne) {
   core.OnTick(5.0);
   core.OnTick(15.0);
   Take(core, DockingLeg::Kind::kApproach);
+}
+
+namespace {
+
+ChargeSample Sample(double t, double amps, int percentage = 80, bool contact = true, bool battery = true) {
+  ChargeSample sample;
+  sample.time = t;
+  sample.contact = contact;
+  sample.battery_ok = battery;
+  sample.charge_current = amps;
+  sample.percentage = percentage;
+  return sample;
+}
+
+// The last leg reached the station: raw contact at t - 2 s, debounced at t s, the charge is checked, no current yet.
+LogicCore Checking(LogicConfig config = Tron(), double t = 100.0) {
+  LogicCore core = OntoTheContacts(config);
+  core.OnPose(PoseAt(-1.0, 0.0, 0.0));
+  core.OnHardwareStatus(At(Healthy(false, true), t - 2.0));
+  core.OnHardwareStatus(At(Healthy(true), t));
+  EXPECT_TRUE(core.Docking());
+  core.TakeEvents();
+  core.TakeNotices();
+  core.TakeStopRequest();
+  core.TakeDriveCancel();
+  return core;
+}
+
+// IDLE on the station, the charge confirmed there at t s.
+LogicCore OnTheStation(double t = 10.0) {
+  LogicCore core = Ready();
+  core.OnPose(PoseAt(-1.0, 0.0, 0.0));
+  core.OnHardwareStatus(Charging(t - 5.0));
+  core.OnHardwareStatus(Charging(t));
+  EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"DOCKED"}));
+  core.TakeNotices();
+  return core;
+}
+
+}  // namespace
+
+TEST(ChargeCheck, AChargeCurrentThatHoldsConfirms) {
+  ChargeCheck check(ChargeConfig(), 10.0);
+  EXPECT_EQ(check.OnSample(Sample(10.0, 0.0)), ChargeCheck::Result::kWaiting);
+  EXPECT_EQ(check.OnSample(Sample(11.0, 3.2)), ChargeCheck::Result::kWaiting);
+  EXPECT_EQ(check.OnSample(Sample(15.9, 3.4)), ChargeCheck::Result::kWaiting);
+  EXPECT_EQ(check.OnSample(Sample(16.0, 3.3)), ChargeCheck::Result::kCharging);
+  EXPECT_DOUBLE_EQ(check.max_current(), 3.4);
+  // The result stays.
+  EXPECT_EQ(check.OnSample(Sample(17.0, 0.0, 80, false)), ChargeCheck::Result::kCharging);
+}
+
+TEST(ChargeCheck, AGapBeginsTheTimeAgain) {
+  ChargeCheck check(ChargeConfig(), 0.0);
+  check.OnSample(Sample(1.0, 3.0));
+  check.OnSample(Sample(4.0, 3.0));
+  EXPECT_EQ(check.OnSample(Sample(4.5, 0.4)), ChargeCheck::Result::kWaiting);
+  check.OnSample(Sample(5.0, 3.0));
+  EXPECT_EQ(check.OnSample(Sample(9.9, 3.0)), ChargeCheck::Result::kWaiting);
+  EXPECT_EQ(check.OnSample(Sample(10.0, 3.0)), ChargeCheck::Result::kCharging);
+}
+
+TEST(ChargeCheck, NearFullTheContactIsEnough) {
+  ChargeCheck full(ChargeConfig(), 0.0);
+  full.OnSample(Sample(0.0, 0.0, 95));
+  EXPECT_EQ(full.OnSample(Sample(4.9, 0.0, 95)), ChargeCheck::Result::kWaiting);
+  EXPECT_EQ(full.OnSample(Sample(5.0, 0.0, 96)), ChargeCheck::Result::kFull);
+  EXPECT_EQ(full.percentage(), 96);
+  // Below it the current has to come.
+  ChargeCheck low(ChargeConfig(), 0.0);
+  low.OnSample(Sample(0.0, 0.2, 94));
+  EXPECT_EQ(low.OnSample(Sample(19.9, 0.2, 94)), ChargeCheck::Result::kWaiting);
+  EXPECT_EQ(low.OnSample(Sample(20.0, 0.2, 94)), ChargeCheck::Result::kNoCharge);
+  EXPECT_DOUBLE_EQ(low.max_current(), 0.2);
+}
+
+TEST(ChargeCheck, TheContactHasToHold) {
+  ChargeCheck check(ChargeConfig(), 0.0);
+  check.OnSample(Sample(1.0, 3.0));
+  EXPECT_EQ(check.OnSample(Sample(2.0, 3.0, 80, false)), ChargeCheck::Result::kContactLost);
+  EXPECT_EQ(check.OnSample(Sample(8.0, 3.0)), ChargeCheck::Result::kContactLost);
+}
+
+TEST(ChargeCheck, TheDeadline) {
+  ChargeCheck none(ChargeConfig(), 100.0);
+  EXPECT_EQ(none.OnTick(119.9), ChargeCheck::Result::kWaiting);
+  EXPECT_EQ(none.OnTick(120.0), ChargeCheck::Result::kNoCharge);
+  // A current that came before the deadline may hold past it.
+  ChargeCheck late(ChargeConfig(), 100.0);
+  late.OnSample(Sample(118.0, 1.0));
+  EXPECT_EQ(late.OnTick(121.0), ChargeCheck::Result::kWaiting);
+  EXPECT_EQ(late.OnSample(Sample(123.0, 1.0)), ChargeCheck::Result::kCharging);
+  // A battery without a report confirms nothing.
+  ChargeCheck unknown(ChargeConfig(), 0.0);
+  unknown.OnSample(Sample(1.0, 3.0, 99, true, false));
+  EXPECT_EQ(unknown.OnSample(Sample(20.0, 3.0, 99, true, false)), ChargeCheck::Result::kNoCharge);
+}
+
+TEST(Docking, AContactWithoutAChargeCurrentFailsTheTry) {
+  LogicCore core = Checking();
+  // On the contacts at 0.4 A: nothing before the deadline of 20 s.
+  core.OnHardwareStatus(Charging(110.0, 0.4f));
+  core.OnTick(119.0);
+  EXPECT_TRUE(core.Docking());
+  EXPECT_FALSE(core.TakeChargeOff());
+  core.OnTick(120.0);
+  // Charging off first, then out; the try counts at the approach point.
+  EXPECT_TRUE(core.TakeEvents().empty());
+  EXPECT_FALSE(core.TakeDockingLeg());
+  EXPECT_TRUE(core.TakeChargeOff());
+  EXPECT_FALSE(core.TakeChargeOff());
+  // Its late answer is all the node waits for; the contact stays meanwhile.
+  core.OnHardwareStatus(Charging(121.0, 0.4f));
+  EXPECT_FALSE(core.TakeDockingLeg());
+  core.OnChargeOff(true, "");
+  const DockingLeg out = Take(core, DockingLeg::Kind::kOut);
+  EXPECT_NEAR(out.poses.front().x, -1.0, 1e-9);
+  EXPECT_FALSE(out.reverse);
+  EXPECT_FALSE(core.TakeChargeOn());
+  core.OnHardwareStatus(At(Healthy(), 125.0));
+  core.OnPose(PoseAt(-0.21, 0.0, 0.0));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  // Allowed again once out.
+  EXPECT_TRUE(core.TakeChargeOn());
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_RETRY"}));
+  const auto& retry = events[0].details;
+  EXPECT_EQ(retry["reason"], "NO_CHARGE_CURRENT");
+  EXPECT_EQ(retry["attempts"], 1);
+  EXPECT_EQ(retry["severity"], "warning");
+  EXPECT_EQ(retry["resume"], "auto");
+  EXPECT_NEAR(retry["current"].get<double>(), 0.4, 1e-6);
+  EXPECT_DOUBLE_EQ(retry["limit"].get<double>(), 0.5);
+  EXPECT_NE(retry["message"].get<std::string>().find("no charge current on the contacts within 20 s"),
+            std::string::npos)
+      << retry;
+  Take(core, DockingLeg::Kind::kLine);
+}
+
+TEST(Docking, TheLastTryWithoutAChargeCurrentLeavesTheMowerOnTheContacts) {
+  LogicConfig config = Tron();
+  config.dock.retry_count = 0;
+  LogicCore core = Checking(config);
+  core.OnTick(120.0);
+  EXPECT_TRUE(core.Idle());
+  EXPECT_FALSE(core.TakeDockingLeg());
+  EXPECT_FALSE(core.TakeChargeOff());
+  EXPECT_FALSE(core.TakeChargeOn());
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_FAILED", "STATE"}));
+  EXPECT_EQ(events[0].details["reason"], "NO_CHARGE_CURRENT");
+  EXPECT_EQ(events[0].details["attempts"], 1);
+  EXPECT_EQ(events[0].details["severity"], "error");
+  EXPECT_EQ(events[0].details["resume"], "user");
+  EXPECT_EQ(events[1].details["state"], "IDLE");
+  // Told already: no CHARGING_LOST for the same lack. A stable current later is DOCKED after all, once.
+  core.OnHardwareStatus(Charging(121.0, 0.0f));
+  core.OnHardwareStatus(Charging(160.0, 0.0f));
+  EXPECT_TRUE(core.TakeEvents().empty());
+  core.OnHardwareStatus(Charging(161.0));
+  core.OnHardwareStatus(Charging(165.9));
+  EXPECT_TRUE(core.TakeEvents().empty());
+  core.OnHardwareStatus(Charging(166.0));
+  EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"DOCKED"}));
+  core.OnHardwareStatus(Charging(190.0));
+  EXPECT_TRUE(core.TakeEvents().empty());
+  EXPECT_TRUE(core.Idle());
+  EXPECT_FALSE(core.TakeDockingLeg());
+}
+
+TEST(Docking, WhereTheHardwareChargesByItselfItDrivesOutAtOnce) {
+  LogicCore core = Checking();
+  core.OnCapabilities(true, false);
+  core.OnTick(120.0);
+  EXPECT_FALSE(core.TakeChargeOff());
+  Take(core, DockingLeg::Kind::kOut);
+}
+
+TEST(Docking, ChargingThatCannotBeSwitchedOffKeepsTheMowerOnTheContacts) {
+  LogicCore core = Checking();
+  core.OnTick(120.0);
+  ASSERT_TRUE(core.TakeChargeOff());
+  core.OnChargeOff(false, "no answer from hw/charge");
+  EXPECT_TRUE(core.Idle());
+  EXPECT_FALSE(core.TakeDockingLeg());
+  // Allowed again in case it went off after all.
+  EXPECT_TRUE(core.TakeChargeOn());
+  const auto events = core.TakeEvents();
+  const Event* failed = Find(events, "DOCKING_FAILED");
+  ASSERT_TRUE(failed);
+  EXPECT_EQ(failed->details["reason"], "NO_CHARGE_CURRENT");
+  EXPECT_EQ(failed->details["attempts"], 1);
+  EXPECT_NE(failed->details["message"].get<std::string>().find("could not be switched off (no answer from hw/charge)"),
+            std::string::npos)
+      << failed->details;
+}
+
+TEST(Docking, AContactThatGoesWhileTheChargeIsCheckedFailsTheTry) {
+  LogicCore core = Checking();
+  core.OnHardwareStatus(Charging(101.0));
+  // Gone, the raw one as well: nothing to switch off.
+  core.OnHardwareStatus(At(Healthy(), 102.0));
+  EXPECT_FALSE(core.TakeChargeOff());
+  Take(core, DockingLeg::Kind::kOut);
+  core.OnPose(PoseAt(-0.21, 0.0, 0.0));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  EXPECT_FALSE(core.TakeChargeOn());
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_RETRY"}));
+  EXPECT_EQ(events[0].details["reason"], "dock_failed");
+  EXPECT_NE(events[0].details["message"].get<std::string>().find("went away while the charge was checked"),
+            std::string::npos);
+}
+
+TEST(Docking, ANearlyFullBatteryNeedsTheContactOnly) {
+  LogicCore core = Checking();
+  core.OnHardwareStatus(Charging(101.0, 0.0f, 97));
+  EXPECT_TRUE(core.Docking());
+  core.OnHardwareStatus(Charging(106.0, 0.0f, 97));
+  EXPECT_TRUE(core.Idle());
+  EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"DOCKED", "STATE"}));
+}
+
+TEST(Docking, AContactWhileWaitingForAPositionChecksTheCharge) {
+  LogicCore core = AtTheGate();
+  core.OnDockingLegEnded(LegEnd::kGps, Reason("POSITION_ACCURACY", "position accuracy 0.20 m worse than 0.10 m"));
+  core.OnTick(45.0);
+  core.OnHardwareStatus(At(Healthy(true), 50.0));
+  core.OnHardwareStatus(Charging(51.0));
+  // The position does not matter on the contacts any more.
+  core.OnTick(55.5);
+  EXPECT_TRUE(core.Docking());
+  core.OnHardwareStatus(Charging(56.0));
+  EXPECT_TRUE(core.Idle());
+  const auto events = core.TakeEvents();
+  EXPECT_TRUE(Find(events, "DOCKED"));
+  EXPECT_FALSE(Find(events, "DOCKING_FAILED"));
+}
+
+TEST(Docking, AContactBeforeTheWayOutAfterAFailedLegChecksTheCharge) {
+  LogicCore core = OntoTheContacts();
+  // The end of the line with the first raw contact; debounced only after the leg ended.
+  core.OnHardwareStatus(At(Healthy(false, true), 99.0));
+  core.OnPose(PoseAt(-1.0, 0.0, 0.0));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  EXPECT_FALSE(core.TakeDockingLeg());
+  ASSERT_TRUE(core.TakeChargeOff());
+  core.OnHardwareStatus(At(Healthy(true), 100.0));
+  EXPECT_TRUE(core.Docking());
+  // Charging allowed again; the late answer to "off" changes nothing.
+  EXPECT_TRUE(core.TakeChargeOn());
+  core.OnChargeOff(true, "");
+  EXPECT_FALSE(core.TakeDockingLeg());
+  core.OnHardwareStatus(Charging(101.0));
+  core.OnHardwareStatus(Charging(106.0));
+  EXPECT_TRUE(core.Idle());
+  const auto events = core.TakeEvents();
+  EXPECT_TRUE(Find(events, "DOCKED"));
+  EXPECT_FALSE(Find(events, "DOCKING_RETRY"));
+}
+
+TEST(Docking, AnEmergencyOrAbortWhileTheChargeIsCheckedStops) {
+  LogicCore core = Checking();
+  HardwareSnapshot stop = Charging(101.0);
+  stop.emergency = true;
+  stop.emergency_reason = kEmergencyLatch | kEmergencyStop;
+  core.OnHardwareStatus(stop);
+  EXPECT_TRUE(core.Idle());
+  auto events = core.TakeEvents();
+  EXPECT_FALSE(Find(events, "DOCKING_FAILED"));
+  EXPECT_FALSE(Find(events, "DOCKED"));
+  EXPECT_FALSE(core.TakeChargeOn());
+
+  LogicCore aborted = Checking();
+  ASSERT_EQ(aborted.OnAction(kAbort), ActionResult::kDone);
+  EXPECT_TRUE(aborted.Idle());
+  EXPECT_EQ(Types(aborted.TakeEvents()), (std::vector<std::string>{"STATE"}));
+  // On the contacts in IDLE the watch confirms the charge like for any stay.
+  aborted.OnHardwareStatus(Charging(101.0));
+  aborted.OnHardwareStatus(Charging(106.0));
+  EXPECT_EQ(Types(aborted.TakeEvents()), (std::vector<std::string>{"DOCKED"}));
+  EXPECT_FALSE(aborted.TakeDockingLeg());
+}
+
+TEST(ChargingLost, TheContactGoneForTenSecondsIsTold) {
+  LogicCore core = OnTheStation();
+  core.OnHardwareStatus(At(Healthy(), 20.0));
+  core.OnHardwareStatus(At(Healthy(), 29.9));
+  EXPECT_TRUE(core.TakeEvents().empty());
+  core.OnHardwareStatus(At(Healthy(), 30.0));
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"CHARGING_LOST"}));
+  EXPECT_EQ(events[0].details["reason"], "NO_DOCK_CONTACT");
+  EXPECT_EQ(events[0].details["severity"], "warning");
+  EXPECT_EQ(events[0].details["resume"], "user");
+  EXPECT_EQ(events[0].details["battery_percentage"], 80);
+  // Once, and it does not drive.
+  core.OnHardwareStatus(At(Healthy(), 60.0));
+  EXPECT_TRUE(core.TakeEvents().empty());
+  EXPECT_TRUE(core.Idle());
+  EXPECT_FALSE(core.TakeDockingLeg());
+  // Put back by hand: docked again once the charge holds.
+  core.OnHardwareStatus(Charging(70.0));
+  core.OnHardwareStatus(Charging(75.0));
+  EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"DOCKED"}));
+}
+
+TEST(ChargingLost, NotWhenTheContactComesBackOrTheMowerIsLifted) {
+  LogicCore core = OnTheStation();
+  core.OnHardwareStatus(At(Healthy(), 20.0));
+  core.OnHardwareStatus(Charging(25.0));
+  core.OnHardwareStatus(Charging(31.0));
+  EXPECT_TRUE(core.TakeEvents().empty());
+  // Lifted: the emergency tells.
+  core.OnHardwareStatus(At(Healthy(), 32.0));
+  HardwareSnapshot lifted = At(Healthy(), 35.0);
+  lifted.emergency = true;
+  lifted.emergency_reason = kEmergencyLatch | kEmergencyLift;
+  core.OnHardwareStatus(lifted);
+  lifted.time_s = 60.0;
+  core.OnHardwareStatus(lifted);
+  EXPECT_FALSE(Find(core.TakeEvents(), "CHARGING_LOST"));
+}
+
+TEST(ChargingLost, AChargeCurrentThatStopsBelowTheLimitIsTold) {
+  LogicCore core = OnTheStation();
+  core.OnHardwareStatus(Charging(20.0, 0.0f));
+  core.OnHardwareStatus(Charging(29.9, 0.1f));
+  EXPECT_TRUE(core.TakeEvents().empty());
+  core.OnHardwareStatus(Charging(30.0, 0.1f));
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"CHARGING_LOST"}));
+  EXPECT_EQ(events[0].details["reason"], "NO_CHARGE_CURRENT");
+  EXPECT_NEAR(events[0].details["current"].get<double>(), 0.1, 1e-6);
+  EXPECT_DOUBLE_EQ(events[0].details["limit"].get<double>(), 0.5);
+  EXPECT_NE(events[0].details["message"].get<std::string>().find("stopped for 10 s"), std::string::npos);
+  core.OnHardwareStatus(Charging(60.0, 0.0f));
+  EXPECT_TRUE(core.TakeEvents().empty());
+  // Charging again: DOCKED once it holds, and told again when it stops again.
+  core.OnHardwareStatus(Charging(61.0));
+  core.OnHardwareStatus(Charging(66.0));
+  EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"DOCKED"}));
+  core.OnHardwareStatus(Charging(67.0, 0.0f));
+  core.OnHardwareStatus(Charging(77.0, 0.0f));
+  EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"CHARGING_LOST"}));
+}
+
+TEST(ChargingLost, NotWhenChargingEndsNearFull) {
+  LogicCore core = OnTheStation();
+  core.OnHardwareStatus(Charging(20.0, 0.0f, 96));
+  core.OnHardwareStatus(Charging(40.0, 0.0f, 90));
+  core.OnHardwareStatus(Charging(80.0, 0.0f, 90));
+  EXPECT_TRUE(core.TakeEvents().empty());
+}
+
+TEST(ChargingLost, AStayThatNeverChargesIsToldOnceAfterTheDeadline) {
+  // Put on the station by hand, or started there: unconfirmed until the charge holds.
+  LogicCore core = Ready();
+  core.OnHardwareStatus(Charging(10.0, 0.0f));
+  core.OnHardwareStatus(Charging(29.9, 0.0f));
+  EXPECT_TRUE(core.TakeEvents().empty());
+  core.OnHardwareStatus(Charging(30.0, 0.0f));
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"CHARGING_LOST"}));
+  EXPECT_EQ(events[0].details["reason"], "NO_CHARGE_CURRENT");
+  EXPECT_NE(events[0].details["message"].get<std::string>().find("no charge current for 20 s"), std::string::npos);
+  core.OnHardwareStatus(Charging(90.0, 0.0f));
+  EXPECT_TRUE(core.TakeEvents().empty());
+  // Not while an emergency is on.
+  LogicCore stopped = Ready();
+  HardwareSnapshot stop = Charging(10.0, 0.0f);
+  stop.emergency = true;
+  stop.emergency_reason = kEmergencyLatch | kEmergencyStop;
+  stopped.OnHardwareStatus(stop);
+  stop.time_s = 40.0;
+  stopped.OnHardwareStatus(stop);
+  EXPECT_FALSE(Find(stopped.TakeEvents(), "CHARGING_LOST"));
+}
+
+TEST(ChargingLost, NothingWhileTheMowerIsBusy) {
+  LogicCore core = OnTheStation();
+  ASSERT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
+  core.OnHardwareStatus(At(Healthy(), 20.0));
+  core.OnHardwareStatus(At(Healthy(), 40.0));
+  EXPECT_FALSE(Find(core.TakeEvents(), "CHARGING_LOST"));
 }

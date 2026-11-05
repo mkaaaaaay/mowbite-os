@@ -107,9 +107,12 @@ mowbite_localization:
 
 mowbite_logic:
   ros__parameters:
-    # Assumption for 6S Li-ion until the discharge curve is measured.
-    battery_empty_voltage: 19.2
+    # 6S Li-ion. empty is 0 % for the app and where mowing goes home: the highest voltage of battery_low_window s below
+    # it (assumption, 3.5 V per cell, until the discharge curve is measured). The start checks
+    # critical < empty < full.
+    battery_empty_voltage: 21.0
     battery_full_voltage: 25.2
+    battery_low_window: 20.0
     dock_charge_voltage: 28.0
     # localization/pose older than this (s) counts as lost: accuracy 999, GPS 0.
     pose_timeout: 2.0
@@ -158,13 +161,27 @@ mowbite_logic:
     dock_gate_heading: 8.0
     dock_overshoot: 0.05
     contact_timeout: 10.0
+    # The debounced contact is not DOCKED yet (G19): contact and a charge current of at least charge_confirm_current A
+    # have to hold charge_confirm_time s without a gap, at charge_expected_below percent or more the contact alone, as
+    # the charger stays off near full. Without either within charge_confirm_timeout s the try fails (NO_CHARGE_CURRENT):
+    # charging off over hw/charge, out to the approach point, the next try; after the last one the mower stays on the
+    # contacts (DOCKING_FAILED). In IDLE on the station CHARGING_LOST tells when the contact, or the current it had
+    # below charge_expected_below, is gone for charge_lost_time s. The Tron charges with 3.3 to 4.2 A and draws 0.6 A
+    # standing; tron_mcu sends Charge 1 with the debounced contact. Assumptions until phase 7.
+    charge_confirm_current: 0.5
+    charge_confirm_time: 5.0
+    charge_confirm_timeout: 20.0
+    charge_expected_below: 95.0
+    charge_lost_time: 10.0
     # mowing.plan and the job ask the planner for a plan and set only what the request carries: width, passes and angle
     # are the planner's (mowbite_planner below). plan_timeout in s.
     plan_timeout: 30.0
     # Mowing. The blade turns only with mow_with_blade here and allow_blade of tron_mcu, and only on mow segments. It runs
     # on a lease of blade_lease s, renewed every blade_renew s. mower_spinup_rpm 0: no wait for the blade (Tron rpm not
     # measured yet); BLADES events from blade_running_rpm on. gps_wait_time s of good position before mowing goes on.
-    # Below battery_critical_voltage for battery_critical_time s mowing ends (assumption, 3.5 V per cell). A path that
+    # Below battery_critical_voltage for battery_critical_time s mowing goes home at once. ASSUMPTION until the
+    # discharge curve and question 47 (iv): 3.28 V per cell, 2 s against dips under load. battery_hot_temperature (°C)
+    # sends mowing home and stops a start, 0 for never (until question 47 (ii)). A path that
     # starts farther than approach_distance m away is reached over the drivable areas first. The checkpoint in data_dir
     # is written every checkpoint_period s while mowing.
     mow_with_blade: false
@@ -174,8 +191,9 @@ mowbite_logic:
     mower_spinup_timeout: 10.0
     blade_running_rpm: 100
     gps_wait_time: 10.0
-    battery_critical_voltage: 21.0
-    battery_critical_time: 10.0
+    battery_critical_voltage: 19.7
+    battery_critical_time: 2.0
+    battery_hot_temperature: 0.0
     approach_distance: 0.5
     checkpoint_period: 30.0
 

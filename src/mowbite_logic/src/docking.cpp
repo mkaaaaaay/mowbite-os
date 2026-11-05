@@ -170,4 +170,130 @@ bool DockingSequence::Failed() {
   return failures_ <= config_.retry_count;
 }
 
+ChargeCheck::ChargeCheck(const ChargeConfig& config, double start) : config_(config), start_(start) {}
+
+ChargeCheck::Result ChargeCheck::OnSample(const ChargeSample& sample) {
+  if (result_ != Result::kWaiting) return result_;
+  if (!sample.contact) return result_ = Result::kContactLost;
+  const bool charging = sample.battery_ok && sample.charge_current >= config_.current;
+  const bool full = sample.battery_ok && sample.percentage >= config_.expected_below;
+  if (sample.battery_ok) {
+    max_current_ = std::max(max_current_, sample.charge_current);
+    percentage_ = sample.percentage;
+  }
+  if (!charging && !full) {
+    good_since_.reset();
+  } else if (!good_since_) {
+    good_since_ = sample.time;
+  }
+  if (good_since_ && sample.time - *good_since_ >= config_.time) {
+    return result_ = charging ? Result::kCharging : Result::kFull;
+  }
+  return OnTick(sample.time);
+}
+
+ChargeCheck::Result ChargeCheck::OnTick(double now) {
+  // A stretch that began before the deadline may still end it well.
+  if (result_ == Result::kWaiting && !good_since_ && now - start_ >= config_.timeout) result_ = Result::kNoCharge;
+  return result_;
+}
+
+ChargeWatch::Change ChargeWatch::OnSample(const ChargeSample& sample, bool emergency) {
+  if (!sample.contact) {
+    good_since_.reset();
+    current_gone_since_.reset();
+    charging_ = false;
+    if (!on_station_) return Change::kNone;
+    if (!contact_gone_since_) {
+      contact_gone_since_ = sample.time;
+      emergency_ = false;
+    }
+    emergency_ = emergency_ || emergency;
+    if (sample.time - *contact_gone_since_ < config_.lost_time) return Change::kNone;
+    // Lifted or stopped by hand: the emergency tells already.
+    const bool tell = !emergency_;
+    Leave();
+    return tell ? Change::kContactLost : Change::kNone;
+  }
+  if (!on_station_) {
+    on_station_ = true;
+    stay_since_ = sample.time;
+  }
+  contact_gone_since_.reset();
+  const bool current = sample.battery_ok && sample.charge_current >= config_.current;
+  const bool full = sample.battery_ok && sample.percentage >= config_.expected_below;
+  if (!current && !full) {
+    good_since_.reset();
+  } else if (!good_since_) {
+    good_since_ = sample.time;
+  }
+  if (current) {
+    charging_ = true;
+    current_gone_since_.reset();
+  }
+  if (!confirmed_) {
+    if (good_since_ && sample.time - *good_since_ >= config_.time) {
+      confirmed_ = true;
+      return Change::kConfirmed;
+    }
+    if (no_current_told_ || good_since_ || emergency || sample.time - stay_since_ < config_.timeout) {
+      return Change::kNone;
+    }
+    no_current_told_ = true;
+    return Change::kNoCurrent;
+  }
+  // Confirmed: a current that stops near full ends there, below it is lost after lost_time; unknown tells nothing.
+  if (current || !charging_ || !sample.battery_ok) {
+    current_gone_since_.reset();
+    return Change::kNone;
+  }
+  if (full) {
+    charging_ = false;
+    current_gone_since_.reset();
+    return Change::kNone;
+  }
+  if (!current_gone_since_) {
+    current_gone_since_ = sample.time;
+    emergency_ = false;
+  }
+  emergency_ = emergency_ || emergency;
+  if (sample.time - *current_gone_since_ < config_.lost_time) return Change::kNone;
+  charging_ = false;
+  current_gone_since_.reset();
+  confirmed_ = false;
+  no_current_told_ = true;
+  return emergency_ ? Change::kNone : Change::kCurrentLost;
+}
+
+void ChargeWatch::OnBusy(bool contact_ended) {
+  on_station_ = false;
+  contact_gone_since_.reset();
+  current_gone_since_.reset();
+  good_since_.reset();
+  charging_ = false;
+  emergency_ = false;
+  if (contact_ended) Leave();
+}
+
+void ChargeWatch::Confirm() {
+  confirmed_ = true;
+  no_current_told_ = false;
+}
+
+void ChargeWatch::Unconfirm(bool told) {
+  confirmed_ = false;
+  no_current_told_ = told;
+}
+
+void ChargeWatch::Leave() {
+  on_station_ = false;
+  confirmed_ = false;
+  no_current_told_ = false;
+  contact_gone_since_.reset();
+  current_gone_since_.reset();
+  good_since_.reset();
+  charging_ = false;
+  emergency_ = false;
+}
+
 }  // namespace mowbite_logic

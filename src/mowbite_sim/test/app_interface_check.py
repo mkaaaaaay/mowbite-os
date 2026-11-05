@@ -1231,6 +1231,14 @@ if methods is not None and "docking.start" in methods:
               if top == "events/json" and json.loads(p)["type"] == "STATE"]
     check("STATE DOCKING, then IDLE", states[:1] == ["DOCKING"] and bool(wait_for(
         lambda: b'"current_state":"IDLE"' in (latest("robot_state/json") or b""), 5)), ",".join(map(str, states)))
+    # api 5: every way home carries its reason, the one of docking.start is MANUAL, before the state changes.
+    going = [e for e in (json.loads(p) for _, top, p, _ in msgs[mark:] if top == "events/json")
+             if e["type"] in ("DOCKING", "STATE")]
+    first = going[0] if going else {}
+    check("docking.start: DOCKING MANUAL before STATE DOCKING", first.get("type") == "DOCKING"
+          and first.get("reason") == "MANUAL" and first.get("severity") == "info" and fixed_reason(first, "user")
+          and len(going) > 1 and going[1].get("state") == "DOCKING",
+          json.dumps(going[:2]), point="3.1a DOCKING")
     charging = wait_for(lambda: b'"is_charging":1' in (latest("robot_state/json") or b""), 6)
     check("docked -> is_charging", bool(charging))
     r = command("docking.start", None, "dock_there")

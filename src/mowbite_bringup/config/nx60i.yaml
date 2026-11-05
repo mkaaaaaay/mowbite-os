@@ -3,10 +3,18 @@
 
 mowbite_logic:
   ros__parameters:
-    # 7S pack, as the battery voltages of the driver (xcore_driver/config/nx60i.yaml): mowing ends below 23.0 V.
+    # 7S pack, as the battery voltages of the driver (xcore_driver/config/nx60i.yaml): mowing goes home below 24.5 V
+    # (the highest voltage of 20 s), at once below 23.0 V; no battery temperature, so battery_hot_temperature stays 0.
     battery_empty_voltage: 24.5
     battery_full_voltage: 28.2
     battery_critical_voltage: 23.0
+    # The charge on the station as the NX60i showed it under OpenMower (October): 0.87 to 0.89 A constant current,
+    # done at 0.25 A (+-50 %), exactly 0 without charging; after done the charger starts again only below about
+    # 27.5 V, 82 % on the linear scale between the voltages above, so up to there no current is no fault. The board
+    # charges by itself, the current stands within a second. Until "Dock YF" confirms them at the station.
+    charge_confirm_current: 0.1
+    charge_confirm_timeout: 15.0
+    charge_expected_below: 75.0
 
 mowbite_localization:
   ros__parameters:
