@@ -121,6 +121,7 @@ class LocalizationNode : public rclcpp::Node {
           RCLCPP_INFO(get_logger(), "GPS %s", req->data ? "on" : "off");
         });
 
+    for (const auto& warning : estimator_.TakeGyroWarnings()) RCLCPP_WARN(get_logger(), "%s", warning.c_str());
     if (!estimator_.calibrated()) {
       RCLCPP_INFO(get_logger(), "Gyro calibration: keep the mower still for %.0f s",
                   get_parameter("gyro_calibration_time").as_double());
@@ -136,8 +137,9 @@ class LocalizationNode : public rclcpp::Node {
     config.gyro.still_spread = declare_parameter("gyro_still_spread", config.gyro.still_spread);
     config.gyro.offset_limit = declare_parameter("gyro_offset_limit", config.gyro.offset_limit);
     if (!(config.gyro.still_spread > 0) || !(config.gyro.offset_limit >= 0) ||
-        !std::isfinite(config.gyro.offset_limit)) {
-      throw std::invalid_argument("gyro_still_spread must be above 0 and gyro_offset_limit a number of 0 or more");
+        !std::isfinite(config.gyro.offset_limit) || !std::isfinite(config.gyro.initial_offset)) {
+      throw std::invalid_argument(
+          "gyro_still_spread must be above 0, gyro_offset_limit a number of 0 or more and gyro_offset a number");
     }
     config.max_imu_gap = declare_parameter("max_imu_gap", config.max_imu_gap);
     config.wheel_timeout = declare_parameter("wheel_timeout", config.wheel_timeout);

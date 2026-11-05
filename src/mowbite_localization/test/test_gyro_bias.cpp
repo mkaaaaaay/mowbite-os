@@ -104,7 +104,13 @@ TEST(L1GyroCalibration, TheGivenOffsetStaysWithinTheLimit) {
   config.skip_calibration = true;
   config.initial_offset = 0.05;
   config.offset_limit = 0.02;
-  EXPECT_DOUBLE_EQ(GyroBias(config).offset(), 0.02);
+  GyroBias bias(config);
+  EXPECT_DOUBLE_EQ(bias.offset(), 0.02);
+  const auto warnings = bias.TakeWarnings();
+  ASSERT_EQ(warnings.size(), 1u);
+  EXPECT_NE(warnings[0].find("beyond the limit"), std::string::npos) << warnings[0];
+  config.initial_offset = -0.01;
+  EXPECT_TRUE(GyroBias(config).TakeWarnings().empty());
 }
 
 GyroBias Calibrated(double offset) {

@@ -11,6 +11,12 @@ GyroBias::GyroBias(const GyroBiasConfig& config)
       calibrated_(config.skip_calibration),
       offset_(config.skip_calibration ? std::clamp(config.initial_offset, -config.offset_limit, config.offset_limit)
                                       : 0.0) {
+  if (config.skip_calibration && offset_ != config.initial_offset) {
+    char text[160];
+    std::snprintf(text, sizeof(text), "gyro offset %.4f rad/s from the file is beyond the limit %.4f: taking %.4f",
+                  config.initial_offset, config.offset_limit, offset_);
+    warnings_.push_back(text);
+  }
 }
 
 std::vector<std::string> GyroBias::TakeWarnings() {
