@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:mowbite-os:api:4",
+  "$id": "urn:mowbite-os:api:5",
   "title": "MowBite OS app interface",
   "description": "robot_state, events and RPC methods of MowBite OS over MQTT, as system.api gives them. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals), x-emergency-bits the bits of emergency, x-commands the methods with params, result, the event of their refusal and the actions that do the same.",
-  "x-api": 4,
+  "x-api": 5,
   "$defs": {
     "robot_state": {
       "type": "object",
@@ -256,7 +256,11 @@
             "OUTSIDE",
             "TIMEOUT",
             "APPROACH_FAILED",
-            "FOLLOWER_MISSING"
+            "FOLLOWER_MISSING",
+            "BATTERY_HOT",
+            "MOTOR_HOT",
+            "RAIN",
+            "DARK"
           ]
         },
         "message": {
@@ -300,6 +304,16 @@
           "type": "number",
           "description": "How long it lasted",
           "x-unit": "s"
+        },
+        "temperature": {
+          "type": "number",
+          "description": "The temperature it measured",
+          "x-unit": "°C"
+        },
+        "sun_elevation": {
+          "type": "number",
+          "description": "Height of the sun over the horizon at the garden",
+          "x-unit": "deg"
         }
       },
       "required": [
@@ -377,7 +391,9 @@
             "NO_DOCK",
             "DOCK_UNREACHABLE",
             "NO_DOCK_CONTACT",
-            "REFERENCE_MISMATCH"
+            "REFERENCE_MISMATCH",
+            "BATTERY_HOT",
+            "MOTOR_HOT"
           ]
         },
         "message": {
@@ -445,6 +461,11 @@
           "type": "number",
           "description": "Expected error of the position",
           "x-unit": "m"
+        },
+        "temperature": {
+          "type": "number",
+          "description": "The temperature it measured",
+          "x-unit": "°C"
         }
       },
       "required": [
@@ -1734,7 +1755,7 @@
     },
     "event.BATTERY_LOW": {
       "type": "object",
-      "description": "The battery stayed below its critical voltage: the mower goes home",
+      "description": "The battery is low and the mower cannot go home: it stays where it is",
       "properties": {
         "id": {
           "type": "string",
@@ -1779,7 +1800,7 @@
         },
         "limit": {
           "type": "number",
-          "description": "The critical voltage",
+          "description": "The voltage it fell below",
           "x-unit": "V"
         }
       },
@@ -2235,6 +2256,118 @@
       "additionalProperties": false,
       "x-emitter": "logic"
     },
+    "event.DOCKING": {
+      "type": "object",
+      "description": "The mower goes home to the docking station; the reason tells why",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Random id of the event, 32 letters and digits"
+        },
+        "t": {
+          "type": "number",
+          "description": "When it happened",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "DOCKING",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "type": "number",
+          "description": "Where the mower was, east of the datum of the map",
+          "x-unit": "m"
+        },
+        "y": {
+          "type": "number",
+          "description": "Where the mower was, north of the datum of the map",
+          "x-unit": "m"
+        },
+        "job_id": {
+          "type": "string",
+          "description": "The job of mowing it belongs to"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "The session of the logic since its start"
+        },
+        "client": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "description": "Who sent the command (app, ha), for the log and the events of its step"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "MANUAL",
+            "BATTERY_CRITICAL",
+            "BATTERY_HOT",
+            "BATTERY_LOW",
+            "MOTOR_HOT",
+            "RAIN",
+            "DARK"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "English text for the log and for apps that do not know the reason"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "description": "How bad it is"
+        },
+        "resume": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "description": "auto when it goes on by itself, user when it waits for the user"
+        },
+        "battery_voltage": {
+          "type": "number",
+          "description": "Voltage of the battery",
+          "x-unit": "V"
+        },
+        "limit": {
+          "type": "number",
+          "description": "The limit the value went past, in the unit of the value"
+        },
+        "temperature": {
+          "type": "number",
+          "description": "The temperature it measured",
+          "x-unit": "°C"
+        },
+        "battery_percentage": {
+          "type": "integer",
+          "description": "Charge of the battery",
+          "x-unit": "%"
+        },
+        "sun_elevation": {
+          "type": "number",
+          "description": "Height of the sun over the horizon at the garden",
+          "x-unit": "deg"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "additionalProperties": false,
+      "x-emitter": "logic"
+    },
     "event.DOCKED": {
       "type": "object",
       "description": "The mower is on the contacts of the docking station",
@@ -2434,7 +2567,10 @@
           "enum": [
             "approach_failed",
             "dock_failed",
-            "NO_CHARGE_CURRENT"
+            "NO_CHARGE_CURRENT",
+            "NO_POSITION",
+            "NO_HEADING",
+            "POSITION_ACCURACY"
           ]
         },
         "message": {
@@ -2465,8 +2601,12 @@
         },
         "limit": {
           "type": "number",
-          "description": "The limit the value went past, in the unit of the value",
-          "x-unit": "A"
+          "description": "The limit the value went past, in the unit of the value"
+        },
+        "accuracy": {
+          "type": "number",
+          "description": "Expected error of the position",
+          "x-unit": "m"
         }
       },
       "required": [
@@ -3072,6 +3212,7 @@
               "MOW_MOTOR_SPINUP_FAILED",
               "UNDOCKED",
               "UNDOCKING_FAILED",
+              "DOCKING",
               "DOCKED",
               "DOCKING_RETRY",
               "DOCKING_FAILED",
@@ -3162,6 +3303,9 @@
         },
         {
           "$ref": "#/$defs/event.UNDOCKING_FAILED"
+        },
+        {
+          "$ref": "#/$defs/event.DOCKING"
         },
         {
           "$ref": "#/$defs/event.DOCKED"
@@ -4105,6 +4249,39 @@
           "seconds": "s",
           "limit": "s"
         }
+      },
+      "BATTERY_HOT": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The battery is too hot",
+        "fields": {
+          "temperature": "°C",
+          "limit": "°C"
+        }
+      },
+      "MOTOR_HOT": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The blade motor is too hot",
+        "fields": {
+          "temperature": "°C",
+          "limit": "°C"
+        }
+      },
+      "RAIN": {
+        "severity": "info",
+        "resume": "user",
+        "description": "It rains",
+        "fields": {}
+      },
+      "DARK": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The sun has set",
+        "fields": {
+          "sun_elevation": "deg",
+          "limit": "deg"
+        }
       }
     },
     "MOWING_REFUSED": {
@@ -4256,6 +4433,24 @@
         "fields": {
           "distance": "m",
           "limit": "m"
+        }
+      },
+      "BATTERY_HOT": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The battery is too hot",
+        "fields": {
+          "temperature": "°C",
+          "limit": "°C"
+        }
+      },
+      "MOTOR_HOT": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The blade motor is too hot",
+        "fields": {
+          "temperature": "°C",
+          "limit": "°C"
         }
       }
     },
@@ -5061,6 +5256,66 @@
         "fields": {}
       }
     },
+    "DOCKING": {
+      "MANUAL": {
+        "severity": "info",
+        "resume": "user",
+        "description": "By the user",
+        "fields": {}
+      },
+      "BATTERY_CRITICAL": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The battery voltage is critically low",
+        "fields": {
+          "battery_voltage": "V",
+          "limit": "V"
+        }
+      },
+      "BATTERY_HOT": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The battery is too hot",
+        "fields": {
+          "temperature": "°C",
+          "limit": "°C"
+        }
+      },
+      "BATTERY_LOW": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The battery is too low",
+        "fields": {
+          "battery_voltage": "V",
+          "battery_percentage": "%",
+          "limit": "V"
+        }
+      },
+      "MOTOR_HOT": {
+        "severity": "warning",
+        "resume": "user",
+        "description": "The blade motor is too hot",
+        "fields": {
+          "temperature": "°C",
+          "limit": "°C"
+        }
+      },
+      "RAIN": {
+        "severity": "info",
+        "resume": "user",
+        "description": "It rains",
+        "fields": {}
+      },
+      "DARK": {
+        "severity": "info",
+        "resume": "user",
+        "description": "The sun has set",
+        "fields": {
+          "sun_elevation": "deg",
+          "limit": "deg"
+        }
+      }
+    },
     "DOCKING_RETRY": {
       "approach_failed": {
         "severity": "warning",
@@ -5104,6 +5359,27 @@
         "fields": {
           "current": "A",
           "limit": "A"
+        }
+      },
+      "NO_POSITION": {
+        "severity": "error",
+        "resume": "user",
+        "description": "No position from the localization",
+        "fields": {}
+      },
+      "NO_HEADING": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The heading is not known yet",
+        "fields": {}
+      },
+      "POSITION_ACCURACY": {
+        "severity": "error",
+        "resume": "user",
+        "description": "The position is not accurate enough",
+        "fields": {
+          "accuracy": "m",
+          "limit": "m"
         }
       }
     },

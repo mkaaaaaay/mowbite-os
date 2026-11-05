@@ -38,6 +38,10 @@ Field Seconds() {
   return Number("seconds", "s", "How long it lasted");
 }
 
+Field Temperature() {
+  return Number("temperature", "°C", "The temperature it measured");
+}
+
 // reason, message, severity and resume as PutReason of the logic writes them.
 std::vector<Field> Rated(bool always, std::vector<Field> fields = {}) {
   fields.push_back(Text("reason", "Why: a fixed name in capitals, rated in x-reasons", always));
@@ -63,6 +67,10 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
   static const std::map<std::string, ReasonText> texts = {
       {"ALREADY_THERE", {"The mower is there already", {}}},
       {"APPROACH_FAILED", {"The approach to the docking station failed", {}}},
+      {"BATTERY_CRITICAL",
+       {"The battery voltage is critically low",
+        {Number("battery_voltage", "V", "Voltage of the battery"), Limit("V")}}},
+      {"BATTERY_HOT", {"The battery is too hot", {Temperature(), Limit("°C")}}},
       {"BATTERY_LOW",
        {"The battery is too low",
         {Number("battery_voltage", "V", "Voltage of the battery"),
@@ -80,6 +88,9 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
        {"The correlation data of the request is longer than 1024 bytes: nothing was done",
         {Limit("bytes")}}},
       {"CROSS_TRACK", {"The mower got too far off its path", {}}},
+      {"DARK",
+       {"The sun has set",
+        {Number("sun_elevation", "deg", "Height of the sun over the horizon at the garden"), Limit("deg")}}},
       {"DOCK_TOO_CLOSE", {"The two points of the docking station are too close together", {Distance(), Limit("m")}}},
       {"DOCK_UNREACHABLE",
        {"The docking station is outside of the areas the mower may drive in", {Distance()}}},
@@ -108,6 +119,7 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
         {Text("datum_state", "unbound when the map has no recorded datum", false, {"unbound"})}}},
       {"MAP_UNKNOWN", {"The datum of the GNSS is not known yet", {}}},
       {"MAP_UNREADABLE", {"The map cannot be read", {}}},
+      {"MOTOR_HOT", {"The blade motor is too hot", {Temperature(), Limit("°C")}}},
       {"NOT_ALLOWED", {"Outside of the areas the mower may drive in", {}}},
       {"NOT_MOVING", {"The mower does not move", {}}},
       {"NOT_TURNING", {"The mower does not turn", {}}},
@@ -239,7 +251,8 @@ const std::vector<EventEntry>& Events() {
              R("BLADE_REFUSED", "error", "user"), R("PLANNING_FAILED", "error", "user"), R("INVALID", "error", "user"),
              R("NOT_ALLOWED", "error", "user"), R("CROSS_TRACK", "error", "user"), R("OUTSIDE", "error", "user"),
              R("TIMEOUT", "error", "user"), R("APPROACH_FAILED", "error", "user"),
-             R("FOLLOWER_MISSING", "error", "user")},
+             R("FOLLOWER_MISSING", "error", "user"), R("BATTERY_HOT", "warning", "user"),
+             R("MOTOR_HOT", "warning", "user"), R("RAIN", "info", "user"), R("DARK", "info", "user")},
             "error", "user"),
       Event("MOWING_REFUSED", "logic", "A start of mowing was refused", Rated(true),
             User({{"BUSY", "info"},
@@ -262,7 +275,9 @@ const std::vector<EventEntry>& Events() {
                   {"NO_DOCK", "warning"},
                   {"DOCK_UNREACHABLE", "warning"},
                   {"NO_DOCK_CONTACT", "warning"},
-                  {"REFERENCE_MISMATCH", "warning"}})),
+                  {"REFERENCE_MISMATCH", "warning"},
+                  {"BATTERY_HOT", "warning"},
+                  {"MOTOR_HOT", "warning"}})),
       Event("DRIVE_REFUSED", "logic", "A drive (to a point or home) was refused", Rated(true),
             User({{"BUSY", "info"},
                   {"HOLD", "info"},
@@ -408,9 +423,9 @@ const std::vector<EventEntry>& Events() {
             "error", "user"),
       Event("BLADES", "logic", "The blade started or stopped, as its speed shows",
             {Bool("enabled", "Whether the blade runs")}),
-      Event("BATTERY_LOW", "logic", "The battery stayed below its critical voltage: the mower goes home",
+      Event("BATTERY_LOW", "logic", "The battery is low and the mower cannot go home: it stays where it is",
             {Number("battery_voltage", "V", "Voltage of the battery", true),
-             Number("limit", "V", "The critical voltage", true)}),
+             Number("limit", "V", "The voltage it fell below", true)}),
       Event("AREA", "logic", "Mowing began in an area",
             {Text("area_id", "Id of the area", true), Text("area_name", "Name of the area", true)}),
       Event("AREA_SKIPPED", "logic", "An area was skipped",
@@ -422,13 +437,23 @@ const std::vector<EventEntry>& Events() {
       Event("UNDOCKED", "logic", "The mower left the docking station"),
       Event("UNDOCKING_FAILED", "logic", "Leaving the docking station failed; the mower stays where it stopped",
             Rated(true), User({{"path_failed", "error"}, {"no_gps", "error"}}), "error", "user"),
+      Event("DOCKING", "logic", "The mower goes home to the docking station; the reason tells why", Rated(true),
+            {R("MANUAL", "info", "user"), R("BATTERY_CRITICAL", "warning", "user"), R("BATTERY_HOT", "warning", "user"),
+             R("BATTERY_LOW", "info", "user"), R("MOTOR_HOT", "warning", "user"), R("RAIN", "info", "user"),
+             R("DARK", "info", "user")},
+            "info", "user"),
       Event("DOCKED", "logic", "The mower is on the contacts of the docking station"),
       Event("DOCKING_RETRY", "logic", "Docking failed, the next try follows by itself", DockingTries(),
             {R("approach_failed", "warning", "auto"), R("dock_failed", "warning", "auto"),
              R("NO_CHARGE_CURRENT", "warning", "auto")},
             "warning", "auto"),
       Event("DOCKING_FAILED", "logic", "Docking failed for good; the mower waits", DockingTries(),
-            User({{"approach_failed", "error"}, {"dock_failed", "error"}, {"NO_CHARGE_CURRENT", "error"}}),
+            User({{"approach_failed", "error"},
+                  {"dock_failed", "error"},
+                  {"NO_CHARGE_CURRENT", "error"},
+                  {"NO_POSITION", "error"},
+                  {"NO_HEADING", "error"},
+                  {"POSITION_ACCURACY", "error"}}),
             "error", "user"),
       Event("CHARGING_LOST", "logic", "Charging stopped while the mower stood on the docking station; it stays there",
             Rated(true, {Integer("battery_percentage", "%", "Charge of the battery")}),

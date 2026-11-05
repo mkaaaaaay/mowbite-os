@@ -10,7 +10,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 4;
+constexpr int kApi = 5;
 
 // The JSON type of a field; kNumber takes whole numbers as well, kInteger also 2.0.
 enum class Type { kString, kNumber, kInteger, kBoolean, kObject, kArray };

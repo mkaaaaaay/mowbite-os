@@ -55,8 +55,8 @@ TEST(CheckEvent, AReasonWithItsRatingAndItsOwnFields) {
   wrong["severity"] = "error";
   EXPECT_TRUE(Has(CheckEvent("STATE", wrong), "severity \"error\", the catalog says warning"));
   wrong = paused;
-  wrong["reason"] = "RAIN";
-  EXPECT_TRUE(Has(CheckEvent("STATE", wrong), "reason RAIN is not in the catalog for this event"));
+  wrong["reason"] = "HOLD";
+  EXPECT_TRUE(Has(CheckEvent("STATE", wrong), "reason HOLD is not in the catalog for this event"));
 
   Json low = at;
   low.update(Json{{"reason", "BATTERY_LOW"}, {"severity", "warning"}, {"resume", "user"},
