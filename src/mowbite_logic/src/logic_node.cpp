@@ -516,6 +516,18 @@ class LogicNode : public rclcpp::Node {
         declare_parameter("dock_gate_heading", config.dock.gate_heading * 180.0 / M_PI) * M_PI / 180.0;
     config.dock.overshoot = declare_parameter("dock_overshoot", config.dock.overshoot);
     config.dock.contact_timeout = declare_parameter("contact_timeout", config.dock.contact_timeout);
+    // The charge that confirms docking and whose loss on the station is told, the platform's.
+    config.charge.current = declare_parameter("charge_confirm_current", config.charge.current);
+    config.charge.time = declare_parameter("charge_confirm_time", config.charge.time);
+    config.charge.timeout = declare_parameter("charge_confirm_timeout", config.charge.timeout);
+    config.charge.expected_below = declare_parameter("charge_expected_below", config.charge.expected_below);
+    config.charge.lost_time = declare_parameter("charge_lost_time", config.charge.lost_time);
+    if (!(config.charge.current > 0) || !(config.charge.time >= 0) || !(config.charge.timeout > config.charge.time) ||
+        !(config.charge.lost_time > 0)) {
+      throw std::invalid_argument(
+          "charge_confirm_current and charge_lost_time need to be above 0, charge_confirm_timeout above "
+          "charge_confirm_time");
+    }
     // The calibration drive: what a start needs, and how long the program may be silent.
     config.calibration.max_position_accuracy =
         declare_parameter("calibration_max_position_accuracy", config.calibration.max_position_accuracy);
@@ -544,10 +556,11 @@ class LogicNode : public rclcpp::Node {
     hw.blade = ToMotor(msg.blade_motor);
     hw.left = ToMotor(msg.left_motor);
     hw.right = ToMotor(msg.right_motor);
+    hw.time_s = MonotonicSeconds();
     {
       std::lock_guard<std::mutex> lock(mutex_);
       core_.OnHardwareStatus(hw);
-      last_hw_ = MonotonicSeconds();
+      last_hw_ = hw.time_s;
     }
     Flush();
   }
@@ -2250,8 +2263,8 @@ class LogicNode : public rclcpp::Node {
     }
   }
 
-  // hw/charge: off before undocking, the answer goes to the core; on again after an undocking that ended on the
-  // station. Called with the mutex held.
+  // hw/charge: off before the mower leaves the contacts (undocking, a docking that failed there), the answer goes to
+  // the core; on again after it. Called with the mutex held.
   void SendCharge(bool on) {
     const uint64_t seq = ++charge_seq_;
     charge_sent_.reset();
@@ -2285,7 +2298,7 @@ class LogicNode : public rclcpp::Node {
                                    Flush();
                                  })
             .request_id;
-    RCLCPP_INFO(get_logger(), "Charging %s", on ? "allowed again" : "off before undocking");
+    RCLCPP_INFO(get_logger(), "Charging %s", on ? "allowed again" : "off before leaving the docking station");
   }
 
   // Hands the way out of the station to the follower: straight, without steering, at the speed of undocking. Besides
@@ -2341,7 +2354,8 @@ class LogicNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       if (auto edit = core_.TakeMapEdit()) SendMapEdit(*edit);
       if (auto heading = core_.TakeDockCheck()) SendDockCheck(*heading);
-      // Undocking: charging off, then the way out; after it the drive that waited, or charging on again.
+      // Undocking (and docking that leaves the contacts): charging off, then the way out; after it the drive that
+      // waited, or charging on again.
       if (core_.TakeChargeOff()) SendCharge(false);
       if (auto path = core_.TakeUndockPath()) SendUndock(*path);
       if (core_.TakeChargeOn()) SendCharge(true);

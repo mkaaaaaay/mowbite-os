@@ -2,6 +2,7 @@
 #define MOWBITE_LOGIC_DOCKING_H
 
 #include <cmath>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -87,6 +88,10 @@ class DockingSequence {
 
   // Counts a failed try; true when another one follows.
   bool Failed();
+  // Whether a failure now would be the last one: no try follows it.
+  bool LastTry() const {
+    return failures_ >= config_.retry_count;
+  }
   int failures() const {
     return failures_;
   }
@@ -104,6 +109,104 @@ class DockingSequence {
   DockPose station_;
   double facing_ = 0;
   int failures_ = 0;
+};
+
+// The charge on the contacts confirms docking (G19): the contact and a charge current of at least current A without a
+// gap for time s, or at expected_below percent or more the contact alone for that long, as a charger stays off near
+// full. Without either within timeout s of the debounced contact the try fails. In IDLE on the station charging
+// counts as lost after lost_time s without the contact, or without the current that was there while the battery is
+// below expected_below. Per platform, assumptions until measured (Tron phase 7, YardForce "Dock YF").
+struct ChargeConfig {
+  double current = 0.5;
+  double time = 5.0;
+  double timeout = 20.0;
+  double expected_below = 95.0;
+  double lost_time = 10.0;
+};
+
+// What one report of hw/status says about charging.
+struct ChargeSample {
+  // Monotonic s.
+  double time = 0;
+  // Debounced, with telemetry.
+  bool contact = false;
+  bool battery_ok = false;
+  // A into the battery, 0 while it discharges.
+  double charge_current = 0;
+  int percentage = 0;
+};
+
+// The check after the debounced contact while docking, without ROS.
+class ChargeCheck {
+ public:
+  enum class Result { kWaiting, kCharging, kFull, kContactLost, kNoCharge };
+
+  ChargeCheck(const ChargeConfig& config, double start);
+
+  // Every report while it runs; once it is not kWaiting the result stays.
+  Result OnSample(const ChargeSample& sample);
+  // The deadline also between reports.
+  Result OnTick(double now);
+  Result result() const {
+    return result_;
+  }
+  // The largest charge current seen (A) and the last battery percentage, for the messages.
+  double max_current() const {
+    return max_current_;
+  }
+  int percentage() const {
+    return percentage_;
+  }
+
+ private:
+  ChargeConfig config_;
+  double start_ = 0;
+  // Since when the contact and the charge current, or a full battery, held without a gap.
+  std::optional<double> good_since_;
+  double max_current_ = 0;
+  int percentage_ = 0;
+  Result result_ = Result::kWaiting;
+};
+
+// IDLE on the station, without ROS: whether charging is confirmed there, by the rule of ChargeCheck, and when it
+// stops. Unconfirmed after the start, after a loss, once the contact ended outside of IDLE, and where docking ended
+// on the contacts without a confirmed charge; each confirmation from there is a DOCKED.
+class ChargeWatch {
+ public:
+  // kConfirmed: DOCKED. kContactLost, kCurrentLost (it charged, and stopped below expected_below) and kNoCurrent
+  // (unconfirmed for timeout s without a current, once per stay): CHARGING_LOST.
+  enum class Change { kNone, kConfirmed, kContactLost, kCurrentLost, kNoCurrent };
+
+  explicit ChargeWatch(const ChargeConfig& config = ChargeConfig()) : config_(config) {}
+
+  // Every report in IDLE with telemetry; emergency: whether one is on.
+  Change OnSample(const ChargeSample& sample, bool emergency);
+  // Every report outside of IDLE or without telemetry: the stay is not watched; contact_ended unconfirms.
+  void OnBusy(bool contact_ended);
+  // Docking confirmed the charge.
+  void Confirm();
+  // Docking ended on the contacts without a confirmed charge; told: its lack was told already (charge_failed).
+  void Unconfirm(bool told);
+  bool confirmed() const {
+    return confirmed_;
+  }
+
+ private:
+  // The stay ends: off the station.
+  void Leave();
+
+  ChargeConfig config_;
+  bool confirmed_ = false;
+  bool no_current_told_ = false;
+  // The stay on the contacts in IDLE: since when, since when the contact or the current is gone and whether an
+  // emergency came meanwhile, since when the rule of the check holds, whether a current flowed.
+  bool on_station_ = false;
+  double stay_since_ = 0;
+  std::optional<double> contact_gone_since_;
+  std::optional<double> current_gone_since_;
+  bool emergency_ = false;
+  std::optional<double> good_since_;
+  bool charging_ = false;
 };
 
 }  // namespace mowbite_logic

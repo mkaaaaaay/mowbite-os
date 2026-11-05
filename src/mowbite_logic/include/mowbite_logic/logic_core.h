@@ -44,6 +44,8 @@ struct HardwareSnapshot {
   Motor blade;
   Motor left;
   Motor right;
+  // Monotonic s when the node got the report: the check of the charge and its watch measure time with it.
+  double time_s = 0;
 };
 
 // What the logic needs from localization/pose.
@@ -110,6 +112,8 @@ struct LogicConfig {
   // After JOB_COMPLETE, abort_mowing and on docking.start the mower backs onto the station (contacts behind base_link
   // only); a try that fails also drives out like undocking.
   DockConfig dock;
+  // DOCKED only with the charge confirmed on the contacts, CHARGING_LOST in IDLE on the station (G19).
+  ChargeConfig charge;
   CalibrationConfig calibration;
 };
 
@@ -380,6 +384,7 @@ class LogicCore {
   // once, and hands the answer to OnChargeOff), then the path of TakeUndockPath to the follower, whose end goes to OnUndockEnded. After UNDOCKED
   // mowing or the drive starts like away from the station. Charging is allowed again (TakeChargeOn) when undocking
   // ends otherwise, as the mower may still stand on the contacts. TakeUndockOutcome tells the node once how it ended.
+  // Docking uses TakeChargeOff, OnChargeOff and TakeChargeOn the same way before it drives off the contacts.
   bool Undocking() const;
   bool UndockingForDrive() const;
   bool TakeChargeOff();
@@ -393,9 +398,13 @@ class LogicCore {
   // DOCKING: back onto the station of the map after JOB_COMPLETE and abort_mowing, or on docking.start, where the
   // contacts are at the back (CanDock); else IDLE as before. The node hands the leg of TakeDockingLeg to the follower,
   // once and when nothing else is on its way, and its end to OnDockingLegEnded. On the way onto the station the first
-  // raw contact stops the mower (one zero command, G18) and the debounced one ends in DOCKED. A failed try drives out
-  // to the approach point, then DOCKING_RETRY or after docking_retry_count DOCKING_FAILED; a bad position waits like
-  // mowing, at most gps_timeout. An emergency and abort_docking end it without DOCKING_FAILED.
+  // raw contact stops the mower (one zero command, G18); the debounced one, also at the end of a leg that failed,
+  // starts the check of the charge (ChargeCheck), and only a confirmed charge ends in DOCKED. A failed try drives out
+  // to the approach point, off the contacts with charging off first where the driver can stop it, then DOCKING_RETRY
+  // or after docking_retry_count DOCKING_FAILED; the last try without a charge current (charge_failed) leaves the
+  // mower on the contacts, and a stable charge current there later still ends in DOCKED. A bad position waits like
+  // mowing, at most gps_timeout. An emergency and abort_docking end it without DOCKING_FAILED. In IDLE on the contacts
+  // CHARGING_LOST tells when the contact or the charge current goes away (ChargeConfig); the mower stays.
   bool CanDock() const;
   bool Docking() const;
   // Why docking.start cannot start now, empty if it can: BUSY, ALREADY_THERE on the contacts, EMERGENCY or
@@ -546,7 +555,19 @@ class LogicCore {
   void NextDockingTry();
   void OnDockingContact();
   // A try failed: counted at once, or once the mower drove out to the approach point when it stands on the line.
-  void DockingTryFailed(const std::string& code, const std::string& message);
+  void DockingTryFailed(const Reason& why);
+  // The leg for the node; a way out from the contacts waits until charging is off, where the driver can stop it.
+  void SetDockingLeg(DockingLeg leg);
+  void DockingChargeOff(bool ok, const std::string& message);
+  // Once the docking switched charging off: allowed again after the way out and when docking ends.
+  void AllowChargeAgain();
+  // The check of the charge from the debounced contact on, its samples and how it ended.
+  void BeginChargeCheck();
+  ChargeSample ChargeSampleNow() const;
+  void OnChargeResult(ChargeCheck::Result result);
+  // IDLE on the contacts: DOCKED once the charge is confirmed there, CHARGING_LOST when it stops (ChargeWatch).
+  void WatchCharge();
+  void ChargingLost(const Reason& why);
   // DOCKING_RETRY and the next try, or DOCKING_FAILED and IDLE (also when last). A copy: why may be the failure kept.
   void CountDockingFailure(Reason why, bool last = false);
   void WaitForDockingGps();
@@ -635,6 +656,15 @@ class LogicCore {
   bool docking_gps_wait_ = false;
   std::optional<double> docking_gps_since_;
   std::optional<double> docking_gps_good_since_;
+  // The check of the charge on the contacts and whether it ran in this try; the way out kept until charging is off;
+  // whether this docking switched charging off (stopped once the driver confirmed it) and has to allow it again.
+  std::optional<ChargeCheck> docking_charge_;
+  bool docking_checked_ = false;
+  std::optional<DockingLeg> docking_out_after_charge_off_;
+  bool docking_charge_touched_ = false;
+  bool docking_charge_stopped_ = false;
+  // Whether charging is confirmed on the station, and its loss.
+  ChargeWatch charge_watch_;
   std::string session_id_;
   int pause_ = 0;
   Reason pause_reason_;
