@@ -332,6 +332,32 @@ TEST(LogicMowing, ABladeRefusedForAnEmergencyPausesAsTheEmergencyDoes) {
   EXPECT_EQ(Find(events, "STATE")->details.at("message"), "The blade was refused: mower on the dock");
 }
 
+TEST(LogicMowing, ARefusalOfABladeThatIsNotWantedChangesNothing) {
+  // Without mow_with_blade the blade is never wanted, so a late answer of hw/blade does not pause.
+  LogicCore core = Following();
+  core.OnJobProgress(1);
+  ASSERT_FALSE(core.BladeWanted());
+  core.OnBladeRefused("allow_blade is off", 0);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  EXPECT_TRUE(core.TakeEvents().empty());
+}
+
+TEST(LogicMowing, AnEmergencyCancelsADriveOnlyWhereOneRuns) {
+  auto stopped = Healthy();
+  stopped.emergency = true;
+  stopped.emergency_reason = kEmergencyLatch | kEmergencyStop;
+  LogicCore idle = Ready();
+  idle.TakeDriveCancel();
+  idle.OnHardwareStatus(stopped);
+  EXPECT_FALSE(idle.TakeDriveCancel());
+  // Mowing: once when it begins, not again when it ends before the follower told the end of its leg.
+  LogicCore core = Following();
+  core.OnHardwareStatus(stopped);
+  EXPECT_TRUE(core.TakeDriveCancel());
+  core.OnHardwareStatus(Healthy());
+  EXPECT_FALSE(core.TakeDriveCancel());
+}
+
 TEST(LogicMowing, TheGpsPauseCarriesTheAccuracyAndTheLimit) {
   LogicConfig config;
   LogicCore core = Following(config);

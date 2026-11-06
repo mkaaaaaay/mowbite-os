@@ -1032,6 +1032,24 @@ TEST(ChargingLost, AStayThatNeverChargesIsToldOnceAfterTheDeadline) {
   EXPECT_FALSE(Find(stopped.TakeEvents(), "CHARGING_LOST"));
 }
 
+TEST(ChargingLost, LostTelemetryKeepsTheConfirmationAndStartsTheStayAnew) {
+  // Confirmed before: no second DOCKED once telemetry is back.
+  LogicCore docked = OnTheStation();
+  docked.OnHardwareTimeout();
+  docked.OnHardwareStatus(Charging(20.0));
+  docked.OnHardwareStatus(Charging(25.0));
+  EXPECT_FALSE(Find(docked.TakeEvents(), "DOCKED"));
+  // Never charging: the 20 s count from the first report after the gap.
+  LogicCore core = Ready();
+  core.OnHardwareStatus(Charging(10.0, 0.0f));
+  core.OnHardwareTimeout();
+  core.OnHardwareStatus(Charging(26.0, 0.0f));
+  core.OnHardwareStatus(Charging(30.0, 0.0f));
+  EXPECT_FALSE(Find(core.TakeEvents(), "CHARGING_LOST"));
+  core.OnHardwareStatus(Charging(46.0, 0.0f));
+  EXPECT_TRUE(Find(core.TakeEvents(), "CHARGING_LOST"));
+}
+
 TEST(ChargingLost, NothingWhileTheMowerIsBusy) {
   LogicCore core = OnTheStation();
   ASSERT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);

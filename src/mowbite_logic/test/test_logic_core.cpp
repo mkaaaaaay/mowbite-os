@@ -56,8 +56,10 @@ TEST(Logic, StartsInEmergencyWithoutEventOnFirstReport) {
   LogicCore core{LogicConfig{}};
   core.OnMapStatus(MapDatum::kMatch, "");
   EXPECT_TRUE(core.RobotState().emergency);
+  EXPECT_TRUE(core.Emergency());
   core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.RobotState().emergency);
+  EXPECT_FALSE(core.Emergency());
   EXPECT_TRUE(core.TakeEvents().empty());
   EXPECT_EQ(core.RobotState().state, "IDLE");
 }
@@ -345,6 +347,42 @@ TEST(Logic, ActionsChangeFlag) {
   EXPECT_TRUE(core.TakeActionsChanged());
   core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.TakeActionsChanged());
+}
+
+TEST(Logic, ActionsChangeWithHoldAndEmergencyAlsoWhenTheStartReasonStays) {
+  // An update holds the logic: the reason against a start stays HOLD throughout.
+  const auto held = [] {
+    LogicCore core{LogicConfig{}};
+    core.OnMapStatus(MapDatum::kMatch, "");
+    core.SetHold(1);
+    core.TakeActionsChanged();
+    return core;
+  };
+  LogicCore core = held();
+  core.OnHardwareStatus(Healthy());
+  EXPECT_TRUE(core.TakeActionsChanged());
+  core.OnHardwareStatus(Stopped(kEmergencyLatch));
+  EXPECT_TRUE(core.TakeActionsChanged());
+  // A first report that keeps the emergency, with the driver holding too.
+  LogicCore driver = held();
+  HardwareSnapshot hw = Stopped(kEmergencyLatch);
+  hw.hold = true;
+  driver.OnHardwareStatus(hw);
+  EXPECT_TRUE(driver.TakeActionsChanged());
+}
+
+TEST(Logic, BladesRunFromTheRunningRpmOn) {
+  LogicCore core{LogicConfig{}};
+  core.OnMapStatus(MapDatum::kMatch, "");
+  core.OnHardwareStatus(Healthy());
+  core.TakeEvents();
+  HardwareSnapshot hw = Healthy();
+  hw.blade.rpm = LogicConfig{}.blade_running_rpm;
+  core.OnHardwareStatus(hw);
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].type, "BLADES");
+  EXPECT_EQ(events[0].details["enabled"], true);
 }
 
 TEST(Logic, RobotStateAndSensors) {

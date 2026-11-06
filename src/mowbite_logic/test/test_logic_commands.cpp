@@ -565,6 +565,21 @@ TEST(LogicCommands, ReleaseCarriesSourceAndClient) {
   EXPECT_FALSE(core.TakeEvents().back().details.contains("source"));
 }
 
+TEST(LogicCommands, AnEmergencyEndsWithASourceOnlyAfterItsOwnRequest) {
+  LogicCore core = Idle();
+  core.OnHardwareStatus(InEmergency());
+  core.OnHardwareStatus(Healthy());
+  EXPECT_FALSE(core.TakeEvents().back().details.contains("source"));
+  // A request that ended one emergency does not tell the end of the next.
+  core.OnHardwareStatus(InEmergency());
+  Rpc(core, "emergency.reset");
+  core.OnHardwareStatus(Healthy());
+  EXPECT_EQ(core.TakeEvents().back().details["source"], "rpc");
+  core.OnHardwareStatus(InEmergency());
+  core.OnHardwareStatus(Healthy());
+  EXPECT_FALSE(core.TakeEvents().back().details.contains("source"));
+}
+
 // I2: start_mowing carries a reason exactly while it is off, the one MOWING_REFUSED gets when it is pressed anyway.
 TEST(LogicCommands, StartMowingShowsTheReasonOfItsRefusal) {
   const mowbite_api::EventEntry* refused = mowbite_api::FindEvent("MOWING_REFUSED");
