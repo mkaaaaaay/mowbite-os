@@ -914,6 +914,18 @@ TEST(XcoreControl, HoldWithoutMotionSendsNoDrive) {
   }
 }
 
+TEST(XcoreControl, ACommandDuringAHoldIsDroppedNotKeptForLater) {
+  Fixture f;
+  f.control.SetHold(true);
+  f.control.OnCmdVel(0.2, 0, 0);
+  f.control.SetHold(false);
+  for (int i = 0; i < 100; i++) {
+    const double t = i * 0.01;
+    f.Board(0, t);
+    EXPECT_TRUE(Of(f.control.Tick(t), kDiffDriveService).empty());
+  }
+}
+
 // A driver started again after its predecessor ended (start_latched): the board is held from the first frame on, and
 // commands stay without effect until a release.
 TEST(XcoreControl, LatchedBeforeTheFirstFrame) {
