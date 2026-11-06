@@ -1,0 +1,10 @@
+[Unit]
+Description=MowBite trial period: SSH login within 10 minutes of the boot
+ConditionPathExists=/etc/mowbite/probezeit
+
+[Timer]
+OnBootSec=10min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

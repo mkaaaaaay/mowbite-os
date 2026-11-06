@@ -1,0 +1,12 @@
+[Unit]
+Description=Tron IMU, camera and rear camera setup
+ConditionPathExists=/usr/metoak/metoak/mo_asicrw
+After=systemd-modules-load.service systemd-udevd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/mowbite/tron-hwinit
+
+[Install]
+WantedBy=multi-user.target

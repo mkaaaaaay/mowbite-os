@@ -1,0 +1,16 @@
+# Vendor parts that make-image.sh copies from the owner's rootfs backup (paths from /, directories with contents).
+# Never in the repo or the base rootfs: no licence for redistribution.
+# Kernel modules for 5.10.209 with modules.* (WLAN bcmdhd, init_test)
+usr/lib/modules/5.10.209
+# Metoak modules: IMU, temperature sensor, flash trigger
+usr/lib/kernel/driver
+# Firmware of WLAN and Bluetooth (AP6256) and the rest of the Rockchip set
+vendor/etc/firmware
+# Metoak setup tool of the stereo camera bridge
+usr/metoak/metoak/mo_asicrw
+# Camera tuning and the Rockchip camera libraries
+etc/iqfiles
+usr/lib/librkaiq.so
+usr/lib/aarch64-linux-gnu/librga.so
+usr/lib/aarch64-linux-gnu/librga.so.2
+usr/lib/aarch64-linux-gnu/librga.so.2.1.0

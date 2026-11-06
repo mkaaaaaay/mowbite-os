@@ -1,0 +1,7 @@
+[Unit]
+Description=MowBite trial period: check for an SSH login
+ConditionPathExists=/etc/mowbite/probezeit
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/mowbite/probezeit timeout

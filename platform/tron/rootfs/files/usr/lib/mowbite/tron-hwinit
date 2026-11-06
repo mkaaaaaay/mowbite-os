@@ -1,0 +1,53 @@
+#!/bin/sh
+# Sets up the IMU, the temperature sensor, the stereo camera and the rear camera of the Tron. Needs the vendor parts
+# that make-image.sh adds from the owner's backup (Metoak modules, mo_asicrw); each step logs its own failure.
+set -u
+MODULES=/usr/lib/kernel/driver
+ASICRW=/usr/metoak/metoak/mo_asicrw
+rc=0
+
+run() {
+    "$@" || { echo "tron-hwinit: failed: $*"; rc=1; }
+}
+
+gpio_high() {
+    [ -e "/sys/class/gpio/gpio$1" ] || run sh -c "echo $1 > /sys/class/gpio/export"
+    run sh -c "echo out > /sys/class/gpio/gpio$1/direction && echo 1 > /sys/class/gpio/gpio$1/value"
+}
+
+# Temperature sensor, flash trigger and IMU (ICM-40608 on i2c-8), time stamps from ktime_get_ts64.
+run insmod "$MODULES/mo_tmp112.ko"
+run insmod "$MODULES/mo_trig_flash.ko" TimeStamp_m=1
+run insmod "$MODULES/inv-icm42600.ko" TimeStamp_m=1 Repot_m=1
+run insmod "$MODULES/inv-icm42600-i2c.ko"
+
+# Names under which the Metoak tools find the camera bus and the calibration EEPROM.
+ln -sf /sys/devices/platform/feca0000.i2c/i2c-8/8-0050/eeprom /dev/i2c_simor0_eeprom
+for name in simor0 simor0_cmosa simor0_cmosb isp0 isp0_cmosa isp0_cmosb fpga0 imu; do
+    ln -sf /dev/i2c-8 "/dev/i2c_$name"
+done
+
+# Camera trigger on, then the camera bridge on i2c-8 and its register 0x0051.
+gpio_high 103
+run sh -c 'echo 103 > /sys/class/gpio/unexport'
+run "$ASICRW" 8 xc
+sleep 0.1
+run "$ASICRW" 8 s 0051 23
+sleep 0.1
+run "$ASICRW" 8 s 0051 7f
+
+ln -sf /dev/video22 /dev/videoIsp
+ln -sf /dev/video11 /dev/videoSimor
+run sh -c 'echo 0 > /sys/devices/platform/rkcif-mipi-lvds2/compact_test'
+
+# Rear camera: power on (GPIO 113) while usb2 is off, then usb2 on again.
+sleep 0.5
+run sh -c 'echo 0 > /sys/bus/usb/devices/usb2/authorized'
+sleep 0.5
+gpio_high 113
+sleep 1
+run sh -c 'echo 1 > /sys/bus/usb/devices/usb2/authorized'
+
+# Vendor module init_test.ko (GPL), the key input device.
+run insmod "/usr/lib/modules/$(uname -r)/kernel/drivers/init_test.ko"
+exit $rc

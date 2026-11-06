@@ -1,0 +1,3 @@
+# A login during the trial period confirms the boot; no output, it would break scp and rsync.
+[ -e /etc/mowbite/probezeit ] && /usr/lib/mowbite/probezeit ssh >/dev/null 2>&1
+:

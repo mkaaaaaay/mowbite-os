@@ -1,0 +1,11 @@
+[Unit]
+Description=SSH host keys on the first boot of a base rootfs
+ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
+Before=ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+WantedBy=multi-user.target

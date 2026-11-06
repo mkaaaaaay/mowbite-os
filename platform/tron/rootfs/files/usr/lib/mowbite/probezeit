@@ -1,0 +1,69 @@
+#!/bin/sh
+# Trial period of a newly written rootfs, active while /etc/mowbite/probezeit exists: after MAX_BOOTS boots or
+# TIMEOUT without an SSH login the mower reboots into the loader mode of U-Boot, where the PC writes the old rootfs back.
+#   probezeit boot      early in every boot: count the boot, reboot on a kernel panic
+#   probezeit ssh       from /etc/ssh/sshrc: confirm this boot
+#   probezeit timeout   from mowbite-probezeit-check.timer: no login since the boot
+#   probezeit end       the owner ends the trial period (mowbite-probezeit-ende)
+set -eu
+MARK=/etc/mowbite/probezeit
+COUNT=/var/lib/mowbite/bootcount
+SEEN=/run/mowbite/ssh-seen
+MAX_BOOTS=3
+
+write_count() {
+    mkdir -p "${COUNT%/*}"
+    echo "$1" > "$COUNT.new"
+    sync "$COUNT.new"
+    mv "$COUNT.new" "$COUNT"
+    sync "${COUNT%/*}"
+}
+
+to_loader() {
+    echo "probezeit: $1, reboot into the loader"
+    # Only the Rockchip U-Boot knows the loader mode; elsewhere (QEMU) the same call runs as a dry run.
+    dry=--dry-run
+    if grep -qs 'rockchip,rk3588' /proc/device-tree/compatible; then
+        dry=
+    else
+        echo "probezeit: no Rockchip board, dry run only"
+    fi
+    systemctl $dry --no-block --reboot-argument=loader reboot
+}
+
+if [ "${1:-}" != end ] && [ ! -e "$MARK" ]; then
+    exit 0
+fi
+
+case "${1:-}" in
+boot)
+    sysctl -q kernel.panic=10
+    n=$(cat "$COUNT" 2>/dev/null || true)
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    n=$((n + 1))
+    write_count "$n"
+    echo "probezeit: boot $n of $MAX_BOOTS without a confirmed login"
+    if [ "$n" -ge "$MAX_BOOTS" ]; then
+        to_loader "boot $n without a confirmed login"
+    fi
+    ;;
+ssh)
+    mkdir -p "${SEEN%/*}"
+    touch "$SEEN"
+    write_count 0
+    ;;
+timeout)
+    if [ ! -e "$SEEN" ]; then
+        to_loader "no SSH login since the boot"
+    fi
+    ;;
+end)
+    rm -f "$MARK" "$COUNT" "$SEEN"
+    sync
+    echo "trial period ended, the mower no longer reboots into the loader on its own"
+    ;;
+*)
+    echo "usage: probezeit boot|ssh|timeout|end" >&2
+    exit 2
+    ;;
+esac
