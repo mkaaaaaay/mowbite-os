@@ -17,6 +17,8 @@ less
 nano
 rsync
 python3
+# libdrm of the vendor camera library librkaiq
+libdrm2
 ros-jazzy-ros-core
 libpaho-mqttpp3-1
 python3-paho-mqtt

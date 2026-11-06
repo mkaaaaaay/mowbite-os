@@ -40,6 +40,7 @@ mmdebstrap --mode=unshare --architectures=arm64 --variant=apt --format=tar \
     --customize-hook="chroot \"\$1\" systemctl enable $UNITS" \
     --customize-hook='chroot "$1" systemctl disable lttng-sessiond.service' \
     --customize-hook='rm -f "$1"/etc/ssh/ssh_host_*' \
+    --customize-hook='mkdir -m 755 "$1"/userdata "$1"/meta' \
     --customize-hook='ln -sf /usr/share/zoneinfo/Europe/Berlin "$1"/etc/localtime && echo Europe/Berlin > "$1"/etc/timezone' \
     noble "$OUT" \
     "deb [signed-by=$UBUNTU_KEY] $PORTS noble main universe" \

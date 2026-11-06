@@ -27,7 +27,7 @@ test "$("$DEBUGFS" -c -R 'stat /usr/sbin/init' "$IMG" 2>/dev/null | grep -c 'Fas
 result "/sbin/init is systemd" $?
 for f in /etc/mowbite/probezeit /usr/lib/mowbite/probezeit /usr/lib/mowbite/tron-hwinit /etc/fstab \
          /etc/systemd/system/sysinit.target.wants/mowbite-probezeit.service \
-         /etc/systemd/system/timers.target.wants/mowbite-probezeit-check.timer; do
+         /etc/systemd/system/timers.target.wants/mowbite-probezeit-check.timer /userdata /meta; do
     "$DEBUGFS" -c -R "stat $f" "$IMG" 2>/dev/null | grep -q '^Inode:'; result "present: $f" $?
 done
 test "$(stat_of /root/.ssh)" = "0700 0:0"; result "/root/.ssh 0700 root" $?
@@ -43,7 +43,10 @@ done
 # Every program and library of the image against the image's loader and libraries.
 "$DEBUGFS" -c -R "rdump / $WORK" "$IMG" >/dev/null 2>&1
 TREE=$WORK
-LIBPATH=/opt/ros/jazzy/lib:/opt/ros/jazzy/lib/aarch64-linux-gnu
+# ROS libraries come from the environment, systemd's private ones from the RUNPATH of its programs.
+LIBPATH=/opt/ros/jazzy/lib:/opt/ros/jazzy/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/systemd
+# Loaded only for the ATM qdisc of tc, which needs libatm (a recommendation of iproute2, not installed).
+UNUSED=/usr/lib/aarch64-linux-gnu/tc/q_atm.so
 python3 -I - "$TREE" > "$WORK/elf.list" <<'EOF'
 import os, struct, sys
 root = sys.argv[1]
@@ -51,6 +54,11 @@ for top in ("usr", "opt", "etc", "vendor"):
     for d, _, files in os.walk(os.path.join(root, top)):
         for f in files:
             p = os.path.join(d, f)
+            # Absolute links (alternatives) would resolve on the host under qemu -L; this copy points them into the tree.
+            if os.path.islink(p) and os.readlink(p).startswith("/"):
+                target = root + os.readlink(p)
+                os.unlink(p)
+                os.symlink(target, p)
             if os.path.islink(p) or not os.path.isfile(p):
                 continue
             with open(p, "rb") as h:
@@ -63,9 +71,15 @@ EOF
 qemu-aarch64 -L "$TREE" "$TREE/usr/lib/ld-linux-aarch64.so.1" --list "$TREE/usr/bin/ls" 2>&1 | grep -q 'libc.so.6 => '
 result "loader of the image resolves libraries" $?
 : > "$WORK/missing.txt"
+# A failing loader counts as well: it may stop with "error while loading" before it prints "not found".
 while read -r elf; do
-    qemu-aarch64 -L "$TREE" "$TREE/usr/lib/ld-linux-aarch64.so.1" --library-path "$LIBPATH" --list "$elf" 2>&1 \
-        | sed -n "s|^\(.*not found\)|${elf#$TREE}: \1|p" >> "$WORK/missing.txt"
+    test "${elf#$TREE}" != "$UNUSED" || continue
+    out=$(qemu-aarch64 -L "$TREE" "$TREE/usr/lib/ld-linux-aarch64.so.1" --library-path "$LIBPATH" --list "$elf" 2>&1)
+    rc=$?
+    if [ $rc != 0 ] || grep -qE 'not found|error while loading' <<< "$out"; then
+        echo "${elf#$TREE}: rc $rc"
+        grep -E 'not found|error while loading' <<< "$out" | sed 's/^[[:space:]]*/    /'
+    fi >> "$WORK/missing.txt"
 done < "$WORK/elf.list"
 echo "$(wc -l < "$WORK/elf.list") ELF files checked"
 test ! -s "$WORK/missing.txt"; result "all libraries found" $?
