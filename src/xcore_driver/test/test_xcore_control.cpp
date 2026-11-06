@@ -3,6 +3,9 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 #include "xcore_driver/services.h"
 #include "xcore_driver/xcore_control.h"
@@ -131,20 +134,21 @@ TEST(XcoreControl, DriveIsLimitedAndStopsAfterSilence) {
   EXPECT_EQ(twist[1] + twist[2] + twist[3] + twist[4], 0);
   EXPECT_TRUE(f.control.Status(0).moving);
   // Resent every 0.1 s until cmd_vel falls silent for 0.5 s, then three stops 0.1 s apart, then nothing.
-  std::vector<std::pair<double, double>> sent;
+  std::vector<std::pair<double, std::vector<double>>> sent;
   for (int i = 1; i <= 150; i++) {
     double t = i * 0.01;
     f.Board(0, t);
-    for (const auto& v : Of(f.control.Tick(t), kDiffDriveService)) sent.emplace_back(t, TwistOf(v)[0]);
+    for (const auto& v : Of(f.control.Tick(t), kDiffDriveService)) sent.emplace_back(t, TwistOf(v));
   }
   int moving = 0, stops = 0;
   for (const auto& [t, v] : sent) {
-    if (v != 0) {
+    if (v[0] != 0) {
       moving++;
       EXPECT_LE(t, 0.5 + 1e-9);
     } else {
       stops++;
       EXPECT_GT(t, 0.5);
+      EXPECT_EQ(v, std::vector<double>(6, 0.0));
     }
   }
   EXPECT_EQ(moving, 5);
@@ -245,6 +249,7 @@ TEST(XcoreControl, BladeStillTurningLatches) {
   f.control.OnOutput(kMowerService, mower::kOutRpm, F32(500), 0, 5.2);
   auto s = f.control.Status(5.2);
   EXPECT_TRUE(s.blocked);
+  EXPECT_TRUE(s.latched);
   EXPECT_TRUE(s.emergency_reason & kReasonMowerNotStopped);
   // The board gets a high level emergency, the blade more offs. The I/O thread ran in between.
   f.control.Alive(5.2);
@@ -504,11 +509,12 @@ struct DriveRun {
   Wheels wheels;
   std::vector<InputValue> sent;
   double t = 0;
-  void Until(double t1, double v_left, double v_right, bool command = false, double v_command = 0.1) {
+  void Until(double t1, double v_left, double v_right, bool command = false, double v_command = 0.1,
+             double w_command = 0) {
     for (; t < t1 - 1e-9; t += 0.01) {
       f.Board(0, t);
       Tilt(f.control, 0, t);
-      if (command) f.control.OnCmdVel(v_command, 0, t);
+      if (command) f.control.OnCmdVel(v_command, w_command, t);
       if (std::lround(t * 100) % 4 == 0) {
         f.control.OnOutput(kDiffDriveService, diff_drive::kOutTicks, wheels.Step(v_left, v_right, 0.04),
                            wheels.us(), t);
@@ -590,9 +596,14 @@ TEST(XcoreControl, UpsideDownIsTilted) {
   Fixture f;
   for (double t = 0; t <= 0.6; t += 0.01) f.control.OnImu(0, 0, -kG, t);
   EXPECT_TRUE(f.control.Status(0.6).emergency_reason & kReasonTilt);
-  // Values that are no numbers change nothing.
+  // Values that are no numbers change nothing: the last sample stays the one at 0.6.
   f.control.OnImu(std::nan(""), 0, kG, 0.65);
   EXPECT_TRUE(f.control.ReleaseEmergency(0.65));
+  f.control.OnImu(0, std::nan(""), kG, 1.5);
+  f.control.OnImu(0, 0, std::nan(""), 1.5);
+  auto refused = f.control.ReleaseEmergency(1.5);
+  ASSERT_TRUE(refused);
+  EXPECT_EQ(refused->code, "TILT_UNKNOWN");
 }
 
 TEST(XcoreControl, WheelTurningAfterTheStopLatches) {
@@ -714,6 +725,7 @@ TEST(SpeedCaps, MeasurementLimitFromZeroToSixTenths) {
 TEST(SpeedCaps, LimitsStayUnderTheirCap) {
   EXPECT_EQ(CappedLimit("max_linear_speed", 0.5, kLinearSpeedCap), 0.3);
   EXPECT_EQ(CappedLimit("max_linear_speed", 0.2, kLinearSpeedCap), 0.2);
+  EXPECT_EQ(CappedLimit("max_angular_speed", 0.5, kAngularSpeedCap), 0.3);
   EXPECT_EQ(CappedLimit("max_linear_speed", 0.0, kLinearSpeedCap), 0.0);
   EXPECT_EQ(CappedLimit("max_duty", 1.5, 1.0), 1.0);
   EXPECT_EQ(CappedLimit("max_linear_speed", INFINITY, kLinearSpeedCap), 0.3);
@@ -750,9 +762,12 @@ TEST(XcoreControl, StalledThreadLatchesBeforeTheNextFrame) {
   auto emergency = Of(out, kEmergencyService);
   ASSERT_EQ(emergency.size(), 1u);
   EXPECT_EQ(EmergencyOf(emergency[0]).first, reason::kHighLevel | reason::kLatch);
-  for (const auto& v : Of(out, kDiffDriveService)) EXPECT_EQ(TwistOf(v)[0], 0);
+  auto drive = Of(out, kDiffDriveService);
+  ASSERT_EQ(drive.size(), 1u);
+  EXPECT_EQ(TwistOf(drive[0]), std::vector<double>(6, 0.0));
   for (const auto& v : Of(out, kMowerService)) EXPECT_EQ(SpeedOf(v), 0);
   auto s = f.control.Status(2.9);
+  EXPECT_FALSE(s.moving);
   EXPECT_TRUE(s.emergency_reason & kReasonDriverStall);
   EXPECT_FALSE(s.emergency_reason & reason::kTimeoutHighLevel);
   EXPECT_TRUE(s.latched);
@@ -823,6 +838,13 @@ TEST(XcoreControl, WheelAgainstTheCommandLatches) {
   EXPECT_TRUE(r.f.control.TakeErrors().empty());
   EXPECT_FALSE(r.f.control.ReleaseEmergency(r.t));
   EXPECT_FALSE(r.f.control.Status(r.t).blocked);
+  // The regulator's fault is gone as well: the wheels turn with the command again.
+  r.sent.clear();
+  r.Until(2.0, 0.1, 0.1, true);
+  EXPECT_FALSE(r.f.control.Status(r.t).blocked);
+  int forward = 0;
+  for (const auto& v : Of(r.sent, kDiffDriveService)) forward += TwistOf(v)[0] > 0;
+  EXPECT_GT(forward, 0);
 }
 
 TEST(XcoreControl, HoldStopsWheelsAndBladeWithoutEmergency) {
@@ -910,4 +932,796 @@ TEST(XcoreControl, LatchedBeforeTheFirstFrame) {
   EXPECT_FALSE(control.ReleaseEmergency(1.0));
   control.OnOutput(kEmergencyService, emergency::kOutReason, U16(0), 0, 1.05);
   EXPECT_FALSE(control.Status(1.05).blocked);
+}
+
+namespace {
+
+// One sample of the wheel counters at now, after 40 ms of board time.
+void Ticks(Fixture& f, Wheels& wheels, double v_left, double v_right, double now) {
+  f.control.OnOutput(kDiffDriveService, diff_drive::kOutTicks, wheels.Step(v_left, v_right, 0.04), wheels.us(), now);
+}
+
+// A drive setpoint goes out at t; the command goes on or ends with it.
+void DriveAt(Fixture& f, double t, bool keep) {
+  f.Board(0, t);
+  f.control.OnCmdVel(0.1, 0, t);
+  f.control.Tick(t);
+  if (!keep) f.control.OnCmdVel(0, 0, t);
+}
+
+bool Runaway(const Fixture& f, double now) {
+  return (f.control.Status(now).emergency_reason & kReasonWheelRunaway) != 0;
+}
+
+}  // namespace
+
+TEST(XcoreControl, EveryHostReasonLatchesAndNoOther) {
+  for (uint32_t bit : {kReasonHighLevel, kReasonTilt, kReasonFence, kReasonStuck}) {
+    Fixture f;
+    EXPECT_TRUE(f.control.LatchEmergency(bit));
+    EXPECT_EQ(f.control.Status(0).emergency_reason, bit | kReasonLatch);
+  }
+  Fixture f;
+  for (uint32_t bit : {kReasonStop, kReasonLift, kReasonMowerNotStopped, kReasonForeignHost, kReasonWheelRunaway}) {
+    EXPECT_FALSE(f.control.LatchEmergency(bit));
+  }
+  EXPECT_FALSE(f.control.Status(0).blocked);
+}
+
+TEST(XcoreControl, TheBoardsLatchedCausesStayUntilRelease) {
+  // TIMEOUT_HIGH_LEVEL (6) is left out: after the board heard the driver it latches as lost messages.
+  for (int bit = 1; bit <= 12; bit++) {
+    if (bit == 6) continue;
+    Fixture f;
+    const uint16_t cause = static_cast<uint16_t>(1u << bit);
+    f.Board(cause | reason::kLatch, 0);
+    f.Board(reason::kLatch, 0.1);
+    const bool kept = (f.control.Status(0.1).emergency_reason & cause) != 0;
+    EXPECT_EQ(kept, bit == 2 || bit == 3 || bit == 4 || bit == 5 || bit == 9 || bit == 10 || bit == 11) << bit;
+  }
+  // A cause without the latch goes with the next report.
+  Fixture f;
+  f.Board(reason::kLift, 0);
+  EXPECT_TRUE(f.control.Status(0).blocked);
+  f.Board(0, 0.1);
+  EXPECT_FALSE(f.control.Status(0.1).blocked);
+}
+
+TEST(XcoreControl, LatchesGoOutWithTheNextTick) {
+  Fixture f;
+  ASSERT_EQ(Of(f.control.Tick(0), kEmergencyService).size(), 1u);
+  // The heartbeat is due again at 0.25 s; a latch from above does not wait for it.
+  EXPECT_TRUE(f.control.LatchEmergency(kReasonFence));
+  EXPECT_TRUE(HighLevelLatch(f.control.Tick(0.05)));
+  // Nor does a tilt, here at 0.51 s with heartbeats at 0.25 and 0.5 s.
+  Fixture g;
+  for (int i = 0; i <= 51; i++) {
+    const double t = i * 0.01;
+    g.Board(0, t);
+    if (i >= 1) Tilt(g.control, 45, t);
+    const auto out = g.control.Tick(t);
+    if (i == 50) {
+      EXPECT_FALSE(HighLevelLatch(out));
+    }
+    if (i == 51) {
+      EXPECT_TRUE(HighLevelLatch(out));
+    }
+  }
+}
+
+TEST(XcoreControl, AReleaseClearsAtOnceAndTheHeartbeatFollowsTheLastClear) {
+  Fixture f;
+  EXPECT_TRUE(f.control.LatchEmergency(kReasonFence));
+  std::vector<std::pair<double, std::pair<uint16_t, uint16_t>>> sent;
+  for (int i = 0; i <= 100; i++) {
+    const double t = i * 0.01;
+    f.Board(0, t);
+    if (i == 30) {
+      EXPECT_FALSE(f.control.ReleaseEmergency(t));
+    }
+    for (const auto& v : Of(f.control.Tick(t), kEmergencyService)) sent.emplace_back(t, EmergencyOf(v));
+  }
+  // Latched at 0 and 0.25 s, released at 0.3 s between two heartbeats: clears at 0.3, 0.4 and 0.5 s, then every 0.25 s.
+  const uint16_t latch = reason::kHighLevel | reason::kLatch;
+  const uint16_t clear = reason::kLatch | reason::kHighLevel | reason::kMowerRpmTimeout | reason::kMowerRpmLimit;
+  const std::vector<std::pair<double, std::pair<uint16_t, uint16_t>>> want{
+      {0, {latch, 0}}, {0.25, {latch, 0}}, {0.3, {0, clear}}, {0.4, {0, clear}},
+      {0.5, {0, clear}}, {0.75, {0, 0}},   {1.0, {0, 0}}};
+  ASSERT_EQ(sent.size(), want.size());
+  for (size_t i = 0; i < want.size(); i++) {
+    EXPECT_NEAR(sent[i].first, want[i].first, 1e-9) << i;
+    EXPECT_EQ(sent[i].second, want[i].second) << i;
+  }
+}
+
+// Each cause of the driver adds its bits to a latch from above.
+TEST(XcoreControl, ReasonsAddUp) {
+  {
+    Fixture f;
+    f.control.SetBlade({true, 0, 0, 1}, 0);
+    f.control.Tick(0);
+    f.control.SetBlade({false, 0, 0, 0}, 0.1);
+    f.control.Tick(0.1);
+    ASSERT_TRUE(f.control.LatchEmergency(kReasonFence));
+    f.Board(0, 5.2);
+    f.control.OnOutput(kMowerService, mower::kOutRpm, F32(3000), 0, 5.2);
+    EXPECT_EQ(f.control.Status(5.2).emergency_reason, kReasonFence | kReasonMowerNotStopped | kReasonLatch);
+  }
+  {
+    Fixture f;
+    f.control.Tick(0);
+    ASSERT_TRUE(f.control.LatchEmergency(kReasonFence));
+    f.Board(0, 1.0);
+    f.control.Tick(1.0);
+    EXPECT_EQ(f.control.Status(1.0).emergency_reason, kReasonFence | kReasonDriverStall | kReasonLatch);
+  }
+  {
+    Fixture f;
+    ASSERT_TRUE(f.control.LatchEmergency(kReasonFence));
+    f.Board(reason::kTimeoutHighLevel, 0.5);
+    EXPECT_EQ(f.control.Status(0.5).emergency_reason, kReasonFence | reason::kTimeoutHighLevel | kReasonLatch);
+  }
+  {
+    ControlConfig config = Fixture::Config();
+    config.regulator.feedback = true;
+    DriveRun r(config);
+    r.Until(1.0, -0.1, -0.1, true);
+    ASSERT_TRUE(r.f.control.LatchEmergency(kReasonFence));
+    EXPECT_EQ(r.f.control.Status(r.t).emergency_reason, kReasonFence | kReasonWheelRunaway | kReasonLatch);
+  }
+  {
+    Fixture f;
+    ASSERT_TRUE(f.control.LatchEmergency(kReasonFence));
+    f.control.LatchForeignHost("another host", 0);
+    EXPECT_EQ(f.control.Status(0).emergency_reason, kReasonFence | kReasonForeignHost | kReasonLatch);
+    EXPECT_EQ(f.control.Status(3.0).emergency_reason,
+              kReasonFence | kReasonForeignHost | kReasonLatch | kReasonTimeoutInputs);
+    f.control.SetServicesReady(true, false);
+    EXPECT_EQ(f.control.Status(0).emergency_reason,
+              kReasonFence | kReasonForeignHost | kReasonLatch | kReasonFirmwareIncompatible);
+  }
+  {
+    // Two checks of the driver keep both bits.
+    DriveRun r;
+    r.Until(1.0, 0.1, 0.1, true);
+    r.f.control.OnCmdVel(0, 0, 1.0);
+    r.f.control.LatchForeignHost("another host", 1.0);
+    r.Until(2.5, 0.2, 0.2);
+    EXPECT_EQ(r.f.control.Status(r.t).emergency_reason, kReasonForeignHost | kReasonWheelRunaway | kReasonLatch);
+  }
+}
+
+TEST(XcoreControl, AReleaseStartsTheTimesOfTheChecksAgain) {
+  {
+    // Tilted for 0.3 s when another latch is released: the tilt counts from the next sample.
+    Fixture f;
+    ASSERT_TRUE(f.control.LatchEmergency(kReasonFence));
+    for (int i = 0; i <= 30; i++) Tilt(f.control, 45, i * 0.01);
+    EXPECT_FALSE(f.control.ReleaseEmergency(0.3));
+    for (int i = 31; i <= 70; i++) Tilt(f.control, 45, i * 0.01);
+    EXPECT_FALSE(f.control.Status(0.7).emergency_reason & kReasonTilt);
+    for (int i = 71; i <= 85; i++) Tilt(f.control, 45, i * 0.01);
+    EXPECT_TRUE(f.control.Status(0.85).emergency_reason & kReasonTilt);
+  }
+  {
+    // A wheel turning on without a command after its latch was released.
+    Fixture f;
+    Wheels wheels;
+    DriveAt(f, 0, false);
+    for (int i = 0; i <= 6; i++) Ticks(f, wheels, 0.2, 0.2, 1.0 + 0.04 * i);
+    ASSERT_TRUE(Runaway(f, 1.24));
+    EXPECT_FALSE(f.control.ReleaseEmergency(1.25));
+    for (int i = 7; i <= 10; i++) Ticks(f, wheels, 0.2, 0.2, 1.0 + 0.04 * i);
+    EXPECT_FALSE(Runaway(f, 1.4));
+  }
+  {
+    // A wheel above the overspeed limit while commanded.
+    Fixture f;
+    Wheels wheels;
+    DriveAt(f, 0, true);
+    for (int i = 0; i <= 14; i++) Ticks(f, wheels, 0.6, 0.6, 0.04 * i);
+    ASSERT_TRUE(Runaway(f, 0.56));
+    EXPECT_FALSE(f.control.ReleaseEmergency(0.57));
+    for (int i = 15; i <= 25; i++) Ticks(f, wheels, 0.6, 0.6, 0.04 * i);
+    EXPECT_FALSE(Runaway(f, 1.0));
+  }
+}
+
+TEST(XcoreControl, UncommandedTurningCountsAtItsLimits) {
+  {
+    // 1.13 - 0.13 lies just under 1 s by rounding: the second after the setpoint is over.
+    Fixture f;
+    Wheels wheels;
+    DriveAt(f, 0.13, false);
+    for (double t : {1.09, 1.13, 1.17, 1.21, 1.25, 1.29, 1.33}) Ticks(f, wheels, 0.2, 0.2, t);
+    EXPECT_TRUE(Runaway(f, 1.33));
+  }
+  {
+    // Exactly 1 s after the setpoint.
+    Fixture f;
+    Wheels wheels;
+    DriveAt(f, 0.5, false);
+    for (double t : {1.46, 1.5, 1.54, 1.58, 1.62, 1.66, 1.7}) Ticks(f, wheels, 0.2, 0.2, t);
+    EXPECT_TRUE(Runaway(f, 1.7));
+  }
+  {
+    // 1.2 - 1.0 lies just under 0.2 s: enough.
+    Fixture f;
+    Wheels wheels;
+    DriveAt(f, 0, false);
+    for (double t : {0.96, 1.0, 1.2}) Ticks(f, wheels, 0.2, 0.2, t);
+    EXPECT_TRUE(Runaway(f, 1.2));
+  }
+  {
+    // Exactly uncommanded_time, here 1 s.
+    ControlConfig config = Fixture::Config();
+    config.uncommanded_time_s = 1.0;
+    Fixture f(config);
+    Wheels wheels;
+    DriveAt(f, 0, false);
+    for (double t : {1.46, 1.5, 2.5}) Ticks(f, wheels, 0.2, 0.2, t);
+    EXPECT_TRUE(Runaway(f, 2.5));
+  }
+  {
+    // An interrupted run counts again.
+    Fixture f;
+    Wheels wheels;
+    DriveAt(f, 0, false);
+    for (double t : {1.0, 1.04, 1.08, 1.12, 1.16}) Ticks(f, wheels, 0.2, 0.2, t);
+    Ticks(f, wheels, 0, 0, 1.2);
+    for (double t : {1.24, 1.28, 1.32, 1.36, 1.4}) Ticks(f, wheels, 0.2, 0.2, t);
+    EXPECT_FALSE(Runaway(f, 1.4));
+  }
+  {
+    // Exactly uncommanded_speed is not above it: 81 ticks in 0.4 s are 0.1 m/s.
+    Fixture f;
+    DriveAt(f, 0, false);
+    for (uint32_t i = 0; i <= 5; i++) {
+      Writer w;
+      w.U32(81 * i);
+      w.U32(-81 * i);
+      f.control.OnOutput(kDiffDriveService, diff_drive::kOutTicks, w.Take(), 400000 * i, 1.0 + 0.4 * i);
+    }
+    EXPECT_FALSE(Runaway(f, 3.0));
+  }
+}
+
+TEST(XcoreControl, OverspeedCountsAtItsLimits) {
+  // Exactly 0.5 s, and 0.57 - 0.07 just under it by rounding.
+  for (const auto& [since, latch] : std::vector<std::pair<double, double>>{{0.01, 0.51}, {0.07, 0.57}}) {
+    Fixture f;
+    Wheels wheels;
+    DriveAt(f, 0, true);
+    for (double t : {since - 0.005, since, latch}) Ticks(f, wheels, 0.6, 0.6, t);
+    EXPECT_TRUE(Runaway(f, latch)) << since;
+  }
+  {
+    // One wheel alone.
+    Fixture f;
+    Wheels wheels;
+    DriveAt(f, 0, true);
+    for (int i = 0; i <= 14; i++) Ticks(f, wheels, 0.6, 0, 0.04 * i);
+    EXPECT_TRUE(Runaway(f, 0.56));
+  }
+  {
+    // An interrupted run counts again.
+    Fixture f;
+    Wheels wheels;
+    DriveAt(f, 0, true);
+    for (int i = 0; i <= 8; i++) Ticks(f, wheels, 0.6, 0.6, 0.04 * i);
+    Ticks(f, wheels, 0.3, 0.3, 0.36);
+    for (int i = 10; i <= 22; i++) Ticks(f, wheels, 0.6, 0.6, 0.04 * i);
+    EXPECT_FALSE(Runaway(f, 0.88));
+  }
+}
+
+TEST(XcoreControl, TheWatchEndsFiveSecondsAfterTheLastSetpoint) {
+  // Exactly 5 s after the setpoint, and 8.05 - 3.05 just over 5 s by rounding: still watched.
+  auto latches_at = [](double setpoint, double since, double last) {
+    Fixture f;
+    Wheels wheels;
+    DriveAt(f, setpoint, false);
+    for (double t : {since - 0.04, since, last}) Ticks(f, wheels, 0.2, 0.2, t);
+    return Runaway(f, last);
+  };
+  EXPECT_TRUE(latches_at(0.01, 4.81, 5.01));
+  EXPECT_TRUE(latches_at(3.05, 7.85, 8.05));
+}
+
+TEST(XcoreControl, ANewWatchCountsAfresh) {
+  {
+    // Above the overspeed limit since 4.8 s while commanded, on after the watch ended, then a new setpoint at 7 s:
+    // the time counts from the first sample after it.
+    Fixture f;
+    Wheels wheels;
+    DriveAt(f, 0, true);
+    for (int i = 0; i <= 56; i++) Ticks(f, wheels, 0.6, 0.6, 4.76 + 0.04 * i);
+    f.control.Alive(6.99);
+    DriveAt(f, 7.0, true);
+    for (int i = 1; i <= 12; i++) Ticks(f, wheels, 0.6, 0.6, 7.0 + 0.04 * i);
+    EXPECT_FALSE(Runaway(f, 7.48));
+    Ticks(f, wheels, 0.6, 0.6, 7.52);
+    EXPECT_FALSE(Runaway(f, 7.52));
+  }
+  {
+    // A wheel turning without a command when the watch ends, a setpoint at 7 s and no samples for a second after it.
+    Fixture f;
+    Wheels wheels;
+    DriveAt(f, 0, false);
+    for (double t : {4.86, 4.9, 5.02}) Ticks(f, wheels, 0.2, 0.2, t);
+    f.control.Alive(6.99);
+    DriveAt(f, 7.0, false);
+    for (double t : {8.0, 8.1}) Ticks(f, wheels, 0.2, 0.2, t);
+    EXPECT_FALSE(Runaway(f, 8.1));
+  }
+}
+
+TEST(XcoreControl, TurningOnTheSpotDrivesAndIsWatched) {
+  DriveRun r;
+  r.Until(1.0, -0.05, 0.05, true, 0, 0.3);
+  auto drive = Of(r.sent, kDiffDriveService);
+  ASSERT_FALSE(drive.empty());
+  EXPECT_EQ(TwistOf(drive[0])[0], 0);
+  EXPECT_GT(TwistOf(drive[0])[5], 0);
+  r.f.control.OnCmdVel(0, 0, 1.0);
+  r.Until(2.0, 0, 0);
+  EXPECT_FALSE(r.f.control.Status(r.t).blocked);
+  r.Until(2.5, 0.2, 0.2);
+  EXPECT_EQ(r.f.control.Status(r.t).emergency_reason, kReasonWheelRunaway | kReasonLatch);
+}
+
+TEST(XcoreControl, SetpointsOfZeroDutyStartNoWatch) {
+  ControlConfig config = Fixture::Config();
+  config.regulator.max_duty = 0;
+  DriveRun r(config);
+  r.Until(1.0, 0, 0, true);
+  r.f.control.OnCmdVel(0, 0, 1.0);
+  r.Until(3.0, 0.2, 0.2);
+  EXPECT_FALSE(r.f.control.Status(r.t).blocked);
+}
+
+TEST(XcoreControl, ZeroCommandsGiveThreeStopsThenSilence) {
+  Fixture f;
+  f.control.OnCmdVel(0.2, 0, 0);
+  f.control.Tick(0);
+  int stops = 0, drives = 0;
+  for (int i = 1; i <= 200; i++) {
+    const double t = i * 0.01;
+    f.Board(0, t);
+    if (i % 10 == 0) f.control.OnCmdVel(0, 0, t);
+    for (const auto& v : Of(f.control.Tick(t), kDiffDriveService)) (TwistOf(v)[0] == 0 ? stops : drives)++;
+  }
+  EXPECT_EQ(drives, 0);
+  EXPECT_EQ(stops, 3);
+  EXPECT_FALSE(f.control.Status(2.0).moving);
+}
+
+TEST(XcoreControl, AChangedSetpointGoesOutAtOnceTheSameOneEveryPeriod) {
+  Fixture f;
+  std::vector<double> at;
+  for (const auto& [t, linear, angular] : std::vector<std::tuple<double, double, double>>{
+           {0, 0.2, 0.1}, {0.03, 0.2, 0.1}, {0.05, 0.1, 0.1}, {0.07, 0.1, 0.2}, {0.09, 0.1, 0.2},
+           {0.15, 0.1, 0.2}, {0.17, 0.1, 0.2}}) {
+    f.control.OnCmdVel(linear, angular, t);
+    if (!Of(f.control.Tick(t), kDiffDriveService).empty()) at.push_back(t);
+  }
+  EXPECT_EQ(at, (std::vector<double>{0, 0.05, 0.07, 0.17}));
+}
+
+TEST(XcoreControl, CommandsThatAreNoNumberStopOnce) {
+  Fixture f;
+  // An infinite speed would otherwise pass the clamp at the limit.
+  f.control.OnCmdVel(INFINITY, 0, 0);
+  EXPECT_TRUE(Of(f.control.Tick(0), kDiffDriveService).empty());
+  f.control.OnCmdVel(0.2, 0, 0.01);
+  f.control.Tick(0.01);
+  int stops = 0;
+  for (int i = 2; i <= 200; i++) {
+    const double t = i * 0.01;
+    f.Board(0, t);
+    f.control.OnCmdVel(std::nan(""), std::nan(""), t);
+    for (const auto& v : Of(f.control.Tick(t), kDiffDriveService)) {
+      EXPECT_EQ(TwistOf(v), std::vector<double>(6, 0.0));
+      stops++;
+    }
+  }
+  EXPECT_EQ(stops, 3);
+}
+
+TEST(XcoreControl, CommandsDuringAnEmergencyKeepItsStops) {
+  Fixture f;
+  f.control.OnCmdVel(0.2, 0, 0);
+  f.control.Tick(0);
+  int stops = 0;
+  for (int i = 1; i <= 100; i++) {
+    const double t = i * 0.01;
+    f.Board(reason::kLatch | reason::kStop, t);
+    f.control.OnCmdVel(0.2, 0, t);
+    for (const auto& v : Of(f.control.Tick(t), kDiffDriveService)) {
+      EXPECT_EQ(TwistOf(v)[0], 0);
+      stops++;
+    }
+  }
+  EXPECT_EQ(stops, 3);
+}
+
+TEST(XcoreControl, ACommandWithdrawnBeforeItWentOutSendsNothing) {
+  Fixture f;
+  f.control.OnCmdVel(0.2, 0, 0);
+  f.control.OnCmdVel(0, 0, 0.001);
+  for (int i = 0; i < 100; i++) {
+    f.Board(0, i * 0.01);
+    EXPECT_TRUE(Of(f.control.Tick(i * 0.01), kDiffDriveService).empty());
+  }
+}
+
+TEST(XcoreControl, TimesOfTheDriveAtTheirLimits) {
+  {
+    // The command of 0.57 s is 0.5000000000000001 s old at 1.07 s: within the timeout.
+    Fixture f;
+    f.control.OnCmdVel(0.2, 0, 0.57);
+    f.control.Tick(0.57);
+    auto drive = Of(f.control.Tick(1.07), kDiffDriveService);
+    ASSERT_EQ(drive.size(), 1u);
+    EXPECT_GT(TwistOf(drive[0])[0], 0);
+  }
+  {
+    // A stop at 0.2 s is due again at 0.2 + 0.1 = 0.30000000000000004 s: the tick at 0.3 s sends it.
+    Fixture f;
+    f.control.OnCmdVel(0.2, 0, 0.1);
+    f.control.Tick(0.1);
+    f.control.OnCmdVel(0, 0, 0.2);
+    ASSERT_EQ(Of(f.control.Tick(0.2), kDiffDriveService).size(), 1u);
+    EXPECT_EQ(Of(f.control.Tick(0.3), kDiffDriveService).size(), 1u);
+  }
+}
+
+TEST(XcoreControl, RestartOfTheDriveServiceStopsAndForgets) {
+  Fixture f;
+  Wheels wheels;
+  f.control.OnCmdVel(0.2, 0, 0);
+  f.control.Tick(0);
+  Ticks(f, wheels, 0.2, 0.2, 0);
+  f.control.OnServiceRestart(kDiffDriveService, 0.05);
+  EXPECT_FALSE(f.control.Status(0.05).moving);
+  // Three stops and no setpoint until a new command; the counters start again.
+  int stops = 0;
+  for (int i = 5; i <= 60; i++) {
+    const double t = i * 0.01;
+    f.Board(0, t);
+    for (const auto& v : Of(f.control.Tick(t), kDiffDriveService)) {
+      EXPECT_EQ(TwistOf(v), std::vector<double>(6, 0.0));
+      stops++;
+    }
+  }
+  EXPECT_EQ(stops, 3);
+  EXPECT_FALSE(f.control.OnOutput(kDiffDriveService, diff_drive::kOutTicks, wheels.Step(0.2, 0.2, 0.04), wheels.us(),
+                                  0.61));
+}
+
+// The wheels measured against the command for 0.3 s, then the command goes on after a restart of the drive service or
+// after a hold: the time against counts again.
+TEST(XcoreControl, TheTimeAgainstTheCommandStartsAgainAfterARestartOrAHold) {
+  {
+    DriveRun r;
+    r.Until(0.3, -0.1, -0.1, true);
+    r.f.control.OnServiceRestart(kDiffDriveService, r.t);
+    r.Until(0.7, -0.1, -0.1, true);
+    EXPECT_FALSE(r.f.control.Status(r.t).blocked);
+  }
+  {
+    DriveRun r;
+    r.Until(0.3, -0.1, -0.1, true);
+    r.f.control.SetHold(true);
+    r.Until(0.35, -0.1, -0.1, true);
+    r.f.control.SetHold(false);
+    r.Until(0.7, -0.1, -0.1, true);
+    EXPECT_FALSE(r.f.control.Status(r.t).blocked);
+  }
+}
+
+TEST(XcoreControl, StallAtItsLimits) {
+  // A gap of exactly 0.8 s, and 1.37 - 0.57 just over it by rounding: no stall yet.
+  for (const auto& [t0, t1] : std::vector<std::pair<double, double>>{{0.01, 0.81}, {0.57, 1.37}}) {
+    Fixture f;
+    f.control.Tick(t0);
+    f.Board(0, t1);
+    f.control.Tick(t1);
+    EXPECT_FALSE(f.control.Status(t1).emergency_reason & kReasonDriverStall) << t0;
+  }
+  {
+    // A setpoint that did not go out yet gets its stop as well.
+    Fixture f;
+    f.control.Tick(0);
+    f.Board(0, 1.0);
+    f.control.OnCmdVel(0.2, 0, 1.0);
+    auto drive = Of(f.control.Tick(1.0), kDiffDriveService);
+    ASSERT_EQ(drive.size(), 1u);
+    EXPECT_EQ(TwistOf(drive[0]), std::vector<double>(6, 0.0));
+  }
+  {
+    // The stall says why the blade went off, also when its lease ran out meanwhile.
+    Fixture f;
+    ASSERT_EQ(f.control.SetBlade({true, 0, 0, 0.5}, 0), BladeResult::kOk);
+    f.control.Tick(0);
+    f.Board(0, 1.0);
+    f.control.Tick(1.0);
+    EXPECT_EQ(f.control.Status(1.0).blade_off_reason, BladeOffReason::kBlocked);
+  }
+}
+
+TEST(XcoreControl, TiltAtItsLimits) {
+  {
+    // 0.57 - 0.07 lies just under 0.5 s by rounding: enough.
+    Fixture f;
+    Tilt(f.control, 45, 0.07);
+    Tilt(f.control, 45, 0.57);
+    EXPECT_TRUE(f.control.Status(0.57).emergency_reason & kReasonTilt);
+  }
+  // A release takes a sample exactly 0.5 s old, and 1.07 - 0.57 just over it by rounding.
+  for (const auto& [level, release] : std::vector<std::pair<double, double>>{{0.51, 1.01}, {0.57, 1.07}}) {
+    Fixture f;
+    Tilt(f.control, 50, 0);
+    Tilt(f.control, 50, 0.5);
+    ASSERT_TRUE(f.control.Status(0.5).emergency_reason & kReasonTilt);
+    Tilt(f.control, 0, level);
+    EXPECT_FALSE(f.control.ReleaseEmergency(release)) << level;
+  }
+  {
+    // 90 deg exactly, on its side: not above a limit of 90 deg, and not below a release limit of 90 deg.
+    ControlConfig config = Fixture::Config();
+    config.tilt_limit_deg = 90;
+    config.tilt_release_deg = 90;
+    Fixture f(config);
+    for (int i = 0; i <= 100; i++) f.control.OnImu(0, kG, 0, i * 0.01);
+    EXPECT_FALSE(f.control.Status(1.0).emergency_reason & kReasonTilt);
+    for (int i = 101; i <= 160; i++) f.control.OnImu(0, 0, -kG, i * 0.01);
+    ASSERT_TRUE(f.control.Status(1.6).emergency_reason & kReasonTilt);
+    f.control.OnImu(0, kG, 0, 1.61);
+    auto refused = f.control.ReleaseEmergency(1.61);
+    ASSERT_TRUE(refused);
+    EXPECT_EQ(refused->code, "STILL_TILTED");
+    f.control.OnImu(0, 0, kG, 1.62);
+    EXPECT_FALSE(f.control.ReleaseEmergency(1.62));
+  }
+}
+
+TEST(XcoreControl, BladeRequestsAtTheirLimits) {
+  Fixture f;
+  EXPECT_EQ(f.control.SetBlade({true, 100, 0, 1}, 0), BladeResult::kOk);
+  // A lease a rounding error above blade_lease_max passes, a longer one does not.
+  EXPECT_EQ(f.control.SetBlade({true, 0, 0, 2.0000005}, 0), BladeResult::kOk);
+  EXPECT_EQ(f.control.SetBlade({true, 0, 0, 2.00001}, 0), BladeResult::kInvalidLease);
+  // A speed above 100 % in the configuration runs the blade at full speed.
+  ControlConfig config = Fixture::Config();
+  config.blade_speed_percent = 150;
+  Fixture g(config);
+  ASSERT_EQ(g.control.SetBlade({true, 0, 0, 1}, 0), BladeResult::kOk);
+  auto out = Of(g.control.Tick(0), kMowerService);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(SpeedOf(out[0]), 1.0f);
+}
+
+TEST(XcoreControl, ARenewalWaitsForThePeriodANewSpeedGoesOutAtOnce) {
+  Fixture f;
+  ASSERT_EQ(f.control.SetBlade({true, 50, 0, 1}, 0), BladeResult::kOk);
+  ASSERT_EQ(Of(f.control.Tick(0), kMowerService).size(), 1u);
+  ASSERT_EQ(f.control.SetBlade({true, 50, 0, 1}, 0.3), BladeResult::kOk);
+  EXPECT_TRUE(Of(f.control.Tick(0.3), kMowerService).empty());
+  ASSERT_EQ(f.control.SetBlade({true, 80, 0, 1}, 0.5), BladeResult::kOk);
+  auto out = Of(f.control.Tick(0.5), kMowerService);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_FLOAT_EQ(SpeedOf(out[0]), 0.8f);
+}
+
+TEST(XcoreControl, ARefusalEndsTheLeaseAtOnce) {
+  {
+    // The stop is pressed and let go again before the next tick.
+    Fixture f;
+    ASSERT_EQ(f.control.SetBlade({true, 0, 0, 2.0}, 0), BladeResult::kOk);
+    f.control.Tick(0);
+    f.Board(reason::kStop, 0.1);
+    EXPECT_EQ(f.control.SetBlade({true, 0, 0, 2.0}, 0.1), BladeResult::kBlocked);
+    EXPECT_FALSE(f.control.Status(0.1).blade_on);
+    f.Board(0, 0.15);
+    auto out = Of(f.control.Tick(0.15), kMowerService);
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(SpeedOf(out[0]), 0);
+    EXPECT_EQ(f.control.Status(0.15).blade_off_reason, BladeOffReason::kBlocked);
+  }
+  {
+    // On the dock; the contact is gone again before the next tick.
+    Fixture f;
+    ASSERT_EQ(f.control.SetBlade({true, 0, 0, 2.0}, 0), BladeResult::kOk);
+    f.control.Tick(0);
+    f.control.OnOutput(kPowerService, power::kOutChargeVoltage, F32(29.0f), 0, 0.05);
+    f.control.OnOutput(kPowerService, power::kOutChargeVoltage, F32(29.0f), 0, 0.1);
+    EXPECT_EQ(f.control.SetBlade({true, 0, 0, 2.0}, 0.1), BladeResult::kDocked);
+    EXPECT_FALSE(f.control.Status(0.1).blade_on);
+    f.control.OnOutput(kPowerService, power::kOutChargeVoltage, F32(0.5f), 0, 0.12);
+    f.control.Tick(0.15);
+    EXPECT_FALSE(f.control.Status(0.15).blade_on);
+  }
+  {
+    // The contact while the blade runs: off with the next tick.
+    Fixture f;
+    ASSERT_EQ(f.control.SetBlade({true, 0, 0, 2.0}, 0), BladeResult::kOk);
+    f.control.Tick(0);
+    f.control.OnOutput(kPowerService, power::kOutChargeVoltage, F32(29.0f), 0, 0.05);
+    f.control.OnOutput(kPowerService, power::kOutChargeVoltage, F32(29.0f), 0, 0.1);
+    auto out = Of(f.control.Tick(0.1), kMowerService);
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(SpeedOf(out[0]), 0);
+    EXPECT_EQ(f.control.Status(0.1).blade_off_reason, BladeOffReason::kDock);
+  }
+}
+
+TEST(XcoreControl, TimesOfTheBladeAtTheirLimits) {
+  {
+    // A lease of 0.1 s from 0.2 s ends at 0.30000000000000004 s: the tick at 0.3 s ends it.
+    Fixture f;
+    ASSERT_EQ(f.control.SetBlade({true, 0, 0, 0.1}, 0.2), BladeResult::kOk);
+    f.control.Tick(0.2);
+    f.control.Tick(0.3);
+    EXPECT_FALSE(f.control.Status(0.3).blade_on);
+  }
+  {
+    // An off at 0.2 s is due again at 0.30000000000000004 s: the tick at 0.3 s sends it.
+    Fixture f;
+    ASSERT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0.1), BladeResult::kOk);
+    f.control.Tick(0.1);
+    f.control.SetBlade({false, 0, 0, 0}, 0.2);
+    ASSERT_EQ(Of(f.control.Tick(0.2), kMowerService).size(), 1u);
+    EXPECT_EQ(Of(f.control.Tick(0.3), kMowerService).size(), 1u);
+  }
+}
+
+TEST(XcoreControl, ABladeTurningFromTheStartLatches) {
+  Fixture f;
+  for (int i = 0; i <= 500; i++) {
+    const double t = i * 0.01;
+    f.Board(0, t);
+    f.control.Tick(t);
+    if (i % 10 == 0) f.control.OnOutput(kMowerService, mower::kOutRpm, F32(1500), 0, t);
+    if (i == 490) {
+      EXPECT_FALSE(f.control.Status(t).blocked);
+    }
+  }
+  // The first off went out at 0 s, five seconds before.
+  EXPECT_TRUE(f.control.Status(5.0).emergency_reason & kReasonMowerNotStopped);
+}
+
+TEST(XcoreControl, TheStopTimeOfTheBladeAtItsLimits) {
+  // The first off at 0.01 s and a report exactly 5 s later; at 3.04 s and one 4.999999999999999 s later by rounding.
+  // blade_still_rpm itself counts as turning.
+  for (const auto& [off, report] : std::vector<std::pair<double, double>>{{0.01, 5.01}, {3.04, 8.04}}) {
+    Fixture f;
+    f.Board(0, off);
+    f.control.Tick(off);
+    f.Board(0, report);
+    f.control.OnOutput(kMowerService, mower::kOutRpm, F32(1500), 0, (off + report) / 2);
+    EXPECT_FALSE(f.control.Status(report).emergency_reason & kReasonMowerNotStopped) << off;
+    f.control.OnOutput(kMowerService, mower::kOutRpm, F32(100), 0, report);
+    EXPECT_TRUE(f.control.Status(report).emergency_reason & kReasonMowerNotStopped) << off;
+  }
+}
+
+TEST(XcoreControl, OffRequestsDoNotRestartTheStopTime) {
+  Fixture f;
+  ASSERT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0), BladeResult::kOk);
+  f.control.Tick(0);
+  f.control.SetBlade({false, 0, 0, 0}, 0.1);
+  for (int i = 10; i <= 520; i++) {
+    const double t = i * 0.01;
+    f.Board(0, t);
+    if (i % 50 == 0) f.control.SetBlade({false, 0, 0, 0}, t);
+    f.control.Tick(t);
+    if (i % 10 == 0) f.control.OnOutput(kMowerService, mower::kOutRpm, F32(1500), 0, t);
+  }
+  EXPECT_TRUE(f.control.Status(5.2).emergency_reason & kReasonMowerNotStopped);
+  EXPECT_EQ(f.control.Status(5.2).blade_off_reason, BladeOffReason::kRequest);
+}
+
+TEST(XcoreControl, ABladeStillTurningGetsItsOffsAtOnce) {
+  Fixture f;
+  ASSERT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0), BladeResult::kOk);
+  f.control.Tick(0);
+  f.control.SetBlade({false, 0, 0, 0}, 0.1);
+  std::vector<double> offs;
+  for (int i = 10; i <= 540; i++) {
+    const double t = i * 0.01;
+    f.Board(0, t);
+    if (i == 515) f.control.OnOutput(kMowerService, mower::kOutRpm, F32(1500), 0, t);
+    if (!Of(f.control.Tick(t), kMowerService).empty()) offs.push_back(t);
+  }
+  // Three quick offs, then one every second, and three at once when the blade still turns 5 s after the first.
+  const std::vector<double> want{0.1, 0.2, 0.3, 1.3, 2.3, 3.3, 4.3, 5.15, 5.25, 5.35};
+  ASSERT_EQ(offs.size(), want.size());
+  for (size_t i = 0; i < want.size(); i++) EXPECT_NEAR(offs[i], want[i], 1e-9) << i;
+}
+
+TEST(XcoreControl, RestartOfTheMowerServiceSendsOffsAlsoWithTheBladeOff) {
+  Fixture f;
+  ASSERT_EQ(Of(f.control.Tick(0), kMowerService).size(), 1u);
+  f.control.OnServiceRestart(kMowerService, 0.5);
+  size_t offs = 0;
+  for (int i = 50; i <= 90; i++) offs += Of(f.control.Tick(i * 0.01), kMowerService).size();
+  EXPECT_EQ(offs, 3u);
+}
+
+TEST(XcoreControl, StatusShowsBladeAndMotors) {
+  Fixture f;
+  ASSERT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0), BladeResult::kOk);
+  EXPECT_TRUE(f.control.Status(0).blade_on);
+  f.control.OnOutput(kMowerService, mower::kOutRpm, F32(2500), 0, 0);
+  f.control.OnOutput(kDiffDriveService, diff_drive::kOutLeftCurrent, F32(1.5f), 0, 0);
+  f.control.OnOutput(kDiffDriveService, diff_drive::kOutRightCurrent, F32(2.5f), 0, 0);
+  auto s = f.control.Status(0);
+  EXPECT_FLOAT_EQ(s.blade_motor.rpm, 2500);
+  EXPECT_FLOAT_EQ(s.left_motor.current, 1.5f);
+  EXPECT_FLOAT_EQ(s.right_motor.current, 2.5f);
+}
+
+TEST(XcoreControl, InputsWhileUnknownAndAtTheirIndices) {
+  Fixture f;
+  auto none = [](const ControlStatus& s) { return !s.stop && !s.lift && !s.bumper_left && !s.bumper_right; };
+  EXPECT_TRUE(none(f.control.Status(0)));
+  f.control.OnOutput(kInputService, input::kOutActive, U64(1u << 0), 0, 0);
+  EXPECT_TRUE(f.control.Status(0).stop);
+  f.control.OnOutput(kInputService, input::kOutActive, U64((1u << 2) | (1u << 5)), 0, 0);
+  auto s = f.control.Status(0);
+  EXPECT_TRUE(s.lift);
+  EXPECT_TRUE(s.bumper_left);
+  EXPECT_FALSE(s.stop);
+  EXPECT_FALSE(s.bumper_right);
+  // Another channel of the service changes nothing; a restart makes all unknown again.
+  f.control.OnOutput(kInputService, 7, U64(~uint64_t{0}), 0, 0);
+  EXPECT_FALSE(f.control.Status(0).stop);
+  f.control.OnOutput(kInputService, input::kOutActive, U64(~uint64_t{0}), 0, 0);
+  f.control.OnServiceRestart(kInputService, 0.1);
+  EXPECT_TRUE(none(f.control.Status(0.1)));
+  // Indices outside the mask are no input.
+  InputMap map = Inputs();
+  map.stop = {-1, 64, 100};
+  XcoreControl control(Fixture::Config(), map);
+  control.OnOutput(kInputService, input::kOutActive, U64(~uint64_t{0}), 0, 0);
+  EXPECT_FALSE(control.Status(0).stop);
+}
+
+TEST(XcoreControl, TelemetryOfTheEmergencyService) {
+  Fixture f;
+  EXPECT_TRUE(f.control.Status(0).telemetry_ok);
+  // A report 2.5 s old is still fresh.
+  EXPECT_FALSE(f.control.Status(2.5).blocked);
+  EXPECT_FALSE(f.control.Status(2.6).telemetry_ok);
+  // Another channel of the service is no reason.
+  f.control.OnOutput(kEmergencyService, 1, U16(reason::kLatch | reason::kStop), 0, 0);
+  EXPECT_FALSE(f.control.Status(0).blocked);
+  // A restart: unknown at once, the heartbeat goes out with the next tick.
+  ASSERT_EQ(Of(f.control.Tick(0), kEmergencyService).size(), 1u);
+  f.control.OnServiceRestart(kEmergencyService, 0.1);
+  EXPECT_TRUE(f.control.Status(0.1).emergency_reason & kReasonTimeoutInputs);
+  EXPECT_EQ(Of(f.control.Tick(0.1), kEmergencyService).size(), 1u);
+}
+
+TEST(XcoreControl, DockContactAtItsLimits) {
+  Fixture f;
+  auto charge = [&f](float volts, double t) {
+    f.control.OnOutput(kPowerService, power::kOutChargeVoltage, F32(volts), 0, t);
+  };
+  // Exactly dock_voltage counts, after two reports.
+  charge(5.0f, 0);
+  charge(5.0f, 1);
+  EXPECT_TRUE(f.control.Status(1).dock_contact);
+  // After reports without contact, one with it is not enough.
+  for (int i = 2; i <= 4; i++) charge(0.5f, i);
+  charge(29.0f, 5);
+  EXPECT_TRUE(f.control.Status(5).dock_contact_raw);
+  EXPECT_FALSE(f.control.Status(5).dock_contact);
+  // A restart of the power service forgets the contact.
+  charge(29.0f, 6);
+  ASSERT_TRUE(f.control.Status(6).dock_contact);
+  f.control.OnServiceRestart(kPowerService, 6.5);
+  EXPECT_FALSE(f.control.Status(6.5).dock_contact_raw);
+  EXPECT_FALSE(f.control.Status(6.5).dock_contact);
 }

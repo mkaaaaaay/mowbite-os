@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -141,6 +142,8 @@ TEST(DriveRegulator, SpeedModelCheckAndReach) {
   EXPECT_TRUE(bad(0.58, 0.019, std::nan("")));
   EXPECT_TRUE(bad(0.58, 0.019, 1.5));
   EXPECT_FALSE(bad(0.58, 0.299, 0.3));
+  EXPECT_FALSE(bad(0.58, 0, 0.3));
+  EXPECT_FALSE(bad(0.58, 0.019, 1.0));
 }
 
 TEST(DriveRegulator, FeedbackCorrectsTowardsTheTarget) {
@@ -166,6 +169,53 @@ TEST(DriveRegulator, FeedbackCorrectsTowardsTheTarget) {
   EXPECT_EQ(r.Update(0, 0, 2.1).left_duty, 0);
 }
 
+TEST(DriveRegulator, MeasurementsCorrectUpToAFifthOfASecond) {
+  RegulatorConfig config;
+  config.feedback = true;
+  config.max_duty = 1.0;
+  DriveRegulator r(config);
+  r.OnMeasured(0.1, 0.1, 0);
+  // Exactly 0.2 s old: feed forward 0.2 and 0.3 x 0.1 for the error, no time yet for the integral.
+  EXPECT_NEAR(r.Update(0.2, 0, 0.2).left_duty, 0.23, 1e-12);
+  EXPECT_NEAR(r.Update(0.2, 0, 0.25).left_duty, 0.2, 1e-12);
+}
+
+// Measured 0.1 m/s below the target of 0.2 m/s on both wheels: duty 0.2 + 0.3 x 0.1 + 0.6 x integral.
+TEST(DriveRegulator, TheIntegralFollowsTheTimeBetweenUpdates) {
+  RegulatorConfig config;
+  config.feedback = true;
+  config.max_duty = 1.0;
+  DriveRegulator r(config);
+  auto left = [&r](double t) {
+    r.OnMeasured(0.1, 0.1, t);
+    return r.Update(0.2, 0, t).left_duty;
+  };
+  EXPECT_NEAR(left(1.0), 0.23, 1e-12);
+  EXPECT_NEAR(left(1.1), 0.23 + 0.6 * 0.01, 1e-12);
+  // A gap of 0.3 s counts as 0.2 s.
+  EXPECT_NEAR(left(1.4), 0.23 + 0.6 * 0.03, 1e-12);
+  // The integral stops at integral_limit.
+  double t = 1.4;
+  for (int i = 0; i < 20; i++) left(t += 0.2);
+  EXPECT_NEAR(left(t += 0.2), 0.23 + 0.6 * 0.2, 1e-12);
+  // A target of 0 clears it; the next update has 0.1 s.
+  r.Update(0, 0, t += 0.1);
+  EXPECT_NEAR(left(t += 0.1), 0.23 + 0.6 * 0.01, 1e-12);
+  // A reset clears both wheels and the time of the last update.
+  for (int i = 0; i < 5; i++) left(t += 0.2);
+  r.Reset();
+  r.OnMeasured(0.1, 0.1, t += 0.1);
+  auto d = r.Update(0.2, 0, t);
+  EXPECT_NEAR(d.left_duty, 0.23, 1e-12);
+  EXPECT_NEAR(d.right_duty, 0.23, 1e-12);
+  // An update at 0 counts as one.
+  DriveRegulator from_zero(config);
+  from_zero.OnMeasured(0.1, 0.1, 0);
+  EXPECT_NEAR(from_zero.Update(0.2, 0, 0).left_duty, 0.23, 1e-12);
+  from_zero.OnMeasured(0.1, 0.1, 0.1);
+  EXPECT_NEAR(from_zero.Update(0.2, 0, 0.1).left_duty, 0.23 + 0.6 * 0.01, 1e-12);
+}
+
 TEST(DriveRegulator, WheelAgainstSetpointFaults) {
   RegulatorConfig config;
   DriveRegulator r(config);
@@ -188,4 +238,56 @@ TEST(DriveRegulator, WheelAgainstSetpointFaults) {
     slow.Update(0.2, 0, i * 0.1);
   }
   EXPECT_FALSE(slow.fault());
+}
+
+namespace {
+
+// Updates every 0.1 s from t0 to t1 with a forward target of 0.2 m/s and the wheels measured as given.
+void Against(DriveRegulator& r, double t0, double t1, double left, double right, double target = 0.2) {
+  for (double t = t0; t < t1 + 1e-9; t += 0.1) {
+    r.OnMeasured(left, right, t);
+    r.Update(target, 0, t);
+  }
+}
+
+}  // namespace
+
+TEST(DriveRegulator, EachWheelAgainstItsSetpointFaults) {
+  RegulatorConfig config;
+  DriveRegulator r(config);
+  // Late in time, so that the time against counts from its start.
+  Against(r, 10.0, 10.4, 0.1, -0.1);
+  EXPECT_FALSE(r.fault());
+  Against(r, 10.5, 10.5, 0.1, -0.1);
+  EXPECT_TRUE(r.fault());
+}
+
+TEST(DriveRegulator, TheTimeAgainstStartsAgain) {
+  RegulatorConfig config;
+  DriveRegulator r(config);
+  // Interrupted by a sample in the direction of the setpoint.
+  Against(r, 10.0, 10.3, -0.1, 0.1);
+  Against(r, 10.4, 10.4, 0.1, 0.1);
+  Against(r, 10.5, 10.8, -0.1, 0.1);
+  EXPECT_FALSE(r.fault());
+  // By a target of 0.
+  r.Update(0, 0, 10.9);
+  Against(r, 11.0, 11.4, -0.1, 0.1);
+  EXPECT_FALSE(r.fault());
+  // After a fault cleared.
+  Against(r, 11.5, 11.5, -0.1, 0.1);
+  ASSERT_TRUE(r.fault());
+  r.ClearFault();
+  Against(r, 11.6, 12.0, -0.1, 0.1);
+  EXPECT_FALSE(r.fault());
+}
+
+TEST(DriveRegulator, AgainstMeansTheOtherDirectionAboveTheReverseSpeed) {
+  RegulatorConfig config;
+  DriveRegulator r(config);
+  Against(r, 0, 1.0, -0.05, 0.1);
+  EXPECT_FALSE(r.fault());
+  // The smallest setpoint: the product with the speed is 0, the direction is the same.
+  Against(r, 1.1, 2.0, 0.1, 0.1, std::numeric_limits<double>::denorm_min());
+  EXPECT_FALSE(r.fault());
 }
