@@ -106,7 +106,6 @@ void XcoreControl::OnCmdVel(double linear, double angular, double now) {
   if (Blocked(now)) return;
   bool changed = !command_ || command_->linear != command.linear || command_->angular != command.angular;
   command_ = command;
-  stop_repeat_.remaining = 0;
   // A new setpoint goes out with the next tick.
   if (changed) next_drive_s_.reset();
 }
@@ -475,10 +474,6 @@ std::vector<InputValue> XcoreControl::Tick(double now) {
   std::vector<InputValue> out;
   // Before anything goes out: after a stall of this thread the board may have stopped on its own.
   CheckStall(now);
-  if (regulator_.fault() && !drive_fault_) {
-    drive_fault_ = true;
-    errors_.push_back("wheel turns against the drive command: latched");
-  }
   bool blocked = Blocked(now);
 
   // Emergency: the host's latch, a pending release, and in any case the heartbeat for the board.
@@ -509,6 +504,11 @@ std::vector<InputValue> XcoreControl::Tick(double now) {
   if (command_) {
     if (Due(next_drive_s_, config_.drive_period_s, now)) {
       DutyTwist duty = regulator_.Update(command_->linear, command_->angular, now);
+      // Latched where found, so no release can come between the fault and its latch.
+      if (regulator_.fault() && !drive_fault_) {
+        drive_fault_ = true;
+        errors_.push_back("wheel turns against the drive command: latched");
+      }
       out.push_back(Twist(duty.linear, duty.angular));
       if (duty.linear != 0 || duty.angular != 0) last_drive_s_ = now;
       moving_ = true;

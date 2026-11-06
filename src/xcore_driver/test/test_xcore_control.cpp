@@ -1355,6 +1355,33 @@ TEST(XcoreControl, ACommandWithdrawnBeforeItWentOutSendsNothing) {
   }
 }
 
+TEST(XcoreControl, AStopKeepsItsRepeatsWhenTheNextCommandEndsBeforeItWentOut) {
+  for (const bool hold : {false, true}) {
+    SCOPED_TRACE(hold ? "hold" : "zero");
+    Fixture f;
+    f.control.OnCmdVel(0.2, 0, 0);
+    f.control.Tick(0);
+    f.control.OnCmdVel(0, 0, 0.005);
+    int stops = 0, drives = 0;
+    for (int i = 1; i <= 100; i++) {
+      const double t = i * 0.01;
+      f.Board(0, t);
+      for (const auto& v : Of(f.control.Tick(t), kDiffDriveService)) (TwistOf(v)[0] == 0 ? stops : drives)++;
+      if (i == 1) {
+        // A new command after the first stop that ends before the next tick.
+        f.control.OnCmdVel(0.2, 0, t + 0.002);
+        if (hold) {
+          f.control.SetHold(true);
+        } else {
+          f.control.OnCmdVel(0, 0, t + 0.005);
+        }
+      }
+    }
+    EXPECT_EQ(drives, 0);
+    EXPECT_EQ(stops, 3);
+  }
+}
+
 TEST(XcoreControl, TimesOfTheDriveAtTheirLimits) {
   {
     // The command of 0.57 s is 0.5000000000000001 s old at 1.07 s: within the timeout.
@@ -1418,6 +1445,31 @@ TEST(XcoreControl, TheTimeAgainstTheCommandStartsAgainAfterARestartOrAHold) {
     r.Until(0.7, -0.1, -0.1, true);
     EXPECT_FALSE(r.f.control.Status(r.t).blocked);
   }
+}
+
+TEST(XcoreControl, TheTimeAgainstTheCommandGoesOnOverAStop) {
+  // A command that flickers through zero does not start the time again.
+  DriveRun r;
+  r.Until(0.3, -0.1, -0.1, true);
+  r.f.control.OnCmdVel(0, 0, r.t);
+  r.Until(0.35, -0.1, -0.1);
+  r.Until(0.7, -0.1, -0.1, true);
+  EXPECT_TRUE(Runaway(r.f, r.t));
+}
+
+TEST(XcoreControl, TheRegulatorsFaultLatchesInTheTickThatFindsIt) {
+  // A release after every tick never comes between the fault and its latch.
+  DriveRun r;
+  int latched = 0;
+  while (r.t < 1.0 - 1e-9) {
+    r.Until(r.t + 0.01, -0.1, -0.1, true);
+    if (Runaway(r.f, r.t)) latched++;
+    EXPECT_FALSE(r.f.control.ReleaseEmergency(r.t));
+  }
+  EXPECT_EQ(latched, 1);
+  auto errors = r.f.control.TakeErrors();
+  ASSERT_EQ(errors.size(), 1u);
+  EXPECT_NE(errors[0].find("against the drive command"), std::string::npos);
 }
 
 TEST(XcoreControl, StallAtItsLimits) {
