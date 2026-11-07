@@ -57,9 +57,15 @@ std::vector<Field> DockingTries() {
   return Rated(true, {Integer("attempts", "", "Tries of docking so far")});
 }
 
+Field Nullable(Field field) {
+  field.nullable = true;
+  return field;
+}
+
 struct ReasonText {
   std::string text;
   std::vector<Field> fields;
+  UserTexts texts = {};
 };
 
 // What each reason means and the fields it brings, the same in every event that carries it.
@@ -112,6 +118,21 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
        {"The IMU does not measure gravity as it should",
         {Number("gravity", "m/s2", "The gravity it measures"), Number("tilt", "deg", "The tilt it measures")}}},
       {"INVALID", {"The path or the request was not valid", {}}},
+      {"KERNEL_CRASH",
+       {"The kernel of the mower crashed; it holds the mower in every state",
+        {},
+        {{"de",
+          {"Kernel-Absturz",
+           "Das Betriebssystem des Mähers ist abgestürzt und neu gestartet. Der Mäher fährt und mäht nicht, bis er "
+           "freigegeben wird, gleich was er vorher tat.",
+           "Mäher und Umgebung ansehen, dann den Notaus zurücksetzen. Kommt es öfter vor, die Protokolle für eine "
+           "Meldung sichern."}},
+         {"en",
+          {"Kernel crash",
+           "The operating system of the mower crashed and started again. The mower does not drive or mow until it "
+           "is released, whatever it did before.",
+           "Look at the mower and around it, then reset the emergency. If it happens again, keep the logs for a "
+           "report."}}}}},
       {"LEFT_LANE", {"The mower left its lane", {}}},
       {"MANUAL", {"By the user", {}}},
       {"MAP_MISMATCH",
@@ -124,6 +145,21 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"NOT_MOVING", {"The mower does not move", {}}},
       {"NOT_TURNING", {"The mower does not turn", {}}},
       {"NO_ANSWER", {"No answer in time", {}}},
+      {"OS_CRASH",
+       {"MowBite OS ended without its own stop in this boot; it holds the mower after a state other than IDLE",
+        {},
+        {{"de",
+          {"MowBite OS abgestürzt",
+           "MowBite OS wurde ohne eigenen Stopp beendet und neu gestartet (Absturz, beendet, Speicher voll). Lief "
+           "gerade eine Arbeit, wartet der Mäher auf die Freigabe; im Leerlauf geht es von selbst weiter.",
+           "Mäher und Umgebung ansehen, dann den Notaus zurücksetzen. Kommt es öfter vor, das Protokoll für eine "
+           "Meldung sichern."}},
+         {"en",
+          {"MowBite OS crashed",
+           "MowBite OS ended without its own stop and started again (crash, killed, out of memory). If it was "
+           "working, the mower waits for a release; in IDLE it goes on by itself.",
+           "Look at the mower and around it, then reset the emergency. If it happens again, keep the log for a "
+           "report."}}}}},
       {"NO_CHARGE_CURRENT",
        {"Contact with the docking station, but no charge current",
         {Number("current", "A", "The charge current seen; while docking the largest one of the check"), Limit("A")}}},
@@ -153,8 +189,26 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"POSITION_ACCURACY",
        {"The position is not accurate enough",
         {Number("accuracy", "m", "Expected error of the position"), Limit("m")}}},
+      {"POWER_LOSS",
+       {"The mower started again while MowBite OS ran (power, reset, power key, hang); it holds the mower after a "
+        "state other than IDLE",
+        {},
+        {{"de",
+          {"Unterbrechung während der Arbeit",
+           "Der Mäher ist neu gestartet, während MowBite OS lief: Strom weg, Akku raus, harter Reset, Ein-Taste "
+           "gehalten oder ein Hänger. Jede solche Unterbrechung während der Arbeit sperrt den Mäher bis zur "
+           "Freigabe. Das ist Absicht, kein Fehler.",
+           "Mäher und Umgebung ansehen, dann den Notaus zurücksetzen. Im Leerlauf sperrt eine Unterbrechung "
+           "nicht."}},
+         {"en",
+          {"Interrupted while working",
+           "The mower started again while MowBite OS ran: power cut, battery out, hard reset, power key held or a "
+           "hang. Any such interruption during work holds the mower until it is released. This is on purpose, not a "
+           "fault.",
+           "Look at the mower and around it, then reset the emergency. In IDLE an interruption holds nothing."}}}}},
       {"RAIN", {"It rains", {}}},
       {"REFERENCE_MISMATCH", {"The docking station is not where the map has it", {Distance(), Limit("m")}}},
+      {"RESTART_HOLD_STAYS", {"The hold after an unexpected restart could not be removed from data_dir", {}}},
       {"RESPONSE_TOPIC",
        {"The response topic of the request is not rpc/response/<token> with a token of 1 to 64 of A-Z, a-z, 0-9, "
         "dot, underscore and hyphen: nothing was done",
@@ -198,9 +252,9 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
   return texts;
 }
 
-ReasonEntry R(const std::string& code, std::string severity, std::string resume, std::string action = "") {
+ReasonEntry R(const std::string& code, std::string severity, std::string resume, Json when = Json::object()) {
   const ReasonText& text = ReasonTexts().at(code);
-  return {code, std::move(severity), std::move(resume), text.text, text.fields, std::move(action)};
+  return {code, std::move(severity), std::move(resume), text.text, text.fields, std::move(when), text.texts};
 }
 
 // A list of reasons that all wait for the user: codes with their severity.
@@ -304,7 +358,7 @@ const std::vector<EventEntry>& Events() {
                               kRecordingActions)}),
             [] {
               // An automatic point is taken again by itself once the position is accurate.
-              std::vector<ReasonEntry> reasons = {R("POSITION_ACCURACY", "warning", "auto", "point")};
+              std::vector<ReasonEntry> reasons = {R("POSITION_ACCURACY", "warning", "auto", {{"action", "point"}})};
               for (auto& reason : User({{"HOLD", "info"},
                                         {"STILL_SAVING", "info"},
                                         {"EMERGENCY", "error"},
@@ -419,7 +473,25 @@ const std::vector<EventEntry>& Events() {
                   {"FOREIGN_HOST", "error"},
                   {"DRIVER_MISSING", "error"},
                   {"NO_ANSWER", "error"},
-                  {"SAFETY_MISSING", "error"}}),
+                  {"SAFETY_MISSING", "error"},
+                  {"RESTART_HOLD_STAYS", "error"}}),
+            "error", "user"),
+      Event("UNEXPECTED_RESTART", "logic",
+            "MowBite OS started after an end that was not its own stop, or after a kernel crash; hold tells whether "
+            "the mower waits for emergency.reset (emergency bit UNEXPECTED_RESTART)",
+            Rated(true,
+                  {Text("cause", "What ended the OS before, the same as reason", true,
+                        {"KERNEL_CRASH", "OS_CRASH", "POWER_LOSS"}),
+                   Text("detail", "English text of what is known: the line of the kernel or what the OS found", true),
+                   Nullable(Integer("crashed_at", "unix s", "When the kernel crashed, null when not known", true)),
+                   Text("state_before",
+                        "The state before: current_state, DRIVING or CALIBRATING for IDLE with a drive; empty when "
+                        "not known",
+                        true),
+                   Nullable(Text("job_id_before", "The job of mowing then, null without one", true)),
+                   Bool("hold", "The mower is held until a release, also by a hold from before")}),
+            {R("OS_CRASH", "warning", "auto", {{"hold", false}}), R("POWER_LOSS", "warning", "auto", {{"hold", false}}),
+             R("KERNEL_CRASH", "error", "user"), R("OS_CRASH", "error", "user"), R("POWER_LOSS", "error", "user")},
             "error", "user"),
       Event("BLADES", "logic", "The blade started or stopped, as its speed shows",
             {Bool("enabled", "Whether the blade runs")}),

@@ -280,6 +280,43 @@ TEST_F(FilterTest, LatchIsAskedForAgainUntilHwStatusShowsIt) {
   EXPECT_FALSE(filter_.TakeLatchRequest(now_).has_value());
 }
 
+TEST_F(FilterTest, RestartHoldLatchesOnceAndGoesOnlyWithARelease) {
+  ASSERT_TRUE(Moves(Cmd(Source::kTeleop, 0.2))) << filter_.LastRefusal();
+  filter_.OnRestartHold(true);
+  EXPECT_EQ(filter_.Latched(), kReasonUnexpectedRestart);
+  EXPECT_TRUE(Stops(Cmd(Source::kTeleop, 0.2)));
+  const auto latch = filter_.TakeLatchRequest(now_);
+  ASSERT_TRUE(latch.has_value());
+  EXPECT_EQ(latch->bits, kReasonUnexpectedRestart);
+  EXPECT_FALSE(latch->again);
+  // The file stays while the driver shows the bit: no new request.
+  hw_emergency_ = true;
+  hw_reason_ = 1u | kReasonUnexpectedRestart;
+  for (int i = 0; i < 20; ++i) {
+    filter_.OnRestartHold(true);
+    Run(now_ + 0.1);
+    EXPECT_FALSE(filter_.TakeLatchRequest(now_).has_value());
+  }
+  // The logic removes the file, then asks for the release.
+  filter_.OnRestartHold(false);
+  EXPECT_EQ(filter_.Latched(), kReasonUnexpectedRestart);
+  ASSERT_TRUE(filter_.OnRelease(now_).allowed);
+  EXPECT_EQ(filter_.Latched(), 0u);
+  filter_.OnRestartHold(false);
+  EXPECT_EQ(filter_.Latched(), 0u);
+}
+
+TEST_F(FilterTest, ARestartHoldFileLatchesAgainOnlyWhenItComesAnew) {
+  filter_.OnRestartHold(true);
+  ASSERT_TRUE(filter_.OnRelease(now_).allowed);
+  // The release came first: the file it saw before does not latch again.
+  filter_.OnRestartHold(true);
+  EXPECT_EQ(filter_.Latched(), 0u);
+  filter_.OnRestartHold(false);
+  filter_.OnRestartHold(true);
+  EXPECT_EQ(filter_.Latched(), kReasonUnexpectedRestart);
+}
+
 TEST_F(FilterTest, FenceLatchesForTheFollowerOnly) {
   // 0.5 m west of the lawn and off the line of the station: within the margin.
   x_ = -0.5;

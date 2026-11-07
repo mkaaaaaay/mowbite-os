@@ -32,7 +32,8 @@ struct mowbite_journal::CoreTraits<mowbite_safety::SafetyFilter> {
   static constexpr const char* kName = "safety";
   using Config = mowbite_safety::SafetyConfig;
   MOWBITE_JOURNAL_METHODS(&F::OnHardware, &F::OnCapabilities, &F::OnTilt, &F::OnPose, &F::SetMap, &F::SetMapFits,
-                          &F::SetMaxPositionAccuracy, &F::OnCommand, &F::Tick, &F::TakeLatchRequest, &F::OnRelease);
+                          &F::SetMaxPositionAccuracy, &F::OnCommand, &F::Tick, &F::TakeLatchRequest, &F::OnRelease,
+                          &F::OnRestartHold);
   // The latched reason bits of S2.
   static uint32_t View(const F& core) {
     return core.Latched();

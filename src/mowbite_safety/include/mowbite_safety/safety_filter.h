@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "mowbite_hold/restart.h"
 #include "mowbite_safety/region.h"
 
 namespace mowbite_safety {
@@ -19,6 +20,7 @@ enum class Source : uint8_t { kStop = 0, kTeleop = 1, kFollower = 2, kCalibratio
 // The reason bits of hw/status the filter latches over hw/emergency.
 constexpr uint32_t kReasonTilt = 1u << 13;
 constexpr uint32_t kReasonFence = 1u << 14;
+using mowbite_hold::kReasonUnexpectedRestart;
 
 struct SafetyConfig {
   // TILT: the body more than tilt_limit degrees off the vertical for tilt_time s; a release needs it below
@@ -100,6 +102,9 @@ class SafetyFilter {
   Decision OnCommand(Source source, double linear, double angular, double now);
   // A stop when an emergency began or the IMU went silent while the mower moves.
   std::optional<Twist2> Tick(double now);
+  // Whether <data_dir>/restart-hold.json is there: when it appears, UNEXPECTED_RESTART latches like TILT and goes only
+  // with a release; the logic removes the file before it asks for one.
+  void OnRestartHold(bool present);
   // The own latch for hw/emergency: once when it is new, again every second while hw/status does not show it.
   std::optional<LatchRequest> TakeLatchRequest(double now);
   // A release asked for by the logic: refused while tilted or without an IMU sample; else the own latch is gone, every
@@ -169,6 +174,7 @@ class SafetyFilter {
   // The source whose moving command went out last, empty after a stop.
   std::optional<Source> moving_;
   uint32_t latched_ = 0;
+  bool restart_hold_ = false;
   std::string latch_reason_;
   bool latch_new_ = false;
   std::optional<double> latch_sent_s_;

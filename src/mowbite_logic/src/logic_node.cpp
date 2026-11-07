@@ -47,6 +47,7 @@
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mowbite_msgs/srv/set_heading.hpp>
 #include <mowbite_hold/hold.h>
+#include <mowbite_hold/restart.h>
 #include <map>
 #include <mowbite_planner_interfaces/srv/plan_coverage.hpp>
 #include <mowbite_planner_interfaces/srv/plan_transit.hpp>
@@ -288,6 +289,8 @@ class LogicNode : public rclcpp::Node {
     follower_timeout_s_ = declare_parameter("follower_timeout", 2.0);
     blade_client_ = create_client<mowbite_msgs::srv::SetBlade>("hw/blade");
     RestoreCheckpoint();
+    // The kernel record of the platform ("<unix s> <reason>"), empty where it has none.
+    JudgeRestart(declare_parameter("crash_record", std::string()));
 
     robot_state_pub_ = create_publisher<mowbite_msgs::msg::RobotState>("bridge/robot_state", 10);
     actions_pub_ = create_publisher<mowbite_msgs::msg::ActionList>("bridge/actions", LatchedQos(50));
@@ -480,6 +483,11 @@ class LogicNode : public rclcpp::Node {
     PublishActionsIfChanged();
     PublishIdleIfChanged();
     PublishHoldIfChanged();
+  }
+
+  // Its own stop: the next start finds a clean session.
+  ~LogicNode() override {
+    WriteSession(true);
   }
 
  private:
@@ -718,6 +726,18 @@ class LogicNode : public rclcpp::Node {
   void ReleaseEmergency(const std::string& rpc_id = "") {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!rpc_id.empty()) release_rpc_ids_.push_back(rpc_id);
+    // The user looked at the mower: the restart hold goes first, the file before the flag, so S2 does not latch it
+    // again; the release of S2 and the driver follows as for any emergency.
+    if (core_.View().RestartHeld()) {
+      std::string error;
+      if (!mowbite_hold::RemoveRecordFile(restart_hold_path_, &error)) {
+        RCLCPP_ERROR(get_logger(), "Restart hold stays: %s", error.c_str());
+        RefuseReleaseLocked(Reason("RESTART_HOLD_STAYS", "The restart hold stays: " + error));
+        return;
+      }
+      core_.Call<&LogicCore::SetRestartHold>(false);
+      RCLCPP_INFO(get_logger(), "Restart hold released by emergency.reset");
+    }
     if (!emergency_client_->service_is_ready()) {
       RCLCPP_ERROR(get_logger(), "safety/release_emergency is not available, emergency stays");
       RefuseReleaseLocked(Reason("SAFETY_MISSING", "safety/release_emergency is not available"));
@@ -1276,6 +1296,77 @@ class LogicNode : public rclcpp::Node {
     });
   }
 
+  // The restart hold (G35) from os-session.json of the end before and the kernel record: it holds from here on, the
+  // event waits for the bridge. A hold file from before stands, whatever this start finds.
+  void JudgeRestart(const std::string& crash_record) {
+    if (data_dir_.empty()) return;
+    session_path_ = data_dir_ + "/" + mowbite_hold::kSessionFile;
+    restart_hold_path_ = data_dir_ + "/" + mowbite_hold::kRestartHoldFile;
+    boot_id_ = mowbite_hold::ReadBootId();
+    if (boot_id_.empty()) RCLCPP_ERROR(get_logger(), "No boot id: every end before counts as one of another boot");
+    const mowbite_hold::SessionFile session = mowbite_hold::ReadSessionFile(session_path_);
+    const mowbite_hold::Verdict verdict =
+        mowbite_hold::JudgeStart(session, boot_id_, mowbite_hold::ReadKernelRecord(crash_record));
+    bool held = mowbite_hold::RestartHoldPresent(restart_hold_path_);
+    if (verdict.hold && !held) {
+      std::string error;
+      if (!mowbite_hold::WriteRecordFile(restart_hold_path_, mowbite_hold::RestartHoldText(verdict, WallSeconds()),
+                                         &error)) {
+        RCLCPP_ERROR(get_logger(), "Restart hold only until the next start: %s", error.c_str());
+      }
+    }
+    held = held || verdict.hold;
+    core_.Call<&LogicCore::SetRestartHold>(held);
+    if (verdict.cause != mowbite_hold::Cause::kNone) {
+      restart_report_ = RestartReport{mowbite_hold::CauseName(verdict.cause), verdict.detail, verdict.crashed_at,
+                                      verdict.state_before, verdict.job_id_before, held};
+      const std::string line = "Unexpected restart " + restart_report_->cause + " after " +
+                               (verdict.state_before.empty() ? "an unknown state" : verdict.state_before) + ": " +
+                               verdict.detail;
+      if (held) {
+        RCLCPP_ERROR(get_logger(), "%s; held until emergency.reset", line.c_str());
+      } else {
+        RCLCPP_WARN(get_logger(), "%s", line.c_str());
+      }
+    } else if (held) {
+      RCLCPP_ERROR(get_logger(), "Held after an unexpected restart before: %s", restart_hold_path_.c_str());
+    }
+    WriteSession(false);
+  }
+
+  // os-session.json with the state and job now, when they changed or clean is new. Called without the mutex.
+  void WriteSession(bool clean) {
+    if (session_path_.empty()) return;
+    mowbite_hold::SessionRecord record;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const RobotStateData state = core_.View().RobotState();
+      record = {mowbite_hold::SessionState(state.state, state.sub_state), core_.View().JobId(), boot_id_,
+                WallSeconds(), clean};
+    }
+    if (session_ && session_->state == record.state && session_->job_id == record.job_id &&
+        session_->clean == clean) {
+      return;
+    }
+    std::string error;
+    if (!mowbite_hold::WriteRecordFile(session_path_, mowbite_hold::SessionText(record), &error)) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 60000, "Session: %s", error.c_str());
+      return;
+    }
+    session_ = record;
+  }
+
+  // UNEXPECTED_RESTART once the bridge listens, so the event reaches events/json and its history.
+  void ReportRestartWhenHeard() {
+    if (!restart_report_ || publish_pub_->get_subscription_count() == 0) return;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      core_.Call<&LogicCore::ReportRestart>(*restart_report_);
+    }
+    restart_report_.reset();
+    Flush();
+  }
+
   // <data_dir>/checkpoint.json, written to a new file and renamed, so a crash never leaves half a checkpoint.
   std::string CheckpointPath() const {
     return data_dir_.empty() ? "" : data_dir_ + "/checkpoint.json";
@@ -1358,6 +1449,7 @@ class LogicNode : public rclcpp::Node {
     }
     if (calibration_client_->action_server_is_ready() != calibration_offered_) PublishRpcMethods();
     Flush();
+    ReportRestartWhenHeard();
     MirrorHold();
     mowbite_msgs::msg::RobotState msg;
     msg.current_state = state.state;
@@ -2396,6 +2488,8 @@ class LogicNode : public rclcpp::Node {
 
   // Sends stop requests, events, changed actions and map edits collected by the core.
   void Flush() {
+    // The state goes to os-session.json before the commands of this step go out.
+    WriteSession(false);
     // An edit refused before it went out brings its events with it, so they are collected after it.
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -2567,6 +2661,13 @@ class LogicNode : public rclcpp::Node {
   // system.hold: <data_dir>/hold.json (empty without data_dir), its time on the monotonic clock, what logic/hold said
   // last and when mowbite/hold went out.
   std::string hold_path_;
+  // The restart hold: os-session.json and what was last written to it, restart-hold.json (all empty without
+  // data_dir), the boot of this start and the event that waits for the bridge.
+  std::string session_path_;
+  std::optional<mowbite_hold::SessionRecord> session_;
+  std::string restart_hold_path_;
+  std::string boot_id_;
+  std::optional<RestartReport> restart_report_;
   mowbite_hold::HoldTimer hold_;
   std::optional<int64_t> published_hold_;
   bool hold_mirror_due_ = true;

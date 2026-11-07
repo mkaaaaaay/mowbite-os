@@ -7,8 +7,8 @@
 namespace mowbite_logic {
 
 // The one table of severity and resume is the catalog of the interface.
-Rating RateReason(const std::string& event, const std::string& code, const std::string& action) {
-  const mowbite_api::Rating rating = mowbite_api::RateReason(event, code, action);
+Rating RateReason(const std::string& event, const std::string& code, const json& details) {
+  const mowbite_api::Rating rating = mowbite_api::RateReason(event, code, details);
   return {rating.severity, rating.resume};
 }
 
@@ -16,8 +16,7 @@ void PutReason(json* details, const std::string& event, const Reason& reason) {
   (*details)["reason"] = reason.code;
   for (const auto& [key, value] : reason.fields.items()) (*details)[key] = value;
   if (!reason.message.empty()) (*details)["message"] = reason.message;
-  const std::string action = details->contains("action") ? (*details)["action"].get<std::string>() : "";
-  const Rating rating = RateReason(event, reason.code, action);
+  const Rating rating = RateReason(event, reason.code, *details);
   (*details)["severity"] = rating.severity;
   (*details)["resume"] = rating.resume;
 }

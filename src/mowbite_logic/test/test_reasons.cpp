@@ -9,7 +9,7 @@ namespace {
 
 void ExpectRating(const std::string& event, const std::string& code, const std::string& severity,
                   const std::string& resume, const std::string& action = "") {
-  const Rating rating = RateReason(event, code, action);
+  const Rating rating = RateReason(event, code, action.empty() ? json::object() : json{{"action", action}});
   EXPECT_EQ(rating.severity, severity) << event << " " << code;
   EXPECT_EQ(rating.resume, resume) << event << " " << code;
 }

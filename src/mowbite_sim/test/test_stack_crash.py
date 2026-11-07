@@ -3,8 +3,9 @@ in test_follower_stall.py. Once the blade turns and the mower drives on a path, 
 tron_mcu is killed (SIGKILL: no node shuts down on its own). fake_tron goes on getting the heartbeat, so like the MCU it
 holds the last setpoint and the blade. tron_mcu runs in a process of its own and has to stop both by itself: speed 0
 after cmd_vel_timeout, the blade off once its lease ran out or the missing IMU latched IMU_TIMEOUT. tron.launch.py
-then starts the container again: the logic comes back idle, the bridge logs why, the driver keeps motion and blade
-blocked until a release, and after the fourth crash the container stays down.
+then starts the container again: the logic comes back idle with the restart hold (G35, OS_CRASH after MOWING), the
+bridge logs why, S2 latches UNEXPECTED_RESTART at the driver, a release at the driver alone does not lift it, only
+emergency.reset of the logic does. A crash in IDLE only tells, and after the fourth crash the container stays down.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_stack_crash.py
 """
@@ -37,6 +38,9 @@ STATE = os.path.join(WORK, "state.json")
 FLAGS = os.path.join(WORK, "flags.json")
 RX = os.path.join(WORK, "rx.jsonl")
 DATA = os.path.join(WORK, "data")
+RESTART_HOLD = os.path.join(DATA, "restart-hold.json")
+SESSION = os.path.join(DATA, "os-session.json")
+UNEXPECTED_RESTART = HardwareStatus.REASON_UNEXPECTED_RESTART
 CONFIG = os.path.join(WORK, "crash.yaml")
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 # tron.yaml: cmd_vel_timeout of tron_mcu and blade_lease of the logic. fake_tron stops on its own only after 2 s
@@ -278,6 +282,10 @@ class TestStackCrash(unittest.TestCase):
         self.assertIsNotNone(p.event(since, "BLADES", 90, enabled=True), "the blade never ran")
         self.assertTrue(p.wait(lambda: p.hw is not None and p.hw.blade_motor.rpm > 1000, 5), "no rpm from fake_tron")
         self.assertTrue(p.wait(lambda: (p.truth() or {}).get("linear", 0.0) > 0.05, 30), "the mower does not drive")
+        with open(SESSION) as f:
+            session = json.load(f)
+        self.assertEqual((session["state"], session["clean"]), ("MOWING", False), session)
+        self.assertFalse(os.path.exists(RESTART_HOLD))
 
     def test_03_without_the_container_the_driver_stops_mower_and_blade(self, proc_info):
         p = self.probe
@@ -345,15 +353,38 @@ class TestStackCrash(unittest.TestCase):
         self.assertTrue(p.wait(lambda: p.robot is not None and p.robot.current_state == "IDLE", 10), p.robot)
         # Back with its IMU, the driver keeps the latch until a release.
         self.assertTrue(p.hw.emergency_latched and p.hw.emergency_reason & HardwareStatus.REASON_IMU_TIMEOUT, p.hw)
+        # The restart hold: its file, the event, the bit in robot_state and, through S2, at the driver.
+        self.assertTrue(os.path.exists(RESTART_HOLD))
+        event = p.event(0, "UNEXPECTED_RESTART", 15)
+        self.assertTrue(event, [e["type"] for e in p.events])
+        self.assertEqual((event["cause"], event["reason"], event["state_before"], event["hold"]),
+                         ("OS_CRASH", "OS_CRASH", "MOWING", True), event)
+        self.assertEqual((event["severity"], event["resume"]), ("error", "user"), event)
+        self.assertIsNone(event["crashed_at"])
+        self.assertTrue(event["job_id_before"], event)
+        self.assertTrue(p.wait(lambda: p.robot.emergency and p.robot.emergency_reason & UNEXPECTED_RESTART, 5),
+                        p.robot)
+        self.assertTrue(p.wait(lambda: p.hw.emergency_reason & UNEXPECTED_RESTART, 5), p.hw)
         speeds = [e for e in p.received(TestStackCrash.stop) if "speed" in e]
         self.assertTrue(all(e["hex"] == ZERO for e in speeds) and len(speeds) <= 3, speeds)
         self.assertFalse([e for e in p.received(t0) if e.get("cutter", 0) != 0], "the blade on again")
 
     def test_06_a_release_leaves_the_mower_standing(self):
         p = self.probe
+        # At the driver alone the hold stays: S2 latches it again.
         answer = p.call(p.emergency, SetEmergency.Request(latch=False, reason="stack crash test"))
         self.assertTrue(answer.success, answer.message)
+        time.sleep(2.5)
+        self.assertTrue(p.hw.emergency and p.hw.emergency_reason & UNEXPECTED_RESTART, p.hw)
+        self.assertTrue(os.path.exists(RESTART_HOLD))
+        # emergency.reset of the logic: the file goes, then S2 and the driver let go.
+        since = len(p.events)
+        p.act("mower_logic/reset_emergency")
         self.assertTrue(p.wait(lambda: not p.hw.emergency, 5), p.hw)
+        self.assertFalse(os.path.exists(RESTART_HOLD))
+        self.assertTrue(p.wait(lambda: not p.robot.emergency and p.robot.emergency_reason == 0, 5), p.robot)
+        self.assertIsNotNone(p.event(since, "EMERGENCY", 5, emergency=False, source="rpc"),
+                             p.events[since:])
         t2 = p.sim_time()
         time.sleep(3.0)
         self.assertEqual(p.robot.current_state, "IDLE")
@@ -367,11 +398,18 @@ class TestStackCrash(unittest.TestCase):
         p = self.probe
         pid = container_pid(proc_info)
         for restart in range(2, RESTARTS + 1):
+            since = len(p.events)
             os.kill(pid, signal.SIGKILL)
             pid = restarted(proc_info, pid, RESTART_DELAY + 10)
             self.assertTrue(pid, f"no restart {restart}")
             # Loaded once the bridge says so; only then the next crash.
             self.assertTrue(p.logged(f"exit code -9 (restart {restart} of {RESTARTS})", 15))
+            # In IDLE an unexpected end only tells.
+            event = p.event(since, "UNEXPECTED_RESTART", 15)
+            self.assertTrue(event, [e for e in p.events if e["type"] == "UNEXPECTED_RESTART"])
+            self.assertEqual((event["cause"], event["state_before"], event["hold"], event["severity"], event["resume"]),
+                             ("OS_CRASH", "IDLE", False, "warning", "auto"), event)
+            self.assertFalse(os.path.exists(RESTART_HOLD))
         t3 = p.sim_time()
         os.kill(pid, signal.SIGKILL)
         self.assertIsNone(restarted(proc_info, pid, RESTART_DELAY + 4), "a restart more than allowed")

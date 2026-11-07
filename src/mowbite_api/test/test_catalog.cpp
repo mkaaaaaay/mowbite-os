@@ -86,7 +86,7 @@ TEST(Catalog, RateReasonAsTheTableBefore) {
                             "DOCKING_RETRY", "DOCKING_FAILED", "EMERGENCY_RESET_REFUSED", "NOT_AN_EVENT"}) {
     for (const auto& code : CodesOf(event)) {
       for (const char* action : {"", "point", "collect_point", "record_dock", "start_area_recording"}) {
-        const Rating now = RateReason(event, code, action);
+        const Rating now = RateReason(event, code, Json{{"action", action}});
         const auto anew = paused_since_api_5.find(code);
         const Rating before = std::string(event) == "STATE" && anew != paused_since_api_5.end()
                                   ? anew->second
@@ -134,7 +134,7 @@ TEST(Catalog, EntriesAreWellFormed) {
       EXPECT_TRUE(severities.count(reason.severity)) << event.type << " " << reason.code;
       EXPECT_TRUE(resumes.count(reason.resume)) << event.type << " " << reason.code;
       EXPECT_FALSE(reason.text.empty()) << event.type << " " << reason.code;
-      if (reason.action.empty()) {
+      if (reason.when.empty()) {
         EXPECT_TRUE(codes.insert(reason.code).second) << event.type << " " << reason.code;
       }
       for (const auto& field : reason.fields) add(field, true);
@@ -155,7 +155,7 @@ TEST(Catalog, EntriesAreWellFormed) {
 }
 
 TEST(Catalog, EmergencyBits) {
-  ASSERT_EQ(EmergencyBits().size(), 21u);
+  ASSERT_EQ(EmergencyBits().size(), 22u);
   for (size_t i = 0; i < EmergencyBits().size(); i++) {
     EXPECT_EQ(EmergencyBits()[i].bit, static_cast<int>(i));
     EXPECT_FALSE(EmergencyBits()[i].text.empty()) << i;
@@ -164,6 +164,7 @@ TEST(Catalog, EmergencyBits) {
   EXPECT_EQ(EmergencyNames((1 << 0) | (1 << 3)), "LATCH, LIFT");
   EXPECT_EQ(EmergencyNames((1 << 13) | (1 << 14) | (1 << 15)), "TILT, FENCE, STUCK");
   EXPECT_EQ(EmergencyNames((1 << 18) | (1 << 19) | (1 << 20)), "WHEEL_RUNAWAY, FOREIGN_HOST, DRIVER_STALL");
+  EXPECT_EQ(EmergencyNames((1 << 0) | (1 << 21)), "LATCH, UNEXPECTED_RESTART");
 }
 
 // Home Assistant reads the names from the log line with [A-Z_, ]: each bit, set alone, gives a name that fits it.
@@ -182,7 +183,7 @@ TEST(Catalog, EmergencyNamesOfEachBit) {
     EXPECT_TRUE(std::regex_match(EmergencyNames(bits), line)) << i;
   }
   // One UNKNOWN for any number of bits without a name, after the named ones.
-  EXPECT_EQ(EmergencyNames((1 << 21) | (1 << 25) | static_cast<int>(1u << 31)), "UNKNOWN");
+  EXPECT_EQ(EmergencyNames((1 << 22) | (1 << 25) | static_cast<int>(1u << 31)), "UNKNOWN");
   EXPECT_EQ(EmergencyNames((1 << 0) | (1 << 25) | (1 << 3) | (1 << 30)), "LATCH, LIFT, UNKNOWN");
   const std::string all = EmergencyNames(-1);
   EXPECT_TRUE(std::regex_match(all, line));

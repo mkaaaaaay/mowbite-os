@@ -284,6 +284,11 @@ std::optional<Twist2> SafetyFilter::Tick(double now) {
   return std::nullopt;
 }
 
+void SafetyFilter::OnRestartHold(bool present) {
+  if (present && !restart_hold_) Latch(kReasonUnexpectedRestart, "unexpected restart: the mower waits for a release");
+  restart_hold_ = present;
+}
+
 std::optional<LatchRequest> SafetyFilter::TakeLatchRequest(double now) {
   if (latched_ == 0) return std::nullopt;
   const bool shown = (hw_reason_ & latched_) == latched_;

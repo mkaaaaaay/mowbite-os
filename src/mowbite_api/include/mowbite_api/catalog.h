@@ -1,6 +1,7 @@
 #ifndef MOWBITE_API_CATALOG_H
 #define MOWBITE_API_CATALOG_H
 
+#include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
@@ -11,7 +12,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 6;
+constexpr int kApi = 7;
 
 // Who owns the names of the interface file; readers keep a copy of it.
 constexpr char kOwner[] = "mowbite-os";
@@ -39,6 +40,16 @@ struct Field {
   std::optional<Type> items = std::nullopt;
 };
 
+// What the app shows of a reason or an emergency bit in one language: its name, what happened, what to do.
+struct UserText {
+  std::string name;
+  std::string help;
+  std::string fix;
+};
+
+// Texts by language (de, en); none where the app has its own.
+using UserTexts = std::map<std::string, UserText>;
+
 // A reason as events and refusals carry it: reason, message, severity, resume and its own fields.
 struct ReasonEntry {
   std::string code;
@@ -48,8 +59,10 @@ struct ReasonEntry {
   std::string resume;
   std::string text;
   std::vector<Field> fields;
-  // Only with this action field (RECORDING_REFUSED), else for every action; the first match counts.
-  std::string action;
+  // Only for details with these field values (RECORDING_REFUSED: action, UNEXPECTED_RESTART: hold), else for all; the
+  // first match counts.
+  Json when = Json::object();
+  UserTexts texts = {};
 };
 
 struct EventEntry {
@@ -70,6 +83,7 @@ struct EmergencyBit {
   int bit = 0;
   std::string name;
   std::string text;
+  UserTexts texts = {};
 };
 
 // An action of actions/json that does what a command does with these params.
@@ -182,8 +196,11 @@ struct Rating {
   const char* resume;
 };
 
-// severity and resume of a reason of an event or of a group of answers; action only for RECORDING_REFUSED.
-Rating RateReason(const std::string& event, const std::string& code, const std::string& action = "");
+// severity and resume of a reason of an event or of a group of answers; details only where a rating depends on a
+// field (when of the reason).
+Rating RateReason(const std::string& event, const std::string& code, const Json& details = Json::object());
+// Whether the entry rates this code with these details.
+bool ReasonFits(const ReasonEntry& reason, const std::string& code, const Json& details);
 
 // The name EmergencyNames gives all set bits without a name together.
 constexpr char kUnknownEmergency[] = "UNKNOWN";
@@ -192,7 +209,7 @@ constexpr char kUnknownEmergency[] = "UNKNOWN";
 std::string EmergencyNames(int bits);
 
 // The JSON Schema 2020-12 of the interface with the catalog in x-reasons, x-emergency-bits, x-commands, x-methods,
-// x-sensors, x-settings and x-geometry; every object sorted by key.
+// x-sensors, x-settings and x-geometry; texts of reasons and bits by language; every object sorted by key.
 const Json& Schema();
 
 // What is wrong with an event against the catalog: an unknown type (strict only), a missing or unknown field, a

@@ -260,6 +260,21 @@ constexpr int kEmergencyHighLevel = 1 << 7;
 constexpr int kEmergencyFirmwareIncompatible = 1 << 12;
 constexpr int kEmergencyImuTimeout = 1 << 16;
 constexpr int kEmergencyMowerNotStopped = 1 << 17;
+// The restart hold of the logic (mowbite_hold/restart.h), also without a driver.
+constexpr int kEmergencyUnexpectedRestart = 1 << 21;
+
+// What the start found about the end before it, for the event UNEXPECTED_RESTART.
+struct RestartReport {
+  // KERNEL_CRASH, OS_CRASH or POWER_LOSS.
+  std::string cause;
+  std::string detail;
+  // unix s, 0 when not known.
+  int64_t crashed_at = 0;
+  std::string state_before;
+  std::string job_id_before;
+  // The mower waits for a release, also by a hold from before.
+  bool hold = false;
+};
 
 // "LATCH, LIFT": the names of the bits from the catalog in bit order, one UNKNOWN for all bits without a name.
 std::string EmergencyReasonNames(int reason);
@@ -449,6 +464,17 @@ class LogicCore {
   // reset_emergency did not release: EMERGENCY_RESET_REFUSED with the reason of the driver, of S2 or of the node;
   // returns the id of the event.
   std::string RefuseReset(const Reason& why);
+  // The restart hold (G35): while it stands the logic counts as in emergency with UNEXPECTED_RESTART, so nothing that
+  // drives or mows starts, whatever the driver reports. The node sets it at the start and clears it on emergency.reset
+  // once the file is gone.
+  void SetRestartHold(bool held);
+  bool RestartHeld() const {
+    return restart_hold_;
+  }
+  // The event UNEXPECTED_RESTART, rated by cause and hold.
+  void ReportRestart(const RestartReport& report);
+  // The job of mowing, finished or not; empty without one.
+  const std::string& JobId() const;
   // The safety node released after emergency.reset (now_s monotonic): the end of the emergency that follows within
   // kReleaseSourceS carries source rpc and the client of the command.
   void OnReleaseAnswered(double now_s);
@@ -545,7 +571,8 @@ class LogicCore {
   std::string AddEvent(const std::string& type, json details);
   // 32 letters and digits from id_seed: the ids of jobs, sessions and events.
   std::string NewId();
-  void UpdateEmergency();
+  // report: called for a report of the driver or its absence, whose first one only sets the state.
+  void UpdateEmergency(bool report = true);
   int EmergencyReason() const;
   static const char* StateName(State state);
   std::string CurrentStateName() const;
@@ -644,6 +671,7 @@ class LogicCore {
   double last_x_ = 0;
   double last_y_ = 0;
   bool hw_seen_ = false;
+  bool restart_hold_ = false;
   bool actions_changed_ = true;
   bool stop_requested_ = false;
   bool teleop_armed_ = false;

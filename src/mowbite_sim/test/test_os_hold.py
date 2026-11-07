@@ -1,6 +1,6 @@
 """A hold of an update across a restart of the whole stack (sim.launch.py on a private mosquitto): the OS starts with
 <data_dir>/hold.json from before, the logic holds for what is left of it and mirrors it on mowbite/hold, nothing
-starts; system.hold 0 lets go and removes the file.
+starts; system.hold 0 lets go and removes the file. The stop at the end leaves a clean os-session.json.
 
 Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite_sim/test/test_os_hold.py
 """
@@ -152,6 +152,13 @@ class TestOsHold(unittest.TestCase):
 @launch_testing.post_shutdown_test()
 class TestShutdown(unittest.TestCase):
     def test_processes_exit_cleanly(self, proc_info):
-        # fake_tron writes its state into WORK until the end, so WORK goes only now.
-        shutil.rmtree(WORK, ignore_errors=True)
+        # The logic stopped on its own: the next start finds a clean session and holds nothing. fake_tron writes its
+        # state into WORK until the end, so WORK goes only now.
+        try:
+            with open(os.path.join(DATA, "os-session.json")) as f:
+                session = json.load(f)
+            self.assertEqual((session["state"], session["clean"]), ("IDLE", True), session)
+            self.assertFalse(os.path.exists(os.path.join(DATA, "restart-hold.json")))
+        finally:
+            shutil.rmtree(WORK, ignore_errors=True)
         launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -2, -15, 130, 143])

@@ -127,12 +127,22 @@ Json PlannerEventSchema(const std::string& type, const Json& part) {
   return schema;
 }
 
+Json Texts(const UserTexts& texts) {
+  Json out = Json::object();
+  for (const auto& [language, text] : texts) {
+    out[language] = {{"name", text.name}, {"help", text.help}, {"fix", text.fix}};
+  }
+  return out;
+}
+
 Json Reasons(const EventEntry& event) {
   Json out = Json::object();
   for (const auto& reason : event.reasons) {
-    if (!reason.action.empty()) {
-      // A rating only for one action; the plain entry of the code carries it under "when".
-      Json when = {{"action", reason.action}, {"severity", reason.severity}, {"resume", reason.resume}};
+    if (!reason.when.empty()) {
+      // A rating only for these field values; the plain entry of the code carries it under "when".
+      Json when = reason.when;
+      when["severity"] = reason.severity;
+      when["resume"] = reason.resume;
       out[reason.code]["when"].push_back(when);
       continue;
     }
@@ -140,6 +150,7 @@ Json Reasons(const EventEntry& event) {
     for (const auto& field : reason.fields) fields[field.name] = field.unit;
     Json entry = {{"severity", reason.severity}, {"resume", reason.resume}, {"description", reason.text},
                   {"fields", fields}};
+    if (!reason.texts.empty()) entry["texts"] = Texts(reason.texts);
     if (out.contains(reason.code) && out[reason.code].contains("when")) entry["when"] = out[reason.code]["when"];
     out[reason.code] = entry;
   }
@@ -283,7 +294,9 @@ Json BuildSchema(const Json& planner) {
   }
   Json bits = Json::array();
   for (const auto& bit : EmergencyBits()) {
-    bits.push_back({{"bit", bit.bit}, {"name", bit.name}, {"description", bit.text}});
+    Json entry = {{"bit", bit.bit}, {"name", bit.name}, {"description", bit.text}};
+    if (!bit.texts.empty()) entry["texts"] = Texts(bit.texts);
+    bits.push_back(entry);
   }
   Json schema = {{"$schema", "https://json-schema.org/draft/2020-12/schema"},
                  {"$id", "urn:mowbite-os:api:" + std::to_string(kApi)},
@@ -291,7 +304,8 @@ Json BuildSchema(const Json& planner) {
                  {"description",
                   "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; "
                   "made from the code, objects sorted by key. x-reasons has severity and resume of every reason by "
-                  "event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals), x-emergency-bits the bits of "
+                  "event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these "
+                  "field values; texts: name, help and fix by language), x-emergency-bits the bits of "
                   "emergency, x-commands the commands with params, result, the event of their refusal and the actions "
                   "that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, "
                   "sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set "

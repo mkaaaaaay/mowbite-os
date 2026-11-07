@@ -112,6 +112,7 @@ TEST(CheckEvent, EveryReasonOfTheCatalogPassesWithItsRating) {
     for (const auto& reason : event.reasons) {
       if (event.type == "EMERGENCY") continue;
       Json details{{"reason", reason.code}};
+      details.update(reason.when);
       // GEOMETRY_CHANGED carries no resume.
       for (const auto& field : event.fields) {
         if (field.name == "severity") details["severity"] = reason.severity;
@@ -120,7 +121,7 @@ TEST(CheckEvent, EveryReasonOfTheCatalogPassesWithItsRating) {
       if (event.emitter == "logic") details.update(Json{{"x", 0.0}, {"y", 0.0}});
       for (const auto& field : event.fields) {
         if (!field.required || details.contains(field.name)) continue;
-        if (field.name == "action") details["action"] = reason.action.empty() ? "collect_point" : reason.action;
+        if (field.name == "action") details["action"] = "collect_point";
         else if (field.type == Type::kString) details[field.name] = field.values.empty() ? "a" : field.values.front();
         else if (field.type == Type::kArray) details[field.name] = Json::array();
         else if (field.type == Type::kBoolean) details[field.name] = true;

@@ -140,10 +140,10 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal):
     ntrip = ComposableNode(
         package="mowbite_ntrip", plugin="mowbite_ntrip::NtripNode", name="mowbite_ntrip",
         parameters=[*files, {"data_dir": data_dir}])
-    # S2 between the logic and the driver, the only writer of hw/cmd_vel.
+    # S2 between the logic and the driver, the only writer of hw/cmd_vel; it latches the restart hold of data_dir.
     safety = ComposableNode(
         package="mowbite_safety", plugin="mowbite_safety::SafetyNode", name="mowbite_safety",
-        parameters=[*files, journal_dir])
+        parameters=[*files, {"data_dir": data_dir}, journal_dir])
     # The calibration drive: its program, recording and result; it moves only through the logic and S2.
     calibration = ComposableNode(
         package="mowbite_calibration", plugin="mowbite_calibration::CalibrationNode", name="mowbite_calibration",

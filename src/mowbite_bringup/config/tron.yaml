@@ -113,6 +113,8 @@ mowbite_localization:
 
 mowbite_logic:
   ros__parameters:
+    # The kernel record of the rootfs (mowbite-crash): after a kernel crash the restart hold stands in every state.
+    crash_record: /run/mowbite/crash
     # 6S Li-ion. empty is 0 % for the app and where mowing goes home: the highest voltage of battery_low_window s below
     # it (assumption, 3.5 V per cell, until the discharge curve is measured). The start checks
     # critical < empty < full.

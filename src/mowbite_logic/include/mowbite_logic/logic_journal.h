@@ -51,6 +51,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UndockOutcome, undocked, for_drive, why)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CommandOutcome, invalid, invalid_field, accepted, release, result, why, data)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ReasonChange, from, to)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobStep, kind, area_id, goal, path, start_index)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(RestartReport, cause, detail, crashed_at, state_before, job_id_before, hold)
 
 static_assert(sizeof(Reason) == 80);
 static_assert(sizeof(Event) == 80);
@@ -75,6 +76,7 @@ static_assert(sizeof(CalibrationOutcome) == 128);
 static_assert(sizeof(UndockOutcome) == 88);
 static_assert(sizeof(CommandOutcome) == 184);
 static_assert(sizeof(JobStep) == 112);
+static_assert(sizeof(RestartReport) == 144);
 
 // What the logic decides: state, sub_state, the reason bits of an emergency, blade wanted, follower driving.
 struct LogicView {
@@ -106,7 +108,8 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::SetHomeSettings, &L::RestoreJob, &L::RefuseStart, &L::RefuseReset, &L::OnReleaseAnswered,
       &L::GeometryChanged, &L::SetHold, &L::SetGpsSettings, &L::NextJobStep, &L::OnJobPlanned, &L::OnJobPlanFailed,
       &L::OnJobProgress, &L::OnLegEnded, &L::OnTick, &L::OnBladeRefused, &L::TakeCheckpoint, &L::TakeEvents,
-      &L::TakeActionsChanged, &L::TakeReasonChanges, &L::TakeStopRequest, &L::TakeNotices, &L::TakeOverlayChanged);
+      &L::TakeActionsChanged, &L::TakeReasonChanges, &L::TakeStopRequest, &L::TakeNotices, &L::TakeOverlayChanged,
+      &L::SetRestartHold, &L::ReportRestart);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};

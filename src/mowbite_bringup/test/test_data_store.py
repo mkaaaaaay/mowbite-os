@@ -180,6 +180,8 @@ def test_newer_data_goes_back_to_the_backup_of_the_update(data_dir):
     write(os.path.join(data_dir, "map.json"), '{"map": "new"}')
     write(os.path.join(data_dir, "only-new"), "x")
     write(os.path.join(data_dir, "hold.json"), '{"until": 5}')
+    write(os.path.join(data_dir, "restart-hold.json"), '{"cause": "OS_CRASH"}')
+    write(os.path.join(data_dir, "os-session.json"), '{"state": "MOWING"}')
     newer = tree(data_dir)
     note = start(data_dir, 2)
     assert schema_of(data_dir) == {"schema": 2, "by": "v2"}
@@ -188,6 +190,9 @@ def test_newer_data_goes_back_to_the_backup_of_the_update(data_dir):
     assert note["from"] == 3 and note["to"] == 2 and note["backup"] == "backup-3"
     assert json.loads(read(os.path.join(data_dir, "data_rollback.json")))["backup"] == "backup-3"
     assert read(os.path.join(data_dir, "hold.json")) == '{"until": 5}'
+    # The restart hold and its session stay through a way back.
+    assert read(os.path.join(data_dir, "restart-hold.json")) == '{"cause": "OS_CRASH"}'
+    assert read(os.path.join(data_dir, "os-session.json")) == '{"state": "MOWING"}'
     assert stat.S_IMODE(os.stat(os.path.join(data_dir, "ntrip.yaml")).st_mode) == 0o600
     assert data_store.backups(data_dir) == [2, 3]
     # The note lasts until the next start.

@@ -252,11 +252,12 @@ bool LogicCore::Emergency() const {
 }
 
 int LogicCore::EmergencyReason() const {
-  return hw_.emergency_reason | (hw_.telemetry_ok ? 0 : kEmergencyTimeoutInputs);
+  return hw_.emergency_reason | (hw_.telemetry_ok ? 0 : kEmergencyTimeoutInputs) |
+         (restart_hold_ ? kEmergencyUnexpectedRestart : 0);
 }
 
-void LogicCore::UpdateEmergency() {
-  const bool emergency = hw_.emergency || !hw_.telemetry_ok;
+void LogicCore::UpdateEmergency(bool report) {
+  const bool emergency = hw_.emergency || !hw_.telemetry_ok || restart_hold_;
   // The driver sends no reason without an emergency; one that does not block is not shown either.
   reason_ = emergency ? EmergencyReason() : 0;
   if (reason_ != logged_reason_) {
@@ -265,7 +266,7 @@ void LogicCore::UpdateEmergency() {
   }
   // The first report after the start only sets the state, it is no change worth an event.
   if (!hw_seen_) {
-    hw_seen_ = true;
+    hw_seen_ = report;
     actions_changed_ |= emergency != emergency_;
     emergency_ = emergency;
     return;
@@ -1999,6 +2000,28 @@ std::string LogicCore::RefuseReset(const Reason& why) {
   const std::string id = AddEvent("EMERGENCY_RESET_REFUSED", std::move(details));
   client_ = client;
   return id;
+}
+
+void LogicCore::SetRestartHold(bool held) {
+  if (held == restart_hold_) return;
+  restart_hold_ = held;
+  actions_changed_ = true;
+  UpdateEmergency(false);
+}
+
+void LogicCore::ReportRestart(const RestartReport& report) {
+  json details = {{"cause", report.cause},
+                  {"detail", report.detail},
+                  {"crashed_at", report.crashed_at > 0 ? json(report.crashed_at) : json()},
+                  {"state_before", report.state_before},
+                  {"job_id_before", report.job_id_before.empty() ? json() : json(report.job_id_before)},
+                  {"hold", report.hold}};
+  PutReason(&details, "UNEXPECTED_RESTART", Reason(report.cause, report.detail));
+  AddEvent("UNEXPECTED_RESTART", std::move(details));
+}
+
+const std::string& LogicCore::JobId() const {
+  return job_.progress().job_id;
 }
 
 void LogicCore::OnReleaseAnswered(double now_s) {

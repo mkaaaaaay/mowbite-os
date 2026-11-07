@@ -16,13 +16,14 @@ find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(mowbite_journal REQUIRED)
+find_package(mowbite_hold REQUIRED)
 
 # The rules of the filter without ROS, testable on any machine.
 add_library(mowbite_safety_core STATIC src/region.cpp src/safety_filter.cpp)
 target_include_directories(mowbite_safety_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(mowbite_safety_core nlohmann_json::nlohmann_json)
+target_link_libraries(mowbite_safety_core nlohmann_json::nlohmann_json mowbite_hold::mowbite_hold_core)
 set_target_properties(mowbite_safety_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_safety_component SHARED src/safety_node.cpp)
@@ -47,4 +48,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_mowbite_safety HAS_LIBRARY_TARGET)
+ament_export_dependencies(mowbite_hold)
 ament_package()

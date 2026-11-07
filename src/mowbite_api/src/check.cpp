@@ -93,10 +93,8 @@ std::vector<std::string> CheckEvent(const std::string& type, const Json& details
   const ReasonEntry* reason = nullptr;
   if (details.contains("reason") && details["reason"].is_string()) {
     const std::string code = details["reason"].get<std::string>();
-    const std::string action =
-        details.contains("action") && details["action"].is_string() ? details["action"].get<std::string>() : "";
     for (const auto& entry : event->reasons) {
-      if (entry.code == code && (entry.action.empty() || entry.action == action)) {
+      if (ReasonFits(entry, code, details)) {
         reason = &entry;
         break;
       }
@@ -105,7 +103,7 @@ std::vector<std::string> CheckEvent(const std::string& type, const Json& details
       problems.push_back(type + ": reason " + code + " is not in the catalog for this event");
     } else {
       for (const auto& field : reason->fields) fields.push_back(&field);
-      const Rating rating = RateReason(type, code, action);
+      const Rating rating = RateReason(type, code, details);
       if (details.contains("severity") && details["severity"] != rating.severity) {
         problems.push_back(type + " " + code + ": severity " + details["severity"].dump() + ", the catalog says " +
                            rating.severity);

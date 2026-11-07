@@ -56,13 +56,14 @@ std::string BitNames(uint32_t bits) {
   std::string names;
   if (bits & kReasonTilt) names = "TILT";
   if (bits & kReasonFence) names += names.empty() ? "FENCE" : ", FENCE";
+  if (bits & kReasonUnexpectedRestart) names += names.empty() ? "UNEXPECTED_RESTART" : ", UNEXPECTED_RESTART";
   return names;
 }
 
 }  // namespace
 
 // S2, the only writer of hw/cmd_vel: passes the drive commands of the logic (safety/drive) that SafetyFilter allows,
-// latches TILT and FENCE over hw/emergency, and lets a release of the logic (safety/release_emergency) through to the
+// latches TILT, FENCE and UNEXPECTED_RESTART over hw/emergency, and lets a release of the logic (safety/release_emergency) through to the
 // driver only while the mower is not tilted; the driver's answer is the answer to the logic.
 class SafetyNode : public rclcpp::Node {
  public:
@@ -122,6 +123,9 @@ class SafetyNode : public rclcpp::Node {
         [this](std::shared_ptr<rmw_request_id_t> header, const SetEmergency::Request::SharedPtr req) {
           OnRelease(header, *req);
         });
+    // The restart hold of the logic, looked at with every tick; empty without data_dir.
+    const std::string data_dir = declare_parameter("data_dir", std::string());
+    restart_hold_path_ = data_dir.empty() ? "" : data_dir + "/" + mowbite_hold::kRestartHoldFile;
     timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { OnTimer(); });
   }
 
@@ -292,6 +296,9 @@ class SafetyNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       const double now = MonotonicSeconds();
       ExpirePending(now);
+      if (!restart_hold_path_.empty()) {
+        filter_.Call<&SafetyFilter::OnRestartHold>(mowbite_hold::RestartHoldPresent(restart_hold_path_));
+      }
       stop = filter_.Call<&SafetyFilter::Tick>(now);
       latch = filter_.Call<&SafetyFilter::TakeLatchRequest>(now);
       status.latched = filter_.View().Latched();
@@ -363,6 +370,7 @@ class SafetyNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr params_sub_;
   rclcpp::Service<SetEmergency>::SharedPtr release_srv_;
+  std::string restart_hold_path_;
   // Level until the geometry is there.
   double imu_roll_ = 0.0;
   double imu_pitch_ = 0.0;

@@ -180,6 +180,21 @@ const std::vector<EmergencyBit>& EmergencyBits() {
       {18, "WHEEL_RUNAWAY", "A wheel turned against the drive command"},
       {19, "FOREIGN_HOST", "Another host talks to the board"},
       {20, "DRIVER_STALL", "The input and output of the driver stalled"},
+      {21, "UNEXPECTED_RESTART",
+       "The OS started after a kernel crash or after an end without its own stop while the mower worked; it holds "
+       "until emergency.reset, also after power off and on",
+       {{"de",
+         {"Unerwarteter Neustart",
+          "MowBite OS wurde während der Arbeit nicht geordnet beendet oder der Kernel ist abgestürzt. Der Mäher "
+          "wartet auf die Freigabe, auch nach Aus und Ein.",
+          "Mäher und Umgebung ansehen, dann den Notaus zurücksetzen. Das Ereignis UNEXPECTED_RESTART nennt die "
+          "Ursache."}},
+        {"en",
+         {"Unexpected restart",
+          "MowBite OS did not end in order while the mower worked, or the kernel crashed. The mower waits for a "
+          "release, also after power off and on.",
+          "Look at the mower and around it, then reset the emergency. The event UNEXPECTED_RESTART tells the "
+          "cause."}}}},
   };
   return bits;
 }
@@ -523,13 +538,19 @@ const Command* CommandOfAction(const std::string& action, Json* params) {
   return nullptr;
 }
 
-Rating RateReason(const std::string& event, const std::string& code, const std::string& action) {
+bool ReasonFits(const ReasonEntry& reason, const std::string& code, const Json& details) {
+  if (reason.code != code) return false;
+  for (const auto& [key, value] : reason.when.items()) {
+    if (!details.is_object() || !details.contains(key) || details[key] != value) return false;
+  }
+  return true;
+}
+
+Rating RateReason(const std::string& event, const std::string& code, const Json& details) {
   const EventEntry* entry = FindReasonGroup(event);
   if (!entry) return {"warning", "user"};
   for (const auto& reason : entry->reasons) {
-    if (reason.code == code && (reason.action.empty() || reason.action == action)) {
-      return {reason.severity.c_str(), reason.resume.c_str()};
-    }
+    if (ReasonFits(reason, code, details)) return {reason.severity.c_str(), reason.resume.c_str()};
   }
   return {entry->other_severity.c_str(), entry->other_resume.c_str()};
 }

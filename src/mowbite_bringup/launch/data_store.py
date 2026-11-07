@@ -32,6 +32,10 @@ LOCK_FILE = ".lock"
 HOLD_FILE = "hold.json"
 # For the bridge: a way back took the data since the update away and left it in a backup.
 ROLLBACK_NOTE = "data_rollback.json"
+# Written by the logic (mowbite_hold/restart.h): the restart hold and the session it is judged from outlive an update
+# and a way back.
+RESTART_HOLD_FILE = "restart-hold.json"
+SESSION_FILE = "os-session.json"
 BACKUP = "backup-"
 TEMP = ".tmp"
 OLD = ".old"
@@ -71,8 +75,8 @@ def image_schema():
 
 def kept_out(name):
     """Not data: never backed up, never replaced by a way back."""
-    return (name in (LOCK_FILE, HOLD_FILE, SCHEMA_FILE, ROLLBACK_NOTE) or name.startswith(BACKUP)
-            or name.endswith(TEMP))
+    return (name in (LOCK_FILE, HOLD_FILE, SCHEMA_FILE, ROLLBACK_NOTE, RESTART_HOLD_FILE, SESSION_FILE)
+            or name.startswith(BACKUP) or name.endswith(TEMP))
 
 
 def data_names(folder):
