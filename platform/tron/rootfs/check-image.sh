@@ -27,8 +27,13 @@ test "$("$DEBUGFS" -c -R 'stat /usr/sbin/init' "$IMG" 2>/dev/null | grep -c 'Fas
 result "/sbin/init is systemd" $?
 for f in /etc/mowbite/probezeit /usr/lib/mowbite/probezeit /usr/lib/mowbite/tron-hwinit /etc/fstab \
          /etc/systemd/system/sysinit.target.wants/mowbite-probezeit.service \
-         /etc/systemd/system/timers.target.wants/mowbite-probezeit-check.timer /userdata /meta; do
+         /etc/systemd/system/timers.target.wants/mowbite-probezeit-check.timer /userdata /meta \
+         /etc/default/locale /etc/NetworkManager/conf.d/20-unused-wifi.conf /usr/bin/fuser; do
     "$DEBUGFS" -c -R "stat $f" "$IMG" 2>/dev/null | grep -q '^Inode:'; result "present: $f" $?
+done
+for t in motd-news apt-daily apt-daily-upgrade; do
+    ! "$DEBUGFS" -c -R "stat /etc/systemd/system/timers.target.wants/$t.timer" "$IMG" 2>/dev/null | grep -q '^Inode:'
+    result "off: $t.timer" $?
 done
 test "$(stat_of /root/.ssh)" = "0700 0:0"; result "/root/.ssh 0700 root" $?
 test "$(stat_of /root/.ssh/authorized_keys)" = "0600 0:0"; result "authorized_keys 0600 root" $?
@@ -39,6 +44,19 @@ for d in /etc/ssh /etc/NetworkManager/system-connections; do
         END { printf "%s: %d secret files, %d not 0600 root\n", d, n, bad; exit bad > 0 }'
     result "secret files in $d 0600 root" $?
 done
+
+# Counts only, the profiles hold the WLAN key.
+profiles=0
+ignoring=0
+while IFS= read -r n; do
+    profiles=$((profiles + 1))
+    "$DEBUGFS" -c -R "cat \"/etc/NetworkManager/system-connections/$n\"" "$IMG" 2>/dev/null \
+        | awk '/^\[/ { sec = $0 } sec == "[ipv6]" && $0 == "ignore-auto-dns=true" { f = 1 } END { exit !f }' \
+        && ignoring=$((ignoring + 1))
+done < <("$DEBUGFS" -c -R "ls -p /etc/NetworkManager/system-connections" "$IMG" 2>/dev/null \
+         | awk -F/ '$6 != "" && $6 != "." && $6 != ".." { print $6 }')
+echo "WLAN profiles: $profiles, $ignoring without IPv6 name servers"
+test "$profiles" = "$ignoring"; result "WLAN profiles ignore IPv6 name servers" $?
 
 # Every program and library of the image against the image's loader and libraries.
 "$DEBUGFS" -c -R "rdump / $WORK" "$IMG" >/dev/null 2>&1

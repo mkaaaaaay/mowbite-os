@@ -68,7 +68,13 @@ chmod 700 "$work/p/root/.ssh"
 for c in "$VENDOR"/etc/NetworkManager/system-connections/*; do
     test "$VENDOR" != - && test -f "$c" || continue
     n=$(basename "$c")
-    install -m 600 "$c" "$work/p/etc/NetworkManager/system-connections/$n"
+    # No name servers over IPv6: router advertisements would bypass the resolver that DHCPv4 hands out.
+    awk '/^\[/ { sec = $0 }
+        sec == "[ipv6]" && /^ignore-auto-dns=/ { next }
+        { print }
+        $0 == "[ipv6]" { print "ignore-auto-dns=true"; seen = 1 }
+        END { if (!seen) print "[ipv6]\nmethod=auto\nignore-auto-dns=true" }' "$c" \
+        > "$work/p/etc/NetworkManager/system-connections/$n"
     private+=("./etc/NetworkManager/system-connections/$n")
 done
 grep -qxF etc/NetworkManager/system-connections "$work/base.list"

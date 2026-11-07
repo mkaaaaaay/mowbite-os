@@ -1,7 +1,7 @@
 [Unit]
 Description=Tron IMU, camera and rear camera setup
 ConditionPathExists=/usr/metoak/metoak/mo_asicrw
-After=systemd-modules-load.service systemd-udevd.service
+After=systemd-modules-load.service systemd-udev-trigger.service
 
 [Service]
 Type=oneshot

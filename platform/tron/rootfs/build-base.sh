@@ -12,6 +12,8 @@ UBUNTU_KEY=/usr/share/keyrings/ubuntu-archive-keyring.gpg
 # Signing key of packages.ros.org (Open Robotics).
 ROS_KEY_FPR=C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
 UNITS="mowbite-probezeit.service mowbite-probezeit-check.timer mowbite-tron-hwinit.service mowbite-ssh-hostkeys.service"
+# Off: tracing daemon, Ubuntu news and package lists fetched on their own (updates come through MowBite OS).
+OFF="lttng-sessiond.service motd-news.timer apt-daily.timer apt-daily-upgrade.timer"
 
 test ! -e "$OUT" || { echo "$OUT exists" >&2; exit 1; }
 work=$(mktemp -d)
@@ -38,7 +40,7 @@ mmdebstrap --mode=unshare --architectures=arm64 --variant=apt --format=tar \
     --customize-hook="printf 'Types: deb\nURIs: $PORTS\nSuites: noble noble-updates noble-security\nComponents: main universe\nSigned-By: $UBUNTU_KEY\n' > \"\$1\"/etc/apt/sources.list.d/ubuntu.sources" \
     --customize-hook="printf 'Types: deb\nURIs: $ROS\nSuites: noble\nComponents: main\nSigned-By: /usr/share/keyrings/ros-archive-keyring.gpg\n' > \"\$1\"/etc/apt/sources.list.d/ros2.sources" \
     --customize-hook="chroot \"\$1\" systemctl enable $UNITS" \
-    --customize-hook='chroot "$1" systemctl disable lttng-sessiond.service' \
+    --customize-hook="chroot \"\$1\" systemctl disable $OFF" \
     --customize-hook='rm -f "$1"/etc/ssh/ssh_host_*' \
     --customize-hook='mkdir -m 755 "$1"/userdata "$1"/meta' \
     --customize-hook='ln -sf /usr/share/zoneinfo/Europe/Berlin "$1"/etc/localtime && echo Europe/Berlin > "$1"/etc/timezone' \

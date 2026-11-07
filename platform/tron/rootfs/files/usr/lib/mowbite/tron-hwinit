@@ -27,6 +27,10 @@ for name in simor0 simor0_cmosa simor0_cmosb isp0 isp0_cmosa isp0_cmosb fpga0 im
     ln -sf /dev/i2c-8 "/dev/i2c_$name"
 done
 
+# udev opens the video nodes at coldplug (v4l_id), which makes the kernel set up the camera bridge; mo_asicrw
+# during that setup leaves the stereo stream without frames.
+run udevadm settle --timeout=60
+
 # Camera trigger on, then the camera bridge on i2c-8 and its register 0x0051.
 gpio_high 103
 run sh -c 'echo 103 > /sys/class/gpio/unexport'
