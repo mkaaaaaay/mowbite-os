@@ -35,8 +35,11 @@ measure=$current/tools/measure.py
 echo "== T0, read only"
 mowbite-update status
 echo "installation: $current"
-[ "$MOWBITE_HARDWARE" = false ] || fail "MOWBITE_HARDWARE=$MOWBITE_HARDWARE in /etc/mowbite/os.conf: the measurement is \
-for a Tron that runs with hardware=false"
+case "$MOWBITE_HARDWARE" in
+    false|read) ;;
+    *) fail "MOWBITE_HARDWARE=$MOWBITE_HARDWARE in /etc/mowbite/os.conf: the measurement is for a Tron that runs with \
+hardware=false or read" ;;
+esac
 if systemctl is-active --quiet "$SERVICE"; then
     health=$(source /usr/lib/mowbite/os-setup "$current" && timeout 30 ros2 run mowbite_bridge mowbite_health)
     echo "MowBite OS: $health"

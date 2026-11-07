@@ -11,9 +11,10 @@
 
 namespace tron {
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(McuControlConfig, heartbeat_period_s, cmd_vel_timeout_s, telemetry_timeout_s,
-                                   repeat_count, repeat_interval_s, imu_min_period_s, imu_timeout_s,
-                                   imu_start_timeout_s, dock_debounce_samples, charge_resend_s, allow_blade,
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(McuControlConfig, heartbeat_period_s, cmd_vel_timeout_s, speed_repeat_window_s,
+                                   speed_repeat_period_s, telemetry_timeout_s, repeat_count, repeat_interval_s,
+                                   imu_min_period_s, imu_timeout_s, imu_start_timeout_s, dock_debounce_samples,
+                                   charge_resend_s, allow_blade,
                                    blade_speed_percent, mow_height_mm, blade_lease_max_s, blade_off_height_mm,
                                    blade_stop_time_s, blade_still_rpm, bumper_latches_emergency, release_window_s,
                                    clear_min_interval_s, clear_zero_after_motion_s, expected_cutter_version,
@@ -27,7 +28,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WallClock, year, month, day, hour, minute, se
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BladeRequest, on, speed_percent, height_mm, lease_s)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SubPacket, type, module, payload)
 
-static_assert(sizeof(McuControlConfig) == 208);
+static_assert(sizeof(McuControlConfig) == 224);
 static_assert(sizeof(SensorInfo) == 10);
 static_assert(sizeof(ImuCounts) == 18);
 static_assert(sizeof(VersionInfo) == 9);

@@ -113,4 +113,25 @@ std::optional<ImuSample> WitImu::Update(const WitPacket& packet) {
   return s;
 }
 
+bool UpsideDownCheck::Update(const ImuSample& sample, double now) {
+  const double a_z = sample.acceleration[2];
+  bool toward;
+  if (upside_down_) {
+    toward = a_z > -kUpsideDownAccel;
+  } else {
+    const auto& w = sample.angular_velocity;
+    const bool rest = std::abs(w[0]) < kRestRate && std::abs(w[1]) < kRestRate && std::abs(w[2]) < kRestRate;
+    toward = rest && a_z < kUpsideDownAccel;
+  }
+  if (!toward) {
+    since_.reset();
+  } else if (!since_) {
+    since_ = now;
+  } else if (now - *since_ >= kUpsideDownTime) {
+    upside_down_ = !upside_down_;
+    since_.reset();
+  }
+  return upside_down_;
+}
+
 }  // namespace tron

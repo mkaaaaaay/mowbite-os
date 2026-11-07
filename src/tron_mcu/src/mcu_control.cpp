@@ -238,6 +238,12 @@ SubPacket McuControl::ZeroSpeed() const {
   return *SpeedPacket(0.0f, 0.0f);
 }
 
+// Silence on cmd_vel after which the wheels get the stop.
+double McuControl::StopAfter() const {
+  if (config_.speed_repeat_window_s <= 0) return config_.cmd_vel_timeout_s;
+  return std::min(config_.speed_repeat_window_s, config_.cmd_vel_timeout_s);
+}
+
 SubPacket McuControl::BladeOff() const {
   CutterCommand command;
   command.height_mm = config_.blade_off_height_mm;
@@ -322,6 +328,8 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
       out.push_back(*packet);
       moving_ = true;
       last_motion_s_ = now;
+      last_speed_ = *packet;
+      next_speed_s_ = now + config_.speed_repeat_period_s;
     } else if (moving_) {
       moving_ = false;
       StartRepeat(stop_repeat_, ZeroSpeed(), now);
@@ -329,9 +337,14 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     pending_cmd_.reset();
   }
 
-  if (moving_ && now - last_cmd_s_ > config_.cmd_vel_timeout_s) {
+  if (moving_ && now - last_cmd_s_ > StopAfter()) {
     moving_ = false;
     StartRepeat(stop_repeat_, ZeroSpeed(), now);
+  }
+  if (moving_ && config_.speed_repeat_window_s > 0 && now + kTimeEpsilon >= next_speed_s_) {
+    out.push_back(*last_speed_);
+    last_motion_s_ = now;
+    next_speed_s_ = now + config_.speed_repeat_period_s;
   }
 
   // A blocked or docked mower drops the blade request, it has to be made again afterwards.

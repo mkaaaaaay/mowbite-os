@@ -21,8 +21,11 @@ tron_mcu:
   ros__parameters:
     port: /dev/ttyS9
     send_imu: true
-    # Assumption (the reference driver uses 0.5 s), set after measuring the heartbeat failsafe.
+    # The MCU stops the wheels ~0.2 s after the last SpeedData, also with heartbeat and IMU (measured 07.11.). Within
+    # speed_repeat_window s of the last hw/cmd_vel the driver sends the last non-zero setpoint every 50 ms, then three
+    # stops; without a repeat window they come after cmd_vel_timeout s.
     cmd_vel_timeout: 0.5
+    speed_repeat_window: 0.3
     telemetry_timeout: 1.0
     allow_blade: false
     # Defaults for blade requests that leave speed or height at 0.
@@ -87,9 +90,9 @@ mowbite_ntrip:
 tron_imu:
   ros__parameters:
     port: /dev/ttyS1
-    # Assumptions: baud rate and the sensor mounted upside down, checked on the device.
     baud: 115200
-    mount_roll_deg: 180.0
+    # The sensor sits upright (measured 07.11.). Gravity up at rest stops imu/data, see tron_imu.
+    mount_roll_deg: 0.0
 
 mowbite_localization:
   ros__parameters:

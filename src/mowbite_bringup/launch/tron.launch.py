@@ -43,8 +43,10 @@ def launch_setup(context):
     # The driver reads the hold of an update itself, also without the logic and right after its own restart.
     hold_file = os.path.join(data_dir, data_store.HOLD_FILE) if data_dir else ""
     journal = stack.journal_dir(arg("journal_dir"), data_dir, logger)
+    hardware = arg("hardware")
     mcu = Node(package="tron_mcu", executable="tron_mcu_node", name="tron_mcu", namespace="/",
-               parameters=[*files, {"port": arg("mcu_port"), "hold_file": hold_file, "journal_dir": journal}],
+               parameters=[*files, {"port": arg("mcu_port"), "hold_file": hold_file, "journal_dir": journal,
+                                    "read_only": hardware == "read"}],
                output="screen")
     gnss = ComposableNode(
         package="tron_gnss", plugin="tron_gnss::GnssNode", name="tron_gnss",
@@ -57,9 +59,13 @@ def launch_setup(context):
     nodes = stack.components(files, geometry, data_dir, arg("mqtt_host"), arg("mqtt_port"), journal)
     oom = arg("oom_score_adj")
     # Without hardware no process opens the MCU, GNSS or IMU port: the stack runs, the logic finds no driver.
-    if arg("hardware") != "true":
+    if hardware == "false":
         logger.warning("hardware:=false: tron_mcu, tron_gnss and tron_imu do not start")
         return stack.container_and_planner(nodes, data_dir, files, logger, oom)
+    # read: tron_mcu and tron_imu only read their ports, tron_gnss (it writes to its port) does not start.
+    if hardware == "read":
+        logger.warning("hardware:=read: tron_mcu and tron_imu only listen, nothing moves; tron_gnss does not start")
+        return [mcu, *stack.container_and_planner([imu, *nodes], data_dir, files, logger, oom)]
     return [mcu, *stack.container_and_planner([gnss, imu, *nodes], data_dir, files, logger, oom)]
 
 
@@ -73,8 +79,9 @@ def generate_launch_description():
         DeclareLaunchArgument("mcu_port", default_value="/dev/ttyS9"),
         DeclareLaunchArgument("gnss_port", default_value="/dev/ttyS4"),
         DeclareLaunchArgument("imu_port", default_value="/dev/ttyS1"),
-        # false: neither tron_mcu nor the GNSS and IMU nodes, nothing is sent to a port of the mower.
-        DeclareLaunchArgument("hardware", default_value="true", choices=["true", "false"]),
+        # false: neither tron_mcu nor the GNSS and IMU nodes, nothing is sent to a port of the mower. read: tron_mcu and
+        # tron_imu only read, nothing is sent either.
+        DeclareLaunchArgument("hardware", default_value="true", choices=["true", "false", "read"]),
         # The datum of the garden stays out of the repo; without it tron_gnss publishes nothing.
         DeclareLaunchArgument("datum_lat", default_value="nan"),
         DeclareLaunchArgument("datum_long", default_value="nan"),

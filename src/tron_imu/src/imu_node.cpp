@@ -88,7 +88,7 @@ class ImuNode : public rclcpp::Node {
       return;
     }
     std::string error;
-    if (!port_.Open(port_name_, baud_, error)) {
+    if (!port_.Open(port_name_, baud_, error, true)) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Cannot open %s: %s", port_name_.c_str(), error.c_str());
       return;
     }
@@ -100,15 +100,31 @@ class ImuNode : public rclcpp::Node {
     parser_.Feed(data, size, packets_);
     for (const auto& packet : packets_) {
       auto sample = imu_->Update(packet);
-      if (sample) Publish(*sample);
+      if (sample && Plausible(*sample)) Publish(*sample);
     }
-    const uint64_t errors = parser_.checksum_errors() + parser_.unknown_types();
-    if (errors != reported_errors_) {
-      reported_errors_ = errors;
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 30000, "WIT errors so far: %lu checksum, %lu unknown type",
-                           static_cast<unsigned long>(parser_.checksum_errors()),
-                           static_cast<unsigned long>(parser_.unknown_types()));
+    if (parser_.checksum_errors() != reported_errors_) {
+      reported_errors_ = parser_.checksum_errors();
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 30000, "WIT checksum errors so far: %lu",
+                           static_cast<unsigned long>(reported_errors_));
     }
+    if (parser_.unknown_types() && !unknown_logged_) {
+      unknown_logged_ = true;
+      RCLCPP_INFO(get_logger(), "Skipping WIT packets of type 0x%02x and other types; 0x51-0x53 are used",
+                  parser_.last_unknown_type());
+    }
+  }
+
+  // Upside down at rest no sample goes out: the driver and the safety stop on the missing IMU.
+  bool Plausible(const tron::ImuSample& sample) {
+    const bool was = upside_down_.upside_down();
+    const bool now = upside_down_.Update(sample, MonotonicSeconds());
+    if (now && !was) {
+      RCLCPP_ERROR(get_logger(), "IMU upside down (a_z %.1f m/s2 at rest): check mount_roll_deg; no imu/data until it "
+                   "reads upright", sample.acceleration[2]);
+    } else if (was && !now) {
+      RCLCPP_INFO(get_logger(), "IMU upright again (a_z %.1f m/s2): imu/data goes on", sample.acceleration[2]);
+    }
+    return !now;
   }
 
   void Publish(const tron::ImuSample& s) {
@@ -142,6 +158,8 @@ class ImuNode : public rclcpp::Node {
   std::unique_ptr<tron::WitImu> imu_;
   std::vector<tron::WitPacket> packets_;
   uint64_t reported_errors_ = 0;
+  bool unknown_logged_ = false;
+  tron::UpsideDownCheck upside_down_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_;
   std::atomic<bool> running_{true};
   std::thread io_thread_;

@@ -17,8 +17,10 @@ class SerialPort {
   SerialPort& operator=(const SerialPort&) = delete;
   ~SerialPort();
 
-  // Also sets TIOCEXCL, so further opens fail for processes without CAP_SYS_ADMIN.
-  bool Open(const std::string& path, int baud, std::string& error);
+  // Also sets TIOCEXCL, so further opens fail for processes without CAP_SYS_ADMIN. Fails unless the port ends up raw
+  // (no echo, no software flow control): the line discipline would send bytes of its own otherwise. read_only opens it
+  // O_RDONLY and Write always fails.
+  bool Open(const std::string& path, int baud, std::string& error, bool read_only = false);
   void Close();
   bool IsOpen() const {
     return fd_ >= 0;
@@ -30,6 +32,7 @@ class SerialPort {
 
  private:
   int fd_ = -1;
+  bool read_only_ = false;
 };
 
 // Process ids (other than our own) that have the device open. Only processes in our pid namespace are visible.

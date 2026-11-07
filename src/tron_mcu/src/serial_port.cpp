@@ -50,14 +50,14 @@ SerialPort::~SerialPort() {
   Close();
 }
 
-bool SerialPort::Open(const std::string& path, int baud, std::string& error) {
+bool SerialPort::Open(const std::string& path, int baud, std::string& error, bool read_only) {
   Close();
   speed_t speed;
   if (!BaudConstant(baud, speed)) {
     error = "unsupported baud rate " + std::to_string(baud);
     return false;
   }
-  int fd = open(path.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+  int fd = open(path.c_str(), (read_only ? O_RDONLY : O_RDWR) | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
   if (fd < 0) {
     error = "open " + path + ": " + strerror(errno);
     return false;
@@ -81,6 +81,14 @@ bool SerialPort::Open(const std::string& path, int baud, std::string& error) {
     ::close(fd);
     return false;
   }
+  // tcsetattr succeeds when any of the changes took, so read back what the port does now.
+  termios now{};
+  if (tcgetattr(fd, &now) != 0 || (now.c_lflag & (ECHO | ECHONL | ICANON | ISIG | IEXTEN)) != 0 ||
+      (now.c_iflag & (IXON | IXOFF | IXANY)) != 0) {
+    error = "the port did not become raw (echo or flow control left on)";
+    ::close(fd);
+    return false;
+  }
   if (ioctl(fd, TIOCEXCL) != 0) {
     error = "TIOCEXCL: " + std::string(strerror(errno));
     ::close(fd);
@@ -88,6 +96,7 @@ bool SerialPort::Open(const std::string& path, int baud, std::string& error) {
   }
   tcflush(fd, TCIOFLUSH);
   fd_ = fd;
+  read_only_ = read_only;
   return true;
 }
 
@@ -111,7 +120,7 @@ ssize_t SerialPort::Read(uint8_t* buffer, size_t size, int timeout_ms) {
 }
 
 bool SerialPort::Write(const std::vector<uint8_t>& data) {
-  if (fd_ < 0) return false;
+  if (fd_ < 0 || read_only_) return false;
   size_t done = 0;
   while (done < data.size()) {
     ssize_t n = write(fd_, data.data() + done, data.size() - done);

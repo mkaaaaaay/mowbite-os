@@ -16,8 +16,8 @@ struct ImuSample {
 };
 
 struct WitImuConfig {
-  // Rotation of the sensor axes into the base axes (ZYX). The JY61P sits upside down: roll 180.
-  double mount_roll_deg = 180.0;
+  // Rotation of the sensor axes into the base axes (ZYX). The JY61P of the Tron sits upright (measured 07.11.).
+  double mount_roll_deg = 0.0;
   double mount_pitch_deg = 0.0;
   double mount_yaw_deg = 0.0;
 };
@@ -35,6 +35,27 @@ class WitImu {
   std::array<double, 3> gyro_dps_{};
   bool have_acc_ = false;
   bool have_gyro_ = false;
+};
+
+// Gravity pointing up in the base frame while the sensor rests: a wrong mount_roll_deg, or a mower on its back. Either
+// way no sample may go on. Starts after kUpsideDownTime s at rest with a_z below kUpsideDownAccel, ends after as long
+// with a_z above -kUpsideDownAccel; a slope or a jacked-up mower stays far from both.
+class UpsideDownCheck {
+ public:
+  static constexpr double kUpsideDownAccel = -7.0;
+  static constexpr double kUpsideDownTime = 1.0;
+  // rad/s on every axis: faster counts as moving.
+  static constexpr double kRestRate = 0.5;
+
+  // True while the IMU counts as upside down.
+  bool Update(const ImuSample& sample, double now);
+  bool upside_down() const {
+    return upside_down_;
+  }
+
+ private:
+  bool upside_down_ = false;
+  std::optional<double> since_;
 };
 
 }  // namespace tron

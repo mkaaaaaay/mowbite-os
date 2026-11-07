@@ -14,6 +14,11 @@ struct McuControlConfig {
   double heartbeat_period_s = 0.1;
   // Silence on cmd_vel after which the wheels are stopped.
   double cmd_vel_timeout_s = 0.5;
+  // The MCU drops a setpoint ~0.2 s after the last SpeedData: within this time of the last cmd_vel the last non-zero
+  // setpoint goes out again every speed_repeat_period_s, and the stop follows at its end if that comes before
+  // cmd_vel_timeout_s. 0 sends each command once.
+  double speed_repeat_window_s = 0;
+  double speed_repeat_period_s = 0.05;
   // Without sensor info from the MCU for this long, motion and blade are blocked.
   double telemetry_timeout_s = 1.0;
   int repeat_count = 3;
@@ -188,6 +193,7 @@ class McuControl {
   void StartRepeat(Repeat& repeat, const SubPacket& packet, double now);
   void EmitRepeat(Repeat& repeat, double now, std::vector<SubPacket>& out);
   SubPacket ZeroSpeed() const;
+  double StopAfter() const;
   SubPacket BladeOff() const;
 
   McuControlConfig config_;
@@ -200,6 +206,9 @@ class McuControl {
   double last_cmd_s_ = 0;
   bool moving_ = false;
   std::optional<double> last_motion_s_;
+  // The last non-zero setpoint sent and when it goes out again.
+  std::optional<SubPacket> last_speed_;
+  double next_speed_s_ = 0;
 
   std::optional<SensorInfo> sensor_;
   double last_sensor_s_ = 0;

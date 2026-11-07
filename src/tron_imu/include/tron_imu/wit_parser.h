@@ -28,8 +28,12 @@ class WitParser {
   uint64_t checksum_errors() const {
     return checksum_errors_;
   }
+  // Valid packets of other types (the sensor may send more than the three used), skipped.
   uint64_t unknown_types() const {
     return unknown_types_;
+  }
+  uint8_t last_unknown_type() const {
+    return last_unknown_type_;
   }
   uint64_t skipped_bytes() const {
     return skipped_bytes_;
@@ -40,6 +44,7 @@ class WitParser {
   std::vector<uint8_t> buffer_;
   uint64_t checksum_errors_ = 0;
   uint64_t unknown_types_ = 0;
+  uint8_t last_unknown_type_ = 0;
   uint64_t skipped_bytes_ = 0;
 };
 

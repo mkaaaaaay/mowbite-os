@@ -30,8 +30,21 @@ double Norm(const std::array<double, 4>& q) {
 
 }  // namespace
 
+tron::WitImuConfig UpsideDown() {
+  tron::WitImuConfig config;
+  config.mount_roll_deg = 180;
+  return config;
+}
+
+TEST(WitImu, UprightByDefault) {
+  tron::WitImu imu({});
+  auto s = Feed3(imu, {0, 0, 1}, {0, 0, 0}, {0, 0, 0});
+  ASSERT_TRUE(s);
+  EXPECT_NEAR(s->acceleration[2], 9.80665, 1e-2);
+}
+
 TEST(WitImu, UpsideDownAtRestIsLevelInBaseFrame) {
-  tron::WitImu imu({});  // default: roll 180
+  tron::WitImu imu(UpsideDown());
   // Upside down the sensor sees gravity along -z and reports roll ±180 (-180 fits an int16).
   auto s = Feed3(imu, {0, 0, -1}, {0, 0, 0}, {-180, 0, 0});
   ASSERT_TRUE(s);
@@ -43,7 +56,7 @@ TEST(WitImu, UpsideDownAtRestIsLevelInBaseFrame) {
 }
 
 TEST(WitImu, MountingFlipsYAndZRates) {
-  tron::WitImu imu({});
+  tron::WitImu imu(UpsideDown());
   auto s = Feed3(imu, {0, 0, -1}, {10, 20, 30}, {-180, 0, 0});
   ASSERT_TRUE(s);
   const double d2r = M_PI / 180.0;
@@ -54,7 +67,7 @@ TEST(WitImu, MountingFlipsYAndZRates) {
 
 TEST(WitImu, SensorPitchUpIsPitchUpInBase) {
   // Rotation about x keeps the sign of pitch only when the mount is a pure x flip: pitch sign inverts.
-  tron::WitImu imu({});
+  tron::WitImu imu(UpsideDown());
   auto s = Feed3(imu, {0, 0, -1}, {0, 0, 0}, {-180, 10, 0});
   ASSERT_TRUE(s);
   EXPECT_NEAR(std::abs(s->pitch_deg), 10, 0.1);
@@ -86,7 +99,7 @@ TEST(WitImu, YawQuaternionMatchesAngle) {
 }
 
 TEST(WitImu, QuaternionStaysUnitOverRange) {
-  tron::WitImu imu({});
+  tron::WitImu imu(UpsideDown());
   for (double roll = -170; roll <= 170; roll += 34)
     for (double pitch = -80; pitch <= 80; pitch += 40)
       for (double yaw = -170; yaw <= 170; yaw += 68) {
@@ -114,4 +127,55 @@ TEST(WitImu, AccelerationScale) {
   auto s = Feed3(imu, {16.0 * 0.5, 0, 0}, {0, 0, 0}, {0, 0, 0});
   ASSERT_TRUE(s);
   EXPECT_NEAR(s->acceleration[0], 8 * 9.80665, 1e-3);
+}
+
+namespace {
+
+tron::ImuSample Resting(double a_z, double rate = 0.0) {
+  tron::ImuSample s{};
+  s.acceleration = {0, 0, a_z};
+  s.angular_velocity = {0, 0, rate};
+  return s;
+}
+
+// Feeds the sample at 50 Hz from `from` for `seconds` and returns the last answer.
+bool Hold(tron::UpsideDownCheck& check, const tron::ImuSample& sample, double from, double seconds) {
+  bool upside_down = false;
+  for (double t = from; t <= from + seconds + 1e-9; t += 0.02) upside_down = check.Update(sample, t);
+  return upside_down;
+}
+
+}  // namespace
+
+TEST(UpsideDownCheck, GravityUpAtRestForOneSecond) {
+  tron::UpsideDownCheck check;
+  EXPECT_FALSE(Hold(check, Resting(-9.81), 0.0, 0.9));
+  EXPECT_TRUE(Hold(check, Resting(-9.81), 0.92, 0.2));
+}
+
+TEST(UpsideDownCheck, UprightOnASlopeOrJackedUpIsFine) {
+  tron::UpsideDownCheck check;
+  // 3.6 deg jacked up, 31 deg the steepest slope of the vendor, and level.
+  EXPECT_FALSE(Hold(check, Resting(9.81 * std::cos(3.6 * M_PI / 180)), 0.0, 3.0));
+  EXPECT_FALSE(Hold(check, Resting(9.81 * std::cos(31 * M_PI / 180)), 3.0, 3.0));
+  EXPECT_FALSE(Hold(check, Resting(9.81), 6.0, 3.0));
+}
+
+TEST(UpsideDownCheck, MovingOrBriefDoesNotCount) {
+  tron::UpsideDownCheck check;
+  EXPECT_FALSE(Hold(check, Resting(-9.81, 1.0), 0.0, 3.0));
+  for (double t = 3.0; t < 10.0; t += 0.6) {
+    EXPECT_FALSE(Hold(check, Resting(-9.81), t, 0.5));
+    EXPECT_FALSE(check.Update(Resting(9.81), t + 0.55));
+  }
+}
+
+TEST(UpsideDownCheck, EndsAfterOneSecondUpright) {
+  tron::UpsideDownCheck check;
+  ASSERT_TRUE(Hold(check, Resting(-9.81), 0.0, 1.1));
+  // Moving does not end it, a brief upright reading neither.
+  EXPECT_TRUE(Hold(check, Resting(-9.81, 2.0), 1.2, 1.0));
+  EXPECT_TRUE(Hold(check, Resting(9.81), 2.3, 0.5));
+  EXPECT_TRUE(check.Update(Resting(-9.81), 2.9));
+  EXPECT_FALSE(Hold(check, Resting(9.81), 3.0, 1.1));
 }

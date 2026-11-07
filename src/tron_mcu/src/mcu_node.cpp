@@ -123,6 +123,11 @@ class McuNode : public rclcpp::Node {
       tx_stream_ = journal_->Define({{"name", "mcu.tx"}, {"kind", "raw"}});
     }
     port_name_ = declare_parameter("port", "/dev/ttyS9");
+    read_only_ = get_parameter("read_only").as_bool();
+    if (read_only_) {
+      RCLCPP_WARN(get_logger(), "read_only: %s is only read, no byte goes to the MCU: no motion, blade or charging",
+                  port_name_.c_str());
+    }
     blade_lease_max_s_ = get_parameter("blade_lease_max").as_double();
     imu_timeout_s_ = get_parameter("imu_timeout").as_double();
     measured_linear_scale_ = declare_parameter("measured_linear_scale", 1.0);
@@ -131,7 +136,7 @@ class McuNode : public rclcpp::Node {
     imu_roll_offset_deg_ = declare_parameter("imu_roll_offset_deg", 0.0);
     imu_pitch_offset_deg_ = declare_parameter("imu_pitch_offset_deg", 0.0);
     failsafe_without_host_s_ = declare_parameter("failsafe_without_host", -1.0);
-    safety_measurement_date_ = declare_parameter("safety_measurement_date", "");
+    safety_measurement_date_ = read_only_ ? "" : declare_parameter("safety_measurement_date", "");
     if (safety_measurement_date_.empty()) {
       RCLCPP_WARN(get_logger(), "No safety measurement of this Tron yet: remote control only");
     }
@@ -145,9 +150,11 @@ class McuNode : public rclcpp::Node {
     capabilities_pub_ = create_publisher<mowbite_msgs::msg::HardwareCapabilities>("hw/capabilities", LatchedQos());
     PublishCapabilities();
 
-    cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-        "hw/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) { OnCmdVel(*msg); });
-    if (get_parameter("send_imu").as_bool()) {
+    if (!read_only_) {
+      cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
+          "hw/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) { OnCmdVel(*msg); });
+    }
+    if (get_parameter("send_imu").as_bool() && !read_only_) {
       imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
           "imu/data", rclcpp::SensorDataQoS(), [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) { OnImu(*msg); });
     }
@@ -175,14 +182,17 @@ class McuNode : public rclcpp::Node {
  private:
   tron::McuControlConfig LoadConfig() {
     tron::McuControlConfig config;
+    // Only listens on the port: the core runs, its frames are dropped.
+    const bool read_only = declare_parameter("read_only", false);
     config.cmd_vel_timeout_s = declare_parameter("cmd_vel_timeout", config.cmd_vel_timeout_s);
+    config.speed_repeat_window_s = declare_parameter("speed_repeat_window", config.speed_repeat_window_s);
     config.telemetry_timeout_s = declare_parameter("telemetry_timeout", config.telemetry_timeout_s);
-    config.allow_blade = declare_parameter("allow_blade", false);
+    config.allow_blade = declare_parameter("allow_blade", false) && !read_only;
     config.blade_speed_percent = static_cast<uint16_t>(declare_parameter("blade_speed_percent", 100));
     config.mow_height_mm = static_cast<uint16_t>(declare_parameter("mow_height_mm", 60));
     config.blade_lease_max_s = declare_parameter("blade_lease_max", config.blade_lease_max_s);
     config.bumper_latches_emergency = declare_parameter("bumper_latches_emergency", true);
-    const bool send_imu = declare_parameter("send_imu", true);
+    const bool send_imu = declare_parameter("send_imu", true) && !read_only;
     const double imu_timeout = declare_parameter("imu_timeout", 0.5);
     const double imu_start_timeout = declare_parameter("imu_start_timeout", 2.0);
     // Without forwarding the MCU gets no IMU from here, so there is nothing to wait for.
@@ -192,8 +202,8 @@ class McuNode : public rclcpp::Node {
     config.blade_still_rpm = static_cast<int>(declare_parameter("blade_still_rpm", config.blade_still_rpm));
     config.expected_cutter_version = declare_parameter("expected_cutter_version", "");
     config.expected_chassis_version = declare_parameter("expected_chassis_version", "");
-    RCLCPP_INFO(get_logger(), "allow_blade: %d, cmd_vel_timeout: %.2f s, mow_height: %u mm", config.allow_blade,
-                config.cmd_vel_timeout_s, config.mow_height_mm);
+    RCLCPP_INFO(get_logger(), "allow_blade: %d, cmd_vel_timeout: %.2f s, speed_repeat_window: %.2f s, mow_height: %u "
+                "mm", config.allow_blade, config.cmd_vel_timeout_s, config.speed_repeat_window_s, config.mow_height_mm);
     if (config.expected_cutter_version.empty() && config.expected_chassis_version.empty()) {
       RCLCPP_WARN(get_logger(), "Firmware check is off: expected_cutter_version and expected_chassis_version are empty");
     } else {
@@ -256,7 +266,7 @@ class McuNode : public rclcpp::Node {
           std::lock_guard<std::mutex> lock(mutex_);
           packets = control_.Call<&C::Tick>(now, LocalWallClock());
         }
-        Send(packets);
+        if (!read_only_) Send(packets);
       }
       // So that the logic learns of a block before a blade request it refuses, not only at the next status tick.
       if (BlockChanged()) PublishStatus();
@@ -300,7 +310,7 @@ class McuNode : public rclcpp::Node {
       return;
     }
     std::string error;
-    if (!port_.Open(port_name_, 115200, error)) {
+    if (!port_.Open(port_name_, 115200, error, read_only_)) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Cannot open %s: %s", port_name_.c_str(), error.c_str());
       return;
     }
@@ -325,6 +335,10 @@ class McuNode : public rclcpp::Node {
 
   void SendShutdownFrames() {
     if (!port_.IsOpen()) return;
+    if (read_only_) {
+      port_.Close();
+      return;
+    }
     // Stop wheels if they were commanded, switch the blade off and lift the deck.
     std::vector<tron::SubPacket> packets;
     {
@@ -449,7 +463,7 @@ class McuNode : public rclcpp::Node {
     msg.blade_lease_max_s = static_cast<float>(blade_lease_max_s_);
     // The driver sends Charge itself after a debounced dock contact.
     msg.host_charge_control = false;
-    msg.charge_stop = true;
+    msg.charge_stop = !read_only_;
     msg.rain_sensor = true;
     msg.separate_bumpers = true;
     msg.wheel_ticks = false;
@@ -457,8 +471,9 @@ class McuNode : public rclcpp::Node {
     msg.wheel_distance = tron::kMcuWheelDistance;
     msg.imu_source = "tron_imu";
     msg.gnss_source = "tron_gnss";
-    msg.max_linear_speed = tron::kMaxLinearSpeed;
-    msg.max_angular_speed = tron::kMaxAngularSpeed;
+    // 0 lets nothing move.
+    msg.max_linear_speed = read_only_ ? 0.0f : tron::kMaxLinearSpeed;
+    msg.max_angular_speed = read_only_ ? 0.0f : tron::kMaxAngularSpeed;
     msg.failsafe_without_host_s = static_cast<float>(failsafe_without_host_s_);
     msg.safety_measurement_date = safety_measurement_date_;
     capabilities_pub_->publish(msg);
@@ -613,6 +628,11 @@ class McuNode : public rclcpp::Node {
 
   // Charging follows the contact; the host only stops it, before leaving the station, or allows it again.
   void OnCharge(const mowbite_msgs::srv::SetCharge::Request& req, mowbite_msgs::srv::SetCharge::Response& res) {
+    if (read_only_) {
+      res.success = false;
+      res.message = "read only: nothing goes to the MCU";
+      return;
+    }
     {
       std::lock_guard<std::mutex> lock(mutex_);
       control_.Call<&C::SetCharging>(req.on, MonotonicSeconds());
@@ -655,6 +675,7 @@ class McuNode : public rclcpp::Node {
   std::atomic<bool> running_{true};
   std::thread io_thread_;
 
+  bool read_only_;
   double blade_lease_max_s_;
   double failsafe_without_host_s_;
   std::string safety_measurement_date_;

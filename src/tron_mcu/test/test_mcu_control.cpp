@@ -171,6 +171,25 @@ class BladeStopTest : public ControlTest {
   }
 };
 
+// The setting of the Tron: the MCU drops a setpoint ~0.2 s after the last SpeedData.
+class RepeatTest : public ControlTest {
+ protected:
+  static McuControlConfig RepeatConfig(double cmd_vel_timeout_s = 0.5) {
+    McuControlConfig config;
+    config.cmd_vel_timeout_s = cmd_vel_timeout_s;
+    config.speed_repeat_window_s = 0.3;
+    return config;
+  }
+  explicit RepeatTest(double cmd_vel_timeout_s = 0.5) : ControlTest(RepeatConfig(cmd_vel_timeout_s)) {
+  }
+};
+
+class ShortTimeoutRepeatTest : public RepeatTest {
+ protected:
+  ShortTimeoutRepeatTest() : RepeatTest(0.2) {
+  }
+};
+
 }  // namespace
 
 TEST_F(ControlTest, HeartbeatEvery100ms) {
@@ -1663,4 +1682,97 @@ TEST_F(ShortBladeStopTest, AShortStopTimeStillChecks) {
   Run(1.0);
   control_.OnBladeRpm(2800, now_);
   EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonMowerNotStopped);
+}
+
+TEST_F(RepeatTest, OneCommandIsRepeatedEvery50msForTheWindowThenStopped) {
+  Run(0.1);
+  control_.OnCmdVel(0.2f, 0.1f, now_);
+  const double start = now_;
+  Run(2.0);
+  auto moving = Times(IsMovingSpeed);
+  // The repeat at 0.3 s falls on the tick of the stop: either side of it is fine.
+  ASSERT_GE(moving.size(), 6u);
+  ASSERT_LE(moving.size(), 7u);
+  for (size_t i = 1; i < moving.size(); i++) EXPECT_NEAR(moving[i] - moving[i - 1], 0.05, 1e-6);
+  EXPECT_LE(moving.back() - start, 0.3 + 1e-6);
+  // Every repeat carries the same setpoint.
+  const auto expected = *SpeedPacket(0.2f, 0.1f);
+  for (const auto& s : sent_) {
+    if (IsMovingSpeed(s.packet)) {
+      EXPECT_EQ(s.packet.payload, expected.payload);
+    }
+  }
+  auto zeros = Times(IsZeroSpeed);
+  ASSERT_EQ(zeros.size(), 3u);
+  EXPECT_GE(zeros[0] - start, 0.3 - 1e-6);
+  EXPECT_LT(zeros[0] - start, 0.32);
+  EXPECT_FALSE(control_.Status(now_).moving);
+}
+
+TEST_F(RepeatTest, CommandsAt10HzGoOutEvery50ms) {
+  Run(0.1);
+  for (int i = 0; i < 30; i++) {
+    control_.OnCmdVel(0.2f, 0.0f, now_);
+    Run(now_ + 0.1);
+  }
+  auto moving = Times(IsMovingSpeed);
+  EXPECT_EQ(moving.size(), 60u);
+  for (size_t i = 1; i < moving.size(); i++) EXPECT_LE(moving[i] - moving[i - 1], 0.05 + 1e-6);
+  EXPECT_TRUE(Times(IsZeroSpeed).empty());
+}
+
+TEST_F(RepeatTest, ANewSetpointReplacesTheRepeatedOne) {
+  Run(0.1);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(0.2);
+  control_.OnCmdVel(-0.1f, 0.0f, now_);
+  const auto expected = *SpeedPacket(-0.1f, 0.0f);
+  Run(0.4);
+  for (const auto& s : sent_) {
+    if (s.t > 0.2 + 1e-9 && IsMovingSpeed(s.packet)) {
+      EXPECT_EQ(s.packet.payload, expected.payload);
+    }
+  }
+}
+
+TEST_F(RepeatTest, AZeroCommandEndsTheRepeat) {
+  Run(0.1);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(0.2);
+  control_.OnCmdVel(0.0f, 0.0f, now_);
+  Run(1.0);
+  EXPECT_TRUE(Times(IsMovingSpeed, 0.21).empty());
+  EXPECT_EQ(Times(IsZeroSpeed).size(), 3u);
+}
+
+TEST_F(RepeatTest, ALiftEndsTheRepeat) {
+  Run(0.1);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(0.15);
+  sensor_.lift = true;
+  Run(1.0);
+  EXPECT_TRUE(Times(IsMovingSpeed, 0.16).empty());
+  EXPECT_EQ(Times(IsZeroSpeed).size(), 3u);
+}
+
+TEST_F(RepeatTest, IdleAndOnTheDockNothingIsRepeated) {
+  Run(0.1);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  for (int i = 0; i < 20; i++) {
+    control_.OnCmdVel(0.0f, 0.0f, now_);
+    Run(now_ + 0.1);
+  }
+  EXPECT_TRUE(Times([](const SubPacket& p) { return IsModule(p, Module::kSpeed); }).empty());
+}
+
+TEST_F(ShortTimeoutRepeatTest, AShorterCmdVelTimeoutStopsFirst) {
+  Run(0.1);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  const double start = now_;
+  Run(1.0);
+  auto zeros = Times(IsZeroSpeed);
+  ASSERT_EQ(zeros.size(), 3u);
+  EXPECT_GE(zeros[0] - start, 0.2 - 1e-6);
+  EXPECT_LT(zeros[0] - start, 0.22);
+  EXPECT_LE(Times(IsMovingSpeed).back() - start, 0.2 + 1e-6);
 }

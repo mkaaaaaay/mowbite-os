@@ -22,6 +22,7 @@ void WitParser::Feed(const uint8_t* data, size_t size, std::vector<WitPacket>& o
     }
     if (f[1] != 0x51 && f[1] != 0x52 && f[1] != 0x53) {
       unknown_types_++;
+      last_unknown_type_ = f[1];
       pos += kFrameSize;
       continue;
     }
