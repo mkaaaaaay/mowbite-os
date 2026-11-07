@@ -1,8 +1,8 @@
 #!/bin/bash
-# The rootfs image of one Tron: the base tar of build-base.sh plus the vendor parts (vendor-files.txt) and the WLAN
-# profiles from the owner's own rootfs backup, the SSH host keys and the key for root. ext4 with only the features of
-# the vendor rootfs (kernel 5.10), exactly the size of the rootfs partition. The image holds vendor files and secrets:
-# it stays in the owner's encrypted storage, never in a repo, an upload or a release.
+# The rootfs image of one Tron: the base tar of build-base.sh, files/ of the repo over it, the vendor parts
+# (vendor-files.txt) and the WLAN profiles from the owner's own rootfs backup, the SSH host keys and the key for root.
+# ext4 with only the features of the vendor rootfs (kernel 5.10), exactly the size of the rootfs partition. The image
+# holds vendor files and secrets: it stays in the owner's encrypted storage, never in a repo, an upload or a release.
 #   make-image.sh <base .tar> <vendor rootfs dir> <host key dir> <root key .pub> <new .img>
 # "-" for the vendor rootfs or the host keys leaves them out (probe image for QEMU, keys made on the first boot).
 # Prints no secrets; work files lie next to the image and are removed at the end.
@@ -30,6 +30,18 @@ trap 'rm -rf "$work"' EXIT
 
 # Paths of the base tar without the leading ./ for the check of missing parent directories.
 tar -tf "$BASE" | sed 's|^\./||; s|/$||' | sort -u > "$work/base.list"
+
+# files/ of the repo go over the base; the base must come from the same packages.txt and build-base.sh and hold no
+# file that files/ no longer has.
+"$HERE/base-inputs.sh" > "$work/inputs.now"
+tar -xOf "$BASE" ./usr/lib/mowbite/base-inputs > "$work/inputs.base" 2>/dev/null \
+    || { echo "$BASE has no base-inputs, build a new base" >&2; exit 1; }
+if ! cmp -s <(grep -v '^file ' "$work/inputs.base") <(grep -v '^file ' "$work/inputs.now") \
+    || [ -n "$(LC_ALL=C comm -23 <(grep '^file ' "$work/inputs.base") <(grep '^file ' "$work/inputs.now"))" ]; then
+    echo "$BASE is out of date for packages.txt, build-base.sh or a removal under files/, build a new base" >&2
+    exit 1
+fi
+tar -C "$HERE/files" -cf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w .
 
 items=()
 parents=()
@@ -82,6 +94,7 @@ grep -qxF root "$work/base.list"
 tar -C "$work/p" -cf "$work/private.tar" --owner=0 --group=0 --numeric-owner --no-recursion "${private[@]}"
 
 cp "$BASE" "$work/all.tar"
+tar -Af "$work/all.tar" "$work/files.tar"
 if [ -e "$work/vendor.tar" ]; then
     tar -Af "$work/all.tar" "$work/vendor.tar"
 fi

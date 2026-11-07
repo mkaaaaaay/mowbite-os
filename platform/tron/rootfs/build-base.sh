@@ -1,7 +1,8 @@
 #!/bin/bash
 # Base rootfs of MowBite OS for the Airseekers Tron as a tar: Ubuntu 24.04 arm64, ROS 2 Jazzy core, the units and
 # configuration under files/, no vendor parts, no keys. Without root: mmdebstrap in a user namespace, arm64 binaries
-# through the qemu-user binfmt handler. make-image.sh turns the tar into the image of one mower.
+# through the qemu-user binfmt handler. make-image.sh turns the tar into the image of one mower and lays the current
+# files/ over it, so only a change of packages.txt, of this script or a removal under files/ needs a new base.
 #   build-base.sh <new .tar>
 set -euo pipefail
 OUT=${1:?new .tar}
@@ -29,6 +30,8 @@ chmod 755 "$work"
 chmod 644 "$work/ros-archive-keyring.gpg"
 # files/ as root's, without write access for group and others, whoever checked out the repo.
 tar -C "$HERE/files" -cf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w .
+"$HERE/base-inputs.sh" > "$work/base-inputs"
+chmod 644 "$work/base-inputs"
 
 mmdebstrap --mode=unshare --architectures=arm64 --variant=apt --format=tar \
     --aptopt="$HERE/files/etc/apt/apt.conf.d/90mowbite" \
@@ -36,6 +39,7 @@ mmdebstrap --mode=unshare --architectures=arm64 --variant=apt --format=tar \
     --include="$(sed 's/#.*//; /^[[:space:]]*$/d' "$HERE/packages.txt" | paste -sd,)" \
     --customize-hook="tar-in '$work/files.tar' /" \
     --customize-hook="upload '$work/ros-archive-keyring.gpg' /usr/share/keyrings/ros-archive-keyring.gpg" \
+    --customize-hook="upload '$work/base-inputs' /usr/lib/mowbite/base-inputs" \
     --customize-hook='rm -f "$1"/etc/apt/sources.list "$1"/etc/apt/sources.list.d/*' \
     --customize-hook="printf 'Types: deb\nURIs: $PORTS\nSuites: noble noble-updates noble-security\nComponents: main universe\nSigned-By: $UBUNTU_KEY\n' > \"\$1\"/etc/apt/sources.list.d/ubuntu.sources" \
     --customize-hook="printf 'Types: deb\nURIs: $ROS\nSuites: noble\nComponents: main\nSigned-By: /usr/share/keyrings/ros-archive-keyring.gpg\n' > \"\$1\"/etc/apt/sources.list.d/ros2.sources" \
