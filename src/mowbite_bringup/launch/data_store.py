@@ -36,6 +36,8 @@ ROLLBACK_NOTE = "data_rollback.json"
 # and a way back.
 RESTART_HOLD_FILE = "restart-hold.json"
 SESSION_FILE = "os-session.json"
+# The measured values of this Tron (safety measurement, firmware), read after the platform file; kept like the data.
+TRON_PARAMS_FILE = "tron.yaml"
 BACKUP = "backup-"
 TEMP = ".tmp"
 OLD = ".old"

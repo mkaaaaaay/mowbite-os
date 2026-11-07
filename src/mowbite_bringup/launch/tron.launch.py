@@ -32,8 +32,11 @@ def launch_setup(context):
     config = arg("config")
     # The dimensions of the platform; config and extra come after it and can change single values (the simulation does).
     geometry = arg("geometry")
-    # Values on top of config, e.g. those of the simulation; by default config once more.
+    # Values on top of config, e.g. those of the simulation; by default config once more. Then the measured values of
+    # this Tron (data_dir/tron.yaml), if there are any.
     extra = arg("extra_config")
+    mower = os.path.join(data_dir, data_store.TRON_PARAMS_FILE) if data_dir else ""
+    files = [config, extra] + ([mower] if os.path.isfile(mower) else [])
     # Should the container die, the driver stops the wheels after cmd_vel_timeout, the blade lease runs out and the
     # missing IMU latches IMU_TIMEOUT. With the namespace the dict goes under the full name; without it, under /**,
     # the port in the node's own section of config would win.
@@ -41,23 +44,23 @@ def launch_setup(context):
     hold_file = os.path.join(data_dir, data_store.HOLD_FILE) if data_dir else ""
     journal = stack.journal_dir(arg("journal_dir"), data_dir, logger)
     mcu = Node(package="tron_mcu", executable="tron_mcu_node", name="tron_mcu", namespace="/",
-               parameters=[config, extra, {"port": arg("mcu_port"), "hold_file": hold_file, "journal_dir": journal}],
+               parameters=[*files, {"port": arg("mcu_port"), "hold_file": hold_file, "journal_dir": journal}],
                output="screen")
     gnss = ComposableNode(
         package="tron_gnss", plugin="tron_gnss::GnssNode", name="tron_gnss",
-        parameters=[config, extra, {"port": arg("gnss_port"), "datum_lat": float(arg("datum_lat")),
+        parameters=[*files, {"port": arg("gnss_port"), "datum_lat": float(arg("datum_lat")),
                                     "datum_long": float(arg("datum_long")),
                                     "datum_height": float(arg("datum_height")), "data_dir": data_dir}])
     imu = ComposableNode(
         package="tron_imu", plugin="tron_imu::ImuNode", name="tron_imu",
-        parameters=[config, extra, {"port": arg("imu_port")}])
-    nodes = stack.components([config, extra], geometry, data_dir, arg("mqtt_host"), arg("mqtt_port"), journal)
+        parameters=[*files, {"port": arg("imu_port")}])
+    nodes = stack.components(files, geometry, data_dir, arg("mqtt_host"), arg("mqtt_port"), journal)
     oom = arg("oom_score_adj")
     # Without hardware no process opens the MCU, GNSS or IMU port: the stack runs, the logic finds no driver.
     if arg("hardware") != "true":
         logger.warning("hardware:=false: tron_mcu, tron_gnss and tron_imu do not start")
-        return stack.container_and_planner(nodes, data_dir, [config, extra], logger, oom)
-    return [mcu, *stack.container_and_planner([gnss, imu, *nodes], data_dir, [config, extra], logger, oom)]
+        return stack.container_and_planner(nodes, data_dir, files, logger, oom)
+    return [mcu, *stack.container_and_planner([gnss, imu, *nodes], data_dir, files, logger, oom)]
 
 
 def generate_launch_description():
