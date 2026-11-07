@@ -276,6 +276,60 @@ class UpdateTest(unittest.TestCase):
         # The second install: is-active of aaa, stop, then start of bbb.
         self.assertEqual(calls[-3:], ["stop", "reset-failed", "start"])
 
+    def test_no_pending_after_switches(self):
+        self.install(self.bundle("aaa"))
+        self.write(self.state("health-bbb"), "NO_ROBOT_STATE")
+        self.install(self.bundle("bbb"))
+        self.assertNotIn("pending", self.installed())
+
+    # Killed (or power cut) while it waits for the health of the new installation.
+    def killed_during_health(self, rev):
+        def killed(root):
+            raise SystemExit("killed")
+        self.tool.wait_healthy = killed
+        with self.assertRaises(SystemExit):
+            self.install(self.bundle(rev))
+        self.tool = load_tool()
+
+    def test_killed_during_health_recovers(self):
+        self.install(self.bundle("aaa"))
+        self.killed_during_health("bbb")
+        self.assertEqual(self.link("current"), "bbb")
+        self.assertIn("pending", self.installed())
+        self.assertEqual(self.install(self.bundle("ccc")), 1)
+        self.assertEqual(self.tool.main(["mowbite-update", "recover"]), 0)
+        self.assertEqual(self.link("current"), "aaa")
+        self.assertNotIn("pending", self.installed())
+        self.assertEqual(self.service(), "active")
+        self.assertEqual(self.install(self.bundle("ccc")), 0)
+        self.assertEqual(self.installed(), ["aaa", "ccc", "current", "previous"])
+
+    def test_recover_at_boot_keeps_service_off(self):
+        self.install(self.bundle("aaa"))
+        self.killed_during_health("bbb")
+        self.write(self.state("service"), "inactive")
+        self.assertEqual(self.tool.main(["mowbite-update", "recover"]), 0)
+        self.assertEqual(self.link("current"), "aaa")
+        self.assertEqual(self.service(), "inactive")
+
+    def test_recover_first_install_turns_off(self):
+        self.killed_during_health("aaa")
+        self.assertEqual(self.tool.main(["mowbite-update", "recover"]), 0)
+        self.assertIsNone(self.link("current"))
+        self.assertEqual(self.service(), "inactive")
+
+    def test_prune_keeps_pending(self):
+        self.install(self.bundle("aaa"))
+        self.install(self.bundle("bbb"))
+        self.killed_during_health("ccc")
+        self.tool.prune()
+        self.assertEqual(self.installed(), ["aaa", "bbb", "ccc", "current", "pending", "previous"])
+
+    def test_recover_without_pending(self):
+        self.install(self.bundle("aaa"))
+        self.assertEqual(self.tool.main(["mowbite-update", "recover"]), 0)
+        self.assertEqual(self.link("current"), "aaa")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,11 @@
+[Unit]
+Description=MowBite OS back to its installation before an unfinished update
+ConditionPathExists=/opt/mowbite/pending
+Before=mowbite-os.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/mowbite-update recover
+
+[Install]
+WantedBy=multi-user.target

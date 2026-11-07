@@ -101,6 +101,9 @@ python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$TREE/usr/
 result "mowbite-update parses" $?
 test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-os.service")" = ../mowbite-os.service
 result "mowbite-os.service enabled" $?
+test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-update-recover.service")" = \
+    ../mowbite-update-recover.service
+result "mowbite-update-recover.service enabled" $?
 grep -qx 'ConditionPathExists=!/run/mowbite/crash' "$TREE/etc/systemd/system/mowbite-os.service"
 result "mowbite-os stays off after a crash" $?
 cmp -s "$TREE/etc/mosquitto/mosquitto.conf" "$HERE/../../../docker/mower/mosquitto.conf"
