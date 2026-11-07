@@ -96,6 +96,15 @@ for u in mowbite-crash mowbite-probezeit; do
 done
 sh -n "$TREE/usr/lib/mowbite/crash"; result "crash script parses" $?
 grep -qFe "-name 'console-*'" "$TREE/usr/lib/mowbite/crash"; result "crash script reads console records" $?
+bash -n "$TREE/usr/lib/mowbite/run-os" && bash -n "$TREE/usr/lib/mowbite/os-setup"; result "run-os parses" $?
+python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$TREE/usr/sbin/mowbite-update"
+result "mowbite-update parses" $?
+test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-os.service")" = ../mowbite-os.service
+result "mowbite-os.service enabled" $?
+grep -qx 'ConditionPathExists=!/run/mowbite/crash' "$TREE/etc/systemd/system/mowbite-os.service"
+result "mowbite-os stays off after a crash" $?
+cmp -s "$TREE/etc/mosquitto/mosquitto.conf" "$HERE/../../../docker/mower/mosquitto.conf"
+result "broker configuration of the Compose stack" $?
 # keys <template> <prefix> <value>: every key the template of this systemd knows, set to <value>.
 keys() { sed -n "s/^#\($2[A-Za-z]*\)=.*/\1=$3/p" "$TREE/$1" | sort; }
 set_in() { grep "^$2" "$TREE/$1" | sort; }

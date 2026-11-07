@@ -29,3 +29,5 @@ ros-jazzy-ros-core
 libpaho-mqttpp3-1
 python3-paho-mqtt
 python3-shapely
+# Broker of MowBite OS
+mosquitto

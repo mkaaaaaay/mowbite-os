@@ -49,6 +49,9 @@ if ! cmp -s <(grep -v '^file ' "$work/inputs.base") <(grep -v '^file ' "$work/in
     exit 1
 fi
 tar -C "$HERE/files" -cf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w .
+# The broker of MowBite OS with the configuration the Compose stack of the other platforms uses.
+tar -C "$HERE/../../../docker/mower" -rf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w \
+    --transform 's|^mosquitto.conf$|./etc/mosquitto/mosquitto.conf|' mosquitto.conf
 
 items=()
 parents=()

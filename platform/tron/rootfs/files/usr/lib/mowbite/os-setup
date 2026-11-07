@@ -1,0 +1,10 @@
+# Sourced by run-os and mowbite-update: the ROS environment of the installed OS at $1 (a directory under /opt/mowbite).
+# The setup scripts of ROS read unset variables.
+set +u
+source /opt/ros/jazzy/setup.bash
+source "$1/planner/local_setup.bash"
+source "$1/install/local_setup.bash"
+set -u
+MOWBITE_OS_REVISION=$(cat "$1/revision")
+export MOWBITE_OS_REVISION
+export FASTRTPS_DEFAULT_PROFILES_FILE="$1/install/mowbite_bringup/share/mowbite_bringup/config/fastdds_loopback.xml"

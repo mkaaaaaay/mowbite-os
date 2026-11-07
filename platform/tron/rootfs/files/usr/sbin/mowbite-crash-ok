@@ -1,0 +1,12 @@
+#!/bin/sh
+# After a kernel crash the owner has looked at the mower: MowBite OS may start in this boot.
+set -eu
+if [ ! -e /run/mowbite/crash ]; then
+    echo "no crash record in this boot"
+    exit 0
+fi
+echo "crash record: $(cat /run/mowbite/crash)"
+mv /run/mowbite/crash /run/mowbite/crash.ok
+logger -t mowbite-crash-ok "released after the crash record $(cat /run/mowbite/crash.ok)"
+systemctl start mowbite-os.service
+systemctl is-active mowbite-os.service

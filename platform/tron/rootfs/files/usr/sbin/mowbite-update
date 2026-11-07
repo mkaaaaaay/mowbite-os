@@ -1,0 +1,335 @@
+#!/usr/bin/python3
+"""Installs a signed bundle of MowBite OS under /opt/mowbite/<revision> and switches /opt/mowbite/current to it.
+
+  mowbite-update install <bundle.tar.gz> [<signature>]   (signature default <bundle>.sig)
+  mowbite-update rollback                                 back to /opt/mowbite/previous
+  mowbite-update status
+
+A bundle is a tar of one directory <revision>/ with install/, planner/, revision and bundle.json (format 1, revision,
+min_app, runtime_packages). Before the switch: signature (ssh-keygen -Y, /etc/mowbite/allowed_signers), the runtime
+packages installed (no apt here), every ELF finds its libraries. The switch only while the OS is stopped or reports
+IDLE, never after a crash in this boot. After it the OS has to report healthy within HEALTH_WAIT s, else it goes back.
+Two installations are kept: current and previous. A power cut leaves current on the old or the new one, never half.
+"""
+import fcntl
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+import time
+
+# Tests run under a prefix; on the mower it is empty.
+PREFIX = os.environ.get("MOWBITE_UPDATE_PREFIX", "")
+OPT = PREFIX + "/opt/mowbite"
+CURRENT = OPT + "/current"
+PREVIOUS = OPT + "/previous"
+SIGNERS = PREFIX + "/etc/mowbite/allowed_signers"
+CRASH = PREFIX + "/run/mowbite/crash"
+LOCK = PREFIX + "/run/mowbite-update.lock"
+ENV_FILES = [PREFIX + "/usr/lib/mowbite/os.defaults", PREFIX + "/etc/mowbite/os.conf"]
+OS_SETUP = PREFIX + "/usr/lib/mowbite/os-setup"
+SERVICE = "mowbite-os.service"
+HEALTH = "install/mowbite_bridge/lib/mowbite_bridge/mowbite_health"
+NAMESPACE = "mowbite-bundle"
+FORMAT = 1
+HEALTH_WAIT = float(os.environ.get("MOWBITE_UPDATE_HEALTH_WAIT", "120"))
+HEALTH_EVERY = 5.0
+
+
+class Refused(Exception):
+    """The update does not go on; the text says why, nothing has been switched."""
+
+
+def log(text):
+    print(text, flush=True)
+
+
+def run(args, **kwargs):
+    return subprocess.run(args, capture_output=True, **{"text": True, **kwargs})
+
+
+def sync_dir(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+# link -> target (a name in OPT), atomic: a new link renamed over the old one.
+def set_link(link, target):
+    tmp = link + ".new"
+    try:
+        os.remove(tmp)
+    except FileNotFoundError:
+        pass
+    os.symlink(target, tmp)
+    os.replace(tmp, link)
+    sync_dir(OPT)
+
+
+def link_target(link):
+    try:
+        return os.readlink(link)
+    except FileNotFoundError:
+        return None
+
+
+def env_of_service():
+    env = {}
+    for path in ENV_FILES:
+        try:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, value = line.split("=", 1)
+                        env[key] = value
+        except FileNotFoundError:
+            pass
+    return env
+
+
+# The environment run-os gives the OS at root, for ldd and mowbite_health.
+def ros_env(root):
+    script = f'set -eu; source "{OS_SETUP}" "{root}"; env -0'
+    result = subprocess.run(["bash", "-c", script], capture_output=True, env={**os.environ, **env_of_service()})
+    if result.returncode != 0:
+        raise Refused(f"the environment of {root} cannot be set up: {result.stderr.decode(errors='replace').strip()}")
+    return dict(item.split("=", 1) for item in result.stdout.decode().split("\0") if "=" in item)
+
+
+def verify_signature(bundle, signature):
+    if not os.path.isfile(signature):
+        raise Refused(f"no signature {signature}")
+    with open(bundle, "rb") as data:
+        result = run(["ssh-keygen", "-Y", "verify", "-f", SIGNERS, "-I", "mowbite", "-n", NAMESPACE, "-s", signature],
+                     stdin=data, text=False)
+    if result.returncode != 0:
+        raise Refused(f"bad signature: {result.stderr.decode(errors='replace').strip()}")
+
+
+def read_meta(bundle):
+    with tarfile.open(bundle) as tar:
+        names = tar.getnames()
+        tops = {name.split("/", 1)[0] for name in names}
+        if len(tops) != 1:
+            raise Refused(f"the bundle has to hold one directory, it holds {sorted(tops)}")
+        top = tops.pop()
+        member = tar.extractfile(f"{top}/bundle.json")
+        meta = json.load(member)
+    if meta.get("format") != FORMAT:
+        raise Refused(f"bundle format {meta.get('format')}, this tool reads {FORMAT}")
+    if meta.get("revision") != top or top in ("current", "previous") or top.startswith("."):
+        raise Refused(f"revision {meta.get('revision')} does not match the directory {top}")
+    return meta
+
+
+def missing_packages(packages):
+    missing = []
+    for package in packages:
+        result = run(["dpkg-query", "-W", "-f", "${Status}", package])
+        if result.returncode != 0 or result.stdout.strip() != "install ok installed":
+            missing.append(package)
+    return missing
+
+
+def is_elf(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+def unresolved_libraries(root):
+    env = ros_env(root)
+    problems = []
+    for folder, _, files in os.walk(root):
+        for name in files:
+            path = os.path.join(folder, name)
+            if os.path.islink(path) or not is_elf(path):
+                continue
+            result = run(["ldd", path], env=env)
+            text = result.stdout + result.stderr
+            if "not a dynamic executable" in text or "statically linked" in text:
+                continue
+            if result.returncode != 0 or "not found" in text or "error while loading" in text:
+                lines = [line.strip() for line in text.splitlines() if "not found" in line or "error" in line]
+                problems.append(f"{os.path.relpath(path, root)}: {'; '.join(lines) or 'ldd ' + str(result.returncode)}")
+    return problems
+
+
+def unpack(bundle, revision):
+    partial = os.path.join(OPT, f".{revision}.partial")
+    shutil.rmtree(partial, ignore_errors=True)
+    os.makedirs(partial)
+    try:
+        with tarfile.open(bundle) as tar:
+            tar.extractall(partial, filter="data")
+    except tarfile.FilterError as error:
+        shutil.rmtree(partial, ignore_errors=True)
+        raise Refused(f"unsafe entry in the bundle: {error}")
+    os.sync()
+    return partial
+
+
+def service_active():
+    return run(["systemctl", "is-active", "--quiet", SERVICE]).returncode == 0
+
+
+# One answer of mowbite_health of the OS at root: (healthy, its line).
+def health(root):
+    try:
+        env = {**ros_env(root), **env_of_service()}
+        result = run([os.path.join(root, HEALTH)], env=env, timeout=30)
+    except (Refused, OSError, subprocess.TimeoutExpired) as error:
+        return False, str(error)
+    return result.returncode == 0, result.stdout.strip()
+
+
+def wait_healthy(root):
+    deadline = time.monotonic() + HEALTH_WAIT
+    line = ""
+    while True:
+        ok, line = health(root)
+        if ok:
+            return True, line
+        if time.monotonic() >= deadline:
+            return False, line
+        time.sleep(HEALTH_EVERY)
+
+
+def check_switch_allowed():
+    if os.path.exists(CRASH):
+        raise Refused(f"a crash record in this boot ({CRASH}): look at the mower and run mowbite-crash-ok first")
+    current = link_target(CURRENT)
+    if current and service_active():
+        ok, line = health(os.path.join(OPT, current))
+        if not ok or line.split()[-1] != "IDLE":
+            raise Refused(f"the OS is not idle ({line or 'no answer'}): no switch while it works")
+
+
+def stop():
+    result = run(["systemctl", "stop", SERVICE])
+    if result.returncode != 0:
+        raise Refused(f"systemctl stop {SERVICE}: {result.stderr.strip()}")
+
+
+def start():
+    run(["systemctl", "reset-failed", SERVICE])
+    return run(["systemctl", "start", SERVICE]).returncode == 0
+
+
+# current -> revision, previous -> the one before; True when the OS came up healthy, else back to the one before.
+def switch(revision):
+    before = link_target(CURRENT)
+    if before == revision:
+        before = link_target(PREVIOUS)
+    stop()
+    set_link(CURRENT, revision)
+    log(f"current -> {revision}, starting")
+    started = start()
+    ok, line = wait_healthy(os.path.join(OPT, revision)) if started else (False, "the service did not start")
+    if ok:
+        log(f"healthy: {line}")
+        if before:
+            set_link(PREVIOUS, before)
+        return True
+    log(f"not healthy: {line}")
+    stop()
+    if before:
+        set_link(CURRENT, before)
+        log(f"back to {before}")
+        start()
+        ok, line = wait_healthy(os.path.join(OPT, before))
+        log(f"{'healthy' if ok else 'NOT HEALTHY'} after going back: {line}")
+    else:
+        os.remove(CURRENT)
+        sync_dir(OPT)
+        log("no installation before this one: the OS stays off")
+    return False
+
+
+# Keeps current and previous, removes the other installations and broken unpacks.
+def prune():
+    keep = {link_target(CURRENT), link_target(PREVIOUS)}
+    for name in os.listdir(OPT):
+        path = os.path.join(OPT, name)
+        if name in ("current", "previous") or name in keep or os.path.islink(path):
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        log(f"removed {name}")
+
+
+def install(bundle, signature):
+    verify_signature(bundle, signature)
+    meta = read_meta(bundle)
+    revision = meta["revision"]
+    log(f"bundle {revision}, oldest app {meta.get('min_app')}, signature ok")
+    missing = missing_packages(meta.get("runtime_packages", []))
+    if missing:
+        raise Refused(f"runtime packages missing, install them first: apt install {' '.join(missing)}")
+    check_switch_allowed()
+    target = os.path.join(OPT, revision)
+    if not os.path.isdir(target):
+        partial = unpack(bundle, revision)
+        problems = unresolved_libraries(os.path.join(partial, revision))
+        if problems:
+            shutil.rmtree(partial, ignore_errors=True)
+            raise Refused("libraries not found:\n  " + "\n  ".join(problems[:20]))
+        os.rename(os.path.join(partial, revision), target)
+        os.rmdir(partial)
+        sync_dir(OPT)
+        log(f"unpacked to {target}")
+    ok = switch(revision)
+    prune()
+    return ok
+
+
+def rollback():
+    previous = link_target(PREVIOUS)
+    if not previous or not os.path.isdir(os.path.join(OPT, previous)):
+        raise Refused("no previous installation")
+    check_switch_allowed()
+    return switch(previous)
+
+
+def status():
+    log(f"current: {link_target(CURRENT) or '-'}")
+    log(f"previous: {link_target(PREVIOUS) or '-'}")
+    log(f"service: {run(['systemctl', 'is-active', SERVICE]).stdout.strip()}")
+    if os.path.exists(CRASH):
+        log(f"crash record: {open(CRASH).read().strip()}")
+    return True
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[1] == "install" and len(argv) in (3, 4):
+        action = lambda: install(argv[2], argv[3] if len(argv) == 4 else argv[2] + ".sig")  # noqa: E731
+    elif argv[1:] == ["rollback"]:
+        action = rollback
+    elif argv[1:] == ["status"]:
+        action = status
+    else:
+        print(__doc__, file=sys.stderr)
+        return 2
+    os.makedirs(OPT, exist_ok=True)
+    os.makedirs(os.path.dirname(LOCK), exist_ok=True)
+    with open(LOCK, "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("another mowbite-update runs", file=sys.stderr)
+            return 1
+        try:
+            return 0 if action() else 1
+        except Refused as why:
+            print(f"refused: {why}", file=sys.stderr)
+            return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

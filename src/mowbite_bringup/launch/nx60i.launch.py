@@ -104,7 +104,7 @@ def launch_setup(context):
 
     journal = stack.journal_dir(arg("journal_dir"), data_dir, logger)
     nodes = stack.components(files, arg("geometry"), data_dir, arg("mqtt_host"), arg("mqtt_port"), journal)
-    return [*driver(0), *stack.container_and_planner(nodes, data_dir, files, logger)]
+    return [*driver(0), *stack.container_and_planner(nodes, data_dir, files, logger, arg("oom_score_adj"))]
 
 
 def generate_launch_description():

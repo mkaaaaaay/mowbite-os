@@ -1,0 +1,2 @@
+# Keys whose signature mowbite-update accepts on a bundle (ssh-keygen -Y, namespace mowbite-bundle).
+mowbite namespaces="mowbite-bundle" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ5VWCS3KYxoY42LtO3cAjW91C8j87YSHRLA+wNbL4Dm

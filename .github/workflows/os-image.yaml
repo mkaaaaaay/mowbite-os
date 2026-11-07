@@ -153,6 +153,24 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
+      # The same build as a bundle for mowbite-update on the Tron (no Docker there), signed later by the owner.
+      - name: Bundle for the Tron
+        if: matrix.arch == 'arm64'
+        env:
+          TAG: ${{ env.IMAGE }}:${{ steps.rev.outputs.short }}-${{ matrix.arch }}
+        run: |
+          mkdir bundle
+          platform/tron/bundle/make-bundle.sh "$TAG" bundle | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        if: matrix.arch == 'arm64'
+        with:
+          name: mowbite-os-bundle-${{ steps.rev.outputs.short }}
+          path: bundle/mowbite-os-*.tar.gz
+          retention-days: 5
+          compression-level: 0
+          if-no-files-found: error
+
   manifest:
     if: inputs.push
     needs: build

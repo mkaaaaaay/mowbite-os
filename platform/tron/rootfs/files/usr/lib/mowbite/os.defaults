@@ -1,0 +1,14 @@
+# Environment of mowbite-os.service and of the checks of mowbite-update; /etc/mowbite/os.conf comes after it.
+ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT
+ROS_HOME=/var/lib/mowbite-os
+ROS_LOG_DIR=/var/log/mowbite-ros
+MOWBITE_HALT_FILE=/run/mowbite-os/halt
+MOWBITE_MQTT_HOST=127.0.0.1
+MOWBITE_MQTT_PORT=1883
+MOWBITE_JOURNAL_DIR=/userdata/mowbite-journal
+MOWBITE_OOM_SCORE_ADJ=500
+MOWBITE_HARDWARE=false
+MOWBITE_DATUM_LAT=nan
+MOWBITE_DATUM_LONG=nan
+MOWBITE_DATUM_HEIGHT=0.0
+TZ=Europe/Berlin

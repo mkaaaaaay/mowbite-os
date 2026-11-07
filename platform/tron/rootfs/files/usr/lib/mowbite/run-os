@@ -1,0 +1,6 @@
+#!/bin/bash
+# The installed MowBite OS (/opt/mowbite/current) in the foreground, for mowbite-os.service.
+set -eu
+source /usr/lib/mowbite/os-setup "$(readlink -f /opt/mowbite/current)"
+exec ros2 launch mowbite_bringup tron.launch.py data_dir:=/userdata/mowbite hardware:="$MOWBITE_HARDWARE" \
+    datum_lat:="$MOWBITE_DATUM_LAT" datum_long:="$MOWBITE_DATUM_LONG" datum_height:="$MOWBITE_DATUM_HEIGHT"

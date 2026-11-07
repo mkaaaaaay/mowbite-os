@@ -52,7 +52,12 @@ def launch_setup(context):
         package="tron_imu", plugin="tron_imu::ImuNode", name="tron_imu",
         parameters=[config, extra, {"port": arg("imu_port")}])
     nodes = stack.components([config, extra], geometry, data_dir, arg("mqtt_host"), arg("mqtt_port"), journal)
-    return [mcu, *stack.container_and_planner([gnss, imu, *nodes], data_dir, [config, extra], logger)]
+    oom = arg("oom_score_adj")
+    # Without hardware no process opens the MCU, GNSS or IMU port: the stack runs, the logic finds no driver.
+    if arg("hardware") != "true":
+        logger.warning("hardware:=false: tron_mcu, tron_gnss and tron_imu do not start")
+        return stack.container_and_planner(nodes, data_dir, [config, extra], logger, oom)
+    return [mcu, *stack.container_and_planner([gnss, imu, *nodes], data_dir, [config, extra], logger, oom)]
 
 
 def generate_launch_description():
@@ -65,6 +70,8 @@ def generate_launch_description():
         DeclareLaunchArgument("mcu_port", default_value="/dev/ttyS9"),
         DeclareLaunchArgument("gnss_port", default_value="/dev/ttyS4"),
         DeclareLaunchArgument("imu_port", default_value="/dev/ttyS1"),
+        # false: neither tron_mcu nor the GNSS and IMU nodes, nothing is sent to a port of the mower.
+        DeclareLaunchArgument("hardware", default_value="true", choices=["true", "false"]),
         # The datum of the garden stays out of the repo; without it tron_gnss publishes nothing.
         DeclareLaunchArgument("datum_lat", default_value="nan"),
         DeclareLaunchArgument("datum_long", default_value="nan"),

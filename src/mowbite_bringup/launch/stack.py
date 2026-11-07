@@ -9,7 +9,7 @@ import time
 
 from launch.actions import (DeclareLaunchArgument, OpaqueCoroutine, RegisterEventHandler, SetEnvironmentVariable,
                             TimerAction)
-from launch.event_handlers import OnProcessExit
+from launch.event_handlers import OnProcessExit, OnProcessStart
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
@@ -110,6 +110,10 @@ def arguments():
         # The journal of the cores (mowbite_journal), outside of data_dir; empty: none. Its limits are in the config.
         DeclareLaunchArgument("journal_dir", default_value=EnvironmentVariable("MOWBITE_JOURNAL_DIR",
                                                                                default_value="")),
+        # oom_score_adj of the container and the planner, so that the kernel ends them before the driver when memory
+        # runs out; empty: inherited.
+        DeclareLaunchArgument("oom_score_adj", default_value=EnvironmentVariable("MOWBITE_OOM_SCORE_ADJ",
+                                                                                 default_value="")),
     ]
 
 
@@ -149,8 +153,23 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal):
 
 # The container with these components, started again after a crash, and the planner. The driver of the platform runs
 # beside them in a process of its own and keeps motion and blade blocked until a release; the logic comes back idle.
-def container_and_planner(nodes, data_dir, files, logger):
+def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
     note = os.path.join(data_dir, EXIT_NOTE)
+
+    # On every start of action its oom_score_adj; raising it needs no privilege.
+    def oom_score(action):
+        if not oom_score_adj:
+            return []
+        value = str(int(oom_score_adj))
+
+        def started(event, context):
+            try:
+                with open(f"/proc/{event.pid}/oom_score_adj", "w") as f:
+                    f.write(value)
+            except OSError as error:
+                logger.error(f"Cannot set oom_score_adj of {event.process_name}: {error}")
+        return [RegisterEventHandler(OnProcessStart(target_action=action, on_start=started))]
+
     # A start by hand begins without restarts.
     try:
         os.remove(note)
@@ -167,7 +186,7 @@ def container_and_planner(nodes, data_dir, files, logger):
             executable="component_container", composable_node_descriptions=nodes, output="screen")
         return [RegisterEventHandler(OnProcessExit(target_action=action,
                                                    on_exit=lambda event, context: crashed(restart, event, context))),
-                action]
+                *oom_score(action), action]
 
     def crashed(restart, event, context):
         # At the end of the launch the container is stopped, it did not crash.
@@ -191,4 +210,4 @@ def container_and_planner(nodes, data_dir, files, logger):
     planner = Node(package="mowbite_planner", executable="mowbite_planner_node", name="mowbite_planner", namespace="/",
                    parameters=[*files, {"data_dir": data_dir}], output="screen", respawn=True,
                    respawn_delay=5.0)
-    return [*container(0), planner]
+    return [*container(0), *oom_score(planner), planner]

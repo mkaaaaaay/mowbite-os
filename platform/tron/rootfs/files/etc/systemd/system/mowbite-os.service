@@ -1,0 +1,31 @@
+[Unit]
+Description=MowBite OS
+# After a kernel crash the OS stays off in this boot until mowbite-crash-ok.
+ConditionPathExists=!/run/mowbite/crash
+ConditionPathExists=/opt/mowbite/current
+After=mowbite-crash.service mosquitto.service network.target
+Wants=mosquitto.service
+StartLimitIntervalSec=10min
+StartLimitBurst=3
+
+[Service]
+User=mowbite
+Group=mowbite
+EnvironmentFile=/usr/lib/mowbite/os.defaults
+EnvironmentFile=-/etc/mowbite/os.conf
+ExecStart=/usr/lib/mowbite/run-os
+# ros2 launch stops its nodes on SIGINT (the driver switches the blade off); the rest is killed after the timeout.
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=5
+# The driver is the last the kernel ends when memory runs out; container and planner raise their own value.
+OOMScoreAdjust=-900
+LimitCORE=0
+RuntimeDirectory=mowbite-os
+StateDirectory=mowbite-os
+TemporaryFileSystem=/var/log/mowbite-ros:size=20m,mode=1777
+
+[Install]
+WantedBy=multi-user.target
