@@ -283,7 +283,7 @@ class TestHardwareContract(unittest.TestCase):
         lift = SetEmergency.Request(latch=True, bits=HardwareStatus.REASON_LIFT, reason="hw contract test")
         answer = self.probe.call(self.probe.emergency, lift)
         self.assertFalse(answer.success)
-        self.assertIn("only HIGH_LEVEL, TILT, FENCE and STUCK", answer.message)
+        self.assertIn("only HIGH_LEVEL, TILT, FENCE, STUCK and UNEXPECTED_RESTART", answer.message)
         time.sleep(0.3)
         self.assertFalse(self.probe.status.emergency)
 
