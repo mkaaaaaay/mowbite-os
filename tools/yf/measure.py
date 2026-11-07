@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Safety measurement of a mower with xcore_driver (programme M1-M8 of the NX60i), next to the minimal launch.
+"""Safety measurement of a mower behind hw/*: programme M1-M8 of the NX60i (xcore_driver, next to the minimal launch)
+and T1-T5 of the Tron (--platform tron: this programme starts tron_imu and tron_mcu itself, see TronStart).
 
 Asks before every step and shows what it will send. In the air the wheels get at most 0.1 m/s each, on the ground in
 M8 (only with --ground) 0.3 m/s, in the fast runs of M8 (only with --fast as well, and only up to the limit the driver
@@ -12,21 +13,32 @@ Records hw/status, hw/wheel_odom, imu/data, hw/capabilities and its own commands
 limit. The capture of the inner network (tcpdump on the host) is the second record; the report on both
 comes from xcore_capture.py.
 
-With --fake-flags the actions of the person (press STOP, lift, tilt, turn a wheel) go to fake_xcore's flag file
-instead, for the rehearsal against the simulated board.
+With --fake-flags the actions of the person (press STOP, lift, tilt, turn a wheel) go to fake_xcore's or fake_tron's
+flag file instead, for the rehearsal against the simulated board.
+
+On the Tron the wheels turn at most 0.1 m/s, in the air only; the first turn is at 0.05 m/s (0.1 m/s if no wheel turns
+at 0.05), followed at once by a check of STOP. For the time the MCU holds a setpoint without its host (T2) tron_mcu is
+frozen (SIGSTOP) or killed; only while it is stopped or gone this programme reads the MCU port, read only and without
+touching its settings, into a capture file (at most CAPTURE_MAX_BYTES each), which tron_mcu_capture decodes with the
+codec of tron_mcu. The values for the parameter file of the Tron come out as a proposal only; nothing is written there.
 """
 import argparse
 import collections
+import datetime
 import json
 import math
 import os
+import pwd
 import select
 import signal
+import subprocess
 import sys
 import termios
 import threading
 import time
 import tty
+
+import yaml
 
 import rclpy
 from geometry_msgs.msg import Twist, TwistStamped, Vector3
@@ -59,9 +71,27 @@ EMERGENCY_BITS = {0: "LATCH", 1: "TIMEOUT_INPUTS", 2: "STOP", 3: "LIFT", 4: "LIF
                   6: "TIMEOUT_HIGH_LEVEL", 7: "HIGH_LEVEL", 8: "SERVICE_NOT_READY", 9: "COLLISION_MULTIPLE",
                   10: "MOWER_RPM_TIMEOUT", 11: "MOWER_RPM_LIMIT", 12: "FIRMWARE_INCOMPATIBLE", 13: "TILT",
                   14: "FENCE", 15: "STUCK", 16: "IMU_TIMEOUT", 17: "MOWER_NOT_STOPPED", 18: "WHEEL_RUNAWAY",
-                  19: "FOREIGN_HOST", 20: "DRIVER_STALL"}
+                  19: "FOREIGN_HOST", 20: "DRIVER_STALL", 21: "UNEXPECTED_RESTART"}
 DRIVER = "xcore_driver_node"
 SERVICE_NOT_READY = 256
+
+# The Tron (T1-T5). The firmware this programme was written against, read on the Tron 07.11.; another one ends the run.
+TRON_FIRMWARE = {"cutter": "0.6.36", "chassis": "0.6.34"}
+TRON_FIRST_SPEED = 0.05
+# Runs of heartbeat alone, of each input in T4 and of the driver's watchdog in T5 (host gone: --repeats).
+TRON_SHORT_REPEATS = 3
+# Host gone (T2): the programme reads the port for HOST_GONE_WINDOW_S after the signal. In every run the wheels have to
+# stand within HOST_GONE_LIMIT_S of it, the runs of one way within HOST_GONE_SPREAD_S of each other.
+HOST_GONE_WINDOW_S = 5.0
+HOST_GONE_LIMIT_S = 3.0
+HOST_GONE_SPREAD_S = 0.3
+# Heartbeat alone (T2): tron_mcu of that start stops the wheels only after this long without hw/cmd_vel.
+HEARTBEAT_ONLY_TIMEOUT_S = 10.0
+# The wheels stand this soon after an emergency (T2, T4), after the driver's watchdog plus its cmd_vel_timeout (T5).
+EMERGENCY_STAND_S = 1.0
+WATCHDOG_MARGIN_S = 0.5
+CAPTURE_MAX_BYTES = 1024 * 1024
+NODE_LOG_BYTES = 5 * 1024 * 1024
 
 
 class Abort(Exception):
@@ -119,6 +149,70 @@ def spread_problem(metres):
 def top_speed_allowed(first_steady, top):
     """The top speed runs only if the speed at FAST_FIRST_SPEED, scaled like the command, stays within the abort."""
     return first_steady is not None and first_steady * top / FAST_FIRST_SPEED <= FAST_ABORT_SPEED + 1e-9
+
+
+def host_gone_result(packets, since, wheel_distance):
+    """What the MCU reported after its host went at `since`, from the decoded capture: when the wheels stood for good
+    (None while a wheel still turned at the end), whether they turned at the first sample, when lift and stop came up,
+    the last report of a drive motor turning, and the number of speed samples."""
+    speeds = [(p["t"], fastest_wheel(*p["speed"], wheel_distance)) for p in packets if "speed" in p and p["t"] >= since]
+    stood = None
+    for t, speed in speeds:
+        if speed > STILL_SPEED:
+            stood = None
+        elif stood is None:
+            stood = t
+
+    def first(flag):
+        return next((p["t"] - since for p in packets if p.get("sensor", {}).get(flag) and p["t"] >= since), None)
+    turning = [p["t"] for p in packets
+               if "motors" in p and p["t"] >= since and (p["motors"]["left"] or p["motors"]["right"])]
+    return {"stand_s": None if stood is None else stood - since,
+            "turning_at_start": bool(speeds) and speeds[0][1] > STILL_SPEED, "lift_s": first("lift"),
+            "stop_s": first("stop"), "rpm_last_s": turning[-1] - since if turning else None, "samples": len(speeds)}
+
+
+def holding_problems(stands):
+    """The host-gone runs of one way (stand times in s, None: did not stand) beyond the limits, as texts."""
+    problems = []
+    if any(s is None for s in stands):
+        problems.append(f"in {sum(s is None for s in stands)} of {len(stands)} runs the wheels did not stand within "
+                        f"{HOST_GONE_WINDOW_S:.0f} s")
+    known = [s for s in stands if s is not None]
+    if known and max(known) > HOST_GONE_LIMIT_S:
+        problems.append(f"the wheels stood after up to {max(known):.2f} s, limit {HOST_GONE_LIMIT_S:.1f} s")
+    if len(known) >= 2 and max(known) - min(known) > HOST_GONE_SPREAD_S + 1e-9:
+        problems.append(f"stand times {min(known):.2f}-{max(known):.2f} s, spread above {HOST_GONE_SPREAD_S:.1f} s")
+    return problems
+
+
+def failsafe_proposal(stands):
+    """failsafe_without_host from the stand times of all host-gone runs: the longest, rounded up to 0.1 s."""
+    known = [s for s in stands if s is not None]
+    return math.ceil(max(known) * 10 - 1e-6) / 10 if known else None
+
+
+def tron_values_text(failsafe, firmware, date):
+    """The proposal for the measured values of the Tron, in the form of its parameter file."""
+    return "\n".join(["tron_mcu:", "  ros__parameters:", f"    failsafe_without_host: {failsafe:.1f}",
+                      f'    safety_measurement_date: "{date}"',
+                      f'    expected_cutter_version: "{firmware.get("cutter", "")}"',
+                      f'    expected_chassis_version: "{firmware.get("chassis", "")}"'])
+
+
+def termios_problem(attrs):
+    """Why a port with these settings must not be read without changing them; None if it may. Echo and canonical mode
+    would answer the MCU, software flow control would send it XON and XOFF."""
+    iflag, _, cflag, lflag, ispeed, ospeed, _ = attrs
+    if lflag & (termios.ECHO | termios.ECHONL | termios.ICANON):
+        return "echo or canonical mode is on"
+    if iflag & (termios.IXON | termios.IXOFF):
+        return "software flow control is on"
+    if not cflag & termios.CREAD:
+        return "the receiver is off"
+    if ispeed != termios.B115200 or ospeed != termios.B115200:
+        return "the speed is not 115200 baud"
+    return None
 
 
 class SpeedGuard:
@@ -250,6 +344,12 @@ class Mower:
         self.emergency_since = None
         self.last_cmd_at = None
         self.guard = None
+        self.firmware = {}
+        self.capability_wheel_distance = None
+        # Messages per topic, the inputs hw/status showed since reset_seen, a_z of imu/data.
+        self.counts = collections.Counter()
+        self.seen = set()
+        self.acc_z = collections.deque(maxlen=3000)
         # (t, v, w) of hw/wheel_odom.
         self.odom_log = collections.deque(maxlen=3000)
         self.node = rclpy.create_node("yf_measure")
@@ -274,6 +374,8 @@ class Mower:
             if msg.emergency and not (self.status is not None and self.status.emergency):
                 self.emergency_since = time.monotonic()
             self.status, self.status_at = msg, time.monotonic()
+            self.counts["status"] += 1
+            self.seen.update(name for name in ("stop", "lift", "bumper_left", "bumper_right") if getattr(msg, name))
         self.rec.write("status", emergency=msg.emergency, latched=msg.emergency_latched,
                        reason=msg.emergency_reason, telemetry_ok=msg.telemetry_ok, stop=msg.stop, lift=msg.lift,
                        bumper=msg.bumper, moving=msg.moving, blade_on=msg.blade_on, blade_rpm=msg.blade_motor.rpm,
@@ -283,6 +385,7 @@ class Mower:
         with self.lock:
             self.odom, self.odom_at = (msg.twist.linear.x, msg.twist.angular.z), time.monotonic()
             self.odom_log.append((self.odom_at, msg.twist.linear.x, msg.twist.angular.z))
+            self.counts["odom"] += 1
             if self.guard is not None:
                 self.guard.update(self.odom_at, fastest_wheel(*self.odom, self.wheel_distance))
         self.rec.write("odom", v=msg.twist.linear.x, w=msg.twist.angular.z)
@@ -293,11 +396,15 @@ class Mower:
         tilt = math.degrees(math.atan2(math.hypot(acc[0], acc[1]), acc[2]))
         with self.lock:
             self.max_tilt = max(self.max_tilt, tilt)
+            self.counts["imu"] += 1
+            self.acc_z.append(acc[2])
         self.rec.imu(a=list(acc), g=list(rate))
 
     def _capabilities(self, msg):
         with self.lock:
             self.max_linear_speed = msg.max_linear_speed
+            self.firmware = {kv.key: kv.value for kv in msg.firmware}
+            self.capability_wheel_distance = msg.wheel_distance
         self.rec.write("capabilities", firmware={kv.key: kv.value for kv in msg.firmware},
                        max_linear_speed=msg.max_linear_speed, max_angular_speed=msg.max_angular_speed)
 
@@ -310,6 +417,14 @@ class Mower:
     def odometry(self):
         with self.lock:
             return list(self.odom_log)
+
+    def reset_seen(self):
+        """Starts a new count of the messages, inputs and a_z; returns the status before it."""
+        with self.lock:
+            self.counts.clear()
+            self.seen.clear()
+            self.acc_z.clear()
+            return self.status
 
     def set_guard(self, guard):
         with self.lock:
@@ -388,7 +503,11 @@ class Person:
         self.keys = keys
         self.flags_path = flags_path
         self.assume_yes = assume_yes or bool(flags_path)
+        # The flags of the rehearsal that are not the person's (e.g. host_timeout of fake_tron) stay as they are.
         self.flags = {}
+        if flags_path and os.path.exists(flags_path):
+            with open(flags_path) as f:
+                self.flags = json.load(f)
         self.timers = []
 
     @property
@@ -1065,33 +1184,701 @@ class Measurement:
         return True
 
 
+# The Tron ----------------------------------------------------------------------------------------------------------
+
+
+class PortRefused(Exception):
+    pass
+
+
+def port_holders(path):
+    """Pids other than this one that have the device behind `path` open (all of them when run as root)."""
+    device = os.path.realpath(path)
+    pids = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        try:
+            fds = os.listdir(f"/proc/{pid}/fd")
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                if os.readlink(f"/proc/{pid}/fd/{fd}") == device:
+                    pids.append(int(pid))
+                    break
+            except OSError:
+                continue
+    return sorted(pids)
+
+
+def process_state(pid):
+    """The state letter of a process (R, S, T, ...); None once it is gone."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return None
+
+
+class PortReader:
+    """Reads a serial port without writing to it or changing its settings: one line "<monotonic s> <hex>" per chunk
+    into a capture file of at most max_bytes. Refuses a port whose settings could answer the other side."""
+
+    def __init__(self, path, capture, max_bytes=CAPTURE_MAX_BYTES):
+        self.fd = os.open(path, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            problem = termios_problem(termios.tcgetattr(self.fd))
+            if problem:
+                raise PortRefused(f"{path}: {problem}; not read")
+            self.file = open(capture, "x")
+        except BaseException:
+            os.close(self.fd)
+            raise
+        self.left = max_bytes
+        self.running = True
+        self.thread = threading.Thread(target=self._read, daemon=True)
+        self.thread.start()
+
+    def _read(self):
+        while self.running:
+            if not select.select([self.fd], [], [], 0.02)[0]:
+                continue
+            try:
+                data = os.read(self.fd, 4096)
+            except BlockingIOError:
+                continue
+            except OSError:
+                return
+            line = f"{time.monotonic():.6f} {data.hex()}\n"
+            if len(line) > self.left:
+                return
+            self.left -= len(line)
+            self.file.write(line)
+
+    def close(self):
+        self.running = False
+        self.thread.join(1.0)
+        os.close(self.fd)
+        self.file.close()
+
+
+def capped_copy(stream, path, max_bytes):
+    """Copies a process's output into path until max_bytes, then drops the rest."""
+    with open(path, "ab") as f:
+        for line in stream:
+            if len(line) <= max_bytes:
+                max_bytes -= len(line)
+                f.write(line)
+                f.flush()
+
+
+class TronStart:
+    """The minimal start of the Tron: tron_imu and tron_mcu as processes of this programme, nothing else (no GNSS,
+    logic, bridge or MQTT). Parameters: tron.yaml of mowbite_bringup, then the measured values of this Tron in data_dir,
+    then the overrides of this start (only here, e.g. the long cmd_vel_timeout of heartbeat alone). The output of each
+    process goes to a file next to the recording, at most NODE_LOG_BYTES."""
+
+    def __init__(self, args, rec):
+        from ament_index_python.packages import get_package_prefix, get_package_share_directory
+        share = get_package_share_directory("mowbite_bringup")
+        sys.path.insert(0, os.path.join(share, "launch"))
+        import data_store
+        self.files = [os.path.join(share, "config", "tron.yaml")]
+        mower = os.path.join(args.data_dir, data_store.TRON_PARAMS_FILE)
+        if os.path.isfile(mower):
+            self.files.append(mower)
+        self.common = {"hold_file": os.path.join(args.data_dir, data_store.HOLD_FILE), "allow_blade": False}
+        if args.journal_dir:
+            self.common["journal_dir"] = args.journal_dir
+        self.ports = {"tron_mcu": args.mcu_port or self.param("tron_mcu", "port"),
+                      "tron_imu": args.imu_port or self.param("tron_imu", "port")}
+        self.executables = {node: os.path.join(get_package_prefix(node), "lib", node, f"{node}_node")
+                            for node in self.ports}
+        self.capture_tool = os.path.join(get_package_prefix("tron_mcu"), "lib", "tron_mcu", "tron_mcu_capture")
+        self.user = pwd.getpwnam(args.node_user) if args.node_user else None
+        self.rec = rec
+        self.log_stem = rec.path[:-len(".jsonl")]
+        self.processes = {}
+        self.overrides = {}
+        self.started = collections.Counter()
+
+    @property
+    def mcu_port(self):
+        return self.ports["tron_mcu"]
+
+    def param(self, node, name):
+        """A parameter of a node as the files give it (the last file wins, its own section over /**)."""
+        value = None
+        for path in self.files:
+            with open(path) as f:
+                content = yaml.safe_load(f) or {}
+            for section in ("/**", node):
+                value = content.get(section, {}).get("ros__parameters", {}).get(name, value)
+        return value
+
+    def start(self, node, **overrides):
+        params = {**self.common, "port": self.ports[node], **overrides}
+        # In a file of its own: a section of the node in a file wins over -p.
+        self.started[node] += 1
+        override = f"{self.log_stem}-{node}-{self.started[node]}.yaml"
+        with open(override, "w") as f:
+            yaml.safe_dump({node: {"ros__parameters": params}}, f)
+        argv = [self.executables[node], "--ros-args"]
+        for path in self.files + [override]:
+            argv += ["--params-file", path]
+        user = {}
+        if self.user is not None:
+            user = {"user": self.user.pw_uid, "group": self.user.pw_gid,
+                    "extra_groups": os.getgrouplist(self.user.pw_name, self.user.pw_gid)}
+        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   start_new_session=True, **user)
+        threading.Thread(target=capped_copy, args=(process.stdout, f"{self.log_stem}-{node}.log", NODE_LOG_BYTES),
+                         daemon=True).start()
+        self.processes[node] = process
+        self.rec.write("process", node=node, pid=process.pid, params=params)
+        print(f"     started {node} (pid {process.pid})" + (f" with {overrides}" if overrides else ""))
+        return process
+
+    def start_driver(self, **overrides):
+        """tron_mcu with the overrides of this start; a start after a kill keeps those of the last one."""
+        self.overrides = overrides
+        return self.start("tron_mcu", **overrides)
+
+    @property
+    def driver_pid(self):
+        process = self.processes.get("tron_mcu")
+        return process.pid if process is not None and process.poll() is None else None
+
+    def signal_driver(self, sig):
+        pid = self.driver_pid
+        os.kill(pid, sig)
+        self.rec.write("signal", signal=signal.Signals(sig).name, pid=pid)
+        return pid
+
+    def stop(self, node, timeout=5.0):
+        """SIGINT (tron_mcu stops moving wheels and the blade on the way out), SIGKILL after the timeout."""
+        process = self.processes.pop(node, None)
+        if process is None or process.poll() is not None:
+            return
+        os.kill(process.pid, signal.SIGCONT)
+        os.kill(process.pid, signal.SIGINT)
+        try:
+            process.wait(timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        self.rec.write("process_end", node=node, pid=process.pid, code=process.returncode)
+
+    def restart_driver(self, **overrides):
+        self.stop("tron_mcu")
+        return self.start_driver(**overrides)
+
+    def decode(self, capture):
+        """The decoded capture (tron_mcu_capture) next to it; its lines and the summary."""
+        with open(capture + ".jsonl", "w") as out:
+            done = subprocess.run([self.capture_tool, capture], stdout=out, stderr=subprocess.PIPE, text=True)
+        with open(capture + ".jsonl") as f:
+            lines = [json.loads(line) for line in f if line.strip()]
+        summary = lines.pop()["summary"] if lines and "summary" in lines[-1] else {}
+        return lines, summary, done.returncode
+
+    def close(self):
+        self.stop("tron_mcu")
+        self.stop("tron_imu")
+
+
+class TronMeasurement(Measurement):
+    """T1-T5 of phase 6 on the Tron, in the air: the driver is this programme's process (TronStart)."""
+
+    def __init__(self, args, rec, mower, person, keys, start):
+        super().__init__(args, rec, mower, person, keys)
+        self.start = start
+        self.turn_speed = None
+        # Stand times of the host-gone runs by way (freeze, kill), the firmware the driver reported.
+        self.host_gone = {}
+        self.firmware = {}
+
+    @property
+    def speed(self):
+        return self.turn_speed or TRON_FIRST_SPEED
+
+    def safe_stop(self, why):
+        super().safe_stop(why)
+        print("  If a wheel still turns: press STOP, or take the battery out.")
+
+    def capture_path(self, label):
+        return f"{self.start.log_stem}-{label}.capture"
+
+    def stand_after(self, since, seconds=EMERGENCY_STAND_S):
+        """s from `since` (monotonic) until the wheels stood, waiting up to `seconds` for it; None if they did not."""
+        self.wait(seconds, until=lambda: not self.wheels_turn(STILL_SPEED))
+        self.wait(0.2)
+        still = still_after(self.mower.odometry(), since, self.mower.wheel_distance)
+        return None if still is None else still - since
+
+    def wait_driver_back(self, step, old_pid):
+        end = time.monotonic() + self.args.restart_wait
+        while time.monotonic() < end:
+            self.check_keys()
+            status, age, _, _ = self.mower.snapshot()
+            pid = self.start.driver_pid
+            if pid is not None and pid != old_pid and status is not None and age < 0.3 and status.telemetry_ok:
+                return
+            time.sleep(0.1)
+        self.finding(step, "tron_mcu did not come back")
+        raise Quit()
+
+    def emergency_run(self, step, text, fake, hold):
+        """Wheels at the turning speed until the person's input brings the emergency; the wheels have to stand within
+        EMERGENCY_STAND_S of it. Returns that time."""
+        self.person.act_later(text, fake, after=1.0, hold=hold)
+        started = time.monotonic()
+        if not self.drive(self.speed, 0.0, 10.0, until=self.in_emergency):
+            self.mower.stop_wheels()
+            self.finding(step, f"no emergency within 10 s: {text}")
+            raise Abort()
+        since = self.mower.emergency_since
+        since = since if since is not None and since >= started else time.monotonic()
+        stand = self.stand_after(since)
+        self.rec.write("emergency_stop", step=step, text=text, stand_s=stand)
+        if stand is None:
+            self.finding(step, f"the wheels did not stand within {EMERGENCY_STAND_S:.1f} s of the emergency: {text}")
+            raise Abort()
+        print(f"     the wheels stood {stand:.2f} s after the emergency")
+        self.show("emergency")
+        return stand
+
+    def let_go(self, text):
+        if not self.person.fake:
+            self.person.act(f"let go ({text}); unlock STOP if it stays down")
+
+    # Steps ------------------------------------------------------------------------------------------------------------
+
+    def t1(self):
+        step = "T1"
+        if self.ask(f"{step} the driver at standstill, no wheel command: 10 s of telemetry (rates, checksum errors, "
+                    "flags, IMU)"):
+            self.ready(step)
+            self.mark(step, "telemetry at standstill")
+            before = self.mower.reset_seen()
+            self.wait(10.0)
+            after = self.status()
+            with self.mower.lock:
+                counts = dict(self.mower.counts)
+                seen = set(self.mower.seen)
+                acc_z = list(self.mower.acc_z)
+            frames = (after.link_messages_ok - before.link_messages_ok) / 10.0
+            errors = after.link_errors - before.link_errors
+            a_z = sum(acc_z) / len(acc_z) if acc_z else None
+            rates = {topic: counts.get(topic, 0) / 10.0 for topic in ("status", "odom", "imu")}
+            self.rec.write("telemetry", frames_per_s=frames, link_errors=errors, rates=rates, a_z=a_z,
+                           seen=sorted(seen), link_total=after.link_messages_ok, errors_total=after.link_errors)
+            shown = "-" if a_z is None else f"{a_z:.2f}"
+            print(f"     MCU frames {frames:.0f}/s, checksum and length errors {errors}; hw/wheel_odom "
+                  f"{rates['odom']:.0f}/s, imu/data {rates['imu']:.0f}/s, a_z {shown} m/s2")
+            if errors:
+                self.finding(step, f"{errors} link errors in 10 s at standstill")
+            if a_z is None or not 8.8 <= a_z <= 10.8:
+                self.finding(step, f"a_z at standstill {shown} m/s2, expected about +9.81 (mount of the IMU)")
+            if rates["imu"] < 20 or rates["odom"] < 20:
+                self.finding(step, "imu/data or hw/wheel_odom below 20/s")
+            if seen:
+                self.finding(step, f"inputs at standstill without a hand on them: {', '.join(sorted(seen))}")
+        items = [("STOP: press, hold 2 s, let go", {"stop": True}, 2.0, "stop"),
+                 ("lift: lift the front 4 s, set it down", {"lift": True}, 4.0, "lift"),
+                 ("bumper left: push 2 s, let go", {"bumper_left": True}, 2.0, "bumper_left"),
+                 ("bumper right: push 2 s, let go", {"bumper_right": True}, 2.0, "bumper_right")]
+        for text, fake, hold, flag in items:
+            if not self.ask(f"{step} input at standstill, sends nothing but the release (clear frame) afterwards: "
+                            f"{text}"):
+                continue
+            self.ready(step)
+            self.mark(step, text)
+            self.mower.reset_seen()
+            self.person.act(f"{text}; unlock STOP if it stays down", fake, hold)
+            self.wait(1.0)
+            self.show("after")
+            if flag not in self.mower.seen:
+                self.finding(step, f"hw/status never showed {flag}: {text}")
+            self.release(step)
+        text = "STOP held while the release is sent: the emergency must stay"
+        if self.ask(f"{step} release with a pressed input: {text}"):
+            self.ready(step)
+            self.mark(step, text)
+            if self.person.fake:
+                self.person.set({"stop": True})
+                self.wait(0.5)
+            else:
+                self.person.act("press and keep holding STOP, then Enter")
+            self.mower.release()
+            self.wait(1.5)
+            if not self.in_emergency():
+                self.finding(step, "released while STOP was pressed")
+            self.show("after the release while held")
+            if self.person.fake:
+                self.person.clear({"stop": True})
+            else:
+                self.person.act("let go of STOP, unlock it if it stays down")
+            self.wait(0.5)
+            self.release(step)
+
+    def t2(self):
+        step = "T2"
+        if not self.ask(f"{step} wheels in the air (jacked up, wheels free, blade disc off, you at STOP and battery): "
+                        f"first turn at {TRON_FIRST_SPEED} m/s ({AIR_WHEEL_SPEED} m/s if no wheel turns), then press "
+                        "STOP once while they turn"):
+            return
+        self.ready(step)
+        self.first_turn(step)
+        self.ready(step)
+        self.mark(step, "STOP while turning")
+        self.emergency_run(step, "press STOP while the wheels turn", {"stop": True}, 1.0)
+        self.let_go("STOP")
+        self.release(step)
+        self.no_motion(step, 2.0, "after the release without a new command")
+        ways = [("freeze", signal.SIGSTOP, "frozen (SIGSTOP), continued after the window"),
+                ("kill", signal.SIGKILL, "killed (SIGKILL), started again after the window: blade off, the height "
+                                         "motor may move")]
+        for way, sig, text in ways:
+            stands = []
+            for n in range(self.args.repeats):
+                if not self.ask(f"{step} host gone, run {n + 1}/{self.args.repeats}: wheels at {self.speed} m/s "
+                                f"for 2 s, then tron_mcu {text}; meanwhile this programme only reads the port, "
+                                f"{HOST_GONE_WINDOW_S:.0f} s"):
+                    break
+                stands.append(self.host_gone_run(step, way, sig, n + 1))
+            self.host_gone[way] = stands
+            problems = holding_problems(stands)
+            for problem in problems:
+                self.finding(step, f"host gone ({way}): {problem}")
+            if problems:
+                raise Abort()
+        self.heartbeat_only(step)
+
+    def first_turn(self, step):
+        for v in (TRON_FIRST_SPEED, AIR_WHEEL_SPEED):
+            self.mark(step, f"first turn at {v} m/s")
+            if self.drive(v, 0.0, 3.0, until=self.in_emergency):
+                self.mower.stop_wheels()
+                self.finding(step, f"emergency during the first turn at {v} m/s")
+                raise Abort()
+            turned = self.wheels_turn()
+            self.mower.stop_wheels()
+            self.wait(1.0)
+            if turned:
+                self.turn_speed = v
+                print(f"     the wheels turn at {v} m/s")
+                self.rec.write("turn_speed", speed=v)
+                return
+            print(f"     no wheel turned at {v} m/s")
+        self.finding(step, f"no wheel turned at {AIR_WHEEL_SPEED} m/s")
+        raise Abort()
+
+    def host_gone_run(self, step, way, sig, n):
+        """One run without host: the stand time from the signal, from the MCU's own reports on the port."""
+        self.ready(step)
+        self.mark(step, f"host gone ({way}), run {n}")
+        if self.drive(self.speed, 0.0, 2.0, until=self.in_emergency) or not self.wheels_turn():
+            self.mower.stop_wheels()
+            self.finding(step, f"host gone ({way}) run {n}: the wheels did not turn, or an emergency came first")
+            raise Abort()
+        capture = self.capture_path(f"{step}-{way}-{n}")
+        since = time.monotonic()
+        pid = self.start.signal_driver(sig)
+        print(f"     sent {signal.Signals(sig).name} to tron_mcu (pid {pid}), reading {self.start.mcu_port}")
+        reader = None
+        try:
+            self.driver_off(step, way, pid)
+            reader = PortReader(self.start.mcu_port, capture)
+            self.wait(HOST_GONE_WINDOW_S)
+        except PortRefused as error:
+            self.finding(step, str(error))
+            raise Abort()
+        finally:
+            if reader is not None:
+                reader.close()
+            if way == "freeze":
+                os.kill(pid, signal.SIGCONT)
+                self.rec.write("signal", signal="SIGCONT", pid=pid)
+            elif self.start.driver_pid is None:
+                self.start.start_driver(**self.start.overrides)
+        if way == "kill":
+            self.wait_driver_back(step, pid)
+        packets, summary, code = self.start.decode(capture)
+        result = host_gone_result(packets, since, self.mower.wheel_distance)
+        self.rec.write("host_gone", step=step, way=way, run=n, capture=capture, summary=summary, **result)
+        if code != 0 or not result["samples"]:
+            self.finding(step, f"the capture {capture} has no speed reports (tron_mcu_capture exit {code})")
+            raise Abort()
+        stand = result["stand_s"]
+        flags = ", ".join(f"{name} up after {result[name + '_s']:.2f} s" for name in ("lift", "stop")
+                          if result[name + "_s"] is not None)
+        print(f"     the wheels stood {'never' if stand is None else f'{stand:.2f} s'} after the signal"
+              + (f"; {flags}" if flags else "") + f" ({summary.get('frames', 0)} frames, "
+              f"{summary.get('checksum_errors', 0)} checksum errors)")
+        if not result["turning_at_start"]:
+            print("     (the first report after the signal already stood)")
+        if stand is None:
+            self.finding(step, f"host gone ({way}) run {n}: the wheels still turned {HOST_GONE_WINDOW_S:.0f} s after "
+                               "the signal")
+            if way == "kill" and not self.person.fake:
+                self.person.act("the wheels may still turn without a stop from the host: press STOP now")
+            raise Abort()
+        self.no_motion(step, 3.0, "after tron_mcu came back without a new command")
+        self.show("after")
+        self.release(step)
+        self.no_motion(step, 2.0, "after the release without a new command")
+        return stand
+
+    def driver_off(self, step, way, pid):
+        """Waits until tron_mcu reads no more (stopped, or ended and reaped) and nobody else holds the port."""
+        end = time.monotonic() + 2.0
+        while time.monotonic() < end:
+            state = process_state(pid)
+            if way == "freeze" and state in ("T", "t"):
+                break
+            if way == "kill" and self.start.processes["tron_mcu"].poll() is not None:
+                break
+            time.sleep(0.01)
+        else:
+            self.finding(step, f"tron_mcu (pid {pid}) is still running after the signal")
+            raise Abort()
+        holders = port_holders(self.start.mcu_port)
+        if holders != ([pid] if way == "freeze" else []):
+            self.finding(step, f"{self.start.mcu_port} is open in {holders}, expected only the stopped tron_mcu")
+            raise Abort()
+
+    def heartbeat_only(self, step):
+        n = min(self.args.repeats, TRON_SHORT_REPEATS)
+        if not self.ask(f"{step} heartbeat alone, {n} runs: tron_mcu starts again with a watchdog of "
+                        f"{HEARTBEAT_ONLY_TIMEOUT_S:.0f} s (this start only); wheels at {self.speed} m/s for 2 s, then "
+                        f"no command: they may turn {HEARTBEAT_ONLY_TIMEOUT_S:.0f} s more"):
+            return
+        old = self.start.driver_pid
+        self.start.restart_driver(cmd_vel_timeout=HEARTBEAT_ONLY_TIMEOUT_S)
+        try:
+            self.wait_driver_back(step, old)
+            for i in range(n):
+                if i and not self.ask(f"{step} heartbeat alone, run {i + 1}/{n}"):
+                    break
+                self.ready(step)
+                self.mark(step, f"heartbeat alone, run {i + 1}")
+                if self.drive(self.speed, 0.0, 2.0, until=self.in_emergency):
+                    self.finding(step, "emergency while driving (heartbeat alone)")
+                    raise Abort()
+                last = self.mower.last_cmd_at
+                stand = self.stand_after(last, HEARTBEAT_ONLY_TIMEOUT_S + 2.0)
+                self.rec.write("heartbeat_only", step=step, run=i + 1, stand_s=stand)
+                if stand is None:
+                    self.finding(step, "the wheels did not stand after the driver's watchdog (heartbeat alone)")
+                    raise Abort()
+                held = stand >= HEARTBEAT_ONLY_TIMEOUT_S - WATCHDOG_MARGIN_S
+                print(f"     the wheels stood {stand:.2f} s after the last command: "
+                      + ("the MCU held the setpoint with the heartbeat alone" if held else
+                         "the MCU stopped with the heartbeat alone"))
+                self.no_motion(step, 2.0, "after the driver's stop")
+        finally:
+            old = self.start.driver_pid
+            self.start.restart_driver()
+        self.wait_driver_back(step, old)
+
+    def t3(self):
+        step = "T3"
+        if not self.ask(f"{step} driving in the air, at most {AIR_WHEEL_SPEED} m/s a wheel (jacked up, wheels free, "
+                        "blade disc off): start?"):
+            return
+        d = self.mower.wheel_distance
+        items = [("forward 0.05 m/s for 8 s: do both wheels turn forward?", 0.05, 0.0),
+                 ("backward 0.05 m/s for 8 s: do both wheels turn backward?", -0.05, 0.0),
+                 ("turn left, 8 s: left wheel back, right wheel forward, 0.05 m/s each", 0.0, 0.1 / d),
+                 ("turn right, 8 s: left wheel forward, right wheel back, 0.05 m/s each", 0.0, -0.1 / d)]
+        for text, v, w in items:
+            if not self.ask(f"{step} {text}"):
+                continue
+            self.ready(step)
+            self.mark(step, text)
+            started = time.monotonic()
+            self.drive(v, w, 8.0, until=self.in_emergency)
+            status = self.status()
+            ended = time.monotonic()
+            self.mower.stop_wheels()
+            self.direction(step, text, v, w, started + 2.0, ended, status)
+            self.wait(1.0)
+            if not self.person.fake and not self.ask(f"{step} did the wheels turn as said?"):
+                self.finding(step, f"wheels not as commanded: {text}")
+        points = []
+        for v in (0.02, 0.03, 0.05, 0.07, 0.1):
+            text = f"straight at {v:.2f} m/s for 3 s (reported speed per command)"
+            if not self.ask(f"{step} {text}"):
+                continue
+            self.ready(step)
+            self.mark(step, text)
+            self.drive(v, 0.0, 3.0, until=self.in_emergency)
+            ended = time.monotonic()
+            self.mower.stop_wheels()
+            reported = self.mean_odometry(ended - 1.5, ended)[0]
+            points.append((v, reported))
+            self.rec.write("speed_point", step=step, command=v, reported=reported)
+            print(f"     command {v:.2f} m/s, reported {reported:.3f} m/s")
+            self.wait(1.0)
+        moving = [(v, r) for v, r in points if abs(r) > STILL_SPEED]
+        if moving:
+            factor = sum(r / v for v, r in moving) / len(moving)
+            standing = [v for v, r in points if abs(r) <= STILL_SPEED]
+            print(f"     reported/command {factor:.3f} on average; no motion at {standing or 'none'}")
+            self.rec.write("speed_factor", step=step, factor=factor, standing=standing)
+        text = "0.05 m/s for 20 s: count the turns of the left wheel"
+        if self.ask(f"{step} {text}"):
+            self.ready(step)
+            self.mark(step, text)
+            self.drive(0.05, 0.0, 20.0, until=self.in_emergency)
+            self.mower.stop_wheels()
+            turns = self.person.number("turns of the left wheel")
+            circumference = self.person.number("circumference of the wheel in m")
+            self.rec.write("wheel_turns", turns=turns, circumference=circumference)
+
+    def mean_odometry(self, start, end):
+        samples = [(v, w) for t, v, w in self.mower.odometry() if start <= t <= end]
+        if not samples:
+            return 0.0, 0.0
+        return sum(v for v, _ in samples) / len(samples), sum(w for _, w in samples) / len(samples)
+
+    def direction(self, step, text, v, w, start, end, status):
+        """Signs of the reported motion against the command, and the labels of the drive motors on a turn."""
+        rv, rw = self.mean_odometry(start, end)
+        left = right = None
+        if status is not None and status.left_motor.ok and status.right_motor.ok:
+            left, right = status.left_motor.rpm, status.right_motor.rpm
+        self.rec.write("direction", step=step, text=text, v=v, w=w, reported_v=rv, reported_w=rw, left_rpm=left,
+                       right_rpm=right)
+        print(f"     reported v {rv:.3f} m/s, w {rw:.3f} rad/s; motors left {left}, right {right} rpm")
+        command, reported = (v, rv) if w == 0 else (w, rw)
+        if command * reported <= 0:
+            self.finding(step, f"reported motion not in the commanded direction: {text}")
+        if w != 0 and left and right:
+            if (left > 0) == (w > 0) and (right < 0) == (w > 0):
+                self.finding(step, f"labels left/right swapped (left motor {left}, right motor {right} rpm): {text}")
+
+    def t4(self):
+        step = "T4"
+        items = [("press STOP while the wheels turn", {"stop": True}, 1.0),
+                 ("lift the front while the wheels turn", {"lift": True}, 1.0),
+                 ("push the bumper left while the wheels turn", {"bumper_left": True}, 1.0),
+                 ("push the bumper right while the wheels turn", {"bumper_right": True}, 1.0)]
+        n = min(self.args.repeats, TRON_SHORT_REPEATS)
+        for text, fake, hold in items:
+            for i in range(n):
+                if not self.ask(f"{step} {text}, run {i + 1}/{n}: wheels at {self.speed} m/s for up to 10 s, stop on "
+                                "the emergency, then the release and a new command"):
+                    break
+                self.ready(step)
+                self.mark(step, f"{text}, run {i + 1}")
+                self.emergency_run(step, text, fake, hold)
+                self.wait(hold + 0.5)
+                self.let_go(text)
+                self.no_motion(step, 2.0, "with the input free and no new command")
+                self.release(step)
+                self.no_motion(step, 2.0, "after the release without a new command")
+                self.drive(self.speed, 0.0, 1.0, until=self.in_emergency)
+                if not self.wheels_turn():
+                    self.finding(step, f"no turn on a new command after the release: {text}")
+                self.mower.stop_wheels()
+
+    def t5(self):
+        step = "T5"
+        timeout = float(self.start.param("tron_mcu", "cmd_vel_timeout"))
+        n = min(self.args.repeats, TRON_SHORT_REPEATS)
+        for i in range(n):
+            if not self.ask(f"{step} the driver's watchdog, run {i + 1}/{n}: wheels at {self.speed} m/s for 2 s, then "
+                            f"no command; tron_mcu has to stop them after {timeout:.1f} s with three stops, then stay "
+                            "silent"):
+                break
+            self.ready(step)
+            self.mark(step, f"watchdog, run {i + 1}")
+            if self.drive(self.speed, 0.0, 2.0, until=self.in_emergency):
+                self.finding(step, "emergency while driving")
+                raise Abort()
+            last = self.mower.last_cmd_at
+            stand = self.stand_after(last, timeout + EMERGENCY_STAND_S + WATCHDOG_MARGIN_S)
+            moving = self.status().moving
+            self.rec.write("watchdog", step=step, run=i + 1, stand_s=stand, moving=moving)
+            if stand is None or stand > timeout + EMERGENCY_STAND_S or moving:
+                shown = "never" if stand is None else f"after {stand:.2f} s"
+                self.finding(step, f"the wheels stood {shown} without a command (cmd_vel_timeout {timeout:.1f} s), "
+                                   f"driver moving {moving}")
+                raise Abort()
+            print(f"     the wheels stood {stand:.2f} s after the last command")
+            self.no_motion(step, 2.0, "after the driver's stop")
+
+    STEPS = {"T1": t1, "T2": t2, "T3": t3, "T4": t4, "T5": t5}
+
+    def run(self, steps):
+        """The firmware first: another one than TRON_FIRMWARE ends the run before any step."""
+        end = time.monotonic() + 20.0
+        while time.monotonic() < end and not all(self.mower.firmware.get(b) for b in TRON_FIRMWARE):
+            time.sleep(0.1)
+        self.firmware = dict(self.mower.firmware)
+        print(f"Firmware: {self.firmware}")
+        self.rec.write("firmware", **self.firmware)
+        wrong = {b: self.firmware.get(b, "") for b, v in TRON_FIRMWARE.items() if self.firmware.get(b) != v}
+        if wrong:
+            self.finding("start", f"firmware {wrong}, this programme is for {TRON_FIRMWARE}")
+            return False
+        if self.mower.capability_wheel_distance:
+            self.mower.wheel_distance = self.mower.capability_wheel_distance
+        return super().run(steps)
+
+    def proposal(self):
+        """The values for the parameter file of the Tron from T2, as a proposal; nothing is written."""
+        stands = [s for way in ("freeze", "kill") for s in self.host_gone.get(way, [])]
+        failsafe = failsafe_proposal(stands)
+        if failsafe is None or any(holding_problems(self.host_gone.get(way, [])) for way in self.host_gone):
+            return None
+        return tron_values_text(failsafe, self.firmware, datetime.date.today().isoformat())
+
+
 def interrupted(*_):
     raise KeyboardInterrupt()
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--steps", default="M1,M2,M3,M4,M5,M6", help="comma separated, of M1..M8")
+    parser.add_argument("--platform", choices=["nx60i", "tron"], default="nx60i")
+    parser.add_argument("--steps", help="comma separated, of M1..M8 (nx60i, default M1-M6) or T1..T5 (tron, default "
+                                        "all)")
     parser.add_argument("--record-dir", default=".", help="directory of the recording")
     parser.add_argument("--max-mb", type=float, default=100.0, help="size limit of the recording")
     parser.add_argument("--max-minutes", type=float, default=120.0, help="no step starts after this time")
     parser.add_argument("--imu-every", type=int, default=1, help="record every n-th IMU sample")
-    parser.add_argument("--repeats", type=int, default=5, help="runs per case in M4 and M5")
-    parser.add_argument("--wheel-distance", type=float, default=0.3556)
+    parser.add_argument("--repeats", type=int, default=5, help="runs per case in M4 and M5, host-gone runs in T2")
+    parser.add_argument("--wheel-distance", type=float, default=0.3556, help="nx60i; the Tron's driver reports its own")
     parser.add_argument("--restart-wait", type=float, default=120.0, help="s to wait for a restarted driver")
     parser.add_argument("--blade", action="store_true", help="allow M7 (blade)")
     parser.add_argument("--ground", action="store_true", help="allow M8 on the ground, 0.3 m/s per wheel")
     parser.add_argument("--fast", action="store_true",
                         help="with --ground: the fast runs of M8 up to 0.5 m/s in stages, in the raised start of the "
                              "measurement image only (speed_limit of measure.launch.py)")
+    parser.add_argument("--data-dir", default="/userdata/mowbite",
+                        help="tron: data_dir of MowBite OS (hold file, measured values of this Tron)")
+    parser.add_argument("--journal-dir", default=os.environ.get("MOWBITE_JOURNAL_DIR", ""),
+                        help="tron: journal of tron_mcu, empty: none")
+    parser.add_argument("--node-user", help="tron: user of tron_mcu and tron_imu (this programme runs as root)")
+    parser.add_argument("--mcu-port", help="tron: port of the MCU instead of the parameter files (rehearsal)")
+    parser.add_argument("--imu-port", help="tron: port of the IMU instead of the parameter files (rehearsal)")
     parser.add_argument("--yes", action="store_true", help="answer every question with yes (rehearsal)")
-    parser.add_argument("--fake-flags", help="flag file of fake_xcore: the person's actions go there")
+    parser.add_argument("--fake-flags", help="flag file of fake_xcore or fake_tron: the person's actions go there")
     parser.add_argument("--abort-file", help="abort the running step once this file exists (rehearsal)")
     args = parser.parse_args(argv)
-    steps = [s.strip().upper() for s in args.steps.split(",") if s.strip()]
-    unknown = [s for s in steps if s not in Measurement.STEPS]
+    tron = args.platform == "tron"
+    programme = TronMeasurement if tron else Measurement
+    default = "T1,T2,T3,T4,T5" if tron else "M1,M2,M3,M4,M5,M6"
+    steps = [s.strip().upper() for s in (args.steps or default).split(",") if s.strip()]
+    unknown = [s for s in steps if s not in programme.STEPS]
     if unknown:
-        sys.exit(f"unknown steps: {unknown}")
+        sys.exit(f"unknown steps for {args.platform}: {unknown}")
+    if tron and (args.blade or args.ground or args.fast):
+        sys.exit("--blade, --ground and --fast are not for the Tron (T6 and T7 come later)")
     if "M8" in steps and not args.ground:
         sys.exit("M8 needs --ground")
     if args.fast and not args.ground:
@@ -1100,24 +1887,47 @@ def main(argv=None):
     path = os.path.join(args.record_dir, time.strftime("measure-%Y%m%d-%H%M%S.jsonl"))
     rec = Recorder(path, int(args.max_mb * 1024 * 1024), args.max_minutes * 60, max(1, args.imu_every))
     rec.write("start", steps=steps, argv=sys.argv[1:])
+    start = TronStart(args, rec) if tron else None
+    if start is not None:
+        busy = {port: port_holders(port) for port in start.ports.values()}
+        if any(busy.values()):
+            rec.write("end", complete=False, findings=[f"ports in use: {busy}"])
+            rec.close()
+            sys.exit(f"ports in use, nothing started: {busy}")
     print(f"Recording to {path} (at most {args.max_mb:g} MB, {args.max_minutes:g} min); wheels at most "
-          f"{AIR_WHEEL_SPEED} m/s in the air, {GROUND_WHEEL_SPEED} m/s in M8; any key aborts a running step.")
+          f"{AIR_WHEEL_SPEED} m/s in the air" + ("" if tron else f", {GROUND_WHEEL_SPEED} m/s in M8")
+          + "; any key aborts a running step.")
     keys = Keys(args.abort_file)
     rclpy.init()
     mower = Mower(rec, AIR_WHEEL_SPEED, args.wheel_distance)
     person = Person(keys, args.fake_flags, args.yes)
-    measurement = Measurement(args, rec, mower, person, keys)
+    measurement = TronMeasurement(args, rec, mower, person, keys, start) if tron else Measurement(args, rec, mower,
+                                                                                                     person, keys)
     signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGHUP, interrupted)
     complete = False
     try:
+        if start is not None:
+            if not person.ask("T0 start tron_imu and tron_mcu alone: heartbeat, IMU, the blade off at 90 mm (the "
+                              "height motor may move), no wheel command"):
+                raise Quit()
+            start.start("tron_imu")
+            start.start_driver()
         complete = measurement.run(steps)
+    except Quit:
+        pass
     except KeyboardInterrupt:
         measurement.safe_stop("interrupted")
     finally:
-        mower.stop_wheels()
-        if measurement.blade_used:
-            mower.set_blade(False)
-        rec.write("end", complete=complete, findings=measurement.findings)
+        try:
+            mower.stop_wheels()
+            if measurement.blade_used:
+                mower.set_blade(False)
+        finally:
+            if start is not None:
+                start.close()
+        proposal = measurement.proposal() if tron else None
+        rec.write("end", complete=complete, findings=measurement.findings, proposal=proposal)
         keys.restore()
         mower.close()
         rclpy.shutdown()
@@ -1125,6 +1935,9 @@ def main(argv=None):
     print(f"\nRecording: {path}" + (" (limit reached)" if rec.full else ""))
     for f in measurement.findings:
         print(f"Finding {f}")
+    if proposal:
+        print(f"\nProposal for {os.path.join(args.data_dir, 'tron.yaml')} (nothing written; only on the user's word "
+              f"after T9):\n{proposal}")
     return 0 if complete and not measurement.findings else 1
 
 
