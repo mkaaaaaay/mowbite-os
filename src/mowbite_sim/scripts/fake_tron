@@ -3,10 +3,10 @@
 
 The MCU pty sends sensor, speed, battery, version and motor frames like the real MCU. SpeedData (linear, angular) drives two
 wheels: the MCU splits it on --mcu-track, the base turns on the real --track, and the speed frame reports what the wheels
-did. The speed drops to 0 after --host-timeout seconds without any frame from the host and
+did. The speed drops to 0 after --host-timeout seconds (flag host_timeout) without any frame from the host and
 while the lift or stop flag is set; it stays 0 until the next SpeedData. The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an upside-down mounted sensor.
-Optional: a JSON file with flags (lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, gnss_age, gnss_delay,
+Optional: a JSON file with flags (lift, stop, bumper, bumper_left, bumper_right, rain, dock, host_timeout, gnss_quality, gnss_noise, gnss_age, gnss_delay,
 yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, gnss_rtcm, dock_shift_x, dock_shift_y,
 dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps, charge_current, battery_percentage, battery_voltage,
 battery_temperature, blade_temperature) is read every 10 ms, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON; a thread
@@ -41,6 +41,7 @@ import select
 import signal
 import struct
 import sys
+import termios
 import threading
 import time
 import tty
@@ -264,9 +265,12 @@ class HostLink:
     def on_speed(self, linear, angular):
         self.linear, self.angular = linear, angular
 
+    def silent(self, now):
+        return self.last_rx is None or now - self.last_rx > self.timeout
+
     def setpoint(self, now, blocked):
         """The (linear, angular) to drive now. A timeout or a block clears the held setpoint."""
-        silent = self.last_rx is None or now - self.last_rx > self.timeout
+        silent = self.silent(now)
         if silent or blocked:
             self.linear = self.angular = 0.0
         return self.linear, self.angular
@@ -654,6 +658,10 @@ def open_pty(link):
     """Master end of a new pty, symlinked at link. The slave stays closed so a driver may open it."""
     master, slave = os.openpty()
     tty.setraw(master)
+    # The ports of the Tron keep the 115200 baud their driver set, also after it closed them.
+    attrs = termios.tcgetattr(master)
+    attrs[4] = attrs[5] = termios.B115200
+    termios.tcsetattr(master, termios.TCSANOW, attrs)
     os.set_blocking(master, False)
     if os.path.lexists(link):
         os.remove(link)
@@ -727,7 +735,8 @@ def main():
     parser.add_argument("--link", default="/tmp/mowbite_sim_mcu", help="symlink to the MCU pty the driver opens")
     parser.add_argument("--gnss-link", default="/tmp/mowbite_sim_gnss", help="symlink to the GNSS pty")
     parser.add_argument("--imu-link", default="/tmp/mowbite_sim_imu", help="symlink to the IMU pty")
-    parser.add_argument("--flags", help="JSON file with lift, stop, bumper, rain, dock, gnss_quality, gnss_noise, "
+    parser.add_argument("--flags", help="JSON file with lift, stop, bumper, bumper_left, bumper_right, rain, dock, "
+                        "host_timeout, gnss_quality, gnss_noise, "
                         "gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, "
                         "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps, "
                         "charge_current, battery_percentage, battery_voltage, battery_temperature, blade_temperature")
@@ -809,6 +818,7 @@ def main():
                     if dock and dock.settle(pose):
                         log.write({"t": round(now, 3), "dock": "contact"})
             blocked = bool(flags.get("lift", 0) or flags.get("stop", 0))
+            host.timeout = float(flags.get("host_timeout", args.host_timeout))
             drive.track = float(flags.get("track", args.track or args.mcu_track))
             linear, angular = drive.move(*host.setpoint(now, blocked),
                                          float(flags.get("wheel_deadband", args.wheel_deadband)))
@@ -833,10 +843,12 @@ def main():
 
             if now >= next_sensor:
                 next_sensor = now + SENSOR_PERIOD
-                bumper = int(flags.get("bumper", 0))
+                # bumper (one of both) stands for the right one
+                right = int(bool(flags.get("bumper", 0) or flags.get("bumper_right", 0)))
+                left = int(bool(flags.get("bumper_left", 0)))
                 # bumper, rain, lift, stop, power_off, battery_gate, cutter_size (2 = large), press_module, right, left
-                sensor = bytes([bumper, int(flags.get("rain", 0)), int(flags.get("lift", 0)),
-                                int(flags.get("stop", 0)), 0, 0, 2, 0, bumper, 0])
+                sensor = bytes([right | left, int(flags.get("rain", 0)), int(flags.get("lift", 0)),
+                                int(flags.get("stop", 0)), 0, 0, 2, 0, right, left])
                 measured = drive.measured(float(flags.get("odom_scale", args.odom_scale)))
                 send(mcu.fd, encode([(FROM_MCU, 10, sensor), (FROM_MCU, 4, struct.pack("<ff", *measured))]))
             if now >= next_status:
@@ -849,7 +861,7 @@ def main():
                 battery = struct.pack("<HhBbbI", decivolts, current, percentage, int(dock_ok),
                                       celsius(flags.get("battery_temperature", 30)), 0)
                 motor = struct.pack("<hhhbb", 0, 0, 2450, 30, 0)
-                if blocked or host.last_rx is None or now - host.last_rx > args.host_timeout:
+                if blocked or host.silent(now):
                     cutter_percent = 0
                 # Assumed 2800 rpm at full speed, 0.8 A while turning (10 mA steps).
                 cutter = struct.pack("<hhhbb", 28 * cutter_percent, 80 if cutter_percent else 0, 2450,
