@@ -1,18 +1,56 @@
 #!/bin/sh
 # Sets up the IMU, the temperature sensor, the stereo camera and the rear camera of the Tron. Needs the vendor parts
 # that make-image.sh adds from the owner's backup (Metoak modules, mo_asicrw); each step logs its own failure.
+# The stereo camera is optional: its result goes to /run/mowbite/stereo ("configured" or "failed <reason>") and never
+# fails the unit. Nothing here streams from the camera.
 set -u
 MODULES=/usr/lib/kernel/driver
 ASICRW=/usr/metoak/metoak/mo_asicrw
+STATUS=/run/mowbite/stereo
 rc=0
+stereo_fail=
 
 run() {
     "$@" || { echo "tron-hwinit: failed: $*"; rc=1; }
 }
 
+# Like run for the stereo camera: the first failure becomes the reason in the status, rc stays.
+stereo_run() {
+    reason=$1
+    shift
+    "$@" || { echo "tron-hwinit: stereo: failed: $*"; [ -n "$stereo_fail" ] || stereo_fail=$reason; }
+}
+
+# gpio_high <gpio> <runner...>
 gpio_high() {
-    [ -e "/sys/class/gpio/gpio$1" ] || run sh -c "echo $1 > /sys/class/gpio/export"
-    run sh -c "echo out > /sys/class/gpio/gpio$1/direction && echo 1 > /sys/class/gpio/gpio$1/value"
+    n=$1
+    shift
+    [ -e "/sys/class/gpio/gpio$n" ] || "$@" sh -c "echo $n > /sys/class/gpio/export"
+    "$@" sh -c "echo out > /sys/class/gpio/gpio$n/direction && echo 1 > /sys/class/gpio/gpio$n/value"
+}
+
+# The kernel sets up the camera bridge (XC9080) on its own, without a udev event; mo_asicrw during that setup leaves
+# the stereo stream without frames. Waits up to 60 s for its last message.
+kernel_setup_done() {
+    i=0
+    while [ $i -lt 120 ]; do
+        dmesg | grep -q 'xc9080 8-001b: sensor chip is' && return 0
+        sleep 0.5
+        i=$((i + 1))
+    done
+    return 1
+}
+
+# Camera trigger on, then the camera bridge on i2c-8 and register 0x51 of the Simor (mo_asicrw "s" is i2c 0x66).
+stereo_setup() {
+    gpio_high 103 stereo_run gpio
+    stereo_run gpio sh -c 'echo 103 > /sys/class/gpio/unexport'
+    stereo_run asicrw "$ASICRW" 8 xc
+    sleep 0.1
+    stereo_run asicrw "$ASICRW" 8 s 0051 23
+    sleep 0.1
+    stereo_run asicrw "$ASICRW" 8 s 0051 7f
+    stereo_run compact-test sh -c 'echo 0 > /sys/devices/platform/rkcif-mipi-lvds2/compact_test'
 }
 
 # Temperature sensor, flash trigger and IMU (ICM-40608 on i2c-8), time stamps from ktime_get_ts64.
@@ -21,34 +59,33 @@ run insmod "$MODULES/mo_trig_flash.ko" TimeStamp_m=1
 run insmod "$MODULES/inv-icm42600.ko" TimeStamp_m=1 Repot_m=1
 run insmod "$MODULES/inv-icm42600-i2c.ko"
 
-# Names under which the Metoak tools find the camera bus and the calibration EEPROM.
+# Names under which the Metoak tools find the camera bus, the calibration EEPROM and the video nodes.
 ln -sf /sys/devices/platform/feca0000.i2c/i2c-8/8-0050/eeprom /dev/i2c_simor0_eeprom
 for name in simor0 simor0_cmosa simor0_cmosb isp0 isp0_cmosa isp0_cmosb fpga0 imu; do
     ln -sf /dev/i2c-8 "/dev/i2c_$name"
 done
-
-# udev opens the video nodes at coldplug (v4l_id), which makes the kernel set up the camera bridge; mo_asicrw
-# during that setup leaves the stereo stream without frames.
-run udevadm settle --timeout=60
-
-# Camera trigger on, then the camera bridge on i2c-8 and its register 0x0051.
-gpio_high 103
-run sh -c 'echo 103 > /sys/class/gpio/unexport'
-run "$ASICRW" 8 xc
-sleep 0.1
-run "$ASICRW" 8 s 0051 23
-sleep 0.1
-run "$ASICRW" 8 s 0051 7f
-
 ln -sf /dev/video22 /dev/videoIsp
 ln -sf /dev/video11 /dev/videoSimor
-run sh -c 'echo 0 > /sys/devices/platform/rkcif-mipi-lvds2/compact_test'
+
+mkdir -p "${STATUS%/*}"
+rm -f "$STATUS"
+if kernel_setup_done; then
+    sleep 2
+    # After a cold start the first setup leaves the stream without frames, a second one fixes it.
+    stereo_setup
+    sleep 10
+    stereo_setup
+else
+    stereo_fail=kernel-setup
+fi
+if [ -n "$stereo_fail" ]; then echo "failed $stereo_fail"; else echo configured; fi > "$STATUS"
+echo "tron-hwinit: stereo: $(cat "$STATUS")"
 
 # Rear camera: power on (GPIO 113) while usb2 is off, then usb2 on again.
 sleep 0.5
 run sh -c 'echo 0 > /sys/bus/usb/devices/usb2/authorized'
 sleep 0.5
-gpio_high 113
+gpio_high 113 run
 sleep 1
 run sh -c 'echo 1 > /sys/bus/usb/devices/usb2/authorized'
 

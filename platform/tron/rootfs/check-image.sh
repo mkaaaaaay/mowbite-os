@@ -28,7 +28,7 @@ result "/sbin/init is systemd" $?
 for f in /etc/mowbite/probezeit /usr/lib/mowbite/probezeit /usr/lib/mowbite/tron-hwinit /etc/fstab \
          /etc/systemd/system/sysinit.target.wants/mowbite-probezeit.service \
          /etc/systemd/system/timers.target.wants/mowbite-probezeit-check.timer /userdata /meta \
-         /etc/default/locale /etc/NetworkManager/conf.d/20-unused-wifi.conf /usr/bin/fuser; do
+         /etc/locale.conf /etc/NetworkManager/conf.d/20-unused-wifi.conf /usr/bin/fuser; do
     "$DEBUGFS" -c -R "stat $f" "$IMG" 2>/dev/null | grep -q '^Inode:'; result "present: $f" $?
 done
 for t in motd-news apt-daily apt-daily-upgrade; do

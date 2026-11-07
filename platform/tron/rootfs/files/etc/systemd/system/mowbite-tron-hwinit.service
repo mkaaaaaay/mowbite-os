@@ -6,6 +6,8 @@ After=systemd-modules-load.service systemd-udev-trigger.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# At most about 80 s: up to 60 s for the kernel's camera setup, then two stereo setups 10 s apart.
+TimeoutStartSec=120
 ExecStart=/usr/lib/mowbite/tron-hwinit
 
 [Install]
