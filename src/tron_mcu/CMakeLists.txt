@@ -18,7 +18,7 @@ find_package(mowbite_hold REQUIRED)
 find_package(mowbite_journal REQUIRED)
 
 # Codec, control logic and port without ROS, testable on any machine.
-add_library(tron_mcu_core STATIC src/mcu_codec.cpp src/mcu_control.cpp src/serial_port.cpp)
+add_library(tron_mcu_core STATIC src/mcu_codec.cpp src/mcu_control.cpp src/serial_port.cpp src/capture_dump.cpp)
 target_include_directories(tron_mcu_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -32,6 +32,11 @@ rclcpp_components_register_node(tron_mcu_component
   PLUGIN "tron_mcu::McuNode"
   EXECUTABLE tron_mcu_node)
 
+# Decodes the port captures of the safety measurement (tools/yf/measure.py) with this codec.
+add_executable(tron_mcu_capture src/capture_dump_main.cpp)
+target_link_libraries(tron_mcu_capture tron_mcu_core)
+install(TARGETS tron_mcu_capture RUNTIME DESTINATION lib/${PROJECT_NAME})
+
 install(DIRECTORY include/ DESTINATION include)
 install(TARGETS tron_mcu_core tron_mcu_component
   EXPORT export_tron_mcu
@@ -41,7 +46,7 @@ install(TARGETS tron_mcu_core tron_mcu_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(tron_mcu_test test/test_mcu_codec.cpp test/test_mcu_control.cpp)
+  ament_add_gtest(tron_mcu_test test/test_mcu_codec.cpp test/test_mcu_control.cpp test/test_capture_dump.cpp)
   target_link_libraries(tron_mcu_test tron_mcu_core)
 endif()
 
