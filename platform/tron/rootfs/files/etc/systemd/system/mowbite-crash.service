@@ -6,6 +6,8 @@ Before=sysinit.target
 
 [Service]
 Type=oneshot
+# Stays active, so a later start job in the same boot does not run it again.
+RemainAfterExit=yes
 ExecStart=/usr/lib/mowbite/crash
 
 [Install]

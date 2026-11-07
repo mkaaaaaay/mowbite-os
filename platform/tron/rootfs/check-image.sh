@@ -90,6 +90,12 @@ test "$(grep -rlE '^[[:space:]]*kernel\.panic' "$TREE/etc/sysctl.conf" "$TREE/et
     2>/dev/null)" = "$TREE/etc/sysctl.d/60-mowbite-panic.conf"
 result "kernel.panic only in 60-mowbite-panic.conf" $?
 ! grep -q sysctl "$TREE/usr/lib/mowbite/probezeit"; result "probezeit sets no sysctl" $?
+# A second start job in the same boot must not count again.
+for u in mowbite-crash mowbite-probezeit; do
+    grep -qx 'RemainAfterExit=yes' "$TREE/etc/systemd/system/$u.service"; result "$u stays active after its run" $?
+done
+sh -n "$TREE/usr/lib/mowbite/crash"; result "crash script parses" $?
+grep -qFe "-name 'console-*'" "$TREE/usr/lib/mowbite/crash"; result "crash script reads console records" $?
 # keys <template> <prefix> <value>: every key the template of this systemd knows, set to <value>.
 keys() { sed -n "s/^#\($2[A-Za-z]*\)=.*/\1=$3/p" "$TREE/$1" | sort; }
 set_in() { grep "^$2" "$TREE/$1" | sort; }

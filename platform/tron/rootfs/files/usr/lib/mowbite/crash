@@ -1,9 +1,10 @@
 #!/bin/sh
 # Early in every boot, after systemd-pstore: a dmesg record under /var/lib/systemd/pstore that the last boot did not
-# see means that boot ended in an oops or a panic. Then /run/mowbite/crash ("<unix time> <reason>") keeps MowBite OS
-# from resuming on its own and the crash goes into /var/lib/mowbite/crashes. After three crashes within an hour the
-# next panic halts instead of rebooting (/run/mowbite/crash-latch), except during the trial period, whose fallback
-# needs the reboots.
+# see, or such a console record with a panic line, means that boot ended in an oops or a panic. On the Tron the first
+# dmesg zone does not survive the reset, so a panic without an oops before it leaves only the console record. Then
+# /run/mowbite/crash ("<unix time> <reason>") keeps MowBite OS from resuming on its own and the crash goes into
+# /var/lib/mowbite/crashes. After three crashes within an hour the next panic halts instead of rebooting
+# (/run/mowbite/crash-latch), except during the trial period, whose fallback needs the reboots.
 set -eu
 PSTORE=/var/lib/systemd/pstore
 SEEN=/var/lib/mowbite/pstore-seen
@@ -18,9 +19,10 @@ WINDOW=3600
 MAX_KB=20480
 export LC_ALL=C
 
-# One line per record: path, size and mtime, which systemd-pstore copies from the record (the crash time).
+# One line per record: path, size and mtime, which systemd-pstore copies from the record (dmesg: the crash time,
+# console: this boot).
 records() {
-    find "$PSTORE" -type f -name 'dmesg-*' -printf '%p %s %T@\n' 2>/dev/null | sort
+    find "$PSTORE" -type f \( -name 'dmesg-*' -o -name 'console-*' \) -printf '%p %s %T@\n' 2>/dev/null | sort
 }
 
 # replace <file>: stdin becomes <file>, synced before and after the rename.
@@ -33,11 +35,17 @@ replace() {
 
 mkdir -p "${SEEN%/*}" "${FLAG%/*}"
 test -e "$SEEN" || : > "$SEEN"
-new=$(records | comm -23 - "$SEEN")
+# A warm reboot leaves a console record too, so only one with a panic line counts.
+crashed=$(records | comm -23 - "$SEEN" | while read -r f size mtime; do
+    case "${f##*/}" in
+    dmesg-*) echo "$f $mtime" ;;
+    console-*) if grep -q 'Kernel panic - not syncing: ' "$f"; then echo "$f $mtime"; fi ;;
+    esac
+done)
 
-if [ -n "$new" ]; then
-    files=$(echo "$new" | cut -d' ' -f1)
-    t=$(echo "$new" | cut -d' ' -f3 | sort -n | tail -n1 | cut -d. -f1)
+if [ -n "$crashed" ]; then
+    files=$(echo "$crashed" | cut -d' ' -f1)
+    t=$(echo "$crashed" | cut -d' ' -f2 | sort -n | tail -n1 | cut -d. -f1)
     reason=$(echo "$files" | xargs grep -h -m1 -o 'Kernel panic - not syncing: .*' | head -n1)
     # Without a panic line the record header ("Oops#1 Part1") names the kind.
     [ -n "$reason" ] || reason=$(echo "$files" | xargs head -q -n1 | head -n1)

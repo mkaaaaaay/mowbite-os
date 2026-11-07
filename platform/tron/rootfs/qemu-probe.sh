@@ -2,9 +2,9 @@
 # Boot probe of a probe image (make-image.sh with "-" for the vendor rootfs) in QEMU: virt board, the generic Ubuntu
 # kernel, no vendor parts, so it says nothing about the vendor kernel. Checks that systemd and sshd come up and that
 # the trial period counts boots, falls back after three boots and without a login, and ends on request; the panic
-# settings, that logind ignores every key and cannot suspend, and mowbite-crash on dummy dmesg records, by hand and
-# in a real boot. Off the Rockchip board the fallback only logs. Each boot ends with a power-off; QEMU runs with
-# -no-reboot.
+# settings, that logind ignores every key and cannot suspend, and mowbite-crash on dummy dmesg and console records,
+# by hand and in a real boot, and that a second start job in the same boot runs neither oneshot again. Off the
+# Rockchip board the fallback only logs. Each boot ends with a power-off; QEMU runs with -no-reboot.
 #   qemu-probe.sh <probe .img> <private test key> <new log dir> <test password of the hash make-image.sh put in>
 # Result: <log dir>/result.txt with one PASS or FAIL line per check, the consoles and command outputs beside it.
 set -uo pipefail
@@ -128,6 +128,13 @@ check "lttng-sessiond off" test "$(vm systemctl is-enabled lttng-sessiond.servic
 check "fallback without login" grep -q 'no SSH login since the boot, reboot into the loader' "$LOG/probezeit.txt"
 check "fallback as a dry run off the board" grep -q 'no Rockchip board, dry run only' "$LOG/probezeit.txt"
 check "login reset the counter" test "$(vm cat /var/lib/mowbite/bootcount)" = 0
+# On the Tron a second transaction starts the sysinit oneshots again (alsa-utils).
+check "second start of mowbite-probezeit does not count" \
+    vm 'systemctl start mowbite-probezeit.service && test "$(cat /var/lib/mowbite/bootcount)" = 0'
+check "second start of mowbite-crash is no second run" \
+    vm 'a=$(systemctl show -P ExecMainStartTimestampMonotonic mowbite-crash.service)
+        systemctl start mowbite-crash.service
+        test "$(systemctl show -P ExecMainStartTimestampMonotonic mowbite-crash.service)" = "$a"'
 check "kernel.panic 10, panic_on_oops 1, panic_on_rcu_stall 1" \
     test "$(vm sysctl -n kernel.panic kernel.panic_on_oops kernel.panic_on_rcu_stall | paste -sd' ')" = "10 1 1"
 vm 'm="org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager"
@@ -174,8 +181,8 @@ vm 'set -x; systemctl is-system-running; systemctl --failed --no-legend; systemc
     cat /etc/machine-id; dpkg -l | grep -c ^ii; du -sh /usr /var 2>/dev/null; date -u
     journalctl --list-boots --no-pager; ls -l /var/log/journal/*/ /run/log/journal 2>&1' > "$LOG/system.txt" 2>&1
 
-# mowbite-crash by hand on dummy dmesg records; the trial mark is away while the latch is probed. Afterwards the
-# state is cleared and one record stays for boot 5.
+# mowbite-crash by hand on dummy dmesg and console records; the trial mark is away while the latch is probed.
+# Afterwards the state is cleared and a dmesg and a console record of the same crash stay for boot 5.
 vm 'sh -s' > "$LOG/crash.txt" 2>&1 <<'CRASH'
 set -u
 P=/var/lib/systemd/pstore
@@ -188,13 +195,17 @@ record() {
     printf 'Panic#1 Part1\n<0>Kernel panic - not syncing: %s\n' "$1" > "$P/dmesg-ramoops-0"
     touch -d "@$((now - $2))" "$P/dmesg-ramoops-0"
 }
+console() {
+    printf '[    0.000000] Booting Linux\n%b' "$1" > "$P/console-ramoops-0"
+    touch -d "@$((now - $2))" "$P/console-ramoops-0"
+}
 run() { rm -f "$F" "$L"; /usr/lib/mowbite/crash; }
 expect() { if eval "$2"; then echo "PASS crash: $1"; else echo "FAIL crash: $1"; fi; }
 lines() { wc -l < "$C"; }
 panic() { sysctl -n kernel.panic; }
 mv /etc/mowbite/probezeit /root/probezeit.away
 trap 'mv /root/probezeit.away /etc/mowbite/probezeit 2>/dev/null; sysctl -q kernel.panic=10' EXIT
-rm -f "$P"/dmesg-* "$C" /var/lib/mowbite/pstore-seen
+rm -f "$P"/dmesg-* "$P"/console-* "$C" /var/lib/mowbite/pstore-seen
 run
 expect "no record, no flag" 'test ! -e $F && test ! -e $C'
 record one 300; run
@@ -211,16 +222,24 @@ mv /root/probezeit.away /etc/mowbite/probezeit
 printf '%s recent\n' $((now - 600)) $((now - 500)) > "$C"
 record five 80; run
 expect "three in 1 h with trial mark, no latch" 'test -e $F && test ! -e $L && test $(panic) = 10'
-rm -f "$P"/dmesg-* "$C" /var/lib/mowbite/pstore-seen "$F" "$L"
+rm -f "$C"
+console '' 70; run
+expect "console record without panic line, no flag" 'test ! -e $F && test ! -e $C'
+console '[  350.49] Kernel panic - not syncing: RCU Stall\n' 60; run
+expect "console record with panic line, flag" 'grep -q "not syncing: RCU Stall$" $F && test $(lines) = 1'
+console '[  286.17] Kernel panic - not syncing: six\n' 50; record six 55; run
+expect "console and dmesg record in one boot, counted once" 'grep -q "not syncing: six$" $F && test $(lines) = 2'
+rm -f "$P"/dmesg-* "$P"/console-* "$C" /var/lib/mowbite/pstore-seen "$F" "$L"
 record probe 10
+console '[    1.00] Kernel panic - not syncing: probe\n' 10
 sync
 CRASH
 grep -E '^(PASS|FAIL) ' "$LOG/crash.txt" >&3
-test "$(grep -c '^PASS ' "$LOG/crash.txt")" = 6 || { echo "FAIL crash: not all 6 cases passed" >&3; fail=1; }
+test "$(grep -c '^PASS ' "$LOG/crash.txt")" = 9 || { echo "FAIL crash: not all 9 cases passed" >&3; fail=1; }
 vm 'systemctl reboot' >/dev/null 2>&1
 wait "$vm_pid" 2>/dev/null
 
-# Boot 5 without a login: the counter starts again at 1, mowbite-crash records the dummy record of boot 4.
+# Boot 5 without a login: the counter starts again at 1, mowbite-crash records the dummy crash of boot 4 once.
 start_vm
 check "boot 5 reaches multi-user" wait_console 'Reached target.*Multi-User' 900
 stop_vm
