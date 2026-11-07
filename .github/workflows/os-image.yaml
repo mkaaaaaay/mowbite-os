@@ -1,4 +1,5 @@
-# Builds docker/os.Dockerfile natively for amd64 and arm64; pushes to ghcr.io only when started by hand with push.
+# Builds docker/os.Dockerfile natively for arm64, for amd64 too when started by hand with push, which alone pushes to
+# ghcr.io.
 # The arm64 image also goes into an artifact of the run (docker save, layers repacked with gzip, kept 5 days), the way
 # to a mower by hand over ssh (docker load < the .tar) without ghcr: gzip layers, because the containerd store of the
 # mower keeps the layers as they come and unpacked beside them.
@@ -26,12 +27,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
+        arch: ${{ inputs.push && fromJSON('["amd64", "arm64"]') || fromJSON('["arm64"]') }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 90
     permissions:
       contents: read

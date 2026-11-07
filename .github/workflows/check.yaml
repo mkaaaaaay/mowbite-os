@@ -1,10 +1,12 @@
 # Unit tests natively on arm64 (the mowers) for every push that changes the code, on amd64 too for main;
-# the app interface check against the simulation on both for every branch push that changes the code, not for tags,
-# and after it the journal of the simulation has to replay bit-identically.
+# the app interface check against the simulation on amd64 for every branch push that changes the code, on arm64 too
+# for main, not for tags, and after it the journal of the simulation has to replay bit-identically. os-image and
+# measure-image only carry commits checked on their branch before.
 name: check
 
 on:
   push:
+    branches-ignore: [os-image, measure-image]
     paths: ['src/**', 'docker/**', '.github/**']
   workflow_dispatch:
 
@@ -65,7 +67,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, arm64]
+        arch: ${{ github.ref == 'refs/heads/main' && fromJSON('["amd64", "arm64"]') || fromJSON('["amd64"]') }}
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
