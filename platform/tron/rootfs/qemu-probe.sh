@@ -5,7 +5,10 @@
 # settings, that logind ignores every key and cannot suspend, and mowbite-crash on dummy dmesg and console records,
 # by hand and in a real boot, and that a second start job in the same boot runs neither oneshot again. Off the
 # Rockchip board the fallback only logs. Each boot ends with a power-off; QEMU runs with -no-reboot.
-#   qemu-probe.sh <probe .img> <private test key> <new log dir> <test password of the hash make-image.sh put in>
+#   [PROBE_QUICK=1] qemu-probe.sh <probe .img> <private test key> <new log dir> <test password of the hash make-image.sh
+#   put in>
+# PROBE_QUICK=1 skips boots 1 to 3 and the 10 minutes without a login (fallbacks of the trial period), about 8
+# instead of 25 minutes.
 # Result: <log dir>/result.txt with one PASS or FAIL line per check, the consoles and command outputs beside it.
 set -uo pipefail
 IMG=${1:?probe .img}
@@ -14,6 +17,7 @@ LOG=${3:?new log dir}
 PASSWORD=${4:?file with the test password for root}
 CLOUD=https://cloud-images.ubuntu.com/noble/current/unpacked
 PORT=${PROBE_SSH_PORT:-2522}
+QUICK=${PROBE_QUICK:-0}
 
 test ! -e "$LOG" || { echo "$LOG exists" >&2; exit 1; }
 mkdir -p "$LOG/kernel"
@@ -107,26 +111,33 @@ trap 'kill "$vm_pid" 2>/dev/null' EXIT
 
 # Boots 1 to 3 without a login: the counter climbs, the third boot falls back (logged only). The counter is read
 # from the image between boots, a login would reset it.
-for i in 1 2 3; do
-    start_vm
-    check "boot $boot reaches multi-user" wait_console 'Reached target.*Multi-User' 900
-    stop_vm
-    check "counter $boot after boot $boot" test "$(offline_cat /var/lib/mowbite/bootcount)" = "$boot"
-done
-# QEMU starts on the build time of systemd until the RTC module loads, so the early entries fall under the journal's
-# 14 days and are gone; on the Tron the RTC is built in. Reported, not counted.
-info "journal keeps boots 1 to 3" journal_has 'boot 3 without a confirmed login, reboot into the loader' 3
+if [ "$QUICK" = 1 ]; then
+    echo "INFO quick: boots 1 to 3 and the fallback without a login skipped" >&3
+else
+    for i in 1 2 3; do
+        start_vm
+        check "boot $boot reaches multi-user" wait_console 'Reached target.*Multi-User' 900
+        stop_vm
+        check "counter $boot after boot $boot" test "$(offline_cat /var/lib/mowbite/bootcount)" = "$boot"
+    done
+    # QEMU starts on the build time of systemd until the RTC module loads, so the early entries fall under the
+    # journal's 14 days and are gone; on the Tron the RTC is built in. Reported, not counted.
+    info "journal keeps boots 1 to 3" journal_has 'boot 3 without a confirmed login, reboot into the loader' 3
+fi
 
 # Boot 4: no login for more than 10 minutes, then the first login.
 start_vm
 check "boot 4 reaches multi-user" wait_console 'Reached target.*Multi-User' 900
-sleep 660
+[ "$QUICK" = 1 ] || sleep 660
 check "boot 4 ssh login" wait_ssh
-vm 'journalctl -o cat -u mowbite-probezeit.service -u mowbite-probezeit-check.service --no-pager' > "$LOG/probezeit.txt" 2>&1
-info "boot 4 counted in the journal" grep -q 'boot 4 of 3 without a confirmed login' "$LOG/probezeit.txt"
 check "lttng-sessiond off" test "$(vm systemctl is-enabled lttng-sessiond.service)" = disabled
-check "fallback without login" grep -q 'no SSH login since the boot, reboot into the loader' "$LOG/probezeit.txt"
-check "fallback as a dry run off the board" grep -q 'no Rockchip board, dry run only' "$LOG/probezeit.txt"
+if [ "$QUICK" != 1 ]; then
+    vm 'journalctl -o cat -u mowbite-probezeit.service -u mowbite-probezeit-check.service --no-pager' \
+        > "$LOG/probezeit.txt" 2>&1
+    info "boot 4 counted in the journal" grep -q 'boot 4 of 3 without a confirmed login' "$LOG/probezeit.txt"
+    check "fallback without login" grep -q 'no SSH login since the boot, reboot into the loader' "$LOG/probezeit.txt"
+    check "fallback as a dry run off the board" grep -q 'no Rockchip board, dry run only' "$LOG/probezeit.txt"
+fi
 check "login reset the counter" test "$(vm cat /var/lib/mowbite/bootcount)" = 0
 # On the Tron a second transaction starts the sysinit oneshots again (alsa-utils).
 check "second start of mowbite-probezeit does not count" \
