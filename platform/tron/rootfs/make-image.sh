@@ -1,9 +1,10 @@
 #!/bin/bash
 # The rootfs image of one Tron: the base tar of build-base.sh, files/ of the repo over it, the vendor parts
-# (vendor-files.txt) and the WLAN profiles from the owner's own rootfs backup, the SSH host keys and the key for root.
+# (vendor-files.txt) and the WLAN profiles from the owner's own rootfs backup, the SSH host keys, the key for root and
+# optionally the password hash for root.
 # ext4 with only the features of the vendor rootfs (kernel 5.10), exactly the size of the rootfs partition. The image
 # holds vendor files and secrets: it stays in the owner's encrypted storage, never in a repo, an upload or a release.
-#   make-image.sh <base .tar> <vendor rootfs dir> <host key dir> <root key .pub> <new .img>
+#   make-image.sh <base .tar> <vendor rootfs dir> <host key dir> <root key .pub> <new .img> [root password hash]
 # "-" for the vendor rootfs or the host keys leaves them out (probe image for QEMU, keys made on the first boot).
 # Prints no secrets; work files lie next to the image and are removed at the end.
 set -euo pipefail
@@ -12,6 +13,8 @@ VENDOR=${2:?directory with the vendor rootfs}
 HOSTKEYS=${3:?directory with ssh_host_*_key and .pub}
 ROOTKEY=${4:?public key for root}
 OUT=${5:?new .img}
+# One line from "openssl passwd -6"; without it root has no password.
+ROOTHASH=${6:-}
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 SIZE=17179869184
@@ -23,6 +26,10 @@ test -f "$BASE" && test -f "$ROOTKEY"
 test "$VENDOR" = - || test -d "$VENDOR"
 test "$HOSTKEYS" = - || test -d "$HOSTKEYS"
 grep -q '^ssh-' "$ROOTKEY" || { echo "$ROOTKEY is no public key" >&2; exit 1; }
+if [ -n "$ROOTHASH" ]; then
+    test "$(wc -l < "$ROOTHASH")" = 1 && grep -qE '^\$(6|y)\$[^:[:space:]]+$' "$ROOTHASH" \
+        || { echo "$ROOTHASH is no sha512 or yescrypt hash" >&2; exit 1; }
+fi
 
 umask 077
 work=$(mktemp -d "$(dirname "$OUT")/.make-image.XXXXXX")
@@ -92,6 +99,17 @@ done
 grep -qxF etc/NetworkManager/system-connections "$work/base.list"
 grep -qxF root "$work/base.list"
 tar -C "$work/p" -cf "$work/private.tar" --owner=0 --group=0 --numeric-owner --no-recursion "${private[@]}"
+# The password hash goes into root's line of the base's shadow, which keeps its group (shadow) and mode.
+if [ -n "$ROOTHASH" ]; then
+    mkdir -p "$work/s"
+    tar -C "$work/s" -xf "$BASE" ./etc/shadow
+    group=$(tar -tvf "$BASE" --numeric-owner ./etc/shadow | awk '{ split($2, o, "/"); print o[2] }')
+    awk -F: -v OFS=: 'NR == FNR { h = $0; next } $1 == "root" { $2 = h; n++ } { print } END { exit n != 1 }' \
+        "$ROOTHASH" "$work/s/etc/shadow" > "$work/s/etc/shadow.new"
+    mv "$work/s/etc/shadow.new" "$work/s/etc/shadow"
+    tar -C "$work/s" -cf "$work/shadow.tar" --owner=0 --group="$group" --numeric-owner --mode=0640 ./etc/shadow
+    tar -Af "$work/private.tar" "$work/shadow.tar"
+fi
 
 cp "$BASE" "$work/all.tar"
 tar -Af "$work/all.tar" "$work/files.tar"
@@ -104,4 +122,4 @@ truncate -s "$SIZE" "$OUT"
 "$MKE2FS" -q -F -t ext4 -O "$FEATURES" -b 4096 -I 256 -E root_owner=0:0 -d "$work/all.tar" "$OUT" $((SIZE / 4096))
 test "$(stat -c %s "$OUT")" -eq "$SIZE"
 echo "image $OUT: ${#items[@]} vendor items, ${#parents[@]} new parent directories," \
-     "$(( ${#private[@]} - 2 )) host key and WLAN files"
+     "$(( ${#private[@]} - 2 )) host key and WLAN files, root password: $([ -n "$ROOTHASH" ] && echo set || echo none)"

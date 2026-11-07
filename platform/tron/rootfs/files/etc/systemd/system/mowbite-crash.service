@@ -1,0 +1,12 @@
+[Unit]
+Description=MowBite crash record of the last boot
+DefaultDependencies=no
+After=local-fs.target systemd-pstore.service systemd-sysctl.service
+Before=sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/mowbite/crash
+
+[Install]
+WantedBy=sysinit.target

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Trial period of a newly written rootfs, active while /etc/mowbite/probezeit exists: after MAX_BOOTS boots or
 # TIMEOUT without an SSH login the mower reboots into the loader mode of U-Boot, where the PC writes the old rootfs back.
-#   probezeit boot      early in every boot: count the boot, reboot on a kernel panic
+#   probezeit boot      early in every boot: count the boot
 #   probezeit ssh       from /etc/ssh/sshrc: confirm this boot
 #   probezeit timeout   from mowbite-probezeit-check.timer: no login since the boot
 #   probezeit end       the owner ends the trial period (mowbite-probezeit-ende)
@@ -37,7 +37,6 @@ fi
 
 case "${1:-}" in
 boot)
-    sysctl -q kernel.panic=10
     n=$(cat "$COUNT" 2>/dev/null || true)
     case "$n" in ''|*[!0-9]*) n=0 ;; esac
     n=$((n + 1))

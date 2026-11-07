@@ -1,0 +1,68 @@
+#!/bin/sh
+# Early in every boot, after systemd-pstore: a dmesg record under /var/lib/systemd/pstore that the last boot did not
+# see means that boot ended in an oops or a panic. Then /run/mowbite/crash ("<unix time> <reason>") keeps MowBite OS
+# from resuming on its own and the crash goes into /var/lib/mowbite/crashes. After three crashes within an hour the
+# next panic halts instead of rebooting (/run/mowbite/crash-latch), except during the trial period, whose fallback
+# needs the reboots.
+set -eu
+PSTORE=/var/lib/systemd/pstore
+SEEN=/var/lib/mowbite/pstore-seen
+CRASHES=/var/lib/mowbite/crashes
+FLAG=/run/mowbite/crash
+LATCH=/run/mowbite/crash-latch
+TRIAL=/etc/mowbite/probezeit
+KEEP=10
+LOOP=3
+WINDOW=3600
+# Age is limited by tmpfiles (14 days for this directory), size here.
+MAX_KB=20480
+export LC_ALL=C
+
+# One line per record: path, size and mtime, which systemd-pstore copies from the record (the crash time).
+records() {
+    find "$PSTORE" -type f -name 'dmesg-*' -printf '%p %s %T@\n' 2>/dev/null | sort
+}
+
+# replace <file>: stdin becomes <file>, synced before and after the rename.
+replace() {
+    cat > "$1.new"
+    sync "$1.new"
+    mv "$1.new" "$1"
+    sync "${1%/*}"
+}
+
+mkdir -p "${SEEN%/*}" "${FLAG%/*}"
+test -e "$SEEN" || : > "$SEEN"
+new=$(records | comm -23 - "$SEEN")
+
+if [ -n "$new" ]; then
+    files=$(echo "$new" | cut -d' ' -f1)
+    t=$(echo "$new" | cut -d' ' -f3 | sort -n | tail -n1 | cut -d. -f1)
+    reason=$(echo "$files" | xargs grep -h -m1 -o 'Kernel panic - not syncing: .*' | head -n1)
+    # Without a panic line the record header ("Oops#1 Part1") names the kind.
+    [ -n "$reason" ] || reason=$(echo "$files" | xargs head -q -n1 | head -n1)
+    reason=$(printf '%s' "${reason:-unknown}" | tr -c '[:print:]' ' ' | cut -c1-160)
+    { tail -n $((KEEP - 1)) "$CRASHES" 2>/dev/null || true; echo "$t $reason"; } | replace "$CRASHES"
+    echo "$t $reason" > "$FLAG"
+    echo "crash: the last boot crashed: $reason"
+    n=$(awk -v since=$(($(date +%s) - WINDOW)) '$1 >= since' "$CRASHES" | wc -l)
+    if [ "$n" -ge "$LOOP" ]; then
+        if [ -e "$TRIAL" ]; then
+            echo "crash: $n crashes within an hour, trial period: a panic still reboots"
+        else
+            sysctl -q kernel.panic=0
+            echo "$n crashes within an hour, a panic halts in this boot" > "$LATCH"
+            echo "crash: $n crashes within an hour, a panic halts in this boot"
+        fi
+    fi
+fi
+
+if [ -d "$PSTORE" ]; then
+    while [ "$(du -sk "$PSTORE" | cut -f1)" -gt "$MAX_KB" ]; do
+        oldest=$(find "$PSTORE" -type f -printf '%T@ %p\n' | sort -n | head -n1 | cut -d' ' -f2-)
+        [ -n "$oldest" ] || break
+        rm -f "$oldest"
+    done
+    find "$PSTORE" -mindepth 1 -type d -empty -delete
+fi
+records | replace "$SEEN"

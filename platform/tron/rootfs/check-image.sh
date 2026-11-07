@@ -1,13 +1,15 @@
 #!/bin/bash
 # Offline checks of an image of make-image.sh before it goes near a mower: size, e2fsck, the same ext4 features as
-# the vendor rootfs, the boot essentials, owner and mode of the key files, and that every program and library finds
-# its libraries under the image's own loader (qemu-aarch64). Prints no file contents.
+# the vendor rootfs, the boot essentials, files/ of the repo unchanged, panic, key and sleep settings, owner and mode
+# of the key files, and that every program and library finds its libraries under the image's own loader
+# (qemu-aarch64). Prints no file contents.
 #   check-image.sh <.img> <vendor rootfs .img> <new work dir, removed at the end>
 # Result: one PASS or FAIL line per check; exit 1 on any FAIL.
 set -uo pipefail
 IMG=${1:?.img of make-image.sh}
 REF=${2:?vendor rootfs .img}
 WORK=${3:?new work dir}
+HERE=$(cd "$(dirname "$0")" && pwd)
 DEBUGFS=/usr/sbin/debugfs
 SIZE=17179869184
 
@@ -28,13 +30,24 @@ result "/sbin/init is systemd" $?
 for f in /etc/mowbite/probezeit /usr/lib/mowbite/probezeit /usr/lib/mowbite/tron-hwinit /etc/fstab \
          /etc/systemd/system/sysinit.target.wants/mowbite-probezeit.service \
          /etc/systemd/system/timers.target.wants/mowbite-probezeit-check.timer /userdata /meta \
-         /etc/locale.conf /etc/NetworkManager/conf.d/20-unused-wifi.conf /usr/bin/fuser; do
+         /etc/locale.conf /etc/NetworkManager/conf.d/20-unused-wifi.conf /usr/bin/fuser \
+         /etc/systemd/system/sysinit.target.wants/mowbite-crash.service \
+         /etc/systemd/system/sysinit.target.wants/systemd-pstore.service; do
     "$DEBUGFS" -c -R "stat $f" "$IMG" 2>/dev/null | grep -q '^Inode:'; result "present: $f" $?
 done
 for t in motd-news apt-daily apt-daily-upgrade; do
     ! "$DEBUGFS" -c -R "stat /etc/systemd/system/timers.target.wants/$t.timer" "$IMG" 2>/dev/null | grep -q '^Inode:'
     result "off: $t.timer" $?
 done
+test "$(stat_of /usr/lib/mowbite/crash)" = "0755 0:0"; result "crash script 0755 root" $?
+# Classifies the password fields without printing them: root hashed or locked, every other account locked.
+"$DEBUGFS" -c -R "cat /etc/shadow" "$IMG" 2>/dev/null | awk -F: '
+    $1 == "root" { root = $2 ~ /^\$(6|y)\$/ ? "set" : $2 ~ /^[!*]/ ? "none" : "bad"; next }
+    $2 !~ /^[!*]/ { others++ }
+    END { printf "root password: %s, other accounts with a password: %d\n", root, others
+          exit !((root == "set" || root == "none") && !others) }'
+result "root password hashed or locked, no other password" $?
+test "$(stat_of /etc/shadow)" = "0640 0:42"; result "/etc/shadow 0640 root:shadow" $?
 test "$(stat_of /root/.ssh)" = "0700 0:0"; result "/root/.ssh 0700 root" $?
 test "$(stat_of /root/.ssh/authorized_keys)" = "0600 0:0"; result "authorized_keys 0600 root" $?
 for d in /etc/ssh /etc/NetworkManager/system-connections; do
@@ -61,6 +74,31 @@ test "$profiles" = "$ignoring"; result "WLAN profiles ignore IPv6 name servers" 
 # Every program and library of the image against the image's loader and libraries.
 "$DEBUGFS" -c -R "rdump / $WORK" "$IMG" >/dev/null 2>&1
 TREE=$WORK
+
+# Before the ELF walk below rewrites absolute links in the tree.
+(cd "$HERE/files" && find . ! -type d) | while read -r f; do
+    if [ -L "$HERE/files/$f" ]; then
+        test "$(readlink "$TREE/$f")" = "$(readlink "$HERE/files/$f")"
+    else
+        cmp -s "$TREE/$f" "$HERE/files/$f"
+    fi || echo "  differs: $f"
+done > "$WORK/files.diff"
+test ! -s "$WORK/files.diff"; result "files/ of the repo unchanged in the image" $?
+cat "$WORK/files.diff"
+# Only the MowBite file sets the panic values; a later file would override it.
+test "$(grep -rlE '^[[:space:]]*kernel\.panic' "$TREE/etc/sysctl.conf" "$TREE/etc/sysctl.d" "$TREE/usr/lib/sysctl.d" \
+    2>/dev/null)" = "$TREE/etc/sysctl.d/60-mowbite-panic.conf"
+result "kernel.panic only in 60-mowbite-panic.conf" $?
+! grep -q sysctl "$TREE/usr/lib/mowbite/probezeit"; result "probezeit sets no sysctl" $?
+# keys <template> <prefix> <value>: every key the template of this systemd knows, set to <value>.
+keys() { sed -n "s/^#\($2[A-Za-z]*\)=.*/\1=$3/p" "$TREE/$1" | sort; }
+set_in() { grep "^$2" "$TREE/$1" | sort; }
+test "$(keys etc/systemd/logind.conf Handle ignore)" = "$(set_in etc/systemd/logind.conf.d/mowbite.conf Handle)" \
+    && test -n "$(keys etc/systemd/logind.conf Handle ignore)"
+result "logind ignores every key and switch" $?
+test "$(keys etc/systemd/sleep.conf Allow no)" = "$(set_in etc/systemd/sleep.conf.d/mowbite.conf Allow)" \
+    && test -n "$(keys etc/systemd/sleep.conf Allow no)"
+result "every sleep state off" $?
 # ROS libraries come from the environment, systemd's private ones from the RUNPATH of its programs.
 LIBPATH=/opt/ros/jazzy/lib:/opt/ros/jazzy/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/systemd
 # Loaded only for the ATM qdisc of tc, which needs libatm (a recommendation of iproute2, not installed).
