@@ -61,6 +61,7 @@ static_assert(xcore::kReasonFirmwareIncompatible == HardwareStatus::REASON_FIRMW
 static_assert(xcore::kReasonTilt == HardwareStatus::REASON_TILT);
 static_assert(xcore::kReasonFence == HardwareStatus::REASON_FENCE);
 static_assert(xcore::kReasonStuck == HardwareStatus::REASON_STUCK);
+static_assert(mowbite_hold::kReasonUnexpectedRestart == HardwareStatus::REASON_UNEXPECTED_RESTART);
 static_assert(xcore::kReasonMowerNotStopped == HardwareStatus::REASON_MOWER_NOT_STOPPED);
 static_assert(xcore::kReasonWheelRunaway == HardwareStatus::REASON_WHEEL_RUNAWAY);
 static_assert(xcore::kReasonForeignHost == HardwareStatus::REASON_FOREIGN_HOST);
@@ -754,9 +755,9 @@ class XcoreNode : public rclcpp::Node {
       const uint32_t bits = req.bits ? req.bits : xcore::kReasonHighLevel;
       if (!io_->LatchEmergency(bits)) {
         log.Error(mowbite_outbox::Format(
-            "Refused to latch with reason bits 0x%x: only HIGH_LEVEL, TILT, FENCE and STUCK", bits));
+            "Refused to latch with reason bits 0x%x: only HIGH_LEVEL, TILT, FENCE, STUCK and UNEXPECTED_RESTART", bits));
         res.success = false;
-        res.message = "only HIGH_LEVEL, TILT, FENCE and STUCK can be latched by request";
+        res.message = "only HIGH_LEVEL, TILT, FENCE, STUCK and UNEXPECTED_RESTART can be latched by request";
         return;
       }
       log.Warn(mowbite_outbox::Format("Emergency latched by request (bits 0x%x): %s", bits, req.reason.c_str()));

@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "mowbite_hold/restart.h"
 #include "xcore_driver/drive_regulator.h"
 #include "xcore_driver/odometry.h"
 #include "xcore_driver/wire.h"
@@ -104,7 +105,7 @@ constexpr uint32_t kReasonDriverStall = 1u << 20;
 // Causes the board latches; the driver keeps them in its reason until the release, also across a restart of the board.
 constexpr uint32_t kLatchedCauses = (1u << 2) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 9) | (1u << 10) | (1u << 11);
 // The bits a node above the driver may latch with over hw/emergency.
-constexpr uint32_t kHostLatchReasons = kReasonHighLevel | kReasonTilt | kReasonFence | kReasonStuck;
+using mowbite_hold::kHostLatchReasons;
 
 enum class BladeOffReason : uint8_t {
   kNone = 0,

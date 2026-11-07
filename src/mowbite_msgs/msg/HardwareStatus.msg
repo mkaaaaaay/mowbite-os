@@ -23,6 +23,8 @@ uint32 REASON_MOWER_NOT_STOPPED = 131072
 uint32 REASON_WHEEL_RUNAWAY = 262144
 uint32 REASON_FOREIGN_HOST = 524288
 uint32 REASON_DRIVER_STALL = 1048576
+# Latched by mowbite_safety while <data_dir>/restart-hold.json is there: the hold after an unexpected restart.
+uint32 REASON_UNEXPECTED_RESTART = 2097152
 
 # Motion and blade are blocked by the driver: latched, stale telemetry or incompatible firmware.
 bool emergency

@@ -3,7 +3,7 @@
 <package format="3">
   <name>mowbite_hold</name>
   <version>0.0.0</version>
-  <description>The hold of an update (data_dir/hold.json) for the logic and the drivers, without ROS</description>
+  <description>The hold of an update (data_dir/hold.json) and the restart hold for the logic, S2 and the drivers, without ROS</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
   <license>GPL-3.0</license>
 

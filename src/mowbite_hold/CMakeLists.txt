@@ -10,8 +10,8 @@ add_compile_options(-ffp-contract=off)
 find_package(ament_cmake REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
-# The hold of an update: the file, its time limit and the watch of the drivers, without ROS.
-add_library(mowbite_hold_core STATIC src/hold.cpp)
+# The hold of an update (the file, its time limit and the watch of the drivers) and the restart hold, without ROS.
+add_library(mowbite_hold_core STATIC src/file_io.cpp src/hold.cpp src/restart.cpp)
 target_include_directories(mowbite_hold_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -27,8 +27,8 @@ install(TARGETS mowbite_hold_core
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(mowbite_hold_test test/test_hold.cpp)
-  target_link_libraries(mowbite_hold_test mowbite_hold_core)
+  ament_add_gtest(mowbite_hold_test test/test_hold.cpp test/test_restart.cpp)
+  target_link_libraries(mowbite_hold_test mowbite_hold_core nlohmann_json::nlohmann_json)
 endif()
 
 ament_export_targets(export_mowbite_hold HAS_LIBRARY_TARGET)

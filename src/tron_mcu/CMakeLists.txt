@@ -22,6 +22,7 @@ add_library(tron_mcu_core STATIC src/mcu_codec.cpp src/mcu_control.cpp src/seria
 target_include_directories(tron_mcu_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
+target_link_libraries(tron_mcu_core mowbite_hold::mowbite_hold_core)
 set_target_properties(tron_mcu_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(tron_mcu_component SHARED src/mcu_node.cpp)
@@ -45,4 +46,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_tron_mcu HAS_LIBRARY_TARGET)
+ament_export_dependencies(mowbite_hold)
 ament_package()

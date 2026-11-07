@@ -1,14 +1,13 @@
 #include "mowbite_hold/hold.h"
 
-#include <fcntl.h>
 #include <sys/stat.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <cerrno>
-#include <cstdio>
 #include <cstring>
 #include <nlohmann/json.hpp>
+
+#include "file_io.h"
 
 namespace mowbite_hold {
 
@@ -25,19 +24,6 @@ std::optional<int64_t> Time(const nlohmann::json& value) {
   const int64_t t = value.get<int64_t>();
   if (t < 0 || t > kLatestTime) return std::nullopt;
   return t;
-}
-
-std::string Folder(const std::string& path) {
-  const size_t slash = path.rfind('/');
-  if (slash == std::string::npos) return ".";
-  return slash == 0 ? "/" : path.substr(0, slash);
-}
-
-void SyncFolder(const std::string& path) {
-  const int fd = ::open(Folder(path).c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (fd < 0) return;
-  ::fsync(fd);
-  ::close(fd);
 }
 
 }  // namespace
@@ -67,34 +53,12 @@ int64_t HoldSeconds(const HoldRecord& record, int64_t now_wall) {
 
 HoldFile ReadHoldFile(const std::string& path) {
   HoldFile file;
-  const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
-  if (fd < 0) {
-    if (errno == ENOENT) return file;
-    file.state = HoldFile::State::kUnreadable;
-    file.error = "cannot open " + path + ": " + std::strerror(errno);
-    return file;
-  }
   std::string text;
-  char buffer[512];
-  bool failed = false;
-  while (text.size() <= kMaxFileBytes) {
-    const ssize_t n = ::read(fd, buffer, sizeof(buffer));
-    if (n < 0 && errno == EINTR) continue;
-    if (n < 0) {
-      failed = true;
-      file.error = "cannot read " + path + ": " + std::strerror(errno);
-      break;
-    }
-    if (n == 0) break;
-    text.append(buffer, static_cast<size_t>(n));
-  }
-  ::close(fd);
+  const FileRead read = ReadSmallFile(path, kMaxFileBytes, &text, &file.error);
+  if (read == FileRead::kMissing) return file;
   file.state = HoldFile::State::kUnreadable;
-  if (failed) return file;
-  if (text.size() > kMaxFileBytes) {
-    file.error = path + " is larger than a hold";
-    return file;
-  }
+  if (read == FileRead::kTooLarge) file.error = path + " is larger than a hold";
+  if (read != FileRead::kText) return file;
   const auto record = ParseHold(text);
   if (!record) {
     file.error = path + " is not a hold (until and set_at in unix seconds)";
@@ -106,48 +70,11 @@ HoldFile ReadHoldFile(const std::string& path) {
 }
 
 bool WriteHoldFile(const std::string& path, const HoldRecord& record, std::string* error) {
-  const std::string temp = path + ".tmp";
-  const std::string text = HoldText(record);
-  const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-  if (fd < 0) {
-    *error = "cannot write " + temp + ": " + std::strerror(errno);
-    return false;
-  }
-  size_t done = 0;
-  while (done < text.size()) {
-    const ssize_t n = ::write(fd, text.data() + done, text.size() - done);
-    if (n < 0 && errno == EINTR) continue;
-    if (n < 0) {
-      *error = "cannot write " + temp + ": " + std::strerror(errno);
-      ::close(fd);
-      ::unlink(temp.c_str());
-      return false;
-    }
-    done += static_cast<size_t>(n);
-  }
-  const bool synced = ::fsync(fd) == 0;
-  ::close(fd);
-  if (!synced) {
-    *error = "cannot sync " + temp + ": " + std::strerror(errno);
-    ::unlink(temp.c_str());
-    return false;
-  }
-  if (std::rename(temp.c_str(), path.c_str()) != 0) {
-    *error = "cannot replace " + path + ": " + std::strerror(errno);
-    ::unlink(temp.c_str());
-    return false;
-  }
-  SyncFolder(path);
-  return true;
+  return WriteFileAtomic(path, HoldText(record), error);
 }
 
 bool RemoveHoldFile(const std::string& path, std::string* error) {
-  if (::unlink(path.c_str()) != 0 && errno != ENOENT) {
-    *error = "cannot remove " + path + ": " + std::strerror(errno);
-    return false;
-  }
-  SyncFolder(path);
-  return true;
+  return RemoveFileSynced(path, error);
 }
 
 void HoldTimer::Start(const HoldRecord& record, double now_mono, int64_t now_wall) {

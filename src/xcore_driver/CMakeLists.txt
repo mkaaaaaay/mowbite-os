@@ -23,7 +23,7 @@ add_library(xcore_core STATIC src/wire.cpp src/cbor.cpp src/schema.cpp src/servi
 target_include_directories(xcore_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(xcore_core mowbite_gnss::mowbite_gnss_core)
+target_link_libraries(xcore_core mowbite_gnss::mowbite_gnss_core mowbite_hold::mowbite_hold_core)
 set_target_properties(xcore_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # The I/O thread with sockets, link and control, also without ROS: it cannot publish or log by itself.
@@ -59,5 +59,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_xcore_driver HAS_LIBRARY_TARGET)
-ament_export_dependencies(mowbite_gnss mowbite_outbox)
+ament_export_dependencies(mowbite_gnss mowbite_outbox mowbite_hold)
 ament_package()
