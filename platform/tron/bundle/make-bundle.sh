@@ -1,7 +1,7 @@
 #!/bin/bash
 # A bundle of MowBite OS for mowbite-update on the Tron from an arm64 image of docker/os.Dockerfile (a loaded image or
-# the .tar of docker save): <out dir>/mowbite-os-<revision>.tar.gz with <revision>/install, planner, revision and
-# bundle.json. Unsigned; the owner signs it: ssh-keygen -Y sign -f <key> -n mowbite-bundle <bundle>
+# the .tar of docker save): <out dir>/mowbite-os-<revision>.tar.gz with <revision>/install, planner, tools (the safety
+# measurement for mowbite-measure), revision and bundle.json. Unsigned; the owner signs it: ssh-keygen -Y sign -f <key> -n mowbite-bundle <bundle>
 set -euo pipefail
 if [ $# -ne 2 ]; then
     echo "usage: $0 <image or image.tar> <out dir>" >&2
@@ -32,6 +32,7 @@ container=$(docker create --platform linux/arm64 "$image" true)
 mkdir "$work/$revision"
 docker cp -q "$container:/ws/install" "$work/$revision/install"
 docker cp -q "$container:/opt/mowbite_planner" "$work/$revision/planner"
+docker cp -q "$container:/ws/tools" "$work/$revision/tools"
 docker cp -q "$container:/opt/runtime-packages.txt" "$work/runtime-packages.txt"
 printf '%s\n' "$commit" > "$work/$revision/revision"
 python3 -I - "$work/runtime-packages.txt" "$revision" "$commit" "$min_app" > "$work/$revision/bundle.json" <<'PY'

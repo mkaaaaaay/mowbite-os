@@ -107,6 +107,7 @@ result "mowbite-update-recover.service enabled" $?
 ! grep -q '/run/mowbite/crash' "$TREE/etc/systemd/system/mowbite-os.service"
 result "mowbite-os starts after a crash, its restart hold holds" $?
 sh -n "$TREE/usr/sbin/mowbite-crash-ok"; result "mowbite-crash-ok parses" $?
+bash -n "$TREE/usr/sbin/mowbite-measure"; result "mowbite-measure parses" $?
 test "$(stat_of /usr/sbin/mowbite-crash-ok)" = "0755 0:0"; result "mowbite-crash-ok 0755 root" $?
 cmp -s "$TREE/etc/mosquitto/mosquitto.conf" "$HERE/../../../docker/mower/mosquitto.conf"
 result "broker configuration of the Compose stack" $?

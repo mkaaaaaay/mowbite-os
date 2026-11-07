@@ -1,0 +1,109 @@
+#!/bin/bash
+# The safety measurement of phase 6 with one command, as root: T0 reads (installation, settings, state of the OS, space,
+# crashes, boot area), then MowBite OS stops and measure.py of the installed bundle runs T1-T5 with tron_imu and tron_mcu
+# alone (as user mowbite). MowBite OS starts again at the end, on an abort and when the ssh session ends. Recordings in
+# OUT/<time>/, beyond KEEP runs or MAX_MB the oldest go. Further arguments go to measure.py (--steps T1,T2, --repeats n).
+set -u
+SERVICE=mowbite-os.service
+DATA=/userdata/mowbite
+OUT=/userdata/mowbite-measure
+KEEP=10
+MAX_MB=500
+NEED_MB=300
+ROOT_FREE_MB=4096
+CRASHES=/var/lib/mowbite/crashes
+CRASH_LATCH=/run/mowbite/crash-latch
+NODE_USER=mowbite
+LOCK=/run/mowbite-measure.lock
+
+fail() {
+    echo "mowbite-measure: $*" >&2
+    exit 1
+}
+
+[ "$(id -u)" = 0 ] || fail "run it as root"
+exec 9> "$LOCK"
+flock -n 9 || fail "another mowbite-measure is running"
+set -a
+source /usr/lib/mowbite/os.defaults
+[ ! -r /etc/mowbite/os.conf ] || source /etc/mowbite/os.conf
+set +a
+current=$(readlink -f /opt/mowbite/current) || fail "no installation under /opt/mowbite/current"
+measure=$current/tools/measure.py
+[ -r "$measure" ] || fail "the installed bundle has no tools/measure.py: install a bundle with it first"
+
+echo "== T0, read only"
+mowbite-update status
+echo "installation: $current"
+[ "$MOWBITE_HARDWARE" = false ] || fail "MOWBITE_HARDWARE=$MOWBITE_HARDWARE in /etc/mowbite/os.conf: the measurement is \
+for a Tron that runs with hardware=false"
+if systemctl is-active --quiet "$SERVICE"; then
+    health=$(source /usr/lib/mowbite/os-setup "$current" && timeout 30 ros2 run mowbite_bridge mowbite_health)
+    echo "MowBite OS: $health"
+    [ "${health##* }" = IDLE ] || fail "MowBite OS is not idle: nothing stopped"
+fi
+free_data=$(df -Pm /userdata | awk 'NR == 2 {print $4}')
+free_root=$(df -Pm / | awk 'NR == 2 {print $4}')
+echo "free: /userdata $free_data MB, / $free_root MB"
+[ "$free_data" -ge "$NEED_MB" ] || fail "less than $NEED_MB MB free on /userdata"
+[ "$free_root" -ge "$ROOT_FREE_MB" ] || fail "less than $ROOT_FREE_MB MB free on /"
+echo "crashes within the last hour: $(awk -v since=$(($(date +%s) - 3600)) '$1 >= since' "$CRASHES" 2>/dev/null | wc -l)"
+[ ! -e "$CRASH_LATCH" ] || echo "crash latch: $(cat "$CRASH_LATCH")"
+start=$(cat /sys/block/mmcblk0/mmcblk0p1/start)
+echo "boot area (sectors 0-$((start - 1))): $(dd if=/dev/mmcblk0 bs=512 count="$start" status=none | sha256sum | cut -c1-64)"
+for area in /dev/mmcblk0boot0 /dev/mmcblk0boot1; do
+    [ ! -e "$area" ] || echo "$area: $(dd if="$area" bs=1M status=none | sha256sum | cut -c1-64)"
+done
+
+read -r -p "Stop MowBite OS (the app disconnects) and start the measurement? [y/N] " answer
+[ "$answer" = y ] || [ "$answer" = Y ] || fail "nothing stopped"
+
+# The oldest runs go first, beyond KEEP - 1 or MAX_MB, so that the new one fits.
+mkdir -p "$OUT"
+ls -1d "$OUT"/*/ 2>/dev/null | sort | head -n -$((KEEP - 1)) | xargs -r rm -rf
+while [ "$(du -sm "$OUT" | cut -f1)" -gt "$MAX_MB" ] && [ -n "$(ls -A "$OUT")" ]; do
+    rm -rf "$(ls -1d "$OUT"/*/ | sort | head -n1)"
+done
+run=$OUT/$(date +%Y%m%d-%H%M%S)
+mkdir -p "$run/ros-log"
+chown "$NODE_USER": "$run/ros-log"
+
+child=
+restored=
+# Ends the programme (it stops the wheels itself on SIGHUP and SIGTERM), then anything it left, then starts the OS.
+restore() {
+    [ -z "$restored" ] || return
+    restored=1
+    trap '' HUP INT TERM
+    if [ -n "$child" ] && kill -0 "$child" 2> /dev/null; then
+        kill -TERM "$child" 2> /dev/null
+        for _ in $(seq 100); do kill -0 "$child" 2> /dev/null || break; sleep 0.1; done
+        kill -KILL "$child" 2> /dev/null
+    fi
+    pkill -INT -x tron_mcu_node
+    pkill -INT -x tron_imu_node
+    for _ in $(seq 50); do pgrep -x 'tron_(mcu|imu)_node' > /dev/null || break; sleep 0.1; done
+    pkill -KILL -x 'tron_(mcu|imu)_node'
+    systemctl reset-failed "$SERVICE"
+    systemctl start "$SERVICE"
+    echo "MowBite OS: $(systemctl is-active "$SERVICE"); recording in $run"
+    logger -t mowbite-measure "ended, $SERVICE $(systemctl is-active "$SERVICE"), recording $run"
+}
+trap restore EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+logger -t mowbite-measure "stopping $SERVICE for the measurement, recording $run"
+systemctl stop "$SERVICE" || fail "systemctl stop $SERVICE failed"
+exec 3<&0
+(
+    source /usr/lib/mowbite/os-setup "$current"
+    export ROS_LOG_DIR=$run/ros-log PYTHONUNBUFFERED=1
+    exec python3 "$measure" --platform tron --data-dir "$DATA" --record-dir "$run" --node-user "$NODE_USER" "$@"
+) <&3 &
+child=$!
+wait "$child"
+code=$?
+child=
+exit "$code"

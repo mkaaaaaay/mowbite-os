@@ -6,7 +6,7 @@
   mowbite-update recover                                  after an update that did not finish (at boot)
   mowbite-update status
 
-A bundle is a tar of one directory <revision>/ with install/, planner/, revision and bundle.json (format 1, revision,
+A bundle is a tar of one directory <revision>/ with install/, planner/, tools/, revision and bundle.json (format 1, revision,
 min_app, runtime_packages). Before the switch: signature (ssh-keygen -Y, /etc/mowbite/allowed_signers), the runtime
 packages installed (no apt here), every ELF finds its libraries. The switch only while the OS is stopped or reports
 IDLE, never while the restart hold of the OS stands or before the OS judged a kernel crash of this boot. After it the
