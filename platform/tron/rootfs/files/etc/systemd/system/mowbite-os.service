@@ -1,7 +1,6 @@
 [Unit]
 Description=MowBite OS
-# After a kernel crash the OS stays off in this boot until mowbite-crash-ok.
-ConditionPathExists=!/run/mowbite/crash
+# After a kernel crash the OS starts with its restart hold (crash_record); mowbite-crash-ok or the app release it.
 ConditionPathExists=/opt/mowbite/current
 After=mowbite-crash.service mosquitto.service network.target
 Wants=mosquitto.service

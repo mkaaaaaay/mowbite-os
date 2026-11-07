@@ -104,8 +104,10 @@ result "mowbite-os.service enabled" $?
 test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-update-recover.service")" = \
     ../mowbite-update-recover.service
 result "mowbite-update-recover.service enabled" $?
-grep -qx 'ConditionPathExists=!/run/mowbite/crash' "$TREE/etc/systemd/system/mowbite-os.service"
-result "mowbite-os stays off after a crash" $?
+! grep -q '/run/mowbite/crash' "$TREE/etc/systemd/system/mowbite-os.service"
+result "mowbite-os starts after a crash, its restart hold holds" $?
+sh -n "$TREE/usr/sbin/mowbite-crash-ok"; result "mowbite-crash-ok parses" $?
+test "$(stat_of /usr/sbin/mowbite-crash-ok)" = "0755 0:0"; result "mowbite-crash-ok 0755 root" $?
 cmp -s "$TREE/etc/mosquitto/mosquitto.conf" "$HERE/../../../docker/mower/mosquitto.conf"
 result "broker configuration of the Compose stack" $?
 # keys <template> <prefix> <value>: every key the template of this systemd knows, set to <value>.

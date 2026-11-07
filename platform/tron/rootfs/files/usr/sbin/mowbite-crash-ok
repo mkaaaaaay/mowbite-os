@@ -1,12 +1,26 @@
 #!/bin/sh
-# After a kernel crash the owner has looked at the mower: MowBite OS may start in this boot.
+# The owner has looked at the mower after an unexpected restart: the restart hold of MowBite OS goes and the OS starts
+# again without it. emergency.reset in the app does the same without a restart.
 set -eu
-if [ ! -e /run/mowbite/crash ]; then
-    echo "no crash record in this boot"
+DATA=/userdata/mowbite
+HOLD=$DATA/restart-hold.json
+SESSION=$DATA/os-session.json
+CRASH=/run/mowbite/crash
+[ ! -e "$CRASH" ] || echo "crash record of this boot: $(cat "$CRASH")"
+# Before its first start in this boot the OS has not judged the end before: it would hold again after this.
+boot=$(cat /proc/sys/kernel/random/boot_id)
+if ! grep -qF "\"boot_id\":\"$boot\"" "$SESSION" 2>/dev/null; then
+    echo "MowBite OS has not run in this boot yet: start it first (systemctl start mowbite-os.service)" >&2
+    exit 1
+fi
+if [ ! -e "$HOLD" ]; then
+    echo "no restart hold"
     exit 0
 fi
-echo "crash record: $(cat /run/mowbite/crash)"
-mv /run/mowbite/crash /run/mowbite/crash.ok
-logger -t mowbite-crash-ok "released after the crash record $(cat /run/mowbite/crash.ok)"
+echo "restart hold: $(cat "$HOLD")"
+systemctl stop mowbite-os.service
+rm "$HOLD"
+sync "$DATA"
+logger -t mowbite-crash-ok "restart hold released"
 systemctl start mowbite-os.service
 systemctl is-active mowbite-os.service

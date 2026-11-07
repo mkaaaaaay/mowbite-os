@@ -9,7 +9,8 @@
 A bundle is a tar of one directory <revision>/ with install/, planner/, revision and bundle.json (format 1, revision,
 min_app, runtime_packages). Before the switch: signature (ssh-keygen -Y, /etc/mowbite/allowed_signers), the runtime
 packages installed (no apt here), every ELF finds its libraries. The switch only while the OS is stopped or reports
-IDLE, never after a crash in this boot. After it the OS has to report healthy within HEALTH_WAIT s, else it goes back.
+IDLE, never while the restart hold of the OS stands or before the OS judged a kernel crash of this boot. After it the
+OS has to report healthy within HEALTH_WAIT s, else it goes back.
 Two installations are kept: current and previous. A power cut leaves current on the old or the new one, never half;
 /opt/mowbite/pending says that a switch has not been confirmed healthy, and recover goes back to the one before.
 """
@@ -30,6 +31,10 @@ PREVIOUS = OPT + "/previous"
 PENDING = OPT + "/pending"
 SIGNERS = PREFIX + "/etc/mowbite/allowed_signers"
 CRASH = PREFIX + "/run/mowbite/crash"
+BOOT_ID = PREFIX + "/proc/sys/kernel/random/boot_id"
+# Written by the logic of MowBite OS in its data_dir (mowbite_hold/restart.h).
+RESTART_HOLD = PREFIX + "/userdata/mowbite/restart-hold.json"
+SESSION = PREFIX + "/userdata/mowbite/os-session.json"
 LOCK = PREFIX + "/run/mowbite-update.lock"
 ENV_FILES = [PREFIX + "/usr/lib/mowbite/os.defaults", PREFIX + "/etc/mowbite/os.conf"]
 OS_SETUP = PREFIX + "/usr/lib/mowbite/os-setup"
@@ -219,11 +224,26 @@ def wait_healthy(root):
         time.sleep(HEALTH_EVERY)
 
 
+# Whether the OS started in this boot already: then it judged the kernel record of this boot.
+def crash_judged():
+    try:
+        with open(BOOT_ID) as f:
+            boot = f.read().strip()
+        with open(SESSION) as f:
+            session = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return bool(boot) and isinstance(session, dict) and session.get("boot_id") == boot
+
+
 def check_switch_allowed():
     if os.path.exists(PENDING):
         raise Refused("an update did not finish: run mowbite-update recover first")
-    if os.path.exists(CRASH):
-        raise Refused(f"a crash record in this boot ({CRASH}): look at the mower and run mowbite-crash-ok first")
+    if os.path.lexists(RESTART_HOLD):
+        raise Refused(f"the mower is held after an unexpected restart ({RESTART_HOLD}): look at it, then release it "
+                      "in the app or with mowbite-crash-ok")
+    if os.path.exists(CRASH) and not crash_judged():
+        raise Refused(f"a crash record in this boot ({CRASH}) that MowBite OS has not judged yet: start it first")
     current = link_target(CURRENT)
     if current and service_active():
         ok, line = health(os.path.join(OPT, current))
@@ -354,6 +374,8 @@ def status():
         log(f"unfinished update: {open(PENDING).read().strip()}")
     if os.path.exists(CRASH):
         log(f"crash record: {open(CRASH).read().strip()}")
+    if os.path.lexists(RESTART_HOLD):
+        log(f"restart hold: {RESTART_HOLD}")
     return True
 
 

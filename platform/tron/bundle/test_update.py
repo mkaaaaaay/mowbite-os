@@ -17,14 +17,14 @@ import unittest
 HERE = os.path.dirname(os.path.realpath(__file__))
 TOOL = os.path.join(HERE, "..", "rootfs", "files", "usr", "sbin", "mowbite-update")
 
-# systemctl: the state of the service in $PREFIX/state/service; a start with a crash record does nothing (condition).
+# systemctl: the state of the service in $PREFIX/state/service.
 SYSTEMCTL = """#!/bin/sh
 s="$MOWBITE_UPDATE_PREFIX/state/service"
 echo "$*" >> "$MOWBITE_UPDATE_PREFIX/state/systemctl.log"
 case "$1" in
   is-active) state=$(cat "$s" 2>/dev/null || echo inactive); [ "$2" = --quiet ] || echo "$state"; [ "$state" = active ];;
   stop) echo inactive > "$s";;
-  start) [ -e "$MOWBITE_UPDATE_PREFIX/run/mowbite/crash" ] || echo active > "$s";;
+  start) echo active > "$s";;
   reset-failed) ;;
 esac
 """
@@ -95,6 +95,7 @@ class UpdateTest(unittest.TestCase):
         shutil.rmtree(self.root)
 
     def write(self, path, text, mode=0o644):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             f.write(text)
         os.chmod(path, mode)
@@ -223,8 +224,26 @@ class UpdateTest(unittest.TestCase):
     def test_crash_record(self):
         self.install(self.bundle("aaa"))
         self.write(os.path.join(self.prefix, "run/mowbite/crash"), "1 Kernel panic")
+        self.write(os.path.join(self.prefix, "proc/sys/kernel/random/boot_id"), "b2\n")
+        session = os.path.join(self.prefix, "userdata/mowbite/os-session.json")
+        # Not judged by the OS of this boot yet: no session, or one of the boot before.
+        self.assertEqual(self.install(self.bundle("bbb")), 1)
+        self.write(session, json.dumps({"state": "IDLE", "boot_id": "b1"}))
         self.assertEqual(self.install(self.bundle("bbb")), 1)
         self.assertEqual(self.link("current"), "aaa")
+        # The OS started in this boot and judged it.
+        self.write(session, json.dumps({"state": "IDLE", "boot_id": "b2"}))
+        self.assertEqual(self.install(self.bundle("bbb")), 0)
+        self.assertEqual(self.link("current"), "bbb")
+
+    def test_restart_hold(self):
+        self.install(self.bundle("aaa"))
+        hold = os.path.join(self.prefix, "userdata/mowbite/restart-hold.json")
+        self.write(hold, "{}")
+        self.assertEqual(self.install(self.bundle("bbb")), 1)
+        self.assertEqual(self.link("current"), "aaa")
+        os.remove(hold)
+        self.assertEqual(self.install(self.bundle("bbb")), 0)
 
     def test_unhealthy_goes_back(self):
         self.install(self.bundle("aaa"))
