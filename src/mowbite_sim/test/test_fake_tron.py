@@ -8,6 +8,7 @@ import importlib.util
 import json
 import math
 import os
+import random
 import struct
 import subprocess
 import sys
@@ -185,42 +186,61 @@ class HistoryTest(unittest.TestCase):
 
 class HostLinkTest(unittest.TestCase):
     def test_no_traffic_no_motion(self):
-        host = ft.HostLink(2.0)
-        host.on_speed(0.3, 0.0)
+        host = ft.HostLink(0.2)
         self.assertEqual(host.setpoint(0.0, False), (0.0, 0.0))
 
-    def test_holds_while_host_talks(self):
-        host = ft.HostLink(2.0)
-        host.on_frame(0.0)
-        host.on_speed(0.3, 0.1)
-        for t in (0.5, 1.5, 2.0):
-            host.on_frame(t)
+    def test_holds_for_the_timeout_after_the_last_speed(self):
+        host = ft.HostLink(0.2)
+        host.on_speed(0.3, 0.1, 0.0)
+        for t in (0.1, 0.2):
             self.assertEqual(host.setpoint(t, False), (0.3, 0.1))
+        self.assertEqual(host.setpoint(0.21, False), (0.0, 0.0))
 
-    def test_stops_after_two_seconds_of_silence(self):
-        host = ft.HostLink(2.0)
+    def test_heartbeats_do_not_hold_the_setpoint(self):
+        host = ft.HostLink(0.2)
         host.on_frame(0.0)
-        host.on_speed(0.3, 0.0)
-        self.assertEqual(host.setpoint(2.0, False), (0.3, 0.0))
-        self.assertEqual(host.setpoint(2.01, False), (0.0, 0.0))
+        host.on_speed(0.3, 0.0, 0.0)
+        for t in (0.1, 0.2, 0.3):
+            host.on_frame(t)
+        self.assertEqual(host.setpoint(0.3, False), (0.0, 0.0))
+        self.assertFalse(host.silent(0.3))
 
-    def test_new_traffic_alone_does_not_restart(self):
-        host = ft.HostLink(2.0)
-        host.on_frame(0.0)
-        host.on_speed(0.3, 0.0)
-        host.setpoint(2.5, False)
-        host.on_frame(3.0)
-        self.assertEqual(host.setpoint(3.0, False), (0.0, 0.0))
-        host.on_speed(0.2, 0.0)
-        self.assertEqual(host.setpoint(3.1, False), (0.2, 0.0))
+    def test_repeated_speed_keeps_it(self):
+        host = ft.HostLink(0.2)
+        for t in (0.0, 0.05, 0.1, 0.15, 0.2, 0.25):
+            host.on_speed(0.3, 0.0, t)
+            self.assertEqual(host.setpoint(t + 0.05, False), (0.3, 0.0))
 
     def test_block_clears_until_next_speed(self):
-        host = ft.HostLink(2.0)
-        host.on_frame(0.0)
-        host.on_speed(0.3, 0.0)
-        self.assertEqual(host.setpoint(0.1, True), (0.0, 0.0))
-        host.on_frame(0.2)
-        self.assertEqual(host.setpoint(0.2, False), (0.0, 0.0))
+        host = ft.HostLink(0.2)
+        host.on_speed(0.3, 0.0, 0.0)
+        self.assertEqual(host.setpoint(0.05, True), (0.0, 0.0))
+        self.assertEqual(host.setpoint(0.1, False), (0.0, 0.0))
+        host.on_speed(0.2, 0.0, 0.15)
+        self.assertEqual(host.setpoint(0.2, False), (0.2, 0.0))
+
+
+class DriveReportTest(unittest.TestCase):
+    def test_rpm_by_side(self):
+        drive = ft.Drive(0.40, 0.40)
+        drive.move(0.0, 0.25)
+        left, right = drive.rpm()
+        self.assertLess(left, 0)
+        self.assertGreater(right, 0)
+        drive.move(0.05, 0.0)
+        self.assertEqual(drive.rpm(), (5, 5))
+        self.assertFalse(drive.standing())
+        drive.move(0.0, 0.0)
+        self.assertTrue(drive.standing())
+
+    def test_standstill_noise_like_the_tron(self):
+        rng = random.Random(3)
+        samples = [ft.standstill_noise(rng) for _ in range(5000)]
+        self.assertLessEqual(max(abs(v) for v, _ in samples), 0.0034)
+        self.assertLessEqual(max(abs(w) for _, w in samples), 0.02)
+        fastest = max(max(abs(v - w * 0.2), abs(v + w * 0.2)) for v, w in samples)
+        self.assertLess(fastest, 0.011)
+        self.assertGreater(fastest, 0.005)
 
 
 class GeodesyTest(unittest.TestCase):
@@ -749,8 +769,11 @@ class ProcessTest(unittest.TestCase):
         types = [t for t, _ in frames]
         self.assertGreater(types.count(0x53), 35)
         self.assertLess(types.count(0x53), 65)
+        # Upright like the sensor of the Tron: level, gravity along +z.
         angle = [v for t, v in frames if t == 0x53][-1]
-        self.assertAlmostEqual(abs(angle[0] / 32768.0 * 180.0), 180.0, delta=0.1)
+        self.assertAlmostEqual(angle[0] / 32768.0 * 180.0, 0.0, delta=0.1)
+        acc = [v for t, v in frames if t == 0x51][-1]
+        self.assertAlmostEqual(acc[2] / 32768.0 * 16.0, 1.0, delta=0.02)
 
     def test_4_symlinks_removed_at_exit(self):
         # Checked in a separate process so the class fixtures stay up.

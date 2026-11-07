@@ -61,8 +61,9 @@ FAST_REPEATS = 3
 FAST_STAND_S = {"stop": 0.5, "quiet": 1.0}
 FAST_DISTANCE_M = {"stop": 0.30, "quiet": 0.60}
 FAST_SPREAD_M = 0.15
-# A wheel this slow stands.
+# A wheel this slow stands; the Tron reports up to 0.011 m/s for one standing wheel (07.11.).
 STILL_SPEED = 0.005
+TRON_STILL_SPEED = 0.015
 # Keys this soon after an answer belong to it (a double tap on a phone), not to the step it starts.
 KEY_SETTLE_S = 0.4
 # Emergency bits of hw/status by bit number, named as in the catalog of mowbite_api (x-emergency-bits);
@@ -85,9 +86,12 @@ TRON_SHORT_REPEATS = 3
 HOST_GONE_WINDOW_S = 5.0
 HOST_GONE_LIMIT_S = 3.0
 HOST_GONE_SPREAD_S = 0.3
-# Heartbeat alone (T2): tron_mcu of that start stops the wheels only after this long without hw/cmd_vel.
+# Heartbeat alone (T2): tron_mcu of that start sends each command once and stops the wheels only after this long
+# without hw/cmd_vel.
 HEARTBEAT_ONLY_TIMEOUT_S = 10.0
-# The wheels stand this soon after an emergency (T2, T4), after the driver's watchdog plus its cmd_vel_timeout (T5).
+HEARTBEAT_ONLY = {"cmd_vel_timeout": HEARTBEAT_ONLY_TIMEOUT_S, "speed_repeat_window": 0.0}
+# The wheels stand this soon after an emergency (T2, T4), after the driver's watchdog (T5). The driver reports
+# moving false once its watchdog fired: T5 looks at it WATCHDOG_MARGIN_S after that.
 EMERGENCY_STAND_S = 1.0
 WATCHDOG_MARGIN_S = 0.5
 CAPTURE_MAX_BYTES = 1024 * 1024
@@ -120,10 +124,10 @@ def steady_speed(log, start, end, wheel_distance):
     return sum(speeds) / len(speeds) if speeds else None
 
 
-def still_after(log, since, wheel_distance):
+def still_after(log, since, wheel_distance, still=STILL_SPEED):
     """Time of the first sample (t, v, w) at or after `since` with both wheels standing; None if there is none."""
     for t, v, w in log:
-        if t >= since and fastest_wheel(v, w, wheel_distance) <= STILL_SPEED:
+        if t >= since and fastest_wheel(v, w, wheel_distance) <= still:
             return t
     return None
 
@@ -158,7 +162,7 @@ def host_gone_result(packets, since, wheel_distance):
     speeds = [(p["t"], fastest_wheel(*p["speed"], wheel_distance)) for p in packets if "speed" in p and p["t"] >= since]
     stood = None
     for t, speed in speeds:
-        if speed > STILL_SPEED:
+        if speed > TRON_STILL_SPEED:
             stood = None
         elif stood is None:
             stood = t
@@ -168,7 +172,7 @@ def host_gone_result(packets, since, wheel_distance):
     turning = [p["t"] for p in packets
                if "motors" in p and p["t"] >= since and (p["motors"]["left"] or p["motors"]["right"])]
     return {"stand_s": None if stood is None else stood - since,
-            "turning_at_start": bool(speeds) and speeds[0][1] > STILL_SPEED, "lift_s": first("lift"),
+            "turning_at_start": bool(speeds) and speeds[0][1] > TRON_STILL_SPEED, "lift_s": first("lift"),
             "stop_s": first("stop"), "rpm_last_s": turning[-1] - since if turning else None, "samples": len(speeds)}
 
 
@@ -604,6 +608,8 @@ def driver_pids():
 
 
 class Measurement:
+    still_speed = STILL_SPEED
+
     def __init__(self, args, rec, mower, person, keys):
         self.args, self.rec, self.mower, self.person, self.keys = args, rec, mower, person, keys
         self.blade_used = False
@@ -721,7 +727,7 @@ class Measurement:
         while time.monotonic() < end:
             self.check_keys()
             now = time.monotonic()
-            still_since = None if self.wheels_turn(0.005) else (still_since or now)
+            still_since = None if self.wheels_turn(self.still_speed) else (still_since or now)
             if still_since is not None and now - still_since >= 0.5:
                 return
             time.sleep(0.02)
@@ -1317,6 +1323,13 @@ class TronStart:
                 value = content.get(section, {}).get("ros__parameters", {}).get(name, value)
         return value
 
+    def watchdog(self):
+        """s without hw/cmd_vel until tron_mcu sends its stops, with the overrides of the running start."""
+        def value(name):
+            return float(self.overrides.get(name, self.param("tron_mcu", name) or 0.0))
+        timeout, window = value("cmd_vel_timeout"), value("speed_repeat_window")
+        return min(window, timeout) if window > 0 else timeout
+
     def start(self, node, **overrides):
         params = {**self.common, "port": self.ports[node], **overrides}
         # In a file of its own: a section of the node in a file wins over -p.
@@ -1390,6 +1403,7 @@ class TronStart:
 
 class TronMeasurement(Measurement):
     """T1-T5 of phase 6 on the Tron, in the air: the driver is this programme's process (TronStart)."""
+    still_speed = TRON_STILL_SPEED
 
     def __init__(self, args, rec, mower, person, keys, start):
         super().__init__(args, rec, mower, person, keys)
@@ -1412,9 +1426,9 @@ class TronMeasurement(Measurement):
 
     def stand_after(self, since, seconds=EMERGENCY_STAND_S):
         """s from `since` (monotonic) until the wheels stood, waiting up to `seconds` for it; None if they did not."""
-        self.wait(seconds, until=lambda: not self.wheels_turn(STILL_SPEED))
+        self.wait(seconds, until=lambda: not self.wheels_turn(self.still_speed))
         self.wait(0.2)
-        still = still_after(self.mower.odometry(), since, self.mower.wheel_distance)
+        still = still_after(self.mower.odometry(), since, self.mower.wheel_distance, self.still_speed)
         return None if still is None else still - since
 
     def wait_driver_back(self, step, old_pid):
@@ -1449,9 +1463,9 @@ class TronMeasurement(Measurement):
         self.show("emergency")
         return stand
 
-    def let_go(self, text):
+    def let_go(self, text, then=""):
         if not self.person.fake:
-            self.person.act(f"let go ({text}); unlock STOP if it stays down")
+            self.person.act(f"let go ({text}); unlock STOP if it stays down" + (f". {then}" if then else ""))
 
     # Steps ------------------------------------------------------------------------------------------------------------
 
@@ -1651,12 +1665,12 @@ class TronMeasurement(Measurement):
 
     def heartbeat_only(self, step):
         n = min(self.args.repeats, TRON_SHORT_REPEATS)
-        if not self.ask(f"{step} heartbeat alone, {n} runs: tron_mcu starts again with a watchdog of "
-                        f"{HEARTBEAT_ONLY_TIMEOUT_S:.0f} s (this start only); wheels at {self.speed} m/s for 2 s, then "
-                        f"no command: they may turn {HEARTBEAT_ONLY_TIMEOUT_S:.0f} s more"):
+        if not self.ask(f"{step} heartbeat alone, {n} runs: tron_mcu starts again sending each command once, with a "
+                        f"watchdog of {HEARTBEAT_ONLY_TIMEOUT_S:.0f} s (this start only); wheels at {self.speed} m/s "
+                        f"for 2 s, then no command: they may turn {HEARTBEAT_ONLY_TIMEOUT_S:.0f} s more"):
             return
         old = self.start.driver_pid
-        self.start.restart_driver(cmd_vel_timeout=HEARTBEAT_ONLY_TIMEOUT_S)
+        self.start.restart_driver(**HEARTBEAT_ONLY)
         try:
             self.wait_driver_back(step, old)
             for i in range(n):
@@ -1722,10 +1736,10 @@ class TronMeasurement(Measurement):
             self.rec.write("speed_point", step=step, command=v, reported=reported)
             print(f"     command {v:.2f} m/s, reported {reported:.3f} m/s")
             self.wait(1.0)
-        moving = [(v, r) for v, r in points if abs(r) > STILL_SPEED]
+        moving = [(v, r) for v, r in points if abs(r) > self.still_speed]
         if moving:
             factor = sum(r / v for v, r in moving) / len(moving)
-            standing = [v for v, r in points if abs(r) <= STILL_SPEED]
+            standing = [v for v, r in points if abs(r) <= self.still_speed]
             print(f"     reported/command {factor:.3f} on average; no motion at {standing or 'none'}")
             self.rec.write("speed_factor", step=step, factor=factor, standing=standing)
         text = "0.05 m/s for 20 s: count the turns of the left wheel"
@@ -1776,7 +1790,7 @@ class TronMeasurement(Measurement):
                 self.mark(step, f"{text}, run {i + 1}")
                 self.emergency_run(step, text, fake, hold)
                 self.wait(hold + 0.5)
-                self.let_go(text)
+                self.let_go(text, "Then hands off: after the release the wheels turn 1 s on a new command")
                 self.no_motion(step, 2.0, "with the input free and no new command")
                 self.release(step)
                 self.no_motion(step, 2.0, "after the release without a new command")
@@ -1787,11 +1801,11 @@ class TronMeasurement(Measurement):
 
     def t5(self):
         step = "T5"
-        timeout = float(self.start.param("tron_mcu", "cmd_vel_timeout"))
+        timeout = self.start.watchdog()
         n = min(self.args.repeats, TRON_SHORT_REPEATS)
         for i in range(n):
             if not self.ask(f"{step} the driver's watchdog, run {i + 1}/{n}: wheels at {self.speed} m/s for 2 s, then "
-                            f"no command; tron_mcu has to stop them after {timeout:.1f} s with three stops, then stay "
+                            f"no command; tron_mcu has to stop them after {timeout:.2f} s with three stops, then stay "
                             "silent"):
                 break
             self.ready(step)
@@ -1801,11 +1815,13 @@ class TronMeasurement(Measurement):
                 raise Abort()
             last = self.mower.last_cmd_at
             stand = self.stand_after(last, timeout + EMERGENCY_STAND_S + WATCHDOG_MARGIN_S)
+            # The MCU may stop the wheels before the watchdog fires (it drops a setpoint ~0.2 s after the last one).
+            self.wait(max(0.0, last + timeout + WATCHDOG_MARGIN_S - time.monotonic()))
             moving = self.status().moving
             self.rec.write("watchdog", step=step, run=i + 1, stand_s=stand, moving=moving)
             if stand is None or stand > timeout + EMERGENCY_STAND_S or moving:
                 shown = "never" if stand is None else f"after {stand:.2f} s"
-                self.finding(step, f"the wheels stood {shown} without a command (cmd_vel_timeout {timeout:.1f} s), "
+                self.finding(step, f"the wheels stood {shown} without a command (watchdog {timeout:.2f} s), "
                                    f"driver moving {moving}")
                 raise Abort()
             print(f"     the wheels stood {stand:.2f} s after the last command")

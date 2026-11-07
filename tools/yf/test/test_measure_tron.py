@@ -35,8 +35,13 @@ class TestHostGone(unittest.TestCase):
         self.assertIsNone(r["stand_s"])
 
     def test_a_turn_on_the_spot_counts_by_its_faster_wheel(self):
-        # 0.02 rad/s on 0.40 m: each wheel 0.004 m/s, standing; 0.05 rad/s: 0.01 m/s, turning.
-        self.assertAlmostEqual(m.host_gone_result(speeds((0.0, 0.0, 0.05), (1.0, 0.0, 0.02)), 0.0, D)["stand_s"], 1.0)
+        # 0.05 rad/s on 0.40 m: each wheel 0.01 m/s, standing; 0.1 rad/s: 0.02 m/s, turning.
+        self.assertAlmostEqual(m.host_gone_result(speeds((0.0, 0.0, 0.1), (1.0, 0.0, 0.05)), 0.0, D)["stand_s"], 1.0)
+
+    def test_the_noise_of_standing_wheels_stands(self):
+        # The largest the Tron reported standing (07.11.): one wheel at 0.0106 m/s.
+        packets = speeds((1.0, 0.05, 0.0), (1.2, 0.0, 0.0), (2.5, 0.0049, 0.0284), (3.0, -0.0033, 0.0208))
+        self.assertAlmostEqual(m.host_gone_result(packets, 1.0, D)["stand_s"], 0.2)
 
     def test_flags_and_motors(self):
         packets = speeds((5.0, 0.05, 0.0), (6.5, 0.0, 0.0)) + [
@@ -176,6 +181,20 @@ class TestStartParameters(unittest.TestCase):
         self.assertEqual(start.param("tron_mcu", "failsafe_without_host"), 1.6)
         self.assertEqual(start.param("tron_mcu", "t"), 1)
         self.assertIsNone(start.param("tron_mcu", "missing"))
+
+    def test_watchdog_of_the_running_start(self):
+        work = tempfile.mkdtemp(prefix="measure_tron_")
+        path = os.path.join(work, "tron.yaml")
+        with open(path, "w") as f:
+            f.write("tron_mcu:\n  ros__parameters:\n    cmd_vel_timeout: 0.5\n    speed_repeat_window: 0.3\n")
+        start = m.TronStart.__new__(m.TronStart)
+        start.files = [path]
+        start.overrides = {}
+        self.assertAlmostEqual(start.watchdog(), 0.3)
+        start.overrides = {"cmd_vel_timeout": 0.2}
+        self.assertAlmostEqual(start.watchdog(), 0.2)
+        start.overrides = dict(m.HEARTBEAT_ONLY)
+        self.assertAlmostEqual(start.watchdog(), m.HEARTBEAT_ONLY_TIMEOUT_S)
 
 
 if __name__ == "__main__":

@@ -48,7 +48,7 @@ def generate_test_description():
              parameters=[{"port": LINKS["gnss"], "datum_lat": DATUM[0], "datum_long": DATUM[1],
                           "datum_height": DATUM[2]}]),
         Node(package="tron_imu", executable="tron_imu_node", output="screen",
-             parameters=[{"port": LINKS["imu"], "mount_roll_deg": 180.0}]),
+             parameters=[{"port": LINKS["imu"]}]),
         Node(package="mowbite_localization", executable="mowbite_localization_node", output="screen",
              parameters=[{"gyro_calibration_time": 2.0}]),
         # Standing wheels, as a driver reports them: without a wheel report the gyro does not calibrate.

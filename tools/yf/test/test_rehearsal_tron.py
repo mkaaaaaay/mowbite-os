@@ -1,7 +1,8 @@
 """Rehearsal of T1-T5 against fake_tron: measure.py --platform tron starts tron_imu and tron_mcu on the fake's ptys, the
-person's actions go to the fake's flags. With the fake holding the setpoint 1.5 s without host frames, every host-gone
-run has to find that time in its capture and the proposal has to follow from it; with 4 s the limit has to end T2; a key
-while tron_mcu is frozen has to continue it and stop the wheels. No process may be left.
+person's actions go to the fake's flags. The fake reports the noise of standing wheels and the motors like the Tron.
+With the fake holding the setpoint 1.5 s after the last SpeedData, every host-gone run and heartbeat alone have to find
+that time and the proposal has to follow from it; with 4 s the limit has to end T2; a key while tron_mcu is frozen
+has to continue it and stop the wheels. No process may be left.
 
 Reading the port while tron_mcu holds it (TIOCEXCL) needs root with CAP_SYS_ADMIN, as on the Tron:
   docker run --user 0 --cap-add SYS_ADMIN ... python3 -m unittest tools/yf/test/test_rehearsal_tron.py
@@ -59,7 +60,7 @@ class TestRehearsalTron(unittest.TestCase):
         cls.set_flags({"host_timeout": HOLD_S})
         cls.fake = subprocess.Popen(
             [FAKE, "--link", cls.links["mcu"], "--gnss-link", cls.links["gnss"], "--imu-link", cls.links["imu"],
-             "--flags", cls.flags, "--state", cls.state, "--host-timeout", "2.0"],
+             "--flags", cls.flags, "--state", cls.state, "--host-timeout", "2.0", "--standstill-noise"],
             stdout=open(os.path.join(cls.work, "fake.log"), "w"), stderr=subprocess.STDOUT)
         time.sleep(1.0)
 
@@ -124,18 +125,26 @@ class TestRehearsalTron(unittest.TestCase):
             self.assertGreaterEqual(run["stand_s"], HOLD_S - 0.2, run)
             self.assertLessEqual(run["stand_s"], HOLD_S + 0.3, run)
             self.assertEqual(run["summary"]["checksum_errors"], 0)
-        # The fake holds the setpoint while the heartbeat comes; the driver's own watchdog of that start stops it.
+        # Like the Tron, the fake drops the setpoint after its time also while the heartbeat comes.
         heartbeat = [r["stand_s"] for r in rec if r["kind"] == "heartbeat_only"]
         self.assertEqual(len(heartbeat), 2)
         for stand in heartbeat:
-            self.assertGreaterEqual(stand, m.HEARTBEAT_ONLY_TIMEOUT_S)
-            self.assertLessEqual(stand, m.HEARTBEAT_ONLY_TIMEOUT_S + 0.5)
+            self.assertGreaterEqual(stand, HOLD_S - 0.2)
+            self.assertLessEqual(stand, HOLD_S + 0.4)
         starts = [r["params"] for r in rec if r["kind"] == "process" and r["node"] == "tron_mcu"]
         self.assertEqual([p.get("cmd_vel_timeout") for p in starts], [None, None, None, 10.0, None])
+        self.assertEqual([p.get("speed_repeat_window") for p in starts], [None, None, None, 0.0, None])
         self.assertTrue(all(p["allow_blade"] is False for p in starts))
         watchdog = [r["stand_s"] for r in rec if r["kind"] == "watchdog"]
         self.assertEqual(len(watchdog), 2)
-        self.assertTrue(all(0.5 <= s <= 1.2 for s in watchdog), watchdog)
+        # The driver repeats the setpoint 0.3 s after the last command, then stops.
+        self.assertTrue(all(0.3 <= s <= 0.8 for s in watchdog), watchdog)
+        self.assertTrue(all(r["moving"] is False for r in rec if r["kind"] == "watchdog"))
+        directions = [r for r in rec if r["kind"] == "direction"]
+        self.assertEqual(len(directions), 4)
+        left_turn = directions[2]
+        self.assertLess(left_turn["left_rpm"], 0)
+        self.assertGreater(left_turn["right_rpm"], 0)
         self.assertEqual(len([r for r in rec if r["kind"] == "emergency_stop"]), 1 + 4 * 2)
         proposal = end["proposal"]
         self.assertIn(f"failsafe_without_host: {m.failsafe_proposal([r['stand_s'] for r in runs]):.1f}", proposal)

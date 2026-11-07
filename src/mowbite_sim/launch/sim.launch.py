@@ -49,7 +49,8 @@ def generate_launch_description():
                           "mqtt_host": LaunchConfiguration("mqtt_host"),
                           "mqtt_port": LaunchConfiguration("mqtt_port"),
                           "data_dir": LaunchConfiguration("data_dir"),
-                          "extra_config": LaunchConfiguration("extra_config")}.items())
+                          "extra_config": LaunchConfiguration("extra_config"),
+                          "hardware": LaunchConfiguration("hardware")}.items())
     return LaunchDescription([
         DeclareLaunchArgument("link", default_value="/tmp/mowbite_sim_mcu"),
         DeclareLaunchArgument("gnss_link", default_value="/tmp/mowbite_sim_gnss"),
@@ -66,6 +67,8 @@ def generate_launch_description():
         DeclareLaunchArgument("mqtt_port", default_value=EnvironmentVariable("MOWBITE_MQTT_PORT",
                                                                              default_value="1883")),
         DeclareLaunchArgument("data_dir", default_value="/tmp/mowbite_sim_data"),
+        # read: tron_mcu and tron_imu only read the ptys, as hardware:=read of tron.launch.py.
+        DeclareLaunchArgument("hardware", default_value="true", choices=["true", "read"]),
         DeclareLaunchArgument("extra_config", default_value=PathJoinSubstitution(
             [FindPackageShare("mowbite_sim"), "config", "sim.yaml"])),
         OpaqueFunction(function=fake_tron_setup),
