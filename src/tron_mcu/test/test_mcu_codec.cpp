@@ -232,12 +232,35 @@ TEST(Telemetry, MotorsFromCapture) {
   ASSERT_TRUE(motors);
   EXPECT_EQ(motors->cutter.voltage_raw, 1969);
   EXPECT_EQ(motors->cutter.temperature_c, 30);
-  EXPECT_EQ(motors->left.current_raw, 3582);
-  EXPECT_EQ(motors->left.voltage_raw, 12798);
-  EXPECT_EQ(motors->left.temperature_c, 40);
-  EXPECT_EQ(motors->left.status, 1);
-  EXPECT_EQ(motors->right.current_raw, -617);
-  EXPECT_EQ(motors->right.temperature_c, 34);
+  // The right drive motor comes first.
+  EXPECT_EQ(motors->right.current_raw, 3582);
+  EXPECT_EQ(motors->right.voltage_raw, 12798);
+  EXPECT_EQ(motors->right.temperature_c, 40);
+  EXPECT_EQ(motors->right.status, 1);
+  EXPECT_EQ(motors->left.current_raw, -617);
+  EXPECT_EQ(motors->left.temperature_c, 34);
+}
+
+// Measured 07.11.: forwards the MCU reports -3/-4 rpm, on a left turn -3 first and +4 second.
+TEST(Telemetry, MotorsBySidePositiveForwards) {
+  auto frame = [](int16_t first, int16_t second) {
+    std::vector<uint8_t> payload(32, 0);
+    payload[8] = static_cast<uint8_t>(first & 0xFF);
+    payload[9] = static_cast<uint8_t>((first >> 8) & 0xFF);
+    payload[16] = static_cast<uint8_t>(second & 0xFF);
+    payload[17] = static_cast<uint8_t>((second >> 8) & 0xFF);
+    return *DecodeMotors(payload);
+  };
+  auto forwards = frame(-3, -4);
+  EXPECT_EQ(forwards.right.rpm, 3);
+  EXPECT_EQ(forwards.left.rpm, 4);
+  auto backwards = frame(3, 4);
+  EXPECT_EQ(backwards.right.rpm, -3);
+  EXPECT_EQ(backwards.left.rpm, -4);
+  // Left turn: the left wheel turns back, the right one forwards.
+  auto left_turn = frame(-3, 4);
+  EXPECT_EQ(left_turn.right.rpm, 3);
+  EXPECT_EQ(left_turn.left.rpm, -4);
 }
 
 TEST(Telemetry, SensorInfo) {

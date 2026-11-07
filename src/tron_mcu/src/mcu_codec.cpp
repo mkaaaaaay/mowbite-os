@@ -307,7 +307,12 @@ std::optional<BatteryInfo> DecodeBattery(const std::vector<uint8_t>& payload) {
 
 std::optional<MotorsInfo> DecodeMotors(const std::vector<uint8_t>& payload) {
   if (payload.size() != 32) return std::nullopt;
-  return MotorsInfo{GetMotor(payload, 0), GetMotor(payload, 8), GetMotor(payload, 16), GetMotor(payload, 24)};
+  // The MCU sends the right drive motor before the left, both with negative rpm forwards (measured 07.11.).
+  MotorInfo right = GetMotor(payload, 8);
+  MotorInfo left = GetMotor(payload, 16);
+  right.rpm = static_cast<int16_t>(-right.rpm);
+  left.rpm = static_cast<int16_t>(-left.rpm);
+  return MotorsInfo{GetMotor(payload, 0), left, right, GetMotor(payload, 24)};
 }
 
 std::optional<VersionInfo> DecodeVersionInfo(const std::vector<uint8_t>& payload) {

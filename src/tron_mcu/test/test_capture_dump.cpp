@@ -37,9 +37,10 @@ SubPacket Sensor(std::vector<uint8_t> bytes) {
   return {kFromMcu, static_cast<uint8_t>(Module::kSensor), std::move(bytes)};
 }
 
+// As the MCU sends them: right before left, negative forwards.
 SubPacket Motors(int16_t cutter, int16_t left, int16_t right) {
   SubPacket packet{kFromMcu, static_cast<uint8_t>(Module::kMotors), std::vector<uint8_t>(32)};
-  const int16_t rpm[4] = {cutter, left, right, 0};
+  const int16_t rpm[4] = {cutter, static_cast<int16_t>(-right), static_cast<int16_t>(-left), 0};
   for (int i = 0; i < 4; ++i) std::memcpy(packet.payload.data() + 8 * i, &rpm[i], 2);
   return packet;
 }

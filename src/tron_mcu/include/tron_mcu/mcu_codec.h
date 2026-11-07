@@ -184,6 +184,7 @@ struct MotorInfo {
 
 struct MotorsInfo {
   MotorInfo cutter;
+  // Drive motors by side, positive rpm forwards.
   MotorInfo left;
   MotorInfo right;
   // Not populated by the hardware.
