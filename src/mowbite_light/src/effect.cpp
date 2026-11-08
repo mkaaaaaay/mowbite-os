@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 
@@ -105,6 +106,51 @@ std::vector<Rgb> Render(const Effect& effect, size_t n, double t) {
     }
   }
   for (auto& c : leds) c = Scale(c, effect.brightness);
+  return leds;
+}
+
+std::optional<std::vector<Strip>> ParseStrips(const std::vector<std::string>& texts, size_t leds, std::string* error) {
+  std::vector<Strip> strips;
+  std::vector<bool> used(leds);
+  for (const auto& text : texts) {
+    Strip strip;
+    const char* end = text.data() + text.size();
+    auto [dash, first_error] = std::from_chars(text.data(), end, strip.first);
+    const bool has_dash = first_error == std::errc() && dash != end && *dash == '-';
+    const auto [last_end, last_error] =
+        has_dash ? std::from_chars(dash + 1, end, strip.last) : std::from_chars_result{dash, std::errc::invalid_argument};
+    if (last_error != std::errc() || last_end != end) {
+      *error = "strip " + text + " is not first-last";
+      return std::nullopt;
+    }
+    if (strip.first >= leds || strip.last >= leds) {
+      *error = "strip " + text + " is beyond the " + std::to_string(leds) + " LEDs";
+      return std::nullopt;
+    }
+    for (size_t i = std::min(strip.first, strip.last); i <= std::max(strip.first, strip.last); ++i) {
+      if (used[i]) {
+        *error = "strip " + text + " overlaps another at " + std::to_string(i);
+        return std::nullopt;
+      }
+      used[i] = true;
+    }
+    strips.push_back(strip);
+  }
+  return strips;
+}
+
+std::vector<Rgb> Render(const Effect& effect, const std::vector<Strip>& strips, size_t n, double t) {
+  if (strips.empty()) return Render(effect, n, t);
+  std::vector<Rgb> leds(n);
+  for (const auto& strip : strips) {
+    const bool forward = strip.first <= strip.last;
+    const auto along = Render(effect, std::max(strip.first, strip.last) - std::min(strip.first, strip.last) + 1, t);
+    const size_t length = along.size();
+    for (size_t k = 0; k < length; ++k) {
+      const size_t i = forward ? strip.first + k : strip.first - k;
+      if (i < n) leds[i] = along[k];
+    }
+  }
   return leds;
 }
 

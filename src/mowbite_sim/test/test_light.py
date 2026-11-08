@@ -14,11 +14,13 @@ import time
 import unittest
 
 import launch
+import yaml
 import launch_testing.actions
 import paho.mqtt.client as mqtt
 import rclpy
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
+from ament_index_python.packages import get_package_share_directory
 from launch_ros.substitutions import FindPackagePrefix
 from mowbite_msgs.msg import RobotState
 
@@ -31,6 +33,7 @@ BUFFER_LEDS = 60
 # 120 of 255 at full brightness of an effect.
 MAX_BRIGHTNESS = 0.47
 RESET_BYTES = 100
+FRONT = 14
 
 
 def generate_test_description():
@@ -61,6 +64,11 @@ def decode(data):
         g, r, b = (int("".join(map(str, bits[i + k * 8:i + k * 8 + 8])), 2) for k in range(3))
         leds.append((r, g, b))
     return leds
+
+
+def tron_strips():
+    with open(os.path.join(get_package_share_directory("mowbite_bringup"), "config", "tron.yaml")) as f:
+        return yaml.safe_load(f)["mowbite_light"]["ros__parameters"]["strips"]
 
 
 def light_node_path():
@@ -97,7 +105,8 @@ class TestLight(unittest.TestCase):
         cls.process = subprocess.Popen(
             [light_node_path(), "--ros-args", "-p", "output:=file", "-p", f"file:={FRAME}", "-p",
              f"data_dir:={DATA_DIR}", "-p", f"leds:={LEDS}", "-p", f"buffer_leds:={BUFFER_LEDS}", "-p",
-             f"max_brightness:={MAX_BRIGHTNESS}", "-p", "max_current_ma:=100000.0"], stdout=subprocess.DEVNULL)
+             f"max_brightness:={MAX_BRIGHTNESS}", "-p", "max_current_ma:=100000.0", "-p",
+             f"strips:={json.dumps(tron_strips())}"], stdout=subprocess.DEVNULL)
 
     @classmethod
     def tearDownClass(cls):
@@ -200,6 +209,15 @@ class TestLight(unittest.TestCase):
                                                          "duration": 11}))
         # Back to MOWING once the emergency and the preview are over.
         self.frame_with(lambda leds: leds[0] == (120, 120, 120), state=("MOWING",))
+
+    def test_3a_a_chase_runs_alike_on_both_fronts(self):
+        answer = self.rpc("light.preview", {"effect": {"effect": "chase", "colors": ["#00ff00"], "period": 2},
+                                            "duration": 3})
+        self.assertIn("result", answer, answer)
+        self.frame_with(lambda leds: leds[:FRONT] == leds[FRONT:2 * FRONT] and leds[0] == (0, 120, 0)
+                        and leds[FRONT - 1] == (0, 0, 0), state=("MOWING",))
+        self.frame_with(lambda leds: leds[:FRONT] == leds[FRONT:2 * FRONT] and leds[0] == (0, 0, 0)
+                        and (0, 120, 0) in leds[:FRONT], state=("MOWING",))
 
     def test_4_reset_and_a_dark_chain_at_the_end(self):
         answer = self.rpc("light.reset")

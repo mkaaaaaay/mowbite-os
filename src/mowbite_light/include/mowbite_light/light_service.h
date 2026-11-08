@@ -27,6 +27,8 @@ struct RpcOutcome {
 
 struct LightConfig {
   size_t leds = 55;
+  // Empty: the whole chain as one strip.
+  std::vector<Strip> strips;
   // Of full scale per channel; the effects scale within it.
   double max_brightness = 0.47;
   double max_current_ma = 1200.0;

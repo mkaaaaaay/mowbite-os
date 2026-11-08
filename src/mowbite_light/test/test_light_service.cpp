@@ -92,6 +92,20 @@ TEST(LightService, ABrokenFileGivesTheDefaultsAndWhy) {
   EXPECT_NE(service.Load(), "");
 }
 
+TEST(LightService, TheFrameRunsAlongTheStrips) {
+  LightConfig config = Config();
+  config.strips = {{0, 4}, {9, 5}};
+  LightService service(config);
+  const Json chase = Json::parse(R"({"effect":"chase","colors":["#ff0000"],"period":1})");
+  ASSERT_TRUE(service.Call("light.preview", Json{{"effect", chase}}, 0)->ok);
+  for (double t : {0.0, 0.25, 0.5, 0.75}) {
+    const auto leds = service.Frame(t);
+    for (size_t k = 0; k < 5; ++k) EXPECT_EQ(leds[k], leds[9 - k]) << t << " " << k;
+  }
+  EXPECT_EQ(service.Frame(0.0)[0], kRed);
+  EXPECT_EQ(service.Frame(0.0)[9], kRed);
+}
+
 TEST(LightService, TheFrameFollowsTheStateAndTheEmergencyGoesOverAll) {
   LightService service(Config());
   service.Call("light.set_profile", Json{{"profile", {{"MOWING", kOrange}}}}, 0);

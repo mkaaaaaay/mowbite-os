@@ -106,6 +106,7 @@ class LightNode : public rclcpp::Node {
     config.device = declare_parameter("device", std::string("/dev/spidev3.0"));
     config.file = declare_parameter("file", std::string());
     const int64_t leds = declare_parameter("leds", static_cast<int64_t>(light.leds));
+    const auto strip_texts = declare_parameter("strips", std::vector<std::string>{});
     const int64_t buffer_leds = declare_parameter("buffer_leds", static_cast<int64_t>(60));
     config.frame_rate = declare_parameter("frame_rate", 25.0);
     light.max_brightness = declare_parameter("max_brightness", light.max_brightness);
@@ -134,6 +135,12 @@ class LightNode : public rclcpp::Node {
     }
     light.leds = static_cast<size_t>(std::max<int64_t>(1, leds));
     config.buffer_leds = static_cast<size_t>(std::max<int64_t>(1, buffer_leds));
+    const auto strips = ParseStrips(strip_texts, light.leds, &why);
+    if (strips) {
+      light.strips = *strips;
+    } else {
+      RCLCPP_ERROR(get_logger(), "Invalid strips (%s): the effects run along the whole chain", why.c_str());
+    }
     return config;
   }
 

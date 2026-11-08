@@ -285,6 +285,9 @@ mowbite_light:
     device: /dev/spidev3.0
     # 55 lit (2 x 14 front, 27 top) of the 60 the chain is driven with.
     leds: 55
+    # Chase and gradient run along each at once (seen from the mower): fronts left and right bottom up, the top bar
+    # from both ends to the middle.
+    strips: ["0-13", "14-27", "28-41", "54-42"]
     buffer_leds: 60
     frame_rate: 25.0
     # 120 of 255, full brightness of the vendor's patterns.

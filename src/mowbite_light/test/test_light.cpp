@@ -76,6 +76,58 @@ TEST(Effect, EachKindAtItsPhase) {
   EXPECT_EQ(Render({EffectKind::kOff, {red}, 1.0, 1.0}, 1, 0)[0], Rgb{});
 }
 
+TEST(Strips, TheTextsAndTheirLimits) {
+  std::string error;
+  const auto strips = ParseStrips({"0-13", "14-27", "28-41", "54-42"}, 55, &error);
+  ASSERT_TRUE(strips) << error;
+  ASSERT_EQ(strips->size(), 4u);
+  EXPECT_EQ((*strips)[3].first, 54u);
+  EXPECT_EQ((*strips)[3].last, 42u);
+  EXPECT_TRUE(ParseStrips({}, 55, &error)->empty());
+  EXPECT_TRUE(ParseStrips({"7-7"}, 55, &error));
+  for (const auto& bad : std::vector<std::vector<std::string>>{
+           {"0-55"}, {"55-0"}, {"0-13", "13-20"}, {"20-10", "5-10"}, {"0-"}, {"-1-5"}, {"1-2-3"}, {" 1-2"},
+           {"1- 2"}, {"a-b"}, {""}, {"3"}}) {
+    EXPECT_FALSE(ParseStrips(bad, 55, &error)) << bad[0];
+    EXPECT_FALSE(error.empty());
+  }
+}
+
+TEST(Strips, EveryStripShowsTheSameFrameInItsDirection) {
+  const Rgb red{255, 0, 0};
+  const Rgb blue{0, 0, 255};
+  std::string error;
+  const auto strips = *ParseStrips({"0-13", "27-14", "30-35"}, 40, &error);
+  for (const Effect& effect : {Effect{EffectKind::kChase, {red}, 1.0, 1.0},
+                               Effect{EffectKind::kGradient, {red, blue}, 2.0, 1.0}}) {
+    for (double t : {0.0, 0.3, 0.55, 0.9, 1.7}) {
+      const auto leds = Render(effect, strips, 40, t);
+      const auto along = Render(effect, 14, t);
+      for (size_t k = 0; k < 14; ++k) {
+        EXPECT_EQ(leds[k], along[k]) << t << " " << k;
+        EXPECT_EQ(leds[27 - k], along[k]) << t << " " << k;
+      }
+      const auto short_strip = Render(effect, 6, t);
+      for (size_t k = 0; k < 6; ++k) EXPECT_EQ(leds[30 + k], short_strip[k]) << t << " " << k;
+      for (size_t i : {28u, 29u, 36u, 39u}) EXPECT_EQ(leds[i], Rgb{}) << t << " " << i;
+    }
+  }
+  // A chase starts at the first LED of each strip.
+  const auto start = Render({EffectKind::kChase, {red}, 1.0, 1.0}, strips, 40, 0.0);
+  EXPECT_EQ(start[0], red);
+  EXPECT_EQ(start[27], red);
+  EXPECT_EQ(start[13], Rgb{});
+  EXPECT_EQ(start[14], Rgb{});
+  // Outside every strip it stays dark even for a solid effect.
+  EXPECT_EQ(Render({EffectKind::kSolid, {red}, 1.0, 1.0}, strips, 40, 0.0)[38], Rgb{});
+  EXPECT_EQ(Render({EffectKind::kSolid, {red}, 1.0, 1.0}, strips, 40, 0.0)[20], red);
+}
+
+TEST(Strips, WithoutStripsTheWholeChainIsOne) {
+  const Effect chase{EffectKind::kChase, {Rgb{0, 255, 0}}, 2.0, 0.5};
+  for (double t : {0.0, 0.7, 1.4}) EXPECT_EQ(Render(chase, {}, 55, t), Render(chase, 55, t)) << t;
+}
+
 TEST(Effect, JsonBothWaysAndItsLimits) {
   std::string error;
   const auto effect = EffectFromJson(Json::parse(R"({"effect":"chase","colors":["#00ff00","#0000FF"],"period":2,

@@ -33,8 +33,20 @@ struct Effect {
 
 const std::vector<std::string>& EffectNames();
 
+// A run of LEDs that chase and gradient follow from first to last, backwards when last < first.
+struct Strip {
+  size_t first = 0;
+  size_t last = 0;
+};
+
+// The strips from texts "first-last" of a chain of leds; nullopt and why for one that is malformed, beyond the chain
+// or overlaps another.
+std::optional<std::vector<Strip>> ParseStrips(const std::vector<std::string>& texts, size_t leds, std::string* error);
+
 // The colours of n LEDs t s after the start.
 std::vector<Rgb> Render(const Effect& effect, size_t n, double t);
+// The same on every strip at once, the LEDs outside them dark; no strips: the whole chain as one.
+std::vector<Rgb> Render(const Effect& effect, const std::vector<Strip>& strips, size_t n, double t);
 
 Json ToJson(const Effect& effect);
 // nullopt and why for a value that is no effect: 1 to 4 colours as #rrggbb, period 0.2 to 20 s (gradient also 0),
