@@ -21,11 +21,12 @@ tron_mcu:
   ros__parameters:
     port: /dev/ttyS9
     send_imu: true
-    # The MCU stops the wheels ~0.2 s after the last SpeedData, also with heartbeat and IMU (measured 07.11.). Within
-    # speed_repeat_window s of the last hw/cmd_vel the driver sends the last non-zero setpoint every 50 ms, then three
-    # stops; without a repeat window they come after cmd_vel_timeout s.
+    # The MCU stops the wheels ~0.2 s after the last SpeedData, also with heartbeat and IMU (measured 07.11.), but at
+    # 20 SpeedData/s it kept a setpoint up to 3.6 s without host (08.11.). The driver sends motion at most every 100 ms.
+    # After cmd_vel_timeout s without hw/cmd_vel come three stops. speed_repeat_window > 0 repeats the last setpoint
+    # every 100 ms for that long instead, stops at its end and needs a measurement on the Tron first.
     cmd_vel_timeout: 0.5
-    speed_repeat_window: 0.3
+    speed_repeat_window: 0.0
     telemetry_timeout: 1.0
     allow_blade: false
     # Defaults for blade requests that leave speed or height at 0.

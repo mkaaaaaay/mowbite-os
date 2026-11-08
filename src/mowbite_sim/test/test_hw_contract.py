@@ -1,5 +1,5 @@
 """Duties of a platform driver behind the hardware contract hw/*, here tron_mcu against fake_tron on a pty:
-capabilities, status, drive watchdog, blade lease, emergency with its reason and release.
+capabilities, status, drive frame rate and watchdog, blade lease, emergency with its reason and release.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_hw_contract.py
 """
@@ -184,6 +184,20 @@ class TestHardwareContract(unittest.TestCase):
         self.assertTrue(s.blade_motor.ok)
         self.assertGreater(s.link_messages_ok, 0)
         self.assertTrue(self.probe.wait(lambda p: p.odom > 10), "no hw/wheel_odom")
+
+    def test_c_drive_frames_at_most_every_100ms(self):
+        # At 20 SpeedData/s the MCU of the Tron kept a setpoint up to 3.6 s without host (08.11.).
+        t0 = sim_time()
+        for i in range(40):
+            self.probe.cmd_vel.publish(Twist(linear=Vector3(x=0.1 + 0.001 * i)))
+            time.sleep(0.05)
+        self.probe.cmd_vel.publish(Twist())
+        time.sleep(0.5)
+        moving = [e for e in received(t0, SPEED) if e["speed"] != [0.0, 0.0]]
+        self.assertGreaterEqual(len(moving), 15)
+        gaps = [b["t"] - a["t"] for a, b in zip(moving, moving[1:])]
+        self.assertGreaterEqual(min(gaps), 0.095, str(gaps))
+        self.assertAlmostEqual(moving[-1]["speed"][0], 0.138, delta=0.0025)
 
     def test_c_drive_watchdog_three_zeros(self):
         t0 = sim_time()

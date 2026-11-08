@@ -12,7 +12,7 @@
 namespace tron {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(McuControlConfig, heartbeat_period_s, cmd_vel_timeout_s, speed_repeat_window_s,
-                                   speed_repeat_period_s, telemetry_timeout_s, repeat_count, repeat_interval_s,
+                                   speed_period_s, telemetry_timeout_s, repeat_count, repeat_interval_s,
                                    imu_min_period_s, imu_timeout_s, imu_start_timeout_s, dock_debounce_samples,
                                    charge_resend_s, allow_blade,
                                    blade_speed_percent, mow_height_mm, blade_lease_max_s, blade_off_height_mm,

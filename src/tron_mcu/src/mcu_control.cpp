@@ -323,18 +323,21 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     if (pending_cmd_->linear != 0.0f || pending_cmd_->angular != 0.0f) {
       packet = SpeedPacket(pending_cmd_->linear, pending_cmd_->angular);
     }
-    if (packet) {
+    if (!packet) {
+      if (moving_) {
+        moving_ = false;
+        StartRepeat(stop_repeat_, ZeroSpeed(), now);
+      }
+      pending_cmd_.reset();
+    } else if (now + kTimeEpsilon >= next_speed_s_) {
       stop_repeat_.remaining = 0;
       out.push_back(*packet);
       moving_ = true;
       last_motion_s_ = now;
       last_speed_ = *packet;
-      next_speed_s_ = now + config_.speed_repeat_period_s;
-    } else if (moving_) {
-      moving_ = false;
-      StartRepeat(stop_repeat_, ZeroSpeed(), now);
+      next_speed_s_ = now + config_.speed_period_s;
+      pending_cmd_.reset();
     }
-    pending_cmd_.reset();
   }
 
   if (moving_ && now - last_cmd_s_ > StopAfter()) {
@@ -344,7 +347,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   if (moving_ && config_.speed_repeat_window_s > 0 && now + kTimeEpsilon >= next_speed_s_) {
     out.push_back(*last_speed_);
     last_motion_s_ = now;
-    next_speed_s_ = now + config_.speed_repeat_period_s;
+    next_speed_s_ = now + config_.speed_period_s;
   }
 
   // A blocked or docked mower drops the blade request, it has to be made again afterwards.
@@ -383,7 +386,9 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     last_imu_s_ = now;
   }
 
+  const size_t before_stop = out.size();
   EmitRepeat(stop_repeat_, now, out);
+  if (out.size() > before_stop) next_speed_s_ = now + config_.speed_period_s;
   EmitRepeat(blade_off_repeat_, now, out);
   return out;
 }
