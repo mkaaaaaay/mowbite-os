@@ -116,6 +116,24 @@ TEST(Path, ArcsTighterThanTheMinimumRadiusAreCorners) {
   for (size_t i = 0; i < path.size(); i++) EXPECT_FALSE(path.corner(i)) << i;
 }
 
+// A turn on the spot of the planner in 2 mm steps, then 4.5 deg onto 9 cm segments (full run 08.11.): without the
+// corner the short segment had a curvature of 20 1/m and a speed limit of 0.012 m/s, below the dead band of the wheels.
+TEST(Path, ABendAfterAVeryShortSegmentIsACorner) {
+  std::vector<Pose2> poses = Line(0, 0, 0, 0.5);
+  for (int i = 1; i <= 10; i++) {
+    const Pose2& p = poses.back();
+    const double yaw = 9.0 * kDeg * i;
+    poses.push_back({p.x + 0.0019 * std::cos(yaw), p.y + 0.0019 * std::sin(yaw), yaw});
+  }
+  const Pose2 end = poses.back();
+  Append(poses, Line(end.x, end.y, end.yaw + 4.5 * kDeg, 0.45, 0.09), true);
+  Path path;
+  ASSERT_EQ(path.Build(poses, {}, kCorner, 0.3), "");
+  for (size_t i = 0; i + 1 < path.size(); i++) EXPECT_LE(std::abs(path.curvature(i)), 1.0 / 0.3 + 1e-9) << i;
+  ASSERT_EQ(path.Build(poses, {}, kCorner, 0.0), "");
+  for (size_t i = 0; i < path.size(); i++) EXPECT_FALSE(path.corner(i)) << i;
+}
+
 TEST(Path, ArcsOfTenDegreesPerPoseHaveNoCorners) {
   std::vector<Pose2> poses = Line(0, 0, 0, 1.0);
   Append(poses, Arc(poses.back(), 0.44, 210.0 * kDeg));

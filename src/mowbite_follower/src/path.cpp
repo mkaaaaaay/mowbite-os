@@ -71,8 +71,9 @@ std::string Path::Build(const std::vector<Pose2>& poses, const std::vector<Kind>
   heading_in_[n - 1] = direction_[n - 2];
   for (size_t i = 1; i + 1 < n; i++) {
     const double turn = NormalizeAngle(direction_[i] - direction_[i - 1]);
-    // The radius of the bend: half of the two segments over the turn.
-    const double around = 0.5 * (length_[i - 1] + length_[i]);
+    // The radius of the bend over the shorter segment: no segment between two poses that are no corners is then
+    // tighter than min_radius, also where a short one meets a long one (after a turn on the spot of the planner).
+    const double around = std::min(length_[i - 1], length_[i]);
     corner_[i] = std::abs(turn) > corner_angle || around < min_radius * std::abs(turn);
     if (corner_[i]) {
       heading_in_[i] = direction_[i - 1];
