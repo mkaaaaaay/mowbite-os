@@ -1,0 +1,2 @@
+# The LED chain of the Tron on spi3; mowbite_light runs as mowbite.
+SUBSYSTEM=="spidev", KERNEL=="spidev3.0", GROUP="mowbite", MODE="0660"
