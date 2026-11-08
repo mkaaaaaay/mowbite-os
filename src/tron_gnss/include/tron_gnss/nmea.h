@@ -80,9 +80,16 @@ class NmeaParser {
   uint64_t decoded() const {
     return decoded_;
   }
+  // One text per address among the ignored sentences, in the order first seen, at most kMaxIgnoredKinds: the address,
+  // the number of fields and the first field unless it is a number (no coordinates).
+  const std::vector<std::string>& ignored_kinds() const {
+    return ignored_kinds_;
+  }
+  static constexpr size_t kMaxIgnoredKinds = 16;
 
  private:
   void HandleLine(const std::string& line, std::vector<NmeaMessage>& out);
+  void Ignore(const std::vector<std::string>& fields);
 
   std::string line_;
   bool overflow_ = false;
@@ -90,6 +97,7 @@ class NmeaParser {
   uint64_t malformed_ = 0;
   uint64_t ignored_ = 0;
   uint64_t decoded_ = 0;
+  std::vector<std::string> ignored_kinds_;
 };
 
 // XOR of the characters between '$' and '*'.

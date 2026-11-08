@@ -153,6 +153,23 @@ TEST(Nmea, OtherSentencesAreIgnored) {
   EXPECT_EQ(parser.checksum_errors(), 0u);
 }
 
+TEST(Nmea, EachIgnoredKindIsNamedOnceWithoutNumbers) {
+  NmeaParser parser;
+  Parse(parser, Sentence("GNGLL,4807.038,N,01131.000,E,123519,A,A"));
+  Parse(parser, Sentence("GNGLL,4807.039,N,01131.000,E,123520,A,A"));
+  Parse(parser, Sentence("command,GNRTK,ON,response: OK"));
+  Parse(parser, Sentence("GNRTK,1"));
+  Parse(parser, Sentence("GNTXT,,x"));
+  ASSERT_EQ(parser.ignored_kinds().size(), 3u);
+  EXPECT_EQ(parser.ignored_kinds()[0], "$GNGLL (7 fields)");
+  EXPECT_EQ(parser.ignored_kinds()[1], "$command (3 fields, first GNRTK)");
+  EXPECT_EQ(parser.ignored_kinds()[2], "$GNTXT (2 fields)");
+  EXPECT_EQ(parser.ignored(), 4u);
+  EXPECT_EQ(parser.malformed(), 1u);
+  for (int i = 0; i < 40; ++i) Parse(parser, Sentence("GNX" + std::to_string(i) + ",A"));
+  EXPECT_EQ(parser.ignored_kinds().size(), NmeaParser::kMaxIgnoredKinds);
+}
+
 TEST(Nmea, SentenceSplitAcrossReads) {
   NmeaParser parser;
   std::string s = Sentence("GNGGA,120000.00,5200.0,N,01000.0,E,4,20,0.6,10.0,M,0.0,M,1.0,0000");

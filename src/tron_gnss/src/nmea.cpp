@@ -1,5 +1,6 @@
 #include "tron_gnss/nmea.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 
@@ -149,6 +150,19 @@ void NmeaParser::Feed(const uint8_t* data, size_t size, std::vector<NmeaMessage>
   }
 }
 
+void NmeaParser::Ignore(const std::vector<std::string>& fields) {
+  ignored_++;
+  if (ignored_kinds_.size() >= kMaxIgnoredKinds) return;
+  std::string kind = "$" + fields[0] + " (";
+  if (std::any_of(ignored_kinds_.begin(), ignored_kinds_.end(),
+                  [&kind](const std::string& known) { return known.rfind(kind, 0) == 0; })) {
+    return;
+  }
+  kind += std::to_string(fields.size() - 1) + " fields";
+  if (fields.size() > 1 && !fields[1].empty() && !Number(fields[1])) kind += ", first " + fields[1].substr(0, 24);
+  ignored_kinds_.push_back(kind + ")");
+}
+
 void NmeaParser::HandleLine(const std::string& line, std::vector<NmeaMessage>& out) {
   size_t star = line.rfind('*');
   if (line[0] != '$' || star == std::string::npos || star + 3 != line.size()) {
@@ -168,7 +182,7 @@ void NmeaParser::HandleLine(const std::string& line, std::vector<NmeaMessage>& o
   auto fields = Split(body);
   const std::string& address = fields[0];
   if (address.size() != 5) {
-    ignored_++;
+    Ignore(fields);
     return;
   }
   const std::string kind = address.substr(2);
@@ -189,7 +203,7 @@ void NmeaParser::HandleLine(const std::string& line, std::vector<NmeaMessage>& o
     ok = fields.size() >= 2 && (fields[1] == "ON" || fields[1] == "OFF");
     message.board.on = ok && fields[1] == "ON";
   } else {
-    ignored_++;
+    Ignore(fields);
     return;
   }
   if (!ok) {

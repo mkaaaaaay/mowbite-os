@@ -260,6 +260,9 @@ class GnssNode : public rclcpp::Node {
   void HandleBytes(const uint8_t* data, size_t size, double now) {
     std::vector<tron::NmeaMessage> messages;
     parser_.Feed(data, size, messages);
+    for (; reported_kinds_ < parser_.ignored_kinds().size(); ++reported_kinds_) {
+      RCLCPP_INFO(get_logger(), "Not decoded: %s", parser_.ignored_kinds()[reported_kinds_].c_str());
+    }
     std::optional<double> host_age;
     for (const auto& message : messages) {
       if (message.type == tron::NmeaMessage::Type::kBoardRtk) {
@@ -370,6 +373,7 @@ class GnssNode : public rclcpp::Node {
   uint64_t queue_dropped_ = 0;
   double last_gga_published_ = -1e9;
   uint64_t reported_errors_ = 0;
+  size_t reported_kinds_ = 0;
   uint64_t reported_stale_ = 0;
   uint64_t reported_old_corrections_ = 0;
   uint64_t reported_before_host_ = 0;
