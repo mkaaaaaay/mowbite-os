@@ -18,7 +18,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CourseConfig, min_speed, speed_tolerance, spe
                                    velocity_noise)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(AccuracyConfig, growth_per_m, growth_per_s, timeout)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(EstimatorConfig, gyro, noise, gate, course, accuracy, max_imu_gap, wheel_timeout,
-                                   min_speed, gnss_latency, heading_reset_angle, contradiction_chi2,
+                                   min_speed, motion_confirm_time, gnss_latency, heading_reset_angle, contradiction_chi2,
                                    contradiction_reset, steady_turn_rate, pose_variance, pose_heading_variance,
                                    set_heading_variance)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GnssFix, solution, accuracy, x, y, motion_valid, motion_x, motion_y)
@@ -30,7 +30,7 @@ static_assert(sizeof(FilterNoise) == 16);
 static_assert(sizeof(GateConfig) == 40);
 static_assert(sizeof(CourseConfig) == 56);
 static_assert(sizeof(AccuracyConfig) == 24);
-static_assert(sizeof(EstimatorConfig) == 288);
+static_assert(sizeof(EstimatorConfig) == 296);
 static_assert(sizeof(GnssFix) == 56);
 static_assert(sizeof(Pose2) == 24);
 static_assert(sizeof(Jump) == 40);

@@ -153,6 +153,39 @@ TEST(L1GyroCalibration, TurningWheelsStartItAgain) {
   EXPECT_TRUE(w.est.calibrated());
 }
 
+TEST(L1GyroCalibration, ASingleNoiseSampleEndsItWithoutConfirmTime) {
+  World w;
+  w.Geometry();
+  w.Run(3.0, 0.0, 0.0);
+  w.Run(0.02, 0.05, 0.0);
+  w.Run(2.2, 0.0, 0.0);
+  EXPECT_FALSE(w.est.calibrated());
+}
+
+TEST(L1GyroCalibration, ASingleNoiseSampleDoesNotEndItWithConfirmTime) {
+  EstimatorConfig config;
+  config.motion_confirm_time = 0.1;
+  World w(config);
+  w.Geometry();
+  w.Run(3.0, 0.0, 0.0);
+  w.Run(0.02, 0.05, 0.0);
+  w.Run(2.2, 0.0, 0.0);
+  EXPECT_TRUE(w.est.calibrated());
+}
+
+TEST(L1GyroCalibration, MotionLongerThanTheConfirmTimeStartsItAgain) {
+  EstimatorConfig config;
+  config.motion_confirm_time = 0.1;
+  World w(config);
+  w.Geometry();
+  w.Run(3.0, 0.0, 0.0);
+  w.Run(0.2, 0.2, 0.0);
+  w.Run(4.9, 0.0, 0.0);
+  EXPECT_FALSE(w.est.calibrated());
+  w.Run(0.2, 0.0, 0.0);
+  EXPECT_TRUE(w.est.calibrated());
+}
+
 TEST(L1GyroCalibration, SkippedItTakesTheOffsetAndTheFirstSampleOnlyStarts) {
   EstimatorConfig config;
   config.gyro.skip_calibration = true;

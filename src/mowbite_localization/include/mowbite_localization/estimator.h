@@ -25,8 +25,10 @@ struct EstimatorConfig {
   // Gyro samples further apart than max_imu_gap s are not integrated; a wheel speed older than wheel_timeout s is 0.
   double max_imu_gap = 0.5;
   double wheel_timeout = 0.5;
-  // Wheels slower than min_speed (m/s, and rad/s for their turn) stand.
+  // Wheels slower than min_speed (m/s, and rad/s for their turn) stand. They count as moving only after
+  // motion_confirm_time s above it, so single noise samples of a standing mower do not end a still window.
   double min_speed = 0.01;
+  double motion_confirm_time = 0.0;
   // How old (s) a GNSS position and velocity are when they arrive.
   double gnss_latency = 0.0;
   // A valid heading that run courses in a row contradict by more than this (rad) and by more than three standard
@@ -157,6 +159,7 @@ class Estimator {
   bool aligned_ = false;
   std::optional<double> last_imu_;
   std::optional<double> wheel_time_;
+  std::optional<double> fast_since_;
   double wheel_speed_ = 0.0;
   double wheel_turn_ = 0.0;
   double speed_ = 0.0;

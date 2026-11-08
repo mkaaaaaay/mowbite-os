@@ -103,7 +103,10 @@ mowbite_localization:
     # Assumptions for the Tron until phase 5.
     gyro_still_spread: 0.02
     gyro_offset_limit: 0.02
-    min_speed: 0.01
+    # Wheels below min_speed (m/s, and rad/s for their turn) stand: the standing Tron reports up to 0.011 m/s and
+    # 0.028 rad/s, a wheel moves from ~0.06 m/s (measured 07./08.11.). Above it they move after motion_confirm_time s.
+    min_speed: 0.04
+    motion_confirm_time: 0.1
     # The antenna offset is part of the geometry (config/geometry/tron.yaml, robot.geometry), measured in phase 7.
     # Without a fix the accuracy grows by this much per m driven and per s. Assumptions until measured in phase 7.
     accuracy_growth_per_m: 0.05
