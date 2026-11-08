@@ -35,6 +35,7 @@
   <test_depend>mowbite_bridge</test_depend>
   <test_depend>mowbite_map</test_depend>
   <test_depend>mowbite_light</test_depend>
+  <test_depend>mowbite_sound</test_depend>
   <test_depend>mowbite_follower</test_depend>
   <test_depend>mowbite_ntrip</test_depend>
 
