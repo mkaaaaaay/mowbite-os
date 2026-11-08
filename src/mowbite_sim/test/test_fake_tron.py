@@ -211,6 +211,27 @@ class HostLinkTest(unittest.TestCase):
             host.on_speed(0.3, 0.0, t)
             self.assertEqual(host.setpoint(t + 0.05, False), (0.3, 0.0))
 
+    def test_fast_speed_holds_the_setpoint_long(self):
+        host = ft.HostLink(0.2, 3.6)
+        for t in (0.0, 0.05, 0.1, 0.15):
+            host.on_speed(0.3, 0.0, t)
+        self.assertEqual(host.setpoint(3.7, False), (0.3, 0.0))
+        self.assertEqual(host.setpoint(3.76, False), (0.0, 0.0))
+
+    def test_a_single_short_gap_does_not_hold(self):
+        host = ft.HostLink(0.2, 3.6)
+        for t in (0.0, 0.1, 0.14, 0.24):
+            host.on_speed(0.3, 0.0, t)
+        self.assertEqual(host.setpoint(0.44, False), (0.3, 0.0))
+        self.assertEqual(host.setpoint(0.45, False), (0.0, 0.0))
+
+    def test_speed_every_100ms_drops_after_the_timeout(self):
+        host = ft.HostLink(0.2, 3.6)
+        for t in (0.0, 0.1, 0.2):
+            host.on_speed(0.3, 0.0, t)
+        self.assertEqual(host.setpoint(0.4, False), (0.3, 0.0))
+        self.assertEqual(host.setpoint(0.41, False), (0.0, 0.0))
+
     def test_block_clears_until_next_speed(self):
         host = ft.HostLink(0.2)
         host.on_speed(0.3, 0.0, 0.0)

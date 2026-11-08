@@ -263,6 +263,52 @@ TEST_F(ControlTest, WatchdogStopsAfterSilence) {
   EXPECT_LT(zeros[0] - start, 0.52);
 }
 
+TEST_F(ControlTest, CommandsAt20HzGoOutEvery100msWithTheNewestSetpoint) {
+  Run(0.1);
+  for (int i = 1; i <= 40; i++) {
+    control_.OnCmdVel(0.01f * static_cast<float>(i), 0.0f, now_);
+    Run(now_ + 0.05);
+  }
+  auto moving = Times(IsMovingSpeed);
+  ASSERT_EQ(moving.size(), 20u);
+  for (size_t i = 1; i < moving.size(); i++) EXPECT_NEAR(moving[i] - moving[i - 1], 0.1, 1e-6);
+  // Each frame carries the command that came last before it, the one in between is dropped.
+  std::vector<std::vector<uint8_t>> payloads;
+  for (const auto& s : sent_) {
+    if (IsMovingSpeed(s.packet)) payloads.push_back(s.packet.payload);
+  }
+  EXPECT_EQ(payloads.front(), SpeedPacket(0.01f, 0.0f)->payload);
+  EXPECT_EQ(payloads[1], SpeedPacket(0.03f, 0.0f)->payload);
+  EXPECT_EQ(payloads.back(), SpeedPacket(0.39f, 0.0f)->payload);
+  EXPECT_TRUE(Times(IsZeroSpeed).empty());
+}
+
+TEST_F(ControlTest, AStopRightAfterAFrameGoesOutAtOnce) {
+  Run(0.1);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(0.12);
+  control_.OnCmdVel(0.0f, 0.0f, now_);
+  Run(0.13);
+  auto zeros = Times(IsZeroSpeed);
+  ASSERT_EQ(zeros.size(), 1u);
+  EXPECT_NEAR(zeros[0], 0.13, 1e-6);
+}
+
+TEST_F(ControlTest, MotionRightAfterAStopFrameWaits) {
+  Run(0.1);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(0.5);
+  control_.OnCmdVel(0.0f, 0.0f, now_);
+  Run(0.51);
+  control_.OnCmdVel(0.1f, 0.0f, now_);
+  Run(1.0);
+  auto zeros = Times(IsZeroSpeed);
+  ASSERT_EQ(zeros.size(), 1u);
+  auto moving = Times(IsMovingSpeed, 0.5);
+  ASSERT_EQ(moving.size(), 1u);
+  EXPECT_NEAR(moving[0] - zeros[0], 0.1, 1e-6);
+}
+
 TEST_F(ControlTest, CommandsKeepWatchdogQuiet) {
   Run(0.1);
   for (int i = 0; i < 30; i++) {
@@ -1684,16 +1730,16 @@ TEST_F(ShortBladeStopTest, AShortStopTimeStillChecks) {
   EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonMowerNotStopped);
 }
 
-TEST_F(RepeatTest, OneCommandIsRepeatedEvery50msForTheWindowThenStopped) {
+TEST_F(RepeatTest, OneCommandIsRepeatedEvery100msForTheWindowThenStopped) {
   Run(0.1);
   control_.OnCmdVel(0.2f, 0.1f, now_);
   const double start = now_;
   Run(2.0);
   auto moving = Times(IsMovingSpeed);
   // The repeat at 0.3 s falls on the tick of the stop: either side of it is fine.
-  ASSERT_GE(moving.size(), 6u);
-  ASSERT_LE(moving.size(), 7u);
-  for (size_t i = 1; i < moving.size(); i++) EXPECT_NEAR(moving[i] - moving[i - 1], 0.05, 1e-6);
+  ASSERT_GE(moving.size(), 3u);
+  ASSERT_LE(moving.size(), 4u);
+  for (size_t i = 1; i < moving.size(); i++) EXPECT_NEAR(moving[i] - moving[i - 1], 0.1, 1e-6);
   EXPECT_LE(moving.back() - start, 0.3 + 1e-6);
   // Every repeat carries the same setpoint.
   const auto expected = *SpeedPacket(0.2f, 0.1f);
@@ -1709,16 +1755,28 @@ TEST_F(RepeatTest, OneCommandIsRepeatedEvery50msForTheWindowThenStopped) {
   EXPECT_FALSE(control_.Status(now_).moving);
 }
 
-TEST_F(RepeatTest, CommandsAt10HzGoOutEvery50ms) {
+TEST_F(RepeatTest, CommandsAt10HzAreNotRepeated) {
   Run(0.1);
   for (int i = 0; i < 30; i++) {
     control_.OnCmdVel(0.2f, 0.0f, now_);
     Run(now_ + 0.1);
   }
   auto moving = Times(IsMovingSpeed);
-  EXPECT_EQ(moving.size(), 60u);
-  for (size_t i = 1; i < moving.size(); i++) EXPECT_LE(moving[i] - moving[i - 1], 0.05 + 1e-6);
+  EXPECT_EQ(moving.size(), 30u);
+  for (size_t i = 1; i < moving.size(); i++) EXPECT_NEAR(moving[i] - moving[i - 1], 0.1, 1e-6);
   EXPECT_TRUE(Times(IsZeroSpeed).empty());
+}
+
+TEST_F(RepeatTest, ACommandGapIsFilledEvery100ms) {
+  Run(0.1);
+  for (int i = 0; i < 10; i++) {
+    control_.OnCmdVel(0.2f, 0.0f, now_);
+    Run(now_ + 0.25);
+  }
+  auto moving = Times(IsMovingSpeed);
+  for (size_t i = 1; i < moving.size(); i++) EXPECT_GE(moving[i] - moving[i - 1], 0.1 - 1e-6);
+  EXPECT_GT(moving.size(), 20u);
+  EXPECT_TRUE(Times(IsZeroSpeed, 0, 2.5).empty());
 }
 
 TEST_F(RepeatTest, ANewSetpointReplacesTheRepeatedOne) {

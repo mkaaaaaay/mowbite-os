@@ -137,7 +137,7 @@ class TestRehearsalTron(unittest.TestCase):
         self.assertTrue(all(p["allow_blade"] is False for p in starts))
         watchdog = [r["stand_s"] for r in rec if r["kind"] == "watchdog"]
         self.assertEqual(len(watchdog), 2)
-        # The driver repeats the setpoint 0.3 s after the last command, then stops.
+        # The driver stops cmd_vel_timeout s after the last command; the fake holds no longer than its timeout.
         self.assertTrue(all(0.3 <= s <= 0.8 for s in watchdog), watchdog)
         self.assertTrue(all(r["moving"] is False for r in rec if r["kind"] == "watchdog"))
         directions = [r for r in rec if r["kind"] == "direction"]

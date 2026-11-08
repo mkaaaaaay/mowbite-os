@@ -4,12 +4,13 @@
 The MCU pty sends sensor, speed, battery, version and motor frames like the real MCU. SpeedData (linear, angular) drives two
 wheels: the MCU splits it on --mcu-track, the base turns on the real --track, and the speed frame reports what the wheels
 did. The speed drops to 0 --host-timeout seconds (flag host_timeout, 0.2 as measured on the Tron) after the last
-SpeedData, also while heartbeats come, and while the lift or stop flag is set; it stays 0 until the next SpeedData. The
-motor report gives the drive motors as the Tron does: right before left, negative rpm forwards. Standing wheels report
+SpeedData, also while heartbeats come, and while the lift or stop flag is set; it stays 0 until the next SpeedData. If
+the last three SpeedData came each less than 75 ms after the one before, the setpoint lasts --fast-speed-hold s (flag
+fast_speed_hold, 3.6 as measured on the Tron at 20 SpeedData/s; 0 off). The motor report gives the drive motors as the Tron does: right before left, negative rpm forwards. Standing wheels report
 the noise of the Tron with --standstill-noise (flag standstill_noise). The state file counts the bytes the host wrote to
 the MCU pty (host_bytes). The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an upright sensor.
-Optional: a JSON file with flags (lift, stop, bumper, bumper_left, bumper_right, rain, dock, host_timeout, gnss_quality, gnss_noise, gnss_age, gnss_delay,
+Optional: a JSON file with flags (lift, stop, bumper, bumper_left, bumper_right, rain, dock, host_timeout, fast_speed_hold, gnss_quality, gnss_noise, gnss_age, gnss_delay,
 yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, gnss_rtcm, dock_shift_x, dock_shift_y,
 dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps, charge_current, battery_percentage, battery_voltage,
 battery_temperature, blade_temperature, standstill_noise) is read every 10 ms, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON; a thread
@@ -254,21 +255,32 @@ class Pose:
         return (self.linear * c - self.angular * (s * ax + c * ay), self.linear * s + self.angular * (c * ax - s * ay))
 
 
-class HostLink:
-    """The setpoint the MCU holds: up to `timeout` s after the last SpeedData, and not during a lift or stop. The blade
-    stops once no frame at all came for `timeout` s."""
+FAST_SPEED_GAP = 0.075
+FAST_SPEED_RUN = 3
+FAST_SPEED_HOLD = 3.6
 
-    def __init__(self, timeout):
+
+class HostLink:
+    """The setpoint the MCU holds: up to `timeout` s after the last SpeedData, `fast_hold` s after FAST_SPEED_RUN
+    SpeedData in a row each less than FAST_SPEED_GAP s apart (a single short gap is read jitter), and not during a lift
+    or stop. The blade stops once no frame at all came for
+    `timeout` s."""
+
+    def __init__(self, timeout, fast_hold=0.0):
         self.timeout = timeout
+        self.fast_hold = fast_hold
         self.linear = self.angular = 0.0
         self.last_rx = None
         self.last_speed = None
+        self.fast_run = 0
 
     def on_frame(self, now):
         self.last_rx = now
 
     def on_speed(self, linear, angular, now):
         self.linear, self.angular = linear, angular
+        fast = self.last_speed is not None and now - self.last_speed < FAST_SPEED_GAP
+        self.fast_run = self.fast_run + 1 if fast else 0
         self.last_speed = now
 
     def silent(self, now):
@@ -276,7 +288,8 @@ class HostLink:
 
     def setpoint(self, now, blocked):
         """The (linear, angular) to drive now. A timeout or a block clears the held setpoint."""
-        if blocked or self.last_speed is None or now - self.last_speed > self.timeout:
+        hold = max(self.timeout, self.fast_hold) if self.fast_run >= FAST_SPEED_RUN else self.timeout
+        if blocked or self.last_speed is None or now - self.last_speed > hold:
             self.linear = self.angular = 0.0
         return self.linear, self.angular
 
@@ -765,11 +778,14 @@ def main():
                         "gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, "
                         "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps, "
                         "charge_current, battery_percentage, battery_voltage, battery_temperature, blade_temperature, "
-                        "standstill_noise")
+                        "standstill_noise, fast_speed_hold")
     parser.add_argument("--log", help="JSON lines log of received sub packets")
     parser.add_argument("--log-max-mb", type=float, default=20.0)
     parser.add_argument("--state", help="JSON file with the true pose, written 5 times a second")
     parser.add_argument("--host-timeout", type=float, default=0.2, help="seconds after the last SpeedData until stop")
+    parser.add_argument("--fast-speed-hold", type=float, default=FAST_SPEED_HOLD,
+                        help=f"seconds the setpoint lasts after SpeedData that came faster than every "
+                             f"{FAST_SPEED_GAP * 1000:.0f} ms (0 off)")
     parser.add_argument("--standstill-noise", action="store_true",
                         help="standing wheels report the noise of the Tron (flag standstill_noise)")
     parser.add_argument("--datum", type=float, nargs=3, default=[52.0, 9.0, 50.0], metavar=("LAT", "LON", "H"),
@@ -816,7 +832,7 @@ def main():
     rng = random.Random(args.seed)
     noise_rng = random.Random(args.seed + 1)
     host_bytes = 0
-    host = HostLink(args.host_timeout)
+    host = HostLink(args.host_timeout, args.fast_speed_hold)
     drive = Drive(args.mcu_track, args.track or args.mcu_track)
     antenna_history = History()
     course = None
@@ -849,6 +865,7 @@ def main():
                         log.write({"t": round(now, 3), "dock": "contact"})
             blocked = bool(flags.get("lift", 0) or flags.get("stop", 0))
             host.timeout = float(flags.get("host_timeout", args.host_timeout))
+            host.fast_hold = float(flags.get("fast_speed_hold", args.fast_speed_hold))
             drive.track = float(flags.get("track", args.track or args.mcu_track))
             linear, angular = drive.move(*host.setpoint(now, blocked),
                                          float(flags.get("wheel_deadband", args.wheel_deadband)))
@@ -893,9 +910,8 @@ def main():
                 battery = struct.pack("<HhBbbI", decivolts, current, percentage, int(dock_ok),
                                       celsius(flags.get("battery_temperature", 30)), 0)
                 left_rpm, right_rpm = drive.rpm()
-                right_motor = struct.pack("<hhhbb", -right_rpm, 0, 2450, 30, 0)
-                left_motor = struct.pack("<hhhbb", -left_rpm, 0, 2450, 30, 0)
-                height_motor = struct.pack("<hhhbb", 0, 0, 2450, 30, 0)
+                motors = b"".join(struct.pack("<hhhbb", rpm, 0, 2450, 30, 0)
+                                  for rpm in (-right_rpm, -left_rpm, 0))
                 if blocked or host.silent(now):
                     cutter_percent = 0
                 # Assumed 2800 rpm at full speed, 0.8 A while turning (10 mA steps).
@@ -903,7 +919,7 @@ def main():
                                      celsius(flags.get("blade_temperature", 30)), 0)
                 version = bytes([0, 6, 36, 0, 6, 34, 0, 0, 0])
                 send(mcu.fd, encode([(FROM_MCU, 5, battery), (FROM_MCU, 12, version),
-                                  (FROM_MCU, 13, cutter + right_motor + left_motor + height_motor)]))
+                                  (FROM_MCU, 13, cutter + motors)]))
             if now >= next_gnss:
                 next_gnss = now + GNSS_PERIOD
                 sigma = float(flags.get("gnss_noise", args.gnss_noise_m))

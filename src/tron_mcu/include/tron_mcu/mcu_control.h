@@ -14,11 +14,13 @@ struct McuControlConfig {
   double heartbeat_period_s = 0.1;
   // Silence on cmd_vel after which the wheels are stopped.
   double cmd_vel_timeout_s = 0.5;
-  // The MCU drops a setpoint ~0.2 s after the last SpeedData: within this time of the last cmd_vel the last non-zero
-  // setpoint goes out again every speed_repeat_period_s, and the stop follows at its end if that comes before
-  // cmd_vel_timeout_s. 0 sends each command once.
+  // The MCU drops a setpoint ~0.2 s after the last SpeedData, but at 20 SpeedData/s it kept one up to 3.6 s without
+  // host (measured 08.11.). So motion frames go out at most every speed_period_s, a newer command replaces the waiting
+  // one; a stop goes at once. Within speed_repeat_window_s of the last cmd_vel the last non-zero setpoint goes out
+  // again every speed_period_s, and the stop follows at its end if that comes before cmd_vel_timeout_s. 0 sends each
+  // command once.
   double speed_repeat_window_s = 0;
-  double speed_repeat_period_s = 0.05;
+  double speed_period_s = 0.1;
   // Without sensor info from the MCU for this long, motion and blade are blocked.
   double telemetry_timeout_s = 1.0;
   int repeat_count = 3;

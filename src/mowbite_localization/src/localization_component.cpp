@@ -152,6 +152,7 @@ class LocalizationNode : public rclcpp::Node {
     config.max_imu_gap = declare_parameter("max_imu_gap", config.max_imu_gap);
     config.wheel_timeout = declare_parameter("wheel_timeout", config.wheel_timeout);
     config.min_speed = declare_parameter("min_speed", config.min_speed);
+    config.motion_confirm_time = declare_parameter("motion_confirm_time", config.motion_confirm_time);
     config.accuracy.growth_per_m = declare_parameter("accuracy_growth_per_m", config.accuracy.growth_per_m);
     config.accuracy.growth_per_s = declare_parameter("accuracy_growth_per_s", config.accuracy.growth_per_s);
     config.accuracy.timeout = declare_parameter("gps_timeout", config.accuracy.timeout);
