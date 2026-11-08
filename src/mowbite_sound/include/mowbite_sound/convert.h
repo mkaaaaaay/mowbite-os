@@ -9,9 +9,8 @@
 
 namespace mowbite_sound {
 
-// Longest sound in s, and the shortest one worth playing.
-constexpr double kMaxSeconds = 30.0;
-constexpr double kMinSeconds = 0.2;
+// Largest MP3 the converter reads.
+constexpr size_t kMaxMp3Bytes = 2 << 20;
 
 // The sound of an MP3 (MPEG-1 or 2 Layer III) with its channels mixed to one, at most kMaxSeconds; nullopt and why
 // for anything else. A leading ID3v2 tag is skipped.

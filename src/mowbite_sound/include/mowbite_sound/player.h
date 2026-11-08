@@ -29,7 +29,7 @@ class Output {
   virtual void Close(bool drop) = 0;
 };
 
-// libasound on device (plughw:0,0), with room for 0.1 s.
+// libasound on device, with room for 0.1 s.
 std::unique_ptr<Output> MakeAlsaOutput(const std::string& device);
 // Whether device opens for playback now; why not.
 bool ProbeAlsa(const std::string& device, std::string* error);

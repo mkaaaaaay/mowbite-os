@@ -24,6 +24,10 @@ uint32_t Get(const std::string& bytes, size_t at, int size) {
 
 }  // namespace
 
+std::string RateRange() {
+  return std::to_string(kMinRate) + " to " + std::to_string(kMaxRate) + " Hz";
+}
+
 std::string EncodeWav(const Wav& wav) {
   const uint32_t data_bytes = static_cast<uint32_t>(wav.samples.size() * 2);
   std::string out = "RIFF";
@@ -66,7 +70,7 @@ std::optional<Wav> DecodeWav(const std::string& bytes, std::string* error) {
       }
       wav.rate = Get(bytes, body + 4, 4);
       if (wav.rate < kMinRate || wav.rate > kMaxRate) {
-        *error = "rate " + std::to_string(wav.rate) + " Hz is outside of 8000 to 48000";
+        *error = "rate " + std::to_string(wav.rate) + " Hz is outside of " + RateRange();
         return std::nullopt;
       }
       format = true;

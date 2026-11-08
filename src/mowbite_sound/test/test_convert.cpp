@@ -1,31 +1,16 @@
 #include <gtest/gtest.h>
-#include <stdlib.h>
-
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 
 #include "mowbite_sound/convert.h"
 #include "mowbite_sound/wav.h"
+#include "temp_dir.h"
 
 using namespace mowbite_sound;
 namespace fs = std::filesystem;
 
 namespace {
-
-struct TempDir {
-  TempDir() {
-    char pattern[] = "/tmp/mowbite_sound_XXXXXX";
-    path = ::mkdtemp(pattern);
-  }
-  ~TempDir() { fs::remove_all(path); }
-  std::string path;
-};
-
-std::string ReadAll(const std::string& path) {
-  std::ifstream in(path, std::ios::binary);
-  return std::string(std::istreambuf_iterator<char>(in), {});
-}
 
 void WriteAll(const std::string& path, const std::string& bytes) {
   std::ofstream(path, std::ios::binary) << bytes;

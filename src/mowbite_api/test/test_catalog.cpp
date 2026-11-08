@@ -296,7 +296,7 @@ TEST(Catalog, RefusalsAreNoEvents) {
     EXPECT_STREQ(rating.severity, "info") << code;
     EXPECT_STREQ(rating.resume, "user") << code;
   }
-  const EventEntry& requests = Refusals().at(1);
+  const EventEntry& requests = *FindReasonGroup("REQUEST_REFUSED");
   EXPECT_EQ(requests.type, "REQUEST_REFUSED");
   EXPECT_EQ(FindEvent("REQUEST_REFUSED"), nullptr);
   EXPECT_EQ(FindReasonGroup("REQUEST_REFUSED"), &requests);
@@ -312,8 +312,7 @@ TEST(Catalog, RefusalsAreNoEvents) {
     EXPECT_STREQ(rating.severity, "error") << code;
     EXPECT_STREQ(rating.resume, "user") << code;
   }
-  const EventEntry& sounds = Refusals().back();
-  EXPECT_EQ(sounds.type, "SOUND_REFUSED");
+  ASSERT_NE(FindReasonGroup("SOUND_REFUSED"), nullptr);
   EXPECT_EQ(FindEvent("SOUND_REFUSED"), nullptr);
   for (const char* code : {"NO_FILE", "EMERGENCY"}) {
     const Rating rating = RateReason("SOUND_REFUSED", code);

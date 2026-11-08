@@ -17,7 +17,6 @@
 #include <rclcpp_components/register_node_macro.hpp>
 #include <std_msgs/msg/int64.hpp>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "mowbite_bridge/json_rpc.h"
@@ -84,18 +83,12 @@ class SoundNode : public rclcpp::Node {
     const std::string problem = service_.Load();
     if (!problem.empty()) RCLCPP_ERROR(get_logger(), "%s; the vendor's sounds are taken again", problem.c_str());
 
-    std::promise<Imported> promise;
-    imported_ = promise.get_future();
-    import_thread_ = std::thread([this, promise = std::move(promise), have = service_.files()]() mutable {
-      promise.set_value(Import(have));
-    });
+    imported_ = std::async(std::launch::async, [this, have = service_.files()] { return Import(have); });
     import_timer_ = create_wall_timer(std::chrono::duration<double>(kImportPoll), [this] { OnImportPoll(); });
   }
 
-  ~SoundNode() override {
-    stopping_ = true;
-    if (import_thread_.joinable()) import_thread_.join();
-  }
+  // The import ends after the file it converts; imported_ waits for it.
+  ~SoundNode() override { stopping_ = true; }
 
  private:
   NodeConfig LoadConfig() {
@@ -175,7 +168,6 @@ class SoundNode : public rclcpp::Node {
   void OnImportPoll() {
     if (imported_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
     import_timer_->cancel();
-    import_thread_.join();
     Imported imported = imported_.get();
     if (!imported.error.empty()) {
       RCLCPP_ERROR(get_logger(), "%s: no sound.* methods, no sound", imported.error.c_str());
@@ -222,16 +214,15 @@ class SoundNode : public rclcpp::Node {
   }
 
   void OnRequest(const mowbite_msgs::msg::RpcRequest& request) {
+    // A method of another node, which answers it; its params (a map, say) are not parsed here.
+    const auto& methods = SoundService::Methods();
+    if (std::find(methods.begin(), methods.end(), request.method) == methods.end()) return;
     Json params = Json::object();
     if (!request.params.empty()) params = Json::parse(request.params, nullptr, false);
-    std::optional<RpcOutcome> outcome;
-    if (!params.is_discarded()) {
-      outcome = service_.Call(request.method, params);
-    } else if (const auto& methods = SoundService::Methods();
-               std::find(methods.begin(), methods.end(), request.method) != methods.end()) {
-      outcome = RpcOutcome{false, Json(), mowbite_bridge::kInvalidParams, "The parameters are not valid JSON", Json()};
-    }
-    // A method of another node, which answers it.
+    std::optional<RpcOutcome> outcome =
+        params.is_discarded()
+            ? RpcOutcome{false, Json(), mowbite_bridge::kInvalidParams, "The parameters are not valid JSON", Json()}
+            : service_.Call(request.method, params);
     if (!outcome) return;
     if (outcome->ok) {
       mowbite_msgs::msg::RpcResponse response;
@@ -254,7 +245,6 @@ class SoundNode : public rclcpp::Node {
   std::unique_ptr<Player> player_;
   SoundService service_;
   std::atomic<bool> stopping_{false};
-  std::thread import_thread_;
   std::future<Imported> imported_;
 
   rclcpp::TimerBase::SharedPtr import_timer_;

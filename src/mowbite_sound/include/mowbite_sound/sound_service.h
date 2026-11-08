@@ -13,8 +13,6 @@ namespace mowbite_sound {
 
 using Json = nlohmann::ordered_json;
 
-// sound.volume while an update holds the mower (system.hold), with data {"reason": "HOLD", "until"}.
-constexpr int kRpcHold = -32004;
 // The emergency bits of a lift: LIFT and LIFT_MULTIPLE.
 constexpr uint32_t kLiftBits = (1u << 3) | (1u << 4);
 // Charge (0..1) at which charging is done.
@@ -24,15 +22,11 @@ constexpr int64_t kMaxVendorBytes = 1 << 20;
 // All originals and WAVs together in bytes.
 constexpr int64_t kMaxStoreBytes = 40 << 20;
 
-struct Situation {
-  std::string name;
-  // What makes the OS play it, for sound.list.
-  std::string event;
-};
-
-// Every situation in the order of sound.list; which file each has is the platform's.
-const std::vector<Situation>& Situations();
+// A situation of the catalog (mowbite_api::SoundSituations); which file each has is the platform's.
 bool IsSituation(const std::string& name);
+
+// <dir>/<situation><extension>: the original (.mp3) and the WAV (.wav) of a situation.
+std::string SoundPath(const std::string& dir, const std::string& situation, const char* extension);
 
 // The sound of a situation as sounds.json keeps it; the files are <name>.mp3 (original) and <name>.wav.
 struct SoundFile {
@@ -123,7 +117,7 @@ class SoundService {
   void Announce(const std::string& situation, double now);
   void OnState(const std::string& state, double now);
   double Gain() const;
-  std::string WavPath(const std::string& situation) const;
+  std::string StorePath() const;
   std::string Save();
 
   RpcOutcome List() const;

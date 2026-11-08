@@ -12,8 +12,14 @@ namespace mowbite_sound {
 // Rates a sound may have, in Hz.
 constexpr uint32_t kMinRate = 8000;
 constexpr uint32_t kMaxRate = 48000;
-// Largest WAV the OS reads: 30 s at 48 kHz and its header.
-constexpr size_t kMaxWavBytes = 3 << 20;
+// Longest sound in s, and the shortest one worth playing.
+constexpr double kMaxSeconds = 30.0;
+constexpr double kMinSeconds = 0.2;
+// Largest WAV the OS reads: kMaxSeconds at kMaxRate and its header.
+constexpr size_t kMaxWavBytes = 44 + 2 * kMaxRate * static_cast<size_t>(kMaxSeconds);
+
+// "8000 to 48000 Hz", for messages.
+std::string RateRange();
 
 // A mono sound of 16-bit samples.
 struct Wav {

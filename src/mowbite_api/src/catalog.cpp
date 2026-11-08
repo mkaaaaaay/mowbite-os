@@ -119,10 +119,11 @@ Field LightEffect(std::string name, std::string text) {
                  Number("brightness", "", "0 to 1 of what the OS allows", false)});
 }
 
-// The situations of sound.list in their order (mowbite_sound has the same list).
-const std::vector<std::string> kSoundSituations = {
-    "MOWING_START",   "MOWING_COMPLETE", "DOCKING_START", "LOW_BATTERY", "RAIN_DETECTED", "MOWING_PAUSED",
-    "AREA_RECORDING_MODE", "DOCKING_FAILED", "CHARGING_START", "CHARGING_DONE", "EMERGENCY", "LIFT_TRIGGERED"};
+std::vector<std::string> SoundSituationNames() {
+  std::vector<std::string> names;
+  for (const auto& situation : SoundSituations()) names.push_back(situation.name);
+  return names;
+}
 
 const char kSoundOffered[] = "with a speaker and at least one sound";
 
@@ -479,7 +480,7 @@ const std::vector<Method>& Methods() {
        NoParams(),
        Object("result", "The sounds",
               {Rows("situations", "A situation, in the order to show them",
-                    {Text("name", "Name of the situation", true, kSoundSituations),
+                    {Text("name", "Name of the situation", true, SoundSituationNames()),
                      Text("event", "What makes the OS play it, in English"),
                      Nullable(Object("file", "Its sound, null without one",
                                      {Text("source", "vendor: of the maker of the mower; upload: of the user", true,
@@ -492,7 +493,7 @@ const std::vector<Method>& Methods() {
       {"sound.play", "mowbite_sound",
        "Plays the sound of a situation once, to listen to it; refused (SOUND_REFUSED) in an emergency and without a "
        "sound",
-       Object("params", "The situation", {Text("situation", "A name of sound.list", true, kSoundSituations)}),
+       Object("params", "The situation", {Text("situation", "A name of sound.list", true, SoundSituationNames())}),
        Object("result", "What plays",
               {Text("situation", "The situation"), Number("seconds", "s", "How long it plays")}),
        kSoundOffered},
@@ -520,6 +521,24 @@ const std::vector<Method>& Methods() {
        "only with access_over_rpc"},
   };
   return methods;
+}
+
+const std::vector<SoundSituation>& SoundSituations() {
+  static const std::vector<SoundSituation> situations = {
+      {"MOWING_START", "STATE MOWING, not after PAUSED"},
+      {"MOWING_COMPLETE", "JOB_COMPLETE"},
+      {"DOCKING_START", "STATE DOCKING"},
+      {"LOW_BATTERY", "BATTERY_LOW, or DOCKING for BATTERY_LOW or BATTERY_CRITICAL"},
+      {"RAIN_DETECTED", "DOCKING for RAIN"},
+      {"MOWING_PAUSED", "STATE PAUSED"},
+      {"AREA_RECORDING_MODE", "STATE AREA_RECORDING"},
+      {"DOCKING_FAILED", "DOCKING_FAILED"},
+      {"CHARGING_START", "is_charging of robot_state turns true"},
+      {"CHARGING_DONE", "battery_percentage reaches 0.99 while charging"},
+      {"EMERGENCY", "An emergency begins without LIFT or LIFT_MULTIPLE"},
+      {"LIFT_TRIGGERED", "An emergency with LIFT or LIFT_MULTIPLE begins, or one of them joins it"},
+  };
+  return situations;
 }
 
 std::string NodeOf(const std::string& method) {

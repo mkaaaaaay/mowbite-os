@@ -16,6 +16,8 @@ constexpr int kInvalidRequest = -32600;
 constexpr int kMethodNotFound = -32601;
 constexpr int kInvalidParams = -32602;
 constexpr int kInternalError = -32603;
+// A change refused while an update holds the mower (system.hold), with data {"reason": "HOLD", "until"}.
+constexpr int kHold = -32004;
 
 // Requests nested deeper than this are refused before they are parsed.
 constexpr std::size_t kMaxRequestDepth = 64;

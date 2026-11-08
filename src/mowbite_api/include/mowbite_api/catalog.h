@@ -157,6 +157,13 @@ struct GeometryEntry {
   std::string text;
 };
 
+// A situation the OS may play a sound for (sound.*), names as in open_mower_ros #347.
+struct SoundSituation {
+  std::string name;
+  // What makes the OS play it.
+  std::string event;
+};
+
 // The fields of robot_state/json.
 const std::vector<Field>& RobotState();
 // Every event the OS sends on events/json; types not in it may come from the planner and carry the envelope.
@@ -179,6 +186,8 @@ const SensorEntry* FindSensor(const std::string& id);
 const std::vector<SettingEntry>& LogicSettings();
 // The keys of the geometry in the order of the answers; robot_outline is the only list.
 const std::vector<GeometryEntry>& GeometryKeys();
+// The situations of sound.list in their order.
+const std::vector<SoundSituation>& SoundSituations();
 
 // The event of this type, nullptr for a type the catalog does not know.
 const EventEntry* FindEvent(const std::string& type);

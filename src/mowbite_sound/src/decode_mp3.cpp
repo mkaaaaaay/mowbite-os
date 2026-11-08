@@ -37,7 +37,7 @@ std::optional<Wav> DecodeMp3(const std::string& bytes, std::string* error) {
     const uint32_t rate = static_cast<uint32_t>(info.hz);
     if (wav.rate == 0) {
       if (rate < kMinRate || rate > kMaxRate) {
-        *error = "rate " + std::to_string(rate) + " Hz is outside of 8000 to 48000";
+        *error = "rate " + std::to_string(rate) + " Hz is outside of " + RateRange();
         return std::nullopt;
       }
       wav.rate = rate;
@@ -46,7 +46,7 @@ std::optional<Wav> DecodeMp3(const std::string& bytes, std::string* error) {
       return std::nullopt;
     }
     if (static_cast<double>(wav.samples.size() + frames) > kMaxSeconds * wav.rate) {
-      *error = "longer than 30 s";
+      *error = "longer than " + std::to_string(static_cast<int>(kMaxSeconds)) + " s";
       return std::nullopt;
     }
     for (int i = 0; i < frames; ++i) {

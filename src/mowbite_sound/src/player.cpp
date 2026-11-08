@@ -109,13 +109,16 @@ void Player::Run() {
 }
 
 void Player::PlayOne(const Cue& cue) {
-  std::string bytes;
   std::string error;
-  if (mowbite_hold::ReadSmallFile(cue.path, kMaxWavBytes, &bytes, &error) != mowbite_hold::FileRead::kText) {
-    log_(cue.situation + ": cannot read " + cue.path + " " + error);
-    return;
+  std::optional<Wav> wav;
+  {
+    std::string bytes;
+    if (mowbite_hold::ReadSmallFile(cue.path, kMaxWavBytes, &bytes, &error) != mowbite_hold::FileRead::kText) {
+      log_(cue.situation + ": cannot read " + cue.path + " " + error);
+      return;
+    }
+    wav = DecodeWav(bytes, &error);
   }
-  const auto wav = DecodeWav(bytes, &error);
   if (!wav) {
     log_(cue.situation + ": " + cue.path + ": " + error);
     return;

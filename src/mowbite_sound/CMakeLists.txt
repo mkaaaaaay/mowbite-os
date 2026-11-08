@@ -11,6 +11,7 @@ find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(ALSA REQUIRED)
+find_package(mowbite_api REQUIRED)
 find_package(mowbite_hold REQUIRED)
 find_package(mowbite_bridge REQUIRED)
 find_package(mowbite_map REQUIRED)
@@ -31,14 +32,14 @@ target_link_libraries(mowbite_sound_decode mowbite_sound_wav)
 target_include_directories(mowbite_sound_decode SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/minimp3)
 
 add_executable(mowbite_sound_convert src/convert_main.cpp)
-target_link_libraries(mowbite_sound_convert mowbite_sound_decode)
+target_link_libraries(mowbite_sound_convert mowbite_sound_decode mowbite_hold::mowbite_hold_core)
 
 # Situations, the RPC methods, sounds.json, the import and the player without ROS.
 add_library(mowbite_sound_core STATIC src/sound_service.cpp src/run_program.cpp src/player.cpp
   src/alsa_output.cpp)
 target_link_libraries(mowbite_sound_core mowbite_sound_wav nlohmann_json::nlohmann_json ALSA::ALSA
-  mowbite_hold::mowbite_hold_core
-  mowbite_bridge::mowbite_bridge_core mowbite_map::mowbite_map_core)
+  mowbite_api::mowbite_api_core mowbite_hold::mowbite_hold_core mowbite_bridge::mowbite_bridge_core
+  mowbite_map::mowbite_map_core)
 set_target_properties(mowbite_sound_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_sound_component SHARED src/sound_node.cpp)
@@ -57,9 +58,8 @@ install(FILES third_party/minimp3/LICENSE DESTINATION share/${PROJECT_NAME}/mini
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  find_package(mowbite_api REQUIRED)
   ament_add_gtest(mowbite_sound_test test/test_sound_service.cpp test/test_convert.cpp)
-  target_link_libraries(mowbite_sound_test mowbite_sound_core mowbite_sound_decode mowbite_api::mowbite_api_core)
+  target_link_libraries(mowbite_sound_test mowbite_sound_core mowbite_sound_decode)
   target_compile_definitions(mowbite_sound_test PRIVATE
     TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/test/data"
     CONVERTER="$<TARGET_FILE:mowbite_sound_convert>")

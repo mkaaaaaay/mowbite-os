@@ -8,6 +8,7 @@
 #include <fstream>
 #include <string>
 
+#include "mowbite_hold/file_io.h"
 #include "mowbite_sound/convert.h"
 
 namespace {
@@ -15,8 +16,6 @@ namespace {
 constexpr rlim_t kCpuSeconds = 10;
 constexpr rlim_t kMemoryBytes = 128u << 20;
 constexpr rlim_t kFileBytes = 4u << 20;
-// Largest MP3 it reads; an original may have up to 2 MB.
-constexpr std::streamsize kMaxInput = 2 << 20;
 
 bool Limit(int resource, rlim_t value) {
 #ifdef __SANITIZE_ADDRESS__
@@ -43,14 +42,15 @@ int main(int argc, char** argv) {
   if (::nice(19) == -1 && errno != 0) return Fail("cannot lower the priority");
   if (argc != 3) return Fail("usage: mowbite_sound_convert <in.mp3> <out.wav>");
 
-  std::ifstream in(argv[1], std::ios::binary);
-  if (!in) return Fail(std::string("cannot open ") + argv[1]);
-  std::string mp3(static_cast<size_t>(kMaxInput) + 1, '\0');
-  in.read(mp3.data(), kMaxInput + 1);
-  if (in.gcount() > kMaxInput) return Fail("larger than 2 MB");
-  mp3.resize(static_cast<size_t>(in.gcount()));
-
+  std::string mp3;
   std::string error;
+  switch (mowbite_hold::ReadSmallFile(argv[1], mowbite_sound::kMaxMp3Bytes, &mp3, &error)) {
+    case mowbite_hold::FileRead::kText: break;
+    case mowbite_hold::FileRead::kMissing: return Fail(std::string("cannot open ") + argv[1]);
+    case mowbite_hold::FileRead::kTooLarge:
+      return Fail("larger than " + std::to_string(mowbite_sound::kMaxMp3Bytes >> 20) + " MB");
+    case mowbite_hold::FileRead::kFailed: return Fail(error);
+  }
   const auto wav = mowbite_sound::DecodeMp3(mp3, &error);
   if (!wav) return Fail(error);
   std::ofstream out(argv[2], std::ios::binary | std::ios::trunc);

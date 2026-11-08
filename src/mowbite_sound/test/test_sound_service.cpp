@@ -1,6 +1,4 @@
 #include <gtest/gtest.h>
-#include <stdlib.h>
-
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -9,20 +7,12 @@
 #include "mowbite_bridge/json_rpc.h"
 #include "mowbite_sound/sound_service.h"
 #include "mowbite_sound/wav.h"
+#include "temp_dir.h"
 
 using namespace mowbite_sound;
 namespace fs = std::filesystem;
 
 namespace {
-
-struct TempDir {
-  TempDir() {
-    char pattern[] = "/tmp/mowbite_sound_XXXXXX";
-    path = ::mkdtemp(pattern);
-  }
-  ~TempDir() { fs::remove_all(path); }
-  std::string path;
-};
 
 struct FakeSink : Sink {
   void Play(const Cue& cue) override {
@@ -43,7 +33,7 @@ SoundFile Vendor(const std::string& code) {
 // Every situation with a file.
 std::map<std::string, SoundFile> AllFiles() {
   std::map<std::string, SoundFile> files;
-  for (const auto& situation : Situations()) files[situation.name] = Vendor("9");
+  for (const auto& situation : mowbite_api::SoundSituations()) files[situation.name] = Vendor("9");
   return files;
 }
 
@@ -68,22 +58,15 @@ struct Fixture {
   std::unique_ptr<SoundService> service;
 };
 
-std::string ReadAll(const std::string& path) {
-  std::ifstream in(path, std::ios::binary);
-  return std::string(std::istreambuf_iterator<char>(in), {});
-}
-
 }  // namespace
 
-TEST(SoundService, MethodsAndSituationsAreThoseOfTheCatalog) {
+TEST(SoundService, MethodsAndLiftBitsAreThoseOfTheCatalog) {
   for (const auto& method : SoundService::Methods()) EXPECT_EQ(mowbite_api::NodeOf(method), "mowbite_sound") << method;
-  const auto& methods = mowbite_api::Methods();
-  const auto play = std::find_if(methods.begin(), methods.end(), [](const auto& m) { return m.name == "sound.play"; });
-  ASSERT_NE(play, methods.end());
-  std::vector<std::string> names;
-  for (const auto& situation : Situations()) names.push_back(situation.name);
-  EXPECT_EQ(play->params.fields.at(0).values, names);
-  EXPECT_EQ(names.size(), 12u);
+  uint32_t lift = 0;
+  for (const auto& bit : mowbite_api::EmergencyBits()) {
+    if (bit.name == "LIFT" || bit.name == "LIFT_MULTIPLE") lift |= 1u << bit.bit;
+  }
+  EXPECT_EQ(kLiftBits, lift);
 }
 
 TEST(SoundService, RefusalsCarryTheRatingOfTheCatalog) {
@@ -229,7 +212,7 @@ TEST(SoundService, VolumeIsKeptAndRefusedOnlyToChangeInAHold) {
   f.service->SetHold(1800000000);
   const auto refused = f.service->Call("sound.volume", {{"volume", 50}});
   ASSERT_TRUE(refused && !refused->ok);
-  EXPECT_EQ(refused->code, kRpcHold);
+  EXPECT_EQ(refused->code, mowbite_bridge::kHold);
   EXPECT_EQ(refused->data, (Json{{"reason", "HOLD"}, {"until", 1800000000}}));
   const auto read = f.service->Call("sound.volume", Json::object());
   ASSERT_TRUE(read && read->ok);

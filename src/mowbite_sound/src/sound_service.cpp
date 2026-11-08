@@ -6,10 +6,10 @@
 #include <cstring>
 #include <filesystem>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_bridge/json_rpc.h"
 #include "mowbite_hold/file_io.h"
 #include "mowbite_map/sha256.h"
-#include "mowbite_sound/convert.h"
 #include "mowbite_sound/wav.h"
 
 namespace mowbite_sound {
@@ -21,9 +21,19 @@ namespace {
 constexpr int kStoreSchema = 1;
 constexpr size_t kStoreMaxBytes = 64 * 1024;
 constexpr char kStoreFile[] = "sounds.json";
+// The group of x-reasons whose reasons the refusals of sound.* carry.
+constexpr char kRefused[] = "SOUND_REFUSED";
+
+RpcOutcome Ok(Json result) {
+  return {true, std::move(result), 0, "", Json()};
+}
 
 RpcOutcome Invalid(std::string message) {
   return {false, Json(), mowbite_bridge::kInvalidParams, std::move(message), Json()};
+}
+
+std::string Mb(int64_t bytes) {
+  return std::to_string(bytes >> 20) + " MB";
 }
 
 Json ToJson(const SoundFile& file) {
@@ -64,27 +74,13 @@ void RemoveQuietly(const fs::path& path) {
 
 }  // namespace
 
-const std::vector<Situation>& Situations() {
-  static const std::vector<Situation> situations = {
-      {"MOWING_START", "STATE MOWING, not after PAUSED"},
-      {"MOWING_COMPLETE", "JOB_COMPLETE"},
-      {"DOCKING_START", "STATE DOCKING"},
-      {"LOW_BATTERY", "BATTERY_LOW, or DOCKING for BATTERY_LOW or BATTERY_CRITICAL"},
-      {"RAIN_DETECTED", "DOCKING for RAIN"},
-      {"MOWING_PAUSED", "STATE PAUSED"},
-      {"AREA_RECORDING_MODE", "STATE AREA_RECORDING"},
-      {"DOCKING_FAILED", "DOCKING_FAILED"},
-      {"CHARGING_START", "is_charging of robot_state turns true"},
-      {"CHARGING_DONE", "battery_percentage reaches 0.99 while charging"},
-      {"EMERGENCY", "An emergency begins without LIFT or LIFT_MULTIPLE"},
-      {"LIFT_TRIGGERED", "An emergency with LIFT or LIFT_MULTIPLE begins, or one of them joins it"},
-  };
-  return situations;
+bool IsSituation(const std::string& name) {
+  const auto& all = mowbite_api::SoundSituations();
+  return std::any_of(all.begin(), all.end(), [&](const auto& situation) { return situation.name == name; });
 }
 
-bool IsSituation(const std::string& name) {
-  const auto& all = Situations();
-  return std::any_of(all.begin(), all.end(), [&](const Situation& s) { return s.name == name; });
+std::string SoundPath(const std::string& dir, const std::string& situation, const char* extension) {
+  return dir + "/" + situation + extension;
 }
 
 SoundService::SoundService(SoundConfig config, Sink* sink)
@@ -93,7 +89,7 @@ SoundService::SoundService(SoundConfig config, Sink* sink)
 std::string SoundService::Load() {
   files_.clear();
   volume_ = config_.volume;
-  const std::string path = config_.dir + "/" + kStoreFile;
+  const std::string path = StorePath();
   std::string text;
   std::string error;
   switch (mowbite_hold::ReadSmallFile(path, kStoreMaxBytes, &text, &error)) {
@@ -132,7 +128,7 @@ std::string SoundService::Save() {
   for (const auto& [name, file] : files_) situations[name] = ToJson(file);
   const Json store = {{"schema", kStoreSchema}, {"volume", volume_}, {"situations", situations}};
   std::string error;
-  if (!mowbite_hold::WriteFileAtomic(config_.dir + "/" + kStoreFile, store.dump(2) + "\n", &error)) return error;
+  if (!mowbite_hold::WriteFileAtomic(StorePath(), store.dump(2) + "\n", &error)) return error;
   return "";
 }
 
@@ -221,7 +217,7 @@ void SoundService::Announce(const std::string& situation, double now) {
   const auto last = last_played_.find(situation);
   if (last != last_played_.end() && now - last->second < config_.min_gap) return;
   last_played_[situation] = now;
-  sink_->Play({situation, WavPath(situation), Gain()});
+  sink_->Play({situation, SoundPath(config_.dir, situation, ".wav"), Gain()});
 }
 
 double SoundService::Gain() const {
@@ -229,19 +225,19 @@ double SoundService::Gain() const {
   return config_.max_volume * share * share;
 }
 
-std::string SoundService::WavPath(const std::string& situation) const {
-  return config_.dir + "/" + situation + ".wav";
+std::string SoundService::StorePath() const {
+  return config_.dir + "/" + kStoreFile;
 }
 
 RpcOutcome SoundService::List() const {
   Json situations = Json::array();
-  for (const auto& situation : Situations()) {
+  for (const auto& situation : mowbite_api::SoundSituations()) {
     const auto file = files_.find(situation.name);
     Json json = file == files_.end() ? Json() : ToJson(file->second);
     if (json.is_object()) json.erase("code");
     situations.push_back({{"name", situation.name}, {"event", situation.event}, {"file", json}});
   }
-  return {true, Json{{"situations", situations}, {"volume", volume_}}, 0, "", Json()};
+  return Ok(Json{{"situations", situations}, {"volume", volume_}});
 }
 
 RpcOutcome SoundService::Play(const Json& params) {
@@ -253,25 +249,25 @@ RpcOutcome SoundService::Play(const Json& params) {
   if (InEmergency()) return Refuse("EMERGENCY", "No sound during an emergency");
   const auto file = files_.find(name);
   if (file == files_.end()) return Refuse("NO_FILE", name + " has no sound");
-  if (volume_ > 0) sink_->Play({name, WavPath(name), Gain()});
-  return {true, Json{{"situation", name}, {"seconds", file->second.seconds}}, 0, "", Json()};
+  if (volume_ > 0) sink_->Play({name, SoundPath(config_.dir, name, ".wav"), Gain()});
+  return Ok(Json{{"situation", name}, {"seconds", file->second.seconds}});
 }
 
 RpcOutcome SoundService::Stop() {
   if (InEmergency()) return Refuse("EMERGENCY", "No sound.stop during an emergency");
   sink_->Stop();
-  return {true, Json::object(), 0, "", Json()};
+  return Ok(Json::object());
 }
 
 RpcOutcome SoundService::Volume(const Json& params) {
   if (!params.is_object()) return Invalid("params are {\"volume\": 0 to 100} or none");
   const Json volume = params.value("volume", Json());
-  if (volume.is_null()) return {true, Json{{"volume", volume_}}, 0, "", Json()};
+  if (volume.is_null()) return Ok(Json{{"volume", volume_}});
   if (!volume.is_number_integer() || volume.get<int64_t>() < 0 || volume.get<int64_t>() > 100) {
     return Invalid("volume is a whole number from 0 to 100");
   }
   if (hold_until_ > 0) {
-    return {false, Json(), kRpcHold, "An update holds the mower. The volume changes after it",
+    return {false, Json(), mowbite_bridge::kHold, "An update holds the mower. The volume changes after it",
             Json{{"reason", "HOLD"}, {"until", hold_until_}}};
   }
   const int before = volume_;
@@ -281,16 +277,17 @@ RpcOutcome SoundService::Volume(const Json& params) {
     volume_ = before;
     return {false, Json(), mowbite_bridge::kInternalError, error, Json()};
   }
-  return {true, Json{{"volume", volume_}}, 0, "", Json()};
+  return Ok(Json{{"volume", volume_}});
 }
 
 RpcOutcome SoundService::Refuse(const std::string& reason, const std::string& message) const {
+  const mowbite_api::Rating rating = mowbite_api::RateReason(kRefused, reason);
   return {false, Json(), mowbite_bridge::kInvalidRequest, message,
-          Json{{"event", "SOUND_REFUSED"},
+          Json{{"event", kRefused},
                {"reason", reason},
                {"message", message},
-               {"severity", "info"},
-               {"resume", "user"}}};
+               {"severity", rating.severity},
+               {"resume", rating.resume}}};
 }
 
 std::vector<std::string> VendorDirs(const std::vector<std::string>& patterns) {
@@ -315,8 +312,8 @@ std::map<std::string, SoundFile> ImportVendor(const std::string& dir, const std:
                                               const std::map<std::string, std::string>& codes,
                                               const std::vector<std::string>& dirs, const Convert& convert,
                                               std::vector<std::string>* notes) {
-  const auto mp3_of = [&](const std::string& situation) { return fs::path(dir) / (situation + ".mp3"); };
-  const auto wav_of = [&](const std::string& situation) { return fs::path(dir) / (situation + ".wav"); };
+  const auto mp3_of = [&](const std::string& situation) { return SoundPath(dir, situation, ".mp3"); };
+  const auto wav_of = [&](const std::string& situation) { return SoundPath(dir, situation, ".wav"); };
   std::map<std::string, SoundFile> out;
   int64_t stored = 0;
   const auto keep = [&](const std::string& situation, const SoundFile& file) {
@@ -350,10 +347,11 @@ std::map<std::string, SoundFile> ImportVendor(const std::string& dir, const std:
     std::string mp3;
     std::string error;
     if (mowbite_hold::ReadSmallFile(source, kMaxVendorBytes, &mp3, &error) != mowbite_hold::FileRead::kText) {
-      notes->push_back(situation + ": " + source.string() + " cannot be read or is larger than 1 MB " + error);
+      notes->push_back(situation + ": " + source.string() + " cannot be read or is larger than " +
+                       Mb(kMaxVendorBytes) + " " + error);
       continue;
     }
-    const fs::path wav_new = fs::path(dir) / (situation + ".wav.new");
+    const std::string wav_new = SoundPath(dir, situation, ".wav.new");
     std::string wav_bytes;
     std::optional<Wav> wav;
     if (!mowbite_hold::WriteFileAtomic(mp3_of(situation), mp3, &error) ||
@@ -362,10 +360,10 @@ std::map<std::string, SoundFile> ImportVendor(const std::string& dir, const std:
         !(wav = DecodeWav(wav_bytes, &error))) {
       notes->push_back(situation + ": " + code + ".mp3 not converted: " + error);
     } else if (wav->Seconds() < kMinSeconds || wav->Seconds() > kMaxSeconds) {
-      notes->push_back(situation + ": " + code + ".mp3 lasts " + std::to_string(wav->Seconds()) +
-                       " s, not 0.2 to 30 s");
+      notes->push_back(situation + ": " + code + ".mp3 lasts " + std::to_string(wav->Seconds()) + " s, not " +
+                       Json(kMinSeconds).dump() + " to " + Json(kMaxSeconds).dump() + " s");
     } else if (stored + static_cast<int64_t>(mp3.size() + wav_bytes.size()) > kMaxStoreBytes) {
-      notes->push_back(situation + ": no room, the sounds may take 40 MB");
+      notes->push_back(situation + ": no room, the sounds may take " + Mb(kMaxStoreBytes));
     } else {
       std::error_code renamed;
       fs::rename(wav_new, wav_of(situation), renamed);
@@ -381,7 +379,7 @@ std::map<std::string, SoundFile> ImportVendor(const std::string& dir, const std:
   }
 
   // The files of situations no longer kept.
-  for (const auto& situation : Situations()) {
+  for (const auto& situation : mowbite_api::SoundSituations()) {
     if (out.count(situation.name)) continue;
     RemoveQuietly(mp3_of(situation.name));
     RemoveQuietly(wav_of(situation.name));
