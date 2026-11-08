@@ -52,10 +52,9 @@ Json ToJson(const Profile& profile);
 // Missing states keep the default; nullopt and why for an unknown state or an effect that is none.
 std::optional<Profile> ProfileFromJson(const Json& value, std::string* error);
 
-// The profile state for robot_state: charging (CHARGED from charged_from 0..1 on), BATTERY_LOW while IDLE below
+// The profile state for robot_state: charging (CHARGED from a battery of 0.99 on), BATTERY_LOW while IDLE below
 // low_battery, else current_state, IDLE for one the profile does not know.
-std::string ShownState(const std::string& current_state, bool is_charging, double battery, double low_battery,
-                       double charged_from = 0.99);
+std::string ShownState(const std::string& current_state, bool is_charging, double battery, double low_battery);
 
 }  // namespace mowbite_light
 

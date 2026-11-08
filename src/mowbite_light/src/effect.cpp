@@ -9,6 +9,8 @@ namespace mowbite_light {
 
 namespace {
 
+// The battery from which charging shows CHARGED.
+constexpr double kChargedFrom = 0.99;
 // The darkest step of a pulse, of its colour.
 constexpr double kPulseFloor = 0.05;
 
@@ -212,9 +214,8 @@ std::optional<Profile> ProfileFromJson(const Json& value, std::string* error) {
   return profile;
 }
 
-std::string ShownState(const std::string& current_state, bool is_charging, double battery, double low_battery,
-                       double charged_from) {
-  if (is_charging) return battery >= charged_from ? "CHARGED" : "CHARGING";
+std::string ShownState(const std::string& current_state, bool is_charging, double battery, double low_battery) {
+  if (is_charging) return battery >= kChargedFrom ? "CHARGED" : "CHARGING";
   if (current_state == "IDLE" && battery > 0 && battery < low_battery) return "BATTERY_LOW";
   const auto& states = ProfileStates();
   return std::find(states.begin(), states.end(), current_state) != states.end() ? current_state : "IDLE";

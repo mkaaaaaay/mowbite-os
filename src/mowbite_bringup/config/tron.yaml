@@ -282,8 +282,9 @@ mowbite_light:
     frame_rate: 25.0
     # 120 of 255, full brightness of the vendor's patterns.
     max_brightness: 0.47
-    # Assumption (20 mA per channel at 255) until measured.
+    # Assumptions until measured: the whole chain and one channel of an LED at 255.
     max_current_ma: 1200.0
+    ma_per_channel: 20.0
     low_battery: 0.2
 
 mowbite_bridge:

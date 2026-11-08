@@ -110,14 +110,13 @@ Field GeometryAnswer() {
 }
 
 // An effect of the lights, as light.get_profile has its effects and limits.
-Field LightEffect(std::string name, std::string text, bool required = true) {
+Field LightEffect(std::string name, std::string text) {
   return Object(std::move(name), std::move(text),
                 {Text("effect", "One of the effects of light.get_profile"),
                  List("colors", "1 to limits.colors texts #rrggbb; none for off", Type::kString, false),
                  Number("period", "s", "Time of one blink, pulse, chase or move of the gradient; a gradient may be 0",
                         false),
-                 Number("brightness", "", "0 to 1 of what the OS allows", false)},
-                required);
+                 Number("brightness", "", "0 to 1 of what the OS allows", false)});
 }
 
 // The answer of light.set_profile and light.reset.

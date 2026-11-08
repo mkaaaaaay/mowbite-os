@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "mowbite_bridge/json_rpc.h"
 #include "mowbite_hold/file_io.h"
 
 namespace mowbite_light {
@@ -12,7 +13,7 @@ constexpr int kProfileSchema = 1;
 constexpr size_t kProfileMaxBytes = 64 * 1024;
 
 RpcOutcome Invalid(std::string message) {
-  return {false, Json(), kRpcInvalidParams, std::move(message)};
+  return {false, Json(), mowbite_bridge::kInvalidParams, std::move(message)};
 }
 
 }  // namespace
@@ -84,7 +85,7 @@ std::vector<Rgb> LightService::Frame(double now) {
   }
   effect.brightness *= config_.max_brightness;
   auto leds = Render(effect, config_.leds, now - shown_since_);
-  LimitCurrent(&leds, config_.max_current_ma);
+  LimitCurrent(&leds, config_.max_current_ma, config_.ma_per_channel);
   return leds;
 }
 
@@ -99,7 +100,7 @@ RpcOutcome LightService::GetProfile() const {
                 {{"colors", kMaxColors},
                  {"min_period", kMinPeriod},
                  {"max_period", kMaxPeriod},
-                 {"max_preview", config_.max_preview}}},
+                 {"max_preview", kMaxPreview}}},
                {"leds", config_.leds}},
           0,
           ""};
@@ -113,7 +114,7 @@ RpcOutcome LightService::SetProfile(const Json& params) {
   if (!config_.profile_path.empty()) {
     const Json file = {{"schema", kProfileSchema}, {"profile", ToJson(*profile)}};
     if (!mowbite_hold::WriteFileAtomic(config_.profile_path, file.dump(2) + "\n", &error)) {
-      return {false, Json(), kRpcInternal, error};
+      return {false, Json(), mowbite_bridge::kInternalError, error};
     }
   }
   profile_ = *profile;
@@ -127,9 +128,9 @@ RpcOutcome LightService::Preview(const Json& params, double now) {
   std::string error;
   const auto effect = EffectFromJson(params["effect"], &error);
   if (!effect) return Invalid(error);
-  const Json duration = params.value("duration", Json(config_.max_preview));
-  if (!duration.is_number() || !(duration.get<double>() > 0 && duration.get<double>() <= config_.max_preview)) {
-    return Invalid("duration is more than 0 and at most " + Json(config_.max_preview).dump() + " s");
+  const Json duration = params.value("duration", Json(kMaxPreview));
+  if (!duration.is_number() || !(duration.get<double>() > 0 && duration.get<double>() <= kMaxPreview)) {
+    return Invalid("duration is more than 0 and at most " + Json(kMaxPreview).dump() + " s");
   }
   preview_ = *effect;
   preview_until_ = now + duration.get<double>();
@@ -140,7 +141,7 @@ RpcOutcome LightService::Preview(const Json& params, double now) {
 RpcOutcome LightService::Reset() {
   std::string error;
   if (!config_.profile_path.empty() && !mowbite_hold::RemoveFileSynced(config_.profile_path, &error)) {
-    return {false, Json(), kRpcInternal, error};
+    return {false, Json(), mowbite_bridge::kInternalError, error};
   }
   profile_ = DefaultProfile();
   preview_.reset();

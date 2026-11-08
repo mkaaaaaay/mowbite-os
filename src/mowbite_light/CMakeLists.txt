@@ -10,6 +10,7 @@ add_compile_options(-ffp-contract=off)
 find_package(ament_cmake REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(mowbite_hold REQUIRED)
+find_package(mowbite_bridge REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(mowbite_msgs REQUIRED)
@@ -20,7 +21,8 @@ add_library(mowbite_light_core STATIC src/ws2812.cpp src/effect.cpp src/light_se
 target_include_directories(mowbite_light_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(mowbite_light_core nlohmann_json::nlohmann_json mowbite_hold::mowbite_hold_core)
+target_link_libraries(mowbite_light_core nlohmann_json::nlohmann_json mowbite_hold::mowbite_hold_core
+  mowbite_bridge::mowbite_bridge_core)
 set_target_properties(mowbite_light_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_light_component SHARED src/light_node.cpp)
@@ -45,5 +47,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_mowbite_light HAS_LIBRARY_TARGET)
-ament_export_dependencies(mowbite_hold)
+ament_export_dependencies(mowbite_hold mowbite_bridge)
 ament_package()

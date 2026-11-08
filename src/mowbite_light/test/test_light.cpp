@@ -2,6 +2,7 @@
 
 #include "mowbite_light/effect.h"
 #include "mowbite_light/ws2812.h"
+#include "decode_ws2812.h"
 
 using namespace mowbite_light;
 
@@ -38,13 +39,13 @@ TEST(Ws2812, DecodingGivesTheColoursBack) {
 
 TEST(Ws2812, TheCurrentStaysWithinTheLimit) {
   std::vector<Rgb> white(60, Rgb{255, 255, 255});
-  LimitCurrent(&white, 1200.0);
+  LimitCurrent(&white, 1200.0, 20.0);
   double sum = 0;
   for (const auto& c : white) sum += c.r + c.g + c.b;
   EXPECT_LE(sum / 255.0 * 20.0, 1200.0);
   EXPECT_GT(white[0].r, 0);
   std::vector<Rgb> dim(10, Rgb{10, 0, 0});
-  LimitCurrent(&dim, 1200.0);
+  LimitCurrent(&dim, 1200.0, 20.0);
   EXPECT_EQ(dim[0], (Rgb{10, 0, 0}));
 }
 

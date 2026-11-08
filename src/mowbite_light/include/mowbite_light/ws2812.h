@@ -22,11 +22,8 @@ constexpr size_t kResetBytes = 100;
 // 0xC0 for 0, most significant first), buffer_leds LEDs with those beyond the given ones dark, a reset before and after.
 std::vector<uint8_t> EncodeWs2812(const std::vector<Rgb>& leds, size_t buffer_leds);
 
-// The colours of such bytes; empty for bytes that are no frame.
-std::vector<Rgb> DecodeWs2812(const std::vector<uint8_t>& bytes);
-
 // Dims all colours alike so that the chain draws at most max_current_ma, at ma_per_channel for a channel at 255.
-void LimitCurrent(std::vector<Rgb>* leds, double max_current_ma, double ma_per_channel = 20.0);
+void LimitCurrent(std::vector<Rgb>* leds, double max_current_ma, double ma_per_channel);
 
 }  // namespace mowbite_light
 

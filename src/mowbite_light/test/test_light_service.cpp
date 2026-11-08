@@ -6,8 +6,10 @@
 #include <iterator>
 
 #include "mowbite_api/catalog.h"
+#include "mowbite_bridge/json_rpc.h"
 #include "mowbite_light/light_service.h"
 #include "mowbite_light/output.h"
+#include "decode_ws2812.h"
 
 using namespace mowbite_light;
 namespace fs = std::filesystem;
@@ -67,7 +69,7 @@ TEST(LightService, SetProfileStoresAllOrNothingAndLoadsItAgain) {
     answer = service.Call("light.set_profile", Json{{"profile", {{"MOWING", kOrange}, {"NOPE", kOrange}}}}, 0);
     ASSERT_TRUE(answer);
     EXPECT_FALSE(answer->ok);
-    EXPECT_EQ(answer->code, kRpcInvalidParams);
+    EXPECT_EQ(answer->code, mowbite_bridge::kInvalidParams);
     EXPECT_FALSE(service.Call("light.set_profile", Json{{"MOWING", kOrange}}, 0)->ok);
     EXPECT_EQ(service.profile().at("MOWING").colors[0], (Rgb{255, 136, 0}));
   }

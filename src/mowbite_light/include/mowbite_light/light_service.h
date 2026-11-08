@@ -9,8 +9,8 @@
 
 namespace mowbite_light {
 
-constexpr int kRpcInvalidParams = -32602;
-constexpr int kRpcInternal = -32603;
+// Longest light.preview in s.
+constexpr double kMaxPreview = 10.0;
 
 struct RpcOutcome {
   bool ok = true;
@@ -24,10 +24,10 @@ struct LightConfig {
   // Of full scale per channel; the effects scale within it.
   double max_brightness = 0.47;
   double max_current_ma = 1200.0;
+  // What one channel of an LED draws at 255.
+  double ma_per_channel = 20.0;
   // Below this battery (0..1) IDLE shows BATTERY_LOW.
   double low_battery = 0.2;
-  // Longest light.preview in s.
-  double max_preview = 10.0;
   // Where the profile is kept; empty: only in memory.
   std::string profile_path;
 };
