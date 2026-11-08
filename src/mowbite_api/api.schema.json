@@ -5309,6 +5309,182 @@
       },
       "type": "array"
     },
+    "sound.list.params": {
+      "description": "The params of sound.list: None",
+      "type": "object"
+    },
+    "sound.list.result": {
+      "additionalProperties": false,
+      "description": "The result of sound.list: The sounds",
+      "properties": {
+        "situations": {
+          "description": "A situation, in the order to show them",
+          "items": {
+            "additionalProperties": false,
+            "description": "One item",
+            "properties": {
+              "event": {
+                "description": "What makes the OS play it, in English",
+                "type": "string"
+              },
+              "file": {
+                "additionalProperties": false,
+                "description": "Its sound, null without one",
+                "properties": {
+                  "seconds": {
+                    "description": "How long it plays",
+                    "type": "number",
+                    "x-unit": "s"
+                  },
+                  "sha256": {
+                    "description": "SHA-256 of the original",
+                    "type": "string"
+                  },
+                  "size": {
+                    "description": "Bytes of the original",
+                    "type": "integer"
+                  },
+                  "source": {
+                    "description": "vendor: of the maker of the mower; upload: of the user",
+                    "enum": [
+                      "vendor",
+                      "upload"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "size",
+                  "sha256",
+                  "seconds"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Name of the situation",
+                "enum": [
+                  "MOWING_START",
+                  "MOWING_COMPLETE",
+                  "DOCKING_START",
+                  "LOW_BATTERY",
+                  "RAIN_DETECTED",
+                  "MOWING_PAUSED",
+                  "AREA_RECORDING_MODE",
+                  "DOCKING_FAILED",
+                  "CHARGING_START",
+                  "CHARGING_DONE",
+                  "EMERGENCY",
+                  "LIFT_TRIGGERED"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "event",
+              "file"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "volume": {
+          "description": "0 to 100; 0 is silent",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "situations",
+        "volume"
+      ],
+      "type": "object"
+    },
+    "sound.play.params": {
+      "additionalProperties": false,
+      "description": "The params of sound.play: The situation",
+      "properties": {
+        "situation": {
+          "description": "A name of sound.list",
+          "enum": [
+            "MOWING_START",
+            "MOWING_COMPLETE",
+            "DOCKING_START",
+            "LOW_BATTERY",
+            "RAIN_DETECTED",
+            "MOWING_PAUSED",
+            "AREA_RECORDING_MODE",
+            "DOCKING_FAILED",
+            "CHARGING_START",
+            "CHARGING_DONE",
+            "EMERGENCY",
+            "LIFT_TRIGGERED"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "situation"
+      ],
+      "type": "object"
+    },
+    "sound.play.result": {
+      "additionalProperties": false,
+      "description": "The result of sound.play: What plays",
+      "properties": {
+        "seconds": {
+          "description": "How long it plays",
+          "type": "number",
+          "x-unit": "s"
+        },
+        "situation": {
+          "description": "The situation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "situation",
+        "seconds"
+      ],
+      "type": "object"
+    },
+    "sound.stop.params": {
+      "description": "The params of sound.stop: None",
+      "type": "object"
+    },
+    "sound.stop.result": {
+      "description": "The result of sound.stop: Empty",
+      "type": "object"
+    },
+    "sound.volume.params": {
+      "additionalProperties": false,
+      "description": "The params of sound.volume: None to read",
+      "properties": {
+        "volume": {
+          "description": "0 to 100",
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "sound.volume.result": {
+      "additionalProperties": false,
+      "description": "The result of sound.volume: The volume now",
+      "properties": {
+        "volume": {
+          "description": "0 to 100",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "volume"
+      ],
+      "type": "object"
+    },
     "system.api.params": {
       "additionalProperties": false,
       "description": "The params of system.api",
@@ -5544,11 +5720,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:8",
+  "$id": "urn:mowbite-os:api:9",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry.",
   "title": "MowBite OS app interface",
-  "x-api": 8,
+  "x-api": 9,
   "x-commands": {
     "docking.abort": {
       "action": "mower_logic:docking/abort_docking",
@@ -6418,6 +6594,34 @@
       "offered": "",
       "params": "#/$defs/sensors.list.params",
       "result": "#/$defs/sensors.list.result"
+    },
+    "sound.list": {
+      "description": "The situations the OS has a sound for, the sound of each and the volume",
+      "node": "mowbite_sound",
+      "offered": "with a speaker and at least one sound",
+      "params": "#/$defs/sound.list.params",
+      "result": "#/$defs/sound.list.result"
+    },
+    "sound.play": {
+      "description": "Plays the sound of a situation once, to listen to it; refused (SOUND_REFUSED) in an emergency and without a sound",
+      "node": "mowbite_sound",
+      "offered": "with a speaker and at least one sound",
+      "params": "#/$defs/sound.play.params",
+      "result": "#/$defs/sound.play.result"
+    },
+    "sound.stop": {
+      "description": "Ends the sound that plays; refused (SOUND_REFUSED) in an emergency",
+      "node": "mowbite_sound",
+      "offered": "with a speaker and at least one sound",
+      "params": "#/$defs/sound.stop.params",
+      "result": "#/$defs/sound.stop.result"
+    },
+    "sound.volume": {
+      "description": "Reads the volume, or sets it with volume; 0 is silent, also in an emergency. A change while an update holds the mower is refused with -32004",
+      "node": "mowbite_sound",
+      "offered": "with a speaker and at least one sound",
+      "params": "#/$defs/sound.volume.params",
+      "result": "#/$defs/sound.volume.result"
     },
     "system.api": {
       "description": "This interface as JSON Schema with its version",
@@ -7660,6 +7864,32 @@
         "fields": {},
         "resume": "user",
         "severity": "error"
+      }
+    },
+    "SOUND_REFUSED": {
+      "EMERGENCY": {
+        "description": "An emergency stops the mower",
+        "fields": {},
+        "resume": "user",
+        "severity": "info"
+      },
+      "NO_FILE": {
+        "description": "The situation has no sound",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Eine Situation mit Ton wählen.",
+            "help": "Für diese Situation hat der Mäher keinen Ton.",
+            "name": "Kein Ton"
+          },
+          "en": {
+            "fix": "Choose a situation that has a sound.",
+            "help": "The mower has no sound for this situation.",
+            "name": "No sound"
+          }
+        }
       }
     },
     "STATE": {

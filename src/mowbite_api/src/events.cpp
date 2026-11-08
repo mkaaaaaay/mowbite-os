@@ -164,6 +164,11 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
        {"Contact with the docking station, but no charge current",
         {Number("current", "A", "The charge current seen; while docking the largest one of the check"), Limit("A")}}},
       {"NO_DOCK", {"The map has no docking station", {}}},
+      {"NO_FILE",
+       {"The situation has no sound",
+        {},
+        {{"de", {"Kein Ton", "Für diese Situation hat der Mäher keinen Ton.", "Eine Situation mit Ton wählen."}},
+         {"en", {"No sound", "The mower has no sound for this situation.", "Choose a situation that has a sound."}}}}},
       {"NO_DOCK_CONTACT", {"No contact with the docking station", {}}},
       {"NO_HEADING", {"The heading is not known yet", {}}},
       {"NO_JOB", {"There is no unfinished job", {}}},
@@ -576,6 +581,9 @@ const std::vector<EventEntry>& Refusals() {
                          Text("state", "current_state of robot_state, empty before the first", true),
                          Text("sub_state", "current_sub_state of robot_state", true)}),
             User({{"RESPONSE_TOPIC", "error"}, {"CORRELATION_DATA", "error"}})),
+      Event("SOUND_REFUSED", "answer", "sound.play or sound.stop was refused: the data of its -32600, never an event",
+            Rated(true, {Text("event", "Always SOUND_REFUSED", true)}), User({{"NO_FILE", "info"}, {"EMERGENCY", "info"}}),
+            "info", "user"),
   };
   return groups;
 }

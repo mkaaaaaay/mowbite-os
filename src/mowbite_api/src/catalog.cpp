@@ -119,6 +119,13 @@ Field LightEffect(std::string name, std::string text) {
                  Number("brightness", "", "0 to 1 of what the OS allows", false)});
 }
 
+// The situations of sound.list in their order (mowbite_sound has the same list).
+const std::vector<std::string> kSoundSituations = {
+    "MOWING_START",   "MOWING_COMPLETE", "DOCKING_START", "LOW_BATTERY", "RAIN_DETECTED", "MOWING_PAUSED",
+    "AREA_RECORDING_MODE", "DOCKING_FAILED", "CHARGING_START", "CHARGING_DONE", "EMERGENCY", "LIFT_TRIGGERED"};
+
+const char kSoundOffered[] = "with a speaker and at least one sound";
+
 // The answer of light.set_profile and light.reset.
 Field LightProfile() {
   return Object("result", "The profile now", {Object("profile", "An effect by state of light.get_profile")});
@@ -468,6 +475,34 @@ const std::vector<Method>& Methods() {
                Bool("emergency", "An emergency shows over it right now")}),
        ""},
       {"light.reset", "mowbite_light", "Back to the default profile; ends a preview", NoParams(), LightProfile(), ""},
+      {"sound.list", "mowbite_sound", "The situations the OS has a sound for, the sound of each and the volume",
+       NoParams(),
+       Object("result", "The sounds",
+              {Rows("situations", "A situation, in the order to show them",
+                    {Text("name", "Name of the situation", true, kSoundSituations),
+                     Text("event", "What makes the OS play it, in English"),
+                     Nullable(Object("file", "Its sound, null without one",
+                                     {Text("source", "vendor: of the maker of the mower; upload: of the user", true,
+                                           {"vendor", "upload"}),
+                                      Integer("size", "Bytes of the original"),
+                                      Text("sha256", "SHA-256 of the original"),
+                                      Number("seconds", "s", "How long it plays")}))}),
+               Integer("volume", "0 to 100; 0 is silent")}),
+       kSoundOffered},
+      {"sound.play", "mowbite_sound",
+       "Plays the sound of a situation once, to listen to it; refused (SOUND_REFUSED) in an emergency and without a "
+       "sound",
+       Object("params", "The situation", {Text("situation", "A name of sound.list", true, kSoundSituations)}),
+       Object("result", "What plays",
+              {Text("situation", "The situation"), Number("seconds", "s", "How long it plays")}),
+       kSoundOffered},
+      {"sound.stop", "mowbite_sound", "Ends the sound that plays; refused (SOUND_REFUSED) in an emergency", NoParams(),
+       Object("result", "Empty"), kSoundOffered},
+      {"sound.volume", "mowbite_sound",
+       "Reads the volume, or sets it with volume; 0 is silent, also in an emergency. A change while an update holds "
+       "the mower is refused with -32004",
+       Object("params", "None to read", {Integer("volume", "0 to 100", false)}, false),
+       Object("result", "The volume now", {Integer("volume", "0 to 100")}), kSoundOffered},
       {"map.replace", "mowbite_map", "Replaces the map with the one given, in the shape of map/json",
        List("params", "[map]", Type::kObject), Text("result", "Successfully stored map (n areas)"), ""},
       {"map.area_properties", "mowbite_map", "The properties an area of the map may have", NoParams(),

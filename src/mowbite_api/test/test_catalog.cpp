@@ -284,9 +284,9 @@ TEST(Catalog, EveryReasonOfTheSources) {
   EXPECT_GT(found, 40);
 }
 
-// COMMAND_REFUSED and REQUEST_REFUSED are groups of answers only: rated like an event, but never one.
+// COMMAND_REFUSED, REQUEST_REFUSED and SOUND_REFUSED are groups of answers only: rated like an event, but never one.
 TEST(Catalog, RefusalsAreNoEvents) {
-  ASSERT_EQ(Refusals().size(), 2u);
+  ASSERT_EQ(Refusals().size(), 3u);
   const EventEntry& answers = Refusals().front();
   EXPECT_EQ(answers.type, "COMMAND_REFUSED");
   EXPECT_EQ(FindEvent("COMMAND_REFUSED"), nullptr);
@@ -296,7 +296,7 @@ TEST(Catalog, RefusalsAreNoEvents) {
     EXPECT_STREQ(rating.severity, "info") << code;
     EXPECT_STREQ(rating.resume, "user") << code;
   }
-  const EventEntry& requests = Refusals().back();
+  const EventEntry& requests = Refusals().at(1);
   EXPECT_EQ(requests.type, "REQUEST_REFUSED");
   EXPECT_EQ(FindEvent("REQUEST_REFUSED"), nullptr);
   EXPECT_EQ(FindReasonGroup("REQUEST_REFUSED"), &requests);
@@ -310,6 +310,14 @@ TEST(Catalog, RefusalsAreNoEvents) {
   for (const char* code : {"RESPONSE_TOPIC", "CORRELATION_DATA"}) {
     const Rating rating = RateReason("REQUEST_REFUSED", code);
     EXPECT_STREQ(rating.severity, "error") << code;
+    EXPECT_STREQ(rating.resume, "user") << code;
+  }
+  const EventEntry& sounds = Refusals().back();
+  EXPECT_EQ(sounds.type, "SOUND_REFUSED");
+  EXPECT_EQ(FindEvent("SOUND_REFUSED"), nullptr);
+  for (const char* code : {"NO_FILE", "EMERGENCY"}) {
+    const Rating rating = RateReason("SOUND_REFUSED", code);
+    EXPECT_STREQ(rating.severity, "info") << code;
     EXPECT_STREQ(rating.resume, "user") << code;
   }
 }
@@ -368,7 +376,7 @@ TEST(Catalog, ParamsOfACommand) {
 // Every RPC method once, each with its node; the commands are none of them.
 TEST(Catalog, MethodsSensorsSettingsAndGeometry) {
   const std::set<std::string> nodes = {"mowbite_bridge", "mowbite_logic", "mowbite_map", "mowbite_ntrip",
-                                       "mowbite_calibration", "mowbite_light"};
+                                       "mowbite_calibration", "mowbite_light", "mowbite_sound"};
   std::set<std::string> names;
   for (const auto& command : Commands()) names.insert(command.name);
   for (const auto& method : Methods()) {
