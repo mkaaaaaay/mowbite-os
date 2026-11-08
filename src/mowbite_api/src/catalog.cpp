@@ -109,6 +109,22 @@ Field GeometryAnswer() {
                  Text("platform", "The platform whose file gives the defaults")});
 }
 
+// An effect of the lights, as light.get_profile has its effects and limits.
+Field LightEffect(std::string name, std::string text, bool required = true) {
+  return Object(std::move(name), std::move(text),
+                {Text("effect", "One of the effects of light.get_profile"),
+                 List("colors", "1 to limits.colors texts #rrggbb; none for off", Type::kString, false),
+                 Number("period", "s", "Time of one blink, pulse, chase or move of the gradient; a gradient may be 0",
+                        false),
+                 Number("brightness", "", "0 to 1 of what the OS allows", false)},
+                required);
+}
+
+// The answer of light.set_profile and light.reset.
+Field LightProfile() {
+  return Object("result", "The profile now", {Object("profile", "An effect by state of light.get_profile")});
+}
+
 }  // namespace
 
 const std::vector<Field>& RobotState() {
@@ -424,6 +440,35 @@ const std::vector<Method>& Methods() {
        "while the calibration program runs"},
       {"calibration.result", "mowbite_calibration", "The result of the last calibration, null before one",
        NoParams(), Nullable(Object("result", "As the calibration wrote it")), ""},
+      {"light.get_profile", "mowbite_light",
+       "The lights: the states and effects there are, the profile by state, its defaults, the fixed signal of an "
+       "emergency and the limits",
+       NoParams(),
+       Object("result", "The lights now",
+              {List("states", "The states of a profile in the order to show them", Type::kString),
+               List("effects", "The effects there are", Type::kString),
+               Object("profile", "An effect by state"), Object("defaults", "The effect by state after light.reset"),
+               LightEffect("emergency", "What every emergency shows; no profile changes it"),
+               Object("limits", "Bounds of an effect",
+                      {Integer("colors", "Most colours of an effect"),
+                       Number("min_period", "s", "Shortest period"), Number("max_period", "s", "Longest period"),
+                       Number("max_preview", "s", "Longest light.preview")}),
+               Integer("leds", "LEDs on the mower")}),
+       ""},
+      {"light.set_profile", "mowbite_light",
+       "Stores the profile, all or nothing; a state left out gets its default",
+       Object("params", "The profile", {Object("profile", "An effect by state of light.get_profile")}),
+       LightProfile(), ""},
+      {"light.preview", "mowbite_light",
+       "Shows an effect for a while, then the state again; an emergency shows over it",
+       Object("params", "What to show",
+              {LightEffect("effect", "The effect"),
+               Number("duration", "s", "How long, more than 0 and at most limits.max_preview; that without", false)}),
+       Object("result", "The preview",
+              {Number("duration", "s", "How long it shows"),
+               Bool("emergency", "An emergency shows over it right now")}),
+       ""},
+      {"light.reset", "mowbite_light", "Back to the default profile; ends a preview", NoParams(), LightProfile(), ""},
       {"map.replace", "mowbite_map", "Replaces the map with the one given, in the shape of map/json",
        List("params", "[map]", Type::kObject), Text("result", "Successfully stored map (n areas)"), ""},
       {"map.area_properties", "mowbite_map", "The properties an area of the map may have", NoParams(),

@@ -109,7 +109,7 @@ struct Command {
 // Another RPC method of the OS: what it takes and gives, and which node answers it.
 struct Method {
   std::string name;
-  // mowbite_bridge, mowbite_logic, mowbite_map, mowbite_ntrip or mowbite_calibration.
+  // mowbite_bridge, mowbite_logic, mowbite_map, mowbite_ntrip, mowbite_calibration or mowbite_light.
   std::string node;
   std::string text;
   // The params as one value, mostly an object of fields.

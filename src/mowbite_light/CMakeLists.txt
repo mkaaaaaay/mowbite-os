@@ -9,17 +9,29 @@ add_compile_options(-ffp-contract=off)
 
 find_package(ament_cmake REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(mowbite_hold REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(mowbite_msgs REQUIRED)
+find_package(tron_mcu REQUIRED)
 
-# Effects, profiles and the WS2812 frames without ROS, testable on any machine.
-add_library(mowbite_light_core STATIC src/ws2812.cpp src/effect.cpp)
+# Effects, profiles, the RPC methods and the WS2812 frames without ROS, testable on any machine.
+add_library(mowbite_light_core STATIC src/ws2812.cpp src/effect.cpp src/light_service.cpp src/output.cpp)
 target_include_directories(mowbite_light_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(mowbite_light_core nlohmann_json::nlohmann_json)
+target_link_libraries(mowbite_light_core nlohmann_json::nlohmann_json mowbite_hold::mowbite_hold_core)
 set_target_properties(mowbite_light_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+add_library(mowbite_light_component SHARED src/light_node.cpp)
+target_link_libraries(mowbite_light_component mowbite_light_core tron_mcu::tron_mcu_core)
+ament_target_dependencies(mowbite_light_component rclcpp rclcpp_components mowbite_msgs)
+rclcpp_components_register_node(mowbite_light_component
+  PLUGIN "mowbite_light::LightNode"
+  EXECUTABLE mowbite_light_node)
+
 install(DIRECTORY include/ DESTINATION include)
-install(TARGETS mowbite_light_core
+install(TARGETS mowbite_light_core mowbite_light_component
   EXPORT export_mowbite_light
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -27,9 +39,11 @@ install(TARGETS mowbite_light_core
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(mowbite_light_test test/test_light.cpp)
-  target_link_libraries(mowbite_light_test mowbite_light_core)
+  find_package(mowbite_api REQUIRED)
+  ament_add_gtest(mowbite_light_test test/test_light.cpp test/test_light_service.cpp)
+  target_link_libraries(mowbite_light_test mowbite_light_core mowbite_api::mowbite_api_core)
 endif()
 
 ament_export_targets(export_mowbite_light HAS_LIBRARY_TARGET)
+ament_export_dependencies(mowbite_hold)
 ament_package()

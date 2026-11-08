@@ -13,6 +13,11 @@ namespace mowbite_light {
 
 using Json = nlohmann::ordered_json;
 
+// The bounds of an effect.
+constexpr size_t kMaxColors = 4;
+constexpr double kMinPeriod = 0.2;
+constexpr double kMaxPeriod = 20.0;
+
 enum class EffectKind { kOff, kSolid, kBlink, kPulse, kChase, kGradient };
 
 // What a state shows: solid, blink (on for half of period s, then the second colour or dark), pulse (breathing once per

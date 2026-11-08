@@ -3629,6 +3629,229 @@
       },
       "type": "array"
     },
+    "light.get_profile.params": {
+      "description": "The params of light.get_profile: None",
+      "type": "object"
+    },
+    "light.get_profile.result": {
+      "additionalProperties": false,
+      "description": "The result of light.get_profile: The lights now",
+      "properties": {
+        "defaults": {
+          "description": "The effect by state after light.reset",
+          "type": "object"
+        },
+        "effects": {
+          "description": "The effects there are",
+          "items": {
+            "description": "One item",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "emergency": {
+          "additionalProperties": false,
+          "description": "What every emergency shows; no profile changes it",
+          "properties": {
+            "brightness": {
+              "description": "0 to 1 of what the OS allows",
+              "type": "number"
+            },
+            "colors": {
+              "description": "1 to limits.colors texts #rrggbb; none for off",
+              "items": {
+                "description": "One item",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "effect": {
+              "description": "One of the effects of light.get_profile",
+              "type": "string"
+            },
+            "period": {
+              "description": "Time of one blink, pulse, chase or move of the gradient; a gradient may be 0",
+              "type": "number",
+              "x-unit": "s"
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "type": "object"
+        },
+        "leds": {
+          "description": "LEDs on the mower",
+          "type": "integer"
+        },
+        "limits": {
+          "additionalProperties": false,
+          "description": "Bounds of an effect",
+          "properties": {
+            "colors": {
+              "description": "Most colours of an effect",
+              "type": "integer"
+            },
+            "max_period": {
+              "description": "Longest period",
+              "type": "number",
+              "x-unit": "s"
+            },
+            "max_preview": {
+              "description": "Longest light.preview",
+              "type": "number",
+              "x-unit": "s"
+            },
+            "min_period": {
+              "description": "Shortest period",
+              "type": "number",
+              "x-unit": "s"
+            }
+          },
+          "required": [
+            "colors",
+            "min_period",
+            "max_period",
+            "max_preview"
+          ],
+          "type": "object"
+        },
+        "profile": {
+          "description": "An effect by state",
+          "type": "object"
+        },
+        "states": {
+          "description": "The states of a profile in the order to show them",
+          "items": {
+            "description": "One item",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "states",
+        "effects",
+        "profile",
+        "defaults",
+        "emergency",
+        "limits",
+        "leds"
+      ],
+      "type": "object"
+    },
+    "light.preview.params": {
+      "additionalProperties": false,
+      "description": "The params of light.preview: What to show",
+      "properties": {
+        "duration": {
+          "description": "How long, more than 0 and at most limits.max_preview; that without",
+          "type": "number",
+          "x-unit": "s"
+        },
+        "effect": {
+          "additionalProperties": false,
+          "description": "The effect",
+          "properties": {
+            "brightness": {
+              "description": "0 to 1 of what the OS allows",
+              "type": "number"
+            },
+            "colors": {
+              "description": "1 to limits.colors texts #rrggbb; none for off",
+              "items": {
+                "description": "One item",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "effect": {
+              "description": "One of the effects of light.get_profile",
+              "type": "string"
+            },
+            "period": {
+              "description": "Time of one blink, pulse, chase or move of the gradient; a gradient may be 0",
+              "type": "number",
+              "x-unit": "s"
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "effect"
+      ],
+      "type": "object"
+    },
+    "light.preview.result": {
+      "additionalProperties": false,
+      "description": "The result of light.preview: The preview",
+      "properties": {
+        "duration": {
+          "description": "How long it shows",
+          "type": "number",
+          "x-unit": "s"
+        },
+        "emergency": {
+          "description": "An emergency shows over it right now",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "duration",
+        "emergency"
+      ],
+      "type": "object"
+    },
+    "light.reset.params": {
+      "description": "The params of light.reset: None",
+      "type": "object"
+    },
+    "light.reset.result": {
+      "additionalProperties": false,
+      "description": "The result of light.reset: The profile now",
+      "properties": {
+        "profile": {
+          "description": "An effect by state of light.get_profile",
+          "type": "object"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "type": "object"
+    },
+    "light.set_profile.params": {
+      "additionalProperties": false,
+      "description": "The params of light.set_profile: The profile",
+      "properties": {
+        "profile": {
+          "description": "An effect by state of light.get_profile",
+          "type": "object"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "type": "object"
+    },
+    "light.set_profile.result": {
+      "additionalProperties": false,
+      "description": "The result of light.set_profile: The profile now",
+      "properties": {
+        "profile": {
+          "description": "An effect by state of light.get_profile",
+          "type": "object"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "type": "object"
+    },
     "logs.recent.params": {
       "additionalProperties": false,
       "description": "The params of logs.recent: All optional",
@@ -5943,6 +6166,34 @@
       "offered": "",
       "params": "#/$defs/events.history.list.params",
       "result": "#/$defs/events.history.list.result"
+    },
+    "light.get_profile": {
+      "description": "The lights: the states and effects there are, the profile by state, its defaults, the fixed signal of an emergency and the limits",
+      "node": "mowbite_light",
+      "offered": "",
+      "params": "#/$defs/light.get_profile.params",
+      "result": "#/$defs/light.get_profile.result"
+    },
+    "light.preview": {
+      "description": "Shows an effect for a while, then the state again; an emergency shows over it",
+      "node": "mowbite_light",
+      "offered": "",
+      "params": "#/$defs/light.preview.params",
+      "result": "#/$defs/light.preview.result"
+    },
+    "light.reset": {
+      "description": "Back to the default profile; ends a preview",
+      "node": "mowbite_light",
+      "offered": "",
+      "params": "#/$defs/light.reset.params",
+      "result": "#/$defs/light.reset.result"
+    },
+    "light.set_profile": {
+      "description": "Stores the profile, all or nothing; a state left out gets its default",
+      "node": "mowbite_light",
+      "offered": "",
+      "params": "#/$defs/light.set_profile.params",
+      "result": "#/$defs/light.set_profile.result"
     },
     "logs.recent": {
       "description": "The last log lines from WARN on, oldest first, logins hidden",

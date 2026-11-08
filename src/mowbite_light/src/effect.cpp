@@ -9,9 +9,6 @@ namespace mowbite_light {
 
 namespace {
 
-constexpr size_t kMaxColors = 4;
-constexpr double kMinPeriod = 0.2;
-constexpr double kMaxPeriod = 20.0;
 // The darkest step of a pulse, of its colour.
 constexpr double kPulseFloor = 0.05;
 

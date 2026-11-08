@@ -56,6 +56,10 @@ def launch_setup(context):
     imu = ComposableNode(
         package="tron_imu", plugin="tron_imu::ImuNode", name="tron_imu",
         parameters=[*files, {"port": arg("imu_port")}])
+    # The LEDs on /dev/spidev3.0, only with hardware:=true; output in config.
+    light = ComposableNode(
+        package="mowbite_light", plugin="mowbite_light::LightNode", name="mowbite_light",
+        parameters=[*files, {"data_dir": data_dir}])
     nodes = stack.components(files, geometry, data_dir, arg("mqtt_host"), arg("mqtt_port"), journal)
     oom = arg("oom_score_adj")
     # Without hardware no process opens the MCU, GNSS or IMU port: the stack runs, the logic finds no driver.
@@ -66,7 +70,7 @@ def launch_setup(context):
     if hardware == "read":
         logger.warning("hardware:=read: tron_mcu and tron_imu only listen, nothing moves; tron_gnss does not start")
         return [mcu, *stack.container_and_planner([imu, *nodes], data_dir, files, logger, oom)]
-    return [mcu, *stack.container_and_planner([gnss, imu, *nodes], data_dir, files, logger, oom)]
+    return [mcu, *stack.container_and_planner([gnss, imu, *nodes, light], data_dir, files, logger, oom)]
 
 
 def generate_launch_description():

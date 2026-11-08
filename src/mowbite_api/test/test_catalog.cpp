@@ -368,7 +368,7 @@ TEST(Catalog, ParamsOfACommand) {
 // Every RPC method once, each with its node; the commands are none of them.
 TEST(Catalog, MethodsSensorsSettingsAndGeometry) {
   const std::set<std::string> nodes = {"mowbite_bridge", "mowbite_logic", "mowbite_map", "mowbite_ntrip",
-                                       "mowbite_calibration"};
+                                       "mowbite_calibration", "mowbite_light"};
   std::set<std::string> names;
   for (const auto& command : Commands()) names.insert(command.name);
   for (const auto& method : Methods()) {

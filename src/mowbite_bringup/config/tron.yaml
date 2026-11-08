@@ -271,6 +271,21 @@ mowbite_map:
     max_map_bytes: 1500000
     datum_tolerance: 0.01
 
+mowbite_light:
+  ros__parameters:
+    # none until the lights are released on the mower: no light.* methods, nothing on spidev. spidev or file (sim).
+    output: none
+    device: /dev/spidev3.0
+    # 55 lit (2 x 14 front, 27 top) of the 60 the chain is driven with.
+    leds: 55
+    buffer_leds: 60
+    frame_rate: 25.0
+    # 120 of 255, full brightness of the vendor's patterns.
+    max_brightness: 0.47
+    # Assumption (20 mA per channel at 255) until measured.
+    max_current_ma: 1200.0
+    low_battery: 0.2
+
 mowbite_bridge:
   ros__parameters:
     mqtt_host: 127.0.0.1
