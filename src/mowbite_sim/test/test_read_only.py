@@ -49,9 +49,9 @@ def generate_test_description():
                                      launch_testing.actions.ReadyToTest()]), {}
 
 
-def host_bytes():
+def state():
     with open(STATE) as f:
-        return json.load(f)["host_bytes"]
+        return json.load(f)
 
 
 class TestReadOnly(unittest.TestCase):
@@ -123,7 +123,7 @@ class TestReadOnly(unittest.TestCase):
             self.assertEqual((self.caps.max_linear_speed, self.caps.max_angular_speed), (0.0, 0.0))
             self.assertEqual(self.caps.safety_measurement_date, "")
             self.assertFalse(self.caps.charge_stop)
-        self.assertEqual(host_bytes(), 0)
+        self.assertEqual(state()["host_bytes"], 0)
 
     def test_2_commands_reach_nothing(self):
         end = time.monotonic() + 2.0
@@ -138,10 +138,9 @@ class TestReadOnly(unittest.TestCase):
         with self.lock:
             self.assertFalse(self.status.moving)
             self.assertFalse(self.status.blade_on)
-        with open(STATE) as f:
-            state = json.load(f)
-        self.assertEqual(state["host_bytes"], 0)
-        self.assertEqual(state["linear"], 0.0)
+        now = state()
+        self.assertEqual(now["host_bytes"], 0)
+        self.assertEqual(now["linear"], 0.0)
 
     def test_3_no_gnss_node(self):
         nodes = subprocess.run(["ros2", "node", "list"], capture_output=True, text=True, timeout=30).stdout.split()
@@ -161,4 +160,4 @@ class TestReadOnly(unittest.TestCase):
         self.assertTrue({"om_v_battery", "battery_temp", "om_charge_state", "om_left_esc_temp", "om_right_esc_temp",
                          "om_mow_motor_rpm"} <= ids, ids)
         self.assertNotIn("os_correction_age", ids)
-        self.assertEqual(host_bytes(), 0)
+        self.assertEqual(state()["host_bytes"], 0)

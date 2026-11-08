@@ -309,7 +309,12 @@ class Base(unittest.TestCase):
         rclpy.shutdown()
         shutil.rmtree(WORK, ignore_errors=True)
 
-    def assert_still(self, before, seconds=1.0):
+    def assert_still(self, seconds=1.0):
+        # The state file comes 5 times a second: only a sample written after this call shows the mower now.
+        p = self.probe
+        written = p.truth()["t"]
+        self.assertTrue(p.wait(lambda: p.truth()["t"] != written, 2))
+        before = p.truth()
         time.sleep(seconds)
         after = self.probe.truth()
         self.assertLess(math.hypot(after["x"] - before["x"], after["y"] - before["y"]), 0.005, (before, after))
@@ -425,7 +430,7 @@ class TestDock(Base):
         p.act(ABORT)
         self.assertIsNotNone(p.event(since, "STATE", 3, state="IDLE"), p.events[since:])
         time.sleep(0.5)
-        self.assert_still(p.truth())
+        self.assert_still()
         types = [e["type"] for e in p.events[since:]]
         self.assertNotIn("DOCKING_FAILED", types)
         self.assertNotIn("DOCKED", types)
@@ -439,12 +444,12 @@ class TestDock(Base):
         p.flags(stop=1)
         self.assertIsNotNone(p.event(since, "EMERGENCY", 3, emergency=True), p.events[since:])
         self.assertIsNotNone(p.event(since, "STATE", 3, state="IDLE"), p.events[since:])
-        self.assert_still(p.truth())
+        self.assert_still()
         p.flags()
         p.act("mower_logic/reset_emergency")
         self.assertTrue(p.wait(lambda: not p.robot.emergency, 5))
         # It never goes on by itself.
-        self.assert_still(p.truth(), 3.0)
+        self.assert_still(3.0)
         types = [e["type"] for e in p.events[since:]]
         self.assertNotIn("DOCKING_FAILED", types)
         self.assertEqual(p.robot.current_state, "IDLE")

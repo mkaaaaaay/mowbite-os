@@ -356,7 +356,7 @@ class TestXcoreContract(unittest.TestCase):
         self.assertTrue(self.release(), "release failed")
         answer = self.probe.set_emergency(True, HardwareStatus.REASON_LIFT)
         self.assertFalse(answer.success)
-        self.assertIn("only HIGH_LEVEL, TILT, FENCE and STUCK", answer.message)
+        self.assertIn("only HIGH_LEVEL, TILT, FENCE, STUCK and UNEXPECTED_RESTART", answer.message)
         time.sleep(0.3)
         self.assertFalse(self.probe.status.emergency)
 
