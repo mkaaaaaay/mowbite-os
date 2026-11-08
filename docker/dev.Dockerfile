@@ -2,7 +2,7 @@
 FROM ros:jazzy-ros-base
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      libpaho-mqttpp-dev libpaho-mqtt-dev nlohmann-json3-dev \
+      libpaho-mqttpp-dev libpaho-mqtt-dev nlohmann-json3-dev libasound2-dev \
       mosquitto mosquitto-clients python3-paho-mqtt \
       git python3-shapely python3-jsonschema \
  && rm -rf /var/lib/apt/lists/*

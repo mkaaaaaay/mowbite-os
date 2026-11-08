@@ -9,7 +9,7 @@ ARG ROS_DISTRO=jazzy
 FROM ros:${ROS_DISTRO}-ros-base AS build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      libpaho-mqttpp-dev libpaho-mqtt-dev nlohmann-json3-dev libssl-dev libeigen3-dev zlib1g-dev git \
+      libpaho-mqttpp-dev libpaho-mqtt-dev nlohmann-json3-dev libssl-dev libeigen3-dev zlib1g-dev libasound2-dev git \
  && rm -rf /var/lib/apt/lists/*
 
 # Compilers at once: BUILD_WORKERS packages with BUILD_JOBS jobs each.
@@ -51,6 +51,7 @@ RUN rosdep keys --from-paths /ws/install/*/ /opt/mowbite_planner/*/ --ignore-src
       else case $k in \
         libpaho-mqttpp-dev) echo libpaho-mqttpp3-1 ;; \
         libssl-dev) echo libssl3t64 ;; \
+        libasound2-dev) echo libasound2t64 ;; \
         zlib) echo zlib1g ;; \
         libzstd-dev) echo libzstd1 ;; \
         python3-shapely|python3-paho-mqtt) echo $k ;; \

@@ -291,6 +291,33 @@ mowbite_light:
     ma_per_channel: 20.0
     low_battery: 0.2
 
+mowbite_sound:
+  ros__parameters:
+    # none until the speaker is released on the mower: no sound.* methods, no sound. alsa or file (sim).
+    output: none
+    device: plughw:0,0
+    # Gain at volume 100 (0 to 1); the mixer stays as asound.state has it.
+    max_volume: 1.0
+    volume: 60
+    min_gap: 10.0
+    # The vendor's announcements (MP3, en-US), newest version first; converted once into <data_dir>/sounds.
+    vendor_dirs:
+      - /userdata/RobotData/upgrade/*/src/mower_task/mower_light_sound/sound_files
+      - /userdata/RobotData/voice/sound_files
+    # Situation=code of the vendor's sound_list.txt; DOCKING_START has none.
+    vendor_codes:
+      - MOWING_START=900001
+      - MOWING_COMPLETE=900102
+      - LOW_BATTERY=900105
+      - RAIN_DETECTED=400005
+      - MOWING_PAUSED=900010
+      - AREA_RECORDING_MODE=900002
+      - DOCKING_FAILED=900025
+      - CHARGING_START=900011
+      - CHARGING_DONE=900013
+      - EMERGENCY=900017
+      - LIFT_TRIGGERED=900018
+
 mowbite_bridge:
   ros__parameters:
     mqtt_host: 127.0.0.1
