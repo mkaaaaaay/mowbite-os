@@ -29,6 +29,7 @@
 #include "mowbite_bridge/bridge_core.h"
 #include "mowbite_bridge/event_log.h"
 #include "mowbite_bridge/pose_window.h"
+#include "mowbite_bridge/system_stats.h"
 #include "mowbite_bridge/track.h"
 #include "mowbite_msgs/msg/action_list.hpp"
 #include "mowbite_msgs/msg/hardware_capabilities.hpp"
@@ -213,6 +214,11 @@ class BridgeNode : public rclcpp::Node {
     core_.AddLocalMethod("position.history", [this](const Json& p) { return track_.History(p); });
     core_.AddLocalMethod("position.history.list", [this](const Json&) { return track_.List(); });
     core_.AddLocalMethod("position.history.delete", [this](const Json& p) { return track_.Erase(p); });
+    core_.AddLocalMethod("system.stats", [this](const Json&) {
+      SystemSources sources;
+      sources.data = data_dir_;
+      return SystemStats(sources);
+    });
     core_.Start(WallNow());
 
     action_pub_ = create_publisher<std_msgs::msg::String>("bridge/action", 10);

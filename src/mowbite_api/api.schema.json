@@ -5211,6 +5211,83 @@
       ],
       "type": "object"
     },
+    "system.stats.params": {
+      "description": "The params of system.stats: None",
+      "type": "object"
+    },
+    "system.stats.result": {
+      "additionalProperties": false,
+      "description": "The result of system.stats: The values that could be read",
+      "properties": {
+        "cpu_temp": {
+          "description": "Temperature of the CPU or SoC",
+          "type": "number",
+          "x-unit": "deg.C"
+        },
+        "cpus": {
+          "description": "Number of CPU cores",
+          "type": "integer"
+        },
+        "data_free": {
+          "description": "Space left on the disk of data_dir",
+          "type": "integer",
+          "x-unit": "B"
+        },
+        "data_total": {
+          "description": "Size of the disk of data_dir",
+          "type": "integer",
+          "x-unit": "B"
+        },
+        "disk_free": {
+          "description": "Space left on the system disk",
+          "type": "integer",
+          "x-unit": "B"
+        },
+        "disk_total": {
+          "description": "Size of the system disk",
+          "type": "integer",
+          "x-unit": "B"
+        },
+        "load": {
+          "description": "Load average over one minute",
+          "type": "number"
+        },
+        "mem_available": {
+          "description": "Memory free for new programs",
+          "type": "integer",
+          "x-unit": "B"
+        },
+        "mem_total": {
+          "description": "Memory of the machine",
+          "type": "integer",
+          "x-unit": "B"
+        },
+        "net_iface": {
+          "description": "The interface of the default route",
+          "type": "string"
+        },
+        "net_ip": {
+          "description": "Its IPv4 address",
+          "type": "string"
+        },
+        "uptime": {
+          "description": "Time since the machine started",
+          "type": "integer",
+          "x-unit": "s"
+        },
+        "wifi_iface": {
+          "description": "The first wifi interface",
+          "type": "string"
+        },
+        "wifi_signal": {
+          "description": "Signal of that wifi",
+          "type": "integer",
+          "x-unit": "dBm"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
     "undocking.abort.params": {
       "additionalProperties": false,
       "description": "The params of undocking.abort",
@@ -5244,11 +5321,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:7",
+  "$id": "urn:mowbite-os:api:8",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry.",
   "title": "MowBite OS app interface",
-  "x-api": 7,
+  "x-api": 8,
   "x-commands": {
     "docking.abort": {
       "action": "mower_logic:docking/abort_docking",
@@ -6111,6 +6188,13 @@
       "offered": "",
       "params": "#/$defs/system.info.params",
       "result": "#/$defs/system.info.result"
+    },
+    "system.stats": {
+      "description": "Memory, disks, load, temperature, uptime and network of the machine the OS runs on, with the keys and units of system.cgi of the app; a value that cannot be read is left out",
+      "node": "mowbite_bridge",
+      "offered": "",
+      "params": "#/$defs/system.stats.params",
+      "result": "#/$defs/system.stats.result"
     },
     "undocking.abort": {
       "description": "Stops leaving the docking station",

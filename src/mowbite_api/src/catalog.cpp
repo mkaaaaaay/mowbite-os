@@ -15,6 +15,11 @@ Field Integer(std::string name, std::string text, bool required = true) {
   return {std::move(name), Type::kInteger, "", required, std::move(text), {}, false, {}, ""};
 }
 
+// An optional whole number with a unit.
+Field Count(std::string name, std::string unit, std::string text) {
+  return {std::move(name), Type::kInteger, std::move(unit), false, std::move(text), {}, false, {}, ""};
+}
+
 Field Text(std::string name, std::string text, bool required = true, std::vector<std::string> values = {}) {
   return {std::move(name), Type::kString, "", required, std::move(text), std::move(values), false, {}, ""};
 }
@@ -319,6 +324,25 @@ const std::vector<Method>& Methods() {
        Object("params", "None for today; [\"YYYYMMDD\"] works as well",
               {Text("date", "The day as YYYYMMDD", false)}, false),
        List("result", "Events, oldest first; none for an unknown day", Type::kObject), ""},
+      {"system.stats", "mowbite_bridge",
+       "Memory, disks, load, temperature, uptime and network of the machine the OS runs on, with the keys and units "
+       "of system.cgi of the app; a value that cannot be read is left out",
+       NoParams(),
+       Object("result", "The values that could be read",
+              {Count("mem_total", "B", "Memory of the machine"),
+               Count("mem_available", "B", "Memory free for new programs"),
+               Count("disk_total", "B", "Size of the system disk"),
+               Count("disk_free", "B", "Space left on the system disk"),
+               Count("data_total", "B", "Size of the disk of data_dir"),
+               Count("data_free", "B", "Space left on the disk of data_dir"),
+               Number("load", "", "Load average over one minute", false), Count("cpus", "", "Number of CPU cores"),
+               Number("cpu_temp", "deg.C", "Temperature of the CPU or SoC", false),
+               Count("uptime", "s", "Time since the machine started"),
+               Text("wifi_iface", "The first wifi interface", false),
+               Count("wifi_signal", "dBm", "Signal of that wifi"),
+               Text("net_iface", "The interface of the default route", false),
+               Text("net_ip", "Its IPv4 address", false)}),
+       ""},
       {"events.history.list", "mowbite_bridge", "The days with events", NoParams(),
        List("result", "Days as YYYYMMDD, newest first", Type::kString), ""},
       {"events.history.delete", "mowbite_bridge", "Deletes the events of one day, without a day of all",

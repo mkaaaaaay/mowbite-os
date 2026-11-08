@@ -209,6 +209,16 @@ class TestBridgeMqtt5(unittest.TestCase):
         self.assertEqual(got[0][1]["result"]["mqtt"], 5)
         self.assertEqual(got[0][1]["result"]["api"], API)
 
+    def test_1_system_stats_of_the_machine(self):
+        self.assertIn("system.stats", self.methods_of(self.old))
+        ask(self.old, "system.stats", "stats")
+        got = wait_for(lambda: answers(self.old, "stats"))
+        self.assertTrue(got, "no answer to system.stats")
+        stats = got[0][1]["result"]
+        self.assertGreater(stats["mem_total"], 0)
+        self.assertLessEqual(stats["disk_free"], stats["disk_total"])
+        self.assertGreaterEqual(stats["cpus"], 1)
+
     def test_2_answer_only_to_the_response_topic_with_correlation(self):
         correlation = b"\x00\x01corr\xff"
         ask(self.five, "rpc.ping", "same", "rpc/response/five", correlation)
