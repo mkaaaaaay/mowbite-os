@@ -1,0 +1,339 @@
+"""Releasing the emergency with STOP at the mower (G37) in the simulation: the whole stack of sim.launch.py with the
+gesture on (stop_release of tron_mcu). While mowing, STOP pauses; the press that latched never releases, however long;
+after 2 s free a press held 3 to 10 s releases once let go, with source button, and mowing stays paused until continue.
+Too short, too long, too quick and an IMU gap release nothing. The app asking while STOP is still held gets STILL_ACTIVE,
+the gesture releases afterwards. The flags file of fake_tron plays the button.
+
+Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_stop_release.py
+"""
+import json
+import math
+import os
+import shutil
+import tempfile
+import threading
+import time
+import unittest
+
+import launch
+import launch_testing.actions
+import rclpy
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch_ros.substitutions import FindPackageShare
+from mowbite_msgs.msg import (ButtonEvent, MapStatus, MqttPublish, RobotPose, RobotState, RpcError, RpcRequest,
+                              RpcResponse)
+from mowbite_msgs.srv import ReplaceMap, SetPose
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import String
+
+WORK = tempfile.mkdtemp(prefix="mowbite_stop_")
+STATE = os.path.join(WORK, "state.json")
+FLAGS = os.path.join(WORK, "flags.json")
+RX = os.path.join(WORK, "rx.jsonl")
+DATA = os.path.join(WORK, "data")
+CONFIG = os.path.join(WORK, "stop.yaml")
+LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+# hw/button is reliable and never latched.
+BUTTON = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE, depth=10)
+# Free and held with a margin to the limits of 2, 3 and 10 s, for a loaded machine.
+FREE = 3.0
+HOLD = 5.0
+
+LAWN = [(-0.41, -0.11), (2.59, -0.11), (2.59, 1.49), (-0.41, 1.49)]
+GARDEN = {
+    "areas": [{"id": "lawn", "properties": {"type": "mow", "name": "Lawn", "outline_count": 1},
+               "outline": [{"x": x, "y": y} for x, y in LAWN]}],
+    "docking_stations": [],
+}
+
+with open(CONFIG, "w") as f:
+    f.write("tron_mcu:\n  ros__parameters:\n    safety_measurement_date: \"simulation\"\n    stop_release: true\n"
+            "mowbite_logic:\n  ros__parameters:\n    gps_wait_time: 2.0\n"
+            # The antenna of fake_tron, as in sim.yaml, which this file replaces.
+            "    geometry:\n      antenna_x: 0.098\n      antenna_y: 0.0\n")
+
+
+def generate_test_description():
+    sim = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),
+        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
+                          "imu_link": os.path.join(WORK, "imu"), "state": STATE, "flags": FLAGS, "log": RX,
+                          "data_dir": DATA, "mqtt_port": "18852", "extra_config": CONFIG}.items())
+    return launch.LaunchDescription([sim, launch_testing.actions.ReadyToTest()]), {}
+
+
+class Probe:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.status = None
+        self.pose = None
+        self.robot = None
+        self.events = []
+        self.presses = []
+        self.answers = {}
+        self.node = rclpy.create_node("stop_release_probe")
+        self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
+        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
+        self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
+        self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
+        self.node.create_subscription(ButtonEvent, "hw/button", self._button, BUTTON)
+        self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
+        self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
+        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._answer, 10)
+        self.node.create_subscription(RpcError, "bridge/rpc/error", self._answer, 10)
+        self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
+        self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
+        self.running = True
+        threading.Thread(target=self._spin, daemon=True).start()
+
+    def _spin(self):
+        while self.running:
+            rclpy.spin_once(self.node, timeout_sec=0.05)
+
+    def _status(self, msg):
+        with self.lock:
+            self.status = msg
+
+    def _pose(self, msg):
+        with self.lock:
+            self.pose = msg
+
+    def _robot(self, msg):
+        with self.lock:
+            self.robot = msg
+
+    def _button(self, msg):
+        with self.lock:
+            self.presses.append(msg)
+
+    def _answer(self, msg):
+        with self.lock:
+            if isinstance(msg, RpcResponse):
+                self.answers[msg.id] = {"result": json.loads(msg.result)}
+            else:
+                self.answers[msg.id] = {"error": {"code": msg.code, "message": msg.message,
+                                                  "data": json.loads(msg.data) if msg.data else None}}
+
+    def _publish(self, msg):
+        if msg.topic != "events/json":
+            return
+        with self.lock:
+            self.events.append(json.loads(msg.payload))
+
+    def truth(self):
+        try:
+            with open(STATE) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
+
+    def wait(self, getter, timeout=10.0):
+        end = time.time() + timeout
+        while time.time() < end:
+            with self.lock:
+                value = getter()
+            if value:
+                return value
+            time.sleep(0.05)
+        return None
+
+    def call(self, client, request, timeout=60.0):
+        assert client.wait_for_service(timeout_sec=20.0), f"{client.srv_name} not offered"
+        future = client.call_async(request)
+        end = time.time() + timeout
+        while not future.done() and time.time() < end:
+            time.sleep(0.05)
+        assert future.done(), f"no answer from {client.srv_name}"
+        return future.result()
+
+    def act(self, action):
+        self.action_pub.publish(String(data=action))
+
+    def rpc(self, method, params, timeout=10.0):
+        request = RpcRequest(method=method, params=json.dumps(params), id=f"stop-{method}-{time.time()}")
+        self.rpc_pub.publish(request)
+        return self.wait(lambda: self.answers.get(request.id), timeout)
+
+    def event(self, since, type_, timeout, **match):
+        return self.wait(lambda: next((e for e in self.events[since:] if e["type"] == type_
+                                       and all(e.get(k) == v for k, v in match.items())), None), timeout)
+
+    def press(self, since, kind, timeout):
+        return self.wait(lambda: next((m for m in self.presses[since:] if m.press == kind), None), timeout)
+
+    def flags(self, **values):
+        with open(FLAGS + ".tmp", "w") as f:
+            json.dump(values, f)
+        os.replace(FLAGS + ".tmp", FLAGS)
+
+    def hold(self, seconds, **during):
+        """STOP held for seconds, then let go."""
+        self.flags(stop=1, **during)
+        time.sleep(seconds)
+        self.flags()
+
+    def standing(self):
+        a = self.truth()
+        time.sleep(1.0)
+        b = self.truth()
+        return math.hypot(a["x"] - b["x"], a["y"] - b["y"]) < 0.02, (a, b)
+
+    def stop(self):
+        self.running = False
+        time.sleep(0.3)
+        self.node.destroy_node()
+
+
+class TestStopRelease(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        rclpy.init()
+        cls.probe = Probe()
+        cls.probe.flags()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.probe.stop()
+        rclpy.shutdown()
+        shutil.rmtree(WORK, ignore_errors=True)
+
+    def assertNoRelease(self, since, presses_since):
+        p = self.probe
+        time.sleep(1.0)
+        self.assertTrue(p.robot.emergency)
+        self.assertEqual([e for e in p.events[since:] if e["type"] == "EMERGENCY" and not e["emergency"]], [])
+        self.assertIsNone(p.press(presses_since, ButtonEvent.PRESS_LONG, 0.1))
+
+    def test_01_mowing_on_the_lawn(self):
+        p = self.probe
+        self.assertTrue(p.wait(lambda: p.status is not None and p.status.datum_state != MapStatus.DATUM_UNKNOWN, 30),
+                        "the map never learnt the datum")
+        request = ReplaceMap.Request()
+        request.map = json.dumps(GARDEN)
+        answer = p.call(p.replace_map, request)
+        self.assertTrue(answer.success, answer.message)
+        self.assertTrue(p.wait(lambda: p.status.mowing_allowed, 10), "the map does not fit the datum")
+        request = SetPose.Request()
+        request.pose.orientation.w = 1.0
+        p.call(p.set_pose, request)
+        self.assertTrue(p.wait(lambda: p.pose is not None and p.pose.heading_valid
+                               and p.pose.position_accuracy < 0.1, 30), "no good pose with a heading")
+        p.act("mower_logic:idle/start_mowing")
+        self.assertTrue(p.wait(lambda: p.robot is not None and p.robot.current_state == "MOWING"
+                               and p.robot.current_path >= 0, 60), "mowing did not start")
+
+    def test_02_the_press_that_latched_never_releases(self):
+        p = self.probe
+        time.sleep(2.0)
+        since, presses = len(p.events), len(p.presses)
+        p.flags(stop=1)
+        paused = p.event(since, "STATE", 5, state="PAUSED")
+        self.assertIsNotNone(paused)
+        self.assertEqual(paused["reason"], "EMERGENCY")
+        time.sleep(6.0)
+        p.flags()
+        self.assertNoRelease(since, presses)
+        self.assertEqual(p.presses[presses:], [])
+
+    def test_03_free_then_held_releases_and_mowing_stays_paused(self):
+        p = self.probe
+        time.sleep(FREE)
+        since, presses = len(p.events), len(p.presses)
+        p.flags(stop=1)
+        held = p.press(presses, ButtonEvent.PRESS_HELD, 4.0)
+        self.assertIsNotNone(held, "no HELD after 3 s")
+        self.assertTrue(p.robot.emergency)
+        time.sleep(HOLD - 3.0)
+        p.flags()
+        released = p.press(presses, ButtonEvent.PRESS_LONG, 2.0)
+        self.assertIsNotNone(released)
+        self.assertNotEqual(released.latch_count, 0)
+        end = p.event(since, "EMERGENCY", 5, emergency=False)
+        self.assertIsNotNone(end, [e["type"] for e in p.events[since:]])
+        self.assertEqual(end.get("source"), "button")
+        self.assertNotIn("client", end)
+        self.assertTrue(p.wait(lambda: not p.robot.emergency, 5))
+        # Released, but nothing starts: it stays paused and standing until continue.
+        time.sleep(1.0)
+        still, poses = p.standing()
+        self.assertTrue(still, poses)
+        self.assertEqual(p.robot.current_state, "PAUSED")
+        since = len(p.events)
+        p.act("mower_logic:mowing/continue")
+        self.assertIsNotNone(p.event(since, "STATE", 5, state="MOWING"))
+
+    def test_04_too_short_too_long_too_quick_and_an_imu_gap_release_nothing(self):
+        p = self.probe
+        time.sleep(2.0)
+        since = len(p.events)
+        p.hold(0.5)
+        self.assertIsNotNone(p.event(since, "STATE", 5, state="PAUSED"))
+        self.assertIsNotNone(p.event(since, "EMERGENCY", 5, emergency=True))
+        since = len(p.events)
+        # Too short.
+        time.sleep(FREE)
+        presses = len(p.presses)
+        p.hold(2.0)
+        self.assertNoRelease(since, presses)
+        self.assertEqual(p.presses[presses:], [])
+        # Too long: held at 3 s, canceled at 10 s, letting go does nothing.
+        time.sleep(FREE)
+        presses = len(p.presses)
+        p.hold(11.0)
+        self.assertNoRelease(since, presses)
+        self.assertEqual([m.press for m in p.presses[presses:]], [ButtonEvent.PRESS_HELD, ButtonEvent.PRESS_CANCELED])
+        # Too quick after the last press.
+        time.sleep(0.8)
+        presses = len(p.presses)
+        p.hold(HOLD)
+        self.assertNoRelease(since, presses)
+        self.assertEqual(p.presses[presses:], [])
+        # The IMU stops while it is held.
+        time.sleep(FREE)
+        presses = len(p.presses)
+        p.flags(stop=1)
+        self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_HELD, 4.0))
+        p.flags(stop=1, imu_off=1)
+        self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_CANCELED, 2.0))
+        p.flags(stop=1)
+        time.sleep(1.0)
+        p.flags()
+        self.assertNoRelease(since, presses)
+
+    def test_05_the_app_while_held_then_the_gesture(self):
+        p = self.probe
+        time.sleep(FREE)
+        since, presses = len(p.events), len(p.presses)
+        p.flags(stop=1)
+        self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_HELD, 4.0))
+        # The driver takes the request, but STOP is held beyond its window: the emergency stays.
+        answer = p.rpc("emergency.reset", {"client": "test"})
+        self.assertEqual((answer or {}).get("result", {}).get("released"), True, answer)
+        refused = p.event(since, "EMERGENCY_RESET_REFUSED", 5, reason="STILL_ACTIVE")
+        self.assertIsNotNone(refused, [e["type"] for e in p.events[since:]])
+        self.assertEqual(refused["source"], "rpc")
+        self.assertEqual(refused["client"], "test")
+        self.assertIn("STOP", refused["bits"])
+        self.assertEqual(refused["severity"], "warning")
+        self.assertTrue(p.robot.emergency)
+        p.flags()
+        self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_LONG, 2.0))
+        end = p.event(since, "EMERGENCY", 5, emergency=False)
+        self.assertIsNotNone(end)
+        self.assertEqual(end.get("source"), "button")
+        self.assertEqual(p.robot.current_state, "PAUSED")
+
+    def test_06_a_new_press_after_the_release_latches_again(self):
+        p = self.probe
+        time.sleep(0.5)
+        since = len(p.events)
+        p.hold(0.3)
+        self.assertIsNotNone(p.event(since, "EMERGENCY", 5, emergency=True))
+        time.sleep(1.0)
+        self.assertTrue(p.robot.emergency)
+        # Leave it clean for the next run.
+        answer = p.rpc("emergency.reset", {"client": "test"})
+        self.assertEqual((answer or {}).get("result", {}).get("released"), True, answer)
+        self.assertTrue(p.wait(lambda: not p.robot.emergency, 5))
