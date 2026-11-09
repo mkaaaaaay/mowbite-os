@@ -81,7 +81,7 @@ TEST_F(CoreReplay, McuControl) {
         mcu.Call<&C::SetBlade>(tron::BladeRequest{true, 80, 50, 1.0}, now, &reason);
         mcu.Call<&C::SetBlade>(tron::BladeRequest{true, 0, 0, 5.0}, now, nullptr);
       }
-      if (i == 170) mcu.Call<&C::ReleaseEmergency>(now);
+      if (i == 170) mcu.Call<&C::ReleaseEmergency>(now, 0u);
       if (i == 200) mcu.Call<&C::LatchEmergency>(tron::kReasonTilt);
       if (i == 250) mcu.Call<&C::SetCharging>(false, now);
       if (i == 260) mcu.Call<&C::SetHold>(i % 2 == 0);

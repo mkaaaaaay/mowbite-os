@@ -380,7 +380,7 @@ TEST_F(ControlTest, EmergencyLatchesUntilReleased) {
   Run(1.0);
   EXPECT_EQ(Times(IsMovingSpeed).size(), 1u);
   EXPECT_EQ(Times(IsZeroSpeed).size(), 3u);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(1.05);
   control_.OnCmdVel(0.2f, 0.0f, now_);
   Run(1.1);
@@ -399,7 +399,7 @@ TEST_F(ControlTest, RequestedBitsStayUntilReleased) {
   Run(0.3);
   EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonTilt | kReasonFence);
   EXPECT_FALSE(DrivesOrMows(0.5));
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(0.6);
   EXPECT_FALSE(control_.Status(now_).blocked);
   EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
@@ -416,7 +416,7 @@ TEST_F(ControlTest, LiftStaysLatchedAfterFlagDrops) {
   Run(1.5);
   EXPECT_TRUE(Times(IsMovingSpeed).empty());
   EXPECT_TRUE(control_.Status(now_).latched);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(1.55);
   control_.OnCmdVel(0.2f, 0.0f, now_);
   Run(1.6);
@@ -429,7 +429,7 @@ TEST_F(ControlTest, ReleaseWithLiftSendsClearThenZeros) {
   Run(0.2);
   sensor_.lift = true;
   Run(1.0);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(1.3);
   auto clears = Times(IsClear);
   ASSERT_EQ(clears.size(), 1u);
@@ -447,7 +447,7 @@ TEST_F(ControlTest, RepeatedReleaseWithStuckLiftIsQuiet) {
   Run(0.1);
   sensor_.lift = true;
   for (int i = 0; i < 20; i++) {
-    control_.ReleaseEmergency(now_);
+    control_.ReleaseEmergency(now_, 0);
     Run(now_ + 0.5);
   }
   size_t clears = Times(IsClear).size();
@@ -462,7 +462,7 @@ TEST_F(ControlTest, ReleaseWindowExpires) {
   Run(0.1);
   sensor_.lift = true;
   Run(0.5);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(2.0);
   sensor_.lift = false;
   Run(3.0);
@@ -482,7 +482,7 @@ TEST_F(ControlTest, BumperLatches) {
   EXPECT_EQ(Times(IsZeroSpeed).size(), 3u);
   EXPECT_TRUE(control_.Status(now_).latched);
   // Bumper is not an MCU latch, no clear frame.
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(1.1);
   EXPECT_TRUE(Times(IsClear).empty());
   EXPECT_FALSE(control_.Status(now_).latched);
@@ -499,7 +499,7 @@ TEST_F(ControlTest, LiftReasonStaysUntilRelease) {
   sensor_.lift = false;
   Run(1.0);
   EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonLift);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(1.1);
   EXPECT_FALSE(control_.Status(now_).blocked);
   EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
@@ -516,7 +516,7 @@ TEST_F(ControlTest, ReasonsAddUpUntilRelease) {
   control_.LatchEmergency(kReasonHighLevel);
   Run(1.0);
   EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonCollision | kReasonStop | kReasonHighLevel);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(1.1);
   EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
   // A new cause starts from scratch.
@@ -572,7 +572,7 @@ TEST_F(FirmwareControlTest, MismatchStaysBlockedAfterRelease) {
   auto status = control_.Status(now_);
   EXPECT_TRUE(status.firmware_incompatible);
   EXPECT_TRUE(status.latched);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(0.5);
   EXPECT_FALSE(control_.Status(now_).latched);
   EXPECT_TRUE(control_.Status(now_).firmware_incompatible);
@@ -592,7 +592,7 @@ TEST_F(FirmwareControlTest, MatchAfterMismatchStillNeedsRelease) {
   // The mismatch stays in the reason until the release.
   EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonFirmwareIncompatible);
   EXPECT_FALSE(DrivesOrMows(0.5));
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(0.6);
   EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
   EXPECT_TRUE(DrivesOrMows(0.8));
@@ -746,7 +746,7 @@ TEST_F(BladeControlTest, ARefusalForAnEmergencyCarriesItsReasonBits) {
   EXPECT_EQ(control_.SetBlade(BladeOn(2.5), now_, &reason), BladeResult::kInvalidLease);
   EXPECT_EQ(reason, 0u);
   sensor_.stop = false;
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(1.5);
   for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
   reason = 1;
@@ -1003,7 +1003,7 @@ TEST_F(ImuControlTest, ReleaseOnlyOnceTheImuIsBack) {
   Run(0.5);
   feed_imu_ = false;
   Run(1.5);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(3.0);
   EXPECT_TRUE(control_.Status(now_).latched);
   feed_imu_ = true;
@@ -1011,7 +1011,7 @@ TEST_F(ImuControlTest, ReleaseOnlyOnceTheImuIsBack) {
   // Back again, the gap stays latched until released.
   EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonImuTimeout);
   EXPECT_FALSE(DrivesOrMows(3.8));
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(4.0);
   EXPECT_FALSE(control_.Status(now_).blocked);
   EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
@@ -1050,14 +1050,14 @@ TEST_F(BladeStopTest, ABladeStillTurningLatchesAndIsSentOffAgain) {
   EXPECT_EQ(Times(IsBladeOff, 4.5).size(), 3u);
   EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kBlocked);
   // While it turns a release does not lift the block, and the next report sends off again.
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(5.5);
   control_.OnBladeRpm(1500, now_);
   Run(7.0);
   EXPECT_TRUE(control_.Status(now_).latched);
   EXPECT_EQ(Times(IsBladeOff, 4.5).size(), 6u);
   control_.OnBladeRpm(0, now_);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(7.2);
   EXPECT_FALSE(control_.Status(now_).blocked);
   EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
@@ -1075,7 +1075,7 @@ TEST_F(BladeStopTest, ABladeStillTurningStaysLatchedAfterAReconnect) {
   control_.OnConnected(now_);
   Run(5.5);
   control_.OnBladeRpm(1500, now_);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(6.0);
   EXPECT_TRUE(control_.Status(now_).latched);
   EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonMowerNotStopped);
@@ -1094,11 +1094,11 @@ TEST_F(BladeStopTest, AfterAReconnectOnlyAReportBelowTheStillRpmClears) {
   Run(5.5);
   // Within the new run-down: exactly the still rpm still turns, one less is still.
   control_.OnBladeRpm(100, now_);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(6.0);
   EXPECT_TRUE(control_.Status(now_).latched);
   control_.OnBladeRpm(99, now_);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(6.5);
   EXPECT_FALSE(control_.Status(now_).latched);
 }
@@ -1114,7 +1114,7 @@ TEST_F(BladeControlTest, NeverSendsPowerOff) {
   const SubPacket power_off = PowerOffPacket();
   for (int i = 0; i < 200; i++) {
     control_.OnCmdVel(i % 3 ? 0.3f : 0.0f, i % 5 ? -0.3f : 0.0f, now_);
-    if (i % 7 == 0) control_.ReleaseEmergency(now_);
+    if (i % 7 == 0) control_.ReleaseEmergency(now_, 0);
     if (i % 11 == 0) control_.SetBlade(i % 22 == 0 ? BladeOn(0.3) : kBladeOff, now_);
     if (i % 13 == 0) control_.LatchEmergency(kReasonHighLevel);
     control_.OnDockContactSample(i % 17 < 5);
@@ -1213,7 +1213,7 @@ TEST_F(ControlTest, ALatchBetweenReleaseAndTickStays) {
   Run(0.1);
   control_.LatchEmergency(kReasonHighLevel);
   Run(0.2);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   control_.LatchEmergency(kReasonTilt);
   Run(0.5);
   EXPECT_TRUE(control_.Status(now_).latched);
@@ -1224,7 +1224,7 @@ TEST_F(ControlTest, ALiftRightAfterAReleaseStaysLatched) {
   Run(0.1);
   control_.LatchEmergency(kReasonHighLevel);
   Run(0.2);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(0.3);
   ASSERT_FALSE(control_.Status(now_).latched);
   // A short lift within the second after the release.
@@ -1240,7 +1240,7 @@ TEST_F(ControlTest, OneReleaseSendsOneClearWhileTheLiftStays) {
   Run(0.1);
   sensor_.lift = true;
   Run(0.5);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(5.0);
   EXPECT_EQ(Times(IsClear).size(), 1u);
   EXPECT_TRUE(control_.Status(now_).latched);
@@ -1254,7 +1254,7 @@ TEST_F(ControlTest, ZerosFollowAClearOnlyAfterRecentMotion) {
   Run(7.0);
   sensor_.lift = true;
   Run(8.0);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(8.5);
   auto clears = Times(IsClear);
   ASSERT_EQ(clears.size(), 1u);
@@ -1264,7 +1264,7 @@ TEST_F(ControlTest, ZerosFollowAClearOnlyAfterRecentMotion) {
   Run(14.0);
   sensor_.lift = true;
   Run(15.0);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(15.5);
   clears = Times(IsClear);
   ASSERT_EQ(clears.size(), 2u);
@@ -1281,7 +1281,7 @@ TEST_F(ControlTest, NoZerosAfterAClearExactlyFiveSecondsAfterTheMotion) {
   sensor_.lift = true;
   Run(5.02);
   // The motion went out at 0.03 s, the clear goes out at 5.03 s.
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(5.5);
   auto clears = Times(IsClear);
   ASSERT_EQ(clears.size(), 1u);
@@ -1293,10 +1293,10 @@ TEST_F(ControlTest, ASecondClearAfterTheMinimumInterval) {
   Run(0.1);
   sensor_.lift = true;
   Run(0.15);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   // Clears at 0.16 s and 1.16 s, 0.9999999999999999 s apart in doubles.
   Run(1.15);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(1.5);
   auto clears = Times(IsClear);
   ASSERT_EQ(clears.size(), 2u);
@@ -1306,7 +1306,7 @@ TEST_F(ControlTest, ASecondClearAfterTheMinimumInterval) {
 TEST_F(ControlTest, TheReleaseWindowLastsUpToItsEnd) {
   sensor_.lift = true;
   Run(0.01);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   // The window ends at exactly 1.01 s, the lift drops right after.
   Run(1.01);
   sensor_.lift = false;
@@ -1425,7 +1425,7 @@ TEST_F(ControlTest, AfterAReleaseOnlyTheNewCauseShows) {
   Run(0.1);
   control_.LatchEmergency(kReasonHighLevel);
   Run(0.2);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(0.3);
   Run(1.5, false);
   EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonTimeoutInputs);
@@ -1690,7 +1690,7 @@ TEST_F(BladeStopTest, AReleaseDuringTheRunDownGoesThrough) {
   control_.OnBladeRpm(2000, now_);
   Run(2.0);
   control_.OnBladeRpm(50, now_);
-  control_.ReleaseEmergency(now_);
+  control_.ReleaseEmergency(now_, 0);
   Run(2.1);
   EXPECT_FALSE(control_.Status(now_).latched);
 }

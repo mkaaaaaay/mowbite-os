@@ -44,6 +44,9 @@ tron_mcu:
     imu_start_timeout: 2.0
     blade_stop_time: 5.0
     blade_still_rpm: 100
+    # STOP at the mower releases the emergency (G37): free 2 s, held 3 to 10 s, let go. The driver reports it on
+    # hw/button, the logic releases as for emergency.reset.
+    stop_release: true
     # Set after reading the versions of this Tron in phase 4.
     expected_cutter_version: ""
     expected_chassis_version: ""

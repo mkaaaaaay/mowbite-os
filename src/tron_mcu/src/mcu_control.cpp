@@ -8,9 +8,6 @@ namespace tron {
 
 namespace {
 
-// Tolerance for comparing loop times against deadlines.
-constexpr double kTimeEpsilon = 1e-6;
-
 bool VersionMatches(const std::string& expected, const Version& version) {
   return expected.empty() || expected == VersionString(version);
 }
@@ -79,14 +76,28 @@ bool McuControl::OnVersions(const VersionInfo& versions) {
 }
 
 void McuControl::LatchEmergency(uint32_t reason) {
-  latched_ = true;
-  latch_reason_ |= reason;
+  Latch(reason);
   release_until_s_.reset();
 }
 
-void McuControl::ReleaseEmergency(double now) {
+void McuControl::Latch(uint32_t reason, bool rising) {
+  // STOP counts by its debounced press in UpdateStopRelease, so a bounce is no new reason.
+  if (rising || (reason & ~latch_reason_ & ~kReasonStop)) CountReason();
+  latched_ = true;
+  latch_reason_ |= reason;
+}
+
+void McuControl::CountReason() {
+  if (++latch_count_ == 0) latch_count_ = 1;
+  new_reason_ = true;
+}
+
+bool McuControl::ReleaseEmergency(double now, uint32_t latch_count) {
+  if (latch_count != 0 && latch_count != latch_count_) return false;
   release_requested_ = true;
   release_until_s_ = now + config_.release_window_s;
+  release_count_ = latch_count_;
+  return true;
 }
 
 BladeResult McuControl::SetBlade(const BladeRequest& request, double now, uint32_t* emergency_reason) {
@@ -97,7 +108,7 @@ BladeResult McuControl::SetBlade(const BladeRequest& request, double now, uint32
   }
   if (!config_.allow_blade) return BladeResult::kNotAllowed;
   if (!std::isfinite(request.lease_s) || request.lease_s <= 0 ||
-      request.lease_s > config_.blade_lease_max_s + kTimeEpsilon) {
+      request.lease_s > config_.blade_lease_max_s + kDeadlineSlackS) {
     return BladeResult::kInvalidLease;
   }
   if (request.speed_percent > 100) return BladeResult::kInvalidSpeed;
@@ -153,6 +164,7 @@ void McuControl::OnConnected(double now) {
     moving_ = false;
     StartRepeat(stop_repeat_, ZeroSpeed(), now);
   }
+  stop_release_.Interrupt();
 }
 
 void McuControl::SetHold(bool held) {
@@ -201,7 +213,7 @@ bool McuControl::NoImuYet() const {
 // No sample yet, within the start time of the first tick.
 bool McuControl::ImuStarting(double now) const {
   const double start_time = std::max(config_.imu_timeout_s, config_.imu_start_timeout_s);
-  return NoImuYet() && (!start_s_ || now - *start_s_ <= start_time + kTimeEpsilon);
+  return NoImuYet() && (!start_s_ || now - *start_s_ <= start_time + kDeadlineSlackS);
 }
 
 bool McuControl::FirmwareIncompatible() const {
@@ -228,7 +240,7 @@ void McuControl::StartRepeat(Repeat& repeat, const SubPacket& packet, double now
 }
 
 void McuControl::EmitRepeat(Repeat& repeat, double now, std::vector<SubPacket>& out) {
-  if (repeat.remaining <= 0 || now + kTimeEpsilon < repeat.next_s) return;
+  if (repeat.remaining <= 0 || now + kDeadlineSlackS < repeat.next_s) return;
   out.push_back(repeat.packet);
   repeat.remaining--;
   repeat.next_s = now + config_.repeat_interval_s;
@@ -262,30 +274,35 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     blade_off_since_s_ = now;
   }
 
-  if (!next_heartbeat_s_ || now + kTimeEpsilon >= *next_heartbeat_s_) {
+  if (!next_heartbeat_s_ || now + kDeadlineSlackS >= *next_heartbeat_s_) {
     out.push_back(HeartbeatPacket(wall));
     double next = next_heartbeat_s_ ? *next_heartbeat_s_ + config_.heartbeat_period_s : now;
-    next_heartbeat_s_ = next > now + kTimeEpsilon ? next : now + config_.heartbeat_period_s;
+    next_heartbeat_s_ = next > now + kDeadlineSlackS ? next : now + config_.heartbeat_period_s;
   }
 
+  const bool latched_before = latched_;
   const bool lift = Lift(now);
   const bool stop = Stop(now);
   const bool bumper = config_.bumper_latches_emergency && Bumper(now);
+  // Lift and bumper count again when they rise, also with their bit still latched.
+  const bool rising = (lift && !last_lift_) || (bumper && !last_bumper_);
+  last_lift_ = lift;
+  last_bumper_ = bumper;
   // Unlike a request, active flags keep a pending release open: the clear frame below is what drops them.
   const uint32_t flags = (lift ? kReasonLift : 0) | (stop ? kReasonStop : 0) | (bumper ? kReasonCollision : 0);
-  if (flags) {
-    latched_ = true;
-    latch_reason_ |= flags;
-  }
+  if (flags) Latch(flags, rising);
   // A gap in the IMU latches like the flags; before the first sample it only blocks.
-  if (last_imu_sample_s_ && ImuStale(now)) {
-    latched_ = true;
-    latch_reason_ |= kReasonImuTimeout;
-  }
+  if (last_imu_sample_s_ && ImuStale(now)) Latch(kReasonImuTimeout);
+  UpdateStopRelease(stop, lift, latched_before, now);
 
+  // A new reason since the request ends it without effect, also one that came between the request and this tick.
+  if (latch_count_ != release_count_) {
+    release_requested_ = false;
+    release_until_s_.reset();
+  }
   if (release_requested_) {
     release_requested_ = false;
-    bool clear_allowed = !last_clear_s_ || now - *last_clear_s_ + kTimeEpsilon >= config_.clear_min_interval_s;
+    bool clear_allowed = !last_clear_s_ || now - *last_clear_s_ + kDeadlineSlackS >= config_.clear_min_interval_s;
     if ((lift || stop) && clear_allowed) {
       out.push_back(SensorClearPacket());
       last_clear_s_ = now;
@@ -329,7 +346,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
         StartRepeat(stop_repeat_, ZeroSpeed(), now);
       }
       pending_cmd_.reset();
-    } else if (now + kTimeEpsilon >= next_speed_s_) {
+    } else if (now + kDeadlineSlackS >= next_speed_s_) {
       stop_repeat_.remaining = 0;
       out.push_back(*packet);
       moving_ = true;
@@ -344,7 +361,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     moving_ = false;
     StartRepeat(stop_repeat_, ZeroSpeed(), now);
   }
-  if (moving_ && config_.speed_repeat_window_s > 0 && now + kTimeEpsilon >= next_speed_s_) {
+  if (moving_ && config_.speed_repeat_window_s > 0 && now + kDeadlineSlackS >= next_speed_s_) {
     out.push_back(*last_speed_);
     last_motion_s_ = now;
     next_speed_s_ = now + config_.speed_period_s;
@@ -354,7 +371,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   if (blocked) DropBlade(BladeOffReason::kBlocked);
   if (dock_contact) DropBlade(BladeOffReason::kDock);
   // Blade watchdog: a lease that was not renewed in time switches the blade off.
-  if (blade_request_ && now + kTimeEpsilon >= blade_request_->until_s) DropBlade(BladeOffReason::kLeaseExpired);
+  if (blade_request_ && now + kDeadlineSlackS >= blade_request_->until_s) DropBlade(BladeOffReason::kLeaseExpired);
   if (blade_request_ && blade_on_ != blade_request_->setting) {
     CutterCommand command;
     command.blade_on = true;
@@ -371,7 +388,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   }
 
   if (dock_contact && !charge_stopped_) {
-    if (!charge_sent_ || now - last_charge_s_ + kTimeEpsilon >= config_.charge_resend_s) {
+    if (!charge_sent_ || now - last_charge_s_ + kDeadlineSlackS >= config_.charge_resend_s) {
       out.push_back(ChargePacket(true));
       charge_sent_ = true;
       last_charge_s_ = now;
@@ -380,7 +397,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     charge_sent_ = false;
   }
 
-  if (pending_imu_ && (!last_imu_s_ || now - *last_imu_s_ + kTimeEpsilon >= config_.imu_min_period_s)) {
+  if (pending_imu_ && (!last_imu_s_ || now - *last_imu_s_ + kDeadlineSlackS >= config_.imu_min_period_s)) {
     out.push_back(ImuPacket(*pending_imu_));
     pending_imu_.reset();
     last_imu_s_ = now;
@@ -391,6 +408,22 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   if (out.size() > before_stop) next_speed_s_ = now + config_.speed_period_s;
   EmitRepeat(blade_off_repeat_, now, out);
   return out;
+}
+
+void McuControl::UpdateStopRelease(bool stop, bool lift, bool latched_before, double now) {
+  if (stop_release_.Sample(stop, now) && ++latch_count_ == 0) latch_count_ = 1;
+  StopReleaseInput input;
+  input.latched = latched_before;
+  input.usable = !TelemetryStale(now) && !ImuStale(now) && !NoImuYet();
+  input.lift = lift;
+  input.new_reason = new_reason_;
+  new_reason_ = false;
+  if (!config_.stop_release) return;
+  const StopPress press = stop_release_.Update(input, now);
+  if (press == StopPress::kNone) return;
+  ++stop_event_.seq;
+  stop_event_.press = press;
+  stop_event_.latch_count = press == StopPress::kLong ? latch_count_ : 0;
 }
 
 McuControlStatus McuControl::Status(double now) const {
@@ -409,6 +442,8 @@ McuControlStatus McuControl::Status(double now) const {
   status.dock_contact_raw = dock_raw_;
   status.firmware_incompatible = FirmwareIncompatible();
   status.held = held_;
+  status.latch_count = latch_count_;
+  status.stop_event = stop_event_;
   return status;
 }
 

@@ -7,6 +7,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <diagnostic_msgs/msg/key_value.hpp>
+#include <mowbite_msgs/msg/button_event.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/srv/set_blade.hpp>
@@ -48,6 +49,9 @@ static_assert(tron::kReasonStuck == HardwareStatus::REASON_STUCK);
 static_assert(mowbite_hold::kReasonUnexpectedRestart == HardwareStatus::REASON_UNEXPECTED_RESTART);
 static_assert(tron::kReasonImuTimeout == HardwareStatus::REASON_IMU_TIMEOUT);
 static_assert(tron::kReasonMowerNotStopped == HardwareStatus::REASON_MOWER_NOT_STOPPED);
+static_assert(static_cast<uint8_t>(tron::StopPress::kHeld) == mowbite_msgs::msg::ButtonEvent::PRESS_HELD);
+static_assert(static_cast<uint8_t>(tron::StopPress::kLong) == mowbite_msgs::msg::ButtonEvent::PRESS_LONG);
+static_assert(static_cast<uint8_t>(tron::StopPress::kCanceled) == mowbite_msgs::msg::ButtonEvent::PRESS_CANCELED);
 static_assert(static_cast<uint8_t>(tron::BladeOffReason::kLeaseExpired) == HardwareStatus::BLADE_OFF_LEASE_EXPIRED);
 static_assert(static_cast<uint8_t>(tron::BladeOffReason::kReconnect) == HardwareStatus::BLADE_OFF_RECONNECT);
 
@@ -129,6 +133,7 @@ class McuNode : public rclcpp::Node {
                   port_name_.c_str());
     }
     blade_lease_max_s_ = get_parameter("blade_lease_max").as_double();
+    stop_release_ = get_parameter("stop_release").as_bool() && !read_only_;
     imu_timeout_s_ = get_parameter("imu_timeout").as_double();
     measured_linear_scale_ = declare_parameter("measured_linear_scale", 1.0);
     measured_angular_scale_ = declare_parameter("measured_angular_scale", 1.0);
@@ -148,6 +153,8 @@ class McuNode : public rclcpp::Node {
     twist_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("hw/wheel_odom", 10);
     status_pub_ = create_publisher<HardwareStatus>("hw/status", 10);
     capabilities_pub_ = create_publisher<mowbite_msgs::msg::HardwareCapabilities>("hw/capabilities", LatchedQos());
+    // Never latched: a late subscriber must not act on an old press.
+    button_pub_ = create_publisher<mowbite_msgs::msg::ButtonEvent>("hw/button", rclcpp::QoS(10).reliable());
     PublishCapabilities();
 
     if (!read_only_) {
@@ -202,6 +209,11 @@ class McuNode : public rclcpp::Node {
     config.blade_still_rpm = static_cast<int>(declare_parameter("blade_still_rpm", config.blade_still_rpm));
     config.expected_cutter_version = declare_parameter("expected_cutter_version", "");
     config.expected_chassis_version = declare_parameter("expected_chassis_version", "");
+    config.stop_release = declare_parameter("stop_release", false) && !read_only;
+    if (config.stop_release) {
+      RCLCPP_INFO(get_logger(), "stop_release: STOP free %.1f s, then held %.1f to %.1f s, reports a release on hw/button",
+                  tron::kStopReleaseFreeS, tron::kStopReleaseHoldS, tron::kStopReleaseMaxHoldS);
+    }
     RCLCPP_INFO(get_logger(), "allow_blade: %d, cmd_vel_timeout: %.2f s, speed_repeat_window: %.2f s, mow_height: %u "
                 "mm", config.allow_blade, config.cmd_vel_timeout_s, config.speed_repeat_window_s, config.mow_height_mm);
     if (config.expected_cutter_version.empty() && config.expected_chassis_version.empty()) {
@@ -267,6 +279,7 @@ class McuNode : public rclcpp::Node {
           packets = control_.Call<&C::Tick>(now, LocalWallClock());
         }
         if (!read_only_) Send(packets);
+        PublishButton();
       }
       // So that the logic learns of a block before a blade request it refuses, not only at the next status tick.
       if (BlockChanged()) PublishStatus();
@@ -443,6 +456,29 @@ class McuNode : public rclcpp::Node {
     twist_pub_->publish(msg);
   }
 
+  // The STOP gesture the last tick reported, once.
+  void PublishButton() {
+    tron::StopEvent event;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      event = control_.View().Status(MonotonicSeconds()).stop_event;
+    }
+    if (event.seq == published_stop_seq_) return;
+    published_stop_seq_ = event.seq;
+    mowbite_msgs::msg::ButtonEvent msg;
+    msg.stamp = now();
+    msg.button = mowbite_msgs::msg::ButtonEvent::BUTTON_STOP;
+    msg.press = static_cast<uint8_t>(event.press);
+    msg.latch_count = event.latch_count;
+    switch (event.press) {
+      case tron::StopPress::kHeld: RCLCPP_INFO(get_logger(), "STOP held: let go to release"); break;
+      case tron::StopPress::kLong: RCLCPP_INFO(get_logger(), "STOP let go: release (latch_count %u)", msg.latch_count); break;
+      case tron::StopPress::kCanceled: RCLCPP_INFO(get_logger(), "STOP press canceled, no release"); break;
+      case tron::StopPress::kNone: return;
+    }
+    button_pub_->publish(msg);
+  }
+
   // Called with mutex_ held, or before the I/O thread starts.
   void PublishCapabilities() {
     mowbite_msgs::msg::HardwareCapabilities msg;
@@ -474,6 +510,11 @@ class McuNode : public rclcpp::Node {
     // 0 lets nothing move.
     msg.max_linear_speed = read_only_ ? 0.0f : tron::kMaxLinearSpeed;
     msg.max_angular_speed = read_only_ ? 0.0f : tron::kMaxAngularSpeed;
+    if (stop_release_) {
+      msg.stop_release_free_s = static_cast<float>(tron::kStopReleaseFreeS);
+      msg.stop_release_hold_s = static_cast<float>(tron::kStopReleaseHoldS);
+      msg.stop_release_max_hold_s = static_cast<float>(tron::kStopReleaseMaxHoldS);
+    }
     msg.failsafe_without_host_s = static_cast<float>(failsafe_without_host_s_);
     msg.safety_measurement_date = safety_measurement_date_;
     capabilities_pub_->publish(msg);
@@ -604,8 +645,14 @@ class McuNode : public rclcpp::Node {
       control_.Call<&C::LatchEmergency>(bits);
       res.message = "latched";
     } else {
+      if (!control_.Call<&C::ReleaseEmergency>(MonotonicSeconds(), req.latch_count)) {
+        RCLCPP_WARN(get_logger(), "Emergency release refused (%s): another reason latched since", req.reason.c_str());
+        res.success = false;
+        res.message = "another reason latched since the press";
+        res.code = "LATCH_CHANGED";
+        return;
+      }
       RCLCPP_INFO(get_logger(), "Emergency release requested: %s", req.reason.c_str());
-      control_.Call<&C::ReleaseEmergency>(MonotonicSeconds());
       res.message = "release requested";
     }
     res.success = true;
@@ -676,6 +723,9 @@ class McuNode : public rclcpp::Node {
   std::thread io_thread_;
 
   bool read_only_;
+  bool stop_release_;
+  // seq of the last StopEvent published, only for the I/O thread.
+  uint32_t published_stop_seq_ = 0;
   double blade_lease_max_s_;
   double failsafe_without_host_s_;
   std::string safety_measurement_date_;
@@ -694,6 +744,7 @@ class McuNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
   rclcpp::Publisher<HardwareStatus>::SharedPtr status_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr capabilities_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::ButtonEvent>::SharedPtr button_pub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Service<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_srv_;

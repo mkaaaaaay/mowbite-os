@@ -7,6 +7,7 @@
 
 #include "mowbite_hold/restart.h"
 #include "tron_mcu/mcu_codec.h"
+#include "tron_mcu/stop_release.h"
 
 namespace tron {
 
@@ -55,6 +56,8 @@ struct McuControlConfig {
   // motion and blade stay blocked until a version frame matches; a release does not lift it.
   std::string expected_cutter_version;
   std::string expected_chassis_version;
+  // The STOP gesture (G37) is recognised and reported in Status; the release is up to the logic.
+  bool stop_release = false;
 };
 
 // Bits of the emergency reason, numbered like EmergencyReason of OpenMower.
@@ -94,6 +97,14 @@ struct BladeRequest {
   double lease_s = 0;
 };
 
+// The last STOP gesture reported; seq counts them from 1.
+struct StopEvent {
+  uint32_t seq = 0;
+  StopPress press = StopPress::kNone;
+  // latch_count with kLong, 0 otherwise.
+  uint32_t latch_count = 0;
+};
+
 enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked, kHeld };
 
 const char* BladeResultText(BladeResult result);
@@ -119,6 +130,10 @@ struct McuControlStatus {
   bool firmware_incompatible = false;
   // An update holds the mower: motion and blade blocked without an emergency.
   bool held = false;
+  // Counts every new reason: a press of STOP (debounced), lift or bumper rising, a bit new in the latch. Never 0 once
+  // something counted.
+  uint32_t latch_count = 0;
+  StopEvent stop_event;
 };
 
 // Decides what goes to the MCU and when. Time is passed in (monotonic seconds), nothing here touches the port.
@@ -139,8 +154,9 @@ class McuControl {
 
   // Lift, stop and bumper latch the emergency as well; all of it stays until released, with its reason bits.
   void LatchEmergency(uint32_t reason);
-  // Clears a latched lift or stop on the MCU and releases the emergency once the flags are gone.
-  void ReleaseEmergency(double now);
+  // Clears a latched lift or stop on the MCU and releases the emergency once the flags are gone, unless latch_count
+  // rises before. Refused (false) when latch_count is not 0 and not the current one: another reason latched since.
+  bool ReleaseEmergency(double now, uint32_t latch_count);
   // Switching off always works. Switching on, or renewing the lease with the same or another setting, is refused when
   // the configuration forbids the blade, the request is out of range, the mower is blocked or on the dock. A refusal
   // because of an emergency sets emergency_reason to its bits as hw/status shows them, every other answer to 0.
@@ -179,6 +195,10 @@ class McuControl {
     double until_s;
   };
 
+  // Latches the reason bits; a bit not latched yet counts as a new reason, once per call, as does rising.
+  void Latch(uint32_t reason, bool rising = false);
+  void CountReason();
+  void UpdateStopRelease(bool stop, bool lift, bool latched_before, double now);
   bool Blocked(double now) const;
   bool Reported(double now) const;
   uint32_t EmergencyReason(double now) const;
@@ -220,6 +240,15 @@ class McuControl {
   uint32_t latch_reason_ = 0;
   bool release_requested_ = false;
   std::optional<double> release_until_s_;
+  // latch_count when the release was asked for; a new reason ends the release without effect.
+  uint32_t release_count_ = 0;
+  uint32_t latch_count_ = 0;
+  // A reason counted since the last gesture update.
+  bool new_reason_ = false;
+  bool last_lift_ = false;
+  bool last_bumper_ = false;
+  StopRelease stop_release_;
+  StopEvent stop_event_;
   std::optional<double> last_clear_s_;
 
   std::optional<BladeLease> blade_request_;
