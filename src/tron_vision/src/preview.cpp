@@ -92,7 +92,7 @@ Preview::Preview(PreviewConfig config) : config_(config), quality_(config.qualit
 
 bool Preview::Make(const Nv12View& frame, const ColorGains& gains, const std::vector<Detection>& boxes, double now,
                    std::string& error) {
-  // On time: the next slot; after a pause: one period from now, not a catch-up burst.
+  // On time: the next slot; after a pause: one period from now, so no burst to catch up.
   const double period = 1.0 / config_.max_rate;
   next_ = next_ + period > now ? next_ + period : now + period;
   uint32_t out_w = 0;
