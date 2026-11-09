@@ -143,7 +143,13 @@ class TestReadOnly(unittest.TestCase):
         self.assertEqual(now["linear"], 0.0)
 
     def test_3_no_gnss_node(self):
-        nodes = subprocess.run(["ros2", "node", "list"], capture_output=True, text=True, timeout=30).stdout.split()
+        # One listing can miss a node under load, so it asks again until both drivers show.
+        end = time.monotonic() + 15.0
+        while True:
+            nodes = subprocess.run(["ros2", "node", "list"], capture_output=True, text=True, timeout=30).stdout.split()
+            if {"/tron_mcu", "/tron_imu"} <= set(nodes) or time.monotonic() > end:
+                break
+            time.sleep(1.0)
         self.assertIn("/tron_mcu", nodes)
         self.assertIn("/tron_imu", nodes)
         self.assertNotIn("/tron_gnss", nodes)
