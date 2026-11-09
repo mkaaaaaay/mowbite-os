@@ -21,6 +21,7 @@ without ROS in a library of its own with gtests; the node stays thin.
 | service | `hw/emergency` | `mowbite_msgs/SetEmergency` |
 | service | `hw/blade` | `mowbite_msgs/SetBlade` |
 | service | `hw/charge` | `mowbite_msgs/SetCharge` |
+| publishes, optional | `hw/button` | `mowbite_msgs/ButtonEvent` (reliable, never latched) |
 | publishes | `imu/data` | `sensor_msgs/Imu` |
 | publishes | `gps/absolute_pose` | `mowbite_msgs/GnssFix` |
 | publishes, latched | `gps/datum` | `sensor_msgs/NavSatFix` |
@@ -34,7 +35,14 @@ Duties:
 - Blade: on only with a lease (`lease_s`), off when it runs out; heights outside the limits of `hw/capabilities` are
   refused; never on while an emergency is latched.
 - Emergency: reason bits numbered like the EMERGENCY event; stop button and lift stay latched until a release. The host
-  latches only its own bits (`kHostLatchReasons` in `mowbite_hold/restart.h`).
+  latches only its own bits (`kHostLatchReasons` in `mowbite_hold/restart.h`). A release waits a short window for the
+  flags to drop; a new reason within it ends the window without releasing.
+- Release at the mower (optional, G37): a driver that sees every sample of its stop button may recognise the gesture
+  itself (`tron_mcu/stop_release.h`: free 2 s, held 3 to 10 s, let go) and report HELD, LONG and CANCELED on
+  `hw/button`. It never releases by itself: the logic does, like `emergency.reset`, with the `latch_count` of LONG, and
+  the driver refuses that with `LATCH_CHANGED` once another reason latched since. It then fills the
+  `stop_release_*` times of `hw/capabilities` (the app shows them, `system.info.stop_release`). Without it they stay 0
+  and the release goes by app only.
 - Limits until driving tests show more: 0.3 m/s and 0.3 rad/s.
 - Before opening a port: no other process holds it.
 - A restarted driver starts latched (`start_latched`).
@@ -76,6 +84,7 @@ Before the mower drives by itself. On blocks, wheels free, blade off, someone at
 
 1. How long the board keeps the last setpoint without the host: `failsafe_without_host`.
 2. Stop button, lift, bumper left and right: wheels and blade stop, the reason bits are right, latched until release.
+   With a release at the mower: the press that latched never releases, a held press does, anything else does not.
 3. Drive in the air: forwards, backwards, turning; left and right the right way round.
 4. The blade last: briefly, in the air, heights within the limits.
 
