@@ -286,9 +286,9 @@ void LogicCore::UpdateEmergency(bool report) {
                     {"reason", reason_},
                     {"severity", emergency ? "error" : "info"},
                     {"resume", emergency ? "user" : "auto"}};
-    // The end after emergency.reset tells who released it (masterplan 3.1a); a new emergency drops the request.
+    // The end after emergency.reset or STOP tells who released it (masterplan 3.1a); a new emergency drops the request.
     if (!emergency && release_pending_) {
-      details["source"] = "rpc";
+      details["source"] = release_source_;
       if (!release_client_.empty()) details["client"] = release_client_;
     }
     release_pending_ = false;
@@ -392,6 +392,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
   const std::string& name = command.name;
   if (name == "emergency.reset") {
     release_pending_ = true;
+    release_source_ = "rpc";
     release_client_ = client_;
     release_answered_s_.reset();
     out->release = true;
@@ -1992,6 +1993,7 @@ void LogicCore::RefuseStart(const Reason& why) {
 std::string LogicCore::RefuseReset(const Reason& why) {
   json details = json::object();
   PutReason(&details, "EMERGENCY_RESET_REFUSED", why);
+  if (release_pending_) details["source"] = release_source_;
   // The refusal carries the client of the request it answers.
   const std::string client = client_;
   if (release_pending_) client_ = release_client_;
@@ -2026,6 +2028,15 @@ const std::string& LogicCore::JobId() const {
 
 void LogicCore::OnReleaseAnswered(double now_s) {
   if (release_pending_) release_answered_s_ = now_s;
+}
+
+bool LogicCore::OnStopRelease() {
+  if (!emergency_) return false;
+  release_pending_ = true;
+  release_source_ = "button";
+  release_client_.clear();
+  release_answered_s_.reset();
+  return true;
 }
 
 void LogicCore::GeometryChanged(const std::vector<std::string>& changed, const std::vector<std::string>& below_default,
@@ -2277,9 +2288,10 @@ void LogicCore::OnLegEnded(LegEnd end, size_t index, const Reason& reason) {
 }
 
 void LogicCore::OnTick(double now_s) {
+  // Any end of the emergency drops the request, so one still pending is an emergency that stayed.
   if (release_answered_s_ && now_s - *release_answered_s_ > kReleaseSourceS) {
-    release_pending_ = false;
-    release_answered_s_.reset();
+    RefuseReset(Reason("STILL_ACTIVE", "The emergency stays: " + EmergencyReasonNames(reason_))
+                    .With("bits", mowbite_api::EmergencyNameList(reason_)));
   }
   if (state_ == State::kDocking) TickDocking(now_s);
   if (state_ != State::kMowing) return;

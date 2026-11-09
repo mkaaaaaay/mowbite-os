@@ -21,6 +21,7 @@
 #include <mowbite_msgs/action/calibrate.hpp>
 #include <mowbite_msgs/action/follow_path.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
+#include <mowbite_msgs/msg/button_event.hpp>
 #include <mowbite_msgs/msg/calibration_status.hpp>
 #include <mowbite_msgs/msg/drive_command.hpp>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
@@ -418,6 +419,10 @@ class LogicNode : public rclcpp::Node {
           }
           if (active) SendDrive(mowbite_msgs::msg::DriveCommand::SOURCE_FOLLOWER, *msg);
         });
+    // Volatile and never latched: a restart replays no old press.
+    button_sub_ = create_subscription<mowbite_msgs::msg::ButtonEvent>(
+        "hw/button", rclcpp::QoS(10).reliable(),
+        [this](const mowbite_msgs::msg::ButtonEvent& msg) { OnButton(msg); });
     caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
         "hw/capabilities", LatchedQos(1), [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
           {
@@ -721,9 +726,30 @@ class LogicNode : public rclcpp::Node {
     AnswerReleaseLocked(false, why, event_id);
   }
 
+  // STOP let go after the gesture of the driver releases like emergency.reset, with its latch_count; held and canceled
+  // only show on the lights.
+  void OnButton(const mowbite_msgs::msg::ButtonEvent& msg) {
+    using mowbite_msgs::msg::ButtonEvent;
+    if (msg.button != ButtonEvent::BUTTON_STOP || msg.press != ButtonEvent::PRESS_LONG) return;
+    bool emergency;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      emergency = core_.Call<&LogicCore::OnStopRelease>();
+    }
+    if (!emergency) {
+      RCLCPP_INFO(get_logger(), "STOP let go after holding it, but there is no emergency to release");
+      return;
+    }
+    RCLCPP_INFO(get_logger(), "STOP at the mower: releasing the emergency");
+    ReleaseEmergency("", msg.latch_count, "STOP at the mower");
+    Flush();
+  }
+
   // The answer comes from S2 once the driver answered; a refusal goes to the app as EMERGENCY_RESET_REFUSED and to the
-  // RPCs waiting for it (rpc_id: the one of emergency.reset, empty for the action).
-  void ReleaseEmergency(const std::string& rpc_id = "") {
+  // RPCs waiting for it (rpc_id: the one of emergency.reset, empty for the action and STOP). latch_count of a STOP
+  // gesture lets the driver refuse when another reason latched since, 0 releases without that check.
+  void ReleaseEmergency(const std::string& rpc_id = "", uint32_t latch_count = 0,
+                        const std::string& reason = "reset_emergency from the app") {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!rpc_id.empty()) release_rpc_ids_.push_back(rpc_id);
     // The user looked at the mower: the restart hold goes first, the file before the flag, so S2 does not latch it
@@ -745,7 +771,8 @@ class LogicNode : public rclcpp::Node {
     }
     auto request = std::make_shared<mowbite_msgs::srv::SetEmergency::Request>();
     request->latch = false;
-    request->reason = "reset_emergency from the app";
+    request->reason = reason;
+    request->latch_count = latch_count;
     // A second reset while one is pending replaces it; only the newest answer counts, for all that wait.
     if (release_sent_) emergency_client_->remove_pending_request(release_request_id_);
     release_sent_ = MonotonicSeconds();
@@ -2758,6 +2785,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr teleop_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr follower_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::ButtonEvent>::SharedPtr button_sub_;
   rclcpp::Client<mowbite_planner_interfaces::srv::PlanTransit>::SharedPtr transit_client_;
   rclcpp_action::Client<FollowPath>::SharedPtr follow_client_;
   rclcpp_action::Client<Calibrate>::SharedPtr calibration_client_;

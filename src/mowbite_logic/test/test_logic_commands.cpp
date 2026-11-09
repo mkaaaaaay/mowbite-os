@@ -539,14 +539,26 @@ TEST(LogicCommands, ReleaseCarriesSourceAndClient) {
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].details["source"], "rpc");
   EXPECT_FALSE(events[0].details.contains("client"));
-  // An end long after the answer, or without a request, does not say who.
+  // No end within kReleaseSourceS of the answer: refused with STILL_ACTIVE; an end after that does not say who.
   core.OnHardwareStatus(InEmergency());
+  core.TakeEvents();
   Rpc(core, "emergency.reset");
   core.OnReleaseAnswered(20.0);
+  core.OnTick(20.0 + kReleaseSourceS - 0.1);
+  EXPECT_TRUE(core.TakeEvents().empty());
   core.OnTick(20.0 + kReleaseSourceS + 0.1);
+  events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].type, "EMERGENCY_RESET_REFUSED");
+  EXPECT_EQ(events[0].details["reason"], "STILL_ACTIVE");
+  EXPECT_EQ(events[0].details["source"], "rpc");
+  EXPECT_EQ(events[0].details["client"], "app");
+  EXPECT_EQ(events[0].details["severity"], "warning");
+  EXPECT_EQ(events[0].details["resume"], "user");
+  EXPECT_EQ(events[0].details["bits"], json::array({"LATCH", "STOP"}));
   core.OnHardwareStatus(Healthy());
   events = core.TakeEvents();
-  ASSERT_FALSE(events.empty());
+  ASSERT_EQ(events.size(), 1u);
   EXPECT_FALSE(events.back().details.contains("source"));
   // A refusal is the event with the client of the request, and its id for the answer.
   core.OnHardwareStatus(InEmergency());
@@ -563,6 +575,61 @@ TEST(LogicCommands, ReleaseCarriesSourceAndClient) {
   // After the refusal the end of the emergency has no source.
   core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.TakeEvents().back().details.contains("source"));
+}
+
+// STOP let go after the gesture of the driver: released like emergency.reset, with source button.
+TEST(LogicCommands, StopAtTheMowerReleasesWithSourceButton) {
+  LogicCore core = Idle();
+  // Outside an emergency there is nothing to release.
+  EXPECT_FALSE(core.OnStopRelease());
+  core.OnHardwareStatus(InEmergency());
+  core.TakeEvents();
+  EXPECT_TRUE(core.OnStopRelease());
+  core.OnReleaseAnswered(10.0);
+  core.OnHardwareStatus(Healthy());
+  auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].details["emergency"], false);
+  EXPECT_EQ(events[0].details["source"], "button");
+  EXPECT_FALSE(events[0].details.contains("client"));
+  // A refusal of the driver (LATCH_CHANGED) or S2 carries the source.
+  core.OnHardwareStatus(InEmergency());
+  core.TakeEvents();
+  EXPECT_TRUE(core.OnStopRelease());
+  core.RefuseReset(Reason("LATCH_CHANGED", "another reason latched since the press"));
+  events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].details["reason"], "LATCH_CHANGED");
+  EXPECT_EQ(events[0].details["source"], "button");
+  EXPECT_EQ(events[0].details["severity"], "warning");
+  EXPECT_FALSE(events[0].details.contains("client"));
+  // Both at once: the latest request names the end.
+  EXPECT_TRUE(core.OnStopRelease());
+  Rpc(core, "emergency.reset");
+  core.OnHardwareStatus(Healthy());
+  EXPECT_EQ(core.TakeEvents().back().details["source"], "rpc");
+  core.OnHardwareStatus(InEmergency());
+  Rpc(core, "emergency.reset");
+  EXPECT_TRUE(core.OnStopRelease());
+  core.OnReleaseAnswered(30.0);
+  core.OnTick(30.0 + kReleaseSourceS + 0.1);
+  events = core.TakeEvents();
+  ASSERT_FALSE(events.empty());
+  EXPECT_EQ(events.back().details["reason"], "STILL_ACTIVE");
+  EXPECT_EQ(events.back().details["source"], "button");
+}
+
+// The release by STOP starts nothing: mowing stays paused until continued (G11).
+TEST(LogicCommands, StopAtTheMowerKeepsMowingPaused) {
+  LogicCore core = PausedInEmergency();
+  ASSERT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_TRUE(core.OnStopRelease());
+  core.OnReleaseAnswered(1.0);
+  core.OnHardwareStatus(Healthy());
+  Settle(core);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_FALSE(core.BladeWanted());
+  EXPECT_FALSE(core.FollowerActive());
 }
 
 TEST(LogicCommands, AnEmergencyEndsWithASourceOnlyAfterItsOwnRequest) {

@@ -475,9 +475,13 @@ class LogicCore {
   void ReportRestart(const RestartReport& report);
   // The job of mowing, finished or not; empty without one.
   const std::string& JobId() const;
-  // The safety node released after emergency.reset (now_s monotonic): the end of the emergency that follows within
-  // kReleaseSourceS carries source rpc and the client of the command.
+  // The safety node released after emergency.reset or STOP (now_s monotonic): the end of the emergency that follows
+  // within kReleaseSourceS carries the source, rpc with the client of the command or button. Without that end the
+  // tick after kReleaseSourceS refuses it with STILL_ACTIVE and the bits that stay.
   void OnReleaseAnswered(double now_s);
+  // STOP was let go after the gesture of the driver (hw/button LONG): true in an emergency, which the node then
+  // releases like emergency.reset with source button; false outside of one.
+  bool OnStopRelease();
   // robot.geometry.set changed the dimensions: event GEOMETRY_CHANGED with the keys that are other now and the keys of
   // the body below the platform's value; with the latter it is a warning with the reason BELOW_DEFAULT, else info. It
   // stops nothing, so it has no resume.
@@ -766,9 +770,10 @@ class LogicCore {
   // The client of the command being run, for its events; the one of a skip that waits for the leg to stop.
   std::string client_;
   std::string skip_client_;
-  // emergency.reset asked the safety node: the end of the emergency carries source rpc and its client, until a
-  // refusal, a new emergency or kReleaseSourceS after the answer.
+  // emergency.reset or STOP asked the safety node: the end of the emergency carries the source (rpc with its client,
+  // button), until a refusal, a new emergency or kReleaseSourceS after the answer; the latest request names it.
   bool release_pending_ = false;
+  std::string release_source_;
   std::string release_client_;
   std::optional<double> release_answered_s_;
 };

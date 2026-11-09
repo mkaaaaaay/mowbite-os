@@ -252,6 +252,7 @@ class SafetyNode : public rclcpp::Node {
     auto request = std::make_shared<SetEmergency::Request>();
     request->latch = false;
     request->reason = req.reason;
+    request->latch_count = req.latch_count;
     auto sent = emergency_client_->async_send_request(
         request, [this, header](rclcpp::Client<SetEmergency>::SharedFuture future) { OnDriverAnswer(header, future); });
     pending_.push_back({header, sent.request_id, now});
