@@ -1,0 +1,22 @@
+#!/bin/sh
+# Playback levels of the ES8388 codec of the Tron, the values of the vendor image: DAC and both outputs at 0 dB, DAC
+# into the output mixers, analog bypass off, speaker on, headphone off. Without them the codec keeps its own defaults
+# and the speaker is quiet. How loud a sound plays is up to mowbite_sound.
+set -u
+CARD=rockchipes8388
+rc=0
+
+set_control() {
+    amixer -q -c "$CARD" cset "name=$1" "$2" || { echo "tron-audio: failed: $1 = $2"; rc=1; }
+}
+
+set_control 'PCM Volume' 192,192
+set_control 'Output 1 Playback Volume' 30,30
+set_control 'Output 2 Playback Volume' 30,30
+set_control 'Left Mixer Left Playback Switch' on
+set_control 'Right Mixer Right Playback Switch' on
+set_control 'Left Mixer Left Bypass Switch' off
+set_control 'Right Mixer Right Bypass Switch' off
+set_control 'Speaker Switch' on
+set_control 'Headphone Switch' off
+exit $rc

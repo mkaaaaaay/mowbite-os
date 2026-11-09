@@ -32,6 +32,7 @@ for f in /etc/mowbite/probezeit /usr/lib/mowbite/probezeit /usr/lib/mowbite/tron
          /etc/systemd/system/timers.target.wants/mowbite-probezeit-check.timer /userdata /meta \
          /etc/locale.conf /etc/NetworkManager/conf.d/20-unused-wifi.conf /usr/bin/fuser \
          /etc/systemd/system/sysinit.target.wants/mowbite-crash.service \
+         /etc/systemd/system/multi-user.target.wants/mowbite-tron-audio.service /usr/lib/mowbite/tron-audio \
          /etc/systemd/system/sysinit.target.wants/systemd-pstore.service; do
     "$DEBUGFS" -c -R "stat $f" "$IMG" 2>/dev/null | grep -q '^Inode:'; result "present: $f" $?
 done

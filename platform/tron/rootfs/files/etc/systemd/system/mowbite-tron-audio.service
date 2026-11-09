@@ -1,0 +1,13 @@
+[Unit]
+Description=Tron playback levels
+ConditionPathExists=/proc/asound/rockchipes8388
+# After the restore of the saved state, which would otherwise set older levels again.
+After=alsa-restore.service sound.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/mowbite/tron-audio
+
+[Install]
+WantedBy=multi-user.target
