@@ -12,6 +12,7 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "the journal is written little endian");
@@ -134,6 +135,10 @@ template <typename T>
 struct IsArray : std::false_type {};
 template <typename T, size_t N>
 struct IsArray<std::array<T, N>> : std::true_type {};
+template <typename T>
+struct IsVariant : std::false_type {};
+template <typename... A>
+struct IsVariant<std::variant<A...>> : std::true_type {};
 
 template <typename T>
 constexpr bool kRaw = std::is_arithmetic_v<T> || std::is_enum_v<T> || Pod<T>::value;
@@ -150,7 +155,20 @@ void Write(Out& out, const T& value);
 template <typename T>
 T Read(In& in);
 
-// Numbers and enums as their bytes, strings and containers with a u32 count, everything else as CBOR of its to_json.
+namespace detail {
+
+template <typename T, size_t... I>
+T ReadVariant(In& in, size_t index, std::index_sequence<I...>) {
+  T value;
+  const bool known = ((index == I && (value = Read<std::variant_alternative_t<I, T>>(in), true)) || ...);
+  if (!known) throw std::runtime_error("variant index beyond its types");
+  return value;
+}
+
+}  // namespace detail
+
+// Numbers and enums as their bytes, strings and containers with a u32 count, a variant as the index of its type and
+// its value, an empty struct as nothing, everything else as CBOR of its to_json.
 template <typename T>
 void Write(Out& out, const T& value) {
   if constexpr (detail::kRaw<T>) {
@@ -175,6 +193,12 @@ void Write(Out& out, const T& value) {
     Write(out, value.second);
   } else if constexpr (detail::IsArray<T>::value) {
     for (const auto& element : value) Write(out, element);
+  } else if constexpr (detail::IsVariant<T>::value) {
+    static_assert(std::variant_size_v<T> <= 255, "the index of a variant is one byte");
+    const auto index = static_cast<uint8_t>(value.index());
+    out.Put(&index, 1);
+    std::visit([&out](const auto& alternative) { Write(out, alternative); }, value);
+  } else if constexpr (std::is_empty_v<T>) {
   } else if constexpr (detail::HasCodec<T>::value) {
     Codec<T>::Write(out, value);
   } else {
@@ -224,6 +248,12 @@ T Read(In& in) {
     T value;
     for (auto& element : value) element = Read<typename T::value_type>(in);
     return value;
+  } else if constexpr (detail::IsVariant<T>::value) {
+    uint8_t index;
+    in.Get(&index, 1);
+    return detail::ReadVariant<T>(in, index, std::make_index_sequence<std::variant_size_v<T>>());
+  } else if constexpr (std::is_empty_v<T>) {
+    return T();
   } else if constexpr (detail::HasCodec<T>::value) {
     return Codec<T>::Read(in);
   } else {

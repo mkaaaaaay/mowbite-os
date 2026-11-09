@@ -10,6 +10,7 @@
 #include <limits>
 #include <sstream>
 #include <thread>
+#include <variant>
 
 #include "mowbite_journal/journaled.h"
 #include "mowbite_journal/replay.h"
@@ -152,6 +153,26 @@ TEST(Codec, KeepsWhatItWrites) {
   EXPECT_EQ(sample.n, 7);
   EXPECT_EQ(in.left(), 0u);
   EXPECT_THROW(Read<double>(in), std::runtime_error);
+}
+
+TEST(Codec, KeepsTheTypeOfAVariant) {
+  struct Mark {};
+  using Choice = std::variant<Mark, std::string, toy::ToyConfig>;
+  Out out;
+  Write(out, Choice(Mark{}));
+  Write(out, Choice(toy::ToyConfig{2.0, "y"}));
+  Write(out, Choice(std::string("z")));
+  EXPECT_EQ(out.data()[0], 0u);
+  EXPECT_EQ(out.data()[1], 2u);
+  In in(out.data(), out.size());
+  EXPECT_EQ(Read<Choice>(in).index(), 0u);
+  const auto config = std::get<toy::ToyConfig>(Read<Choice>(in));
+  EXPECT_EQ(config.label, "y");
+  EXPECT_EQ(std::get<std::string>(Read<Choice>(in)), "z");
+  EXPECT_EQ(in.left(), 0u);
+  const uint8_t beyond = 3;
+  In bad(&beyond, 1);
+  EXPECT_THROW(Read<Choice>(bad), std::runtime_error);
 }
 
 TEST(Table, NamesComeFromTheMacro) {

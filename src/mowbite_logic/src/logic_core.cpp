@@ -108,10 +108,53 @@ LogicCore::LogicCore(const LogicConfig& config)
       home_(HomeRules()) {
   // Without telemetry the mower counts as stopped until the driver reports.
   emergency_ = true;
+  effects_.push_back(ActionsChanged{});
+}
+
+template <typename T>
+bool LogicCore::Pending() const {
+  return std::any_of(effects_.begin(), effects_.end(),
+                     [](const Effect& effect) { return std::holds_alternative<T>(effect); });
+}
+
+template <typename T>
+void LogicCore::SetDue(bool due) {
+  if (!due) {
+    Drop<T>();
+  } else if (!Pending<T>()) {
+    effects_.push_back(T{});
+  }
+}
+
+template <typename T>
+void LogicCore::Replace(T value) {
+  Drop<T>();
+  effects_.push_back(std::move(value));
+}
+
+template <typename T>
+void LogicCore::Drop() {
+  effects_.erase(std::remove_if(effects_.begin(), effects_.end(),
+                                [](const Effect& effect) { return std::holds_alternative<T>(effect); }),
+                 effects_.end());
+}
+
+template <typename T>
+std::vector<T> LogicCore::Extract() {
+  std::vector<T> out;
+  for (auto& effect : effects_) {
+    if (auto* value = std::get_if<T>(&effect)) out.push_back(std::move(*value));
+  }
+  Drop<T>();
+  return out;
+}
+
+void LogicCore::Notify(std::string line) {
+  effects_.push_back(Notice{std::move(line)});
 }
 
 void LogicCore::OnHardwareStatus(const HardwareSnapshot& hw) {
-  if (hw.hold != hw_.hold) actions_changed_ = true;
+  if (hw.hold != hw_.hold) SetDue<ActionsChanged>(true);
   hw_ = hw;
   recorder_.SetDockContact(DockContact());
   UpdateEmergency();
@@ -178,7 +221,7 @@ void LogicCore::OnPoseTimeout() {
 
 void LogicCore::OnMapStatus(MapDatum datum, const std::string& reason) {
   const bool writable = datum == MapDatum::kMatch || datum == MapDatum::kEmpty;
-  if (writable != map_writable_) actions_changed_ = true;
+  if (writable != map_writable_) SetDue<ActionsChanged>(true);
   map_writable_ = writable;
   map_reason_ = writable ? Reason() : MapReason(datum, reason);
   recorder_.SetMapWritable(writable, map_reason_);
@@ -196,7 +239,7 @@ void LogicCore::OnMapEditResult(bool ok, const std::string& id, const std::strin
 
 void LogicCore::PullRecorder() {
   for (auto& event : recorder_.TakeEvents()) AddEvent(event.type, std::move(event.details));
-  actions_changed_ |= recorder_.TakeActionsChanged();
+  if (recorder_.TakeActionsChanged()) SetDue<ActionsChanged>(true);
 }
 
 json LogicCore::MapOverlay() const {
@@ -210,8 +253,7 @@ bool LogicCore::TakeOverlayChanged() {
 
 std::vector<std::string> LogicCore::TakeNotices() {
   std::vector<std::string> out = recorder_.TakeNotices();
-  out.insert(out.end(), notices_.begin(), notices_.end());
-  notices_.clear();
+  for (auto& notice : Extract<Notice>()) out.push_back(std::move(notice.line));
   return out;
 }
 
@@ -235,7 +277,7 @@ std::string LogicCore::AddEvent(const std::string& type, json details) {
   if (!client_.empty() && !details.contains("client")) details["client"] = client_;
   if (event_observer) event_observer(type, details);
   std::string id = NewId();
-  events_.push_back({type, std::move(details), id});
+  effects_.push_back(Event{type, std::move(details), id});
   return id;
 }
 
@@ -261,13 +303,13 @@ void LogicCore::UpdateEmergency(bool report) {
   // The driver sends no reason without an emergency; one that does not block is not shown either.
   reason_ = emergency ? EmergencyReason() : 0;
   if (reason_ != logged_reason_) {
-    reason_changes_.push_back({logged_reason_, reason_});
+    effects_.push_back(ReasonChange{logged_reason_, reason_});
     logged_reason_ = reason_;
   }
   // The first report after the start only sets the state, it is no change worth an event.
   if (!hw_seen_) {
     hw_seen_ = report;
-    actions_changed_ |= emergency != emergency_;
+    if (emergency != emergency_) SetDue<ActionsChanged>(true);
     emergency_ = emergency;
     return;
   }
@@ -294,7 +336,7 @@ void LogicCore::UpdateEmergency(bool report) {
     release_pending_ = false;
     release_answered_s_.reset();
     AddEvent("EMERGENCY", std::move(details));
-    actions_changed_ = true;
+    SetDue<ActionsChanged>(true);
   }
 }
 
@@ -328,7 +370,9 @@ CommandOutcome LogicCore::Command(const std::string& name, const json& params, c
   }
   if (!out.invalid.empty()) return out;
   client_ = params.is_object() ? params.value("client", "") : "";
-  const size_t first_event = events_.size();
+  // Effects may go away while the command runs, events never: its events are those after the ones before it.
+  const auto is_event = [](const Effect& effect) { return std::holds_alternative<Event>(effect); };
+  const auto events_before = std::count_if(effects_.begin(), effects_.end(), is_event);
   const Reason why = RunCommand(*command, params, node_problem, &out);
   client_.clear();
   if (why.empty()) {
@@ -341,8 +385,11 @@ CommandOutcome LogicCore::Command(const std::string& name, const json& params, c
   std::string group;
   std::string event_id;
   json action;
-  for (size_t i = first_event; i < events_.size(); i++) {
-    const Event& event = events_[i];
+  auto seen = decltype(events_before){0};
+  for (const Effect& effect : effects_) {
+    const Event* found = std::get_if<Event>(&effect);
+    if (!found || seen++ < events_before) continue;
+    const Event& event = *found;
     const bool refused = event.type.size() > 8 && event.type.compare(event.type.size() - 8, 8, "_REFUSED") == 0;
     if (!refused || event.details.value("reason", "") != why.code) continue;
     group = event.type;
@@ -422,7 +469,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     AddEvent("JOB_RESET", json::object());
     job_.Reset();
     CheckpointNow();
-    actions_changed_ = true;
+    SetDue<ActionsChanged>(true);
     return {};
   }
   if (name.rfind("mowing.", 0) == 0) {
@@ -463,7 +510,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     // A leg on its way ends first, its index counts.
     if (leg_ == Leg::kApproach || leg_ == Leg::kFollow) {
       CancelDrive(Reason("STOPPED", "Skipped by the app"));
-      stop_requested_ = true;
+      SetDue<StopRequest>(true);
     } else {
       ApplySkips();
     }
@@ -476,7 +523,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
   }
   if (name == "docking.abort") {
     if (state_ != State::kDocking) return WrongState();
-    notices_.push_back("Docking stopped: aborted by the app");
+    Notify("Docking stopped: aborted by the app");
     EndDocking(Reason("STOPPED", "Aborted by the app"));
     return {};
   }
@@ -593,8 +640,7 @@ Reason LogicCore::StartDrive(double x, double y) {
 }
 
 void LogicCore::BeginDrive(double x, double y) {
-  drive_cancel_ = false;
-  cancel_reason_.reset();
+  Drop<DriveCancel>();
   SetState(State::kDriving);
   AddEvent("DRIVE", {{"phase", "start"}, {"goal_x", x}, {"goal_y", y}});
 }
@@ -610,8 +656,7 @@ void LogicCore::OnDriveEnded(bool arrived, const Reason& reason) {
   json details = {{"phase", "end"}, {"arrived", arrived}};
   PutReason(&details, "DRIVE", reason);
   AddEvent("DRIVE", std::move(details));
-  drive_cancel_ = false;
-  cancel_reason_.reset();
+  Drop<DriveCancel>();
   SetState(State::kIdle);
 }
 
@@ -628,23 +673,21 @@ bool LogicCore::FollowerActive() const {
 }
 
 std::optional<Reason> LogicCore::TakeDriveCancel() {
-  if (!drive_cancel_) return std::nullopt;
-  drive_cancel_ = false;
-  Reason reason = cancel_reason_.value_or(Reason("STOPPED", "Stopped by the logic"));
-  cancel_reason_.reset();
-  return reason;
+  std::vector<DriveCancel> cancels = Extract<DriveCancel>();
+  if (cancels.empty()) return std::nullopt;
+  return std::move(cancels.front().why);
 }
 
 void LogicCore::CancelDrive(const Reason& reason) {
-  drive_cancel_ = true;
-  if (!cancel_reason_) cancel_reason_ = reason;
+  // The first reason stays until the node takes it.
+  if (!Pending<DriveCancel>()) effects_.push_back(DriveCancel{reason});
 }
 
 void LogicCore::SetState(State state) {
   if (state == state_) return;
   if (state_ == State::kAreaRecording || state_ == State::kDriving || state_ == State::kMowing ||
       state_ == State::kUndocking || state_ == State::kDocking || state_ == State::kCalibrating) {
-    stop_requested_ = true;
+    SetDue<StopRequest>(true);
   }
   // A session is one run of mowing; the job lasts until it is finished or reset.
   if (state == State::kMowing) {
@@ -674,7 +717,7 @@ void LogicCore::SetState(State state) {
   if (state == State::kDriving) details["sub_state"] = "DRIVING";
   if (state == State::kCalibrating) details["sub_state"] = "CALIBRATING";
   AddEvent("STATE", std::move(details));
-  actions_changed_ = true;
+  SetDue<ActionsChanged>(true);
 }
 
 std::string LogicCore::CurrentStateName() const {
@@ -835,14 +878,11 @@ std::vector<SensorReading> LogicCore::Readings() const {
 }
 
 std::vector<Event> LogicCore::TakeEvents() {
-  std::vector<Event> out;
-  out.swap(events_);
-  return out;
+  return Extract<Event>();
 }
 
 bool LogicCore::TakeActionsChanged() {
-  bool changed = actions_changed_;
-  actions_changed_ = false;
+  bool changed = !Extract<ActionsChanged>().empty();
   // Start Mowing and its reason follow the position, the battery and more, which change without an event.
   const std::string start_reason = StartProblem().code;
   if (start_reason != last_start_reason_) {
@@ -853,15 +893,11 @@ bool LogicCore::TakeActionsChanged() {
 }
 
 std::vector<ReasonChange> LogicCore::TakeReasonChanges() {
-  std::vector<ReasonChange> out;
-  out.swap(reason_changes_);
-  return out;
+  return Extract<ReasonChange>();
 }
 
 bool LogicCore::TakeStopRequest() {
-  bool stop = stop_requested_;
-  stop_requested_ = false;
-  return stop;
+  return !Extract<StopRequest>().empty();
 }
 
 void LogicCore::OnCalibrationStatus(const CalibrationStatus& status, double now_s) {
@@ -930,15 +966,15 @@ Reason LogicCore::StartCalibration(double now_s) {
     return problems.front();
   }
   const CalibrationStatus status = *CalibrationStatusNow(now_s);
-  calibration_goal_due_ = CalibrationGoal{status.heading, status.lane_length};
-  calibration_cancel_ = false;
+  Replace(CalibrationGoal{status.heading, status.lane_length});
+  Drop<CalibrationCancel>();
   calibration_sign_s_ = now_s;
   calibration_phase_ = "start";
   calibration_index_ = 0;
   home_.Reset();
   SetState(State::kCalibrating);
   AddEvent("CALIBRATION", {{"phase", "start"}, {"index", 0}});
-  notices_.push_back("Calibration: lanes of " + Metres(status.lane_length) + " m, heading " +
+  Notify("Calibration: lanes of " + Metres(status.lane_length) + " m, heading " +
                      Degrees(status.heading) + " deg");
   return {};
 }
@@ -950,9 +986,9 @@ void LogicCore::RefuseCalibration(const Reason& why) {
 }
 
 std::optional<CalibrationGoal> LogicCore::TakeCalibrationGoal() {
-  std::optional<CalibrationGoal> goal = calibration_goal_due_;
-  calibration_goal_due_.reset();
-  return goal;
+  std::vector<CalibrationGoal> goals = Extract<CalibrationGoal>();
+  if (goals.empty()) return std::nullopt;
+  return goals.front();
 }
 
 void LogicCore::OnCalibrationSign(double now_s) {
@@ -974,7 +1010,7 @@ void LogicCore::OnCalibrationEnded(const CalibrationOutcome& outcome) {
     AddEvent("CALIBRATED", {{"status", outcome.status},
                             {"summary", outcome.summary},
                             {"severity", outcome.status == "done" ? "info" : "warning"}});
-    notices_.push_back("Calibration done: " + outcome.summary);
+    Notify("Calibration done: " + outcome.summary);
     EndCalibration(std::nullopt, false);
     return;
   }
@@ -1021,9 +1057,7 @@ bool LogicCore::CalibrationActive() const {
 }
 
 bool LogicCore::TakeCalibrationCancel() {
-  const bool cancel = calibration_cancel_;
-  calibration_cancel_ = false;
-  return cancel;
+  return !Extract<CalibrationCancel>().empty();
 }
 
 void LogicCore::EndCalibration(const std::optional<Reason>& failure, bool cancel) {
@@ -1031,11 +1065,11 @@ void LogicCore::EndCalibration(const std::optional<Reason>& failure, bool cancel
     json details = json::object();
     PutReason(&details, "CALIBRATION_FAILED", *failure);
     AddEvent("CALIBRATION_FAILED", std::move(details));
-    notices_.push_back("Calibration stopped: " + failure->message);
+    Notify("Calibration stopped: " + failure->message);
   }
   AddEvent("CALIBRATION", {{"phase", "end"}, {"index", calibration_index_}});
-  calibration_cancel_ = calibration_cancel_ || cancel;
-  calibration_goal_due_.reset();
+  if (cancel) SetDue<CalibrationCancel>(true);
+  Drop<CalibrationGoal>();
   home_.Reset();
   // One zero follows from leaving the state; the mower stays where it stopped.
   SetState(State::kIdle);
@@ -1049,7 +1083,7 @@ void LogicCore::OnMowMap(std::vector<JobArea> areas, const Reason& problem) {
 
 void LogicCore::RestoreJob(const JobProgress& progress) {
   job_.Restore(progress);
-  actions_changed_ = true;
+  SetDue<ActionsChanged>(true);
 }
 
 bool LogicCore::PoseGood() const {
@@ -1145,9 +1179,9 @@ double LogicCore::DockedHeading() const {
 
 void LogicCore::BeginDockCheck(DockCheck purpose) {
   dock_check_ = purpose;
-  dock_check_due_ = true;
-  actions_changed_ = true;
-  notices_.push_back("On the docking station: checking the position against the recorded one first");
+  SetDue<ReferenceCheck>(true);
+  SetDue<ActionsChanged>(true);
+  Notify("On the docking station: checking the position against the recorded one first");
 }
 
 void LogicCore::CheckDockBeforeDrive(double x, double y) {
@@ -1157,8 +1191,7 @@ void LogicCore::CheckDockBeforeDrive(double x, double y) {
 }
 
 std::optional<double> LogicCore::TakeDockCheck() {
-  if (!dock_check_due_) return std::nullopt;
-  dock_check_due_ = false;
+  if (Extract<ReferenceCheck>().empty()) return std::nullopt;
   return DockedHeading();
 }
 
@@ -1170,8 +1203,8 @@ Reason LogicCore::OnDockCheck(bool ok, double x, double y, float accuracy, const
   const DockCheck purpose = dock_check_;
   if (purpose == DockCheck::kNone) return Reason("STOPPED", "No reference check was on its way");
   dock_check_ = DockCheck::kNone;
-  dock_check_due_ = false;
-  actions_changed_ = true;
+  Drop<ReferenceCheck>();
+  SetDue<ActionsChanged>(true);
   // What changed meanwhile comes first: an emergency, the contact, then the rest of a start or a drive.
   Reason why = Unsafe();
   if (why.empty() && !DockContact()) {
@@ -1194,7 +1227,7 @@ Reason LogicCore::OnDockCheck(bool ok, double x, double y, float accuracy, const
                 .With("distance", distance)
                 .With("limit", limit);
     } else {
-      notices_.push_back("Reference check on the docking station passed: " + Metres(distance) +
+      Notify("Reference check on the docking station passed: " + Metres(distance) +
                          " m from the recorded position");
       if (config_.dock_contact_x >= 0) {
         why = Reason("ON_DOCK", "The position on the docking station fits, but undocking backwards is not built yet: "
@@ -1226,18 +1259,18 @@ void LogicCore::StartUndocking(DockCheck purpose, double x, double y) {
   undock_y_ = y;
   undock_heading_ = DockedHeading();
   undock_fix_start_.reset();
-  charge_off_due_ = charge_stop_;
-  undock_path_due_.reset();
+  SetDue<ChargeOff>(charge_stop_);
+  Drop<UndockPath>();
   undock_stopping_ = false;
   undock_failure_.reset();
   undock_stop_why_ = Reason();
   if (charge_stop_) {
-    notices_.push_back("Undocking: charging off, then " + Metres(config_.undock.distance) + " m straight ahead");
+    Notify("Undocking: charging off, then " + Metres(config_.undock.distance) + " m straight ahead");
   } else {
     // The hardware charges by itself and cannot stop it: straight to the path.
-    notices_.push_back("Undocking: " + Metres(config_.undock.distance) + " m straight ahead");
+    Notify("Undocking: " + Metres(config_.undock.distance) + " m straight ahead");
     undock_step_ = UndockStep::kDrive;
-    undock_path_due_ = PlanUndock(undock_x_, undock_y_, undock_heading_, config_.undock);
+    Replace(PlanUndock(undock_x_, undock_y_, undock_heading_, config_.undock));
   }
   SetState(State::kUndocking);
 }
@@ -1251,9 +1284,7 @@ bool LogicCore::UndockingForDrive() const {
 }
 
 bool LogicCore::TakeChargeOff() {
-  const bool due = charge_off_due_;
-  charge_off_due_ = false;
-  return due;
+  return !Extract<ChargeOff>().empty();
 }
 
 void LogicCore::OnChargeOff(bool ok, const std::string& message) {
@@ -1268,29 +1299,29 @@ void LogicCore::OnChargeOff(bool ok, const std::string& message) {
     return;
   }
   undock_step_ = UndockStep::kDrive;
-  undock_path_due_ = PlanUndock(undock_x_, undock_y_, undock_heading_, config_.undock);
+  Replace(PlanUndock(undock_x_, undock_y_, undock_heading_, config_.undock));
 }
 
 std::optional<UndockPath> LogicCore::TakeUndockPath() {
-  std::optional<UndockPath> path;
-  path.swap(undock_path_due_);
-  return path;
+  std::vector<UndockPath> paths = Extract<UndockPath>();
+  if (paths.empty()) return std::nullopt;
+  return std::move(paths.front());
 }
 
 void LogicCore::StopUndocking(const std::optional<Reason>& failure, const Reason& why) {
   if (state_ != State::kUndocking || undock_stopping_) return;
   // Before the path went to the follower nothing moves: it ends at once.
-  if (undock_step_ == UndockStep::kChargeOff || undock_path_due_) {
+  if (undock_step_ == UndockStep::kChargeOff || Pending<UndockPath>()) {
     EndUndocking(failure, why);
     return;
   }
   undock_stopping_ = true;
   undock_failure_ = failure;
   undock_stop_why_ = why;
-  undock_path_due_.reset();
+  Drop<UndockPath>();
   CancelDrive(why);
-  stop_requested_ = true;
-  actions_changed_ = true;
+  SetDue<StopRequest>(true);
+  SetDue<ActionsChanged>(true);
 }
 
 void LogicCore::AbortUndocking(const Reason& why) {
@@ -1323,15 +1354,15 @@ void LogicCore::EndUndocking(const std::optional<Reason>& failure, const Reason&
     PutReason(&details, "UNDOCKING_FAILED", *failure);
     AddEvent("UNDOCKING_FAILED", std::move(details));
   }
-  if (!failure) notices_.push_back("Undocking stopped: " + why.message);
+  if (!failure) Notify("Undocking stopped: " + why.message);
   UndockOutcome outcome;
   outcome.for_drive = undock_for_ == DockCheck::kDrive;
   outcome.why = failure.value_or(why);
-  undock_outcome_ = outcome;
+  Replace(outcome);
   // The mower may still stand on the contacts.
-  charge_on_due_ = charge_stop_;
-  charge_off_due_ = false;
-  undock_path_due_.reset();
+  SetDue<ChargeOn>(charge_stop_);
+  Drop<ChargeOff>();
+  Drop<UndockPath>();
   undock_stopping_ = false;
   undock_for_ = DockCheck::kNone;
   SetState(State::kIdle);
@@ -1339,7 +1370,7 @@ void LogicCore::EndUndocking(const std::optional<Reason>& failure, const Reason&
 
 void LogicCore::Undocked() {
   AddEvent("UNDOCKED", json::object());
-  notices_.push_back("Undocked");
+  Notify("Undocked");
   UndockOutcome outcome;
   outcome.undocked = true;
   outcome.for_drive = undock_for_ == DockCheck::kDrive;
@@ -1358,19 +1389,17 @@ void LogicCore::Undocked() {
   } else {
     StartMowing();
   }
-  undock_outcome_ = outcome;
+  Replace(outcome);
 }
 
 bool LogicCore::TakeChargeOn() {
-  const bool due = charge_on_due_;
-  charge_on_due_ = false;
-  return due;
+  return !Extract<ChargeOn>().empty();
 }
 
 std::optional<UndockOutcome> LogicCore::TakeUndockOutcome() {
-  std::optional<UndockOutcome> outcome;
-  outcome.swap(undock_outcome_);
-  return outcome;
+  std::vector<UndockOutcome> outcomes = Extract<UndockOutcome>();
+  if (outcomes.empty()) return std::nullopt;
+  return outcomes.front();
 }
 
 bool LogicCore::CanDock() const {
@@ -1446,7 +1475,7 @@ void LogicCore::GoHome(const Reason& home_why) {
     json details = json::object();
     PutReason(&details, "DOCKING_FAILED", Reason("approach_failed", why.message).With("attempts", 1));
     AddEvent("DOCKING_FAILED", std::move(details));
-    notices_.push_back("Docking failed: " + why.message);
+    Notify("Docking failed: " + why.message);
     SetState(State::kIdle);
     return;
   }
@@ -1454,7 +1483,7 @@ void LogicCore::GoHome(const Reason& home_why) {
     json details = json::object();
     PutReason(&details, "DOCKING", home_why);
     AddEvent("DOCKING", std::move(details));
-    notices_.push_back(home_why.message);
+    Notify(home_why.message);
   }
   BeginDocking();
 }
@@ -1525,7 +1554,7 @@ void LogicCore::BatteryEndsMowing(HomeReason reason) {
   const double voltage = critical ? hw_.battery_voltage : home_.WindowVoltage();
   const double limit = critical ? config_.battery_critical_voltage : config_.battery_empty_voltage;
   AddEvent("BATTERY_LOW", {{"battery_voltage", voltage}, {"limit", limit}});
-  notices_.push_back("Mowing ends: the battery is low and the mower cannot go home");
+  Notify("Mowing ends: the battery is low and the mower cannot go home");
   EndJob(false, false);
 }
 
@@ -1552,7 +1581,7 @@ void LogicCore::WatchHome(double now_s) {
   const int bit = 1 << static_cast<int>(due.front());
   if (waits_for_user || (home_told_ & bit) != 0) return;
   home_told_ |= bit;
-  notices_.push_back("Mowing goes on, it cannot go home: " + HomeWhy(due.front()).message);
+  Notify("Mowing goes on, it cannot go home: " + HomeWhy(due.front()).message);
 }
 
 void LogicCore::BeginDocking() {
@@ -1572,7 +1601,7 @@ void LogicCore::BeginDocking() {
   docking_charge_stopped_ = false;
   SetState(State::kDocking);
   const Point2 p = docking_.ApproachPoint();
-  notices_.push_back("Docking: to (" + Metres(p.x) + ", " + Metres(p.y) +
+  Notify("Docking: to (" + Metres(p.x) + ", " + Metres(p.y) +
                      ") in front of the docking station, then backwards onto it");
   NextDockingTry();
 }
@@ -1621,8 +1650,8 @@ void LogicCore::OnDockingContact() {
     docking_leg_due_.reset();
     docking_out_after_charge_off_.reset();
     docking_failure_.reset();
-    if (charge_off_due_) {
-      charge_off_due_ = false;
+    if (Pending<ChargeOff>()) {
+      Drop<ChargeOff>();
       docking_charge_touched_ = false;
     }
     AllowChargeAgain();
@@ -1642,11 +1671,11 @@ void LogicCore::OnDockingContact() {
   if (raw && !docking_hold_) {
     // G18: one zero command, the driver sends three zero frames and then nothing while the contact settles.
     docking_hold_ = true;
-    stop_requested_ = true;
-    notices_.push_back("Docking: contact with the docking station, stopped until it is confirmed");
+    SetDue<StopRequest>(true);
+    Notify("Docking: contact with the docking station, stopped until it is confirmed");
   } else if (!raw && docking_hold_) {
     docking_hold_ = false;
-    notices_.push_back("Docking: the contact went away before it was confirmed, on slowly");
+    Notify("Docking: the contact went away before it was confirmed, on slowly");
   }
 }
 
@@ -1656,7 +1685,7 @@ void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
   docking_leg_.reset();
   docking_hold_ = false;
   if (end == LegEnd::kEmergency) {
-    notices_.push_back("Docking stopped: " + reason.message);
+    Notify("Docking stopped: " + reason.message);
     EndDocking(reason);
     return;
   }
@@ -1692,7 +1721,7 @@ void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
                                                           pose_->position_accuracy, DockAccuracyLimit())
                                      : "at the gate there was no position";
       if (gate.empty()) {
-        notices_.push_back("Docking: through the gate, onto the contacts");
+        Notify("Docking: through the gate, onto the contacts");
         docking_leg_due_ = docking_.Contact();
       } else {
         DockingTryFailed(Reason("dock_failed", "Docking failed: " + gate));
@@ -1707,7 +1736,7 @@ void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
 }
 
 void LogicCore::DockingTryFailed(const Reason& why) {
-  notices_.push_back(why.message);
+  Notify(why.message);
   // Out to the approach point first; the try counts once the mower got there.
   if (pose_ && docking_last_kind_ != DockingLeg::Kind::kOut && docking_.OnLine(pose_->x, pose_->y)) {
     docking_failure_ = why;
@@ -1723,8 +1752,8 @@ void LogicCore::SetDockingLeg(DockingLeg leg) {
   if (leg.kind == DockingLeg::Kind::kOut && charge_stop_ && on_contacts && !docking_charge_stopped_) {
     docking_out_after_charge_off_ = std::move(leg);
     docking_charge_touched_ = true;
-    charge_off_due_ = true;
-    notices_.push_back("Docking: charging off, then out of the docking station");
+    SetDue<ChargeOff>(true);
+    Notify("Docking: charging off, then out of the docking station");
     return;
   }
   docking_leg_due_ = std::move(leg);
@@ -1741,7 +1770,7 @@ void LogicCore::DockingChargeOff(bool ok, const std::string& message) {
   // Not off the contacts while they may still charge: docking ends where the mower stands.
   Reason why = docking_failure_.value_or(Reason("dock_failed", "Docking failed"));
   why.message += "; charging could not be switched off (" + message + "), the mower stays on the docking station";
-  notices_.push_back(why.message);
+  Notify(why.message);
   CountDockingFailure(why, true);
   charge_watch_.Unconfirm(why.code == "NO_CHARGE_CURRENT");
 }
@@ -1750,7 +1779,7 @@ void LogicCore::AllowChargeAgain() {
   if (!docking_charge_touched_) return;
   docking_charge_touched_ = false;
   docking_charge_stopped_ = false;
-  charge_on_due_ = true;
+  SetDue<ChargeOn>(true);
 }
 
 ChargeSample LogicCore::ChargeSampleNow() const {
@@ -1769,7 +1798,7 @@ void LogicCore::BeginChargeCheck() {
   docking_gps_wait_ = false;
   docking_checked_ = true;
   docking_charge_.emplace(config_.charge, hw_.time_s);
-  notices_.push_back("Docking: contact with the docking station, checking the charge");
+  Notify("Docking: contact with the docking station, checking the charge");
   OnChargeResult(docking_charge_->OnSample(ChargeSampleNow()));
 }
 
@@ -1781,13 +1810,13 @@ void LogicCore::OnChargeResult(ChargeCheck::Result result) {
   switch (result) {
     case ChargeCheck::Result::kCharging:
       std::snprintf(text, sizeof(text), "Docking: charging at %.2f A", check.max_current());
-      notices_.push_back(text);
+      Notify(text);
       Docked();
       return;
     case ChargeCheck::Result::kFull:
       std::snprintf(text, sizeof(text), "Docking: the contact held, the battery at %d %% needs no charge current",
                     check.percentage());
-      notices_.push_back(text);
+      Notify(text);
       Docked();
       return;
     case ChargeCheck::Result::kContactLost:
@@ -1809,7 +1838,7 @@ void LogicCore::OnChargeResult(ChargeCheck::Result result) {
         return;
       }
       // The last try leaves the mower on the contacts: a person has to look anyway, and charging may still begin.
-      notices_.push_back(why.message);
+      Notify(why.message);
       CountDockingFailure(why, true);
       charge_watch_.Unconfirm(true);
       return;
@@ -1825,11 +1854,11 @@ void LogicCore::CountDockingFailure(Reason why, bool last) {
   PutReason(&details, type, Reason(why).With("attempts", docking_.failures()));
   AddEvent(type, std::move(details));
   if (!again) {
-    notices_.push_back("Docking failed, tries: " + std::to_string(docking_.failures()));
+    Notify("Docking failed, tries: " + std::to_string(docking_.failures()));
     EndDocking(Reason("STOPPED", why.message));
     return;
   }
-  notices_.push_back("Docking: try " + std::to_string(docking_.failures() + 1) + " of " +
+  Notify("Docking: try " + std::to_string(docking_.failures() + 1) + " of " +
                      std::to_string(docking_.config().retry_count + 1));
   NextDockingTry();
 }
@@ -1839,7 +1868,7 @@ void LogicCore::WaitForDockingGps() {
   docking_gps_wait_ = true;
   docking_gps_since_.reset();
   docking_gps_good_since_.reset();
-  notices_.push_back("Docking waits for a good position");
+  Notify("Docking waits for a good position");
 }
 
 void LogicCore::TickDocking(double now_s) {
@@ -1853,7 +1882,7 @@ void LogicCore::TickDocking(double now_s) {
     if (!docking_gps_good_since_) docking_gps_good_since_ = now_s;
     if (now_s - *docking_gps_good_since_ < config_.gps_wait_time) return;
     docking_gps_wait_ = false;
-    notices_.push_back("Docking goes on: the position is good again");
+    Notify("Docking goes on: the position is good again");
     NextDockingTry();
     return;
   }
@@ -1880,13 +1909,13 @@ void LogicCore::CancelDockingLeg(const Reason& why) {
   docking_leg_.reset();
   docking_hold_ = false;
   CancelDrive(why);
-  stop_requested_ = true;
+  SetDue<StopRequest>(true);
 }
 
 void LogicCore::Docked() {
   charge_watch_.Confirm();
   AddEvent("DOCKED", json::object());
-  notices_.push_back("Docked");
+  Notify("Docked");
   EndDocking(Reason("STOPPED", "Docked"));
 }
 
@@ -1911,7 +1940,7 @@ void LogicCore::WatchCharge() {
   switch (charge_watch_.OnSample(now, emergency_)) {
     case ChargeWatch::Change::kConfirmed:
       AddEvent("DOCKED", json::object());
-      notices_.push_back("Docked: charging confirmed on the docking station");
+      Notify("Docked: charging confirmed on the docking station");
       return;
     case ChargeWatch::Change::kContactLost:
       ChargingLost(Reason("NO_DOCK_CONTACT", "The mower lost the contact with the docking station"));
@@ -1939,7 +1968,7 @@ void LogicCore::ChargingLost(const Reason& why) {
   PutReason(&details, "CHARGING_LOST", why);
   if (hw_.battery_ok) details["battery_percentage"] = hw_.battery_percentage;
   AddEvent("CHARGING_LOST", std::move(details));
-  notices_.push_back("Charging lost: " + why.message);
+  Notify("Charging lost: " + why.message);
 }
 
 Reason LogicCore::StartProblem() const {
@@ -2007,7 +2036,7 @@ std::string LogicCore::RefuseReset(const Reason& why) {
 void LogicCore::SetRestartHold(bool held) {
   if (held == restart_hold_) return;
   restart_hold_ = held;
-  actions_changed_ = true;
+  SetDue<ActionsChanged>(true);
   UpdateEmergency(false);
 }
 
@@ -2073,7 +2102,7 @@ bool LogicCore::Idle() const {
 void LogicCore::SetHold(int64_t until) {
   if (until == hold_until_) return;
   hold_until_ = until;
-  actions_changed_ = true;
+  SetDue<ActionsChanged>(true);
 }
 
 bool LogicCore::Held() const {
@@ -2142,23 +2171,23 @@ void LogicCore::Pause(int why, const Reason& reason) {
   if (why == kPauseGps) gps_good_since_.reset();
   if (leg_ == Leg::kApproach || leg_ == Leg::kFollow) {
     CancelDrive(reason);
-    stop_requested_ = true;
+    SetDue<StopRequest>(true);
   }
   spinup_since_.reset();
   if (was_paused) return;
   pause_reason_ = reason;
-  notices_.push_back("Mowing paused: " + reason.message);
+  Notify("Mowing paused: " + reason.message);
   json details = {{"state", "PAUSED"}};
   PutReason(&details, "STATE", reason);
   AddEvent("STATE", std::move(details));
-  actions_changed_ = true;
+  SetDue<ActionsChanged>(true);
   CheckpointNow();
 }
 
 void LogicCore::Unpause(int why) {
   if (pause_ == 0) return;
   pause_ &= ~why;
-  actions_changed_ = true;
+  SetDue<ActionsChanged>(true);
   if (pause_ != 0) return;
   pause_reason_ = Reason();
   // From where it stopped: the start of the path may be behind it now.
@@ -2186,11 +2215,11 @@ JobStep LogicCore::NextJobStep(double now_s) {
   if (!job_.HasPlan()) {
     std::string notice;
     if (!job_.SeekArea(&notice)) {
-      if (!notice.empty()) notices_.push_back(notice);
+      if (!notice.empty()) Notify(notice);
       EndJob(true, true);
       return step;
     }
-    if (!notice.empty()) notices_.push_back(notice);
+    if (!notice.empty()) Notify(notice);
     const JobArea* area = job_.CurrentArea();
     if (area->id != announced_area_) {
       announced_area_ = area->id;
@@ -2334,12 +2363,11 @@ void LogicCore::OnBladeRefused(const std::string& message, int emergency_reason)
 }
 
 void LogicCore::CheckpointNow() {
-  checkpoint_due_ = true;
+  SetDue<Checkpoint>(true);
 }
 
 std::optional<std::string> LogicCore::TakeCheckpoint() {
-  if (!checkpoint_due_) return std::nullopt;
-  checkpoint_due_ = false;
+  if (Extract<Checkpoint>().empty()) return std::nullopt;
   return CheckpointText(job_.progress());
 }
 

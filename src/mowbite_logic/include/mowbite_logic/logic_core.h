@@ -7,6 +7,7 @@
 #include <random>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "mowbite_api/catalog.h"
@@ -248,6 +249,37 @@ struct ReasonChange {
   int from = 0;
   int to = 0;
 };
+
+// What the core asks of the node, one type per command, in the order it came up.
+// The follower stops the drive or leg on its way; a drive ends with why.
+struct DriveCancel {
+  Reason why;
+};
+// One zero command to the wheels at once instead of waiting for the cmd_vel watchdog of the driver.
+struct StopRequest {};
+// The goal of calibration/run is canceled.
+struct CalibrationCancel {};
+// hw/charge off before the mower leaves the contacts, or on again.
+struct ChargeOff {};
+struct ChargeOn {};
+// localization/set_heading with the heading of the station, for the reference check (OnDockCheck).
+struct ReferenceCheck {
+  double heading = 0;
+};
+// The enabled flags of the actions changed.
+struct ActionsChanged {};
+// A line for the log.
+struct Notice {
+  std::string line;
+};
+// checkpoint.json with this text.
+struct Checkpoint {
+  std::string text;
+};
+// The index of a type is its number in the journal: new ones only at the end.
+using Effect = std::variant<DriveCancel, StopRequest, CalibrationCancel, ChargeOff, ChargeOn, ReferenceCheck,
+                            UndockPath, UndockOutcome, CalibrationGoal, MapEdit, Event, ReasonChange, ActionsChanged,
+                            Notice, Checkpoint>;
 
 // Bits of the reason in an EMERGENCY event, as the app reads them (EmergencyReason of OpenMower) and as
 // hw/status carries them.
@@ -660,6 +692,19 @@ class LogicCore {
   void CheckpointNow();
   // Ends a calibration drive here: CALIBRATION_FAILED unless done, CALIBRATION end, IDLE; cancel: the program too.
   void EndCalibration(const std::optional<Reason>& failure, bool cancel);
+  // The effects of one type in effects_: whether one waits; a flag added once or every one removed; the waiting one
+  // replaced; every one removed; every one removed and returned, oldest first.
+  template <typename T>
+  bool Pending() const;
+  template <typename T>
+  void SetDue(bool due);
+  template <typename T>
+  void Replace(T value);
+  template <typename T>
+  void Drop();
+  template <typename T>
+  std::vector<T> Extract();
+  void Notify(std::string line);
 
   LogicConfig config_;
   std::mt19937_64 ids_;
@@ -670,22 +715,18 @@ class LogicCore {
   int reason_ = kEmergencyTimeoutInputs;
   // OpenMower logs the first reason as a change from none.
   int logged_reason_ = 0;
-  std::vector<ReasonChange> reason_changes_;
   std::optional<PoseSnapshot> pose_;
   double last_x_ = 0;
   double last_y_ = 0;
   bool hw_seen_ = false;
   bool restart_hold_ = false;
-  bool actions_changed_ = true;
-  bool stop_requested_ = false;
   bool teleop_armed_ = false;
   bool safety_measured_ = false;
   // Until the driver says otherwise, undocking waits for charging to be off.
   bool charge_stop_ = true;
-  bool drive_cancel_ = false;
-  std::optional<Reason> cancel_reason_;
   double last_teleop_s_ = -std::numeric_limits<double>::infinity();
-  std::vector<Event> events_;
+  // What the node has not taken yet, oldest first; flags (StopRequest, ChargeOff, ...) at most once.
+  std::vector<Effect> effects_;
   AreaRecorder recorder_;
   bool map_writable_ = false;
   Reason map_reason_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
@@ -693,17 +734,16 @@ class LogicCore {
   MowingJob job_;
   Reason mow_map_problem_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
   std::optional<DockPose> dock_;
-  // The reference check on its way: what for, and whether the node has taken it yet.
+  // The reference check on its way and what for.
   DockCheck dock_check_ = DockCheck::kNone;
-  bool dock_check_due_ = false;
   // The goal of a drive from the station, for after undocking.
   double drive_x_ = 0;
   double drive_y_ = 0;
   std::vector<Ring> drivable_;
   std::vector<Ring> obstacles_;
   Reason drivable_problem_;
-  // Undocking: what for, where it started and the way it faces, what the node does next for it, and once it is
-  // stopping, whether that ends in UNDOCKING_FAILED.
+  // Undocking: what for, where it started and the way it faces, and once it is stopping, whether that ends in
+  // UNDOCKING_FAILED.
   enum class UndockStep { kChargeOff, kDrive };
   DockCheck undock_for_ = DockCheck::kNone;
   UndockStep undock_step_ = UndockStep::kChargeOff;
@@ -711,13 +751,9 @@ class LogicCore {
   double undock_y_ = 0;
   double undock_heading_ = 0;
   std::optional<Point2> undock_fix_start_;
-  bool charge_off_due_ = false;
-  bool charge_on_due_ = false;
-  std::optional<UndockPath> undock_path_due_;
   bool undock_stopping_ = false;
   std::optional<Reason> undock_failure_;
   Reason undock_stop_why_;
-  std::optional<UndockOutcome> undock_outcome_;
   // Docking: its tries, the leg due for the node and the kind of the one on its way (and of the last one), stopped at a
   // first contact, a failed try waiting for the mower to drive out, and the wait for a good position.
   DockingSequence docking_;
@@ -752,17 +788,12 @@ class LogicCore {
   HomeWatch home_;
   int home_told_ = 0;
   double last_checkpoint_s_ = 0;
-  bool checkpoint_due_ = false;
   bool blades_running_ = false;
   // The reason of StartProblem() at the last actions, empty while a start would go.
   std::string last_start_reason_ = "-";
-  std::vector<std::string> notices_;
-  // Calibration: the program's status and when it came, the goal due for the node, the cancel of the program, its last
-  // sign and the phase it reported last.
+  // Calibration: the program's status and when it came, its last sign and the phase it reported last.
   std::optional<CalibrationStatus> calibration_status_;
   double calibration_status_s_ = 0;
-  std::optional<CalibrationGoal> calibration_goal_due_;
-  bool calibration_cancel_ = false;
   double calibration_sign_s_ = 0;
   std::string calibration_phase_;
   int calibration_index_ = 0;
