@@ -11,6 +11,12 @@ namespace mowbite_light {
 
 // Longest light.preview in s.
 constexpr double kMaxPreview = 10.0;
+// The ready signal of STOP shows at most this long after held, and this long after let go while the release runs.
+constexpr double kStopReadyMaxS = 10.0;
+constexpr double kStopReleasingS = 2.0;
+
+// The STOP gesture as hw/button reports it.
+enum class StopPress { kHeld, kLong, kCanceled };
 
 struct RpcOutcome {
   bool ok = true;
@@ -46,6 +52,9 @@ class LightService {
   std::optional<RpcOutcome> Call(const std::string& method, const Json& params, double now);
 
   void SetRobotState(const std::string& current_state, bool emergency, bool is_charging, double battery);
+  // In an emergency held shows the ready signal over the emergency, long keeps it while the release runs, canceled
+  // ends it; the end of the emergency ends it too.
+  void OnStopPress(StopPress press, double now);
 
   // The colours of the chain at now (s), within max_brightness and max_current_ma.
   std::vector<Rgb> Frame(double now);
@@ -64,6 +73,8 @@ class LightService {
   bool emergency_ = false;
   bool charging_ = false;
   double battery_ = 1.0;
+  // Until when the ready signal of STOP shows.
+  std::optional<double> stop_ready_until_;
   std::optional<Effect> preview_;
   double preview_until_ = 0;
   unsigned previews_ = 0;

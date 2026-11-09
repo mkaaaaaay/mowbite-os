@@ -47,6 +47,8 @@ using Profile = std::map<std::string, Effect>;
 Profile DefaultProfile();
 // The signal of an emergency, the same on every mower and not part of a profile.
 Effect EmergencyEffect();
+// In an emergency: STOP was held long enough, letting go releases. Like the emergency, not part of a profile.
+Effect StopReadyEffect();
 
 Json ToJson(const Profile& profile);
 // Missing states keep the default; nullopt and why for an unknown state or an effect that is none.

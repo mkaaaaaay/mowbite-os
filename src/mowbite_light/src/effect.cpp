@@ -183,6 +183,10 @@ Effect EmergencyEffect() {
   return Make(EffectKind::kBlink, {kRed}, 0.5);
 }
 
+Effect StopReadyEffect() {
+  return Make(EffectKind::kSolid, {kGreen}, 1.0);
+}
+
 Json ToJson(const Profile& profile) {
   Json out = Json::object();
   for (const auto& state : ProfileStates()) {

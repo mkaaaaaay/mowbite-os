@@ -61,15 +61,28 @@ void LightService::SetRobotState(const std::string& current_state, bool emergenc
                                  double battery) {
   state_ = current_state;
   emergency_ = emergency;
+  if (!emergency) stop_ready_until_.reset();
   charging_ = is_charging;
   battery_ = battery;
 }
 
+void LightService::OnStopPress(StopPress press, double now) {
+  if (!emergency_ || press == StopPress::kCanceled) {
+    stop_ready_until_.reset();
+    return;
+  }
+  stop_ready_until_ = now + (press == StopPress::kHeld ? kStopReadyMaxS : kStopReleasingS);
+}
+
 std::vector<Rgb> LightService::Frame(double now) {
   if (preview_ && now >= preview_until_) preview_.reset();
+  if (stop_ready_until_ && now >= *stop_ready_until_) stop_ready_until_.reset();
   std::string key;
   Effect effect;
-  if (emergency_) {
+  if (emergency_ && stop_ready_until_) {
+    key = "STOP_READY";
+    effect = StopReadyEffect();
+  } else if (emergency_) {
     key = "EMERGENCY";
     effect = EmergencyEffect();
   } else if (preview_) {

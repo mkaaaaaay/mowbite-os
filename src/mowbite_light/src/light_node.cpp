@@ -2,6 +2,7 @@
 #include <chrono>
 #include <memory>
 #include <optional>
+#include <mowbite_msgs/msg/button_event.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
 #include <mowbite_msgs/msg/rpc_error.hpp>
 #include <mowbite_msgs/msg/rpc_methods.hpp>
@@ -71,6 +72,14 @@ class LightNode : public rclcpp::Node {
     state_sub_ = create_subscription<mowbite_msgs::msg::RobotState>(
         "bridge/robot_state", 10, [this](mowbite_msgs::msg::RobotState::ConstSharedPtr msg) {
           service_.SetRobotState(msg->current_state, msg->emergency, msg->is_charging, msg->battery_percentage);
+        });
+    button_sub_ = create_subscription<mowbite_msgs::msg::ButtonEvent>(
+        "hw/button", rclcpp::QoS(10).reliable(), [this](const mowbite_msgs::msg::ButtonEvent& msg) {
+          using mowbite_msgs::msg::ButtonEvent;
+          if (msg.button != ButtonEvent::BUTTON_STOP) return;
+          if (msg.press == ButtonEvent::PRESS_HELD) service_.OnStopPress(StopPress::kHeld, MonotonicSeconds());
+          if (msg.press == ButtonEvent::PRESS_LONG) service_.OnStopPress(StopPress::kLong, MonotonicSeconds());
+          if (msg.press == ButtonEvent::PRESS_CANCELED) service_.OnStopPress(StopPress::kCanceled, MonotonicSeconds());
         });
 
     mowbite_msgs::msg::RpcMethods methods;
@@ -208,6 +217,7 @@ class LightNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::RpcError>::SharedPtr error_pub_;
   rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr request_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotState>::SharedPtr state_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::ButtonEvent>::SharedPtr button_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

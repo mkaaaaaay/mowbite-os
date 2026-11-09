@@ -114,6 +114,37 @@ TEST(LightService, TheFrameFollowsTheStateAndTheEmergencyGoesOverAll) {
   EXPECT_EQ(service.Frame(11.0)[0], Render(DefaultProfile().at("CHARGING"), 10, 0)[0]);
 }
 
+// STOP held in an emergency: green over the red until canceled, the end of the emergency, or the time is up.
+TEST(LightService, TheReadySignalOfStop) {
+  const Rgb green{0, 255, 0};
+  LightService service(Config());
+  service.SetRobotState("IDLE", false, false, 0.8);
+  // Outside an emergency STOP shows nothing.
+  service.OnStopPress(StopPress::kHeld, 1.0);
+  EXPECT_NE(service.Frame(1.1)[0], green);
+  service.SetRobotState("IDLE", true, false, 0.8);
+  service.OnStopPress(StopPress::kHeld, 2.0);
+  EXPECT_EQ(service.Frame(2.1)[0], green);
+  EXPECT_EQ(service.Frame(2.4)[0], green);
+  service.OnStopPress(StopPress::kCanceled, 3.0);
+  EXPECT_EQ(service.Frame(3.0)[0], kRed);
+  // Held, then let go: green while the release runs, red again after 2 s without its end.
+  service.OnStopPress(StopPress::kHeld, 4.0);
+  service.OnStopPress(StopPress::kLong, 5.0);
+  EXPECT_EQ(service.Frame(6.9)[0], green);
+  EXPECT_EQ(service.Frame(7.0)[0], kRed);
+  // Released: the state shows.
+  service.OnStopPress(StopPress::kHeld, 8.0);
+  service.OnStopPress(StopPress::kLong, 9.0);
+  service.SetRobotState("IDLE", false, false, 0.8);
+  EXPECT_EQ(service.Frame(9.5)[0], Render(DefaultProfile().at("IDLE"), 10, 0)[0]);
+  // A held press without its end shows at most 10 s.
+  service.SetRobotState("IDLE", true, false, 0.8);
+  service.OnStopPress(StopPress::kHeld, 20.0);
+  EXPECT_EQ(service.Frame(29.9)[0], green);
+  EXPECT_EQ(service.Frame(30.0)[0], kRed);
+}
+
 TEST(LightService, APreviewHasItsLimits) {
   LightService service(Config());
   const Json blue = {{"effect", "solid"}, {"colors", {"#0000ff"}}};
