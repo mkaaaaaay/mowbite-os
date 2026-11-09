@@ -160,6 +160,14 @@ example: `tron_vision` with its start in `tron.launch.py` and its parameters in 
   (`tron_vision/test/test_vision_node.cpp`).
 - Protocol `mjpeg`: JPEG on `camera/<id>/jpeg` (`sensor_msgs/CompressedImage`, best effort, depth 1), made only while
   someone subscribes, with a rate and a size limit as platform parameters. The OS serves it to the app.
+- Protocol `webrtc`, for a smooth live picture: the process is an RTSP camera on the loopback address (H.264
+  constrained baseline, RTP over the RTSP connection, its address as `source` in `hw/cameras`), and the OS pulls from
+  it only while someone watches. The connection is the viewer signal: PLAY starts the camera, its end stops it, and
+  while the camera cannot stream DESCRIBE answers 503. The parts without ROS are in `tron_vision` (`rtsp_server`,
+  `h264_rtp`, `stereo_loop`); a hardware encoder is loaded at run time like the other vendor libraries.
+- A stream whose driver can crash the kernel does not run next to the blade: the loop ends it when the blade starts
+  or the state of the mower is unknown, and tests the camera once per boot while the mower stands. Lift that only
+  after measuring on the mower how long the blade runs without the host.
 - Vendor runtimes and models are loaded at run time from a directory on the mower and never go into the repo, a bundle
   or an image. Check the model when loading it (inputs, outputs, classes against the class list), else report it and
   do not stream.
