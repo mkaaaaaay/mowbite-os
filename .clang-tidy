@@ -1,0 +1,20 @@
+# clang-tidy of LLVM 18 (noble). Left out: checks whose findings here are style or noise (counts of 09.11. on 601425a):
+# easily-swappable-parameters 88, enum-size 55, string concatenation 25, cert-err33-c 70 (snprintf and strftime;
+# important results stay checked by bugprone-unused-return-value), cert-err58-cpp 14 (static objects of nodes),
+# Padding 5.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  cert-*,
+  -cert-err33-c,
+  -cert-err58-cpp,
+  performance-*,
+  -performance-enum-size,
+  -performance-inefficient-string-concatenation,
+  concurrency-*,
+  clang-analyzer-*,
+  -clang-analyzer-optin.performance.Padding
+WarningsAsErrors: ''
+HeaderFilterRegex: '/src/(mowbite_[a-z_]+|tron_[a-z_]+|xcore_driver)/(include|src)/'
+FormatStyle: none

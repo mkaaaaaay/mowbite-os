@@ -85,6 +85,7 @@ Then set `safety_measurement_date` in the driver parameters. Without it the mowe
 ## Check list
 
 - [ ] Driver package: protocol code with gtests, build without warnings
+- [ ] clang-tidy without findings in the package (`.clang-tidy` of the repo)
 - [ ] Fake board, contract test passes
 - [ ] Geometry file and platform file, inherited values checked
 - [ ] Start file, driver restarts latched

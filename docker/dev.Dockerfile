@@ -4,7 +4,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libpaho-mqttpp-dev libpaho-mqtt-dev nlohmann-json3-dev libasound2-dev \
       mosquitto mosquitto-clients python3-paho-mqtt \
-      git python3-shapely python3-jsonschema \
+      git python3-shapely python3-jsonschema clang-tidy \
  && rm -rf /var/lib/apt/lists/*
 
 # The MowBite Planner (own process of the stack) at a fixed commit of its branch tron, taken from a local clone:
