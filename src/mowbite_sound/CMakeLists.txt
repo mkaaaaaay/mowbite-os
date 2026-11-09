@@ -15,6 +15,7 @@ find_package(mowbite_api REQUIRED)
 find_package(mowbite_hold REQUIRED)
 find_package(mowbite_bridge REQUIRED)
 find_package(mowbite_map REQUIRED)
+find_package(mowbite_journal REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(mowbite_msgs REQUIRED)
@@ -43,7 +44,7 @@ target_link_libraries(mowbite_sound_core mowbite_sound_wav nlohmann_json::nlohma
 set_target_properties(mowbite_sound_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_sound_component SHARED src/sound_node.cpp)
-target_link_libraries(mowbite_sound_component mowbite_sound_core)
+target_link_libraries(mowbite_sound_component mowbite_sound_core mowbite_journal::mowbite_journal)
 ament_target_dependencies(mowbite_sound_component ament_index_cpp rclcpp rclcpp_components mowbite_msgs std_msgs)
 rclcpp_components_register_node(mowbite_sound_component
   PLUGIN "mowbite_sound::SoundNode"

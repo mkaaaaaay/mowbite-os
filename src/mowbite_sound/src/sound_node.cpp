@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "mowbite_bridge/json_rpc.h"
+#include "mowbite_journal/journal.h"
 #include "mowbite_sound/convert.h"
 #include "mowbite_sound/player.h"
 #include "mowbite_sound/sound_service.h"
@@ -30,8 +31,9 @@ namespace {
 
 // Longest run of the converter for one file in s.
 constexpr double kConvertTimeout = 30.0;
-// How often the executor looks whether the import is done, in s.
+// How often the executor looks whether the import or the check of an upload is done, in s.
 constexpr double kImportPoll = 0.5;
+constexpr double kUploadPoll = 0.1;
 constexpr int kLogEveryMs = 10000;
 
 rclcpp::QoS LatchedQos(size_t depth) {
@@ -65,9 +67,9 @@ struct Imported {
 }  // namespace
 
 // The sounds: announcements for the events and states of the mower, the emergency over all of them (G33: a sound ends
-// within 0.1 s of hw/status telling it, then only EMERGENCY or LIFT_TRIGGERED), and sound.list, sound.play,
-// sound.stop and sound.volume through the bridge. The vendor's MP3 are converted by mowbite_sound_convert, a process of
-// its own, once at the start. With output none, or without a sound card or a file, it offers no method and plays
+// within 0.1 s of hw/status telling it, then only EMERGENCY or LIFT_TRIGGERED), and sound.* through the bridge. The
+// vendor's MP3 are converted by mowbite_sound_convert, a process of its own, once at the start, an upload after its
+// last part in a thread of its own. With output none, or without a sound card or a file, it offers no method and plays
 // nothing.
 class SoundNode : public rclcpp::Node {
  public:
@@ -87,7 +89,7 @@ class SoundNode : public rclcpp::Node {
     import_timer_ = create_wall_timer(std::chrono::duration<double>(kImportPoll), [this] { OnImportPoll(); });
   }
 
-  // The import ends after the file it converts; imported_ waits for it.
+  // The import and the check of an upload end after the file they convert; their futures wait for them.
   ~SoundNode() override { stopping_ = true; }
 
  private:
@@ -105,6 +107,8 @@ class SoundNode : public rclcpp::Node {
     const auto codes = declare_parameter("vendor_codes", std::vector<std::string>{});
     const std::string data_dir = declare_parameter("data_dir", std::string());
     sound.dir = data_dir + "/sounds";
+    const double reserve_mb = declare_parameter("journal_reserve_mb", mowbite_journal::Options().reserve_mb);
+    sound.reserve_bytes = static_cast<int64_t>(std::max(0.0, reserve_mb) * 1e6);
     if (config.converter.empty()) {
       try {
         config.converter =
@@ -153,16 +157,23 @@ class SoundNode : public rclcpp::Node {
   Imported Import(const std::map<std::string, SoundFile>& have) {
     Imported out;
     if (config_.output == "alsa" && !ProbeAlsa(config_.device, &out.error)) return out;
-    const Convert convert = [this](const std::string& mp3, const std::string& wav, std::string* error) {
+    out.files = ImportVendor(config_.sound.dir, have, config_.vendor_codes, VendorDirs(config_.vendor_dirs),
+                             Converter(), &out.notes);
+    return out;
+  }
+
+  Convert Converter() {
+    return [this](const std::string& mp3, const std::string& wav, std::string* error) {
       if (stopping_) {
         *error = "the node stops";
-        return false;
+        return Converted::kFailed;
       }
-      return RunProgram({config_.converter, mp3, wav}, kConvertTimeout, error);
+      int code = -1;
+      if (RunProgram({config_.converter, mp3, wav}, kConvertTimeout, error, &code)) return Converted::kOk;
+      if (code == kExitNotMp3) return Converted::kNotMp3;
+      if (code == kExitTooLong) return Converted::kTooLong;
+      return Converted::kFailed;
     };
-    out.files = ImportVendor(config_.sound.dir, have, config_.vendor_codes, VendorDirs(config_.vendor_dirs), convert,
-                             &out.notes);
-    return out;
   }
 
   void OnImportPoll() {
@@ -176,11 +187,12 @@ class SoundNode : public rclcpp::Node {
     for (const auto& note : imported.notes) RCLCPP_WARN(get_logger(), "%s", note.c_str());
     const std::string problem = service_.SetFiles(std::move(imported.files));
     if (!problem.empty()) RCLCPP_ERROR(get_logger(), "Cannot keep sounds.json: %s", problem.c_str());
-    if (service_.files().empty()) {
+    if (service_.files().empty() && service_.uploads().empty()) {
       RCLCPP_ERROR(get_logger(), "No sound file: no sound.* methods, no sound");
       return;
     }
-    RCLCPP_INFO(get_logger(), "%zu sounds at volume %d", service_.files().size(), service_.volume());
+    RCLCPP_INFO(get_logger(), "%zu sounds and %zu uploads at volume %d", service_.files().size(),
+                service_.uploads().size(), service_.volume());
     Start();
   }
 
@@ -221,21 +233,42 @@ class SoundNode : public rclcpp::Node {
     if (!request.params.empty()) params = Json::parse(request.params, nullptr, false);
     std::optional<RpcOutcome> outcome =
         params.is_discarded()
-            ? RpcOutcome{false, Json(), mowbite_bridge::kInvalidParams, "The parameters are not valid JSON", Json()}
-            : service_.Call(request.method, params);
+            ? RpcOutcome{false, Json(), mowbite_bridge::kInvalidParams, "The parameters are not valid JSON", Json(),
+                         std::nullopt}
+            : service_.Call(request.method, params, MonotonicSeconds());
     if (!outcome) return;
-    if (outcome->ok) {
+    if (outcome->job) {
+      upload_id_ = request.id;
+      checked_ = std::async(std::launch::async, [job = std::move(*outcome->job), convert = Converter()] {
+        return FinishUpload(job, convert);
+      });
+      upload_timer_ = create_wall_timer(std::chrono::duration<double>(kUploadPoll), [this] { OnUploadPoll(); });
+      return;
+    }
+    Answer(request.method, request.id, *outcome);
+  }
+
+  void OnUploadPoll() {
+    if (checked_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    upload_timer_->cancel();
+    const RpcOutcome outcome = service_.CompleteUpload(checked_.get());
+    if (outcome.ok) RCLCPP_INFO(get_logger(), "Upload kept: %s", outcome.result.dump().c_str());
+    Answer("sound.upload", upload_id_, outcome);
+  }
+
+  void Answer(const std::string& method, const std::string& id, const RpcOutcome& outcome) {
+    if (outcome.ok) {
       mowbite_msgs::msg::RpcResponse response;
-      response.result = outcome->result.dump();
-      response.id = request.id;
+      response.result = outcome.result.dump();
+      response.id = id;
       response_pub_->publish(response);
     } else {
-      RCLCPP_WARN(get_logger(), "%s refused: %s", request.method.c_str(), outcome->message.c_str());
+      RCLCPP_WARN(get_logger(), "%s refused: %s", method.c_str(), outcome.message.c_str());
       mowbite_msgs::msg::RpcError error;
-      error.code = outcome->code;
-      error.message = outcome->message;
-      error.id = request.id;
-      if (!outcome->data.is_null()) error.data = outcome->data.dump();
+      error.code = outcome.code;
+      error.message = outcome.message;
+      error.id = id;
+      if (!outcome.data.is_null()) error.data = outcome.data.dump();
       error_pub_->publish(error);
     }
   }
@@ -246,8 +279,12 @@ class SoundNode : public rclcpp::Node {
   SoundService service_;
   std::atomic<bool> stopping_{false};
   std::future<Imported> imported_;
+  // The check of the upload whose last part waits for its answer.
+  std::future<UploadResult> checked_;
+  std::string upload_id_;
 
   rclcpp::TimerBase::SharedPtr import_timer_;
+  rclcpp::TimerBase::SharedPtr upload_timer_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcMethods>::SharedPtr methods_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcResponse>::SharedPtr response_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcError>::SharedPtr error_pub_;

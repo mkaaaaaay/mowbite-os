@@ -14,6 +14,7 @@
   <depend>mowbite_api</depend>
   <depend>mowbite_bridge</depend>
   <depend>mowbite_hold</depend>
+  <depend>mowbite_journal</depend>
   <depend>mowbite_map</depend>
   <depend>mowbite_msgs</depend>
   <depend>rclcpp</depend>
