@@ -180,11 +180,12 @@ def oom_score(action, oom_score_adj, logger):
 
 
 # make(restart) as a process that starts again after it ended outside the shutdown, at most `restarts` times, each time
-# after RESTART_DELAY s; before each restart `note` says how it ended. Every start gets oom_score_adj (empty: inherited).
+# after RESTART_DELAY s; before each restart `note` (None: none) says how it ended. Every start gets oom_score_adj.
 def restarting(make, note, label, logger, restarts, oom_score_adj=""):
     # A start by hand begins without restarts.
     try:
-        os.remove(note)
+        if note:
+            os.remove(note)
     except FileNotFoundError:
         pass
     except OSError as error:
@@ -204,10 +205,13 @@ def restarting(make, note, label, logger, restarts, oom_score_adj=""):
             logger.error(f"{label} ended with exit code {event.returncode} after {restarts} restarts and stays down "
                          "until the next start")
             return None
+        logger.warning(f"{label} ended with exit code {event.returncode}: started again in {RESTART_DELAY:.0f} s "
+                       f"(restart {restart + 1} of {restarts})")
         try:
-            data_store.write_json(os.path.dirname(note), os.path.basename(note),
-                                  {"exit_code": event.returncode, "restart": restart + 1, "max_restarts": restarts,
-                                   "t": time.time()})
+            if note:
+                data_store.write_json(os.path.dirname(note), os.path.basename(note),
+                                      {"exit_code": event.returncode, "restart": restart + 1, "max_restarts": restarts,
+                                       "t": time.time()})
         except OSError as error:
             logger.error(f"Cannot write {note}: {error}")
         return [TimerAction(period=RESTART_DELAY, actions=start(restart + 1))]

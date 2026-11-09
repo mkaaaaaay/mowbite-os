@@ -1,18 +1,15 @@
 # MowBite OS on the YardForce NX60i (OpenMower v2 carrier, xCore board on Ethernet): xcore_driver in a process of its
 # own, so that a crash of any other node leaves its watchdogs running (G25), the container of stack.py without
 # tron_gnss and tron_imu (the driver passes IMU and GNSS of the board on) and the MowBite Planner. A driver that ends
-# outside the shutdown starts again after DRIVER_RESTART_DELAY s, at most DRIVER_RESTARTS times, each new one latched
-# from its first frame (start_latched): a new driver would otherwise take the board without a latch (M4).
-import json
+# outside the shutdown starts again like the container (stack.restarting), at most DRIVER_RESTARTS times, each new one
+# latched from its first frame (start_latched): a new driver would otherwise take the board without a latch (M4).
 import math
 import os
 import sys
-import time
 
 import launch.logging
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, TimerAction
-from launch.event_handlers import OnProcessExit
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -23,7 +20,6 @@ import data_store  # noqa: E402
 import stack  # noqa: E402
 
 DRIVER_RESTARTS = 3
-DRIVER_RESTART_DELAY = 2.0
 # In data_dir: how the driver ended, written before it starts again.
 DRIVER_EXIT_NOTE = "driver_exit.json"
 
@@ -66,47 +62,15 @@ def launch_setup(context):
             overrides[name] = arg(name)
     if arg("announcement_port"):
         overrides["announcement_port"] = int(arg("announcement_port"))
-    note = os.path.join(data_dir, DRIVER_EXIT_NOTE) if data_dir else None
-    # A start by hand begins without restarts.
-    try:
-        if note:
-            os.remove(note)
-    except FileNotFoundError:
-        pass
-    except OSError as error:
-        logger.error(f"Cannot remove {note}: {error}")
-
     def driver(restart):
-        action = Node(package="xcore_driver", executable="xcore_driver_node", name="xcore_driver", namespace="/",
-                      parameters=[*driver_files, {**overrides, "start_latched": restart > 0}], output="screen")
-        return [RegisterEventHandler(OnProcessExit(target_action=action,
-                                                   on_exit=lambda event, context: ended(restart, event, context))),
-                action]
+        return Node(package="xcore_driver", executable="xcore_driver_node", name="xcore_driver", namespace="/",
+                    parameters=[*driver_files, {**overrides, "start_latched": restart > 0}], output="screen")
 
-    def ended(restart, event, context):
-        if context.is_shutdown:
-            return None
-        if restart >= DRIVER_RESTARTS:
-            logger.error(f"xcore_driver ended with exit code {event.returncode} after {DRIVER_RESTARTS} restarts and "
-                         "stays down until the next start: the board stops the mower without it")
-            return None
-        logger.warning(f"xcore_driver ended with exit code {event.returncode}: started again in "
-                       f"{DRIVER_RESTART_DELAY:.0f} s, latched until a release (restart {restart + 1} of "
-                       f"{DRIVER_RESTARTS})")
-        if not note:
-            return [TimerAction(period=DRIVER_RESTART_DELAY, actions=driver(restart + 1))]
-        try:
-            with open(note + ".tmp", "w") as f:
-                json.dump({"exit_code": event.returncode, "restart": restart + 1, "max_restarts": DRIVER_RESTARTS,
-                           "t": time.time()}, f)
-            os.replace(note + ".tmp", note)
-        except OSError as error:
-            logger.error(f"Cannot write {note}: {error}")
-        return [TimerAction(period=DRIVER_RESTART_DELAY, actions=driver(restart + 1))]
-
+    note = os.path.join(data_dir, DRIVER_EXIT_NOTE) if data_dir else None
     journal = stack.journal_dir(arg("journal_dir"), data_dir, logger)
     nodes = stack.components(files, arg("geometry"), data_dir, arg("mqtt_host"), arg("mqtt_port"), journal)
-    return [*driver(0), *stack.container_and_planner(nodes, data_dir, files, logger, arg("oom_score_adj"))]
+    return [*stack.restarting(driver, note, "xcore_driver", logger, DRIVER_RESTARTS),
+            *stack.container_and_planner(nodes, data_dir, files, logger, arg("oom_score_adj"))]
 
 
 def generate_launch_description():
