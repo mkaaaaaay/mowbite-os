@@ -3,7 +3,7 @@
 <package format="3">
   <name>tron_vision</name>
   <version>0.0.0</version>
-  <description>Object detection on the obstacle camera of the Airseekers Tron with its NPU, display only</description>
+  <description>Cameras of the Airseekers Tron: object detection on its NPU for display, live picture of the stereo camera</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
   <license>GPL-3.0</license>
 

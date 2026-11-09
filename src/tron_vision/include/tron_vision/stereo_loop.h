@@ -1,0 +1,209 @@
+#ifndef TRON_VISION_STEREO_LOOP_H
+#define TRON_VISION_STEREO_LOOP_H
+
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <vector>
+
+#include "tron_vision/budget.h"
+#include "tron_vision/crash_guard.h"
+#include "tron_vision/h264_encoder.h"
+#include "tron_vision/h264_rtp.h"
+#include "tron_vision/rtsp_server.h"
+#include "tron_vision/v4l2_camera.h"
+
+namespace tron_vision {
+
+// A camera whose frames come with their dma-buf.
+class FrameSource {
+ public:
+  virtual ~FrameSource() = default;
+  // Opens the video node and asks for its buffers; nothing streams yet.
+  virtual bool Open(std::string& error) = 0;
+  // The STREAMON of the node.
+  virtual bool Start(std::string& error) = 0;
+  // The STREAMOFF of the node; its buffers stay.
+  virtual void Stop() = 0;
+  // Stops, frees the buffers and closes the node.
+  virtual void Close() = 0;
+  // As V4l2Capture::Next.
+  virtual int Next(int timeout_ms, CapturedFrame& frame, std::string& error) = 0;
+};
+
+struct StereoConfig {
+  std::string camera_id = "stereo";
+  // Result of the camera setup at boot; only the line "configured" lets the camera stream.
+  std::string setup_file = "/run/mowbite/stereo";
+  // How long after the start of the process a missing result counts as not there yet.
+  double setup_wait_s = 120.0;
+  // Where the result of the self-test of this boot is kept, next to the markers of the crash guard.
+  std::string marker_dir = "/var/lib/mowbite-vision";
+  std::string boot_id_file = "/proc/sys/kernel/random/boot_id";
+  // The self-test passes with this many full frames within this time.
+  int selftest_frames = 10;
+  double selftest_s = 2.0;
+  double first_frame_s = 2.0;
+  // A longer gap between two frames ends the stream for this boot.
+  double frame_gap_s = 1.0;
+  // False: no stream while the blade runs or while the state of the mower is unknown.
+  bool stream_while_mowing = false;
+  // hw/status older than this counts as unknown.
+  double mower_status_max_age_s = 1.0;
+  EncoderSettings encoder;
+  // An encode that takes longer counts as a failure of the encoder.
+  double slow_encode_s = 0.5;
+  // Failures of the encoder, and of opening the camera, before the camera gives up until the process restarts.
+  int max_attempts = 3;
+  double retry_s = 5.0;
+  double pause_at_c = 80.0;
+  double resume_below_c = 75.0;
+  // Empty: no temperature check.
+  std::string temp_file;
+  size_t max_rss_bytes = 150UL * 1024 * 1024;
+  std::string statm = "/proc/self/statm";
+  double check_s = 5.0;
+  // Wait for a viewer per step while nothing streams.
+  int idle_wait_ms = 200;
+};
+
+enum class StereoState {
+  kOff,
+  kWaitingSetup,
+  kNotConfigured,
+  kLocked,
+  kWaitingIdle,
+  kSelftest,
+  kReady,
+  kStreaming,
+  kPausedBlade,
+  kPausedHot,
+  kNoFrames,
+  kStalled,
+  kEncoderMissing,
+  kEncoderError,
+  kFailed,
+};
+
+const char* StateName(StereoState state);
+
+struct StereoStatus {
+  StereoState state = StereoState::kOff;
+  std::string detail;
+  // Frame rate of the camera as measured in the self-test.
+  double camera_fps = 0.0;
+  // Of the running stream, over the last second.
+  double fps = 0.0;
+  double kbps = 0.0;
+  double encode_ms = 0.0;
+  // Since the start of the process: frames sent, and frames the driver dropped during a stream.
+  uint64_t frames = 0;
+  uint64_t lost = 0;
+  int exit_code = kExitNone;
+};
+
+// Live picture of the stereo camera without ROS: the left eye as H.264 for one RTSP client, which is the viewer
+// signal. The camera streams only after one self-test per boot, taken while the mower stands with the blade off; a
+// stream without frames or with a gap ends streaming for that boot. One thread calls Step() in a loop; it blocks at
+// most until the next frame deadline or the idle wait and returns false once the process has to end.
+class StereoLoop {
+ public:
+  StereoLoop(StereoConfig config, FrameSource& camera, H264Encoder& encoder, RtspServer& server, CrashGuard& guard,
+             std::function<double()> now);
+  ~StereoLoop();
+  StereoLoop(const StereoLoop&) = delete;
+  StereoLoop& operator=(const StereoLoop&) = delete;
+
+  // The mower as last seen on hw/status.
+  void SetMowerStatus(bool blade_on, bool moving);
+  bool Step();
+  void Shutdown();
+
+  const StereoStatus& Status() const {
+    return status_;
+  }
+
+ private:
+  enum class Phase {
+    kInit,
+    kSetup,
+    kMarkers,
+    kSelftestWait,
+    kSelftest,
+    kPrepare,
+    kIdle,
+    kStream,
+    kEnd,
+  };
+  enum class Gate {
+    kOpen,
+    kBlade,
+    kUnknown,
+    kHot,
+  };
+
+  void Set(StereoState state, const std::string& detail);
+  // Ends in a state that holds until the process restarts.
+  void End(StereoState state, const std::string& detail);
+  // Whether a stream may run now; `for_selftest` also asks for a mower that stands.
+  Gate CheckGate(double now, bool for_selftest, std::string& why) const;
+  void Pause(Gate gate, const std::string& why);
+  bool CheckBudget(double now);
+  void CheckSetup(double now);
+  void CheckMarkers();
+  void StartSelftest(double now);
+  void StepSelftest(double now);
+  void Prepare(double now);
+  void StepIdle(double now);
+  void StartStream(double now);
+  void StepStream(double now);
+  bool SendFrame(const CapturedFrame& frame);
+  void StopStream();
+  // Notes that the camera gave no picture, which holds for this boot.
+  void FailForThisBoot(StereoState state, const std::string& detail);
+  // Counts a failure that may pass; true once it has happened too often.
+  bool CountFailure(int& count, double now);
+  std::string Marker(const char* kind) const;
+
+  StereoConfig config_;
+  FrameSource& camera_;
+  H264Encoder& encoder_;
+  RtspServer& server_;
+  CrashGuard& guard_;
+  std::function<double()> now_;
+  ThermalGate thermal_;
+  StereoStatus status_;
+  Phase phase_ = Phase::kInit;
+  double started_;
+  bool streaming_ = false;
+  bool hot_ = false;
+  bool mower_known_ = false;
+  bool blade_on_ = false;
+  bool moving_ = false;
+  double mower_at_ = 0.0;
+  double next_check_ = 0.0;
+  double next_retry_ = 0.0;
+  int camera_failures_ = 0;
+  int encoder_failures_ = 0;
+  // Self-test and stream.
+  double stream_start_ = 0.0;
+  double last_frame_ = -1.0;
+  int test_frames_ = 0;
+  int64_t test_first_us_ = 0;
+  int64_t test_last_us_ = 0;
+  bool have_sequence_ = false;
+  uint32_t last_sequence_ = 0;
+  ParameterSets sets_;
+  RtpPacketizer packetizer_;
+  RtpClock clock_;
+  std::vector<std::vector<uint8_t>> packets_;
+  // Sums of the running second for fps and kbps.
+  double window_start_ = 0.0;
+  int window_frames_ = 0;
+  size_t window_bytes_ = 0;
+};
+
+}  // namespace tron_vision
+
+#endif  // TRON_VISION_STEREO_LOOP_H
