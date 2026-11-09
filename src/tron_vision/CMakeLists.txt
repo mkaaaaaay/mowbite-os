@@ -8,6 +8,9 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 add_compile_options(-ffp-contract=off)
 
 find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(mowbite_msgs REQUIRED)
+find_package(tron_mcu REQUIRED)
 
 # Camera, exposure, NPU model and detection decoding without ROS. The NPU runtime is loaded at run time, never linked.
 add_library(tron_vision_core STATIC src/npu_model.cpp src/model_check.cpp src/yolo_decode.cpp src/frame_convert.cpp
@@ -17,6 +20,14 @@ target_include_directories(tron_vision_core PUBLIC
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(tron_vision_core ${CMAKE_DL_LIBS})
 set_target_properties(tron_vision_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# The node, a process of its own outside the container: a crash of the NPU runtime takes nothing else along.
+add_library(tron_vision_node_lib STATIC src/vision_node.cpp)
+target_link_libraries(tron_vision_node_lib tron_vision_core tron_mcu::tron_mcu_core)
+ament_target_dependencies(tron_vision_node_lib rclcpp mowbite_msgs)
+add_executable(tron_vision_node src/vision_node_main.cpp)
+target_link_libraries(tron_vision_node tron_vision_node_lib)
+install(TARGETS tron_vision_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY include/ DESTINATION include)
 install(TARGETS tron_vision_core
@@ -36,6 +47,8 @@ if(BUILD_TESTING)
   target_link_libraries(tron_vision_test tron_vision_core)
   target_compile_definitions(tron_vision_test PRIVATE FAKE_NPU_LIB="$<TARGET_FILE:tron_vision_fake_npu>")
   add_dependencies(tron_vision_test tron_vision_fake_npu)
+  ament_add_gtest(tron_vision_node_test test/test_vision_node.cpp)
+  target_link_libraries(tron_vision_node_test tron_vision_node_lib)
 endif()
 
 ament_export_targets(export_tron_vision HAS_LIBRARY_TARGET)

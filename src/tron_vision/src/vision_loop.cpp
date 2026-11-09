@@ -68,7 +68,7 @@ bool VisionLoop::Load() {
   loaded_ = false;
   for (const std::string* path : {&config_.library_path, &config_.model_path, &config_.labels_path}) {
     if (!Exists(*path)) {
-      Set(VisionState::kModelMissing, *path + " missing");
+      Set(VisionState::kModelMissing, path->empty() ? "path not set" : *path + " missing");
       return false;
     }
   }
@@ -249,6 +249,9 @@ bool VisionLoop::Infer(const Nv12View& frame, double now) {
   }
   if (detections_.size() > kLastShown) text += " (+" + std::to_string(detections_.size() - kLastShown) + ")";
   status_.last = text.empty() ? "none" : text;
+  status_.inferences++;
+  status_.frame_width = frame.width;
+  status_.frame_height = frame.height;
   if (last_infer_ >= 0.0 && start > last_infer_) {
     const double rate = 1.0 / (start - last_infer_);
     status_.rate = status_.rate == 0.0 ? rate : status_.rate + 0.3 * (rate - status_.rate);

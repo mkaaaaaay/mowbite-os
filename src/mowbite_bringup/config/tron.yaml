@@ -324,6 +324,22 @@ mowbite_sound:
       - EMERGENCY=900017
       - LIFT_TRIGGERED=900018
 
+tron_vision:
+  ros__parameters:
+    # The vendor's NPU runtime, model and class list, copied by hand from its update; never in repo, bundle or image.
+    library_path: /userdata/mowbite-vision/librknnrt.so
+    model_path: /userdata/mowbite-vision/model.rknn
+    labels_path: /userdata/mowbite-vision/labels.txt
+    # Inferences per second (0.5 to 5).
+    infer_rate: 2.0
+    # crop: the middle 3:4 of the frame fills the upright model input; pad: the whole frame with gray bars.
+    fit: crop
+    # Gray world white balance also for the inference, not only for the shown image.
+    white_balance_inference: false
+    # Vertical blanking of the sensor in lines; 0 leaves its 30 fps.
+    vertical_blanking: 0
+    # score_threshold, max_rss_mb and crash_dir: the defaults of the node.
+
 mowbite_bridge:
   ros__parameters:
     mqtt_host: 127.0.0.1

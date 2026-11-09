@@ -58,6 +58,22 @@ TEST(TronCamera, StartRefusesWithoutTheSensorOrWithAnotherNode) {
   EXPECT_NE(error.find("not rkisp_mainpath"), std::string::npos) << error;
 }
 
+TEST(TronCamera, StartRefusesADeviceOpenElsewhere) {
+  Sysfs s;
+  TronCameraConfig c;
+  c.sysfs = s.tmp.Path();
+  std::vector<std::string> asked;
+  c.processes_using = [&asked](const std::string& device) {
+    asked.push_back(device);
+    return device == "/dev/video53" ? std::vector<int>{4711} : std::vector<int>{};
+  };
+  TronCamera camera(c);
+  std::string error;
+  EXPECT_FALSE(camera.Start(error));
+  EXPECT_EQ(error, "/dev/video53 is open in process 4711");
+  EXPECT_EQ(asked, (std::vector<std::string>{"/dev/v4l-subdev13", "/dev/video53"}));
+}
+
 TEST(TronCamera, ExposureBeforeStartIsKept) {
   TronCamera camera{TronCameraConfig{}};
   std::string error;

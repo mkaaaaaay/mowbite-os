@@ -138,6 +138,11 @@ TEST(VisionLoop, MissingFilesAndBrokenModel) {
   EXPECT_EQ(missing.Loop().Status().state, VisionState::kModelMissing);
   EXPECT_NE(missing.Loop().Status().detail.find("none.rknn"), std::string::npos);
 
+  Rig unset(kPersonModel);
+  unset.config.library_path.clear();
+  EXPECT_FALSE(unset.Loop().Load());
+  EXPECT_EQ(unset.Loop().Status().detail, "path not set");
+
   Rig broken("fail_init\n");
   EXPECT_FALSE(broken.Loop().Load());
   EXPECT_EQ(broken.Loop().Status().state, VisionState::kModelError);
@@ -155,6 +160,10 @@ TEST(VisionLoop, DetectsAndReports) {
   EXPECT_EQ(rig.camera.starts, 1);
   EXPECT_EQ(st.last, "person 0.80");
   EXPECT_NEAR(st.rate, 2.0, 0.3);
+  // The clock of the rig also runs in real time, so a slow build sees more.
+  EXPECT_GE(st.inferences, 9U);
+  EXPECT_EQ(st.frame_width, kWidth);
+  EXPECT_EQ(st.frame_height, kHeight);
   ASSERT_EQ(rig.Loop().Detections().size(), 1U);
   const Detection& d = rig.Loop().Detections()[0];
   // Cell (30,40) of stride 8 with 2 cells each side: model x 228..260, y 308..340; crop of 320x180 is 135x180 at 92.5.
@@ -172,8 +181,14 @@ TEST(VisionLoop, InferenceRateIsBounded) {
   Rig rig(kPersonModel);
   rig.config.infer_rate = 50.0;
   ASSERT_TRUE(rig.Loop().Load());
+  const auto began = std::chrono::steady_clock::now();
   rig.Run(5.0);
-  EXPECT_NEAR(rig.Loop().Status().rate, 5.0, 0.6);
+  // A late frame lets the next inference come sooner, so single intervals vary; the count holds. The clock of the rig
+  // also runs in real time.
+  const double seconds = 5.0 + std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+  const auto count = static_cast<double>(rig.Loop().Status().inferences);
+  EXPECT_LE(count, 5.0 * seconds + 2.0);
+  EXPECT_GE(count, 4.0 * 5.0);
 }
 
 TEST(VisionLoop, NoFramesStopsAfterThreeAttempts) {

@@ -2,8 +2,10 @@
 #define TRON_VISION_TRON_CAMERA_H
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "tron_vision/v4l2_camera.h"
 #include "tron_vision/vision_loop.h"
@@ -23,6 +25,8 @@ struct TronCameraConfig {
   uint32_t buffers = 4;
   // Vertical blanking in lines while streaming; 0 leaves the sensor as it is.
   int vertical_blanking = 0;
+  // Other processes that have a device open; Start refuses sensor and video node while one does. Empty: no check.
+  std::function<std::vector<int>(const std::string&)> processes_using;
 };
 
 class TronCamera : public Camera {

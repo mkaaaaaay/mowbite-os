@@ -87,6 +87,10 @@ struct VisionStatus {
   std::string last;
   double rate = 0.0;
   double infer_ms = 0.0;
+  // Inferences since the start, and the size of the frame of the last one.
+  uint64_t inferences = 0;
+  uint32_t frame_width = 0;
+  uint32_t frame_height = 0;
   ExposureSetting exposure;
   ColorGains display_gains;
   int exit_code = kExitNone;

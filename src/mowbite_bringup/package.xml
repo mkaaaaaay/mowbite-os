@@ -15,6 +15,7 @@
   <exec_depend>tron_mcu</exec_depend>
   <exec_depend>tron_gnss</exec_depend>
   <exec_depend>tron_imu</exec_depend>
+  <exec_depend>tron_vision</exec_depend>
   <exec_depend>mowbite_localization</exec_depend>
   <exec_depend>mowbite_logic</exec_depend>
   <exec_depend>mowbite_bridge</exec_depend>

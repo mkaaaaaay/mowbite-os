@@ -115,6 +115,30 @@ the emergency signal is fixed. Load it as a component of the container only when
   `platform/tron/rootfs/files/usr/lib/udev/rules.d/60-mowbite-spidev.rules`, in Docker the device passed in.
 - On the mower: `output: spidev` in the file of that mower, then one `light.preview`.
 
+## 8. Cameras (optional)
+
+Object detection on a camera of the mower, for display only. The Tron has `tron_vision` (obstacle camera, NPU); there
+is no common camera package yet.
+
+- A process of its own, never a component of the container: a crash of a vendor library takes nothing else along.
+  Start it from the start file with `stack.own_process` only when the drivers run and a switch says so (Tron:
+  `hardware:=true` and `MOWBITE_VISION=on` in `/etc/mowbite/os.conf`). It restarts at most three times and leaves
+  `<name>_exit.json`; give it `oom_score_adj` 1000, a `nice` value and CPUs apart from the driver.
+- It reports and nothing else: sensors over `bridge/sensor_info` and `bridge/sensor_value` (Tron: `vision_state`
+  and `vision_last` as text, `vision_rate` in 1/s), detections on `vision/detections` (`mowbite_msgs/Detections`, boxes
+  in pixels of the camera image). It subscribes to nothing; a test checks its list of publishers
+  (`tron_vision/test/test_vision_node.cpp`).
+- Vendor runtimes and models are loaded at run time from a directory on the mower (Tron `/userdata/mowbite-vision/`)
+  and never go into the repo, a bundle or an image. Check the model when loading it (inputs, outputs, classes against
+  the class list), else report it and do not stream.
+- Before opening a camera: no other process holds it. A camera whose driver can crash the kernel gets a lock: a marker
+  before the stream starts; found after a kernel crash, the camera stays off until the lock file is deleted.
+- Without memory cgroups the process holds its own limits: resident memory, inferences per second, a pause when the
+  SoC is hot, a deadline for frames, a few stream attempts per start. Measure them on the mower before it runs for
+  long.
+- The service user needs the devices: on a native rootfs groups like `video` and `render`
+  (`platform/tron/rootfs/files/usr/lib/sysusers.d/mowbite.conf`), in Docker the devices passed in.
+
 ## Check list
 
 - [ ] Driver package: protocol code with gtests, build without warnings
@@ -126,4 +150,5 @@ the emergency signal is fixed. Load it as a component of the container only when
 - [ ] Way onto the mower chosen, limits for logs and journal
 - [ ] Safety measurement done, date set
 - [ ] Lights, if any: device rights, `output` on only after a look on the mower
+- [ ] Cameras, if any: own process, publisher list tested, vendor files only on the mower, limits measured
 - [ ] First drive watched: blade off, RTK fix, at most 0.3 m/s

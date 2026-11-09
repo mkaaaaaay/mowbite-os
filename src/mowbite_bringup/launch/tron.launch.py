@@ -1,13 +1,13 @@
-# All nodes of MowBite OS in one process (one ROS context, one DDS participant) except two: tron_mcu, so that a crash of
-# any other node leaves its watchdogs running (G25), and the MowBite Planner (Python, shapely). The part every platform
-# shares is in stack.py.
+# All nodes of MowBite OS in one process (one ROS context, one DDS participant) except three: tron_mcu, so that a crash
+# of any other node leaves its watchdogs running (G25), the MowBite Planner (Python, shapely) and the camera AI. The
+# part every platform shares is in stack.py.
 import os
 import sys
 
 import launch.logging
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
@@ -74,7 +74,22 @@ def launch_setup(context):
     if hardware == "read":
         logger.warning("hardware:=read: tron_mcu and tron_imu only listen, nothing moves; tron_gnss does not start")
         return [mcu, *stack.container_and_planner([imu, *nodes], data_dir, files, logger, oom)]
-    return [mcu, *stack.container_and_planner([gnss, imu, *nodes, light, sound], data_dir, files, logger, oom)]
+    return [mcu, *vision(files, data_dir, arg("vision"), logger),
+            *stack.container_and_planner([gnss, imu, *nodes, light, sound], data_dir, files, logger, oom)]
+
+
+# The camera AI (tron_vision) with vision:=on: a process of its own, so that a crash of the NPU runtime takes nothing
+# along. It only reports; the kernel ends it first when memory runs out, and it keeps CPU 4-7 free.
+def vision(files, data_dir, switch, logger):
+    if switch != "on":
+        # Another value in os.conf must not stop the stack.
+        if switch != "off":
+            logger.warning(f"vision:={switch} is neither on nor off: no camera AI")
+        return []
+    return stack.own_process(
+        lambda prefix: Node(package="tron_vision", executable="tron_vision_node", name="tron_vision", namespace="/",
+                            parameters=[*files], output="screen", prefix=prefix),
+        "vision", data_dir, logger, oom_score_adj=1000, nice=10, cpus="0-3")
 
 
 def generate_launch_description():
@@ -96,6 +111,8 @@ def generate_launch_description():
         DeclareLaunchArgument("datum_height", default_value="0.0"),
         # Without it nothing is kept; with it, it is prepared for the data schema of the image before any node starts.
         DeclareLaunchArgument("data_dir", default_value="/userdata/mowbite"),
+        # on: the camera AI starts as well, only with hardware:=true; MOWBITE_VISION in /etc/mowbite/os.conf.
+        DeclareLaunchArgument("vision", default_value=EnvironmentVariable("MOWBITE_VISION", default_value="off")),
         *stack.arguments(),
         OpaqueFunction(function=launch_setup),
     ])
