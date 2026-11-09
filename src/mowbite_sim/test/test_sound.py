@@ -1,9 +1,11 @@
 """The sounds of MowBite OS behind the app interface: mowbite_sound with its file output and mowbite_bridge on a private
 mosquitto. The test plays the app (MQTT), the driver (hw/status) and the logic (bridge/robot_state, events/json), and
-reads the start and end of every sound from the file.
+reads the start and end of every sound from the file. Uploads go through the real converter.
 
 Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite_sim/test/test_sound.py
 """
+import base64
+import hashlib
 import json
 import os
 import shutil
@@ -35,9 +37,8 @@ LIFT = 1 << 3
 def generate_test_description():
     os.makedirs(DATA_DIR)
     os.makedirs(os.path.join(VENDOR, "v1.3.32"))
-    tone = os.path.join(FindPackageShare("mowbite_sound").find("mowbite_sound"), "test_data", "tone.mp3")
     for code in CODES.values():
-        shutil.copy(tone, os.path.join(VENDOR, "v1.3.32", f"{code}.mp3"))
+        shutil.copy(tone_path(), os.path.join(VENDOR, "v1.3.32", f"{code}.mp3"))
     with open(os.path.join(WORK, "mosquitto.conf"), "w") as f:
         f.write(f"listener {MQTT_PORT} 127.0.0.1\nallow_anonymous true\n")
     mosquitto = ExecuteProcess(cmd=["mosquitto", "-c", os.path.join(WORK, "mosquitto.conf")], output="screen")
@@ -47,6 +48,10 @@ def generate_test_description():
         mosquitto,
         TimerAction(period=1.0, actions=[bridge, launch_testing.actions.ReadyToTest()]),
     ]), {}
+
+
+def tone_path():
+    return os.path.join(FindPackageShare("mowbite_sound").find("mowbite_sound"), "test_data", "tone.mp3")
 
 
 def sound_node_path():
@@ -171,7 +176,7 @@ class TestSound(unittest.TestCase):
                 methods = answer["result"]
             time.sleep(0.2)
         self.assertIsNotNone(methods, "sound.list never registered")
-        for method in ("sound.play", "sound.stop", "sound.volume"):
+        for method in ("sound.play", "sound.stop", "sound.volume", "sound.upload", "sound.delete"):
             self.assertIn(method, methods)
         listed = self.rpc("sound.list")["result"]
         self.assertEqual(len(listed["situations"]), 12)
@@ -228,3 +233,46 @@ class TestSound(unittest.TestCase):
         self.publish_status()
         with open(os.path.join(DATA_DIR, "sounds", "sounds.json")) as f:
             self.assertEqual(json.load(f)["volume"], 0)
+
+    def upload(self, situation, data, parts=2):
+        """All parts of data, the answer to the last one."""
+        size = -(-len(data) // parts)
+        sha256 = hashlib.sha256(data).hexdigest()
+        for part in range(parts):
+            answer = self.rpc("sound.upload", {"situation": situation, "part": part, "parts": parts, "sha256": sha256,
+                                               "data": base64.b64encode(data[part * size:(part + 1) * size]).decode()},
+                              timeout=40.0)
+            if part + 1 < parts:
+                self.assertEqual(answer.get("result"), {"received": part}, answer)
+        return answer
+
+    def test_5_an_upload_plays_until_it_is_deleted(self):
+        self.assertEqual(self.rpc("sound.volume", {"volume": 60})["result"], {"volume": 60})
+        with open(tone_path(), "rb") as f:
+            tone = f.read()
+        sha256 = hashlib.sha256(tone).hexdigest()
+        answer = self.upload("RAIN_DETECTED", tone)
+        self.assertEqual(answer["result"]["situation"], "RAIN_DETECTED")
+        self.assertEqual(answer["result"]["source"], "upload")
+        self.assertEqual(answer["result"]["sha256"], sha256)
+        self.assertAlmostEqual(answer["result"]["duration_s"], 1.0, delta=0.15)
+        rows = {row["name"]: row["file"] for row in self.rpc("sound.list")["result"]["situations"]}
+        self.assertEqual(rows["RAIN_DETECTED"]["source"], "upload")
+        self.assertEqual(rows["RAIN_DETECTED"]["size"], len(tone))
+
+        before = len(self.played())
+        self.publish_event("DOCKING", reason="RAIN")
+        self.wait_line(lambda l: l == {"event": "start", "situation": "RAIN_DETECTED", "gain": 0.36, "rate": 24000},
+                       after=before)
+
+        # A file that is no MP3 leaves the sound before alone.
+        refused = self.upload("RAIN_DETECTED", b"no mp3 at all" * 100)
+        self.assertEqual(refused["error"]["code"], -32600)
+        self.assertEqual(refused["error"]["data"]["reason"], "NOT_MP3")
+        rows = {row["name"]: row["file"] for row in self.rpc("sound.list")["result"]["situations"]}
+        self.assertEqual(rows["RAIN_DETECTED"]["sha256"], sha256)
+
+        deleted = self.rpc("sound.delete", {"situation": "RAIN_DETECTED"})["result"]
+        self.assertEqual(deleted, {"situation": "RAIN_DETECTED", "source": None, "file": None})
+        self.assertEqual(self.rpc("sound.play", {"situation": "RAIN_DETECTED"})["error"]["data"]["reason"], "NO_FILE")
+        self.assertEqual(os.listdir(os.path.join(DATA_DIR, "sounds", "upload")), [])
