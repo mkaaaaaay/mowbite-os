@@ -76,12 +76,6 @@ enum class VisionState {
 
 const char* StateName(VisionState state);
 
-enum ExitCode : int {
-  kExitNone = 0,
-  kExitMemory = 3,
-  kExitSlowNpu = 4,
-};
-
 struct VisionStatus {
   VisionState state = VisionState::kOff;
   std::string detail;

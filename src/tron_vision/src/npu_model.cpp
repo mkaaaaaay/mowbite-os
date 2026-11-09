@@ -6,6 +6,8 @@
 #include <fstream>
 #include <iterator>
 
+#include "tron_vision/dynamic_library.h"
+
 namespace tron_vision {
 
 namespace {
@@ -47,16 +49,6 @@ TensorInfo ToInfo(const abi::TensorAttr& attr) {
   return info;
 }
 
-template <typename Fn>
-bool Symbol(void* library, const char* name, Fn& fn, std::string& error) {
-  fn = reinterpret_cast<Fn>(dlsym(library, name));
-  if (fn == nullptr) {
-    error = std::string("symbol ") + name + " missing";
-    return false;
-  }
-  return true;
-}
-
 }  // namespace
 
 NpuModel::~NpuModel() {
@@ -74,12 +66,8 @@ bool NpuModel::Resolve(std::string& error) {
 
 bool NpuModel::Open(const std::string& library_path, const std::string& model_path, std::string& error) {
   Close();
-  library_ = dlopen(library_path.c_str(), RTLD_NOW | RTLD_LOCAL);
-  if (library_ == nullptr) {
-    const char* e = dlerror();  // NOLINT(concurrency-mt-unsafe): models are loaded on one thread
-    error = "cannot load " + library_path + (e != nullptr ? std::string(": ") + e : std::string());
-    return false;
-  }
+  library_ = OpenLibrary(library_path, error);
+  if (library_ == nullptr) return false;
   if (!Resolve(error)) {
     Close();
     return false;

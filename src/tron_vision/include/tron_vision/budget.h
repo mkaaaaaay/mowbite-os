@@ -7,6 +7,13 @@
 
 namespace tron_vision {
 
+// Why a camera process ends on its own.
+enum ExitCode : int {
+  kExitNone = 0,
+  kExitMemory = 3,
+  kExitSlowNpu = 4,
+};
+
 // Resident memory of the process from statm, 0 if unreadable.
 size_t ResidentBytes(const std::string& statm = "/proc/self/statm");
 
