@@ -55,6 +55,14 @@ std::string SessionText(const SessionRecord& record) {
          "\n";
 }
 
+bool HoldsOnRestart(const SessionRecord& record) {
+  return !record.clean && record.state != kIdle;
+}
+
+bool MustWaitForSession(const std::optional<SessionRecord>& before, const SessionRecord& next) {
+  return HoldsOnRestart(next) && !(before && HoldsOnRestart(*before));
+}
+
 std::string SessionState(const std::string& state, const std::string& sub_state) {
   return state == kIdle && !sub_state.empty() ? sub_state : state;
 }
@@ -93,7 +101,7 @@ Verdict JudgeStart(const SessionFile& session, const std::string& boot_id, const
     if (session.record->clean) return verdict;
     verdict.cause = Cause::kOsCrash;
     verdict.detail = "MowBite OS ended in this boot without its own stop (crash, killed, out of memory)";
-    verdict.hold = verdict.state_before != kIdle;
+    verdict.hold = HoldsOnRestart(*session.record);
     return verdict;
   }
   if (kernel) {
@@ -118,7 +126,7 @@ Verdict JudgeStart(const SessionFile& session, const std::string& boot_id, const
     return verdict;
   }
   verdict.detail = "The mower started again while MowBite OS ran: power cut, hard reset, power key held or a hang";
-  verdict.hold = verdict.state_before != kIdle;
+  verdict.hold = HoldsOnRestart(*session.record);
   return verdict;
 }
 

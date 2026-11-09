@@ -98,6 +98,39 @@ TEST(JudgeStart, DetailIsClipped) {
   EXPECT_EQ(v.detail.size(), 200u);
 }
 
+// The logic waits exactly when the new record would hold after a crash and the one before it would not.
+TEST(MustWaitForSession, OnlyWhenTheHoldBegins) {
+  const auto record = [](const std::string& state, bool clean) {
+    return SessionRecord{state, "", kBoot, 1800000000, clean};
+  };
+  // What a start in another boot (POWER_LOSS) would say about the record.
+  const auto holds = [](const SessionRecord& r) {
+    SessionFile file;
+    file.present = true;
+    file.record = r;
+    return JudgeStart(file, kOtherBoot, std::nullopt).hold;
+  };
+  for (const auto& next_state : kStates) {
+    for (const bool next_clean : {false, true}) {
+      const SessionRecord next = record(next_state, next_clean);
+      EXPECT_EQ(HoldsOnRestart(next), holds(next)) << next_state << next_clean;
+      EXPECT_EQ(MustWaitForSession(std::nullopt, next), holds(next)) << next_state << next_clean;
+      for (const auto& before_state : kStates) {
+        for (const bool before_clean : {false, true}) {
+          const SessionRecord before = record(before_state, before_clean);
+          EXPECT_EQ(MustWaitForSession(before, next), holds(next) && !holds(before))
+              << before_state << before_clean << " -> " << next_state << next_clean;
+        }
+      }
+    }
+  }
+  EXPECT_TRUE(MustWaitForSession(record("IDLE", false), record("MOWING", false)));
+  EXPECT_TRUE(MustWaitForSession(record("IDLE", false), record("DRIVING", false)));
+  EXPECT_FALSE(MustWaitForSession(record("MOWING", false), record("PAUSED", false)));
+  EXPECT_FALSE(MustWaitForSession(record("MOWING", false), record("IDLE", false)));
+  EXPECT_FALSE(MustWaitForSession(record("MOWING", false), record("MOWING", true)));
+}
+
 TEST(SessionState, IdleTakesItsDrive) {
   EXPECT_EQ(SessionState("IDLE", ""), "IDLE");
   EXPECT_EQ(SessionState("IDLE", "DRIVING"), "DRIVING");
