@@ -165,25 +165,24 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal):
     return [localization, safety, logic, bridge, map_node, follower, ntrip, calibration]
 
 
-# The container with these components, started again after a crash, and the planner. The driver of the platform runs
-# beside them in a process of its own and keeps motion and blade blocked until a release; the logic comes back idle.
-def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
-    note = os.path.join(data_dir, EXIT_NOTE)
+# On every start of action its oom_score_adj; raising it needs no privilege. Empty: inherited.
+def oom_score(action, oom_score_adj, logger):
+    if not oom_score_adj:
+        return []
+    value = str(int(oom_score_adj))
 
-    # On every start of action its oom_score_adj; raising it needs no privilege.
-    def oom_score(action):
-        if not oom_score_adj:
-            return []
-        value = str(int(oom_score_adj))
+    def started(event, context):
+        try:
+            with open(f"/proc/{event.pid}/oom_score_adj", "w") as f:
+                f.write(value)
+        except OSError as error:
+            logger.error(f"Cannot set oom_score_adj of {event.process_name}: {error}")
+    return [RegisterEventHandler(OnProcessStart(target_action=action, on_start=started))]
 
-        def started(event, context):
-            try:
-                with open(f"/proc/{event.pid}/oom_score_adj", "w") as f:
-                    f.write(value)
-            except OSError as error:
-                logger.error(f"Cannot set oom_score_adj of {event.process_name}: {error}")
-        return [RegisterEventHandler(OnProcessStart(target_action=action, on_start=started))]
 
+# make(restart) as a process that starts again after it ended outside the shutdown, at most `restarts` times, each time
+# after RESTART_DELAY s; before each restart `note` says how it ended. on_start(action) adds handlers to every start.
+def restarting(make, note, label, logger, restarts, on_start):
     # A start by hand begins without restarts.
     try:
         os.remove(note)
@@ -192,36 +191,59 @@ def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
     except OSError as error:
         logger.error(f"Cannot remove {note}: {error}")
 
-    # Every restart is a new container with a name of its own: DDS knows the load service of a crashed one for a while,
-    # and launch_ros would wait for its answer for ever.
-    def container(restart):
-        action = ComposableNodeContainer(
-            name="mowbite" if restart == 0 else f"mowbite_{restart}", namespace="", package="rclcpp_components",
-            executable="component_container", composable_node_descriptions=nodes, output="screen")
+    def start(restart):
+        action = make(restart)
         return [RegisterEventHandler(OnProcessExit(target_action=action,
-                                                   on_exit=lambda event, context: crashed(restart, event, context))),
-                *oom_score(action), action]
+                                                   on_exit=lambda event, context: ended(restart, event, context))),
+                *on_start(action), action]
 
-    def crashed(restart, event, context):
-        # At the end of the launch the container is stopped, it did not crash.
+    def ended(restart, event, context):
+        # At the end of the launch the process is stopped, it did not crash.
         if context.is_shutdown:
             return None
-        if restart >= CONTAINER_RESTARTS:
-            logger.error(f"The container ended with exit code {event.returncode} after {CONTAINER_RESTARTS} restarts "
-                         "and stays down until the next start")
+        if restart >= restarts:
+            logger.error(f"{label} ended with exit code {event.returncode} after {restarts} restarts and stays down "
+                         "until the next start")
             return None
         try:
             with open(note + ".tmp", "w") as f:
-                json.dump({"exit_code": event.returncode, "restart": restart + 1,
-                           "max_restarts": CONTAINER_RESTARTS, "t": time.time()}, f)
+                json.dump({"exit_code": event.returncode, "restart": restart + 1, "max_restarts": restarts,
+                           "t": time.time()}, f)
             os.replace(note + ".tmp", note)
         except OSError as error:
             logger.error(f"Cannot write {note}: {error}")
-        return [TimerAction(period=RESTART_DELAY, actions=container(restart + 1))]
+        return [TimerAction(period=RESTART_DELAY, actions=start(restart + 1))]
+    return start(0)
+
+
+# A process of its own beside the stack, e.g. one that loads a library which may crash: make(prefix) builds its action
+# with that command prefix (None without limits), which sets nice and the CPUs before the first thread starts. Restarts
+# as the container, with <name>_exit.json in data_dir.
+def own_process(make, name, data_dir, logger, restarts=CONTAINER_RESTARTS, oom_score_adj="", nice=None, cpus=None):
+    prefix = []
+    if cpus:
+        prefix += ["taskset", "-c", str(cpus)]
+    if nice is not None:
+        prefix += ["nice", "-n", str(int(nice))]
+    return restarting(lambda restart: make(" ".join(prefix) or None), os.path.join(data_dir, f"{name}_exit.json"),
+                      name, logger, restarts, lambda action: oom_score(action, oom_score_adj, logger))
+
+
+# The container with these components, started again after a crash, and the planner. The driver of the platform runs
+# beside them in a process of its own and keeps motion and blade blocked until a release; the logic comes back idle.
+def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
+    # Every restart is a new container with a name of its own: DDS knows the load service of a crashed one for a while,
+    # and launch_ros would wait for its answer for ever.
+    def container(restart):
+        return ComposableNodeContainer(
+            name="mowbite" if restart == 0 else f"mowbite_{restart}", namespace="", package="rclcpp_components",
+            executable="component_container", composable_node_descriptions=nodes, output="screen")
 
     # Plans the mowing paths for mowing.plan; a crash only costs the plans until it is back. Namespace "/" so that a
     # dict of parameters goes under its full name.
     planner = Node(package="mowbite_planner", executable="mowbite_planner_node", name="mowbite_planner", namespace="/",
                    parameters=[*files, {"data_dir": data_dir}], output="screen", respawn=True,
                    respawn_delay=5.0)
-    return [*container(0), *oom_score(planner), planner]
+    return [*restarting(container, os.path.join(data_dir, EXIT_NOTE), "The container", logger, CONTAINER_RESTARTS,
+                        lambda action: oom_score(action, oom_score_adj, logger)),
+            *oom_score(planner, oom_score_adj, logger), planner]
