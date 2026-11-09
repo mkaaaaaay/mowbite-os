@@ -2,6 +2,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -47,9 +48,11 @@
 #include <mowbite_msgs/srv/set_dock.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mowbite_msgs/srv/set_heading.hpp>
+#include <mowbite_hold/file_writer.h>
 #include <mowbite_hold/hold.h>
 #include <mowbite_hold/restart.h>
 #include <map>
+#include <memory>
 #include <mowbite_planner_interfaces/srv/plan_coverage.hpp>
 #include <mowbite_planner_interfaces/srv/plan_transit.hpp>
 #include <mutex>
@@ -90,6 +93,10 @@ constexpr double kReleaseTimeoutS = 3.0;
 constexpr double kHoldMirrorS = 30.0;
 // Rounds of effects in one step: the callback, the next step of the job or docking, what their answers bring up.
 constexpr int kMaxRounds = 4;
+// A write of os-session.json or checkpoint.json longer than this (ms) gets a line with its time.
+constexpr double kSlowWriteMs = 50.0;
+// One write longer than this (s): an error line every 5 s until it ends.
+constexpr double kWriterStuckS = 5.0;
 
 rclcpp::QoS LatchedQos(size_t depth) {
   return rclcpp::QoS(rclcpp::KeepLast(depth)).reliable().transient_local();
@@ -294,6 +301,7 @@ class LogicNode : public rclcpp::Node {
     RestoreCheckpoint();
     // The kernel record of the platform ("<unix s> <reason>"), empty where it has none.
     JudgeRestart(declare_parameter("crash_record", std::string()));
+    StartWriter();
 
     robot_state_pub_ = create_publisher<mowbite_msgs::msg::RobotState>("bridge/robot_state", 10);
     actions_pub_ = create_publisher<mowbite_msgs::msg::ActionList>("bridge/actions", LatchedQos(50));
@@ -494,8 +502,9 @@ class LogicNode : public rclcpp::Node {
     PublishHoldIfChanged();
   }
 
-  // Its own stop: the next start finds a clean session.
+  // Its own stop: what is queued first, then a clean session, so the next start finds it clean.
   ~LogicNode() override {
+    writer_.reset();
     WriteSession(true);
   }
 
@@ -1365,7 +1374,9 @@ class LogicNode : public rclcpp::Node {
     WriteSession(false);
   }
 
-  // os-session.json with the state and job now, when they changed or clean is new. Called without the mutex.
+  // os-session.json with the state and job now, when they changed, clean is new or the last write failed. Without
+  // the writer (start and stop) here; else through it, waited for only when this record begins a restart hold, so the
+  // hold is on the disk before what it guards acts (G35). Called without the mutex.
   void WriteSession(bool clean) {
     if (session_path_.empty()) return;
     mowbite_hold::SessionRecord record;
@@ -1375,16 +1386,57 @@ class LogicNode : public rclcpp::Node {
       record = {mowbite_hold::SessionState(state.state, state.sub_state), core_.View().JobId(), boot_id_,
                 WallSeconds(), clean};
     }
+    if (session_failed_.exchange(false)) session_.reset();
     if (session_ && session_->state == record.state && session_->job_id == record.job_id &&
         session_->clean == clean) {
       return;
     }
-    std::string error;
-    if (!mowbite_hold::WriteRecordFile(session_path_, mowbite_hold::SessionText(record), &error)) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 60000, "Session: %s", error.c_str());
+    if (!writer_) {
+      std::string error;
+      if (!mowbite_hold::WriteRecordFile(session_path_, mowbite_hold::SessionText(record), &error)) {
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 60000, "Session: %s", error.c_str());
+        return;
+      }
+      session_ = record;
       return;
     }
+    const bool wait = mowbite_hold::MustWaitForSession(session_, record);
     session_ = record;
+    writer_->Submit(session_path_, mowbite_hold::SessionText(record));
+    while (wait && !writer_->WaitFor(session_path_, std::chrono::seconds(1))) CheckWriter();
+  }
+
+  // The writer of os-session.json and checkpoint.json, after the start has written its session.
+  void StartWriter() {
+    if (data_dir_.empty()) return;
+    writer_ = std::make_unique<mowbite_hold::FileWriter>(
+        [this](const std::string& path, const std::string& text, std::string* error) {
+          return path == session_path_ ? mowbite_hold::WriteRecordFile(path, text, error)
+                                       : WriteFileSafely(path, text, error);
+        },
+        [this](const mowbite_hold::FileWriter::Done& done) { OnWritten(done); });
+  }
+
+  // In the writer thread: no core, no mutex. A failed session is written again at the next step.
+  void OnWritten(const mowbite_hold::FileWriter::Done& done) {
+    const double ms = std::chrono::duration<double, std::milli>(done.took).count();
+    if (!done.ok && done.path == session_path_) {
+      session_failed_ = true;
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 60000, "Session: %s", done.error.c_str());
+    } else if (!done.ok) {
+      RCLCPP_ERROR(get_logger(), "Checkpoint: %s", done.error.c_str());
+    }
+    if (ms > kSlowWriteMs) RCLCPP_INFO(get_logger(), "Wrote %s in %.0f ms", done.path.c_str(), ms);
+  }
+
+  // An error line while one write has run longer than kWriterStuckS.
+  void CheckWriter() {
+    if (!writer_) return;
+    const double busy = std::chrono::duration<double>(writer_->Busy()).count();
+    if (busy > kWriterStuckS) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "Writing in %s has hung for %.0f s",
+                            data_dir_.c_str(), busy);
+    }
   }
 
   // UNEXPECTED_RESTART once the bridge listens, so the event reaches events/json and its history.
@@ -1422,9 +1474,8 @@ class LogicNode : public rclcpp::Node {
 
   void SaveCheckpoint(const std::string& text) {
     const std::string path = CheckpointPath();
-    if (path.empty()) return;
-    std::string error;
-    if (!WriteFileSafely(path, text, &error)) RCLCPP_ERROR(get_logger(), "Checkpoint: %s", error.c_str());
+    if (path.empty() || !writer_) return;
+    writer_->Submit(path, text);
   }
 
   void RespondDrive(const std::shared_ptr<rmw_request_id_t>& header, bool success, const std::string& message) {
@@ -1482,6 +1533,7 @@ class LogicNode : public rclcpp::Node {
     Step();
     ReportRestartWhenHeard();
     MirrorHold();
+    CheckWriter();
     mowbite_msgs::msg::RobotState msg;
     msg.current_state = state.state;
     msg.current_sub_state = state.sub_state;
@@ -2520,9 +2572,10 @@ class LogicNode : public rclcpp::Node {
   }
 
   // Carries out what the core asks for after a callback, in a fixed order: what halts (drive canceled, zero command,
-  // calibration canceled, blade off), then os-session.json, then the rest in the order it came up, among it what
-  // starts a motion (G35), then the next step of the job and of docking. What that brings up goes the same way, at
-  // most kMaxRounds rounds; files and publications come last, so no fsync delays a halt.
+  // calibration canceled, blade off), then os-session.json (waited for only when it begins the restart hold, G35),
+  // then the rest in the order it came up, among it what starts a motion, then the next step of the job and of
+  // docking. What that brings up goes the same way, at most kMaxRounds rounds; publications come last. The files go
+  // through the writer, so no fsync delays a halt.
   void Step() {
     std::vector<Effect> record;
     for (int round = 0;; ++round) {
@@ -2729,13 +2782,16 @@ class LogicNode : public rclcpp::Node {
   // system.hold: <data_dir>/hold.json (empty without data_dir), its time on the monotonic clock, what logic/hold said
   // last and when mowbite/hold went out.
   std::string hold_path_;
-  // The restart hold: os-session.json and what was last written to it, restart-hold.json (all empty without
-  // data_dir), the boot of this start and the event that waits for the bridge.
+  // The restart hold: os-session.json, what was last written or queued for it and whether that write failed,
+  // restart-hold.json (all empty without data_dir), the boot of this start and the event that waits for the bridge.
   std::string session_path_;
   std::optional<mowbite_hold::SessionRecord> session_;
+  std::atomic<bool> session_failed_{false};
   std::string restart_hold_path_;
   std::string boot_id_;
   std::optional<RestartReport> restart_report_;
+  // os-session.json and checkpoint.json after the start; null without data_dir and during the stop.
+  std::unique_ptr<mowbite_hold::FileWriter> writer_;
   mowbite_hold::HoldTimer hold_;
   std::optional<int64_t> published_hold_;
   bool hold_mirror_due_ = true;
