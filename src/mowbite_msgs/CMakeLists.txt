@@ -38,6 +38,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ButtonEvent.msg"
   "msg/Detection.msg"
   "msg/Detections.msg"
+  "msg/Camera.msg"
   "srv/AddArea.srv"
   "srv/ReplaceMap.srv"
   "srv/SetBlade.srv"
