@@ -23,7 +23,8 @@ bool TronCamera::Start(std::string& error) {
   }
   if (!sensor_.Open(subdev, error)) return false;
   if (!sensor_.SetVerticalBlanking(config_.vertical_blanking, error) || !sensor_.Set(pending_, error) ||
-      !capture_.Open(config_.video_device, config_.width, config_.height, config_.buffers, error) ||
+      !capture_.Open(config_.video_device, {config_.width, config_.height, PixelFormat::kNv12, config_.buffers, false},
+                     error) ||
       !capture_.Start(error)) {
     Stop();
     return false;
@@ -37,7 +38,15 @@ void TronCamera::Stop() {
 }
 
 int TronCamera::Next(int timeout_ms, Nv12View& frame, std::string& error) {
-  return capture_.Next(timeout_ms, frame, error);
+  CapturedFrame raw;
+  const int got = capture_.Next(timeout_ms, raw, error);
+  if (got <= 0) return got;
+  frame.y = raw.data;
+  frame.uv = raw.data + static_cast<size_t>(raw.stride) * config_.height;
+  frame.width = config_.width;
+  frame.height = config_.height;
+  frame.stride = raw.stride;
+  return 1;
 }
 
 bool TronCamera::SetExposure(const ExposureSetting& setting, std::string& error) {

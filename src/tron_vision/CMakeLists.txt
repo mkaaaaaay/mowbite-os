@@ -47,7 +47,8 @@ if(BUILD_TESTING)
   target_include_directories(tron_vision_fake_npu PRIVATE include)
   ament_add_gtest(tron_vision_test test/test_model_check.cpp test/test_yolo_decode.cpp test/test_frame_convert.cpp
                   test/test_exposure.cpp test/test_npu_model.cpp test/test_crash_guard.cpp test/test_budget.cpp
-                  test/test_vision_loop.cpp test/test_tron_camera.cpp test/test_preview.cpp)
+                  test/test_vision_loop.cpp test/test_tron_camera.cpp test/test_preview.cpp
+                  test/test_v4l2_capture.cpp)
   target_link_libraries(tron_vision_test tron_vision_core)
   target_compile_definitions(tron_vision_test PRIVATE FAKE_NPU_LIB="$<TARGET_FILE:tron_vision_fake_npu>")
   add_dependencies(tron_vision_test tron_vision_fake_npu)
