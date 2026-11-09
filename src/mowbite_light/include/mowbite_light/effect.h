@@ -37,6 +37,7 @@ const std::vector<std::string>& EffectNames();
 struct Strip {
   size_t first = 0;
   size_t last = 0;
+  size_t Length() const { return (first <= last ? last - first : first - last) + 1; }
 };
 
 // The strips from texts "first-last" of a chain of leds; nullopt and why for one that is malformed, beyond the chain

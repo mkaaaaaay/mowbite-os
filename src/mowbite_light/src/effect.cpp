@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <string_view>
 
 namespace mowbite_light {
 
@@ -61,6 +62,13 @@ Effect Make(EffectKind kind, std::vector<Rgb> colors, double period) {
   return {kind, std::move(colors), period, 1.0};
 }
 
+// True when all of text is one decimal number.
+bool Index(std::string_view text, size_t* value) {
+  const char* end = text.data() + text.size();
+  const auto [last, error] = std::from_chars(text.data(), end, *value);
+  return error == std::errc() && last == end;
+}
+
 }  // namespace
 
 const std::vector<std::string>& EffectNames() {
@@ -114,12 +122,10 @@ std::optional<std::vector<Strip>> ParseStrips(const std::vector<std::string>& te
   std::vector<bool> used(leds);
   for (const auto& text : texts) {
     Strip strip;
-    const char* end = text.data() + text.size();
-    auto [dash, first_error] = std::from_chars(text.data(), end, strip.first);
-    const bool has_dash = first_error == std::errc() && dash != end && *dash == '-';
-    const auto [last_end, last_error] =
-        has_dash ? std::from_chars(dash + 1, end, strip.last) : std::from_chars_result{dash, std::errc::invalid_argument};
-    if (last_error != std::errc() || last_end != end) {
+    const std::string_view view(text);
+    const size_t dash = view.find('-');
+    if (dash == std::string_view::npos || !Index(view.substr(0, dash), &strip.first) ||
+        !Index(view.substr(dash + 1), &strip.last)) {
       *error = "strip " + text + " is not first-last";
       return std::nullopt;
     }
@@ -127,7 +133,8 @@ std::optional<std::vector<Strip>> ParseStrips(const std::vector<std::string>& te
       *error = "strip " + text + " is beyond the " + std::to_string(leds) + " LEDs";
       return std::nullopt;
     }
-    for (size_t i = std::min(strip.first, strip.last); i <= std::max(strip.first, strip.last); ++i) {
+    const size_t low = std::min(strip.first, strip.last);
+    for (size_t i = low; i < low + strip.Length(); ++i) {
       if (used[i]) {
         *error = "strip " + text + " overlaps another at " + std::to_string(i);
         return std::nullopt;
@@ -144,9 +151,8 @@ std::vector<Rgb> Render(const Effect& effect, const std::vector<Strip>& strips, 
   std::vector<Rgb> leds(n);
   for (const auto& strip : strips) {
     const bool forward = strip.first <= strip.last;
-    const auto along = Render(effect, std::max(strip.first, strip.last) - std::min(strip.first, strip.last) + 1, t);
-    const size_t length = along.size();
-    for (size_t k = 0; k < length; ++k) {
+    const auto along = Render(effect, strip.Length(), t);
+    for (size_t k = 0; k < along.size(); ++k) {
       const size_t i = forward ? strip.first + k : strip.first - k;
       if (i < n) leds[i] = along[k];
     }
