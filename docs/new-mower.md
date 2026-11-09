@@ -146,20 +146,23 @@ the emergency signal is fixed. Load it as a component of the container only when
 
 ## 8. Cameras (optional)
 
-Object detection on a camera of the mower, for display only. The Tron has `tron_vision` (obstacle camera, NPU); there
-is no common camera package yet.
+A camera of the mower, shown in the app, optionally with object detection for display only. The Tron's setup is the
+example: `tron_vision` with its start in `tron.launch.py` and its parameters in `config/tron.yaml`.
 
 - A process of its own, never a component of the container: a crash of a vendor library takes nothing else along.
-  Start it from the start file with `stack.own_process` only when the drivers run and a switch says so (Tron:
-  `hardware:=true` and `MOWBITE_VISION=on` in `/etc/mowbite/os.conf`). It restarts at most three times and leaves
-  `<name>_exit.json`; give it `oom_score_adj` 1000, a `nice` value and CPUs apart from the driver.
-- It reports and nothing else: sensors over `bridge/sensor_info` and `bridge/sensor_value` (Tron: `vision_state`
-  and `vision_last` as text, `vision_rate` in 1/s), detections on `vision/detections` (`mowbite_msgs/Detections`, boxes
-  in pixels of the camera image). It subscribes to nothing; a test checks its list of publishers
+  Start it from the start file with `stack.own_process` only when the drivers run and a switch in
+  `/etc/mowbite/os.conf` says so. It restarts at most three times and leaves `<name>_exit.json`; give it
+  `oom_score_adj` 1000, a `nice` value and CPUs apart from the driver. Pass the same name to the node as `process`.
+- It reports and nothing else: sensors over `bridge/sensor_info` and `bridge/sensor_value`, detections on
+  `vision/detections` (`mowbite_msgs/Detections`, boxes in pixels of the camera image), each camera latched on
+  `hw/cameras` (`mowbite_msgs/Camera`: id, process, size of the shown image, protocols, and while it cannot stream
+  one of the reasons of the message). It subscribes to nothing of the stack; a test checks its list of publishers
   (`tron_vision/test/test_vision_node.cpp`).
-- Vendor runtimes and models are loaded at run time from a directory on the mower (Tron `/userdata/mowbite-vision/`)
-  and never go into the repo, a bundle or an image. Check the model when loading it (inputs, outputs, classes against
-  the class list), else report it and do not stream.
+- Protocol `mjpeg`: JPEG on `camera/<id>/jpeg` (`sensor_msgs/CompressedImage`, best effort, depth 1), made only while
+  someone subscribes, with a rate and a size limit as platform parameters. The OS serves it to the app.
+- Vendor runtimes and models are loaded at run time from a directory on the mower and never go into the repo, a bundle
+  or an image. Check the model when loading it (inputs, outputs, classes against the class list), else report it and
+  do not stream.
 - Before opening a camera: no other process holds it. A camera whose driver can crash the kernel gets a lock: a marker
   before the stream starts; found after a kernel crash, the camera stays off until the lock file is deleted.
 - Without memory cgroups the process holds its own limits: resident memory, inferences per second, a pause when the
@@ -181,5 +184,6 @@ is no common camera package yet.
 - [ ] mowbite-host with its carrier: base version, two keys in allowed_signers, `test_e2e.py` green
 - [ ] Safety measurement done, date set
 - [ ] Lights, if any: device rights, `output` on only after a look on the mower
-- [ ] Cameras, if any: own process, publisher list tested, vendor files only on the mower, limits measured
+- [ ] Cameras, if any: own process, publisher list tested, hw/cameras entry, vendor files only on the mower, limits
+      measured
 - [ ] First drive watched: blade off, RTK fix, at most 0.3 m/s
