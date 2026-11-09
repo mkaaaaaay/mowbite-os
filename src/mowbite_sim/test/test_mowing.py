@@ -81,6 +81,20 @@ def outside_by(ring, x, y):
     return min(to_edge(ring[i - 1], ring[i]) for i in range(len(ring)))
 
 
+# checkpoint.json once pred holds for it, else the last one read: the logic writes it in a thread of its own.
+def read_checkpoint(pred, timeout=5.0):
+    end = time.time() + timeout
+    while True:
+        try:
+            with open(os.path.join(DATA, "checkpoint.json")) as f:
+                checkpoint = json.load(f)
+        except (OSError, ValueError):
+            checkpoint = {}
+        if (checkpoint and pred(checkpoint)) or time.time() > end:
+            return checkpoint
+        time.sleep(0.05)
+
+
 class Probe:
     def __init__(self):
         self.lock = threading.Lock()
@@ -290,8 +304,7 @@ class TestMowing(unittest.TestCase):
         still, poses = p.standing()
         self.assertTrue(still, poses)
         self.assertEqual(p.robot.current_state, "PAUSED")
-        with open(os.path.join(DATA, "checkpoint.json")) as f:
-            checkpoint = json.load(f)
+        checkpoint = read_checkpoint(lambda c: c["job_id"] == self.job)
         self.assertEqual(checkpoint["job_id"], self.job)
         self.assertEqual(checkpoint["area_id"], "lawn")
         # Paused already: a second pause is refused, without an event.
@@ -378,7 +391,6 @@ class TestMowing(unittest.TestCase):
         # The last cutter frame switches the blade off.
         frames = p.cutter_frames()
         self.assertEqual(frames[-1]["cutter"], 0)
-        with open(os.path.join(DATA, "checkpoint.json")) as f:
-            checkpoint = json.load(f)
+        checkpoint = read_checkpoint(lambda c: c["job_id"] == "")
         self.assertEqual(checkpoint["job_id"], "")
         self.assertEqual(checkpoint["area"], 0)
