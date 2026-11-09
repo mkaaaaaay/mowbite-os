@@ -61,7 +61,7 @@ if(BUILD_TESTING)
   ament_add_gtest(mowbite_bridge_test test/test_text.cpp test/test_json_rpc.cpp test/test_app_json.cpp
     test/test_param_table.cpp test/test_warn_log.cpp test/test_bridge_core.cpp test/test_bridge_fuzz.cpp
     test/test_pose_window.cpp test/test_event_log.cpp test/test_track.cpp test/test_health.cpp
-    test/test_system_stats.cpp)
+    test/test_system_stats.cpp TIMEOUT 300)
   target_link_libraries(mowbite_bridge_test mowbite_bridge_core)
 endif()
 

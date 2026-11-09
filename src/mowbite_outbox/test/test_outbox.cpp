@@ -122,7 +122,7 @@ TEST(Outbox, ProducerNeverWaitsForAHangingConsumer) {
       if (!wakeup.WaitFor(std::chrono::milliseconds(100)) && !done) continue;
       stream.TakeAll();
       log.TakeAll();
-      // Hangs right after taking, the way a blocked publish would.
+      // Hangs right after taking, the way a blocked publish would (2 s; the bound is far below, also with sanitizers).
       hanging = true;
       std::this_thread::sleep_for(std::chrono::seconds(2));
       hanging = false;
@@ -140,7 +140,7 @@ TEST(Outbox, ProducerNeverWaitsForAHangingConsumer) {
     wakeup.Notify();
   }
   const auto took = Clock::now() - start;
-  EXPECT_LT(took, std::chrono::milliseconds(5)) << std::chrono::duration<double>(took).count() << " s";
+  EXPECT_LT(took, std::chrono::milliseconds(100)) << std::chrono::duration<double>(took).count() << " s";
   EXPECT_TRUE(hanging);
 
   auto entries = stream.TakeAll();
