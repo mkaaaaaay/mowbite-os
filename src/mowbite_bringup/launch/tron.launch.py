@@ -88,7 +88,7 @@ def vision(files, data_dir, switch, logger):
         return []
     return stack.own_process(
         lambda prefix: Node(package="tron_vision", executable="tron_vision_node", name="tron_vision", namespace="/",
-                            parameters=[*files], output="screen", prefix=prefix),
+                            parameters=[*files], output="screen", prefix=prefix, exec_name="tron_vision"),
         "vision", data_dir, logger, oom_score_adj=1000, nice=10, cpus="0-3")
 
 
