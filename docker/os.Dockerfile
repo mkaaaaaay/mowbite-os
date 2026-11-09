@@ -54,7 +54,7 @@ RUN rosdep keys --from-paths /ws/install/*/ /opt/mowbite_planner/*/ --ignore-src
         libasound2-dev) echo libasound2t64 ;; \
         zlib) echo zlib1g ;; \
         libzstd-dev) echo libzstd1 ;; \
-        python3-shapely|python3-paho-mqtt) echo $k ;; \
+        python3-shapely|python3-paho-mqtt|python3-yaml) echo $k ;; \
         nlohmann-json-dev|eigen) ;; \
         *) echo "unknown runtime key $k" >&2; exit 1 ;; \
       esac; fi; \
