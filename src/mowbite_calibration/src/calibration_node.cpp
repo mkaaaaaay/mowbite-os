@@ -292,8 +292,8 @@ class CalibrationNode : public rclcpp::Node {
         fields["vh"] = Round(std::atan2(msg.velocity_north, msg.velocity_east), 1e5);
       }
     }
-    // The receiver of the Tron tells UTC; the time of the xCore is its own.
-    if (caps_ && caps_->platform == "airseekers_tron") fields["rt"] = msg.receiver_time_ms / 1000.0;
+    // Only a receiver time in UTC can be set against other clocks.
+    if (caps_ && caps_->gnss_receiver_time) fields["rt"] = msg.receiver_time_ms / 1000.0;
     Record("gps", fields);
   }
 

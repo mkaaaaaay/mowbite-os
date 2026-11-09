@@ -43,6 +43,9 @@ Duties:
   the driver refuses that with `LATCH_CHANGED` once another reason latched since. It then fills the
   `stop_release_*` times of `hw/capabilities` (the app shows them, `system.info.stop_release`). Without it they stay 0
   and the release goes by app only.
+- Capabilities: `platform` is the same name as in the geometry file; set `gnss_receiver_time` only where
+  `receiver_time_ms` of `gps/absolute_pose` is the UTC time of day of the receiver (Tron), not a clock of the board
+  (xCore). Nothing in the code asks for a platform name.
 - Limits until driving tests show more: 0.3 m/s and 0.3 rad/s.
 - Before opening a port: no other process holds it.
 - A restarted driver starts latched (`start_latched`).
@@ -58,7 +61,7 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
 - `mowbite_bringup/config/geometry/<platform>.yaml`: `geometry.*` in m, base_link in the middle of the drive axle, x
   forward, y left: `platform`, `robot_width`, `robot_front`, `robot_rear`, `mower_width`, `blade_ahead`,
   `blade_offset`, `antenna_x`, `antenna_y`, `track`, `wheel_radius`, `dock_contact_x`, `ticks_per_m`, `imu_roll`,
-  `imu_pitch`. `dock_contact_x` below 0: contacts at the back, the mower backs onto the station. Contacts in front are
+  `imu_pitch`. Without `platform` or a number the start stops. `dock_contact_x` below 0: contacts at the back, the mower backs onto the station. Contacts in front are
   not built yet.
 - `mowbite_bringup/config/<platform>.yaml`: what differs from `tron.yaml`, which lies underneath (battery voltages
   empty, full and critical, charge check, temperatures). Check every value you inherit.

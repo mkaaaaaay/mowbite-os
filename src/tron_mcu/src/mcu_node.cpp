@@ -507,6 +507,7 @@ class McuNode : public rclcpp::Node {
     msg.wheel_distance = tron::kMcuWheelDistance;
     msg.imu_source = "tron_imu";
     msg.gnss_source = "tron_gnss";
+    msg.gnss_receiver_time = true;
     // 0 lets nothing move.
     msg.max_linear_speed = read_only_ ? 0.0f : tron::kMaxLinearSpeed;
     msg.max_angular_speed = read_only_ ? 0.0f : tron::kMaxAngularSpeed;

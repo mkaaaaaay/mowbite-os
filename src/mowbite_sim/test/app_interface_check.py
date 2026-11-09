@@ -242,9 +242,9 @@ for top in ["capabilities/json", "version/json", "params/json", "sensor_infos/js
 
 params = json.loads(latest("params/json") or "{}")
 if args.target == "mowbite-os":
-    check("params /ll/board is Tron", params.get("/ll/board") == "Tron", str(params.get("/ll/board")))
+    check("params /ll/board is MowBite", params.get("/ll/board") == "MowBite", str(params.get("/ll/board")))
 else:
-    skip("params /ll/board is Tron", "MowBite OS only")
+    skip("params /ll/board is MowBite", "MowBite OS only")
 
 infos = json.loads(latest("sensor_infos/json") or "[]")
 ids = sorted(i["sensor_id"] for i in infos)

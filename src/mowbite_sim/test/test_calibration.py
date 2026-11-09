@@ -389,6 +389,8 @@ class TestCalibration(unittest.TestCase):
         self.assertLess(len(kinds["pose"]) / span, 10.5)
         self.assertTrue(kinds["cmd"])
         self.assertTrue(all(g["fix"] == "fixed" for g in kinds["gps"][:10]))
+        # The receiver time only where hw/capabilities says it is UTC (gnss_receiver_time).
+        self.assertTrue(all("rt" in g for g in kinds["gps"]))
         starts = [(m["name"]) for m in kinds["phase"] if m["edge"] == "start"]
         self.assertEqual(starts.count("line"), 4)
         self.assertEqual(starts.count("spin_left"), 2)

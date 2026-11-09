@@ -282,6 +282,10 @@ class TestCalibrationXcore(unittest.TestCase):
             lines = [json.loads(line) for line in f]
         head = lines[0]
         self.assertEqual(head["platform"], "yardforce_nx60i")
+        # The board's clock wraps, so no receiver time (gnss_receiver_time false).
+        gps = [m for m in lines if m.get("k") == "gps"]
+        self.assertTrue(gps)
+        self.assertFalse([m for m in gps if "rt" in m])
         self.assertEqual(head["basis"], {"ticks_per_m": 2025.0, "wheel_distance_m": 0.3556})
         self.assertEqual(head["params"]["ticks_per_m"], 2025.0)
         self.assertEqual(head["imu"], {"roll": 0.0, "pitch": 0.079})

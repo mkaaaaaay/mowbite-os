@@ -211,6 +211,7 @@ class TestXcoreGnss(unittest.TestCase):
         self.assertEqual(params[0]["params"], {"datum_lat": DATUM[0], "datum_long": DATUM[1]})
         caps = p.wait(lambda p: p.capabilities, 10)
         self.assertEqual(caps.gnss_source, "xcore_driver")
+        self.assertFalse(caps.gnss_receiver_time)
 
     def test_2_fixed_counts_as_float_without_corrections(self):
         p = self.probe

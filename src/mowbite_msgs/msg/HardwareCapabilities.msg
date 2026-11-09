@@ -23,6 +23,8 @@ bool wheel_ticks
 # Nodes that provide imu/data and gps/absolute_pose.
 string imu_source
 string gnss_source
+# receiver_time_ms of gps/absolute_pose is the UTC time of day of the receiver; false where it is a clock of the board.
+bool gnss_receiver_time
 
 # What the driver computes speed and turn rate of hw/wheel_odom and hw/cmd_vel with: ticks of the wheels per m (a
 # driver that reports speed gives its scale, 1000 for mm) and the distance between the drive wheels (m). The

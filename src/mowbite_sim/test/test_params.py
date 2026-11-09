@@ -189,7 +189,7 @@ class TestParams(unittest.TestCase):
         logic = {k for k in self.probe.params if k.startswith(P)}
         self.assertEqual(len(logic), 13, sorted(logic))
         self.assertEqual(self.probe.params[P + "rain_mode"], 1)
-        self.assertEqual(self.probe.params["/ll/board"], "Tron")
+        self.assertEqual(self.probe.params["/ll/board"], "MowBite")
         self.assertTrue(self.probe.logged("GPS limits: accuracy 0.100 m, timeout 7.0 s"))
         self.assertTrue(self.probe.logged("Accuracy limit 0.100 m"))
 
