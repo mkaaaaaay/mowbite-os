@@ -2,7 +2,6 @@
 the container with the nodes above the hardware contract, restarted after a crash, and the MowBite Planner.
 """
 import asyncio
-import json
 import os
 import sys
 import time
@@ -181,8 +180,8 @@ def oom_score(action, oom_score_adj, logger):
 
 
 # make(restart) as a process that starts again after it ended outside the shutdown, at most `restarts` times, each time
-# after RESTART_DELAY s; before each restart `note` says how it ended. on_start(action) adds handlers to every start.
-def restarting(make, note, label, logger, restarts, on_start):
+# after RESTART_DELAY s; before each restart `note` says how it ended. Every start gets oom_score_adj (empty: inherited).
+def restarting(make, note, label, logger, restarts, oom_score_adj=""):
     # A start by hand begins without restarts.
     try:
         os.remove(note)
@@ -195,7 +194,7 @@ def restarting(make, note, label, logger, restarts, on_start):
         action = make(restart)
         return [RegisterEventHandler(OnProcessExit(target_action=action,
                                                    on_exit=lambda event, context: ended(restart, event, context))),
-                *on_start(action), action]
+                *oom_score(action, oom_score_adj, logger), action]
 
     def ended(restart, event, context):
         # At the end of the launch the process is stopped, it did not crash.
@@ -206,10 +205,9 @@ def restarting(make, note, label, logger, restarts, on_start):
                          "until the next start")
             return None
         try:
-            with open(note + ".tmp", "w") as f:
-                json.dump({"exit_code": event.returncode, "restart": restart + 1, "max_restarts": restarts,
-                           "t": time.time()}, f)
-            os.replace(note + ".tmp", note)
+            data_store.write_json(os.path.dirname(note), os.path.basename(note),
+                                  {"exit_code": event.returncode, "restart": restart + 1, "max_restarts": restarts,
+                                   "t": time.time()})
         except OSError as error:
             logger.error(f"Cannot write {note}: {error}")
         return [TimerAction(period=RESTART_DELAY, actions=start(restart + 1))]
@@ -226,7 +224,7 @@ def own_process(make, name, data_dir, logger, restarts=CONTAINER_RESTARTS, oom_s
     if nice is not None:
         prefix += ["nice", "-n", str(int(nice))]
     return restarting(lambda restart: make(" ".join(prefix) or None), os.path.join(data_dir, f"{name}_exit.json"),
-                      name, logger, restarts, lambda action: oom_score(action, oom_score_adj, logger))
+                      name, logger, restarts, oom_score_adj)
 
 
 # The container with these components, started again after a crash, and the planner. The driver of the platform runs
@@ -246,5 +244,5 @@ def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
                    parameters=[*files, {"data_dir": data_dir}], output="screen", respawn=True,
                    respawn_delay=5.0)
     return [*restarting(container, os.path.join(data_dir, EXIT_NOTE), "The container", logger, CONTAINER_RESTARTS,
-                        lambda action: oom_score(action, oom_score_adj, logger)),
+                        oom_score_adj),
             *oom_score(planner, oom_score_adj, logger), planner]
