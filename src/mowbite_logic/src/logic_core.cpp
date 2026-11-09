@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 
 #include "mowbite_api/catalog.h"
 
@@ -153,6 +154,40 @@ void LogicCore::Notify(std::string line) {
   effects_.push_back(Notice{std::move(line)});
 }
 
+namespace {
+
+template <typename T, typename... Types>
+constexpr bool kOneOf = (std::is_same_v<T, Types> || ...);
+
+}  // namespace
+
+const char* EffectName(const Effect& effect) {
+  static constexpr const char* kNames[] = {"DriveCancel",     "StopRequest",    "CalibrationCancel", "ChargeOff",
+                                           "ChargeOn",        "ReferenceCheck", "UndockPath",        "UndockOutcome",
+                                           "CalibrationGoal", "MapEdit",        "Event",             "ReasonChange",
+                                           "ActionsChanged",  "Notice",         "Checkpoint"};
+  static_assert(std::size(kNames) == std::variant_size_v<Effect>, "a name for every effect");
+  return kNames[effect.index()];
+}
+
+EffectPhase PhaseOf(const Effect& effect) {
+  return std::visit(
+      [](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (kOneOf<T, DriveCancel, StopRequest, CalibrationCancel>) {
+          return EffectPhase::kHalt;
+        } else if constexpr (kOneOf<T, Event, ReasonChange, ActionsChanged, Notice, Checkpoint>) {
+          return EffectPhase::kRecord;
+        } else {
+          static_assert(
+              kOneOf<T, ChargeOff, ChargeOn, ReferenceCheck, UndockPath, UndockOutcome, CalibrationGoal, MapEdit>,
+              "every effect has its phase");
+          return EffectPhase::kAct;
+        }
+      },
+      effect);
+}
+
 void LogicCore::OnHardwareStatus(const HardwareSnapshot& hw) {
   if (hw.hold != hw_.hold) SetDue<ActionsChanged>(true);
   hw_ = hw;
@@ -249,6 +284,23 @@ json LogicCore::MapOverlay() const {
 
 bool LogicCore::TakeOverlayChanged() {
   return recorder_.TakeOverlayChanged();
+}
+
+std::vector<Effect> LogicCore::TakeEffects() {
+  if (auto edit = recorder_.TakeMapEdit()) effects_.push_back(std::move(*edit));
+  for (auto& line : recorder_.TakeNotices()) Notify(std::move(line));
+  // Start Mowing and its reason follow the position, the battery and more, which change without an event.
+  const std::string start_reason = StartProblem().code;
+  if (start_reason != last_start_reason_) {
+    last_start_reason_ = start_reason;
+    SetDue<ActionsChanged>(true);
+  }
+  for (auto& effect : effects_) {
+    if (auto* checkpoint = std::get_if<Checkpoint>(&effect)) checkpoint->text = CheckpointText(job_.progress());
+  }
+  std::vector<Effect> out;
+  out.swap(effects_);
+  return out;
 }
 
 std::vector<std::string> LogicCore::TakeNotices() {
@@ -1179,7 +1231,7 @@ double LogicCore::DockedHeading() const {
 
 void LogicCore::BeginDockCheck(DockCheck purpose) {
   dock_check_ = purpose;
-  SetDue<ReferenceCheck>(true);
+  Replace(ReferenceCheck{DockedHeading()});
   SetDue<ActionsChanged>(true);
   Notify("On the docking station: checking the position against the recorded one first");
 }

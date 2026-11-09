@@ -281,6 +281,13 @@ using Effect = std::variant<DriveCancel, StopRequest, CalibrationCancel, ChargeO
                             UndockPath, UndockOutcome, CalibrationGoal, MapEdit, Event, ReasonChange, ActionsChanged,
                             Notice, Checkpoint>;
 
+// When the node carries an effect out in its step: what halts first, then (after os-session.json) what acts, among
+// it what starts a motion, and last what is written or published.
+enum class EffectPhase { kHalt, kAct, kRecord };
+EffectPhase PhaseOf(const Effect& effect);
+// The name of the type of an effect, for logs and the export of a journal.
+const char* EffectName(const Effect& effect);
+
 // Bits of the reason in an EMERGENCY event, as the app reads them (EmergencyReason of OpenMower) and as
 // hw/status carries them.
 constexpr int kEmergencyLatch = 1 << 0;
@@ -576,6 +583,9 @@ class LogicCore {
   bool TakeStopRequest();
   // Lines for the log since the last call.
   std::vector<std::string> TakeNotices();
+  // Everything the node has to do since the last call, oldest first; a checkpoint with the progress now. The next step
+  // of the job (NextJobStep), of docking (TakeDockingLeg) and the overlay stay queries.
+  std::vector<Effect> TakeEffects();
   bool Emergency() const;
   // The lines of map_overlay/json, none outside of AREA_RECORDING.
   json MapOverlay() const;

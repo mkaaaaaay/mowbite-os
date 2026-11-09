@@ -88,6 +88,8 @@ static_assert(static_cast<uint8_t>(SensorMeaning::kDistance) == SensorSpec::MEAN
 constexpr double kReleaseTimeoutS = 3.0;
 // mowbite/hold goes out again this often while nothing changes.
 constexpr double kHoldMirrorS = 30.0;
+// Rounds of effects in one step: the callback, the next step of the job or docking, what their answers bring up.
+constexpr int kMaxRounds = 4;
 
 rclcpp::QoS LatchedQos(size_t depth) {
   return rclcpp::QoS(rclcpp::KeepLast(depth)).reliable().transient_local();
@@ -350,7 +352,7 @@ class LogicNode : public rclcpp::Node {
             core_.Call<&LogicCore::OnMapDock>(planner_.Dock());
             UpdateDrivableAreas();
           }
-          Flush();
+          Step();
         });
     // The calibration drive: the status of the program for calibration.check and .start, its commands while
     // calibrating.
@@ -383,7 +385,7 @@ class LogicNode : public rclcpp::Node {
             undocking = core_.View().Undocking();
             core_.Call<&LogicCore::OnGnssFix>(msg->x, msg->y);
           }
-          if (undocking) Flush();
+          if (undocking) Step();
         });
     jump_sub_ = create_subscription<mowbite_msgs::msg::PositionJump>(
         "localization/jump", 10, [this](mowbite_msgs::msg::PositionJump::ConstSharedPtr msg) {
@@ -392,7 +394,7 @@ class LogicNode : public rclcpp::Node {
             core_.Call<&LogicCore::OnPositionJump>(msg->after.x, msg->after.y, msg->distance,
                                                    msg->reason == mowbite_msgs::msg::PositionJump::REASON_OUTLIERS);
           }
-          Flush();
+          Step();
         });
     map_status_sub_ = create_subscription<mowbite_msgs::msg::MapStatus>(
         "map/status", LatchedQos(1), [this](mowbite_msgs::msg::MapStatus::ConstSharedPtr msg) {
@@ -404,7 +406,7 @@ class LogicNode : public rclcpp::Node {
             core_.Call<&LogicCore::OnMowMap>(planner_.MowAreas(), planner_.MapProblem());
             UpdateDrivableAreas();
           }
-          Flush();
+          Step();
         });
     action_sub_ = create_subscription<std_msgs::msg::String>(
         "bridge/action", 10, [this](std_msgs::msg::String::ConstSharedPtr msg) { OnAction(msg->data); });
@@ -432,7 +434,7 @@ class LogicNode : public rclcpp::Node {
             rain_sensor_ = msg->rain_sensor;
             TellRainWithoutSensor();
           }
-          Flush();
+          Step();
         });
 
     // Driving to a pose: the planner plans the way, the follower drives it. A ROS service only, not for the app yet.
@@ -459,7 +461,7 @@ class LogicNode : public rclcpp::Node {
               CancelDrive(Reason("STOPPED", "Stopped by logic/stop_drive"));
             }
           }
-          Flush();
+          Step();
         });
 
     for (const auto& sensor : core_.View().Sensors()) {
@@ -482,10 +484,11 @@ class LogicNode : public rclcpp::Node {
     overlay_timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] { PublishOverlay(); });
     plan_timer_ = create_wall_timer(std::chrono::seconds(1), [this] {
       ExpirePlans();
-      Flush();
+      Step();
     });
     blade_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { UpdateBlade(); });
-    PublishActionsIfChanged();
+    // What the core has for the node waits for the first callback; the actions go out at once.
+    PublishActions();
     PublishIdleIfChanged();
     PublishHoldIfChanged();
   }
@@ -595,7 +598,7 @@ class LogicNode : public rclcpp::Node {
       core_.Call<&LogicCore::OnHardwareStatus>(hw);
       last_hw_ = hw.time_s;
     }
-    Flush();
+    Step();
   }
 
   void OnPose(const mowbite_msgs::msg::RobotPose& msg) {
@@ -644,7 +647,7 @@ class LogicNode : public rclcpp::Node {
       }
       if (result == ActionResult::kRejected) RCLCPP_WARN(get_logger(), "Action %s not possible", action_id.c_str());
       if (result == ActionResult::kUnknown) RCLCPP_DEBUG(get_logger(), "Ignoring action %s", action_id.c_str());
-      Flush();
+      Step();
       return;
     }
     CommandOutcome outcome;
@@ -661,7 +664,7 @@ class LogicNode : public rclcpp::Node {
       RCLCPP_WARN(get_logger(), "Action %s refused: %s (%s)", action_id.c_str(), outcome.why.code.c_str(),
                   outcome.why.message.c_str());
     }
-    Flush();
+    Step();
   }
 
   // A command of the catalog over RPC: -32602 for params that do not fit, the answer, or -32600 with the refusal;
@@ -699,7 +702,7 @@ class LogicNode : public rclcpp::Node {
       PublishRpcError(request.id, RpcError::ERROR_INVALID_REQUEST, outcome.why.message,
                       outcome.data.dump(-1, ' ', false, json::error_handler_t::replace));
     }
-    Flush();
+    Step();
   }
 
   // Answers every emergency.reset waiting for the safety node: released, or the refusal and the id of its event.
@@ -742,7 +745,7 @@ class LogicNode : public rclcpp::Node {
     }
     RCLCPP_INFO(get_logger(), "STOP at the mower: releasing the emergency");
     ReleaseEmergency("", msg.latch_count, "STOP at the mower");
-    Flush();
+    Step();
   }
 
   // The answer comes from S2 once the driver answered; a refusal goes to the app as EMERGENCY_RESET_REFUSED and to the
@@ -790,7 +793,7 @@ class LogicNode : public rclcpp::Node {
               RefuseReleaseLocked(ResetRefusal(response->code, response->message, response->value, response->limit));
             }
           }
-          Flush();
+          Step();
         }).request_id;
     RCLCPP_INFO(get_logger(), "Emergency release requested");
   }
@@ -854,7 +857,7 @@ class LogicNode : public rclcpp::Node {
         PlanDrive(request, header);
       }
     }
-    Flush();
+    Step();
   }
 
   // Plans the way of the drive the core has started (state DRIVING). Called with the mutex held.
@@ -933,7 +936,7 @@ class LogicNode : public rclcpp::Node {
         SendFollow(goal, text);
       }
     }
-    Flush();
+    Step();
   }
 
   // Hands a path to the follower for the current drive. Called with the mutex held.
@@ -957,7 +960,7 @@ class LogicNode : public rclcpp::Node {
           if (drive_.cancel_pending) follow_client_->async_cancel_goal(handle);
         }
       }
-      Flush();
+      Step();
     };
     options.feedback_callback = [this, seq](FollowHandle::SharedPtr, const std::shared_ptr<const FollowPath::Feedback> feedback) {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -991,7 +994,7 @@ class LogicNode : public rclcpp::Node {
         }
         EndDrive(reason == FollowPath::Result::REASON_DONE, why, reason, index);
       }
-      Flush();
+      Step();
     };
     drive_.follower_sign = MonotonicSeconds();
     drive_.follower_index = goal.start_index;
@@ -1127,7 +1130,7 @@ class LogicNode : public rclcpp::Node {
         core_.Call<&LogicCore::OnJobPlanned>(std::move(paths), answer.fingerprint);
       }
     }
-    Flush();
+    Step();
   }
 
   // Drives to the start of a path over the drivable areas, the blade off. Called with the mutex held.
@@ -1279,7 +1282,7 @@ class LogicNode : public rclcpp::Node {
     if (!stalled && !calibration_ended) return;
     // One zero command: the follower sends none any more, the driver's watchdog would stop the wheels only later.
     if (stalled) SendStop();
-    Flush();
+    Step();
   }
 
   void UpdateBladeLocked() {
@@ -1319,7 +1322,7 @@ class LogicNode : public rclcpp::Node {
         blade_on_requested_ = false;
         core_.Call<&LogicCore::OnBladeRefused>(response->message, static_cast<int>(response->emergency_reason));
       }
-      Flush();
+      Step();
     });
   }
 
@@ -1391,7 +1394,7 @@ class LogicNode : public rclcpp::Node {
       core_.Call<&LogicCore::ReportRestart>(*restart_report_);
     }
     restart_report_.reset();
-    Flush();
+    Step();
   }
 
   // <data_dir>/checkpoint.json, written to a new file and renamed, so a crash never leaves half a checkpoint.
@@ -1475,7 +1478,7 @@ class LogicNode : public rclcpp::Node {
       state = core_.View().RobotState();
     }
     if (calibration_client_->action_server_is_ready() != calibration_offered_) PublishRpcMethods();
-    Flush();
+    Step();
     ReportRestartWhenHeard();
     MirrorHold();
     mowbite_msgs::msg::RobotState msg;
@@ -1610,7 +1613,7 @@ class LogicNode : public rclcpp::Node {
     }
     RCLCPP_INFO(get_logger(), "params.set: %s", result.applied.dump().c_str());
     PublishLogicParams();
-    Flush();
+    Step();
     mowbite_msgs::msg::RpcResponse msg;
     msg.result = result.applied.dump();
     msg.id = request.id;
@@ -1671,7 +1674,7 @@ class LogicNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       hold_mirror_due_ = true;
     }
-    Flush();
+    Step();
     MirrorHold();
   }
 
@@ -1886,7 +1889,7 @@ class LogicNode : public rclcpp::Node {
       PublishRpcError(request.id, mowbite_msgs::msg::RpcError::ERROR_INVALID_REQUEST, why.message,
                       ReasonJson(why).dump(-1, ' ', false, json::error_handler_t::replace));
     }
-    Flush();
+    Step();
   }
 
   // The app and HA (pause, dock): {"ok": true} when a drive was running; the mower stops where it is.
@@ -1901,7 +1904,7 @@ class LogicNode : public rclcpp::Node {
     msg.result = json{{"ok", ok}}.dump();
     msg.id = request.id;
     rpc_response_pub_->publish(msg);
-    Flush();
+    Step();
   }
 
   // Hands the lane to the program. Called with the mutex held.
@@ -1934,7 +1937,7 @@ class LogicNode : public rclcpp::Node {
           if (calibration_.cancel_pending) calibration_client_->async_cancel_goal(handle);
         }
       }
-      Flush();
+      Step();
     };
     options.feedback_callback = [this, seq](CalibrateHandle::SharedPtr,
                                             const std::shared_ptr<const Calibrate::Feedback> feedback) {
@@ -1943,7 +1946,7 @@ class LogicNode : public rclcpp::Node {
         if (seq != calibration_.seq) return;
         core_.Call<&LogicCore::OnCalibrationFeedback>(feedback->phase, feedback->index, MonotonicSeconds());
       }
-      Flush();
+      Step();
     };
     options.result_callback = [this, seq](const CalibrateHandle::WrappedResult& wrapped) {
       {
@@ -1959,7 +1962,7 @@ class LogicNode : public rclcpp::Node {
         if (outcome.reason.empty()) outcome.message = "The calibration program dropped the drive";
         core_.Call<&LogicCore::OnCalibrationEnded>(outcome);
       }
-      Flush();
+      Step();
     };
     calibration_client_->async_send_goal(msg, options);
   }
@@ -2182,7 +2185,7 @@ class LogicNode : public rclcpp::Node {
       RCLCPP_INFO(get_logger(), "robot.geometry.set: version %d, changed %zu key(s)", answer["version"].get<int>(),
                   change.changed.size());
       PublishGeometry();
-      Flush();
+      Step();
     }
     mowbite_msgs::msg::RpcResponse msg;
     msg.result = answer.dump();
@@ -2335,7 +2338,7 @@ class LogicNode : public rclcpp::Node {
         edit_request_id_.reset();
         core_.Call<&LogicCore::OnMapEditResult>(ok, id, code, message);
       }
-      Flush();
+      Step();
     };
     if (edit_is_dock_) {
       if (!set_dock_client_->service_is_ready()) {
@@ -2400,7 +2403,7 @@ class LogicNode : public rclcpp::Node {
                                      const auto r = f.get();
                                      FinishDockCheck(r->success, r->x, r->y, r->position_accuracy, r->message);
                                    }
-                                   Flush();
+                                   Step();
                                  })
             .request_id;
     RCLCPP_INFO(get_logger(), "Reference check on the docking station: heading %.3f rad", heading);
@@ -2461,7 +2464,7 @@ class LogicNode : public rclcpp::Node {
                                      charge_sent_.reset();
                                      core_.Call<&LogicCore::OnChargeOff>(r->success, r->message);
                                    }
-                                   Flush();
+                                   Step();
                                  })
             .request_id;
     RCLCPP_INFO(get_logger(), "Charging %s", on ? "allowed again" : "off before leaving the docking station");
@@ -2513,70 +2516,114 @@ class LogicNode : public rclcpp::Node {
     return point;
   }
 
-  // Sends stop requests, events, changed actions and map edits collected by the core.
-  void Flush() {
-    // The state goes to os-session.json before the commands of this step go out.
-    WriteSession(false);
-    // An edit refused before it went out brings its events with it, so they are collected after it.
-    {
+  // Carries out what the core asks for after a callback, in a fixed order: what halts (drive canceled, zero command,
+  // calibration canceled, blade off), then os-session.json, then the rest in the order it came up, among it what
+  // starts a motion (G35), then the next step of the job and of docking. What that brings up goes the same way, at
+  // most kMaxRounds rounds; files and publications come last, so no fsync delays a halt.
+  void Step() {
+    std::vector<Effect> record;
+    for (int round = 0;; ++round) {
+      std::vector<Effect> effects;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        effects = core_.Call<&LogicCore::TakeEffects>();
+        if (round > 0 && effects.empty()) break;
+        for (const auto& effect : effects) {
+          if (PhaseOf(effect) == EffectPhase::kHalt) Halt(effect);
+        }
+        if (!core_.View().BladeWanted()) UpdateBladeLocked();
+        if (round == kMaxRounds) {
+          // Never in a sound core: stopped, what would act dropped.
+          SendStop();
+          RCLCPP_ERROR(get_logger(), "The logic still asked for %zu effects after %d rounds; stopped, the rest dropped",
+                       effects.size(), kMaxRounds);
+        }
+      }
+      for (auto& effect : effects) {
+        if (PhaseOf(effect) == EffectPhase::kRecord) record.push_back(std::move(effect));
+      }
+      if (round == kMaxRounds) break;
+      WriteSession(false);
       std::lock_guard<std::mutex> lock(mutex_);
-      if (auto edit = core_.Call<&LogicCore::TakeMapEdit>()) SendMapEdit(*edit);
-      if (auto heading = core_.Call<&LogicCore::TakeDockCheck>()) SendDockCheck(*heading);
-      // Undocking (and docking that leaves the contacts): charging off, then the way out; after it the drive that
-      // waited, or charging on again.
-      if (core_.Call<&LogicCore::TakeChargeOff>()) SendCharge(false);
-      if (auto path = core_.Call<&LogicCore::TakeUndockPath>()) SendUndock(*path);
-      if (core_.Call<&LogicCore::TakeChargeOn>()) SendCharge(true);
-      if (auto outcome = core_.Call<&LogicCore::TakeUndockOutcome>()) OnUndockOutcome(*outcome);
-      if (core_.Call<&LogicCore::TakeCalibrationCancel>()) CancelCalibration();
-      if (auto goal = core_.Call<&LogicCore::TakeCalibrationGoal>()) SendCalibration(*goal);
-    }
-    std::vector<Event> events;
-    bool actions_changed;
-    bool stop;
-    std::vector<ReasonChange> reasons;
-    std::vector<std::string> notices;
-    std::optional<std::string> checkpoint;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (auto why = core_.Call<&LogicCore::TakeDriveCancel>()) CancelDrive(*why);
-      // The blade goes off at once when the logic no longer wants it, not at the next tick.
+      for (const auto& effect : effects) {
+        if (PhaseOf(effect) == EffectPhase::kAct) Act(effect);
+      }
+      if (round == 0) {
+        PumpJob();
+        PumpDocking();
+      }
       UpdateBladeLocked();
-      PumpJob();
-      if (auto why = core_.Call<&LogicCore::TakeDriveCancel>()) CancelDrive(*why);
-      PumpDocking();
-      UpdateBladeLocked();
-      events = core_.Call<&LogicCore::TakeEvents>();
-      actions_changed = core_.Call<&LogicCore::TakeActionsChanged>();
-      stop = core_.Call<&LogicCore::TakeStopRequest>();
-      reasons = core_.Call<&LogicCore::TakeReasonChanges>();
-      notices = core_.Call<&LogicCore::TakeNotices>();
-      checkpoint = core_.Call<&LogicCore::TakeCheckpoint>();
     }
-    if (checkpoint) SaveCheckpoint(*checkpoint);
-    for (const auto& line : notices) RCLCPP_INFO(get_logger(), "%s", line.c_str());
-    if (stop) SendStop();
-    // The app shows the reasons of an active emergency from this line, like with mower_comms_v2 of OpenMower.
-    for (const auto& change : reasons) {
-      if (change.to == 0) {
-        RCLCPP_INFO(get_logger(), "Emergency cleared");
-      } else {
-        RCLCPP_WARN(get_logger(), "Emergency reason changed from: '%s' to: '%s'",
-                    EmergencyReasonNames(change.from).c_str(), EmergencyReasonNames(change.to).c_str());
+    Record(record);
+  }
+
+  // Called with the mutex held.
+  void Halt(const Effect& effect) {
+    if (const auto* cancel = std::get_if<DriveCancel>(&effect)) {
+      CancelDrive(cancel->why);
+    } else if (std::holds_alternative<StopRequest>(effect)) {
+      SendStop();
+    } else if (std::holds_alternative<CalibrationCancel>(effect)) {
+      CancelCalibration();
+    }
+  }
+
+  // Undocking (and docking that leaves the contacts): charging off, then the way out; after it the drive that waited,
+  // or charging on again. Called with the mutex held.
+  void Act(const Effect& effect) {
+    if (std::holds_alternative<ChargeOff>(effect)) {
+      SendCharge(false);
+    } else if (std::holds_alternative<ChargeOn>(effect)) {
+      SendCharge(true);
+    } else if (const auto* check = std::get_if<ReferenceCheck>(&effect)) {
+      SendDockCheck(check->heading);
+    } else if (const auto* path = std::get_if<UndockPath>(&effect)) {
+      SendUndock(*path);
+    } else if (const auto* outcome = std::get_if<UndockOutcome>(&effect)) {
+      OnUndockOutcome(*outcome);
+    } else if (const auto* goal = std::get_if<CalibrationGoal>(&effect)) {
+      SendCalibration(*goal);
+    } else if (const auto* edit = std::get_if<MapEdit>(&effect)) {
+      SendMapEdit(*edit);
+    }
+  }
+
+  // The checkpoint (the latest of the step), log lines, events and actions. Called without the mutex.
+  void Record(const std::vector<Effect>& effects) {
+    const Checkpoint* checkpoint = nullptr;
+    bool actions_changed = false;
+    for (const auto& effect : effects) {
+      if (const auto* c = std::get_if<Checkpoint>(&effect)) checkpoint = c;
+      actions_changed = actions_changed || std::holds_alternative<ActionsChanged>(effect);
+    }
+    if (checkpoint) SaveCheckpoint(checkpoint->text);
+    for (const auto& effect : effects) {
+      if (const auto* notice = std::get_if<Notice>(&effect)) {
+        RCLCPP_INFO(get_logger(), "%s", notice->line.c_str());
+      } else if (const auto* change = std::get_if<ReasonChange>(&effect)) {
+        // The app shows the reasons of an active emergency from this line, like with mower_comms_v2 of OpenMower.
+        if (change->to == 0) {
+          RCLCPP_INFO(get_logger(), "Emergency cleared");
+        } else {
+          RCLCPP_WARN(get_logger(), "Emergency reason changed from: '%s' to: '%s'",
+                      EmergencyReasonNames(change->from).c_str(), EmergencyReasonNames(change->to).c_str());
+        }
       }
     }
-    for (auto& event : events) {
-      if (event.type == "RECORDING_REFUSED") {
-        RCLCPP_WARN(get_logger(), "Recording: %s refused: %s", event.details.value("action", "").c_str(),
-                    event.details.value("reason", "").c_str());
+    for (const auto& effect : effects) {
+      const auto* event = std::get_if<Event>(&effect);
+      if (!event) continue;
+      if (event->type == "RECORDING_REFUSED") {
+        RCLCPP_WARN(get_logger(), "Recording: %s refused: %s", event->details.value("action", "").c_str(),
+                    event->details.value("reason", "").c_str());
       }
-      if (event.type == "UNDOCKING_FAILED") {
-        RCLCPP_WARN(get_logger(), "UNDOCKING_FAILED %s: %s", event.details.value("reason", "").c_str(),
-                    event.details.value("message", "").c_str());
+      if (event->type == "UNDOCKING_FAILED") {
+        RCLCPP_WARN(get_logger(), "UNDOCKING_FAILED %s: %s", event->details.value("reason", "").c_str(),
+                    event->details.value("message", "").c_str());
       }
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "events/json";
-      msg.payload = mowbite_bridge::BuildEvent(event.type, event.details, now().seconds(), event.id).dump();
+      msg.payload = mowbite_bridge::BuildEvent(event->type, event->details, now().seconds(), event->id).dump();
       publish_pub_->publish(msg);
     }
     if (actions_changed) PublishActions();
@@ -2593,15 +2640,6 @@ class LogicNode : public rclcpp::Node {
       published_idle_ = msg.data;
     }
     idle_pub_->publish(msg);
-  }
-
-  void PublishActionsIfChanged() {
-    bool changed;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      changed = core_.Call<&LogicCore::TakeActionsChanged>();
-    }
-    if (changed) PublishActions();
   }
 
   void PublishActions() {

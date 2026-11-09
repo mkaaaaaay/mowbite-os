@@ -52,6 +52,25 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CommandOutcome, invalid, invalid_field, accep
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ReasonChange, from, to)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobStep, kind, area_id, goal, path, start_index)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(RestartReport, cause, detail, crashed_at, state_before, job_id_before, hold)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DriveCancel, why)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ReferenceCheck, heading)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Notice, line)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Checkpoint, text)
+
+// An effect in the export of a journal: the name of its type and its fields; for json and ordered_json.
+template <typename Json>
+void to_json(Json& j, const Effect& effect) {
+  std::visit(
+      [&j](const auto& value) {
+        if constexpr (std::is_empty_v<std::decay_t<decltype(value)>>) {
+          j = Json::object();
+        } else {
+          j = value;
+        }
+      },
+      effect);
+  j["effect"] = EffectName(effect);
+}
 
 static_assert(sizeof(Reason) == 80);
 static_assert(sizeof(Event) == 80);
@@ -77,6 +96,10 @@ static_assert(sizeof(UndockOutcome) == 88);
 static_assert(sizeof(CommandOutcome) == 184);
 static_assert(sizeof(JobStep) == 112);
 static_assert(sizeof(RestartReport) == 144);
+static_assert(sizeof(DriveCancel) == 80);
+static_assert(sizeof(ReferenceCheck) == 8);
+static_assert(sizeof(Notice) == 32);
+static_assert(sizeof(Checkpoint) == 32);
 
 // What the logic decides: state, sub_state, the reason bits of an emergency, blade wanted, follower driving.
 struct LogicView {
@@ -109,7 +132,7 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::GeometryChanged, &L::SetHold, &L::SetGpsSettings, &L::NextJobStep, &L::OnJobPlanned, &L::OnJobPlanFailed,
       &L::OnJobProgress, &L::OnLegEnded, &L::OnTick, &L::OnBladeRefused, &L::TakeCheckpoint, &L::TakeEvents,
       &L::TakeActionsChanged, &L::TakeReasonChanges, &L::TakeStopRequest, &L::TakeNotices, &L::TakeOverlayChanged,
-      &L::SetRestartHold, &L::ReportRestart, &L::OnStopRelease);
+      &L::SetRestartHold, &L::ReportRestart, &L::OnStopRelease, &L::TakeEffects);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};
