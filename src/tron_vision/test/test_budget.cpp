@@ -17,13 +17,6 @@ TEST(Budget, ResidentBytesFromStatm) {
   EXPECT_GT(ResidentBytes(), 0U);
 }
 
-TEST(Budget, MemAvailable) {
-  test::TempDir dir;
-  EXPECT_EQ(MemAvailableKb(dir.Write("meminfo", "MemTotal: 3990000 kB\nMemFree: 100 kB\nMemAvailable: 3710000 kB\n")),
-            3710000);
-  EXPECT_EQ(MemAvailableKb(dir.Write("other", "MemTotal: 1 kB\n")), -1);
-}
-
 TEST(Budget, ThermalZoneByType) {
   test::TempDir dir;
   std::filesystem::create_directories(dir.Path() + "/thermal_zone0");

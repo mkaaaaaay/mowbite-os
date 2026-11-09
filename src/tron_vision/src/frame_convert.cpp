@@ -132,7 +132,9 @@ ColorGains GrayWorld(const FrameStats& stats) {
 
 void ConvertFrame(const Nv12View& frame, const Placement& p, const ColorGains& gains, bool swap_rb,
                   uint32_t out_width, uint32_t out_height, std::vector<uint8_t>& rgb) {
-  rgb.assign(static_cast<size_t>(out_width) * out_height * 3, kPadGray);
+  rgb.resize(static_cast<size_t>(out_width) * out_height * 3);
+  // Only bars outside the placed area keep the pad gray; the placed area is written below.
+  if (p.dst_w != out_width || p.dst_h != out_height) std::fill(rgb.begin(), rgb.end(), kPadGray);
   if (p.dst_w == 0 || p.dst_h == 0) return;
   const std::vector<Tap> cols = Taps(p.src_x, p.src_w, p.dst_w, frame.width);
   const std::vector<Tap> rows = Taps(p.src_y, p.src_h, p.dst_h, frame.height);

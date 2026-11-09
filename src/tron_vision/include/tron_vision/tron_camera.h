@@ -12,9 +12,8 @@
 
 namespace tron_vision {
 
-// Left obstacle camera of the Tron: gc2093 behind the ISP, measured 09.11. (M2b). Its subdev number changes between
-// boots, so it is found by name. No other subdev of the graph is opened: the stereo bridge driver crashes the kernel
-// on a frame interval enumeration.
+// Left obstacle camera of the Tron: gc2093 behind the ISP, its subdev found by name. No other subdev of the graph is
+// opened: the stereo bridge driver crashes the kernel on a frame interval enumeration.
 struct TronCameraConfig {
   std::string sysfs = "/sys/class/video4linux";
   std::string sensor_name = "m01_b_gc2093";
@@ -45,7 +44,6 @@ class TronCamera : public Camera {
   SensorControls sensor_;
   V4l2Capture capture_;
   ExposureSetting pending_;
-  bool open_ = false;
 };
 
 }  // namespace tron_vision

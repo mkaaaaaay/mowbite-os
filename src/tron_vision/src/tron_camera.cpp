@@ -22,7 +22,6 @@ bool TronCamera::Start(std::string& error) {
     }
   }
   if (!sensor_.Open(subdev, error)) return false;
-  open_ = true;
   if (!sensor_.SetVerticalBlanking(config_.vertical_blanking, error) || !sensor_.Set(pending_, error) ||
       !capture_.Open(config_.video_device, config_.width, config_.height, config_.buffers, error) ||
       !capture_.Start(error)) {
@@ -34,8 +33,7 @@ bool TronCamera::Start(std::string& error) {
 
 void TronCamera::Stop() {
   capture_.Close();
-  if (open_) sensor_.Close();
-  open_ = false;
+  sensor_.Close();
 }
 
 int TronCamera::Next(int timeout_ms, Nv12View& frame, std::string& error) {
@@ -44,7 +42,7 @@ int TronCamera::Next(int timeout_ms, Nv12View& frame, std::string& error) {
 
 bool TronCamera::SetExposure(const ExposureSetting& setting, std::string& error) {
   pending_ = setting;
-  return !open_ || sensor_.Set(setting, error);
+  return !sensor_.IsOpen() || sensor_.Set(setting, error);
 }
 
 }  // namespace tron_vision

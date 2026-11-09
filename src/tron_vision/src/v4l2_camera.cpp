@@ -11,7 +11,9 @@
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
+#include <utility>
+
+#include "tron_vision/text_file.h"
 
 namespace tron_vision {
 
@@ -28,13 +30,6 @@ int Ioctl(int fd, unsigned long request, void* arg) {
 std::string Errno(const std::string& what) {
   char buf[128];
   return what + ": " + strerror_r(errno, buf, sizeof(buf));
-}
-
-std::string FirstLine(const std::string& path) {
-  std::ifstream in(path);
-  std::string line;
-  std::getline(in, line);
-  return line;
 }
 
 struct Range {
@@ -61,6 +56,22 @@ bool ReadControl(int fd, uint32_t id, const char* name, Range& range, std::strin
   range.value = control.value;
   return true;
 }
+
+// One multi-planar memory-mapped buffer with its single plane; not copyable, the buffer points at the plane.
+struct PlaneBuffer {
+  explicit PlaneBuffer(uint32_t index) {
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    buf.memory = V4L2_MEMORY_MMAP;
+    buf.index = index;
+    buf.length = 1;
+    buf.m.planes = &plane;
+  }
+  PlaneBuffer(const PlaneBuffer&) = delete;
+  PlaneBuffer& operator=(const PlaneBuffer&) = delete;
+
+  v4l2_plane plane{};
+  v4l2_buffer buf{};
+};
 
 bool WriteControl(int fd, uint32_t id, int value, const char* name, std::string& error) {
   v4l2_control control{};
@@ -161,6 +172,21 @@ V4l2Capture::~V4l2Capture() {
   Close();
 }
 
+bool V4l2Capture::Fail(std::string message, std::string& error) {
+  error = std::move(message);
+  Close();
+  return false;
+}
+
+size_t V4l2Capture::FrameBytes() const {
+  return static_cast<size_t>(stride_) * height_ * 3 / 2;
+}
+
+bool V4l2Capture::Queue(uint32_t index) {
+  PlaneBuffer b(index);
+  return Ioctl(fd_, VIDIOC_QBUF, &b.buf) == 0;
+}
+
 bool V4l2Capture::Open(const std::string& device, uint32_t width, uint32_t height, uint32_t buffers,
                        std::string& error) {
   Close();
@@ -170,16 +196,10 @@ bool V4l2Capture::Open(const std::string& device, uint32_t width, uint32_t heigh
     return false;
   }
   v4l2_capability cap{};
-  if (Ioctl(fd_, VIDIOC_QUERYCAP, &cap) < 0) {
-    error = Errno("querycap");
-    Close();
-    return false;
-  }
+  if (Ioctl(fd_, VIDIOC_QUERYCAP, &cap) < 0) return Fail(Errno("querycap"), error);
   const uint32_t caps = (cap.capabilities & V4L2_CAP_DEVICE_CAPS) != 0 ? cap.device_caps : cap.capabilities;
   if ((caps & V4L2_CAP_VIDEO_CAPTURE_MPLANE) == 0 || (caps & V4L2_CAP_STREAMING) == 0) {
-    error = device + " is no multi-planar streaming capture node";
-    Close();
-    return false;
+    return Fail(device + " is no multi-planar streaming capture node", error);
   }
   v4l2_format fmt{};
   fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
@@ -188,60 +208,32 @@ bool V4l2Capture::Open(const std::string& device, uint32_t width, uint32_t heigh
   fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_NV12;
   fmt.fmt.pix_mp.field = V4L2_FIELD_NONE;
   fmt.fmt.pix_mp.num_planes = 1;
-  if (Ioctl(fd_, VIDIOC_S_FMT, &fmt) < 0) {
-    error = Errno("set format");
-    Close();
-    return false;
-  }
+  if (Ioctl(fd_, VIDIOC_S_FMT, &fmt) < 0) return Fail(Errno("set format"), error);
   const v4l2_pix_format_mplane& pix = fmt.fmt.pix_mp;
-  const uint32_t stride = pix.plane_fmt[0].bytesperline;
-  if (pix.pixelformat != V4L2_PIX_FMT_NV12 || pix.width != width || pix.height != height || pix.num_planes != 1 ||
-      stride < width || pix.plane_fmt[0].sizeimage < stride * height * 3 / 2) {
-    error = "format not accepted: " + std::to_string(pix.width) + "x" + std::to_string(pix.height) + " planes " +
-            std::to_string(pix.num_planes) + " stride " + std::to_string(stride);
-    Close();
-    return false;
-  }
   width_ = width;
   height_ = height;
-  stride_ = stride;
+  stride_ = pix.plane_fmt[0].bytesperline;
+  if (pix.pixelformat != V4L2_PIX_FMT_NV12 || pix.width != width || pix.height != height || pix.num_planes != 1 ||
+      stride_ < width || pix.plane_fmt[0].sizeimage < FrameBytes()) {
+    return Fail("format not accepted: " + std::to_string(pix.width) + "x" + std::to_string(pix.height) + " planes " +
+                    std::to_string(pix.num_planes) + " stride " + std::to_string(stride_),
+                error);
+  }
 
   v4l2_requestbuffers req{};
   req.count = buffers;
   req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
   req.memory = V4L2_MEMORY_MMAP;
-  if (Ioctl(fd_, VIDIOC_REQBUFS, &req) < 0 || req.count == 0) {
-    error = Errno("request buffers");
-    Close();
-    return false;
-  }
+  if (Ioctl(fd_, VIDIOC_REQBUFS, &req) < 0 || req.count == 0) return Fail(Errno("request buffers"), error);
   buffers_.resize(req.count);
   for (uint32_t i = 0; i < req.count; i++) {
-    v4l2_plane plane{};
-    v4l2_buffer buf{};
-    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-    buf.memory = V4L2_MEMORY_MMAP;
-    buf.index = i;
-    buf.length = 1;
-    buf.m.planes = &plane;
-    if (Ioctl(fd_, VIDIOC_QUERYBUF, &buf) < 0) {
-      error = Errno("query buffer");
-      Close();
-      return false;
-    }
-    void* data = mmap(nullptr, plane.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, plane.m.mem_offset);
-    if (data == MAP_FAILED) {
-      error = Errno("map buffer");
-      Close();
-      return false;
-    }
+    PlaneBuffer b(i);
+    if (Ioctl(fd_, VIDIOC_QUERYBUF, &b.buf) < 0) return Fail(Errno("query buffer"), error);
+    void* data = mmap(nullptr, b.plane.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, b.plane.m.mem_offset);
+    if (data == MAP_FAILED) return Fail(Errno("map buffer"), error);
     buffers_[i].data = data;
-    buffers_[i].length = plane.length;
-    if (plane.length < static_cast<size_t>(stride_) * height_ * 3 / 2) {
-      error = "buffer smaller than a frame";
-      Close();
-      return false;
-    }
+    buffers_[i].length = b.plane.length;
+    if (b.plane.length < FrameBytes()) return Fail("buffer smaller than a frame", error);
   }
   return true;
 }
@@ -270,14 +262,7 @@ bool V4l2Capture::Start(std::string& error) {
   }
   if (streaming_) return true;
   for (uint32_t i = 0; i < buffers_.size(); i++) {
-    v4l2_plane plane{};
-    v4l2_buffer buf{};
-    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-    buf.memory = V4L2_MEMORY_MMAP;
-    buf.index = i;
-    buf.length = 1;
-    buf.m.planes = &plane;
-    if (Ioctl(fd_, VIDIOC_QBUF, &buf) < 0) {
+    if (!Queue(i)) {
       error = Errno("queue buffer");
       return false;
     }
@@ -317,25 +302,19 @@ int V4l2Capture::Next(int timeout_ms, Nv12View& frame, std::string& error) {
     error = "poll error on the video node";
     return -1;
   }
-  v4l2_plane plane{};
-  v4l2_buffer buf{};
-  buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-  buf.memory = V4L2_MEMORY_MMAP;
-  buf.length = 1;
-  buf.m.planes = &plane;
-  if (Ioctl(fd_, VIDIOC_DQBUF, &buf) < 0) {
+  PlaneBuffer b(0);
+  if (Ioctl(fd_, VIDIOC_DQBUF, &b.buf) < 0) {
     if (errno == EAGAIN) return 0;
     error = Errno("dequeue buffer");
     return -1;
   }
-  held_ = static_cast<int>(buf.index);
-  const size_t frame_bytes = static_cast<size_t>(stride_) * height_ * 3 / 2;
-  if (buf.index >= buffers_.size() || (buf.flags & V4L2_BUF_FLAG_ERROR) != 0 ||
-      (plane.bytesused != 0 && plane.bytesused < frame_bytes)) {
+  held_ = static_cast<int>(b.buf.index);
+  if (b.buf.index >= buffers_.size() || (b.buf.flags & V4L2_BUF_FLAG_ERROR) != 0 ||
+      (b.plane.bytesused != 0 && b.plane.bytesused < FrameBytes())) {
     Release();
     return 0;
   }
-  const auto* base = static_cast<const uint8_t*>(buffers_[buf.index].data);
+  const auto* base = static_cast<const uint8_t*>(buffers_[b.buf.index].data);
   frame.y = base;
   frame.uv = base + static_cast<size_t>(stride_) * height_;
   frame.width = width_;
@@ -349,14 +328,7 @@ void V4l2Capture::Release() {
     held_ = -1;
     return;
   }
-  v4l2_plane plane{};
-  v4l2_buffer buf{};
-  buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-  buf.memory = V4L2_MEMORY_MMAP;
-  buf.index = static_cast<uint32_t>(held_);
-  buf.length = 1;
-  buf.m.planes = &plane;
-  Ioctl(fd_, VIDIOC_QBUF, &buf);
+  Queue(static_cast<uint32_t>(held_));
   held_ = -1;
 }
 

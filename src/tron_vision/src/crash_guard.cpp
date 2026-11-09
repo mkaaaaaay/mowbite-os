@@ -7,19 +7,13 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <utility>
+
+#include "tron_vision/text_file.h"
 
 namespace tron_vision {
 
 namespace {
-
-std::string FirstLine(const std::string& path) {
-  std::ifstream in(path);
-  std::string line;
-  std::getline(in, line);
-  return line;
-}
 
 std::string SysError(const std::string& what) {
   char buf[128];

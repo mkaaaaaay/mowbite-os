@@ -4,20 +4,10 @@
 
 #include <filesystem>
 #include <fstream>
-#include <sstream>
+
+#include "tron_vision/text_file.h"
 
 namespace tron_vision {
-
-namespace {
-
-std::string FirstLine(const std::string& path) {
-  std::ifstream in(path);
-  std::string line;
-  std::getline(in, line);
-  return line;
-}
-
-}  // namespace
 
 size_t ResidentBytes(const std::string& statm) {
   std::ifstream in(statm);
@@ -26,18 +16,6 @@ size_t ResidentBytes(const std::string& statm) {
   if (!(in >> pages >> resident)) return 0;
   const long page = sysconf(_SC_PAGESIZE);
   return resident * static_cast<size_t>(page > 0 ? page : 4096);
-}
-
-long MemAvailableKb(const std::string& meminfo) {
-  std::ifstream in(meminfo);
-  std::string line;
-  while (std::getline(in, line)) {
-    if (line.rfind("MemAvailable:", 0) != 0) continue;
-    std::istringstream fields(line.substr(13));
-    long kb = -1;
-    return fields >> kb ? kb : -1;
-  }
-  return -1;
 }
 
 std::string FindThermalZone(const std::string& root, const std::string& type) {

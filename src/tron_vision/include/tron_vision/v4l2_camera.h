@@ -34,14 +34,8 @@ class SensorControls {
   bool Set(const ExposureSetting& setting, std::string& error);
   // 0 leaves the blanking as it is.
   bool SetVerticalBlanking(int lines, std::string& error);
-  int ExposureMax() const {
-    return exposure_max_;
-  }
-  int GainMin() const {
-    return gain_min_;
-  }
-  int GainMax() const {
-    return gain_max_;
+  bool IsOpen() const {
+    return fd_ >= 0;
   }
 
  private:
@@ -74,6 +68,11 @@ class V4l2Capture {
   void Release();
 
  private:
+  bool Fail(std::string message, std::string& error);
+  size_t FrameBytes() const;
+  // QBUF of a buffer the driver gave back or that was never queued.
+  bool Queue(uint32_t index);
+
   struct Buffer {
     void* data = nullptr;
     size_t length = 0;

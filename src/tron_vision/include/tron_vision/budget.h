@@ -10,9 +10,6 @@ namespace tron_vision {
 // Resident memory of the process from statm, 0 if unreadable.
 size_t ResidentBytes(const std::string& statm = "/proc/self/statm");
 
-// MemAvailable in kB, -1 if unreadable.
-long MemAvailableKb(const std::string& meminfo = "/proc/meminfo");
-
 // temp file of the thermal zone of that type ("soc-thermal"), empty if none.
 std::string FindThermalZone(const std::string& root, const std::string& type);
 
