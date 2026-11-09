@@ -64,9 +64,11 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   `imu_pitch`. Without `platform` or a number the start stops. `dock_contact_x` below 0: contacts at the back, the mower backs onto the station. Contacts in front are
   not built yet.
 - `mowbite_bringup/config/<platform>.yaml`: what differs from `tron.yaml`, which lies underneath (battery voltages
-  empty, full and critical, charge check, temperatures). Check every value you inherit.
+  empty, full and critical, charge check, temperatures). Check every value you inherit. The battery voltages stand only
+  here: a driver that sets them on its board gets them in the start file from `stack.battery_voltages`, under the
+  same names (see `nx60i.launch.py`).
 - Driver parameters (ports, baud rates, limits) in the file of the driver; values measured on one mower in a file on
-  that mower.
+  that mower. No value in two files.
 - The datum of the garden: one place on the mower, `MOWBITE_DATUM_LAT`, `_LONG`, `_HEIGHT` (Tron `/etc/mowbite/os.conf`,
   NX60i the environment of the compose file), handed to the GNSS node as launch arguments `datum_*` after every
   parameter file. Without a datum no pose is published.

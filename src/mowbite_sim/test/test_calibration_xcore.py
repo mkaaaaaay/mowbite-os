@@ -15,6 +15,7 @@ import math
 import os
 import random
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -23,6 +24,7 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
@@ -32,6 +34,13 @@ from mowbite_msgs.msg import (HardwareStatus, MapStatus, MqttPublish, RobotPose,
 from mowbite_msgs.srv import ReplaceMap, SetPose
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
+
+# The battery voltages of the platform file, which nx60i.launch.py hands to the driver (stack.py of mowbite_bringup).
+sys.path.insert(0, os.path.join(get_package_share_directory("mowbite_bringup"), "launch"))
+import stack  # noqa: E402
+
+BATTERY = stack.battery_voltages([os.path.join(get_package_share_directory("mowbite_bringup"), "config",
+                                               "nx60i.yaml")])
 
 WORK = tempfile.mkdtemp(prefix="mowbite_calibration_xcore_")
 FLAGS = os.path.join(WORK, "flags.json")
@@ -66,9 +75,10 @@ def generate_test_description():
     driver_config = os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "config", "nx60i.yaml")
     driver = Node(package="xcore_driver", executable="xcore_driver_node", name="xcore_driver", namespace="/",
                   output="screen",
-                  parameters=[driver_config, {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT,
-                                              "datum_lat": DATUM[0], "datum_long": DATUM[1], "datum_height": DATUM[2],
-                                              "safety_measurement_date": "simulation"}])
+                  parameters=[driver_config, BATTERY,
+                              {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT,
+                               "datum_lat": DATUM[0], "datum_long": DATUM[1], "datum_height": DATUM[2],
+                               "safety_measurement_date": "simulation"}])
 
     def component(package, plugin, name, extra=None):
         return ComposableNode(package=package, plugin=plugin, name=name,

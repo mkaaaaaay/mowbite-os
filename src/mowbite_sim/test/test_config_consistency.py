@@ -3,12 +3,13 @@ planner section of tron.yaml, until the planner takes the body from /mowbite_geo
 sim.yaml. They have to agree, and no node may be given an antenna offset or contact position of its own any more.
 The fence of mowbite_safety lies beyond the one of the follower, so that it acts only when the follower does not.
 The NX60i the same way: config/nx60i.yaml on top of tron.yaml has the body of config/geometry/nx60i.yaml for the
-planner and the battery of the driver's xcore_driver/config/nx60i.yaml for the logic; the driver charges at 29.4 V at
-most (G29) and has the speed model of A2.
+planner and the battery voltages, which nx60i.launch.py hands to the driver, so its own file has none; the driver
+charges at 29.4 V at most (G29) and has the speed model of A2.
 
 Run in a sourced workspace: python3 /ws/src/mowbite_sim/test/test_config_consistency.py
 """
 import os
+import sys
 import unittest
 
 import yaml
@@ -18,6 +19,9 @@ BRINGUP = get_package_share_directory("mowbite_bringup")
 SIM = get_package_share_directory("mowbite_sim")
 XCORE = get_package_share_directory("xcore_driver")
 BODY = ("robot_width", "robot_front", "robot_rear", "mower_width", "blade_ahead")
+
+sys.path.insert(0, os.path.join(BRINGUP, "launch"))
+import stack  # noqa: E402
 
 
 def load(path):
@@ -79,13 +83,15 @@ class Nx60iConsistency(unittest.TestCase):
         for key in BODY:
             self.assertAlmostEqual(planner[key], self.geometry[key], msg=key)
 
-    def test_the_logic_has_the_battery_of_the_driver(self):
+    def test_the_driver_gets_the_battery_of_the_platform_file_only(self):
+        files = [os.path.join(BRINGUP, "config", name) for name in ("tron.yaml", "nx60i.yaml")]
+        battery = stack.battery_voltages(files)
         logic = self.nx60i["mowbite_logic"]["ros__parameters"]
-        self.assertEqual(logic["battery_empty_voltage"], self.driver["battery_empty_voltage"])
-        self.assertEqual(logic["battery_full_voltage"], self.driver["battery_full_voltage"])
-        self.assertEqual(logic["battery_critical_voltage"], self.driver["battery_critical_low_voltage"])
-        self.assertLess(logic["battery_critical_voltage"], logic["battery_empty_voltage"])
-        self.assertLess(logic["battery_empty_voltage"], logic["battery_full_voltage"])
+        self.assertEqual(battery, {key: logic[key] for key in stack.BATTERY_VOLTAGES})
+        self.assertLess(battery["battery_critical_voltage"], battery["battery_empty_voltage"])
+        self.assertLess(battery["battery_empty_voltage"], battery["battery_full_voltage"])
+        self.assertLess(battery["battery_full_voltage"], self.driver["battery_critical_high_voltage"])
+        self.assertFalse([key for key in self.driver if key in stack.BATTERY_VOLTAGES or "critical_low" in key])
 
     def test_only_known_nodes_and_keys_change(self):
         for node, section in self.nx60i.items():

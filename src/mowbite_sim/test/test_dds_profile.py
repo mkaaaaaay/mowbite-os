@@ -13,6 +13,7 @@ import signal
 import socket
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -28,6 +29,13 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix
 from mowbite_msgs.msg import HardwareStatus
+
+# The battery voltages of the platform file, which nx60i.launch.py hands to the driver (stack.py of mowbite_bringup).
+sys.path.insert(0, os.path.join(get_package_share_directory("mowbite_bringup"), "launch"))
+import stack  # noqa: E402
+
+BATTERY = stack.battery_voltages([os.path.join(get_package_share_directory("mowbite_bringup"), "config",
+                                               "nx60i.yaml")])
 
 WORK = tempfile.mkdtemp(prefix="mowbite_dds_")
 PROFILE = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "fastdds_loopback.xml")
@@ -62,7 +70,8 @@ def generate_test_description():
         params = yaml.safe_load(f)["xcore_driver"]["ros__parameters"]
     # In a namespace of its own, beside tron_mcu; the file is keyed by the bare node name, so its values go in as a dict.
     driver = Node(package="xcore_driver", executable="xcore_driver_node", namespace="xcore", output="screen",
-                  parameters=[params, {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT}])
+                  parameters=[params, BATTERY,
+                              {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT}])
     return launch.LaunchDescription([
         sim, fake_xcore,
         TimerAction(period=0.5, actions=[driver]),

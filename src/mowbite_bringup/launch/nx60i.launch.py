@@ -52,9 +52,11 @@ def launch_setup(context):
         return halt
     files = [arg("config"), arg("platform_config"), arg("extra_config")]
 
-    # The platform file, then the file of this mower (measured values, datum), then what is given here.
+    # The driver's file, then the file of this mower (measured values, datum), then what is given here: the battery
+    # voltages of the logic and the arguments.
     driver_files = [arg("driver_params")] + ([arg("mower_params")] if arg("mower_params") else [])
-    overrides = {"hold_file": os.path.join(data_dir, data_store.HOLD_FILE) if data_dir else ""}
+    overrides = {"hold_file": os.path.join(data_dir, data_store.HOLD_FILE) if data_dir else "",
+                 **stack.battery_voltages(files)}
     for name in ("datum_lat", "datum_long", "datum_height"):
         value = number(arg(name), name)
         if value is not None:

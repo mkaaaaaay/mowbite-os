@@ -13,6 +13,7 @@ import math
 import os
 import random
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -22,6 +23,7 @@ import zlib
 import launch
 import launch_testing.actions
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
@@ -29,6 +31,13 @@ from mowbite_msgs.msg import GnssFix, HardwareCapabilities, Rtcm, SensorValue
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
+
+# The battery voltages of the platform file, which nx60i.launch.py hands to the driver (stack.py of mowbite_bringup).
+sys.path.insert(0, os.path.join(get_package_share_directory("mowbite_bringup"), "launch"))
+import stack  # noqa: E402
+
+BATTERY = stack.battery_voltages([os.path.join(get_package_share_directory("mowbite_bringup"), "config",
+                                               "nx60i.yaml")])
 
 WORK = tempfile.mkdtemp(prefix="mowbite_xcore_gnss_")
 FLAGS = os.path.join(WORK, "flags.json")
@@ -89,9 +98,10 @@ def generate_test_description():
         output="screen")
     config = os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "config", "nx60i.yaml")
     driver = Node(package="xcore_driver", executable="xcore_driver_node", output="screen",
-                  parameters=[config, {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT,
-                                       "datum_lat": DATUM[0], "datum_long": DATUM[1], "datum_height": DATUM[2],
-                                       "max_correction_age": MAX_AGE}])
+                  parameters=[config, BATTERY,
+                              {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT,
+                               "datum_lat": DATUM[0], "datum_long": DATUM[1], "datum_height": DATUM[2],
+                               "max_correction_age": MAX_AGE}])
     ntrip = Node(package="mowbite_ntrip", executable="mowbite_ntrip_node", output="screen",
                  parameters=[{"data_dir": WORK, "config_check": 1.0, "first_retry": 1.0, "max_retry": 2.0,
                               "data_timeout": 3.0, "gga_interval": 1.0, "max_correction_age": MAX_AGE}])

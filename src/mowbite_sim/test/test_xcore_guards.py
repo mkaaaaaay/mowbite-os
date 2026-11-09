@@ -11,6 +11,7 @@ import random
 import shutil
 import signal
 import struct
+import sys
 import tempfile
 import threading
 import time
@@ -20,12 +21,20 @@ import launch
 import launch_testing.actions
 import launch_testing.asserts
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist, Vector3
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
 from mowbite_msgs.msg import HardwareStatus
 from mowbite_msgs.srv import SetBlade, SetEmergency
+
+# The battery voltages of the platform file, which nx60i.launch.py hands to the driver (stack.py of mowbite_bringup).
+sys.path.insert(0, os.path.join(get_package_share_directory("mowbite_bringup"), "launch"))
+import stack  # noqa: E402
+
+BATTERY = stack.battery_voltages([os.path.join(get_package_share_directory("mowbite_bringup"), "config",
+                                               "nx60i.yaml")])
 
 WORK = tempfile.mkdtemp(prefix="mowbite_xcore_guards_")
 FLAGS = os.path.join(WORK, "flags.json")
@@ -59,8 +68,9 @@ def generate_test_description():
         output="screen")
     config = os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "config", "nx60i.yaml")
     driver = Node(package="xcore_driver", executable="xcore_driver_node", output="screen",
-                  parameters=[config, {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT,
-                                       "allow_blade": True}])
+                  parameters=[config, BATTERY,
+                              {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT,
+                               "allow_blade": True}])
     return launch.LaunchDescription([
         fake_xcore,
         squatter,

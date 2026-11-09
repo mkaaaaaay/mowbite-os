@@ -429,10 +429,13 @@ class XcoreNode : public rclcpp::Node {
 
     const double empty = declare_parameter("battery_empty_voltage", 0.0);
     const double full = declare_parameter("battery_full_voltage", 0.0);
-    const double low = declare_parameter("battery_critical_low_voltage", 0.0);
+    // The first three as the logic has them (nx60i.launch.py hands them over), the last the board's alone.
+    const double low = declare_parameter("battery_critical_voltage", 0.0);
     const double high = declare_parameter("battery_critical_high_voltage", 0.0);
     if (!(low > 0) || !(empty > low) || !(full > empty) || !(high > full)) {
-      throw std::invalid_argument("battery voltages need 0 < critical low < empty < full < critical high");
+      throw std::invalid_argument(
+          "battery voltages need 0 < battery_critical_voltage < battery_empty_voltage < battery_full_voltage < "
+          "battery_critical_high_voltage");
     }
     std::vector<Section> power = {{power::kRegEmptyVoltage, F32(empty)},
                                   {power::kRegFullVoltage, F32(full)},

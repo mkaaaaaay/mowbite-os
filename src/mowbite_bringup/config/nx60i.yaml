@@ -1,5 +1,6 @@
 # Parameters of MowBite OS on the YardForce NX60i on top of tron.yaml (nx60i.launch.py loads tron.yaml, then this
-# file). The driver has its own file, config/nx60i.yaml of xcore_driver; the dimensions are in geometry/nx60i.yaml.
+# file). The driver has its own file, config/nx60i.yaml of xcore_driver, and gets the battery voltages from here; the
+# dimensions are in geometry/nx60i.yaml.
 
 /**:
   ros__parameters:
@@ -11,8 +12,9 @@
 
 mowbite_logic:
   ros__parameters:
-    # 7S pack, as the battery voltages of the driver (xcore_driver/config/nx60i.yaml): mowing goes home below 24.5 V
-    # (the highest voltage of 20 s), at once below 23.0 V; no battery temperature, so battery_hot_temperature stays 0.
+    # 7S pack, also the voltages of the board (nx60i.launch.py hands them to xcore_driver): mowing goes home below
+    # 24.5 V (the highest voltage of 20 s), at once below 23.0 V; no battery temperature, so battery_hot_temperature
+    # stays 0.
     battery_empty_voltage: 24.5
     battery_full_voltage: 28.2
     battery_critical_voltage: 23.0
