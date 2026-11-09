@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "mowbite_logic/logic_core.h"
+#include "logic_test_core.h"
 
 using namespace mowbite_logic;
 
@@ -71,8 +72,8 @@ LogicConfig Tron() {
 }
 
 // IDLE in the field, 2 m east of the station, with the station and the lawn in the map.
-LogicCore Ready(LogicConfig config = Tron(), const Ring& lawn = kLawn) {
-  LogicCore core{config};
+TestCore Ready(LogicConfig config = Tron(), const Ring& lawn = kLawn) {
+  TestCore core{config};
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnCapabilities(true);
@@ -86,7 +87,7 @@ LogicCore Ready(LogicConfig config = Tron(), const Ring& lawn = kLawn) {
   return core;
 }
 
-bool Enabled(const LogicCore& core, const std::string& prefix, const std::string& id) {
+bool Enabled(const TestCore& core, const std::string& prefix, const std::string& id) {
   for (const auto& group : core.Actions()) {
     if (group.prefix != prefix) continue;
     for (const auto& action : group.actions) {
@@ -109,7 +110,7 @@ const Event* Find(const std::vector<Event>& events, const std::string& type) {
 }
 
 // A job on a lawn without anything left to mow: JOB_COMPLETE at once. The events of the start are taken.
-void CompleteJob(LogicCore& core) {
+void CompleteJob(TestCore& core) {
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
   core.TakeEvents();
@@ -117,7 +118,7 @@ void CompleteJob(LogicCore& core) {
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kNone);
 }
 
-DockingLeg Take(LogicCore& core, DockingLeg::Kind kind) {
+DockingLeg Take(TestCore& core, DockingLeg::Kind kind) {
   auto leg = core.TakeDockingLeg();
   EXPECT_TRUE(leg);
   if (!leg) return DockingLeg();
@@ -126,8 +127,8 @@ DockingLeg Take(LogicCore& core, DockingLeg::Kind kind) {
 }
 
 // Docking after the job, through the approach and the line, stopped at the gate within its limits.
-LogicCore AtTheGate(LogicConfig config = Tron()) {
-  LogicCore core = Ready(config);
+TestCore AtTheGate(LogicConfig config = Tron()) {
+  TestCore core = Ready(config);
   CompleteJob(core);
   Take(core, DockingLeg::Kind::kApproach);
   core.OnPose(PoseAt(-0.21, 0.01, Rad(3)));
@@ -138,8 +139,8 @@ LogicCore AtTheGate(LogicConfig config = Tron()) {
 }
 
 // On the last leg onto the contacts.
-LogicCore OntoTheContacts(LogicConfig config = Tron()) {
-  LogicCore core = AtTheGate(config);
+TestCore OntoTheContacts(LogicConfig config = Tron()) {
+  TestCore core = AtTheGate(config);
   core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
   Take(core, DockingLeg::Kind::kContact);
   core.TakeEvents();
@@ -237,7 +238,7 @@ TEST(DockingSequence, TriesAgainRetryCountTimes) {
 }
 
 TEST(Docking, AfterTheJobTheMowerBacksOntoTheStation) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   CompleteJob(core);
   EXPECT_TRUE(core.Docking());
   EXPECT_FALSE(core.Idle());
@@ -315,7 +316,7 @@ TEST(Docking, AfterTheJobTheMowerBacksOntoTheStation) {
 }
 
 TEST(Docking, AContactThatGoesBeforeItIsConfirmedPushesOnSlowly) {
-  LogicCore core = OntoTheContacts();
+  TestCore core = OntoTheContacts();
   core.OnHardwareStatus(Healthy(false, true));
   EXPECT_FALSE(core.FollowerActive());
   core.OnHardwareStatus(Healthy(false, false));
@@ -325,7 +326,7 @@ TEST(Docking, AContactThatGoesBeforeItIsConfirmedPushesOnSlowly) {
 }
 
 TEST(Docking, AbortMowingDocksToo) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
   core.TakeEvents();
   ASSERT_EQ(core.OnAction(kAbortMowing), ActionResult::kDone);
@@ -341,7 +342,7 @@ TEST(Docking, AbortMowingDocksToo) {
 }
 
 TEST(Docking, WithoutAStationOrWithContactsInFrontTheJobEndsInIdle) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.OnMapDock(std::nullopt);
   CompleteJob(core);
   EXPECT_TRUE(core.Idle());
@@ -350,7 +351,7 @@ TEST(Docking, WithoutAStationOrWithContactsInFrontTheJobEndsInIdle) {
 
   LogicConfig front;
   front.dock_contact_x = 0.3;
-  LogicCore other = Ready(front);
+  TestCore other = Ready(front);
   EXPECT_FALSE(other.CanDock());
   CompleteJob(other);
   EXPECT_TRUE(other.Idle());
@@ -358,7 +359,7 @@ TEST(Docking, WithoutAStationOrWithContactsInFrontTheJobEndsInIdle) {
 }
 
 TEST(Docking, AnApproachPointOutsideOfTheAreasFailsAtOnce) {
-  LogicCore core = Ready(Tron(), kFarLawn);
+  TestCore core = Ready(Tron(), kFarLawn);
   CompleteJob(core);
   EXPECT_TRUE(core.Idle());
   const auto events = core.TakeEvents();
@@ -373,7 +374,7 @@ TEST(Docking, AnApproachPointOutsideOfTheAreasFailsAtOnce) {
 }
 
 TEST(Docking, OnTheContactsAtTheEndOfTheJobItIsDockedOnceTheChargeHolds) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
   core.OnHardwareStatus(At(Healthy(true), 10.0));
@@ -389,7 +390,7 @@ TEST(Docking, OnTheContactsAtTheEndOfTheJobItIsDockedOnceTheChargeHolds) {
 }
 
 TEST(Docking, MissingTheGateDrivesOutAndTriesAgain) {
-  LogicCore core = AtTheGate();
+  TestCore core = AtTheGate();
   // 3 cm beside the line at the gate.
   core.OnPose(PoseAt(-0.74, 0.03, Rad(2)));
   core.TakeEvents();
@@ -421,7 +422,7 @@ TEST(Docking, MissingTheGateDrivesOutAndTriesAgain) {
 TEST(Docking, AfterTheLastRetryItFailsAtTheApproachPoint) {
   LogicConfig config = Tron();
   config.dock.retry_count = 1;
-  LogicCore core = OntoTheContacts(config);
+  TestCore core = OntoTheContacts(config);
   for (int attempt = 1; attempt <= 2; attempt++) {
     // Pushed at the station without a contact until it counts as stuck.
     core.OnPose(PoseAt(-0.99, 0.0, 0.0));
@@ -456,7 +457,7 @@ TEST(Docking, AfterTheLastRetryItFailsAtTheApproachPoint) {
 TEST(Docking, TheEndOfTheLineWithoutAContactFailsTheTry) {
   LogicConfig config = Tron();
   config.dock.retry_count = 0;
-  LogicCore core = OntoTheContacts(config);
+  TestCore core = OntoTheContacts(config);
   // Past where the station should be: it is not there.
   core.OnPose(PoseAt(-1.045, 0.0, 0.0));
   core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
@@ -476,7 +477,7 @@ TEST(Docking, TheEndOfTheLineWithoutAContactFailsTheTry) {
 TEST(Docking, AWayThatFailsIsTriedAgain) {
   LogicConfig config = Tron();
   config.dock.retry_count = 1;
-  LogicCore core = Ready(config);
+  TestCore core = Ready(config);
   CompleteJob(core);
   core.TakeEvents();
   Take(core, DockingLeg::Kind::kApproach);
@@ -495,7 +496,7 @@ TEST(Docking, AWayThatFailsIsTriedAgain) {
 }
 
 TEST(Docking, AnEmergencyStopsWithoutDockingFailed) {
-  LogicCore core = OntoTheContacts();
+  TestCore core = OntoTheContacts();
   HardwareSnapshot stop = Healthy();
   stop.emergency = true;
   stop.emergency_reason = kEmergencyLatch | kEmergencyStop;
@@ -517,7 +518,7 @@ TEST(Docking, AnEmergencyStopsWithoutDockingFailed) {
 }
 
 TEST(Docking, AbortDockingStopsWithoutAnEvent) {
-  LogicCore core = OntoTheContacts();
+  TestCore core = OntoTheContacts();
   ASSERT_EQ(core.OnAction(kAbort), ActionResult::kDone);
   EXPECT_TRUE(core.Idle());
   const auto cancel = core.TakeDriveCancel();
@@ -528,7 +529,7 @@ TEST(Docking, AbortDockingStopsWithoutAnEvent) {
 }
 
 TEST(Docking, ABadPositionWaitsAndGoesOn) {
-  LogicCore core = AtTheGate();
+  TestCore core = AtTheGate();
   // The position got bad on the line: the follower stopped.
   core.OnPose(PoseAt(-0.5, 0.0, 0.0, 0.2f));
   core.OnDockingLegEnded(LegEnd::kGps, Reason("POSITION_ACCURACY", "position accuracy 0.20 m worse than 0.10 m"));
@@ -546,7 +547,7 @@ TEST(Docking, ABadPositionWaitsAndGoesOn) {
 }
 
 TEST(Docking, APositionThatStaysBadEndsDocking) {
-  LogicCore core = AtTheGate();
+  TestCore core = AtTheGate();
   core.OnPoseTimeout();
   EXPECT_FALSE(core.FollowerActive());
   const auto cancel = core.TakeDriveCancel();
@@ -571,7 +572,7 @@ TEST(Docking, APositionThatStaysBadEndsDocking) {
 }
 
 TEST(Docking, WithoutTheSafetyMeasurementDockingFails) {
-  LogicCore core = OntoTheContacts();
+  TestCore core = OntoTheContacts();
   core.OnCapabilities(false);
   EXPECT_TRUE(core.Idle());
   EXPECT_TRUE(core.TakeDriveCancel());
@@ -582,7 +583,7 @@ TEST(Docking, WithoutTheSafetyMeasurementDockingFails) {
 }
 
 TEST(DockingStart, RefusedWithAReason) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   EXPECT_TRUE(core.DockingProblem().empty()) << core.DockingProblem().code;
   // On the contacts already.
   core.OnHardwareStatus(Healthy(true));
@@ -626,7 +627,7 @@ TEST(DockingStart, RefusedWithAReason) {
 }
 
 TEST(DockingStart, DocksFromIdle) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.SetDockingSettings(1.2, 2);
   EXPECT_TRUE(core.StartDocking().empty());
   EXPECT_TRUE(core.Docking());
@@ -641,7 +642,7 @@ TEST(DockingStart, DocksFromIdle) {
 }
 
 TEST(DockingStart, WithABadPositionItWaitsForAGoodOne) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
   core.OnPose(PoseAt(2.0, 0.5, M_PI, 0.3f));
   core.TakeEvents();
@@ -668,8 +669,8 @@ ChargeSample Sample(double t, double amps, int percentage = 80, bool contact = t
 }
 
 // The last leg reached the station: raw contact at t - 2 s, debounced at t s, the charge is checked, no current yet.
-LogicCore Checking(LogicConfig config = Tron(), double t = 100.0) {
-  LogicCore core = OntoTheContacts(config);
+TestCore Checking(LogicConfig config = Tron(), double t = 100.0) {
+  TestCore core = OntoTheContacts(config);
   core.OnPose(PoseAt(-1.0, 0.0, 0.0));
   core.OnHardwareStatus(At(Healthy(false, true), t - 2.0));
   core.OnHardwareStatus(At(Healthy(true), t));
@@ -682,8 +683,8 @@ LogicCore Checking(LogicConfig config = Tron(), double t = 100.0) {
 }
 
 // IDLE on the station, the charge confirmed there at t s.
-LogicCore OnTheStation(double t = 10.0) {
-  LogicCore core = Ready();
+TestCore OnTheStation(double t = 10.0) {
+  TestCore core = Ready();
   core.OnPose(PoseAt(-1.0, 0.0, 0.0));
   core.OnHardwareStatus(Charging(t - 5.0));
   core.OnHardwareStatus(Charging(t));
@@ -752,7 +753,7 @@ TEST(ChargeCheck, TheDeadline) {
 }
 
 TEST(Docking, AContactWithoutAChargeCurrentFailsTheTry) {
-  LogicCore core = Checking();
+  TestCore core = Checking();
   // On the contacts at 0.4 A: nothing before the deadline of 20 s.
   core.OnHardwareStatus(Charging(110.0, 0.4f));
   core.OnTick(119.0);
@@ -795,7 +796,7 @@ TEST(Docking, AContactWithoutAChargeCurrentFailsTheTry) {
 TEST(Docking, TheLastTryWithoutAChargeCurrentLeavesTheMowerOnTheContacts) {
   LogicConfig config = Tron();
   config.dock.retry_count = 0;
-  LogicCore core = Checking(config);
+  TestCore core = Checking(config);
   core.OnTick(120.0);
   EXPECT_TRUE(core.Idle());
   EXPECT_FALSE(core.TakeDockingLeg());
@@ -824,7 +825,7 @@ TEST(Docking, TheLastTryWithoutAChargeCurrentLeavesTheMowerOnTheContacts) {
 }
 
 TEST(Docking, WhereTheHardwareChargesByItselfItDrivesOutAtOnce) {
-  LogicCore core = Checking();
+  TestCore core = Checking();
   core.OnCapabilities(true, false);
   core.OnTick(120.0);
   EXPECT_FALSE(core.TakeChargeOff());
@@ -832,7 +833,7 @@ TEST(Docking, WhereTheHardwareChargesByItselfItDrivesOutAtOnce) {
 }
 
 TEST(Docking, ChargingThatCannotBeSwitchedOffKeepsTheMowerOnTheContacts) {
-  LogicCore core = Checking();
+  TestCore core = Checking();
   core.OnTick(120.0);
   ASSERT_TRUE(core.TakeChargeOff());
   core.OnChargeOff(false, "no answer from hw/charge");
@@ -851,7 +852,7 @@ TEST(Docking, ChargingThatCannotBeSwitchedOffKeepsTheMowerOnTheContacts) {
 }
 
 TEST(Docking, AContactThatGoesWhileTheChargeIsCheckedFailsTheTry) {
-  LogicCore core = Checking();
+  TestCore core = Checking();
   core.OnHardwareStatus(Charging(101.0));
   // Gone, the raw one as well: nothing to switch off.
   core.OnHardwareStatus(At(Healthy(), 102.0));
@@ -868,7 +869,7 @@ TEST(Docking, AContactThatGoesWhileTheChargeIsCheckedFailsTheTry) {
 }
 
 TEST(Docking, ANearlyFullBatteryNeedsTheContactOnly) {
-  LogicCore core = Checking();
+  TestCore core = Checking();
   core.OnHardwareStatus(Charging(101.0, 0.0f, 97));
   EXPECT_TRUE(core.Docking());
   core.OnHardwareStatus(Charging(106.0, 0.0f, 97));
@@ -877,7 +878,7 @@ TEST(Docking, ANearlyFullBatteryNeedsTheContactOnly) {
 }
 
 TEST(Docking, AContactWhileWaitingForAPositionChecksTheCharge) {
-  LogicCore core = AtTheGate();
+  TestCore core = AtTheGate();
   core.OnDockingLegEnded(LegEnd::kGps, Reason("POSITION_ACCURACY", "position accuracy 0.20 m worse than 0.10 m"));
   core.OnTick(45.0);
   core.OnHardwareStatus(At(Healthy(true), 50.0));
@@ -893,7 +894,7 @@ TEST(Docking, AContactWhileWaitingForAPositionChecksTheCharge) {
 }
 
 TEST(Docking, AContactBeforeTheWayOutAfterAFailedLegChecksTheCharge) {
-  LogicCore core = OntoTheContacts();
+  TestCore core = OntoTheContacts();
   // The end of the line with the first raw contact; debounced only after the leg ended.
   core.OnHardwareStatus(At(Healthy(false, true), 99.0));
   core.OnPose(PoseAt(-1.0, 0.0, 0.0));
@@ -915,7 +916,7 @@ TEST(Docking, AContactBeforeTheWayOutAfterAFailedLegChecksTheCharge) {
 }
 
 TEST(Docking, AnEmergencyOrAbortWhileTheChargeIsCheckedStops) {
-  LogicCore core = Checking();
+  TestCore core = Checking();
   HardwareSnapshot stop = Charging(101.0);
   stop.emergency = true;
   stop.emergency_reason = kEmergencyLatch | kEmergencyStop;
@@ -926,7 +927,7 @@ TEST(Docking, AnEmergencyOrAbortWhileTheChargeIsCheckedStops) {
   EXPECT_FALSE(Find(events, "DOCKED"));
   EXPECT_FALSE(core.TakeChargeOn());
 
-  LogicCore aborted = Checking();
+  TestCore aborted = Checking();
   ASSERT_EQ(aborted.OnAction(kAbort), ActionResult::kDone);
   EXPECT_TRUE(aborted.Idle());
   EXPECT_EQ(Types(aborted.TakeEvents()), (std::vector<std::string>{"STATE"}));
@@ -938,7 +939,7 @@ TEST(Docking, AnEmergencyOrAbortWhileTheChargeIsCheckedStops) {
 }
 
 TEST(ChargingLost, TheContactGoneForTenSecondsIsTold) {
-  LogicCore core = OnTheStation();
+  TestCore core = OnTheStation();
   core.OnHardwareStatus(At(Healthy(), 20.0));
   core.OnHardwareStatus(At(Healthy(), 29.9));
   EXPECT_TRUE(core.TakeEvents().empty());
@@ -961,7 +962,7 @@ TEST(ChargingLost, TheContactGoneForTenSecondsIsTold) {
 }
 
 TEST(ChargingLost, NotWhenTheContactComesBackOrTheMowerIsLifted) {
-  LogicCore core = OnTheStation();
+  TestCore core = OnTheStation();
   core.OnHardwareStatus(At(Healthy(), 20.0));
   core.OnHardwareStatus(Charging(25.0));
   core.OnHardwareStatus(Charging(31.0));
@@ -978,7 +979,7 @@ TEST(ChargingLost, NotWhenTheContactComesBackOrTheMowerIsLifted) {
 }
 
 TEST(ChargingLost, AChargeCurrentThatStopsBelowTheLimitIsTold) {
-  LogicCore core = OnTheStation();
+  TestCore core = OnTheStation();
   core.OnHardwareStatus(Charging(20.0, 0.0f));
   core.OnHardwareStatus(Charging(29.9, 0.1f));
   EXPECT_TRUE(core.TakeEvents().empty());
@@ -1001,7 +1002,7 @@ TEST(ChargingLost, AChargeCurrentThatStopsBelowTheLimitIsTold) {
 }
 
 TEST(ChargingLost, NotWhenChargingEndsNearFull) {
-  LogicCore core = OnTheStation();
+  TestCore core = OnTheStation();
   core.OnHardwareStatus(Charging(20.0, 0.0f, 96));
   core.OnHardwareStatus(Charging(40.0, 0.0f, 90));
   core.OnHardwareStatus(Charging(80.0, 0.0f, 90));
@@ -1010,7 +1011,7 @@ TEST(ChargingLost, NotWhenChargingEndsNearFull) {
 
 TEST(ChargingLost, AStayThatNeverChargesIsToldOnceAfterTheDeadline) {
   // Put on the station by hand, or started there: unconfirmed until the charge holds.
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.OnHardwareStatus(Charging(10.0, 0.0f));
   core.OnHardwareStatus(Charging(29.9, 0.0f));
   EXPECT_TRUE(core.TakeEvents().empty());
@@ -1022,7 +1023,7 @@ TEST(ChargingLost, AStayThatNeverChargesIsToldOnceAfterTheDeadline) {
   core.OnHardwareStatus(Charging(90.0, 0.0f));
   EXPECT_TRUE(core.TakeEvents().empty());
   // Not while an emergency is on.
-  LogicCore stopped = Ready();
+  TestCore stopped = Ready();
   HardwareSnapshot stop = Charging(10.0, 0.0f);
   stop.emergency = true;
   stop.emergency_reason = kEmergencyLatch | kEmergencyStop;
@@ -1034,13 +1035,13 @@ TEST(ChargingLost, AStayThatNeverChargesIsToldOnceAfterTheDeadline) {
 
 TEST(ChargingLost, LostTelemetryKeepsTheConfirmationAndStartsTheStayAnew) {
   // Confirmed before: no second DOCKED once telemetry is back.
-  LogicCore docked = OnTheStation();
+  TestCore docked = OnTheStation();
   docked.OnHardwareTimeout();
   docked.OnHardwareStatus(Charging(20.0));
   docked.OnHardwareStatus(Charging(25.0));
   EXPECT_FALSE(Find(docked.TakeEvents(), "DOCKED"));
   // Never charging: the 20 s count from the first report after the gap.
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.OnHardwareStatus(Charging(10.0, 0.0f));
   core.OnHardwareTimeout();
   core.OnHardwareStatus(Charging(26.0, 0.0f));
@@ -1051,7 +1052,7 @@ TEST(ChargingLost, LostTelemetryKeepsTheConfirmationAndStartsTheStayAnew) {
 }
 
 TEST(ChargingLost, NothingWhileTheMowerIsBusy) {
-  LogicCore core = OnTheStation();
+  TestCore core = OnTheStation();
   ASSERT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
   core.OnHardwareStatus(At(Healthy(), 20.0));
   core.OnHardwareStatus(At(Healthy(), 40.0));

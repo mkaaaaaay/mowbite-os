@@ -140,16 +140,6 @@ void LogicCore::Drop() {
                  effects_.end());
 }
 
-template <typename T>
-std::vector<T> LogicCore::Extract() {
-  std::vector<T> out;
-  for (auto& effect : effects_) {
-    if (auto* value = std::get_if<T>(&effect)) out.push_back(std::move(*value));
-  }
-  Drop<T>();
-  return out;
-}
-
 void LogicCore::Notify(std::string line) {
   effects_.push_back(Notice{std::move(line)});
 }
@@ -262,10 +252,6 @@ void LogicCore::OnMapStatus(MapDatum datum, const std::string& reason) {
   recorder_.SetMapWritable(writable, map_reason_);
 }
 
-std::optional<MapEdit> LogicCore::TakeMapEdit() {
-  return recorder_.TakeMapEdit();
-}
-
 void LogicCore::OnMapEditResult(bool ok, const std::string& id, const std::string& code,
                                 const std::string& message) {
   recorder_.OnMapEditResult(ok, id, code, message);
@@ -300,12 +286,6 @@ std::vector<Effect> LogicCore::TakeEffects() {
   }
   std::vector<Effect> out;
   out.swap(effects_);
-  return out;
-}
-
-std::vector<std::string> LogicCore::TakeNotices() {
-  std::vector<std::string> out = recorder_.TakeNotices();
-  for (auto& notice : Extract<Notice>()) out.push_back(std::move(notice.line));
   return out;
 }
 
@@ -724,12 +704,6 @@ bool LogicCore::FollowerActive() const {
   return state_ == State::kMowing && pause_ == 0 && (leg_ == Leg::kApproach || leg_ == Leg::kFollow);
 }
 
-std::optional<Reason> LogicCore::TakeDriveCancel() {
-  std::vector<DriveCancel> cancels = Extract<DriveCancel>();
-  if (cancels.empty()) return std::nullopt;
-  return std::move(cancels.front().why);
-}
-
 void LogicCore::CancelDrive(const Reason& reason) {
   // The first reason stays until the node takes it.
   if (!Pending<DriveCancel>()) effects_.push_back(DriveCancel{reason});
@@ -929,29 +903,6 @@ std::vector<SensorReading> LogicCore::Readings() const {
   return readings;
 }
 
-std::vector<Event> LogicCore::TakeEvents() {
-  return Extract<Event>();
-}
-
-bool LogicCore::TakeActionsChanged() {
-  bool changed = !Extract<ActionsChanged>().empty();
-  // Start Mowing and its reason follow the position, the battery and more, which change without an event.
-  const std::string start_reason = StartProblem().code;
-  if (start_reason != last_start_reason_) {
-    last_start_reason_ = start_reason;
-    changed = true;
-  }
-  return changed;
-}
-
-std::vector<ReasonChange> LogicCore::TakeReasonChanges() {
-  return Extract<ReasonChange>();
-}
-
-bool LogicCore::TakeStopRequest() {
-  return !Extract<StopRequest>().empty();
-}
-
 void LogicCore::OnCalibrationStatus(const CalibrationStatus& status, double now_s) {
   calibration_status_ = status;
   calibration_status_s_ = now_s;
@@ -1037,12 +988,6 @@ void LogicCore::RefuseCalibration(const Reason& why) {
   AddEvent("CALIBRATION_REFUSED", std::move(details));
 }
 
-std::optional<CalibrationGoal> LogicCore::TakeCalibrationGoal() {
-  std::vector<CalibrationGoal> goals = Extract<CalibrationGoal>();
-  if (goals.empty()) return std::nullopt;
-  return goals.front();
-}
-
 void LogicCore::OnCalibrationSign(double now_s) {
   if (state_ == State::kCalibrating) calibration_sign_s_ = now_s;
 }
@@ -1106,10 +1051,6 @@ bool LogicCore::Calibrating() const {
 
 bool LogicCore::CalibrationActive() const {
   return state_ == State::kCalibrating && !emergency_;
-}
-
-bool LogicCore::TakeCalibrationCancel() {
-  return !Extract<CalibrationCancel>().empty();
 }
 
 void LogicCore::EndCalibration(const std::optional<Reason>& failure, bool cancel) {
@@ -1242,11 +1183,6 @@ void LogicCore::CheckDockBeforeDrive(double x, double y) {
   BeginDockCheck(DockCheck::kDrive);
 }
 
-std::optional<double> LogicCore::TakeDockCheck() {
-  if (Extract<ReferenceCheck>().empty()) return std::nullopt;
-  return DockedHeading();
-}
-
 bool LogicCore::DockCheckPending() const {
   return dock_check_ != DockCheck::kNone;
 }
@@ -1335,10 +1271,6 @@ bool LogicCore::UndockingForDrive() const {
   return state_ == State::kUndocking && undock_for_ == DockCheck::kDrive;
 }
 
-bool LogicCore::TakeChargeOff() {
-  return !Extract<ChargeOff>().empty();
-}
-
 void LogicCore::OnChargeOff(bool ok, const std::string& message) {
   if (state_ == State::kDocking && docking_out_after_charge_off_) {
     DockingChargeOff(ok, message);
@@ -1352,12 +1284,6 @@ void LogicCore::OnChargeOff(bool ok, const std::string& message) {
   }
   undock_step_ = UndockStep::kDrive;
   Replace(PlanUndock(undock_x_, undock_y_, undock_heading_, config_.undock));
-}
-
-std::optional<UndockPath> LogicCore::TakeUndockPath() {
-  std::vector<UndockPath> paths = Extract<UndockPath>();
-  if (paths.empty()) return std::nullopt;
-  return std::move(paths.front());
 }
 
 void LogicCore::StopUndocking(const std::optional<Reason>& failure, const Reason& why) {
@@ -1442,16 +1368,6 @@ void LogicCore::Undocked() {
     StartMowing();
   }
   Replace(outcome);
-}
-
-bool LogicCore::TakeChargeOn() {
-  return !Extract<ChargeOn>().empty();
-}
-
-std::optional<UndockOutcome> LogicCore::TakeUndockOutcome() {
-  std::vector<UndockOutcome> outcomes = Extract<UndockOutcome>();
-  if (outcomes.empty()) return std::nullopt;
-  return outcomes.front();
 }
 
 bool LogicCore::CanDock() const {
@@ -2416,11 +2332,6 @@ void LogicCore::OnBladeRefused(const std::string& message, int emergency_reason)
 
 void LogicCore::CheckpointNow() {
   SetDue<Checkpoint>(true);
-}
-
-std::optional<std::string> LogicCore::TakeCheckpoint() {
-  if (Extract<Checkpoint>().empty()) return std::nullopt;
-  return CheckpointText(job_.progress());
 }
 
 }  // namespace mowbite_logic

@@ -7,6 +7,7 @@
 
 #include "mowbite_api/catalog.h"
 #include "mowbite_logic/logic_core.h"
+#include "logic_test_core.h"
 
 using namespace mowbite_logic;
 
@@ -56,7 +57,7 @@ LogicConfig Tron() {
   return config;
 }
 
-void Settle(LogicCore& core) {
+void Settle(TestCore& core) {
   core.TakeEvents();
   core.TakeNotices();
   core.TakeActionsChanged();
@@ -67,8 +68,8 @@ void Settle(LogicCore& core) {
 }
 
 // IDLE in the field, 2 m east of the station, with the station and the lawn in the map.
-LogicCore Idle() {
-  LogicCore core{Tron()};
+TestCore Idle() {
+  TestCore core{Tron()};
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnCapabilities(true);
@@ -80,16 +81,16 @@ LogicCore Idle() {
   return core;
 }
 
-LogicCore Mowing() {
-  LogicCore core = Idle();
+TestCore Mowing() {
+  TestCore core = Idle();
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
   Settle(core);
   return core;
 }
 
 // Mowing a lane in front of the mower: a skip waits for the leg to stop.
-LogicCore Following() {
-  LogicCore core = Mowing();
+TestCore Following() {
+  TestCore core = Mowing();
   EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
   JobPath path;
   for (int i = 0; i < 5; ++i) {
@@ -106,52 +107,52 @@ LogicCore Following() {
   return core;
 }
 
-LogicCore Paused() {
-  LogicCore core = Mowing();
+TestCore Paused() {
+  TestCore core = Mowing();
   EXPECT_EQ(core.OnAction("mower_logic:mowing/pause"), ActionResult::kDone);
   Settle(core);
   return core;
 }
 
-LogicCore PausedInEmergency() {
-  LogicCore core = Mowing();
+TestCore PausedInEmergency() {
+  TestCore core = Mowing();
   core.OnHardwareStatus(InEmergency());
   Settle(core);
   return core;
 }
 
-LogicCore Held(LogicCore core) {
+TestCore Held(TestCore core) {
   core.SetHold(2000000000);
   Settle(core);
   return core;
 }
 
 // After abort_mowing on a planned path the mower goes home; the job stays unfinished.
-LogicCore Docking() {
-  LogicCore core = Following();
+TestCore Docking() {
+  TestCore core = Following();
   EXPECT_EQ(core.OnAction("mower_logic:mowing/abort_mowing"), ActionResult::kDone);
   EXPECT_TRUE(core.Docking());
   Settle(core);
   return core;
 }
 
-LogicCore IdleWithJob() {
-  LogicCore core = Docking();
+TestCore IdleWithJob() {
+  TestCore core = Docking();
   EXPECT_EQ(core.OnAction("mower_logic:docking/abort_docking"), ActionResult::kDone);
   Settle(core);
   return core;
 }
 
-LogicCore Recording() {
-  LogicCore core = Idle();
+TestCore Recording() {
+  TestCore core = Idle();
   EXPECT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
   Settle(core);
   return core;
 }
 
 // Recording a ring of three points.
-LogicCore Ring3() {
-  LogicCore core = Recording();
+TestCore Ring3() {
+  TestCore core = Recording();
   EXPECT_EQ(core.OnAction("mower_logic:area_recording/start_recording"), ActionResult::kDone);
   core.OnPose(PoseAt(2.0, 0.5));
   core.OnPose(PoseAt(3.0, 0.5));
@@ -160,16 +161,16 @@ LogicCore Ring3() {
   return core;
 }
 
-LogicCore Unwritable() {
-  LogicCore core = Idle();
+TestCore Unwritable() {
+  TestCore core = Idle();
   core.OnMapStatus(MapDatum::kMismatch, "");
   Settle(core);
   return core;
 }
 
 // On the contacts of the recorded station, the heading not aligned yet, as after a start there.
-LogicCore OnDock() {
-  LogicCore core{Tron()};
+TestCore OnDock() {
+  TestCore core{Tron()};
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy(true));
   core.OnCapabilities(true);
@@ -181,16 +182,16 @@ LogicCore OnDock() {
   return core;
 }
 
-LogicCore Checking() {
-  LogicCore core = OnDock();
+TestCore Checking() {
+  TestCore core = OnDock();
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
   EXPECT_TRUE(core.DockCheckPending());
   Settle(core);
   return core;
 }
 
-LogicCore Undocking() {
-  LogicCore core = Checking();
+TestCore Undocking() {
+  TestCore core = Checking();
   core.TakeDockCheck();
   EXPECT_TRUE(core.OnDockCheck(true, kHome.x + 0.03, kHome.y, 0.022f, "").empty());
   EXPECT_TRUE(core.Undocking());
@@ -200,7 +201,7 @@ LogicCore Undocking() {
 
 struct Scenario {
   const char* name;
-  std::function<LogicCore()> make;
+  std::function<TestCore()> make;
 };
 
 const std::vector<Scenario>& Scenarios() {
@@ -215,7 +216,7 @@ const std::vector<Scenario>& Scenarios() {
       {"held_paused", [] { return Held(Paused()); }},
       {"emergency_idle",
        [] {
-         LogicCore core = Idle();
+         TestCore core = Idle();
          core.OnHardwareStatus(InEmergency());
          Settle(core);
          return core;
@@ -231,7 +232,7 @@ const std::vector<Scenario>& Scenarios() {
   return scenarios;
 }
 
-bool Enabled(const LogicCore& core, const std::string& action_id) {
+bool Enabled(const TestCore& core, const std::string& action_id) {
   for (const auto& group : core.Actions()) {
     for (const auto& action : group.actions) {
       if (group.prefix + "/" + action.id == action_id) return action.enabled;
@@ -252,7 +253,7 @@ const Event* Find(const std::vector<Event>& events, const std::string& type) {
   return it == events.end() ? nullptr : &*it;
 }
 
-CommandOutcome Rpc(LogicCore& core, const std::string& name, json params = json::object(),
+CommandOutcome Rpc(TestCore& core, const std::string& name, json params = json::object(),
                    const Reason& node_problem = Reason()) {
   params["client"] = "app";
   return core.Command(name, params, node_problem);
@@ -267,8 +268,8 @@ TEST(LogicCommands, ActionAndRpcAlikeInEveryState) {
     for (const auto& command : mowbite_api::Commands()) {
       for (const auto& entry : command.actions) {
         const std::string where = std::string(scenario.name) + " " + entry.action;
-        LogicCore by_action = scenario.make();
-        LogicCore by_rpc = scenario.make();
+        TestCore by_action = scenario.make();
+        TestCore by_rpc = scenario.make();
         const bool enabled = Enabled(by_action, entry.action);
         const ActionResult result = by_action.OnAction(entry.action);
         const CommandOutcome outcome = Rpc(by_rpc, command.name, entry.params);
@@ -327,7 +328,7 @@ TEST(LogicCommands, ActionAndRpcAlikeInEveryState) {
 }
 
 TEST(LogicCommands, ARefusalNamesTheEventItWentOutAs) {
-  LogicCore core = Idle();
+  TestCore core = Idle();
   core.OnHardwareStatus(InEmergency());
   Settle(core);
   const CommandOutcome outcome = Rpc(core, "mowing.start");
@@ -347,7 +348,7 @@ TEST(LogicCommands, ARefusalNamesTheEventItWentOutAs) {
 }
 
 TEST(LogicCommands, WrongStateGoesOutOnlyAsTheAnswer) {
-  LogicCore core = Idle();
+  TestCore core = Idle();
   for (const char* name : {"mowing.pause", "mowing.continue", "mowing.abort", "mowing.skip_area", "mowing.skip_path",
                            "undocking.abort", "docking.abort", "recording.exit", "recording.ring_start"}) {
     const CommandOutcome outcome = Rpc(core, name);
@@ -360,7 +361,7 @@ TEST(LogicCommands, WrongStateGoesOutOnlyAsTheAnswer) {
   }
   EXPECT_TRUE(core.TakeEvents().empty());
   // While recording, a step the recorder has off: WRONG_STATE with its sub state.
-  LogicCore recording = Recording();
+  TestCore recording = Recording();
   const CommandOutcome outcome = Rpc(recording, "recording.ring_stop");
   EXPECT_EQ(outcome.why.code, "WRONG_STATE");
   EXPECT_EQ(outcome.data["state"], "AREA_RECORDING");
@@ -368,7 +369,7 @@ TEST(LogicCommands, WrongStateGoesOutOnlyAsTheAnswer) {
 }
 
 TEST(LogicCommands, ResetJobOnlyWithAJob) {
-  LogicCore core = Idle();
+  TestCore core = Idle();
   CommandOutcome outcome = Rpc(core, "mowing.reset_job");
   EXPECT_EQ(outcome.why.code, "NO_JOB");
   EXPECT_EQ(outcome.data["event"], "COMMAND_REFUSED");
@@ -386,7 +387,7 @@ TEST(LogicCommands, ResetJobOnlyWithAJob) {
 }
 
 TEST(LogicCommands, SkipOnlyWhatTheClientSaw) {
-  LogicCore core = Following();
+  TestCore core = Following();
   ASSERT_EQ(core.RobotState().current_area, 0);
   CommandOutcome outcome = Rpc(core, "mowing.skip_area", {{"area", 1}});
   EXPECT_EQ(outcome.why.code, "CHANGED");
@@ -411,7 +412,7 @@ TEST(LogicCommands, SkipOnlyWhatTheClientSaw) {
 }
 
 TEST(LogicCommands, ParamsThatDoNotFitChangeNothing) {
-  LogicCore core = Idle();
+  TestCore core = Idle();
   CommandOutcome outcome = core.Command("mowing.start", {{"areas", {"lawn"}}});
   EXPECT_EQ(outcome.invalid_field, "areas");
   EXPECT_FALSE(outcome.accepted);
@@ -427,7 +428,7 @@ TEST(LogicCommands, ParamsThatDoNotFitChangeNothing) {
 }
 
 TEST(LogicCommands, StartAnswersWithTheState) {
-  LogicCore core = Idle();
+  TestCore core = Idle();
   CommandOutcome outcome = Rpc(core, "mowing.start");
   ASSERT_TRUE(outcome.accepted);
   EXPECT_EQ(outcome.result, json::parse(R"({"state": "MOWING", "sub_state": "", "check": false})"));
@@ -449,7 +450,7 @@ TEST(LogicCommands, StartAnswersWithTheState) {
 }
 
 TEST(LogicCommands, DockingStart) {
-  LogicCore core = Idle();
+  TestCore core = Idle();
   CommandOutcome outcome = Rpc(core, "docking.start");
   ASSERT_TRUE(outcome.accepted) << outcome.why.code;
   EXPECT_EQ(outcome.result, json::parse(R"({"state": "DOCKING", "sub_state": ""})"));
@@ -463,7 +464,7 @@ TEST(LogicCommands, DockingStart) {
 }
 
 TEST(LogicCommands, TheHoldRefusesEveryStartWithHold) {
-  LogicCore core = Held(Idle());
+  TestCore core = Held(Idle());
   for (const auto& [name, group] : std::vector<std::pair<std::string, std::string>>{
            {"mowing.start", "MOWING_REFUSED"},
            {"recording.start", "RECORDING_REFUSED"},
@@ -482,7 +483,7 @@ TEST(LogicCommands, TheHoldRefusesEveryStartWithHold) {
 }
 
 TEST(LogicCommands, InAnEmergencyNoSecondEvent) {
-  LogicCore core = PausedInEmergency();
+  TestCore core = PausedInEmergency();
   CommandOutcome outcome = Rpc(core, "mowing.continue");
   EXPECT_EQ(outcome.why.code, "EMERGENCY");
   EXPECT_EQ(outcome.data["event"], "MOWING_REFUSED");
@@ -498,7 +499,7 @@ TEST(LogicCommands, InAnEmergencyNoSecondEvent) {
 }
 
 TEST(LogicCommands, RecordingRefusalCarriesItsAction) {
-  LogicCore core = Recording();
+  TestCore core = Recording();
   // Without an outline the recorder has saving off: WRONG_STATE, no event.
   CommandOutcome outcome = Rpc(core, "recording.save", {{"type", "mow"}});
   EXPECT_EQ(outcome.why.code, "WRONG_STATE");
@@ -517,7 +518,7 @@ TEST(LogicCommands, RecordingRefusalCarriesItsAction) {
 
 // The end of the emergency after emergency.reset tells who released it (masterplan 3.1a).
 TEST(LogicCommands, ReleaseCarriesSourceAndClient) {
-  LogicCore core = Idle();
+  TestCore core = Idle();
   core.OnHardwareStatus(InEmergency());
   core.TakeEvents();
   CommandOutcome outcome = Rpc(core, "emergency.reset");
@@ -579,7 +580,7 @@ TEST(LogicCommands, ReleaseCarriesSourceAndClient) {
 
 // STOP let go after the gesture of the driver: released like emergency.reset, with source button.
 TEST(LogicCommands, StopAtTheMowerReleasesWithSourceButton) {
-  LogicCore core = Idle();
+  TestCore core = Idle();
   // Outside an emergency there is nothing to release.
   EXPECT_FALSE(core.OnStopRelease());
   core.OnHardwareStatus(InEmergency());
@@ -621,7 +622,7 @@ TEST(LogicCommands, StopAtTheMowerReleasesWithSourceButton) {
 
 // The release by STOP starts nothing: mowing stays paused until continued (G11).
 TEST(LogicCommands, StopAtTheMowerKeepsMowingPaused) {
-  LogicCore core = PausedInEmergency();
+  TestCore core = PausedInEmergency();
   ASSERT_EQ(core.RobotState().state, "PAUSED");
   EXPECT_TRUE(core.OnStopRelease());
   core.OnReleaseAnswered(1.0);
@@ -633,7 +634,7 @@ TEST(LogicCommands, StopAtTheMowerKeepsMowingPaused) {
 }
 
 TEST(LogicCommands, AnEmergencyEndsWithASourceOnlyAfterItsOwnRequest) {
-  LogicCore core = Idle();
+  TestCore core = Idle();
   core.OnHardwareStatus(InEmergency());
   core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.TakeEvents().back().details.contains("source"));
@@ -653,7 +654,7 @@ TEST(LogicCommands, StartMowingShowsTheReasonOfItsRefusal) {
   ASSERT_NE(refused, nullptr);
   std::set<std::string> reasons;
   for (const auto& scenario : Scenarios()) {
-    LogicCore core = scenario.make();
+    TestCore core = scenario.make();
     const Action* start = nullptr;
     std::vector<ActionGroup> groups = core.Actions();
     for (const auto& group : groups) {

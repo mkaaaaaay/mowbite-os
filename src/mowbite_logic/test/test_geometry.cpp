@@ -4,6 +4,7 @@
 
 #include "mowbite_logic/geometry.h"
 #include "mowbite_logic/logic_core.h"
+#include "logic_test_core.h"
 
 namespace mowbite_logic {
 namespace {
@@ -432,7 +433,7 @@ TEST(Geometry, AFileThatIsWrongChangesNothing) {
 }
 
 TEST(GeometryEvent, NamesWhatChangedAndStaysInfoWithoutASmallerBody) {
-  LogicCore core{LogicConfig{}};
+  TestCore core{LogicConfig{}};
   core.GeometryChanged({"blade_ahead", "antenna_x"}, {}, 3);
   const auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
@@ -449,7 +450,7 @@ TEST(GeometryEvent, NamesWhatChangedAndStaysInfoWithoutASmallerBody) {
 }
 
 TEST(GeometryEvent, WarnsWithTheReasonWhenTheBodyIsBelowThePlatformsValue) {
-  LogicCore core{LogicConfig{}};
+  TestCore core{LogicConfig{}};
   core.GeometryChanged({"robot_width", "robot_rear"}, {"robot_width"}, 4);
   const auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);

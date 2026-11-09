@@ -250,19 +250,21 @@ struct ReasonChange {
   int to = 0;
 };
 
-// What the core asks of the node, one type per command, in the order it came up.
-// The follower stops the drive or leg on its way; a drive ends with why.
+// What the core asks of the node, one type per command, in the order it came up (TakeEffects).
+// A drive or a leg of the job has to stop at once (emergency, no pose, no safety measurement, pause, skip, abort): the
+// node cancels it, and a drive ends with why, the first reason given.
 struct DriveCancel {
   Reason why;
 };
-// One zero command to the wheels at once instead of waiting for the cmd_vel watchdog of the driver.
+// The logic left a state that drives: one zero command to the wheels at once instead of waiting for the cmd_vel
+// watchdog of the driver.
 struct StopRequest {};
 // The goal of calibration/run is canceled.
 struct CalibrationCancel {};
-// hw/charge off before the mower leaves the contacts, or on again.
+// hw/charge off before the mower leaves the contacts (the answer goes to OnChargeOff), or on again.
 struct ChargeOff {};
 struct ChargeOn {};
-// localization/set_heading with the heading of the station, for the reference check (OnDockCheck).
+// localization/set_heading with the heading of the station for the reference check, whose answer goes to OnDockCheck.
 struct ReferenceCheck {
   double heading = 0;
 };
@@ -272,7 +274,7 @@ struct ActionsChanged {};
 struct Notice {
   std::string line;
 };
-// checkpoint.json with this text.
+// checkpoint.json with this text, after each change worth keeping.
 struct Checkpoint {
   std::string text;
 };
@@ -374,8 +376,7 @@ class LogicCore {
   json RefusalData(const std::string& group, const Reason& why, const std::string& event_id = "") const;
   // Recording starts and saves only while the map fits the datum in use, or is still empty and takes it.
   void OnMapStatus(MapDatum datum, const std::string& reason);
-  // The change of the map a recording asks for, once; the node sends it to mowbite_map.
-  std::optional<MapEdit> TakeMapEdit();
+  // The answer of mowbite_map to a MapEdit a recording asked for.
   void OnMapEditResult(bool ok, const std::string& id, const std::string& code, const std::string& message);
   // Remote control reaches the wheels only while recording an area, like in OpenMower. After an emergency or a state
   // change it waits for a zero command or a pause of kTeleopQuietS, so a held joystick does not move the mower.
@@ -398,9 +399,6 @@ class LogicCore {
   // The commands of the follower reach the wheels only while driving, or mowing on a leg and not paused, and without
   // emergency; teleop only while recording. So safety/drive has one source at a time.
   bool FollowerActive() const;
-  // Once when a drive or a leg of the job has to stop at once (emergency, no pose, no safety measurement, pause, skip,
-  // abort): the node cancels it, and a drive ends with this reason.
-  std::optional<Reason> TakeDriveCancel();
 
   // The calibration drive (mowbite_calibration): IDLE with the sub state CALIBRATING. It starts only on
   // calibration.start, never by itself; the program drives on calibration/cmd_vel, which reaches the wheels only while
@@ -414,10 +412,9 @@ class LogicCore {
   std::optional<CalibrationStatus> CalibrationStatusNow(double now_s) const;
   // calibration.start: empty when CALIBRATING began, else the first reason against it (also CALIBRATION_REFUSED).
   Reason StartCalibration(double now_s);
-  // A start refused by the node (no program, the last drive still stopping): CALIBRATION_REFUSED.
+  // A start refused by the node (no program, the last drive still stopping): CALIBRATION_REFUSED. After a start the
+  // node hands the CalibrationGoal to calibration/run.
   void RefuseCalibration(const Reason& why);
-  // The goal for calibration/run, once after the start.
-  std::optional<CalibrationGoal> TakeCalibrationGoal();
   // A sign of the program: the goal taken, or feedback, which also tells the phase (event CALIBRATION when it changes).
   void OnCalibrationSign(double now_s);
   void OnCalibrationFeedback(const std::string& phase, int index, double now_s);
@@ -429,8 +426,6 @@ class LogicCore {
   bool TickCalibration(double now_s);
   bool Calibrating() const;
   bool CalibrationActive() const;
-  // True once when the node has to cancel the goal of calibration/run.
-  bool TakeCalibrationCancel();
 
   // The mow areas of the map and why mowing may not plan from it (empty if it may).
   void OnMowMap(std::vector<JobArea> areas, const Reason& problem);
@@ -444,28 +439,23 @@ class LogicCore {
   // The driver reports a debounced contact with the docking station.
   bool DockContact() const;
   // On the docking station mowing (start_mowing) and drives start only after the reference check (G24): the node sets
-  // the heading TakeDockCheck returns, once per check, with localization/set_heading and hands the answer to
-  // OnDockCheck. A drive to (x, y) asks for its check here, after DriveProblem found nothing.
+  // the heading of the ReferenceCheck with localization/set_heading and hands the answer to OnDockCheck. A drive to
+  // (x, y) asks for its check here, after DriveProblem found nothing.
   void CheckDockBeforeDrive(double x, double y);
-  std::optional<double> TakeDockCheck();
   bool DockCheckPending() const;
   // The answer of localization/set_heading: base_link with the heading of the station and its accuracy; ok false
   // without a recent fix or without an answer (message says which). Empty when the check passed and undocking
   // starts, else why mowing or the drive does not start, which also goes out as MOWING_REFUSED or DRIVE_REFUSED.
   Reason OnDockCheck(bool ok, double x, double y, float accuracy, const std::string& message);
-  // UNDOCKING: first charging off where the driver can stop it (the node calls hw/charge when TakeChargeOff says so,
-  // once, and hands the answer to OnChargeOff), then the path of TakeUndockPath to the follower, whose end goes to OnUndockEnded. After UNDOCKED
-  // mowing or the drive starts like away from the station. Charging is allowed again (TakeChargeOn) when undocking
-  // ends otherwise, as the mower may still stand on the contacts. TakeUndockOutcome tells the node once how it ended.
-  // Docking uses TakeChargeOff, OnChargeOff and TakeChargeOn the same way before it drives off the contacts.
+  // UNDOCKING: first charging off where the driver can stop it (ChargeOff, whose answer goes to OnChargeOff), then
+  // the UndockPath to the follower, whose end goes to OnUndockEnded. After UNDOCKED mowing or the drive starts like
+  // away from the station. Charging is allowed again (ChargeOn) when undocking ends otherwise, as the mower may still
+  // stand on the contacts. The UndockOutcome tells the node how it ended. Docking uses ChargeOff, OnChargeOff and
+  // ChargeOn the same way before it drives off the contacts.
   bool Undocking() const;
   bool UndockingForDrive() const;
-  bool TakeChargeOff();
   void OnChargeOff(bool ok, const std::string& message);
-  std::optional<UndockPath> TakeUndockPath();
   void OnUndockEnded(LegEnd end, const Reason& reason);
-  bool TakeChargeOn();
-  std::optional<UndockOutcome> TakeUndockOutcome();
   // Stops undocking without UNDOCKING_FAILED, like abort_undocking (also logic/stop_drive for a drive).
   void AbortUndocking(const Reason& why);
   // DOCKING: back onto the station of the map after JOB_COMPLETE, abort_mowing or a reason of HomeWatch, or on
@@ -564,25 +554,12 @@ class LogicCore {
   bool BladeWanted() const;
   // hw/blade refused while the blade was wanted: mowing pauses, with reason bits of the answer as for that emergency.
   void OnBladeRefused(const std::string& message, int emergency_reason = 0);
-  // The checkpoint to save, once after each change worth keeping.
-  std::optional<std::string> TakeCheckpoint();
 
   RobotStateData RobotState() const;
   std::vector<ActionGroup> Actions() const;
   std::vector<SensorDefinition> Sensors() const;
   std::vector<SensorReading> Readings() const;
 
-  // Events since the last call, oldest first.
-  std::vector<Event> TakeEvents();
-  // True once after the enabled flags of the actions changed.
-  bool TakeActionsChanged();
-  // Every change of the emergency reason since the last call, for the log line the app reads.
-  std::vector<ReasonChange> TakeReasonChanges();
-  // True once after the logic left a state that drives: the wheels get a zero command at once instead of waiting for
-  // the cmd_vel watchdog of the driver.
-  bool TakeStopRequest();
-  // Lines for the log since the last call.
-  std::vector<std::string> TakeNotices();
   // Everything the node has to do since the last call, oldest first; a checkpoint with the progress now. The next step
   // of the job (NextJobStep), of docking (TakeDockingLeg) and the overlay stay queries.
   std::vector<Effect> TakeEffects();
@@ -703,7 +680,7 @@ class LogicCore {
   // Ends a calibration drive here: CALIBRATION_FAILED unless done, CALIBRATION end, IDLE; cancel: the program too.
   void EndCalibration(const std::optional<Reason>& failure, bool cancel);
   // The effects of one type in effects_: whether one waits; a flag added once or every one removed; the waiting one
-  // replaced; every one removed; every one removed and returned, oldest first.
+  // replaced; every one removed.
   template <typename T>
   bool Pending() const;
   template <typename T>
@@ -712,8 +689,6 @@ class LogicCore {
   void Replace(T value);
   template <typename T>
   void Drop();
-  template <typename T>
-  std::vector<T> Extract();
   void Notify(std::string line);
 
   LogicConfig config_;

@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "mowbite_logic/logic_core.h"
+#include "logic_test_core.h"
 
 using namespace mowbite_logic;
 
@@ -44,8 +45,8 @@ LogicConfig Tron() {
 }
 
 // On the contacts of the recorded station, the heading of the localization not aligned yet, as after a start there.
-LogicCore Docked(LogicConfig config = Tron()) {
-  LogicCore core{config};
+TestCore Docked(LogicConfig config = Tron()) {
+  TestCore core{config};
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy(true));
   core.OnCapabilities(true);
@@ -59,7 +60,7 @@ LogicCore Docked(LogicConfig config = Tron()) {
   return core;
 }
 
-bool Enabled(const LogicCore& core, const std::string& prefix, const std::string& id) {
+bool Enabled(const TestCore& core, const std::string& prefix, const std::string& id) {
   for (const auto& group : core.Actions()) {
     if (group.prefix != prefix) continue;
     for (const auto& action : group.actions) {
@@ -76,7 +77,7 @@ const Event* Find(const std::vector<Event>& events, const std::string& type) {
 }
 
 // start_mowing on the station: the check is asked for with the heading of the mower there.
-void StartChecking(LogicCore& core) {
+void StartChecking(TestCore& core) {
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
   ASSERT_TRUE(core.DockCheckPending());
 }
@@ -84,7 +85,7 @@ void StartChecking(LogicCore& core) {
 }  // namespace
 
 TEST(DockStart, OnTheContactsNoHeadingIsNeededButAStricterPosition) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   EXPECT_TRUE(core.StartProblem().empty()) << core.StartProblem().code;
   EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_mowing"));
   core.OnPose(PoseAt(kDock.x, kDock.y, 0.05f, false));
@@ -100,7 +101,7 @@ TEST(DockStart, OnTheContactsNoHeadingIsNeededButAStricterPosition) {
 }
 
 TEST(DockStart, WithoutTheStationInTheMapNoStartAndNoDrive) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   core.OnMapDock(std::nullopt);
   EXPECT_EQ(core.StartProblem().code, "NO_DOCK");
   EXPECT_EQ(core.DriveProblem().code, "NO_DOCK");
@@ -115,7 +116,7 @@ TEST(DockStart, WithoutTheStationInTheMapNoStartAndNoDrive) {
 }
 
 TEST(DockStart, TheCheckComesFirstAndTheMowerStaysIdle) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartChecking(core);
   EXPECT_FALSE(core.Mowing());
   EXPECT_EQ(core.RobotState().state, "IDLE");
@@ -137,7 +138,7 @@ TEST(DockStart, TheCheckComesFirstAndTheMowerStaysIdle) {
 }
 
 TEST(DockStart, FarFromTheRecordedStationIsAReferenceMismatch) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartChecking(core);
   core.TakeDockCheck();
   core.TakeEvents();
@@ -162,7 +163,7 @@ TEST(DockStart, FarFromTheRecordedStationIsAReferenceMismatch) {
 }
 
 TEST(DockStart, ACheckThatPassesLeadsToUndocking) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartChecking(core);
   core.TakeDockCheck();
   core.TakeNotices();
@@ -179,7 +180,7 @@ TEST(DockStart, ACheckThatPassesLeadsToUndocking) {
 }
 
 TEST(DockStart, WithoutAFixOrWithAPoorOneTheStartIsRefused) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartChecking(core);
   core.TakeEvents();
   EXPECT_EQ(core.OnDockCheck(false, 0, 0, 999.0f, "No recent RTK fixed position").code, "NO_POSITION");
@@ -195,7 +196,7 @@ TEST(DockStart, WithoutAFixOrWithAPoorOneTheStartIsRefused) {
 }
 
 TEST(DockStart, WhatChangedDuringTheCheckComesFirst) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartChecking(core);
   HardwareSnapshot hw = Healthy(true);
   hw.emergency = true;
@@ -203,7 +204,7 @@ TEST(DockStart, WhatChangedDuringTheCheckComesFirst) {
   core.OnHardwareStatus(hw);
   EXPECT_EQ(core.OnDockCheck(true, kDock.x, kDock.y, 0.02f, "").code, "EMERGENCY");
 
-  LogicCore lifted = Docked();
+  TestCore lifted = Docked();
   StartChecking(lifted);
   lifted.OnHardwareStatus(Healthy(false));
   EXPECT_EQ(lifted.OnDockCheck(true, kDock.x, kDock.y, 0.02f, "").code, "NO_DOCK_CONTACT");
@@ -213,7 +214,7 @@ TEST(DockStart, WhatChangedDuringTheCheckComesFirst) {
 TEST(DockStart, ContactsInFrontFaceTheWayIn) {
   LogicConfig config;
   config.dock_contact_x = 0.3;
-  LogicCore core = Docked(config);
+  TestCore core = Docked(config);
   StartChecking(core);
   EXPECT_NEAR(core.TakeDockCheck().value_or(99), M_PI / 2, 1e-12);
   // Undocking backwards is not built: a check that passes ends on the station.
@@ -227,7 +228,7 @@ TEST(DockStart, ContactsInFrontFaceTheWayIn) {
 }
 
 TEST(DockStart, OffTheStationNoCheck) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   core.OnHardwareStatus(Healthy(false));
   core.OnPose(PoseAt(0, 0));
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
@@ -237,13 +238,13 @@ TEST(DockStart, OffTheStationNoCheck) {
 }
 
 TEST(DockStart, AnAnswerWithoutACheckChangesNothing) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   EXPECT_EQ(core.OnDockCheck(true, kDock.x, kDock.y, 0.02f, "").code, "STOPPED");
   EXPECT_TRUE(core.TakeEvents().empty());
 }
 
 TEST(DockDrive, ADriveFromTheStationIsCheckedFirst) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   ASSERT_TRUE(core.DriveProblem().empty()) << core.DriveProblem().code;
   core.CheckDockBeforeDrive(2.0, 0.0);
   EXPECT_FALSE(core.Driving());
@@ -261,7 +262,7 @@ TEST(DockDrive, ADriveFromTheStationIsCheckedFirst) {
 }
 
 TEST(DockRecording, ContactAndHeadingComeFromTheCore) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   core.OnHardwareStatus(Healthy(false));
   core.OnMapStatus(MapDatum::kMatch, "");
   ASSERT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);

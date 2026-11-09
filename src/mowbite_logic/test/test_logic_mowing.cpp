@@ -4,6 +4,7 @@
 #include <functional>
 
 #include "mowbite_logic/logic_core.h"
+#include "logic_test_core.h"
 
 using namespace mowbite_logic;
 
@@ -51,8 +52,8 @@ JobPath Lane(double x0) {
   return path;
 }
 
-LogicCore Ready(LogicConfig config = LogicConfig{}) {
-  LogicCore core{config};
+TestCore Ready(LogicConfig config = LogicConfig{}) {
+  TestCore core{config};
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnCapabilities(true);
@@ -63,7 +64,7 @@ LogicCore Ready(LogicConfig config = LogicConfig{}) {
   return core;
 }
 
-bool Enabled(const LogicCore& core, const std::string& prefix, const std::string& id) {
+bool Enabled(const TestCore& core, const std::string& prefix, const std::string& id) {
   for (const auto& group : core.Actions()) {
     if (group.prefix != prefix) continue;
     for (const auto& action : group.actions) {
@@ -86,8 +87,8 @@ const Event* Find(const std::vector<Event>& events, const std::string& type) {
 }
 
 // Started, the first area planned with two lanes from the pose on.
-LogicCore Following(LogicConfig config = LogicConfig{}) {
-  LogicCore core = Ready(config);
+TestCore Following(LogicConfig config = LogicConfig{}) {
+  TestCore core = Ready(config);
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
   EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
   core.OnJobPlanned({Lane(1), Lane(1)}, "fp");
@@ -104,24 +105,24 @@ LogicCore Following(LogicConfig config = LogicConfig{}) {
 TEST(LogicMowing, StartRefusedWithAReasonAndAnEvent) {
   struct Case {
     const char* why;
-    std::function<void(LogicCore&)> spoil;
+    std::function<void(TestCore&)> spoil;
   };
   const std::vector<Case> cases = {
-      {"EMERGENCY", [](LogicCore& c) { auto hw = Healthy(); hw.emergency = true; c.OnHardwareStatus(hw); }},
-      {"NO_SAFETY_MEASUREMENT", [](LogicCore& c) { c.OnCapabilities(false); }},
+      {"EMERGENCY", [](TestCore& c) { auto hw = Healthy(); hw.emergency = true; c.OnHardwareStatus(hw); }},
+      {"NO_SAFETY_MEASUREMENT", [](TestCore& c) { c.OnCapabilities(false); }},
       // On the contacts without a docking station in the map.
-      {"NO_DOCK", [](LogicCore& c) { auto hw = Healthy(); hw.dock_contact = true; c.OnHardwareStatus(hw); }},
-      {"RAIN", [](LogicCore& c) { auto hw = Healthy(); hw.rain = true; c.OnHardwareStatus(hw); }},
-      {"BATTERY_LOW", [](LogicCore& c) { auto hw = Healthy(); hw.battery_voltage = 20; c.OnHardwareStatus(hw); }},
-      {"NO_POSITION", [](LogicCore& c) { c.OnPoseTimeout(); }},
-      {"POSITION_ACCURACY", [](LogicCore& c) { c.OnPose(PoseAt(1, 2, 0.5f)); }},
-      {"NO_HEADING", [](LogicCore& c) { auto p = PoseAt(1, 2); p.orientation_valid = false; c.OnPose(p); }},
-      {"MAP_MISMATCH", [](LogicCore& c) { c.OnMowMap(Garden(), MapReason(MapDatum::kMismatch, "map mismatch")); }},
-      {"NO_MOWING_AREA", [](LogicCore& c) { c.OnMowMap({{"bed", "", false}}, Reason()); }},
-      {"BUSY", [](LogicCore& c) { c.OnAction("mower_logic:idle/start_area_recording"); }},
+      {"NO_DOCK", [](TestCore& c) { auto hw = Healthy(); hw.dock_contact = true; c.OnHardwareStatus(hw); }},
+      {"RAIN", [](TestCore& c) { auto hw = Healthy(); hw.rain = true; c.OnHardwareStatus(hw); }},
+      {"BATTERY_LOW", [](TestCore& c) { auto hw = Healthy(); hw.battery_voltage = 20; c.OnHardwareStatus(hw); }},
+      {"NO_POSITION", [](TestCore& c) { c.OnPoseTimeout(); }},
+      {"POSITION_ACCURACY", [](TestCore& c) { c.OnPose(PoseAt(1, 2, 0.5f)); }},
+      {"NO_HEADING", [](TestCore& c) { auto p = PoseAt(1, 2); p.orientation_valid = false; c.OnPose(p); }},
+      {"MAP_MISMATCH", [](TestCore& c) { c.OnMowMap(Garden(), MapReason(MapDatum::kMismatch, "map mismatch")); }},
+      {"NO_MOWING_AREA", [](TestCore& c) { c.OnMowMap({{"bed", "", false}}, Reason()); }},
+      {"BUSY", [](TestCore& c) { c.OnAction("mower_logic:idle/start_area_recording"); }},
   };
   for (const auto& test : cases) {
-    LogicCore core = Ready();
+    TestCore core = Ready();
     EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_mowing"));
     test.spoil(core);
     core.TakeEvents();
@@ -139,7 +140,7 @@ TEST(LogicMowing, StartRefusedWithAReasonAndAnEvent) {
 }
 
 TEST(LogicMowing, StartOpensAJobAndASessionCarriedByEveryEvent) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
   EXPECT_TRUE(core.Mowing());
   EXPECT_EQ(core.RobotState().state, "MOWING");
@@ -171,7 +172,7 @@ TEST(LogicMowing, StartOpensAJobAndASessionCarriedByEveryEvent) {
 }
 
 TEST(LogicMowing, PlansEachMowableAreaFollowsItsPathsAndCompletesTheJob) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.OnAction(kStart);
   const std::string job = core.TakeEvents()[0].details["job_id"];
   JobStep step = core.NextJobStep(0);
@@ -228,7 +229,7 @@ TEST(LogicMowing, PlansEachMowableAreaFollowsItsPathsAndCompletesTheJob) {
 }
 
 TEST(LogicMowing, PauseStopsAtOnceAndContinueGoesOnFromWhereItStopped) {
-  LogicCore core = Following();
+  TestCore core = Following();
   core.OnJobProgress(2);
   EXPECT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
   EXPECT_EQ(core.RobotState().state, "PAUSED");
@@ -261,7 +262,7 @@ TEST(LogicMowing, PauseStopsAtOnceAndContinueGoesOnFromWhereItStopped) {
 }
 
 TEST(LogicMowing, EmergencyPausesAndWaitsForContinueAfterTheReset) {
-  LogicCore core = Following();
+  TestCore core = Following();
   auto hw = Healthy();
   hw.emergency = true;
   hw.emergency_reason = kEmergencyLatch | kEmergencyLift;
@@ -285,8 +286,8 @@ TEST(LogicMowing, ABladeRefusedForAnEmergencyPausesAsTheEmergencyDoes) {
   LogicConfig config;
   config.mow_with_blade = true;
   // The same stop, once told by hw/status, once first by the answer of hw/blade.
-  LogicCore by_status = Following(config);
-  LogicCore by_blade = Following(config);
+  TestCore by_status = Following(config);
+  TestCore by_blade = Following(config);
   by_status.OnJobProgress(1);
   by_blade.OnJobProgress(1);
   ASSERT_TRUE(by_blade.BladeWanted());
@@ -323,7 +324,7 @@ TEST(LogicMowing, ABladeRefusedForAnEmergencyPausesAsTheEmergencyDoes) {
   EXPECT_EQ(by_blade.OnAction(kMowing + "continue"), ActionResult::kDone);
   EXPECT_EQ(by_blade.RobotState().state, "MOWING");
   // Without reason bits a refusal stays a fault of its own.
-  LogicCore refused = Following(config);
+  TestCore refused = Following(config);
   refused.OnJobProgress(1);
   refused.OnBladeRefused("mower on the dock", 0);
   const auto events = refused.TakeEvents();
@@ -334,7 +335,7 @@ TEST(LogicMowing, ABladeRefusedForAnEmergencyPausesAsTheEmergencyDoes) {
 
 TEST(LogicMowing, ARefusalOfABladeThatIsNotWantedChangesNothing) {
   // Without mow_with_blade the blade is never wanted, so a late answer of hw/blade does not pause.
-  LogicCore core = Following();
+  TestCore core = Following();
   core.OnJobProgress(1);
   ASSERT_FALSE(core.BladeWanted());
   core.OnBladeRefused("allow_blade is off", 0);
@@ -346,12 +347,12 @@ TEST(LogicMowing, AnEmergencyCancelsADriveOnlyWhereOneRuns) {
   auto stopped = Healthy();
   stopped.emergency = true;
   stopped.emergency_reason = kEmergencyLatch | kEmergencyStop;
-  LogicCore idle = Ready();
+  TestCore idle = Ready();
   idle.TakeDriveCancel();
   idle.OnHardwareStatus(stopped);
   EXPECT_FALSE(idle.TakeDriveCancel());
   // Mowing: once when it begins, not again when it ends before the follower told the end of its leg.
-  LogicCore core = Following();
+  TestCore core = Following();
   core.OnHardwareStatus(stopped);
   EXPECT_TRUE(core.TakeDriveCancel());
   core.OnHardwareStatus(Healthy());
@@ -360,7 +361,7 @@ TEST(LogicMowing, AnEmergencyCancelsADriveOnlyWhereOneRuns) {
 
 TEST(LogicMowing, TheGpsPauseCarriesTheAccuracyAndTheLimit) {
   LogicConfig config;
-  LogicCore core = Following(config);
+  TestCore core = Following(config);
   core.OnPose(PoseAt(1, 2, 0.3f));
   core.TakeEvents();
   core.OnLegEnded(LegEnd::kGps, 2, Reason("POSITION_ACCURACY", "Position accuracy 0.30 m"));
@@ -375,7 +376,7 @@ TEST(LogicMowing, TheGpsPauseCarriesTheAccuracyAndTheLimit) {
 TEST(LogicMowing, AfterBadGpsItGoesOnByItselfOnceThePositionIsGoodLongEnough) {
   LogicConfig config;
   config.gps_wait_time = 10;
-  LogicCore core = Following(config);
+  TestCore core = Following(config);
   core.OnLegEnded(LegEnd::kGps, 2, Reason("POSITION_ACCURACY", "Position accuracy 0.30 m"));
   EXPECT_EQ(core.RobotState().state, "PAUSED");
   core.OnPose(PoseAt(1, 2, 0.3f));
@@ -401,7 +402,7 @@ TEST(LogicMowing, AfterBadGpsItGoesOnByItselfOnceThePositionIsGoodLongEnough) {
 }
 
 TEST(LogicMowing, GpsSettingsCountAtOnceAndOnlyIdleTakesSettings) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   EXPECT_TRUE(core.Idle());
   // The pose is at 0.02 m.
   core.SetGpsSettings(0.01, 10, 10);
@@ -419,7 +420,7 @@ TEST(LogicMowing, GpsSettingsCountAtOnceAndOnlyIdleTakesSettings) {
 }
 
 TEST(LogicMowing, GpsWaitTimeOfTheSettings) {
-  LogicCore core = Following();
+  TestCore core = Following();
   core.SetGpsSettings(0.1, 3, 10);
   core.OnLegEnded(LegEnd::kGps, 2, Reason("POSITION_ACCURACY", "Position accuracy 0.30 m"));
   core.OnPose(PoseAt(2, 2));
@@ -431,13 +432,13 @@ TEST(LogicMowing, GpsWaitTimeOfTheSettings) {
 }
 
 TEST(LogicMowing, TheBladeOnlyOnMowSegmentsAndOnlyWhenAllowed) {
-  LogicCore off = Following();
+  TestCore off = Following();
   off.OnJobProgress(2);
   EXPECT_FALSE(off.BladeWanted());
 
   LogicConfig config;
   config.mow_with_blade = true;
-  LogicCore core = Following(config);
+  TestCore core = Following(config);
   // Index 0 starts the transit to the lane.
   EXPECT_FALSE(core.BladeWanted());
   core.OnJobProgress(1);
@@ -467,7 +468,7 @@ TEST(LogicMowing, TheBladeOnlyOnMowSegmentsAndOnlyWhenAllowed) {
   core.OnAction(kMowing + "abort_mowing");
   EXPECT_FALSE(core.BladeWanted());
   // An approach is a transit.
-  LogicCore approach = Ready(config);
+  TestCore approach = Ready(config);
   approach.OnAction(kStart);
   approach.NextJobStep(0);
   approach.OnJobPlanned({Lane(6)}, "fp");
@@ -483,7 +484,7 @@ TEST(LogicMowing, WaitsForTheBladeToSpinUpOrPausesWhenItDoesNot) {
   config.mow_with_blade = true;
   config.mower_spinup_rpm = 2000;
   config.mower_spinup_timeout = 10;
-  LogicCore core = Ready(config);
+  TestCore core = Ready(config);
   core.OnAction(kStart);
   core.NextJobStep(0);
   JobPath path = Lane(1);
@@ -508,7 +509,7 @@ TEST(LogicMowing, WaitsForTheBladeToSpinUpOrPausesWhenItDoesNot) {
 }
 
 TEST(LogicMowing, BladesEventsFollowTheRpmTheMcuReports) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   auto hw = Healthy();
   hw.blade.rpm = 50;
   core.OnHardwareStatus(hw);
@@ -529,7 +530,7 @@ TEST(LogicMowing, BladesEventsFollowTheRpmTheMcuReports) {
 }
 
 TEST(LogicMowing, SkipPathAndSkipAreaWaitForTheLegToEnd) {
-  LogicCore core = Following();
+  TestCore core = Following();
   EXPECT_EQ(core.OnAction(kMowing + "skip_path"), ActionResult::kDone);
   EXPECT_TRUE(core.TakeDriveCancel());
   EXPECT_EQ(core.RobotState().current_path, 0);
@@ -556,7 +557,7 @@ TEST(LogicMowing, SkipPathAndSkipAreaWaitForTheLegToEnd) {
 }
 
 TEST(LogicMowing, AbortKeepsTheJobForTheNextStartAndResetJobDropsIt) {
-  LogicCore core = Following();
+  TestCore core = Following();
   core.OnJobProgress(2);
   EXPECT_EQ(core.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
   EXPECT_FALSE(core.Mowing());
@@ -609,7 +610,7 @@ TEST(LogicMowing, GoesOnFromARestoredCheckpoint) {
   saved.path = 1;
   saved.index = 3;
   saved.fingerprint = "fp";
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.RestoreJob(saved);
   EXPECT_TRUE(Enabled(core, "mower_logic:idle", "reset_job"));
   core.OnPose(PoseAt(2.5, 2));
@@ -626,7 +627,7 @@ TEST(LogicMowing, GoesOnFromARestoredCheckpoint) {
 }
 
 TEST(LogicMowing, AFailedPlanOrLegPausesUntilContinue) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.OnAction(kStart);
   core.NextJobStep(0);
   core.OnJobPlanFailed("no lanes fit");
@@ -650,7 +651,7 @@ TEST(LogicMowing, AFollowerThatStopsAnsweringPausesWithTheBladeOff) {
   // G22: the node ends the leg itself with FOLLOWER_MISSING; the job waits for the user, the blade is off.
   LogicConfig config;
   config.mow_with_blade = true;
-  LogicCore core = Following(config);
+  TestCore core = Following(config);
   core.OnJobProgress(1);
   ASSERT_TRUE(core.BladeWanted());
   core.OnLegEnded(LegEnd::kFailed, 3,
@@ -677,7 +678,7 @@ TEST(LogicMowing, AFollowerThatStopsAnsweringPausesWithTheBladeOff) {
 
 // Without a docking station in the map: BATTERY_LOW and IDLE once the highest voltage of 20 s is below empty.
 TEST(LogicMowing, ALowBatteryEndsMowingAfterAWhile) {
-  LogicCore core = Following();
+  TestCore core = Following();
   auto hw = Healthy();
   hw.battery_voltage = 20.5f;
   core.OnHardwareStatus(hw);
@@ -695,7 +696,7 @@ TEST(LogicMowing, ALowBatteryEndsMowingAfterAWhile) {
 }
 
 TEST(LogicMowing, CheckpointsWhileFollowingInItsPeriod) {
-  LogicCore core = Following();
+  TestCore core = Following();
   core.TakeCheckpoint();
   core.OnJobProgress(1);
   core.OnTick(10);

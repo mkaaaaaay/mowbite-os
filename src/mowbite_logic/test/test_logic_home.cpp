@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "mowbite_logic/logic_core.h"
+#include "logic_test_core.h"
 
 using namespace mowbite_logic;
 
@@ -54,8 +55,8 @@ LogicConfig Tron() {
 }
 
 // IDLE in the field 2 m east of the station; with_dock: the station in the map.
-LogicCore Ready(LogicConfig config = Tron(), bool with_dock = true) {
-  LogicCore core{config};
+TestCore Ready(LogicConfig config = Tron(), bool with_dock = true) {
+  TestCore core{config};
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnCapabilities(true);
@@ -70,8 +71,8 @@ LogicCore Ready(LogicConfig config = Tron(), bool with_dock = true) {
 }
 
 // Mowing, planning the first area.
-LogicCore Mowing(LogicConfig config = Tron(), bool with_dock = true) {
-  LogicCore core = Ready(config, with_dock);
+TestCore Mowing(LogicConfig config = Tron(), bool with_dock = true) {
+  TestCore core = Ready(config, with_dock);
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
   EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
   core.TakeEvents();
@@ -91,7 +92,7 @@ const Event* Find(const std::vector<Event>& events, const std::string& type) {
 }
 
 // Ticks every second from `from` up to `to`, with hw.
-void Hold(LogicCore& core, const HardwareSnapshot& hw, double from, double to) {
+void Hold(TestCore& core, const HardwareSnapshot& hw, double from, double to) {
   core.OnHardwareStatus(hw);
   for (double t = from; t <= to; t += 1) core.OnTick(t);
 }
@@ -99,7 +100,7 @@ void Hold(LogicCore& core, const HardwareSnapshot& hw, double from, double to) {
 }  // namespace
 
 TEST(GoingHome, BatteryLowSendsTheMowerHome) {
-  LogicCore core = Mowing();
+  TestCore core = Mowing();
   Hold(core, Volts(20.8f), 0, 19);
   EXPECT_TRUE(core.Mowing());
   core.OnTick(20);
@@ -117,7 +118,7 @@ TEST(GoingHome, BatteryLowSendsTheMowerHome) {
 }
 
 TEST(GoingHome, CriticalComesFirstAndAfterTwoSeconds) {
-  LogicCore core = Mowing();
+  TestCore core = Mowing();
   HardwareSnapshot hw = Volts(19.5f);
   hw.blade.temperature = 90;
   Hold(core, hw, 0, 1);
@@ -133,7 +134,7 @@ TEST(GoingHome, CriticalComesFirstAndAfterTwoSeconds) {
 }
 
 TEST(GoingHome, AHotBladeMotorSendsItHome) {
-  LogicCore core = Mowing();
+  TestCore core = Mowing();
   core.SetHomeSettings(0, 20, 60, 40);
   HardwareSnapshot hw = Healthy();
   hw.blade.temperature = 61;
@@ -152,12 +153,12 @@ TEST(GoingHome, AHotBladeMotorSendsItHome) {
 TEST(GoingHome, RainOnlyWithARainMode) {
   HardwareSnapshot wet = Healthy();
   wet.rain = true;
-  LogicCore off = Mowing();
+  TestCore off = Mowing();
   Hold(off, wet, 0, 120);
   EXPECT_TRUE(off.Mowing());
   EXPECT_FALSE(Find(off.TakeEvents(), "DOCKING"));
 
-  LogicCore core = Mowing();
+  TestCore core = Mowing();
   core.SetHomeSettings(1, 20, 70, 40);
   Hold(core, wet, 0, 19);
   EXPECT_TRUE(core.Mowing());
@@ -172,13 +173,13 @@ TEST(GoingHome, RainOnlyWithARainMode) {
 TEST(GoingHome, BatteryHotOnlyWithALimit) {
   HardwareSnapshot hot = Healthy();
   hot.battery_temperature = 60;
-  LogicCore off = Mowing();
+  TestCore off = Mowing();
   Hold(off, hot, 0, 30);
   EXPECT_TRUE(off.Mowing());
 
   LogicConfig config = Tron();
   config.battery_hot_temperature = 55;
-  LogicCore core = Mowing(config);
+  TestCore core = Mowing(config);
   Hold(core, hot, 0, 3);
   const auto taken = core.TakeEvents();
   const Event* docking = Find(taken, "DOCKING");
@@ -189,7 +190,7 @@ TEST(GoingHome, BatteryHotOnlyWithALimit) {
 }
 
 TEST(GoingHome, AlsoWhileWaitingForAGoodPosition) {
-  LogicCore core = Mowing();
+  TestCore core = Mowing();
   core.OnPoseTimeout();
   EXPECT_EQ(core.RobotState().state, "PAUSED");
   core.TakeEvents();
@@ -201,7 +202,7 @@ TEST(GoingHome, AlsoWhileWaitingForAGoodPosition) {
 // A pause that waits for the user never goes home: only the battery ends it, as BATTERY_LOW and IDLE.
 TEST(GoingHome, NeverFromAPauseThatWaitsForTheUser) {
   for (const char* how : {"manual", "emergency"}) {
-    LogicCore core = Mowing();
+    TestCore core = Mowing();
     core.SetHomeSettings(1, 20, 60, 40);
     if (std::string(how) == "manual") {
       ASSERT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
@@ -233,7 +234,7 @@ TEST(GoingHome, NeverFromAPauseThatWaitsForTheUser) {
 
 // Without a way home only the battery ends mowing; heat and rain change nothing yet (question 47 iii).
 TEST(GoingHome, WithoutAWayHomeOnlyTheBattery) {
-  LogicCore core = Mowing(Tron(), false);
+  TestCore core = Mowing(Tron(), false);
   core.SetHomeSettings(1, 20, 60, 40);
   HardwareSnapshot hot = Healthy();
   hot.blade.temperature = 90;
@@ -258,14 +259,14 @@ TEST(GoingHome, WithoutAWayHomeOnlyTheBattery) {
   // Contacts in front: no docking yet, the same.
   LogicConfig front = Tron();
   front.dock_contact_x = 0.3;
-  LogicCore yf = Mowing(front);
+  TestCore yf = Mowing(front);
   Hold(yf, Volts(19.0f), 0, 2);
   EXPECT_TRUE(yf.Idle());
   EXPECT_TRUE(Find(yf.TakeEvents(), "BATTERY_LOW"));
 }
 
 TEST(GoingHome, StartRefusedLowHotOrWarm) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.OnHardwareStatus(Volts(20.9f));
   Reason why = core.StartProblem();
   EXPECT_EQ(why.code, "BATTERY_LOW");
@@ -295,14 +296,14 @@ TEST(GoingHome, StartRefusedLowHotOrWarm) {
   EXPECT_TRUE(core.StartProblem().empty());
   LogicConfig config = Tron();
   config.battery_hot_temperature = 55;
-  LogicCore limited = Ready(config);
+  TestCore limited = Ready(config);
   limited.OnHardwareStatus(hot);
   EXPECT_EQ(limited.StartProblem().code, "BATTERY_HOT");
   EXPECT_DOUBLE_EQ(limited.StartProblem().fields["limit"].get<double>(), 55.0);
 }
 
 TEST(GoingHome, DockingStartAndAbortCarryManualAndJobCompleteNone) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   ASSERT_TRUE(core.StartDocking().empty());
   const auto events = core.TakeEvents();
   ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING", "STATE"}));
@@ -310,7 +311,7 @@ TEST(GoingHome, DockingStartAndAbortCarryManualAndJobCompleteNone) {
   EXPECT_EQ(events[0].details["message"], "Going home: sent by the app");
 
   // abort_mowing without a station: IDLE, no DOCKING.
-  LogicCore lost = Mowing(Tron(), false);
+  TestCore lost = Mowing(Tron(), false);
   ASSERT_EQ(lost.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
   EXPECT_TRUE(lost.Idle());
   EXPECT_FALSE(Find(lost.TakeEvents(), "DOCKING"));
@@ -325,7 +326,7 @@ TEST(GoingHome, DockingFailsWithTheReasonOfThePosition) {
                         {"NO_HEADING", PoseAt(2.0, 0.5, 0.02f, false)},
                         {"POSITION_ACCURACY", PoseAt(2.0, 0.5, 0.4f)}};
   for (const auto& c : cases) {
-    LogicCore core = Ready();
+    TestCore core = Ready();
     ASSERT_TRUE(core.StartDocking().empty());
     ASSERT_TRUE(core.TakeDockingLeg());
     if (c.pose) {

@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "mowbite_logic/logic_core.h"
+#include "logic_test_core.h"
 
 using namespace mowbite_logic;
 
@@ -49,8 +50,8 @@ LogicConfig Tron() {
 }
 
 // IDLE in the field with a station and a lawn: everything may start.
-LogicCore Ready() {
-  LogicCore core{Tron()};
+TestCore Ready() {
+  TestCore core{Tron()};
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnCapabilities(true);
@@ -64,7 +65,7 @@ LogicCore Ready() {
   return core;
 }
 
-bool Enabled(const LogicCore& core, const std::string& prefix, const std::string& id) {
+bool Enabled(const TestCore& core, const std::string& prefix, const std::string& id) {
   for (const auto& group : core.Actions()) {
     if (group.prefix != prefix) continue;
     for (const auto& action : group.actions) {
@@ -92,7 +93,7 @@ void ExpectHold(const Event* event, const std::string& type) {
 }  // namespace
 
 TEST(LogicHold, AllowedOnlyInIdleWithNothingOnItsWay) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   EXPECT_TRUE(core.HoldAllowed());
   ASSERT_TRUE(core.StartDrive(3.0, 0.5).empty());
   EXPECT_FALSE(core.HoldAllowed());
@@ -103,7 +104,7 @@ TEST(LogicHold, AllowedOnlyInIdleWithNothingOnItsWay) {
 }
 
 TEST(LogicHold, NotAllowedWhileMowing) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
   EXPECT_FALSE(core.HoldAllowed());
   ASSERT_EQ(core.OnAction(kPause), ActionResult::kDone);
@@ -111,7 +112,7 @@ TEST(LogicHold, NotAllowedWhileMowing) {
 }
 
 TEST(LogicHold, NotAllowedDuringTheReferenceCheck) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.OnHardwareStatus(Healthy(true));
   core.OnPose(PoseAt(kDock.x, kDock.y, 0.0));
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
@@ -121,7 +122,7 @@ TEST(LogicHold, NotAllowedDuringTheReferenceCheck) {
 }
 
 TEST(LogicHold, StartMowingIsRefused) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.SetHold(kUntil);
   EXPECT_TRUE(core.Held());
   EXPECT_EQ(core.StartProblem().code, "HOLD");
@@ -132,7 +133,7 @@ TEST(LogicHold, StartMowingIsRefused) {
 }
 
 TEST(LogicHold, RecordingIsRefused) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.SetHold(kUntil);
   EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
   EXPECT_EQ(core.OnAction(kRecord), ActionResult::kRejected);
@@ -146,7 +147,7 @@ TEST(LogicHold, RecordingIsRefused) {
 }
 
 TEST(LogicHold, DriveIsRefused) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.SetHold(kUntil);
   EXPECT_EQ(core.DriveProblem().code, "HOLD");
   const Reason why = core.StartDrive(3.0, 0.5);
@@ -157,7 +158,7 @@ TEST(LogicHold, DriveIsRefused) {
 }
 
 TEST(LogicHold, DockingIsRefused) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   ASSERT_TRUE(core.DockingProblem().empty()) << core.DockingProblem().code;
   core.SetHold(kUntil);
   EXPECT_EQ(core.DockingProblem().code, "HOLD");
@@ -168,7 +169,7 @@ TEST(LogicHold, DockingIsRefused) {
 
 TEST(LogicHold, ContinueIsRefused) {
   // Cannot happen through system.hold (only in IDLE); the core refuses it all the same.
-  LogicCore core = Ready();
+  TestCore core = Ready();
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
   ASSERT_EQ(core.OnAction(kPause), ActionResult::kDone);
   ASSERT_TRUE(Enabled(core, "mower_logic:mowing", "continue"));
@@ -182,7 +183,7 @@ TEST(LogicHold, ContinueIsRefused) {
 }
 
 TEST(LogicHold, AReferenceCheckEndsInTheHold) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.OnHardwareStatus(Healthy(true));
   core.OnPose(PoseAt(kDock.x, kDock.y, 0.0));
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
@@ -195,13 +196,13 @@ TEST(LogicHold, AReferenceCheckEndsInTheHold) {
 }
 
 TEST(LogicHold, ResetOfTheEmergencyStays) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.SetHold(kUntil);
   EXPECT_EQ(core.OnAction(kReset), ActionResult::kReleaseEmergency);
 }
 
 TEST(LogicHold, EndsAndEverythingStartsAgain) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.SetHold(kUntil);
   EXPECT_TRUE(core.TakeActionsChanged());
   core.SetHold(0);
@@ -214,7 +215,7 @@ TEST(LogicHold, EndsAndEverythingStartsAgain) {
 }
 
 TEST(LogicHold, TheSameHoldChangesNoAction) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.SetHold(kUntil);
   core.TakeActionsChanged();
   core.SetHold(kUntil);
@@ -222,7 +223,7 @@ TEST(LogicHold, TheSameHoldChangesNoAction) {
 }
 
 TEST(LogicHold, AHoldOfTheDriverAloneStopsStartsToo) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   HardwareSnapshot hw = Healthy();
   hw.hold = true;
   core.OnHardwareStatus(hw);

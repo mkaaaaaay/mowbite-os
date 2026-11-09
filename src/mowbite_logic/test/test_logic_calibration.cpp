@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "mowbite_logic/logic_core.h"
+#include "logic_test_core.h"
 
 using namespace mowbite_logic;
 
@@ -44,9 +45,9 @@ CalibrationStatus Lane(double heading = 0.5, double length = 3.0) {
 }
 
 // On the lawn, everything there for a calibration drive; the program reported at t = 10 s.
-LogicCore Ready(LogicConfig config = LogicConfig()) {
+TestCore Ready(LogicConfig config = LogicConfig()) {
   config.dock_contact_x = -0.10;
-  LogicCore core{config};
+  TestCore core{config};
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnCapabilities(true);
@@ -91,8 +92,8 @@ std::vector<std::string> Codes(const std::vector<Reason>& reasons) {
 }
 
 // Started at t = 10 s with the goal taken by the node.
-LogicCore Calibrating(LogicConfig config = LogicConfig()) {
-  LogicCore core = Ready(config);
+TestCore Calibrating(LogicConfig config = LogicConfig()) {
+  TestCore core = Ready(config);
   EXPECT_TRUE(core.StartCalibration(10.0).empty());
   EXPECT_TRUE(core.TakeCalibrationGoal().has_value());
   core.OnCalibrationSign(10.1);
@@ -104,7 +105,7 @@ LogicCore Calibrating(LogicConfig config = LogicConfig()) {
 
 // The end of a drive the logic stopped: CALIBRATION_FAILED with reason, the end of the phases, IDLE, one zero and the
 // program canceled.
-void ExpectStopped(LogicCore& core, const std::string& reason, const std::string& severity) {
+void ExpectStopped(TestCore& core, const std::string& reason, const std::string& severity) {
   const auto events = core.TakeEvents();
   ASSERT_EQ(Types(events), (std::vector<std::string>{"CALIBRATION_FAILED", "CALIBRATION", "STATE"}));
   EXPECT_EQ(events[0].details["reason"], reason);
@@ -127,7 +128,7 @@ void ExpectStopped(LogicCore& core, const std::string& reason, const std::string
 TEST(Calibration, StartsOnTheLawnAndEndsCalibrated) {
   LogicConfig config;
   config.mow_with_blade = true;
-  LogicCore core = Ready(config);
+  TestCore core = Ready(config);
   EXPECT_TRUE(core.CalibrationProblems(10.5).empty());
   ASSERT_TRUE(core.StartCalibration(10.5).empty());
   EXPECT_TRUE(core.Calibrating());
@@ -177,7 +178,7 @@ TEST(Calibration, StartsOnTheLawnAndEndsCalibrated) {
 }
 
 TEST(Calibration, NotEvaluatedIsAWarning) {
-  LogicCore core = Calibrating();
+  TestCore core = Calibrating();
   core.OnCalibrationEnded({"DONE", "", "not_evaluated", "Recorded, not evaluated"});
   const auto events = core.TakeEvents();
   const Event* calibrated = Find(events, "CALIBRATED");
@@ -187,7 +188,7 @@ TEST(Calibration, NotEvaluatedIsAWarning) {
 }
 
 TEST(Calibration, EveryReasonAgainstAStart) {
-  const auto refused = [](LogicCore& core, const std::string& code) {
+  const auto refused = [](TestCore& core, const std::string& code) {
     core.TakeEvents();
     const Reason why = core.StartCalibration(11.0);
     EXPECT_EQ(why.code, code);
@@ -201,13 +202,13 @@ TEST(Calibration, EveryReasonAgainstAStart) {
     return events.empty() ? Event{} : events[0];
   };
   {
-    LogicCore core = Ready();
+    TestCore core = Ready();
     ASSERT_EQ(core.OnAction(kStartRecording), ActionResult::kDone);
     const Event e = refused(core, "BUSY");
     EXPECT_EQ(e.details["severity"], "info");
   }
   {
-    LogicCore core = Ready();
+    TestCore core = Ready();
     HardwareSnapshot hw = Healthy();
     hw.emergency = true;
     hw.emergency_reason = kEmergencyStop;
@@ -215,37 +216,37 @@ TEST(Calibration, EveryReasonAgainstAStart) {
     EXPECT_EQ(refused(core, "EMERGENCY").details["severity"], "error");
   }
   {
-    LogicCore core = Ready();
+    TestCore core = Ready();
     core.OnCapabilities(false);
     refused(core, "NO_SAFETY_MEASUREMENT");
   }
   {
-    LogicCore core = Ready();
+    TestCore core = Ready();
     HardwareSnapshot hw = Healthy();
     hw.dock_contact = true;
     core.OnHardwareStatus(hw);
     EXPECT_EQ(refused(core, "ON_DOCK").details["severity"], "info");
   }
   {
-    LogicCore core = Ready();
+    TestCore core = Ready();
     core.OnPoseTimeout();
     refused(core, "NO_POSITION");
   }
   {
     // Stricter than for mowing: 3 cm.
-    LogicCore core = Ready();
+    TestCore core = Ready();
     core.OnPose(PoseAt(2, 3, 0.05f));
     const Event e = refused(core, "POSITION_ACCURACY");
     EXPECT_DOUBLE_EQ(e.details["limit"].get<double>(), 0.03);
     EXPECT_EQ(e.details["severity"], "warning");
   }
   {
-    LogicCore core = Ready();
+    TestCore core = Ready();
     core.OnPose(PoseAt(2, 3, 0.015f, false));
     refused(core, "NO_HEADING");
   }
   {
-    LogicCore core = Ready();
+    TestCore core = Ready();
     HardwareSnapshot hw = Healthy();
     hw.battery_percentage = 25;
     core.OnHardwareStatus(hw);
@@ -257,23 +258,23 @@ TEST(Calibration, EveryReasonAgainstAStart) {
     EXPECT_EQ(refused(core, "BATTERY_LOW").details["message"], "No battery level from the driver");
   }
   {
-    LogicCore core = Ready();
+    TestCore core = Ready();
     core.OnDrivableAreas({}, {}, MapReason(MapDatum::kMismatch, ""));
     EXPECT_EQ(refused(core, "MAP_MISMATCH").details["severity"], "error");
   }
   {
     // The status of the program counts for 2 s.
-    LogicCore core = Ready();
+    TestCore core = Ready();
     core.TakeEvents();
     EXPECT_EQ(core.StartCalibration(12.5).code, "CALIBRATION_MISSING");
     EXPECT_EQ(DetailsOf(core.TakeEvents(), "CALIBRATION_REFUSED")["severity"], "error");
-    LogicCore none = Ready();
+    TestCore none = Ready();
     none.OnCalibrationStatus(Lane(), -100);
     refused(none, "CALIBRATION_MISSING");
   }
   {
     // Room and sensors come from the program, with their numbers.
-    LogicCore core = Ready();
+    TestCore core = Ready();
     CalibrationStatus status = Lane(0, 0);
     status.problems.push_back(Reason("NO_ROOM", "No room").With("free_length", 1.4).With("length", 2.0));
     status.problems.push_back(Reason("SLOPE", "Tilted by 7 deg").With("slope", 7.0).With("limit", 5.0));
@@ -287,7 +288,7 @@ TEST(Calibration, EveryReasonAgainstAStart) {
     refused(core, "NO_ROOM");
   }
   {
-    LogicCore core = Ready();
+    TestCore core = Ready();
     CalibrationStatus status = Lane();
     status.running = true;
     core.OnCalibrationStatus(status, 10.5);
@@ -296,7 +297,7 @@ TEST(Calibration, EveryReasonAgainstAStart) {
 }
 
 TEST(Calibration, CheckListsEveryReasonOnce) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   core.OnCapabilities(false);
   core.OnPose(PoseAt(2, 3, 0.2f, false));
   HardwareSnapshot hw = Healthy();
@@ -315,7 +316,7 @@ TEST(Calibration, CheckListsEveryReasonOnce) {
 }
 
 TEST(Calibration, BusyForEverythingElse) {
-  LogicCore core = Calibrating();
+  TestCore core = Calibrating();
   EXPECT_EQ(core.StartProblem().code, "BUSY");
   EXPECT_EQ(core.StartProblem().fields["state"], "calibrating");
   EXPECT_EQ(core.DriveProblem().code, "BUSY");
@@ -330,7 +331,7 @@ TEST(Calibration, BusyForEverythingElse) {
 
 // The hold of an update refuses a start like the other starts, and none is granted while calibrating.
 TEST(Calibration, TheHoldOfAnUpdateRefusesAStart) {
-  LogicCore core = Ready();
+  TestCore core = Ready();
   const int64_t until = 1'790'000'600;
   core.SetHold(until);
   EXPECT_EQ(Codes(core.CalibrationProblems(10.0)).front(), "HOLD");
@@ -356,7 +357,7 @@ TEST(Calibration, TheHoldOfAnUpdateRefusesAStart) {
 }
 
 TEST(Calibration, EmergencyEndsItWithOneZero) {
-  LogicCore core = Calibrating();
+  TestCore core = Calibrating();
   HardwareSnapshot hw = Healthy();
   hw.emergency = true;
   hw.emergency_reason = kEmergencyLift;
@@ -376,18 +377,18 @@ TEST(Calibration, EmergencyEndsItWithOneZero) {
 
 TEST(Calibration, PoseLostMeasurementLostAndAbort) {
   {
-    LogicCore core = Calibrating();
+    TestCore core = Calibrating();
     core.OnPoseTimeout();
     ExpectStopped(core, "POSE_LOST", "warning");
   }
   {
-    LogicCore core = Calibrating();
+    TestCore core = Calibrating();
     core.OnCapabilities(false);
     ExpectStopped(core, "NO_SAFETY_MEASUREMENT", "error");
   }
   {
     // App and HA: the mower stays where it is.
-    LogicCore core = Calibrating();
+    TestCore core = Calibrating();
     EXPECT_TRUE(core.AbortCalibration(Reason("STOPPED", "Stopped by calibration.abort")));
     ExpectStopped(core, "STOPPED", "info");
     EXPECT_FALSE(core.AbortCalibration(Reason("STOPPED", "again")));
@@ -397,7 +398,7 @@ TEST(Calibration, PoseLostMeasurementLostAndAbort) {
 
 TEST(Calibration, LowBatteryHeldLikeWhileMowing) {
   // Below empty (21.0 V) the highest voltage of 20 s counts; a voltage above it within the window keeps it going.
-  LogicCore core = Calibrating();
+  TestCore core = Calibrating();
   HardwareSnapshot hw = Healthy();
   hw.battery_voltage = 20.5f;
   core.OnHardwareStatus(hw);
@@ -425,7 +426,7 @@ TEST(Calibration, LowBatteryHeldLikeWhileMowing) {
 }
 
 TEST(Calibration, CriticalBatteryAfterItsHoldTime) {
-  LogicCore core = Calibrating();
+  TestCore core = Calibrating();
   HardwareSnapshot hw = Healthy();
   hw.battery_voltage = 19.5f;
   const auto tick = [&core](double t) {
@@ -449,7 +450,7 @@ TEST(Calibration, CriticalBatteryAfterItsHoldTime) {
 }
 
 TEST(Calibration, WatchdogOfTheProgram) {
-  LogicCore core = Calibrating();
+  TestCore core = Calibrating();
   core.OnCalibrationFeedback("align", 0, 11.0);
   EXPECT_FALSE(core.TickCalibration(12.9));
   core.OnCalibrationFeedback("align", 0, 12.95);
@@ -468,7 +469,7 @@ TEST(Calibration, WatchdogOfTheProgram) {
 
 TEST(Calibration, TheProgramStopsWithItsReason) {
   {
-    LogicCore core = Calibrating();
+    TestCore core = Calibrating();
     core.OnCalibrationFeedback("line", 2, 50.0);
     core.TakeEvents();
     core.OnCalibrationEnded({"LEFT_LANE", "The antenna is 0.31 m off its line, at most 0.30 m", "", ""});
@@ -483,19 +484,19 @@ TEST(Calibration, TheProgramStopsWithItsReason) {
     EXPECT_TRUE(core.TakeStopRequest());
   }
   {
-    LogicCore core = Calibrating();
+    TestCore core = Calibrating();
     core.OnCalibrationEnded({"NO_RTK", "No RTK fixed position", "", ""});
     EXPECT_EQ(DetailsOf(core.TakeEvents(), "CALIBRATION_FAILED")["severity"], "warning");
   }
   {
     // Without a reason the program counts as gone.
-    LogicCore core = Calibrating();
+    TestCore core = Calibrating();
     core.OnCalibrationEnded({"", "The calibration program dropped the drive", "", ""});
     EXPECT_EQ(DetailsOf(core.TakeEvents(), "CALIBRATION_FAILED")["reason"], "CALIBRATION_MISSING");
   }
   {
     // A late result after the logic stopped it changes nothing.
-    LogicCore core = Calibrating();
+    TestCore core = Calibrating();
     core.AbortCalibration(Reason("STOPPED", "Stopped by calibration.abort"));
     core.TakeEvents();
     core.OnCalibrationEnded({"STOPPED", "canceled", "", ""});
@@ -505,7 +506,7 @@ TEST(Calibration, TheProgramStopsWithItsReason) {
 }
 
 TEST(Calibration, PositionJumpsDoNotEndIt) {
-  LogicCore core = Calibrating();
+  TestCore core = Calibrating();
   core.OnPositionJump(2.3, 3.1, 0.3, true);
   EXPECT_TRUE(core.Calibrating());
   EXPECT_EQ(Types(core.TakeEvents()), std::vector<std::string>{"POSITION_JUMP"});

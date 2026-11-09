@@ -4,6 +4,7 @@
 
 #include "mowbite_api/catalog.h"
 #include "mowbite_logic/logic_core.h"
+#include "logic_test_core.h"
 
 using namespace mowbite_logic;
 
@@ -37,7 +38,7 @@ void Count(const std::string&, const json&) {
 
 TEST(EventCatalog, SeesTheEventsOfTheCore) {
   SetEventObserver(&Count);
-  LogicCore core{LogicConfig()};
+  TestCore core{LogicConfig()};
   // Without a safety measurement every drive is refused with an event.
   EXPECT_FALSE(core.StartDrive(1.0, 2.0).empty());
   const size_t events = core.TakeEvents().size();
@@ -53,7 +54,7 @@ TEST(EventCatalog, FindsAnEventOutsideOfIt) {
 
 // The sensors of the logic are those of the interface with source logic, with the same name, unit and kind.
 TEST(EventCatalog, SensorsOfTheLogicAreThoseOfTheInterface) {
-  LogicCore core{LogicConfig()};
+  TestCore core{LogicConfig()};
   size_t logic = 0;
   for (const auto& sensor : mowbite_api::Sensors()) logic += sensor.source == "logic" ? 1 : 0;
   const auto sensors = core.Sensors();

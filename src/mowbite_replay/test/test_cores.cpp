@@ -191,12 +191,7 @@ TEST_F(CoreReplay, LogicCore) {
       if (i == 51) logic.Call<&L::OnReleaseAnswered>(now);
       if (i == 60) logic.Call<&L::Command>(std::string("mowing.start"), json{{"areas", {"front"}}}, Reason());
       logic.Call<&L::NextJobStep>(now);
-      logic.Call<&L::TakeEvents>();
-      logic.Call<&L::TakeActionsChanged>();
-      logic.Call<&L::TakeReasonChanges>();
-      logic.Call<&L::TakeStopRequest>();
-      logic.Call<&L::TakeNotices>();
-      logic.Call<&L::TakeCheckpoint>();
+      logic.Call<&L::TakeEffects>();
     }
   }
   const auto report = Replay();

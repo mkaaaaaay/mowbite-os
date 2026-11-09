@@ -120,19 +120,16 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
   using Config = mowbite_logic::LogicConfig;
   MOWBITE_JOURNAL_METHODS(
       &L::OnHardwareStatus, &L::OnHardwareTimeout, &L::OnPose, &L::OnPoseTimeout, &L::OnGnssFix, &L::OnPositionJump,
-      &L::OnAction, &L::Command, &L::OnMapStatus, &L::TakeMapEdit, &L::OnMapEditResult, &L::OnTeleop,
-      &L::OnCapabilities, &L::StartDrive, &L::RefuseDrive, &L::OnDriveEnded, &L::TakeDriveCancel,
-      &L::OnCalibrationStatus, &L::StartCalibration, &L::RefuseCalibration, &L::TakeCalibrationGoal,
+      &L::OnAction, &L::Command, &L::OnMapStatus, &L::OnMapEditResult, &L::OnTeleop, &L::OnCapabilities, &L::StartDrive,
+      &L::RefuseDrive, &L::OnDriveEnded, &L::OnCalibrationStatus, &L::StartCalibration, &L::RefuseCalibration,
       &L::OnCalibrationSign, &L::OnCalibrationFeedback, &L::OnCalibrationEnded, &L::AbortCalibration,
-      &L::TickCalibration, &L::TakeCalibrationCancel, &L::OnMowMap, &L::OnMapDock, &L::OnDrivableAreas,
-      &L::SetUndockDistance, &L::CheckDockBeforeDrive, &L::TakeDockCheck, &L::OnDockCheck, &L::TakeChargeOff,
-      &L::OnChargeOff, &L::TakeUndockPath, &L::OnUndockEnded, &L::TakeChargeOn, &L::TakeUndockOutcome,
-      &L::AbortUndocking, &L::StartDocking, &L::TakeDockingLeg, &L::OnDockingLegEnded, &L::SetDockingSettings,
-      &L::SetHomeSettings, &L::RestoreJob, &L::RefuseStart, &L::RefuseReset, &L::OnReleaseAnswered,
-      &L::GeometryChanged, &L::SetHold, &L::SetGpsSettings, &L::NextJobStep, &L::OnJobPlanned, &L::OnJobPlanFailed,
-      &L::OnJobProgress, &L::OnLegEnded, &L::OnTick, &L::OnBladeRefused, &L::TakeCheckpoint, &L::TakeEvents,
-      &L::TakeActionsChanged, &L::TakeReasonChanges, &L::TakeStopRequest, &L::TakeNotices, &L::TakeOverlayChanged,
-      &L::SetRestartHold, &L::ReportRestart, &L::OnStopRelease, &L::TakeEffects);
+      &L::TickCalibration, &L::OnMowMap, &L::OnMapDock, &L::OnDrivableAreas, &L::SetUndockDistance,
+      &L::CheckDockBeforeDrive, &L::OnDockCheck, &L::OnChargeOff, &L::OnUndockEnded, &L::AbortUndocking,
+      &L::StartDocking, &L::TakeDockingLeg, &L::OnDockingLegEnded, &L::SetDockingSettings, &L::SetHomeSettings,
+      &L::RestoreJob, &L::RefuseStart, &L::RefuseReset, &L::OnReleaseAnswered, &L::GeometryChanged, &L::SetHold,
+      &L::SetGpsSettings, &L::NextJobStep, &L::OnJobPlanned, &L::OnJobPlanFailed, &L::OnJobProgress, &L::OnLegEnded,
+      &L::OnTick, &L::OnBladeRefused, &L::TakeOverlayChanged, &L::SetRestartHold, &L::ReportRestart, &L::OnStopRelease,
+      &L::TakeEffects);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};

@@ -4,6 +4,7 @@
 
 #include "mowbite_logic/area_recorder.h"
 #include "mowbite_logic/logic_core.h"
+#include "logic_test_core.h"
 
 using namespace mowbite_logic;
 
@@ -375,7 +376,7 @@ PoseSnapshot At(double x, double y, float accuracy = 0.02f) {
   return pose;
 }
 
-bool Enabled(const LogicCore& core, const std::string& prefix, const std::string& id) {
+bool Enabled(const TestCore& core, const std::string& prefix, const std::string& id) {
   for (const auto& group : core.Actions()) {
     if (group.prefix != prefix) continue;
     for (const auto& action : group.actions) {
@@ -386,7 +387,7 @@ bool Enabled(const LogicCore& core, const std::string& prefix, const std::string
   return false;
 }
 
-void DriveCore(LogicCore& core, const Ring& corners) {
+void DriveCore(TestCore& core, const Ring& corners) {
   for (size_t i = 0; i + 1 < corners.size(); i++) {
     const Point2& a = corners[i];
     const Point2& b = corners[i + 1];
@@ -401,7 +402,7 @@ void DriveCore(LogicCore& core, const Ring& corners) {
 }  // namespace
 
 TEST(LogicRecording, NeedsAMapThatFitsTheDatum) {
-  LogicCore core{LogicConfig{}};
+  TestCore core{LogicConfig{}};
   core.OnHardwareStatus(Healthy());
   // No map/status yet.
   EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
@@ -433,7 +434,7 @@ TEST(LogicRecording, NeedsAMapThatFitsTheDatum) {
 }
 
 TEST(LogicRecording, RecordsAndSavesThroughTheCore) {
-  LogicCore core{LogicConfig{}};
+  TestCore core{LogicConfig{}};
   core.OnHardwareStatus(Healthy());
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnAction("mower_logic:idle/start_area_recording");
@@ -458,7 +459,7 @@ TEST(LogicRecording, RecordsAndSavesThroughTheCore) {
 }
 
 TEST(LogicRecording, ExitDropsWhatIsNotSaved) {
-  LogicCore core{LogicConfig{}};
+  TestCore core{LogicConfig{}};
   core.OnHardwareStatus(Healthy());
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnAction("mower_logic:idle/start_area_recording");
@@ -478,7 +479,7 @@ TEST(LogicRecording, ExitDropsWhatIsNotSaved) {
 }
 
 TEST(LogicRecording, ManualMowingStaysOff) {
-  LogicCore core{LogicConfig{}};
+  TestCore core{LogicConfig{}};
   core.OnHardwareStatus(Healthy());
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnAction("mower_logic:idle/start_area_recording");
@@ -694,7 +695,7 @@ TEST(RecorderOverlay, LinesInBothFormats) {
 }
 
 TEST(RecorderOverlay, LeavingRecordingClearsIt) {
-  LogicCore core{LogicConfig{}};
+  TestCore core{LogicConfig{}};
   core.OnHardwareStatus(Healthy());
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnAction("mower_logic:idle/start_area_recording");

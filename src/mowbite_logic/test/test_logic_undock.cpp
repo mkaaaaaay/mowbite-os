@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "mowbite_logic/logic_core.h"
+#include "logic_test_core.h"
 
 using namespace mowbite_logic;
 
@@ -51,8 +52,8 @@ LogicConfig Tron() {
 }
 
 // On the contacts of the recorded station, as after a start there.
-LogicCore Docked(const Ring& lawn = kLawn, LogicConfig config = Tron()) {
-  LogicCore core{config};
+TestCore Docked(const Ring& lawn = kLawn, LogicConfig config = Tron()) {
+  TestCore core{config};
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy(true));
   core.OnCapabilities(true);
@@ -66,7 +67,7 @@ LogicCore Docked(const Ring& lawn = kLawn, LogicConfig config = Tron()) {
   return core;
 }
 
-bool Enabled(const LogicCore& core, const std::string& prefix, const std::string& id) {
+bool Enabled(const TestCore& core, const std::string& prefix, const std::string& id) {
   for (const auto& group : core.Actions()) {
     if (group.prefix != prefix) continue;
     for (const auto& action : group.actions) {
@@ -83,7 +84,7 @@ const Event* Find(const std::vector<Event>& events, const std::string& type) {
 }
 
 // start_mowing on the station and a reference check that passes.
-void StartUndocking(LogicCore& core) {
+void StartUndocking(TestCore& core) {
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
   ASSERT_TRUE(core.TakeDockCheck());
   const Reason why = core.OnDockCheck(true, kStartX, kDock.y, 0.02f, "");
@@ -91,7 +92,7 @@ void StartUndocking(LogicCore& core) {
 }
 
 // Charging is off: the way out goes to the follower.
-UndockPath ChargedOff(LogicCore& core) {
+UndockPath ChargedOff(TestCore& core) {
   EXPECT_TRUE(core.TakeChargeOff());
   core.OnChargeOff(true, "charging off");
   const auto path = core.TakeUndockPath();
@@ -100,7 +101,7 @@ UndockPath ChargedOff(LogicCore& core) {
 }
 
 // The mower got out: off the contacts, 0.75 m along the way.
-void Out(LogicCore& core) {
+void Out(TestCore& core) {
   core.OnHardwareStatus(Healthy(false));
   core.OnPose(PoseAt(kStartX + 0.75, kDock.y));
 }
@@ -152,7 +153,7 @@ TEST(UndockPlan, TheCourseCountsOnlyFarEnoughOut) {
 }
 
 TEST(Undock, ACheckThatPassesStartsWithChargingOff) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartUndocking(core);
   EXPECT_TRUE(core.Undocking());
   EXPECT_FALSE(core.Idle());
@@ -176,7 +177,7 @@ TEST(Undock, ACheckThatPassesStartsWithChargingOff) {
 }
 
 TEST(Undock, TheWayOutStartsWhereTheMowerStands) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartUndocking(core);
   const UndockPath path = ChargedOff(core);
   ASSERT_EQ(path.poses.size(), 9u);
@@ -195,7 +196,7 @@ TEST(Undock, TheWayOutStartsWhereTheMowerStands) {
 }
 
 TEST(Undock, UndockedThenMowing) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartUndocking(core);
   ChargedOff(core);
   Out(core);
@@ -221,7 +222,7 @@ TEST(Undock, UndockedThenMowing) {
 }
 
 TEST(Undock, WhatChangedMeanwhileKeepsMowingFromStarting) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartUndocking(core);
   ChargedOff(core);
   Out(core);
@@ -244,7 +245,7 @@ TEST(Undock, WhatChangedMeanwhileKeepsMowingFromStarting) {
 }
 
 TEST(Undock, ADriveFromTheStationGoesOnAfterUndocking) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   ASSERT_TRUE(core.DriveProblem().empty()) << core.DriveProblem().code;
   core.CheckDockBeforeDrive(2.0, 1.0);
   ASSERT_TRUE(core.TakeDockCheck());
@@ -271,7 +272,7 @@ TEST(Undock, ADriveFromTheStationGoesOnAfterUndocking) {
 }
 
 TEST(Undock, AbortWhileChargingOffEndsAtOnce) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartUndocking(core);
   core.TakeChargeOff();
   core.TakeEvents();
@@ -294,7 +295,7 @@ TEST(Undock, AbortWhileChargingOffEndsAtOnce) {
 }
 
 TEST(Undock, AbortOnTheWayStopsTheFollowerFirst) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartUndocking(core);
   ChargedOff(core);
   core.TakeStopRequest();
@@ -314,7 +315,7 @@ TEST(Undock, AbortOnTheWayStopsTheFollowerFirst) {
 }
 
 TEST(Undock, TheCourseProbeStopsAMowerLeavingAskew) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   // Fixes before undocking do not count.
   core.OnGnssFix(5.0, 5.0);
   StartUndocking(core);
@@ -351,7 +352,7 @@ TEST(Undock, TheCourseProbeStopsAMowerLeavingAskew) {
 }
 
 TEST(Undock, StandingInTheHollowFails) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartUndocking(core);
   ChargedOff(core);
   core.TakeEvents();
@@ -376,7 +377,7 @@ TEST(Undock, StandingInTheHollowFails) {
 }
 
 TEST(Undock, ABadPositionIsNoGps) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartUndocking(core);
   ChargedOff(core);
   core.TakeEvents();
@@ -386,7 +387,7 @@ TEST(Undock, ABadPositionIsNoGps) {
   ASSERT_TRUE(failed);
   EXPECT_EQ(failed->details["reason"], "no_gps");
 
-  LogicCore lost = Docked();
+  TestCore lost = Docked();
   StartUndocking(lost);
   ChargedOff(lost);
   lost.TakeEvents();
@@ -404,7 +405,7 @@ TEST(Undock, AnEmergencyStopsWithoutUndockingFailed) {
   stop.emergency = true;
   stop.emergency_reason = kEmergencyLatch | kEmergencyStop;
 
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartUndocking(core);
   ChargedOff(core);
   core.TakeEvents();
@@ -420,7 +421,7 @@ TEST(Undock, AnEmergencyStopsWithoutUndockingFailed) {
   EXPECT_FALSE(Find(events, "UNDOCKING_FAILED"));
 
   // While charging goes off nothing moves yet: it ends at once.
-  LogicCore early = Docked();
+  TestCore early = Docked();
   StartUndocking(early);
   early.OnHardwareStatus(stop);
   EXPECT_TRUE(early.Idle());
@@ -429,7 +430,7 @@ TEST(Undock, AnEmergencyStopsWithoutUndockingFailed) {
 }
 
 TEST(Undock, ChargingThatDoesNotGoOffKeepsTheMowerOnTheStation) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   StartUndocking(core);
   ASSERT_TRUE(core.TakeChargeOff());
   core.TakeEvents();
@@ -446,7 +447,7 @@ TEST(Undock, ChargingThatDoesNotGoOffKeepsTheMowerOnTheStation) {
 }
 
 TEST(Undock, AStationOutsideOfTheAreasIsUnreachable) {
-  LogicCore core = Docked(kFarLawn);
+  TestCore core = Docked(kFarLawn);
   const Reason why = core.StartProblem();
   EXPECT_EQ(why.code, "DOCK_UNREACHABLE");
   EXPECT_DOUBLE_EQ(why.fields["distance"].get<double>(), 0.8);
@@ -475,7 +476,7 @@ TEST(Undock, AStationOutsideOfTheAreasIsUnreachable) {
 TEST(Undock, CheckedAgainFromWhereTheMowerStands) {
   // The recorded station reaches the lawn by 1 cm, the mower stands 5 cm behind it.
   const Ring edge{{-0.21, -2.0}, {4.0, -2.0}, {4.0, 2.0}, {-0.21, 2.0}};
-  LogicCore core = Docked(edge);
+  TestCore core = Docked(edge);
   ASSERT_TRUE(core.StartProblem().empty()) << core.StartProblem().code;
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
   ASSERT_TRUE(core.TakeDockCheck());
@@ -490,7 +491,7 @@ TEST(Undock, CheckedAgainFromWhereTheMowerStands) {
 }
 
 TEST(Undock, HardwareThatChargesByItselfLeavesWithoutChargingOff) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   core.OnCapabilities(true, false);
   StartUndocking(core);
   EXPECT_TRUE(core.Undocking());
@@ -511,7 +512,7 @@ TEST(Undock, HardwareThatChargesByItselfLeavesWithoutChargingOff) {
 }
 
 TEST(Undock, ADriverThatCanStopChargingIsWaitedFor) {
-  LogicCore core = Docked();
+  TestCore core = Docked();
   core.OnCapabilities(true, false);
   core.OnCapabilities(true, true);
   StartUndocking(core);

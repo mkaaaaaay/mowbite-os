@@ -4,6 +4,7 @@
 
 #include "mowbite_api/catalog.h"
 #include "mowbite_logic/logic_core.h"
+#include "logic_test_core.h"
 
 using namespace mowbite_logic;
 
@@ -33,10 +34,10 @@ PoseSnapshot Pose() {
 }
 
 // IDLE in the field with everything a start needs; held when the start found a restart hold.
-LogicCore Started(bool held) {
+TestCore Started(bool held) {
   LogicConfig config;
   config.dock_contact_x = -0.10;
-  LogicCore core{config};
+  TestCore core{config};
   core.SetRestartHold(held);
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
@@ -62,13 +63,13 @@ RestartReport Report(const std::string& cause, bool hold) {
 }  // namespace
 
 TEST(RestartHold, WithoutItTheMowerStarts) {
-  LogicCore core = Started(false);
+  TestCore core = Started(false);
   EXPECT_FALSE(core.Emergency());
   EXPECT_TRUE(core.StartProblem().empty()) << core.StartProblem().message;
 }
 
 TEST(RestartHold, RefusesAllThatDrivesOrMowsWhateverTheDriverSays) {
-  LogicCore core = Started(true);
+  TestCore core = Started(true);
   EXPECT_TRUE(core.Emergency());
   const RobotStateData state = core.RobotState();
   EXPECT_TRUE(state.emergency);
@@ -88,7 +89,7 @@ TEST(RestartHold, RefusesAllThatDrivesOrMowsWhateverTheDriverSays) {
 }
 
 TEST(RestartHold, ShowsItsBitBesideTheDriversBits) {
-  LogicCore core = Started(true);
+  TestCore core = Started(true);
   HardwareSnapshot hw = Healthy();
   hw.emergency = true;
   hw.emergency_reason = kEmergencyLatch | kEmergencyUnexpectedRestart;
@@ -100,7 +101,7 @@ TEST(RestartHold, ShowsItsBitBesideTheDriversBits) {
 }
 
 TEST(RestartHold, AResetLetsGoAndTellsWhoReleased) {
-  LogicCore core = Started(true);
+  TestCore core = Started(true);
   const CommandOutcome reset = core.Command("emergency.reset", {{"client", "app"}});
   EXPECT_TRUE(reset.release);
   core.SetRestartHold(false);
@@ -115,7 +116,7 @@ TEST(RestartHold, AResetLetsGoAndTellsWhoReleased) {
 }
 
 TEST(RestartHold, TheDriverKeepsItsOwnLatchAfterTheRelease) {
-  LogicCore core = Started(true);
+  TestCore core = Started(true);
   HardwareSnapshot hw = Healthy();
   hw.emergency = true;
   hw.emergency_reason = kEmergencyLatch | kEmergencyUnexpectedRestart;
@@ -128,7 +129,7 @@ TEST(RestartHold, TheDriverKeepsItsOwnLatchAfterTheRelease) {
 }
 
 TEST(RestartHold, TheEventIsRatedByHold) {
-  LogicCore core = Started(true);
+  TestCore core = Started(true);
   core.ReportRestart(Report("OS_CRASH", true));
   core.ReportRestart(Report("OS_CRASH", false));
   RestartReport kernel = Report("KERNEL_CRASH", true);
