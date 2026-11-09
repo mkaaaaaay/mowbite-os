@@ -10,13 +10,13 @@ TensorInfo Tensor(std::vector<uint32_t> dims, int fmt, int type, int32_t zp, flo
   TensorInfo t;
   t.name = "t";
   t.dims = std::move(dims);
-  t.fmt = fmt;
+  t.format = fmt;
   t.type = type;
-  t.qnt_type = abi::kQuantAffine;
-  t.zp = zp;
+  t.quant = abi::kQuantAffine;
+  t.zero_point = zp;
   t.scale = scale;
-  t.n_elems = 1;
-  for (uint32_t d : t.dims) t.n_elems *= d;
+  t.elements = 1;
+  for (uint32_t d : t.dims) t.elements *= d;
   return t;
 }
 
@@ -74,7 +74,7 @@ TEST(ModelCheck, RefusesOtherInputs) {
   in[0].dims = {1, 480, 640, 3};
   EXPECT_FALSE(CheckModel(in, out, 22, layout, reason));
   Measured(22, in, out);
-  in[0].fmt = abi::kNchw;
+  in[0].format = abi::kNchw;
   EXPECT_FALSE(CheckModel(in, out, 22, layout, reason));
   Measured(22, in, out);
   in.push_back(in[0]);

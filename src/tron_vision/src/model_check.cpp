@@ -23,7 +23,7 @@ bool QuantizedNchw(const TensorInfo& t, uint32_t channels, uint32_t height, uint
              Dims({1, channels, height, width});
     return false;
   }
-  if (t.fmt != abi::kNchw || t.type != abi::kInt8 || t.qnt_type != abi::kQuantAffine || !(t.scale > 0.0F)) {
+  if (t.format != abi::kNchw || t.type != abi::kInt8 || t.quant != abi::kQuantAffine || !(t.scale > 0.0F)) {
     reason = "output " + t.name + " is not NCHW int8 with affine quantization";
     return false;
   }
@@ -40,7 +40,7 @@ bool CheckModel(const std::vector<TensorInfo>& inputs, const std::vector<TensorI
     return false;
   }
   const TensorInfo& in = inputs[0];
-  if (in.dims != std::vector<uint32_t>{1, kModelHeight, kModelWidth, 3} || in.fmt != abi::kNhwc ||
+  if (in.dims != std::vector<uint32_t>{1, kModelHeight, kModelWidth, 3} || in.format != abi::kNhwc ||
       (in.type != abi::kInt8 && in.type != abi::kUint8)) {
     reason = "input " + in.name + " has dims " + Dims(in.dims) + ", expected NHWC 8 bit [1,640,480,3]";
     return false;

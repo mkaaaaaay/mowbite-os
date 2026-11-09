@@ -42,27 +42,27 @@ enum QuantType : int {
 constexpr int kCore0 = 1;
 
 struct InOutNum {
-  uint32_t n_input;
-  uint32_t n_output;
+  uint32_t inputs;
+  uint32_t outputs;
 };
 
 struct TensorAttr {
   uint32_t index;
-  uint32_t n_dims;
+  uint32_t dim_count;
   uint32_t dims[kMaxDims];
   char name[kMaxName];
-  uint32_t n_elems;
-  uint32_t size;
-  int fmt;
+  uint32_t elements;
+  uint32_t bytes;
+  int format;
   int type;
-  int qnt_type;
-  int8_t fl;
-  int32_t zp;
+  int quant;
+  int8_t fixed_point;
+  int32_t zero_point;
   float scale;
-  uint32_t w_stride;
-  uint32_t size_with_stride;
-  uint8_t pass_through;
-  uint32_t h_stride;
+  uint32_t width_stride;
+  uint32_t bytes_with_stride;
+  uint8_t raw;
+  uint32_t height_stride;
 };
 
 struct SdkVersion {
@@ -70,21 +70,22 @@ struct SdkVersion {
   char driver[256];
 };
 
+// raw = 1 hands the buffer to the NPU as it is, 0 lets the runtime convert type and layout.
 struct Input {
   uint32_t index;
-  void* buf;
-  uint32_t size;
-  uint8_t pass_through;
+  void* data;
+  uint32_t bytes;
+  uint8_t raw;
   int type;
-  int fmt;
+  int format;
 };
 
 struct Output {
-  uint8_t want_float;
-  uint8_t is_prealloc;
+  uint8_t as_float;
+  uint8_t caller_buffer;
   uint32_t index;
-  void* buf;
-  uint32_t size;
+  void* data;
+  uint32_t bytes;
 };
 
 using InitFn = int (*)(Context*, void* model, uint32_t size, uint32_t flag, void* extend);

@@ -13,12 +13,12 @@ namespace tron_vision {
 struct TensorInfo {
   std::string name;
   std::vector<uint32_t> dims;
-  int fmt = 0;
+  int format = 0;
   int type = 0;
-  int qnt_type = 0;
-  int32_t zp = 0;
+  int quant = 0;
+  int32_t zero_point = 0;
   float scale = 1.0F;
-  uint32_t n_elems = 0;
+  uint32_t elements = 0;
 };
 
 // One model on the NPU through the runtime library loaded with dlopen. Not copyable, one context per object.

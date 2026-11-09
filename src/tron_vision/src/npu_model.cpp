@@ -36,14 +36,14 @@ bool ReadFile(const std::string& path, std::vector<char>& data, std::string& err
 TensorInfo ToInfo(const abi::TensorAttr& attr) {
   TensorInfo info;
   info.name.assign(attr.name, strnlen(attr.name, sizeof(attr.name)));
-  const uint32_t n = attr.n_dims < abi::kMaxDims ? attr.n_dims : abi::kMaxDims;
+  const uint32_t n = attr.dim_count < abi::kMaxDims ? attr.dim_count : abi::kMaxDims;
   info.dims.assign(attr.dims, attr.dims + n);
-  info.fmt = attr.fmt;
+  info.format = attr.format;
   info.type = attr.type;
-  info.qnt_type = attr.qnt_type;
-  info.zp = attr.zp;
+  info.quant = attr.quant;
+  info.zero_point = attr.zero_point;
   info.scale = attr.scale;
-  info.n_elems = attr.n_elems;
+  info.elements = attr.elements;
   return info;
 }
 
@@ -124,16 +124,16 @@ bool NpuModel::QueryTensors(std::string& error) {
     return false;
   }
   // The expected models have 1 input and 9 outputs; anything far beyond is not a detection model.
-  if (num.n_input > 4 || num.n_output > 32) {
-    error = "model has " + std::to_string(num.n_input) + " inputs and " + std::to_string(num.n_output) + " outputs";
+  if (num.inputs > 4 || num.outputs > 32) {
+    error = "model has " + std::to_string(num.inputs) + " inputs and " + std::to_string(num.outputs) + " outputs";
     return false;
   }
   inputs_.clear();
   outputs_.clear();
-  for (uint32_t i = 0; i < num.n_input + num.n_output; i++) {
-    const bool is_input = i < num.n_input;
+  for (uint32_t i = 0; i < num.inputs + num.outputs; i++) {
+    const bool is_input = i < num.inputs;
     abi::TensorAttr attr{};
-    attr.index = is_input ? i : i - num.n_input;
+    attr.index = is_input ? i : i - num.inputs;
     ret = query_(context_, is_input ? abi::kQueryInputAttr : abi::kQueryOutputAttr, &attr, sizeof(attr));
     if (ret != 0) {
       error = std::string("query ") + (is_input ? "input " : "output ") + std::to_string(attr.index) + " " +
@@ -150,17 +150,17 @@ bool NpuModel::Run(const uint8_t* image, size_t size, std::vector<std::vector<in
     error = "model not open";
     return false;
   }
-  if (size != inputs_[0].n_elems) {
-    error = "input size " + std::to_string(size) + " instead of " + std::to_string(inputs_[0].n_elems);
+  if (size != inputs_[0].elements) {
+    error = "input size " + std::to_string(size) + " instead of " + std::to_string(inputs_[0].elements);
     return false;
   }
   abi::Input input{};
   input.index = 0;
-  input.buf = const_cast<uint8_t*>(image);  // the runtime only reads the input
-  input.size = static_cast<uint32_t>(size);
-  input.pass_through = 0;
+  input.data = const_cast<uint8_t*>(image);  // the runtime only reads the input
+  input.bytes = static_cast<uint32_t>(size);
+  input.raw = 0;
   input.type = abi::kUint8;
-  input.fmt = abi::kNhwc;
+  input.format = abi::kNhwc;
   int ret = inputs_set_(context_, 1, &input);
   if (ret != 0) {
     error = "rknn_inputs_set " + std::to_string(ret);
@@ -183,12 +183,12 @@ bool NpuModel::Run(const uint8_t* image, size_t size, std::vector<std::vector<in
   outputs.resize(raw.size());
   bool sizes_ok = true;
   for (size_t i = 0; i < raw.size(); i++) {
-    if (raw[i].buf == nullptr || raw[i].size != outputs_[i].n_elems) {
+    if (raw[i].data == nullptr || raw[i].bytes != outputs_[i].elements) {
       sizes_ok = false;
       break;
     }
-    const auto* data = static_cast<const int8_t*>(raw[i].buf);
-    outputs[i].assign(data, data + raw[i].size);
+    const auto* data = static_cast<const int8_t*>(raw[i].data);
+    outputs[i].assign(data, data + raw[i].bytes);
   }
   outputs_release_(context_, static_cast<uint32_t>(raw.size()), raw.data());
   if (!sizes_ok) {

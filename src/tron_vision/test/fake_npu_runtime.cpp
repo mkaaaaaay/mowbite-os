@@ -62,7 +62,7 @@ constexpr float kScoreScale = 1.0F / 255.0F;
 TensorAttr Attr(const Fake& f, uint32_t index) {
   TensorAttr a{};
   a.index = index;
-  a.n_dims = 4;
+  a.dim_count = 4;
   const uint32_t branch = index / 3;
   const uint32_t kind = index % 3;
   const uint32_t stride = kStrides[branch % 3];
@@ -70,12 +70,12 @@ TensorAttr Attr(const Fake& f, uint32_t index) {
   const uint32_t dims[4] = {1, channels, f.in_dims[0] / stride, f.in_dims[1] / stride};
   std::memcpy(a.dims, dims, sizeof(dims));
   std::snprintf(a.name, sizeof(a.name), "out%u", index);
-  a.n_elems = dims[1] * dims[2] * dims[3];
-  a.size = a.n_elems;
-  a.fmt = tron_vision::abi::kNchw;
+  a.elements = dims[1] * dims[2] * dims[3];
+  a.bytes = a.elements;
+  a.format = tron_vision::abi::kNchw;
   a.type = tron_vision::abi::kInt8;
-  a.qnt_type = tron_vision::abi::kQuantAffine;
-  a.zp = kind == 0 ? kBoxZp : kScoreZp;
+  a.quant = tron_vision::abi::kQuantAffine;
+  a.zero_point = kind == 0 ? kBoxZp : kScoreZp;
   a.scale = kind == 0 ? kBoxScale : kScoreScale;
   return a;
 }
@@ -90,7 +90,7 @@ void Fill(Fake& f) {
   f.data.clear();
   for (uint32_t i = 0; i < f.outputs; i++) {
     const TensorAttr a = Attr(f, i);
-    f.data.emplace_back(a.n_elems, static_cast<int8_t>(i % 3 == 0 ? Quant(-8.0F, kBoxZp, kBoxScale) : -128));
+    f.data.emplace_back(a.elements, static_cast<int8_t>(i % 3 == 0 ? Quant(-8.0F, kBoxZp, kBoxScale) : -128));
   }
   for (const Hit& h : f.hits) {
     uint32_t b = 0;
@@ -155,16 +155,16 @@ int rknn_query(Context context, int query, void* info, uint32_t size) {
     case tron_vision::abi::kQueryInputAttr: {
       if (size < sizeof(TensorAttr)) return -1;
       TensorAttr a{};
-      a.n_dims = 4;
+      a.dim_count = 4;
       const uint32_t dims[4] = {1, f.in_dims[0], f.in_dims[1], f.in_dims[2]};
       std::memcpy(a.dims, dims, sizeof(dims));
       std::snprintf(a.name, sizeof(a.name), "images");
-      a.n_elems = f.in_dims[0] * f.in_dims[1] * f.in_dims[2];
-      a.size = a.n_elems;
-      a.fmt = tron_vision::abi::kNhwc;
+      a.elements = f.in_dims[0] * f.in_dims[1] * f.in_dims[2];
+      a.bytes = a.elements;
+      a.format = tron_vision::abi::kNhwc;
       a.type = tron_vision::abi::kInt8;
-      a.qnt_type = tron_vision::abi::kQuantAffine;
-      a.zp = -128;
+      a.quant = tron_vision::abi::kQuantAffine;
+      a.zero_point = -128;
       a.scale = 1.0F / 255.0F;
       std::memcpy(info, &a, sizeof(a));
       return 0;
@@ -200,9 +200,9 @@ int rknn_inputs_set(Context context, uint32_t n, Input* inputs) {
   auto it = fakes.find(context);
   if (it == fakes.end() || n != 1) return -1;
   const Input& in = inputs[0];
-  if (in.type != tron_vision::abi::kUint8 || in.fmt != tron_vision::abi::kNhwc || in.pass_through != 0) return -1;
-  const auto* p = static_cast<const uint8_t*>(in.buf);
-  it->second.last_input.assign(p, p + in.size);
+  if (in.type != tron_vision::abi::kUint8 || in.format != tron_vision::abi::kNhwc || in.raw != 0) return -1;
+  const auto* p = static_cast<const uint8_t*>(in.data);
+  it->second.last_input.assign(p, p + in.bytes);
   return 0;
 }
 
@@ -217,9 +217,9 @@ int rknn_outputs_get(Context context, uint32_t n, Output* outputs, void*) {
   auto it = fakes.find(context);
   if (it == fakes.end() || n != it->second.outputs) return -1;
   for (uint32_t i = 0; i < n; i++) {
-    if (outputs[i].want_float != 0 || outputs[i].is_prealloc != 0) return -1;
-    outputs[i].buf = it->second.data[outputs[i].index].data();
-    outputs[i].size = static_cast<uint32_t>(it->second.data[outputs[i].index].size());
+    if (outputs[i].as_float != 0 || outputs[i].caller_buffer != 0) return -1;
+    outputs[i].data = it->second.data[outputs[i].index].data();
+    outputs[i].bytes = static_cast<uint32_t>(it->second.data[outputs[i].index].size());
   }
   return 0;
 }

@@ -8,7 +8,7 @@ namespace tron_vision {
 namespace {
 
 float Dequant(int8_t q, const TensorInfo& t) {
-  return (static_cast<float>(q) - static_cast<float>(t.zp)) * t.scale;
+  return (static_cast<float>(q) - static_cast<float>(t.zero_point)) * t.scale;
 }
 
 // Expected bin of one side: softmax over its bins, at cell index `cell` of a plane of `plane` values.

@@ -33,7 +33,7 @@ struct Model {
       const size_t plane = static_cast<size_t>(br.height) * br.width;
       for (uint32_t k = 0; k < 3; k++) {
         TensorInfo t;
-        t.zp = k == 0 ? kBoxZp : kScoreZp;
+        t.zero_point = k == 0 ? kBoxZp : kScoreZp;
         t.scale = k == 0 ? kBoxScale : kScoreScale;
         info.push_back(t);
         const size_t n = (k == 0 ? 64 : k == 1 ? classes : 1) * plane;
