@@ -15,11 +15,11 @@ find_package(sensor_msgs REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg)
 
-# Cameras, exposure, NPU model, detection decoding, pictures and the H.264 stream without ROS. The NPU runtime is
-# loaded at run time, never linked.
+# Cameras, exposure, NPU model, detection decoding, pictures and the H.264 stream without ROS. The NPU runtime and
+# the media library of the encoder are loaded at run time, never linked.
 add_library(tron_vision_core STATIC src/npu_model.cpp src/model_check.cpp src/yolo_decode.cpp src/frame_convert.cpp
   src/exposure.cpp src/v4l2_camera.cpp src/crash_guard.cpp src/budget.cpp src/vision_loop.cpp src/tron_camera.cpp
-  src/text_file.cpp src/preview.cpp src/h264_rtp.cpp src/rtsp_server.cpp)
+  src/text_file.cpp src/preview.cpp src/h264_rtp.cpp src/rtsp_server.cpp src/h264_encoder.cpp)
 target_include_directories(tron_vision_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -46,13 +46,24 @@ if(BUILD_TESTING)
   # Stand-in for the runtime library, for the tests only.
   add_library(tron_vision_fake_npu SHARED test/fake_npu_runtime.cpp)
   target_include_directories(tron_vision_fake_npu PRIVATE include)
+  # Stand-in for the media library, for the tests only.
+  add_library(tron_vision_fake_mpp SHARED test/fake_mpp.cpp src/h264_rtp.cpp)
+  target_include_directories(tron_vision_fake_mpp PRIVATE include)
   ament_add_gtest(tron_vision_test test/test_model_check.cpp test/test_yolo_decode.cpp test/test_frame_convert.cpp
                   test/test_exposure.cpp test/test_npu_model.cpp test/test_crash_guard.cpp test/test_budget.cpp
                   test/test_vision_loop.cpp test/test_tron_camera.cpp test/test_preview.cpp
-                  test/test_v4l2_capture.cpp test/test_h264_rtp.cpp test/test_rtsp_server.cpp)
+                  test/test_v4l2_capture.cpp test/test_h264_rtp.cpp test/test_rtsp_server.cpp
+                  test/test_h264_encoder.cpp)
   target_link_libraries(tron_vision_test tron_vision_core)
-  target_compile_definitions(tron_vision_test PRIVATE FAKE_NPU_LIB="$<TARGET_FILE:tron_vision_fake_npu>")
-  add_dependencies(tron_vision_test tron_vision_fake_npu)
+  target_compile_definitions(tron_vision_test PRIVATE FAKE_NPU_LIB="$<TARGET_FILE:tron_vision_fake_npu>"
+                             FAKE_MPP_LIB="$<TARGET_FILE:tron_vision_fake_mpp>")
+  add_dependencies(tron_vision_test tron_vision_fake_npu tron_vision_fake_mpp)
+  # With the headers of the media library at hand, the declarations in mpp_abi.h are compared with them.
+  if(TRON_VISION_MPP_INCLUDE)
+    add_library(tron_vision_check_mpp_abi OBJECT test/check_mpp_abi.cpp)
+    target_include_directories(tron_vision_check_mpp_abi PRIVATE include)
+    target_include_directories(tron_vision_check_mpp_abi SYSTEM PRIVATE ${TRON_VISION_MPP_INCLUDE})
+  endif()
   ament_add_gtest(tron_vision_node_test test/test_vision_node.cpp)
   target_link_libraries(tron_vision_node_test tron_vision_node_lib)
 endif()
