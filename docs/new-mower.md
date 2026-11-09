@@ -79,6 +79,11 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
 all nodes above the contract, and the planner). Copy `nx60i.launch.py`: it restarts the driver at most three times,
 each time latched, and leaves `driver_exit.json`.
 
+Every node in the container runs in its own thread (`component_container_isolated`), so a node that waits stalls only
+itself. A node of your own (lights, sound, camera) follows the same rule as the others: nothing that blocks in a
+callback of the driving chain (pose, safety, follower, logic), no `fsync` or network there; files that must last go
+through a thread of their own like `mowbite_hold::FileWriter`.
+
 ## 5. Onto the mower
 
 - Docker Compose like the NX60i (`docker/mower/nx60i.compose.yaml`), or a native bundle on the mower's own rootfs like
