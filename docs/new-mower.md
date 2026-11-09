@@ -64,6 +64,9 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   empty, full and critical, charge check, temperatures). Check every value you inherit.
 - Driver parameters (ports, baud rates, limits) in the file of the driver; values measured on one mower in a file on
   that mower.
+- The datum of the garden: one place on the mower, `MOWBITE_DATUM_LAT`, `_LONG`, `_HEIGHT` (Tron `/etc/mowbite/os.conf`,
+  NX60i the environment of the compose file), handed to the GNSS node as launch arguments `datum_*` after every
+  parameter file. Without a datum no pose is published.
 
 ## 4. Start file
 
@@ -91,6 +94,22 @@ Before the mower drives by itself. On blocks, wheels free, blade off, someone at
 Then set `safety_measurement_date` in the driver parameters. Without it the mower takes remote control only
 (`NO_SAFETY_MEASUREMENT`).
 
+## 7. Lights (optional)
+
+`mowbite_light` drives a WS2812 chain on spidev after the robot state, with a profile per state in the app (`light.*`);
+the emergency signal is fixed. Load it as a component of the container only when the drivers run, like
+`tron.launch.py` with `hardware:=true`.
+
+- Parameters under `mowbite_light` in `<platform>.yaml`: `output` (`none` until checked on the mower, then `spidev`;
+  `file` in the simulation), `device`, `leds` (lit), `buffer_leds` (driven), `strips` (runs `first-last` that chase
+  and gradient follow, backwards when last < first, not overlapping; empty: the whole chain), `frame_rate`,
+  `max_brightness`, `max_current_ma`, `ma_per_channel`, `low_battery`.
+- With `output: none` or an invalid value the node offers no `light.*` method and the app hides the lights; invalid
+  `strips` only fall back to the whole chain.
+- The service user needs the device: on a native rootfs a udev rule like
+  `platform/tron/rootfs/files/usr/lib/udev/rules.d/60-mowbite-spidev.rules`, in Docker the device passed in.
+- On the mower: `output: spidev` in the file of that mower, then one `light.preview`.
+
 ## Check list
 
 - [ ] Driver package: protocol code with gtests, build without warnings
@@ -101,4 +120,5 @@ Then set `safety_measurement_date` in the driver parameters. Without it the mowe
 - [ ] Simulation: mowing, going home, docking; `app_interface_check`
 - [ ] Way onto the mower chosen, limits for logs and journal
 - [ ] Safety measurement done, date set
+- [ ] Lights, if any: device rights, `output` on only after a look on the mower
 - [ ] First drive watched: blade off, RTK fix, at most 0.3 m/s
