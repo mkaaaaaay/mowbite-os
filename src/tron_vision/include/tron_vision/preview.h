@@ -37,7 +37,7 @@ struct PreviewConfig {
   uint32_t width = 640;
   // Pictures per second, held within 0.5..5.
   double max_rate = 5.0;
-  size_t max_bytes = 100 * 1024;
+  size_t max_bytes = 100UL * 1024;
   int quality = 80;
   int min_quality = 30;
 };

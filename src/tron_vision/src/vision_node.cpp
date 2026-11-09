@@ -228,7 +228,7 @@ void VisionNode::PublishPicture() {
   msg.header.frame_id = camera_id_;
   msg.format = "jpeg";
   msg.data = preview.Jpeg();
-  picture_pub_->publish(std::move(msg));
+  picture_pub_->publish(msg);
 }
 
 }  // namespace tron_vision
