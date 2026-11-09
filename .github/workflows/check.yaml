@@ -1,12 +1,13 @@
-# Unit tests natively on arm64 (the mowers) for every push that changes the code, on amd64 too for main;
-# the app interface check against the simulation on amd64 for every branch push that changes the code, on arm64 too
-# for main, not for tags, and after it the journal of the simulation has to replay bit-identically. os-image and
-# measure-image only carry commits checked on their branch before.
+# Unit tests natively on arm64 (the mowers) for every push to main and tron-bundle (the source of the bundles), on
+# amd64 too for main; the app interface check against the simulation on amd64 for main and by hand, on arm64 too for
+# main, and after it the journal of the simulation has to replay bit-identically. Other branches are checked on the
+# build server before they merge; by hand: workflow_dispatch on the branch. os-image and measure-image only carry
+# commits checked before.
 name: check
 
 on:
   push:
-    branches-ignore: [os-image, measure-image]
+    branches: [main, tron-bundle]
     paths: ['src/**', 'docker/**', '.github/**']
   workflow_dispatch:
 
@@ -63,7 +64,7 @@ jobs:
           grep -B2 -A6 'warning:' out/build.txt 2>/dev/null | head -60 || true
 
   app-check:
-    if: startsWith(github.ref, 'refs/heads/') || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
