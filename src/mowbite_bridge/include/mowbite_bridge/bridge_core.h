@@ -141,7 +141,8 @@ class BridgeCore {
   void OnParams(std::string_view message);
   void OnPublish(const std::string& topic, const std::string& payload, bool retain);
   void OnMap(const std::string& text);
-  void OnPlatform(const std::string& platform);
+  // From hw/capabilities: the platform and stop_release of system.info.
+  void OnPlatform(const std::string& platform, const Json& stop_release = Json());
   void OnRpcMethods(const std::string& node, const std::vector<std::string>& methods);
   // Answers of the nodes for MQTT under the id the client sent, to where its request wanted them; calls one node makes
   // of another (ids beginning with kInternalCall) stay in ROS, an answer to a call no longer open or to an id the
@@ -182,6 +183,7 @@ class BridgeCore {
   bool connected_ = false;
   int mqtt_version_ = 5;
   std::string platform_;
+  Json stop_release_;
   // current_state and current_sub_state of the last robot_state, for refused requests.
   std::string state_;
   std::string sub_state_;

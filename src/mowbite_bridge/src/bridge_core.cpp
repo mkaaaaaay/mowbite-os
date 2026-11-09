@@ -61,7 +61,7 @@ BridgeCore::BridgeCore(BridgeConfig config)
   local_["rpc.ping"] = [](const Json&) { return Json("pong"); };
   local_["rpc.methods"] = [this](const Json&) { return Json(methods_.All()); };
   local_["system.info"] = [this](const Json&) {
-    return SystemInfo(config_.software_version, platform_, mqtt_version_);
+    return SystemInfo(config_.software_version, platform_, mqtt_version_, stop_release_);
   };
   // The catalog of the interface as JSON Schema; system.info.api tells whether a client knows it already.
   local_["system.api"] = [](const Json&) {
@@ -284,8 +284,9 @@ void BridgeCore::OnMap(const std::string& text) {
   Guard("map", [&] { Keep("map/json", text); });
 }
 
-void BridgeCore::OnPlatform(const std::string& platform) {
+void BridgeCore::OnPlatform(const std::string& platform, const Json& stop_release) {
   platform_ = platform;
+  stop_release_ = stop_release;
 }
 
 void BridgeCore::OnRpcMethods(const std::string& node, const std::vector<std::string>& methods) {

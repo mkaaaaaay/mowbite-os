@@ -263,7 +263,8 @@ class BridgeNode : public rclcpp::Node {
     Subscribe<std_msgs::msg::String>("map/json", Latched(1),
                                      [this](const std_msgs::msg::String& m) { core_.OnMap(m.data); });
     Subscribe<msg::HardwareCapabilities>("hw/capabilities", Latched(1), [this](const msg::HardwareCapabilities& m) {
-      core_.OnPlatform(m.platform);
+      core_.OnPlatform(m.platform,
+                       StopRelease(m.stop_release_free_s, m.stop_release_hold_s, m.stop_release_max_hold_s));
     });
     // Transient local: the WARN lines from before this node met the others are in logs.recent too.
     Subscribe<rcl_interfaces::msg::Log>("/rosout", Latched(1000), [this](const rcl_interfaces::msg::Log& m) {

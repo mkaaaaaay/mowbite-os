@@ -178,7 +178,11 @@ TEST(Fixed, CapabilitiesVersionAndSystemInfo) {
   EXPECT_EQ(VersionText("1.2.3"), R"({"version":"1.2.3"})");
   EXPECT_EQ(SystemInfo("", "airseekers_tron", 5).dump(),
             R"({"name":"mowbite-os","version":"UNKNOWN VERSION","platform":"airseekers_tron","schema":)" +
-                std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) + R"(,"mqtt":5})");
+                std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) +
+                R"(,"mqtt":5,"stop_release":null})");
   EXPECT_EQ(SystemInfo("1.2.3", "", 3)["platform"], "");
   EXPECT_EQ(SystemInfo("1.2.3", "", 3)["mqtt"], 3);
+  EXPECT_EQ(SystemInfo("1.2.3", "airseekers_tron", 5, StopRelease(2, 3, 10))["stop_release"].dump(),
+            R"({"free_s":2.0,"hold_s":3.0,"max_hold_s":10.0})");
+  EXPECT_TRUE(StopRelease(0, 0, 0).is_null());
 }

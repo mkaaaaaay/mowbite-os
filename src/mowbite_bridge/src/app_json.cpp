@@ -151,13 +151,19 @@ std::string VersionText(const std::string& version) {
   return Dump(Json{{"version", version.empty() ? "UNKNOWN VERSION" : version}});
 }
 
-Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version) {
+Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version, const Json& stop_release) {
   return Json{{"name", "mowbite-os"},
               {"version", version.empty() ? "UNKNOWN VERSION" : version},
               {"platform", platform},
               {"schema", DataSchema()},
               {"api", mowbite_api::kApi},
-              {"mqtt", mqtt_version}};
+              {"mqtt", mqtt_version},
+              {"stop_release", stop_release}};
+}
+
+Json StopRelease(double free_s, double hold_s, double max_hold_s) {
+  if (!(free_s > 0)) return Json();
+  return Json{{"free_s", free_s}, {"hold_s", hold_s}, {"max_hold_s", max_hold_s}};
 }
 
 int DataSchema() {

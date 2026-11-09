@@ -237,7 +237,14 @@ const std::vector<Command>& Commands() {
         Integer("schema", "Version of the data in data_dir"),
         Integer("api", "Version of this interface, the x-api of the schema system.api gives"),
         Integer("mqtt", "MQTT version of the bridge at the broker: 5 sends each answer to the response topic of its "
-                        "request, 3 sends all to rpc/response")},
+                        "request, 3 sends all to rpc/response"),
+        Nullable(Object("stop_release",
+                        "Releasing the emergency with STOP at the mower: free for free_s, held for hold_s, let go "
+                        "before max_hold_s; null or missing where the platform has no such release",
+                        {Number("free_s", "s", "STOP not pressed for this long before"),
+                         Number("hold_s", "s", "Held at least this long"),
+                         Number("max_hold_s", "s", "Let go before this")},
+                        false))},
        "",
        {}},
       {"system.api",
@@ -677,17 +684,21 @@ Rating RateReason(const std::string& event, const std::string& code, const Json&
   return {entry->other_severity.c_str(), entry->other_resume.c_str()};
 }
 
-std::string EmergencyNames(int bits) {
+std::vector<std::string> EmergencyNameList(int bits) {
   const uint32_t set = static_cast<uint32_t>(bits);
   uint32_t named = 0;
-  std::string names;
+  std::vector<std::string> names;
   for (const auto& bit : EmergencyBits()) {
     named |= 1u << bit.bit;
-    if ((set & (1u << bit.bit)) == 0) continue;
-    if (!names.empty()) names += ", ";
-    names += bit.name;
+    if ((set & (1u << bit.bit)) != 0) names.push_back(bit.name);
   }
-  if ((set & ~named) != 0) names += names.empty() ? kUnknownEmergency : std::string(", ") + kUnknownEmergency;
+  if ((set & ~named) != 0) names.push_back(kUnknownEmergency);
+  return names;
+}
+
+std::string EmergencyNames(int bits) {
+  std::string names;
+  for (const auto& name : EmergencyNameList(bits)) names += (names.empty() ? "" : ", ") + name;
   return names;
 }
 

@@ -106,8 +106,12 @@ std::string CapabilitiesText();
 // version/json; an empty version is "UNKNOWN VERSION".
 std::string VersionText(const std::string& version);
 
-// system.info.
-Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version);
+// system.info; stop_release is null where the platform offers no release with STOP.
+Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version,
+                const Json& stop_release = Json());
+
+// stop_release of system.info from the times of hw/capabilities: null without a free time.
+Json StopRelease(double free_s, double hold_s, double max_hold_s);
 
 // The schema of data_dir this image writes, from data_schema.json of the package (tron.launch.py reads the same file).
 int DataSchema();

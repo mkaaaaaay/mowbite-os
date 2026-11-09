@@ -75,21 +75,25 @@ std::set<std::string> CodesOf(const std::string& type) {
 }  // namespace
 
 // RateReason reads the catalog now and rates every reason of an event as the table did, also one it does not know;
-// the pauses of api 5 (O11) are rated anew.
+// the pauses of api 5 (O11) and the release refusals of api 10 are rated anew.
 TEST(Catalog, RateReasonAsTheTableBefore) {
   const std::map<std::string, Rating> paused_since_api_5 = {{"BATTERY_HOT", {"warning", "user"}},
                                                              {"MOTOR_HOT", {"warning", "user"}},
                                                              {"RAIN", {"info", "user"}},
                                                              {"DARK", {"info", "user"}}};
+  const std::map<std::string, Rating> refused_since_api_10 = {{"STILL_ACTIVE", {"warning", "user"}},
+                                                              {"LATCH_CHANGED", {"warning", "user"}}};
   for (const char* event : {"MOWING_REFUSED", "DRIVE_REFUSED", "RECORDING_REFUSED", "CALIBRATION_REFUSED",
                             "CALIBRATION_FAILED", "STATE", "DRIVE", "POSITION_JUMP", "AREA_SKIPPED", "UNDOCKING_FAILED",
                             "DOCKING_RETRY", "DOCKING_FAILED", "EMERGENCY_RESET_REFUSED", "NOT_AN_EVENT"}) {
     for (const auto& code : CodesOf(event)) {
       for (const char* action : {"", "point", "collect_point", "record_dock", "start_area_recording"}) {
         const Rating now = RateReason(event, code, Json{{"action", action}});
-        const auto anew = paused_since_api_5.find(code);
-        const Rating before = std::string(event) == "STATE" && anew != paused_since_api_5.end()
-                                  ? anew->second
+        const auto paused = paused_since_api_5.find(code);
+        const auto refused = refused_since_api_10.find(code);
+        const Rating before = std::string(event) == "STATE" && paused != paused_since_api_5.end() ? paused->second
+                              : std::string(event) == "EMERGENCY_RESET_REFUSED" && refused != refused_since_api_10.end()
+                                  ? refused->second
                                   : OldRateReason(event, code, action);
         EXPECT_STREQ(now.severity, before.severity) << event << " " << code << " " << action;
         EXPECT_STREQ(now.resume, before.resume) << event << " " << code << " " << action;
