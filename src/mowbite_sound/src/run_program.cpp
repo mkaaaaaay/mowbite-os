@@ -43,7 +43,8 @@ void Drain(int fd, std::string* tail) {
 
 }  // namespace
 
-bool RunProgram(const std::vector<std::string>& argv, double timeout, std::string* error) {
+bool RunProgram(const std::vector<std::string>& argv, double timeout, std::string* error, int* exit_code) {
+  if (exit_code) *exit_code = -1;
   int pipe_fds[2];
   if (::pipe2(pipe_fds, O_CLOEXEC | O_NONBLOCK) != 0) {
     *error = std::string("pipe: ") + std::strerror(errno);
@@ -106,6 +107,7 @@ bool RunProgram(const std::vector<std::string>& argv, double timeout, std::strin
   Drain(pipe_fds[0], &output);
   ::close(pipe_fds[0]);
 
+  if (!killed && WIFEXITED(status) && exit_code) *exit_code = WEXITSTATUS(status);
   if (!killed && WIFEXITED(status) && WEXITSTATUS(status) == 0) return true;
   if (killed) {
     *error = argv[0] + " took longer than " + std::to_string(static_cast<int>(timeout)) + " s";

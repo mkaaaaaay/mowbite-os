@@ -85,12 +85,27 @@ TEST(Converter, TellsWhyAFileFails) {
   TempDir dir;
   WriteAll(dir.path + "/broken.mp3", std::string(3000, 'x'));
   std::string error;
-  EXPECT_FALSE(RunProgram({CONVERTER, dir.path + "/broken.mp3", dir.path + "/out.wav"}, 30, &error));
-  EXPECT_NE(error.find("exited with 1: no MP3 frames"), std::string::npos) << error;
+  int code = 0;
+  EXPECT_FALSE(RunProgram({CONVERTER, dir.path + "/broken.mp3", dir.path + "/out.wav"}, 30, &error, &code));
+  EXPECT_NE(error.find("exited with 2: no MP3 frames"), std::string::npos) << error;
+  EXPECT_EQ(code, kExitNotMp3);
 
   WriteAll(dir.path + "/large.mp3", std::string((2 << 20) + 1, '\0'));
-  EXPECT_FALSE(RunProgram({CONVERTER, dir.path + "/large.mp3", dir.path + "/out.wav"}, 30, &error));
+  EXPECT_FALSE(RunProgram({CONVERTER, dir.path + "/large.mp3", dir.path + "/out.wav"}, 30, &error, &code));
   EXPECT_NE(error.find("larger than 2 MB"), std::string::npos) << error;
+  EXPECT_EQ(code, 1);
+
+  // The frames of a 1-s tone 32 times after its tag: longer than 30 s.
+  const std::string tone = ReadAll(TEST_DATA "/tone.mp3");
+  size_t tag = 0;
+  for (int i = 6; i < 10; ++i) tag = (tag << 7) | (static_cast<uint8_t>(tone[i]) & 0x7f);
+  tag += 10;
+  std::string long_one = tone.substr(0, tag);
+  for (int i = 0; i < 32; ++i) long_one += tone.substr(tag);
+  WriteAll(dir.path + "/long.mp3", long_one);
+  EXPECT_FALSE(RunProgram({CONVERTER, dir.path + "/long.mp3", dir.path + "/out.wav"}, 30, &error, &code));
+  EXPECT_NE(error.find("longer than 30 s"), std::string::npos) << error;
+  EXPECT_EQ(code, kExitTooLong);
 
   EXPECT_FALSE(RunProgram({CONVERTER, dir.path + "/missing.mp3", dir.path + "/out.wav"}, 30, &error));
   EXPECT_NE(error.find("cannot open"), std::string::npos) << error;
@@ -102,5 +117,9 @@ TEST(RunProgram, KillsWhatTakesTooLongAndNamesAMissingProgram) {
   EXPECT_NE(error.find("took longer than"), std::string::npos) << error;
   EXPECT_FALSE(RunProgram({"/nonexistent/convert"}, 1, &error));
   EXPECT_NE(error.find("cannot start"), std::string::npos) << error;
-  EXPECT_TRUE(RunProgram({"/bin/true"}, 5, &error)) << error;
+  int code = -2;
+  EXPECT_TRUE(RunProgram({"/bin/true"}, 5, &error, &code)) << error;
+  EXPECT_EQ(code, 0);
+  EXPECT_FALSE(RunProgram({"/bin/sleep", "5"}, 0.3, &error, &code));
+  EXPECT_EQ(code, -1);
 }

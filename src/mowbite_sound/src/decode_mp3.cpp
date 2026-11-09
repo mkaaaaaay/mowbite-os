@@ -21,7 +21,7 @@ size_t Id3Size(const std::string& bytes) {
 
 }  // namespace
 
-std::optional<Wav> DecodeMp3(const std::string& bytes, std::string* error) {
+std::optional<Wav> DecodeMp3(const std::string& bytes, std::string* error, bool* too_long) {
   mp3dec_t decoder;
   mp3dec_init(&decoder);
   Wav wav;
@@ -47,6 +47,7 @@ std::optional<Wav> DecodeMp3(const std::string& bytes, std::string* error) {
     }
     if (static_cast<double>(wav.samples.size() + frames) > kMaxSeconds * wav.rate) {
       *error = "longer than " + std::to_string(static_cast<int>(kMaxSeconds)) + " s";
+      if (too_long) *too_long = true;
       return std::nullopt;
     }
     for (int i = 0; i < frames; ++i) {

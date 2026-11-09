@@ -26,9 +26,9 @@ bool Limit(int resource, rlim_t value) {
   return ::setrlimit(resource, &limit) == 0;
 }
 
-int Fail(const std::string& why) {
+int Fail(const std::string& why, int code = 1) {
   std::fprintf(stderr, "%s\n", why.c_str());
-  return 1;
+  return code;
 }
 
 }  // namespace
@@ -51,8 +51,9 @@ int main(int argc, char** argv) {
       return Fail("larger than " + std::to_string(mowbite_sound::kMaxMp3Bytes >> 20) + " MB");
     case mowbite_hold::FileRead::kFailed: return Fail(error);
   }
-  const auto wav = mowbite_sound::DecodeMp3(mp3, &error);
-  if (!wav) return Fail(error);
+  bool too_long = false;
+  const auto wav = mowbite_sound::DecodeMp3(mp3, &error, &too_long);
+  if (!wav) return Fail(error, too_long ? mowbite_sound::kExitTooLong : mowbite_sound::kExitNotMp3);
   std::ofstream out(argv[2], std::ios::binary | std::ios::trunc);
   const std::string bytes = mowbite_sound::EncodeWav(*wav);
   out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
