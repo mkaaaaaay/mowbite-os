@@ -85,11 +85,13 @@ struct Rig {
   }
   VisionLoop& Loop() {
     if (!loop) {
-      loop = std::make_unique<VisionLoop>(config, camera, guard, [this] {
-        return clock + std::chrono::duration<double>(std::chrono::steady_clock::now() - real_start).count();
-      });
+      loop = std::make_unique<VisionLoop>(config, camera, guard, [this] { return Now(); });
     }
     return *loop;
+  }
+  // The clock of the loop: camera time plus the real time the test took.
+  double Now() const {
+    return clock + std::chrono::duration<double>(std::chrono::steady_clock::now() - real_start).count();
   }
   // Steps for `seconds` of camera time, idle steps move the clock on by 0.1 s.
   void Run(double seconds) {
@@ -112,6 +114,24 @@ struct Rig {
 };
 
 constexpr const char* kPersonModel = "classes 3\nhit 0 0.8 8 30 40 2 2 2 2\n";
+
+TEST(VisionLoop, PicturesOnlyWhileWatchedAndRunning) {
+  Rig rig(kPersonModel);
+  ASSERT_TRUE(rig.Loop().Load());
+  rig.Run(2.0);
+  EXPECT_EQ(rig.Loop().GetPreview().Count(), 0U);
+  rig.Loop().SetPreviewWanted(true);
+  const double start = rig.Now();
+  rig.Run(2.0);
+  const uint64_t made = rig.Loop().GetPreview().Count();
+  // 15 frames per second, at most 5 pictures per second of the loop clock.
+  EXPECT_GE(made, 8U);
+  EXPECT_LE(static_cast<double>(made), 5.0 * (rig.Now() - start) + 1.0);
+  EXPECT_EQ(rig.Loop().GetPreview().Width(), kWidth);
+  rig.Loop().SetPreviewWanted(false);
+  rig.Run(2.0);
+  EXPECT_EQ(rig.Loop().GetPreview().Count(), made);
+}
 
 TEST(VisionLoop, RefusesTheSmallModelAndNeverStreams) {
   Rig rig("classes 1\n", "stone\nleaf\n");

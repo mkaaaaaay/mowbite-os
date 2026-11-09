@@ -49,7 +49,8 @@ VisionLoop::VisionLoop(VisionConfig config, Camera& camera, CrashGuard& guard, s
       camera_(camera),
       guard_(guard),
       now_(std::move(now)),
-      thermal_(config_.pause_at_c, config_.resume_below_c) {
+      thermal_(config_.pause_at_c, config_.resume_below_c),
+      preview_(config_.preview) {
   config_.infer_rate = std::clamp(config_.infer_rate, 0.5, 5.0);
   status_.exposure.exposure = config_.exposure.exposure_max;
   status_.exposure.gain = config_.exposure.gain_min;
@@ -116,6 +117,7 @@ bool VisionLoop::StartStream(double now) {
   last_frame_ = -1.0;
   frames_since_exposure_ = 0;
   next_infer_ = now;
+  detections_.clear();
   Set(VisionState::kStarting, "");
   return true;
 }
@@ -212,6 +214,10 @@ void VisionLoop::OnFrame(const Nv12View& frame, double now) {
     }
   }
   if (now >= next_infer_) Infer(frame, now);
+  if (preview_wanted_ && status_.state == VisionState::kRunning && preview_.Due(now)) {
+    std::string error;
+    if (!preview_.Make(frame, status_.display_gains, detections_, now, error)) status_.detail = error;
+  }
 }
 
 bool VisionLoop::Infer(const Nv12View& frame, double now) {

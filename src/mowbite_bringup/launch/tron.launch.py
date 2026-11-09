@@ -86,10 +86,13 @@ def vision(files, data_dir, switch, logger):
         if switch != "off":
             logger.warning(f"vision:={switch} is neither on nor off: no camera AI")
         return []
+    # The node names this process in hw/cameras, so the OS ties its exit note to the camera.
+    process = "vision"
     return stack.own_process(
         lambda prefix: Node(package="tron_vision", executable="tron_vision_node", name="tron_vision", namespace="/",
-                            parameters=[*files], output="screen", prefix=prefix, exec_name="tron_vision"),
-        "vision", data_dir, logger, oom_score_adj=1000, nice=10, cpus="0-3")
+                            parameters=[*files, {"process": process}], output="screen", prefix=prefix,
+                            exec_name="tron_vision"),
+        process, data_dir, logger, oom_score_adj=1000, nice=10, cpus="0-3")
 
 
 def generate_launch_description():

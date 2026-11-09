@@ -39,6 +39,24 @@ std::string StateText(const VisionStatus& status) {
 
 }  // namespace
 
+Availability CameraAvailability(VisionState state) {
+  using mowbite_msgs::msg::Camera;
+  switch (state) {
+    case VisionState::kStarting:
+    case VisionState::kRunning: return {true, ""};
+    case VisionState::kLocked: return {false, Camera::REASON_LOCKED_AFTER_CRASH};
+    case VisionState::kModelMissing:
+    case VisionState::kModelMismatch:
+    case VisionState::kModelError: return {false, Camera::REASON_NOT_SET_UP};
+    case VisionState::kPausedHot: return {false, Camera::REASON_TOO_HOT};
+    case VisionState::kOff:
+    case VisionState::kNoFrames:
+    case VisionState::kCameraError:
+    case VisionState::kFailed: break;
+  }
+  return {false, Camera::REASON_NO_SIGNAL};
+}
+
 VisionNode::VisionNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_vision", options) {
   VisionConfig config;
   camera_id_ = config.camera_id;
@@ -53,11 +71,21 @@ VisionNode::VisionNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_
   config.decode.score_threshold =
       static_cast<float>(declare_parameter("score_threshold", static_cast<double>(config.decode.score_threshold)));
   config.max_rss_bytes = static_cast<size_t>(declare_parameter("max_rss_mb", 300)) << 20;
+  config.preview.max_rate = declare_parameter("jpeg_max_rate", config.preview.max_rate);
+  config.preview.max_bytes = static_cast<size_t>(declare_parameter("jpeg_max_kb", 100)) * 1024;
   config.temp_file = FindThermalZone("/sys/class/thermal", "soc-thermal");
   if (config.temp_file.empty()) RCLCPP_WARN(get_logger(), "No soc-thermal zone: no pause when hot");
   const std::string crash_dir = declare_parameter("crash_dir", std::string("/var/lib/mowbite-vision"));
 
   TronCameraConfig camera;
+  camera_entry_.id = camera_id_;
+  camera_entry_.name = "Front camera";
+  // The name the start file gives stack.own_process, so the OS can tie an exit note to this camera.
+  camera_entry_.process = declare_parameter("process", std::string("vision"));
+  camera_entry_.kind = mowbite_msgs::msg::Camera::KIND_OBSTACLE;
+  PreviewSize(camera.width, camera.height, config.preview.width, camera_entry_.width, camera_entry_.height);
+  camera_entry_.detections = true;
+  camera_entry_.protocols = {mowbite_msgs::msg::Camera::PROTOCOL_MJPEG};
   camera.vertical_blanking = static_cast<int>(declare_parameter("vertical_blanking", camera.vertical_blanking));
   camera.processes_using = tron::ProcessesUsing;
   camera_ = std::make_unique<TronCamera>(std::move(camera));
@@ -69,6 +97,10 @@ VisionNode::VisionNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_
       "bridge/sensor_info", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().transient_local());
   sensor_value_pub_ = create_publisher<mowbite_msgs::msg::SensorValue>("bridge/sensor_value", 100);
   detections_pub_ = create_publisher<mowbite_msgs::msg::Detections>("vision/detections", 5);
+  cameras_pub_ = create_publisher<mowbite_msgs::msg::Camera>(
+      "hw/cameras", rclcpp::QoS(rclcpp::KeepLast(4)).reliable().transient_local());
+  picture_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>("camera/" + camera_id_ + "/jpeg",
+                                                                     rclcpp::QoS(rclcpp::KeepLast(1)).best_effort());
   Sensor(kStateSensor, "Camera AI", mowbite_msgs::msg::SensorSpec::KIND_TEXT, "");
   Sensor(kLastSensor, "Camera AI Detections", mowbite_msgs::msg::SensorSpec::KIND_TEXT, "");
   Sensor(kRateSensor, "Camera AI Rate", mowbite_msgs::msg::SensorSpec::KIND_NUMBER, "1/s");
@@ -108,9 +140,12 @@ void VisionNode::Run() {
       std::lock_guard<std::mutex> lock(mutex_);
       if (!running_) return;
     }
+    loop_->SetPreviewWanted(picture_pub_->get_subscription_count() > 0);
     const bool go_on = loop_->Step();
     const VisionStatus& status = loop_->Status();
     if (status.inferences != published_inferences_) PublishDetections(status);
+    if (loop_->GetPreview().Count() != published_pictures_) PublishPicture();
+    PublishCamera(status);
     Report(MonotonicSeconds());
     if (!go_on) {
       exit_code_ = status.exit_code;
@@ -173,6 +208,27 @@ void VisionNode::PublishDetections(const VisionStatus& status) {
     msg.detections.push_back(std::move(out));
   }
   detections_pub_->publish(msg);
+}
+
+void VisionNode::PublishCamera(const VisionStatus& status) {
+  const Availability now = CameraAvailability(status.state);
+  if (camera_published_ && now.available == camera_entry_.available && now.reason == camera_entry_.reason) return;
+  camera_published_ = true;
+  camera_entry_.available = now.available;
+  camera_entry_.reason = now.reason;
+  camera_entry_.detail = now.available ? "" : StateText(status);
+  cameras_pub_->publish(camera_entry_);
+}
+
+void VisionNode::PublishPicture() {
+  const Preview& preview = loop_->GetPreview();
+  published_pictures_ = preview.Count();
+  sensor_msgs::msg::CompressedImage msg;
+  msg.header.stamp = now();
+  msg.header.frame_id = camera_id_;
+  msg.format = "jpeg";
+  msg.data = preview.Jpeg();
+  picture_pub_->publish(std::move(msg));
 }
 
 }  // namespace tron_vision

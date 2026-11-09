@@ -13,6 +13,7 @@
 #include "tron_vision/frame_convert.h"
 #include "tron_vision/model_check.h"
 #include "tron_vision/npu_model.h"
+#include "tron_vision/preview.h"
 #include "tron_vision/yolo_decode.h"
 
 namespace tron_vision {
@@ -56,6 +57,7 @@ struct VisionConfig {
   size_t max_rss_bytes = 300UL * 1024 * 1024;
   std::string statm = "/proc/self/statm";
   double check_s = 10.0;
+  PreviewConfig preview;
 };
 
 enum class VisionState {
@@ -120,6 +122,13 @@ class VisionLoop {
   const std::vector<std::string>& ClassNames() const {
     return names_;
   }
+  // Pictures are made only while someone watches.
+  void SetPreviewWanted(bool wanted) {
+    preview_wanted_ = wanted;
+  }
+  const Preview& GetPreview() const {
+    return preview_;
+  }
 
  private:
   bool StartStream(double now);
@@ -141,6 +150,8 @@ class VisionLoop {
   std::vector<Detection> detections_;
   std::vector<uint8_t> rgb_;
   std::vector<std::vector<int8_t>> outputs_;
+  Preview preview_;
+  bool preview_wanted_ = false;
   bool loaded_ = false;
   bool streaming_ = false;
   int attempts_ = 0;
