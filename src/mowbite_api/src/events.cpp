@@ -90,6 +90,15 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"CHANGED",
        {"The area or path is another one than the client saw: nothing was skipped",
         {Integer("area", "", "current_area now"), Integer("path", "", "current_path now")}}},
+      {"CHECKSUM",
+       {"The file that came has another sha256 than the one given",
+        {},
+        {{"de",
+          {"Prüfsumme falsch", "Die angekommene Datei passt nicht zu ihrer Prüfsumme, unterwegs ging etwas verloren.",
+           "Die Datei noch einmal hochladen."}},
+         {"en",
+          {"Checksum mismatch", "The file that arrived does not match its checksum, something got lost on the way.",
+           "Upload the file again."}}}}},
       {"CORRELATION_DATA",
        {"The correlation data of the request is longer than 1024 bytes: nothing was done",
         {Limit("bytes")}}},
@@ -152,6 +161,11 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"MOTOR_HOT", {"The blade motor is too hot", {Temperature(), Limit("°C")}}},
       {"NOT_ALLOWED", {"Outside of the areas the mower may drive in", {}}},
       {"NOT_MOVING", {"The mower does not move", {}}},
+      {"NOT_MP3",
+       {"The file is no MP3 the mower can play",
+        {},
+        {{"de", {"Keine MP3", "Die Datei ist keine MP3, die der Mäher abspielen kann.", "Eine MP3-Datei wählen."}},
+         {"en", {"Not an MP3", "The file is not an MP3 the mower can play.", "Choose an MP3 file."}}}}},
       {"NOT_TURNING", {"The mower does not turn", {}}},
       {"NO_ANSWER", {"No answer in time", {}}},
       {"OS_CRASH",
@@ -190,11 +204,29 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
          Number("length", "m", "The length the drive needs"), Number("strip_length", "m", "Length of the strip"),
          Number("strip_width", "m", "Width of the strip")}}},
       {"NO_RTK", {"No RTK fix", {Limit("m")}}},
+      {"NO_SPACE",
+       {"No room for the file: all sounds together have a limit, and the journal keeps its reserve free",
+        {},
+        {{"de",
+          {"Kein Platz", "Auf dem Mäher ist kein Platz mehr für diesen Ton.",
+           "Einen anderen eigenen Ton löschen oder eine kleinere Datei wählen."}},
+         {"en",
+          {"No space", "The mower has no space left for this sound.",
+           "Delete another sound of your own or choose a smaller file."}}}}},
       {"NO_SAFETY_MEASUREMENT", {"This platform has no safety measurement yet, so it does not drive by itself", {}}},
       {"ON_DOCK", {"The mower is on the docking station", {Distance(), Limit("m")}}},
       {"OUTLIERS", {"Back on GPS after outliers", {Distance()}}},
       {"OUTSIDE", {"The mower left the allowed area", {}}},
       {"OVERSPEED", {"The mower drove faster than it should", {}}},
+      {"PART_ORDER",
+       {"A part of the upload came out of order",
+        {Integer("expected", "", "The part that comes next")},
+        {{"de",
+          {"Teile durcheinander", "Ein Teil der Datei kam nicht in der richtigen Reihenfolge an.",
+           "Die Datei noch einmal hochladen."}},
+         {"en",
+          {"Parts out of order", "A part of the file did not arrive in the right order.",
+           "Upload the file again."}}}}},
       {"PLANNER_MISSING", {"The planner is not running", {}}},
       {"PLANNER_TIMEOUT", {"The planner took too long", {}}},
       {"PLANNING_FAILED", {"No plan for the area", {}}},
@@ -259,6 +291,16 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"STOPPED", {"Stopped by the app or by the logic", {}}},
       {"TILT_UNKNOWN", {"The tilt of the mower is not known", {Seconds()}}},
       {"TIMEOUT", {"It took too long", {}}},
+      {"TOO_LARGE",
+       {"The file or a part of it is too large",
+        {Limit("bytes")},
+        {{"de", {"Datei zu groß", "Die Datei ist zu groß, erlaubt sind 2 MB.", "Eine kleinere Datei wählen."}},
+         {"en", {"File too large", "The file is too large, 2 MB are allowed.", "Choose a smaller file."}}}}},
+      {"TOO_LONG",
+       {"The sound is too long",
+        {Number("seconds", "s", "How long the sound lasts"), Limit("s")},
+        {{"de", {"Ton zu lang", "Der Ton ist länger als 30 Sekunden.", "Einen kürzeren Ton wählen."}},
+         {"en", {"Sound too long", "The sound is longer than 30 seconds.", "Choose a shorter sound."}}}}},
       {"TOO_MANY_POINTS", {"The ring has too many points", {Limit("")}}},
       {"TRANSIT_FAILED", {"No way to the goal", {}}},
       {"WRONG_STATE",
@@ -283,6 +325,12 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
 ReasonEntry R(const std::string& code, std::string severity, std::string resume, Json when = Json::object()) {
   const ReasonText& text = ReasonTexts().at(code);
   return {code, std::move(severity), std::move(resume), text.text, text.fields, std::move(when), text.texts};
+}
+
+// A reason with texts of its own in one event, where the shared ones would not fit.
+ReasonEntry WithTexts(ReasonEntry reason, UserTexts texts) {
+  reason.texts = std::move(texts);
+  return reason;
 }
 
 // A list of reasons that all wait for the user: codes with their severity.
@@ -593,6 +641,21 @@ const std::vector<EventEntry>& Events() {
   return events;
 }
 
+std::vector<ReasonEntry> SoundRefusals() {
+  std::vector<ReasonEntry> reasons =
+      User({{"NO_FILE", "info"}, {"EMERGENCY", "info"}, {"NOT_MP3", "info"}, {"TOO_LARGE", "info"},
+            {"TOO_LONG", "info"}, {"CHECKSUM", "info"}, {"PART_ORDER", "info"}, {"NO_SPACE", "warning"}});
+  reasons.push_back(WithTexts(
+      R("BUSY", "info", "user"),
+      {{"de",
+        {"Upload läuft", "Gerade wird schon ein anderer Ton hochgeladen oder geprüft.",
+         "Kurz warten und noch einmal versuchen."}},
+       {"en",
+        {"Upload in progress", "Another sound is being uploaded or checked right now.",
+         "Wait a moment and try again."}}}));
+  return reasons;
+}
+
 const std::vector<EventEntry>& Refusals() {
   static const std::vector<EventEntry> groups = {
       Event("COMMAND_REFUSED", "answer",
@@ -609,9 +672,8 @@ const std::vector<EventEntry>& Refusals() {
                          Text("state", "current_state of robot_state, empty before the first", true),
                          Text("sub_state", "current_sub_state of robot_state", true)}),
             User({{"RESPONSE_TOPIC", "error"}, {"CORRELATION_DATA", "error"}})),
-      Event("SOUND_REFUSED", "answer", "sound.play or sound.stop was refused: the data of its -32600, never an event",
-            Rated(true, {Text("event", "Always SOUND_REFUSED", true)}), User({{"NO_FILE", "info"}, {"EMERGENCY", "info"}}),
-            "info", "user"),
+      Event("SOUND_REFUSED", "answer", "A method sound.* was refused: the data of its -32600, never an event",
+            Rated(true, {Text("event", "Always SOUND_REFUSED", true)}), SoundRefusals(), "info", "user"),
   };
   return groups;
 }
