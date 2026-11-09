@@ -85,7 +85,8 @@ def generate_test_description():
                               parameters=[geometry, config, CONFIG, *([extra] if extra else [])])
 
     container = ComposableNodeContainer(
-        name="mowbite", namespace="", package="rclcpp_components", executable="component_container", output="screen",
+        name="mowbite", namespace="", package="rclcpp_components", executable="component_container_isolated",
+        output="screen",
         composable_node_descriptions=[
             component("mowbite_localization", "mowbite_localization::LocalizationNode", "mowbite_localization"),
             component("mowbite_safety", "mowbite_safety::SafetyNode", "mowbite_safety"),

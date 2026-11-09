@@ -233,11 +233,12 @@ def own_process(make, name, data_dir, logger, restarts=CONTAINER_RESTARTS, oom_s
 # beside them in a process of its own and keeps motion and blade blocked until a release; the logic comes back idle.
 def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
     # Every restart is a new container with a name of its own: DDS knows the load service of a crashed one for a while,
-    # and launch_ros would wait for its answer for ever.
+    # and launch_ros would wait for its answer for ever. Each node spins in its own thread, so a node that blocks stalls
+    # only itself, not S2 or the follower beside it.
     def container(restart):
         return ComposableNodeContainer(
             name="mowbite" if restart == 0 else f"mowbite_{restart}", namespace="", package="rclcpp_components",
-            executable="component_container", composable_node_descriptions=nodes, output="screen")
+            executable="component_container_isolated", composable_node_descriptions=nodes, output="screen")
 
     # Plans the mowing paths for mowing.plan; a crash only costs the plans until it is back. Namespace "/" so that a
     # dict of parameters goes under its full name.

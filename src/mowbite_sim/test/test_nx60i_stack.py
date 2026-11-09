@@ -257,7 +257,7 @@ class TestNx60iStack(unittest.TestCase):
         self.assertTrue(p.wait(lambda: p.pose, 30), "no pose: the gyro never calibrated")
         self.assertTrue(p.wait(lambda: any("Gyro offset" in line for line in p.logs), 5))
         rss = {name: [round(rss_mb(pid), 1) for pid in running(proc_info, name)]
-               for name in ("xcore_driver_node", "component_container", "mowbite_planner_node")}
+               for name in ("xcore_driver_node", "component_container_isolated", "mowbite_planner_node")}
         print(f"RSS MB: {rss}", flush=True)
         self.assertEqual([len(v) for v in rss.values()], [1, 1, 1], rss)
 
@@ -365,9 +365,9 @@ class TestNx60iStack(unittest.TestCase):
         p = self.probe
         time.sleep(1.5)
         driver = running(proc_info, "xcore_driver_node")
-        container, = running(proc_info, "component_container")
+        container, = running(proc_info, "component_container_isolated")
         os.kill(container, signal.SIGKILL)
-        new = p.wait(lambda: [pid for pid in running(proc_info, "component_container") if pid != container], 15)
+        new = p.wait(lambda: [pid for pid in running(proc_info, "component_container_isolated") if pid != container], 15)
         self.assertTrue(new, "no new container")
         self.assertEqual(note("container_exit.json")["restart"], 1)
         self.assertEqual(running(proc_info, "xcore_driver_node"), driver)

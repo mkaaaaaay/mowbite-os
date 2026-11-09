@@ -230,7 +230,7 @@ def container_pid(proc_info):
     """The pid of the container that runs now; tron.launch.py starts a new one after each crash."""
     for action in proc_info.processes():
         event = proc_info[action]
-        if "component_container" in action.process_details["name"] and isinstance(event, ProcessStarted):
+        if "component_container_isolated" in action.process_details["name"] and isinstance(event, ProcessStarted):
             return event.pid
     return None
 
@@ -426,8 +426,8 @@ class TestShutdown(unittest.TestCase):
     def test_the_container_was_killed_last_and_the_driver_ended_cleanly(self, proc_info):
         # The first one and its three successors.
         launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[-signal.SIGKILL],
-                                               process="component_container", strict_proc_matching=False)
+                                               process="component_container_isolated", strict_proc_matching=False)
         self.assertEqual(len([a for a in proc_info.processes()
-                              if "component_container" in a.process_details["name"]]), RESTARTS + 1)
+                              if "component_container_isolated" in a.process_details["name"]]), RESTARTS + 1)
         launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -2, -15, 130, 143],
                                                process="tron_mcu_node")

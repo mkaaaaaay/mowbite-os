@@ -46,7 +46,7 @@ GROUP_PORT = random.randint(42000, 48000)
 BIND_IP = f"127.{random.randint(1, 250)}.{random.randint(1, 250)}.{random.randint(2, 250)}"
 GROUP = "233.255.255.0"
 # The processes to look at, by a part of their name in the launch.
-PROCESSES = ("tron_mcu_node", "component_container", "mowbite_planner_node", "xcore_driver_node")
+PROCESSES = ("tron_mcu_node", "component_container_isolated", "mowbite_planner_node", "xcore_driver_node")
 
 
 def generate_test_description():
