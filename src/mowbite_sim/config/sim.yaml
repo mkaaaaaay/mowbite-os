@@ -23,12 +23,6 @@ mowbite_ntrip:
     # never the real one.
     access_over_rpc: true
 
-mowbite_light:
-  ros__parameters:
-    # Offers light.* like a Tron with released lights; the frame goes to a file.
-    output: file
-    file: /tmp/mowbite_sim_light.bin
-
 # The charging station of fake_tron, which is no ROS node: sim.launch.py passes it on. Placed like one of map.json:
 # base_link of the docked mower (m) and the way in (degrees). 1 m behind the start the mower backs in going west and
 # faces east on the contacts. dock_contact_x is where the simulated Tron has its contacts; mowbite_logic has the same
