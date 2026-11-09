@@ -35,6 +35,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/SafetyStatus.msg"
   "msg/CalibrationProblem.msg"
   "msg/CalibrationStatus.msg"
+  "msg/ButtonEvent.msg"
   "srv/AddArea.srv"
   "srv/ReplaceMap.srv"
   "srv/SetBlade.srv"

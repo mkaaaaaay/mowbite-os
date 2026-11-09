@@ -34,6 +34,12 @@ float64 wheel_distance
 float32 max_linear_speed
 float32 max_angular_speed
 
+# Releasing the emergency with the STOP button (hw/button): free this long, then held this long and let go before
+# max_hold (s). 0 where the driver offers no such release.
+float32 stop_release_free_s
+float32 stop_release_hold_s
+float32 stop_release_max_hold_s
+
 # How long the hardware keeps the last setpoint without the host, measured on the device; negative while unknown.
 float32 failsafe_without_host_s
 # Date of the safety measurement of this platform (YYYY-MM-DD), empty without one. Without it the logic stays with
