@@ -6,6 +6,30 @@
 # No simulation, no tests, no models in it.
 ARG ROS_DISTRO=jazzy
 
+# Rockchip MPP (Apache-2.0 or MIT) for the hardware H.264 encoder of the Tron, arm64 only: cross-built on the build
+# machine from the release tarball, so it costs little under qemu. tron_vision loads it at run time (encoder_library)
+# and its licence texts go into the bundle with it. Empty on amd64.
+FROM --platform=$BUILDPLATFORM ros:${ROS_DISTRO}-ros-base AS mpp
+ARG TARGETARCH
+ARG MPP_VERSION=1.1.0
+ARG MPP_SHA256=7bb0040f364468ad9abbb71a04553ebc6a5814584e083c2fc9a553783e9656df
+RUN mkdir -p /opt/mpp \
+ && if [ "$TARGETARCH" = arm64 ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+      && curl -fsSL -o /tmp/mpp.tar.gz "https://github.com/rockchip-linux/mpp/archive/refs/tags/$MPP_VERSION.tar.gz" \
+      && echo "$MPP_SHA256  /tmp/mpp.tar.gz" | sha256sum -c - \
+      && tar -xzf /tmp/mpp.tar.gz -C /tmp \
+      && cmake -S /tmp/mpp-$MPP_VERSION -B /tmp/mpp-build -DCMAKE_BUILD_TYPE=Release -DBUILD_TEST=OFF \
+           -DTOOLCHAIN=aarch64-linux-gnu- \
+           -DCMAKE_TOOLCHAIN_FILE=/tmp/mpp-$MPP_VERSION/build/linux/aarch64/arm.linux.cross.cmake > /dev/null \
+      && cmake --build /tmp/mpp-build -j4 --target rockchip_mpp > /dev/null \
+      && mkdir -p /opt/mpp/lib /opt/mpp/share/licenses \
+      && cp -L /tmp/mpp-build/mpp/librockchip_mpp.so.1 /opt/mpp/lib/ \
+      && aarch64-linux-gnu-strip /opt/mpp/lib/librockchip_mpp.so.1 \
+      && cp /tmp/mpp-$MPP_VERSION/LICENSES/Apache-2.0 /tmp/mpp-$MPP_VERSION/LICENSES/MIT /opt/mpp/share/licenses/; \
+    fi
+
 FROM ros:${ROS_DISTRO}-ros-base AS build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -68,6 +92,8 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /opt/mowbite_planner /opt/mowbite_planner
 COPY --from=build /ws/install /ws/install
+# Outside the packages, but in the install tree that the bundle takes along.
+COPY --from=mpp /opt/mpp /ws/install/mpp
 # The safety measurement runs on the image that drives (the driver's normal caps, no fast runs of M8).
 COPY tools/yf/measure.py tools/yf/xcore_capture.py /ws/tools/
 # For docker exec, which skips the entrypoint: docker exec -it <container> measure --steps ...
