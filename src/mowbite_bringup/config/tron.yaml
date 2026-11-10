@@ -343,7 +343,13 @@ tron_vision:
     # jpeg_max_rate, jpeg_max_kb, score_threshold, max_rss_mb and crash_dir: the defaults of the node.
 
 # tron_stereo, the live picture of the stereo camera (MOWBITE_STEREO=on): bitrate_kbps, rtsp_port, capture_device,
-# stream_name, encoder_library and crash_dir have the defaults of the node. Its locks are no parameters.
+# stream_name, encoder_library and crash_dir have the defaults of the node.
+tron_stereo:
+  ros__parameters:
+    # The stream also runs while the blade runs or hw/status is missing. The self-test per boot (mower standing, blade
+    # off), the pause when hot and the lock after a kernel crash stay. Known risk: after a kernel crash in the camera
+    # driver while mowing the blade may run without the host until the restart; how long is not measured.
+    stream_while_mowing: true
 
 mowbite_bridge:
   ros__parameters:

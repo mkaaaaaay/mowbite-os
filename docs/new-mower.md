@@ -169,10 +169,13 @@ parameters in `config/tron.yaml`.
   it only while someone watches. The connection is the viewer signal: PLAY starts the camera, its end stops it, and
   while the camera cannot stream DESCRIBE answers 503. The parts without ROS are in `tron_vision` (`rtsp_server`,
   `h264_rtp`, `stereo_loop`); a hardware encoder is loaded at run time like the other vendor libraries.
-- A stream whose driver can crash the kernel does not run next to the blade: the loop ends it when the blade starts
-  (`BLADE_RUNNING`) or the state of the mower is unknown (`DRIVER_MISSING`: no `hw/status` yet or the last one older
-  than 1 s by the time it came, not by its stamp), and tests the camera once per boot while the mower stands
-  (`SELF_TEST` until then). Lift that only after measuring on the mower how long the blade runs without the host.
+- A stream whose driver can crash the kernel does not run next to the blade by default: the loop ends it when the
+  blade starts (`BLADE_RUNNING`) or the state of the mower is unknown (`DRIVER_MISSING`: no `hw/status` yet or the
+  last one older than 1 s by the time it came, not by its stamp), and tests the camera once per boot while the mower
+  stands with the blade off (`SELF_TEST` until then). `stream_while_mowing: true` in the file of the platform lets
+  the stream run next to the blade and without `hw/status`; the self-test, the pause when hot and the lock after a
+  kernel crash stay. Set it only after measuring on the mower how long the blade runs without the host, or with that
+  risk accepted and written next to the value (the Tron: `config/tron.yaml`).
   Start such a process only with `hardware:=true`: with another host at the board `blade_on` says nothing.
 - Vendor runtimes and models are loaded at run time from a directory on the mower and never go into the repo, a bundle
   or an image. Check the model when loading it (inputs, outputs, classes against the class list), else report it and
