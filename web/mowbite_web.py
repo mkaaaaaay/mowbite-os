@@ -22,6 +22,9 @@ BUNDLED = "/opt/mowbite/current/app"
 FALLBACK = ("/opt/mowbite-app/current/app", "/opt/mowbite-app/previous/app", BUNDLED,
             "/opt/mowbite/previous/app")
 STATIC = "_next/static/"
+# Read by pages of other origins (the Android app, the page of another mower): which app runs, and the 404 of
+# /cgi-bin/ that says this is no OpenMower container. Only these answers carry Access-Control-Allow-Origin.
+SHARED = ("/app.json", "/version.json")
 TIMEOUT = 30
 # Below TasksMax of the unit; further connections wait in the backlog.
 MAX_CONNECTIONS = 24
@@ -43,6 +46,11 @@ def regular_file(root, rel):
         return None
     path = os.path.realpath(path)
     return path if path.startswith(root + os.sep) else None
+
+
+def shared(target):
+    path = urllib.parse.urlsplit(target).path
+    return path in SHARED or path == "/cgi-bin" or path.startswith("/cgi-bin/")
 
 
 def accepts_gzip(header):
@@ -161,6 +169,8 @@ class Handler(BaseHTTPRequestHandler):
     def head(self, status, headers):
         self.send_response(status)
         self.send_header("X-Content-Type-Options", "nosniff")
+        if self.command in ("GET", "HEAD") and shared(self.path):
+            self.send_header("Access-Control-Allow-Origin", "*")
         for key, value in headers.items():
             self.send_header(key, value)
         self.end_headers()

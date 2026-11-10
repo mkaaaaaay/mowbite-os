@@ -123,6 +123,19 @@ class WebTest(unittest.TestCase):
             self.assertEqual(self.get(path)[0], 404, path)
         self.assertEqual(self.request("POST", "/cgi-bin/update")[0], 405)
 
+    # Other origins may read which app runs and the 404 of /cgi-bin/, nothing else; never on a refused method.
+    def test_cross_origin_only_for_what_tells_the_app(self):
+        self.export("/opt/mowbite", "os1", "bundled")
+        self.write("/opt/mowbite/os1/app/app.json", '{"schema": 1}')
+        origin = {"Origin": "http://localhost"}
+        for method, path in (("GET", "/app.json"), ("HEAD", "/version.json"), ("GET", "/version.json?x=1"),
+                             ("GET", "/cgi-bin/version"), ("GET", "/cgi-bin")):
+            status, headers, _ = self.request(method, path, origin)
+            self.assertEqual(headers.get("Access-Control-Allow-Origin"), "*", (method, path, status))
+        for method, path in (("GET", "/"), ("GET", "/map/"), ("GET", "/nope"), ("GET", "/x/app.json"),
+                             ("POST", "/cgi-bin/update"), ("OPTIONS", "/app.json")):
+            self.assertNotIn("Access-Control-Allow-Origin", self.request(method, path, origin)[1], (method, path))
+
     def test_only_get_and_head(self):
         self.export("/opt/mowbite", "os1", "bundled")
         for method in ("POST", "PUT", "DELETE", "OPTIONS", "PATCH", "FOO"):
