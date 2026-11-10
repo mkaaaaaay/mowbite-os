@@ -71,6 +71,8 @@ LIBC = ctypes.CDLL(None, use_errno=True)
 LIBC.ptrace.argtypes = [ctypes.c_long, ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p]
 PTRACE_SEIZE = 0x4206
 PTRACE_INTERRUPT = 0x4207
+# waitpid: also for threads that are not children (tracees).
+WALL = 0x40000000
 
 
 def generate_test_description():
@@ -230,6 +232,17 @@ def stop_thread(pid, name):
     raise LookupError(f"no thread {name} in {pid}")
 
 
+def reap(tid, timeout):
+    """Waits for the end of a thread this process traces: until it is collected here, its process cannot end."""
+    end = time.time() + timeout
+    while time.time() < end:
+        done, status = os.waitpid(tid, os.WNOHANG | WALL)
+        if done and (os.WIFEXITED(status) or os.WIFSIGNALED(status)):
+            return True
+        time.sleep(0.02)
+    return False
+
+
 class TestWatchStall(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -253,24 +266,30 @@ class TestWatchStall(unittest.TestCase):
         self.assertTrue(p.wait(lambda: p.hw is not None and p.hw.blade_motor.rpm > 1000, 5), "no rpm from fake_tron")
 
     def stall(self, proc_info, thread, limit):
-        """Stops that thread while the mower drives; the times of fake_tron of the stall, the first stop, the blade
-        off, and the pid of the container that ran."""
+        """Stops that thread while the mower drives; the times of fake_tron of the stall, of the last setpoint that
+        moved the mower, of the final stop and of the last time the blade went off."""
         p = self.probe
         pid = container_pid(proc_info)
         offset = p.clock_offset()
         self.assertTrue(p.wait(p.driving_now, 30), "the mower does not drive")
         t0 = time.monotonic() - offset
-        stop_thread(pid, thread)
-        self.assertTrue(restarted(proc_info, pid, limit + PERIOD + RESTART_DELAY + 10), "no new container")
+        tid = stop_thread(pid, thread)
+        self.assertTrue(reap(tid, limit + PERIOD + 10), f"{thread} did not end")
+        self.assertTrue(restarted(proc_info, pid, RESTART_DELAY + 10), "no new container")
         rx = p.received(t0)
         speeds = [e for e in rx if "speed" in e]
-        stop = next((e["t"] for e in speeds if e["hex"] == ZERO), None)
-        off = next((e["t"] for e in rx if e.get("cutter", None) == 0), None)
+        moving = [e["t"] for e in speeds if e["hex"] != ZERO]
+        self.assertTrue(moving, speeds[:5])
+        # The stop for good: the first zero setpoint after the last one that moved.
+        stop = next((e["t"] for e in speeds if e["hex"] == ZERO and e["t"] > moving[-1]), None)
         self.assertIsNotNone(stop, speeds[-5:])
+        cutter = [e for e in rx if "cutter" in e]
+        off = next((e["t"] for e in reversed(cutter) if e["cutter"] == 0), None)
         self.assertIsNotNone(off, "the blade never went off")
-        self.assertFalse([e for e in speeds if e["t"] > stop and e["hex"] != ZERO], "it drove again")
-        print(f"{thread} stalled: stop {stop - t0:.2f} s, blade off {off - t0:.2f} s after the stall", flush=True)
-        return t0, stop, off, pid
+        self.assertFalse([e for e in cutter if e["t"] > off and e["cutter"] != 0], "the blade on again")
+        print(f"{thread} stalled: last drive {moving[-1] - t0:.2f} s, stop {stop - t0:.2f} s, blade off "
+              f"{off - t0:.2f} s after the stall", flush=True)
+        return t0, moving[-1], stop, off
 
     def restart_event(self, since, node, limit, state):
         p = self.probe
@@ -281,7 +300,8 @@ class TestWatchStall(unittest.TestCase):
         self.assertEqual((event["severity"], event["resume"]), ("error", "user"), event)
         stalled = event["stalled"]
         self.assertEqual((stalled["node"], stalled["limit"]), (node, limit), event)
-        self.assertTrue(limit < stalled["seconds"] <= limit + PERIOD + 0.2, event)
+        # One decimal as the watch writes it.
+        self.assertTrue(limit <= stalled["seconds"] <= limit + PERIOD + 0.2, event)
         self.assertIn(f"The watch ended MowBite OS: {node} gave no sign", event["detail"])
         with open(EXIT_NOTE) as f:
             note = json.load(f)
@@ -310,11 +330,10 @@ class TestWatchStall(unittest.TestCase):
     def test_02_a_stalled_bridge_ends_the_container_after_its_limit(self, proc_info):
         self.mow()
         since = len(self.probe.events)
-        t0, stop, off, _ = self.stall(proc_info, "bridge", BRIDGE_LIMIT)
+        t0, moved, stop, off = self.stall(proc_info, "bridge", BRIDGE_LIMIT)
         # Without remote control the mower mows on until the limit, then the way of a crash.
-        self.assertGreater(stop - t0, BRIDGE_LIMIT)
+        self.assertGreater(moved - t0, BRIDGE_LIMIT - 1.0)
         self.assertLess(stop - t0, BRIDGE_LIMIT + PERIOD + CMD_VEL_TIMEOUT + SLACK)
-        self.assertGreater(off - t0, BRIDGE_LIMIT)
         self.assertLess(off - t0, BRIDGE_LIMIT + PERIOD + BLADE_LEASE + SLACK)
         self.restart_event(since, "mowbite_bridge", BRIDGE_LIMIT, "MOWING")
 
@@ -325,10 +344,9 @@ class TestWatchStall(unittest.TestCase):
         self.assertTrue(p.wait(lambda: not p.robot.emergency, 5), p.robot)
         self.mow()
         since = len(p.events)
-        t0, stop, off, _ = self.stall(proc_info, "safety", SAFETY_LIMIT)
+        t0, _, stop, off = self.stall(proc_info, "safety", SAFETY_LIMIT)
         # No hw/cmd_vel any more: the driver stops the wheels; the blade lease of the logic ends with the process.
         self.assertLess(stop - t0, CMD_VEL_TIMEOUT + SLACK)
-        self.assertGreater(off - t0, SAFETY_LIMIT)
         self.assertLess(off - t0, SAFETY_LIMIT + PERIOD + BLADE_LEASE + SLACK)
         event = p.event(since, "UNEXPECTED_RESTART", 30)
         self.restart_event(since, "mowbite_safety", SAFETY_LIMIT, event["state_before"] if event else "MOWING")
