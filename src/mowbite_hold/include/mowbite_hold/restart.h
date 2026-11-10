@@ -36,6 +36,9 @@ struct SessionRecord {
   // unix s of the change.
   int64_t since = 0;
   bool clean = false;
+  // Whether an emergency stands and whether it charges, for the gate of mowbite-host; false when missing.
+  bool emergency = false;
+  bool charging = false;
 };
 
 std::optional<SessionRecord> ParseSession(const std::string& text);

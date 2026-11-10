@@ -166,6 +166,21 @@ TEST(ParseSession, ReadsItsOwnText) {
   EXPECT_EQ(parsed->boot_id, kBoot);
   EXPECT_EQ(parsed->since, 1800000000);
   EXPECT_FALSE(parsed->clean);
+  EXPECT_FALSE(parsed->emergency);
+  EXPECT_FALSE(parsed->charging);
+}
+
+TEST(ParseSession, EmergencyAndCharging) {
+  const auto parsed = ParseSession(SessionText({"IDLE", "", kBoot, 5, false, true, true}));
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->emergency);
+  EXPECT_TRUE(parsed->charging);
+  // A file of an older OS has neither; anything but true counts as false.
+  const auto older = ParseSession(R"({"state": "IDLE", "job_id": "", "boot_id": "b", "since": 1, "clean": false,
+                                      "emergency": 1})");
+  ASSERT_TRUE(older);
+  EXPECT_FALSE(older->emergency);
+  EXPECT_FALSE(older->charging);
 }
 
 TEST(ParseSession, RefusesWhatIsNoSession) {

@@ -48,8 +48,12 @@ std::optional<SessionRecord> ParseSession(const std::string& text) {
       !since->is_number_integer() || clean == value.end() || !clean->is_boolean()) {
     return std::nullopt;
   }
+  const auto flag = [&](const char* key) {
+    const auto it = value.find(key);
+    return it != value.end() && it->is_boolean() && it->get<bool>();
+  };
   return SessionRecord{state->get<std::string>(), job_id->get<std::string>(), boot_id->get<std::string>(),
-                       since->get<int64_t>(), clean->get<bool>()};
+                       since->get<int64_t>(), clean->get<bool>(), flag("emergency"), flag("charging")};
 }
 
 std::string SessionText(const SessionRecord& record) {
@@ -57,7 +61,9 @@ std::string SessionText(const SessionRecord& record) {
                         {"job_id", record.job_id},
                         {"boot_id", record.boot_id},
                         {"since", record.since},
-                        {"clean", record.clean}}
+                        {"clean", record.clean},
+                        {"emergency", record.emergency},
+                        {"charging", record.charging}}
              .dump() +
          "\n";
 }
