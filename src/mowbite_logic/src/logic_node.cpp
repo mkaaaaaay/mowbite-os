@@ -1328,10 +1328,9 @@ class LogicNode : public rclcpp::Node {
     WriteSession(false);
   }
 
-  // os-session.json with the state, job, emergency and charging now, when they changed, clean is new or the last write
+  // os-session.json with state, job, emergency and charging now, when they changed, clean is new or the last write
   // failed. Without the writer (start and stop) here; else through it, waited for only when this record begins a
-  // restart hold, so the hold is on the disk before what it guards acts (G35). False only when it waited and the record did not get there.
-  // Called without the mutex.
+  // restart hold, so it is on disk before what it guards acts (G35). False when that wait failed. Without the mutex.
   bool WriteSession(bool clean) {
     if (session_path_.empty()) return true;
     mowbite_hold::SessionRecord record;
