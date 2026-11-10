@@ -109,8 +109,8 @@ process is outside this watch and stops the mower by its own timeouts.
   rootfs: the library under `/usr/lib/mowbite-host` (from `host/`, `make-image.sh` copies it), the unit enabled, the
   rootfs version in `/usr/lib/mowbite/base` (raise it when a bundle needs something new of the rootfs; bundles name
   the version they need) and `/etc/mowbite/allowed_signers` with two keys, the main one and a reserve kept apart, for
-  the namespaces `mowbite-os` and `mowbite-index`. `host/test/test_e2e.py` runs the whole way with the carrier
-  `process` (`MOWBITE_HOST_CARRIER=process` in the environment files).
+  the namespaces `mowbite-os`, `mowbite-app`, `mowbite-planner` and `mowbite-index`. `host/test/test_e2e.py` runs the
+  whole way with the carrier `process` (`MOWBITE_HOST_CARRIER=process` in the environment files).
 - Bundles: `make-bundle.sh` (serial = commit time, base, api from the image), signed with `sign-bundle.sh` (refuses a
   serial not newer than the last one signed, shows the result of the test gate), then into the inbox
   `/userdata/mowbite-update/inbox` and `update.check`.

@@ -108,7 +108,7 @@ test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-host.
 result "mowbite-host.service enabled" $?
 grep -qx '[0-9]\+' "$TREE/usr/lib/mowbite/base"; result "rootfs version in /usr/lib/mowbite/base" $?
 # A lost key must not lock every mower out: a main and a reserve key, both for bundles and the index.
-test "$(grep -cE '^mowbite namespaces="mowbite-os,mowbite-index" ssh-ed25519 ' "$TREE/etc/mowbite/allowed_signers")" -ge 2
+test "$(grep -cE '^mowbite namespaces="mowbite-os,mowbite-app,mowbite-planner,mowbite-index" ssh-ed25519 ' "$TREE/etc/mowbite/allowed_signers")" -ge 2
 result "two keys in allowed_signers" $?
 test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-os.service")" = ../mowbite-os.service
 result "mowbite-os.service enabled" $?
