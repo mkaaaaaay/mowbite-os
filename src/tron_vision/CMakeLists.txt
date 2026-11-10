@@ -73,7 +73,9 @@ if(BUILD_TESTING)
                   test/test_exposure.cpp test/test_npu_model.cpp test/test_crash_guard.cpp test/test_budget.cpp
                   test/test_vision_loop.cpp test/test_tron_camera.cpp test/test_preview.cpp
                   test/test_v4l2_capture.cpp test/test_h264_rtp.cpp test/test_rtsp_server.cpp
-                  test/test_h264_encoder.cpp test/test_stereo_camera.cpp test/test_stereo_loop.cpp)
+                  test/test_h264_encoder.cpp test/test_stereo_camera.cpp test/test_stereo_loop.cpp
+                  # The loops are tested in real time, about a minute in all.
+                  TIMEOUT 180)
   target_link_libraries(tron_vision_test tron_vision_core)
   target_compile_definitions(tron_vision_test PRIVATE FAKE_NPU_LIB="$<TARGET_FILE:tron_vision_fake_npu>"
                              FAKE_MPP_LIB="$<TARGET_FILE:tron_vision_fake_mpp>")
