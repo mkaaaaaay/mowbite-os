@@ -111,6 +111,14 @@ process is outside this watch and stops the mower by its own timeouts.
   the version they need) and `/etc/mowbite/allowed_signers` with two keys, the main one and a reserve kept apart, for
   the namespaces `mowbite-os`, `mowbite-app`, `mowbite-planner` and `mowbite-index`. `host/test/test_e2e.py` runs the
   whole way with the carrier `process` (`MOWBITE_HOST_CARRIER=process` in the environment files).
+- The host keeps three components, each in a folder of its own with `current`, `previous` and `pending`: the OS
+  (`/opt/mowbite`), the planner (`/opt/mowbite-planner`) and the app (`/opt/mowbite-app`). The OS brings a planner and
+  an app along and names them in its `bundle.json` (`bundled`, `planner_interface`, `planner_files_version`, `api`,
+  `min_app`). An own planner or app is used only while the link `active` in its folder names it; the host alone sets
+  it, when the own one goes with the installed OS and is newer than the bundled one. Whatever starts the planner or
+  serves the app on your mower reads `active` first and else `<os>/planner` or `<os>/app`, and decides nothing itself.
+  A planner update restarts the OS through the gate of the OS; an app update only changes files and needs no gate.
+  Bundles of the planner and the app hold no machine code.
 - Bundles: `make-bundle.sh` (serial = commit time, base, api from the image), signed with `sign-bundle.sh` (refuses a
   serial not newer than the last one signed, shows the result of the test gate), then into the inbox
   `/userdata/mowbite-update/inbox` and `update.check`.

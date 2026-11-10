@@ -1,6 +1,7 @@
 """End to end: mowbite-host as a process under a prefix with the carrier process, a private mosquitto, signed bundles
 whose OS is fake_os.py, and the app side on the broker. A -> B -> broken C -> back; kill -9 of the host in every phase
-of an update, then its next start recovers; a foreign origin, an old serial, swapped files, a closed gate.
+of an update of the OS and of its planner, then its next start recovers; a foreign origin, an old serial, swapped
+files, a closed gate; an app installed while the OS mows.
 
   python3 -I host/test/test_e2e.py   (needs mosquitto, ssh-keygen and paho-mqtt)
 """
@@ -35,6 +36,7 @@ except ImportError:
     mqtt = None
 
 A, B, C = "a000001", "b000002", "c000003"
+PLANNER, APP = "opt/mowbite-planner", "opt/mowbite-app"
 WAIT = 60.0
 # dpkg-query: every package is installed; it takes 2 s while state/slow-verify is there.
 DPKG_QUERY = """#!/bin/sh
@@ -66,6 +68,8 @@ class App:
     def __init__(self, port):
         self.statuses = {}
         self.updates = []
+        # The states of the OS the host reported, in their order.
+        self.os_states = []
         self.answers = {}
         self.cond = threading.Condition()
         self.client = broker._client("app-e2e")
@@ -85,6 +89,8 @@ class App:
                 self.statuses[m.topic] = payload
                 if m.topic == "mowbite/update/status" and payload:
                     self.updates.append(payload)
+                elif m.topic == "mowbite/host/status" and payload and payload.get("os"):
+                    self.os_states.append(payload["os"].get("state"))
             self.cond.notify_all()
 
     def call(self, method, **params):
@@ -137,8 +143,8 @@ class EndToEnd(unittest.TestCase):
         os.chmod(os.path.join(self.bin, "dpkg-query"), 0o755)
         self.key = support.keygen(os.path.join(self.root, "key"))
         self.foreign = support.keygen(os.path.join(self.root, "foreign"))
-        self.write("etc/mowbite/allowed_signers",
-                   f'mowbite namespaces="mowbite-os,mowbite-index" {support.public(self.key)}\n')
+        self.write("etc/mowbite/allowed_signers", 'mowbite namespaces="mowbite-os,mowbite-planner,mowbite-app,'
+                                                  f'mowbite-index" {support.public(self.key)}\n')
         self.mosquitto = support.mosquitto(self.root, self.port)
         self.app = App(self.port)
         self.host = None
@@ -146,7 +152,7 @@ class EndToEnd(unittest.TestCase):
         self.serial = 1_700_000_000
 
     def tearDown(self):
-        self.kill_host()
+        self.kill_host(gone=False)
         if os.path.exists(self.pid_file()):
             with open(self.pid_file()) as f:
                 pid = int(f.read().split()[0])
@@ -174,15 +180,20 @@ class EndToEnd(unittest.TestCase):
         support.sign(path, key or self.key, namespace)
 
     # A signed bundle of rev as make-bundle.sh lays it out, with fake_os.py as its OS and an ELF file for the check
-    # of the libraries; in the inbox unless folder is given.
-    def bundle(self, rev, serial=None, broken=False, key=None, folder=None, name=None):
+    # of the libraries; in the inbox unless folder is given. Of the planner (broken: it does not answer) or the app:
+    # what those bring.
+    def bundle(self, rev, serial=None, broken=False, key=None, folder=None, name=None, component="os"):
         if serial is None:
             self.serial += 1
             serial = self.serial
-        meta = {"format": 2, "component": "os", "revision": rev, "commit": rev * 5 + "abcde", "serial": serial,
-                "date": serial, "base": 1, "api": 14, "min_app": "1.4.0", "runtime_packages": ["fake-runtime"]}
+        meta = {"format": 2, "component": component, "revision": rev, "commit": rev * 5 + "abcde", "serial": serial,
+                "date": serial, "runtime_packages": ["fake-runtime"]}
+        meta.update({"os": {"base": 1, "api": 14, "min_app": "1.4.0", "planner_interface": 1,
+                            "planner_files_version": 1},
+                     "planner": {"version": "2.0.0", "interface": 1, "files_version": 1},
+                     "app": {"version": "1.5.0", "api": {"min": 14, "max": 14}}}[component])
         path = os.path.join(folder or os.path.join(self.P, "userdata/mowbite-update/inbox"),
-                            name or f"mowbite-os-{rev}.tar.gz")
+                            name or f"mowbite-{component}-{rev}.tar.gz")
         with tarfile.open(path, "w:gz") as tar:
             def add(member, data, mode=0o644):
                 info = tarfile.TarInfo(f"{rev}/{member}")
@@ -190,13 +201,21 @@ class EndToEnd(unittest.TestCase):
                 tar.addfile(info, io.BytesIO(data))
             add("bundle.json", json.dumps(meta).encode())
             add("revision", rev.encode())
-            with open(os.path.join(HERE, "fake_os.py"), "rb") as f:
-                add("fake_os.py", f.read())
-            with open(shutil.which("true"), "rb") as f:
-                add("bin/true", f.read(), 0o755)
-            if broken:
-                add("broken", b"")
-        self.sign(path, key=key)
+            if component == "os":
+                with open(os.path.join(HERE, "fake_os.py"), "rb") as f:
+                    add("fake_os.py", f.read())
+                with open(shutil.which("true"), "rb") as f:
+                    add("bin/true", f.read(), 0o755)
+                if broken:
+                    add("broken", b"")
+            elif component == "planner":
+                add("planner/local_setup.bash", b"")
+                if broken:
+                    add("planner/silent", b"")
+            else:
+                add("app/index.html", b"<html></html>")
+                add("app/version.json", json.dumps({"version": meta["version"], "level": 1}).encode())
+        self.sign(path, namespace=f"mowbite-{component}", key=key)
         return path
 
     def pid_file(self):
@@ -214,10 +233,15 @@ class EndToEnd(unittest.TestCase):
         self.app.wait(lambda: (self.app.statuses.get("mowbite/host/status") or {}).get("online") is True and
                       self.app.statuses["mowbite/host/status"].get("t", 0) >= t, "host status")
 
-    def kill_host(self):
+    # gone: waits for the last will of the killed host, so that a status seen after it is one of the next host and
+    # not the last of this one.
+    def kill_host(self, gone=True):
         if self.host is not None and self.host.poll() is None:
             self.host.send_signal(signal.SIGKILL)
             self.host.wait()
+            if gone:
+                self.app.wait(lambda: (self.app.statuses.get("mowbite/host/status") or {}).get("online") is False,
+                              "last will of the host")
         self.host = None
 
     def fake_pids(self):
@@ -241,11 +265,19 @@ class EndToEnd(unittest.TestCase):
             revisions.add(os.path.basename(os.path.dirname(cmd.decode())))
         return revisions
 
-    def current(self):
+    def current(self, opt="opt/mowbite", name="current"):
         try:
-            return os.readlink(os.path.join(self.P, "opt/mowbite/current"))
+            return os.readlink(os.path.join(self.P, opt, name))
         except OSError:
             return None
+
+    # running.json of the fake OS that runs.
+    def fake(self):
+        with open(os.path.join(self.P, "state/running.json")) as f:
+            return json.load(f)
+
+    def component(self, name):
+        return next(c for c in self.app.update()["components"] if c["id"] == name)
 
     def state(self):
         with open(os.path.join(self.P, "var/lib/mowbite-host/update.json")) as f:
@@ -257,9 +289,9 @@ class EndToEnd(unittest.TestCase):
         return answer["result"]
 
     # update.start (or another call) and the last result once the update ended.
-    def run_update(self, method="update.start", **params):
+    def run_update(self, method="update.start", component="os", **params):
         before = self.app.update().get("last")
-        answer = self.app.call(method, component="os", **params)
+        answer = self.app.call(method, component=component, **params)
         self.assertIn("result", answer, answer)
         self.app.wait(lambda: self.app.update().get("phase") == "idle" and self.app.update().get("last") != before,
                       "end of the update")
@@ -270,10 +302,34 @@ class EndToEnd(unittest.TestCase):
                       f"OS {revision} running")
         until(lambda: self.running() == {revision}, what=f"only {revision} runs")
 
-    def install(self, rev, **kwargs):
-        self.bundle(rev, **kwargs)
+    def install(self, rev, component="os", **kwargs):
+        self.bundle(rev, component=component, **kwargs)
         self.check()
-        return self.run_update(revision=rev)
+        return self.run_update(component=component, revision=rev)
+
+    # The host is killed, the marker of the phase goes, the next host starts and takes the cut update back: its
+    # result once it is the one of rev, None for a phase before the switch.
+    def cut_and_restart(self, marker, rev, switched):
+        self.kill_host()
+        os.remove(os.path.join(self.P, "state", marker))
+        self.start_host()
+        self.wait_os(A)
+        if not switched:
+            return None
+        self.app.wait(lambda: (self.app.update().get("last") or {}).get("revision") == rev, "result of the cut update")
+        return self.app.update()["last"]
+
+    # Starts the update of rev and waits until it is in phase, held there by marker.
+    def start_into(self, phase, marker, rev, component="os"):
+        with open(os.path.join(self.P, "state", marker), "w") as f:
+            f.write("MOWING" if marker == "os-state" else "")
+        self.bundle(rev, component=component)
+        self.check()
+        self.app.call("update.start", component=component, revision=rev)
+        self.app.wait(lambda: self.app.update().get("phase") == phase and
+                      self.app.update().get("revision") == rev, phase)
+        if phase == "waiting_gate":
+            self.app.wait(lambda: self.app.update().get("reason") == "BUSY", "gate closed BUSY")
 
     def test_a_b_broken_c_and_back(self):
         self.start_host()
@@ -322,32 +378,19 @@ class EndToEnd(unittest.TestCase):
         self.start_host()
         self.assertEqual(self.install(A)["result"], "installed")
         self.wait_os(A)
-        state_dir = os.path.join(self.P, "state")
         phases = (("verifying", "slow-verify"), ("unpacking", "slow-unpack"), ("waiting_gate", "os-state"),
                   ("switching", "slow-stop"), ("checking", "slow-start"))
         for n, (phase, marker) in enumerate(phases):
             with self.subTest(phase=phase):
                 rev = f"e00000{n}"
-                with open(os.path.join(state_dir, marker), "w") as f:
-                    f.write("MOWING" if marker == "os-state" else "")
-                self.bundle(rev)
-                self.check()
-                self.app.call("update.start", component="os", revision=rev)
-                self.app.wait(lambda: self.app.update().get("phase") == phase and
-                              self.app.update().get("revision") == rev, phase)
-                if phase == "waiting_gate":
-                    self.app.wait(lambda: self.app.update().get("reason") == "BUSY", "gate closed BUSY")
+                self.start_into(phase, marker, rev)
                 if phase == "switching":
                     # While the OS before it stops.
                     until(lambda: os.path.exists(os.path.join(self.P, "opt/mowbite/pending")), what="pending")
-                self.kill_host()
-                os.remove(os.path.join(state_dir, marker))
-                self.start_host()
-                self.wait_os(A)
+                last = self.cut_and_restart(marker, rev, phase in ("switching", "checking"))
                 self.assertEqual(self.current(), A)
                 self.assertFalse(os.path.lexists(os.path.join(self.P, "opt/mowbite/pending")))
-                if phase in ("switching", "checking"):
-                    last = self.app.update()["last"]
+                if last:
                     self.assertEqual((last["result"], last["reason"], last["revision"]),
                                      ("failed", "INTERRUPTED", rev), last)
                     # Once cut off is not blocked yet.
@@ -359,6 +402,80 @@ class EndToEnd(unittest.TestCase):
         self.wait_os("f000006")
         self.assertEqual(sorted(os.listdir(os.path.join(self.P, "opt/mowbite"))),
                          sorted([A, "f000006", "current", "previous"]))
+
+    # The planner switches like the OS: a cut in every phase leaves the OS with the planner it had, here its own.
+    def test_planner_kill_in_every_phase_and_back(self):
+        self.start_host()
+        self.assertEqual(self.install(A)["result"], "installed")
+        self.wait_os(A)
+        self.assertIsNone(self.fake()["planner"])
+        phases = (("verifying", "slow-verify"), ("waiting_gate", "os-state"), ("switching", "slow-stop"),
+                  ("checking", "slow-start"))
+        for n, (phase, marker) in enumerate(phases):
+            with self.subTest(phase=phase):
+                rev = f"d00000{n}"
+                self.start_into(phase, marker, rev, component="planner")
+                if phase == "switching":
+                    until(lambda: os.path.exists(os.path.join(self.P, PLANNER, "pending")), what="pending")
+                last = self.cut_and_restart(marker, rev, phase in ("switching", "checking"))
+                self.assertEqual((self.current(), self.current(PLANNER), self.current(PLANNER, "active")),
+                                 (A, None, None))
+                self.assertFalse(os.path.lexists(os.path.join(self.P, PLANNER, "pending")))
+                self.assertIsNone(self.fake()["planner"])
+                if last:
+                    self.assertEqual((last["result"], last["reason"], last["component"]),
+                                     ("failed", "INTERRUPTED", "planner"), last)
+        good, silent = "d000007", "d000008"
+        last = self.install(good, component="planner")
+        self.assertEqual((last["result"], last["component"]), ("installed", "planner"), last)
+        self.wait_os(A)
+        self.assertEqual((self.current(PLANNER, "active"), self.fake()["planner"]), (good, good))
+        self.assertEqual(self.component("planner")["source"], "own")
+        # A planner that does not answer through the OS: back to the one before, and the OS runs with it.
+        last = self.install(silent, component="planner", broken=True)
+        self.assertEqual((last["result"], last["reason"]), ("rolled_back", "UNHEALTHY"), last)
+        self.assertIn("planner.settings", last["message"])
+        self.wait_os(A)
+        self.assertEqual((self.current(PLANNER, "active"), self.fake()["planner"]), (good, good))
+        last = self.run_update("update.rollback", component="planner")
+        self.assertEqual((last["result"], last["revision"]), ("installed", None), last)
+        self.wait_os(A)
+        self.assertEqual((self.current(PLANNER, "active"), self.fake()["planner"]), (None, None))
+        self.assertEqual(self.component("planner")["source"], "bundled")
+
+    # Decision S1: the app is installed while the OS mows; the OS is neither stopped nor held nor reported updating.
+    def test_app_while_the_os_mows(self):
+        self.start_host()
+        self.assertEqual(self.install(A)["result"], "installed")
+        self.wait_os(A)
+        with open(os.path.join(self.P, "state/os-state"), "w") as f:
+            f.write("MOWING")
+        session = os.path.join(self.P, "userdata/mowbite/os-session.json")
+
+        def mowing():
+            with open(session) as f:
+                return json.load(f).get("state") == "MOWING"
+        until(mowing, what="the OS mows")
+        pid, seen = self.fake()["pid"], len(self.app.os_states)
+        rev = "f000001"
+        last = self.install(rev, component="app")
+        self.assertEqual((last["result"], last["component"], last["revision"]), ("installed", "app", rev), last)
+        self.assertEqual((self.current(APP), self.current(APP, "active")), (rev, rev))
+        app = self.component("app")
+        self.assertEqual((app["source"], app["running"]["version"]), ("own", "1.5.0"))
+        self.assertEqual((self.fake()["pid"], self.running()), (pid, {A}))
+        self.assertTrue(mowing())
+        self.assertFalse(os.path.exists(os.path.join(self.P, "userdata/mowbite/hold.json")))
+        self.assertNotIn("updating", self.app.os_states[seen:])
+        # The planner waits for the OS to idle on its contacts.
+        self.bundle("d000001", component="planner")
+        self.check()
+        self.app.call("update.start", component="planner", revision="d000001")
+        self.app.wait(lambda: self.app.update().get("phase") == "waiting_gate" and
+                      self.app.update().get("reason") == "BUSY", "gate closed")
+        self.assertIn("result", self.app.call("update.abort"))
+        self.app.wait(lambda: (self.app.update().get("last") or {}).get("result") == "aborted", "aborted")
+        self.assertEqual((self.fake()["pid"], self.current(PLANNER)), (pid, None))
 
     def test_origin_swapped_files_and_gate(self):
         self.start_host()

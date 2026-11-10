@@ -3,7 +3,11 @@
 While the OS runs, it has to idle on the charging contacts without an emergency (os-session.json of this boot) and have
 granted the hold the host asked for (hold.json: from then on nothing starts the wheels or the blade). An OS that does
 not run moves nothing, nor one that halted before its nodes started or stays down after its crashes. Never with an
-unfinished switch, a restart hold or a kernel crash the OS has not judged yet.
+unfinished switch of any component, a restart hold or a kernel crash the OS has not judged yet.
+
+A switch of the planner restarts the OS and so passes the same gate; before it the mowing job has to be finished
+(checkpoint.json), since the logic begins the area of a job again when its planner changed. The app passes no gate:
+its switch touches nothing that runs.
 """
 import os
 import re
@@ -52,10 +56,32 @@ def session_of_this_boot(paths):
     return session
 
 
+# Whether a switch of some component was not confirmed.
+def unfinished(paths):
+    return any(os.path.lexists(place.pending) for place in paths.places.values())
+
+
+# The version of checkpoint.json this host reads (kCheckpointVersion of the logic).
+CHECKPOINT_VERSION = 1
+
+
+# Whether the logic keeps a mowing job it would go on with: a checkpoint beyond its start. One of another version, or
+# one that cannot be read, counts as open.
+def job_open(paths):
+    if not os.path.lexists(paths.checkpoint):
+        return False
+    checkpoint = files.read_json(paths.checkpoint)
+    if checkpoint is None or checkpoint.get("version") != CHECKPOINT_VERSION:
+        return True
+    progress = [checkpoint.get(key) for key in ("area", "path", "index")]
+    return not all(isinstance(value, int) and not isinstance(value, bool) for value in progress) or any(
+        value > 0 for value in progress)
+
+
 # The reason the switch may not happen now, None when it may; active: whether the service of the OS runs, still:
 # whether it is halted or down (off).
 def before_hold(paths, active, still=False):
-    if os.path.exists(paths.pending):
+    if unfinished(paths):
         return "UNFINISHED", "an update did not finish: recover first"
     # Halted or down nobody answers a release; the file stays and holds the OS that starts next.
     if os.path.lexists(paths.restart_hold) and not still:

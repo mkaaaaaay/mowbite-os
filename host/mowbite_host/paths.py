@@ -5,12 +5,31 @@ import os
 ENV_FILES = ("/usr/lib/mowbite/os.defaults", "/etc/mowbite/os.conf")
 
 
+# The folder of each component and whether its installations lie over the one the OS brings along.
+PLACES = {"os": ("/opt/mowbite", False), "planner": ("/opt/mowbite-planner", True), "app": ("/opt/mowbite-app", True)}
+
+
+class Place:
+    """The installations of a component: <opt>/<revision>, current, previous, pending. overlay: the OS brings one
+    along as <os>/<component>, and the link active names the own one while it is the one to use."""
+
+    def __init__(self, component, opt, overlay):
+        self.component, self.opt, self.overlay = component, opt, overlay
+        self.current = self.of("current")
+        self.previous = self.of("previous")
+        self.pending = self.of("pending")
+        self.active = self.of("active")
+
+    def of(self, name):
+        return os.path.join(self.opt, name)
+
+
 class Paths:
     def __init__(self, prefix="", data_dir="/userdata/mowbite"):
         p = prefix
         self.prefix = prefix
-        # The installations of the OS: <opt>/<revision>, current, previous, pending.
-        self.opt = p + "/opt/mowbite"
+        self.places = {component: Place(component, p + opt, overlay) for component, (opt, overlay) in PLACES.items()}
+        self.os = self.places["os"]
         self.signers = p + "/etc/mowbite/allowed_signers"
         # The version of the rootfs or base image, an integer; a bundle names the oldest it runs on.
         self.base = p + "/usr/lib/mowbite/base"
@@ -30,22 +49,8 @@ class Paths:
         self.restart_hold = data + "/restart-hold.json"
         self.hold = data + "/hold.json"
         self.exit_note = data + "/container_exit.json"
+        self.checkpoint = data + "/checkpoint.json"
         self.halt = p + (self.env().get("MOWBITE_HALT_FILE") or "/run/mowbite-os/halt")
-
-    def opt_of(self, name):
-        return os.path.join(self.opt, name)
-
-    @property
-    def current(self):
-        return self.opt_of("current")
-
-    @property
-    def previous(self):
-        return self.opt_of("previous")
-
-    @property
-    def pending(self):
-        return self.opt_of("pending")
 
     # KEY=value of the environment files of the OS service.
     def env(self):

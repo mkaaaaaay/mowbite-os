@@ -13,6 +13,7 @@ FAIL_BITS = (1 << 1) | (1 << 8) | (1 << 12)
 # robot_state older than this does not count, an answer later than this is none.
 STATE_FRESH = 5.0
 ANSWER_WAIT = 3.0
+PLANNER_TRIES = 3
 
 
 class OsRpc:
@@ -69,7 +70,7 @@ class OsRpc:
 
 class Probe:
     """Health over the broker for installer.Health: robot_state comes, rpc.methods answers with system.hold, system.info
-    with the api the bundle names; settled() at the end of the stable time judges the bits."""
+    with the api the bundle names; settled() at the end of the stable time judges the bits, planner() the planner."""
 
     def __init__(self, rpc, api_of_running=lambda: None):
         self.rpc, self.api_of_running = rpc, api_of_running
@@ -115,6 +116,13 @@ class Probe:
         if api is not None and info.get("api") != api:
             return False, f"system.info says api {info.get('api')}, the bundle {api}"
         return True, f"api {info.get('api')}, {state.get('current_state')}"
+
+    # For a switch of the planner: whether the planner answers through the OS.
+    def planner(self):
+        for _ in range(PLANNER_TRIES):
+            if isinstance(self.rpc.call("planner.settings"), dict):
+                return True, ""
+        return False, "planner.settings does not answer"
 
     def settled(self):
         new = self.bits() & FAIL_BITS & ~self._bits_before

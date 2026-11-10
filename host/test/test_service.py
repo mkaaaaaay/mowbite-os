@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from mowbite_host import files, installer, os_state, probe, service  # noqa: E402
 from mowbite_host.broker import Message  # noqa: E402
 import support  # noqa: E402
+from test_components import P1, X, ComponentBase  # noqa: E402
 from test_updater import A, B, Base  # noqa: E402
 
 
@@ -105,9 +106,11 @@ class RequestTest(HostBase):
         self.assertEqual(self.answer("update.abort")["error"]["data"]["reason"], "NOT_UPDATING")
         self.assertEqual(self.answer("update.rollback", {"component": "os"})["error"]["data"]["reason"],
                          "NO_PREVIOUS")
-        for method, params in (("update.start", {"component": "planner"}), ("update.start", {}),
+        for method, params in (("update.start", {"component": "host"}), ("update.start", {}),
                                ("update.start", [1]), ("update.set_auto", {"from": "25:00"}),
-                               ("update.set_auto", {"enabled": "yes"})):
+                               ("update.set_auto", {"enabled": "yes"}),
+                               ("update.start", {"component": "os", "reset_jobs": True}),
+                               ("update.start", {"component": "planner", "reset_jobs": "yes"})):
             error = self.answer(method, params)["error"]
             self.assertEqual((error["code"], error["data"]["reason"]), (-32602, "INVALID"), (method, params))
 
@@ -122,6 +125,36 @@ class RequestTest(HostBase):
         status = self.published.last(service.UPDATE_STATUS)
         self.assertEqual((status[1]["phase"], status[2]), ("idle", True))
         self.assertEqual(status[1]["last"]["revision"], A)
+
+
+class ComponentsTest(ComponentBase, HostBase):
+    def test_three_components(self):
+        components = self.answer("update.status")["result"]["components"]
+        self.assertEqual([(c["id"], c["name"]) for c in components],
+                         [("os", "MowBite OS"), ("planner", "MowBite Planner"), ("app", "MowBite App")])
+        self.assertEqual([c.get("source") for c in components], [None, "bundled", "bundled"])
+
+    def test_reset_jobs_only_when_asked_for(self):
+        self.installed("os", A)
+        self.planner_bundle(P1)
+        self.checkpoint(index=3)
+        self.answer("update.check")
+        self.assertIn("result", self.answer("update.start", {"component": "planner", "reset_jobs": False}))
+        self.assertEqual(self.updater.join()["reason"], "JOB_OPEN")
+        self.assertIn("result", self.answer("update.start", {"component": "planner", "reset_jobs": True}))
+        self.assertEqual(self.updater.join()["result"], "installed")
+        planner = self.published.last(service.UPDATE_STATUS)[1]["components"][1]
+        self.assertEqual((planner["source"], planner["running"]["revision"]), ("own", P1))
+
+    def test_rollback_of_each_component(self):
+        self.installed("os", A)
+        self.installed("app", X)
+        self.assertEqual(self.answer("update.rollback", {"component": "planner"})["error"]["data"]["reason"],
+                         "NO_PREVIOUS")
+        self.assertIn("result", self.answer("update.rollback", {"component": "app"}))
+        last = self.updater.join()
+        self.assertEqual((last["result"], last["component"], last["revision"]), ("installed", "app", None))
+        self.assertEqual(self.published.last(service.UPDATE_STATUS)[1]["components"][2]["source"], "bundled")
 
 
 class RestartTest(HostBase):
@@ -225,8 +258,9 @@ class OsStateTest(HostBase):
 
     def test_updating_while_it_switches(self):
         self.install()
-        self.updater._phase["phase"] = "checking"
-        self.assertEqual(self.read()["state"], "updating")
+        for component, state in (("os", "updating"), ("planner", "updating"), ("app", "running")):
+            self.updater._phase = {**self.updater._phase, "phase": "checking", "component": component}
+            self.assertEqual(self.read()["state"], state)
 
     def test_host_status_on_change_and_connect(self):
         self.host.look()

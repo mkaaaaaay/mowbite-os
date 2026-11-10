@@ -1,9 +1,11 @@
 """A signed bundle: a root-owned copy of it, its signature, its bundle.json and what it needs before a switch.
 
 A bundle is a tar.gz of one directory <revision>/ with bundle.json (format 2: component, revision, commit, serial,
-base, min_app, runtime_packages) beside what the component runs. Only the copy in the stage folder is checked and
-unpacked: the file in the inbox may change after its signature was checked. What comes out of a bundle is never run
-as root.
+date) beside what the component brings: os with base, api, min_app, runtime_packages, planner_interface,
+planner_files_version and bundled beside install/, planner/, app/ and tools/; planner with version, interface,
+files_version and requires beside planner/; app with version and api {min, max} beside app/. Only the copy in the
+stage folder is checked and unpacked: the file in the inbox may change after its signature was checked. What comes
+out of a bundle is never run as root, and a bundle of the planner or the app holds no machine code.
 """
 import json
 import os
@@ -11,12 +13,16 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 
-from mowbite_host import Refused
+from mowbite_host import Refused, compat
 
 FORMAT = 2
-MAX_BUNDLE = 300 * 1024 * 1024
+# The largest bundle of each component, checked before its signature.
+MAX_BUNDLE = {"os": 300 * 1024 * 1024, "planner": 20 * 1024 * 1024, "app": 50 * 1024 * 1024}
+# What a bundle of the component has to hold beside bundle.json.
+NEEDS = {"planner": "planner/local_setup.bash", "app": "app/index.html"}
 MAX_SIGNATURE = 64 * 1024
 # What the unpacked bundle may take of the free space beside it.
 SPACE_MARGIN = 100 * 1024 * 1024
@@ -91,19 +97,44 @@ class Bundle:
         return self.meta["serial"]
 
 
-# Copies src and its signature into stage, checks the signature for component and reads bundle.json.
-def stage(src, signature, component, stage_dir, signers):
+def _copies(src, signature, stage_dir, limit):
     shutil.rmtree(stage_dir, ignore_errors=True)
     os.makedirs(stage_dir, mode=0o700)
     path = os.path.join(stage_dir, "bundle.tar.gz")
-    sig = path + ".sig"
-    copy_in(signature, sig, MAX_SIGNATURE)
-    copy_in(src, path, MAX_BUNDLE)
-    verify(path, sig, component, signers)
+    copy_in(signature, path + ".sig", MAX_SIGNATURE)
+    copy_in(src, path, limit)
+    return path
+
+
+def _checked(path, component):
     meta, size = read_meta(path)
     if meta["component"] != component:
         raise Refused("BAD_BUNDLE", f"the bundle is of {meta['component']}, not of {component}")
     return Bundle(path, meta, size)
+
+
+# Copies src and its signature into stage, checks the signature for component and reads bundle.json.
+def stage(src, signature, component, stage_dir, signers):
+    if component not in MAX_BUNDLE:
+        raise Refused("BAD_BUNDLE", f"no component {component}")
+    path = _copies(src, signature, stage_dir, MAX_BUNDLE[component])
+    verify(path, path + ".sig", component, signers)
+    return _checked(path, component)
+
+
+# As stage for a bundle given by hand: its component is the one whose namespace the signature holds for, nothing of
+# the bundle is read before that.
+def stage_any(src, signature, stage_dir, signers):
+    path = _copies(src, signature, stage_dir, max(MAX_BUNDLE.values()))
+    for component, limit in MAX_BUNDLE.items():
+        try:
+            verify(path, path + ".sig", component, signers)
+        except Refused:
+            continue
+        if os.path.getsize(path) > limit:
+            raise Refused("BAD_BUNDLE", f"{src} is larger than {limit // 1048576} MB")
+        return _checked(path, component)
+    raise Refused("BAD_SIGNATURE", f"the signature of {src} holds for no component")
 
 
 def _integer(meta, key, default=None):
@@ -138,7 +169,28 @@ def read_meta(path):
     if _integer(meta, "serial") == 0:
         raise Refused("BAD_BUNDLE", "serial in bundle.json is 0")
     _integer(meta, "base", 0)
+    _check_fields(meta, {member.name for member in members if member.isfile()})
     return meta, sum(member.size for member in members)
+
+
+# What bundle.json of the planner and the app has to name, and the file the component is used through.
+def _check_fields(meta, names):
+    component = meta["component"]
+    if component == "app":
+        span = meta.get("api")
+        if (compat.version_tuple(meta.get("version")) is None or not isinstance(span, dict) or
+                not compat.whole(span.get("min")) or not compat.whole(span.get("max")) or span["min"] > span["max"]):
+            raise Refused("BAD_BUNDLE", "version or api {min, max} in bundle.json are missing or wrong")
+    elif component == "planner":
+        requires = meta.get("requires", {})
+        if (not isinstance(meta.get("version"), str) or not compat.whole(meta.get("interface")) or
+                not compat.whole(meta.get("files_version")) or not isinstance(requires, dict) or
+                not all(isinstance(need, str) for need in requires.values())):
+            raise Refused("BAD_BUNDLE", "version, interface, files_version or requires in bundle.json are missing "
+                                        "or wrong")
+    need = NEEDS.get(component)
+    if need and f"{meta['revision']}/{need}" not in names:
+        raise Refused("BAD_BUNDLE", f"the bundle has no {need}")
 
 
 # The version of the rootfs or base image at path, 0 without one.
@@ -168,6 +220,47 @@ def check_base(bundle, base_file):
     missing = missing_packages(bundle.meta.get("runtime_packages", []))
     if missing:
         raise Refused("BASE_TOO_OLD", f"runtime packages missing: {' '.join(missing)}")
+
+
+# Prints each entry of requires {name: oldest version} on stdin that this python does not meet: python itself, any
+# other name as an installed distribution.
+REQUIRES_SCRIPT = """
+import json, sys
+from importlib import metadata
+
+def numbers(text):
+    found = []
+    for part in text.split("."):
+        digits = part[:len(part) - len(part.lstrip("0123456789"))]
+        if not digits:
+            break
+        found.append(int(digits))
+    return found
+
+for name, need in sorted(json.load(sys.stdin).items()):
+    if name == "python":
+        have = ".".join(str(n) for n in sys.version_info[:3])
+    else:
+        try:
+            have = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            have = None
+    if have is None or numbers(have) < numbers(need):
+        print(f"{name} {need} (found {have or 'none'})")
+"""
+
+
+# Refused BASE_TOO_OLD when the python of the rootfs, asked as USER, misses what the bundle requires.
+def check_requires(bundle, env):
+    requires = bundle.meta.get("requires")
+    if not requires:
+        return
+    result = run(as_user([sys.executable, "-I", "-c", REQUIRES_SCRIPT]), input=json.dumps(requires), env=env,
+                 timeout=60)
+    if result.returncode != 0:
+        raise Refused("BASE_TOO_OLD", f"what the bundle requires cannot be checked: {result.stderr.strip()[-300:]}")
+    if result.stdout.strip():
+        raise Refused("BASE_TOO_OLD", "the bundle requires " + ", ".join(result.stdout.splitlines()))
 
 
 def check_space(bundle, folder):
@@ -206,11 +299,17 @@ def _is_elf(path):
 LDD_SCRIPT = 'set -eu; source "$1" "$2"; while IFS= read -r f; do echo "== $f"; ldd "$f" 2>&1 || true; done'
 
 
-# Files of the tree at root whose libraries are not found in the environment of the OS: [text].
-def unresolved_libraries(root, os_setup, env):
+# The files of machine code in the tree at root.
+def elf_files(root):
     files = []
     for folder, _, names in os.walk(root):
         files += [os.path.join(folder, name) for name in names if _is_elf(os.path.join(folder, name))]
+    return files
+
+
+# Files of the tree at root whose libraries are not found in the environment of the OS: [text].
+def unresolved_libraries(root, os_setup, env):
+    files = elf_files(root)
     if not files:
         return []
     result = run(as_user(["bash", "-c", LDD_SCRIPT, "ldd-check", os_setup, root]), input="\n".join(files) + "\n",

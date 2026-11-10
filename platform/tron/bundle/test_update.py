@@ -22,8 +22,8 @@ HOST_LIB = os.path.join(HERE, "..", "..", "..", "host")
 SIGN = os.path.join(HERE, "sign-bundle.sh")
 
 # systemctl: the state of the service in $PREFIX/state/service. A start writes os-session.json of this boot as the
-# logic does, IDLE on the contacts (or $PREFIX/state/os-state), unless state/broken-<revision of current> is there; a
-# stop writes it clean.
+# logic does, IDLE on the contacts (or $PREFIX/state/os-state), unless state/broken-<revision> of the OS or of the
+# planner active names is there; a stop writes it clean.
 SYSTEMCTL = """#!/bin/sh
 p="$MOWBITE_UPDATE_PREFIX"
 s="$p/state/service"
@@ -39,7 +39,8 @@ case "$1" in
   is-active) state=$(cat "$s" 2>/dev/null || echo inactive); [ "$2" = --quiet ] || echo "$state"; [ "$state" = active ];;
   stop) [ "$(cat "$s" 2>/dev/null)" = active ] && session true; echo inactive > "$s";;
   start) echo active > "$s"; date +%s > "$s.since"
-    rev=$(readlink "$p/opt/mowbite/current"); [ -e "$p/state/broken-$rev" ] || session false;;
+    rev=$(readlink "$p/opt/mowbite/current"); planner=$(readlink "$p/opt/mowbite-planner/active" || echo none)
+    [ -e "$p/state/broken-$rev" ] || [ -e "$p/state/broken-$planner" ] || session false;;
   show) echo "ActiveState=$(cat "$s" 2>/dev/null || echo inactive)"
     echo "ActiveEnterTimestamp=@$(cat "$s.since" 2>/dev/null || echo 0)";;
   reset-failed) ;;
@@ -93,7 +94,7 @@ class UpdateTest(unittest.TestCase):
         with open(self.key + ".pub") as f:
             public = " ".join(f.read().split()[:2])
         self.write(os.path.join(self.prefix, "etc/mowbite/allowed_signers"),
-                   f'mowbite namespaces="mowbite-os" {public}\n')
+                   f'mowbite namespaces="mowbite-os,mowbite-planner,mowbite-app" {public}\n')
         self.env = dict(os.environ)
         os.environ["MOWBITE_UPDATE_PREFIX"] = self.prefix
         os.environ["MOWBITE_UPDATE_HEALTH_WAIT"] = "0"
@@ -152,29 +153,37 @@ class UpdateTest(unittest.TestCase):
         self.write(os.path.join(self.prefix, "userdata/mowbite/os-session.json"), json.dumps(record))
 
     # A signed bundle of revision rev, each one with a newer serial unless given; extra entries (name -> bytes)
-    # beside or instead of the usual ones.
+    # beside or instead of the usual ones. Of the planner or the app: only what those bring.
     def bundle(self, rev, key=None, packages=("ros-jazzy-rclcpp",), extra=None, meta=None, serial=None,
-               namespace="mowbite-os"):
+               namespace=None, component="os"):
         self.serial += 1
-        path = os.path.join(self.root, f"mowbite-os-{rev}.tar.gz")
-        files = {
-            f"{rev}/revision": f"{rev}\n".encode(),
-            f"{rev}/bundle.json": json.dumps(meta or {
-                "format": 2, "component": "os", "revision": rev, "commit": rev, "serial": serial or self.serial,
-                "base": 1, "min_app": "1.4.0", "runtime_packages": list(packages)}).encode(),
-            f"{rev}/install/lib/libok.so": b"\x7fELF fake",
-            f"{rev}/planner/local_setup.bash": b"",
-        }
+        path = os.path.join(self.root, f"mowbite-{component}-{rev}.tar.gz")
+        common = {"format": 2, "component": component, "revision": rev, "commit": rev,
+                  "serial": serial or self.serial}
+        files = {f"{rev}/revision": f"{rev}\n".encode()}
+        if component == "os":
+            common.update(base=1, min_app="1.4.0", runtime_packages=list(packages), api=15, planner_interface=1,
+                          planner_files_version=1)
+            files.update({f"{rev}/install/lib/libok.so": b"\x7fELF fake", f"{rev}/planner/local_setup.bash": b""})
+        elif component == "planner":
+            common.update(version="2.0.0", interface=1, files_version=1)
+            files[f"{rev}/planner/local_setup.bash"] = b""
+        else:
+            common.update(version="1.5.0", api={"min": 14, "max": 15})
+            files.update({f"{rev}/app/index.html": b"<html></html>",
+                          f"{rev}/app/version.json": b'{"version": "1.5.0", "level": 1}'})
+        files[f"{rev}/bundle.json"] = json.dumps(meta or common).encode()
         files.update(extra or {})
         with tarfile.open(path, "w:gz") as tar:
             for name, data in files.items():
                 info = tarfile.TarInfo(name)
                 info.size = len(data)
-                info.mode = 0o755
+                info.mode = 0o755 if component == "os" else 0o644
                 tar.addfile(info, io.BytesIO(data))
         if os.path.exists(path + ".sig"):
             os.remove(path + ".sig")
-        subprocess.run(["ssh-keygen", "-q", "-Y", "sign", "-f", key or self.key, "-n", namespace, path],
+        subprocess.run(["ssh-keygen", "-q", "-Y", "sign", "-f", key or self.key, "-n",
+                        namespace or f"mowbite-{component}", path],
                        check=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30)
         return path
 
@@ -185,14 +194,19 @@ class UpdateTest(unittest.TestCase):
         with open(os.path.join(self.prefix, "var/lib/mowbite-host/update.json")) as f:
             return json.load(f)["last"]
 
-    def link(self, name):
+    def link(self, name, opt="opt/mowbite"):
         try:
-            return os.readlink(os.path.join(self.prefix, "opt/mowbite", name))
+            return os.readlink(os.path.join(self.prefix, opt, name))
         except FileNotFoundError:
             return None
 
-    def installed(self):
-        return sorted(os.listdir(os.path.join(self.prefix, "opt/mowbite")))
+    def installed(self, opt="opt/mowbite"):
+        return sorted(os.listdir(os.path.join(self.prefix, opt)))
+
+    # What systemctl was asked for since mark (a count of calls), without the questions.
+    def calls(self, mark=0):
+        with open(self.state("systemctl.log")) as f:
+            return [line.split()[0] for line in f if line.split()[0] not in ("is-active", "show")][mark:]
 
     def service(self):
         with open(self.state("service")) as f:
@@ -226,6 +240,89 @@ class UpdateTest(unittest.TestCase):
     def test_signature_of_another_component(self):
         self.assertEqual(self.install(self.bundle(A, namespace="mowbite-planner")), 1)
         self.assertIsNone(self.link("current"))
+
+    # The component is the one the signature holds for; nothing of an unchecked bundle says which.
+    def test_signed_as_app_is_never_installed_as_os(self):
+        self.install(self.bundle(A))
+        self.assertEqual(self.install(self.bundle(B, namespace="mowbite-app")), 1)
+        self.assertEqual((self.link("current"), self.installed("opt/mowbite-app")), (A, []))
+
+    def test_app_installs_beside_a_mowing_os(self):
+        self.install(self.bundle(A))
+        self.session(state="MOWING", emergency=True)
+        mark = len(self.calls())
+        self.assertEqual(self.install(self.bundle(D, component="app")), 0)
+        self.assertEqual((self.link("current", APP), self.link("active", APP)), (D, D))
+        self.assertEqual((self.calls(mark), self.service()), ([], "active"))
+        self.assertEqual(self.last()["component"], "app")
+        self.assertFalse(os.path.exists(os.path.join(self.prefix, "userdata/mowbite/hold.json")))
+        # Back without an own one before it: the app of the OS.
+        self.assertEqual(self.tool.main(["mowbite-update", "rollback", "app"]), 0)
+        self.assertEqual((self.link("current", APP), self.link("active", APP), self.link("previous", APP)),
+                         (None, None, D))
+        self.assertEqual(self.calls(mark), [])
+
+    def test_app_needs_an_os_it_goes_with(self):
+        self.assertEqual(self.install(self.bundle(D, component="app")), 1)
+        self.assertEqual(self.last()["reason"], "OS_TOO_OLD")
+        self.assertEqual(self.installed(APP), [])
+
+    def test_planner_restarts_the_os(self):
+        self.install(self.bundle(A))
+        mark = len(self.calls())
+        self.assertEqual(self.install(self.bundle(D, component="planner")), 0)
+        self.assertEqual((self.link("current", PLANNER), self.link("active", PLANNER)), (D, D))
+        self.assertEqual(self.calls(mark), ["stop", "reset-failed", "start"])
+        self.assertEqual(self.link("current"), A)
+        self.session(state="MOWING")
+        self.assertEqual(self.tool.main(["mowbite-update", "rollback", "planner"]), 1)
+        self.assertEqual(self.last()["reason"], "BUSY")
+
+    def test_planner_waits_for_the_job_unless_told(self):
+        self.install(self.bundle(A))
+        self.write(os.path.join(self.prefix, "userdata/mowbite/checkpoint.json"),
+                   json.dumps({"version": 1, "area": 0, "path": 1, "index": 12}))
+        path = self.bundle(D, component="planner")
+        self.assertEqual(self.install(path), 1)
+        self.assertEqual(self.last()["reason"], "JOB_OPEN")
+        self.assertEqual(self.tool.main(["mowbite-update", "install", "--reset-jobs", path]), 0)
+        self.assertEqual(self.link("active", PLANNER), D)
+
+    def test_unhealthy_planner_goes_back_to_the_one_of_the_os(self):
+        self.install(self.bundle(A))
+        self.write(self.state(f"broken-{D}"), "")
+        self.assertEqual(self.install(self.bundle(D, component="planner")), 1)
+        self.assertEqual(self.last()["result"], "rolled_back")
+        self.assertEqual((self.link("current", PLANNER), self.link("active", PLANNER), self.service()),
+                         (None, None, "active"))
+
+    def test_recover_of_every_place(self):
+        self.install(self.bundle(A))
+        self.install(self.bundle(D, component="planner"))
+        self.killed_during_health(E, self.bundle(E, component="planner"))
+        self.assertEqual(self.link("current", PLANNER), E)
+        self.assertIn("pending", self.installed(PLANNER))
+        # Nothing switches meanwhile, not even the app.
+        self.assertEqual(self.install(self.bundle(D, component="app")), 1)
+        self.assertEqual(self.last()["reason"], "UNFINISHED")
+        self.assertEqual(self.tool.main(["mowbite-update", "recover"]), 0)
+        self.assertEqual((self.link("current", PLANNER), self.link("active", PLANNER)), (D, D))
+        self.assertNotIn("pending", self.installed(PLANNER))
+        self.assertEqual((self.last()["reason"], self.last()["component"], self.service()),
+                         ("INTERRUPTED", "planner", "active"))
+
+    def test_status_of_every_place(self):
+        self.install(self.bundle(A))
+        self.install(self.bundle(D, component="app"))
+        out = subprocess.run([sys.executable, "-I", TOOL, "status"], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        for line in (f"os current: {A}", "service: active", "planner current: -", "planner in use: the one of the OS",
+                     f"app current: {D}", "app in use: current"):
+            self.assertIn(line, out.stdout.splitlines())
+
+    def test_usage(self):
+        for args in ([], ["rollback", "host"], ["status", "--reset-jobs"], ["install"], ["recover", "os"]):
+            self.assertEqual(self.tool.main(["mowbite-update", *args]), 2, args)
 
     def test_signature_missing(self):
         path = self.bundle(A)
@@ -528,7 +625,8 @@ class UpdateTest(unittest.TestCase):
         self.assertIn("test gate: NO RESULT", self.sign(self.bundle(C, serial=2001), "n").stdout)
 
 
-A, B, C = "aaaaaaa", "bbbbbbb", "ccccccc"
+A, B, C, D, E = "aaaaaaa", "bbbbbbb", "ccccccc", "ddddddd", "eeeeeee"
+PLANNER, APP = "opt/mowbite-planner", "opt/mowbite-app"
 
 if __name__ == "__main__":
     unittest.main()

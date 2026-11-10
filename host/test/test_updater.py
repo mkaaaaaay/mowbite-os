@@ -34,6 +34,9 @@ class FakeOs:
         self.broken = set()
         self.holds = []
         self.started = None
+        self.starts = self.stops = 0
+        # The planner the last start took: the revision active named, None for the one of the OS.
+        self.planner = None
         # The state of the service when it is neither active nor inactive.
         self.state = None
 
@@ -54,16 +57,20 @@ class FakeOs:
         self.stop()
         return self.start()
 
+    # Like os-setup it takes the planner active names, else the one of the OS.
     def start(self):
         self.running = True
         self.started = int(time.time())
-        if os.readlink(self.paths.current) not in self.broken:
+        self.planner = files.link_target(self.paths.places["planner"].active)
+        self.starts += 1
+        if not {os.readlink(self.paths.os.current), self.planner} & self.broken:
             self.session()
         return True
 
     def stop(self):
         if self.running:
             self.session(clean=True)
+            self.stops += 1
         self.running = False
 
     def request_hold(self, seconds):
@@ -83,14 +90,16 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="mowbite-host-")
         self.paths = paths.Paths(os.path.join(self.root, "fs"))
-        for folder in (self.paths.opt, self.paths.inbox, os.path.dirname(self.paths.signers),
-                       os.path.dirname(self.paths.boot_id), os.path.dirname(self.paths.base)):
+        for folder in (*(place.opt for place in self.paths.places.values()), self.paths.inbox,
+                       os.path.dirname(self.paths.signers), os.path.dirname(self.paths.boot_id),
+                       os.path.dirname(self.paths.base)):
             os.makedirs(folder)
         self.write(self.paths.boot_id, "b1\n")
         self.write(self.paths.base, "1\n")
         self.write(self.paths.os_setup, "true\n")
         self.key = support.keygen(os.path.join(self.root, "key"))
-        self.write(self.paths.signers, f'mowbite namespaces="mowbite-os,mowbite-index" {support.public(self.key)}\n')
+        self.write(self.paths.signers, 'mowbite namespaces="mowbite-os,mowbite-planner,mowbite-app,mowbite-index" '
+                                       f'{support.public(self.key)}\n')
         self.fake = FakeOs(self.paths)
         health = installer.Health(self.paths, self.fake, wait=0, stable=0, every=0)
         self.updater = updater.Updater(self.paths, self.fake, health, origin.Inbox(self.paths), self.fake)
@@ -112,21 +121,23 @@ class Base(unittest.TestCase):
     def sign(self, path, namespace):
         support.sign(path, self.key, namespace)
 
-    # A signed bundle of rev in the inbox (or folder), with a newer serial unless given; extra: more files {name: bytes}.
-    def bundle(self, rev, serial=None, folder=None, extra=None, **meta):
+    # A signed bundle of rev in the inbox (or folder), with a newer serial unless given; extra: more files {name:
+    # bytes}, modes: {name: mode} for files not 0644.
+    def bundle(self, rev, serial=None, folder=None, extra=None, component="os", modes=None, **meta):
         self.serial += 1
-        path = os.path.join(folder or self.paths.inbox, f"mowbite-os-{rev}.tar.gz")
-        members = {f"{rev}/bundle.json": json.dumps({"format": 2, "component": "os", "revision": rev,
-                                                     "serial": serial or self.serial, "base": 1, "min_app": "1.4.0",
-                                                     "runtime_packages": [], **meta}).encode(),
-                   f"{rev}/revision": rev.encode()}
+        path = os.path.join(folder or self.paths.inbox, f"mowbite-{component}-{rev}.tar.gz")
+        common = {"format": 2, "component": component, "revision": rev, "serial": serial or self.serial}
+        if component == "os":
+            meta = {"base": 1, "min_app": "1.4.0", "runtime_packages": [], **meta}
+        members = {f"{rev}/bundle.json": json.dumps({**common, **meta}).encode(), f"{rev}/revision": rev.encode()}
         members.update({f"{rev}/{name}": data for name, data in (extra or {}).items()})
         with tarfile.open(path, "w:gz") as tar:
             for name, data in members.items():
                 info = tarfile.TarInfo(name)
                 info.size = len(data)
+                info.mode = (modes or {}).get(name[len(rev) + 1:], 0o644)
                 tar.addfile(info, io.BytesIO(data))
-        self.sign(path, "mowbite-os")
+        self.sign(path, f"mowbite-{component}")
         return path
 
     def run_update(self, *args, **kwargs):
@@ -218,7 +229,7 @@ class StageTest(Base):
         staged = bundle.stage(good, good + ".sig", "os", os.path.join(self.paths.stage, "t"), self.paths.signers)
         with open(good, "wb") as f:
             f.write(b"something else")
-        partial = bundle.unpack(staged, self.paths.opt)
+        partial = bundle.unpack(staged, self.paths.os.opt)
         self.assertTrue(os.path.isfile(os.path.join(partial, A, "bundle.json")))
 
     def test_fifo_refused(self):
@@ -280,7 +291,7 @@ class GateTest(Base):
         self.assertEqual(gate.before_hold(self.paths, True)[0], "EMERGENCY")
         self.assertEqual(gate.before_hold(self.paths, False)[0], "EMERGENCY")
         self.assertIsNone(gate.before_hold(self.paths, True, True))
-        self.write(self.paths.pending, "{}")
+        self.write(self.paths.os.pending, "{}")
         self.assertEqual(gate.before_hold(self.paths, True, True)[0], "UNFINISHED")
 
     # Files in the folders of the OS user: never read or written through a link, never more than a small text.
@@ -337,8 +348,8 @@ class FlowTest(Base):
         last = self.install(B)
         self.fake.stop = stop
         self.assertEqual((last["result"], last["reason"]), ("refused", "BUSY"))
-        self.assertEqual(os.readlink(self.paths.current), A)
-        self.assertFalse(os.path.lexists(self.paths.pending))
+        self.assertEqual(os.readlink(self.paths.os.current), A)
+        self.assertFalse(os.path.lexists(self.paths.os.pending))
 
     # An abort the caller got a yes for: no switch after it, although the hold arrives.
     def test_accepted_abort_is_never_switched(self):
@@ -360,7 +371,7 @@ class FlowTest(Base):
         self.fake.grant = True
         request_hold(900)
         self.assertEqual(self.updater.join()["result"], "aborted")
-        self.assertEqual(os.readlink(self.paths.current), A)
+        self.assertEqual(os.readlink(self.paths.os.current), A)
         self.assertEqual(self.fake.holds[-1], 0)
         # Also when it comes between the gate and the switch.
         self.updater._abort.set()
@@ -381,9 +392,9 @@ class FlowTest(Base):
         self.updater.installer.health.once = fail_first
         last = self.install(B)
         self.assertEqual((last["result"], last["reason"]), ("failed", "INTERNAL"))
-        self.assertEqual(os.readlink(self.paths.current), A)
+        self.assertEqual(os.readlink(self.paths.os.current), A)
         self.assertTrue(self.fake.running)
-        self.assertFalse(os.path.lexists(self.paths.pending))
+        self.assertFalse(os.path.lexists(self.paths.os.pending))
         self.assertEqual(self.updater.state["components"]["os"]["attempts"], {})
         self.assertEqual(self.install(B)["result"], "installed")
 
@@ -399,8 +410,8 @@ class FlowTest(Base):
             stop()
         self.fake.stop = refuse_second
         self.assertEqual(self.install(B)["result"], "rolled_back")
-        self.assertEqual(os.readlink(self.paths.current), A)
-        self.assertFalse(os.path.lexists(self.paths.pending))
+        self.assertEqual(os.readlink(self.paths.os.current), A)
+        self.assertFalse(os.path.lexists(self.paths.os.pending))
 
     # From its stop on the host holds the mower itself, also when the OS was off and nobody granted a hold.
     def test_switch_holds_the_os_it_starts(self):
@@ -437,7 +448,7 @@ class FlowTest(Base):
         asked = len(self.fake.holds)
         self.updater.rollback("os")
         self.assertEqual(self.updater.join()["result"], "installed")
-        self.assertEqual(os.readlink(self.paths.current), A)
+        self.assertEqual(os.readlink(self.paths.os.current), A)
         self.assertNotIn(900, self.fake.holds[asked:])
         self.assertTrue(os.path.exists(self.paths.restart_hold))
 
@@ -498,7 +509,7 @@ class FlowTest(Base):
             self.assertEqual(self.updater.join()["result"], "aborted")
         finally:
             updater.GATE_EVERY = every
-        self.assertEqual(os.readlink(self.paths.current), A)
+        self.assertEqual(os.readlink(self.paths.os.current), A)
 
     def test_one_at_a_time(self):
         self.install(A)

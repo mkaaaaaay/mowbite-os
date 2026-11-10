@@ -1,17 +1,21 @@
 #!/usr/bin/python3
-"""Installs a signed bundle of MowBite OS by hand (SSH), with the same checks as mowbite-host.
+"""Installs a signed bundle of MowBite OS, its planner or its app by hand (SSH), with the same checks as mowbite-host.
 
-  mowbite-update install <bundle.tar.gz> [<signature>]   (signature default <bundle>.sig)
-  mowbite-update rollback                                 back to /opt/mowbite/previous
+  mowbite-update install [--reset-jobs] <bundle.tar.gz> [<signature>]   (signature default <bundle>.sig)
+  mowbite-update rollback [--reset-jobs] [os|planner|app]               back to the installation before (default os)
   mowbite-update recover                                  after an update that did not finish (at boot)
   mowbite-update status
 
-A bundle is a tar of one directory <revision>/ with bundle.json (format 2: component os, revision, serial, base,
-min_app, runtime_packages) beside install/, planner/ and tools/. Before the switch: signature (namespace mowbite-os,
-/etc/mowbite/allowed_signers), a serial newer than the running one, the base and runtime packages of this rootfs,
-every library found (checked as the user mowbite). The switch only while the OS is stopped, or idles on the charging
-contacts without an emergency and holds for the update (system.hold over the broker of the OS, the gate reads the
-files). After it the OS has to come up healthy, else it goes back; without the broker its files alone decide.
+A bundle is a tar of one directory <revision>/ with bundle.json (format 2: component, revision, serial, ...) beside
+what the component brings; its component is the one whose namespace (mowbite-os, mowbite-planner, mowbite-app in
+/etc/mowbite/allowed_signers) the signature holds for. Before the switch of the OS: a serial newer than the installed
+one, the base and runtime packages of this rootfs, every library found (checked as the user mowbite). The switch only
+while the OS is stopped, or idles on the charging contacts without an emergency and holds for the update (system.hold
+over the broker of the OS, the gate reads the files). After it the OS has to come up healthy, else it goes back;
+without the broker its files alone decide. The planner has to go with the installed OS and switches like the OS, once
+the mowing job is finished (--reset-jobs: also with an unfinished one, the logic then begins its area again). The app
+has to go with the installed OS and switches at any time. Without an installation before it, the planner and the app
+go back to the one the OS brings along.
 """
 import fcntl
 import os
@@ -60,7 +64,9 @@ def make(prefix, with_broker):
         print("no broker: only a stopped OS switches, its health is judged from its files", file=sys.stderr)
     health = installer.health_of(where, service, check)
     tool = updater.Updater(where, service, health, origin.Inbox(where), rpc or NoBroker())
-    tool.installer.hold = rpc is not None
+    if rpc is None:
+        for one in tool.installers.values():
+            one.hold = False
     if check is not None:
         check.api_of_running = tool.running_api
     # By hand the gate is judged once, there is no waiting for it.
@@ -68,14 +74,16 @@ def make(prefix, with_broker):
     return tool
 
 
-# The candidate of a bundle given by path: read once here, read again from its own copy by the install.
+# The candidate of a bundle given by path, of the component its signature holds for: read once here, read again
+# from its own copy by the install.
 def candidate_of(tool, path, signature):
     folder = os.path.join(tool.paths.stage, "cli")
     try:
-        staged = bundle.stage(path, signature, "os", folder, tool.paths.signers)
+        staged = bundle.stage_any(path, signature, folder, tool.paths.signers)
     finally:
         shutil.rmtree(folder, ignore_errors=True)
-    return {"component": "os", "revision": staged.revision, "serial": staged.serial, "path": path, "sig": signature}
+    return {"component": staged.meta["component"], "revision": staged.revision, "serial": staged.serial,
+            "path": path, "sig": signature}
 
 
 def wait_and_report(tool):
@@ -86,16 +94,23 @@ def wait_and_report(tool):
 
 def main(argv):
     prefix = os.environ.get("MOWBITE_UPDATE_PREFIX", "")
-    if len(argv) in (3, 4) and argv[1] == "install":
-        signature = argv[3] if len(argv) == 4 else argv[2] + ".sig"
-    elif argv[1:] not in (["rollback"], ["recover"], ["status"]):
+    args = [arg for arg in argv[1:] if arg != "--reset-jobs"]
+    reset_jobs = len(args) < len(argv) - 1
+    command = args[0] if args else None
+    if command == "install" and len(args) in (2, 3):
+        signature = args[2] if len(args) == 3 else args[1] + ".sig"
+    elif command == "rollback" and len(args) <= 2 and (args[1:] or ["os"])[0] in updater.COMPONENTS:
+        component = (args[1:] or ["os"])[0]
+    elif args not in (["recover"], ["status"]) or reset_jobs:
         print(__doc__, file=sys.stderr)
         return 2
-    tool = make(prefix, argv[1] in ("install", "rollback"))
-    if argv[1] == "status":
-        print("\n".join(tool.installer.status_lines()))
+    tool = make(prefix, command in ("install", "rollback"))
+    if command == "status":
+        for one in tool.installers.values():
+            print("\n".join(one.status_lines()))
         return 0
-    os.makedirs(tool.paths.opt, exist_ok=True)
+    for place in tool.paths.places.values():
+        os.makedirs(place.opt, exist_ok=True)
     os.makedirs(os.path.dirname(tool.paths.lock), exist_ok=True)
     with open(tool.paths.lock, "w") as lock:
         try:
@@ -105,15 +120,16 @@ def main(argv):
                   file=sys.stderr)
             return 1
         try:
-            if argv[1] == "recover":
+            if command == "recover":
                 tool.recover()
+                installer.settle(tool.paths)
                 return 0
-            if argv[1] == "rollback":
-                tool.rollback("os")
+            if command == "rollback":
+                tool.rollback(component, reset_jobs)
             else:
-                candidate = candidate_of(tool, argv[2], signature)
+                candidate = candidate_of(tool, args[1], signature)
                 tool.offer(candidate)
-                tool.start("os", candidate["revision"])
+                tool.start(candidate["component"], candidate["revision"], reset_jobs=reset_jobs)
             return 0 if wait_and_report(tool) else 1
         except Refused as why:
             print(f"refused: {why.reason}: {why}", file=sys.stderr)

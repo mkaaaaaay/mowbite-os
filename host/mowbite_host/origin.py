@@ -1,28 +1,24 @@
 """Where bundles come from: for now only the inbox folder on the mower (scp, then update.check).
 
-With a signed index.json (namespace mowbite-index; entries component, revision, serial, date, size, sha256, file,
-min_app) only its entries count and each file has to match its entry; without one every mowbite-<component>-*.tar.gz
-with its .sig is read itself. The inbox keeps at most MAX_PER_COMPONENT bundles newer than what runs, MAX_BYTES in all.
+With a signed index.json (namespace mowbite-index; entries component, revision, serial, date, size, sha256, file and
+the fields of FIELDS its bundle.json has) only its entries count and each file has to match its entry; without one
+every mowbite-<component>-*.tar.gz with its .sig is read itself. Of each component the inbox keeps at most
+MAX_PER_COMPONENT bundles newer than what is installed, MAX_BYTES in all. A bundle of a component this host does not
+know is no candidate and stays where it is.
 """
 import hashlib
 import json
 import os
 import shutil
-import stat
 
-from mowbite_host import Refused, bundle
+from mowbite_host import Refused, bundle, files
 
 INDEX = "index.json"
 MAX_INDEX = 1024 * 1024
 MAX_PER_COMPONENT = 2
 MAX_BYTES = 1024 * 1024 * 1024
-
-
-def _regular(path):
-    try:
-        return stat.S_ISREG(os.lstat(path).st_mode)
-    except OSError:
-        return False
+# What a candidate carries of its bundle.json to tell before the install whether it goes with the OS.
+FIELDS = ("min_app", "version", "api", "interface", "files_version")
 
 
 def _sha256(path):
@@ -31,6 +27,11 @@ def _sha256(path):
         while chunk := f.read(1 << 20):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+# The component a bundle file names: mowbite-<component>-<revision>.tar.gz.
+def _component(name):
+    return name[len("mowbite-"):].split("-", 1)[0]
 
 
 class Inbox:
@@ -45,7 +46,7 @@ class Inbox:
 
     def _index(self):
         path = os.path.join(self.folder, INDEX)
-        if not _regular(path):
+        if not files.regular(path):
             return None
         stage = self._stage("index")
         shutil.rmtree(stage, ignore_errors=True)
@@ -79,14 +80,14 @@ class Inbox:
         key = (name, info.st_size, info.st_mtime_ns)
         if key in self._read:
             return self._read[key]
-        component = name[len("mowbite-"):].split("-", 1)[0]
+        component = _component(name)
         stage = self._stage(name)
         try:
             staged = bundle.stage(path, path + ".sig", component, stage, self.paths.signers)
             meta = staged.meta
             candidate = {"component": component, "revision": meta["revision"], "serial": meta["serial"],
-                         "date": meta.get("date", meta["serial"]), "min_app": meta.get("min_app"),
-                         "size": info.st_size, "path": path}
+                         "date": meta.get("date", meta["serial"]), "size": info.st_size, "path": path,
+                         **{key: meta[key] for key in FIELDS if key in meta}}
         except Refused as why:
             print(f"inbox: {name} left out: {why}", flush=True)
             candidate = None
@@ -95,16 +96,18 @@ class Inbox:
         self._read[key] = candidate
         return candidate
 
-    # The candidates in the inbox: [{component, revision, serial, date, min_app, size, path, sha256?}].
+    # The candidates in the inbox: [{component, revision, serial, date, size, path, sha256?, fields of FIELDS}].
     def candidates(self):
         if not os.path.isdir(self.folder):
             return []
         indexed = self._index()
         if indexed is not None:
-            return [entry for entry in indexed if _regular(entry["path"])]
+            return [entry for entry in indexed
+                    if entry["component"] in bundle.MAX_BUNDLE and files.regular(entry["path"])]
         found = []
         names = [name for name in sorted(os.listdir(self.folder))
-                 if name.startswith("mowbite-") and name.endswith(".tar.gz") and _regular(os.path.join(self.folder, name))]
+                 if name.startswith("mowbite-") and name.endswith(".tar.gz") and
+                 _component(name) in bundle.MAX_BUNDLE and files.regular(os.path.join(self.folder, name))]
         # Only bundles still in the inbox stay remembered.
         self._read = {key: value for key, value in self._read.items() if key[0] in names}
         for name in names:
@@ -152,7 +155,7 @@ class Inbox:
                 drop.append(candidate)
         for candidate in drop:
             for path in (candidate["path"], candidate["path"] + ".sig"):
-                if _regular(path):
+                if files.regular(path):
                     os.remove(path)
             print(f"inbox: removed {os.path.basename(candidate['path'])}", flush=True)
         return keep

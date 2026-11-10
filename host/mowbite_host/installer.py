@@ -1,15 +1,22 @@
-"""Switching the installed OS: /opt/mowbite/<revision> with the links current and previous.
+"""Switching an installed component: <opt>/<revision> with the links current and previous, the OS under /opt/mowbite,
+the planner and the app in folders of their own.
 
 A power cut leaves current on the old or the new installation, never half; pending says that a switch has not been
 confirmed healthy, and recover goes back to the one before. Two installations are kept. From the stop of the old OS
 until the updater lets go, hold.json holds whichever OS runs.
+
+The OS brings a planner and an app along (<os>/planner, <os>/app). An own installation of them is used only while
+the link active names it: settle sets the link after every change of a current and takes it away when the own
+installation does not go with the OS or is not newer than the one the OS brings along. The readers (os-setup, the
+web server) follow active and else take what the OS brings along; without a current, back is that one as well.
 """
 import json
 import os
 import shutil
+import stat
 import time
 
-from mowbite_host import Refused, files, gate
+from mowbite_host import Refused, compat, files, gate
 
 HEALTH_WAIT = 240.0
 # After the first healthy answer the OS has to stay healthy this long (rule M5 of the updater contract).
@@ -26,6 +33,40 @@ def log(text):
     print(text, flush=True)
 
 
+def meta_of(place, revision):
+    return files.read_json(os.path.join(place.of(revision), "bundle.json")) if revision else None
+
+
+# bundle.json of the installed OS, {} without one.
+def os_meta(paths):
+    return meta_of(paths.os, files.link_target(paths.os.current)) or {}
+
+
+# Why the own installation at place is not the one to use, None when it is or when there is none.
+def skipped(paths, place):
+    revision = files.link_target(place.current)
+    if revision is None:
+        return None
+    return compat.skip_own(place.component, meta_of(place, revision) or {}, os_meta(paths))
+
+
+# active of the planner and the app: on their current while that one is to be used, else gone. Only the host writes
+# it, within pending and before the OS starts; the same files give the same links.
+def settle(paths):
+    for place in paths.places.values():
+        if not place.overlay:
+            continue
+        revision = files.link_target(place.current)
+        if revision and skipped(paths, place) is None:
+            if files.link_target(place.active) != revision:
+                files.set_link(place.active, revision)
+                log(f"{place.component}: active -> {revision}")
+        elif os.path.lexists(place.active):
+            files.remove(place.active)
+            files.sync_dir(place.opt)
+            log(f"{place.component}: no active, the one of the OS is used")
+
+
 class FilesOnly:
     """The probe without a broker: the files alone decide."""
 
@@ -36,6 +77,9 @@ class FilesOnly:
         return True, ""
 
     def settled(self):
+        return True, ""
+
+    def planner(self):
         return True, ""
 
 
@@ -94,6 +138,68 @@ class Health:
             time.sleep(self.every)
 
 
+class WithPlanner:
+    """Health of the OS for a switch of its planner: at the end the planner has to answer as well."""
+
+    def __init__(self, health):
+        self.health = health
+
+    def begin(self):
+        self.health.begin()
+
+    def wait_healthy(self, since):
+        ok, line = self.health.wait_healthy(since)
+        if ok:
+            answers, why = self.health.probe.planner()
+            if not answers:
+                return False, why
+        return ok, line
+
+
+class AppFiles:
+    """Health of the app, which nothing on the mower runs: the own installation current names has its page and the
+    version of its bundle, and the web server, another user, can read all of it. Without a current the app of the OS
+    is served."""
+
+    def __init__(self, place):
+        self.place = place
+
+    def begin(self):
+        pass
+
+    def wait_healthy(self, since):
+        revision = files.link_target(self.place.current)
+        if revision is None:
+            return True, "the app of the OS"
+        root = self.place.of(revision)
+        app = os.path.join(root, "app")
+        version = (files.read_json(os.path.join(app, "version.json")) or {}).get("version")
+        bundled = (meta_of(self.place, revision) or {}).get("version")
+        if version is None or version != bundled:
+            return False, f"version.json says {version}, the bundle {bundled}"
+        if not files.regular(os.path.join(app, "index.html")):
+            return False, "index.html is missing or no file"
+        closed = _closed_to_others(root, app)
+        if closed:
+            return False, f"not readable for the web server: {os.path.relpath(closed, root)}"
+        return True, f"app {version}"
+
+
+# The first of root and the folders and files under tree that others cannot read; None when they can read all.
+def _closed_to_others(root, tree):
+    def closed(path):
+        mode = os.lstat(path).st_mode
+        need = 0o005 if stat.S_ISDIR(mode) else 0o004
+        return not stat.S_ISLNK(mode) and mode & need != need
+    if closed(root) or closed(tree):
+        return root if closed(root) else tree
+    for folder, folders, names in os.walk(tree):
+        for name in folders + names:
+            if closed(os.path.join(folder, name)):
+                return os.path.join(folder, name)
+    return None
+
+
 # Health as the entry points use it; MOWBITE_UPDATE_HEALTH_WAIT and _STABLE (s) shorten it for tests.
 def health_of(paths, carrier, probe=None):
     return Health(paths, carrier, probe, wait=float(os.environ.get("MOWBITE_UPDATE_HEALTH_WAIT", HEALTH_WAIT)),
@@ -101,30 +207,43 @@ def health_of(paths, carrier, probe=None):
 
 
 class Installer:
-    def __init__(self, paths, carrier, health):
-        self.paths, self.carrier, self.health = paths, carrier, health
-        # False for a caller without the broker: it could not end the hold in the OS it started.
+    """The installations at place. carrier is what the switch stops and starts: the OS for itself and for its planner,
+    carrier.Nothing for the app. A revision of None is the installation the OS brings along (planner and app only)."""
+
+    def __init__(self, paths, place, carrier, health):
+        self.paths, self.place, self.carrier, self.health = paths, place, carrier, health
+        # False for a caller without the broker: it could not end the hold in the OS it started. False as well when
+        # the switch stops no OS.
         self.hold = True
 
     def current(self):
-        return files.link_target(self.paths.current)
+        return files.link_target(self.place.current)
 
     def previous(self):
-        return files.link_target(self.paths.previous)
+        return files.link_target(self.place.previous)
 
     def pending(self):
-        return files.read_json(self.paths.pending)
+        return files.read_json(self.place.pending)
 
     def meta_of(self, revision):
-        return files.read_json(os.path.join(self.paths.opt_of(revision), "bundle.json")) if revision else None
+        return meta_of(self.place, revision)
 
     # ran: whether the OS ran before the switch, so that a host started again after a cut starts it again.
     def _write_pending(self, to, before, ran):
-        files.write_json(self.paths.pending, {"to": to, "from": before or "", "ran": ran})
+        files.write_json(self.place.pending, {"to": to or "", "from": before or "", "ran": ran})
 
     def _clear_pending(self):
-        files.remove(self.paths.pending)
-        files.sync_dir(self.paths.opt)
+        files.remove(self.place.pending)
+        files.sync_dir(self.place.opt)
+
+    # current -> revision, or no current for None; then active of the planner and the app follows.
+    def _set_current(self, revision):
+        if revision:
+            files.set_link(self.place.current, revision)
+        else:
+            files.remove(self.place.current)
+            files.sync_dir(self.place.opt)
+        settle(self.paths)
 
     def _start(self):
         if not self.carrier.start():
@@ -156,8 +275,8 @@ class Installer:
             raise
         try:
             self._hold()
-            files.set_link(self.paths.current, revision)
-            log(f"current -> {revision}, starting")
+            self._set_current(revision)
+            log(f"{self.place.component}: current -> {revision or 'none'}, starting")
             since = time.time()
             ok, line = self._start()
             if ok is None:
@@ -166,7 +285,10 @@ class Installer:
             if ok:
                 log(f"healthy: {line}")
                 if before:
-                    files.set_link(self.paths.previous, before)
+                    files.set_link(self.place.previous, before)
+                elif self.previous() == revision:
+                    # Back from the one of the OS to the own one: nothing own lies before it.
+                    files.remove(self.place.previous)
                 self._clear_pending()
                 return True, line
         except Exception as error:
@@ -177,16 +299,16 @@ class Installer:
         self._back(before)
         return False, line
 
-    # Back to the installation before the switch, or off without one; a stop that fails does not keep current on the
-    # new one.
+    # Back to the installation before the switch; without one the OS stays off, the planner and the app are those of
+    # the OS again. A stop that fails does not keep current on the new one.
     def _back(self, before):
         try:
             self.carrier.stop()
         except Exception as error:  # noqa: BLE001 - going back goes on
             log(f"stop before going back: {type(error).__name__}: {error}")
-        if before:
-            files.set_link(self.paths.current, before)
-            log(f"back to {before}")
+        self._set_current(before)
+        if before or self.place.overlay:
+            log(f"back to {before or 'the one of the OS'}")
             try:
                 since = time.time()
                 back, back_line = self._start()
@@ -196,8 +318,6 @@ class Installer:
                 back, back_line = False, f"{type(error).__name__}: {error}"
             log(f"{'healthy' if back else 'NOT HEALTHY'} after going back: {back_line}")
         else:
-            files.remove(self.paths.current)
-            files.sync_dir(self.paths.opt)
             log("no installation before this one: the OS stays off")
         self._clear_pending()
 
@@ -207,7 +327,7 @@ class Installer:
     def recover(self, start_stopped=False):
         pending = self.pending()
         if pending is None:
-            if os.path.lexists(self.paths.pending):
+            if os.path.lexists(self.place.pending):
                 pending = {}
             else:
                 return None
@@ -215,14 +335,18 @@ class Installer:
         if was_active:
             self.carrier.stop()
         before = pending.get("from")
-        if before and os.path.isdir(self.paths.opt_of(before)):
-            files.set_link(self.paths.current, before)
-            log(f"unfinished update to {pending.get('to')}: back to {before}")
+        if not before or not os.path.isdir(self.place.of(before)):
+            before = None
+        self._set_current(before)
+        what = f"{self.place.component}: unfinished update to {pending.get('to') or 'the one of the OS'}"
+        if before:
+            log(f"{what}: back to {before}")
+        elif self.place.overlay:
+            log(f"{what} without an installation before it: back to the one of the OS")
         else:
-            files.remove(self.paths.current)
-            log(f"unfinished update to {pending.get('to')} without an installation before it: the OS stays off")
+            log(f"{what} without an installation before it: the OS stays off")
         self._clear_pending()
-        if before and (was_active or (start_stopped and pending.get("ran") is True)):
+        if (before or self.place.overlay) and (was_active or (start_stopped and pending.get("ran") is True)):
             self.carrier.start()
         return pending
 
@@ -230,8 +354,8 @@ class Installer:
     def prune(self):
         keep = {self.current(), self.previous()}
         keep.update((self.pending() or {}).values())
-        for name in os.listdir(self.paths.opt):
-            path = self.paths.opt_of(name)
+        for name in os.listdir(self.place.opt):
+            path = self.place.of(name)
             if name in ("current", "previous", "pending") or name in keep or os.path.islink(path):
                 continue
             if os.path.isdir(path):
@@ -241,19 +365,28 @@ class Installer:
             log(f"removed {name}")
 
     def status_lines(self):
-        lines = [f"current: {self.current() or '-'}", f"previous: {self.previous() or '-'}",
-                 f"service: {'active' if self.carrier.active() else 'inactive'}"]
-        if os.path.lexists(self.paths.pending):
-            lines.append(f"unfinished update: {json.dumps(self.pending())}")
-        if os.path.exists(self.paths.crash):
-            lines.append(f"crash record: {self.paths.crash}")
-        if os.path.lexists(self.paths.restart_hold):
-            lines.append(f"restart hold: {self.paths.restart_hold}")
+        name = self.place.component
+        lines = [f"{name} current: {self.current() or '-'}", f"{name} previous: {self.previous() or '-'}"]
+        if self.place.overlay:
+            why = skipped(self.paths, self.place)
+            lines.append(f"{name} in use: {'the one of the OS' if why or not self.current() else 'current'}"
+                         f"{f' ({why})' if why else ''}")
+        else:
+            lines.append(f"service: {'active' if self.carrier.active() else 'inactive'}")
+            if os.path.exists(self.paths.crash):
+                lines.append(f"crash record: {self.paths.crash}")
+            if os.path.lexists(self.paths.restart_hold):
+                lines.append(f"restart hold: {self.paths.restart_hold}")
+        if os.path.lexists(self.place.pending):
+            lines.append(f"{name} unfinished update: {json.dumps(self.pending())}")
         return lines
 
-
-def require_previous(installer):
-    previous = installer.previous()
-    if not previous or not os.path.isdir(installer.paths.opt_of(previous)):
+    # Where a rollback goes: the previous installation, or None for the one of the OS when an own one is installed
+    # with none before it.
+    def back_target(self):
+        previous = self.previous()
+        if previous and previous != self.current() and os.path.isdir(self.place.of(previous)):
+            return previous
+        if self.place.overlay and self.current():
+            return None
         raise Refused("NO_PREVIOUS", "no previous installation")
-    return previous

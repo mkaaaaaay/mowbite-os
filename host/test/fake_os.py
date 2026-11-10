@@ -3,6 +3,8 @@
 It writes os-session.json as the logic does, answers rpc.methods, system.info and system.hold on the broker and sends
 robot_state. Files in $MOWBITE_UPDATE_PREFIX/state steer it: os-state (the state it reports, IDLE without), slow-start
 (waits 2 s before it comes up), slow-stop (takes 1.5 s to stop); a file broken beside it makes it end at once with 3.
+Like os-setup it takes the planner /opt/mowbite-planner/active names, else its own, and answers planner.settings for
+it unless that planner holds a file silent.
 """
 import json
 import os
@@ -37,6 +39,11 @@ def write_json(path, value):
 
 
 REVISION = read(os.path.join(HERE, "revision"))
+try:
+    PLANNER = os.readlink(P + "/opt/mowbite-planner/active")
+except OSError:
+    PLANNER = None
+PLANNER_SILENT = PLANNER is not None and os.path.exists(f"{P}/opt/mowbite-planner/{PLANNER}/planner/silent")
 API = json.loads(read(os.path.join(HERE, "bundle.json"), "{}")).get("api")
 
 
@@ -64,6 +71,8 @@ def answer(client, userdata, message):
         elif seconds == 0 and os.path.exists(DATA + "/hold.json"):
             os.remove(DATA + "/hold.json")
         result = {"until": now + seconds if seconds > 0 else 0}
+    elif method == "planner.settings" and not PLANNER_SILENT:
+        result = {"settings": {}}
     else:
         return
     to = getattr(message.properties, "ResponseTopic", None) or "rpc/response"
@@ -94,7 +103,7 @@ def main():
     client.loop_start()
     state = read(STATE + "/os-state", "IDLE")
     session(False)
-    write_json(STATE + "/running.json", {"revision": REVISION, "pid": os.getpid()})
+    write_json(STATE + "/running.json", {"revision": REVISION, "pid": os.getpid(), "planner": PLANNER})
     while not stop.wait(0.5):
         if read(STATE + "/os-state", "IDLE") != state:
             state = read(STATE + "/os-state", "IDLE")

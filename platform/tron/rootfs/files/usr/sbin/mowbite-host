@@ -1,5 +1,6 @@
 #!/usr/bin/python3
-"""mowbite-host (mowbite-host.service): updates of MowBite OS over the app and how the OS is, beside the OS as root.
+"""mowbite-host (mowbite-host.service): updates of MowBite OS, its planner and its app over the app and how the OS is,
+beside the OS as root.
 
 It answers update.* and host.* on the broker of the OS, keeps mowbite/host/status and mowbite/update/status retained,
 looks for updates in the inbox every 6 h and on update.check, and installs at night when auto is on. Without the
@@ -52,7 +53,8 @@ def main():
                 return 0
             notify("WATCHDOG=1")
             time.sleep(1)
-    os.makedirs(where.opt, exist_ok=True)
+    for place in where.places.values():
+        os.makedirs(place.opt, exist_ok=True)
 
     host = None
     client, rpc, check = broker.attach(where, "mowbite-host", [("rpc/request", 1)],
@@ -63,6 +65,7 @@ def main():
     tool = updater.Updater(where, service_os, installer.health_of(where, service_os, check), origin.Inbox(where), rpc)
     check.api_of_running = tool.running_api
     tool.recover(start_stopped=True)
+    installer.settle(where)
     host = service.Host(where, tool, os_state.OsWatch(where, service_os, tool), service_os, client.publish)
     client.start()
     try:

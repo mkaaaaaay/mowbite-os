@@ -64,6 +64,14 @@ def write_new(path, text):
     sync_dir(os.path.dirname(path))
 
 
+# Whether path is a regular file itself, not a link to one.
+def regular(path):
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
 def remove(path):
     try:
         os.remove(path)

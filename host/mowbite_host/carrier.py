@@ -1,5 +1,6 @@
 """What runs the installed OS: systemd on the Tron, a process of its own for tests; the container of a compose stack
-comes later. The host only starts, stops, restarts and asks how it runs."""
+comes later. The host only starts, stops, restarts and asks how it runs. The planner runs inside the OS and has its
+carrier; nothing runs the app."""
 import os
 import signal
 import subprocess
@@ -41,6 +42,22 @@ class Systemd:
         result = self._systemctl("stop")
         if result.returncode != 0:
             raise Refused("BUSY", f"systemctl stop {self.service}: {result.stderr.strip()}")
+
+
+class Nothing:
+    """The carrier of a component nothing on the mower runs (the app: files a web server reads)."""
+
+    def active(self):
+        return False
+
+    def start(self):
+        return True
+
+    def show(self):
+        return "inactive", None, None
+
+    def stop(self):
+        pass
 
 
 def _start_time(pid):

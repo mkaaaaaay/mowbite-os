@@ -1,8 +1,8 @@
 """How the OS is, from systemd and its files only: os of mowbite/host/status.
 
-state: updating while the updater switches or checks; stopped (inactive by hand); down when it stays off after crashes
-(the container after its last restart, or systemd gave up); halted with the reason of the halt line; starting until
-the logic wrote its session after the start; then running.
+state: updating while the updater switches or checks the OS or its planner; stopped (inactive by hand); down when it
+stays off after crashes (the container after its last restart, or systemd gave up); halted with the reason of the halt
+line; starting until the logic wrote its session after the start; then running.
 """
 import os
 import time
@@ -31,7 +31,7 @@ class OsWatch:
         self._since = None
 
     def _base(self, active, active_since):
-        if self.updater.phase() in ("switching", "checking"):
+        if self.updater.os_switching():
             return "updating", None
         if active == "failed":
             return "down", "CRASH_LOOP"
