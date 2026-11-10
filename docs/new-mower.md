@@ -84,6 +84,14 @@ itself. A node of your own (lights, sound, camera) follows the same rule as the 
 callback of the driving chain (pose, safety, follower, logic), no `fsync` or network there; files that must last go
 through a thread of their own like `mowbite_hold::FileWriter`.
 
+Every node in the container calls `mowbite_watch::Attach(*this)` once, at the end of its constructor (before it
+starts a thread of its own); a test in `mowbite_bringup` checks it. Its executor thread then signs every 0.5 s; silent
+for 10 s (S2: 2 s), or not loaded 60 s after the start (`stack.py` passes the node list), and the watch ends the
+container: the way of a crash, with the node in `container_exit.json` and in UNEXPECTED_RESTART (NODE_STALLED). Keep
+callbacks short, so the limits can come down after measuring; a sign later than a quarter of the limit is logged.
+Limits are never parameters; `MOWBITE_WATCH_FACTOR` only lengthens them for sanitizer runs. A driver in its own
+process is outside this watch and stops the mower by its own timeouts.
+
 ## 5. Onto the mower
 
 - Docker Compose like the NX60i (`docker/mower/nx60i.compose.yaml`), or a native bundle on the mower's own rootfs like
@@ -154,6 +162,7 @@ is no common camera package yet.
 - [ ] Fake board, contract test passes
 - [ ] Geometry file and platform file, inherited values checked
 - [ ] Start file, driver restarts latched
+- [ ] Every node of your own in the container attached to the watch (`test_stack.py`)
 - [ ] Simulation: mowing, going home, docking; `app_interface_check`
 - [ ] Way onto the mower chosen, limits for logs and journal, data dir writable (a start works)
 - [ ] Safety measurement done, date set
