@@ -67,6 +67,9 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   config.encoder.bitrate_bps = static_cast<int>(declare_parameter("bitrate_kbps", config.encoder.bitrate_bps / 1000)) * 1000;
   config.temp_file = FindThermalZone("/sys/class/thermal", "soc-thermal");
   if (config.temp_file.empty()) RCLCPP_WARN(get_logger(), "No soc-thermal zone: no pause when hot");
+  // The platform decides it; the self-test waits for a standing mower with the blade off either way.
+  config.stream_while_mowing = declare_parameter("stream_while_mowing", config.stream_while_mowing);
+  if (config.stream_while_mowing) RCLCPP_WARN(get_logger(), "stream_while_mowing: the stream runs next to the blade");
   const std::string library = declare_parameter("encoder_library", DefaultEncoderLibrary());
 
   StereoCameraConfig camera;

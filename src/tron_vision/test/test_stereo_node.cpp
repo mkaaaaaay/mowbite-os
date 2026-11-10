@@ -111,7 +111,8 @@ class Spinner {
 // hw/status at 10 Hz as tron_mcu sends it, and once more at once when the blade changes.
 class Driver {
  public:
-  explicit Driver(rclcpp::Node& node) : pub_(node.create_publisher<HardwareStatus>("hw/status", 10)) {
+  explicit Driver(rclcpp::Node& node, bool blade = false)
+      : pub_(node.create_publisher<HardwareStatus>("hw/status", 10)), blade_(blade) {
     thread_ = std::thread([this] {
       while (running_) {
         if (sending_) Send();
@@ -201,8 +202,10 @@ struct Rig {
       camera.processes_using = nullptr;
     };
   }
-  std::shared_ptr<StereoNode> Make() {
-    return std::make_shared<StereoNode>(Options(dir.Path() + "/markers", port, FAKE_MPP_LIB), seams);
+  std::shared_ptr<StereoNode> Make(bool stream_while_mowing = false) {
+    rclcpp::NodeOptions options = Options(dir.Path() + "/markers", port, FAKE_MPP_LIB);
+    if (stream_while_mowing) options.append_parameter_override("stream_while_mowing", true);
+    return std::make_shared<StereoNode>(options, seams);
   }
   std::string Url(const std::string& rest = "") const {
     return "rtsp://127.0.0.1:" + std::to_string(port) + "/stereo" + rest;
@@ -250,8 +253,8 @@ TEST_F(StereoNodeTest, TopicsOfTheDesignOnly) {
   const auto infos = node->get_subscriptions_info_by_topic("/hw/status");
   ASSERT_EQ(infos.size(), 1U);
   EXPECT_EQ(infos[0].qos_profile().reliability(), rclcpp::ReliabilityPolicy::BestEffort);
-  // The blade lock is no setting.
-  EXPECT_FALSE(node->has_parameter("stream_while_mowing"));
+  // The blade lock holds unless the platform lifts it.
+  EXPECT_FALSE(node->get_parameter("stream_while_mowing").as_bool());
 }
 
 // One entry on hw/cameras, latched; without the media library the camera is not set up.
@@ -344,6 +347,49 @@ TEST_F(StereoNodeTest, BladeAndSilentDriverEndTheStream) {
   ASSERT_TRUE(spinner.WaitForCamera([](const Camera& m) { return !m.available; }, 3.0, &c));
   EXPECT_EQ(c.reason, Camera::REASON_DRIVER_MISSING);
   EXPECT_LT(std::chrono::duration<double>(Clock::now() - silent_at).count(), 1.0 + 0.2 + 0.3);
+}
+
+// Reads the stream for this long; the bytes that came, 0 once the server has closed.
+size_t ReadStream(const test::Client& client, std::chrono::milliseconds time) {
+  size_t bytes = 0;
+  const auto end = Clock::now() + time;
+  while (Clock::now() < end) {
+    const std::string got = client.Receive();
+    if (got == "<closed>") return 0;
+    bytes += got.size();
+  }
+  return bytes;
+}
+
+// stream_while_mowing: the stream goes on next to the blade and without hw/status; the self-test still waits for
+// the blade to stop.
+TEST_F(StereoNodeTest, StreamWhileMowingKeepsTheStream) {
+  Rig rig;
+  auto node = rig.Make(true);
+  Spinner spinner;
+  spinner.Add(node);
+  Driver driver(spinner.Listener(), true);
+  spinner.Start();
+  ASSERT_TRUE(
+      spinner.WaitForCamera([](const Camera& m) { return m.reason == Camera::REASON_BLADE_RUNNING; }, 5.0));
+  std::this_thread::sleep_for(500ms);
+  EXPECT_EQ(rig.device.ons, 0);
+
+  driver.Blade(false);
+  ASSERT_TRUE(spinner.WaitForCamera([](const Camera& m) { return m.available; }, 15.0));
+  EXPECT_EQ(rig.device.ons, 1);
+  test::Client client(rig.port);
+  ASSERT_TRUE(rig.Play(client));
+  for (int i = 0; i < 100 && rig.device.ons < 2; i++) std::this_thread::sleep_for(10ms);
+  ASSERT_EQ(rig.device.ons, 2);
+
+  driver.Blade(true);
+  EXPECT_GT(ReadStream(client, 1000ms), 0U);
+  // Longer than the age limit of hw/status.
+  driver.Stop();
+  EXPECT_GT(ReadStream(client, 2000ms), 0U);
+  EXPECT_EQ(rig.device.offs, 1);
+  EXPECT_TRUE(spinner.WaitForCamera([](const Camera& m) { return m.available; }, 0.1));
 }
 
 // A loop thread that hangs in the camera ends the process with the code of the watch.
