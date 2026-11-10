@@ -774,7 +774,8 @@ std::vector<ActionGroup> LogicCore::Actions() const {
   const Reason start = StartProblem();
   groups.push_back({kIdlePrefix,
                     {{"start_mowing", "Start Mowing", start.empty(), start.code},
-                     {"start_area_recording", "Start Area Recording", idle && !emergency_ && map_writable_ && !Held()},
+                     {"start_area_recording", "Start Area Recording",
+                      idle && !emergency_ && map_writable_ && HoldProblem().empty()},
                      {"reset_job", "Reset Job", idle && job_.Unfinished()}}});
   // Pause and continue take turns, like in OpenMower; continue waits for the emergency to be reset.
   const bool waits = (pause_ & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;

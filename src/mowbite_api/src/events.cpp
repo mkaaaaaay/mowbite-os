@@ -290,8 +290,8 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"STILL_TILTED", {"The mower is still tilted", {Number("angle", "deg", "Its tilt"), Limit("deg")}}},
       {"STOPPED", {"Stopped by the app or by the logic", {}}},
       {"STORAGE_NOT_WRITABLE",
-       {"A file of the restart hold cannot be written in data_dir: nothing starts until it can",
-        {Text("file", "The file in data_dir: os-session.json or restart-hold.json")},
+       {"A file in data_dir cannot be written: nothing starts until it can",
+        {Text("file", "The file in data_dir that cannot be written, as os-session.json")},
         {{"de",
           {"Speicher nicht beschreibbar",
            "Der Speicher des Mähers lässt sich nicht beschreiben. Starten ist gesperrt, bis das Schreiben wieder "

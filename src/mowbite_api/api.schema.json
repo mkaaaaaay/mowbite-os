@@ -1113,7 +1113,7 @@
           "x-unit": "m"
         },
         "file": {
-          "description": "The file in data_dir: os-session.json or restart-hold.json",
+          "description": "The file in data_dir that cannot be written, as os-session.json",
           "type": "string"
         },
         "free_length": {
@@ -1913,7 +1913,7 @@
           "type": "string"
         },
         "file": {
-          "description": "The file in data_dir: os-session.json or restart-hold.json",
+          "description": "The file in data_dir that cannot be written, as os-session.json",
           "type": "string"
         },
         "goal_x": {
@@ -2064,7 +2064,7 @@
           "x-unit": "m"
         },
         "file": {
-          "description": "The file in data_dir: os-session.json or restart-hold.json",
+          "description": "The file in data_dir that cannot be written, as os-session.json",
           "type": "string"
         },
         "id": {
@@ -2681,7 +2681,7 @@
           "x-unit": "m"
         },
         "file": {
-          "description": "The file in data_dir: os-session.json or restart-hold.json",
+          "description": "The file in data_dir that cannot be written, as os-session.json",
           "type": "string"
         },
         "id": {
@@ -3004,7 +3004,7 @@
           "x-unit": "m"
         },
         "file": {
-          "description": "The file in data_dir: os-session.json or restart-hold.json",
+          "description": "The file in data_dir that cannot be written, as os-session.json",
           "type": "string"
         },
         "id": {
@@ -3303,7 +3303,7 @@
           "type": "string"
         },
         "file": {
-          "description": "The file in data_dir: os-session.json or restart-hold.json",
+          "description": "The file in data_dir that cannot be written, as os-session.json",
           "type": "string"
         },
         "id": {
@@ -7317,7 +7317,7 @@
         "severity": "info"
       },
       "STORAGE_NOT_WRITABLE": {
-        "description": "A file of the restart hold cannot be written in data_dir: nothing starts until it can",
+        "description": "A file in data_dir cannot be written: nothing starts until it can",
         "fields": {
           "file": ""
         },
@@ -7680,7 +7680,7 @@
         "severity": "info"
       },
       "STORAGE_NOT_WRITABLE": {
-        "description": "A file of the restart hold cannot be written in data_dir: nothing starts until it can",
+        "description": "A file in data_dir cannot be written: nothing starts until it can",
         "fields": {
           "file": ""
         },
@@ -7854,7 +7854,7 @@
         "severity": "info"
       },
       "STORAGE_NOT_WRITABLE": {
-        "description": "A file of the restart hold cannot be written in data_dir: nothing starts until it can",
+        "description": "A file in data_dir cannot be written: nothing starts until it can",
         "fields": {
           "file": ""
         },
@@ -8149,7 +8149,7 @@
         "severity": "info"
       },
       "STORAGE_NOT_WRITABLE": {
-        "description": "A file of the restart hold cannot be written in data_dir: nothing starts until it can",
+        "description": "A file in data_dir cannot be written: nothing starts until it can",
         "fields": {
           "file": ""
         },
@@ -8313,7 +8313,7 @@
         "severity": "info"
       },
       "STORAGE_NOT_WRITABLE": {
-        "description": "A file of the restart hold cannot be written in data_dir: nothing starts until it can",
+        "description": "A file in data_dir cannot be written: nothing starts until it can",
         "fields": {
           "file": ""
         },
@@ -8695,7 +8695,7 @@
     },
     "STORAGE": {
       "STORAGE_NOT_WRITABLE": {
-        "description": "A file of the restart hold cannot be written in data_dir: nothing starts until it can",
+        "description": "A file in data_dir cannot be written: nothing starts until it can",
         "fields": {
           "file": ""
         },

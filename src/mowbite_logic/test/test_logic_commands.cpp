@@ -733,6 +733,9 @@ TEST(LogicStorage, NothingStartsFromIdleWhileTheSessionCannotBeWritten) {
       if (action.id == "start_mowing") {
         EXPECT_EQ(action.reason, "STORAGE_NOT_WRITABLE");
       }
+      if (action.id == "start_area_recording") {
+        EXPECT_FALSE(action.enabled);
+      }
     }
   }
   // Another file while it lasts is the same incident; written again, starts go.
