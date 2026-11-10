@@ -1,7 +1,9 @@
 #!/bin/bash
-# A bundle of MowBite OS for mowbite-update on the Tron from an arm64 image of docker/os.Dockerfile (a loaded image or
+# A bundle of MowBite OS for mowbite-host on the Tron from an arm64 image of docker/os.Dockerfile (a loaded image or
 # the .tar of docker save): <out dir>/mowbite-os-<revision>.tar.gz with <revision>/install, planner, tools (the safety
-# measurement for mowbite-measure), revision and bundle.json. Unsigned; the owner signs it: ssh-keygen -Y sign -f <key> -n mowbite-bundle <bundle>
+# measurement for mowbite-measure), revision and bundle.json (format 2). serial is the commit time of the image's
+# commit and base the rootfs version it needs, both read from this repo at that commit; api from the schema in the
+# image. Unsigned; the owner signs it with sign-bundle.sh.
 set -euo pipefail
 if [ $# -ne 2 ]; then
     echo "usage: $0 <image or image.tar> <out dir>" >&2
@@ -21,6 +23,12 @@ if [ "$arch" != arm64 ] || ! [[ $commit =~ ^[0-9a-f]{40}$ ]] || [ -z "$min_app" 
     exit 1
 fi
 revision=${commit:0:12}
+repo=$(dirname "$(readlink -f "$0")")
+if ! serial=$(git -C "$repo" show -s --format=%ct "$commit" 2> /dev/null) ||
+   ! base=$(git -C "$repo" show "$commit:platform/tron/rootfs/files/usr/lib/mowbite/base" 2> /dev/null); then
+    echo "commit $commit or its usr/lib/mowbite/base is not in the repo at $repo: fetch it first" >&2
+    exit 1
+fi
 work=$(mktemp -d "$out/.bundle.XXXXXX")
 container=
 cleanup() {
@@ -35,10 +43,14 @@ docker cp -q "$container:/opt/mowbite_planner" "$work/$revision/planner"
 docker cp -q "$container:/ws/tools" "$work/$revision/tools"
 docker cp -q "$container:/opt/runtime-packages.txt" "$work/runtime-packages.txt"
 printf '%s\n' "$commit" > "$work/$revision/revision"
-python3 -I - "$work/runtime-packages.txt" "$revision" "$commit" "$min_app" > "$work/$revision/bundle.json" <<'PY'
-import json, sys
-packages = sorted({line.strip() for line in open(sys.argv[1]) if line.strip()})
-print(json.dumps({"format": 1, "revision": sys.argv[2], "commit": sys.argv[3], "min_app": sys.argv[4],
+python3 -I - "$work" "$revision" "$commit" "$min_app" "$serial" "$base" > "$work/$revision/bundle.json" <<'PY'
+import json, sys, time
+work, revision, commit, min_app, serial, base = sys.argv[1:]
+packages = sorted({line.strip() for line in open(f"{work}/runtime-packages.txt") if line.strip()})
+with open(f"{work}/{revision}/install/mowbite_api/share/mowbite_api/api.schema.json") as f:
+    api = json.load(f)["x-api"]
+print(json.dumps({"format": 2, "component": "os", "revision": revision, "commit": commit, "serial": int(serial),
+                  "date": int(time.time()), "base": int(base.strip()), "api": api, "min_app": min_app,
                   "runtime_packages": packages}, indent=1))
 PY
 bundle="$out/mowbite-os-$revision.tar.gz"

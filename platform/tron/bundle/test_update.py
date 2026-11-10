@@ -19,6 +19,7 @@ import unittest
 HERE = os.path.dirname(os.path.realpath(__file__))
 TOOL = os.path.join(HERE, "..", "rootfs", "files", "usr", "sbin", "mowbite-update")
 HOST_LIB = os.path.join(HERE, "..", "..", "..", "host")
+SIGN = os.path.join(HERE, "sign-bundle.sh")
 
 # systemctl: the state of the service in $PREFIX/state/service. A start writes os-session.json of this boot as the
 # logic does, IDLE on the contacts (or $PREFIX/state/os-state), unless state/broken-<revision of current> is there; a
@@ -492,6 +493,36 @@ class UpdateTest(unittest.TestCase):
             fcntl.flock(lock, fcntl.LOCK_EX)
             self.assertEqual(self.install(self.bundle(A)), 1)
         self.assertIsNone(self.link("current"))
+
+    # sign-bundle.sh with its state, the signers of this mower and a gate folder in the test folder.
+    def sign(self, path, answer="y"):
+        signers = os.path.join(self.prefix, "etc/mowbite/allowed_signers")
+        env = {**self.env, "MOWBITE_SIGN_STATE": os.path.join(self.root, "sign"), "MOWBITE_SIGNERS": signers,
+               "MOWBITE_GATE": os.path.join(self.root, "gate")}
+        return subprocess.run([SIGN, path, self.key], input=answer + "\n", env=env, capture_output=True, text=True,
+                              timeout=30)
+
+    # It shows the bundle and the gate result, signs only on y and refuses a serial not newer than the last.
+    def test_sign_newer_serials_only(self):
+        os.makedirs(os.path.join(self.root, "gate"))
+        self.write(os.path.join(self.root, "gate", "bbbbbbb.json"),
+                   json.dumps({"ok": False, "updated": "now", "steps": {"chk:update": {"ok": False}}}))
+        path = self.bundle(B, serial=2000)
+        os.remove(path + ".sig")
+        self.assertEqual(self.sign(path, "n").returncode, 1)
+        self.assertFalse(os.path.exists(path + ".sig"))
+        signed = self.sign(path)
+        self.assertEqual(signed.returncode, 0, signed.stderr)
+        self.assertIn("test gate: NOT OK", signed.stdout)
+        self.assertIn("FAIL chk:update", signed.stdout)
+        self.assertEqual(self.install(path), 0)
+        # The same serial again, and an older one, are refused before any question.
+        older = self.bundle(A, serial=1999)
+        for again in (path, older):
+            refused = self.sign(again)
+            self.assertEqual(refused.returncode, 1)
+            self.assertIn("is not newer than 2000", refused.stderr)
+        self.assertIn("test gate: NO RESULT", self.sign(self.bundle(C, serial=2001), "n").stdout)
 
 
 A, B, C = "aaaaaaa", "bbbbbbb", "ccccccc"
