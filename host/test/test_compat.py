@@ -2,6 +2,7 @@
 
   python3 -I host/test/test_compat.py
 """
+import json
 import os
 import sys
 import unittest
@@ -94,6 +95,15 @@ class CompatTest(unittest.TestCase):
         self.assertEqual(set(updater.COMPONENTS), set(bundle.MAX_BUNDLE))
         self.assertEqual(sorted(updater.AUTO_ORDER), sorted(updater.COMPONENTS))
         self.assertEqual({c for c, (_, overlay) in paths.PLACES.items() if overlay}, set(compat.CHECKS))
+
+    # The app learns the components and the reasons of the host from the catalog of the OS.
+    def test_the_catalog_names_them(self):
+        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "src", "mowbite_api",
+                               "api.schema.json")) as f:
+            schema = json.load(f)
+        enum = schema["$defs"]["update.start.params"]["properties"]["component"]["enum"]
+        self.assertEqual(enum, list(updater.COMPONENTS))
+        self.assertLessEqual(set(compat.EXPLAIN), set(schema["x-reasons"]["UPDATE"]))
 
 
 if __name__ == "__main__":

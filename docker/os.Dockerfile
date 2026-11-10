@@ -77,19 +77,6 @@ RUN . /opt/ros/$ROS_DISTRO/setup.sh && . /opt/mowbite_planner/setup.sh && cd /ws
  && if [ -d /ws/install/mowbite_bringup ]; then \
       python3 /ws/install/mowbite_bringup/share/mowbite_bringup/launch/data_store.py --check-planner; fi
 
-# The app it brings along: MowBite-web.zip of the build context app, of APP_VERSION with APP_SHA256, unpacked and
-# checked by host/bundle/app_export.py against docker/min_app and the api of this build; without APP_VERSION none.
-ARG APP_VERSION=
-ARG APP_SHA256=
-RUN --mount=type=bind,from=app,target=/src/app --mount=type=bind,source=host,target=/src/host \
-    --mount=type=bind,source=docker/min_app,target=/tmp/min_app \
-    if [ -z "$APP_VERSION" ]; then mkdir /opt/mowbite_app; \
-    elif [ -z "$APP_SHA256" ]; then echo "APP_VERSION needs APP_SHA256" >&2; exit 1; \
-    else python3 -I -B /src/host/bundle/app_export.py export /src/app/MowBite-web.zip /opt/mowbite_app \
-           --sha256 "$APP_SHA256" --version "$APP_VERSION" --min-app "$(cat /tmp/min_app)" \
-           --api "$(python3 -c 'import json; print(json.load(open("/ws/install/mowbite_api/share/mowbite_api/api.schema.json"))["x-api"])')"; \
-    fi
-
 # Runtime packages of all installed packages: ROS keys by name, other keys mapped here, an unknown key stops the build.
 # Each package directory on its own: rosdep skips the install bases, colcon marks them with COLCON_IGNORE.
 RUN rosdep keys --from-paths /ws/install/*/ /opt/mowbite_planner/*/ --ignore-src -t exec | sort -u > /tmp/keys \
@@ -109,13 +96,24 @@ RUN rosdep keys --from-paths /ws/install/*/ /opt/mowbite_planner/*/ --ignore-src
     done > /opt/runtime-packages.txt \
  && cat /opt/runtime-packages.txt
 
+# The app it brings along: MowBite-web.zip of the build context app, of APP_VERSION with APP_SHA256, unpacked and
+# checked by host/bundle/app_export.py against docker/min_app and the api of this build; without APP_VERSION none.
+ARG APP_VERSION=
+ARG APP_SHA256=
+RUN --mount=type=bind,from=app,target=/src/app --mount=type=bind,source=host,target=/src/host \
+    --mount=type=bind,source=docker/min_app,target=/tmp/min_app \
+    if [ -z "$APP_VERSION" ]; then mkdir /opt/mowbite_app; \
+    else python3 -I -B /src/host/bundle/app_export.py export /src/app/MowBite-web.zip /opt/mowbite_app \
+           --sha256 "${APP_SHA256:?APP_VERSION needs APP_SHA256}" --version "$APP_VERSION" \
+           --min-app "$(cat /tmp/min_app)" --api-schema /ws/install/mowbite_api/share/mowbite_api/api.schema.json; \
+    fi
+
 FROM ros:${ROS_DISTRO}-ros-core
 COPY --from=build /opt/runtime-packages.txt /opt/runtime-packages.txt
 RUN apt-get update \
  && apt-get install -y --no-install-recommends $(cat /opt/runtime-packages.txt) \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /opt/mowbite_planner /opt/mowbite_planner
-COPY --from=build /opt/mowbite_app /opt/mowbite_app
 COPY --from=build /ws/install /ws/install
 # Outside the packages, but in the install tree that the bundle takes along.
 COPY --from=mpp /opt/mpp /ws/install/mpp
@@ -134,6 +132,8 @@ RUN . /ws/install/setup.sh \
     done > /tmp/missing \
  && if [ -s /tmp/missing ]; then cat /tmp/missing; exit 1; fi \
  && rm /tmp/missing
+# No machine code, so after the library check: a new app leaves the layers above cached.
+COPY --from=build /opt/mowbite_app /opt/mowbite_app
 ARG SOURCE_COMMIT=unknown
 # The oldest MowBite app that handles this OS (label mowbite.min_app for the updater): the value of docker/min_app,
 # X.Y.Z or X.Y.Z-beta.N. No image without it; checked here, so that the layers above stay cached.

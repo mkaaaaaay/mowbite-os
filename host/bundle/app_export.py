@@ -1,18 +1,15 @@
 """The web export of the MowBite app (MowBite-web.zip of its release) as the OS image and an app bundle carry it.
 
-  app_export.py export <zip> <out dir> [--sha256 <hex>] [--version <v>] [--min-app <version>] [--api <n>]
+  app_export.py export <zip> <out dir> [--sha256 <hex>] [--version <v>] [--min-app <version>] [--api-schema <file>]
       unpacks the zip into the new folder <out dir>, readable by everyone, with a .gz copy of each text file worth
       it; refused: a zip of another sha256, names outside the folder, links, .gz files, more than MAX_FILES files or
       MAX_BYTES, an export without the files of NEEDS, app.json not as the app writes it, version.json or --version
-      of another version, a version older than min_app or an api range without api
+      of another version, a version older than min_app or an api range without x-api of the schema
   app_export.py meta <dir>
       prints what bundle.json takes from app.json of an export: version, api {min, max}, commit and serial
-  app_export.py probe <zip> [--version <v>] [--api-min <n>] [--api-max <n>] [--serial <n>]
-      writes a small export as a zip, for tests and image builds before an app with app.json
 """
 import argparse
 import gzip
-import hashlib
 import json
 import os
 import re
@@ -23,6 +20,7 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 from mowbite_host.compat import version_tuple, whole  # noqa: E402
+from mowbite_host.origin import sha256  # noqa: E402
 
 MAX_FILES = 5000
 MAX_BYTES = 100 * 1024 * 1024
@@ -36,14 +34,6 @@ COMMIT = re.compile(r"[0-9a-f]{40}")
 
 class Refused(Exception):
     pass
-
-
-def sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 # The relative path of a zip entry, refused when it leaves the folder or is no plain file or folder.
@@ -164,18 +154,6 @@ def export(zip_path, out, sha=None, version=None, min_app=None, api=None):
     return fields
 
 
-def probe(zip_path, version="1.5.0", api_min=15, api_max=15, serial=1700000000):
-    app = {"schema": 1, "owner": OWNER, "version": version, "api": {"min": api_min, "max": api_max},
-           "commit": hashlib.sha1(version.encode()).hexdigest(), "serial": serial}
-    page = "<!doctype html><title>MowBite probe</title>" + "<p>probe export</p>" * 40
-    entries = {"index.html": page, "404.html": "<!doctype html><title>not found</title>",
-               "guide/index.html": page, "version.json": json.dumps({"version": version, "level": 1}),
-               "app.json": json.dumps(app), "_next/static/chunks/main.js": "console.log('probe');" * 60}
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        for name, text in entries.items():
-            archive.writestr(name, text)
-
-
 def main(argv):
     parser = argparse.ArgumentParser(prog="app_export.py", usage=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -185,24 +163,20 @@ def main(argv):
     one.add_argument("--sha256")
     one.add_argument("--version")
     one.add_argument("--min-app")
-    one.add_argument("--api", type=int)
+    one.add_argument("--api-schema")
     commands.add_parser("meta").add_argument("dir")
-    test = commands.add_parser("probe")
-    test.add_argument("zip")
-    test.add_argument("--version", default="1.5.0")
-    test.add_argument("--api-min", type=int, default=15)
-    test.add_argument("--api-max", type=int, default=15)
-    test.add_argument("--serial", type=int, default=1700000000)
     args = parser.parse_args(argv)
     try:
         if args.command == "export":
-            fields = export(args.zip, args.out, args.sha256, args.version, args.min_app, args.api)
+            api = None
+            if args.api_schema:
+                with open(args.api_schema) as f:
+                    api = json.load(f)["x-api"]
+            fields = export(args.zip, args.out, args.sha256, args.version, args.min_app, api)
             print(f"app {fields['version']}, api {fields['api']['min']}..{fields['api']['max']}, "
                   f"commit {fields['commit'][:12]} in {args.out}")
-        elif args.command == "meta":
-            print(json.dumps(meta(args.dir)))
         else:
-            probe(args.zip, args.version, args.api_min, args.api_max, args.serial)
+            print(json.dumps(meta(args.dir)))
     except (Refused, zipfile.BadZipFile, OSError) as why:
         print(f"refused: {why}", file=sys.stderr)
         return 1

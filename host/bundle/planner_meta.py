@@ -1,8 +1,8 @@
 """What bundle.json says of a colcon installation of mowbite_planner: version from its package.xml, interface,
 files_version and requires {name: oldest version} from contract.json in its python package (else in its share folder).
 
-  planner_meta.py <install base> [--contract]
-      prints them as JSON; without contract.json only version, with --contract that is refused
+  planner_meta.py <install base>
+      prints them as JSON, refused without contract.json
 """
 import glob
 import json
@@ -55,11 +55,11 @@ def read(base, contract=False):
 
 
 def main(argv):
-    if len(argv) not in (1, 2) or argv[1:] not in ([], ["--contract"]):
+    if len(argv) != 1:
         print(__doc__, file=sys.stderr)
         return 2
     try:
-        print(json.dumps(read(argv[0], contract=len(argv) == 2)))
+        print(json.dumps(read(argv[0], contract=True)))
     except Refused as why:
         print(f"refused: {why}", file=sys.stderr)
         return 1

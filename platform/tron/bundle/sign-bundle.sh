@@ -14,12 +14,13 @@ fi
 bundle=$1
 key=$2
 here=$(dirname "$(readlink -f "$0")")
+source "$here/pack.sh"
 signers=${MOWBITE_SIGNERS:-$here/../rootfs/files/etc/mowbite/allowed_signers}
 state=${MOWBITE_SIGN_STATE:-$HOME/.local/state/mowbite-sign}
 
 # component revision commit serial namespace on the first line, then the lines to show; the checks of mowbite-host.
 read_meta() {
-    python3 -I - "$here/../../../host" "$1" <<'PY'
+    python3 -I - "$HOST_LIB" "$1" <<'PY'
 import sys, time
 sys.path.insert(0, sys.argv[1])
 from mowbite_host import Refused, bundle

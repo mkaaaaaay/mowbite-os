@@ -21,7 +21,7 @@ MAX_BYTES = 1024 * 1024 * 1024
 FIELDS = ("min_app", "version", "api", "interface", "files_version")
 
 
-def _sha256(path):
+def sha256(path):
     digest = hashlib.sha256()
     with open(path, "rb") as f:
         while chunk := f.read(1 << 20):
@@ -126,7 +126,7 @@ class Inbox:
                               self.paths.signers)
         if "sha256" in candidate:
             if (os.path.getsize(staged.path) != candidate["size"] or
-                    _sha256(staged.path) != candidate["sha256"]):
+                    sha256(staged.path) != candidate["sha256"]):
                 raise Refused("BAD_BUNDLE", f"{candidate['path']} is not the file its index names")
         if (staged.revision, staged.serial) != (candidate["revision"], candidate["serial"]):
             raise Refused("BAD_BUNDLE", f"{candidate['path']} holds {staged.revision} serial {staged.serial}, "

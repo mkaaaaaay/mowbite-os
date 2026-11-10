@@ -25,13 +25,13 @@ if [ "$arch" != arm64 ] || ! [[ $commit =~ ^[0-9a-f]{40}$ ]] || [ -z "$min_app" 
     exit 1
 fi
 revision=${commit:0:12}
-repo=$(dirname "$(readlink -f "$0")")
-if ! serial=$(git -C "$repo" show -s --format=%ct "$commit" 2> /dev/null) ||
-   ! base=$(git -C "$repo" show "$commit:platform/tron/rootfs/files/usr/lib/mowbite/base" 2> /dev/null); then
-    echo "commit $commit or its usr/lib/mowbite/base is not in the repo at $repo: fetch it first" >&2
+here=$(dirname "$(readlink -f "$0")")
+if ! serial=$(git -C "$here" show -s --format=%ct "$commit" 2> /dev/null) ||
+   ! base=$(git -C "$here" show "$commit:platform/tron/rootfs/files/usr/lib/mowbite/base" 2> /dev/null); then
+    echo "commit $commit or its usr/lib/mowbite/base is not in the repo at $here: fetch it first" >&2
     exit 1
 fi
-source "$repo/pack.sh"
+source "$here/pack.sh"
 work=$(mktemp -d "$out/.bundle.XXXXXX")
 container=
 cleanup() {
@@ -45,14 +45,13 @@ docker cp -q "$container:/ws/install" "$work/$revision/install"
 docker cp -q "$container:/opt/mowbite_planner" "$work/$revision/planner"
 docker cp -q "$container:/opt/mowbite_app" "$work/app"
 if [ -f "$work/app/app.json" ]; then
-    chmod -R a+rX "$work/app"
     mv "$work/app" "$work/$revision/app"
 fi
 docker cp -q "$container:/ws/tools" "$work/$revision/tools"
 docker cp -q "$container:/opt/runtime-packages.txt" "$work/runtime-packages.txt"
 printf '%s\n' "$commit" > "$work/$revision/revision"
-python3 -I - "$HOST_LIB" "$work" "$revision" "$commit" "$min_app" "$serial" "$base" > "$work/$revision/bundle.json" <<'PY'
-import json, os, sys, time
+fields=$(python3 -I - "$HOST_LIB" "$work" "$revision" "$commit" "$min_app" "$serial" "$base" <<'PY'
+import json, os, sys
 host, work, revision, commit, min_app, serial, base = sys.argv[1:]
 sys.path.insert(0, os.path.join(host, "bundle"))
 import app_export, planner_meta
@@ -62,8 +61,7 @@ with open(f"{tree}/install/mowbite_api/share/mowbite_api/api.schema.json") as f:
     api = json.load(f)["x-api"]
 with open(f"{tree}/install/mowbite_bridge/share/mowbite_bridge/data_schema.json") as f:
     table = json.load(f)
-meta = {"format": 2, "component": "os", "revision": revision, "commit": commit, "serial": int(serial),
-        "date": int(time.time()), "base": int(base.strip()), "api": api, "min_app": min_app,
+meta = {"commit": commit, "serial": int(serial), "base": int(base.strip()), "api": api, "min_app": min_app,
         "runtime_packages": packages,
         "planner_files_version": table["planner_files_version"][str(table["schema"])]}
 planner = planner_meta.read(f"{tree}/planner")
@@ -76,6 +74,8 @@ meta["bundled"] = {"planner": {"revision": source["commit"][:12], "version": pla
 if os.path.isdir(f"{tree}/app"):
     app = app_export.meta(f"{tree}/app")
     meta["bundled"]["app"] = {"revision": app["commit"][:12], "version": app["version"], "serial": app["serial"]}
-print(json.dumps(meta, indent=1))
+print(json.dumps(meta))
 PY
-pack "$work" "$revision" os "$out"
+)
+bundle_json os "$fields" > "$work/$revision/bundle.json"
+pack "$work/$revision" "$out"

@@ -22,8 +22,7 @@ BUNDLED = "/opt/mowbite/current/app"
 FALLBACK = ("/opt/mowbite-app/current/app", "/opt/mowbite-app/previous/app", BUNDLED,
             "/opt/mowbite/previous/app")
 STATIC = "_next/static/"
-# Read by pages of other origins (the Android app, the page of another mower): which app runs, and the 404 of
-# /cgi-bin/ that says this is no OpenMower container. Only these answers carry Access-Control-Allow-Origin.
+# Answers that pages of other origins may read, besides /cgi-bin/*: which app runs.
 SHARED = ("/app.json", "/version.json")
 TIMEOUT = 30
 # Below TasksMax of the unit; further connections wait in the backlog.
@@ -48,11 +47,6 @@ def regular_file(root, rel):
     return path if path.startswith(root + os.sep) else None
 
 
-def shared(target):
-    path = urllib.parse.urlsplit(target).path
-    return path in SHARED or path == "/cgi-bin" or path.startswith("/cgi-bin/")
-
-
 def accepts_gzip(header):
     for part in (header or "").split(","):
         token, *params = [p.strip() for p in part.split(";")]
@@ -73,6 +67,8 @@ class Handler(BaseHTTPRequestHandler):
     # Head and a small body leave in one packet; handle_one_request flushes after each request.
     wbufsize = CHUNK
     prefix = ""
+    # Access-Control-Allow-Origin on the answer to this request.
+    shared = False
 
     def log_message(self, format, *args):
         pass
@@ -89,6 +85,7 @@ class Handler(BaseHTTPRequestHandler):
     do_HEAD = do_GET
 
     def not_allowed(self):
+        self.shared = False
         self.reply(405, "Only GET and HEAD.\n", {"Allow": "GET, HEAD"})
 
     def root(self):
@@ -111,6 +108,7 @@ class Handler(BaseHTTPRequestHandler):
         except UnicodeDecodeError:
             path = ""
         parts = path.split("/")[1:]
+        self.shared = path in SHARED or parts[:1] == ["cgi-bin"]
         root = self.root()
         if (not path.startswith("/") or "\0" in path or any(p in (".", "..") for p in parts) or "" in parts[:-1]
                 or parts[0] == "cgi-bin"):
@@ -169,7 +167,7 @@ class Handler(BaseHTTPRequestHandler):
     def head(self, status, headers):
         self.send_response(status)
         self.send_header("X-Content-Type-Options", "nosniff")
-        if self.command in ("GET", "HEAD") and shared(self.path):
+        if self.shared:
             self.send_header("Access-Control-Allow-Origin", "*")
         for key, value in headers.items():
             self.send_header(key, value)

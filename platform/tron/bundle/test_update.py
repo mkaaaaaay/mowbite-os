@@ -70,6 +70,19 @@ export MOWBITE_OS_REVISION
 """
 
 
+# A small web export of the app as a zip, as the release of the app has it.
+def probe(zip_path, version="1.5.0", api_min=15, api_max=15, serial=1700000000):
+    app = {"schema": 1, "owner": app_export.OWNER, "version": version, "api": {"min": api_min, "max": api_max},
+           "commit": "%040x" % serial, "serial": serial}
+    page = "<!doctype html><title>MowBite probe</title>" + "<p>probe export</p>" * 40
+    entries = {"index.html": page, "404.html": "<!doctype html><title>not found</title>",
+               "guide/index.html": page, "version.json": json.dumps({"version": version, "level": 1}),
+               "app.json": json.dumps(app), "_next/static/chunks/main.js": "console.log('probe');" * 60}
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, text in entries.items():
+            archive.writestr(name, text)
+
+
 # The tool has no .py name; its bytecode would land in files/ of the rootfs.
 def load_tool():
     sys.dont_write_bytecode = True
@@ -273,7 +286,7 @@ class UpdateTest(unittest.TestCase):
         out = os.path.join(self.root, "out")
         os.makedirs(out)
         zip_path = os.path.join(self.root, "MowBite-web.zip")
-        app_export.probe(zip_path, version="1.5.0", api_min=14, api_max=15)
+        probe(zip_path, version="1.5.0", api_min=14, api_max=15)
         made = subprocess.run([MAKE_APP, zip_path, out], capture_output=True, text=True, timeout=60)
         self.assertEqual(made.returncode, 0, made.stderr)
         path = made.stdout.splitlines()[-1].split()[0]
@@ -663,7 +676,7 @@ class BundleToolsTest(unittest.TestCase):
     # The probe export with entries replaced or added, and links.
     def zip(self, entries, links=()):
         path = os.path.join(self.root, "web.zip")
-        app_export.probe(path)
+        probe(path)
         with zipfile.ZipFile(path) as archive:
             files = {name: archive.read(name) for name in archive.namelist()}
         with zipfile.ZipFile(path, "w") as archive:
@@ -688,7 +701,7 @@ class BundleToolsTest(unittest.TestCase):
                 finally:
                     self.assertFalse(os.path.exists(out))
         good = os.path.join(self.root, "good.zip")
-        app_export.probe(good, version="1.5.0", api_min=14, api_max=15)
+        probe(good, version="1.5.0", api_min=14, api_max=15)
         for checks in ({"sha": "0" * 64}, {"version": "1.6.0"}, {"min_app": "1.6.0"}, {"api": 16}, {"api": 13}):
             with self.subTest(checks), self.assertRaises(app_export.Refused):
                 app_export.export(good, os.path.join(self.root, "out"), **checks)
