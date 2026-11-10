@@ -63,8 +63,8 @@ std::string CheckpointText(const JobProgress& p) {
 }
 
 std::optional<JobProgress> ParseCheckpoint(const std::string& text) {
+  // Text that is no JSON object throws at the first key.
   const json j = json::parse(text, nullptr, false);
-  if (j.is_discarded() || !j.is_object()) return std::nullopt;
   JobProgress p;
   try {
     if (j.at("version").get<int>() != kCheckpointVersion) return std::nullopt;

@@ -13,11 +13,10 @@ void LogicCore::SetUnwritableFile(const std::string& file) {
   const bool begins = unwritable_file_.empty();
   unwritable_file_ = file;
   SetDue<ActionsChanged>(true);
-  if (file.empty()) {
-    Notify("data_dir can be written again: starts are allowed");
+  if (!begins) {
+    if (file.empty()) Notify("data_dir can be written again: starts are allowed");
     return;
   }
-  if (!begins) return;
   json details = json::object();
   PutReason(&details, "STORAGE", StorageProblem());
   AddEvent("STORAGE", std::move(details));
@@ -27,6 +26,7 @@ void LogicCore::AbandonStart(const std::string& file) {
   SetUnwritableFile(file);
   const Reason why = StorageProblem();
   switch (state_) {
+    case State::kIdle: return;
     case State::kMowing:
       RefuseStart(why);
       SetState(State::kIdle);
@@ -58,10 +58,7 @@ void LogicCore::AbandonStart(const std::string& file) {
       PutReason(&details, "RECORDING_REFUSED", why);
       AddEvent("RECORDING_REFUSED", std::move(details));
       SetState(State::kIdle);
-      return;
     }
-    case State::kIdle:
-    default: return;
   }
 }
 

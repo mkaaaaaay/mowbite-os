@@ -744,7 +744,11 @@ TEST(LogicStorage, NothingStartsFromIdleWhileTheSessionCannotBeWritten) {
   EXPECT_EQ(core.StartProblem().fields.value("file", ""), "restart-hold.json");
   core.SetUnwritableFile("");
   EXPECT_TRUE(core.TakeEvents().empty());
+  EXPECT_EQ(core.TakeNotices(), std::vector<std::string>{"data_dir can be written again: starts are allowed"});
   EXPECT_TRUE(core.TakeActionsChanged());
+  // Told again what it knows: nothing new.
+  core.SetUnwritableFile("");
+  EXPECT_TRUE(core.TakeNotices().empty());
   EXPECT_TRUE(core.StartProblem().empty()) << core.StartProblem().message;
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
   EXPECT_TRUE(core.Mowing());
@@ -794,7 +798,9 @@ TEST(LogicStorage, AStartWhoseRecordFailedEndsAtOnce) {
     core.TakeUndockPath();
     core.AbandonStart("os-session.json");
     const auto events = core.TakeEvents();
+    EXPECT_EQ(TypesOf(events), (std::vector<std::string>{"STORAGE", "MOWING_REFUSED", "STATE"}));
     EXPECT_EQ(ReasonOf(events, "MOWING_REFUSED"), "STORAGE_NOT_WRITABLE");
+    EXPECT_FALSE(core.TakeDriveCancel().has_value());
     EXPECT_TRUE(core.Idle());
     EXPECT_FALSE(core.Undocking());
     EXPECT_FALSE(core.TakeUndockPath().has_value());
@@ -831,6 +837,7 @@ TEST(LogicStorage, AStartWhoseRecordFailedEndsAtOnce) {
     const auto events = core.TakeEvents();
     EXPECT_EQ(TypesOf(events), (std::vector<std::string>{"STORAGE", "DRIVE_REFUSED", "DRIVE", "STATE"}));
     EXPECT_EQ(events[2].details["phase"], "end");
+    EXPECT_EQ(events[2].details["arrived"], false);
     EXPECT_EQ(events[2].details["reason"], "STORAGE_NOT_WRITABLE");
     EXPECT_EQ(core.TakeDriveCancel().value_or(Reason()).code, "STORAGE_NOT_WRITABLE");
     EXPECT_TRUE(core.Idle());
@@ -845,14 +852,18 @@ TEST(LogicStorage, AStartWhoseRecordFailedEndsAtOnce) {
     ASSERT_TRUE(core.Docking());
     Settle(core);
     core.AbandonStart("os-session.json");
-    EXPECT_EQ(ReasonOf(core.TakeEvents(), "DRIVE_REFUSED"), "STORAGE_NOT_WRITABLE");
+    const auto events = core.TakeEvents();
+    EXPECT_EQ(TypesOf(events), (std::vector<std::string>{"STORAGE", "DRIVE_REFUSED", "STATE"}));
+    EXPECT_EQ(ReasonOf(events, "DRIVE_REFUSED"), "STORAGE_NOT_WRITABLE");
     EXPECT_TRUE(core.Idle());
     EXPECT_FALSE(core.TakeDockingLeg().has_value());
+    EXPECT_FALSE(core.TakeCalibrationCancel());
   }
   {
     TestCore core = Recording();
     core.AbandonStart("os-session.json");
     const auto events = core.TakeEvents();
+    EXPECT_EQ(TypesOf(events), (std::vector<std::string>{"STORAGE", "RECORDING_REFUSED", "STATE"}));
     EXPECT_EQ(ReasonOf(events, "RECORDING_REFUSED"), "STORAGE_NOT_WRITABLE");
     EXPECT_TRUE(core.Idle());
     EXPECT_FALSE(core.OnTeleop(0.1, 0.0, 100.0).has_value());

@@ -43,6 +43,7 @@ RX = os.path.join(WORK, "rx.jsonl")
 DATA = os.path.join(WORK, "data")
 RESTART_HOLD = os.path.join(DATA, "restart-hold.json")
 SESSION = os.path.join(DATA, "os-session.json")
+HISTORY = os.path.join(DATA, "event_history")
 UNEXPECTED_RESTART = HardwareStatus.REASON_UNEXPECTED_RESTART
 CONFIG = os.path.join(WORK, "crash.yaml")
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -229,6 +230,15 @@ class Probe:
         self.node.destroy_node()
 
 
+def history(type_):
+    """The events of that type the bridge kept in its history, which hears them also before the probe does."""
+    out = []
+    for name in sorted(os.listdir(HISTORY)) if os.path.isdir(HISTORY) else []:
+        with open(os.path.join(HISTORY, name)) as f:
+            out += [e for e in map(json.loads, f) if e.get("type") == type_]
+    return out
+
+
 def container_pid(proc_info):
     """The pid of the container that runs now; tron.launch.py starts a new one after each crash."""
     for action in proc_info.processes():
@@ -334,7 +344,9 @@ class TestStackCrash(unittest.TestCase):
         with open(SESSION) as f:
             session = json.load(f)
         self.assertEqual((session["state"], session["clean"]), ("MOWING", False), session)
-        TestStackCrash.storage_events = len([e for e in p.events if e["type"] == "STORAGE"])
+        heard = len([e for e in p.events if e["type"] == "STORAGE"])
+        self.assertTrue(p.wait(lambda: len(history("STORAGE")) == heard, 5), "STORAGE not in the history")
+        TestStackCrash.storage_events = len(history("STORAGE"))
 
     def test_03_without_the_container_the_driver_stops_mower_and_blade(self, proc_info):
         p = self.probe
@@ -407,7 +419,7 @@ class TestStackCrash(unittest.TestCase):
                         p.robot)
         self.assertFalse(os.path.exists(RESTART_HOLD))
         self.assertTrue(p.logged("Restart hold in memory until it can be written", 5))
-        storage = p.wait(lambda: [e for e in p.events if e["type"] == "STORAGE"][TestStackCrash.storage_events:], 10)
+        storage = p.wait(lambda: history("STORAGE")[TestStackCrash.storage_events:], 10)
         self.assertEqual(storage[0]["file"] if storage else None, "os-session.json", storage)
         again = sum("data_dir can be written again" in line for line in p.logs)
         os.rmdir(SESSION + ".tmp")

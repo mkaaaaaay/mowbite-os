@@ -135,6 +135,7 @@ TEST(FileWriter, BusyWhileAWriteRuns) {
   disk.WaitStarted(1);
   std::this_thread::sleep_for(milliseconds(20));
   EXPECT_GE(writer.Busy(), milliseconds(20));
+  EXPECT_LT(writer.Busy(), seconds(10));
   disk.Release();
   ASSERT_EQ(writer.WaitFor("session", seconds(5)), Wait::kWritten);
   EXPECT_EQ(writer.Busy().count(), 0);
