@@ -87,7 +87,8 @@ through a thread of their own like `mowbite_hold::FileWriter`.
 Every node in the container calls `mowbite_watch::Attach(*this)` once, at the end of its constructor (before it
 starts a thread of its own); a test in `mowbite_bringup` checks it. Its executor thread then signs every 0.5 s; silent
 for 10 s (S2: 2 s), or not loaded 60 s after the start (`stack.py` passes the node list), and the watch ends the
-container: the way of a crash, with the node in `container_exit.json` and in UNEXPECTED_RESTART (NODE_STALLED). Keep
+container: the way of a crash, with the node in `container_exit.json` and in UNEXPECTED_RESTART (NODE_STALLED). After
+three crashes in a row the container stays down (`down` true in the note), a run of 10 min counts from 0 again. Keep
 callbacks short, so the limits can come down after measuring; a sign later than a quarter of the limit is logged.
 Limits are never parameters; `MOWBITE_WATCH_FACTOR` only lengthens them for sanitizer runs. A driver in its own
 process is outside this watch and stops the mower by its own timeouts.
@@ -101,6 +102,10 @@ process is outside this watch and stops the mower by its own timeouts.
   there, nothing starts from IDLE (`STORAGE_NOT_WRITABLE`, event `STORAGE`), a job already running goes on. Put it
   on storage that lasts across power cuts and is not mounted read only on errors without a way back.
 - Every log, recording and cache gets a limit in days and MB.
+- `mowbite-host` (`host/`, unit `mowbite-host.service` on the Tron) runs beside the OS as root, not in its bundle:
+  it installs signed bundles (update.*), answers `host.restart_os` and keeps `mowbite/host/status` retained, also
+  while the OS is off. It needs the broker of the OS, `python3-paho-mqtt` (1.x or 2.x), systemd for the OS service
+  and the files of the data dir; a compose stack needs a carrier of its own (not built yet).
 
 ## 6. Safety measurement
 

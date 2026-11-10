@@ -218,7 +218,7 @@ def test_no_room_for_the_backup_halts_without_a_change(data_dir, monkeypatch):
     monkeypatch.setattr(data_store, "free_space", lambda path: data_store.ROOM_MARGIN)
     with pytest.raises(Halt) as halt:
         start(data_dir, 2)
-    assert halt.value.reason == "NO_ROOM"
+    assert halt.value.reason == "DATA_NO_SPACE"
     assert tree(data_dir, skip_kept_out=False) == before
     # A way back needs the room as well.
     monkeypatch.undo()
@@ -228,7 +228,7 @@ def test_no_room_for_the_backup_halts_without_a_change(data_dir, monkeypatch):
     monkeypatch.setattr(data_store, "free_space", lambda path: data_store.ROOM_MARGIN)
     with pytest.raises(Halt) as halt:
         start(data_dir, 2)
-    assert halt.value.reason == "NO_ROOM"
+    assert halt.value.reason == "DATA_NO_SPACE"
     assert tree(data_dir, skip_kept_out=False) == before
 
 
@@ -460,8 +460,8 @@ def test_the_backup_of_a_lower_schema_stays_after_an_update(data_dir):
 
 def test_the_halt_line_waits_for_mowbite_health(tmp_path):
     path = str(tmp_path / "halt")
-    line = Halt("NO_ROOM", "No room.", 1).line(2)
-    assert line == "MOWBITE_OS_HALT reason=NO_ROOM data_schema=1 image_schema=2 No room."
+    line = Halt("DATA_NO_SPACE", "No room.", 1).line(2)
+    assert line == "MOWBITE_OS_HALT reason=DATA_NO_SPACE data_schema=1 image_schema=2 No room."
     data_store.write_halt(path, line)
     assert read(path) == line + "\n"
     assert not os.path.exists(path + ".tmp")

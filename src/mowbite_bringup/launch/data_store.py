@@ -53,7 +53,7 @@ STEPS = {}
 
 
 class Halt(Exception):
-    """No node may start: reason (DATA_DIR_LOCKED, NO_ROOM, SCHEMA_NEWER, DATA_ERROR, DDS_PROFILE) and one sentence."""
+    """No node may start: reason (DATA_DIR_LOCKED, DATA_NO_SPACE, SCHEMA_NEWER, DATA_ERROR, DDS_PROFILE) and one sentence."""
 
     def __init__(self, reason, text, data_schema=None):
         super().__init__(text)
@@ -255,7 +255,7 @@ def prune(data_dir, keep):
 def need_room(data_dir, needed, schema):
     free = free_space(data_dir)
     if free < needed + ROOM_MARGIN:
-        raise Halt("NO_ROOM", f"A backup needs {(needed + ROOM_MARGIN) // 1048576} MB free in {data_dir}, "
+        raise Halt("DATA_NO_SPACE", f"A backup needs {(needed + ROOM_MARGIN) // 1048576} MB free in {data_dir}, "
                    f"there are {free // 1048576} MB; nothing was changed.", schema)
 
 

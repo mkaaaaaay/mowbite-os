@@ -87,7 +87,7 @@ def test_the_process_restarts_three_times_with_its_limits(tmp_path, monkeypatch)
     for line in lines:
         assert line == "{'nice': 10, 'cpus': [0], 'oom': 1000}"
     note = json.loads((tmp_path / "vision_exit.json").read_text())
-    assert (note["exit_code"], note["restart"], note["max_restarts"]) == (3, 3, 3)
+    assert (note["exit_code"], note["restart"], note["max_restarts"], note["down"]) == (3, 3, 3, True)
 
 
 # Writes the note of the watch as mowbite_watch does and ends with its code.
@@ -120,6 +120,54 @@ def test_the_note_of_the_watch_goes_into_the_exit_note(tmp_path, monkeypatch):
     # The last end that wrote the note was no stall: null, and the note of the watch is gone after it was taken.
     assert json.loads(note.read_text())["stalled"] is None
     assert not watch_note.exists()
+
+
+class Lines:
+    def __init__(self):
+        self.lines = []
+
+    def error(self, text):
+        self.lines.append(text)
+
+    warning = error
+
+
+def test_the_last_end_says_down_with_the_stalled_node(tmp_path, monkeypatch):
+    monkeypatch.setattr(stack, "RESTART_DELAY", 0.1)
+    note = tmp_path / stack.EXIT_NOTE
+    watch_note = tmp_path / stack.WATCH_NOTE
+    script = tmp_path / "probe.py"
+    script.write_text(WATCH_PROBE)
+    logged = Lines()
+    actions = stack.restarting(lambda start: ExecuteProcess(cmd=[sys.executable, str(script), str(watch_note)]),
+                               str(note), "The container", logged, 1, watch_note=str(watch_note))
+    service = LaunchService()
+    service.include_launch_description(LaunchDescription(actions))
+    assert service.run() == 0
+    written = json.loads(note.read_text())
+    assert (written["down"], written["restart"], written["exit_code"]) == (True, 1, 86)
+    assert written["stalled"] == {"node": "mowbite_bridge", "seconds": 10.2, "limit": 10.0}
+    assert written["stable_s"] == stack.STABLE_AFTER
+    assert logged.lines[-1] == ("The container ended with exit code 86 (the watch: mowbite_bridge gave no sign) "
+                                "after 1 restarts and stays down until the next start")
+
+
+def test_a_stable_run_counts_the_crashes_from_zero(tmp_path, monkeypatch):
+    monkeypatch.setattr(stack, "RESTART_DELAY", 0.1)
+    note = tmp_path / stack.EXIT_NOTE
+    # Start and end of each run: the second one lasts STABLE_AFTER s.
+    times = iter([0, 1, 1, 1 + stack.STABLE_AFTER, 1 + stack.STABLE_AFTER, 2 + stack.STABLE_AFTER])
+    starts = []
+
+    def make(start):
+        starts.append(start)
+        return ExecuteProcess(cmd=[sys.executable, "-c", "import sys; sys.exit(5)"])
+    actions = stack.restarting(make, str(note), "The container", LOGGER, 1, clock=lambda: next(times))
+    service = LaunchService()
+    service.include_launch_description(LaunchDescription(actions))
+    assert service.run() == 0
+    assert starts == [0, 1, 2]
+    assert json.loads(note.read_text())["down"] is True
 
 
 def test_the_exit_note_after_a_stall(tmp_path):

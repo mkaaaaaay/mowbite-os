@@ -20,10 +20,11 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import data_store  # noqa: E402
 
 # After a crash the container starts again at most this often, each time after RESTART_DELAY s, then it stays down
-# until the next start by hand.
+# until the next start by hand. A run of STABLE_AFTER s counts the crashes from 0 again.
 CONTAINER_RESTARTS = 3
 RESTART_DELAY = 2.0
-# In data_dir: how the container ended, written before it starts again, for its bridge to log.
+STABLE_AFTER = 600.0
+# In data_dir: how the container ended, for its bridge to log and mowbite-host to show; down true after the last end.
 EXIT_NOTE = "container_exit.json"
 # In data_dir: the node the watch of the container (mowbite_watch) ended it for, taken into EXIT_NOTE as stalled.
 WATCH_NOTE = "watch_exit.json"
@@ -216,40 +217,50 @@ def take_watch_note(path, logger):
     return {key: note.get(key) for key in ("node", "seconds", "limit")}
 
 
-# make(restart) as a process that starts again after it ended outside the shutdown, at most `restarts` times, each time
-# after RESTART_DELAY s; before each restart `note` (None: none) says how it ended, with what the watch of the process
-# left in `watch_note` (None: none) as stalled. Every start gets oom_score_adj.
-def restarting(make, note, label, logger, restarts, oom_score_adj="", watch_note=None):
+# make(start) as a process that starts again after it ended outside the shutdown, at most `restarts` times in a row,
+# each time after RESTART_DELAY s; start counts every start for a name of its own. A run of STABLE_AFTER s begins the
+# count again. Each end goes into `note` (None: none) with what the watch of the process left in `watch_note` (None:
+# none) as stalled, the last one with down true. Every start gets oom_score_adj.
+def restarting(make, note, label, logger, restarts, oom_score_adj="", watch_note=None, clock=time.monotonic):
     # A start by hand begins without restarts.
     remove(note, logger)
     remove(watch_note, logger)
 
-    def start(restart):
-        action = make(restart)
-        return [RegisterEventHandler(OnProcessExit(target_action=action,
-                                                   on_exit=lambda event, context: ended(restart, event, context))),
+    def start(number, crashes):
+        action = make(number)
+        began = clock()
+        return [RegisterEventHandler(OnProcessExit(
+                    target_action=action,
+                    on_exit=lambda event, context: ended(number, crashes, began, event, context))),
                 *oom_score(action, oom_score_adj, logger), action]
 
-    def ended(restart, event, context):
+    def ended(number, crashes, began, event, context):
         # At the end of the launch the process is stopped, it did not crash.
         if context.is_shutdown:
             return None
         stalled = take_watch_note(watch_note, logger)
-        if restart >= restarts:
-            logger.error(f"{label} ended with exit code {event.returncode} after {restarts} restarts and stays down "
-                         "until the next start")
-            return None
-        logger.warning(f"{label} ended with exit code {event.returncode}: started again in {RESTART_DELAY:.0f} s "
-                       f"(restart {restart + 1} of {restarts})")
+        if clock() - began >= STABLE_AFTER:
+            crashes = 0
+        down = crashes >= restarts
+        why = f" (the watch: {stalled['node']} gave no sign)" if stalled else ""
+        if down:
+            logger.error(f"{label} ended with exit code {event.returncode}{why} after {restarts} restarts and stays "
+                         "down until the next start")
+        else:
+            logger.warning(f"{label} ended with exit code {event.returncode}{why}: started again in "
+                           f"{RESTART_DELAY:.0f} s (restart {crashes + 1} of {restarts})")
         try:
             if note:
                 data_store.write_json(os.path.dirname(note), os.path.basename(note),
-                                      {"exit_code": event.returncode, "restart": restart + 1, "max_restarts": restarts,
-                                       "t": time.time(), "stalled": stalled})
+                                      {"exit_code": event.returncode, "restart": crashes if down else crashes + 1,
+                                       "max_restarts": restarts, "t": time.time(), "stalled": stalled,
+                                       "down": down, "stable_s": STABLE_AFTER})
         except OSError as error:
             logger.error(f"Cannot write {note}: {error}")
-        return [TimerAction(period=RESTART_DELAY, actions=start(restart + 1))]
-    return start(0)
+        if down:
+            return None
+        return [TimerAction(period=RESTART_DELAY, actions=start(number + 1, crashes + 1))]
+    return start(0, 0)
 
 
 # A process of its own beside the stack, e.g. one that loads a library which may crash: make(prefix) builds its action
@@ -261,7 +272,7 @@ def own_process(make, name, data_dir, logger, restarts=CONTAINER_RESTARTS, oom_s
         prefix += ["taskset", "-c", str(cpus)]
     if nice is not None:
         prefix += ["nice", "-n", str(int(nice))]
-    return restarting(lambda restart: make(" ".join(prefix) or None), os.path.join(data_dir, f"{name}_exit.json"),
+    return restarting(lambda start: make(" ".join(prefix) or None), os.path.join(data_dir, f"{name}_exit.json"),
                       name, logger, restarts, oom_score_adj)
 
 
@@ -277,9 +288,9 @@ def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
     if watch_note:
         watch_env["MOWBITE_WATCH_NOTE"] = watch_note
 
-    def container(restart):
+    def container(start):
         return ComposableNodeContainer(
-            name="mowbite" if restart == 0 else f"mowbite_{restart}", namespace="", package="rclcpp_components",
+            name="mowbite" if start == 0 else f"mowbite_{start}", namespace="", package="rclcpp_components",
             executable="component_container_isolated", composable_node_descriptions=nodes, output="screen",
             additional_env=watch_env)
 
