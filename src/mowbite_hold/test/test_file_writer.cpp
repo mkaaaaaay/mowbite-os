@@ -18,6 +18,7 @@ namespace {
 
 using std::chrono::milliseconds;
 using std::chrono::seconds;
+using Wait = FileWriter::Wait;
 
 // A disk that holds every write until it is let go, and remembers what it wrote.
 class Disk {
@@ -48,6 +49,10 @@ class Disk {
   void Fail() {
     std::lock_guard<std::mutex> lock(mutex_);
     fail_ = true;
+  }
+  void Heal() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    fail_ = false;
   }
 
  private:
@@ -90,15 +95,36 @@ TEST(FileWriter, WaitForReturnsOnceTheFileIsWrittenAndReported) {
   });
   writer.Submit("checkpoint", "c1");
   writer.Submit("session", "s1");
-  EXPECT_FALSE(writer.WaitFor("session", milliseconds(50)));
+  EXPECT_EQ(writer.WaitFor("session", milliseconds(50)), Wait::kTimeout);
   disk.Release();
   // The checkpoint ahead of it is written, the session not yet.
-  EXPECT_FALSE(writer.WaitFor("session", milliseconds(50)));
-  EXPECT_TRUE(writer.WaitFor("checkpoint", seconds(5)));
+  EXPECT_EQ(writer.WaitFor("session", milliseconds(50)), Wait::kTimeout);
+  EXPECT_EQ(writer.WaitFor("checkpoint", seconds(5)), Wait::kWritten);
   disk.Release();
-  EXPECT_TRUE(writer.WaitFor("session", seconds(5)));
+  EXPECT_EQ(writer.WaitFor("session", seconds(5)), Wait::kWritten);
   EXPECT_EQ(reports, 2);
-  EXPECT_TRUE(writer.WaitFor("unknown", milliseconds(0)));
+  // Nothing written for it: no write went through.
+  EXPECT_EQ(writer.WaitFor("unknown", milliseconds(0)), Wait::kFailed);
+}
+
+// The wait tells how the last write of the file went, so the logic acts only on a record that is on the disk.
+TEST(FileWriter, WaitForTellsTheLastWriteOfTheFile) {
+  Disk disk;
+  FileWriter writer(On(&disk), [](const FileWriter::Done&) {});
+  disk.Release(4);
+  writer.Submit("checkpoint", "c1");
+  ASSERT_EQ(writer.WaitFor("checkpoint", seconds(5)), Wait::kWritten);
+  disk.Fail();
+  writer.Submit("session", "s1");
+  EXPECT_EQ(writer.WaitFor("session", seconds(5)), Wait::kFailed);
+  // Another file is not touched by it.
+  EXPECT_EQ(writer.WaitFor("checkpoint", milliseconds(0)), Wait::kWritten);
+  disk.Heal();
+  writer.Submit("session", "s2");
+  EXPECT_EQ(writer.WaitFor("session", seconds(5)), Wait::kWritten);
+  disk.Fail();
+  writer.Submit("session", "s3");
+  EXPECT_EQ(writer.WaitFor("session", seconds(5)), Wait::kFailed);
 }
 
 TEST(FileWriter, BusyWhileAWriteRuns) {
@@ -110,7 +136,7 @@ TEST(FileWriter, BusyWhileAWriteRuns) {
   std::this_thread::sleep_for(milliseconds(20));
   EXPECT_GE(writer.Busy(), milliseconds(20));
   disk.Release();
-  ASSERT_TRUE(writer.WaitFor("session", seconds(5)));
+  ASSERT_EQ(writer.WaitFor("session", seconds(5)), Wait::kWritten);
   EXPECT_EQ(writer.Busy().count(), 0);
 }
 
@@ -156,7 +182,7 @@ TEST(FileWriter, WritesRealFilesWhole) {
   {
     FileWriter writer(WriteFileAtomic, [](const FileWriter::Done& done) { EXPECT_TRUE(done.ok) << done.error; });
     for (int i = 0; i < 50; ++i) writer.Submit(path, "text " + std::to_string(i) + "\n");
-    ASSERT_TRUE(writer.WaitFor(path, seconds(10)));
+    ASSERT_EQ(writer.WaitFor(path, seconds(10)), Wait::kWritten);
   }
   std::ifstream in(path);
   std::string line;

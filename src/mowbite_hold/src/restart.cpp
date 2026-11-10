@@ -59,8 +59,8 @@ bool HoldsOnRestart(const SessionRecord& record) {
   return !record.clean && record.state != kIdle;
 }
 
-bool MustWaitForSession(const std::optional<SessionRecord>& before, const SessionRecord& next) {
-  return HoldsOnRestart(next) && !(before && HoldsOnRestart(*before));
+bool MustWaitForSession(bool written_holds, const SessionRecord& next) {
+  return HoldsOnRestart(next) && !written_holds;
 }
 
 std::string SessionState(const std::string& state, const std::string& sub_state) {

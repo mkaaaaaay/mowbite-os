@@ -28,9 +28,11 @@ void FileWriter::Submit(const std::string& path, std::string text) {
   work_.notify_one();
 }
 
-bool FileWriter::WaitFor(const std::string& path, std::chrono::steady_clock::duration limit) {
+FileWriter::Wait FileWriter::WaitFor(const std::string& path, std::chrono::steady_clock::duration limit) {
   std::unique_lock<std::mutex> lock(mutex_);
-  return done_.wait_for(lock, limit, [&] { return !Pending(path); });
+  if (!done_.wait_for(lock, limit, [&] { return !Pending(path); })) return Wait::kTimeout;
+  const auto it = written_.find(path);
+  return it != written_.end() && it->second ? Wait::kWritten : Wait::kFailed;
 }
 
 std::chrono::steady_clock::duration FileWriter::Busy() const {
@@ -62,6 +64,7 @@ void FileWriter::Run() {
     done.took = std::chrono::steady_clock::now() - started;
     report_(done);
     lock.lock();
+    written_[done.path] = done.ok;
     writing_.clear();
     done_.notify_all();
   }

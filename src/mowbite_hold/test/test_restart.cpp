@@ -98,7 +98,7 @@ TEST(JudgeStart, DetailIsClipped) {
   EXPECT_EQ(v.detail.size(), 200u);
 }
 
-// The logic waits exactly when the new record would hold after a crash and the one before it would not.
+// The logic waits exactly when the new record would hold after a crash and the one surely on the disk would not.
 TEST(MustWaitForSession, OnlyWhenTheHoldBegins) {
   const auto record = [](const std::string& state, bool clean) {
     return SessionRecord{state, "", kBoot, 1800000000, clean};
@@ -114,21 +114,15 @@ TEST(MustWaitForSession, OnlyWhenTheHoldBegins) {
     for (const bool next_clean : {false, true}) {
       const SessionRecord next = record(next_state, next_clean);
       EXPECT_EQ(HoldsOnRestart(next), holds(next)) << next_state << next_clean;
-      EXPECT_EQ(MustWaitForSession(std::nullopt, next), holds(next)) << next_state << next_clean;
-      for (const auto& before_state : kStates) {
-        for (const bool before_clean : {false, true}) {
-          const SessionRecord before = record(before_state, before_clean);
-          EXPECT_EQ(MustWaitForSession(before, next), holds(next) && !holds(before))
-              << before_state << before_clean << " -> " << next_state << next_clean;
-        }
-      }
+      EXPECT_EQ(MustWaitForSession(false, next), holds(next)) << next_state << next_clean;
+      EXPECT_FALSE(MustWaitForSession(true, next)) << next_state << next_clean;
     }
   }
-  EXPECT_TRUE(MustWaitForSession(record("IDLE", false), record("MOWING", false)));
-  EXPECT_TRUE(MustWaitForSession(record("IDLE", false), record("DRIVING", false)));
-  EXPECT_FALSE(MustWaitForSession(record("MOWING", false), record("PAUSED", false)));
-  EXPECT_FALSE(MustWaitForSession(record("MOWING", false), record("IDLE", false)));
-  EXPECT_FALSE(MustWaitForSession(record("MOWING", false), record("MOWING", true)));
+  EXPECT_TRUE(MustWaitForSession(false, record("MOWING", false)));
+  EXPECT_TRUE(MustWaitForSession(false, record("DRIVING", false)));
+  EXPECT_FALSE(MustWaitForSession(true, record("PAUSED", false)));
+  EXPECT_FALSE(MustWaitForSession(false, record("IDLE", false)));
+  EXPECT_FALSE(MustWaitForSession(false, record("MOWING", true)));
 }
 
 TEST(SessionState, IdleTakesItsDrive) {

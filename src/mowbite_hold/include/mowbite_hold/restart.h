@@ -42,8 +42,8 @@ std::string SessionText(const SessionRecord& record);
 // Whether a start after this record, not ended clean, holds (KERNEL_CRASH holds whatever the record says).
 bool HoldsOnRestart(const SessionRecord& record);
 // Whether the logic waits for next to be on the disk before it acts: next would hold after a crash and the record
-// before it, written or queued, would not (G35). Without one before it the file is not known to hold.
-bool MustWaitForSession(const std::optional<SessionRecord>& before, const SessionRecord& next);
+// surely on the disk does not (G35).
+bool MustWaitForSession(bool written_holds, const SessionRecord& next);
 
 // current_state of robot_state, with IDLE replaced by its sub_state while it drives (DRIVING, CALIBRATING).
 std::string SessionState(const std::string& state, const std::string& sub_state);

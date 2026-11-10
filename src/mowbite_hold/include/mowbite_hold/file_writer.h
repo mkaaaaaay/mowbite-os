@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -24,6 +25,7 @@ class FileWriter {
   // Called in the writer thread after each write, before a WaitFor for its file returns.
   using Report = std::function<void(const Done&)>;
   using Write = std::function<bool(const std::string& path, const std::string& text, std::string* error)>;
+  enum class Wait { kWritten, kFailed, kTimeout };
 
   FileWriter(Write write, Report report);
   // Writes what is queued, then ends the thread.
@@ -32,8 +34,9 @@ class FileWriter {
   FileWriter& operator=(const FileWriter&) = delete;
 
   void Submit(const std::string& path, std::string text);
-  // Until no text for path is queued or being written; false when that takes longer than limit.
-  bool WaitFor(const std::string& path, std::chrono::steady_clock::duration limit);
+  // Until no text for path is queued or being written, then how its last write went (kFailed without one);
+  // kTimeout when that takes longer than limit.
+  Wait WaitFor(const std::string& path, std::chrono::steady_clock::duration limit);
   // How long the write in progress has run, zero without one.
   std::chrono::steady_clock::duration Busy() const;
 
@@ -52,8 +55,9 @@ class FileWriter {
   std::condition_variable work_;
   std::condition_variable done_;
   std::deque<Entry> queue_;
-  // The file being written, empty between writes.
+  // The file being written, empty between writes, and whether the last write of each file went through.
   std::string writing_;
+  std::map<std::string, bool> written_;
   std::chrono::steady_clock::time_point started_;
   bool stop_ = false;
   std::thread thread_;
