@@ -117,7 +117,11 @@ TEST(MowingJobCheckpoint, AnOldOneWithAnAngleIncrementIsReadAndTheFieldDropped) 
 TEST(MowingJobCheckpoint, RefusesWhatIsNotOne) {
   for (const char* text : {"", "{", "[]", "{\"version\": 2}", R"({"version": 1, "area": 0})",
                            R"({"version":1,"job_id":"","area":-1,"area_id":"","path":0,"index":0,"fingerprint":""})",
-                           R"({"version":1,"job_id":3,"area":0,"area_id":"","path":0,"index":0,"fingerprint":""})"}) {
+                           R"({"version":1,"job_id":3,"area":0,"area_id":"","path":0,"index":0,"fingerprint":""})",
+                           // A version that is no number, or none, is not one either.
+                           R"({"version":"1","job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":""})",
+                           R"({"version":null,"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":""})",
+                           R"({"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":""})"}) {
     EXPECT_FALSE(ParseCheckpoint(text)) << text;
   }
 }

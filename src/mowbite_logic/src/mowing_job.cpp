@@ -64,9 +64,10 @@ std::string CheckpointText(const JobProgress& p) {
 
 std::optional<JobProgress> ParseCheckpoint(const std::string& text) {
   const json j = json::parse(text, nullptr, false);
-  if (j.is_discarded() || !j.is_object() || j.value("version", 0) != kCheckpointVersion) return std::nullopt;
+  if (j.is_discarded() || !j.is_object()) return std::nullopt;
   JobProgress p;
   try {
+    if (j.at("version").get<int>() != kCheckpointVersion) return std::nullopt;
     p.job_id = j.at("job_id").get<std::string>();
     p.area = j.at("area").get<int>();
     p.area_id = j.at("area_id").get<std::string>();
