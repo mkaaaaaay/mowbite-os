@@ -1,6 +1,6 @@
-# All nodes of MowBite OS in one process (one ROS context, one DDS participant) except three: tron_mcu, so that a crash
-# of any other node leaves its watchdogs running (G25), the MowBite Planner (Python, shapely) and the camera AI. The
-# part every platform shares is in stack.py.
+# All nodes of MowBite OS in one process (one ROS context, one DDS participant) except four: tron_mcu, so that a crash
+# of any other node leaves its watchdogs running (G25), the MowBite Planner (Python, shapely), the camera AI and the
+# live picture of the stereo camera. The part every platform shares is in stack.py.
 import os
 import sys
 
@@ -74,24 +74,26 @@ def launch_setup(context):
     if hardware == "read":
         logger.warning("hardware:=read: tron_mcu and tron_imu only listen, nothing moves; tron_gnss does not start")
         return [mcu, *stack.container_and_planner([imu, *nodes], data_dir, files, logger, oom)]
-    return [mcu, *vision(files, data_dir, arg("vision"), logger),
+    # Only here: with hardware:=read another host drives the blade, and blade_on of hw/status would always be false.
+    return [mcu, *camera(files, data_dir, arg("vision"), logger, "vision", "tron_vision_node", "tron_vision"),
+            *camera(files, data_dir, arg("stereo"), logger, "stereo", "tron_stereo_node", "tron_stereo"),
             *stack.container_and_planner([gnss, imu, *nodes, light, sound], data_dir, files, logger, oom)]
 
 
-# The camera AI (tron_vision) with vision:=on: a process of its own, so that a crash of the NPU runtime takes nothing
-# along. It only reports; the kernel ends it first when memory runs out, and it keeps CPU 4-7 free.
-def vision(files, data_dir, switch, logger):
+# A camera process of tron_vision with <process>:=on, each of its own, so that a crash of the NPU runtime or of the
+# media library takes nothing along. They only report; the kernel ends them first when memory runs out, and they keep
+# CPU 4-7 free.
+def camera(files, data_dir, switch, logger, process, executable, name):
     if switch != "on":
         # Another value in os.conf must not stop the stack.
         if switch != "off":
-            logger.warning(f"vision:={switch} is neither on nor off: no camera AI")
+            logger.warning(f"{process}:={switch} is neither on nor off: {name} does not start")
         return []
-    # The node names this process in hw/cameras, so the OS ties its exit note to the camera.
-    process = "vision"
+    # The node names this process in hw/cameras, so the OS ties its exit note to its cameras.
     return stack.own_process(
-        lambda prefix: Node(package="tron_vision", executable="tron_vision_node", name="tron_vision", namespace="/",
+        lambda prefix: Node(package="tron_vision", executable=executable, name=name, namespace="/",
                             parameters=[*files, {"process": process}], output="screen", prefix=prefix,
-                            exec_name="tron_vision"),
+                            exec_name=name),
         process, data_dir, logger, oom_score_adj=1000, nice=10, cpus="0-3")
 
 
@@ -116,6 +118,8 @@ def generate_launch_description():
         DeclareLaunchArgument("data_dir", default_value="/userdata/mowbite"),
         # on: the camera AI starts as well, only with hardware:=true; MOWBITE_VISION in /etc/mowbite/os.conf.
         DeclareLaunchArgument("vision", default_value=EnvironmentVariable("MOWBITE_VISION", default_value="off")),
+        # on: the live picture of the stereo camera starts as well, only with hardware:=true; MOWBITE_STEREO in os.conf.
+        DeclareLaunchArgument("stereo", default_value=EnvironmentVariable("MOWBITE_STEREO", default_value="off")),
         *stack.arguments(),
         OpaqueFunction(function=launch_setup),
     ])

@@ -342,6 +342,9 @@ tron_vision:
     # jpeg_max_kb each; the JPEG quality steps down to keep the size.
     # jpeg_max_rate, jpeg_max_kb, score_threshold, max_rss_mb and crash_dir: the defaults of the node.
 
+# tron_stereo, the live picture of the stereo camera (MOWBITE_STEREO=on): bitrate_kbps, rtsp_port, capture_device,
+# stream_name, encoder_library and crash_dir have the defaults of the node. Its locks are no parameters.
+
 mowbite_bridge:
   ros__parameters:
     mqtt_host: 127.0.0.1
