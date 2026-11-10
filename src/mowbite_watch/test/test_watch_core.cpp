@@ -65,6 +65,13 @@ TEST(WatchCore, OfTwoSilentNodesTheOlderIsNamed) {
   EXPECT_EQ(verdict.seconds_ns, 3 * kS);
 }
 
+TEST(WatchCore, OfTwoNodesSilentSinceTheSameTimeTheFirstIsNamed) {
+  WatchCore core = Core();
+  core.Enter("first", kS, 0);
+  core.Enter("second", kS, 0);
+  EXPECT_STREQ(core.Judge(2 * kS).node, "first");
+}
+
 TEST(WatchCore, TheMarkOfTheSilentNodeIsNamed) {
   WatchCore core = Core();
   const int bridge = core.Enter("mowbite_bridge", kS, 0);
@@ -150,6 +157,7 @@ TEST(WatchCore, NamesAndListsBeyondTheFieldsAreRefused) {
   EXPECT_THROW(core.Enter(std::string(kNameSize, 'x'), kS, 0), std::length_error);
   EXPECT_EQ(core.Enter(std::string(kNameSize - 1, 'x'), kS, 0), 0);
   EXPECT_THROW(Core(std::vector<std::string>(kMaxPlaces + 1, "x")), std::length_error);
+  EXPECT_NO_THROW(Core(std::vector<std::string>(kMaxPlaces, "x")));
 }
 
 TEST(WatchText, NoteAndLine) {

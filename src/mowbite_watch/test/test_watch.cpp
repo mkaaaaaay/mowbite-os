@@ -2,6 +2,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -139,6 +140,80 @@ TEST_F(WatchDeath, AStalledWatchThreadMeetsTheKernelTimerAlsoWithSignalsBlocked)
   EXPECT_LT(duration<double>(steady_clock::now() - start).count(), 2.0);
 }
 
+TEST_F(WatchDeath, AStalledWatchThreadMeetsAKernelTimerOfSecondsAsWell) {
+  const auto start = steady_clock::now();
+  EXPECT_EXIT(
+      {
+        Options options = Short();
+        options.deadman = 1.2;
+        options.before_judge = Stall;
+        new Runtime(options);
+        Sleep(5.0);
+        _exit(0);
+      },
+      ::testing::KilledBySignal(SIGKILL), "");
+  const double took = duration<double>(steady_clock::now() - start).count();
+  EXPECT_GT(took, 1.0);
+  EXPECT_LT(took, 3.0);
+}
+
+std::atomic<int> rounds{0};
+
+void Count() {
+  ++rounds;
+}
+
+TEST_F(WatchDeath, TheWatchJudgesOncePerPeriod) {
+  EXPECT_EXIT(
+      {
+        Options options = Short();
+        options.period = 0.1;
+        options.before_judge = Count;
+        new Runtime(options);
+        Sleep(0.55);
+        _exit(rounds >= 4 && rounds <= 7 ? 0 : 100 + rounds);
+      },
+      ::testing::ExitedWithCode(0), "");
+}
+
+TEST_F(WatchDeath, AllPlacesTakenIsAnErrorAtTheNode) {
+  EXPECT_EXIT(
+      {
+        auto* runtime = new Runtime(Short());
+        for (int i = 0; i < kMaxPlaces; ++i) runtime->Enter("n" + std::to_string(i), 5.0);
+        try {
+          Watch one_more("one_more", 5.0, *runtime);
+        } catch (const std::length_error&) {
+          _exit(0);
+        }
+        _exit(1);
+      },
+      ::testing::ExitedWithCode(0), "");
+}
+
+TEST_F(WatchDeath, TheNoteIsWrittenWholeAndReadable) {
+  const std::string note = Folder() + "/watch_exit.json";
+  // A rest of an earlier end next to it does not stay in the note.
+  std::ofstream(note + ".tmp") << std::string(300, 'x');
+  EXPECT_EXIT(
+      {
+        Options options = Short();
+        options.note = note;
+        auto* runtime = new Runtime(options);
+        Watch watch("mowbite_map", 0.1, *runtime);
+        Sleep(5.0);
+        _exit(0);
+      },
+      ::testing::ExitedWithCode(kExitCode), "");
+  const std::string text = Read(note);
+  EXPECT_EQ(text.rfind("{\"node\":\"mowbite_map\",\"seconds\":0.", 0), 0u) << text;
+  EXPECT_EQ(text.back(), '\n');
+  EXPECT_EQ(text.find('x'), std::string::npos) << text;
+  struct stat st {};
+  ASSERT_EQ(stat(note.c_str(), &st), 0);
+  EXPECT_EQ(st.st_mode & 07777, 0644u);
+}
+
 TEST_F(WatchDeath, ANoteThatBlocksDoesNotHoldTheEnd) {
   const std::string note = Folder() + "/watch_exit.json";
   ASSERT_EQ(mkfifo((note + ".tmp").c_str(), 0600), 0);
@@ -147,20 +222,25 @@ TEST_F(WatchDeath, ANoteThatBlocksDoesNotHoldTheEnd) {
       {
         Options options = Short();
         options.note = note;
+        // Only the timer set at the verdict ends it this soon.
+        options.deadman = 2.0;
         auto* runtime = new Runtime(options);
         Watch watch("mowbite_safety", 0.1, *runtime);
         Sleep(5.0);
         _exit(0);
       },
       ::testing::KilledBySignal(SIGKILL), "mowbite_safety silent for");
-  EXPECT_LT(duration<double>(steady_clock::now() - start).count(), 2.0);
+  EXPECT_LT(duration<double>(steady_clock::now() - start).count(), 1.5);
 }
 
 TEST_F(WatchDeath, AfterTheShutdownSilenceDoesNotCountOnlyItsLimit) {
+  const std::string note = Folder() + "/watch_exit.json";
   const auto start = steady_clock::now();
   EXPECT_EXIT(
       {
-        auto* runtime = new Runtime(Short());
+        Options options = Short();
+        options.note = note;
+        auto* runtime = new Runtime(options);
         Watch watch("mowbite_logic", 0.05, *runtime);
         runtime->Shutdown();
         Sleep(5.0);
@@ -170,6 +250,8 @@ TEST_F(WatchDeath, AfterTheShutdownSilenceDoesNotCountOnlyItsLimit) {
   const double took = duration<double>(steady_clock::now() - start).count();
   EXPECT_GT(took, 0.3);
   EXPECT_LT(took, 2.0);
+  // An end after the shutdown names no node.
+  EXPECT_FALSE(std::ifstream(note).good());
   EXPECT_EXIT(
       {
         auto* runtime = new Runtime(Short());
@@ -195,7 +277,7 @@ TEST_F(WatchDeath, TheFactorStretchesTheLimits) {
 }
 
 TEST(WatchOptions, FromTheEnvironment) {
-  std::string warning;
+  std::string warning = "from before";
   unsetenv(kNodesEnv);
   unsetenv(kNoteEnv);
   unsetenv(kFactorEnv);
@@ -212,8 +294,22 @@ TEST(WatchOptions, FromTheEnvironment) {
   EXPECT_EQ(options.note, "/data/watch_exit.json");
   EXPECT_EQ(options.factor, 3.0);
   EXPECT_NE(warning.find("times 3"), std::string::npos) << warning;
+  setenv(kNodesEnv, "a,b", 1);
+  EXPECT_EQ(OptionsFromEnvironment(&warning).expected, (std::vector<std::string>{"a", "b"}));
+  for (const char* edge : {"1", "100"}) {
+    setenv(kFactorEnv, edge, 1);
+    EXPECT_EQ(OptionsFromEnvironment(&warning).factor, std::stod(edge)) << edge;
+    EXPECT_EQ(warning.find("not a factor"), std::string::npos) << edge;
+  }
+  EXPECT_NE(warning.find("times 100"), std::string::npos) << warning;
+  setenv(kFactorEnv, "1", 1);
+  OptionsFromEnvironment(&warning);
+  EXPECT_EQ(warning, "");
+  setenv(kFactorEnv, "1.5", 1);
+  OptionsFromEnvironment(&warning);
+  EXPECT_NE(warning.find("times 1.5"), std::string::npos) << warning;
   // Only longer, never shorter or off.
-  for (const char* bad : {"0.5", "0", "-1", "x", "", "1e9"}) {
+  for (const char* bad : {"0.5", "0", "-1", "x", "", "1e9", "100.5"}) {
     setenv(kFactorEnv, bad, 1);
     EXPECT_EQ(OptionsFromEnvironment(&warning).factor, 1.0) << bad;
     EXPECT_NE(warning.find("not a factor"), std::string::npos) << bad;
