@@ -43,17 +43,20 @@ IDLE = {"phase": "idle", "component": None, "revision": None, "reason": None}
 HHMM = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
 
 
+# Minute of the day of HH:MM.
+def _minutes(hhmm):
+    return int(hhmm[:2]) * 60 + int(hhmm[3:])
+
+
 def in_window(now_local, start, end):
     minute = now_local.tm_hour * 60 + now_local.tm_min
-    a = int(start[:2]) * 60 + int(start[3:])
-    b = int(end[:2]) * 60 + int(end[3:])
+    a, b = _minutes(start), _minutes(end)
     return a <= minute < b if a <= b else minute >= a or minute < b
 
 
 # Seconds from now_local until the window ends at end.
 def window_left(now_local, end):
-    minute = now_local.tm_hour * 60 + now_local.tm_min
-    left = (int(end[:2]) * 60 + int(end[3:]) - minute) % (24 * 60)
+    left = (_minutes(end) - now_local.tm_hour * 60 - now_local.tm_min) % (24 * 60)
     return left * 60 - now_local.tm_sec
 
 
@@ -139,14 +142,7 @@ class Updater:
         installer = self.installers[component]
         meta = installer.meta_of(installer.current()) or {}
         serial = compat.serial(meta) if meta.get("format") == bundle.FORMAT else 0
-        if installer.place.overlay:
-            serial = max(serial, compat.serial(compat.bundled(self._running_meta(), component)))
-        if component == "host":
-            serial = max(serial, compat.serial(self._seed_meta()))
-        return serial
-
-    def _seed_meta(self):
-        return files.read_json(os.path.join(self.paths.host_seed, "bundle.json")) or {}
+        return max(serial, compat.serial(installer.bundled()))
 
     @staticmethod
     def _info(revision, meta):
@@ -159,8 +155,7 @@ class Updater:
 
     # The planner or the app the OS brings along, the seed of the host; None when there is none.
     def _bundled_info(self, component):
-        meta = self._seed_meta() if component == "host" else compat.bundled(self._running_meta(), component)
-        return self._meta_info(meta)
+        return self._meta_info(self.installers[component].bundled())
 
     def _meta_info(self, meta):
         meta = meta or {}
@@ -527,7 +522,7 @@ class Updater:
 
     # A folder of the revision that the bundle did not give (an earlier, broken unpack) goes, unless it is in use.
     def _replace_stale(self, installer, revision):
-        if revision in (installer.current(), installer.previous()) or revision in (installer.pending() or {}).values():
+        if revision in installer.in_use():
             raise Refused("BAD_BUNDLE", f"{revision} is installed with another bundle.json than this bundle")
         shutil.rmtree(installer.place.of(revision))
         print(f"{installer.place.component}: removed {revision}, it did not match its bundle", flush=True)
@@ -644,12 +639,11 @@ class Updater:
         # An OS stopped by hand stays as it is, and its planner with it; one that gave up after crashes gets its
         # update, as does one that was never installed. The app and the host do not touch the OS.
         runs = self.carrier.show()[0] in ("active", "failed")
-        left_alone = {"os": bool(self.installer.current()) and not runs, "planner": not runs, "app": False,
-                      "host": False}
+        left_alone = {"os": bool(self.installer.current()) and not runs, "planner": not runs}
         self.check()
         for component in AUTO_ORDER:
             available = self._available(component)
-            if (left_alone[component] or not available or available["blocked"] or
+            if (left_alone.get(component) or not available or available["blocked"] or
                     not app_suffices(self.state["app_version"], available.get("min_app"))):
                 continue
             entry = self._entry(component)

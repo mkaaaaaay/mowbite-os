@@ -237,6 +237,19 @@ class Installer:
     def meta_of(self, revision):
         return meta_of(self.place, revision)
 
+    # bundle.json of what runs without an own installation: the planner or the app the OS brings along, {} for the OS.
+    def bundled(self):
+        return compat.bundled(os_meta(self.paths), self.place.component) if self.place.overlay else {}
+
+    # Whether something runs without an own installation, where a rollback of the first one goes: the planner or the
+    # app the OS brings along, the seed of the host.
+    def has_base(self):
+        return self.place.overlay
+
+    # The revisions current, previous and pending name.
+    def in_use(self):
+        return {self.current(), self.previous(), *(self.pending() or {}).values()}
+
     # ran: whether the OS ran before the switch, so that a host started again after a cut starts it again.
     def _write_pending(self, to, before, ran):
         files.write_json(self.place.pending, {"to": to or "", "from": before or "", "ran": ran})
@@ -369,8 +382,7 @@ class Installer:
 
     # Keeps current, previous and what pending names; removes other installations and broken unpacks.
     def prune(self):
-        keep = {self.current(), self.previous()}
-        keep.update((self.pending() or {}).values())
+        keep = self.in_use()
         for name in os.listdir(self.place.opt):
             path = self.place.of(name)
             if name in ("current", "previous", "pending") or name in keep or os.path.islink(path):
@@ -404,7 +416,7 @@ class Installer:
         previous = self.previous()
         if previous and previous != self.current() and os.path.isdir(self.place.of(previous)):
             return previous
-        if self.place.overlay and self.current():
+        if self.has_base() and self.current():
             return None
         raise Refused("NO_PREVIOUS", "no previous installation")
 
@@ -450,13 +462,12 @@ class HostInstaller(Installer):
         self._clear_pending()
         return pending
 
-    def back_target(self):
-        previous = self.previous()
-        if previous and previous != self.current() and os.path.isdir(self.place.of(previous)):
-            return previous
-        if self.current():
-            return None
-        raise Refused("NO_PREVIOUS", "the seed runs, there is nothing before it")
+    def has_base(self):
+        return True
+
+    # The seed in the rootfs.
+    def bundled(self):
+        return files.read_json(os.path.join(self.paths.host_seed, "bundle.json")) or {}
 
     def status_lines(self):
         lines = [f"host current: {self.current() or '- (the seed)'}", f"host previous: {self.previous() or '-'}"]

@@ -88,9 +88,8 @@ def candidate_of(tool, path, signature):
 
 
 def wait_and_report(tool):
-    before = tool.state["last"]
     last = tool.join() or {}
-    if tool.phase() == "checking" and last is before:
+    if tool.phase() == "checking":
         print("switched: mowbite-host tries it at its next start (systemctl start mowbite-host)", flush=True)
         return True
     print(f"{last.get('result')}: {last.get('reason') or ''} {last.get('message', '')}".strip(), flush=True)
@@ -114,7 +113,7 @@ def main(argv):
         for one in tool.installers.values():
             print("\n".join(one.status_lines()))
         return 0
-    for place in tool.paths.places.values():
+    for place in (*tool.paths.places.values(), tool.paths.host):
         os.makedirs(place.opt, exist_ok=True)
     os.makedirs(os.path.dirname(tool.paths.lock), exist_ok=True)
     with open(tool.paths.lock, "w") as lock:

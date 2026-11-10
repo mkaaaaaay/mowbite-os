@@ -85,6 +85,7 @@ def run():
     check.api_of_running = tool.running_api
     # A switch of the host ends this process; systemd starts the new one.
     tool.restart_self = lambda: stopping.append(True)
+    tool.connected = lambda: client.connected
     tool.host_went_back()
     tool.recover(start_stopped=True)
     installer.settle(where)

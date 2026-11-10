@@ -60,14 +60,20 @@ class Nothing:
         pass
 
 
-def _start_time(pid):
+# The fields of /proc/<pid>/stat after the name (state first, process group third, start time twentieth); None for
+# a process that is gone or a zombie.
+def _stat_fields(pid):
     try:
         with open(f"/proc/{pid}/stat") as f:
             fields = f.read().rsplit(")", 1)[1].split()
     except (OSError, IndexError):
         return None
-    # State is the first field after the name, the start time the twentieth.
-    return None if fields[0] in ("Z", "X") else fields[19]
+    return None if fields[0] in ("Z", "X") else fields
+
+
+def _start_time(pid):
+    fields = _stat_fields(pid)
+    return fields[19] if fields else None
 
 
 class Process:
@@ -153,19 +159,15 @@ class Process:
             pass
 
 
-# Whether a process of the group pgid lives that is not a zombie.
+# Whether a process of the group pgid lives that is not a zombie; /proc is read only while the group exists.
 def _group_alive(pgid):
-    for name in os.listdir("/proc"):
-        if not name.isdigit():
-            continue
-        try:
-            with open(f"/proc/{name}/stat") as f:
-                fields = f.read().rsplit(")", 1)[1].split()
-        except (OSError, IndexError):
-            continue
-        if fields[2] == str(pgid) and fields[0] not in ("Z", "X"):
-            return True
-    return False
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return any((_stat_fields(name) or [None] * 3)[2] == str(pgid) for name in os.listdir("/proc") if name.isdigit())
 
 
 def _kill_group(pgid, sig):
