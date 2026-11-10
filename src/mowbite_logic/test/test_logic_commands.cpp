@@ -523,7 +523,7 @@ TEST(LogicCommands, UndoTakesMetresWithinItsRange) {
   TestCore core = Ring3();
   for (double meters : {0.05, 50.5, -1.0}) {
     const CommandOutcome outcome = Rpc(core, "recording.undo", {{"meters", meters}});
-    EXPECT_EQ(outcome.invalid, "meters: 0.1 to 50") << meters;
+    EXPECT_FALSE(outcome.invalid.empty()) << meters;
     EXPECT_EQ(outcome.invalid_field, "meters");
   }
   EXPECT_EQ(core.recorder().current().size(), 3u);

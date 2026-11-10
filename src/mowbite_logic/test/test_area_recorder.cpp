@@ -317,10 +317,9 @@ TEST(Recorder, ClosingCutsTheEndPastTheStart) {
   recorder.OnAction("start_recording");
   Drive(recorder, {{0, 0}, {4, 0}, {4, 4}, {0.37, 4}, {0.37, -0.6}});
   const size_t points = recorder.current().size();
-  json answer;
-  ASSERT_EQ(recorder.OnAction("stop_recording", nullptr, json::object(), &answer), AreaRecorder::Result::kDone);
+  ASSERT_EQ(recorder.OnAction("stop_recording"), AreaRecorder::Result::kDone);
   ASSERT_TRUE(recorder.outline());
-  const size_t trimmed = answer["trimmed_points"];
+  const size_t trimmed = recorder.trimmed_points();
   EXPECT_GE(trimmed, 4u);
   // The crossing comes in as a point of its own.
   EXPECT_EQ(recorder.outline()->size(), points - trimmed + 1);
@@ -340,13 +339,11 @@ TEST(Recorder, AFarOverhangNeedsUndo) {
   auto events = recorder.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].details["reason"], "RING_CROSSES_ITSELF");
-  json answer;
-  ASSERT_EQ(recorder.OnAction("undo_points", nullptr, {{"meters", 3.2}}, &answer), AreaRecorder::Result::kDone);
-  EXPECT_EQ(answer["points"], recorder.current().size());
+  ASSERT_EQ(recorder.OnAction("undo_points", nullptr, 3.2), AreaRecorder::Result::kDone);
   EXPECT_GT(recorder.current().back().y, 0);
   EXPECT_LT(recorder.current().back().y, 0.5);
-  ASSERT_EQ(recorder.OnAction("stop_recording", nullptr, json::object(), &answer), AreaRecorder::Result::kDone);
-  EXPECT_EQ(answer["trimmed_points"], 0);
+  ASSERT_EQ(recorder.OnAction("stop_recording"), AreaRecorder::Result::kDone);
+  EXPECT_EQ(recorder.trimmed_points(), 0u);
 }
 
 TEST(Recorder, UndoTakesBackThePathAndStopsAutoPoints) {
@@ -360,12 +357,12 @@ TEST(Recorder, UndoTakesBackThePathAndStopsAutoPoints) {
   EXPECT_TRUE(recorder.TakeActionsChanged()) << "undo_points comes with the first point";
   EXPECT_TRUE(On(recorder, "undo_points"));
   recorder.TakeOverlayChanged();
-  json answer;
-  ASSERT_EQ(recorder.OnAction("undo_points", nullptr, json::object(), &answer), AreaRecorder::Result::kDone);
+  const size_t before = recorder.current().size();
+  ASSERT_EQ(recorder.OnAction("undo_points"), AreaRecorder::Result::kDone);
   // 1 m by default: the end is at most 2 m from the start now, and not much less.
   EXPECT_LE(recorder.current().back().x, 2.0 + 1e-9);
   EXPECT_GT(recorder.current().back().x, 1.7);
-  EXPECT_EQ(answer, json({{"points", recorder.current().size()}}));
+  EXPECT_GE(before - recorder.current().size(), 7u);
   EXPECT_TRUE(recorder.TakeOverlayChanged());
   EXPECT_TRUE(recorder.TakeActionsChanged());
   EXPECT_TRUE(On(recorder, "auto_point_collecting_enable"));
@@ -376,8 +373,7 @@ TEST(Recorder, UndoTakesBackThePathAndStopsAutoPoints) {
   EXPECT_EQ(recorder.current().size(), left);
   EXPECT_TRUE(recorder.TakeEvents().empty());
 
-  ASSERT_EQ(recorder.OnAction("undo_points", nullptr, {{"meters", 50}}, &answer), AreaRecorder::Result::kDone);
-  EXPECT_EQ(answer["points"], 0);
+  ASSERT_EQ(recorder.OnAction("undo_points", nullptr, 50), AreaRecorder::Result::kDone);
   EXPECT_TRUE(recorder.current().empty());
   EXPECT_FALSE(On(recorder, "undo_points"));
   EXPECT_TRUE(recorder.recording());
@@ -386,9 +382,8 @@ TEST(Recorder, UndoTakesBackThePathAndStopsAutoPoints) {
 TEST(Recorder, ARingWithoutPointsJustEnds) {
   AreaRecorder recorder = Writable();
   recorder.OnAction("start_recording");
-  json answer;
-  ASSERT_EQ(recorder.OnAction("stop_recording", nullptr, json::object(), &answer), AreaRecorder::Result::kDone);
-  EXPECT_EQ(answer["trimmed_points"], 0);
+  ASSERT_EQ(recorder.OnAction("stop_recording"), AreaRecorder::Result::kDone);
+  EXPECT_EQ(recorder.trimmed_points(), 0u);
   EXPECT_FALSE(recorder.recording());
   EXPECT_FALSE(recorder.outline());
   EXPECT_TRUE(On(recorder, "start_recording"));
@@ -399,9 +394,7 @@ TEST(Recorder, ARingWithoutPointsJustEnds) {
   Drive(recorder, Square(3));
   recorder.OnAction("stop_recording");
   recorder.OnAction("start_recording");
-  ASSERT_EQ(recorder.OnAction("finish_mowing_area", nullptr, {{"type", "mow"}}, &answer),
-            AreaRecorder::Result::kDone);
-  EXPECT_EQ(answer["trimmed_points"], 0);
+  ASSERT_EQ(recorder.OnAction("finish_mowing_area"), AreaRecorder::Result::kDone);
   const auto edit = recorder.TakeMapEdit();
   ASSERT_TRUE(edit);
   EXPECT_TRUE(edit->obstacles.empty());
@@ -825,7 +818,7 @@ TEST(RecorderOverlay, LinesInMillimetres) {
   EXPECT_EQ(line.size(), 4u);
   recorder.OnPose(1.123456, 0.2, 0.02f, true);
   EXPECT_EQ(recorder.Overlay()["polygons"][0]["poly"][2].dump(), R"({"x":1.123,"y":0.2})");
-  recorder.OnAction("undo_points", nullptr, {{"meters", 0.1}});
+  recorder.OnAction("undo_points", nullptr, 0.1);
   EXPECT_TRUE(recorder.TakeOverlayChanged());
   EXPECT_EQ(recorder.Overlay()["polygons"][0]["poly"].size(), 2u);
   recorder.OnAction("auto_point_collecting_enable");

@@ -24,6 +24,14 @@ Field Text(std::string name, std::string text, bool required = true, std::vector
   return {std::move(name), Type::kString, "", required, std::move(text), std::move(values), false, {}, ""};
 }
 
+// A number of this unit from min to max.
+Field Ranged(std::string name, std::string unit, double min, double max, std::string text, bool required = true) {
+  Field field = Number(std::move(name), std::move(unit), std::move(text), required);
+  field.min = min;
+  field.max = max;
+  return field;
+}
+
 Field Bool(std::string name, std::string text, bool required = true) {
   return {std::move(name), Type::kBoolean, "", required, std::move(text), {}, false, {}, ""};
 }
@@ -425,7 +433,7 @@ const std::vector<Command>& Commands() {
             {{kRecord + "collect_point"}}),
       Logic("recording.undo",
             "Takes points back from the end of the open ring and switches the automatic points off; the mower stays",
-            {Number("meters", "m", "Path to take back, 0.1 to 50, default 1", false)},
+            {Ranged("meters", "m", 0.1, 50, "Path to take back, default 1", false)},
             Answer({Integer("points", "Points left in the open ring")}), "RECORDING_REFUSED",
             {{kRecord + "undo_points"}}),
   };

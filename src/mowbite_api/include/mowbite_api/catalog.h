@@ -38,6 +38,9 @@ struct Field {
   std::string pattern;
   // The type of the items of an array without fields; with fields they are objects of these fields.
   std::optional<Type> items = std::nullopt;
+  // Bounds of a number, inclusive.
+  std::optional<double> min = std::nullopt;
+  std::optional<double> max = std::nullopt;
 };
 
 // What the app shows of a reason or an emergency bit in one language: its name, what happened, what to do.

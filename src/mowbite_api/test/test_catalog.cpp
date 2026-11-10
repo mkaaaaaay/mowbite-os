@@ -375,6 +375,12 @@ TEST(Catalog, ParamsOfACommand) {
   EXPECT_NE(CheckParams(skip, Json{{"area", 2.5}}, &field), "");
   EXPECT_NE(CheckParams(*FindCommand("recording.auto_points"), Json{{"enabled", 1}}, &field), "");
   EXPECT_EQ(CheckParams(*FindCommand("mowing.start"), Json{{"areas", Json::array({"front"})}}, &field), "");
+  const Command& undo = *FindCommand("recording.undo");
+  EXPECT_EQ(CheckParams(undo, Json{{"meters", 0.1}}, &field), "");
+  EXPECT_EQ(CheckParams(undo, Json{{"meters", 50}}, &field), "");
+  EXPECT_EQ(CheckParams(undo, Json{{"meters", 0.05}}, &field), "recording.undo.meters: 0.05 is below 0.1");
+  EXPECT_EQ(field, "meters");
+  EXPECT_EQ(CheckParams(undo, Json{{"meters", 51}}, &field), "recording.undo.meters: 51 is above 50.0");
 }
 
 // Every RPC method once, each with its node; the commands are none of them.

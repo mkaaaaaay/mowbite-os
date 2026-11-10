@@ -21,10 +21,6 @@ struct PlanError {
   throw PlanError{kPlanInvalidParams, message};
 }
 
-double Millimetres(double v) {
-  return std::round(v * 1000.0) / 1000.0;
-}
-
 bool IsNumber(const json& j) {
   return j.is_number() && std::isfinite(j.get<double>());
 }

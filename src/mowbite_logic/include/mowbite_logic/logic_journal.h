@@ -14,8 +14,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Reason, code, message, fields)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Event, type, details, id)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Point2, x, y)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockPose, x, y, heading)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(RecorderConfig, min_point_distance, max_position_accuracy, min_area, max_points,
-                                   min_dock_distance, dock_backwards)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RecorderConfig, min_point_distance, max_position_accuracy, min_area,
+                                                max_overhang, max_points, min_dock_distance, dock_backwards)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(MapEdit, kind, type, outline, obstacles, x, y, heading)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobArea, id, name, mowable)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UndockConfig, distance, speed, stall_time, course_limit, course_distance, corridor)
@@ -76,7 +76,7 @@ void to_json(Json& j, const Effect& effect) {
 
 static_assert(sizeof(Reason) == 80);
 static_assert(sizeof(Event) == 80);
-static_assert(sizeof(RecorderConfig) == 48);
+static_assert(sizeof(RecorderConfig) == 56);
 static_assert(sizeof(MapEdit) == 112);
 static_assert(sizeof(JobArea) == 72);
 static_assert(sizeof(UndockConfig) == 48);
@@ -90,7 +90,7 @@ static_assert(sizeof(JobProgress) == 112);
 static_assert(sizeof(HardwareSnapshot) == 72);
 static_assert(sizeof(PoseSnapshot) == 40);
 static_assert(sizeof(CalibrationConfig) == 32);
-static_assert(sizeof(LogicConfig) == 424);
+static_assert(sizeof(LogicConfig) == 432);
 static_assert(sizeof(CalibrationStatus) == 64);
 static_assert(sizeof(CalibrationGoal) == 16);
 static_assert(sizeof(CalibrationOutcome) == 128);

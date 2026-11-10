@@ -65,10 +65,6 @@ bool SegmentsTouch(const Point2& a, const Point2& b, const Point2& c, const Poin
   return false;
 }
 
-double Distance(const Point2& a, const Point2& b) {
-  return std::hypot(b.x - a.x, b.y - a.y);
-}
-
 // The same point within a micrometre: a crossing at a corner of the ring.
 bool Same(const Point2& a, const Point2& b) {
   return Distance(a, b) < 1e-6;
@@ -121,15 +117,23 @@ bool SelfIntersects(const Ring& ring) {
 
 std::optional<CutRing> CutOverhang(const Ring& ring, double max_cut) {
   const size_t n = ring.size();
+  if (n < 4) return std::nullopt;
+  // Only segments that begin within max_cut of the start (i) or end within max_cut of the end (j) can be cut at.
+  size_t last_i = 0;
+  double path = 0;
+  while (last_i + 2 < n && (path += Distance(ring[last_i], ring[last_i + 1])) <= max_cut) last_i++;
+  size_t first_j = n - 2;
+  path = 0;
+  while (first_j > 0 && (path += Distance(ring[first_j], ring[first_j + 1])) <= max_cut) first_j--;
   // Segment j runs from point j to j + 1; the first that meets an earlier one ends the loop, the latest of those
   // begins it.
-  for (size_t j = 2; j + 1 < n; j++) {
-    for (size_t i = j - 1; i-- > 0;) {
+  for (size_t j = std::max<size_t>(first_j, 2); j + 1 < n; j++) {
+    for (size_t i = std::min(j - 1, last_i + 1); i-- > 0;) {
       if (!SegmentsTouch(ring[i], ring[i + 1], ring[j], ring[j + 1])) continue;
       const Point2 at = Meeting(ring[i], ring[i + 1], ring[j], ring[j + 1]);
       const double cut = PathLength(ring, 0, i) + Distance(ring[i], at) + Distance(at, ring[j + 1]) +
                          PathLength(ring, j + 1, n - 1);
-      if (cut > max_cut) return std::nullopt;
+      if (cut > max_cut) continue;
       CutRing out;
       if (!Same(at, ring[i + 1]) && !Same(at, ring[j])) out.ring.push_back(at);
       out.ring.insert(out.ring.end(), ring.begin() + static_cast<std::ptrdiff_t>(i + 1),
@@ -201,17 +205,15 @@ AreaRecorder::Result AreaRecorder::Refuse(const std::string& action, const Reaso
   return Result::kRefused;
 }
 
-AreaRecorder::Result AreaRecorder::OnAction(const std::string& name, Reason* why, const json& params,
-                                            json* answer) {
+AreaRecorder::Result AreaRecorder::OnAction(const std::string& name, Reason* why, double undo_meters) {
   refusal_ = Reason();
-  json fields = json::object();
-  const Result result = Act(name, params, &fields);
+  trimmed_points_ = 0;
+  const Result result = Act(name, undo_meters);
   if (why) *why = result == Result::kRefused ? refusal_ : Reason();
-  if (answer && result == Result::kDone) *answer = std::move(fields);
   return result;
 }
 
-AreaRecorder::Result AreaRecorder::Act(const std::string& name, const json& params, json* answer) {
+AreaRecorder::Result AreaRecorder::Act(const std::string& name, double undo_meters) {
   const auto& names = ActionNames();
   const auto it = std::find(names.begin(), names.end(), name);
   if (it == names.end() || name == "exit_recording_mode") return Result::kUnknown;
@@ -229,9 +231,9 @@ AreaRecorder::Result AreaRecorder::Act(const std::string& name, const json& para
       full_reported_ = false;
       notices_.push_back(outline_ ? "Recording an obstacle" : "Recording an outline");
       return Result::kDone;
-    case kStopRecording: return CloseRing(name, answer) ? Result::kDone : Result::kRefused;
-    case kFinishNavigationArea: return Finish(name, "nav", answer);
-    case kFinishMowingArea: return Finish(name, "mow", answer);
+    case kStopRecording: return CloseRing(name) ? Result::kDone : Result::kRefused;
+    case kFinishNavigationArea: return Finish(name, "nav");
+    case kFinishMowingArea: return Finish(name, "mow");
     case kFinishDiscard:
       notices_.push_back(dock_first_ ? "Discarded the first point of the docking station"
                                      : "Discarded the area being recorded");
@@ -249,13 +251,13 @@ AreaRecorder::Result AreaRecorder::Act(const std::string& name, const json& para
       collect_requested_ = true;
       return Result::kDone;
     case kUndoPoints:
-      Undo(params.is_object() ? params.value("meters", kUndoDefaultM) : kUndoDefaultM, answer);
+      Undo(undo_meters);
       return Result::kDone;
     default: return Result::kRefused;
   }
 }
 
-void AreaRecorder::Undo(double meters, json* answer) {
+void AreaRecorder::Undo(double meters) {
   const size_t before = current_.size();
   double taken = 0;
   while (!current_.empty() && taken < meters) {
@@ -270,39 +272,33 @@ void AreaRecorder::Undo(double meters, json* answer) {
   overlay_changed_ = true;
   notices_.push_back("Took back " + std::to_string(before - current_.size()) + " points (" + Metres(taken) +
                      " m), automatic points are off");
-  (*answer)["points"] = current_.size();
 }
 
-bool AreaRecorder::CloseRing(const std::string& action, json* answer) {
-  (*answer)["trimmed_points"] = 0;
+bool AreaRecorder::CloseRing(const std::string& action) {
   if (current_.empty()) {
     notices_.push_back("Ended the ring without points");
-    recording_ = false;
-    collect_requested_ = false;
-    return true;
-  }
-  Reason problem = RingProblem(current_, config_.min_area);
-  if (problem.code == "RING_CROSSES_ITSELF") {
-    auto cut = CutOverhang(current_, config_.max_overhang);
+  } else {
+    Reason problem = RingProblem(current_, config_.min_area);
+    std::optional<CutRing> cut;
+    if (problem.code == "RING_CROSSES_ITSELF") cut = CutOverhang(current_, config_.max_overhang);
     if (cut && RingProblem(cut->ring, config_.min_area).empty()) {
       notices_.push_back("Cut off " + std::to_string(cut->dropped) + " points where the ring ran past its start");
-      (*answer)["trimmed_points"] = cut->dropped;
+      trimmed_points_ = cut->dropped;
       current_ = std::move(cut->ring);
-      problem = Reason();
+    } else if (!problem.empty()) {
+      // The ring stays open: the mower can drive on, or take points back.
+      Refuse(action, problem);
+      return false;
     }
+    const size_t points = current_.size();
+    if (outline_) {
+      obstacles_.push_back(std::move(current_));
+    } else {
+      outline_ = std::move(current_);
+    }
+    notices_.push_back("Closed the " + std::string(obstacles_.empty() ? "outline" : "obstacle") + " with " +
+                       std::to_string(points) + " points");
   }
-  if (!problem.empty()) {
-    // The ring stays open: the mower can drive on, or take points back.
-    Refuse(action, problem);
-    return false;
-  }
-  if (outline_) {
-    obstacles_.push_back(current_);
-  } else {
-    outline_ = current_;
-  }
-  notices_.push_back("Closed the " + std::string(obstacles_.empty() ? "outline" : "obstacle") + " with " +
-                     std::to_string(current_.size()) + " points");
   recording_ = false;
   current_.clear();
   collect_requested_ = false;
@@ -310,10 +306,9 @@ bool AreaRecorder::CloseRing(const std::string& action, json* answer) {
   return true;
 }
 
-AreaRecorder::Result AreaRecorder::Finish(const std::string& action, const std::string& type, json* answer) {
+AreaRecorder::Result AreaRecorder::Finish(const std::string& action, const std::string& type) {
   if (!map_writable_) return Refuse(action, map_reason_);
-  (*answer)["trimmed_points"] = 0;
-  if (recording_ && !CloseRing(action, answer)) return Result::kRefused;
+  if (recording_ && !CloseRing(action)) return Result::kRefused;
   if (!outline_) return Refuse(action, Reason("NO_OUTLINE", "No outline recorded"));
   MapEdit edit;
   edit.type = type;
@@ -354,7 +349,7 @@ AreaRecorder::Result AreaRecorder::RecordDock() {
     return Refuse(action, Reason("NO_DOCK_CONTACT", "No contact with the docking station: drive " + onto +
                                                         " until the mower reports it"));
   }
-  const double distance = std::hypot(here.x - dock_first_->x, here.y - dock_first_->y);
+  const double distance = Distance(here, *dock_first_);
   if (distance < config_.min_dock_distance) {
     // The first point stays, driving on is enough.
     return Refuse(action, Reason("DOCK_TOO_CLOSE", "Only " + Metres(distance) + " m from the first point, at least " +
@@ -528,16 +523,15 @@ json AreaRecorder::Overlay() const {
   const auto add = [&polygons](const Ring& ring, bool closed, double line_width, const char* color) {
     // Like OpenMower: a single point is no line.
     if (ring.size() < 2) return;
-    const auto mm = [](double value) { return std::round(value * 1000) / 1000; };
     json points = json::array();
-    for (const auto& p : ring) points.push_back({{"x", mm(p.x)}, {"y", mm(p.y)}});
+    for (const auto& p : ring) points.push_back({{"x", Millimetres(p.x)}, {"y", Millimetres(p.y)}});
     polygons.push_back(
         {{"poly", std::move(points)}, {"is_closed", closed ? 1 : 0}, {"line_width", line_width}, {"color", color}});
   };
   if (outline_) add(*outline_, true, 0.05, "green");
   for (const auto& ring : obstacles_) add(ring, true, 0.05, "red");
   if (recording_) add(current_, false, 0.1, "blue");
-  return {{"polygons", polygons}};
+  return {{"polygons", std::move(polygons)}};
 }
 
 bool AreaRecorder::TakeOverlayChanged() {

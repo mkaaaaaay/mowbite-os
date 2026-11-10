@@ -36,6 +36,8 @@ Json Property(const Field& field) {
     if (field.nullable) property["enum"].push_back(nullptr);
   }
   if (!field.pattern.empty()) property["pattern"] = field.pattern;
+  if (field.min) property["minimum"] = *field.min;
+  if (field.max) property["maximum"] = *field.max;
   property["description"] = field.text;
   if (!field.unit.empty()) property["x-unit"] = field.unit;
   if (field.type == Type::kArray && (!field.fields.empty() || field.items)) {

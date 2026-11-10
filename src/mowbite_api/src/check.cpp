@@ -48,6 +48,12 @@ void CheckField(const std::string& where, const Field& field, const Json& value,
   if (!field.values.empty() && std::find(field.values.begin(), field.values.end(), value) == field.values.end()) {
     problems->push_back(where + "." + field.name + ": value " + value.dump() + " is not one of the catalog's");
   }
+  if (value.is_number() && field.min && value.get<double>() < *field.min) {
+    problems->push_back(where + "." + field.name + ": " + value.dump() + " is below " + Json(*field.min).dump());
+  }
+  if (value.is_number() && field.max && value.get<double>() > *field.max) {
+    problems->push_back(where + "." + field.name + ": " + value.dump() + " is above " + Json(*field.max).dump());
+  }
   if (!field.pattern.empty() && value.is_string() &&
       !std::regex_search(value.get<std::string>(), std::regex(field.pattern, std::regex::ECMAScript))) {
     problems->push_back(where + "." + field.name + ": " + value.dump() + " does not match " + field.pattern);

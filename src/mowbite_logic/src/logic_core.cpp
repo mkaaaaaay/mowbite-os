@@ -372,15 +372,6 @@ CommandOutcome LogicCore::Command(const std::string& name, const json& params, c
     out.invalid = "areas: this OS keeps no list of areas yet, start without it";
     out.invalid_field = "areas";
   }
-  if (out.invalid.empty() && name == "recording.undo" && params.contains("meters")) {
-    const double meters = params["meters"].get<double>();
-    if (!(meters >= kUndoMinM && meters <= kUndoMaxM)) {
-      char text[64];
-      std::snprintf(text, sizeof(text), "meters: %g to %g", kUndoMinM, kUndoMaxM);
-      out.invalid = text;
-      out.invalid_field = "meters";
-    }
-  }
   if (!out.invalid.empty()) return out;
   client_ = params.is_object() ? params.value("client", "") : "";
   // Effects may go away while the command runs, events never: its events are those after the ones before it.
@@ -586,11 +577,15 @@ Reason LogicCore::RecordingCommand(const mowbite_api::Command& command, const js
   }
   if (action.rfind(kRecordingPrefix + "/", 0) != 0) return WrongState();
   Reason why;
-  const AreaRecorder::Result result =
-      recorder_.OnAction(action.substr(kRecordingPrefix.size() + 1), &why, params, &out->result);
+  const AreaRecorder::Result result = recorder_.OnAction(action.substr(kRecordingPrefix.size() + 1), &why,
+                                                        params.value("meters", kUndoDefaultM));
   PullRecorder();
-  if (result == AreaRecorder::Result::kDone) return {};
-  return why.empty() ? WrongState() : why;
+  if (result != AreaRecorder::Result::kDone) return why.empty() ? WrongState() : why;
+  if (command.name == "recording.undo") out->result["points"] = recorder_.current().size();
+  if (command.name == "recording.ring_stop" || command.name == "recording.save") {
+    out->result["trimmed_points"] = recorder_.trimmed_points();
+  }
+  return {};
 }
 
 std::optional<std::pair<double, double>> LogicCore::OnTeleop(double vx, double vz, double now_s) {

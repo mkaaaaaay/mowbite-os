@@ -1,6 +1,7 @@
 #ifndef MOWBITE_LOGIC_AREA_RECORDER_H
 #define MOWBITE_LOGIC_AREA_RECORDER_H
 
+#include <cmath>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -39,20 +40,27 @@ bool SelfIntersects(const Ring& ring);
 // m², of the closed ring.
 double RingArea(const Ring& ring);
 
+inline double Distance(const Point2& a, const Point2& b) {
+  return std::hypot(b.x - a.x, b.y - a.y);
+}
+
+// Rounded to mm, as positions go out.
+inline double Millimetres(double metres) {
+  return std::round(metres * 1000.0) / 1000.0;
+}
+
 // A ring whose end ran past its start: the loop from the first crossing of the line with itself, and how many
 // points of the ring are not in it.
 struct CutRing {
   Ring ring;
   size_t dropped = 0;
 };
-// The loop, or nullopt when the line does not cross itself or the path cut off before and after the crossing is
-// longer than max_cut (m).
+// The loop, or nullopt when the line does not cross itself where the path cut off before and after the crossing is
+// at most max_cut (m).
 std::optional<CutRing> CutOverhang(const Ring& ring, double max_cut);
 
-// recording.undo: the path (m) taken back from the end of the open ring.
+// recording.undo without meters: the path (m) taken back from the end of the open ring.
 constexpr double kUndoDefaultM = 1.0;
-constexpr double kUndoMinM = 0.1;
-constexpr double kUndoMaxM = 50;
 
 struct RecorderConfig {
   // A new point needs more than this distance (m) to the last one, NEW_POINT_MIN_DISTANCE of OpenMower.
@@ -103,10 +111,12 @@ class AreaRecorder {
   // Drops everything recorded and not saved; an edit on its way is still reported when it is answered.
   void Reset();
   // An action of mower_logic:area_recording without the prefix, except exit_recording_mode; why: the reason of a
-  // refusal that went out as RECORDING_REFUSED, empty for one without an event (the action is not enabled). params:
-  // those of the command (meters of undo_points); answer: its fields when done (points, trimmed_points).
-  Result OnAction(const std::string& name, Reason* why = nullptr, const json& params = json::object(),
-                  json* answer = nullptr);
+  // refusal that went out as RECORDING_REFUSED, empty for one without an event (the action is not enabled).
+  Result OnAction(const std::string& name, Reason* why = nullptr, double undo_meters = kUndoDefaultM);
+  // Points the last action cut off where the ring ran past its start.
+  size_t trimmed_points() const {
+    return trimmed_points_;
+  }
   // heading_valid: the localization has its heading, else base_link may be off by the antenna offset.
   void OnPose(double x, double y, float position_accuracy, bool heading_valid);
   // The pose got too old.
@@ -159,11 +169,11 @@ class AreaRecorder {
 
  private:
   Result Refuse(const std::string& action, const Reason& reason);
-  Result Act(const std::string& name, const json& params, json* answer);
+  Result Act(const std::string& name, double undo_meters);
   // Ends the open ring: the outline if there is none yet, else an obstacle; a ring without points just ends.
-  bool CloseRing(const std::string& action, json* answer);
-  Result Finish(const std::string& action, const std::string& type, json* answer);
-  void Undo(double meters, json* answer);
+  bool CloseRing(const std::string& action);
+  Result Finish(const std::string& action, const std::string& type);
+  void Undo(double meters);
   Result RecordDock();
   void AddPoint(double x, double y);
   size_t PointCount() const;
@@ -187,6 +197,7 @@ class AreaRecorder {
   std::optional<Pose> pose_;
   bool accuracy_blocked_ = false;
   bool full_reported_ = false;
+  size_t trimmed_points_ = 0;
   bool map_writable_ = false;
   bool dock_contact_ = false;
   Reason map_reason_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");

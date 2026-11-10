@@ -5201,7 +5201,9 @@
           "type": "string"
         },
         "meters": {
-          "description": "Path to take back, 0.1 to 50, default 1",
+          "description": "Path to take back, default 1",
+          "maximum": 50.0,
+          "minimum": 0.1,
           "type": "number",
           "x-unit": "m"
         }
