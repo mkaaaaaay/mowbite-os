@@ -77,6 +77,11 @@ class Text {
   size_t len_ = 0;
 };
 
+// The container sets no variable while it runs, so reading them is safe.
+const char* Env(const char* name) {
+  return std::getenv(name);  // NOLINT(concurrency-mt-unsafe)
+}
+
 void WriteAll(int fd, const char* data, size_t size) {
   while (size > 0) {
     const ssize_t n = write(fd, data, size);
@@ -106,7 +111,7 @@ void WriteNote(const std::string& path, const Verdict& verdict) {
 Options OptionsFromEnvironment(std::string* warning) {
   Options options;
   warning->clear();
-  if (const char* nodes = std::getenv(kNodesEnv)) {
+  if (const char* nodes = Env(kNodesEnv)) {
     std::string list = nodes;
     size_t start = 0;
     while (start <= list.size()) {
@@ -115,8 +120,8 @@ Options OptionsFromEnvironment(std::string* warning) {
       start = end + 1;
     }
   }
-  if (const char* note = std::getenv(kNoteEnv)) options.note = note;
-  if (const char* factor = std::getenv(kFactorEnv)) {
+  if (const char* note = Env(kNoteEnv)) options.note = note;
+  if (const char* factor = Env(kFactorEnv)) {
     char* end = nullptr;
     const double value = std::strtod(factor, &end);
     if (end != factor && *end == '\0' && value >= 1.0 && value <= 100.0) {
@@ -170,7 +175,8 @@ Runtime::Runtime(Options options)
   if (timer_create(CLOCK_MONOTONIC, &event, &timer_) != 0) {
     char line[160];
     Text text(line, sizeof(line));
-    text.Add("mowbite_watch: no kernel timer (").Add(std::strerror(errno)).Add("): ending the process\n");
+    const char* error = strerrorname_np(errno);
+    text.Add("mowbite_watch: no kernel timer (").Add(error ? error : "?").Add("): ending the process\n");
     WriteAll(STDERR_FILENO, line, text.size());
     _exit(kExitCode);
   }
