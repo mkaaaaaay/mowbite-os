@@ -1791,7 +1791,7 @@ class LogicNode : public rclcpp::Node {
   // mowbite/hold for scheduler.sh, the planner, App and HA, the OS its only writer on its host: {"until"} retained while
   // held, again every kHoldMirrorS, and empty once after it and after the start. It waits for the bridge.
   void MirrorHold() {
-    if (!BridgeListens()) return;
+    if (publish_pub_->get_subscription_count() == 0) return;
     mowbite_msgs::msg::MqttPublish msg;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -2352,7 +2352,7 @@ class LogicNode : public rclcpp::Node {
 
   void PublishOverlay() {
     // The first, empty one replaces the lines of a recording before a restart, so it waits for the bridge.
-    if (!BridgeListens()) return;
+    if (publish_pub_->get_subscription_count() == 0) return;
     mowbite_msgs::msg::MqttPublish msg;
     {
       std::lock_guard<std::mutex> lock(mutex_);
