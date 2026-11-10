@@ -39,6 +39,12 @@ std::string Folder() {
   return mkdtemp(path);
 }
 
+mode_t CurrentUmask() {
+  const mode_t mask = umask(0);
+  umask(mask);
+  return mask;
+}
+
 std::string Read(const std::string& path) {
   std::ifstream in(path);
   std::stringstream text;
@@ -88,6 +94,22 @@ TEST_F(WatchDeath, ASilentNodeEndsTheProcessWithItsLineAndNote) {
   const std::string text = Read(note);
   EXPECT_NE(text.find("{\"node\":\"mowbite_bridge\",\"seconds\":0."), std::string::npos) << text;
   EXPECT_NE(text.find(",\"limit\":0.2}"), std::string::npos) << text;
+  struct stat st {};
+  ASSERT_EQ(stat(note.c_str(), &st), 0);
+  EXPECT_EQ(st.st_mode & 07777, 0644u & ~CurrentUmask());
+}
+
+TEST_F(WatchDeath, ANotePathTooLongEndsWithoutANote) {
+  EXPECT_EXIT(
+      {
+        Options options = Short();
+        options.note = "/tmp/" + std::string(5000, 'n');
+        auto* runtime = new Runtime(options);
+        Watch watch("mowbite_map", 0.1, *runtime);
+        Sleep(5.0);
+        _exit(0);
+      },
+      ::testing::ExitedWithCode(kExitCode), "mowbite_map silent for");
 }
 
 TEST_F(WatchDeath, ANodeThatLeftNoLongerCounts) {
@@ -130,6 +152,7 @@ TEST_F(WatchDeath, AStalledWatchThreadMeetsTheKernelTimerAlsoWithSignalsBlocked)
         sigfillset(&all);
         pthread_sigmask(SIG_BLOCK, &all, nullptr);
         Options options = Short();
+        options.deadman = 0.6;
         options.before_judge = Stall;
         auto* runtime = new Runtime(options);
         Watch watch("mowbite_logic", 0.1, *runtime);
@@ -137,7 +160,9 @@ TEST_F(WatchDeath, AStalledWatchThreadMeetsTheKernelTimerAlsoWithSignalsBlocked)
         _exit(0);
       },
       ::testing::KilledBySignal(SIGKILL), "");
-  EXPECT_LT(duration<double>(steady_clock::now() - start).count(), 2.0);
+  const double took = duration<double>(steady_clock::now() - start).count();
+  EXPECT_GT(took, 0.5);
+  EXPECT_LT(took, 1.0);
 }
 
 TEST_F(WatchDeath, AStalledWatchThreadMeetsAKernelTimerOfSecondsAsWell) {
