@@ -326,11 +326,11 @@ class TestGeometry(unittest.TestCase):
         before = saved()
         events = len(self.probe.geometry_events())
         # A folder where the new file is written first: the save fails, as it would with a full or broken card.
-        os.mkdir(FILE + ".new")
+        os.mkdir(FILE + ".tmp")
         try:
             answer = self.set("nosave", 11, {"blade_offset": 0.02})
         finally:
-            os.rmdir(FILE + ".new")
+            os.rmdir(FILE + ".tmp")
         self.assertEqual(answer[0], RpcError.ERROR_INTERNAL)
         self.assertTrue(answer[1].startswith("Cannot save the dimensions: "), answer[1])
         self.assertEqual(saved(), before)

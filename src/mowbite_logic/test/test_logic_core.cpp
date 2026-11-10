@@ -740,7 +740,7 @@ TEST(LogicDrive, LostTelemetryPoseOrSafetyMeasurementCancel) {
     TestCore core = ReadyToDrive();
     ASSERT_TRUE(core.StartDrive(5, 3).empty());
     core.OnCapabilities(false);
-    EXPECT_EQ(core.TakeDriveCancel().value_or(Reason()).code, "NOT_ALLOWED");
+    EXPECT_EQ(core.TakeDriveCancel().value_or(Reason()).code, "NO_SAFETY_MEASUREMENT");
   }
 }
 

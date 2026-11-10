@@ -6,6 +6,9 @@ after cmd_vel_timeout, the blade off once its lease ran out or the missing IMU l
 then starts the container again: the logic comes back idle with the restart hold (G35, OS_CRASH after MOWING), the
 bridge logs why, S2 latches UNEXPECTED_RESTART at the driver, a release at the driver alone does not lift it, only
 emergency.reset of the logic does. A crash in IDLE only tells, and after the fourth crash the container stays down.
+With a disk that cannot be written (a folder where the file is written first): a start whose os-session.json does not
+get there is refused and nothing moves; a job goes on when the disk fails meanwhile; a restart hold that cannot be
+written holds in memory and is written once it can.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_stack_crash.py
 """
@@ -274,6 +277,33 @@ class TestStackCrash(unittest.TestCase):
         self.assertTrue(p.wait(lambda: p.pose is not None and p.pose.heading_valid
                                and p.pose.position_accuracy < 0.1, 30), "no good pose with a heading")
 
+    def test_01b_a_start_without_its_record_on_the_disk_is_refused(self):
+        p = self.probe
+        os.mkdir(SESSION + ".tmp")
+        try:
+            since = len(p.events)
+            p.act("mower_logic:idle/start_mowing")
+            refused = p.event(since, "MOWING_REFUSED", 10)
+            self.assertTrue(refused, [e["type"] for e in p.events[since:]])
+            self.assertEqual((refused["reason"], refused["file"]), ("STORAGE_NOT_WRITABLE", "os-session.json"), refused)
+            storage = p.event(since, "STORAGE", 5)
+            self.assertEqual((storage or {}).get("reason"), "STORAGE_NOT_WRITABLE", storage)
+            self.assertTrue(p.wait(lambda: p.robot.current_state == "IDLE", 5), p.robot)
+            still, poses = p.standing()
+            self.assertTrue(still and poses[1]["linear"] == 0.0, poses)
+            with open(SESSION) as f:
+                self.assertEqual(json.load(f)["state"], "IDLE")
+            # Known now: the next start is refused before it begins, and the event does not come again.
+            since = len(p.events)
+            p.act("mower_logic:idle/start_mowing")
+            refused = p.event(since, "MOWING_REFUSED", 10)
+            self.assertEqual((refused or {}).get("reason"), "STORAGE_NOT_WRITABLE", refused)
+            time.sleep(1.0)
+            self.assertEqual([e["type"] for e in p.events[since:]], ["MOWING_REFUSED"])
+        finally:
+            os.rmdir(SESSION + ".tmp")
+        self.assertTrue(p.logged("data_dir can be written again", 10))
+
     def test_02_the_blade_turns_and_the_mower_drives(self):
         p = self.probe
         since = len(p.events)
@@ -286,6 +316,25 @@ class TestStackCrash(unittest.TestCase):
             session = json.load(f)
         self.assertEqual((session["state"], session["clean"]), ("MOWING", False), session)
         self.assertFalse(os.path.exists(RESTART_HOLD))
+
+    def test_02b_a_job_goes_on_when_the_disk_fails_meanwhile(self):
+        p = self.probe
+        since = len(p.events)
+        # Both stay until after the crash: the restart finds neither file writable.
+        os.mkdir(SESSION + ".tmp")
+        os.mkdir(RESTART_HOLD + ".tmp")
+        p.act("mower_logic:mowing/pause")
+        storage = p.event(since, "STORAGE", 10)
+        self.assertEqual((storage or {}).get("file"), "os-session.json", storage)
+        p.act("mower_logic:mowing/continue")
+        self.assertTrue(p.wait(lambda: p.robot.current_state == "MOWING", 10), p.robot)
+        self.assertTrue(p.wait(lambda: (p.truth() or {}).get("linear", 0.0) > 0.05, 30), "the mower does not drive")
+        self.assertFalse([e for e in p.events[since:] if e["type"] == "MOWING_REFUSED"])
+        # The record of the start is on the disk: a crash now holds.
+        with open(SESSION) as f:
+            session = json.load(f)
+        self.assertEqual((session["state"], session["clean"]), ("MOWING", False), session)
+        TestStackCrash.storage_events = len([e for e in p.events if e["type"] == "STORAGE"])
 
     def test_03_without_the_container_the_driver_stops_mower_and_blade(self, proc_info):
         p = self.probe
@@ -353,6 +402,18 @@ class TestStackCrash(unittest.TestCase):
         self.assertTrue(p.wait(lambda: p.robot is not None and p.robot.current_state == "IDLE", 10), p.robot)
         # Back with its IMU, the driver keeps the latch until a release.
         self.assertTrue(p.hw.emergency_latched and p.hw.emergency_reason & HardwareStatus.REASON_IMU_TIMEOUT, p.hw)
+        # The hold cannot be written: the logic holds in memory and tells it, S2 has no file to latch on.
+        self.assertTrue(p.wait(lambda: p.robot.emergency and p.robot.emergency_reason & UNEXPECTED_RESTART, 10),
+                        p.robot)
+        self.assertFalse(os.path.exists(RESTART_HOLD))
+        self.assertTrue(p.logged("Restart hold in memory until it can be written", 5))
+        storage = p.wait(lambda: [e for e in p.events if e["type"] == "STORAGE"][TestStackCrash.storage_events:], 10)
+        self.assertEqual(storage[0]["file"] if storage else None, "os-session.json", storage)
+        again = sum("data_dir can be written again" in line for line in p.logs)
+        os.rmdir(SESSION + ".tmp")
+        os.rmdir(RESTART_HOLD + ".tmp")
+        self.assertTrue(p.wait(lambda: os.path.exists(RESTART_HOLD), 5), "the hold was not written again")
+        self.assertTrue(p.wait(lambda: sum("data_dir can be written again" in line for line in p.logs) > again, 10))
         # The restart hold: its file, the event, the bit in robot_state and, through S2, at the driver.
         self.assertTrue(os.path.exists(RESTART_HOLD))
         event = p.event(0, "UNEXPECTED_RESTART", 15)

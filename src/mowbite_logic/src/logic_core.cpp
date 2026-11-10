@@ -112,34 +112,6 @@ LogicCore::LogicCore(const LogicConfig& config)
   effects_.push_back(ActionsChanged{});
 }
 
-template <typename T>
-bool LogicCore::Pending() const {
-  return std::any_of(effects_.begin(), effects_.end(),
-                     [](const Effect& effect) { return std::holds_alternative<T>(effect); });
-}
-
-template <typename T>
-void LogicCore::SetDue(bool due) {
-  if (!due) {
-    Drop<T>();
-  } else if (!Pending<T>()) {
-    effects_.push_back(T{});
-  }
-}
-
-template <typename T>
-void LogicCore::Replace(T value) {
-  Drop<T>();
-  effects_.push_back(std::move(value));
-}
-
-template <typename T>
-void LogicCore::Drop() {
-  effects_.erase(std::remove_if(effects_.begin(), effects_.end(),
-                                [](const Effect& effect) { return std::holds_alternative<T>(effect); }),
-                 effects_.end());
-}
-
 void LogicCore::Notify(std::string line) {
   effects_.push_back(Notice{std::move(line)});
 }
@@ -572,7 +544,8 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     if (state_ != State::kIdle) return WrongState();
     // The EMERGENCY event told already: no RECORDING_REFUSED.
     if (emergency_) return Reason("EMERGENCY", "Emergency: reset it first");
-    const Reason why = Held() ? HoldProblem() : map_writable_ ? Reason() : map_reason_;
+    Reason why = HoldProblem();
+    if (why.empty() && !map_writable_) why = map_reason_;
     if (!why.empty()) {
       json details = {{"action", "start_area_recording"}};
       PutReason(&details, "RECORDING_REFUSED", why);
@@ -629,23 +602,17 @@ void LogicCore::OnCapabilities(bool safety_measured, bool charge_stop) {
   safety_measured_ = safety_measured;
   charge_stop_ = charge_stop;
   if (safety_measured) return;
-  if (state_ == State::kDriving) {
-    CancelDrive(Reason("NOT_ALLOWED", "No safety measurement of this platform (hw/capabilities)"));
-  }
-  if (state_ == State::kUndocking) {
-    const std::string text = "Undocking stopped: no safety measurement of this platform (hw/capabilities)";
-    StopUndocking(Reason("path_failed", text), Reason("NOT_ALLOWED", text));
-  }
-  if (state_ == State::kCalibrating) {
-    EndCalibration(Reason("NO_SAFETY_MEASUREMENT", "No safety measurement of this platform (hw/capabilities)"), true);
-  }
+  const Reason why("NO_SAFETY_MEASUREMENT", "No safety measurement of this platform (hw/capabilities)");
+  if (state_ == State::kDriving) CancelDrive(why);
+  if (state_ == State::kUndocking) StopUndocking(why, why);
+  if (state_ == State::kCalibrating) EndCalibration(why, true);
   if (state_ == State::kDocking) {
     const bool approach = docking_last_kind_ == DockingLeg::Kind::kApproach;
     CountDockingFailure(Reason(approach ? "approach_failed" : "dock_failed",
                                "Docking stopped: no safety measurement of this platform (hw/capabilities)"),
                         true);
   }
-  Pause(kPauseFault, Reason("NO_SAFETY_MEASUREMENT", "No safety measurement of this platform (hw/capabilities)"));
+  Pause(kPauseFault, why);
 }
 
 Reason LogicCore::DriveProblem() const {
@@ -2082,7 +2049,7 @@ Reason LogicCore::HoldProblem() const {
     return Reason("HOLD", "An update holds the mower: nothing starts until it is done").With("until", hold_until_);
   }
   if (hw_.hold) return Reason("HOLD", "The driver holds the mower for an update: nothing starts until it is done");
-  return {};
+  return StorageProblem();
 }
 
 bool LogicCore::HoldAllowed() const {

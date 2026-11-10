@@ -1,6 +1,7 @@
 #ifndef MOWBITE_LOGIC_LOGIC_CORE_H
 #define MOWBITE_LOGIC_LOGIC_CORE_H
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -528,8 +529,16 @@ class LogicCore {
     return hold_until_;
   }
   bool Held() const;
-  // HOLD while held, with until when the logic holds, else empty.
+  // HOLD while held, with until when the logic holds; else STORAGE_NOT_WRITABLE while a file of the restart hold
+  // cannot be written; else empty. mowing.continue checks only the hold: PAUSED holds on the disk already.
   Reason HoldProblem() const;
+  // The file in data_dir of the restart hold (os-session.json, restart-hold.json) that the node cannot write, empty
+  // once it can again. While one cannot, every start from IDLE is refused with STORAGE_NOT_WRITABLE; the event STORAGE
+  // tells it once each time it begins.
+  void SetUnwritableFile(const std::string& file);
+  // The record of a start from IDLE did not reach the disk (G35), and the node carried out nothing of the start: the
+  // start ends at once with the refusal of its kind and STORAGE_NOT_WRITABLE, and the mower is IDLE again.
+  void AbandonStart(const std::string& file);
   // A hold is granted only in IDLE with nothing on its way, not even the reference check on the docking station.
   bool HoldAllowed() const;
   // GPS settings of params.set for the position, the recording, and mowing or docking on after a bad position.
@@ -679,6 +688,8 @@ class LogicCore {
   void CheckpointNow();
   // Ends a calibration drive here: CALIBRATION_FAILED unless done, CALIBRATION end, IDLE; cancel: the program too.
   void EndCalibration(const std::optional<Reason>& failure, bool cancel);
+  // STORAGE_NOT_WRITABLE with the file while one cannot be written, else empty.
+  Reason StorageProblem() const;
   // The effects of one type in effects_: whether one waits; a flag added once or every one removed; the waiting one
   // replaced; every one removed.
   template <typename T>
@@ -705,6 +716,8 @@ class LogicCore {
   double last_y_ = 0;
   bool hw_seen_ = false;
   bool restart_hold_ = false;
+  // The file of SetUnwritableFile.
+  std::string unwritable_file_;
   bool teleop_armed_ = false;
   bool safety_measured_ = false;
   // Until the driver says otherwise, undocking waits for charging to be off.
@@ -793,6 +806,34 @@ class LogicCore {
   std::string release_client_;
   std::optional<double> release_answered_s_;
 };
+
+template <typename T>
+bool LogicCore::Pending() const {
+  return std::any_of(effects_.begin(), effects_.end(),
+                     [](const Effect& effect) { return std::holds_alternative<T>(effect); });
+}
+
+template <typename T>
+void LogicCore::SetDue(bool due) {
+  if (!due) {
+    Drop<T>();
+  } else if (!Pending<T>()) {
+    effects_.push_back(T{});
+  }
+}
+
+template <typename T>
+void LogicCore::Replace(T value) {
+  Drop<T>();
+  effects_.push_back(std::move(value));
+}
+
+template <typename T>
+void LogicCore::Drop() {
+  effects_.erase(std::remove_if(effects_.begin(), effects_.end(),
+                                [](const Effect& effect) { return std::holds_alternative<T>(effect); }),
+                 effects_.end());
+}
 
 }  // namespace mowbite_logic
 

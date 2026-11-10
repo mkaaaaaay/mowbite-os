@@ -1,13 +1,8 @@
-#include <fcntl.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <atomic>
-#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -48,6 +43,7 @@
 #include <mowbite_msgs/srv/set_dock.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mowbite_msgs/srv/set_heading.hpp>
+#include <mowbite_hold/file_io.h>
 #include <mowbite_hold/file_writer.h>
 #include <mowbite_hold/hold.h>
 #include <mowbite_hold/restart.h>
@@ -115,48 +111,17 @@ int64_t WallSeconds() {
   return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
 }
 
-// The text becomes the file whole or not at all: written next to it, synced, renamed over it, the folder synced.
+using Wait = mowbite_hold::FileWriter::Wait;
+
+// The text becomes the file whole or not at all (WriteFileAtomic), in a folder made when missing.
 bool WriteFileSafely(const std::string& path, const std::string& text, std::string* error) {
   std::error_code ec;
-  const std::filesystem::path folder = std::filesystem::path(path).parent_path();
-  std::filesystem::create_directories(folder, ec);
+  std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
   if (ec) {
     *error = "cannot create the folder of " + path + ": " + ec.message();
     return false;
   }
-  const std::string temp = path + ".new";
-  const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-  if (fd < 0) {
-    *error = "cannot write " + temp + ": " + std::strerror(errno);
-    return false;
-  }
-  size_t done = 0;
-  while (done < text.size()) {
-    const ssize_t n = ::write(fd, text.data() + done, text.size() - done);
-    if (n < 0 && errno == EINTR) continue;
-    if (n < 0) {
-      *error = "cannot write " + temp + ": " + std::strerror(errno);
-      ::close(fd);
-      return false;
-    }
-    done += static_cast<size_t>(n);
-  }
-  const bool synced = ::fsync(fd) == 0;
-  ::close(fd);
-  if (!synced) {
-    *error = "cannot sync " + temp + ": " + std::strerror(errno);
-    return false;
-  }
-  if (std::rename(temp.c_str(), path.c_str()) != 0) {
-    *error = "cannot replace " + path + ": " + std::strerror(errno);
-    return false;
-  }
-  const int folder_fd = ::open(folder.c_str(), O_RDONLY | O_DIRECTORY);
-  if (folder_fd >= 0) {
-    ::fsync(folder_fd);
-    ::close(folder_fd);
-  }
-  return true;
+  return mowbite_hold::WriteFileAtomic(path, text, error);
 }
 
 MapDatum ToDatum(uint8_t state) {
@@ -769,6 +734,9 @@ class LogicNode : public rclcpp::Node {
     // again; the release of S2 and the driver follows as for any emergency.
     if (core_.View().RestartHeld()) {
       std::string error;
+      // A write of the hold still on its way lands before the removal.
+      hold_text_.clear();
+      while (writer_ && writer_->WaitFor(restart_hold_path_, std::chrono::seconds(1)) == Wait::kTimeout) CheckWriter();
       if (!mowbite_hold::RemoveRecordFile(restart_hold_path_, &error)) {
         RCLCPP_ERROR(get_logger(), "Restart hold stays: %s", error.c_str());
         RefuseReleaseLocked(Reason("RESTART_HOLD_STAYS", "The restart hold stays: " + error));
@@ -1350,9 +1318,11 @@ class LogicNode : public rclcpp::Node {
     bool held = mowbite_hold::RestartHoldPresent(restart_hold_path_);
     if (verdict.hold && !held) {
       std::string error;
-      if (!mowbite_hold::WriteRecordFile(restart_hold_path_, mowbite_hold::RestartHoldText(verdict, WallSeconds()),
-                                         &error)) {
-        RCLCPP_ERROR(get_logger(), "Restart hold only until the next start: %s", error.c_str());
+      const std::string text = mowbite_hold::RestartHoldText(verdict, WallSeconds());
+      if (!mowbite_hold::WriteRecordFile(restart_hold_path_, text, &error)) {
+        RCLCPP_ERROR(get_logger(), "Restart hold in memory until it can be written: %s", error.c_str());
+        hold_text_ = text;
+        hold_failed_ = true;
       }
     }
     held = held || verdict.hold;
@@ -1376,9 +1346,10 @@ class LogicNode : public rclcpp::Node {
 
   // os-session.json with the state and job now, when they changed, clean is new or the last write failed. Without
   // the writer (start and stop) here; else through it, waited for only when this record begins a restart hold, so the
-  // hold is on the disk before what it guards acts (G35). Called without the mutex.
-  void WriteSession(bool clean) {
-    if (session_path_.empty()) return;
+  // hold is on the disk before what it guards acts (G35). False only when it waited and the record did not get there.
+  // Called without the mutex.
+  bool WriteSession(bool clean) {
+    if (session_path_.empty()) return true;
     mowbite_hold::SessionRecord record;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -1386,24 +1357,27 @@ class LogicNode : public rclcpp::Node {
       record = {mowbite_hold::SessionState(state.state, state.sub_state), core_.View().JobId(), boot_id_,
                 WallSeconds(), clean};
     }
-    if (session_failed_.exchange(false)) session_.reset();
+    if (session_failed_) session_.reset();
     if (session_ && session_->state == record.state && session_->job_id == record.job_id &&
         session_->clean == clean) {
-      return;
+      return true;
     }
+    const std::string text = mowbite_hold::SessionText(record);
+    session_ = record;
+    if (!mowbite_hold::HoldsOnRestart(record)) session_holds_ = false;
     if (!writer_) {
       std::string error;
-      if (!mowbite_hold::WriteRecordFile(session_path_, mowbite_hold::SessionText(record), &error)) {
-        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 60000, "Session: %s", error.c_str());
-        return;
-      }
-      session_ = record;
-      return;
+      session_failed_ = !mowbite_hold::WriteRecordFile(session_path_, text, &error);
+      if (session_failed_) RCLCPP_ERROR(get_logger(), "Session: %s", error.c_str());
+      return true;
     }
-    const bool wait = mowbite_hold::MustWaitForSession(session_, record);
-    session_ = record;
-    writer_->Submit(session_path_, mowbite_hold::SessionText(record));
-    while (wait && !writer_->WaitFor(session_path_, std::chrono::seconds(1))) CheckWriter();
+    const bool wait = mowbite_hold::MustWaitForSession(session_holds_, record);
+    writer_->Submit(session_path_, text);
+    if (!wait) return true;
+    Wait result;
+    while ((result = writer_->WaitFor(session_path_, std::chrono::seconds(1))) == Wait::kTimeout) CheckWriter();
+    session_holds_ = result == Wait::kWritten;
+    return session_holds_;
   }
 
   // The writer of os-session.json and checkpoint.json, after the start has written its session.
@@ -1411,18 +1385,19 @@ class LogicNode : public rclcpp::Node {
     if (data_dir_.empty()) return;
     writer_ = std::make_unique<mowbite_hold::FileWriter>(
         [this](const std::string& path, const std::string& text, std::string* error) {
-          return path == session_path_ ? mowbite_hold::WriteRecordFile(path, text, error)
-                                       : WriteFileSafely(path, text, error);
+          return path == session_path_ || path == restart_hold_path_ ? mowbite_hold::WriteRecordFile(path, text, error)
+                                                                     : WriteFileSafely(path, text, error);
         },
         [this](const mowbite_hold::FileWriter::Done& done) { OnWritten(done); });
   }
 
-  // In the writer thread: no core, no mutex. A failed session is written again at the next step.
+  // In the writer thread: no core, no mutex. What of the restart hold failed is written again at the next step.
   void OnWritten(const mowbite_hold::FileWriter::Done& done) {
     const double ms = std::chrono::duration<double, std::milli>(done.took).count();
-    if (!done.ok && done.path == session_path_) {
-      session_failed_ = true;
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 60000, "Session: %s", done.error.c_str());
+    if (done.path == session_path_) session_failed_ = !done.ok;
+    if (done.path == restart_hold_path_) hold_failed_ = !done.ok;
+    if (!done.ok && (done.path == session_path_ || done.path == restart_hold_path_)) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 60000, "Restart hold: %s", done.error.c_str());
     } else if (!done.ok) {
       RCLCPP_ERROR(get_logger(), "Checkpoint: %s", done.error.c_str());
     }
@@ -1437,6 +1412,18 @@ class LogicNode : public rclcpp::Node {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "Writing in %s has hung for %.0f s",
                             data_dir_.c_str(), busy);
     }
+  }
+
+  // A restart hold not yet on the disk again; the file of the restart hold that cannot be written for the core, once
+  // the bridge listens, so its event reaches the history. Called with the mutex held.
+  void TellUnwritableFileLocked() {
+    if (!hold_failed_) hold_text_.clear();
+    if (!hold_text_.empty() && writer_) writer_->Submit(restart_hold_path_, hold_text_);
+    std::string file = session_failed_ ? mowbite_hold::kSessionFile : "";
+    if (file.empty() && !hold_text_.empty()) file = mowbite_hold::kRestartHoldFile;
+    if (file == unwritable_told_ || (!file.empty() && publish_pub_->get_subscription_count() == 0)) return;
+    unwritable_told_ = file;
+    core_.Call<&LogicCore::SetUnwritableFile>(file);
   }
 
   // UNEXPECTED_RESTART once the bridge listens, so the event reaches events/json and its history.
@@ -2582,6 +2569,7 @@ class LogicNode : public rclcpp::Node {
       std::vector<Effect> effects;
       {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (round == 0) TellUnwritableFileLocked();
         effects = core_.Call<&LogicCore::TakeEffects>();
         if (round > 0 && effects.empty()) break;
         for (const auto& effect : effects) {
@@ -2599,8 +2587,14 @@ class LogicNode : public rclcpp::Node {
         if (PhaseOf(effect) == EffectPhase::kRecord) record.push_back(std::move(effect));
       }
       if (round == kMaxRounds) break;
-      WriteSession(false);
+      const bool written = WriteSession(false);
       std::lock_guard<std::mutex> lock(mutex_);
+      if (!written) {
+        // Nothing of the start acts: the core takes it back, the next round carries out how it ends.
+        unwritable_told_ = mowbite_hold::kSessionFile;
+        core_.Call<&LogicCore::AbandonStart>(unwritable_told_);
+        continue;
+      }
       for (const auto& effect : effects) {
         if (PhaseOf(effect) == EffectPhase::kAct) Act(effect);
       }
@@ -2782,12 +2776,17 @@ class LogicNode : public rclcpp::Node {
   // system.hold: <data_dir>/hold.json (empty without data_dir), its time on the monotonic clock, what logic/hold said
   // last and when mowbite/hold went out.
   std::string hold_path_;
-  // The restart hold: os-session.json, what was last written or queued for it and whether that write failed,
-  // restart-hold.json (all empty without data_dir), the boot of this start and the event that waits for the bridge.
+  // The restart hold: os-session.json, its record last written or queued, whether its last write failed, whether a
+  // record that holds is surely on the disk; restart-hold.json (all empty without data_dir) and its text until written;
+  // what the core was told cannot be written; the boot of this start and the event that waits for the bridge.
   std::string session_path_;
   std::optional<mowbite_hold::SessionRecord> session_;
   std::atomic<bool> session_failed_{false};
+  bool session_holds_ = false;
   std::string restart_hold_path_;
+  std::string hold_text_;
+  std::atomic<bool> hold_failed_{false};
+  std::string unwritable_told_;
   std::string boot_id_;
   std::optional<RestartReport> restart_report_;
   // os-session.json and checkpoint.json after the start; null without data_dir and during the stop.

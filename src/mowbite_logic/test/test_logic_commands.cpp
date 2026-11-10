@@ -683,3 +683,182 @@ TEST(LogicCommands, StartMowingShowsTheReasonOfItsRefusal) {
   EXPECT_TRUE(reasons.count("EMERGENCY"));
 }
 
+
+namespace {
+
+// The types of the events, in order.
+std::vector<std::string> TypesOf(const std::vector<Event>& events) {
+  std::vector<std::string> types;
+  for (const auto& event : events) types.push_back(event.type);
+  return types;
+}
+
+// The reason of the first event of this type, empty without one.
+std::string ReasonOf(const std::vector<Event>& events, const std::string& type) {
+  for (const auto& event : events) {
+    if (event.type == type) return event.details.value("reason", "");
+  }
+  return "";
+}
+
+}  // namespace
+
+// G35 with a disk that cannot be written: while os-session.json cannot, no start from IDLE, each refused with
+// STORAGE_NOT_WRITABLE in the refusal of its kind; the event STORAGE tells it once.
+TEST(LogicStorage, NothingStartsFromIdleWhileTheSessionCannotBeWritten) {
+  TestCore core = Idle();
+  core.SetUnwritableFile("os-session.json");
+  auto events = core.TakeEvents();
+  ASSERT_EQ(TypesOf(events), std::vector<std::string>{"STORAGE"});
+  EXPECT_EQ(events[0].details["reason"], "STORAGE_NOT_WRITABLE");
+  EXPECT_EQ(events[0].details["file"], "os-session.json");
+  EXPECT_EQ(events[0].details["severity"], "error");
+  EXPECT_EQ(events[0].details["resume"], "user");
+  EXPECT_TRUE(core.TakeActionsChanged());
+  EXPECT_EQ(core.StartProblem().code, "STORAGE_NOT_WRITABLE");
+  EXPECT_EQ(core.Command("mowing.start", json::object()).why.code, "STORAGE_NOT_WRITABLE");
+  EXPECT_EQ(ReasonOf(core.TakeEvents(), "MOWING_REFUSED"), "STORAGE_NOT_WRITABLE");
+  EXPECT_EQ(core.Command("docking.start", json::object()).why.code, "STORAGE_NOT_WRITABLE");
+  EXPECT_EQ(ReasonOf(core.TakeEvents(), "DRIVE_REFUSED"), "STORAGE_NOT_WRITABLE");
+  EXPECT_EQ(core.StartDrive(3.0, 0.5).code, "STORAGE_NOT_WRITABLE");
+  EXPECT_EQ(ReasonOf(core.TakeEvents(), "DRIVE_REFUSED"), "STORAGE_NOT_WRITABLE");
+  EXPECT_EQ(core.Command("recording.start", json::object()).why.code, "STORAGE_NOT_WRITABLE");
+  events = core.TakeEvents();
+  EXPECT_EQ(ReasonOf(events, "RECORDING_REFUSED"), "STORAGE_NOT_WRITABLE");
+  EXPECT_EQ(events[0].details["file"], "os-session.json");
+  EXPECT_TRUE(core.Idle());
+  EXPECT_FALSE(core.FollowerActive());
+  for (const auto& group : core.Actions()) {
+    for (const auto& action : group.actions) {
+      if (action.id == "start_mowing") {
+        EXPECT_EQ(action.reason, "STORAGE_NOT_WRITABLE");
+      }
+    }
+  }
+  // Another file while it lasts is the same incident; written again, starts go.
+  core.SetUnwritableFile("restart-hold.json");
+  EXPECT_TRUE(core.TakeEvents().empty());
+  EXPECT_EQ(core.StartProblem().fields.value("file", ""), "restart-hold.json");
+  core.SetUnwritableFile("");
+  EXPECT_TRUE(core.TakeEvents().empty());
+  EXPECT_TRUE(core.TakeActionsChanged());
+  EXPECT_TRUE(core.StartProblem().empty()) << core.StartProblem().message;
+  EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  EXPECT_TRUE(core.Mowing());
+  // A new incident tells again.
+  Settle(core);
+  core.SetUnwritableFile("os-session.json");
+  EXPECT_EQ(TypesOf(core.TakeEvents()), std::vector<std::string>{"STORAGE"});
+}
+
+// The disk turns read only during a job: the record of its start holds on the disk already, so the job goes on and
+// stops as always; only a new start from IDLE waits.
+TEST(LogicStorage, AJobGoesOnWhenTheDiskFailsMeanwhile) {
+  TestCore core = Following();
+  core.SetUnwritableFile("os-session.json");
+  EXPECT_EQ(TypesOf(core.TakeEvents()), std::vector<std::string>{"STORAGE"});
+  EXPECT_TRUE(core.Mowing());
+  EXPECT_FALSE(core.TakeDriveCancel().has_value());
+  EXPECT_FALSE(core.TakeStopRequest());
+  EXPECT_EQ(core.NextJobStep(1).kind, JobStep::Kind::kNone);
+  // A pause and its continue stay in the job.
+  EXPECT_EQ(core.OnAction("mower_logic:mowing/pause"), ActionResult::kDone);
+  Settle(core);
+  EXPECT_EQ(core.OnAction("mower_logic:mowing/continue"), ActionResult::kDone);
+  EXPECT_TRUE(core.Mowing());
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+}
+
+// The record of a start did not reach the disk: the start ends at once, with the refusal of its kind, and nothing it
+// asked of the node is left; the mower is IDLE.
+TEST(LogicStorage, AStartWhoseRecordFailedEndsAtOnce) {
+  {
+    TestCore core = Idle();
+    EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
+    Settle(core);
+    core.AbandonStart("os-session.json");
+    const auto events = core.TakeEvents();
+    EXPECT_EQ(TypesOf(events), (std::vector<std::string>{"STORAGE", "MOWING_REFUSED", "STATE"}));
+    EXPECT_EQ(ReasonOf(events, "MOWING_REFUSED"), "STORAGE_NOT_WRITABLE");
+    EXPECT_TRUE(core.Idle());
+    EXPECT_EQ(core.NextJobStep(1).kind, JobStep::Kind::kNone);
+    EXPECT_EQ(core.StartProblem().code, "STORAGE_NOT_WRITABLE");
+  }
+  {
+    // What the start asked for the node took already, as in its step.
+    TestCore core = Undocking();
+    core.TakeChargeOff();
+    core.TakeUndockPath();
+    core.AbandonStart("os-session.json");
+    const auto events = core.TakeEvents();
+    EXPECT_EQ(ReasonOf(events, "MOWING_REFUSED"), "STORAGE_NOT_WRITABLE");
+    EXPECT_TRUE(core.Idle());
+    EXPECT_FALSE(core.Undocking());
+    EXPECT_FALSE(core.TakeUndockPath().has_value());
+    EXPECT_FALSE(core.TakeChargeOff());
+    const auto outcome = core.TakeUndockOutcome();
+    ASSERT_TRUE(outcome.has_value());
+    EXPECT_FALSE(outcome->undocked);
+    EXPECT_EQ(outcome->why.code, "STORAGE_NOT_WRITABLE");
+  }
+  {
+    TestCore core = OnDock();
+    core.CheckDockBeforeDrive(0.0, -1.0);
+    core.TakeDockCheck();
+    EXPECT_TRUE(core.OnDockCheck(true, kHome.x + 0.03, kHome.y, 0.022f, "").empty());
+    ASSERT_TRUE(core.Undocking());
+    Settle(core);
+    core.TakeChargeOff();
+    core.TakeUndockPath();
+    core.AbandonStart("os-session.json");
+    const auto events = core.TakeEvents();
+    EXPECT_EQ(ReasonOf(events, "DRIVE_REFUSED"), "STORAGE_NOT_WRITABLE");
+    EXPECT_EQ(ReasonOf(events, "MOWING_REFUSED"), "");
+    const auto outcome = core.TakeUndockOutcome();
+    ASSERT_TRUE(outcome.has_value());
+    EXPECT_TRUE(outcome->for_drive);
+    EXPECT_EQ(outcome->why.code, "STORAGE_NOT_WRITABLE");
+    EXPECT_TRUE(core.Idle());
+  }
+  {
+    TestCore core = Idle();
+    ASSERT_TRUE(core.StartDrive(3.0, 0.5).empty());
+    Settle(core);
+    core.AbandonStart("os-session.json");
+    const auto events = core.TakeEvents();
+    EXPECT_EQ(TypesOf(events), (std::vector<std::string>{"STORAGE", "DRIVE_REFUSED", "DRIVE", "STATE"}));
+    EXPECT_EQ(events[2].details["phase"], "end");
+    EXPECT_EQ(events[2].details["reason"], "STORAGE_NOT_WRITABLE");
+    EXPECT_EQ(core.TakeDriveCancel().value_or(Reason()).code, "STORAGE_NOT_WRITABLE");
+    EXPECT_TRUE(core.Idle());
+    EXPECT_EQ(core.RobotState().sub_state, "");
+    // The node ends the drive it was planning: the core is IDLE already and stays so.
+    core.OnDriveEnded(false, Reason("STORAGE_NOT_WRITABLE", ""));
+    EXPECT_TRUE(core.TakeEvents().empty());
+  }
+  {
+    TestCore core = Idle();
+    ASSERT_TRUE(core.Command("docking.start", json::object()).why.empty());
+    ASSERT_TRUE(core.Docking());
+    Settle(core);
+    core.AbandonStart("os-session.json");
+    EXPECT_EQ(ReasonOf(core.TakeEvents(), "DRIVE_REFUSED"), "STORAGE_NOT_WRITABLE");
+    EXPECT_TRUE(core.Idle());
+    EXPECT_FALSE(core.TakeDockingLeg().has_value());
+  }
+  {
+    TestCore core = Recording();
+    core.AbandonStart("os-session.json");
+    const auto events = core.TakeEvents();
+    EXPECT_EQ(ReasonOf(events, "RECORDING_REFUSED"), "STORAGE_NOT_WRITABLE");
+    EXPECT_TRUE(core.Idle());
+    EXPECT_FALSE(core.OnTeleop(0.1, 0.0, 100.0).has_value());
+  }
+  {
+    // In IDLE there is nothing to take back.
+    TestCore core = Idle();
+    core.AbandonStart("os-session.json");
+    EXPECT_EQ(TypesOf(core.TakeEvents()), std::vector<std::string>{"STORAGE"});
+    EXPECT_TRUE(core.Idle());
+  }
+}

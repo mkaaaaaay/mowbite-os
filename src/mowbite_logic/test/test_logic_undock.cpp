@@ -522,3 +522,23 @@ TEST(Undock, ADriverThatCanStopChargingIsWaitedFor) {
   EXPECT_TRUE(core.Idle());
   EXPECT_TRUE(core.TakeChargeOn());
 }
+
+// The platform loses its safety measurement while undocking: the way ends with UNDOCKING_FAILED NO_SAFETY_MEASUREMENT,
+// not NOT_ALLOWED, which only the follower uses for outside of the areas.
+TEST(Undock, WithoutTheSafetyMeasurementTheWayStops) {
+  TestCore core = Docked();
+  StartUndocking(core);
+  ChargedOff(core);
+  core.TakeEvents();
+  core.OnCapabilities(false);
+  EXPECT_EQ(core.TakeDriveCancel().value_or(Reason()).code, "NO_SAFETY_MEASUREMENT");
+  EXPECT_TRUE(core.TakeStopRequest());
+  core.OnUndockEnded(LegEnd::kCanceled, Reason("NO_SAFETY_MEASUREMENT", "canceled"));
+  const auto events = core.TakeEvents();
+  const Event* failed = Find(events, "UNDOCKING_FAILED");
+  ASSERT_TRUE(failed);
+  EXPECT_EQ(failed->details["reason"], "NO_SAFETY_MEASUREMENT");
+  EXPECT_EQ(failed->details["severity"], "error");
+  EXPECT_EQ(failed->details["resume"], "user");
+  EXPECT_TRUE(core.Idle());
+}

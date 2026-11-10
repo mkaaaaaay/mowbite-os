@@ -513,3 +513,27 @@ TEST(Calibration, PositionJumpsDoNotEndIt) {
   EXPECT_FALSE(core.TakeStopRequest());
   EXPECT_FALSE(core.TakeCalibrationCancel());
 }
+
+// G35: no calibration drive while os-session.json cannot be written, and one whose record failed ends at once.
+TEST(LogicCalibration, StorageThatCannotBeWrittenRefusesAndTakesBackTheStart) {
+  {
+    TestCore core = Ready();
+    core.SetUnwritableFile("os-session.json");
+    core.TakeEvents();
+    EXPECT_EQ(core.StartCalibration(10.0).code, "STORAGE_NOT_WRITABLE");
+    EXPECT_EQ(DetailsOf(core.TakeEvents(), "CALIBRATION_REFUSED")["reason"], "STORAGE_NOT_WRITABLE");
+    EXPECT_FALSE(core.TakeCalibrationGoal().has_value());
+  }
+  TestCore core = Ready();
+  ASSERT_TRUE(core.StartCalibration(10.0).empty());
+  // The node took the goal already, as in its step.
+  ASSERT_TRUE(core.TakeCalibrationGoal().has_value());
+  core.TakeEvents();
+  core.AbandonStart("os-session.json");
+  const auto events = core.TakeEvents();
+  EXPECT_EQ(Types(events), (std::vector<std::string>{"STORAGE", "CALIBRATION_REFUSED", "CALIBRATION", "STATE"}));
+  EXPECT_EQ(DetailsOf(events, "CALIBRATION_REFUSED")["reason"], "STORAGE_NOT_WRITABLE");
+  EXPECT_FALSE(core.Calibrating());
+  EXPECT_FALSE(core.TakeCalibrationGoal().has_value());
+  EXPECT_TRUE(core.TakeCalibrationCancel());
+}
