@@ -245,6 +245,18 @@ class TestStartParameters(unittest.TestCase):
         start.overrides = dict(m.HEARTBEAT_ONLY)
         self.assertAlmostEqual(start.watchdog(), m.HEARTBEAT_ONLY_TIMEOUT_S)
 
+    def test_time_for_the_imu_after_the_start(self):
+        work = tempfile.mkdtemp(prefix="measure_tron_")
+        path = os.path.join(work, "tron.yaml")
+        with open(path, "w") as f:
+            f.write("tron_mcu:\n  ros__parameters:\n    imu_timeout: 0.5\n    imu_start_timeout: 2.0\n")
+        start = m.TronStart.__new__(m.TronStart)
+        start.files = [path]
+        self.assertAlmostEqual(start.imu_start(), 2.0)
+        with open(path, "w") as f:
+            f.write("tron_mcu:\n  ros__parameters:\n    imu_timeout: 3.0\n    imu_start_timeout: 2.0\n")
+        self.assertAlmostEqual(start.imu_start(), 3.0)
+
 
 if __name__ == "__main__":
     unittest.main()
