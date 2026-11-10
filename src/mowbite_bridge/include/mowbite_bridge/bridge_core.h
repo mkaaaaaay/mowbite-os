@@ -28,6 +28,12 @@ constexpr std::size_t kMaxOpenCalls = 512;
 constexpr std::size_t kMaxIdBytes = 1024;
 // Correlation data of an MQTT 5 request longer than this is refused.
 constexpr std::size_t kMaxCorrelationBytes = 1024;
+// Retained {"online": true|false} of the bridge; false is also its last will. robot_state is old while it says false.
+constexpr char kBridgeStatusTopic[] = "mowbite/bridge/status";
+// Retained by mowbite-host: {online, methods, ...}; the bridge stays silent on its methods while it is online.
+constexpr char kHostStatusTopic[] = "mowbite/host/status";
+
+std::string BridgeStatusText(bool online);
 
 struct MqttMessage {
   std::string topic;
@@ -111,7 +117,7 @@ class BridgeCore {
 
   explicit BridgeCore(BridgeConfig config);
 
-  // The topics to subscribe to after every connect.
+  // The topics to subscribe to after every connect, the status of the host among them.
   static const std::vector<std::string>& CommandTopics();
 
   // A method answered in the bridge; it may throw RpcFailure, or std::invalid_argument for -32602.
@@ -121,7 +127,7 @@ class BridgeCore {
 
   // BOOTED into the sink now and live after the first connect, with the same id.
   void Start(double t);
-  // SHUTDOWN live and into the sink.
+  // SHUTDOWN live and into the sink, the status of the bridge offline.
   void Stop(double t);
   // mqtt_version for system.info: 5 or 3.
   void Connected(int mqtt_version = 5);
@@ -165,6 +171,7 @@ class BridgeCore {
   template <typename F>
   void Guard(const char* where, F&& f);
   void Request(std::string_view payload, const ResponseRoute& route);
+  void OnHostStatus(std::string_view payload);
   void Answer(const RpcCall& call, const Reply& to);
   // -32600 with data {event REQUEST_REFUSED, reason, ...}.
   std::string RefuseRequest(const Json& id, const std::string& reason, const std::string& message, Json fields = {});

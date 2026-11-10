@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <set>
 
 #include "mowbite_api/catalog.h"
@@ -85,12 +86,13 @@ TEST(BridgeCoreConnection, NothingIsSentWithoutConnectionAndTheRestGoesOn) {
 // B2, B3, B16
 TEST(BridgeCoreConnection, AfterEachConnectTheRetainedTextsInTheirOrder) {
   BridgeCore core({"", R"({"/a/b":1})"});
-  EXPECT_EQ(BridgeCore::CommandTopics(), (std::vector<std::string>{"action", "teleop", "rpc/request"}));
+  EXPECT_EQ(BridgeCore::CommandTopics(),
+            (std::vector<std::string>{"action", "teleop", "rpc/request", "mowbite/host/status"}));
   core.Connected();
   Outbox out = core.Take();
   // Without sensors and map: none of them.
-  EXPECT_EQ(Topics(out),
-            (std::vector<std::string>{"capabilities/json", "version/json", "params/json", "actions/json"}));
+  EXPECT_EQ(Topics(out), (std::vector<std::string>{"capabilities/json", "version/json", "params/json", "actions/json",
+                                                   "mowbite/bridge/status"}));
   for (const auto& m : out.mqtt) {
     EXPECT_TRUE(m.retain);
     EXPECT_EQ(m.qos, 1);
@@ -112,7 +114,8 @@ TEST(BridgeCoreConnection, AfterEachConnectTheRetainedTextsInTheirOrder) {
   // E3 (i): what nodes sent retained comes again too.
   EXPECT_EQ(Topics(out), (std::vector<std::string>{"capabilities/json", "version/json", "params/json",
                                                    "sensor_infos/json", "actions/json", "map/json",
-                                                   "map_overlay/json", "other/json"}));
+                                                   "mowbite/bridge/status", "map_overlay/json", "other/json"}));
+  EXPECT_EQ(Find(out, "mowbite/bridge/status")->payload, R"({"online":true})");
   EXPECT_EQ(Find(out, "map_overlay/json")->payload, R"({"o":1})");
   EXPECT_EQ(Find(out, "map/json")->payload, R"({"areas":[]})");
 }
@@ -287,6 +290,51 @@ TEST_F(Core, MethodsOfTheNodesAreForwardedAsTheyCame) {
   core_.OnRpcMethods("mowbite_planner", {});
   EXPECT_EQ(Call(core_, "planner.plan", nullptr, "u1").dump(),
             R"({"jsonrpc":"2.0","error":{"code":-32601,"message":"Method \"planner.plan\" not found"},"id":"u1"})");
+}
+
+// Master 10.11. (3.5 Punkt 3 (d)): one answer per request; the methods of an online host are its own.
+TEST_F(Core, MethodsOfTheHostAreNeverAnsweredWhileItIsOnline) {
+  const std::string online =
+      R"({"schema":1,"online":true,"t":1,"methods":["update.status","host.restart_os","emergency.reset",7]})";
+  core_.OnMqtt("mowbite/host/status", online, true);
+  const Json methods = Call(core_, "rpc.methods")["result"];
+  EXPECT_NE(std::find(methods.begin(), methods.end(), "update.status"), methods.end());
+  EXPECT_NE(std::find(methods.begin(), methods.end(), "host.restart_os"), methods.end());
+  // Only update.* and host.* of the host count; emergency.reset stays a method of the logic.
+  EXPECT_EQ(std::find(methods.begin(), methods.end(), "emergency.reset"), methods.end());
+
+  core_.Take();
+  core_.OnMqtt("rpc/request", R"({"jsonrpc":"2.0","method":"update.status","id":"a"})", false);
+  core_.OnMqtt("rpc/request", R"({"jsonrpc":"2.0","method":"host.restart_os","id":"b"})", false,
+               {std::string("rpc/response/app1"), std::string("c")});
+  Outbox out = core_.Take();
+  EXPECT_TRUE(out.mqtt.empty());
+  EXPECT_TRUE(out.requests.empty());
+
+  // Not one of the host: -32601 as before.
+  EXPECT_EQ(Call(core_, "update.unknown", nullptr, "u")["error"]["code"], kMethodNotFound);
+  EXPECT_EQ(Call(core_, "emergency.reset", nullptr, "u")["error"]["code"], kMethodNotFound);
+
+  // Offline (its last will) or broken: the bridge answers update.* again with -32601.
+  for (const char* gone :
+       {R"({"schema":1,"online":false})", R"({"online":"true","methods":["update.status"]})", "{", ""}) {
+    core_.OnMqtt("mowbite/host/status", online, false);
+    core_.OnMqtt("mowbite/host/status", gone, false);
+    EXPECT_EQ(Call(core_, "update.status", nullptr, "u")["error"]["code"], kMethodNotFound) << gone;
+  }
+}
+
+TEST(BridgeCoreConnection, TheStatusOfTheBridgeGoesOfflineAtTheEnd) {
+  BridgeCore core({});
+  core.Connected();
+  core.Take();
+  core.Stop(1.0);
+  const Outbox out = core.Take();
+  const MqttMessage* status = Find(out, "mowbite/bridge/status");
+  ASSERT_TRUE(status);
+  EXPECT_EQ(status->payload, R"({"online":false})");
+  EXPECT_TRUE(status->retain);
+  EXPECT_EQ(BridgeStatusText(false), R"({"online":false})");
 }
 
 // B10

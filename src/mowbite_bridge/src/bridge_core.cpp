@@ -25,6 +25,10 @@ constexpr std::size_t kMaxDataDepth = 64;
 
 }  // namespace
 
+std::string BridgeStatusText(bool online) {
+  return Json{{"online", online}}.dump();
+}
+
 bool ValidResponseTopic(std::string_view topic) {
   const std::string_view prefix = "rpc/response/";
   if (topic.substr(0, prefix.size()) != prefix) return false;
@@ -72,15 +76,17 @@ BridgeCore::BridgeCore(BridgeConfig config)
   local_["logs.recent"] = [this](const Json& params) { return warnings_.Recent(params); };
   for (const auto& [name, method] : local_) methods_.AddLocal(name);
   // The app's retained texts come first after a connect, in this order; sensors and map only once there are some.
-  kept_order_ = {"capabilities/json", "version/json", "params/json", "sensor_infos/json", "actions/json", "map/json"};
+  kept_order_ = {"capabilities/json", "version/json", "params/json",     "sensor_infos/json",
+                 "actions/json",      "map/json",     kBridgeStatusTopic};
   Keep("capabilities/json", CapabilitiesText());
   Keep("version/json", VersionText(config_.software_version));
   Keep("params/json", params_.Text());
   Keep("actions/json", ActionsText(actions_));
+  Keep(kBridgeStatusTopic, BridgeStatusText(true));
 }
 
 const std::vector<std::string>& BridgeCore::CommandTopics() {
-  static const std::vector<std::string> topics = {"action", "teleop", kRequestTopic};
+  static const std::vector<std::string> topics = {"action", "teleop", kRequestTopic, kHostStatusTopic};
   return topics;
 }
 
@@ -117,6 +123,7 @@ void BridgeCore::Stop(double t) {
     const Json shutdown = BuildEvent("SHUTDOWN", Json::object(), t);
     Send(kEventsTopic, shutdown.dump(-1, ' ', false, Json::error_handler_t::replace), false);
     if (sink_) sink_(shutdown);
+    Keep(kBridgeStatusTopic, BridgeStatusText(false));
   });
 }
 
@@ -141,6 +148,11 @@ void BridgeCore::ConnectionLost() {
 }
 
 void BridgeCore::OnMqtt(const std::string& topic, std::string_view payload, bool retained, const ResponseRoute& route) {
+  // A status, retained or not.
+  if (topic == kHostStatusTopic) {
+    Guard("host status", [&] { OnHostStatus(payload); });
+    return;
+  }
   // A command the broker kept from earlier would act again at every connect.
   if (retained) return;
   Guard("MQTT input", [&] {
@@ -190,6 +202,24 @@ void BridgeCore::Request(std::string_view payload, const ResponseRoute& route) {
   }
 }
 
+void BridgeCore::OnHostStatus(std::string_view payload) {
+  const Json status =
+      NestingDepth(payload) > kMaxDataDepth ? Json() : Json::parse(payload.begin(), payload.end(), nullptr, false);
+  std::vector<std::string> methods;
+  if (status.is_object() && status.value("online", Json()) == Json(true) && status.contains("methods") &&
+      status["methods"].is_array()) {
+    for (const auto& method : status["methods"]) {
+      if (method.is_string()) methods.push_back(method.get<std::string>());
+    }
+  }
+  const std::size_t before = methods_.All().size();
+  methods_.SetHost(methods);
+  if (methods_.All().size() != before) {
+    Log(kLogInfo, "mowbite-host " + std::string(methods.empty() ? "is offline" : "answers its methods") + ": " +
+                      std::to_string(methods_.All().size()) + " methods in all");
+  }
+}
+
 void BridgeCore::Answer(const RpcCall& call, const Reply& to) {
   switch (methods_.Find(call.method)) {
     case Route::kLocal:
@@ -216,6 +246,7 @@ void BridgeCore::Answer(const RpcCall& call, const Reply& to) {
       out_.requests.push_back({call.method, call.params.is_null() ? "" : call.params.dump(), id});
       return;
     }
+    case Route::kHost: return;
     case Route::kUnknown:
       SendReply(to, ErrorReply(call.id, kMethodNotFound, "Method \"" + call.method + "\" not found"));
       return;

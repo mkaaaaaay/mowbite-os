@@ -481,6 +481,7 @@ class BridgeNode : public rclcpp::Node {
         options.set_mqtt_version(MQTTVERSION_3_1_1);
         options.set_clean_session(true);
       }
+      options.set_will(mqtt::will_options(kBridgeStatusTopic, BridgeStatusText(false), 1, true));
       options.set_keep_alive_interval(30);
       options.set_connect_timeout(4);
       options.set_automatic_reconnect(false);

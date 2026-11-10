@@ -14,8 +14,16 @@ void MethodTable::SetNode(const std::string& node, const std::vector<std::string
   }
 }
 
+void MethodTable::SetHost(const std::vector<std::string>& methods) {
+  host_.clear();
+  for (const auto& method : methods) {
+    if (method.rfind("update.", 0) == 0 || method.rfind("host.", 0) == 0) host_.insert(method);
+  }
+}
+
 Route MethodTable::Find(const std::string& method) const {
   if (local_.count(method)) return Route::kLocal;
+  if (host_.count(method)) return Route::kHost;
   for (const auto& [node, methods] : nodes_) {
     if (methods.count(method)) return Route::kNode;
   }
@@ -24,6 +32,7 @@ Route MethodTable::Find(const std::string& method) const {
 
 std::vector<std::string> MethodTable::All() const {
   std::set<std::string> all = local_;
+  all.insert(host_.begin(), host_.end());
   for (const auto& [node, methods] : nodes_) all.insert(methods.begin(), methods.end());
   return {all.begin(), all.end()};
 }
