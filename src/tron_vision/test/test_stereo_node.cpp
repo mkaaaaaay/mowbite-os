@@ -193,11 +193,14 @@ struct Rig {
     std::filesystem::create_directory_symlink("../devices/rkcif-mipi-lvds3", dir.Path() + "/sys/video22/device");
     dir.Write("stereo", "configured\n");
     dir.Write("boot_id", "6b0a57c2-0000-4000-8000-00000000b007\n");
+    // The memory of the test process is not the node's.
+    dir.Write("statm", "30000 5000 900 1 0 20000 0\n");
     seams.device = &device;
     seams.crash_flag = dir.Path() + "/crash";
     seams.adjust = [this](StereoConfig& config, StereoCameraConfig& camera) {
       config.setup_file = dir.Path() + "/stereo";
       config.boot_id_file = dir.Path() + "/boot_id";
+      config.statm = dir.Path() + "/statm";
       camera.sysfs = dir.Path() + "/sys";
       camera.processes_using = nullptr;
     };
