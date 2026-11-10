@@ -1969,24 +1969,6 @@ std::string LogicCore::RefuseReset(const Reason& why) {
   return id;
 }
 
-void LogicCore::SetRestartHold(bool held) {
-  if (held == restart_hold_) return;
-  restart_hold_ = held;
-  SetDue<ActionsChanged>(true);
-  UpdateEmergency(false);
-}
-
-void LogicCore::ReportRestart(const RestartReport& report) {
-  json details = {{"cause", report.cause},
-                  {"detail", report.detail},
-                  {"crashed_at", report.crashed_at > 0 ? json(report.crashed_at) : json()},
-                  {"state_before", report.state_before},
-                  {"job_id_before", report.job_id_before.empty() ? json() : json(report.job_id_before)},
-                  {"hold", report.hold}};
-  PutReason(&details, "UNEXPECTED_RESTART", Reason(report.cause, report.detail));
-  AddEvent("UNEXPECTED_RESTART", std::move(details));
-}
-
 const std::string& LogicCore::JobId() const {
   return job_.progress().job_id;
 }

@@ -761,6 +761,15 @@ TEST(RestartWarning, TextOfTheNote) {
             "MowBite OS restarted after a crash: its container ended with exit code -9 (restart 1 of 3)");
   EXPECT_EQ(RestartWarning(R"({"exit_code": 0})"), "MowBite OS restarted after a crash: its container ended with exit code 0");
   EXPECT_EQ(RestartWarning("broken"), "MowBite OS restarted after a crash");
+  EXPECT_EQ(RestartWarning(R"({"exit_code": 86, "restart": 2, "max_restarts": 3,
+                               "stalled": {"node": "mowbite_bridge", "seconds": 10.24, "limit": 10}})"),
+            "MowBite OS restarted after a crash: its container ended with exit code 86 (restart 2 of 3), ended by "
+            "the watch: mowbite_bridge gave no sign for 10.2 s (limit 10.0 s)");
+  EXPECT_EQ(RestartWarning(R"({"exit_code": 86, "stalled": {"node": "x", "seconds": "a"}})"),
+            "MowBite OS restarted after a crash: its container ended with exit code 86, ended by the watch: x gave no "
+            "sign for ? s (limit ? s)");
+  EXPECT_EQ(RestartWarning(R"({"exit_code": -9, "stalled": null})"),
+            "MowBite OS restarted after a crash: its container ended with exit code -9");
 }
 
 TEST(RollbackWarning, TextOfTheNote) {

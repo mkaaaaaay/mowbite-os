@@ -6,6 +6,8 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <system_error>
 
 namespace mowbite_hold {
 
@@ -83,6 +85,14 @@ bool WriteFileAtomic(const std::string& path, const std::string& text, std::stri
   }
   SyncFolder(path);
   return true;
+}
+
+bool WriteFileSafely(const std::string& path, const std::string& text, std::string* error) {
+  std::error_code ec;
+  std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+  if (!ec) return WriteFileAtomic(path, text, error);
+  *error = "cannot create the folder of " + path + ": " + ec.message();
+  return false;
 }
 
 bool RemoveFileSynced(const std::string& path, std::string* error) {

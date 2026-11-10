@@ -156,3 +156,32 @@ TEST(RestartHold, TheEventIsRatedByHold) {
   EXPECT_EQ(events[2].details["job_id_before"], "J1");
   EXPECT_EQ(events[2].details["state_before"], "MOWING");
 }
+
+TEST(RestartHold, AnEndByTheWatchNamesTheStalledNode) {
+  TestCore core = Started(true);
+  const json stalled = {{"node", "mowbite_bridge"}, {"seconds", 10.2}, {"limit", 10.0}};
+  for (bool hold : {true, false}) {
+    RestartReport report = Report("OS_CRASH", hold);
+    report.stalled = stalled;
+    core.ReportRestart(report);
+  }
+  core.ReportRestart(Report("OS_CRASH", true));
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 3u);
+  const char* severity[] = {"error", "warning", "error"};
+  const char* resume[] = {"user", "auto", "user"};
+  for (size_t i = 0; i < events.size(); i++) {
+    const json& d = events[i].details;
+    // The hold judges by cause, which stays; the reason tells a stall apart.
+    EXPECT_EQ(d["cause"], "OS_CRASH");
+    EXPECT_EQ(d["reason"], i < 2 ? "NODE_STALLED" : "OS_CRASH");
+    EXPECT_EQ(d["stalled"], i < 2 ? stalled : json()) << i;
+    EXPECT_EQ(d["severity"], severity[i]) << i;
+    EXPECT_EQ(d["resume"], resume[i]) << i;
+    EXPECT_TRUE(mowbite_api::CheckEvent("UNEXPECTED_RESTART", d).empty())
+        << json(mowbite_api::CheckEvent("UNEXPECTED_RESTART", d)).dump();
+  }
+  json odd = events[0].details;
+  odd["stalled"] = {{"node", "mowbite_bridge"}};
+  EXPECT_FALSE(mowbite_api::CheckEvent("UNEXPECTED_RESTART", odd).empty());
+}

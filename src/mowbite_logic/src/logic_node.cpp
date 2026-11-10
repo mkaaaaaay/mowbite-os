@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -70,6 +69,7 @@
 #include "mowbite_logic/logic_journal.h"
 #include "mowbite_logic/logic_params.h"
 #include "mowbite_logic/mowing_plan.h"
+#include "mowbite_watch/attach.h"
 
 namespace mowbite_logic {
 
@@ -113,14 +113,7 @@ int64_t WallSeconds() {
 
 using Wait = mowbite_hold::FileWriter::Wait;
 
-// The text becomes the file whole or not at all (WriteFileAtomic), in a folder made when missing.
-bool WriteFileSafely(const std::string& path, const std::string& text, std::string* error) {
-  std::error_code ec;
-  std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-  if (!ec) return mowbite_hold::WriteFileAtomic(path, text, error);
-  *error = "cannot create the folder of " + path + ": " + ec.message();
-  return false;
-}
+using mowbite_hold::WriteFileSafely;
 
 MapDatum ToDatum(uint8_t state) {
   using mowbite_msgs::msg::MapStatus;
@@ -453,6 +446,7 @@ class LogicNode : public rclcpp::Node {
     PublishActions();
     PublishIdleIfChanged();
     PublishHoldIfChanged();
+    watch_ = mowbite_watch::Attach(*this);
   }
 
   // Its own stop: what is queued first, then a clean session, so the next start finds it clean.
@@ -1302,7 +1296,8 @@ class LogicNode : public rclcpp::Node {
     if (boot_id_.empty()) RCLCPP_ERROR(get_logger(), "No boot id: every end before counts as one of another boot");
     const mowbite_hold::SessionFile session = mowbite_hold::ReadSessionFile(session_path_);
     const mowbite_hold::Verdict verdict =
-        mowbite_hold::JudgeStart(session, boot_id_, mowbite_hold::ReadKernelRecord(crash_record));
+        mowbite_hold::JudgeStart(session, boot_id_, mowbite_hold::ReadKernelRecord(crash_record),
+                                 mowbite_hold::ReadStall(data_dir_ + "/" + mowbite_hold::kExitNoteFile));
     bool held = mowbite_hold::RestartHoldPresent(restart_hold_path_);
     if (verdict.hold && !held) {
       std::string error;
@@ -1316,13 +1311,14 @@ class LogicNode : public rclcpp::Node {
     held = held || verdict.hold;
     core_.Call<&LogicCore::SetRestartHold>(held);
     if (verdict.cause != mowbite_hold::Cause::kNone) {
+      const auto& stall = verdict.stalled;
       restart_report_ = RestartReport{mowbite_hold::CauseName(verdict.cause), verdict.detail, verdict.crashed_at,
-                                      verdict.state_before, verdict.job_id_before, held};
-      const std::string line = "Unexpected restart " + restart_report_->cause + " after " +
-                               (verdict.state_before.empty() ? "an unknown state" : verdict.state_before) + ": " +
-                               verdict.detail;
+                                      verdict.state_before, verdict.job_id_before, held,
+                                      stall ? json{{"node", stall->node}, {"seconds", stall->seconds},
+                                                   {"limit", stall->limit}} : json()};
+      const std::string line = mowbite_hold::RestartLine(verdict, held);
       if (held) {
-        RCLCPP_ERROR(get_logger(), "%s; held until emergency.reset", line.c_str());
+        RCLCPP_ERROR(get_logger(), "%s", line.c_str());
       } else {
         RCLCPP_WARN(get_logger(), "%s", line.c_str());
       }
@@ -2897,6 +2893,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::TimerBase::SharedPtr overlay_timer_;
   rclcpp::TimerBase::SharedPtr plan_timer_;
   rclcpp::TimerBase::SharedPtr blade_timer_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 
 }  // namespace mowbite_logic

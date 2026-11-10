@@ -55,6 +55,31 @@ TEST(JudgeStart, RuleTableOfCauseAndState) {
   }
 }
 
+TEST(JudgeStart, AStallOfTheWatchNamesTheNodeOfAnOsCrash) {
+  const Stall stall{"mowbite_bridge", 10.2, 10.0};
+  Verdict v = JudgeStart(Session("MOWING", kBoot, false), kBoot, std::nullopt, stall);
+  EXPECT_EQ(v.cause, Cause::kOsCrash);
+  EXPECT_TRUE(v.hold);
+  ASSERT_TRUE(v.stalled);
+  EXPECT_EQ(v.stalled->node, "mowbite_bridge");
+  EXPECT_EQ(v.detail, "The watch ended MowBite OS: mowbite_bridge gave no sign for 10.2 s (limit 10.0 s)");
+  EXPECT_EQ(RestartLine(v, true),
+            "Unexpected restart OS_CRASH after MOWING: The watch ended MowBite OS: mowbite_bridge gave no sign for "
+            "10.2 s (limit 10.0 s); held until emergency.reset");
+  v = JudgeStart(Session("IDLE", kBoot, false), kBoot, std::nullopt, stall);
+  EXPECT_FALSE(v.hold);
+  EXPECT_TRUE(v.stalled);
+  // Only an end in this boot can be the watch's; a clean stop is no end at all.
+  for (const auto& other : {JudgeStart(Session("MOWING", kOtherBoot, false), kBoot, std::nullopt, stall),
+                            JudgeStart(Session("MOWING", kOtherBoot, false), kBoot, std::string("1 panic"), stall),
+                            JudgeStart(Session("MOWING", kBoot, true), kBoot, std::nullopt, stall)}) {
+    EXPECT_FALSE(other.stalled);
+    EXPECT_EQ(other.detail.find("watch"), std::string::npos) << other.detail;
+  }
+  EXPECT_EQ(RestartLine(JudgeStart({}, kBoot, std::string("1 panic")), false),
+            "Unexpected restart KERNEL_CRASH after an unknown state: panic");
+}
+
 TEST(JudgeStart, KernelRecordCountsOnlyAtTheFirstStartOfItsBoot) {
   const std::optional<std::string> record = std::string("1800000100 Oops#1 Part1");
   EXPECT_EQ(JudgeStart(Session("MOWING", kBoot, true), kBoot, record).cause, Cause::kNone);
@@ -228,6 +253,25 @@ TEST_F(RestartDir, HoldThatCannotBeLookedAtCounts) {
   std::filesystem::permissions(dir_ + "/sub", std::filesystem::perms::none);
   EXPECT_TRUE(RestartHoldPresent(path));
   std::filesystem::permissions(dir_ + "/sub", std::filesystem::perms::owner_all);
+}
+
+TEST_F(RestartDir, StallOfTheExitNote) {
+  const std::string path = dir_ + "/" + kExitNoteFile;
+  EXPECT_FALSE(ReadStall(path));
+  std::ofstream(path) << R"({"exit_code": 86, "restart": 1, "max_restarts": 3, "t": 1800000000.5,
+      "stalled": {"node": "mowbite_safety", "seconds": 2.1, "limit": 2.0}})";
+  const std::optional<Stall> stall = ReadStall(path);
+  ASSERT_TRUE(stall);
+  EXPECT_EQ(stall->node, "mowbite_safety");
+  EXPECT_DOUBLE_EQ(stall->seconds, 2.1);
+  EXPECT_DOUBLE_EQ(stall->limit, 2.0);
+  for (const char* text : {R"({"exit_code": -9, "restart": 1})", R"({"stalled": null})", R"({"stalled": {}})",
+                           R"({"stalled": {"node": 1, "seconds": 2, "limit": 2}})",
+                           R"({"stalled": {"node": "a", "seconds": "2", "limit": 2}})",
+                           R"({"stalled": {"node": "a", "seconds": 2}})", "{\"stalled", "[]"}) {
+    std::ofstream(path) << text;
+    EXPECT_FALSE(ReadStall(path)) << text;
+  }
 }
 
 TEST_F(RestartDir, BootIdAndKernelRecord) {

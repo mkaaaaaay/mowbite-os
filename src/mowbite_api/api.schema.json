@@ -3519,7 +3519,7 @@
       "description": "MowBite OS started after an end that was not its own stop, or after a kernel crash; hold tells whether the mower waits for emergency.reset (emergency bit UNEXPECTED_RESTART)",
       "properties": {
         "cause": {
-          "description": "What ended the OS before, the same as reason",
+          "description": "What ended the OS before; the same as reason, which is NODE_STALLED instead when the watch ended it",
           "enum": [
             "KERNEL_CRASH",
             "OS_CRASH",
@@ -3572,6 +3572,7 @@
           "enum": [
             "OS_CRASH",
             "POWER_LOSS",
+            "NODE_STALLED",
             "KERNEL_CRASH"
           ],
           "type": "string"
@@ -3596,6 +3597,35 @@
             "error"
           ],
           "type": "string"
+        },
+        "stalled": {
+          "additionalProperties": false,
+          "description": "The node the watch ended the OS for (reason NODE_STALLED), else null",
+          "properties": {
+            "limit": {
+              "description": "Its limit",
+              "type": "number",
+              "x-unit": "s"
+            },
+            "node": {
+              "description": "Name of the node",
+              "type": "string"
+            },
+            "seconds": {
+              "description": "How long it gave no sign, or since the start for a node that never came",
+              "type": "number",
+              "x-unit": "s"
+            }
+          },
+          "required": [
+            "node",
+            "seconds",
+            "limit"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "state_before": {
           "description": "The state before: current_state, DRIVING or CALIBRATING for IDLE with a drive; empty when not known",
@@ -3633,6 +3663,7 @@
         "state_before",
         "job_id_before",
         "hold",
+        "stalled",
         "reason",
         "severity",
         "resume"
@@ -6053,11 +6084,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:12",
+  "$id": "urn:mowbite-os:api:13",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry.",
   "title": "MowBite OS app interface",
-  "x-api": 12,
+  "x-api": 13,
   "x-commands": {
     "docking.abort": {
       "action": "mower_logic:docking/abort_docking",
@@ -8753,6 +8784,31 @@
             "name": "Kernel crash"
           }
         }
+      },
+      "NODE_STALLED": {
+        "description": "The watch ended MowBite OS: a node gave no sign within its limit or did not start (stalled in UNEXPECTED_RESTART names it); it holds the mower after a state other than IDLE",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Mäher und Umgebung ansehen, dann den Notaus zurücksetzen. Kommt es öfter vor, das Protokoll für eine Meldung sichern; das Ereignis nennt den Teil, der hing.",
+            "help": "Ein Teil von MowBite OS hat nicht mehr reagiert, deshalb wurde MowBite OS beendet und neu gestartet. Lief gerade eine Arbeit, wartet der Mäher auf die Freigabe; im Leerlauf geht es von selbst weiter.",
+            "name": "MowBite OS hing"
+          },
+          "en": {
+            "fix": "Look at the mower and around it, then reset the emergency. If it happens again, keep the log for a report; the event names the part that hung.",
+            "help": "A part of MowBite OS stopped responding, so MowBite OS was ended and started again. If it was working, the mower waits for a release; in IDLE it goes on by itself.",
+            "name": "MowBite OS hung"
+          }
+        },
+        "when": [
+          {
+            "hold": false,
+            "resume": "auto",
+            "severity": "warning"
+          }
+        ]
       },
       "OS_CRASH": {
         "description": "MowBite OS ended without its own stop in this boot; it holds the mower after a state other than IDLE",

@@ -124,6 +124,7 @@ TEST(CheckEvent, EveryReasonOfTheCatalogPassesWithItsRating) {
         if (field.name == "action") details["action"] = "collect_point";
         else if (field.type == Type::kString) details[field.name] = field.values.empty() ? "a" : field.values.front();
         else if (field.type == Type::kArray) details[field.name] = Json::array();
+        else if (field.type == Type::kObject && field.nullable) details[field.name] = nullptr;
         else if (field.type == Type::kBoolean) details[field.name] = true;
         else details[field.name] = 1;
       }

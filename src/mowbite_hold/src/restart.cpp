@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 
 #include <cerrno>
+#include <cstdio>
 #include <cstdlib>
 #include <nlohmann/json.hpp>
 
@@ -20,6 +21,12 @@ constexpr size_t kMaxDetail = 200;
 std::string Clip(std::string text) {
   while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) text.pop_back();
   if (text.size() > kMaxDetail) text.resize(kMaxDetail);
+  return text;
+}
+
+std::string Tenths(double seconds) {
+  char text[32];
+  std::snprintf(text, sizeof(text), "%.1f", seconds);
   return text;
 }
 
@@ -90,7 +97,8 @@ SessionFile ReadSessionFile(const std::string& path) {
   return file;
 }
 
-Verdict JudgeStart(const SessionFile& session, const std::string& boot_id, const std::optional<std::string>& kernel) {
+Verdict JudgeStart(const SessionFile& session, const std::string& boot_id, const std::optional<std::string>& kernel,
+                   const std::optional<Stall>& stall) {
   Verdict verdict;
   if (session.record) {
     verdict.state_before = session.record->state;
@@ -101,6 +109,11 @@ Verdict JudgeStart(const SessionFile& session, const std::string& boot_id, const
     if (session.record->clean) return verdict;
     verdict.cause = Cause::kOsCrash;
     verdict.detail = "MowBite OS ended in this boot without its own stop (crash, killed, out of memory)";
+    if (stall) {
+      verdict.stalled = stall;
+      verdict.detail = Clip("The watch ended MowBite OS: " + stall->node + " gave no sign for " +
+                            Tenths(stall->seconds) + " s (limit " + Tenths(stall->limit) + " s)");
+    }
     verdict.hold = HoldsOnRestart(*session.record);
     return verdict;
   }
@@ -128,6 +141,27 @@ Verdict JudgeStart(const SessionFile& session, const std::string& boot_id, const
   verdict.detail = "The mower started again while MowBite OS ran: power cut, hard reset, power key held or a hang";
   verdict.hold = HoldsOnRestart(*session.record);
   return verdict;
+}
+
+std::string RestartLine(const Verdict& verdict, bool held) {
+  return "Unexpected restart " + std::string(CauseName(verdict.cause)) + " after " +
+         (verdict.state_before.empty() ? "an unknown state" : verdict.state_before) + ": " + verdict.detail +
+         (held ? "; held until emergency.reset" : "");
+}
+
+std::optional<Stall> ReadStall(const std::string& path) {
+  std::string text;
+  std::string error;
+  if (ReadSmallFile(path, kMaxFileBytes, &text, &error) != FileRead::kText) return std::nullopt;
+  const nlohmann::json note = nlohmann::json::parse(text, nullptr, false);
+  if (!note.is_object() || !note.contains("stalled")) return std::nullopt;
+  const nlohmann::json& stalled = note["stalled"];
+  if (!stalled.is_object() || !stalled.contains("node") || !stalled["node"].is_string() ||
+      !stalled.value("seconds", nlohmann::json()).is_number() || !stalled.value("limit", nlohmann::json()).is_number()) {
+    return std::nullopt;
+  }
+  return Stall{Clip(stalled["node"].get<std::string>()), stalled["seconds"].get<double>(),
+               stalled["limit"].get<double>()};
 }
 
 std::string RestartHoldText(const Verdict& verdict, int64_t since) {

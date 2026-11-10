@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 
 #include "mowbite_api/catalog.h"
 #include "mowbite_bridge/event_builder.h"
@@ -422,6 +423,19 @@ std::string RestartWarning(std::string_view note) {
   const auto code = number("exit_code"), restart = number("restart"), most = number("max_restarts");
   if (code) text += ": its container ended with exit code " + std::to_string(*code);
   if (restart && most) text += " (restart " + std::to_string(*restart) + " of " + std::to_string(*most) + ")";
+  // Written by the launch when the watch ended the container for a node (mowbite_watch).
+  const Json stalled = j.is_object() ? j.value("stalled", Json()) : Json();
+  if (stalled.is_object() && stalled.value("node", Json()).is_string()) {
+    const auto tenths = [&](const char* key) {
+      const Json value = stalled.value(key, Json());
+      if (!value.is_number()) return std::string("?");
+      char number[32];
+      std::snprintf(number, sizeof(number), "%.1f", value.get<double>());
+      return std::string(number);
+    };
+    text += ", ended by the watch: " + CleanUtf8(stalled["node"].get<std::string>()) + " gave no sign for " +
+            tenths("seconds") + " s (limit " + tenths("limit") + " s)";
+  }
   return text;
 }
 

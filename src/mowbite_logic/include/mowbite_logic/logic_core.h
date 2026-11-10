@@ -316,6 +316,8 @@ struct RestartReport {
   std::string job_id_before;
   // The mower waits for a release, also by a hold from before.
   bool hold = false;
+  // {node, seconds, limit} when the watch of the container ended it for a stalled node, else null.
+  json stalled;
 };
 
 // "LATCH, LIFT": the names of the bits from the catalog in bit order, one UNKNOWN for all bits without a name.

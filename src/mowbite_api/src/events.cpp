@@ -57,6 +57,10 @@ std::vector<Field> DockingTries() {
   return Rated(true, {Integer("attempts", "", "Tries of docking so far")});
 }
 
+Field Object(std::string name, std::string text, std::vector<Field> fields, bool required = false) {
+  return {std::move(name), Type::kObject, "", required, std::move(text), {}, false, std::move(fields), ""};
+}
+
 Field Nullable(Field field) {
   field.nullable = true;
   return field;
@@ -159,6 +163,22 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"MAP_UNKNOWN", {"The datum of the GNSS is not known yet", {}}},
       {"MAP_UNREADABLE", {"The map cannot be read", {}}},
       {"MOTOR_HOT", {"The blade motor is too hot", {Temperature(), Limit("°C")}}},
+      {"NODE_STALLED",
+       {"The watch ended MowBite OS: a node gave no sign within its limit or did not start (stalled in "
+        "UNEXPECTED_RESTART names it); it holds the mower after a state other than IDLE",
+        {},
+        {{"de",
+          {"MowBite OS hing",
+           "Ein Teil von MowBite OS hat nicht mehr reagiert, deshalb wurde MowBite OS beendet und neu gestartet. Lief "
+           "gerade eine Arbeit, wartet der Mäher auf die Freigabe; im Leerlauf geht es von selbst weiter.",
+           "Mäher und Umgebung ansehen, dann den Notaus zurücksetzen. Kommt es öfter vor, das Protokoll für eine "
+           "Meldung sichern; das Ereignis nennt den Teil, der hing."}},
+         {"en",
+          {"MowBite OS hung",
+           "A part of MowBite OS stopped responding, so MowBite OS was ended and started again. If it was working, "
+           "the mower waits for a release; in IDLE it goes on by itself.",
+           "Look at the mower and around it, then reset the emergency. If it happens again, keep the log for a "
+           "report; the event names the part that hung."}}}}},
       {"NOT_ALLOWED", {"Outside of the areas the mower may drive in", {}}},
       {"NOT_MOVING", {"The mower does not move", {}}},
       {"NOT_MP3",
@@ -580,8 +600,9 @@ const std::vector<EventEntry>& Events() {
             "MowBite OS started after an end that was not its own stop, or after a kernel crash; hold tells whether "
             "the mower waits for emergency.reset (emergency bit UNEXPECTED_RESTART)",
             Rated(true,
-                  {Text("cause", "What ended the OS before, the same as reason", true,
-                        {"KERNEL_CRASH", "OS_CRASH", "POWER_LOSS"}),
+                  {Text("cause", "What ended the OS before; the same as reason, which is NODE_STALLED instead when "
+                                 "the watch ended it",
+                        true, {"KERNEL_CRASH", "OS_CRASH", "POWER_LOSS"}),
                    Text("detail", "English text of what is known: the line of the kernel or what the OS found", true),
                    Nullable(Integer("crashed_at", "unix s", "When the kernel crashed, null when not known", true)),
                    Text("state_before",
@@ -589,9 +610,17 @@ const std::vector<EventEntry>& Events() {
                         "not known",
                         true),
                    Nullable(Text("job_id_before", "The job of mowing then, null without one", true)),
-                   Bool("hold", "The mower is held until a release, also by a hold from before")}),
+                   Bool("hold", "The mower is held until a release, also by a hold from before"),
+                   Nullable(Object("stalled", "The node the watch ended the OS for (reason NODE_STALLED), else null",
+                                   {Text("node", "Name of the node", true),
+                                    Number("seconds", "s",
+                                           "How long it gave no sign, or since the start for a node that never came",
+                                           true),
+                                    Number("limit", "s", "Its limit", true)},
+                                   true))}),
             {R("OS_CRASH", "warning", "auto", {{"hold", false}}), R("POWER_LOSS", "warning", "auto", {{"hold", false}}),
-             R("KERNEL_CRASH", "error", "user"), R("OS_CRASH", "error", "user"), R("POWER_LOSS", "error", "user")},
+             R("NODE_STALLED", "warning", "auto", {{"hold", false}}), R("KERNEL_CRASH", "error", "user"),
+             R("OS_CRASH", "error", "user"), R("NODE_STALLED", "error", "user"), R("POWER_LOSS", "error", "user")},
             "error", "user"),
       Event("BLADES", "logic", "The blade started or stopped, as its speed shows",
             {Bool("enabled", "Whether the blade runs")}),

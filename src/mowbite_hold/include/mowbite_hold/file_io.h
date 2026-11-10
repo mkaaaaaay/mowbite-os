@@ -12,6 +12,8 @@ enum class FileRead { kMissing, kText, kTooLarge, kFailed };
 FileRead ReadSmallFile(const std::string& path, size_t max_bytes, std::string* text, std::string* error);
 // Whole or not at all: written next to it as <path>.tmp, synced, renamed over it, the folder synced.
 bool WriteFileAtomic(const std::string& path, const std::string& text, std::string* error);
+// As WriteFileAtomic, in a folder made when missing.
+bool WriteFileSafely(const std::string& path, const std::string& text, std::string* error);
 // Removes it and syncs the folder; a file that is not there counts as removed.
 bool RemoveFileSynced(const std::string& path, std::string* error);
 

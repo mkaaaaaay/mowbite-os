@@ -51,7 +51,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UndockOutcome, undocked, for_drive, why)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CommandOutcome, invalid, invalid_field, accepted, release, result, why, data)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ReasonChange, from, to)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobStep, kind, area_id, goal, path, start_index)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(RestartReport, cause, detail, crashed_at, state_before, job_id_before, hold)
+// With defaults: stalled came later, journals from before stay readable.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RestartReport, cause, detail, crashed_at, state_before, job_id_before,
+                                                hold, stalled)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DriveCancel, why)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ReferenceCheck, heading)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Notice, line)
@@ -95,7 +97,7 @@ static_assert(sizeof(CalibrationOutcome) == 128);
 static_assert(sizeof(UndockOutcome) == 88);
 static_assert(sizeof(CommandOutcome) == 184);
 static_assert(sizeof(JobStep) == 112);
-static_assert(sizeof(RestartReport) == 144);
+static_assert(sizeof(RestartReport) == 160);
 static_assert(sizeof(DriveCancel) == 80);
 static_assert(sizeof(ReferenceCheck) == 8);
 static_assert(sizeof(Notice) == 32);

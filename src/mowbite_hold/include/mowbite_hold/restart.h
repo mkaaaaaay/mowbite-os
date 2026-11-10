@@ -20,6 +20,8 @@ constexpr uint32_t kHostLatchReasons = (1u << 7) | (1u << 13) | (1u << 14) | (1u
 // In data_dir.
 constexpr char kSessionFile[] = "os-session.json";
 constexpr char kRestartHoldFile[] = "restart-hold.json";
+// How the container ended, written by the launch before it starts it again (stack.py EXIT_NOTE).
+constexpr char kExitNoteFile[] = "container_exit.json";
 
 constexpr char kIdle[] = "IDLE";
 
@@ -50,6 +52,17 @@ std::string SessionState(const std::string& state, const std::string& sub_state)
 
 enum class Cause { kNone, kKernelCrash, kOsCrash, kPowerLoss };
 
+// The node for which the watch of the container ended it (G39): stalled of the exit note, as mowbite_watch wrote it.
+struct Stall {
+  std::string node;
+  // s silent, or s since the start for a node that never came.
+  double seconds = 0.0;
+  double limit = 0.0;
+};
+
+// stalled of the exit note; none without the file, without stalled or when it cannot be read.
+std::optional<Stall> ReadStall(const std::string& path);
+
 // KERNEL_CRASH, OS_CRASH, POWER_LOSS; empty for kNone.
 const char* CauseName(Cause cause);
 
@@ -64,6 +77,8 @@ struct Verdict {
   std::string state_before;
   std::string job_id_before;
   bool hold = false;
+  // OS_CRASH only: the stalled node, when the watch ended the OS.
+  std::optional<Stall> stalled;
 };
 
 // The session file as a start finds it: absent, a record, or there but not readable (error says why).
@@ -78,8 +93,13 @@ SessionFile ReadSessionFile(const std::string& path);
 // The rule of the start. The session of this boot ended clean: nothing; not clean: OS_CRASH. The first start of a
 // boot: a kernel record ("<unix s> <reason>" of the platform, none where it has none) is KERNEL_CRASH, else a session
 // that did not end clean is POWER_LOSS. KERNEL_CRASH always holds, the others only after a state other than IDLE; a
-// session file that cannot be read counts as POWER_LOSS in an unknown state and holds.
-Verdict JudgeStart(const SessionFile& session, const std::string& boot_id, const std::optional<std::string>& kernel);
+// session file that cannot be read counts as POWER_LOSS in an unknown state and holds. stall: what the exit note says,
+// taken for OS_CRASH only.
+Verdict JudgeStart(const SessionFile& session, const std::string& boot_id, const std::optional<std::string>& kernel,
+                   const std::optional<Stall>& stall = std::nullopt);
+
+// The log line of a verdict with a cause; held: the mower waits for a release.
+std::string RestartLine(const Verdict& verdict, bool held);
 
 // restart-hold.json: the verdict that set it and when.
 std::string RestartHoldText(const Verdict& verdict, int64_t since);

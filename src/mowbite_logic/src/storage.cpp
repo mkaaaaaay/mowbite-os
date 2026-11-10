@@ -62,4 +62,25 @@ void LogicCore::AbandonStart(const std::string& file) {
   }
 }
 
+void LogicCore::SetRestartHold(bool held) {
+  if (held == restart_hold_) return;
+  restart_hold_ = held;
+  SetDue<ActionsChanged>(true);
+  UpdateEmergency(false);
+}
+
+void LogicCore::ReportRestart(const RestartReport& report) {
+  json details = {{"cause", report.cause},
+                  {"detail", report.detail},
+                  {"crashed_at", report.crashed_at > 0 ? json(report.crashed_at) : json()},
+                  {"state_before", report.state_before},
+                  {"job_id_before", report.job_id_before.empty() ? json() : json(report.job_id_before)},
+                  {"hold", report.hold},
+                  {"stalled", report.stalled}};
+  // The hold judges by cause; the reason tells a node the watch ended the OS for apart from a crash.
+  const std::string reason = report.stalled.is_null() ? report.cause : "NODE_STALLED";
+  PutReason(&details, "UNEXPECTED_RESTART", Reason(reason, report.detail));
+  AddEvent("UNEXPECTED_RESTART", std::move(details));
+}
+
 }  // namespace mowbite_logic
