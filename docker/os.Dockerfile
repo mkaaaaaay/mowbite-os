@@ -3,6 +3,7 @@
 #   docker buildx build --platform linux/arm64 --load --build-context planer=/home/mkay/tron-projekt/planer \
 #     --build-arg SOURCE_COMMIT=<commit> --build-arg MIN_APP=$(cat <tree>/docker/min_app) \
 #     -f docker/os.Dockerfile -t local/mowbite-os:arm64-<commit> <tree>
+# With the app: --build-context app=<folder with MowBite-web.zip> --build-arg APP_VERSION=<v> --build-arg APP_SHA256=<h>.
 # No simulation, no tests, no models in it.
 ARG ROS_DISTRO=jazzy
 
@@ -31,6 +32,9 @@ RUN mkdir -p /opt/mpp /opt/mpp-inc \
       && cp /tmp/mpp-$MPP_VERSION/inc/*.h /opt/mpp-inc/; \
     fi
 
+# The folder with MowBite-web.zip, replaced by --build-context app=<folder>; empty without one.
+FROM scratch AS app
+
 FROM ros:${ROS_DISTRO}-ros-base AS build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -49,11 +53,13 @@ RUN --mount=type=bind,from=planer,target=/src/planer \
  && git -c safe.directory='*' fetch -q --depth 1 /src/planer "$PLANNER_COMMIT" \
  && git checkout -q FETCH_HEAD \
  && test "$(git rev-parse HEAD)" = "$PLANNER_COMMIT" \
+ && commit_time=$(git show -s --format=%ct HEAD) \
  && . /opt/ros/$ROS_DISTRO/setup.sh \
  && MAKEFLAGS=-j$BUILD_JOBS colcon --log-base /tmp/planner_log build \
       --base-paths ros2/mowbite_planner_interfaces ros2/mowbite_planner \
       --build-base /tmp/planner_build --install-base /opt/mowbite_planner \
       --parallel-workers $BUILD_WORKERS --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+ && printf '{"commit": "%s", "serial": %s}\n' "$PLANNER_COMMIT" "$commit_time" > /opt/mowbite_planner/source.json \
  && rm -rf /tmp/planner /tmp/planner_build /tmp/planner_log
 
 # Every package but the simulation; PACKAGES narrows it (colcon selection, e.g. "--packages-up-to xcore_driver").
@@ -70,6 +76,19 @@ RUN . /opt/ros/$ROS_DISTRO/setup.sh && . /opt/mowbite_planner/setup.sh && cd /ws
  && . /ws/install/setup.sh \
  && if [ -d /ws/install/mowbite_bringup ]; then \
       python3 /ws/install/mowbite_bringup/share/mowbite_bringup/launch/data_store.py --check-planner; fi
+
+# The app it brings along: MowBite-web.zip of the build context app, of APP_VERSION with APP_SHA256, unpacked and
+# checked by host/bundle/app_export.py against docker/min_app and the api of this build; without APP_VERSION none.
+ARG APP_VERSION=
+ARG APP_SHA256=
+RUN --mount=type=bind,from=app,target=/src/app --mount=type=bind,source=host,target=/src/host \
+    --mount=type=bind,source=docker/min_app,target=/tmp/min_app \
+    if [ -z "$APP_VERSION" ]; then mkdir /opt/mowbite_app; \
+    elif [ -z "$APP_SHA256" ]; then echo "APP_VERSION needs APP_SHA256" >&2; exit 1; \
+    else python3 -I -B /src/host/bundle/app_export.py export /src/app/MowBite-web.zip /opt/mowbite_app \
+           --sha256 "$APP_SHA256" --version "$APP_VERSION" --min-app "$(cat /tmp/min_app)" \
+           --api "$(python3 -c 'import json; print(json.load(open("/ws/install/mowbite_api/share/mowbite_api/api.schema.json"))["x-api"])')"; \
+    fi
 
 # Runtime packages of all installed packages: ROS keys by name, other keys mapped here, an unknown key stops the build.
 # Each package directory on its own: rosdep skips the install bases, colcon marks them with COLCON_IGNORE.
@@ -96,6 +115,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends $(cat /opt/runtime-packages.txt) \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /opt/mowbite_planner /opt/mowbite_planner
+COPY --from=build /opt/mowbite_app /opt/mowbite_app
 COPY --from=build /ws/install /ws/install
 # Outside the packages, but in the install tree that the bundle takes along.
 COPY --from=mpp /opt/mpp /ws/install/mpp

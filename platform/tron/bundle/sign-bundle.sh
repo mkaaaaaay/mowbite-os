@@ -27,12 +27,24 @@ try:
     meta, _ = bundle.read_meta(sys.argv[2])
 except Refused as why:
     sys.exit(f"{why.reason}: {why}")
+if meta["component"] not in bundle.MAX_BUNDLE:
+    sys.exit(f"unknown component {meta['component']}")
 print(meta["component"], meta["revision"], meta.get("commit", ""), meta["serial"], bundle.namespace(meta["component"]))
 day = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) if isinstance(t, int) else "-"
 print(f"  component {meta['component']}, revision {meta['revision']}, commit {meta.get('commit', '-')}")
 print(f"  serial {meta['serial']} (commit time {day(meta['serial'])}), built {day(meta.get('date'))}")
-print(f"  base {meta.get('base', 0)}, api {meta.get('api', '-')}, min_app {meta.get('min_app', '-')}, "
-      f"{len(meta.get('runtime_packages', []))} runtime packages")
+if meta["component"] == "os":
+    print(f"  base {meta.get('base', 0)}, api {meta.get('api', '-')}, min_app {meta.get('min_app', '-')}, "
+          f"{len(meta.get('runtime_packages', []))} runtime packages")
+    print(f"  planner_interface {meta.get('planner_interface', '-')}, "
+          f"planner_files_version {meta.get('planner_files_version', '-')}")
+    for name, entry in sorted(meta.get("bundled", {}).items()):
+        print(f"  brings {name} {entry.get('version')} ({entry.get('revision')}, serial {entry.get('serial')})")
+elif meta["component"] == "planner":
+    print(f"  version {meta['version']}, interface {meta['interface']}, files_version {meta['files_version']}, "
+          f"requires {', '.join(f'{k} {v}' for k, v in sorted(meta.get('requires', {}).items())) or '-'}")
+else:
+    print(f"  version {meta['version']}, api {meta['api']['min']}..{meta['api']['max']}")
 PY
 }
 

@@ -15,11 +15,16 @@ import tarfile
 import tempfile
 import time
 import unittest
+import zipfile
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 TOOL = os.path.join(HERE, "..", "rootfs", "files", "usr", "sbin", "mowbite-update")
 HOST_LIB = os.path.join(HERE, "..", "..", "..", "host")
 SIGN = os.path.join(HERE, "sign-bundle.sh")
+MAKE_APP = os.path.join(HERE, "make-app-bundle.sh")
+sys.path.insert(0, os.path.join(HOST_LIB, "bundle"))
+import app_export  # noqa: E402
+import planner_meta  # noqa: E402
 
 # systemctl: the state of the service in $PREFIX/state/service. A start writes os-session.json of this boot as the
 # logic does, IDLE on the contacts (or $PREFIX/state/os-state), unless state/broken-<revision> of the OS or of the
@@ -261,6 +266,31 @@ class UpdateTest(unittest.TestCase):
         self.assertEqual((self.link("current", APP), self.link("active", APP), self.link("previous", APP)),
                          (None, None, D))
         self.assertEqual(self.calls(mark), [])
+
+    # make-app-bundle.sh of the probe export, signed for the app: installed beside the OS, readable for mowbite-web.
+    def test_app_bundle_of_the_probe_export(self):
+        self.install(self.bundle(A))
+        out = os.path.join(self.root, "out")
+        os.makedirs(out)
+        zip_path = os.path.join(self.root, "MowBite-web.zip")
+        app_export.probe(zip_path, version="1.5.0", api_min=14, api_max=15)
+        made = subprocess.run([MAKE_APP, zip_path, out], capture_output=True, text=True, timeout=60)
+        self.assertEqual(made.returncode, 0, made.stderr)
+        path = made.stdout.splitlines()[-1].split()[0]
+        revision = os.path.basename(path)[len("mowbite-app-"):-len(".tar.gz")]
+        with tarfile.open(path) as tar:
+            meta = json.load(tar.extractfile(f"{revision}/bundle.json"))
+            self.assertTrue(all(m.uid == 0 and m.mode & 0o004 for m in tar.getmembers()))
+        self.assertEqual({k: meta[k] for k in ("component", "revision", "version", "api", "serial")},
+                         {"component": "app", "revision": revision, "version": "1.5.0", "api": {"min": 14, "max": 15},
+                          "serial": 1700000000})
+        self.assertEqual(meta["commit"][:12], revision)
+        subprocess.run(["ssh-keygen", "-q", "-Y", "sign", "-f", self.key, "-n", "mowbite-app", path], check=True,
+                       capture_output=True, stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(self.install(path), 0)
+        self.assertEqual(self.link("active", APP), revision)
+        app = os.path.join(self.prefix, APP, revision, "app")
+        self.assertTrue(os.path.isfile(os.path.join(app, "_next/static/chunks/main.js.gz")))
 
     def test_app_needs_an_os_it_goes_with(self):
         self.assertEqual(self.install(self.bundle(D, component="app")), 1)
@@ -623,6 +653,76 @@ class UpdateTest(unittest.TestCase):
             self.assertEqual(refused.returncode, 1)
             self.assertIn("is not newer than 2000", refused.stderr)
         self.assertIn("test gate: NO RESULT", self.sign(self.bundle(C, serial=2001), "n").stdout)
+
+
+class BundleToolsTest(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="mowbite-bundle-")
+        self.addCleanup(shutil.rmtree, self.root)
+
+    # The probe export with entries replaced or added, and links.
+    def zip(self, entries, links=()):
+        path = os.path.join(self.root, "web.zip")
+        app_export.probe(path)
+        with zipfile.ZipFile(path) as archive:
+            files = {name: archive.read(name) for name in archive.namelist()}
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, text in {**files, **entries}.items():
+                archive.writestr(name, text)
+            for name in links:
+                info = zipfile.ZipInfo(name)
+                info.external_attr = (0o120777 << 16)
+                archive.writestr(info, "index.html")
+        return path
+
+    # A zip that leaves its folder, brings links or .gz files, or an app.json not of the app is refused, nothing kept.
+    def test_export_refuses(self):
+        cases = {"../x": ({"../x": "x"}, ()), "/etc/x": ({"/etc/x": "x"}, ()), "link": ({}, ("guide/a.html",)),
+                 ".gz": ({"index.html.gz": "x"}, ()),
+                 "owner": ({"app.json": json.dumps({"schema": 1, "owner": "other"})}, ())}
+        for case, (entries, links) in cases.items():
+            with self.subTest(case), self.assertRaises(app_export.Refused):
+                out = os.path.join(self.root, "out")
+                try:
+                    app_export.export(self.zip(entries, links), out)
+                finally:
+                    self.assertFalse(os.path.exists(out))
+        good = os.path.join(self.root, "good.zip")
+        app_export.probe(good, version="1.5.0", api_min=14, api_max=15)
+        for checks in ({"sha": "0" * 64}, {"version": "1.6.0"}, {"min_app": "1.6.0"}, {"api": 16}, {"api": 13}):
+            with self.subTest(checks), self.assertRaises(app_export.Refused):
+                app_export.export(good, os.path.join(self.root, "out"), **checks)
+        fields = app_export.export(good, os.path.join(self.root, "out"), sha=app_export.sha256(good),
+                                   version="1.5.0", min_app="1.4.0-beta.20", api=15)
+        self.assertEqual(fields["api"], {"min": 14, "max": 15})
+
+    def planner(self, contract=None, where="python"):
+        base = os.path.join(self.root, "install")
+        share = os.path.join(base, "mowbite_planner", "share", "mowbite_planner")
+        os.makedirs(share)
+        with open(os.path.join(share, "package.xml"), "w") as f:
+            f.write("<package><name>mowbite_planner</name><version>2.1.0</version></package>")
+        if contract is not None:
+            folder = share if where == "share" else os.path.join(
+                base, "mowbite_planner", "lib", "python3.12", "site-packages", "mowbite_planner")
+            os.makedirs(folder, exist_ok=True)
+            with open(os.path.join(folder, "contract.json"), "w") as f:
+                f.write(json.dumps(contract))
+        return base
+
+    def test_planner_meta(self):
+        terms = {"interface": 2, "files_version": 1, "requires": {"python": "3.8", "shapely": "2.0.3"}}
+        self.assertEqual(planner_meta.read(self.planner(terms)), {"version": "2.1.0", **terms})
+        shutil.rmtree(os.path.join(self.root, "install"))
+        self.assertEqual(planner_meta.read(self.planner(terms, where="share"))["interface"], 2)
+        shutil.rmtree(os.path.join(self.root, "install"))
+        base = self.planner()
+        self.assertEqual(planner_meta.read(base), {"version": "2.1.0"})
+        with self.assertRaises(planner_meta.Refused):
+            planner_meta.read(base, contract=True)
+        shutil.rmtree(base)
+        with self.assertRaises(planner_meta.Refused):
+            planner_meta.read(self.planner({"interface": 1, "files_version": 1, "requires": ["numpy>=1.17"]}))
 
 
 A, B, C, D, E = "aaaaaaa", "bbbbbbb", "ccccccc", "ddddddd", "eeeeeee"
