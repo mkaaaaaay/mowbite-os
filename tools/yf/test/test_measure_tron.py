@@ -1,5 +1,6 @@
 """The Tron part of measure.py without a mower: the evaluation of the host-gone captures, the limits and the proposal,
-the port settings it reads under, the port reader on a pty, and the parameters of the minimal start.
+the port settings it reads under, the port reader on a pty, the parameters of the minimal start, and the blade motor
+without host (T6).
 
 Run in a sourced workspace (measure.py imports rclpy): python3 -m unittest tools/yf/test/test_measure_tron.py
 """
@@ -63,6 +64,54 @@ class TestHostGone(unittest.TestCase):
     def test_already_standing(self):
         r = m.host_gone_result(speeds((1.0, 0.0, 0.0), (2.0, 0.0, 0.0)), 1.0, D)
         self.assertEqual((r["stand_s"], r["turning_at_start"]), (0.0, False))
+
+
+def motors(*samples):
+    return [{"t": t, "motors": {"cutter": rpm, "left": 0, "right": 0}} for t, rpm in samples]
+
+
+class TestBladeGone(unittest.TestCase):
+    def test_stands_at_the_first_report_below_the_limit(self):
+        result = m.blade_gone_result(motors((9.5, 840), (10.4, 840), (11.4, 300), (12.4, 60), (13.4, 0)), 10.0, 100)
+        self.assertAlmostEqual(result["still_s"], 2.4)
+        self.assertTrue(result["turning_at_start"])
+        self.assertEqual(result["last_rpm"], 0)
+        self.assertEqual(result["samples"], 4)
+
+    def test_still_turning_at_the_end(self):
+        result = m.blade_gone_result(motors((10.5, 2800), (11.5, 2800), (19.5, 2800)), 10.0, 100)
+        self.assertIsNone(result["still_s"])
+        self.assertEqual(result["last_rpm"], 2800)
+
+    def test_a_motor_that_starts_again_did_not_stand(self):
+        result = m.blade_gone_result(motors((10.5, 840), (11.5, 0), (12.5, 840), (13.5, 0)), 10.0, 100)
+        self.assertAlmostEqual(result["still_s"], 3.5)
+
+    def test_the_limit_itself_turns_and_the_direction_does_not_count(self):
+        result = m.blade_gone_result(motors((10.5, -840), (11.5, -100), (12.5, -99)), 10.0, 100)
+        self.assertAlmostEqual(result["still_s"], 2.5)
+        self.assertTrue(result["turning_at_start"])
+
+    def test_already_standing_and_nothing_after_the_signal(self):
+        result = m.blade_gone_result(motors((10.3, 0), (11.3, 0)), 10.0, 100)
+        self.assertAlmostEqual(result["still_s"], 0.3)
+        self.assertFalse(result["turning_at_start"])
+        result = m.blade_gone_result(motors((9.0, 840)) + speeds((10.2, 0.0, 0.0)), 10.0, 100)
+        self.assertEqual(result, {"still_s": None, "turning_at_start": False, "last_rpm": None, "samples": 0})
+
+
+class TestBladeArguments(unittest.TestCase):
+    def test_blade_and_t6_go_together(self):
+        for argv in (["--steps", "T6"], ["--blade"], ["--steps", "T1,T6"], ["--steps", "T1", "--blade"]):
+            with self.assertRaises(SystemExit) as refused:
+                m.main(["--platform", "tron", *argv])
+            self.assertIn("go together", str(refused.exception.code), argv)
+
+    def test_t6_is_not_in_the_default_steps(self):
+        self.assertIn("T6", m.TronMeasurement.STEPS)
+        with self.assertRaises(SystemExit) as refused:
+            m.main(["--platform", "tron", "--ground"])
+        self.assertIn("not for the Tron", str(refused.exception.code))
 
 
 class TestLimits(unittest.TestCase):

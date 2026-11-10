@@ -2,7 +2,9 @@
 person's actions go to the fake's flags. The fake reports the noise of standing wheels and the motors like the Tron.
 With the fake holding the setpoint 1.5 s after the last SpeedData, every host-gone run and heartbeat alone have to find
 that time and the proposal has to follow from it; with 4 s the limit has to end T2; a key while tron_mcu is frozen
-has to continue it and stop the wheels. No process may be left.
+has to continue it and stop the wheels. T6: the blade motor of the fake stops without host like its wheels, and the
+runs have to find that; with the flag cutter_holds it keeps turning, which has to end T6 with the finding and the blade
+off. No process may be left.
 
 Reading the port while tron_mcu holds it (TIOCEXCL) needs root with CAP_SYS_ADMIN, as on the Tron:
   docker run --user 0 --cap-add SYS_ADMIN ... python3 -m unittest tools/yf/test/test_rehearsal_tron.py
@@ -179,6 +181,53 @@ class TestRehearsalTron(unittest.TestCase):
         time.sleep(0.5)
         with open(self.state) as f:
             self.assertEqual(json.load(f)["linear"], 0.0)
+
+    def test_4_blade_without_host(self):
+        code, output, rec = self.measure("blade", "--steps", "T6", "--blade", "--repeats", "1")
+        end = rec[-1]
+        self.assertEqual(end["findings"], [])
+        self.assertTrue(end["complete"])
+        self.assertEqual(code, 0)
+        offs = [r for r in rec if r["kind"] == "blade_off"]
+        self.assertEqual([(r["percent"], r["rpm"]) for r in offs], [(30, 840), (100, 2800)])
+        lease, = [r for r in rec if r["kind"] == "blade_lease"]
+        for r in offs + [lease]:
+            self.assertLessEqual(r["still_s"], 3.0, r)
+        self.assertGreaterEqual(lease["still_s"], 0.4)
+        self.assertEqual(len([r for r in rec if r["kind"] == "blade_emergency"]), 3)
+        runs = [r for r in rec if r["kind"] == "blade_gone"]
+        self.assertEqual([(r["way"], r["percent"]) for r in runs],
+                         [("freeze", 30), ("freeze", 100), ("kill", 30), ("kill", 100)])
+        for run in runs:
+            self.assertTrue(run["turning_at_start"], run)
+            # The fake reports the motors once a second.
+            self.assertGreaterEqual(run["still_s"], HOLD_S - 0.2, run)
+            self.assertLessEqual(run["still_s"], HOLD_S + 1.3, run)
+            self.assertEqual(run["last_rpm"], 0)
+            self.assertEqual(run["summary"]["checksum_errors"], 0)
+        requests = [r for r in rec if r["kind"] == "blade" and r["on"]]
+        self.assertTrue(all(r["height_mm"] == m.TRON_BLADE_HEIGHT_MM and r["lease_s"] == 1.0 for r in requests))
+        starts = [r["params"]["allow_blade"] for r in rec if r["kind"] == "process" and r["node"] == "tron_mcu"]
+        self.assertEqual(starts, [False, True, True, True, False])
+        self.assertFalse(any(r["kind"] == "cmd" and (r["v"] or r["w"]) for r in rec))
+
+    def test_5_blade_kept_turning_ends_t6(self):
+        self.set_flags({"host_timeout": HOLD_S, "cutter_holds": 1})
+        try:
+            code, output, rec = self.measure("held", "--steps", "T6", "--blade", "--repeats", "1")
+        finally:
+            self.set_flags({"host_timeout": HOLD_S})
+        self.assertEqual(code, 1)
+        end = rec[-1]
+        self.assertTrue(any("kept the motor turning for 10 s" in f for f in end["findings"]), end["findings"])
+        run, = [r for r in rec if r["kind"] == "blade_gone"]
+        self.assertIsNone(run["still_s"])
+        self.assertEqual(run["last_rpm"], 840)
+        self.assertIn("abort", [r["kind"] for r in rec])
+        starts = [r["params"]["allow_blade"] for r in rec if r["kind"] == "process" and r["node"] == "tron_mcu"]
+        self.assertEqual(starts, [False, True, False])
+        status = [r for r in rec if r["kind"] == "status"]
+        self.assertEqual(status[-1]["blade_rpm"], 0)
 
 
 if __name__ == "__main__":

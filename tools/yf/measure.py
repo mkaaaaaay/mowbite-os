@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Safety measurement of a mower behind hw/*: programme M1-M8 of the NX60i (xcore_driver, next to the minimal launch)
-and T1-T5 of the Tron (--platform tron: this programme starts tron_imu and tron_mcu itself, see TronStart).
+and T1-T6 of the Tron (--platform tron: this programme starts tron_imu and tron_mcu itself, see TronStart).
 
 Asks before every step and shows what it will send. In the air the wheels get at most 0.1 m/s each, on the ground in
 M8 (only with --ground) 0.3 m/s, in the fast runs of M8 (only with --fast as well, and only up to the limit the driver
@@ -21,6 +21,8 @@ at 0.05), followed at once by a check of STOP. For the time the MCU holds a setp
 frozen (SIGSTOP) or killed; only while it is stopped or gone this programme reads the MCU port, read only and without
 touching its settings, into a capture file (at most CAPTURE_MAX_BYTES each), which tron_mcu_capture decodes with the
 codec of tron_mcu. The values for the parameter file of the Tron come out as a proposal only; nothing is written there.
+T6 (only with --blade, the blade disc off) asks the same of the blade motor: tron_mcu runs with the blade allowed for
+that step alone, the motor turns free on the lease of mowing, and the host goes the same two ways.
 """
 import argparse
 import collections
@@ -76,7 +78,7 @@ EMERGENCY_BITS = {0: "LATCH", 1: "TIMEOUT_INPUTS", 2: "STOP", 3: "LIFT", 4: "LIF
 DRIVER = "xcore_driver_node"
 SERVICE_NOT_READY = 256
 
-# The Tron (T1-T5). The firmware this programme was written against, read on the Tron 07.11.; another one ends the run.
+# The Tron (T1-T6). The firmware this programme was written against, read on the Tron 07.11.; another one ends the run.
 TRON_FIRMWARE = {"cutter": "0.6.36", "chassis": "0.6.34"}
 TRON_FIRST_SPEED = 0.05
 # Runs of heartbeat alone, of each input in T4 and of the driver's watchdog in T5 (host gone: --repeats).
@@ -94,6 +96,14 @@ HEARTBEAT_ONLY = {"cmd_vel_timeout": HEARTBEAT_ONLY_TIMEOUT_S, "speed_repeat_win
 # moving false once its watchdog fired: T5 looks at it WATCHDOG_MARGIN_S after that.
 EMERGENCY_STAND_S = 1.0
 WATCHDOG_MARGIN_S = 0.5
+# Blade without host (T6), the disc off: the motor turns at each of TRON_BLADE_PERCENT for BLADE_RUN_S, then the host
+# goes and the programme reads the port for BLADE_GONE_WINDOW_S; the MCU reports the motors about once a second. The
+# height stays where tron_mcu leaves a blade that is off, so the height motor does not move.
+TRON_BLADE_PERCENT = (30, 100)
+TRON_BLADE_HEIGHT_MM = 90
+BLADE_RUN_S = 4.0
+BLADE_GONE_WINDOW_S = 10.0
+BLADE_INPUT_WAIT_S = 10.0
 CAPTURE_MAX_BYTES = 1024 * 1024
 NODE_LOG_BYTES = 5 * 1024 * 1024
 
@@ -174,6 +184,22 @@ def host_gone_result(packets, since, wheel_distance):
     return {"stand_s": None if stood is None else stood - since,
             "turning_at_start": bool(speeds) and speeds[0][1] > TRON_STILL_SPEED, "lift_s": first("lift"),
             "stop_s": first("stop"), "rpm_last_s": turning[-1] - since if turning else None, "samples": len(speeds)}
+
+
+def blade_gone_result(packets, since, still_rpm):
+    """What the MCU reported of the blade motor after its host went at `since`, from the decoded capture: when it stood
+    for good (None while it still turned at the end), whether it turned at the first report, the last rpm and the
+    number of reports."""
+    reports = [(p["t"], abs(p["motors"]["cutter"])) for p in packets if "motors" in p and p["t"] >= since]
+    stood = None
+    for t, rpm in reports:
+        if rpm >= still_rpm:
+            stood = None
+        elif stood is None:
+            stood = t
+    return {"still_s": None if stood is None else stood - since,
+            "turning_at_start": bool(reports) and reports[0][1] >= still_rpm,
+            "last_rpm": reports[-1][1] if reports else None, "samples": len(reports)}
 
 
 def holding_problems(stands):
@@ -488,10 +514,12 @@ class Mower:
                        **refusal)
         return answer
 
-    def set_blade(self, on, lease_s=2.0):
-        answer = self.call(self.blade, SetBlade.Request(on=on, lease_s=lease_s if on else 0.0))
-        self.rec.write("blade", on=on, lease_s=lease_s, success=bool(answer and answer.success),
-                       message=answer.message if answer else "")
+    def set_blade(self, on, lease_s=2.0, percent=0, height_mm=0):
+        """percent and height_mm 0: the driver's defaults."""
+        answer = self.call(self.blade, SetBlade.Request(on=on, speed_percent=percent, height_mm=height_mm,
+                                                        lease_s=lease_s if on else 0.0))
+        self.rec.write("blade", on=on, lease_s=lease_s, percent=percent, height_mm=height_mm,
+                       success=bool(answer and answer.success), message=answer.message if answer else "")
         return answer
 
     def close(self):
@@ -1402,7 +1430,7 @@ class TronStart:
 
 
 class TronMeasurement(Measurement):
-    """T1-T5 of phase 6 on the Tron, in the air: the driver is this programme's process (TronStart)."""
+    """T1-T6 of phase 6 on the Tron, in the air: the driver is this programme's process (TronStart)."""
     still_speed = TRON_STILL_SPEED
 
     def __init__(self, args, rec, mower, person, keys, start):
@@ -1412,6 +1440,9 @@ class TronMeasurement(Measurement):
         # Stand times of the host-gone runs by way (freeze, kill), the firmware the driver reported.
         self.host_gone = {}
         self.firmware = {}
+        # T6, from the parameter files of the start: a blade motor below blade_still_rpm stands, within blade_stop_s of
+        # going off; the lease and its renewal are those of mowing.
+        self.blade_still_rpm = self.blade_stop_s = self.blade_lease_s = self.blade_renew_s = None
 
     @property
     def speed(self):
@@ -1597,28 +1628,7 @@ class TronMeasurement(Measurement):
             self.mower.stop_wheels()
             self.finding(step, f"host gone ({way}) run {n}: the wheels did not turn, or an emergency came first")
             raise Abort()
-        capture = self.capture_path(f"{step}-{way}-{n}")
-        since = time.monotonic()
-        pid = self.start.signal_driver(sig)
-        print(f"     sent {signal.Signals(sig).name} to tron_mcu (pid {pid}), reading {self.start.mcu_port}")
-        reader = None
-        try:
-            self.driver_off(step, way, pid)
-            reader = PortReader(self.start.mcu_port, capture)
-            self.wait(HOST_GONE_WINDOW_S)
-        except PortRefused as error:
-            self.finding(step, str(error))
-            raise Abort()
-        finally:
-            if reader is not None:
-                reader.close()
-            if way == "freeze":
-                os.kill(pid, signal.SIGCONT)
-                self.rec.write("signal", signal="SIGCONT", pid=pid)
-            elif self.start.driver_pid is None:
-                self.start.start_driver(**self.start.overrides)
-        if way == "kill":
-            self.wait_driver_back(step, pid)
+        since, capture = self.without_host(step, way, sig, f"{way}-{n}", HOST_GONE_WINDOW_S)
         packets, summary, code = self.start.decode(capture)
         result = host_gone_result(packets, since, self.mower.wheel_distance)
         self.rec.write("host_gone", step=step, way=way, run=n, capture=capture, summary=summary, **result)
@@ -1644,6 +1654,33 @@ class TronMeasurement(Measurement):
         self.release(step)
         self.no_motion(step, 2.0, "after the release without a new command")
         return stand
+
+    def without_host(self, step, way, sig, label, window):
+        """Sends `sig` to tron_mcu and reads the port for `window` s; then the frozen driver continues, a killed one
+        starts again and is waited for. Returns the time of the signal and the capture."""
+        capture = self.capture_path(f"{step}-{label}")
+        since = time.monotonic()
+        pid = self.start.signal_driver(sig)
+        print(f"     sent {signal.Signals(sig).name} to tron_mcu (pid {pid}), reading {self.start.mcu_port}")
+        reader = None
+        try:
+            self.driver_off(step, way, pid)
+            reader = PortReader(self.start.mcu_port, capture)
+            self.wait(window)
+        except PortRefused as error:
+            self.finding(step, str(error))
+            raise Abort()
+        finally:
+            if reader is not None:
+                reader.close()
+            if way == "freeze":
+                os.kill(pid, signal.SIGCONT)
+                self.rec.write("signal", signal="SIGCONT", pid=pid)
+            elif self.start.driver_pid is None:
+                self.start.start_driver(**self.start.overrides)
+        if way == "kill":
+            self.wait_driver_back(step, pid)
+        return since, capture
 
     def driver_off(self, step, way, pid):
         """Waits until tron_mcu reads no more (stopped, or ended and reaped) and nobody else holds the port."""
@@ -1827,7 +1864,186 @@ class TronMeasurement(Measurement):
             print(f"     the wheels stood {stand:.2f} s after the last command")
             self.no_motion(step, 2.0, "after the driver's stop")
 
-    STEPS = {"T1": t1, "T2": t2, "T3": t3, "T4": t4, "T5": t5}
+    def t6(self):
+        step = "T6"
+        self.blade_still_rpm = int(self.start.param("tron_mcu", "blade_still_rpm"))
+        self.blade_stop_s = float(self.start.param("tron_mcu", "blade_stop_time"))
+        self.blade_lease_s = float(self.start.param("mowbite_logic", "blade_lease"))
+        self.blade_renew_s = float(self.start.param("mowbite_logic", "blade_renew"))
+        longest = BLADE_RUN_S + BLADE_GONE_WINDOW_S + self.blade_stop_s
+        if not self.ask(f"{step} blade motor with the disc OFF (jacked up, you at STOP and battery): tron_mcu starts "
+                        f"again with the blade allowed, for this step only; the motor turns up to {longest:.0f} s a "
+                        f"run at {TRON_BLADE_HEIGHT_MM} mm, the wheels get no command"):
+            return
+        self.blade_used = True
+        old = self.start.driver_pid
+        self.start.restart_driver(allow_blade=True)
+        try:
+            self.wait_driver_back(step, old)
+            self.blade_basics(step)
+            self.blade_inputs(step)
+            self.blade_host_gone(step)
+        finally:
+            # tron_mcu switches the blade off on its way out; the next start does not allow it.
+            old = self.start.driver_pid
+            self.start.restart_driver()
+        self.wait_driver_back(step, old)
+
+    def blade_rpm(self):
+        """The rpm of the blade motor in hw/status; None without a fresh report of the motors."""
+        s, age, _, _ = self.mower.snapshot()
+        return abs(s.blade_motor.rpm) if s is not None and age < 0.5 and s.blade_motor.ok else None
+
+    def blade_turns(self):
+        rpm = self.blade_rpm()
+        return rpm is not None and rpm >= self.blade_still_rpm
+
+    def blade_run(self, step, percent, seconds, until=None):
+        """The blade motor on at `percent` on a renewed lease for `seconds`, or until `until` holds: True then. A
+        refused request ends the step."""
+        print(f"     sending hw/blade on at {percent} %, {TRON_BLADE_HEIGHT_MM} mm, lease {self.blade_lease_s} s, "
+              f"every {self.blade_renew_s} s, for up to {seconds:.0f} s")
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if until and until():
+                return True
+            answer = self.mower.set_blade(True, self.blade_lease_s, percent, TRON_BLADE_HEIGHT_MM)
+            if answer is None or not answer.success:
+                if until and until():
+                    return True
+                self.finding(step, f"hw/blade refused: {answer.message if answer else 'no answer'}")
+                raise Abort()
+            if self.wait(self.blade_renew_s, until):
+                return True
+        return False
+
+    def blade_turning(self, step, percent):
+        """`percent` for BLADE_RUN_S; the rpm the MCU reports then. A motor that does not turn ends the step."""
+        self.blade_run(step, percent, BLADE_RUN_S)
+        rpm = self.blade_rpm()
+        if self.in_emergency() or not self.blade_turns():
+            self.mower.set_blade(False)
+            self.show("blade")
+            self.finding(step, f"the blade motor reports {rpm} rpm after {BLADE_RUN_S:.0f} s at {percent} %")
+            raise Abort()
+        print(f"     the blade motor turns at {rpm} rpm")
+        return rpm
+
+    def blade_stands(self, step, since, what, seconds=None):
+        """s from `since` until hw/status showed the blade motor standing, waiting up to `seconds` (blade_stop_s) for
+        it. A motor that still turns ends the step."""
+        limit = self.blade_stop_s if seconds is None else seconds
+        rpm = self.blade_rpm
+        if not self.wait(max(0.0, since + limit - time.monotonic()),
+                         until=lambda: rpm() is not None and rpm() < self.blade_still_rpm):
+            self.finding(step, f"the blade motor reports {rpm()} rpm {limit:.0f} s after {what}")
+            if not self.person.fake:
+                self.person.act("the blade motor may still turn: press STOP now")
+            raise Abort()
+        still = time.monotonic() - since
+        print(f"     the blade motor stood {still:.1f} s after {what} (the MCU reports it about once a second)")
+        return still
+
+    def blade_basics(self, step):
+        for percent in TRON_BLADE_PERCENT:
+            text = f"on at {percent} % for {BLADE_RUN_S:.0f} s, then off"
+            if not self.ask(f"{step} blade motor {text}"):
+                continue
+            self.ready(step)
+            self.mark(step, text)
+            rpm = self.blade_turning(step, percent)
+            print("     sending hw/blade off")
+            since = time.monotonic()
+            self.mower.set_blade(False)
+            still = self.blade_stands(step, since, "the off request")
+            self.rec.write("blade_off", step=step, percent=percent, rpm=rpm, still_s=still)
+        percent = TRON_BLADE_PERCENT[0]
+        text = f"on at {percent} %, then no renewal: tron_mcu switches it off when the lease runs out"
+        if self.ask(f"{step} blade motor {text}"):
+            self.ready(step)
+            self.mark(step, text)
+            rpm = self.blade_turning(step, percent)
+            since = time.monotonic()
+            still = self.blade_stands(step, since, "the last renewal", self.blade_lease_s + self.blade_stop_s)
+            self.rec.write("blade_lease", step=step, percent=percent, rpm=rpm, still_s=still)
+
+    def blade_inputs(self, step):
+        items = [("press STOP while the blade motor turns", {"stop": True}),
+                 ("push the bumper left while the blade motor turns", {"bumper_left": True}),
+                 ("push the bumper right while the blade motor turns", {"bumper_right": True})]
+        percent = TRON_BLADE_PERCENT[0]
+        for text, fake in items:
+            if not self.ask(f"{step} {text}: on at {percent} % for up to {BLADE_RUN_S + BLADE_INPUT_WAIT_S:.0f} s, "
+                            "it has to stand on the emergency and stay so after the release"):
+                continue
+            self.ready(step)
+            self.mark(step, text)
+            rpm = self.blade_turning(step, percent)
+            self.person.act_later(text, fake, after=1.0, hold=1.0)
+            started = time.monotonic()
+            if not self.blade_run(step, percent, BLADE_INPUT_WAIT_S, until=self.in_emergency):
+                self.mower.set_blade(False)
+                self.finding(step, f"no emergency within {BLADE_INPUT_WAIT_S:.0f} s: {text}")
+                raise Abort()
+            since = self.mower.emergency_since
+            since = since if since is not None and since >= started else time.monotonic()
+            still = self.blade_stands(step, since, "the emergency")
+            self.rec.write("blade_emergency", step=step, text=text, rpm=rpm, still_s=still)
+            self.show("emergency")
+            self.wait(1.5)
+            self.let_go(text)
+            self.release(step)
+            if self.wait(2.0, until=self.blade_turns):
+                self.finding(step, f"the blade motor turned after the release without a request: {text}")
+                raise Abort()
+
+    def blade_host_gone(self, step):
+        ways = [("freeze", signal.SIGSTOP, "frozen (SIGSTOP), continued after the window"),
+                ("kill", signal.SIGKILL, "killed (SIGKILL), started again after the window")]
+        n = min(self.args.repeats, TRON_SHORT_REPEATS)
+        for way, sig, text in ways:
+            for percent in TRON_BLADE_PERCENT:
+                stills = []
+                for i in range(n):
+                    if not self.ask(f"{step} blade without host, {percent} %, run {i + 1}/{n}: the motor on for "
+                                    f"{BLADE_RUN_S:.0f} s, then tron_mcu {text}; meanwhile this programme only reads "
+                                    f"the port, {BLADE_GONE_WINDOW_S:.0f} s"):
+                        break
+                    stills.append(self.blade_gone_run(step, way, sig, percent, i + 1))
+                if stills:
+                    print(f"     {way}, {percent} %: the blade motor stood {min(stills):.1f}-{max(stills):.1f} s after "
+                          "the signal")
+
+    def blade_gone_run(self, step, way, sig, percent, n):
+        """One run of the blade motor without host: the time from the signal until the MCU reported it standing. A
+        motor the MCU kept turning through the window is the finding of T6 and ends it."""
+        self.ready(step)
+        self.mark(step, f"blade without host ({way}), {percent} %, run {n}")
+        rpm = self.blade_turning(step, percent)
+        since, capture = self.without_host(step, way, sig, f"{way}-{percent}-{n}", BLADE_GONE_WINDOW_S)
+        back = time.monotonic()
+        packets, summary, code = self.start.decode(capture)
+        result = blade_gone_result(packets, since, self.blade_still_rpm)
+        self.rec.write("blade_gone", step=step, way=way, percent=percent, run=n, rpm=rpm, capture=capture,
+                       summary=summary, **result)
+        if code != 0 or not result["samples"]:
+            self.finding(step, f"the capture {capture} has no reports of the motors (tron_mcu_capture exit {code})")
+            raise Abort()
+        still = result["still_s"]
+        print(f"     the MCU reported the blade motor standing {'never' if still is None else f'{still:.1f} s'} after "
+              f"the signal, last {result['last_rpm']} rpm ({result['samples']} reports, "
+              f"{summary.get('checksum_errors', 0)} checksum errors)")
+        # With its host back the blade goes off: the lease ran out, and a new tron_mcu sends off when it connects.
+        self.blade_stands(step, back, "tron_mcu came back")
+        if still is None:
+            self.finding(step, f"blade without host ({way}), {percent} %, run {n}: the MCU kept the motor turning for "
+                               f"{BLADE_GONE_WINDOW_S:.0f} s without its host")
+            raise Abort()
+        self.show("after")
+        self.release(step)
+        return still
+
+    STEPS = {"T1": t1, "T2": t2, "T3": t3, "T4": t4, "T5": t5, "T6": t6}
 
     def run(self, steps):
         """The firmware first: another one than TRON_FIRMWARE ends the run before any step."""
@@ -1861,8 +2077,8 @@ def interrupted(*_):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--platform", choices=["nx60i", "tron"], default="nx60i")
-    parser.add_argument("--steps", help="comma separated, of M1..M8 (nx60i, default M1-M6) or T1..T5 (tron, default "
-                                        "all)")
+    parser.add_argument("--steps", help="comma separated, of M1..M8 (nx60i, default M1-M6) or T1..T6 (tron, default "
+                                        "T1-T5)")
     parser.add_argument("--record-dir", default=".", help="directory of the recording")
     parser.add_argument("--max-mb", type=float, default=100.0, help="size limit of the recording")
     parser.add_argument("--max-minutes", type=float, default=120.0, help="no step starts after this time")
@@ -1870,7 +2086,7 @@ def main(argv=None):
     parser.add_argument("--repeats", type=int, default=5, help="runs per case in M4 and M5, host-gone runs in T2")
     parser.add_argument("--wheel-distance", type=float, default=0.3556, help="nx60i; the Tron's driver reports its own")
     parser.add_argument("--restart-wait", type=float, default=120.0, help="s to wait for a restarted driver")
-    parser.add_argument("--blade", action="store_true", help="allow M7 (blade)")
+    parser.add_argument("--blade", action="store_true", help="allow M7, on the Tron T6 (blade, the disc off)")
     parser.add_argument("--ground", action="store_true", help="allow M8 on the ground, 0.3 m/s per wheel")
     parser.add_argument("--fast", action="store_true",
                         help="with --ground: the fast runs of M8 up to 0.5 m/s in stages, in the raised start of the "
@@ -1893,8 +2109,10 @@ def main(argv=None):
     unknown = [s for s in steps if s not in programme.STEPS]
     if unknown:
         sys.exit(f"unknown steps for {args.platform}: {unknown}")
-    if tron and (args.blade or args.ground or args.fast):
-        sys.exit("--blade, --ground and --fast are not for the Tron (T6 and T7 come later)")
+    if tron and (args.ground or args.fast):
+        sys.exit("--ground and --fast are not for the Tron")
+    if tron and args.blade != ("T6" in steps):
+        sys.exit("on the Tron --blade and T6 go together")
     if "M8" in steps and not args.ground:
         sys.exit("M8 needs --ground")
     if args.fast and not args.ground:
