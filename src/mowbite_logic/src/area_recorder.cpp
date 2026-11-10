@@ -167,6 +167,8 @@ AreaRecorder::Result AreaRecorder::Act(const std::string& name) {
       recording_ = true;
       current_.clear();
       collect_requested_ = false;
+      // Every ring that meets the limit says so once.
+      full_reported_ = false;
       notices_.push_back(outline_ ? "Recording an obstacle" : "Recording an outline");
       return Result::kDone;
     case kStopRecording: return CloseRing(name) ? Result::kDone : Result::kRefused;

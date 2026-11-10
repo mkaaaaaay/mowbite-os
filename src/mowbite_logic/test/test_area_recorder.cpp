@@ -355,6 +355,36 @@ TEST(Recorder, StopsCollectingAtTheLimit) {
   EXPECT_EQ(events[0].details["limit"], 5);
 }
 
+TEST(Recorder, EveryRingAtTheLimitReportsIt) {
+  RecorderConfig config;
+  // Reached on the second or third side of the square, so the ring encloses an area.
+  config.max_points = 20;
+  AreaRecorder recorder = Writable(config);
+  const auto full = [&recorder]() {
+    const auto events = recorder.TakeEvents();
+    return events.size() == 1 && events[0].details["reason"] == "TOO_MANY_POINTS";
+  };
+  // The second area of a session meets the limit like the first.
+  for (const char* id : {"a", "b"}) {
+    recorder.OnAction("start_recording");
+    Drive(recorder, Square(1));
+    EXPECT_TRUE(full()) << id;
+    ASSERT_EQ(recorder.OnAction("finish_mowing_area"), AreaRecorder::Result::kDone) << id;
+    ASSERT_TRUE(recorder.TakeMapEdit()) << id;
+    recorder.OnMapEditResult(true, id, "", "");
+    recorder.TakeEvents();
+  }
+  // An obstacle begun at the limit takes no point and says why.
+  recorder.OnAction("start_recording");
+  Drive(recorder, Square(1));
+  EXPECT_TRUE(full());
+  ASSERT_EQ(recorder.OnAction("stop_recording"), AreaRecorder::Result::kDone);
+  recorder.OnAction("start_recording");
+  Drive(recorder, Square(0.5, 0.2, 0.2));
+  EXPECT_TRUE(recorder.current().empty());
+  EXPECT_TRUE(full());
+}
+
 namespace {
 
 HardwareSnapshot Healthy() {
