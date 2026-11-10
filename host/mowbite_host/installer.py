@@ -94,6 +94,12 @@ class Health:
             time.sleep(self.every)
 
 
+# Health as the entry points use it; MOWBITE_UPDATE_HEALTH_WAIT and _STABLE (s) shorten it for tests.
+def health_of(paths, carrier, probe=None):
+    return Health(paths, carrier, probe, wait=float(os.environ.get("MOWBITE_UPDATE_HEALTH_WAIT", HEALTH_WAIT)),
+                  stable=float(os.environ.get("MOWBITE_UPDATE_HEALTH_STABLE", HEALTH_STABLE)))
+
+
 class Installer:
     def __init__(self, paths, carrier, health):
         self.paths, self.carrier, self.health = paths, carrier, health
@@ -110,8 +116,9 @@ class Installer:
     def meta_of(self, revision):
         return files.read_json(os.path.join(self.paths.opt_of(revision), "bundle.json")) if revision else None
 
-    def _write_pending(self, to, before):
-        files.write_json(self.paths.pending, {"to": to, "from": before or ""})
+    # ran: whether the OS ran before the switch, so that a host started again after a cut starts it again.
+    def _write_pending(self, to, before, ran):
+        files.write_json(self.paths.pending, {"to": to, "from": before or "", "ran": ran})
 
     def _clear_pending(self):
         files.remove(self.paths.pending)
@@ -129,8 +136,13 @@ class Installer:
         if before == revision:
             before = self.previous()
         self.health.begin()
-        self.carrier.stop()
-        self._write_pending(revision, before)
+        # Written before the stop: a cut while the OS stops is recovered as well.
+        self._write_pending(revision, before, self.carrier.active())
+        try:
+            self.carrier.stop()
+        except Refused:
+            self._clear_pending()
+            raise
         files.set_link(self.paths.current, revision)
         log(f"current -> {revision}, starting")
         since = time.time()
@@ -161,9 +173,10 @@ class Installer:
         self._clear_pending()
         return False, line
 
-    # An update that ended before its health was confirmed (power cut, killed): back to the installation before it.
-    # The pending record, None without one.
-    def recover(self):
+    # An update that ended before its health was confirmed (power cut, killed): back to the installation before it,
+    # started again when it ran (start_stopped: also when it ran before the switch; never at boot, where the service
+    # starts after this). The pending record, None without one.
+    def recover(self, start_stopped=False):
         pending = self.pending()
         if pending is None:
             if os.path.lexists(self.paths.pending):
@@ -181,7 +194,7 @@ class Installer:
             files.remove(self.paths.current)
             log(f"unfinished update to {pending.get('to')} without an installation before it: the OS stays off")
         self._clear_pending()
-        if was_active and before:
+        if before and (was_active or (start_stopped and pending.get("ran") is True)):
             self.carrier.start()
         return pending
 

@@ -65,12 +65,11 @@ def connect(where):
 
 def make(prefix, with_broker):
     where = paths.Paths(prefix)
-    service = carrier.Systemd()
+    service = carrier.of(where)
     rpc, check = connect(where) if with_broker else (None, None)
     if with_broker and rpc is None:
         print("no broker: only a stopped OS switches, its health is judged from its files", file=sys.stderr)
-    health = installer.Health(where, service, check, wait=float(os.environ.get("MOWBITE_UPDATE_HEALTH_WAIT",
-                                                                                installer.HEALTH_WAIT)))
+    health = installer.health_of(where, service, check)
     tool = updater.Updater(where, service, health, origin.Inbox(where), rpc or NoBroker())
     if check is not None:
         check.api_of_running = lambda: (tool.installer.meta_of(tool.installer.current()) or {}).get("api")

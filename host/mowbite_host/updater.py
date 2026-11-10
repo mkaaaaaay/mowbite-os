@@ -395,8 +395,8 @@ class Updater:
                 "HOME": "/nonexistent"}
 
     # At the start of the host: back from a switch that was cut off; a revision cut off MAX_ATTEMPTS times is blocked.
-    def recover(self):
-        pending = self.installer.recover()
+    def recover(self, start_stopped=False):
+        pending = self.installer.recover(start_stopped)
         if pending is None:
             return
         revision = pending.get("to")

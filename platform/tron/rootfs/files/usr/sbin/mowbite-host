@@ -61,7 +61,7 @@ def main():
                            on_message=lambda m: route(m), on_connect=lambda: host and host.connected(),
                            will=(service.HOST_STATUS, service.OFFLINE))
     rpc = probe.OsRpc(client)
-    service_os = carrier.Systemd()
+    service_os = carrier.of(where)
     tool = None
     check = probe.Probe(rpc, api_of_running=lambda: (tool.installer.meta_of(tool.installer.current()) or {}).get("api"))
 
@@ -73,8 +73,8 @@ def main():
         elif host is not None:
             host.on_request(message)
 
-    tool = updater.Updater(where, service_os, installer.Health(where, service_os, check), origin.Inbox(where), rpc)
-    tool.recover()
+    tool = updater.Updater(where, service_os, installer.health_of(where, service_os, check), origin.Inbox(where), rpc)
+    tool.recover(start_stopped=True)
     host = service.Host(where, tool, os_state.OsWatch(where, service_os, tool), service_os, client.publish)
     client.start()
     try:

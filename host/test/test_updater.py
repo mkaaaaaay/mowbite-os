@@ -292,6 +292,20 @@ class FlowTest(Base):
         self.fake.broken.clear()
         self.assertEqual(self.run_update("os", B)["result"], "installed")
 
+    # The OS does not stop: nothing switched and no unfinished update left behind.
+    def test_stop_refused_leaves_no_pending(self):
+        self.install(A)
+        stop = self.fake.stop
+
+        def refuse():
+            raise Refused("BUSY", "systemctl stop failed")
+        self.fake.stop = refuse
+        last = self.install(B)
+        self.fake.stop = stop
+        self.assertEqual((last["result"], last["reason"]), ("refused", "BUSY"))
+        self.assertEqual(os.readlink(self.paths.current), A)
+        self.assertFalse(os.path.lexists(self.paths.pending))
+
     def test_base_too_old_blocks(self):
         last = self.install(A, base=7)
         self.assertEqual((last["result"], last["reason"]), ("refused", "BASE_TOO_OLD"))
