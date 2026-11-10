@@ -8,7 +8,7 @@ name: check
 on:
   push:
     branches: [main, tron-bundle]
-    paths: ['src/**', 'platform/**', 'docker/**', '.github/**']
+    paths: ['src/**', 'platform/**', 'host/**', 'docker/**', '.github/**']
   workflow_dispatch:
 
 concurrency:
@@ -71,8 +71,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Tools for the end-to-end test
+        run: sudo apt-get install -y --no-install-recommends mosquitto python3-paho-mqtt
+
       - name: Updater tests
-        run: python3 -I platform/tron/bundle/test_update.py
+        run: |
+          for t in platform/tron/bundle/test_update.py host/test/test_updater.py host/test/test_service.py \
+                   host/test/test_e2e.py; do
+            /usr/bin/python3 -I "$t"
+          done
 
   app-check:
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
