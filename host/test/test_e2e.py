@@ -9,7 +9,6 @@ import json
 import os
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import tarfile
@@ -21,35 +20,34 @@ import unittest
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.realpath(__file__))
 LIB = os.path.join(HERE, "..")
+sys.path.insert(0, LIB)
+sys.path.insert(0, HERE)
+import support  # noqa: E402
 REPO = os.path.join(HERE, "..", "..")
 SBIN = os.path.join(REPO, "platform", "tron", "rootfs", "files", "usr", "sbin")
 try:
     import paho.mqtt.client as mqtt
     from paho.mqtt.packettypes import PacketTypes
     from paho.mqtt.properties import Properties
+
+    from mowbite_host import broker
 except ImportError:
     mqtt = None
 
 A, B, C = "a000001", "b000002", "c000003"
 WAIT = 60.0
-# dpkg-query: every package is installed; it takes 4 s while state/slow-verify is there.
+# dpkg-query: every package is installed; it takes 2 s while state/slow-verify is there.
 DPKG_QUERY = """#!/bin/sh
-[ -e "{P}/state/slow-verify" ] && sleep 4
+[ -e "{P}/state/slow-verify" ] && sleep 2
 printf 'install ok installed'
 """
-# os-setup of the rootfs: sourced for the library check during the unpack; 4 s while state/slow-unpack is there.
-OS_SETUP = """[ -e "{P}/state/slow-unpack" ] && sleep 4
+# os-setup of the rootfs: sourced for the library check during the unpack; 2 s while state/slow-unpack is there.
+OS_SETUP = """[ -e "{P}/state/slow-unpack" ] && sleep 2
 true
 """
 RUN_OS = """#!/bin/sh
 exec python3 -I "$(readlink -f "{P}/opt/mowbite/current")/fake_os.py"
 """
-
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def until(test, wait=WAIT, what="condition"):
@@ -70,10 +68,7 @@ class App:
         self.updates = []
         self.answers = {}
         self.cond = threading.Condition()
-        if hasattr(mqtt, "CallbackAPIVersion"):
-            self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id="app-e2e", protocol=mqtt.MQTTv5)
-        else:
-            self.client = mqtt.Client(client_id="app-e2e", protocol=mqtt.MQTTv5)
+        self.client = broker._client("app-e2e")
         self.client.on_connect = lambda c, *_: c.subscribe(
             [("mowbite/host/status", 1), ("mowbite/update/status", 1), ("rpc/response/app-e2e", 1)])
         self.client.on_message = self._message
@@ -129,7 +124,7 @@ class EndToEnd(unittest.TestCase):
         for folder in ("opt/mowbite", "userdata/mowbite-update/inbox", "userdata/mowbite", "etc/mowbite",
                        "usr/lib/mowbite", "proc/sys/kernel/random", "state", "run"):
             os.makedirs(os.path.join(P, folder))
-        self.port = free_port()
+        self.port = support.free_port()
         self.write("proc/sys/kernel/random/boot_id", "boot-1\n")
         self.write("usr/lib/mowbite/base", "1\n")
         self.write("usr/lib/mowbite/os-setup", OS_SETUP.format(P=P))
@@ -140,16 +135,11 @@ class EndToEnd(unittest.TestCase):
         with open(os.path.join(self.bin, "dpkg-query"), "w") as f:
             f.write(DPKG_QUERY.format(P=P))
         os.chmod(os.path.join(self.bin, "dpkg-query"), 0o755)
-        self.key, self.foreign = self.keygen("key"), self.keygen("foreign")
-        with open(self.key + ".pub") as f:
-            public = " ".join(f.read().split()[:2])
-        self.write("etc/mowbite/allowed_signers", f'mowbite namespaces="mowbite-os,mowbite-index" {public}\n')
-        conf = os.path.join(self.root, "mosquitto.conf")
-        with open(conf, "w") as f:
-            f.write(f"listener {self.port} 127.0.0.1\nallow_anonymous true\npersistence false\n")
-        self.mosquitto = subprocess.Popen(["mosquitto", "-c", conf], stdout=subprocess.DEVNULL,
-                                          stderr=subprocess.DEVNULL)
-        until(lambda: self.connectable(), 5, "mosquitto")
+        self.key = support.keygen(os.path.join(self.root, "key"))
+        self.foreign = support.keygen(os.path.join(self.root, "foreign"))
+        self.write("etc/mowbite/allowed_signers",
+                   f'mowbite namespaces="mowbite-os,mowbite-index" {support.public(self.key)}\n')
+        self.mosquitto = support.mosquitto(self.root, self.port)
         self.app = App(self.port)
         self.host = None
         self.starts = 0
@@ -174,29 +164,14 @@ class EndToEnd(unittest.TestCase):
         else:
             shutil.rmtree(self.root, ignore_errors=True)
 
-    def connectable(self):
-        try:
-            socket.create_connection(("127.0.0.1", self.port), 0.2).close()
-            return True
-        except OSError:
-            return False
-
     def write(self, rel, text, mode=0o644):
         path = os.path.join(self.P, rel)
         with open(path, "w") as f:
             f.write(text)
         os.chmod(path, mode)
 
-    def keygen(self, name):
-        path = os.path.join(self.root, name)
-        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "", "-f", path], check=True)
-        return path
-
     def sign(self, path, namespace="mowbite-os", key=None):
-        if os.path.exists(path + ".sig"):
-            os.remove(path + ".sig")
-        subprocess.run(["ssh-keygen", "-q", "-Y", "sign", "-f", key or self.key, "-n", namespace, path], check=True,
-                       capture_output=True, stdin=subprocess.DEVNULL, timeout=30)
+        support.sign(path, key or self.key, namespace)
 
     # A signed bundle of rev as make-bundle.sh lays it out, with fake_os.py as its OS and an ELF file for the check
     # of the libraries; in the inbox unless folder is given.

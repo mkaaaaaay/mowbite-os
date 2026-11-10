@@ -13,7 +13,7 @@ import sys
 import time
 
 sys.path.insert(0, os.environ.get("MOWBITE_HOST_LIB", "/usr/lib/mowbite-host"))
-from mowbite_host import broker, carrier, installer, origin, os_state, paths, probe, service, updater  # noqa: E402
+from mowbite_host import broker, carrier, installer, origin, os_state, paths, service, updater  # noqa: E402
 
 
 # A message to systemd (Type=notify, WatchdogSec) over NOTIFY_SOCKET; nothing without one.
@@ -54,26 +54,14 @@ def main():
             time.sleep(1)
     os.makedirs(where.opt, exist_ok=True)
 
-    env = where.env()
     host = None
-    client = broker.Broker(env.get("MOWBITE_MQTT_HOST") or "127.0.0.1", env.get("MOWBITE_MQTT_PORT") or 1883,
-                           "mowbite-host", [("rpc/request", 1), ("robot_state/json", 0)],
-                           on_message=lambda m: route(m), on_connect=lambda: host and host.connected(),
-                           will=(service.HOST_STATUS, service.OFFLINE))
-    rpc = probe.OsRpc(client)
+    client, rpc, check = broker.attach(where, "mowbite-host", [("rpc/request", 1)],
+                                       other=lambda m: host and host.on_request(m),
+                                       on_connect=lambda: host and host.connected(),
+                                       will=(service.HOST_STATUS, service.OFFLINE))
     service_os = carrier.of(where)
-    tool = None
-    check = probe.Probe(rpc, api_of_running=lambda: (tool.installer.meta_of(tool.installer.current()) or {}).get("api"))
-
-    def route(message):
-        if message.topic == client.answers:
-            rpc.on_answer(message.payload)
-        elif message.topic == "robot_state/json":
-            check.on_robot_state(message.payload)
-        elif host is not None:
-            host.on_request(message)
-
     tool = updater.Updater(where, service_os, installer.health_of(where, service_os, check), origin.Inbox(where), rpc)
+    check.api_of_running = tool.running_api
     tool.recover(start_stopped=True)
     host = service.Host(where, tool, os_state.OsWatch(where, service_os, tool), service_os, client.publish)
     client.start()

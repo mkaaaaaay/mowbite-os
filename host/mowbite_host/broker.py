@@ -65,8 +65,8 @@ class Broker:
 
     def _message(self, client, userdata, m):
         props = getattr(m, "properties", None)
-        response = getattr(props, "ResponseTopic", None) if props is not None else None
-        correlation = getattr(props, "CorrelationData", None) if props is not None else None
+        response = getattr(props, "ResponseTopic", None)
+        correlation = getattr(props, "CorrelationData", None)
         self._on_message(Message(m.topic, m.payload, bool(m.retain), response, correlation))
 
     # Sent only while connected; a retained text goes again with on_connect.
@@ -88,3 +88,23 @@ class Broker:
         props.ResponseTopic = self.answers
         self.client.publish("rpc/request", payload, qos=1, properties=props)
         return True
+
+
+# The broker of the OS named in the environment files, with system.hold and the health probe on it: (client, rpc,
+# check). Answers go to rpc, robot_state to check, any other message to other.
+def attach(where, name, subscriptions, other=lambda message: None, on_connect=lambda: None, will=None):
+    from mowbite_host import probe
+    env = where.env()
+
+    def route(message):
+        if message.topic == client.answers:
+            rpc.on_answer(message.payload)
+        elif message.topic == "robot_state/json":
+            check.on_robot_state(message.payload)
+        else:
+            other(message)
+    client = Broker(env.get("MOWBITE_MQTT_HOST") or "127.0.0.1", env.get("MOWBITE_MQTT_PORT") or 1883, name,
+                    [*subscriptions, ("robot_state/json", 0)], on_message=route, on_connect=on_connect, will=will)
+    rpc = probe.OsRpc(client)
+    check = probe.Probe(rpc)
+    return client, rpc, check

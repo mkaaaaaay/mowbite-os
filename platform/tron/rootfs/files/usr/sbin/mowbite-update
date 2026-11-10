@@ -20,7 +20,7 @@ import sys
 import time
 
 sys.path.insert(0, os.environ.get("MOWBITE_HOST_LIB", "/usr/lib/mowbite-host"))
-from mowbite_host import Refused, bundle, carrier, installer, origin, paths, probe, updater  # noqa: E402
+from mowbite_host import Refused, bundle, carrier, installer, origin, paths, updater  # noqa: E402
 
 # How long install and rollback wait for the broker before they go on without one; 0: never asked.
 BROKER_WAIT = float(os.environ.get("MOWBITE_UPDATE_BROKER_WAIT", 5.0))
@@ -41,18 +41,7 @@ def connect(where):
     if BROKER_WAIT <= 0:
         return None, None
     from mowbite_host import broker
-    env = where.env()
-    check = None
-
-    def route(message):
-        if message.topic == client.answers:
-            rpc.on_answer(message.payload)
-        elif message.topic == "robot_state/json":
-            check.on_robot_state(message.payload)
-    client = broker.Broker(env.get("MOWBITE_MQTT_HOST") or "127.0.0.1", env.get("MOWBITE_MQTT_PORT") or 1883,
-                           "mowbite-update", [("robot_state/json", 0)], on_message=route)
-    rpc = probe.OsRpc(client)
-    check = probe.Probe(rpc)
+    client, rpc, check = broker.attach(where, "mowbite-update", [])
     client.start()
     deadline = time.monotonic() + BROKER_WAIT
     while not client.connected and time.monotonic() < deadline:
@@ -72,7 +61,7 @@ def make(prefix, with_broker):
     health = installer.health_of(where, service, check)
     tool = updater.Updater(where, service, health, origin.Inbox(where), rpc or NoBroker())
     if check is not None:
-        check.api_of_running = lambda: (tool.installer.meta_of(tool.installer.current()) or {}).get("api")
+        check.api_of_running = tool.running_api
     # By hand the gate is judged once, there is no waiting for it.
     tool.gate_wait = 0
     return tool

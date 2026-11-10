@@ -23,6 +23,7 @@ HOLD_WAIT = 10.0
 # A revision cut off this often during its switch (power cut) is blocked.
 MAX_ATTEMPTS = 2
 AUTO_DEFAULT = {"enabled": False, "from": "02:00", "to": "05:00"}
+IDLE = {"phase": "idle", "component": None, "revision": None, "reason": None}
 HHMM = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
 
 
@@ -69,7 +70,7 @@ class Updater:
         self._lock = threading.RLock()
         self._abort = threading.Event()
         self._worker = None
-        self._phase = {"phase": "idle", "component": None, "revision": None, "reason": None}
+        self._phase = dict(IDLE)
         self._candidates = []
         self.gate_wait = GATE_WAIT
         self.state = self._load()
@@ -102,6 +103,10 @@ class Updater:
     def _running_meta(self):
         return self.installer.meta_of(self.installer.current()) or {}
 
+    # The api the running installation names, None without one.
+    def running_api(self):
+        return self._running_meta().get("api")
+
     def serial_of(self, component):
         meta = self._running_meta()
         serial = meta.get("serial") if meta.get("format") == bundle.FORMAT else 0
@@ -114,7 +119,8 @@ class Updater:
         return {"revision": revision, "date": meta.get("date", meta.get("serial"))}
 
     def _available(self, component):
-        newer = [c for c in self._candidates if c["component"] == component and c["serial"] > self.serial_of(component)]
+        have = self.serial_of(component)
+        newer = [c for c in self._candidates if c["component"] == component and c["serial"] > have]
         if not newer:
             return None
         best = max(newer, key=lambda c: c["serial"])
@@ -156,7 +162,7 @@ class Updater:
             self.state["last"] = {"result": result, "reason": reason, "message": message[:500],
                                   "revision": revision, "component": component, "t": int(time.time())}
             self._save()
-            self._phase = {"phase": "idle", "component": None, "revision": None, "reason": None}
+            self._phase = dict(IDLE)
         self._changed()
 
     def phase(self):
@@ -373,10 +379,8 @@ class Updater:
             ok, line = self._switch(component, previous)
             if ok:
                 # Taken back by hand: the newer one does not come back by itself.
-                with self._lock:
-                    if current:
-                        self._entry(component)["blocked"][current] = {"reason": "ROLLED_BACK_BY_HAND",
-                                                                       "result": "rolled_back", "t": int(time.time())}
+                if current:
+                    self._block(component, current, "ROLLED_BACK_BY_HAND", "rolled_back")
                 self._finish("installed", None, line, component, previous)
             else:
                 self._finish("failed", "UNHEALTHY", line, component, previous)

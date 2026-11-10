@@ -2,7 +2,7 @@
 
 It writes os-session.json as the logic does, answers rpc.methods, system.info and system.hold on the broker and sends
 robot_state. Files in $MOWBITE_UPDATE_PREFIX/state steer it: os-state (the state it reports, IDLE without), slow-start
-(waits 4 s before it comes up), slow-stop (takes 3 s to stop); a file broken beside it makes it end at once with 3.
+(waits 2 s before it comes up), slow-stop (takes 1.5 s to stop); a file broken beside it makes it end at once with 3.
 """
 import json
 import os
@@ -81,7 +81,7 @@ def main():
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    if os.path.exists(STATE + "/slow-start") and stop.wait(4):
+    if os.path.exists(STATE + "/slow-start") and stop.wait(2):
         return 0
     if hasattr(mqtt, "CallbackAPIVersion"):
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id=f"fake-os-{os.getpid()}",
@@ -101,7 +101,7 @@ def main():
             session(False)
         client.publish("robot_state/json", json.dumps({"current_state": state, "emergency_reason": 0}))
     if os.path.exists(STATE + "/slow-stop"):
-        time.sleep(3)
+        time.sleep(1.5)
     session(True)
     os.remove(STATE + "/running.json")
     client.disconnect()

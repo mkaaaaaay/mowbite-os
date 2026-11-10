@@ -62,16 +62,16 @@ class Host:
         self.requests = queue.Queue(maxsize=MAX_WAITING)
         self._os = None
         self._update_text = None
+        # None: the answer is update.status.
         self._methods = {
-            "update.status": lambda p: self.updater.status(),
-            "update.start": self._start,
-            "update.abort": self._abort,
-            "update.rollback": lambda p: self._then_status(self.updater.rollback(_component(p))),
-            "update.check": lambda p: self._then_status(self.updater.check()),
+            "update.status": lambda p: None,
+            "update.start": lambda p: self.updater.start(_component(p), _text(p, "revision", required=False)),
+            "update.abort": lambda p: self.updater.abort(),
+            "update.rollback": lambda p: self.updater.rollback(_component(p)),
+            "update.check": lambda p: self.updater.check(),
             "update.set_auto": self._set_auto,
             "host.restart_os": self._restart_os,
         }
-
 
     def host_status(self):
         return {"schema": SCHEMA, "online": True, "t": int(time.time()), "methods": list(METHODS), "os": self._os}
@@ -83,8 +83,10 @@ class Host:
             self.publish(HOST_STATUS, json.dumps(self.host_status()), True)
 
     def update_changed(self, status):
-        self._update_text = json.dumps(status)
-        self.publish(UPDATE_STATUS, self._update_text, True)
+        text = json.dumps(status)
+        if text != self._update_text:
+            self._update_text = text
+            self.publish(UPDATE_STATUS, text, True)
 
     # After every connect: both statuses again, the broker may have lost them.
     def connected(self):
@@ -92,7 +94,6 @@ class Host:
             self._os = self.watch.read()
         self.publish(HOST_STATUS, json.dumps(self.host_status()), True)
         self.publish(UPDATE_STATUS, self._update_text or json.dumps(self.updater.status()), True)
-
 
     # From the thread of the broker client: requests for the host go to the queue of the main loop.
     def on_request(self, message):
@@ -129,7 +130,8 @@ class Host:
                 raise Invalid("params has to be an object")
             if method.startswith("update.") and isinstance(params.get("app_version"), str):
                 self.updater.remember_app(params["app_version"])
-            reply = {"jsonrpc": "2.0", "id": call_id, "result": self._methods[method](params)}
+            result = self._methods[method](params)
+            reply = {"jsonrpc": "2.0", "id": call_id, "result": self.updater.status() if result is None else result}
         except Invalid as why:
             reply = self._error(call_id, INVALID_PARAMS, str(why), "INVALID")
         except Refused as why:
@@ -146,22 +148,10 @@ class Host:
                 "error": {"code": code, "message": message,
                           "data": {"event": "UPDATE_REFUSED", "reason": reason, "message": message}}}
 
-    def _then_status(self, _):
-        return self.updater.status()
-
-    def _start(self, params):
-        self.updater.start(_component(params), _text(params, "revision", required=False))
-        return self.updater.status()
-
-    def _abort(self, params):
-        self.updater.abort()
-        return self.updater.status()
-
     def _set_auto(self, params):
         auto = self.updater.state["auto"]
         enabled = params.get("enabled", auto["enabled"])
         self.updater.set_auto(enabled, params.get("from", auto["from"]), params.get("to", auto["to"]))
-        return self.updater.status()
 
     # Decision (N): stopped, down or halted always; a running OS only in IDLE without an emergency or restart hold;
     # never during an update.
@@ -179,7 +169,6 @@ class Host:
             raise Refused("INTERNAL", "the OS did not start")
         self.look()
         return self._os
-
 
     def run(self, alive=lambda: None, stop=lambda: False):
         self.updater.on_change = self.update_changed

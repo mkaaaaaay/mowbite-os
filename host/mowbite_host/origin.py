@@ -103,11 +103,14 @@ class Inbox:
         if indexed is not None:
             return [entry for entry in indexed if _regular(entry["path"])]
         found = []
-        for name in sorted(os.listdir(self.folder)):
-            if name.startswith("mowbite-") and name.endswith(".tar.gz") and _regular(os.path.join(self.folder, name)):
-                candidate = self._read_bundle(name)
-                if candidate:
-                    found.append(candidate)
+        names = [name for name in sorted(os.listdir(self.folder))
+                 if name.startswith("mowbite-") and name.endswith(".tar.gz") and _regular(os.path.join(self.folder, name))]
+        # Only bundles still in the inbox stay remembered.
+        self._read = {key: value for key, value in self._read.items() if key[0] in names}
+        for name in names:
+            candidate = self._read_bundle(name)
+            if candidate:
+                found.append(candidate)
         return found
 
     def install_stage(self):

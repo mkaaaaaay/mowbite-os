@@ -43,7 +43,7 @@ def remove(path):
 def link_target(link):
     try:
         return os.readlink(link)
-    except (FileNotFoundError, OSError):
+    except OSError:
         return None
 
 

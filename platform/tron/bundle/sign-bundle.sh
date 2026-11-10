@@ -1,6 +1,6 @@
 #!/bin/bash
 # Signs a bundle of make-bundle.sh for mowbite-host: shows what it holds and the test gate result of its commit,
-# refuses a serial not newer than the last one signed for its component, asks, signs (namespace mowbite-<component>)
+# refuses a serial not newer than the last one signed for its component, asks, signs (namespace of mowbite-host)
 # and checks the signature against allowed_signers of the rootfs.
 #   sign-bundle.sh <bundle.tar.gz> <private key>
 # The last serial per component and a log of what was signed stay in $MOWBITE_SIGN_STATE (default
@@ -17,29 +17,27 @@ here=$(dirname "$(readlink -f "$0")")
 signers=${MOWBITE_SIGNERS:-$here/../rootfs/files/etc/mowbite/allowed_signers}
 state=${MOWBITE_SIGN_STATE:-$HOME/.local/state/mowbite-sign}
 
-# component revision commit serial on the first line, then the lines to show.
+# component revision commit serial namespace on the first line, then the lines to show; the checks of mowbite-host.
 read_meta() {
-    python3 -I - "$1" <<'PY'
-import json, sys, tarfile, time
-with tarfile.open(sys.argv[1]) as tar:
-    tops = {m.name.split("/", 1)[0] for m in tar.getmembers()}
-    if len(tops) != 1:
-        sys.exit(f"the bundle has to hold one directory, it holds {sorted(tops)}")
-    top = tops.pop()
-    meta = json.load(tar.extractfile(f"{top}/bundle.json"))
-if meta.get("format") != 2 or not all(isinstance(meta.get(k), int) for k in ("serial", "base")):
-    sys.exit(f"bundle.json is not format 2 with serial and base: {meta}")
-print(meta["component"], meta["revision"], meta.get("commit", ""), meta["serial"])
+    python3 -I - "$here/../../../host" "$1" <<'PY'
+import sys, time
+sys.path.insert(0, sys.argv[1])
+from mowbite_host import Refused, bundle
+try:
+    meta, _ = bundle.read_meta(sys.argv[2])
+except Refused as why:
+    sys.exit(f"{why.reason}: {why}")
+print(meta["component"], meta["revision"], meta.get("commit", ""), meta["serial"], bundle.namespace(meta["component"]))
 day = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) if isinstance(t, int) else "-"
 print(f"  component {meta['component']}, revision {meta['revision']}, commit {meta.get('commit', '-')}")
 print(f"  serial {meta['serial']} (commit time {day(meta['serial'])}), built {day(meta.get('date'))}")
-print(f"  base {meta['base']}, api {meta.get('api', '-')}, min_app {meta.get('min_app', '-')}, "
+print(f"  base {meta.get('base', 0)}, api {meta.get('api', '-')}, min_app {meta.get('min_app', '-')}, "
       f"{len(meta.get('runtime_packages', []))} runtime packages")
 PY
 }
 
 meta=$(read_meta "$bundle")
-read -r component revision commit serial <<< "$(head -1 <<< "$meta")"
+read -r component revision commit serial namespace <<< "$(head -1 <<< "$meta")"
 echo "$bundle"
 tail -n +2 <<< "$meta"
 echo "  $(( $(stat -c %s "$bundle") / 1000000 )) MB, sha256 $(sha256sum "$bundle" | cut -d' ' -f1)"
@@ -75,8 +73,8 @@ fi
 read -r -p "Sign $revision for $component? [y/N] " answer
 [ "$answer" = y ] || { echo "not signed"; exit 1; }
 rm -f "$bundle.sig"
-ssh-keygen -q -Y sign -f "$key" -n "mowbite-$component" "$bundle"
-ssh-keygen -q -Y verify -f "$signers" -I mowbite -n "mowbite-$component" -s "$bundle.sig" < "$bundle" > /dev/null || {
+ssh-keygen -q -Y sign -f "$key" -n "$namespace" "$bundle"
+ssh-keygen -q -Y verify -f "$signers" -I mowbite -n "$namespace" -s "$bundle.sig" < "$bundle" > /dev/null || {
     echo "the signature does not hold for allowed_signers of the rootfs: $bundle.sig is no use to a mower" >&2
     exit 1
 }

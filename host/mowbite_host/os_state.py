@@ -9,12 +9,11 @@ import re
 import time
 
 from mowbite_host import files, gate
+from mowbite_host.installer import CLOCK_SLACK
 
 HALT_REASON = re.compile(r"reason=([A-Z_]+)")
 # A note older than its stable_s does not count as a restart any more (the launch counts the same way).
 STABLE_DEFAULT = 600
-# File times run on a coarse clock, up to a tick behind time.time().
-CLOCK_SLACK = 0.1
 
 
 def halt_reason(paths):
@@ -42,7 +41,7 @@ class OsWatch:
         self._state = None
         self._since = None
 
-    def _base(self, active, active_since):
+    def _base(self, active, active_since, note):
         if self.updater.phase() in ("switching", "checking"):
             return "updating", None
         if active == "failed":
@@ -53,7 +52,6 @@ class OsWatch:
             return "starting", None
         if os.path.exists(self.paths.halt):
             return "halted", halt_reason(self.paths)
-        note = exit_note(self.paths)
         if note and note.get("down") is True:
             return "down", "CRASH_LOOP"
         session = gate.session_of_this_boot(self.paths)
@@ -69,12 +67,12 @@ class OsWatch:
     def read(self, now=None):
         now = time.time() if now is None else now
         active, changed, active_since = self.carrier.show()
-        state, reason = self._base(active, active_since)
+        note = exit_note(self.paths)
+        state, reason = self._base(active, active_since, note)
         if state != self._state:
             # The first look takes the time systemd knows; later changes the time they were seen.
             self._since = int(changed if self._state is None and changed else now)
             self._state = state
-        note = exit_note(self.paths)
         if note:
             self.updater.note_crash("os", int(note["t"]))
         restarts = 0

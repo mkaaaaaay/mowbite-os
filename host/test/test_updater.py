@@ -7,7 +7,6 @@ import io
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tarfile
 import tempfile
@@ -17,6 +16,8 @@ import unittest
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import support  # noqa: E402
 from mowbite_host import Refused, bundle, gate, installer, origin, paths, updater  # noqa: E402
 
 A, B, C = "aaaaaaa", "bbbbbbb", "ccccccc"
@@ -37,7 +38,7 @@ class FakeOs:
     def session(self, **fields):
         record = {"state": "IDLE", "job_id": "", "boot_id": "b1", "since": 0, "clean": False, "emergency": False,
                   "charging": True, **fields}
-        os.makedirs(self.paths.data_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(self.paths.session), exist_ok=True)
         with open(self.paths.session, "w") as f:
             json.dump(record, f)
 
@@ -86,18 +87,19 @@ class Base(unittest.TestCase):
         self.write(self.paths.boot_id, "b1\n")
         self.write(self.paths.base, "1\n")
         self.write(self.paths.os_setup, "true\n")
-        self.key = os.path.join(self.root, "key")
-        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "", "-f", self.key], check=True)
-        with open(self.key + ".pub") as f:
-            public = " ".join(f.read().split()[:2])
-        self.write(self.paths.signers, f'mowbite namespaces="mowbite-os,mowbite-index" {public}\n')
+        self.key = support.keygen(os.path.join(self.root, "key"))
+        self.write(self.paths.signers, f'mowbite namespaces="mowbite-os,mowbite-index" {support.public(self.key)}\n')
         self.fake = FakeOs(self.paths)
         health = installer.Health(self.paths, self.fake, wait=0, stable=0, every=0)
         self.updater = updater.Updater(self.paths, self.fake, health, origin.Inbox(self.paths), self.fake)
         self.updater.gate_wait = 0
         self.serial = 1000
+        # A hold not granted and a closed gate are judged again within a fraction of a second.
+        self.waits = updater.HOLD_WAIT, updater.GATE_EVERY
+        updater.HOLD_WAIT, updater.GATE_EVERY = 0.3, 0.05
 
     def tearDown(self):
+        updater.HOLD_WAIT, updater.GATE_EVERY = self.waits
         shutil.rmtree(self.root)
 
     def write(self, path, text):
@@ -106,8 +108,7 @@ class Base(unittest.TestCase):
             f.write(text)
 
     def sign(self, path, namespace):
-        subprocess.run(["ssh-keygen", "-q", "-Y", "sign", "-f", self.key, "-n", namespace, path], check=True,
-                       capture_output=True, stdin=subprocess.DEVNULL, timeout=30)
+        support.sign(path, self.key, namespace)
 
     # A signed bundle of rev in the inbox (or folder), with a newer serial unless given.
     def bundle(self, rev, serial=None, folder=None, **meta):
@@ -122,8 +123,6 @@ class Base(unittest.TestCase):
                 info = tarfile.TarInfo(name)
                 info.size = len(data)
                 tar.addfile(info, io.BytesIO(data))
-        if os.path.exists(path + ".sig"):
-            os.remove(path + ".sig")
         self.sign(path, "mowbite-os")
         return path
 
@@ -170,8 +169,6 @@ class InboxTest(Base):
         path = os.path.join(self.paths.inbox, origin.INDEX)
         with open(path, "w") as f:
             json.dump({"bundles": entries}, f)
-        if os.path.exists(path + ".sig"):
-            os.remove(path + ".sig")
         self.sign(path, namespace)
 
     def entry(self, path, **fields):

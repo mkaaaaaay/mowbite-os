@@ -6,8 +6,6 @@
 import json
 import os
 import shutil
-import socket
-import subprocess
 import sys
 import tempfile
 import threading
@@ -19,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from mowbite_host import files, installer, os_state, probe, service  # noqa: E402
 from mowbite_host.broker import Message  # noqa: E402
+import support  # noqa: E402
 from test_updater import A, B, Base  # noqa: E402
 
 
@@ -304,12 +303,6 @@ class ProbeTest(unittest.TestCase):
             shutil.rmtree(root)
 
 
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 @unittest.skipUnless(shutil.which("mosquitto"), "no mosquitto")
 class BrokerTest(unittest.TestCase):
     """mowbite-host against a private mosquitto: answers with correlation, statuses, last will."""
@@ -318,19 +311,8 @@ class BrokerTest(unittest.TestCase):
         from mowbite_host import broker
         self.broker = broker
         self.dir = tempfile.mkdtemp()
-        self.port = free_port()
-        conf = os.path.join(self.dir, "mosquitto.conf")
-        with open(conf, "w") as f:
-            f.write(f"listener {self.port} 127.0.0.1\nallow_anonymous true\npersistence false\n")
-        self.mosquitto = subprocess.Popen(["mosquitto", "-c", conf], stdout=subprocess.DEVNULL,
-                                          stderr=subprocess.DEVNULL)
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            try:
-                socket.create_connection(("127.0.0.1", self.port), 0.2).close()
-                break
-            except OSError:
-                time.sleep(0.05)
+        self.port = support.free_port()
+        self.mosquitto = support.mosquitto(self.dir, self.port)
 
     def tearDown(self):
         self.mosquitto.terminate()

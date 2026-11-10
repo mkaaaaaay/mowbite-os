@@ -12,7 +12,6 @@ class Paths:
         # The installations of the OS: <opt>/<revision>, current, previous, pending.
         self.opt = p + "/opt/mowbite"
         self.signers = p + "/etc/mowbite/allowed_signers"
-        self.update_conf = p + "/etc/mowbite/update.conf"
         # The version of the rootfs or base image, an integer; a bundle names the oldest it runs on.
         self.base = p + "/usr/lib/mowbite/base"
         self.os_setup = p + "/usr/lib/mowbite/os-setup"
@@ -27,7 +26,6 @@ class Paths:
         self.boot_id = p + "/proc/sys/kernel/random/boot_id"
         # Written by MowBite OS in its data_dir (mowbite_hold, stack.py).
         data = p + data_dir
-        self.data_dir = data
         self.session = data + "/os-session.json"
         self.restart_hold = data + "/restart-hold.json"
         self.hold = data + "/hold.json"

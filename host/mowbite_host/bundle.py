@@ -83,10 +83,6 @@ class Bundle:
         self.size = size
 
     @property
-    def component(self):
-        return self.meta["component"]
-
-    @property
     def revision(self):
         return self.meta["revision"]
 

@@ -13,7 +13,7 @@ class Systemd:
         self.service = service
 
     def _systemctl(self, *args):
-        return subprocess.run(["systemctl", *args, self.service], capture_output=True, text=True)
+        return bundle.run(["systemctl", *args, self.service])
 
     def active(self):
         return self._systemctl("is-active", "--quiet").returncode == 0
