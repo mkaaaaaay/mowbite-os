@@ -42,6 +42,17 @@ install(TARGETS tron_vision_core
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
 
+# With the headers of the media library at hand (TRON_VISION_MPP_INCLUDE as option or in the environment), the
+# declarations in mpp_abi.h are compared with them, also in the image build.
+if(NOT TRON_VISION_MPP_INCLUDE)
+  set(TRON_VISION_MPP_INCLUDE "$ENV{TRON_VISION_MPP_INCLUDE}")
+endif()
+if(TRON_VISION_MPP_INCLUDE)
+  add_library(tron_vision_check_mpp_abi OBJECT test/check_mpp_abi.cpp)
+  target_include_directories(tron_vision_check_mpp_abi PRIVATE include)
+  target_include_directories(tron_vision_check_mpp_abi SYSTEM PRIVATE ${TRON_VISION_MPP_INCLUDE})
+endif()
+
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   # Stand-in for the runtime library, for the tests only.
@@ -62,12 +73,6 @@ if(BUILD_TESTING)
   # The stream without the Tron, for a trial by hand against a real RTSP client.
   add_executable(tron_stereo_trial test/stereo_trial.cpp)
   target_link_libraries(tron_stereo_trial tron_vision_core)
-  # With the headers of the media library at hand, the declarations in mpp_abi.h are compared with them.
-  if(TRON_VISION_MPP_INCLUDE)
-    add_library(tron_vision_check_mpp_abi OBJECT test/check_mpp_abi.cpp)
-    target_include_directories(tron_vision_check_mpp_abi PRIVATE include)
-    target_include_directories(tron_vision_check_mpp_abi SYSTEM PRIVATE ${TRON_VISION_MPP_INCLUDE})
-  endif()
   ament_add_gtest(tron_vision_node_test test/test_vision_node.cpp)
   target_link_libraries(tron_vision_node_test tron_vision_node_lib)
 endif()

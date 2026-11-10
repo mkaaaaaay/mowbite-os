@@ -13,7 +13,7 @@ FROM --platform=$BUILDPLATFORM ros:${ROS_DISTRO}-ros-base AS mpp
 ARG TARGETARCH
 ARG MPP_VERSION=1.1.0
 ARG MPP_SHA256=7bb0040f364468ad9abbb71a04553ebc6a5814584e083c2fc9a553783e9656df
-RUN mkdir -p /opt/mpp \
+RUN mkdir -p /opt/mpp /opt/mpp-inc \
  && if [ "$TARGETARCH" = arm64 ]; then \
       apt-get update \
       && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
@@ -27,7 +27,8 @@ RUN mkdir -p /opt/mpp \
       && mkdir -p /opt/mpp/lib /opt/mpp/share/licenses \
       && cp -L /tmp/mpp-build/mpp/librockchip_mpp.so.1 /opt/mpp/lib/ \
       && aarch64-linux-gnu-strip /opt/mpp/lib/librockchip_mpp.so.1 \
-      && cp /tmp/mpp-$MPP_VERSION/LICENSES/Apache-2.0 /tmp/mpp-$MPP_VERSION/LICENSES/MIT /opt/mpp/share/licenses/; \
+      && cp /tmp/mpp-$MPP_VERSION/LICENSES/Apache-2.0 /tmp/mpp-$MPP_VERSION/LICENSES/MIT /opt/mpp/share/licenses/ \
+      && cp /tmp/mpp-$MPP_VERSION/inc/*.h /opt/mpp-inc/; \
     fi
 
 FROM ros:${ROS_DISTRO}-ros-base AS build
@@ -57,9 +58,12 @@ RUN --mount=type=bind,from=planer,target=/src/planer \
 
 # Every package but the simulation; PACKAGES narrows it (colcon selection, e.g. "--packages-up-to xcore_driver").
 ARG PACKAGES="--packages-skip mowbite_sim"
+# Headers of the media library, only for the check of tron_vision against its declarations; empty on amd64.
+COPY --from=mpp /opt/mpp-inc /opt/mpp-inc
 COPY src /ws/src
 # The FILES_VERSION of the pinned planner has to be the one data_schema.json of mowbite_bridge expects.
 RUN . /opt/ros/$ROS_DISTRO/setup.sh && . /opt/mowbite_planner/setup.sh && cd /ws \
+ && if [ -f /opt/mpp-inc/rk_mpi.h ]; then export TRON_VISION_MPP_INCLUDE=/opt/mpp-inc; fi \
  && MAKEFLAGS=-j$BUILD_JOBS colcon build $PACKAGES --parallel-workers $BUILD_WORKERS \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
  && rm -rf /ws/build /ws/log \
