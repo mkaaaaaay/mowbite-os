@@ -127,6 +127,80 @@ std::vector<std::string> SoundSituationNames() {
 
 const char kSoundOffered[] = "with a speaker and at least one sound";
 
+// update.* and host.* are answered by mowbite-host on the broker, also while the OS is off.
+const char kHostOffered[] = "while mowbite/host/status says online";
+
+// unix s, or null when it is not known.
+Field Time(std::string name, std::string text) {
+  return Nullable({std::move(name), Type::kInteger, "unix s", true, std::move(text), {}, false, {}, ""});
+}
+
+Field Revision(std::string name, std::string text) {
+  return Nullable(Object(std::move(name), std::move(text),
+                         {Text("revision", "The revision, a commit of MowBite OS"),
+                          Time("date", "When it was built, null when the bundle does not say")}));
+}
+
+// The params of update.*: app_version in every call, for min_app of a bundle.
+Field UpdateParams(std::vector<Field> fields, bool required = false) {
+  fields.push_back(Text("app_version", "Version of the app that calls, e.g. 1.4.0 or 1.5.0-beta.2", false));
+  return Object("params", "app_version and the fields of the call", std::move(fields), required);
+}
+
+// A revision update.status offers, and why it is not installed by itself.
+Field Available() {
+  return Nullable(Object(
+      "available", "The newest revision found that is newer than what runs, null without one",
+      {Text("revision", "The revision"), Time("date", "When it was built"),
+       Nullable(Text("min_app", "The oldest app it works with")),
+       Nullable(Object("blocked",
+                       "Not installed by itself: why, the result of the attempt that ended so and when; update.start "
+                       "of this revision tries it anyway",
+                       {Text("reason", "A reason of UPDATE in x-reasons, never BLOCKED"),
+                        Text("result", "How the attempt ended", false, {"rolled_back", "failed"}),
+                        Integer("t", "When, unix s")}))}));
+}
+
+// update.status, the same as retained on mowbite/update/status.
+Field UpdateStatus() {
+  return Object(
+      "result", "What the updater does, what runs and what is available, the last result",
+      {Text("phase", "What it does now", true,
+            {"idle", "verifying", "unpacking", "waiting_gate", "switching", "checking"}),
+       Nullable(Text("component", "The component of the update that runs, null in idle")),
+       Nullable(Text("revision", "The revision it installs or goes back to, null in idle")),
+       Nullable(Text("reason", "Why the gate waits in waiting_gate: a reason of UPDATE in x-reasons")),
+       Rows("components", "Each component the updater keeps",
+            {Text("id", "The component", true, {"os"}), Text("name", "Its name to show"),
+             Revision("running", "What runs, null without an installation"), Available(),
+             Revision("previous", "Where update.rollback goes, null without one"),
+             Time("installed_at", "When what runs was installed"),
+             Integer("crashes_since_install", "Ends of the container since then"),
+             Bool("auto", "Whether updates install by themselves at night")}),
+       Object("auto", "The automatic update",
+              {Bool("enabled", "On or off"), Text("from", "Start of the window, HH:MM local time"),
+               Text("to", "End of the window, HH:MM local time")}),
+       Nullable(Object(
+           "last", "The result of the last update or rollback, null before the first",
+           {Text("result", "How it ended", true, {"installed", "rolled_back", "refused", "aborted", "failed"}),
+            Nullable(Text("reason", "Why: a reason of UPDATE in x-reasons, null when installed")),
+            Text("message", "English text for the log"), Nullable(Text("revision", "The revision")),
+            Text("component", "The component"), Integer("t", "When, unix s")}))});
+}
+
+// os of mowbite/host/status: how the OS is, from systemd and its files.
+std::vector<Field> HostOs() {
+  return {Text("state", "How it is", true, {"starting", "running", "stopped", "down", "halted", "updating"}),
+          Nullable(Text("reason",
+                        "Why: CRASH_LOOP when down, the reason of the halt when halted (HOST_OS in x-reasons); else "
+                        "null")),
+          Integer("since", "Since when, unix s"), Integer("restarts", "Crashes since its last stable run of 10 min"),
+          Time("last_crash", "The last end of its container"), Nullable(Text("revision", "The revision that runs")),
+          Nullable(Object("stalled", "The node the watch ended it for at its last end, null without one",
+                          {Text("node", "The node"), Number("seconds", "s", "How long it gave no sign"),
+                           Number("limit", "s", "Its limit")}))};
+}
+
 // The answer of light.set_profile and light.reset.
 Field LightProfile() {
   return Object("result", "The profile now", {Object("profile", "An effect by state of light.get_profile")});
@@ -555,6 +629,35 @@ const std::vector<Method>& Methods() {
        NtripAccess(), "only with access_over_rpc"},
       {"ntrip.delete", "mowbite_ntrip", "Removes the access in IDLE", NoParams(), NtripAccess(),
        "only with access_over_rpc"},
+      {"update.status", "mowbite_host",
+       "What the updater does and what is there; the same retained on mowbite/update/status", UpdateParams({}),
+       UpdateStatus(), kHostOffered},
+      {"update.start", "mowbite_host",
+       "Installs the newest available revision of the component or the one given, one update at a time; it waits for "
+       "the gate (IDLE on the charging contacts, the hold granted) for up to 30 min. Refused (UPDATE_REFUSED) when "
+       "none is there or one runs",
+       UpdateParams({Text("component", "The component", true, {"os"}),
+                     Text("revision", "A revision of available or found by update.check; the newest without", false)},
+                    true),
+       UpdateStatus(), kHostOffered},
+      {"update.abort", "mowbite_host", "Stops the update before its switch; after it the health check decides",
+       UpdateParams({}), UpdateStatus(), kHostOffered},
+      {"update.rollback", "mowbite_host",
+       "Goes back to the previous installation through the same gate; that revision is then not installed by itself",
+       UpdateParams({Text("component", "The component", true, {"os"})}, true), UpdateStatus(), kHostOffered},
+      {"update.check", "mowbite_host", "Looks for bundles in the origins now (the inbox), as it does every 6 h",
+       UpdateParams({}), UpdateStatus(), kHostOffered},
+      {"update.set_auto", "mowbite_host",
+       "Switches the automatic update on or off and sets its window; it needs a sure clock and an app as new as "
+       "min_app",
+       UpdateParams({Bool("enabled", "On or off", false), Text("from", "Start of the window, HH:MM local time", false),
+                     Text("to", "End of the window, HH:MM local time", false)}),
+       UpdateStatus(), kHostOffered},
+      {"host.restart_os", "mowbite_host",
+       "Starts MowBite OS again, its restarts from 0: always when it is stopped, down or halted, else only in IDLE "
+       "without an emergency or the restart hold; never during an update. The restart hold judges at the start as "
+       "always",
+       NoParams(), Object("result", "os of mowbite/host/status after the restart", HostOs()), kHostOffered},
   };
   return methods;
 }

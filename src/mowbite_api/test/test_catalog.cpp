@@ -291,7 +291,7 @@ TEST(Catalog, EveryReasonOfTheSources) {
 
 // COMMAND_REFUSED, REQUEST_REFUSED and SOUND_REFUSED are groups of answers only: rated like an event, but never one.
 TEST(Catalog, RefusalsAreNoEvents) {
-  ASSERT_EQ(Refusals().size(), 3u);
+  ASSERT_EQ(Refusals().size(), 6u);
   const EventEntry& answers = Refusals().front();
   EXPECT_EQ(answers.type, "COMMAND_REFUSED");
   EXPECT_EQ(FindEvent("COMMAND_REFUSED"), nullptr);
@@ -379,8 +379,8 @@ TEST(Catalog, ParamsOfACommand) {
 
 // Every RPC method once, each with its node; the commands are none of them.
 TEST(Catalog, MethodsSensorsSettingsAndGeometry) {
-  const std::set<std::string> nodes = {"mowbite_bridge", "mowbite_logic", "mowbite_map", "mowbite_ntrip",
-                                       "mowbite_calibration", "mowbite_light", "mowbite_sound"};
+  const std::set<std::string> nodes = {"mowbite_bridge",      "mowbite_logic", "mowbite_map",   "mowbite_ntrip",
+                                       "mowbite_calibration", "mowbite_light", "mowbite_sound", "mowbite_host"};
   std::set<std::string> names;
   for (const auto& command : Commands()) names.insert(command.name);
   for (const auto& method : Methods()) {

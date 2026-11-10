@@ -3792,6 +3792,97 @@
       },
       "type": "array"
     },
+    "host.restart_os.params": {
+      "description": "The params of host.restart_os: None",
+      "type": "object"
+    },
+    "host.restart_os.result": {
+      "additionalProperties": false,
+      "description": "The result of host.restart_os: os of mowbite/host/status after the restart",
+      "properties": {
+        "last_crash": {
+          "description": "The last end of its container",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-unit": "unix s"
+        },
+        "reason": {
+          "description": "Why: CRASH_LOOP when down, the reason of the halt when halted (HOST_OS in x-reasons); else null",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "restarts": {
+          "description": "Crashes since its last stable run of 10 min",
+          "type": "integer"
+        },
+        "revision": {
+          "description": "The revision that runs",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "since": {
+          "description": "Since when, unix s",
+          "type": "integer"
+        },
+        "stalled": {
+          "additionalProperties": false,
+          "description": "The node the watch ended it for at its last end, null without one",
+          "properties": {
+            "limit": {
+              "description": "Its limit",
+              "type": "number",
+              "x-unit": "s"
+            },
+            "node": {
+              "description": "The node",
+              "type": "string"
+            },
+            "seconds": {
+              "description": "How long it gave no sign",
+              "type": "number",
+              "x-unit": "s"
+            }
+          },
+          "required": [
+            "node",
+            "seconds",
+            "limit"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "How it is",
+          "enum": [
+            "starting",
+            "running",
+            "stopped",
+            "down",
+            "halted",
+            "updating"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "reason",
+        "since",
+        "restarts",
+        "last_crash",
+        "revision",
+        "stalled"
+      ],
+      "type": "object"
+    },
     "light.get_profile.params": {
       "description": "The params of light.get_profile: None",
       "type": "object"
@@ -6082,13 +6173,1877 @@
         "sub_state"
       ],
       "type": "object"
+    },
+    "update.abort.params": {
+      "additionalProperties": false,
+      "description": "The params of update.abort: app_version and the fields of the call",
+      "properties": {
+        "app_version": {
+          "description": "Version of the app that calls, e.g. 1.4.0 or 1.5.0-beta.2",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "update.abort.result": {
+      "additionalProperties": false,
+      "description": "The result of update.abort: What the updater does, what runs and what is available, the last result",
+      "properties": {
+        "auto": {
+          "additionalProperties": false,
+          "description": "The automatic update",
+          "properties": {
+            "enabled": {
+              "description": "On or off",
+              "type": "boolean"
+            },
+            "from": {
+              "description": "Start of the window, HH:MM local time",
+              "type": "string"
+            },
+            "to": {
+              "description": "End of the window, HH:MM local time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "enabled",
+            "from",
+            "to"
+          ],
+          "type": "object"
+        },
+        "component": {
+          "description": "The component of the update that runs, null in idle",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "components": {
+          "description": "Each component the updater keeps",
+          "items": {
+            "additionalProperties": false,
+            "description": "One item",
+            "properties": {
+              "auto": {
+                "description": "Whether updates install by themselves at night",
+                "type": "boolean"
+              },
+              "available": {
+                "additionalProperties": false,
+                "description": "The newest revision found that is newer than what runs, null without one",
+                "properties": {
+                  "blocked": {
+                    "additionalProperties": false,
+                    "description": "Not installed by itself: why, the result of the attempt that ended so and when; update.start of this revision tries it anyway",
+                    "properties": {
+                      "reason": {
+                        "description": "A reason of UPDATE in x-reasons, never BLOCKED",
+                        "type": "string"
+                      },
+                      "result": {
+                        "description": "How the attempt ended",
+                        "enum": [
+                          "rolled_back",
+                          "failed"
+                        ],
+                        "type": "string"
+                      },
+                      "t": {
+                        "description": "When, unix s",
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "reason",
+                      "t"
+                    ],
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "date": {
+                    "description": "When it was built",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "min_app": {
+                    "description": "The oldest app it works with",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "revision": {
+                    "description": "The revision",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date",
+                  "min_app",
+                  "blocked"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "crashes_since_install": {
+                "description": "Ends of the container since then",
+                "type": "integer"
+              },
+              "id": {
+                "description": "The component",
+                "enum": [
+                  "os"
+                ],
+                "type": "string"
+              },
+              "installed_at": {
+                "description": "When what runs was installed",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "x-unit": "unix s"
+              },
+              "name": {
+                "description": "Its name to show",
+                "type": "string"
+              },
+              "previous": {
+                "additionalProperties": false,
+                "description": "Where update.rollback goes, null without one",
+                "properties": {
+                  "date": {
+                    "description": "When it was built, null when the bundle does not say",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "revision": {
+                    "description": "The revision, a commit of MowBite OS",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "running": {
+                "additionalProperties": false,
+                "description": "What runs, null without an installation",
+                "properties": {
+                  "date": {
+                    "description": "When it was built, null when the bundle does not say",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "revision": {
+                    "description": "The revision, a commit of MowBite OS",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "running",
+              "available",
+              "previous",
+              "installed_at",
+              "crashes_since_install",
+              "auto"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "last": {
+          "additionalProperties": false,
+          "description": "The result of the last update or rollback, null before the first",
+          "properties": {
+            "component": {
+              "description": "The component",
+              "type": "string"
+            },
+            "message": {
+              "description": "English text for the log",
+              "type": "string"
+            },
+            "reason": {
+              "description": "Why: a reason of UPDATE in x-reasons, null when installed",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "result": {
+              "description": "How it ended",
+              "enum": [
+                "installed",
+                "rolled_back",
+                "refused",
+                "aborted",
+                "failed"
+              ],
+              "type": "string"
+            },
+            "revision": {
+              "description": "The revision",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "t": {
+              "description": "When, unix s",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "result",
+            "reason",
+            "message",
+            "revision",
+            "component",
+            "t"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "phase": {
+          "description": "What it does now",
+          "enum": [
+            "idle",
+            "verifying",
+            "unpacking",
+            "waiting_gate",
+            "switching",
+            "checking"
+          ],
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why the gate waits in waiting_gate: a reason of UPDATE in x-reasons",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "description": "The revision it installs or goes back to, null in idle",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "component",
+        "revision",
+        "reason",
+        "components",
+        "auto",
+        "last"
+      ],
+      "type": "object"
+    },
+    "update.check.params": {
+      "additionalProperties": false,
+      "description": "The params of update.check: app_version and the fields of the call",
+      "properties": {
+        "app_version": {
+          "description": "Version of the app that calls, e.g. 1.4.0 or 1.5.0-beta.2",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "update.check.result": {
+      "additionalProperties": false,
+      "description": "The result of update.check: What the updater does, what runs and what is available, the last result",
+      "properties": {
+        "auto": {
+          "additionalProperties": false,
+          "description": "The automatic update",
+          "properties": {
+            "enabled": {
+              "description": "On or off",
+              "type": "boolean"
+            },
+            "from": {
+              "description": "Start of the window, HH:MM local time",
+              "type": "string"
+            },
+            "to": {
+              "description": "End of the window, HH:MM local time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "enabled",
+            "from",
+            "to"
+          ],
+          "type": "object"
+        },
+        "component": {
+          "description": "The component of the update that runs, null in idle",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "components": {
+          "description": "Each component the updater keeps",
+          "items": {
+            "additionalProperties": false,
+            "description": "One item",
+            "properties": {
+              "auto": {
+                "description": "Whether updates install by themselves at night",
+                "type": "boolean"
+              },
+              "available": {
+                "additionalProperties": false,
+                "description": "The newest revision found that is newer than what runs, null without one",
+                "properties": {
+                  "blocked": {
+                    "additionalProperties": false,
+                    "description": "Not installed by itself: why, the result of the attempt that ended so and when; update.start of this revision tries it anyway",
+                    "properties": {
+                      "reason": {
+                        "description": "A reason of UPDATE in x-reasons, never BLOCKED",
+                        "type": "string"
+                      },
+                      "result": {
+                        "description": "How the attempt ended",
+                        "enum": [
+                          "rolled_back",
+                          "failed"
+                        ],
+                        "type": "string"
+                      },
+                      "t": {
+                        "description": "When, unix s",
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "reason",
+                      "t"
+                    ],
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "date": {
+                    "description": "When it was built",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "min_app": {
+                    "description": "The oldest app it works with",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "revision": {
+                    "description": "The revision",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date",
+                  "min_app",
+                  "blocked"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "crashes_since_install": {
+                "description": "Ends of the container since then",
+                "type": "integer"
+              },
+              "id": {
+                "description": "The component",
+                "enum": [
+                  "os"
+                ],
+                "type": "string"
+              },
+              "installed_at": {
+                "description": "When what runs was installed",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "x-unit": "unix s"
+              },
+              "name": {
+                "description": "Its name to show",
+                "type": "string"
+              },
+              "previous": {
+                "additionalProperties": false,
+                "description": "Where update.rollback goes, null without one",
+                "properties": {
+                  "date": {
+                    "description": "When it was built, null when the bundle does not say",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "revision": {
+                    "description": "The revision, a commit of MowBite OS",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "running": {
+                "additionalProperties": false,
+                "description": "What runs, null without an installation",
+                "properties": {
+                  "date": {
+                    "description": "When it was built, null when the bundle does not say",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "revision": {
+                    "description": "The revision, a commit of MowBite OS",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "running",
+              "available",
+              "previous",
+              "installed_at",
+              "crashes_since_install",
+              "auto"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "last": {
+          "additionalProperties": false,
+          "description": "The result of the last update or rollback, null before the first",
+          "properties": {
+            "component": {
+              "description": "The component",
+              "type": "string"
+            },
+            "message": {
+              "description": "English text for the log",
+              "type": "string"
+            },
+            "reason": {
+              "description": "Why: a reason of UPDATE in x-reasons, null when installed",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "result": {
+              "description": "How it ended",
+              "enum": [
+                "installed",
+                "rolled_back",
+                "refused",
+                "aborted",
+                "failed"
+              ],
+              "type": "string"
+            },
+            "revision": {
+              "description": "The revision",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "t": {
+              "description": "When, unix s",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "result",
+            "reason",
+            "message",
+            "revision",
+            "component",
+            "t"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "phase": {
+          "description": "What it does now",
+          "enum": [
+            "idle",
+            "verifying",
+            "unpacking",
+            "waiting_gate",
+            "switching",
+            "checking"
+          ],
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why the gate waits in waiting_gate: a reason of UPDATE in x-reasons",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "description": "The revision it installs or goes back to, null in idle",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "component",
+        "revision",
+        "reason",
+        "components",
+        "auto",
+        "last"
+      ],
+      "type": "object"
+    },
+    "update.rollback.params": {
+      "additionalProperties": false,
+      "description": "The params of update.rollback: app_version and the fields of the call",
+      "properties": {
+        "app_version": {
+          "description": "Version of the app that calls, e.g. 1.4.0 or 1.5.0-beta.2",
+          "type": "string"
+        },
+        "component": {
+          "description": "The component",
+          "enum": [
+            "os"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "component"
+      ],
+      "type": "object"
+    },
+    "update.rollback.result": {
+      "additionalProperties": false,
+      "description": "The result of update.rollback: What the updater does, what runs and what is available, the last result",
+      "properties": {
+        "auto": {
+          "additionalProperties": false,
+          "description": "The automatic update",
+          "properties": {
+            "enabled": {
+              "description": "On or off",
+              "type": "boolean"
+            },
+            "from": {
+              "description": "Start of the window, HH:MM local time",
+              "type": "string"
+            },
+            "to": {
+              "description": "End of the window, HH:MM local time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "enabled",
+            "from",
+            "to"
+          ],
+          "type": "object"
+        },
+        "component": {
+          "description": "The component of the update that runs, null in idle",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "components": {
+          "description": "Each component the updater keeps",
+          "items": {
+            "additionalProperties": false,
+            "description": "One item",
+            "properties": {
+              "auto": {
+                "description": "Whether updates install by themselves at night",
+                "type": "boolean"
+              },
+              "available": {
+                "additionalProperties": false,
+                "description": "The newest revision found that is newer than what runs, null without one",
+                "properties": {
+                  "blocked": {
+                    "additionalProperties": false,
+                    "description": "Not installed by itself: why, the result of the attempt that ended so and when; update.start of this revision tries it anyway",
+                    "properties": {
+                      "reason": {
+                        "description": "A reason of UPDATE in x-reasons, never BLOCKED",
+                        "type": "string"
+                      },
+                      "result": {
+                        "description": "How the attempt ended",
+                        "enum": [
+                          "rolled_back",
+                          "failed"
+                        ],
+                        "type": "string"
+                      },
+                      "t": {
+                        "description": "When, unix s",
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "reason",
+                      "t"
+                    ],
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "date": {
+                    "description": "When it was built",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "min_app": {
+                    "description": "The oldest app it works with",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "revision": {
+                    "description": "The revision",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date",
+                  "min_app",
+                  "blocked"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "crashes_since_install": {
+                "description": "Ends of the container since then",
+                "type": "integer"
+              },
+              "id": {
+                "description": "The component",
+                "enum": [
+                  "os"
+                ],
+                "type": "string"
+              },
+              "installed_at": {
+                "description": "When what runs was installed",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "x-unit": "unix s"
+              },
+              "name": {
+                "description": "Its name to show",
+                "type": "string"
+              },
+              "previous": {
+                "additionalProperties": false,
+                "description": "Where update.rollback goes, null without one",
+                "properties": {
+                  "date": {
+                    "description": "When it was built, null when the bundle does not say",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "revision": {
+                    "description": "The revision, a commit of MowBite OS",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "running": {
+                "additionalProperties": false,
+                "description": "What runs, null without an installation",
+                "properties": {
+                  "date": {
+                    "description": "When it was built, null when the bundle does not say",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "revision": {
+                    "description": "The revision, a commit of MowBite OS",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "running",
+              "available",
+              "previous",
+              "installed_at",
+              "crashes_since_install",
+              "auto"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "last": {
+          "additionalProperties": false,
+          "description": "The result of the last update or rollback, null before the first",
+          "properties": {
+            "component": {
+              "description": "The component",
+              "type": "string"
+            },
+            "message": {
+              "description": "English text for the log",
+              "type": "string"
+            },
+            "reason": {
+              "description": "Why: a reason of UPDATE in x-reasons, null when installed",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "result": {
+              "description": "How it ended",
+              "enum": [
+                "installed",
+                "rolled_back",
+                "refused",
+                "aborted",
+                "failed"
+              ],
+              "type": "string"
+            },
+            "revision": {
+              "description": "The revision",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "t": {
+              "description": "When, unix s",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "result",
+            "reason",
+            "message",
+            "revision",
+            "component",
+            "t"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "phase": {
+          "description": "What it does now",
+          "enum": [
+            "idle",
+            "verifying",
+            "unpacking",
+            "waiting_gate",
+            "switching",
+            "checking"
+          ],
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why the gate waits in waiting_gate: a reason of UPDATE in x-reasons",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "description": "The revision it installs or goes back to, null in idle",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "component",
+        "revision",
+        "reason",
+        "components",
+        "auto",
+        "last"
+      ],
+      "type": "object"
+    },
+    "update.set_auto.params": {
+      "additionalProperties": false,
+      "description": "The params of update.set_auto: app_version and the fields of the call",
+      "properties": {
+        "app_version": {
+          "description": "Version of the app that calls, e.g. 1.4.0 or 1.5.0-beta.2",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "On or off",
+          "type": "boolean"
+        },
+        "from": {
+          "description": "Start of the window, HH:MM local time",
+          "type": "string"
+        },
+        "to": {
+          "description": "End of the window, HH:MM local time",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "update.set_auto.result": {
+      "additionalProperties": false,
+      "description": "The result of update.set_auto: What the updater does, what runs and what is available, the last result",
+      "properties": {
+        "auto": {
+          "additionalProperties": false,
+          "description": "The automatic update",
+          "properties": {
+            "enabled": {
+              "description": "On or off",
+              "type": "boolean"
+            },
+            "from": {
+              "description": "Start of the window, HH:MM local time",
+              "type": "string"
+            },
+            "to": {
+              "description": "End of the window, HH:MM local time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "enabled",
+            "from",
+            "to"
+          ],
+          "type": "object"
+        },
+        "component": {
+          "description": "The component of the update that runs, null in idle",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "components": {
+          "description": "Each component the updater keeps",
+          "items": {
+            "additionalProperties": false,
+            "description": "One item",
+            "properties": {
+              "auto": {
+                "description": "Whether updates install by themselves at night",
+                "type": "boolean"
+              },
+              "available": {
+                "additionalProperties": false,
+                "description": "The newest revision found that is newer than what runs, null without one",
+                "properties": {
+                  "blocked": {
+                    "additionalProperties": false,
+                    "description": "Not installed by itself: why, the result of the attempt that ended so and when; update.start of this revision tries it anyway",
+                    "properties": {
+                      "reason": {
+                        "description": "A reason of UPDATE in x-reasons, never BLOCKED",
+                        "type": "string"
+                      },
+                      "result": {
+                        "description": "How the attempt ended",
+                        "enum": [
+                          "rolled_back",
+                          "failed"
+                        ],
+                        "type": "string"
+                      },
+                      "t": {
+                        "description": "When, unix s",
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "reason",
+                      "t"
+                    ],
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "date": {
+                    "description": "When it was built",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "min_app": {
+                    "description": "The oldest app it works with",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "revision": {
+                    "description": "The revision",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date",
+                  "min_app",
+                  "blocked"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "crashes_since_install": {
+                "description": "Ends of the container since then",
+                "type": "integer"
+              },
+              "id": {
+                "description": "The component",
+                "enum": [
+                  "os"
+                ],
+                "type": "string"
+              },
+              "installed_at": {
+                "description": "When what runs was installed",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "x-unit": "unix s"
+              },
+              "name": {
+                "description": "Its name to show",
+                "type": "string"
+              },
+              "previous": {
+                "additionalProperties": false,
+                "description": "Where update.rollback goes, null without one",
+                "properties": {
+                  "date": {
+                    "description": "When it was built, null when the bundle does not say",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "revision": {
+                    "description": "The revision, a commit of MowBite OS",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "running": {
+                "additionalProperties": false,
+                "description": "What runs, null without an installation",
+                "properties": {
+                  "date": {
+                    "description": "When it was built, null when the bundle does not say",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "revision": {
+                    "description": "The revision, a commit of MowBite OS",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "running",
+              "available",
+              "previous",
+              "installed_at",
+              "crashes_since_install",
+              "auto"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "last": {
+          "additionalProperties": false,
+          "description": "The result of the last update or rollback, null before the first",
+          "properties": {
+            "component": {
+              "description": "The component",
+              "type": "string"
+            },
+            "message": {
+              "description": "English text for the log",
+              "type": "string"
+            },
+            "reason": {
+              "description": "Why: a reason of UPDATE in x-reasons, null when installed",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "result": {
+              "description": "How it ended",
+              "enum": [
+                "installed",
+                "rolled_back",
+                "refused",
+                "aborted",
+                "failed"
+              ],
+              "type": "string"
+            },
+            "revision": {
+              "description": "The revision",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "t": {
+              "description": "When, unix s",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "result",
+            "reason",
+            "message",
+            "revision",
+            "component",
+            "t"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "phase": {
+          "description": "What it does now",
+          "enum": [
+            "idle",
+            "verifying",
+            "unpacking",
+            "waiting_gate",
+            "switching",
+            "checking"
+          ],
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why the gate waits in waiting_gate: a reason of UPDATE in x-reasons",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "description": "The revision it installs or goes back to, null in idle",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "component",
+        "revision",
+        "reason",
+        "components",
+        "auto",
+        "last"
+      ],
+      "type": "object"
+    },
+    "update.start.params": {
+      "additionalProperties": false,
+      "description": "The params of update.start: app_version and the fields of the call",
+      "properties": {
+        "app_version": {
+          "description": "Version of the app that calls, e.g. 1.4.0 or 1.5.0-beta.2",
+          "type": "string"
+        },
+        "component": {
+          "description": "The component",
+          "enum": [
+            "os"
+          ],
+          "type": "string"
+        },
+        "revision": {
+          "description": "A revision of available or found by update.check; the newest without",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component"
+      ],
+      "type": "object"
+    },
+    "update.start.result": {
+      "additionalProperties": false,
+      "description": "The result of update.start: What the updater does, what runs and what is available, the last result",
+      "properties": {
+        "auto": {
+          "additionalProperties": false,
+          "description": "The automatic update",
+          "properties": {
+            "enabled": {
+              "description": "On or off",
+              "type": "boolean"
+            },
+            "from": {
+              "description": "Start of the window, HH:MM local time",
+              "type": "string"
+            },
+            "to": {
+              "description": "End of the window, HH:MM local time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "enabled",
+            "from",
+            "to"
+          ],
+          "type": "object"
+        },
+        "component": {
+          "description": "The component of the update that runs, null in idle",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "components": {
+          "description": "Each component the updater keeps",
+          "items": {
+            "additionalProperties": false,
+            "description": "One item",
+            "properties": {
+              "auto": {
+                "description": "Whether updates install by themselves at night",
+                "type": "boolean"
+              },
+              "available": {
+                "additionalProperties": false,
+                "description": "The newest revision found that is newer than what runs, null without one",
+                "properties": {
+                  "blocked": {
+                    "additionalProperties": false,
+                    "description": "Not installed by itself: why, the result of the attempt that ended so and when; update.start of this revision tries it anyway",
+                    "properties": {
+                      "reason": {
+                        "description": "A reason of UPDATE in x-reasons, never BLOCKED",
+                        "type": "string"
+                      },
+                      "result": {
+                        "description": "How the attempt ended",
+                        "enum": [
+                          "rolled_back",
+                          "failed"
+                        ],
+                        "type": "string"
+                      },
+                      "t": {
+                        "description": "When, unix s",
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "reason",
+                      "t"
+                    ],
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "date": {
+                    "description": "When it was built",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "min_app": {
+                    "description": "The oldest app it works with",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "revision": {
+                    "description": "The revision",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date",
+                  "min_app",
+                  "blocked"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "crashes_since_install": {
+                "description": "Ends of the container since then",
+                "type": "integer"
+              },
+              "id": {
+                "description": "The component",
+                "enum": [
+                  "os"
+                ],
+                "type": "string"
+              },
+              "installed_at": {
+                "description": "When what runs was installed",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "x-unit": "unix s"
+              },
+              "name": {
+                "description": "Its name to show",
+                "type": "string"
+              },
+              "previous": {
+                "additionalProperties": false,
+                "description": "Where update.rollback goes, null without one",
+                "properties": {
+                  "date": {
+                    "description": "When it was built, null when the bundle does not say",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "revision": {
+                    "description": "The revision, a commit of MowBite OS",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "running": {
+                "additionalProperties": false,
+                "description": "What runs, null without an installation",
+                "properties": {
+                  "date": {
+                    "description": "When it was built, null when the bundle does not say",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "revision": {
+                    "description": "The revision, a commit of MowBite OS",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "running",
+              "available",
+              "previous",
+              "installed_at",
+              "crashes_since_install",
+              "auto"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "last": {
+          "additionalProperties": false,
+          "description": "The result of the last update or rollback, null before the first",
+          "properties": {
+            "component": {
+              "description": "The component",
+              "type": "string"
+            },
+            "message": {
+              "description": "English text for the log",
+              "type": "string"
+            },
+            "reason": {
+              "description": "Why: a reason of UPDATE in x-reasons, null when installed",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "result": {
+              "description": "How it ended",
+              "enum": [
+                "installed",
+                "rolled_back",
+                "refused",
+                "aborted",
+                "failed"
+              ],
+              "type": "string"
+            },
+            "revision": {
+              "description": "The revision",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "t": {
+              "description": "When, unix s",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "result",
+            "reason",
+            "message",
+            "revision",
+            "component",
+            "t"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "phase": {
+          "description": "What it does now",
+          "enum": [
+            "idle",
+            "verifying",
+            "unpacking",
+            "waiting_gate",
+            "switching",
+            "checking"
+          ],
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why the gate waits in waiting_gate: a reason of UPDATE in x-reasons",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "description": "The revision it installs or goes back to, null in idle",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "component",
+        "revision",
+        "reason",
+        "components",
+        "auto",
+        "last"
+      ],
+      "type": "object"
+    },
+    "update.status.params": {
+      "additionalProperties": false,
+      "description": "The params of update.status: app_version and the fields of the call",
+      "properties": {
+        "app_version": {
+          "description": "Version of the app that calls, e.g. 1.4.0 or 1.5.0-beta.2",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "update.status.result": {
+      "additionalProperties": false,
+      "description": "The result of update.status: What the updater does, what runs and what is available, the last result",
+      "properties": {
+        "auto": {
+          "additionalProperties": false,
+          "description": "The automatic update",
+          "properties": {
+            "enabled": {
+              "description": "On or off",
+              "type": "boolean"
+            },
+            "from": {
+              "description": "Start of the window, HH:MM local time",
+              "type": "string"
+            },
+            "to": {
+              "description": "End of the window, HH:MM local time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "enabled",
+            "from",
+            "to"
+          ],
+          "type": "object"
+        },
+        "component": {
+          "description": "The component of the update that runs, null in idle",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "components": {
+          "description": "Each component the updater keeps",
+          "items": {
+            "additionalProperties": false,
+            "description": "One item",
+            "properties": {
+              "auto": {
+                "description": "Whether updates install by themselves at night",
+                "type": "boolean"
+              },
+              "available": {
+                "additionalProperties": false,
+                "description": "The newest revision found that is newer than what runs, null without one",
+                "properties": {
+                  "blocked": {
+                    "additionalProperties": false,
+                    "description": "Not installed by itself: why, the result of the attempt that ended so and when; update.start of this revision tries it anyway",
+                    "properties": {
+                      "reason": {
+                        "description": "A reason of UPDATE in x-reasons, never BLOCKED",
+                        "type": "string"
+                      },
+                      "result": {
+                        "description": "How the attempt ended",
+                        "enum": [
+                          "rolled_back",
+                          "failed"
+                        ],
+                        "type": "string"
+                      },
+                      "t": {
+                        "description": "When, unix s",
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "reason",
+                      "t"
+                    ],
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "date": {
+                    "description": "When it was built",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "min_app": {
+                    "description": "The oldest app it works with",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "revision": {
+                    "description": "The revision",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date",
+                  "min_app",
+                  "blocked"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "crashes_since_install": {
+                "description": "Ends of the container since then",
+                "type": "integer"
+              },
+              "id": {
+                "description": "The component",
+                "enum": [
+                  "os"
+                ],
+                "type": "string"
+              },
+              "installed_at": {
+                "description": "When what runs was installed",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "x-unit": "unix s"
+              },
+              "name": {
+                "description": "Its name to show",
+                "type": "string"
+              },
+              "previous": {
+                "additionalProperties": false,
+                "description": "Where update.rollback goes, null without one",
+                "properties": {
+                  "date": {
+                    "description": "When it was built, null when the bundle does not say",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "revision": {
+                    "description": "The revision, a commit of MowBite OS",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "running": {
+                "additionalProperties": false,
+                "description": "What runs, null without an installation",
+                "properties": {
+                  "date": {
+                    "description": "When it was built, null when the bundle does not say",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "x-unit": "unix s"
+                  },
+                  "revision": {
+                    "description": "The revision, a commit of MowBite OS",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "date"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "running",
+              "available",
+              "previous",
+              "installed_at",
+              "crashes_since_install",
+              "auto"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "last": {
+          "additionalProperties": false,
+          "description": "The result of the last update or rollback, null before the first",
+          "properties": {
+            "component": {
+              "description": "The component",
+              "type": "string"
+            },
+            "message": {
+              "description": "English text for the log",
+              "type": "string"
+            },
+            "reason": {
+              "description": "Why: a reason of UPDATE in x-reasons, null when installed",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "result": {
+              "description": "How it ended",
+              "enum": [
+                "installed",
+                "rolled_back",
+                "refused",
+                "aborted",
+                "failed"
+              ],
+              "type": "string"
+            },
+            "revision": {
+              "description": "The revision",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "t": {
+              "description": "When, unix s",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "result",
+            "reason",
+            "message",
+            "revision",
+            "component",
+            "t"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "phase": {
+          "description": "What it does now",
+          "enum": [
+            "idle",
+            "verifying",
+            "unpacking",
+            "waiting_gate",
+            "switching",
+            "checking"
+          ],
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why the gate waits in waiting_gate: a reason of UPDATE in x-reasons",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "description": "The revision it installs or goes back to, null in idle",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "component",
+        "revision",
+        "reason",
+        "components",
+        "auto",
+        "last"
+      ],
+      "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:13",
+  "$id": "urn:mowbite-os:api:14",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry.",
   "title": "MowBite OS app interface",
-  "x-api": 13,
+  "x-api": 14,
   "x-commands": {
     "docking.abort": {
       "action": "mower_logic:docking/abort_docking",
@@ -6707,6 +8662,13 @@
       "params": "#/$defs/events.history.list.params",
       "result": "#/$defs/events.history.list.result"
     },
+    "host.restart_os": {
+      "description": "Starts MowBite OS again, its restarts from 0: always when it is stopped, down or halted, else only in IDLE without an emergency or the restart hold; never during an update. The restart hold judges at the start as always",
+      "node": "mowbite_host",
+      "offered": "while mowbite/host/status says online",
+      "params": "#/$defs/host.restart_os.params",
+      "result": "#/$defs/host.restart_os.result"
+    },
     "light.get_profile": {
       "description": "The lights: the states and effects there are, the profile by state, its defaults, the fixed signal of an emergency and the limits",
       "node": "mowbite_light",
@@ -7035,6 +8997,48 @@
       "offered": "",
       "params": "#/$defs/undocking.abort.params",
       "result": "#/$defs/undocking.abort.result"
+    },
+    "update.abort": {
+      "description": "Stops the update before its switch; after it the health check decides",
+      "node": "mowbite_host",
+      "offered": "while mowbite/host/status says online",
+      "params": "#/$defs/update.abort.params",
+      "result": "#/$defs/update.abort.result"
+    },
+    "update.check": {
+      "description": "Looks for bundles in the origins now (the inbox), as it does every 6 h",
+      "node": "mowbite_host",
+      "offered": "while mowbite/host/status says online",
+      "params": "#/$defs/update.check.params",
+      "result": "#/$defs/update.check.result"
+    },
+    "update.rollback": {
+      "description": "Goes back to the previous installation through the same gate; that revision is then not installed by itself",
+      "node": "mowbite_host",
+      "offered": "while mowbite/host/status says online",
+      "params": "#/$defs/update.rollback.params",
+      "result": "#/$defs/update.rollback.result"
+    },
+    "update.set_auto": {
+      "description": "Switches the automatic update on or off and sets its window; it needs a sure clock and an app as new as min_app",
+      "node": "mowbite_host",
+      "offered": "while mowbite/host/status says online",
+      "params": "#/$defs/update.set_auto.params",
+      "result": "#/$defs/update.set_auto.result"
+    },
+    "update.start": {
+      "description": "Installs the newest available revision of the component or the one given, one update at a time; it waits for the gate (IDLE on the charging contacts, the hold granted) for up to 30 min. Refused (UPDATE_REFUSED) when none is there or one runs",
+      "node": "mowbite_host",
+      "offered": "while mowbite/host/status says online",
+      "params": "#/$defs/update.start.params",
+      "result": "#/$defs/update.start.result"
+    },
+    "update.status": {
+      "description": "What the updater does and what is there; the same retained on mowbite/update/status",
+      "node": "mowbite_host",
+      "offered": "while mowbite/host/status says online",
+      "params": "#/$defs/update.status.params",
+      "result": "#/$defs/update.status.result"
     }
   },
   "x-owner": "mowbite-os",
@@ -8000,6 +10004,119 @@
         "severity": "warning"
       }
     },
+    "HOST_OS": {
+      "CRASH_LOOP": {
+        "description": "MowBite OS crashed several times and stays off",
+        "fields": {
+          "last_crash": "unix s",
+          "restarts": ""
+        },
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Neu starten oder das letzte Update zurücknehmen.",
+            "help": "MowBite OS ist mehrmals abgestürzt und bleibt aus.",
+            "name": "MowBite OS bleibt aus"
+          },
+          "en": {
+            "fix": "Restart it or take back the last update.",
+            "help": "MowBite OS crashed several times and stays off.",
+            "name": "MowBite OS stays off"
+          }
+        }
+      },
+      "DATA_DIR_LOCKED": {
+        "description": "Another MowBite OS holds the data, this one does not start",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Das andere MowBite OS beenden, dann neu starten.",
+            "help": "Ein anderes MowBite OS hält die Daten des Mähers, dieses startet nicht.",
+            "name": "Daten belegt"
+          },
+          "en": {
+            "fix": "End the other MowBite OS, then restart.",
+            "help": "Another MowBite OS holds the data of the mower, this one does not start.",
+            "name": "Data in use"
+          }
+        }
+      },
+      "DATA_ERROR": {
+        "description": "The data of MowBite OS cannot be read or prepared, it does not start",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Neu starten. Hilft das nicht, das letzte Update zurücknehmen und das Protokoll für eine Meldung sichern.",
+            "help": "MowBite OS kann seine Daten nicht lesen oder vorbereiten und startet nicht.",
+            "name": "Datenfehler"
+          },
+          "en": {
+            "fix": "Restart. If that does not help, take back the last update and keep the log for a report.",
+            "help": "MowBite OS cannot read or prepare its data and does not start.",
+            "name": "Data error"
+          }
+        }
+      },
+      "DATA_NO_SPACE": {
+        "description": "No space for the backup of the data before the start, it does not start",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Platz auf dem Mäher schaffen, etwa alte Aufnahmen löschen, dann neu starten.",
+            "help": "Vor dem Start sichert MowBite OS seine Daten, dafür ist auf dem Mäher nicht genug Platz.",
+            "name": "Kein Platz für die Sicherung"
+          },
+          "en": {
+            "fix": "Make space on the mower, e.g. delete old recordings, then restart.",
+            "help": "Before it starts MowBite OS backs up its data, and the mower has not enough space for that.",
+            "name": "No space for the backup"
+          }
+        }
+      },
+      "DDS_PROFILE": {
+        "description": "The profile the parts of the OS talk with is missing, it does not start",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Das letzte Update zurücknehmen oder MowBite OS neu installieren.",
+            "help": "Das Profil, mit dem die Teile von MowBite OS miteinander sprechen, fehlt oder ist nicht lesbar.",
+            "name": "Netzprofil fehlt"
+          },
+          "en": {
+            "fix": "Take back the last update or install MowBite OS again.",
+            "help": "The profile the parts of MowBite OS talk to each other with is missing or not readable.",
+            "name": "Network profile missing"
+          }
+        }
+      },
+      "SCHEMA_NEWER": {
+        "description": "The data is newer than this MowBite OS, it does not start",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Die neuere Version wieder installieren.",
+            "help": "Die Daten auf dem Mäher stammen von einer neueren Version von MowBite OS, diese startet nicht.",
+            "name": "Daten neuer als das System"
+          },
+          "en": {
+            "fix": "Install the newer version again.",
+            "help": "The data on the mower comes from a newer version of MowBite OS, this one does not start.",
+            "name": "Data newer than the system"
+          }
+        }
+      }
+    },
     "MAP_DATUM": {
       "MAP_MISMATCH": {
         "description": "The map does not fit the datum in use",
@@ -8859,6 +10976,478 @@
             "severity": "warning"
           }
         ]
+      }
+    },
+    "UPDATE": {
+      "BAD_BUNDLE": {
+        "description": "The update file is damaged or not what its origin names",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Die Datei neu laden und noch einmal in den Eingang legen.",
+            "help": "Die Update-Datei ist beschädigt oder nicht die, die ihre Quelle nennt.",
+            "name": "Update-Datei fehlerhaft"
+          },
+          "en": {
+            "fix": "Load the file again and put it into the inbox once more.",
+            "help": "The update file is damaged or not the one its origin names.",
+            "name": "Update file damaged"
+          }
+        }
+      },
+      "BAD_ORIGIN": {
+        "description": "The update does not come from a configured origin, or its index is not validly signed",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Die Quelle prüfen und das Update von dort neu laden.",
+            "help": "Das Update kommt nicht aus einer eingerichteten Quelle, oder deren Verzeichnis ist nicht gültig signiert.",
+            "name": "Herkunft ungültig"
+          },
+          "en": {
+            "fix": "Check the origin and load the update from there again.",
+            "help": "The update does not come from a configured origin, or its index is not validly signed.",
+            "name": "Origin not valid"
+          }
+        }
+      },
+      "BAD_SIGNATURE": {
+        "description": "The update is not signed by a known key",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Nur Updates aus der Quelle von MowBite OS verwenden.",
+            "help": "Das Update ist nicht mit einem bekannten Schlüssel signiert und wird nicht installiert.",
+            "name": "Signatur ungültig"
+          },
+          "en": {
+            "fix": "Use only updates from the origin of MowBite OS.",
+            "help": "The update is not signed with a known key and is not installed.",
+            "name": "Signature not valid"
+          }
+        }
+      },
+      "BASE_TOO_OLD": {
+        "description": "The update needs a newer base system of the mower",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Erst das Grundsystem des Mähers erneuern, dann das Update installieren.",
+            "help": "Dieses Update braucht ein neueres Grundsystem des Mähers und wird nicht von selbst installiert.",
+            "name": "Grundsystem zu alt"
+          },
+          "en": {
+            "fix": "Renew the base system of the mower first, then install the update.",
+            "help": "This update needs a newer base system of the mower and is not installed by itself.",
+            "name": "Base system too old"
+          }
+        }
+      },
+      "BLOCKED": {
+        "description": "The automatic update skips this revision; available.blocked says why",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Bei Bedarf von Hand installieren.",
+            "help": "Die Automatik installiert diesen Stand nicht, weil er vorher gescheitert ist, zurückgenommen wurde oder nicht passt.",
+            "name": "Übersprungen"
+          },
+          "en": {
+            "fix": "Install it by hand if you want it.",
+            "help": "The automatic update does not install this revision: it failed before, was taken back or does not fit.",
+            "name": "Skipped"
+          }
+        }
+      },
+      "BUSY": {
+        "description": "The mower is busy with something else",
+        "fields": {
+          "state": ""
+        },
+        "resume": "auto",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Nichts zu tun, oder die Arbeit beenden.",
+            "help": "Das Update wartet, bis der Mäher im Leerlauf ist.",
+            "name": "Mäher arbeitet"
+          },
+          "en": {
+            "fix": "Nothing to do, or end the work.",
+            "help": "The update waits until the mower is idle.",
+            "name": "Mower working"
+          }
+        }
+      },
+      "EMERGENCY": {
+        "description": "An emergency stops the mower",
+        "fields": {},
+        "resume": "user",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Mäher und Umgebung ansehen und den Notaus zurücksetzen.",
+            "help": "Das Update wartet, bis kein Notaus und keine Neustart-Sperre mehr steht.",
+            "name": "Notaus"
+          },
+          "en": {
+            "fix": "Look at the mower and around it and reset the emergency.",
+            "help": "The update waits until no emergency and no restart hold stands.",
+            "name": "Emergency"
+          }
+        }
+      },
+      "INTERNAL": {
+        "description": "An error in the updater",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Noch einmal versuchen. Hilft das nicht, das Protokoll für eine Meldung sichern.",
+            "help": "Im Updater von MowBite OS ist ein Fehler aufgetreten.",
+            "name": "Fehler im Updater"
+          },
+          "en": {
+            "fix": "Try again. If that does not help, keep the log for a report.",
+            "help": "An error happened in the updater of MowBite OS.",
+            "name": "Error in the updater"
+          }
+        }
+      },
+      "INTERRUPTED": {
+        "description": "The switch to this revision was cut off twice",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Für eine sichere Stromversorgung sorgen und das Update von Hand noch einmal starten.",
+            "help": "Das Umschalten auf diesen Stand wurde zweimal unterbrochen, etwa durch einen Stromausfall. Der Mäher ist beim Stand davor.",
+            "name": "Update unterbrochen"
+          },
+          "en": {
+            "fix": "Make sure the power stays on and start the update again by hand.",
+            "help": "The switch to this revision was cut off twice, e.g. by a power cut. The mower is at the revision before.",
+            "name": "Update cut off"
+          }
+        }
+      },
+      "KERNEL_CRASH": {
+        "description": "The kernel of the mower crashed; it holds the mower in every state",
+        "fields": {},
+        "resume": "user",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Mäher und Umgebung ansehen, dann den Notaus zurücksetzen. Kommt es öfter vor, die Protokolle für eine Meldung sichern.",
+            "help": "Das Betriebssystem des Mähers ist abgestürzt und neu gestartet. Der Mäher fährt und mäht nicht, bis er freigegeben wird, gleich was er vorher tat.",
+            "name": "Kernel-Absturz"
+          },
+          "en": {
+            "fix": "Look at the mower and around it, then reset the emergency. If it happens again, keep the logs for a report.",
+            "help": "The operating system of the mower crashed and started again. The mower does not drive or mow until it is released, whatever it did before.",
+            "name": "Kernel crash"
+          }
+        }
+      },
+      "LIBRARY_MISSING": {
+        "description": "A library the update needs is missing on the mower",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Ein Update wählen, das zu diesem Mäher passt, oder das Grundsystem erneuern.",
+            "help": "Dem Update fehlt auf dem Mäher eine Bibliothek, die es braucht.",
+            "name": "Bibliothek fehlt"
+          },
+          "en": {
+            "fix": "Choose an update that fits this mower, or renew the base system.",
+            "help": "A library the update needs is missing on the mower.",
+            "name": "Library missing"
+          }
+        }
+      },
+      "NO_DOCK_CONTACT": {
+        "description": "No contact with the docking station",
+        "fields": {},
+        "resume": "auto",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Den Mäher in die Station fahren.",
+            "help": "Das Update wartet, bis der Mäher auf den Ladekontakten steht.",
+            "name": "Nicht in der Station"
+          },
+          "en": {
+            "fix": "Drive the mower into the station.",
+            "help": "The update waits until the mower stands on the charging contacts.",
+            "name": "Not in the station"
+          }
+        }
+      },
+      "NO_HOLD": {
+        "description": "MowBite OS did not hold the mower for the update",
+        "fields": {},
+        "resume": "auto",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Nichts zu tun, das Update versucht es von selbst weiter.",
+            "help": "MowBite OS hat den Mäher für das Update nicht angehalten, etwa weil gerade etwas startet.",
+            "name": "Mäher nicht angehalten"
+          },
+          "en": {
+            "fix": "Nothing to do, the update keeps trying by itself.",
+            "help": "MowBite OS did not hold the mower for the update, e.g. because something is starting.",
+            "name": "Mower not held"
+          }
+        }
+      },
+      "OLD_SERIAL": {
+        "description": "The update is not newer than what runs",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Für einen älteren Stand das Zurücknehmen nutzen.",
+            "help": "Dieses Update ist nicht neuer als der laufende Stand und wird nicht installiert.",
+            "name": "Nicht neuer"
+          },
+          "en": {
+            "fix": "To go to an older revision, take back the update.",
+            "help": "This update is not newer than the running revision and is not installed.",
+            "name": "Not newer"
+          }
+        }
+      },
+      "ROLLED_BACK_BY_HAND": {
+        "description": "This revision was taken back by hand and does not come back by itself",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Bei Bedarf von Hand installieren.",
+            "help": "Dieser Stand wurde von Hand zurückgenommen und wird nicht von selbst wieder installiert.",
+            "name": "Von Hand zurückgenommen"
+          },
+          "en": {
+            "fix": "Install it by hand if you want it.",
+            "help": "This revision was taken back by hand and is not installed again by itself.",
+            "name": "Taken back by hand"
+          }
+        }
+      },
+      "UNFINISHED": {
+        "description": "An update did not finish; the mower goes back to the revision before it first",
+        "fields": {},
+        "resume": "auto",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Kurz warten, der Mäher kehrt von selbst zum Stand davor zurück.",
+            "help": "Ein früheres Update wurde nicht beendet.",
+            "name": "Update nicht beendet"
+          },
+          "en": {
+            "fix": "Wait a moment, the mower goes back to the revision before by itself.",
+            "help": "An earlier update did not finish.",
+            "name": "Update not finished"
+          }
+        }
+      },
+      "UNHEALTHY": {
+        "description": "After the update MowBite OS did not come up healthy, the mower went back",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Den Stand davor weiter nutzen. Dieses Update wird nicht mehr von selbst installiert.",
+            "help": "Nach dem Update lief MowBite OS nicht richtig, der Mäher ist zum Stand davor zurückgekehrt.",
+            "name": "Update nicht gesund"
+          },
+          "en": {
+            "fix": "Keep using the revision before. This update is not installed by itself any more.",
+            "help": "After the update MowBite OS did not run properly, the mower went back to the revision before.",
+            "name": "Update not healthy"
+          }
+        }
+      },
+      "UPDATE_NO_SPACE": {
+        "description": "No space on the mower to unpack the update",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Platz schaffen, etwa alte Aufnahmen löschen, dann noch einmal versuchen.",
+            "help": "Auf dem Mäher ist nicht genug Platz, um das Update zu entpacken.",
+            "name": "Kein Platz für das Update"
+          },
+          "en": {
+            "fix": "Make space, e.g. delete old recordings, then try again.",
+            "help": "The mower has not enough space to unpack the update.",
+            "name": "No space for the update"
+          }
+        }
+      }
+    },
+    "UPDATE_REFUSED": {
+      "BUSY": {
+        "description": "The mower is busy with something else",
+        "fields": {
+          "state": ""
+        },
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Kurz warten und noch einmal versuchen.",
+            "help": "Gerade läuft schon ein Update, oder MowBite OS startet oder arbeitet.",
+            "name": "Beschäftigt"
+          },
+          "en": {
+            "fix": "Wait a moment and try again.",
+            "help": "An update is already running, or MowBite OS is starting or working.",
+            "name": "Busy"
+          }
+        }
+      },
+      "EMERGENCY": {
+        "description": "An emergency stops the mower",
+        "fields": {},
+        "resume": "user",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Mäher und Umgebung ansehen und den Notaus zurücksetzen.",
+            "help": "Ein Notaus oder die Neustart-Sperre steht, deshalb startet MowBite OS jetzt nicht neu.",
+            "name": "Notaus"
+          },
+          "en": {
+            "fix": "Look at the mower and around it and reset the emergency.",
+            "help": "An emergency or the restart hold stands, so MowBite OS does not restart now.",
+            "name": "Emergency"
+          }
+        }
+      },
+      "HOLD": {
+        "description": "An update holds the mower: nothing starts until it is done",
+        "fields": {
+          "until": "unix s"
+        },
+        "resume": "user",
+        "severity": "info"
+      },
+      "INTERNAL": {
+        "description": "An error in the updater",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Noch einmal versuchen. Hilft das nicht, das Protokoll für eine Meldung sichern.",
+            "help": "Im Updater von MowBite OS ist ein Fehler aufgetreten.",
+            "name": "Fehler im Updater"
+          },
+          "en": {
+            "fix": "Try again. If that does not help, keep the log for a report.",
+            "help": "An error happened in the updater of MowBite OS.",
+            "name": "Error in the updater"
+          }
+        }
+      },
+      "INVALID": {
+        "description": "The path or the request was not valid",
+        "fields": {},
+        "resume": "user",
+        "severity": "info"
+      },
+      "NOT_UPDATING": {
+        "description": "No update runs that could be stopped",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Nichts zu tun.",
+            "help": "Gerade läuft kein Update, das abgebrochen werden könnte.",
+            "name": "Kein Update läuft"
+          },
+          "en": {
+            "fix": "Nothing to do.",
+            "help": "No update is running that could be stopped.",
+            "name": "No update running"
+          }
+        }
+      },
+      "NO_NEWER": {
+        "description": "No newer revision was found",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Die Update-Datei in den Eingang des Mähers legen und erneut suchen.",
+            "help": "Es liegt kein neuerer Stand vor.",
+            "name": "Kein neuerer Stand"
+          },
+          "en": {
+            "fix": "Put the update file into the inbox of the mower and look again.",
+            "help": "There is no newer revision.",
+            "name": "No newer revision"
+          }
+        }
+      },
+      "NO_PREVIOUS": {
+        "description": "There is no earlier installation to go back to",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Nichts zu tun.",
+            "help": "Es gibt keinen früheren Stand, zu dem der Mäher zurückkehren kann.",
+            "name": "Kein Stand davor"
+          },
+          "en": {
+            "fix": "Nothing to do.",
+            "help": "There is no earlier revision the mower can go back to.",
+            "name": "No earlier revision"
+          }
+        }
+      },
+      "UNKNOWN_REVISION": {
+        "description": "The mower does not know this revision",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Erneut suchen und einen angezeigten Stand wählen.",
+            "help": "Diesen Stand kennt der Mäher nicht.",
+            "name": "Stand unbekannt"
+          },
+          "en": {
+            "fix": "Look again and choose a revision it shows.",
+            "help": "The mower does not know this revision.",
+            "name": "Unknown revision"
+          }
+        }
       }
     }
   },
