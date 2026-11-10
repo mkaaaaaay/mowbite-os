@@ -110,6 +110,7 @@ class RequestTest(HostBase):
                                ("update.start", [1]), ("update.set_auto", {"from": "25:00"}),
                                ("update.set_auto", {"enabled": "yes"}),
                                ("update.start", {"component": "os", "reset_jobs": True}),
+                               ("update.rollback", {"component": "app", "reset_jobs": True}),
                                ("update.start", {"component": "planner", "reset_jobs": "yes"})):
             error = self.answer(method, params)["error"]
             self.assertEqual((error["code"], error["data"]["reason"]), (-32602, "INVALID"), (method, params))
@@ -145,6 +146,12 @@ class ComponentsTest(ComponentBase, HostBase):
         self.assertEqual(self.updater.join()["result"], "installed")
         planner = self.published.last(service.UPDATE_STATUS)[1]["components"][1]
         self.assertEqual((planner["source"], planner["running"]["revision"]), ("own", P1))
+        # The way back of the planner waits for the job as well.
+        self.assertIn("result", self.answer("update.rollback", {"component": "planner"}))
+        self.assertEqual(self.updater.join()["reason"], "JOB_OPEN")
+        self.assertIn("result", self.answer("update.rollback", {"component": "planner", "reset_jobs": True}))
+        self.assertEqual(self.updater.join()["result"], "installed")
+        self.assertEqual(self.published.last(service.UPDATE_STATUS)[1]["components"][1]["source"], "bundled")
 
     def test_rollback_of_each_component(self):
         self.installed("os", A)

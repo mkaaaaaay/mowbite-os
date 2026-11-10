@@ -53,7 +53,7 @@ def _component(params):
     return component
 
 
-# reset_jobs: only for the planner, whose update waits for the end of the mowing job without it.
+# reset_jobs: only for the planner, whose update and rollback wait for the end of the mowing job without it.
 def _reset_jobs(params):
     reset = params.get("reset_jobs", False)
     if not isinstance(reset, bool) or (reset and params.get("component") != "planner"):
@@ -77,7 +77,7 @@ class Host:
             "update.start": lambda p: self.updater.start(_component(p), _text(p, "revision", required=False),
                                                          reset_jobs=_reset_jobs(p)),
             "update.abort": lambda p: self.updater.abort(),
-            "update.rollback": lambda p: self.updater.rollback(_component(p)),
+            "update.rollback": lambda p: self.updater.rollback(_component(p), reset_jobs=_reset_jobs(p)),
             "update.check": lambda p: self.updater.check(),
             "update.set_auto": self._set_auto,
             "host.restart_os": self._restart_os,
