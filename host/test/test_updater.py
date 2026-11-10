@@ -18,7 +18,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import support  # noqa: E402
-from mowbite_host import Refused, bundle, gate, installer, origin, paths, updater  # noqa: E402
+from mowbite_host import Refused, bundle, files, gate, installer, origin, paths, updater  # noqa: E402
 
 A, B, C = "aaaaaaa", "bbbbbbb", "ccccccc"
 
@@ -34,6 +34,8 @@ class FakeOs:
         self.broken = set()
         self.holds = []
         self.started = None
+        # The state of the service when it is neither active nor inactive.
+        self.state = None
 
     def session(self, **fields):
         record = {"state": "IDLE", "job_id": "", "boot_id": "b1", "since": 0, "clean": False, "emergency": False,
@@ -46,7 +48,7 @@ class FakeOs:
         return self.running
 
     def show(self):
-        return ("active" if self.running else "inactive"), None, self.started
+        return self.state or ("active" if self.running else "inactive"), None, self.started
 
     def restart(self):
         self.stop()
@@ -110,16 +112,17 @@ class Base(unittest.TestCase):
     def sign(self, path, namespace):
         support.sign(path, self.key, namespace)
 
-    # A signed bundle of rev in the inbox (or folder), with a newer serial unless given.
-    def bundle(self, rev, serial=None, folder=None, **meta):
+    # A signed bundle of rev in the inbox (or folder), with a newer serial unless given; extra: more files {name: bytes}.
+    def bundle(self, rev, serial=None, folder=None, extra=None, **meta):
         self.serial += 1
         path = os.path.join(folder or self.paths.inbox, f"mowbite-os-{rev}.tar.gz")
-        files = {f"{rev}/bundle.json": json.dumps({"format": 2, "component": "os", "revision": rev,
-                                                   "serial": serial or self.serial, "base": 1, "min_app": "1.4.0",
-                                                   "runtime_packages": [], **meta}).encode(),
-                 f"{rev}/revision": rev.encode()}
+        members = {f"{rev}/bundle.json": json.dumps({"format": 2, "component": "os", "revision": rev,
+                                                     "serial": serial or self.serial, "base": 1, "min_app": "1.4.0",
+                                                     "runtime_packages": [], **meta}).encode(),
+                   f"{rev}/revision": rev.encode()}
+        members.update({f"{rev}/{name}": data for name, data in (extra or {}).items()})
         with tarfile.open(path, "w:gz") as tar:
-            for name, data in files.items():
+            for name, data in members.items():
                 info = tarfile.TarInfo(name)
                 info.size = len(data)
                 tar.addfile(info, io.BytesIO(data))
@@ -261,6 +264,40 @@ class GateTest(Base):
         self.assertEqual(self.run_update("os")["reason"], "NO_HOLD")
         self.assertEqual(self.fake.holds[-1], 0)
 
+    def test_halted_and_down_count_as_stopped(self):
+        self.fake.session()
+        self.assertIsNone(gate.off(self.paths, None))
+        self.write(self.paths.exit_note, json.dumps({"t": 1000.0, "down": True}))
+        self.assertEqual(gate.off(self.paths, 1000), "down")
+        # A note from before this start of the service says nothing about it.
+        self.assertIsNone(gate.off(self.paths, 1002))
+        os.remove(self.paths.exit_note)
+        self.write(self.paths.halt, "MOWBITE_OS_HALT reason=SCHEMA_NEWER data_schema=9 image_schema=8\n")
+        self.assertEqual(gate.off(self.paths, None), "halted")
+        self.assertEqual(gate.halt_reason(self.paths), "SCHEMA_NEWER")
+        self.fake.session(state="MOWING")
+        self.write(self.paths.restart_hold, "{}")
+        self.assertEqual(gate.before_hold(self.paths, True)[0], "EMERGENCY")
+        self.assertEqual(gate.before_hold(self.paths, False)[0], "EMERGENCY")
+        self.assertIsNone(gate.before_hold(self.paths, True, True))
+        self.write(self.paths.pending, "{}")
+        self.assertEqual(gate.before_hold(self.paths, True, True)[0], "UNFINISHED")
+
+    # Files in the folders of the OS user: never read or written through a link, never more than a small text.
+    def test_no_link_followed_in_the_folders_of_the_os(self):
+        other = os.path.join(self.root, "of-root")
+        self.write(other, json.dumps({"boot_id": "b1", "clean": False, "reason": "reason=SECRET"}))
+        for path in (self.paths.session, self.paths.halt, self.paths.hold, self.paths.hold + ".tmp"):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            os.symlink(other, path)
+        self.assertIsNone(gate.session_of_this_boot(self.paths))
+        self.assertEqual(gate.halt_reason(self.paths), "DATA_ERROR")
+        files.write_new(self.paths.hold, "{}\n")
+        self.assertFalse(os.path.islink(self.paths.hold))
+        self.assertIn("SECRET", files.read_text(other))
+        self.write(other, "x" * (files.MAX_TEXT + 1))
+        self.assertIsNone(files.read_text(other))
+
     def test_driving_is_busy(self):
         self.bundle(A)
         self.updater.check()
@@ -302,6 +339,116 @@ class FlowTest(Base):
         self.assertEqual((last["result"], last["reason"]), ("refused", "BUSY"))
         self.assertEqual(os.readlink(self.paths.current), A)
         self.assertFalse(os.path.lexists(self.paths.pending))
+
+    # An abort the caller got a yes for: no switch after it, although the hold arrives.
+    def test_accepted_abort_is_never_switched(self):
+        self.install(A)
+        self.bundle(B)
+        self.updater.check()
+        updater.HOLD_WAIT = 5.0
+        asked = threading.Event()
+        request_hold = self.fake.request_hold
+        self.fake.grant = False
+
+        def ask(seconds):
+            request_hold(seconds)
+            asked.set()
+        self.fake.request_hold = ask
+        self.updater.start("os", B)
+        self.assertTrue(asked.wait(10))
+        self.updater.abort()
+        self.fake.grant = True
+        request_hold(900)
+        self.assertEqual(self.updater.join()["result"], "aborted")
+        self.assertEqual(os.readlink(self.paths.current), A)
+        self.assertEqual(self.fake.holds[-1], 0)
+        # Also when it comes between the gate and the switch.
+        self.updater._abort.set()
+        with self.assertRaises(updater.Aborted):
+            self.updater._switch("os", B)
+        self.assertEqual(self.updater.phase(), "idle")
+
+    # An error after the stop (no memory for a fork, a full disk): back to the one before, no unfinished update.
+    def test_error_in_the_switch_goes_back(self):
+        self.install(A)
+        once, calls = self.updater.installer.health.once, []
+
+        def fail_first(since):
+            calls.append(since)
+            if len(calls) == 1:
+                raise OSError(12, "Cannot allocate memory")
+            return once(since)
+        self.updater.installer.health.once = fail_first
+        last = self.install(B)
+        self.assertEqual((last["result"], last["reason"]), ("failed", "INTERNAL"))
+        self.assertEqual(os.readlink(self.paths.current), A)
+        self.assertTrue(self.fake.running)
+        self.assertFalse(os.path.lexists(self.paths.pending))
+        self.assertEqual(self.updater.state["components"]["os"]["attempts"], {})
+        self.assertEqual(self.install(B)["result"], "installed")
+
+    def test_stop_that_fails_does_not_keep_the_unhealthy_one(self):
+        self.install(A)
+        self.fake.broken.add(B)
+        stop, calls = self.fake.stop, []
+
+        def refuse_second():
+            calls.append(1)
+            if len(calls) == 2:
+                raise Refused("BUSY", "systemctl stop failed")
+            stop()
+        self.fake.stop = refuse_second
+        self.assertEqual(self.install(B)["result"], "rolled_back")
+        self.assertEqual(os.readlink(self.paths.current), A)
+        self.assertFalse(os.path.lexists(self.paths.pending))
+
+    # From its stop on the host holds the mower itself, also when the OS was off and nobody granted a hold.
+    def test_switch_holds_the_os_it_starts(self):
+        self.install(A)
+        self.fake.stop()
+        start, left = self.fake.start, []
+
+        def start_and_look():
+            left.append((files.read_json(self.paths.hold) or {}).get("until", 0) - time.time())
+            return start()
+        self.fake.start = start_and_look
+        self.assertEqual(self.install(B)["result"], "installed")
+        self.assertGreater(left[0], installer.HOLD_SECONDS - 60)
+        self.assertNotIn(900, self.fake.holds)
+        self.assertFalse(os.path.exists(self.paths.hold))
+
+    def test_service_that_starts_or_stops_is_busy(self):
+        self.install(A)
+        self.bundle(B)
+        self.updater.check()
+        for state in ("activating", "deactivating", "unknown"):
+            self.fake.state = state
+            self.assertEqual(self.run_update("os", B)["reason"], "BUSY")
+        self.assertNotIn(900, self.fake.holds)
+
+    # The container stays down after its crashes and holds a restart hold nobody can release: the way back is open.
+    def test_back_out_of_down(self):
+        self.install(A)
+        self.install(B)
+        self.write(self.paths.exit_note, json.dumps({"t": time.time() - 0.5, "down": True, "restart": 3}))
+        self.write(self.paths.restart_hold, "{}")
+        self.fake.session(state="MOWING")
+        self.fake.grant = False
+        asked = len(self.fake.holds)
+        self.updater.rollback("os")
+        self.assertEqual(self.updater.join()["result"], "installed")
+        self.assertEqual(os.readlink(self.paths.current), A)
+        self.assertNotIn(900, self.fake.holds[asked:])
+        self.assertTrue(os.path.exists(self.paths.restart_hold))
+
+    def test_library_missing_blocks(self):
+        self.write(self.paths.os_setup, "return 1\n")
+        self.bundle(A, extra={"lib/x.so": b"\x7fELF" + bytes(60)})
+        self.updater.check()
+        self.assertEqual(self.run_update("os", A)["reason"], "LIBRARY_MISSING")
+        self.assertEqual(self.blocked()[A]["reason"], "LIBRARY_MISSING")
+        with self.assertRaises(Refused):
+            self.updater.start("os", A, by_hand=False)
 
     def test_base_too_old_blocks(self):
         last = self.install(A, base=7)
@@ -405,6 +552,44 @@ class AutoTest(Base):
         self.updater.state["last"] = None
         self.updater.tick()
         self.assertIsNone(self.updater.state["last"])
+
+    # A gate that stays closed is not tried again every few minutes with a copy of the bundle each time.
+    def test_each_revision_once_a_night(self):
+        self.bundle(A)
+        self.updater.tick()
+        self.updater.join()
+        self.fake.session(charging=False)
+        self.bundle(B)
+        now = time.time()
+        self.updater.tick(now)
+        self.assertEqual(self.updater.join()["reason"], "NO_DOCK_CONTACT")
+        self.updater.state["last"] = None
+        self.updater.tick(now + 600)
+        self.assertFalse(self.updater.busy())
+        self.assertIsNone(self.updater.state["last"])
+        self.fake.session()
+        self.updater.set_auto(True, "00:00", "23:59")
+        later = now + updater.AUTO_AGAIN + 1
+        # 23:59 is outside the window of this test.
+        later += 120 if time.localtime(later)[3:5] == (23, 59) else 0
+        self.updater.tick(later)
+        self.assertEqual(self.updater.join()["result"], "installed")
+
+    def test_os_stopped_by_hand_is_left_alone(self):
+        self.bundle(A)
+        self.updater.tick()
+        self.updater.join()
+        self.fake.stop()
+        self.bundle(B)
+        self.updater.state["last"] = None
+        self.updater.tick()
+        self.assertFalse(self.updater.busy())
+        self.assertIsNone(self.updater.state["last"])
+        self.assertFalse(self.fake.running)
+        # After a crash loop the update may be the way out.
+        self.fake.state = "failed"
+        self.updater.tick()
+        self.assertEqual(self.updater.join()["result"], "installed")
 
     def test_set_auto_checked(self):
         with self.assertRaises(Refused):

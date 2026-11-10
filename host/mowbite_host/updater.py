@@ -2,7 +2,8 @@
 
 Phases: idle, verifying, unpacking, waiting_gate, switching, checking. The last result {result installed|rolled_back|
 refused|aborted|failed, reason, message, revision, t} stays until the next one. A revision that ended rolled_back or
-failed, or that was taken back by hand, is blocked: never installed by itself again, only by hand (rule P4).
+failed, that was taken back by hand or that cannot run on this mower is blocked: never installed by itself again, only
+by hand (rule P4). By itself a revision is tried once a night, and an OS stopped by hand is left alone.
 """
 import os
 import re
@@ -11,15 +12,17 @@ import threading
 import time
 
 from mowbite_host import Refused, bundle, files, gate
-from mowbite_host.installer import Installer, require_previous
+from mowbite_host.installer import HOLD_SECONDS, Installer, require_previous
 
 COMPONENTS = {"os": "MowBite OS"}
 # How long an update waits for the gate before it gives up, and how often it looks.
 GATE_WAIT = 30 * 60.0
 GATE_EVERY = 5.0
-# The hold it asks for covers the switch and the health check; the OS ends it at most after 1800 s.
-HOLD_SECONDS = 900
 HOLD_WAIT = 10.0
+# The automatic tries a revision again at the earliest this long after its last try: once a night.
+AUTO_AGAIN = 20 * 3600.0
+# States of the service in which the gate judges; in any other it starts or stops, or nobody knows.
+SETTLED = ("active", "inactive", "failed")
 # A revision cut off this often during its switch (power cut) is blocked.
 MAX_ATTEMPTS = 2
 AUTO_DEFAULT = {"enabled": False, "from": "02:00", "to": "05:00"}
@@ -72,11 +75,13 @@ class Updater:
         self._worker = None
         self._phase = dict(IDLE)
         self._candidates = []
+        # Whether a hold of this updater may stand: asked for at the gate or written by the switch.
+        self._holding = False
         self.gate_wait = GATE_WAIT
         self.state = self._load()
 
     # update.json: {auto, app_version, last, components {id: {serial, installed_at, crashes_since_install, last_crash,
-    # blocked {revision: {reason, result?, t}}, attempts {revision: n}}}}.
+    # blocked {revision: {reason, result?, t}}, attempts {revision: n}, auto_tried {revision, t}}}}.
     def _load(self):
         state = files.read_json(self.paths.state) or {}
         state.setdefault("auto", dict(AUTO_DEFAULT))
@@ -86,7 +91,7 @@ class Updater:
         for component in COMPONENTS:
             entry = components.setdefault(component, {})
             for key, value in (("installed_at", None), ("crashes_since_install", 0), ("last_crash", None),
-                               ("blocked", {}), ("attempts", {})):
+                               ("blocked", {}), ("attempts", {}), ("auto_tried", None)):
                 entry.setdefault(key, value)
         return state
 
@@ -180,7 +185,11 @@ class Updater:
             entry["last_crash"] = t
             if entry["installed_at"] is None or t >= entry["installed_at"]:
                 entry["crashes_since_install"] += 1
-            self._save()
+            # Counted in memory when the disk does not take it: the state of the OS stays visible.
+            try:
+                self._save()
+            except OSError as error:
+                print(f"update.json: {error}", flush=True)
         self._changed()
 
     def remember_app(self, app_version):
@@ -252,12 +261,14 @@ class Updater:
                 raise Refused("BLOCKED", f"{candidate['revision']} ended {blocked.get('result')} before")
             self._run("update", lambda: self._install(candidate))
 
+    # Under the lock the switch begins under: an abort that is accepted is never followed by the switch.
     def abort(self):
-        if not self.busy():
-            raise Refused("NOT_UPDATING", "no update runs")
-        if self._phase["phase"] in ("switching", "checking"):
-            raise Refused("BUSY", "the switch has begun; its health check decides")
-        self._abort.set()
+        with self._lock:
+            if not self.busy():
+                raise Refused("NOT_UPDATING", "no update runs")
+            if self._phase["phase"] in ("switching", "checking"):
+                raise Refused("BUSY", "the switch has begun; its health check decides")
+            self._abort.set()
 
     def rollback(self, component):
         with self._lock:
@@ -270,37 +281,55 @@ class Updater:
         if self._abort.is_set():
             raise Aborted()
 
-    # Waits until the gate opens and the OS granted its hold; True with a hold to give back.
+    # Waits until the gate opens: an OS that moves the mower granted its hold, any other needs none.
     def _wait_gate(self):
         deadline = time.monotonic() + self.gate_wait
         while True:
             self._check_abort()
-            active = self.carrier.active()
-            why = gate.before_hold(self.paths, active)
-            if why is None and not active:
-                return False
-            if why is None:
-                asked = time.time()
-                self.os_rpc.request_hold(HOLD_SECONDS)
-                until = time.monotonic() + HOLD_WAIT
-                while time.monotonic() < until:
-                    if gate.hold_granted(self.paths, asked, time.time(), HOLD_SECONDS - 60):
-                        # Granted only in IDLE; the files must still say so after it.
-                        why = gate.before_hold(self.paths, self.carrier.active())
-                        if why is None:
-                            return True
-                        break
-                    time.sleep(0.5)
-                else:
-                    why = ("NO_HOLD", "MowBite OS did not grant the hold of the update")
-                # No switch now: the mower is not held for nothing.
-                self.os_rpc.release_hold()
+            state, _, started = self.carrier.show()
+            if state not in SETTLED:
+                why = ("BUSY", "MowBite OS is starting or stopping")
+            else:
+                active = state == "active"
+                still = active and gate.off(self.paths, started) is not None
+                why = gate.before_hold(self.paths, active, still)
+                if why is None and (still or not active):
+                    return
+                if why is None:
+                    why = self._ask_hold()
+                    if why is None:
+                        return
             self._set_phase("waiting_gate", why[0])
             if time.monotonic() >= deadline:
                 raise Refused(why[0], f"the gate stayed closed: {why[1]}")
-            time.sleep(GATE_EVERY)
+            self._abort.wait(GATE_EVERY)
+
+    # Asks the OS for its hold: None once hold.json shows it and the files still open the gate, else why not, with
+    # the hold given back.
+    def _ask_hold(self):
+        asked = time.time()
+        self.os_rpc.request_hold(HOLD_SECONDS)
+        self._holding = True
+        why = ("NO_HOLD", "MowBite OS did not grant the hold of the update")
+        until = time.monotonic() + HOLD_WAIT
+        while time.monotonic() < until:
+            if gate.hold_granted(self.paths, asked, time.time(), HOLD_SECONDS - 60):
+                # Granted only in IDLE; the files must still say so after it.
+                why = gate.before_hold(self.paths, self.carrier.active())
+                if why is None:
+                    return None
+                break
+            if self._abort.wait(0.5):
+                break
+        # No switch now: the mower is not held for nothing.
+        self._release_hold()
+        self._check_abort()
+        return why
 
     def _release_hold(self):
+        if not self._holding:
+            return
+        self._holding = False
         if self.carrier.active():
             self.os_rpc.release_hold()
         else:
@@ -309,21 +338,34 @@ class Updater:
     def _switch(self, component, revision):
         entry = self._entry(component)
         with self._lock:
+            # An abort accepted until here wins; from here on the health check decides.
+            self._check_abort()
             entry["attempts"][revision] = entry["attempts"].get(revision, 0) + 1
             self._save()
-        self._set_phase("switching", component=component, revision=revision)
-        ok, line = self.installer.switch(revision, on_started=lambda: self._set_phase("checking"))
+            self._phase = {**self._phase, "phase": "switching", "reason": None, "component": component,
+                           "revision": revision}
+        self._changed()
+        # The switch writes the hold itself once the OS is stopped.
+        self._holding = True
+        try:
+            ok, line = self.installer.switch(revision, on_started=lambda: self._set_phase("checking"))
+        except Exception:
+            self._switched(entry, revision, False)
+            raise
+        self._switched(entry, revision, ok)
+        return ok, line
+
+    # The switch ended by itself, healthy or back at the one before: no cut to count.
+    def _switched(self, entry, revision, ok):
         with self._lock:
             entry["attempts"].pop(revision, None)
             if ok:
                 entry["installed_at"] = int(time.time())
                 entry["crashes_since_install"] = 0
             self._save()
-        return ok, line
 
     def _install(self, candidate):
         component, revision = candidate["component"], candidate["revision"]
-        held = False
         try:
             self._set_phase("verifying", component=component, revision=revision)
             staged = self.inbox.stage(candidate)
@@ -345,12 +387,13 @@ class Updater:
                                                        self._env())
                 if problems:
                     shutil.rmtree(partial, ignore_errors=True)
+                    self._block(component, revision, "LIBRARY_MISSING")
                     raise Refused("LIBRARY_MISSING", "libraries not found:\n  " + "\n  ".join(problems[:20]))
                 os.rename(os.path.join(partial, revision), target)
                 os.rmdir(partial)
                 files.sync_dir(self.paths.opt)
             self._set_phase("waiting_gate")
-            held = self._wait_gate()
+            self._wait_gate()
             ok, line = self._switch(component, revision)
             self.installer.prune()
             if ok:
@@ -367,15 +410,13 @@ class Updater:
             self._finish("failed", "INTERNAL", f"{type(error).__name__}: {error}", component, revision)
         finally:
             shutil.rmtree(self.inbox.install_stage(), ignore_errors=True)
-            if held:
-                self._release_hold()
+            self._release_hold()
 
     def _roll_back(self, component, previous):
         current = self.installer.current()
-        held = False
         try:
             self._set_phase("waiting_gate", component=component, revision=previous)
-            held = self._wait_gate()
+            self._wait_gate()
             ok, line = self._switch(component, previous)
             if ok:
                 # Taken back by hand: the newer one does not come back by itself.
@@ -391,8 +432,7 @@ class Updater:
         except Exception as error:  # noqa: BLE001
             self._finish("failed", "INTERNAL", f"{type(error).__name__}: {error}", component, previous)
         finally:
-            if held:
-                self._release_hold()
+            self._release_hold()
 
     def _env(self):
         return {**self.paths.env(), "PATH": os.environ.get("PATH", "/usr/sbin:/usr/bin:/sbin:/bin"),
@@ -415,18 +455,29 @@ class Updater:
         return os.path.exists(self.paths.prefix + "/run/systemd/timesync/synchronized")
 
     # Called every few minutes: starts the available update at night when auto is on, the clock is sure and the app
-    # the user has is new enough for it.
+    # the user has is new enough for it; each revision once a night.
     def tick(self, now=None):
         auto = self.state["auto"]
         if not auto["enabled"] or self.busy() or not self.clock_ok():
             return
+        now = time.time() if now is None else now
         if not in_window(time.localtime(now), auto["from"], auto["to"]):
+            return
+        # An OS stopped by hand stays as it is; one that gave up after crashes or was never installed gets its update.
+        if self.installer.current() and self.carrier.show()[0] not in ("active", "failed"):
             return
         self.check()
         for component in COMPONENTS:
             available = self._available(component)
             if (available and not available["blocked"] and
                     app_suffices(self.state["app_version"], available.get("min_app"))):
+                entry = self._entry(component)
+                tried = entry["auto_tried"] or {}
+                if tried.get("revision") == available["revision"] and 0 <= now - tried.get("t", 0) < AUTO_AGAIN:
+                    return
+                with self._lock:
+                    entry["auto_tried"] = {"revision": available["revision"], "t": int(now)}
+                    self._save()
                 try:
                     self.start(component, available["revision"], by_hand=False)
                 except Refused as why:

@@ -1,6 +1,10 @@
 """Small file helpers: whole-or-nothing writes, links and JSON that may be missing or broken."""
 import json
 import os
+import stat
+
+# What a file read for its text may hold: they are small, and some lie in folders of another user.
+MAX_TEXT = 64 * 1024
 
 
 def sync_dir(path):
@@ -23,14 +27,41 @@ def write_json(path, value):
     sync_dir(os.path.dirname(path) or ".")
 
 
+# The text of the regular file at path, at most limit bytes and never through a link; None for anything else.
+def read_text(path, limit=MAX_TEXT):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return None
+            data = f.read(limit + 1)
+    except OSError:
+        return None
+    return data.decode(errors="replace") if len(data) <= limit else None
+
+
 # The JSON object at path; None when it is missing, unreadable or no object.
 def read_json(path):
+    text = read_text(path)
     try:
-        with open(path) as f:
-            value = json.load(f)
-    except (OSError, ValueError):
+        value = json.loads(text) if text is not None else None
+    except ValueError:
         return None
     return value if isinstance(value, dict) else None
+
+
+# text as the file at path in a folder of another user: whole or not at all, and nothing is written through a link
+# that waits there.
+def write_new(path, text):
+    tmp = path + ".tmp"
+    remove(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    sync_dir(os.path.dirname(path))
 
 
 def remove(path):

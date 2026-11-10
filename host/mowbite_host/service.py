@@ -62,6 +62,7 @@ class Host:
         self.requests = queue.Queue(maxsize=MAX_WAITING)
         self._os = None
         self._update_text = None
+        self._complaints = {}
         # None: the answer is update.status.
         self._methods = {
             "update.status": lambda p: None,
@@ -170,6 +171,17 @@ class Host:
         self.look()
         return self._os
 
+    # A step of the main loop that fails (a full or read-only disk) is logged once per text; the host goes on.
+    def _step(self, name, call):
+        try:
+            call()
+            self._complaints.pop(name, None)
+        except Exception as error:  # noqa: BLE001
+            text = f"{type(error).__name__}: {error}"
+            if self._complaints.get(name) != text:
+                self._complaints[name] = text
+                print(f"{name}: {text}", flush=True)
+
     def run(self, alive=lambda: None, stop=lambda: False):
         self.updater.on_change = self.update_changed
         next_tick = time.monotonic() + TICK_EVERY
@@ -180,13 +192,13 @@ class Host:
             now = time.monotonic()
             if now >= next_check:
                 next_check = now + CHECK_EVERY
-                self.updater.check()
+                self._step("check", self.updater.check)
             if now >= next_tick:
                 next_tick = now + TICK_EVERY
-                self.updater.tick()
+                self._step("tick", self.updater.tick)
             if now >= next_look:
                 next_look = now + LOOK_EVERY
-                self.look()
+                self._step("look", self.look)
             try:
                 item = self.requests.get(timeout=max(0.05, min(next_look, next_tick) - time.monotonic()))
             except queue.Empty:

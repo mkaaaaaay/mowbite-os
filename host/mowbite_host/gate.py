@@ -2,11 +2,37 @@
 
 While the OS runs, it has to idle on the charging contacts without an emergency (os-session.json of this boot) and have
 granted the hold the host asked for (hold.json: from then on nothing starts the wheels or the blade). An OS that does
-not run moves nothing. Never with an unfinished switch, a restart hold or a kernel crash the OS has not judged yet.
+not run moves nothing, nor one that halted before its nodes started or stays down after its crashes. Never with an
+unfinished switch, a restart hold or a kernel crash the OS has not judged yet.
 """
 import os
+import re
 
 from mowbite_host import files
+
+
+HALT_REASON = re.compile(r"reason=([A-Z_]+)")
+
+
+# The reason of the halt line; None without a halt file, DATA_ERROR when it names none.
+def halt_reason(paths):
+    if not os.path.lexists(paths.halt):
+        return None
+    match = HALT_REASON.search(files.read_text(paths.halt) or "")
+    return match.group(1) if match else "DATA_ERROR"
+
+
+# How a service that runs keeps the mower still: "halted" before its nodes started, "down" when the container stays
+# off after its crashes (the note has to be of this start of the service, started in unix s or None when unknown);
+# None when its nodes run.
+def off(paths, started):
+    if os.path.lexists(paths.halt):
+        return "halted"
+    note = files.read_json(paths.exit_note)
+    if (note and note.get("down") is True and isinstance(note.get("t"), (int, float)) and
+            (started is None or note["t"] >= started - 1)):
+        return "down"
+    return None
 
 
 def _boot_id(paths):
@@ -26,15 +52,17 @@ def session_of_this_boot(paths):
     return session
 
 
-# The reason the switch may not happen now, None when it may; active: whether the OS runs.
-def before_hold(paths, active):
+# The reason the switch may not happen now, None when it may; active: whether the service of the OS runs, still:
+# whether it is halted or down (off).
+def before_hold(paths, active, still=False):
     if os.path.exists(paths.pending):
         return "UNFINISHED", "an update did not finish: recover first"
-    if os.path.lexists(paths.restart_hold):
+    # Halted or down nobody answers a release; the file stays and holds the OS that starts next.
+    if os.path.lexists(paths.restart_hold) and not still:
         return "EMERGENCY", "the mower is held after an unexpected restart: release it first"
     if os.path.exists(paths.crash) and session_of_this_boot(paths) is None:
         return "KERNEL_CRASH", "a kernel crash in this boot that MowBite OS has not judged yet: start it first"
-    if not active:
+    if not active or still:
         return None
     session = session_of_this_boot(paths)
     if session is None or session.get("clean") is not False:

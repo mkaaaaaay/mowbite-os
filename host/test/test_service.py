@@ -242,6 +242,23 @@ class OsStateTest(HostBase):
         self.host.connected()
         self.assertEqual([s[0] for s in self.published.sent], [service.HOST_STATUS, service.UPDATE_STATUS])
 
+    # A disk that takes no writes: the step is logged once and the crash still counts, the host goes on.
+    def test_failing_step_does_not_end_the_host(self):
+        calls = []
+
+        def fail():
+            calls.append(1)
+            raise OSError(30, "Read-only file system")
+        self.host._step("check", fail)
+        self.host._step("check", fail)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.host._complaints, {"check": "OSError: [Errno 30] Read-only file system"})
+        self.host._step("check", lambda: None)
+        self.assertEqual(self.host._complaints, {})
+        self.updater._save = fail
+        self.updater.note_crash("os", 5)
+        self.assertEqual(self.updater.last_crash("os"), 5)
+
 
 class FakeRpc:
     def __init__(self):

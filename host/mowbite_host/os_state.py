@@ -5,24 +5,13 @@ state: updating while the updater switches or checks; stopped (inactive by hand)
 the logic wrote its session after the start; then running.
 """
 import os
-import re
 import time
 
 from mowbite_host import files, gate
 from mowbite_host.installer import CLOCK_SLACK
 
-HALT_REASON = re.compile(r"reason=([A-Z_]+)")
 # A note older than its stable_s does not count as a restart any more (the launch counts the same way).
 STABLE_DEFAULT = 600
-
-
-def halt_reason(paths):
-    try:
-        with open(paths.halt) as f:
-            match = HALT_REASON.search(f.read(4096))
-    except OSError:
-        return None
-    return match.group(1) if match else "DATA_ERROR"
 
 
 # container_exit.json as written by the launch, None when missing or broken.
@@ -41,7 +30,7 @@ class OsWatch:
         self._state = None
         self._since = None
 
-    def _base(self, active, active_since, note):
+    def _base(self, active, active_since):
         if self.updater.phase() in ("switching", "checking"):
             return "updating", None
         if active == "failed":
@@ -50,9 +39,10 @@ class OsWatch:
             return "stopped", None
         if active != "active":
             return "starting", None
-        if os.path.exists(self.paths.halt):
-            return "halted", halt_reason(self.paths)
-        if note and note.get("down") is True:
+        still = gate.off(self.paths, active_since)
+        if still == "halted":
+            return "halted", gate.halt_reason(self.paths)
+        if still == "down":
             return "down", "CRASH_LOOP"
         session = gate.session_of_this_boot(self.paths)
         try:
@@ -68,7 +58,7 @@ class OsWatch:
         now = time.time() if now is None else now
         active, changed, active_since = self.carrier.show()
         note = exit_note(self.paths)
-        state, reason = self._base(active, active_since, note)
+        state, reason = self._base(active, active_since)
         if state != self._state:
             # The first look takes the time systemd knows; later changes the time they were seen.
             self._since = int(changed if self._state is None and changed else now)

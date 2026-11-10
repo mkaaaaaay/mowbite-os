@@ -60,6 +60,7 @@ def make(prefix, with_broker):
         print("no broker: only a stopped OS switches, its health is judged from its files", file=sys.stderr)
     health = installer.health_of(where, service, check)
     tool = updater.Updater(where, service, health, origin.Inbox(where), rpc or NoBroker())
+    tool.installer.hold = rpc is not None
     if check is not None:
         check.api_of_running = tool.running_api
     # By hand the gate is judged once, there is no waiting for it.

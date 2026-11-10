@@ -38,7 +38,10 @@ session() {
 case "$1" in
   is-active) state=$(cat "$s" 2>/dev/null || echo inactive); [ "$2" = --quiet ] || echo "$state"; [ "$state" = active ];;
   stop) [ "$(cat "$s" 2>/dev/null)" = active ] && session true; echo inactive > "$s";;
-  start) echo active > "$s"; rev=$(readlink "$p/opt/mowbite/current"); [ -e "$p/state/broken-$rev" ] || session false;;
+  start) echo active > "$s"; date +%s > "$s.since"
+    rev=$(readlink "$p/opt/mowbite/current"); [ -e "$p/state/broken-$rev" ] || session false;;
+  show) echo "ActiveState=$(cat "$s" 2>/dev/null || echo inactive)"
+    echo "ActiveEnterTimestamp=@$(cat "$s.since" 2>/dev/null || echo 0)";;
   reset-failed) ;;
 esac
 """
