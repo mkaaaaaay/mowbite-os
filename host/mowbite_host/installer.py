@@ -22,14 +22,31 @@ def log(text):
     print(text, flush=True)
 
 
+class FilesOnly:
+    """The probe without a broker: the files alone decide."""
+
+    def begin(self):
+        pass
+
+    def __call__(self):
+        return True, ""
+
+    def settled(self):
+        return True, ""
+
+
 class Health:
     """Whether the OS that started at wall time since came up: the service runs, no halt, no crash of the container,
-    the logic wrote its session in this boot, and probe() (the answers over the broker) agrees."""
+    the logic wrote its session in this boot, and probe() (the answers over the broker) agrees; probe.settled() has the
+    last word at the end of the stable time, probe.begin() runs before the switch."""
 
     def __init__(self, paths, carrier, probe=None, wait=HEALTH_WAIT, stable=HEALTH_STABLE, every=HEALTH_EVERY):
         self.paths, self.carrier = paths, carrier
-        self.probe = probe or (lambda: (True, ""))
+        self.probe = probe or FilesOnly()
         self.wait, self.stable, self.every = wait, stable, every
+
+    def begin(self):
+        self.probe.begin()
 
     def _since(self, path, since):
         try:
@@ -70,7 +87,8 @@ class Health:
                 return False, f"no longer healthy: {line}"
             now = time.monotonic()
             if first_ok is not None and now - first_ok >= self.stable:
-                return True, line
+                settled, why = self.probe.settled()
+                return (True, line) if settled else (False, why)
             if first_ok is None and now >= deadline:
                 return False, line or "no answer"
             time.sleep(self.every)
@@ -110,6 +128,7 @@ class Installer:
         before = self.current()
         if before == revision:
             before = self.previous()
+        self.health.begin()
         self.carrier.stop()
         self._write_pending(revision, before)
         files.set_link(self.paths.current, revision)

@@ -1,0 +1,19 @@
+[Unit]
+Description=mowbite-host: updates of MowBite OS and how it is
+After=mowbite-update-recover.service mosquitto.service network.target
+Wants=mosquitto.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/sbin/mowbite-host
+# A hung host is killed and started again; stopping the OS during a switch takes up to its TimeoutStopSec of 20 s.
+WatchdogSec=120
+Restart=always
+RestartSec=5
+# An update that runs is cut off at the stop; recover takes the OS back at the next start.
+TimeoutStopSec=10
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,5 @@
 """What runs the installed OS: systemd on the Tron; the container of a compose stack comes later. The host only starts,
-stops and asks whether it runs."""
+stops, restarts and asks how it runs."""
 import subprocess
 
 from mowbite_host import Refused
@@ -18,6 +18,21 @@ class Systemd:
     def start(self):
         self._systemctl("reset-failed")
         return self._systemctl("start").returncode == 0
+
+    def restart(self):
+        self._systemctl("reset-failed")
+        return self._systemctl("restart").returncode == 0
+
+    # ActiveState (active, activating, deactivating, inactive, failed), since when in unix s, and since when active.
+    def show(self):
+        result = self._systemctl("show", "--timestamp=unix", "-p", "ActiveState", "-p", "StateChangeTimestamp",
+                                 "-p", "ActiveEnterTimestamp")
+        values = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+
+        def unix(key):
+            value = values.get(key, "")
+            return int(value[1:]) if value.startswith("@") and value[1:].isdigit() else None
+        return values.get("ActiveState", "unknown"), unix("StateChangeTimestamp"), unix("ActiveEnterTimestamp")
 
     def stop(self):
         result = self._systemctl("stop")

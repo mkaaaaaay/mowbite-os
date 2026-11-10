@@ -1,0 +1,91 @@
+#!/usr/bin/python3
+"""mowbite-host (mowbite-host.service): updates of MowBite OS over the app and how the OS is, beside the OS as root.
+
+It answers update.* and host.* on the broker of the OS, keeps mowbite/host/status and mowbite/update/status retained,
+looks for updates in the inbox every 6 h and on update.check, and installs at night when auto is on. Without the
+broker it goes on and reconnects; the gate and the state of the OS come from files only.
+"""
+import fcntl
+import os
+import signal
+import socket
+import sys
+import time
+
+sys.path.insert(0, os.environ.get("MOWBITE_HOST_LIB", "/usr/lib/mowbite-host"))
+from mowbite_host import broker, carrier, installer, origin, os_state, paths, probe, service, updater  # noqa: E402
+
+
+# A message to systemd (Type=notify, WatchdogSec) over NOTIFY_SOCKET; nothing without one.
+def notify(text):
+    address = os.environ.get("NOTIFY_SOCKET")
+    if not address:
+        return
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+        try:
+            sock.sendto(text.encode(), address)
+        except OSError:
+            pass
+
+
+def main():
+    stopping = []
+    signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
+    signal.signal(signal.SIGINT, lambda *_: stopping.append(True))
+    where = paths.Paths(os.environ.get("MOWBITE_UPDATE_PREFIX", ""))
+    notify("READY=1")
+    # mowbite-update by hand or at boot holds the lock while it works.
+    os.makedirs(os.path.dirname(where.lock), exist_ok=True)
+    lock = open(where.lock, "w")
+    waiting = False
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if not waiting:
+                print("mowbite-update runs: waiting for it", flush=True)
+                waiting = True
+            if stopping:
+                return 0
+            notify("WATCHDOG=1")
+            time.sleep(1)
+    os.makedirs(where.opt, exist_ok=True)
+
+    env = where.env()
+    host = None
+    client = broker.Broker(env.get("MOWBITE_MQTT_HOST") or "127.0.0.1", env.get("MOWBITE_MQTT_PORT") or 1883,
+                           "mowbite-host", [("rpc/request", 1), ("robot_state/json", 0)],
+                           on_message=lambda m: route(m), on_connect=lambda: host and host.connected(),
+                           will=(service.HOST_STATUS, service.OFFLINE))
+    rpc = probe.OsRpc(client)
+    service_os = carrier.Systemd()
+    tool = None
+    check = probe.Probe(rpc, api_of_running=lambda: (tool.installer.meta_of(tool.installer.current()) or {}).get("api"))
+
+    def route(message):
+        if message.topic == client.answers:
+            rpc.on_answer(message.payload)
+        elif message.topic == "robot_state/json":
+            check.on_robot_state(message.payload)
+        elif host is not None:
+            host.on_request(message)
+
+    tool = updater.Updater(where, service_os, installer.Health(where, service_os, check), origin.Inbox(where), rpc)
+    tool.recover()
+    host = service.Host(where, tool, os_state.OsWatch(where, service_os, tool), service_os, client.publish)
+    client.start()
+    try:
+        host.run(alive=lambda: notify("WATCHDOG=1"), stop=lambda: bool(stopping))
+    finally:
+        notify("STOPPING=1")
+        client.publish(service.HOST_STATUS, service.OFFLINE, True)
+        time.sleep(0.2)
+        client.stop()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

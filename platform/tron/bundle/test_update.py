@@ -93,6 +93,7 @@ class UpdateTest(unittest.TestCase):
         self.env = dict(os.environ)
         os.environ["MOWBITE_UPDATE_PREFIX"] = self.prefix
         os.environ["MOWBITE_UPDATE_HEALTH_WAIT"] = "0"
+        os.environ["MOWBITE_UPDATE_BROKER_WAIT"] = "0"
         os.environ["MOWBITE_HOST_LIB"] = HOST_LIB
         os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
         self.serial = 1000
@@ -104,8 +105,8 @@ class UpdateTest(unittest.TestCase):
         make = tool.make
         hold = os.path.join(self.prefix, "userdata/mowbite/hold.json")
 
-        def quick(prefix):
-            updater = make(prefix)
+        def quick(prefix, with_broker):
+            updater = make(prefix, with_broker)
             updater.installer.health.stable = 0
             updater.installer.health.every = 0
             return updater
@@ -301,7 +302,7 @@ class UpdateTest(unittest.TestCase):
         self.install(self.bundle(A))
         self.session(charging=False)
         self.assertEqual(self.install(self.bundle(B)), 1)
-        self.assertEqual(self.last()["reason"], "NOT_CHARGING")
+        self.assertEqual(self.last()["reason"], "NO_DOCK_CONTACT")
 
     def test_hold_not_granted(self):
         self.install(self.bundle(A))
@@ -476,7 +477,7 @@ class UpdateTest(unittest.TestCase):
         self.install(self.bundle(A))
         self.install(self.bundle(B))
         self.killed_during_health(C)
-        self.tool.make(self.prefix).installer.prune()
+        self.tool.make(self.prefix, False).installer.prune()
         self.assertEqual(self.installed(), [A, B, C, "current", "pending", "previous"])
 
     def test_recover_without_pending(self):

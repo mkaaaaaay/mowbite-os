@@ -32,6 +32,7 @@ class FakeOs:
         self.grant = True
         self.broken = set()
         self.holds = []
+        self.started = None
 
     def session(self, **fields):
         record = {"state": "IDLE", "job_id": "", "boot_id": "b1", "since": 0, "clean": False, "emergency": False,
@@ -43,8 +44,16 @@ class FakeOs:
     def active(self):
         return self.running
 
+    def show(self):
+        return ("active" if self.running else "inactive"), None, self.started
+
+    def restart(self):
+        self.stop()
+        return self.start()
+
     def start(self):
         self.running = True
+        self.started = int(time.time())
         if os.readlink(self.paths.current) not in self.broken:
             self.session()
         return True
@@ -187,7 +196,7 @@ class InboxTest(Base):
         self.index([entry])
         self.updater.check()
         last = self.run_update("os")
-        self.assertEqual((last["result"], last["reason"]), ("refused", "BAD_ORIGIN"))
+        self.assertEqual((last["result"], last["reason"]), ("refused", "BAD_BUNDLE"))
 
     def test_index_signed_for_os_is_no_index(self):
         a = self.bundle(A)
@@ -346,10 +355,10 @@ class FlowTest(Base):
         self.updater.abort()
         self.updater.join()
 
-    def test_not_found(self):
+    def test_no_newer(self):
         with self.assertRaises(Refused) as caught:
             self.updater.start("os")
-        self.assertEqual(caught.exception.reason, "NOT_FOUND")
+        self.assertEqual(caught.exception.reason, "NO_NEWER")
 
 
 class AutoTest(Base):

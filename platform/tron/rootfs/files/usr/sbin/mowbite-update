@@ -10,15 +10,20 @@ A bundle is a tar of one directory <revision>/ with bundle.json (format 2: compo
 min_app, runtime_packages) beside install/, planner/ and tools/. Before the switch: signature (namespace mowbite-os,
 /etc/mowbite/allowed_signers), a serial newer than the running one, the base and runtime packages of this rootfs,
 every library found (checked as the user mowbite). The switch only while the OS is stopped, or idles on the charging
-contacts without an emergency and holds for the update. After it the OS has to come up healthy, else it goes back.
+contacts without an emergency and holds for the update (system.hold over the broker of the OS, the gate reads the
+files). After it the OS has to come up healthy, else it goes back; without the broker its files alone decide.
 """
 import fcntl
 import os
 import shutil
 import sys
+import time
 
 sys.path.insert(0, os.environ.get("MOWBITE_HOST_LIB", "/usr/lib/mowbite-host"))
-from mowbite_host import Refused, bundle, carrier, installer, origin, paths, updater  # noqa: E402
+from mowbite_host import Refused, bundle, carrier, installer, origin, paths, probe, updater  # noqa: E402
+
+# How long install and rollback wait for the broker before they go on without one; 0: never asked.
+BROKER_WAIT = float(os.environ.get("MOWBITE_UPDATE_BROKER_WAIT", 5.0))
 
 
 class NoBroker:
@@ -31,12 +36,44 @@ class NoBroker:
         pass
 
 
-def make(prefix):
+# The broker of the OS for system.hold and the health check as mowbite-host does them; None when it does not answer.
+def connect(where):
+    if BROKER_WAIT <= 0:
+        return None, None
+    from mowbite_host import broker
+    env = where.env()
+    check = None
+
+    def route(message):
+        if message.topic == client.answers:
+            rpc.on_answer(message.payload)
+        elif message.topic == "robot_state/json":
+            check.on_robot_state(message.payload)
+    client = broker.Broker(env.get("MOWBITE_MQTT_HOST") or "127.0.0.1", env.get("MOWBITE_MQTT_PORT") or 1883,
+                           "mowbite-update", [("robot_state/json", 0)], on_message=route)
+    rpc = probe.OsRpc(client)
+    check = probe.Probe(rpc)
+    client.start()
+    deadline = time.monotonic() + BROKER_WAIT
+    while not client.connected and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if not client.connected:
+        client.stop()
+        return None, None
+    return rpc, check
+
+
+def make(prefix, with_broker):
     where = paths.Paths(prefix)
     service = carrier.Systemd()
-    health = installer.Health(where, service, wait=float(os.environ.get("MOWBITE_UPDATE_HEALTH_WAIT",
-                                                                         installer.HEALTH_WAIT)))
-    tool = updater.Updater(where, service, health, origin.Inbox(where), NoBroker())
+    rpc, check = connect(where) if with_broker else (None, None)
+    if with_broker and rpc is None:
+        print("no broker: only a stopped OS switches, its health is judged from its files", file=sys.stderr)
+    health = installer.Health(where, service, check, wait=float(os.environ.get("MOWBITE_UPDATE_HEALTH_WAIT",
+                                                                                installer.HEALTH_WAIT)))
+    tool = updater.Updater(where, service, health, origin.Inbox(where), rpc or NoBroker())
+    if check is not None:
+        check.api_of_running = lambda: (tool.installer.meta_of(tool.installer.current()) or {}).get("api")
     # By hand the gate is judged once, there is no waiting for it.
     tool.gate_wait = 0
     return tool
@@ -65,7 +102,7 @@ def main(argv):
     elif argv[1:] not in (["rollback"], ["recover"], ["status"]):
         print(__doc__, file=sys.stderr)
         return 2
-    tool = make(prefix)
+    tool = make(prefix, argv[1] in ("install", "rollback"))
     if argv[1] == "status":
         print("\n".join(tool.installer.status_lines()))
         return 0

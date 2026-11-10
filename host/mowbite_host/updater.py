@@ -74,8 +74,8 @@ class Updater:
         self.gate_wait = GATE_WAIT
         self.state = self._load()
 
-    # update.json: {auto, app_version, last, components {id: {serial, installed_at, crashes_since_install, blocked
-    # {revision: {reason, result?, t}}, attempts {revision: n}}}}.
+    # update.json: {auto, app_version, last, components {id: {serial, installed_at, crashes_since_install, last_crash,
+    # blocked {revision: {reason, result?, t}}, attempts {revision: n}}}}.
     def _load(self):
         state = files.read_json(self.paths.state) or {}
         state.setdefault("auto", dict(AUTO_DEFAULT))
@@ -84,8 +84,8 @@ class Updater:
         components = state.setdefault("components", {})
         for component in COMPONENTS:
             entry = components.setdefault(component, {})
-            for key, value in (("installed_at", None), ("crashes_since_install", 0), ("blocked", {}),
-                               ("attempts", {})):
+            for key, value in (("installed_at", None), ("crashes_since_install", 0), ("last_crash", None),
+                               ("blocked", {}), ("attempts", {})):
                 entry.setdefault(key, value)
         return state
 
@@ -159,6 +159,24 @@ class Updater:
             self._phase = {"phase": "idle", "component": None, "revision": None, "reason": None}
         self._changed()
 
+    def phase(self):
+        return self._phase["phase"]
+
+    def last_crash(self, component):
+        return self._entry(component)["last_crash"]
+
+    # An end of the component at unix time t, from its exit note: counted once, since its install.
+    def note_crash(self, component, t):
+        with self._lock:
+            entry = self._entry(component)
+            if entry["last_crash"] is not None and t <= entry["last_crash"]:
+                return
+            entry["last_crash"] = t
+            if entry["installed_at"] is None or t >= entry["installed_at"]:
+                entry["crashes_since_install"] += 1
+            self._save()
+        self._changed()
+
     def remember_app(self, app_version):
         if isinstance(app_version, str) and app_version != self.state["app_version"]:
             with self._lock:
@@ -205,12 +223,12 @@ class Updater:
         if revision is None:
             available = self._available(component)
             if available is None:
-                raise Refused("NOT_FOUND", "no newer revision found; scp it into the inbox and check again")
+                raise Refused("NO_NEWER", "no newer revision found; scp it into the inbox and check again")
             revision = available["revision"]
         for candidate in self._candidates:
             if candidate["component"] == component and candidate["revision"] == revision:
                 return candidate
-        raise Refused("NOT_FOUND", f"revision {revision} of {component} was not found")
+        raise Refused("UNKNOWN_REVISION", f"revision {revision} of {component} was not found")
 
     def _run(self, name, work):
         if self.busy():
@@ -230,7 +248,7 @@ class Updater:
 
     def abort(self):
         if not self.busy():
-            raise Refused("NOT_FOUND", "no update runs")
+            raise Refused("NOT_UPDATING", "no update runs")
         if self._phase["phase"] in ("switching", "checking"):
             raise Refused("BUSY", "the switch has begun; its health check decides")
         self._abort.set()

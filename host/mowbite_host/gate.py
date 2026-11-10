@@ -44,7 +44,7 @@ def before_hold(paths, active):
     if session.get("state") != "IDLE":
         return "BUSY", f"MowBite OS is {session.get('state')}"
     if session.get("charging") is not True:
-        return "NOT_CHARGING", "the mower is not on its charging contacts"
+        return "NO_DOCK_CONTACT", "the mower is not on its charging contacts"
     return None
 
 

@@ -177,7 +177,7 @@ def check_base(bundle, base_file):
 def check_space(bundle, folder):
     free = shutil.disk_usage(folder).free
     if bundle.size + SPACE_MARGIN > free:
-        raise Refused("NO_SPACE", f"the bundle needs {(bundle.size + SPACE_MARGIN) // 1048576} MB in {folder}, "
+        raise Refused("UPDATE_NO_SPACE", f"the bundle needs {(bundle.size + SPACE_MARGIN) // 1048576} MB in {folder}, "
                                   f"{free // 1048576} MB are free")
 
 

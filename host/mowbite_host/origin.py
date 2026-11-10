@@ -56,7 +56,7 @@ class Inbox:
             bundle.verify(copy, copy + ".sig", "index", self.paths.signers)
             with open(copy) as f:
                 entries = json.load(f).get("bundles", [])
-        except (OSError, ValueError, AttributeError) as error:
+        except (OSError, ValueError, AttributeError, Refused) as error:
             raise Refused("BAD_ORIGIN", f"{path} cannot be read: {error}")
         finally:
             shutil.rmtree(stage, ignore_errors=True)
@@ -121,9 +121,9 @@ class Inbox:
         if "sha256" in candidate:
             if (os.path.getsize(staged.path) != candidate["size"] or
                     _sha256(staged.path) != candidate["sha256"]):
-                raise Refused("BAD_ORIGIN", f"{candidate['path']} is not the file its index names")
+                raise Refused("BAD_BUNDLE", f"{candidate['path']} is not the file its index names")
         if (staged.revision, staged.serial) != (candidate["revision"], candidate["serial"]):
-            raise Refused("BAD_ORIGIN", f"{candidate['path']} holds {staged.revision} serial {staged.serial}, "
+            raise Refused("BAD_BUNDLE", f"{candidate['path']} holds {staged.revision} serial {staged.serial}, "
                                         f"not what the inbox named")
         return staged
 
