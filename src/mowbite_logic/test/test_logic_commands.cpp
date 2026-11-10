@@ -308,8 +308,11 @@ TEST(LogicCommands, ActionAndRpcAlikeInEveryState) {
         if (outcome.accepted) {
           EXPECT_EQ(outcome.result["state"], by_rpc.RobotState().state) << where;
           EXPECT_EQ(outcome.result["sub_state"], by_rpc.RobotState().sub_state) << where;
+          // released comes from the node with the answer of the safety node.
           for (const auto& field : command.result) {
-            if (field.required) EXPECT_TRUE(outcome.result.contains(field.name)) << where << ": " << field.name;
+            if (field.required && !outcome.release) {
+              EXPECT_TRUE(outcome.result.contains(field.name)) << where << ": " << field.name;
+            }
           }
         } else {
           EXPECT_EQ(outcome.data["reason"], outcome.why.code) << where;

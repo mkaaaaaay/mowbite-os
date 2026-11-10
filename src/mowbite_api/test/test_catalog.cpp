@@ -342,7 +342,7 @@ TEST(Catalog, ActionsAndCommands) {
       EXPECT_EQ(CheckParams(command, params, &field), "") << entry.action;
     }
   }
-  EXPECT_EQ(actions.size(), 21u);
+  EXPECT_EQ(actions.size(), 22u);
   EXPECT_EQ(CommandOfAction("mower_logic:area_recording/start_manual_mowing", nullptr), nullptr);
   EXPECT_EQ(FindCommand("mowing.start")->actions[0].action, "mower_logic:idle/start_mowing");
   EXPECT_EQ(FindCommand("no.such"), nullptr);
