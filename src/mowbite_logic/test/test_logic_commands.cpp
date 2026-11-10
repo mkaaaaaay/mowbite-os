@@ -741,6 +741,7 @@ TEST(LogicStorage, NothingStartsFromIdleWhileTheSessionCannotBeWritten) {
   // Another file while it lasts is the same incident; written again, starts go.
   core.SetUnwritableFile("restart-hold.json");
   EXPECT_TRUE(core.TakeEvents().empty());
+  EXPECT_TRUE(core.TakeNotices().empty());
   EXPECT_EQ(core.StartProblem().fields.value("file", ""), "restart-hold.json");
   core.SetUnwritableFile("");
   EXPECT_TRUE(core.TakeEvents().empty());

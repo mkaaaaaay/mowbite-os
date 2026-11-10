@@ -117,11 +117,9 @@ using Wait = mowbite_hold::FileWriter::Wait;
 bool WriteFileSafely(const std::string& path, const std::string& text, std::string* error) {
   std::error_code ec;
   std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-  if (ec) {
-    *error = "cannot create the folder of " + path + ": " + ec.message();
-    return false;
-  }
-  return mowbite_hold::WriteFileAtomic(path, text, error);
+  if (!ec) return mowbite_hold::WriteFileAtomic(path, text, error);
+  *error = "cannot create the folder of " + path + ": " + ec.message();
+  return false;
 }
 
 MapDatum ToDatum(uint8_t state) {
@@ -146,20 +144,10 @@ geometry_msgs::msg::Polygon ToPolygon(const Ring& ring) {
   return polygon;
 }
 
-rcl_interfaces::msg::Parameter IntegerParameter(const std::string& name, int64_t value) {
-  rcl_interfaces::msg::Parameter parameter;
-  parameter.name = name;
-  parameter.value.type = rcl_interfaces::msg::ParameterType::PARAMETER_INTEGER;
-  parameter.value.integer_value = value;
-  return parameter;
-}
-
-rcl_interfaces::msg::Parameter DoubleParameter(const std::string& name, double value) {
-  rcl_interfaces::msg::Parameter parameter;
-  parameter.name = name;
-  parameter.value.type = rcl_interfaces::msg::ParameterType::PARAMETER_DOUBLE;
-  parameter.value.double_value = value;
-  return parameter;
+// An override for the planner, typed by its value (int an integer, double a double).
+template <typename T>
+rcl_interfaces::msg::Parameter Override(const std::string& name, T value) {
+  return rclcpp::Parameter(name, value).to_parameter_msg();
 }
 
 geometry_msgs::msg::Pose PoseAt(double x, double y, double heading) {
@@ -1421,14 +1409,24 @@ class LogicNode : public rclcpp::Node {
     if (!hold_text_.empty() && writer_) writer_->Submit(restart_hold_path_, hold_text_);
     std::string file = session_failed_ ? mowbite_hold::kSessionFile : "";
     if (file.empty() && !hold_text_.empty()) file = mowbite_hold::kRestartHoldFile;
-    if (file == unwritable_told_ || (!file.empty() && publish_pub_->get_subscription_count() == 0)) return;
+    if (file == unwritable_told_ || (!file.empty() && !BridgeListens())) return;
     unwritable_told_ = file;
     core_.Call<&LogicCore::SetUnwritableFile>(file);
   }
 
+  // Whether the bridge itself takes bridge/publish, not only a tool or test that listens there; it stays so, the
+  // bridge lives in this process.
+  bool BridgeListens() {
+    if (bridge_listens_ || publish_pub_->get_subscription_count() == 0) return bridge_listens_;
+    for (const auto& info : get_subscriptions_info_by_topic(publish_pub_->get_topic_name())) {
+      if (info.node_name() == "mowbite_bridge") bridge_listens_ = true;
+    }
+    return bridge_listens_;
+  }
+
   // UNEXPECTED_RESTART once the bridge listens, so the event reaches events/json and its history.
   void ReportRestartWhenHeard() {
-    if (!restart_report_ || publish_pub_->get_subscription_count() == 0) return;
+    if (!restart_report_ || !BridgeListens()) return;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       core_.Call<&LogicCore::ReportRestart>(*restart_report_);
@@ -1793,7 +1791,7 @@ class LogicNode : public rclcpp::Node {
   // mowbite/hold for scheduler.sh, the planner, App and HA, the OS its only writer on its host: {"until"} retained while
   // held, again every kHoldMirrorS, and empty once after it and after the start. It waits for the bridge.
   void MirrorHold() {
-    if (publish_pub_->get_subscription_count() == 0) return;
+    if (!BridgeListens()) return;
     mowbite_msgs::msg::MqttPublish msg;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -2314,8 +2312,8 @@ class LogicNode : public rclcpp::Node {
     request->perimeter_passes = r.perimeter_passes;
     request->use_angle = r.use_angle;
     request->angle = r.angle;
-    if (r.lane_overlap_passes) request->overrides.push_back(IntegerParameter("lane_overlap_passes", *r.lane_overlap_passes));
-    if (r.perimeter_offset) request->overrides.push_back(DoubleParameter("perimeter_offset", *r.perimeter_offset));
+    if (r.lane_overlap_passes) request->overrides.push_back(Override("lane_overlap_passes", *r.lane_overlap_passes));
+    if (r.perimeter_offset) request->overrides.push_back(Override("perimeter_offset", *r.perimeter_offset));
     return request;
   }
 
@@ -2354,7 +2352,7 @@ class LogicNode : public rclcpp::Node {
 
   void PublishOverlay() {
     // The first, empty one replaces the lines of a recording before a restart, so it waits for the bridge.
-    if (publish_pub_->get_subscription_count() == 0) return;
+    if (!BridgeListens()) return;
     mowbite_msgs::msg::MqttPublish msg;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -2787,6 +2785,7 @@ class LogicNode : public rclcpp::Node {
   std::string hold_text_;
   std::atomic<bool> hold_failed_{false};
   std::string unwritable_told_;
+  bool bridge_listens_ = false;
   std::string boot_id_;
   std::optional<RestartReport> restart_report_;
   // os-session.json and checkpoint.json after the start; null without data_dir and during the stop.
