@@ -10,6 +10,7 @@ Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_watch_stal
 """
 import ctypes
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -257,6 +258,17 @@ class TestWatchStall(unittest.TestCase):
         rclpy.shutdown()
         shutil.rmtree(WORK, ignore_errors=True)
 
+    def align(self):
+        """The heading of fake_tron for the localization, then a good pose with it."""
+        p = self.probe
+        yaw = p.truth()["yaw"]
+        request = SetPose.Request()
+        request.pose.orientation.z = math.sin(yaw / 2)
+        request.pose.orientation.w = math.cos(yaw / 2)
+        p.call(p.set_pose, request)
+        self.assertTrue(p.wait(lambda: p.pose is not None and p.pose.heading_valid
+                               and p.pose.position_accuracy < 0.1, 30), "no good pose with a heading")
+
     def mow(self):
         p = self.probe
         since = len(p.events)
@@ -321,11 +333,7 @@ class TestWatchStall(unittest.TestCase):
         answer = p.call(p.replace_map, request)
         self.assertTrue(answer.success, answer.message)
         self.assertTrue(p.wait(lambda: p.status.mowing_allowed, 10), "the map does not fit the datum")
-        request = SetPose.Request()
-        request.pose.orientation.w = 1.0
-        p.call(p.set_pose, request)
-        self.assertTrue(p.wait(lambda: p.pose is not None and p.pose.heading_valid
-                               and p.pose.position_accuracy < 0.1, 30), "no good pose with a heading")
+        self.align()
 
     def test_02_a_stalled_bridge_ends_the_container_after_its_limit(self, proc_info):
         self.mow()
@@ -342,6 +350,8 @@ class TestWatchStall(unittest.TestCase):
         p.act("mower_logic/reset_emergency")
         self.assertTrue(p.wait(lambda: not p.hw.emergency, 10), p.hw)
         self.assertTrue(p.wait(lambda: not p.robot.emergency, 5), p.robot)
+        # The new container begins without a heading.
+        self.align()
         self.mow()
         since = len(p.events)
         t0, _, stop, off = self.stall(proc_info, "safety", SAFETY_LIMIT)
