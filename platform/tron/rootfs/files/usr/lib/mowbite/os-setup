@@ -3,6 +3,11 @@
 set +u
 source /opt/ros/jazzy/setup.bash
 source "$1/planner/local_setup.bash"
+# The own planner the host chose (only it sets active) goes before the one of the OS, which keeps the interfaces;
+# resolved once, so a restarted node keeps the planner the OS started with.
+if planner=$(readlink -e /opt/mowbite-planner/active); then
+    source "$planner/planner/local_setup.bash"
+fi
 source "$1/install/local_setup.bash"
 set -u
 MOWBITE_OS_REVISION=$(cat "$1/revision")

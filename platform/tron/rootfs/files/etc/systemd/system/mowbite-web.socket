@@ -1,0 +1,8 @@
+[Unit]
+Description=mowbite-web: port 80 of the MowBite App
+
+[Socket]
+ListenStream=80
+
+[Install]
+WantedBy=sockets.target

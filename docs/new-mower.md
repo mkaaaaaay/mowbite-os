@@ -118,7 +118,15 @@ process is outside this watch and stops the mower by its own timeouts.
   it, when the own one goes with the installed OS and is newer than the bundled one. Whatever starts the planner or
   serves the app on your mower reads `active` first and else `<os>/planner` or `<os>/app`, and decides nothing itself.
   A planner update restarts the OS through the gate of the OS; an app update only changes files and needs no gate.
-  Bundles of the planner and the app hold no machine code.
+  Bundles of the planner and the app hold no machine code. On the Tron `os-setup` puts the planner `active` names
+  before the one of the OS (which keeps `mowbite_planner_interfaces`), and tmpfiles makes the two folders.
+  `mowbite-update-recover.service` runs at boot while any of the three folders has a `pending`.
+- The app comes from `mowbite-web` (`web/mowbite_web.py`, standard library only): port 80 from
+  `mowbite-web.socket`, the service as its own user `mowbite-web` in no group, no root, no capability, nothing to
+  write. GET and HEAD only, `/cgi-bin/*` is always 404 (the app reads that as "no container"), hashed parts under
+  `/_next/static/` are also taken from the older installations so an open page keeps working after an update. The
+  app reaches the broker over WebSocket on 9001 (`docker/mower/mosquitto.conf`). A compose stack can serve the same
+  export with any static server that follows these rules. `web/test/test_web.py` runs without a mower.
 - Bundles: `make-bundle.sh` (serial = commit time, base, api from the image), signed with `sign-bundle.sh` (refuses a
   serial not newer than the last one signed, shows the result of the test gate), then into the inbox
   `/userdata/mowbite-update/inbox` and `update.check`.
@@ -210,6 +218,7 @@ parameters in `config/tron.yaml`.
 - [ ] Simulation: mowing, going home, docking; `app_interface_check`
 - [ ] Way onto the mower chosen, limits for logs and journal, data dir writable (a start works)
 - [ ] mowbite-host with its carrier: base version, two keys in allowed_signers, `test_e2e.py` green
+- [ ] The app served (mowbite-web or the like) without root, `/cgi-bin/*` 404, broker WebSocket open
 - [ ] Safety measurement done, date set
 - [ ] Lights, if any: device rights, `output` on only after a look on the mower
 - [ ] Cameras, if any: own process, publisher list tested, hw/cameras entry, vendor files only on the mower, limits

@@ -1,0 +1,33 @@
+[Unit]
+Description=mowbite-web: the MowBite App, read only
+Requires=mowbite-web.socket
+
+[Service]
+# The socket comes from mowbite-web.socket; no root, no capability, nothing to write.
+User=mowbite-web
+Group=mowbite-web
+ExecStart=/usr/bin/python3 -I -B /usr/lib/mowbite-web/mowbite_web.py
+Restart=on-failure
+RestartSec=5
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+MemoryMax=64M
+TasksMax=32

@@ -57,6 +57,10 @@ mkdir -p "$work/host/usr/lib/mowbite-host"
 cp -r "$HERE/../../../host/mowbite_host" "$work/host/usr/lib/mowbite-host/"
 tar -C "$work/host" -rf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w --exclude=__pycache__ \
     --no-recursion ./usr/lib/mowbite-host --recursion ./usr/lib/mowbite-host/mowbite_host
+# The web server of the MowBite App, from web/ of the repo; readable for its user despite the umask.
+install -d -m 755 "$work/web/usr/lib/mowbite-web"
+install -m 644 "$HERE/../../../web/mowbite_web.py" "$work/web/usr/lib/mowbite-web/"
+tar -C "$work/web" -rf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w ./usr/lib/mowbite-web
 
 items=()
 parents=()

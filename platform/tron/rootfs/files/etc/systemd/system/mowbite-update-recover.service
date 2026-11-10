@@ -1,6 +1,8 @@
 [Unit]
-Description=MowBite OS back to its installation before an unfinished update
-ConditionPathExists=/opt/mowbite/pending
+Description=MowBite OS, planner and app back to their installation before an unfinished update
+ConditionPathExists=|/opt/mowbite/pending
+ConditionPathExists=|/opt/mowbite-planner/pending
+ConditionPathExists=|/opt/mowbite-app/pending
 Before=mowbite-os.service
 
 [Service]

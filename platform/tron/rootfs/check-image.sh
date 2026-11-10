@@ -104,6 +104,31 @@ for f in mowbite-update mowbite-host; do
 done
 diff -r --exclude=__pycache__ "$HERE/../../../host/mowbite_host" "$TREE/usr/lib/mowbite-host/mowbite_host" > /dev/null
 result "library of mowbite-host as in host/ of the repo" $?
+cmp -s "$HERE/../../../web/mowbite_web.py" "$TREE/usr/lib/mowbite-web/mowbite_web.py"
+result "mowbite-web as in web/ of the repo" $?
+test "$(stat_of /usr/lib/mowbite-web) $(stat_of /usr/lib/mowbite-web/mowbite_web.py)" = "0755 0:0 0644 0:0"
+result "mowbite-web readable for its user, owned by root" $?
+test "$(readlink "$TREE/etc/systemd/system/sockets.target.wants/mowbite-web.socket")" = ../mowbite-web.socket
+result "mowbite-web.socket enabled" $?
+grep -qx 'User=mowbite-web' "$TREE/etc/systemd/system/mowbite-web.service" \
+    && grep -qx 'CapabilityBoundingSet=' "$TREE/etc/systemd/system/mowbite-web.service" \
+    && ! grep -qE '^(ReadWritePaths|StateDirectory|SupplementaryGroups|AmbientCapabilities)=' \
+        "$TREE/etc/systemd/system/mowbite-web.service"
+result "mowbite-web without root, capability, group or path to write" $?
+grep -q '^u mowbite-web ' "$TREE/usr/lib/sysusers.d/mowbite-web.conf" \
+    && ! grep -qE '^[mg] +mowbite-web' "$TREE"/usr/lib/sysusers.d/*.conf
+result "user mowbite-web in no group" $?
+# The folders of the components as mowbite-host knows them.
+places=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from mowbite_host.paths import PLACES
+print(*(opt for opt, _ in PLACES.values()))' "$TREE/usr/lib/mowbite-host")
+test -n "$places"; result "folders of the components read from mowbite-host" $?
+for d in $places; do
+    grep -qx "d $d 0755 root root -" "$TREE/usr/lib/tmpfiles.d/mowbite-os.conf"; result "tmpfiles: $d" $?
+    grep -qx "ConditionPathExists=|$d/pending" "$TREE/etc/systemd/system/mowbite-update-recover.service"
+    result "mowbite-update-recover for $d" $?
+done
+grep -q 'readlink -e /opt/mowbite-planner/active)' "$TREE/usr/lib/mowbite/os-setup"
+result "os-setup takes the planner active names" $?
 test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-host.service")" = ../mowbite-host.service
 result "mowbite-host.service enabled" $?
 grep -qx '[0-9]\+' "$TREE/usr/lib/mowbite/base"; result "rootfs version in /usr/lib/mowbite/base" $?
