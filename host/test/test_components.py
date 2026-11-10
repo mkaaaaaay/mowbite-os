@@ -139,7 +139,7 @@ class AppTest(ComponentBase):
             self.assertEqual((last["result"], last["reason"]), ("refused", reason), last)
             self.assertEqual(self.links("app"), (None, None, None))
             # Shown from the bundles, not kept: with another OS it may fit.
-            self.assertEqual(self.entry("app")["available"]["blocked"], {"reason": reason})
+            self.assertEqual(self.entry("app")["available"]["blocked"], {"reason": reason, "t": None})
             self.assertEqual(self.blocked("app"), {})
         self.installed("os", B, api=16)
         self.assertIsNone(self.entry("app")["available"]["blocked"])
@@ -261,7 +261,7 @@ class PlannerTest(ComponentBase):
         for meta, reason in (({"interface": 2}, "PLANNER_INTERFACE"), ({"files_version": 2}, "PLANNER_DATA")):
             last = self.install("planner", P1, **meta)
             self.assertEqual((last["result"], last["reason"]), ("refused", reason), last)
-            self.assertEqual(self.entry("planner")["available"]["blocked"], {"reason": reason})
+            self.assertEqual(self.entry("planner")["available"]["blocked"], {"reason": reason, "t": None})
         self.assertEqual((self.fake.stops, self.blocked("planner")), (0, {}))
 
     def test_requires_of_the_rootfs(self):
@@ -533,7 +533,7 @@ class InboxTest(ComponentBase):
             json.dump({"bundles": [entry, {**entry, "component": "host"}]}, f)
         self.sign(index, "mowbite-index")
         self.updater.check()
-        self.assertEqual(self.entry("app")["available"]["blocked"], {"reason": "OS_TOO_OLD"})
+        self.assertEqual(self.entry("app")["available"]["blocked"], {"reason": "OS_TOO_OLD", "t": None})
         self.assertTrue(os.path.exists(path))
 
 

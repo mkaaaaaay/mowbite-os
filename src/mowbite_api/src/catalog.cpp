@@ -135,14 +135,19 @@ Field Time(std::string name, std::string text) {
   return Nullable({std::move(name), Type::kInteger, "unix s", true, std::move(text), {}, false, {}, ""});
 }
 
+// The version of a planner or an app; the OS has none besides its revision.
+Field Version() {
+  return Nullable(Text("version", "Its version, null for os"));
+}
+
 Field Revision(std::string name, std::string text) {
   return Nullable(Object(std::move(name), std::move(text),
-                         {Text("revision", "The revision, a commit of MowBite OS"),
-                          Time("date", "When it was built, null when the bundle does not say")}));
+                         {Text("revision", "The revision, a commit of the component"),
+                          Time("date", "When it was built, null when the bundle does not say"), Version()}));
 }
 
 // The components the updater keeps.
-const std::vector<std::string> kComponents = {"os"};
+const std::vector<std::string> kComponents = {"os", "planner", "app"};
 
 Field Component(std::string name = "component") {
   return Text(std::move(name), "The component", true, kComponents);
@@ -152,6 +157,14 @@ Field Component(std::string name = "component") {
 std::vector<Field> Auto(bool required) {
   return {Bool("enabled", "On or off", required), Text("from", "Start of the window, HH:MM local time", required),
           Text("to", "End of the window, HH:MM local time", required)};
+}
+
+// reset_jobs of update.start and update.rollback; the planner waits for the end of the mowing job without it.
+Field ResetJobs() {
+  return Bool("reset_jobs",
+              "planner only (else INVALID): switch without waiting for an unfinished mowing job (JOB_OPEN), which "
+              "then starts its area anew",
+              false);
 }
 
 // The params of update.*: app_version in every call, for min_app of a bundle.
@@ -164,14 +177,14 @@ Field UpdateParams(std::vector<Field> fields, bool required = false) {
 Field Available() {
   return Nullable(Object(
       "available", "The newest revision found that is newer than what runs, null without one",
-      {Text("revision", "The revision"), Time("date", "When it was built"),
+      {Text("revision", "The revision"), Time("date", "When it was built"), Version(),
        Nullable(Text("min_app", "The oldest app it works with")),
        Nullable(Object("blocked",
                        "Not installed by itself: why, the result of the attempt that ended so and when; update.start "
                        "of this revision tries it anyway",
                        {Text("reason", "A reason of UPDATE in x-reasons, never BLOCKED"),
                         Text("result", "How the attempt ended", false, {"rolled_back", "failed"}),
-                        Integer("t", "When, unix s")}))}));
+                        Time("t", "When, null for a reason reckoned from the installed OS (kept nowhere)")}))}));
 }
 
 // update.status, the same as retained on mowbite/update/status.
@@ -189,7 +202,13 @@ Field UpdateStatus() {
              Revision("previous", "Where update.rollback goes, null without one"),
              Time("installed_at", "When what runs was installed"),
              Integer("crashes_since_install", "Ends of the container since then"),
-             Bool("auto", "Whether updates install by themselves at night")}),
+             Bool("auto", "Whether updates install by themselves at night"),
+             Text("source", "planner and app: own while their own installation is used, else bundled (the one the OS "
+                  "brings along)", false, {"own", "bundled"}),
+             Nullable(Object("own_skipped",
+                             "planner and app: their own installation the OS does not use, null without one",
+                             {Text("revision", "The revision"),
+                              Text("reason", "Why: a reason of UPDATE in x-reasons")}, false))}),
        Object("auto", "The automatic update", Auto(true)),
        Nullable(Object(
            "last", "The result of the last update or rollback, null before the first",
@@ -644,18 +663,20 @@ const std::vector<Method>& Methods() {
        "What the updater does and what is there; the same retained on mowbite/update/status", UpdateParams({}),
        UpdateStatus(), kHostOffered},
       {"update.start", "mowbite_host",
-       "Installs the newest available revision of the component or the one given, one update at a time; it waits for "
-       "the gate (IDLE on the charging contacts, the hold granted) for up to 30 min. Refused (UPDATE_REFUSED) when "
-       "none is there or one runs",
+       "Installs the newest available revision of the component or the one given, one update at a time; os and "
+       "planner wait for the gate (IDLE on the charging contacts, the hold granted) for up to 30 min, the planner also "
+       "for the end of the mowing job, the app for none. Refused (UPDATE_REFUSED) when none is there or one runs",
        UpdateParams({Component(),
-                     Text("revision", "A revision of available or found by update.check; the newest without", false)},
+                     Text("revision", "A revision of available or found by update.check; the newest without", false),
+                     ResetJobs()},
                     true),
        UpdateStatus(), kHostOffered},
       {"update.abort", "mowbite_host", "Stops the update before its switch; after it the health check decides",
        UpdateParams({}), UpdateStatus(), kHostOffered},
       {"update.rollback", "mowbite_host",
-       "Goes back to the previous installation through the same gate; that revision is then not installed by itself",
-       UpdateParams({Component()}, true), UpdateStatus(), kHostOffered},
+       "Goes back to the previous installation through the same gate, planner and app without an own one before to "
+       "the bundled one; that revision is then not installed by itself. NO_PREVIOUS on the bundled one",
+       UpdateParams({Component(), ResetJobs()}, true), UpdateStatus(), kHostOffered},
       {"update.check", "mowbite_host", "Looks for bundles in the origins now (the inbox), as it does every 6 h",
        UpdateParams({}), UpdateStatus(), kHostOffered},
       {"update.set_auto", "mowbite_host",

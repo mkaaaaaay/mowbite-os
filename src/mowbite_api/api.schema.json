@@ -6252,8 +6252,12 @@
                         "type": "string"
                       },
                       "t": {
-                        "description": "When, unix s",
-                        "type": "integer"
+                        "description": "When, null for a reason reckoned from the installed OS (kept nowhere)",
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "x-unit": "unix s"
                       }
                     },
                     "required": [
@@ -6283,11 +6287,19 @@
                   "revision": {
                     "description": "The revision",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
                   "date",
+                  "version",
                   "min_app",
                   "blocked"
                 ],
@@ -6303,7 +6315,9 @@
               "id": {
                 "description": "The component",
                 "enum": [
-                  "os"
+                  "os",
+                  "planner",
+                  "app"
                 ],
                 "type": "string"
               },
@@ -6319,6 +6333,28 @@
                 "description": "Its name to show",
                 "type": "string"
               },
+              "own_skipped": {
+                "additionalProperties": false,
+                "description": "planner and app: their own installation the OS does not use, null without one",
+                "properties": {
+                  "reason": {
+                    "description": "Why: a reason of UPDATE in x-reasons",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "description": "The revision",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "reason"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
               "previous": {
                 "additionalProperties": false,
                 "description": "Where update.rollback goes, null without one",
@@ -6332,13 +6368,21 @@
                     "x-unit": "unix s"
                   },
                   "revision": {
-                    "description": "The revision, a commit of MowBite OS",
+                    "description": "The revision, a commit of the component",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
-                  "date"
+                  "date",
+                  "version"
                 ],
                 "type": [
                   "object",
@@ -6358,18 +6402,34 @@
                     "x-unit": "unix s"
                   },
                   "revision": {
-                    "description": "The revision, a commit of MowBite OS",
+                    "description": "The revision, a commit of the component",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
-                  "date"
+                  "date",
+                  "version"
                 ],
                 "type": [
                   "object",
                   "null"
                 ]
+              },
+              "source": {
+                "description": "planner and app: own while their own installation is used, else bundled (the one the OS brings along)",
+                "enum": [
+                  "own",
+                  "bundled"
+                ],
+                "type": "string"
               }
             },
             "required": [
@@ -6557,8 +6617,12 @@
                         "type": "string"
                       },
                       "t": {
-                        "description": "When, unix s",
-                        "type": "integer"
+                        "description": "When, null for a reason reckoned from the installed OS (kept nowhere)",
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "x-unit": "unix s"
                       }
                     },
                     "required": [
@@ -6588,11 +6652,19 @@
                   "revision": {
                     "description": "The revision",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
                   "date",
+                  "version",
                   "min_app",
                   "blocked"
                 ],
@@ -6608,7 +6680,9 @@
               "id": {
                 "description": "The component",
                 "enum": [
-                  "os"
+                  "os",
+                  "planner",
+                  "app"
                 ],
                 "type": "string"
               },
@@ -6624,6 +6698,28 @@
                 "description": "Its name to show",
                 "type": "string"
               },
+              "own_skipped": {
+                "additionalProperties": false,
+                "description": "planner and app: their own installation the OS does not use, null without one",
+                "properties": {
+                  "reason": {
+                    "description": "Why: a reason of UPDATE in x-reasons",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "description": "The revision",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "reason"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
               "previous": {
                 "additionalProperties": false,
                 "description": "Where update.rollback goes, null without one",
@@ -6637,13 +6733,21 @@
                     "x-unit": "unix s"
                   },
                   "revision": {
-                    "description": "The revision, a commit of MowBite OS",
+                    "description": "The revision, a commit of the component",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
-                  "date"
+                  "date",
+                  "version"
                 ],
                 "type": [
                   "object",
@@ -6663,18 +6767,34 @@
                     "x-unit": "unix s"
                   },
                   "revision": {
-                    "description": "The revision, a commit of MowBite OS",
+                    "description": "The revision, a commit of the component",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
-                  "date"
+                  "date",
+                  "version"
                 ],
                 "type": [
                   "object",
                   "null"
                 ]
+              },
+              "source": {
+                "description": "planner and app: own while their own installation is used, else bundled (the one the OS brings along)",
+                "enum": [
+                  "own",
+                  "bundled"
+                ],
+                "type": "string"
               }
             },
             "required": [
@@ -6795,9 +6915,15 @@
         "component": {
           "description": "The component",
           "enum": [
-            "os"
+            "os",
+            "planner",
+            "app"
           ],
           "type": "string"
+        },
+        "reset_jobs": {
+          "description": "planner only (else INVALID): switch without waiting for an unfinished mowing job (JOB_OPEN), which then starts its area anew",
+          "type": "boolean"
         }
       },
       "required": [
@@ -6871,8 +6997,12 @@
                         "type": "string"
                       },
                       "t": {
-                        "description": "When, unix s",
-                        "type": "integer"
+                        "description": "When, null for a reason reckoned from the installed OS (kept nowhere)",
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "x-unit": "unix s"
                       }
                     },
                     "required": [
@@ -6902,11 +7032,19 @@
                   "revision": {
                     "description": "The revision",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
                   "date",
+                  "version",
                   "min_app",
                   "blocked"
                 ],
@@ -6922,7 +7060,9 @@
               "id": {
                 "description": "The component",
                 "enum": [
-                  "os"
+                  "os",
+                  "planner",
+                  "app"
                 ],
                 "type": "string"
               },
@@ -6938,6 +7078,28 @@
                 "description": "Its name to show",
                 "type": "string"
               },
+              "own_skipped": {
+                "additionalProperties": false,
+                "description": "planner and app: their own installation the OS does not use, null without one",
+                "properties": {
+                  "reason": {
+                    "description": "Why: a reason of UPDATE in x-reasons",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "description": "The revision",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "reason"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
               "previous": {
                 "additionalProperties": false,
                 "description": "Where update.rollback goes, null without one",
@@ -6951,13 +7113,21 @@
                     "x-unit": "unix s"
                   },
                   "revision": {
-                    "description": "The revision, a commit of MowBite OS",
+                    "description": "The revision, a commit of the component",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
-                  "date"
+                  "date",
+                  "version"
                 ],
                 "type": [
                   "object",
@@ -6977,18 +7147,34 @@
                     "x-unit": "unix s"
                   },
                   "revision": {
-                    "description": "The revision, a commit of MowBite OS",
+                    "description": "The revision, a commit of the component",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
-                  "date"
+                  "date",
+                  "version"
                 ],
                 "type": [
                   "object",
                   "null"
                 ]
+              },
+              "source": {
+                "description": "planner and app: own while their own installation is used, else bundled (the one the OS brings along)",
+                "enum": [
+                  "own",
+                  "bundled"
+                ],
+                "type": "string"
               }
             },
             "required": [
@@ -7188,8 +7374,12 @@
                         "type": "string"
                       },
                       "t": {
-                        "description": "When, unix s",
-                        "type": "integer"
+                        "description": "When, null for a reason reckoned from the installed OS (kept nowhere)",
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "x-unit": "unix s"
                       }
                     },
                     "required": [
@@ -7219,11 +7409,19 @@
                   "revision": {
                     "description": "The revision",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
                   "date",
+                  "version",
                   "min_app",
                   "blocked"
                 ],
@@ -7239,7 +7437,9 @@
               "id": {
                 "description": "The component",
                 "enum": [
-                  "os"
+                  "os",
+                  "planner",
+                  "app"
                 ],
                 "type": "string"
               },
@@ -7255,6 +7455,28 @@
                 "description": "Its name to show",
                 "type": "string"
               },
+              "own_skipped": {
+                "additionalProperties": false,
+                "description": "planner and app: their own installation the OS does not use, null without one",
+                "properties": {
+                  "reason": {
+                    "description": "Why: a reason of UPDATE in x-reasons",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "description": "The revision",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "reason"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
               "previous": {
                 "additionalProperties": false,
                 "description": "Where update.rollback goes, null without one",
@@ -7268,13 +7490,21 @@
                     "x-unit": "unix s"
                   },
                   "revision": {
-                    "description": "The revision, a commit of MowBite OS",
+                    "description": "The revision, a commit of the component",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
-                  "date"
+                  "date",
+                  "version"
                 ],
                 "type": [
                   "object",
@@ -7294,18 +7524,34 @@
                     "x-unit": "unix s"
                   },
                   "revision": {
-                    "description": "The revision, a commit of MowBite OS",
+                    "description": "The revision, a commit of the component",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
-                  "date"
+                  "date",
+                  "version"
                 ],
                 "type": [
                   "object",
                   "null"
                 ]
+              },
+              "source": {
+                "description": "planner and app: own while their own installation is used, else bundled (the one the OS brings along)",
+                "enum": [
+                  "own",
+                  "bundled"
+                ],
+                "type": "string"
               }
             },
             "required": [
@@ -7426,9 +7672,15 @@
         "component": {
           "description": "The component",
           "enum": [
-            "os"
+            "os",
+            "planner",
+            "app"
           ],
           "type": "string"
+        },
+        "reset_jobs": {
+          "description": "planner only (else INVALID): switch without waiting for an unfinished mowing job (JOB_OPEN), which then starts its area anew",
+          "type": "boolean"
         },
         "revision": {
           "description": "A revision of available or found by update.check; the newest without",
@@ -7506,8 +7758,12 @@
                         "type": "string"
                       },
                       "t": {
-                        "description": "When, unix s",
-                        "type": "integer"
+                        "description": "When, null for a reason reckoned from the installed OS (kept nowhere)",
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "x-unit": "unix s"
                       }
                     },
                     "required": [
@@ -7537,11 +7793,19 @@
                   "revision": {
                     "description": "The revision",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
                   "date",
+                  "version",
                   "min_app",
                   "blocked"
                 ],
@@ -7557,7 +7821,9 @@
               "id": {
                 "description": "The component",
                 "enum": [
-                  "os"
+                  "os",
+                  "planner",
+                  "app"
                 ],
                 "type": "string"
               },
@@ -7573,6 +7839,28 @@
                 "description": "Its name to show",
                 "type": "string"
               },
+              "own_skipped": {
+                "additionalProperties": false,
+                "description": "planner and app: their own installation the OS does not use, null without one",
+                "properties": {
+                  "reason": {
+                    "description": "Why: a reason of UPDATE in x-reasons",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "description": "The revision",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "reason"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
               "previous": {
                 "additionalProperties": false,
                 "description": "Where update.rollback goes, null without one",
@@ -7586,13 +7874,21 @@
                     "x-unit": "unix s"
                   },
                   "revision": {
-                    "description": "The revision, a commit of MowBite OS",
+                    "description": "The revision, a commit of the component",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
-                  "date"
+                  "date",
+                  "version"
                 ],
                 "type": [
                   "object",
@@ -7612,18 +7908,34 @@
                     "x-unit": "unix s"
                   },
                   "revision": {
-                    "description": "The revision, a commit of MowBite OS",
+                    "description": "The revision, a commit of the component",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
-                  "date"
+                  "date",
+                  "version"
                 ],
                 "type": [
                   "object",
                   "null"
                 ]
+              },
+              "source": {
+                "description": "planner and app: own while their own installation is used, else bundled (the one the OS brings along)",
+                "enum": [
+                  "own",
+                  "bundled"
+                ],
+                "type": "string"
               }
             },
             "required": [
@@ -7811,8 +8123,12 @@
                         "type": "string"
                       },
                       "t": {
-                        "description": "When, unix s",
-                        "type": "integer"
+                        "description": "When, null for a reason reckoned from the installed OS (kept nowhere)",
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "x-unit": "unix s"
                       }
                     },
                     "required": [
@@ -7842,11 +8158,19 @@
                   "revision": {
                     "description": "The revision",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
                   "date",
+                  "version",
                   "min_app",
                   "blocked"
                 ],
@@ -7862,7 +8186,9 @@
               "id": {
                 "description": "The component",
                 "enum": [
-                  "os"
+                  "os",
+                  "planner",
+                  "app"
                 ],
                 "type": "string"
               },
@@ -7878,6 +8204,28 @@
                 "description": "Its name to show",
                 "type": "string"
               },
+              "own_skipped": {
+                "additionalProperties": false,
+                "description": "planner and app: their own installation the OS does not use, null without one",
+                "properties": {
+                  "reason": {
+                    "description": "Why: a reason of UPDATE in x-reasons",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "description": "The revision",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "reason"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
               "previous": {
                 "additionalProperties": false,
                 "description": "Where update.rollback goes, null without one",
@@ -7891,13 +8239,21 @@
                     "x-unit": "unix s"
                   },
                   "revision": {
-                    "description": "The revision, a commit of MowBite OS",
+                    "description": "The revision, a commit of the component",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
-                  "date"
+                  "date",
+                  "version"
                 ],
                 "type": [
                   "object",
@@ -7917,18 +8273,34 @@
                     "x-unit": "unix s"
                   },
                   "revision": {
-                    "description": "The revision, a commit of MowBite OS",
+                    "description": "The revision, a commit of the component",
                     "type": "string"
+                  },
+                  "version": {
+                    "description": "Its version, null for os",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "revision",
-                  "date"
+                  "date",
+                  "version"
                 ],
                 "type": [
                   "object",
                   "null"
                 ]
+              },
+              "source": {
+                "description": "planner and app: own while their own installation is used, else bundled (the one the OS brings along)",
+                "enum": [
+                  "own",
+                  "bundled"
+                ],
+                "type": "string"
               }
             },
             "required": [
@@ -8039,11 +8411,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:14",
+  "$id": "urn:mowbite-os:api:15",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry.",
   "title": "MowBite OS app interface",
-  "x-api": 14,
+  "x-api": 15,
   "x-commands": {
     "docking.abort": {
       "action": "mower_logic:docking/abort_docking",
@@ -9013,7 +9385,7 @@
       "result": "#/$defs/update.check.result"
     },
     "update.rollback": {
-      "description": "Goes back to the previous installation through the same gate; that revision is then not installed by itself",
+      "description": "Goes back to the previous installation through the same gate, planner and app without an own one before to the bundled one; that revision is then not installed by itself. NO_PREVIOUS on the bundled one",
       "node": "mowbite_host",
       "offered": "while mowbite/host/status says online",
       "params": "#/$defs/update.rollback.params",
@@ -9027,7 +9399,7 @@
       "result": "#/$defs/update.set_auto.result"
     },
     "update.start": {
-      "description": "Installs the newest available revision of the component or the one given, one update at a time; it waits for the gate (IDLE on the charging contacts, the hold granted) for up to 30 min. Refused (UPDATE_REFUSED) when none is there or one runs",
+      "description": "Installs the newest available revision of the component or the one given, one update at a time; os and planner wait for the gate (IDLE on the charging contacts, the hold granted) for up to 30 min, the planner also for the end of the mowing job, the app for none. Refused (UPDATE_REFUSED) when none is there or one runs",
       "node": "mowbite_host",
       "offered": "while mowbite/host/status says online",
       "params": "#/$defs/update.start.params",
@@ -10979,6 +11351,24 @@
       }
     },
     "UPDATE": {
+      "APP_TOO_OLD": {
+        "description": "The app of the bundle is too old for the OS that is installed",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Eine neuere Version der App installieren.",
+            "help": "Diese Version der App ist zu alt für das installierte MowBite OS und wird nicht verwendet.",
+            "name": "App zu alt"
+          },
+          "en": {
+            "fix": "Install a newer version of the app.",
+            "help": "This version of the app is too old for the MowBite OS that is installed and is not used.",
+            "name": "App too old"
+          }
+        }
+      },
       "BAD_BUNDLE": {
         "description": "The update file is damaged or not what its origin names",
         "fields": {},
@@ -11143,6 +11533,24 @@
           }
         }
       },
+      "JOB_OPEN": {
+        "description": "A mowing job is unfinished; the planner waits for its end unless reset_jobs",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Den Auftrag zu Ende mähen oder zurücksetzen, oder das Update mit Zurücksetzen der Aufträge starten.",
+            "help": "Das Update des Planers wartet, bis der begonnene Mähauftrag fertig oder zurückgesetzt ist.",
+            "name": "Auftrag offen"
+          },
+          "en": {
+            "fix": "Finish or reset the job, or start the update with resetting the jobs.",
+            "help": "The planner update waits until the started mowing job is finished or reset.",
+            "name": "Job open"
+          }
+        }
+      },
       "KERNEL_CRASH": {
         "description": "The kernel of the mower crashed; it holds the mower in every state",
         "fields": {},
@@ -11230,6 +11638,60 @@
             "fix": "To go back, use Back to the version before.",
             "help": "This update is not newer than the running version and is not installed.",
             "name": "Not newer"
+          }
+        }
+      },
+      "OS_TOO_OLD": {
+        "description": "The app of the bundle needs a newer OS than the one installed",
+        "fields": {},
+        "resume": "user",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Zuerst MowBite OS aktualisieren.",
+            "help": "Diese Version der App braucht ein neueres MowBite OS und wird erst danach verwendet.",
+            "name": "MowBite OS zu alt"
+          },
+          "en": {
+            "fix": "Update MowBite OS first.",
+            "help": "This version of the app needs a newer MowBite OS and is only used after that.",
+            "name": "MowBite OS too old"
+          }
+        }
+      },
+      "PLANNER_DATA": {
+        "description": "The planner of the bundle keeps its files in another version than the OS installed reads",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Eine passende Version von Planer oder MowBite OS installieren.",
+            "help": "Diese Version des Planers speichert ihre Daten anders, als das installierte MowBite OS sie liest, und wird nicht verwendet.",
+            "name": "Planer-Daten passen nicht"
+          },
+          "en": {
+            "fix": "Install a matching version of the planner or of MowBite OS.",
+            "help": "This version of the planner stores its data differently than the MowBite OS that is installed reads it and is not used.",
+            "name": "Planner data doesn't match"
+          }
+        }
+      },
+      "PLANNER_INTERFACE": {
+        "description": "The planner of the bundle speaks another interface than the OS installed",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Eine passende Version von Planer oder MowBite OS installieren.",
+            "help": "Diese Version des Planers spricht eine andere Schnittstelle als das installierte MowBite OS und wird nicht verwendet.",
+            "name": "Planer passt nicht"
+          },
+          "en": {
+            "fix": "Install a matching version of the planner or of MowBite OS.",
+            "help": "This version of the planner speaks another interface than the MowBite OS that is installed and is not used.",
+            "name": "Planner doesn't match"
           }
         }
       },

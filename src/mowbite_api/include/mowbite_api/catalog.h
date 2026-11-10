@@ -12,7 +12,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 14;
+constexpr int kApi = 15;
 
 // Who owns the names of the interface file; readers keep a copy of it.
 constexpr char kOwner[] = "mowbite-os";

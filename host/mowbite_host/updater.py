@@ -147,7 +147,7 @@ class Updater:
         if blocked is None:
             # Not kept: after an update of the OS it may fit.
             why = compat.reason(component, best, self._running_meta())
-            blocked = {"reason": why} if why else None
+            blocked = {"reason": why, "t": None} if why else None
         return {"revision": best["revision"], "date": best.get("date", best["serial"]), "min_app": best.get("min_app"),
                 "version": best.get("version"), "blocked": blocked}
 
