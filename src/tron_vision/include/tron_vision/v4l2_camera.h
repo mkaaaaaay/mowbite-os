@@ -3,12 +3,23 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "tron_vision/exposure.h"
 
 namespace tron_vision {
+
+// The PIDs of other processes that have a device open.
+using ProcessesUsing = std::function<std::vector<int>(const std::string&)>;
+
+// /dev/<node> of the one directory under `sysfs_root` that `match` accepts; empty if none or more than one does.
+std::string UniqueNode(const std::string& sysfs_root, const std::function<bool(const std::filesystem::path&)>& match);
+
+// False with the error while another process has `device` open; an empty `processes_using` checks nothing.
+bool DeviceFree(const ProcessesUsing& processes_using, const std::string& device, std::string& error);
 
 // /dev/v4l-subdevN whose sysfs name starts with `name_prefix`, found by reading the names under `sysfs_root`
 // (normally /sys/class/video4linux) only; empty if none or more than one match. No device is opened.
@@ -122,7 +133,6 @@ class V4l2Capture {
   bool Fail(std::string message, std::string& error);
   // QBUF of a buffer the driver gave back or that was never queued.
   bool Queue(uint32_t index);
-  int BufferType() const;
 
   struct Buffer {
     void* data = nullptr;
@@ -133,7 +143,6 @@ class V4l2Capture {
   int fd_ = -1;
   bool mplane_ = true;
   // Buffers were requested and have to be freed.
-  bool requested_ = false;
   bool streaming_ = false;
   int held_ = -1;
   CaptureFormat format_;

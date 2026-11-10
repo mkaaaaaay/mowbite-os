@@ -338,11 +338,9 @@ tron_vision:
     white_balance_inference: false
     # Vertical blanking of the sensor in lines; 0 leaves its 30 fps.
     vertical_blanking: 0
-    # Pictures on camera/oa_left/jpeg, only while someone subscribes: at most this many per second (0.5 to 5) and KB
-    # each; the JPEG quality steps down to keep the size.
-    jpeg_max_rate: 5.0
-    jpeg_max_kb: 100
-    # score_threshold, max_rss_mb and crash_dir: the defaults of the node.
+    # Pictures on camera/oa_left/jpeg only while someone subscribes, at most jpeg_max_rate per second (0.5 to 5) and
+    # jpeg_max_kb each; the JPEG quality steps down to keep the size.
+    # jpeg_max_rate, jpeg_max_kb, score_threshold, max_rss_mb and crash_dir: the defaults of the node.
 
 mowbite_bridge:
   ros__parameters:

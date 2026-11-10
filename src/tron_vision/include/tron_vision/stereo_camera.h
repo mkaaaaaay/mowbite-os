@@ -2,7 +2,6 @@
 #define TRON_VISION_STEREO_CAMERA_H
 
 #include <cstdint>
-#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,7 +27,7 @@ struct StereoCameraConfig {
   uint32_t height = 480;
   uint32_t buffers = 4;
   // Other processes that have a device open; Open refuses the node while one does. Empty: no check.
-  std::function<std::vector<int>(const std::string&)> processes_using;
+  ProcessesUsing processes_using;
 };
 
 class TronStereoCamera : public FrameSource {

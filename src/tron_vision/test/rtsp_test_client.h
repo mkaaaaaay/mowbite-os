@@ -49,6 +49,13 @@ class Client {
   mutable bool sent_ = true;
 };
 
+// The session id of a SETUP answer; empty without one.
+inline std::string SessionOf(const std::string& setup) {
+  const size_t at = setup.find("Session: ");
+  if (at == std::string::npos) return "";
+  return setup.substr(at + 9, setup.find(';', at) - at - 9);
+}
+
 }  // namespace tron_vision::test
 
 #endif  // TRON_VISION_RTSP_TEST_CLIENT_H

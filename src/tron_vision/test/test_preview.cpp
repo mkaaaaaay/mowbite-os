@@ -9,16 +9,6 @@
 namespace tron_vision {
 namespace {
 
-Nv12View View(const test::Nv12Frame& f) {
-  Nv12View v;
-  v.y = f.data.data();
-  v.uv = f.data.data() + static_cast<size_t>(f.width) * f.height;
-  v.width = f.width;
-  v.height = f.height;
-  v.stride = f.width;
-  return v;
-}
-
 // Width and height read back from a JPEG; 0 if it does not decode.
 std::pair<int, int> JpegSize(const std::vector<uint8_t>& jpeg) {
   tjhandle h = tjInitDecompress();
@@ -51,7 +41,7 @@ TEST(Preview, JpegOfTheScaledFrame) {
   test::Nv12Frame frame(1920, 1080, 120, 110, 150);
   Preview preview(PreviewConfig{});
   std::string error;
-  ASSERT_TRUE(preview.Make(View(frame), ColorGains{}, {{0, 0.9F, 300, 300, 900, 900}}, 10.0, error)) << error;
+  ASSERT_TRUE(preview.Make(test::View(frame), ColorGains{}, {{0, 0.9F, 300, 300, 900, 900}}, 10.0, error)) << error;
   EXPECT_EQ(preview.Count(), 1U);
   EXPECT_EQ(preview.Width(), 640U);
   EXPECT_EQ(preview.Height(), 360U);
@@ -67,7 +57,7 @@ TEST(Preview, AtMostTheConfiguredRate) {
   std::string error;
   int made = 0;
   for (double t = 0.0; t < 2.0; t += 1.0 / 30.0) {
-    if (preview.Due(t) && preview.Make(View(frame), ColorGains{}, {}, t, error)) made++;
+    if (preview.Due(t) && preview.Make(test::View(frame), ColorGains{}, {}, t, error)) made++;
   }
   EXPECT_GE(made, 9);
   EXPECT_LE(made, 10);
@@ -75,13 +65,13 @@ TEST(Preview, AtMostTheConfiguredRate) {
   Preview capped(config);
   made = 0;
   for (double t = 0.0; t < 2.0; t += 1.0 / 30.0) {
-    if (capped.Due(t) && capped.Make(View(frame), ColorGains{}, {}, t, error)) made++;
+    if (capped.Due(t) && capped.Make(test::View(frame), ColorGains{}, {}, t, error)) made++;
   }
   EXPECT_LE(made, 10);
   // After a pause one picture, then the rate again.
   made = 0;
   for (double t = 10.0; t < 10.9; t += 1.0 / 30.0) {
-    if (capped.Due(t) && capped.Make(View(frame), ColorGains{}, {}, t, error)) made++;
+    if (capped.Due(t) && capped.Make(test::View(frame), ColorGains{}, {}, t, error)) made++;
   }
   EXPECT_LE(made, 5);
 }
@@ -94,7 +84,7 @@ TEST(Preview, QualityStepsDownToKeepTheLimit) {
   config.max_bytes = 60 * 1024;
   Preview preview(config);
   std::string error;
-  ASSERT_TRUE(preview.Make(View(frame), ColorGains{}, {}, 0.0, error)) << error;
+  ASSERT_TRUE(preview.Make(test::View(frame), ColorGains{}, {}, 0.0, error)) << error;
   EXPECT_LT(preview.Quality(), config.quality);
   if (preview.Count() == 1) {
     EXPECT_LE(preview.Jpeg().size(), config.max_bytes);
@@ -103,7 +93,7 @@ TEST(Preview, QualityStepsDownToKeepTheLimit) {
   // Even the lowest quality is too big: no picture, the last one stays.
   config.max_bytes = 1000;
   Preview tiny(config);
-  ASSERT_TRUE(tiny.Make(View(frame), ColorGains{}, {}, 0.0, error)) << error;
+  ASSERT_TRUE(tiny.Make(test::View(frame), ColorGains{}, {}, 0.0, error)) << error;
   EXPECT_EQ(tiny.Count(), 0U);
   EXPECT_EQ(tiny.Quality(), config.min_quality);
 }
@@ -117,9 +107,9 @@ TEST(Preview, QualityComesBackWithRoom) {
   for (uint8_t& b : noisy.data) b = static_cast<uint8_t>(noise());
   config.max_bytes = 60 * 1024;
   Preview limited(config);
-  ASSERT_TRUE(limited.Make(View(noisy), ColorGains{}, {}, 0.0, error));
+  ASSERT_TRUE(limited.Make(test::View(noisy), ColorGains{}, {}, 0.0, error));
   const int low = limited.Quality();
-  for (int i = 1; i <= 20; i++) ASSERT_TRUE(limited.Make(View(flat), ColorGains{}, {}, i, error));
+  for (int i = 1; i <= 20; i++) ASSERT_TRUE(limited.Make(test::View(flat), ColorGains{}, {}, i, error));
   EXPECT_GT(limited.Quality(), low);
   EXPECT_EQ(limited.Quality(), config.quality);
 }

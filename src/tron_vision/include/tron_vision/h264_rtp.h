@@ -63,9 +63,6 @@ class RtpPacketizer {
   // The packets of one access unit: all with `timestamp`, the last with the marker bit.
   void Packetize(const std::vector<NalUnit>& nals, uint32_t timestamp, std::vector<std::vector<uint8_t>>& packets);
 
-  uint32_t Ssrc() const {
-    return ssrc_;
-  }
   // Sequence number of the next packet.
   uint16_t Sequence() const {
     return sequence_;

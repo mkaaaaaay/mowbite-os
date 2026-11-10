@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include "tron_vision/frame_convert.h"
+
 namespace tron_vision::test {
 
 // Directory removed with everything in it at the end of the test.
@@ -52,6 +54,16 @@ struct Nv12Frame {
   uint32_t height;
   std::vector<uint8_t> data;
 };
+
+inline Nv12View View(const Nv12Frame& f) {
+  Nv12View v;
+  v.y = f.data.data();
+  v.uv = f.data.data() + static_cast<size_t>(f.width) * f.height;
+  v.width = f.width;
+  v.height = f.height;
+  v.stride = f.width;
+  return v;
+}
 
 inline std::string Lines(size_t n) {
   std::string s;

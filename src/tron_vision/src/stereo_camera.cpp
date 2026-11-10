@@ -7,20 +7,12 @@
 namespace tron_vision {
 
 std::string FindVideoNode(const std::string& sysfs_root, const std::string& device, const std::string& name) {
-  std::string found;
-  int matches = 0;
-  std::error_code ec;
-  for (const auto& entry : std::filesystem::directory_iterator(sysfs_root, ec)) {
-    const std::string node = entry.path().filename().string();
-    if (node.rfind("video", 0) != 0 || FirstLine(sysfs_root + "/" + node + "/name") != name) continue;
+  return UniqueNode(sysfs_root, [&device, &name](const std::filesystem::path& dir) {
+    if (dir.filename().string().rfind("video", 0) != 0 || FirstLine((dir / "name").string()) != name) return false;
     std::error_code link_error;
-    const std::filesystem::path owner = std::filesystem::read_symlink(entry.path() / "device", link_error);
-    if (!link_error && owner.filename() == device) {
-      found = "/dev/" + node;
-      matches++;
-    }
-  }
-  return matches == 1 ? found : "";
+    const std::filesystem::path owner = std::filesystem::read_symlink(dir / "device", link_error);
+    return !link_error && owner.filename() == device;
+  });
 }
 
 bool TronStereoCamera::Open(std::string& error) {
@@ -30,12 +22,8 @@ bool TronStereoCamera::Open(std::string& error) {
     error = "no single video node " + config_.stream_name + " of " + config_.capture_device;
     return false;
   }
-  const std::vector<int> users = config_.processes_using ? config_.processes_using(node) : std::vector<int>{};
-  if (!users.empty()) {
-    error = node + " is open in process " + std::to_string(users.front());
-    return false;
-  }
-  return capture_.Open(node, {config_.width, config_.height, PixelFormat::kYuyv, config_.buffers, true}, error);
+  return DeviceFree(config_.processes_using, node, error) &&
+         capture_.Open(node, {config_.width, config_.height, PixelFormat::kYuyv, config_.buffers, true}, error);
 }
 
 bool TronStereoCamera::Start(std::string& error) {

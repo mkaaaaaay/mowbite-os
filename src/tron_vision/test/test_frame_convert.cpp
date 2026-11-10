@@ -6,16 +6,6 @@
 namespace tron_vision {
 namespace {
 
-Nv12View View(const test::Nv12Frame& f) {
-  Nv12View v;
-  v.y = f.data.data();
-  v.uv = f.data.data() + static_cast<size_t>(f.width) * f.height;
-  v.width = f.width;
-  v.height = f.height;
-  v.stride = f.width;
-  return v;
-}
-
 TEST(PlaceFrame, CropTakesTheCenteredThreeByFourPart) {
   const Placement p = PlaceFrame(1920, 1080, Fit::kCrop, 480, 640);
   EXPECT_FLOAT_EQ(p.src_x, 555.0F);
@@ -57,7 +47,7 @@ TEST(ConvertFrame, GrayStaysGrayAndBarsArePadGray) {
   const test::Nv12Frame f(64, 36, 126, 128, 128);
   const Placement p = PlaceFrame(f.width, f.height, Fit::kPad, 48, 64);
   std::vector<uint8_t> rgb;
-  ConvertFrame(View(f), p, ColorGains{}, false, 48, 64, rgb);
+  ConvertFrame(test::View(f), p, ColorGains{}, false, 48, 64, rgb);
   ASSERT_EQ(rgb.size(), 48U * 64U * 3U);
   EXPECT_EQ(rgb[0], 114);  // bar above
   const size_t mid = (32 * 48 + 24) * 3;
@@ -71,11 +61,11 @@ TEST(ConvertFrame, ColorsAndSwap) {
   const test::Nv12Frame f(32, 32, 81, 90, 240);
   const Placement p = PlaceFrame(f.width, f.height, Fit::kCrop, 24, 32);
   std::vector<uint8_t> rgb;
-  ConvertFrame(View(f), p, ColorGains{}, false, 24, 32, rgb);
+  ConvertFrame(test::View(f), p, ColorGains{}, false, 24, 32, rgb);
   EXPECT_GT(rgb[0], 240);
   EXPECT_LT(rgb[1], 20);
   EXPECT_LT(rgb[2], 20);
-  ConvertFrame(View(f), p, ColorGains{}, true, 24, 32, rgb);
+  ConvertFrame(test::View(f), p, ColorGains{}, true, 24, 32, rgb);
   EXPECT_LT(rgb[0], 20);
   EXPECT_GT(rgb[2], 240);
 }
@@ -90,7 +80,7 @@ TEST(ConvertFrame, BilinearLuma) {
   p.dst_w = 2;
   p.dst_h = 1;
   std::vector<uint8_t> rgb;
-  ConvertFrame(View(f), p, ColorGains{}, false, 2, 1, rgb);
+  ConvertFrame(test::View(f), p, ColorGains{}, false, 2, 1, rgb);
   // Output column 0 samples source x 0.5, column 1 x 2.5.
   EXPECT_LT(rgb[0], 5);
   EXPECT_GT(rgb[3], 250);
@@ -114,16 +104,16 @@ TEST(GrayWorld, NeutralForGrayWarmForWarm) {
 TEST(GrayWorld, AppliedGainsNeutralizeTheCast) {
   const test::Nv12Frame f(32, 32, 77, 113, 132);
   const Placement p = PlaceFrame(f.width, f.height, Fit::kCrop, 24, 32);
-  const ColorGains gains = GrayWorld(MeasureFrame(View(f), p));
+  const ColorGains gains = GrayWorld(MeasureFrame(test::View(f), p));
   std::vector<uint8_t> rgb;
-  ConvertFrame(View(f), p, gains, false, 24, 32, rgb);
+  ConvertFrame(test::View(f), p, gains, false, 24, 32, rgb);
   EXPECT_NEAR(rgb[0], rgb[1], 2);
   EXPECT_NEAR(rgb[2], rgb[1], 2);
 }
 
 TEST(MeasureFrame, MeansOverTheRegion) {
   test::Nv12Frame f(64, 32, 50, 100, 150);
-  const FrameStats s = MeasureFrame(View(f), PlaceFrame(64, 32, Fit::kCrop, 3, 4));
+  const FrameStats s = MeasureFrame(test::View(f), PlaceFrame(64, 32, Fit::kCrop, 3, 4));
   EXPECT_FLOAT_EQ(s.y, 50.0F);
   EXPECT_FLOAT_EQ(s.u, 100.0F);
   EXPECT_FLOAT_EQ(s.v, 150.0F);

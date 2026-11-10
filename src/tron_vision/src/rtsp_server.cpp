@@ -1,7 +1,6 @@
 #include "tron_vision/rtsp_server.h"
 
 #include <arpa/inet.h>
-#include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -136,7 +135,6 @@ void RtspServer::DropClient() {
   CloseFd(client_fd_);
   input_.clear();
   session_.clear();
-  set_up_ = false;
   playing_ = false;
 }
 
@@ -308,14 +306,13 @@ void RtspServer::Handle(const Request& request) {
     }
     rtp_channel_ = channel;
     if (session_.empty()) session_ = std::to_string(++session_counter_);
-    set_up_ = true;
     Reply(request, 200,
           "Transport: RTP/AVP/TCP;unicast;interleaved=" + std::to_string(channel) + "-" + std::to_string(channel + 1) +
               "\r\nSession: " + session_ + ";timeout=" + std::to_string(static_cast<int>(config_.idle_timeout_s)) +
               "\r\n");
     return;
   }
-  if (!set_up_) {
+  if (session_.empty()) {
     Reply(request, 455);
     return;
   }

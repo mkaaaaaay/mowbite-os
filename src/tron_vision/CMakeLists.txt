@@ -44,9 +44,7 @@ install(TARGETS tron_vision_core
 
 # With the headers of the media library at hand (TRON_VISION_MPP_INCLUDE as option or in the environment), the
 # declarations in mpp_abi.h are compared with them, also in the image build.
-if(NOT TRON_VISION_MPP_INCLUDE)
-  set(TRON_VISION_MPP_INCLUDE "$ENV{TRON_VISION_MPP_INCLUDE}")
-endif()
+find_path(TRON_VISION_MPP_INCLUDE rk_mpi.h HINTS ENV TRON_VISION_MPP_INCLUDE NO_DEFAULT_PATH)
 if(TRON_VISION_MPP_INCLUDE)
   add_library(tron_vision_check_mpp_abi OBJECT test/check_mpp_abi.cpp)
   target_include_directories(tron_vision_check_mpp_abi PRIVATE include)

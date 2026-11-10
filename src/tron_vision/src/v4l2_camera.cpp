@@ -52,10 +52,14 @@ bool ReadControl(int fd, uint32_t id, const char* name, Range& range, std::strin
   return true;
 }
 
+uint32_t BufferType(bool mplane) {
+  return mplane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE;
+}
+
 // A memory-mapped buffer of either buffer type with its single plane; not copyable, the buffer points at the plane.
 struct BufferArg {
   BufferArg(bool mplane, uint32_t index) : mplane(mplane) {
-    buf.type = mplane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.type = BufferType(mplane);
     buf.memory = V4L2_MEMORY_MMAP;
     buf.index = index;
     if (mplane) {
@@ -103,19 +107,30 @@ bool WriteControl(int fd, uint32_t id, int value, const char* name, std::string&
 
 }  // namespace
 
-std::string FindSubdev(const std::string& sysfs_root, const std::string& name_prefix) {
+std::string UniqueNode(const std::string& sysfs_root, const std::function<bool(const std::filesystem::path&)>& match) {
   std::string found;
   int matches = 0;
   std::error_code ec;
   for (const auto& entry : std::filesystem::directory_iterator(sysfs_root, ec)) {
-    const std::string node = entry.path().filename().string();
-    if (node.rfind("v4l-subdev", 0) == 0 &&
-        FirstLine(sysfs_root + "/" + node + "/name").rfind(name_prefix, 0) == 0) {
-      found = "/dev/" + node;
-      matches++;
-    }
+    if (!match(entry.path())) continue;
+    found = "/dev/" + entry.path().filename().string();
+    matches++;
   }
   return matches == 1 ? found : "";
+}
+
+bool DeviceFree(const ProcessesUsing& processes_using, const std::string& device, std::string& error) {
+  const std::vector<int> users = processes_using ? processes_using(device) : std::vector<int>{};
+  if (users.empty()) return true;
+  error = device + " is open in process " + std::to_string(users.front());
+  return false;
+}
+
+std::string FindSubdev(const std::string& sysfs_root, const std::string& name_prefix) {
+  return UniqueNode(sysfs_root, [&name_prefix](const std::filesystem::path& dir) {
+    return dir.filename().string().rfind("v4l-subdev", 0) == 0 &&
+           FirstLine((dir / "name").string()).rfind(name_prefix, 0) == 0;
+  });
 }
 
 std::string NodeName(const std::string& sysfs_root, const std::string& device_path) {
@@ -235,10 +250,6 @@ size_t V4l2Capture::FrameBytes() const {
   return format_.pixel == PixelFormat::kYuyv ? luma : luma * 3 / 2;
 }
 
-int V4l2Capture::BufferType() const {
-  return mplane_ ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE;
-}
-
 bool V4l2Capture::Queue(uint32_t index) {
   BufferArg b(mplane_, index);
   return device_->Ioctl(fd_, VIDIOC_QBUF, &b.buf) == 0;
@@ -262,7 +273,7 @@ bool V4l2Capture::Open(const std::string& device, const CaptureFormat& format, s
   // Bytes per pixel in a line of the first plane.
   const uint32_t pixel_bytes = format.pixel == PixelFormat::kYuyv ? 2 : 1;
   v4l2_format fmt{};
-  fmt.type = static_cast<uint32_t>(BufferType());
+  fmt.type = BufferType(mplane_);
   // What the driver made of the request.
   v4l2_pix_format got{};
   uint32_t planes = 1;
@@ -299,10 +310,9 @@ bool V4l2Capture::Open(const std::string& device, const CaptureFormat& format, s
 
   v4l2_requestbuffers req{};
   req.count = format.buffers;
-  req.type = static_cast<uint32_t>(BufferType());
+  req.type = BufferType(mplane_);
   req.memory = V4L2_MEMORY_MMAP;
   if (device_->Ioctl(fd_, VIDIOC_REQBUFS, &req) < 0 || req.count == 0) return Fail(ErrnoText("request buffers"), error);
-  requested_ = true;
   buffers_.resize(req.count);
   for (uint32_t i = 0; i < req.count; i++) {
     BufferArg b(mplane_, i);
@@ -314,7 +324,7 @@ bool V4l2Capture::Open(const std::string& device, const CaptureFormat& format, s
     if (b.Length() < FrameBytes()) return Fail("buffer smaller than a frame", error);
     if (format.export_buffers) {
       v4l2_exportbuffer exp{};
-      exp.type = static_cast<uint32_t>(BufferType());
+      exp.type = BufferType(mplane_);
       exp.index = i;
       exp.flags = O_CLOEXEC;
       if (device_->Ioctl(fd_, VIDIOC_EXPBUF, &exp) < 0) return Fail(ErrnoText("export buffer"), error);
@@ -326,19 +336,20 @@ bool V4l2Capture::Open(const std::string& device, const CaptureFormat& format, s
 
 void V4l2Capture::Close() {
   Stop();
+  // Buffers come only from a successful request.
+  const bool requested = !buffers_.empty();
   for (Buffer& b : buffers_) {
     if (b.data != nullptr) device_->Unmap(b.data, b.length);
   }
   buffers_.clear();
   for (int fd : exported_) device_->Close(fd);
   exported_.clear();
-  if (requested_) {
+  if (requested) {
     v4l2_requestbuffers req{};
     req.count = 0;
-    req.type = static_cast<uint32_t>(BufferType());
+    req.type = BufferType(mplane_);
     req.memory = V4L2_MEMORY_MMAP;
     device_->Ioctl(fd_, VIDIOC_REQBUFS, &req);
-    requested_ = false;
   }
   if (fd_ >= 0) {
     device_->Close(fd_);
@@ -358,7 +369,7 @@ bool V4l2Capture::Start(std::string& error) {
       return false;
     }
   }
-  int type = BufferType();
+  int type = static_cast<int>(BufferType(mplane_));
   if (device_->Ioctl(fd_, VIDIOC_STREAMON, &type) < 0) {
     error = ErrnoText("stream on");
     return false;
@@ -370,7 +381,7 @@ bool V4l2Capture::Start(std::string& error) {
 void V4l2Capture::Stop() {
   held_ = -1;
   if (!streaming_) return;
-  int type = BufferType();
+  int type = static_cast<int>(BufferType(mplane_));
   device_->Ioctl(fd_, VIDIOC_STREAMOFF, &type);
   streaming_ = false;
 }

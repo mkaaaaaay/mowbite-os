@@ -15,11 +15,7 @@ bool TronCamera::Start(std::string& error) {
     return false;
   }
   for (const std::string& device : {subdev, config_.video_device}) {
-    const std::vector<int> users = config_.processes_using ? config_.processes_using(device) : std::vector<int>{};
-    if (!users.empty()) {
-      error = device + " is open in process " + std::to_string(users.front());
-      return false;
-    }
+    if (!DeviceFree(config_.processes_using, device, error)) return false;
   }
   if (!sensor_.Open(subdev, error)) return false;
   if (!sensor_.SetVerticalBlanking(config_.vertical_blanking, error) || !sensor_.Set(pending_, error) ||

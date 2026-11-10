@@ -60,10 +60,10 @@ RUN --mount=type=bind,from=planer,target=/src/planer \
 ARG PACKAGES="--packages-skip mowbite_sim"
 # Headers of the media library, only for the check of tron_vision against its declarations; empty on amd64.
 COPY --from=mpp /opt/mpp-inc /opt/mpp-inc
+ENV TRON_VISION_MPP_INCLUDE=/opt/mpp-inc
 COPY src /ws/src
 # The FILES_VERSION of the pinned planner has to be the one data_schema.json of mowbite_bridge expects.
 RUN . /opt/ros/$ROS_DISTRO/setup.sh && . /opt/mowbite_planner/setup.sh && cd /ws \
- && if [ -f /opt/mpp-inc/rk_mpi.h ]; then export TRON_VISION_MPP_INCLUDE=/opt/mpp-inc; fi \
  && MAKEFLAGS=-j$BUILD_JOBS colcon build $PACKAGES --parallel-workers $BUILD_WORKERS \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
  && rm -rf /ws/build /ws/log \
@@ -81,10 +81,9 @@ RUN rosdep keys --from-paths /ws/install/*/ /opt/mowbite_planner/*/ --ignore-src
         libpaho-mqttpp-dev) echo libpaho-mqttpp3-1 ;; \
         libssl-dev) echo libssl3t64 ;; \
         libasound2-dev) echo libasound2t64 ;; \
-        libturbojpeg) echo libturbojpeg ;; \
         zlib) echo zlib1g ;; \
         libzstd-dev) echo libzstd1 ;; \
-        python3-shapely|python3-paho-mqtt|python3-yaml) echo $k ;; \
+        python3-shapely|python3-paho-mqtt|python3-yaml|libturbojpeg) echo $k ;; \
         nlohmann-json-dev|eigen) ;; \
         *) echo "unknown runtime key $k" >&2; exit 1 ;; \
       esac; fi; \

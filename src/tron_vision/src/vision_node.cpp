@@ -72,7 +72,8 @@ VisionNode::VisionNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_
       static_cast<float>(declare_parameter("score_threshold", static_cast<double>(config.decode.score_threshold)));
   config.max_rss_bytes = static_cast<size_t>(declare_parameter("max_rss_mb", 300)) << 20;
   config.preview.max_rate = declare_parameter("jpeg_max_rate", config.preview.max_rate);
-  config.preview.max_bytes = static_cast<size_t>(declare_parameter("jpeg_max_kb", 100)) * 1024;
+  const auto max_kb = static_cast<int64_t>(config.preview.max_bytes / 1024);
+  config.preview.max_bytes = static_cast<size_t>(declare_parameter("jpeg_max_kb", max_kb)) * 1024;
   config.temp_file = FindThermalZone("/sys/class/thermal", "soc-thermal");
   if (config.temp_file.empty()) RCLCPP_WARN(get_logger(), "No soc-thermal zone: no pause when hot");
   const std::string crash_dir = declare_parameter("crash_dir", std::string("/var/lib/mowbite-vision"));

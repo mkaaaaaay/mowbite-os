@@ -200,10 +200,9 @@ struct Rig {
     if (Ask(client, "DESCRIBE " + Url() + " RTSP/1.0\r\nCSeq: 1\r\n\r\n").find("200 OK") == std::string::npos) return false;
     const std::string setup =
         Ask(client, "SETUP " + Url("/trackID=0") + " RTSP/1.0\r\nCSeq: 2\r\nTransport: RTP/AVP/TCP;interleaved=0-1\r\n\r\n");
-    const size_t at = setup.find("Session: ");
-    if (at == std::string::npos) return false;
-    client.Send("PLAY " + Url("/") + " RTSP/1.0\r\nCSeq: 3\r\nSession: " +
-                setup.substr(at + 9, setup.find(';', at) - at - 9) + "\r\n\r\n");
+    const std::string session = test::SessionOf(setup);
+    if (session.empty()) return false;
+    client.Send("PLAY " + Url("/") + " RTSP/1.0\r\nCSeq: 3\r\nSession: " + session + "\r\n\r\n");
     Steps(1);
     return State() == StereoState::kStreaming;
   }

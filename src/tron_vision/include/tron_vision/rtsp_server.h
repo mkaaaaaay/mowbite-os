@@ -81,9 +81,9 @@ class RtspServer {
   bool available_ = false;
   ParameterSets sets_;
   std::string input_;
+  // Empty until SETUP.
   std::string session_;
   uint32_t session_counter_;
-  bool set_up_ = false;
   bool playing_ = false;
   uint8_t rtp_channel_ = 0;
   double last_activity_ = 0.0;

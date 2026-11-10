@@ -39,9 +39,8 @@ struct Rig {
     server.Poll(100);
     const std::string setup = Ask(client, "SETUP " + Url("/trackID=0") +
                                               " RTSP/1.0\r\nCSeq: 1\r\nTransport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n");
-    const size_t at = setup.find("Session: ");
-    if (at == std::string::npos) return "";
-    const std::string session = setup.substr(at + 9, setup.find(';', at) - at - 9);
+    const std::string session = test::SessionOf(setup);
+    if (session.empty()) return "";
     Ask(client, "PLAY " + Url("/") + " RTSP/1.0\r\nCSeq: 2\r\nSession: " + session + "\r\n\r\n");
     return session;
   }
