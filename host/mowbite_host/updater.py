@@ -7,7 +7,9 @@ failed, that was taken back by hand or that cannot run on this mower is blocked:
 by hand (rule P4). By itself a revision is tried once a night, and an OS stopped by hand is left alone.
 
 The OS and the planner switch through the gate of the OS and restart it, the planner only once the mowing job is
-finished. The app switches at any time: only files change, nothing that runs is touched. An own planner or app that
+finished. The app switches at any time: only files change, nothing that runs is touched. The host switches at any
+time as well and ends; its result comes from the new one once it confirmed itself, or from the note of mowbite_boot
+when it went back. An own planner or app that
 does not go with the installed OS is not installed; one already installed is left aside (installer.settle).
 """
 import os
@@ -16,13 +18,16 @@ import shutil
 import threading
 import time
 
+import mowbite_host
 from mowbite_host import Refused, bundle, carrier as carriers, compat, files, gate
 from mowbite_host.compat import app_suffices
-from mowbite_host.installer import HOLD_SECONDS, AppFiles, Installer, WithPlanner, os_meta, skipped
+from mowbite_host.installer import HOLD_SECONDS, AppFiles, HostInstaller, Installer, WithPlanner, os_meta, skipped
 
-COMPONENTS = {"os": "MowBite OS", "planner": "MowBite Planner", "app": "MowBite App"}
-# The order the automatic takes them in.
-AUTO_ORDER = ("app", "planner", "os")
+COMPONENTS = {"os": "MowBite OS", "planner": "MowBite Planner", "app": "MowBite App", "host": "MowBite Host"}
+# The order the automatic takes them in: a new host may be needed for the bundles after it.
+AUTO_ORDER = ("host", "app", "planner", "os")
+# The folder of the library this process runs: an installation of the host or its seed.
+RUNNING_HOST = os.path.dirname(os.path.dirname(os.path.realpath(mowbite_host.__file__)))
 # How long an update waits for the gate before it gives up, and how often it looks.
 GATE_WAIT = 30 * 60.0
 GATE_EVERY = 5.0
@@ -56,6 +61,10 @@ class Aborted(Exception):
     pass
 
 
+class Restarting(Exception):
+    """The host switched itself and ends; the new one gives the result."""
+
+
 class Updater:
     """os_rpc: request_hold(seconds) and release_hold() over the broker; their answers are not trusted, the gate reads
     the files. on_change(status) after every change of the status."""
@@ -65,10 +74,14 @@ class Updater:
         places = paths.places
         self.installers = {"os": Installer(paths, places["os"], carrier, health),
                            "planner": Installer(paths, places["planner"], carrier, WithPlanner(health)),
-                           "app": Installer(paths, places["app"], carriers.Nothing(), AppFiles(places["app"]))}
+                           "app": Installer(paths, places["app"], carriers.Nothing(), AppFiles(places["app"])),
+                           "host": HostInstaller(paths)}
         self.installers["app"].hold = False
         self.installer = self.installers["os"]
         self.on_change = on_change or (lambda status: None)
+        # Ends this process after a switch of the host; whether the broker is connected, for its confirmation.
+        self.restart_self = lambda: None
+        self.connected = lambda: False
         self._lock = threading.RLock()
         self._abort = threading.Event()
         self._worker = None
@@ -128,7 +141,12 @@ class Updater:
         serial = compat.serial(meta) if meta.get("format") == bundle.FORMAT else 0
         if installer.place.overlay:
             serial = max(serial, compat.serial(compat.bundled(self._running_meta(), component)))
+        if component == "host":
+            serial = max(serial, compat.serial(self._seed_meta()))
         return serial
+
+    def _seed_meta(self):
+        return files.read_json(os.path.join(self.paths.host_seed, "bundle.json")) or {}
 
     @staticmethod
     def _info(revision, meta):
@@ -139,9 +157,13 @@ class Updater:
             return None
         return self._info(revision, self.installers[component].meta_of(revision) or {})
 
-    # The planner or the app the OS brings along, None when it names none.
+    # The planner or the app the OS brings along, the seed of the host; None when there is none.
     def _bundled_info(self, component):
-        meta = compat.bundled(self._running_meta(), component)
+        meta = self._seed_meta() if component == "host" else compat.bundled(self._running_meta(), component)
+        return self._meta_info(meta)
+
+    def _meta_info(self, meta):
+        meta = meta or {}
         return self._info(meta["revision"], meta) if isinstance(meta.get("revision"), str) else None
 
     def _available(self, component):
@@ -169,6 +191,9 @@ class Updater:
             previous = None
         else:
             previous = self._revision_info(component, back) if back else self._bundled_info(component)
+        if component == "host":
+            return {"running": self._meta_info(files.read_json(os.path.join(RUNNING_HOST, "bundle.json"))),
+                    "previous": previous}
         if not place.overlay:
             return {"running": self._revision_info(component, own), "previous": previous}
         used = own is not None and files.link_target(place.active) == own
@@ -292,6 +317,9 @@ class Updater:
     def _run(self, name, work):
         if self.busy():
             raise Refused("BUSY", "an update runs")
+        # A host on trial installs nothing: going back would cut it off.
+        if os.path.lexists(self.paths.host.pending):
+            raise Refused("BUSY", "the new host has not confirmed itself yet")
         self._abort.clear()
         self._worker = threading.Thread(target=work, name=name, daemon=True)
         self._worker.start()
@@ -394,9 +422,12 @@ class Updater:
         else:
             files.remove(self.paths.hold)
 
-    # revision None: to the planner or the app the OS brings along.
-    def _switch(self, component, revision):
+    # revision None: to the planner or the app the OS brings along, to the seed of the host. by_hand_from: a rollback
+    # by hand away from that revision.
+    def _switch(self, component, revision, by_hand_from=None):
         entry = self._entry(component)
+        if component == "host":
+            self._switch_host(revision, by_hand_from)
         with self._lock:
             # An abort accepted until here wins; from here on the health check decides.
             self._check_abort()
@@ -416,6 +447,47 @@ class Updater:
             raise
         self._switched(entry, revision, ok)
         return ok, line
+
+    def _switch_host(self, revision, by_hand_from):
+        with self._lock:
+            self._check_abort()
+            self.installers["host"].switch(revision, broker=self.connected(), by_hand_from=by_hand_from)
+            self._phase = {**self._phase, "phase": "checking", "reason": None, "component": "host",
+                           "revision": revision}
+        self._changed()
+        self.restart_self()
+        raise Restarting()
+
+    # At the start: the result of a switch of the host that mowbite_boot took back.
+    def host_went_back(self):
+        note = files.read_json(self.paths.host_back)
+        if note is None:
+            return
+        revision = note.get("to") if isinstance(note.get("to"), str) else None
+        message = f"{note.get('message', '')}; back to {note.get('from') or 'the seed'}"
+        self._finish("rolled_back", "UNHEALTHY", message, "host", revision, block=bool(revision))
+        files.remove(self.paths.host_back)
+
+    # Whether the new host waits for the broker before it confirms itself: the one before it was connected.
+    def host_needs_broker(self):
+        return bool((self.installers["host"].pending() or {}).get("broker"))
+
+    # Called once the host ran long enough: ends the switch to it as installed. True when there was one.
+    def confirm_host(self):
+        installer = self.installers["host"]
+        pending = installer.confirm(RUNNING_HOST)
+        if pending is None:
+            return False
+        revision = pending.get("to") or None
+        with self._lock:
+            entry = self._entry("host")
+            entry["installed_at"] = int(time.time())
+            entry["crashes_since_install"] = 0
+        if pending.get("by_hand_from"):
+            self._block("host", pending["by_hand_from"], "ROLLED_BACK_BY_HAND", "rolled_back")
+        self._finish("installed", None, "the new host confirmed itself", "host", revision)
+        installer.prune()
+        return True
 
     # The switch ended by itself, healthy or back at the one before: no cut to count.
     def _switched(self, entry, revision, ok):
@@ -448,6 +520,9 @@ class Updater:
         machine = [os.path.relpath(path, tree) for path in bundle.elf_files(tree)]
         if machine:
             return "BAD_BUNDLE", f"machine code in a bundle of {component}: " + ", ".join(machine[:20])
+        broken = bundle.unparsable_python(tree, self._env()) if component == "host" else []
+        if broken:
+            return "BAD_BUNDLE", "python that does not parse:\n  " + "\n  ".join(broken[:20])
         return None
 
     # A folder of the revision that the bundle did not give (an earlier, broken unpack) goes, unless it is in use.
@@ -501,6 +576,8 @@ class Updater:
                 self._finish("failed", "UNHEALTHY", line, component, revision, block=True)
         except Aborted:
             self._finish("aborted", None, "aborted before the switch", component, revision)
+        except Restarting:
+            pass
         except Refused as why:
             self._finish("refused", why.reason, str(why), component, revision)
         except Exception as error:  # noqa: BLE001 - the result has to say it, the host goes on
@@ -514,7 +591,7 @@ class Updater:
         try:
             self._set_phase("waiting_gate", component=component, revision=previous)
             self._wait_gate(component, reset_jobs)
-            ok, line = self._switch(component, previous)
+            ok, line = self._switch(component, previous, by_hand_from=current)
             if ok:
                 # Taken back by hand: the newer one does not come back by itself.
                 if current:
@@ -524,6 +601,8 @@ class Updater:
                 self._finish("failed", "UNHEALTHY", line, component, previous)
         except Aborted:
             self._finish("aborted", None, "aborted before the switch", component, previous)
+        except Restarting:
+            pass
         except Refused as why:
             self._finish("refused", why.reason, str(why), component, previous)
         except Exception as error:  # noqa: BLE001
@@ -563,9 +642,10 @@ class Updater:
         if not in_window(time.localtime(now), auto["from"], auto["to"]):
             return
         # An OS stopped by hand stays as it is, and its planner with it; one that gave up after crashes gets its
-        # update, as does one that was never installed. The app does not touch the OS.
+        # update, as does one that was never installed. The app and the host do not touch the OS.
         runs = self.carrier.show()[0] in ("active", "failed")
-        left_alone = {"os": bool(self.installer.current()) and not runs, "planner": not runs, "app": False}
+        left_alone = {"os": bool(self.installer.current()) and not runs, "planner": not runs, "app": False,
+                      "host": False}
         self.check()
         for component in AUTO_ORDER:
             available = self._available(component)

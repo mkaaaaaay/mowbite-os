@@ -1,4 +1,4 @@
-# Sourced by the make-*-bundle.sh scripts and sign-bundle.sh.
+# Sourced by the make-*-bundle.sh scripts, sign-bundle.sh and make-image.sh.
 HOST_LIB=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../host
 
 # bundle_json <component> <JSON object>...: bundle.json in the format of mowbite-host with the fields of the objects,
@@ -13,6 +13,22 @@ for text in sys.argv[3:]:
     fields.update(json.loads(text))
 print(json.dumps({"format": bundle.FORMAT, "component": sys.argv[2], "revision": fields["commit"][:12],
                   "date": int(time.time()), **fields}, indent=1))' "$HOST_LIB" "$@"
+}
+
+# host_files <commit> <dir>: mowbite_host of this repo at commit and its bundle.json into dir, the layout of an
+# installation of the host and of its seed in the rootfs; serial is the commit time, base the rootfs version of then.
+host_files() {
+    local commit serial base repo
+    repo=$(git -C "$HOST_LIB" rev-parse --show-toplevel)
+    if ! commit=$(git -C "$repo" rev-parse --verify -q "$1^{commit}") ||
+       ! serial=$(git -C "$repo" show -s --format=%ct "$commit") ||
+       ! base=$(git -C "$repo" show "$commit:platform/tron/rootfs/files/usr/lib/mowbite/base"); then
+        echo "$1 is no commit of $repo with usr/lib/mowbite/base" >&2
+        return 1
+    fi
+    mkdir -p "$2"
+    git -C "$repo" archive "$commit" host/mowbite_host | tar -x -C "$2" --strip-components=1
+    bundle_json host "{\"commit\": \"$commit\", \"serial\": $serial, \"base\": $base}" > "$2/bundle.json"
 }
 
 # pack <tree> <out dir>: <out dir>/mowbite-<component>-<revision>.tar.gz of the tree and its bundle.json as

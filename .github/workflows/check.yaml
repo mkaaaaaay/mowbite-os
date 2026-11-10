@@ -77,7 +77,8 @@ jobs:
       - name: Updater and web tests
         run: |
           for t in platform/tron/bundle/test_update.py host/test/test_compat.py host/test/test_updater.py \
-                   host/test/test_components.py host/test/test_service.py host/test/test_e2e.py web/test/test_web.py; do
+                   host/test/test_components.py host/test/test_host_update.py host/test/test_service.py \
+                   host/test/test_e2e.py web/test/test_web.py; do
             /usr/bin/python3 -I "$t"
           done
 

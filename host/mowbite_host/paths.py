@@ -1,6 +1,8 @@
 """Where mowbite-host finds and keeps its files; tests give a prefix, on the mower it is empty."""
 import os
 
+import mowbite_boot
+
 # The OS reads these files from the environment of its service, the last one winning.
 ENV_FILES = ("/usr/lib/mowbite/os.defaults", "/etc/mowbite/os.conf")
 
@@ -36,8 +38,12 @@ class Paths:
         self.os_setup = p + "/usr/lib/mowbite/os-setup"
         self.env_files = [p + path for path in ENV_FILES]
         self.inbox = p + "/userdata/mowbite-update/inbox"
+        # The installations of the host itself and the seed in the rootfs; mowbite_boot chooses between them.
+        self.host = Place("host", p + mowbite_boot.OPT, False)
+        self.host_seed = p + mowbite_boot.SEED
+        self.host_back = p + mowbite_boot.BACK
         # State of the host and the root-owned copies it checks and unpacks.
-        self.var = p + "/var/lib/mowbite-host"
+        self.var = p + mowbite_boot.VAR
         self.state = self.var + "/update.json"
         self.stage = self.var + "/stage"
         self.lock = p + "/run/mowbite-host.lock"

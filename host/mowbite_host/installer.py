@@ -16,7 +16,7 @@ import shutil
 import stat
 import time
 
-from mowbite_host import Refused, compat, files, gate
+from mowbite_host import Refused, carrier, compat, files, gate
 
 HEALTH_WAIT = 240.0
 # After the first healthy answer the OS has to stay healthy this long (rule M5 of the updater contract).
@@ -407,3 +407,59 @@ class Installer:
         if self.place.overlay and self.current():
             return None
         raise Refused("NO_PREVIOUS", "no previous installation")
+
+
+class HostInstaller(Installer):
+    """The host itself under /opt/mowbite-host, the seed in the rootfs without current. A switch only writes pending
+    and current; the process ends after it and mowbite_boot tries the new one at the next start, going back when it
+    does not confirm itself (confirm). The command line takes what is confirmed."""
+
+    def __init__(self, paths):
+        super().__init__(paths, paths.host, carrier.Nothing(), None)
+        self.hold = False
+
+    # revision None: back to the seed. broker: the new one confirms only once connected. by_hand_from: a rollback
+    # by hand away from that revision.
+    def switch(self, revision, broker=False, by_hand_from=None):
+        before = self.current()
+        files.write_json(self.place.pending, {"to": revision or "", "from": before or "", "broker": broker,
+                                              "by_hand_from": by_hand_from or "", "tried": False})
+        if revision:
+            files.set_link(self.place.current, revision)
+        else:
+            files.remove(self.place.current)
+            files.sync_dir(self.place.opt)
+        log(f"host: current -> {revision or 'the seed'}, it starts at the next start of mowbite-host")
+
+    # mowbite_boot goes back before the host starts.
+    def recover(self, start_stopped=False):
+        return None
+
+    # The pending record when the switch to the running library ends well here (previous -> the one before), else
+    # None. running: the folder of the library this process runs.
+    def confirm(self, running):
+        pending = self.pending()
+        to = (pending or {}).get("to") or None
+        if pending is None or to != self.current() or running != (self.place.of(to) if to else self.paths.host_seed):
+            return None
+        before = pending.get("from") or None
+        if before and before != to:
+            files.set_link(self.place.previous, before)
+        elif os.path.lexists(self.place.previous):
+            files.remove(self.place.previous)
+        self._clear_pending()
+        return pending
+
+    def back_target(self):
+        previous = self.previous()
+        if previous and previous != self.current() and os.path.isdir(self.place.of(previous)):
+            return previous
+        if self.current():
+            return None
+        raise Refused("NO_PREVIOUS", "the seed runs, there is nothing before it")
+
+    def status_lines(self):
+        lines = [f"host current: {self.current() or '- (the seed)'}", f"host previous: {self.previous() or '-'}"]
+        if os.path.lexists(self.place.pending):
+            lines.append(f"host unfinished update: {json.dumps(self.pending())}")
+        return lines

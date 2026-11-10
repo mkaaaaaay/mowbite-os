@@ -21,7 +21,9 @@ import unittest
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.realpath(__file__))
 LIB = os.path.join(HERE, "..")
+BOOT = os.path.join(LIB, "boot")
 sys.path.insert(0, LIB)
+sys.path.insert(0, BOOT)
 sys.path.insert(0, HERE)
 import support  # noqa: E402
 REPO = os.path.join(HERE, "..", "..")
@@ -144,7 +146,7 @@ class EndToEnd(unittest.TestCase):
         self.key = support.keygen(os.path.join(self.root, "key"))
         self.foreign = support.keygen(os.path.join(self.root, "foreign"))
         self.write("etc/mowbite/allowed_signers", 'mowbite namespaces="mowbite-os,mowbite-planner,mowbite-app,'
-                                                  f'mowbite-index" {support.public(self.key)}\n')
+                                                  f'mowbite-host,mowbite-index" {support.public(self.key)}\n')
         self.mosquitto = support.mosquitto(self.root, self.port)
         self.app = App(self.port)
         self.host = None
@@ -191,7 +193,8 @@ class EndToEnd(unittest.TestCase):
         meta.update({"os": {"base": 1, "api": 14, "min_app": "1.4.0", "planner_interface": 1,
                             "planner_files_version": 1},
                      "planner": {"version": "2.0.0", "interface": 1, "files_version": 1},
-                     "app": {"version": "1.5.0", "api": {"min": 14, "max": 14}}}[component])
+                     "app": {"version": "1.5.0", "api": {"min": 14, "max": 14}},
+                     "host": {"base": 1}}[component])
         path = os.path.join(folder or os.path.join(self.P, "userdata/mowbite-update/inbox"),
                             name or f"mowbite-{component}-{rev}.tar.gz")
         with tarfile.open(path, "w:gz") as tar:
@@ -208,6 +211,14 @@ class EndToEnd(unittest.TestCase):
                     add("bin/true", f.read(), 0o755)
                 if broken:
                     add("broken", b"")
+            elif component == "host":
+                for name in sorted(os.listdir(os.path.join(LIB, "mowbite_host"))):
+                    if name.endswith(".py"):
+                        with open(os.path.join(LIB, "mowbite_host", name), "rb") as f:
+                            data = f.read()
+                        if broken and name == "main.py":
+                            data += b"\nraise SystemExit('broken host')\n"
+                        add(f"mowbite_host/{name}", data)
             elif component == "planner":
                 add("planner/local_setup.bash", b"")
                 if broken:
@@ -221,17 +232,23 @@ class EndToEnd(unittest.TestCase):
     def pid_file(self):
         return os.path.join(self.P, "run/mowbite-host/os.pid")
 
-    def start_host(self):
+    # seed: the library mowbite_boot chooses under the prefix (the seed or an installation) instead of the repo's;
+    # wait: for its status online.
+    def start_host(self, seed=False, wait=True):
         self.starts += 1
         t = int(time.time())
-        env = {**os.environ, "MOWBITE_UPDATE_PREFIX": self.P, "MOWBITE_HOST_LIB": LIB,
-               "MOWBITE_UPDATE_HEALTH_STABLE": "1", "PATH": self.bin + os.pathsep + os.environ.get("PATH", "")}
+        env = {**os.environ, "MOWBITE_UPDATE_PREFIX": self.P, "MOWBITE_BOOT_LIB": BOOT, "MOWBITE_HOST_LIB": LIB,
+               "MOWBITE_UPDATE_HEALTH_STABLE": "1", "MOWBITE_HOST_SETTLE": "1",
+               "PATH": self.bin + os.pathsep + os.environ.get("PATH", "")}
+        if seed:
+            del env["MOWBITE_HOST_LIB"]
         log = open(os.path.join(self.root, f"host-{self.starts}.log"), "w")
         self.host = subprocess.Popen([sys.executable, "-I", os.path.join(SBIN, "mowbite-host")], env=env,
                                      stdout=log, stderr=subprocess.STDOUT)
         log.close()
-        self.app.wait(lambda: (self.app.statuses.get("mowbite/host/status") or {}).get("online") is True and
-                      self.app.statuses["mowbite/host/status"].get("t", 0) >= t, "host status")
+        if wait:
+            self.app.wait(lambda: (self.app.statuses.get("mowbite/host/status") or {}).get("online") is True and
+                          self.app.statuses["mowbite/host/status"].get("t", 0) >= t, "host status")
 
     # gone: waits for the last will of the killed host, so that a status seen after it is one of the next host and
     # not the last of this one.
@@ -368,6 +385,7 @@ class EndToEnd(unittest.TestCase):
         old = self.bundle("d000004", serial=1, folder=self.root)
         tool = subprocess.run([sys.executable, "-I", os.path.join(SBIN, "mowbite-update"), "install", old],
                               env={**os.environ, "MOWBITE_UPDATE_PREFIX": self.P, "MOWBITE_HOST_LIB": LIB,
+                                   "MOWBITE_BOOT_LIB": BOOT,
                                    "PATH": self.bin + os.pathsep + os.environ.get("PATH", "")},
                               capture_output=True, text=True, timeout=WAIT)
         self.assertEqual(tool.returncode, 1, tool.stdout + tool.stderr)
@@ -522,6 +540,45 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(self.running(), {A})
         self.assertFalse(os.path.exists(os.path.join(self.P, "userdata/mowbite/hold.json")))
 
+    # The host updates itself: the switch ends it, the next start (systemd) tries the new one, which confirms itself;
+    # a broken one does not come up and the start after it goes back. The OS runs on all along.
+    def test_host_updates_itself_and_goes_back(self):
+        seed = os.path.join(self.P, "usr/lib/mowbite-host")
+        shutil.copytree(os.path.join(LIB, "mowbite_host"), os.path.join(seed, "mowbite_host"),
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        with open(os.path.join(seed, "bundle.json"), "w") as f:
+            json.dump({"format": 2, "component": "host", "revision": "5eed000", "serial": 1}, f)
+        self.bundle(A)
+        self.start_host(seed=True)
+        self.check()
+        self.assertEqual(self.run_update()["result"], "installed")
+        os_pids = set(self.fake_pids())
+        self.assertEqual(self.component("host")["running"]["revision"], "5eed000")
+
+        self.bundle(B, component="host")
+        self.check()
+        self.app.call("update.start", component="host")
+        self.assertEqual(self.host.wait(WAIT), 0)
+        self.start_host(seed=True)
+        self.app.wait(lambda: (self.app.update().get("last") or {}).get("component") == "host", "host confirmed")
+        self.assertEqual(self.app.update()["last"]["result"], "installed")
+        self.assertEqual(self.component("host")["running"]["revision"], B)
+        self.assertEqual(self.current("opt/mowbite-host"), B)
+        self.assertFalse(os.path.lexists(os.path.join(self.P, "opt/mowbite-host/pending")))
+
+        self.bundle(C, component="host", broken=True)
+        self.check()
+        self.app.call("update.start", component="host")
+        self.assertEqual(self.host.wait(WAIT), 0)
+        self.start_host(seed=True, wait=False)
+        self.assertNotEqual(self.host.wait(WAIT), 0)
+        self.start_host(seed=True)
+        self.app.wait(lambda: (self.app.update().get("last") or {}).get("revision") == C, "result of the way back")
+        last = self.app.update()["last"]
+        self.assertEqual((last["result"], last["reason"]), ("rolled_back", "UNHEALTHY"))
+        self.assertEqual(self.current("opt/mowbite-host"), B)
+        self.assertEqual(self.component("host")["running"]["revision"], B)
+        self.assertEqual(set(self.fake_pids()), os_pids, "the OS ran on")
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

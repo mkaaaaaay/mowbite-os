@@ -84,13 +84,14 @@ def probe(zip_path, version="1.5.0", api_min=15, api_max=15, serial=1700000000):
 
 
 # The tool has no .py name; its bytecode would land in files/ of the rootfs.
+# The command line as the rootfs starts it, fresh for each test.
 def load_tool():
     sys.dont_write_bytecode = True
     loader = importlib.machinery.SourceFileLoader("mowbite_update", TOOL)
     spec = importlib.util.spec_from_loader("mowbite_update", loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
-    return module
+    return importlib.reload(module.cli)
 
 
 class UpdateTest(unittest.TestCase):
@@ -118,6 +119,7 @@ class UpdateTest(unittest.TestCase):
         os.environ["MOWBITE_UPDATE_HEALTH_WAIT"] = "0"
         os.environ["MOWBITE_UPDATE_BROKER_WAIT"] = "0"
         os.environ["MOWBITE_HOST_LIB"] = HOST_LIB
+        os.environ["MOWBITE_BOOT_LIB"] = os.path.join(HOST_LIB, "boot")
         os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
         self.serial = 1000
         self.tool = self.load()
@@ -364,7 +366,7 @@ class UpdateTest(unittest.TestCase):
             self.assertIn(line, out.stdout.splitlines())
 
     def test_usage(self):
-        for args in ([], ["rollback", "host"], ["status", "--reset-jobs"], ["install"], ["recover", "os"]):
+        for args in ([], ["rollback", "camera"], ["status", "--reset-jobs"], ["install"], ["recover", "os"]):
             self.assertEqual(self.tool.main(["mowbite-update", *args]), 2, args)
 
     def test_signature_missing(self):

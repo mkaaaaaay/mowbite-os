@@ -1,5 +1,5 @@
 # Keys whose signature mowbite-host accepts on a bundle of a component and on the index of the inbox (ssh-keygen -Y,
 # namespaces mowbite-<component> for os, app and planner, and mowbite-index): the main key and a reserve kept apart
 # from it.
-mowbite namespaces="mowbite-os,mowbite-app,mowbite-planner,mowbite-index" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ5VWCS3KYxoY42LtO3cAjW91C8j87YSHRLA+wNbL4Dm
-mowbite namespaces="mowbite-os,mowbite-app,mowbite-planner,mowbite-index" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPjcdzv/dIcmjfI0ZRJ/bXo8Z28BVZ/+yUMpJF9Mwm2z
+mowbite namespaces="mowbite-os,mowbite-app,mowbite-planner,mowbite-host,mowbite-index" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ5VWCS3KYxoY42LtO3cAjW91C8j87YSHRLA+wNbL4Dm
+mowbite namespaces="mowbite-os,mowbite-app,mowbite-planner,mowbite-host,mowbite-index" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPjcdzv/dIcmjfI0ZRJ/bXo8Z28BVZ/+yUMpJF9Mwm2z

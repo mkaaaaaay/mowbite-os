@@ -17,6 +17,7 @@ import unittest
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "boot"))
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import support  # noqa: E402
 from mowbite_host import Refused, bundle, carrier, files, gate, installer, origin, paths, updater  # noqa: E402
@@ -99,8 +100,8 @@ class Base(unittest.TestCase):
         self.write(self.paths.base, "1\n")
         self.write(self.paths.os_setup, "true\n")
         self.key = support.keygen(os.path.join(self.root, "key"))
-        self.write(self.paths.signers, 'mowbite namespaces="mowbite-os,mowbite-planner,mowbite-app,mowbite-index" '
-                                       f'{support.public(self.key)}\n')
+        namespaces = "mowbite-os,mowbite-planner,mowbite-app,mowbite-host,mowbite-index"
+        self.write(self.paths.signers, f'mowbite namespaces="{namespaces}" {support.public(self.key)}\n')
         self.fake = FakeOs(self.paths)
         health = installer.Health(self.paths, self.fake, wait=0, stable=0, every=0)
         self.updater = updater.Updater(self.paths, self.fake, health, origin.Inbox(self.paths), self.fake)

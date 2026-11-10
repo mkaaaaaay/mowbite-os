@@ -159,7 +159,7 @@ Field Revision(std::string name, std::string text) {
 }
 
 // The components the updater keeps.
-const std::vector<std::string> kComponents = {"os", "planner", "app"};
+const std::vector<std::string> kComponents = {"os", "planner", "app", "host"};
 
 Field Component(std::string name = "component") {
   return Text(std::move(name), "The component", true, kComponents);
@@ -685,7 +685,9 @@ const std::vector<Method>& Methods() {
       {"update.start", "mowbite_host",
        "Installs the newest available revision of the component or the one given, one update at a time; os and "
        "planner wait for the gate (IDLE on the charging contacts, the hold granted) for up to 30 min, the planner also "
-       "for the end of the mowing job, the app for none. Refused (UPDATE_REFUSED) when none is there or one runs",
+       "for the end of the mowing job, the app and the host for none. The host starts itself anew and gives the result "
+       "once the new one confirmed itself after 60 s, else it goes back. Refused (UPDATE_REFUSED) when none is there "
+       "or one runs",
        UpdateParams({Component(),
                      Text("revision", "A revision of available or found by update.check; the newest without", false),
                      ResetJobs()},
@@ -695,7 +697,8 @@ const std::vector<Method>& Methods() {
        UpdateParams({}), UpdateStatus(), kHostOffered},
       {"update.rollback", "mowbite_host",
        "Goes back to the previous installation through the same gate, planner and app without an own one before to "
-       "the bundled one; that revision is then not installed by itself. NO_PREVIOUS on the bundled one",
+       "the bundled one, the host to its seed in the rootfs; that revision is then not installed by itself. "
+       "NO_PREVIOUS on the bundled one or the seed",
        UpdateParams({Component(), ResetJobs()}, true), UpdateStatus(), kHostOffered},
       {"update.check", "mowbite_host", "Looks for bundles in the origins now (the inbox), as it does every 6 h",
        UpdateParams({}), UpdateStatus(), kHostOffered},

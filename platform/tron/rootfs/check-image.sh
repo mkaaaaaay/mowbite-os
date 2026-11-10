@@ -104,6 +104,14 @@ for f in mowbite-update mowbite-host; do
 done
 diff -r --exclude=__pycache__ "$HERE/../../../host/mowbite_host" "$TREE/usr/lib/mowbite-host/mowbite_host" > /dev/null
 result "library of mowbite-host as in host/ of the repo" $?
+cmp -s "$HERE/../../../host/boot/mowbite_boot.py" "$TREE/usr/lib/mowbite-boot/mowbite_boot.py"
+result "mowbite_boot as in host/boot of the repo" $?
+python3 -I -c 'import json, sys; m = json.load(open(sys.argv[1]))
+sys.exit(not (m["component"] == "host" and isinstance(m["serial"], int) and m["serial"] > 0))' \
+    "$TREE/usr/lib/mowbite-host/bundle.json"
+result "seed of mowbite-host with its bundle.json" $?
+grep -qx "d /opt/mowbite-host 0755 root root -" "$TREE/usr/lib/tmpfiles.d/mowbite-os.conf"
+result "tmpfiles: /opt/mowbite-host" $?
 cmp -s "$HERE/../../../web/mowbite_web.py" "$TREE/usr/lib/mowbite-web/mowbite_web.py"
 result "mowbite-web as in web/ of the repo" $?
 test "$(stat_of /usr/lib/mowbite-web) $(stat_of /usr/lib/mowbite-web/mowbite_web.py)" = "0755 0:0 0644 0:0"
@@ -119,8 +127,8 @@ grep -q '^u mowbite-web ' "$TREE/usr/lib/sysusers.d/mowbite-web.conf" \
     && ! grep -qE '^[mg] +mowbite-web' "$TREE"/usr/lib/sysusers.d/*.conf
 result "user mowbite-web in no group" $?
 # The folders of the components as mowbite-host knows them.
-places=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from mowbite_host.paths import PLACES
-print(*(opt for opt, _ in PLACES.values()))' "$TREE/usr/lib/mowbite-host")
+places=$(python3 -I -c 'import sys; sys.path[:0] = sys.argv[1:]; from mowbite_host.paths import PLACES
+print(*(opt for opt, _ in PLACES.values()))' "$TREE/usr/lib/mowbite-host" "$TREE/usr/lib/mowbite-boot")
 test -n "$places"; result "folders of the components read from mowbite-host" $?
 for d in $places; do
     grep -qx "d $d 0755 root root -" "$TREE/usr/lib/tmpfiles.d/mowbite-os.conf"; result "tmpfiles: $d" $?
@@ -133,7 +141,8 @@ test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-host.
 result "mowbite-host.service enabled" $?
 grep -qx '[0-9]\+' "$TREE/usr/lib/mowbite/base"; result "rootfs version in /usr/lib/mowbite/base" $?
 # A lost key must not lock every mower out: a main and a reserve key, both for bundles and the index.
-test "$(grep -cE '^mowbite namespaces="mowbite-os,mowbite-app,mowbite-planner,mowbite-index" ssh-ed25519 ' "$TREE/etc/mowbite/allowed_signers")" -ge 2
+namespaces="mowbite-os,mowbite-app,mowbite-planner,mowbite-host,mowbite-index"
+test "$(grep -cE "^mowbite namespaces=\"$namespaces\" ssh-ed25519 " "$TREE/etc/mowbite/allowed_signers")" -ge 2
 result "two keys in allowed_signers" $?
 test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-os.service")" = ../mowbite-os.service
 result "mowbite-os.service enabled" $?

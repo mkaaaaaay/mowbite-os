@@ -6372,7 +6372,8 @@
                 "enum": [
                   "os",
                   "planner",
-                  "app"
+                  "app",
+                  "host"
                 ],
                 "type": "string"
               },
@@ -6737,7 +6738,8 @@
                 "enum": [
                   "os",
                   "planner",
-                  "app"
+                  "app",
+                  "host"
                 ],
                 "type": "string"
               },
@@ -6972,7 +6974,8 @@
           "enum": [
             "os",
             "planner",
-            "app"
+            "app",
+            "host"
           ],
           "type": "string"
         },
@@ -7117,7 +7120,8 @@
                 "enum": [
                   "os",
                   "planner",
-                  "app"
+                  "app",
+                  "host"
                 ],
                 "type": "string"
               },
@@ -7494,7 +7498,8 @@
                 "enum": [
                   "os",
                   "planner",
-                  "app"
+                  "app",
+                  "host"
                 ],
                 "type": "string"
               },
@@ -7729,7 +7734,8 @@
           "enum": [
             "os",
             "planner",
-            "app"
+            "app",
+            "host"
           ],
           "type": "string"
         },
@@ -7878,7 +7884,8 @@
                 "enum": [
                   "os",
                   "planner",
-                  "app"
+                  "app",
+                  "host"
                 ],
                 "type": "string"
               },
@@ -8243,7 +8250,8 @@
                 "enum": [
                   "os",
                   "planner",
-                  "app"
+                  "app",
+                  "host"
                 ],
                 "type": "string"
               },
@@ -8466,11 +8474,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:16",
+  "$id": "urn:mowbite-os:api:17",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry.",
   "title": "MowBite OS app interface",
-  "x-api": 16,
+  "x-api": 17,
   "x-commands": {
     "docking.abort": {
       "action": "mower_logic:docking/abort_docking",
@@ -9460,7 +9468,7 @@
       "result": "#/$defs/update.check.result"
     },
     "update.rollback": {
-      "description": "Goes back to the previous installation through the same gate, planner and app without an own one before to the bundled one; that revision is then not installed by itself. NO_PREVIOUS on the bundled one",
+      "description": "Goes back to the previous installation through the same gate, planner and app without an own one before to the bundled one, the host to its seed in the rootfs; that revision is then not installed by itself. NO_PREVIOUS on the bundled one or the seed",
       "node": "mowbite_host",
       "offered": "while mowbite/host/status says online",
       "params": "#/$defs/update.rollback.params",
@@ -9474,7 +9482,7 @@
       "result": "#/$defs/update.set_auto.result"
     },
     "update.start": {
-      "description": "Installs the newest available revision of the component or the one given, one update at a time; os and planner wait for the gate (IDLE on the charging contacts, the hold granted) for up to 30 min, the planner also for the end of the mowing job, the app for none. Refused (UPDATE_REFUSED) when none is there or one runs",
+      "description": "Installs the newest available revision of the component or the one given, one update at a time; os and planner wait for the gate (IDLE on the charging contacts, the hold granted) for up to 30 min, the planner also for the end of the mowing job, the app and the host for none. The host starts itself anew and gives the result once the new one confirmed itself after 60 s, else it goes back. Refused (UPDATE_REFUSED) when none is there or one runs",
       "node": "mowbite_host",
       "offered": "while mowbite/host/status says online",
       "params": "#/$defs/update.start.params",

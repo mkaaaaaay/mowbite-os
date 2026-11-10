@@ -106,10 +106,13 @@ process is outside this watch and stops the mower by its own timeouts.
   it installs signed bundles (update.*), answers `host.restart_os` and keeps `mowbite/host/status` retained, also
   while the OS is off. It needs the broker of the OS, `python3-paho-mqtt` (1.x or 2.x), `ssh-keygen`, systemd for
   the OS service and the files of the data dir; a compose stack needs a carrier of its own (not built yet). On the
-  rootfs: the library under `/usr/lib/mowbite-host` (from `host/`, `make-image.sh` copies it), the unit enabled, the
+  rootfs: the seed of the library under `/usr/lib/mowbite-host` (`host/mowbite_host` and its `bundle.json`,
+  `make-image.sh` writes both from the commit checked out), `mowbite_boot` under `/usr/lib/mowbite-boot` (from
+  `host/boot/`, never in a bundle), the thin entry points `mowbite-host` and `mowbite-update`, the unit enabled, the
   rootfs version in `/usr/lib/mowbite/base` (raise it when a bundle needs something new of the rootfs; bundles name
   the version they need) and `/etc/mowbite/allowed_signers` with two keys, the main one and a reserve kept apart, for
-  the namespaces `mowbite-os`, `mowbite-app`, `mowbite-planner` and `mowbite-index`. `host/test/test_e2e.py` runs the
+  the namespaces `mowbite-os`, `mowbite-app`, `mowbite-planner`, `mowbite-host` and `mowbite-index`.
+  `host/test/test_e2e.py` runs the
   whole way with the carrier `process` (`MOWBITE_HOST_CARRIER=process` in the environment files).
 - The host keeps three components, each in a folder of its own with `current`, `previous` and `pending`: the OS
   (`/opt/mowbite`), the planner (`/opt/mowbite-planner`) and the app (`/opt/mowbite-app`). The OS brings a planner and
@@ -121,6 +124,11 @@ process is outside this watch and stops the mower by its own timeouts.
   Bundles of the planner and the app hold no machine code. On the Tron `os-setup` puts the planner `active` names
   before the one of the OS (which keeps `mowbite_planner_interfaces`), and tmpfiles makes the two folders.
   `mowbite-update-recover.service` runs at boot while any of the three folders has a `pending`.
+- The host updates itself as a fourth component under `/opt/mowbite-host` without a gate: the switch writes `pending`
+  and `current` and ends the process, the service manager starts it again (`Restart=always`). `mowbite_boot` tries
+  the new one for 180 s; it confirms itself after 60 s of its main loop (and once connected, when the host before it
+  was), else the next start goes back to the one before or to the seed and leaves a note for the result. After three
+  starts in a boot that did not run 60 s the seed runs. Keep `Restart=always` and the watchdog on your service.
 - The app comes from `mowbite-web` (`web/mowbite_web.py`, standard library only): port 80 from
   `mowbite-web.socket`, the service as its own user `mowbite-web` in no group, no root, no capability, nothing to
   write. GET and HEAD only, `/cgi-bin/*` is always 404 (the app reads that as "no container"); only `/app.json`,
@@ -132,7 +140,8 @@ process is outside this watch and stops the mower by its own timeouts.
 - Bundles, all in `platform/tron/bundle/`: `make-bundle.sh` for the OS (serial = commit time, base, api, the planner's
   `contract.json` and what it brings along from the image), `make-planner-bundle.sh <repo> <commit> <out>` (only
   `mowbite_planner`, built in a throwaway container, `contract.json` required), `make-app-bundle.sh <zip> <out>` (the
-  web export of the app release, `app.json` required). `host/bundle/app_export.py` unpacks and checks the export for
+  web export of the app release, `app.json` required), `make-host-bundle.sh <commit> <out>` (`host/mowbite_host` of
+  that commit). `host/bundle/app_export.py` unpacks and checks the export for
   them and for `docker/os.Dockerfile` (build context `app`, `APP_VERSION`, `APP_SHA256`; none without them). Each is
   signed with `sign-bundle.sh` under the namespace of its component (refuses a serial not newer than the last one
   signed for it, shows its fields and the result of the test gate), then into the inbox

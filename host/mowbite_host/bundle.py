@@ -3,9 +3,11 @@
 A bundle is a tar.gz of one directory <revision>/ with bundle.json (format 2: component, revision, commit, serial,
 date) beside what the component brings: os with base, api, min_app, runtime_packages, planner_interface,
 planner_files_version and bundled beside install/, planner/, app/ and tools/; planner with version, interface,
-files_version and requires beside planner/; app with version and api {min, max} beside app/. Only the copy in the
+files_version and requires beside planner/; app with version and api {min, max} beside app/; host with base beside
+mowbite_host/. Only the copy in the
 stage folder is checked and unpacked: the file in the inbox may change after its signature was checked. What comes
-out of a bundle is never run as root, and a bundle of the planner or the app holds no machine code.
+out of a bundle is never run as root, but the host itself, and a bundle of the planner, the app or the host holds
+no machine code.
 """
 import json
 import os
@@ -20,9 +22,10 @@ from mowbite_host import Refused, compat
 
 FORMAT = 2
 # The largest bundle of each component, checked before its signature.
-MAX_BUNDLE = {"os": 300 * 1024 * 1024, "planner": 20 * 1024 * 1024, "app": 50 * 1024 * 1024}
+MAX_BUNDLE = {"os": 300 * 1024 * 1024, "planner": 20 * 1024 * 1024, "app": 50 * 1024 * 1024,
+              "host": 5 * 1024 * 1024}
 # What a bundle of the component has to hold beside bundle.json.
-NEEDS = {"planner": "planner/local_setup.bash", "app": "app/index.html"}
+NEEDS = {"planner": "planner/local_setup.bash", "app": "app/index.html", "host": "mowbite_host/__init__.py"}
 MAX_SIGNATURE = 64 * 1024
 # What the unpacked bundle may take of the free space beside it.
 SPACE_MARGIN = 100 * 1024 * 1024
@@ -329,3 +332,24 @@ def unresolved_libraries(root, os_setup, env):
             bad.append(line.strip())
     close()
     return problems
+
+
+PARSE_SCRIPT = """
+import ast, sys
+for path in sys.stdin.read().splitlines():
+    try:
+        with open(path, "rb") as f:
+            ast.parse(f.read(), path)
+    except (OSError, SyntaxError, ValueError) as error:
+        print(f"{path}: {error}")
+"""
+
+
+# Python files of the tree at root that do not parse, checked as the user mowbite: [text].
+def unparsable_python(root, env):
+    paths = [os.path.join(folder, name) for folder, _, names in os.walk(root) for name in names if name.endswith(".py")]
+    result = run(as_user([sys.executable, "-I", "-c", PARSE_SCRIPT]), input="\n".join(paths) + "\n", env=env,
+                 timeout=120)
+    if result.returncode != 0:
+        return [f"the files of {root} cannot be read: {result.stderr.strip()[-300:]}"]
+    return [line.replace(root + os.sep, "", 1) for line in result.stdout.splitlines()]

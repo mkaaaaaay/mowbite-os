@@ -52,11 +52,14 @@ tar -C "$HERE/files" -cf "$work/files.tar" --owner=0 --group=0 --numeric-owner -
 # The broker of MowBite OS with the configuration the Compose stack of the other platforms uses.
 tar -C "$HERE/../../../docker/mower" -rf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w \
     --transform 's|^mosquitto.conf$|./etc/mosquitto/mosquitto.conf|' mosquitto.conf
-# The library of mowbite-host and mowbite-update, from host/ of the repo, with its own folder.
-mkdir -p "$work/host/usr/lib/mowbite-host"
-cp -r "$HERE/../../../host/mowbite_host" "$work/host/usr/lib/mowbite-host/"
+# The seed of mowbite-host (its library at the commit checked out, with bundle.json as an installation has it) and
+# mowbite_boot, which chooses between the seed and an installed one.
+source "$HERE/../bundle/pack.sh"
+host_files HEAD "$work/host/usr/lib/mowbite-host"
+install -D -m 644 "$HERE/../../../host/boot/mowbite_boot.py" "$work/host/usr/lib/mowbite-boot/mowbite_boot.py"
 tar -C "$work/host" -rf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w --exclude=__pycache__ \
-    --no-recursion ./usr/lib/mowbite-host --recursion ./usr/lib/mowbite-host/mowbite_host
+    --no-recursion ./usr/lib/mowbite-host ./usr/lib/mowbite-host/bundle.json ./usr/lib/mowbite-boot \
+    ./usr/lib/mowbite-boot/mowbite_boot.py --recursion ./usr/lib/mowbite-host/mowbite_host
 # The web server of the MowBite App, from web/ of the repo; readable for its user despite the umask.
 install -d -m 755 "$work/web/usr/lib/mowbite-web"
 install -m 644 "$HERE/../../../web/mowbite_web.py" "$work/web/usr/lib/mowbite-web/"

@@ -14,6 +14,7 @@ import unittest
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "boot"))
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from mowbite_host import files, installer, os_state, probe, service  # noqa: E402
 from mowbite_host.broker import Message  # noqa: E402

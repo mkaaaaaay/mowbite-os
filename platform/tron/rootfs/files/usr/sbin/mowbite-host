@@ -1,82 +1,15 @@
 #!/usr/bin/python3
-"""mowbite-host (mowbite-host.service): updates of MowBite OS, its planner and its app over the app and how the OS is,
-beside the OS as root.
-
-It answers update.* and host.* on the broker of the OS, keeps mowbite/host/status and mowbite/update/status retained,
-looks for updates in the inbox every 6 h and on update.check, and installs at night when auto is on. Without the
-broker it goes on and reconnects; the gate and the state of the OS come from files only.
+"""mowbite-host (mowbite-host.service): updates of MowBite OS, its planner, its app and of itself, beside the OS as
+root. mowbite_boot chooses its library (an installed one or the seed in the rootfs); the program is mowbite_host.main.
 """
-import fcntl
 import os
-import signal
-import socket
 import sys
-import time
 
-sys.path.insert(0, os.environ.get("MOWBITE_HOST_LIB", "/usr/lib/mowbite-host"))
-from mowbite_host import broker, carrier, installer, origin, os_state, paths, service, updater  # noqa: E402
+sys.path.insert(0, os.environ.get("MOWBITE_BOOT_LIB", "/usr/lib/mowbite-boot"))
+import mowbite_boot  # noqa: E402
 
-
-# A message to systemd (Type=notify, WatchdogSec) over NOTIFY_SOCKET; nothing without one.
-def notify(text):
-    address = os.environ.get("NOTIFY_SOCKET")
-    if not address:
-        return
-    if address.startswith("@"):
-        address = "\0" + address[1:]
-    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
-        try:
-            sock.sendto(text.encode(), address)
-        except OSError:
-            pass
-
-
-def main():
-    stopping = []
-    signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
-    signal.signal(signal.SIGINT, lambda *_: stopping.append(True))
-    where = paths.Paths(os.environ.get("MOWBITE_UPDATE_PREFIX", ""))
-    notify("READY=1")
-    # mowbite-update by hand or at boot holds the lock while it works.
-    os.makedirs(os.path.dirname(where.lock), exist_ok=True)
-    lock = open(where.lock, "w")
-    waiting = False
-    while True:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            break
-        except BlockingIOError:
-            if not waiting:
-                print("mowbite-update runs: waiting for it", flush=True)
-                waiting = True
-            if stopping:
-                return 0
-            notify("WATCHDOG=1")
-            time.sleep(1)
-    for place in where.places.values():
-        os.makedirs(place.opt, exist_ok=True)
-
-    host = None
-    client, rpc, check = broker.attach(where, "mowbite-host", [("rpc/request", 1)],
-                                       other=lambda m: host and host.on_request(m),
-                                       on_connect=lambda: host and host.connected(),
-                                       will=(service.HOST_STATUS, service.OFFLINE))
-    service_os = carrier.of(where)
-    tool = updater.Updater(where, service_os, installer.health_of(where, service_os, check), origin.Inbox(where), rpc)
-    check.api_of_running = tool.running_api
-    tool.recover(start_stopped=True)
-    installer.settle(where)
-    host = service.Host(where, tool, os_state.OsWatch(where, service_os, tool), service_os, client.publish)
-    client.start()
-    try:
-        host.run(alive=lambda: notify("WATCHDOG=1"), stop=lambda: bool(stopping))
-    finally:
-        notify("STOPPING=1")
-        client.publish(service.HOST_STATUS, service.OFFLINE, True)
-        time.sleep(0.2)
-        client.stop()
-    return 0
-
+mowbite_boot.load(service=True)
+from mowbite_host import main  # noqa: E402
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main.run())

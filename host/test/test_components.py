@@ -14,6 +14,7 @@ import unittest
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "boot"))
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from mowbite_host import Refused, bundle, files, gate, installer, origin, updater  # noqa: E402
 from test_updater import A, B, Base  # noqa: E402
@@ -517,10 +518,10 @@ class CutTest(ComponentBase):
 class InboxTest(ComponentBase):
     def test_unknown_component_stays_and_is_no_candidate(self):
         self.installed("os", A)
-        path = self.bundle(B, component="host")
+        path = self.bundle(B, component="camera")
         self.updater.check()
         self.assertTrue(os.path.exists(path))
-        self.assertEqual([c["available"] for c in self.updater.status()["components"]], [None, None, None])
+        self.assertEqual([c["available"] for c in self.updater.status()["components"]], [None] * 4)
 
     def test_index_names_what_goes_with_the_os(self):
         self.installed("os", A)

@@ -9,6 +9,7 @@ import unittest
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "boot"))
 from mowbite_host import bundle, compat, paths, updater  # noqa: E402
 
 OS = {"api": 15, "min_app": "1.5.0", "planner_interface": 2, "planner_files_version": 3,
@@ -91,7 +92,8 @@ class CompatTest(unittest.TestCase):
         self.assertEqual(reasons, set(compat.EXPLAIN))
 
     def test_tables_name_the_same_components(self):
-        self.assertEqual(set(updater.COMPONENTS), set(paths.PLACES))
+        # The host is no place of the installer: mowbite_boot takes it back.
+        self.assertEqual(set(updater.COMPONENTS), {*paths.PLACES, "host"})
         self.assertEqual(set(updater.COMPONENTS), set(bundle.MAX_BUNDLE))
         self.assertEqual(sorted(updater.AUTO_ORDER), sorted(updater.COMPONENTS))
         self.assertEqual({c for c, (_, overlay) in paths.PLACES.items() if overlay}, set(compat.CHECKS))
