@@ -147,7 +147,8 @@ the emergency signal is fixed. Load it as a component of the container only when
 ## 8. Cameras (optional)
 
 A camera of the mower, shown in the app, optionally with object detection for display only. The Tron's setup is the
-example: `tron_vision` with its start in `tron.launch.py` and its parameters in `config/tron.yaml`.
+example: `tron_vision` (camera AI) and `tron_stereo` (live picture) with their start in `tron.launch.py` and their
+parameters in `config/tron.yaml`.
 
 - A process of its own, never a component of the container: a crash of a vendor library takes nothing else along.
   Start it from the start file with `stack.own_process` only when the drivers run and a switch in
@@ -156,8 +157,11 @@ example: `tron_vision` with its start in `tron.launch.py` and its parameters in 
 - It reports and nothing else: sensors over `bridge/sensor_info` and `bridge/sensor_value`, detections on
   `vision/detections` (`mowbite_msgs/Detections`, boxes in pixels of the camera image), each camera latched on
   `hw/cameras` (`mowbite_msgs/Camera`: id, process, size of the shown image, protocols, and while it cannot stream
-  one of the reasons of the message). It subscribes to nothing of the stack; a test checks its list of publishers
-  (`tron_vision/test/test_vision_node.cpp`).
+  one of the reasons of the message). It subscribes to nothing of the stack but `hw/status` when it needs the state
+  of the mower (best effort, depth 1); tests check its lists of publishers and subscriptions
+  (`tron_vision/test/test_vision_node.cpp`, `test_stereo_node.cpp`).
+- A thread of its own beside the ROS thread signs the watch of the process after each step (`mowbite_watch`: `Attach`
+  for the node, a `Watch` for the thread); a step that hangs in a vendor library then ends the process (code 86).
 - Protocol `mjpeg`: JPEG on `camera/<id>/jpeg` (`sensor_msgs/CompressedImage`, best effort, depth 1), made only while
   someone subscribes, with a rate and a size limit as platform parameters. The OS serves it to the app.
 - Protocol `webrtc`, for a smooth live picture: the process is an RTSP camera on the loopback address (H.264
@@ -166,8 +170,10 @@ example: `tron_vision` with its start in `tron.launch.py` and its parameters in 
   while the camera cannot stream DESCRIBE answers 503. The parts without ROS are in `tron_vision` (`rtsp_server`,
   `h264_rtp`, `stereo_loop`); a hardware encoder is loaded at run time like the other vendor libraries.
 - A stream whose driver can crash the kernel does not run next to the blade: the loop ends it when the blade starts
-  or the state of the mower is unknown, and tests the camera once per boot while the mower stands. Lift that only
-  after measuring on the mower how long the blade runs without the host.
+  (`BLADE_RUNNING`) or the state of the mower is unknown (`DRIVER_MISSING`: no `hw/status` yet or the last one older
+  than 1 s by the time it came, not by its stamp), and tests the camera once per boot while the mower stands
+  (`SELF_TEST` until then). Lift that only after measuring on the mower how long the blade runs without the host.
+  Start such a process only with `hardware:=true`: with another host at the board `blade_on` says nothing.
 - Vendor runtimes and models are loaded at run time from a directory on the mower and never go into the repo, a bundle
   or an image. Check the model when loading it (inputs, outputs, classes against the class list), else report it and
   do not stream.
@@ -177,7 +183,10 @@ example: `tron_vision` with its start in `tron.launch.py` and its parameters in 
   SoC is hot, a deadline for frames, a few stream attempts per start. Measure them on the mower before it runs for
   long.
 - The service user needs the devices: on a native rootfs groups like `video` and `render`
-  (`platform/tron/rootfs/files/usr/lib/sysusers.d/mowbite.conf`), in Docker the devices passed in.
+  (`platform/tron/rootfs/files/usr/lib/sysusers.d/mowbite.conf`) and udev rules for devices that are root only, such
+  as a hardware encoder and the dma-buf heaps (`60-mowbite-stereo.rules`); in Docker the devices passed in.
+- Settings of a camera that need register writes (exposure control of the Tron's bridge chip, `tron-stereo-ae`) come
+  from the setup at boot, read back, before it reports the camera ready; the node never writes to i2c.
 
 ## Check list
 
