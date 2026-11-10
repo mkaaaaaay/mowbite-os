@@ -1,0 +1,3 @@
+# Hardware encoder and dma-buf heaps for the live picture of the stereo camera; tron_stereo_node runs as mowbite.
+KERNEL=="mpp_service", GROUP="video", MODE="0660"
+SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"

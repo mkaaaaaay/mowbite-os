@@ -75,6 +75,12 @@ if kernel_setup_done; then
     stereo_setup
     sleep 10
     stereo_setup
+    # Exposure control in the bridge, before "configured": the stream never starts during an i2c write. 1 leaves the
+    # exposure fixed, 2 the bridge in an unknown state.
+    if [ -z "$stereo_fail" ]; then
+        /usr/lib/mowbite/tron-stereo-ae
+        [ $? -lt 2 ] || stereo_fail=exposure
+    fi
 else
     stereo_fail=kernel-setup
 fi

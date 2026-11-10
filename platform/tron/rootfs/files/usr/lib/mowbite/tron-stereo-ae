@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Switches on the exposure control inside the XC9080 for both SC132 of the stereo camera, over i2c-8 (2 byte register,
+1 byte value). Fixed sequence, every write read back: page 80/50, 004d = 1, SC132 3e03 = 2b, 004d = 2, SC132
+3e03 = 2b, then 004d = 0 and page 80/26 in any case. Run by tron-hwinit while nothing streams.
+
+Exit 0: control on. 1: stopped at a value that did not read back, 004d and page set back, the exposure stays fixed.
+2: 004d or page could not be set back, the state of the bridge is unknown.
+"""
+import ctypes
+import os
+import sys
+
+BUS = "/dev/i2c-8"
+XC9080, SC132 = 0x1B, 0x30
+I2C_RDWR, I2C_M_RD = 0x0707, 0x0001
+
+
+class Msg(ctypes.Structure):
+    _fields_ = [("addr", ctypes.c_uint16), ("flags", ctypes.c_uint16), ("len", ctypes.c_uint16),
+                ("buf", ctypes.c_void_p)]
+
+
+class RdWr(ctypes.Structure):
+    _fields_ = [("msgs", ctypes.POINTER(Msg)), ("nmsgs", ctypes.c_uint32)]
+
+
+libc = ctypes.CDLL(None, use_errno=True)
+libc.ioctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_void_p]
+
+
+def transfer(fd, msgs):
+    arr = (Msg * len(msgs))(*msgs)
+    data = RdWr(arr, len(msgs))
+    if libc.ioctl(fd, I2C_RDWR, ctypes.addressof(data)) < 0:
+        e = ctypes.get_errno()
+        raise OSError(e, os.strerror(e))
+
+
+def read(fd, addr, reg):
+    out = ctypes.create_string_buffer(bytes([reg >> 8, reg & 0xFF]), 2)
+    into = ctypes.create_string_buffer(1)
+    transfer(fd, [Msg(addr, 0, 2, ctypes.addressof(out)), Msg(addr, I2C_M_RD, 1, ctypes.addressof(into))])
+    return into.raw[0]
+
+
+def write(fd, addr, reg, value, name):
+    try:
+        out = ctypes.create_string_buffer(bytes([reg >> 8, reg & 0xFF, value]), 3)
+        transfer(fd, [Msg(addr, 0, 3, ctypes.addressof(out))])
+        back = read(fd, addr, reg)
+    except OSError as e:
+        print(f"tron-stereo-ae: {name} {reg:04x} = {value:02x}: {e}", flush=True)
+        return False
+    if back != value:
+        print(f"tron-stereo-ae: {name} {reg:04x} = {value:02x}, read back {back:02x}", flush=True)
+    return back == value
+
+
+def control_on(fd):
+    xc = lambda reg, v: write(fd, XC9080, reg, v, "XC9080")
+    ok = False
+    try:
+        if not (xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50)):
+            return 1
+        for sensor in (1, 2):
+            if not (xc(0x004D, sensor) and write(fd, SC132, 0x3E03, 0x2B, f"SC132 #{sensor}")):
+                return 1
+        ok = True
+        return 0
+    finally:
+        # 004d lives on page 80/50; back to 0 there, then the page the kernel driver left (80/26).
+        back = xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50) and xc(0x004D, 0x00)
+        back = xc(0xFFFD, 0x80) and xc(0xFFFE, 0x26) and back
+        if not back:
+            print("tron-stereo-ae: 004d or page not set back", flush=True)
+            sys.exit(2)
+        print("tron-stereo-ae: " + ("exposure control on" if ok else "exposure stays fixed"), flush=True)
+
+
+def main():
+    fd = os.open(BUS, os.O_RDWR | os.O_CLOEXEC)
+    try:
+        sys.exit(control_on(fd))
+    finally:
+        os.close(fd)
+
+
+if __name__ == "__main__":
+    main()
