@@ -73,7 +73,7 @@ class FilesOnly:
     def begin(self):
         pass
 
-    def __call__(self):
+    def __call__(self, since):
         return True, ""
 
     def settled(self):
@@ -102,10 +102,17 @@ class Health:
         except OSError:
             return False
 
-    # (False, why) when it failed for sure, (True, line) when it answers healthy, (None, why) while it comes up.
-    def once(self, since):
-        if not self.carrier.active():
-            return False, "the service does not run"
+    # (False, why) when it failed for sure, (True, line) when it answers healthy, (None, why) while it comes up; with
+    # the time the service became active. entered: that time from the first look, a later one is a restart.
+    def once(self, since, entered=None):
+        state, _, now_entered = self.carrier.show()
+        if state != "active":
+            return False, "the service does not run", now_entered
+        if entered is not None and now_entered != entered:
+            return False, "the service started again", now_entered
+        return (*self._answers(since), now_entered)
+
+    def _answers(self, since):
         if self._since(self.paths.halt, since):
             return False, f"halted: {gate.halt_reason(self.paths)}"
         note = files.read_json(self.paths.exit_note)
@@ -114,15 +121,17 @@ class Health:
         session = gate.session_of_this_boot(self.paths)
         if session is None or session.get("clean") is not False or not self._since(self.paths.session, since):
             return None, "the logic has not started"
-        ok, line = self.probe()
+        ok, line = self.probe(since)
         return (True, line) if ok else (None, line)
 
     def wait_healthy(self, since):
         deadline = time.monotonic() + self.wait
         first_ok = None
         line = ""
+        entered = None
         while True:
-            ok, line = self.once(since)
+            ok, line, now_entered = self.once(since, entered)
+            entered = entered or now_entered
             if ok is False:
                 return False, line
             if ok and first_ok is None:
@@ -272,6 +281,10 @@ class Installer:
             self.carrier.stop()
         except Refused:
             self._clear_pending()
+            if ran and not self.carrier.active():
+                log(f"the stop failed half: {self.place.component} stays on {before or 'the one of the OS'}, "
+                    f"starting again")
+                self.carrier.start()
             raise
         try:
             self._hold()
@@ -296,11 +309,12 @@ class Installer:
             self._back(before)
             raise
         log(f"not healthy: {line}")
-        self._back(before)
-        return False, line
+        back = self._back(before)
+        return False, line if back is None else f"{line}; {back}"
 
     # Back to the installation before the switch; without one the OS stays off, the planner and the app are those of
-    # the OS again. A stop that fails does not keep current on the new one.
+    # the OS again. A stop that fails does not keep current on the new one. What went wrong going back, None when the
+    # one before came up healthy or there is none to start.
     def _back(self, before):
         try:
             self.carrier.stop()
@@ -317,9 +331,12 @@ class Installer:
             except Exception as error:  # noqa: BLE001 - current points back, the record of the switch ends
                 back, back_line = False, f"{type(error).__name__}: {error}"
             log(f"{'healthy' if back else 'NOT HEALTHY'} after going back: {back_line}")
+            problem = None if back else f"not healthy after going back either: {back_line}"
         else:
             log("no installation before this one: the OS stays off")
+            problem = None
         self._clear_pending()
+        return problem
 
     # An update that ended before its health was confirmed (power cut, killed): back to the installation before it,
     # started again when it ran (start_stopped: also when it ran before the switch; never at boot, where the service

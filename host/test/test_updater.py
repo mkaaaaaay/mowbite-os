@@ -7,6 +7,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -18,7 +19,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import support  # noqa: E402
-from mowbite_host import Refused, bundle, files, gate, installer, origin, paths, updater  # noqa: E402
+from mowbite_host import Refused, bundle, carrier, files, gate, installer, origin, paths, updater  # noqa: E402
 
 A, B, C = "aaaaaaa", "bbbbbbb", "ccccccc"
 
@@ -59,8 +60,8 @@ class FakeOs:
 
     # Like os-setup it takes the planner active names, else the one of the OS.
     def start(self):
-        self.running = True
-        self.started = int(time.time())
+        self.running, self.state = True, None
+        self.started = time.time()
         self.planner = files.link_target(self.paths.places["planner"].active)
         self.starts += 1
         if not {os.readlink(self.paths.os.current), self.planner} & self.broken:
@@ -384,11 +385,11 @@ class FlowTest(Base):
         self.install(A)
         once, calls = self.updater.installer.health.once, []
 
-        def fail_first(since):
+        def fail_first(since, entered=None):
             calls.append(since)
             if len(calls) == 1:
                 raise OSError(12, "Cannot allocate memory")
-            return once(since)
+            return once(since, entered)
         self.updater.installer.health.once = fail_first
         last = self.install(B)
         self.assertEqual((last["result"], last["reason"]), ("failed", "INTERNAL"))
@@ -397,6 +398,53 @@ class FlowTest(Base):
         self.assertFalse(os.path.lexists(self.paths.os.pending))
         self.assertEqual(self.updater.state["components"]["os"]["attempts"], {})
         self.assertEqual(self.install(B)["result"], "installed")
+
+    def test_stop_that_fails_half_starts_the_old_one_again(self):
+        self.install(A)
+        stop = self.fake.stop
+
+        def half():
+            stop()
+            raise Refused("BUSY", "systemctl stop mowbite-os.service: timed out")
+        self.fake.stop = half
+        last = self.install(B)
+        self.assertEqual((last["result"], last["reason"]), ("refused", "BUSY"))
+        self.assertEqual(os.readlink(self.paths.os.current), A)
+        self.assertTrue(self.fake.running)
+        self.assertFalse(os.path.lexists(self.paths.os.pending))
+
+    def test_restart_between_two_looks_is_unhealthy(self):
+        self.install(A)
+        health = self.updater.installer.health
+        health.stable, health.every = 0.3, 0.05
+        show = self.fake.show
+        self.fake.show = lambda: (*show()[:2], time.time())
+        last = self.install(B)
+        self.assertEqual(last["result"], "rolled_back")
+        self.assertTrue(last["message"].startswith("the service started again"), last["message"])
+        self.assertEqual(os.readlink(self.paths.os.current), A)
+
+    def test_folder_of_the_revision_from_another_bundle_is_replaced(self):
+        self.install(A)
+        os.makedirs(self.paths.os.of(B))
+        self.write(os.path.join(self.paths.os.of(B), "bundle.json"), "{}")
+        self.assertEqual(self.install(B)["result"], "installed")
+        with open(os.path.join(self.paths.os.of(B), "revision")) as f:
+            self.assertEqual(f.read(), B)
+
+    def test_installed_revision_from_another_bundle_is_refused(self):
+        self.install(A)
+        last = self.install(A)
+        self.assertEqual((last["result"], last["reason"]), ("refused", "BAD_BUNDLE"))
+        self.assertEqual(os.readlink(self.paths.os.current), A)
+
+    def test_nothing_half_unpacked_stays_after_an_error(self):
+        def slow(component, tree):
+            raise subprocess.TimeoutExpired("ldd", 600)
+        self.updater._tree_problem = slow
+        last = self.install(A)
+        self.assertEqual((last["result"], last["reason"]), ("failed", "INTERNAL"))
+        self.assertEqual(sorted(os.listdir(self.paths.os.opt)), [])
 
     def test_stop_that_fails_does_not_keep_the_unhealthy_one(self):
         self.install(A)
@@ -542,6 +590,15 @@ class AutoTest(Base):
         self.updater.tick()
         self.assertEqual(self.updater.join()["result"], "installed")
 
+    def test_gate_given_up_at_the_end_of_the_window(self):
+        self.bundle(A)
+        given = {}
+        self.updater.start = lambda *args, **kwargs: given.update(kwargs)
+        now = time.time()
+        self.updater.tick(now)
+        left = updater.window_left(time.localtime(now), "23:59")
+        self.assertAlmostEqual(given["gate_until"] - time.monotonic(), left, delta=2)
+
     def test_no_sure_clock(self):
         os.remove(self.paths.prefix + "/run/systemd/timesync/synchronized")
         self.bundle(A)
@@ -609,7 +666,87 @@ class AutoTest(Base):
             self.updater.set_auto("yes", "02:00", "05:00")
 
 
+class ProcessCarrierTest(unittest.TestCase):
+    """The carrier for tests and compose: one session, found again by its pid file, stopped as a whole."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.ran = os.path.join(self.dir, "ran")
+        self.pid_file = os.path.join(self.dir, "run/os.pid")
+
+    def carrier(self, script):
+        command = os.path.join(self.dir, "run-os")
+        with open(command, "w") as f:
+            f.write(f"#!/bin/sh\necho $$ >> {self.ran}\n{script}\n")
+        os.chmod(command, 0o755)
+        process = carrier.Process(command, self.pid_file, dict(os.environ), stop_wait=2.0)
+        self.addCleanup(process.stop)
+        return process
+
+    def wait_for(self, check, seconds=5.0):
+        deadline = time.monotonic() + seconds
+        while not check() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return check()
+
+    def test_found_by_its_pid_file_and_stopped(self):
+        process = self.carrier("exec sleep 60")
+        self.assertTrue(process.start())
+        self.assertTrue(self.wait_for(lambda: os.path.exists(self.ran)))
+        again = carrier.Process(process.command, self.pid_file, {})
+        self.assertTrue(again.active())
+        self.assertTrue(again.start())
+        again.stop()
+        self.assertFalse(process.active())
+        self.assertFalse(os.path.exists(self.pid_file))
+        with open(self.ran) as f:
+            self.assertEqual(1, len(f.read().split()))
+
+    def test_session_without_its_leader_still_runs(self):
+        process = self.carrier("sleep 60 &\nexit 0")
+        self.assertTrue(process.start())
+        self.assertTrue(self.wait_for(lambda: process._child.poll() is not None))
+        self.assertTrue(process.active())
+        self.assertTrue(process.start())
+        with open(self.ran) as f:
+            self.assertEqual(1, len(f.read().split()), "a second OS beside the rest of the first")
+        process.stop()
+        self.assertFalse(process.active())
+
+    def test_nothing_runs_when_the_pid_file_was_not_written(self):
+        child = subprocess.Popen(["/bin/sh", "-c", carrier.Process.GO, "/bin/sh", "-c", f"echo x > {self.ran}"],
+                                 stdin=subprocess.PIPE)
+        child.stdin.close()
+        self.assertEqual(1, child.wait(5))
+        self.assertFalse(os.path.exists(self.ran))
+
+    def test_stop_of_a_session_already_gone(self):
+        process = self.carrier("exit 0")
+        self.assertTrue(process.start())
+        self.assertTrue(self.wait_for(lambda: not process.active()))
+        process.stop()
+        process.stop()
+
+    def test_a_session_that_does_not_end_is_refused(self):
+        process = self.carrier("exec sleep 60")
+        self.assertTrue(process.start())
+        self.assertTrue(self.wait_for(lambda: os.path.exists(self.ran)))
+        process.stop_wait, process.KILL_WAIT = 0.1, 0.1
+        stays = process._pid
+        process._pid = lambda: stays() or 1
+        with self.assertRaises(Refused):
+            process.stop()
+        process._pid = stays
+
+
 class HelpersTest(unittest.TestCase):
+    def test_window_left(self):
+        at = time.struct_time((2026, 11, 11, 4, 59, 30, 2, 315, 0))
+        self.assertEqual(updater.window_left(at, "05:00"), 30)
+        at = time.struct_time((2026, 11, 11, 23, 0, 0, 2, 315, 0))
+        self.assertEqual(updater.window_left(at, "02:00"), 3 * 3600)
+
     def test_versions(self):
         self.assertTrue(updater.app_suffices("1.4.0", "1.4.0"))
         self.assertTrue(updater.app_suffices("1.10.0", "1.9.3"))

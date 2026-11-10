@@ -205,7 +205,7 @@ def base_version(path):
 def missing_packages(packages):
     missing = []
     for package in packages:
-        result = run(["dpkg-query", "-W", "-f", "${Status}", str(package)])
+        result = run(["dpkg-query", "-W", "-f", "${Status}", "--", str(package)])
         if result.returncode != 0 or result.stdout.strip() != "install ok installed":
             missing.append(str(package))
     return missing

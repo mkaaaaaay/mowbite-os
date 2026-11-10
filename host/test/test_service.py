@@ -315,9 +315,12 @@ class ProbeTest(unittest.TestCase):
         check = probe.Probe(rpc, api_of_running=lambda: 14)
         check.on_robot_state(json.dumps({"current_state": "IDLE", "emergency_reason": 1 << 1}))
         check.begin()
-        self.assertFalse(check()[0])
+        time.sleep(0.01)
+        since = time.time()
+        # The robot_state of the old OS does not count for the new one.
+        self.assertEqual(check(since), (False, "no robot_state from the new OS"))
         check.on_robot_state(json.dumps({"current_state": "IDLE", "emergency_reason": 1 << 1}))
-        self.assertEqual(check(), (True, "api 14, IDLE"))
+        self.assertEqual(check(since), (True, "api 14, IDLE"))
         # A bit that stood before does not fail it; a new one does.
         self.assertEqual(check.settled()[0], True)
         check.on_robot_state(json.dumps({"current_state": "IDLE", "emergency_reason": (1 << 1) | (1 << 12)}))
@@ -325,9 +328,9 @@ class ProbeTest(unittest.TestCase):
         check.on_robot_state(json.dumps({"current_state": "IDLE", "emergency_reason": 1 << 2}))
         self.assertEqual(check.settled()[0], True)
         rpc.answers["system.info"] = {"api": 13}
-        self.assertEqual(check(), (False, "system.info says api 13, the bundle 14"))
+        self.assertEqual(check(since), (False, "system.info says api 13, the bundle 14"))
         rpc.answers["rpc.methods"] = ["rpc.methods"]
-        self.assertFalse(check()[0])
+        self.assertFalse(check(since)[0])
 
     def test_health_takes_the_last_word_of_settled(self):
         class Settles:
@@ -337,7 +340,7 @@ class ProbeTest(unittest.TestCase):
             def begin(self):
                 self.begun += 1
 
-            def __call__(self):
+            def __call__(self, since):
                 return True, "ok"
 
             def settled(self):
@@ -346,6 +349,9 @@ class ProbeTest(unittest.TestCase):
         class Running:
             def active(self):
                 return True
+
+            def show(self):
+                return "active", None, 1
 
         root = tempfile.mkdtemp()
         try:

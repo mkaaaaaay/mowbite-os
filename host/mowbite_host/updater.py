@@ -45,6 +45,13 @@ def in_window(now_local, start, end):
     return a <= minute < b if a <= b else minute >= a or minute < b
 
 
+# Seconds from now_local until the window ends at end.
+def window_left(now_local, end):
+    minute = now_local.tm_hour * 60 + now_local.tm_min
+    left = (int(end[:2]) * 60 + int(end[3:]) - minute) % (24 * 60)
+    return left * 60 - now_local.tm_sec
+
+
 class Aborted(Exception):
     pass
 
@@ -290,14 +297,14 @@ class Updater:
         self._worker.start()
 
     # update.start: runs in its own thread; Refused right away when it cannot begin. reset_jobs: the planner is
-    # installed although a mowing job is unfinished.
-    def start(self, component, revision=None, by_hand=True, reset_jobs=False):
+    # installed although a mowing job is unfinished. gate_until: the monotonic time the gate is given up at the latest.
+    def start(self, component, revision=None, by_hand=True, reset_jobs=False, gate_until=None):
         with self._lock:
             candidate = self._pick(component, revision)
             blocked = self._entry(component)["blocked"].get(candidate["revision"])
             if blocked and not by_hand:
                 raise Refused("BLOCKED", f"{candidate['revision']} ended {blocked.get('result')} before")
-            self._run("update", lambda: self._install(candidate, reset_jobs))
+            self._run("update", lambda: self._install(candidate, reset_jobs, gate_until))
 
     # Under the lock the switch begins under: an abort that is accepted is never followed by the switch.
     def abort(self):
@@ -329,13 +336,13 @@ class Updater:
 
     # Waits until the gate opens: an OS that moves the mower granted its hold, any other needs none. The planner
     # waits for the end of the mowing job as well unless reset_jobs. The app needs no gate, only no unfinished switch.
-    def _wait_gate(self, component, reset_jobs=False):
+    def _wait_gate(self, component, reset_jobs=False, until=None):
         if not self._stops_os(component):
             if gate.unfinished(self.paths):
                 raise Refused("UNFINISHED", "an update did not finish: recover first")
             return
         jobs = component == "planner" and not reset_jobs
-        deadline = time.monotonic() + self.gate_wait
+        deadline = min(time.monotonic() + self.gate_wait, until or float("inf"))
         while True:
             self._check_abort()
             state, _, started = self.carrier.show()
@@ -443,7 +450,27 @@ class Updater:
             return "BAD_BUNDLE", f"machine code in a bundle of {component}: " + ", ".join(machine[:20])
         return None
 
-    def _install(self, candidate, reset_jobs=False):
+    # A folder of the revision that the bundle did not give (an earlier, broken unpack) goes, unless it is in use.
+    def _replace_stale(self, installer, revision):
+        if revision in (installer.current(), installer.previous()) or revision in (installer.pending() or {}).values():
+            raise Refused("BAD_BUNDLE", f"{revision} is installed with another bundle.json than this bundle")
+        shutil.rmtree(installer.place.of(revision))
+        print(f"{installer.place.component}: removed {revision}, it did not match its bundle", flush=True)
+
+    # Unpacks next to the installations and renames when the tree is good; nothing half stays behind.
+    def _unpack(self, component, staged, place):
+        partial = bundle.unpack(staged, place.opt)
+        try:
+            problem = self._tree_problem(component, os.path.join(partial, staged.revision))
+            if problem:
+                self._block(component, staged.revision, problem[0])
+                raise Refused(*problem)
+            os.rename(os.path.join(partial, staged.revision), place.of(staged.revision))
+        finally:
+            shutil.rmtree(partial, ignore_errors=True)
+        files.sync_dir(place.opt)
+
+    def _install(self, candidate, reset_jobs=False, gate_until=None):
         component, revision = candidate["component"], candidate["revision"]
         installer = self.installers[component]
         place = installer.place
@@ -455,21 +482,15 @@ class Updater:
                                             f"{self.serial_of(component)}")
             self._check_fits(component, staged)
             target = place.of(revision)
+            if os.path.isdir(target) and installer.meta_of(revision) != staged.meta:
+                self._replace_stale(installer, revision)
             if not os.path.isdir(target):
                 self._check_abort()
                 self._set_phase("unpacking")
                 bundle.check_space(staged, place.opt)
-                partial = bundle.unpack(staged, place.opt)
-                problem = self._tree_problem(component, os.path.join(partial, revision))
-                if problem:
-                    shutil.rmtree(partial, ignore_errors=True)
-                    self._block(component, revision, problem[0])
-                    raise Refused(*problem)
-                os.rename(os.path.join(partial, revision), target)
-                os.rmdir(partial)
-                files.sync_dir(place.opt)
+                self._unpack(component, staged, place)
             self._set_phase("waiting_gate")
-            self._wait_gate(component, reset_jobs)
+            self._wait_gate(component, reset_jobs, gate_until)
             ok, line = self._switch(component, revision)
             installer.prune()
             if ok:
@@ -559,7 +580,9 @@ class Updater:
                 entry["auto_tried"] = {"revision": available["revision"], "t": int(now)}
                 self._save()
             try:
-                self.start(component, available["revision"], by_hand=False)
+                # The switch begins within the window or not at all.
+                self.start(component, available["revision"], by_hand=False,
+                           gate_until=time.monotonic() + window_left(time.localtime(now), auto["to"]))
             except Refused as why:
                 print(f"auto: {why}", flush=True)
             return

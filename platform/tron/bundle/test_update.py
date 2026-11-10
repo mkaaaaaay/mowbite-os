@@ -556,7 +556,7 @@ class UpdateTest(unittest.TestCase):
         self.install(self.bundle(A))
         self.install(self.bundle(B))
         with open(self.state("systemctl.log")) as f:
-            calls = [line.split()[0] for line in f if line.split()[0] != "is-active"]
+            calls = [line.split()[0] for line in f if line.split()[0] not in ("is-active", "show")]
         self.assertEqual(calls[-3:], ["stop", "reset-failed", "start"])
 
     def test_no_pending_after_switches(self):

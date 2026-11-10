@@ -252,7 +252,9 @@ class PlannerTest(ComponentBase):
     def test_planner_that_does_not_answer_is_unhealthy(self):
         self.updater.installer.health.probe.planner = lambda: (False, "planner.settings does not answer")
         last = self.install("planner", P1)
-        self.assertEqual((last["result"], last["message"]), ("rolled_back", "planner.settings does not answer"))
+        self.assertEqual(last["result"], "rolled_back")
+        self.assertEqual(last["message"], "planner.settings does not answer; not healthy after going back either: "
+                                          "planner.settings does not answer")
         self.assertEqual(self.links("planner"), (None, None, None))
         # An update of the OS does not ask the planner.
         self.assertEqual(self.install("os", B)["result"], "installed")

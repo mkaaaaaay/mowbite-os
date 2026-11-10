@@ -78,7 +78,6 @@ class Probe:
         self._state = None
         self._state_t = None
         self._bits_before = 0
-        self._since = 0.0
 
     def on_robot_state(self, payload):
         try:
@@ -99,12 +98,12 @@ class Probe:
         with self._lock:
             fresh = self._state_t is not None and time.time() - self._state_t < STATE_FRESH
         self._bits_before = self.bits() if fresh else 0
-        self._since = time.time()
 
-    def __call__(self):
+    # Whether the OS that started at wall time since answers; a robot_state from before is the old one.
+    def __call__(self, since):
         with self._lock:
             state, state_t = self._state, self._state_t
-        if state_t is None or state_t < self._since or time.time() - state_t > STATE_FRESH:
+        if state_t is None or state_t < since or time.time() - state_t > STATE_FRESH:
             return False, "no robot_state from the new OS"
         methods = self.rpc.call("rpc.methods")
         if not isinstance(methods, list) or "system.hold" not in methods:
