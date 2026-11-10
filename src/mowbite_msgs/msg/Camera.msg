@@ -14,6 +14,13 @@ string KIND_STEREO=stereo
 string KIND_REAR=rear
 string kind
 
+# Where it looks, for the switch of the app; empty when unknown or not fixed.
+string POSITION_FRONT=front
+string POSITION_REAR=rear
+string POSITION_LEFT=left
+string POSITION_RIGHT=right
+string position
+
 # Size of the image a viewer gets.
 uint32 width
 uint32 height
@@ -27,8 +34,8 @@ string PROTOCOL_WEBRTC=webrtc
 string[] protocols
 string source
 
-# False with one of the reasons below while the camera cannot stream; the reason is empty while it can. The OS adds
-# CAMERA_BUSY on its own.
+# False with one of the reasons below while the camera cannot stream; the reason is empty while it can. The OS refuses
+# a third viewer with CAMERA_BUSY on its own.
 bool available
 string REASON_LOCKED_AFTER_CRASH=LOCKED_AFTER_CRASH
 string REASON_NOT_SET_UP=NOT_SET_UP

@@ -26,6 +26,13 @@ Field List(std::string name, std::string text, bool required = true) {
   return {std::move(name), Type::kArray, "", required, std::move(text), {}, false, {}, ""};
 }
 
+// A list of names.
+Field Names(std::string name, std::string text) {
+  Field field = List(std::move(name), std::move(text));
+  field.items = Type::kString;
+  return field;
+}
+
 Field Limit(std::string unit) {
   return Number("limit", std::move(unit), "The limit the value went past, in the unit of the value");
 }
@@ -142,6 +149,13 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
          Integer("battery_percentage", "%", "Charge of the battery"), Limit("V")}}},
       {"BELOW_DEFAULT", {"A dimension of the body is now below the value of the platform: check the measurement", {}}},
       {"BLADE_REFUSED", {"The driver refused to start the blade", {}}},
+      {"BLADE_RUNNING",
+       {"The blade runs, and this camera does not stream next to it",
+        {},
+        {{"de", {"Messer läuft", "Diese Kamera zeigt kein Bild, solange das Messer läuft.",
+                 "Warten, bis das Messer steht."}},
+         {"en", {"Blade running", "This camera shows no picture while the blade runs.",
+                 "Wait until the blade has stopped."}}}}},
       {"BLADE_SPINUP_FAILED", {"The blade did not come up to speed", {}}},
       {"BLOCKED",
        {"The automatic update skips this revision; available.blocked says why",
@@ -158,6 +172,15 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
            "Install it by hand if you want it."}}}}},
       {"BUSY", {"The mower is busy with something else", {Text("state", "What it is busy with")}}},
       {"CALIBRATION_MISSING", {"The calibration program is not running or gave no sign", {Seconds(), Limit("s")}}},
+      {"CAMERA_BUSY",
+       {"Two viewers watch already, over all cameras together",
+        {},
+        {{"de",
+          {"Kamera belegt", "Es sehen schon zwei Geräte ein Kamerabild an, mehr geht nicht zugleich.",
+           "Das Bild auf einem anderen Gerät schließen und noch einmal versuchen."}},
+         {"en",
+          {"Camera busy", "Two devices are already watching a camera, more is not possible at once.",
+           "Close the picture on another device, then try again."}}}}},
       {"CANCELED", {"The drive was canceled", {}}},
       {"CHANGED",
        {"The area or path is another one than the client saw: nothing was skipped",
@@ -326,6 +349,19 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
           {"Library missing",
            "A library the update needs is missing on the mower.",
            "Choose an update that fits this mower, or renew the base system."}}}}},
+      {"LOCKED_AFTER_CRASH",
+       {"The camera stays off after a kernel crash while it ran, until its lock on the mower is removed",
+        {},
+        {{"de",
+          {"Kamera gesperrt",
+           "Das Betriebssystem des Mähers ist abgestürzt, während diese Kamera lief. Sie bleibt aus, bis die Sperre "
+           "auf dem Mäher gelöscht ist.",
+           "Das Protokoll für eine Meldung sichern. Die Sperre nur nach der Anleitung löschen."}},
+         {"en",
+          {"Camera locked",
+           "The operating system of the mower crashed while this camera ran. It stays off until the lock on the "
+           "mower is deleted.",
+           "Keep the log for a report. Delete the lock only as the guide says."}}}}},
       {"MANUAL", {"By the user", {}}},
       {"MAP_MISMATCH",
        {"The map does not fit the datum in use",
@@ -356,6 +392,19 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
         {},
         {{"de", {"Keine MP3", "Die Datei ist keine MP3, die der Mäher abspielen kann.", "Eine MP3-Datei wählen."}},
          {"en", {"Not an MP3", "The file is not an MP3 the mower can play.", "Choose an MP3 file."}}}}},
+      {"NOT_SET_UP",
+       {"Something the camera needs is not set up on the mower: a model, an encoder or the stream server",
+        {},
+        {{"de",
+          {"Kamera nicht eingerichtet",
+           "Auf dem Mäher fehlt etwas, das diese Kamera braucht, zum Beispiel ein Modell oder der Dienst für das "
+           "Livebild.",
+           "Die Kamera nach der Anleitung einrichten."}},
+         {"en",
+          {"Camera not set up",
+           "Something this camera needs is missing on the mower, for example a model or the service for the live "
+           "picture.",
+           "Set the camera up as the guide says."}}}}},
       {"NOT_TURNING", {"The mower does not turn", {}}},
       {"NOT_UPDATING",
        {"No update runs that could be stopped",
@@ -459,6 +508,13 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
           {"No space", "The mower has no space left for this sound.",
            "Delete another sound of your own or choose a smaller file."}}}}},
       {"NO_SAFETY_MEASUREMENT", {"This platform has no safety measurement yet, so it does not drive by itself", {}}},
+      {"NO_SIGNAL",
+       {"The camera gives no picture, or its process ended",
+        {},
+        {{"de", {"Kein Bild", "Die Kamera liefert gerade kein Bild.",
+                 "Kurz warten. Bleibt es dabei, MowBite OS neu starten."}},
+         {"en", {"No picture", "The camera gives no picture right now.",
+                 "Wait a moment. If it stays so, restart MowBite OS."}}}}},
       {"ON_DOCK", {"The mower is on the docking station", {Distance(), Limit("m")}}},
       {"OS_TOO_OLD",
        {"The app of the bundle needs a newer OS than the one installed",
@@ -571,6 +627,18 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
           {"Data newer than the system",
            "The data on the mower comes from a newer version of MowBite OS, this one does not start.",
            "Install the newer version again."}}}}},
+      {"SELF_TEST",
+       {"The test of the camera after the start is pending or running; it passes on its own",
+        {},
+        {{"de",
+          {"Selbsttest",
+           "Die Kamera prüft sich nach dem Start einmal selbst. Das geht nur, wenn der Mäher steht und das Messer aus "
+           "ist.",
+           "Warten, bis der Test durch ist."}},
+         {"en",
+          {"Self-test",
+           "The camera tests itself once after the start. That only works while the mower stands with the blade off.",
+           "Wait until the test is done."}}}}},
       {"SENSOR_MISSING",
        {"A sensor the calibration needs does not report",
         {Number("rate", "1/s", "How often it reports"), Limit("1/s")}}},
@@ -608,6 +676,13 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
            "Restart the mower. If it stays, the storage is full or broken: keep the log for a report."}}}}},
       {"TILT_UNKNOWN", {"The tilt of the mower is not known", {Seconds()}}},
       {"TIMEOUT", {"It took too long", {}}},
+      {"TOO_HOT",
+       {"The computer of the mower is too hot, the camera pauses",
+        {},
+        {{"de", {"Zu warm", "Der Rechner des Mähers ist zu warm, die Kamera macht eine Pause.",
+                 "Warten, bis er abgekühlt ist."}},
+         {"en", {"Too hot", "The computer of the mower is too hot, so the camera pauses.",
+                 "Wait until it has cooled down."}}}}},
       {"TOO_LARGE",
        {"The file or a part of it is too large",
         {Limit("bytes")},
@@ -706,6 +781,36 @@ EventEntry Event(std::string type, std::string emitter, std::string text, std::v
                  std::string other_resume = "user") {
   return {std::move(type),   std::move(emitter),        std::move(text),        std::move(fields),
           std::move(reasons), std::move(other_severity), std::move(other_resume)};
+}
+
+// Why a camera cannot stream, in the order of Camera.msg. A refusal rates each on its own; CAMERA_CHANGED only tells
+// that camera.list is another now, so there every reason is a notice.
+std::vector<ReasonEntry> CameraReasons(bool notice) {
+  const auto rated = [notice](const char* code, const char* severity, const char* resume) {
+    return notice ? R(code, "info", "auto") : R(code, severity, resume);
+  };
+  return {rated("LOCKED_AFTER_CRASH", "warning", "user"),
+          rated("NOT_SET_UP", "warning", "user"),
+          rated("BLADE_RUNNING", "info", "auto"),
+          rated("TOO_HOT", "warning", "auto"),
+          rated("NO_SIGNAL", "warning", "user"),
+          WithTexts(rated("DRIVER_MISSING", "warning", "auto"),
+                    {{"de",
+                      {"Mäher meldet sich nicht",
+                       "Die Kamera kennt den Zustand des Mähers nicht und zeigt deshalb kein Bild.",
+                       "Kurz warten. Bleibt es dabei, MowBite OS neu starten."}},
+                     {"en",
+                      {"Mower not reporting",
+                       "The camera doesn't know the state of the mower and so shows no picture.",
+                       "Wait a moment. If it stays so, restart MowBite OS."}}}),
+          rated("SELF_TEST", "info", "auto")};
+}
+
+// severity and resume of an event that is always a notice.
+std::vector<Field> Notice(std::vector<Field> fields) {
+  fields.push_back(Text("severity", "Always info", true, {"info"}));
+  fields.push_back(Text("resume", "Always auto", true, {"auto"}));
+  return fields;
 }
 
 const std::vector<std::string> kRecordingActions = {"start_area_recording",
@@ -1017,8 +1122,24 @@ const std::vector<EventEntry>& Events() {
                   {"auto", "user"})},
             {R("LOST", "warning", "auto"), R("RESTORED", "info", "auto"), R("REJECTED", "error", "user"),
              R("SOURCE_CHANGED", "warning", "auto")}),
+      Event("CAMERA_CHANGED", "camera",
+            "A camera of camera.list can stream again, or no longer and why; viewers of a camera that no longer can "
+            "were disconnected",
+            Notice({Text("camera_id", "Its id in camera.list", true), Bool("available", "Whether it can stream now"),
+                    Text("reason", "Why not, only while it is not available (x-reasons)"),
+                    Text("message", "English text for the log, only with a reason")}),
+            CameraReasons(true), "info", "auto"),
+      Event("METHODS_CHANGED", "bridge",
+            "rpc.methods lists other methods than before: the changes of one second together, also those of the start",
+            Notice({Names("added", "Methods offered now"), Names("removed", "Methods no longer offered")})),
   };
   return events;
+}
+
+std::vector<ReasonEntry> CameraRefusals() {
+  std::vector<ReasonEntry> reasons = {R("CAMERA_BUSY", "info", "user")};
+  for (auto& reason : CameraReasons(false)) reasons.push_back(std::move(reason));
+  return reasons;
 }
 
 std::vector<ReasonEntry> SoundRefusals() {
@@ -1138,6 +1259,8 @@ const std::vector<EventEntry>& Refusals() {
             User({{"RESPONSE_TOPIC", "error"}, {"CORRELATION_DATA", "error"}})),
       Event("SOUND_REFUSED", "answer", "A method sound.* was refused: the data of its -32600, never an event",
             Rated(true, {Text("event", "Always SOUND_REFUSED", true)}), SoundRefusals(), "info", "user"),
+      Event("CAMERA_REFUSED", "answer", "camera.stream was refused: the data of its -32600, never an event",
+            Rated(true, {Text("event", "Always CAMERA_REFUSED", true)}), CameraRefusals(), "info", "user"),
       Event("UPDATE_REFUSED", "host",
             "mowbite-host refused a method update.* or host.*: the data of its -32600 (-32602 with INVALID), never an "
             "event",

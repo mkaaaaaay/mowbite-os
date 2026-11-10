@@ -142,9 +142,15 @@ const char kSoundOffered[] = "with a speaker and at least one sound";
 // update.* and host.* are answered by mowbite-host on the broker, also while the OS is off.
 const char kHostOffered[] = "while mowbite/host/status says online";
 
+const char kCameraOffered[] = "with at least one camera";
+
+Field UnixTime(std::string name, std::string text) {
+  return {std::move(name), Type::kInteger, "unix s", true, std::move(text), {}, false, {}, ""};
+}
+
 // unix s, or null when it is not known.
 Field Time(std::string name, std::string text) {
-  return Nullable({std::move(name), Type::kInteger, "unix s", true, std::move(text), {}, false, {}, ""});
+  return Nullable(UnixTime(std::move(name), std::move(text)));
 }
 
 // The version of a planner or an app; the OS has none besides its revision.
@@ -664,6 +670,36 @@ const std::vector<Method>& Methods() {
                                 Integer("size", "Bytes of the original"), Text("sha256", "SHA-256 of the original"),
                                 Number("seconds", "s", "How long it plays")}))}),
        kSoundOffered},
+      {"camera.list", "mowbite_camera",
+       "The cameras of the mower; CAMERA_CHANGED tells when one of them can stream again or no longer", NoParams(),
+       Rows("result", "A camera, in the order they first reported",
+            {Text("id", "Its id for camera.stream"), Text("name", "Its name to show"),
+             Text("kind", "What it is for: obstacle, stereo, rear or another kind of the platform"),
+             Nullable(Text("position", "Where it looks, null when unknown or not fixed", true,
+                           {"front", "rear", "left", "right"})),
+             Integer("width", "Width of the picture in pixels"), Integer("height", "Height of the picture in pixels"),
+             Bool("detections", "The boxes of the camera AI are drawn into the picture"),
+             List("protocols", "How it streams, mjpeg or webrtc; camera.stream takes the first without a protocol",
+                  Type::kString),
+             Bool("available", "Whether it can stream now"),
+             Text("reason", "Why not, only while it is not available: a reason of CAMERA_REFUSED in x-reasons", false),
+             Text("detail", "A few English words on the reason, for the log", false)}),
+       kCameraOffered},
+      {"camera.stream", "mowbite_camera",
+       "Keeps a place for one viewer and gives the address to watch from: for one connection, which has to begin "
+       "before expires; the place is free again when that connection ends, and every new connection needs a new "
+       "call. At most two viewers at once over all cameras (CAMERA_BUSY). mjpeg: a GET of url gives "
+       "multipart/x-mixed-replace with JPEG; webrtc: url is a WHEP endpoint (H.264). Refused (CAMERA_REFUSED) while "
+       "the camera is not available; -32602 for an id or a protocol it does not have",
+       Object("params", "The camera",
+              {Text("id", "An id of camera.list"),
+               Text("protocol", "One of its protocols; its first without", false, {"mjpeg", "webrtc"})}),
+       Object("result", "The stream",
+              {Text("url", "http address with the token of this connection; its host is the IPv4 of the mower in the "
+                    "network of its default route"),
+               Text("protocol", "The protocol of url", true, {"mjpeg", "webrtc"}),
+               UnixTime("expires", "The connection has to begin before this")}),
+       kCameraOffered},
       {"map.replace", "mowbite_map", "Replaces the map with the one given, in the shape of map/json",
        List("params", "[map]", Type::kObject), Text("result", "Successfully stored map (n areas)"), ""},
       {"map.area_properties", "mowbite_map", "The properties an area of the map may have", NoParams(),

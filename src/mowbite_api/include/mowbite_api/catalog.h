@@ -12,7 +12,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 17;
+constexpr int kApi = 18;
 
 // Who owns the names of the interface file; readers keep a copy of it.
 constexpr char kOwner[] = "mowbite-os";
@@ -70,7 +70,7 @@ struct ReasonEntry {
 
 struct EventEntry {
   std::string type;
-  // logic, map, ntrip or bridge; logic events carry x, y, job_id and session_id as well.
+  // logic, map, ntrip, camera or bridge; logic events carry x, y, job_id and session_id as well.
   std::string emitter;
   std::string text;
   // The fields beyond the envelope (id, t, type) and those of the emitter.
@@ -112,7 +112,8 @@ struct Command {
 // Another RPC method of the OS: what it takes and gives, and which node answers it.
 struct Method {
   std::string name;
-  // mowbite_bridge, mowbite_logic, mowbite_map, mowbite_ntrip, mowbite_calibration, mowbite_light or mowbite_sound.
+  // mowbite_bridge, mowbite_logic, mowbite_map, mowbite_ntrip, mowbite_calibration, mowbite_light, mowbite_sound,
+  // mowbite_camera or mowbite_host.
   std::string node;
   std::string text;
   // The params as one value, mostly an object of fields.
@@ -177,7 +178,8 @@ const std::vector<Field>& Envelope();
 const std::vector<Field>& LogicFields();
 const std::vector<EmergencyBit>& EmergencyBits();
 const std::vector<Command>& Commands();
-// Groups of reasons only answers carry, never an event: COMMAND_REFUSED, REQUEST_REFUSED and SOUND_REFUSED.
+// Groups of reasons only answers carry, never an event: COMMAND_REFUSED, REQUEST_REFUSED, SOUND_REFUSED,
+// CAMERA_REFUSED and those of mowbite-host.
 const std::vector<EventEntry>& Refusals();
 // The RPC methods of the OS beyond Commands(); planner.* are the planner's, sim.* only in the simulation.
 const std::vector<Method>& Methods();

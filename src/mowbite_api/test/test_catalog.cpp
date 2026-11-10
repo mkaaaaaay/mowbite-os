@@ -109,7 +109,8 @@ TEST(Catalog, EntriesAreWellFormed) {
   std::set<std::string> types;
   for (const auto& event : Events()) {
     EXPECT_TRUE(types.insert(event.type).second) << "twice: " << event.type;
-    EXPECT_TRUE(std::set<std::string>({"logic", "map", "ntrip", "bridge"}).count(event.emitter)) << event.type;
+    EXPECT_TRUE(std::set<std::string>({"logic", "map", "ntrip", "camera", "bridge"}).count(event.emitter))
+        << event.type;
     EXPECT_FALSE(event.text.empty()) << event.type;
     EXPECT_TRUE(severities.count(event.other_severity)) << event.type;
     EXPECT_TRUE(resumes.count(event.other_resume)) << event.type;
@@ -289,9 +290,10 @@ TEST(Catalog, EveryReasonOfTheSources) {
   EXPECT_GT(found, 40);
 }
 
-// COMMAND_REFUSED, REQUEST_REFUSED and SOUND_REFUSED are groups of answers only: rated like an event, but never one.
+// COMMAND_REFUSED, REQUEST_REFUSED, SOUND_REFUSED and CAMERA_REFUSED are groups of answers only: rated like an event,
+// but never one.
 TEST(Catalog, RefusalsAreNoEvents) {
-  ASSERT_EQ(Refusals().size(), 6u);
+  ASSERT_EQ(Refusals().size(), 7u);
   const EventEntry& answers = Refusals().front();
   EXPECT_EQ(answers.type, "COMMAND_REFUSED");
   EXPECT_EQ(FindEvent("COMMAND_REFUSED"), nullptr);
@@ -324,6 +326,73 @@ TEST(Catalog, RefusalsAreNoEvents) {
     EXPECT_STREQ(rating.severity, "info") << code;
     EXPECT_STREQ(rating.resume, "user") << code;
   }
+}
+
+// Every reason hw/cameras may give is one of CAMERA_REFUSED and of CAMERA_CHANGED, with texts in both languages;
+// CAMERA_BUSY is the OS's own and never the state of a camera. The event only tells that the list changed.
+TEST(Catalog, ReasonsOfTheCameras) {
+  const std::filesystem::path root = std::filesystem::canonical(MOWBITE_SOURCE_ROOT);
+  std::ifstream in(root / "mowbite_msgs/msg/Camera.msg");
+  std::stringstream text;
+  text << in.rdbuf();
+  const std::string msg = text.str();
+  const std::regex constant(R"(string REASON_([A-Z_]+)=([A-Z_]+))");
+  const EventEntry* refused = FindReasonGroup("CAMERA_REFUSED");
+  const EventEntry* changed = FindEvent("CAMERA_CHANGED");
+  ASSERT_NE(refused, nullptr);
+  ASSERT_NE(changed, nullptr);
+  EXPECT_EQ(FindEvent("CAMERA_REFUSED"), nullptr);
+  const auto find = [](const EventEntry& group, const std::string& code) -> const ReasonEntry* {
+    for (const auto& reason : group.reasons) {
+      if (reason.code == code) return &reason;
+    }
+    return nullptr;
+  };
+  int reasons = 0;
+  for (std::sregex_iterator it(msg.begin(), msg.end(), constant), end; it != end; ++it) {
+    const std::string code = (*it)[2];
+    EXPECT_EQ((*it)[1], code);
+    reasons++;
+    for (const EventEntry* group : {refused, changed}) {
+      const ReasonEntry* reason = find(*group, code);
+      ASSERT_NE(reason, nullptr) << group->type << " " << code;
+      for (const char* language : {"de", "en"}) {
+        ASSERT_TRUE(reason->texts.count(language)) << group->type << " " << code;
+        const UserText& words = reason->texts.at(language);
+        EXPECT_FALSE(words.name.empty() || words.help.empty() || words.fix.empty()) << group->type << " " << code;
+      }
+    }
+    const Rating notice = RateReason("CAMERA_CHANGED", code);
+    EXPECT_STREQ(notice.severity, "info") << code;
+    EXPECT_STREQ(notice.resume, "auto") << code;
+  }
+  EXPECT_EQ(reasons, 7);
+  EXPECT_EQ(refused->reasons.size(), 8u);
+  EXPECT_EQ(changed->reasons.size(), 7u);
+  ASSERT_NE(find(*refused, "CAMERA_BUSY"), nullptr);
+  EXPECT_EQ(find(*refused, "CAMERA_BUSY")->texts.count("de"), 1u);
+  EXPECT_EQ(find(*changed, "CAMERA_BUSY"), nullptr);
+  EXPECT_STREQ(RateReason("CAMERA_REFUSED", "CAMERA_BUSY").resume, "user");
+  EXPECT_STREQ(RateReason("CAMERA_REFUSED", "SELF_TEST").resume, "auto");
+  EXPECT_STREQ(RateReason("CAMERA_REFUSED", "LOCKED_AFTER_CRASH").severity, "warning");
+
+  // The events as the camera node and the bridge send them.
+  EXPECT_TRUE(CheckEvent("CAMERA_CHANGED", Json{{"camera_id", "stereo"}, {"available", true}, {"severity", "info"},
+                                                {"resume", "auto"}}).empty());
+  EXPECT_TRUE(CheckEvent("CAMERA_CHANGED",
+                         Json{{"camera_id", "stereo"}, {"available", false}, {"reason", "TOO_HOT"},
+                              {"message", "Stereo camera: TOO_HOT (SoC 81 C)"}, {"severity", "info"},
+                              {"resume", "auto"}}).empty());
+  EXPECT_FALSE(CheckEvent("CAMERA_CHANGED", Json{{"camera_id", "stereo"}, {"available", false},
+                                                 {"reason", "CAMERA_BUSY"}, {"severity", "info"},
+                                                 {"resume", "auto"}}).empty());
+  EXPECT_FALSE(CheckEvent("CAMERA_CHANGED", Json{{"id", "stereo"}, {"available", true}, {"severity", "info"},
+                                                 {"resume", "auto"}}).empty());
+  EXPECT_TRUE(CheckEvent("METHODS_CHANGED", Json{{"added", {"camera.list", "camera.stream"}},
+                                                 {"removed", Json::array()}, {"severity", "info"},
+                                                 {"resume", "auto"}}).empty());
+  EXPECT_FALSE(CheckEvent("METHODS_CHANGED", Json{{"added", Json::array()}, {"severity", "info"},
+                                                  {"resume", "auto"}}).empty());
 }
 
 // Every action of the logic but manual mowing stands for exactly one command, with params that command takes.
@@ -386,7 +455,8 @@ TEST(Catalog, ParamsOfACommand) {
 // Every RPC method once, each with its node; the commands are none of them.
 TEST(Catalog, MethodsSensorsSettingsAndGeometry) {
   const std::set<std::string> nodes = {"mowbite_bridge",      "mowbite_logic", "mowbite_map",   "mowbite_ntrip",
-                                       "mowbite_calibration", "mowbite_light", "mowbite_sound", "mowbite_host"};
+                                       "mowbite_calibration", "mowbite_light", "mowbite_sound", "mowbite_camera",
+                                       "mowbite_host"};
   std::set<std::string> names;
   for (const auto& command : Commands()) names.insert(command.name);
   for (const auto& method : Methods()) {
