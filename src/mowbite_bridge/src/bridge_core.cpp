@@ -75,6 +75,7 @@ BridgeCore::BridgeCore(BridgeConfig config)
   local_["sensors.list"] = [this](const Json& params) { return SensorList(sensors_, readings_, params); };
   local_["logs.recent"] = [this](const Json& params) { return warnings_.Recent(params); };
   for (const auto& [name, method] : local_) methods_.AddLocal(name);
+  told_methods_ = methods_.All();
   // The app's retained texts come first after a connect, in this order; sensors and map only once there are some.
   kept_order_ = {"capabilities/json", "version/json", "params/json",     "sensor_infos/json",
                  "actions/json",      "map/json",     kBridgeStatusTopic};
@@ -93,6 +94,9 @@ const std::vector<std::string>& BridgeCore::CommandTopics() {
 void BridgeCore::AddLocalMethod(const std::string& name, LocalMethod method) {
   local_[name] = std::move(method);
   methods_.AddLocal(name);
+  // There from the start, no change to tell.
+  const auto place = std::lower_bound(told_methods_.begin(), told_methods_.end(), name);
+  if (place == told_methods_.end() || *place != name) told_methods_.insert(place, name);
 }
 
 void BridgeCore::SetEventSink(EventSink sink) {
@@ -218,6 +222,7 @@ void BridgeCore::OnHostStatus(std::string_view payload) {
     Log(kLogInfo, "mowbite-host " + std::string(methods.empty() ? "is offline" : "answers its methods") + ": " +
                       std::to_string(methods_.All().size()) + " methods in all");
   }
+  NoteMethods();
 }
 
 void BridgeCore::Answer(const RpcCall& call, const Reply& to) {
@@ -268,8 +273,9 @@ void BridgeCore::OnRobotState(const RobotStateView& state) {
   Guard("robot state", [&] { Send("robot_state/json", RobotStateText(state), false); });
 }
 
-void BridgeCore::OnSensor(const SensorDescription& sensor) {
+void BridgeCore::OnSensor(const SensorDescription& sensor, const std::string& provider) {
   Guard("sensor", [&] {
+    sensor_provider_[sensor.id] = provider;
     const auto known = sensors_.find(sensor.id);
     if (known != sensors_.end() && SensorInfo(known->second) == SensorInfo(sensor)) return;
     sensors_[sensor.id] = sensor;
@@ -321,10 +327,91 @@ void BridgeCore::OnPlatform(const std::string& platform, const Json& stop_releas
   stop_release_ = stop_release;
 }
 
-void BridgeCore::OnRpcMethods(const std::string& node, const std::vector<std::string>& methods) {
+void BridgeCore::OnRpcMethods(const std::string& node, const std::vector<std::string>& methods,
+                              const std::string& provider) {
   Guard("rpc methods", [&] {
+    const auto known = node_provider_.find(node);
+    if (known != node_provider_.end() && !known->second.empty() && !provider.empty() && known->second != provider) {
+      Log(kLogWarn, CleanUtf8(node) + " registered anew from another process");
+      FailCalls(methods_.Of(node));
+    }
     methods_.SetNode(node, methods);
+    if (methods.empty()) {
+      node_provider_.erase(node);
+    } else {
+      node_provider_[node] = provider;
+    }
+    NoteMethods();
     Log(kLogInfo, CleanUtf8(node) + " registered " + std::to_string(methods.size()) + " methods");
+  });
+}
+
+void BridgeCore::OnProviders(const std::set<std::string>& alive) {
+  Guard("providers", [&] {
+    std::map<std::string, int> missed;
+    std::set<std::string> gone;
+    const auto check = [&](const std::string& provider) {
+      if (provider.empty() || alive.count(provider) || missed.count(provider)) return;
+      const auto before = missed_.find(provider);
+      const int checks = (before == missed_.end() ? 0 : before->second) + 1;
+      missed[provider] = checks;
+      if (checks >= kProviderChecks) gone.insert(provider);
+    };
+    for (const auto& [node, provider] : node_provider_) check(provider);
+    for (const auto& [id, provider] : sensor_provider_) check(provider);
+    missed_ = std::move(missed);
+    if (gone.empty()) return;
+
+    std::set<std::string> methods;
+    for (auto node = node_provider_.begin(); node != node_provider_.end();) {
+      if (!gone.count(node->second)) {
+        ++node;
+        continue;
+      }
+      const std::set<std::string>& its = methods_.Of(node->first);
+      Log(kLogWarn, CleanUtf8(node->first) + " is gone, its " + std::to_string(its.size()) +
+                        " methods are no longer offered");
+      methods.insert(its.begin(), its.end());
+      methods_.SetNode(node->first, {});
+      node = node_provider_.erase(node);
+    }
+    FailCalls(methods);
+    NoteMethods();
+
+    std::string sensors;
+    for (auto sensor = sensor_provider_.begin(); sensor != sensor_provider_.end();) {
+      if (!gone.count(sensor->second)) {
+        ++sensor;
+        continue;
+      }
+      if (sensors_.erase(sensor->first) != 0) sensors += (sensors.empty() ? "" : ", ") + CleanUtf8(sensor->first);
+      readings_.erase(sensor->first);
+      sensor = sensor_provider_.erase(sensor);
+    }
+    if (sensors.empty()) return;
+    Log(kLogWarn, "Sensors no longer reported, their process is gone: " + sensors);
+    Keep("sensor_infos/json", SensorInfosText(sensors_));
+  });
+}
+
+void BridgeCore::Tick(double t) {
+  Guard("methods", [&] {
+    if (!methods_changed_ || !connected_ || Now() - *methods_changed_ < kMethodsCollectS) return;
+    methods_changed_.reset();
+    const std::vector<std::string> now = methods_.All();
+    Json added = Json::array(), removed = Json::array();
+    for (const auto& method : now) {
+      if (!std::binary_search(told_methods_.begin(), told_methods_.end(), method)) added.push_back(CleanUtf8(method));
+    }
+    for (const auto& method : told_methods_) {
+      if (!std::binary_search(now.begin(), now.end(), method)) removed.push_back(CleanUtf8(method));
+    }
+    told_methods_ = now;
+    if (added.empty() && removed.empty()) return;
+    const Json event = BuildEvent(
+        "METHODS_CHANGED", {{"added", added}, {"removed", removed}, {"severity", "info"}, {"resume", "auto"}}, t);
+    Send(kEventsTopic, event.dump(), false);
+    Event(event);
   });
 }
 
@@ -418,6 +505,26 @@ std::string BridgeCore::Open(const Json& id, const std::string& method, const Re
   const uint64_t number = ++next_call_;
   open_[number] = {id, method, now, to};
   return tag_ + std::to_string(number);
+}
+
+void BridgeCore::NoteMethods() {
+  if (methods_.All() == told_methods_) {
+    methods_changed_.reset();
+  } else if (!methods_changed_) {
+    methods_changed_ = Now();
+  }
+}
+
+void BridgeCore::FailCalls(const std::set<std::string>& methods) {
+  for (auto call = open_.begin(); call != open_.end();) {
+    if (!methods.count(call->second.method)) {
+      ++call;
+      continue;
+    }
+    SendReply(call->second.to, ErrorReply(call->second.id, kMethodNotFound,
+                                          "The node that answers \"" + call->second.method + "\" is gone"));
+    call = open_.erase(call);
+  }
 }
 
 bool BridgeCore::Close(const std::string& node_id, Json* id, Reply* to) {

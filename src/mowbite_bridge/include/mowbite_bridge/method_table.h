@@ -19,6 +19,8 @@ class MethodTable {
   void SetNode(const std::string& node, const std::vector<std::string>& methods);
   // The methods mowbite-host answers itself, replacing its earlier list; only update.* and host.* count.
   void SetHost(const std::vector<std::string>& methods);
+  // The methods a node offers now, none for a node without a list.
+  const std::set<std::string>& Of(const std::string& node) const;
   // The bridge's own methods come first.
   Route Find(const std::string& method) const;
   // Every method once, sorted.

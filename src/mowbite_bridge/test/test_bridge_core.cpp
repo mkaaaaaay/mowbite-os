@@ -839,3 +839,216 @@ TEST_F(Core, AFailingSinkBecomesAWarning) {
   EXPECT_EQ(out.logs[0].level, kLogWarn);
   EXPECT_EQ(out.logs[0].text, "Bridge: publish failed: disk full");
 }
+
+namespace {
+
+// A connected core with a clock the test sets and its events kept.
+class Timed : public ::testing::Test {
+ protected:
+  Timed() : core_(BridgeConfig{"1.2.3", "{}", [this] { return now_; }}) {
+    core_.SetEventSink([this](const Json& event) { sunk_.push_back(event); });
+    core_.Connected();
+    core_.Take();
+  }
+
+  // The METHODS_CHANGED events a Tick sends after this many seconds.
+  std::vector<Json> After(double seconds) {
+    now_ += seconds;
+    core_.Tick(1000.0 + now_);
+    std::vector<Json> events;
+    for (const auto& m : core_.Take().mqtt) {
+      if (m.topic != "events/json") continue;
+      EXPECT_FALSE(m.retain);
+      events.push_back(Json::parse(m.payload));
+    }
+    return events;
+  }
+
+  // Forwards a call of this method and gives the id the node got.
+  std::string Forward(const std::string& method, const Json& id) {
+    core_.Take();
+    core_.OnMqtt("rpc/request", Json{{"jsonrpc", "2.0"}, {"method", method}, {"id", id}}.dump(), false);
+    const Outbox out = core_.Take();
+    EXPECT_EQ(out.requests.size(), 1u) << method;
+    return out.requests.empty() ? std::string("?") : out.requests[0].id;
+  }
+
+  std::vector<std::string> Methods() {
+    return Call(core_, "rpc.methods")["result"].get<std::vector<std::string>>();
+  }
+
+  double now_ = 50.0;
+  BridgeCore core_;
+  std::vector<Json> sunk_;
+};
+
+bool Offers(const std::vector<std::string>& methods, const std::string& method) {
+  return std::find(methods.begin(), methods.end(), method) != methods.end();
+}
+
+SensorDescription TextSensor(const std::string& id) {
+  SensorDescription sensor;
+  sensor.id = id;
+  sensor.is_text = true;
+  return sensor;
+}
+
+}  // namespace
+
+// M5: the changes of one second in one event, as the catalog has it; the bridge's own methods are never news.
+TEST_F(Timed, MethodsChangedTellsTheChangesOfOneSecondTogether) {
+  core_.AddLocalMethod("events.history", [](const Json&) { return Json(); });
+  EXPECT_TRUE(After(5.0).empty());
+
+  core_.OnRpcMethods("mowbite_logic", {"params.set", "docking.start"});
+  EXPECT_TRUE(After(0.4).empty());
+  core_.OnRpcMethods("mowbite_planner", {"planner.plan"});
+  EXPECT_TRUE(After(0.5).empty());
+  std::vector<Json> events = After(0.1);
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0]["type"], "METHODS_CHANGED");
+  EXPECT_EQ(events[0]["added"], Json({"docking.start", "params.set", "planner.plan"}));
+  EXPECT_EQ(events[0]["removed"], Json::array());
+  EXPECT_EQ(events[0]["severity"], "info");
+  EXPECT_EQ(events[0]["resume"], "auto");
+  EXPECT_EQ(events[0]["t"], 1000.0 + now_);
+  EXPECT_TRUE(mowbite_api::CheckEvent("METHODS_CHANGED", events[0]).empty());
+  ASSERT_EQ(sunk_.size(), 1u);
+  EXPECT_EQ(sunk_[0], events[0]);
+  EXPECT_TRUE(After(5.0).empty());
+
+  // One method less, one of the host more.
+  core_.OnRpcMethods("mowbite_planner", {});
+  core_.OnMqtt("mowbite/host/status", R"({"online": true, "methods": ["update.status"]})", true);
+  events = After(1.0);
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0]["added"], Json({"update.status"}));
+  EXPECT_EQ(events[0]["removed"], Json({"planner.plan"}));
+
+  // Back within the second: nothing to tell, and the next change has its own second.
+  core_.OnRpcMethods("mowbite_light", {"light.preview"});
+  core_.OnRpcMethods("mowbite_light", {});
+  EXPECT_TRUE(After(0.9).empty());
+  core_.OnRpcMethods("mowbite_light", {"light.preview"});
+  EXPECT_TRUE(After(0.9).empty());
+  events = After(0.1);
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0]["added"], Json({"light.preview"}));
+  EXPECT_EQ(sunk_.size(), 3u);
+}
+
+TEST(BridgeCoreConnection, MethodsChangedWaitsForTheBroker) {
+  double now = 0.0;
+  BridgeCore core(BridgeConfig{"1.2.3", "{}", [&now] { return now; }});
+  std::vector<Json> sunk;
+  core.SetEventSink([&sunk](const Json& event) { sunk.push_back(event); });
+  core.OnRpcMethods("mowbite_logic", {"params.set"});
+  now = 30.0;
+  core.Tick(1.0);
+  EXPECT_TRUE(core.Take().mqtt.empty());
+  EXPECT_TRUE(sunk.empty());
+  core.Connected();
+  core.Take();
+  core.OnRpcMethods("mowbite_map", {"map.replace"});
+  core.Tick(2.0);
+  const Outbox out = core.Take();
+  ASSERT_EQ(out.mqtt.size(), 1u);
+  EXPECT_EQ(out.mqtt[0].topic, "events/json");
+  EXPECT_EQ(Json::parse(out.mqtt[0].payload)["added"], Json({"map.replace", "params.set"}));
+  EXPECT_EQ(sunk.size(), 1u);
+}
+
+// M5: a provider the graph lacks twice in a row is gone with its methods, its open calls and its sensors.
+TEST_F(Timed, AProviderMissingTwiceInARowIsGone) {
+  core_.OnRpcMethods("mowbite_camera", {"camera.list", "camera.stream"}, "aa");
+  core_.OnRpcMethods("mowbite_logic", {"params.set"}, "bb");
+  core_.OnSensor(TextSensor("vision_state"), "cc");
+  core_.OnSensor(TextSensor("om_charge_state"), "bb");
+  core_.OnSensor(TextSensor("from_a_test"));
+  core_.OnSensorValue("vision_state", "running", 1.0);
+  ASSERT_EQ(After(1.0).size(), 1u);
+  const std::string camera_call = Forward("camera.stream", 7);
+  const std::string logic_call = Forward("params.set", 8);
+
+  // Missing once, there again, missing once: nothing happens.
+  core_.OnProviders({"aa", "bb", "cc"});
+  core_.OnProviders({"bb"});
+  core_.OnProviders({"aa", "bb", "cc"});
+  core_.OnProviders({"bb"});
+  EXPECT_TRUE(core_.Take().mqtt.empty());
+  EXPECT_TRUE(Offers(Methods(), "camera.stream"));
+
+  core_.OnProviders({"bb"});
+  Outbox out = core_.Take();
+  ASSERT_EQ(Topics(out), (std::vector<std::string>{"rpc/response", "sensor_infos/json"}));
+  const Json failed = Json::parse(out.mqtt[0].payload);
+  EXPECT_EQ(failed["id"], 7);
+  EXPECT_EQ(failed["error"]["code"], kMethodNotFound);
+  EXPECT_TRUE(out.mqtt[1].retain);
+  const Json infos = Json::parse(out.mqtt[1].payload);
+  ASSERT_EQ(infos.size(), 2u);
+  EXPECT_EQ(infos[0]["sensor_id"], "from_a_test");
+  EXPECT_EQ(infos[1]["sensor_id"], "om_charge_state");
+  ASSERT_EQ(out.logs.size(), 2u);
+  EXPECT_EQ(out.logs[0].level, kLogWarn);
+  EXPECT_EQ(out.logs[0].text, "mowbite_camera is gone, its 2 methods are no longer offered");
+  EXPECT_EQ(out.logs[1].text, "Sensors no longer reported, their process is gone: vision_state");
+
+  const std::vector<std::string> methods = Methods();
+  EXPECT_FALSE(Offers(methods, "camera.list"));
+  EXPECT_FALSE(Offers(methods, "camera.stream"));
+  EXPECT_TRUE(Offers(methods, "params.set"));
+  EXPECT_EQ(Call(core_, "camera.list")["error"]["code"], kMethodNotFound);
+  EXPECT_EQ(Call(core_, "sensors.list", Json{{"ids", {"vision_state"}}})["result"], Json::array());
+  const std::vector<Json> events = After(1.0);
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0]["added"], Json::array());
+  EXPECT_EQ(events[0]["removed"], Json({"camera.list", "camera.stream"}));
+
+  // The call of the node that is still there gets its answer, the late one of the camera is dropped.
+  core_.OnRpcResponse(logic_call, "true");
+  core_.OnRpcResponse(camera_call, "{}");
+  out = core_.Take();
+  ASSERT_EQ(out.mqtt.size(), 1u);
+  EXPECT_EQ(Json::parse(out.mqtt[0].payload)["id"], 8);
+
+  // A sensor without a known publisher stays whatever the graph says; the process that comes back is taken again.
+  for (int i = 0; i < 3; ++i) core_.OnProviders({});
+  EXPECT_EQ(Call(core_, "sensors.list")["result"].size(), 1u);
+  core_.OnSensor(TextSensor("vision_state"), "cd");
+  core_.OnRpcMethods("mowbite_camera", {"camera.list", "camera.stream"}, "ab");
+  core_.OnProviders({"ab", "cd"});
+  core_.OnProviders({"ab", "cd"});
+  EXPECT_EQ(Call(core_, "sensors.list")["result"].size(), 2u);
+  EXPECT_TRUE(Offers(Methods(), "camera.list"));
+}
+
+// A node that registers from another publisher started anew: what its old process was asked gets no answer.
+TEST_F(Timed, ANewProcessOfANodeEndsTheCallsOfItsOldOne) {
+  core_.OnRpcMethods("mowbite_camera", {"camera.stream"}, "aa");
+  core_.OnRpcMethods("mowbite_logic", {"params.set"}, "bb");
+  ASSERT_EQ(After(1.0).size(), 1u);
+  Forward("camera.stream", "a");
+  Forward("params.set", "b");
+
+  // The same publisher once more, as DDS sends a latched message again.
+  core_.OnRpcMethods("mowbite_camera", {"camera.stream"}, "aa");
+  EXPECT_TRUE(core_.Take().mqtt.empty());
+
+  core_.OnRpcMethods("mowbite_camera", {"camera.stream"}, "ab");
+  const Outbox out = core_.Take();
+  ASSERT_EQ(out.mqtt.size(), 1u);
+  const Json failed = Json::parse(out.mqtt[0].payload);
+  EXPECT_EQ(failed["id"], "a");
+  EXPECT_EQ(failed["error"]["code"], kMethodNotFound);
+  EXPECT_EQ(failed["error"]["message"], "The node that answers \"camera.stream\" is gone");
+
+  // The method is still offered: nothing to tell, and the new process gets the next call.
+  EXPECT_TRUE(After(2.0).empty());
+  EXPECT_NE(Forward("camera.stream", "c"), "?");
+  // The old publisher leaving the graph afterwards changes nothing.
+  core_.OnProviders({"ab", "bb"});
+  core_.OnProviders({"ab", "bb"});
+  EXPECT_TRUE(core_.Take().mqtt.empty());
+  EXPECT_TRUE(Offers(Methods(), "camera.stream"));
+}

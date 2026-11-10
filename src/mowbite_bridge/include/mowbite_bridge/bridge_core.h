@@ -28,6 +28,10 @@ constexpr std::size_t kMaxOpenCalls = 512;
 constexpr std::size_t kMaxIdBytes = 1024;
 // Correlation data of an MQTT 5 request longer than this is refused.
 constexpr std::size_t kMaxCorrelationBytes = 1024;
+// Changes of rpc.methods are collected this long from the first one, then told in one METHODS_CHANGED.
+constexpr double kMethodsCollectS = 1.0;
+// A publisher of methods or sensors the graph lacks in this many checks in a row is gone.
+constexpr int kProviderChecks = 2;
 // Retained {"online": true|false} of the bridge; false is also its last will. robot_state is old while it says false.
 constexpr char kBridgeStatusTopic[] = "mowbite/bridge/status";
 // Retained by mowbite-host: {online, methods, ...}; the bridge stays silent on its methods while it is online.
@@ -141,7 +145,8 @@ class BridgeCore {
   void OnMqtt(const std::string& topic, std::string_view payload, bool retained, const ResponseRoute& route = {});
 
   void OnRobotState(const RobotStateView& state);
-  void OnSensor(const SensorDescription& sensor);
+  // provider names the publisher the sensor came from (OnProviders); empty: not known, the sensor stays for good.
+  void OnSensor(const SensorDescription& sensor, const std::string& provider = "");
   void OnSensorValue(const std::string& id, const Json& value, double stamp);
   void OnActions(const std::string& prefix, const std::vector<ActionItem>& items);
   void OnParams(std::string_view message);
@@ -149,7 +154,17 @@ class BridgeCore {
   void OnMap(const std::string& text);
   // From hw/capabilities: the platform and stop_release of system.info.
   void OnPlatform(const std::string& platform, const Json& stop_release = Json());
-  void OnRpcMethods(const std::string& node, const std::vector<std::string>& methods);
+  // provider as for OnSensor. Another provider under the name of a node is a new instance of it: the calls its old
+  // one still owes an answer get -32601.
+  void OnRpcMethods(const std::string& node, const std::vector<std::string>& methods,
+                    const std::string& provider = "");
+  // The publishers of methods and sensors the graph has now, checked once a second. One that is missing in
+  // kProviderChecks checks in a row is gone: its methods leave rpc.methods, the calls it still owes an answer get
+  // -32601, its sensors leave sensor_infos/json and sensors.list.
+  void OnProviders(const std::set<std::string>& alive);
+  // A few times a second: METHODS_CHANGED once rpc.methods has been another list for kMethodsCollectS, held back
+  // until the broker is connected. t is the time of the event.
+  void Tick(double t);
   // Answers of the nodes for MQTT under the id the client sent, to where its request wanted them; calls one node makes
   // of another (ids beginning with kInternalCall) stay in ROS, an answer to a call no longer open or to an id the
   // bridge did not give is dropped.
@@ -185,6 +200,10 @@ class BridgeCore {
   std::string Open(const Json& id, const std::string& method, const Reply& to);
   // The client's id of the call with this id for the node and where its answer goes; false when it is not open.
   bool Close(const std::string& node_id, Json* id, Reply* to);
+  // Starts the time to collect when rpc.methods is not the list told last.
+  void NoteMethods();
+  // -32601 to every open call of one of these methods.
+  void FailCalls(const std::set<std::string>& methods);
 
   BridgeConfig config_;
   bool connected_ = false;
@@ -195,6 +214,14 @@ class BridgeCore {
   std::string state_;
   std::string sub_state_;
   MethodTable methods_;
+  // rpc.methods as METHODS_CHANGED told it last, sorted; the bridge's own methods count as told.
+  std::vector<std::string> told_methods_;
+  // Since when rpc.methods is another list, by the clock of the open calls.
+  std::optional<double> methods_changed_;
+  // The provider of each node with methods and of each sensor, and the checks in a row a provider was missing in.
+  std::map<std::string, std::string> node_provider_;
+  std::map<std::string, std::string> sensor_provider_;
+  std::map<std::string, int> missed_;
   std::map<std::string, LocalMethod> local_;
   EventSink sink_;
   ParamTable params_;

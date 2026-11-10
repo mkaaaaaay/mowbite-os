@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -57,6 +58,10 @@ constexpr double kRetrySeconds = 5.0;
 constexpr auto kPositionPeriod = 150ms;
 constexpr auto kSavePeriod = 30s;
 constexpr auto kRestartNoteDelay = 1s;
+constexpr auto kProvidersPeriod = 1s;
+constexpr auto kTickPeriod = 250ms;
+constexpr char kMethodsTopic[] = "bridge/rpc/methods";
+constexpr char kSensorInfoTopic[] = "bridge/sensor_info";
 constexpr int kReachableTimeoutMs = 1000;
 constexpr char kClientId[] = "mowbite_bridge";
 constexpr char kRestartNote[] = "container_exit.json";
@@ -80,6 +85,20 @@ Meaning MeaningOf(uint8_t meaning) {
     case msg::SensorSpec::MEANING_REVOLUTIONS: return Meaning::kRevolutions;
     default: return Meaning::kUnknown;
   }
+}
+
+// The GID of a publisher as the core's name for it; empty for one without (all zero).
+template <typename Bytes>
+std::string ProviderName(const Bytes& gid) {
+  static constexpr char kDigits[] = "0123456789abcdef";
+  std::string name;
+  bool any = false;
+  for (const uint8_t byte : gid) {
+    any = any || byte != 0;
+    name += kDigits[byte >> 4];
+    name += kDigits[byte & 15];
+  }
+  return any ? name : "";
 }
 
 std::optional<double> Limit(double value) {
@@ -229,10 +248,11 @@ class BridgeNode : public rclcpp::Node {
     Subscribe<msg::RobotState>("bridge/robot_state", rclcpp::QoS(10), [this](const msg::RobotState& m) {
       core_.OnRobotState(View(m));
     });
-    Subscribe<msg::SensorSpec>("bridge/sensor_info", Latched(100), [this](const msg::SensorSpec& m) {
-      text_sensors_[m.id] = m.kind == msg::SensorSpec::KIND_TEXT;
-      core_.OnSensor(Describe(m));
-    });
+    SubscribeFrom<msg::SensorSpec>(kSensorInfoTopic, Latched(100),
+                                   [this](const msg::SensorSpec& m, const std::string& provider) {
+                                     text_sensors_[m.id] = m.kind == msg::SensorSpec::KIND_TEXT;
+                                     core_.OnSensor(Describe(m), provider);
+                                   });
     Subscribe<msg::SensorValue>("bridge/sensor_value", rclcpp::QoS(100), [this](const msg::SensorValue& m) {
       const auto known = text_sensors_.find(m.sensor_id);
       const bool text = known != text_sensors_.end() && known->second;
@@ -248,9 +268,10 @@ class BridgeNode : public rclcpp::Node {
     Subscribe<msg::MqttPublish>("bridge/publish", rclcpp::QoS(100), [this](const msg::MqttPublish& m) {
       core_.OnPublish(m.topic, m.payload, m.retain);
     });
-    Subscribe<msg::RpcMethods>("bridge/rpc/methods", Latched(50), [this](const msg::RpcMethods& m) {
-      core_.OnRpcMethods(m.node_id, m.methods);
-    });
+    SubscribeFrom<msg::RpcMethods>(kMethodsTopic, Latched(50),
+                                   [this](const msg::RpcMethods& m, const std::string& provider) {
+                                     core_.OnRpcMethods(m.node_id, m.methods, provider);
+                                   });
     Subscribe<msg::RpcResponse>("bridge/rpc/response", rclcpp::QoS(100), [this](const msg::RpcResponse& m) {
       core_.OnRpcResponse(m.id, m.result);
     });
@@ -281,6 +302,19 @@ class BridgeNode : public rclcpp::Node {
       });
     });
     save_timer_ = create_wall_timer(kSavePeriod, [this] { Locked("track save", [&] { track_.Save(); }); });
+    providers_timer_ = create_wall_timer(kProvidersPeriod, [this] {
+      // A graph that cannot be read skips the check: it throws, and no provider counts as missing.
+      Locked("providers", [&] {
+        std::set<std::string> alive;
+        for (const char* topic : {kMethodsTopic, kSensorInfoTopic}) {
+          for (const auto& publisher : get_publishers_info_by_topic(topic)) {
+            alive.insert(ProviderName(publisher.endpoint_gid()));
+          }
+        }
+        core_.OnProviders(alive);
+      });
+    });
+    tick_timer_ = create_wall_timer(kTickPeriod, [this] { Locked("tick", [&] { core_.Tick(WallNow()); }); });
     restart_timer_ = create_wall_timer(kRestartNoteDelay, [this] {
       restart_timer_->cancel();
       ReportRestart();
@@ -400,6 +434,16 @@ class BridgeNode : public rclcpp::Node {
     subscriptions_.push_back(create_subscription<M>(topic, qos, [this, topic, handler](const M& m) {
       Locked(topic.c_str(), [&] { handler(m); });
     }));
+  }
+
+  // As Subscribe, the handler also gets the name of the publisher each message came from.
+  template <typename M, typename F>
+  void SubscribeFrom(const std::string& topic, const rclcpp::QoS& qos, F handler) {
+    subscriptions_.push_back(
+        create_subscription<M>(topic, qos, [this, topic, handler](const M& m, const rclcpp::MessageInfo& info) {
+          const auto& gid = info.get_rmw_message_info().publisher_gid.data;
+          Locked(topic.c_str(), [&] { handler(m, ProviderName(gid)); });
+        }));
   }
 
   // Runs f with the core to itself, then sends what came of it; where names it should the bridge stall. Nothing that
@@ -572,6 +616,8 @@ class BridgeNode : public rclcpp::Node {
   std::vector<rclcpp::SubscriptionBase::SharedPtr> subscriptions_;
   rclcpp::TimerBase::SharedPtr position_timer_;
   rclcpp::TimerBase::SharedPtr save_timer_;
+  rclcpp::TimerBase::SharedPtr providers_timer_;
+  rclcpp::TimerBase::SharedPtr tick_timer_;
   rclcpp::TimerBase::SharedPtr restart_timer_;
   rclcpp::TimerBase::SharedPtr retry_timer_;
   std::unique_ptr<mowbite_watch::Attached> watch_;

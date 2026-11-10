@@ -21,6 +21,12 @@ void MethodTable::SetHost(const std::vector<std::string>& methods) {
   }
 }
 
+const std::set<std::string>& MethodTable::Of(const std::string& node) const {
+  static const std::set<std::string> none;
+  const auto known = nodes_.find(node);
+  return known == nodes_.end() ? none : known->second;
+}
+
 Route MethodTable::Find(const std::string& method) const {
   if (local_.count(method)) return Route::kLocal;
   if (host_.count(method)) return Route::kHost;
