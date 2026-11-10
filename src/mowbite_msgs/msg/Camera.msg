@@ -34,6 +34,8 @@ string REASON_NOT_SET_UP=NOT_SET_UP
 string REASON_BLADE_RUNNING=BLADE_RUNNING
 string REASON_TOO_HOT=TOO_HOT
 string REASON_NO_SIGNAL=NO_SIGNAL
+# The state of the mower is unknown (hw/status older than 1 s); BLADE_RUNNING only while the blade really runs.
+string REASON_DRIVER_MISSING=DRIVER_MISSING
 string reason
 # Why, in a few words for the log and the app ("model missing", "SoC 81 C").
 string detail
