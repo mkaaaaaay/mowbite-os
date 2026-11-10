@@ -10015,12 +10015,12 @@
         "severity": "error",
         "texts": {
           "de": {
-            "fix": "Neu starten oder das letzte Update zurücknehmen.",
+            "fix": "Neu starten oder zur vorigen Version zurück.",
             "help": "MowBite OS ist mehrmals abgestürzt und bleibt aus.",
             "name": "MowBite OS bleibt aus"
           },
           "en": {
-            "fix": "Restart it or take back the last update.",
+            "fix": "Restart it or go back to the version before.",
             "help": "MowBite OS crashed several times and stays off.",
             "name": "MowBite OS stays off"
           }
@@ -10051,12 +10051,12 @@
         "severity": "error",
         "texts": {
           "de": {
-            "fix": "Neu starten. Hilft das nicht, das letzte Update zurücknehmen und das Protokoll für eine Meldung sichern.",
+            "fix": "Neu starten. Hilft das nicht, zur vorigen Version zurück und das Protokoll für eine Meldung sichern.",
             "help": "MowBite OS kann seine Daten nicht lesen oder vorbereiten und startet nicht.",
             "name": "Datenfehler"
           },
           "en": {
-            "fix": "Restart. If that does not help, take back the last update and keep the log for a report.",
+            "fix": "Restart. If that does not help, go back to the version before and keep the log for a report.",
             "help": "MowBite OS cannot read or prepare its data and does not start.",
             "name": "Data error"
           }
@@ -10069,13 +10069,13 @@
         "severity": "error",
         "texts": {
           "de": {
-            "fix": "Platz auf dem Mäher schaffen, etwa alte Aufnahmen löschen, dann neu starten.",
+            "fix": "Das Protokoll für eine Meldung sichern; der Speicher des Mähers muss von Hand aufgeräumt werden.",
             "help": "Vor dem Start sichert MowBite OS seine Daten, dafür ist auf dem Mäher nicht genug Platz.",
             "name": "Kein Platz für die Sicherung"
           },
           "en": {
-            "fix": "Make space on the mower, e.g. delete old recordings, then restart.",
-            "help": "Before it starts MowBite OS backs up its data, and the mower has not enough space for that.",
+            "fix": "Keep the log for a report; the storage of the mower has to be cleaned up by hand.",
+            "help": "Before it starts MowBite OS backs up its data, and the mower doesn't have enough space for that.",
             "name": "No space for the backup"
           }
         }
@@ -10087,13 +10087,13 @@
         "severity": "error",
         "texts": {
           "de": {
-            "fix": "Das letzte Update zurücknehmen oder MowBite OS neu installieren.",
+            "fix": "Zur vorigen Version zurück oder MowBite OS neu installieren.",
             "help": "Das Profil, mit dem die Teile von MowBite OS miteinander sprechen, fehlt oder ist nicht lesbar.",
             "name": "Netzprofil fehlt"
           },
           "en": {
-            "fix": "Take back the last update or install MowBite OS again.",
-            "help": "The profile the parts of MowBite OS talk to each other with is missing or not readable.",
+            "fix": "Go back to the version before or install MowBite OS again.",
+            "help": "The profile the parts of MowBite OS use to talk to each other is missing or unreadable.",
             "name": "Network profile missing"
           }
         }
@@ -10992,7 +10992,7 @@
           },
           "en": {
             "fix": "Load the file again and put it into the inbox once more.",
-            "help": "The update file is damaged or not the one its origin names.",
+            "help": "The update file is damaged or not the one its source names.",
             "name": "Update file damaged"
           }
         }
@@ -11009,9 +11009,9 @@
             "name": "Herkunft ungültig"
           },
           "en": {
-            "fix": "Check the origin and load the update from there again.",
-            "help": "The update does not come from a configured origin, or its index is not validly signed.",
-            "name": "Origin not valid"
+            "fix": "Check the source and load the update from there again.",
+            "help": "The update does not come from a configured source, or its index is not validly signed.",
+            "name": "Source not valid"
           }
         }
       },
@@ -11027,7 +11027,7 @@
             "name": "Signatur ungültig"
           },
           "en": {
-            "fix": "Use only updates from the origin of MowBite OS.",
+            "fix": "Use only updates from the source of MowBite OS.",
             "help": "The update is not signed with a known key and is not installed.",
             "name": "Signature not valid"
           }
@@ -11046,7 +11046,7 @@
           },
           "en": {
             "fix": "Renew the base system of the mower first, then install the update.",
-            "help": "This update needs a newer base system of the mower and is not installed by itself.",
+            "help": "This update needs a newer base system of the mower and is not installed automatically.",
             "name": "Base system too old"
           }
         }
@@ -11059,12 +11059,12 @@
         "texts": {
           "de": {
             "fix": "Bei Bedarf von Hand installieren.",
-            "help": "Die Automatik installiert diesen Stand nicht, weil er vorher gescheitert ist, zurückgenommen wurde oder nicht passt.",
+            "help": "Die Automatik installiert diese Version nicht: Sie ist vorher gescheitert, wurde rückgängig gemacht oder passt nicht zu diesem Mäher.",
             "name": "Übersprungen"
           },
           "en": {
             "fix": "Install it by hand if you want it.",
-            "help": "The automatic update does not install this revision: it failed before, was taken back or does not fit.",
+            "help": "The automatic update does not install this version: it failed before, was rolled back or doesn't fit this mower.",
             "name": "Skipped"
           }
         }
@@ -11096,13 +11096,13 @@
         "severity": "warning",
         "texts": {
           "de": {
-            "fix": "Mäher und Umgebung ansehen und den Notaus zurücksetzen.",
-            "help": "Das Update wartet, bis kein Notaus und keine Neustart-Sperre mehr steht.",
+            "fix": "Mäher und Umgebung prüfen, dann den Notaus zurücksetzen.",
+            "help": "Das Update wartet, bis kein Notaus und keine Neustart-Sperre mehr aktiv ist.",
             "name": "Notaus"
           },
           "en": {
-            "fix": "Look at the mower and around it and reset the emergency.",
-            "help": "The update waits until no emergency and no restart hold stands.",
+            "fix": "Check the mower and its surroundings, then reset the emergency.",
+            "help": "The update waits until no emergency and no restart lock is active.",
             "name": "Emergency"
           }
         }
@@ -11133,13 +11133,13 @@
         "texts": {
           "de": {
             "fix": "Für eine sichere Stromversorgung sorgen und das Update von Hand noch einmal starten.",
-            "help": "Das Umschalten auf diesen Stand wurde zweimal unterbrochen, etwa durch einen Stromausfall. Der Mäher ist beim Stand davor.",
+            "help": "Das Umschalten auf diese Version wurde zweimal unterbrochen, etwa durch einen Stromausfall. Der Mäher ist bei der vorigen Version.",
             "name": "Update unterbrochen"
           },
           "en": {
             "fix": "Make sure the power stays on and start the update again by hand.",
-            "help": "The switch to this revision was cut off twice, e.g. by a power cut. The mower is at the revision before.",
-            "name": "Update cut off"
+            "help": "The switch to this version was interrupted twice, e.g. by a power failure. The mower is back on the version before.",
+            "name": "Update interrupted"
           }
         }
       },
@@ -11150,13 +11150,13 @@
         "severity": "warning",
         "texts": {
           "de": {
-            "fix": "Mäher und Umgebung ansehen, dann den Notaus zurücksetzen. Kommt es öfter vor, die Protokolle für eine Meldung sichern.",
-            "help": "Das Betriebssystem des Mähers ist abgestürzt und neu gestartet. Der Mäher fährt und mäht nicht, bis er freigegeben wird, gleich was er vorher tat.",
+            "fix": "Mäher und Umgebung prüfen, dann den Notaus zurücksetzen.",
+            "help": "Das Betriebssystem des Mähers ist abgestürzt und neu gestartet. Das Update wartet, bis der Notaus zurückgesetzt ist.",
             "name": "Kernel-Absturz"
           },
           "en": {
-            "fix": "Look at the mower and around it, then reset the emergency. If it happens again, keep the logs for a report.",
-            "help": "The operating system of the mower crashed and started again. The mower does not drive or mow until it is released, whatever it did before.",
+            "fix": "Check the mower and its surroundings, then reset the emergency.",
+            "help": "The operating system of the mower crashed and restarted. The update waits until the emergency is reset.",
             "name": "Kernel crash"
           }
         }
@@ -11209,9 +11209,9 @@
             "name": "Mäher nicht angehalten"
           },
           "en": {
-            "fix": "Nothing to do, the update keeps trying by itself.",
-            "help": "MowBite OS did not hold the mower for the update, e.g. because something is starting.",
-            "name": "Mower not held"
+            "fix": "Nothing to do, the update keeps trying automatically.",
+            "help": "MowBite OS couldn't pause the mower for the update, e.g. because something is starting.",
+            "name": "Mower not paused"
           }
         }
       },
@@ -11222,13 +11222,13 @@
         "severity": "error",
         "texts": {
           "de": {
-            "fix": "Für einen älteren Stand das Zurücknehmen nutzen.",
-            "help": "Dieses Update ist nicht neuer als der laufende Stand und wird nicht installiert.",
+            "fix": "Zum Zurückgehen „Zurück zur vorigen Version“ nutzen.",
+            "help": "Dieses Update ist nicht neuer als die laufende Version und wird nicht installiert.",
             "name": "Nicht neuer"
           },
           "en": {
-            "fix": "To go to an older revision, take back the update.",
-            "help": "This update is not newer than the running revision and is not installed.",
+            "fix": "To go back, use Back to the version before.",
+            "help": "This update is not newer than the running version and is not installed.",
             "name": "Not newer"
           }
         }
@@ -11241,13 +11241,13 @@
         "texts": {
           "de": {
             "fix": "Bei Bedarf von Hand installieren.",
-            "help": "Dieser Stand wurde von Hand zurückgenommen und wird nicht von selbst wieder installiert.",
-            "name": "Von Hand zurückgenommen"
+            "help": "Diese Version wurde von Hand rückgängig gemacht und wird nicht von selbst wieder installiert.",
+            "name": "Von Hand rückgängig gemacht"
           },
           "en": {
             "fix": "Install it by hand if you want it.",
-            "help": "This revision was taken back by hand and is not installed again by itself.",
-            "name": "Taken back by hand"
+            "help": "This version was rolled back by hand and is not installed again automatically.",
+            "name": "Rolled back by hand"
           }
         }
       },
@@ -11258,12 +11258,12 @@
         "severity": "warning",
         "texts": {
           "de": {
-            "fix": "Kurz warten, der Mäher kehrt von selbst zum Stand davor zurück.",
+            "fix": "Kurz warten, der Mäher kehrt von selbst zur vorigen Version zurück.",
             "help": "Ein früheres Update wurde nicht beendet.",
             "name": "Update nicht beendet"
           },
           "en": {
-            "fix": "Wait a moment, the mower goes back to the revision before by itself.",
+            "fix": "Wait a moment, the mower goes back to the version before automatically.",
             "help": "An earlier update did not finish.",
             "name": "Update not finished"
           }
@@ -11276,13 +11276,13 @@
         "severity": "error",
         "texts": {
           "de": {
-            "fix": "Den Stand davor weiter nutzen. Dieses Update wird nicht mehr von selbst installiert.",
-            "help": "Nach dem Update lief MowBite OS nicht richtig, der Mäher ist zum Stand davor zurückgekehrt.",
+            "fix": "Die vorige Version weiter nutzen. Dieses Update wird nicht mehr von selbst installiert.",
+            "help": "Nach dem Update lief MowBite OS nicht richtig, der Mäher ist zur vorigen Version zurückgekehrt.",
             "name": "Update nicht gesund"
           },
           "en": {
-            "fix": "Keep using the revision before. This update is not installed by itself any more.",
-            "help": "After the update MowBite OS did not run properly, the mower went back to the revision before.",
+            "fix": "Keep using the version before. This update is not installed automatically any more.",
+            "help": "After the update MowBite OS did not run properly, the mower went back to the version before.",
             "name": "Update not healthy"
           }
         }
@@ -11294,13 +11294,13 @@
         "severity": "error",
         "texts": {
           "de": {
-            "fix": "Platz schaffen, etwa alte Aufnahmen löschen, dann noch einmal versuchen.",
+            "fix": "Später noch einmal versuchen. Bleibt es dabei, das Protokoll für eine Meldung sichern.",
             "help": "Auf dem Mäher ist nicht genug Platz, um das Update zu entpacken.",
             "name": "Kein Platz für das Update"
           },
           "en": {
-            "fix": "Make space, e.g. delete old recordings, then try again.",
-            "help": "The mower has not enough space to unpack the update.",
+            "fix": "Try again later. If it stays so, keep the log for a report.",
+            "help": "The mower doesn't have enough space to unpack the update.",
             "name": "No space for the update"
           }
         }
@@ -11334,24 +11334,34 @@
         "severity": "warning",
         "texts": {
           "de": {
-            "fix": "Mäher und Umgebung ansehen und den Notaus zurücksetzen.",
-            "help": "Ein Notaus oder die Neustart-Sperre steht, deshalb startet MowBite OS jetzt nicht neu.",
+            "fix": "Mäher und Umgebung prüfen, dann den Notaus zurücksetzen.",
+            "help": "Ein Notaus oder die Neustart-Sperre ist aktiv, deshalb geht das jetzt nicht.",
             "name": "Notaus"
           },
           "en": {
-            "fix": "Look at the mower and around it and reset the emergency.",
-            "help": "An emergency or the restart hold stands, so MowBite OS does not restart now.",
+            "fix": "Check the mower and its surroundings, then reset the emergency.",
+            "help": "An emergency or the restart lock is active, so this can't be done now.",
             "name": "Emergency"
           }
         }
       },
       "HOLD": {
         "description": "An update holds the mower: nothing starts until it is done",
-        "fields": {
-          "until": "unix s"
-        },
+        "fields": {},
         "resume": "user",
-        "severity": "info"
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Warten, bis das Update fertig ist.",
+            "help": "Gerade läuft ein Update, deshalb geht das jetzt nicht.",
+            "name": "Update läuft"
+          },
+          "en": {
+            "fix": "Wait until the update has finished.",
+            "help": "An update is running, so this can't be done now.",
+            "name": "Update running"
+          }
+        }
       },
       "INTERNAL": {
         "description": "An error in the updater",
@@ -11375,7 +11385,19 @@
         "description": "The path or the request was not valid",
         "fields": {},
         "resume": "user",
-        "severity": "info"
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Die App aktualisieren und noch einmal versuchen.",
+            "help": "Der Mäher hat diese Anfrage nicht angenommen.",
+            "name": "Anfrage ungültig"
+          },
+          "en": {
+            "fix": "Update the app, then try again.",
+            "help": "The mower didn't accept this request.",
+            "name": "Request not valid"
+          }
+        }
       },
       "NOT_UPDATING": {
         "description": "No update runs that could be stopped",
@@ -11402,14 +11424,14 @@
         "severity": "info",
         "texts": {
           "de": {
-            "fix": "Die Update-Datei in den Eingang des Mähers legen und erneut suchen.",
-            "help": "Es liegt kein neuerer Stand vor.",
-            "name": "Kein neuerer Stand"
+            "fix": "Nichts zu tun.",
+            "help": "MowBite OS ist aktuell.",
+            "name": "Aktuell"
           },
           "en": {
-            "fix": "Put the update file into the inbox of the mower and look again.",
-            "help": "There is no newer revision.",
-            "name": "No newer revision"
+            "fix": "Nothing to do.",
+            "help": "MowBite OS is up to date.",
+            "name": "Up to date"
           }
         }
       },
@@ -11421,13 +11443,13 @@
         "texts": {
           "de": {
             "fix": "Nichts zu tun.",
-            "help": "Es gibt keinen früheren Stand, zu dem der Mäher zurückkehren kann.",
-            "name": "Kein Stand davor"
+            "help": "Es gibt keine vorige Version, zu der der Mäher zurückkehren kann.",
+            "name": "Keine vorige Version"
           },
           "en": {
             "fix": "Nothing to do.",
-            "help": "There is no earlier revision the mower can go back to.",
-            "name": "No earlier revision"
+            "help": "There is no version before this one the mower can go back to.",
+            "name": "No version before"
           }
         }
       },
@@ -11438,14 +11460,14 @@
         "severity": "info",
         "texts": {
           "de": {
-            "fix": "Erneut suchen und einen angezeigten Stand wählen.",
-            "help": "Diesen Stand kennt der Mäher nicht.",
-            "name": "Stand unbekannt"
+            "fix": "Erneut prüfen und eine angezeigte Version wählen.",
+            "help": "Diese Version kennt der Mäher nicht.",
+            "name": "Version unbekannt"
           },
           "en": {
-            "fix": "Look again and choose a revision it shows.",
-            "help": "The mower does not know this revision.",
-            "name": "Unknown revision"
+            "fix": "Check again and choose a version it shows.",
+            "help": "The mower does not know this version.",
+            "name": "Unknown version"
           }
         }
       }
