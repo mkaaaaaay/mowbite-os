@@ -35,11 +35,8 @@ string REASON_NOT_SET_UP=NOT_SET_UP
 string REASON_BLADE_RUNNING=BLADE_RUNNING
 string REASON_TOO_HOT=TOO_HOT
 string REASON_NO_SIGNAL=NO_SIGNAL
-# hw/status older than 1 s or without telemetry; BLADE_RUNNING only while the blade really runs.
+# hw/status older than 1 s; BLADE_RUNNING only while the blade really runs.
 string REASON_DRIVER_MISSING=DRIVER_MISSING
-# The emergency bits FOREIGN_HOST and MOWER_NOT_STOPPED of hw/status, the latter also with the blade off.
-string REASON_FOREIGN_HOST=FOREIGN_HOST
-string REASON_MOWER_NOT_STOPPED=MOWER_NOT_STOPPED
 # The self-test after the start is pending or running; it passes on its own.
 string REASON_SELF_TEST=SELF_TEST
 string reason
