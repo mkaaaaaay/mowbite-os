@@ -89,6 +89,9 @@ through a thread of their own like `mowbite_hold::FileWriter`.
 - Docker Compose like the NX60i (`docker/mower/nx60i.compose.yaml`), or a native bundle on the mower's own rootfs like
   the Tron (`platform/tron/`).
 - Map, settings and journal live in the data dir, never in a container volume.
+- The data dir has to stay writable for the OS: while `os-session.json` or `restart-hold.json` cannot be written
+  there, nothing starts from IDLE (`STORAGE_NOT_WRITABLE`, event `STORAGE`), a job already running goes on. Put it
+  on storage that lasts across power cuts and is not mounted read only on errors without a way back.
 - Every log, recording and cache gets a limit in days and MB.
 
 ## 6. Safety measurement
@@ -152,7 +155,7 @@ is no common camera package yet.
 - [ ] Geometry file and platform file, inherited values checked
 - [ ] Start file, driver restarts latched
 - [ ] Simulation: mowing, going home, docking; `app_interface_check`
-- [ ] Way onto the mower chosen, limits for logs and journal
+- [ ] Way onto the mower chosen, limits for logs and journal, data dir writable (a start works)
 - [ ] Safety measurement done, date set
 - [ ] Lights, if any: device rights, `output` on only after a look on the mower
 - [ ] Cameras, if any: own process, publisher list tested, vendor files only on the mower, limits measured
