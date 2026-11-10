@@ -17,6 +17,7 @@
   <depend>nlohmann-json-dev</depend>
   <depend>mowbite_journal</depend>
   <depend>mowbite_hold</depend>
+  <depend>mowbite_watch</depend>
   <test_depend>ament_cmake_gtest</test_depend>
 
   <export>

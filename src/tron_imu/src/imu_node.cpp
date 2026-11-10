@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 
+#include "mowbite_watch/attach.h"
 #include "tron_imu/wit_imu.h"
 #include "tron_imu/wit_parser.h"
 #include "tron_mcu/serial_port.h"
@@ -39,6 +40,7 @@ class ImuNode : public rclcpp::Node {
     imu_ = std::make_unique<tron::WitImu>(config);
 
     pub_ = create_publisher<sensor_msgs::msg::Imu>("imu/data", rclcpp::SensorDataQoS());
+    watch_ = mowbite_watch::Attach(*this);
     io_thread_ = std::thread([this] { IoLoop(); });
   }
 
@@ -163,6 +165,7 @@ class ImuNode : public rclcpp::Node {
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_;
   std::atomic<bool> running_{true};
   std::thread io_thread_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 
 }  // namespace tron_imu

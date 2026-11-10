@@ -19,6 +19,7 @@
 
 #include "mowbite_bridge/event_builder.h"
 #include "mowbite_map/map_service.h"
+#include "mowbite_watch/attach.h"
 
 namespace mowbite_map {
 
@@ -119,6 +120,7 @@ class MapNode : public rclcpp::Node {
     Flush();
     // Events wait until the bridge listens, and go out once a second at the latest.
     timer_ = create_wall_timer(std::chrono::seconds(1), [this] { Flush(); });
+    watch_ = mowbite_watch::Attach(*this);
   }
 
  private:
@@ -216,6 +218,7 @@ class MapNode : public rclcpp::Node {
   rclcpp::Service<mowbite_msgs::srv::SetDock>::SharedPtr set_dock_srv_;
   rclcpp::Service<mowbite_msgs::srv::ReplaceMap>::SharedPtr replace_srv_;
   rclcpp::TimerBase::SharedPtr timer_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 
 }  // namespace mowbite_map

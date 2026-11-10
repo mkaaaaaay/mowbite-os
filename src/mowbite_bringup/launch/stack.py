@@ -2,6 +2,7 @@
 the container with the nodes above the hardware contract, restarted after a crash, and the MowBite Planner.
 """
 import asyncio
+import json
 import os
 import sys
 import time
@@ -24,6 +25,8 @@ CONTAINER_RESTARTS = 3
 RESTART_DELAY = 2.0
 # In data_dir: how the container ended, written before it starts again, for its bridge to log.
 EXIT_NOTE = "container_exit.json"
+# In data_dir: the node the watch of the container (mowbite_watch) ended it for, taken into EXIT_NOTE as stalled.
+WATCH_NOTE = "watch_exit.json"
 # Battery voltages that stand only in the parameter files of the logic; a driver that sets them on its board gets them
 # from there under the same names.
 BATTERY_VOLTAGES = ("battery_empty_voltage", "battery_full_voltage", "battery_critical_voltage")
@@ -164,6 +167,11 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal):
     return [localization, safety, logic, bridge, map_node, follower, ntrip, calibration]
 
 
+# The names of these composable nodes, as their watch knows them.
+def node_names(nodes):
+    return ["".join(part.text for part in node.node_name) for node in nodes]
+
+
 # On every start of action its oom_score_adj; raising it needs no privilege. Empty: inherited.
 def oom_score(action, oom_score_adj, logger):
     if not oom_score_adj:
@@ -179,17 +187,42 @@ def oom_score(action, oom_score_adj, logger):
     return [RegisterEventHandler(OnProcessStart(target_action=action, on_start=started))]
 
 
-# make(restart) as a process that starts again after it ended outside the shutdown, at most `restarts` times, each time
-# after RESTART_DELAY s; before each restart `note` (None: none) says how it ended. Every start gets oom_score_adj.
-def restarting(make, note, label, logger, restarts, oom_score_adj=""):
-    # A start by hand begins without restarts.
+# Removes path if it is there; None: nothing.
+def remove(path, logger):
     try:
-        if note:
-            os.remove(note)
+        if path:
+            os.remove(path)
     except FileNotFoundError:
         pass
     except OSError as error:
-        logger.error(f"Cannot remove {note}: {error}")
+        logger.error(f"Cannot remove {path}: {error}")
+
+
+# {node, seconds, limit} of the note of the watch, which it then removes; None without one or when it cannot be read.
+def take_watch_note(path, logger):
+    if not path:
+        return None
+    try:
+        with open(path) as f:
+            note = json.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as error:
+        logger.error(f"Cannot read {path}: {error}")
+        note = None
+    remove(path, logger)
+    if not isinstance(note, dict) or not isinstance(note.get("node"), str):
+        return None
+    return {key: note.get(key) for key in ("node", "seconds", "limit")}
+
+
+# make(restart) as a process that starts again after it ended outside the shutdown, at most `restarts` times, each time
+# after RESTART_DELAY s; before each restart `note` (None: none) says how it ended, with what the watch of the process
+# left in `watch_note` (None: none) as stalled. Every start gets oom_score_adj.
+def restarting(make, note, label, logger, restarts, oom_score_adj="", watch_note=None):
+    # A start by hand begins without restarts.
+    remove(note, logger)
+    remove(watch_note, logger)
 
     def start(restart):
         action = make(restart)
@@ -201,6 +234,7 @@ def restarting(make, note, label, logger, restarts, oom_score_adj=""):
         # At the end of the launch the process is stopped, it did not crash.
         if context.is_shutdown:
             return None
+        stalled = take_watch_note(watch_note, logger)
         if restart >= restarts:
             logger.error(f"{label} ended with exit code {event.returncode} after {restarts} restarts and stays down "
                          "until the next start")
@@ -211,7 +245,7 @@ def restarting(make, note, label, logger, restarts, oom_score_adj=""):
             if note:
                 data_store.write_json(os.path.dirname(note), os.path.basename(note),
                                       {"exit_code": event.returncode, "restart": restart + 1, "max_restarts": restarts,
-                                       "t": time.time()})
+                                       "t": time.time(), "stalled": stalled})
         except OSError as error:
             logger.error(f"Cannot write {note}: {error}")
         return [TimerAction(period=RESTART_DELAY, actions=start(restart + 1))]
@@ -236,11 +270,18 @@ def own_process(make, name, data_dir, logger, restarts=CONTAINER_RESTARTS, oom_s
 def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
     # Every restart is a new container with a name of its own: DDS knows the load service of a crashed one for a while,
     # and launch_ros would wait for its answer for ever. Each node spins in its own thread, so a node that blocks stalls
-    # only itself, not S2 or the follower beside it.
+    # only itself, not S2 or the follower beside it; the watch of the container ends it when one stays silent or one
+    # of these nodes does not come (mowbite_watch).
+    watch_note = os.path.join(data_dir, WATCH_NOTE) if data_dir else None
+    watch_env = {"MOWBITE_WATCH_NODES": ",".join(node_names(nodes))}
+    if watch_note:
+        watch_env["MOWBITE_WATCH_NOTE"] = watch_note
+
     def container(restart):
         return ComposableNodeContainer(
             name="mowbite" if restart == 0 else f"mowbite_{restart}", namespace="", package="rclcpp_components",
-            executable="component_container_isolated", composable_node_descriptions=nodes, output="screen")
+            executable="component_container_isolated", composable_node_descriptions=nodes, output="screen",
+            additional_env=watch_env)
 
     # Plans the mowing paths for mowing.plan; a crash only costs the plans until it is back. Namespace "/" so that a
     # dict of parameters goes under its full name.
@@ -248,5 +289,5 @@ def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
                    parameters=[*files, {"data_dir": data_dir}], output="screen", respawn=True,
                    respawn_delay=5.0)
     return [*restarting(container, os.path.join(data_dir, EXIT_NOTE), "The container", logger, CONTAINER_RESTARTS,
-                        oom_score_adj),
+                        oom_score_adj, watch_note),
             *oom_score(planner, oom_score_adj, logger), planner]

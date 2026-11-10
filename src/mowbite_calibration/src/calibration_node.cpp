@@ -33,6 +33,7 @@
 #include "mowbite_calibration/program.h"
 #include "mowbite_calibration/recording.h"
 #include "mowbite_calibration/result.h"
+#include "mowbite_watch/attach.h"
 
 namespace mowbite_calibration {
 
@@ -245,6 +246,7 @@ class CalibrationNode : public rclcpp::Node {
 
     tick_timer_ = create_wall_timer(std::chrono::milliseconds(50), [this] { OnTick(); });
     status_timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] { PublishStatus(); });
+    watch_ = mowbite_watch::Attach(*this);
   }
 
  private:
@@ -698,6 +700,7 @@ class CalibrationNode : public rclcpp::Node {
   rclcpp_action::Server<Calibrate>::SharedPtr server_;
   rclcpp::TimerBase::SharedPtr tick_timer_;
   rclcpp::TimerBase::SharedPtr status_timer_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 
 }  // namespace mowbite_calibration

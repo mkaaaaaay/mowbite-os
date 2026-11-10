@@ -19,6 +19,7 @@
 #include <thread>
 #include <vector>
 
+#include "mowbite_watch/attach.h"
 #include "tron_gnss/board_link.h"
 #include "tron_gnss/gnss_tracker.h"
 #include "tron_gnss/nmea.h"
@@ -128,6 +129,7 @@ class GnssNode : public rclcpp::Node {
     spec.critical_low = none;
     spec.critical_high = max_correction_age_s_;
     sensor_info_pub_->publish(spec);
+    watch_ = mowbite_watch::Attach(*this);
     io_thread_ = std::thread([this] { IoLoop(); });
   }
 
@@ -390,6 +392,7 @@ class GnssNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::Rtcm>::SharedPtr rtcm_sub_;
   std::atomic<bool> running_{true};
   std::thread io_thread_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 
 }  // namespace tron_gnss

@@ -16,6 +16,7 @@ find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_bridge REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(mowbite_watch REQUIRED)
 
 # Map model, storage and RPC handling without ROS, testable on any machine.
 add_library(mowbite_map_core STATIC src/map_model.cpp src/map_store.cpp src/map_service.cpp src/sha256.cpp)
@@ -26,7 +27,8 @@ target_link_libraries(mowbite_map_core nlohmann_json::nlohmann_json OpenSSL::Cry
 set_target_properties(mowbite_map_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_map_component SHARED src/map_node.cpp)
-target_link_libraries(mowbite_map_component mowbite_map_core mowbite_bridge::mowbite_bridge_core)
+target_link_libraries(mowbite_map_component mowbite_map_core mowbite_bridge::mowbite_bridge_core
+  mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_map_component rclcpp rclcpp_components sensor_msgs std_msgs mowbite_msgs)
 rclcpp_components_register_node(mowbite_map_component
   PLUGIN "mowbite_map::MapNode"

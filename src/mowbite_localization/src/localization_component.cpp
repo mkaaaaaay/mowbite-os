@@ -25,6 +25,7 @@
 
 #include "mowbite_localization/estimator.h"
 #include "mowbite_localization/estimator_journal.h"
+#include "mowbite_watch/attach.h"
 
 namespace mowbite_localization {
 
@@ -134,6 +135,7 @@ class LocalizationNode : public rclcpp::Node {
       RCLCPP_INFO(get_logger(), "Gyro calibration: keep the mower still for %.0f s",
                   get_parameter("gyro_calibration_time").as_double());
     }
+    watch_ = mowbite_watch::Attach(*this);
   }
 
  private:
@@ -361,6 +363,7 @@ class LocalizationNode : public rclcpp::Node {
   rclcpp::Service<mowbite_msgs::srv::SetPose>::SharedPtr set_pose_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetHeading>::SharedPtr set_heading_srv_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_gps_srv_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 
 }  // namespace mowbite_localization

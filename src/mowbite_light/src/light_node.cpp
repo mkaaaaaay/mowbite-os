@@ -17,6 +17,7 @@
 #include "mowbite_light/light_service.h"
 #include "mowbite_light/output.h"
 #include "mowbite_light/ws2812.h"
+#include "mowbite_watch/attach.h"
 #include "tron_mcu/serial_port.h"
 
 namespace mowbite_light {
@@ -57,6 +58,7 @@ class LightNode : public rclcpp::Node {
  public:
   explicit LightNode(const rclcpp::NodeOptions& options)
       : rclcpp::Node("mowbite_light", options), config_(LoadConfig()), service_(config_.light) {
+    watch_ = mowbite_watch::Attach(*this);
     if (config_.output == "none") {
       RCLCPP_INFO(get_logger(), "output none: no light.* methods, nothing is sent to the lights");
       return;
@@ -226,6 +228,7 @@ class LightNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::RobotState>::SharedPtr state_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::ButtonEvent>::SharedPtr button_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 
 }  // namespace mowbite_light

@@ -16,6 +16,7 @@
 
 #include "mowbite_follower/guard.h"
 #include "mowbite_follower/path_follower.h"
+#include "mowbite_watch/attach.h"
 
 namespace mowbite_follower {
 
@@ -145,6 +146,7 @@ class FollowerNode : public rclcpp::Node {
         [this](const std::shared_ptr<GoalHandle> handle) { OnAccepted(handle); });
 
     timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / rate), [this] { OnTimer(); });
+    watch_ = mowbite_watch::Attach(*this);
   }
 
  private:
@@ -303,6 +305,7 @@ class FollowerNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;
   rclcpp_action::Server<FollowPath>::SharedPtr server_;
   rclcpp::TimerBase::SharedPtr timer_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 
 }  // namespace mowbite_follower

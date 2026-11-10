@@ -15,6 +15,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(tron_mcu REQUIRED)
+find_package(mowbite_watch REQUIRED)
 
 # Effects, profiles, the RPC methods and the WS2812 frames without ROS, testable on any machine.
 add_library(mowbite_light_core STATIC src/ws2812.cpp src/effect.cpp src/light_service.cpp src/output.cpp)
@@ -26,7 +27,7 @@ target_link_libraries(mowbite_light_core nlohmann_json::nlohmann_json mowbite_ho
 set_target_properties(mowbite_light_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_light_component SHARED src/light_node.cpp)
-target_link_libraries(mowbite_light_component mowbite_light_core tron_mcu::tron_mcu_core)
+target_link_libraries(mowbite_light_component mowbite_light_core tron_mcu::tron_mcu_core mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_light_component rclcpp rclcpp_components mowbite_msgs)
 rclcpp_components_register_node(mowbite_light_component
   PLUGIN "mowbite_light::LightNode"

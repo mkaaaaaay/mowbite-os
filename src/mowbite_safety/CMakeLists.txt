@@ -17,6 +17,7 @@ find_package(mowbite_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(mowbite_journal REQUIRED)
 find_package(mowbite_hold REQUIRED)
+find_package(mowbite_watch REQUIRED)
 
 # The rules of the filter without ROS, testable on any machine.
 add_library(mowbite_safety_core STATIC src/region.cpp src/safety_filter.cpp)
@@ -27,7 +28,8 @@ target_link_libraries(mowbite_safety_core nlohmann_json::nlohmann_json mowbite_h
 set_target_properties(mowbite_safety_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_safety_component SHARED src/safety_node.cpp)
-target_link_libraries(mowbite_safety_component mowbite_safety_core mowbite_journal::mowbite_journal)
+target_link_libraries(mowbite_safety_component mowbite_safety_core mowbite_journal::mowbite_journal
+  mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_safety_component rclcpp rclcpp_components geometry_msgs sensor_msgs std_msgs
   mowbite_msgs)
 rclcpp_components_register_node(mowbite_safety_component

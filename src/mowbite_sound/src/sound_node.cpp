@@ -24,6 +24,7 @@
 #include "mowbite_sound/convert.h"
 #include "mowbite_sound/player.h"
 #include "mowbite_sound/sound_service.h"
+#include "mowbite_watch/attach.h"
 
 namespace mowbite_sound {
 
@@ -76,6 +77,7 @@ class SoundNode : public rclcpp::Node {
   explicit SoundNode(const rclcpp::NodeOptions& options)
       : rclcpp::Node("mowbite_sound", options), config_(LoadConfig()), player_(MakePlayer()),
         service_(config_.sound, player_.get()) {
+    watch_ = mowbite_watch::Attach(*this);
     if (!player_) {
       RCLCPP_INFO(get_logger(), "output none: no sound.* methods, no sound");
       return;
@@ -293,6 +295,7 @@ class SoundNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::RobotState>::SharedPtr state_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_sub_;
   rclcpp::Subscription<std_msgs::msg::Int64>::SharedPtr hold_sub_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 
 }  // namespace mowbite_sound

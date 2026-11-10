@@ -14,6 +14,7 @@ find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(mowbite_bridge REQUIRED)
+find_package(mowbite_watch REQUIRED)
 
 # Access file and its RPC, the source used last, NTRIP protocol, RTCM frames and the client's states without ROS and
 # sockets, testable on any machine.
@@ -26,7 +27,8 @@ target_link_libraries(mowbite_ntrip_core nlohmann_json::nlohmann_json)
 set_target_properties(mowbite_ntrip_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_ntrip_component SHARED src/ntrip_node.cpp)
-target_link_libraries(mowbite_ntrip_component mowbite_ntrip_core mowbite_bridge::mowbite_bridge_core)
+target_link_libraries(mowbite_ntrip_component mowbite_ntrip_core mowbite_bridge::mowbite_bridge_core
+  mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_ntrip_component rclcpp rclcpp_components std_msgs mowbite_msgs)
 rclcpp_components_register_node(mowbite_ntrip_component
   PLUGIN "mowbite_ntrip::NtripNode"

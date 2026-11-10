@@ -17,6 +17,7 @@ find_package(mowbite_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(PahoMqttCpp REQUIRED)
 find_package(mowbite_api REQUIRED)
+find_package(mowbite_watch REQUIRED)
 
 # The schema of data_dir this image writes: one file for system.info here and for tron.launch.py, installed with
 # the package.
@@ -41,7 +42,8 @@ add_executable(mowbite_health src/health_main.cpp)
 target_link_libraries(mowbite_health mowbite_bridge_core PahoMqttCpp::paho-mqttpp3)
 
 add_library(mowbite_bridge_component SHARED src/bridge_component.cpp)
-target_link_libraries(mowbite_bridge_component mowbite_bridge_core PahoMqttCpp::paho-mqttpp3)
+target_link_libraries(mowbite_bridge_component mowbite_bridge_core PahoMqttCpp::paho-mqttpp3
+  mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_bridge_component rclcpp rclcpp_components rcl_interfaces geometry_msgs std_msgs mowbite_msgs)
 rclcpp_components_register_node(mowbite_bridge_component
   PLUGIN "mowbite_bridge::BridgeNode"

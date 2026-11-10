@@ -15,6 +15,7 @@ find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(tron_mcu REQUIRED)
 find_package(mowbite_gnss REQUIRED)
+find_package(mowbite_watch REQUIRED)
 
 # NMEA parser and tracker without ROS, testable on any machine.
 add_library(tron_gnss_core STATIC src/nmea.cpp src/gnss_tracker.cpp src/board_link.cpp)
@@ -25,7 +26,7 @@ target_link_libraries(tron_gnss_core mowbite_gnss::mowbite_gnss_core)
 set_target_properties(tron_gnss_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(tron_gnss_component SHARED src/gnss_node.cpp)
-target_link_libraries(tron_gnss_component tron_gnss_core tron_mcu::tron_mcu_core)
+target_link_libraries(tron_gnss_component tron_gnss_core tron_mcu::tron_mcu_core mowbite_watch::mowbite_watch)
 ament_target_dependencies(tron_gnss_component rclcpp rclcpp_components sensor_msgs std_msgs mowbite_msgs)
 rclcpp_components_register_node(tron_gnss_component
   PLUGIN "tron_gnss::GnssNode"

@@ -24,6 +24,7 @@
 
 #include "mowbite_safety/safety_filter.h"
 #include "mowbite_safety/safety_journal.h"
+#include "mowbite_watch/attach.h"
 
 namespace mowbite_safety {
 
@@ -35,6 +36,8 @@ using mowbite_msgs::srv::SetEmergency;
 
 // The driver answers a release at once; the logic waits a little longer for this answer.
 constexpr double kDriverAnswerS = 2.0;
+// The watch of S2 (s): silent for longer, the process ends and the blade stops with it (G22, G39).
+constexpr double kWatchLimit = 2.0;
 
 static_assert(kReasonTilt == HardwareStatus::REASON_TILT);
 static_assert(kReasonFence == HardwareStatus::REASON_FENCE);
@@ -127,6 +130,7 @@ class SafetyNode : public rclcpp::Node {
     const std::string data_dir = declare_parameter("data_dir", std::string());
     restart_hold_path_ = data_dir.empty() ? "" : data_dir + "/" + mowbite_hold::kRestartHoldFile;
     timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { OnTimer(); });
+    watch_ = mowbite_watch::Attach(*this, kWatchLimit);
   }
 
  private:
@@ -376,6 +380,7 @@ class SafetyNode : public rclcpp::Node {
   double imu_roll_ = 0.0;
   double imu_pitch_ = 0.0;
   rclcpp::TimerBase::SharedPtr timer_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 
 }  // namespace mowbite_safety

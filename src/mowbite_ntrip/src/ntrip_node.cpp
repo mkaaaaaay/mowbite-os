@@ -31,6 +31,7 @@
 #include "mowbite_ntrip/ntrip_client.h"
 #include "mowbite_ntrip/ntrip_config.h"
 #include "mowbite_ntrip/ntrip_source.h"
+#include "mowbite_watch/attach.h"
 
 namespace mowbite_ntrip {
 
@@ -131,6 +132,7 @@ class NtripNode : public rclcpp::Node {
                   last.error.c_str());
     }
     client_.SetLastSource(last.source);
+    watch_ = mowbite_watch::Attach(*this);
     io_thread_ = std::thread([this] { Loop(); });
   }
 
@@ -520,6 +522,7 @@ class NtripNode : public rclcpp::Node {
   rclcpp::Subscription<std_msgs::msg::Int64>::SharedPtr hold_sub_;
   std::atomic<bool> running_{true};
   std::thread io_thread_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 
 }  // namespace mowbite_ntrip

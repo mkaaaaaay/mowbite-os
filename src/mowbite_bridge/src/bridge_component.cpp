@@ -42,6 +42,7 @@
 #include "mowbite_msgs/msg/rpc_response.hpp"
 #include "mowbite_msgs/msg/sensor_spec.hpp"
 #include "mowbite_msgs/msg/sensor_value.hpp"
+#include "mowbite_watch/attach.h"
 
 namespace mowbite_bridge {
 
@@ -290,6 +291,7 @@ class BridgeNode : public rclcpp::Node {
     MakeClient();
     retry_timer_ = create_wall_timer(kRetryCheck, [this] { TryConnect(); });
     TryConnect();
+    watch_ = mowbite_watch::Attach(*this);
   }
 
   ~BridgeNode() override {
@@ -400,9 +402,11 @@ class BridgeNode : public rclcpp::Node {
     }));
   }
 
-  // Runs f with the core to itself, then sends what came of it. Nothing that arrives ends the process.
+  // Runs f with the core to itself, then sends what came of it; where names it should the bridge stall. Nothing that
+  // arrives ends the process.
   template <typename F>
   void Locked(const char* where, F&& f) {
+    if (watch_) watch_->Mark(where);
     try {
       std::lock_guard<std::mutex> lock(mutex_);
       f();
@@ -569,6 +573,7 @@ class BridgeNode : public rclcpp::Node {
   rclcpp::TimerBase::SharedPtr save_timer_;
   rclcpp::TimerBase::SharedPtr restart_timer_;
   rclcpp::TimerBase::SharedPtr retry_timer_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 
 }  // namespace mowbite_bridge
