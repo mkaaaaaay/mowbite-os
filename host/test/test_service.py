@@ -107,7 +107,7 @@ class RequestTest(HostBase):
         self.assertEqual(self.answer("update.abort")["error"]["data"]["reason"], "NOT_UPDATING")
         self.assertEqual(self.answer("update.rollback", {"component": "os"})["error"]["data"]["reason"],
                          "NO_PREVIOUS")
-        for method, params in (("update.start", {"component": "host"}), ("update.start", {}),
+        for method, params in (("update.start", {"component": "camera"}), ("update.start", {}),
                                ("update.start", [1]), ("update.set_auto", {"from": "25:00"}),
                                ("update.set_auto", {"enabled": "yes"}),
                                ("update.start", {"component": "os", "reset_jobs": True}),
@@ -130,11 +130,12 @@ class RequestTest(HostBase):
 
 
 class ComponentsTest(ComponentBase, HostBase):
-    def test_three_components(self):
+    def test_four_components(self):
         components = self.answer("update.status")["result"]["components"]
         self.assertEqual([(c["id"], c["name"]) for c in components],
-                         [("os", "MowBite OS"), ("planner", "MowBite Planner"), ("app", "MowBite App")])
-        self.assertEqual([c.get("source") for c in components], [None, "bundled", "bundled"])
+                         [("os", "MowBite OS"), ("planner", "MowBite Planner"), ("app", "MowBite App"),
+                          ("host", "MowBite Host")])
+        self.assertEqual([c.get("source") for c in components], [None, "bundled", "bundled", None])
 
     def test_reset_jobs_only_when_asked_for(self):
         self.installed("os", A)
@@ -238,8 +239,8 @@ class OsStateTest(HostBase):
     def test_since_changes_with_the_state(self):
         self.fake.show = lambda: ("inactive", 1000, None)
         self.assertEqual(self.read()["since"], 1000)
-        self.install()
         self.fake.show = type(self.fake).show.__get__(self.fake)
+        self.install()
         self.assertGreater(self.read()["since"], 1000)
 
     def test_crashes_restarts_and_stalled(self):
@@ -360,7 +361,7 @@ class ProbeTest(unittest.TestCase):
             where = paths.Paths(root)
             checker = Settles()
             health = installer.Health(where, Running(), checker, wait=0, stable=0, every=0)
-            health.once = lambda since: (True, "ok")
+            health.once = lambda since, entered: (True, "ok", 1)
             health.begin()
             self.assertEqual(health.wait_healthy(0), (False, "emergency since the update: SERVICE_NOT_READY"))
             self.assertEqual(checker.begun, 1)

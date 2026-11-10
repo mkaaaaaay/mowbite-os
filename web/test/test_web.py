@@ -17,6 +17,7 @@ sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "host"))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "host", "boot"))
 import mowbite_web  # noqa: E402
 from mowbite_host import paths  # noqa: E402
 
