@@ -141,6 +141,19 @@ Field Revision(std::string name, std::string text) {
                           Time("date", "When it was built, null when the bundle does not say")}));
 }
 
+// The components the updater keeps.
+const std::vector<std::string> kComponents = {"os"};
+
+Field Component(std::string name = "component") {
+  return Text(std::move(name), "The component", true, kComponents);
+}
+
+// The automatic update: on or off and its window.
+std::vector<Field> Auto(bool required) {
+  return {Bool("enabled", "On or off", required), Text("from", "Start of the window, HH:MM local time", required),
+          Text("to", "End of the window, HH:MM local time", required)};
+}
+
 // The params of update.*: app_version in every call, for min_app of a bundle.
 Field UpdateParams(std::vector<Field> fields, bool required = false) {
   fields.push_back(Text("app_version", "Version of the app that calls, e.g. 1.4.0 or 1.5.0-beta.2", false));
@@ -171,15 +184,13 @@ Field UpdateStatus() {
        Nullable(Text("revision", "The revision it installs or goes back to, null in idle")),
        Nullable(Text("reason", "Why the gate waits in waiting_gate: a reason of UPDATE in x-reasons")),
        Rows("components", "Each component the updater keeps",
-            {Text("id", "The component", true, {"os"}), Text("name", "Its name to show"),
+            {Component("id"), Text("name", "Its name to show"),
              Revision("running", "What runs, null without an installation"), Available(),
              Revision("previous", "Where update.rollback goes, null without one"),
              Time("installed_at", "When what runs was installed"),
              Integer("crashes_since_install", "Ends of the container since then"),
              Bool("auto", "Whether updates install by themselves at night")}),
-       Object("auto", "The automatic update",
-              {Bool("enabled", "On or off"), Text("from", "Start of the window, HH:MM local time"),
-               Text("to", "End of the window, HH:MM local time")}),
+       Object("auto", "The automatic update", Auto(true)),
        Nullable(Object(
            "last", "The result of the last update or rollback, null before the first",
            {Text("result", "How it ended", true, {"installed", "rolled_back", "refused", "aborted", "failed"}),
@@ -636,7 +647,7 @@ const std::vector<Method>& Methods() {
        "Installs the newest available revision of the component or the one given, one update at a time; it waits for "
        "the gate (IDLE on the charging contacts, the hold granted) for up to 30 min. Refused (UPDATE_REFUSED) when "
        "none is there or one runs",
-       UpdateParams({Text("component", "The component", true, {"os"}),
+       UpdateParams({Component(),
                      Text("revision", "A revision of available or found by update.check; the newest without", false)},
                     true),
        UpdateStatus(), kHostOffered},
@@ -644,14 +655,13 @@ const std::vector<Method>& Methods() {
        UpdateParams({}), UpdateStatus(), kHostOffered},
       {"update.rollback", "mowbite_host",
        "Goes back to the previous installation through the same gate; that revision is then not installed by itself",
-       UpdateParams({Text("component", "The component", true, {"os"})}, true), UpdateStatus(), kHostOffered},
+       UpdateParams({Component()}, true), UpdateStatus(), kHostOffered},
       {"update.check", "mowbite_host", "Looks for bundles in the origins now (the inbox), as it does every 6 h",
        UpdateParams({}), UpdateStatus(), kHostOffered},
       {"update.set_auto", "mowbite_host",
        "Switches the automatic update on or off and sets its window; it needs a sure clock and an app as new as "
        "min_app",
-       UpdateParams({Bool("enabled", "On or off", false), Text("from", "Start of the window, HH:MM local time", false),
-                     Text("to", "End of the window, HH:MM local time", false)}),
+       UpdateParams(Auto(false)),
        UpdateStatus(), kHostOffered},
       {"host.restart_os", "mowbite_host",
        "Starts MowBite OS again, its restarts from 0: always when it is stopped, down or halted, else only in IDLE "
