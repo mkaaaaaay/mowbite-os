@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
   const double end = Now() + std::atof(argv[3]);
   double next_line = 0.0;
   while (Now() < end) {
-    loop.SetMowerStatus(false, false);
+    loop.SetMowerStatus({true, Now(), false, false});
     if (!loop.Step()) break;
     if (Now() >= next_line) {
       next_line = Now() + 1.0;

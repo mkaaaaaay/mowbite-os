@@ -32,6 +32,13 @@ uint32_t Random() {
 
 }  // namespace
 
+MowerGate CheckMower(const MowerView& mower, double now, double max_age_s, bool for_selftest) {
+  if (!mower.received || now - mower.received_at > max_age_s) return MowerGate::kUnknown;
+  if (mower.blade_on) return MowerGate::kBlade;
+  if (for_selftest && mower.moving) return MowerGate::kMoving;
+  return MowerGate::kOpen;
+}
+
 const char* StateName(StereoState state) {
   switch (state) {
     case StereoState::kOff: return "off";
@@ -43,6 +50,7 @@ const char* StateName(StereoState state) {
     case StereoState::kReady: return "ready";
     case StereoState::kStreaming: return "streaming";
     case StereoState::kPausedBlade: return "paused_blade";
+    case StereoState::kPausedDriver: return "paused_driver";
     case StereoState::kPausedHot: return "paused_hot";
     case StereoState::kNoFrames: return "no_frames";
     case StereoState::kStalled: return "stalled";
@@ -85,11 +93,8 @@ std::string StereoLoop::Marker(const char* kind) const {
   return config_.marker_dir + "/" + kind + "-" + config_.camera_id;
 }
 
-void StereoLoop::SetMowerStatus(bool blade_on, bool moving) {
-  mower_known_ = true;
-  blade_on_ = blade_on;
-  moving_ = moving;
-  mower_at_ = now_();
+void StereoLoop::SetMowerStatus(const MowerView& mower) {
+  mower_ = mower;
 }
 
 StereoLoop::Gate StereoLoop::CheckGate(double now, bool for_selftest, std::string& why) const {
@@ -98,24 +103,31 @@ StereoLoop::Gate StereoLoop::CheckGate(double now, bool for_selftest, std::strin
     return Gate::kHot;
   }
   if (config_.stream_while_mowing && !for_selftest) return Gate::kOpen;
-  if (!mower_known_ || now - mower_at_ > config_.mower_status_max_age_s) {
-    why = "state of the mower unknown";
-    return Gate::kUnknown;
+  return CheckMowerGate(now, for_selftest, why);
+}
+
+StereoLoop::Gate StereoLoop::CheckMowerGate(double now, bool for_selftest, std::string& why) const {
+  switch (CheckMower(mower_, now, config_.mower_status_max_age_s, for_selftest)) {
+    case MowerGate::kOpen: return Gate::kOpen;
+    case MowerGate::kUnknown:
+      why = mower_.received ? "hw/status older than " + Fixed(config_.mower_status_max_age_s) + " s" : "no hw/status yet";
+      return Gate::kDriver;
+    case MowerGate::kBlade: why = "blade running"; return Gate::kBlade;
+    case MowerGate::kMoving: why = "mower moving"; return Gate::kMoving;
   }
-  if (blade_on_) {
-    why = "blade running";
-    return Gate::kBlade;
-  }
-  if (for_selftest && moving_) {
-    why = "mower moving";
-    return Gate::kBlade;
-  }
-  return Gate::kOpen;
+  why = "state of the mower unknown";
+  return Gate::kDriver;
 }
 
 void StereoLoop::Pause(Gate gate, const std::string& why) {
   server_.SetUnavailable();
-  Set(gate == Gate::kHot ? StereoState::kPausedHot : StereoState::kPausedBlade, why);
+  switch (gate) {
+    case Gate::kHot: Set(StereoState::kPausedHot, why); return;
+    case Gate::kDriver: Set(StereoState::kPausedDriver, why); return;
+    case Gate::kBlade: Set(StereoState::kPausedBlade, why); return;
+    case Gate::kMoving:
+    case Gate::kOpen: Set(StereoState::kWaitingIdle, why); return;
+  }
 }
 
 bool StereoLoop::CheckBudget(double now) {
@@ -220,11 +232,15 @@ void StereoLoop::FailForThisBoot(StereoState state, const std::string& detail) {
 
 void StereoLoop::StartSelftest(double now) {
   std::string text;
-  if (CheckGate(now, true, text) != Gate::kOpen) {
-    Set(StereoState::kWaitingIdle, text);
+  const Gate gate = CheckGate(now, true, text);
+  if (gate != Gate::kOpen) {
+    Pause(gate, text);
     return;
   }
-  if (now < next_retry_) return;
+  if (now < next_retry_) {
+    if (status_.state != StereoState::kWaitingIdle) Set(StereoState::kWaitingIdle, "next try of the camera");
+    return;
+  }
   if (!guard_.MayStream(config_.camera_id, text)) {
     End(StereoState::kLocked, text);
     return;
@@ -255,14 +271,17 @@ void StereoLoop::StartSelftest(double now) {
 }
 
 void StereoLoop::StepSelftest(double now) {
-  // The blade never runs next to a stream, also not for the rest of a self-test.
-  if (!config_.stream_while_mowing && mower_known_ && blade_on_) {
+  // The blade never runs next to a stream, also not for the rest of a self-test, nor does a stream go on while the
+  // state of the mower is unknown; the wheels may start meanwhile.
+  std::string why;
+  const Gate gate = config_.stream_while_mowing ? Gate::kOpen : CheckMowerGate(now, false, why);
+  if (gate != Gate::kOpen) {
     if (test_frames_ == 0) {
-      FailForThisBoot(StereoState::kNoFrames, "self-test cut off by the blade before its first frame");
+      FailForThisBoot(StereoState::kNoFrames, "self-test cut off before its first frame: " + why);
       return;
     }
     StopStream();
-    Set(StereoState::kWaitingIdle, "self-test cut off by the blade");
+    Pause(gate, "self-test cut off: " + why);
     phase_ = Phase::kSelftestWait;
     return;
   }

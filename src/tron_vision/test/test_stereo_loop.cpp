@@ -172,7 +172,7 @@ struct Rig {
   // The mower stands with the blade off, said again at each step like hw/status at 10 Hz.
   void Steps(int n, bool blade_on = false, bool moving = false) {
     for (int i = 0; i < n; i++) {
-      loop->SetMowerStatus(blade_on, moving);
+      loop->SetMowerStatus({true, clock, blade_on, moving});
       loop->Step();
     }
   }
@@ -320,17 +320,20 @@ TEST(StereoLoop, SelftestOnlyWhileTheMowerStands) {
   rig.Configured();
   rig.Make();
   for (int i = 0; i < 5; i++) rig.loop->Step();
-  EXPECT_EQ(rig.State(), StereoState::kWaitingIdle);
-  EXPECT_EQ(rig.loop->Status().detail, "state of the mower unknown");
+  EXPECT_EQ(rig.State(), StereoState::kPausedDriver);
+  EXPECT_EQ(rig.loop->Status().detail, "no hw/status yet");
   rig.Steps(5, true, false);
+  EXPECT_EQ(rig.State(), StereoState::kPausedBlade);
   EXPECT_EQ(rig.loop->Status().detail, "blade running");
   rig.Steps(5, false, true);
+  EXPECT_EQ(rig.State(), StereoState::kWaitingIdle);
   EXPECT_EQ(rig.loop->Status().detail, "mower moving");
   // A state that is too old counts as unknown.
-  rig.loop->SetMowerStatus(false, false);
+  rig.loop->SetMowerStatus({true, rig.clock, false, false});
   rig.clock += 1.5;
   rig.loop->Step();
-  EXPECT_EQ(rig.loop->Status().detail, "state of the mower unknown");
+  EXPECT_EQ(rig.State(), StereoState::kPausedDriver);
+  EXPECT_EQ(rig.loop->Status().detail, "hw/status older than 1.0 s");
   EXPECT_EQ(rig.camera.calls, "");
 
   rig.Steps(1);
@@ -443,7 +446,7 @@ TEST(StereoLoop, BladeCutsTheSelftestOff) {
   ASSERT_EQ(rig.State(), StereoState::kSelftest);
   rig.Steps(3);
   rig.Steps(1, true);
-  EXPECT_EQ(rig.State(), StereoState::kWaitingIdle);
+  EXPECT_EQ(rig.State(), StereoState::kPausedBlade);
   EXPECT_FALSE(rig.camera.streaming);
   EXPECT_EQ(rig.Marker("stream-stereo"), "");
   EXPECT_EQ(rig.Marker("verified-stereo"), "");
@@ -464,7 +467,7 @@ TEST(StereoLoop, BladeCutsTheSelftestOff) {
   blind.Steps(1, true);
   EXPECT_EQ(blind.State(), StereoState::kNoFrames);
   EXPECT_FALSE(blind.camera.streaming);
-  EXPECT_NE(blind.Marker("failed-stereo").find("cut off by the blade"), std::string::npos);
+  EXPECT_NE(blind.Marker("failed-stereo").find("cut off before its first frame: blade running"), std::string::npos);
 }
 
 TEST(StereoLoop, StreamsToTheViewerAndStopsWhenItLeaves) {
@@ -564,11 +567,78 @@ TEST(StereoLoop, UnknownMowerStateEndsTheStream) {
   rig.Steps(5);
   // hw/status stops coming while frames go on.
   for (int i = 0; i < 30 && rig.State() == StereoState::kStreaming; i++) rig.loop->Step();
-  EXPECT_EQ(rig.State(), StereoState::kPausedBlade);
-  EXPECT_EQ(rig.loop->Status().detail, "state of the mower unknown");
+  EXPECT_EQ(rig.State(), StereoState::kPausedDriver);
+  EXPECT_EQ(rig.loop->Status().detail, "hw/status older than 1.0 s");
   EXPECT_FALSE(rig.camera.streaming);
   // 5 steps with a fresh state, then at most 1 s of frames.
   EXPECT_LE(rig.loop->Status().frames, 5U + 25U);
+}
+
+TEST(StereoLoop, MowerGateInItsOrder) {
+  const double now = 50.0;
+  EXPECT_EQ(CheckMower({}, now, 1.0, false), MowerGate::kUnknown);
+  EXPECT_EQ(CheckMower({false, now, false, false}, now, 1.0, false), MowerGate::kUnknown);
+  EXPECT_EQ(CheckMower({true, now - 1.0, false, false}, now, 1.0, false), MowerGate::kOpen);
+  EXPECT_EQ(CheckMower({true, now - 1.001, false, false}, now, 1.0, false), MowerGate::kUnknown);
+  // An old message counts as unknown before anything it says.
+  EXPECT_EQ(CheckMower({true, now - 2.0, true, true}, now, 1.0, true), MowerGate::kUnknown);
+  EXPECT_EQ(CheckMower({true, now, true, false}, now, 1.0, false), MowerGate::kBlade);
+  EXPECT_EQ(CheckMower({true, now, true, true}, now, 1.0, true), MowerGate::kBlade);
+  EXPECT_EQ(CheckMower({true, now, false, true}, now, 1.0, true), MowerGate::kMoving);
+  EXPECT_EQ(CheckMower({true, now, false, true}, now, 1.0, false), MowerGate::kOpen);
+  EXPECT_EQ(CheckMower({true, now, false, false}, now, 1.0, true), MowerGate::kOpen);
+}
+
+TEST(StereoLoop, SameCopyOfTheMowerAtEachStepGetsOld) {
+  Rig rig;
+  rig.Ready();
+  Client client(rig.server.Port());
+  ASSERT_TRUE(rig.Play(client));
+  // The node hands over its last copy before each step; the time it came with makes it old.
+  const MowerView last{true, rig.clock, false, false};
+  const double until = rig.clock + 1.5;
+  while (rig.clock < until && rig.State() == StereoState::kStreaming) {
+    rig.loop->SetMowerStatus(last);
+    rig.loop->Step();
+  }
+  EXPECT_EQ(rig.State(), StereoState::kPausedDriver);
+  EXPECT_FALSE(rig.camera.streaming);
+  EXPECT_LE(rig.clock - last.received_at, 1.0 + 0.2);
+}
+
+TEST(StereoLoop, UnknownMowerStateCutsTheSelftestOff) {
+  Rig rig;
+  // A test that takes longer than the age limit.
+  rig.config.selftest_frames = 40;
+  rig.Configured();
+  rig.Make();
+  rig.Steps(4);
+  ASSERT_EQ(rig.State(), StereoState::kSelftest);
+  rig.Steps(3);
+  ASSERT_GT(rig.camera.sequence, 0U);
+  // hw/status stops coming: the test ends within the age limit, and runs again once the state is known.
+  const double last = rig.clock;
+  while (rig.State() == StereoState::kSelftest) rig.loop->Step();
+  EXPECT_EQ(rig.State(), StereoState::kPausedDriver);
+  EXPECT_LE(rig.clock - last, 1.0 + 0.2);
+  EXPECT_FALSE(rig.camera.streaming);
+  EXPECT_EQ(rig.Marker("verified-stereo"), "");
+  EXPECT_EQ(rig.Marker("failed-stereo"), "");
+  rig.Steps(60);
+  EXPECT_EQ(rig.State(), StereoState::kReady);
+  EXPECT_EQ(rig.camera.starts, 2);
+
+  // Without a frame so far it stays off for this boot.
+  Rig blind;
+  blind.Configured();
+  blind.camera.frames_left = 0;
+  blind.Make();
+  blind.Steps(4);
+  ASSERT_EQ(blind.State(), StereoState::kSelftest);
+  while (blind.State() == StereoState::kSelftest) blind.loop->Step();
+  EXPECT_EQ(blind.State(), StereoState::kNoFrames);
+  EXPECT_FALSE(blind.camera.streaming);
+  EXPECT_NE(blind.Marker("failed-stereo").find("cut off before its first frame: hw/status older"), std::string::npos);
 }
 
 TEST(StereoLoop, DrivingWithoutTheBladeKeepsTheStream) {
@@ -594,7 +664,7 @@ TEST(StereoLoop, StreamWhileMowingOnlyWhenSetSo) {
   fresh.Configured();
   fresh.Make();
   fresh.Steps(10, true, false);
-  EXPECT_EQ(fresh.State(), StereoState::kWaitingIdle);
+  EXPECT_EQ(fresh.State(), StereoState::kPausedBlade);
   EXPECT_EQ(fresh.camera.calls, "");
 }
 

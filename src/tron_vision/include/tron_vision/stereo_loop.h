@@ -68,6 +68,27 @@ struct StereoConfig {
   int idle_wait_ms = 200;
 };
 
+// The mower as the last message on hw/status gave it.
+struct MowerView {
+  bool received = false;
+  // When the message came, on the clock of the loop, not its stamp.
+  double received_at = 0.0;
+  bool blade_on = false;
+  bool moving = false;
+};
+
+// What the mower allows the stereo camera; checked in this order, the first hit counts.
+enum class MowerGate {
+  kOpen,
+  // No message yet, or the last one older than max_age_s.
+  kUnknown,
+  kBlade,
+  // The wheels are commanded to move; asked for the self-test only.
+  kMoving,
+};
+
+MowerGate CheckMower(const MowerView& mower, double now, double max_age_s, bool for_selftest);
+
 enum class StereoState {
   kOff,
   kWaitingSetup,
@@ -78,6 +99,7 @@ enum class StereoState {
   kReady,
   kStreaming,
   kPausedBlade,
+  kPausedDriver,
   kPausedHot,
   kNoFrames,
   kStalled,
@@ -115,8 +137,8 @@ class StereoLoop {
   StereoLoop(const StereoLoop&) = delete;
   StereoLoop& operator=(const StereoLoop&) = delete;
 
-  // The mower as last seen on hw/status.
-  void SetMowerStatus(bool blade_on, bool moving);
+  // The mower as last seen on hw/status, with the time the message came.
+  void SetMowerStatus(const MowerView& mower);
   bool Step();
   void Shutdown();
 
@@ -138,8 +160,9 @@ class StereoLoop {
   };
   enum class Gate {
     kOpen,
+    kDriver,
     kBlade,
-    kUnknown,
+    kMoving,
     kHot,
   };
 
@@ -148,6 +171,7 @@ class StereoLoop {
   void End(StereoState state, const std::string& detail);
   // Whether a stream may run now; `for_selftest` also asks for a mower that stands.
   Gate CheckGate(double now, bool for_selftest, std::string& why) const;
+  Gate CheckMowerGate(double now, bool for_selftest, std::string& why) const;
   void Pause(Gate gate, const std::string& why);
   bool CheckBudget(double now);
   void CheckSetup(double now);
@@ -178,10 +202,7 @@ class StereoLoop {
   double started_;
   bool streaming_ = false;
   bool hot_ = false;
-  bool mower_known_ = false;
-  bool blade_on_ = false;
-  bool moving_ = false;
-  double mower_at_ = 0.0;
+  MowerView mower_;
   double next_check_ = 0.0;
   double next_retry_ = 0.0;
   int camera_failures_ = 0;
