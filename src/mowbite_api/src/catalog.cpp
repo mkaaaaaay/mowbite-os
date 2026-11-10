@@ -55,6 +55,10 @@ const std::string kIdle = "mower_logic:idle/";
 const std::string kMow = "mower_logic:mowing/";
 const std::string kRecord = "mower_logic:area_recording/";
 
+Field TrimmedPoints() {
+  return Integer("trimmed_points", "Points cut off where the ring ran past its start, 0 for none");
+}
+
 // A switch as OpenMower sends it in robot_state: 0 or 1.
 Field Switch(std::string name, std::string text) {
   return {std::move(name), Type::kInteger, "", true, std::move(text), {}, false, {}, ""};
@@ -397,11 +401,14 @@ const std::vector<Command>& Commands() {
             {{kRecord + "exit_recording_mode"}}),
       Logic("recording.ring_start", "Starts recording a ring: the outline, after it an obstacle", {}, Answer(),
             "RECORDING_REFUSED", {{kRecord + "start_recording"}}),
-      Logic("recording.ring_stop", "Closes the ring being recorded", {}, Answer(), "RECORDING_REFUSED",
-            {{kRecord + "stop_recording"}}),
-      Logic("recording.save", "Saves the outline and its obstacles as an area; AREA_RECORDED follows",
-            {Text("type", "mow for a mowing area, nav for a navigation area", true, {"mow", "nav"})}, Answer(),
-            "RECORDING_REFUSED",
+      Logic("recording.ring_stop",
+            "Closes the ring being recorded; one without points just ends, one whose end ran past its start is cut "
+            "at the crossing",
+            {}, Answer({TrimmedPoints()}), "RECORDING_REFUSED", {{kRecord + "stop_recording"}}),
+      Logic("recording.save",
+            "Saves the outline and its obstacles as an area, closing an open ring first; AREA_RECORDED follows",
+            {Text("type", "mow for a mowing area, nav for a navigation area", true, {"mow", "nav"})},
+            Answer({TrimmedPoints()}), "RECORDING_REFUSED",
             {{kRecord + "finish_mowing_area", {{"type", "mow"}}},
              {kRecord + "finish_navigation_area", {{"type", "nav"}}}}),
       Logic("recording.discard", "Drops what was recorded and not saved", {}, Answer(), "RECORDING_REFUSED",
@@ -416,6 +423,11 @@ const std::vector<Command>& Commands() {
              {kRecord + "auto_point_collecting_disable", {{"enabled", false}}}}),
       Logic("recording.point", "Takes the next position as a point of the ring", {}, Answer(), "RECORDING_REFUSED",
             {{kRecord + "collect_point"}}),
+      Logic("recording.undo",
+            "Takes points back from the end of the open ring and switches the automatic points off; the mower stays",
+            {Number("meters", "m", "Path to take back, 0.1 to 50, default 1", false)},
+            Answer({Integer("points", "Points left in the open ring")}), "RECORDING_REFUSED",
+            {{kRecord + "undo_points"}}),
   };
   return commands;
 }

@@ -22,6 +22,7 @@ enum ActionIndex {
   kCollectPoint,
   kStartManualMowing,
   kStopManualMowing,
+  kUndoPoints,
   kActionCount
 };
 
@@ -64,6 +65,35 @@ bool SegmentsTouch(const Point2& a, const Point2& b, const Point2& c, const Poin
   return false;
 }
 
+double Distance(const Point2& a, const Point2& b) {
+  return std::hypot(b.x - a.x, b.y - a.y);
+}
+
+// The same point within a micrometre: a crossing at a corner of the ring.
+bool Same(const Point2& a, const Point2& b) {
+  return Distance(a, b) < 1e-6;
+}
+
+// Where the segments from a to b and from c to d meet, given they touch; on a common line an end inside the other.
+Point2 Meeting(const Point2& a, const Point2& b, const Point2& c, const Point2& d) {
+  const Point2 along{b.x - a.x, b.y - a.y};
+  const double denominator = along.x * (d.y - c.y) - along.y * (d.x - c.x);
+  if (denominator != 0) {
+    const double share = Cross(c, d, a) / denominator;
+    return {a.x + share * along.x, a.y + share * along.y};
+  }
+  if (Within(a, b, c)) return c;
+  if (Within(a, b, d)) return d;
+  return a;
+}
+
+// Path along the ring from point first to point last.
+double PathLength(const Ring& ring, size_t first, size_t last) {
+  double length = 0;
+  for (size_t k = first; k < last; k++) length += Distance(ring[k], ring[k + 1]);
+  return length;
+}
+
 }  // namespace
 
 double RingArea(const Ring& ring) {
@@ -87,6 +117,30 @@ bool SelfIntersects(const Ring& ring) {
     }
   }
   return false;
+}
+
+std::optional<CutRing> CutOverhang(const Ring& ring, double max_cut) {
+  const size_t n = ring.size();
+  // Segment j runs from point j to j + 1; the first that meets an earlier one ends the loop, the latest of those
+  // begins it.
+  for (size_t j = 2; j + 1 < n; j++) {
+    for (size_t i = j - 1; i-- > 0;) {
+      if (!SegmentsTouch(ring[i], ring[i + 1], ring[j], ring[j + 1])) continue;
+      const Point2 at = Meeting(ring[i], ring[i + 1], ring[j], ring[j + 1]);
+      const double cut = PathLength(ring, 0, i) + Distance(ring[i], at) + Distance(at, ring[j + 1]) +
+                         PathLength(ring, j + 1, n - 1);
+      if (cut > max_cut) return std::nullopt;
+      CutRing out;
+      if (!Same(at, ring[i + 1]) && !Same(at, ring[j])) out.ring.push_back(at);
+      out.ring.insert(out.ring.end(), ring.begin() + static_cast<std::ptrdiff_t>(i + 1),
+                      ring.begin() + static_cast<std::ptrdiff_t>(j + 1));
+      // A crossing on point i or j + 1 keeps that point as where the loop begins.
+      const bool kept_end = Same(at, ring[i]) || Same(at, ring[j + 1]);
+      out.dropped = n - (j - i) - (kept_end ? 1 : 0);
+      return out;
+    }
+  }
+  return std::nullopt;
 }
 
 Reason RingProblem(const Ring& ring, double min_area_m2) {
@@ -121,7 +175,8 @@ const std::vector<std::string>& AreaRecorder::ActionNames() {
                                                  "auto_point_collecting_disable",
                                                  "collect_point",
                                                  "start_manual_mowing",
-                                                 "stop_manual_mowing"};
+                                                 "stop_manual_mowing",
+                                                 "undo_points"};
   return names;
 }
 
@@ -146,14 +201,17 @@ AreaRecorder::Result AreaRecorder::Refuse(const std::string& action, const Reaso
   return Result::kRefused;
 }
 
-AreaRecorder::Result AreaRecorder::OnAction(const std::string& name, Reason* why) {
+AreaRecorder::Result AreaRecorder::OnAction(const std::string& name, Reason* why, const json& params,
+                                            json* answer) {
   refusal_ = Reason();
-  const Result result = Act(name);
+  json fields = json::object();
+  const Result result = Act(name, params, &fields);
   if (why) *why = result == Result::kRefused ? refusal_ : Reason();
+  if (answer && result == Result::kDone) *answer = std::move(fields);
   return result;
 }
 
-AreaRecorder::Result AreaRecorder::Act(const std::string& name) {
+AreaRecorder::Result AreaRecorder::Act(const std::string& name, const json& params, json* answer) {
   const auto& names = ActionNames();
   const auto it = std::find(names.begin(), names.end(), name);
   if (it == names.end() || name == "exit_recording_mode") return Result::kUnknown;
@@ -171,9 +229,9 @@ AreaRecorder::Result AreaRecorder::Act(const std::string& name) {
       full_reported_ = false;
       notices_.push_back(outline_ ? "Recording an obstacle" : "Recording an outline");
       return Result::kDone;
-    case kStopRecording: return CloseRing(name) ? Result::kDone : Result::kRefused;
-    case kFinishNavigationArea: return Finish(name, "nav");
-    case kFinishMowingArea: return Finish(name, "mow");
+    case kStopRecording: return CloseRing(name, answer) ? Result::kDone : Result::kRefused;
+    case kFinishNavigationArea: return Finish(name, "nav", answer);
+    case kFinishMowingArea: return Finish(name, "mow", answer);
     case kFinishDiscard:
       notices_.push_back(dock_first_ ? "Discarded the first point of the docking station"
                                      : "Discarded the area being recorded");
@@ -190,14 +248,51 @@ AreaRecorder::Result AreaRecorder::Act(const std::string& name) {
       // The next pose, so the point is where the mower is now.
       collect_requested_ = true;
       return Result::kDone;
+    case kUndoPoints:
+      Undo(params.is_object() ? params.value("meters", kUndoDefaultM) : kUndoDefaultM, answer);
+      return Result::kDone;
     default: return Result::kRefused;
   }
 }
 
-bool AreaRecorder::CloseRing(const std::string& action) {
-  const Reason problem = RingProblem(current_, config_.min_area);
+void AreaRecorder::Undo(double meters, json* answer) {
+  const size_t before = current_.size();
+  double taken = 0;
+  while (!current_.empty() && taken < meters) {
+    const Point2 last = current_.back();
+    current_.pop_back();
+    if (!current_.empty()) taken += Distance(current_.back(), last);
+  }
+  // Else the next pose puts a point where the mower stands; the user drives to the new end first.
+  auto_points_ = false;
+  collect_requested_ = false;
+  full_reported_ = false;
+  overlay_changed_ = true;
+  notices_.push_back("Took back " + std::to_string(before - current_.size()) + " points (" + Metres(taken) +
+                     " m), automatic points are off");
+  (*answer)["points"] = current_.size();
+}
+
+bool AreaRecorder::CloseRing(const std::string& action, json* answer) {
+  (*answer)["trimmed_points"] = 0;
+  if (current_.empty()) {
+    notices_.push_back("Ended the ring without points");
+    recording_ = false;
+    collect_requested_ = false;
+    return true;
+  }
+  Reason problem = RingProblem(current_, config_.min_area);
+  if (problem.code == "RING_CROSSES_ITSELF") {
+    auto cut = CutOverhang(current_, config_.max_overhang);
+    if (cut && RingProblem(cut->ring, config_.min_area).empty()) {
+      notices_.push_back("Cut off " + std::to_string(cut->dropped) + " points where the ring ran past its start");
+      (*answer)["trimmed_points"] = cut->dropped;
+      current_ = std::move(cut->ring);
+      problem = Reason();
+    }
+  }
   if (!problem.empty()) {
-    // The ring stays open: the mower can drive on and close it better.
+    // The ring stays open: the mower can drive on, or take points back.
     Refuse(action, problem);
     return false;
   }
@@ -215,9 +310,10 @@ bool AreaRecorder::CloseRing(const std::string& action) {
   return true;
 }
 
-AreaRecorder::Result AreaRecorder::Finish(const std::string& action, const std::string& type) {
+AreaRecorder::Result AreaRecorder::Finish(const std::string& action, const std::string& type, json* answer) {
   if (!map_writable_) return Refuse(action, map_reason_);
-  if (recording_ && !CloseRing(action)) return Result::kRefused;
+  (*answer)["trimmed_points"] = 0;
+  if (recording_ && !CloseRing(action, answer)) return Result::kRefused;
   if (!outline_) return Refuse(action, Reason("NO_OUTLINE", "No outline recorded"));
   MapEdit edit;
   edit.type = type;
@@ -339,6 +435,8 @@ void AreaRecorder::AddPoint(double x, double y) {
     }
     return;
   }
+  // undo_points comes with the first point.
+  if (current_.empty()) actions_changed_ = true;
   current_.push_back({x, y});
   overlay_changed_ = true;
 }
@@ -365,7 +463,7 @@ void AreaRecorder::OnPose(double x, double y, float position_accuracy, bool head
     accuracy_blocked_ = false;
     notices_.push_back("Position accurate again, points are recorded");
   }
-  const double distance = current_.empty() ? 0 : std::hypot(x - current_.back().x, y - current_.back().y);
+  const double distance = current_.empty() ? 0 : Distance(current_.back(), {x, y});
   const bool far_enough = current_.empty() || distance > config_.min_point_distance;
   if (auto_points_) {
     if (far_enough) AddPoint(x, y);
@@ -415,6 +513,7 @@ std::vector<bool> AreaRecorder::Enabled() const {
     on[kAutoPointsEnable] = !auto_points_;
     on[kAutoPointsDisable] = auto_points_;
     on[kCollectPoint] = !auto_points_;
+    on[kUndoPoints] = !current_.empty();
   } else if (outline_) {
     on[kStartRecording] = on[kFinishNavigationArea] = on[kFinishMowingArea] = on[kFinishDiscard] = true;
   } else {
@@ -429,14 +528,11 @@ json AreaRecorder::Overlay() const {
   const auto add = [&polygons](const Ring& ring, bool closed, double line_width, const char* color) {
     // Like OpenMower: a single point is no line.
     if (ring.size() < 2) return;
+    const auto mm = [](double value) { return std::round(value * 1000) / 1000; };
     json points = json::array();
-    for (const auto& p : ring) points.push_back({{"x", p.x}, {"y", p.y}});
-    polygons.push_back({{"poly", points},
-                        {"is_closed", closed ? 1 : 0},
-                        {"line_width", line_width},
-                        {"color", color},
-                        {"polygon", {{"points", points}}},
-                        {"closed", closed ? 1 : 0}});
+    for (const auto& p : ring) points.push_back({{"x", mm(p.x)}, {"y", mm(p.y)}});
+    polygons.push_back(
+        {{"poly", std::move(points)}, {"is_closed", closed ? 1 : 0}, {"line_width", line_width}, {"color", color}});
   };
   if (outline_) add(*outline_, true, 0.05, "green");
   for (const auto& ring : obstacles_) add(ring, true, 0.05, "red");

@@ -308,6 +308,9 @@ TEST(LogicCommands, ActionAndRpcAlikeInEveryState) {
         if (outcome.accepted) {
           EXPECT_EQ(outcome.result["state"], by_rpc.RobotState().state) << where;
           EXPECT_EQ(outcome.result["sub_state"], by_rpc.RobotState().sub_state) << where;
+          for (const auto& field : command.result) {
+            if (field.required) EXPECT_TRUE(outcome.result.contains(field.name)) << where << ": " << field.name;
+          }
         } else {
           EXPECT_EQ(outcome.data["reason"], outcome.why.code) << where;
           const std::string group = outcome.data["event"];
@@ -324,7 +327,7 @@ TEST(LogicCommands, ActionAndRpcAlikeInEveryState) {
       }
     }
   }
-  EXPECT_EQ(compared, 21 * static_cast<int>(Scenarios().size()));
+  EXPECT_EQ(compared, 22 * static_cast<int>(Scenarios().size()));
 }
 
 TEST(LogicCommands, ARefusalNamesTheEventItWentOutAs) {
@@ -514,6 +517,30 @@ TEST(LogicCommands, RecordingRefusalCarriesItsAction) {
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(outcome.data["event_id"], events[0].id);
   EXPECT_EQ(events[0].details["client"], "app");
+}
+
+TEST(LogicCommands, UndoTakesMetresWithinItsRange) {
+  TestCore core = Ring3();
+  for (double meters : {0.05, 50.5, -1.0}) {
+    const CommandOutcome outcome = Rpc(core, "recording.undo", {{"meters", meters}});
+    EXPECT_EQ(outcome.invalid, "meters: 0.1 to 50") << meters;
+    EXPECT_EQ(outcome.invalid_field, "meters");
+  }
+  EXPECT_EQ(core.recorder().current().size(), 3u);
+  // From (3, 1.5) back 0.5 m: one point, the segment before it is 1 m.
+  CommandOutcome outcome = Rpc(core, "recording.undo", {{"meters", 0.5}});
+  ASSERT_TRUE(outcome.accepted);
+  EXPECT_EQ(outcome.result["points"], 2);
+  EXPECT_EQ(outcome.result["state"], "AREA_RECORDING");
+  EXPECT_FALSE(Enabled(core, "mower_logic:area_recording/auto_point_collecting_disable"));
+  outcome = Rpc(core, "recording.undo");
+  EXPECT_EQ(outcome.result["points"], 1);
+  outcome = Rpc(core, "recording.ring_stop");
+  EXPECT_EQ(outcome.why.code, "RING_FEW_POINTS");
+  EXPECT_EQ(Rpc(core, "recording.undo").result["points"], 0);
+  outcome = Rpc(core, "recording.ring_stop");
+  ASSERT_TRUE(outcome.accepted);
+  EXPECT_EQ(outcome.result["trimmed_points"], 0);
 }
 
 // The end of the emergency after emergency.reset tells who released it (masterplan 3.1a).

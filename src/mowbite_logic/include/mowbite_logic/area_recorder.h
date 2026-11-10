@@ -39,6 +39,21 @@ bool SelfIntersects(const Ring& ring);
 // m², of the closed ring.
 double RingArea(const Ring& ring);
 
+// A ring whose end ran past its start: the loop from the first crossing of the line with itself, and how many
+// points of the ring are not in it.
+struct CutRing {
+  Ring ring;
+  size_t dropped = 0;
+};
+// The loop, or nullopt when the line does not cross itself or the path cut off before and after the crossing is
+// longer than max_cut (m).
+std::optional<CutRing> CutOverhang(const Ring& ring, double max_cut);
+
+// recording.undo: the path (m) taken back from the end of the open ring.
+constexpr double kUndoDefaultM = 1.0;
+constexpr double kUndoMinM = 0.1;
+constexpr double kUndoMaxM = 50;
+
 struct RecorderConfig {
   // A new point needs more than this distance (m) to the last one, NEW_POINT_MIN_DISTANCE of OpenMower.
   double min_point_distance = 0.1;
@@ -46,6 +61,9 @@ struct RecorderConfig {
   double max_position_accuracy = 0.1;
   // A ring must enclose at least this (m²), so that points on a line are no area.
   double min_area = 0.05;
+  // Closing a ring that crosses itself once cuts off the start before the crossing and the end past it, together up
+  // to this path (m); a longer one is more than driving past the start.
+  double max_overhang = 2.0;
   // All rings of one recording together; the map must fit into one MQTT message.
   size_t max_points = 5000;
   // The two points of the docking station must be this far apart (m) for a usable heading: 2 cm across between them
@@ -85,8 +103,10 @@ class AreaRecorder {
   // Drops everything recorded and not saved; an edit on its way is still reported when it is answered.
   void Reset();
   // An action of mower_logic:area_recording without the prefix, except exit_recording_mode; why: the reason of a
-  // refusal that went out as RECORDING_REFUSED, empty for one without an event (the action is not enabled).
-  Result OnAction(const std::string& name, Reason* why = nullptr);
+  // refusal that went out as RECORDING_REFUSED, empty for one without an event (the action is not enabled). params:
+  // those of the command (meters of undo_points); answer: its fields when done (points, trimmed_points).
+  Result OnAction(const std::string& name, Reason* why = nullptr, const json& params = json::object(),
+                  json* answer = nullptr);
   // heading_valid: the localization has its heading, else base_link may be off by the antenna offset.
   void OnPose(double x, double y, float position_accuracy, bool heading_valid);
   // The pose got too old.
@@ -118,8 +138,7 @@ class AreaRecorder {
   std::vector<std::string> TakeNotices();
   bool TakeActionsChanged();
 
-  // map_overlay/json like OpenMower: the outline green, obstacles red, the open ring blue. Each line also carries
-  // polygon.points and closed, which MowBite up to 1.4.0-beta.16 reads instead of poly and is_closed.
+  // map_overlay/json like OpenMower: the outline green, obstacles red, the open ring blue; points in mm.
   json Overlay() const;
   // True once after the lines changed.
   bool TakeOverlayChanged();
@@ -140,10 +159,11 @@ class AreaRecorder {
 
  private:
   Result Refuse(const std::string& action, const Reason& reason);
-  Result Act(const std::string& name);
-  // Ends the open ring: the outline if there is none yet, else an obstacle.
-  bool CloseRing(const std::string& action);
-  Result Finish(const std::string& action, const std::string& type);
+  Result Act(const std::string& name, const json& params, json* answer);
+  // Ends the open ring: the outline if there is none yet, else an obstacle; a ring without points just ends.
+  bool CloseRing(const std::string& action, json* answer);
+  Result Finish(const std::string& action, const std::string& type, json* answer);
+  void Undo(double meters, json* answer);
   Result RecordDock();
   void AddPoint(double x, double y);
   size_t PointCount() const;

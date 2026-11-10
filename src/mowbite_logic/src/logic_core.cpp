@@ -372,6 +372,15 @@ CommandOutcome LogicCore::Command(const std::string& name, const json& params, c
     out.invalid = "areas: this OS keeps no list of areas yet, start without it";
     out.invalid_field = "areas";
   }
+  if (out.invalid.empty() && name == "recording.undo" && params.contains("meters")) {
+    const double meters = params["meters"].get<double>();
+    if (!(meters >= kUndoMinM && meters <= kUndoMaxM)) {
+      char text[64];
+      std::snprintf(text, sizeof(text), "meters: %g to %g", kUndoMinM, kUndoMaxM);
+      out.invalid = text;
+      out.invalid_field = "meters";
+    }
+  }
   if (!out.invalid.empty()) return out;
   client_ = params.is_object() ? params.value("client", "") : "";
   // Effects may go away while the command runs, events never: its events are those after the ones before it.
@@ -560,11 +569,11 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     SetState(State::kIdle);
     return {};
   }
-  return RecordingCommand(command, params);
+  return RecordingCommand(command, params, out);
 }
 
 // A step of the recording: the recorder decides by the action the command stands for.
-Reason LogicCore::RecordingCommand(const mowbite_api::Command& command, const json& params) {
+Reason LogicCore::RecordingCommand(const mowbite_api::Command& command, const json& params, CommandOutcome* out) {
   if (state_ != State::kAreaRecording) return WrongState();
   std::string action;
   for (const auto& entry : command.actions) {
@@ -577,7 +586,8 @@ Reason LogicCore::RecordingCommand(const mowbite_api::Command& command, const js
   }
   if (action.rfind(kRecordingPrefix + "/", 0) != 0) return WrongState();
   Reason why;
-  const AreaRecorder::Result result = recorder_.OnAction(action.substr(kRecordingPrefix.size() + 1), &why);
+  const AreaRecorder::Result result =
+      recorder_.OnAction(action.substr(kRecordingPrefix.size() + 1), &why, params, &out->result);
   PullRecorder();
   if (result == AreaRecorder::Result::kDone) return {};
   return why.empty() ? WrongState() : why;
@@ -800,7 +810,8 @@ std::vector<ActionGroup> LogicCore::Actions() const {
                                           "Disable automatic point collecting",
                                           "Collect point",
                                           "Start manual mowing",
-                                          "Stop manual mowing"};
+                                          "Stop manual mowing",
+                                          "Undo points"};
   ActionGroup recording_group{kRecordingPrefix, {}};
   for (size_t i = 0; i < names.size(); i++) {
     recording_group.actions.push_back({AreaRecorder::ActionNames()[i], names[i], recording && enabled[i]});

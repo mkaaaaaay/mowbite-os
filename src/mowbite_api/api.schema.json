@@ -2966,6 +2966,7 @@
             "collect_point",
             "start_manual_mowing",
             "stop_manual_mowing",
+            "undo_points",
             "point"
           ],
           "type": "string"
@@ -5098,11 +5099,16 @@
         "sub_state": {
           "description": "current_sub_state of robot_state right after the command",
           "type": "string"
+        },
+        "trimmed_points": {
+          "description": "Points cut off where the ring ran past its start, 0 for none",
+          "type": "integer"
         }
       },
       "required": [
         "state",
-        "sub_state"
+        "sub_state",
+        "trimmed_points"
       ],
       "type": "object"
     },
@@ -5140,11 +5146,16 @@
         "sub_state": {
           "description": "current_sub_state of robot_state right after the command",
           "type": "string"
+        },
+        "trimmed_points": {
+          "description": "Points cut off where the ring ran past its start, 0 for none",
+          "type": "integer"
         }
       },
       "required": [
         "state",
-        "sub_state"
+        "sub_state",
+        "trimmed_points"
       ],
       "type": "object"
     },
@@ -5177,6 +5188,48 @@
       "required": [
         "state",
         "sub_state"
+      ],
+      "type": "object"
+    },
+    "recording.undo.params": {
+      "additionalProperties": false,
+      "description": "The params of recording.undo",
+      "properties": {
+        "client": {
+          "description": "Who sent the command (app, ha), for the log and the events of its step",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "type": "string"
+        },
+        "meters": {
+          "description": "Path to take back, 0.1 to 50, default 1",
+          "type": "number",
+          "x-unit": "m"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "recording.undo.result": {
+      "additionalProperties": false,
+      "description": "The result of recording.undo",
+      "properties": {
+        "points": {
+          "description": "Points left in the open ring",
+          "type": "integer"
+        },
+        "state": {
+          "description": "current_state of robot_state right after the command",
+          "type": "string"
+        },
+        "sub_state": {
+          "description": "current_sub_state of robot_state right after the command",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "sub_state",
+        "points"
       ],
       "type": "object"
     },
@@ -8411,11 +8464,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:15",
+  "$id": "urn:mowbite-os:api:16",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry.",
   "title": "MowBite OS app interface",
-  "x-api": 15,
+  "x-api": 16,
   "x-commands": {
     "docking.abort": {
       "action": "mower_logic:docking/abort_docking",
@@ -8636,7 +8689,7 @@
           "params": {}
         }
       ],
-      "description": "Closes the ring being recorded",
+      "description": "Closes the ring being recorded; one without points just ends, one whose end ran past its start is cut at the crossing",
       "params": "#/$defs/recording.ring_stop.params",
       "refused": "RECORDING_REFUSED",
       "result": "#/$defs/recording.ring_stop.result"
@@ -8657,7 +8710,7 @@
           }
         }
       ],
-      "description": "Saves the outline and its obstacles as an area; AREA_RECORDED follows",
+      "description": "Saves the outline and its obstacles as an area, closing an open ring first; AREA_RECORDED follows",
       "params": "#/$defs/recording.save.params",
       "refused": "RECORDING_REFUSED",
       "result": "#/$defs/recording.save.result"
@@ -8674,6 +8727,19 @@
       "params": "#/$defs/recording.start.params",
       "refused": "RECORDING_REFUSED",
       "result": "#/$defs/recording.start.result"
+    },
+    "recording.undo": {
+      "action": "mower_logic:area_recording/undo_points",
+      "actions": [
+        {
+          "action": "mower_logic:area_recording/undo_points",
+          "params": {}
+        }
+      ],
+      "description": "Takes points back from the end of the open ring and switches the automatic points off; the mower stays",
+      "params": "#/$defs/recording.undo.params",
+      "refused": "RECORDING_REFUSED",
+      "result": "#/$defs/recording.undo.result"
     },
     "system.api": {
       "action": null,
@@ -9238,14 +9304,14 @@
       "result": "#/$defs/recording.ring_start.result"
     },
     "recording.ring_stop": {
-      "description": "Closes the ring being recorded",
+      "description": "Closes the ring being recorded; one without points just ends, one whose end ran past its start is cut at the crossing",
       "node": "mowbite_logic",
       "offered": "",
       "params": "#/$defs/recording.ring_stop.params",
       "result": "#/$defs/recording.ring_stop.result"
     },
     "recording.save": {
-      "description": "Saves the outline and its obstacles as an area; AREA_RECORDED follows",
+      "description": "Saves the outline and its obstacles as an area, closing an open ring first; AREA_RECORDED follows",
       "node": "mowbite_logic",
       "offered": "",
       "params": "#/$defs/recording.save.params",
@@ -9257,6 +9323,13 @@
       "offered": "",
       "params": "#/$defs/recording.start.params",
       "result": "#/$defs/recording.start.result"
+    },
+    "recording.undo": {
+      "description": "Takes points back from the end of the open ring and switches the automatic points off; the mower stays",
+      "node": "mowbite_logic",
+      "offered": "",
+      "params": "#/$defs/recording.undo.params",
+      "result": "#/$defs/recording.undo.result"
     },
     "robot.geometry.get": {
       "description": "The dimensions of the mower, keys of x-geometry",

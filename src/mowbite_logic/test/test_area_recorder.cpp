@@ -88,6 +88,39 @@ TEST(Ring, AConcaveRingIsFine) {
   EXPECT_FALSE(SelfIntersects({{0, 0}, {4, 0}, {4, 4}, {2, 1}, {0, 4}}));
 }
 
+TEST(Ring, CutOverhangKeepsTheLoopFromTheCrossing) {
+  // The last segment runs through the first at (0.444, 0), past the start.
+  const Ring ring = {{0, 0}, {4, 0}, {4, 4}, {0, 4}, {0.5, -0.5}};
+  const auto cut = CutOverhang(ring, 2.0);
+  ASSERT_TRUE(cut);
+  ASSERT_EQ(cut->ring.size(), 4u);
+  EXPECT_NEAR(cut->ring[0].x, 4.0 / 9, 1e-9);
+  EXPECT_NEAR(cut->ring[0].y, 0, 1e-9);
+  EXPECT_DOUBLE_EQ(cut->ring[3].x, 0);
+  EXPECT_DOUBLE_EQ(cut->ring[3].y, 4);
+  EXPECT_EQ(cut->dropped, 2u);
+  EXPECT_TRUE(RingProblem(cut->ring, 0.05).empty());
+  // Before the crossing 0.44 m, after it 0.5 m.
+  EXPECT_FALSE(CutOverhang(ring, 0.9));
+}
+
+TEST(Ring, CutOverhangAtACornerKeepsTheCorner) {
+  // The last segment runs through the point (1, 0).
+  const auto cut = CutOverhang({{0, 0}, {1, 0}, {2, 0}, {2, 2}, {1, 2}, {1, -1}}, 2.0);
+  ASSERT_TRUE(cut);
+  ASSERT_EQ(cut->ring.size(), 4u);
+  EXPECT_DOUBLE_EQ(cut->ring[0].x, 1);
+  EXPECT_DOUBLE_EQ(cut->ring[0].y, 0);
+  EXPECT_EQ(cut->dropped, 2u);
+  EXPECT_TRUE(RingProblem(cut->ring, 0.05).empty());
+}
+
+TEST(Ring, CutOverhangNeedsACrossingNearTheEnds) {
+  EXPECT_FALSE(CutOverhang({{0, 0}, {4, 0}, {4, 4}, {0, 4}}, 2.0));
+  // A figure eight: half of it lies before and after the crossing.
+  EXPECT_FALSE(CutOverhang({{0, 0}, {2, 2}, {2, 0}, {0, 2}}, 2.0));
+}
+
 TEST(Recorder, StartsWithStartRecordingOnly) {
   AreaRecorder recorder = Writable();
   EXPECT_TRUE(On(recorder, "start_recording"));
@@ -277,6 +310,101 @@ TEST(Recorder, AFigureEightIsRefused) {
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].details["reason"], "RING_CROSSES_ITSELF");
   EXPECT_EQ(events[0].details["message"], "Cannot close the ring: the line crosses itself");
+}
+
+TEST(Recorder, ClosingCutsTheEndPastTheStart) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0, 0}, {4, 0}, {4, 4}, {0.37, 4}, {0.37, -0.6}});
+  const size_t points = recorder.current().size();
+  json answer;
+  ASSERT_EQ(recorder.OnAction("stop_recording", nullptr, json::object(), &answer), AreaRecorder::Result::kDone);
+  ASSERT_TRUE(recorder.outline());
+  const size_t trimmed = answer["trimmed_points"];
+  EXPECT_GE(trimmed, 4u);
+  // The crossing comes in as a point of its own.
+  EXPECT_EQ(recorder.outline()->size(), points - trimmed + 1);
+  for (const auto& p : *recorder.outline()) {
+    EXPECT_GE(p.y, -1e-9);
+    EXPECT_GE(p.x, 0.37 - 1e-9);
+  }
+  EXPECT_TRUE(recorder.TakeEvents().empty());
+  EXPECT_NEAR(RingArea(*recorder.outline()), 3.63 * 4, 0.3);
+}
+
+TEST(Recorder, AFarOverhangNeedsUndo) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0, 0}, {4, 0}, {4, 4}, {0.37, 4}, {0.37, -3}});
+  EXPECT_EQ(recorder.OnAction("stop_recording"), AreaRecorder::Result::kRefused);
+  auto events = recorder.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].details["reason"], "RING_CROSSES_ITSELF");
+  json answer;
+  ASSERT_EQ(recorder.OnAction("undo_points", nullptr, {{"meters", 3.2}}, &answer), AreaRecorder::Result::kDone);
+  EXPECT_EQ(answer["points"], recorder.current().size());
+  EXPECT_GT(recorder.current().back().y, 0);
+  EXPECT_LT(recorder.current().back().y, 0.5);
+  ASSERT_EQ(recorder.OnAction("stop_recording", nullptr, json::object(), &answer), AreaRecorder::Result::kDone);
+  EXPECT_EQ(answer["trimmed_points"], 0);
+}
+
+TEST(Recorder, UndoTakesBackThePathAndStopsAutoPoints) {
+  AreaRecorder recorder = Writable();
+  EXPECT_FALSE(On(recorder, "undo_points"));
+  EXPECT_EQ(recorder.OnAction("undo_points"), AreaRecorder::Result::kRefused);
+  recorder.OnAction("start_recording");
+  EXPECT_FALSE(On(recorder, "undo_points")) << "no point yet";
+  recorder.TakeActionsChanged();
+  Drive(recorder, {{0, 0}, {3, 0}});
+  EXPECT_TRUE(recorder.TakeActionsChanged()) << "undo_points comes with the first point";
+  EXPECT_TRUE(On(recorder, "undo_points"));
+  recorder.TakeOverlayChanged();
+  json answer;
+  ASSERT_EQ(recorder.OnAction("undo_points", nullptr, json::object(), &answer), AreaRecorder::Result::kDone);
+  // 1 m by default: the end is at most 2 m from the start now, and not much less.
+  EXPECT_LE(recorder.current().back().x, 2.0 + 1e-9);
+  EXPECT_GT(recorder.current().back().x, 1.7);
+  EXPECT_EQ(answer, json({{"points", recorder.current().size()}}));
+  EXPECT_TRUE(recorder.TakeOverlayChanged());
+  EXPECT_TRUE(recorder.TakeActionsChanged());
+  EXPECT_TRUE(On(recorder, "auto_point_collecting_enable"));
+  EXPECT_FALSE(On(recorder, "auto_point_collecting_disable"));
+  // Without automatic points the mower may drive back to the new end.
+  const size_t left = recorder.current().size();
+  Drive(recorder, {{3, 0}, {2, 0}});
+  EXPECT_EQ(recorder.current().size(), left);
+  EXPECT_TRUE(recorder.TakeEvents().empty());
+
+  ASSERT_EQ(recorder.OnAction("undo_points", nullptr, {{"meters", 50}}, &answer), AreaRecorder::Result::kDone);
+  EXPECT_EQ(answer["points"], 0);
+  EXPECT_TRUE(recorder.current().empty());
+  EXPECT_FALSE(On(recorder, "undo_points"));
+  EXPECT_TRUE(recorder.recording());
+}
+
+TEST(Recorder, ARingWithoutPointsJustEnds) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  json answer;
+  ASSERT_EQ(recorder.OnAction("stop_recording", nullptr, json::object(), &answer), AreaRecorder::Result::kDone);
+  EXPECT_EQ(answer["trimmed_points"], 0);
+  EXPECT_FALSE(recorder.recording());
+  EXPECT_FALSE(recorder.outline());
+  EXPECT_TRUE(On(recorder, "start_recording"));
+  EXPECT_TRUE(recorder.TakeEvents().empty());
+
+  // An obstacle begun without a point does not stop the save.
+  recorder.OnAction("start_recording");
+  Drive(recorder, Square(3));
+  recorder.OnAction("stop_recording");
+  recorder.OnAction("start_recording");
+  ASSERT_EQ(recorder.OnAction("finish_mowing_area", nullptr, {{"type", "mow"}}, &answer),
+            AreaRecorder::Result::kDone);
+  EXPECT_EQ(answer["trimmed_points"], 0);
+  const auto edit = recorder.TakeMapEdit();
+  ASSERT_TRUE(edit);
+  EXPECT_TRUE(edit->obstacles.empty());
 }
 
 TEST(Recorder, NoSavingWhileTheMapIsNotWritable) {
@@ -678,7 +806,7 @@ TEST(RecorderOverlay, EmptyAtFirst) {
   EXPECT_FALSE(recorder.TakeOverlayChanged());
 }
 
-TEST(RecorderOverlay, LinesInBothFormats) {
+TEST(RecorderOverlay, LinesInMillimetres) {
   AreaRecorder recorder = Writable();
   recorder.TakeOverlayChanged();
   recorder.OnAction("start_recording");
@@ -689,12 +817,18 @@ TEST(RecorderOverlay, LinesInBothFormats) {
   EXPECT_TRUE(recorder.TakeOverlayChanged());
   json line = recorder.Overlay()["polygons"][0];
   EXPECT_EQ(line["is_closed"], 0);
-  EXPECT_EQ(line["closed"], 0);
   EXPECT_EQ(line["color"], "blue");
   EXPECT_DOUBLE_EQ(line["line_width"].get<double>(), 0.1);
   ASSERT_EQ(line["poly"].size(), 2u);
   EXPECT_DOUBLE_EQ(line["poly"][1]["x"].get<double>(), 1.0);
-  EXPECT_EQ(line["polygon"]["points"], line["poly"]);
+  // Only the form of OpenMower.
+  EXPECT_EQ(line.size(), 4u);
+  recorder.OnPose(1.123456, 0.2, 0.02f, true);
+  EXPECT_EQ(recorder.Overlay()["polygons"][0]["poly"][2].dump(), R"({"x":1.123,"y":0.2})");
+  recorder.OnAction("undo_points", nullptr, {{"meters", 0.1}});
+  EXPECT_TRUE(recorder.TakeOverlayChanged());
+  EXPECT_EQ(recorder.Overlay()["polygons"][0]["poly"].size(), 2u);
+  recorder.OnAction("auto_point_collecting_enable");
 
   // A pose too close changes nothing.
   recorder.OnPose(1.05, 0, 0.02f, true);
@@ -707,7 +841,6 @@ TEST(RecorderOverlay, LinesInBothFormats) {
   ASSERT_EQ(polygons.size(), 1u);
   EXPECT_EQ(polygons[0]["color"], "green");
   EXPECT_EQ(polygons[0]["is_closed"], 1);
-  EXPECT_EQ(polygons[0]["closed"], 1);
 
   recorder.OnAction("start_recording");
   Drive(recorder, {{0.2, 0.2}, {0.6, 0.2}, {0.6, 0.6}, {0.2, 0.55}});

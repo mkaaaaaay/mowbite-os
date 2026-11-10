@@ -596,7 +596,7 @@ class LogicCore {
   // out->result.
   Reason RunCommand(const mowbite_api::Command& command, const json& params, const Reason& node_problem,
                     CommandOutcome* out);
-  Reason RecordingCommand(const mowbite_api::Command& command, const json& params);
+  Reason RecordingCommand(const mowbite_api::Command& command, const json& params, CommandOutcome* out);
   // WRONG_STATE with state and sub_state of robot_state.
   Reason WrongState() const;
   // Moves the events of the recorder into the events of the logic, at the current position.

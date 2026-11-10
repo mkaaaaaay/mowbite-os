@@ -720,6 +720,7 @@ const std::vector<std::string> kRecordingActions = {"start_area_recording",
                                                     "collect_point",
                                                     "start_manual_mowing",
                                                     "stop_manual_mowing",
+                                                    "undo_points",
                                                     "point"};
 
 }  // namespace

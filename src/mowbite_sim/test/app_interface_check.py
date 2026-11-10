@@ -1039,8 +1039,8 @@ zeros = [t for t, s in speeds if s == [0.0, 0.0]]
 check_log("teleop drives, clamped to 0.3", len(moving) >= 8 and all(s[0] == 0.3 for s in moving), f"{len(moving)} frames, {moving[:2]}")
 check_log("stop after teleop: 3 zeros", len(zeros) == 3, str(zeros))
 line = wait_for(lambda: [p for p in overlay_lines("blue") if len(p["poly"]) >= 2], 3)
-check("map_overlay: the open line, in both formats", bool(line) and line[0]["is_closed"] == 0 and line[0]["closed"] == 0
-      and line[0]["polygon"]["points"] == line[0]["poly"],
+check("map_overlay: the open line as poly, in mm", bool(line) and line[0]["is_closed"] == 0
+      and "polygon" not in line[0] and all(round(p["x"], 3) == p["x"] for p in line[0]["poly"]),
       json.dumps(line[0]) if line else str(latest("map_overlay/json"))[:200])
 
 set_flags(lift=1)
@@ -1206,6 +1206,12 @@ if "recording.start" in COMMANDS:
           refused_with(r, "RECORDING_REFUSED", "RING_FEW_POINTS", True, mark)
           and data.get("action") == "stop_recording",
           json.dumps(r)[:400], point="AS2 recording")
+    if "recording.undo" in COMMANDS and (data.get("points") or 0) >= 1:
+        r = command("recording.undo", {"meters": 1, "client": "check"})
+        check("recording.undo: points left, automatic points off",
+              ((r or {}).get("result") or {}).get("points") == 0
+              and bool(wait_for(lambda: enabled(REC + "auto_point_collecting_enable") == 1, 3)),
+              json.dumps(r)[:300], point="AS2 recording")
     r = command("recording.discard", {"client": "check"})
     check("recording.discard", ((r or {}).get("result") or {}).get("state") == "AREA_RECORDING", json.dumps(r),
           point="AS2 recording")
