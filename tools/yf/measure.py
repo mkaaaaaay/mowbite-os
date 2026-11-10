@@ -1358,6 +1358,10 @@ class TronStart:
         timeout, window = value("cmd_vel_timeout"), value("speed_repeat_window")
         return min(window, timeout) if window > 0 else timeout
 
+    def imu_start(self):
+        """s tron_mcu gives its IMU for the first sample after the start."""
+        return max(float(self.param("tron_mcu", name)) for name in ("imu_timeout", "imu_start_timeout"))
+
     def start(self, node, **overrides):
         params = {**self.common, "port": self.ports[node], **overrides}
         # In a file of its own: a section of the node in a file wins over -p.
@@ -1443,6 +1447,7 @@ class TronMeasurement(Measurement):
         # T6, from the parameter files of the start: a blade motor below blade_still_rpm stands, within blade_stop_s of
         # going off; the lease and its renewal are those of mowing.
         self.blade_still_rpm = self.blade_stop_s = self.blade_lease_s = self.blade_renew_s = None
+        self.blade_renewed = None
 
     @property
     def speed(self):
@@ -1463,12 +1468,15 @@ class TronMeasurement(Measurement):
         return None if still is None else still - since
 
     def wait_driver_back(self, step, old_pid):
+        """Until the new tron_mcu reports, then through the time it gives its IMU: before the first sample it refuses
+        motion and blade without an emergency in hw/status, after that time it reports one."""
         end = time.monotonic() + self.args.restart_wait
         while time.monotonic() < end:
             self.check_keys()
             status, age, _, _ = self.mower.snapshot()
             pid = self.start.driver_pid
             if pid is not None and pid != old_pid and status is not None and age < 0.3 and status.telemetry_ok:
+                self.wait(self.start.imu_start())
                 return
             time.sleep(0.1)
         self.finding(step, "tron_mcu did not come back")
@@ -1900,19 +1908,21 @@ class TronMeasurement(Measurement):
 
     def blade_run(self, step, percent, seconds, until=None):
         """The blade motor on at `percent` on a renewed lease for `seconds`, or until `until` holds: True then. A
-        refused request ends the step."""
+        refused request ends the step. blade_renewed is when the last accepted request went out."""
         print(f"     sending hw/blade on at {percent} %, {TRON_BLADE_HEIGHT_MM} mm, lease {self.blade_lease_s} s, "
               f"every {self.blade_renew_s} s, for up to {seconds:.0f} s")
         end = time.monotonic() + seconds
         while time.monotonic() < end:
             if until and until():
                 return True
+            asked = time.monotonic()
             answer = self.mower.set_blade(True, self.blade_lease_s, percent, TRON_BLADE_HEIGHT_MM)
             if answer is None or not answer.success:
                 if until and until():
                     return True
                 self.finding(step, f"hw/blade refused: {answer.message if answer else 'no answer'}")
                 raise Abort()
+            self.blade_renewed = asked
             if self.wait(self.blade_renew_s, until):
                 return True
         return False
@@ -1963,8 +1973,8 @@ class TronMeasurement(Measurement):
             self.ready(step)
             self.mark(step, text)
             rpm = self.blade_turning(step, percent)
-            since = time.monotonic()
-            still = self.blade_stands(step, since, "the last renewal", self.blade_lease_s + self.blade_stop_s)
+            still = self.blade_stands(step, self.blade_renewed, "the last renewal",
+                                      self.blade_lease_s + self.blade_stop_s)
             self.rec.write("blade_lease", step=step, percent=percent, rpm=rpm, still_s=still)
 
     def blade_inputs(self, step):
