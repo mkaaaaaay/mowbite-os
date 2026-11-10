@@ -1,6 +1,7 @@
 #ifndef TRON_VISION_RTSP_SERVER_H
 #define TRON_VISION_RTSP_SERVER_H
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -18,7 +19,7 @@ struct RtspConfig {
   std::string path = "stereo";
   // A client that sends nothing for this long is dropped; a player sends receiver reports and keep-alives.
   double idle_timeout_s = 60.0;
-  // Longest wait for room in the socket of a client that reads too slowly, then it is dropped.
+  // Longest time for one picture, or one answer, to go out to a client that reads too slowly, then it is dropped.
   int send_timeout_ms = 200;
 };
 
@@ -53,8 +54,9 @@ class RtspServer {
   bool Playing() const {
     return playing_;
   }
-  // One RTP packet to the playing client; false without one, also when it had to be dropped.
-  bool SendRtp(const uint8_t* packet, size_t size);
+  // The RTP packets of one picture to the playing client, all within send_timeout_ms; false without one, also when
+  // it had to be dropped.
+  bool SendRtp(const std::vector<std::vector<uint8_t>>& packets);
   void DropClient();
 
  private:
@@ -71,7 +73,8 @@ class RtspServer {
   void Handle(const Request& request);
   void Reply(const Request& request, int code, const std::string& headers = "", const std::string& body = "");
   bool OwnPath(const std::string& url) const;
-  bool SendAll(const uint8_t* data, size_t size);
+  bool SendAll(const uint8_t* data, size_t size, std::chrono::steady_clock::time_point give_up);
+  std::chrono::steady_clock::time_point SendDeadline() const;
 
   RtspConfig config_;
   std::function<double()> now_;

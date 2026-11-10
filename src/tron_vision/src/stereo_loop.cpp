@@ -481,14 +481,12 @@ bool StereoLoop::SendFrame(const CapturedFrame& frame) {
   }
   status_.encode_ms = took * 1000.0;
   packetizer_.Packetize(SplitAnnexB(data, size), clock_.Next(frame.timestamp_us), packets_);
-  for (const std::vector<uint8_t>& packet : packets_) {
-    if (!server_.SendRtp(packet.data(), packet.size())) {
-      // The viewer is gone or reads too slowly; the next one starts a new stream.
-      StopStream();
-      Set(StereoState::kReady, "");
-      phase_ = Phase::kIdle;
-      return false;
-    }
+  if (!server_.SendRtp(packets_)) {
+    // The viewer is gone or reads too slowly; the next one starts a new stream.
+    StopStream();
+    Set(StereoState::kReady, "");
+    phase_ = Phase::kIdle;
+    return false;
   }
   status_.frames++;
   window_frames_++;

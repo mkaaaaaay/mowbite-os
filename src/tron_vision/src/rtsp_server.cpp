@@ -250,7 +250,7 @@ void RtspServer::Reply(const Request& request, int code, const std::string& head
   out += headers;
   if (!body.empty()) out += "Content-Length: " + std::to_string(body.size()) + "\r\n";
   out += "\r\n" + body;
-  SendAll(reinterpret_cast<const uint8_t*>(out.data()), out.size());
+  SendAll(reinterpret_cast<const uint8_t*>(out.data()), out.size(), SendDeadline());
 }
 
 void RtspServer::Handle(const Request& request) {
@@ -325,21 +325,32 @@ void RtspServer::Handle(const Request& request) {
   playing_ = client_fd_ >= 0;
 }
 
-bool RtspServer::SendRtp(const uint8_t* packet, size_t size) {
-  if (!playing_ || size > 0xFFFF) return false;
-  frame_.resize(4 + size);
-  frame_[0] = '$';
-  frame_[1] = rtp_channel_;
-  frame_[2] = static_cast<uint8_t>(size >> 8);
-  frame_[3] = static_cast<uint8_t>(size);
-  std::memcpy(frame_.data() + 4, packet, size);
-  return SendAll(frame_.data(), frame_.size());
+bool RtspServer::SendRtp(const std::vector<std::vector<uint8_t>>& packets) {
+  if (!playing_) return false;
+  const auto give_up = SendDeadline();
+  for (const std::vector<uint8_t>& packet : packets) {
+    if (packet.size() > 0xFFFF) {
+      DropClient();
+      return false;
+    }
+    frame_.resize(4 + packet.size());
+    frame_[0] = '$';
+    frame_[1] = rtp_channel_;
+    frame_[2] = static_cast<uint8_t>(packet.size() >> 8);
+    frame_[3] = static_cast<uint8_t>(packet.size());
+    std::memcpy(frame_.data() + 4, packet.data(), packet.size());
+    if (!SendAll(frame_.data(), frame_.size(), give_up)) return false;
+  }
+  return true;
 }
 
-bool RtspServer::SendAll(const uint8_t* data, size_t size) {
+std::chrono::steady_clock::time_point RtspServer::SendDeadline() const {
+  return std::chrono::steady_clock::now() + std::chrono::milliseconds(config_.send_timeout_ms);
+}
+
+bool RtspServer::SendAll(const uint8_t* data, size_t size, std::chrono::steady_clock::time_point give_up) {
   if (client_fd_ < 0) return false;
   size_t sent = 0;
-  const auto give_up = std::chrono::steady_clock::now() + std::chrono::milliseconds(config_.send_timeout_ms);
   while (sent < size) {
     const ssize_t n = send(client_fd_, data + sent, size - sent, MSG_NOSIGNAL);
     if (n > 0) {

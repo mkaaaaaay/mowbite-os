@@ -4,6 +4,10 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <atomic>
+#include <chrono>
+#include <thread>
+
 #include "rtsp_test_client.h"
 #include "tron_vision/rtsp_server.h"
 
@@ -148,8 +152,7 @@ TEST(RtspServer, SetupTakesOnlyTheRtspConnection) {
   EXPECT_EQ(rig.Ask(client, "PLAY " + rig.Url("/") + " RTSP/1.0\r\nCSeq: 5\r\nSession: nobody\r\n\r\n"),
             "RTSP/1.0 454 Session Not Found\r\nCSeq: 5\r\n\r\n");
   EXPECT_FALSE(rig.server.Playing());
-  const uint8_t packet[] = {1, 2, 3};
-  EXPECT_FALSE(rig.server.SendRtp(packet, sizeof(packet)));
+  EXPECT_FALSE(rig.server.SendRtp({{1, 2, 3}}));
 }
 
 TEST(RtspServer, PlaySendsFramedPacketsAndDropsRtcp) {
@@ -159,8 +162,7 @@ TEST(RtspServer, PlaySendsFramedPacketsAndDropsRtcp) {
   ASSERT_FALSE(session.empty());
   ASSERT_TRUE(rig.server.Playing());
 
-  const uint8_t packet[] = {0x80, 0x60, 0, 1, 9, 9};
-  ASSERT_TRUE(rig.server.SendRtp(packet, sizeof(packet)));
+  ASSERT_TRUE(rig.server.SendRtp({{0x80, 0x60, 0, 1, 9, 9}}));
   EXPECT_EQ(client.Receive(), std::string("$\0\0\6\x80\x60\0\1\x09\x09", 10));
 
   // A receiver report, then a request split over two segments with another report in between.
@@ -238,12 +240,32 @@ TEST(RtspServer, ClientThatDoesNotReadIsDropped) {
   Rig rig(config);
   Client client(rig.server.Port());
   ASSERT_FALSE(rig.Play(client).empty());
-  const std::vector<uint8_t> packet(1200, 0x55);
+  const std::vector<std::vector<uint8_t>> picture{std::vector<uint8_t>(1200, 0x55)};
   int sent = 0;
-  while (sent < 100000 && rig.server.SendRtp(packet.data(), packet.size())) sent++;
+  while (sent < 100000 && rig.server.SendRtp(picture)) sent++;
   EXPECT_GT(sent, 10);
   EXPECT_LT(sent, 100000);
   EXPECT_FALSE(rig.server.Playing());
+}
+
+TEST(RtspServer, PictureForAClientThatReadsSlowlyHasOneDeadline) {
+  RtspConfig config;
+  config.send_timeout_ms = 100;
+  Rig rig(config);
+  Client client(rig.server.Port());
+  ASSERT_FALSE(rig.Play(client).empty());
+  // Each packet alone would find room within the deadline, the whole picture does not.
+  std::atomic<bool> reading{true};
+  std::thread reader([&] {
+    while (reading && client.Receive() != "<closed>") std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  });
+  const std::vector<std::vector<uint8_t>> picture(640, std::vector<uint8_t>(65000, 0x55));
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_FALSE(rig.server.SendRtp(picture));
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
+  EXPECT_FALSE(rig.server.Playing());
+  reading = false;
+  reader.join();
 }
 
 }  // namespace
