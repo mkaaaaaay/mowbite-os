@@ -1447,6 +1447,7 @@ class TronMeasurement(Measurement):
         # T6, from the parameter files of the start: a blade motor below blade_still_rpm stands, within blade_stop_s of
         # going off; the lease and its renewal are those of mowing.
         self.blade_still_rpm = self.blade_stop_s = self.blade_lease_s = self.blade_renew_s = None
+        self.blade_renewed = None
 
     @property
     def speed(self):
@@ -1907,19 +1908,21 @@ class TronMeasurement(Measurement):
 
     def blade_run(self, step, percent, seconds, until=None):
         """The blade motor on at `percent` on a renewed lease for `seconds`, or until `until` holds: True then. A
-        refused request ends the step."""
+        refused request ends the step. blade_renewed is when the last accepted request went out."""
         print(f"     sending hw/blade on at {percent} %, {TRON_BLADE_HEIGHT_MM} mm, lease {self.blade_lease_s} s, "
               f"every {self.blade_renew_s} s, for up to {seconds:.0f} s")
         end = time.monotonic() + seconds
         while time.monotonic() < end:
             if until and until():
                 return True
+            asked = time.monotonic()
             answer = self.mower.set_blade(True, self.blade_lease_s, percent, TRON_BLADE_HEIGHT_MM)
             if answer is None or not answer.success:
                 if until and until():
                     return True
                 self.finding(step, f"hw/blade refused: {answer.message if answer else 'no answer'}")
                 raise Abort()
+            self.blade_renewed = asked
             if self.wait(self.blade_renew_s, until):
                 return True
         return False
@@ -1970,8 +1973,8 @@ class TronMeasurement(Measurement):
             self.ready(step)
             self.mark(step, text)
             rpm = self.blade_turning(step, percent)
-            since = time.monotonic()
-            still = self.blade_stands(step, since, "the last renewal", self.blade_lease_s + self.blade_stop_s)
+            still = self.blade_stands(step, self.blade_renewed, "the last renewal",
+                                      self.blade_lease_s + self.blade_stop_s)
             self.rec.write("blade_lease", step=step, percent=percent, rpm=rpm, still_s=still)
 
     def blade_inputs(self, step):

@@ -193,7 +193,11 @@ class TestRehearsalTron(unittest.TestCase):
         lease, = [r for r in rec if r["kind"] == "blade_lease"]
         for r in offs + [lease]:
             self.assertLessEqual(r["still_s"], 3.0, r)
-        self.assertGreaterEqual(lease["still_s"], 0.4)
+        requests = [r for r in rec if r["kind"] == "blade" and r["on"]]
+        # The lease run counts from its last request, not from the end of the wait after it.
+        renewed = max(r["t"] for r in requests if r["t"] < lease["t"])
+        self.assertAlmostEqual(lease["t"] - lease["still_s"], renewed, delta=0.2)
+        self.assertGreaterEqual(lease["still_s"], 1.0)
         self.assertEqual(len([r for r in rec if r["kind"] == "blade_emergency"]), 3)
         runs = [r for r in rec if r["kind"] == "blade_gone"]
         self.assertEqual([(r["way"], r["percent"]) for r in runs],
@@ -205,7 +209,6 @@ class TestRehearsalTron(unittest.TestCase):
             self.assertLessEqual(run["still_s"], HOLD_S + 1.3, run)
             self.assertEqual(run["last_rpm"], 0)
             self.assertEqual(run["summary"]["checksum_errors"], 0)
-        requests = [r for r in rec if r["kind"] == "blade" and r["on"]]
         self.assertTrue(all(r["height_mm"] == m.TRON_BLADE_HEIGHT_MM and r["lease_s"] == 1.0 for r in requests))
         starts = [r["params"]["allow_blade"] for r in rec if r["kind"] == "process" and r["node"] == "tron_mcu"]
         self.assertEqual(starts, [False, True, True, True, False])
