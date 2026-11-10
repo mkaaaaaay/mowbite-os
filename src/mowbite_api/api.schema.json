@@ -28,6 +28,7 @@
               "STILL_STOPPING",
               "EMERGENCY",
               "NO_SAFETY_MEASUREMENT",
+              "STORAGE_NOT_WRITABLE",
               "MAP_UNKNOWN",
               "MAP_MISMATCH",
               "MAP_UNREADABLE",
@@ -373,6 +374,9 @@
         },
         {
           "$ref": "#/$defs/event.GEOMETRY_CHANGED"
+        },
+        {
+          "$ref": "#/$defs/event.STORAGE"
         },
         {
           "$ref": "#/$defs/event.MAP_DATUM"
@@ -1108,6 +1112,10 @@
           "type": "number",
           "x-unit": "m"
         },
+        "file": {
+          "description": "The file in data_dir: os-session.json or restart-hold.json",
+          "type": "string"
+        },
         "free_length": {
           "description": "The free length in front of the mower",
           "type": "number",
@@ -1153,6 +1161,7 @@
             "STILL_STOPPING",
             "EMERGENCY",
             "NO_SAFETY_MEASUREMENT",
+            "STORAGE_NOT_WRITABLE",
             "MAP_UNKNOWN",
             "MAP_MISMATCH",
             "MAP_UNREADABLE",
@@ -1903,6 +1912,10 @@
           ],
           "type": "string"
         },
+        "file": {
+          "description": "The file in data_dir: os-session.json or restart-hold.json",
+          "type": "string"
+        },
         "goal_x": {
           "description": "The goal, east of the datum of the map",
           "type": "number",
@@ -1953,6 +1966,8 @@
             "PLANNER_TIMEOUT",
             "PLANNER_MISSING",
             "EMERGENCY",
+            "NO_SAFETY_MEASUREMENT",
+            "STORAGE_NOT_WRITABLE",
             "NOT_ALLOWED",
             "INVALID",
             "CROSS_TRACK",
@@ -2048,6 +2063,10 @@
           "type": "number",
           "x-unit": "m"
         },
+        "file": {
+          "description": "The file in data_dir: os-session.json or restart-hold.json",
+          "type": "string"
+        },
         "id": {
           "description": "Random id of the event, 32 letters and digits",
           "type": "string"
@@ -2074,6 +2093,7 @@
             "ALREADY_THERE",
             "EMERGENCY",
             "NO_SAFETY_MEASUREMENT",
+            "STORAGE_NOT_WRITABLE",
             "MAP_UNKNOWN",
             "MAP_MISMATCH",
             "MAP_UNREADABLE",
@@ -2660,6 +2680,10 @@
           "type": "number",
           "x-unit": "m"
         },
+        "file": {
+          "description": "The file in data_dir: os-session.json or restart-hold.json",
+          "type": "string"
+        },
         "id": {
           "description": "Random id of the event, 32 letters and digits",
           "type": "string"
@@ -2686,6 +2710,7 @@
             "STILL_STOPPING",
             "EMERGENCY",
             "NO_SAFETY_MEASUREMENT",
+            "STORAGE_NOT_WRITABLE",
             "MAP_UNKNOWN",
             "MAP_MISMATCH",
             "MAP_UNREADABLE",
@@ -2978,6 +3003,10 @@
           "type": "number",
           "x-unit": "m"
         },
+        "file": {
+          "description": "The file in data_dir: os-session.json or restart-hold.json",
+          "type": "string"
+        },
         "id": {
           "description": "Random id of the event, 32 letters and digits",
           "type": "string"
@@ -3005,6 +3034,7 @@
             "HOLD",
             "STILL_SAVING",
             "EMERGENCY",
+            "STORAGE_NOT_WRITABLE",
             "MAP_UNKNOWN",
             "MAP_MISMATCH",
             "SAVE_FAILED",
@@ -3263,6 +3293,92 @@
       "type": "object",
       "x-emitter": "logic"
     },
+    "event.STORAGE": {
+      "additionalProperties": false,
+      "description": "Writing in data_dir failed; the reason tells what, once each time it begins",
+      "properties": {
+        "client": {
+          "description": "Who sent the command (app, ha), for the log and the events of its step",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "type": "string"
+        },
+        "file": {
+          "description": "The file in data_dir: os-session.json or restart-hold.json",
+          "type": "string"
+        },
+        "id": {
+          "description": "Random id of the event, 32 letters and digits",
+          "type": "string"
+        },
+        "job_id": {
+          "description": "The job of mowing it belongs to",
+          "type": "string"
+        },
+        "message": {
+          "description": "English text for the log and for apps that do not know the reason",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why: a fixed name in capitals, rated in x-reasons",
+          "enum": [
+            "STORAGE_NOT_WRITABLE"
+          ],
+          "type": "string"
+        },
+        "resume": {
+          "description": "auto when it goes on by itself, user when it waits for the user",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "type": "string"
+        },
+        "session_id": {
+          "description": "The session of the logic since its start",
+          "type": "string"
+        },
+        "severity": {
+          "description": "How bad it is",
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "type": "string"
+        },
+        "t": {
+          "description": "When it happened",
+          "type": "number",
+          "x-unit": "unix s"
+        },
+        "type": {
+          "const": "STORAGE",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "x": {
+          "description": "Where the mower was, east of the datum of the map",
+          "type": "number",
+          "x-unit": "m"
+        },
+        "y": {
+          "description": "Where the mower was, north of the datum of the map",
+          "type": "number",
+          "x-unit": "m"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "reason",
+        "severity",
+        "resume"
+      ],
+      "type": "object",
+      "x-emitter": "logic"
+    },
     "event.UNDOCKED": {
       "additionalProperties": false,
       "description": "The mower left the docking station",
@@ -3339,7 +3455,8 @@
           "description": "Why: a fixed name in capitals, rated in x-reasons",
           "enum": [
             "path_failed",
-            "no_gps"
+            "no_gps",
+            "NO_SAFETY_MEASUREMENT"
           ],
           "type": "string"
         },
@@ -3571,6 +3688,7 @@
               "DOCK_RECORDED",
               "AREA_RECORDED",
               "GEOMETRY_CHANGED",
+              "STORAGE",
               "MAP_DATUM",
               "CORRECTIONS"
             ]
@@ -5935,11 +6053,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:11",
+  "$id": "urn:mowbite-os:api:12",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry.",
   "title": "MowBite OS app interface",
-  "x-api": 11,
+  "x-api": 12,
   "x-commands": {
     "docking.abort": {
       "action": "mower_logic:docking/abort_docking",
@@ -7197,6 +7315,26 @@
         "fields": {},
         "resume": "user",
         "severity": "info"
+      },
+      "STORAGE_NOT_WRITABLE": {
+        "description": "A file of the restart hold cannot be written in data_dir: nothing starts until it can",
+        "fields": {
+          "file": ""
+        },
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Den Mäher neu starten. Bleibt es so, ist der Speicher voll oder defekt: das Protokoll für eine Meldung sichern.",
+            "help": "Der Speicher des Mähers lässt sich nicht beschreiben. Starten ist gesperrt, bis das Schreiben wieder gelingt.",
+            "name": "Speicher nicht beschreibbar"
+          },
+          "en": {
+            "fix": "Restart the mower. If it stays, the storage is full or broken: keep the log for a report.",
+            "help": "The storage of the mower cannot be written. Starting is blocked until writing works again.",
+            "name": "Storage not writable"
+          }
+        }
       }
     },
     "CHARGING_LOST": {
@@ -7496,6 +7634,12 @@
         "resume": "user",
         "severity": "error"
       },
+      "NO_SAFETY_MEASUREMENT": {
+        "description": "This platform has no safety measurement yet, so it does not drive by itself",
+        "fields": {},
+        "resume": "user",
+        "severity": "error"
+      },
       "OUTSIDE": {
         "description": "The mower left the allowed area",
         "fields": {},
@@ -7534,6 +7678,26 @@
         "fields": {},
         "resume": "user",
         "severity": "info"
+      },
+      "STORAGE_NOT_WRITABLE": {
+        "description": "A file of the restart hold cannot be written in data_dir: nothing starts until it can",
+        "fields": {
+          "file": ""
+        },
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Den Mäher neu starten. Bleibt es so, ist der Speicher voll oder defekt: das Protokoll für eine Meldung sichern.",
+            "help": "Der Speicher des Mähers lässt sich nicht beschreiben. Starten ist gesperrt, bis das Schreiben wieder gelingt.",
+            "name": "Speicher nicht beschreibbar"
+          },
+          "en": {
+            "fix": "Restart the mower. If it stays, the storage is full or broken: keep the log for a report.",
+            "help": "The storage of the mower cannot be written. Starting is blocked until writing works again.",
+            "name": "Storage not writable"
+          }
+        }
       },
       "TIMEOUT": {
         "description": "It took too long",
@@ -7688,11 +7852,31 @@
         "fields": {},
         "resume": "user",
         "severity": "info"
+      },
+      "STORAGE_NOT_WRITABLE": {
+        "description": "A file of the restart hold cannot be written in data_dir: nothing starts until it can",
+        "fields": {
+          "file": ""
+        },
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Den Mäher neu starten. Bleibt es so, ist der Speicher voll oder defekt: das Protokoll für eine Meldung sichern.",
+            "help": "Der Speicher des Mähers lässt sich nicht beschreiben. Starten ist gesperrt, bis das Schreiben wieder gelingt.",
+            "name": "Speicher nicht beschreibbar"
+          },
+          "en": {
+            "fix": "Restart the mower. If it stays, the storage is full or broken: keep the log for a report.",
+            "help": "The storage of the mower cannot be written. Starting is blocked until writing works again.",
+            "name": "Storage not writable"
+          }
+        }
       }
     },
     "EMERGENCY_RESET_REFUSED": {
       "DRIVER_MISSING": {
-        "description": "The driver of the platform does not answer",
+        "description": "The driver of the platform does not answer or reports no status",
         "fields": {},
         "resume": "user",
         "severity": "error"
@@ -7963,6 +8147,26 @@
         "fields": {},
         "resume": "user",
         "severity": "info"
+      },
+      "STORAGE_NOT_WRITABLE": {
+        "description": "A file of the restart hold cannot be written in data_dir: nothing starts until it can",
+        "fields": {
+          "file": ""
+        },
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Den Mäher neu starten. Bleibt es so, ist der Speicher voll oder defekt: das Protokoll für eine Meldung sichern.",
+            "help": "Der Speicher des Mähers lässt sich nicht beschreiben. Starten ist gesperrt, bis das Schreiben wieder gelingt.",
+            "name": "Speicher nicht beschreibbar"
+          },
+          "en": {
+            "fix": "Restart the mower. If it stays, the storage is full or broken: keep the log for a report.",
+            "help": "The storage of the mower cannot be written. Starting is blocked until writing works again.",
+            "name": "Storage not writable"
+          }
+        }
       }
     },
     "POSITION_JUMP": {
@@ -8107,6 +8311,26 @@
         "fields": {},
         "resume": "user",
         "severity": "info"
+      },
+      "STORAGE_NOT_WRITABLE": {
+        "description": "A file of the restart hold cannot be written in data_dir: nothing starts until it can",
+        "fields": {
+          "file": ""
+        },
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Den Mäher neu starten. Bleibt es so, ist der Speicher voll oder defekt: das Protokoll für eine Meldung sichern.",
+            "help": "Der Speicher des Mähers lässt sich nicht beschreiben. Starten ist gesperrt, bis das Schreiben wieder gelingt.",
+            "name": "Speicher nicht beschreibbar"
+          },
+          "en": {
+            "fix": "Restart the mower. If it stays, the storage is full or broken: keep the log for a report.",
+            "help": "The storage of the mower cannot be written. Starting is blocked until writing works again.",
+            "name": "Storage not writable"
+          }
+        }
       },
       "TOO_MANY_POINTS": {
         "description": "The ring has too many points",
@@ -8296,7 +8520,7 @@
     },
     "STATE": {
       "APPROACH_FAILED": {
-        "description": "The approach to the docking station failed",
+        "description": "No way to the start of the next path while mowing",
         "fields": {},
         "resume": "user",
         "severity": "error"
@@ -8469,7 +8693,35 @@
         "severity": "error"
       }
     },
+    "STORAGE": {
+      "STORAGE_NOT_WRITABLE": {
+        "description": "A file of the restart hold cannot be written in data_dir: nothing starts until it can",
+        "fields": {
+          "file": ""
+        },
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Den Mäher neu starten. Bleibt es so, ist der Speicher voll oder defekt: das Protokoll für eine Meldung sichern.",
+            "help": "Der Speicher des Mähers lässt sich nicht beschreiben. Starten ist gesperrt, bis das Schreiben wieder gelingt.",
+            "name": "Speicher nicht beschreibbar"
+          },
+          "en": {
+            "fix": "Restart the mower. If it stays, the storage is full or broken: keep the log for a report.",
+            "help": "The storage of the mower cannot be written. Starting is blocked until writing works again.",
+            "name": "Storage not writable"
+          }
+        }
+      }
+    },
     "UNDOCKING_FAILED": {
+      "NO_SAFETY_MEASUREMENT": {
+        "description": "This platform has no safety measurement yet, so it does not drive by itself",
+        "fields": {},
+        "resume": "user",
+        "severity": "error"
+      },
       "no_gps": {
         "description": "No GPS for the way off the docking station (value of OpenMower)",
         "fields": {},
