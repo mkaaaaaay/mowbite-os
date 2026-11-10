@@ -104,8 +104,16 @@ process is outside this watch and stops the mower by its own timeouts.
 - Every log, recording and cache gets a limit in days and MB.
 - `mowbite-host` (`host/`, unit `mowbite-host.service` on the Tron) runs beside the OS as root, not in its bundle:
   it installs signed bundles (update.*), answers `host.restart_os` and keeps `mowbite/host/status` retained, also
-  while the OS is off. It needs the broker of the OS, `python3-paho-mqtt` (1.x or 2.x), systemd for the OS service
-  and the files of the data dir; a compose stack needs a carrier of its own (not built yet).
+  while the OS is off. It needs the broker of the OS, `python3-paho-mqtt` (1.x or 2.x), `ssh-keygen`, systemd for
+  the OS service and the files of the data dir; a compose stack needs a carrier of its own (not built yet). On the
+  rootfs: the library under `/usr/lib/mowbite-host` (from `host/`, `make-image.sh` copies it), the unit enabled, the
+  rootfs version in `/usr/lib/mowbite/base` (raise it when a bundle needs something new of the rootfs; bundles name
+  the version they need) and `/etc/mowbite/allowed_signers` with two keys, the main one and a reserve kept apart, for
+  the namespaces `mowbite-os` and `mowbite-index`. `host/test/test_e2e.py` runs the whole way with the carrier
+  `process` (`MOWBITE_HOST_CARRIER=process` in the environment files).
+- Bundles: `make-bundle.sh` (serial = commit time, base, api from the image), signed with `sign-bundle.sh` (refuses a
+  serial not newer than the last one signed, shows the result of the test gate), then into the inbox
+  `/userdata/mowbite-update/inbox` and `update.check`.
 
 ## 6. Safety measurement
 
@@ -170,6 +178,7 @@ is no common camera package yet.
 - [ ] Every node of your own in the container attached to the watch (`test_stack.py`)
 - [ ] Simulation: mowing, going home, docking; `app_interface_check`
 - [ ] Way onto the mower chosen, limits for logs and journal, data dir writable (a start works)
+- [ ] mowbite-host with its carrier: base version, two keys in allowed_signers, `test_e2e.py` green
 - [ ] Safety measurement done, date set
 - [ ] Lights, if any: device rights, `output` on only after a look on the mower
 - [ ] Cameras, if any: own process, publisher list tested, vendor files only on the mower, limits measured

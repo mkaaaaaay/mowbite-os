@@ -97,8 +97,17 @@ done
 sh -n "$TREE/usr/lib/mowbite/crash"; result "crash script parses" $?
 grep -qFe "-name 'console-*'" "$TREE/usr/lib/mowbite/crash"; result "crash script reads console records" $?
 bash -n "$TREE/usr/lib/mowbite/run-os" && bash -n "$TREE/usr/lib/mowbite/os-setup"; result "run-os parses" $?
-python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$TREE/usr/sbin/mowbite-update"
-result "mowbite-update parses" $?
+for f in mowbite-update mowbite-host; do
+    python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$TREE/usr/sbin/$f"; result "$f parses" $?
+done
+diff -r --exclude=__pycache__ "$HERE/../../../host/mowbite_host" "$TREE/usr/lib/mowbite-host/mowbite_host" > /dev/null
+result "library of mowbite-host as in host/ of the repo" $?
+test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-host.service")" = ../mowbite-host.service
+result "mowbite-host.service enabled" $?
+grep -qx '[0-9]\+' "$TREE/usr/lib/mowbite/base"; result "rootfs version in /usr/lib/mowbite/base" $?
+# A lost key must not lock every mower out: a main and a reserve key, both for bundles and the index.
+test "$(grep -cE '^mowbite namespaces="mowbite-os,mowbite-index" ssh-ed25519 ' "$TREE/etc/mowbite/allowed_signers")" -ge 2
+result "two keys in allowed_signers" $?
 test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-os.service")" = ../mowbite-os.service
 result "mowbite-os.service enabled" $?
 test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-update-recover.service")" = \

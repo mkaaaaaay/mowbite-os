@@ -52,6 +52,11 @@ tar -C "$HERE/files" -cf "$work/files.tar" --owner=0 --group=0 --numeric-owner -
 # The broker of MowBite OS with the configuration the Compose stack of the other platforms uses.
 tar -C "$HERE/../../../docker/mower" -rf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w \
     --transform 's|^mosquitto.conf$|./etc/mosquitto/mosquitto.conf|' mosquitto.conf
+# The library of mowbite-host and mowbite-update, from host/ of the repo, with its own folder.
+mkdir -p "$work/host/usr/lib/mowbite-host"
+cp -r "$HERE/../../../host/mowbite_host" "$work/host/usr/lib/mowbite-host/"
+tar -C "$work/host" -rf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w --exclude=__pycache__ \
+    --no-recursion ./usr/lib/mowbite-host --recursion ./usr/lib/mowbite-host/mowbite_host
 
 items=()
 parents=()
