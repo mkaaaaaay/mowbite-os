@@ -1,8 +1,6 @@
 #include "tron_vision/vision_node.h"
 
 #include <chrono>
-#include <cmath>
-#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -12,20 +10,12 @@ namespace tron_vision {
 
 namespace {
 
-double MonotonicSeconds() {
-  using namespace std::chrono;
-  return duration<double>(steady_clock::now().time_since_epoch()).count();
-}
-
 const char kStateSensor[] = "vision_state";
 const char kLastSensor[] = "vision_last";
 const char kRateSensor[] = "vision_rate";
 constexpr double kReportPeriod = 1.0;
 // Step interval while no camera streams: retries and the heat pause count in seconds.
 constexpr auto kIdleWait = std::chrono::milliseconds(200);
-// Set by the system after a kernel crash (mowbite-crash.service), and the id of this boot.
-const char kCrashFlag[] = "/run/mowbite/crash";
-const char kBootId[] = "/proc/sys/kernel/random/boot_id";
 
 bool Streams(VisionState state) {
   return state == VisionState::kStarting || state == VisionState::kRunning;
@@ -102,9 +92,10 @@ VisionNode::VisionNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_
       "hw/cameras", rclcpp::QoS(rclcpp::KeepLast(4)).reliable().transient_local());
   picture_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>("camera/" + camera_id_ + "/jpeg",
                                                                      rclcpp::QoS(rclcpp::KeepLast(1)).best_effort());
-  Sensor(kStateSensor, "Camera AI", mowbite_msgs::msg::SensorSpec::KIND_TEXT, "");
-  Sensor(kLastSensor, "Camera AI Detections", mowbite_msgs::msg::SensorSpec::KIND_TEXT, "");
-  Sensor(kRateSensor, "Camera AI Rate", mowbite_msgs::msg::SensorSpec::KIND_NUMBER, "1/s");
+  using mowbite_msgs::msg::SensorSpec;
+  sensor_info_pub_->publish(PlainSensor(kStateSensor, "Camera AI", SensorSpec::KIND_TEXT, ""));
+  sensor_info_pub_->publish(PlainSensor(kLastSensor, "Camera AI Detections", SensorSpec::KIND_TEXT, ""));
+  sensor_info_pub_->publish(PlainSensor(kRateSensor, "Camera AI Rate", SensorSpec::KIND_NUMBER, "1/s"));
 
   thread_ = std::thread([this] { Run(); });
 }
@@ -117,21 +108,6 @@ VisionNode::~VisionNode() {
   wake_.notify_all();
   if (thread_.joinable()) thread_.join();
   loop_->Shutdown();
-}
-
-void VisionNode::Sensor(const std::string& id, const std::string& name, uint8_t kind, const std::string& unit) {
-  const double none = std::numeric_limits<double>::quiet_NaN();
-  mowbite_msgs::msg::SensorSpec spec;
-  spec.id = id;
-  spec.name = name;
-  spec.kind = kind;
-  spec.meaning = mowbite_msgs::msg::SensorSpec::MEANING_UNKNOWN;
-  spec.unit = unit;
-  spec.min = none;
-  spec.max = none;
-  spec.critical_low = none;
-  spec.critical_high = none;
-  sensor_info_pub_->publish(spec);
 }
 
 void VisionNode::Run() {

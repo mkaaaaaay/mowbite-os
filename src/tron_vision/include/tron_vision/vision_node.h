@@ -15,17 +15,13 @@
 #include <thread>
 
 #include "tron_vision/budget.h"
+#include "tron_vision/camera_node.h"
 #include "tron_vision/crash_guard.h"
 #include "tron_vision/tron_camera.h"
 #include "tron_vision/vision_loop.h"
 
 namespace tron_vision {
 
-// Whether the camera can stream in this state, else the reason of hw/cameras (mowbite_msgs/Camera REASON_*).
-struct Availability {
-  bool available = false;
-  std::string reason;
-};
 Availability CameraAvailability(VisionState state);
 
 // The camera AI of the Tron in a process of its own: it reports state, detections and the camera with its pictures and
@@ -48,7 +44,6 @@ class VisionNode : public rclcpp::Node {
   void PublishDetections(const VisionStatus& status);
   void PublishCamera(const VisionStatus& status);
   void PublishPicture();
-  void Sensor(const std::string& id, const std::string& name, uint8_t kind, const std::string& unit);
 
   std::unique_ptr<TronCamera> camera_;
   std::unique_ptr<CrashGuard> guard_;
