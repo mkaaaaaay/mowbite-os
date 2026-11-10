@@ -11,8 +11,8 @@ the noise of the Tron with --standstill-noise (flag standstill_noise). The state
 the MCU pty (host_bytes). The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an upright sensor.
 Optional: a JSON file with flags (lift, stop, bumper, bumper_left, bumper_right, rain, dock, host_timeout, fast_speed_hold, gnss_quality, gnss_noise, gnss_age, gnss_delay,
-yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, gnss_rtcm, dock_shift_x, dock_shift_y,
-dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps, charge_current, battery_percentage, battery_voltage,
+yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, cutter_holds, gnss_rtcm, dock_shift_x,
+dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps, charge_current, battery_percentage, battery_voltage,
 battery_temperature, blade_temperature, standstill_noise) is read every 10 ms, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON; a thread
 of its own does all of this file work, so a slow disk never holds the ptys (Files). The
 GNSS pty also plays the RTK board in front of the receiver (Board). gnss_rtcm true makes the fix depend on the RTCM the
@@ -21,7 +21,7 @@ gnss_noise is the standard deviation (m) of the antenna position, gnss_age the a
 1.0, null leaves the field empty), gnss_delay how old (s) the position is when it is sent, yaw_drift the yaw error (rad)
 per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below which a wheel stands, odom_scale the factor
 between the reported and the real wheel speed, track the real track (m). imu_off stops the IMU frames,
-cutter_ignores_off keeps the blade turning on off frames. tilt_roll and tilt_pitch (degrees) stand the base on a slope
+cutter_ignores_off keeps the blade turning on off frames, cutter_holds also without any frame from the host. tilt_roll and tilt_pitch (degrees) stand the base on a slope
 for the IMU; the wheels and the GNSS do not notice it. gyro_bias_dps overrides --gyro-bias-dps, e.g. a bias that changes
 with the temperature. battery_voltage (V, 24.5), battery_temperature and blade_temperature (degC, 30) go into the battery
 and the blade motor report.
@@ -264,7 +264,7 @@ class HostLink:
     """The setpoint the MCU holds: up to `timeout` s after the last SpeedData, `fast_hold` s after FAST_SPEED_RUN
     SpeedData in a row each less than FAST_SPEED_GAP s apart (a single short gap is read jitter), and not during a lift
     or stop. The blade stops once no frame at all came for
-    `timeout` s."""
+    `timeout` s, unless the flag cutter_holds keeps it."""
 
     def __init__(self, timeout, fast_hold=0.0):
         self.timeout = timeout
@@ -776,6 +776,7 @@ def main():
     parser.add_argument("--flags", help="JSON file with lift, stop, bumper, bumper_left, bumper_right, rain, dock, "
                         "host_timeout, gnss_quality, gnss_noise, "
                         "gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, "
+                        "cutter_holds, "
                         "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps, "
                         "charge_current, battery_percentage, battery_voltage, battery_temperature, blade_temperature, "
                         "standstill_noise, fast_speed_hold")
@@ -912,7 +913,7 @@ def main():
                 left_rpm, right_rpm = drive.rpm()
                 motors = b"".join(struct.pack("<hhhbb", rpm, 0, 2450, 30, 0)
                                   for rpm in (-right_rpm, -left_rpm, 0))
-                if blocked or host.silent(now):
+                if blocked or (host.silent(now) and not flags.get("cutter_holds", 0)):
                     cutter_percent = 0
                 # Assumed 2800 rpm at full speed, 0.8 A while turning (10 mA steps).
                 cutter = struct.pack("<hhhbb", 28 * cutter_percent, 80 if cutter_percent else 0, 2450,
