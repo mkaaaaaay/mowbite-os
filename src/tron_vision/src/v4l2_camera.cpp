@@ -27,13 +27,7 @@ int RetryIoctl(int fd, unsigned long request, void* arg) {
   return ret;
 }
 
-struct Range {
-  int min = 0;
-  int max = 0;
-  int value = 0;
-};
-
-bool ReadControl(int fd, uint32_t id, const char* name, Range& range, std::string& error) {
+bool ReadControl(int fd, uint32_t id, const char* name, ControlRange& range, std::string& error) {
   v4l2_queryctrl query{};
   query.id = id;
   if (RetryIoctl(fd, VIDIOC_QUERYCTRL, &query) < 0) {
@@ -86,7 +80,22 @@ struct BufferArg {
 };
 
 uint32_t FourCc(PixelFormat pixel) {
-  return pixel == PixelFormat::kYuyv ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_NV12;
+  switch (pixel) {
+    case PixelFormat::kYuyv: return V4L2_PIX_FMT_YUYV;
+    case PixelFormat::kMjpeg: return V4L2_PIX_FMT_MJPEG;
+    case PixelFormat::kNv12: break;
+  }
+  return V4L2_PIX_FMT_NV12;
+}
+
+// Bytes per pixel in a line of the first plane; 0 for a compressed format.
+uint32_t PixelBytes(PixelFormat pixel) {
+  switch (pixel) {
+    case PixelFormat::kYuyv: return 2;
+    case PixelFormat::kMjpeg: return 0;
+    case PixelFormat::kNv12: break;
+  }
+  return 1;
 }
 
 VideoDevice& SystemDevice() {
@@ -149,9 +158,9 @@ bool SensorControls::Open(const std::string& subdev, std::string& error) {
     error = ErrnoText("open " + subdev);
     return false;
   }
-  Range exposure;
-  Range gain;
-  Range vblank;
+  ControlRange exposure;
+  ControlRange gain;
+  ControlRange vblank;
   if (!ReadControl(fd_, V4L2_CID_EXPOSURE, "exposure", exposure, error) ||
       !ReadControl(fd_, V4L2_CID_ANALOGUE_GAIN, "analogue_gain", gain, error) ||
       !ReadControl(fd_, V4L2_CID_VBLANK, "vertical_blanking", vblank, error)) {
@@ -247,7 +256,46 @@ bool V4l2Capture::Fail(std::string message, std::string& error) {
 
 size_t V4l2Capture::FrameBytes() const {
   const size_t luma = static_cast<size_t>(stride_) * format_.height;
-  return format_.pixel == PixelFormat::kYuyv ? luma : luma * 3 / 2;
+  switch (format_.pixel) {
+    case PixelFormat::kYuyv: return luma;
+    case PixelFormat::kMjpeg: return 0;
+    case PixelFormat::kNv12: break;
+  }
+  return luma * 3 / 2;
+}
+
+bool V4l2Capture::QueryControl(uint32_t id, ControlRange& range, std::string& error) {
+  v4l2_queryctrl query{};
+  query.id = id;
+  if (fd_ < 0 || device_->Ioctl(fd_, VIDIOC_QUERYCTRL, &query) < 0) {
+    error = fd_ < 0 ? "camera not open" : ErrnoText("query control " + std::to_string(id));
+    return false;
+  }
+  if ((query.flags & V4L2_CTRL_FLAG_DISABLED) != 0) {
+    error = "control " + std::to_string(id) + " disabled";
+    return false;
+  }
+  v4l2_control control{};
+  control.id = id;
+  if (device_->Ioctl(fd_, VIDIOC_G_CTRL, &control) < 0) {
+    error = ErrnoText("read control " + std::to_string(id));
+    return false;
+  }
+  range.min = query.minimum;
+  range.max = query.maximum;
+  range.value = control.value;
+  return true;
+}
+
+bool V4l2Capture::SetControl(uint32_t id, int value, std::string& error) {
+  v4l2_control control{};
+  control.id = id;
+  control.value = value;
+  if (fd_ < 0 || device_->Ioctl(fd_, VIDIOC_S_CTRL, &control) < 0) {
+    error = fd_ < 0 ? "camera not open" : ErrnoText("set control " + std::to_string(id));
+    return false;
+  }
+  return true;
 }
 
 bool V4l2Capture::Queue(uint32_t index) {
@@ -270,8 +318,7 @@ bool V4l2Capture::Open(const std::string& device, const CaptureFormat& format, s
   if ((!mplane_ && (caps & V4L2_CAP_VIDEO_CAPTURE) == 0) || (caps & V4L2_CAP_STREAMING) == 0) {
     return Fail(device + " is no streaming capture node", error);
   }
-  // Bytes per pixel in a line of the first plane.
-  const uint32_t pixel_bytes = format.pixel == PixelFormat::kYuyv ? 2 : 1;
+  const uint32_t pixel_bytes = PixelBytes(format.pixel);
   v4l2_format fmt{};
   fmt.type = BufferType(mplane_);
   // What the driver made of the request.
@@ -302,7 +349,7 @@ bool V4l2Capture::Open(const std::string& device, const CaptureFormat& format, s
   }
   stride_ = got.bytesperline;
   if (got.pixelformat != FourCc(format.pixel) || got.width != format.width || got.height != format.height ||
-      planes != 1 || stride_ < format.width * pixel_bytes || got.sizeimage < FrameBytes()) {
+      planes != 1 || stride_ < format.width * pixel_bytes || got.sizeimage < std::max<size_t>(FrameBytes(), 1)) {
     return Fail("format not accepted: " + std::to_string(got.width) + "x" + std::to_string(got.height) + " planes " +
                     std::to_string(planes) + " stride " + std::to_string(stride_),
                 error);
@@ -405,8 +452,9 @@ int V4l2Capture::Next(int timeout_ms, CapturedFrame& frame, std::string& error) 
     return -1;
   }
   held_ = static_cast<int>(b.buf.index);
-  if (b.buf.index >= buffers_.size() || (b.buf.flags & V4L2_BUF_FLAG_ERROR) != 0 ||
-      (b.Used() != 0 && b.Used() < FrameBytes())) {
+  // A compressed frame without bytes is as broken as a short raw one.
+  const bool short_frame = FrameBytes() == 0 ? b.Used() == 0 : b.Used() != 0 && b.Used() < FrameBytes();
+  if (b.buf.index >= buffers_.size() || (b.buf.flags & V4L2_BUF_FLAG_ERROR) != 0 || short_frame) {
     Release();
     return 0;
   }

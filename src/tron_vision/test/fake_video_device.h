@@ -4,13 +4,16 @@
 #include <fcntl.h>
 #include <linux/videodev2.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "tron_vision/v4l2_camera.h"
@@ -112,6 +115,32 @@ class FakeVideoDevice : public VideoDevice {
         queued.clear();
         ready.clear();
         return 0;
+      case VIDIOC_QUERYCTRL: {
+        auto* query = static_cast<v4l2_queryctrl*>(arg);
+        const auto c = controls.find(query->id);
+        if (c == controls.end()) return Error(EINVAL);
+        query->minimum = c->second.min;
+        query->maximum = c->second.max;
+        query->flags = c->second.flags;
+        return 0;
+      }
+      case VIDIOC_G_CTRL: {
+        auto* control = static_cast<v4l2_control*>(arg);
+        const auto c = controls.find(control->id);
+        if (c == controls.end()) return Error(EINVAL);
+        control->value = c->second.value;
+        return 0;
+      }
+      case VIDIOC_S_CTRL: {
+        auto* control = static_cast<v4l2_control*>(arg);
+        const auto c = controls.find(control->id);
+        if (c == controls.end()) return Error(EINVAL);
+        if (control->value < c->second.min || control->value > c->second.max) return Error(ERANGE);
+        if (set_errno != 0) return Error(set_errno);
+        c->second.value = control->value;
+        writes.emplace_back(control->id, control->value);
+        return 0;
+      }
       default: return Error(ENOTTY);
     }
   }
@@ -144,6 +173,18 @@ class FakeVideoDevice : public VideoDevice {
     return true;
   }
 
+  // A compressed frame of these bytes in the oldest queued buffer.
+  bool PushBytes(const std::vector<uint8_t>& bytes) {
+    sequence++;
+    timestamp_us += frame_period_us;
+    if (!streaming || queued.empty() || bytes.size() > buffer_bytes) return false;
+    const uint32_t index = queued.front();
+    queued.pop_front();
+    std::copy(bytes.begin(), bytes.end(), memory[index].begin());
+    ready.push_back({index, static_cast<uint32_t>(bytes.size()), 0, sequence, timestamp_us});
+    return true;
+  }
+
   // Every request seen is one of `allowed`.
   bool OnlyRequests(const std::set<unsigned long>& allowed) const {
     for (unsigned long r : requests) {
@@ -161,6 +202,17 @@ class FakeVideoDevice : public VideoDevice {
   uint32_t max_buffers = 4;
   int open_errno = 0;
   int streamon_errno = 0;
+  // Not 0: S_CTRL fails with it.
+  int set_errno = 0;
+  struct Control {
+    int min = 0;
+    int max = 0;
+    int value = 0;
+    uint32_t flags = 0;
+  };
+  std::map<uint32_t, Control> controls;
+  // S_CTRL in order, id and value.
+  std::vector<std::pair<uint32_t, int>> writes;
   int64_t frame_period_us = 42000;
   std::function<void(int)> on_wait;
 

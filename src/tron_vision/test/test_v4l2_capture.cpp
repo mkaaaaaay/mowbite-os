@@ -124,6 +124,48 @@ TEST_P(V4l2CaptureTest, Nv12WithoutExport) {
   EXPECT_TRUE(device.OnlyRequests(kAllowed));
 }
 
+// The rear camera: MJPEG with the stride 0 and frames as long as the driver says; empty ones are dropped.
+TEST_P(V4l2CaptureTest, MjpegFramesOfTheirOwnLength) {
+  device.stride = 0;
+  device.buffer_bytes = 1920 * 1080 * 2;
+  V4l2Capture capture(&device);
+  ASSERT_TRUE(capture.Open("/dev/mowbite-rear", {1920, 1080, PixelFormat::kMjpeg, 4, false}, error)) << error;
+  EXPECT_EQ(capture.FrameBytes(), 0U);
+  ASSERT_TRUE(capture.Start(error));
+  CapturedFrame frame;
+  device.Push(1, 0);
+  EXPECT_EQ(capture.Next(0, frame, error), 0);
+  ASSERT_TRUE(device.PushBytes({0xff, 0xd8, 0xff, 0xd9}));
+  ASSERT_EQ(capture.Next(0, frame, error), 1);
+  EXPECT_EQ(frame.bytes, 4U);
+  EXPECT_EQ(frame.data[1], 0xd8);
+  EXPECT_TRUE(device.OnlyRequests(kAllowed));
+
+  device.buffer_bytes = 0;
+  EXPECT_FALSE(capture.Open("/dev/mowbite-rear", {1920, 1080, PixelFormat::kMjpeg, 4, false}, error));
+}
+
+TEST_P(V4l2CaptureTest, ControlsOfTheNode) {
+  V4l2Capture capture(&device);
+  ControlRange range;
+  EXPECT_FALSE(capture.QueryControl(V4L2_CID_GAIN, range, error));
+  EXPECT_EQ(error, "camera not open");
+  ASSERT_TRUE(capture.Open("/dev/video22", kStereo, error)) << error;
+  device.controls[V4L2_CID_GAIN] = {0, 63, 12, 0};
+  device.controls[V4L2_CID_EXPOSURE_ABSOLUTE] = {1, 5000, 313, V4L2_CTRL_FLAG_DISABLED};
+  ASSERT_TRUE(capture.QueryControl(V4L2_CID_GAIN, range, error)) << error;
+  EXPECT_EQ(range.min, 0);
+  EXPECT_EQ(range.max, 63);
+  EXPECT_EQ(range.value, 12);
+  EXPECT_FALSE(capture.QueryControl(V4L2_CID_EXPOSURE_ABSOLUTE, range, error));
+  EXPECT_NE(error.find("disabled"), std::string::npos) << error;
+  EXPECT_FALSE(capture.QueryControl(V4L2_CID_BRIGHTNESS, range, error));
+  ASSERT_TRUE(capture.SetControl(V4L2_CID_GAIN, 40, error)) << error;
+  EXPECT_EQ(device.controls[V4L2_CID_GAIN].value, 40);
+  EXPECT_FALSE(capture.SetControl(V4L2_CID_GAIN, 64, error));
+  EXPECT_NE(error.find("set control"), std::string::npos) << error;
+}
+
 INSTANTIATE_TEST_SUITE_P(BufferTypes, V4l2CaptureTest, ::testing::Values(true, false),
                          [](const ::testing::TestParamInfo<bool>& info) {
                            return info.param ? "MultiPlanar" : "SinglePlanar";
