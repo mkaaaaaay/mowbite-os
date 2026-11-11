@@ -1,16 +1,20 @@
 """The Tron part of measure.py without a mower: the evaluation of the host-gone captures, the limits and the proposal,
-the port settings it reads under, the port reader on a pty, the parameters of the minimal start, and the blade motor
-without host (T6).
+the port settings it reads under, the port reader and the window without host on a pty, the parameters of the minimal
+start, and the blade motor without host (T6) with its options.
 
 Run in a sourced workspace (measure.py imports rclpy): python3 -m unittest tools/yf/test/test_measure_tron.py
 """
 import os
+import signal
+import subprocess
 import sys
 import tempfile
 import termios
 import time
 import tty
+import types
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import measure as m  # noqa: E402
@@ -107,6 +111,50 @@ class TestBladeArguments(unittest.TestCase):
                 m.main(["--platform", "tron", *argv])
             self.assertIn("go together", str(refused.exception.code), argv)
 
+    def test_percent_values(self):
+        self.assertEqual(m.blade_percents("30,100"), (30, 100))
+        self.assertEqual(m.blade_percents(" 100 "), (100,))
+        self.assertEqual(m.blade_percents("1,50,100"), (1, 50, 100))
+        for text in ("", "0", "101", "30,", "30,,100", "30.5", "-30", "1e2", "²", "abc"):
+            with self.assertRaisesRegex(ValueError, "a whole number from 1 to 100", msg=text):
+                m.blade_percents(text)
+        with self.assertRaisesRegex(ValueError, "at most 3 values, got 4"):
+            m.blade_percents("10,20,30,40")
+        for text in ("30,30", "100,30,030"):
+            with self.assertRaisesRegex(ValueError, "each value once", msg=text):
+                m.blade_percents(text)
+
+    def test_window_values(self):
+        self.assertEqual(m.blade_window("5"), 5.0)
+        self.assertEqual(m.blade_window(" 120 "), 120.0)
+        for text in ("4", "121", "60.5", "1e1", "0", "-10", "nan", "inf", "", "ten"):
+            with self.assertRaisesRegex(ValueError, "a whole number from 5 to 120", msg=text):
+                m.blade_window(text)
+
+    def test_the_capture_limit_follows_a_long_window(self):
+        self.assertEqual(m.capture_limit(m.HOST_GONE_WINDOW_S), m.CAPTURE_MAX_BYTES)
+        self.assertEqual(m.capture_limit(m.BLADE_GONE_WINDOW_S), m.CAPTURE_MAX_BYTES)
+        # The Tron's MCU filled 8.4 kB a second (T2, 08.11.): the longest window has room for three times that.
+        longest = m.BLADE_WINDOW_RANGE_S[1]
+        self.assertGreaterEqual(m.capture_limit(longest), 3 * 8400 * longest)
+
+    def test_options_only_with_t6_on_the_tron(self):
+        for argv in (["--blade-percent", "100"], ["--blade-window", "60"],
+                     ["--platform", "tron", "--steps", "T2", "--blade-window", "60"],
+                     ["--platform", "nx60i", "--steps", "M7", "--blade", "--blade-percent", "100"]):
+            with self.assertRaises(SystemExit) as refused:
+                m.main(argv)
+            self.assertIn("for T6 on the Tron", str(refused.exception.code), argv)
+
+    def test_wrong_values_are_refused_before_anything_starts(self):
+        t6 = ["--platform", "tron", "--steps", "T6", "--blade", "--record-dir", "/nonexistent/record"]
+        for option, value in (("--blade-percent", "0"), ("--blade-percent", "30,60,90,100"),
+                              ("--blade-percent", "30,30"), ("--blade-window", "4"), ("--blade-window", "121"),
+                              ("--blade-window", "7.5")):
+            with self.assertRaises(SystemExit) as refused:
+                m.main([*t6, option, value])
+            self.assertTrue(str(refused.exception.code).startswith(option + ": "), refused.exception.code)
+
     def test_t6_is_not_in_the_default_steps(self):
         self.assertIn("T6", m.TronMeasurement.STEPS)
         with self.assertRaises(SystemExit) as refused:
@@ -193,9 +241,11 @@ class TestPort(unittest.TestCase):
         t0 = time.monotonic()
         os.write(self.master, bytes([0xA5, 0x00, 0x5A]))
         time.sleep(0.1)
+        self.assertFalse(reader.full)
         os.write(self.master, b"\x01" * 40)
         time.sleep(0.1)
         reader.close()
+        self.assertTrue(reader.full)
         with open(capture) as f:
             lines = f.read().splitlines()
         self.assertEqual(len(lines), 1)
@@ -213,6 +263,44 @@ class TestPort(unittest.TestCase):
         self.assertEqual(m.port_holders(self.path), [])
         self.assertIn(m.process_state(os.getpid()), ("R", "S"))
         self.assertIsNone(m.process_state(2 ** 22 + 1))
+
+    def stand_in(self):
+        """A measurement whose tron_mcu is a sleeping process that holds the port, and that process."""
+        self.settings()
+        driver = subprocess.Popen(["sleep", "30"], stdin=self.slave)
+        self.addCleanup(driver.wait)
+        self.addCleanup(driver.kill)
+
+        def signal_driver(sig):
+            os.kill(driver.pid, sig)
+            return driver.pid
+        run = m.TronMeasurement.__new__(m.TronMeasurement)
+        run.findings = []
+        run.rec = types.SimpleNamespace(write=lambda kind, **fields: None)
+        run.keys = types.SimpleNamespace(pressed=lambda: False)
+        run.mower = types.SimpleNamespace(tripped=lambda: None)
+        run.start = types.SimpleNamespace(mcu_port=self.path, log_stem=os.path.join(self.work, "run"),
+                                          signal_driver=signal_driver)
+        return run, driver
+
+    def test_without_host_reads_the_window_and_continues_the_driver(self):
+        run, driver = self.stand_in()
+        os.write(self.master, b"\x01" * 40)
+        since, capture = run.without_host("T6", "freeze", signal.SIGSTOP, "freeze-30-1", 0.3)
+        self.assertGreaterEqual(time.monotonic() - since, 0.3)
+        with open(capture) as f:
+            self.assertEqual(f.read().split()[1], "01" * 40)
+        self.assertEqual(run.findings, [])
+        self.assertNotIn(m.process_state(driver.pid), ("T", "t"))
+
+    def test_a_capture_at_its_limit_ends_the_step(self):
+        run, driver = self.stand_in()
+        os.write(self.master, b"\x01" * 40)
+        with mock.patch.object(m, "capture_limit", return_value=60), self.assertRaises(m.Abort):
+            run.without_host("T6", "freeze", signal.SIGSTOP, "freeze-30-1", 0.3)
+        self.assertEqual(len(run.findings), 1)
+        self.assertIn("reached its limit of 60 bytes", run.findings[0])
+        self.assertNotIn(m.process_state(driver.pid), ("T", "t"))
 
 
 class TestStartParameters(unittest.TestCase):

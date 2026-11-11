@@ -19,7 +19,7 @@ flag file instead, for the rehearsal against the simulated board.
 On the Tron the wheels turn at most 0.1 m/s, in the air only; the first turn is at 0.05 m/s (0.1 m/s if no wheel turns
 at 0.05), followed at once by a check of STOP. For the time the MCU holds a setpoint without its host (T2) tron_mcu is
 frozen (SIGSTOP) or killed; only while it is stopped or gone this programme reads the MCU port, read only and without
-touching its settings, into a capture file (at most CAPTURE_MAX_BYTES each), which tron_mcu_capture decodes with the
+touching its settings, into a capture file (at most capture_limit bytes each), which tron_mcu_capture decodes with the
 codec of tron_mcu. The values for the parameter file of the Tron come out as a proposal only; nothing is written there.
 T6 (only with --blade, the blade disc off) asks the same of the blade motor: tron_mcu runs with the blade allowed for
 that step alone, the motor turns free on the lease of mowing, and the host goes the same two ways.
@@ -96,15 +96,21 @@ HEARTBEAT_ONLY = {"cmd_vel_timeout": HEARTBEAT_ONLY_TIMEOUT_S, "speed_repeat_win
 # moving false once its watchdog fired: T5 looks at it WATCHDOG_MARGIN_S after that.
 EMERGENCY_STAND_S = 1.0
 WATCHDOG_MARGIN_S = 0.5
-# Blade without host (T6), the disc off: the motor turns at each of TRON_BLADE_PERCENT for BLADE_RUN_S, then the host
-# goes and the programme reads the port for BLADE_GONE_WINDOW_S; the MCU reports the motors about once a second. The
-# height stays where tron_mcu leaves a blade that is off, so the height motor does not move.
+# Blade without host (T6), the disc off: the motor turns at each of --blade-percent (default TRON_BLADE_PERCENT, at
+# most BLADE_PERCENT_COUNT values) for BLADE_RUN_S, then the host goes and the programme reads the port for
+# --blade-window s (default BLADE_GONE_WINDOW_S, within BLADE_WINDOW_RANGE_S); the MCU reports the motors about once a
+# second. The height stays where tron_mcu leaves a blade that is off, so the height motor does not move.
 TRON_BLADE_PERCENT = (30, 100)
+BLADE_PERCENT_COUNT = 3
 TRON_BLADE_HEIGHT_MM = 90
 BLADE_RUN_S = 4.0
 BLADE_GONE_WINDOW_S = 10.0
+BLADE_WINDOW_RANGE_S = (5, 120)
 BLADE_INPUT_WAIT_S = 10.0
+# Limit of a capture: CAPTURE_MAX_BYTES, for a long window CAPTURE_BYTES_PER_S where that is more (capture_limit). The
+# Tron's MCU filled 8.4 kB a second (T2, 08.11.). A capture that reached its limit ends the step.
 CAPTURE_MAX_BYTES = 1024 * 1024
+CAPTURE_BYTES_PER_S = 32 * 1024
 NODE_LOG_BYTES = 5 * 1024 * 1024
 
 
@@ -200,6 +206,40 @@ def blade_gone_result(packets, since, still_rpm):
     return {"still_s": None if stood is None else stood - since,
             "turning_at_start": bool(reports) and reports[0][1] >= still_rpm,
             "last_rpm": reports[-1][1] if reports else None, "samples": len(reports)}
+
+
+def whole_number(text, low, high):
+    """`text` as a whole number from `low` to `high`; None if it is none."""
+    item = text.strip()
+    return int(item) if item.isascii() and item.isdigit() and low <= int(item) <= high else None
+
+
+def blade_percents(text):
+    """The values of --blade-percent: whole numbers 1-100, comma separated, at most BLADE_PERCENT_COUNT, each once (the
+    captures of a run are named by its percent). ValueError with the reason otherwise."""
+    values = [whole_number(item, 1, 100) for item in text.split(",")]
+    if len(values) > BLADE_PERCENT_COUNT:
+        raise ValueError(f"at most {BLADE_PERCENT_COUNT} values, got {len(values)}")
+    if None in values:
+        raise ValueError(f"each value a whole number from 1 to 100, got {text!r}")
+    if len(set(values)) < len(values):
+        raise ValueError(f"each value once, got {text!r}")
+    return tuple(values)
+
+
+def blade_window(text):
+    """The value of --blade-window: whole seconds within BLADE_WINDOW_RANGE_S, as the questions show them. ValueError
+    with the reason otherwise."""
+    low, high = BLADE_WINDOW_RANGE_S
+    window = whole_number(text, low, high)
+    if window is None:
+        raise ValueError(f"a whole number from {low} to {high}, got {text!r}")
+    return float(window)
+
+
+def capture_limit(window):
+    """Bytes the capture of a window of `window` s may take."""
+    return max(CAPTURE_MAX_BYTES, int(window * CAPTURE_BYTES_PER_S))
 
 
 def holding_problems(stands):
@@ -1257,7 +1297,8 @@ def process_state(pid):
 
 class PortReader:
     """Reads a serial port without writing to it or changing its settings: one line "<monotonic s> <hex>" per chunk
-    into a capture file of at most max_bytes. Refuses a port whose settings could answer the other side."""
+    into a capture file of at most max_bytes; `full` once a chunk found no room, the capture ends there. Refuses a port
+    whose settings could answer the other side."""
 
     def __init__(self, path, capture, max_bytes=CAPTURE_MAX_BYTES):
         self.fd = os.open(path, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK | os.O_CLOEXEC)
@@ -1270,6 +1311,7 @@ class PortReader:
             os.close(self.fd)
             raise
         self.left = max_bytes
+        self.full = False
         self.running = True
         self.thread = threading.Thread(target=self._read, daemon=True)
         self.thread.start()
@@ -1286,6 +1328,7 @@ class PortReader:
                 return
             line = f"{time.monotonic():.6f} {data.hex()}\n"
             if len(line) > self.left:
+                self.full = True
                 return
             self.left -= len(line)
             self.file.write(line)
@@ -1665,15 +1708,17 @@ class TronMeasurement(Measurement):
 
     def without_host(self, step, way, sig, label, window):
         """Sends `sig` to tron_mcu and reads the port for `window` s; then the frozen driver continues, a killed one
-        starts again and is waited for. Returns the time of the signal and the capture."""
+        starts again and is waited for. Returns the time of the signal and the capture. A capture that reached its
+        limit does not hold the whole window and ends the step."""
         capture = self.capture_path(f"{step}-{label}")
+        limit = capture_limit(window)
         since = time.monotonic()
         pid = self.start.signal_driver(sig)
         print(f"     sent {signal.Signals(sig).name} to tron_mcu (pid {pid}), reading {self.start.mcu_port}")
         reader = None
         try:
             self.driver_off(step, way, pid)
-            reader = PortReader(self.start.mcu_port, capture)
+            reader = PortReader(self.start.mcu_port, capture, limit)
             self.wait(window)
         except PortRefused as error:
             self.finding(step, str(error))
@@ -1688,6 +1733,9 @@ class TronMeasurement(Measurement):
                 self.start.start_driver(**self.start.overrides)
         if way == "kill":
             self.wait_driver_back(step, pid)
+        if reader.full:
+            self.finding(step, f"the capture {capture} reached its limit of {limit} bytes before the window ended")
+            raise Abort()
         return since, capture
 
     def driver_off(self, step, way, pid):
@@ -1878,7 +1926,7 @@ class TronMeasurement(Measurement):
         self.blade_stop_s = float(self.start.param("tron_mcu", "blade_stop_time"))
         self.blade_lease_s = float(self.start.param("mowbite_logic", "blade_lease"))
         self.blade_renew_s = float(self.start.param("mowbite_logic", "blade_renew"))
-        longest = BLADE_RUN_S + BLADE_GONE_WINDOW_S + self.blade_stop_s
+        longest = BLADE_RUN_S + self.args.blade_window + self.blade_stop_s
         if not self.ask(f"{step} blade motor with the disc OFF (jacked up, you at STOP and battery): tron_mcu starts "
                         f"again with the blade allowed, for this step only; the motor turns up to {longest:.0f} s a "
                         f"run at {TRON_BLADE_HEIGHT_MM} mm, the wheels get no command"):
@@ -1955,7 +2003,7 @@ class TronMeasurement(Measurement):
         return still
 
     def blade_basics(self, step):
-        for percent in TRON_BLADE_PERCENT:
+        for percent in self.args.blade_percent:
             text = f"on at {percent} % for {BLADE_RUN_S:.0f} s, then off"
             if not self.ask(f"{step} blade motor {text}"):
                 continue
@@ -1967,7 +2015,7 @@ class TronMeasurement(Measurement):
             self.mower.set_blade(False)
             still = self.blade_stands(step, since, "the off request")
             self.rec.write("blade_off", step=step, percent=percent, rpm=rpm, still_s=still)
-        percent = TRON_BLADE_PERCENT[0]
+        percent = self.args.blade_percent[0]
         text = f"on at {percent} %, then no renewal: tron_mcu switches it off when the lease runs out"
         if self.ask(f"{step} blade motor {text}"):
             self.ready(step)
@@ -1981,7 +2029,7 @@ class TronMeasurement(Measurement):
         items = [("press STOP while the blade motor turns", {"stop": True}),
                  ("push the bumper left while the blade motor turns", {"bumper_left": True}),
                  ("push the bumper right while the blade motor turns", {"bumper_right": True})]
-        percent = TRON_BLADE_PERCENT[0]
+        percent = self.args.blade_percent[0]
         for text, fake in items:
             if not self.ask(f"{step} {text}: on at {percent} % for up to {BLADE_RUN_S + BLADE_INPUT_WAIT_S:.0f} s, "
                             "it has to stand on the emergency and stay so after the release"):
@@ -2012,12 +2060,12 @@ class TronMeasurement(Measurement):
                 ("kill", signal.SIGKILL, "killed (SIGKILL), started again after the window")]
         n = min(self.args.repeats, TRON_SHORT_REPEATS)
         for way, sig, text in ways:
-            for percent in TRON_BLADE_PERCENT:
+            for percent in self.args.blade_percent:
                 stills = []
                 for i in range(n):
                     if not self.ask(f"{step} blade without host, {percent} %, run {i + 1}/{n}: the motor on for "
                                     f"{BLADE_RUN_S:.0f} s, then tron_mcu {text}; meanwhile this programme only reads "
-                                    f"the port, {BLADE_GONE_WINDOW_S:.0f} s"):
+                                    f"the port, {self.args.blade_window:.0f} s"):
                         break
                     stills.append(self.blade_gone_run(step, way, sig, percent, i + 1))
                 if stills:
@@ -2030,7 +2078,7 @@ class TronMeasurement(Measurement):
         self.ready(step)
         self.mark(step, f"blade without host ({way}), {percent} %, run {n}")
         rpm = self.blade_turning(step, percent)
-        since, capture = self.without_host(step, way, sig, f"{way}-{percent}-{n}", BLADE_GONE_WINDOW_S)
+        since, capture = self.without_host(step, way, sig, f"{way}-{percent}-{n}", self.args.blade_window)
         back = time.monotonic()
         packets, summary, code = self.start.decode(capture)
         result = blade_gone_result(packets, since, self.blade_still_rpm)
@@ -2047,7 +2095,7 @@ class TronMeasurement(Measurement):
         self.blade_stands(step, back, "tron_mcu came back")
         if still is None:
             self.finding(step, f"blade without host ({way}), {percent} %, run {n}: the MCU kept the motor turning for "
-                               f"{BLADE_GONE_WINDOW_S:.0f} s without its host")
+                               f"{self.args.blade_window:.0f} s without its host")
             raise Abort()
         self.show("after")
         self.release(step)
@@ -2097,6 +2145,11 @@ def main(argv=None):
     parser.add_argument("--wheel-distance", type=float, default=0.3556, help="nx60i; the Tron's driver reports its own")
     parser.add_argument("--restart-wait", type=float, default=120.0, help="s to wait for a restarted driver")
     parser.add_argument("--blade", action="store_true", help="allow M7, on the Tron T6 (blade, the disc off)")
+    parser.add_argument("--blade-percent",
+                        help=f"tron T6: up to {BLADE_PERCENT_COUNT} whole numbers from 1 to 100, comma separated, "
+                             f"default {','.join(map(str, TRON_BLADE_PERCENT))}; the lease and the inputs at the first")
+    parser.add_argument("--blade-window", help=f"tron T6: whole s without host, {BLADE_WINDOW_RANGE_S[0]} to "
+                                               f"{BLADE_WINDOW_RANGE_S[1]}, default {BLADE_GONE_WINDOW_S:g}")
     parser.add_argument("--ground", action="store_true", help="allow M8 on the ground, 0.3 m/s per wheel")
     parser.add_argument("--fast", action="store_true",
                         help="with --ground: the fast runs of M8 up to 0.5 m/s in stages, in the raised start of the "
@@ -2123,6 +2176,16 @@ def main(argv=None):
         sys.exit("--ground and --fast are not for the Tron")
     if tron and args.blade != ("T6" in steps):
         sys.exit("on the Tron --blade and T6 go together")
+    if (args.blade_percent is not None or args.blade_window is not None) and not (tron and "T6" in steps):
+        sys.exit("--blade-percent and --blade-window are for T6 on the Tron")
+    try:
+        args.blade_percent = TRON_BLADE_PERCENT if args.blade_percent is None else blade_percents(args.blade_percent)
+    except ValueError as error:
+        sys.exit(f"--blade-percent: {error}")
+    try:
+        args.blade_window = BLADE_GONE_WINDOW_S if args.blade_window is None else blade_window(args.blade_window)
+    except ValueError as error:
+        sys.exit(f"--blade-window: {error}")
     if "M8" in steps and not args.ground:
         sys.exit("M8 needs --ground")
     if args.fast and not args.ground:
