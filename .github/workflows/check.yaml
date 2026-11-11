@@ -41,10 +41,24 @@ jobs:
         with:
           planner-key: ${{ secrets.PLANNER_DEPLOY_KEY }}
 
+      # For the smoke test of mowbite_camera: the release that docker/os.Dockerfile pins, checked against its sum there.
+      - name: Stream server of the image
+        run: |
+          arch=${{ matrix.arch }}
+          version=$(sed -n 's/^ARG MEDIAMTX_VERSION=//p' docker/os.Dockerfile)
+          sum=$(sed -n "s/^ARG MEDIAMTX_SHA256_${arch^^}=//p" docker/os.Dockerfile)
+          : "${version:?no MEDIAMTX_VERSION in docker/os.Dockerfile}" "${sum:?no sum for $arch there}"
+          release=https://github.com/bluenviron/mediamtx/releases/download/v$version
+          curl -fsSL -o mediamtx.tar.gz "$release/mediamtx_v${version}_linux_$arch.tar.gz"
+          echo "$sum  mediamtx.tar.gz" | sha256sum -c -
+          mkdir mtx
+          tar -xzf mediamtx.tar.gz -C mtx mediamtx
+
       - name: Build and run the unit tests
         run: |
           mkdir -p out
-          docker run --rm -v "$PWD/src:/ws/src:ro" -v "$PWD/out:/out" mowbite-os-dev:jazzy bash -c '
+          docker run --rm -v "$PWD/src:/ws/src:ro" -v "$PWD/out:/out" -v "$PWD/mtx:/mtx:ro" \
+            -e MOWBITE_MEDIAMTX=/mtx/mediamtx mowbite-os-dev:jazzy bash -c '
             . /opt/ros/jazzy/setup.sh && . /opt/mowbite_planner/setup.sh && cd /ws
             colcon build --packages-skip mowbite_sim --event-handlers console_direct+ \
               --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_COMPILE_WARNING_AS_ERROR=ON 2>&1 | tee /out/build.txt

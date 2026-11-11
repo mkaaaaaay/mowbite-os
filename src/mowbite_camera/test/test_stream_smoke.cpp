@@ -30,7 +30,8 @@ constexpr char kOthersOff[] = "logLevel: warn\nlogDestinations: [stdout]\napi: f
                               "srt: false\nmoq: false\nwebrtc: false\n";
 
 double Now() {
-  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  using std::chrono::steady_clock;
+  return std::chrono::duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
 bool Until(const std::function<bool()>& done, double seconds) {
@@ -118,9 +119,9 @@ TEST(StreamSmoke, ARealSessionTakesAPlaceUntilItIsKicked) {
   EXPECT_TRUE(supervisor.Up());
   EXPECT_EQ(sessions, std::vector<std::string>());
 
-  // The API is closed to everyone but the node.
+  // The API is closed to everyone but the node; the server holds a wrong password back for up to 4 s.
   EXPECT_EQ(LocalRequest({kApiPort, "", ""}, "GET", "/v3/webrtcsessions/list", 2.0).status, 401);
-  EXPECT_EQ(LocalRequest({kApiPort, service.api_user(), "guess"}, "GET", "/v3/paths/list", 2.0).status, 401);
+  EXPECT_EQ(LocalRequest({kApiPort, service.api_user(), "guess"}, "GET", "/v3/paths/list", 8.0).status, 401);
 
   // A page of another origin may ask, a token decides who gets in.
   const std::string preflight = Ask("OPTIONS", "/stereo/whep?t=none",

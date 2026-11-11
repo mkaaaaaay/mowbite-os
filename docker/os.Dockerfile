@@ -32,6 +32,25 @@ RUN mkdir -p /opt/mpp /opt/mpp-inc \
       && cp /tmp/mpp-$MPP_VERSION/inc/*.h /opt/mpp-inc/; \
     fi
 
+# MediaMTX (MIT), the stream server mowbite_camera starts for WebRTC (media_server): the release binary of the target
+# architecture, unchanged, with its licence text. check.yaml reads the version and the sums here for the unit tests.
+FROM --platform=$BUILDPLATFORM ros:${ROS_DISTRO}-ros-base AS mediamtx
+ARG TARGETARCH
+ARG MEDIAMTX_VERSION=1.21.3
+ARG MEDIAMTX_SHA256_AMD64=0a2ea7eba96023631efa1bea7804823a9145b043b6646a8a05798d4ac24ed635
+ARG MEDIAMTX_SHA256_ARM64=27f038237cb5f77a724f6afc58eca2798f2bc4edf9989895631a80eeb41a4fe2
+RUN case "$TARGETARCH" in \
+      amd64) sum=$MEDIAMTX_SHA256_AMD64 ;; \
+      arm64) sum=$MEDIAMTX_SHA256_ARM64 ;; \
+      *) echo "no MediaMTX pinned for $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+ && release=https://github.com/bluenviron/mediamtx/releases/download/v$MEDIAMTX_VERSION \
+ && curl -fsSL -o /tmp/mediamtx.tar.gz "$release/mediamtx_v${MEDIAMTX_VERSION}_linux_$TARGETARCH.tar.gz" \
+ && echo "$sum  /tmp/mediamtx.tar.gz" | sha256sum -c - \
+ && mkdir -p /opt/mediamtx \
+ && tar -xzf /tmp/mediamtx.tar.gz -C /opt/mediamtx mediamtx LICENSE \
+ && rm /tmp/mediamtx.tar.gz
+
 # The folder with MowBite-web.zip, replaced by --build-context app=<folder>; empty without one.
 FROM scratch AS app
 
@@ -117,6 +136,7 @@ COPY --from=build /opt/mowbite_planner /opt/mowbite_planner
 COPY --from=build /ws/install /ws/install
 # Outside the packages, but in the install tree that the bundle takes along.
 COPY --from=mpp /opt/mpp /ws/install/mpp
+COPY --from=mediamtx /opt/mediamtx /ws/install/mediamtx
 # The safety measurement runs on the image that drives (the driver's normal caps, no fast runs of M8).
 COPY tools/yf/measure.py tools/yf/xcore_capture.py /ws/tools/
 # For docker exec, which skips the entrypoint: docker exec -it <container> measure --steps ...
