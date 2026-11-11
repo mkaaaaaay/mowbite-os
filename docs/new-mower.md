@@ -27,6 +27,8 @@ without ROS in a library of its own with gtests; the node stays thin.
 | publishes, latched | `gps/datum` | `sensor_msgs/NavSatFix` |
 | publishes | `gnss/gga` | `std_msgs/String` (for the NTRIP caster) |
 | subscribes | `gnss/rtcm` | `mowbite_msgs/Rtcm` |
+| publishes, optional | `hw/dock_marker` | `mowbite_msgs/DockMarker` |
+| subscribes, optional | `hw/dock_marker_request` | `std_msgs/Empty` |
 
 Duties:
 
@@ -49,6 +51,10 @@ Duties:
 - Limits until driving tests show more: 0.3 m/s and 0.3 rad/s.
 - Before opening a port: no other process holds it.
 - A restarted driver starts latched (`start_latched`).
+- Dock marker (optional): a process of its own that measures only while asked on `hw/dock_marker_request`, one
+  image per message on `hw/dock_marker`, never an old or estimated pose; the times, states and reasons are in
+  `DockMarker.msg`. What the mower drives with it and when it stops is up to the logic. The Tron's process is
+  `tron_rear` (`tron_vision`, section 8).
 
 ## 2. Fake board
 
