@@ -239,7 +239,8 @@ def restarting(make, note, label, logger, restarts, oom_score_adj="", watch_note
         if context.is_shutdown:
             return None
         stalled = take_watch_note(watch_note, logger)
-        if clock() - began >= STABLE_AFTER:
+        now = clock()
+        if now - began >= STABLE_AFTER:
             crashes = 0
         down = crashes >= restarts
         why = f" (the watch: {stalled['node']} gave no sign)" if stalled else ""
@@ -251,9 +252,10 @@ def restarting(make, note, label, logger, restarts, oom_score_adj="", watch_note
                            f"{RESTART_DELAY:.0f} s (restart {crashes + 1} of {restarts})")
         try:
             if note:
+                # mono is the end on `clock`: a reader compares it with its own CLOCK_MONOTONIC, t may jump.
                 data_store.write_json(os.path.dirname(note), os.path.basename(note),
                                       {"exit_code": event.returncode, "restart": crashes if down else crashes + 1,
-                                       "max_restarts": restarts, "t": time.time(), "stalled": stalled,
+                                       "max_restarts": restarts, "t": time.time(), "mono": now, "stalled": stalled,
                                        "down": down, "stable_s": STABLE_AFTER})
         except OSError as error:
             logger.error(f"Cannot write {note}: {error}")

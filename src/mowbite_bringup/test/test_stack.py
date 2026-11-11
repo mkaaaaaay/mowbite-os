@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import sys
+import time
 
 from launch import LaunchDescription, LaunchService
 from launch.actions import ExecuteProcess, RegisterEventHandler
@@ -81,6 +82,7 @@ def test_the_process_restarts_three_times_with_its_limits(tmp_path, monkeypatch)
         "vision", str(tmp_path), LOGGER, oom_score_adj=1000, nice=10, cpus="0")
     service = LaunchService()
     service.include_launch_description(LaunchDescription(actions))
+    before = time.monotonic()
     assert service.run() == 0
     lines = runs.read_text().splitlines()
     assert len(lines) == 4
@@ -88,6 +90,8 @@ def test_the_process_restarts_three_times_with_its_limits(tmp_path, monkeypatch)
         assert line == "{'nice': 10, 'cpus': [0], 'oom': 1000}"
     note = json.loads((tmp_path / "vision_exit.json").read_text())
     assert (note["exit_code"], note["restart"], note["max_restarts"], note["down"]) == (3, 3, 3, True)
+    # The end on the monotonic clock, for readers that compare it with their own.
+    assert before < note["mono"] <= time.monotonic()
 
 
 # Writes the note of the watch as mowbite_watch does and ends with its code.
@@ -167,7 +171,10 @@ def test_a_stable_run_counts_the_crashes_from_zero(tmp_path, monkeypatch):
     service.include_launch_description(LaunchDescription(actions))
     assert service.run() == 0
     assert starts == [0, 1, 2]
-    assert json.loads(note.read_text())["down"] is True
+    written = json.loads(note.read_text())
+    assert written["down"] is True
+    # Each end reads the clock once, for the count and for the note.
+    assert written["mono"] == 2 + stack.STABLE_AFTER
 
 
 def test_the_exit_note_after_a_stall(tmp_path):
