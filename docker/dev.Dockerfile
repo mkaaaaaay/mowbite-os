@@ -7,10 +7,10 @@ RUN apt-get update \
       git python3-shapely python3-jsonschema clang-tidy \
  && rm -rf /var/lib/apt/lists/*
 
-# The MowBite Planner (own process of the stack) at a fixed commit of its branch tron, taken from a local clone:
+# The MowBite Planner (own process of the stack) at a fixed commit of its branch os-pin, taken from a local clone:
 #   docker buildx build --load --build-context planer=/home/mkay/tron-projekt/planer -f docker/dev.Dockerfile ...
 # Source it after ROS: . /opt/ros/jazzy/setup.bash && . /opt/mowbite_planner/setup.bash
-ARG PLANNER_COMMIT=50934541edc1bc7731d47a015edbb29f57a9a219
+ARG PLANNER_COMMIT=0c791c559d423cd6f437ed11717a48b238c1f449
 RUN --mount=type=bind,from=planer,target=/src/planer \
     git init -q /tmp/planner && cd /tmp/planner \
  && git -c safe.directory='*' fetch -q --depth 1 /src/planer "$PLANNER_COMMIT" \
@@ -19,9 +19,11 @@ RUN --mount=type=bind,from=planer,target=/src/planer \
  && . /opt/ros/jazzy/setup.sh \
  && colcon --log-base /tmp/planner_log build \
       --base-paths ros2/mowbite_planner_interfaces ros2/mowbite_planner \
+        os/mowbite_planner_os_interfaces os/mowbite_planner_os \
       --build-base /tmp/planner_build --install-base /opt/mowbite_planner \
  && . /opt/mowbite_planner/setup.sh \
- && ros2 pkg prefix mowbite_planner_interfaces > /dev/null && ros2 pkg prefix mowbite_planner > /dev/null \
+ && for p in mowbite_planner_interfaces mowbite_planner mowbite_planner_os_interfaces mowbite_planner_os; do \
+      ros2 pkg prefix $p > /dev/null || exit 1; done \
  && rm -rf /tmp/planner /tmp/planner_build /tmp/planner_log
 # DDS on the loopback only, without shared memory (fastdds_loopback.xml of mowbite_bringup); the launch halts without it.
 COPY src/mowbite_bringup/config/fastdds_loopback.xml /etc/mowbite/fastdds_loopback.xml

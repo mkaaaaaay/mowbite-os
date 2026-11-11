@@ -257,7 +257,7 @@ class TestNx60iStack(unittest.TestCase):
         self.assertTrue(p.wait(lambda: p.pose, 30), "no pose: the gyro never calibrated")
         self.assertTrue(p.wait(lambda: any("Gyro offset" in line for line in p.logs), 5))
         rss = {name: [round(rss_mb(pid), 1) for pid in running(proc_info, name)]
-               for name in ("xcore_driver_node", "component_container_isolated", "mowbite_planner_node")}
+               for name in ("xcore_driver_node", "component_container_isolated", "mowbite_planner_os_node")}
         print(f"RSS MB: {rss}", flush=True)
         self.assertEqual([len(v) for v in rss.values()], [1, 1, 1], rss)
 

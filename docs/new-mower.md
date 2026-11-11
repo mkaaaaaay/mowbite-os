@@ -140,7 +140,7 @@ process is outside this watch and stops the mower by its own timeouts.
   serves the app on your mower reads `active` first and else `<os>/planner` or `<os>/app`, and decides nothing itself.
   A planner update restarts the OS through the gate of the OS; an app update only changes files and needs no gate.
   Bundles of the planner and the app hold no machine code. On the Tron `os-setup` puts the planner `active` names
-  before the one of the OS (which keeps `mowbite_planner_interfaces`), and tmpfiles makes the two folders.
+  before the one of the OS (which keeps the interfaces of both services), and tmpfiles makes the two folders.
   `mowbite-update-recover.service` runs at boot while any of the three folders has a `pending`.
 - The host updates itself as a fourth component under `/opt/mowbite-host` without a gate: the switch writes `pending`
   and `current` and ends the process, the service manager starts it again (`Restart=always`). `mowbite_boot` tries
@@ -163,7 +163,8 @@ process is outside this watch and stops the mower by its own timeouts.
   export with any static server that follows these rules. `web/test/test_web.py` runs without a mower.
 - Bundles, all in `platform/tron/bundle/`: `make-bundle.sh` for the OS (serial = commit time, base, api, the planner's
   `contract.json` and what it brings along from the image), `make-planner-bundle.sh <repo> <commit> <out>` (only
-  `mowbite_planner`, built in a throwaway container, `contract.json` required), `make-app-bundle.sh <zip> <out>` (the
+  `mowbite_planner` and `mowbite_planner_os`, built in a throwaway container, `contract.json` required),
+  `make-app-bundle.sh <zip> <out>` (the
   web export of the app release, `app.json` required), `make-host-bundle.sh <commit> <out>` (`host/mowbite_host` of
   that commit). `host/bundle/app_export.py` unpacks and checks the export for
   them and for `docker/os.Dockerfile`, which pins the app it brings along (`APP_VERSION`, `APP_SHA256`) and loads

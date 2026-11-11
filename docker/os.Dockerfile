@@ -89,8 +89,9 @@ RUN apt-get update \
 ARG BUILD_WORKERS=2
 ARG BUILD_JOBS=2
 
-# The MowBite Planner at a fixed commit of its branch tron, only its two ROS 2 packages, the source removed after.
-ARG PLANNER_COMMIT=50934541edc1bc7731d47a015edbb29f57a9a219
+# The MowBite Planner at a fixed commit of its branch os-pin: its two ROS 2 packages and the two of MowBite OS
+# (os/: the node and its service), the source removed after.
+ARG PLANNER_COMMIT=0c791c559d423cd6f437ed11717a48b238c1f449
 RUN --mount=type=bind,from=planer,target=/src/planer \
     git init -q /tmp/planner && cd /tmp/planner \
  && git -c safe.directory='*' fetch -q --depth 1 /src/planer "$PLANNER_COMMIT" \
@@ -100,6 +101,7 @@ RUN --mount=type=bind,from=planer,target=/src/planer \
  && . /opt/ros/$ROS_DISTRO/setup.sh \
  && MAKEFLAGS=-j$BUILD_JOBS colcon --log-base /tmp/planner_log build \
       --base-paths ros2/mowbite_planner_interfaces ros2/mowbite_planner \
+        os/mowbite_planner_os_interfaces os/mowbite_planner_os \
       --build-base /tmp/planner_build --install-base /opt/mowbite_planner \
       --parallel-workers $BUILD_WORKERS --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
  && printf '{"commit": "%s", "serial": %s}\n' "$PLANNER_COMMIT" "$commit_time" > /opt/mowbite_planner/source.json \
@@ -132,7 +134,7 @@ RUN rosdep keys --from-paths /ws/install/*/ /opt/mowbite_planner/*/ --ignore-src
         libasound2-dev) echo libasound2t64 ;; \
         zlib) echo zlib1g ;; \
         libzstd-dev) echo libzstd1 ;; \
-        python3-shapely|python3-paho-mqtt|python3-yaml|libturbojpeg) echo $k ;; \
+        python3-shapely|python3-numpy|python3-paho-mqtt|python3-yaml|libturbojpeg) echo $k ;; \
         nlohmann-json-dev|eigen) ;; \
         *) echo "unknown runtime key $k" >&2; exit 1 ;; \
       esac; fi; \

@@ -15,6 +15,7 @@ find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_bridge REQUIRED)
 find_package(mowbite_planner_interfaces REQUIRED)
+find_package(mowbite_planner_os_interfaces REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(std_srvs REQUIRED)
@@ -38,7 +39,7 @@ add_library(mowbite_logic_component SHARED src/logic_node.cpp src/logic_messages
 target_link_libraries(mowbite_logic_component mowbite_logic_core mowbite_bridge::mowbite_bridge_core
   mowbite_hold::mowbite_hold_core mowbite_journal::mowbite_journal mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_logic_component rclcpp rclcpp_components rclcpp_action geometry_msgs std_msgs
-  std_srvs mowbite_msgs mowbite_planner_interfaces rcl_interfaces)
+  std_srvs mowbite_msgs mowbite_planner_interfaces mowbite_planner_os_interfaces rcl_interfaces)
 rclcpp_components_register_node(mowbite_logic_component
   PLUGIN "mowbite_logic::LogicNode"
   EXECUTABLE mowbite_logic_node)

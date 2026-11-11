@@ -1,8 +1,8 @@
 """The calibration drive in the simulation: the whole stack of sim.launch.py with a Tron that is off its configuration on
 purpose: wheel speeds reported 6 % short (ticks_per_m 940 against 1000), 0.395 m between the wheels against the MCU's
 0.40, the antenna 0.098 m ahead of base_link where the geometry says 0, the IMU turned 2 deg in roll and -1.5 deg in
-pitch on ground that rises 3 deg, RTK noise of 1 cm and 0.1 s of delay, wheels that stand below 0.05 m/s. Without the
-planner's evaluation in the pin the drive ends not_evaluated with its recording.
+pitch on ground that rises 3 deg, RTK noise of 1 cm and 0.1 s of delay, wheels that stand below 0.05 m/s. The planner
+evaluates the recording (planner.calib.evaluate): the drive ends done with its values.
 
 Checks calibration.check, a whole drive (phase events, forward only, at most 0.3 m/s and 0.3 rad/s, the blade never on,
 the recording in the format mowbite-calib/1 with its marks and rates, calibration.result) and the ends: calibration.abort,
@@ -343,8 +343,8 @@ class TestCalibration(unittest.TestCase):
             failed = [e for e in p.events[since:] if e["type"] == "CALIBRATION_FAILED"]
             self.fail(f"no CALIBRATED: {failed}")
         took = time.time() - t0
-        self.assertEqual(done["status"], "not_evaluated", done)
-        self.assertEqual(done["severity"], "warning")
+        self.assertEqual(done["status"], "done", done)
+        self.assertEqual(done["severity"], "info")
         self.assertIsNotNone(p.event(since, "CALIBRATION", 5, phase="end"))
         self.assertIsNotNone(p.event(since, "STATE", 5, state="IDLE"))
         phases = [(e["phase"], e["index"]) for e in p.events[since:] if e["type"] == "CALIBRATION"]
@@ -400,7 +400,16 @@ class TestCalibration(unittest.TestCase):
         answer = p.rpc("calibration.result")
         self.assertEqual(answer[0], "ok", answer)
         result = answer[1]
-        self.assertEqual((result["status"], result["reason"]), ("not_evaluated", "DONE"))
+        self.assertEqual((result["status"], result["reason"]), ("done", "DONE"))
+        values = {value["key"]: value for value in result["values"]}
+        self.assertEqual(set(values), {"ticks_per_m", "track", "antenna_x", "antenna_y", "imu_roll", "imu_pitch"})
+        # What this Tron is off by is found: the wheel ticks, the antenna and the tilt of the IMU (2 and -1.5 deg).
+        for key, truth, delta in (("ticks_per_m", 940.0, 5.0), ("antenna_x", 0.098, 0.01), ("antenna_y", 0.0, 0.01),
+                                  ("imu_roll", 0.0349, 0.006), ("imu_pitch", -0.0262, 0.006)):
+            self.assertTrue(values[key]["ok"], values[key])
+            self.assertAlmostEqual(values[key]["value"], truth, delta=delta, msg=key)
+        # The recording holds no wheel ticks, so the distance between the wheels stays open.
+        self.assertFalse(values["track"]["ok"], values["track"])
         self.assertEqual(result["recording"], files[0])
         with open(os.path.join(DATA, "calibration", "result.json")) as f:
             self.assertEqual(json.load(f)["id"], result["id"])

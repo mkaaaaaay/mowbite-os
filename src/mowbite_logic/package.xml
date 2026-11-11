@@ -17,6 +17,7 @@
   <depend>mowbite_hold</depend>
   <depend>mowbite_api</depend>
   <depend>mowbite_planner_interfaces</depend>
+  <depend>mowbite_planner_os_interfaces</depend>
   <depend>rcl_interfaces</depend>
   <depend>rclcpp_action</depend>
   <depend>std_srvs</depend>

@@ -96,7 +96,7 @@ def planner_pids():
             continue
         try:
             with open(f"/proc/{name}/cmdline", "rb") as f:
-                if b"mowbite_planner_node" not in f.read():
+                if b"mowbite_planner_os_node" not in f.read():
                     continue
         except OSError:
             continue

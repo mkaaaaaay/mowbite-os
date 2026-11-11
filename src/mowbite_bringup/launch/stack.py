@@ -307,10 +307,12 @@ def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
             additional_env=watch_env)
 
     # Plans the mowing paths for mowing.plan; a crash only costs the plans until it is back. Namespace "/" so that a
-    # dict of parameters goes under its full name.
-    planner = Node(package="mowbite_planner", executable="mowbite_planner_node", name="mowbite_planner", namespace="/",
-                   parameters=[*files, {"data_dir": data_dir}], output="screen", respawn=True,
-                   respawn_delay=5.0)
+    # dict of parameters goes under its full name. calib_root is the folder of mowbite_calibration: only under it
+    # planner.calib.evaluate reads a recording.
+    calib_root = os.path.join(data_dir, "calibration") if data_dir else ""
+    planner = Node(package="mowbite_planner_os", executable="mowbite_planner_os_node", name="mowbite_planner",
+                   namespace="/", parameters=[*files, {"data_dir": data_dir, "calib_root": calib_root}],
+                   output="screen", respawn=True, respawn_delay=5.0)
     return [*restarting(container, os.path.join(data_dir, EXIT_NOTE), "The container", logger, CONTAINER_RESTARTS,
                         oom_score_adj, watch_note),
             *oom_score(planner, oom_score_adj, logger), planner]

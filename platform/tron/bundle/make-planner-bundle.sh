@@ -1,9 +1,9 @@
 #!/bin/bash
 # A bundle of the MowBite Planner for mowbite-host from a commit of its repo: <out dir>/mowbite-planner-<revision>.tar.gz
-# with <revision>/planner (the colcon installation of mowbite_planner alone, local_setup.bash at its top; the
-# interfaces stay those of the OS) and bundle.json. Built in a throwaway container of ROS_IMAGE without network;
-# serial is the commit time, version, interface, files_version and requires come from the package
-# (host/bundle/planner_meta.py, contract.json required). Unsigned; sign it with sign-bundle.sh.
+# with <revision>/planner (the colcon installation of mowbite_planner and of mowbite_planner_os, the node of MowBite
+# OS, local_setup.bash at its top; the interfaces stay those of the OS) and bundle.json. Built in a throwaway
+# container of ROS_IMAGE without network; serial is the commit time, version, interface, files_version and requires
+# come from the package (host/bundle/planner_meta.py, contract.json required). Unsigned; sign it with sign-bundle.sh.
 set -euo pipefail
 if [ $# -ne 3 ]; then
     echo "usage: $0 <planner repo> <commit> <out dir>" >&2
@@ -26,7 +26,7 @@ docker run --rm --network none --user "$(id -u):$(id -g)" -e HOME=/tmp \
     git init -q /tmp/planner && cd /tmp/planner
     git -c safe.directory="*" fetch -q --depth 1 /src "$1" && git checkout -q FETCH_HEAD
     source "/opt/ros/$ROS_DISTRO/setup.bash"
-    colcon --log-base /tmp/log build --base-paths ros2/mowbite_planner --build-base /tmp/build \
+    colcon --log-base /tmp/log build --base-paths ros2/mowbite_planner os/mowbite_planner_os --build-base /tmp/build \
         --install-base /out/planner > /tmp/build.log 2>&1 || { tail -30 /tmp/build.log; exit 1; }' _ "$commit"
 meta=$(python3 -I "$HOST_LIB/bundle/planner_meta.py" "$work/tree/planner")
 bundle_json planner "$meta" "{\"commit\": \"$commit\", \"serial\": $serial}" > "$work/tree/bundle.json"

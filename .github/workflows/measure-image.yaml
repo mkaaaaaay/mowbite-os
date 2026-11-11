@@ -49,7 +49,7 @@ jobs:
         run: |
           docker run --rm "$TAG" ros2 pkg list > pkgs.txt
           grep -qx xcore_driver pkgs.txt
-          if grep -qE '^(mowbite_sim|mowbite_logic|mowbite_bridge|mowbite_planner)$' pkgs.txt; then
+          if grep -qE '^(mowbite_sim|mowbite_logic|mowbite_bridge|mowbite_planner|mowbite_planner_os)$' pkgs.txt; then
             echo "only xcore_driver and its dependencies belong in the image"; exit 1
           fi
           docker run --rm "$TAG" ros2 launch xcore_driver measure.launch.py --show-args > /dev/null

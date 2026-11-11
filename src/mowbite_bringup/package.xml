@@ -29,6 +29,7 @@
   <exec_depend>mowbite_light</exec_depend>
   <exec_depend>mowbite_sound</exec_depend>
   <exec_depend>mowbite_planner</exec_depend>
+  <exec_depend>mowbite_planner_os</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

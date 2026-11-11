@@ -49,7 +49,7 @@
 #include <map>
 #include <memory>
 #include <mowbite_planner_interfaces/srv/plan_coverage.hpp>
-#include <mowbite_planner_interfaces/srv/plan_transit.hpp>
+#include <mowbite_planner_os_interfaces/srv/plan_transit.hpp>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <rcl_interfaces/msg/parameter.hpp>
@@ -77,6 +77,7 @@ namespace mowbite_logic {
 namespace {
 
 using mowbite_msgs::msg::SensorSpec;
+using mowbite_planner_os_interfaces::srv::PlanTransit;
 static_assert(static_cast<uint8_t>(SensorMeaning::kUnknown) == SensorSpec::MEANING_UNKNOWN);
 static_assert(static_cast<uint8_t>(SensorMeaning::kVoltage) == SensorSpec::MEANING_VOLTAGE);
 static_assert(static_cast<uint8_t>(SensorMeaning::kCurrent) == SensorSpec::MEANING_CURRENT);
@@ -319,7 +320,7 @@ class LogicNode : public rclcpp::Node {
 
     // Driving to a pose: the planner plans the way, the follower drives it. A ROS service only, not for the app yet.
     transit_max_outside_ = declare_parameter("transit_max_outside", 0.3);
-    transit_client_ = create_client<mowbite_planner_interfaces::srv::PlanTransit>("mowbite_planner/plan_transit");
+    transit_client_ = create_client<PlanTransit>("mowbite_planner/plan_transit");
     follow_client_ = rclcpp_action::create_client<FollowPath>(this, "follow_path");
     drive_srv_ = create_service<mowbite_msgs::srv::DriveTo>(
         "logic/drive_to", [this](std::shared_ptr<rmw_request_id_t> header,
@@ -764,7 +765,7 @@ class LogicNode : public rclcpp::Node {
       return;
     }
     const RobotStateData state = core_.View().RobotState();
-    auto plan = std::make_shared<mowbite_planner_interfaces::srv::PlanTransit::Request>();
+    auto plan = std::make_shared<PlanTransit::Request>();
     plan->start = PoseAt(state.pose_x, state.pose_y, state.pose_heading);
     plan->goal = PoseAt(request.x, request.y, request.heading);
     plan->use_goal_heading = request.use_heading;
@@ -783,10 +784,8 @@ class LogicNode : public rclcpp::Node {
     const uint64_t seq = drive_.seq;
     drive_.request_id =
         transit_client_
-            ->async_send_request(plan,
-                                 [this, seq](rclcpp::Client<mowbite_planner_interfaces::srv::PlanTransit>::SharedFuture f) {
-                                   OnTransit(seq, *f.get());
-                                 })
+            ->async_send_request(
+                plan, [this, seq](rclcpp::Client<PlanTransit>::SharedFuture f) { OnTransit(seq, *f.get()); })
             .request_id;
     RCLCPP_INFO(get_logger(), "Drive to (%.2f, %.2f): planning the way", request.x, request.y);
   }
@@ -804,7 +803,7 @@ class LogicNode : public rclcpp::Node {
     core_.Call<&LogicCore::OnDrivableAreas>(std::move(drivable), std::move(obstacles), problem);
   }
 
-  void OnTransit(uint64_t seq, const mowbite_planner_interfaces::srv::PlanTransit::Response& response) {
+  void OnTransit(uint64_t seq, const PlanTransit::Response& response) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (seq != drive_.seq || !drive_.planning) return;
@@ -1050,7 +1049,7 @@ class LogicNode : public rclcpp::Node {
     if (!why.empty()) return why;
     if (!transit_client_->service_is_ready()) return PlannerMissing();
     const RobotStateData state = core_.View().RobotState();
-    auto plan = std::make_shared<mowbite_planner_interfaces::srv::PlanTransit::Request>();
+    auto plan = std::make_shared<PlanTransit::Request>();
     plan->start = PoseAt(state.pose_x, state.pose_y, state.pose_heading);
     plan->goal = PoseAt(x, y, heading);
     plan->use_goal_heading = true;
@@ -1068,10 +1067,8 @@ class LogicNode : public rclcpp::Node {
     const uint64_t seq = drive_.seq;
     drive_.request_id =
         transit_client_
-            ->async_send_request(plan,
-                                 [this, seq](rclcpp::Client<mowbite_planner_interfaces::srv::PlanTransit>::SharedFuture f) {
-                                   OnTransit(seq, *f.get());
-                                 })
+            ->async_send_request(
+                plan, [this, seq](rclcpp::Client<PlanTransit>::SharedFuture f) { OnTransit(seq, *f.get()); })
             .request_id;
     return {};
   }
@@ -2820,7 +2817,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr follower_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::ButtonEvent>::SharedPtr button_sub_;
-  rclcpp::Client<mowbite_planner_interfaces::srv::PlanTransit>::SharedPtr transit_client_;
+  rclcpp::Client<PlanTransit>::SharedPtr transit_client_;
   rclcpp_action::Client<FollowPath>::SharedPtr follow_client_;
   rclcpp_action::Client<Calibrate>::SharedPtr calibration_client_;
   rclcpp::Subscription<mowbite_msgs::msg::CalibrationStatus>::SharedPtr calibration_status_sub_;

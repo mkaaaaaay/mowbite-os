@@ -42,7 +42,7 @@ jobs:
         id: planner
         run: echo "commit=$(sed -n 's/^ARG PLANNER_COMMIT=//p' docker/os.Dockerfile)" >> "$GITHUB_OUTPUT"
 
-      # The planner branch tron lives in a private repo; a read-only deploy key opens it.
+      # The planner branch os-pin lives in a private repo; a read-only deploy key opens it.
       - uses: actions/checkout@v7
         with:
           repository: mkaaaaaay/mowbite-planner-tron
@@ -93,7 +93,7 @@ jobs:
           docker run --rm "$TAG" ros2 pkg list > pkgs.txt
           grep -E '^(mowbite_|tron_|xcore_)' pkgs.txt
           if grep -q '^mowbite_sim$' pkgs.txt; then echo "mowbite_sim must not be in the image"; exit 1; fi
-          docker run --rm "$TAG" python3 -c 'import mowbite_planner.node'
+          docker run --rm "$TAG" python3 -c 'import mowbite_planner_os.node'
           # The app docker/os.Dockerfile pins came along.
           app=$(docker run --rm "$TAG" python3 -c \
             'import json; print(json.load(open("/opt/mowbite_app/app.json"))["version"])')
