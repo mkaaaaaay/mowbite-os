@@ -29,7 +29,8 @@ tron_mcu:
     speed_repeat_window: 0.0
     telemetry_timeout: 1.0
     allow_blade: false
-    # Defaults for blade requests that leave speed or height at 0.
+    # Defaults for blade requests that leave speed or height at 0. The speed changes nothing on firmware 0.6.36: the
+    # motor turned at about 3000 rpm at 30 and at 100 % (measured 2026-11-11; below 30 and above 100 not measured).
     blade_speed_percent: 100
     mow_height_mm: 60
     # Longest blade lease in s; without a renewal the blade goes off when it runs out.
@@ -359,8 +360,8 @@ tron_vision:
 tron_stereo:
   ros__parameters:
     # The stream also runs while the blade runs or hw/status is missing. The self-test per boot (mower standing, blade
-    # off), the pause when hot and the lock after a kernel crash stay. Known risk: after a kernel crash in the camera
-    # driver while mowing the blade may run without the host until the restart; how long is not measured.
+    # off), the pause when hot and the lock after a kernel crash stay. A kernel crash in the camera driver while mowing
+    # leaves the blade without the host: the MCU then stops the blade motor by itself within 0.4 s (T6, without disc).
     stream_while_mowing: true
 
 # mowbite_camera, the pictures of these cameras for the app (starts with either switch): mjpeg_port, webrtc_port,

@@ -163,6 +163,7 @@ class TestHardwareContract(unittest.TestCase):
         firmware = {kv.key: kv.value for kv in caps.firmware}
         self.assertEqual(firmware["cutter"], "0.6.36")
         self.assertEqual(firmware["chassis"], "0.6.34")
+        self.assertFalse(caps.blade_speed_control)
         self.assertTrue(caps.blade_height_control)
         self.assertEqual((caps.blade_height_min_mm, caps.blade_height_max_mm), (30, 90))
         self.assertAlmostEqual(caps.blade_lease_max_s, 2.0)
