@@ -331,8 +331,9 @@ class TestFullRun(unittest.TestCase):
         paths = answer["paths"]
         self.assertTrue(paths and paths[0]["is_outline"] and not paths[-1]["is_outline"], json.dumps(answer)[:300])
         type(self).segments = [(a, b) for path in paths for a, b in zip(path["points"], path["points"][1:])]
-        # plan_transit of planner 5093454 finds no way from inside the lawn to the start of the loop by the edge (the
-        # body would stick out turning there), so teleop puts the mower at the start, within approach_distance.
+        # Where the recording ends the mower stands on the edge of the lawn: plan_transit of planner 0c791c5 finds no
+        # way in from there (START_OUTSIDE, the body would stick out turning), so teleop puts it at the start, within
+        # approach_distance.
         self.assertLess(p.teleop_to(*paths[0]["points"][0]), 0.1)
         since = len(p.events)
         p.act(REC + "exit_recording_mode")
