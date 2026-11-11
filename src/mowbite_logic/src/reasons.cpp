@@ -1,10 +1,23 @@
 #include "mowbite_logic/reasons.h"
 
 #include <cmath>
+#include <cstdio>
 
 #include "mowbite_api/catalog.h"
 
 namespace mowbite_logic {
+
+std::string Metres(double value) {
+  char text[32];
+  std::snprintf(text, sizeof(text), "%.2f", value);
+  return text;
+}
+
+std::string Degrees(double radians) {
+  char text[32];
+  std::snprintf(text, sizeof(text), "%.0f", radians * 180.0 / M_PI);
+  return text;
+}
 
 // The one table of severity and resume is the catalog of the interface.
 Rating RateReason(const std::string& event, const std::string& code, const json& details) {

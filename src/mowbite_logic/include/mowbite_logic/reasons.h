@@ -33,6 +33,10 @@ struct Reason {
   }
 };
 
+// Numbers for the message of a reason: metres with two decimals, radians as whole degrees.
+std::string Metres(double value);
+std::string Degrees(double radians);
+
 // How bad it is and whether it goes on by itself (auto) or waits for the user (user); App and HA read both.
 struct Rating {
   const char* severity;

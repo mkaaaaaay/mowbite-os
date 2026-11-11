@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 
 namespace mowbite_logic {
 
@@ -25,12 +24,6 @@ enum ActionIndex {
   kUndoPoints,
   kActionCount
 };
-
-std::string Metres(double value) {
-  char text[32];
-  std::snprintf(text, sizeof(text), "%.2f", value);
-  return text;
-}
 
 Reason NoPosition() {
   return Reason("NO_POSITION", "No position");
