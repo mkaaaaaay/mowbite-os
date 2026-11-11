@@ -111,6 +111,12 @@ python3 -I -c 'import json, sys; m = json.load(open(sys.argv[1]))
 sys.exit(not (m["component"] == "host" and isinstance(m["serial"], int) and m["serial"] > 0))' \
     "$TREE/usr/lib/mowbite-host/bundle.json"
 result "seed of mowbite-host with its bundle.json" $?
+(cd "$TREE" && find usr/lib/mowbite-host) | while read -r p; do
+    if [ -d "$TREE/$p" ]; then want="0755 0:0"; else want="0644 0:0"; fi
+    test "$(stat_of "/$p")" = "$want" || echo "  mode or owner: /$p"
+done > "$WORK/seed.modes"
+test ! -s "$WORK/seed.modes"; result "seed of mowbite-host 0755 and 0644, owned by root" $?
+cat "$WORK/seed.modes"
 grep -qx "d /opt/mowbite-host 0755 root root -" "$TREE/usr/lib/tmpfiles.d/mowbite-os.conf"
 result "tmpfiles: /opt/mowbite-host" $?
 cmp -s "$HERE/../../../web/mowbite_web.py" "$TREE/usr/lib/mowbite-web/mowbite_web.py"

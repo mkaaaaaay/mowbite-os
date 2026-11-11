@@ -53,9 +53,10 @@ tar -C "$HERE/files" -cf "$work/files.tar" --owner=0 --group=0 --numeric-owner -
 tar -C "$HERE/../../../docker/mower" -rf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w \
     --transform 's|^mosquitto.conf$|./etc/mosquitto/mosquitto.conf|' mosquitto.conf
 # The seed of mowbite-host (its library at the commit checked out, with bundle.json as an installation has it) and
-# mowbite_boot, which chooses between the seed and an installed one.
+# mowbite_boot, which chooses between the seed and an installed one; the seed 0755 and 0644 despite the umask.
 source "$HERE/../bundle/pack.sh"
 host_files HEAD "$work/host/usr/lib/mowbite-host"
+chmod -R u=rwX,go=rX "$work/host/usr/lib/mowbite-host"
 install -D -m 644 "$HERE/../../../host/boot/mowbite_boot.py" "$work/host/usr/lib/mowbite-boot/mowbite_boot.py"
 tar -C "$work/host" -rf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w --exclude=__pycache__ \
     ./usr/lib/mowbite-host ./usr/lib/mowbite-boot
