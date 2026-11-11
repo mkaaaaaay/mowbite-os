@@ -247,7 +247,7 @@ bool LogicCore::TakeOverlayChanged() {
 std::vector<Effect> LogicCore::TakeEffects() {
   if (auto edit = recorder_.TakeMapEdit()) effects_.push_back(std::move(*edit));
   for (auto& line : recorder_.TakeNotices()) Notify(std::move(line));
-  // Start Mowing and its reason follow the position, the battery and more, which change without an event.
+  // start_mowing and its reason follow the position, the battery and more, which change without an event.
   const std::string start_reason = StartProblem().code;
   if (start_reason != last_start_reason_) {
     last_start_reason_ = start_reason;
@@ -775,7 +775,7 @@ std::vector<ActionGroup> LogicCore::Actions() const {
   const bool recording = state_ == State::kAreaRecording;
   const bool mowing = state_ == State::kMowing;
   std::vector<ActionGroup> groups;
-  groups.push_back({kRootPrefix, {{"reset_emergency", "Release emergency stop", true}}});
+  groups.push_back({kRootPrefix, {{"reset_emergency", "Unlatch emergency", true}}});
   const Reason start = StartProblem();
   groups.push_back({kIdlePrefix,
                     {{"start_mowing", "Begin mowing", start.empty(), start.code},

@@ -191,10 +191,10 @@ const std::vector<std::string>& AreaRecorder::ActionLabels() {
                                                   "Keep as mowing area",
                                                   "Leave recording",
                                                   "Drop outline",
-                                                  "Set dock position",
+                                                  "Mark the dock here",
                                                   "Automatic points on",
                                                   "Automatic points off",
-                                                  "Add point",
+                                                  "Take a point here",
                                                   "Manual blade on",
                                                   "Manual blade off",
                                                   "Undo points"};

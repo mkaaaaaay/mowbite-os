@@ -151,9 +151,9 @@ TEST(Sensors, ListOnlyTheIdsAskedFor) {
 TEST(Actions, GroupsSortedByPrefixItemsInTheirOrder) {
   const std::map<std::string, std::vector<ActionItem>> groups = {
       {"mower_logic:mowing", {{"pause", "Pause", false}, {"abort_mowing", "Stop", true}}},
-      {"mower_logic", {{"reset_emergency", "Release emergency stop", true}}}};
+      {"mower_logic", {{"reset_emergency", "Unlatch emergency", true}}}};
   EXPECT_EQ(ActionsText(groups),
-            R"([{"action_id":"mower_logic/reset_emergency","action_name":"Release emergency stop","enabled":1},)"
+            R"([{"action_id":"mower_logic/reset_emergency","action_name":"Unlatch emergency","enabled":1},)"
             R"({"action_id":"mower_logic:mowing/pause","action_name":"Pause","enabled":0},)"
             R"({"action_id":"mower_logic:mowing/abort_mowing","action_name":"Stop","enabled":1}])");
   EXPECT_EQ(ActionsText({}), "[]");

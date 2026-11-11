@@ -712,14 +712,14 @@ TEST_F(Core, SensorsInfosOnChangeValuesLiveAndTheList) {
 
 // B14
 TEST_F(Core, ActionsOfAPrefixReplaceItsOldOnes) {
-  core_.OnActions("mower_logic", {{"reset_emergency", "Release emergency stop", true}});
+  core_.OnActions("mower_logic", {{"reset_emergency", "Unlatch emergency", true}});
   core_.OnActions("mower_logic:mowing", {{"pause", "Pause", false}});
-  core_.OnActions("mower_logic", {{"reset_emergency", "Release emergency stop", false}});
+  core_.OnActions("mower_logic", {{"reset_emergency", "Unlatch emergency", false}});
   const Outbox out = core_.Take();
   ASSERT_EQ(out.mqtt.size(), 3u);
   EXPECT_TRUE(out.mqtt[2].retain);
   EXPECT_EQ(out.mqtt[2].payload,
-            R"([{"action_id":"mower_logic/reset_emergency","action_name":"Release emergency stop","enabled":0},)"
+            R"([{"action_id":"mower_logic/reset_emergency","action_name":"Unlatch emergency","enabled":0},)"
             R"({"action_id":"mower_logic:mowing/pause","action_name":"Pause","enabled":0}])");
 }
 
