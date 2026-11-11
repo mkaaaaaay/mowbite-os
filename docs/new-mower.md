@@ -182,6 +182,11 @@ Before the mower drives by itself. On blocks, wheels free, blade off, someone at
 3. Drive in the air: forwards, backwards, turning; left and right the right way round.
 4. The blade last: briefly, in the air, heights within the limits.
 
+The measurement runs the driver alone, so nothing may start the OS meanwhile: keep `mowbite-host` off for all of it
+as section 5 says (stop it, hold its lock, go on only after `mowbite-update unfinished` answers 0). At the end start
+the OS, give the lock back and start the host again when it ran before, as `mowbite-measure` of the Tron does
+(`platform/tron/rootfs/files/usr/sbin/mowbite-measure`).
+
 Then set `safety_measurement_date` in the driver parameters. Without it the mower takes remote control only
 (`NO_SAFETY_MEASUREMENT`).
 

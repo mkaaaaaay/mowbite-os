@@ -1,10 +1,14 @@
 #!/bin/bash
 # The safety measurement of phase 6 with one command, as root: T0 reads (installation, settings, state of the OS, space,
-# crashes, boot area), then MowBite OS stops and measure.py of the installed bundle runs T1-T5 with tron_imu and tron_mcu
-# alone (as user mowbite). MowBite OS starts again at the end, on an abort and when the ssh session ends. Recordings in
-# OUT/<time>/, beyond KEEP runs or MAX_MB the oldest go. Further arguments go to measure.py (--steps T1,T2, --repeats n).
+# crashes, boot area), then mowbite-host and MowBite OS stop and measure.py of the installed bundle runs T1-T5 with
+# tron_imu and tron_mcu alone (as user mowbite). MowBite OS and mowbite-host start again at the end, on an abort and
+# when the ssh session ends. Recordings in OUT/<time>/, beyond KEEP runs or MAX_MB the oldest go. Further arguments go
+# to measure.py (--steps T1,T2, --repeats n).
 set -u
 SERVICE=mowbite-os.service
+HOST=mowbite-host.service
+# The lock mowbite-host holds while it runs and mowbite-update while it works.
+HOST_LOCK=/run/mowbite-host.lock
 DATA=/userdata/mowbite
 OUT=/userdata/mowbite-measure
 KEEP=10
@@ -19,6 +23,13 @@ LOCK=/run/mowbite-measure.lock
 fail() {
     echo "mowbite-measure: $*" >&2
     exit 1
+}
+
+# Whether mowbite-host runs or comes up by itself (it waits for its restart): any state but inactive or failed.
+host_up() {
+    case $(systemctl show -P ActiveState "$HOST") in
+        inactive|failed) return 1 ;;
+    esac
 }
 
 [ "$(id -u)" = 0 ] || fail "run it as root"
@@ -45,6 +56,9 @@ if systemctl is-active --quiet "$SERVICE"; then
     echo "MowBite OS: $health"
     [ "${health##* }" = IDLE ] || fail "MowBite OS is not idle: nothing stopped"
 fi
+# 0 while no switch of any component is open; it names the ones that are.
+mowbite-update unfinished || fail "an update did not finish (mowbite-update unfinished): nothing stopped"
+if host_up; then echo "mowbite-host: it stops for the measurement"; else echo "mowbite-host: does not run"; fi
 free_data=$(df -Pm /userdata | awk 'NR == 2 {print $4}')
 free_root=$(df -Pm / | awk 'NR == 2 {print $4}')
 echo "free: /userdata $free_data MB, / $free_root MB"
@@ -73,11 +87,11 @@ chown "$NODE_USER": "$run/ros-log"
 
 child=
 restored=
+os_stopping=
+host_stopped=
+locked=
 # Ends the programme (it stops the wheels itself on SIGHUP and SIGTERM), then anything it left, then starts the OS.
-restore() {
-    [ -z "$restored" ] || return
-    restored=1
-    trap '' HUP INT TERM
+restore_os() {
     if [ -n "$child" ] && kill -0 "$child" 2> /dev/null; then
         kill -TERM "$child" 2> /dev/null
         for _ in $(seq 100); do kill -0 "$child" 2> /dev/null || break; sleep 0.1; done
@@ -92,12 +106,46 @@ restore() {
     echo "MowBite OS: $(systemctl is-active "$SERVICE"); recording in $run"
     logger -t mowbite-measure "ended, $SERVICE $(systemctl is-active "$SERVICE"), recording $run"
 }
+# What the measurement stopped starts again: the OS first, then mowbite-host when it ran before. The lock goes back
+# in between and by name: whatever the measurement left running holds a copy of it.
+restore() {
+    local until
+    [ -z "$restored" ] || return
+    restored=1
+    trap '' HUP INT TERM
+    [ -z "$os_stopping" ] || restore_os
+    [ -z "$locked" ] || flock -u 8
+    if [ -n "$host_stopped" ]; then
+        systemctl start "$HOST"
+        echo "mowbite-host: $(systemctl is-active "$HOST")"
+    fi
+    # A hold an update was granted before its host stopped stands until it runs out.
+    until=$(sed -n 's/.*"until": *\([0-9][0-9]*\).*/\1/p' "$DATA/hold.json" 2> /dev/null)
+    if [ -n "$until" ] && [ "$until" -gt "$(date +%s)" ]; then
+        echo "MowBite OS holds for an update until $(date -d "@$until" +%H:%M:%S): it starts nothing before"
+    fi
+}
 trap restore EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# mowbite-host starts a stopped OS when someone asks over the broker (host.restart_os, a switch) and mowbite-update
+# switches by hand; each needs the lock of the host. The measurement stops the host and takes the lock itself, and
+# its processes inherit it: nothing of the two starts the OS while tron_mcu runs alone.
+if host_up; then
+    logger -t mowbite-measure "stopping $HOST for the measurement"
+    systemctl stop "$HOST" || fail "systemctl stop $HOST failed"
+    host_stopped=1
+fi
+exec 8> "$HOST_LOCK"
+flock -n 8 || fail "mowbite-update works on an update: the measurement does not begin"
+locked=1
+# Under the lock no switch begins any more.
+mowbite-update unfinished \
+    || fail "an update did not finish (mowbite-update unfinished): no measurement, mowbite-host takes it back"
 logger -t mowbite-measure "stopping $SERVICE for the measurement, recording $run"
+os_stopping=1
 systemctl stop "$SERVICE" || fail "systemctl stop $SERVICE failed"
 exec 3<&0
 (

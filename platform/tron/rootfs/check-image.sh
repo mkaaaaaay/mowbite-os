@@ -160,6 +160,15 @@ result "mowbite-update-recover.service enabled" $?
 result "mowbite-os starts after a crash, its restart hold holds" $?
 sh -n "$TREE/usr/sbin/mowbite-crash-ok"; result "mowbite-crash-ok parses" $?
 bash -n "$TREE/usr/sbin/mowbite-measure"; result "mowbite-measure parses" $?
+# mowbite-measure keeps the OS stopped with the lock of mowbite-host and asks its seed for a switch cut off.
+lock=$(python3 -I -c 'import sys; sys.path[:0] = sys.argv[1:]; from mowbite_host.paths import Paths
+print(Paths().lock)' "$TREE/usr/lib/mowbite-host" "$TREE/usr/lib/mowbite-boot")
+grep -qx "HOST_LOCK=$lock" "$TREE/usr/sbin/mowbite-measure"; result "mowbite-measure takes the lock of mowbite-host" $?
+test "$(grep -c '^mowbite-update unfinished ' "$TREE/usr/sbin/mowbite-measure")" = 2
+result "mowbite-measure asks mowbite-update unfinished before it stops anything and under the lock" $?
+MOWBITE_UPDATE_PREFIX=$TREE python3 -I -c 'import sys; sys.path[:0] = sys.argv[1:]; from mowbite_host import cli
+sys.exit(cli.main(["mowbite-update", "unfinished"]))' "$TREE/usr/lib/mowbite-host" "$TREE/usr/lib/mowbite-boot"
+result "mowbite-update unfinished of the seed answers 0 on the image" $?
 test "$(stat_of /usr/sbin/mowbite-crash-ok)" = "0755 0:0"; result "mowbite-crash-ok 0755 root" $?
 cmp -s "$TREE/etc/mosquitto/mosquitto.conf" "$HERE/../../../docker/mower/mosquitto.conf"
 result "broker configuration of the Compose stack" $?
