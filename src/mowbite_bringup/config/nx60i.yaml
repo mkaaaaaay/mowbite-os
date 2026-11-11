@@ -31,12 +31,3 @@ mowbite_localization:
     # The gyro of the xCore read about 0.0025 rad/s at rest (M-A, raw z); assumptions until the safety measurement.
     gyro_still_spread: 0.02
     gyro_offset_limit: 0.02
-
-mowbite_planner:
-  ros__parameters:
-    # The body and the blade of config/geometry/nx60i.yaml, checked by test_config_consistency.py.
-    mower_width: 0.18
-    robot_width: 0.41
-    robot_front: 0.43
-    robot_rear: 0.12
-    blade_ahead: 0.20

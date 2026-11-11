@@ -1,13 +1,15 @@
-"""The dimensions of the platform stand in one file, config/geometry/tron.yaml. Two places repeat them for now: the
-planner section of tron.yaml, until the planner takes the body from /mowbite_geometry, and the station of fake_tron in
-sim.yaml. They have to agree, and no node may be given an antenna offset or contact position of its own any more.
+"""The dimensions of the platform stand in one file, config/geometry/tron.yaml. One place repeats one of them, the
+station of fake_tron in sim.yaml: it has to agree. No node may be given an antenna offset or contact position of its
+own any more, and no planner section the body or the blade, which the planner takes from /mowbite_geometry.
 The fence of mowbite_safety lies beyond the one of the follower, so that it acts only when the follower does not.
-The NX60i the same way: config/nx60i.yaml on top of tron.yaml has the body of config/geometry/nx60i.yaml for the
-planner and the battery voltages, which nx60i.launch.py hands to the driver, so its own file has none; the driver
+The NX60i the same way: config/nx60i.yaml on top of tron.yaml has the battery voltages, which nx60i.launch.py hands
+to the driver, so its own file has none; the driver
 charges at 29.4 V at most (G29) and has the speed model of A2.
 
 Run in a sourced workspace: python3 /ws/src/mowbite_sim/test/test_config_consistency.py
 """
+import ast
+import importlib.util
 import os
 import sys
 import unittest
@@ -18,7 +20,6 @@ from ament_index_python.packages import get_package_share_directory
 BRINGUP = get_package_share_directory("mowbite_bringup")
 SIM = get_package_share_directory("mowbite_sim")
 XCORE = get_package_share_directory("xcore_driver")
-BODY = ("robot_width", "robot_front", "robot_rear", "mower_width", "blade_ahead")
 
 sys.path.insert(0, os.path.join(BRINGUP, "launch"))
 import stack  # noqa: E402
@@ -29,6 +30,23 @@ def load(path):
         return yaml.safe_load(f)
 
 
+def planner_constant(name):
+    """A constant of the installed planner's node for MowBite OS, read without importing it."""
+    path = os.path.join(os.path.dirname(importlib.util.find_spec("mowbite_planner_os").origin), "node.py")
+    with open(path) as f:
+        tree = ast.parse(f.read(), path)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            return ast.literal_eval(node.value)
+    raise KeyError(name)
+
+
+def from_geometry(config):
+    """The keys of a planner section that the planner takes from /mowbite_geometry instead."""
+    section = config.get("mowbite_planner", {}).get("ros__parameters", {})
+    return set(section) & set(planner_constant("GEOMETRY_KEYS"))
+
+
 class ConfigConsistency(unittest.TestCase):
     def setUp(self):
         platform = load(os.path.join(BRINGUP, "config", "geometry", "tron.yaml"))
@@ -36,10 +54,10 @@ class ConfigConsistency(unittest.TestCase):
         self.tron = load(os.path.join(BRINGUP, "config", "tron.yaml"))
         self.sim = load(os.path.join(SIM, "config", "sim.yaml"))
 
-    def test_the_planner_section_has_the_body_of_the_platform(self):
-        planner = self.tron["mowbite_planner"]["ros__parameters"]
-        for key in BODY:
-            self.assertAlmostEqual(planner[key], self.geometry[key], msg=key)
+    def test_no_planner_section_has_the_body_or_the_blade(self):
+        self.assertIn("mower_width", planner_constant("GEOMETRY_KEYS"))
+        for config in (self.tron, self.sim):
+            self.assertFalse(from_geometry(config))
 
     def test_the_fence_of_the_safety_filter_lies_beyond_the_one_of_the_follower(self):
         safety = self.tron["mowbite_safety"]["ros__parameters"]
@@ -78,10 +96,8 @@ class Nx60iConsistency(unittest.TestCase):
         self.nx60i = load(os.path.join(BRINGUP, "config", "nx60i.yaml"))
         self.driver = load(os.path.join(XCORE, "config", "nx60i.yaml"))["xcore_driver"]["ros__parameters"]
 
-    def test_the_planner_has_the_body_of_the_platform(self):
-        planner = self.nx60i["mowbite_planner"]["ros__parameters"]
-        for key in BODY:
-            self.assertAlmostEqual(planner[key], self.geometry[key], msg=key)
+    def test_the_planner_section_has_no_body_or_blade(self):
+        self.assertFalse(from_geometry(self.nx60i))
 
     def test_the_driver_gets_the_battery_of_the_platform_file_only(self):
         files = [os.path.join(BRINGUP, "config", name) for name in ("tron.yaml", "nx60i.yaml")]
