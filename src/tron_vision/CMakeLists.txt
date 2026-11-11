@@ -81,7 +81,8 @@ if(BUILD_TESTING)
                              FAKE_MPP_LIB="$<TARGET_FILE:tron_vision_fake_mpp>")
   add_dependencies(tron_vision_test tron_vision_fake_npu tron_vision_fake_mpp)
   # A test of its own for what works on drawn images: it takes a while with the sanitizers.
-  ament_add_gtest(tron_vision_dock_test test/test_lens_model.cpp TIMEOUT 300)
+  ament_add_gtest(tron_vision_dock_test test/test_lens_model.cpp test/test_dock_marker.cpp test/test_dock_pose.cpp
+                  TIMEOUT 300)
   target_link_libraries(tron_vision_dock_test tron_vision_core)
   # The stream without the Tron, for a trial by hand against a real RTSP client.
   add_executable(tron_stereo_trial test/stereo_trial.cpp)
