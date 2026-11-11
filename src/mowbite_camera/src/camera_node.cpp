@@ -1,3 +1,5 @@
+#include <ament_index_cpp/get_package_prefix.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -23,6 +25,9 @@
 #include "mowbite_bridge/json_rpc.h"
 #include "mowbite_camera/camera_service.h"
 #include "mowbite_camera/http_server.h"
+#include "mowbite_camera/stream_config.h"
+#include "mowbite_camera/stream_server.h"
+#include "mowbite_camera/stream_supervisor.h"
 #include "mowbite_watch/attach.h"
 
 namespace mowbite_camera {
@@ -38,6 +43,8 @@ constexpr size_t kMaxNoteBytes = 4096;
 constexpr size_t kMaxJpegBytes = 4u << 20;
 // Events kept while the bridge is not there yet.
 constexpr size_t kMaxPendingEvents = 16;
+// The longest body of what the stream server asks: its fields with the query and the user agent of a viewer.
+constexpr size_t kMaxAuthBytes = 4096;
 
 rclcpp::QoS LatchedQos(size_t depth) {
   return rclcpp::QoS(rclcpp::KeepLast(depth)).reliable().transient_local();
@@ -55,6 +62,23 @@ double WallSeconds() {
 
 std::string Dump(const Json& json) {
   return json.dump(-1, ' ', false, Json::error_handler_t::replace);
+}
+
+// The image puts the stream server next to the packages, under <install>/mediamtx.
+std::string DefaultMediaServer() {
+  try {
+    const std::filesystem::path prefix = ament_index_cpp::get_package_prefix("mowbite_camera");
+    return (prefix.parent_path() / "mediamtx/mediamtx").string();
+  } catch (const std::exception&) {
+    return "";
+  }
+}
+
+uint16_t Port(int64_t value, int64_t lowest, const char* name) {
+  if (value < lowest || value > 65535) {
+    throw std::runtime_error(std::string(name) + " is " + std::to_string(lowest) + " to 65535");
+  }
+  return static_cast<uint16_t>(value);
 }
 
 CameraEntry ToEntry(const mowbite_msgs::msg::Camera& msg) {
@@ -79,31 +103,47 @@ CameraEntry ToEntry(const mowbite_msgs::msg::Camera& msg) {
 
 // The cameras of the platform for the app, in a process of its own: camera.list and camera.stream through the
 // bridge, CAMERA_CHANGED, and the pictures of camera/<id>/jpeg over HTTP to the viewers that hold a place. The
-// HTTP server has a thread of its own, so a slow viewer never holds up the node.
+// HTTP server has a thread of its own, so a slow viewer never holds up the node. Cameras with webrtc go through a
+// stream server, a child process this node starts, configures and answers when it asks who may watch.
 class CameraNode : public rclcpp::Node {
  public:
   explicit CameraNode(const rclcpp::NodeOptions& options) : rclcpp::Node("mowbite_camera", options) {
     data_dir_ = declare_parameter("data_dir", std::string());
     ServiceConfig config;
     config.public_host = declare_parameter("public_host", std::string());
-    const int64_t mjpeg_port = declare_parameter("mjpeg_port", static_cast<int64_t>(config.mjpeg_port));
-    const int64_t webrtc_port = declare_parameter("webrtc_port", static_cast<int64_t>(config.webrtc_port));
-    if (mjpeg_port < 0 || mjpeg_port > 65535 || webrtc_port < 1 || webrtc_port > 65535) {
-      throw std::runtime_error("mjpeg_port is 0 to 65535 (0: any free one), webrtc_port 1 to 65535");
-    }
+    // 0 for mjpeg_port: any free one.
+    const uint16_t mjpeg_port = Port(declare_parameter("mjpeg_port", int64_t{config.mjpeg_port}), 0, "mjpeg_port");
+    stream_.webrtc_port = Port(declare_parameter("webrtc_port", int64_t{stream_.webrtc_port}), 1, "webrtc_port");
+    stream_.ice_port = Port(declare_parameter("ice_port", int64_t{stream_.ice_port}), 1, "ice_port");
+    stream_.api_port = Port(declare_parameter("media_api_port", int64_t{stream_.api_port}), 1, "media_api_port");
+    std::string media_server = declare_parameter("media_server", std::string());
+    if (media_server.empty()) media_server = DefaultMediaServer();
 
     server_ = std::make_unique<HttpServer>(
-        [this](const HttpRequest& request) { return service_->OnViewer(request); },
+        [this](const HttpRequest& request) {
+          return request.listener == auth_listener_ ? service_->OnAuth(request) : service_->OnViewer(request);
+        },
         [this](uint64_t connection) { service_->OnViewerGone(connection); }, SteadySeconds);
     ListenerRules viewers;
     viewers.any_origin = true;
     std::string error;
-    if (server_->Listen("0.0.0.0", static_cast<uint16_t>(mjpeg_port), viewers, &error) < 0) {
-      throw std::runtime_error("cannot listen for viewers: " + error);
-    }
-    config.mjpeg_port = server_->Port(0);
-    config.webrtc_port = static_cast<uint16_t>(webrtc_port);
+    const int viewer_listener = server_->Listen("0.0.0.0", mjpeg_port, viewers, &error);
+    if (viewer_listener < 0) throw std::runtime_error("cannot listen for viewers: " + error);
+    // Only the stream server on this host asks here, on a port the configuration tells it.
+    ListenerRules asking;
+    asking.max_body = kMaxAuthBytes;
+    auth_listener_ = server_->Listen("127.0.0.1", 0, asking, &error);
+    if (auth_listener_ < 0) throw std::runtime_error("cannot listen for the stream server: " + error);
+    stream_.auth_port = server_->Port(auth_listener_);
+    config.mjpeg_port = server_->Port(viewer_listener);
+    config.webrtc_port = stream_.webrtc_port;
     service_ = std::make_unique<CameraService>(config, Clocks{SteadySeconds, WallSeconds});
+    api_ = {stream_.api_port, service_->api_user(), service_->api_password()};
+    runtime_dir_ = RuntimeDir(declare_parameter("runtime_dir", std::string()), &runtime_problem_);
+    if (runtime_dir_.empty()) RCLCPP_WARN(get_logger(), "No webrtc: %s", runtime_problem_.c_str());
+    media_ = std::make_unique<MediaServer>(media_server, runtime_dir_);
+    supervisor_ = std::make_unique<StreamSupervisor>(media_.get(), SteadySeconds);
+    service_->SetWebrtc(supervisor_->reason(), supervisor_->detail());
 
     publish_pub_ = create_publisher<mowbite_msgs::msg::MqttPublish>("bridge/publish", 100);
     cameras_sub_ = create_subscription<mowbite_msgs::msg::Camera>(
@@ -116,6 +156,7 @@ class CameraNode : public rclcpp::Node {
   }
 
   ~CameraNode() override {
+    media_->Stop();
     running_ = false;
     server_->Post([] {});
     if (thread_.joinable()) thread_.join();
@@ -179,7 +220,7 @@ class CameraNode : public rclcpp::Node {
     error_pub_->publish(refused);
   }
 
-  // What the service left to do: events for the bridge, connections to end.
+  // What the service left to do: events for the bridge, connections and sessions to end.
   void Apply() {
     Effects effects = service_->TakeEffects();
     for (Json& event : effects.events) {
@@ -189,6 +230,11 @@ class CameraNode : public rclcpp::Node {
     }
     for (const uint64_t connection : effects.close) {
       server_->Post([this, connection] { server_->Close(connection); });
+    }
+    for (const std::string& session : effects.kick) {
+      if (supervisor_->Up() && !KickStreamSession(api_, session)) {
+        RCLCPP_WARN(get_logger(), "The stream server did not end session %s", session.c_str());
+      }
     }
   }
 
@@ -229,7 +275,35 @@ class CameraNode : public rclcpp::Node {
   void OnSlow() {
     service_->Tick();
     ReadExitNotes();
+    Supervise();
     Apply();
+  }
+
+  // The stream server follows the cameras with webrtc: its configuration, its start, and what its API tells about
+  // its sessions while some hold a place. The calls of the API block this thread for kStreamApiSeconds at most.
+  void Supervise() {
+    const std::map<std::string, std::string> sources = service_->WebrtcSources();
+    std::string problem = runtime_problem_;
+    if (problem.empty() && !sources.empty() && sources != stream_.sources) {
+      StreamConfig next = stream_;
+      next.sources = sources;
+      if (ReplaceFile(runtime_dir_, kStreamConfigFile, StreamConfigText(next), &problem)) stream_ = next;
+    }
+    if (supervisor_->Tick(!sources.empty() && sources == stream_.sources)) service_->OnStreamServerGone();
+    std::vector<std::string> sessions;
+    if (supervisor_->Starting()) {
+      if (StreamSessions(api_, &sessions)) supervisor_->Answered();
+    } else if (supervisor_->Up() && !service_->WebrtcSessions().empty() && StreamSessions(api_, &sessions)) {
+      service_->OnSessions(sessions);
+    }
+    const std::string reason = problem.empty() ? supervisor_->reason() : kNotSetUp;
+    const std::string& detail = problem.empty() ? supervisor_->detail() : problem;
+    service_->SetWebrtc(reason, detail);
+    const std::string state = reason.empty() ? "up" : reason + ": " + detail;
+    if (!sources.empty() && state != stream_state_) {
+      RCLCPP_INFO(get_logger(), "Stream server %s", state.c_str());
+      stream_state_ = state;
+    }
   }
 
   // The launch leaves <data_dir>/<process>_exit.json when a process of its own ended.
@@ -250,7 +324,17 @@ class CameraNode : public rclcpp::Node {
   rclcpp::Clock steady_clock_{RCL_STEADY_TIME};
   std::string data_dir_;
   std::unique_ptr<HttpServer> server_;
+  int auth_listener_ = -1;
   std::unique_ptr<CameraService> service_;
+  // The stream server: what its configuration file holds, how the node calls its API, where its files are (empty
+  // with the reason in runtime_problem_), and the last state logged.
+  StreamConfig stream_;
+  LocalServer api_;
+  std::string runtime_dir_;
+  std::string runtime_problem_;
+  std::unique_ptr<MediaServer> media_;
+  std::unique_ptr<StreamSupervisor> supervisor_;
+  std::string stream_state_;
   std::atomic<bool> running_{true};
   std::thread thread_;
   std::vector<Json> pending_events_;

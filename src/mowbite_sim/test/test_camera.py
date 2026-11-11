@@ -1,6 +1,7 @@
 """The cameras of MowBite OS behind the app interface: mowbite_camera in a process of its own and mowbite_bridge on a
 private mosquitto. The test plays the app (MQTT and HTTP) and a camera (hw/cameras, camera/<id>/jpeg). The process the
-camera names is a stand-in under stack.own_process, so the launch itself writes its exit note.
+camera names is a stand-in under stack.own_process, so the launch itself writes its exit note. With the stream server
+in MOWBITE_MEDIAMTX a camera with webrtc is served through it, without it that camera is not set up.
 
 Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite_sim/test/test_camera.py
 """
@@ -35,6 +36,10 @@ import stack  # noqa: E402
 
 MQTT_PORT = 18844
 MJPEG_PORT = 18845
+WEBRTC_PORT = 18846
+ICE_PORT = 18847
+MEDIA_API_PORT = 18848
+MEDIAMTX = os.environ.get("MOWBITE_MEDIAMTX", "")
 WORK = tempfile.mkdtemp(prefix="mowbite_camera_")
 DATA_DIR = os.path.join(WORK, "data")
 PROCESS = "vision"
@@ -85,10 +90,10 @@ def picture(number):
 class Viewer:
     """A client of the picture server on a connection of its own."""
 
-    def __init__(self, url):
+    def __init__(self, url, method="GET"):
         host, port, self.target = re.fullmatch(r"http://([0-9.]+):(\d+)(/\S*)", url).groups()
         self.sock = socket.create_connection((host, int(port)), timeout=5)
-        self.sock.sendall(f"GET {self.target} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
+        self.sock.sendall(f"{method} {self.target} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
         self.data = b""
         self.closed = False
 
@@ -151,9 +156,9 @@ class Viewer:
         self.sock.close()
 
 
-def status_of(url):
+def status_of(url, method="GET"):
     """The status a new connection gets for this url."""
-    viewer = Viewer(url)
+    viewer = Viewer(url, method)
     try:
         return viewer.head()[0]
     finally:
@@ -217,8 +222,11 @@ class TestCamera(unittest.TestCase):
     @classmethod
     def start_node(cls, port, **pipes):
         # public_host: a test container has no default route to take the address from.
-        return subprocess.Popen([camera_node_path(), "--ros-args", "-p", f"data_dir:={DATA_DIR}", "-p",
-                                 "public_host:=127.0.0.1", "-p", f"mjpeg_port:={port}"], **pipes)
+        params = {"data_dir": DATA_DIR, "public_host": "127.0.0.1", "mjpeg_port": port, "webrtc_port": WEBRTC_PORT,
+                  "ice_port": ICE_PORT, "media_api_port": MEDIA_API_PORT, "runtime_dir": WORK,
+                  "media_server": MEDIAMTX or "/nowhere/mediamtx"}
+        args = [arg for name, value in params.items() for arg in ("-p", f"{name}:={value}")]
+        return subprocess.Popen([camera_node_path(), "--ros-args", *args], **pipes)
 
     @classmethod
     def play_camera(cls):
@@ -275,12 +283,13 @@ class TestCamera(unittest.TestCase):
         with self.lock:
             return len(self.events)
 
-    def wait_event(self, kind, after, timeout=10.0):
-        """The first event of this type since the mark, without id and t."""
+    def wait_event(self, kind, after, timeout=10.0, **having):
+        """The first event of this type with these values since the mark, without id and t."""
         end = time.time() + timeout
         while time.time() < end:
             with self.lock:
-                found = [event for event in self.events[after:] if event["type"] == kind]
+                found = [event for event in self.events[after:]
+                         if event["type"] == kind and having.items() <= event.items()]
             if found:
                 return {key: value for key, value in found[0].items() if key not in ("id", "t")}
             time.sleep(0.05)
@@ -425,18 +434,63 @@ class TestCamera(unittest.TestCase):
         viewer.wait_pictures(1)
         viewer.close()
 
-    def test_6_a_node_that_cannot_start_ends_with_code_1(self):
+    def test_6_a_camera_with_webrtc_goes_through_the_stream_server(self):
+        before = self.mark()
+        msg = Camera()
+        msg.id = "stereo"
+        msg.name = "Stereo camera"
+        msg.process = "stereo"
+        msg.kind = Camera.KIND_STEREO
+        msg.width = 1280
+        msg.height = 720
+        msg.protocols = [Camera.PROTOCOL_WEBRTC]
+        msg.source = "rtsp://127.0.0.1:18849/stereo"
+        msg.available = True
+        self.cameras_pub.publish(msg)
+        listed = {"id": "stereo", "name": "Stereo camera", "kind": "stereo", "position": None, "width": 1280,
+                  "height": 720, "detections": False, "protocols": ["webrtc"]}
+        if not MEDIAMTX:
+            changed = self.wait_event("CAMERA_CHANGED", before, camera_id="stereo", reason="NOT_SET_UP")
+            self.assertEqual(changed["message"], "the stream server is not installed")
+            self.assertEqual(self.rpc("camera.list")["result"],
+                             [LISTED, {**listed, "available": False, "reason": "NOT_SET_UP",
+                                       "detail": "the stream server is not installed"}])
+            refused = self.rpc("camera.stream", {"id": "stereo"})["error"]["data"]
+            self.assertEqual((refused["reason"], refused["severity"], refused["resume"]),
+                             ("NOT_SET_UP", "warning", "user"))
+            return
+        # Not before its API answers: until then the camera waits with NO_SIGNAL.
+        waiting = self.wait_event("CAMERA_CHANGED", before, camera_id="stereo")
+        self.assertEqual((waiting["available"], waiting["reason"]), (False, "NO_SIGNAL"))
+        self.wait_event("CAMERA_CHANGED", before, timeout=30.0, camera_id="stereo", available=True)
+        self.assertEqual(self.rpc("camera.list")["result"], [LISTED, {**listed, "available": True}])
+        answer = self.rpc("camera.stream", {"id": "stereo"})["result"]
+        self.assertEqual(answer["protocol"], "webrtc")
+        self.assertRegex(answer["url"], rf"^http://127\.0\.0\.1:{WEBRTC_PORT}/stereo/whep\?t=[0-9a-f]{{32}}$")
+        # The stream server asks the node: the token that waits may ask how to connect, another one may not.
+        self.assertEqual(status_of(answer["url"], "OPTIONS"), 204)
+        self.assertEqual(status_of(answer["url"][:-32] + "0" * 32, "OPTIONS"), 401)
+        with open(os.path.join(WORK, "mowbite_camera", "mediamtx.yml")) as f:
+            self.assertIn('"stereo":\n    source: "rtsp://127.0.0.1:18849/stereo"\n', f.read())
+        # The token that waits holds one place, so one more viewer fits and no third.
+        self.stream()
+        self.assertEqual(self.refusal()["reason"], "CAMERA_BUSY")
+
+    def test_7_a_node_that_cannot_start_ends_with_code_1(self):
         for port, said in ((MJPEG_PORT, "cannot listen for viewers"), (70000, "mjpeg_port is 0 to 65535")):
             other = self.start_node(port, stderr=subprocess.PIPE, text=True)
             _, errors = other.communicate(timeout=30)
             self.assertEqual(other.returncode, 1, errors)
             self.assertIn(said, errors)
-        self.assertEqual(self.rpc("camera.list")["result"], [LISTED])
+        self.assertEqual(self.rpc("camera.list")["result"][0], LISTED)
 
-    def test_7_the_methods_go_with_the_node(self):
+    def test_8_the_methods_go_with_the_node(self):
         before = self.mark()
         self.process.send_signal(signal.SIGINT)
         self.assertEqual(self.process.wait(10), 0)
+        # The stream server went with its node.
+        with self.assertRaises(OSError):
+            socket.create_connection(("127.0.0.1", WEBRTC_PORT), timeout=2).close()
         changed = self.wait_event("METHODS_CHANGED", before, timeout=20.0)
         self.assertEqual((changed["added"], sorted(changed["removed"])), ([], METHODS))
         self.assertEqual(self.rpc("camera.list")["error"]["code"], -32601)

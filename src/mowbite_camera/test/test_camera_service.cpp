@@ -83,7 +83,7 @@ class CameraServiceTest : public ::testing::Test {
 
   // What the stream server asks for a reader of a camera; no session: the request before the session.
   HttpAnswer Reader(const std::string& camera, const std::string& token, const std::string& session) {
-    return Auth({{"ip", "192.168.1.30"}, {"user", ""}, {"password", ""}, {"token", ""}, {"action", "read"},
+    return Auth({{"ip", "198.51.100.30"}, {"user", ""}, {"password", ""}, {"token", ""}, {"action", "read"},
                  {"path", camera}, {"protocol", "webrtc"}, {"id", session.empty() ? Json() : Json(session)},
                  {"query", "t=" + token}, {"userAgent", "test"}});
   }
@@ -118,7 +118,7 @@ class CameraServiceTest : public ::testing::Test {
 
   double steady_ = 50.0;
   double wall_ = 1700000000.75;
-  std::string route_ = "192.168.1.20";
+  std::string route_ = "198.51.100.20";
   CameraService service_;
 };
 
@@ -156,7 +156,7 @@ TEST_F(CameraServiceTest, GivesAnAddressWithATokenForMjpeg) {
   service_.OnCamera(Obstacle());
   const RpcOutcome outcome = Stream("oa_left");
   ASSERT_TRUE(outcome.ok) << outcome.message;
-  EXPECT_EQ(outcome.result["url"], std::string("http://192.168.1.20:8890/camera/oa_left.mjpg?t=") + kFirstToken);
+  EXPECT_EQ(outcome.result["url"], std::string("http://198.51.100.20:8890/camera/oa_left.mjpg?t=") + kFirstToken);
   EXPECT_EQ(outcome.result["protocol"], "mjpeg");
   // 30 s from now, rounded down.
   EXPECT_EQ(outcome.result["expires"], 1700000030);
@@ -167,7 +167,7 @@ TEST_F(CameraServiceTest, GivesAWhepAddressForWebrtc) {
   service_.OnCamera(Stereo());
   const RpcOutcome outcome = Call("camera.stream", {{"id", "stereo"}, {"protocol", "webrtc"}});
   ASSERT_TRUE(outcome.ok) << outcome.message;
-  EXPECT_EQ(outcome.result["url"], std::string("http://192.168.1.20:8889/stereo/whep?t=") + kFirstToken);
+  EXPECT_EQ(outcome.result["url"], std::string("http://198.51.100.20:8889/stereo/whep?t=") + kFirstToken);
   EXPECT_EQ(outcome.result["protocol"], "webrtc");
 }
 

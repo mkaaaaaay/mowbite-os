@@ -96,7 +96,7 @@ TEST(CameraList, WebrtcOnlyFromItsOwnAddressOnThisHost) {
   for (const char* source : {"", "rtsp://127.0.0.1:8555/other", "rtsp://127.0.0.1:8555/stereo/x",
                              "rtsp://127.0.0.1:0/stereo", "rtsp://127.0.0.1:65536/stereo",
                              "rtsp://127.0.0.1:/stereo", "rtsp://127.0.0.1:85a5/stereo",
-                             "rtsp://192.168.1.5:8555/stereo", "rtsp://127.0.0.1:8555/stereo\nrunOnInit: x",
+                             "rtsp://198.51.100.5:8555/stereo", "rtsp://127.0.0.1:8555/stereo\nrunOnInit: x",
                              "http://127.0.0.1:8555/stereo"}) {
     CameraList list;
     std::string problem;
