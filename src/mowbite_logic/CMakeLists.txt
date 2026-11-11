@@ -28,7 +28,7 @@ find_package(mowbite_watch REQUIRED)
 # States, actions and sensors without ROS, testable on any machine.
 add_library(mowbite_logic_core STATIC src/reasons.cpp src/logic_core.cpp src/area_recorder.cpp src/mowing_plan.cpp src/mowing_job.cpp
   src/logic_params.cpp src/undocking.cpp src/docking.cpp src/geometry.cpp src/home_watch.cpp src/sun.cpp
-  src/storage.cpp src/logic_dock.cpp src/logic_undock.cpp src/logic_home.cpp src/direct_route.cpp)
+  src/storage.cpp src/logic_dock.cpp src/logic_undock.cpp src/logic_home.cpp src/logic_job.cpp src/direct_route.cpp)
 target_include_directories(mowbite_logic_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
