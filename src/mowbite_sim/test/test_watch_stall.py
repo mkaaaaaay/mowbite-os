@@ -192,9 +192,10 @@ class Probe:
         return min(offsets)
 
     def driving_now(self):
+        """The time of the newest setpoint when it moves the mower and is no older than 0.2 s."""
         entries = self.recent()
         speeds = [e for e in entries if "speed" in e and e["t"] > entries[-1]["t"] - 0.2]
-        return entries[-1]["t"] if speeds and speeds[-1]["hex"] != ZERO else None
+        return speeds[-1]["t"] if speeds and speeds[-1]["hex"] != ZERO else None
 
     def stop(self):
         self.running = False
@@ -283,18 +284,21 @@ class TestWatchStall(unittest.TestCase):
         p = self.probe
         pid = container_pid(proc_info)
         offset = p.clock_offset()
-        self.assertTrue(p.wait(p.driving_now, 30), "the mower does not drive")
+        drove = p.wait(p.driving_now, 30)
+        self.assertTrue(drove, "the mower does not drive")
         t0 = time.monotonic() - offset
         tid = stop_thread(pid, thread)
         self.assertTrue(reap(tid, limit + PERIOD + 10), f"{thread} did not end")
         self.assertTrue(restarted(proc_info, pid, RESTART_DELAY + 10), "no new container")
         rx = p.received(t0)
-        speeds = [e for e in rx if "speed" in e]
+        # From the setpoint that showed the drive on: a stalled S2 may let no other follow it.
+        speeds = [e for e in p.received(drove) if "speed" in e]
         moving = [e["t"] for e in speeds if e["hex"] != ZERO]
         self.assertTrue(moving, speeds[:5])
         # The stop for good: the first zero setpoint after the last one that moved.
         stop = next((e["t"] for e in speeds if e["hex"] == ZERO and e["t"] > moving[-1]), None)
         self.assertIsNotNone(stop, speeds[-5:])
+        self.assertGreaterEqual(stop, t0, "the mower stood before the stall")
         cutter = [e for e in rx if "cutter" in e]
         off = next((e["t"] for e in reversed(cutter) if e["cutter"] == 0), None)
         self.assertIsNotNone(off, "the blade never went off")
