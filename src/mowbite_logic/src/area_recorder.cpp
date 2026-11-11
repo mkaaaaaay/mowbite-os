@@ -184,6 +184,23 @@ const std::vector<std::string>& AreaRecorder::ActionNames() {
   return names;
 }
 
+const std::vector<std::string>& AreaRecorder::ActionLabels() {
+  static const std::vector<std::string> labels = {"Start Recording",
+                                                  "Stop Recording",
+                                                  "Save Navigation Area",
+                                                  "Save Mowing Area",
+                                                  "Exit",
+                                                  "Discard Area",
+                                                  "Record Docking point",
+                                                  "Enable automatic point collecting",
+                                                  "Disable automatic point collecting",
+                                                  "Collect point",
+                                                  "Start manual mowing",
+                                                  "Stop manual mowing",
+                                                  "Undo points"};
+  return labels;
+}
+
 void AreaRecorder::Reset() {
   recording_ = false;
   current_.clear();

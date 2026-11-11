@@ -794,19 +794,7 @@ std::vector<ActionGroup> LogicCore::Actions() const {
   groups.push_back({kDockingPrefix, {{"abort_docking", "Stop Docking", state_ == State::kDocking}}});
   // The recorder decides while recording; outside of it all are off.
   const std::vector<bool> enabled = recorder_.Enabled();
-  const std::vector<std::string> names = {"Start Recording",
-                                          "Stop Recording",
-                                          "Save Navigation Area",
-                                          "Save Mowing Area",
-                                          "Exit",
-                                          "Discard Area",
-                                          "Record Docking point",
-                                          "Enable automatic point collecting",
-                                          "Disable automatic point collecting",
-                                          "Collect point",
-                                          "Start manual mowing",
-                                          "Stop manual mowing",
-                                          "Undo points"};
+  const std::vector<std::string>& names = AreaRecorder::ActionLabels();
   ActionGroup recording_group{kRecordingPrefix, {}};
   for (size_t i = 0; i < names.size(); i++) {
     recording_group.actions.push_back({AreaRecorder::ActionNames()[i], names[i], recording && enabled[i]});

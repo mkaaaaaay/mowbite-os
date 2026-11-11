@@ -121,6 +121,11 @@ TEST(Ring, CutOverhangNeedsACrossingNearTheEnds) {
   EXPECT_FALSE(CutOverhang({{0, 0}, {2, 2}, {2, 0}, {0, 2}}, 2.0));
 }
 
+TEST(Recorder, EveryActionHasALabelAndAFlag) {
+  EXPECT_EQ(AreaRecorder::ActionLabels().size(), AreaRecorder::ActionNames().size());
+  EXPECT_EQ(Writable().Enabled().size(), AreaRecorder::ActionNames().size());
+}
+
 TEST(Recorder, StartsWithStartRecordingOnly) {
   AreaRecorder recorder = Writable();
   EXPECT_TRUE(On(recorder, "start_recording"));

@@ -2349,12 +2349,10 @@ class LogicNode : public rclcpp::Node {
   void PublishOverlay() {
     // The first, empty one replaces the lines of a recording before a restart, so it waits for the bridge.
     if (publish_pub_->get_subscription_count() == 0) return;
-    json overlay;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (!core_.Call<&LogicCore::TakeOverlayChanged>()) return;
-      overlay = core_.View().MapOverlay();
-    }
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (!core_.Call<&LogicCore::TakeOverlayChanged>()) return;
+    const json overlay = core_.View().MapOverlay();
+    lock.unlock();
     mowbite_msgs::msg::MqttPublish msg;
     msg.payload = overlay.dump();
     msg.topic = "map_overlay/json";

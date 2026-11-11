@@ -141,6 +141,8 @@ class AreaRecorder {
   // Enabled flags in the order of ActionNames().
   std::vector<bool> Enabled() const;
   static const std::vector<std::string>& ActionNames();
+  // What the app shows for each of them, in the same order.
+  static const std::vector<std::string>& ActionLabels();
 
   // Events since the last call, without a position.
   std::vector<Event> TakeEvents();
