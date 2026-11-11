@@ -402,9 +402,8 @@ mowbite_planner:
     frame_id: map
     # The body and the blade (robot_*, mower_width, blade_*) are those of robot.geometry: the planner takes them from
     # /mowbite_geometry (bridge/params) and plans nothing before it has them. None of them counts here.
-    # Lane overlap: with the cutting width of the Tron (0.281 m) lanes are 0.281 * 0.85 = 0.239 m apart. It holds for
-    # every plan, also the ones of mowbite_logic. perimeter_passes: loops along the outline, an area's own
-    # outline_count in the map goes before it.
+    # Lane overlap: lanes lie (1 - overlap) * mower_width apart. It holds for every plan, also the ones of
+    # mowbite_logic. perimeter_passes: loops along the outline, an area's own outline_count in the map goes before it.
     overlap: 0.15
     perimeter_passes: 3
     # Turns forwards only, every lane change a U-turn of turn_radius with the lanes 2 * turn_radius apart (lane_order skip).

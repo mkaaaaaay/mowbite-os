@@ -8,14 +8,13 @@ charges at 29.4 V at most (G29) and has the speed model of A2.
 
 Run in a sourced workspace: python3 /ws/src/mowbite_sim/test/test_config_consistency.py
 """
-import ast
-import importlib.util
 import os
 import sys
 import unittest
 
 import yaml
 from ament_index_python.packages import get_package_share_directory
+from mowbite_planner_os.node import GEOMETRY_KEYS
 
 BRINGUP = get_package_share_directory("mowbite_bringup")
 SIM = get_package_share_directory("mowbite_sim")
@@ -30,21 +29,10 @@ def load(path):
         return yaml.safe_load(f)
 
 
-def planner_constant(name):
-    """A constant of the installed planner's node for MowBite OS, read without importing it."""
-    path = os.path.join(os.path.dirname(importlib.util.find_spec("mowbite_planner_os").origin), "node.py")
-    with open(path) as f:
-        tree = ast.parse(f.read(), path)
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
-            return ast.literal_eval(node.value)
-    raise KeyError(name)
-
-
 def from_geometry(config):
     """The keys of a planner section that the planner takes from /mowbite_geometry instead."""
     section = config.get("mowbite_planner", {}).get("ros__parameters", {})
-    return set(section) & set(planner_constant("GEOMETRY_KEYS"))
+    return set(section) & set(GEOMETRY_KEYS)
 
 
 class ConfigConsistency(unittest.TestCase):
@@ -55,7 +43,7 @@ class ConfigConsistency(unittest.TestCase):
         self.sim = load(os.path.join(SIM, "config", "sim.yaml"))
 
     def test_no_planner_section_has_the_body_or_the_blade(self):
-        self.assertIn("mower_width", planner_constant("GEOMETRY_KEYS"))
+        self.assertIn("mower_width", GEOMETRY_KEYS)
         for config in (self.tron, self.sim):
             self.assertFalse(from_geometry(config))
 
