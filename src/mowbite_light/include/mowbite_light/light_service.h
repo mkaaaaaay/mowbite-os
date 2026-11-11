@@ -63,7 +63,7 @@ class LightService {
   // ends it; the end of the emergency ends it too.
   void OnStopPress(StopPress press, double now);
 
-  // The colours of the chain at now (s), within max_brightness and max_current_ma.
+  // The colours of the chain at now (s), within max_brightness and max_current_ma; level shows the battery.
   std::vector<Rgb> Frame(double now);
 
   const Profile& profile() const { return profile_; }
@@ -79,6 +79,7 @@ class LightService {
   std::string state_ = "IDLE";
   bool emergency_ = false;
   bool charging_ = false;
+  // 0..1 as robot_state gives it.
   double battery_ = 1.0;
   // Until when the announcement of a start shows, and the state it began in.
   std::optional<double> announce_until_;

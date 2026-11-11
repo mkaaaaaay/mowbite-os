@@ -18,11 +18,30 @@ constexpr size_t kMaxColors = 4;
 constexpr double kMinPeriod = 0.2;
 constexpr double kMaxPeriod = 20.0;
 
-enum class EffectKind { kOff, kSolid, kBlink, kPulse, kChase, kGradient };
+enum class EffectKind {
+  kOff,
+  kSolid,
+  kBlink,
+  kPulse,
+  kChase,
+  kGradient,
+  kFade,
+  kComet,
+  kScanner,
+  kRainbow,
+  kSparkle,
+  kFlash,
+  kLevel
+};
 
 // What a state shows: solid, blink (on for half of period s, then the second colour or dark), pulse (breathing once per
-// period), chase (a run of light along the chain once per period, on the second colour or dark) and gradient (the
-// colours spread along the chain, moving once per period, still with period 0).
+// period), chase (a run of light along the chain once per period, on the second colour or dark), gradient (the
+// colours spread along the chain, moving once per period, still with period 0), fade (all from the first colour to the
+// second or dark and back once per period), comet (a head with a fading tail along the chain once per period), scanner
+// (a dot there and back once per period), rainbow (the colour circle along the chain, moving once per period, still
+// with period 0, without colours), sparkle (single LEDs glowing up and fading, a new choice every period), flash (two
+// short flashes at the start of every period) and level (the chain filled to the level, its top breathing once per
+// period, still with period 0). Comet, scanner, sparkle, flash and level lie on the second colour or dark.
 struct Effect {
   EffectKind kind = EffectKind::kOff;
   std::vector<Rgb> colors;
@@ -44,14 +63,16 @@ struct Strip {
 // or overlaps another.
 std::optional<std::vector<Strip>> ParseStrips(const std::vector<std::string>& texts, size_t leds, std::string* error);
 
-// The colours of n LEDs t s after the start.
+// The colours of n LEDs t s after the start, level full.
 std::vector<Rgb> Render(const Effect& effect, size_t n, double t);
-// The same on every strip at once, the LEDs outside them dark; no strips: the whole chain as one.
-std::vector<Rgb> Render(const Effect& effect, const std::vector<Strip>& strips, size_t n, double t);
+// The same on every strip at once, the LEDs outside them dark; no strips: the whole chain as one. level (0..1,
+// clamped) is what the effect level fills.
+std::vector<Rgb> Render(const Effect& effect, const std::vector<Strip>& strips, size_t n, double t,
+                        double level = 1.0);
 
 Json ToJson(const Effect& effect);
-// nullopt and why for a value that is no effect: 1 to 4 colours as #rrggbb, period 0.2 to 20 s (gradient also 0),
-// brightness 0 to 1.
+// nullopt and why for a value that is no effect: 1 to 4 colours as #rrggbb (off and rainbow also none), period 0.2 to
+// 20 s (gradient, rainbow and level also 0), brightness 0 to 1.
 std::optional<Effect> EffectFromJson(const Json& value, std::string* error);
 
 // The states of a profile in the order the app shows them: robot_state with PAUSED, then charging and the battery.

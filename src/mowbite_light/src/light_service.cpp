@@ -115,7 +115,7 @@ std::vector<Rgb> LightService::Frame(double now) {
     shown_since_ = now;
   }
   effect.brightness *= config_.max_brightness;
-  auto leds = Render(effect, config_.strips, config_.leds, now - shown_since_);
+  auto leds = Render(effect, config_.strips, config_.leds, now - shown_since_, battery_);
   LimitCurrent(&leds, config_.max_current_ma, config_.ma_per_channel);
   return leds;
 }

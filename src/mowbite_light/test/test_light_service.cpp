@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <stdlib.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -163,6 +164,31 @@ TEST(LightService, TheAnnouncementOfAStartBlinksOverChargingUntilItEnds) {
   service.OnEvent(Json{{"type", "JOB_COMPLETE"}}, 50.0);
   service.OnEvent(Json("no event"), 50.0);
   EXPECT_NE(service.Frame(50.0)[0], yellow);
+}
+
+TEST(LightService, ALevelShowsTheBattery) {
+  const Rgb green{0, 255, 0};
+  LightService service(Config());
+  auto lit = [&service, green](double now) {
+    const auto leds = service.Frame(now);
+    return std::count(leds.begin(), leds.end(), green);
+  };
+  const Json level = {{"effect", "level"}, {"colors", {"#00ff00"}}, {"period", 0}};
+  ASSERT_TRUE(service.Call("light.set_profile", Json{{"profile", {{"MOWING", level}}}}, 0)->ok);
+  service.SetRobotState("MOWING", false, false, 0.5);
+  EXPECT_EQ(lit(1.0), 5);
+  service.SetRobotState("MOWING", false, false, 0.8);
+  EXPECT_EQ(lit(1.1), 8);
+  service.SetRobotState("MOWING", false, false, 1.4);
+  EXPECT_EQ(lit(1.2), 10);
+  service.SetRobotState("MOWING", false, false, 0.0);
+  EXPECT_EQ(lit(1.3), 0);
+  // A running preview follows the battery as well.
+  ASSERT_TRUE(service.Call("light.preview", Json{{"effect", level}}, 2.0)->ok);
+  service.SetRobotState("IDLE", false, false, 0.3);
+  EXPECT_EQ(lit(2.1), 3);
+  service.SetRobotState("IDLE", false, false, 0.6);
+  EXPECT_EQ(lit(2.2), 6);
 }
 
 // STOP held in an emergency: green over the red until canceled, the end of the emergency, or the time is up.

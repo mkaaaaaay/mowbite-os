@@ -15,6 +15,10 @@ namespace {
 constexpr double kChargedFrom = 0.99;
 // The darkest step of a pulse, of its colour.
 constexpr double kPulseFloor = 0.05;
+// One flash and the gap after it, of the period.
+constexpr double kFlash = 0.08;
+// Every this many LEDs one sparkles, on average.
+constexpr uint32_t kSparkleEvery = 5;
 
 const Rgb kWhite{255, 255, 255};
 const Rgb kYellow{255, 160, 0};
@@ -38,6 +42,36 @@ double Phase(double t, double period) {
   if (period <= 0) return 0;
   const double p = std::fmod(t / period, 1.0);
   return p < 0 ? p + 1 : p;
+}
+
+// 0 at phase 0, 1 at 0.5 and 0 again at 1, along a cosine.
+double Swell(double phase) {
+  return 0.5 * (1 - std::cos(2 * M_PI * phase));
+}
+
+// The share of its colour a pulse shows at phase.
+double Breath(double phase) {
+  return kPulseFloor + (1 - kPulseFloor) * Swell(phase);
+}
+
+// The colour at hue h (0..1 is once round the circle, red at 0) with full saturation and value.
+Rgb Hue(double h) {
+  const double x = (h - std::floor(h)) * 6;
+  auto channel = [x](double center) {
+    double d = std::fabs(x - center);
+    d = std::min(d, 6 - d);
+    return static_cast<uint8_t>(std::lround(255 * std::clamp(2 - d, 0.0, 1.0)));
+  };
+  return {channel(0), channel(2), channel(4)};
+}
+
+// A well mixed number from a and b, the same on every machine.
+uint32_t Hash(uint32_t a, uint32_t b) {
+  uint32_t h = a * 0x9e3779b1u + b * 0x632be5abu;
+  h ^= h >> 16;
+  h *= 0x9e3779b1u;
+  h ^= h >> 13;
+  return h;
 }
 
 std::string Hex(Rgb c) {
@@ -69,17 +103,11 @@ bool Index(std::string_view text, size_t* value) {
   return error == std::errc() && last == end;
 }
 
-}  // namespace
-
-const std::vector<std::string>& EffectNames() {
-  static const std::vector<std::string> names = {"off", "solid", "blink", "pulse", "chase", "gradient"};
-  return names;
-}
-
-std::vector<Rgb> Render(const Effect& effect, size_t n, double t) {
+// The colours of one run of n LEDs.
+std::vector<Rgb> Along(const Effect& effect, size_t n, double t, double level) {
   std::vector<Rgb> leds(n);
-  if (effect.colors.empty() || n == 0) return leds;
-  const Rgb first = effect.colors[0];
+  if (n == 0 || (effect.colors.empty() && effect.kind != EffectKind::kRainbow)) return leds;
+  const Rgb first = effect.colors.empty() ? Rgb{} : effect.colors[0];
   const Rgb second = effect.colors.size() > 1 ? effect.colors[1] : Rgb{};
   const double phase = Phase(t, effect.period);
   switch (effect.kind) {
@@ -91,11 +119,9 @@ std::vector<Rgb> Render(const Effect& effect, size_t n, double t) {
     case EffectKind::kBlink:
       std::fill(leds.begin(), leds.end(), phase < 0.5 ? first : second);
       break;
-    case EffectKind::kPulse: {
-      const double level = kPulseFloor + (1 - kPulseFloor) * 0.5 * (1 - std::cos(2 * M_PI * phase));
-      std::fill(leds.begin(), leds.end(), Scale(first, level));
+    case EffectKind::kPulse:
+      std::fill(leds.begin(), leds.end(), Scale(first, Breath(phase)));
       break;
-    }
     case EffectKind::kChase: {
       const size_t run = std::max<size_t>(1, n / 5);
       const size_t head = static_cast<size_t>(phase * n);
@@ -112,9 +138,62 @@ std::vector<Rgb> Render(const Effect& effect, size_t n, double t) {
       }
       break;
     }
+    case EffectKind::kFade:
+      std::fill(leds.begin(), leds.end(), Mix(first, second, Swell(phase)));
+      break;
+    case EffectKind::kComet: {
+      const size_t tail = std::max<size_t>(2, n / 3);
+      const size_t head = static_cast<size_t>(phase * n);
+      for (size_t i = 0; i < n; ++i) {
+        const size_t behind = (head + n - i) % n;
+        leds[i] = behind <= tail ? Mix(first, second, static_cast<double>(behind) / (tail + 1)) : second;
+      }
+      break;
+    }
+    case EffectKind::kScanner: {
+      const double dot = (1 - std::fabs(2 * phase - 1)) * (n - 1);
+      for (size_t i = 0; i < n; ++i) leds[i] = Mix(second, first, std::max(0.0, 1 - std::fabs(i - dot)));
+      break;
+    }
+    case EffectKind::kRainbow:
+      for (size_t i = 0; i < n; ++i) leds[i] = Hue(static_cast<double>(i) / n - phase);
+      break;
+    case EffectKind::kSparkle: {
+      const double slot = effect.period > 0 ? std::floor(t / effect.period) : 0;
+      const auto slot_index = static_cast<uint32_t>(static_cast<int64_t>(slot));
+      for (size_t i = 0; i < n; ++i) {
+        const bool chosen = Hash(static_cast<uint32_t>(i), slot_index) % kSparkleEvery == 0;
+        leds[i] = chosen ? Mix(second, first, Swell(phase)) : second;
+      }
+      break;
+    }
+    case EffectKind::kFlash: {
+      const bool on = phase < kFlash || (phase >= 2 * kFlash && phase < 3 * kFlash);
+      std::fill(leds.begin(), leds.end(), on ? first : second);
+      break;
+    }
+    case EffectKind::kLevel: {
+      const double filled = std::clamp(level, 0.0, 1.0);
+      const size_t lit = filled > 0 ? std::max<size_t>(1, static_cast<size_t>(std::lround(filled * n))) : 0;
+      for (size_t i = 0; i < n; ++i) leds[i] = i < lit ? first : second;
+      if (lit > 0 && effect.period > 0) leds[lit - 1] = Mix(second, first, Breath(phase));
+      break;
+    }
   }
   for (auto& c : leds) c = Scale(c, effect.brightness);
   return leds;
+}
+
+}  // namespace
+
+const std::vector<std::string>& EffectNames() {
+  static const std::vector<std::string> names = {"off",   "solid",   "blink",   "pulse",   "chase", "gradient", "fade",
+                                                 "comet", "scanner", "rainbow", "sparkle", "flash", "level"};
+  return names;
+}
+
+std::vector<Rgb> Render(const Effect& effect, size_t n, double t) {
+  return Along(effect, n, t, 1.0);
 }
 
 std::optional<std::vector<Strip>> ParseStrips(const std::vector<std::string>& texts, size_t leds, std::string* error) {
@@ -146,12 +225,12 @@ std::optional<std::vector<Strip>> ParseStrips(const std::vector<std::string>& te
   return strips;
 }
 
-std::vector<Rgb> Render(const Effect& effect, const std::vector<Strip>& strips, size_t n, double t) {
-  if (strips.empty()) return Render(effect, n, t);
+std::vector<Rgb> Render(const Effect& effect, const std::vector<Strip>& strips, size_t n, double t, double level) {
+  if (strips.empty()) return Along(effect, n, t, level);
   std::vector<Rgb> leds(n);
   for (const auto& strip : strips) {
     const bool forward = strip.first <= strip.last;
-    const auto along = Render(effect, strip.Length(), t);
+    const auto along = Along(effect, strip.Length(), t, level);
     for (size_t k = 0; k < along.size(); ++k) {
       const size_t i = forward ? strip.first + k : strip.first - k;
       if (i < n) leds[i] = along[k];
@@ -180,12 +259,14 @@ std::optional<Effect> EffectFromJson(const Json& value, std::string* error) {
   const auto name =
       kind != value.end() && kind->is_string() ? std::find(names.begin(), names.end(), *kind) : names.end();
   if (name == names.end()) {
-    *error = "effect is one of off, solid, blink, pulse, chase, gradient";
+    *error = "effect is one of " + names[0];
+    for (size_t i = 1; i < names.size(); ++i) *error += ", " + names[i];
     return std::nullopt;
   }
   effect.kind = static_cast<EffectKind>(name - names.begin());
   const Json colors = value.value("colors", Json::array());
-  if (!colors.is_array() || colors.size() > kMaxColors || (colors.empty() && effect.kind != EffectKind::kOff)) {
+  const bool colorless = effect.kind == EffectKind::kOff || effect.kind == EffectKind::kRainbow;
+  if (!colors.is_array() || colors.size() > kMaxColors || (colors.empty() && !colorless)) {
     *error = "colors are 1 to 4 texts #rrggbb";
     return std::nullopt;
   }
@@ -199,8 +280,10 @@ std::optional<Effect> EffectFromJson(const Json& value, std::string* error) {
   }
   const Json period = value.value("period", Json(1.0));
   const double p = period.is_number() ? period.get<double>() : -1.0;
-  if (!((p >= kMinPeriod && p <= kMaxPeriod) || (p == 0 && effect.kind == EffectKind::kGradient))) {
-    *error = "period is 0.2 to 20 s, for a gradient also 0";
+  const bool still = effect.kind == EffectKind::kGradient || effect.kind == EffectKind::kRainbow ||
+                     effect.kind == EffectKind::kLevel;
+  if (!((p >= kMinPeriod && p <= kMaxPeriod) || (p == 0 && still))) {
+    *error = "period is 0.2 to 20 s, for gradient, rainbow and level also 0";
     return std::nullopt;
   }
   effect.period = p;
