@@ -196,7 +196,8 @@ struct Rig {
     if (calibrated) {
       const LensModel& l = s.lens;
       const CameraMount& m = s.mount;
-      options.append_parameter_override("lens", std::vector<double>{l.fx, l.fy, l.cx, l.cy, l.k1, l.k2, l.p1, l.p2, l.k3});
+      const std::vector<double> lens = {l.fx, l.fy, l.cx, l.cy, l.k1, l.k2, l.p1, l.p2, l.k3};
+      options.append_parameter_override("lens", lens);
       options.append_parameter_override("mount", std::vector<double>{m.x, m.y, m.z, m.yaw, m.pitch, m.roll});
       options.append_parameter_override("marker_side", s.side);
       options.append_parameter_override("marker_pattern", static_cast<int64_t>(test::kDockPattern));

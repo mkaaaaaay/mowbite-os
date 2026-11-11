@@ -131,13 +131,12 @@ RearNode::RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seam
   if (!config.not_set_up.empty()) RCLCPP_WARN(get_logger(), "Not set up: %s", config.not_set_up.c_str());
 
   // The only publishers and the only subscription of this process; test_rear_node checks the lists.
-  marker_pub_ =
-      create_publisher<DockMarker>("hw/dock_marker", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile());
+  const auto reliable = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
+  marker_pub_ = create_publisher<DockMarker>("hw/dock_marker", reliable);
   pixels_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
       "tron_rear/marker_pixels", rclcpp::QoS(rclcpp::KeepLast(10)).best_effort());
-  request_sub_ = create_subscription<std_msgs::msg::Empty>(
-      "hw/dock_marker_request", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile(),
-      [this](const std_msgs::msg::Empty&) { OnRequest(); });
+  request_sub_ = create_subscription<std_msgs::msg::Empty>("hw/dock_marker_request", reliable,
+                                                           [this](const std_msgs::msg::Empty&) { OnRequest(); });
 
   camera_ = std::make_unique<UvcRearCamera>(std::move(camera), seams.device);
   guard_ = std::make_unique<CrashGuard>(config.marker_dir, seams.crash_flag, kBootId);

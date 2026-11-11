@@ -212,7 +212,8 @@ void RearLoop::StepCamera(double now, bool asked) {
   if (state_ == DockState::kStarting) ReportIfDue(now);
   CapturedFrame frame;
   std::string error;
-  const int got = camera_.Next(static_cast<int>(std::ceil(std::min(deadline - now, kFrameStepS) * 1000.0)), frame, error);
+  const auto wait_ms = static_cast<int>(std::ceil(std::min(deadline - now, kFrameStepS) * 1000.0));
+  const int got = camera_.Next(wait_ms, frame, error);
   if (got < 0) {
     Fault(DockReason::kNoSignal, error);
     return;
@@ -272,7 +273,9 @@ void RearLoop::Evaluate(const CapturedFrame& frame, double now) {
       next.setting.exposure != exposure_.setting.exposure || next.setting.gain != exposure_.setting.gain;
   exposure_ = next;
   Send(report);
-  if (changed && !camera_.SetExposure(Controls(next.setting), error)) Fault(DockReason::kNoSignal, "exposure: " + error);
+  if (changed && !camera_.SetExposure(Controls(next.setting), error)) {
+    Fault(DockReason::kNoSignal, "exposure: " + error);
+  }
 }
 
 void RearLoop::Fault(DockReason reason, const std::string& detail) {
