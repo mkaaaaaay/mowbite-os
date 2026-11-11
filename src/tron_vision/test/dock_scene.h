@@ -335,6 +335,30 @@ inline SceneImage Render(const Scene& s) {
   return Develop(Expose(s), s, s.seed);
 }
 
+// Pattern of the markers in the tests, the one of the stations of the Tron.
+constexpr uint16_t kDockPattern = 0xB532;
+
+// Camera at the rear, looking back and a little down, not quite level; lens with strong barrel distortion.
+inline Scene RearScene() {
+  Scene s;
+  s.lens = {1540.0, 1540.0, 986.0, 521.0, -0.37, 0.17, -0.0001, -0.0005, 0.0};
+  s.width = 1920;
+  s.height = 1080;
+  s.mount = {-0.2, 0.01, 0.25, 3.14159265358979323846, 0.05, 0.01};
+  return s;
+}
+
+// A marker this far behind the camera and to its side, a little above it.
+inline SceneMarker Behind(const Scene& s, double distance, double lateral, double yaw) {
+  SceneMarker m;
+  m.x = s.mount.x - distance;
+  m.y = s.mount.y + lateral;
+  m.z = s.mount.z + 0.02;
+  m.yaw = yaw;
+  m.pattern = kDockPattern;
+  return m;
+}
+
 }  // namespace tron_vision::test
 
 #endif  // TRON_VISION_DOCK_SCENE_H

@@ -9,31 +9,14 @@
 namespace tron_vision {
 namespace {
 
+using test::Behind;
+using test::RearScene;
 using test::Scene;
 using test::SceneMarker;
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kDeg = kPi / 180.0;
 constexpr double kFocal = 1540.0;
-
-// Camera at the rear, looking back and a little down, not quite level.
-Scene RearScene() {
-  Scene s;
-  s.lens = {kFocal, kFocal, 986.0, 521.0, -0.37, 0.17, -0.0001, -0.0005, 0.0};
-  s.width = 1920;
-  s.height = 1080;
-  s.mount = {-0.2, 0.01, 0.25, kPi, 0.05, 0.01};
-  return s;
-}
-
-SceneMarker Behind(const Scene& s, double distance, double lateral, double yaw) {
-  SceneMarker m;
-  m.x = s.mount.x - distance;
-  m.y = s.mount.y + lateral;
-  m.z = s.mount.z + 0.02;
-  m.yaw = yaw;
-  return m;
-}
 
 // Directions of the corners as a perfect detector would report them.
 std::array<Point2, 4> Corners(const Scene& s, const SceneMarker& m) {

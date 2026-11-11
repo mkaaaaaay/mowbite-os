@@ -10,6 +10,8 @@
 namespace tron_vision {
 namespace {
 
+using test::Behind;
+using test::RearScene;
 using test::Render;
 using test::Scene;
 using test::SceneImage;
@@ -17,27 +19,6 @@ using test::SceneMarker;
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kDeg = kPi / 180.0;
-constexpr uint16_t kPattern = 0xB532;
-
-// Camera at the rear, looking back and a little down, not quite level; lens with strong barrel distortion.
-Scene RearScene() {
-  Scene s;
-  s.lens = {1540.0, 1540.0, 986.0, 521.0, -0.37, 0.17, -0.0001, -0.0005, 0.0};
-  s.width = 1920;
-  s.height = 1080;
-  s.mount = {-0.2, 0.01, 0.25, kPi, 0.05, 0.01};
-  return s;
-}
-
-SceneMarker Behind(const Scene& s, double distance, double lateral, double yaw) {
-  SceneMarker m;
-  m.x = s.mount.x - distance;
-  m.y = s.mount.y + lateral;
-  m.z = s.mount.z + 0.02;
-  m.yaw = yaw;
-  m.pattern = kPattern;
-  return m;
-}
 
 Scene SceneWith(const SceneMarker& m) {
   Scene s = RearScene();
@@ -47,7 +28,7 @@ Scene SceneWith(const SceneMarker& m) {
 
 MarkerParams Params() {
   MarkerParams params;
-  params.pattern = kPattern;
+  params.pattern = test::kDockPattern;
   return params;
 }
 
@@ -182,10 +163,10 @@ TEST(DockMarker, ReadsOnlyTheOnePattern) {
   EXPECT_EQ(ResultOf(s), MarkerResult::kFound);
   // One cell different, on the marker or in what is asked for.
   for (int bit = 0; bit < 16; bit += 5) {
-    s.markers[0].pattern = kPattern ^ static_cast<uint16_t>(1U << bit);
+    s.markers[0].pattern = test::kDockPattern ^ static_cast<uint16_t>(1U << bit);
     EXPECT_EQ(ResultOf(s), MarkerResult::kNoMarker) << bit;
   }
-  s.markers[0].pattern = kPattern;
+  s.markers[0].pattern = test::kDockPattern;
   MarkerParams other = Params();
   other.pattern = 0xB533;
   EXPECT_EQ(DetectMarker(Render(s).View(), s.lens, other).result, MarkerResult::kNoMarker);
