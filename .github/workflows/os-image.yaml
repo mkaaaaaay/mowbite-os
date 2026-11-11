@@ -75,11 +75,9 @@ jobs:
           context: .
           file: docker/os.Dockerfile
           build-contexts: planer=planer
-          # Without the app, until a release of the app carries the export docker/os.Dockerfile pins.
           build-args: |
             SOURCE_COMMIT=${{ github.sha }}
             MIN_APP=${{ steps.min_app.outputs.version }}
-            APP_VERSION=
           platforms: linux/${{ matrix.arch }}
           load: true
           push: ${{ inputs.push == true }}
@@ -96,6 +94,9 @@ jobs:
           grep -E '^(mowbite_|tron_|xcore_)' pkgs.txt
           if grep -q '^mowbite_sim$' pkgs.txt; then echo "mowbite_sim must not be in the image"; exit 1; fi
           docker run --rm "$TAG" python3 -c 'import mowbite_planner.node'
+          # The app docker/os.Dockerfile pins came along.
+          app=$(docker run --rm "$TAG" python3 -c \
+            'import json; print(json.load(open("/opt/mowbite_app/app.json"))["version"])')
           # The label the updater reads, as in docker/min_app and in its form.
           min_app=$(docker image inspect --format '{{ index .Config.Labels "mowbite.min_app" }}' "$TAG")
           if [ "$min_app" != "$(cat docker/min_app)" ] \
@@ -120,6 +121,7 @@ jobs:
             echo "- size unpacked: $((size / 1000000)) MB, saved and gzipped: $((packed / 1000000)) MB"
             echo "- packages: $(grep -cE '^(mowbite_|tron_|xcore_)' pkgs.txt)"
             echo "- mowbite.min_app: $min_app"
+            echo "- app: $app"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Save the image with gzip layers

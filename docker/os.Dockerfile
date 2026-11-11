@@ -1,10 +1,10 @@
 # MowBite OS for the mower, one image for every platform (launch and configuration choose the platform).
 # Built from a clean tree that has src/ and tools/ at its top, e.g. for arm64 on the PC (qemu):
 #   docker buildx build --platform linux/arm64 --load --build-context planer=/home/mkay/tron-projekt/planer \
-#     --build-context app=<folder with MowBite-web.zip> \
 #     --build-arg SOURCE_COMMIT=<commit> --build-arg MIN_APP=$(cat <tree>/docker/min_app) \
 #     -f docker/os.Dockerfile -t local/mowbite-os:arm64-<commit> <tree>
-# Without the app: --build-arg APP_VERSION= in place of the build context app.
+# The app comes from its release; --build-context app=<folder with MowBite-web.zip> takes that zip instead,
+# --build-arg APP_VERSION= builds without the app.
 # No simulation, no tests, no models in it.
 ARG ROS_DISTRO=jazzy
 
@@ -55,21 +55,25 @@ RUN case "$TARGETARCH" in \
 # The folder with MowBite-web.zip, replaced by --build-context app=<folder>; empty without one.
 FROM scratch AS app
 
-# The app the image brings along: MowBite-web.zip of the build context app, pinned by APP_VERSION and APP_SHA256,
-# unpacked and checked by host/bundle/app_export.py against docker/min_app and the api of this tree. A stage of its
-# own on the build machine, so a wrong zip stops the build at its start. An empty APP_VERSION builds the image
-# without the app.
+# The app the image brings along, pinned by APP_VERSION and APP_SHA256: MowBite-web.zip of the build context app or,
+# when that has none, of the release v$APP_VERSION of the app. host/bundle/app_export.py unpacks it and checks it
+# against the sum, docker/min_app and the api of this tree. A stage of its own on the build machine, so a wrong zip
+# stops the build at its start. An empty APP_VERSION builds the image without the app.
 FROM --platform=$BUILDPLATFORM ros:${ROS_DISTRO}-ros-base AS app_export
-ARG APP_VERSION=1.4.0-tron-os.0210743
-ARG APP_SHA256=20b52a46c0add46588a153a7425373a15241d02aafe85322bbe51c26ad10365b
+ARG APP_VERSION=1.5.0-preview.1
+ARG APP_SHA256=1fc88502c9cc4fa5dcd977dcd63cc759a34c8adcf6e00ce3d345435287ffa6fa
 RUN --mount=type=bind,from=app,target=/src/app --mount=type=bind,source=host,target=/src/host \
     --mount=type=bind,source=docker/min_app,target=/tmp/min_app \
     --mount=type=bind,source=src/mowbite_api/api.schema.json,target=/tmp/api.schema.json \
     if [ -z "$APP_VERSION" ]; then mkdir /opt/mowbite_app; \
-    elif [ ! -f /src/app/MowBite-web.zip ]; then \
-      echo "app $APP_VERSION is pinned: --build-context app=<folder with MowBite-web.zip>," \
-           "or --build-arg APP_VERSION= for an image without the app" >&2; exit 1; \
-    else python3 -I -B /src/host/bundle/app_export.py export /src/app/MowBite-web.zip /opt/mowbite_app \
+    else \
+      zip=/src/app/MowBite-web.zip \
+      && if [ ! -f "$zip" ]; then \
+           zip=/tmp/MowBite-web.zip \
+           && curl -fsSL -o "$zip" \
+                "https://github.com/mkaaaaaay/mowbite/releases/download/v$APP_VERSION/MowBite-web.zip"; \
+         fi \
+      && python3 -I -B /src/host/bundle/app_export.py export "$zip" /opt/mowbite_app \
            --sha256 "${APP_SHA256:?APP_VERSION needs APP_SHA256}" --version "$APP_VERSION" \
            --min-app "$(cat /tmp/min_app)" --api-schema /tmp/api.schema.json; \
     fi
