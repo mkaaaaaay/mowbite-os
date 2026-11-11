@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tarfile
@@ -235,7 +236,7 @@ class EndToEnd(unittest.TestCase):
 
     # seed: the library mowbite_boot chooses under the prefix (the seed or an installation) instead of the repo's;
     # wait: for its status online.
-    def start_host(self, seed=False, wait=True):
+    def start_host(self, seed=False, wait=True, notify=None):
         self.starts += 1
         t = int(time.time())
         env = {**os.environ, "MOWBITE_UPDATE_PREFIX": self.P, "MOWBITE_BOOT_LIB": BOOT, "MOWBITE_HOST_LIB": LIB,
@@ -243,6 +244,8 @@ class EndToEnd(unittest.TestCase):
                "PATH": self.bin + os.pathsep + os.environ.get("PATH", "")}
         if seed:
             del env["MOWBITE_HOST_LIB"]
+        if notify:
+            env["NOTIFY_SOCKET"] = notify
         log = open(os.path.join(self.root, f"host-{self.starts}.log"), "w")
         self.host = subprocess.Popen([sys.executable, "-I", os.path.join(SBIN, "mowbite-host")], env=env,
                                      stdout=log, stderr=subprocess.STDOUT)
@@ -587,6 +590,31 @@ class EndToEnd(unittest.TestCase):
 
     # A tool that stopped the OS itself holds the lock of the host (mowbite-measure): a host started meanwhile waits
     # without the broker and takes nothing back, mowbite-update is refused, and unfinished answers under the lock.
+    def test_the_notify_socket_stays_with_the_host(self):
+        # Tools of systemd tell their exit status to a NOTIFY_SOCKET they inherit.
+        told = []
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        self.addCleanup(sock.close)
+        sock.bind(os.path.join(self.root, "notify"))
+        sock.settimeout(0.2)
+
+        def read():
+            while sock.fileno() >= 0:
+                try:
+                    told.append(sock.recv(64))
+                except OSError:
+                    pass
+        threading.Thread(target=read, daemon=True).start()
+        self.start_host(notify=sock.getsockname())
+        self.install(A)
+        self.wait_os(A)
+        with open(self.pid_file()) as f:
+            pid = int(f.read().split()[0])
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            self.assertNotIn(b"NOTIFY_SOCKET=", f.read())
+        until(lambda: b"WATCHDOG=1" in told, what="the host telling systemd that it is alive")
+        self.assertEqual(told[0], b"READY=1")
+
     def test_host_waits_while_its_lock_is_held(self):
         self.start_host()
         self.install(A)

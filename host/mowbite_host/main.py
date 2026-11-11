@@ -16,9 +16,14 @@ import mowbite_boot
 from mowbite_host import broker, carrier, installer, origin, os_state, paths, service, updater
 
 
-# A message to systemd (Type=notify, WatchdogSec) over NOTIFY_SOCKET; nothing without one.
+# The socket of systemd for this service (Type=notify, WatchdogSec), none outside one. Taken out of the environment:
+# a child that inherits NOTIFY_SOCKET reports there too (systemctl its exit status), and systemd logs each message.
+NOTIFY_SOCKET = os.environ.pop("NOTIFY_SOCKET", None)
+
+
+# A message to systemd; nothing without its socket.
 def notify(text):
-    address = os.environ.get("NOTIFY_SOCKET")
+    address = NOTIFY_SOCKET
     if not address:
         return
     if address.startswith("@"):
