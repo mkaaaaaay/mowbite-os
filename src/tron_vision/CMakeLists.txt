@@ -22,7 +22,7 @@ pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg)
 add_library(tron_vision_core STATIC src/npu_model.cpp src/model_check.cpp src/yolo_decode.cpp src/frame_convert.cpp
   src/exposure.cpp src/v4l2_camera.cpp src/crash_guard.cpp src/budget.cpp src/vision_loop.cpp src/tron_camera.cpp
   src/text_file.cpp src/preview.cpp src/h264_rtp.cpp src/rtsp_server.cpp src/h264_encoder.cpp src/stereo_camera.cpp
-  src/stereo_loop.cpp src/lens_model.cpp src/dock_marker.cpp src/dock_pose.cpp)
+  src/stereo_loop.cpp src/lens_model.cpp src/dock_marker.cpp src/dock_pose.cpp src/dock_exposure.cpp)
 target_include_directories(tron_vision_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -80,9 +80,9 @@ if(BUILD_TESTING)
   target_compile_definitions(tron_vision_test PRIVATE FAKE_NPU_LIB="$<TARGET_FILE:tron_vision_fake_npu>"
                              FAKE_MPP_LIB="$<TARGET_FILE:tron_vision_fake_mpp>")
   add_dependencies(tron_vision_test tron_vision_fake_npu tron_vision_fake_mpp)
-  # A test of its own for what works on drawn images: it takes a while with the sanitizers.
+  # The marker of the docking station on drawn images; a test of its own, it takes a while with the sanitizers.
   ament_add_gtest(tron_vision_dock_test test/test_lens_model.cpp test/test_dock_marker.cpp test/test_dock_pose.cpp
-                  TIMEOUT 300)
+                  test/test_dock_exposure.cpp TIMEOUT 300)
   target_link_libraries(tron_vision_dock_test tron_vision_core)
   # The stream without the Tron, for a trial by hand against a real RTSP client.
   add_executable(tron_stereo_trial test/stereo_trial.cpp)
