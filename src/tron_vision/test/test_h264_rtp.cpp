@@ -19,11 +19,13 @@ uint16_t Sequence(const std::vector<uint8_t>& p) {
 }
 
 uint32_t Timestamp(const std::vector<uint8_t>& p) {
-  return static_cast<uint32_t>(p[4]) << 24 | static_cast<uint32_t>(p[5]) << 16 | static_cast<uint32_t>(p[6]) << 8 | p[7];
+  return static_cast<uint32_t>(p[4]) << 24 | static_cast<uint32_t>(p[5]) << 16 | static_cast<uint32_t>(p[6]) << 8 |
+         p[7];
 }
 
 TEST(SplitAnnexB, BothStartCodesAndPadding) {
-  const std::vector<uint8_t> stream = {0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1f, 0, 0, 1, 0x68, 0xce, 0, 0, 0, 0, 1, 0x65, 0x88, 0, 0};
+  const std::vector<uint8_t> stream = {0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1f, 0, 0, 1, 0x68, 0xce,
+                                       0, 0, 0, 0, 1, 0x65, 0x88, 0, 0};
   const std::vector<NalUnit> nals = SplitAnnexB(stream.data(), stream.size());
   ASSERT_EQ(nals.size(), 3U);
   EXPECT_EQ(nals[0].Type(), kNalSps);

@@ -359,7 +359,8 @@ bool RtspServer::SendAll(const uint8_t* data, size_t size, std::chrono::steady_c
     }
     if (n < 0 && errno == EINTR) continue;
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(give_up - std::chrono::steady_clock::now());
+      const auto left =
+          std::chrono::duration_cast<std::chrono::milliseconds>(give_up - std::chrono::steady_clock::now());
       pollfd pfd{client_fd_, POLLOUT, 0};
       if (left.count() > 0 && poll(&pfd, 1, static_cast<int>(left.count())) >= 0) continue;
     }

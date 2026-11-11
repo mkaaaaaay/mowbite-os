@@ -41,8 +41,9 @@ struct Rig {
   // Session id after SETUP and PLAY.
   std::string Play(const Client& client) {
     server.Poll(100);
-    const std::string setup = Ask(client, "SETUP " + Url("/trackID=0") +
-                                              " RTSP/1.0\r\nCSeq: 1\r\nTransport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n");
+    const std::string setup =
+        Ask(client, "SETUP " + Url("/trackID=0") +
+                        " RTSP/1.0\r\nCSeq: 1\r\nTransport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n");
     const std::string session = test::SessionOf(setup);
     if (session.empty()) return "";
     Ask(client, "PLAY " + Url("/") + " RTSP/1.0\r\nCSeq: 2\r\nSession: " + session + "\r\n\r\n");
@@ -103,7 +104,8 @@ TEST(RtspServer, DescribeOffersTheStream) {
                         "\r\n\r\n" + sdp);
   EXPECT_NE(sdp.find("m=video 0 RTP/AVP 96\r\n"), std::string::npos);
   EXPECT_NE(sdp.find("a=rtpmap:96 H264/90000\r\n"), std::string::npos);
-  EXPECT_NE(sdp.find("a=fmtp:96 packetization-mode=1;profile-level-id=42e01f;sprop-parameter-sets=Z0LgH6o=,aM48gA==\r\n"),
+  EXPECT_NE(sdp.find("a=fmtp:96 packetization-mode=1;profile-level-id=42e01f;"
+                     "sprop-parameter-sets=Z0LgH6o=,aM48gA==\r\n"),
             std::string::npos)
       << sdp;
   EXPECT_EQ(rig.Ask(client, "DESCRIBE rtsp://127.0.0.1/other RTSP/1.0\r\nCSeq: 3\r\n\r\n"),
@@ -144,9 +146,13 @@ TEST(RtspServer, SetupTakesOnlyTheRtspConnection) {
             "RTSP/1.0 461 Unsupported Transport\r\nCSeq: 2\r\n\r\n");
   EXPECT_EQ(rig.Ask(client, "PLAY " + rig.Url("/") + " RTSP/1.0\r\nCSeq: 3\r\nSession: 1\r\n\r\n"),
             "RTSP/1.0 455 Method Not Valid in This State\r\nCSeq: 3\r\n\r\n");
-  const std::string setup = rig.Ask(
-      client, "SETUP " + rig.Url("/trackID=0") + " RTSP/1.0\r\nCSeq: 4\r\nTransport: RTP/AVP/TCP;unicast;interleaved=4-5\r\n\r\n");
-  EXPECT_EQ(setup.rfind("RTSP/1.0 200 OK\r\nCSeq: 4\r\nTransport: RTP/AVP/TCP;unicast;interleaved=4-5\r\nSession: ", 0), 0U)
+  const std::string setup =
+      rig.Ask(client, "SETUP " + rig.Url("/trackID=0") +
+                          " RTSP/1.0\r\nCSeq: 4\r\nTransport: RTP/AVP/TCP;unicast;interleaved=4-5\r\n\r\n");
+  EXPECT_EQ(setup.rfind("RTSP/1.0 200 OK\r\nCSeq: 4\r\n"
+                        "Transport: RTP/AVP/TCP;unicast;interleaved=4-5\r\nSession: ",
+                        0),
+            0U)
       << setup;
   EXPECT_NE(setup.find(";timeout=60\r\n"), std::string::npos) << setup;
   EXPECT_EQ(rig.Ask(client, "PLAY " + rig.Url("/") + " RTSP/1.0\r\nCSeq: 5\r\nSession: nobody\r\n\r\n"),

@@ -110,7 +110,8 @@ StereoLoop::Gate StereoLoop::CheckMowerGate(double now, bool for_selftest, std::
   switch (CheckMower(mower_, now, config_.mower_status_max_age_s, for_selftest)) {
     case MowerGate::kOpen: return Gate::kOpen;
     case MowerGate::kUnknown:
-      why = mower_.received ? "hw/status older than " + Fixed(config_.mower_status_max_age_s) + " s" : "no hw/status yet";
+      why = mower_.received ? "hw/status older than " + Fixed(config_.mower_status_max_age_s) + " s"
+                            : "no hw/status yet";
       return Gate::kDriver;
     case MowerGate::kBlade: why = "blade running"; return Gate::kBlade;
     case MowerGate::kMoving: why = "mower moving"; return Gate::kMoving;
@@ -293,7 +294,8 @@ void StereoLoop::StepSelftest(double now) {
   }
   CapturedFrame frame;
   std::string error;
-  const int got = camera_.Next(static_cast<int>(std::ceil(std::min(deadline - now, kStreamStepS) * 1000.0)), frame, error);
+  const int got =
+      camera_.Next(static_cast<int>(std::ceil(std::min(deadline - now, kStreamStepS) * 1000.0)), frame, error);
   if (got < 0) {
     FailForThisBoot(StereoState::kNoFrames, "self-test: " + error);
     return;
@@ -455,7 +457,8 @@ void StereoLoop::StepStream(double now) {
     return;
   }
   CapturedFrame frame;
-  const int got = camera_.Next(static_cast<int>(std::ceil(std::min(deadline - now, kStreamStepS) * 1000.0)), frame, text);
+  const int got =
+      camera_.Next(static_cast<int>(std::ceil(std::min(deadline - now, kStreamStepS) * 1000.0)), frame, text);
   if (got < 0) {
     FailForThisBoot(StereoState::kStalled, text);
     return;

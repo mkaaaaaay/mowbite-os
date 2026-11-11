@@ -4,7 +4,8 @@ With the fake holding the setpoint 1.5 s after the last SpeedData, every host-go
 that time and the proposal has to follow from it; with 4 s the limit has to end T2; a key while tron_mcu is frozen
 has to continue it and stop the wheels. T6: the blade motor of the fake stops without host like its wheels, and the
 runs have to find that; with the flag cutter_holds it keeps turning, which has to end T6 with the finding and the blade
-off. No process may be left.
+off. With --blade-percent 100 and --blade-window 5 every blade run has to take those values; a window longer than the
+lease of a DDS participant (20 s) has to end with the same finding and nothing else. No process may be left.
 
 Reading the port while tron_mcu holds it (TIOCEXCL) needs root with CAP_SYS_ADMIN, as on the Tron:
   docker run --user 0 --cap-add SYS_ADMIN ... python3 -m unittest tools/yf/test/test_rehearsal_tron.py
@@ -229,6 +230,48 @@ class TestRehearsalTron(unittest.TestCase):
         self.assertIn("abort", [r["kind"] for r in rec])
         starts = [r["params"]["allow_blade"] for r in rec if r["kind"] == "process" and r["node"] == "tron_mcu"]
         self.assertEqual(starts, [False, True, False])
+        status = [r for r in rec if r["kind"] == "status"]
+        self.assertEqual(status[-1]["blade_rpm"], 0)
+
+    def test_6_blade_percent_and_window(self):
+        code, output, rec = self.measure("options", "--steps", "T6", "--blade", "--repeats", "1",
+                                         "--blade-percent", "100", "--blade-window", "5")
+        end = rec[-1]
+        self.assertEqual(end["findings"], [])
+        self.assertTrue(end["complete"])
+        self.assertEqual(code, 0)
+        self.assertEqual([(r["percent"], r["rpm"]) for r in rec if r["kind"] == "blade_off"], [(100, 2800)])
+        self.assertEqual([r["percent"] for r in rec if r["kind"] == "blade_lease"], [100])
+        self.assertEqual([r["rpm"] for r in rec if r["kind"] == "blade_emergency"], [2800] * 3)
+        self.assertTrue(all(r["percent"] == 100 for r in rec if r["kind"] == "blade" and r["on"]))
+        runs = [r for r in rec if r["kind"] == "blade_gone"]
+        self.assertEqual([(r["way"], r["percent"]) for r in runs], [("freeze", 100), ("kill", 100)])
+        signals = [(r["signal"], r["t"]) for r in rec if r["kind"] == "signal"]
+        frozen = [t for name, t in signals if name == "SIGSTOP"]
+        continued = [t for name, t in signals if name == "SIGCONT"]
+        self.assertEqual(len(frozen), 1)
+        self.assertEqual(len(continued), 1)
+        self.assertGreaterEqual(continued[0] - frozen[0], 5.0)
+        self.assertLess(continued[0] - frozen[0], 6.0)
+        self.assertIn("up to 14 s a run", output)
+        self.assertIn("reads the port, 5 s", output.replace("\n", " "))
+
+    def test_7_blade_kept_turning_for_a_long_window(self):
+        self.set_flags({"host_timeout": HOLD_S, "cutter_holds": 1})
+        try:
+            code, output, rec = self.measure("held-window", "--steps", "T6", "--blade", "--repeats", "1",
+                                             "--blade-window", "25")
+        finally:
+            self.set_flags({"host_timeout": HOLD_S})
+        self.assertEqual(code, 1)
+        # hw/status was back in time after the window: no finding of a motor still turning with its host back.
+        finding, = rec[-1]["findings"]
+        self.assertIn("kept the motor turning for 25 s", finding)
+        run, = [r for r in rec if r["kind"] == "blade_gone"]
+        self.assertIsNone(run["still_s"])
+        self.assertEqual(run["last_rpm"], 840)
+        # The fake reports the motors once a second: the capture holds the whole window.
+        self.assertGreaterEqual(run["samples"], 24)
         status = [r for r in rec if r["kind"] == "status"]
         self.assertEqual(status[-1]["blade_rpm"], 0)
 
