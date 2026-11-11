@@ -97,6 +97,42 @@ void Hold(TestCore& core, const HardwareSnapshot& hw, double from, double to) {
   for (double t = from; t <= to; t += 1) core.OnTick(t);
 }
 
+// A lane north of where the mower stands: it has to drive to its start first.
+JobPath FarLane() {
+  JobPath path;
+  for (int i = 0; i < 5; ++i) {
+    JobPose pose;
+    pose.x = 1.0 + 0.5 * i;
+    pose.y = 1.8;
+    pose.kind = i == 0 ? kSegmentTransit : kSegmentLane;
+    path.poses.push_back(pose);
+  }
+  return path;
+}
+
+const Reason kNoAnswer("PLANNER_TIMEOUT", "No answer from the planner in 10 s");
+const Reason kNotRunning("PLANNER_MISSING", "The planner is not running");
+
+// Mowing with the plan of the lawn, the planner asked for the way to the start of its lane.
+TestCore Approaching(LogicConfig config = Tron(), bool with_dock = true) {
+  TestCore core = Mowing(config, with_dock);
+  core.OnJobPlanned({FarLane()}, "fp");
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  core.TakeEvents();
+  core.TakeNotices();
+  core.TakeCheckpoint();
+  return core;
+}
+
+// kPlannerRetries approaches in a row without an answer, each asked for again.
+void StaySilent(TestCore& core, const Reason& silent = kNoAnswer) {
+  for (int i = 1; i <= kPlannerRetries; i++) {
+    core.OnLegEnded(LegEnd::kCanceled, 0, silent);
+    EXPECT_EQ(core.RobotState().state, "MOWING") << i;
+    ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach) << i;
+  }
+}
+
 }  // namespace
 
 TEST(GoingHome, BatteryLowSendsTheMowerHome) {
@@ -364,4 +400,178 @@ TEST(GoingHome, BatteryVoltagesInOrder) {
   config = LogicConfig();
   config.battery_critical_voltage = 0;
   EXPECT_NE(BatteryVoltagesProblem(config), "");
+}
+
+TEST(SilentPlanner, AnApproachWithoutAnAnswerIsAskedForAgain) {
+  TestCore core = Approaching();
+  StaySilent(core);
+  // Standing in MOWING with the blade off, nothing for the app yet.
+  EXPECT_FALSE(core.BladeWanted());
+  EXPECT_TRUE(core.TakeEvents().empty());
+  EXPECT_FALSE(core.TakeDriveCancel());
+  const auto notices = core.TakeNotices();
+  ASSERT_EQ(notices.size(), 3u);
+  EXPECT_EQ(notices[2],
+            "Mowing: no answer from the planner (No answer from the planner in 10 s), asking again: 3 of 3");
+  // The fourth question is answered: on with the path, without a pause.
+  core.OnLegEnded(LegEnd::kDone, 0, Reason("DONE", "done"));
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kFollow);
+  EXPECT_TRUE(core.TakeEvents().empty());
+}
+
+TEST(SilentPlanner, AfterThreeRetriesMowingEndsAndTheMowerGoesHome) {
+  for (const Reason& silent : {kNoAnswer, kNotRunning}) {
+    TestCore core = Approaching();
+    StaySilent(core, silent);
+    core.OnLegEnded(silent.code == "PLANNER_MISSING" ? LegEnd::kFailed : LegEnd::kCanceled, 0, silent);
+    EXPECT_TRUE(core.Docking()) << silent.code;
+    const auto events = core.TakeEvents();
+    ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING", "STATE"})) << silent.code;
+    const json& docking = events[0].details;
+    EXPECT_EQ(docking["reason"], silent.code);
+    EXPECT_EQ(docking["severity"], "warning") << silent.code;
+    EXPECT_EQ(docking["resume"], "user") << silent.code;
+    EXPECT_EQ(docking["message"], "Going home: the planner does not answer") << silent.code;
+    EXPECT_EQ(events[1].details["state"], "DOCKING") << silent.code;
+    // The job stays for the next start.
+    const auto saved = ParseCheckpoint(*core.TakeCheckpoint());
+    ASSERT_TRUE(saved) << silent.code;
+    EXPECT_FALSE(saved->job_id.empty()) << silent.code;
+    EXPECT_EQ(docking["job_id"], saved->job_id) << silent.code;
+    EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kNone) << silent.code;
+    EXPECT_TRUE(core.TakeDockingLeg()) << silent.code;
+  }
+}
+
+TEST(SilentPlanner, AnAnswerBeginsTheCountAnew) {
+  TestCore core = Approaching();
+  StaySilent(core);
+  // "No way" is an answer: the pause of a failed approach as before.
+  core.OnLegEnded(LegEnd::kFailed, 0, Reason("APPROACH_FAILED", "Transit planning failed: no way"));
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"STATE"}));
+  EXPECT_EQ(events[0].details["reason"], "APPROACH_FAILED");
+  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  StaySilent(core);
+  core.OnLegEnded(LegEnd::kCanceled, 0, kNoAnswer);
+  EXPECT_TRUE(core.Docking());
+}
+
+TEST(SilentPlanner, AnApproachTheLogicStoppedKeepsTheCount) {
+  TestCore core = Approaching();
+  StaySilent(core);
+  ASSERT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+  const auto cancel = core.TakeDriveCancel();
+  ASSERT_TRUE(cancel);
+  core.OnLegEnded(LegEnd::kCanceled, 0, *cancel);
+  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  core.OnLegEnded(LegEnd::kCanceled, 0, kNoAnswer);
+  EXPECT_TRUE(core.Docking());
+}
+
+TEST(SilentPlanner, NeverHomeFromAPauseThatWaitsForTheUser) {
+  TestCore core = Approaching();
+  StaySilent(core);
+  // The user pauses while the fourth question is out, and its end without an answer comes after that.
+  ASSERT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+  core.TakeEvents();
+  core.OnLegEnded(LegEnd::kCanceled, 0, kNoAnswer);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_TRUE(core.TakeEvents().empty());
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kNone);
+  // With continue the job asks once more.
+  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  core.OnLegEnded(LegEnd::kCanceled, 0, kNoAnswer);
+  EXPECT_TRUE(core.Docking());
+}
+
+TEST(SilentPlanner, WithoutAWayHomeMowingPausesAsForAFailedApproach) {
+  TestCore core = Approaching(Tron(), false);
+  StaySilent(core);
+  core.OnLegEnded(LegEnd::kCanceled, 0, kNoAnswer);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"STATE"}));
+  EXPECT_EQ(events[0].details["state"], "PAUSED");
+  EXPECT_EQ(events[0].details["reason"], "APPROACH_FAILED");
+  EXPECT_EQ(events[0].details["severity"], "error");
+  EXPECT_EQ(events[0].details["resume"], "user");
+  EXPECT_EQ(events[0].details["message"], "No answer from the planner in 10 s");
+  // The job goes on with continue; a planner that stays silent pauses it again at the next question.
+  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  core.OnLegEnded(LegEnd::kCanceled, 0, kNoAnswer);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_TRUE(core.Mowing());
+}
+
+TEST(SilentPlanner, APlanThatTimesOutSendsTheMowerHomeAtOnce) {
+  const Reason late("PLANNER_TIMEOUT", "No answer from the planner in 120 s");
+  TestCore core = Mowing();
+  core.OnJobPlanFailed(late);
+  EXPECT_TRUE(core.Docking());
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING", "STATE"}));
+  EXPECT_EQ(events[0].details["reason"], "PLANNER_TIMEOUT");
+  EXPECT_EQ(events[0].details["message"], "Going home: the planner does not answer");
+
+  // Without a way home: the pause of a failed plan.
+  TestCore stays = Mowing(Tron(), false);
+  stays.OnJobPlanFailed(late);
+  EXPECT_EQ(stays.RobotState().state, "PAUSED");
+  const auto paused = stays.TakeEvents();
+  ASSERT_EQ(Types(paused), (std::vector<std::string>{"STATE"}));
+  EXPECT_EQ(paused[0].details["reason"], "PLANNING_FAILED");
+  EXPECT_EQ(paused[0].details["message"], "Planning failed: No answer from the planner in 120 s");
+}
+
+TEST(SilentPlanner, APlannerThatIsNotRunningIsAskedForThePlanAgain) {
+  TestCore core = Mowing();
+  for (int i = 1; i <= kPlannerRetries; i++) {
+    core.OnJobPlanFailed(kNotRunning);
+    EXPECT_EQ(core.RobotState().state, "MOWING") << i;
+    ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan) << i;
+  }
+  EXPECT_TRUE(core.TakeEvents().empty());
+  // Its plan counts as an answer: three more questions before mowing ends.
+  core.OnJobPlanned({FarLane()}, "fp");
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  StaySilent(core, kNotRunning);
+  core.OnLegEnded(LegEnd::kFailed, 0, kNotRunning);
+  EXPECT_TRUE(core.Docking());
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING", "STATE"}));
+  EXPECT_EQ(events[0].details["reason"], "PLANNER_MISSING");
+
+  // A plan that never comes ends mowing like the approach.
+  TestCore never = Mowing();
+  for (int i = 1; i <= kPlannerRetries; i++) {
+    never.OnJobPlanFailed(kNotRunning);
+    ASSERT_EQ(never.NextJobStep(0).kind, JobStep::Kind::kPlan) << i;
+  }
+  never.OnJobPlanFailed(kNotRunning);
+  EXPECT_TRUE(never.Docking());
+}
+
+// A plan the planner refused is an answer: the pause as before, and the count begins anew.
+TEST(SilentPlanner, ARefusedPlanPausesAsBefore) {
+  TestCore core = Mowing();
+  for (int i = 1; i <= kPlannerRetries; i++) {
+    core.OnJobPlanFailed(kNotRunning);
+    ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan) << i;
+  }
+  core.OnJobPlanFailed(Reason("PLANNING_FAILED", "no lanes fit"));
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"STATE"}));
+  EXPECT_EQ(events[0].details["reason"], "PLANNING_FAILED");
+  EXPECT_EQ(events[0].details["message"], "Planning failed: no lanes fit");
+  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
+  core.OnJobPlanFailed(kNotRunning);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
 }

@@ -349,6 +349,12 @@ struct JobStep {
 // s after the answer of the safety node within which the end of the emergency counts as released by the command.
 constexpr double kReleaseSourceS = 2.0;
 
+// A job asks the planner again this often in a row when it gave no answer; then mowing ends and the mower goes home.
+constexpr int kPlannerRetries = 3;
+
+// Whether the planner gave no answer: PLANNER_TIMEOUT or PLANNER_MISSING.
+bool PlannerSilent(const Reason& why);
+
 // The app repeats teleop every 100 ms while the joystick is held and sends one zero when it is let go.
 constexpr double kTeleopQuietS = 1.0;
 
@@ -476,6 +482,11 @@ class LogicCore {
   // mowing, at most gps_timeout, then DOCKING_FAILED NO_POSITION, NO_HEADING or POSITION_ACCURACY. An emergency and
   // abort_docking end it without DOCKING_FAILED. In IDLE on the contacts CHARGING_LOST tells when the contact or the
   // charge current goes away (ChargeConfig); the mower stays.
+  // Where the planner gives no answer for the way to the point in front of the station (PlannerSilent as the reason
+  // of the approach), the try takes the straight way (DockConfig::direct): free for the body in every heading, with
+  // direct_margin and the accuracy of a good position to spare (CheckDirectRoute), it is the event DOCKING_DIRECT and
+  // the leg kDirect, then the line as after the approach. Not free, or failed on the way, the try fails as
+  // approach_failed with cause and direct_blocked; with the switch off only with cause.
   bool CanDock() const;
   bool Docking() const;
   // Why docking.start cannot start now, empty if it can: BUSY, ALREADY_THERE on the contacts, EMERGENCY or
@@ -487,6 +498,9 @@ class LogicCore {
   void OnDockingLegEnded(LegEnd end, const Reason& reason);
   // docking_approach_distance and docking_retry_count of params.set, for the next docking.
   void SetDockingSettings(double approach_distance, int retry_count);
+  // m from base_link to the farthest point of the body (Geometry::TurningRadius), once the dimensions are loaded and
+  // after every change; until then no straight way counts as free.
+  void SetTurningRadius(double radius);
   // rain_mode, rain_check_seconds and the temperatures of the blade motor of params.set, for the next run.
   void SetHomeSettings(int rain_mode, double rain_check_seconds, double motor_hot_temperature,
                        double motor_cold_temperature);
@@ -551,12 +565,17 @@ class LogicCore {
   // Called whenever the node has nothing on its way for the job; the step it returns is on its way until its result
   // comes back. now_s is a monotonic clock.
   JobStep NextJobStep(double now_s);
-  // The plan of the area asked for by kPlan, or why there is none.
+  // The plan of the area asked for by kPlan, or why there is none: PLANNING_FAILED with the answer of the planner,
+  // PLANNER_TIMEOUT or PLANNER_MISSING without one.
   void OnJobPlanned(std::vector<JobPath> paths, const std::string& fingerprint);
-  void OnJobPlanFailed(const std::string& message);
+  void OnJobPlanFailed(const Reason& why);
   // The follower got to this pose of the path of kFollow.
   void OnJobProgress(size_t index);
-  // The approach or path ended; index is the pose of the path it got to (kFollow only), reason why it ended.
+  // The approach or path ended; index is the pose of the path it got to (kFollow only), reason why it ended. An
+  // approach or a plan the planner gave no answer for (PlannerSilent) is asked for again, up to kPlannerRetries times
+  // in a row and never after a plan that timed out. Then the job ends, kept for the next start, and the mower goes
+  // home with that reason at the event DOCKING; without a way home, or in a pause that waits for the user, mowing
+  // pauses as for a failed approach or plan.
   void OnLegEnded(LegEnd end, size_t index, const Reason& reason);
   // Timers of the job: GPS back, going home (HomeWatch), checkpoint period. While mowing and not waiting for the user
   // the first reason that holds sends the mower home with the event DOCKING; without a way home only the battery
@@ -659,6 +678,8 @@ class LogicCore {
   void OnDockingContact();
   // A try failed: counted at once, or once the mower drove out to the approach point when it stands on the line.
   void DockingTryFailed(const Reason& why);
+  // The planner gave no answer for the approach of a try: the straight way, or the try failed.
+  void DockingWithoutPlanner(const Reason& silent);
   // The leg for the node; a way out from the contacts waits until charging is off, where the driver can stop it.
   void SetDockingLeg(DockingLeg leg);
   void DockingChargeOff(bool ok, const std::string& message);
@@ -689,6 +710,9 @@ class LogicCore {
   // Ends the job: finished (JOB_COMPLETE) or not (it goes on from the checkpoint next time); home: docking after it,
   // with why as the reason of the event DOCKING.
   void EndJob(bool finished, bool home, const Reason& why = Reason());
+  // The planner gave the job no answer: it asks again where retry is set and tries are left, else the mower goes
+  // home; pause: the pause where it cannot.
+  void JobWithoutPlanner(const Reason& silent, const Reason& pause, bool retry);
   bool PoseGood() const;
   void CheckpointNow();
   // Ends a calibration drive here: CALIBRATION_FAILED unless done, CALIBRATION end, IDLE; cancel: the program too.
@@ -775,6 +799,9 @@ class LogicCore {
   std::optional<DockingLeg> docking_out_after_charge_off_;
   bool docking_charge_touched_ = false;
   bool docking_charge_stopped_ = false;
+  // Why the planner gave no way for the try that drives straight, and the turning circle of the body for its check.
+  std::string docking_direct_cause_;
+  double turning_radius_ = 0;
   // Whether charging is confirmed on the station, and its loss.
   ChargeWatch charge_watch_;
   std::string session_id_;
@@ -782,6 +809,8 @@ class LogicCore {
   Reason pause_reason_;
   Leg leg_ = Leg::kNone;
   bool approached_ = false;
+  // Questions of the job in a row the planner gave no answer for.
+  int planner_silent_ = 0;
   bool skip_path_ = false;
   bool skip_area_ = false;
   std::string announced_area_;

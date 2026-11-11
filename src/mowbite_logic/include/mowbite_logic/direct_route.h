@@ -10,9 +10,9 @@ namespace mowbite_logic {
 
 // The check of a straight way for a mower whose planner does not answer. It turns on the spot, drives the line and
 // turns on the spot again, and the follower may turn it on the spot anywhere in between. So the body has to fit in
-// every heading wherever base_link may get: base_link stays within margin m of the line (the follower stops the leg
-// beyond that), the body within turning_radius m of base_link. Nothing may lie closer to the line than the sum of
-// both, ends included. Without ROS.
+// every heading wherever base_link may get: base_link stays within margin m of the line (how far off the follower
+// lets it get before it ends the leg, and how exact the position is it measures that by), the body within
+// turning_radius m of base_link. Nothing may lie closer to the line than the sum of both, ends included. Without ROS.
 struct DirectRouteCheck {
   bool free = false;
   // Not free: what is in the way and where, for the message of the event.

@@ -14,7 +14,8 @@ constexpr double kLineEndTolerance = 0.02;
 // m before its end, 0.05 m past the station, where the contact leg is done without contact.
 constexpr double kContactEndTolerance = 0.005;
 // A try begins by driving out when base_link stands at most kOnLineAcross m beside the line, more than kOutMin m past
-// the approach point and at most kOutMin m past the end of the line.
+// the approach point and at most kOutMin m past the end of the line. Within kOutMin of the approach point there is no
+// straight way to drive.
 constexpr double kOutMin = 0.1;
 constexpr double kOnLineAcross = 0.3;
 // Within kOutMin of the approach point and facing within this of the way the mower faces on the station, a try begins
@@ -32,6 +33,7 @@ const char* DockingLegName(DockingLeg::Kind kind) {
     case DockingLeg::Kind::kOut: return "out";
     case DockingLeg::Kind::kLine: return "line";
     case DockingLeg::Kind::kContact: return "contact";
+    case DockingLeg::Kind::kDirect: return "direct";
     case DockingLeg::Kind::kApproach:
     default: return "approach";
   }
@@ -137,6 +139,24 @@ DockingLeg DockingSequence::Contact() const {
   // At the station the contacts need some pushing.
   leg.stall_time = config_.contact_timeout;
   leg.end_tolerance = kContactEndTolerance;
+  return leg;
+}
+
+std::optional<DockingLeg> DockingSequence::Direct(double x, double y) const {
+  const Point2 a = ApproachPoint();
+  const double length = std::hypot(a.x - x, a.y - y);
+  if (length <= kOutMin) return std::nullopt;
+  DockingLeg leg;
+  leg.kind = DockingLeg::Kind::kDirect;
+  const double course = std::atan2(a.y - y, a.x - x);
+  const int steps = std::max(2, static_cast<int>(std::ceil(length / kPoseSpacing - 1e-9)));
+  for (int i = 0; i < steps; i++) {
+    const double part = static_cast<double>(i) / steps;
+    leg.poses.push_back({x + (a.x - x) * part, y + (a.y - y) * part, course});
+  }
+  // At its end the follower turns the mower to where the line begins.
+  leg.poses.push_back({a.x, a.y, facing_});
+  leg.max_cross_track = config_.direct_margin;
   return leg;
 }
 

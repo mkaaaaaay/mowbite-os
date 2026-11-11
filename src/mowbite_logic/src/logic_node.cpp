@@ -979,11 +979,11 @@ class LogicNode : public rclcpp::Node {
   void PlanJobArea(const std::string& area_id) {
     const PlanQuestion question = planner_.Prepare(json{{"area_id", area_id}});
     if (!question.ok) {
-      core_.Call<&LogicCore::OnJobPlanFailed>(question.message);
+      core_.Call<&LogicCore::OnJobPlanFailed>(Reason("PLANNING_FAILED", question.message));
       return;
     }
     if (!plan_client_->service_is_ready()) {
-      core_.Call<&LogicCore::OnJobPlanFailed>("The planner is not running");
+      core_.Call<&LogicCore::OnJobPlanFailed>(Reason("PLANNING_FAILED", "The planner is not running"));
       return;
     }
     RCLCPP_INFO(get_logger(), "Mowing: planning area %s", area_id.c_str());
@@ -1007,7 +1007,7 @@ class LogicNode : public rclcpp::Node {
       job_plan_ = JobPlan();
       const CoverageAnswer answer = ToAnswer(response);
       if (!answer.success) {
-        core_.Call<&LogicCore::OnJobPlanFailed>(answer.message);
+        core_.Call<&LogicCore::OnJobPlanFailed>(Reason("PLANNING_FAILED", answer.message));
       } else {
         std::vector<JobPath> paths = JobPaths(answer);
         RCLCPP_INFO(get_logger(), "Mowing: %zu paths from %zu poses", paths.size(), answer.poses.size());
@@ -2196,8 +2196,9 @@ class LogicNode : public rclcpp::Node {
       if (job_plan_.active && t - job_plan_.sent > plan_timeout_s_) {
         plan_client_->remove_pending_request(job_plan_.request_id);
         job_plan_ = JobPlan();
-        core_.Call<&LogicCore::OnJobPlanFailed>("No answer from the planner in " +
-                                                std::to_string(static_cast<int>(plan_timeout_s_)) + " s");
+        core_.Call<&LogicCore::OnJobPlanFailed>(
+            Reason("PLANNING_FAILED",
+                   "No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s"));
       }
       for (auto it = pending_plans_.begin(); it != pending_plans_.end();) {
         if (t - it->second.sent > plan_timeout_s_) {

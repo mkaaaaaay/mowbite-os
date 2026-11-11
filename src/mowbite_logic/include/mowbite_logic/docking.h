@@ -33,19 +33,23 @@ struct DockConfig {
   double contact_timeout = 10.0;
   // Failed tries that are tried again (docking_retry_count of params.set).
   int retry_count = 4;
+  // A planner that gives no answer for the way to the point in front of the station: the mower drives straight
+  // there where CheckDirectRoute finds that way free, base_link at most direct_margin m off it; off: the try fails.
+  bool direct = true;
+  double direct_margin = 0.15;
 };
 
 // What the follower drives for docking.
 struct DockingLeg {
   // kApproach: over the drivable areas to the point in front of the station, planned like a drive. kOut: forwards along
   // the mower's own heading out of the station to that point. kLine: backwards along the line to the gate. kContact:
-  // from the gate onto the contacts.
-  enum class Kind { kApproach, kOut, kLine, kContact };
+  // from the gate onto the contacts. kDirect: straight to the point in front of the station, without the planner.
+  enum class Kind { kApproach, kOut, kLine, kContact, kDirect };
   Kind kind = Kind::kApproach;
   // kApproach: the point in front of the station, facing the way the mower faces on it.
   DockPose goal;
   // The others: poses at most 0.1 m apart that face the way the mower faces, and where base_link may be besides the
-  // drivable areas; the rest as in FollowPath.
+  // drivable areas (none for kDirect); the rest as in FollowPath.
   std::vector<DockPose> poses;
   Ring corridor;
   bool straight = false;
@@ -53,6 +57,8 @@ struct DockingLeg {
   double speed = 0;
   double stall_time = 0;
   double end_tolerance = 0;
+  // kDirect: m base_link may get off its path, beyond that the follower ends the leg; 0: the limit of the follower.
+  double max_cross_track = 0;
 };
 
 const char* DockingLegName(DockingLeg::Kind kind);
@@ -81,6 +87,10 @@ class DockingSequence {
   DockingLeg Out(double x, double y, double heading) const;
   DockingLeg Line() const;
   DockingLeg Contact() const;
+  // The straight way from base_link at (x, y) to the approach point: poses along it, the last one facing the way the
+  // mower faces on the station, base_link at most direct_margin off them. None from within 0.1 m of the approach
+  // point: the line begins there.
+  std::optional<DockingLeg> Direct(double x, double y) const;
 
   // Why the mower may not go on from where it stands at the gate, empty if it may: base_link beside the line, the
   // heading off, or the position accuracy worse than accuracy_limit.

@@ -59,9 +59,20 @@ std::vector<Field> Rated(bool always, std::vector<Field> fields = {}) {
   return fields;
 }
 
-// The tries of docking in DOCKING_RETRY and DOCKING_FAILED, whatever the reason.
+// Why the planner gave no way to the docking station, one of its reasons in x-reasons.
+Field PlannerCause(bool required) {
+  return Text("cause", "Why the planner gave no way: it did not answer in time, or is not running", required,
+              {"PLANNER_TIMEOUT", "PLANNER_MISSING"});
+}
+
+// The tries of docking in DOCKING_RETRY and DOCKING_FAILED, whatever the reason; cause and direct_blocked come with
+// approach_failed where the planner gave no way.
 std::vector<Field> DockingTries() {
-  return Rated(true, {Integer("attempts", "", "Tries of docking so far")});
+  return Rated(true, {Integer("attempts", "", "Tries of docking so far"), PlannerCause(false),
+                      Bool("direct_blocked",
+                           "With a cause, where the mower may drive straight to the station then: true when that way "
+                           "was not free, false when it drove it and failed",
+                           false)});
 }
 
 Field Object(std::string name, std::string text, std::vector<Field> fields, bool required = false) {
@@ -769,6 +780,21 @@ ReasonEntry WithTexts(ReasonEntry reason, UserTexts texts) {
   return reason;
 }
 
+// A planner that gives no answer as the reason mowing ends and the mower goes home.
+ReasonEntry PlannerHome(const std::string& code) {
+  return WithTexts(R(code, "warning", "user"),
+                   {{"de",
+                     {"Planer antwortet nicht",
+                      "Der Planer hat beim Mähen nicht geantwortet. Der Mäher fährt zur Ladestation, der Auftrag "
+                      "bleibt erhalten.",
+                      "Mähen später wieder starten. Bleibt es dabei, MowBite OS neu starten."}},
+                    {"en",
+                     {"Planner not answering",
+                      "The planner didn't answer while mowing. The mower goes to the docking station, the job is "
+                      "kept.",
+                      "Start mowing again later. If it stays so, restart MowBite OS."}}});
+}
+
 // A list of reasons that all wait for the user: codes with their severity.
 std::vector<ReasonEntry> User(const std::vector<std::pair<std::string, std::string>>& codes) {
   std::vector<ReasonEntry> out;
@@ -1076,8 +1102,14 @@ const std::vector<EventEntry>& Events() {
       Event("DOCKING", "logic", "The mower goes home to the docking station; the reason tells why", Rated(true),
             {R("MANUAL", "info", "user"), R("BATTERY_CRITICAL", "warning", "user"), R("BATTERY_HOT", "warning", "user"),
              R("BATTERY_LOW", "info", "user"), R("MOTOR_HOT", "warning", "user"), R("RAIN", "info", "user"),
-             R("DARK", "info", "user")},
+             R("DARK", "info", "user"), PlannerHome("PLANNER_TIMEOUT"), PlannerHome("PLANNER_MISSING")},
             "info", "user"),
+      Event("DOCKING_DIRECT", "logic",
+            "The planner gave no way to the docking station: this try drives straight to the point in front of it, "
+            "over ground the logic checked for the body of the mower",
+            {PlannerCause(true), Number("distance", "m", "Length of the straight way", true),
+             Text("message", "English text for the log", true), Text("severity", "Always warning", true, {"warning"}),
+             Text("resume", "Always auto", true, {"auto"})}),
       Event("DOCKED", "logic", "The mower is on the contacts of the docking station"),
       Event("DOCKING_RETRY", "logic", "Docking failed, the next try follows by itself", DockingTries(),
             {R("approach_failed", "warning", "auto"), R("dock_failed", "warning", "auto"),

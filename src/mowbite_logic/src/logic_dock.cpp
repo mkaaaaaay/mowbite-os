@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstdio>
 
+#include "mowbite_logic/direct_route.h"
+
 namespace mowbite_logic {
 
 Reason LogicCore::DockProblem() const {
@@ -47,6 +49,10 @@ bool LogicCore::Docking() const {
 void LogicCore::SetDockingSettings(double approach_distance, int retry_count) {
   config_.dock.approach_distance = approach_distance;
   config_.dock.retry_count = retry_count;
+}
+
+void LogicCore::SetTurningRadius(double radius) {
+  turning_radius_ = radius;
 }
 
 DockingSequence LogicCore::NewDocking() const {
@@ -142,6 +148,7 @@ void LogicCore::BeginDocking() {
   docking_out_after_charge_off_.reset();
   docking_charge_touched_ = false;
   docking_charge_stopped_ = false;
+  docking_direct_cause_.clear();
   SetState(State::kDocking);
   const Point2 p = docking_.ApproachPoint();
   Notify("Docking: to (" + Metres(p.x) + ", " + Metres(p.y) +
@@ -238,8 +245,15 @@ void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
     return;
   }
   if (end != LegEnd::kDone) {
-    if (kind == DockingLeg::Kind::kApproach) {
+    if (kind == DockingLeg::Kind::kApproach && PlannerSilent(reason)) {
+      DockingWithoutPlanner(reason);
+    } else if (kind == DockingLeg::Kind::kApproach) {
       DockingTryFailed(Reason("approach_failed", "The way to the docking station failed: " + reason.message));
+    } else if (kind == DockingLeg::Kind::kDirect) {
+      DockingTryFailed(
+          Reason("approach_failed", "The straight way to the docking station failed: " + reason.message)
+              .With("cause", docking_direct_cause_)
+              .With("direct_blocked", false));
     } else if (kind == DockingLeg::Kind::kOut && docking_failure_) {
       Reason why = *docking_failure_;
       why.message += "; then driving out failed: " + reason.message;
@@ -251,7 +265,8 @@ void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
     return;
   }
   switch (kind) {
-    case DockingLeg::Kind::kApproach: docking_leg_due_ = docking_.Line(); break;
+    case DockingLeg::Kind::kApproach:
+    case DockingLeg::Kind::kDirect: docking_leg_due_ = docking_.Line(); break;
     case DockingLeg::Kind::kOut:
       if (docking_failure_) {
         CountDockingFailure(*docking_failure_);
@@ -275,6 +290,47 @@ void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
       DockingTryFailed(Reason("dock_failed", "Docking failed: no contact with the docking station up to " +
                                                  Metres(config_.dock.overshoot) + " m past it"));
       break;
+  }
+}
+
+void LogicCore::DockingWithoutPlanner(const Reason& silent) {
+  Reason failed =
+      Reason("approach_failed", "The way to the docking station failed: " + silent.message).With("cause", silent.code);
+  if (!config_.dock.direct) {
+    DockingTryFailed(failed);
+    return;
+  }
+  // The way is checked from where the mower stands, so only with a good position.
+  if (!PoseGood()) {
+    WaitForDockingGps();
+    return;
+  }
+  // The follower holds base_link within the margin of the leg, by a position it takes up to this accuracy. Without
+  // that margin it would not hold the leg to its way: not free.
+  const double margin =
+      config_.dock.direct_margin > 0 ? config_.dock.direct_margin + config_.max_position_accuracy : 0.0;
+  const Point2 to = docking_.ApproachPoint();
+  const DirectRouteCheck check =
+      CheckDirectRoute({pose_->x, pose_->y}, to, turning_radius_, margin, drivable_, obstacles_);
+  if (!check.free) {
+    failed.message += "; the straight way is not free: " + check.why;
+    DockingTryFailed(failed.With("direct_blocked", true));
+    return;
+  }
+  const double distance = std::hypot(to.x - pose_->x, to.y - pose_->y);
+  const std::string text = "No way from the planner (" + silent.message + "): straight to the point in front of the " +
+                           "docking station, " + Metres(distance) + " m";
+  AddEvent("DOCKING_DIRECT", {{"cause", silent.code},
+                              {"distance", distance},
+                              {"message", text},
+                              {"severity", "warning"},
+                              {"resume", "auto"}});
+  Notify("Docking: " + text);
+  docking_direct_cause_ = silent.code;
+  if (auto leg = docking_.Direct(pose_->x, pose_->y)) {
+    docking_leg_due_ = std::move(*leg);
+  } else {
+    docking_leg_due_ = docking_.Line();
   }
 }
 

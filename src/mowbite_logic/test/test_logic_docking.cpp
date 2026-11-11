@@ -138,6 +138,26 @@ TestCore AtTheGate(LogicConfig config = Tron()) {
   return core;
 }
 
+// A lawn around the station and the point in front of it: from where the mower stands nothing lies within 1.8 m of
+// the straight way there.
+const Ring kOpenLawn{{-2.0, -3.0}, {6.0, -3.0}, {6.0, 3.0}, {-2.0, 3.0}};
+// From base_link to the front corners of the Tron.
+const double kTurningRadius = 0.644;
+const Reason kNoAnswer("PLANNER_TIMEOUT", "No answer from the planner in 10 s");
+
+// Docking after the job, the planner asked for the way to the point in front of the station.
+TestCore Approaching(LogicConfig config = Tron(), const Ring& lawn = kOpenLawn, const std::vector<Ring>& obstacles = {},
+                     double turning_radius = kTurningRadius) {
+  TestCore core = Ready(config, lawn);
+  core.OnDrivableAreas({lawn}, obstacles);
+  core.SetTurningRadius(turning_radius);
+  CompleteJob(core);
+  Take(core, DockingLeg::Kind::kApproach);
+  core.TakeEvents();
+  core.TakeNotices();
+  return core;
+}
+
 // On the last leg onto the contacts.
 TestCore OntoTheContacts(LogicConfig config = Tron()) {
   TestCore core = AtTheGate(config);
@@ -235,6 +255,46 @@ TEST(DockingSequence, TriesAgainRetryCountTimes) {
   EXPECT_TRUE(docking.Failed());
   EXPECT_FALSE(docking.Failed());
   EXPECT_EQ(docking.failures(), 3);
+}
+
+TEST(DockingSequence, TheStraightWayToTheApproachPoint) {
+  DockConfig config;
+  config.direct_margin = 0.2;
+  const DockingSequence docking(config, UndockConfig(), kDock, 0.0);
+  // From 0.25 m north of the approach point: poses at most 0.1 m apart facing south, the last one facing east as on
+  // the station.
+  const auto leg = docking.Direct(-0.2, 0.25);
+  ASSERT_TRUE(leg);
+  EXPECT_EQ(leg->kind, DockingLeg::Kind::kDirect);
+  ASSERT_EQ(leg->poses.size(), 4u);
+  for (size_t i = 0; i < 3; i++) {
+    EXPECT_NEAR(leg->poses[i].x, -0.2, 1e-9);
+    EXPECT_NEAR(leg->poses[i].y, 0.25 - 0.25 * i / 3, 1e-9);
+    EXPECT_NEAR(Angle(leg->poses[i].heading + M_PI / 2), 0.0, 1e-9);
+  }
+  EXPECT_NEAR(leg->poses[3].x, -0.2, 1e-9);
+  EXPECT_NEAR(leg->poses[3].y, 0.0, 1e-9);
+  EXPECT_NEAR(Angle(leg->poses[3].heading), 0.0, 1e-9);
+  EXPECT_DOUBLE_EQ(leg->max_cross_track, 0.2);
+  EXPECT_TRUE(leg->corridor.empty());
+  EXPECT_FALSE(leg->straight);
+  EXPECT_FALSE(leg->reverse);
+  EXPECT_DOUBLE_EQ(leg->speed, 0.0);
+  EXPECT_DOUBLE_EQ(leg->stall_time, 0.0);
+  EXPECT_DOUBLE_EQ(leg->end_tolerance, 0.0);
+  // The follower needs 3 poses also on the shortest way.
+  const auto shortest = docking.Direct(-0.2, 0.11);
+  ASSERT_TRUE(shortest);
+  ASSERT_EQ(shortest->poses.size(), 3u);
+  EXPECT_NEAR(shortest->poses[1].y, 0.055, 1e-9);
+  // Within 0.1 m of the approach point there is nothing to drive.
+  EXPECT_FALSE(docking.Direct(-0.2, 0.099));
+  EXPECT_FALSE(docking.Direct(-0.15, -0.05));
+  // The other legs keep the limit of the follower.
+  EXPECT_DOUBLE_EQ(docking.Line().max_cross_track, 0.0);
+  EXPECT_DOUBLE_EQ(docking.Contact().max_cross_track, 0.0);
+  EXPECT_DOUBLE_EQ(docking.Out(-0.6, 0.0, 0.0).max_cross_track, 0.0);
+  EXPECT_STREQ(DockingLegName(DockingLeg::Kind::kDirect), "direct");
 }
 
 TEST(Docking, AfterTheJobTheMowerBacksOntoTheStation) {
@@ -493,6 +553,296 @@ TEST(Docking, AWayThatFailsIsTriedAgain) {
   EXPECT_EQ(events[0].details["reason"], "approach_failed");
   EXPECT_EQ(events[0].details["attempts"], 2);
   EXPECT_NE(events[0].details["message"].get<std::string>().find("no way"), std::string::npos);
+}
+
+TEST(DockingDirect, APlannerThatDoesNotAnswerSendsTheMowerStraight) {
+  TestCore core = Approaching();
+  core.OnDockingLegEnded(LegEnd::kCanceled, kNoAnswer);
+  EXPECT_TRUE(core.Docking());
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_DIRECT"}));
+  const json& direct = events[0].details;
+  EXPECT_EQ(direct["cause"], "PLANNER_TIMEOUT");
+  EXPECT_NEAR(direct["distance"].get<double>(), std::hypot(2.2, 0.5), 1e-9);
+  EXPECT_EQ(direct["severity"], "warning");
+  EXPECT_EQ(direct["resume"], "auto");
+  EXPECT_EQ(direct["message"], "No way from the planner (No answer from the planner in 10 s): straight to the point "
+                               "in front of the docking station, 2.26 m");
+
+  const DockingLeg leg = Take(core, DockingLeg::Kind::kDirect);
+  ASSERT_EQ(leg.poses.size(), 24u);
+  EXPECT_NEAR(leg.poses.front().x, 2.0, 1e-9);
+  EXPECT_NEAR(leg.poses.front().y, 0.5, 1e-9);
+  EXPECT_NEAR(leg.poses.back().x, -0.2, 1e-9);
+  EXPECT_NEAR(leg.poses.back().y, 0.0, 1e-9);
+  // Along the way the poses face it, the last one faces as the mower does on the station.
+  const double course = std::atan2(-0.5, -2.2);
+  for (size_t i = 0; i + 1 < leg.poses.size(); i++) {
+    EXPECT_NEAR(Angle(leg.poses[i].heading - course), 0.0, 1e-9) << i;
+    const double step = std::hypot(leg.poses[i + 1].x - leg.poses[i].x, leg.poses[i + 1].y - leg.poses[i].y);
+    EXPECT_NEAR(step, std::hypot(2.2, 0.5) / 23, 1e-9) << i;
+  }
+  EXPECT_NEAR(Angle(leg.poses.back().heading), 0.0, 1e-9);
+  // base_link no farther off it than the margin of the check, and no corridor besides the areas.
+  EXPECT_DOUBLE_EQ(leg.max_cross_track, 0.15);
+  EXPECT_TRUE(leg.corridor.empty());
+  EXPECT_TRUE(core.FollowerActive());
+  EXPECT_FALSE(core.BladeWanted());
+  EXPECT_FALSE(core.TakeDockingLeg());
+
+  // A contact on the way means nothing; from its end on as after the approach.
+  core.OnHardwareStatus(Healthy(true));
+  EXPECT_TRUE(core.FollowerActive());
+  core.OnHardwareStatus(Healthy());
+  core.OnPose(PoseAt(-0.21, 0.01, Rad(3)));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  Take(core, DockingLeg::Kind::kLine);
+  EXPECT_TRUE(core.TakeEvents().empty());
+}
+
+TEST(DockingDirect, APlannerThatIsNotRunningCountsTheSame) {
+  TestCore core = Approaching();
+  core.OnDockingLegEnded(LegEnd::kFailed, Reason("PLANNER_MISSING", "The planner is not running"));
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_DIRECT"}));
+  EXPECT_EQ(events[0].details["cause"], "PLANNER_MISSING");
+  Take(core, DockingLeg::Kind::kDirect);
+}
+
+TEST(DockingDirect, AWayThatIsNotFreeFailsTheTry) {
+  struct Case {
+    const char* what;
+    Ring lawn;
+    std::vector<Ring> obstacles;
+    double turning_radius;
+    const char* why;
+  };
+  const Ring stone{{0.9, 0.55}, {1.1, 0.55}, {1.1, 0.75}, {0.9, 0.75}};
+  const std::vector<Case> cases = {
+      {"the lawn ends 0.3 m behind the point in front of the station", kLawn, {}, kTurningRadius,
+       "the areas end 0.30 m from the way at (-0.50, 0.00), less than 0.90 m"},
+      {"an obstacle 0.25 m beside the way", kOpenLawn, {stone}, kTurningRadius,
+       "an obstacle 0.25 m from the way at (1.10, 0.55), less than 0.90 m"},
+      {"no dimensions of the body", kOpenLawn, {}, 0.0, "the size of the body is not known"},
+      {"no margin for the follower to hold", kOpenLawn, {}, kTurningRadius, "the size of the body is not known"},
+  };
+  for (const Case& c : cases) {
+    LogicConfig config = Tron();
+    if (std::string(c.what).find("no margin") == 0) config.dock.direct_margin = 0.0;
+    TestCore core = Approaching(config, c.lawn, c.obstacles, c.turning_radius);
+    core.OnDockingLegEnded(LegEnd::kCanceled, kNoAnswer);
+    const auto events = core.TakeEvents();
+    ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_RETRY"})) << c.what;
+    const json& retry = events[0].details;
+    EXPECT_EQ(retry["reason"], "approach_failed") << c.what;
+    EXPECT_EQ(retry["cause"], "PLANNER_TIMEOUT") << c.what;
+    EXPECT_EQ(retry["direct_blocked"], true) << c.what;
+    EXPECT_EQ(retry["attempts"], 1) << c.what;
+    EXPECT_EQ(retry["severity"], "warning") << c.what;
+    EXPECT_EQ(retry["resume"], "auto") << c.what;
+    const std::string message = retry["message"];
+    EXPECT_EQ(message.find("The way to the docking station failed: No answer from the planner in 10 s; the straight "
+                           "way is not free: " + std::string(c.why)),
+              0u)
+        << message;
+    // The next try asks the planner first again.
+    Take(core, DockingLeg::Kind::kApproach);
+  }
+}
+
+// The follower drives up to the accuracy limit of the position, so the way is free only with that to spare as well.
+TEST(DockingDirect, TheAccuracyLimitOfThePositionIsKeptFreeToo) {
+  // The way runs along y = 0, an obstacle begins 0.86 m beside it: more than the 0.644 m of the body, the margin of
+  // 0.15 m and the 1 cm of the check together.
+  const Ring stone{{0.8, 0.86}, {1.2, 0.86}, {1.2, 1.2}, {0.8, 1.2}};
+  for (const double accuracy : {0.1, 0.03}) {
+    LogicConfig config = Tron();
+    config.max_position_accuracy = accuracy;
+    TestCore core = Ready(config, kOpenLawn);
+    core.OnDrivableAreas({kOpenLawn}, {stone});
+    core.SetTurningRadius(kTurningRadius);
+    core.OnPose(PoseAt(2.0, 0.0, M_PI));
+    CompleteJob(core);
+    Take(core, DockingLeg::Kind::kApproach);
+    core.TakeEvents();
+    core.OnDockingLegEnded(LegEnd::kCanceled, kNoAnswer);
+    const auto events = core.TakeEvents();
+    ASSERT_EQ(events.size(), 1u) << accuracy;
+    if (accuracy > 0.05) {
+      EXPECT_EQ(events[0].type, "DOCKING_RETRY");
+      const std::string message = events[0].details["message"];
+      EXPECT_NE(message.find("an obstacle 0.86 m from the way at ("), std::string::npos) << message;
+      EXPECT_NE(message.find("), less than 0.90 m"), std::string::npos) << message;
+    } else {
+      EXPECT_EQ(events[0].type, "DOCKING_DIRECT") << events[0].details;
+    }
+  }
+}
+
+TEST(DockingDirect, NeverAfterAnAnswerOfThePlanner) {
+  TestCore core = Approaching();
+  core.OnDockingLegEnded(LegEnd::kFailed, Reason("TRANSIT_FAILED", "Transit planning failed: no way"));
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_RETRY"}));
+  EXPECT_EQ(events[0].details["reason"], "approach_failed");
+  EXPECT_FALSE(events[0].details.contains("cause"));
+  EXPECT_FALSE(events[0].details.contains("direct_blocked"));
+  Take(core, DockingLeg::Kind::kApproach);
+}
+
+TEST(DockingDirect, AStraightWayThatFailsCountsWithItsCause) {
+  const std::vector<Reason> ends = {
+      Reason("CROSS_TRACK", "0.16 m off the path (limit of this path 0.15 m)"),
+      Reason("TIMEOUT", "no progress along the path for 10 s"),
+      Reason("OUTSIDE", "the mower is 0.31 m outside of the allowed areas at (1.00, 0.20)"),
+  };
+  for (const Reason& end : ends) {
+    TestCore core = Approaching();
+    core.OnDockingLegEnded(LegEnd::kFailed, Reason("PLANNER_MISSING", "The planner is not running"));
+    Take(core, DockingLeg::Kind::kDirect);
+    core.TakeEvents();
+    core.OnPose(PoseAt(1.0, 0.4, M_PI));
+    core.OnDockingLegEnded(LegEnd::kFailed, end);
+    const auto events = core.TakeEvents();
+    ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_RETRY"})) << end.code;
+    const json& retry = events[0].details;
+    EXPECT_EQ(retry["reason"], "approach_failed") << end.code;
+    EXPECT_EQ(retry["cause"], "PLANNER_MISSING") << end.code;
+    EXPECT_EQ(retry["direct_blocked"], false) << end.code;
+    EXPECT_EQ(retry["attempts"], 1) << end.code;
+    EXPECT_EQ(retry["message"], "The straight way to the docking station failed: " + end.message);
+    // The planner comes first again, and a way it refuses fails without a cause.
+    Take(core, DockingLeg::Kind::kApproach);
+    core.OnDockingLegEnded(LegEnd::kFailed, Reason("TRANSIT_FAILED", "Transit planning failed: no way"));
+    const auto next = core.TakeEvents();
+    ASSERT_EQ(Types(next), (std::vector<std::string>{"DOCKING_RETRY"})) << end.code;
+    EXPECT_FALSE(next[0].details.contains("cause")) << end.code;
+    EXPECT_FALSE(next[0].details.contains("direct_blocked")) << end.code;
+    EXPECT_EQ(next[0].details["attempts"], 2) << end.code;
+  }
+}
+
+TEST(DockingDirect, WithTheSwitchOffTheTryFailsWithItsCauseOnly) {
+  LogicConfig config = Tron();
+  config.dock.direct = false;
+  TestCore core = Approaching(config);
+  core.OnDockingLegEnded(LegEnd::kCanceled, kNoAnswer);
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_RETRY"}));
+  EXPECT_EQ(events[0].details["reason"], "approach_failed");
+  EXPECT_EQ(events[0].details["cause"], "PLANNER_TIMEOUT");
+  EXPECT_FALSE(events[0].details.contains("direct_blocked"));
+  EXPECT_EQ(events[0].details["message"],
+            "The way to the docking station failed: No answer from the planner in 10 s");
+  Take(core, DockingLeg::Kind::kApproach);
+}
+
+TEST(DockingDirect, AfterTheLastTryDockingFailsWithTheCause) {
+  LogicConfig config = Tron();
+  config.dock.retry_count = 1;
+  TestCore core = Approaching(config, kLawn);
+  core.OnDockingLegEnded(LegEnd::kCanceled, kNoAnswer);
+  ASSERT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"DOCKING_RETRY"}));
+  Take(core, DockingLeg::Kind::kApproach);
+  core.OnDockingLegEnded(LegEnd::kFailed, Reason("PLANNER_MISSING", "The planner is not running"));
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_FAILED", "STATE"}));
+  const json& failed = events[0].details;
+  EXPECT_EQ(failed["reason"], "approach_failed");
+  EXPECT_EQ(failed["cause"], "PLANNER_MISSING");
+  EXPECT_EQ(failed["direct_blocked"], true);
+  EXPECT_EQ(failed["attempts"], 2);
+  EXPECT_EQ(failed["severity"], "error");
+  EXPECT_EQ(failed["resume"], "user");
+  EXPECT_TRUE(core.Idle());
+  EXPECT_FALSE(core.TakeDockingLeg());
+}
+
+TEST(DockingDirect, AnEmergencyStopsItLikeEveryLeg) {
+  // The driver reports the stop: IDLE without DOCKING_FAILED, and nothing goes on after the reset.
+  TestCore core = Approaching();
+  core.OnDockingLegEnded(LegEnd::kCanceled, kNoAnswer);
+  Take(core, DockingLeg::Kind::kDirect);
+  core.TakeEvents();
+  HardwareSnapshot stop = Healthy();
+  stop.emergency = true;
+  stop.emergency_reason = kEmergencyLatch | kEmergencyStop;
+  core.OnHardwareStatus(stop);
+  EXPECT_TRUE(core.Idle());
+  EXPECT_FALSE(core.FollowerActive());
+  const auto cancel = core.TakeDriveCancel();
+  ASSERT_TRUE(cancel);
+  EXPECT_EQ(cancel->code, "EMERGENCY");
+  EXPECT_TRUE(core.TakeStopRequest());
+  auto events = core.TakeEvents();
+  EXPECT_TRUE(Find(events, "EMERGENCY"));
+  EXPECT_FALSE(Find(events, "DOCKING_FAILED"));
+  EXPECT_FALSE(Find(events, "DOCKING_RETRY"));
+  core.OnHardwareStatus(Healthy());
+  EXPECT_TRUE(core.Idle());
+  EXPECT_FALSE(core.TakeDockingLeg());
+
+  // The follower saw it first.
+  TestCore other = Approaching();
+  other.OnDockingLegEnded(LegEnd::kCanceled, kNoAnswer);
+  Take(other, DockingLeg::Kind::kDirect);
+  other.TakeEvents();
+  other.OnDockingLegEnded(LegEnd::kEmergency, Reason("EMERGENCY", "Emergency stop"));
+  EXPECT_TRUE(other.Idle());
+  events = other.TakeEvents();
+  EXPECT_FALSE(Find(events, "DOCKING_FAILED"));
+  EXPECT_FALSE(Find(events, "DOCKING_RETRY"));
+  EXPECT_FALSE(other.TakeDockingLeg());
+}
+
+TEST(DockingDirect, ABadPositionWaitsAndAsksThePlannerAgain) {
+  // On the straight way: the follower stopped, the try is not counted.
+  TestCore core = Approaching();
+  core.OnDockingLegEnded(LegEnd::kCanceled, kNoAnswer);
+  Take(core, DockingLeg::Kind::kDirect);
+  core.TakeEvents();
+  core.OnPose(PoseAt(1.0, 0.3, M_PI, 0.2f));
+  core.OnDockingLegEnded(LegEnd::kGps, Reason("POSITION_ACCURACY", "position accuracy 0.20 m worse than 0.10 m"));
+  EXPECT_TRUE(core.Docking());
+  EXPECT_FALSE(core.TakeDockingLeg());
+  core.OnTick(100.0);
+  core.OnPose(PoseAt(1.0, 0.3, M_PI));
+  core.OnTick(105.0);
+  EXPECT_FALSE(core.TakeDockingLeg());
+  core.OnTick(115.0);
+  Take(core, DockingLeg::Kind::kApproach);
+  EXPECT_TRUE(core.TakeEvents().empty());
+
+  // Bad already when the planner gives no answer: the way is not checked from a place the mower may not stand at.
+  TestCore early = Approaching();
+  early.OnPose(PoseAt(2.0, 0.5, M_PI, 0.2f));
+  early.OnDockingLegEnded(LegEnd::kCanceled, kNoAnswer);
+  EXPECT_TRUE(early.Docking());
+  EXPECT_FALSE(early.TakeDockingLeg());
+  EXPECT_TRUE(early.TakeEvents().empty());
+  early.OnTick(100.0);
+  early.OnPose(PoseAt(2.0, 0.5, M_PI));
+  early.OnTick(105.0);
+  early.OnTick(115.0);
+  Take(early, DockingLeg::Kind::kApproach);
+  early.OnDockingLegEnded(LegEnd::kCanceled, kNoAnswer);
+  EXPECT_EQ(Types(early.TakeEvents()), (std::vector<std::string>{"DOCKING_DIRECT"}));
+  Take(early, DockingLeg::Kind::kDirect);
+}
+
+// At the point in front of the station already, but turned away from it: no way to drive, the line begins there.
+TEST(DockingDirect, AtTheApproachPointTheLineFollowsAtOnce) {
+  TestCore core = Ready(Tron(), kOpenLawn);
+  core.SetTurningRadius(kTurningRadius);
+  core.OnPose(PoseAt(-0.15, 0.05, M_PI / 2));
+  CompleteJob(core);
+  Take(core, DockingLeg::Kind::kApproach);
+  core.TakeEvents();
+  core.OnDockingLegEnded(LegEnd::kCanceled, kNoAnswer);
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_DIRECT"}));
+  EXPECT_NEAR(events[0].details["distance"].get<double>(), std::hypot(0.05, 0.05), 1e-9);
+  Take(core, DockingLeg::Kind::kLine);
 }
 
 TEST(Docking, AnEmergencyStopsWithoutDockingFailed) {

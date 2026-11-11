@@ -48,6 +48,10 @@ std::string EmergencyReasonNames(int reason) {
   return mowbite_api::EmergencyNames(reason);
 }
 
+bool PlannerSilent(const Reason& why) {
+  return why.code == "PLANNER_TIMEOUT" || why.code == "PLANNER_MISSING";
+}
+
 void SetEventObserver(EventObserver observer) {
   event_observer = observer;
 }
@@ -1205,6 +1209,7 @@ void LogicCore::StartMowing() {
   job_.Restore(job_.progress());
   leg_ = Leg::kNone;
   approached_ = false;
+  planner_silent_ = 0;
   announced_area_.clear();
   SetState(State::kMowing);
   CheckpointNow();
@@ -1335,15 +1340,39 @@ JobStep LogicCore::NextJobStep(double now_s) {
 void LogicCore::OnJobPlanned(std::vector<JobPath> paths, const std::string& fingerprint) {
   if (state_ != State::kMowing || leg_ != Leg::kPlanning) return;
   leg_ = Leg::kNone;
+  planner_silent_ = 0;
   job_.SetPlan(std::move(paths), fingerprint);
   approached_ = false;
   CheckpointNow();
 }
 
-void LogicCore::OnJobPlanFailed(const std::string& message) {
+void LogicCore::OnJobPlanFailed(const Reason& why) {
   if (state_ != State::kMowing || leg_ != Leg::kPlanning) return;
   leg_ = Leg::kNone;
-  Pause(kPauseFault, Reason("PLANNING_FAILED", "Planning failed: " + message));
+  const Reason pause("PLANNING_FAILED", "Planning failed: " + why.message);
+  if (PlannerSilent(why)) {
+    // A plan that timed out is not asked for again: the planner may still be at it.
+    JobWithoutPlanner(why, pause, why.code != "PLANNER_TIMEOUT");
+    return;
+  }
+  planner_silent_ = 0;
+  Pause(kPauseFault, pause);
+}
+
+void LogicCore::JobWithoutPlanner(const Reason& silent, const Reason& pause, bool retry) {
+  planner_silent_++;
+  if (retry && planner_silent_ <= kPlannerRetries) {
+    Notify("Mowing: no answer from the planner (" + silent.message + "), asking again: " +
+           std::to_string(planner_silent_) + " of " + std::to_string(kPlannerRetries));
+    return;
+  }
+  // Like a reason of HomeWatch: never from a pause that waits for the user, who may stand at the mower (G11).
+  const bool waits_for_user = (pause_ & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
+  if (!waits_for_user && HomeReachable()) {
+    EndJob(false, true, Reason(silent.code, "Going home: the planner does not answer"));
+    return;
+  }
+  Pause(kPauseFault, pause);
 }
 
 void LogicCore::OnJobProgress(size_t index) {
@@ -1360,6 +1389,13 @@ void LogicCore::OnLegEnded(LegEnd end, size_t index, const Reason& reason) {
     ApplySkips();
     return;
   }
+  if (!follow && PlannerSilent(reason)) {
+    approached_ = false;
+    JobWithoutPlanner(reason, Reason("APPROACH_FAILED", reason.message), true);
+    return;
+  }
+  // An approach the logic stopped itself tells nothing about the planner.
+  if (!follow && end != LegEnd::kCanceled) planner_silent_ = 0;
   switch (end) {
     case LegEnd::kDone:
       if (follow) {

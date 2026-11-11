@@ -21,9 +21,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobArea, id, name, mowable)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UndockConfig, distance, speed, stall_time, course_limit, course_distance, corridor)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UndockPath, poses, corridor, speed, stall_time)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockConfig, approach_distance, speed, contact_speed, gate_distance, gate_lateral,
-                                   gate_heading, overshoot, contact_timeout, retry_count)
+                                   gate_heading, overshoot, contact_timeout, retry_count, direct, direct_margin)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockingLeg, kind, goal, poses, corridor, straight, reverse, speed, stall_time,
-                                   end_tolerance)
+                                   end_tolerance, max_cross_track)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ChargeConfig, current, time, timeout, expected_below, lost_time)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobPose, x, y, heading, kind)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobPath, is_outline, poses)
@@ -81,8 +81,8 @@ static_assert(sizeof(MapEdit) == 112);
 static_assert(sizeof(JobArea) == 72);
 static_assert(sizeof(UndockConfig) == 48);
 static_assert(sizeof(UndockPath) == 64);
-static_assert(sizeof(DockConfig) == 72);
-static_assert(sizeof(DockingLeg) == 112);
+static_assert(sizeof(DockConfig) == 80);
+static_assert(sizeof(DockingLeg) == 120);
 static_assert(sizeof(ChargeConfig) == 40);
 static_assert(sizeof(JobPose) == 32);
 static_assert(sizeof(JobPath) == 32);
@@ -90,7 +90,7 @@ static_assert(sizeof(JobProgress) == 112);
 static_assert(sizeof(HardwareSnapshot) == 72);
 static_assert(sizeof(PoseSnapshot) == 40);
 static_assert(sizeof(CalibrationConfig) == 32);
-static_assert(sizeof(LogicConfig) == 432);
+static_assert(sizeof(LogicConfig) == 440);
 static_assert(sizeof(CalibrationStatus) == 64);
 static_assert(sizeof(CalibrationGoal) == 16);
 static_assert(sizeof(CalibrationOutcome) == 128);
@@ -131,7 +131,7 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::RestoreJob, &L::RefuseStart, &L::RefuseReset, &L::OnReleaseAnswered, &L::GeometryChanged, &L::SetHold,
       &L::SetGpsSettings, &L::NextJobStep, &L::OnJobPlanned, &L::OnJobPlanFailed, &L::OnJobProgress, &L::OnLegEnded,
       &L::OnTick, &L::OnBladeRefused, &L::TakeOverlayChanged, &L::SetRestartHold, &L::ReportRestart, &L::OnStopRelease,
-      &L::TakeEffects, &L::SetUnwritableFile, &L::AbandonStart);
+      &L::TakeEffects, &L::SetUnwritableFile, &L::AbandonStart, &L::SetTurningRadius);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};

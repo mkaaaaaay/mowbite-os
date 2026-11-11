@@ -630,7 +630,7 @@ TEST(LogicMowing, AFailedPlanOrLegPausesUntilContinue) {
   TestCore core = Ready();
   core.OnAction(kStart);
   core.NextJobStep(0);
-  core.OnJobPlanFailed("no lanes fit");
+  core.OnJobPlanFailed(Reason("PLANNING_FAILED", "no lanes fit"));
   EXPECT_EQ(core.RobotState().state, "PAUSED");
   EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kNone);
   core.OnAction(kMowing + "continue");
