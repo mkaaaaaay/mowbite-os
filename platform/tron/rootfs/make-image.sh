@@ -58,8 +58,7 @@ source "$HERE/../bundle/pack.sh"
 host_files HEAD "$work/host/usr/lib/mowbite-host"
 install -D -m 644 "$HERE/../../../host/boot/mowbite_boot.py" "$work/host/usr/lib/mowbite-boot/mowbite_boot.py"
 tar -C "$work/host" -rf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w --exclude=__pycache__ \
-    --no-recursion ./usr/lib/mowbite-host ./usr/lib/mowbite-host/bundle.json ./usr/lib/mowbite-boot \
-    ./usr/lib/mowbite-boot/mowbite_boot.py --recursion ./usr/lib/mowbite-host/mowbite_host
+    ./usr/lib/mowbite-host ./usr/lib/mowbite-boot
 # The web server of the MowBite App, from web/ of the repo; readable for its user despite the umask.
 install -d -m 755 "$work/web/usr/lib/mowbite-web"
 install -m 644 "$HERE/../../../web/mowbite_web.py" "$work/web/usr/lib/mowbite-web/"
