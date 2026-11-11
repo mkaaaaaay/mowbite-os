@@ -9,6 +9,17 @@ struct ExposureSetting {
   int gain = 64;
 };
 
+// Range of the two controls.
+struct ExposureRange {
+  int exposure_min = 0;
+  int exposure_max = 0;
+  int gain_min = 0;
+  int gain_max = 0;
+};
+
+// Setting for a product of exposure and gain: the gain stays at its minimum until the exposure is at its maximum.
+ExposureSetting SplitLight(double light, const ExposureRange& range);
+
 struct ExposureLimits {
   int exposure_min = 4;
   int exposure_max = 1120;

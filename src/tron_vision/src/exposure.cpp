@@ -11,16 +11,20 @@ ExposureSetting NextExposure(const ExposureSetting& now, float mean_y, const Exp
   const float factor = std::clamp((limits.target_y - limits.black) / signal, 1.0F / limits.max_step, limits.max_step);
   const double light = static_cast<double>(std::clamp(now.exposure, limits.exposure_min, limits.exposure_max)) *
                        std::clamp(now.gain, limits.gain_min, limits.gain_max) * factor;
+  return SplitLight(light, {limits.exposure_min, limits.exposure_max, limits.gain_min, limits.gain_max});
+}
+
+ExposureSetting SplitLight(double light, const ExposureRange& range) {
   ExposureSetting next;
-  if (light >= static_cast<double>(limits.exposure_max) * limits.gain_min) {
-    next.exposure = limits.exposure_max;
-    next.gain = static_cast<int>(std::clamp(std::lround(light / limits.exposure_max),
-                                            static_cast<long>(limits.gain_min), static_cast<long>(limits.gain_max)));
+  if (light >= static_cast<double>(range.exposure_max) * range.gain_min) {
+    next.exposure = range.exposure_max;
+    next.gain = static_cast<int>(std::clamp(std::lround(light / range.exposure_max),
+                                            static_cast<long>(range.gain_min), static_cast<long>(range.gain_max)));
   } else {
-    next.gain = limits.gain_min;
-    next.exposure = static_cast<int>(std::clamp(std::lround(light / limits.gain_min),
-                                                static_cast<long>(limits.exposure_min),
-                                                static_cast<long>(limits.exposure_max)));
+    next.gain = range.gain_min;
+    next.exposure = static_cast<int>(std::clamp(std::lround(light / range.gain_min),
+                                                static_cast<long>(range.exposure_min),
+                                                static_cast<long>(range.exposure_max)));
   }
   return next;
 }
