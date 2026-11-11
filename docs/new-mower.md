@@ -139,6 +139,12 @@ process is outside this watch and stops the mower by its own timeouts.
   the new one for 180 s; it confirms itself after 60 s of its main loop (and once connected, when the host before it
   was), else the next start goes back to the one before or to the seed and leaves a note for the result. After three
   starts in a boot that did not run 60 s the seed runs. Keep `Restart=always` and the watchdog on your service.
+- A tool of your rootfs that stops the OS itself (the safety measurement, on the Tron `mowbite-measure`) has to keep
+  the host off, which starts a stopped OS on `host.restart_os` and with every switch: stop `mowbite-host`, take
+  `/run/mowbite-host.lock` (flock, held until the tool is done) and go on only when `mowbite-update unfinished`
+  answers 0. While the lock is held, a host started again waits without the broker and `mowbite-update` refuses to
+  install, roll back and recover. A bundle of the host does not renew such a tool: the path of the lock and that
+  command stay as they are.
 - The app comes from `mowbite-web` (`web/mowbite_web.py`, standard library only): port 80 from
   `mowbite-web.socket`, the service as its own user `mowbite-web` in no group, no root, no capability, nothing to
   write. GET and HEAD only, `/cgi-bin/*` is always 404 (the app reads that as "no container"); only `/app.json`,

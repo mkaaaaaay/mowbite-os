@@ -5,6 +5,7 @@ as mowbite-host.
   mowbite-update rollback [--reset-jobs] [os|planner|app|host]          back to the installation before (default os)
   mowbite-update recover                                  after an update that did not finish (at boot)
   mowbite-update status
+  mowbite-update unfinished                               0 when no update is unfinished, else 1 and which
 
 A bundle is a tar of one directory <revision>/ with bundle.json (format 2: component, revision, serial, ...) beside
 what the component brings; its component is the one whose namespace (mowbite-os, mowbite-planner, mowbite-app,
@@ -18,6 +19,10 @@ begins its area again). The app has to go with the installed OS and switches at 
 before it, the planner and the app go back to the one the OS brings along. A bundle of the host is installed while
 mowbite-host is stopped and tried at its next start; without an installation before it, the host goes back to its
 seed in the rootfs.
+
+unfinished answers a tool of the rootfs that stops the OS itself (mowbite-measure). Such a tool stops mowbite-host and
+holds /run/mowbite-host.lock while it works, which keeps mowbite-host, install, rollback and recover off, and goes on
+only after a 0. A bundle of the host does not renew that tool: the command, its answer and the lock stay as they are.
 """
 import fcntl
 import os
@@ -105,7 +110,7 @@ def main(argv):
         signature = args[2] if len(args) == 3 else args[1] + ".sig"
     elif command == "rollback" and len(args) <= 2 and (args[1:] or ["os"])[0] in updater.COMPONENTS:
         component = (args[1:] or ["os"])[0]
-    elif args not in (["recover"], ["status"]) or reset_jobs:
+    elif args not in (["recover"], ["status"], ["unfinished"]) or reset_jobs:
         print(__doc__, file=sys.stderr)
         return 2
     tool = make(prefix, command in ("install", "rollback"))
@@ -113,6 +118,11 @@ def main(argv):
         for one in tool.installers.values():
             print("\n".join(one.status_lines()))
         return 0
+    if command == "unfinished":
+        lines = [line for one in tool.installers.values() for line in one.unfinished_lines()]
+        if lines:
+            print("\n".join(lines))
+        return 1 if lines else 0
     for place in (*tool.paths.places.values(), tool.paths.host):
         os.makedirs(place.opt, exist_ok=True)
     os.makedirs(os.path.dirname(tool.paths.lock), exist_ok=True)

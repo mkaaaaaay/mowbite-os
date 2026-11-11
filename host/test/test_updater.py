@@ -742,6 +742,10 @@ class ProcessCarrierTest(unittest.TestCase):
 
 
 class HelpersTest(unittest.TestCase):
+    # Tools of the rootfs take the lock by this path (mowbite-measure); a bundle of the host does not renew them.
+    def test_the_lock_keeps_its_path(self):
+        self.assertEqual(paths.Paths().lock, "/run/mowbite-host.lock")
+
     def test_window_left(self):
         at = time.struct_time((2026, 11, 11, 4, 59, 30, 2, 315, 0))
         self.assertEqual(updater.window_left(at, "05:00"), 30)

@@ -5,6 +5,7 @@ files, a closed gate; an app installed while the OS mows.
 
   python3 -I host/test/test_e2e.py   (needs mosquitto, ssh-keygen and paho-mqtt)
 """
+import fcntl
 import io
 import json
 import os
@@ -261,6 +262,14 @@ class EndToEnd(unittest.TestCase):
                               "last will of the host")
         self.host = None
 
+    # mowbite-update by hand under the prefix.
+    def by_hand(self, *args):
+        return subprocess.run([sys.executable, "-I", os.path.join(SBIN, "mowbite-update"), *args],
+                              env={**os.environ, "MOWBITE_UPDATE_PREFIX": self.P, "MOWBITE_HOST_LIB": LIB,
+                                   "MOWBITE_BOOT_LIB": BOOT,
+                                   "PATH": self.bin + os.pathsep + os.environ.get("PATH", "")},
+                              capture_output=True, text=True, timeout=WAIT)
+
     def fake_pids(self):
         pids = []
         for pid in filter(str.isdigit, os.listdir("/proc")):
@@ -383,11 +392,7 @@ class EndToEnd(unittest.TestCase):
         # By hand with mowbite-update it is refused for its serial.
         self.kill_host()
         old = self.bundle("d000004", serial=1, folder=self.root)
-        tool = subprocess.run([sys.executable, "-I", os.path.join(SBIN, "mowbite-update"), "install", old],
-                              env={**os.environ, "MOWBITE_UPDATE_PREFIX": self.P, "MOWBITE_HOST_LIB": LIB,
-                                   "MOWBITE_BOOT_LIB": BOOT,
-                                   "PATH": self.bin + os.pathsep + os.environ.get("PATH", "")},
-                              capture_output=True, text=True, timeout=WAIT)
+        tool = self.by_hand("install", old)
         self.assertEqual(tool.returncode, 1, tool.stdout + tool.stderr)
         self.assertIn("OLD_SERIAL", tool.stdout + tool.stderr)
         self.assertEqual(self.current(), A)
@@ -579,6 +584,37 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(self.current("opt/mowbite-host"), B)
         self.assertEqual(self.component("host")["running"]["revision"], B)
         self.assertEqual(set(self.fake_pids()), os_pids, "the OS ran on")
+
+    # A tool that stopped the OS itself holds the lock of the host (mowbite-measure): a host started meanwhile waits
+    # without the broker and takes nothing back, mowbite-update is refused, and unfinished answers under the lock.
+    def test_host_waits_while_its_lock_is_held(self):
+        self.start_host()
+        self.install(A)
+        self.wait_os(A)
+        self.kill_host()
+        with open(self.pid_file()) as f:
+            os.killpg(int(f.read().split()[0]), signal.SIGINT)
+        until(lambda: not self.fake_pids(), what="the OS stopped")
+        self.assertEqual(self.by_hand("unfinished").returncode, 0)
+        pending = os.path.join(self.P, "opt/mowbite/pending")
+        with open(pending, "w") as f:
+            json.dump({"to": A, "from": A, "ran": True}, f)
+        with open(os.path.join(self.P, "run/mowbite-host.lock"), "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.start_host(wait=False)
+            log = os.path.join(self.root, f"host-{self.starts}.log")
+            until(lambda: "waiting for it" in open(log).read(), what="the host waiting for its lock")
+            time.sleep(1.5)
+            self.assertIsNone(self.host.poll())
+            self.assertIsNot((self.app.statuses.get("mowbite/host/status") or {}).get("online"), True)
+            self.assertEqual((self.fake_pids(), os.path.lexists(pending)), ([], True))
+            asked = self.by_hand("unfinished")
+            self.assertEqual((asked.returncode, asked.stdout.startswith("os unfinished update: ")), (1, True), asked)
+            self.assertEqual(self.by_hand("recover").returncode, 1)
+            self.assertTrue(os.path.lexists(pending))
+        # The lock is free: the host takes the cut switch back and starts the OS that ran before it.
+        self.wait_os(A)
+        self.assertEqual(self.by_hand("unfinished").returncode, 0)
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

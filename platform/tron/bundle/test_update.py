@@ -3,6 +3,7 @@ its session file.
 
   python3 -I platform/tron/bundle/test_update.py
 """
+import contextlib
 import importlib.machinery
 import importlib.util
 import io
@@ -365,8 +366,37 @@ class UpdateTest(unittest.TestCase):
                      f"app current: {D}", "app in use: current"):
             self.assertIn(line, out.stdout.splitlines())
 
+    def unfinished(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = self.tool.main(["mowbite-update", "unfinished"])
+        return code, out.getvalue().splitlines()
+
+    # The contract with the tools of the rootfs (mowbite-measure): 0 only while no switch of any component is open.
+    def test_unfinished_names_every_open_switch(self):
+        self.assertEqual(self.unfinished(), (0, []))
+        self.install(self.bundle(A))
+        self.assertEqual(self.unfinished(), (0, []))
+        for component, opt in (("os", "opt/mowbite"), ("planner", PLANNER), ("app", APP), ("host", HOST)):
+            pending = os.path.join(self.prefix, opt, "pending")
+            for record in (json.dumps({"to": B, "from": A}), "cut off"):
+                self.write(pending, record)
+                code, lines = self.unfinished()
+                self.assertEqual((code, len(lines)), (1, 1), (component, lines))
+                self.assertTrue(lines[0].startswith(f"{component} unfinished update: "), lines)
+            os.remove(pending)
+        self.assertEqual(self.unfinished(), (0, []))
+
+    def test_unfinished_after_a_cut_switch(self):
+        self.install(self.bundle(A))
+        self.killed_during_health(B)
+        self.assertEqual(self.unfinished()[0], 1)
+        self.assertEqual(self.tool.main(["mowbite-update", "recover"]), 0)
+        self.assertEqual(self.unfinished(), (0, []))
+
     def test_usage(self):
-        for args in ([], ["rollback", "camera"], ["status", "--reset-jobs"], ["install"], ["recover", "os"]):
+        for args in ([], ["rollback", "camera"], ["status", "--reset-jobs"], ["install"], ["recover", "os"],
+                     ["unfinished", "os"], ["unfinished", "--reset-jobs"]):
             self.assertEqual(self.tool.main(["mowbite-update", *args]), 2, args)
 
     def test_signature_missing(self):
@@ -741,7 +771,7 @@ class BundleToolsTest(unittest.TestCase):
 
 
 A, B, C, D, E = "aaaaaaa", "bbbbbbb", "ccccccc", "ddddddd", "eeeeeee"
-PLANNER, APP = "opt/mowbite-planner", "opt/mowbite-app"
+PLANNER, APP, HOST = "opt/mowbite-planner", "opt/mowbite-app", "opt/mowbite-host"
 
 if __name__ == "__main__":
     unittest.main()

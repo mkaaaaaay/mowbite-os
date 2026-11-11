@@ -46,6 +46,8 @@ class Paths:
         self.var = p + mowbite_boot.VAR
         self.state = self.var + "/update.json"
         self.stage = self.var + "/stage"
+        # Held by mowbite-host while it runs, by mowbite-update while it works and by a tool of the rootfs that stops
+        # the OS itself (mowbite-measure): the path stays.
         self.lock = p + "/run/mowbite-host.lock"
         self.crash = p + "/run/mowbite/crash"
         self.boot_id = p + "/proc/sys/kernel/random/boot_id"

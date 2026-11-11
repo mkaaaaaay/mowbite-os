@@ -258,6 +258,12 @@ class Installer:
         files.remove(self.place.pending)
         files.sync_dir(self.place.opt)
 
+    # The line of a switch that did not finish; none without one.
+    def unfinished_lines(self):
+        if not os.path.lexists(self.place.pending):
+            return []
+        return [f"{self.place.component} unfinished update: {json.dumps(self.pending())}"]
+
     # current -> revision, or no current for None; then active of the planner and the app follows.
     def _set_current(self, revision):
         if revision:
@@ -406,9 +412,7 @@ class Installer:
                 lines.append(f"crash record: {self.paths.crash}")
             if os.path.lexists(self.paths.restart_hold):
                 lines.append(f"restart hold: {self.paths.restart_hold}")
-        if os.path.lexists(self.place.pending):
-            lines.append(f"{name} unfinished update: {json.dumps(self.pending())}")
-        return lines
+        return lines + self.unfinished_lines()
 
     # Where a rollback goes: the previous installation, or None for the one of the OS when an own one is installed
     # with none before it.
@@ -471,6 +475,4 @@ class HostInstaller(Installer):
 
     def status_lines(self):
         lines = [f"host current: {self.current() or '- (the seed)'}", f"host previous: {self.previous() or '-'}"]
-        if os.path.lexists(self.place.pending):
-            lines.append(f"host unfinished update: {json.dumps(self.pending())}")
-        return lines
+        return lines + self.unfinished_lines()
