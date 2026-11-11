@@ -775,23 +775,23 @@ std::vector<ActionGroup> LogicCore::Actions() const {
   const bool recording = state_ == State::kAreaRecording;
   const bool mowing = state_ == State::kMowing;
   std::vector<ActionGroup> groups;
-  groups.push_back({kRootPrefix, {{"reset_emergency", "Reset Emergency", true}}});
+  groups.push_back({kRootPrefix, {{"reset_emergency", "Release emergency stop", true}}});
   const Reason start = StartProblem();
   groups.push_back({kIdlePrefix,
-                    {{"start_mowing", "Start Mowing", start.empty(), start.code},
-                     {"start_area_recording", "Start Area Recording",
+                    {{"start_mowing", "Begin mowing", start.empty(), start.code},
+                     {"start_area_recording", "Record an area",
                       idle && !emergency_ && map_writable_ && HoldProblem().empty()},
-                     {"reset_job", "Reset Job", idle && job_.Unfinished()}}});
+                     {"reset_job", "Discard unfinished job", idle && job_.Unfinished()}}});
   // Pause and continue take turns, like in OpenMower; continue waits for the emergency to be reset.
   const bool waits = (pause_ & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
   groups.push_back({kMowingPrefix,
-                    {{"pause", "Pause Mowing", mowing && !waits},
-                     {"continue", "Continue Mowing", mowing && waits && !emergency_ && !Held()},
-                     {"abort_mowing", "Stop Mowing", mowing},
-                     {"skip_area", "Skip Area", mowing},
-                     {"skip_path", "Skip Path", mowing}}});
-  groups.push_back({kUndockingPrefix, {{"abort_undocking", "Stop Undocking", state_ == State::kUndocking}}});
-  groups.push_back({kDockingPrefix, {{"abort_docking", "Stop Docking", state_ == State::kDocking}}});
+                    {{"pause", "Pause", mowing && !waits},
+                     {"continue", "Resume", mowing && waits && !emergency_ && !Held()},
+                     {"abort_mowing", "End mowing", mowing},
+                     {"skip_area", "Next area", mowing},
+                     {"skip_path", "Next path", mowing}}});
+  groups.push_back({kUndockingPrefix, {{"abort_undocking", "Cancel undocking", state_ == State::kUndocking}}});
+  groups.push_back({kDockingPrefix, {{"abort_docking", "Cancel docking", state_ == State::kDocking}}});
   // The recorder decides while recording; outside of it all are off.
   const std::vector<bool> enabled = recorder_.Enabled();
   const std::vector<std::string>& names = AreaRecorder::ActionLabels();

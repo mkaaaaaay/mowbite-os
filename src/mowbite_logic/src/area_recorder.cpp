@@ -185,18 +185,18 @@ const std::vector<std::string>& AreaRecorder::ActionNames() {
 }
 
 const std::vector<std::string>& AreaRecorder::ActionLabels() {
-  static const std::vector<std::string> labels = {"Start Recording",
-                                                  "Stop Recording",
-                                                  "Save Navigation Area",
-                                                  "Save Mowing Area",
-                                                  "Exit",
-                                                  "Discard Area",
-                                                  "Record Docking point",
-                                                  "Enable automatic point collecting",
-                                                  "Disable automatic point collecting",
-                                                  "Collect point",
-                                                  "Start manual mowing",
-                                                  "Stop manual mowing",
+  static const std::vector<std::string> labels = {"Begin outline",
+                                                  "End outline",
+                                                  "Keep as navigation area",
+                                                  "Keep as mowing area",
+                                                  "Leave recording",
+                                                  "Drop outline",
+                                                  "Set dock position",
+                                                  "Automatic points on",
+                                                  "Automatic points off",
+                                                  "Add point",
+                                                  "Manual blade on",
+                                                  "Manual blade off",
                                                   "Undo points"};
   return labels;
 }

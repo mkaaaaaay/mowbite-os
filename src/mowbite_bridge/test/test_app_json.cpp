@@ -151,9 +151,9 @@ TEST(Sensors, ListOnlyTheIdsAskedFor) {
 TEST(Actions, GroupsSortedByPrefixItemsInTheirOrder) {
   const std::map<std::string, std::vector<ActionItem>> groups = {
       {"mower_logic:mowing", {{"pause", "Pause", false}, {"abort_mowing", "Stop", true}}},
-      {"mower_logic", {{"reset_emergency", "Reset Emergency", true}}}};
+      {"mower_logic", {{"reset_emergency", "Release emergency stop", true}}}};
   EXPECT_EQ(ActionsText(groups),
-            R"([{"action_id":"mower_logic/reset_emergency","action_name":"Reset Emergency","enabled":1},)"
+            R"([{"action_id":"mower_logic/reset_emergency","action_name":"Release emergency stop","enabled":1},)"
             R"({"action_id":"mower_logic:mowing/pause","action_name":"Pause","enabled":0},)"
             R"({"action_id":"mower_logic:mowing/abort_mowing","action_name":"Stop","enabled":1}])");
   EXPECT_EQ(ActionsText({}), "[]");
@@ -162,12 +162,12 @@ TEST(Actions, GroupsSortedByPrefixItemsInTheirOrder) {
 // I2: the reason of an action that is off, never of one that works.
 TEST(Actions, ReasonOnlyWhileOff) {
   const std::map<std::string, std::vector<ActionItem>> off = {
-      {"mower_logic:idle", {{"start_mowing", "Start Mowing", false, "NO_POSITION"}}}};
-  EXPECT_EQ(ActionsText(off), R"([{"action_id":"mower_logic:idle/start_mowing","action_name":"Start Mowing",)"
+      {"mower_logic:idle", {{"start_mowing", "Begin mowing", false, "NO_POSITION"}}}};
+  EXPECT_EQ(ActionsText(off), R"([{"action_id":"mower_logic:idle/start_mowing","action_name":"Begin mowing",)"
                               R"("enabled":0,"reason":"NO_POSITION"}])");
   const std::map<std::string, std::vector<ActionItem>> on = {
-      {"mower_logic:idle", {{"start_mowing", "Start Mowing", true, "NO_POSITION"}}}};
-  EXPECT_EQ(ActionsText(on), R"([{"action_id":"mower_logic:idle/start_mowing","action_name":"Start Mowing",)"
+      {"mower_logic:idle", {{"start_mowing", "Begin mowing", true, "NO_POSITION"}}}};
+  EXPECT_EQ(ActionsText(on), R"([{"action_id":"mower_logic:idle/start_mowing","action_name":"Begin mowing",)"
                              R"("enabled":1}])");
 }
 
