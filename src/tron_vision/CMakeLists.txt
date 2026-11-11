@@ -22,7 +22,7 @@ pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg)
 add_library(tron_vision_core STATIC src/npu_model.cpp src/model_check.cpp src/yolo_decode.cpp src/frame_convert.cpp
   src/exposure.cpp src/v4l2_camera.cpp src/crash_guard.cpp src/budget.cpp src/vision_loop.cpp src/tron_camera.cpp
   src/text_file.cpp src/preview.cpp src/h264_rtp.cpp src/rtsp_server.cpp src/h264_encoder.cpp src/stereo_camera.cpp
-  src/stereo_loop.cpp src/lens_model.cpp src/dock_marker.cpp)
+  src/stereo_loop.cpp src/lens_model.cpp src/dock_marker.cpp src/dock_pose.cpp)
 target_include_directories(tron_vision_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
