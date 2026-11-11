@@ -135,8 +135,8 @@ trap 'exit 143' TERM
 # its processes inherit it: nothing of the two starts the OS while tron_mcu runs alone.
 if host_up; then
     logger -t mowbite-measure "stopping $HOST for the measurement"
-    systemctl stop "$HOST" || fail "systemctl stop $HOST failed"
     host_stopped=1
+    systemctl stop "$HOST" || fail "systemctl stop $HOST failed"
 fi
 exec 8> "$HOST_LOCK"
 flock -n 8 || fail "mowbite-update works on an update: the measurement does not begin"
