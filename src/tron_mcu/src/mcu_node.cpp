@@ -492,7 +492,8 @@ class McuNode : public rclcpp::Node {
     add_firmware("cutter", cutter_version_);
     add_firmware("chassis", chassis_version_);
     add_firmware("bms", bms_version_);
-    msg.blade_speed_control = true;
+    // The MCU holds about 3000 rpm whatever percent the cutter frame names (30 and 100 measured).
+    msg.blade_speed_control = false;
     msg.blade_height_control = true;
     msg.blade_height_min_mm = tron::kMinCutterHeightMm;
     msg.blade_height_max_mm = tron::kMaxCutterHeightMm;

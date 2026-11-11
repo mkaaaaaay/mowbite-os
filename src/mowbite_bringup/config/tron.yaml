@@ -29,7 +29,8 @@ tron_mcu:
     speed_repeat_window: 0.0
     telemetry_timeout: 1.0
     allow_blade: false
-    # Defaults for blade requests that leave speed or height at 0.
+    # Defaults for blade requests that leave speed or height at 0. The speed changes nothing on firmware 0.6.36: the
+    # motor turned at about 3000 rpm at 30 and at 100 % (measured 2026-11-11; below 30 and above 100 not measured).
     blade_speed_percent: 100
     mow_height_mm: 60
     # Longest blade lease in s; without a renewal the blade goes off when it runs out.
