@@ -278,6 +278,7 @@ TEST_F(StereoNodeTest, ReportsTheCameraLatched) {
   EXPECT_EQ(c.id, "stereo");
   EXPECT_EQ(c.process, "stereo");
   EXPECT_EQ(c.kind, Camera::KIND_STEREO);
+  EXPECT_EQ(c.position, Camera::POSITION_FRONT);
   EXPECT_EQ(c.width, 640U);
   EXPECT_EQ(c.height, 480U);
   EXPECT_FALSE(c.detections);
