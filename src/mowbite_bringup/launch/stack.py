@@ -278,6 +278,16 @@ def own_process(make, name, data_dir, logger, restarts=CONTAINER_RESTARTS, oom_s
                       name, logger, restarts, oom_score_adj)
 
 
+# mowbite_camera in a process of its own: camera.list and camera.stream for the cameras the platform reports on
+# hw/cameras. A platform with cameras starts it beside their processes; limits as own_process takes them.
+def camera_service(files, data_dir, logger, **limits):
+    return own_process(
+        lambda prefix: Node(package="mowbite_camera", executable="mowbite_camera_node", name="mowbite_camera",
+                            namespace="/", parameters=[*files, {"data_dir": data_dir}], output="screen",
+                            prefix=prefix, exec_name="mowbite_camera"),
+        "camera", data_dir, logger, **limits)
+
+
 # The container with these components, started again after a crash, and the planner. The driver of the platform runs
 # beside them in a process of its own and keeps motion and blade blocked until a release; the logic comes back idle.
 def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):

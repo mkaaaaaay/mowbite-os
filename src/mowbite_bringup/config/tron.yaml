@@ -351,6 +351,13 @@ tron_stereo:
     # driver while mowing the blade may run without the host until the restart; how long is not measured.
     stream_while_mowing: true
 
+# mowbite_camera, the pictures of these cameras for the app (starts with either switch): mjpeg_port, webrtc_port,
+# ice_port, media_api_port, media_server and runtime_dir have the defaults of the node.
+mowbite_camera:
+  ros__parameters:
+    # The host in the addresses of camera.stream; empty: the IPv4 address of the default route at that moment.
+    public_host: ""
+
 mowbite_bridge:
   ros__parameters:
     mqtt_host: 127.0.0.1

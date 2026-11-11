@@ -42,4 +42,17 @@ def test_no_stereo_without_the_own_driver(tmp_path, monkeypatch, hardware):
 
 
 def test_another_value_starts_nothing(tmp_path, monkeypatch):
-    assert "tron_stereo_node" not in executables(tmp_path, monkeypatch, stereo="yes")
+    assert not {"tron_stereo_node", "mowbite_camera_node"} & executables(tmp_path, monkeypatch, stereo="yes")
+
+
+# The camera service comes with a camera process and only then.
+@pytest.mark.parametrize("switches", [{"stereo": "on"}, {"vision": "on"}, {"stereo": "on", "vision": "on"}])
+def test_the_camera_service_starts_with_a_camera(tmp_path, monkeypatch, switches):
+    assert "mowbite_camera_node" in executables(tmp_path, monkeypatch, **switches)
+
+
+def test_no_camera_service_without_a_camera(tmp_path, monkeypatch):
+    assert "mowbite_camera_node" not in executables(tmp_path, monkeypatch)
+    for hardware in ("read", "false"):
+        started = executables(tmp_path, monkeypatch, hardware=hardware, stereo="on", vision="on")
+        assert started and "mowbite_camera_node" not in started

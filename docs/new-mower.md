@@ -182,6 +182,11 @@ A camera of the mower, shown in the app, optionally with object detection for di
 example: `tron_vision` (camera AI) and `tron_stereo` (live picture) with their start in `tron.launch.py` and their
 parameters in `config/tron.yaml`.
 
+The platform makes the pictures, the OS takes them to the app: `mowbite_camera` keeps the cameras of `hw/cameras`,
+answers `camera.list` and `camera.stream` (both show up in `rpc.methods` with the first camera), lets two viewers in
+at a time and gives each an address with a token of its own. The first list is what a camera process has to do, the
+second what `mowbite_camera` needs around it.
+
 - A process of its own, never a component of the container: a crash of a vendor library takes nothing else along.
   Start it from the start file with `stack.own_process` only when the drivers run and a switch in
   `/etc/mowbite/os.conf` says so. It restarts at most three times and leaves `<name>_exit.json`; give it
@@ -195,12 +200,14 @@ parameters in `config/tron.yaml`.
 - A thread of its own beside the ROS thread signs the watch of the process after each step (`mowbite_watch`: `Attach`
   for the node, a `Watch` for the thread); a step that hangs in a vendor library then ends the process (code 86).
 - Protocol `mjpeg`: JPEG on `camera/<id>/jpeg` (`sensor_msgs/CompressedImage`, best effort, depth 1), made only while
-  someone subscribes, with a rate and a size limit as platform parameters. The OS serves it to the app.
+  someone subscribes, with a rate and a size limit as platform parameters. The OS subscribes while a viewer is
+  connected and serves the pictures to the app.
 - Protocol `webrtc`, for a smooth live picture: the process is an RTSP camera on the loopback address (H.264
-  constrained baseline, RTP over the RTSP connection, its address as `source` in `hw/cameras`), and the OS pulls from
-  it only while someone watches. The connection is the viewer signal: PLAY starts the camera, its end stops it, and
-  while the camera cannot stream DESCRIBE answers 503. The parts without ROS are in `tron_vision` (`rtsp_server`,
-  `h264_rtp`, `stereo_loop`); a hardware encoder is loaded at run time like the other vendor libraries.
+  constrained baseline, RTP over the RTSP connection, its address `rtsp://127.0.0.1:<port>/<id>` as `source` in
+  `hw/cameras`; the OS takes no other form), and the OS pulls from it only while someone watches. The connection is
+  the viewer signal: PLAY starts the camera, its end stops it, and while the camera cannot stream DESCRIBE answers
+  503. The parts without ROS are in `tron_vision` (`rtsp_server`, `h264_rtp`, `stereo_loop`); a hardware encoder is
+  loaded at run time like the other vendor libraries.
 - A stream whose driver can crash the kernel does not run next to the blade by default: the loop ends it when the
   blade starts (`BLADE_RUNNING`) or the state of the mower is unknown (`DRIVER_MISSING`: no `hw/status` yet or the
   last one older than 1 s by the time it came, not by its stamp), and tests the camera once per boot while the mower
@@ -223,6 +230,25 @@ parameters in `config/tron.yaml`.
 - Settings of a camera that need register writes (exposure control of the Tron's bridge chip, `tron-stereo-ae`) come
   from the setup at boot, read back, before it reports the camera ready; the node never writes to i2c.
 
+Around `mowbite_camera`:
+
+- Start it beside the camera processes and only with them: `stack.camera_service(files, data_dir, logger, ...)` with
+  their limits (`tron.launch.py`). It is a process of its own too and leaves `camera_exit.json`.
+- The app has to reach `mjpeg_port` 8890 (HTTP, protocol `mjpeg`), `webrtc_port` 8889 (HTTP, the WHEP exchange of
+  protocol `webrtc`) and `ice_port` 8189 over UDP (its pictures). `media_api_port` 9997 and the RTSP sources stay on
+  the loopback address. Other ports go under `mowbite_camera` in the file of the platform.
+- `public_host` is the host in the addresses of `camera.stream`; empty, it is the IPv4 address of the default route
+  at that moment. Set it in the file of the mower when the app reaches the mower under another address. The
+  addresses are HTTP without TLS and hold for one connection each.
+- Protocol `webrtc` runs through a stream server (MediaMTX) that `mowbite_camera` starts as a child and watches. The
+  image of `docker/os.Dockerfile` brings the release pinned there, with its licence text, as `<install>/mediamtx/`;
+  elsewhere `media_server` names the program. Without it `mjpeg` works as before, `camera.stream` refuses `webrtc`
+  and a camera with no other protocol is listed as `NOT_SET_UP`. Its files lie in a folder `mowbite_camera` in
+  `runtime_dir`; by default that is `$RUNTIME_DIRECTORY` (systemd `RuntimeDirectory=`), else `/tmp`. It offers the
+  addresses of the interfaces it sees, so in Docker it needs the host network.
+- `position` in `hw/cameras` (`front`, `rear`, `left`, `right`; empty when unknown or not fixed) is what the app's
+  switch between cameras goes by.
+
 ## Check list
 
 - [ ] Driver package: protocol code with gtests, build without warnings
@@ -239,5 +265,5 @@ parameters in `config/tron.yaml`.
 - [ ] Safety measurement done, date set
 - [ ] Lights, if any: device rights, `output` on only after a look on the mower
 - [ ] Cameras, if any: own process, publisher list tested, hw/cameras entry, vendor files only on the mower, limits
-      measured
+      measured; `mowbite_camera` started with them, its ports reachable from the app, each protocol watched once
 - [ ] First drive watched: blade off, RTK fix, at most 0.3 m/s

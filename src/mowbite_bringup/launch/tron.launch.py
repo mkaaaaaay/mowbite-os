@@ -1,6 +1,7 @@
-# All nodes of MowBite OS in one process (one ROS context, one DDS participant) except four: tron_mcu, so that a crash
-# of any other node leaves its watchdogs running (G25), the MowBite Planner (Python, shapely), the camera AI and the
-# live picture of the stereo camera. The part every platform shares is in stack.py.
+# All nodes of MowBite OS in one process (one ROS context, one DDS participant) except five: tron_mcu, so that a crash
+# of any other node leaves its watchdogs running (G25), the MowBite Planner (Python, shapely), the camera AI, the live
+# picture of the stereo camera and, with one of these two, the camera service. The part every platform shares is in
+# stack.py.
 import os
 import sys
 
@@ -75,14 +76,21 @@ def launch_setup(context):
         logger.warning("hardware:=read: tron_mcu and tron_imu only listen, nothing moves; tron_gnss does not start")
         return [mcu, *stack.container_and_planner([imu, *nodes], data_dir, files, logger, oom)]
     # Only here: with hardware:=read another host drives the blade, and blade_on of hw/status would always be false.
-    return [mcu, *camera(files, data_dir, arg("vision"), logger, "vision", "tron_vision_node", "tron_vision"),
-            *camera(files, data_dir, arg("stereo"), logger, "stereo", "tron_stereo_node", "tron_stereo"),
+    cameras = [*camera(files, data_dir, arg("vision"), logger, "vision", "tron_vision_node", "tron_vision"),
+               *camera(files, data_dir, arg("stereo"), logger, "stereo", "tron_stereo_node", "tron_stereo")]
+    # The camera service of the OS shows their pictures in the app; without a camera process it has none to show.
+    if cameras:
+        cameras += stack.camera_service(files, data_dir, logger, **CAMERA_LIMITS)
+    return [mcu, *cameras,
             *stack.container_and_planner([gnss, imu, *nodes, light, sound], data_dir, files, logger, oom)]
 
 
+# What every process around the cameras gets: the kernel ends it first when memory runs out, and it keeps CPU 4-7 free.
+CAMERA_LIMITS = {"oom_score_adj": 1000, "nice": 10, "cpus": "0-3"}
+
+
 # A camera process of tron_vision with <process>:=on, each of its own, so that a crash of the NPU runtime or of the
-# media library takes nothing along. They only report; the kernel ends them first when memory runs out, and they keep
-# CPU 4-7 free.
+# media library takes nothing along. They only report.
 def camera(files, data_dir, switch, logger, process, executable, name):
     if switch != "on":
         # Another value in os.conf must not stop the stack.
@@ -94,7 +102,7 @@ def camera(files, data_dir, switch, logger, process, executable, name):
         lambda prefix: Node(package="tron_vision", executable=executable, name=name, namespace="/",
                             parameters=[*files, {"process": process}], output="screen", prefix=prefix,
                             exec_name=name),
-        process, data_dir, logger, oom_score_adj=1000, nice=10, cpus="0-3")
+        process, data_dir, logger, **CAMERA_LIMITS)
 
 
 def generate_launch_description():
