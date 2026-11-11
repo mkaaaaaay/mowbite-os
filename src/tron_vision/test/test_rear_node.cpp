@@ -1,0 +1,360 @@
+#include <gtest/gtest.h>
+#include <linux/videodev2.h>
+
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstdlib>
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <mowbite_msgs/msg/dock_marker.hpp>
+#include <mutex>
+#include <rclcpp/rclcpp.hpp>
+#include <set>
+#include <std_msgs/msg/empty.hpp>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "dock_jpeg.h"
+#include "fake_video_device.h"
+#include "mowbite_watch/watch.h"
+#include "test_util.h"
+#include "tron_vision/rear_node.h"
+
+namespace tron_vision {
+namespace {
+
+using diagnostic_msgs::msg::DiagnosticArray;
+using mowbite_msgs::msg::DockMarker;
+using Clock = std::chrono::steady_clock;
+using namespace std::chrono_literals;
+
+// One ROS context for all tests: once ROS has shut down, the watch of the process only counts its shutdown limit.
+class RearNodeTest : public ::testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    rclcpp::init(0, nullptr);
+  }
+  static void TearDownTestSuite() {
+    rclcpp::shutdown();
+  }
+};
+
+// The marker half a meter behind the camera of the rear scene, as the camera sends it.
+const std::vector<uint8_t>& MarkerJpeg() {
+  static const std::vector<uint8_t> jpeg = [] {
+    test::Scene s = test::RearScene();
+    s.markers = {test::Behind(s, 0.5, 0.03, 0.1)};
+    return test::EncodeJpeg(test::Render(s));
+  }();
+  return jpeg;
+}
+
+// The UVC camera with a frame every 33 ms of real time while it streams.
+class TimedRearDevice : public test::FakeVideoDevice {
+ public:
+  TimedRearDevice() {
+    caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
+    stride = 0;
+    buffer_bytes = 1920 * 1080 * 2;
+    frame_period_us = 33333;
+    controls[V4L2_CID_EXPOSURE_AUTO] = {0, 3, V4L2_EXPOSURE_APERTURE_PRIORITY, 0};
+    controls[V4L2_CID_EXPOSURE_ABSOLUTE] = {1, 5000, 313, 0};
+    controls[V4L2_CID_GAIN] = {0, 63, 10, 0};
+    on_wait = [this](int timeout_ms) {
+      if (hang) std::this_thread::sleep_for(30s);
+      if (!streaming) return;
+      const auto now = Clock::now();
+      if (due_ < now - 1s) due_ = now + 33ms;
+      std::this_thread::sleep_for(std::min<Clock::duration>(due_ - now, std::chrono::milliseconds(timeout_ms)));
+      if (Clock::now() >= due_) {
+        // Taken one frame period ago on the monotonic clock, as the driver stamps it; PushBytes adds one period.
+        timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count() -
+                       2 * frame_period_us;
+        PushBytes(MarkerJpeg());
+        due_ += 33ms;
+      }
+    };
+  }
+  int Ioctl(int fd, unsigned long request, void* arg) override {
+    const int result = FakeVideoDevice::Ioctl(fd, request, arg);
+    if (request == VIDIOC_STREAMON && result == 0) ons++;
+    if (request == VIDIOC_STREAMOFF && result == 0) offs++;
+    return result;
+  }
+
+  std::atomic<int> ons{0};
+  std::atomic<int> offs{0};
+  std::atomic<bool> hang{false};
+
+ private:
+  Clock::time_point due_{};
+};
+
+// Spins the nodes in a thread of its own, keeps what comes on hw/dock_marker and tron_rear/marker_pixels and sends
+// requests.
+class Spinner {
+ public:
+  Spinner() : listener_(std::make_shared<rclcpp::Node>("listener")) {
+    markers_sub_ = listener_->create_subscription<DockMarker>(
+        "hw/dock_marker", rclcpp::QoS(rclcpp::KeepLast(100)).reliable(), [this](const DockMarker& m) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          markers_.push_back({m, listener_->get_clock()->now()});
+        });
+    pixels_sub_ = listener_->create_subscription<DiagnosticArray>(
+        "tron_rear/marker_pixels", rclcpp::QoS(rclcpp::KeepLast(100)).best_effort(), [this](const DiagnosticArray& m) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          pixels_.push_back(m);
+        });
+    request_pub_ = listener_->create_publisher<std_msgs::msg::Empty>(
+        "hw/dock_marker_request", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile());
+    spinning_.add_node(listener_);
+  }
+  ~Spinner() {
+    spinning_.cancel();
+    if (thread_.joinable()) thread_.join();
+  }
+  void Add(const rclcpp::Node::SharedPtr& node) {
+    spinning_.add_node(node);
+  }
+  void Start() {
+    thread_ = std::thread([this] { spinning_.spin(); });
+  }
+  void Request() {
+    request_pub_->publish(std_msgs::msg::Empty());
+  }
+  // Requests every 0.5 s for this long.
+  void RequestFor(std::chrono::milliseconds time) {
+    const auto end = Clock::now() + time;
+    while (Clock::now() < end) {
+      Request();
+      std::this_thread::sleep_for(500ms);
+    }
+  }
+  bool WaitFor(const std::function<bool(const DockMarker&)>& meets, double seconds, DockMarker* got = nullptr) {
+    const auto end = Clock::now() + std::chrono::duration<double>(seconds);
+    while (Clock::now() < end) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!markers_.empty() && meets(markers_.back().msg)) {
+          if (got) *got = markers_.back().msg;
+          return true;
+        }
+      }
+      std::this_thread::sleep_for(5ms);
+    }
+    return false;
+  }
+
+  struct Received {
+    DockMarker msg;
+    rclcpp::Time at;
+  };
+  std::vector<Received> Markers() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return markers_;
+  }
+  std::vector<DiagnosticArray> Pixels() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return pixels_;
+  }
+
+ private:
+  rclcpp::Node::SharedPtr listener_;
+  rclcpp::Subscription<DockMarker>::SharedPtr markers_sub_;
+  rclcpp::Subscription<DiagnosticArray>::SharedPtr pixels_sub_;
+  rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr request_pub_;
+  rclcpp::executors::SingleThreadedExecutor spinning_;
+  std::mutex mutex_;
+  std::vector<Received> markers_;
+  std::vector<DiagnosticArray> pixels_;
+  std::thread thread_;
+};
+
+// The rear camera of the scene with its calibration as parameters.
+struct Rig {
+  Rig() {
+    // Drawn here: in the loop thread it would take longer than the watch allows in a build with sanitizers.
+    MarkerJpeg();
+    std::filesystem::create_directories(dir.Path() + "/markers");
+    dir.Write("statm", "30000 5000 900 1 0 20000 0\n");
+    seams.device = &device;
+    seams.crash_flag = dir.Path() + "/crash";
+    seams.adjust = [this](RearConfig& config, RearCameraConfig& camera) {
+      config.statm = dir.Path() + "/statm";
+      camera.device = dir.Write("mowbite-rear", "");
+      camera.processes_using = nullptr;
+    };
+  }
+  rclcpp::NodeOptions Options(bool calibrated = true) const {
+    const test::Scene s = test::RearScene();
+    rclcpp::NodeOptions options;
+    options.append_parameter_override("crash_dir", dir.Path() + "/markers");
+    if (calibrated) {
+      const LensModel& l = s.lens;
+      const CameraMount& m = s.mount;
+      options.append_parameter_override("lens", std::vector<double>{l.fx, l.fy, l.cx, l.cy, l.k1, l.k2, l.p1, l.p2, l.k3});
+      options.append_parameter_override("mount", std::vector<double>{m.x, m.y, m.z, m.yaw, m.pitch, m.roll});
+      options.append_parameter_override("marker_side", s.side);
+      options.append_parameter_override("marker_pattern", static_cast<int64_t>(test::kDockPattern));
+    }
+    return options;
+  }
+  std::shared_ptr<RearNode> Make(bool calibrated = true) {
+    return std::make_shared<RearNode>(Options(calibrated), seams);
+  }
+
+  test::TempDir dir;
+  TimedRearDevice device;
+  RearNodeSeams seams;
+};
+
+// It measures and nothing else: one subscription, two publishers, no client.
+TEST_F(RearNodeTest, TopicsOfTheDesignOnly) {
+  Rig rig;
+  auto node = rig.Make();
+  const std::set<std::string> allowed = {"/hw/dock_marker", "/tron_rear/marker_pixels", "/rosout", "/parameter_events"};
+  const auto graph = node->get_node_graph_interface();
+  const auto publishers = graph->get_publisher_names_and_types_by_node("tron_rear", "/");
+  EXPECT_TRUE(publishers.count("/hw/dock_marker"));
+  EXPECT_TRUE(publishers.count("/tron_rear/marker_pixels"));
+  for (const auto& [topic, types] : publishers) EXPECT_TRUE(allowed.count(topic)) << topic;
+  const auto subscribers = graph->get_subscriber_names_and_types_by_node("tron_rear", "/");
+  EXPECT_TRUE(subscribers.count("/hw/dock_marker_request"));
+  for (const auto& [topic, types] : subscribers) {
+    EXPECT_TRUE(topic == "/hw/dock_marker_request" || topic == "/parameter_events") << topic;
+  }
+  EXPECT_TRUE(graph->get_client_names_and_types_by_node("tron_rear", "/").empty());
+  const auto out = node->get_publishers_info_by_topic("/hw/dock_marker");
+  ASSERT_EQ(out.size(), 1U);
+  EXPECT_EQ(out[0].qos_profile().reliability(), rclcpp::ReliabilityPolicy::Reliable);
+  EXPECT_EQ(out[0].qos_profile().durability(), rclcpp::DurabilityPolicy::Volatile);
+  const auto in = node->get_subscriptions_info_by_topic("/hw/dock_marker_request");
+  ASSERT_EQ(in.size(), 1U);
+  EXPECT_EQ(in[0].qos_profile().reliability(), rclcpp::ReliabilityPolicy::Reliable);
+  EXPECT_EQ(in[0].qos_profile().durability(), rclcpp::DurabilityPolicy::Volatile);
+}
+
+TEST_F(RearNodeTest, RefusesWrongLimits) {
+  Rig rig;
+  rclcpp::NodeOptions options = rig.Options();
+  options.append_parameter_override("frame_gap_s", 1.0);
+  EXPECT_THROW(RearNode node(options, rig.seams), std::invalid_argument);
+  options = rig.Options();
+  options.append_parameter_override("eval_rate", 0.0);
+  EXPECT_THROW(RearNode node(options, rig.seams), std::invalid_argument);
+}
+
+// Without calibration: OFF with NOT_SET_UP at least once a second, a request does not open the camera.
+TEST_F(RearNodeTest, NotSetUpWithoutCalibration) {
+  Rig rig;
+  auto node = rig.Make(false);
+  Spinner spinner;
+  spinner.Add(node);
+  spinner.Start();
+  DockMarker m;
+  ASSERT_TRUE(spinner.WaitFor([](const DockMarker&) { return true; }, 5.0, &m));
+  EXPECT_EQ(m.state, DockMarker::STATE_OFF);
+  EXPECT_FALSE(m.valid);
+  EXPECT_EQ(m.reason, "NOT_SET_UP");
+  EXPECT_EQ(m.detail, "no lens, no camera mount, no marker side, no marker pattern");
+  EXPECT_EQ(m.header.frame_id, "base_link");
+  spinner.RequestFor(1500ms);
+  ASSERT_TRUE(spinner.WaitFor([](const DockMarker& d) { return d.state == DockMarker::STATE_FAULT; }, 1.0, &m));
+  EXPECT_EQ(m.reason, "NOT_SET_UP");
+  EXPECT_TRUE(rig.device.opened.empty());
+  const auto got = spinner.Markers();
+  for (size_t i = 1; i < got.size(); i++) EXPECT_LT((got[i].at - got[i - 1].at).seconds(), 1.0) << i;
+}
+
+// Over DDS: a request starts the camera, each image gives a measurement stamped with its capture time; three seconds
+// after the last request the camera is off again.
+TEST_F(RearNodeTest, MeasuresWhileAsked) {
+  Rig rig;
+  auto node = rig.Make();
+  Spinner spinner;
+  spinner.Add(node);
+  spinner.Start();
+  ASSERT_TRUE(spinner.WaitFor([](const DockMarker& m) { return m.state == DockMarker::STATE_OFF; }, 5.0));
+  spinner.RequestFor(2000ms);
+  const auto last_request = Clock::now() - 500ms;
+  EXPECT_EQ(rig.device.ons, 1);
+  ASSERT_TRUE(spinner.WaitFor([](const DockMarker& m) { return m.state == DockMarker::STATE_OFF; }, 4.0));
+  const double off_after = std::chrono::duration<double>(Clock::now() - last_request).count();
+  std::printf("last request to OFF: %.2f s\n", off_after);
+  EXPECT_GT(off_after, 2.9);
+  EXPECT_LT(off_after, 3.5);
+  EXPECT_EQ(rig.device.offs, 1);
+  EXPECT_FALSE(std::filesystem::exists(rig.dir.Path() + "/markers/stream-rear"));
+
+  int valid = 0;
+  int starting = 0;
+  for (const auto& [m, at] : spinner.Markers()) {
+    if (m.state == DockMarker::STATE_STARTING) starting++;
+    if (m.state != DockMarker::STATE_MEASURING) continue;
+    ASSERT_TRUE(m.valid) << m.reason << " " << m.detail;
+    valid++;
+    EXPECT_NEAR(m.x, -0.7, 0.003);
+    EXPECT_NEAR(m.y, 0.04, 0.003);
+    EXPECT_GT(m.covariance[0], 0.0);
+    EXPECT_EQ(m.reason, "");
+    EXPECT_EQ(m.header.frame_id, "base_link");
+    // Taken one frame before it came, measured and sent within a few tens of milliseconds.
+    const double age = (at - rclcpp::Time(m.header.stamp)).seconds();
+    EXPECT_GT(age, 0.03);
+    EXPECT_LT(age, 0.5);
+  }
+  EXPECT_GE(starting, 1);
+  std::printf("valid measurements: %d\n", valid);
+  EXPECT_GE(valid, 20);
+  const auto pixels = spinner.Pixels();
+  ASSERT_FALSE(pixels.empty());
+  const auto& status = pixels.back().status.at(0);
+  EXPECT_EQ(status.message, "found");
+  ASSERT_GE(status.values.size(), 1U);
+  EXPECT_EQ(status.values[0].key, "side_px");
+  EXPECT_GT(std::atof(status.values[0].value.c_str()), 50.0);
+  // The camera got its exposure back.
+  EXPECT_EQ(rig.device.controls[V4L2_CID_EXPOSURE_AUTO].value, V4L2_EXPOSURE_APERTURE_PRIORITY);
+  EXPECT_EQ(rig.device.controls[V4L2_CID_EXPOSURE_ABSOLUTE].value, 313);
+}
+
+// A loop thread that hangs in the camera ends the process with the code of the watch.
+TEST_F(RearNodeTest, LoopThatHangsEndsTheProcess) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  EXPECT_EXIT(
+      {
+        Rig rig;
+        rig.device.hang = true;
+        auto node = rig.Make();
+        Spinner spinner;
+        spinner.Add(node);
+        spinner.Start();
+        spinner.RequestFor(10s);
+        std::_Exit(0);
+      },
+      ::testing::ExitedWithCode(mowbite_watch::kExitCode), "tron_rear_loop silent");
+}
+
+TEST(DockReasonText, NamesOfTheMessage) {
+  const std::vector<std::pair<DockReason, std::string>> names = {
+      {DockReason::kNone, ""},
+      {DockReason::kNoMarker, "NO_MARKER"},
+      {DockReason::kMarkerClipped, "MARKER_CLIPPED"},
+      {DockReason::kMarkerAmbiguous, "MARKER_AMBIGUOUS"},
+      {DockReason::kTooDark, "TOO_DARK"},
+      {DockReason::kTooBright, "TOO_BRIGHT"},
+      {DockReason::kBlurred, "BLURRED"},
+      {DockReason::kFitRejected, "FIT_REJECTED"},
+      {DockReason::kNoSignal, "NO_SIGNAL"},
+      {DockReason::kNotSetUp, "NOT_SET_UP"},
+      {DockReason::kLockedAfterCrash, "LOCKED_AFTER_CRASH"},
+      {DockReason::kTooHot, "TOO_HOT"}};
+  for (const auto& [reason, name] : names) EXPECT_EQ(DockReasonText(reason), name);
+}
+
+}  // namespace
+}  // namespace tron_vision

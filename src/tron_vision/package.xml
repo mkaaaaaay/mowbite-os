@@ -3,7 +3,7 @@
 <package format="3">
   <name>tron_vision</name>
   <version>0.0.0</version>
-  <description>Cameras of the Airseekers Tron: object detection on its NPU for display, live picture of the stereo camera</description>
+  <description>Cameras of the Airseekers Tron: object detection for display, stereo live picture, dock marker</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
   <license>GPL-3.0</license>
 
@@ -11,6 +11,8 @@
   <depend>rclcpp</depend>
   <depend>mowbite_msgs</depend>
   <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>diagnostic_msgs</depend>
   <depend>libturbojpeg</depend>
   <depend>tron_mcu</depend>
   <depend>mowbite_watch</depend>

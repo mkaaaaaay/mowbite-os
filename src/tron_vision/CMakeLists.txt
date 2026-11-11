@@ -14,15 +14,18 @@ find_package(tron_mcu REQUIRED)
 find_package(mowbite_watch REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg)
 
-# Cameras, exposure, NPU model, detection decoding, pictures and the H.264 stream without ROS. The NPU runtime and
-# the media library of the encoder are loaded at run time, never linked.
+# Cameras, exposure, NPU model, detection decoding, pictures, the H.264 stream and the marker of the docking station
+# without ROS. The NPU runtime and the media library of the encoder are loaded at run time, never linked.
 add_library(tron_vision_core STATIC src/npu_model.cpp src/model_check.cpp src/yolo_decode.cpp src/frame_convert.cpp
   src/exposure.cpp src/v4l2_camera.cpp src/crash_guard.cpp src/budget.cpp src/vision_loop.cpp src/tron_camera.cpp
   src/text_file.cpp src/preview.cpp src/h264_rtp.cpp src/rtsp_server.cpp src/h264_encoder.cpp src/stereo_camera.cpp
-  src/stereo_loop.cpp)
+  src/stereo_loop.cpp src/lens_model.cpp src/dock_marker.cpp src/dock_pose.cpp src/dock_exposure.cpp
+  src/jpeg_luma.cpp src/rear_camera.cpp src/rear_loop.cpp)
 target_include_directories(tron_vision_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -44,6 +47,14 @@ ament_target_dependencies(tron_stereo_node_lib rclcpp mowbite_msgs ament_index_c
 add_executable(tron_stereo_node src/stereo_node_main.cpp)
 target_link_libraries(tron_stereo_node tron_stereo_node_lib)
 install(TARGETS tron_stereo_node RUNTIME DESTINATION lib/${PROJECT_NAME})
+
+# The dock marker seen by the rear camera, a process of its own: a crash in the USB camera takes nothing else along.
+add_library(tron_rear_node_lib STATIC src/rear_node.cpp)
+target_link_libraries(tron_rear_node_lib tron_vision_core tron_mcu::tron_mcu_core mowbite_watch::mowbite_watch)
+ament_target_dependencies(tron_rear_node_lib rclcpp mowbite_msgs std_msgs diagnostic_msgs)
+add_executable(tron_rear_node src/rear_node_main.cpp)
+target_link_libraries(tron_rear_node tron_rear_node_lib)
+install(TARGETS tron_rear_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY include/ DESTINATION include)
 install(TARGETS tron_vision_core
@@ -74,12 +85,18 @@ if(BUILD_TESTING)
                   test/test_vision_loop.cpp test/test_tron_camera.cpp test/test_preview.cpp
                   test/test_v4l2_capture.cpp test/test_h264_rtp.cpp test/test_rtsp_server.cpp
                   test/test_h264_encoder.cpp test/test_stereo_camera.cpp test/test_stereo_loop.cpp
+                  test/test_rear_camera.cpp
                   # The loops are tested in real time, about a minute in all.
                   TIMEOUT 180)
   target_link_libraries(tron_vision_test tron_vision_core)
   target_compile_definitions(tron_vision_test PRIVATE FAKE_NPU_LIB="$<TARGET_FILE:tron_vision_fake_npu>"
                              FAKE_MPP_LIB="$<TARGET_FILE:tron_vision_fake_mpp>")
   add_dependencies(tron_vision_test tron_vision_fake_npu tron_vision_fake_mpp)
+  # The marker of the docking station on drawn images; a test of its own, it takes a while with the sanitizers.
+  ament_add_gtest(tron_vision_dock_test test/test_lens_model.cpp test/test_dock_marker.cpp test/test_dock_pose.cpp
+                  test/test_dock_exposure.cpp test/test_jpeg_luma.cpp test/test_rear_loop.cpp
+                  TIMEOUT 300)
+  target_link_libraries(tron_vision_dock_test tron_vision_core)
   # The stream without the Tron, for a trial by hand against a real RTSP client.
   add_executable(tron_stereo_trial test/stereo_trial.cpp)
   target_link_libraries(tron_stereo_trial tron_vision_core)
@@ -89,6 +106,8 @@ if(BUILD_TESTING)
   target_link_libraries(tron_stereo_node_test tron_stereo_node_lib)
   target_compile_definitions(tron_stereo_node_test PRIVATE FAKE_MPP_LIB="$<TARGET_FILE:tron_vision_fake_mpp>")
   add_dependencies(tron_stereo_node_test tron_vision_fake_mpp)
+  ament_add_gtest(tron_rear_node_test test/test_rear_node.cpp TIMEOUT 120)
+  target_link_libraries(tron_rear_node_test tron_rear_node_lib)
 endif()
 
 ament_export_targets(export_tron_vision HAS_LIBRARY_TARGET)

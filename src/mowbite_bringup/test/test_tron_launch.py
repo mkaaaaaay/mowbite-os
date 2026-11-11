@@ -22,7 +22,7 @@ def executables(tmp_path, monkeypatch, **switches):
     values = {"data_dir": str(tmp_path / "data"), "config": "tron.yaml", "extra_config": "tron.yaml",
               "geometry": "geometry.yaml", "mcu_port": "/dev/ttyS9", "gnss_port": "/dev/ttyS4", "imu_port": "/dev/ttyS1",
               "hardware": "true", "datum_lat": "nan", "datum_long": "nan", "datum_height": "0.0", "vision": "off",
-              "stereo": "off", "mqtt_host": "127.0.0.1", "mqtt_port": "1883", "journal_dir": "", "oom_score_adj": ""}
+              "stereo": "off", "rear": "off", "mqtt_host": "127.0.0.1", "mqtt_port": "1883", "journal_dir": "", "oom_score_adj": ""}
     values.update(switches)
     context.launch_configurations.update(values)
     return {a.node_executable for a in tron_launch.launch_setup(context) if isinstance(a, Node)}
@@ -34,15 +34,21 @@ def test_stereo_starts_with_the_hardware_and_its_switch(tmp_path, monkeypatch):
     assert "tron_vision_node" not in executables(tmp_path, monkeypatch, stereo="on")
 
 
+def test_rear_starts_with_the_hardware_and_its_switch(tmp_path, monkeypatch):
+    assert "tron_rear_node" in executables(tmp_path, monkeypatch, rear="on")
+    assert "tron_rear_node" not in executables(tmp_path, monkeypatch, stereo="on", vision="on")
+
+
 # With hardware:=read another host drives the blade; without hardware nothing reports it.
 @pytest.mark.parametrize("hardware", ["read", "false"])
-def test_no_stereo_without_the_own_driver(tmp_path, monkeypatch, hardware):
-    started = executables(tmp_path, monkeypatch, hardware=hardware, stereo="on", vision="on")
-    assert started and not {"tron_stereo_node", "tron_vision_node"} & started
+def test_no_camera_without_the_own_driver(tmp_path, monkeypatch, hardware):
+    started = executables(tmp_path, monkeypatch, hardware=hardware, stereo="on", vision="on", rear="on")
+    assert started and not {"tron_stereo_node", "tron_vision_node", "tron_rear_node"} & started
 
 
 def test_another_value_starts_nothing(tmp_path, monkeypatch):
     assert not {"tron_stereo_node", "mowbite_camera_node"} & executables(tmp_path, monkeypatch, stereo="yes")
+    assert "tron_rear_node" not in executables(tmp_path, monkeypatch, rear="1")
 
 
 # The camera service comes with a camera process and only then.

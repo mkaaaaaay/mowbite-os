@@ -1,0 +1,3 @@
+# Fixed name for the capture node of the rear camera (USB, UVC); tron_rear_node runs as mowbite in the group video.
+SUBSYSTEM=="video4linux", KERNEL=="video*", ATTR{index}=="0", ATTRS{idVendor}=="32e6", ATTRS{idProduct}=="9221", \
+  SYMLINK+="mowbite-rear", GROUP="video", MODE="0660"

@@ -27,6 +27,8 @@ without ROS in a library of its own with gtests; the node stays thin.
 | publishes, latched | `gps/datum` | `sensor_msgs/NavSatFix` |
 | publishes | `gnss/gga` | `std_msgs/String` (for the NTRIP caster) |
 | subscribes | `gnss/rtcm` | `mowbite_msgs/Rtcm` |
+| publishes, optional | `hw/dock_marker` | `mowbite_msgs/DockMarker` |
+| subscribes, optional | `hw/dock_marker_request` | `std_msgs/Empty` |
 
 Duties:
 
@@ -49,6 +51,10 @@ Duties:
 - Limits until driving tests show more: 0.3 m/s and 0.3 rad/s.
 - Before opening a port: no other process holds it.
 - A restarted driver starts latched (`start_latched`).
+- Dock marker (optional): a process of its own that measures only while asked on `hw/dock_marker_request`, one
+  image per message on `hw/dock_marker`, never an old or estimated pose; the times, states and reasons are in
+  `DockMarker.msg`. What the mower drives with it and when it stops is up to the logic. The Tron's process is
+  `tron_rear` (`tron_vision`, section 8).
 
 ## 2. Fake board
 
@@ -179,8 +185,8 @@ the emergency signal is fixed. Load it as a component of the container only when
 ## 8. Cameras (optional)
 
 A camera of the mower, shown in the app, optionally with object detection for display only. The Tron's setup is the
-example: `tron_vision` (camera AI) and `tron_stereo` (live picture) with their start in `tron.launch.py` and their
-parameters in `config/tron.yaml`.
+example: `tron_vision` (camera AI), `tron_stereo` (live picture) and `tron_rear` (dock marker) with their start in
+`tron.launch.py` and their parameters in `config/tron.yaml`.
 
 The platform makes the pictures, the OS takes them to the app: `mowbite_camera` keeps the cameras of `hw/cameras`,
 answers `camera.list` and `camera.stream` (both show up in `rpc.methods` with the first camera), lets two viewers in
@@ -227,6 +233,11 @@ second what `mowbite_camera` needs around it.
 - The service user needs the devices: on a native rootfs groups like `video` and `render`
   (`platform/tron/rootfs/files/usr/lib/sysusers.d/mowbite.conf`) and udev rules for devices that are root only, such
   as a hardware encoder and the dma-buf heaps (`60-mowbite-stereo.rules`); in Docker the devices passed in.
+- A camera that measures for the logic, like the dock marker (section 1), has its own process too and opens the
+  camera only while asked. Its calibration (lens, mount, marker) has no defaults in the code: what is missing makes it
+  report `NOT_SET_UP` and never measure. A USB camera gets a fixed name by a udev rule on its USB id
+  (`60-mowbite-rear.rules`), never `/dev/videoN`. Pixel values for measurements go on a topic outside `hw/*`
+  (`tron_rear/marker_pixels`).
 - Settings of a camera that need register writes (exposure control of the Tron's bridge chip, `tron-stereo-ae`) come
   from the setup at boot, read back, before it reports the camera ready; the node never writes to i2c.
 

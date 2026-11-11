@@ -76,6 +76,8 @@ class VideoDevice {
 enum class PixelFormat {
   kNv12,
   kYuyv,
+  // Compressed: a frame is as long as the driver says, the stride is 0.
+  kMjpeg,
 };
 
 struct CaptureFormat {
@@ -101,8 +103,16 @@ struct CapturedFrame {
   int dmabuf = -1;
 };
 
-// Capture of NV12 or YUYV with memory-mapped buffers on one video node, single- or multi-planar as the node reports.
-// Nothing but QUERYCAP, S_FMT, REQBUFS, QUERYBUF, EXPBUF, QBUF, DQBUF, STREAMON and STREAMOFF on that node.
+// A control of a video node with its range and its value when read.
+struct ControlRange {
+  int min = 0;
+  int max = 0;
+  int value = 0;
+};
+
+// Capture of NV12, YUYV or MJPEG with memory-mapped buffers on one video node, single- or multi-planar as the node
+// reports. Nothing but QUERYCAP, S_FMT, REQBUFS, QUERYBUF, EXPBUF, QBUF, DQBUF, STREAMON and STREAMOFF on that node,
+// and QUERYCTRL, G_CTRL and S_CTRL for a caller that asks for a control.
 class V4l2Capture {
  public:
   // Without a device the real system calls are used.
@@ -127,7 +137,12 @@ class V4l2Capture {
   uint32_t Stride() const {
     return stride_;
   }
+  // 0 for MJPEG.
   size_t FrameBytes() const;
+
+  // Range and value of a control of the open node; false if it has none or it is disabled.
+  bool QueryControl(uint32_t id, ControlRange& range, std::string& error);
+  bool SetControl(uint32_t id, int value, std::string& error);
 
  private:
   bool Fail(std::string message, std::string& error);
@@ -149,6 +164,22 @@ class V4l2Capture {
   uint32_t stride_ = 0;
   std::vector<Buffer> buffers_;
   std::vector<int> exported_;
+};
+
+// A camera on a video node, for the loops.
+class FrameSource {
+ public:
+  virtual ~FrameSource() = default;
+  // Opens the video node and asks for its buffers; nothing streams yet.
+  virtual bool Open(std::string& error) = 0;
+  // The STREAMON of the node.
+  virtual bool Start(std::string& error) = 0;
+  // The STREAMOFF of the node; its buffers stay.
+  virtual void Stop() = 0;
+  // Stops, frees the buffers and closes the node.
+  virtual void Close() = 0;
+  // As V4l2Capture::Next.
+  virtual int Next(int timeout_ms, CapturedFrame& frame, std::string& error) = 0;
 };
 
 }  // namespace tron_vision

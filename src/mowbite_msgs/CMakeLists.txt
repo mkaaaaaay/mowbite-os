@@ -39,6 +39,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Detection.msg"
   "msg/Detections.msg"
   "msg/Camera.msg"
+  "msg/DockMarker.msg"
   "srv/AddArea.srv"
   "srv/ReplaceMap.srv"
   "srv/SetBlade.srv"

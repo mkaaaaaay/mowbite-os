@@ -16,22 +16,6 @@
 
 namespace tron_vision {
 
-// A camera whose frames come with their dma-buf.
-class FrameSource {
- public:
-  virtual ~FrameSource() = default;
-  // Opens the video node and asks for its buffers; nothing streams yet.
-  virtual bool Open(std::string& error) = 0;
-  // The STREAMON of the node.
-  virtual bool Start(std::string& error) = 0;
-  // The STREAMOFF of the node; its buffers stay.
-  virtual void Stop() = 0;
-  // Stops, frees the buffers and closes the node.
-  virtual void Close() = 0;
-  // As V4l2Capture::Next.
-  virtual int Next(int timeout_ms, CapturedFrame& frame, std::string& error) = 0;
-};
-
 struct StereoConfig {
   std::string camera_id = "stereo";
   // Result of the camera setup at boot; only the line "configured" lets the camera stream.
