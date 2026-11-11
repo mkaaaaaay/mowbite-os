@@ -12,8 +12,9 @@ constexpr uint32_t kStereoBytes = 2560 * 480;
 const CaptureFormat kStereo{1280, 480, PixelFormat::kYuyv, 4, true};
 
 // The stereo bridge and its sensors crash the kernel on enumerations, so the node sees these requests and no other.
-const std::set<unsigned long> kAllowed = {VIDIOC_QUERYCAP, VIDIOC_S_FMT,  VIDIOC_REQBUFS,  VIDIOC_QUERYBUF, VIDIOC_EXPBUF,
-                                          VIDIOC_QBUF,     VIDIOC_DQBUF,  VIDIOC_STREAMON, VIDIOC_STREAMOFF};
+const std::set<unsigned long> kAllowed = {VIDIOC_QUERYCAP, VIDIOC_S_FMT, VIDIOC_REQBUFS, VIDIOC_QUERYBUF,
+                                          VIDIOC_EXPBUF,   VIDIOC_QBUF,  VIDIOC_DQBUF,   VIDIOC_STREAMON,
+                                          VIDIOC_STREAMOFF};
 
 class V4l2CaptureTest : public ::testing::TestWithParam<bool> {
  protected:
