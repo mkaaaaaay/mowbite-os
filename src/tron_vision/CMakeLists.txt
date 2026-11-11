@@ -17,12 +17,12 @@ find_package(sensor_msgs REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg)
 
-# Cameras, exposure, NPU model, detection decoding, pictures and the H.264 stream without ROS. The NPU runtime and
-# the media library of the encoder are loaded at run time, never linked.
+# Cameras, exposure, NPU model, detection decoding, pictures, the H.264 stream and the marker of the docking station
+# without ROS. The NPU runtime and the media library of the encoder are loaded at run time, never linked.
 add_library(tron_vision_core STATIC src/npu_model.cpp src/model_check.cpp src/yolo_decode.cpp src/frame_convert.cpp
   src/exposure.cpp src/v4l2_camera.cpp src/crash_guard.cpp src/budget.cpp src/vision_loop.cpp src/tron_camera.cpp
   src/text_file.cpp src/preview.cpp src/h264_rtp.cpp src/rtsp_server.cpp src/h264_encoder.cpp src/stereo_camera.cpp
-  src/stereo_loop.cpp src/lens_model.cpp)
+  src/stereo_loop.cpp src/lens_model.cpp src/dock_marker.cpp)
 target_include_directories(tron_vision_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
