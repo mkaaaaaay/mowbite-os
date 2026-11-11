@@ -20,9 +20,10 @@ def executables(tmp_path, monkeypatch, **switches):
     monkeypatch.setattr(tron_launch.stack, "prepare_data_dir", lambda data_dir, logger: None)
     context = LaunchContext()
     values = {"data_dir": str(tmp_path / "data"), "config": "tron.yaml", "extra_config": "tron.yaml",
-              "geometry": "geometry.yaml", "mcu_port": "/dev/ttyS9", "gnss_port": "/dev/ttyS4", "imu_port": "/dev/ttyS1",
-              "hardware": "true", "datum_lat": "nan", "datum_long": "nan", "datum_height": "0.0", "vision": "off",
-              "stereo": "off", "rear": "off", "mqtt_host": "127.0.0.1", "mqtt_port": "1883", "journal_dir": "", "oom_score_adj": ""}
+              "geometry": "geometry.yaml", "mcu_port": "/dev/ttyS9", "gnss_port": "/dev/ttyS4",
+              "imu_port": "/dev/ttyS1", "hardware": "true", "datum_lat": "nan", "datum_long": "nan",
+              "datum_height": "0.0", "vision": "off", "stereo": "off", "rear": "off", "mqtt_host": "127.0.0.1",
+              "mqtt_port": "1883", "journal_dir": "", "oom_score_adj": ""}
     values.update(switches)
     context.launch_configurations.update(values)
     return {a.node_executable for a in tron_launch.launch_setup(context) if isinstance(a, Node)}
@@ -51,14 +52,16 @@ def test_another_value_starts_nothing(tmp_path, monkeypatch):
     assert "tron_rear_node" not in executables(tmp_path, monkeypatch, rear="1")
 
 
-# The camera service comes with a camera process and only then.
-@pytest.mark.parametrize("switches", [{"stereo": "on"}, {"vision": "on"}, {"stereo": "on", "vision": "on"}])
+# The camera service comes with a camera that has a picture on hw/cameras and only then; the dock marker has none.
+@pytest.mark.parametrize("switches", [{"stereo": "on"}, {"vision": "on"}, {"stereo": "on", "vision": "on"},
+                                      {"stereo": "on", "rear": "on"}])
 def test_the_camera_service_starts_with_a_camera(tmp_path, monkeypatch, switches):
     assert "mowbite_camera_node" in executables(tmp_path, monkeypatch, **switches)
 
 
 def test_no_camera_service_without_a_camera(tmp_path, monkeypatch):
     assert "mowbite_camera_node" not in executables(tmp_path, monkeypatch)
+    assert "mowbite_camera_node" not in executables(tmp_path, monkeypatch, rear="on")
     for hardware in ("read", "false"):
         started = executables(tmp_path, monkeypatch, hardware=hardware, stereo="on", vision="on")
         assert started and "mowbite_camera_node" not in started

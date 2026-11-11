@@ -243,8 +243,9 @@ second what `mowbite_camera` needs around it.
 
 Around `mowbite_camera`:
 
-- Start it beside the camera processes and only with them: `stack.camera_service(files, data_dir, logger, ...)` with
-  their limits (`tron.launch.py`). It is a process of its own too and leaves `camera_exit.json`.
+- Start it beside the camera processes that report on `hw/cameras` and only with them; a camera that only measures
+  for the logic does not bring it along. `stack.camera_service(files, data_dir, logger, ...)` takes their limits
+  (`tron.launch.py`). It is a process of its own too and leaves `camera_exit.json`.
 - The app has to reach `mjpeg_port` 8890 (HTTP, protocol `mjpeg`), `webrtc_port` 8889 (HTTP, the WHEP exchange of
   protocol `webrtc`) and `ice_port` 8189 over UDP (its pictures). `media_api_port` 9997 and the RTSP sources stay on
   the loopback address. Other ports go under `mowbite_camera` in the file of the platform.
