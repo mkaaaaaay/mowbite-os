@@ -185,8 +185,8 @@ the emergency signal is fixed. Load it as a component of the container only when
 ## 8. Cameras (optional)
 
 A camera of the mower, shown in the app, optionally with object detection for display only. The Tron's setup is the
-example: `tron_vision` (camera AI) and `tron_stereo` (live picture) with their start in `tron.launch.py` and their
-parameters in `config/tron.yaml`.
+example: `tron_vision` (camera AI), `tron_stereo` (live picture) and `tron_rear` (dock marker) with their start in
+`tron.launch.py` and their parameters in `config/tron.yaml`.
 
 - A process of its own, never a component of the container: a crash of a vendor library takes nothing else along.
   Start it from the start file with `stack.own_process` only when the drivers run and a switch in
@@ -226,6 +226,11 @@ parameters in `config/tron.yaml`.
 - The service user needs the devices: on a native rootfs groups like `video` and `render`
   (`platform/tron/rootfs/files/usr/lib/sysusers.d/mowbite.conf`) and udev rules for devices that are root only, such
   as a hardware encoder and the dma-buf heaps (`60-mowbite-stereo.rules`); in Docker the devices passed in.
+- A camera that measures for the logic, like the dock marker (section 1), has its own process too and opens the
+  camera only while asked. Its calibration (lens, mount, marker) has no defaults in the code: what is missing makes it
+  report `NOT_SET_UP` and never measure. A USB camera gets a fixed name by a udev rule on its USB id
+  (`60-mowbite-rear.rules`), never `/dev/videoN`. Pixel values for measurements go on a topic outside `hw/*`
+  (`tron_rear/marker_pixels`).
 - Settings of a camera that need register writes (exposure control of the Tron's bridge chip, `tron-stereo-ae`) come
   from the setup at boot, read back, before it reports the camera ready; the node never writes to i2c.
 

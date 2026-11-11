@@ -351,6 +351,20 @@ tron_stereo:
     # driver while mowing the blade may run without the host until the restart; how long is not measured.
     stream_while_mowing: true
 
+# tron_rear, the dock marker of the rear camera (MOWBITE_REAR=on), on request of the logic. Without lens, mount, marker
+# side or pattern it reports NOT_SET_UP and never measures; a measured value for one mower goes to <data_dir>/tron.yaml.
+# device, eval_rate, max_exposure_ms, first_frame_s, frame_gap_s, max_rss_mb and crash_dir have the defaults of the node.
+tron_rear:
+  ros__parameters:
+    # fx, fy, cx, cy (px at 1920x1080), k1, k2, p1, p2, k3 (plumb_bob): the vendor's value for all Trons, until M2.
+    lens: [1540.499, 1539.740, 986.294, 520.626, -0.373942, 0.165317, -0.000099, -0.000519, 0.0]
+    # x, y, z (m) and yaw, pitch, roll (rad) of the camera in base_link: not measured yet (M3). The vendor's URDF has
+    # only a placeholder (-0.201, 0, 0.25, looking back), so it stays out and the node reports NOT_SET_UP.
+    # mount: [x, y, z, yaw, pitch, roll]
+    # The marker of the station EC1: side of the black square (m) and its 4 x 4 inner cells (0xB532).
+    marker_side: 0.04
+    marker_pattern: 46386
+
 mowbite_bridge:
   ros__parameters:
     mqtt_host: 127.0.0.1

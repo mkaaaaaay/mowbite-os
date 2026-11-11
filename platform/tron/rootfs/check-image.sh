@@ -34,6 +34,7 @@ for f in /etc/mowbite/probezeit /usr/lib/mowbite/probezeit /usr/lib/mowbite/tron
          /etc/systemd/system/sysinit.target.wants/mowbite-crash.service \
          /etc/systemd/system/multi-user.target.wants/mowbite-tron-audio.service /usr/lib/mowbite/tron-audio \
          /usr/lib/mowbite/tron-stereo-ae /usr/lib/udev/rules.d/60-mowbite-stereo.rules \
+         /usr/lib/udev/rules.d/60-mowbite-rear.rules \
          /etc/systemd/system/sysinit.target.wants/systemd-pstore.service; do
     "$DEBUGFS" -c -R "stat $f" "$IMG" 2>/dev/null | grep -q '^Inode:'; result "present: $f" $?
 done
