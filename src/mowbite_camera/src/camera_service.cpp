@@ -43,7 +43,7 @@ std::string Text(const Json& json, const char* key) {
 
 }  // namespace
 
-CameraService::CameraService(ServiceConfig config, Clocks clocks, RandomBytes random,
+CameraService::CameraService(ServiceConfig config, Clocks clocks, const RandomBytes& random,
                              std::function<std::string()> route)
     : config_(std::move(config)), clocks_(std::move(clocks)), route_(std::move(route)),
       api_password_(RandomHex(random, kTokenBytes)), seats_(random) {}

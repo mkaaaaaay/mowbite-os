@@ -79,9 +79,7 @@ bool CameraList::Update(const CameraEntry& entry, double t, std::string* problem
   clean.protocols.clear();
   for (const std::string& protocol : entry.protocols) {
     if (std::find(clean.protocols.begin(), clean.protocols.end(), protocol) != clean.protocols.end()) continue;
-    if (protocol == kMjpeg) {
-      clean.protocols.push_back(protocol);
-    } else if (protocol == kWebrtc && IsLocalSource(entry.source, entry.id)) {
+    if (protocol == kMjpeg || (protocol == kWebrtc && IsLocalSource(entry.source, entry.id))) {
       clean.protocols.push_back(protocol);
     } else if (protocol == kWebrtc) {
       Note(problem, std::string("webrtc needs the source ") + kSourcePrefix + "<port>/" + entry.id);

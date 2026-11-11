@@ -57,7 +57,9 @@ bool ParseSessions(const std::string& body, std::vector<std::string>* ids) {
   if (!one_page) return false;
   ids->clear();
   for (const Json& item : answer["items"]) {
-    if (item.is_object() && item.contains("id") && item["id"].is_string()) ids->push_back(item["id"].get<std::string>());
+    if (item.is_object() && item.contains("id") && item["id"].is_string()) {
+      ids->push_back(item["id"].get<std::string>());
+    }
   }
   return true;
 }

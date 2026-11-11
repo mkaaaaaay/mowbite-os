@@ -9,7 +9,8 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
-#include <cstring>
+
+#include "mowbite_camera/error_text.h"
 
 namespace mowbite_camera {
 
@@ -37,12 +38,12 @@ bool Ready(int fd, short events, Clock::time_point deadline) {
 std::string Exchange(int fd, const sockaddr_in& where, const std::string& out, Clock::time_point deadline,
                      std::string* in) {
   if (::connect(fd, reinterpret_cast<const sockaddr*>(&where), sizeof where) != 0) {
-    if (errno != EINPROGRESS) return std::string("connect: ") + std::strerror(errno);
+    if (errno != EINPROGRESS) return std::string("connect: ") + ErrorText(errno);
     int failed = 0;
     socklen_t size = sizeof failed;
     if (!Ready(fd, POLLOUT, deadline)) return "no connection in time";
     if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &failed, &size) != 0 || failed != 0) {
-      return std::string("connect: ") + std::strerror(failed != 0 ? failed : errno);
+      return std::string("connect: ") + ErrorText(failed != 0 ? failed : errno);
     }
   }
   size_t sent = 0;
@@ -51,7 +52,7 @@ std::string Exchange(int fd, const sockaddr_in& where, const std::string& out, C
     if (n > 0) {
       sent += static_cast<size_t>(n);
     } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-      return std::string("send: ") + std::strerror(errno);
+      return std::string("send: ") + ErrorText(errno);
     } else if (!Ready(fd, POLLOUT, deadline)) {
       return "request not taken in time";
     }
@@ -64,7 +65,7 @@ std::string Exchange(int fd, const sockaddr_in& where, const std::string& out, C
       in->append(buffer, static_cast<size_t>(n));
       if (in->size() > kMaxReply) return "answer too long";
     } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-      return std::string("recv: ") + std::strerror(errno);
+      return std::string("recv: ") + ErrorText(errno);
     } else if (!Ready(fd, POLLIN, deadline)) {
       return "no answer in time";
     }
@@ -92,7 +93,7 @@ HttpReply LocalRequest(const LocalServer& server, const std::string& method, con
       Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(timeout_s));
   const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
   if (fd < 0) {
-    reply.error = std::string("socket: ") + std::strerror(errno);
+    reply.error = std::string("socket: ") + ErrorText(errno);
     return reply;
   }
   sockaddr_in where{};

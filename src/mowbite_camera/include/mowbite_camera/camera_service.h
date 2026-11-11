@@ -54,7 +54,7 @@ struct Effects {
 // be called from any thread.
 class CameraService {
  public:
-  CameraService(ServiceConfig config, Clocks clocks, RandomBytes random = SystemRandom,
+  CameraService(ServiceConfig config, Clocks clocks, const RandomBytes& random = SystemRandom,
                 std::function<std::string()> route = DefaultRouteAddress);
 
   static const std::vector<std::string>& Methods();

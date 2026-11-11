@@ -147,7 +147,8 @@ class CameraNode : public rclcpp::Node {
 
     publish_pub_ = create_publisher<mowbite_msgs::msg::MqttPublish>("bridge/publish", 100);
     cameras_sub_ = create_subscription<mowbite_msgs::msg::Camera>(
-        "hw/cameras", LatchedQos(16), [this](mowbite_msgs::msg::Camera::ConstSharedPtr msg) { OnCamera(*msg); });
+        "hw/cameras", LatchedQos(16),
+        [this](const mowbite_msgs::msg::Camera::ConstSharedPtr& msg) { OnCamera(*msg); });
     fast_timer_ = create_wall_timer(kFastPeriod, [this] { OnFast(); });
     slow_timer_ = create_wall_timer(kSlowPeriod, [this] { OnSlow(); });
     RCLCPP_INFO(get_logger(), "Pictures for viewers on port %d", config.mjpeg_port);
@@ -186,7 +187,8 @@ class CameraNode : public rclcpp::Node {
     response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
     error_pub_ = create_publisher<mowbite_msgs::msg::RpcError>("bridge/rpc/error", 100);
     request_sub_ = create_subscription<mowbite_msgs::msg::RpcRequest>(
-        "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRequest(*msg); });
+        "bridge/rpc/request", 100,
+        [this](const mowbite_msgs::msg::RpcRequest::ConstSharedPtr& msg) { OnRequest(*msg); });
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_camera";
     methods.methods = CameraService::Methods();
@@ -263,7 +265,7 @@ class CameraNode : public rclcpp::Node {
       if (picture_subs_.count(id)) continue;
       picture_subs_[id] = create_subscription<sensor_msgs::msg::CompressedImage>(
           "camera/" + id + "/jpeg", rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
-          [this, id](sensor_msgs::msg::CompressedImage::ConstSharedPtr msg) {
+          [this, id](const sensor_msgs::msg::CompressedImage::ConstSharedPtr& msg) {
             if (msg->format != "jpeg" || msg->data.empty() || msg->data.size() > kMaxJpegBytes) return;
             server_->Post([this, id, jpeg = std::string(msg->data.begin(), msg->data.end())] {
               server_->Push(id, jpeg);

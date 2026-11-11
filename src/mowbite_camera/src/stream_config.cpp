@@ -8,9 +8,9 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdlib>
-#include <cstring>
 #include <sstream>
 
+#include "mowbite_camera/error_text.h"
 #include "mowbite_camera/seats.h"
 
 namespace mowbite_camera {
@@ -66,13 +66,13 @@ std::string RuntimeDir(const std::string& parameter, std::string* error) {
   std::string base = parameter;
   if (base.empty()) {
     // systemd separates several folders with ':'.
-    const char* given = std::getenv("RUNTIME_DIRECTORY");
+    const char* given = std::getenv("RUNTIME_DIRECTORY");  // NOLINT(concurrency-mt-unsafe)
     base = given ? std::string(given).substr(0, std::string(given).find(':')) : "";
   }
   if (base.empty()) base = "/tmp";
-  const std::string dir = base + "/" + kFolder;
+  std::string dir = base + "/" + kFolder;
   if (::mkdir(dir.c_str(), 0700) != 0 && errno != EEXIST) {
-    *error = dir + ": " + std::strerror(errno);
+    *error = dir + ": " + ErrorText(errno);
     return "";
   }
   // A link is not followed: in /tmp anyone could have put one there.
@@ -92,7 +92,7 @@ bool ReplaceFile(const std::string& dir, const std::string& name, const std::str
   ::unlink(fresh.c_str());
   const int fd = ::open(fresh.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
   if (fd < 0) {
-    *error = fresh + ": " + std::strerror(errno);
+    *error = fresh + ": " + ErrorText(errno);
     return false;
   }
   size_t done = 0;
@@ -104,7 +104,7 @@ bool ReplaceFile(const std::string& dir, const std::string& name, const std::str
   }
   const bool written = done == text.size();
   if (::close(fd) != 0 || !written || ::rename(fresh.c_str(), path.c_str()) != 0) {
-    *error = path + ": " + std::strerror(errno);
+    *error = path + ": " + ErrorText(errno);
     ::unlink(fresh.c_str());
     return false;
   }

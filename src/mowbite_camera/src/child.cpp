@@ -10,8 +10,9 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
-#include <cstring>
 #include <thread>
+
+#include "mowbite_camera/error_text.h"
 
 extern char** environ;
 
@@ -27,6 +28,7 @@ constexpr auto kStopStep = std::chrono::milliseconds(20);
 
 std::vector<char*> Pointers(std::vector<std::string>& texts) {
   std::vector<char*> pointers;
+  pointers.reserve(texts.size() + 1);
   for (std::string& text : texts) pointers.push_back(text.data());
   pointers.push_back(nullptr);
   return pointers;
@@ -66,7 +68,7 @@ bool Child::Start(const ChildSpec& spec, std::string* error) {
 
   const pid_t pid = ::fork();
   if (pid < 0) {
-    *error = std::string("fork: ") + std::strerror(errno);
+    *error = std::string("fork: ") + ErrorText(errno);
     return false;
   }
   if (pid == 0) {
@@ -75,7 +77,7 @@ bool Child::Start(const ChildSpec& spec, std::string* error) {
     if (::getppid() != parent) ::_exit(kCannotRun);
     sigset_t none;
     ::sigemptyset(&none);
-    ::sigprocmask(SIG_SETMASK, &none, nullptr);
+    ::pthread_sigmask(SIG_SETMASK, &none, nullptr);
     ::signal(SIGINT, SIG_DFL);
     ::signal(SIGTERM, SIG_DFL);
     const int null = ::open("/dev/null", O_RDONLY);

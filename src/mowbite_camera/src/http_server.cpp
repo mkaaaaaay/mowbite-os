@@ -12,7 +12,8 @@
 #include <cctype>
 #include <cerrno>
 #include <cmath>
-#include <cstring>
+
+#include "mowbite_camera/error_text.h"
 
 namespace mowbite_camera {
 
@@ -143,7 +144,7 @@ int HttpServer::Listen(const std::string& address, uint16_t port, const Listener
   }
   const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
   if (fd < 0) {
-    *error = std::string("socket: ") + std::strerror(errno);
+    *error = std::string("socket: ") + ErrorText(errno);
     return -1;
   }
   const int on = 1;
@@ -151,7 +152,7 @@ int HttpServer::Listen(const std::string& address, uint16_t port, const Listener
   socklen_t size = sizeof where;
   if (::bind(fd, reinterpret_cast<const sockaddr*>(&where), size) != 0 || ::listen(fd, 16) != 0 ||
       ::getsockname(fd, reinterpret_cast<sockaddr*>(&where), &size) != 0) {
-    *error = address + ":" + std::to_string(port) + ": " + std::strerror(errno);
+    *error = address + ":" + std::to_string(port) + ": " + ErrorText(errno);
     ::close(fd);
     return -1;
   }
