@@ -16,6 +16,7 @@
 #include "mowbite_camera/camera_service.h"
 #include "mowbite_camera/stream_config.h"
 #include "mowbite_camera/stream_server.h"
+#include "test_util.h"
 
 namespace mowbite_camera {
 namespace {
@@ -52,15 +53,11 @@ std::string Ask(const std::string& method, const std::string& target, const std:
   return client.in().substr(0, client.in().find("\r\n\r\n"));
 }
 
-bool Has(const std::string& text, const std::string& part) {
-  return text.find(part) != std::string::npos;
-}
-
 TEST(StreamSmoke, ARealSessionTakesAPlaceUntilItIsKicked) {
   const char* program = std::getenv("MOWBITE_MEDIAMTX");
   if (!program || !*program) GTEST_SKIP() << "MOWBITE_MEDIAMTX names no stream server";
-  char pattern[] = "/tmp/mowbite_stream_smoke_XXXXXX";
-  const fs::path dir = ::mkdtemp(pattern);
+  const TempDir temp;
+  const fs::path& dir = temp.path();
   std::string error;
 
   // The node without ROS: the service, and the listener the stream server asks, in a thread of its own.
@@ -169,7 +166,6 @@ TEST(StreamSmoke, ARealSessionTakesAPlaceUntilItIsKicked) {
   camera.Stop();
   serving = false;
   server.join();
-  fs::remove_all(dir);
 }
 
 }  // namespace

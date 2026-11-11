@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "mowbite_camera/child.h"
+#include "test_util.h"
 
 namespace mowbite_camera {
 namespace {
@@ -37,15 +38,8 @@ bool WaitForFile(const fs::path& path) {
 
 class ChildTest : public ::testing::Test {
  protected:
-  ChildTest() {
-    char pattern[] = "/tmp/mowbite_child_test_XXXXXX";
-    dir_ = fs::canonical(::mkdtemp(pattern));
-  }
-  ~ChildTest() override {
-    fs::remove_all(dir_);
-  }
-
-  fs::path dir_;
+  TempDir temp_;
+  const fs::path& dir_ = temp_.path();
   std::string error_;
   Child child_;
 };

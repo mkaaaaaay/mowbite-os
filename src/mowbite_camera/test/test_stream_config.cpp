@@ -9,6 +9,7 @@
 #include <sstream>
 
 #include "mowbite_camera/stream_config.h"
+#include "test_util.h"
 
 namespace mowbite_camera {
 namespace {
@@ -30,16 +31,14 @@ mode_t ModeOf(const fs::path& path) {
 class StreamConfigTest : public ::testing::Test {
  protected:
   StreamConfigTest() {
-    char pattern[] = "/tmp/mowbite_camera_test_XXXXXX";
-    base_ = ::mkdtemp(pattern);
     ::unsetenv("RUNTIME_DIRECTORY");
   }
   ~StreamConfigTest() override {
     ::unsetenv("RUNTIME_DIRECTORY");
-    fs::remove_all(base_);
   }
 
-  fs::path base_;
+  TempDir temp_;
+  const fs::path& base_ = temp_.path();
   std::string error_;
 };
 

@@ -11,10 +11,6 @@ namespace {
 
 constexpr char kGet[] = "GET /camera/cam.mjpg?t=abc HTTP/1.1\r\nHost: mower\r\n\r\n";
 
-bool Has(const std::string& text, const std::string& part) {
-  return text.find(part) != std::string::npos;
-}
-
 class HttpServerTest : public ::testing::Test {
  protected:
   HttpServerTest()

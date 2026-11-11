@@ -68,6 +68,10 @@ class TestClient {
   std::string in_;
 };
 
+inline bool Has(const std::string& text, const std::string& part) {
+  return text.find(part) != std::string::npos;
+}
+
 }  // namespace mowbite_camera
 
 #endif  // MOWBITE_CAMERA_TEST_HTTP_TEST_CLIENT_H

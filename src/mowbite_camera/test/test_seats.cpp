@@ -2,21 +2,12 @@
 
 #include <algorithm>
 #include <cctype>
-#include <memory>
 
 #include "mowbite_camera/seats.h"
+#include "test_util.h"
 
 namespace mowbite_camera {
 namespace {
-
-// Bytes that count up, so every token is another one.
-RandomBytes Counting() {
-  auto next = std::make_shared<uint8_t>(0);
-  return [next](uint8_t* out, size_t size) {
-    for (size_t i = 0; i < size; ++i) out[i] = (*next)++;
-    return true;
-  };
-}
 
 TEST(Seats, ATokenIsHexOfTheRandomBytes) {
   Seats seats(Counting());

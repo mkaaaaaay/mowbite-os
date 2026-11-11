@@ -1,11 +1,10 @@
 #include <gtest/gtest.h>
 
-#include <memory>
-
 #include "mowbite_api/catalog.h"
 #include "mowbite_bridge/event_builder.h"
 #include "mowbite_bridge/json_rpc.h"
 #include "mowbite_camera/camera_service.h"
+#include "test_util.h"
 
 namespace mowbite_camera {
 namespace {
@@ -13,35 +12,6 @@ namespace {
 // The first 16 bytes make the password for the stream server, the next ones the tokens.
 constexpr char kApiPassword[] = "000102030405060708090a0b0c0d0e0f";
 constexpr char kFirstToken[] = "101112131415161718191a1b1c1d1e1f";
-
-CameraEntry Obstacle() {
-  CameraEntry entry;
-  entry.id = "oa_left";
-  entry.name = "Obstacle camera";
-  entry.process = "vision";
-  entry.kind = "obstacle";
-  entry.position = "front";
-  entry.width = 640;
-  entry.height = 480;
-  entry.detections = true;
-  entry.protocols = {"mjpeg"};
-  entry.available = true;
-  return entry;
-}
-
-CameraEntry Stereo() {
-  CameraEntry entry;
-  entry.id = "stereo";
-  entry.name = "Stereo camera";
-  entry.process = "stereo";
-  entry.kind = "stereo";
-  entry.width = 1280;
-  entry.height = 720;
-  entry.protocols = {"webrtc"};
-  entry.source = "rtsp://127.0.0.1:8555/stereo";
-  entry.available = true;
-  return entry;
-}
 
 std::string TokenOf(const RpcOutcome& outcome) {
   const std::string url = outcome.result.value("url", "");
@@ -54,14 +24,6 @@ class CameraServiceTest : public ::testing::Test {
   CameraServiceTest()
       : service_(ServiceConfig(), Clocks{[this] { return steady_; }, [this] { return wall_; }}, Counting(),
                  [this] { return route_; }) {}
-
-  static RandomBytes Counting() {
-    auto next = std::make_shared<uint8_t>(0);
-    return [next](uint8_t* out, size_t size) {
-      for (size_t i = 0; i < size; ++i) out[i] = (*next)++;
-      return true;
-    };
-  }
 
   RpcOutcome Call(const std::string& method, const Json& params = Json::object()) {
     const std::optional<RpcOutcome> outcome = service_.Call(method, params);

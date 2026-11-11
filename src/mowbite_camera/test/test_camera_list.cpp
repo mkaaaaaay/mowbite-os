@@ -1,38 +1,10 @@
 #include <gtest/gtest.h>
 
 #include "mowbite_camera/camera_list.h"
+#include "test_util.h"
 
 namespace mowbite_camera {
 namespace {
-
-CameraEntry Obstacle() {
-  CameraEntry entry;
-  entry.id = "oa_left";
-  entry.name = "Obstacle camera";
-  entry.process = "vision";
-  entry.kind = "obstacle";
-  entry.position = "front";
-  entry.width = 640;
-  entry.height = 480;
-  entry.detections = true;
-  entry.protocols = {"mjpeg"};
-  entry.available = true;
-  return entry;
-}
-
-CameraEntry Stereo() {
-  CameraEntry entry;
-  entry.id = "stereo";
-  entry.name = "Stereo camera";
-  entry.process = "stereo";
-  entry.kind = "stereo";
-  entry.width = 1280;
-  entry.height = 720;
-  entry.protocols = {"webrtc"};
-  entry.source = "rtsp://127.0.0.1:8555/stereo";
-  entry.available = true;
-  return entry;
-}
 
 TEST(CameraList, ListsWhatTheCameraSays) {
   CameraList list;
