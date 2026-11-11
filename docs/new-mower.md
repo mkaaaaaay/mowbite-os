@@ -77,6 +77,14 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   empty, full and critical, charge check, temperatures). Check every value you inherit. The battery voltages stand only
   here: a driver that sets them on its board gets them in the start file from `stack.battery_voltages`, under the
   same names (see `nx60i.launch.py`).
+- The way home without the planner (`docking_direct`, `direct_margin`, inherited from `tron.yaml`): a planner that
+  gives no answer does not keep the mower from the station. It drives the straight line to the point
+  `docking_approach_distance` m in front of the station, where no obstacle and no end of the mowing and navigation
+  areas lies closer to that line than the turning circle of the body (base_link to its farthest point) plus
+  `direct_margin` plus `max_position_accuracy`: on the Tron 0.90 m, more than its `docking_approach_distance`. Where
+  the areas around the station are narrower, the mower waits for the planner there; for the straight way draw them
+  wider or set `docking_approach_distance` larger. `direct_margin` is also how far base_link may get off the line
+  before the drive ends, and has to be above 0.
 - Driver parameters (ports, baud rates, limits) in the file of the driver; values measured on one mower in a file on
   that mower. No value in two files.
 - The datum of the garden: one place on the mower, `MOWBITE_DATUM_LAT`, `_LONG`, `_HEIGHT` (Tron `/etc/mowbite/os.conf`,
