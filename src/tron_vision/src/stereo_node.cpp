@@ -90,6 +90,7 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   // The name the start file gives stack.own_process, so the OS can tie an exit note to this camera.
   camera_entry_.process = declare_parameter("process", std::string("stereo"));
   camera_entry_.kind = Camera::KIND_STEREO;
+  camera_entry_.position = Camera::POSITION_FRONT;
   camera_entry_.width = config.encoder.width;
   camera_entry_.height = config.encoder.height;
   camera_entry_.detections = false;
