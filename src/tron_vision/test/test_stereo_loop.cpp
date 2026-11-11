@@ -197,9 +197,11 @@ struct Rig {
   // DESCRIBE, SETUP and PLAY; true once the stream has started.
   bool Play(const Client& client) {
     Steps(2);
-    if (Ask(client, "DESCRIBE " + Url() + " RTSP/1.0\r\nCSeq: 1\r\n\r\n").find("200 OK") == std::string::npos) return false;
+    const std::string describe = Ask(client, "DESCRIBE " + Url() + " RTSP/1.0\r\nCSeq: 1\r\n\r\n");
+    if (describe.find("200 OK") == std::string::npos) return false;
     const std::string setup =
-        Ask(client, "SETUP " + Url("/trackID=0") + " RTSP/1.0\r\nCSeq: 2\r\nTransport: RTP/AVP/TCP;interleaved=0-1\r\n\r\n");
+        Ask(client, "SETUP " + Url("/trackID=0") +
+                        " RTSP/1.0\r\nCSeq: 2\r\nTransport: RTP/AVP/TCP;interleaved=0-1\r\n\r\n");
     const std::string session = test::SessionOf(setup);
     if (session.empty()) return false;
     client.Send("PLAY " + Url("/") + " RTSP/1.0\r\nCSeq: 3\r\nSession: " + session + "\r\n\r\n");

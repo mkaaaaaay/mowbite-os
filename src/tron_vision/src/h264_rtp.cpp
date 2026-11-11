@@ -60,7 +60,8 @@ std::string Base64(const uint8_t* data, size_t size) {
   out.reserve((size + 2) / 3 * 4);
   for (size_t i = 0; i < size; i += 3) {
     const size_t left = size - i;
-    const uint32_t group = static_cast<uint32_t>(data[i]) << 16 | (left > 1 ? static_cast<uint32_t>(data[i + 1]) << 8 : 0U) |
+    const uint32_t group = static_cast<uint32_t>(data[i]) << 16 |
+                           (left > 1 ? static_cast<uint32_t>(data[i + 1]) << 8 : 0U) |
                            (left > 2 ? static_cast<uint32_t>(data[i + 2]) : 0U);
     out += kDigits[group >> 18];
     out += kDigits[(group >> 12) & 0x3F];

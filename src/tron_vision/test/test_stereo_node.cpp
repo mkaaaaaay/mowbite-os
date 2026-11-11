@@ -333,7 +333,8 @@ TEST_F(StereoNodeTest, BladeAndSilentDriverEndTheStream) {
   driver.Blade(true);
   for (int i = 0; i < 200 && rig.device.offs < 2; i++) std::this_thread::sleep_for(1ms);
   ASSERT_EQ(rig.device.offs, 2);
-  const double took = std::chrono::duration<double>(Clock::duration(rig.device.off_at) - blade_at.time_since_epoch()).count();
+  const double took =
+      std::chrono::duration<double>(Clock::duration(rig.device.off_at) - blade_at.time_since_epoch()).count();
   std::printf("blade_on on hw/status to STREAMOFF: %.3f s\n", took);
   EXPECT_LT(took, 0.3);
   Camera c;

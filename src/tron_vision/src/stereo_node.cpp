@@ -64,7 +64,8 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
     : rclcpp::Node("tron_stereo", options) {
   StereoConfig config;
   config.marker_dir = declare_parameter("crash_dir", config.marker_dir);
-  config.encoder.bitrate_bps = static_cast<int>(declare_parameter("bitrate_kbps", config.encoder.bitrate_bps / 1000)) * 1000;
+  config.encoder.bitrate_bps =
+      static_cast<int>(declare_parameter("bitrate_kbps", config.encoder.bitrate_bps / 1000)) * 1000;
   config.temp_file = FindThermalZone("/sys/class/thermal", "soc-thermal");
   if (config.temp_file.empty()) RCLCPP_WARN(get_logger(), "No soc-thermal zone: no pause when hot");
   // The platform decides it; the self-test waits for a standing mower with the blade off either way.
