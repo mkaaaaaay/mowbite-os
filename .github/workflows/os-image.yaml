@@ -75,9 +75,11 @@ jobs:
           context: .
           file: docker/os.Dockerfile
           build-contexts: planer=planer
+          # Without the app, until a release of the app carries the export docker/os.Dockerfile pins.
           build-args: |
             SOURCE_COMMIT=${{ github.sha }}
             MIN_APP=${{ steps.min_app.outputs.version }}
+            APP_VERSION=
           platforms: linux/${{ matrix.arch }}
           load: true
           push: ${{ inputs.push == true }}

@@ -152,7 +152,8 @@ process is outside this watch and stops the mower by its own timeouts.
   `mowbite_planner`, built in a throwaway container, `contract.json` required), `make-app-bundle.sh <zip> <out>` (the
   web export of the app release, `app.json` required), `make-host-bundle.sh <commit> <out>` (`host/mowbite_host` of
   that commit). `host/bundle/app_export.py` unpacks and checks the export for
-  them and for `docker/os.Dockerfile` (build context `app`, `APP_VERSION`, `APP_SHA256`; none without them). Each is
+  them and for `docker/os.Dockerfile`, which pins the app it brings along (`APP_VERSION`, `APP_SHA256`) and takes
+  the zip from the build context `app`; `--build-arg APP_VERSION=` builds an image without the app. Each is
   signed with `sign-bundle.sh` under the namespace of its component (refuses a serial not newer than the last one
   signed for it, shows its fields and the result of the test gate), then into the inbox
   `/userdata/mowbite-update/inbox` and `update.check`.
