@@ -118,3 +118,31 @@ TEST(Guard, TheMostImportantReasonWins) {
   in.safety_measured = false;
   EXPECT_EQ(CheckGuard(GuardConfig(), in, fence).reason, StopReason::kNotAllowed);
 }
+
+// A path with a limit of its own: off it by more ends the path, wherever beside or past it the mower is.
+TEST(Guard, AGoalWithItsOwnLimitStopsFartherOffThePath) {
+  const Geofence fence({kLawn}, {}, 0.5);
+  GuardInput in = Healthy();
+  in.cross_track = 0;
+  in.off_path = 0.4;
+  EXPECT_EQ(CheckGuard(GuardConfig(), in, fence).reason, StopReason::kNone);
+  in.max_off_path = 0.15;
+  const auto result = CheckGuard(GuardConfig(), in, fence);
+  EXPECT_EQ(result.reason, StopReason::kCrossTrack);
+  EXPECT_EQ(result.message, "0.40 m off the path (limit of this path 0.15 m)");
+  in.off_path = 0.15;
+  EXPECT_EQ(CheckGuard(GuardConfig(), in, fence).reason, StopReason::kNone);
+  in.off_path = 0.151;
+  EXPECT_EQ(CheckGuard(GuardConfig(), in, fence).reason, StopReason::kCrossTrack);
+  // A distance that is no number never passes.
+  in.off_path = std::nan("");
+  EXPECT_EQ(CheckGuard(GuardConfig(), in, fence).reason, StopReason::kCrossTrack);
+  // The limit of the follower holds besides.
+  in.off_path = 0.1;
+  in.cross_track = 0.6;
+  EXPECT_EQ(CheckGuard(GuardConfig(), in, fence).reason, StopReason::kCrossTrack);
+  // What matters more still comes first.
+  in.off_path = 0.4;
+  in.emergency = true;
+  EXPECT_EQ(CheckGuard(GuardConfig(), in, fence).reason, StopReason::kEmergency);
+}

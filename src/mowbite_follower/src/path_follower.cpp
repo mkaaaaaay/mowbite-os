@@ -203,6 +203,11 @@ double PathFollower::CrossTrack(const Pose2& pose) const {
   return Foot(pose).cross;
 }
 
+double PathFollower::OffPath(const Pose2& pose) const {
+  if (path_.size() == 0) return 0.0;
+  return path_.Project(pose.x, pose.y, 0, path_.size()).distance;
+}
+
 Projection PathFollower::Foot(const Pose2& pose) const {
   size_t last = segment_;
   const double reach = std::max(along_, path_.s(segment_)) + kWindow;

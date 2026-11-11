@@ -77,6 +77,10 @@ struct GuardInput {
   double position_accuracy = 999;
   bool heading_valid = false;
   double cross_track = 0;
+  // Per path, from the goal (FollowPath.action): m base_link is from the nearest point of the path, and how far it
+  // may be; 0: no such limit.
+  double off_path = 0;
+  double max_off_path = 0;
 };
 
 struct GuardResult {

@@ -30,6 +30,10 @@ bool reverse
 # m: the path is done once base_link got along the last stretch to this much before the last pose, without turning
 # there; 0: once it is within the follower's goal distance of the last pose, then turned to its heading.
 float32 end_tolerance
+# m base_link may be from the nearest point of the path at most, from the first command on, also before its start and
+# past its end; farther off the path ends with REASON_CROSS_TRACK. For a path whose surroundings were checked only that
+# far. 0: only the limit of the follower beside the path, which counts once the mower came onto it.
+float32 max_cross_track
 ---
 uint8 REASON_DONE=0
 uint8 REASON_CANCELED=1

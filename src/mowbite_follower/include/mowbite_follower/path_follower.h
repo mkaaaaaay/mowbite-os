@@ -101,6 +101,8 @@ class PathFollower {
   bool OnPath() const;
   // m beside the path, left positive.
   double CrossTrack(const Pose2& pose) const;
+  // m to the nearest point of the whole path, its ends included.
+  double OffPath(const Pose2& pose) const;
 
  private:
   Projection Foot(const Pose2& pose) const;

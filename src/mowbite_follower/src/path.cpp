@@ -135,6 +135,7 @@ Projection Path::Project(double x, double y, size_t first, size_t last) const {
     const double side = c * ry - sn * rx;
     // Before or past an open end the distance to the line counts, so that it does not grow along the path.
     best.cross = open_end ? side : std::copysign(distance, side);
+    best.distance = distance;
     best.heading = NormalizeAngle(heading_out_[i] + t * NormalizeAngle(heading_in_[i + 1] - heading_out_[i]));
     best.curvature = curvature_[i];
   }

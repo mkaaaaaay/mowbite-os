@@ -880,3 +880,18 @@ TEST(PlannerSpeeds, UnderTheDriversLimits) {
             "{\"node\":\"/mowbite_follower\",\"params\":{\"speed_fast\":0.16298,\"speed_slow\":0.15,"
             "\"max_angular\":0.3}}");
 }
+
+// The distance for a goal with a limit of its own: to the whole path, before it started and past both ends.
+TEST(PathFollower, OffPathIsTheDistanceToTheWholePath) {
+  PathFollower follower{FollowerConfig()};
+  EXPECT_EQ(follower.OffPath({3, 3, 0}), 0.0);
+  ASSERT_EQ(follower.Start(Line(0, 0, 0, 2.0), {}, 0), "");
+  EXPECT_FALSE(follower.OnPath());
+  EXPECT_NEAR(follower.OffPath({0.5, 0.2, 0}), 0.2, 1e-9);
+  EXPECT_NEAR(follower.OffPath({0.5, -0.2, 1.0}), 0.2, 1e-9);
+  EXPECT_NEAR(follower.OffPath({-0.3, 0.4, 0}), 0.5, 1e-9);
+  EXPECT_NEAR(follower.OffPath({2.3, -0.4, 0}), 0.5, 1e-9);
+  // Not only the part ahead: started in the middle, the path behind still counts.
+  ASSERT_EQ(follower.Start(Line(0, 0, 0, 2.0), {}, 10), "");
+  EXPECT_NEAR(follower.OffPath({0.2, 0.1, 0}), 0.1, 1e-9);
+}

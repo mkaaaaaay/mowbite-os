@@ -99,6 +99,10 @@ GuardResult CheckGuard(const GuardConfig& config, const GuardInput& in, const Ge
   if (!in.heading_valid) return {StopReason::kHeading, "the heading is not aligned"};
   std::string outside = fence.Check(in.pose.x, in.pose.y);
   if (!outside.empty()) return {StopReason::kOutside, outside};
+  if (in.max_off_path > 0 && !(in.off_path <= in.max_off_path)) {
+    return {StopReason::kCrossTrack, Format("%.2f m off the path (limit of this path %.2f m)", in.off_path,
+                                            in.max_off_path)};
+  }
   if (std::abs(in.cross_track) > config.max_cross_track) {
     return {StopReason::kCrossTrack, Format("%.2f m off the path (limit %.2f m)", std::abs(in.cross_track),
                                             config.max_cross_track)};

@@ -160,6 +160,19 @@ TEST(Path, HeadingAndCurvatureOnAnArc) {
   EXPECT_NEAR(Built(right).curvature(12), -1.0 / 0.27, 0.02);
 }
 
+TEST(Path, TheDistanceCountsTheWayToAnEndPastIt) {
+  const Path east = Built(Line(0, 0, 0, 2.0));
+  EXPECT_NEAR(east.Project(0.5, 0.3, 0, 19).distance, 0.3, 1e-9);
+  EXPECT_NEAR(east.Project(0.5, -0.3, 0, 19).distance, 0.3, 1e-9);
+  // Past an end cross stays the distance to the line, distance is the way to the end.
+  const auto past = east.Project(2.4, 0.3, 0, 19);
+  EXPECT_NEAR(past.cross, 0.3, 1e-9);
+  EXPECT_NEAR(past.distance, 0.5, 1e-9);
+  const auto before = east.Project(-0.3, -0.4, 0, 19);
+  EXPECT_NEAR(before.cross, -0.4, 1e-9);
+  EXPECT_NEAR(before.distance, 0.5, 1e-9);
+}
+
 // F12: left of the direction of travel positive.
 TEST(Path, CrossIsSignedLeftOfTravel) {
   const Path east = Built(Line(0, 0, 0, 2.0));

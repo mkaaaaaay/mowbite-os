@@ -31,6 +31,8 @@ struct Projection {
   double along = 0;
   // m beside the path, left of the direction of travel positive.
   double cross = 0;
+  // m to the foot point: like cross on a segment, before or past an open end the way to that end.
+  double distance = 0;
   // rad, the smoothed direction of travel at the foot point.
   double heading = 0;
   // 1/m, left turns positive.

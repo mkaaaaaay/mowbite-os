@@ -171,6 +171,10 @@ class FollowerNode : public rclcpp::Node {
       if (k > static_cast<uint8_t>(Kind::kTransit)) problem = "unknown kind " + std::to_string(k);
       kinds.push_back(static_cast<Kind>(k));
     }
+    // 0 or a limit: a value that is no number must not switch the check off.
+    if (!(goal->max_cross_track >= 0) || !std::isfinite(goal->max_cross_track)) {
+      problem = "max_cross_track must be 0 or more";
+    }
     std::vector<Ring> allowed;
     std::vector<Ring> obstacles;
     for (const auto& p : goal->allowed_areas) allowed.push_back(ToRing(p));
@@ -188,6 +192,7 @@ class FollowerNode : public rclcpp::Node {
     config.straight = goal->straight;
     config.reverse = goal->reverse;
     config.end_tolerance = goal->end_tolerance > 0 ? goal->end_tolerance : 0.0;
+    max_off_path_ = goal->max_cross_track;
     follower_ = std::make_unique<PathFollower>(config);
     fence_ = Geofence(std::move(allowed), std::move(obstacles), geofence_margin_);
     if (problem.empty()) problem = fence_.Problem();
@@ -225,6 +230,9 @@ class FollowerNode : public rclcpp::Node {
     in.heading_valid = heading_valid_;
     // Off the path counts only while on it; before the start the follower checks the distance itself.
     in.cross_track = follower_->OnPath() ? follower_->CrossTrack(pose_) : 0.0;
+    // The limit of the goal counts from the first command and around the whole path.
+    in.off_path = max_off_path_ > 0 ? follower_->OffPath(pose_) : 0.0;
+    in.max_off_path = max_off_path_;
     const GuardResult guard = CheckGuard(guard_config_, in, fence_);
     if (guard.reason != StopReason::kNone) {
       Finish(static_cast<uint8_t>(guard.reason), guard.message, follower_->index());
@@ -279,6 +287,8 @@ class FollowerNode : public rclcpp::Node {
   FollowerConfig follower_config_;
   GuardConfig guard_config_;
   double geofence_margin_ = 0.5;
+  // max_cross_track of the active goal, 0 for none.
+  double max_off_path_ = 0;
   std::unique_ptr<PathFollower> follower_;
   Geofence fence_;
   std::shared_ptr<GoalHandle> active_;
