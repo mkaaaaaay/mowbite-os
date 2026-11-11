@@ -9,6 +9,9 @@ a driver reporting more than 0.3 m/s takes nothing else. They go in stages, 0.4 
 a wheel above 0.6 m/s for 0.2 s, the wheels standing late or after too long a way, runs of a case too far apart.
 Any key while a step runs aborts it: three stops on hw/cmd_vel, the blade off, the emergency latched
 over hw/emergency; keys within 0.4 s after an answer are dropped, so a double tap does not abort the step it started.
+Before the first step that can turn a motor (any step but STANDSTILL_STEPS) comes the STOP check: each STOP button
+pressed and let go once, hw/status has to show stop with its emergency, then stop free and the emergency released. Only
+what this run saw counts and nothing switches it off: before it this programme sends no wheel command and no blade on.
 Records hw/status, hw/wheel_odom, imu/data, hw/capabilities and its own commands as JSON lines with a size and a time
 limit. The capture of the inner network (tcpdump on the host) is the second record; the report on both
 comes from xcore_capture.py.
@@ -68,6 +71,10 @@ STILL_SPEED = 0.005
 TRON_STILL_SPEED = 0.015
 # Keys this soon after an answer belong to it (a double tap on a phone), not to the step it starts.
 KEY_SETTLE_S = 0.4
+# STOP check: hw/status has to show a STOP button within STOP_CHECK_S of the request to press it, the emergency within
+# STOP_EMERGENCY_S of that, and the button free within STOP_CHECK_S of then.
+STOP_CHECK_S = 60.0
+STOP_EMERGENCY_S = 1.0
 # Emergency bits of hw/status by bit number, named as in the catalog of mowbite_api (x-emergency-bits);
 # test/test_names.py holds them against the catalog, the message and the board's own names.
 EMERGENCY_BITS = {0: "LATCH", 1: "TIMEOUT_INPUTS", 2: "STOP", 3: "LIFT", 4: "LIFT_MULTIPLE", 5: "COLLISION",
@@ -414,6 +421,8 @@ class Mower:
         self.emergency_since = None
         self.last_cmd_at = None
         self.guard = None
+        # Set by the STOP check of this run alone; before it no wheel command but a stop and no blade on go out.
+        self.stop_checked = False
         self.firmware = {}
         self.capability_wheel_distance = None
         # Messages per topic, the inputs hw/status showed since reset_seen, a_z of imu/data.
@@ -519,6 +528,8 @@ class Mower:
         return v, w
 
     def drive(self, v, w):
+        if not self.stop_checked:
+            raise Abort("a wheel command before the STOP check")
         v, w = self.clamp(v, w)
         self.cmd_vel.publish(Twist(linear=Vector3(x=v), angular=Vector3(z=w)))
         self.last_cmd_at = time.monotonic()
@@ -556,6 +567,8 @@ class Mower:
 
     def set_blade(self, on, lease_s=2.0, percent=0, height_mm=0):
         """percent and height_mm 0: the driver's defaults."""
+        if on and not self.stop_checked:
+            raise Abort("blade on before the STOP check")
         answer = self.call(self.blade, SetBlade.Request(on=on, speed_percent=percent, height_mm=height_mm,
                                                         lease_s=lease_s if on else 0.0))
         self.rec.write("blade", on=on, lease_s=lease_s, percent=percent, height_mm=height_mm,
@@ -677,6 +690,10 @@ def driver_pids():
 
 class Measurement:
     still_speed = STILL_SPEED
+    # Steps that send no motor command; every other step waits for the STOP check.
+    STANDSTILL_STEPS = ("M1", "M2")
+    # The STOP buttons, each with its flag of the rehearsal.
+    STOP_BUTTONS = (("STOP top", {"stop": True}), ("STOP rear", {"rear_stop": True}))
 
     def __init__(self, args, rec, mower, person, keys):
         self.args, self.rec, self.mower, self.person, self.keys = args, rec, mower, person, keys
@@ -801,6 +818,59 @@ class Measurement:
             time.sleep(0.02)
         self.finding(step, "the wheels do not stand still before the step")
         raise Abort()
+
+    def stop_shown(self):
+        """stop of a fresh hw/status; None without one."""
+        s, age, _, _ = self.mower.snapshot()
+        return bool(s.stop) if s is not None and age < 0.5 else None
+
+    def stop_check(self, before):
+        """Before the first step that can turn a motor: each STOP button pressed and let go once, seen in hw/status
+        with its emergency, then free and released. False if the person skipped it. A button hw/status did not show
+        that way ends the step; the motors stay locked until a check of this run passed."""
+        if self.mower.stop_checked:
+            return True
+        step = "STOP"
+        buttons = ", ".join(button for button, _ in self.STOP_BUTTONS)
+        each = ", one at a time" if len(self.STOP_BUTTONS) > 1 else ""
+        if not self.ask(f"{step} check before {before}, the first step that can turn a motor: press and let go "
+                        f"{buttons}{each}; sends nothing but the release"):
+            print(f"     {before} skipped: no motor step without the STOP check")
+            return False
+        for button, fake in self.STOP_BUTTONS:
+            self.ready(step)
+            shown = self.stop_shown()
+            if shown is not False:
+                self.show("before the press")
+                self.finding(step, f"hw/status shows {'stop' if shown else 'nothing'} before {button} was pressed")
+                raise Abort()
+            self.mark(step, button)
+            asked = time.monotonic()
+            self.person.act_later(f"press {button} now, hold it 2 s, let go (unlock it if it stays down)", fake)
+            if not self.wait(STOP_CHECK_S, until=self.stop_shown):
+                self.finding(step, f"hw/status did not show stop within {STOP_CHECK_S:.0f} s for {button}: is the "
+                                   "button plugged in? No motor step")
+                raise Abort()
+            pressed = time.monotonic()
+            if not self.wait(STOP_EMERGENCY_S, until=self.in_emergency):
+                self.show("pressed")
+                self.finding(step, f"no emergency within {STOP_EMERGENCY_S:.0f} s of {button}")
+                raise Abort()
+            s = self.status()
+            print(f"     {button} seen after {pressed - asked:.1f} s, reason {reason_text(s.emergency_reason)}; "
+                  "waiting for it to be free")
+            free = self.wait(STOP_CHECK_S, until=lambda: self.stop_shown() is False)
+            held = time.monotonic() - pressed
+            if not free:
+                self.finding(step, f"hw/status still shows stop {STOP_CHECK_S:.0f} s after {button} was pressed")
+            released = free and self.release(step)
+            self.rec.write("stop_check", button=button, pressed_after_s=pressed - asked, free=free, held_s=held,
+                           latched=s.emergency_latched, reason=s.emergency_reason, released=released)
+            if not released:
+                raise Abort()
+            print(f"     {button} free after {held:.1f} s, emergency released")
+        self.mower.stop_checked = True
+        return True
 
     def safe_stop(self, why):
         """The abort: three stops, blade off, emergency latched."""
@@ -1248,8 +1318,11 @@ class Measurement:
             self.mower.wheel_limit = GROUND_WHEEL_SPEED if name == "M8" else AIR_WHEEL_SPEED
             print(f"\n== {name}, wheels at most {self.mower.wheel_limit} m/s ==")
             try:
-                self.STEPS[name](self)
-            except Abort:
+                if name in self.STANDSTILL_STEPS or self.stop_check(name):
+                    self.STEPS[name](self)
+            except Abort as abort:
+                if abort.args:
+                    self.finding(name, abort.args[0])
                 self.safe_stop("key or failed check")
                 if self.person.assume_yes or not self.person.ask("continue with the next step?"):
                     return False
@@ -1479,6 +1552,8 @@ class TronStart:
 class TronMeasurement(Measurement):
     """T1-T6 of phase 6 on the Tron, in the air: the driver is this programme's process (TronStart)."""
     still_speed = TRON_STILL_SPEED
+    STANDSTILL_STEPS = ("T1",)
+    STOP_BUTTONS = (("STOP", {"stop": True}),)
 
     def __init__(self, args, rec, mower, person, keys, start):
         super().__init__(args, rec, mower, person, keys)

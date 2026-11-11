@@ -5,7 +5,8 @@ that time and the proposal has to follow from it; with 4 s the limit has to end 
 has to continue it and stop the wheels. T6: the blade motor of the fake stops without host like its wheels, and the
 runs have to find that; with the flag cutter_holds it keeps turning, which has to end T6 with the finding and the blade
 off. With --blade-percent 100 and --blade-window 5 every blade run has to take those values; a window longer than the
-lease of a DDS participant (20 s) has to end with the same finding and nothing else. No process may be left.
+lease of a DDS participant (20 s) has to end with the same finding and nothing else. The STOP check has to pass
+before the first wheel command and before the first blade on. No process may be left.
 
 Reading the port while tron_mcu holds it (TIOCEXCL) needs root with CAP_SYS_ADMIN, as on the Tron:
   docker run --user 0 --cap-add SYS_ADMIN ... python3 -m unittest tools/yf/test/test_rehearsal_tron.py
@@ -116,6 +117,13 @@ class TestRehearsalTron(unittest.TestCase):
         self.assertTrue(end["complete"])
         self.assertEqual(code, 0)
         self.assertEqual([r for r in rec if r["kind"] == "firmware"][0]["cutter"], "0.6.36")
+        check, = [r for r in rec if r["kind"] == "stop_check"]
+        self.assertEqual(check["button"], "STOP")
+        self.assertTrue(check["free"] and check["released"] and check["latched"], check)
+        self.assertEqual(m.reason_text(check["reason"]), "LATCH|STOP")
+        before = rec[:rec.index(check)]
+        self.assertIn("T1", [r["step"] for r in before if r["kind"] == "mark"])
+        self.assertFalse([r for r in before if r["kind"] == "cmd" and (r["v"] or r["w"])])
         telemetry, = [r for r in rec if r["kind"] == "telemetry"]
         self.assertGreater(telemetry["frames_per_s"], 40)
         self.assertEqual(telemetry["link_errors"], 0)
@@ -189,6 +197,9 @@ class TestRehearsalTron(unittest.TestCase):
         self.assertEqual(end["findings"], [])
         self.assertTrue(end["complete"])
         self.assertEqual(code, 0)
+        check, = [r for r in rec if r["kind"] == "stop_check"]
+        self.assertTrue(check["released"], check)
+        self.assertFalse([r for r in rec[:rec.index(check)] if r["kind"] == "blade" and r["on"]])
         offs = [r for r in rec if r["kind"] == "blade_off"]
         self.assertEqual([(r["percent"], r["rpm"]) for r in offs], [(30, 840), (100, 2800)])
         lease, = [r for r in rec if r["kind"] == "blade_lease"]
