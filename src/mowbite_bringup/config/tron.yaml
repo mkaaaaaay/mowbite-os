@@ -179,6 +179,15 @@ mowbite_logic:
     dock_gate_heading: 8.0
     dock_overshoot: 0.05
     contact_timeout: 10.0
+    # A planner that gives no answer for the way to the point in front of the station within plan_timeout, or does
+    # not run, does not keep the mower from it (docking_direct): the mower turns on the spot, drives the straight
+    # line there and turns again (DOCKING_DIRECT), where no obstacle and no end of the mowing and navigation areas
+    # lies closer to that line than the turning circle of the body plus direct_margin m plus max_position_accuracy.
+    # The follower ends the leg once base_link is direct_margin m off the line. Not free, the try fails
+    # (DOCKING_RETRY with cause and direct_blocked), and a way the planner refuses is never replaced. Platform
+    # values, not settings of params.set. Assumptions until phase 7.
+    docking_direct: true
+    direct_margin: 0.15
     # The debounced contact is not DOCKED yet (G19): contact and a charge current of at least charge_confirm_current A
     # have to hold charge_confirm_time s without a gap, at charge_expected_below percent or more the contact alone, as
     # the charger stays off near full. Without either within charge_confirm_timeout s the try fails (NO_CHARGE_CURRENT):
@@ -192,7 +201,10 @@ mowbite_logic:
     charge_expected_below: 95.0
     charge_lost_time: 10.0
     # mowing.plan and the job ask the planner for a plan and set only what the request carries: width, passes and angle
-    # are the planner's (mowbite_planner below). plan_timeout in s.
+    # are the planner's (mowbite_planner below). plan_timeout in s, also for the way to a path or to the station. A
+    # job asks for a way again up to three times, standing with the blade off; after that, or once the plan of an area
+    # got no answer, mowing ends, the job kept, and the mower goes home (DOCKING with the reason PLANNER_TIMEOUT).
+    # Where it cannot go home it pauses as for a way or a plan that failed.
     plan_timeout: 30.0
     # Mowing. The blade turns only with mow_with_blade here and allow_blade of tron_mcu, and only on mow segments. It runs
     # on a lease of blade_lease s, renewed every blade_renew s. mower_spinup_rpm 0: no wait for the blade (Tron rpm not

@@ -161,6 +161,7 @@ class LogicNode : public rclcpp::Node {
     RestoreHold();
     LoadLogicParams();
     LoadGeometryEntries();
+    core_.Call<&LogicCore::SetTurningRadius>(geometry_.TurningRadius());
     // The blade: a lease of blade_lease (s), renewed every blade_renew (s) while the logic wants it to turn.
     blade_lease_s_ = declare_parameter("blade_lease", 1.0);
     blade_renew_s_ = declare_parameter("blade_renew", 0.5);
@@ -432,6 +433,12 @@ class LogicNode : public rclcpp::Node {
         declare_parameter("dock_gate_heading", config.dock.gate_heading * 180.0 / M_PI) * M_PI / 180.0;
     config.dock.overshoot = declare_parameter("dock_overshoot", config.dock.overshoot);
     config.dock.contact_timeout = declare_parameter("contact_timeout", config.dock.contact_timeout);
+    // The straight way to the station where the planner gives no answer, the platform's.
+    config.dock.direct = declare_parameter("docking_direct", config.dock.direct);
+    config.dock.direct_margin = declare_parameter("direct_margin", config.dock.direct_margin);
+    if (!(config.dock.direct_margin > 0) || !std::isfinite(config.dock.direct_margin)) {
+      throw std::invalid_argument("direct_margin needs to be above 0");
+    }
     // The charge that confirms docking and whose loss on the station is told, the platform's.
     config.charge.current = declare_parameter("charge_confirm_current", config.charge.current);
     config.charge.time = declare_parameter("charge_confirm_time", config.charge.time);
@@ -946,9 +953,10 @@ class LogicNode : public rclcpp::Node {
       core_.Call<&LogicCore::OnDockingLegEnded>(ToLegEnd(reason), why);
       return;
     }
-    // In a job the way to the start of a path failed, or the follower did not take a path of the plan.
+    // In a job the way to the start of a path failed, or the follower did not take a path of the plan; a planner
+    // that gave no answer goes to the core as it is.
     Reason leg = why;
-    const bool way = why.code == "TRANSIT_FAILED" || why.code == "PLANNER_TIMEOUT" || why.code == "FOLLOWER_REFUSED";
+    const bool way = why.code == "TRANSIT_FAILED" || why.code == "FOLLOWER_REFUSED";
     if (way && ended.purpose == Purpose::kApproach) leg.code = "APPROACH_FAILED";
     if (way && ended.purpose == Purpose::kMow) leg.code = "INVALID";
     core_.Call<&LogicCore::OnLegEnded>(ToLegEnd(reason), ended.PathIndex(index), leg);
@@ -964,8 +972,13 @@ class LogicNode : public rclcpp::Node {
     }
   }
 
-  // The next step of the job, when nothing is on its way for it. Called with the mutex held.
+  // The next step of the job, when nothing is on its way for it. A plan asked for by a job that ended is dropped:
+  // nothing waits for its answer, not the way home either. Called with the mutex held.
   void PumpJob() {
+    if (job_plan_.active && !core_.View().Mowing()) {
+      plan_client_->remove_pending_request(job_plan_.request_id);
+      job_plan_ = JobPlan();
+    }
     if (drive_.active || job_plan_.active || !core_.View().Mowing()) return;
     JobStep step = core_.Call<&LogicCore::NextJobStep>(MonotonicSeconds());
     switch (step.kind) {
@@ -1070,7 +1083,7 @@ class LogicNode : public rclcpp::Node {
   }
 
   // The way to the docking station over the drivable areas, or a line for the follower: besides the drivable areas
-  // base_link may be in the corridor along it. Called with the mutex held.
+  // base_link may be in the corridor along it, if it has one. Called with the mutex held.
   void SendDockingLeg(const DockingLeg& leg) {
     if (leg.kind == DockingLeg::Kind::kApproach) {
       const Reason why = PlanWay(Purpose::kDock, leg.goal.x, leg.goal.y, leg.goal.heading);
@@ -1089,13 +1102,14 @@ class LogicNode : public rclcpp::Node {
     for (const auto& p : leg.poses) goal.poses.push_back(PoseAt(p.x, p.y, p.heading));
     goal.start_index = 0;
     for (const auto& ring : drivable) goal.allowed_areas.push_back(ToPolygon(ring));
-    goal.allowed_areas.push_back(ToPolygon(leg.corridor));
+    if (!leg.corridor.empty()) goal.allowed_areas.push_back(ToPolygon(leg.corridor));
     for (const auto& ring : obstacles) goal.obstacles.push_back(ToPolygon(ring));
     goal.max_speed = static_cast<float>(leg.speed);
     goal.stall_time = static_cast<float>(leg.stall_time);
     goal.straight = leg.straight;
     goal.reverse = leg.reverse;
     goal.end_tolerance = static_cast<float>(leg.end_tolerance);
+    goal.max_cross_track = static_cast<float>(leg.max_cross_track);
     drive_ = Drive();
     drive_.purpose = Purpose::kDock;
     drive_.seq = ++drive_seq_;
@@ -1103,10 +1117,13 @@ class LogicNode : public rclcpp::Node {
     drive_.sent = MonotonicSeconds();
     const auto& from = leg.poses.front();
     const auto& to = leg.poses.back();
+    // A leg without a speed of its own drives at the follower's.
+    char speed[24] = "";
+    if (leg.speed > 0) std::snprintf(speed, sizeof(speed), " at %.2f m/s", leg.speed);
     char text[128];
-    std::snprintf(text, sizeof(text), "%s, %.2f m %s to (%.2f, %.2f) at %.2f m/s", DockingLegName(leg.kind),
+    std::snprintf(text, sizeof(text), "%s, %.2f m %s to (%.2f, %.2f)%s", DockingLegName(leg.kind),
                   std::hypot(to.x - from.x, to.y - from.y), leg.reverse ? "backwards" : "forwards", to.x, to.y,
-                  leg.speed);
+                  speed);
     SendFollow(goal, text);
   }
 
@@ -2134,6 +2151,7 @@ class LogicNode : public rclcpp::Node {
           return;
         }
         geometry_ = std::move(changed);
+        core_.Call<&LogicCore::SetTurningRadius>(geometry_.TurningRadius());
         // Only a value that is another now is news; a key entered with the platform's own value is not.
         if (!change.changed.empty()) {
           core_.Call<&LogicCore::GeometryChanged>(change.changed, change.below_default, geometry_.version());
@@ -2197,7 +2215,7 @@ class LogicNode : public rclcpp::Node {
         plan_client_->remove_pending_request(job_plan_.request_id);
         job_plan_ = JobPlan();
         core_.Call<&LogicCore::OnJobPlanFailed>(
-            Reason("PLANNING_FAILED",
+            Reason("PLANNER_TIMEOUT",
                    "No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s"));
       }
       for (auto it = pending_plans_.begin(); it != pending_plans_.end();) {
