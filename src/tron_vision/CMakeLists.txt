@@ -14,6 +14,8 @@ find_package(tron_mcu REQUIRED)
 find_package(mowbite_watch REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg)
 
@@ -45,6 +47,14 @@ ament_target_dependencies(tron_stereo_node_lib rclcpp mowbite_msgs ament_index_c
 add_executable(tron_stereo_node src/stereo_node_main.cpp)
 target_link_libraries(tron_stereo_node tron_stereo_node_lib)
 install(TARGETS tron_stereo_node RUNTIME DESTINATION lib/${PROJECT_NAME})
+
+# The dock marker seen by the rear camera, a process of its own: a crash in the USB camera takes nothing else along.
+add_library(tron_rear_node_lib STATIC src/rear_node.cpp)
+target_link_libraries(tron_rear_node_lib tron_vision_core tron_mcu::tron_mcu_core mowbite_watch::mowbite_watch)
+ament_target_dependencies(tron_rear_node_lib rclcpp mowbite_msgs std_msgs diagnostic_msgs)
+add_executable(tron_rear_node src/rear_node_main.cpp)
+target_link_libraries(tron_rear_node tron_rear_node_lib)
+install(TARGETS tron_rear_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY include/ DESTINATION include)
 install(TARGETS tron_vision_core
@@ -96,6 +106,8 @@ if(BUILD_TESTING)
   target_link_libraries(tron_stereo_node_test tron_stereo_node_lib)
   target_compile_definitions(tron_stereo_node_test PRIVATE FAKE_MPP_LIB="$<TARGET_FILE:tron_vision_fake_mpp>")
   add_dependencies(tron_stereo_node_test tron_vision_fake_mpp)
+  ament_add_gtest(tron_rear_node_test test/test_rear_node.cpp TIMEOUT 120)
+  target_link_libraries(tron_rear_node_test tron_rear_node_lib)
 endif()
 
 ament_export_targets(export_tron_vision HAS_LIBRARY_TARGET)
