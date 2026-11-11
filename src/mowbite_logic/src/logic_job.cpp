@@ -22,6 +22,8 @@ void LogicCore::ApplySkips() {
   // Its events carry the client of the skip, also after the leg stopped.
   const std::string client = client_;
   if (client_.empty()) client_ = skip_client_;
+  skipped_.reset();
+  drive_on_ = false;
   if (skip_area_) {
     if (const JobArea* area = job_.CurrentArea()) {
       json details = {{"area_id", area->id}, {"area_name", area->name}};
@@ -32,7 +34,10 @@ void LogicCore::ApplySkips() {
     // A plan on its way is for the skipped area.
     if (leg_ == Leg::kPlanning) leg_ = Leg::kNone;
   } else if (skip_path_ && job_.HasPlan()) {
+    const JobProgress left = job_.progress();
     job_.SkipPath();
+    // Still in its plan: the path left is a checked way on where the planner finds none (OnLegEnded).
+    if (job_.HasPlan()) skipped_ = left;
   }
   if (skip_area_ || skip_path_) {
     approached_ = false;
@@ -49,7 +54,7 @@ void LogicCore::Pause(int why, const Reason& reason) {
   const bool was_paused = pause_ != 0;
   pause_ |= why;
   if (why == kPauseGps) gps_good_since_.reset();
-  if (leg_ == Leg::kApproach || leg_ == Leg::kFollow) {
+  if (LegDrives()) {
     CancelDrive(reason);
     SetDue<StopRequest>(true);
   }
@@ -115,6 +120,11 @@ JobStep LogicCore::NextJobStep(double now_s) {
   if (!pose_) {
     Pause(kPauseGps, Reason("NO_POSITION", "No position from the localization"));
     return step;
+  }
+  if (drive_on_) {
+    drive_on_ = false;
+    // Moved meanwhile: the way is asked for again from where the mower stands now.
+    if (const JobPath* path = SkippedPathHere()) return SkippedPiece(*path);
   }
   if (!approached_ && std::hypot(goal->x - pose_->x, goal->y - pose_->y) > config_.approach_distance) {
     leg_ = Leg::kApproach;
@@ -184,28 +194,31 @@ void LogicCore::OnJobProgress(size_t index) {
 }
 
 void LogicCore::OnLegEnded(LegEnd end, size_t index, const Reason& reason) {
-  if (state_ != State::kMowing || (leg_ != Leg::kApproach && leg_ != Leg::kFollow)) return;
+  if (state_ != State::kMowing || !LegDrives()) return;
   const bool follow = leg_ == Leg::kFollow;
+  const bool approach = leg_ == Leg::kApproach;
   leg_ = Leg::kNone;
   if (follow) job_.OnIndex(index);
+  // A piece of the path a skip left: the job stays at the start of the next path.
+  if (!follow && !approach && skipped_) skipped_->index = static_cast<int>(index);
   if (skip_area_ || skip_path_) {
     ApplySkips();
     return;
   }
-  if (!follow && PlannerSilent(reason)) {
+  if (approach && PlannerSilent(reason)) {
     approached_ = false;
     JobWithoutPlanner(reason, Reason("APPROACH_FAILED", reason.message), true);
     return;
   }
   // An approach the logic stopped itself tells nothing about the planner.
-  if (!follow && end != LegEnd::kCanceled) planner_silent_ = 0;
+  if (approach && end != LegEnd::kCanceled) planner_silent_ = 0;
   switch (end) {
     case LegEnd::kDone:
       if (follow) {
         job_.PathDone();
         approached_ = false;
         CheckpointNow();
-      } else {
+      } else if (approach) {
         approached_ = true;
       }
       break;
@@ -219,12 +232,60 @@ void LogicCore::OnLegEnded(LegEnd end, size_t index, const Reason& reason) {
       }
       break;
     case LegEnd::kEmergency: Pause(kPauseEmergency, reason); break;
+    case LegEnd::kNoWay:
+      // After a skip the path left is a checked way on: a piece of it, then the approach is asked for again.
+      if (approach && SkippedPathHere()) {
+        approached_ = false;
+        drive_on_ = true;
+        break;
+      }
+      [[fallthrough]];
     case LegEnd::kFailed:
       approached_ = false;
       Pause(kPauseFault, reason);
       break;
   }
   if (follow) CheckpointNow();
+}
+
+bool LogicCore::LegDrives() const {
+  return leg_ == Leg::kApproach || leg_ == Leg::kFollow || leg_ == Leg::kSkippedPath;
+}
+
+const JobPath* LogicCore::SkippedPathHere() const {
+  if (!skipped_ || !pose_ || !job_.HasPlan()) return nullptr;
+  const JobProgress& now = job_.progress();
+  if (now.area != skipped_->area || now.fingerprint != skipped_->fingerprint || now.path != skipped_->path + 1 ||
+      now.index != 0) {
+    return nullptr;
+  }
+  const JobPath* path = job_.Path(skipped_->path);
+  if (!path || skipped_->index < 0 || static_cast<size_t>(skipped_->index) + 1 >= path->poses.size()) return nullptr;
+  const JobPose& at = path->poses[static_cast<size_t>(skipped_->index)];
+  return std::hypot(at.x - pose_->x, at.y - pose_->y) <= config_.approach_distance ? path : nullptr;
+}
+
+JobStep LogicCore::SkippedPiece(const JobPath& path) {
+  const std::vector<JobPose>& poses = path.poses;
+  const size_t from = static_cast<size_t>(skipped_->index);
+  size_t to = from + 1;
+  double length = std::hypot(poses[to].x - poses[from].x, poses[to].y - poses[from].y);
+  while (to + 1 < poses.size()) {
+    length += std::hypot(poses[to + 1].x - poses[to].x, poses[to + 1].y - poses[to].y);
+    if (length > kSkippedPathPiece) break;
+    ++to;
+  }
+  Notify("Mowing: no way to the next path from here, driving on along the skipped one with the blade off, to pose " +
+         std::to_string(to));
+  // Off also where the blade was spinning up for the next path.
+  spinup_since_.reset();
+  leg_ = Leg::kSkippedPath;
+  JobStep step;
+  step.kind = JobStep::Kind::kSkippedPath;
+  step.path.poses.assign(poses.begin(), poses.begin() + static_cast<std::ptrdiff_t>(to) + 1);
+  for (JobPose& pose : step.path.poses) pose.kind = kSegmentTransit;
+  step.start_index = from;
+  return step;
 }
 
 }  // namespace mowbite_logic

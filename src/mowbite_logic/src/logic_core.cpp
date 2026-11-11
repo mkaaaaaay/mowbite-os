@@ -491,7 +491,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     (area ? skip_area_ : skip_path_) = true;
     skip_client_ = client_;
     // A leg on its way ends first, its index counts.
-    if (leg_ == Leg::kApproach || leg_ == Leg::kFollow) {
+    if (LegDrives()) {
       CancelDrive(Reason("STOPPED", "Skipped by the app"));
       SetDue<StopRequest>(true);
     } else {
@@ -652,7 +652,7 @@ bool LogicCore::FollowerActive() const {
   if (state_ == State::kDriving) return true;
   if (state_ == State::kUndocking) return undock_step_ == UndockStep::kDrive && !undock_stopping_;
   if (state_ == State::kDocking) return docking_leg_.has_value() && !docking_hold_;
-  return state_ == State::kMowing && pause_ == 0 && (leg_ == Leg::kApproach || leg_ == Leg::kFollow);
+  return state_ == State::kMowing && pause_ == 0 && LegDrives();
 }
 
 void LogicCore::CancelDrive(const Reason& reason) {
@@ -673,11 +673,12 @@ void LogicCore::SetState(State state) {
   }
   if (state_ == State::kMowing) {
     session_id_.clear();
-    if (leg_ == Leg::kApproach || leg_ == Leg::kFollow) CancelDrive(Reason("STOPPED", "Mowing ended"));
+    if (LegDrives()) CancelDrive(Reason("STOPPED", "Mowing ended"));
     leg_ = Leg::kNone;
     pause_ = 0;
     pause_reason_ = Reason();
-    skip_path_ = skip_area_ = false;
+    skip_path_ = skip_area_ = drive_on_ = false;
+    skipped_.reset();
     spinup_since_.reset();
     gps_good_since_.reset();
   }

@@ -223,6 +223,20 @@ TEST(MowingJob, StartsOverWhenTheAreaOfTheCheckpointMoved) {
   EXPECT_NE(notice.find("starting over"), std::string::npos);
 }
 
+TEST(MowingJob, APathOfThePlanByItsNumber) {
+  MowingJob job;
+  job.SetAreas(Garden());
+  EXPECT_EQ(job.Path(0), nullptr);
+  ASSERT_TRUE(job.SeekArea(nullptr));
+  job.SetPlan(TwoPaths(), "fp");
+  job.SkipPath();
+  EXPECT_EQ(job.Path(1), job.CurrentPath());
+  ASSERT_NE(job.Path(0), nullptr);
+  EXPECT_NE(job.Path(0), job.CurrentPath());
+  EXPECT_EQ(job.Path(-1), nullptr);
+  EXPECT_EQ(job.Path(2), nullptr);
+}
+
 TEST(MowingJob, SkipPathAndCompleteAndReset) {
   MowingJob job;
   job.SetAreas(Garden());

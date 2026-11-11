@@ -809,6 +809,7 @@ class LogicNode : public rclcpp::Node {
       if (seq != drive_.seq || !drive_.planning) return;
       drive_.planning = false;
       if (!response.success) {
+        drive_.no_way = response.code == "NO_WAY" || response.code == "START_OUTSIDE";
         EndDrive(false, Reason("TRANSIT_FAILED", "Transit planning failed: " + response.message),
                  FollowPath::Result::REASON_INVALID, 0);
       } else if (response.path.poses.empty()) {
@@ -956,9 +957,9 @@ class LogicNode : public rclcpp::Node {
     // that gave no answer goes to the core as it is.
     Reason leg = why;
     const bool way = why.code == "TRANSIT_FAILED" || why.code == "FOLLOWER_REFUSED";
-    if (way && ended.purpose == Purpose::kApproach) leg.code = "APPROACH_FAILED";
-    if (way && ended.purpose == Purpose::kMow) leg.code = "INVALID";
-    core_.Call<&LogicCore::OnLegEnded>(ToLegEnd(reason), ended.PathIndex(index), leg);
+    if (way) leg.code = ended.purpose == Purpose::kApproach ? "APPROACH_FAILED" : "INVALID";
+    // Only an approach asks the planner: its "no way from here" lets the core drive on along a skipped path.
+    core_.Call<&LogicCore::OnLegEnded>(ended.no_way ? LegEnd::kNoWay : ToLegEnd(reason), ended.PathIndex(index), leg);
   }
 
   static const char* PurposeName(int purpose) {
@@ -984,6 +985,7 @@ class LogicNode : public rclcpp::Node {
       case JobStep::Kind::kNone: return;
       case JobStep::Kind::kPlan: PlanJobArea(step.area_id); return;
       case JobStep::Kind::kApproach: Approach(step.goal); return;
+      case JobStep::Kind::kSkippedPath:
       case JobStep::Kind::kFollow: FollowJobPath(step.path, step.start_index); return;
     }
   }
@@ -2661,6 +2663,7 @@ class LogicNode : public rclcpp::Node {
     uint64_t seq = 0;
     std::shared_ptr<rmw_request_id_t> header;
     bool planning = false;
+    bool no_way = false;  // the planner refused the way with NO_WAY or START_OUTSIDE
     int64_t request_id = 0;
     // MonotonicSeconds() when the request went out, like every time the node measures against a limit.
     double sent = 0;

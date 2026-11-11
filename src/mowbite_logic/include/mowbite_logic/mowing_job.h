@@ -76,6 +76,8 @@ class MowingJob {
   // The plan of the current area. Path and index stay when the fingerprint is the saved one, else the area starts
   // over. A plan without paths finishes the area.
   void SetPlan(std::vector<JobPath> paths, const std::string& fingerprint);
+  // A path of the plan by its number; nothing without a plan or for another number.
+  const JobPath* Path(int number) const;
   // Nothing without a plan or after its last path.
   const JobPath* CurrentPath() const;
   const JobPose* CurrentPose() const;

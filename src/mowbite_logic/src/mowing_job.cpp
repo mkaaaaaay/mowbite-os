@@ -136,10 +136,14 @@ void MowingJob::SetPlan(std::vector<JobPath> paths, const std::string& fingerpri
   if (paths_.empty()) NextArea();
 }
 
-const JobPath* MowingJob::CurrentPath() const {
-  if (!has_plan_) return nullptr;
-  const size_t at = static_cast<size_t>(progress_.path);
+const JobPath* MowingJob::Path(int number) const {
+  if (!has_plan_ || number < 0) return nullptr;
+  const size_t at = static_cast<size_t>(number);
   return at < paths_.size() ? &paths_[at] : nullptr;
+}
+
+const JobPath* MowingJob::CurrentPath() const {
+  return Path(progress_.path);
 }
 
 const JobPose* MowingJob::CurrentPose() const {

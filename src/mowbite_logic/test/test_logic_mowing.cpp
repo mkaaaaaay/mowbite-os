@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <functional>
+#include <initializer_list>
+#include <utility>
+#include <vector>
 
 #include "mowbite_logic/logic_core.h"
 #include "logic_test_core.h"
@@ -712,4 +715,288 @@ TEST(LogicMowing, CheckpointsWhileFollowingInItsPeriod) {
   EXPECT_EQ(saved->index, 2);
   EXPECT_EQ(saved->area_id, "front");
   EXPECT_EQ(saved->fingerprint, "fp");
+}
+
+namespace {
+
+// n poses 0.5 m apart along x at the height y, all of one kind.
+JobPath Row(double y, int n, uint8_t kind) {
+  JobPath path;
+  for (int i = 0; i < n; ++i) {
+    JobPose pose;
+    pose.x = 0.5 * i;
+    pose.y = y;
+    pose.kind = kind;
+    path.poses.push_back(pose);
+  }
+  return path;
+}
+
+// A path through the given points, all of one kind.
+JobPath Through(std::initializer_list<std::pair<double, double>> points, uint8_t kind) {
+  JobPath path;
+  for (const auto& [x, y] : points) {
+    JobPose pose;
+    pose.x = x;
+    pose.y = y;
+    pose.kind = kind;
+    path.poses.push_back(pose);
+  }
+  return path;
+}
+
+const Reason kRefused("APPROACH_FAILED", "Transit planning failed: no way leaves the start");
+
+// Mowing the first of the paths with the blade, skipped at its pose of the given index, where the mower stands; the
+// approach to the path after it is on its way.
+TestCore SkippedAt(const std::vector<JobPath>& paths, size_t index) {
+  LogicConfig config;
+  config.mow_with_blade = true;
+  TestCore core = Ready(config);
+  const std::vector<JobPose>& poses = paths[0].poses;
+  core.OnPose(PoseAt(poses[0].x, poses[0].y));
+  EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
+  core.OnJobPlanned(paths, "fp");
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kFollow);
+  EXPECT_TRUE(core.BladeWanted());
+  EXPECT_EQ(core.OnAction(kMowing + "skip_path"), ActionResult::kDone);
+  core.OnPose(PoseAt(poses[index].x, poses[index].y));
+  core.OnLegEnded(LegEnd::kCanceled, index, Reason("CANCELED", ""));
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  core.TakeEvents();
+  core.TakeNotices();
+  core.TakeDriveCancel();
+  core.TakeStopRequest();
+  return core;
+}
+
+// An outline of 6 m skipped at its pose 2 (x = 1); the lane after it starts 4 m away.
+TestCore SkippedOnTheOutline() { return SkippedAt({Row(2, 13, kSegmentPerimeter), Row(6, 5, kSegmentLane)}, 2); }
+
+}  // namespace
+
+TEST(LogicMowing, AfterASkipARefusedWayGoesOnAlongThePathLeftInPieces) {
+  TestCore core = SkippedOnTheOutline();
+  core.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  EXPECT_TRUE(core.TakeEvents().empty());
+  JobStep step = core.NextJobStep(0);
+  ASSERT_EQ(step.kind, JobStep::Kind::kSkippedPath);
+  // 2 m on from pose 2: the path handed over ends at pose 6 and is a transit all along.
+  EXPECT_EQ(step.start_index, 2u);
+  ASSERT_EQ(step.path.poses.size(), 7u);
+  EXPECT_EQ(step.path.poses.back().x, 3.0);
+  for (const JobPose& pose : step.path.poses) EXPECT_EQ(pose.kind, kSegmentTransit);
+  EXPECT_FALSE(core.BladeWanted());
+  EXPECT_TRUE(core.FollowerActive());
+  EXPECT_EQ(core.TakeNotices().size(), 1u);
+  // The job stays at the start of the next path, whatever the follower reports.
+  core.OnJobProgress(4);
+  EXPECT_EQ(core.RobotState().current_path, 1);
+  EXPECT_EQ(core.RobotState().current_path_index, 0);
+  core.OnPose(PoseAt(3, 2));
+  core.OnLegEnded(LegEnd::kDone, 6, Reason("DONE", ""));
+  // Asked again from there, and still no way: the next piece.
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  EXPECT_FALSE(core.BladeWanted());
+  core.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  step = core.NextJobStep(0);
+  ASSERT_EQ(step.kind, JobStep::Kind::kSkippedPath);
+  EXPECT_EQ(step.start_index, 6u);
+  EXPECT_EQ(step.path.poses.size(), 11u);
+  EXPECT_FALSE(core.BladeWanted());
+  core.OnPose(PoseAt(5, 2));
+  core.OnLegEnded(LegEnd::kDone, 10, Reason("DONE", ""));
+  // Now the planner finds the way: the lane is mowed as after any approach.
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  core.OnPose(PoseAt(0, 6));
+  core.OnLegEnded(LegEnd::kDone, 0, Reason("DONE", ""));
+  step = core.NextJobStep(0);
+  ASSERT_EQ(step.kind, JobStep::Kind::kFollow);
+  EXPECT_EQ(step.path.poses.size(), 5u);
+  EXPECT_EQ(step.path.poses[1].kind, kSegmentLane);
+  EXPECT_TRUE(core.BladeWanted());
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+}
+
+TEST(LogicMowing, AtTheEndOfThePathLeftARefusedWayPausesAsBefore) {
+  TestCore core = SkippedOnTheOutline();
+  core.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  for (const size_t end : {size_t{6}, size_t{10}, size_t{12}}) {
+    const JobStep step = core.NextJobStep(0);
+    ASSERT_EQ(step.kind, JobStep::Kind::kSkippedPath);
+    ASSERT_EQ(step.path.poses.size(), end + 1);
+    core.OnPose(PoseAt(0.5 * static_cast<double>(end), 2));
+    core.OnLegEnded(LegEnd::kDone, end, Reason("DONE", ""));
+    EXPECT_EQ(core.RobotState().state, "MOWING");
+    ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+    core.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+    EXPECT_FALSE(core.BladeWanted());
+  }
+  // No pose of the path is left.
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  const auto events = core.TakeEvents();
+  ASSERT_TRUE(Find(events, "STATE"));
+  EXPECT_EQ(Find(events, "STATE")->details["reason"], "APPROACH_FAILED");
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kNone);
+  // Continued there, the way is asked for again and pauses the same way.
+  core.OnAction(kMowing + "continue");
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  core.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+}
+
+TEST(LogicMowing, AMowerOffThePathLeftPausesOnARefusedWay) {
+  TestCore core = SkippedOnTheOutline();
+  core.OnPose(PoseAt(1, 2.6));
+  core.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_EQ(Find(core.TakeEvents(), "STATE")->details["reason"], "APPROACH_FAILED");
+  // Put back and continued: asked again, then the path left counts.
+  core.OnPose(PoseAt(1, 2.2));
+  core.OnAction(kMowing + "continue");
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  core.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kSkippedPath);
+  // Moved between the answer and the piece: the way is asked for again from there.
+  TestCore moved = SkippedOnTheOutline();
+  moved.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  moved.OnPose(PoseAt(1, 3));
+  EXPECT_EQ(moved.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  moved.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  EXPECT_EQ(moved.RobotState().state, "PAUSED");
+}
+
+TEST(LogicMowing, OnlyNoWayAfterASkipGoesOnAlongThePathLeft) {
+  // Any other refusal of the planner and a failure of the follower pause.
+  TestCore failed = SkippedOnTheOutline();
+  failed.OnLegEnded(LegEnd::kFailed, 0, kRefused);
+  EXPECT_EQ(failed.RobotState().state, "PAUSED");
+  // A planner that gives no answer is asked again.
+  TestCore silent = SkippedOnTheOutline();
+  silent.OnLegEnded(LegEnd::kFailed, 0, Reason("PLANNER_TIMEOUT", "no answer"));
+  EXPECT_EQ(silent.RobotState().state, "MOWING");
+  EXPECT_EQ(silent.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  // Without a skip there is no path left: moved in a pause, the refused way back pauses.
+  TestCore paused = Following();
+  paused.OnAction(kMowing + "pause");
+  paused.OnLegEnded(LegEnd::kCanceled, 2, Reason("CANCELED", ""));
+  paused.OnPose(PoseAt(2, 4));
+  paused.OnAction(kMowing + "continue");
+  ASSERT_EQ(paused.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  paused.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  EXPECT_EQ(paused.RobotState().state, "PAUSED");
+  // The last path of a plan skipped: the next area has another plan.
+  TestCore last = Ready();
+  last.OnPose(PoseAt(0, 2));
+  last.OnAction(kStart);
+  last.NextJobStep(0);
+  last.OnJobPlanned({Row(2, 13, kSegmentPerimeter)}, "fp");
+  ASSERT_EQ(last.NextJobStep(0).kind, JobStep::Kind::kFollow);
+  last.OnAction(kMowing + "skip_path");
+  last.OnLegEnded(LegEnd::kCanceled, 2, Reason("CANCELED", ""));
+  ASSERT_EQ(last.NextJobStep(0).kind, JobStep::Kind::kPlan);
+  last.OnPose(PoseAt(1, 2));
+  last.OnJobPlanned({Row(6, 5, kSegmentLane)}, "fp");
+  ASSERT_EQ(last.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  last.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  EXPECT_EQ(last.RobotState().state, "PAUSED");
+}
+
+TEST(LogicMowing, APieceOfThePathLeftStopsLikeAnyLeg) {
+  TestCore core = SkippedOnTheOutline();
+  core.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kSkippedPath);
+  EXPECT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+  EXPECT_TRUE(core.TakeDriveCancel());
+  EXPECT_TRUE(core.TakeStopRequest());
+  core.OnPose(PoseAt(2, 2));
+  core.OnLegEnded(LegEnd::kCanceled, 4, Reason("CANCELED", ""));
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  // Continued: asked again, then on from the pose it got to.
+  core.OnAction(kMowing + "continue");
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  core.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  const JobStep step = core.NextJobStep(0);
+  ASSERT_EQ(step.kind, JobStep::Kind::kSkippedPath);
+  EXPECT_EQ(step.start_index, 4u);
+  EXPECT_EQ(step.path.poses.size(), 9u);
+  // A piece the follower fails on pauses with its reason.
+  core.TakeEvents();
+  core.OnLegEnded(LegEnd::kFailed, 5, Reason("TIMEOUT", "stuck"));
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_EQ(Find(core.TakeEvents(), "STATE")->details["reason"], "TIMEOUT");
+  EXPECT_FALSE(core.BladeWanted());
+
+  // A second skip stops the piece and skips the lane, the last path of the plan.
+  TestCore twice = SkippedOnTheOutline();
+  twice.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  ASSERT_EQ(twice.NextJobStep(0).kind, JobStep::Kind::kSkippedPath);
+  EXPECT_EQ(twice.OnAction(kMowing + "skip_path"), ActionResult::kDone);
+  EXPECT_TRUE(twice.TakeDriveCancel());
+  twice.OnLegEnded(LegEnd::kCanceled, 3, Reason("CANCELED", ""));
+  EXPECT_EQ(twice.NextJobStep(0).kind, JobStep::Kind::kPlan);
+
+  // Mowing ended during a piece: the drive is canceled.
+  TestCore ended = SkippedOnTheOutline();
+  ended.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  ASSERT_EQ(ended.NextJobStep(0).kind, JobStep::Kind::kSkippedPath);
+  EXPECT_EQ(ended.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
+  EXPECT_TRUE(ended.TakeDriveCancel());
+  EXPECT_FALSE(ended.Mowing());
+}
+
+TEST(LogicMowing, APieceOfThePathLeftIsItsNextStretchAndWhatFitsIntoTwoMetres) {
+  const JobPath lane = Row(8, 5, kSegmentLane);
+  // From the first pose and along y: four stretches of 0.5 m.
+  TestCore first =
+      SkippedAt({Through({{0, 2}, {0, 2.5}, {0, 3}, {0, 3.5}, {0, 4}, {0, 4.5}, {0, 5}}, kSegmentPerimeter), lane}, 0);
+  first.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  JobStep step = first.NextJobStep(0);
+  ASSERT_EQ(step.kind, JobStep::Kind::kSkippedPath);
+  EXPECT_EQ(step.start_index, 0u);
+  ASSERT_EQ(step.path.poses.size(), 5u);
+  EXPECT_EQ(step.path.poses.back().y, 4.0);
+  // A stretch longer than that is driven whole, with nothing after it.
+  TestCore longer = SkippedAt({Through({{0, 2}, {1, 2}, {4, 2}, {4.5, 2}, {5, 2}}, kSegmentPerimeter), lane}, 1);
+  longer.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  step = longer.NextJobStep(0);
+  ASSERT_EQ(step.kind, JobStep::Kind::kSkippedPath);
+  EXPECT_EQ(step.start_index, 1u);
+  EXPECT_EQ(step.path.poses.size(), 3u);
+  // One pose before its end the path left still has a stretch.
+  TestCore last = SkippedAt({Row(2, 13, kSegmentPerimeter), lane}, 11);
+  last.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  step = last.NextJobStep(0);
+  ASSERT_EQ(step.kind, JobStep::Kind::kSkippedPath);
+  EXPECT_EQ(step.start_index, 11u);
+  EXPECT_EQ(step.path.poses.size(), 13u);
+}
+
+TEST(LogicMowing, ThePathLeftCountsOnlyOnTheWayToThePathRightAfterIt) {
+  TestCore core = SkippedAt({Row(2, 13, kSegmentPerimeter), Row(6, 5, kSegmentLane), Row(10, 5, kSegmentLane)}, 2);
+  // The planner finds the way to the lane, which is mowed to its end.
+  core.OnPose(PoseAt(0, 6));
+  core.OnLegEnded(LegEnd::kDone, 0, Reason("DONE", ""));
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kFollow);
+  core.OnLegEnded(LegEnd::kDone, 4, Reason("DONE", ""));
+  // Back where the outline was left, the way to the second lane is refused.
+  core.OnPose(PoseAt(1, 2));
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  core.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_EQ(Find(core.TakeEvents(), "STATE")->details["reason"], "APPROACH_FAILED");
+}
+
+TEST(LogicMowing, ALegEndWithNoLegDrivingChangesNothing) {
+  TestCore core = Ready();
+  core.OnPose(PoseAt(0, 2));
+  EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
+  core.TakeEvents();
+  // Waiting for the plan: a late end of the follower is none of the job's.
+  core.OnLegEnded(LegEnd::kFailed, 0, Reason("TIMEOUT", "stuck"));
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  EXPECT_TRUE(core.TakeEvents().empty());
 }

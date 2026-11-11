@@ -330,18 +330,20 @@ void SetEventObserver(EventObserver observer);
 // What the watch of the way home takes from a report of the hardware.
 HomeSample HomeSampleOf(const HardwareSnapshot& hw, double now_s);
 
-// How a drive of the follower for a job ended.
-enum class LegEnd { kDone, kCanceled, kGps, kEmergency, kFailed };
+// How a drive of the follower for a job ended. kNoWay: the planner found no way for an approach from where the mower
+// stands (NO_WAY or START_OUTSIDE of PlanTransit); for any other leg it counts as kFailed.
+enum class LegEnd { kDone, kCanceled, kGps, kEmergency, kFailed, kNoWay };
 
 // What the node does next for the job.
 struct JobStep {
-  enum class Kind { kNone, kPlan, kApproach, kFollow };
+  enum class Kind { kNone, kPlan, kApproach, kFollow, kSkippedPath };
   Kind kind = Kind::kNone;
   // kPlan: the area to plan.
   std::string area_id;
   // kApproach: where to drive to, over the drivable areas.
   JobPose goal;
-  // kFollow: the path and the pose to start at.
+  // kFollow: the path and the pose to start at. kSkippedPath: the same for a piece of the path a skip left; the path
+  // ends with the piece and is a transit all along.
   JobPath path;
   size_t start_index = 0;
 };
@@ -351,6 +353,10 @@ constexpr double kReleaseSourceS = 2.0;
 
 // A job asks the planner again this often in a row when it gave no answer; then mowing ends and the mower goes home.
 constexpr int kPlannerRetries = 3;
+
+// m of the path a skip left that the mower drives on at a time, the blade off, while the planner finds no way from
+// there to the next path; after each piece the job asks for that way again.
+constexpr double kSkippedPathPiece = 2.0;
 
 // Whether the planner gave no answer: PLANNER_TIMEOUT or PLANNER_MISSING.
 bool PlannerSilent(const Reason& why);
@@ -576,6 +582,9 @@ class LogicCore {
   // in a row and never after a plan that timed out. Then the job ends, kept for the next start, and the mower goes
   // home with that reason at the event DOCKING; without a way home, or in a pause that waits for the user, mowing
   // pauses as for a failed approach or plan.
+  // After a skip an approach that ended with kNoWay does not pause while the mower stands on the path it left and
+  // poses of it are left: the next step is kSkippedPath, a piece of that path with the blade off, and after it the
+  // approach is asked for again. For kSkippedPath index is the pose of that path the mower got to.
   void OnLegEnded(LegEnd end, size_t index, const Reason& reason);
   // Timers of the job: GPS back, going home (HomeWatch), checkpoint period. While mowing and not waiting for the user
   // the first reason that holds sends the mower home with the event DOCKING; without a way home only the battery
@@ -611,7 +620,7 @@ class LogicCore {
   static constexpr int kPauseEmergency = 1 << 1;
   static constexpr int kPauseGps = 1 << 2;
   static constexpr int kPauseFault = 1 << 3;
-  enum class Leg { kNone, kPlanning, kApproach, kFollow };
+  enum class Leg { kNone, kPlanning, kApproach, kFollow, kSkippedPath };
 
   void SetState(State state);
   // The command after its params were checked: empty when accepted, else why not; extra fields of the answer go to
@@ -707,6 +716,14 @@ class LogicCore {
   void CancelDrive(const Reason& reason);
   void Unpause(int why);
   void ApplySkips();
+  // The follower drives a leg of the job.
+  bool LegDrives() const;
+  // The path the last skip left, while the job stands at the start of the one after it, the mower within
+  // approach_distance of the pose it got to on the path left, and poses of it are left; else nothing.
+  const JobPath* SkippedPathHere() const;
+  // Its next piece as the step of the job: the poses within kSkippedPathPiece m of the one the mower stands at, at
+  // least the next one.
+  JobStep SkippedPiece(const JobPath& path);
   // Ends the job: finished (JOB_COMPLETE) or not (it goes on from the checkpoint next time); home: docking after it,
   // with why as the reason of the event DOCKING.
   void EndJob(bool finished, bool home, const Reason& why = Reason());
@@ -813,6 +830,10 @@ class LogicCore {
   int planner_silent_ = 0;
   bool skip_path_ = false;
   bool skip_area_ = false;
+  // Where the job stood when a skip left a path that was not the last of its plan; index follows the mower along it.
+  std::optional<JobProgress> skipped_;
+  // The planner found no way from there to the next path: a piece of the path left is the next step.
+  bool drive_on_ = false;
   std::string announced_area_;
   std::optional<double> spinup_since_;
   std::optional<double> gps_good_since_;
