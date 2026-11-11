@@ -144,6 +144,7 @@ const Ring kOpenLawn{{-2.0, -3.0}, {6.0, -3.0}, {6.0, 3.0}, {-2.0, 3.0}};
 // From base_link to the front corners of the Tron.
 const double kTurningRadius = 0.644;
 const Reason kNoAnswer("PLANNER_TIMEOUT", "No answer from the planner in 10 s");
+const Reason kNotRunning("PLANNER_MISSING", "The planner is not running");
 
 // Docking after the job, the planner asked for the way to the point in front of the station.
 TestCore Approaching(LogicConfig config = Tron(), const Ring& lawn = kOpenLawn, const std::vector<Ring>& obstacles = {},
@@ -602,7 +603,7 @@ TEST(DockingDirect, APlannerThatDoesNotAnswerSendsTheMowerStraight) {
 
 TEST(DockingDirect, APlannerThatIsNotRunningCountsTheSame) {
   TestCore core = Approaching();
-  core.OnDockingLegEnded(LegEnd::kFailed, Reason("PLANNER_MISSING", "The planner is not running"));
+  core.OnDockingLegEnded(LegEnd::kFailed, kNotRunning);
   const auto events = core.TakeEvents();
   ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_DIRECT"}));
   EXPECT_EQ(events[0].details["cause"], "PLANNER_MISSING");
@@ -615,20 +616,23 @@ TEST(DockingDirect, AWayThatIsNotFreeFailsTheTry) {
     Ring lawn;
     std::vector<Ring> obstacles;
     double turning_radius;
+    double margin;
     const char* why;
   };
+  const double margin = Tron().dock.direct_margin;
   const Ring stone{{0.9, 0.55}, {1.1, 0.55}, {1.1, 0.75}, {0.9, 0.75}};
   const std::vector<Case> cases = {
-      {"the lawn ends 0.3 m behind the point in front of the station", kLawn, {}, kTurningRadius,
+      {"the lawn ends 0.3 m behind the point in front of the station", kLawn, {}, kTurningRadius, margin,
        "the areas end 0.30 m from the way at (-0.50, 0.00), less than 0.90 m"},
-      {"an obstacle 0.25 m beside the way", kOpenLawn, {stone}, kTurningRadius,
+      {"an obstacle 0.25 m beside the way", kOpenLawn, {stone}, kTurningRadius, margin,
        "an obstacle 0.25 m from the way at (1.10, 0.55), less than 0.90 m"},
-      {"no dimensions of the body", kOpenLawn, {}, 0.0, "the size of the body is not known"},
-      {"no margin for the follower to hold", kOpenLawn, {}, kTurningRadius, "the size of the body is not known"},
+      {"no dimensions of the body", kOpenLawn, {}, 0.0, margin, "the size of the body is not known"},
+      {"no margin for the follower to hold", kOpenLawn, {}, kTurningRadius, 0.0,
+       "the size of the body is not known"},
   };
   for (const Case& c : cases) {
     LogicConfig config = Tron();
-    if (std::string(c.what).find("no margin") == 0) config.dock.direct_margin = 0.0;
+    config.dock.direct_margin = c.margin;
     TestCore core = Approaching(config, c.lawn, c.obstacles, c.turning_radius);
     core.OnDockingLegEnded(LegEnd::kCanceled, kNoAnswer);
     const auto events = core.TakeEvents();
@@ -698,7 +702,7 @@ TEST(DockingDirect, AStraightWayThatFailsCountsWithItsCause) {
   };
   for (const Reason& end : ends) {
     TestCore core = Approaching();
-    core.OnDockingLegEnded(LegEnd::kFailed, Reason("PLANNER_MISSING", "The planner is not running"));
+    core.OnDockingLegEnded(LegEnd::kFailed, kNotRunning);
     Take(core, DockingLeg::Kind::kDirect);
     core.TakeEvents();
     core.OnPose(PoseAt(1.0, 0.4, M_PI));
@@ -744,7 +748,7 @@ TEST(DockingDirect, AfterTheLastTryDockingFailsWithTheCause) {
   core.OnDockingLegEnded(LegEnd::kCanceled, kNoAnswer);
   ASSERT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"DOCKING_RETRY"}));
   Take(core, DockingLeg::Kind::kApproach);
-  core.OnDockingLegEnded(LegEnd::kFailed, Reason("PLANNER_MISSING", "The planner is not running"));
+  core.OnDockingLegEnded(LegEnd::kFailed, kNotRunning);
   const auto events = core.TakeEvents();
   ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_FAILED", "STATE"}));
   const json& failed = events[0].details;
