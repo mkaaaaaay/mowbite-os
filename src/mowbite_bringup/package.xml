@@ -16,6 +16,7 @@
   <exec_depend>tron_gnss</exec_depend>
   <exec_depend>tron_imu</exec_depend>
   <exec_depend>tron_vision</exec_depend>
+  <exec_depend>xcore_driver</exec_depend>
   <exec_depend>mowbite_camera</exec_depend>
   <exec_depend>mowbite_localization</exec_depend>
   <exec_depend>mowbite_logic</exec_depend>
@@ -26,6 +27,7 @@
   <exec_depend>mowbite_ntrip</exec_depend>
   <exec_depend>mowbite_calibration</exec_depend>
   <exec_depend>mowbite_light</exec_depend>
+  <exec_depend>mowbite_sound</exec_depend>
   <exec_depend>mowbite_planner</exec_depend>
 
   <export>
