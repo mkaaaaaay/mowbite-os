@@ -143,6 +143,15 @@ class TestStopCheck(unittest.TestCase):
         self.assertFalse(run.mower.stop_checked)
         self.assertIn("shows stop before STOP top was pressed", run.findings[0])
 
+    def test_an_emergency_before_the_press_ends_it(self):
+        run = programme()
+        run.mower.latched = True
+        with self.assertRaises(m.Abort):
+            run.stop_check("M3")
+        self.assertFalse(run.mower.stop_checked)
+        self.assertIn("shows an emergency before STOP top was pressed", run.findings[0])
+        self.assertEqual(checks(run), [])
+
     def test_without_a_fresh_status_nothing_counts(self):
         run = programme(stale=True)
         with self.assertRaises(m.Abort):

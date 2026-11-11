@@ -826,8 +826,9 @@ class Measurement:
 
     def stop_check(self, before):
         """Before the first step that can turn a motor: each STOP button pressed and let go once, seen in hw/status
-        with its emergency, then free and released. False if the person skipped it. A button hw/status did not show
-        that way ends the step; the motors stay locked until a check of this run passed."""
+        with its emergency, then free and released; before each press hw/status has to show neither. False if the
+        person skipped it. A button hw/status did not show that way ends the step; the motors stay locked until a
+        check of this run passed."""
         if self.mower.stop_checked:
             return True
         step = "STOP"
@@ -840,9 +841,10 @@ class Measurement:
         for button, fake in self.STOP_BUTTONS:
             self.ready(step)
             shown = self.stop_shown()
-            if shown is not False:
+            if shown is not False or self.in_emergency():
                 self.show("before the press")
-                self.finding(step, f"hw/status shows {'stop' if shown else 'nothing'} before {button} was pressed")
+                what = "an emergency" if shown is False else "stop" if shown else "nothing"
+                self.finding(step, f"hw/status shows {what} before {button} was pressed")
                 raise Abort()
             self.mark(step, button)
             asked = time.monotonic()
