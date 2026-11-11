@@ -327,6 +327,9 @@ std::string EmergencyReasonNames(int reason);
 using EventObserver = void (*)(const std::string& type, const json& details);
 void SetEventObserver(EventObserver observer);
 
+// What the watch of the way home takes from a report of the hardware.
+HomeSample HomeSampleOf(const HardwareSnapshot& hw, double now_s);
+
 // How a drive of the follower for a job ended.
 enum class LegEnd { kDone, kCanceled, kGps, kEmergency, kFailed };
 

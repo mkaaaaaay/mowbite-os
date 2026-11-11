@@ -67,6 +67,7 @@
 #include "mowbite_logic/geometry.h"
 #include "mowbite_logic/logic_core.h"
 #include "mowbite_logic/logic_journal.h"
+#include "mowbite_logic/logic_messages.h"
 #include "mowbite_logic/logic_params.h"
 #include "mowbite_logic/mowing_plan.h"
 #include "mowbite_watch/attach.h"
@@ -115,78 +116,10 @@ using Wait = mowbite_hold::FileWriter::Wait;
 
 using mowbite_hold::WriteFileSafely;
 
-MapDatum ToDatum(uint8_t state) {
-  using mowbite_msgs::msg::MapStatus;
-  switch (state) {
-    case MapStatus::DATUM_EMPTY: return MapDatum::kEmpty;
-    case MapStatus::DATUM_MATCH: return MapDatum::kMatch;
-    case MapStatus::DATUM_MISMATCH: return MapDatum::kMismatch;
-    case MapStatus::DATUM_UNBOUND: return MapDatum::kUnbound;
-    default: return MapDatum::kUnknown;
-  }
-}
-
-geometry_msgs::msg::Polygon ToPolygon(const Ring& ring) {
-  geometry_msgs::msg::Polygon polygon;
-  for (const auto& p : ring) {
-    geometry_msgs::msg::Point32 point;
-    point.x = static_cast<float>(p.x);
-    point.y = static_cast<float>(p.y);
-    polygon.points.push_back(point);
-  }
-  return polygon;
-}
-
 // An override for the planner, typed by its value (int an integer, double a double).
 template <typename T>
 rcl_interfaces::msg::Parameter Override(const std::string& name, T value) {
   return rclcpp::Parameter(name, value).to_parameter_msg();
-}
-
-geometry_msgs::msg::Pose PoseAt(double x, double y, double heading) {
-  geometry_msgs::msg::Pose pose;
-  pose.position.x = x;
-  pose.position.y = y;
-  pose.orientation.z = std::sin(heading / 2);
-  pose.orientation.w = std::cos(heading / 2);
-  return pose;
-}
-
-double Yaw(const geometry_msgs::msg::Quaternion& q) {
-  return std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
-}
-
-// How a drive of the follower ended, for the job: a bad position goes on by itself, the rest waits for continue.
-LegEnd ToLegEnd(uint8_t reason) {
-  using Result = mowbite_msgs::action::FollowPath::Result;
-  switch (reason) {
-    case Result::REASON_DONE: return LegEnd::kDone;
-    case Result::REASON_CANCELED: return LegEnd::kCanceled;
-    case Result::REASON_EMERGENCY: return LegEnd::kEmergency;
-    case Result::REASON_POSE_LOST:
-    case Result::REASON_POSITION_ACCURACY:
-    case Result::REASON_HEADING: return LegEnd::kGps;
-    default: return LegEnd::kFailed;
-  }
-}
-
-// The name of a result of the follower, as in FollowPath.action.
-std::string FollowerCode(uint8_t reason) {
-  using Result = mowbite_msgs::action::FollowPath::Result;
-  switch (reason) {
-    case Result::REASON_DONE: return "DONE";
-    case Result::REASON_CANCELED: return "CANCELED";
-    case Result::REASON_INVALID: return "INVALID";
-    case Result::REASON_NOT_ALLOWED: return "NOT_ALLOWED";
-    case Result::REASON_EMERGENCY: return "EMERGENCY";
-    case Result::REASON_POSE_LOST: return "POSE_LOST";
-    case Result::REASON_POSITION_ACCURACY: return "POSITION_ACCURACY";
-    case Result::REASON_HEADING: return "HEADING";
-    case Result::REASON_CROSS_TRACK: return "CROSS_TRACK";
-    case Result::REASON_OUTSIDE: return "OUTSIDE";
-    case Result::REASON_TIMEOUT: return "TIMEOUT";
-    default: return "INVALID";
-  }
 }
 
 Reason PlannerMissing() {
@@ -195,15 +128,6 @@ Reason PlannerMissing() {
 
 Reason FollowerMissing() {
   return Reason("FOLLOWER_MISSING", "The follower is not running");
-}
-
-HardwareSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
-  HardwareSnapshot::Motor motor;
-  motor.ok = m.ok;
-  motor.rpm = m.rpm;
-  motor.current = m.current;
-  motor.temperature = m.temperature;
-  return motor;
 }
 
 }  // namespace
