@@ -51,6 +51,9 @@ Duties:
 - Limits until driving tests show more: 0.3 m/s and 0.3 rad/s.
 - Before opening a port: no other process holds it.
 - A restarted driver starts latched (`start_latched`).
+- Start: until the first sample of a sensor it needs, a driver may refuse drive and blade without an emergency, for a
+  fixed start time at most (`tron_mcu`: `imu_start_timeout`). After it the driver accepts or reports an emergency.
+  Whoever starts a driver waits that long before the first request.
 - Dock marker (optional): a process of its own that measures only while asked on `hw/dock_marker_request`, one
   image per message on `hw/dock_marker`, never an old or estimated pose; the times, states and reasons are in
   `DockMarker.msg`. What the mower drives with it and when it stops is up to the logic. The Tron's process is
@@ -61,6 +64,7 @@ Duties:
 A fake board on a pty or a socket, so driver, logic and app run without the mower: see `mowbite_sim/scripts/fake_tron`
 and `fake_xcore`. Then a contract test like `mowbite_sim/test/test_hw_contract.py` with your driver and your fake. It
 checks capabilities, status, the frame rate, the watchdog, the blade lease, the emergency and its release.
+`test_hw_start.py` checks the start time of a driver that has one.
 
 ## 3. Dimensions and settings
 
@@ -265,7 +269,7 @@ Around `mowbite_camera`:
 
 - [ ] Driver package: protocol code with gtests, build without warnings
 - [ ] clang-tidy without findings in the package (`.clang-tidy` of the repo)
-- [ ] Fake board, contract test passes
+- [ ] Fake board, contract test passes, the start test too where the driver has a start time
 - [ ] Geometry file and platform file, inherited values checked
 - [ ] Start file, driver restarts latched
 - [ ] Every node of your own in the container attached to the watch (`test_stack.py`)
