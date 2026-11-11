@@ -689,8 +689,9 @@ const std::vector<Method>& Methods() {
        "Keeps a place for one viewer and gives the address to watch from: for one connection, which has to begin "
        "before expires; the place is free again when that connection ends, and every new connection needs a new "
        "call. At most two viewers at once over all cameras (CAMERA_BUSY). mjpeg: a GET of url gives "
-       "multipart/x-mixed-replace with JPEG; webrtc: url is a WHEP endpoint (H.264). Refused (CAMERA_REFUSED) while "
-       "the camera is not available; -32602 for an id or a protocol it does not have",
+       "multipart/x-mixed-replace, every part one JPEG with its own Content-Length, and every answer to that GET, "
+       "also a refusal, carries Access-Control-Allow-Origin: *; webrtc: url is a WHEP endpoint (H.264). Refused "
+       "(CAMERA_REFUSED) while the camera is not available; -32602 for an id or a protocol it does not have",
        Object("params", "The camera",
               {Text("id", "An id of camera.list"),
                Text("protocol", "One of its protocols; its first without", false, {"mjpeg", "webrtc"})}),

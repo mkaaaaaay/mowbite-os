@@ -348,7 +348,11 @@ class TestCamera(unittest.TestCase):
         self.assertRegex(url, rf"^http://127\.0\.0\.1:{MJPEG_PORT}/camera/front\.mjpg\?t=[0-9a-f]{{32}}$")
         # Neither another token nor another camera gets in, and neither uses the place up.
         wrong = url[:-1] + ("0" if url[-1] != "0" else "1")
-        self.assertEqual(status_of(wrong), 401)
+        refused = Viewer(wrong)
+        status, fields = refused.head()
+        refused.close()
+        self.assertEqual(status, 401)
+        self.assertEqual(fields["access-control-allow-origin"], "*")
         self.assertEqual(status_of(url.replace("front.mjpg", "rear.mjpg")), 401)
 
         viewer = Viewer(url)
