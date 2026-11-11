@@ -13,6 +13,7 @@
 #include "mowbite_camera/http_server.h"
 #include "mowbite_camera/route.h"
 #include "mowbite_camera/seats.h"
+#include "mowbite_camera/stream_config.h"
 
 namespace mowbite_camera {
 
@@ -27,7 +28,8 @@ struct RpcOutcome {
 
 struct ServiceConfig {
   uint16_t mjpeg_port = 8890;
-  uint16_t webrtc_port = 8889;
+  // Where the stream server takes WHEP.
+  uint16_t webrtc_port = StreamConfig().webrtc_port;
   // The host of the urls; empty: the IPv4 address of the default route at the time of camera.stream.
   std::string public_host;
 };
@@ -109,8 +111,6 @@ class CameraService {
   mutable std::mutex mutex_;
   CameraList list_;
   Seats seats_;
-  std::string webrtc_reason_;
-  std::string webrtc_detail_;
   // Session -> how often in a row the stream server did not have it.
   std::map<std::string, int> missing_;
   Effects effects_;

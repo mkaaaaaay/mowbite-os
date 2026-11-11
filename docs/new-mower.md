@@ -242,7 +242,7 @@ Around `mowbite_camera`:
   addresses are HTTP without TLS and hold for one connection each.
 - Protocol `webrtc` runs through a stream server (MediaMTX) that `mowbite_camera` starts as a child and watches. The
   image of `docker/os.Dockerfile` brings the release pinned there, with its licence text, as `<install>/mediamtx/`;
-  elsewhere `media_server` names the program. Without it `mjpeg` works as before, `camera.stream` refuses `webrtc`
+  elsewhere `media_server` names the program. Without it `mjpeg` still works, `camera.stream` refuses `webrtc`
   and a camera with no other protocol is listed as `NOT_SET_UP`. Its files lie in a folder `mowbite_camera` in
   `runtime_dir`; by default that is `$RUNTIME_DIRECTORY` (systemd `RuntimeDirectory=`), else `/tmp`. It offers the
   addresses of the interfaces it sees, so in Docker it needs the host network.

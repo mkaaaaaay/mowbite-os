@@ -129,9 +129,8 @@ std::vector<CameraChange> CameraList::TakeChanges() {
   std::vector<CameraChange> changes;
   for (Camera& camera : cameras_) {
     CameraState state = StateOf(camera);
-    if (camera.told && state == camera.told_state) continue;
-    camera.told = true;
-    camera.told_state = state;
+    if (camera.told == state) continue;
+    camera.told = state;
     changes.push_back({camera.entry.id, std::move(state)});
   }
   return changes;

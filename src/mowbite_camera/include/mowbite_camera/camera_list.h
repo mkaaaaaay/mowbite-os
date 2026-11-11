@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -83,14 +84,21 @@ class CameraList {
   std::vector<std::string> Processes() const;
   // Camera id -> its RTSP address, for the cameras with webrtc.
   std::map<std::string, std::string> WebrtcSources() const;
+  // What SetWebrtc had last; the detail is empty with an empty reason.
+  const std::string& webrtc_reason() const {
+    return webrtc_reason_;
+  }
+  const std::string& webrtc_detail() const {
+    return webrtc_detail_;
+  }
 
  private:
   struct Camera {
     CameraEntry entry;
     // When its last entry came.
     double reported = 0;
-    bool told = false;
-    CameraState told_state;
+    // The state TakeChanges gave last, none before the first one.
+    std::optional<CameraState> told;
   };
   struct Ended {
     double t = 0;

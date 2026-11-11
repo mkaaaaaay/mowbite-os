@@ -69,8 +69,6 @@ void CameraService::OnProcessEnded(const std::string& process, double mono, bool
 
 void CameraService::SetWebrtc(const std::string& reason, const std::string& detail) {
   const std::lock_guard<std::mutex> lock(mutex_);
-  webrtc_reason_ = reason;
-  webrtc_detail_ = detail;
   list_.SetWebrtc(reason, detail);
   CollectLocked();
 }
@@ -124,8 +122,8 @@ RpcOutcome CameraService::Stream(const Json& params) {
                                     (state.detail.empty() ? "" : " (" + state.detail + ")"));
   }
   if (protocol.empty()) protocol = camera->protocols.front();
-  if (protocol == kWebrtc && !webrtc_reason_.empty()) {
-    return Refuse(webrtc_reason_, "Camera " + id + " cannot stream with webrtc now: " + webrtc_detail_);
+  if (protocol == kWebrtc && !list_.webrtc_reason().empty()) {
+    return Refuse(list_.webrtc_reason(), "Camera " + id + " cannot stream with webrtc now: " + list_.webrtc_detail());
   }
   const std::string host = config_.public_host.empty() ? route_() : config_.public_host;
   if (host.empty()) {
