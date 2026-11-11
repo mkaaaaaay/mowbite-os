@@ -223,6 +223,16 @@ std::vector<std::string> Geometry::BelowDefault() const {
   return Below(factory_, now_);
 }
 
+double Geometry::TurningRadius() const {
+  if (now_.outline.empty()) {
+    const Body body = BodyOf(now_.numbers, now_.outline);
+    return std::hypot(std::max(body.x_max, -body.x_min), body.y_max);
+  }
+  double radius = 0;
+  for (const Point& point : now_.outline) radius = std::max(radius, std::hypot(point[0], point[1]));
+  return radius;
+}
+
 json Geometry::PointsJson(const std::vector<Point>& points) {
   json out = json::array();
   for (const Point& point : points) out.push_back(json::array({point[0], point[1]}));

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <stdexcept>
 
 #include "mowbite_logic/geometry.h"
@@ -341,6 +342,22 @@ TEST(Geometry, AnOutlineHasToBeAListOfPairsWithThreePointsOrMore) {
   // An empty list is the rectangle again.
   EXPECT_TRUE(geometry.Set(Request(geometry, {{"robot_outline", json::array()}})).ok);
   EXPECT_EQ(geometry.Params()["robot_outline"], json::array());
+}
+
+TEST(Geometry, TheTurningRadiusReachesTheFarthestPointOfTheBody) {
+  Geometry geometry = Tron();
+  // The front corners of the box: 0.60 m ahead and 0.235 m to the side.
+  EXPECT_NEAR(geometry.TurningRadius(), std::hypot(0.60, 0.235), 1e-9);
+  // A rear longer than the front counts the same way.
+  GeometryChange change = geometry.Set(Request(geometry, {{"robot_rear", 0.70}}));
+  ASSERT_TRUE(change.ok) << change.problem.message;
+  EXPECT_NEAR(geometry.TurningRadius(), std::hypot(0.70, 0.235), 1e-9);
+  // With an outline its farthest point, here the tip of the nose.
+  geometry = Tron();
+  change = geometry.Set(Request(
+      geometry, {{"robot_outline", json{{0.6, -0.235}, {0.7, 0.0}, {0.6, 0.235}, {-0.12, 0.235}, {-0.12, -0.235}}}}));
+  ASSERT_TRUE(change.ok) << change.problem.message;
+  EXPECT_NEAR(geometry.TurningRadius(), 0.7, 1e-9);
 }
 
 TEST(Geometry, BodyKeysBelowThePlatformsValueAreNamed) {
