@@ -364,7 +364,11 @@ tron_stereo:
     # leaves the blade without the host: the MCU then stops the blade motor by itself within 0.4 s (T6, without disc).
     stream_while_mowing: true
 
-# mowbite_camera, the pictures of these cameras for the app (starts with either switch): mjpeg_port, webrtc_port,
+# tron_side, the live picture of the right side camera (MOWBITE_RIGHT=on), streaming only while a viewer is there:
+# sensor_name, video_device, vertical_blanking, jpeg_max_rate, jpeg_max_kb, max_rss_mb and crash_dir have the defaults
+# of the node.
+
+# mowbite_camera, the pictures of these cameras for the app (starts with any of them): mjpeg_port, webrtc_port,
 # ice_port, media_api_port, media_server and runtime_dir have the defaults of the node.
 mowbite_camera:
   ros__parameters:

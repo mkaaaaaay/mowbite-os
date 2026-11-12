@@ -11,8 +11,8 @@
 
 namespace tron_vision {
 
-// Left obstacle camera of the Tron: gc2093 behind the ISP, its subdev found by name. No other subdev of the graph is
-// opened: the stereo bridge driver crashes the kernel on a frame interval enumeration.
+// A side obstacle camera of the Tron, by default the left one: gc2093 behind the ISP, its subdev found by name. No
+// other subdev of the graph is opened: the stereo bridge driver crashes the kernel on a frame interval enumeration.
 struct TronCameraConfig {
   std::string sysfs = "/sys/class/video4linux";
   std::string sensor_name = "m01_b_gc2093";
@@ -26,6 +26,10 @@ struct TronCameraConfig {
   // Other processes that have a device open; Start refuses sensor and video node while one does. Empty: no check.
   ProcessesUsing processes_using;
 };
+
+// Sensor and video node of the right side camera, the same hardware as the left one.
+constexpr char kRightSensorName[] = "m00_b_gc2093";
+constexpr char kRightVideoDevice[] = "/dev/video44";
 
 class TronCamera : public Camera {
  public:

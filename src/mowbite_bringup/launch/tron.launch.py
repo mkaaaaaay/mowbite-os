@@ -1,7 +1,7 @@
-# All nodes of MowBite OS in one process (one ROS context, one DDS participant) except six: tron_mcu, so that a crash
-# of any other node leaves its watchdogs running (G25), the MowBite Planner (Python, shapely), the camera AI, the live
-# picture of the stereo camera, with one of these two the camera service, and the dock marker of the rear camera. The
-# part every platform shares is in stack.py.
+# All nodes of MowBite OS in one process (one ROS context, one DDS participant) except seven: tron_mcu, so that a
+# crash of any other node leaves its watchdogs running (G25), the MowBite Planner (Python, shapely), the camera AI, the
+# live pictures of the stereo camera and of the right side camera, with one of these the camera service, and the dock
+# marker of the rear camera. The part every platform shares is in stack.py.
 import os
 import sys
 
@@ -77,7 +77,8 @@ def launch_setup(context):
         return [mcu, *stack.container_and_planner([imu, *nodes], data_dir, files, logger, oom)]
     # Only here: with hardware:=read another host drives the blade, and blade_on of hw/status would always be false.
     cameras = [*camera(files, data_dir, arg("vision"), logger, "vision", "tron_vision_node", "tron_vision"),
-               *camera(files, data_dir, arg("stereo"), logger, "stereo", "tron_stereo_node", "tron_stereo")]
+               *camera(files, data_dir, arg("stereo"), logger, "stereo", "tron_stereo_node", "tron_stereo"),
+               *camera(files, data_dir, arg("right"), logger, "right", "tron_side_node", "tron_side")]
     # The camera service of the OS shows their pictures in the app; without a camera process it has none to show.
     if cameras:
         cameras += stack.camera_service(files, data_dir, logger, **CAMERA_LIMITS)
@@ -130,6 +131,9 @@ def generate_launch_description():
         DeclareLaunchArgument("vision", default_value=EnvironmentVariable("MOWBITE_VISION", default_value="off")),
         # on: the live picture of the stereo camera starts as well, only with hardware:=true; MOWBITE_STEREO in os.conf.
         DeclareLaunchArgument("stereo", default_value=EnvironmentVariable("MOWBITE_STEREO", default_value="off")),
+        # on: the live picture of the right side camera starts as well, only with hardware:=true; MOWBITE_RIGHT in
+        # os.conf.
+        DeclareLaunchArgument("right", default_value=EnvironmentVariable("MOWBITE_RIGHT", default_value="off")),
         # on: the dock marker of the rear camera starts as well, only with hardware:=true; MOWBITE_REAR in os.conf.
         DeclareLaunchArgument("rear", default_value=EnvironmentVariable("MOWBITE_REAR", default_value="off")),
         *stack.arguments(),
