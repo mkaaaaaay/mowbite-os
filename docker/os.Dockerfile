@@ -82,7 +82,7 @@ FROM ros:${ROS_DISTRO}-ros-base AS build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libpaho-mqttpp-dev libpaho-mqtt-dev nlohmann-json3-dev libssl-dev libeigen3-dev zlib1g-dev libasound2-dev \
-      libturbojpeg0-dev git \
+      libturbojpeg0-dev git ccache \
  && rm -rf /var/lib/apt/lists/*
 
 # Compilers at once: BUILD_WORKERS packages with BUILD_JOBS jobs each.
@@ -113,10 +113,15 @@ ARG PACKAGES="--packages-skip mowbite_sim"
 COPY --from=mpp /opt/mpp-inc /opt/mpp-inc
 ENV TRON_VISION_MPP_INCLUDE=/opt/mpp-inc
 COPY src /ws/src
-# The FILES_VERSION of the pinned planner has to be the one data_schema.json of mowbite_bridge expects.
-RUN . /opt/ros/$ROS_DISTRO/setup.sh && . /opt/mowbite_planner/setup.sh && cd /ws \
+# The FILES_VERSION of the pinned planner has to be the one data_schema.json of mowbite_bridge expects. The compiler
+# cache stays on the builder between builds: under qemu a build that changes little then compiles little.
+RUN --mount=type=cache,target=/ccache \
+    . /opt/ros/$ROS_DISTRO/setup.sh && . /opt/mowbite_planner/setup.sh && cd /ws \
+ && export CCACHE_DIR=/ccache CCACHE_COMPILERCHECK=content \
  && MAKEFLAGS=-j$BUILD_JOBS colcon build $PACKAGES --parallel-workers $BUILD_WORKERS \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+ && ccache --show-stats \
  && rm -rf /ws/build /ws/log \
  && . /ws/install/setup.sh \
  && if [ -d /ws/install/mowbite_bringup ]; then \
