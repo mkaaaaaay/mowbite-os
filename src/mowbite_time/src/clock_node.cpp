@@ -64,8 +64,7 @@ class ClockNode : public rclcpp::Node {
         "gps/absolute_pose", 10, [this](const mowbite_msgs::msg::GnssFix& msg) {
           using mowbite_msgs::msg::GnssFix;
           if (!receiver_time_ || msg.solution == GnssFix::NONE || msg.solution == GnssFix::DEAD_RECKONING) return;
-          fix_day_ = msg.receiver_time_ms / 1000.0;
-          fix_mono_ = MonotonicSeconds();
+          fix_ = Fix{msg.receiver_time_ms / 1000.0, MonotonicSeconds()};
         });
     timer_ = create_wall_timer(std::chrono::seconds(1), [this] { Tick(); });
     Tick();
@@ -104,10 +103,11 @@ class ClockNode : public rclcpp::Node {
     probe.mono = MonotonicSeconds();
     probe.wall = WallSeconds();
     probe.kernel_synced = SystemClockSynchronized();
-    if (fix_mono_ && probe.mono - *fix_mono_ <= kFixFresh) probe.gnss_day = fix_day_ + (probe.mono - *fix_mono_);
+    if (fix_ && probe.mono - fix_->mono <= kFixFresh) probe.gnss_day = fix_->day + (probe.mono - fix_->mono);
     const ClockVerdict verdict = guard_.Probe(probe);
-    if (!published_ || verdict != *published_ || probe.mono - published_mono_ >= kRepeat) {
-      if (!published_ || verdict != *published_) {
+    const bool changed = !published_ || verdict != *published_;
+    if (changed || probe.mono - published_mono_ >= kRepeat) {
+      if (changed) {
         if (verdict.ok) RCLCPP_INFO(get_logger(), "The clock is safe");
         else RCLCPP_WARN(get_logger(), "The clock is not safe: %s", verdict.reason.c_str());
       }
@@ -129,8 +129,12 @@ class ClockNode : public rclcpp::Node {
   ClockGuard guard_;
   mowbite_hold::FileWriter writer_;
   bool receiver_time_ = false;
-  double fix_day_ = 0;
-  std::optional<double> fix_mono_;
+  // The time of day of the last fix and when it came (monotonic s).
+  struct Fix {
+    double day;
+    double mono;
+  };
+  std::optional<Fix> fix_;
   std::optional<ClockVerdict> published_;
   double published_mono_ = 0;
   std::optional<double> saved_mono_;
