@@ -2,6 +2,7 @@
 #include <cmath>
 #include <regex>
 #include <set>
+#include <string>
 
 #include "mowbite_api/catalog.h"
 
@@ -57,6 +58,16 @@ void CheckField(const std::string& where, const Field& field, const Json& value,
   if (!field.pattern.empty() && value.is_string() &&
       !std::regex_search(value.get<std::string>(), std::regex(field.pattern, std::regex::ECMAScript))) {
     problems->push_back(where + "." + field.name + ": " + value.dump() + " does not match " + field.pattern);
+  }
+  if (field.type == Type::kArray && !field.fields.empty()) {
+    // Each row is an object of these fields.
+    Field row = field;
+    row.type = Type::kObject;
+    for (size_t i = 0; i < value.size(); ++i) {
+      row.name = field.name + "[" + std::to_string(i) + "]";
+      CheckField(where, row, value[i], problems);
+    }
+    return;
   }
   if (field.type != Type::kObject || field.fields.empty()) return;
   std::set<std::string> known;

@@ -14,6 +14,9 @@ bool rain_detected
 int32 current_area
 int32 current_path
 int32 current_path_index
+# While mowing: the place of the area in the areas of the job and their number; otherwise -1.
+int32 task_index
+int32 task_count
 
 # The pose of the mower for the app.
 float64 pose_x

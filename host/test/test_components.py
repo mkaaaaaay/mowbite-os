@@ -311,7 +311,10 @@ class JobTest(ComponentBase):
     def test_what_counts_as_an_open_job(self):
         self.assertFalse(gate.job_open(self.paths))
         for fields, is_open in (({}, False), ({"index": 1}, True), ({"path": 2}, True), ({"area": 1}, True),
-                                ({"version": 2}, True), ({"index": None}, True), ({"index": True}, True)):
+                                ({"version": 2}, True), ({"index": None}, True), ({"index": True}, True),
+                                # A job with tasks: on at the second one although the area there is the first.
+                                ({"tasks": ["b", "a"], "task": 1}, True), ({"tasks": ["a"], "task": 0}, False),
+                                ({"tasks": ["a"]}, True)):
             self.checkpoint(**fields)
             self.assertEqual(gate.job_open(self.paths), is_open, fields)
         self.write(self.paths.checkpoint, "{ half")

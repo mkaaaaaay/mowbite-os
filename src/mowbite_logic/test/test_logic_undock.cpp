@@ -542,3 +542,21 @@ TEST(Undock, WithoutTheSafetyMeasurementTheWayStops) {
   EXPECT_EQ(failed->details["resume"], "user");
   EXPECT_TRUE(core.Idle());
 }
+
+TEST(Undock, AStartRefusedDuringTheCheckKeepsTheListOfTheFirst) {
+  TestCore core = Docked();
+  core.OnMowMap({{"lawn", "Lawn", true}, {"rose", "Rose", true}}, Reason());
+  const json rose = {{"tasks", json::array({json::object({{"area_id", "rose"}})})}};
+  ASSERT_TRUE(core.Command("mowing.start", rose).accepted);
+  ASSERT_TRUE(core.TakeDockCheck());
+  EXPECT_FALSE(core.Command("mowing.start", json::object()).accepted);
+  const Reason why = core.OnDockCheck(true, kStartX, kDock.y, 0.02f, "");
+  ASSERT_TRUE(why.empty()) << why.code << ": " << why.message;
+  ChargedOff(core);
+  Out(core);
+  core.OnUndockEnded(LegEnd::kDone, Reason("DONE", "done"));
+  ASSERT_TRUE(core.Mowing());
+  const JobStep step = core.NextJobStep(0);
+  ASSERT_EQ(step.kind, JobStep::Kind::kPlan);
+  EXPECT_EQ(step.area_id, "rose");
+}

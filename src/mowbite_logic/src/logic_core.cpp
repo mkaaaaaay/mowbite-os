@@ -322,10 +322,8 @@ CommandOutcome LogicCore::Command(const std::string& name, const json& params, c
     return out;
   }
   out.invalid = mowbite_api::CheckParams(*command, params, &out.invalid_field);
-  // open_mower_ros #359: the areas of the job in order; the OS keeps no such list yet.
-  if (out.invalid.empty() && name == "mowing.start" && params.contains("areas")) {
-    out.invalid = "areas: this OS keeps no list of areas yet, start without it";
-    out.invalid_field = "areas";
+  if (out.invalid.empty() && name == "mowing.start") {
+    out.invalid = ReadStartRequest(params, nullptr, &out.invalid_field);
   }
   if (!out.invalid.empty()) return out;
   client_ = params.is_object() ? params.value("client", "") : "";
@@ -404,22 +402,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     out->release = true;
     return {};
   }
-  if (name == "mowing.start") {
-    Reason why = StartProblem();
-    if (why.empty()) why = node_problem;
-    if (!why.empty()) {
-      RefuseStart(why);
-      return why;
-    }
-    // On the docking station the reference check comes first; its refusal is an event of its own.
-    out->result["check"] = DockContact();
-    if (DockContact()) {
-      BeginDockCheck(DockCheck::kMowing);
-    } else {
-      StartMowing();
-    }
-    return {};
-  }
+  if (name == "mowing.start") return RequestStart(params, node_problem, out);
   if (name == "mowing.reset_job") {
     if (state_ != State::kIdle) return WrongState();
     if (!job_.Unfinished()) return Reason("NO_JOB", "There is no unfinished job");
@@ -700,6 +683,8 @@ RobotStateData LogicCore::RobotState() const {
     s.current_area = job_.progress().area;
     s.current_path = job_.progress().path;
     s.current_path_index = job_.progress().index;
+    s.task_index = job_.TaskIndex();
+    s.task_count = job_.TaskCount();
   }
   if (state_ == State::kAreaRecording) s.sub_state = recorder_.SubState();
   if (state_ == State::kDriving) s.sub_state = "DRIVING";
@@ -1042,13 +1027,13 @@ Reason LogicCore::PositionProblem() const {
   return {};
 }
 
-Reason LogicCore::StartProblem() const {
+Reason LogicCore::StartProblem(const std::vector<std::string>& tasks) const {
   Reason why = Busy();
   if (why.empty()) why = HoldProblem();
-  return why.empty() ? MowProblem() : why;
+  return why.empty() ? MowProblem(tasks) : why;
 }
 
-Reason LogicCore::MowProblem() const {
+Reason LogicCore::MowProblem(const std::vector<std::string>& tasks) const {
   Reason why = Unsafe();
   if (!why.empty()) return why;
   if (hw_.rain) return Reason("RAIN", "Rain detected");
@@ -1080,7 +1065,9 @@ Reason LogicCore::MowProblem() const {
   why = PositionProblem();
   if (!why.empty()) return why;
   if (!mow_map_problem_.empty()) return mow_map_problem_;
-  if (!job_.HasMowableArea()) return Reason("NO_MOWING_AREA", "The map has no active mowing area");
+  if (!job_.HasMowableArea(tasks)) {
+    return Reason("NO_MOWING_AREA", tasks.empty() ? "The map has no active mowing area" : "No area of tasks is active");
+  }
   return DockProblem();
 }
 

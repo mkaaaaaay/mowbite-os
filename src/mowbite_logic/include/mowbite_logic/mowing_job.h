@@ -42,6 +42,9 @@ struct JobProgress {
   int index = 0;
   // Of the plan the path and index belong to.
   std::string fingerprint;
+  // The ids of the areas of the job in order, none for every active mowing area; task is the place in them.
+  std::vector<std::string> tasks;
+  int task = 0;
 };
 
 std::string CheckpointText(const JobProgress& progress);
@@ -55,7 +58,16 @@ class MowingJob {
   const std::vector<JobArea>& areas() const {
     return areas_;
   }
-  bool HasMowableArea() const;
+  // Among these ids, or of the whole map without any.
+  bool HasMowableArea(const std::vector<std::string>& tasks = {}) const;
+  bool HasArea(const std::string& id) const;
+  // The areas a job of these tasks mows in order: the tasks, or every active mowing area without any.
+  std::vector<std::string> TaskIds(const std::vector<std::string>& tasks) const;
+  // A new job over these areas, none for all; it starts at the first.
+  void SetTasks(std::vector<std::string> tasks);
+  // The place of the current area in the areas of the job and their number; -1 where there is no such place.
+  int TaskIndex() const;
+  int TaskCount() const;
   void Restore(const JobProgress& progress);
   const JobProgress& progress() const {
     return progress_;
@@ -67,7 +79,8 @@ class MowingJob {
   bool Unfinished() const;
 
   // Moves on to the first mowable area from the current one. If the saved area has another id now, the job starts
-  // over from the first area (notice says so). False when no area is left.
+  // over from the first area (notice says so). With tasks the next one of them on the map, the others are passed
+  // over. False when no area is left.
   bool SeekArea(std::string* notice);
   const JobArea* CurrentArea() const;
   bool HasPlan() const {
@@ -93,6 +106,7 @@ class MowingJob {
 
  private:
   void NextArea();
+  bool SeekTask(std::string* notice);
 
   std::vector<JobArea> areas_;
   JobProgress progress_;

@@ -29,6 +29,8 @@ struct RobotStateView {
   long long current_area = -1;
   long long current_path = -1;
   long long current_path_index = -1;
+  long long task_index = -1;
+  long long task_count = -1;
   bool emergency = false;
   long long emergency_reason = 0;
   bool is_charging = false;

@@ -8,6 +8,7 @@
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <mowbite_msgs/msg/motor_state.hpp>
 #include <mowbite_msgs/msg/robot_pose.hpp>
+#include <mowbite_msgs/msg/robot_state.hpp>
 #include <string>
 
 #include "mowbite_logic/logic_core.h"
@@ -24,6 +25,7 @@ LegEnd ToLegEnd(uint8_t reason);
 std::string FollowerCode(uint8_t reason);
 HardwareSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m);
 PoseSnapshot ToPose(const mowbite_msgs::msg::RobotPose& msg);
+mowbite_msgs::msg::RobotState ToMessage(const RobotStateData& state);
 
 }  // namespace mowbite_logic
 

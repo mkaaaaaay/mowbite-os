@@ -64,7 +64,8 @@ TEST(RobotState, FieldsInTheOrderOfTheAppWithSwitchesAsNumbers) {
   s.heading_valid = true;
   EXPECT_EQ(RobotStateText(s),
             R"({"battery_percentage":0.5,"gps_percentage":0.25,"current_action_progress":0.0,"current_state":"IDLE",)"
-            R"("current_sub_state":"","current_area":-1,"current_path":-1,"current_path_index":-1,"emergency":0,)"
+            R"("current_sub_state":"","current_area":-1,"current_path":-1,"current_path_index":-1,"task_index":-1,)"
+            R"("task_count":-1,"emergency":0,)"
             R"("emergency_reason":4,"is_charging":1,"rain_detected":0,"pose":{"x":1.5,"y":0.0,"heading":0.0,)"
             R"("pos_accuracy":0.0,"heading_accuracy":0.0,"heading_valid":1}})");
 }

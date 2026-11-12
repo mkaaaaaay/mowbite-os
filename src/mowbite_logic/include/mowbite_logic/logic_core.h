@@ -205,6 +205,9 @@ struct RobotStateData {
   int current_area = -1;
   int current_path = -1;
   int current_path_index = -1;
+  // While mowing: the place of the area in the areas of the job and their number; else -1.
+  int task_index = -1;
+  int task_count = -1;
 };
 
 // What a sensor value means, numbered as in mowbite_msgs/SensorSpec.
@@ -517,8 +520,8 @@ class LogicCore {
                        double motor_cold_temperature);
   // The checkpoint read at the start.
   void RestoreJob(const JobProgress& progress);
-  // Why mowing cannot start now, empty if it can.
-  Reason StartProblem() const;
+  // Why mowing of these areas (none for all) cannot start now, empty if it can.
+  Reason StartProblem(const std::vector<std::string>& tasks = {}) const;
   // A start refused by the node (planner or follower missing): event MOWING_REFUSED.
   void RefuseStart(const Reason& why);
   // reset_emergency did not release: EMERGENCY_RESET_REFUSED with the reason of the driver, of S2 or of the node;
@@ -659,7 +662,8 @@ class LogicCore {
   Reason AccuracyReason(float accuracy, double limit) const;
   Reason PositionProblem() const;
   Reason DockProblem() const;
-  Reason MowProblem() const;
+  // Of these areas, none for all.
+  Reason MowProblem(const std::vector<std::string>& tasks) const;
   Reason MoveProblem() const;
   // DOCK_UNREACHABLE when the way out from base_link at (x, y) on the station ends outside of the drivable areas.
   Reason UndockEndProblem(double x, double y) const;
@@ -720,6 +724,16 @@ class LogicCore {
   void Docked();
   // IDLE; a leg on its way stops with why.
   void EndDocking(const Reason& why);
+  // What a mowing.start asks for: the areas in order (none for all) and whether to begin anew.
+  struct StartRequest {
+    std::vector<std::string> tasks;
+    bool restart = false;
+  };
+  // tasks and restart of mowing.start; the problem with them for -32602 and its field, empty if none.
+  std::string ReadStartRequest(const json& params, StartRequest* request, std::string* field) const;
+  // mowing.start with checked params: the refusal, or the reference check on the station, or mowing.
+  Reason RequestStart(const json& params, const Reason& node_problem, CommandOutcome* out);
+  // Continues the open job, or begins the one mowing.start asked for.
   void StartMowing();
   void Pause(int why, const Reason& reason);
   // Stops a drive or a leg on its way; a drive ends with the first reason given.
@@ -788,6 +802,8 @@ class LogicCore {
   Reason map_reason_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
 
   MowingJob job_;
+  // The start accepted last, until mowing begins.
+  StartRequest start_request_;
   Reason mow_map_problem_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
   std::optional<DockPose> dock_;
   // The reference check on its way and what for.

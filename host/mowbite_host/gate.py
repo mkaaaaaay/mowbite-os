@@ -65,15 +65,16 @@ def unfinished(paths):
 CHECKPOINT_VERSION = 1
 
 
-# Whether the logic keeps a mowing job it would go on with: a checkpoint beyond its start. One of another version, or
-# one that cannot be read, counts as open.
+# Whether the logic keeps a mowing job it would go on with: a checkpoint beyond its start, in a job with tasks also
+# beyond its first task. One of another version, or one that cannot be read, counts as open.
 def job_open(paths):
     if not os.path.lexists(paths.checkpoint):
         return False
     checkpoint = files.read_json(paths.checkpoint)
     if checkpoint is None or checkpoint.get("version") != CHECKPOINT_VERSION:
         return True
-    progress = [checkpoint.get(key) for key in ("area", "path", "index")]
+    keys = ("area", "path", "index") + (("task",) if "tasks" in checkpoint else ())
+    progress = [checkpoint.get(key) for key in keys]
     return not all(isinstance(value, int) and not isinstance(value, bool) for value in progress) or any(
         value > 0 for value in progress)
 

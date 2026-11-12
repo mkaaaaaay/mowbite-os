@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <string>
+#include <vector>
 
 #include "mowbite_logic/mowing_job.h"
 
@@ -280,4 +282,112 @@ TEST(MowingJob, MowAreasOfTheMapInMapOrder) {
   EXPECT_FALSE(planner.MapProblem().empty());
   planner.SetMapStatus(true, Reason());
   EXPECT_TRUE(planner.MapProblem().empty());
+}
+
+TEST(MowingJobCheckpoint, AJobOverAllAreasKeepsTheTextOfBefore) {
+  JobProgress p;
+  p.job_id = "abc";
+  p.area = 2;
+  p.area_id = "back";
+  p.path = 3;
+  p.index = 41;
+  p.fingerprint = "f00";
+  EXPECT_EQ(CheckpointText(p),
+            R"({"version":1,"job_id":"abc","area":2,"area_id":"back","path":3,"index":41,"fingerprint":"f00"})");
+  EXPECT_TRUE(ParseCheckpoint(CheckpointText(p))->tasks.empty());
+}
+
+TEST(MowingJobCheckpoint, CarriesTheTasksAndThePlaceInThem) {
+  JobProgress p;
+  p.job_id = "abc";
+  p.tasks = {"back", "front"};
+  p.task = 1;
+  const auto back = ParseCheckpoint(CheckpointText(p));
+  ASSERT_TRUE(back);
+  EXPECT_EQ(back->tasks, (std::vector<std::string>{"back", "front"}));
+  EXPECT_EQ(back->task, 1);
+  // The place may stand after the last task, never before the first or farther.
+  for (const char* text :
+       {R"({"version":1,"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":"","tasks":["a"],"task":-1})",
+        R"({"version":1,"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":"","tasks":["a"],"task":2})",
+        R"({"version":1,"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":"","tasks":["a"]})",
+        R"({"version":1,"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":"","tasks":[1],"task":0})"}) {
+    EXPECT_FALSE(ParseCheckpoint(text)) << text;
+  }
+  EXPECT_TRUE(ParseCheckpoint(
+      R"({"version":1,"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":"","tasks":["a"],"task":1})"));
+}
+
+TEST(MowingJob, MowsTheTasksInTheirOrderAndPassesOverTheRest) {
+  MowingJob job;
+  job.SetAreas({{"front", "Front", true}, {"bed", "Bed", false}, {"back", "Back", true}, {"side", "Side", true}});
+  job.SetTasks({"back", "gone", "bed", "front"});
+  EXPECT_FALSE(job.Unfinished());
+  EXPECT_EQ(job.TaskCount(), 4);
+  std::string notice;
+  ASSERT_TRUE(job.SeekArea(&notice));
+  EXPECT_EQ(notice, "");
+  EXPECT_EQ(job.CurrentArea()->id, "back");
+  // The index in the map, the place in the list.
+  EXPECT_EQ(job.progress().area, 2);
+  EXPECT_EQ(job.TaskIndex(), 0);
+  job.SetPlan(TwoPaths(), "fp");
+  job.PathDone();
+  job.PathDone();
+  EXPECT_TRUE(job.Unfinished());
+  // An area no longer on the map is told, an inactive one is passed over like in a job over all areas.
+  ASSERT_TRUE(job.SeekArea(&notice));
+  EXPECT_EQ(notice, "The area gone of the job is no longer on the map, passed over");
+  EXPECT_EQ(job.CurrentArea()->id, "front");
+  EXPECT_EQ(job.progress().area, 0);
+  EXPECT_EQ(job.TaskIndex(), 3);
+  job.SkipArea();
+  EXPECT_EQ(job.TaskIndex(), -1);
+  // side is not in the list.
+  EXPECT_FALSE(job.SeekArea(&notice));
+}
+
+TEST(MowingJob, TheAreasOfAJobWithAndWithoutTasks) {
+  MowingJob job;
+  job.SetAreas({{"front", "Front", true}, {"bed", "Bed", false}, {"back", "Back", true}});
+  EXPECT_EQ(job.TaskIds({}), (std::vector<std::string>{"front", "back"}));
+  EXPECT_EQ(job.TaskIds({"back"}), (std::vector<std::string>{"back"}));
+  EXPECT_TRUE(job.HasMowableArea({"bed", "back"}));
+  EXPECT_FALSE(job.HasMowableArea({"bed"}));
+  EXPECT_FALSE(job.HasMowableArea({"gone"}));
+  EXPECT_TRUE(job.HasArea("bed"));
+  EXPECT_FALSE(job.HasArea("gone"));
+  // Without tasks the place among the active areas.
+  EXPECT_EQ(job.TaskCount(), 2);
+  ASSERT_TRUE(job.SeekArea(nullptr));
+  EXPECT_EQ(job.TaskIndex(), 0);
+  job.SkipArea();
+  ASSERT_TRUE(job.SeekArea(nullptr));
+  EXPECT_EQ(job.progress().area, 2);
+  EXPECT_EQ(job.TaskIndex(), 1);
+}
+
+TEST(MowingJob, AJobWithTasksFindsItsAreaByIdWhenTheMapChanged) {
+  MowingJob job;
+  job.SetAreas({{"front", "Front", true}, {"back", "Back", true}});
+  JobProgress saved;
+  saved.job_id = "J";
+  saved.area = 1;
+  saved.area_id = "back";
+  saved.path = 1;
+  saved.index = 3;
+  saved.fingerprint = "fp";
+  saved.tasks = {"back"};
+  job.Restore(saved);
+  job.SetAreas({{"new", "New", true}, {"front", "Front", true}, {"back", "Back", true}});
+  std::string notice;
+  ASSERT_TRUE(job.SeekArea(&notice));
+  EXPECT_EQ(notice, "");
+  EXPECT_EQ(job.progress().area, 2);
+  // The same plan keeps the place.
+  job.SetPlan(TwoPaths(), "fp");
+  EXPECT_EQ(job.progress().path, 1);
+  EXPECT_EQ(job.progress().index, 3);
+  job.Complete();
+  EXPECT_TRUE(job.progress().tasks.empty());
 }

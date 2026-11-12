@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include <initializer_list>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -999,4 +1000,210 @@ TEST(LogicMowing, ALegEndWithNoLegDrivingChangesNothing) {
   core.OnLegEnded(LegEnd::kFailed, 0, Reason("TIMEOUT", "stuck"));
   EXPECT_EQ(core.RobotState().state, "MOWING");
   EXPECT_TRUE(core.TakeEvents().empty());
+}
+
+namespace {
+
+// mowing.start with these areas in order.
+json Tasks(std::initializer_list<const char*> ids, bool restart = false) {
+  json tasks = json::array();
+  for (const char* id : ids) tasks.push_back(json::object({{"area_id", id}}));
+  json params = {{"tasks", tasks}};
+  if (restart) params["restart"] = true;
+  return params;
+}
+
+}  // namespace
+
+TEST(LogicTasks, AListThatDoesNotFitIsRefusedAndNeverMowsAllAreas) {
+  TestCore core = Ready();
+  const json one = json::array({json::object({{"area_id", "back"}})});
+  const std::vector<std::pair<json, std::string>> cases = {
+      {json{{"tasks", json::array()}}, "tasks"},
+      {Tasks({"back", "back"}), "tasks"},
+      {Tasks({"gone"}), "tasks"},
+      {json{{"tasks", "back"}}, "tasks"},
+      {json{{"tasks", json::array({"back"})}}, "tasks"},
+      {json{{"tasks", json::array({json::object()})}}, "tasks"},
+      {json{{"tasks", json::array({json::object({{"area_id", 3}})})}}, "tasks"},
+      {json{{"tasks", json::array({json::object({{"area_id", "back"}, {"angle", 30}})})}}, "tasks"},
+      {json{{"restart", 1}}, "restart"},
+      {json{{"areas", json::array({"back"})}}, "areas"},
+      {json{{"areas", json::array({"back"})}, {"tasks", one}}, "areas"},
+  };
+  for (const auto& [params, field] : cases) {
+    const CommandOutcome outcome = core.Command("mowing.start", params);
+    EXPECT_FALSE(outcome.invalid.empty()) << params.dump();
+    EXPECT_EQ(outcome.invalid_field, field) << params.dump();
+    EXPECT_FALSE(outcome.accepted);
+  }
+  EXPECT_FALSE(core.Mowing());
+  EXPECT_TRUE(core.TakeEvents().empty());
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kNone);
+}
+
+TEST(LogicTasks, WithoutAMapTheStartIsRefusedForTheMap) {
+  TestCore core = Ready();
+  core.OnMowMap({}, Reason("MAP_UNREADABLE", "Cannot mow on the map: map/json is not readable"));
+  core.TakeEvents();
+  const CommandOutcome outcome = core.Command("mowing.start", Tasks({"gone"}));
+  EXPECT_TRUE(outcome.invalid.empty());
+  EXPECT_FALSE(outcome.accepted);
+  EXPECT_EQ(outcome.why.code, "MAP_UNREADABLE");
+  EXPECT_TRUE(Find(core.TakeEvents(), "MOWING_REFUSED"));
+}
+
+TEST(LogicTasks, AListWithoutAnActiveAreaIsRefused) {
+  TestCore core = Ready();
+  const CommandOutcome outcome = core.Command("mowing.start", Tasks({"bed"}));
+  EXPECT_TRUE(outcome.invalid.empty());
+  EXPECT_FALSE(outcome.accepted);
+  EXPECT_EQ(outcome.why.code, "NO_MOWING_AREA");
+  EXPECT_EQ(outcome.why.message, "No area of tasks is active");
+  EXPECT_FALSE(core.Mowing());
+}
+
+TEST(LogicTasks, MowsTheListInItsOrderAndCompletesAfterIt) {
+  TestCore core = Ready();
+  ASSERT_TRUE(core.Command("mowing.start", Tasks({"back", "front"})).accepted);
+  JobStep step = core.NextJobStep(0);
+  ASSERT_EQ(step.kind, JobStep::Kind::kPlan);
+  EXPECT_EQ(step.area_id, "back");
+  // current_area is the index in the map, task_index the place in the list.
+  EXPECT_EQ(core.RobotState().current_area, 2);
+  EXPECT_EQ(core.RobotState().task_index, 0);
+  EXPECT_EQ(core.RobotState().task_count, 2);
+  auto saved = ParseCheckpoint(*core.TakeCheckpoint());
+  ASSERT_TRUE(saved);
+  EXPECT_EQ(saved->tasks, (std::vector<std::string>{"back", "front"}));
+  core.OnJobPlanned({}, "fp");
+  step = core.NextJobStep(0);
+  ASSERT_EQ(step.kind, JobStep::Kind::kPlan);
+  EXPECT_EQ(step.area_id, "front");
+  EXPECT_EQ(core.RobotState().current_area, 0);
+  EXPECT_EQ(core.RobotState().task_index, 1);
+  core.TakeEvents();
+  core.OnJobPlanned({}, "fp");
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kNone);
+  EXPECT_FALSE(core.Mowing());
+  EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"JOB_COMPLETE", "STATE"}));
+  EXPECT_EQ(core.RobotState().task_index, -1);
+  EXPECT_EQ(core.RobotState().task_count, -1);
+  saved = ParseCheckpoint(*core.TakeCheckpoint());
+  EXPECT_TRUE(saved->tasks.empty());
+}
+
+TEST(LogicTasks, TheSameListGoesOnAnotherOneOrRestartBeginsANewJob) {
+  TestCore core = Ready();
+  ASSERT_TRUE(core.Command("mowing.start", Tasks({"back"})).accepted);
+  const std::string job = core.TakeEvents()[0].details["job_id"];
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
+  core.OnJobPlanned({Lane(1), Lane(1)}, "fp");
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kFollow);
+  core.OnJobProgress(2);
+  core.Command("mowing.abort", json::object());
+  core.TakeEvents();
+  // The same list: the same job from the same place.
+  core.OnPose(PoseAt(2, 2));
+  ASSERT_TRUE(core.Command("mowing.start", Tasks({"back"})).accepted);
+  auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"STATE"}));
+  EXPECT_EQ(events[0].details["job_id"], job);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
+  core.OnJobPlanned({Lane(1), Lane(1)}, "fp");
+  EXPECT_EQ(core.NextJobStep(0).start_index, 2u);
+  core.Command("mowing.abort", json::object());
+  core.TakeEvents();
+  // Another list drops the open job with JOB_RESET and begins a new one.
+  ASSERT_TRUE(core.Command("mowing.start", Tasks({"front"})).accepted);
+  events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"JOB_RESET", "STATE"}));
+  EXPECT_EQ(events[0].details["job_id"], job);
+  const std::string second = events[1].details["job_id"];
+  EXPECT_NE(second, job);
+  const JobStep step = core.NextJobStep(0);
+  ASSERT_EQ(step.kind, JobStep::Kind::kPlan);
+  EXPECT_EQ(step.area_id, "front");
+  core.Command("mowing.abort", json::object());
+  core.TakeEvents();
+  // restart begins anew with the same list.
+  ASSERT_TRUE(core.Command("mowing.start", Tasks({"front"}, true)).accepted);
+  events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"JOB_RESET", "STATE"}));
+  EXPECT_EQ(events[0].details["job_id"], second);
+  EXPECT_NE(events[1].details["job_id"], second);
+  core.Command("mowing.abort", json::object());
+  core.TakeEvents();
+  // Without tasks every active area: another list than front alone.
+  ASSERT_TRUE(core.Command("mowing.start", json::object()).accepted);
+  EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"JOB_RESET", "STATE"}));
+}
+
+TEST(LogicTasks, TheListOfAllActiveAreasGoesOnWithAJobOverAllAreas) {
+  TestCore core = Following();
+  EXPECT_EQ(core.RobotState().task_index, 0);
+  EXPECT_EQ(core.RobotState().task_count, 2);
+  core.OnJobProgress(2);
+  core.Command("mowing.abort", json::object());
+  const std::string job = core.TakeEvents()[0].details["job_id"];
+  ASSERT_TRUE(core.Command("mowing.start", Tasks({"front", "back"})).accepted);
+  auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"STATE"}));
+  EXPECT_EQ(events[0].details["job_id"], job);
+  core.Command("mowing.abort", json::object());
+  core.TakeEvents();
+  // Another order is another list.
+  ASSERT_TRUE(core.Command("mowing.start", Tasks({"back", "front"})).accepted);
+  events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"JOB_RESET", "STATE"}));
+  EXPECT_EQ(events[0].details["job_id"], job);
+}
+
+TEST(LogicTasks, SkipAreaGoesOnInTheList) {
+  TestCore core = Ready();
+  ASSERT_TRUE(core.Command("mowing.start", Tasks({"back", "front"})).accepted);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
+  core.OnJobPlanned({Lane(1), Lane(1)}, "fp");
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kFollow);
+  core.TakeEvents();
+  ASSERT_TRUE(core.Command("mowing.skip_area", json{{"area", 2}}).accepted);
+  core.OnLegEnded(LegEnd::kCanceled, 1, Reason("CANCELED", ""));
+  const auto events = core.TakeEvents();
+  const Event* skipped = Find(events, "AREA_SKIPPED");
+  ASSERT_TRUE(skipped);
+  EXPECT_EQ(skipped->details["area_id"], "back");
+  const JobStep step = core.NextJobStep(0);
+  ASSERT_EQ(step.kind, JobStep::Kind::kPlan);
+  EXPECT_EQ(step.area_id, "front");
+  EXPECT_EQ(core.RobotState().task_index, 1);
+  core.Command("mowing.skip_area", json::object());
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kNone);
+  EXPECT_FALSE(core.Mowing());
+  EXPECT_TRUE(Find(core.TakeEvents(), "JOB_COMPLETE"));
+}
+
+TEST(LogicTasks, ARestoredJobGoesOnInItsList) {
+  JobProgress saved;
+  saved.job_id = "J";
+  saved.area = 0;
+  saved.area_id = "front";
+  saved.path = 1;
+  saved.index = 3;
+  saved.fingerprint = "fp";
+  saved.tasks = {"back", "front"};
+  saved.task = 1;
+  TestCore core = Ready();
+  core.RestoreJob(saved);
+  EXPECT_TRUE(Enabled(core, "mower_logic:idle", "reset_job"));
+  core.OnPose(PoseAt(2.5, 2));
+  ASSERT_TRUE(core.Command("mowing.start", Tasks({"back", "front"})).accepted);
+  EXPECT_EQ(core.TakeEvents()[0].details["job_id"], "J");
+  const JobStep plan = core.NextJobStep(0);
+  ASSERT_EQ(plan.kind, JobStep::Kind::kPlan);
+  EXPECT_EQ(plan.area_id, "front");
+  core.OnJobPlanned({Lane(1), Lane(1)}, "fp");
+  const JobStep step = core.NextJobStep(0);
+  ASSERT_EQ(step.kind, JobStep::Kind::kFollow);
+  EXPECT_EQ(step.start_index, 3u);
+  EXPECT_EQ(core.RobotState().task_index, 1);
 }

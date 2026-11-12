@@ -1,13 +1,68 @@
 #include "mowbite_logic/logic_core.h"
 
 #include <cmath>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace mowbite_logic {
 
+std::string LogicCore::ReadStartRequest(const json& params, StartRequest* request, std::string* field) const {
+  const auto fail = [field](const char* name, const std::string& text) {
+    *field = name;
+    return text;
+  };
+  // Never all areas in place of a list the OS cannot take.
+  if (params.contains("areas")) return fail("areas", "areas: not taken, tasks names the areas of the job");
+  StartRequest asked;
+  asked.restart = params.value("restart", false);
+  if (params.contains("tasks")) {
+    if (params["tasks"].empty()) return fail("tasks", "tasks: the list is empty");
+    std::set<std::string> seen;
+    for (const json& task : params["tasks"]) {
+      const std::string id = task["area_id"].get<std::string>();
+      if (!seen.insert(id).second) return fail("tasks", "tasks: the area " + id + " is in the list twice");
+      // Without a map yet the start is refused for that.
+      if (mow_map_problem_.empty() && !job_.HasArea(id)) {
+        return fail("tasks", "tasks: " + id + " is no mowing area of the map");
+      }
+      asked.tasks.push_back(id);
+    }
+  }
+  if (request) *request = std::move(asked);
+  return "";
+}
+
+Reason LogicCore::RequestStart(const json& params, const Reason& node_problem, CommandOutcome* out) {
+  StartRequest request;
+  std::string field;
+  ReadStartRequest(params, &request, &field);
+  Reason why = StartProblem(request.tasks);
+  if (why.empty()) why = node_problem;
+  if (!why.empty()) {
+    RefuseStart(why);
+    return why;
+  }
+  start_request_ = std::move(request);
+  // On the docking station the reference check comes first; its refusal is an event of its own.
+  out->result["check"] = DockContact();
+  if (DockContact()) {
+    BeginDockCheck(DockCheck::kMowing);
+  } else {
+    StartMowing();
+  }
+  return {};
+}
+
 void LogicCore::StartMowing() {
+  // Another list of areas, or a restart, begins a new job; the planner learns of the dropped one by JOB_RESET.
+  const StartRequest request = std::exchange(start_request_, StartRequest());
+  if (request.restart || job_.TaskIds(request.tasks) != job_.TaskIds(job_.progress().tasks)) {
+    if (!JobId().empty()) AddEvent("JOB_RESET", json::object());
+    job_.Reset();
+    job_.SetTasks(request.tasks);
+  }
   // Planned anew on every start, the map may have changed; the fingerprint keeps the place if the plan is the same.
   job_.Restore(job_.progress());
   leg_ = Leg::kNone;

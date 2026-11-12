@@ -150,3 +150,19 @@ TEST(CheckEvent, ClientAndSource) {
   // Never an event.
   EXPECT_TRUE(Has(CheckEvent("COMMAND_REFUSED", Json::object()), "does not know"));
 }
+
+// A list of rows: each one an object of the fields of the catalog.
+TEST(CheckParams, EachRowOfAListOfObjects) {
+  const Command& start = *FindCommand("mowing.start");
+  std::string field;
+  const Json lawn = Json::object({{"area_id", "lawn"}});
+  EXPECT_EQ(CheckParams(start, Json{{"tasks", Json::array({lawn, lawn})}, {"restart", true}}, &field), "");
+  for (const Json& row : {Json("lawn"), Json::object(), Json::object({{"area_id", 1}}),
+                          Json::object({{"area_id", "lawn"}, {"angle", 30}})}) {
+    field.clear();
+    EXPECT_NE(CheckParams(start, Json{{"tasks", Json::array({lawn, row})}}, &field), "") << row.dump();
+    EXPECT_EQ(field, "tasks");
+  }
+  EXPECT_NE(CheckParams(start, Json{{"tasks", Json::array({Json::object()})}}, &field).find("tasks[0].area_id"),
+            std::string::npos);
+}

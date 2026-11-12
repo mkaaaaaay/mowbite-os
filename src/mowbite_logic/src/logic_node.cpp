@@ -1381,25 +1381,7 @@ class LogicNode : public rclcpp::Node {
     ReportRestartWhenHeard();
     MirrorHold();
     CheckWriter();
-    mowbite_msgs::msg::RobotState msg;
-    msg.current_state = state.state;
-    msg.current_sub_state = state.sub_state;
-    msg.current_area = state.current_area;
-    msg.current_path = state.current_path;
-    msg.current_path_index = state.current_path_index;
-    msg.battery_percentage = state.battery_percentage;
-    msg.emergency = state.emergency;
-    msg.emergency_reason = static_cast<uint32_t>(state.emergency_reason);
-    msg.is_charging = state.is_charging;
-    msg.rain_detected = state.rain_detected;
-    msg.gps_percentage = state.gps_percentage;
-    msg.pose_x = state.pose_x;
-    msg.pose_y = state.pose_y;
-    msg.pose_heading = state.pose_heading;
-    msg.pos_accuracy = state.pos_accuracy;
-    msg.heading_accuracy = state.heading_accuracy;
-    msg.heading_valid = state.heading_valid;
-    robot_state_pub_->publish(msg);
+    robot_state_pub_->publish(ToMessage(state));
   }
 
   void OnRpcRequest(const mowbite_msgs::msg::RpcRequest& request) {

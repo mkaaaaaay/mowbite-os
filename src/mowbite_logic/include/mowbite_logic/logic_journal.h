@@ -28,7 +28,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockingLeg, kind, goal, poses, corridor, stra
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ChargeConfig, current, time, timeout, expected_below, lost_time)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobPose, x, y, heading, kind)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobPath, is_outline, poses)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobProgress, job_id, area, area_id, path, index, fingerprint)
+// With defaults: tasks came later, journals from before stay readable.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(JobProgress, job_id, area, area_id, path, index, fingerprint, tasks,
+                                                task)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(HardwareSnapshot::Motor, ok, rpm, current, temperature)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(HardwareSnapshot, telemetry_ok, emergency, emergency_reason, rain, dock_contact,
                                    dock_contact_raw, hold, battery_ok, battery_voltage, battery_current,
@@ -87,7 +89,7 @@ static_assert(sizeof(DockingLeg) == 120);
 static_assert(sizeof(ChargeConfig) == 40);
 static_assert(sizeof(JobPose) == 32);
 static_assert(sizeof(JobPath) == 32);
-static_assert(sizeof(JobProgress) == 112);
+static_assert(sizeof(JobProgress) == 144);
 static_assert(sizeof(HardwareSnapshot) == 72);
 static_assert(sizeof(PoseSnapshot) == 40);
 static_assert(sizeof(CalibrationConfig) == 32);

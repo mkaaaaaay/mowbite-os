@@ -5,6 +5,7 @@
 #include <geometry_msgs/msg/point32.hpp>
 #include <mowbite_msgs/action/follow_path.hpp>
 #include <mowbite_msgs/msg/map_status.hpp>
+#include <mowbite_msgs/msg/robot_state.hpp>
 #include <mowbite_msgs/msg/sensor_spec.hpp>
 
 namespace mowbite_logic {
@@ -107,6 +108,30 @@ PoseSnapshot ToPose(const mowbite_msgs::msg::RobotPose& msg) {
   pose.orientation_accuracy = msg.heading_accuracy;
   pose.orientation_valid = msg.heading_valid;
   return pose;
+}
+
+mowbite_msgs::msg::RobotState ToMessage(const RobotStateData& state) {
+  mowbite_msgs::msg::RobotState msg;
+  msg.current_state = state.state;
+  msg.current_sub_state = state.sub_state;
+  msg.current_area = state.current_area;
+  msg.current_path = state.current_path;
+  msg.current_path_index = state.current_path_index;
+  msg.task_index = state.task_index;
+  msg.task_count = state.task_count;
+  msg.battery_percentage = state.battery_percentage;
+  msg.emergency = state.emergency;
+  msg.emergency_reason = static_cast<uint32_t>(state.emergency_reason);
+  msg.is_charging = state.is_charging;
+  msg.rain_detected = state.rain_detected;
+  msg.gps_percentage = state.gps_percentage;
+  msg.pose_x = state.pose_x;
+  msg.pose_y = state.pose_y;
+  msg.pose_heading = state.pose_heading;
+  msg.pos_accuracy = state.pos_accuracy;
+  msg.heading_accuracy = state.heading_accuracy;
+  msg.heading_valid = state.heading_valid;
+  return msg;
 }
 
 }  // namespace mowbite_logic

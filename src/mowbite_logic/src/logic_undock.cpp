@@ -51,7 +51,7 @@ Reason LogicCore::OnDockCheck(bool ok, double x, double y, float accuracy, const
   if (why.empty() && !DockContact()) {
     why = Reason("NO_DOCK_CONTACT", "The contact with the docking station ended during the reference check");
   }
-  if (why.empty()) why = purpose == DockCheck::kMowing ? StartProblem() : DriveProblem();
+  if (why.empty()) why = purpose == DockCheck::kMowing ? StartProblem(start_request_.tasks) : DriveProblem();
   if (why.empty() && !ok) why = Reason("NO_POSITION", message.empty() ? "No answer from the localization" : message);
   if (why.empty() && !(accuracy <= DockAccuracyLimit())) {
     why = AccuracyReason(accuracy, DockAccuracyLimit());
@@ -207,7 +207,7 @@ void LogicCore::Undocked() {
   outcome.for_drive = undock_for_ == DockCheck::kDrive;
   undock_for_ = DockCheck::kNone;
   // On like a start away from the station; what changed meanwhile comes first.
-  outcome.why = outcome.for_drive ? MoveProblem() : MowProblem();
+  outcome.why = outcome.for_drive ? MoveProblem() : MowProblem(start_request_.tasks);
   if (!outcome.why.empty()) {
     if (outcome.for_drive) {
       RefuseDrive(outcome.why);

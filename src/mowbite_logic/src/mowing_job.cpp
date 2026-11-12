@@ -52,14 +52,19 @@ std::vector<JobPath> JobPaths(const CoverageAnswer& answer) {
 }
 
 std::string CheckpointText(const JobProgress& p) {
-  return json{{"version", kCheckpointVersion},
-              {"job_id", p.job_id},
-              {"area", p.area},
-              {"area_id", p.area_id},
-              {"path", p.path},
-              {"index", p.index},
-              {"fingerprint", p.fingerprint}}
-      .dump();
+  json j = {{"version", kCheckpointVersion},
+            {"job_id", p.job_id},
+            {"area", p.area},
+            {"area_id", p.area_id},
+            {"path", p.path},
+            {"index", p.index},
+            {"fingerprint", p.fingerprint}};
+  // A job over all areas keeps the text of before.
+  if (!p.tasks.empty()) {
+    j["tasks"] = p.tasks;
+    j["task"] = p.task;
+  }
+  return j.dump();
 }
 
 std::optional<JobProgress> ParseCheckpoint(const std::string& text) {
@@ -74,10 +79,16 @@ std::optional<JobProgress> ParseCheckpoint(const std::string& text) {
     p.path = j.at("path").get<int>();
     p.index = j.at("index").get<int>();
     p.fingerprint = j.at("fingerprint").get<std::string>();
+    // Without tasks a job over all areas, as before them.
+    if (j.contains("tasks")) {
+      p.tasks = j.at("tasks").get<std::vector<std::string>>();
+      p.task = j.at("task").get<int>();
+    }
   } catch (const json::exception&) {
     return std::nullopt;
   }
   if (p.area < 0 || p.path < 0 || p.index < 0) return std::nullopt;
+  if (p.task < 0 || static_cast<size_t>(p.task) > p.tasks.size()) return std::nullopt;
   return p;
 }
 
@@ -85,8 +96,42 @@ void MowingJob::SetAreas(std::vector<JobArea> areas) {
   areas_ = std::move(areas);
 }
 
-bool MowingJob::HasMowableArea() const {
-  return std::any_of(areas_.begin(), areas_.end(), [](const JobArea& a) { return a.mowable; });
+bool MowingJob::HasMowableArea(const std::vector<std::string>& tasks) const {
+  return std::any_of(areas_.begin(), areas_.end(), [&tasks](const JobArea& a) {
+    return a.mowable && (tasks.empty() || std::find(tasks.begin(), tasks.end(), a.id) != tasks.end());
+  });
+}
+
+bool MowingJob::HasArea(const std::string& id) const {
+  return std::any_of(areas_.begin(), areas_.end(), [&id](const JobArea& a) { return a.id == id; });
+}
+
+std::vector<std::string> MowingJob::TaskIds(const std::vector<std::string>& tasks) const {
+  if (!tasks.empty()) return tasks;
+  std::vector<std::string> ids;
+  for (const auto& area : areas_) {
+    if (area.mowable) ids.push_back(area.id);
+  }
+  return ids;
+}
+
+void MowingJob::SetTasks(std::vector<std::string> tasks) {
+  progress_.tasks = std::move(tasks);
+  progress_.task = 0;
+}
+
+int MowingJob::TaskIndex() const {
+  if (!progress_.tasks.empty()) {
+    return static_cast<size_t>(progress_.task) < progress_.tasks.size() ? progress_.task : -1;
+  }
+  const JobArea* area = CurrentArea();
+  if (!area || !area->mowable) return -1;
+  return static_cast<int>(std::count_if(areas_.begin(), areas_.begin() + progress_.area,
+                                        [](const JobArea& a) { return a.mowable; }));
+}
+
+int MowingJob::TaskCount() const {
+  return static_cast<int>(TaskIds(progress_.tasks).size());
 }
 
 void MowingJob::Restore(const JobProgress& progress) {
@@ -96,10 +141,12 @@ void MowingJob::Restore(const JobProgress& progress) {
 }
 
 bool MowingJob::Unfinished() const {
-  return progress_.area > 0 || progress_.path > 0 || progress_.index > 0 || has_plan_;
+  const int place = progress_.tasks.empty() ? progress_.area : progress_.task;
+  return place > 0 || progress_.path > 0 || progress_.index > 0 || has_plan_;
 }
 
 bool MowingJob::SeekArea(std::string* notice) {
+  if (!progress_.tasks.empty()) return SeekTask(notice);
   const size_t at = static_cast<size_t>(progress_.area);
   if (!progress_.area_id.empty() && (at >= areas_.size() || areas_[at].id != progress_.area_id)) {
     if (notice) *notice = "The area " + progress_.area_id + " of the checkpoint is not where it was, starting over";
@@ -117,6 +164,23 @@ bool MowingJob::SeekArea(std::string* notice) {
   }
   progress_.area_id = areas_[progress_.area].id;
   return true;
+}
+
+bool MowingJob::SeekTask(std::string* notice) {
+  // Found by its id: the place in the map may have changed, the fingerprint of the plan tells about path and index.
+  while (static_cast<size_t>(progress_.task) < progress_.tasks.size()) {
+    const std::string& id = progress_.tasks[progress_.task];
+    const auto area = std::find_if(areas_.begin(), areas_.end(), [&id](const JobArea& a) { return a.id == id; });
+    if (area != areas_.end() && area->mowable) {
+      progress_.area = static_cast<int>(area - areas_.begin());
+      progress_.area_id = id;
+      return true;
+    }
+    if (area == areas_.end() && notice) *notice = "The area " + id + " of the job is no longer on the map, passed over";
+    NextArea();
+  }
+  progress_.area_id.clear();
+  return false;
 }
 
 const JobArea* MowingJob::CurrentArea() const {
@@ -175,7 +239,12 @@ void MowingJob::SkipArea() {
 }
 
 void MowingJob::NextArea() {
-  progress_.area++;
+  // With tasks the next area is the one of the next task.
+  if (progress_.tasks.empty()) {
+    progress_.area++;
+  } else {
+    progress_.task++;
+  }
   progress_.area_id.clear();
   progress_.path = 0;
   progress_.index = 0;
