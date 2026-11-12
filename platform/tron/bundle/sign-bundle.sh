@@ -44,8 +44,10 @@ if meta["component"] == "os":
 elif meta["component"] == "planner":
     print(f"  version {meta['version']}, interface {meta['interface']}, files_version {meta['files_version']}, "
           f"requires {', '.join(f'{k} {v}' for k, v in sorted(meta.get('requires', {}).items())) or '-'}")
-else:
+elif meta["component"] == "app":
     print(f"  version {meta['version']}, api {meta['api']['min']}..{meta['api']['max']}")
+else:
+    print(f"  base {meta.get('base', 0)}")
 PY
 }
 

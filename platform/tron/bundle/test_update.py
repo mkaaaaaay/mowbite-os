@@ -699,6 +699,21 @@ class UpdateTest(unittest.TestCase):
             self.assertIn("is not newer than 2000", refused.stderr)
         self.assertIn("test gate: NO RESULT", self.sign(self.bundle(C, serial=2001), "n").stdout)
 
+    # A bundle of the host has no version and no api: its base is shown.
+    def test_sign_host_bundle(self):
+        meta = {"format": 2, "component": "host", "revision": D, "commit": D, "serial": 3000, "base": 1}
+        path = self.bundle(D, component="host", meta=meta, extra={f"{D}/mowbite_host/__init__.py": b""})
+        os.remove(path + ".sig")
+        signers = os.path.join(self.prefix, "etc/mowbite/allowed_signers")
+        with open(signers) as f:
+            line = f.read()
+        self.write(signers, line.replace('mowbite-app"', 'mowbite-app,mowbite-host"'))
+        signed = self.sign(path)
+        self.assertEqual(signed.returncode, 0, signed.stderr)
+        self.assertIn("component host", signed.stdout)
+        self.assertIn("base 1", signed.stdout)
+        self.assertTrue(os.path.exists(path + ".sig"))
+
 
 class BundleToolsTest(unittest.TestCase):
     def setUp(self):
