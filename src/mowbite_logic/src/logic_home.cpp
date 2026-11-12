@@ -123,7 +123,7 @@ Reason LogicCore::ContinueProblem() const {
   for (HomeReason reason : home_.Due()) {
     if (reason == HomeReason::kRain || reason == HomeReason::kBatteryHot || reason == HomeReason::kMotorHot) {
       Reason why = HomeWhy(reason);
-      why.message = "It cannot go home: " + why.message;
+      why.message = "Not while it cannot go home: " + why.message;
       return why;
     }
   }

@@ -814,6 +814,7 @@ TEST(Sunset, ContinueInTheRainWithoutAWayHomeIsRefusedUntilItStops) {
   core.TakeEvents();
   const CommandOutcome refused = core.Command("mowing.continue", json::object());
   EXPECT_EQ(refused.why.code, "RAIN");
+  EXPECT_EQ(refused.why.message, "Not while it cannot go home: rain for 20 s");
   EXPECT_EQ(core.RobotState().state, "PAUSED");
   auto events = core.TakeEvents();
   ASSERT_EQ(Types(events), (std::vector<std::string>{"MOWING_REFUSED"}));
