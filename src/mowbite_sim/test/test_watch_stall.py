@@ -13,36 +13,29 @@ import json
 import math
 import os
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
-import launch
-import launch_testing.actions
 import launch_testing.asserts
 import rclpy
-from launch.actions import IncludeLaunchDescription
-from launch.events.process import ProcessStarted
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import HardwareStatus, MapStatus, MqttPublish, RobotPose, RobotState
 from mowbite_msgs.srv import ReplaceMap, SetPose
 from rcl_interfaces.msg import Log
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (EXIT_CODES, LATCHED, ROSOUT, SimProbe, container_pid, restarted, sim_description,  # noqa: E402
+                        sim_files)
+
 WORK = tempfile.mkdtemp(prefix="mowbite_watch_")
-STATE = os.path.join(WORK, "state.json")
-FLAGS = os.path.join(WORK, "flags.json")
-RX = os.path.join(WORK, "rx.jsonl")
-DATA = os.path.join(WORK, "data")
+STATE, FLAGS, RX, DATA = sim_files(WORK)
 RESTART_HOLD = os.path.join(DATA, "restart-hold.json")
 EXIT_NOTE = os.path.join(DATA, "container_exit.json")
 WATCH_NOTE = os.path.join(DATA, "watch_exit.json")
 CONFIG = os.path.join(WORK, "watch.yaml")
 UNEXPECTED_RESTART = HardwareStatus.REASON_UNEXPECTED_RESTART
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 # tron.yaml: cmd_vel_timeout of tron_mcu and blade_lease of the logic.
 CMD_VEL_TIMEOUT = 0.5
 BLADE_LEASE = 1.0
@@ -77,148 +70,31 @@ WALL = 0x40000000
 
 
 def generate_test_description():
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": STATE, "flags": FLAGS, "log": RX,
-                          "data_dir": DATA, "mqtt_port": "18834", "extra_config": CONFIG}.items())
-    return launch.LaunchDescription([sim, launch_testing.actions.ReadyToTest()]), {}
+    return sim_description(WORK, 18834, extra_config=CONFIG)
 
 
-class Probe:
+class Probe(SimProbe):
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("watch_probe", state=STATE, flags=FLAGS, log=RX)
         self.status = None
         self.pose = None
-        self.hw = None
         self.robot = None
-        self.events = []
-        self.logs = []
-        self.node = rclpy.create_node("watch_probe")
         self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
         self.node.create_subscription(RobotPose, "localization/pose", self._set("pose"), 10)
         self.node.create_subscription(HardwareStatus, "hw/status", self._set("hw"), 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
-        rosout_qos = QoSProfile(depth=1000, reliability=ReliabilityPolicy.RELIABLE,
-                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.node.create_subscription(Log, "/rosout", self._log, rosout_qos)
+        self.node.create_subscription(Log, "/rosout", self._log, ROSOUT)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
-
-    def _set(self, name):
-        def store(msg):
-            with self.lock:
-                setattr(self, name, msg)
-        return store
-
-    def _log(self, msg):
-        with self.lock:
-            self.logs.append(msg.msg)
-
-    def _publish(self, msg):
-        if msg.topic != "events/json":
-            return
-        with self.lock:
-            self.events.append(json.loads(msg.payload))
-
-    def truth(self):
-        try:
-            with open(STATE) as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return None
-
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
-    def call(self, client, request, timeout=60.0):
-        assert client.wait_for_service(timeout_sec=20.0), f"{client.srv_name} not offered"
-        future = client.call_async(request)
-        end = time.time() + timeout
-        while not future.done() and time.time() < end:
-            time.sleep(0.05)
-        assert future.done(), f"no answer from {client.srv_name}"
-        return future.result()
-
-    def logged(self, text, timeout):
-        return self.wait(lambda: any(text in line for line in self.logs), timeout)
-
-    def act(self, action):
-        self.action_pub.publish(String(data=action))
-
-    def event(self, since, type_, timeout, **match):
-        return self.wait(lambda: next((e for e in self.events[since:] if e["type"] == type_
-                                       and all(e.get(k) == v for k, v in match.items())), None), timeout)
-
-    def received(self, since=0.0):
-        out = []
-        with open(RX) as f:
-            for line in f:
-                entry = json.loads(line)
-                if "mod" in entry and entry["t"] >= since:
-                    out.append(entry)
-        return out
-
-    def recent(self, size=65536):
-        with open(RX, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            f.seek(max(0, f.tell() - size))
-            lines = f.read().decode().splitlines()[1:]
-        return [json.loads(line) for line in lines]
-
-    def clock_offset(self, reads=40):
-        """time.monotonic() minus the time of fake_tron, from the read that found its newest entry the freshest."""
-        offsets = []
-        for _ in range(reads):
-            now = time.monotonic()
-            offsets.append(now - self.recent(4096)[-1]["t"])
-            time.sleep(0.01)
-        return min(offsets)
+        self.start()
 
     def driving_now(self):
         """The time of the newest setpoint when it moves the mower and is no older than 0.2 s."""
         entries = self.recent()
         speeds = [e for e in entries if "speed" in e and e["t"] > entries[-1]["t"] - 0.2]
         return speeds[-1]["t"] if speeds and speeds[-1]["hex"] != ZERO else None
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
-
-
-def container_pid(proc_info):
-    for action in proc_info.processes():
-        event = proc_info[action]
-        if "component_container_isolated" in action.process_details["name"] and isinstance(event, ProcessStarted):
-            return event.pid
-    return None
-
-
-def restarted(proc_info, pid, timeout):
-    end = time.time() + timeout
-    while time.time() < end:
-        now = container_pid(proc_info)
-        if now is not None and now != pid:
-            return now
-        time.sleep(0.1)
-    return None
 
 
 def stop_thread(pid, name):
@@ -374,5 +250,5 @@ class TestShutdown(unittest.TestCase):
                  if "component_container_isolated" in a.process_details["name"]]
         self.assertEqual(codes[:2], [EXIT_CODE, EXIT_CODE], codes)
         self.assertEqual(len(codes), 3, codes)
-        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -2, -15, 130, 143],
+        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=EXIT_CODES,
                                                process="tron_mcu_node")

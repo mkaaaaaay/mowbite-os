@@ -7,23 +7,22 @@ Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite
 import json
 import os
 import shutil
+import sys
 import tempfile
 import time
 import unittest
 
 import launch
 import launch_testing.actions
-import paho.mqtt.client as mqtt
-from ament_index_python.packages import get_package_share_directory
-from launch.actions import ExecuteProcess, IncludeLaunchDescription, TimerAction
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import TimerAction
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import EXIT_CODES, mosquitto, mqtt_connect, sim_files, sim_stack, wait_until  # noqa: E402
 
 MQTT_PORT = 18843
 WORK = tempfile.mkdtemp(prefix="mowbite_os_hold_")
-DATA = os.path.join(WORK, "data")
+_, _, LOG, DATA = sim_files(WORK)
 HOLD = os.path.join(DATA, "hold.json")
-BROKER_CONF = os.path.join(WORK, "mosquitto.conf")
-LOG = os.path.join(WORK, "rx.jsonl")
 UNTIL = int(time.time()) + 600
 SPEED = 4
 
@@ -33,28 +32,16 @@ def generate_test_description():
     # Left by an update that stopped half way: set five minutes ago for fifteen.
     with open(HOLD, "w") as f:
         json.dump({"until": UNTIL, "set_at": UNTIL - 900}, f)
-    with open(BROKER_CONF, "w") as f:
-        f.write(f"listener {MQTT_PORT} 127.0.0.1\nallow_anonymous true\n")
-    mosquitto = ExecuteProcess(cmd=["mosquitto", "-c", BROKER_CONF], output="screen")
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": os.path.join(WORK, "state.json"),
-                          "flags": os.path.join(WORK, "flags.json"), "log": LOG,
-                          "data_dir": DATA, "mqtt_port": str(MQTT_PORT)}.items())
-    return launch.LaunchDescription([mosquitto, TimerAction(period=1.0, actions=[sim]),
+    return launch.LaunchDescription([mosquitto(WORK, MQTT_PORT),
+                                     TimerAction(period=1.0, actions=[sim_stack(WORK, MQTT_PORT)]),
                                      launch_testing.actions.ReadyToTest()]), {}
 
 
 class Broker:
     def __init__(self):
         self.msgs = []
-        self.client = mqtt.Client("os_hold_test")
-        self.client.on_message = lambda _c, _u, m: self.msgs.append((m.topic, m.payload))
-        self.client.connect("127.0.0.1", MQTT_PORT)
-        self.client.subscribe("#")
-        self.client.loop_start()
+        self.client = mqtt_connect("os_hold_test", MQTT_PORT, lambda _c, _u, m: self.msgs.append((m.topic, m.payload)),
+                                   "#", timeout=30.0)
 
     def latest(self, topic):
         for top, payload in reversed(self.msgs):
@@ -63,13 +50,7 @@ class Broker:
         return None
 
     def wait(self, pred, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            value = pred()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
+        return wait_until(pred, timeout)
 
     def events(self, kind, since):
         return [json.loads(p) for top, p in self.msgs[since:] if top == "events/json" and json.loads(p)["type"] == kind]
@@ -104,15 +85,7 @@ def speeds_moving():
 class TestOsHold(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        end = time.time() + 30
-        while True:
-            try:
-                cls.broker = Broker()
-                break
-            except OSError:
-                if time.time() > end:
-                    raise
-                time.sleep(0.5)
+        cls.broker = Broker()
         assert cls.broker.wait(lambda: cls.broker.latest("robot_state/json"), 90), "no robot_state"
 
     @classmethod
@@ -161,4 +134,4 @@ class TestShutdown(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(DATA, "restart-hold.json")))
         finally:
             shutil.rmtree(WORK, ignore_errors=True)
-        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -2, -15, 130, 143])
+        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=EXIT_CODES)

@@ -6,43 +6,35 @@ Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite
 import json
 import os
 import shutil
+import sys
 import tempfile
-import threading
-import time
 import unittest
 
 import launch
 import launch_testing.actions
-import paho.mqtt.client as mqtt
 import rclpy
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackagePrefix
 from mowbite_msgs.msg import GnssFix, RobotPose
 from nav_msgs.msg import Odometry
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu, NavSatFix
 from std_msgs.msg import String
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import EXIT_CODES, LATCHED, SimProbe, fake_tron, mosquitto, mqtt_connect, sim_links  # noqa: E402
 
 MQTT_PORT = 18831
 DATUM = (52.0, 9.0, 50.0)
 ANTENNA_X = 0.098
 WORK = tempfile.mkdtemp(prefix="mowbite_smoke_")
-LINKS = {name: os.path.join(WORK, name) for name in ("mcu", "gnss", "imu")}
+LINKS = sim_links(WORK)
 BRIDGE_START_S = 6.0
 RETAINED_ID = "retained-1"
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 
 def generate_test_description():
-    with open(os.path.join(WORK, "mosquitto.conf"), "w") as f:
-        f.write(f"listener {MQTT_PORT} 127.0.0.1\nallow_anonymous true\n")
-    fake_tron = ExecuteProcess(
-        cmd=[os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_tron"),
-             "--link", LINKS["mcu"], "--gnss-link", LINKS["gnss"], "--imu-link", LINKS["imu"],
-             "--datum", *map(str, DATUM), "--antenna-offset", str(ANTENNA_X), "0.0"],
-        output="screen")
-    mosquitto = ExecuteProcess(cmd=["mosquitto", "-c", os.path.join(WORK, "mosquitto.conf")], output="screen")
+    broker = mosquitto(WORK, MQTT_PORT)
     nodes = [
         Node(package="tron_gnss", executable="tron_gnss_node", output="screen",
              parameters=[{"port": LINKS["gnss"], "datum_lat": DATUM[0], "datum_long": DATUM[1],
@@ -60,21 +52,21 @@ def generate_test_description():
     # The ptys and the broker have to exist before the drivers look for them. The bridge comes last, after the probe
     # has left a retained request on the broker.
     return launch.LaunchDescription([
-        fake_tron, mosquitto,
+        fake_tron(LINKS, "--datum", *map(str, DATUM), "--antenna-offset", str(ANTENNA_X), "0.0"), broker,
         TimerAction(period=2.0, actions=nodes + [launch_testing.actions.ReadyToTest()]),
         TimerAction(period=BRIDGE_START_S, actions=[bridge]),
     ]), {}
 
 
-class Collector:
+class Collector(SimProbe):
     """Keeps the newest ROS messages and MQTT payloads and waits for them."""
+    spin_timeout = 0.1
 
     def __init__(self):
+        super().__init__("stack_smoke_probe")
         self.ros = {}
         self.mqtt = {}
         self.rpc_ids = []
-        self.lock = threading.Lock()
-        self.node = rclpy.create_node("stack_smoke_probe")
         self.node.create_subscription(GnssFix, "gps/absolute_pose", lambda m: self._ros("gps", m), 10)
         self.node.create_subscription(NavSatFix, "gps/datum", lambda m: self._ros("datum", m), LATCHED)
         self.node.create_subscription(Imu, "imu/data", lambda m: self._ros("imu", m), qos_profile_sensor_data)
@@ -85,31 +77,10 @@ class Collector:
         self.geometry = self.node.create_publisher(String, "bridge/params", LATCHED)
         self.geometry.publish(String(data=json.dumps(
             {"node": "/mowbite_geometry", "params": {"antenna_x": ANTENNA_X, "antenna_y": 0.0, "version": 0}})))
-        try:
-            self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "stack_smoke")
-        except AttributeError:
-            self.client = mqtt.Client("stack_smoke")
-        self.client.on_message = self._mqtt
-        self.spinner = threading.Thread(target=self._spin, daemon=True)
-        self.running = True
-        self.spinner.start()
+        self.start()
 
     def connect(self, timeout=15.0):
-        end = time.time() + timeout
-        while True:
-            try:
-                self.client.connect("127.0.0.1", MQTT_PORT)
-                break
-            except OSError:
-                if time.time() > end:
-                    raise
-                time.sleep(0.2)
-        self.client.subscribe("#")
-        self.client.loop_start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.1)
+        self.client = mqtt_connect("stack_smoke", MQTT_PORT, self._mqtt, "#", timeout)
 
     def _ros(self, key, msg):
         with self.lock:
@@ -122,20 +93,11 @@ class Collector:
                 self.rpc_ids.append(json.loads(msg.payload).get("id"))
 
     def wait(self, getter, timeout=30.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value is not None:
-                return value
-            time.sleep(0.05)
-        return None
+        return super().wait(getter, timeout)
 
     def stop(self):
-        self.running = False
-        self.spinner.join(2.0)
         self.client.loop_stop()
-        self.node.destroy_node()
+        super().stop()
 
 
 class TestSensorChain(unittest.TestCase):
@@ -208,5 +170,5 @@ class TestShutdown(unittest.TestCase):
         # SIGINT from launch is a normal stop for every process of the chain; ros2 topic pub ends on it with 2.
         for action in proc_info.processes():
             name = action.process_details["name"]
-            allowed = [0, -2, -15, 130, 143] + ([2] if name.startswith("ros2") else [])
+            allowed = EXIT_CODES + ([2] if name.startswith("ros2") else [])
             self.assertIn(proc_info[action].returncode, allowed, name)

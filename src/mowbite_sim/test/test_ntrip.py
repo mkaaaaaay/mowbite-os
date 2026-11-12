@@ -7,13 +7,12 @@ that user and password show up nowhere.
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_ntrip.py
 """
 import base64
-import importlib.machinery
-import importlib.util
 import json
 import os
 import shutil
 import socket
 import stat
+import sys
 import tempfile
 import threading
 import time
@@ -22,23 +21,22 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
-from launch.actions import ExecuteProcess, TimerAction
+from launch.actions import TimerAction
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackagePrefix
 from mowbite_msgs.msg import GnssFix, MqttPublish, NtripStatus, RpcError, RpcMethods, RpcRequest, RpcResponse
 from mowbite_msgs.msg import SensorValue
 from rcl_interfaces.msg import Log
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (HISTORY, LATCHED, ROSOUT, SimProbe, fake_tron, log_entries, read_json, rtcm_frame,  # noqa: E402
+                        sim_files, sim_links, write_json)
+
 WORK = tempfile.mkdtemp(prefix="mowbite_ntrip_")
-LINKS = {name: os.path.join(WORK, name) for name in ("mcu", "gnss", "imu")}
-FLAGS = os.path.join(WORK, "flags.json")
-LOG = os.path.join(WORK, "rx.jsonl")
+LINKS = sim_links(WORK)
+_, FLAGS, LOG, _ = sim_files(WORK)
 ACCESS = os.path.join(WORK, "ntrip.yaml")
 SOURCE = os.path.join(WORK, "ntrip_source.json")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-HISTORY = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 # Test values only, they must never appear in a status, a log line, an event or an answer.
 USER = "rover.of.the.test"
 PASSWORD = "pw.of#the.test"
@@ -46,19 +44,6 @@ WRONG = "not.the#pw"
 MAX_AGE = 5.0
 FIXED = GnssFix.RTK_FIXED
 FLOAT = GnssFix.RTK_FLOAT
-
-
-# The CRC of fake_tron, so there is one in the sim.
-_loader = importlib.machinery.SourceFileLoader(
-    "fake_tron", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "fake_tron"))
-ft = importlib.util.module_from_spec(importlib.util.spec_from_loader("fake_tron", _loader))
-_loader.exec_module(ft)
-
-
-def rtcm_frame(message, length):
-    payload = bytes([message >> 4, (message & 0x0F) << 4]) + bytes((i * 7) & 0xFF for i in range(length - 2))
-    frame = bytes([0xD3, length >> 8, length & 0xFF]) + payload
-    return frame + ft.crc24q(frame).to_bytes(3, "big")
 
 
 class Caster:
@@ -165,16 +150,10 @@ def write_access(mountpoint="V2", password=PASSWORD, version=2):
 
 
 write_access()
-with open(FLAGS, "w") as f:
-    json.dump({"gnss_rtcm": 1}, f)
+write_json(FLAGS, {"gnss_rtcm": 1})
 
 
 def generate_test_description():
-    fake_tron = ExecuteProcess(
-        cmd=[os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_tron"),
-             "--link", LINKS["mcu"], "--gnss-link", LINKS["gnss"], "--imu-link", LINKS["imu"],
-             "--flags", FLAGS, "--log", LOG, "--log-max-mb", "5"],
-        output="screen")
     gnss = Node(package="tron_gnss", executable="tron_gnss_node", output="screen",
                 parameters=[{"port": LINKS["gnss"], "datum_lat": 52.0, "datum_long": 9.0, "datum_height": 50.0,
                              "max_correction_age": MAX_AGE}])
@@ -184,111 +163,61 @@ def generate_test_description():
                               "max_correction_age": MAX_AGE, "access_over_rpc": True}])
     # The ptys have to exist before the driver looks for them.
     return launch.LaunchDescription([
-        fake_tron,
+        fake_tron(LINKS, "--flags", FLAGS, "--log", LOG, "--log-max-mb", "5"),
         TimerAction(period=1.0, actions=[gnss, ntrip, launch_testing.actions.ReadyToTest()]),
     ]), {}
 
 
 def board_log():
     """Entries of fake_tron about the board and the RTCM it passed."""
-    out = []
-    with open(LOG) as f:
-        for line in f:
-            entry = json.loads(line)
-            if "board" in entry or "rtcm" in entry:
-                out.append(entry)
-    return out
+    return [e for e in log_entries(LOG) if "board" in e or "rtcm" in e]
 
 
 def saved_source():
     """The source of the corrections used last, as mowbite_ntrip saved it; None without the file."""
-    try:
-        with open(SOURCE) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
+    return read_json(SOURCE)
 
 
-class Probe:
+class Probe(SimProbe):
     def __init__(self):
-        # Reentrant: wait() holds it while a predicate may call corrections_events().
-        self.lock = threading.RLock()
+        super().__init__("ntrip_probe")
         self.status = None
         self.pose = None
-        self.logs = []
-        self.events = []
         self.sensors = {}
         self.statuses = []
-        self.methods = {}
-        self.answers = {}
-        self.node = rclpy.create_node("ntrip_probe")
         self.node.create_subscription(NtripStatus, "gnss/ntrip_status", self._status, 10)
-        self.node.create_subscription(GnssFix, "gps/absolute_pose", self._pose, 10)
+        self.node.create_subscription(GnssFix, "gps/absolute_pose", self._set("pose"), 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.node.create_subscription(SensorValue, "bridge/sensor_value", self._sensor, 100)
         self.node.create_subscription(String, "gnss/gga", lambda m: None, 10)
-        rosout_qos = QoSProfile(depth=1000, reliability=ReliabilityPolicy.RELIABLE,
-                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.node.create_subscription(Log, "/rosout", self._log, rosout_qos)
+        self.node.create_subscription(Log, "/rosout", self._log, ROSOUT)
         self.node.create_subscription(RpcMethods, "bridge/rpc/methods", self._methods, HISTORY)
         self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
         self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
         self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
         self.idle_pub = self.node.create_publisher(Bool, "logic/idle", LATCHED)
-        self.rpc_count = 0
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
+        self.start()
 
     def _status(self, msg):
         with self.lock:
             self.status = msg
             self.statuses.append(msg)
 
-    def _pose(self, msg):
-        with self.lock:
-            self.pose = msg
-
-    def _publish(self, msg):
-        if msg.topic == "events/json":
-            with self.lock:
-                self.events.append(json.loads(msg.payload))
-
     def _sensor(self, msg):
         with self.lock:
             self.sensors[msg.sensor_id] = msg
 
-    def _log(self, msg):
-        with self.lock:
-            self.logs.append(msg.msg)
-
-    def _methods(self, msg):
-        with self.lock:
-            self.methods[msg.node_id] = list(msg.methods)
-
-    def _response(self, msg):
-        with self.lock:
-            self.answers[msg.id] = {"result": json.loads(msg.result)}
-
     def _error(self, msg):
+        """An error without data: the tests compare the whole of it."""
         with self.lock:
             self.answers[msg.id] = {"error": {"code": msg.code, "message": msg.message}}
 
     def rpc(self, method, params=None, raw=None, timeout=5.0):
         """What the node answers, as the bridge would pass it on: {"result": ...} or {"error": {code, message}}."""
-        self.wait(lambda p: p.rpc_pub.get_subscription_count() > 0)
-        with self.lock:
-            self.rpc_count += 1
-            rid = f"r{self.rpc_count}"
-        text = raw if raw is not None else ("" if params is None else json.dumps(params))
-        self.rpc_pub.publish(RpcRequest(method=method, params=text, id=rid))
-        return self.wait(lambda p: p.answers.get(rid), timeout)
+        return super().rpc(method, params, timeout, raw)
 
     def set_idle(self, idle):
-        self.wait(lambda p: p.idle_pub.get_subscription_count() > 0)
+        self.wait_for(lambda p: p.idle_pub.get_subscription_count() > 0)
         self.idle_pub.publish(Bool(data=idle))
         time.sleep(0.5)
 
@@ -296,27 +225,12 @@ class Probe:
         with self.lock:
             return [json.dumps(a) for a in self.answers.values()]
 
-    def wait(self, pred, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = pred(self)
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
     def corrections_events(self, since=0):
         with self.lock:
             return [e for e in self.events[since:] if e["type"] == "CORRECTIONS"]
 
     def source_changes(self, since=0):
         return [e for e in self.corrections_events(since) if e["reason"] == "SOURCE_CHANGED"]
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.2)
-        self.node.destroy_node()
 
 
 class TestNtrip(unittest.TestCase):
@@ -332,13 +246,13 @@ class TestNtrip(unittest.TestCase):
         shutil.rmtree(WORK, ignore_errors=True)
 
     def connected_with_frames(self, timeout=30.0):
-        return self.probe.wait(lambda p: p.status and p.status.state == "connected" and p.status.frames > 0 and
-                               0 <= p.status.last_frame_age < 2.0, timeout)
+        return self.probe.wait_for(lambda p: p.status and p.status.state == "connected" and p.status.frames > 0 and
+                                   0 <= p.status.last_frame_age < 2.0, timeout)
 
     def assert_source_changed(self, since, before, now):
         """One SOURCE_CHANGED since the index, from mountpoint before to now on the test caster, and now saved."""
         p = self.probe
-        changed = p.wait(lambda p: p.source_changes(since), 5)
+        changed = p.wait_for(lambda p: p.source_changes(since), 5)
         self.assertTrue(changed, p.corrections_events(since))
         self.assertEqual(len(changed), 1, changed)
         event = changed[0]
@@ -349,12 +263,13 @@ class TestNtrip(unittest.TestCase):
         # Holds nothing up.
         self.assertNotIn("resume", event)
         self.assertIn("may be offset", event["message"])
-        self.assertTrue(p.wait(lambda p: (saved_source() or {}).get("mountpoint") == now, 5), saved_source())
+        self.assertTrue(p.wait_for(lambda p: (saved_source() or {}).get("mountpoint") == now, 5), saved_source())
 
     def test_1_ntrip2_gives_rtk_fixed(self):
         p = self.probe
         self.assertTrue(self.connected_with_frames(), f"status: {p.status}")
-        self.assertTrue(p.wait(lambda p: p.pose and p.pose.solution == FIXED, 20), f"pose solution {p.pose and p.pose.solution}")
+        self.assertTrue(p.wait_for(lambda p: p.pose and p.pose.solution == FIXED, 20),
+                        f"pose solution {p.pose and p.pose.solution}")
         attempt = [a for a in CASTER.attempts() if a[3]][0]
         self.assertEqual(attempt[1:], ("V2", "Ntrip/2.0", True))
         self.assertIn("User-Agent: NTRIP ", CASTER.requests[0])
@@ -365,12 +280,12 @@ class TestNtrip(unittest.TestCase):
         self.assertTrue(any("rtcm" in e for e in board[first_on:]))
         # No reset on the first handshake, and no RTCM reached the board before it was on.
         self.assertFalse(any(e.get("board") in ("reset", "rtcm_dropped") for e in board))
-        self.assertTrue(p.wait(lambda p: p.sensors.get("os_ntrip_state") and
-                               p.sensors["os_ntrip_state"].text == "connected"))
-        self.assertTrue(p.wait(lambda p: p.sensors.get("os_correction_age") and
-                               p.sensors["os_correction_age"].value < 2.0))
+        self.assertTrue(p.wait_for(lambda p: p.sensors.get("os_ntrip_state") and
+                                   p.sensors["os_ntrip_state"].text == "connected"))
+        self.assertTrue(p.wait_for(lambda p: p.sensors.get("os_correction_age") and
+                                   p.sensors["os_correction_age"].value < 2.0))
         # The first source of all is saved without the login and gives no event.
-        self.assertTrue(p.wait(lambda p: saved_source(), 5), "no ntrip_source.json")
+        self.assertTrue(p.wait_for(lambda p: saved_source(), 5), "no ntrip_source.json")
         self.assertEqual(saved_source(), {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V2"})
         self.assertEqual(p.corrections_events(), [])
 
@@ -382,12 +297,12 @@ class TestNtrip(unittest.TestCase):
             CASTER.down = True
         start = time.time()
         # Past the age limit the fix counts as float, although the receiver still says fixed.
-        self.assertTrue(p.wait(lambda p: p.pose and p.pose.solution == FLOAT, MAX_AGE + 6), "still fixed")
-        lost = p.wait(lambda p: [e for e in p.corrections_events(since) if e["reason"] == "LOST"], MAX_AGE + 6)
+        self.assertTrue(p.wait_for(lambda p: p.pose and p.pose.solution == FLOAT, MAX_AGE + 6), "still fixed")
+        lost = p.wait_for(lambda p: [e for e in p.corrections_events(since) if e["reason"] == "LOST"], MAX_AGE + 6)
         self.assertTrue(lost, p.corrections_events(since))
         self.assertEqual((lost[0]["severity"], lost[0]["resume"], lost[0]["limit"]), ("warning", "auto", MAX_AGE))
         # Without RTCM the keep-alive stops after its window (10 s) and the board falls back to LoRa 6 s later.
-        self.assertTrue(p.wait(lambda p: any(e.get("board") == "off" for e in board_log()[board_since:]), 25),
+        self.assertTrue(p.wait_for(lambda p: any(e.get("board") == "off" for e in board_log()[board_since:]), 25),
                         "board stayed on")
         attempts = [a[0] for a in CASTER.attempts() if a[0] >= start]
         gaps = [b - a for a, b in zip(attempts, attempts[1:])]
@@ -398,7 +313,7 @@ class TestNtrip(unittest.TestCase):
         with CASTER.lock:
             CASTER.down = False
         self.assertTrue(self.connected_with_frames(15), f"status: {p.status}")
-        self.assertTrue(p.wait(lambda p: p.pose and p.pose.solution == FIXED, 15), "no fix after the outage")
+        self.assertTrue(p.wait_for(lambda p: p.pose and p.pose.solution == FIXED, 15), "no fix after the outage")
         events = [e["reason"] for e in p.corrections_events(since)]
         self.assertEqual(events, ["LOST", "RESTORED"])
         # The board came back on with the next RTCM, without a reset (it fell back while nothing was wanted).
@@ -408,7 +323,7 @@ class TestNtrip(unittest.TestCase):
         p = self.probe
         since = len(p.events)
         write_access(password=WRONG)
-        rejected = p.wait(lambda p: p.status and p.status.state == "rejected", 10)
+        rejected = p.wait_for(lambda p: p.status and p.status.state == "rejected", 10)
         self.assertTrue(rejected, f"status: {p.status}")
         self.assertEqual(p.status.last_error, "login refused (401)")
         count = len(CASTER.attempts())
@@ -418,7 +333,7 @@ class TestNtrip(unittest.TestCase):
         events = p.corrections_events(since)
         self.assertEqual([e["reason"] for e in events], ["REJECTED"], events)
         self.assertEqual((events[0]["severity"], events[0]["resume"], events[0]["code"]), ("error", "user", 401))
-        self.assertTrue(p.wait(lambda p: p.sensors["os_ntrip_state"].text == "rejected"))
+        self.assertTrue(p.wait_for(lambda p: p.sensors["os_ntrip_state"].text == "rejected"))
         # The right password: the changed file ends the wait at once.
         write_access()
         self.assertTrue(self.connected_with_frames(6), f"status: {p.status}")
@@ -427,12 +342,12 @@ class TestNtrip(unittest.TestCase):
         p = self.probe
         since = len(p.events)
         write_access(mountpoint="V1", version=1)
-        self.assertTrue(p.wait(lambda p: any(a[1] == "V1" and a[3] for a in CASTER.attempts()), 10))
+        self.assertTrue(p.wait_for(lambda p: any(a[1] == "V1" and a[3] for a in CASTER.attempts()), 10))
         self.assertTrue(self.connected_with_frames(10), f"status: {p.status}")
         v1 = [r for r in CASTER.requests if r.startswith("GET /V1 ")][-1]
         self.assertIn("HTTP/1.0", v1.split("\r\n")[0])
         self.assertNotIn("Ntrip-Version", v1)
-        self.assertTrue(p.wait(lambda p: p.pose and p.pose.solution == FIXED, 15))
+        self.assertTrue(p.wait_for(lambda p: p.pose and p.pose.solution == FIXED, 15))
         # Another mountpoint in the file by hand.
         self.assert_source_changed(since, "V2", "V1")
 
@@ -440,15 +355,15 @@ class TestNtrip(unittest.TestCase):
         p = self.probe
         since = len(p.events)
         os.remove(ACCESS)
-        self.assertTrue(p.wait(lambda p: p.status and p.status.state == "off", 10), f"status: {p.status}")
-        self.assertTrue(p.wait(lambda p: p.sensors["os_ntrip_state"].text == "off"))
+        self.assertTrue(p.wait_for(lambda p: p.status and p.status.state == "off", 10), f"status: {p.status}")
+        self.assertTrue(p.wait_for(lambda p: p.sensors["os_ntrip_state"].text == "off"))
         # No event for switching off, and the source used last stays for the next comparison.
         self.assertEqual(p.corrections_events(since), [])
         self.assertEqual(saved_source(), {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V1"})
 
     def test_6_access_over_rpc(self):
         p = self.probe
-        self.assertTrue(p.wait(lambda p: p.methods.get("mowbite_ntrip"), 5), p.methods)
+        self.assertTrue(p.wait_for(lambda p: p.methods.get("mowbite_ntrip"), 5), p.methods)
         self.assertEqual(sorted(p.methods["mowbite_ntrip"]), ["ntrip.delete", "ntrip.get", "ntrip.set"])
         self.assertEqual(p.rpc("ntrip.get"), {"result": {"configured": False}})
         login = {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V2", "user": USER, "password": PASSWORD}
@@ -464,14 +379,15 @@ class TestNtrip(unittest.TestCase):
         self.assertFalse(os.path.exists(ACCESS))
         p.set_idle(True)
         r = p.rpc("ntrip.set", {k: v for k, v in login.items() if k not in ("user", "password")})
-        self.assertEqual(r and r.get("error"), {"code": -32602, "message": 'user: needed for a new caster ("" for none)'})
+        self.assertEqual(r and r.get("error"),
+                         {"code": -32602, "message": 'user: needed for a new caster ("" for none)'})
         self.assertFalse(os.path.exists(ACCESS))
 
         start = time.time()
         since = len(p.events)
         r = p.rpc("ntrip.set", login)
-        self.assertEqual(r, {"result": {"configured": True, "host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V2",
-                                        "version": 2, "has_user": True, "has_password": True}})
+        self.assertEqual(r, {"result": {"configured": True, "host": "127.0.0.1", "port": CASTER.port,
+                                        "mountpoint": "V2", "version": 2, "has_user": True, "has_password": True}})
         self.assertEqual(stat.S_IMODE(os.stat(ACCESS).st_mode), 0o600)
         self.assertTrue(self.connected_with_frames(10), f"status: {p.status}")
         self.assertTrue([a for a in CASTER.attempts() if a[0] >= start and a[1] == "V2" and a[3]])
@@ -484,7 +400,8 @@ class TestNtrip(unittest.TestCase):
         r = p.rpc("ntrip.set", {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "/V1", "version": 1})
         self.assertEqual(r and (r["result"]["mountpoint"], r["result"]["version"], r["result"]["has_password"]),
                          ("V1", 1, True), r)
-        self.assertTrue(p.wait(lambda p: [a for a in CASTER.attempts() if a[0] >= start and a[1] == "V1" and a[3]], 10))
+        self.assertTrue(p.wait_for(lambda p: [a for a in CASTER.attempts()
+                                              if a[0] >= start and a[1] == "V1" and a[3]], 10))
         self.assertTrue(self.connected_with_frames(10), f"status: {p.status}")
         self.assert_source_changed(since, "V2", "V1")
 
@@ -494,7 +411,8 @@ class TestNtrip(unittest.TestCase):
         for params, raw, message in (
                 ({"host": "localhost", "port": CASTER.port, "mountpoint": "V1"}, None, "user: needed for a new caster"),
                 ({"host": "127.0.0.1", "port": str(CASTER.port), "mountpoint": "V1"}, None, "port: not a port number"),
-                ({"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V1", "pass": PASSWORD}, None, "unknown field"),
+                ({"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V1", "pass": PASSWORD}, None,
+                 "unknown field"),
                 (None, '{"host": "127.0.0.1", "password": "' + PASSWORD, "The parameters are not valid JSON")):
             r = p.rpc("ntrip.set", params, raw)
             self.assertEqual(r and r["error"]["code"], -32602, r)
@@ -506,8 +424,8 @@ class TestNtrip(unittest.TestCase):
         since = len(p.events)
         r = p.rpc("ntrip.set", {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V2", "password": WRONG})
         self.assertTrue(r and r["result"]["configured"], r)
-        self.assertTrue(p.wait(lambda p: p.status and p.status.state == "rejected", 10), f"status: {p.status}")
-        self.assertTrue(p.wait(lambda p: p.corrections_events(since), 5))
+        self.assertTrue(p.wait_for(lambda p: p.status and p.status.state == "rejected", 10), f"status: {p.status}")
+        self.assertTrue(p.wait_for(lambda p: p.corrections_events(since), 5))
         self.assertEqual([e["reason"] for e in p.corrections_events(since)], ["REJECTED"])
         r = p.rpc("ntrip.set", {"host": "127.0.0.1", "port": CASTER.port, "mountpoint": "V2", "password": PASSWORD})
         self.assertTrue(r and r["result"]["configured"], r)
@@ -517,7 +435,7 @@ class TestNtrip(unittest.TestCase):
 
         self.assertEqual(p.rpc("ntrip.delete"), {"result": {"configured": False}})
         self.assertFalse(os.path.exists(ACCESS))
-        self.assertTrue(p.wait(lambda p: p.status and p.status.state == "off", 5), f"status: {p.status}")
+        self.assertTrue(p.wait_for(lambda p: p.status and p.status.state == "off", 5), f"status: {p.status}")
         self.assertEqual(p.rpc("ntrip.get"), {"result": {"configured": False}})
         self.assertEqual(p.rpc("ntrip.delete"), {"result": {"configured": False}})
 

@@ -8,23 +8,21 @@ Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_watch_miss
 import json
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
 import unittest
 
-import launch
-import launch_testing.actions
 import rclpy
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import MqttPublish
 from rcl_interfaces.msg import Log
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import ROSOUT, sim_description, sim_files, wait_until  # noqa: E402
 
 WORK = tempfile.mkdtemp(prefix="mowbite_missing_")
-DATA = os.path.join(WORK, "data")
+DATA = sim_files(WORK)[3]
 EXIT_NOTE = os.path.join(DATA, "container_exit.json")
 CONFIG = os.path.join(WORK, "missing.yaml")
 # mowbite_watch: the start limit and the exit code.
@@ -37,14 +35,7 @@ with open(CONFIG, "w") as f:
 
 
 def generate_test_description():
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": os.path.join(WORK, "state.json"),
-                          "flags": os.path.join(WORK, "flags.json"), "log": os.path.join(WORK, "rx.jsonl"),
-                          "data_dir": DATA, "mqtt_port": "18835", "extra_config": CONFIG}.items())
-    return launch.LaunchDescription([sim, launch_testing.actions.ReadyToTest()]), {}
+    return sim_description(WORK, 18835, extra_config=CONFIG)
 
 
 class TestWatchMissing(unittest.TestCase):
@@ -56,9 +47,7 @@ class TestWatchMissing(unittest.TestCase):
         cls.logs = []
         cls.node = rclpy.create_node("missing_probe")
         cls.node.create_subscription(MqttPublish, "bridge/publish", cls._publish, 100)
-        rosout_qos = QoSProfile(depth=1000, reliability=ReliabilityPolicy.RELIABLE,
-                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        cls.node.create_subscription(Log, "/rosout", cls._log, rosout_qos)
+        cls.node.create_subscription(Log, "/rosout", cls._log, ROSOUT)
         cls.running = True
         threading.Thread(target=cls._spin, daemon=True).start()
 
@@ -87,14 +76,7 @@ class TestWatchMissing(unittest.TestCase):
             cls.logs.append(msg.msg)
 
     def wait(self, getter, timeout):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.1)
-        return None
+        return wait_until(getter, timeout, self.lock, 0.1)
 
     def test_a_node_that_does_not_load_ends_the_container_after_the_start_limit(self, proc_output):
         proc_output.assertWaitFor("mowbite_watch: mowbite_light did not start within 60.0 s", timeout=START_LIMIT + 60,

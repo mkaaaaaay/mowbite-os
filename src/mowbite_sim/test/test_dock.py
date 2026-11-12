@@ -15,40 +15,32 @@ late fix, wheels reporting too little, a dead band, slip): a first answer to ope
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_dock.py
 """
+import functools
 import json
 import math
 import os
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
-import launch
-import launch_testing.actions
 import rclpy
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import HardwareStatus, MapStatus, MqttPublish, RobotPose, RobotState, RpcError, RpcRequest
 from mowbite_msgs.msg import RpcResponse
 from mowbite_msgs.srv import DriveTo, ReplaceMap
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (LATCHED, REAL_FAULTS, SimProbe, host_packets, last_time, moving, sim_description,  # noqa: E402
+                        sim_files)
+
 RATE = int(os.environ.get("MOWBITE_DOCK_RATE") or 0)
-# fake_tron flags of a real Tron as in test_full_run.py: RTK about 1 cm rms, the fix 0.1 s late, wheels report 6 % too
-# little, a wheel below 0.05 m/s stands, the base turns on 0.395 m while the MCU counts 0.40 m, slip of the omni wheels.
-FAULTS = {"gnss_noise": 0.01, "gnss_delay": 0.1, "odom_scale": 0.94, "wheel_deadband": 0.05, "track": 0.395,
-          "yaw_drift": 0.01} if RATE else {}
+FAULTS = REAL_FAULTS if RATE else {}
 
 WORK = tempfile.mkdtemp(prefix="mowbite_dock_")
-STATE = os.path.join(WORK, "state.json")
-FLAGS = os.path.join(WORK, "flags.json")
-RX = os.path.join(WORK, "rx.jsonl")
-DATA = os.path.join(WORK, "data")
+STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "dock.yaml")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 START = "mower_logic:idle/start_mowing"
 ABORT_MOWING = "mower_logic:mowing/abort_mowing"
 ABORT = "mower_logic:docking/abort_docking"
@@ -78,58 +70,27 @@ with open(CONFIG, "w") as f:
 
 
 def generate_test_description():
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": STATE, "flags": FLAGS, "log": RX,
-                          "data_dir": DATA, "mqtt_port": "18838", "extra_config": CONFIG}.items())
-    return launch.LaunchDescription([sim, launch_testing.actions.ReadyToTest()]), {}
+    return sim_description(WORK, 18838, extra_config=CONFIG)
 
 
-def received(since):
-    """Sub packets and charge frames fake_tron got from the host since its time since."""
-    out = []
-    try:
-        with open(RX) as f:
-            for line in f:
-                entry = json.loads(line)
-                if entry.get("t", 0) >= since and "mod" in entry:
-                    out.append(entry)
-    except OSError:
-        pass
-    return out
+received = functools.partial(host_packets, RX)
+sim_time = functools.partial(last_time, RX)
 
 
-def sim_time():
-    try:
-        with open(RX) as f:
-            lines = f.readlines()
-    except OSError:
-        return 0.0
-    return json.loads(lines[-1])["t"] if lines else 0.0
+class Probe(SimProbe):
+    truth_tries = 5
+    faults = FAULTS
 
-
-def moving(entry):
-    return bool(entry.get("speed")) and any(v != 0 for v in entry["speed"])
-
-
-class Probe:
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("dock_probe", state=STATE, flags=FLAGS, log=RX)
         self.status = None
-        self.map = None
         self.pose = None
         self.robot = None
-        self.hw = None
-        self.events = []
-        self.answers = {}
-        self.node = rclpy.create_node("dock_probe")
-        self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
+        self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
         self.node.create_subscription(String, "map/json", self._map, LATCHED)
-        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
-        self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
-        self.node.create_subscription(HardwareStatus, "hw/status", self._hw, 10)
+        self.node.create_subscription(RobotPose, "localization/pose", self._set("pose"), 10)
+        self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
+        self.node.create_subscription(HardwareStatus, "hw/status", self._set("hw"), 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
         self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
@@ -137,99 +98,7 @@ class Probe:
         self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.drive_to = self.node.create_client(DriveTo, "logic/drive_to")
-        self.rpc_count = 0
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
-
-    def _status(self, msg):
-        with self.lock:
-            self.status = msg
-
-    def _map(self, msg):
-        with self.lock:
-            self.map = json.loads(msg.data)
-
-    def _pose(self, msg):
-        with self.lock:
-            self.pose = msg
-
-    def _robot(self, msg):
-        with self.lock:
-            self.robot = msg
-
-    def _hw(self, msg):
-        with self.lock:
-            self.hw = msg
-
-    def _publish(self, msg):
-        if msg.topic != "events/json":
-            return
-        with self.lock:
-            self.events.append(json.loads(msg.payload))
-
-    def _response(self, msg):
-        with self.lock:
-            self.answers[msg.id] = {"result": json.loads(msg.result)}
-
-    def _error(self, msg):
-        with self.lock:
-            self.answers[msg.id] = {"error": {"code": msg.code, "message": msg.message,
-                                              "data": json.loads(msg.data) if msg.data else None}}
-
-    def truth(self):
-        for _ in range(5):
-            try:
-                with open(STATE) as f:
-                    return json.load(f)
-            except (OSError, ValueError):
-                time.sleep(0.05)
-        return None
-
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
-    def call(self, client, request, timeout=60.0):
-        assert client.wait_for_service(timeout_sec=20.0), f"{client.srv_name} not offered"
-        future = client.call_async(request)
-        end = time.time() + timeout
-        while not future.done() and time.time() < end:
-            time.sleep(0.05)
-        assert future.done(), f"no answer from {client.srv_name}"
-        return future.result()
-
-    def rpc(self, method, params=None, timeout=10.0):
-        """The answer of the logic as the bridge would pass it on: {"result": ...} or {"error": {...}}."""
-        self.wait(lambda: self.rpc_pub.get_subscription_count() > 0)
-        self.rpc_count += 1
-        rid = f"dock-{self.rpc_count}"
-        self.rpc_pub.publish(RpcRequest(method=method, params=json.dumps(params) if params is not None else "",
-                                        id=rid))
-        return self.wait(lambda: self.answers.get(rid), timeout)
-
-    def act(self, action):
-        self.wait(lambda: self.action_pub.get_subscription_count() > 0)
-        self.action_pub.publish(String(data=action))
-
-    def event(self, since, type_, timeout, **match):
-        """The first event of that type since index since whose fields match."""
-        return self.wait(lambda: next((e for e in self.events[since:] if e["type"] == type_
-                                       and all(e.get(k) == v for k, v in match.items())), None), timeout)
-
-    def flags(self, **values):
-        with open(FLAGS + ".tmp", "w") as f:
-            json.dump(dict(FAULTS, **values), f)
-        os.replace(FLAGS + ".tmp", FLAGS)
+        self.start()
 
     def replace(self, station=True, yard=YARD):
         request = ReplaceMap.Request()
@@ -270,11 +139,6 @@ class Probe:
             return None
         end = self.event(since, "DRIVE", 90, phase="end")
         return end if end and end.get("arrived") else None
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
 
 
 def g18(test, rx, docked_at, stood_until):

@@ -11,13 +11,12 @@ MOWBITE_GNSS_LATENCY=<s> gives the localization that gnss_latency.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_localization_quality.py
 """
-import bisect
 import json
 import math
 import os
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
@@ -26,26 +25,22 @@ import launch_testing.actions
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
-from launch.actions import ExecuteProcess, TimerAction
+from launch.actions import TimerAction
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackagePrefix
 from mowbite_msgs.msg import RobotPose
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (LATCHED, REAL_FAULTS, SimProbe, TestShutdown, estimate_at, fake_tron,  # noqa: E402, F401
+                        pose_stamp, quantile, sim_files, sim_links, wrap)
 
 ANTENNA_X = 0.098
 WORK = tempfile.mkdtemp(prefix="mowbite_quality_")
-LINKS = {name: os.path.join(WORK, name) for name in ("mcu", "gnss", "imu")}
-STATE = os.path.join(WORK, "state.json")
-FLAGS = os.path.join(WORK, "flags.json")
+LINKS = sim_links(WORK)
+STATE, FLAGS, _, _ = sim_files(WORK)
 TRON = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "tron.yaml")
 # The ports of the simulation: a section of the node wins over values for all nodes, so these come as one too.
 LOCAL = os.path.join(WORK, "local.yaml")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-# The faults of the real variant of test_full_run: RTK about 1 cm rms, the fix 0.1 s late, wheels report 6 % too
-# little, a wheel below 0.05 m/s stands, the base turns on 0.395 m, 0.01 rad of yaw per metre from slip.
-FAULTS = {"gnss_noise": 0.01, "gnss_delay": 0.1, "odom_scale": 0.94, "wheel_deadband": 0.05, "track": 0.395,
-          "yaw_drift": 0.01}
 GOOD_HEADING = math.radians(5.0)
 SPEED = 0.3
 # A gyro bias that changes by this much (deg/s) while the mower stands, e.g. as the sensor warms up.
@@ -71,11 +66,6 @@ def generate_test_description():
         if "MOWBITE_GNSS_LATENCY" in os.environ:
             f.write(f"mowbite_localization:\n  ros__parameters:\n"
                     f"    gnss_latency: {float(os.environ['MOWBITE_GNSS_LATENCY'])}\n")
-    fake_tron = ExecuteProcess(
-        cmd=[os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_tron"),
-             "--link", LINKS["mcu"], "--gnss-link", LINKS["gnss"], "--imu-link", LINKS["imu"], "--flags", FLAGS,
-             "--state", STATE, "--antenna-offset", str(ANTENNA_X), "0.0"],
-        output="screen")
     nodes = [
         Node(package="tron_mcu", executable="tron_mcu_node", name="tron_mcu", output="screen",
              parameters=[TRON, LOCAL]),
@@ -88,71 +78,44 @@ def generate_test_description():
     ]
     # The ptys have to exist before the drivers look for them.
     return launch.LaunchDescription([
-        fake_tron, TimerAction(period=1.5, actions=nodes + [launch_testing.actions.ReadyToTest()])]), {}
-
-
-def wrap(angle):
-    return math.atan2(math.sin(angle), math.cos(angle))
-
-
-def quantile(values, q):
-    ordered = sorted(values)
-    return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
+        fake_tron(LINKS, "--flags", FLAGS, "--state", STATE, "--antenna-offset", str(ANTENNA_X), "0.0"),
+        TimerAction(period=1.5, actions=nodes + [launch_testing.actions.ReadyToTest()])]), {}
 
 
 def report(name, value, unit):
     print(f"\nquality: {name} {'none' if value is None else f'{value:.3f}'} {unit}", flush=True)
 
 
-class Probe:
+class Probe(SimProbe):
     """Drives on hw/cmd_vel and pairs every true pose of fake_tron with the estimate of the same moment."""
+    spin_timeout = 0.02
+    faults = REAL_FAULTS
 
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("localization_quality_probe", state=STATE, flags=FLAGS)
         # (stamp s, x, y, yaw) of localization/pose, and the newest message
         self.estimates = []
         self.pose = None
         # (wall time, truth dict, estimate (x, y, yaw) or None, the RobotPose of that moment)
         self.samples = []
         self.setpoint = (0.0, 0.0)
-        self.node = rclpy.create_node("localization_quality_probe")
         self.node.create_subscription(RobotPose, "localization/pose", self._pose, 50)
         self.cmd_pub = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
         # The logic is not part of this launch: the probe sends the antenna offset of the mower.
         self.geometry = self.node.create_publisher(String, "bridge/params", LATCHED)
         self.geometry.publish(String(data=json.dumps(
             {"node": "/mowbite_geometry", "params": {"antenna_x": ANTENNA_X, "antenna_y": 0.0, "version": 0}})))
-        self.running = True
-        for target in (self._spin, self._record, self._drive):
-            threading.Thread(target=target, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.02)
+        self.start()
+        for target in (self._record, self._drive):
+            self.spawn(target)
 
     def _pose(self, msg):
-        now = time.time()
-        stamp = msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec
-        # A stamp far from the arrival is no clock of this host: the arrival stands in.
-        if abs(stamp - now) > 0.5:
-            stamp = now
+        stamp = pose_stamp(msg)
         yaw = msg.heading
         with self.lock:
             self.pose = msg
             if not self.estimates or stamp > self.estimates[-1][0]:
                 self.estimates.append((stamp, msg.x, msg.y, yaw))
-
-    def estimate_at(self, t):
-        """The estimate at wall time t, linear between the two around it."""
-        with self.lock:
-            i = bisect.bisect_left(self.estimates, (t,))
-            if i == 0 or i >= len(self.estimates):
-                return None
-            a, b = self.estimates[i - 1], self.estimates[i]
-        if b[0] - a[0] > 0.2:
-            return None
-        f = (t - a[0]) / (b[0] - a[0])
-        return a[1] + f * (b[1] - a[1]), a[2] + f * (b[2] - a[2]), a[3] + f * wrap(b[3] - a[3])
 
     def _record(self):
         last = None
@@ -166,9 +129,8 @@ class Probe:
                 last = truth["t"]
                 # The newest estimate has to be past the moment of the truth before the two are paired.
                 time.sleep(0.06)
-                estimate = self.estimate_at(written)
                 with self.lock:
-                    self.samples.append((written, truth, estimate, self.pose))
+                    self.samples.append((written, truth, estimate_at(self.estimates, written), self.pose))
             time.sleep(0.02)
 
     def _drive(self):
@@ -177,28 +139,6 @@ class Probe:
             msg.linear.x, msg.angular.z = self.setpoint
             self.cmd_pub.publish(msg)
             time.sleep(0.1)
-
-    def truth(self):
-        try:
-            with open(STATE) as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return None
-
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
-    def flags(self, **values):
-        with open(FLAGS + ".tmp", "w") as f:
-            json.dump({**FAULTS, **values}, f)
-        os.replace(FLAGS + ".tmp", FLAGS)
 
     def stop_driving(self, settle=1.5):
         self.setpoint = (0.0, 0.0)
@@ -237,11 +177,6 @@ class Probe:
     def samples_since(self, since):
         with self.lock:
             return [s for s in self.samples[since:] if s[2] is not None]
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
 
 
 def errors(sample):
@@ -385,9 +320,3 @@ class TestLocalizationQuality(unittest.TestCase):
         report("after_drift_heading_max_deg", max(heading) if heading else None, "deg")
         p.flags()
         self.check("drift_deg_per_min", drift)
-
-
-@launch_testing.post_shutdown_test()
-class TestShutdown(unittest.TestCase):
-    def test_processes_exit_cleanly(self, proc_info):
-        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -2, -15, 130, 143])

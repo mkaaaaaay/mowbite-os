@@ -6,33 +6,25 @@ FOLLOWER_MISSING, the blade off, the mower standing.
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_follower_stall.py
 """
 import json
-import math
 import os
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
-import launch
-import launch_testing.actions
 import rclpy
 from composition_interfaces.srv import ListNodes, UnloadNode
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import MapStatus, MqttPublish, RobotPose, RobotState
 from mowbite_msgs.srv import ReplaceMap, SetPose
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import LATCHED, SimProbe, sim_description, sim_files  # noqa: E402
+
 WORK = tempfile.mkdtemp(prefix="mowbite_stall_")
-STATE = os.path.join(WORK, "state.json")
-FLAGS = os.path.join(WORK, "flags.json")
-RX = os.path.join(WORK, "rx.jsonl")
-DATA = os.path.join(WORK, "data")
+STATE, FLAGS, RX, _ = sim_files(WORK)
 CONFIG = os.path.join(WORK, "stall.yaml")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 # The lawn of test_mowing.py, one loop around it.
 LAWN = [(-0.41, -0.11), (2.59, -0.11), (2.59, 1.49), (-0.41, 1.49)]
@@ -50,118 +42,25 @@ with open(CONFIG, "w") as f:
 
 
 def generate_test_description():
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": STATE, "flags": FLAGS, "log": RX,
-                          "data_dir": DATA, "mqtt_port": "18833", "extra_config": CONFIG}.items())
-    return launch.LaunchDescription([sim, launch_testing.actions.ReadyToTest()]), {}
+    return sim_description(WORK, 18833, extra_config=CONFIG)
 
 
-class Probe:
+class Probe(SimProbe):
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("stall_probe", state=STATE, flags=FLAGS, log=RX)
         self.status = None
         self.pose = None
         self.robot = None
-        self.events = []
-        self.node = rclpy.create_node("stall_probe")
-        self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
-        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
-        self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
+        self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
+        self.node.create_subscription(RobotPose, "localization/pose", self._set("pose"), 10)
+        self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
         self.list_nodes = self.node.create_client(ListNodes, "/mowbite/_container/list_nodes")
         self.unload_node = self.node.create_client(UnloadNode, "/mowbite/_container/unload_node")
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
-
-    def _status(self, msg):
-        with self.lock:
-            self.status = msg
-
-    def _pose(self, msg):
-        with self.lock:
-            self.pose = msg
-
-    def _robot(self, msg):
-        with self.lock:
-            self.robot = msg
-
-    def _publish(self, msg):
-        if msg.topic != "events/json":
-            return
-        with self.lock:
-            self.events.append(json.loads(msg.payload))
-
-    def truth(self):
-        try:
-            with open(STATE) as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return None
-
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
-    def call(self, client, request, timeout=60.0):
-        assert client.wait_for_service(timeout_sec=20.0), f"{client.srv_name} not offered"
-        future = client.call_async(request)
-        end = time.time() + timeout
-        while not future.done() and time.time() < end:
-            time.sleep(0.05)
-        assert future.done(), f"no answer from {client.srv_name}"
-        return future.result()
-
-    def act(self, action):
-        self.action_pub.publish(String(data=action))
-
-    def event(self, since, type_, timeout, **match):
-        """The first event of that type since index since whose fields match."""
-        return self.wait(lambda: next((e for e in self.events[since:] if e["type"] == type_
-                                       and all(e.get(k) == v for k, v in match.items())), None), timeout)
-
-    def flags(self, **values):
-        with open(FLAGS + ".tmp", "w") as f:
-            json.dump(values, f)
-        os.replace(FLAGS + ".tmp", FLAGS)
-
-    def standing(self):
-        a = self.truth()
-        time.sleep(1.0)
-        b = self.truth()
-        return math.hypot(a["x"] - b["x"], a["y"] - b["y"]) < 0.02, (a, b)
-
-    def cutter_frames(self):
-        frames = []
-        try:
-            with open(RX) as f:
-                for line in f:
-                    entry = json.loads(line)
-                    if "cutter" in entry:
-                        frames.append(entry)
-        except OSError:
-            pass
-        return frames
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
+        self.start()
 
 
 class TestFollowerStall(unittest.TestCase):

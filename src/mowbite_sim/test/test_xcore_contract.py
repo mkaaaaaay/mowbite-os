@@ -4,135 +4,84 @@ and release, charging left to the board, a restart of the board and incompatible
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_xcore_contract.py
 """
+import functools
 import json
 import os
-import random
 import shutil
 import struct
 import sys
 import tempfile
-import threading
 import time
 import unittest
 
 import launch
 import launch_testing.actions
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist, TwistStamped, Vector3
-from launch.actions import ExecuteProcess, TimerAction
-from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
+from launch.actions import TimerAction
 from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus
 from mowbite_msgs.srv import SetBlade, SetCharge, SetEmergency
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 
-# The battery voltages of the platform file, which nx60i.launch.py hands to the driver (logic_params.py of
-# xcore_driver).
-sys.path.insert(0, os.path.join(get_package_share_directory("xcore_driver"), "launch"))
-import logic_params  # noqa: E402
-
-BATTERY = logic_params.battery_voltages([os.path.join(get_package_share_directory("mowbite_bringup"), "config",
-                                                      "nx60i.yaml")])
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (DriverProbe, TestShutdown, fake_xcore, log_entries, loopback_group,  # noqa: E402,F401
+                        read_json, sim_files, write_json, xcore_driver)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_xcore_")
-FLAGS = os.path.join(WORK, "flags.json")
-LOG = os.path.join(WORK, "rx.jsonl")
-STATE = os.path.join(WORK, "state.json")
+STATE, FLAGS, LOG, _ = sim_files(WORK)
 HOLD = os.path.join(WORK, "hold.json")
-# A port of its own, so that tests running side by side do not hear each other's board.
-GROUP_PORT = random.randint(42000, 48000)
-# An address of its own for the driver: it does not start beside another host at its bind_ip.
-BIND_IP = f"127.{random.randint(1, 250)}.{random.randint(1, 250)}.{random.randint(2, 250)}"
+GROUP_PORT, BIND_IP = loopback_group()
 EMERGENCY, DIFF_DRIVE, MOWER = 1, 2, 3
 DATA = 1
 LATCH, LIFT, LIFT_MULTIPLE = HardwareStatus.REASON_LATCH, HardwareStatus.REASON_LIFT, 16
 
 
 def generate_test_description():
-    sim = FindPackageShare("mowbite_sim").find("mowbite_sim")
-    fake_xcore = ExecuteProcess(
-        cmd=[os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_xcore"),
-             "--services", os.path.join(sim, "config", "xcore_nx60i_services.json"), "--group-port", str(GROUP_PORT),
-             "--flags", FLAGS, "--log", LOG, "--log-max-mb", "20", "--state", STATE],
-        output="screen")
-    config = os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "config", "nx60i.yaml")
-    driver = Node(package="xcore_driver", executable="xcore_driver_node", output="screen",
-                  parameters=[config, BATTERY,
-                              {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT,
-                               "allow_blade": True, "hold_file": HOLD}])
+    board = fake_xcore(GROUP_PORT, "--flags", FLAGS, "--log", LOG, "--log-max-mb", "20", "--state", STATE)
+    driver = xcore_driver(BIND_IP, GROUP_PORT, allow_blade=True, hold_file=HOLD)
     return launch.LaunchDescription([
-        fake_xcore,
+        board,
         TimerAction(period=0.5, actions=[driver, launch_testing.actions.ReadyToTest()]),
     ]), {}
 
 
 def set_flags(**flags):
-    with open(FLAGS + ".tmp", "w") as f:
-        json.dump(flags, f)
-    os.replace(FLAGS + ".tmp", FLAGS)
+    write_json(FLAGS, flags)
 
 
-def board():
-    with open(STATE) as f:
-        return json.load(f)
+board = functools.partial(read_json, STATE)
 
 
 def received(since, sid=None, msg_type=None, arg2=None):
     """Datagrams fake_xcore got from the driver since board time `since`."""
-    out = []
-    with open(LOG) as f:
-        for line in f:
-            entry = json.loads(line)
-            if "sid" not in entry or entry["t"] < since:
-                continue
-            if sid is not None and entry["sid"] != sid:
-                continue
-            if msg_type is not None and entry["type"] != msg_type:
-                continue
-            if arg2 is not None and entry["arg2"] != arg2:
-                continue
-            out.append(entry)
-    return out
+    return [e for e in log_entries(LOG, since) if "sid" in e and (sid is None or e["sid"] == sid)
+            and (msg_type is None or e["type"] == msg_type) and (arg2 is None or e["arg2"] == arg2)]
 
 
 def board_time():
     return board()["t"]
 
 
-class Probe:
+class Probe(DriverProbe):
+    emergency_reason = "xcore contract test"
+
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("xcore_contract_probe")
         self.status = None
         self.capabilities = None
         self.odom = []
         self.imu = []
-        self.node = rclpy.create_node("xcore_contract_probe")
         caps_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.node.create_subscription(HardwareStatus, "hw/status", self._status, 10)
-        self.node.create_subscription(HardwareCapabilities, "hw/capabilities", self._capabilities, caps_qos)
+        self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
+        self.node.create_subscription(HardwareCapabilities, "hw/capabilities", self._set("capabilities"), caps_qos)
         self.node.create_subscription(TwistStamped, "hw/wheel_odom", self._odom, 10)
         self.node.create_subscription(Imu, "imu/data", self._imu, qos_profile_sensor_data)
         self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
         self.blade = self.node.create_client(SetBlade, "hw/blade")
         self.emergency = self.node.create_client(SetEmergency, "hw/emergency")
         self.charge = self.node.create_client(SetCharge, "hw/charge")
-        self.running = True
-        self.spinner = threading.Thread(target=self._spin, daemon=True)
-        self.spinner.start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
-
-    def _status(self, msg):
-        with self.lock:
-            self.status = msg
-
-    def _capabilities(self, msg):
-        with self.lock:
-            self.capabilities = msg
+        self.start()
 
     def _odom(self, msg):
         with self.lock:
@@ -141,35 +90,6 @@ class Probe:
     def _imu(self, msg):
         with self.lock:
             self.imu = (self.imu + [msg])[-200:]
-
-    def wait(self, pred, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = pred(self)
-            if value:
-                return value
-            time.sleep(0.02)
-        return None
-
-    def call(self, client, request, timeout=5.0):
-        assert client.wait_for_service(timeout_sec=timeout), "service missing"
-        future = client.call_async(request)
-        end = time.time() + timeout
-        while not future.done() and time.time() < end:
-            time.sleep(0.01)
-        return future.result()
-
-    def set_blade(self, on, lease_s=0.0, speed=0, height=0):
-        return self.call(self.blade, SetBlade.Request(on=on, lease_s=lease_s, speed_percent=speed, height_mm=height))
-
-    def set_emergency(self, latch, bits=0):
-        return self.call(self.emergency, SetEmergency.Request(latch=latch, bits=bits, reason="xcore contract test"))
-
-    def stop(self):
-        self.running = False
-        self.spinner.join(2.0)
-        self.node.destroy_node()
 
 
 def healthy(p):
@@ -182,7 +102,7 @@ class TestXcoreContract(unittest.TestCase):
         rclpy.init()
         set_flags()
         cls.probe = Probe()
-        ready = cls.probe.wait(healthy, 20)
+        ready = cls.probe.wait_for(healthy, 20)
         assert ready, "driver never ready"
 
     @classmethod
@@ -193,7 +113,7 @@ class TestXcoreContract(unittest.TestCase):
 
     def release(self):
         self.probe.set_emergency(False)
-        return self.probe.wait(lambda p: not p.status.emergency, 3)
+        return self.probe.wait_for(lambda p: not p.status.emergency, 3)
 
     def test_a_board_configured_as_the_mower_always_was(self):
         b = board()
@@ -207,7 +127,8 @@ class TestXcoreContract(unittest.TestCase):
         self.assertEqual(power, {"1": 24.5, "2": 28.2, "3": 23.0, "4": 29.9, "6": 29.4})
         self.assertIsNone(b["power_override"])
         inputs = json.loads(b["inputs"])
-        self.assertEqual([i["line"] for i in inputs["gpio"]], ["GPIO1", "GPIO5", "GPIO10", "GPIO11", "GPIO12", "GPIO13"])
+        self.assertEqual([i["line"] for i in inputs["gpio"]],
+                         ["GPIO1", "GPIO5", "GPIO10", "GPIO11", "GPIO12", "GPIO13"])
         self.assertEqual(inputs["yf_cover_ui"], [{"id": "hall_mux", "value": "om"}])
         self.assertEqual(b["restarts"], 0)
         self.assertEqual(b["gps_restarts"], 0)
@@ -216,7 +137,7 @@ class TestXcoreContract(unittest.TestCase):
         self.assertEqual(sorted(int(k) for k in b["claims"]), [1, 2, 3, 4, 5, 6, 7, 11])
 
     def test_b_capabilities_latched_with_firmware(self):
-        caps = self.probe.wait(
+        caps = self.probe.wait_for(
             lambda p: p.capabilities if p.capabilities and p.capabilities.firmware[0].value else None)
         self.assertIsNotNone(caps, "no hw/capabilities with firmware")
         self.assertEqual(caps.platform, "yardforce_nx60i")
@@ -247,13 +168,13 @@ class TestXcoreContract(unittest.TestCase):
         self.assertEqual(s.left_motor.status, 0)
         self.assertFalse(s.dock_contact)
         self.assertGreater(s.link_messages_ok, 0)
-        imu = self.probe.wait(lambda p: list(p.imu) if len(p.imu) > 50 else None)
+        imu = self.probe.wait_for(lambda p: list(p.imu) if len(p.imu) > 50 else None)
         self.assertIsNotNone(imu, "no imu/data")
         # The remap turns the sensor that lies upside down: gravity along +z of the body.
         az = sum(m.linear_acceleration.z for m in imu) / len(imu)
         self.assertAlmostEqual(az, 9.80665, delta=0.05)
         self.assertLess(imu[-1].orientation_covariance[0], 0)
-        self.assertTrue(self.probe.wait(lambda p: len(p.odom) > 10), "no hw/wheel_odom")
+        self.assertTrue(self.probe.wait_for(lambda p: len(p.odom) > 10), "no hw/wheel_odom")
 
     def test_d_emergency_heartbeat_always_four_bytes(self):
         t0 = board_time()
@@ -297,8 +218,8 @@ class TestXcoreContract(unittest.TestCase):
         self.assertEqual(r.emergency_reason, 0)
         r = self.probe.set_blade(True, lease_s=0.5)
         self.assertTrue(r.success, r.message)
-        self.assertTrue(self.probe.wait(lambda p: p.status.blade_on, 2), "blade_on not reported")
-        off = self.probe.wait(lambda p: not p.status.blade_on and p.status, 3)
+        self.assertTrue(self.probe.wait_for(lambda p: p.status.blade_on, 2), "blade_on not reported")
+        off = self.probe.wait_for(lambda p: not p.status.blade_on and p.status, 3)
         self.assertTrue(off, "blade did not go off")
         self.assertEqual(off.blade_off_reason, HardwareStatus.BLADE_OFF_LEASE_EXPIRED)
         time.sleep(0.5)
@@ -309,11 +230,11 @@ class TestXcoreContract(unittest.TestCase):
         offs = [t for t, v in speeds if v == 0 and t > on[0]]
         self.assertGreaterEqual(len(offs), 3, str(speeds))
         self.assertAlmostEqual(offs[0] - on[0], 0.5, delta=0.1)
-        self.assertTrue(self.probe.wait(lambda p: p.status.blade_motor.rpm == 0, 3))
+        self.assertTrue(self.probe.wait_for(lambda p: p.status.blade_motor.rpm == 0, 3))
 
     def test_g_host_latch_reaches_the_board(self):
         self.assertTrue(self.probe.set_emergency(True).success)
-        s = self.probe.wait(lambda p: p.status.emergency and p.status, 2)
+        s = self.probe.wait_for(lambda p: p.status.emergency and p.status, 2)
         self.assertEqual(s.emergency_reason & (LATCH | HardwareStatus.REASON_HIGH_LEVEL),
                          LATCH | HardwareStatus.REASON_HIGH_LEVEL)
         time.sleep(0.4)
@@ -331,11 +252,11 @@ class TestXcoreContract(unittest.TestCase):
 
     def test_h_stop_latches_until_release(self):
         set_flags(stop=1)
-        s = self.probe.wait(lambda p: p.status.emergency and p.status.stop and p.status, 2)
+        s = self.probe.wait_for(lambda p: p.status.emergency and p.status.stop and p.status, 2)
         self.assertTrue(s, "stop gave no emergency")
         self.assertEqual(s.emergency_reason, LATCH | HardwareStatus.REASON_STOP)
         set_flags()
-        self.assertTrue(self.probe.wait(lambda p: not p.status.stop, 2))
+        self.assertTrue(self.probe.wait_for(lambda p: not p.status.stop, 2))
         time.sleep(0.5)
         # The board keeps only its latch, the driver the cause as well.
         self.assertEqual(board()["reason"], LATCH)
@@ -345,25 +266,25 @@ class TestXcoreContract(unittest.TestCase):
 
     def test_i_lift_after_its_delay(self):
         set_flags(lift_left=1)
-        self.assertTrue(self.probe.wait(lambda p: p.status.lift, 1), "lift flag not shown")
+        self.assertTrue(self.probe.wait_for(lambda p: p.status.lift, 1), "lift flag not shown")
         start = time.time()
-        s = self.probe.wait(lambda p: p.status.emergency and p.status, 4)
+        s = self.probe.wait_for(lambda p: p.status.emergency and p.status, 4)
         self.assertTrue(s, "lift gave no emergency")
         # 2500 ms in the configuration of the NX60i.
         self.assertGreater(time.time() - start, 2.0)
         self.assertEqual(s.emergency_reason, LATCH | LIFT)
         set_flags(bumper_left=1)
-        s = self.probe.wait(lambda p: p.status.bumper_left and p.status.emergency_reason & 32 and p.status, 2)
+        s = self.probe.wait_for(lambda p: p.status.bumper_left and p.status.emergency_reason & 32 and p.status, 2)
         self.assertTrue(s, "bumper gave no collision")
         self.assertTrue(s.bumper and not s.bumper_right)
         set_flags()
-        self.assertTrue(self.probe.wait(lambda p: not p.status.bumper, 2))
+        self.assertTrue(self.probe.wait_for(lambda p: not p.status.bumper, 2))
         self.assertTrue(self.release(), "release failed")
 
     def test_j_host_latches_with_its_own_bits_only(self):
         tilt = SetEmergency.Request(latch=True, bits=HardwareStatus.REASON_TILT, reason="xcore contract test")
         self.assertTrue(self.probe.call(self.probe.emergency, tilt).success)
-        self.assertTrue(self.probe.wait(lambda p: p.status.emergency_reason & HardwareStatus.REASON_TILT, 2))
+        self.assertTrue(self.probe.wait_for(lambda p: p.status.emergency_reason & HardwareStatus.REASON_TILT, 2))
         self.assertTrue(self.release(), "release failed")
         answer = self.probe.set_emergency(True, HardwareStatus.REASON_LIFT)
         self.assertFalse(answer.success)
@@ -377,19 +298,19 @@ class TestXcoreContract(unittest.TestCase):
             self.assertFalse(r.success)
             self.assertEqual(r.message, "charging is controlled by the board")
         set_flags(dock=1)
-        s = self.probe.wait(lambda p: p.status.dock_contact and p.status, 4)
+        s = self.probe.wait_for(lambda p: p.status.dock_contact and p.status, 4)
         self.assertTrue(s, "no dock contact")
         self.assertLess(s.battery_current, 0)
         self.assertFalse(self.probe.set_blade(True, lease_s=1.0).success)
         set_flags()
-        self.assertTrue(self.probe.wait(lambda p: not p.status.dock_contact_raw, 3))
+        self.assertTrue(self.probe.wait_for(lambda p: not p.status.dock_contact_raw, 3))
 
     def test_ka_hold_blocks_without_emergency(self):
         now = int(time.time())
         with open(HOLD + ".new", "w") as f:
             json.dump({"until": now + 600, "set_at": now}, f)
         os.replace(HOLD + ".new", HOLD)
-        s = self.probe.wait(lambda p: p.status.hold and p.status, 2)
+        s = self.probe.wait_for(lambda p: p.status.hold and p.status, 2)
         self.assertTrue(s, "hold.json not seen")
         self.assertFalse(s.emergency)
         self.assertEqual(s.emergency_reason, 0)
@@ -410,7 +331,7 @@ class TestXcoreContract(unittest.TestCase):
         sets = [struct.unpack("<HH", bytes.fromhex(e["hex"]))[0] for e in received(t0, EMERGENCY, DATA, 0)]
         self.assertTrue(sets and all(v == 0 for v in sets), str(sets))
         os.remove(HOLD)
-        self.assertTrue(self.probe.wait(lambda p: not p.status.hold, 2), "still held after the file went")
+        self.assertTrue(self.probe.wait_for(lambda p: not p.status.hold, 2), "still held after the file went")
         t1 = board_time()
         for _ in range(5):
             self.probe.cmd_vel.publish(Twist(linear=Vector3(x=0.2)))
@@ -424,8 +345,9 @@ class TestXcoreContract(unittest.TestCase):
         self.assertTrue(self.probe.set_blade(True, lease_s=2.0).success)
         set_flags(restart=1)
         # The board falls silent: blocked, so the blade goes off before its lease ends.
-        self.assertTrue(self.probe.wait(lambda p: not p.status.blade_on and p.status.emergency, 2.5), "blade stayed on")
-        self.assertTrue(self.probe.wait(healthy, 15), "driver did not recover")
+        self.assertTrue(self.probe.wait_for(lambda p: not p.status.blade_on and p.status.emergency, 2.5),
+                        "blade stayed on")
+        self.assertTrue(self.probe.wait_for(healthy, 15), "driver did not recover")
         b = board()
         self.assertNotEqual(b["port"], port)
         self.assertEqual(b["restarts"], 1)
@@ -435,17 +357,11 @@ class TestXcoreContract(unittest.TestCase):
 
     def test_m_incompatible_firmware_blocks(self):
         set_flags(restart=2, major_version=2)
-        s = self.probe.wait(
+        s = self.probe.wait_for(
             lambda p: p.status.emergency_reason & HardwareStatus.REASON_FIRMWARE_INCOMPATIBLE and p.status, 15)
         self.assertTrue(s, "incompatible firmware not reported")
         self.assertTrue(s.emergency)
         time.sleep(1.0)
         self.assertTrue(self.probe.status.emergency)
         set_flags(restart=3)
-        self.assertTrue(self.probe.wait(healthy, 15), "driver did not recover with major version 1")
-
-
-@launch_testing.post_shutdown_test()
-class TestShutdown(unittest.TestCase):
-    def test_processes_exit_cleanly(self, proc_info):
-        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -2, -15, 130, 143])
+        self.assertTrue(self.probe.wait_for(healthy, 15), "driver did not recover with major version 1")

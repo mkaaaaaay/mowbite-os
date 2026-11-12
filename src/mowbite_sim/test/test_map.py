@@ -7,33 +7,32 @@ import hashlib
 import json
 import os
 import shutil
-import signal
 import subprocess
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
 import launch
 import launch_testing.actions
-import paho.mqtt.client as mqtt
 import rclpy
 from geometry_msgs.msg import Point
-from launch.actions import ExecuteProcess, TimerAction
-from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackagePrefix
+from launch.actions import TimerAction
 from mowbite_msgs.msg import MapStatus, RpcMethods
 from mowbite_msgs.srv import AddArea, ReplaceMap, SetDock
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (HISTORY, LATCHED, SimProbe, bridge_node, mosquitto, mqtt_connect, mqtt_rpc,  # noqa: E402
+                        package_program, stop_process, store_answer)
+from sim_common import TestShutdown  # noqa: E402,F401
 
 MQTT_PORT = 18832
 DATUM = (52.0, 9.0, 50.0)
 METRES_PER_DEGREE = 111320.0
 WORK = tempfile.mkdtemp(prefix="mowbite_map_")
 MAP_DIR = os.path.join(WORK, "map")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 # The map the app sends: open rings are fine, the mower closes them.
 APP_MAP = {
@@ -49,13 +48,10 @@ APP_MAP = {
 
 def generate_test_description():
     os.makedirs(MAP_DIR)
-    with open(os.path.join(WORK, "mosquitto.conf"), "w") as f:
-        f.write(f"listener {MQTT_PORT} 127.0.0.1\nallow_anonymous true\n")
-    mosquitto = ExecuteProcess(cmd=["mosquitto", "-c", os.path.join(WORK, "mosquitto.conf")], output="screen")
-    bridge = Node(package="mowbite_bridge", executable="mowbite_bridge_node", output="screen",
-                  parameters=[{"mqtt_host": "127.0.0.1", "mqtt_port": MQTT_PORT, "data_dir": os.path.join(WORK, "bridge")}])
+    broker = mosquitto(WORK, MQTT_PORT)
+    bridge = bridge_node(WORK, MQTT_PORT)
     return launch.LaunchDescription([
-        mosquitto,
+        broker,
         TimerAction(period=1.0, actions=[bridge, launch_testing.actions.ReadyToTest()]),
     ]), {}
 
@@ -79,48 +75,24 @@ def moved(north_m):
     return (DATUM[0] + north_m / METRES_PER_DEGREE, DATUM[1], DATUM[2])
 
 
-class Probe:
+class Probe(SimProbe):
     """The ROS and MQTT sides of the test."""
 
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("map_probe")
         self.ros = {}
         self.mqtt = {}
-        self.events = []
-        self.node = rclpy.create_node("map_probe")
         self.datum_pub = self.node.create_publisher(NavSatFix, "gps/datum", LATCHED)
-        self.methods_pub = self.node.create_publisher(RpcMethods, "bridge/rpc/methods", QoSProfile(
-            depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.methods_pub = self.node.create_publisher(RpcMethods, "bridge/rpc/methods", HISTORY)
         self.node.create_subscription(String, "map/json", lambda m: self._ros("map", m), LATCHED)
         self.node.create_subscription(MapStatus, "map/status", lambda m: self._ros("status", m), LATCHED)
         self.add_area = self.node.create_client(AddArea, "map/add_area")
         self.set_dock = self.node.create_client(SetDock, "map/set_dock")
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
-        try:
-            self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "map_probe")
-        except AttributeError:
-            self.client = mqtt.Client("map_probe")
-        self.client.on_message = self._mqtt
-        self.running = True
-        self.spinner = threading.Thread(target=self._spin, daemon=True)
-        self.spinner.start()
+        self.start()
 
     def connect(self, timeout=15.0):
-        end = time.time() + timeout
-        while True:
-            try:
-                self.client.connect("127.0.0.1", MQTT_PORT)
-                break
-            except OSError:
-                if time.time() > end:
-                    raise
-                time.sleep(0.2)
-        self.client.subscribe("#")
-        self.client.loop_start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
+        self.client = mqtt_connect("map_probe", MQTT_PORT, self._mqtt, "#", timeout)
 
     def _ros(self, key, msg):
         with self.lock:
@@ -131,6 +103,8 @@ class Probe:
             self.mqtt[msg.topic] = msg.payload
             if msg.topic == "events/json":
                 self.events.append(json.loads(msg.payload))
+        if msg.topic == "rpc/response":
+            store_answer(self.answers, self.lock, msg.payload)
 
     def publish_datum(self, datum):
         msg = NavSatFix()
@@ -138,28 +112,13 @@ class Probe:
         self.datum_pub.publish(msg)
 
     def wait(self, getter, timeout=15.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
+        return super().wait(getter, timeout)
 
     def rpc(self, method, params=None, timeout=10.0):
-        rid = f"{method}-{time.time_ns()}"
-        request = {"jsonrpc": "2.0", "method": method, "id": rid}
-        if params is not None:
-            request["params"] = params
-        with self.lock:
-            self.mqtt.pop("rpc/response", None)
-        self.client.publish("rpc/request", json.dumps(request))
-        # Answers of other calls overwrite each other, so a test asks one thing at a time.
-        answer = self.wait(lambda: self.mqtt.get("rpc/response") if b'"%s"' % rid.encode() in self.mqtt.get("rpc/response", b"") else None, timeout)
-        return json.loads(answer) if answer else None
+        return mqtt_rpc(self.client, self.answers, self.lock, method, params, timeout)
 
     def call(self, client, request, timeout=10.0):
+        """The answer of a ROS service, None if it is not offered or does not answer in time."""
         self.node.get_logger().info("calling " + client.srv_name)
         if not client.wait_for_service(timeout_sec=timeout):
             return None
@@ -170,14 +129,8 @@ class Probe:
         return future.result() if future.done() else None
 
     def stop(self):
-        self.running = False
-        self.spinner.join(2.0)
         self.client.loop_stop()
-        self.node.destroy_node()
-
-
-def map_node_path():
-    return os.path.join(FindPackagePrefix("mowbite_map").find("mowbite_map"), "lib", "mowbite_map", "mowbite_map_node")
+        super().stop()
 
 
 class TestMap(unittest.TestCase):
@@ -202,16 +155,13 @@ class TestMap(unittest.TestCase):
         cls.probe.ros.pop("map", None)
         cls.probe.ros.pop("status", None)
         cls.process = subprocess.Popen(
-            [map_node_path(), "--ros-args", "-p", f"data_dir:={MAP_DIR}"], stdout=subprocess.DEVNULL)
+            [package_program("mowbite_map", "mowbite_map_node"), "--ros-args", "-p", f"data_dir:={MAP_DIR}"],
+            stdout=subprocess.DEVNULL)
 
     @classmethod
     def stop_map(cls):
         if cls.process is not None:
-            cls.process.send_signal(signal.SIGTERM)
-            try:
-                cls.process.wait(10)
-            except subprocess.TimeoutExpired:
-                cls.process.kill()
+            stop_process(cls.process)
             cls.process = None
 
     def status(self, state=None):
@@ -384,9 +334,3 @@ class TestMap(unittest.TestCase):
         self.assertEqual((response.code, response.message), (-32602, "Invalid map: not valid JSON"))
         response = self.probe.call(self.probe.replace_map, replace_request(late, "abc"))
         self.assertEqual(response.code, -32602)
-
-
-@launch_testing.post_shutdown_test()
-class TestShutdown(unittest.TestCase):
-    def test_processes_exit_cleanly(self, proc_info):
-        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -2, -15, 130, 143])

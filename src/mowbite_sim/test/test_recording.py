@@ -8,8 +8,8 @@ import json
 import math
 import os
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
@@ -19,14 +19,14 @@ import rclpy
 from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
 from mowbite_msgs.msg import ActionList, HardwareStatus, MapStatus, MqttPublish, RobotPose
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import HISTORY, LATCHED, SimProbe  # noqa: E402
+
 DATUM = (52.0, 9.0, 50.0)
 WORK = tempfile.mkdtemp(prefix="mowbite_recording_")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-ACTIONS_QOS = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 REC = "mower_logic:area_recording/"
 
 
@@ -42,33 +42,24 @@ def generate_test_description():
     return launch.LaunchDescription([map_node, logic, launch_testing.actions.ReadyToTest()]), {}
 
 
-class Probe:
+class Probe(SimProbe):
     def __init__(self):
-        self.lock = threading.Lock()
-        self.map = None
+        super().__init__("recording_probe")
         self.status = None
-        self.actions = {}
-        self.events = []
         self.overlay = None
         self.x = 0.0
         self.y = 0.0
         self.contact = False
-        self.node = rclpy.create_node("recording_probe")
         self.datum_pub = self.node.create_publisher(NavSatFix, "gps/datum", LATCHED)
         self.hw_pub = self.node.create_publisher(HardwareStatus, "hw/status", 10)
         self.pose_pub = self.node.create_publisher(RobotPose, "localization/pose", 10)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.node.create_subscription(String, "map/json", self._map, LATCHED)
-        self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
-        self.node.create_subscription(ActionList, "bridge/actions", self._actions, ACTIONS_QOS)
+        self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
+        self.node.create_subscription(ActionList, "bridge/actions", self._actions, HISTORY)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-        threading.Thread(target=self._keepalive, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
+        self.start()
+        self.spawn(self._keepalive)
 
     def _keepalive(self):
         # A healthy driver and a standing mower, so nothing times out between the steps.
@@ -82,19 +73,6 @@ class Probe:
             self.hw_pub.publish(hw)
             self.pose(self.x, self.y)
             time.sleep(0.2)
-
-    def _map(self, msg):
-        with self.lock:
-            self.map = json.loads(msg.data)
-
-    def _status(self, msg):
-        with self.lock:
-            self.status = msg
-
-    def _actions(self, msg):
-        with self.lock:
-            for a in msg.actions:
-                self.actions[msg.node_prefix + "/" + a.id] = a.enabled
 
     def _publish(self, msg):
         with self.lock:
@@ -128,28 +106,8 @@ class Probe:
                 time.sleep(0.005)
         time.sleep(0.2)
 
-    def act(self, action):
-        # The first action may come before the logic has subscribed; it would be lost.
-        self.wait(lambda: self.action_pub.get_subscription_count() > 0)
-        self.action_pub.publish(String(data=action))
-
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
     def events_of(self, kind):
         return [e for e in self.events if e["type"] == kind]
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
 
 
 class TestRecording(unittest.TestCase):

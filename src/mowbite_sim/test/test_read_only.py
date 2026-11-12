@@ -17,41 +17,30 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist, Vector3
-from launch.actions import ExecuteProcess, IncludeLaunchDescription, TimerAction
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import TimerAction
 from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus
 from mowbite_msgs.srv import SetBlade, SetCharge
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import LATCHED, mosquitto, read_json, sim_files, sim_stack, wait_until  # noqa: E402
 
 MQTT_PORT = 18851
 WORK = tempfile.mkdtemp(prefix="mowbite_read_only_")
-STATE = os.path.join(WORK, "state.json")
+STATE = sim_files(WORK)[0]
 APP_CHECK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_interface_check.py")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 
 def generate_test_description():
-    with open(os.path.join(WORK, "mosquitto.conf"), "w") as f:
-        f.write(f"listener {MQTT_PORT} 127.0.0.1\nallow_anonymous true\n")
-    mosquitto = ExecuteProcess(cmd=["mosquitto", "-c", os.path.join(WORK, "mosquitto.conf")], output="screen")
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": STATE,
-                          "flags": os.path.join(WORK, "flags.json"), "log": os.path.join(WORK, "rx.jsonl"),
-                          "data_dir": os.path.join(WORK, "data"), "mqtt_port": str(MQTT_PORT),
-                          "hardware": "read"}.items())
-    return launch.LaunchDescription([mosquitto, TimerAction(period=1.0, actions=[sim]),
+    sim = sim_stack(WORK, MQTT_PORT, hardware="read")
+    return launch.LaunchDescription([mosquitto(WORK, MQTT_PORT), TimerAction(period=1.0, actions=[sim]),
                                      launch_testing.actions.ReadyToTest()]), {}
 
 
 def state():
-    with open(STATE) as f:
-        return json.load(f)
+    return read_json(STATE)
 
 
 class TestReadOnly(unittest.TestCase):
@@ -96,13 +85,7 @@ class TestReadOnly(unittest.TestCase):
             cls.imu += 1
 
     def wait(self, what, seconds=60):
-        end = time.monotonic() + seconds
-        while time.monotonic() < end:
-            with self.lock:
-                if what():
-                    return True
-            time.sleep(0.1)
-        return False
+        return bool(wait_until(what, seconds, self.lock, 0.1))
 
     def call(self, client, request):
         self.assertTrue(client.wait_for_service(timeout_sec=10.0))

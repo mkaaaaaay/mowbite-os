@@ -7,7 +7,6 @@ there: one MOWBITE_OS_HALT line with reason DDS_PROFILE, no node, the launch end
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_dds_profile.py
 """
 import os
-import random
 import shutil
 import signal
 import socket
@@ -23,58 +22,37 @@ import launch_testing.actions
 import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
-from launch.actions import ExecuteProcess, IncludeLaunchDescription, TimerAction
+from launch.actions import TimerAction
 from launch.events.process import ProcessStarted
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackagePrefix
 from mowbite_msgs.msg import HardwareStatus
 
-# The battery voltages of the platform file, which nx60i.launch.py hands to the driver (logic_params.py of
-# xcore_driver).
-sys.path.insert(0, os.path.join(get_package_share_directory("xcore_driver"), "launch"))
-import logic_params  # noqa: E402
-
-BATTERY = logic_params.battery_voltages([os.path.join(get_package_share_directory("mowbite_bringup"), "config",
-                                                      "nx60i.yaml")])
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import fake_xcore, loopback_group, sim_stack, xcore_driver  # noqa: E402
 
 WORK = tempfile.mkdtemp(prefix="mowbite_dds_")
 PROFILE = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "fastdds_loopback.xml")
 # As in the images: the launch, its nodes and this probe all on the profile.
 os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"] = "SYSTEM_DEFAULT"
 os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = PROFILE
-GROUP_PORT = random.randint(42000, 48000)
-BIND_IP = f"127.{random.randint(1, 250)}.{random.randint(1, 250)}.{random.randint(2, 250)}"
+GROUP_PORT, BIND_IP = loopback_group()
 GROUP = "233.255.255.0"
 # The processes to look at, by a part of their name in the launch.
 PROCESSES = ("tron_mcu_node", "component_container_isolated", "mowbite_planner_os_node", "xcore_driver_node")
 
 
 def generate_test_description():
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": os.path.join(WORK, "state.json"),
-                          "flags": os.path.join(WORK, "flags.json"), "log": os.path.join(WORK, "rx.jsonl"),
-                          "data_dir": os.path.join(WORK, "data"), "mqtt_port": "18851"}.items())
-    sim_share = get_package_share_directory("mowbite_sim")
-    fake_xcore = ExecuteProcess(
-        cmd=[os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_xcore"),
-             "--services", os.path.join(sim_share, "config", "xcore_nx60i_services.json"),
-             "--group-port", str(GROUP_PORT), "--flags", os.path.join(WORK, "xflags.json"),
-             "--log", os.path.join(WORK, "xrx.jsonl"), "--log-max-mb", "20",
-             "--state", os.path.join(WORK, "xstate.json")],
-        output="screen")
+    sim = sim_stack(WORK, 18851)
+    board = fake_xcore(GROUP_PORT, "--flags", os.path.join(WORK, "xflags.json"),
+                       "--log", os.path.join(WORK, "xrx.jsonl"), "--log-max-mb", "20",
+                       "--state", os.path.join(WORK, "xstate.json"))
     config = os.path.join(get_package_share_directory("xcore_driver"), "config", "nx60i.yaml")
     with open(config) as f:
         params = yaml.safe_load(f)["xcore_driver"]["ros__parameters"]
-    # In a namespace of its own, beside tron_mcu; the file is keyed by the bare node name, so its values go in as a dict.
-    driver = Node(package="xcore_driver", executable="xcore_driver_node", namespace="xcore", output="screen",
-                  parameters=[params, BATTERY,
-                              {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT}])
+    # In a namespace of its own, beside tron_mcu; the file is keyed by the bare node name, so its values go in as a
+    # dict.
+    driver = xcore_driver(BIND_IP, GROUP_PORT, params, node={"namespace": "xcore"})
     return launch.LaunchDescription([
-        sim, fake_xcore,
+        sim, board,
         TimerAction(period=0.5, actions=[driver]),
         launch_testing.actions.ReadyToTest(),
     ]), {}
@@ -128,7 +106,8 @@ def shared_memory(pid):
 
 
 def run_until_halt(cmd, seconds=30):
-    """Starts cmd in a process group of its own with the profile missing; its output up to the halt line, then SIGINT."""
+    """Starts cmd in a process group of its own with the profile missing; its output up to the halt line, then
+    SIGINT."""
     env = dict(os.environ, FASTRTPS_DEFAULT_PROFILES_FILE=os.path.join(WORK, "missing.xml"),
                MOWBITE_HALT_FILE=os.path.join(WORK, "halt"))
     process = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,

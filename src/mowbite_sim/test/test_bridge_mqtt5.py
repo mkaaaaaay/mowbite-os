@@ -8,6 +8,7 @@ Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite
 import json
 import os
 import re
+import sys
 import tempfile
 import threading
 import time
@@ -19,17 +20,17 @@ import paho.mqtt.client as mqtt
 import rclpy
 from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackagePrefix
 from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.properties import Properties
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from mowbite_msgs.msg import RpcMethods, RpcRequest, RpcResponse
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import HISTORY, SimProbe, mosquitto, mqtt_connect, sim_program, wait_until  # noqa: E402
 
 WORK = tempfile.mkdtemp(prefix="mowbite_mqtt5_")
 BROKERS = {"a": 18851, "b": 18852, "c": 18853}
 GATES = {"b": (18862, "connack"), "c": (18863, "close")}
-LATCHED = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 WARN = "the bridge uses 3.1.1 until it restarts"
 # The api version the bridge reports: kApi of the source tree next to this test.
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mowbite_api", "include", "mowbite_api",
@@ -40,11 +41,9 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "
 def generate_test_description():
     actions = []
     for name, port in BROKERS.items():
-        conf = os.path.join(WORK, f"mosquitto_{name}.conf")
-        with open(conf, "w") as f:
-            f.write(f"listener {port} 127.0.0.1\nallow_anonymous true\n")
-        actions.append(ExecuteProcess(cmd=["mosquitto", "-c", conf], output="screen"))
-    gate = os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "mqtt311_gate")
+        os.makedirs(os.path.join(WORK, name))
+        actions.append(mosquitto(os.path.join(WORK, name), port))
+    gate = sim_program("mqtt311_gate")
     for name, (port, mode) in GATES.items():
         actions.append(ExecuteProcess(cmd=[gate, "--port", str(port), "--upstream", str(BROKERS[name]), "--mode", mode],
                                       output="screen"))
@@ -62,35 +61,19 @@ def generate_test_description():
     ]), test
 
 
-def client(name, port, version):
-    """A started client of MQTT 5 or 3.1.1 that keeps what it gets: (topic, payload, correlation or None)."""
-    protocol = mqtt.MQTTv5 if version == 5 else mqtt.MQTTv311
-    try:
-        c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, name, protocol=protocol)
-    except AttributeError:
-        c = mqtt.Client(name, protocol=protocol)
-    c.got = []
-    c.lock = threading.Lock()
+def client(name, port, version, topic):
+    """A started client of MQTT 5 or 3.1.1 on topic that keeps what it gets: (topic, payload, correlation or None)."""
+    got = []
+    lock = threading.Lock()
 
     def on_message(_c, _u, m):
         props = getattr(m, "properties", None)
         correlation = getattr(props, "CorrelationData", None) if props else None
-        with c.lock:
-            c.got.append((m.topic, m.payload, correlation))
-    c.on_message = on_message
-    end = time.time() + 15
-    while True:
-        try:
-            if version == 5:
-                c.connect("127.0.0.1", port, clean_start=True)
-            else:
-                c.connect("127.0.0.1", port)
-            break
-        except OSError:
-            if time.time() > end:
-                raise
-            time.sleep(0.2)
-    c.loop_start()
+        with lock:
+            got.append((m.topic, m.payload, correlation))
+    c = mqtt_connect(name, port, on_message, topic, protocol=mqtt.MQTTv5 if version == 5 else mqtt.MQTTv311)
+    c.got = got
+    c.lock = lock
     return c
 
 
@@ -123,33 +106,21 @@ def answers(c, rid, topic=None):
 
 
 def wait_for(pred, timeout=10.0):
-    end = time.time() + timeout
-    while time.time() < end:
-        r = pred()
-        if r:
-            return r
-        time.sleep(0.05)
-    return pred()
+    return wait_until(pred, timeout) or pred()
 
 
-class EchoNode:
+class EchoNode(SimProbe):
     """Stands in for a node of bridge A: test.echo answers with its params, the answers in the order release() says."""
+    spin_timeout = 0.1
 
     def __init__(self):
-        self.node = rclpy.create_node("mqtt5_probe")
+        super().__init__("mqtt5_probe")
         self.requests = []
-        self.lock = threading.Lock()
-        self.methods = self.node.create_publisher(RpcMethods, "/a/bridge/rpc/methods", LATCHED)
+        self.methods = self.node.create_publisher(RpcMethods, "/a/bridge/rpc/methods", HISTORY)
         self.methods.publish(RpcMethods(node_id="mqtt5_probe", methods=["test.echo"]))
         self.response = self.node.create_publisher(RpcResponse, "/a/bridge/rpc/response", 100)
         self.node.create_subscription(RpcRequest, "/a/bridge/rpc/request", self._request, 100)
-        self.running = True
-        self.spinner = threading.Thread(target=self._spin, daemon=True)
-        self.spinner.start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.1)
+        self.start()
 
     def _request(self, m):
         with self.lock:
@@ -158,11 +129,6 @@ class EchoNode:
     def answer(self, request):
         self.response.publish(RpcResponse(id=request.id, result=request.params or "null"))
 
-    def stop(self):
-        self.running = False
-        self.spinner.join(2)
-        self.node.destroy_node()
-
 
 class TestBridgeMqtt5(unittest.TestCase):
 
@@ -170,13 +136,10 @@ class TestBridgeMqtt5(unittest.TestCase):
     def setUpClass(cls):
         rclpy.init()
         cls.echo = EchoNode()
-        cls.five = client("five", BROKERS["a"], 5)
-        cls.five.subscribe("rpc/response/five")
-        cls.old = client("old", BROKERS["a"], 3)
-        cls.old.subscribe("rpc/response")
+        cls.five = client("five", BROKERS["a"], 5, "rpc/response/five")
+        cls.old = client("old", BROKERS["a"], 3, "rpc/response")
         # Listens to everything with 3.1.1, the way an app of before MQTT 5 does.
-        cls.listener = client("listener", BROKERS["a"], 3)
-        cls.listener.subscribe("#")
+        cls.listener = client("listener", BROKERS["a"], 3, "#")
         time.sleep(0.5)
         # The bridge is there once it answers.
 
@@ -274,8 +237,7 @@ class TestBridgeMqtt5(unittest.TestCase):
         self.assertEqual(on_map, [])
 
     def check_fallback(self, name):
-        five = client("five_" + name, BROKERS[name], 5)
-        five.subscribe("rpc/response/#")
+        five = client("five_" + name, BROKERS[name], 5, "rpc/response/#")
         try:
             time.sleep(0.3)
             rid = "info_" + name

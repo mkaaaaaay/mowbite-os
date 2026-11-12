@@ -6,34 +6,28 @@ leads to undocking (test_undock.py); a moved station or a poor position refuses 
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_dock_reference.py
 """
+import functools
 import json
 import math
 import os
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
-import launch
-import launch_testing.actions
 import rclpy
 from geometry_msgs.msg import Twist
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import HardwareStatus, MapStatus, MqttPublish, RobotPose, RobotState
 from mowbite_msgs.srv import DriveTo, ReplaceMap
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import LATCHED, SimProbe, host_packets, last_time, sim_description, sim_files  # noqa: E402
+
 WORK = tempfile.mkdtemp(prefix="mowbite_dock_")
-STATE = os.path.join(WORK, "state.json")
-FLAGS = os.path.join(WORK, "flags.json")
-RX = os.path.join(WORK, "rx.jsonl")
-DATA = os.path.join(WORK, "data")
+STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "dock.yaml")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 REC = "mower_logic:area_recording/"
 START = "mower_logic:idle/start_mowing"
 ABORT = "mower_logic:undocking/abort_undocking"
@@ -58,82 +52,32 @@ with open(CONFIG, "w") as f:
 
 
 def generate_test_description():
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": STATE, "flags": FLAGS, "log": RX,
-                          "data_dir": DATA, "mqtt_port": "18835", "extra_config": CONFIG}.items())
-    return launch.LaunchDescription([sim, launch_testing.actions.ReadyToTest()]), {}
+    return sim_description(WORK, 18835, extra_config=CONFIG)
 
 
-def received(since):
-    """Sub packets fake_tron got from the host since its time since."""
-    out = []
-    try:
-        with open(RX) as f:
-            for line in f:
-                entry = json.loads(line)
-                if entry.get("t", 0) >= since and "mod" in entry:
-                    out.append(entry)
-    except OSError:
-        pass
-    return out
+received = functools.partial(host_packets, RX)
+sim_time = functools.partial(last_time, RX)
 
 
-def sim_time():
-    try:
-        with open(RX) as f:
-            lines = f.readlines()
-    except OSError:
-        return 0.0
-    return json.loads(lines[-1])["t"] if lines else 0.0
-
-
-class Probe:
+class Probe(SimProbe):
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("dock_probe", state=STATE, flags=FLAGS, log=RX)
         self.status = None
-        self.map = None
         self.pose = None
         self.robot = None
-        self.hw = None
         self.raw_since = None
         self.contact_since = None
-        self.events = []
-        self.node = rclpy.create_node("dock_probe")
-        self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
+        self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
         self.node.create_subscription(String, "map/json", self._map, LATCHED)
-        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
-        self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
+        self.node.create_subscription(RobotPose, "localization/pose", self._set("pose"), 10)
+        self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
         self.node.create_subscription(HardwareStatus, "hw/status", self._hw, 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.teleop_pub = self.node.create_publisher(Twist, "bridge/teleop", 10)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.drive_to = self.node.create_client(DriveTo, "logic/drive_to")
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
-
-    def _status(self, msg):
-        with self.lock:
-            self.status = msg
-
-    def _map(self, msg):
-        with self.lock:
-            self.map = json.loads(msg.data)
-
-    def _pose(self, msg):
-        with self.lock:
-            self.pose = msg
-
-    def _robot(self, msg):
-        with self.lock:
-            self.robot = msg
+        self.start()
 
     def _hw(self, msg):
         with self.lock:
@@ -143,42 +87,6 @@ class Probe:
                 self.raw_since = now
             if msg.dock_contact and self.contact_since is None:
                 self.contact_since = now
-
-    def _publish(self, msg):
-        if msg.topic != "events/json":
-            return
-        with self.lock:
-            self.events.append(json.loads(msg.payload))
-
-    def truth(self):
-        try:
-            with open(STATE) as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return None
-
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
-    def call(self, client, request, timeout=60.0):
-        assert client.wait_for_service(timeout_sec=20.0), f"{client.srv_name} not offered"
-        future = client.call_async(request)
-        end = time.time() + timeout
-        while not future.done() and time.time() < end:
-            time.sleep(0.05)
-        assert future.done(), f"no answer from {client.srv_name}"
-        return future.result()
-
-    def act(self, action):
-        self.wait(lambda: self.action_pub.get_subscription_count() > 0)
-        self.action_pub.publish(String(data=action))
 
     def teleop(self, linear, seconds, until=None):
         """Remote control at 10 Hz like the app's joystick, then one zero; stops early once until() is true."""
@@ -195,25 +103,10 @@ class Probe:
         self.teleop_pub.publish(Twist())
         time.sleep(0.3)
 
-    def event(self, since, type_, timeout, **match):
-        """The first event of that type since index since whose fields match."""
-        return self.wait(lambda: next((e for e in self.events[since:] if e["type"] == type_
-                                       and all(e.get(k) == v for k, v in match.items())), None), timeout)
-
-    def flags(self, **values):
-        with open(FLAGS + ".tmp", "w") as f:
-            json.dump(values, f)
-        os.replace(FLAGS + ".tmp", FLAGS)
-
     def replace(self, docks):
         request = ReplaceMap.Request()
         request.map = json.dumps(garden(docks))
         return self.call(self.replace_map, request)
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
 
 
 class TestDockReference(unittest.TestCase):

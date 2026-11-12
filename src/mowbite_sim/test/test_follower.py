@@ -4,6 +4,8 @@ moves a unicycle by what the follower sends on follower/cmd_vel, and sends paths
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_follower.py
 """
 import math
+import os
+import sys
 import threading
 import time
 import unittest
@@ -16,9 +18,10 @@ from launch_ros.actions import Node
 from mowbite_msgs.action import FollowPath
 from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus, RobotPose
 from rclpy.action import ActionClient
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import LATCHED, SimProbe  # noqa: E402
+
 LAWN = [(-1, -2), (12, -2), (12, 4), (-1, 4)]
 Result = FollowPath.Result
 
@@ -44,11 +47,12 @@ def line_poses(x0, y0, yaw, length, spacing=0.1):
     return poses
 
 
-class World:
+class World(SimProbe):
     """Driver and localization: a mower that moves the way it is told on follower/cmd_vel."""
+    spin_timeout = 0.02
 
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("follower_world")
         self.x = self.y = self.yaw = 0.0
         self.v = self.w = 0.0
         self.last_cmd = 0.0
@@ -56,14 +60,12 @@ class World:
         self.emergency = False
         self.accuracy = 0.02
         self.publish_pose = True
-        self.node = rclpy.create_node("follower_world")
         self.caps_pub = self.node.create_publisher(HardwareCapabilities, "hw/capabilities", LATCHED)
         self.hw_pub = self.node.create_publisher(HardwareStatus, "hw/status", 10)
         self.pose_pub = self.node.create_publisher(RobotPose, "localization/pose", 10)
         self.node.create_subscription(Twist, "follower/cmd_vel", self._cmd, 50)
         self.client = ActionClient(self.node, FollowPath, "follow_path")
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
+        self.start()
         threading.Thread(target=self._world, daemon=True).start()
 
     def capabilities(self, date, max_linear=0.3, max_angular=0.3):
@@ -86,10 +88,6 @@ class World:
             self.v, self.w = msg.linear.x, msg.angular.z
             self.last_cmd = time.time()
             self.cmds.append((time.time(), msg.linear.x, msg.angular.z))
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.02)
 
     def _world(self):
         dt = 0.02
@@ -143,11 +141,6 @@ class World:
     def commands_since(self, t):
         with self.lock:
             return [c for c in self.cmds if c[0] >= t]
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.2)
-        self.node.destroy_node()
 
 
 class TestFollower(unittest.TestCase):

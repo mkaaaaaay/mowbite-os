@@ -21,18 +21,19 @@ import unittest
 
 import launch
 import launch_testing.actions
-import paho.mqtt.client as mqtt
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import ExecuteProcess, TimerAction
-from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackagePrefix
 from mowbite_msgs.msg import Camera
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage
 
 sys.path.insert(0, os.path.join(get_package_share_directory("mowbite_bringup"), "launch"))
 import stack  # noqa: E402
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (bridge_node, mosquitto, mqtt_connect, mqtt_rpc, package_program, stop_process,  # noqa: E402
+                        store_answer, wait_until)
 
 MQTT_PORT = 18844
 MJPEG_PORT = 18845
@@ -62,24 +63,15 @@ PICTURE_BYTES = 20000
 
 def generate_test_description():
     os.makedirs(DATA_DIR)
-    with open(os.path.join(WORK, "mosquitto.conf"), "w") as f:
-        f.write(f"listener {MQTT_PORT} 127.0.0.1\nallow_anonymous true\n")
-    mosquitto = ExecuteProcess(cmd=["mosquitto", "-c", os.path.join(WORK, "mosquitto.conf")], output="screen")
-    bridge = Node(package="mowbite_bridge", executable="mowbite_bridge_node", output="screen",
-                  parameters=[{"mqtt_host": "127.0.0.1", "mqtt_port": MQTT_PORT,
-                               "data_dir": os.path.join(WORK, "bridge")}])
+    broker = mosquitto(WORK, MQTT_PORT)
+    bridge = bridge_node(WORK, MQTT_PORT)
     vision = stack.own_process(
         lambda prefix: ExecuteProcess(cmd=[sys.executable, "-c", STAND_IN, END_FILE], prefix=prefix, output="screen"),
         PROCESS, DATA_DIR, logging.getLogger("test_camera"))
     return launch.LaunchDescription([
-        mosquitto, *vision,
+        broker, *vision,
         TimerAction(period=1.0, actions=[bridge, launch_testing.actions.ReadyToTest()]),
     ]), {}
-
-
-def camera_node_path():
-    return os.path.join(FindPackagePrefix("mowbite_camera").find("mowbite_camera"), "lib", "mowbite_camera",
-                        "mowbite_camera_node")
 
 
 def picture(number):
@@ -185,33 +177,14 @@ class TestCamera(unittest.TestCase):
         cls.stop = threading.Event()
         cls.camera = threading.Thread(target=cls.play_camera)
         cls.camera.start()
-        try:
-            cls.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "camera_probe")
-        except AttributeError:
-            cls.client = mqtt.Client("camera_probe")
-        cls.client.on_message = cls.on_message
-        end = time.time() + 15
-        while True:
-            try:
-                cls.client.connect("127.0.0.1", MQTT_PORT)
-                break
-            except OSError:
-                if time.time() > end:
-                    raise
-                time.sleep(0.2)
-        cls.client.subscribe("rpc/response")
-        cls.client.subscribe("events/json")
-        cls.client.loop_start()
+        cls.client = mqtt_connect("camera_probe", MQTT_PORT, cls.on_message,
+                                  [("rpc/response", 0), ("events/json", 0)])
         cls.process = cls.start_node(MJPEG_PORT)
 
     @classmethod
     def tearDownClass(cls):
         if cls.process.poll() is None:
-            cls.process.send_signal(signal.SIGINT)
-            try:
-                cls.process.wait(10)
-            except subprocess.TimeoutExpired:
-                cls.process.kill()
+            stop_process(cls.process, signal.SIGINT)
         cls.stop.set()
         cls.camera.join()
         cls.client.loop_stop()
@@ -226,7 +199,8 @@ class TestCamera(unittest.TestCase):
                   "ice_port": ICE_PORT, "media_api_port": MEDIA_API_PORT, "runtime_dir": WORK,
                   "media_server": MEDIAMTX or "/nowhere/mediamtx"}
         args = [arg for name, value in params.items() for arg in ("-p", f"{name}:={value}")]
-        return subprocess.Popen([camera_node_path(), "--ros-args", *args], **pipes)
+        return subprocess.Popen([package_program("mowbite_camera", "mowbite_camera_node"), "--ros-args", *args],
+                                **pipes)
 
     @classmethod
     def play_camera(cls):
@@ -243,29 +217,18 @@ class TestCamera(unittest.TestCase):
 
     @classmethod
     def on_message(cls, client, userdata, message):
+        if message.topic != "events/json":
+            store_answer(cls.answers, cls.lock, message.payload)
+            return
         try:
             payload = json.loads(message.payload)
         except ValueError:
             return
         with cls.lock:
-            if message.topic == "events/json":
-                cls.events.append(payload)
-            else:
-                cls.answers[payload.get("id")] = payload
+            cls.events.append(payload)
 
     def rpc(self, method, params=None, timeout=10.0):
-        rid = f"{method}-{time.time_ns()}"
-        request = {"jsonrpc": "2.0", "method": method, "id": rid}
-        if params is not None:
-            request["params"] = params
-        self.client.publish("rpc/request", json.dumps(request))
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                if rid in self.answers:
-                    return self.answers.pop(rid)
-            time.sleep(0.05)
-        return None
+        return mqtt_rpc(self.client, self.answers, self.lock, method, params, timeout)
 
     def stream(self, **params):
         """The url of camera.stream for the camera of this test."""
@@ -297,12 +260,7 @@ class TestCamera(unittest.TestCase):
             self.fail(f"no {kind} in {self.events[after:]}")
 
     def wait_until(self, predicate, timeout=5.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            if predicate():
-                return True
-            time.sleep(0.05)
-        return False
+        return bool(wait_until(predicate, timeout))
 
     def report(self, available=True, reason="", detail=""):
         msg = Camera()

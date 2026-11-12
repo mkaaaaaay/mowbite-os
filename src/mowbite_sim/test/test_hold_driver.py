@@ -4,61 +4,43 @@ a restart with the file there.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_hold_driver.py
 """
+import functools
 import json
 import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
 import launch
 import launch_testing.actions
 import rclpy
-from ament_index_python.packages import get_package_prefix
-from geometry_msgs.msg import Twist, Vector3
-from launch.actions import ExecuteProcess
-from launch_ros.substitutions import FindPackagePrefix
+from geometry_msgs.msg import Twist
 from mowbite_msgs.msg import HardwareStatus
 from mowbite_msgs.srv import SetBlade
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (DriverProbe, TestShutdown, fake_tron, package_program, sim_files, sim_links,  # noqa: E402,F401
+                        stop_process, sub_packets, wait_until, wheel_speeds, write_json)
+
 WORK = tempfile.mkdtemp(prefix="mowbite_hold_")
-LINKS = {name: os.path.join(WORK, name) for name in ("mcu", "gnss", "imu")}
-FLAGS = os.path.join(WORK, "flags.json")
-LOG = os.path.join(WORK, "rx.jsonl")
+LINKS = sim_links(WORK)
+_, FLAGS, LOG, _ = sim_files(WORK)
 HOLD = os.path.join(WORK, "hold.json")
 CUTTER = 11
 SPEED = 4
 
 
 def generate_test_description():
-    with open(FLAGS, "w") as f:
-        json.dump({}, f)
-    fake_tron = ExecuteProcess(
-        cmd=[os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_tron"),
-             "--link", LINKS["mcu"], "--gnss-link", LINKS["gnss"], "--imu-link", LINKS["imu"],
-             "--flags", FLAGS, "--log", LOG, "--log-max-mb", "5"],
-        output="screen")
-    return launch.LaunchDescription([fake_tron, launch_testing.actions.ReadyToTest()]), {}
+    write_json(FLAGS, {})
+    return launch.LaunchDescription([fake_tron(LINKS, "--flags", FLAGS, "--log", LOG, "--log-max-mb", "5"),
+                                     launch_testing.actions.ReadyToTest()]), {}
 
 
-def received(since, module=None):
-    """Sub packets fake_tron got from the driver since sim time `since`."""
-    out = []
-    with open(LOG) as f:
-        for line in f:
-            entry = json.loads(line)
-            if entry.get("type") == 0 and entry["t"] >= since and (module is None or entry["mod"] == module):
-                out.append(entry)
-    return out
-
-
-def sim_time():
-    with open(LOG) as f:
-        lines = f.readlines()
-    return json.loads(lines[-1])["t"] if lines else 0.0
+received = functools.partial(sub_packets, LOG)
 
 
 def put(text):
@@ -76,36 +58,23 @@ class Driver:
     """tron_mcu as a process of its own, so the test can stop it and start it again."""
 
     def __init__(self):
-        exe = os.path.join(get_package_prefix("tron_mcu"), "lib", "tron_mcu", "tron_mcu_node")
+        exe = package_program("tron_mcu", "tron_mcu_node")
         self.proc = subprocess.Popen([exe, "--ros-args", "-p", f"port:={LINKS['mcu']}", "-p", "send_imu:=false",
                                       "-p", "allow_blade:=true", "-p", f"hold_file:={HOLD}"],
                                      start_new_session=True)
 
     def stop(self):
-        os.killpg(self.proc.pid, signal.SIGINT)
-        try:
-            self.proc.wait(10)
-        except subprocess.TimeoutExpired:
-            os.killpg(self.proc.pid, signal.SIGKILL)
-            self.proc.wait(5)
-        return self.proc.returncode
+        return stop_process(self.proc, signal.SIGINT, group=True)
 
 
-class Probe:
+class Probe(DriverProbe):
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("hold_driver_probe", log=LOG)
         self.statuses = []
-        self.node = rclpy.create_node("hold_driver_probe")
         self.node.create_subscription(HardwareStatus, "hw/status", self._status, 50)
         self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
         self.blade = self.node.create_client(SetBlade, "hw/blade")
-        self.running = True
-        self.spinner = threading.Thread(target=self._spin, daemon=True)
-        self.spinner.start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
+        self.start()
 
     def _status(self, msg):
         with self.lock:
@@ -121,48 +90,24 @@ class Probe:
             self.statuses = []
 
     def first(self, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                if self.statuses:
-                    return self.statuses[0]
-            time.sleep(0.02)
-        return None
+        return wait_until(lambda: self.statuses[0] if self.statuses else None, timeout, self.lock, self.poll)
 
     def wait(self, pred, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
+        """The latest status once pred(status) holds, else None."""
+        def fits():
             s = self.status
-            if s is not None and pred(s):
-                return s
-            time.sleep(0.02)
-        return None
+            return s if s is not None and pred(s) else None
+        return wait_until(fits, timeout, poll=self.poll)
 
     def set_blade(self, on, lease_s=1.0):
-        assert self.blade.wait_for_service(timeout_sec=5.0), "hw/blade missing"
-        future = self.blade.call_async(SetBlade.Request(on=on, lease_s=lease_s))
-        end = time.time() + 5.0
-        while not future.done() and time.time() < end:
-            time.sleep(0.01)
-        return future.result()
+        return super().set_blade(on, lease_s)
 
     def drive(self, seconds):
-        """cmd_vel for this long; the sim time it began."""
-        t0 = sim_time()
-        end = time.time() + seconds
-        while time.time() < end:
-            self.cmd_vel.publish(Twist(linear=Vector3(x=0.2)))
-            time.sleep(0.1)
-        return t0
-
-    def stop(self):
-        self.running = False
-        self.spinner.join(2.0)
-        self.node.destroy_node()
+        return self.cmd_vel_for(0.2, seconds)
 
 
 def moving(since):
-    return [e for e in received(since, SPEED) if e["speed"] != [0.0, 0.0]]
+    return wheel_speeds(LOG, since, SPEED)
 
 
 class TestHoldDriver(unittest.TestCase):
@@ -243,9 +188,3 @@ class TestHoldDriver(unittest.TestCase):
         t0 = self.probe.drive(1.0)
         time.sleep(0.3)
         self.assertGreater(len(moving(t0)), 3)
-
-
-@launch_testing.post_shutdown_test()
-class TestShutdown(unittest.TestCase):
-    def test_processes_exit_cleanly(self, proc_info):
-        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -2, -15, 130, 143])

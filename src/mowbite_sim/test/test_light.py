@@ -6,8 +6,8 @@ Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite
 import json
 import os
 import shutil
-import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -16,13 +16,14 @@ import unittest
 import launch
 import yaml
 import launch_testing.actions
-import paho.mqtt.client as mqtt
 import rclpy
-from launch.actions import ExecuteProcess, TimerAction
-from launch_ros.actions import Node
+from launch.actions import TimerAction
 from ament_index_python.packages import get_package_share_directory
-from launch_ros.substitutions import FindPackagePrefix
 from mowbite_msgs.msg import RobotState
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (bridge_node, mosquitto, mqtt_connect, mqtt_rpc, package_program, stop_process,  # noqa: E402
+                        store_answer)
 
 MQTT_PORT = 18834
 WORK = tempfile.mkdtemp(prefix="mowbite_light_")
@@ -38,13 +39,10 @@ FRONT = 14
 
 def generate_test_description():
     os.makedirs(DATA_DIR)
-    with open(os.path.join(WORK, "mosquitto.conf"), "w") as f:
-        f.write(f"listener {MQTT_PORT} 127.0.0.1\nallow_anonymous true\n")
-    mosquitto = ExecuteProcess(cmd=["mosquitto", "-c", os.path.join(WORK, "mosquitto.conf")], output="screen")
-    bridge = Node(package="mowbite_bridge", executable="mowbite_bridge_node", output="screen",
-                  parameters=[{"mqtt_host": "127.0.0.1", "mqtt_port": MQTT_PORT, "data_dir": os.path.join(WORK, "bridge")}])
+    broker = mosquitto(WORK, MQTT_PORT)
+    bridge = bridge_node(WORK, MQTT_PORT)
     return launch.LaunchDescription([
-        mosquitto,
+        broker,
         TimerAction(period=1.0, actions=[bridge, launch_testing.actions.ReadyToTest()]),
     ]), {}
 
@@ -71,11 +69,6 @@ def tron_strips():
         return yaml.safe_load(f)["mowbite_light"]["ros__parameters"]["strips"]
 
 
-def light_node_path():
-    return os.path.join(FindPackagePrefix("mowbite_light").find("mowbite_light"), "lib", "mowbite_light",
-                        "mowbite_light_node")
-
-
 class TestLight(unittest.TestCase):
     process = None
 
@@ -86,27 +79,12 @@ class TestLight(unittest.TestCase):
         cls.state_pub = cls.node.create_publisher(RobotState, "bridge/robot_state", 10)
         cls.lock = threading.Lock()
         cls.answers = {}
-        try:
-            cls.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "light_probe")
-        except AttributeError:
-            cls.client = mqtt.Client("light_probe")
-        cls.client.on_message = cls.on_message
-        end = time.time() + 15
-        while True:
-            try:
-                cls.client.connect("127.0.0.1", MQTT_PORT)
-                break
-            except OSError:
-                if time.time() > end:
-                    raise
-                time.sleep(0.2)
-        cls.client.subscribe("rpc/response")
-        cls.client.loop_start()
+        cls.client = mqtt_connect("light_probe", MQTT_PORT, cls.on_message, "rpc/response")
         cls.process = subprocess.Popen(
-            [light_node_path(), "--ros-args", "-p", "output:=file", "-p", f"file:={FRAME}", "-p",
-             f"data_dir:={DATA_DIR}", "-p", f"leds:={LEDS}", "-p", f"buffer_leds:={BUFFER_LEDS}", "-p",
-             f"max_brightness:={MAX_BRIGHTNESS}", "-p", "max_current_ma:=100000.0", "-p",
-             f"strips:={json.dumps(tron_strips())}"], stdout=subprocess.DEVNULL)
+            [package_program("mowbite_light", "mowbite_light_node"), "--ros-args", "-p", "output:=file", "-p",
+             f"file:={FRAME}", "-p", f"data_dir:={DATA_DIR}", "-p", f"leds:={LEDS}", "-p",
+             f"buffer_leds:={BUFFER_LEDS}", "-p", f"max_brightness:={MAX_BRIGHTNESS}", "-p", "max_current_ma:=100000.0",
+             "-p", f"strips:={json.dumps(tron_strips())}"], stdout=subprocess.DEVNULL)
 
     @classmethod
     def tearDownClass(cls):
@@ -119,35 +97,15 @@ class TestLight(unittest.TestCase):
     @classmethod
     def stop_node(cls):
         if cls.process is not None:
-            cls.process.send_signal(signal.SIGTERM)
-            try:
-                cls.process.wait(10)
-            except subprocess.TimeoutExpired:
-                cls.process.kill()
+            stop_process(cls.process)
             cls.process = None
 
     @classmethod
     def on_message(cls, client, userdata, message):
-        try:
-            answer = json.loads(message.payload)
-        except ValueError:
-            return
-        with cls.lock:
-            cls.answers[answer.get("id")] = answer
+        store_answer(cls.answers, cls.lock, message.payload)
 
     def rpc(self, method, params=None, timeout=10.0):
-        rid = f"{method}-{time.time_ns()}"
-        request = {"jsonrpc": "2.0", "method": method, "id": rid}
-        if params is not None:
-            request["params"] = params
-        self.client.publish("rpc/request", json.dumps(request))
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                if rid in self.answers:
-                    return self.answers.pop(rid)
-            time.sleep(0.05)
-        return None
+        return mqtt_rpc(self.client, self.answers, self.lock, method, params, timeout)
 
     def publish_state(self, state, emergency=False, charging=False, battery=0.8):
         msg = RobotState()

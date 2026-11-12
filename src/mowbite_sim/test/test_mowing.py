@@ -7,32 +7,24 @@ simulated mower really went (the state file of fake_tron) and what reached the M
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_mowing.py
 """
 import json
-import math
 import os
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
-import launch
-import launch_testing.actions
 import rclpy
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import MapStatus, MqttPublish, RobotPose, RobotState, RpcError, RpcRequest, RpcResponse
 from mowbite_msgs.srv import ReplaceMap, SetPose
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import LATCHED, SimProbe, distance_to, inside, read_json, sim_description, sim_files  # noqa: E402
+
 WORK = tempfile.mkdtemp(prefix="mowbite_mowing_")
-STATE = os.path.join(WORK, "state.json")
-FLAGS = os.path.join(WORK, "flags.json")
-RX = os.path.join(WORK, "rx.jsonl")
-DATA = os.path.join(WORK, "data")
+STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "mowing.yaml")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 # One small lawn, one loop around it. Placed so that the loop starts at the mower (0, 0): plan_transit of planner
 # 8ff8f73 refuses the start of the loop as a goal (the body would stick out there), so no approach is needed.
@@ -51,83 +43,44 @@ with open(CONFIG, "w") as f:
 
 
 def generate_test_description():
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": STATE, "flags": FLAGS, "log": RX,
-                          "data_dir": DATA, "mqtt_port": "18832", "extra_config": CONFIG}.items())
-    return launch.LaunchDescription([sim, launch_testing.actions.ReadyToTest()]), {}
-
-
-def inside(ring, x, y):
-    result = False
-    for i in range(len(ring)):
-        (ax, ay), (bx, by) = ring[i], ring[i - 1]
-        if (ay > y) != (by > y) and x < (bx - ax) * (y - ay) / (by - ay) + ax:
-            result = not result
-    return result
+    return sim_description(WORK, 18832, extra_config=CONFIG)
 
 
 def outside_by(ring, x, y):
     """m the point lies outside of the ring, 0 inside."""
-    if inside(ring, x, y):
-        return 0.0
-
-    def to_edge(p, q):
-        ex, ey = q[0] - p[0], q[1] - p[1]
-        along = min(1.0, max(0.0, ((x - p[0]) * ex + (y - p[1]) * ey) / (ex * ex + ey * ey)))
-        return math.dist((x, y), (p[0] + along * ex, p[1] + along * ey))
-    return min(to_edge(ring[i - 1], ring[i]) for i in range(len(ring)))
+    return 0.0 if inside(ring, x, y) else distance_to(ring, x, y)
 
 
 # checkpoint.json once pred holds for it, else the last one read: the logic writes it in a thread of its own.
 def read_checkpoint(pred, timeout=5.0):
     end = time.time() + timeout
     while True:
-        try:
-            with open(os.path.join(DATA, "checkpoint.json")) as f:
-                checkpoint = json.load(f)
-        except (OSError, ValueError):
-            checkpoint = {}
+        checkpoint = read_json(os.path.join(DATA, "checkpoint.json")) or {}
         if (checkpoint and pred(checkpoint)) or time.time() > end:
             return checkpoint
         time.sleep(0.05)
 
 
-class Probe:
+class Probe(SimProbe):
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("mowing_probe", state=STATE, flags=FLAGS, log=RX)
         self.status = None
         self.pose = None
         self.robot = None
-        self.events = []
-        self.track = []
         # (time, position accuracy) of every localization/pose, for the report of a failure
         self.accuracy = []
-        self.node = rclpy.create_node("mowing_probe")
-        self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
+        self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
         self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
-        self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
+        self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
-        self.answers = {}
         self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
-        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._answer, 10)
-        self.node.create_subscription(RpcError, "bridge/rpc/error", self._answer, 10)
+        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
+        self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-        threading.Thread(target=self._record, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
-
-    def _status(self, msg):
-        with self.lock:
-            self.status = msg
+        self.start()
+        self.spawn(self._record)
 
     def _pose(self, msg):
         with self.lock:
@@ -140,100 +93,6 @@ class Probe:
             values = [(t, a) for t, a in self.accuracy if t >= since]
         bad = [(round(t - since, 1), round(a, 3)) for t, a in values if a > 0.1]
         return f"{len(values)} poses, worst {max((a for _, a in values), default=0):.3f} m, above 0.1 m: {bad[:20]}"
-
-    def _answer(self, msg):
-        with self.lock:
-            if isinstance(msg, RpcResponse):
-                self.answers[msg.id] = {"result": json.loads(msg.result)}
-            else:
-                self.answers[msg.id] = {"error": {"code": msg.code, "message": msg.message,
-                                                  "data": json.loads(msg.data) if msg.data else None}}
-
-    def _robot(self, msg):
-        with self.lock:
-            self.robot = msg
-
-    def _publish(self, msg):
-        if msg.topic != "events/json":
-            return
-        with self.lock:
-            self.events.append(json.loads(msg.payload))
-
-    def _record(self):
-        while self.running:
-            truth = self.truth()
-            if truth:
-                with self.lock:
-                    self.track.append(truth)
-            time.sleep(0.2)
-
-    def truth(self):
-        try:
-            with open(STATE) as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return None
-
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
-    def call(self, client, request, timeout=60.0):
-        assert client.wait_for_service(timeout_sec=20.0), f"{client.srv_name} not offered"
-        future = client.call_async(request)
-        end = time.time() + timeout
-        while not future.done() and time.time() < end:
-            time.sleep(0.05)
-        assert future.done(), f"no answer from {client.srv_name}"
-        return future.result()
-
-    def act(self, action):
-        self.action_pub.publish(String(data=action))
-
-    def rpc(self, method, params, timeout=10.0):
-        """A command as the app sends it, past the bridge: its answer, or None."""
-        request = RpcRequest(method=method, params=json.dumps(params), id=f"mowing-{method}-{time.time()}")
-        self.rpc_pub.publish(request)
-        return self.wait(lambda: self.answers.get(request.id), timeout)
-
-    def event(self, since, type_, timeout, **match):
-        """The first event of that type since index since whose fields match."""
-        return self.wait(lambda: next((e for e in self.events[since:] if e["type"] == type_
-                                       and all(e.get(k) == v for k, v in match.items())), None), timeout)
-
-    def flags(self, **values):
-        with open(FLAGS + ".tmp", "w") as f:
-            json.dump(values, f)
-        os.replace(FLAGS + ".tmp", FLAGS)
-
-    def standing(self):
-        a = self.truth()
-        time.sleep(1.0)
-        b = self.truth()
-        return math.hypot(a["x"] - b["x"], a["y"] - b["y"]) < 0.02, (a, b)
-
-    def cutter_frames(self):
-        frames = []
-        try:
-            with open(RX) as f:
-                for line in f:
-                    entry = json.loads(line)
-                    if "cutter" in entry:
-                        frames.append(entry)
-        except OSError:
-            pass
-        return frames
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
 
 
 class TestMowing(unittest.TestCase):

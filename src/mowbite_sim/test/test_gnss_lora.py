@@ -4,82 +4,57 @@ corrections went to the receiver. The test plays mowbite_ntrip: it writes the ac
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_gnss_lora.py
 """
-import importlib.machinery
-import importlib.util
 import json
 import os
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
 import launch
 import launch_testing.actions
 import rclpy
-from launch.actions import ExecuteProcess, TimerAction
+from launch.actions import TimerAction
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackagePrefix
 from mowbite_msgs.msg import GnssFix, Rtcm
 from rcl_interfaces.msg import Log
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import SimProbe, fake_tron, rtcm_frame, sim_files, sim_links, write_json  # noqa: E402
+
 WORK = tempfile.mkdtemp(prefix="mowbite_lora_")
-LINKS = {name: os.path.join(WORK, name) for name in ("mcu", "gnss", "imu")}
-FLAGS = os.path.join(WORK, "flags.json")
-LOG = os.path.join(WORK, "rx.jsonl")
+LINKS = sim_links(WORK)
+_, FLAGS, LOG, _ = sim_files(WORK)
 ACCESS = os.path.join(WORK, "ntrip.yaml")
 FIXED = GnssFix.RTK_FIXED
 FLOAT = GnssFix.RTK_FLOAT
 
-# The CRC of fake_tron, so there is one in the sim.
-_loader = importlib.machinery.SourceFileLoader(
-    "fake_tron", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "fake_tron"))
-ft = importlib.util.module_from_spec(importlib.util.spec_from_loader("fake_tron", _loader))
-_loader.exec_module(ft)
-
-with open(FLAGS, "w") as f:
-    json.dump({}, f)
-
-
-def rtcm_frame(message=1005, length=19):
-    payload = bytes([message >> 4, (message & 0x0F) << 4]) + bytes((i * 7) & 0xFF for i in range(length - 2))
-    frame = bytes([0xD3, length >> 8, length & 0xFF]) + payload
-    return frame + ft.crc24q(frame).to_bytes(3, "big")
+write_json(FLAGS, {})
 
 
 def generate_test_description():
-    fake_tron = ExecuteProcess(
-        cmd=[os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_tron"),
-             "--link", LINKS["mcu"], "--gnss-link", LINKS["gnss"], "--imu-link", LINKS["imu"],
-             "--flags", FLAGS, "--log", LOG, "--log-max-mb", "5"],
-        output="screen")
     gnss = Node(package="tron_gnss", executable="tron_gnss_node", output="screen",
                 parameters=[{"port": LINKS["gnss"], "datum_lat": 52.0, "datum_long": 9.0, "datum_height": 50.0,
                              "data_dir": WORK}])
     # The pty has to exist before the driver looks for it.
     return launch.LaunchDescription([
-        fake_tron,
+        fake_tron(LINKS, "--flags", FLAGS, "--log", LOG, "--log-max-mb", "5"),
         TimerAction(period=1.0, actions=[gnss, launch_testing.actions.ReadyToTest()]),
     ]), {}
 
 
-class Probe:
+class Probe(SimProbe):
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("lora_probe")
+        # (time, solution) of every pose.
         self.flags = []
-        self.logs = []
-        self.node = rclpy.create_node("lora_probe")
         self.node.create_subscription(GnssFix, "gps/absolute_pose", self._pose, 10)
         self.node.create_subscription(Log, "/rosout", self._log, 100)
         self.rtcm_pub = self.node.create_publisher(Rtcm, "gnss/rtcm", QoSProfile(depth=50,
                                                                               reliability=ReliabilityPolicy.RELIABLE))
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
+        self.start()
 
     def _pose(self, msg):
         with self.lock:
@@ -97,25 +72,10 @@ class Probe:
         with self.lock:
             return [f for t, f in self.flags if t >= since]
 
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
     def send_rtcm(self):
         msg = Rtcm()
-        msg.data = list(rtcm_frame())
+        msg.data = list(rtcm_frame(1005))
         self.rtcm_pub.publish(msg)
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
 
 
 class TestGnssLora(unittest.TestCase):

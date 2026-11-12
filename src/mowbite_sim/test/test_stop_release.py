@@ -1,39 +1,32 @@
 """Releasing the emergency with STOP at the mower (G37) in the simulation: the whole stack of sim.launch.py with the
 gesture on (stop_release of tron_mcu). While mowing, STOP pauses; the press that latched never releases, however long;
 after 2 s free a press held 3 to 10 s releases once let go, with source button, and mowing stays paused until continue.
-Too short, too long, too quick and an IMU gap release nothing. The app asking while STOP is still held gets STILL_ACTIVE,
-the gesture releases afterwards. The flags file of fake_tron plays the button.
+Too short, too long, too quick and an IMU gap release nothing. The app asking while STOP is still held gets
+STILL_ACTIVE, the gesture releases afterwards. The flags file of fake_tron plays the button.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_stop_release.py
 """
 import json
-import math
 import os
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
-import launch
-import launch_testing.actions
 import rclpy
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import (ButtonEvent, MapStatus, MqttPublish, RobotPose, RobotState, RpcError, RpcRequest,
                               RpcResponse)
 from mowbite_msgs.srv import ReplaceMap, SetPose
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import LATCHED, SimProbe, sim_description, sim_files  # noqa: E402
+
 WORK = tempfile.mkdtemp(prefix="mowbite_stop_")
-STATE = os.path.join(WORK, "state.json")
-FLAGS = os.path.join(WORK, "flags.json")
-RX = os.path.join(WORK, "rx.jsonl")
-DATA = os.path.join(WORK, "data")
+STATE, FLAGS, _, _ = sim_files(WORK)
 CONFIG = os.path.join(WORK, "stop.yaml")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 # hw/button is reliable and never latched.
 BUTTON = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE, depth=10)
 # Free and held with a margin to the limits of 2, 3 and 10 s, for a loaded machine.
@@ -55,135 +48,41 @@ with open(CONFIG, "w") as f:
 
 
 def generate_test_description():
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": STATE, "flags": FLAGS, "log": RX,
-                          "data_dir": DATA, "mqtt_port": "18852", "extra_config": CONFIG}.items())
-    return launch.LaunchDescription([sim, launch_testing.actions.ReadyToTest()]), {}
+    return sim_description(WORK, 18852, extra_config=CONFIG)
 
 
-class Probe:
+class Probe(SimProbe):
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("stop_release_probe", state=STATE, flags=FLAGS)
         self.status = None
         self.pose = None
         self.robot = None
-        self.events = []
         self.presses = []
-        self.answers = {}
-        self.node = rclpy.create_node("stop_release_probe")
-        self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
-        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
-        self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
+        self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
+        self.node.create_subscription(RobotPose, "localization/pose", self._set("pose"), 10)
+        self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.node.create_subscription(ButtonEvent, "hw/button", self._button, BUTTON)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
-        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._answer, 10)
-        self.node.create_subscription(RpcError, "bridge/rpc/error", self._answer, 10)
+        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
+        self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
-
-    def _status(self, msg):
-        with self.lock:
-            self.status = msg
-
-    def _pose(self, msg):
-        with self.lock:
-            self.pose = msg
-
-    def _robot(self, msg):
-        with self.lock:
-            self.robot = msg
+        self.start()
 
     def _button(self, msg):
         with self.lock:
             self.presses.append(msg)
 
-    def _answer(self, msg):
-        with self.lock:
-            if isinstance(msg, RpcResponse):
-                self.answers[msg.id] = {"result": json.loads(msg.result)}
-            else:
-                self.answers[msg.id] = {"error": {"code": msg.code, "message": msg.message,
-                                                  "data": json.loads(msg.data) if msg.data else None}}
-
-    def _publish(self, msg):
-        if msg.topic != "events/json":
-            return
-        with self.lock:
-            self.events.append(json.loads(msg.payload))
-
-    def truth(self):
-        try:
-            with open(STATE) as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return None
-
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
-    def call(self, client, request, timeout=60.0):
-        assert client.wait_for_service(timeout_sec=20.0), f"{client.srv_name} not offered"
-        future = client.call_async(request)
-        end = time.time() + timeout
-        while not future.done() and time.time() < end:
-            time.sleep(0.05)
-        assert future.done(), f"no answer from {client.srv_name}"
-        return future.result()
-
-    def act(self, action):
-        self.action_pub.publish(String(data=action))
-
-    def rpc(self, method, params, timeout=10.0):
-        request = RpcRequest(method=method, params=json.dumps(params), id=f"stop-{method}-{time.time()}")
-        self.rpc_pub.publish(request)
-        return self.wait(lambda: self.answers.get(request.id), timeout)
-
-    def event(self, since, type_, timeout, **match):
-        return self.wait(lambda: next((e for e in self.events[since:] if e["type"] == type_
-                                       and all(e.get(k) == v for k, v in match.items())), None), timeout)
-
     def press(self, since, kind, timeout):
         return self.wait(lambda: next((m for m in self.presses[since:] if m.press == kind), None), timeout)
-
-    def flags(self, **values):
-        with open(FLAGS + ".tmp", "w") as f:
-            json.dump(values, f)
-        os.replace(FLAGS + ".tmp", FLAGS)
 
     def hold(self, seconds, **during):
         """STOP held for seconds, then let go."""
         self.flags(stop=1, **during)
         time.sleep(seconds)
         self.flags()
-
-    def standing(self):
-        a = self.truth()
-        time.sleep(1.0)
-        b = self.truth()
-        return math.hypot(a["x"] - b["x"], a["y"] - b["y"]) < 0.02, (a, b)
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
 
 
 class TestStopRelease(unittest.TestCase):

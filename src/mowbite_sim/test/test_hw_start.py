@@ -4,32 +4,32 @@ reports IMU_TIMEOUT, and the first sample frees it.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_hw_start.py
 """
-import json
+import functools
 import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
 import launch
 import launch_testing.actions
 import rclpy
-from ament_index_python.packages import get_package_prefix
 from geometry_msgs.msg import Twist, Vector3
-from launch.actions import ExecuteProcess
-from launch_ros.substitutions import FindPackagePrefix
 from mowbite_msgs.msg import HardwareStatus
 from mowbite_msgs.srv import SetBlade
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (DriverProbe, TestShutdown, fake_tron, package_program, sim_files, sim_links,  # noqa: E402,F401
+                        stop_process, sub_packets, wheel_speeds, write_json)
+
 WORK = tempfile.mkdtemp(prefix="mowbite_start_")
-LINKS = {name: os.path.join(WORK, name) for name in ("mcu", "gnss", "imu")}
-FLAGS = os.path.join(WORK, "flags.json")
-LOG = os.path.join(WORK, "rx.jsonl")
+LINKS = sim_links(WORK)
+_, FLAGS, LOG, _ = sim_files(WORK)
 CUTTER = 11
 SPEED = 4
 # imu_start_timeout of the driver here, s: long enough to ask within it on a busy machine.
@@ -37,78 +37,52 @@ START = 6.0
 
 
 def generate_test_description():
-    with open(FLAGS, "w") as f:
-        json.dump({}, f)
-    fake_tron = ExecuteProcess(
-        cmd=[os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_tron"),
-             "--link", LINKS["mcu"], "--gnss-link", LINKS["gnss"], "--imu-link", LINKS["imu"],
-             "--flags", FLAGS, "--log", LOG, "--log-max-mb", "5"],
-        output="screen")
-    return launch.LaunchDescription([fake_tron, launch_testing.actions.ReadyToTest()]), {}
+    write_json(FLAGS, {})
+    return launch.LaunchDescription([fake_tron(LINKS, "--flags", FLAGS, "--log", LOG, "--log-max-mb", "5"),
+                                     launch_testing.actions.ReadyToTest()]), {}
 
 
-def received(since, module=None):
-    """Sub packets fake_tron got from the driver since sim time `since`."""
-    out = []
-    with open(LOG) as f:
-        for line in f:
-            entry = json.loads(line)
-            if entry.get("type") == 0 and entry["t"] >= since and (module is None or entry["mod"] == module):
-                out.append(entry)
-    return out
-
-
-def sim_time():
-    with open(LOG) as f:
-        lines = f.readlines()
-    return json.loads(lines[-1])["t"] if lines else 0.0
+received = functools.partial(sub_packets, LOG)
 
 
 def moving(since):
-    return [e for e in received(since, SPEED) if e["speed"] != [0.0, 0.0]]
+    return wheel_speeds(LOG, since, SPEED)
 
 
 class Driver:
     """tron_mcu as a process of its own, so the test knows when it started."""
 
     def __init__(self):
-        exe = os.path.join(get_package_prefix("tron_mcu"), "lib", "tron_mcu", "tron_mcu_node")
+        exe = package_program("tron_mcu", "tron_mcu_node")
         self.started = time.time()
         self.proc = subprocess.Popen([exe, "--ros-args", "-p", f"port:={LINKS['mcu']}", "-p", "send_imu:=true",
                                       "-p", f"imu_start_timeout:={START}", "-p", "allow_blade:=true"],
                                      start_new_session=True)
 
     def stop(self):
-        os.killpg(self.proc.pid, signal.SIGINT)
-        try:
-            self.proc.wait(10)
-        except subprocess.TimeoutExpired:
-            os.killpg(self.proc.pid, signal.SIGKILL)
-            self.proc.wait(5)
-        return self.proc.returncode
+        return stop_process(self.proc, signal.SIGINT, group=True)
 
 
-class Probe:
+class Probe(DriverProbe):
+    spin_timeout = 0.02
+
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("hw_start_probe", log=LOG)
         # (time of arrival, message)
         self.statuses = []
-        self.node = rclpy.create_node("hw_start_probe")
         self.node.create_subscription(HardwareStatus, "hw/status", self._status, 50)
         self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
         self.imu = self.node.create_publisher(Imu, "imu/data", qos_profile_sensor_data)
         self.blade = self.node.create_client(SetBlade, "hw/blade")
         # Whether the IMU of this test gives samples.
         self.sampling = False
-        self.running = True
-        self.spinner = threading.Thread(target=self._spin, daemon=True)
-        self.spinner.start()
+        self.start()
 
     def _spin(self):
         while self.running:
             if self.sampling:
                 self.imu.publish(Imu(linear_acceleration=Vector3(z=9.81)))
-            rclpy.spin_once(self.node, timeout_sec=0.02)
+            rclpy.spin_once(self.node, timeout_sec=self.spin_timeout)
 
     def _status(self, msg):
         with self.lock:
@@ -126,30 +100,14 @@ class Probe:
                 if pred(entry[1]):
                     return entry
             seen += len(new)
-            time.sleep(0.02)
+            time.sleep(self.poll)
         return None
 
     def set_blade(self, on, lease_s=1.0):
-        assert self.blade.wait_for_service(timeout_sec=5.0), "hw/blade missing"
-        future = self.blade.call_async(SetBlade.Request(on=on, lease_s=lease_s))
-        end = time.time() + 5.0
-        while not future.done() and time.time() < end:
-            time.sleep(0.01)
-        return future.result()
+        return super().set_blade(on, lease_s)
 
     def drive(self, seconds):
-        """cmd_vel for this long; the sim time it began."""
-        t0 = sim_time()
-        end = time.time() + seconds
-        while time.time() < end:
-            self.cmd_vel.publish(Twist(linear=Vector3(x=0.2)))
-            time.sleep(0.1)
-        return t0
-
-    def stop(self):
-        self.running = False
-        self.spinner.join(2.0)
-        self.node.destroy_node()
+        return self.cmd_vel_for(0.2, seconds)
 
 
 class TestHardwareStart(unittest.TestCase):
@@ -202,9 +160,3 @@ class TestHardwareStart(unittest.TestCase):
         r = self.probe.set_blade(True)
         self.assertTrue(r.success, r.message)
         self.assertTrue(self.probe.set_blade(False).success)
-
-
-@launch_testing.post_shutdown_test()
-class TestShutdown(unittest.TestCase):
-    def test_processes_exit_cleanly(self, proc_info):
-        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0, -2, -15, 130, 143])

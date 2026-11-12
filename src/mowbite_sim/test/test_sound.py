@@ -9,8 +9,8 @@ import hashlib
 import json
 import os
 import shutil
-import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -18,12 +18,14 @@ import unittest
 
 import launch
 import launch_testing.actions
-import paho.mqtt.client as mqtt
 import rclpy
-from launch.actions import ExecuteProcess, TimerAction
-from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
+from launch.actions import TimerAction
+from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import HardwareStatus, MqttPublish, RobotState
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (bridge_node, mosquitto, mqtt_connect, mqtt_rpc, package_program, stop_process,  # noqa: E402
+                        store_answer)
 
 MQTT_PORT = 18835
 WORK = tempfile.mkdtemp(prefix="mowbite_sound_")
@@ -39,24 +41,16 @@ def generate_test_description():
     os.makedirs(os.path.join(VENDOR, "v1.3.32"))
     for code in CODES.values():
         shutil.copy(tone_path(), os.path.join(VENDOR, "v1.3.32", f"{code}.mp3"))
-    with open(os.path.join(WORK, "mosquitto.conf"), "w") as f:
-        f.write(f"listener {MQTT_PORT} 127.0.0.1\nallow_anonymous true\n")
-    mosquitto = ExecuteProcess(cmd=["mosquitto", "-c", os.path.join(WORK, "mosquitto.conf")], output="screen")
-    bridge = Node(package="mowbite_bridge", executable="mowbite_bridge_node", output="screen",
-                  parameters=[{"mqtt_host": "127.0.0.1", "mqtt_port": MQTT_PORT, "data_dir": os.path.join(WORK, "bridge")}])
+    broker = mosquitto(WORK, MQTT_PORT)
+    bridge = bridge_node(WORK, MQTT_PORT)
     return launch.LaunchDescription([
-        mosquitto,
+        broker,
         TimerAction(period=1.0, actions=[bridge, launch_testing.actions.ReadyToTest()]),
     ]), {}
 
 
 def tone_path():
     return os.path.join(FindPackageShare("mowbite_sound").find("mowbite_sound"), "test_data", "tone.mp3")
-
-
-def sound_node_path():
-    return os.path.join(FindPackagePrefix("mowbite_sound").find("mowbite_sound"), "lib", "mowbite_sound",
-                        "mowbite_sound_node")
 
 
 class TestSound(unittest.TestCase):
@@ -71,36 +65,17 @@ class TestSound(unittest.TestCase):
         cls.event_pub = cls.node.create_publisher(MqttPublish, "bridge/publish", 100)
         cls.lock = threading.Lock()
         cls.answers = {}
-        try:
-            cls.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "sound_probe")
-        except AttributeError:
-            cls.client = mqtt.Client("sound_probe")
-        cls.client.on_message = cls.on_message
-        end = time.time() + 15
-        while True:
-            try:
-                cls.client.connect("127.0.0.1", MQTT_PORT)
-                break
-            except OSError:
-                if time.time() > end:
-                    raise
-                time.sleep(0.2)
-        cls.client.subscribe("rpc/response")
-        cls.client.loop_start()
+        cls.client = mqtt_connect("sound_probe", MQTT_PORT, cls.on_message, "rpc/response")
         codes = [f"{situation}={code}" for situation, code in CODES.items()]
         cls.process = subprocess.Popen(
-            [sound_node_path(), "--ros-args", "-p", "output:=file", "-p", f"file:={PLAYED}", "-p",
-             f"data_dir:={DATA_DIR}", "-p", f"vendor_dirs:=['{VENDOR}/*']", "-p",
+            [package_program("mowbite_sound", "mowbite_sound_node"), "--ros-args", "-p", "output:=file", "-p",
+             f"file:={PLAYED}", "-p", f"data_dir:={DATA_DIR}", "-p", f"vendor_dirs:=['{VENDOR}/*']", "-p",
              "vendor_codes:=[" + ",".join(f"'{c}'" for c in codes) + "]"], stdout=subprocess.DEVNULL)
 
     @classmethod
     def tearDownClass(cls):
         if cls.process is not None:
-            cls.process.send_signal(signal.SIGTERM)
-            try:
-                cls.process.wait(10)
-            except subprocess.TimeoutExpired:
-                cls.process.kill()
+            stop_process(cls.process)
         cls.client.loop_stop()
         cls.node.destroy_node()
         rclpy.shutdown()
@@ -108,26 +83,10 @@ class TestSound(unittest.TestCase):
 
     @classmethod
     def on_message(cls, client, userdata, message):
-        try:
-            answer = json.loads(message.payload)
-        except ValueError:
-            return
-        with cls.lock:
-            cls.answers[answer.get("id")] = answer
+        store_answer(cls.answers, cls.lock, message.payload)
 
     def rpc(self, method, params=None, timeout=10.0):
-        rid = f"{method}-{time.time_ns()}"
-        request = {"jsonrpc": "2.0", "method": method, "id": rid}
-        if params is not None:
-            request["params"] = params
-        self.client.publish("rpc/request", json.dumps(request))
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                if rid in self.answers:
-                    return self.answers.pop(rid)
-            time.sleep(0.05)
-        return None
+        return mqtt_rpc(self.client, self.answers, self.lock, method, params, timeout)
 
     def publish_state(self, emergency=False, bits=0, charging=False):
         msg = RobotState()

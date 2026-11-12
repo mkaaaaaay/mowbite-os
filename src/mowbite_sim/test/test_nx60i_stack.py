@@ -2,18 +2,20 @@
 IDLE with the capabilities of the speed model and the speeds for the planner on bridge/params, the gyro calibrates on
 the wheel reports of the driver; without a safety measurement mowing and drives are refused; the emergency stop latches
 and is released; on the station the charge of the board is confirmed (DOCKED) and its loss told (CHARGING_LOST), with
-the values of the NX60i; a killed driver stands the wheels (the board's own timeout) and its successor holds the board from its
-first frame until a release; a crashed container comes back beside the running driver; after three restarts the driver
-stays down. Prints the RSS of driver, container and planner.
+the values of the NX60i; a killed driver stands the wheels (the board's own timeout) and its successor holds the board
+from its first frame until a release; a crashed container comes back beside the running driver; after three restarts the
+driver stays down. Prints the RSS of driver, container and planner.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_nx60i_stack.py
 """
+import functools
 import json
 import os
 import random
 import shutil
 import signal
 import struct
+import sys
 import tempfile
 import threading
 import time
@@ -24,25 +26,23 @@ import launch_testing.actions
 import launch_testing.asserts
 import rclpy
 from geometry_msgs.msg import Twist, Vector3
-from launch.actions import ExecuteProcess, IncludeLaunchDescription, TimerAction
+from launch.actions import IncludeLaunchDescription, TimerAction
 from launch.events.process import ProcessStarted
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
+from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus, MqttPublish, RobotPose, RobotState
 from mowbite_msgs.srv import DriveTo, SetEmergency
 from rcl_interfaces.msg import Log
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (HISTORY, LATCHED, ROSOUT, SimProbe, fake_xcore, log_entries, loopback_group,  # noqa: E402
+                        read_json, sim_files, write_json)
+
 WORK = tempfile.mkdtemp(prefix="mowbite_nx60i_")
-FLAGS = os.path.join(WORK, "flags.json")
-LOG = os.path.join(WORK, "rx.jsonl")
-STATE = os.path.join(WORK, "state.json")
-DATA = os.path.join(WORK, "data")
-GROUP_PORT = random.randint(42000, 48000)
-BIND_IP = f"127.{random.randint(1, 250)}.{random.randint(1, 250)}.{random.randint(2, 250)}"
+STATE, FLAGS, LOG, DATA = sim_files(WORK)
+GROUP_PORT, BIND_IP = loopback_group()
 DATUM = (52.0, 9.0, 80.0)
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 EMERGENCY = 1
 CLAIM, DATA_MSG = 3, 1
 # The bits of the board as the driver sends them.
@@ -52,18 +52,12 @@ DRIVER_RESTARTS = 3
 # max_duty 0.3 of nx60i.yaml in the speed model 0.58 x (duty - 0.019).
 REACHED = 0.58 * (0.3 - 0.019)
 
-with open(FLAGS, "w") as f:
-    json.dump({"gps_fix": "fix"}, f)
+write_json(FLAGS, {"gps_fix": "fix"})
 
 
 def generate_test_description():
-    sim = FindPackageShare("mowbite_sim").find("mowbite_sim")
-    fake_xcore = ExecuteProcess(
-        cmd=[os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_xcore"),
-             "--services", os.path.join(sim, "config", "xcore_nx60i_services.json"), "--group-port", str(GROUP_PORT),
-             "--origin", str(DATUM[0]), str(DATUM[1]), "--flags", FLAGS, "--state", STATE, "--log", LOG,
-             "--log-max-mb", "60"],
-        output="screen")
+    board = fake_xcore(GROUP_PORT, "--origin", str(DATUM[0]), str(DATUM[1]), "--flags", FLAGS, "--state", STATE,
+                       "--log", LOG, "--log-max-mb", "60")
     stack = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(FindPackageShare("mowbite_bringup").find("mowbite_bringup"),
                                                    "launch", "nx60i.launch.py")),
@@ -71,122 +65,56 @@ def generate_test_description():
                           "data_dir": DATA, "datum_lat": str(DATUM[0]), "datum_long": str(DATUM[1]),
                           "datum_height": str(DATUM[2]), "mqtt_port": str(random.randint(18000, 18999))}.items())
     return launch.LaunchDescription([
-        fake_xcore,
+        board,
         TimerAction(period=0.5, actions=[stack, launch_testing.actions.ReadyToTest()]),
     ]), {}
 
 
 def set_flags(**flags):
     flags.setdefault("gps_fix", "fix")
-    with open(FLAGS + ".tmp", "w") as f:
-        json.dump(flags, f)
-    os.replace(FLAGS + ".tmp", FLAGS)
+    write_json(FLAGS, flags)
 
 
-def board():
-    with open(STATE) as f:
-        return json.load(f)
+board = functools.partial(read_json, STATE)
 
 
 def received(since, sid, msg_type):
     """Datagrams fake_xcore got from a driver since board time `since`."""
-    out = []
-    with open(LOG) as f:
-        for line in f:
-            entry = json.loads(line)
-            if entry["t"] >= since and entry.get("sid") == sid and entry.get("type") == msg_type:
-                out.append(entry)
-    return out
+    return [e for e in log_entries(LOG, since) if e.get("sid") == sid and e.get("type") == msg_type]
 
 
-class Probe:
+class Probe(SimProbe):
+    offer_timeout = 20.0
+    call_timeout = 20.0
+
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("nx60i_probe")
         self.status = None
         self.caps = None
         self.robot = None
         self.pose = None
         self.params = []
-        self.events = []
-        self.logs = []
-        self.node = rclpy.create_node("nx60i_probe")
         self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
         self.node.create_subscription(HardwareCapabilities, "hw/capabilities", self._set("caps"), LATCHED)
         self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
         self.node.create_subscription(RobotPose, "localization/pose", self._set("pose"), 10)
-        self.node.create_subscription(
-            String, "bridge/params", self._param,
-            QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.node.create_subscription(String, "bridge/params", self._param, HISTORY)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
-        self.node.create_subscription(Log, "/rosout", self._log, QoSProfile(
-            depth=1000, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.node.create_subscription(Log, "/rosout", self._log, ROSOUT)
         self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.emergency = self.node.create_client(SetEmergency, "hw/emergency")
         self.drive_to = self.node.create_client(DriveTo, "logic/drive_to")
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
-
-    def _set(self, name):
-        def store(msg):
-            with self.lock:
-                setattr(self, name, msg)
-        return store
+        self.start()
 
     def _param(self, msg):
         with self.lock:
             self.params.append(json.loads(msg.data))
 
-    def _publish(self, msg):
-        if msg.topic != "events/json":
-            return
-        with self.lock:
-            self.events.append(json.loads(msg.payload))
-
-    def _log(self, msg):
-        with self.lock:
-            self.logs.append(msg.msg)
-
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
-    def call(self, client, request, timeout=20.0):
-        assert client.wait_for_service(timeout_sec=20.0), f"{client.srv_name} not offered"
-        future = client.call_async(request)
-        end = time.time() + timeout
-        while not future.done() and time.time() < end:
-            time.sleep(0.05)
-        assert future.done(), f"no answer from {client.srv_name}"
-        return future.result()
-
-    def event(self, since, type_, timeout, **match):
-        return self.wait(lambda: next((e for e in self.events[since:] if e["type"] == type_
-                                       and all(e.get(k) == v for k, v in match.items())), None), timeout)
-
     def release(self):
-        return self.call(self.emergency, SetEmergency.Request(latch=False, reason="test"))
+        return self.set_emergency(False)
 
-    def drive(self, linear, seconds):
-        end = time.time() + seconds
-        while time.time() < end:
-            self.cmd_vel.publish(Twist(linear=Vector3(x=linear)))
-            time.sleep(0.1)
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
+    drive = SimProbe.cmd_vel_for
 
 
 def pids(proc_info, name):
@@ -220,11 +148,7 @@ def rss_mb(pid):
 
 
 def note(name):
-    try:
-        with open(os.path.join(DATA, name)) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
+    return read_json(os.path.join(DATA, name))
 
 
 class TestNx60iStack(unittest.TestCase):
@@ -367,7 +291,8 @@ class TestNx60iStack(unittest.TestCase):
         driver = running(proc_info, "xcore_driver_node")
         container, = running(proc_info, "component_container_isolated")
         os.kill(container, signal.SIGKILL)
-        new = p.wait(lambda: [pid for pid in running(proc_info, "component_container_isolated") if pid != container], 15)
+        new = p.wait(lambda: [pid for pid in running(proc_info, "component_container_isolated") if pid != container],
+                     15)
         self.assertTrue(new, "no new container")
         self.assertEqual(note("container_exit.json")["restart"], 1)
         self.assertEqual(running(proc_info, "xcore_driver_node"), driver)

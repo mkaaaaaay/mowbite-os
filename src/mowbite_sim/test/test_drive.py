@@ -8,26 +8,21 @@ import json
 import math
 import os
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
-import launch
-import launch_testing.actions
 import rclpy
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import MapStatus, MqttPublish, RobotPose
 from mowbite_msgs.srv import DriveTo, ReplaceMap, SetPose
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_srvs.srv import Trigger
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import LATCHED, SimProbe, distance_to, inside, sim_description, sim_files  # noqa: E402
+
 WORK = tempfile.mkdtemp(prefix="mowbite_drive_")
-STATE = os.path.join(WORK, "state.json")
-FLAGS = os.path.join(WORK, "flags.json")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+STATE, FLAGS, _, _ = sim_files(WORK)
 
 # Two lawns with a path between them; the mower starts at (0, 0) facing +x, on the first lawn.
 FRONT = [(-2, -2), (6, -2), (6, 5), (-2, 5)]
@@ -46,32 +41,7 @@ GARDEN = {
 
 
 def generate_test_description():
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": STATE, "flags": FLAGS,
-                          "log": os.path.join(WORK, "rx.jsonl"), "data_dir": os.path.join(WORK, "data"),
-                          "mqtt_port": "18831"}.items())
-    return launch.LaunchDescription([sim, launch_testing.actions.ReadyToTest()]), {}
-
-
-def inside(ring, x, y):
-    result = False
-    for i in range(len(ring)):
-        (ax, ay), (bx, by) = ring[i], ring[i - 1]
-        if (ay > y) != (by > y) and x < (bx - ax) * (y - ay) / (by - ay) + ax:
-            result = not result
-    return result
-
-
-def distance_to(ring, x, y):
-    """m from (x, y) to the closest edge of the ring."""
-    def to_edge(p, q):
-        ex, ey = q[0] - p[0], q[1] - p[1]
-        along = min(1.0, max(0.0, ((x - p[0]) * ex + (y - p[1]) * ey) / (ex * ex + ey * ey)))
-        return math.dist((x, y), (p[0] + along * ex, p[1] + along * ey))
-    return min(to_edge(ring[i - 1], ring[i]) for i in range(len(ring)))
+    return sim_description(WORK, 18831)
 
 
 def outside_by(x, y):
@@ -81,77 +51,20 @@ def outside_by(x, y):
     return min(distance_to(r, x, y) for r in (FRONT, BACK, PATH))
 
 
-class Probe:
+class Probe(SimProbe):
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("drive_probe", state=STATE, flags=FLAGS)
         self.status = None
         self.pose = None
-        self.events = []
-        self.track = []
-        self.node = rclpy.create_node("drive_probe")
-        self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
-        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
+        self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
+        self.node.create_subscription(RobotPose, "localization/pose", self._set("pose"), 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
         self.drive_to = self.node.create_client(DriveTo, "logic/drive_to")
         self.stop_drive = self.node.create_client(Trigger, "logic/stop_drive")
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-        threading.Thread(target=self._record, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
-
-    def _status(self, msg):
-        with self.lock:
-            self.status = msg
-
-    def _pose(self, msg):
-        with self.lock:
-            self.pose = msg
-
-    def _publish(self, msg):
-        if msg.topic != "events/json":
-            return
-        with self.lock:
-            self.events.append(json.loads(msg.payload))
-
-    def _record(self):
-        # The true pose of the simulated mower, five times a second.
-        while self.running:
-            truth = self.truth()
-            if truth:
-                with self.lock:
-                    self.track.append(truth)
-            time.sleep(0.2)
-
-    def truth(self):
-        try:
-            with open(STATE) as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return None
-
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
-    def call(self, client, request, timeout=60.0):
-        assert client.wait_for_service(timeout_sec=20.0), f"{client.srv_name} not offered"
-        future = client.call_async(request)
-        end = time.time() + timeout
-        while not future.done() and time.time() < end:
-            time.sleep(0.05)
-        assert future.done(), f"no answer from {client.srv_name}"
-        return future.result()
+        self.start()
+        self.spawn(self._record)
 
     def drive(self, x, y, heading=0.0, use_heading=False):
         request = DriveTo.Request()
@@ -159,18 +72,7 @@ class Probe:
         return self.call(self.drive_to, request)
 
     def drive_ended(self, since, timeout):
-        return self.wait(lambda: next((e for e in self.events[since:] if e["type"] == "DRIVE"
-                                       and e.get("phase") == "end"), None), timeout)
-
-    def flags(self, **values):
-        with open(FLAGS + ".tmp", "w") as f:
-            json.dump(values, f)
-        os.replace(FLAGS + ".tmp", FLAGS)
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
+        return self.event(since, "DRIVE", timeout, phase="end")
 
 
 class TestDrive(unittest.TestCase):

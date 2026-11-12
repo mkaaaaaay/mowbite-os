@@ -10,37 +10,30 @@ RTK lost, no room and the bumper.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_calibration.py
 """
+import functools
 import gzip
 import json
 import math
 import os
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
-import launch
-import launch_testing.actions
 import rclpy
 from geometry_msgs.msg import Twist
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import (CalibrationStatus, HardwareStatus, MapStatus, MqttPublish, RobotPose, RobotState,
                               RpcError, RpcMethods, RpcRequest, RpcResponse)
 from mowbite_msgs.srv import ReplaceMap, SetPose
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import HISTORY, LATCHED, SimProbe, last_time, log_entries, sim_description, sim_files  # noqa: E402
+
 WORK = tempfile.mkdtemp(prefix="mowbite_calibration_")
-STATE = os.path.join(WORK, "state.json")
-FLAGS = os.path.join(WORK, "flags.json")
-RX = os.path.join(WORK, "rx.jsonl")
-DATA = os.path.join(WORK, "data")
+STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "calibration.yaml")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-HISTORY = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 LAWN = [(-3.0, -3.0), (8.0, -3.0), (8.0, 3.0), (-3.0, 3.0)]
 SMALL = [(-1.0, -1.0), (2.0, -1.0), (2.0, 1.0), (-1.0, 1.0)]
@@ -62,36 +55,15 @@ def garden(lawn):
 
 
 def generate_test_description():
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": STATE, "flags": FLAGS, "log": RX,
-                          "data_dir": DATA, "mqtt_port": "18837", "extra_config": CONFIG}.items())
-    return launch.LaunchDescription([sim, launch_testing.actions.ReadyToTest()]), {}
+    return sim_description(WORK, 18837, extra_config=CONFIG)
 
 
 def cutter_on_since(since):
     """Cutter frames with a speed fake_tron got since its time since."""
-    out = []
-    try:
-        with open(RX) as f:
-            for line in f:
-                entry = json.loads(line)
-                if entry.get("t", 0) >= since and entry.get("cutter", 0) > 0:
-                    out.append(entry)
-    except OSError:
-        pass
-    return out
+    return [e for e in log_entries(RX, since) if e.get("cutter", 0) > 0]
 
 
-def sim_time():
-    try:
-        with open(RX) as f:
-            lines = f.readlines()
-    except OSError:
-        return 0.0
-    return json.loads(lines[-1])["t"] if lines else 0.0
+sim_time = functools.partial(last_time, RX)
 
 
 def recordings():
@@ -102,32 +74,28 @@ def recordings():
         return []
 
 
-class Probe:
+class Probe(SimProbe):
+    truth_tries = 5
+    service = SimProbe.call
+    rpc = SimProbe.rpc_outcome
+
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("calibration_probe", state=STATE, flags=FLAGS, log=RX)
         self.map_status = None
-        self.map = None
         self.pose = None
         self.robot = None
-        self.hw = None
         self.status = None
-        self.events = []
-        self.responses = {}
-        self.errors = {}
-        self.methods = {}
-        # Every command on hw/cmd_vel and calibration/cmd_vel, and whether the blade showed on.
+        # Every command on hw/cmd_vel and calibration/cmd_vel.
         self.commands = []
-        self.blade_on = False
-        self.node = rclpy.create_node("calibration_probe")
-        self.node.create_subscription(MapStatus, "map/status", self._map_status, LATCHED)
+        self.node.create_subscription(MapStatus, "map/status", self._set("map_status"), LATCHED)
         self.node.create_subscription(String, "map/json", self._map, LATCHED)
-        self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
-        self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
+        self.node.create_subscription(RobotPose, "localization/pose", self._set("pose"), 10)
+        self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
         self.node.create_subscription(HardwareStatus, "hw/status", self._hw, 10)
-        self.node.create_subscription(CalibrationStatus, "calibration/status", self._status, 10)
+        self.node.create_subscription(CalibrationStatus, "calibration/status", self._set("status"), 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
-        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
-        self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
+        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._result, 10)
+        self.node.create_subscription(RpcError, "bridge/rpc/error", self._failure, 10)
         self.node.create_subscription(RpcMethods, "bridge/rpc/methods", self._methods, HISTORY)
         self.node.create_subscription(Twist, "hw/cmd_vel", lambda m: self._command("hw", m), 50)
         self.node.create_subscription(Twist, "calibration/cmd_vel", lambda m: self._command("calibration", m), 50)
@@ -135,111 +103,11 @@ class Probe:
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
-        self.calls = 0
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
-
-    def _map_status(self, msg):
-        with self.lock:
-            self.map_status = msg
-
-    def _map(self, msg):
-        with self.lock:
-            self.map = json.loads(msg.data)
-
-    def _pose(self, msg):
-        with self.lock:
-            self.pose = msg
-
-    def _robot(self, msg):
-        with self.lock:
-            self.robot = msg
-
-    def _hw(self, msg):
-        with self.lock:
-            self.hw = msg
-            self.blade_on = self.blade_on or msg.blade_on
-
-    def _status(self, msg):
-        with self.lock:
-            self.status = msg
-
-    def _publish(self, msg):
-        if msg.topic != "events/json":
-            return
-        with self.lock:
-            self.events.append(json.loads(msg.payload))
-
-    def _response(self, msg):
-        with self.lock:
-            self.responses[msg.id] = json.loads(msg.result)
-
-    def _error(self, msg):
-        with self.lock:
-            self.errors[msg.id] = (msg.code, msg.message, json.loads(msg.data) if msg.data else None)
-
-    def _methods(self, msg):
-        with self.lock:
-            self.methods[msg.node_id] = list(msg.methods)
+        self.start()
 
     def _command(self, topic, msg):
         with self.lock:
             self.commands.append((time.time(), topic, msg.linear.x, msg.angular.z))
-
-    def truth(self):
-        for _ in range(5):
-            try:
-                with open(STATE) as f:
-                    return json.load(f)
-            except (OSError, ValueError):
-                time.sleep(0.05)
-        return None
-
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
-    def service(self, client, request, timeout=60.0):
-        assert client.wait_for_service(timeout_sec=20.0), f"{client.srv_name} not offered"
-        future = client.call_async(request)
-        end = time.time() + timeout
-        while not future.done() and time.time() < end:
-            time.sleep(0.05)
-        assert future.done(), f"no answer from {client.srv_name}"
-        return future.result()
-
-    def rpc(self, method, params=None, timeout=5.0):
-        """The answer, or the error as (code, message, data)."""
-        self.calls += 1
-        rid = f"calib_test_{self.calls}"
-        self.wait(lambda: self.rpc_pub.get_subscription_count() > 0)
-        self.rpc_pub.publish(RpcRequest(method=method, params=json.dumps(params) if params is not None else "",
-                                        id=rid))
-        return self.wait(lambda: (("ok", self.responses[rid]) if rid in self.responses else None)
-                         or (("error", self.errors[rid]) if rid in self.errors else None), timeout)
-
-    def act(self, action):
-        self.wait(lambda: self.action_pub.get_subscription_count() > 0)
-        self.action_pub.publish(String(data=action))
-
-    def event(self, since, type_, timeout, **match):
-        return self.wait(lambda: next((e for e in self.events[since:] if e["type"] == type_
-                                       and all(e.get(k) == v for k, v in match.items())), None), timeout)
-
-    def flags(self, **values):
-        with open(FLAGS + ".tmp", "w") as f:
-            json.dump(values, f)
-        os.replace(FLAGS + ".tmp", FLAGS)
 
     def replace(self, lawn):
         request = ReplaceMap.Request()
@@ -249,11 +117,8 @@ class Probe:
         assert self.wait(lambda: self.map and self.map["areas"]
                          and self.map["areas"][0]["outline"][0]["x"] == lawn[0][0], 10), "the map did not come"
 
-    def standing(self):
-        a = self.truth()
-        time.sleep(1.0)
-        b = self.truth()
-        return math.hypot(a["x"] - b["x"], a["y"] - b["y"]) < 0.01, (a, b)
+    def standing(self, tolerance=0.01):
+        return super().standing(tolerance)
 
     def ready(self, timeout=60.0):
         """calibration.check without problems, polled."""
@@ -265,11 +130,6 @@ class Probe:
                 return last[1]
             time.sleep(1.0)
         raise AssertionError(f"calibration.check never ok: {last}")
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
 
 
 class TestCalibration(unittest.TestCase):

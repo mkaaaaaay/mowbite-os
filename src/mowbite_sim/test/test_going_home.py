@@ -15,30 +15,23 @@ import json
 import math
 import os
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
-import launch
-import launch_testing.actions
 import rclpy
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import HardwareStatus, MapStatus, MqttPublish, RobotPose, RobotState, RpcError, RpcRequest
 from mowbite_msgs.msg import RpcResponse
 from mowbite_msgs.srv import ReplaceMap
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import LATCHED, SimProbe, sim_description, sim_files  # noqa: E402
+
 WORK = tempfile.mkdtemp(prefix="mowbite_going_home_")
-STATE = os.path.join(WORK, "state.json")
-FLAGS = os.path.join(WORK, "flags.json")
-RX = os.path.join(WORK, "rx.jsonl")
-DATA = os.path.join(WORK, "data")
+STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "going_home.yaml")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 START = "mower_logic:idle/start_mowing"
 ABORT_MOWING = "mower_logic:mowing/abort_mowing"
 P = "/mower_logic/"
@@ -67,26 +60,17 @@ with open(CONFIG, "w") as f:
 
 
 def generate_test_description():
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": STATE, "flags": FLAGS, "log": RX,
-                          "data_dir": DATA, "mqtt_port": "18843", "extra_config": CONFIG}.items())
-    return launch.LaunchDescription([sim, launch_testing.actions.ReadyToTest()]), {}
+    return sim_description(WORK, 18843, extra_config=CONFIG)
 
 
-class Probe:
+class Probe(SimProbe):
+    truth_tries = 5
+
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("going_home_probe", state=STATE, flags=FLAGS, log=RX)
         self.status = None
-        self.map = None
         self.pose = None
         self.robot = None
-        self.hw = None
-        self.events = []
-        self.answers = {}
-        self.node = rclpy.create_node("going_home_probe")
         self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
         self.node.create_subscription(String, "map/json", self._map, LATCHED)
         self.node.create_subscription(RobotPose, "localization/pose", self._set("pose"), 10)
@@ -98,98 +82,11 @@ class Probe:
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
-        self.rpc_count = 0
-        self.flag_values = {}
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
-
-    def _set(self, name):
-        def store(msg):
-            with self.lock:
-                setattr(self, name, msg)
-        return store
-
-    def _map(self, msg):
-        with self.lock:
-            self.map = json.loads(msg.data)
-
-    def _publish(self, msg):
-        if msg.topic != "events/json":
-            return
-        with self.lock:
-            self.events.append(json.loads(msg.payload))
-
-    def _response(self, msg):
-        with self.lock:
-            self.answers[msg.id] = {"result": json.loads(msg.result)}
-
-    def _error(self, msg):
-        with self.lock:
-            self.answers[msg.id] = {"error": {"code": msg.code, "message": msg.message,
-                                              "data": json.loads(msg.data) if msg.data else None}}
-
-    def truth(self):
-        for _ in range(5):
-            try:
-                with open(STATE) as f:
-                    return json.load(f)
-            except (OSError, ValueError):
-                time.sleep(0.05)
-        return None
-
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
-    def call(self, client, request, timeout=60.0):
-        assert client.wait_for_service(timeout_sec=20.0), f"{client.srv_name} not offered"
-        future = client.call_async(request)
-        end = time.time() + timeout
-        while not future.done() and time.time() < end:
-            time.sleep(0.05)
-        assert future.done(), f"no answer from {client.srv_name}"
-        return future.result()
-
-    def rpc(self, method, params=None, timeout=10.0):
-        self.wait(lambda: self.rpc_pub.get_subscription_count() > 0)
-        self.rpc_count += 1
-        rid = f"home-{self.rpc_count}"
-        self.rpc_pub.publish(RpcRequest(method=method, params=json.dumps(params) if params is not None else "",
-                                        id=rid))
-        return self.wait(lambda: self.answers.get(rid), timeout)
-
-    def act(self, action):
-        self.wait(lambda: self.action_pub.get_subscription_count() > 0)
-        self.action_pub.publish(String(data=action))
-
-    def event(self, since, type_, timeout, **match):
-        return self.wait(lambda: next((e for e in self.events[since:] if e["type"] == type_
-                                       and all(e.get(k) == v for k, v in match.items())), None), timeout)
-
-    def flags(self, **values):
-        self.flag_values = values
-        with open(FLAGS + ".tmp", "w") as f:
-            json.dump(values, f)
-        os.replace(FLAGS + ".tmp", FLAGS)
+        self.start()
 
     def set_params(self, **values):
         answer = self.rpc("params.set", {"params": {P + k: v for k, v in values.items()}})
         assert answer == {"result": {P + k: v for k, v in values.items()}}, answer
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
 
 
 class TestGoingHome(unittest.TestCase):

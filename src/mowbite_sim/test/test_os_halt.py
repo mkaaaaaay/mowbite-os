@@ -12,6 +12,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -20,14 +21,16 @@ import launch
 import launch_testing
 import launch_testing.actions
 import rclpy
-from ament_index_python.packages import get_package_prefix, get_package_share_directory
-from launch.actions import ExecuteProcess, IncludeLaunchDescription, TimerAction
+from ament_index_python.packages import get_package_share_directory
+from launch.actions import TimerAction
 from launch.events.process import ProcessExited
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import mosquitto, package_program, sim_stack  # noqa: E402
 
 MQTT_PORT = 18842
 WORK = tempfile.mkdtemp(prefix="mowbite_halt_")
-HEALTH = os.path.join(get_package_prefix("mowbite_bridge"), "lib", "mowbite_bridge", "mowbite_health")
+HEALTH = package_program("mowbite_bridge", "mowbite_health")
 with open(os.path.join(get_package_share_directory("mowbite_bridge"), "data_schema.json")) as f:
     IMAGE_SCHEMA = json.load(f)["schema"]
 NEWER = IMAGE_SCHEMA + 1
@@ -53,18 +56,8 @@ os.environ["MOWBITE_HALT_FILE"] = HALT
 
 
 def generate_test_description():
-    conf = os.path.join(WORK, "mosquitto.conf")
-    with open(conf, "w") as f:
-        f.write(f"listener {MQTT_PORT} 127.0.0.1\nallow_anonymous true\n")
-    mosquitto = ExecuteProcess(cmd=["mosquitto", "-c", conf], output="screen")
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": os.path.join(WORK, "state.json"),
-                          "flags": os.path.join(WORK, "flags.json"), "log": os.path.join(WORK, "rx.jsonl"),
-                          "data_dir": DATA, "mqtt_port": str(MQTT_PORT)}.items())
-    return launch.LaunchDescription([mosquitto, TimerAction(period=1.0, actions=[sim]),
+    return launch.LaunchDescription([mosquitto(WORK, MQTT_PORT),
+                                     TimerAction(period=1.0, actions=[sim_stack(WORK, MQTT_PORT, data_dir=DATA)]),
                                      launch_testing.actions.ReadyToTest()]), {}
 
 

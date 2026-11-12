@@ -9,43 +9,32 @@ Without it wheels and GNSS are ideal.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_full_run.py
 """
-import bisect
 import json
 import math
 import os
 import shutil
+import sys
 import tempfile
-import threading
 import time
 import unittest
 
-import launch
-import launch_testing.actions
 import rclpy
 from geometry_msgs.msg import Twist
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import MapStatus, MqttPublish, RobotPose, RpcRequest, RpcResponse
 from mowbite_msgs.srv import SetPose
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (LATCHED, REAL_FAULTS, SimProbe, estimate_at, pose_stamp, quantile,  # noqa: E402
+                        sim_description, sim_files, wrap)
+
 REAL = os.environ.get("MOWBITE_FULL_RUN") == "real"
-# fake_tron flags of the real variant: RTK about 1 cm rms, the fix 0.1 s late, wheels report 6 % too little, a wheel
-# below 0.05 m/s stands, the base turns on 0.395 m while the MCU counts 0.40 m, 0.01 rad of yaw per metre from slip.
-FAULTS = {"gnss_noise": 0.01, "gnss_delay": 0.1, "odom_scale": 0.94, "wheel_deadband": 0.05, "track": 0.395,
-          "yaw_drift": 0.01} if REAL else {}
 # Limits of the cross track error (m) of the base while the blade turns: median, 95 %, worst.
 LIMITS = (0.03, 0.08, 0.15) if REAL else (0.01, 0.03, 0.05)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_full_run_")
-STATE = os.path.join(WORK, "state.json")
-FLAGS = os.path.join(WORK, "flags.json")
-RX = os.path.join(WORK, "rx.jsonl")
-DATA = os.path.join(WORK, "data")
+STATE, FLAGS, _, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "full_run.yaml")
-LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 REC = "mower_logic:area_recording/"
 MOW = "mower_logic:mowing/"
 # The lawn the teleop drives around.
@@ -58,13 +47,7 @@ with open(CONFIG, "w") as f:
 
 
 def generate_test_description():
-    sim = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),
-        launch_arguments={"link": os.path.join(WORK, "mcu"), "gnss_link": os.path.join(WORK, "gnss"),
-                          "imu_link": os.path.join(WORK, "imu"), "state": STATE, "flags": FLAGS, "log": RX,
-                          "data_dir": DATA, "mqtt_port": "18834", "extra_config": CONFIG}.items())
-    return launch.LaunchDescription([sim, launch_testing.actions.ReadyToTest()]), {}
+    return sim_description(WORK, 18834, extra_config=CONFIG)
 
 
 def to_segment(x, y, a, b):
@@ -74,27 +57,19 @@ def to_segment(x, y, a, b):
     return math.hypot(x - (a[0] + along * ex), y - (a[1] + along * ey))
 
 
-def quantile(values, q):
-    ordered = sorted(values)
-    return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
+class Probe(SimProbe):
+    call_timeout = 30.0
+    faults = REAL_FAULTS if REAL else {}
 
-
-class Probe:
     def __init__(self):
-        self.lock = threading.Lock()
+        super().__init__("full_run_probe", state=STATE, flags=FLAGS)
         self.status = None
         self.pose = None
-        self.map = None
-        self.actions = {}
-        self.answers = {}
-        # (arrival time, event) and (read time, true pose) for the blade windows
-        self.events = []
-        self.track = []
+        # (read time, true pose) for the blade windows; self.events holds (arrival time, event)
         # (stamp, x, y, yaw) of localization/pose, and (write time, true pose, estimate then or None)
         self.estimates = []
         self.paired = []
-        self.node = rclpy.create_node("full_run_probe")
-        self.node.create_subscription(MapStatus, "map/status", self._status, LATCHED)
+        self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
         self.node.create_subscription(String, "map/json", self._map, LATCHED)
         self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
@@ -103,29 +78,13 @@ class Probe:
         self.teleop_pub = self.node.create_publisher(Twist, "bridge/teleop", 10)
         self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
-        self.running = True
-        threading.Thread(target=self._spin, daemon=True).start()
-        threading.Thread(target=self._record, daemon=True).start()
-
-    def _spin(self):
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.05)
-
-    def _status(self, msg):
-        with self.lock:
-            self.status = msg
-
-    def _map(self, msg):
-        with self.lock:
-            self.map = json.loads(msg.data)
+        self.start()
+        self.spawn(self._record)
 
     def _pose(self, msg):
         # The localization turns about z only.
         yaw = msg.heading
-        now = time.time()
-        stamp = msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec
-        if abs(stamp - now) > 0.5:
-            stamp = now
+        stamp = pose_stamp(msg)
         with self.lock:
             self.pose = (msg.x, msg.y, yaw, msg.position_accuracy,
                          msg.heading_valid)
@@ -142,19 +101,6 @@ class Probe:
         with self.lock:
             self.answers[msg.id] = json.loads(msg.result)
 
-    def estimate_at(self, t):
-        """The estimate with a valid heading at wall time t, linear between the two around it."""
-        with self.lock:
-            i = bisect.bisect_left(self.estimates, (t,))
-            if i == 0 or i >= len(self.estimates):
-                return None
-            a, b = self.estimates[i - 1], self.estimates[i]
-        if b[0] - a[0] > 0.2:
-            return None
-        f = (t - a[0]) / (b[0] - a[0])
-        turn = math.atan2(math.sin(b[3] - a[3]), math.cos(b[3] - a[3]))
-        return a[1] + f * (b[1] - a[1]), a[2] + f * (b[2] - a[2]), a[3] + f * turn
-
     def _record(self):
         last = None
         while self.running:
@@ -170,55 +116,17 @@ class Probe:
                 if written is not None:
                     # The newest estimate has to be past the moment of the truth before the two are paired.
                     time.sleep(0.06)
-                    estimate = self.estimate_at(written)
                     with self.lock:
-                        self.paired.append((written, truth, estimate))
+                        self.paired.append((written, truth, estimate_at(self.estimates, written)))
             time.sleep(0.05)
-
-    def truth(self):
-        try:
-            with open(STATE) as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return None
-
-    def wait(self, getter, timeout=10.0):
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                value = getter()
-            if value:
-                return value
-            time.sleep(0.05)
-        return None
-
-    def call(self, client, request, timeout=30.0):
-        assert client.wait_for_service(timeout_sec=20.0), f"{client.srv_name} not offered"
-        future = client.call_async(request)
-        end = time.time() + timeout
-        while not future.done() and time.time() < end:
-            time.sleep(0.05)
-        assert future.done(), f"no answer from {client.srv_name}"
-        return future.result()
 
     def rpc(self, method, params, id_, timeout=60.0):
-        self.wait(lambda: self.rpc_pub.get_subscription_count() > 0)
-        self.rpc_pub.publish(RpcRequest(method=method, params=json.dumps(params), id=id_))
-        return self.wait(lambda: self.answers.get(id_), timeout)
-
-    def act(self, action):
-        self.wait(lambda: self.action_pub.get_subscription_count() > 0)
-        self.action_pub.publish(String(data=action))
+        return super().rpc(method, params, timeout, rid=id_)
 
     def event(self, since, type_, timeout, **match):
         """The first event of that type since index since whose fields match."""
         return self.wait(lambda: next((e for _, e in self.events[since:] if e["type"] == type_
                                        and all(e.get(k) == v for k, v in match.items())), None), timeout)
-
-    def flags(self, **values):
-        with open(FLAGS + ".tmp", "w") as f:
-            json.dump({**FAULTS, **values}, f)
-        os.replace(FLAGS + ".tmp", FLAGS)
 
     def twist(self, linear, angular):
         msg = Twist()
@@ -233,7 +141,7 @@ class Probe:
             distance = math.hypot(x - px, y - py)
             if distance < 0.03:
                 break
-            error = math.atan2(math.sin(math.atan2(y - py, x - px) - yaw), math.cos(math.atan2(y - py, x - px) - yaw))
+            error = wrap(math.atan2(y - py, x - px) - yaw)
             if abs(error) > 0.15:
                 self.twist(0.0, math.copysign(0.3, error))
             else:
@@ -247,12 +155,6 @@ class Probe:
         """True once the last BLADES event says off (the blade may have stopped before, on a stretch without mowing)."""
         last = next((e for _, e in reversed(self.events) if e["type"] == "BLADES"), None)
         return last is not None and not last["enabled"]
-
-    def standing(self):
-        a = self.truth()
-        time.sleep(1.0)
-        b = self.truth()
-        return math.hypot(a["x"] - b["x"], a["y"] - b["y"]) < 0.02, (a, b)
 
     def blade_windows(self, end):
         """(on, off) times of the blade from the BLADES events, the last one open until end."""
@@ -270,11 +172,6 @@ class Probe:
         if on is not None:
             windows.append((on, end))
         return windows
-
-    def stop(self):
-        self.running = False
-        time.sleep(0.3)
-        self.node.destroy_node()
 
 
 class TestFullRun(unittest.TestCase):
