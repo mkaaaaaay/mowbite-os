@@ -130,6 +130,24 @@ ColorGains GrayWorld(const FrameStats& stats) {
   return gains;
 }
 
+void ShiftChroma(uint8_t* uv, uint32_t width, uint32_t height, uint32_t stride, int du, int dv) {
+  if (du == 0 && dv == 0) return;
+  uint8_t u_map[256];
+  uint8_t v_map[256];
+  for (int i = 0; i < 256; i++) {
+    u_map[i] = Clamp8(i - du);
+    v_map[i] = Clamp8(i - dv);
+  }
+  const uint32_t pairs = width / 2;
+  for (uint32_t line = 0; line < height / 2; line++) {
+    uint8_t* p = uv + static_cast<size_t>(line) * stride;
+    for (uint32_t i = 0; i < pairs; i++) {
+      p[2 * i] = u_map[p[2 * i]];
+      p[2 * i + 1] = v_map[p[2 * i + 1]];
+    }
+  }
+}
+
 void ConvertFrame(const Nv12View& frame, const Placement& p, const ColorGains& gains, bool swap_rb,
                   uint32_t out_width, uint32_t out_height, std::vector<uint8_t>& rgb) {
   rgb.resize(static_cast<size_t>(out_width) * out_height * 3);

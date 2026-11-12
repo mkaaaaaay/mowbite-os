@@ -1,6 +1,7 @@
 #include "tron_vision/v4l2_camera.h"
 
 #include <fcntl.h>
+#include <linux/dma-buf.h>
 #include <linux/videodev2.h>
 #include <poll.h>
 #include <sys/ioctl.h>
@@ -483,6 +484,20 @@ void V4l2Capture::Release() {
   }
   Queue(static_cast<uint32_t>(held_));
   held_ = -1;
+}
+
+bool V4l2Capture::SyncForCpu(uint32_t index, bool start, std::string& error) {
+  if (index >= exported_.size()) {
+    error = "buffer " + std::to_string(index) + " is not exported";
+    return false;
+  }
+  dma_buf_sync sync{};
+  sync.flags = (start ? DMA_BUF_SYNC_START : DMA_BUF_SYNC_END) | DMA_BUF_SYNC_RW;
+  if (device_->Ioctl(exported_[index], DMA_BUF_IOCTL_SYNC, &sync) < 0) {
+    error = ErrnoText("sync buffer");
+    return false;
+  }
+  return true;
 }
 
 }  // namespace tron_vision

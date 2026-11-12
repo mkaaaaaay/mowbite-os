@@ -21,6 +21,8 @@ struct TronCameraConfig {
   uint32_t width = 1920;
   uint32_t height = 1080;
   uint32_t buffers = 4;
+  // Also hands out the buffers as dma-buf, for the encoder.
+  bool export_buffers = false;
   // Vertical blanking in lines while streaming; 0 leaves the sensor as it is.
   int vertical_blanking = 0;
   // Other processes that have a device open; Start refuses sensor and video node while one does. Empty: no check.
@@ -41,12 +43,16 @@ class TronCamera : public Camera {
   int Next(int timeout_ms, Nv12View& frame, std::string& error) override;
   // Before Start the setting is kept and applied there.
   bool SetExposure(const ExposureSetting& setting, std::string& error) override;
+  const CapturedFrame* Captured() const override;
+  bool ShiftChroma(int du, int dv, std::string& error) override;
 
  private:
   TronCameraConfig config_;
   SensorControls sensor_;
   V4l2Capture capture_;
   ExposureSetting pending_;
+  CapturedFrame last_;
+  bool have_last_ = false;
 };
 
 }  // namespace tron_vision

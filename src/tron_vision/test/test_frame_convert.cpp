@@ -119,5 +119,30 @@ TEST(MeasureFrame, MeansOverTheRegion) {
   EXPECT_FLOAT_EQ(s.v, 150.0F);
 }
 
+TEST(ShiftChroma, MovesUAndVWithinTheirRange) {
+  test::Nv12Frame f(8, 4, 50, 100, 250);
+  uint8_t* uv = f.data.data() + 8 * 4;
+  ShiftChroma(uv, 8, 4, 8, -20, 10);
+  const FrameStats s = MeasureFrame(test::View(f), PlaceFrame(8, 4, Fit::kPad, 8, 4));
+  EXPECT_FLOAT_EQ(s.y, 50.0F);
+  EXPECT_FLOAT_EQ(s.u, 120.0F);
+  EXPECT_FLOAT_EQ(s.v, 240.0F);
+  ShiftChroma(uv, 8, 4, 8, 200, -100);
+  EXPECT_EQ(uv[0], 0);
+  EXPECT_EQ(uv[1], 255);
+  EXPECT_EQ(uv[14], 0);
+  EXPECT_EQ(uv[15], 255);
+}
+
+TEST(ShiftChroma, LeavesThePaddingOfALine) {
+  std::vector<uint8_t> uv(2 * 12, 128);
+  ShiftChroma(uv.data(), 8, 4, 12, 28, 0);
+  EXPECT_EQ(uv[0], 100);
+  EXPECT_EQ(uv[1], 128);
+  EXPECT_EQ(uv[8], 128);
+  EXPECT_EQ(uv[12], 100);
+  EXPECT_EQ(uv[20], 128);
+}
+
 }  // namespace
 }  // namespace tron_vision

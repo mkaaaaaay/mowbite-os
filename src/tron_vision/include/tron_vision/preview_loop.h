@@ -9,6 +9,7 @@
 #include "tron_vision/crash_guard.h"
 #include "tron_vision/exposure.h"
 #include "tron_vision/frame_convert.h"
+#include "tron_vision/h264_stream.h"
 #include "tron_vision/preview.h"
 #include "tron_vision/vision_loop.h"
 
@@ -34,6 +35,12 @@ struct PreviewLoopConfig {
   std::string statm = "/proc/self/statm";
   double check_s = 10.0;
   PreviewConfig preview;
+  // H.264 for the client of the RTSP server, with these settings; the camera exports its buffers then.
+  EncoderSettings encoder;
+  // Failures of the encoder before the camera stays with JPEG until the process restarts.
+  int max_encoder_failures = 3;
+  // Wait for an RTSP client per step while the camera does not stream.
+  int idle_wait_ms = 200;
 };
 
 enum class PreviewState {
@@ -54,15 +61,27 @@ struct PreviewStatus {
   std::string detail;
   ExposureSetting exposure;
   ColorGains display_gains;
+  // H.264: prepared and not given up, and the stream of the last second.
+  bool video = false;
+  double fps = 0.0;
+  double kbps = 0.0;
+  double encode_ms = 0.0;
+  // Chroma shift of the gray world for the H.264 picture.
+  int shift_u = 0;
+  int shift_v = 0;
   int exit_code = kExitNone;
 };
 
 // A camera that only shows a live picture, without ROS: it streams only while a viewer wants pictures and for
-// hold_s after, with its own exposure and white balance. The caller calls SetWanted() and Step() in a loop; Step()
-// blocks at most until the next frame deadline and returns false once the process has to end (Status().exit_code).
+// hold_s after, with its own exposure and white balance. Pictures go out as JPEG and, with a stream, as H.264 to the
+// client of its RTSP server, which is a viewer too. The caller calls SetWanted() and Step() in a loop; Step() blocks
+// at most until the next frame deadline (or the idle wait of the stream) and returns false once the process has to
+// end (Status().exit_code).
 class PreviewLoop {
  public:
-  PreviewLoop(PreviewLoopConfig config, Camera& camera, CrashGuard& guard, std::function<double()> now);
+  // `stream` may be null: JPEG only.
+  PreviewLoop(PreviewLoopConfig config, Camera& camera, CrashGuard& guard, std::function<double()> now,
+              H264Stream* stream = nullptr);
   ~PreviewLoop();
   PreviewLoop(const PreviewLoop&) = delete;
   PreviewLoop& operator=(const PreviewLoop&) = delete;
@@ -86,6 +105,10 @@ class PreviewLoop {
   void StopStream(PreviewState state, const std::string& detail);
   void EndDemand();
   void OnFrame(const Nv12View& frame, double now);
+  // The H.264 side of a step: prepares, offers or withdraws the stream, and ends it without a client.
+  void StepVideo(double now);
+  void SendVideo();
+  void VideoFailed(const std::string& detail);
   bool CheckBudget(double now);
   void Set(PreviewState state, const std::string& detail);
 
@@ -93,6 +116,7 @@ class PreviewLoop {
   Camera& camera_;
   CrashGuard& guard_;
   std::function<double()> now_;
+  H264Stream* stream_;
   ThermalGate thermal_;
   PreviewStatus status_;
   Preview preview_;
@@ -101,6 +125,8 @@ class PreviewLoop {
   bool streaming_ = false;
   int attempts_ = 0;
   double last_wanted_ = -1.0;
+  // Of the JPEG pictures alone; the RTSP client wants none.
+  double last_jpeg_wanted_ = -1.0;
   double stream_start_ = 0.0;
   double last_frame_ = 0.0;
   double next_retry_ = 0.0;
@@ -108,6 +134,11 @@ class PreviewLoop {
   int frames_since_exposure_ = 0;
   float gain_r_ = 1.0F;
   float gain_b_ = 1.0F;
+  float shift_u_ = 0.0F;
+  float shift_v_ = 0.0F;
+  bool offered_ = false;
+  int encoder_failures_ = 0;
+  double next_prepare_ = 0.0;
 };
 
 }  // namespace tron_vision

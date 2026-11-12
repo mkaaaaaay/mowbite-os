@@ -2,6 +2,7 @@
 #define TRON_VISION_FAKE_VIDEO_DEVICE_H
 
 #include <fcntl.h>
+#include <linux/dma-buf.h>
 #include <linux/videodev2.h>
 
 #include <algorithm>
@@ -43,6 +44,11 @@ class FakeVideoDevice : public VideoDevice {
 
   int Ioctl(int fd, unsigned long request, void* arg) override {
     requests.push_back(request);
+    if (request == DMA_BUF_IOCTL_SYNC) {
+      if (fd < kFirstExportFd || fds.count(fd) == 0) return Error(EBADF);
+      syncs.emplace_back(fd, static_cast<dma_buf_sync*>(arg)->flags);
+      return 0;
+    }
     if (fd != kNodeFd) return Error(EBADF);
     switch (request) {
       case VIDIOC_QUERYCAP: {
@@ -227,6 +233,8 @@ class FakeVideoDevice : public VideoDevice {
 
   std::vector<std::string> opened;
   std::vector<unsigned long> requests;
+  // fd and flags of each DMA_BUF_IOCTL_SYNC.
+  std::vector<std::pair<int, uint64_t>> syncs;
   std::set<int> fds;
   std::vector<std::vector<uint8_t>> memory;
   std::deque<uint32_t> queued;

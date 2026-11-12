@@ -59,6 +59,10 @@ FrameStats MeasureFrame(const Nv12View& frame, const Placement& p);
 // Gray world: gains that bring the mean color to gray, each within 0.5..3.
 ColorGains GrayWorld(const FrameStats& stats);
 
+// Gray world for a picture that stays NV12: the chroma plane (width bytes of interleaved U and V per line, height / 2
+// lines) moves by -du and -dv, each value held within 0..255.
+void ShiftChroma(uint8_t* uv, uint32_t width, uint32_t height, uint32_t stride, int du, int dv);
+
 // RGB, 3 bytes per pixel, out_width * out_height; outside the placed area the pad gray. Luma bilinear, chroma
 // nearest, BT.601 limited range.
 void ConvertFrame(const Nv12View& frame, const Placement& p, const ColorGains& gains, bool swap_rb,

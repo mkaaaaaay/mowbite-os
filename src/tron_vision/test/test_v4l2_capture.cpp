@@ -125,6 +125,23 @@ TEST_P(V4l2CaptureTest, Nv12WithoutExport) {
   EXPECT_TRUE(device.OnlyRequests(kAllowed));
 }
 
+TEST_P(V4l2CaptureTest, SyncsAnExportedBufferForTheCpu) {
+  device.stride = 1280;
+  device.buffer_bytes = 1280 * 720 * 3 / 2;
+  V4l2Capture capture(&device);
+  ASSERT_TRUE(capture.Open("/dev/video44", {1280, 720, PixelFormat::kNv12, 4, true}, error)) << error;
+  ASSERT_TRUE(capture.Start(error));
+  device.Push(9, 0);
+  CapturedFrame frame;
+  ASSERT_EQ(capture.Next(0, frame, error), 1);
+  ASSERT_TRUE(capture.SyncForCpu(frame.index, true, error)) << error;
+  ASSERT_TRUE(capture.SyncForCpu(frame.index, false, error)) << error;
+  EXPECT_EQ(device.syncs, (std::vector<std::pair<int, uint64_t>>{{200, DMA_BUF_SYNC_START | DMA_BUF_SYNC_RW},
+                                                                  {200, DMA_BUF_SYNC_END | DMA_BUF_SYNC_RW}}));
+  EXPECT_FALSE(capture.SyncForCpu(4, true, error));
+  EXPECT_EQ(error, "buffer 4 is not exported");
+}
+
 // The rear camera: MJPEG with the stride 0 and frames as long as the driver says; empty ones are dropped.
 TEST_P(V4l2CaptureTest, MjpegFramesOfTheirOwnLength) {
   device.stride = 0;

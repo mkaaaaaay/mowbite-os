@@ -130,6 +130,9 @@ class V4l2Capture {
   // Waits up to timeout_ms for a full frame: 1 with `frame` valid until Release(), 0 on timeout, -1 on error.
   int Next(int timeout_ms, CapturedFrame& frame, std::string& error);
   void Release();
+  // Cache sync of the dma-buf of a buffer around a write by the CPU, so that a reader of the dma-buf sees it: `start`
+  // before the write, then once more after. Only with exported buffers.
+  bool SyncForCpu(uint32_t index, bool start, std::string& error);
 
   // dma-buf of each buffer by index; empty unless exported. They stay open until Close().
   const std::vector<int>& ExportedBuffers() const {

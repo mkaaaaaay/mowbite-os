@@ -5,6 +5,8 @@
 #include <memory>
 #include <string>
 
+#include "fake_encoder.h"
+#include "rtsp_test_client.h"
 #include "test_util.h"
 #include "tron_vision/preview_loop.h"
 
@@ -49,11 +51,19 @@ class FakeCamera : public Camera {
       frame_.data[i + 1] = v;
     }
     f = test::View(frame_);
+    captured_.timestamp_us = static_cast<int64_t>(clock_ * 1e6);
     frames++;
     return 1;
   }
   bool SetExposure(const ExposureSetting& s, std::string&) override {
     setting = s;
+    return true;
+  }
+  const CapturedFrame* Captured() const override {
+    return exported && streaming ? &captured_ : nullptr;
+  }
+  bool ShiftChroma(int du, int dv, std::string&) override {
+    shifts.emplace_back(du, dv);
     return true;
   }
 
@@ -67,10 +77,13 @@ class FakeCamera : public Camera {
   uint8_t u = 128;
   uint8_t v = 128;
   ExposureSetting setting;
+  bool exported = false;
+  std::vector<std::pair<int, int>> shifts;
 
  private:
   double& clock_;
   test::Nv12Frame frame_;
+  CapturedFrame captured_{0, nullptr, 0, kWidth, 0, 0, 200};
 };
 
 struct Rig {
@@ -79,8 +92,29 @@ struct Rig {
     config.statm = tmp.Write("statm", "30000 5000 900 1 0 20000 0\n");
   }
   PreviewLoop& Loop() {
-    if (!loop) loop = std::make_unique<PreviewLoop>(config, camera, guard, [this] { return Now(); });
+    if (!loop) loop = std::make_unique<PreviewLoop>(config, camera, guard, [this] { return Now(); }, stream.get());
     return *loop;
+  }
+  // H.264 for an RTSP client on any free port, from an encoder of the test.
+  void WithVideo() {
+    RtspConfig rtsp;
+    rtsp.port = 0;
+    rtsp.path = "oa_right";
+    server = std::make_unique<RtspServer>(rtsp, [this] { return Now(); });
+    std::string error;
+    ASSERT_TRUE(server->Listen(error)) << error;
+    stream = std::make_unique<H264Stream>(encoder, *server, 0.5, [this] { return Now(); });
+    camera.exported = true;
+    config.idle_wait_ms = 5;
+    config.encoder.format = PixelFormat::kNv12;
+  }
+  std::string Ask(const test::Client& client, const std::string& request) {
+    client.Send(request);
+    Run(0.3);
+    return client.Receive();
+  }
+  std::string Url(const std::string& rest = "") const {
+    return "rtsp://127.0.0.1:" + std::to_string(server->Port()) + "/oa_right" + rest;
   }
   // The clock of the loop is the camera time alone, so the load of the machine changes no result.
   double Now() const {
@@ -105,6 +139,9 @@ struct Rig {
   FakeCamera camera{clock};
   CrashGuard guard{tmp.Path() + "/vision", tmp.Path() + "/crash", tmp.Write("boot_id", "boot-1\n")};
   PreviewLoopConfig config;
+  test::FakeEncoder encoder{clock};
+  std::unique_ptr<RtspServer> server;
+  std::unique_ptr<H264Stream> stream;
   std::unique_ptr<PreviewLoop> loop;
 };
 
@@ -282,6 +319,61 @@ TEST(PreviewLoop, ExposureAndWhiteBalanceFollowTheScene) {
   EXPECT_EQ(rig.Loop().Status().exposure.gain, rig.camera.setting.gain);
   EXPECT_LT(rig.Loop().Status().display_gains.r, 256);
   EXPECT_GT(rig.Loop().Status().display_gains.b, 256);
+}
+
+// The RTSP client is a viewer: the camera starts for it, its frames go out as H.264 with the chroma shift of the
+// gray world, and the encoder closes when it leaves.
+TEST(PreviewLoop, VideoForTheRtspClient) {
+  Rig rig;
+  rig.WithVideo();
+  rig.camera.u = 100;
+  rig.Run(1.0);
+  EXPECT_TRUE(rig.Loop().Status().video);
+  EXPECT_EQ(rig.camera.starts, 0);
+  EXPECT_EQ(rig.encoder.opens, 1);
+  EXPECT_FALSE(rig.encoder.is_open);
+  {
+    test::Client client(rig.server->Port());
+    ASSERT_NE(rig.Ask(client, "DESCRIBE " + rig.Url() + " RTSP/1.0\r\nCSeq: 1\r\n\r\n").find("200 OK"),
+              std::string::npos);
+    const std::string setup = rig.Ask(client, "SETUP " + rig.Url("/trackID=0") +
+                                                  " RTSP/1.0\r\nCSeq: 2\r\nTransport: RTP/AVP/TCP;interleaved=0-1\r\n\r\n");
+    const std::string session = test::SessionOf(setup);
+    ASSERT_FALSE(session.empty()) << setup;
+    client.Send("PLAY " + rig.Url("/") + " RTSP/1.0\r\nCSeq: 3\r\nSession: " + session + "\r\n\r\n");
+    rig.Run(2.0);
+    EXPECT_EQ(rig.camera.starts, 1);
+    EXPECT_EQ(rig.State(), PreviewState::kRunning);
+    EXPECT_EQ(rig.encoder.opens, 2);
+    EXPECT_TRUE(rig.encoder.is_open);
+    EXPECT_GT(rig.Loop().Status().fps, 10.0);
+    EXPECT_GT(rig.stream->Frames(), 20U);
+    ASSERT_FALSE(rig.camera.shifts.empty());
+    EXPECT_NEAR(rig.camera.shifts.back().first, -28, 1);
+    EXPECT_EQ(rig.camera.shifts.back().second, 0);
+    // No JPEG without a subscriber of the pictures.
+    EXPECT_EQ(rig.Loop().GetPreview().Count(), 0U);
+    EXPECT_NE(client.Receive().find('$'), std::string::npos);
+  }
+  rig.Run(0.5);
+  EXPECT_FALSE(rig.encoder.is_open);
+  rig.Run(3.0);
+  EXPECT_FALSE(rig.camera.streaming);
+  EXPECT_EQ(rig.State(), PreviewState::kOff);
+}
+
+// An encoder that keeps failing leaves the camera with JPEG.
+TEST(PreviewLoop, GivesUpTheVideoAfterThreeFailures) {
+  Rig rig;
+  rig.WithVideo();
+  rig.encoder.fail_open = true;
+  rig.Run(20.0);
+  EXPECT_FALSE(rig.Loop().Status().video);
+  EXPECT_EQ(rig.encoder.opens, 3);
+  EXPECT_EQ(rig.Loop().Status().detail, "video: mpp_init -1002");
+  test::Client client(rig.server->Port());
+  EXPECT_NE(rig.Ask(client, "DESCRIBE " + rig.Url() + " RTSP/1.0\r\nCSeq: 1\r\n\r\n").find("503"),
+            std::string::npos);
 }
 
 }  // namespace

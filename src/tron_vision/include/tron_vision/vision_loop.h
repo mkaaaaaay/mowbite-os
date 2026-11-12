@@ -14,6 +14,7 @@
 #include "tron_vision/model_check.h"
 #include "tron_vision/npu_model.h"
 #include "tron_vision/preview.h"
+#include "tron_vision/v4l2_camera.h"
 #include "tron_vision/yolo_decode.h"
 
 namespace tron_vision {
@@ -27,6 +28,17 @@ class Camera {
   // As V4l2Capture::Next; the frame stays valid until the next call or Stop().
   virtual int Next(int timeout_ms, Nv12View& frame, std::string& error) = 0;
   virtual bool SetExposure(const ExposureSetting& setting, std::string& error) = 0;
+  // The buffer of the frame of the last Next() for a reader of its dma-buf; nullptr unless the camera exports them.
+  virtual const CapturedFrame* Captured() const {
+    return nullptr;
+  }
+  // ShiftChroma on that frame in place, between the cache syncs of its dma-buf.
+  virtual bool ShiftChroma(int du, int dv, std::string& error) {
+    (void)du;
+    (void)dv;
+    error = "the camera does not export its frames";
+    return false;
+  }
 };
 
 struct VisionConfig {
