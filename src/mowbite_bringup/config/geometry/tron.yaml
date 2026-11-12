@@ -19,8 +19,8 @@ mowbite_logic:
       # The centre of the blade 0.23 m ahead of the axle (measured by the user), none to the side.
       blade_ahead: 0.23
       blade_offset: 0.0
-      # The GPS antenna, measured on the device in phase 7 (until then at base_link).
-      antenna_x: 0.0
+      # The GPS antenna 0.10 m ahead of the axle: a first value, measured on the device in phase 7.
+      antenna_x: 0.10
       antenna_y: 0.0
       # 0.395 m between the middles of the drive wheels (the MCU computes with 0.40 m); the calibration drive measures
       # the one that acts.
