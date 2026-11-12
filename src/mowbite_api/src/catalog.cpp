@@ -263,7 +263,7 @@ const std::vector<Field>& RobotState() {
       Number("current_action_progress", "", "Always 0, kept for the app of OpenMower"),
       Text("current_state", "State of the logic: IDLE, MOWING, DOCKING, UNDOCKING, AREA_RECORDING and the like"),
       Text("current_sub_state", "What the state does right now, empty for nothing in particular"),
-      Integer("current_area", "While mowing the index of the area in the plan, otherwise -1"),
+      Integer("current_area", "While mowing the index of the area among the mowing areas of the map, otherwise -1"),
       Integer("current_path", "While mowing the index of the path in the plan of the area, otherwise -1"),
       Integer("current_path_index", "While mowing the index of the pose in the path, otherwise -1"),
       Integer("task_index", "While mowing the place of the area in the list of the job from 0, otherwise -1"),
@@ -384,8 +384,10 @@ const std::vector<Command>& Commands() {
             "EMERGENCY_RESET_REFUSED", {{"mower_logic/reset_emergency"}}),
       Logic("mowing.start", "Starts or continues the job of mowing from IDLE",
             {Rows("tasks",
-                  "The areas of the job in this order; the list of the open job continues it, another list starts a "
-                  "new one. Without it every active mowing area. Unknown, twice or empty: -32602 with field tasks",
+                  "The areas of the job in this order; an inactive one is passed over. The list of the open job "
+                  "continues it, another list starts a new one: a caller always sends the whole list of its plan, a "
+                  "shorter one is another job. Without it every active mowing area. Unknown, twice or empty: -32602 "
+                  "with field tasks",
                   {Text("area_id", "Id of a mowing area of the map")}, false),
              Bool("restart", "True starts a new job even with the list of the open one", false),
              {"areas", Type::kArray, "", false,
@@ -747,8 +749,8 @@ const std::vector<Method>& Methods() {
       {"update.check", "mowbite_host", "Looks for bundles in the origins now (the inbox), as it does every 6 h",
        UpdateParams({}), UpdateStatus(), kHostOffered},
       {"update.set_auto", "mowbite_host",
-       "Switches the automatic update on or off and sets its window; it needs a sure clock and an app as new as "
-       "min_app",
+       "Switches the automatic update on or off and sets its window; it needs an app as new as min_app. It takes "
+       "the switch also without a sure clock, only the update in the window waits for one",
        UpdateParams(Auto(false)),
        UpdateStatus(), kHostOffered},
       {"host.restart_os", "mowbite_host",

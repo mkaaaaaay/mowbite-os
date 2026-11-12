@@ -798,7 +798,7 @@ ReasonEntry PlannerHome(const std::string& code) {
   return WithTexts(R(code, "warning", "user"),
                    {{"de",
                      {"Planer antwortet nicht",
-                      "Der Planer hat beim Mähen nicht geantwortet. Der Mäher fährt zur Ladestation, der Auftrag "
+                      "Der Planer hat beim Mähen nicht geantwortet. Der Mäher fährt zum Dock, der Auftrag "
                       "bleibt erhalten.",
                       "Mähen später wieder starten. Bleibt es dabei, MowBite OS neu starten."}},
                     {"en",
@@ -1361,8 +1361,8 @@ std::vector<ReasonEntry> UpdateReasons() {
                      "Nichts zu tun, oder die Arbeit beenden."},
                     {"Mower working", "The update waits until the mower is idle.", "Nothing to do, or end the work."}),
           ForUpdate(R("NO_DOCK_CONTACT", "warning", "auto"),
-                    {"Nicht in der Station", "Das Update wartet, bis der Mäher auf den Ladekontakten steht.",
-                     "Den Mäher in die Station fahren."},
+                    {"Nicht im Dock", "Das Update wartet, bis der Mäher auf den Ladekontakten steht.",
+                     "Den Mäher ins Dock fahren."},
                     {"Not in the station", "The update waits until the mower stands on the charging contacts.",
                      "Drive the mower into the station."}),
           R("NO_HOLD", "warning", "auto"),
