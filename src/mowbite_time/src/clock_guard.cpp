@@ -10,6 +10,8 @@ namespace mowbite_time {
 namespace {
 
 constexpr double kDay = 86400.0;
+// NTP_PHASE_LIMIT of the kernel, us.
+constexpr long kMaxErrorUnsynced = 16000000;
 
 // Distance of two times of day (s), across midnight.
 double DayDistance(double a, double b) {
@@ -46,15 +48,15 @@ bool ClockGuard::RtcHolds(double wall) const {
          wall <= *start_.synced_at + kRtcTrust;
 }
 
-bool ClockSynchronized(int state, int status) {
-  return state != -1 && state != TIME_ERROR && (status & STA_UNSYNC) == 0;
+bool ClockSynchronized(int state, long maxerror_us) {
+  return state != -1 && maxerror_us < kMaxErrorUnsynced;
 }
 
 bool SystemClockSynchronized() {
   struct timex tx {};
   tx.modes = 0;
   const int state = adjtimex(&tx);
-  return ClockSynchronized(state, tx.status);
+  return ClockSynchronized(state, tx.maxerror);
 }
 
 }  // namespace mowbite_time

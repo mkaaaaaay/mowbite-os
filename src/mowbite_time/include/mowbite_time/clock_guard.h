@@ -25,8 +25,8 @@ struct ClockStart {
   std::optional<double> synced_at;
 };
 
-// One look at the clocks (s): monotonic, wall (unix), whether the kernel counts the clock as synchronized now, and the
-// time of day (UTC) of the GNSS receiver while its fix is fresh.
+// One look at the clocks (s): monotonic, wall (unix), whether a time service set the clock lately (ClockSynchronized),
+// and the time of day (UTC) of the GNSS receiver while its fix is fresh.
 struct ClockProbe {
   double mono = 0;
   double wall = 0;
@@ -41,11 +41,11 @@ struct ClockVerdict {
   bool operator!=(const ClockVerdict& other) const { return !(*this == other); }
 };
 
-// Whether the wall clock can be trusted for date, weekday and sun. Safe while the kernel is synchronized (a jump then
-// is the correction itself); after a synchronization while the clock has not jumped since; never synchronized since
-// the start only with clock.rtc, when the kernel took the clock from the real-time clock, it lies within kRtcTrust
-// after synced_at and has not jumped. A GNSS time of day off by more than kClockTolerance makes each of them unsafe until
-// the two agree again.
+// Whether the wall clock can be trusted for date, weekday and sun. Safe while a time service set the clock lately (a
+// jump then is the correction itself); after a synchronization while the clock has not jumped since; never synchronized
+// since the start only with clock.rtc, when the kernel took the clock from the real-time clock, it lies within
+// kRtcTrust after synced_at and has not jumped. A GNSS time of day off by more than kClockTolerance makes each of them
+// unsafe until the two agree again.
 class ClockGuard {
  public:
   explicit ClockGuard(const ClockStart& start) : start_(start) {}
@@ -65,9 +65,11 @@ class ClockGuard {
   bool gnss_mismatch_ = false;
 };
 
-// Whether the kernel counts the system clock as synchronized, from the state and status adjtimex returns: neither
-// TIME_ERROR nor STA_UNSYNC, and no error (-1).
-bool ClockSynchronized(int state, int status);
+// Whether the system clock was set by a time service lately, from what adjtimex returns: no error (-1) and a maximum
+// error (us) below the 16 s the kernel starts with, sets on every manual setting and grows to within about 9 h
+// without a service. STA_UNSYNC and TIME_ERROR do not count: timesyncd sets them on purpose where the real-time clock
+// keeps local time.
+bool ClockSynchronized(int state, long maxerror_us);
 // The same for this machine; adjtimex only reads (modes 0), which needs no rights.
 bool SystemClockSynchronized();
 

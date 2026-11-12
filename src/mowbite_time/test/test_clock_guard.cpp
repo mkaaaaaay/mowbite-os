@@ -106,12 +106,13 @@ TEST(ClockGuard, TheTimeOfDayAcrossMidnight) {
   EXPECT_EQ(guard.Probe(At(12, midnight - 20, true, 50)), (ClockVerdict{false, kGnssMismatch}));
 }
 
-TEST(ClockGuard, SynchronizedOnlyWithoutErrorAndUnsync) {
-  EXPECT_TRUE(ClockSynchronized(TIME_OK, 0));
-  EXPECT_TRUE(ClockSynchronized(TIME_INS, STA_PLL));
+TEST(ClockGuard, SynchronizedByTheMaximumError) {
+  EXPECT_TRUE(ClockSynchronized(TIME_OK, 710000));
+  EXPECT_TRUE(ClockSynchronized(TIME_OK, 15999999));
+  EXPECT_FALSE(ClockSynchronized(TIME_OK, 16000000));
   EXPECT_FALSE(ClockSynchronized(-1, 0));
-  EXPECT_FALSE(ClockSynchronized(TIME_ERROR, 0));
-  EXPECT_FALSE(ClockSynchronized(TIME_OK, STA_UNSYNC));
+  // STA_UNSYNC with a small error: timesyncd where the real-time clock keeps local time.
+  EXPECT_TRUE(ClockSynchronized(TIME_ERROR, 880000));
   // Only reads the kernel: it runs anywhere, whatever it answers.
   (void)SystemClockSynchronized();
 }
