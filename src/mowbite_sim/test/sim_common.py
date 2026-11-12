@@ -63,8 +63,7 @@ def without_sunset(data_dir):
     """Settings of params.set in data_dir with dock_at_sunset 0: a run in the simulation keeps mowing past the real
     sunset at its datum, which falls into working hours in winter."""
     os.makedirs(os.path.join(data_dir, "params"), exist_ok=True)
-    with open(os.path.join(data_dir, "params", "mower_logic.json"), "w") as f:
-        json.dump({"dock_at_sunset": 0}, f)
+    write_json(os.path.join(data_dir, "params", "mower_logic.json"), {"dock_at_sunset": 0})
 
 
 def sim_stack(work, mqtt_port, sunset=False, **arguments):
@@ -82,9 +81,9 @@ def sim_stack(work, mqtt_port, sunset=False, **arguments):
         launch_arguments=values.items())
 
 
-def sim_description(work, mqtt_port, sunset=False, **arguments):
+def sim_description(work, mqtt_port, **arguments):
     """The return value of generate_test_description for the stack of sim.launch.py alone."""
-    return launch.LaunchDescription([sim_stack(work, mqtt_port, sunset, **arguments),
+    return launch.LaunchDescription([sim_stack(work, mqtt_port, **arguments),
                                      launch_testing.actions.ReadyToTest()]), {}
 
 
