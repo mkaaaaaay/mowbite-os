@@ -113,6 +113,17 @@ class Probe(SimProbe):
                 time.sleep(0.005)
         time.sleep(0.2)
 
+    def back(self, x, y):
+        """Straight back to the point in steps of 5 cm, the heading kept."""
+        ax, ay = self.x, self.y
+        steps = max(1, math.ceil(math.hypot(x - ax, y - ay) / 0.05))
+        for s in range(1, steps + 1):
+            self.x = ax + (x - ax) * s / steps
+            self.y = ay + (y - ay) * s / steps
+            self.pose(self.x, self.y)
+            time.sleep(0.005)
+        time.sleep(0.2)
+
     def events_of(self, kind):
         return [e for e in self.events if e["type"] == kind]
 
@@ -153,17 +164,18 @@ class TestRecording(unittest.TestCase):
         self.assertTrue(self.enabled(REC + "start_recording"))
         self.probe.act(REC + "start_recording")
         self.assertTrue(self.enabled(REC + "stop_recording"))
-        self.probe.drive([(0, 0), (4, 0), (4, 3), (0, 3), (0, 0.1)])
+        # Over the start at the end, crossing the first side flatly: only so the closing edge was driven.
+        self.probe.drive([(0, 0), (4, 0), (4, 3), (0, 3), (0, 0.15), (0.6, -0.05)])
         line = self.probe.wait(lambda: [p for p in (self.probe.overlay or {}).get("polygons", [])
                                         if p["color"] == "blue" and len(p["poly"]) > 50])
         self.assertTrue(line, "no blue line on map_overlay/json")
         self.probe.act(REC + "stop_recording")
         self.assertTrue(self.enabled(REC + "finish_mowing_area"))
         # To the obstacle first: a ring begins where the mower stands.
-        self.probe.drive([(0, 0.1), (1, 1)])
+        self.probe.drive([(0.6, -0.05), (1, 1)])
         self.probe.act(REC + "start_recording")
         self.assertTrue(self.enabled(REC + "stop_recording"))
-        self.probe.drive([(1, 1), (2, 1), (2, 2), (1, 2), (1, 1.1)])
+        self.probe.drive([(1, 1), (2, 1), (2, 2), (1, 2), (1, 1.15), (1.6, 0.95)])
         self.probe.act(REC + "finish_mowing_area")
 
         saved = self.probe.wait(lambda: self.probe.map if self.probe.map and len(self.probe.map["areas"]) == 2
@@ -277,6 +289,33 @@ class TestRecording(unittest.TestCase):
         self.assertIsNotNone(recorded, "no AREA_RECORDED")
         self.assertFalse(recorded[0]["driven"])
         self.assertEqual(recorded[0]["driven_reason"], "MANUAL_POINT")
+        saved = self.probe.wait(lambda: next((a for a in self.probe.map["areas"] if a["id"] == recorded[0]["area_id"]),
+                                             None))
+        self.assertIsNotNone(saved)
+        self.assertNotIn("recorded_body", saved["properties"])
+
+    def test_07_reversing_gives_no_body(self):
+        self.probe.act("mower_logic:idle/start_area_recording")
+        self.assertTrue(self.enabled(REC + "start_recording"))
+        self.probe.drive([(self.probe.x, self.probe.y), (15, 0)])
+        self.probe.act(REC + "start_recording")
+        # test_06 turned them off; only automatic points are taken back.
+        self.assertTrue(self.enabled(REC + "auto_point_collecting_enable"))
+        self.probe.act(REC + "auto_point_collecting_enable")
+        self.assertTrue(self.enabled(REC + "stop_recording"))
+        since = len(self.probe.events)
+        self.probe.drive([(15, 0), (17, 0)])
+        self.probe.back(16, 0)
+        self.probe.drive([(16, 0), (18, 0), (18, 2), (15, 2), (15, 0.15), (15.6, -0.05)])
+        hint = self.probe.wait(lambda: [e for e in self.probe.events[since:]
+                                        if e["type"] == "RECORDING_REFUSED" and e["reason"] == "REVERSING"])
+        self.assertIsNotNone(hint, "no hint while reversing")
+        recorded_since = len(self.probe.events_of("AREA_RECORDED"))
+        self.probe.act(REC + "finish_mowing_area")
+        recorded = self.probe.wait(lambda: self.probe.events_of("AREA_RECORDED")[recorded_since:])
+        self.assertIsNotNone(recorded, "no AREA_RECORDED")
+        self.assertFalse(recorded[0]["driven"])
+        self.assertEqual(recorded[0]["driven_reason"], "REVERSED")
         saved = self.probe.wait(lambda: next((a for a in self.probe.map["areas"] if a["id"] == recorded[0]["area_id"]),
                                              None))
         self.assertIsNotNone(saved)

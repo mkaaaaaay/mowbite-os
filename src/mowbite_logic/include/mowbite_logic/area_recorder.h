@@ -71,12 +71,16 @@ struct PointMark {
   bool automatic = false;
   // No interruption since the point before: automatic points stayed on, no undo, no inaccurate or lost pose, no jump.
   bool joined = false;
+  // The mower reversed since the point before, so the edge to it was not driven.
+  bool reversed = false;
 };
 
 // Why the closed ring is not the forward driven track of the body, empty if it is: MANUAL_POINT, NO_HEADING,
-// INTERRUPTED, GAP, DIRECTION or SHARP_TURN, the first of them in this order that applies. marks has one entry per
-// point of the ring. Only rings that pass get recorded_body, which lets the planner drive the line without a margin.
-std::string DrivenProblem(const Ring& ring, const std::vector<PointMark>& marks);
+// INTERRUPTED, REVERSED, CLOSING, GAP, DIRECTION or SHARP_TURN, the first of them in this order that applies. marks
+// has one entry per point of the ring; the first point stands for both edges that meet there. crossed: the ring was
+// closed where its line crossed itself, so the closing edge is part of a driven one. Only rings that pass get
+// recorded_body, which lets the planner drive the line without a margin.
+std::string DrivenProblem(const Ring& ring, const std::vector<PointMark>& marks, bool crossed);
 
 // recording.undo without meters: the path (m) taken back from the end of the open ring.
 constexpr double kUndoDefaultM = 1.0;
@@ -102,12 +106,16 @@ struct RecorderConfig {
   // Fixed limits of the driven track, no settings. base_link moved this far (m) from where the direction was judged
   // last is judged again: backwards takes points back.
   static constexpr double kReverseStep = 0.05;
+  // This many judged steps backwards in a row are reversing; a step that is not ends it.
+  static constexpr int kReverseSteps = 2;
   // An edge of a driven ring is at most this long (m).
   static constexpr double kMaxDrivenEdge = 0.3;
   // An edge of a driven ring points between the headings at its ends, widened by this (rad) on each side.
   static constexpr double kDirectionAllowance = M_PI / 3;
   // Two edges of a driven ring turn by at most this (rad).
   static constexpr double kMaxDrivenTurn = 2 * M_PI / 3;
+  // A driven ring turns by at most this (rad) at its first point, where the end crossed the start.
+  static constexpr double kMaxClosingTurn = M_PI / 6;
 };
 
 // A change of the map the recording asks mowbite_map for.
@@ -222,8 +230,6 @@ class AreaRecorder {
   bool TakeBackReversing(double x, double y, double heading);
   void EndReversing();
   void Interrupt();
-  // Drops end points up to max_overhang of path until the closing edge passes DrivenProblem.
-  void TrimDrivenEnd();
   size_t PointCount() const;
 
   RecorderConfig config_;
@@ -232,10 +238,14 @@ class AreaRecorder {
   std::vector<PointMark> marks_;
   // Since the last point of the open ring.
   bool interrupted_ = false;
-  // Where the direction of base_link was judged last, whether that was backwards and the points taken back since.
+  // Where the direction of base_link was judged last, the steps backwards in a row since, whether the mower
+  // reverses and the points taken back since.
   std::optional<Point2> reverse_anchor_;
+  int backward_steps_ = 0;
   bool reversing_ = false;
   size_t reverse_taken_ = 0;
+  // Since the last point of the open ring.
+  bool reversed_ = false;
   std::optional<Ring> outline_;
   std::vector<Ring> obstacles_;
   std::string outline_driven_reason_;

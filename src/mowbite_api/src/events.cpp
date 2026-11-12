@@ -613,11 +613,13 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
         {},
         {{"de",
           {"Rückwärts nimmt Punkte zurück",
-           "Beim Rückwärtsfahren nimmt die Aufnahme die Punkte vor dem Mäher zurück und setzt keine neuen.",
+           "Beim Rückwärtsfahren nimmt die Aufnahme die Punkte vor dem Mäher zurück und setzt keine neuen. Die "
+           "Fläche gilt dann nicht mehr als in einem Zug gefahren und wird ohne den genauen Rand gemäht.",
            "Zum Aufnehmen vorwärts fahren."}},
          {"en",
           {"Reversing takes points back",
-           "While the mower reverses, the recording takes back the points ahead of it and adds none.",
+           "While the mower reverses, the recording takes back the points ahead of it and adds none. The area then "
+           "no longer counts as driven in one go and is mowed without the exact edge.",
            "Drive forward to record."}}}}},
       {"RING_CROSSES_ITSELF", {"The ring crosses itself", {}}},
       {"RING_FEW_POINTS", {"The ring has too few points", {Integer("points", "", "Points of the ring"), Limit("")}}},
@@ -817,7 +819,9 @@ Field DrivenReason() {
   Field field = Text("driven_reason",
                      "Only when driven is false: the first of these that applies; the area is mowed as usual, only "
                      "without the exact edge",
-                     false, {"MANUAL_POINT", "NO_HEADING", "INTERRUPTED", "GAP", "DIRECTION", "SHARP_TURN"});
+                     false,
+                     {"MANUAL_POINT", "NO_HEADING", "INTERRUPTED", "REVERSED", "CLOSING", "GAP", "DIRECTION",
+                      "SHARP_TURN"});
   field.value_texts = {
       {"MANUAL_POINT",
        texts("Punkte von Hand",
@@ -840,12 +844,30 @@ Field DrivenReason() {
              "Automatic points were off for a while, points were undone, or the position was inaccurate, missing or "
              "jumped.",
              "For the exact edge, record the area again driving forward without a break.")},
+      {"REVERSED",
+       texts("Rückwärts gefahren",
+             "Beim Aufnehmen ist der Mäher rückwärts gefahren. Die Punkte davor wurden zurückgenommen, die Linie ist "
+             "dort aber nicht in einem Zug vorwärts gefahren.",
+             "Für den genauen Rand die Fläche ohne Rückwärtsfahren neu aufnehmen.", "Reversed",
+             "The mower reversed while recording. The points ahead of it were taken back, but the line wasn't driven "
+             "forward in one go there.",
+             "For the exact edge, record the area again without reversing.")},
+      {"CLOSING",
+       texts("Anfang nicht überfahren",
+             "Am Ende der Aufnahme ist der Mäher nicht in Fahrtrichtung über den Anfang der Linie gefahren. Das Stück "
+             "zwischen Ende und Anfang wurde dann nie gefahren.",
+             "Für den genauen Rand neu aufnehmen und am Ende über den Anfang hinaus weiterfahren, bis die Spur ihn "
+             "kreuzt.",
+             "Start not driven over",
+             "At the end of the recording the mower didn't drive over the start of the line along its heading, so the "
+             "piece between the end and the start was never driven.",
+             "For the exact edge, record again and at the end drive on past the start until the track crosses it.")},
       {"GAP",
        texts("Lücke in der Linie",
              "Zwischen zwei Punkten oder vom letzten zum ersten Punkt liegen mehr als 30 cm.",
-             "Die Aufnahme nahe am ersten Punkt beenden und für den genauen Rand neu aufnehmen.", "Gap in the line",
+             "Langsamer fahren und für den genauen Rand neu aufnehmen.", "Gap in the line",
              "Two points, or the last and the first point, are more than 30 cm apart.",
-             "End the recording close to the first point and record again for the exact edge.")},
+             "Drive more slowly and record again for the exact edge.")},
       {"DIRECTION",
        texts("Nicht in Fahrtrichtung",
              "Ein Stück der Linie liegt nicht in Fahrtrichtung des Mähers, etwa nach Rückwärtsfahren oder einem "

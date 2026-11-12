@@ -162,6 +162,29 @@ TEST(Catalog, EntriesAreWellFormed) {
   for (const auto& field : RobotState()) EXPECT_FALSE(field.text.empty()) << field.name;
 }
 
+// The values of driven_reason in the order the recorder checks them, each with its texts.
+TEST(Catalog, DrivenReasonsInTheOrderOfTheCheck) {
+  const EventEntry* recorded = FindEvent("AREA_RECORDED");
+  ASSERT_NE(recorded, nullptr);
+  const auto field = std::find_if(recorded->fields.begin(), recorded->fields.end(),
+                                  [](const Field& f) { return f.name == "driven_reason"; });
+  ASSERT_NE(field, recorded->fields.end());
+  EXPECT_EQ(field->values, (std::vector<std::string>{"MANUAL_POINT", "NO_HEADING", "INTERRUPTED", "REVERSED",
+                                                     "CLOSING", "GAP", "DIRECTION", "SHARP_TURN"}));
+  for (const auto& value : field->values) {
+    const auto texts = field->value_texts.find(value);
+    ASSERT_NE(texts, field->value_texts.end()) << value;
+    for (const char* language : {"de", "en"}) {
+      const auto text = texts->second.find(language);
+      ASSERT_NE(text, texts->second.end()) << value << " " << language;
+      EXPECT_FALSE(text->second.name.empty()) << value << " " << language;
+      EXPECT_FALSE(text->second.fix.empty()) << value << " " << language;
+      const std::string edge = std::string(language) == "de" ? "ohne den genauen Rand" : "without the exact edge";
+      EXPECT_NE(text->second.help.find(edge), std::string::npos) << value << " " << language;
+    }
+  }
+}
+
 TEST(Catalog, EmergencyBits) {
   ASSERT_EQ(EmergencyBits().size(), 22u);
   for (size_t i = 0; i < EmergencyBits().size(); i++) {

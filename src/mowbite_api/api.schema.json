@@ -633,12 +633,26 @@
             "MANUAL_POINT",
             "NO_HEADING",
             "INTERRUPTED",
+            "REVERSED",
+            "CLOSING",
             "GAP",
             "DIRECTION",
             "SHARP_TURN"
           ],
           "type": "string",
           "x-texts": {
+            "CLOSING": {
+              "de": {
+                "fix": "Für den genauen Rand neu aufnehmen und am Ende über den Anfang hinaus weiterfahren, bis die Spur ihn kreuzt.",
+                "help": "Am Ende der Aufnahme ist der Mäher nicht in Fahrtrichtung über den Anfang der Linie gefahren. Das Stück zwischen Ende und Anfang wurde dann nie gefahren. Die Fläche wird normal gemäht, nur ohne den genauen Rand.",
+                "name": "Anfang nicht überfahren"
+              },
+              "en": {
+                "fix": "For the exact edge, record again and at the end drive on past the start until the track crosses it.",
+                "help": "At the end of the recording the mower didn't drive over the start of the line along its heading, so the piece between the end and the start was never driven. The area is mowed as usual, only without the exact edge.",
+                "name": "Start not driven over"
+              }
+            },
             "DIRECTION": {
               "de": {
                 "fix": "Für den genauen Rand die Fläche durchgehend vorwärts neu aufnehmen.",
@@ -653,12 +667,12 @@
             },
             "GAP": {
               "de": {
-                "fix": "Die Aufnahme nahe am ersten Punkt beenden und für den genauen Rand neu aufnehmen.",
+                "fix": "Langsamer fahren und für den genauen Rand neu aufnehmen.",
                 "help": "Zwischen zwei Punkten oder vom letzten zum ersten Punkt liegen mehr als 30 cm. Die Fläche wird normal gemäht, nur ohne den genauen Rand.",
                 "name": "Lücke in der Linie"
               },
               "en": {
-                "fix": "End the recording close to the first point and record again for the exact edge.",
+                "fix": "Drive more slowly and record again for the exact edge.",
                 "help": "Two points, or the last and the first point, are more than 30 cm apart. The area is mowed as usual, only without the exact edge.",
                 "name": "Gap in the line"
               }
@@ -697,6 +711,18 @@
                 "fix": "Drive straight for a few metres first, then record again for the exact edge.",
                 "help": "The mower didn't know its heading yet while recording. The area is mowed as usual, only without the exact edge.",
                 "name": "Heading unknown"
+              }
+            },
+            "REVERSED": {
+              "de": {
+                "fix": "Für den genauen Rand die Fläche ohne Rückwärtsfahren neu aufnehmen.",
+                "help": "Beim Aufnehmen ist der Mäher rückwärts gefahren. Die Punkte davor wurden zurückgenommen, die Linie ist dort aber nicht in einem Zug vorwärts gefahren. Die Fläche wird normal gemäht, nur ohne den genauen Rand.",
+                "name": "Rückwärts gefahren"
+              },
+              "en": {
+                "fix": "For the exact edge, record the area again without reversing.",
+                "help": "The mower reversed while recording. The points ahead of it were taken back, but the line wasn't driven forward in one go there. The area is mowed as usual, only without the exact edge.",
+                "name": "Reversed"
               }
             },
             "SHARP_TURN": {
@@ -9214,11 +9240,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:21",
+  "$id": "urn:mowbite-os:api:22",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry.",
   "title": "MowBite OS app interface",
-  "x-api": 21,
+  "x-api": 22,
   "x-commands": {
     "docking.abort": {
       "action": "mower_logic:docking/abort_docking",
@@ -11974,12 +12000,12 @@
         "texts": {
           "de": {
             "fix": "Zum Aufnehmen vorwärts fahren.",
-            "help": "Beim Rückwärtsfahren nimmt die Aufnahme die Punkte vor dem Mäher zurück und setzt keine neuen.",
+            "help": "Beim Rückwärtsfahren nimmt die Aufnahme die Punkte vor dem Mäher zurück und setzt keine neuen. Die Fläche gilt dann nicht mehr als in einem Zug gefahren und wird ohne den genauen Rand gemäht.",
             "name": "Rückwärts nimmt Punkte zurück"
           },
           "en": {
             "fix": "Drive forward to record.",
-            "help": "While the mower reverses, the recording takes back the points ahead of it and adds none.",
+            "help": "While the mower reverses, the recording takes back the points ahead of it and adds none. The area then no longer counts as driven in one go and is mowed without the exact edge.",
             "name": "Reversing takes points back"
           }
         }

@@ -38,7 +38,8 @@ CONFIG = os.path.join(WORK, "full_run.yaml")
 REC = "mower_logic:area_recording/"
 MOW = "mower_logic:mowing/"
 # The lawn the teleop drives around.
-CORNERS = [(2.6, 0.0), (2.6, 1.6), (0.0, 1.6), (0.0, 0.1)]
+# At the end over the start, crossing the first side flatly.
+CORNERS = [(2.6, 0.0), (2.6, 1.6), (0.0, 1.6), (0.0, 0.15), (0.6, -0.05)]
 
 with open(CONFIG, "w") as f:
     f.write("tron_mcu:\n  ros__parameters:\n    safety_measurement_date: \"simulation\"\n    allow_blade: true\n"
@@ -214,6 +215,7 @@ class TestFullRun(unittest.TestCase):
         recorded = p.event(since, "AREA_RECORDED", 10)
         self.assertIsNotNone(recorded, [e["type"] for _, e in p.events[since:]])
         self.assertAlmostEqual(recorded["area_m2"], 2.6 * 1.5, delta=0.5)
+        self.assertTrue(recorded["driven"], recorded.get("driven_reason"))
         saved = p.wait(lambda: p.map if p.map and len(p.map["areas"]) == 1 else None)
         self.assertIsNotNone(saved, f"map/json: {p.map}")
         self.assertEqual(saved["areas"][0]["id"], recorded["area_id"])
