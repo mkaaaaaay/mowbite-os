@@ -181,7 +181,8 @@ void LogicCore::TrySunset(double now_s) {
       return;
     }
   }
-  // No sunset within two days (polar day): the next clock tries again.
+  // No sunset within two days (polar day or night): the next clock tries again; until then the run saw no light to
+  // lose, like a start in the dark.
 }
 
 Reason LogicCore::DarkWhy(double now_s) const {
