@@ -1,5 +1,6 @@
 #include "mowbite_logic/logic_core.h"
 
+#include <cmath>
 #include <string>
 #include <utility>
 
@@ -19,7 +20,8 @@ void LogicCore::OnMapStatus(MapDatum datum, const std::string& reason) {
 
 void LogicCore::OnWheelOdom(double vx, double now_s) {
   if (state_ != State::kAreaRecording) return;
-  if (last_wheel_s_ && now_s - *last_wheel_s_ <= RecorderConfig::kWheelGap) {
+  // A value that is no number is no measurement.
+  if (std::isfinite(vx) && last_wheel_s_ && now_s - *last_wheel_s_ <= RecorderConfig::kWheelGap) {
     recorder_.OnWheelTravel(vx * (now_s - *last_wheel_s_));
   } else {
     recorder_.OnWheelsLost();

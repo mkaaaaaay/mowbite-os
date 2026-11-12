@@ -1413,9 +1413,38 @@ TEST(RecorderDriven, ACrossingOnAPointOfTheEndTurnsByItsAngle) {
   EXPECT_EQ(DrivenReason(recorder), "CLOSING");
 }
 
+TEST(RecorderDriven, PointsSetWhileTheWheelsWereLostDoNotJoin) {
+  // As above the point at 0.66 m is the first one cut off, and the last of the track the ring is judged by. The loss
+  // shows only after the next point, at 0.77 m, is due: it counts for every point since the last travel.
+  for (const int last_travel : {5, 7}) {
+    AreaRecorder recorder = Writable();
+    recorder.OnAction("start_recording");
+    LapCrossingAt(recorder, 15, 0.15, 0.5, [&](int k) {
+      if (k <= last_travel) recorder.OnWheelTravel(0.11);
+      if (k == 8) recorder.OnWheelsLost();
+    });
+    EXPECT_EQ(DrivenReason(recorder), last_travel < 6 ? "INTERRUPTED" : "") << last_travel;
+  }
+}
+
+TEST(RecorderDriven, LostWheelsLeaveReversingByThePoseAsItIs) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0, 0}, {1, 0}});
+  const size_t before = recorder.current().size();
+  for (const double x : {0.94, 0.88, 0.82, 0.76, 0.7}) {
+    recorder.OnPose(x, 0, 0, 0.02f, true);
+    recorder.OnWheelsLost();
+  }
+  // The points ahead of the mower are taken back and none comes on the way.
+  EXPECT_LT(recorder.current().size(), before);
+  EXPECT_LT(recorder.current().back().x, 0.75);
+}
+
 TEST(LogicRecording, TheWheelsTellTheDrivenTrack) {
-  // Wheel travel with every pose; none; none for 0.6 s halfway; 5 cm back halfway while the pose stands.
-  const std::vector<std::string> expected = {"", "INTERRUPTED", "INTERRUPTED", "REVERSED"};
+  // Wheel travel with every pose; none; none for 0.6 s halfway; 5 cm back halfway while the pose stands; one value
+  // that is no number halfway.
+  const std::vector<std::string> expected = {"", "INTERRUPTED", "INTERRUPTED", "REVERSED", "INTERRUPTED"};
   for (size_t c = 0; c < expected.size(); c++) {
     TestCore core{LogicConfig{}};
     core.OnHardwareStatus(Healthy());
@@ -1426,7 +1455,8 @@ TEST(LogicRecording, TheWheelsTellTheDrivenTrack) {
     // Every 0.1 s as the node gives them: the wheels, the pose, the tick.
     const auto at = [&](const PoseSnapshot& pose, double vx) {
       now += 0.1;
-      if (c != 1 && !(c == 2 && now > 5 && now < 5.6)) core.OnWheelOdom(vx, now);
+      const bool no_number = c == 4 && now > 5 && now < 5.15;
+      if (c != 1 && !(c == 2 && now > 5 && now < 5.6)) core.OnWheelOdom(no_number ? std::nan("") : vx, now);
       core.OnPose(pose);
       core.OnTick(now);
     };

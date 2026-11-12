@@ -21,7 +21,6 @@ static_assert(static_cast<uint8_t>(SensorMeaning::kDistance) == SensorSpec::MEAN
 
 }  // namespace
 
-
 MapDatum ToDatum(uint8_t state) {
   using mowbite_msgs::msg::MapStatus;
   switch (state) {

@@ -173,7 +173,8 @@ class AreaRecorder {
   void OnPositionJump();
   // m the wheels moved along base_link since the last call, negative backwards (hw/wheel_odom).
   void OnWheelTravel(double metres);
-  // No wheel travel for RecorderConfig::kWheelGap: reversing would go unseen.
+  // No wheel travel for RecorderConfig::kWheelGap: reversing would go unseen, so neither the points set since the
+  // last travel nor the next one join the driven track.
   void OnWheelsLost();
   // Whether mowbite_map takes changes now, and why not.
   void SetMapWritable(bool writable, const Reason& reason);
@@ -263,6 +264,8 @@ class AreaRecorder {
   // stretch backwards had its hint.
   double wheel_back_ = 0;
   bool reverse_hinted_ = false;
+  // Points of the open ring the wheels have told their travel up to.
+  size_t wheel_points_ = 0;
   std::optional<Ring> outline_;
   std::vector<Ring> obstacles_;
   std::string outline_driven_reason_;

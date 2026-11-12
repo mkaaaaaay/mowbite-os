@@ -382,8 +382,8 @@ class LogicCore {
   // The localization moved its estimate onto GPS again by distance_m, the event is at the new position.
   void OnPositionJump(double to_x, double to_y, double distance_m, bool after_outliers);
   // hw/wheel_odom, which the node passes only in AREA_RECORDING: vx (m/s, negative backwards) since the one before
-  // gives the way the recorder tells reversing by. More than RecorderConfig::kWheelGap after it, or none for that long
-  // (OnTick), is a break of the driven track.
+  // gives the way the recorder tells reversing by. More than RecorderConfig::kWheelGap after it, a value that is no
+  // number, or none for that long (OnTick), is a break of the driven track.
   void OnWheelOdom(double vx, double now_s);
   bool AreaRecording() const;
   // The command the action stands for, as its RPC without client; kUnknown for an action that is not the logic's.

@@ -303,6 +303,7 @@ AreaRecorder::Result AreaRecorder::Act(const std::string& name, double undo_mete
       reversed_ = false;
       wheel_back_ = 0;
       reverse_hinted_ = false;
+      wheel_points_ = 0;
       collect_requested_ = false;
       // Every ring that meets the limit says so once.
       full_reported_ = false;
@@ -546,6 +547,7 @@ void AreaRecorder::AddPoint(double x, double y, const PointMark& mark) {
 void AreaRecorder::DropLastPoint() {
   current_.pop_back();
   marks_.pop_back();
+  wheel_points_ = std::min(wheel_points_, marks_.size());
   overlay_changed_ = true;
 }
 
@@ -667,6 +669,7 @@ void AreaRecorder::OnPositionJump() {
 
 void AreaRecorder::OnWheelTravel(double metres) {
   if (!recording_) return;
+  wheel_points_ = marks_.size();
   wheel_back_ = std::max(0.0, wheel_back_ - metres);
   // Forward up to where they were again ends the stretch backwards.
   if (metres > 0 && wheel_back_ == 0) reverse_hinted_ = false;
@@ -678,7 +681,8 @@ void AreaRecorder::OnWheelTravel(double metres) {
 }
 
 void AreaRecorder::OnWheelsLost() {
-  Interrupt();
+  for (size_t k = std::min(wheel_points_, marks_.size()); k < marks_.size(); k++) marks_[k].joined = false;
+  interrupted_ = true;
 }
 
 void AreaRecorder::SetMapWritable(bool writable, const Reason& reason) {
