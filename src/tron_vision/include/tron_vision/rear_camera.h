@@ -35,9 +35,11 @@ struct RearCameraConfig {
   std::function<void(const std::string& error, int tries, bool taken)> control_retried;
 };
 
-// The exposure controls of UVC; Close() gives them back the values they had before ManualExposure(). A write the
-// camera refuses (EPIPE, seen right after the end of a stream) is tried again after a pause, any other error counts
-// at once.
+// The exposure controls of UVC; Close() gives them back the values they had before ManualExposure(). A camera that
+// starts automatic and is manual when opened was left so by a run that ended without Close(): Open() gives it back
+// the mode it starts with, the exposure time and the gain stay as that run left them (the defaults the camera reports
+// are not the values it runs with). A write the camera refuses (EPIPE, seen right after the end of a stream) is tried
+// again after a pause, any other error counts at once.
 class UvcRearCamera : public DockCamera {
  public:
   // Without a device the real system calls are used.
@@ -55,6 +57,7 @@ class UvcRearCamera : public DockCamera {
 
  private:
   bool Write(uint32_t id, int value, std::string& error);
+  void UndoLeftManual();
 
   RearCameraConfig config_;
   V4l2Capture capture_;

@@ -103,11 +103,12 @@ struct CapturedFrame {
   int dmabuf = -1;
 };
 
-// A control of a video node with its range and its value when read.
+// A control of a video node with its range, its value when read and the value the device starts with.
 struct ControlRange {
   int min = 0;
   int max = 0;
   int value = 0;
+  int default_value = 0;
 };
 
 // Capture of NV12, YUYV or MJPEG with memory-mapped buffers on one video node, single- or multi-planar as the node

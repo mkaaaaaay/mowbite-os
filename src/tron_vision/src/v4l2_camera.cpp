@@ -43,6 +43,7 @@ bool ReadControl(int fd, uint32_t id, const char* name, ControlRange& range, std
   range.min = query.minimum;
   range.max = query.maximum;
   range.value = control.value;
+  range.default_value = query.default_value;
   return true;
 }
 
@@ -284,6 +285,7 @@ bool V4l2Capture::QueryControl(uint32_t id, ControlRange& range, std::string& er
   range.min = query.minimum;
   range.max = query.maximum;
   range.value = control.value;
+  range.default_value = query.default_value;
   return true;
 }
 

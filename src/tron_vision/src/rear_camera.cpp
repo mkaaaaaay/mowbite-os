@@ -26,9 +26,13 @@ bool UvcRearCamera::Present(std::string& error) {
 
 bool UvcRearCamera::Open(std::string& error) {
   Close();
-  return Present(error) && DeviceFree(config_.processes_using, config_.device, error) &&
-         capture_.Open(config_.device, {config_.width, config_.height, PixelFormat::kMjpeg, config_.buffers, false},
-                       error);
+  if (!Present(error) || !DeviceFree(config_.processes_using, config_.device, error) ||
+      !capture_.Open(config_.device, {config_.width, config_.height, PixelFormat::kMjpeg, config_.buffers, false},
+                     error)) {
+    return false;
+  }
+  UndoLeftManual();
+  return true;
 }
 
 bool UvcRearCamera::Start(std::string& error) {
@@ -50,6 +54,15 @@ void UvcRearCamera::Close() {
     manual_ = false;
   }
   capture_.Close();
+}
+
+void UvcRearCamera::UndoLeftManual() {
+  ControlRange mode;
+  std::string ignored;
+  if (capture_.QueryControl(V4L2_CID_EXPOSURE_AUTO, mode, ignored) && mode.value == V4L2_EXPOSURE_MANUAL &&
+      mode.default_value != V4L2_EXPOSURE_MANUAL) {
+    Write(V4L2_CID_EXPOSURE_AUTO, mode.default_value, ignored);
+  }
 }
 
 int UvcRearCamera::Next(int timeout_ms, CapturedFrame& frame, std::string& error) {

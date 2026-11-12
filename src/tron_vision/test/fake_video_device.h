@@ -121,6 +121,7 @@ class FakeVideoDevice : public VideoDevice {
         if (c == controls.end()) return Error(EINVAL);
         query->minimum = c->second.min;
         query->maximum = c->second.max;
+        query->default_value = c->second.default_value;
         query->flags = c->second.flags;
         return 0;
       }
@@ -216,6 +217,7 @@ class FakeVideoDevice : public VideoDevice {
     int max = 0;
     int value = 0;
     uint32_t flags = 0;
+    int default_value = 0;
   };
   std::map<uint32_t, Control> controls;
   // S_CTRL in order, id and value.

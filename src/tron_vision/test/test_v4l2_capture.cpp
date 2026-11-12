@@ -152,12 +152,13 @@ TEST_P(V4l2CaptureTest, ControlsOfTheNode) {
   EXPECT_FALSE(capture.QueryControl(V4L2_CID_GAIN, range, error));
   EXPECT_EQ(error, "camera not open");
   ASSERT_TRUE(capture.Open("/dev/video22", kStereo, error)) << error;
-  device.controls[V4L2_CID_GAIN] = {0, 63, 12, 0};
+  device.controls[V4L2_CID_GAIN] = {0, 63, 12, 0, 8};
   device.controls[V4L2_CID_EXPOSURE_ABSOLUTE] = {1, 5000, 313, V4L2_CTRL_FLAG_DISABLED};
   ASSERT_TRUE(capture.QueryControl(V4L2_CID_GAIN, range, error)) << error;
   EXPECT_EQ(range.min, 0);
   EXPECT_EQ(range.max, 63);
   EXPECT_EQ(range.value, 12);
+  EXPECT_EQ(range.default_value, 8);
   EXPECT_FALSE(capture.QueryControl(V4L2_CID_EXPOSURE_ABSOLUTE, range, error));
   EXPECT_NE(error.find("disabled"), std::string::npos) << error;
   EXPECT_FALSE(capture.QueryControl(V4L2_CID_BRIGHTNESS, range, error));

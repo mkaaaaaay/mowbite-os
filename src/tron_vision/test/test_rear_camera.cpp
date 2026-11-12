@@ -25,10 +25,17 @@ struct RearRig {
     device.controls[V4L2_CID_EXPOSURE_AUTO] = {0, 3, V4L2_EXPOSURE_APERTURE_PRIORITY, 0};
     device.controls[V4L2_CID_EXPOSURE_ABSOLUTE] = {1, 5000, 313, V4L2_CTRL_FLAG_INACTIVE};
     device.controls[V4L2_CID_GAIN] = {0, 63, 10, 0};
+    device.controls[V4L2_CID_EXPOSURE_AUTO].default_value = V4L2_EXPOSURE_APERTURE_PRIORITY;
     config.device = dir.Write("mowbite-rear", "");
     config.control_retried = [this](const std::string& error, int tries, bool taken) {
       retried.push_back(error + (taken ? ", taken on try " : ", failed on try ") + std::to_string(tries));
     };
+  }
+  // The controls as a run that ended without Close() leaves them.
+  void LeftManual() {
+    device.controls[V4L2_CID_EXPOSURE_AUTO].value = V4L2_EXPOSURE_MANUAL;
+    device.controls[V4L2_CID_EXPOSURE_ABSOLUTE].value = 40;
+    device.controls[V4L2_CID_GAIN].value = 20;
   }
   // S_CTRL calls the driver saw, the refused ones too.
   size_t ControlWrites() const {
@@ -135,6 +142,40 @@ TEST(UvcRearCamera, NoManualExposureLeavesTheCameraAlone) {
   EXPECT_FALSE(camera.SetExposure({40, 20}, error));
   camera.Close();
   EXPECT_TRUE(rig.device.writes.empty());
+}
+
+// Open gives a camera left manual its automatic mode back and nothing else.
+TEST(UvcRearCamera, ManualLeftByAnEarlierRunIsUndoneOnOpen) {
+  RearRig rig;
+  rig.LeftManual();
+  UvcRearCamera camera(rig.config, &rig.device);
+  std::string error;
+  ASSERT_TRUE(camera.Open(error)) << error;
+  const std::vector<std::pair<uint32_t, int>> writes = {{V4L2_CID_EXPOSURE_AUTO, 3}};
+  EXPECT_EQ(rig.device.writes, writes);
+}
+
+// Manual is then no trace of an earlier run.
+TEST(UvcRearCamera, ACameraThatStartsManualIsLeftAlone) {
+  RearRig rig;
+  rig.LeftManual();
+  rig.device.controls[V4L2_CID_EXPOSURE_AUTO].default_value = V4L2_EXPOSURE_MANUAL;
+  UvcRearCamera camera(rig.config, &rig.device);
+  std::string error;
+  ASSERT_TRUE(camera.Open(error)) << error;
+  EXPECT_EQ(rig.ControlWrites(), 0U);
+}
+
+TEST(UvcRearCamera, OpensThoughTheUndoFails) {
+  RearRig rig;
+  rig.LeftManual();
+  rig.device.set_errno = EIO;
+  UvcRearCamera camera(rig.config, &rig.device);
+  std::string error;
+  EXPECT_TRUE(camera.Open(error));
+  EXPECT_TRUE(error.empty()) << error;
+  EXPECT_EQ(rig.ControlWrites(), 1U);
+  EXPECT_EQ(rig.device.controls[V4L2_CID_EXPOSURE_AUTO].value, V4L2_EXPOSURE_MANUAL);
 }
 
 // Right after the end of a stream the camera refuses a control now and then (EPIPE): the write is tried again.
