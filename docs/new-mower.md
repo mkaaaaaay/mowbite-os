@@ -216,8 +216,9 @@ the emergency signal is fixed. Load it as a component of the container only when
 ## 8. Cameras (optional)
 
 A camera of the mower, shown in the app, optionally with object detection for display only. The Tron's setup is the
-example: `tron_vision` (camera AI), `tron_stereo` (live picture) and `tron_rear` (dock marker) with their start in
-`tron.launch.py` and their parameters in `config/tron.yaml`.
+example: `tron_vision` (camera AI on the left side camera), `tron_stereo` (live picture), `tron_side` (live picture of
+the right side camera) and `tron_rear` (dock marker with a live picture) with their start in `tron.launch.py` and
+their parameters in `config/tron.yaml`.
 
 The platform makes the pictures, the OS takes them to the app: `mowbite_camera` keeps the cameras of `hw/cameras`,
 answers `camera.list` and `camera.stream` (both show up in `rpc.methods` with the first camera), lets two viewers in
@@ -233,12 +234,13 @@ second what `mowbite_camera` needs around it.
   `hw/cameras` (`mowbite_msgs/Camera`: id, process, size of the shown image, protocols, and while it cannot stream
   one of the reasons of the message). It subscribes to nothing of the stack but `hw/status` when it needs the state
   of the mower (best effort, depth 1); tests check its lists of publishers and subscriptions
-  (`tron_vision/test/test_vision_node.cpp`, `test_stereo_node.cpp`).
+  (`tron_vision/test/test_vision_node.cpp`, `test_stereo_node.cpp`, `test_side_node.cpp`, `test_rear_node.cpp`).
 - A thread of its own beside the ROS thread signs the watch of the process after each step (`mowbite_watch`: `Attach`
   for the node, a `Watch` for the thread); a step that hangs in a vendor library then ends the process (code 86).
 - Protocol `mjpeg`: JPEG on `camera/<id>/jpeg` (`sensor_msgs/CompressedImage`, best effort, depth 1), made only while
   someone subscribes, with a rate and a size limit as platform parameters. The OS subscribes while a viewer is
-  connected and serves the pictures to the app.
+  connected and serves the pictures to the app. A camera that serves only viewers opens only then and closes shortly
+  after the last subscriber left (`tron_side`).
 - Protocol `webrtc`, for a smooth live picture: the process is an RTSP camera on the loopback address (H.264
   constrained baseline, RTP over the RTSP connection, its address `rtsp://127.0.0.1:<port>/<id>` as `source` in
   `hw/cameras`; the OS takes no other form), and the OS pulls from it only while someone watches. The connection is
@@ -268,15 +270,17 @@ second what `mowbite_camera` needs around it.
   camera only while asked. Its calibration (lens, mount, marker) has no defaults in the code: what is missing makes it
   report `NOT_SET_UP` and never measure. A USB camera gets a fixed name by a udev rule on its USB id
   (`60-mowbite-rear.rules`), never `/dev/videoN`. Pixel values for measurements go on a topic outside `hw/*`
-  (`tron_rear/marker_pixels`).
+  (`tron_rear/marker_pixels`). It may show a live picture from the same process (`tron_rear`), but the measurement
+  comes first and the picture must never delay it: a request takes the camera from a viewer, a picture is made after
+  the report of its frame, and a failure of the viewer's stream never reaches the reports for the logic.
 - Settings of a camera that need register writes (exposure control of the Tron's bridge chip, `tron-stereo-ae`) come
   from the setup at boot, read back, before it reports the camera ready; the node never writes to i2c.
 
 Around `mowbite_camera`:
 
 - Start it beside the camera processes that report on `hw/cameras` and only with them; a camera that only measures
-  for the logic does not bring it along. `stack.camera_service(files, data_dir, logger, ...)` takes their limits
-  (`tron.launch.py`). It is a process of its own too and leaves `camera_exit.json`.
+  for the logic and shows no picture does not bring it along. `stack.camera_service(files, data_dir, logger, ...)`
+  takes their limits (`tron.launch.py`). It is a process of its own too and leaves `camera_exit.json`.
 - The app has to reach `mjpeg_port` 8890 (HTTP, protocol `mjpeg`), `webrtc_port` 8889 (HTTP, the WHEP exchange of
   protocol `webrtc`) and `ice_port` 8189 over UDP (its pictures). `media_api_port` 9997 and the RTSP sources stay on
   the loopback address. Other ports go under `mowbite_camera` in the file of the platform.
@@ -289,8 +293,8 @@ Around `mowbite_camera`:
   and a camera with no other protocol is listed as `NOT_SET_UP`. Its files lie in a folder `mowbite_camera` in
   `runtime_dir`; by default that is `$RUNTIME_DIRECTORY` (systemd `RuntimeDirectory=`), else `/tmp`. It offers the
   addresses of the interfaces it sees, so in Docker it needs the host network.
-- `position` in `hw/cameras` (`front`, `rear`, `left`, `right`; empty when unknown or not fixed) is what the app's
-  switch between cameras goes by.
+- `position` in `hw/cameras` (`front`, `rear`, `left`, `right`; empty when unknown or not fixed) says where the camera
+  looks, not where it sits; the app's switch between cameras goes by it.
 
 ## Check list
 
