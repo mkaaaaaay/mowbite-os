@@ -192,6 +192,8 @@ class RearLoop {
   void StopCamera();
   void Send(const DockReport& report);
   bool ReportDue(double now) const;
+  // The report of OFF before a step that opens or closes the camera, unless one went out shortly before.
+  void ReportOffIfStale(double now);
   // A report of the state alone, once per period.
   void ReportIfDue(double now, DockReason reason = DockReason::kNone, const std::string& detail = "");
 

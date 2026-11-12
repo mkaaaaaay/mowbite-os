@@ -60,6 +60,7 @@ class FakeDockCamera : public DockCamera {
   }
   bool Open(std::string& error) override {
     calls += "open ";
+    clock_ += open_s;
     if (fail_open) {
       error = "open /dev/mowbite-rear: Device or resource busy";
       return false;
@@ -69,6 +70,7 @@ class FakeDockCamera : public DockCamera {
   }
   bool Start(std::string& error) override {
     calls += "start ";
+    clock_ += start_s;
     if (fail_start) {
       error = "stream on: Input/output error";
       return false;
@@ -82,7 +84,10 @@ class FakeDockCamera : public DockCamera {
   }
   void Close() override {
     Stop();
-    if (open) calls += "close ";
+    if (open) {
+      calls += "close ";
+      clock_ += close_s;
+    }
     open = false;
     manual = false;
   }
@@ -127,6 +132,10 @@ class FakeDockCamera : public DockCamera {
   bool fail_open = false;
   bool fail_start = false;
   bool fail_next = false;
+  // What the calls cost on the clock of the test.
+  double open_s = 0.0;
+  double start_s = 0.0;
+  double close_s = 0.0;
   // nullptr: no frames.
   const std::vector<uint8_t>* jpeg = nullptr;
   // Time from capture to hand-over.
@@ -160,6 +169,7 @@ struct Rig {
         [this](double s) { clock += s; },
         [this](const DockReport& r) {
           reports.push_back(r);
+          sent_at.push_back(clock);
           pictures_at_report.push_back(loop->Picture().Count());
         });
     return *loop;
@@ -201,6 +211,7 @@ struct Rig {
   std::unique_ptr<CrashGuard> guard;
   std::unique_ptr<RearLoop> loop;
   std::vector<DockReport> reports;
+  std::vector<double> sent_at;
   // The count of pictures when each report went out.
   std::vector<uint64_t> pictures_at_report;
 };
@@ -243,9 +254,11 @@ TEST(RearLoop, MeasuresWhileAskedAndStopsWhenTheRequestsRunOut) {
   EXPECT_FALSE(rig.Armed());
   EXPECT_EQ(rig.camera.calls, "open start stop close ");
 
-  ASSERT_GE(rig.reports.size(), 2U);
-  EXPECT_EQ(rig.reports[0].state, DockState::kStarting);
-  EXPECT_EQ(rig.reports[0].reason, DockReason::kNone);
+  ASSERT_GE(rig.reports.size(), 3U);
+  // The state before the camera opens, then the start.
+  EXPECT_EQ(rig.reports[0].state, DockState::kOff);
+  EXPECT_EQ(rig.reports[1].state, DockState::kStarting);
+  EXPECT_EQ(rig.reports[1].reason, DockReason::kNone);
   const std::vector<DockReport> measured = rig.Of(DockState::kMeasuring);
   int in_one_second = 0;
   for (const DockReport& r : measured) {
@@ -261,12 +274,12 @@ TEST(RearLoop, MeasuresWhileAskedAndStopsWhenTheRequestsRunOut) {
   EXPECT_GE(in_one_second, 14);
   EXPECT_LE(in_one_second, 16);
   // Each stamp is the capture time of its frame, which came 20 ms before the hand-over.
-  const double first_frame = rig.reports[0].stamp + kFramePeriod - 0.02;
+  const double first_frame = rig.reports[1].stamp + kFramePeriod - 0.02;
   EXPECT_NEAR(measured.front().stamp, first_frame, 1e-6);
   EXPECT_EQ(rig.reports.back().state, DockState::kOff);
   const std::vector<DockReport> off = rig.Of(DockState::kOff);
-  ASSERT_FALSE(off.empty());
-  EXPECT_NEAR(off.front().stamp, last_request + 3.0, 0.15);
+  ASSERT_GE(off.size(), 2U);
+  EXPECT_NEAR(off[1].stamp, last_request + 3.0, 0.15);
   EXPECT_LE(measured.back().stamp, last_request + 3.0);
   EXPECT_GE(measured.back().stamp, last_request + 3.0 - 0.15);
 }
@@ -481,8 +494,9 @@ TEST(RearLoop, CameraWithoutManualExposureKeepsItsOwn) {
   rig.Make();
   rig.asking = true;
   ASSERT_TRUE(rig.RunUntil(100.5));
-  EXPECT_EQ(rig.reports[0].state, DockState::kStarting);
-  EXPECT_EQ(rig.reports[0].detail, "automatic exposure: control 10094850 disabled");
+  ASSERT_GE(rig.reports.size(), 2U);
+  EXPECT_EQ(rig.reports[1].state, DockState::kStarting);
+  EXPECT_EQ(rig.reports[1].detail, "automatic exposure: control 10094850 disabled");
   EXPECT_TRUE(rig.camera.settings.empty());
   const std::vector<DockReport> measured = rig.Of(DockState::kMeasuring);
   ASSERT_FALSE(measured.empty());
@@ -774,6 +788,35 @@ TEST(RearLoop, LockedOrMissingCameraHasNoViewer) {
   EXPECT_EQ(view.reason, DockReason::kNoSignal);
   EXPECT_EQ(view.detail, "no /dev/mowbite-rear");
   EXPECT_EQ(missing.camera.calls, "");
+}
+
+// Opening, starting and closing the camera take time. The state goes out before each such step, so hw/dock_marker is
+// never silent for its period while a viewer comes, a request takes the camera over, and both leave again.
+TEST(RearLoop, SlowCameraStepsLeaveNoGapInTheReports) {
+  for (const double shift : {0.0, 0.2, 0.4, 0.6}) {
+    Rig rig;
+    rig.camera.jpeg = &Drawn().marker;
+    rig.camera.open_s = 0.25;
+    rig.camera.start_s = 0.25;
+    rig.camera.close_s = 0.15;
+    rig.Make();
+    ASSERT_TRUE(rig.RunUntil(101.0 + shift));
+    rig.viewing = true;
+    ASSERT_TRUE(rig.RunUntil(104.0 + 2.0 * shift));
+    rig.asking = true;
+    ASSERT_TRUE(rig.RunUntil(105.5 + 2.0 * shift));
+    rig.asking = false;
+    ASSERT_TRUE(rig.RunUntil(111.0 + 3.0 * shift));
+    rig.viewing = false;
+    ASSERT_TRUE(rig.RunUntil(115.0));
+    EXPECT_FALSE(rig.Of(DockState::kMeasuring).empty());
+    EXPECT_TRUE(rig.Of(DockState::kFault).empty());
+    EXPECT_GT(rig.Pictures(), 0U);
+    for (size_t i = 1; i < rig.sent_at.size(); i++) {
+      EXPECT_LT(rig.sent_at[i] - rig.sent_at[i - 1], rig.config.report_period_s)
+          << "shift " << shift << ", report " << i << " at " << rig.sent_at[i];
+    }
+  }
 }
 
 }  // namespace

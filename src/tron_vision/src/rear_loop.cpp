@@ -17,6 +17,9 @@ constexpr double kExposureUnitS = 1e-4;
 constexpr double kDropShare = 0.75;
 // Reports of the state alone come at this share of the period, so that a late step never stretches the gap beyond it.
 constexpr double kReportShare = 0.8;
+// A step that opens or closes the camera can take long: the state goes out before it unless the last report is younger
+// than this share of the period, which leaves the rest of the period to the camera.
+constexpr double kFreshShare = 0.3;
 constexpr char kHot[] = "SoC too hot";
 
 std::string Fixed(double value, const char* format = "%.1f") {
@@ -142,6 +145,7 @@ bool RearLoop::Step() {
 void RearLoop::StepOff(double now, bool asked, bool viewer) {
   if (asked) {
     // The request goes first: the viewer's stream ends and the camera opens anew for the marker.
+    ReportOffIfStale(now);
     if (viewing_) StopCamera();
     Begin(now);
     return;
@@ -160,7 +164,10 @@ void RearLoop::StepOff(double now, bool asked, bool viewer) {
 
 void RearLoop::StepView(double now) {
   // A pause when hot is no failed attempt.
-  if (viewing_ && hot_) StopCamera();
+  if (viewing_ && hot_) {
+    ReportOffIfStale(now);
+    StopCamera();
+  }
   if (!viewing_ && (view_attempts_ >= config_.view_attempts || now < view_next_try_ || !StartView(now))) {
     wait_(config_.idle_wait_s);
     return;
@@ -197,6 +204,7 @@ bool RearLoop::StartView(double now) {
     view_next_try_ = now + config_.view_retry_s;
     return false;
   }
+  ReportOffIfStale(now);
   if (!camera_.Open(detail)) {
     ViewFailed(detail);
     return false;
@@ -220,6 +228,7 @@ bool RearLoop::StartView(double now) {
 }
 
 void RearLoop::ViewFailed(const std::string& detail) {
+  ReportOffIfStale(now_());
   StopCamera();
   view_attempts_++;
   view_next_try_ = now_() + config_.view_retry_s;
@@ -227,7 +236,10 @@ void RearLoop::ViewFailed(const std::string& detail) {
 }
 
 void RearLoop::EndView() {
-  if (viewing_) StopCamera();
+  if (viewing_) {
+    ReportOffIfStale(now_());
+    StopCamera();
+  }
   view_attempts_ = 0;
   view_error_.clear();
 }
@@ -444,6 +456,15 @@ void RearLoop::ReportIfDue(double now, DockReason reason, const std::string& det
   report.stamp = now;
   report.reason = reason;
   report.detail = detail;
+  Send(report);
+}
+
+void RearLoop::ReportOffIfStale(double now) {
+  if (now - last_report_ < kFreshShare * config_.report_period_s) return;
+  DockReport report;
+  report.state = state_;
+  report.stamp = now;
+  report.reason = WouldFail(report.detail);
   Send(report);
 }
 
