@@ -1,9 +1,9 @@
 """Going home on the NX60i (O11) as nx60i.launch.py starts it, against fake_xcore, with a safety measurement given in
 mower_params (test_nx60i_stack.py runs without one and cannot mow). The mower docks with the contacts in front, which
 the logic does not build yet: it has no way home. A start with the blade motor at motor_cold_temperature or more is
-refused, the default temperature of fake_xcore lies below it; while mowing a hot blade motor changes nothing (question
-47 iii, told once in the log), a low battery ends the run with BATTERY_LOW and IDLE where the mower stands, without
-DOCKING. rain_mode other than 0 without the rain sensor of hw/capabilities is told once in the log.
+refused, the default temperature of fake_xcore lies below it; while mowing a hot blade motor pauses the run with
+MOTOR_HOT until the user resumes it (question 47 iii); a low battery ends the run, also from that pause, with
+BATTERY_LOW and IDLE where the mower stands, without DOCKING. rain_mode other than 0 without the rain sensor of hw/capabilities is told once in the log.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_nx60i_going_home.py
 """
@@ -161,17 +161,19 @@ class TestNx60iGoingHome(unittest.TestCase):
         p.act(START)
         self.assertIsNotNone(p.event(since, "STATE", 30, state="MOWING"), p.events[since:])
 
-    def test_3_while_mowing_heat_changes_nothing_without_a_way_home(self):
+    def test_3_while_mowing_heat_pauses_without_a_way_home(self):
         p = self.probe
         since = len(p.events)
         set_flags(blade_temperature=75.0)
-        time.sleep(8.0)
+        paused = p.event(since, "STATE", 10, state="PAUSED")
+        self.assertIsNotNone(paused, p.events[since:])
+        self.assertEqual((paused["reason"], paused["resume"]), ("MOTOR_HOT", "user"), paused)
+        self.assertTrue(paused["message"].startswith("It cannot go home: the blade motor at 75"), paused)
+        time.sleep(3.0)
         types = [e["type"] for e in p.events[since:]]
         self.assertNotIn("DOCKING", types)
-        self.assertNotIn("STATE", types)
-        self.assertEqual(p.robot.current_state, "MOWING")
-        self.assertEqual(len(p.logged("Mowing goes on, it cannot go home: the blade motor at 75")), 1,
-                         [line for line in p.logs if "home" in line])
+        self.assertEqual(types.count("STATE"), 1, p.events[since:])
+        self.assertEqual(p.robot.current_state, "PAUSED")
         set_flags()
 
     def test_4_a_low_battery_ends_the_run_where_it_stands(self):

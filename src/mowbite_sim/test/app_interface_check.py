@@ -157,7 +157,8 @@ def rpc(method, params=None, rid="1", timeout=5.0, response_topic=RESPONSE, corr
 REC = "mower_logic:area_recording/"
 LOGIC_SETTINGS = ["rain_mode", "rain_delay_minutes", "rain_check_seconds", "automatic_mode", "gps_timeout",
                   "max_position_accuracy", "gps_wait_time", "docking_approach_distance", "docking_distance",
-                  "docking_retry_count", "undock_distance", "motor_hot_temperature", "motor_cold_temperature"]
+                  "docking_retry_count", "undock_distance", "motor_hot_temperature", "motor_cold_temperature",
+                  "dock_at_sunset"]
 GEOMETRY_KEYS = ["robot_width", "robot_front", "robot_rear", "robot_outline", "mower_width", "blade_ahead",
                  "blade_offset", "antenna_x", "antenna_y", "track", "wheel_radius", "dock_contact_x", "ticks_per_m",
                  "imu_roll", "imu_pitch"]
