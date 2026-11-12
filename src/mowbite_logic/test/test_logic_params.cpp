@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_logic/logic_params.h"
 
 namespace mowbite_logic {
@@ -9,9 +10,9 @@ json Request(json params) {
   return json{{"params", std::move(params)}};
 }
 
-TEST(LogicParams, FourteenSettingsWithoutPlanningValues) {
+TEST(LogicParams, TheSettingsOfTheCatalogWithoutPlanningValues) {
   const json values = LogicParams().Values();
-  EXPECT_EQ(values.size(), 14u);
+  EXPECT_EQ(values.size(), mowbite_api::LogicSettings().size());
   for (const char* name : {"outline_count", "outline_overlap_count", "outline_offset", "tool_width", "mow_angle_offset",
                            "mow_angle_offset_is_absolute", "mow_angle_increment"}) {
     EXPECT_FALSE(values.contains(name)) << name;

@@ -107,6 +107,7 @@ class MowingJob {
  private:
   void NextArea();
   bool SeekTask(std::string* notice);
+  const JobArea* FindArea(const std::string& id) const;
 
   std::vector<JobArea> areas_;
   JobProgress progress_;

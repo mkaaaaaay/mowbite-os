@@ -104,8 +104,13 @@ bool MowingJob::HasMowableArea(const std::vector<std::string>& tasks) const {
   });
 }
 
+const JobArea* MowingJob::FindArea(const std::string& id) const {
+  const auto area = std::find_if(areas_.begin(), areas_.end(), [&id](const JobArea& a) { return a.id == id; });
+  return area == areas_.end() ? nullptr : &*area;
+}
+
 bool MowingJob::HasArea(const std::string& id) const {
-  return std::any_of(areas_.begin(), areas_.end(), [&id](const JobArea& a) { return a.id == id; });
+  return FindArea(id) != nullptr;
 }
 
 std::vector<std::string> MowingJob::TaskIds(const std::vector<std::string>& tasks) const {
@@ -172,15 +177,15 @@ bool MowingJob::SeekTask(std::string* notice) {
   // Found by its id: the place in the map may have changed, the fingerprint of the plan tells about path and index.
   while (static_cast<size_t>(progress_.task) < progress_.tasks.size()) {
     const std::string& id = progress_.tasks[progress_.task];
-    const auto area = std::find_if(areas_.begin(), areas_.end(), [&id](const JobArea& a) { return a.id == id; });
-    if (area != areas_.end() && area->mowable) {
-      progress_.area = static_cast<int>(area - areas_.begin());
+    const JobArea* area = FindArea(id);
+    if (area && area->mowable) {
+      progress_.area = static_cast<int>(area - areas_.data());
       progress_.area_id = id;
       return true;
     }
     if (notice) {
       if (!notice->empty()) *notice += "; ";
-      *notice += "The area " + id + " of the job is " + (area == areas_.end() ? "no longer on the map" : "not active") +
+      *notice += "The area " + id + " of the job is " + (area ? "not active" : "no longer on the map") +
                  ", passed over";
     }
     NextArea();
