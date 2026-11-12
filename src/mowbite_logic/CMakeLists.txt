@@ -28,14 +28,15 @@ find_package(mowbite_watch REQUIRED)
 # States, actions and sensors without ROS, testable on any machine.
 add_library(mowbite_logic_core STATIC src/reasons.cpp src/logic_core.cpp src/area_recorder.cpp src/mowing_plan.cpp src/mowing_job.cpp
   src/logic_params.cpp src/undocking.cpp src/docking.cpp src/geometry.cpp src/home_watch.cpp src/sun.cpp
-  src/storage.cpp src/logic_dock.cpp src/logic_undock.cpp src/logic_home.cpp src/logic_job.cpp src/direct_route.cpp)
+  src/storage.cpp src/logic_dock.cpp src/logic_undock.cpp src/logic_home.cpp src/logic_job.cpp src/direct_route.cpp
+  src/logic_recording.cpp)
 target_include_directories(mowbite_logic_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(mowbite_logic_core mowbite_api::mowbite_api_core nlohmann_json::nlohmann_json)
 set_target_properties(mowbite_logic_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-add_library(mowbite_logic_component SHARED src/logic_node.cpp src/logic_messages.cpp)
+add_library(mowbite_logic_component SHARED src/logic_node.cpp src/logic_messages.cpp src/logic_config.cpp)
 target_link_libraries(mowbite_logic_component mowbite_logic_core mowbite_bridge::mowbite_bridge_core
   mowbite_hold::mowbite_hold_core mowbite_journal::mowbite_journal mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_logic_component rclcpp rclcpp_components rclcpp_action geometry_msgs std_msgs

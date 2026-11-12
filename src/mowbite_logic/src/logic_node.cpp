@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
-#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <geometry_msgs/msg/point.hpp>
@@ -42,6 +41,7 @@
 #include <mowbite_msgs/srv/set_dock.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mowbite_msgs/srv/set_heading.hpp>
+#include <mowbite_msgs/srv/set_recorded_body.hpp>
 #include <mowbite_hold/file_io.h>
 #include <mowbite_hold/file_writer.h>
 #include <mowbite_hold/hold.h>
@@ -54,7 +54,6 @@
 #include <nlohmann/json.hpp>
 #include <rcl_interfaces/msg/parameter.hpp>
 #include <rcl_interfaces/msg/parameter_type.hpp>
-#include <random>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
@@ -65,6 +64,7 @@
 
 #include "mowbite_bridge/event_builder.h"
 #include "mowbite_logic/geometry.h"
+#include "mowbite_logic/logic_config.h"
 #include "mowbite_logic/logic_core.h"
 #include "mowbite_logic/logic_journal.h"
 #include "mowbite_logic/logic_messages.h"
@@ -146,7 +146,7 @@ class LogicNode : public rclcpp::Node {
   explicit LogicNode(const rclcpp::NodeOptions& options)
       : rclcpp::Node("mowbite_logic", options),
         journal_(mowbite_journal::OpenFromParameters(*this)),
-        core_(journal_, LoadConfig(), {{"api", mowbite_api::kApi}}),
+        core_(journal_, LoadLogicConfig(*this), {{"api", mowbite_api::kApi}}),
         journal_watch_(journal_),
         geometry_(FactoryGeometry()) {
     journal_timer_ = create_wall_timer(std::chrono::seconds(10), [this] { journal_watch_.Check(get_logger()); });
@@ -162,6 +162,13 @@ class LogicNode : public rclcpp::Node {
     RestoreHold();
     LoadLogicParams();
     LoadGeometryEntries();
+    std::string problem;
+    recorded_by_ = LoadRecordedBy(data_dir_, &problem);
+    if (data_dir_.empty()) {
+      RCLCPP_WARN(get_logger(), "No data_dir: recorded areas follow robot.geometry.set only until a restart");
+    } else if (!problem.empty()) {
+      RCLCPP_ERROR(get_logger(), "%s: recorded areas follow robot.geometry.set only until a restart", problem.c_str());
+    }
     core_.Call<&LogicCore::SetTurningRadius>(geometry_.TurningRadius());
     // The blade: a lease of blade_lease (s), renewed every blade_renew (s) while the logic wants it to turn.
     blade_lease_s_ = declare_parameter("blade_lease", 1.0);
@@ -209,6 +216,7 @@ class LogicNode : public rclcpp::Node {
     emergency_client_ = create_client<mowbite_msgs::srv::SetEmergency>("safety/release_emergency");
     add_area_client_ = create_client<mowbite_msgs::srv::AddArea>("map/add_area");
     set_dock_client_ = create_client<mowbite_msgs::srv::SetDock>("map/set_dock");
+    recorded_body_client_ = create_client<mowbite_msgs::srv::SetRecordedBody>("map/set_recorded_body");
     // The reference check on the docking station (G24); without an answer in dock_check_timeout s nothing starts.
     set_heading_client_ = create_client<mowbite_msgs::srv::SetHeading>("localization/set_heading");
     dock_check_timeout_s_ = declare_parameter("dock_check_timeout", 2.0);
@@ -382,88 +390,6 @@ class LogicNode : public rclcpp::Node {
   }
 
  private:
-  LogicConfig LoadConfig() {
-    LogicConfig config;
-    config.battery_empty_voltage = declare_parameter("battery_empty_voltage", config.battery_empty_voltage);
-    config.battery_full_voltage = declare_parameter("battery_full_voltage", config.battery_full_voltage);
-    config.dock_charge_voltage = declare_parameter("dock_charge_voltage", config.dock_charge_voltage);
-    config.max_position_accuracy = declare_parameter("max_position_accuracy", config.max_position_accuracy);
-    config.recorder.min_area = declare_parameter("recording_min_area", config.recorder.min_area);
-    config.recorder.max_points =
-        static_cast<size_t>(declare_parameter("recording_max_points", static_cast<int64_t>(config.recorder.max_points)));
-    config.recorder.min_dock_distance = declare_parameter("recording_min_dock_distance", config.recorder.min_dock_distance);
-    config.mow_with_blade = declare_parameter("mow_with_blade", config.mow_with_blade);
-    config.mower_spinup_rpm =
-        static_cast<int>(declare_parameter("mower_spinup_rpm", static_cast<int64_t>(config.mower_spinup_rpm)));
-    config.mower_spinup_timeout = declare_parameter("mower_spinup_timeout", config.mower_spinup_timeout);
-    config.blade_running_rpm =
-        static_cast<int>(declare_parameter("blade_running_rpm", static_cast<int64_t>(config.blade_running_rpm)));
-    config.gps_wait_time = declare_parameter("gps_wait_time", config.gps_wait_time);
-    config.battery_critical_voltage = declare_parameter("battery_critical_voltage", config.battery_critical_voltage);
-    config.battery_critical_time = declare_parameter("battery_critical_time", config.battery_critical_time);
-    config.battery_low_window = declare_parameter("battery_low_window", config.battery_low_window);
-    config.battery_hot_temperature = declare_parameter("battery_hot_temperature", config.battery_hot_temperature);
-    const std::string battery = BatteryVoltagesProblem(config);
-    if (!battery.empty()) throw std::invalid_argument(battery);
-    if (!(config.battery_critical_time > 0) || !(config.battery_low_window > 0) ||
-        !(config.battery_hot_temperature >= 0)) {
-      throw std::invalid_argument(
-          "battery_critical_time and battery_low_window need to be above 0, battery_hot_temperature 0 or above");
-    }
-    config.approach_distance = declare_parameter("approach_distance", config.approach_distance);
-    config.checkpoint_period = declare_parameter("checkpoint_period", config.checkpoint_period);
-    // Where the charging contacts are belongs to the dimensions of the platform (geometry.dock_contact_x).
-    config.dock_contact_x = GeometryNumber("dock_contact_x");
-    config.dock_max_position_accuracy = declare_parameter("dock_max_position_accuracy", config.dock_max_position_accuracy);
-    config.dock_reference_limit = declare_parameter("dock_reference_limit", config.dock_reference_limit);
-    // undock_distance is a setting of params.set (LoadLogicParams), the rest is the platform's.
-    config.undock.distance = declare_parameter("undock_distance", config.undock.distance);
-    config.undock.speed = declare_parameter("undock_speed", config.undock.speed);
-    config.undock.stall_time = declare_parameter("undock_stall_time", config.undock.stall_time);
-    config.undock.course_limit =
-        declare_parameter("undock_course_limit", config.undock.course_limit * 180.0 / M_PI) * M_PI / 180.0;
-    // docking_approach_distance and docking_retry_count are settings of params.set (LoadLogicParams).
-    config.dock.approach_distance = declare_parameter("docking_approach_distance", config.dock.approach_distance);
-    config.dock.retry_count = static_cast<int>(
-        declare_parameter("docking_retry_count", static_cast<int64_t>(config.dock.retry_count)));
-    config.dock.speed = declare_parameter("docking_speed", config.dock.speed);
-    config.dock.contact_speed = declare_parameter("contact_speed", config.dock.contact_speed);
-    config.dock.gate_distance = declare_parameter("dock_gate_distance", config.dock.gate_distance);
-    config.dock.gate_lateral = declare_parameter("dock_gate_lateral", config.dock.gate_lateral);
-    config.dock.gate_heading =
-        declare_parameter("dock_gate_heading", config.dock.gate_heading * 180.0 / M_PI) * M_PI / 180.0;
-    config.dock.overshoot = declare_parameter("dock_overshoot", config.dock.overshoot);
-    config.dock.contact_timeout = declare_parameter("contact_timeout", config.dock.contact_timeout);
-    // The straight way to the station where the planner gives no answer, the platform's.
-    config.dock.direct = declare_parameter("docking_direct", config.dock.direct);
-    config.dock.direct_margin = declare_parameter("direct_margin", config.dock.direct_margin);
-    if (!(config.dock.direct_margin > 0) || !std::isfinite(config.dock.direct_margin)) {
-      throw std::invalid_argument("direct_margin needs to be above 0");
-    }
-    // The charge that confirms docking and whose loss on the station is told, the platform's.
-    config.charge.current = declare_parameter("charge_confirm_current", config.charge.current);
-    config.charge.time = declare_parameter("charge_confirm_time", config.charge.time);
-    config.charge.timeout = declare_parameter("charge_confirm_timeout", config.charge.timeout);
-    config.charge.expected_below = declare_parameter("charge_expected_below", config.charge.expected_below);
-    config.charge.lost_time = declare_parameter("charge_lost_time", config.charge.lost_time);
-    if (!(config.charge.current > 0) || !(config.charge.time >= 0) || !(config.charge.timeout > config.charge.time) ||
-        !(config.charge.lost_time > 0)) {
-      throw std::invalid_argument(
-          "charge_confirm_current and charge_lost_time need to be above 0, charge_confirm_timeout above "
-          "charge_confirm_time");
-    }
-    // The calibration drive: what a start needs, and how long the program may be silent.
-    config.calibration.max_position_accuracy =
-        declare_parameter("calibration_max_position_accuracy", config.calibration.max_position_accuracy);
-    config.calibration.min_battery = static_cast<int>(
-        declare_parameter("calibration_min_battery", static_cast<int64_t>(config.calibration.min_battery)));
-    config.calibration.status_timeout =
-        declare_parameter("calibration_status_timeout", config.calibration.status_timeout);
-    config.calibration.timeout = declare_parameter("calibration_timeout", config.calibration.timeout);
-    config.id_seed = (static_cast<uint64_t>(std::random_device{}()) << 32) | std::random_device{}();
-    return config;
-  }
-
   void OnHardwareStatus(const mowbite_msgs::msg::HardwareStatus& msg) {
     HardwareSnapshot hw;
     hw.telemetry_ok = msg.telemetry_ok;
@@ -1428,6 +1354,12 @@ class LogicNode : public rclcpp::Node {
         core_.Call<&LogicCore::OnMapEditResult>(false, "", "NO_ANSWER",
                                                 "No answer from mowbite_map; look at the map before saving again");
       }
+      if (body_sent_ && t - *body_sent_ > map_edit_timeout_s_) {
+        body_sent_.reset();
+        if (body_request_id_) recorded_body_client_->remove_pending_request(*body_request_id_);
+        body_request_id_.reset();
+        core_.Call<&LogicCore::RecordedBodyKept>(-1, "NO_ANSWER", "No answer from mowbite_map");
+      }
       if (dock_check_sent_ && t - *dock_check_sent_ > dock_check_timeout_s_) {
         set_heading_client_->remove_pending_request(dock_check_request_id_);
         FinishDockCheck(false, 0, 0, 999.0f, "No answer from the localization (localization/set_heading)");
@@ -2031,20 +1963,11 @@ class LogicNode : public rclcpp::Node {
     gps_limits_pub_->publish(limits);
   }
 
-  // A number of the platform's file (parameters geometry.*); one that is missing stops the start.
-  double GeometryNumber(const std::string& key) {
-    const std::string name = "geometry." + key;
-    if (!has_parameter(name)) declare_parameter(name, std::numeric_limits<double>::quiet_NaN());
-    const double value = get_parameter(name).as_double();
-    if (std::isnan(value)) throw std::invalid_argument(key + " is missing in the geometry file of the platform");
-    return value;
-  }
-
   // The dimensions of the platform (mowbite_bringup/config/geometry/<platform>.yaml); the entries of the user follow.
   Geometry FactoryGeometry() {
     json factory = json::object();
     for (const auto& key : GeometryKeys()) {
-      if (key.type == GeometryType::kNumber) factory[key.name] = GeometryNumber(key.name);
+      if (key.type == GeometryType::kNumber) factory[key.name] = GeometryNumber(*this, key.name);
     }
     // The outline of the body, if the platform has one: x0, y0, x1, y1, ...
     const std::vector<double> flat = declare_parameter("geometry.robot_outline", std::vector<double>());
@@ -2061,6 +1984,48 @@ class LogicNode : public rclcpp::Node {
 
   std::string GeometryPath() const {
     return data_dir_.empty() ? "" : data_dir_ + "/geometry.json";
+  }
+
+  // properties.recorded_body of an area recorded now. Called with the mutex held.
+  std::string RecordedBodyText() const {
+    json body = geometry_.RecordedBody();
+    body["by"] = recorded_by_;
+    return body.dump();
+  }
+
+  // The areas recorded here take the body robot.geometry.set made; a failure is RECORDED_BODY_KEPT. Called with the
+  // mutex held.
+  void SendRecordedBody() {
+    const uint64_t seq = ++body_seq_;
+    if (!recorded_body_client_->service_is_ready()) {
+      body_sent_.reset();
+      core_.Call<&LogicCore::RecordedBodyKept>(-1, "NO_ANSWER", "mowbite_map does not offer map/set_recorded_body");
+      return;
+    }
+    auto request = std::make_shared<mowbite_msgs::srv::SetRecordedBody::Request>();
+    request->by = recorded_by_;
+    request->recorded_body = RecordedBodyText();
+    body_sent_ = MonotonicSeconds();
+    body_request_id_ =
+        recorded_body_client_
+            ->async_send_request(
+                request,
+                [this, seq](rclcpp::Client<mowbite_msgs::srv::SetRecordedBody>::SharedFuture f) {
+                  const auto r = f.get();
+                  {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    // A late answer after the timeout, or one to an older change.
+                    if (seq != body_seq_ || !body_sent_) return;
+                    body_sent_.reset();
+                    if (r->success) {
+                      RCLCPP_INFO(get_logger(), "recorded_body of %d area(s) follows the new dimensions", r->areas);
+                      return;
+                    }
+                    core_.Call<&LogicCore::RecordedBodyKept>(r->areas, r->code, r->message);
+                  }
+                  Step();
+                })
+            .request_id;
   }
 
   // What robot.geometry.set saved. A file that cannot be read stays as it is, the dimensions of the platform hold.
@@ -2131,6 +2096,7 @@ class LogicNode : public rclcpp::Node {
                         json{{"reason", "BUSY"}}.dump());
         return;
       }
+      const json body_before = geometry_.RecordedBody();
       Geometry changed = geometry_;
       change = changed.Set(params);
       if (!change.ok) {
@@ -2151,6 +2117,7 @@ class LogicNode : public rclcpp::Node {
         }
         geometry_ = std::move(changed);
         core_.Call<&LogicCore::SetTurningRadius>(geometry_.TurningRadius());
+        if (geometry_.RecordedBody() != body_before) SendRecordedBody();
         // Only a value that is another now is news; a key entered with the platform's own value is not.
         if (!change.changed.empty()) {
           core_.Call<&LogicCore::GeometryChanged>(change.changed, change.below_default, geometry_.version());
@@ -2348,6 +2315,12 @@ class LogicNode : public rclcpp::Node {
       mowbite_msgs::msg::Outline outline;
       for (const auto& p : ring) outline.points.push_back(ToPoint(p));
       request->obstacles.push_back(std::move(outline));
+    }
+    // Only rings driven forward without a break carry the body they were recorded with.
+    const std::string body = RecordedBodyText();
+    if (edit.outline_driven_reason.empty()) request->recorded_body = body;
+    for (const auto& reason : edit.obstacles_driven_reason) {
+      request->obstacles_recorded_body.push_back(reason.empty() ? body : "");
     }
     edit_sent_ = MonotonicSeconds();
     edit_request_id_ = add_area_client_
@@ -2762,6 +2735,11 @@ class LogicNode : public rclcpp::Node {
   // The map edit on its way: when it went out, its request, and a number that tells a late answer apart.
   std::optional<double> edit_sent_;
   std::optional<int64_t> edit_request_id_;
+  // by of recorded_body, and the change of it on its way to the map like the edit above.
+  std::string recorded_by_;
+  std::optional<double> body_sent_;
+  std::optional<int64_t> body_request_id_;
+  uint64_t body_seq_ = 0;
   // The release asked of S2, under mutex_.
   std::optional<double> release_sent_;
   // ids of the emergency.reset calls that wait for the safety node.
@@ -2801,6 +2779,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Client<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_client_;
   rclcpp::Client<mowbite_msgs::srv::SetBlade>::SharedPtr blade_client_;
   rclcpp::Client<mowbite_msgs::srv::AddArea>::SharedPtr add_area_client_;
+  rclcpp::Client<mowbite_msgs::srv::SetRecordedBody>::SharedPtr recorded_body_client_;
   rclcpp::Client<mowbite_msgs::srv::SetDock>::SharedPtr set_dock_client_;
   rclcpp::Client<mowbite_msgs::srv::SetHeading>::SharedPtr set_heading_client_;
   rclcpp::Client<mowbite_msgs::srv::SetCharge>::SharedPtr charge_client_;

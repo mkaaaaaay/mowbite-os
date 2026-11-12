@@ -107,9 +107,14 @@ class MapService {
   RpcOutcome ReplaceChecked(const std::string& map, const std::string& expected_sha256);
 
   // For the logic: adds an area of a recording (outline open or closed) with a new id, and the obstacles recorded
-  // inside it as areas of type obstacle in the same write.
+  // inside it as areas of type obstacle in the same write. recorded_body: JSON objects for properties.recorded_body,
+  // empty for none; obstacles_recorded_body is empty or has one entry per obstacle.
   EditResult AddArea(const std::string& type, const std::string& name, const std::vector<Point>& outline,
-                     const std::vector<std::vector<Point>>& obstacles = {});
+                     const std::vector<std::vector<Point>>& obstacles = {}, const std::string& recorded_body = "",
+                     const std::vector<std::string>& obstacles_recorded_body = {});
+  // For the logic: properties.recorded_body of every area whose recorded_body has this by becomes body (a JSON object
+  // with the same by). areas: how many carry this by. None of them writes nothing.
+  EditResult SetRecordedBody(const std::string& by, const std::string& body, int* areas);
   // For the logic: the docking station becomes the only one, with a new id, like with OpenMower.
   EditResult SetDock(const Point& position, double heading);
 

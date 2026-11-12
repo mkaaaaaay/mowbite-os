@@ -96,6 +96,9 @@ class Geometry {
   // nothing. Out-of-range values are refused, not cut to the bound.
   GeometryChange Set(const json& request);
 
+  // properties.recorded_body of an area recorded with the body as it is now, without by: robot_width, robot_front,
+  // robot_rear (m) and robot_outline ([] for the rectangle).
+  json RecordedBody() const;
   // Keys of the body below the platform's value now.
   std::vector<std::string> BelowDefault() const;
   // m from base_link to the farthest point of the body: the points of robot_outline, without one the corners of the

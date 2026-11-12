@@ -54,10 +54,29 @@ inline double Millimetres(double metres) {
 struct CutRing {
   Ring ring;
   size_t dropped = 0;
+  // The index in the old ring of the first point kept; the crossing put in before it, if added.
+  size_t first = 0;
+  bool crossing_added = false;
 };
 // The loop, or nullopt when the line does not cross itself where the path cut off before and after the crossing is
 // at most max_cut (m).
 std::optional<CutRing> CutOverhang(const Ring& ring, double max_cut);
+
+// What the recorder knows of a point besides where it is.
+struct PointMark {
+  // rad, of base_link when the point was taken
+  double heading = 0;
+  bool heading_valid = false;
+  // false: taken by collect_point
+  bool automatic = false;
+  // No interruption since the point before: automatic points stayed on, no undo, no inaccurate or lost pose, no jump.
+  bool joined = false;
+};
+
+// Why the closed ring is not the forward driven track of the body, empty if it is: MANUAL_POINT, NO_HEADING,
+// INTERRUPTED, GAP, DIRECTION or SHARP_TURN, the first of them in this order that applies. marks has one entry per
+// point of the ring. Only rings that pass get recorded_body, which lets the planner drive the line without a margin.
+std::string DrivenProblem(const Ring& ring, const std::vector<PointMark>& marks);
 
 // recording.undo without meters: the path (m) taken back from the end of the open ring.
 constexpr double kUndoDefaultM = 1.0;
@@ -79,6 +98,16 @@ struct RecorderConfig {
   double min_dock_distance = 0.5;
   // The mower backs onto the contacts (dock_contact_x below 0), for the hint in the log.
   bool dock_backwards = false;
+
+  // Fixed limits of the driven track, no settings. base_link moved this far (m) from where the direction was judged
+  // last is judged again: backwards takes points back.
+  static constexpr double kReverseStep = 0.05;
+  // An edge of a driven ring is at most this long (m).
+  static constexpr double kMaxDrivenEdge = 0.3;
+  // An edge of a driven ring points between the headings at its ends, widened by this (rad) on each side.
+  static constexpr double kDirectionAllowance = M_PI / 3;
+  // Two edges of a driven ring turn by at most this (rad).
+  static constexpr double kMaxDrivenTurn = 2 * M_PI / 3;
 };
 
 // A change of the map the recording asks mowbite_map for.
@@ -89,6 +118,9 @@ struct MapEdit {
   std::string type;
   Ring outline;
   std::vector<Ring> obstacles;
+  // DrivenProblem of the outline and of each obstacle, empty for a driven ring.
+  std::string outline_driven_reason;
+  std::vector<std::string> obstacles_driven_reason;
   // kDock: on the contacts, map frame; heading in rad, the way the mower drives in
   double x = 0;
   double y = 0;
@@ -117,10 +149,13 @@ class AreaRecorder {
   size_t trimmed_points() const {
     return trimmed_points_;
   }
-  // heading_valid: the localization has its heading, else base_link may be off by the antenna offset.
-  void OnPose(double x, double y, float position_accuracy, bool heading_valid);
+  // heading (rad) counts only with heading_valid: the localization has its heading, else base_link may be off by the
+  // antenna offset.
+  void OnPose(double x, double y, double heading, float position_accuracy, bool heading_valid);
   // The pose got too old.
   void OnPoseLost();
+  // The localization jumped back onto GPS.
+  void OnPositionJump();
   // Whether mowbite_map takes changes now, and why not.
   void SetMapWritable(bool writable, const Reason& reason);
   // The debounced contact with the docking station, which the point on the contacts needs.
@@ -161,6 +196,10 @@ class AreaRecorder {
   const std::vector<Ring>& obstacles() const {
     return obstacles_;
   }
+  // The marks of the open ring, one per point.
+  const std::vector<PointMark>& marks() const {
+    return marks_;
+  }
   // The ring being recorded, empty when none is.
   const Ring& current() const {
     return current_;
@@ -177,14 +216,30 @@ class AreaRecorder {
   Result Finish(const std::string& action, const std::string& type);
   void Undo(double meters);
   Result RecordDock();
-  void AddPoint(double x, double y);
+  void AddPoint(double x, double y, const PointMark& mark);
+  void DropLastPoint();
+  // Backwards takes back the last points in front of base_link; true while the mower reverses.
+  bool TakeBackReversing(double x, double y, double heading);
+  void EndReversing();
+  void Interrupt();
+  // Drops end points up to max_overhang of path until the closing edge passes DrivenProblem.
+  void TrimDrivenEnd();
   size_t PointCount() const;
 
   RecorderConfig config_;
   bool recording_ = false;
   Ring current_;
+  std::vector<PointMark> marks_;
+  // Since the last point of the open ring.
+  bool interrupted_ = false;
+  // Where the direction of base_link was judged last, whether that was backwards and the points taken back since.
+  std::optional<Point2> reverse_anchor_;
+  bool reversing_ = false;
+  size_t reverse_taken_ = 0;
   std::optional<Ring> outline_;
   std::vector<Ring> obstacles_;
+  std::string outline_driven_reason_;
+  std::vector<std::string> obstacles_driven_reason_;
   // Like OpenMower: points come by themselves at min_point_distance.
   bool auto_points_ = true;
   bool collect_requested_ = false;

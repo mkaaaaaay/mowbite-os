@@ -16,7 +16,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Point2, x, y)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockPose, x, y, heading)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RecorderConfig, min_point_distance, max_position_accuracy, min_area,
                                                 max_overhang, max_points, min_dock_distance, dock_backwards)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(MapEdit, kind, type, outline, obstacles, x, y, heading)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(MapEdit, kind, type, outline, obstacles, outline_driven_reason,
+                                                obstacles_driven_reason, x, y, heading)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobArea, id, name, mowable)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UndockConfig, distance, speed, stall_time, course_limit, course_distance, corridor)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UndockPath, poses, corridor, speed, stall_time)
@@ -77,7 +78,7 @@ void to_json(Json& j, const Effect& effect) {
 static_assert(sizeof(Reason) == 80);
 static_assert(sizeof(Event) == 80);
 static_assert(sizeof(RecorderConfig) == 56);
-static_assert(sizeof(MapEdit) == 112);
+static_assert(sizeof(MapEdit) == 168);
 static_assert(sizeof(JobArea) == 72);
 static_assert(sizeof(UndockConfig) == 48);
 static_assert(sizeof(UndockPath) == 64);
@@ -131,7 +132,8 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::RestoreJob, &L::RefuseStart, &L::RefuseReset, &L::OnReleaseAnswered, &L::GeometryChanged, &L::SetHold,
       &L::SetGpsSettings, &L::NextJobStep, &L::OnJobPlanned, &L::OnJobPlanFailed, &L::OnJobProgress, &L::OnLegEnded,
       &L::OnTick, &L::OnBladeRefused, &L::TakeOverlayChanged, &L::SetRestartHold, &L::ReportRestart, &L::OnStopRelease,
-      &L::TakeEffects, &L::SetUnwritableFile, &L::AbandonStart, &L::SetTurningRadius);
+      &L::TakeEffects, &L::SetUnwritableFile, &L::AbandonStart, &L::SetTurningRadius,
+      &L::RecordedBodyKept);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};

@@ -154,9 +154,10 @@ TestCore Recording() {
 TestCore Ring3() {
   TestCore core = Recording();
   EXPECT_EQ(core.OnAction("mower_logic:area_recording/start_recording"), ActionResult::kDone);
-  core.OnPose(PoseAt(2.0, 0.5));
-  core.OnPose(PoseAt(3.0, 0.5));
-  core.OnPose(PoseAt(3.0, 1.5));
+  // Forward: east, then north.
+  core.OnPose(PoseAt(2.0, 0.5, 0));
+  core.OnPose(PoseAt(3.0, 0.5, 0));
+  core.OnPose(PoseAt(3.0, 1.5, M_PI / 2));
   Settle(core);
   return core;
 }

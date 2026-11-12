@@ -1,0 +1,12 @@
+# Replaces recorded_body of every area whose recorded_body carries this by, after robot.geometry.set changed the body.
+string by
+# The new recorded_body as a JSON object with the same by.
+string recorded_body
+---
+bool success
+# Areas whose recorded_body carries this by.
+int32 areas
+# Why it was not saved, empty if it was
+string message
+# Why it was not saved, empty if it was: INVALID, DATUM, TOO_LARGE or STORAGE
+string code

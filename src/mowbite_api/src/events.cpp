@@ -608,6 +608,17 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
        {"The response topic of the request is not rpc/response/<token> with a token of 1 to 64 of A-Z, a-z, 0-9, "
         "dot, underscore and hyphen: nothing was done",
         {}}},
+      {"REVERSING",
+       {"Reversing takes the points ahead of base_link back and records none",
+        {},
+        {{"de",
+          {"Rückwärts nimmt Punkte zurück",
+           "Beim Rückwärtsfahren nimmt die Aufnahme die Punkte vor dem Mäher zurück und setzt keine neuen.",
+           "Zum Aufnehmen vorwärts fahren."}},
+         {"en",
+          {"Reversing takes points back",
+           "While the mower reverses, the recording takes back the points ahead of it and adds none.",
+           "Drive forward to record."}}}}},
       {"RING_CROSSES_ITSELF", {"The ring crosses itself", {}}},
       {"RING_FEW_POINTS", {"The ring has too few points", {Integer("points", "", "Points of the ring"), Limit("")}}},
       {"RING_TOO_SMALL",
@@ -795,6 +806,64 @@ ReasonEntry PlannerHome(const std::string& code) {
                       "Start mowing again later. If it stays so, restart MowBite OS."}}});
 }
 
+// AREA_RECORDED: why the outline does not count as driven forward without a break, with the texts of each value.
+Field DrivenReason() {
+  // Every help ends in the same sentence.
+  const auto texts = [](const char* de_name, const std::string& de_help, const char* de_fix, const char* en_name,
+                        const std::string& en_help, const char* en_fix) {
+    return UserTexts{{"de", {de_name, de_help + " Die Fläche wird normal gemäht, nur ohne den genauen Rand.", de_fix}},
+                     {"en", {en_name, en_help + " The area is mowed as usual, only without the exact edge.", en_fix}}};
+  };
+  Field field = Text("driven_reason",
+                     "Only when driven is false: the first of these that applies; the area is mowed as usual, only "
+                     "without the exact edge",
+                     false, {"MANUAL_POINT", "NO_HEADING", "INTERRUPTED", "GAP", "DIRECTION", "SHARP_TURN"});
+  field.value_texts = {
+      {"MANUAL_POINT",
+       texts("Punkte von Hand",
+             "Mindestens ein Punkt wurde von Hand gesetzt. Dann ist nicht belegt, dass der Mäher die Linie vorwärts "
+             "gefahren ist.",
+             "Für den genauen Rand die Fläche mit automatischen Punkten vorwärts neu aufnehmen.", "Points set by hand",
+             "At least one point was set by hand, so nothing shows that the mower drove the line forward.",
+             "For the exact edge, record the area again driving forward with automatic points.")},
+      {"NO_HEADING",
+       texts("Richtung unbekannt",
+             "Beim Aufnehmen kannte der Mäher seine Fahrtrichtung noch nicht.",
+             "Erst einige Meter geradeaus fahren, dann für den genauen Rand neu aufnehmen.", "Heading unknown",
+             "The mower didn't know its heading yet while recording.",
+             "Drive straight for a few metres first, then record again for the exact edge.")},
+      {"INTERRUPTED",
+       texts("Aufnahme unterbrochen",
+             "Die automatischen Punkte waren zwischendurch aus, Punkte wurden mit Rückgängig entfernt, oder die "
+             "Position war ungenau, fehlte oder sprang.",
+             "Für den genauen Rand die Fläche ohne Unterbrechung vorwärts neu aufnehmen.", "Recording interrupted",
+             "Automatic points were off for a while, points were undone, or the position was inaccurate, missing or "
+             "jumped.",
+             "For the exact edge, record the area again driving forward without a break.")},
+      {"GAP",
+       texts("Lücke in der Linie",
+             "Zwischen zwei Punkten oder vom letzten zum ersten Punkt liegen mehr als 30 cm.",
+             "Die Aufnahme nahe am ersten Punkt beenden und für den genauen Rand neu aufnehmen.", "Gap in the line",
+             "Two points, or the last and the first point, are more than 30 cm apart.",
+             "End the recording close to the first point and record again for the exact edge.")},
+      {"DIRECTION",
+       texts("Nicht in Fahrtrichtung",
+             "Ein Stück der Linie liegt nicht in Fahrtrichtung des Mähers, etwa nach Rückwärtsfahren oder einem "
+             "seitlichen Versatz.",
+             "Für den genauen Rand die Fläche durchgehend vorwärts neu aufnehmen.", "Not along the heading",
+             "A piece of the line doesn't follow the heading of the mower, for example after reversing or a step "
+             "sideways.",
+             "For the exact edge, record the area again driving forward all the way.")},
+      {"SHARP_TURN",
+       texts("Zu spitze Kehre",
+             "Die Linie knickt an einer Stelle um mehr als 120 Grad. Dort ist nicht sicher, in welche Richtung sich "
+             "der Mäher gedreht hat.",
+             "Kehren als Bogen fahren und für den genauen Rand neu aufnehmen.", "Turn too sharp",
+             "The line turns by more than 120 degrees at one spot, where it isn't certain which way the mower turned.",
+             "Drive turns as a curve and record again for the exact edge.")}};
+  return field;
+}
+
 // A list of reasons that all wait for the user: codes with their severity.
 std::vector<ReasonEntry> User(const std::vector<std::pair<std::string, std::string>>& codes) {
   std::vector<ReasonEntry> out;
@@ -929,7 +998,8 @@ const std::vector<EventEntry>& Events() {
                               kRecordingActions)}),
             [] {
               // An automatic point is taken again by itself once the position is accurate.
-              std::vector<ReasonEntry> reasons = {R("POSITION_ACCURACY", "warning", "auto", {{"action", "point"}})};
+              std::vector<ReasonEntry> reasons = {R("POSITION_ACCURACY", "warning", "auto", {{"action", "point"}}),
+                                                  R("REVERSING", "info", "auto")};
               for (auto& reason : User({{"HOLD", "info"},
                                         {"STILL_SAVING", "info"},
                                         {"EMERGENCY", "error"},
@@ -1133,7 +1203,26 @@ const std::vector<EventEntry>& Events() {
             {Text("area_id", "Id of the area", true),
              Text("area_type", "mow for a mowing area, nav for a navigation area", true, {"mow", "nav"}),
              Integer("obstacles", "", "Obstacles in it", true), Integer("points", "", "Points of its outline", true),
-             Number("area_m2", "m2", "Its area", true)}),
+             Number("area_m2", "m2", "Its area", true),
+             Bool("driven",
+                  "The outline was driven forward without a break and carries recorded_body: the planner may drive "
+                  "its line without a margin"),
+             DrivenReason(), Integer("obstacles_driven", "", "Obstacles driven like that, with recorded_body", true)}),
+      Event("RECORDED_BODY_KEPT", "logic",
+            "The areas recorded on this mower could not take the body robot.geometry.set made; they keep the old one",
+            Rated(true, {Integer("areas", "", "Areas recorded on this mower, when the map could tell")}),
+            {WithTexts(R("SAVE_FAILED", "warning", "user"),
+                       {{"de",
+                         {"Maße nicht an den Flächen",
+                          "Die neuen Maße des Mähers konnten nicht an den mit ihm aufgenommenen Flächen gespeichert "
+                          "werden. Diese behalten die alten Maße.",
+                          "Die Änderung der Maße wiederholen oder die Flächen für den genauen Rand neu aufnehmen."}},
+                        {"en",
+                         {"Dimensions not on the areas",
+                          "The new dimensions of the mower couldn't be saved with the areas recorded on it. They keep "
+                          "the old ones.",
+                          "Change the dimensions again, or record the areas again for the exact edge."}}})},
+            "warning", "user"),
       Event("GEOMETRY_CHANGED", "logic", "The dimensions of the mower changed",
             {List("changed", "The keys whose value is another now"),
              List("below_default", "Keys of the body now below the value of the platform"),

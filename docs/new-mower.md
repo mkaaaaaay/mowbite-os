@@ -85,6 +85,10 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   the areas around the station are narrower, the mower waits for the planner there; for the straight way draw them
   wider or set `docking_approach_distance` larger. `direct_margin` is also how far base_link may get off the line
   before the drive ends, and has to be above 0.
+- Recording areas: every ring driven forward with automatic points and without a break keeps the body it was recorded
+  with in `properties.recorded_body` (with `by`, the id in `<data_dir>/recorded_by`), and the planner may then drive
+  its line without a margin; robot.geometry.set of the body moves it on those areas. So measure the body before the
+  first recording. The recorder judges the way by the heading of `localization/pose`: reversing takes points back.
 - Driver parameters (ports, baud rates, limits) in the file of the driver; values measured on one mower in a file on
   that mower. No value in two files.
 - The datum of the garden: one place on the mower, `MOWBITE_DATUM_LAT`, `_LONG`, `_HEIGHT` (Tron `/etc/mowbite/os.conf`,

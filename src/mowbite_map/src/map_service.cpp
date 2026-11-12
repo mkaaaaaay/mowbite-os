@@ -35,6 +35,21 @@ std::string SaveFailedCode(int rpc_code) {
   }
 }
 
+// The recorded_body of a recording: empty for none, else a JSON object.
+std::optional<json> RecordedBody(const std::string& text, std::string* error) {
+  if (text.empty()) return json();
+  json body = json::parse(text, nullptr, false);
+  if (!body.is_object()) {
+    *error = "recorded_body is not a JSON object";
+    return std::nullopt;
+  }
+  return body;
+}
+
+bool CarriesBy(const json& body, const std::string& by) {
+  return body.contains("by") && body["by"] == by;
+}
+
 // 7 decimals of a degree are about a centimetre.
 std::string Describe(const Datum& datum) {
   char text[64];
@@ -180,25 +195,60 @@ RpcOutcome MapService::ReplaceMap(const json& map) {
 }
 
 EditResult MapService::AddArea(const std::string& type, const std::string& name, const std::vector<Point>& outline,
-                               const std::vector<std::vector<Point>>& obstacles) {
+                               const std::vector<std::vector<Point>>& obstacles, const std::string& recorded_body,
+                               const std::vector<std::string>& obstacles_recorded_body) {
+  if (!obstacles_recorded_body.empty() && obstacles_recorded_body.size() != obstacles.size()) {
+    return {false, "", "Invalid area '" + name + "': recorded_body for " +
+                           std::to_string(obstacles_recorded_body.size()) + " of " + std::to_string(obstacles.size()) +
+                           " obstacles", "INVALID"};
+  }
+  std::string error;
+  const auto put_body = [&error](Area* area, const std::string& text) {
+    const auto body = RecordedBody(text, &error);
+    if (!body) return false;
+    if (!body->is_null()) area->other_properties["recorded_body"] = *body;
+    return true;
+  };
   MapData candidate = map_;
   Area area;
   area.id = NewId(candidate);
   area.name = name;
   area.type = type;
   area.outline = outline;
+  if (!put_body(&area, recorded_body)) return {false, "", "Invalid area '" + name + "': " + error, "INVALID"};
   const std::string id = area.id;
   candidate.areas.push_back(std::move(area));
-  for (const auto& ring : obstacles) {
+  for (size_t i = 0; i < obstacles.size(); i++) {
     Area obstacle;
     obstacle.id = NewId(candidate);
     obstacle.type = "obstacle";
-    obstacle.outline = ring;
+    obstacle.outline = obstacles[i];
+    if (!obstacles_recorded_body.empty() && !put_body(&obstacle, obstacles_recorded_body[i])) {
+      return {false, "", "Invalid obstacle of area '" + name + "': " + error, "INVALID"};
+    }
     candidate.areas.push_back(std::move(obstacle));
   }
   std::string what = "area '" + name + "' (" + type + ")";
   if (!obstacles.empty()) what += " with " + std::to_string(obstacles.size()) + " obstacles";
   return Apply(candidate, id, what);
+}
+
+EditResult MapService::SetRecordedBody(const std::string& by, const std::string& body, int* areas) {
+  *areas = 0;
+  std::string error;
+  const auto parsed = RecordedBody(body, &error);
+  if (!parsed || by.empty() || !CarriesBy(*parsed, by)) {
+    return {false, "", "Invalid recorded_body: " + (error.empty() ? "it needs the by " + by : error), "INVALID"};
+  }
+  MapData candidate = map_;
+  for (auto& area : candidate.areas) {
+    auto old = area.other_properties.find("recorded_body");
+    if (old == area.other_properties.end() || !CarriesBy(*old, by)) continue;
+    *old = *parsed;
+    ++*areas;
+  }
+  if (*areas == 0) return {true, "", "", ""};
+  return Apply(candidate, by, "recorded_body of " + std::to_string(*areas) + " areas, by");
 }
 
 EditResult MapService::SetDock(const Point& position, double heading) {

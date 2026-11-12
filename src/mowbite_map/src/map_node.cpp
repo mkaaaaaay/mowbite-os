@@ -10,6 +10,7 @@
 #include <mowbite_msgs/srv/add_area.hpp>
 #include <mowbite_msgs/srv/replace_map.hpp>
 #include <mowbite_msgs/srv/set_dock.hpp>
+#include <mowbite_msgs/srv/set_recorded_body.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
@@ -84,9 +85,21 @@ class MapNode : public rclcpp::Node {
             obstacles.emplace_back();
             for (const auto& p : ring.points) obstacles.back().push_back({p.x, p.y});
           }
-          const EditResult result = service_.AddArea(request->type, request->name, outline, obstacles);
+          const EditResult result = service_.AddArea(request->type, request->name, outline, obstacles,
+                                                     request->recorded_body, request->obstacles_recorded_body);
           response->success = result.ok;
           response->id = result.id;
+          response->message = result.message;
+          response->code = result.code;
+          Flush();
+        });
+    recorded_body_srv_ = create_service<mowbite_msgs::srv::SetRecordedBody>(
+        "map/set_recorded_body", [this](const std::shared_ptr<mowbite_msgs::srv::SetRecordedBody::Request> request,
+                                        std::shared_ptr<mowbite_msgs::srv::SetRecordedBody::Response> response) {
+          int areas = 0;
+          const EditResult result = service_.SetRecordedBody(request->by, request->recorded_body, &areas);
+          response->success = result.ok;
+          response->areas = areas;
           response->message = result.message;
           response->code = result.code;
           Flush();
@@ -215,6 +228,7 @@ class MapNode : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr datum_sub_;
   rclcpp::Subscription<std_msgs::msg::Int64>::SharedPtr hold_sub_;
   rclcpp::Service<mowbite_msgs::srv::AddArea>::SharedPtr add_area_srv_;
+  rclcpp::Service<mowbite_msgs::srv::SetRecordedBody>::SharedPtr recorded_body_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetDock>::SharedPtr set_dock_srv_;
   rclcpp::Service<mowbite_msgs::srv::ReplaceMap>::SharedPtr replace_srv_;
   rclcpp::TimerBase::SharedPtr timer_;

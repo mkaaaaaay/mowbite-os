@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
+#include <random>
 
 #include "mowbite_logic/area_recorder.h"
 #include "mowbite_logic/logic_core.h"
@@ -28,18 +30,20 @@ bool On(const AreaRecorder& recorder, const std::string& name) {
   return false;
 }
 
-// Drives the mower along the corners in steps of 0.05 m with a pose at every step.
+// Drives the mower forward along the corners in steps of 0.05 m with a pose at every step, turning on the spot at
+// each corner.
 void Drive(AreaRecorder& recorder, const Ring& corners, float accuracy = 0.02f) {
+  double heading = 0;
   for (size_t i = 0; i + 1 < corners.size(); i++) {
     const Point2& a = corners[i];
     const Point2& b = corners[i + 1];
+    heading = std::atan2(b.y - a.y, b.x - a.x);
     const int steps = static_cast<int>(std::ceil(std::hypot(b.x - a.x, b.y - a.y) / 0.05));
-    for (int s = 0; s < steps; s++) {
+    for (int s = 0; s <= steps; s++) {
       const double t = static_cast<double>(s) / steps;
-      recorder.OnPose(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, accuracy, true);
+      recorder.OnPose(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, heading, accuracy, true);
     }
   }
-  recorder.OnPose(corners.back().x, corners.back().y, accuracy, true);
 }
 
 // Around a square of side metres from (x0, y0), ending close to the start.
@@ -139,7 +143,7 @@ TEST(Recorder, StartsWithStartRecordingOnly) {
 
 TEST(Recorder, PointsComeEveryTenthOfAMetre) {
   AreaRecorder recorder = Writable();
-  recorder.OnPose(0, 0, 0.02f, true);
+  recorder.OnPose(0, 0, 0, 0.02f, true);
   EXPECT_TRUE(recorder.current().empty()) << "no points before start_recording";
   ASSERT_EQ(recorder.OnAction("start_recording"), AreaRecorder::Result::kDone);
   EXPECT_EQ(recorder.SubState(), "RECORD_OUTLINE");
@@ -157,7 +161,7 @@ TEST(Recorder, PointsComeEveryTenthOfAMetre) {
 TEST(Recorder, NoPointsFromAnInaccuratePositionAndOneEventForIt) {
   AreaRecorder recorder = Writable();
   recorder.OnAction("start_recording");
-  recorder.OnPose(0, 0, 0.02f, true);
+  recorder.OnPose(0, 0, 0, 0.02f, true);
   Drive(recorder, {{0, 0}, {1, 0}}, 0.3f);
   EXPECT_EQ(recorder.current().size(), 1u);
   auto events = recorder.TakeEvents();
@@ -180,7 +184,7 @@ TEST(Recorder, NoPointsFromAnInaccuratePositionAndOneEventForIt) {
 TEST(Recorder, NanAccuracyCountsAsInaccurate) {
   AreaRecorder recorder = Writable();
   recorder.OnAction("start_recording");
-  recorder.OnPose(0, 0, std::nanf(""), true);
+  recorder.OnPose(0, 0, 0, std::nanf(""), true);
   EXPECT_TRUE(recorder.current().empty());
 }
 
@@ -197,11 +201,11 @@ TEST(Recorder, ManualPointsOnlyOnRequestAndFarEnough) {
   Drive(recorder, {{0, 0}, {1, 0}});
   EXPECT_TRUE(recorder.current().empty());
   ASSERT_EQ(recorder.OnAction("collect_point"), AreaRecorder::Result::kDone);
-  recorder.OnPose(1, 0, 0.02f, true);
+  recorder.OnPose(1, 0, 0, 0.02f, true);
   ASSERT_EQ(recorder.current().size(), 1u);
   // A second one at the same spot is refused with the distance.
   recorder.OnAction("collect_point");
-  recorder.OnPose(1.05, 0, 0.02f, true);
+  recorder.OnPose(1.05, 0, 0, 0.02f, true);
   EXPECT_EQ(recorder.current().size(), 1u);
   auto events = recorder.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
@@ -210,7 +214,7 @@ TEST(Recorder, ManualPointsOnlyOnRequestAndFarEnough) {
   EXPECT_NEAR(events[0].details["distance"].get<double>(), 0.05, 1e-9);
   EXPECT_DOUBLE_EQ(events[0].details["limit"].get<double>(), 0.1);
   recorder.OnAction("collect_point");
-  recorder.OnPose(1.5, 0, 0.02f, true);
+  recorder.OnPose(1.5, 0, 0, 0.02f, true);
   EXPECT_EQ(recorder.current().size(), 2u);
 }
 
@@ -218,9 +222,9 @@ TEST(Recorder, ManualPointWithBadAccuracyOrLostPoseIsRefused) {
   AreaRecorder recorder = Writable();
   recorder.OnAction("start_recording");
   recorder.OnAction("auto_point_collecting_disable");
-  recorder.OnPose(0, 0, 0.02f, true);
+  recorder.OnPose(0, 0, 0, 0.02f, true);
   recorder.OnAction("collect_point");
-  recorder.OnPose(0, 0, 0.5f, true);
+  recorder.OnPose(0, 0, 0, 0.5f, true);
   recorder.OnAction("collect_point");
   recorder.OnPoseLost();
   EXPECT_TRUE(recorder.current().empty());
@@ -548,9 +552,11 @@ void DriveCore(TestCore& core, const Ring& corners) {
     const Point2& a = corners[i];
     const Point2& b = corners[i + 1];
     const int steps = static_cast<int>(std::ceil(std::hypot(b.x - a.x, b.y - a.y) / 0.05));
-    for (int s = 0; s < steps; s++) {
+    for (int s = 0; s <= steps; s++) {
       const double t = static_cast<double>(s) / steps;
-      core.OnPose(At(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t));
+      PoseSnapshot pose = At(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+      pose.heading = std::atan2(b.y - a.y, b.x - a.x);
+      core.OnPose(pose);
     }
   }
 }
@@ -646,7 +652,7 @@ TEST(LogicRecording, ManualMowingStaysOff) {
 TEST(RecorderDock, TwoPointsGiveTheHeading) {
   AreaRecorder recorder = Writable();
   EXPECT_TRUE(On(recorder, "record_dock"));
-  recorder.OnPose(2, 1, 0.02f, true);
+  recorder.OnPose(2, 1, 0, 0.02f, true);
   ASSERT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kDone);
   EXPECT_EQ(recorder.SubState(), "RECORD_DOCKING_POSITION");
   // The step the app calls dock: record_dock without start_recording.
@@ -654,7 +660,7 @@ TEST(RecorderDock, TwoPointsGiveTheHeading) {
   EXPECT_FALSE(On(recorder, "start_recording"));
   EXPECT_FALSE(On(recorder, "finish_mowing_area"));
   EXPECT_FALSE(recorder.TakeMapEdit());
-  recorder.OnPose(2, 2, 0.02f, true);
+  recorder.OnPose(2, 2, 0, 0.02f, true);
   recorder.SetDockContact(true);
   ASSERT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kDone);
   auto edit = recorder.TakeMapEdit();
@@ -676,10 +682,10 @@ TEST(RecorderDock, TwoPointsGiveTheHeading) {
 
 TEST(RecorderDock, TooCloseKeepsTheFirstPoint) {
   AreaRecorder recorder = Writable();
-  recorder.OnPose(0, 0, 0.02f, true);
+  recorder.OnPose(0, 0, 0, 0.02f, true);
   recorder.OnAction("record_dock");
   recorder.SetDockContact(true);
-  recorder.OnPose(0.45, 0, 0.02f, true);
+  recorder.OnPose(0.45, 0, 0, 0.02f, true);
   EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
   EXPECT_FALSE(recorder.TakeMapEdit());
   EXPECT_EQ(recorder.SubState(), "RECORD_DOCKING_POSITION");
@@ -689,7 +695,7 @@ TEST(RecorderDock, TooCloseKeepsTheFirstPoint) {
   EXPECT_NEAR(events[0].details["distance"].get<double>(), 0.45, 1e-9);
   EXPECT_DOUBLE_EQ(events[0].details["limit"].get<double>(), 0.5);
   // Backwards onto the contacts: the heading points the way the mower moved.
-  recorder.OnPose(-1, 0, 0.02f, true);
+  recorder.OnPose(-1, 0, 0, 0.02f, true);
   ASSERT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kDone);
   EXPECT_NEAR(std::fabs(recorder.TakeMapEdit()->heading), M_PI, 1e-9);
 }
@@ -697,9 +703,9 @@ TEST(RecorderDock, TooCloseKeepsTheFirstPoint) {
 TEST(RecorderDock, NeedsAnAccuratePositionAndAWritableMap) {
   AreaRecorder recorder = Writable();
   EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
-  recorder.OnPose(0, 0, 0.4f, true);
+  recorder.OnPose(0, 0, 0, 0.4f, true);
   EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
-  recorder.OnPose(0, 0, 0.02f, true);
+  recorder.OnPose(0, 0, 0, 0.02f, true);
   recorder.SetMapWritable(false, MapReason(MapDatum::kMismatch, "The map was recorded for another datum"));
   EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
   auto events = recorder.TakeEvents();
@@ -713,10 +719,10 @@ TEST(RecorderDock, NeedsAnAccuratePositionAndAWritableMap) {
 
 TEST(RecorderDock, ARefusedSaveKeepsTheFirstPoint) {
   AreaRecorder recorder = Writable();
-  recorder.OnPose(0, 0, 0.02f, true);
+  recorder.OnPose(0, 0, 0, 0.02f, true);
   recorder.OnAction("record_dock");
   recorder.SetDockContact(true);
-  recorder.OnPose(1, 0, 0.02f, true);
+  recorder.OnPose(1, 0, 0, 0.02f, true);
   recorder.OnAction("record_dock");
   ASSERT_TRUE(recorder.TakeMapEdit());
   recorder.OnMapEditResult(false, "", "STORAGE", "Cannot store the map: disk full");
@@ -731,11 +737,11 @@ TEST(RecorderDock, ThePointOnTheContactsNeedsTheContact) {
   config.dock_backwards = true;
   AreaRecorder recorder = Writable(config);
   // The first point needs none.
-  recorder.OnPose(0, 0, 0.02f, true);
+  recorder.OnPose(0, 0, 0, 0.02f, true);
   ASSERT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kDone);
   EXPECT_EQ(recorder.TakeNotices().back(),
             "Recorded the point in front of the docking station, now drive backwards onto the contacts");
-  recorder.OnPose(-1, 0, 0.02f, true);
+  recorder.OnPose(-1, 0, 0, 0.02f, true);
   EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
   EXPECT_FALSE(recorder.TakeMapEdit());
   auto events = recorder.TakeEvents();
@@ -758,13 +764,13 @@ TEST(RecorderDock, ThePointOnTheContactsNeedsTheContact) {
 
 TEST(RecorderDock, BothPointsNeedAValidHeading) {
   AreaRecorder recorder = Writable();
-  recorder.OnPose(0, 0, 0.02f, false);
+  recorder.OnPose(0, 0, 0, 0.02f, false);
   EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
   EXPECT_EQ(recorder.SubState(), "");
-  recorder.OnPose(0, 0, 0.02f, true);
+  recorder.OnPose(0, 0, 0, 0.02f, true);
   ASSERT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kDone);
   recorder.SetDockContact(true);
-  recorder.OnPose(0, 1, 0.02f, false);
+  recorder.OnPose(0, 1, 0, 0.02f, false);
   EXPECT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kRefused);
   auto events = recorder.TakeEvents();
   ASSERT_EQ(events.size(), 2u);
@@ -772,14 +778,14 @@ TEST(RecorderDock, BothPointsNeedAValidHeading) {
   EXPECT_EQ(events[1].details["reason"], "NO_HEADING");
   EXPECT_EQ(events[1].details["severity"], "warning");
   EXPECT_EQ(recorder.SubState(), "RECORD_DOCKING_POSITION");
-  recorder.OnPose(0, 1, 0.02f, true);
+  recorder.OnPose(0, 1, 0, 0.02f, true);
   ASSERT_EQ(recorder.OnAction("record_dock"), AreaRecorder::Result::kDone);
   EXPECT_NEAR(recorder.TakeMapEdit()->heading, M_PI / 2, 1e-9);
 }
 
 TEST(RecorderDock, DiscardDropsTheFirstPoint) {
   AreaRecorder recorder = Writable();
-  recorder.OnPose(0, 0, 0.02f, true);
+  recorder.OnPose(0, 0, 0, 0.02f, true);
   recorder.OnAction("record_dock");
   EXPECT_TRUE(On(recorder, "finish_discard"));
   ASSERT_EQ(recorder.OnAction("finish_discard"), AreaRecorder::Result::kDone);
@@ -808,10 +814,10 @@ TEST(RecorderOverlay, LinesInMillimetres) {
   AreaRecorder recorder = Writable();
   recorder.TakeOverlayChanged();
   recorder.OnAction("start_recording");
-  recorder.OnPose(0, 0, 0.02f, true);
+  recorder.OnPose(0, 0, 0, 0.02f, true);
   // One point is no line yet.
   EXPECT_TRUE(recorder.Overlay()["polygons"].empty());
-  recorder.OnPose(1, 0, 0.02f, true);
+  recorder.OnPose(1, 0, 0, 0.02f, true);
   EXPECT_TRUE(recorder.TakeOverlayChanged());
   json line = recorder.Overlay()["polygons"][0];
   EXPECT_EQ(line["is_closed"], 0);
@@ -821,7 +827,7 @@ TEST(RecorderOverlay, LinesInMillimetres) {
   EXPECT_DOUBLE_EQ(line["poly"][1]["x"].get<double>(), 1.0);
   // Only the form of OpenMower.
   EXPECT_EQ(line.size(), 4u);
-  recorder.OnPose(1.123456, 0.2, 0.02f, true);
+  recorder.OnPose(1.123456, 0.2, 0, 0.02f, true);
   EXPECT_EQ(recorder.Overlay()["polygons"][0]["poly"][2].dump(), R"({"x":1.123,"y":0.2})");
   recorder.OnAction("undo_points", nullptr, 0.1);
   EXPECT_TRUE(recorder.TakeOverlayChanged());
@@ -829,7 +835,7 @@ TEST(RecorderOverlay, LinesInMillimetres) {
   recorder.OnAction("auto_point_collecting_enable");
 
   // A pose too close changes nothing.
-  recorder.OnPose(1.05, 0, 0.02f, true);
+  recorder.OnPose(1.05, 0, 0, 0.02f, true);
   EXPECT_FALSE(recorder.TakeOverlayChanged());
 
   Drive(recorder, {{1, 0}, {1, 1}, {0, 1}, {0, 0.05}});
@@ -867,4 +873,358 @@ TEST(RecorderOverlay, LeavingRecordingClearsIt) {
   core.OnAction(kPrefix + "exit_recording_mode");
   EXPECT_TRUE(core.TakeOverlayChanged());
   EXPECT_TRUE(core.MapOverlay()["polygons"].empty());
+}
+
+namespace {
+
+// A ring as the recorder takes it along the corners: a point whenever the mower is more than 0.1 m from the last one,
+// turning on the spot at each corner; the heading is that of the side it drives on. noise: sigma (m) of each point,
+// and a tenth of it in rad for the heading.
+struct Track {
+  Ring ring;
+  std::vector<PointMark> marks;
+};
+
+Track Recorded(const Ring& corners, double noise = 0, unsigned seed = 1) {
+  Track track;
+  for (size_t i = 0; i + 1 < corners.size(); i++) {
+    const Point2& a = corners[i];
+    const Point2& b = corners[i + 1];
+    const double heading = std::atan2(b.y - a.y, b.x - a.x);
+    const int steps = static_cast<int>(std::round(Distance(a, b) / 0.01));
+    for (int s = 0; s <= steps; s++) {
+      const Point2 at{a.x + (b.x - a.x) * s / steps, a.y + (b.y - a.y) * s / steps};
+      if (!track.ring.empty() && Distance(track.ring.back(), at) <= 0.1) continue;
+      track.ring.push_back(at);
+      PointMark mark;
+      mark.heading = heading;
+      mark.heading_valid = mark.automatic = mark.joined = true;
+      track.marks.push_back(mark);
+    }
+  }
+  std::mt19937 source(seed);
+  std::normal_distribution<double> error(0, noise > 0 ? noise : 1);
+  if (noise > 0) {
+    for (auto& p : track.ring) {
+      p.x += error(source);
+      p.y += error(source);
+    }
+    for (auto& mark : track.marks) mark.heading += error(source) / 10;
+  }
+  return track;
+}
+
+// A rectangle of w by h from (0, 0), ending 0.05 m short of the start.
+Ring Rectangle(double w, double h) {
+  return {{0, 0}, {w, 0}, {w, h}, {0, h}, {0, 0.05}};
+}
+
+// The same with its corners as arcs of radius r.
+Ring Rounded(double w, double h, double r) {
+  Ring corners;
+  const double centres[4][3] = {{w - r, r, -M_PI / 2}, {w - r, h - r, 0}, {r, h - r, M_PI / 2}, {r, r, M_PI}};
+  for (const auto& c : centres) {
+    for (int k = 0; k <= 12; k++) {
+      const double angle = c[2] + M_PI / 2 * k / 12;
+      corners.push_back({c[0] + r * std::cos(angle), c[1] + r * std::sin(angle)});
+    }
+  }
+  corners.push_back({corners.front().x - 0.05, corners.front().y});
+  return corners;
+}
+
+}  // namespace
+
+TEST(DrivenRing, StraightSidesAndCornersTurnedOnTheSpot) {
+  const Track track = Recorded(Rectangle(3, 2));
+  EXPECT_EQ(DrivenProblem(track.ring, track.marks), "");
+}
+
+TEST(DrivenRing, AnArc) {
+  Track track;
+  for (int k = 0; k < 125; k++) {
+    const double angle = 2 * M_PI * k / 126;
+    track.ring.push_back({2 * std::cos(angle), 2 * std::sin(angle)});
+    PointMark mark;
+    mark.heading = angle + M_PI / 2;
+    mark.heading_valid = mark.automatic = mark.joined = true;
+    track.marks.push_back(mark);
+  }
+  EXPECT_EQ(DrivenProblem(track.ring, track.marks), "");
+}
+
+TEST(DrivenRing, AQuarterTurnOnTheSpotFromTheRecorder) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, Rectangle(3, 2));
+  EXPECT_EQ(DrivenProblem(recorder.current(), recorder.marks()), "");
+}
+
+TEST(DrivenRing, FiveHundredEdgesWithTheNoiseOfRtk) {
+  // sigma 1.1 cm on every point. Over 1000 seeds 0.4 % of such rings fail by DIRECTION, and 5.5 % of rectangles with
+  // corners turned on the spot by SHARP_TURN; with 5 mm none (the localization filters the pose).
+  const Track track = Recorded(Rounded(17, 10.5, 1.0), 0.011, 7);
+  ASSERT_GE(track.ring.size(), 500u);
+  EXPECT_EQ(DrivenProblem(track.ring, track.marks), "");
+  const Track rectangle = Recorded(Rectangle(17, 10.5), 0.005, 7);
+  EXPECT_EQ(DrivenProblem(rectangle.ring, rectangle.marks), "");
+}
+
+TEST(DrivenRing, APointByHandOrWithoutHeadingOrAfterABreak) {
+  for (const char* code : {"MANUAL_POINT", "NO_HEADING", "INTERRUPTED"}) {
+    Track track = Recorded(Rectangle(3, 2));
+    PointMark& mark = track.marks[10];
+    if (std::string(code) == "MANUAL_POINT") mark.automatic = false;
+    if (std::string(code) == "NO_HEADING") mark.heading_valid = false;
+    if (std::string(code) == "INTERRUPTED") mark.joined = false;
+    EXPECT_EQ(DrivenProblem(track.ring, track.marks), code);
+  }
+  // The first point has none before it.
+  Track track = Recorded(Rectangle(3, 2));
+  track.marks[0].joined = false;
+  EXPECT_EQ(DrivenProblem(track.ring, track.marks), "");
+  // The first reason in the order of the list.
+  track.marks[5].joined = false;
+  track.marks[6].automatic = false;
+  EXPECT_EQ(DrivenProblem(track.ring, track.marks), "MANUAL_POINT");
+}
+
+TEST(DrivenRing, AnEdgeLongerThanThirtyCentimetres) {
+  Track track = Recorded(Rectangle(3, 2));
+  // Points 0.11 m apart: one out of three gaps of 0.33 m.
+  const Ring with_gap = [&] {
+    Ring ring = track.ring;
+    ring.erase(ring.begin() + 10, ring.begin() + 12);
+    return ring;
+  }();
+  std::vector<PointMark> marks = track.marks;
+  marks.erase(marks.begin() + 10, marks.begin() + 12);
+  EXPECT_EQ(DrivenProblem(with_gap, marks), "GAP");
+  // Up to 0.3 m: two of 0.11 m are 0.22.
+  track.ring.erase(track.ring.begin() + 10);
+  track.marks.erase(track.marks.begin() + 10);
+  EXPECT_EQ(DrivenProblem(track.ring, track.marks), "");
+}
+
+TEST(DrivenRing, AnEdgeBackwardsOrSideways) {
+  Track track = Recorded(Rectangle(3, 2));
+  // Point 10 behind point 9 on the first side, heading still east.
+  Track backwards = track;
+  backwards.ring[10] = {backwards.ring[9].x - 0.05, 0};
+  EXPECT_EQ(DrivenProblem(backwards.ring, backwards.marks), "DIRECTION");
+  // A step of 0.2 m to the side with the same heading, then on along the new line.
+  Track sideways = track;
+  for (size_t k = 10; k < 20; k++) sideways.ring[k].y += 0.2;
+  EXPECT_EQ(DrivenProblem(sideways.ring, sideways.marks), "DIRECTION");
+}
+
+TEST(DrivenRing, AHalfTurnOnTheSpot) {
+  // Out along y = 0, a half turn on the spot, back the same way: which way it turned is not in the line.
+  const Track track = Recorded({{0, 0}, {5, 0}, {4, 0}, {4, 2}, {0, 2}, {0, 0.05}});
+  EXPECT_EQ(DrivenProblem(track.ring, track.marks), "SHARP_TURN");
+  // Two quarter turns 0.1 m apart: each turn is clear, so the line is.
+  const Track two = Recorded({{0, 0}, {5, 0}, {5, 0.1}, {0, 0.1}, {0, 0.02}});
+  EXPECT_EQ(DrivenProblem(two.ring, two.marks), "");
+}
+
+TEST(DrivenRing, TheClosingEdge) {
+  // Short: passes, as above. Long: 0.5 m short of the start.
+  Track open = Recorded({{0, 0}, {3, 0}, {3, 2}, {0, 2}, {0, 0.5}});
+  EXPECT_EQ(DrivenProblem(open.ring, open.marks), "GAP");
+  // Run past the start beside the first side: the closing edge points back.
+  Track past = Recorded({{0, 0}, {3, 0}, {3, 2}, {-0.05, 2}, {-0.05, -0.25}});
+  EXPECT_EQ(DrivenProblem(past.ring, past.marks), "DIRECTION");
+}
+
+TEST(RecorderDriven, ReversingTakesPointsBackAndTheRingIsTheSame) {
+  AreaRecorder plain = Writable();
+  plain.OnAction("start_recording");
+  Drive(plain, Rectangle(3, 2));
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0, 0}, {2, 0}});
+  const size_t before = recorder.current().size();
+  // 1 m straight back, heading east, then forward again.
+  for (int s = 1; s <= 20; s++) recorder.OnPose(2 - 0.05 * s, 0, 0, 0.02f, true);
+  EXPECT_LT(recorder.current().size(), before - 7);
+  EXPECT_LE(recorder.current().back().x, 1.0 + 1e-9);
+  Drive(recorder, {{1, 0}, {3, 0}, {3, 2}, {0, 2}, {0, 0.05}});
+  EXPECT_EQ(DrivenProblem(recorder.current(), recorder.marks()), "");
+  EXPECT_NEAR(static_cast<double>(recorder.current().size()), static_cast<double>(plain.current().size()), 2);
+  for (const auto& p : recorder.current()) EXPECT_TRUE(std::fabs(p.y) < 1e-9 || p.x > 2.9 || p.y > 1.9 || p.x < 0.1);
+  auto events = recorder.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].type, "RECORDING_REFUSED");
+  EXPECT_EQ(events[0].details["action"], "point");
+  EXPECT_EQ(events[0].details["reason"], "REVERSING");
+  EXPECT_EQ(events[0].details["resume"], "auto");
+  const auto notices = recorder.TakeNotices();
+  EXPECT_NE(std::find_if(notices.begin(), notices.end(),
+                         [](const std::string& line) { return line.find("while reversing") != std::string::npos; }),
+            notices.end());
+  ASSERT_EQ(recorder.OnAction("stop_recording"), AreaRecorder::Result::kDone);
+  ASSERT_EQ(recorder.OnAction("finish_mowing_area"), AreaRecorder::Result::kDone);
+  EXPECT_EQ(recorder.TakeMapEdit()->outline_driven_reason, "");
+}
+
+TEST(RecorderDriven, ReversingOnAnArcWithAnOffsetFails) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0, 0}, {2, 0}});
+  // Back 1 m bending 0.3 m to the left, then forward along y = 0.3.
+  for (int s = 1; s <= 20; s++) {
+    const double t = 0.05 * s;
+    recorder.OnPose(2 - t, 0.3 * t * t, std::atan2(-0.6 * t, 1), 0.02f, true);
+  }
+  Drive(recorder, {{1, 0.3}, {3, 0.3}, {3, 2}, {0, 2}, {0, 0.35}});
+  EXPECT_NE(DrivenProblem(recorder.current(), recorder.marks()), "");
+}
+
+TEST(RecorderDriven, AHalfTurnOnTheSpotTakesNothingBack) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0, 0}, {2, 0}});
+  const size_t before = recorder.current().size();
+  for (int k = 0; k <= 18; k++) recorder.OnPose(2, 0, M_PI * k / 18, 0.02f, true);
+  EXPECT_EQ(recorder.current().size(), before);
+  // Forward the other way: on, nothing taken back.
+  for (int s = 1; s <= 10; s++) recorder.OnPose(2 - 0.05 * s, 0, M_PI, 0.02f, true);
+  EXPECT_GT(recorder.current().size(), before);
+  EXPECT_TRUE(recorder.TakeEvents().empty());
+}
+
+TEST(RecorderDriven, StandingWithNoiseTakesNothingBack) {
+  // The pose of the localization, which averages GNSS while the wheels stand (5 mm).
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0, 0}, {2, 0}});
+  const size_t before = recorder.current().size();
+  std::mt19937 source(3);
+  std::normal_distribution<double> error(0, 0.005);
+  for (int k = 0; k < 600; k++) recorder.OnPose(2 + error(source), error(source), error(source) / 10, 0.02f, true);
+  EXPECT_EQ(recorder.current().size(), before);
+  EXPECT_TRUE(recorder.TakeEvents().empty());
+}
+
+TEST(RecorderDriven, OneHintForEachStretchBackwards) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0, 0}, {3, 0}});
+  for (int round = 0; round < 2; round++) {
+    for (int s = 1; s <= 10; s++) recorder.OnPose(3 - 0.05 * s, 0, 0, 0.02f, true);
+    for (int s = 1; s <= 10; s++) recorder.OnPose(2.5 + 0.05 * s, 0, 0, 0.02f, true);
+  }
+  int hints = 0;
+  for (const auto& event : recorder.TakeEvents()) hints += event.details["reason"] == "REVERSING";
+  EXPECT_EQ(hints, 2);
+}
+
+TEST(RecorderDriven, ReversingWithoutAutomaticPointsTakesNothingBack) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0, 0}, {2, 0}});
+  recorder.OnAction("auto_point_collecting_disable");
+  const size_t before = recorder.current().size();
+  for (int s = 1; s <= 10; s++) recorder.OnPose(2 - 0.05 * s, 0, 0, 0.02f, true);
+  EXPECT_EQ(recorder.current().size(), before);
+}
+
+TEST(RecorderDriven, RunningPastTheStartWithoutCrossingIsCut) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0, 0}, {3, 0}, {3, 2}, {-0.05, 2}, {-0.05, -0.4}});
+  ASSERT_EQ(recorder.OnAction("stop_recording"), AreaRecorder::Result::kDone);
+  EXPECT_GE(recorder.trimmed_points(), 3u);
+  ASSERT_EQ(recorder.OnAction("finish_mowing_area"), AreaRecorder::Result::kDone);
+  const auto edit = recorder.TakeMapEdit();
+  EXPECT_EQ(edit->outline_driven_reason, "");
+  EXPECT_GT(edit->outline.back().y, -0.05);
+}
+
+TEST(RecorderDriven, ARingWithAPointByHandIsNeverCut) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0, 0}, {3, 0}, {3, 2}});
+  recorder.OnAction("auto_point_collecting_disable");
+  recorder.OnAction("collect_point");
+  recorder.OnPose(1.5, 2, M_PI, 0.02f, true);
+  recorder.OnAction("auto_point_collecting_enable");
+  Drive(recorder, {{1.5, 2}, {-0.05, 2}, {-0.05, -0.4}});
+  ASSERT_EQ(recorder.OnAction("stop_recording"), AreaRecorder::Result::kDone);
+  EXPECT_EQ(recorder.trimmed_points(), 0u);
+  ASSERT_EQ(recorder.OnAction("finish_mowing_area"), AreaRecorder::Result::kDone);
+  EXPECT_EQ(recorder.TakeMapEdit()->outline_driven_reason, "MANUAL_POINT");
+}
+
+TEST(RecorderDriven, AreaRecordedSaysWhichRingsWereDriven) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, Rectangle(5, 5));
+  recorder.OnAction("stop_recording");
+  // One obstacle driven, one with a break of the position.
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{1, 1}, {2, 1}, {2, 2}, {1, 2}, {1, 1.05}});
+  recorder.OnAction("stop_recording");
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{3, 3}, {4, 3}, {4, 3.5}});
+  recorder.OnPoseLost();
+  Drive(recorder, {{4, 3.5}, {4, 4}, {3, 4}, {3, 3.05}});
+  recorder.OnAction("stop_recording");
+  ASSERT_EQ(recorder.OnAction("finish_mowing_area"), AreaRecorder::Result::kDone);
+  const auto edit = recorder.TakeMapEdit();
+  EXPECT_EQ(edit->outline_driven_reason, "");
+  EXPECT_EQ(edit->obstacles_driven_reason, (std::vector<std::string>{"", "INTERRUPTED"}));
+  recorder.TakeEvents();
+  recorder.OnMapEditResult(true, "lawn1", "", "");
+  auto events = recorder.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].details["driven"], true);
+  EXPECT_FALSE(events[0].details.contains("driven_reason"));
+  EXPECT_EQ(events[0].details["obstacles_driven"], 1);
+}
+
+TEST(RecorderDriven, AnOutlineByHandIsNotDriven) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  recorder.OnAction("auto_point_collecting_disable");
+  for (const Point2& p : Ring{{0, 0}, {2, 0}, {2, 2}, {0, 2}}) {
+    recorder.OnAction("collect_point");
+    recorder.OnPose(p.x, p.y, 0, 0.02f, true);
+  }
+  ASSERT_EQ(recorder.OnAction("finish_mowing_area"), AreaRecorder::Result::kDone);
+  recorder.TakeMapEdit();
+  recorder.TakeEvents();
+  recorder.OnMapEditResult(true, "lawn1", "", "");
+  const auto events = recorder.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].details["driven"], false);
+  EXPECT_EQ(events[0].details["driven_reason"], "MANUAL_POINT");
+  EXPECT_EQ(events[0].details["obstacles_driven"], 0);
+}
+
+TEST(RecorderDriven, AJumpOfThePositionIsABreak) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0, 0}, {3, 0}, {3, 1}});
+  recorder.OnPositionJump();
+  Drive(recorder, {{3, 1}, {3, 2}, {0, 2}, {0, 0.05}});
+  EXPECT_EQ(DrivenProblem(recorder.current(), recorder.marks()), "INTERRUPTED");
+}
+
+TEST(LogicRecording, AFailedFollowOfTheBodyIsAnEvent) {
+  TestCore core{LogicConfig{}};
+  core.TakeEvents();
+  core.RecordedBodyKept(2, "STORAGE", "Cannot store the map: disk full");
+  core.RecordedBodyKept(-1, "NO_ANSWER", "No answer from mowbite_map");
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0].type, "RECORDED_BODY_KEPT");
+  EXPECT_EQ(events[0].details["areas"], 2);
+  EXPECT_EQ(events[0].details["reason"], "SAVE_FAILED");
+  EXPECT_EQ(events[0].details["code"], "STORAGE");
+  EXPECT_EQ(events[0].details["severity"], "warning");
+  EXPECT_EQ(events[0].details["resume"], "user");
+  EXPECT_NE(events[0].details["message"].get<std::string>().find("keep the old body"), std::string::npos);
+  EXPECT_FALSE(events[1].details.contains("areas"));
+  EXPECT_EQ(events[1].details["code"], "NO_ANSWER");
 }

@@ -368,6 +368,79 @@ TEST(MapServiceEdits, StoresNoneOfTheAreaWhenAnObstacleIsInvalid) {
   EXPECT_FALSE(service.TakeChanged());
 }
 
+namespace {
+
+std::string Body(double width, double front, double rear, const std::string& by) {
+  return json{{"robot_width", width}, {"robot_front", front}, {"robot_rear", rear}, {"robot_outline", json::array()},
+              {"by", by}}
+      .dump();
+}
+
+}  // namespace
+
+TEST(MapServiceEdits, KeepsTheRecordedBodyOfEachRingAsAProperty) {
+  TempDir dir;
+  MapService service = Started(NumberedIds(dir));
+  const std::string body = Body(0.47, 0.6, 0.12, "b1");
+  const auto result =
+      service.AddArea("mow", "Back", Square(5), {{{1, 1}, {2, 1}, {2, 2}}, {{3, 3}, {4, 3}, {4, 4}}}, body, {"", body});
+  ASSERT_TRUE(result.ok) << result.message;
+  const auto& areas = service.map().areas;
+  ASSERT_EQ(areas.size(), 3u);
+  EXPECT_EQ(areas[0].other_properties["recorded_body"], json::parse(body));
+  EXPECT_FALSE(areas[1].other_properties.contains("recorded_body"));
+  EXPECT_EQ(areas[2].other_properties["recorded_body"]["by"], "b1");
+  const json stored = json::parse(ReadAll(dir.path() / "map.json"));
+  EXPECT_DOUBLE_EQ(stored["areas"][0]["properties"]["recorded_body"]["robot_front"].get<double>(), 0.6);
+  // map.replace keeps it as it keeps every property it does not know.
+  ASSERT_TRUE(service.Call("map.replace", json::array({stored}))->ok);
+  EXPECT_EQ(service.map().areas[0].other_properties["recorded_body"], json::parse(body));
+}
+
+TEST(MapServiceEdits, RefusesARecordedBodyThatIsNoObject) {
+  TempDir dir;
+  MapService service = Started(NumberedIds(dir));
+  auto result = service.AddArea("mow", "Back", Square(5), {}, "[1, 2]");
+  EXPECT_FALSE(result.ok);
+  EXPECT_EQ(result.code, "INVALID");
+  result = service.AddArea("mow", "Back", Square(5), {{{1, 1}, {2, 1}, {2, 2}}}, "", {"", ""});
+  EXPECT_FALSE(result.ok);
+  EXPECT_EQ(result.code, "INVALID");
+  EXPECT_TRUE(service.map().areas.empty());
+}
+
+TEST(MapServiceEdits, TheRecordedBodyFollowsOnlyForItsOwnBy) {
+  TempDir dir;
+  MapService service = Started(NumberedIds(dir));
+  const std::string ours = Body(0.47, 0.6, 0.12, "b1");
+  const std::string theirs = Body(0.5, 0.6, 0.1, "b2");
+  ASSERT_TRUE(service.AddArea("mow", "Ours", Square(5), {{{1, 1}, {2, 1}, {2, 2}}}, ours, {ours}).ok);
+  ASSERT_TRUE(service.AddArea("mow", "Theirs", Square(3), {}, theirs).ok);
+  ASSERT_TRUE(service.AddArea("nav", "Drawn", Square(2)).ok);
+  service.TakeChanged();
+  const std::string wider = Body(0.5, 0.6, 0.12, "b1");
+  int areas = -1;
+  auto result = service.SetRecordedBody("b1", wider, &areas);
+  ASSERT_TRUE(result.ok) << result.message;
+  EXPECT_EQ(areas, 2);
+  EXPECT_TRUE(service.TakeChanged());
+  const auto& map = service.map();
+  EXPECT_EQ(map.areas[0].other_properties["recorded_body"], json::parse(wider));
+  EXPECT_EQ(map.areas[1].other_properties["recorded_body"], json::parse(wider));
+  EXPECT_EQ(map.areas[2].other_properties["recorded_body"], json::parse(theirs));
+  EXPECT_FALSE(map.areas[3].other_properties.contains("recorded_body"));
+  // None with this by: nothing is written.
+  result = service.SetRecordedBody("b3", R"({"robot_width": 0.5, "by": "b3"})", &areas);
+  EXPECT_TRUE(result.ok);
+  EXPECT_EQ(areas, 0);
+  EXPECT_FALSE(service.TakeChanged());
+  // A body without the same by changes nothing.
+  result = service.SetRecordedBody("b1", theirs, &areas);
+  EXPECT_FALSE(result.ok);
+  EXPECT_EQ(result.code, "INVALID");
+  EXPECT_EQ(service.map().areas[0].other_properties["recorded_body"], json::parse(wider));
+}
+
 TEST(MapServiceEdits, GivesTheObstaclesIdsOfTheirOwnWhenTheSourceRepeats) {
   TempDir dir;
   MapService::Config config = ConfigFor(dir);

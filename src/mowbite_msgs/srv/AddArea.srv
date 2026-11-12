@@ -5,6 +5,10 @@ string name
 geometry_msgs/Point[] outline
 # Recorded inside the area, stored as areas of type obstacle in the same write: all of them or none.
 mowbite_msgs/Outline[] obstacles
+# recorded_body of the outline as a JSON object, kept in the properties of the area; empty for none.
+string recorded_body
+# The same for the obstacles: none at all, or one entry per obstacle (empty for none).
+string[] obstacles_recorded_body
 ---
 bool success
 # The id of the new area

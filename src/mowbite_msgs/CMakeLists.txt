@@ -47,6 +47,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetDock.srv"
   "srv/SetEmergency.srv"
   "srv/SetPose.srv"
+  "srv/SetRecordedBody.srv"
   "srv/SetHeading.srv"
   "srv/DriveTo.srv"
   "action/FollowPath.action"

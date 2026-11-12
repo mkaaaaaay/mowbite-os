@@ -233,6 +233,13 @@ double Geometry::TurningRadius() const {
   return radius;
 }
 
+json Geometry::RecordedBody() const {
+  return {{"robot_width", now_.numbers.at("robot_width")},
+          {"robot_front", now_.numbers.at("robot_front")},
+          {"robot_rear", now_.numbers.at("robot_rear")},
+          {"robot_outline", PointsJson(now_.outline)}};
+}
+
 json Geometry::PointsJson(const std::vector<Point>& points) {
   json out = json::array();
   for (const Point& point : points) out.push_back(json::array({point[0], point[1]}));

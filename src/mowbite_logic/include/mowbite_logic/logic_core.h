@@ -542,6 +542,9 @@ class LogicCore {
   // stops nothing, so it has no resume.
   void GeometryChanged(const std::vector<std::string>& changed, const std::vector<std::string>& below_default,
                        int version);
+  // map/set_recorded_body failed after robot.geometry.set changed the body: event RECORDED_BODY_KEPT, the areas
+  // recorded here keep the old body. areas: how many carry the id of this installation, below 0 when not known.
+  void RecordedBodyKept(int areas, const std::string& code, const std::string& message);
   bool Mowing() const;
   // IDLE without a drive: no recording, no job (also paused). Settings change only then.
   bool Idle() const;

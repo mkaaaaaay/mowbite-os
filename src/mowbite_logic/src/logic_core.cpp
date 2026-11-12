@@ -157,7 +157,7 @@ void LogicCore::OnPose(const PoseSnapshot& pose) {
   last_x_ = pose.x;
   last_y_ = pose.y;
   if (state_ != State::kAreaRecording) return;
-  recorder_.OnPose(pose.x, pose.y, pose.position_accuracy, pose.orientation_valid);
+  recorder_.OnPose(pose.x, pose.y, pose.heading, pose.position_accuracy, pose.orientation_valid);
   PullRecorder();
 }
 
@@ -203,26 +203,6 @@ void LogicCore::OnMapStatus(MapDatum datum, const std::string& reason) {
   recorder_.SetMapWritable(writable, map_reason_);
 }
 
-void LogicCore::OnMapEditResult(bool ok, const std::string& id, const std::string& code,
-                                const std::string& message) {
-  recorder_.OnMapEditResult(ok, id, code, message);
-  PullRecorder();
-}
-
-void LogicCore::PullRecorder() {
-  for (auto& event : recorder_.TakeEvents()) AddEvent(event.type, std::move(event.details));
-  if (recorder_.TakeActionsChanged()) SetDue<ActionsChanged>(true);
-}
-
-json LogicCore::MapOverlay() const {
-  // The recorder is reset when the state changes, so outside of AREA_RECORDING it has no lines.
-  return recorder_.Overlay();
-}
-
-bool LogicCore::TakeOverlayChanged() {
-  return recorder_.TakeOverlayChanged();
-}
-
 std::vector<Effect> LogicCore::TakeEffects() {
   if (auto edit = recorder_.TakeMapEdit()) effects_.push_back(std::move(*edit));
   for (auto& line : recorder_.TakeNotices()) Notify(std::move(line));
@@ -249,6 +229,10 @@ void LogicCore::OnPositionJump(double to_x, double to_y, double distance_m, bool
                    after_outliers ? "Back on GPS after outliers" : "Back on GPS after a gap")
                 .With("distance", distance_m));
   AddEvent("POSITION_JUMP", std::move(details));
+  if (state_ == State::kAreaRecording) {
+    recorder_.OnPositionJump();
+    PullRecorder();
+  }
 }
 
 // Every event carries the position where it happened, and the client of the command that caused it.

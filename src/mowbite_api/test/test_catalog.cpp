@@ -75,7 +75,8 @@ std::set<std::string> CodesOf(const std::string& type) {
 }  // namespace
 
 // RateReason reads the catalog now and rates every reason of an event as the table did, also one it does not know;
-// the pauses of api 5 (O11) and the release refusals of api 10 are rated anew, STORAGE_NOT_WRITABLE of api 12 is new.
+// the pauses of api 5 (O11) and the release refusals of api 10 are rated anew, STORAGE_NOT_WRITABLE of api 12 and
+// REVERSING of api 21 are new.
 TEST(Catalog, RateReasonAsTheTableBefore) {
   const std::map<std::string, Rating> paused_since_api_5 = {{"BATTERY_HOT", {"warning", "user"}},
                                                              {"MOTOR_HOT", {"warning", "user"}},
@@ -92,6 +93,7 @@ TEST(Catalog, RateReasonAsTheTableBefore) {
         const auto paused = paused_since_api_5.find(code);
         const auto refused = refused_since_api_10.find(code);
         const Rating before = code == "STORAGE_NOT_WRITABLE" ? Rating{"error", "user"}
+                              : code == "REVERSING" ? Rating{"info", "auto"}
                               : std::string(event) == "STATE" && paused != paused_since_api_5.end() ? paused->second
                               : std::string(event) == "EMERGENCY_RESET_REFUSED" && refused != refused_since_api_10.end()
                                   ? refused->second

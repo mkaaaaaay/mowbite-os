@@ -18,12 +18,13 @@ import launch_testing.actions
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
-from mowbite_msgs.msg import ActionList, HardwareStatus, MapStatus, MqttPublish, RobotPose
+from mowbite_msgs.msg import (ActionList, HardwareStatus, MapStatus, MqttPublish, RobotPose, RpcError, RpcRequest,
+                              RpcResponse)
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import HISTORY, LATCHED, SimProbe  # noqa: E402
+from sim_common import HISTORY, LATCHED, SimProbe, read_json  # noqa: E402
 
 DATUM = (52.0, 9.0, 50.0)
 WORK = tempfile.mkdtemp(prefix="mowbite_recording_")
@@ -49,11 +50,15 @@ class Probe(SimProbe):
         self.overlay = None
         self.x = 0.0
         self.y = 0.0
+        self.heading = 0.0
         self.contact = False
         self.datum_pub = self.node.create_publisher(NavSatFix, "gps/datum", LATCHED)
         self.hw_pub = self.node.create_publisher(HardwareStatus, "hw/status", 10)
         self.pose_pub = self.node.create_publisher(RobotPose, "localization/pose", 10)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
+        self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
+        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
+        self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
         self.node.create_subscription(String, "map/json", self._map, LATCHED)
         self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
         self.node.create_subscription(ActionList, "bridge/actions", self._actions, HISTORY)
@@ -90,14 +95,16 @@ class Probe(SimProbe):
         msg = RobotPose()
         msg.x = x
         msg.y = y
+        msg.heading = self.heading
         msg.position_accuracy = accuracy
         msg.heading_accuracy = 0.05
         msg.heading_valid = True
         self.pose_pub.publish(msg)
 
     def drive(self, corners):
-        """Along the corners in steps of 5 cm, a pose at every step."""
+        """Forward along the corners in steps of 5 cm, a pose at every step, turning on the spot at each corner."""
         for (ax, ay), (bx, by) in zip(corners, corners[1:]):
+            self.heading = math.atan2(by - ay, bx - ax)
             steps = max(1, math.ceil(math.hypot(bx - ax, by - ay) / 0.05))
             for s in range(steps + 1):
                 self.x = ax + (bx - ax) * s / steps
@@ -152,6 +159,8 @@ class TestRecording(unittest.TestCase):
         self.assertTrue(line, "no blue line on map_overlay/json")
         self.probe.act(REC + "stop_recording")
         self.assertTrue(self.enabled(REC + "finish_mowing_area"))
+        # To the obstacle first: a ring begins where the mower stands.
+        self.probe.drive([(0, 0.1), (1, 1)])
         self.probe.act(REC + "start_recording")
         self.assertTrue(self.enabled(REC + "stop_recording"))
         self.probe.drive([(1, 1), (2, 1), (2, 2), (1, 2), (1, 1.1)])
@@ -167,6 +176,20 @@ class TestRecording(unittest.TestCase):
         self.assertEqual(recorded[-1]["area_id"], saved["areas"][0]["id"])
         self.assertEqual(recorded[-1]["obstacles"], 1)
         self.assertAlmostEqual(recorded[-1]["area_m2"], 12.0, delta=0.5)
+        # Both rings were driven forward without a break: they carry the body of the platform and the id of this
+        # installation.
+        self.assertTrue(recorded[-1]["driven"])
+        self.assertNotIn("driven_reason", recorded[-1])
+        self.assertEqual(recorded[-1]["obstacles_driven"], 1)
+        bodies = [area["properties"].get("recorded_body") for area in saved["areas"]]
+        self.assertEqual(bodies[0], bodies[1])
+        self.assertEqual(set(bodies[0]), {"robot_width", "robot_front", "robot_rear", "robot_outline", "by"})
+        self.assertRegex(bodies[0]["by"], "^[0-9a-f]{32}$")
+        geometry = self.probe.rpc("robot.geometry.get")["result"]
+        for key in ("robot_width", "robot_front", "robot_rear"):
+            self.assertAlmostEqual(bodies[0][key], geometry["settings"][key]["value"], places=6)
+        on_disk = read_json(os.path.join(WORK, "map.json"))
+        self.assertEqual(on_disk["areas"][0]["properties"]["recorded_body"], bodies[0])
         self.assertTrue(self.probe.wait(lambda: self.probe.overlay == {"polygons": []}), str(self.probe.overlay)[:200])
         self.assertTrue(self.enabled(REC + "start_recording"))
         # The first area ties the map to the datum.
@@ -217,3 +240,44 @@ class TestRecording(unittest.TestCase):
         self.assertTrue(self.enabled(REC + "stop_recording"))
         self.probe.act(REC + "exit_recording_mode")
         self.assertTrue(self.enabled("mower_logic:idle/start_area_recording", False))
+
+    def test_05_a_new_body_follows_on_the_areas_recorded_here(self):
+        self.probe.datum(DATUM)
+        self.assertTrue(self.probe.wait(lambda: self.probe.status.datum_state == MapStatus.DATUM_MATCH))
+        before = self.probe.map["areas"][0]["properties"]["recorded_body"]
+        geometry = self.probe.rpc("robot.geometry.get")["result"]
+        width = round(geometry["settings"]["robot_width"]["value"] + 0.02, 3)
+        answer = self.probe.rpc("robot.geometry.set", {"version": geometry["version"],
+                                                       "settings": {"robot_width": width}})
+        self.assertIn("result", answer, answer)
+        moved = self.probe.wait(lambda: self.probe.map if all(
+            area["properties"]["recorded_body"]["robot_width"] == width for area in self.probe.map["areas"])
+            else None)
+        self.assertIsNotNone(moved, self.probe.map)
+        for area in moved["areas"]:
+            self.assertEqual(area["properties"]["recorded_body"]["by"], before["by"])
+            self.assertEqual(area["properties"]["recorded_body"]["robot_front"], before["robot_front"])
+        self.assertEqual(self.probe.events_of("RECORDED_BODY_KEPT"), [])
+
+    def test_06_points_by_hand_give_no_body(self):
+        self.probe.act("mower_logic:idle/start_area_recording")
+        self.assertTrue(self.enabled(REC + "start_recording"))
+        self.probe.act(REC + "start_recording")
+        self.assertTrue(self.enabled(REC + "auto_point_collecting_disable"))
+        self.probe.act(REC + "auto_point_collecting_disable")
+        self.assertTrue(self.enabled(REC + "collect_point"))
+        corners = [(10, 0), (12, 0), (12, 2), (10, 2)]
+        for corner in corners:
+            self.probe.drive([(self.probe.x, self.probe.y), corner])
+            self.probe.act(REC + "collect_point")
+            time.sleep(0.5)
+        since = len(self.probe.events_of("AREA_RECORDED"))
+        self.probe.act(REC + "finish_mowing_area")
+        recorded = self.probe.wait(lambda: self.probe.events_of("AREA_RECORDED")[since:])
+        self.assertIsNotNone(recorded, "no AREA_RECORDED")
+        self.assertFalse(recorded[0]["driven"])
+        self.assertEqual(recorded[0]["driven_reason"], "MANUAL_POINT")
+        saved = self.probe.wait(lambda: next((a for a in self.probe.map["areas"] if a["id"] == recorded[0]["area_id"]),
+                                             None))
+        self.assertIsNotNone(saved)
+        self.assertNotIn("recorded_body", saved["properties"])

@@ -22,6 +22,14 @@ const char* TypeName(Type type) {
   return "string";
 }
 
+Json Texts(const UserTexts& texts) {
+  Json out = Json::object();
+  for (const auto& [language, text] : texts) {
+    out[language] = {{"name", text.name}, {"help", text.help}, {"fix", text.fix}};
+  }
+  return out;
+}
+
 Json Property(const Field& field) {
   Json property = Json::object();
   if (field.type == Type::kAny) {
@@ -34,6 +42,11 @@ Json Property(const Field& field) {
   if (!field.values.empty()) {
     property["enum"] = field.values;
     if (field.nullable) property["enum"].push_back(nullptr);
+  }
+  if (!field.value_texts.empty()) {
+    Json texts = Json::object();
+    for (const auto& [value, by_language] : field.value_texts) texts[value] = Texts(by_language);
+    property["x-texts"] = std::move(texts);
   }
   if (!field.pattern.empty()) property["pattern"] = field.pattern;
   if (field.min) property["minimum"] = *field.min;
@@ -127,14 +140,6 @@ Json PlannerEventSchema(const std::string& type, const Json& part) {
   for (const auto& name : required) schema["required"].push_back(name);
   schema["x-emitter"] = "planner";
   return schema;
-}
-
-Json Texts(const UserTexts& texts) {
-  Json out = Json::object();
-  for (const auto& [language, text] : texts) {
-    out[language] = {{"name", text.name}, {"help", text.help}, {"fix", text.fix}};
-  }
-  return out;
 }
 
 Json Reasons(const EventEntry& event) {
@@ -307,7 +312,8 @@ Json BuildSchema(const Json& planner) {
                   "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; "
                   "made from the code, objects sorted by key. x-reasons has severity and resume of every reason by "
                   "event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these "
-                  "field values; texts: name, help and fix by language), x-emergency-bits the bits of "
+                  "field values; texts: name, help and fix by language; an enum field may carry the same by value as "
+                  "x-texts), x-emergency-bits the bits of "
                   "emergency, x-commands the commands with params, result, the event of their refusal and the actions "
                   "that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, "
                   "sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set "

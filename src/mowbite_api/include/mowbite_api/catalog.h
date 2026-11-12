@@ -12,13 +12,24 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 20;
+constexpr int kApi = 21;
 
 // Who owns the names of the interface file; readers keep a copy of it.
 constexpr char kOwner[] = "mowbite-os";
 
 // The JSON type of a field; kNumber takes whole numbers as well, kInteger also 2.0, kAny every value.
 enum class Type { kString, kNumber, kInteger, kBoolean, kObject, kArray, kAny };
+
+// What the app shows of a reason, an emergency bit or a value of a field in one language: its name, what happened,
+// what to do.
+struct UserText {
+  std::string name;
+  std::string help;
+  std::string fix;
+};
+
+// Texts by language (de, en); none where the app has its own.
+using UserTexts = std::map<std::string, UserText>;
 
 struct Field {
   std::string name;
@@ -41,17 +52,9 @@ struct Field {
   // Bounds of a number, inclusive.
   std::optional<double> min = std::nullopt;
   std::optional<double> max = std::nullopt;
+  // Texts of the values of an enum field, by value.
+  std::map<std::string, UserTexts> value_texts = {};
 };
-
-// What the app shows of a reason or an emergency bit in one language: its name, what happened, what to do.
-struct UserText {
-  std::string name;
-  std::string help;
-  std::string fix;
-};
-
-// Texts by language (de, en); none where the app has its own.
-using UserTexts = std::map<std::string, UserText>;
 
 // A reason as events and refusals carry it: reason, message, severity, resume and its own fields.
 struct ReasonEntry {
