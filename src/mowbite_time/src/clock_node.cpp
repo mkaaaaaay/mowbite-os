@@ -57,14 +57,14 @@ class ClockNode : public rclcpp::Node {
         }) {
     status_pub_ = create_publisher<mowbite_msgs::msg::ClockStatus>("time/clock", LatchedQos(1));
     caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
-        "hw/capabilities", LatchedQos(1), [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
-          receiver_time_ = msg->gnss_receiver_time;
+        "hw/capabilities", LatchedQos(1), [this](const mowbite_msgs::msg::HardwareCapabilities& msg) {
+          receiver_time_ = msg.gnss_receiver_time;
         });
     fix_sub_ = create_subscription<mowbite_msgs::msg::GnssFix>(
-        "gps/absolute_pose", 10, [this](mowbite_msgs::msg::GnssFix::ConstSharedPtr msg) {
+        "gps/absolute_pose", 10, [this](const mowbite_msgs::msg::GnssFix& msg) {
           using mowbite_msgs::msg::GnssFix;
-          if (!receiver_time_ || msg->solution == GnssFix::NONE || msg->solution == GnssFix::DEAD_RECKONING) return;
-          fix_day_ = msg->receiver_time_ms / 1000.0;
+          if (!receiver_time_ || msg.solution == GnssFix::NONE || msg.solution == GnssFix::DEAD_RECKONING) return;
+          fix_day_ = msg.receiver_time_ms / 1000.0;
           fix_mono_ = MonotonicSeconds();
         });
     timer_ = create_wall_timer(std::chrono::seconds(1), [this] { Tick(); });
