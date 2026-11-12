@@ -1,11 +1,9 @@
 #include "tron_vision/side_node.h"
 
 #include <chrono>
-#include <stdexcept>
 #include <utility>
 
 #include "tron_mcu/serial_port.h"
-#include "tron_vision/encoder_library.h"
 
 namespace tron_vision {
 
@@ -13,8 +11,6 @@ namespace {
 
 // Step interval while the camera does not stream: demand, retries and the heat pause count in seconds.
 constexpr auto kIdleWait = std::chrono::milliseconds(200);
-// An encode that takes longer counts as a failure of the encoder.
-constexpr double kSlowEncodeS = 0.5;
 
 bool Streams(PreviewState state) {
   return state == PreviewState::kStarting || state == PreviewState::kRunning;
@@ -61,29 +57,8 @@ SideNode::SideNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_side
   camera.vertical_blanking = static_cast<int>(declare_parameter("vertical_blanking", camera.vertical_blanking));
   camera.processes_using = tron::ProcessesUsing;
 
-  // H.264: the ISP scales the sensor picture to the stream size; the frame rate is that of the sensor.
-  const bool video = declare_parameter("video", true);
-  const int64_t width = declare_parameter("stream_width", int64_t{1280});
-  const int64_t height = declare_parameter("stream_height", int64_t{720});
-  const int64_t fps = declare_parameter("stream_fps", int64_t{30});
-  const int64_t kbps = declare_parameter("bitrate_kbps", int64_t{2500});
-  const int64_t port = declare_parameter("rtsp_port", int64_t{8557});
-  const std::string library = declare_parameter("encoder_library", DefaultEncoderLibrary());
-  if (width < 16 || width > 1920 || height < 16 || height > 1080 || width % 2 != 0 || height % 2 != 0) {
-    throw std::invalid_argument("stream size " + std::to_string(width) + "x" + std::to_string(height));
-  }
-  // 0 takes any free port.
-  if (port < 0 || port > 65535) throw std::invalid_argument("rtsp_port " + std::to_string(port) + " is no port");
-  if (video) {
-    camera.width = static_cast<uint32_t>(width);
-    camera.height = static_cast<uint32_t>(height);
-    camera.export_buffers = true;
-    config.encoder.format = PixelFormat::kNv12;
-    config.encoder.width = config.encoder.line_bytes = camera.width;
-    config.encoder.height = config.encoder.lines = camera.height;
-    config.encoder.fps = static_cast<int>(fps);
-    config.encoder.bitrate_bps = static_cast<int>(kbps) * 1000;
-  }
+  video_ = std::make_unique<VideoOut>(*this, int64_t{8557});
+  video_->Configure(camera, config.video);
   camera_entry_.id = camera_id_;
   camera_entry_.name = "Right camera";
   // The name the start file gives stack.own_process, so the OS can tie an exit note to this camera.
@@ -91,27 +66,13 @@ SideNode::SideNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_side
   camera_entry_.kind = mowbite_msgs::msg::Camera::KIND_OBSTACLE;
   camera_entry_.position = mowbite_msgs::msg::Camera::POSITION_RIGHT;
   PreviewSize(camera.width, camera.height, config.preview.width, jpeg_width_, jpeg_height_);
-  video_width_ = camera.width;
-  video_height_ = camera.height;
   camera_entry_.detections = false;
   camera_entry_.protocols = {mowbite_msgs::msg::Camera::PROTOCOL_MJPEG};
   camera_ = std::make_unique<TronCamera>(std::move(camera));
   guard_ = std::make_unique<CrashGuard>(crash_dir, kCrashFlag, kBootId);
-  if (video) {
-    RtspConfig rtsp;
-    rtsp.port = static_cast<uint16_t>(port);
-    rtsp.path = camera_id_;
-    encoder_ = std::make_unique<MppEncoder>(library);
-    server_ = std::make_unique<RtspServer>(rtsp, MonotonicSeconds);
-    std::string error;
-    if (server_->Listen(error)) {
-      stream_ = std::make_unique<H264Stream>(*encoder_, *server_, kSlowEncodeS, MonotonicSeconds);
-      video_source_ = "rtsp://127.0.0.1:" + std::to_string(server_->Port()) + "/" + rtsp.path;
-    } else {
-      RCLCPP_WARN(get_logger(), "No H.264, only JPEG: %s", error.c_str());
-    }
-  }
-  loop_ = std::make_unique<PreviewLoop>(std::move(config), *camera_, *guard_, MonotonicSeconds, stream_.get());
+  std::string error;
+  if (!video_->Open(camera_id_, error)) RCLCPP_WARN(get_logger(), "No H.264, only JPEG: %s", error.c_str());
+  loop_ = std::make_unique<PreviewLoop>(std::move(config), *camera_, *guard_, MonotonicSeconds, video_->Stream());
 
   // The only publishers of this process; test_side_node checks the list.
   cameras_pub_ = create_publisher<mowbite_msgs::msg::Camera>(
@@ -131,7 +92,7 @@ SideNode::~SideNode() {
   if (thread_.joinable()) thread_.join();
   loop_->Shutdown();
   loop_.reset();
-  stream_.reset();
+  video_->Close();
 }
 
 void SideNode::Run() {
@@ -154,7 +115,7 @@ void SideNode::Run() {
       return;
     }
     // With a stream the loop waits for its client itself.
-    if (!Streams(status.state) && stream_ == nullptr) {
+    if (!Streams(status.state) && video_->Stream() == nullptr) {
       std::unique_lock<std::mutex> lock(mutex_);
       wake_.wait_for(lock, kIdleWait, [this] { return !running_; });
     }
@@ -173,25 +134,14 @@ void SideNode::Log(double now) {
 }
 
 void SideNode::PublishCamera(const PreviewStatus& status) {
-  using mowbite_msgs::msg::Camera;
   const Availability now = CameraAvailability(status.state);
-  const bool video = status.video && !video_source_.empty();
+  const auto protocols = camera_entry_.protocols;
+  video_->Describe(status.video, jpeg_width_, jpeg_height_, camera_entry_);
   if (camera_published_ && now.available == camera_entry_.available && now.reason == camera_entry_.reason &&
-      video == !camera_entry_.source.empty()) {
+      protocols == camera_entry_.protocols) {
     return;
   }
   camera_published_ = true;
-  if (video) {
-    camera_entry_.protocols = {Camera::PROTOCOL_WEBRTC, Camera::PROTOCOL_MJPEG};
-    camera_entry_.source = video_source_;
-    camera_entry_.width = video_width_;
-    camera_entry_.height = video_height_;
-  } else {
-    camera_entry_.protocols = {Camera::PROTOCOL_MJPEG};
-    camera_entry_.source.clear();
-    camera_entry_.width = jpeg_width_;
-    camera_entry_.height = jpeg_height_;
-  }
   camera_entry_.available = now.available;
   camera_entry_.reason = now.reason;
   camera_entry_.detail = now.available ? "" : StateText(status);

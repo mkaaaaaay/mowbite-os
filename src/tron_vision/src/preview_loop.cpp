@@ -9,10 +9,6 @@ namespace tron_vision {
 
 namespace {
 
-constexpr float kGainSmoothing = 0.2F;
-// Largest chroma shift of the gray world for the H.264 picture.
-constexpr float kMaxShift = 64.0F;
-
 std::string Seconds(double v) {
   char buf[16];
   std::snprintf(buf, sizeof(buf), "%.2f", v);
@@ -41,11 +37,11 @@ PreviewLoop::PreviewLoop(PreviewLoopConfig config, Camera& camera, CrashGuard& g
       camera_(camera),
       guard_(guard),
       now_(std::move(now)),
-      stream_(stream),
       thermal_(config_.pause_at_c, config_.resume_below_c),
       preview_(config_.preview) {
   status_.exposure.exposure = config_.exposure.exposure_max;
   status_.exposure.gain = config_.exposure.gain_min;
+  if (stream != nullptr) video_ = std::make_unique<VideoFeed>(config_.video, *stream, now_);
 }
 
 PreviewLoop::~PreviewLoop() {
@@ -136,9 +132,18 @@ bool PreviewLoop::Step() {
     if (!guard_.MayStream(config_.camera_id, detail)) Set(PreviewState::kLocked, detail);
   }
   if (!CheckBudget(now)) return false;
-  if (stream_ != nullptr) StepVideo(now);
+  if (video_) {
+    // Offered while the camera may start.
+    const bool may_start = status_.state != PreviewState::kLocked && status_.state != PreviewState::kPausedHot &&
+                           attempts_ < config_.max_attempts;
+    const std::string detail = video_->Step(may_start, streaming_);
+    if (!detail.empty()) status_.detail = detail;
+    status_.video = video_->Active();
+    status_.fps = video_->Fps();
+    status_.kbps = video_->Kbps();
+  }
   if (wanted_) last_jpeg_wanted_ = now;
-  if (wanted_ || (status_.video && stream_->Playing())) last_wanted_ = now;
+  if (wanted_ || (video_ && video_->Playing())) last_wanted_ = now;
   if (last_wanted_ < 0.0 || now >= last_wanted_ + config_.hold_s) {
     EndDemand();
     return true;
@@ -172,62 +177,17 @@ bool PreviewLoop::Step() {
   return true;
 }
 
-void PreviewLoop::StepVideo(double now) {
-  if (!status_.video && encoder_failures_ < config_.max_encoder_failures && now >= next_prepare_) {
-    std::string error;
-    if (stream_->Prepare(config_.encoder, error)) {
-      status_.video = true;
-    } else {
-      VideoFailed(error);
-    }
-  }
-  // Offered while the camera may start; a withdrawn stream answers 503 and drops its client.
-  const bool may = status_.video && status_.state != PreviewState::kLocked &&
-                   status_.state != PreviewState::kPausedHot && attempts_ < config_.max_attempts;
-  if (may != offered_) {
-    offered_ = may;
-    if (may) {
-      stream_->Offer();
-    } else {
-      stream_->Withdraw();
-    }
-  }
-  stream_->Poll(streaming_ ? 0 : config_.idle_wait_ms);
-  if (stream_->Running() && !stream_->Playing()) stream_->End();
-  if (!stream_->Running()) {
-    status_.fps = 0.0;
-    status_.kbps = 0.0;
-  }
-}
-
 void PreviewLoop::SendVideo() {
-  if (stream_ == nullptr || !status_.video || !stream_->Playing()) return;
-  std::string error;
-  if (!stream_->Running() && !stream_->Begin(error)) {
-    stream_->DropClient();
-    VideoFailed(error);
-    return;
-  }
-  const CapturedFrame* frame = camera_.Captured();
-  if (frame == nullptr) {
-    stream_->End();
-    stream_->DropClient();
-    VideoFailed("the camera does not export its frames");
-    return;
-  }
-  // Without the shift the picture goes on with its color cast.
-  if (!camera_.ShiftChroma(status_.shift_u, status_.shift_v, error)) status_.detail = error;
-  if (stream_->Send(*frame, error) == H264Stream::Sent::kEncoderFailed) VideoFailed(error);
-  status_.fps = stream_->Fps();
-  status_.kbps = stream_->Kbps();
-  status_.encode_ms = stream_->EncodeMs();
-}
-
-void PreviewLoop::VideoFailed(const std::string& detail) {
-  encoder_failures_++;
-  next_prepare_ = now_() + config_.retry_s;
-  status_.detail = "video: " + detail;
-  if (encoder_failures_ >= config_.max_encoder_failures) status_.video = false;
+  if (!video_ || !video_->Playing()) return;
+  const int du = status_.shift_u;
+  const int dv = status_.shift_v;
+  const auto shift = [du, dv](const Nv12Buffer& f) { ShiftChroma(f.uv, f.width, f.height, f.stride, du, dv); };
+  const std::string detail = video_->Send(camera_, shift);
+  if (!detail.empty()) status_.detail = detail;
+  status_.video = video_->Active();
+  status_.fps = video_->Fps();
+  status_.kbps = video_->Kbps();
+  status_.encode_ms = video_->EncodeMs();
 }
 
 void PreviewLoop::OnFrame(const Nv12View& frame, double now) {
@@ -236,15 +196,10 @@ void PreviewLoop::OnFrame(const Nv12View& frame, double now) {
   const FrameStats stats =
       MeasureFrame(frame, PlaceFrame(frame.width, frame.height, Fit::kPad, frame.width, frame.height));
 
-  const ColorGains target = GrayWorld(stats);
-  gain_r_ += kGainSmoothing * (static_cast<float>(target.r) / 256.0F - gain_r_);
-  gain_b_ += kGainSmoothing * (static_cast<float>(target.b) / 256.0F - gain_b_);
-  status_.display_gains.r = static_cast<uint16_t>(std::lround(gain_r_ * 256.0F));
-  status_.display_gains.b = static_cast<uint16_t>(std::lround(gain_b_ * 256.0F));
-  shift_u_ += kGainSmoothing * (std::clamp(stats.u - 128.0F, -kMaxShift, kMaxShift) - shift_u_);
-  shift_v_ += kGainSmoothing * (std::clamp(stats.v - 128.0F, -kMaxShift, kMaxShift) - shift_v_);
-  status_.shift_u = static_cast<int>(std::lround(shift_u_));
-  status_.shift_v = static_cast<int>(std::lround(shift_v_));
+  white_.Update(stats);
+  status_.display_gains = white_.Gains();
+  status_.shift_u = white_.ShiftU();
+  status_.shift_v = white_.ShiftV();
 
   if (++frames_since_exposure_ >= config_.settle_frames) {
     const ExposureSetting next = NextExposure(status_.exposure, stats.y, config_.exposure);
@@ -267,7 +222,7 @@ void PreviewLoop::OnFrame(const Nv12View& frame, double now) {
 
 void PreviewLoop::Shutdown() {
   // The encoder lets go of the buffers before the camera frees them.
-  if (stream_ != nullptr) stream_->End();
+  if (video_) video_->End();
   if (streaming_) {
     camera_.Stop();
     guard_.Disarm(config_.camera_id);

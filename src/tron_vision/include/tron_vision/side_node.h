@@ -15,11 +15,9 @@
 #include "tron_vision/budget.h"
 #include "tron_vision/camera_node.h"
 #include "tron_vision/crash_guard.h"
-#include "tron_vision/h264_encoder.h"
-#include "tron_vision/h264_stream.h"
 #include "tron_vision/preview_loop.h"
-#include "tron_vision/rtsp_server.h"
 #include "tron_vision/tron_camera.h"
+#include "tron_vision/video_out.h"
 
 namespace tron_vision {
 
@@ -48,17 +46,11 @@ class SideNode : public rclcpp::Node {
   void PublishPicture();
 
   std::unique_ptr<TronCamera> camera_;
-  std::unique_ptr<MppEncoder> encoder_;
-  std::unique_ptr<RtspServer> server_;
-  std::unique_ptr<H264Stream> stream_;
+  std::unique_ptr<VideoOut> video_;
   std::unique_ptr<CrashGuard> guard_;
   std::unique_ptr<PreviewLoop> loop_;
   std::string camera_id_;
   mowbite_msgs::msg::Camera camera_entry_;
-  // Where MediaMTX takes the stream from, empty without one, and the sizes of its pictures and of the JPEGs.
-  std::string video_source_;
-  uint32_t video_width_ = 0;
-  uint32_t video_height_ = 0;
   uint32_t jpeg_width_ = 0;
   uint32_t jpeg_height_ = 0;
   bool camera_published_ = false;

@@ -27,6 +27,38 @@ uint32_t Pixel(float v, uint32_t size) {
   return static_cast<uint32_t>(std::clamp(std::lround(v), 0L, static_cast<long>(size)));
 }
 
+// BT.601 limited range.
+struct Yuv {
+  uint8_t y;
+  uint8_t u;
+  uint8_t v;
+};
+
+Yuv ToYuv(const uint8_t* rgb) {
+  const double r = rgb[0];
+  const double g = rgb[1];
+  const double b = rgb[2];
+  return {static_cast<uint8_t>(std::lround(16.0 + (65.481 * r + 128.553 * g + 24.966 * b) / 255.0)),
+          static_cast<uint8_t>(std::lround(128.0 + (-37.797 * r - 74.203 * g + 112.0 * b) / 255.0)),
+          static_cast<uint8_t>(std::lround(128.0 + (112.0 * r - 93.786 * g - 18.214 * b) / 255.0))};
+}
+
+// Corners on even pixels.
+void FillRect(const Nv12Buffer& f, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, const Yuv& c) {
+  for (uint32_t y = y0; y < y1; y++) std::fill_n(f.y + static_cast<size_t>(y) * f.stride + x0, x1 - x0, c.y);
+  for (uint32_t y = y0 / 2; y < y1 / 2; y++) {
+    uint8_t* p = f.uv + static_cast<size_t>(y) * f.stride;
+    for (uint32_t x = x0; x < x1; x += 2) {
+      p[x] = c.u;
+      p[x + 1] = c.v;
+    }
+  }
+}
+
+uint32_t Even(uint32_t v) {
+  return v & ~1U;
+}
+
 }  // namespace
 
 JpegEncoder::JpegEncoder() : handle_(tjInitCompress()) {}
@@ -129,6 +161,24 @@ void DrawBoxes(std::vector<uint8_t>& rgb, uint32_t width, uint32_t height, const
     FillRect(rgb, width, x0, y1 > t ? std::max(y1 - t, y0) : y0, x1, y1, color);
     FillRect(rgb, width, x0, y0, std::min(x0 + t, x1), y1, color);
     FillRect(rgb, width, x1 > t ? std::max(x1 - t, x0) : x0, y0, x1, y1, color);
+  }
+}
+
+void DrawBoxes(const Nv12Buffer& frame, const std::vector<Detection>& boxes, uint32_t line) {
+  const uint32_t w = Even(frame.width);
+  const uint32_t h = Even(frame.height);
+  const uint32_t t = std::max(2U, Even(line));
+  for (const Detection& d : boxes) {
+    const uint32_t x0 = Even(Pixel(d.x1, w));
+    const uint32_t y0 = Even(Pixel(d.y1, h));
+    const uint32_t x1 = std::min(Even(Pixel(d.x2, w) + 1), w);
+    const uint32_t y1 = std::min(Even(Pixel(d.y2, h) + 1), h);
+    if (x1 <= x0 || y1 <= y0) continue;
+    const Yuv c = ToYuv(kColors[d.class_id % std::size(kColors)]);
+    FillRect(frame, x0, y0, x1, std::min(y0 + t, y1), c);
+    FillRect(frame, x0, y1 > t ? std::max(y1 - t, y0) : y0, x1, y1, c);
+    FillRect(frame, x0, y0, std::min(x0 + t, x1), y1, c);
+    FillRect(frame, x1 > t ? std::max(x1 - t, x0) : x0, y0, x1, y1, c);
   }
 }
 

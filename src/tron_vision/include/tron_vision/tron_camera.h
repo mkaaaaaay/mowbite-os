@@ -6,8 +6,8 @@
 #include <utility>
 #include <vector>
 
+#include "tron_vision/camera.h"
 #include "tron_vision/v4l2_camera.h"
-#include "tron_vision/vision_loop.h"
 
 namespace tron_vision {
 
@@ -44,7 +44,7 @@ class TronCamera : public Camera {
   // Before Start the setting is kept and applied there.
   bool SetExposure(const ExposureSetting& setting, std::string& error) override;
   const CapturedFrame* Captured() const override;
-  bool ShiftChroma(int du, int dv, std::string& error) override;
+  bool EditFrame(const std::function<void(const Nv12Buffer&)>& edit, std::string& error) override;
 
  private:
   TronCameraConfig config_;

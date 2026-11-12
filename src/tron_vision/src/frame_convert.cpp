@@ -130,6 +130,36 @@ ColorGains GrayWorld(const FrameStats& stats) {
   return gains;
 }
 
+namespace {
+
+constexpr float kSmoothing = 0.2F;
+constexpr float kMaxShift = 64.0F;
+
+}  // namespace
+
+void WhiteBalance::Update(const FrameStats& stats) {
+  const ColorGains target = GrayWorld(stats);
+  gain_r_ += kSmoothing * (static_cast<float>(target.r) / 256.0F - gain_r_);
+  gain_b_ += kSmoothing * (static_cast<float>(target.b) / 256.0F - gain_b_);
+  shift_u_ += kSmoothing * (std::clamp(stats.u - 128.0F, -kMaxShift, kMaxShift) - shift_u_);
+  shift_v_ += kSmoothing * (std::clamp(stats.v - 128.0F, -kMaxShift, kMaxShift) - shift_v_);
+}
+
+ColorGains WhiteBalance::Gains() const {
+  ColorGains gains;
+  gains.r = static_cast<uint16_t>(std::lround(gain_r_ * 256.0F));
+  gains.b = static_cast<uint16_t>(std::lround(gain_b_ * 256.0F));
+  return gains;
+}
+
+int WhiteBalance::ShiftU() const {
+  return static_cast<int>(std::lround(shift_u_));
+}
+
+int WhiteBalance::ShiftV() const {
+  return static_cast<int>(std::lround(shift_v_));
+}
+
 void ShiftChroma(uint8_t* uv, uint32_t width, uint32_t height, uint32_t stride, int du, int dv) {
   if (du == 0 && dv == 0) return;
   uint8_t u_map[256];

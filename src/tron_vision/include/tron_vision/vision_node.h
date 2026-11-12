@@ -18,6 +18,7 @@
 #include "tron_vision/camera_node.h"
 #include "tron_vision/crash_guard.h"
 #include "tron_vision/tron_camera.h"
+#include "tron_vision/video_out.h"
 #include "tron_vision/vision_loop.h"
 
 namespace tron_vision {
@@ -25,8 +26,10 @@ namespace tron_vision {
 Availability CameraAvailability(VisionState state);
 
 // The camera AI of the Tron in a process of its own: it reports state, detections and the camera with its pictures and
-// nothing else. It subscribes to no topic and calls no service, so it cannot move the mower. A loop thread runs
-// VisionLoop; it ends the process with the exit code of the loop when the limits are broken.
+// nothing else. It subscribes to no topic and calls no service, so it cannot move the mower. With `video` the
+// pictures with the boxes also go out as H.264 to the client of an RTSP server on the loopback address (MediaMTX), and
+// hw/cameras offers WebRTC before MJPEG. A loop thread runs VisionLoop; it ends the process with the exit code of the
+// loop when the limits are broken.
 class VisionNode : public rclcpp::Node {
  public:
   explicit VisionNode(const rclcpp::NodeOptions& options);
@@ -46,10 +49,13 @@ class VisionNode : public rclcpp::Node {
   void PublishPicture();
 
   std::unique_ptr<TronCamera> camera_;
+  std::unique_ptr<VideoOut> video_;
   std::unique_ptr<CrashGuard> guard_;
   std::unique_ptr<VisionLoop> loop_;
   std::string camera_id_;
   mowbite_msgs::msg::Camera camera_entry_;
+  uint32_t jpeg_width_ = 0;
+  uint32_t jpeg_height_ = 0;
   bool camera_published_ = false;
   rclcpp::Publisher<mowbite_msgs::msg::SensorSpec>::SharedPtr sensor_info_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_pub_;

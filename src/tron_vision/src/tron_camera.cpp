@@ -56,7 +56,7 @@ const CapturedFrame* TronCamera::Captured() const {
   return have_last_ && last_.dmabuf >= 0 ? &last_ : nullptr;
 }
 
-bool TronCamera::ShiftChroma(int du, int dv, std::string& error) {
+bool TronCamera::EditFrame(const std::function<void(const Nv12Buffer&)>& edit, std::string& error) {
   const CapturedFrame* frame = Captured();
   if (frame == nullptr) {
     error = "no exported frame";
@@ -64,8 +64,13 @@ bool TronCamera::ShiftChroma(int du, int dv, std::string& error) {
   }
   if (!capture_.SyncForCpu(frame->index, true, error)) return false;
   // The buffers are mapped writable; nothing else reads this one until the next frame.
-  auto* uv = const_cast<uint8_t*>(frame->data) + static_cast<size_t>(frame->stride) * config_.height;
-  tron_vision::ShiftChroma(uv, config_.width, config_.height, frame->stride, du, dv);
+  Nv12Buffer buffer;
+  buffer.y = const_cast<uint8_t*>(frame->data);
+  buffer.uv = buffer.y + static_cast<size_t>(frame->stride) * config_.height;
+  buffer.width = config_.width;
+  buffer.height = config_.height;
+  buffer.stride = frame->stride;
+  edit(buffer);
   return capture_.SyncForCpu(frame->index, false, error);
 }
 

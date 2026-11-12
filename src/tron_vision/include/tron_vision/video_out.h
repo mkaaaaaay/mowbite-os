@@ -1,0 +1,60 @@
+#ifndef TRON_VISION_VIDEO_OUT_H
+#define TRON_VISION_VIDEO_OUT_H
+
+#include <cstdint>
+#include <memory>
+#include <mowbite_msgs/msg/camera.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <string>
+
+#include "tron_vision/h264_encoder.h"
+#include "tron_vision/h264_stream.h"
+#include "tron_vision/rtsp_server.h"
+#include "tron_vision/tron_camera.h"
+#include "tron_vision/video_feed.h"
+
+namespace tron_vision {
+
+// The H.264 stream of a camera process of the Tron: its parameters, the encoder and the RTSP server on the loopback
+// address that MediaMTX reads. The ISP scales the sensor picture to the stream size; the frame rate is that of the
+// sensor.
+class VideoOut {
+ public:
+  // Declares video, stream_width, stream_height, stream_fps, bitrate_kbps, rtsp_port and encoder_library; throws
+  // std::invalid_argument on a bad value.
+  VideoOut(rclcpp::Node& node, int64_t default_port);
+  ~VideoOut();
+  VideoOut(const VideoOut&) = delete;
+  VideoOut& operator=(const VideoOut&) = delete;
+
+  // With video: the camera at the stream size with exported buffers, and the settings of the feed.
+  void Configure(TronCameraConfig& camera, VideoFeedConfig& feed) const;
+  // Listens under `path`; false with the error if the server cannot, then there is no stream.
+  bool Open(const std::string& path, std::string& error);
+  // Null without video or before Open().
+  H264Stream* Stream() const {
+    return stream_.get();
+  }
+  // Ends the stream before the loop that feeds it goes.
+  void Close();
+  // Protocols, source and size of the camera entry: WebRTC before MJPEG while the feed is active, else MJPEG at the
+  // size of the JPEG pictures.
+  void Describe(bool active, uint32_t jpeg_width, uint32_t jpeg_height, mowbite_msgs::msg::Camera& entry) const;
+
+ private:
+  bool video_ = false;
+  uint32_t width_ = 0;
+  uint32_t height_ = 0;
+  int fps_ = 0;
+  int bitrate_bps_ = 0;
+  uint16_t port_ = 0;
+  std::string library_;
+  std::string source_;
+  std::unique_ptr<MppEncoder> encoder_;
+  std::unique_ptr<RtspServer> server_;
+  std::unique_ptr<H264Stream> stream_;
+};
+
+}  // namespace tron_vision
+
+#endif  // TRON_VISION_VIDEO_OUT_H

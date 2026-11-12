@@ -4,42 +4,23 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "tron_vision/budget.h"
+#include "tron_vision/camera.h"
 #include "tron_vision/crash_guard.h"
 #include "tron_vision/exposure.h"
 #include "tron_vision/frame_convert.h"
+#include "tron_vision/inference_worker.h"
 #include "tron_vision/model_check.h"
-#include "tron_vision/npu_model.h"
 #include "tron_vision/preview.h"
 #include "tron_vision/v4l2_camera.h"
+#include "tron_vision/video_feed.h"
 #include "tron_vision/yolo_decode.h"
 
 namespace tron_vision {
-
-// A camera that streams NV12 and takes exposure settings.
-class Camera {
- public:
-  virtual ~Camera() = default;
-  virtual bool Start(std::string& error) = 0;
-  virtual void Stop() = 0;
-  // As V4l2Capture::Next; the frame stays valid until the next call or Stop().
-  virtual int Next(int timeout_ms, Nv12View& frame, std::string& error) = 0;
-  virtual bool SetExposure(const ExposureSetting& setting, std::string& error) = 0;
-  // The buffer of the frame of the last Next() for a reader of its dma-buf; nullptr unless the camera exports them.
-  virtual const CapturedFrame* Captured() const {
-    return nullptr;
-  }
-  // ShiftChroma on that frame in place, between the cache syncs of its dma-buf.
-  virtual bool ShiftChroma(int du, int dv, std::string& error) {
-    (void)du;
-    (void)dv;
-    error = "the camera does not export its frames";
-    return false;
-  }
-};
 
 struct VisionConfig {
   std::string camera_id = "oa_left";
@@ -62,6 +43,8 @@ struct VisionConfig {
   double retry_s = 5.0;
   double slow_run_s = 2.0;
   int max_slow_runs = 3;
+  // A run that has not ended after this long ends the process.
+  double hang_s = 6.0;
   double pause_at_c = 80.0;
   double resume_below_c = 75.0;
   // Empty: no temperature check.
@@ -70,6 +53,8 @@ struct VisionConfig {
   std::string statm = "/proc/self/statm";
   double check_s = 10.0;
   PreviewConfig preview;
+  // H.264 with the boxes for the client of the RTSP server; the camera exports its buffers then.
+  VideoFeedConfig video;
 };
 
 enum class VisionState {
@@ -101,6 +86,11 @@ struct VisionStatus {
   uint32_t frame_height = 0;
   ExposureSetting exposure;
   ColorGains display_gains;
+  // H.264: prepared and not given up, and the stream of the last second.
+  bool video = false;
+  double fps = 0.0;
+  double kbps = 0.0;
+  double encode_ms = 0.0;
   int exit_code = kExitNone;
 };
 
@@ -108,7 +98,9 @@ struct VisionStatus {
 // next frame deadline and returns false once the process has to end (status().exit_code).
 class VisionLoop {
  public:
-  VisionLoop(VisionConfig config, Camera& camera, CrashGuard& guard, std::function<double()> now);
+  // `stream` may be null: JPEG only.
+  VisionLoop(VisionConfig config, Camera& camera, CrashGuard& guard, std::function<double()> now,
+             H264Stream* stream = nullptr);
   ~VisionLoop();
   VisionLoop(const VisionLoop&) = delete;
   VisionLoop& operator=(const VisionLoop&) = delete;
@@ -135,12 +127,22 @@ class VisionLoop {
   const Preview& GetPreview() const {
     return preview_;
   }
+  // A run of the model is submitted and has not ended.
+  bool InferenceBusy() const {
+    return worker_ && worker_->Busy();
+  }
 
  private:
   bool StartStream(double now);
   void StopStream(VisionState state, const std::string& detail);
   void OnFrame(const Nv12View& frame, double now);
-  bool Infer(const Nv12View& frame, double now);
+  void StepVideo();
+  void SendVideo();
+  void Submit(const Nv12View& frame, double now);
+  // Takes the result of a run that ended and watches the one in progress; false once the process has to end.
+  bool CheckInference(double now);
+  void Adopt(const InferenceWorker::Result& result);
+  void StopWorker();
   bool CheckBudget(double now);
   void Set(VisionState state, const std::string& detail);
 
@@ -148,14 +150,20 @@ class VisionLoop {
   Camera& camera_;
   CrashGuard& guard_;
   std::function<double()> now_;
-  NpuModel model_;
+  std::unique_ptr<VideoFeed> video_;
+  std::shared_ptr<InferenceWorker> worker_;
   ModelLayout layout_;
   std::vector<std::string> names_;
   ThermalGate thermal_;
   VisionStatus status_;
   std::vector<Detection> detections_;
-  std::vector<uint8_t> rgb_;
-  std::vector<std::vector<int8_t>> outputs_;
+  // The run in progress: its frame, when it was submitted and in which stream.
+  Placement job_place_;
+  uint32_t job_width_ = 0;
+  uint32_t job_height_ = 0;
+  double job_submitted_ = 0.0;
+  uint64_t job_stream_ = 0;
+  uint64_t streams_ = 0;
   Preview preview_;
   bool preview_wanted_ = false;
   bool loaded_ = false;
@@ -169,8 +177,7 @@ class VisionLoop {
   double last_infer_ = -1.0;
   int frames_since_exposure_ = 0;
   int slow_runs_ = 0;
-  float gain_r_ = 1.0F;
-  float gain_b_ = 1.0F;
+  WhiteBalance white_;
 };
 
 }  // namespace tron_vision

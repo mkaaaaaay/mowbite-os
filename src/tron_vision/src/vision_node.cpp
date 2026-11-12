@@ -75,14 +75,18 @@ VisionNode::VisionNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_
   camera_entry_.process = declare_parameter("process", std::string("vision"));
   camera_entry_.kind = mowbite_msgs::msg::Camera::KIND_OBSTACLE;
   camera_entry_.position = mowbite_msgs::msg::Camera::POSITION_LEFT;
-  PreviewSize(camera.width, camera.height, config.preview.width, camera_entry_.width, camera_entry_.height);
-  camera_entry_.detections = true;
-  camera_entry_.protocols = {mowbite_msgs::msg::Camera::PROTOCOL_MJPEG};
   camera.vertical_blanking = static_cast<int>(declare_parameter("vertical_blanking", camera.vertical_blanking));
   camera.processes_using = tron::ProcessesUsing;
+  video_ = std::make_unique<VideoOut>(*this, int64_t{8556});
+  video_->Configure(camera, config.video);
+  PreviewSize(camera.width, camera.height, config.preview.width, jpeg_width_, jpeg_height_);
+  camera_entry_.detections = true;
+  camera_entry_.protocols = {mowbite_msgs::msg::Camera::PROTOCOL_MJPEG};
   camera_ = std::make_unique<TronCamera>(std::move(camera));
   guard_ = std::make_unique<CrashGuard>(crash_dir, kCrashFlag, kBootId);
-  loop_ = std::make_unique<VisionLoop>(std::move(config), *camera_, *guard_, MonotonicSeconds);
+  std::string error;
+  if (!video_->Open(camera_id_, error)) RCLCPP_WARN(get_logger(), "No H.264, only JPEG: %s", error.c_str());
+  loop_ = std::make_unique<VisionLoop>(std::move(config), *camera_, *guard_, MonotonicSeconds, video_->Stream());
 
   // The only publishers of this process; test_vision_node checks the list.
   sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorSpec>(
@@ -109,6 +113,8 @@ VisionNode::~VisionNode() {
   wake_.notify_all();
   if (thread_.joinable()) thread_.join();
   loop_->Shutdown();
+  loop_.reset();
+  video_->Close();
 }
 
 void VisionNode::Run() {
@@ -131,7 +137,8 @@ void VisionNode::Run() {
       rclcpp::shutdown();
       return;
     }
-    if (!Streams(status.state)) {
+    // With a stream the loop waits for its client itself.
+    if (!Streams(status.state) && video_->Stream() == nullptr) {
       std::unique_lock<std::mutex> lock(mutex_);
       wake_.wait_for(lock, kIdleWait, [this] { return !running_; });
     }
@@ -190,7 +197,12 @@ void VisionNode::PublishDetections(const VisionStatus& status) {
 
 void VisionNode::PublishCamera(const VisionStatus& status) {
   const Availability now = CameraAvailability(status.state);
-  if (camera_published_ && now.available == camera_entry_.available && now.reason == camera_entry_.reason) return;
+  const auto protocols = camera_entry_.protocols;
+  video_->Describe(status.video, jpeg_width_, jpeg_height_, camera_entry_);
+  if (camera_published_ && now.available == camera_entry_.available && now.reason == camera_entry_.reason &&
+      protocols == camera_entry_.protocols) {
+    return;
+  }
   camera_published_ = true;
   camera_entry_.available = now.available;
   camera_entry_.reason = now.reason;

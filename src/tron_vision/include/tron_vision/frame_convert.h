@@ -18,6 +18,15 @@ struct Nv12View {
   uint32_t stride = 0;
 };
 
+// An NV12 frame to change in place.
+struct Nv12Buffer {
+  uint8_t* y = nullptr;
+  uint8_t* uv = nullptr;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t stride = 0;
+};
+
 enum class Fit {
   kCrop,  // centered 3:4 part of the frame fills the model input
   kPad,   // whole frame, gray bars above and below
@@ -58,6 +67,22 @@ FrameStats MeasureFrame(const Nv12View& frame, const Placement& p);
 
 // Gray world: gains that bring the mean color to gray, each within 0.5..3.
 ColorGains GrayWorld(const FrameStats& stats);
+
+// Gray world over the frames of a stream, following the scene smoothly: gains for RGB pictures and a chroma shift
+// (for ShiftChroma, each within -64..64) for NV12 ones.
+class WhiteBalance {
+ public:
+  void Update(const FrameStats& stats);
+  ColorGains Gains() const;
+  int ShiftU() const;
+  int ShiftV() const;
+
+ private:
+  float gain_r_ = 1.0F;
+  float gain_b_ = 1.0F;
+  float shift_u_ = 0.0F;
+  float shift_v_ = 0.0F;
+};
 
 // Gray world for a picture that stays NV12: the chroma plane (width bytes of interleaved U and V per line, height / 2
 // lines) moves by -du and -dv, each value held within 0..255.

@@ -59,6 +59,8 @@ class JpegDecoder {
 // Box outlines, 2 pixels wide, a color per class; boxes in source pixels, `scale` maps them onto the RGB image.
 void DrawBoxes(std::vector<uint8_t>& rgb, uint32_t width, uint32_t height, const std::vector<Detection>& boxes,
                float scale);
+// The same in an NV12 frame, `line` pixels wide and on even pixels, so that luma and chroma both carry the color.
+void DrawBoxes(const Nv12Buffer& frame, const std::vector<Detection>& boxes, uint32_t line);
 
 // Size of the picture of a frame: at most `max_width` wide, same aspect, both even.
 void PreviewSize(uint32_t frame_width, uint32_t frame_height, uint32_t max_width, uint32_t& width, uint32_t& height);

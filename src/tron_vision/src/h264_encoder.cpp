@@ -205,7 +205,8 @@ bool MppEncoder::Encode(const CapturedFrame& frame, const uint8_t*& data, size_t
   }
   if (frame.stride != settings_.line_bytes || frame.bytes < FrameBytes()) {
     error = "frame of stride " + std::to_string(frame.stride) + " and " + std::to_string(frame.bytes) +
-            " bytes, the encoder takes " + std::to_string(settings_.line_bytes) + " and " + std::to_string(FrameBytes());
+            " bytes, the encoder takes " + std::to_string(settings_.line_bytes) + " and " +
+            std::to_string(FrameBytes());
     return false;
   }
   if (frame.index >= imported_.size()) imported_.resize(frame.index + 1);

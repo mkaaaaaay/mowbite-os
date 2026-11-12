@@ -25,7 +25,8 @@ add_library(tron_vision_core STATIC src/npu_model.cpp src/model_check.cpp src/yo
   src/exposure.cpp src/v4l2_camera.cpp src/crash_guard.cpp src/budget.cpp src/vision_loop.cpp src/tron_camera.cpp
   src/text_file.cpp src/preview.cpp src/h264_rtp.cpp src/rtsp_server.cpp src/h264_encoder.cpp src/h264_stream.cpp
   src/stereo_camera.cpp src/stereo_loop.cpp src/lens_model.cpp src/dock_marker.cpp src/dock_pose.cpp src/dock_exposure.cpp
-  src/jpeg_luma.cpp src/rear_camera.cpp src/rear_loop.cpp src/preview_loop.cpp)
+  src/jpeg_luma.cpp src/rear_camera.cpp src/rear_loop.cpp src/preview_loop.cpp src/inference_worker.cpp
+  src/video_feed.cpp)
 target_include_directories(tron_vision_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -33,8 +34,13 @@ target_link_libraries(tron_vision_core ${CMAKE_DL_LIBS} PkgConfig::TURBOJPEG)
 set_target_properties(tron_vision_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # The node, a process of its own outside the container: a crash of the NPU runtime takes nothing else along.
+# The H.264 stream of the side cameras with its parameters.
+add_library(tron_video_out_lib STATIC src/video_out.cpp)
+target_link_libraries(tron_video_out_lib tron_vision_core)
+ament_target_dependencies(tron_video_out_lib rclcpp mowbite_msgs ament_index_cpp)
+
 add_library(tron_vision_node_lib STATIC src/vision_node.cpp)
-target_link_libraries(tron_vision_node_lib tron_vision_core tron_mcu::tron_mcu_core)
+target_link_libraries(tron_vision_node_lib tron_vision_core tron_video_out_lib tron_mcu::tron_mcu_core)
 ament_target_dependencies(tron_vision_node_lib rclcpp mowbite_msgs sensor_msgs)
 add_executable(tron_vision_node src/vision_node_main.cpp)
 target_link_libraries(tron_vision_node tron_vision_node_lib)
@@ -50,7 +56,7 @@ install(TARGETS tron_stereo_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 # The live picture of the right side camera, a process of its own beside the camera AI on the left one.
 add_library(tron_side_node_lib STATIC src/side_node.cpp)
-target_link_libraries(tron_side_node_lib tron_vision_core tron_mcu::tron_mcu_core)
+target_link_libraries(tron_side_node_lib tron_vision_core tron_video_out_lib tron_mcu::tron_mcu_core)
 ament_target_dependencies(tron_side_node_lib rclcpp mowbite_msgs sensor_msgs ament_index_cpp)
 add_executable(tron_side_node src/side_node_main.cpp)
 target_link_libraries(tron_side_node tron_side_node_lib)

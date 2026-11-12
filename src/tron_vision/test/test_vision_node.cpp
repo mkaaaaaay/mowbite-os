@@ -70,7 +70,7 @@ TEST_F(VisionNodeTest, ReportsTheStateAsSensors) {
 // One entry on hw/cameras, latched: without the files the camera is not set up, the picture size follows the limit.
 TEST_F(VisionNodeTest, ReportsTheCameraLatched) {
   rclcpp::NodeOptions options;
-  options.parameter_overrides({{"process", "vision"}});
+  options.parameter_overrides({{"process", "vision"}, {"rtsp_port", 0}});
   auto node = std::make_shared<VisionNode>(options);
   auto listener = std::make_shared<rclcpp::Node>("listener");
   std::vector<mowbite_msgs::msg::Camera> got;

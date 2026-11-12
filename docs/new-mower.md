@@ -260,10 +260,13 @@ second what `mowbite_camera` needs around it.
   constrained baseline, RTP over the RTSP connection, its address `rtsp://127.0.0.1:<port>/<id>` as `source` in
   `hw/cameras`; the OS takes no other form), and the OS pulls from it only while someone watches. The connection is
   the viewer signal: PLAY starts the camera, its end stops it, and while the camera cannot stream DESCRIBE answers
-  503. The parts without ROS are in `tron_vision` (`rtsp_server`, `h264_rtp`, `h264_stream`); a hardware encoder is
-  loaded at run time like the other vendor libraries. Up to 1280 x 720 the stream stays at level 3.1, which the OS
-  announces to the browser; a larger picture needs level 4.0. A camera can offer both protocols, `webrtc` first
-  (`tron_side`: H.264 at 1280 x 720 for the RTSP client, JPEG for a subscriber, and only JPEG if the encoder fails).
+  503. The parts without ROS are in `tron_vision` (`rtsp_server`, `h264_rtp`, `h264_stream`, `video_feed`, and
+  `video_out` for the parameters of a camera node); a hardware encoder is loaded at run time like the other vendor
+  libraries. Up to 1280 x 720 the stream stays at level 3.1, which the OS announces to the browser; a larger picture
+  needs level 4.0. A camera can offer both protocols, `webrtc` first (`tron_side` and `tron_vision`: H.264 at 1280 x
+  720 for the RTSP client, JPEG for a subscriber, and only JPEG if the encoder fails). A camera with detections draws
+  its boxes into the frame before the encoder takes it and runs the model on a thread of its own, so the stream does
+  not wait for the NPU.
 - A stream whose driver can crash the kernel does not run next to the blade by default: the loop ends it when the
   blade starts (`BLADE_RUNNING`) or the state of the mower is unknown (`DRIVER_MISSING`: no `hw/status` yet or the
   last one older than 1 s by the time it came, not by its stamp), and tests the camera once per boot while the mower

@@ -11,7 +11,6 @@ namespace tron_vision {
 
 namespace {
 
-constexpr float kGainSmoothing = 0.2F;
 constexpr size_t kLastShown = 3;
 
 bool Exists(const std::string& path) {
@@ -44,7 +43,8 @@ const char* StateName(VisionState state) {
   return "unknown";
 }
 
-VisionLoop::VisionLoop(VisionConfig config, Camera& camera, CrashGuard& guard, std::function<double()> now)
+VisionLoop::VisionLoop(VisionConfig config, Camera& camera, CrashGuard& guard, std::function<double()> now,
+                       H264Stream* stream)
     : config_(std::move(config)),
       camera_(camera),
       guard_(guard),
@@ -54,6 +54,7 @@ VisionLoop::VisionLoop(VisionConfig config, Camera& camera, CrashGuard& guard, s
   config_.infer_rate = std::clamp(config_.infer_rate, 0.5, 5.0);
   status_.exposure.exposure = config_.exposure.exposure_max;
   status_.exposure.gain = config_.exposure.gain_min;
+  if (stream != nullptr) video_ = std::make_unique<VideoFeed>(config_.video, *stream, now_);
 }
 
 VisionLoop::~VisionLoop() {
@@ -78,17 +79,24 @@ bool VisionLoop::Load() {
     Set(VisionState::kModelMissing, error);
     return false;
   }
-  if (!model_.Open(config_.library_path, config_.model_path, error)) {
+  StopWorker();
+  auto worker = std::make_shared<InferenceWorker>();
+  NpuModel& model = worker->Model();
+  if (!model.Open(config_.library_path, config_.model_path, error)) {
     Set(VisionState::kModelError, error);
     return false;
   }
-  if (!CheckModel(model_.Inputs(), model_.Outputs(), names_.size(), layout_, error)) {
-    model_.Close();
+  if (!CheckModel(model.Inputs(), model.Outputs(), names_.size(), layout_, error)) {
+    model.Close();
     Set(VisionState::kModelMismatch, error);
     return false;
   }
+  const std::string detail =
+      "model ok, " + std::to_string(layout_.classes) + " classes, runtime " + model.SdkVersion();
+  worker->Start(layout_, config_.decode);
+  worker_ = std::move(worker);
   loaded_ = true;
-  Set(VisionState::kOff, "model ok, " + std::to_string(layout_.classes) + " classes, runtime " + model_.SdkVersion());
+  Set(VisionState::kOff, detail);
   return true;
 }
 
@@ -118,12 +126,15 @@ bool VisionLoop::StartStream(double now) {
   frames_since_exposure_ = 0;
   next_infer_ = now;
   detections_.clear();
+  streams_++;
   Set(VisionState::kStarting, "");
   return true;
 }
 
 void VisionLoop::StopStream(VisionState state, const std::string& detail) {
   if (streaming_) {
+    // The encoder lets go of the buffers before the camera frees them.
+    if (video_) video_->End();
     camera_.Stop();
     guard_.Disarm(config_.camera_id);
     streaming_ = false;
@@ -159,7 +170,8 @@ bool VisionLoop::CheckBudget(double now) {
 bool VisionLoop::Step() {
   if (status_.state == VisionState::kFailed) return false;
   double now = now_();
-  if (!CheckBudget(now)) return false;
+  if (!CheckBudget(now) || !CheckInference(now)) return false;
+  StepVideo();
   if (!streaming_) {
     if (loaded_ && status_.state != VisionState::kLocked && status_.state != VisionState::kPausedHot &&
         attempts_ < config_.max_attempts && now >= next_retry_) {
@@ -186,6 +198,7 @@ bool VisionLoop::Step() {
   }
   if (got == 0) return true;
   OnFrame(frame, now_());
+  SendVideo();
   return status_.state != VisionState::kFailed;
 }
 
@@ -195,11 +208,8 @@ void VisionLoop::OnFrame(const Nv12View& frame, double now) {
   const Placement place = PlaceFrame(frame.width, frame.height, config_.fit, kModelWidth, kModelHeight);
   const FrameStats stats = MeasureFrame(frame, place);
 
-  const ColorGains target = GrayWorld(stats);
-  gain_r_ += kGainSmoothing * (static_cast<float>(target.r) / 256.0F - gain_r_);
-  gain_b_ += kGainSmoothing * (static_cast<float>(target.b) / 256.0F - gain_b_);
-  status_.display_gains.r = static_cast<uint16_t>(std::lround(gain_r_ * 256.0F));
-  status_.display_gains.b = static_cast<uint16_t>(std::lround(gain_b_ * 256.0F));
+  white_.Update(stats);
+  status_.display_gains = white_.Gains();
 
   if (++frames_since_exposure_ >= config_.settle_frames) {
     const ExposureSetting next = NextExposure(status_.exposure, stats.y, config_.exposure);
@@ -213,66 +223,124 @@ void VisionLoop::OnFrame(const Nv12View& frame, double now) {
       frames_since_exposure_ = 0;
     }
   }
-  if (now >= next_infer_) Infer(frame, now);
+  if (now >= next_infer_ && worker_ && worker_->Idle()) Submit(frame, now);
   if (preview_wanted_ && status_.state == VisionState::kRunning && preview_.Due(now)) {
     std::string error;
     if (!preview_.Make(frame, status_.display_gains, detections_, now, error)) status_.detail = error;
   }
 }
 
-bool VisionLoop::Infer(const Nv12View& frame, double now) {
-  const Placement place = PlaceFrame(frame.width, frame.height, config_.fit, kModelWidth, kModelHeight);
+void VisionLoop::StepVideo() {
+  if (!video_) return;
+  // Offered while the camera may start.
+  const bool may_start = loaded_ && status_.state != VisionState::kLocked &&
+                         status_.state != VisionState::kPausedHot && attempts_ < config_.max_attempts;
+  const std::string detail = video_->Step(may_start, streaming_);
+  if (!detail.empty()) status_.detail = detail;
+  status_.video = video_->Active();
+  status_.fps = video_->Fps();
+  status_.kbps = video_->Kbps();
+}
+
+void VisionLoop::SendVideo() {
+  if (!video_ || !video_->Playing()) return;
+  const int du = white_.ShiftU();
+  const int dv = white_.ShiftV();
+  const std::vector<Detection>& boxes = detections_;
+  const auto edit = [du, dv, &boxes](const Nv12Buffer& f) {
+    ShiftChroma(f.uv, f.width, f.height, f.stride, du, dv);
+    // Outlines a pixel wide per 320 of the picture width, 4 at 1280.
+    DrawBoxes(f, boxes, std::max(2U, f.width / 320));
+  };
+  const std::string detail = video_->Send(camera_, edit);
+  if (!detail.empty()) status_.detail = detail;
+  status_.video = video_->Active();
+  status_.fps = video_->Fps();
+  status_.kbps = video_->Kbps();
+  status_.encode_ms = video_->EncodeMs();
+}
+
+void VisionLoop::Submit(const Nv12View& frame, double now) {
+  job_place_ = PlaceFrame(frame.width, frame.height, config_.fit, kModelWidth, kModelHeight);
   const ColorGains gains = config_.white_balance_inference ? status_.display_gains : ColorGains{};
-  ConvertFrame(frame, place, gains, config_.swap_rb, kModelWidth, kModelHeight, rgb_);
-  const double period = 1.0 / config_.infer_rate;
-  next_infer_ = std::max(next_infer_ + period, now);
+  ConvertFrame(frame, job_place_, gains, config_.swap_rb, kModelWidth, kModelHeight, worker_->Input());
+  job_width_ = frame.width;
+  job_height_ = frame.height;
+  job_submitted_ = now;
+  job_stream_ = streams_;
+  next_infer_ = std::max(next_infer_ + 1.0 / config_.infer_rate, now);
+  worker_->Submit();
+}
 
-  const double start = now_();
-  std::string error;
-  if (!model_.Run(rgb_.data(), rgb_.size(), outputs_, error)) {
-    StopStream(VisionState::kFailed, error);
+bool VisionLoop::CheckInference(double now) {
+  if (!worker_) return true;
+  InferenceWorker::Result result;
+  if (worker_->Take(result)) Adopt(result);
+  if (status_.state == VisionState::kFailed) return false;
+  if (worker_->Busy() && now - job_submitted_ > config_.hang_s) {
+    StopStream(VisionState::kFailed,
+               "inference has not ended after " + Score(static_cast<float>(config_.hang_s)) + " s");
     status_.exit_code = kExitSlowNpu;
     return false;
   }
-  const double end = now_();
-  status_.infer_ms = (end - start) * 1000.0;
-  if (end - start > config_.slow_run_s && ++slow_runs_ >= config_.max_slow_runs) {
-    StopStream(VisionState::kFailed, "inference over " + Score(static_cast<float>(config_.slow_run_s)) + " s " +
-                                         std::to_string(slow_runs_) + " times");
-    status_.exit_code = kExitSlowNpu;
-    return false;
-  }
-
-  detections_ = DecodeDetections(layout_, model_.Outputs(), outputs_, config_.decode);
-  std::string text;
-  for (size_t i = 0; i < detections_.size(); i++) {
-    if (i < kLastShown) {
-      const uint32_t id = detections_[i].class_id;
-      text += (i > 0 ? ", " : "") + (id < names_.size() ? names_[id] : std::to_string(id)) + " " +
-              Score(detections_[i].score);
-    }
-    detections_[i] = ToSource(detections_[i], place);
-  }
-  if (detections_.size() > kLastShown) text += " (+" + std::to_string(detections_.size() - kLastShown) + ")";
-  status_.last = text.empty() ? "none" : text;
-  status_.inferences++;
-  status_.frame_width = frame.width;
-  status_.frame_height = frame.height;
-  if (last_infer_ >= 0.0 && start > last_infer_) {
-    const double rate = 1.0 / (start - last_infer_);
-    status_.rate = status_.rate == 0.0 ? rate : status_.rate + 0.3 * (rate - status_.rate);
-  }
-  last_infer_ = start;
   return true;
 }
 
+void VisionLoop::Adopt(const InferenceWorker::Result& result) {
+  if (!result.ok) {
+    StopStream(VisionState::kFailed, result.error);
+    status_.exit_code = kExitSlowNpu;
+    return;
+  }
+  status_.infer_ms = result.run_s * 1000.0;
+  if (result.run_s > config_.slow_run_s && ++slow_runs_ >= config_.max_slow_runs) {
+    StopStream(VisionState::kFailed, "inference over " + Score(static_cast<float>(config_.slow_run_s)) + " s " +
+                                         std::to_string(slow_runs_) + " times");
+    status_.exit_code = kExitSlowNpu;
+    return;
+  }
+  // Boxes of a stream that has ended no longer fit the picture.
+  if (!streaming_ || job_stream_ != streams_) return;
+
+  detections_.clear();
+  std::string text;
+  for (size_t i = 0; i < result.detections.size(); i++) {
+    const Detection& d = result.detections[i];
+    if (i < kLastShown) {
+      text += (i > 0 ? ", " : "") + (d.class_id < names_.size() ? names_[d.class_id] : std::to_string(d.class_id)) +
+              " " + Score(d.score);
+    }
+    detections_.push_back(ToSource(d, job_place_));
+  }
+  if (result.detections.size() > kLastShown) {
+    text += " (+" + std::to_string(result.detections.size() - kLastShown) + ")";
+  }
+  status_.last = text.empty() ? "none" : text;
+  status_.inferences++;
+  status_.frame_width = job_width_;
+  status_.frame_height = job_height_;
+  if (last_infer_ >= 0.0 && job_submitted_ > last_infer_) {
+    const double rate = 1.0 / (job_submitted_ - last_infer_);
+    status_.rate = status_.rate == 0.0 ? rate : status_.rate + 0.3 * (rate - status_.rate);
+  }
+  last_infer_ = job_submitted_;
+}
+
+void VisionLoop::StopWorker() {
+  if (!worker_) return;
+  // A run that hangs keeps its thread; the process ends anyway.
+  worker_->Stop(config_.slow_run_s);
+  worker_.reset();
+}
+
 void VisionLoop::Shutdown() {
+  if (video_) video_->End();
   if (streaming_) {
     camera_.Stop();
     guard_.Disarm(config_.camera_id);
     streaming_ = false;
   }
-  model_.Close();
+  StopWorker();
   loaded_ = false;
 }
 

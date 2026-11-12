@@ -62,8 +62,15 @@ class FakeCamera : public Camera {
   const CapturedFrame* Captured() const override {
     return exported && streaming ? &captured_ : nullptr;
   }
-  bool ShiftChroma(int du, int dv, std::string&) override {
-    shifts.emplace_back(du, dv);
+  bool EditFrame(const std::function<void(const Nv12Buffer&)>& edit, std::string&) override {
+    Nv12Buffer b;
+    b.y = frame_.data.data();
+    b.uv = b.y + kWidth * kHeight;
+    b.width = kWidth;
+    b.height = kHeight;
+    b.stride = kWidth;
+    edit(b);
+    edited.emplace_back(b.uv[0], b.uv[1]);
     return true;
   }
 
@@ -78,7 +85,8 @@ class FakeCamera : public Camera {
   uint8_t v = 128;
   ExposureSetting setting;
   bool exported = false;
-  std::vector<std::pair<int, int>> shifts;
+  // Chroma of the first pixel after each edit.
+  std::vector<std::pair<int, int>> edited;
 
  private:
   double& clock_;
@@ -105,8 +113,8 @@ struct Rig {
     ASSERT_TRUE(server->Listen(error)) << error;
     stream = std::make_unique<H264Stream>(encoder, *server, 0.5, [this] { return Now(); });
     camera.exported = true;
-    config.idle_wait_ms = 5;
-    config.encoder.format = PixelFormat::kNv12;
+    config.video.idle_wait_ms = 5;
+    config.video.encoder.format = PixelFormat::kNv12;
   }
   std::string Ask(const test::Client& client, const std::string& request) {
     client.Send(request);
@@ -336,8 +344,9 @@ TEST(PreviewLoop, VideoForTheRtspClient) {
     test::Client client(rig.server->Port());
     ASSERT_NE(rig.Ask(client, "DESCRIBE " + rig.Url() + " RTSP/1.0\r\nCSeq: 1\r\n\r\n").find("200 OK"),
               std::string::npos);
-    const std::string setup = rig.Ask(client, "SETUP " + rig.Url("/trackID=0") +
-                                                  " RTSP/1.0\r\nCSeq: 2\r\nTransport: RTP/AVP/TCP;interleaved=0-1\r\n\r\n");
+    const std::string setup =
+        rig.Ask(client, "SETUP " + rig.Url("/trackID=0") +
+                            " RTSP/1.0\r\nCSeq: 2\r\nTransport: RTP/AVP/TCP;interleaved=0-1\r\n\r\n");
     const std::string session = test::SessionOf(setup);
     ASSERT_FALSE(session.empty()) << setup;
     client.Send("PLAY " + rig.Url("/") + " RTSP/1.0\r\nCSeq: 3\r\nSession: " + session + "\r\n\r\n");
@@ -348,9 +357,9 @@ TEST(PreviewLoop, VideoForTheRtspClient) {
     EXPECT_TRUE(rig.encoder.is_open);
     EXPECT_GT(rig.Loop().Status().fps, 10.0);
     EXPECT_GT(rig.stream->Frames(), 20U);
-    ASSERT_FALSE(rig.camera.shifts.empty());
-    EXPECT_NEAR(rig.camera.shifts.back().first, -28, 1);
-    EXPECT_EQ(rig.camera.shifts.back().second, 0);
+    ASSERT_FALSE(rig.camera.edited.empty());
+    EXPECT_NEAR(rig.camera.edited.back().first, 128, 1);
+    EXPECT_EQ(rig.camera.edited.back().second, 128);
     // No JPEG without a subscriber of the pictures.
     EXPECT_EQ(rig.Loop().GetPreview().Count(), 0U);
     EXPECT_NE(client.Receive().find('$'), std::string::npos);

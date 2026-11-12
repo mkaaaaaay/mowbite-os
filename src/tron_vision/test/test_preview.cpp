@@ -42,6 +42,31 @@ TEST(Preview, BoxOutlinesInTheClassColor) {
   EXPECT_EQ(At(rgb, 100, 50, 25)[1], 0);
 }
 
+TEST(Preview, BoxOutlinesInNv12OnEvenPixels) {
+  test::Nv12Frame frame(64, 32, 16, 128, 128);
+  Nv12Buffer b;
+  b.y = frame.data.data();
+  b.uv = b.y + 64 * 32;
+  b.width = 64;
+  b.height = 32;
+  b.stride = 64;
+  DrawBoxes(b, {{0, 0.9F, 9.4F, 5.0F, 30.6F, 20.0F}, {1, 0.5F, -10, -10, 100, 100}}, 4);
+  const auto y = [&](uint32_t px, uint32_t py) { return frame.data[py * 64 + px]; };
+  const auto u = [&](uint32_t px, uint32_t py) { return frame.data[64 * 32 + (py / 2) * 64 + (px & ~1U)]; };
+  // First box: corners 8,4 and 32,20 after rounding to even pixels, red outline 4 wide, inside untouched.
+  EXPECT_EQ(y(8, 4), 120);
+  EXPECT_EQ(u(8, 4), 100);
+  EXPECT_EQ(y(31, 19), 120);
+  EXPECT_EQ(y(11, 7), 120);
+  EXPECT_EQ(y(12, 8), 16);
+  EXPECT_EQ(u(12, 8), 128);
+  EXPECT_EQ(y(7, 4), 16);
+  // Second box is clipped to the frame and drawn green along its border.
+  EXPECT_EQ(y(63, 31), y(0, 0));
+  EXPECT_NE(y(0, 0), 16);
+  EXPECT_EQ(y(32, 16), 16);
+}
+
 TEST(Preview, JpegOfTheScaledFrame) {
   test::Nv12Frame frame(1920, 1080, 120, 110, 150);
   Preview preview(PreviewConfig{});

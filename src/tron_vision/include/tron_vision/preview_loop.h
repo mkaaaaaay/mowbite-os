@@ -3,15 +3,17 @@
 
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <string>
 
 #include "tron_vision/budget.h"
+#include "tron_vision/camera.h"
 #include "tron_vision/crash_guard.h"
 #include "tron_vision/exposure.h"
 #include "tron_vision/frame_convert.h"
 #include "tron_vision/h264_stream.h"
 #include "tron_vision/preview.h"
-#include "tron_vision/vision_loop.h"
+#include "tron_vision/video_feed.h"
 
 namespace tron_vision {
 
@@ -35,12 +37,8 @@ struct PreviewLoopConfig {
   std::string statm = "/proc/self/statm";
   double check_s = 10.0;
   PreviewConfig preview;
-  // H.264 for the client of the RTSP server, with these settings; the camera exports its buffers then.
-  EncoderSettings encoder;
-  // Failures of the encoder before the camera stays with JPEG until the process restarts.
-  int max_encoder_failures = 3;
-  // Wait for an RTSP client per step while the camera does not stream.
-  int idle_wait_ms = 200;
+  // H.264 for the client of the RTSP server; the camera exports its buffers then.
+  VideoFeedConfig video;
 };
 
 enum class PreviewState {
@@ -105,10 +103,7 @@ class PreviewLoop {
   void StopStream(PreviewState state, const std::string& detail);
   void EndDemand();
   void OnFrame(const Nv12View& frame, double now);
-  // The H.264 side of a step: prepares, offers or withdraws the stream, and ends it without a client.
-  void StepVideo(double now);
   void SendVideo();
-  void VideoFailed(const std::string& detail);
   bool CheckBudget(double now);
   void Set(PreviewState state, const std::string& detail);
 
@@ -116,7 +111,7 @@ class PreviewLoop {
   Camera& camera_;
   CrashGuard& guard_;
   std::function<double()> now_;
-  H264Stream* stream_;
+  std::unique_ptr<VideoFeed> video_;
   ThermalGate thermal_;
   PreviewStatus status_;
   Preview preview_;
@@ -132,13 +127,7 @@ class PreviewLoop {
   double next_retry_ = 0.0;
   double next_check_ = 0.0;
   int frames_since_exposure_ = 0;
-  float gain_r_ = 1.0F;
-  float gain_b_ = 1.0F;
-  float shift_u_ = 0.0F;
-  float shift_v_ = 0.0F;
-  bool offered_ = false;
-  int encoder_failures_ = 0;
-  double next_prepare_ = 0.0;
+  WhiteBalance white_;
 };
 
 }  // namespace tron_vision

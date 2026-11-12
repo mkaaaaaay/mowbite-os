@@ -3,7 +3,10 @@
 
 #include <chrono>
 #include <filesystem>
+#include <thread>
 
+#include "fake_encoder.h"
+#include "rtsp_test_client.h"
 #include "test_util.h"
 #include "tron_vision/vision_loop.h"
 
@@ -59,6 +62,20 @@ class FakeCamera : public Camera {
     setting = s;
     return true;
   }
+  const CapturedFrame* Captured() const override {
+    return exported && streaming ? &captured_ : nullptr;
+  }
+  bool EditFrame(const std::function<void(const Nv12Buffer&)>& edit, std::string&) override {
+    Nv12Buffer b;
+    b.y = frame_.data.data();
+    b.uv = b.y + kWidth * kHeight;
+    b.width = kWidth;
+    b.height = kHeight;
+    b.stride = kWidth;
+    edit(b);
+    edited = frame_.data;
+    return true;
+  }
 
   int starts = 0;
   int frames = 0;
@@ -70,10 +87,14 @@ class FakeCamera : public Camera {
   uint8_t u = 128;
   uint8_t v = 128;
   ExposureSetting setting;
+  bool exported = false;
+  // The frame after the last edit.
+  std::vector<uint8_t> edited;
 
  private:
   double& clock_;
   test::Nv12Frame frame_;
+  CapturedFrame captured_{0, nullptr, 0, kWidth, 0, 0, 200};
 };
 
 struct Rig {
@@ -85,21 +106,44 @@ struct Rig {
   }
   VisionLoop& Loop() {
     if (!loop) {
-      loop = std::make_unique<VisionLoop>(config, camera, guard, [this] { return Now(); });
+      loop = std::make_unique<VisionLoop>(config, camera, guard, [this] { return Now(); }, stream.get());
     }
     return *loop;
+  }
+  // H.264 for an RTSP client on any free port, from an encoder of the test.
+  void WithVideo() {
+    RtspConfig rtsp;
+    rtsp.port = 0;
+    rtsp.path = "oa_left";
+    server = std::make_unique<RtspServer>(rtsp, [this] { return Now(); });
+    std::string error;
+    ASSERT_TRUE(server->Listen(error)) << error;
+    stream = std::make_unique<H264Stream>(encoder, *server, 0.5, [this] { return Now(); });
+    camera.exported = true;
+    config.video.idle_wait_ms = 5;
+    config.video.encoder.format = PixelFormat::kNv12;
+  }
+  std::string Ask(const test::Client& client, const std::string& request) {
+    client.Send(request);
+    Run(0.3);
+    return client.Receive();
+  }
+  std::string Url(const std::string& rest = "") const {
+    return "rtsp://127.0.0.1:" + std::to_string(server->Port()) + "/oa_left" + rest;
   }
   // The clock of the loop: camera time plus the real time the test took.
   double Now() const {
     return clock + std::chrono::duration<double>(std::chrono::steady_clock::now() - real_start).count();
   }
-  // Steps for `seconds` of camera time, idle steps move the clock on by 0.1 s.
-  void Run(double seconds) {
+  // Steps for `seconds` of camera time, idle steps move the clock on by 0.1 s. With `wait` each step waits for the
+  // run of the model it submitted, so that results come in the same order as on a camera at 15 fps.
+  void Run(double seconds, bool wait = true) {
     const double end = clock + seconds;
     for (int i = 0; i < 100000 && clock < end; i++) {
       const int frames = camera.frames;
       const double before = clock;
       if (!Loop().Step()) return;
+      while (wait && Loop().InferenceBusy()) std::this_thread::sleep_for(std::chrono::microseconds(200));
       if (camera.frames == frames && clock == before) clock += 0.1;
     }
   }
@@ -110,6 +154,9 @@ struct Rig {
   FakeCamera camera{clock};
   CrashGuard guard{tmp.Path() + "/vision", tmp.Path() + "/crash", tmp.Write("boot_id", "boot-1\n")};
   VisionConfig config;
+  test::FakeEncoder encoder{clock};
+  std::unique_ptr<RtspServer> server;
+  std::unique_ptr<H264Stream> stream;
   std::unique_ptr<VisionLoop> loop;
 };
 
@@ -316,6 +363,85 @@ TEST(VisionLoop, SlowInferenceEndsTheProcess) {
   EXPECT_EQ(rig.Loop().Status().state, VisionState::kFailed);
   EXPECT_EQ(rig.Loop().Status().exit_code, kExitSlowNpu);
   EXPECT_FALSE(rig.Loop().Step());
+  EXPECT_FALSE(rig.camera.streaming);
+}
+
+TEST(VisionLoop, CameraGoesOnDuringARun) {
+  Rig rig("classes 3\nrun_ms 300\n");
+  ASSERT_TRUE(rig.Loop().Load());
+  const auto began = std::chrono::steady_clock::now();
+  rig.Run(2.0, false);
+  const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+  // 30 frames of camera time; with the model in the camera thread each run would hold one for 0.3 s.
+  EXPECT_GE(rig.camera.frames, 28);
+  EXPECT_LT(took, 1.0);
+  EXPECT_EQ(rig.Loop().Status().state, VisionState::kRunning);
+  EXPECT_TRUE(rig.Loop().InferenceBusy());
+  rig.Loop().Shutdown();
+  EXPECT_FALSE(rig.camera.streaming);
+}
+
+TEST(VisionLoop, HangingRunEndsTheProcess) {
+  Rig rig("classes 3\nrun_ms 1500\n");
+  rig.config.hang_s = 0.5;
+  rig.config.slow_run_s = 0.05;
+  ASSERT_TRUE(rig.Loop().Load());
+  rig.Run(3.0, false);
+  EXPECT_EQ(rig.Loop().Status().state, VisionState::kFailed);
+  EXPECT_EQ(rig.Loop().Status().exit_code, kExitSlowNpu);
+  EXPECT_NE(rig.Loop().Status().detail.find("not ended"), std::string::npos);
+  EXPECT_FALSE(rig.camera.streaming);
+  // The run is left to its thread, which keeps the model until it ends.
+  const auto began = std::chrono::steady_clock::now();
+  rig.Loop().Shutdown();
+  EXPECT_LT(std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count(), 1.0);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1600));
+}
+
+// The client of the RTSP server gets the frames with the boxes of the last run, gray-world shifted.
+TEST(VisionLoop, VideoWithTheBoxes) {
+  Rig rig(kPersonModel);
+  rig.WithVideo();
+  rig.camera.u = 100;
+  ASSERT_TRUE(rig.Loop().Load());
+  rig.Run(1.0);
+  EXPECT_TRUE(rig.Loop().Status().video);
+  EXPECT_EQ(rig.camera.starts, 1);
+  {
+    test::Client client(rig.server->Port());
+    ASSERT_NE(rig.Ask(client, "DESCRIBE " + rig.Url() + " RTSP/1.0\r\nCSeq: 1\r\n\r\n").find("200 OK"),
+              std::string::npos);
+    const std::string setup =
+        rig.Ask(client, "SETUP " + rig.Url("/trackID=0") +
+                            " RTSP/1.0\r\nCSeq: 2\r\nTransport: RTP/AVP/TCP;interleaved=0-1\r\n\r\n");
+    const std::string session = test::SessionOf(setup);
+    ASSERT_FALSE(session.empty()) << setup;
+    client.Send("PLAY " + rig.Url("/") + " RTSP/1.0\r\nCSeq: 3\r\nSession: " + session + "\r\n\r\n");
+    rig.Run(2.0);
+    EXPECT_TRUE(rig.encoder.is_open);
+    EXPECT_GT(rig.Loop().Status().fps, 10.0);
+    EXPECT_GT(rig.stream->Frames(), 20U);
+    ASSERT_EQ(rig.Loop().Detections().size(), 1U);
+    const Detection& d = rig.Loop().Detections()[0];
+    const std::vector<uint8_t>& f = rig.camera.edited;
+    ASSERT_EQ(f.size(), kWidth * kHeight * 3 / 2);
+    // Gray world: the chroma away from the box comes to 128.
+    EXPECT_NEAR(f[kWidth * kHeight], 128, 1);
+    // The top edge of the box in the color of class 0 (BT.601 of 255, 64, 64), the inside untouched.
+    const auto x = static_cast<uint32_t>(d.x1 + d.x2) / 2 & ~1U;
+    const auto y = static_cast<uint32_t>(d.y1 + 0.5F) & ~1U;
+    EXPECT_EQ(f[y * kWidth + x], 120);
+    EXPECT_EQ(f[kWidth * kHeight + (y / 2) * kWidth + x], 100);
+    EXPECT_EQ(f[kWidth * kHeight + (y / 2) * kWidth + x + 1], 212);
+    const auto inside = static_cast<uint32_t>(d.y1 + d.y2) / 2;
+    EXPECT_EQ(f[inside * kWidth + x], f[0]);
+    EXPECT_NE(client.Receive().find('$'), std::string::npos);
+  }
+  rig.Run(0.5);
+  EXPECT_FALSE(rig.encoder.is_open);
+  // The camera of the AI keeps streaming without a viewer.
+  EXPECT_TRUE(rig.camera.streaming);
+  rig.Loop().Shutdown();
   EXPECT_FALSE(rig.camera.streaming);
 }
 
