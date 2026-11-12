@@ -10,6 +10,7 @@
 #include <geometry_msgs/msg/point32.hpp>
 #include <geometry_msgs/msg/polygon.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <mowbite_journal/node_options.h>
 #include <mowbite_msgs/action/calibrate.hpp>
@@ -76,14 +77,7 @@ namespace mowbite_logic {
 
 namespace {
 
-using mowbite_msgs::msg::SensorSpec;
 using mowbite_planner_os_interfaces::srv::PlanTransit;
-static_assert(static_cast<uint8_t>(SensorMeaning::kUnknown) == SensorSpec::MEANING_UNKNOWN);
-static_assert(static_cast<uint8_t>(SensorMeaning::kVoltage) == SensorSpec::MEANING_VOLTAGE);
-static_assert(static_cast<uint8_t>(SensorMeaning::kCurrent) == SensorSpec::MEANING_CURRENT);
-static_assert(static_cast<uint8_t>(SensorMeaning::kTemperature) == SensorSpec::MEANING_TEMPERATURE);
-static_assert(static_cast<uint8_t>(SensorMeaning::kRevolutions) == SensorSpec::MEANING_REVOLUTIONS);
-static_assert(static_cast<uint8_t>(SensorMeaning::kDistance) == SensorSpec::MEANING_DISTANCE);
 
 // S2 answers a release within 2 s (its own limit for the driver); later counts as no answer.
 constexpr double kReleaseTimeoutS = 3.0;
@@ -285,6 +279,13 @@ class LogicNode : public rclcpp::Node {
           }
           Step();
         });
+    // Only while recording areas, so that the journal does not take every measurement.
+    wheel_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
+        "hw/wheel_odom", 10, [this](const geometry_msgs::msg::TwistStamped::ConstSharedPtr& msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          if (!core_.View().AreaRecording()) return;
+          core_.Call<&LogicCore::OnWheelOdom>(msg->twist.linear.x, MonotonicSeconds());
+        });
     map_status_sub_ = create_subscription<mowbite_msgs::msg::MapStatus>(
         "map/status", LatchedQos(1), [this](mowbite_msgs::msg::MapStatus::ConstSharedPtr msg) {
           {
@@ -417,15 +418,8 @@ class LogicNode : public rclcpp::Node {
   }
 
   void OnPose(const mowbite_msgs::msg::RobotPose& msg) {
-    PoseSnapshot pose;
-    pose.x = msg.x;
-    pose.y = msg.y;
-    pose.heading = msg.heading;
-    pose.position_accuracy = msg.position_accuracy;
-    pose.orientation_accuracy = msg.heading_accuracy;
-    pose.orientation_valid = msg.heading_valid;
     std::lock_guard<std::mutex> lock(mutex_);
-    core_.Call<&LogicCore::OnPose>(pose);
+    core_.Call<&LogicCore::OnPose>(ToPose(msg));
     last_pose_ = MonotonicSeconds();
   }
 
@@ -2793,6 +2787,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr pose_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::GnssFix>::SharedPtr gnss_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::PositionJump>::SharedPtr jump_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr wheel_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::MapStatus>::SharedPtr map_status_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr action_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr teleop_sub_;

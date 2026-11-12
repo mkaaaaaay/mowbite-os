@@ -1,6 +1,6 @@
-"""Area recording of mowbite_logic against mowbite_map: the test plays the driver (hw/status), the localization
-(localization/pose), tron_gnss (gps/datum) and the app (actions on bridge/action), and reads map/json and what the
-logic sends to MQTT through bridge/publish.
+"""Area recording of mowbite_logic against mowbite_map: the test plays the driver (hw/status, hw/wheel_odom), the
+localization (localization/pose), tron_gnss (gps/datum) and the app (actions on bridge/action), and reads map/json and
+what the logic sends to MQTT through bridge/publish.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_recording.py
 """
@@ -17,6 +17,7 @@ import launch
 import launch_testing.actions
 import rclpy
 from ament_index_python.packages import get_package_share_directory
+from geometry_msgs.msg import TwistStamped
 from launch_ros.actions import Node
 from mowbite_msgs.msg import (ActionList, HardwareStatus, MapStatus, MqttPublish, RobotPose, RpcError, RpcRequest,
                               RpcResponse)
@@ -51,10 +52,13 @@ class Probe(SimProbe):
         self.x = 0.0
         self.y = 0.0
         self.heading = 0.0
+        # m/s of the wheels, negative backwards
+        self.speed = 0.0
         self.contact = False
         self.datum_pub = self.node.create_publisher(NavSatFix, "gps/datum", LATCHED)
         self.hw_pub = self.node.create_publisher(HardwareStatus, "hw/status", 10)
         self.pose_pub = self.node.create_publisher(RobotPose, "localization/pose", 10)
+        self.wheel_pub = self.node.create_publisher(TwistStamped, "hw/wheel_odom", 10)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
         self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
@@ -92,6 +96,10 @@ class Probe(SimProbe):
         self.datum_pub.publish(msg)
 
     def pose(self, x, y, accuracy=0.02):
+        # The wheels with every pose: without them no ring keeps its body.
+        wheels = TwistStamped()
+        wheels.twist.linear.x = self.speed
+        self.wheel_pub.publish(wheels)
         msg = RobotPose()
         msg.x = x
         msg.y = y
@@ -103,6 +111,7 @@ class Probe(SimProbe):
 
     def drive(self, corners):
         """Forward along the corners in steps of 5 cm, a pose at every step, turning on the spot at each corner."""
+        self.speed = 10.0
         for (ax, ay), (bx, by) in zip(corners, corners[1:]):
             self.heading = math.atan2(by - ay, bx - ax)
             steps = max(1, math.ceil(math.hypot(bx - ax, by - ay) / 0.05))
@@ -111,17 +120,20 @@ class Probe(SimProbe):
                 self.y = ay + (by - ay) * s / steps
                 self.pose(self.x, self.y)
                 time.sleep(0.005)
+        self.speed = 0.0
         time.sleep(0.2)
 
     def back(self, x, y):
-        """Straight back to the point in steps of 5 cm, the heading kept."""
+        """Straight back to the point in steps of 1 cm at 0.5 m/s, the heading kept."""
         ax, ay = self.x, self.y
-        steps = max(1, math.ceil(math.hypot(x - ax, y - ay) / 0.05))
+        steps = max(1, math.ceil(math.hypot(x - ax, y - ay) / 0.01))
+        self.speed = -0.5
         for s in range(1, steps + 1):
             self.x = ax + (x - ax) * s / steps
             self.y = ay + (y - ay) * s / steps
             self.pose(self.x, self.y)
-            time.sleep(0.005)
+            time.sleep(0.02)
+        self.speed = 0.0
         time.sleep(0.2)
 
     def events_of(self, kind):
@@ -305,8 +317,9 @@ class TestRecording(unittest.TestCase):
         self.assertTrue(self.enabled(REC + "stop_recording"))
         since = len(self.probe.events)
         self.probe.drive([(15, 0), (17, 0)])
-        self.probe.back(16, 0)
-        self.probe.drive([(16, 0), (18, 0), (18, 2), (15, 2), (15, 0.15), (15.6, -0.05)])
+        # 5 cm, under the two steps the pose needs: the wheels show it.
+        self.probe.back(16.95, 0)
+        self.probe.drive([(16.95, 0), (18, 0), (18, 2), (15, 2), (15, 0.15), (15.6, -0.05)])
         hint = self.probe.wait(lambda: [e for e in self.probe.events[since:]
                                         if e["type"] == "RECORDING_REFUSED" and e["reason"] == "REVERSING"])
         self.assertIsNotNone(hint, "no hint while reversing")

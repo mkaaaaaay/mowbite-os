@@ -75,12 +75,14 @@ struct PointMark {
   bool reversed = false;
 };
 
-// Why the closed ring is not the forward driven track of the body, empty if it is: MANUAL_POINT, NO_HEADING,
-// INTERRUPTED, REVERSED, CLOSING, GAP, DIRECTION or SHARP_TURN, the first of them in this order that applies. marks
-// has one entry per point of the ring; the first point stands for both edges that meet there. crossed: the ring was
-// closed where its line crossed itself, so the closing edge is part of a driven one. Only rings that pass get
-// recorded_body, which lets the planner drive the line without a margin.
-std::string DrivenProblem(const Ring& ring, const std::vector<PointMark>& marks, bool crossed);
+// Why the track a ring was closed from is not the forward driven track of the body, empty if it is: MANUAL_POINT,
+// NO_HEADING, INTERRUPTED, REVERSED, CLOSING, GAP, DIRECTION or SHARP_TURN, the first of them in this order that
+// applies. crossed: the ring was closed where its line crossed itself, and track runs from the point before the
+// crossing to the first point past it, so that its first and last edges cross. Without a crossing track is the ring,
+// whose closing edge was never driven. marks has one entry per point of track; joined and reversed of the first point
+// belong to the edge before it and do not count. Only rings that pass get recorded_body, which lets the planner drive
+// the line without a margin.
+std::string DrivenProblem(const Ring& track, const std::vector<PointMark>& marks, bool crossed);
 
 // recording.undo without meters: the path (m) taken back from the end of the open ring.
 constexpr double kUndoDefaultM = 1.0;
@@ -108,6 +110,11 @@ struct RecorderConfig {
   static constexpr double kReverseStep = 0.05;
   // This many judged steps backwards in a row are reversing; a step that is not ends it.
   static constexpr int kReverseSteps = 2;
+  // The wheels this far (m) backwards are reversing, so that the next point does not join the driven track: more than
+  // they roll back when stopping, less than the 0.10 m the pose needs to show it.
+  static constexpr double kReverseTravel = 0.02;
+  // Wheel measurements further apart than this (s), or none, are a break of the driven track.
+  static constexpr double kWheelGap = 0.5;
   // An edge of a driven ring is at most this long (m).
   static constexpr double kMaxDrivenEdge = 0.3;
   // An edge of a driven ring points between the headings at its ends, widened by this (rad) on each side.
@@ -164,6 +171,10 @@ class AreaRecorder {
   void OnPoseLost();
   // The localization jumped back onto GPS.
   void OnPositionJump();
+  // m the wheels moved along base_link since the last call, negative backwards (hw/wheel_odom).
+  void OnWheelTravel(double metres);
+  // No wheel travel for RecorderConfig::kWheelGap: reversing would go unseen.
+  void OnWheelsLost();
   // Whether mowbite_map takes changes now, and why not.
   void SetMapWritable(bool writable, const Reason& reason);
   // The debounced contact with the docking station, which the point on the contacts needs.
@@ -229,6 +240,8 @@ class AreaRecorder {
   // Backwards takes back the last points in front of base_link; true while the mower reverses.
   bool TakeBackReversing(double x, double y, double heading);
   void EndReversing();
+  // REVERSING once for each stretch backwards.
+  void HintReversing();
   void Interrupt();
   size_t PointCount() const;
 
@@ -246,6 +259,10 @@ class AreaRecorder {
   size_t reverse_taken_ = 0;
   // Since the last point of the open ring.
   bool reversed_ = false;
+  // m the wheels went back since their furthest point forward or since they last showed reversing, and whether this
+  // stretch backwards had its hint.
+  double wheel_back_ = 0;
+  bool reverse_hinted_ = false;
   std::optional<Ring> outline_;
   std::vector<Ring> obstacles_;
   std::string outline_driven_reason_;

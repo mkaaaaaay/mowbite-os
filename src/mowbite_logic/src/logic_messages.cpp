@@ -5,8 +5,22 @@
 #include <geometry_msgs/msg/point32.hpp>
 #include <mowbite_msgs/action/follow_path.hpp>
 #include <mowbite_msgs/msg/map_status.hpp>
+#include <mowbite_msgs/msg/sensor_spec.hpp>
 
 namespace mowbite_logic {
+
+namespace {
+
+using mowbite_msgs::msg::SensorSpec;
+static_assert(static_cast<uint8_t>(SensorMeaning::kUnknown) == SensorSpec::MEANING_UNKNOWN);
+static_assert(static_cast<uint8_t>(SensorMeaning::kVoltage) == SensorSpec::MEANING_VOLTAGE);
+static_assert(static_cast<uint8_t>(SensorMeaning::kCurrent) == SensorSpec::MEANING_CURRENT);
+static_assert(static_cast<uint8_t>(SensorMeaning::kTemperature) == SensorSpec::MEANING_TEMPERATURE);
+static_assert(static_cast<uint8_t>(SensorMeaning::kRevolutions) == SensorSpec::MEANING_REVOLUTIONS);
+static_assert(static_cast<uint8_t>(SensorMeaning::kDistance) == SensorSpec::MEANING_DISTANCE);
+
+}  // namespace
+
 
 MapDatum ToDatum(uint8_t state) {
   using mowbite_msgs::msg::MapStatus;
@@ -83,6 +97,17 @@ HardwareSnapshot::Motor ToMotor(const mowbite_msgs::msg::MotorState& m) {
   motor.current = m.current;
   motor.temperature = m.temperature;
   return motor;
+}
+
+PoseSnapshot ToPose(const mowbite_msgs::msg::RobotPose& msg) {
+  PoseSnapshot pose;
+  pose.x = msg.x;
+  pose.y = msg.y;
+  pose.heading = msg.heading;
+  pose.position_accuracy = msg.position_accuracy;
+  pose.orientation_accuracy = msg.heading_accuracy;
+  pose.orientation_valid = msg.heading_valid;
+  return pose;
 }
 
 }  // namespace mowbite_logic

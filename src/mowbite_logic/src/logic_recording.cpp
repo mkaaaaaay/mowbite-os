@@ -5,6 +5,35 @@
 
 namespace mowbite_logic {
 
+bool LogicCore::AreaRecording() const {
+  return state_ == State::kAreaRecording;
+}
+
+void LogicCore::OnMapStatus(MapDatum datum, const std::string& reason) {
+  const bool writable = datum == MapDatum::kMatch || datum == MapDatum::kEmpty;
+  if (writable != map_writable_) SetDue<ActionsChanged>(true);
+  map_writable_ = writable;
+  map_reason_ = writable ? Reason() : MapReason(datum, reason);
+  recorder_.SetMapWritable(writable, map_reason_);
+}
+
+void LogicCore::OnWheelOdom(double vx, double now_s) {
+  if (state_ != State::kAreaRecording) return;
+  if (last_wheel_s_ && now_s - *last_wheel_s_ <= RecorderConfig::kWheelGap) {
+    recorder_.OnWheelTravel(vx * (now_s - *last_wheel_s_));
+  } else {
+    recorder_.OnWheelsLost();
+  }
+  last_wheel_s_ = now_s;
+  PullRecorder();
+}
+
+void LogicCore::TickRecording(double now_s) {
+  if (last_wheel_s_ && now_s - *last_wheel_s_ <= RecorderConfig::kWheelGap) return;
+  recorder_.OnWheelsLost();
+  PullRecorder();
+}
+
 void LogicCore::OnMapEditResult(bool ok, const std::string& id, const std::string& code,
                                 const std::string& message) {
   recorder_.OnMapEditResult(ok, id, code, message);

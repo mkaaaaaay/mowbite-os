@@ -99,6 +99,11 @@ TEST(Ring, TouchingAnEarlierSegmentCounts) {
   EXPECT_TRUE(SelfIntersects({{0, 0}, {4, 0}, {4, 4}, {2, 0}, {0, 4}}));
 }
 
+TEST(Ring, AnEndBesideAnEdgeByRoundingStillMeetsIt) {
+  // The fourth point lies 5.5e-17 m beside the first side, as rounding a zero leaves it; the edge after it crosses.
+  EXPECT_TRUE(SelfIntersects({{0, 0}, {1, 0}, {1, 1}, {0.5, 5.5e-17}, {0.5, -0.5}}));
+}
+
 TEST(Ring, AConcaveRingIsFine) {
   EXPECT_FALSE(SelfIntersects({{0, 0}, {4, 0}, {4, 4}, {2, 1}, {0, 4}}));
 }
@@ -945,10 +950,18 @@ Ring Rounded(double w, double h, double r) {
   return corners;
 }
 
+// The track CloseRing judges for a ring closed over a crossing: on from the last point to the middle of the first
+// edge, so that the last edge crosses the first.
+Track Crossing(Track ring) {
+  ring.ring.push_back({(ring.ring[0].x + ring.ring[1].x) / 2, (ring.ring[0].y + ring.ring[1].y) / 2});
+  ring.marks.push_back(ring.marks[0]);
+  return ring;
+}
+
 }  // namespace
 
 TEST(DrivenRing, StraightSidesAndCornersTurnedOnTheSpot) {
-  const Track track = Recorded(Rectangle(3, 2));
+  const Track track = Crossing(Recorded(Rectangle(3, 2)));
   EXPECT_EQ(DrivenProblem(track.ring, track.marks, true), "");
 }
 
@@ -962,6 +975,7 @@ TEST(DrivenRing, AnArc) {
     mark.heading_valid = mark.automatic = mark.joined = true;
     track.marks.push_back(mark);
   }
+  track = Crossing(track);
   EXPECT_EQ(DrivenProblem(track.ring, track.marks, true), "");
 }
 
@@ -975,16 +989,16 @@ TEST(DrivenRing, AQuarterTurnOnTheSpotFromTheRecorder) {
 TEST(DrivenRing, FiveHundredEdgesWithTheNoiseOfRtk) {
   // sigma 1.1 cm on every point. Over 1000 seeds 0.4 % of such rings fail by DIRECTION, and 5.5 % of rectangles with
   // corners turned on the spot by SHARP_TURN; with 5 mm none (the localization filters the pose).
-  const Track track = Recorded(Rounded(17, 10.5, 1.0), 0.011, 7);
+  const Track track = Crossing(Recorded(Rounded(17, 10.5, 1.0), 0.011, 7));
   ASSERT_GE(track.ring.size(), 500u);
   EXPECT_EQ(DrivenProblem(track.ring, track.marks, true), "");
-  const Track rectangle = Recorded(Rectangle(17, 10.5), 0.005, 7);
+  const Track rectangle = Crossing(Recorded(Rectangle(17, 10.5), 0.005, 7));
   EXPECT_EQ(DrivenProblem(rectangle.ring, rectangle.marks, true), "");
 }
 
 TEST(DrivenRing, APointByHandOrWithoutHeadingOrAfterABreakOrReversing) {
   for (const char* code : {"MANUAL_POINT", "NO_HEADING", "INTERRUPTED", "REVERSED"}) {
-    Track track = Recorded(Rectangle(3, 2));
+    Track track = Crossing(Recorded(Rectangle(3, 2)));
     PointMark& mark = track.marks[10];
     if (std::string(code) == "MANUAL_POINT") mark.automatic = false;
     if (std::string(code) == "NO_HEADING") mark.heading_valid = false;
@@ -992,22 +1006,27 @@ TEST(DrivenRing, APointByHandOrWithoutHeadingOrAfterABreakOrReversing) {
     if (std::string(code) == "REVERSED") mark.reversed = true;
     EXPECT_EQ(DrivenProblem(track.ring, track.marks, true), code);
   }
-  // The first point stands for the closing edge as well.
-  Track track = Recorded(Rectangle(3, 2));
+  // joined and reversed of the first point belong to the edge before the track, those of the last one count.
+  Track track = Crossing(Recorded(Rectangle(3, 2)));
   track.marks[0].joined = false;
-  EXPECT_EQ(DrivenProblem(track.ring, track.marks, true), "INTERRUPTED");
-  track.marks[0].joined = true;
   track.marks[0].reversed = true;
+  EXPECT_EQ(DrivenProblem(track.ring, track.marks, true), "");
+  track.marks.back().joined = false;
+  EXPECT_EQ(DrivenProblem(track.ring, track.marks, true), "INTERRUPTED");
+  track.marks.back().joined = true;
+  track.marks.back().reversed = true;
   EXPECT_EQ(DrivenProblem(track.ring, track.marks, true), "REVERSED");
-  // The first reason in the order of the list.
+  // The first reason in the order of the list; the heading of the first point counts.
   track.marks[5].joined = false;
   EXPECT_EQ(DrivenProblem(track.ring, track.marks, true), "INTERRUPTED");
+  track.marks[0].heading_valid = false;
+  EXPECT_EQ(DrivenProblem(track.ring, track.marks, true), "NO_HEADING");
   track.marks[6].automatic = false;
   EXPECT_EQ(DrivenProblem(track.ring, track.marks, true), "MANUAL_POINT");
 }
 
 TEST(DrivenRing, AnEdgeLongerThanThirtyCentimetres) {
-  Track track = Recorded(Rectangle(3, 2));
+  Track track = Crossing(Recorded(Rectangle(3, 2)));
   // Points 0.11 m apart: one out of three gaps of 0.33 m.
   const Ring with_gap = [&] {
     Ring ring = track.ring;
@@ -1024,7 +1043,7 @@ TEST(DrivenRing, AnEdgeLongerThanThirtyCentimetres) {
 }
 
 TEST(DrivenRing, AnEdgeBackwardsOrSideways) {
-  Track track = Recorded(Rectangle(3, 2));
+  Track track = Crossing(Recorded(Rectangle(3, 2)));
   // Point 10 behind point 9 on the first side, heading still east.
   Track backwards = track;
   backwards.ring[10] = {backwards.ring[9].x - 0.05, 0};
@@ -1037,10 +1056,10 @@ TEST(DrivenRing, AnEdgeBackwardsOrSideways) {
 
 TEST(DrivenRing, AHalfTurnOnTheSpot) {
   // Out along y = 0, a half turn on the spot, back the same way: which way it turned is not in the line.
-  const Track track = Recorded({{0, 0}, {5, 0}, {4, 0}, {4, 2}, {-1, 2}, {-1, 0}, {-0.05, 0}});
+  const Track track = Crossing(Recorded({{0, 0}, {5, 0}, {4, 0}, {4, 2}, {-1, 2}, {-1, 0}, {-0.05, 0}}));
   EXPECT_EQ(DrivenProblem(track.ring, track.marks, true), "SHARP_TURN");
   // Two quarter turns 0.1 m apart: each turn is clear, so the line is.
-  const Track two = Recorded({{0, 0}, {5, 0}, {5, 0.1}, {4, 0.1}, {4, 2}, {-1, 2}, {-1, 0}, {-0.05, 0}});
+  const Track two = Crossing(Recorded({{0, 0}, {5, 0}, {5, 0.1}, {4, 0.1}, {4, 2}, {-1, 2}, {-1, 0}, {-0.05, 0}}));
   EXPECT_EQ(DrivenProblem(two.ring, two.marks, true), "");
 }
 
@@ -1051,9 +1070,10 @@ TEST(DrivenRing, OnlyAFlatCrossingClosesTheRing) {
   // Before GAP: 0.5 m short of the start.
   const Track short_of = Recorded({{1.5, 0}, {3, 0}, {3, 2}, {0, 2}, {0, 0}, {1, 0}});
   EXPECT_EQ(DrivenProblem(short_of.ring, short_of.marks, false), "CLOSING");
-  // Started at a corner and ended across the first side: a quarter turn at the first point.
-  const Track corner = Recorded({{0, 0}, {3, 0}, {3, 2}, {0, 2}, {0, 0.05}});
-  EXPECT_EQ(DrivenProblem(corner.ring, corner.marks, true), "CLOSING");
+  // Across the first edge at a right angle.
+  const Track across = Recorded({{0, 0}, {3, 0}, {3, 2}, {0.05, 2}, {0.05, -0.1}});
+  ASSERT_LT(across.ring.back().y, 0);
+  EXPECT_EQ(DrivenProblem(across.ring, across.marks, true), "CLOSING");
 }
 
 TEST(RecorderDriven, ReversingTakesPointsBackAndTheRingIsNotDriven) {
@@ -1064,8 +1084,11 @@ TEST(RecorderDriven, ReversingTakesPointsBackAndTheRingIsNotDriven) {
   recorder.OnAction("start_recording");
   Drive(recorder, {{0, 0}, {2, 0}});
   const size_t before = recorder.current().size();
-  // 1 m straight back, heading east, then forward again.
-  for (int s = 1; s <= 20; s++) recorder.OnPose(2 - 0.05 * s, 0, 0, 0.02f, true);
+  // 1 m straight back, heading east, then forward again; the wheels show it first, one hint for both.
+  for (int s = 1; s <= 20; s++) {
+    recorder.OnWheelTravel(-0.05);
+    recorder.OnPose(2 - 0.05 * s, 0, 0, 0.02f, true);
+  }
   EXPECT_LT(recorder.current().size(), before - 7);
   EXPECT_LE(recorder.current().back().x, 1.0 + 1e-9);
   Drive(recorder, {{1, 0}, {3, 0}, {3, 2}, {0, 2}, {0, 0.15}, {0.6, -0.05}});
@@ -1142,16 +1165,78 @@ TEST(RecorderDriven, StandingWithNoiseTakesNothingBack) {
 }
 
 TEST(RecorderDriven, OneHintForEachStretchBackwards) {
+  for (const bool wheels : {false, true}) {
+    AreaRecorder recorder = Writable();
+    recorder.OnAction("start_recording");
+    Drive(recorder, {{0, 0}, {3, 0}});
+    for (int round = 0; round < 2; round++) {
+      for (const double step : {-0.05, 0.05}) {
+        for (int s = 1; s <= 10; s++) {
+          if (wheels) recorder.OnWheelTravel(step);
+          recorder.OnPose(step < 0 ? 3 - 0.05 * s : 2.5 + 0.05 * s, 0, 0, 0.02f, true);
+        }
+      }
+    }
+    int hints = 0;
+    for (const auto& event : recorder.TakeEvents()) hints += event.details["reason"] == "REVERSING";
+    EXPECT_EQ(hints, 2) << wheels;
+  }
+}
+
+TEST(RecorderDriven, OneHintAlsoWhenAPointComesWhileReversing) {
+  // Points every 0.125 m up to 2 m. Back from there in steps of 1/64 m the wheels show it after 0.03 m, a point comes
+  // at 0.11 m, the pose shows it at 0.125 m.
   AreaRecorder recorder = Writable();
   recorder.OnAction("start_recording");
-  Drive(recorder, {{0, 0}, {3, 0}});
-  for (int round = 0; round < 2; round++) {
-    for (int s = 1; s <= 10; s++) recorder.OnPose(3 - 0.05 * s, 0, 0, 0.02f, true);
-    for (int s = 1; s <= 10; s++) recorder.OnPose(2.5 + 0.05 * s, 0, 0, 0.02f, true);
+  for (int k = 0; k <= 32; k++) recorder.OnPose(k / 16.0, 0, 0, 0.02f, true);
+  for (int k = 1; k <= 30; k++) {
+    recorder.OnWheelTravel(-1 / 64.0);
+    recorder.OnPose(2 - k / 64.0, 0, 0, 0.02f, true);
+    if (k == 7) {
+      ASSERT_EQ(recorder.current().back().x, 2 - 7 / 64.0);
+    }
   }
   int hints = 0;
   for (const auto& event : recorder.TakeEvents()) hints += event.details["reason"] == "REVERSING";
-  EXPECT_EQ(hints, 2);
+  EXPECT_EQ(hints, 1);
+}
+
+TEST(RecorderDriven, TheWheelsShowReversingFromTwoCentimetres) {
+  // Wheel travel (m) while the pose stands at (2, 0), and whether that is reversing.
+  const std::vector<std::pair<std::vector<double>, bool>> cases = {{{-0.01, -0.01, -0.01}, true},
+                                                                   {{-0.015, 0.015}, false},
+                                                                   {{-0.015, 0.005, -0.015}, true},
+                                                                   {{-0.015, 0.015, -0.015}, false}};
+  for (const auto& [travel, reversing] : cases) {
+    AreaRecorder recorder = Writable();
+    recorder.OnAction("start_recording");
+    Drive(recorder, {{0, 0}, {2, 0}});
+    const size_t before = recorder.current().size();
+    for (const double metres : travel) recorder.OnWheelTravel(metres);
+    EXPECT_EQ(recorder.current().size(), before);
+    Drive(recorder, {{2, 0}, {3, 0}, {3, 2}, {0, 2}, {0, 0.15}, {0.6, -0.05}});
+    int hints = 0;
+    for (const auto& event : recorder.TakeEvents()) hints += event.details["reason"] == "REVERSING";
+    EXPECT_EQ(hints, reversing ? 1 : 0) << travel.size();
+    EXPECT_EQ(DrivenReason(recorder), reversing ? "REVERSED" : "") << travel.size();
+  }
+}
+
+TEST(RecorderDriven, UnderTenCentimetresBackOnlyTheWheelsShowIt) {
+  // 0.09 m back on the second side, under the two steps of the pose, then on the spot 60 degrees outwards and on:
+  // the edge from the last point turns away from the way driven.
+  for (const bool wheels : {false, true}) {
+    AreaRecorder recorder = Writable();
+    recorder.OnAction("start_recording");
+    Drive(recorder, {{0, 0}, {3, 0}, {3, 1}});
+    for (int k = 1; k <= 9; k++) {
+      if (wheels) recorder.OnWheelTravel(-0.01);
+      recorder.OnPose(3, 1 - 0.01 * k, M_PI / 2, 0.02f, true);
+    }
+    const Point2 out{3 + 0.5 * std::cos(M_PI / 6), 0.91 + 0.5 * std::sin(M_PI / 6)};
+    Drive(recorder, {{3, 0.91}, out, {out.x, 2}, {0, 2}, {0, 0.15}, {0.6, -0.05}});
+    EXPECT_EQ(DrivenReason(recorder), wheels ? "REVERSED" : "") << wheels;
+  }
 }
 
 TEST(RecorderDriven, ReversingWithoutAutomaticPointsTakesNothingBack) {
@@ -1221,11 +1306,11 @@ TEST(RecorderDriven, AJumpOfThePositionIsABreak) {
 
 namespace {
 
-// Around 3 by 2 m from (0, 0) and down the last side to (0, d); then poses every 0.11 m at angle degrees below the
+// Around 3 by 2 m from (from, 0) and down the last side to (0, d); then poses every 0.11 m at angle degrees below the
 // first side, so that each makes a point, up to past. stop(k) comes before the pose k, after the corner.
 template <typename Stop>
-void LapCrossingAt(AreaRecorder& recorder, double degrees, double d, double past, Stop stop) {
-  Drive(recorder, {{0, 0}, {3, 0}, {3, 2}, {0, 2}, {0, d}});
+void LapCrossingAt(AreaRecorder& recorder, double degrees, double d, double past, Stop stop, double from = 0) {
+  Drive(recorder, {{from, 0}, {3, 0}, {3, 2}, {0, 2}, {0, d}});
   const double a = degrees * M_PI / 180;
   recorder.OnPose(0, d, -a, 0.02f, true);
   const double crossing = d / std::sin(a);
@@ -1296,6 +1381,74 @@ TEST(RecorderDriven, ABreakOrReversingOnTheEdgeIntoTheCrossingCounts) {
     for (const double s : {0.49, 0.43}) reversed.OnPose(s * std::cos(a), 0.15 - s * std::sin(a), -a, 0.02f, true);
   });
   EXPECT_EQ(DrivenReason(reversed), "REVERSED");
+}
+
+TEST(RecorderDriven, BothEdgesAtTheCrossingCountWhole) {
+  // The end crosses the first side at 15 degrees from 0.06 m, 0.22 m from the corner, between the points at 0.15 and
+  // 0.3 m. Points taken before the heading was valid: up to 0.15 m the ring has no body, the one at 0 m alone is cut
+  // off.
+  for (const double valid_from : {0.1, 0.3}) {
+    AreaRecorder recorder = Writable();
+    recorder.OnAction("start_recording");
+    for (int s = 0; s < 6; s++) recorder.OnPose(0.05 * s, 0, 0, 0.02f, 0.05 * s > valid_from - 0.01);
+    LapCrossingAt(recorder, 15, 0.06, 0.5, [](int) {}, 0.3);
+    EXPECT_EQ(DrivenReason(recorder), valid_from < 0.15 ? "" : "NO_HEADING") << valid_from;
+  }
+  // An edge of 0.35 m into the crossing: the piece past the crossing is short, the edge is not.
+  AreaRecorder gap = Writable();
+  gap.OnAction("start_recording");
+  gap.OnPose(0, 0, 0, 0.02f, true);
+  LapCrossingAt(gap, 15, 0.06, 0.5, [](int) {}, 0.35);
+  EXPECT_EQ(DrivenReason(gap), "GAP");
+}
+
+TEST(RecorderDriven, ACrossingOnAPointOfTheEndTurnsByItsAngle) {
+  // At 63 degrees the second point past the corner lies 0.1 micrometres before the first side, so the ring ends on it:
+  // the closing turn is the angle of the crossing all the same.
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  LapCrossingAt(recorder, 63, (0.22 + 1e-7) * std::sin(63 * M_PI / 180), 0.2, [](int) {});
+  ASSERT_EQ(recorder.OnAction("stop_recording"), AreaRecorder::Result::kDone);
+  ASSERT_NEAR(recorder.outline()->back().y, 0, 1e-6);
+  EXPECT_EQ(DrivenReason(recorder), "CLOSING");
+}
+
+TEST(LogicRecording, TheWheelsTellTheDrivenTrack) {
+  // Wheel travel with every pose; none; none for 0.6 s halfway; 5 cm back halfway while the pose stands.
+  const std::vector<std::string> expected = {"", "INTERRUPTED", "INTERRUPTED", "REVERSED"};
+  for (size_t c = 0; c < expected.size(); c++) {
+    TestCore core{LogicConfig{}};
+    core.OnHardwareStatus(Healthy());
+    core.OnMapStatus(MapDatum::kMatch, "");
+    core.OnAction("mower_logic:idle/start_area_recording");
+    ASSERT_EQ(core.OnAction(kPrefix + "start_recording"), ActionResult::kDone);
+    double now = 0;
+    // Every 0.1 s as the node gives them: the wheels, the pose, the tick.
+    const auto at = [&](const PoseSnapshot& pose, double vx) {
+      now += 0.1;
+      if (c != 1 && !(c == 2 && now > 5 && now < 5.6)) core.OnWheelOdom(vx, now);
+      core.OnPose(pose);
+      core.OnTick(now);
+    };
+    const Ring corners = Lap(3, 2);
+    for (size_t i = 0; i + 1 < corners.size(); i++) {
+      const Point2& a = corners[i];
+      const Point2& b = corners[i + 1];
+      const int steps = static_cast<int>(std::ceil(Distance(a, b) / 0.05));
+      for (int s = 0; s <= steps; s++) {
+        PoseSnapshot pose = At(a.x + (b.x - a.x) * s / steps, a.y + (b.y - a.y) * s / steps);
+        pose.heading = std::atan2(b.y - a.y, b.x - a.x);
+        at(pose, 0.5);
+        if (c == 3 && i == 1 && s == 0) {
+          for (int k = 0; k < 5; k++) at(pose, -0.1);
+        }
+      }
+    }
+    ASSERT_EQ(core.OnAction(kPrefix + "finish_mowing_area"), ActionResult::kDone);
+    const auto edit = core.TakeMapEdit();
+    ASSERT_TRUE(edit);
+    EXPECT_EQ(edit->outline_driven_reason, expected[c]) << c;
+  }
 }
 
 TEST(LogicRecording, AFailedFollowOfTheBodyIsAnEvent) {

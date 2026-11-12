@@ -381,6 +381,11 @@ class LogicCore {
   void OnGnssFix(double x, double y);
   // The localization moved its estimate onto GPS again by distance_m, the event is at the new position.
   void OnPositionJump(double to_x, double to_y, double distance_m, bool after_outliers);
+  // hw/wheel_odom, which the node passes only in AREA_RECORDING: vx (m/s, negative backwards) since the one before
+  // gives the way the recorder tells reversing by. More than RecorderConfig::kWheelGap after it, or none for that long
+  // (OnTick), is a break of the driven track.
+  void OnWheelOdom(double vx, double now_s);
+  bool AreaRecording() const;
   // The command the action stands for, as its RPC without client; kUnknown for an action that is not the logic's.
   ActionResult OnAction(const std::string& action_id);
   // A command by its RPC name with its params (client among them). node_problem: what only the node knows against a
@@ -635,6 +640,8 @@ class LogicCore {
   Reason WrongState() const;
   // Moves the events of the recorder into the events of the logic, at the current position.
   void PullRecorder();
+  // A break of the driven track while OnWheelOdom does not come.
+  void TickRecording(double now_s);
   // Returns the id of the event.
   std::string AddEvent(const std::string& type, json details);
   // 32 letters and digits from id_seed: the ids of jobs, sessions and events.
@@ -775,6 +782,8 @@ class LogicCore {
   // What the node has not taken yet, oldest first; flags (StopRequest, ChargeOff, ...) at most once.
   std::vector<Effect> effects_;
   AreaRecorder recorder_;
+  // The last OnWheelOdom.
+  std::optional<double> last_wheel_s_;
   bool map_writable_ = false;
   Reason map_reason_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
 

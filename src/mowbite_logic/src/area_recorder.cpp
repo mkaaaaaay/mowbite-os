@@ -34,15 +34,18 @@ double Cross(const Point2& a, const Point2& b, const Point2& c) {
   return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
 }
 
+// Within rounding a point lies on the line (m²) and on a segment (m), so that points of one straight line never cross
+// and an end on an edge stays on it.
+constexpr double kOnTheLine = 1e-12;
+constexpr double kOnTheSegment = 1e-9;
+
 // c lies on the segment from a to b, given the three are on one line.
 bool Within(const Point2& a, const Point2& b, const Point2& c) {
-  return std::min(a.x, b.x) <= c.x && c.x <= std::max(a.x, b.x) && std::min(a.y, b.y) <= c.y &&
-         c.y <= std::max(a.y, b.y);
+  return std::min(a.x, b.x) - kOnTheSegment <= c.x && c.x <= std::max(a.x, b.x) + kOnTheSegment &&
+         std::min(a.y, b.y) - kOnTheSegment <= c.y && c.y <= std::max(a.y, b.y) + kOnTheSegment;
 }
 
-// Within rounding (m²) a point lies on the line, so that points of one straight line never cross.
 int Side(double cross) {
-  constexpr double kOnTheLine = 1e-12;
   return (cross > kOnTheLine) - (cross < -kOnTheLine);
 }
 
@@ -96,9 +99,9 @@ double Direction(const Point2& from, const Point2& to) {
 
 }  // namespace
 
-std::string DrivenProblem(const Ring& ring, const std::vector<PointMark>& marks, bool crossed) {
-  const size_t n = ring.size();
-  // A ring of fewer points or without a mark for each cannot show it was driven.
+std::string DrivenProblem(const Ring& track, const std::vector<PointMark>& marks, bool crossed) {
+  const size_t n = track.size();
+  // A track of fewer points or without a mark for each cannot show it was driven.
   if (n < 3 || marks.size() != n) return "INTERRUPTED";
   for (const auto& mark : marks) {
     if (!mark.automatic) return "MANUAL_POINT";
@@ -106,32 +109,32 @@ std::string DrivenProblem(const Ring& ring, const std::vector<PointMark>& marks,
   for (const auto& mark : marks) {
     if (!mark.heading_valid) return "NO_HEADING";
   }
-  for (const auto& mark : marks) {
-    if (!mark.joined) return "INTERRUPTED";
+  for (size_t k = 1; k < n; k++) {
+    if (!marks[k].joined) return "INTERRUPTED";
   }
-  for (const auto& mark : marks) {
-    if (mark.reversed) return "REVERSED";
+  for (size_t k = 1; k < n; k++) {
+    if (marks[k].reversed) return "REVERSED";
   }
-  // Without a crossing the closing edge was never driven; past a steeper one the body at the first point would turn
+  // Without a crossing the closing edge was never driven; past a steeper one the body at the crossing would turn
   // beyond the track.
-  const double closing_turn = Wrap(Direction(ring[0], ring[1]) - Direction(ring[n - 1], ring[0]));
-  if (!crossed || std::fabs(closing_turn) > RecorderConfig::kMaxClosingTurn) return "CLOSING";
-  // Edge k runs from point k to point k + 1, the last one back to point 0.
-  for (size_t k = 0; k < n; k++) {
-    if (Distance(ring[k], ring[(k + 1) % n]) > RecorderConfig::kMaxDrivenEdge) return "GAP";
+  if (!crossed) return "CLOSING";
+  const double closing_turn = Wrap(Direction(track[0], track[1]) - Direction(track[n - 2], track[n - 1]));
+  if (std::fabs(closing_turn) > RecorderConfig::kMaxClosingTurn) return "CLOSING";
+  // Edge k runs from point k to point k + 1.
+  for (size_t k = 0; k + 1 < n; k++) {
+    if (Distance(track[k], track[k + 1]) > RecorderConfig::kMaxDrivenEdge) return "GAP";
   }
-  for (size_t k = 0; k < n; k++) {
+  for (size_t k = 0; k + 1 < n; k++) {
     const double from = marks[k].heading;
-    const double turn = Wrap(marks[(k + 1) % n].heading - from);
+    const double turn = Wrap(marks[k + 1].heading - from);
     const double middle = from + turn / 2;
     const double allowed = std::fabs(turn) / 2 + RecorderConfig::kDirectionAllowance;
-    if (std::fabs(Wrap(Direction(ring[k], ring[(k + 1) % n]) - middle)) > allowed) return "DIRECTION";
+    if (std::fabs(Wrap(Direction(track[k], track[k + 1]) - middle)) > allowed) return "DIRECTION";
   }
   // The turn at point k, from edge k - 1 to edge k.
-  for (size_t k = 0; k < n; k++) {
-    const size_t before = (k + n - 1) % n;
-    const double in = Direction(ring[before], ring[k]);
-    const double out = Direction(ring[k], ring[(k + 1) % n]);
+  for (size_t k = 1; k + 1 < n; k++) {
+    const double in = Direction(track[k - 1], track[k]);
+    const double out = Direction(track[k], track[k + 1]);
     if (std::fabs(Wrap(out - in)) > RecorderConfig::kMaxDrivenTurn) return "SHARP_TURN";
   }
   return "";
@@ -298,6 +301,8 @@ AreaRecorder::Result AreaRecorder::Act(const std::string& name, double undo_mete
       interrupted_ = false;
       EndReversing();
       reversed_ = false;
+      wheel_back_ = 0;
+      reverse_hinted_ = false;
       collect_requested_ = false;
       // Every ring that meets the limit says so once.
       full_reported_ = false;
@@ -356,27 +361,24 @@ bool AreaRecorder::CloseRing(const std::string& action) {
     std::optional<CutRing> cut;
     if (problem.code == "RING_CROSSES_ITSELF") cut = CutOverhang(current_, config_.max_overhang);
     const bool crossed = cut && RingProblem(cut->ring, config_.min_area).empty();
+    std::string driven;
     if (crossed) {
       notices_.push_back("Cut off " + std::to_string(cut->dropped) + " points where the ring ran past its start");
       trimmed_points_ = cut->dropped;
+      // The track from the point before the crossing to the first point past it, both edges at the crossing whole.
       const size_t kept = cut->ring.size() - (cut->crossing_added ? 1 : 0);
-      // The first point ends the edge out of the crossing and, for the edge into it, stands for the first point cut
-      // off at the end.
-      PointMark first = marks_[cut->first];
-      const PointMark& end = marks_[cut->first + kept];
-      first.joined = first.joined && end.joined;
-      first.reversed = first.reversed || end.reversed;
-      std::vector<PointMark> marks{first};
-      const auto from = marks_.begin() + static_cast<std::ptrdiff_t>(cut->first + (cut->crossing_added ? 0 : 1));
-      marks.insert(marks.end(), from, marks_.begin() + static_cast<std::ptrdiff_t>(cut->first + kept));
+      const auto from = static_cast<std::ptrdiff_t>(cut->first - 1);
+      const auto to = static_cast<std::ptrdiff_t>(cut->first + kept + 1);
+      driven = DrivenProblem(Ring(current_.begin() + from, current_.begin() + to),
+                             std::vector<PointMark>(marks_.begin() + from, marks_.begin() + to), true);
       current_ = std::move(cut->ring);
-      marks_ = std::move(marks);
     } else if (!problem.empty()) {
       // The ring stays open: the mower can drive on, or take points back.
       Refuse(action, problem);
       return false;
+    } else {
+      driven = DrivenProblem(current_, marks_, false);
     }
-    const std::string driven = DrivenProblem(current_, marks_, crossed);
     const size_t points = current_.size();
     if (outline_) {
       obstacles_.push_back(std::move(current_));
@@ -552,6 +554,13 @@ void AreaRecorder::Interrupt() {
   EndReversing();
 }
 
+void AreaRecorder::HintReversing() {
+  if (reverse_hinted_) return;
+  reverse_hinted_ = true;
+  notices_.push_back("Reversing takes points back; drive forward to record");
+  Refuse("point", Reason("REVERSING", "Reversing takes points back, drive forward to record"));
+}
+
 void AreaRecorder::EndReversing() {
   if (reversing_) {
     notices_.push_back("Took back " + std::to_string(reverse_taken_) + " points while reversing");
@@ -576,11 +585,11 @@ bool AreaRecorder::TakeBackReversing(double x, double y, double heading) {
     backward_steps_ = backwards ? backward_steps_ + 1 : 0;
     if (backward_steps_ >= RecorderConfig::kReverseSteps && !reversing_) {
       reversing_ = true;
-      notices_.push_back("Reversing takes points back; drive forward to record");
-      Refuse("point", Reason("REVERSING", "Reversing takes points back, drive forward to record"));
+      HintReversing();
     } else if (!backwards && reversing_) {
       EndReversing();
       reverse_anchor_ = here;
+      reverse_hinted_ = false;
     }
   }
   if (!reversing_) return false;
@@ -653,6 +662,22 @@ void AreaRecorder::OnPoseLost() {
 }
 
 void AreaRecorder::OnPositionJump() {
+  Interrupt();
+}
+
+void AreaRecorder::OnWheelTravel(double metres) {
+  if (!recording_) return;
+  wheel_back_ = std::max(0.0, wheel_back_ - metres);
+  // Forward up to where they were again ends the stretch backwards.
+  if (metres > 0 && wheel_back_ == 0) reverse_hinted_ = false;
+  if (wheel_back_ <= RecorderConfig::kReverseTravel) return;
+  wheel_back_ = 0;
+  reversed_ = true;
+  // Points by hand are never a driven track.
+  if (auto_points_) HintReversing();
+}
+
+void AreaRecorder::OnWheelsLost() {
   Interrupt();
 }
 

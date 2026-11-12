@@ -89,8 +89,9 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   by driving on past its start until the track crosses it flatly (at most 30 degrees), keeps the body it was recorded
   with in `properties.recorded_body` (with `by`, the id in `<data_dir>/recorded_by`), and the planner may then drive
   its line without a margin; robot.geometry.set of the body moves it on those areas. So measure the body before the
-  first recording. The recorder judges the way by the heading of `localization/pose`: two steps of 5 cm backwards in a
-  row take points back, and the ring then has no body.
+  first recording. The recorder tells reversing by `hw/wheel_odom`, so its `twist.linear.x` needs the sign (negative
+  backwards) and has to come at least every 0.5 s: wheels more than 2 cm backwards, or no wheel travel, and the ring
+  has no body. Two steps of 5 cm backwards in a row of `localization/pose` also take points back.
 - Driver parameters (ports, baud rates, limits) in the file of the driver; values measured on one mower in a file on
   that mower. No value in two files.
 - The datum of the garden: one place on the mower, `MOWBITE_DATUM_LAT`, `_LONG`, `_HEIGHT` (Tron `/etc/mowbite/os.conf`,

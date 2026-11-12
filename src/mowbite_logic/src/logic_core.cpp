@@ -195,14 +195,6 @@ void LogicCore::OnPoseTimeout() {
   PullRecorder();
 }
 
-void LogicCore::OnMapStatus(MapDatum datum, const std::string& reason) {
-  const bool writable = datum == MapDatum::kMatch || datum == MapDatum::kEmpty;
-  if (writable != map_writable_) SetDue<ActionsChanged>(true);
-  map_writable_ = writable;
-  map_reason_ = writable ? Reason() : MapReason(datum, reason);
-  recorder_.SetMapWritable(writable, map_reason_);
-}
-
 std::vector<Effect> LogicCore::TakeEffects() {
   if (auto edit = recorder_.TakeMapEdit()) effects_.push_back(std::move(*edit));
   for (auto& line : recorder_.TakeNotices()) Notify(std::move(line));
@@ -1196,6 +1188,7 @@ void LogicCore::OnTick(double now_s) {
                     .With("bits", mowbite_api::EmergencyNameList(reason_)));
   }
   if (state_ == State::kDocking) TickDocking(now_s);
+  if (state_ == State::kAreaRecording) TickRecording(now_s);
   if (state_ != State::kMowing) return;
   if (pause_ & kPauseGps) {
     if (!PoseGood()) {
