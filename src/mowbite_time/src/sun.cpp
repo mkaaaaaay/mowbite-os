@@ -1,10 +1,8 @@
-#include "mowbite_logic/sun.h"
-
-#include <sys/timex.h>
+#include "mowbite_time/sun.h"
 
 #include <cmath>
 
-namespace mowbite_logic {
+namespace mowbite_time {
 
 namespace {
 
@@ -102,15 +100,4 @@ SunDay SunTimes(double latitude, double longitude, double unix_s) {
   return day;
 }
 
-bool ClockSynchronized(int state, int status) {
-  return state != -1 && state != TIME_ERROR && (status & STA_UNSYNC) == 0;
-}
-
-bool SystemClockSynchronized() {
-  struct timex tx {};
-  tx.modes = 0;
-  const int state = adjtimex(&tx);
-  return ClockSynchronized(state, tx.status);
-}
-
-}  // namespace mowbite_logic
+}  // namespace mowbite_time

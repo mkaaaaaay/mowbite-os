@@ -1,9 +1,9 @@
-#ifndef MOWBITE_LOGIC_SUN_H
-#define MOWBITE_LOGIC_SUN_H
+#ifndef MOWBITE_TIME_SUN_H
+#define MOWBITE_TIME_SUN_H
 
 #include <optional>
 
-namespace mowbite_logic {
+namespace mowbite_time {
 
 // Dark below this height of the sun (deg): the zenith of 90.833 deg the app takes for sunrise and sunset.
 constexpr double kSunsetElevation = -0.833;
@@ -23,12 +23,6 @@ struct SunDay {
 };
 SunDay SunTimes(double latitude, double longitude, double unix_s);
 
-// Whether the kernel counts the system clock as synchronized, from the state and status adjtimex returns: neither
-// TIME_ERROR nor STA_UNSYNC, and no error (-1).
-bool ClockSynchronized(int state, int status);
-// The same for this machine; adjtimex only reads (modes 0), which needs no rights.
-bool SystemClockSynchronized();
+}  // namespace mowbite_time
 
-}  // namespace mowbite_logic
-
-#endif  // MOWBITE_LOGIC_SUN_H
+#endif  // MOWBITE_TIME_SUN_H

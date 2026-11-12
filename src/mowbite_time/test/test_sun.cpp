@@ -1,11 +1,10 @@
 #include <gtest/gtest.h>
-#include <sys/timex.h>
 
 #include <cmath>
 
-#include "mowbite_logic/sun.h"
+#include "mowbite_time/sun.h"
 
-using namespace mowbite_logic;
+using namespace mowbite_time;
 
 namespace {
 
@@ -102,14 +101,4 @@ TEST(Sun, TheDayNearestToTheTime) {
   const SunDay morning = SunTimes(kBerlin.latitude, kBerlin.longitude, Utc(6, 21, 3, 0));
   ASSERT_TRUE(evening.set && morning.set);
   EXPECT_NEAR(*evening.set, *morning.set, 1.0);
-}
-
-TEST(Clock, SynchronizedOnlyWithoutErrorAndUnsync) {
-  EXPECT_TRUE(ClockSynchronized(TIME_OK, 0));
-  EXPECT_TRUE(ClockSynchronized(TIME_INS, STA_PLL));
-  EXPECT_FALSE(ClockSynchronized(-1, 0));
-  EXPECT_FALSE(ClockSynchronized(TIME_ERROR, 0));
-  EXPECT_FALSE(ClockSynchronized(TIME_OK, STA_UNSYNC));
-  // Only reads the kernel: it runs anywhere, whatever it answers.
-  (void)SystemClockSynchronized();
 }
