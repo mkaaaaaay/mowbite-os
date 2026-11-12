@@ -427,13 +427,14 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
       if ((pause_ & waiting) == 0) return WrongState();
       // The EMERGENCY event told already: no MOWING_REFUSED.
       if (emergency_) return Reason("EMERGENCY", "Emergency: reset it first");
-      if (Held()) {
-        const Reason why = HoldProblem();
+      const Reason why = Held() ? HoldProblem() : ContinueProblem();
+      if (!why.empty()) {
         RefuseStart(why);
         return why;
       }
       // Without GPS it still waits for a good position.
       Unpause(waiting);
+      ResumedByUser();
       return {};
     }
     if (name == "mowing.abort") {
@@ -644,7 +645,8 @@ void LogicCore::SetState(State state) {
   }
   if (state_ == State::kMowing || state == State::kMowing) {
     home_.Reset();
-    home_told_ = 0;
+    sunset_due_.reset();
+    sunset_try_ = sunset_tried_ = sunset_told_ = false;
   }
   // Entering and leaving both start from nothing; what was not saved is gone, like with OpenMower.
   recorder_.Reset();

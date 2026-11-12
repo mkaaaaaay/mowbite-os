@@ -518,6 +518,12 @@ class LogicCore {
   // rain_mode, rain_check_seconds and the temperatures of the blade motor of params.set, for the next run.
   void SetHomeSettings(int rain_mode, double rain_check_seconds, double motor_hot_temperature,
                        double motor_cold_temperature);
+  // dock_at_sunset of params.set: a run goes home at the first sunset after its start or after the user resumed it.
+  void SetSunsetSettings(bool dock_at_sunset);
+  // time/clock: whether the wall clock is safe, why not, and wall minus monotonic s when it came.
+  void OnClock(bool safe, const std::string& reason, double unix_minus_mono_s);
+  // gps/datum, the datum in use (deg): where the sun is reckoned.
+  void OnDatum(double latitude, double longitude);
   // The checkpoint read at the start.
   void RestoreJob(const JobProgress& progress);
   // Why mowing of these areas (none for all) cannot start now, empty if it can.
@@ -689,8 +695,19 @@ class LogicCore {
   // Whether mowing can go home from here: a station the platform docks onto, a way to it, safe, not on it already.
   bool HomeReachable() const;
   HomeConfig HomeRules() const;
-  // Samples the rules of going home while mowing and acts on the first reason that holds.
+  // Samples the rules of going home while mowing, sets the deadline of the sunset and acts on the reasons that hold.
   void WatchHome(double now_s);
+  // What the reasons to stop mowing do (question 47 iii); they are those of HomeWatch in its order, then dark (empty
+  // when the sunset is not due). With a way home and no pause that waits for the user: home with the first. Else a
+  // reason of the battery ends the run. Else a run without a pause pauses with the first and waits for the user (G11).
+  void ActOnHome(const Reason& dark);
+  // mowing.continue: rain or heat of HomeWatch that still holds while there is no way home.
+  Reason ContinueProblem() const;
+  // The user resumed: a new deadline of the sunset, and the reasons without dark act at once.
+  void ResumedByUser();
+  // The deadline of the sunset of this run in monotonic s, when it is empty and the switch is on.
+  void TrySunset(double now_s);
+  Reason DarkWhy(double now_s) const;
   // The reason of the event DOCKING for a rule of HomeWatch.
   Reason HomeWhy(HomeReason reason) const;
   // The battery ends the run where it cannot go home: BATTERY_LOW with the limit it fell below, IDLE.
@@ -866,9 +883,19 @@ class LogicCore {
   std::string announced_area_;
   std::optional<double> spinup_since_;
   std::optional<double> gps_good_since_;
-  // The rules of going home while mowing or calibrating, and the reasons told once without a way home.
+  // The rules of going home while mowing or calibrating.
   HomeWatch home_;
-  int home_told_ = 0;
+  // The sunset: the switch, the clock and the datum it needs, and the deadline of this run (monotonic s), due once
+  // more after a start, a continue, a clock or a datum. sunset_told_: the first try of the run could not reckon it.
+  bool sunset_on_ = false;
+  bool clock_safe_ = false;
+  std::string clock_reason_ = "no_report";
+  double clock_offset_ = 0;
+  std::optional<std::pair<double, double>> datum_;
+  std::optional<double> sunset_due_;
+  bool sunset_try_ = false;
+  bool sunset_tried_ = false;
+  bool sunset_told_ = false;
   double last_checkpoint_s_ = 0;
   bool blades_running_ = false;
   // The reason of StartProblem() at the last actions, empty while a start would go.

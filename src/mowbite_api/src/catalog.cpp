@@ -832,6 +832,7 @@ const std::vector<SettingEntry>& LogicSettings() {
       {"motor_hot_temperature", false, 20.0, 150.0, 70.0, "deg.C", "The blade motor is too hot from here"},
       {"motor_cold_temperature", false, 20.0, 150.0, 40.0, "deg.C",
        "The blade motor may run again below this; below motor_hot_temperature"},
+      {"dock_at_sunset", true, 0, 1, 1, "", "Whether a run started by hand goes home at sunset"},
   };
   return settings;
 }

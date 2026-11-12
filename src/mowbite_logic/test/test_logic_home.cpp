@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "mowbite_logic/logic_core.h"
+#include "mowbite_time/sun.h"
 #include "logic_test_core.h"
 
 using namespace mowbite_logic;
@@ -268,25 +269,25 @@ TEST(GoingHome, NeverFromAPauseThatWaitsForTheUser) {
   }
 }
 
-// Without a way home only the battery ends mowing; heat and rain change nothing yet (question 47 iii).
-TEST(GoingHome, WithoutAWayHomeOnlyTheBattery) {
+// Without a way home heat and rain pause the run with their reason (question 47 iii); the battery ends it, also from
+// that pause.
+TEST(GoingHome, WithoutAWayHomeHeatAndRainPauseTheBatteryEnds) {
   TestCore core = Mowing(Tron(), false);
   core.SetHomeSettings(1, 20, 60, 40);
   HardwareSnapshot hot = Healthy();
   hot.blade.temperature = 90;
   hot.rain = true;
   Hold(core, hot, 0, 60);
-  EXPECT_TRUE(core.Mowing());
-  EXPECT_FALSE(Find(core.TakeEvents(), "DOCKING"));
-  const auto notices = core.TakeNotices();
-  EXPECT_EQ(std::count_if(notices.begin(), notices.end(),
-                          [](const std::string& n) { return n.find("cannot go home") != std::string::npos; }),
-            1);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"STATE"}));
+  EXPECT_EQ(events[0].details["reason"], "MOTOR_HOT");
+  EXPECT_EQ(events[0].details["message"], "It cannot go home: the blade motor at 90 °C, 60 °C or more");
   HardwareSnapshot low = hot;
   low.battery_voltage = 20.5f;
   Hold(core, low, 61, 81);
   EXPECT_TRUE(core.Idle());
-  const auto events = core.TakeEvents();
+  events = core.TakeEvents();
   EXPECT_FALSE(Find(events, "DOCKING"));
   const Event* battery = Find(events, "BATTERY_LOW");
   ASSERT_TRUE(battery);
@@ -574,4 +575,274 @@ TEST(SilentPlanner, ARefusedPlanPausesAsBefore) {
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
   core.OnJobPlanFailed(kNotRunning);
   EXPECT_EQ(core.RobotState().state, "MOWING");
+}
+
+namespace {
+
+// Berlin, and 2026-11-12 12:00 UTC.
+constexpr double kLat = 52.52;
+constexpr double kLon = 13.405;
+constexpr double kNoon = 1794484800.0;
+
+double SunsetAfter(double unix_s) {
+  for (const double day : {unix_s, unix_s + 86400.0}) {
+    const auto set = mowbite_time::SunTimes(kLat, kLon, day).set;
+    if (set && *set > unix_s) return *set;
+  }
+  return 0;
+}
+
+// The wall clock this many s before today's sunset at monotonic 0.
+double Before(double s) {
+  return SunsetAfter(kNoon) - s;
+}
+
+// Ready with the switch on, the datum and a safe clock whose wall time at monotonic 0 is unix_s.
+TestCore ReadyForTheSun(double unix_s, bool with_dock = true) {
+  TestCore core = Ready(Tron(), with_dock);
+  core.SetSunsetSettings(true);
+  core.OnDatum(kLat, kLon);
+  core.OnClock(true, "", unix_s);
+  return core;
+}
+
+void Start(TestCore& core) {
+  EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
+  core.TakeEvents();
+  core.TakeNotices();
+}
+
+int CountOf(const std::vector<Event>& events, const std::string& type) {
+  return static_cast<int>(std::count_if(events.begin(), events.end(), [&](const Event& e) { return e.type == type; }));
+}
+
+int Lines(const std::vector<std::string>& notices, const std::string& part) {
+  return static_cast<int>(std::count_if(notices.begin(), notices.end(),
+                                        [&](const std::string& n) { return n.find(part) != std::string::npos; }));
+}
+
+}  // namespace
+
+TEST(Sunset, TheFirstSunsetAfterTheStartSendsItHomeOnce) {
+  TestCore core = ReadyForTheSun(Before(100));
+  Start(core);
+  Hold(core, Healthy(), 0, 99);
+  EXPECT_TRUE(core.Mowing());
+  EXPECT_FALSE(Find(core.TakeEvents(), "DOCKING"));
+  core.OnTick(100);
+  EXPECT_TRUE(core.Docking());
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(CountOf(events, "DOCKING"), 1);
+  const Event* docking = Find(events, "DOCKING");
+  EXPECT_EQ(docking->details["reason"], "DARK");
+  EXPECT_EQ(docking->details["severity"], "info");
+  EXPECT_NEAR(docking->details["sun_elevation"].get<double>(), mowbite_time::kSunsetElevation, 0.05);
+  EXPECT_DOUBLE_EQ(docking->details["limit"].get<double>(), mowbite_time::kSunsetElevation);
+  EXPECT_EQ(Lines(core.TakeNotices(), "sunset"), 0);
+}
+
+TEST(Sunset, AStartInTheDarkMowsOnUntilTheNextEvening) {
+  const double start = Before(-3600);
+  TestCore core = ReadyForTheSun(start);
+  Start(core);
+  Hold(core, Healthy(), 0, 600);
+  const double due = SunsetAfter(start) - start;
+  EXPECT_GT(due, 20 * 3600.0);
+  Hold(core, Healthy(), due - 2, due - 1);
+  EXPECT_TRUE(core.Mowing());
+  EXPECT_FALSE(Find(core.TakeEvents(), "DOCKING"));
+  core.OnTick(due);
+  EXPECT_EQ(Find(core.TakeEvents(), "DOCKING")->details["reason"], "DARK");
+}
+
+TEST(Sunset, APauseByHandOverTheSunsetThenContinueMowsOn) {
+  TestCore core = ReadyForTheSun(Before(100));
+  Start(core);
+  Hold(core, Healthy(), 0, 50);
+  ASSERT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+  Hold(core, Healthy(), 51, 200);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  core.TakeEvents();
+  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  Hold(core, Healthy(), 201, 400);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  EXPECT_FALSE(Find(core.TakeEvents(), "DOCKING"));
+}
+
+TEST(Sunset, NothingWithTheSwitchOff) {
+  TestCore core = ReadyForTheSun(Before(100));
+  core.SetSunsetSettings(false);
+  Start(core);
+  Hold(core, Healthy(), 0, 200);
+  EXPECT_TRUE(core.Mowing());
+  EXPECT_FALSE(Find(core.TakeEvents(), "DOCKING"));
+  EXPECT_EQ(Lines(core.TakeNotices(), "sunset"), 0);
+
+  // The core starts with it off: a journal without the switch replays as before.
+  TestCore fresh = Mowing();
+  fresh.OnDatum(kLat, kLon);
+  fresh.OnClock(true, "", Before(100));
+  Hold(fresh, Healthy(), 0, 200);
+  EXPECT_TRUE(fresh.Mowing());
+  EXPECT_EQ(Lines(fresh.TakeNotices(), "sunset"), 0);
+}
+
+TEST(Sunset, AnUnsafeClockIsToldOnceAndASafeOneSetsTheDeadline) {
+  TestCore core = ReadyForTheSun(Before(100));
+  core.OnClock(false, "never_synced", Before(100));
+  Start(core);
+  core.OnTick(0);
+  auto notices = core.TakeNotices();
+  EXPECT_EQ(Lines(notices, "No going home at sunset yet: the clock is not safe (never_synced)"), 1);
+  core.OnClock(false, "clock_jump", Before(100));
+  Hold(core, Healthy(), 1, 50);
+  EXPECT_EQ(Lines(core.TakeNotices(), "sunset"), 0);
+  core.OnClock(true, "", Before(100));
+  Hold(core, Healthy(), 51, 99);
+  EXPECT_EQ(Lines(core.TakeNotices(), "Going home at sunset after all"), 1);
+  EXPECT_FALSE(Find(core.TakeEvents(), "DOCKING"));
+  core.OnTick(100);
+  EXPECT_EQ(Find(core.TakeEvents(), "DOCKING")->details["reason"], "DARK");
+
+  // Unsafe the whole run: no DARK.
+  TestCore never = ReadyForTheSun(Before(100));
+  never.OnClock(false, "gnss_mismatch", Before(100));
+  Start(never);
+  Hold(never, Healthy(), 0, 300);
+  EXPECT_TRUE(never.Mowing());
+  EXPECT_FALSE(Find(never.TakeEvents(), "DOCKING"));
+  EXPECT_EQ(Lines(never.TakeNotices(), "No going home at sunset yet"), 1);
+}
+
+TEST(Sunset, NoDatumNoDeadline) {
+  TestCore core = Ready();
+  core.SetSunsetSettings(true);
+  core.OnClock(true, "", Before(100));
+  Start(core);
+  Hold(core, Healthy(), 0, 300);
+  EXPECT_TRUE(core.Mowing());
+  EXPECT_EQ(Lines(core.TakeNotices(), "No going home at sunset yet: no datum"), 1);
+}
+
+TEST(Sunset, RainBeforeDarkAndOneDocking) {
+  TestCore core = ReadyForTheSun(Before(20));
+  core.SetHomeSettings(1, 20, 70, 40);
+  Start(core);
+  HardwareSnapshot wet = Healthy();
+  wet.rain = true;
+  Hold(core, wet, 0, 20);
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(CountOf(events, "DOCKING"), 1);
+  EXPECT_EQ(Find(events, "DOCKING")->details["reason"], "RAIN");
+}
+
+TEST(Sunset, AJumpOfTheWallClockKeepsTheDeadline) {
+  TestCore core = ReadyForTheSun(Before(100));
+  Start(core);
+  Hold(core, Healthy(), 0, 50);
+  core.OnClock(true, "", Before(100) + 3600);
+  Hold(core, Healthy(), 51, 99);
+  EXPECT_FALSE(Find(core.TakeEvents(), "DOCKING"));
+  core.OnClock(true, "", Before(100) - 3600);
+  core.OnTick(100);
+  EXPECT_EQ(Find(core.TakeEvents(), "DOCKING")->details["reason"], "DARK");
+}
+
+// Without a way home every reason but the battery pauses the run with it; the drive stops and the blade with it.
+TEST(Sunset, WithoutAWayHomeEachReasonPauses) {
+  for (const std::string reason : {"RAIN", "MOTOR_HOT", "BATTERY_HOT", "DARK"}) {
+    LogicConfig config = Tron();
+    config.battery_hot_temperature = 55;
+    TestCore core = Mowing(config, false);
+    core.SetSunsetSettings(true);
+    core.OnDatum(kLat, kLon);
+    core.OnClock(true, "", reason == "DARK" ? Before(30) : Before(-3600));
+    core.SetHomeSettings(1, 20, 70, 40);
+    core.OnJobPlanned({FarLane()}, "fp");
+    ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach) << reason;
+    core.TakeEvents();
+    core.TakeDriveCancel();
+    HardwareSnapshot hw = Healthy();
+    hw.rain = reason == "RAIN";
+    if (reason == "MOTOR_HOT") hw.blade.temperature = 90;
+    if (reason == "BATTERY_HOT") hw.battery_temperature = 60;
+    Hold(core, hw, 0, 40);
+    EXPECT_EQ(core.RobotState().state, "PAUSED") << reason;
+    EXPECT_TRUE(core.Mowing()) << reason;
+    EXPECT_FALSE(core.BladeWanted()) << reason;
+    EXPECT_TRUE(core.TakeDriveCancel()) << reason;
+    const auto events = core.TakeEvents();
+    ASSERT_EQ(Types(events), (std::vector<std::string>{"STATE"})) << reason;
+    EXPECT_EQ(events[0].details["state"], "PAUSED") << reason;
+    EXPECT_EQ(events[0].details["reason"], reason) << reason;
+    EXPECT_EQ(events[0].details["resume"], "user") << reason;
+    EXPECT_EQ(events[0].details["message"].get<std::string>().rfind("It cannot go home: ", 0), 0u) << reason;
+  }
+}
+
+TEST(Sunset, ContinueInTheRainWithoutAWayHomeIsRefusedUntilItStops) {
+  TestCore core = Mowing(Tron(), false);
+  core.SetHomeSettings(1, 20, 70, 40);
+  HardwareSnapshot wet = Healthy();
+  wet.rain = true;
+  Hold(core, wet, 0, 25);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  core.TakeEvents();
+  const CommandOutcome refused = core.Command("mowing.continue", json::object());
+  EXPECT_EQ(refused.why.code, "RAIN");
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"MOWING_REFUSED"}));
+  EXPECT_EQ(events[0].details["reason"], "RAIN");
+  Hold(core, Healthy(), 26, 27);
+  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+}
+
+TEST(Sunset, ContinueAfterTheDarkPauseMowsOn) {
+  TestCore core = ReadyForTheSun(Before(30), false);
+  Start(core);
+  Hold(core, Healthy(), 0, 40);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_EQ(Find(core.TakeEvents(), "STATE")->details["reason"], "DARK");
+  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  Hold(core, Healthy(), 41, 600);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  const auto events = core.TakeEvents();
+  EXPECT_EQ(CountOf(events, "STATE"), 1);
+  EXPECT_EQ(Find(events, "STATE")->details["state"], "MOWING");
+}
+
+TEST(Sunset, APauseForGpsWithRainAndNoWayHomeTurnsIntoTheRainPauseAsItEnds) {
+  TestCore core = Mowing(Tron(), false);
+  core.SetHomeSettings(1, 20, 70, 40);
+  core.OnPoseTimeout();
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  core.TakeEvents();
+  HardwareSnapshot wet = Healthy();
+  wet.rain = true;
+  Hold(core, wet, 0, 30);
+  EXPECT_TRUE(core.TakeEvents().empty());
+  core.OnPose(PoseAt(2.0, 0.5));
+  Hold(core, wet, 31, 45);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"STATE", "STATE"}));
+  EXPECT_EQ(events[0].details["state"], "MOWING");
+  EXPECT_EQ(events[1].details["state"], "PAUSED");
+  EXPECT_EQ(events[1].details["reason"], "RAIN");
+}
+
+TEST(Sunset, ContinueFromAManualPauseInTheRainGoesHomeInTheSameCall) {
+  TestCore core = Mowing();
+  core.SetHomeSettings(1, 20, 70, 40);
+  ASSERT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+  HardwareSnapshot wet = Healthy();
+  wet.rain = true;
+  Hold(core, wet, 0, 30);
+  core.TakeEvents();
+  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  EXPECT_TRUE(core.Docking());
+  EXPECT_EQ(Find(core.TakeEvents(), "DOCKING")->details["reason"], "RAIN");
 }

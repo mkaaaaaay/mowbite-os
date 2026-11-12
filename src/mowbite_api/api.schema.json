@@ -13285,6 +13285,14 @@
       "type": "integer",
       "unit": ""
     },
+    "dock_at_sunset": {
+      "default": 1.0,
+      "description": "Whether a run started by hand goes home at sunset",
+      "max": 1.0,
+      "min": 0.0,
+      "type": "integer",
+      "unit": ""
+    },
     "docking_approach_distance": {
       "default": 1.5,
       "description": "Distance of the point in front of the station",

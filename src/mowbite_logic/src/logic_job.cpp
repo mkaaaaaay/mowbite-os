@@ -68,6 +68,7 @@ void LogicCore::StartMowing() {
   planner_silent_ = 0;
   announced_area_.clear();
   SetState(State::kMowing);
+  sunset_try_ = true;
   CheckpointNow();
 }
 

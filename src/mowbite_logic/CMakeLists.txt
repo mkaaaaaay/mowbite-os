@@ -24,6 +24,8 @@ find_package(mowbite_hold REQUIRED)
 find_package(mowbite_api REQUIRED)
 find_package(mowbite_journal REQUIRED)
 find_package(mowbite_watch REQUIRED)
+find_package(mowbite_time REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 # States, actions and sensors without ROS, testable on any machine.
 add_library(mowbite_logic_core STATIC src/reasons.cpp src/logic_core.cpp src/area_recorder.cpp src/mowing_plan.cpp src/mowing_job.cpp
@@ -33,14 +35,15 @@ add_library(mowbite_logic_core STATIC src/reasons.cpp src/logic_core.cpp src/are
 target_include_directories(mowbite_logic_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(mowbite_logic_core mowbite_api::mowbite_api_core nlohmann_json::nlohmann_json)
+target_link_libraries(mowbite_logic_core mowbite_api::mowbite_api_core mowbite_time::mowbite_time_core
+  nlohmann_json::nlohmann_json)
 set_target_properties(mowbite_logic_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_logic_component SHARED src/logic_node.cpp src/logic_messages.cpp src/logic_config.cpp)
 target_link_libraries(mowbite_logic_component mowbite_logic_core mowbite_bridge::mowbite_bridge_core
   mowbite_hold::mowbite_hold_core mowbite_journal::mowbite_journal mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_logic_component rclcpp rclcpp_components rclcpp_action geometry_msgs std_msgs
-  std_srvs mowbite_msgs mowbite_planner_interfaces mowbite_planner_os_interfaces rcl_interfaces)
+  sensor_msgs std_srvs mowbite_msgs mowbite_planner_interfaces mowbite_planner_os_interfaces rcl_interfaces)
 rclcpp_components_register_node(mowbite_logic_component
   PLUGIN "mowbite_logic::LogicNode"
   EXECUTABLE mowbite_logic_node)
@@ -64,5 +67,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_mowbite_logic HAS_LIBRARY_TARGET)
-ament_export_dependencies(mowbite_api)
+ament_export_dependencies(mowbite_api mowbite_time)
 ament_package()

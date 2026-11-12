@@ -2,7 +2,10 @@
 
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include "mowbite_time/sun.h"
 
 namespace mowbite_logic {
 
@@ -86,28 +89,101 @@ void LogicCore::BatteryEndsMowing(HomeReason reason) {
 
 void LogicCore::WatchHome(double now_s) {
   home_.OnSample(HomeSampleOf(hw_, now_s));
+  if (sunset_try_) TrySunset(now_s);
+  ActOnHome(sunset_due_ && now_s >= *sunset_due_ ? DarkWhy(now_s) : Reason());
+}
+
+void LogicCore::ActOnHome(const Reason& dark) {
   const std::vector<HomeReason> due = home_.Due();
-  if (due.empty()) return;
-  const auto battery = [](HomeReason r) { return r == HomeReason::kBatteryCritical || r == HomeReason::kBatteryLow; };
+  if (due.empty() && dark.empty()) return;
+  const Reason first = due.empty() ? dark : HomeWhy(due.front());
   // A pause that waits for the user never goes home: the user may stand at the mower (G11).
   const bool waits_for_user = (pause_ & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
   if (!waits_for_user && HomeReachable()) {
-    Reason why = HomeWhy(due.front());
+    Reason why = first;
     why.message = "Going home: " + why.message;
     EndJob(false, true, why);
     return;
   }
   for (HomeReason reason : due) {
-    if (battery(reason)) {
+    if (reason == HomeReason::kBatteryCritical || reason == HomeReason::kBatteryLow) {
       BatteryEndsMowing(reason);
       return;
     }
   }
-  // Without a way home heat and rain change nothing yet (O11, question 47 iii); told once per run.
-  const int bit = 1 << static_cast<int>(due.front());
-  if (waits_for_user || (home_told_ & bit) != 0) return;
-  home_told_ |= bit;
-  Notify("Mowing goes on, it cannot go home: " + HomeWhy(due.front()).message);
+  // A pause for GPS turns into this one in the tick it ends; any other pause stays as it is.
+  if (pause_ != 0) return;
+  Reason why = first;
+  why.message = "It cannot go home: " + why.message;
+  Pause(kPauseFault, why);
+}
+
+Reason LogicCore::ContinueProblem() const {
+  if (HomeReachable()) return {};
+  for (HomeReason reason : home_.Due()) {
+    if (reason == HomeReason::kRain || reason == HomeReason::kBatteryHot || reason == HomeReason::kMotorHot) {
+      Reason why = HomeWhy(reason);
+      why.message = "It cannot go home: " + why.message;
+      return why;
+    }
+  }
+  return {};
+}
+
+void LogicCore::ResumedByUser() {
+  sunset_due_.reset();
+  sunset_try_ = true;
+  ActOnHome(Reason());
+}
+
+void LogicCore::SetSunsetSettings(bool dock_at_sunset) {
+  sunset_on_ = dock_at_sunset;
+}
+
+void LogicCore::OnClock(bool safe, const std::string& reason, double unix_minus_mono_s) {
+  clock_safe_ = safe;
+  clock_reason_ = reason;
+  clock_offset_ = unix_minus_mono_s;
+  sunset_try_ = true;
+}
+
+void LogicCore::OnDatum(double latitude, double longitude) {
+  datum_ = std::make_pair(latitude, longitude);
+  sunset_try_ = true;
+}
+
+void LogicCore::TrySunset(double now_s) {
+  sunset_try_ = false;
+  if (!sunset_on_ || sunset_due_) return;
+  const bool first = !std::exchange(sunset_tried_, true);
+  std::string missing;
+  if (!clock_safe_) missing = "the clock is not safe (" + clock_reason_ + ")";
+  else if (!datum_) missing = "no datum";
+  if (!missing.empty()) {
+    if (first) {
+      sunset_told_ = true;
+      Notify("No going home at sunset yet: " + missing);
+    }
+    return;
+  }
+  // The first sunset after now; before it lies daylight, whenever the run started.
+  const double unix_s = now_s + clock_offset_;
+  for (const double day : {unix_s, unix_s + 86400.0}) {
+    const mowbite_time::SunDay sun = mowbite_time::SunTimes(datum_->first, datum_->second, day);
+    if (sun.set && *sun.set > unix_s) {
+      sunset_due_ = *sun.set - clock_offset_;
+      if (std::exchange(sunset_told_, false)) Notify("Going home at sunset after all");
+      return;
+    }
+  }
+  // No sunset within two days (polar day): the next clock tries again.
+}
+
+Reason LogicCore::DarkWhy(double now_s) const {
+  const double elevation = mowbite_time::SunElevation(datum_->first, datum_->second, now_s + clock_offset_);
+  return Reason("DARK", "the sun has set")
+      .With("sun_elevation", elevation)
+      .With("limit", mowbite_time::kSunsetElevation);
 }
 
 }  // namespace mowbite_logic

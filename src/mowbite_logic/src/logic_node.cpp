@@ -12,12 +12,14 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <mowbite_journal/node_options.h>
 #include <mowbite_msgs/action/calibrate.hpp>
 #include <mowbite_msgs/action/follow_path.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
 #include <mowbite_msgs/msg/button_event.hpp>
 #include <mowbite_msgs/msg/calibration_status.hpp>
+#include <mowbite_msgs/msg/clock_status.hpp>
 #include <mowbite_msgs/msg/drive_command.hpp>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
@@ -269,6 +271,18 @@ class LogicNode : public rclcpp::Node {
             core_.Call<&LogicCore::OnGnssFix>(msg->x, msg->y);
           }
           if (undocking) Step();
+        });
+    // The sunset needs a safe wall clock and the datum in use.
+    clock_sub_ = create_subscription<mowbite_msgs::msg::ClockStatus>(
+        "time/clock", LatchedQos(1), [this](mowbite_msgs::msg::ClockStatus::ConstSharedPtr msg) {
+          const double wall = rclcpp::Clock(RCL_SYSTEM_TIME).now().seconds();
+          std::lock_guard<std::mutex> lock(mutex_);
+          core_.Call<&LogicCore::OnClock>(msg->ok, msg->reason, wall - MonotonicSeconds());
+        });
+    datum_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
+        "gps/datum", LatchedQos(1), [this](sensor_msgs::msg::NavSatFix::ConstSharedPtr msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          core_.Call<&LogicCore::OnDatum>(msg->latitude, msg->longitude);
         });
     jump_sub_ = create_subscription<mowbite_msgs::msg::PositionJump>(
         "localization/jump", 10, [this](mowbite_msgs::msg::PositionJump::ConstSharedPtr msg) {
@@ -1904,6 +1918,7 @@ class LogicNode : public rclcpp::Node {
     core_.Call<&LogicCore::SetHomeSettings>(
         static_cast<int>(logic_params_.Get("rain_mode")), logic_params_.Get("rain_check_seconds"),
         logic_params_.Get("motor_hot_temperature"), logic_params_.Get("motor_cold_temperature"));
+    core_.Call<&LogicCore::SetSunsetSettings>(logic_params_.Get("dock_at_sunset") != 0);
     TellRainWithoutSensor();
   }
 
@@ -2769,6 +2784,8 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr pose_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::GnssFix>::SharedPtr gnss_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::PositionJump>::SharedPtr jump_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::ClockStatus>::SharedPtr clock_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr datum_sub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr wheel_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::MapStatus>::SharedPtr map_status_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr action_sub_;

@@ -9,15 +9,16 @@ json Request(json params) {
   return json{{"params", std::move(params)}};
 }
 
-TEST(LogicParams, ThirteenSettingsWithoutPlanningValues) {
+TEST(LogicParams, FourteenSettingsWithoutPlanningValues) {
   const json values = LogicParams().Values();
-  EXPECT_EQ(values.size(), 13u);
+  EXPECT_EQ(values.size(), 14u);
   for (const char* name : {"outline_count", "outline_overlap_count", "outline_offset", "tool_width", "mow_angle_offset",
                            "mow_angle_offset_is_absolute", "mow_angle_increment"}) {
     EXPECT_FALSE(values.contains(name)) << name;
   }
   EXPECT_EQ(values["rain_mode"], 0);
   EXPECT_EQ(values["docking_retry_count"], 4);
+  EXPECT_EQ(values["dock_at_sunset"], 1);
   EXPECT_DOUBLE_EQ(values["max_position_accuracy"].get<double>(), 0.1);
   EXPECT_DOUBLE_EQ(values["gps_timeout"].get<double>(), 10.0);
 }
