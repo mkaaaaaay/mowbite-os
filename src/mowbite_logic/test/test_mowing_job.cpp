@@ -311,7 +311,8 @@ TEST(MowingJobCheckpoint, CarriesTheTasksAndThePlaceInThem) {
        {R"({"version":1,"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":"","tasks":["a"],"task":-1})",
         R"({"version":1,"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":"","tasks":["a"],"task":2})",
         R"({"version":1,"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":"","tasks":["a"]})",
-        R"({"version":1,"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":"","tasks":[1],"task":0})"}) {
+        R"({"version":1,"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":"","tasks":[1],"task":0})",
+        R"({"version":1,"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":"","tasks":[],"task":0})"}) {
     EXPECT_FALSE(ParseCheckpoint(text)) << text;
   }
   EXPECT_TRUE(ParseCheckpoint(
@@ -335,9 +336,10 @@ TEST(MowingJob, MowsTheTasksInTheirOrderAndPassesOverTheRest) {
   job.PathDone();
   job.PathDone();
   EXPECT_TRUE(job.Unfinished());
-  // An area no longer on the map is told, an inactive one is passed over like in a job over all areas.
+  // An area no longer on the map and an inactive one are passed over and told.
   ASSERT_TRUE(job.SeekArea(&notice));
-  EXPECT_EQ(notice, "The area gone of the job is no longer on the map, passed over");
+  EXPECT_EQ(notice, "The area gone of the job is no longer on the map, passed over; "
+                    "The area bed of the job is not active, passed over");
   EXPECT_EQ(job.CurrentArea()->id, "front");
   EXPECT_EQ(job.progress().area, 0);
   EXPECT_EQ(job.TaskIndex(), 3);

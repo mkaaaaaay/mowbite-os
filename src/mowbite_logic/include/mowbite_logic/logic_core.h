@@ -729,10 +729,11 @@ class LogicCore {
     std::vector<std::string> tasks;
     bool restart = false;
   };
-  // tasks and restart of mowing.start; the problem with them for -32602 and its field, empty if none.
+  // tasks and restart of mowing.start; the problem with them for -32602 and its field, empty if none. The request
+  // is set only without a problem.
   std::string ReadStartRequest(const json& params, StartRequest* request, std::string* field) const;
-  // mowing.start with checked params: the refusal, or the reference check on the station, or mowing.
-  Reason RequestStart(const json& params, const Reason& node_problem, CommandOutcome* out);
+  // mowing.start as ReadStartRequest read it: the refusal, or the reference check on the station, or mowing.
+  Reason RequestStart(StartRequest request, const Reason& node_problem, CommandOutcome* out);
   // Continues the open job, or begins the one mowing.start asked for.
   void StartMowing();
   void Pause(int why, const Reason& reason);

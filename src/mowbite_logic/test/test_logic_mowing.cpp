@@ -1159,6 +1159,21 @@ TEST(LogicTasks, TheListOfAllActiveAreasGoesOnWithAJobOverAllAreas) {
   EXPECT_EQ(events[0].details["job_id"], job);
 }
 
+TEST(LogicTasks, AListOfAllActiveAreasStaysThatListWhenTheMapGrows) {
+  TestCore core = Ready();
+  ASSERT_TRUE(core.Command("mowing.start", Tasks({"front", "back"})).accepted);
+  EXPECT_EQ(ParseCheckpoint(*core.TakeCheckpoint())->tasks, (std::vector<std::string>{"front", "back"}));
+  core.OnMowMap({{"front", "Front", true}, {"bed", "Bed", false}, {"back", "Back", true}, {"side", "Side", true}},
+                Reason());
+  EXPECT_EQ(core.RobotState().task_count, 2);
+  // Without tasks every active area: another list now.
+  core.Command("mowing.abort", json::object());
+  core.TakeEvents();
+  ASSERT_TRUE(core.Command("mowing.start", json::object()).accepted);
+  EXPECT_TRUE(Find(core.TakeEvents(), "JOB_RESET"));
+  EXPECT_EQ(core.RobotState().task_count, 3);
+}
+
 TEST(LogicTasks, SkipAreaGoesOnInTheList) {
   TestCore core = Ready();
   ASSERT_TRUE(core.Command("mowing.start", Tasks({"back", "front"})).accepted);

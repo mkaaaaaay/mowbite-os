@@ -30,14 +30,11 @@ std::string LogicCore::ReadStartRequest(const json& params, StartRequest* reques
       asked.tasks.push_back(id);
     }
   }
-  if (request) *request = std::move(asked);
+  *request = std::move(asked);
   return "";
 }
 
-Reason LogicCore::RequestStart(const json& params, const Reason& node_problem, CommandOutcome* out) {
-  StartRequest request;
-  std::string field;
-  ReadStartRequest(params, &request, &field);
+Reason LogicCore::RequestStart(StartRequest request, const Reason& node_problem, CommandOutcome* out) {
   Reason why = StartProblem(request.tasks);
   if (why.empty()) why = node_problem;
   if (!why.empty()) {
@@ -61,8 +58,9 @@ void LogicCore::StartMowing() {
   if (request.restart || job_.TaskIds(request.tasks) != job_.TaskIds(job_.progress().tasks)) {
     if (!JobId().empty()) AddEvent("JOB_RESET", json::object());
     job_.Reset();
-    job_.SetTasks(request.tasks);
   }
+  // A job not begun takes the list as asked: one that names every area does not grow with the map.
+  if (!job_.Unfinished()) job_.SetTasks(request.tasks);
   // Planned anew on every start, the map may have changed; the fingerprint keeps the place if the plan is the same.
   job_.Restore(job_.progress());
   leg_ = Leg::kNone;

@@ -322,15 +322,17 @@ CommandOutcome LogicCore::Command(const std::string& name, const json& params, c
     return out;
   }
   out.invalid = mowbite_api::CheckParams(*command, params, &out.invalid_field);
+  StartRequest start;
   if (out.invalid.empty() && name == "mowing.start") {
-    out.invalid = ReadStartRequest(params, nullptr, &out.invalid_field);
+    out.invalid = ReadStartRequest(params, &start, &out.invalid_field);
   }
   if (!out.invalid.empty()) return out;
   client_ = params.is_object() ? params.value("client", "") : "";
   // Effects may go away while the command runs, events never: its events are those after the ones before it.
   const auto is_event = [](const Effect& effect) { return std::holds_alternative<Event>(effect); };
   const auto events_before = std::count_if(effects_.begin(), effects_.end(), is_event);
-  const Reason why = RunCommand(*command, params, node_problem, &out);
+  const Reason why = name == "mowing.start" ? RequestStart(std::move(start), node_problem, &out)
+                                            : RunCommand(*command, params, node_problem, &out);
   client_.clear();
   if (why.empty()) {
     out.accepted = true;
@@ -402,7 +404,6 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     out->release = true;
     return {};
   }
-  if (name == "mowing.start") return RequestStart(params, node_problem, out);
   if (name == "mowing.reset_job") {
     if (state_ != State::kIdle) return WrongState();
     if (!job_.Unfinished()) return Reason("NO_JOB", "There is no unfinished job");

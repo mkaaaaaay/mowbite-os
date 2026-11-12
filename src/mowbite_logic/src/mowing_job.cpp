@@ -83,6 +83,8 @@ std::optional<JobProgress> ParseCheckpoint(const std::string& text) {
     if (j.contains("tasks")) {
       p.tasks = j.at("tasks").get<std::vector<std::string>>();
       p.task = j.at("task").get<int>();
+      // Never all areas for a list that lost its ids.
+      if (p.tasks.empty()) return std::nullopt;
     }
   } catch (const json::exception&) {
     return std::nullopt;
@@ -176,7 +178,11 @@ bool MowingJob::SeekTask(std::string* notice) {
       progress_.area_id = id;
       return true;
     }
-    if (area == areas_.end() && notice) *notice = "The area " + id + " of the job is no longer on the map, passed over";
+    if (notice) {
+      if (!notice->empty()) *notice += "; ";
+      *notice += "The area " + id + " of the job is " + (area == areas_.end() ? "no longer on the map" : "not active") +
+                 ", passed over";
+    }
     NextArea();
   }
   progress_.area_id.clear();
