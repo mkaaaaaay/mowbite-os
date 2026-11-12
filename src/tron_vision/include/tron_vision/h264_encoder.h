@@ -15,16 +15,18 @@ struct EncoderSettings {
   // Size of the coded picture; it is the left part of each line of the frame.
   uint32_t width = 640;
   uint32_t height = 480;
-  // Bytes per line and lines of the whole frame.
+  // Bytes per line and lines of the whole frame; for NV12 those of the luma plane, the chroma plane follows it.
   uint32_t line_bytes = 2560;
   uint32_t lines = 480;
+  // YUYV or NV12.
+  PixelFormat format = PixelFormat::kYuyv;
   // Constant bit rate, held within 0.5..4 Mbit/s.
   int bitrate_bps = 1500000;
   // Frames per second of the source; an IDR picture comes once a second.
   int fps = 25;
 };
 
-// H.264 encoder for YUYV frames that it reads from their dma-buf.
+// H.264 encoder for YUYV or NV12 frames that it reads from their dma-buf.
 class H264Encoder {
  public:
   virtual ~H264Encoder() = default;
@@ -39,8 +41,9 @@ class H264Encoder {
   virtual bool Encode(const CapturedFrame& frame, const uint8_t*& data, size_t& size, std::string& error) = 0;
 };
 
-// The hardware encoder of the RK3588 through librockchip_mpp, loaded with dlopen: constrained baseline, level 3.1,
-// constant bit rate, SPS and PPS with every IDR picture, no SEI, one frame after the other.
+// The hardware encoder of the RK3588 through librockchip_mpp, loaded with dlopen: constrained baseline, level 3.1 up
+// to 1280 x 720 and 4.0 above, constant bit rate, SPS and PPS with every IDR picture, no SEI, one frame after the
+// other.
 class MppEncoder : public H264Encoder {
  public:
   explicit MppEncoder(std::string library_path);
@@ -59,6 +62,9 @@ class MppEncoder : public H264Encoder {
   void Unload();
   bool Configure(std::string& error);
   bool Fail(std::string message, std::string& error);
+
+  int Format() const;
+  size_t FrameBytes() const;
 
   struct Imported {
     mpp::Handle buffer = nullptr;

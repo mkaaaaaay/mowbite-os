@@ -94,6 +94,42 @@ TEST_F(MppEncoderTest, SettingsOfTheStream) {
   EXPECT_EQ(ProfileLevelId(sets.sps), "42e01f");
 }
 
+TEST_F(MppEncoderTest, Nv12WithTheLevelOfItsSize) {
+  MppEncoder encoder(FAKE_MPP_LIB);
+  EncoderSettings settings;
+  settings.format = PixelFormat::kNv12;
+  settings.width = settings.line_bytes = 1280;
+  settings.height = settings.lines = 720;
+  ASSERT_TRUE(encoder.Open(settings, error)) << error;
+  std::string report = Report();
+  EXPECT_NE(report.find("cfg prep:format=0\n"), std::string::npos) << report;
+  EXPECT_NE(report.find("cfg h264:level=31\n"), std::string::npos) << report;
+  const uint8_t* data = nullptr;
+  size_t size = 0;
+  CapturedFrame frame = Frame(0, 1);
+  EXPECT_FALSE(encoder.Encode(frame, data, size, error));
+  EXPECT_EQ(error, "frame of stride 2560 and 1228800 bytes, the encoder takes 1280 and 1382400");
+  frame.stride = 1280;
+  frame.bytes = 1280 * 720 * 3 / 2;
+  ASSERT_TRUE(encoder.Encode(frame, data, size, error)) << error;
+  EXPECT_NE(Report().find("frame 1280x720 stride 1280x720 format 0 pts 1 fd 200 index 0 size 1382400 type 2\n"),
+            std::string::npos);
+
+  settings.width = settings.line_bytes = 1920;
+  settings.height = settings.lines = 1080;
+  ASSERT_TRUE(encoder.Open(settings, error)) << error;
+  EXPECT_NE(Report().find("cfg h264:level=40\n"), std::string::npos);
+  std::vector<uint8_t> header;
+  ASSERT_TRUE(encoder.Header(header, error)) << error;
+  ParameterSets sets;
+  ASSERT_TRUE(FindParameterSets(header.data(), header.size(), sets));
+  EXPECT_EQ(ProfileLevelId(sets.sps), "42e028");
+
+  settings.format = PixelFormat::kMjpeg;
+  EXPECT_FALSE(encoder.Open(settings, error));
+  EXPECT_EQ(error, "encoder takes YUYV or NV12 only");
+}
+
 TEST_F(MppEncoderTest, BitRateStaysInItsRange) {
   MppEncoder encoder(FAKE_MPP_LIB);
   EncoderSettings settings;

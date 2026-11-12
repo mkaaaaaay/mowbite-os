@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <random>
 #include <utility>
 
 #include "tron_vision/text_file.h"
@@ -24,10 +23,6 @@ std::string Fixed(double value, const char* format = "%.1f") {
   char buf[32];
   std::snprintf(buf, sizeof(buf), format, value);
   return buf;
-}
-
-uint32_t Random() {
-  return std::random_device{}();
 }
 
 }  // namespace
@@ -71,8 +66,7 @@ StereoLoop::StereoLoop(StereoConfig config, FrameSource& camera, H264Encoder& en
       now_(std::move(now)),
       thermal_(config_.pause_at_c, config_.resume_below_c),
       started_(now_()),
-      packetizer_(Random(), static_cast<uint16_t>(Random())),
-      clock_(0) {}
+      stream_(encoder_, server_, config_.slow_encode_s, now_) {}
 
 StereoLoop::~StereoLoop() {
   Shutdown();
@@ -331,14 +325,7 @@ void StereoLoop::Prepare(double now) {
   if (now < next_retry_) return;
   config_.encoder.fps = static_cast<int>(std::lround(status_.camera_fps));
   // The parameter sets for the session description; the encoder is opened again for each stream.
-  std::vector<uint8_t> header;
-  bool ok = encoder_.Open(config_.encoder, text) && encoder_.Header(header, text);
-  encoder_.Close();
-  if (ok && !FindParameterSets(header.data(), header.size(), sets_)) {
-    ok = false;
-    text = "no SPS and PPS from the encoder";
-  }
-  if (!ok) {
+  if (!stream_.Prepare(config_.encoder, text)) {
     if (CountFailure(encoder_failures_, now)) {
       End(StereoState::kEncoderError, text);
     } else {
@@ -346,7 +333,7 @@ void StereoLoop::Prepare(double now) {
     }
     return;
   }
-  server_.SetAvailable(sets_);
+  stream_.Offer();
   Set(StereoState::kReady, "");
   phase_ = Phase::kIdle;
 }
@@ -360,7 +347,7 @@ void StereoLoop::StepIdle(double now) {
     return;
   }
   if (status_.state != StereoState::kReady) {
-    server_.SetAvailable(sets_);
+    stream_.Offer();
     Set(StereoState::kReady, "");
   }
   server_.Poll(config_.idle_wait_ms);
@@ -379,8 +366,7 @@ void StereoLoop::StartStream(double now) {
     End(StereoState::kLocked, text);
     return;
   }
-  if (!encoder_.Open(config_.encoder, text)) {
-    encoder_.Close();
+  if (!stream_.Begin(text)) {
     server_.DropClient();
     if (CountFailure(encoder_failures_, now)) {
       End(StereoState::kEncoderError, text);
@@ -391,7 +377,7 @@ void StereoLoop::StartStream(double now) {
   }
   if (!camera_.Open(text)) {
     camera_.Close();
-    encoder_.Close();
+    stream_.End();
     server_.DropClient();
     if (CountFailure(camera_failures_, now)) {
       End(StereoState::kFailed, text);
@@ -401,7 +387,7 @@ void StereoLoop::StartStream(double now) {
     return;
   }
   if (!guard_.Arm(config_.camera_id, text)) {
-    encoder_.Close();
+    stream_.End();
     camera_.Close();
     End(StereoState::kFailed, text);
     return;
@@ -414,10 +400,6 @@ void StereoLoop::StartStream(double now) {
   stream_start_ = now;
   last_frame_ = -1.0;
   have_sequence_ = false;
-  clock_ = RtpClock(Random());
-  window_start_ = now;
-  window_frames_ = 0;
-  window_bytes_ = 0;
   Set(StereoState::kStreaming, "");
   phase_ = Phase::kStream;
 }
@@ -425,7 +407,7 @@ void StereoLoop::StartStream(double now) {
 void StereoLoop::StopStream() {
   // The stream ends first; the encoder lets go of the buffers before the camera frees them.
   camera_.Stop();
-  encoder_.Close();
+  stream_.End();
   camera_.Close();
   if (streaming_) guard_.Disarm(config_.camera_id);
   streaming_ = false;
@@ -468,52 +450,32 @@ void StereoLoop::StepStream(double now) {
   if (have_sequence_ && frame.sequence > last_sequence_ + 1) status_.lost += frame.sequence - last_sequence_ - 1;
   have_sequence_ = true;
   last_sequence_ = frame.sequence;
-  if (!SendFrame(frame)) return;
-  if (last_frame_ - window_start_ >= 1.0) {
-    const double span = last_frame_ - window_start_;
-    status_.fps = window_frames_ / span;
-    status_.kbps = static_cast<double>(window_bytes_) * 8.0 / 1000.0 / span;
-    window_start_ = last_frame_;
-    window_frames_ = 0;
-    window_bytes_ = 0;
-  }
+  SendFrame(frame);
 }
 
-bool StereoLoop::SendFrame(const CapturedFrame& frame) {
-  const uint8_t* data = nullptr;
-  size_t size = 0;
+void StereoLoop::SendFrame(const CapturedFrame& frame) {
   std::string text;
-  const double before = now_();
-  bool ok = encoder_.Encode(frame, data, size, text);
-  const double took = now_() - before;
-  if (ok && took > config_.slow_encode_s) {
-    ok = false;
-    text = "encode took " + Fixed(took) + " s";
-  }
-  if (!ok) {
+  const H264Stream::Sent sent = stream_.Send(frame, text);
+  if (sent == H264Stream::Sent::kEncoderFailed) {
     StopStream();
-    server_.DropClient();
     if (CountFailure(encoder_failures_, now_())) {
       End(StereoState::kEncoderError, text);
     } else {
       Set(StereoState::kReady, "encoder: " + text);
       phase_ = Phase::kIdle;
     }
-    return false;
+    return;
   }
-  status_.encode_ms = took * 1000.0;
-  packetizer_.Packetize(SplitAnnexB(data, size), clock_.Next(frame.timestamp_us), packets_);
-  if (!server_.SendRtp(packets_)) {
-    // The viewer is gone or reads too slowly; the next one starts a new stream.
+  if (sent == H264Stream::Sent::kClientGone) {
     StopStream();
     Set(StereoState::kReady, "");
     phase_ = Phase::kIdle;
-    return false;
+    return;
   }
-  status_.frames++;
-  window_frames_++;
-  window_bytes_ += size;
-  return true;
+  status_.frames = stream_.Frames();
+  status_.fps = stream_.Fps();
+  status_.kbps = stream_.Kbps();
+  status_.encode_ms = stream_.EncodeMs();
 }
 
 void StereoLoop::Shutdown() {

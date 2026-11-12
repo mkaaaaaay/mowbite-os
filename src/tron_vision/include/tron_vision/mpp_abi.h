@@ -14,6 +14,8 @@ using Handle = void*;
 
 constexpr int kContextEncoder = 1;
 constexpr int kCodingAvc = 7;
+// Planar 4:2:0, the luma plane followed by one plane of interleaved U and V (NV12).
+constexpr int kFormatNv12 = 0;
 // Packed 4:2:2, two bytes per pixel in the order Y U Y V.
 constexpr int kFormatYuyv = 8;
 // A dma-buf that the caller owns.

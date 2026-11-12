@@ -14,9 +14,12 @@ namespace {
 constexpr char kTag[] = "tron_vision";
 constexpr int kMinBitrate = 500000;
 constexpr int kMaxBitrate = 4000000;
-// Baseline profile at level 3.1; the flags force constraint_set0, 1 and 2 to one, which makes it 42e01f.
+// Baseline profile; the flags force constraint_set0, 1 and 2 to one, which makes it 42e01f at level 3.1.
 constexpr int kProfile = 66;
-constexpr int kLevel = 31;
+// Level 3.1 holds 3600 macroblocks per picture (1280 x 720), 4.0 holds 8192 (1920 x 1080).
+constexpr uint32_t kLevel31Macroblocks = 3600;
+constexpr int kLevel31 = 31;
+constexpr int kLevel40 = 40;
 constexpr uint32_t kConstraintFlags = 0x00070007;
 // Room for SPS and PPS; the library copies them without asking for the size.
 constexpr size_t kHeaderBytes = 1024;
@@ -69,6 +72,15 @@ bool MppEncoder::Probe(std::string& error) {
   return Load(error);
 }
 
+int MppEncoder::Format() const {
+  return settings_.format == PixelFormat::kNv12 ? mpp::kFormatNv12 : mpp::kFormatYuyv;
+}
+
+size_t MppEncoder::FrameBytes() const {
+  const size_t plane = static_cast<size_t>(settings_.line_bytes) * settings_.lines;
+  return settings_.format == PixelFormat::kNv12 ? plane / 2 * 3 : plane;
+}
+
 bool MppEncoder::Fail(std::string message, std::string& error) {
   error = std::move(message);
   Close();
@@ -78,6 +90,10 @@ bool MppEncoder::Fail(std::string message, std::string& error) {
 bool MppEncoder::Open(const EncoderSettings& settings, std::string& error) {
   Close();
   if (!Load(error)) return false;
+  if (settings.format != PixelFormat::kYuyv && settings.format != PixelFormat::kNv12) {
+    error = "encoder takes YUYV or NV12 only";
+    return false;
+  }
   settings_ = settings;
   settings_.bitrate_bps = std::clamp(settings.bitrate_bps, kMinBitrate, kMaxBitrate);
   settings_.fps = std::clamp(settings.fps, 1, 60);
@@ -100,12 +116,14 @@ bool MppEncoder::Configure(std::string& error) {
   int ret = config_init_(&config);
   if (ret != 0 || config == nullptr) return Fail("settings init " + std::to_string(ret), error);
   ret = api_->control(context_, mpp::kEncGetConfig, config);
+  const uint32_t macroblocks = ((settings_.width + 15) / 16) * ((settings_.height + 15) / 16);
+  const int level = macroblocks <= kLevel31Macroblocks ? kLevel31 : kLevel40;
   const std::pair<const char*, int32_t> values[] = {
       {"prep:width", static_cast<int32_t>(settings_.width)},
       {"prep:height", static_cast<int32_t>(settings_.height)},
       {"prep:hor_stride", static_cast<int32_t>(settings_.line_bytes)},
       {"prep:ver_stride", static_cast<int32_t>(settings_.lines)},
-      {"prep:format", mpp::kFormatYuyv},
+      {"prep:format", Format()},
       {"rc:mode", mpp::kRateControlCbr},
       {"rc:bps_target", settings_.bitrate_bps},
       {"rc:bps_max", settings_.bitrate_bps / 5 * 6},
@@ -119,7 +137,7 @@ bool MppEncoder::Configure(std::string& error) {
       {"rc:gop", settings_.fps},
       {"codec:type", mpp::kCodingAvc},
       {"h264:profile", kProfile},
-      {"h264:level", kLevel},
+      {"h264:level", level},
       {"h264:cabac_en", 0},
       {"h264:trans8x8", 0},
   };
@@ -185,12 +203,17 @@ bool MppEncoder::Encode(const CapturedFrame& frame, const uint8_t*& data, size_t
     error = "frame without a dma-buf";
     return false;
   }
+  if (frame.stride != settings_.line_bytes || frame.bytes < FrameBytes()) {
+    error = "frame of stride " + std::to_string(frame.stride) + " and " + std::to_string(frame.bytes) +
+            " bytes, the encoder takes " + std::to_string(settings_.line_bytes) + " and " + std::to_string(FrameBytes());
+    return false;
+  }
   if (frame.index >= imported_.size()) imported_.resize(frame.index + 1);
   Imported& in = imported_[frame.index];
   if (in.buffer == nullptr) {
     mpp::BufferInfo info{};
     info.type = mpp::kBufferExternalDma;
-    info.size = static_cast<size_t>(settings_.line_bytes) * settings_.lines;
+    info.size = FrameBytes();
     info.fd = frame.dmabuf;
     info.index = static_cast<int>(frame.index);
     const int ret = buffer_import_(nullptr, &info, &in.buffer, kTag, kTag);
@@ -215,7 +238,7 @@ bool MppEncoder::Encode(const CapturedFrame& frame, const uint8_t*& data, size_t
   frame_set_height_(picture, settings_.height);
   frame_set_hor_stride_(picture, settings_.line_bytes);
   frame_set_ver_stride_(picture, settings_.lines);
-  frame_set_format_(picture, mpp::kFormatYuyv);
+  frame_set_format_(picture, Format());
   frame_set_buffer_(picture, in.buffer);
   frame_set_pts_(picture, frame.timestamp_us);
   ret = api_->encode_put_frame(context_, picture);

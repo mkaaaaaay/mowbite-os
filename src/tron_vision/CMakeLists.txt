@@ -23,8 +23,8 @@ pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg)
 # without ROS. The NPU runtime and the media library of the encoder are loaded at run time, never linked.
 add_library(tron_vision_core STATIC src/npu_model.cpp src/model_check.cpp src/yolo_decode.cpp src/frame_convert.cpp
   src/exposure.cpp src/v4l2_camera.cpp src/crash_guard.cpp src/budget.cpp src/vision_loop.cpp src/tron_camera.cpp
-  src/text_file.cpp src/preview.cpp src/h264_rtp.cpp src/rtsp_server.cpp src/h264_encoder.cpp src/stereo_camera.cpp
-  src/stereo_loop.cpp src/lens_model.cpp src/dock_marker.cpp src/dock_pose.cpp src/dock_exposure.cpp
+  src/text_file.cpp src/preview.cpp src/h264_rtp.cpp src/rtsp_server.cpp src/h264_encoder.cpp src/h264_stream.cpp
+  src/stereo_camera.cpp src/stereo_loop.cpp src/lens_model.cpp src/dock_marker.cpp src/dock_pose.cpp src/dock_exposure.cpp
   src/jpeg_luma.cpp src/rear_camera.cpp src/rear_loop.cpp src/preview_loop.cpp)
 target_include_directories(tron_vision_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -51,7 +51,7 @@ install(TARGETS tron_stereo_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 # The live picture of the right side camera, a process of its own beside the camera AI on the left one.
 add_library(tron_side_node_lib STATIC src/side_node.cpp)
 target_link_libraries(tron_side_node_lib tron_vision_core tron_mcu::tron_mcu_core)
-ament_target_dependencies(tron_side_node_lib rclcpp mowbite_msgs sensor_msgs)
+ament_target_dependencies(tron_side_node_lib rclcpp mowbite_msgs sensor_msgs ament_index_cpp)
 add_executable(tron_side_node src/side_node_main.cpp)
 target_link_libraries(tron_side_node tron_side_node_lib)
 install(TARGETS tron_side_node RUNTIME DESTINATION lib/${PROJECT_NAME})
@@ -112,6 +112,8 @@ if(BUILD_TESTING)
   target_link_libraries(tron_vision_node_test tron_vision_node_lib)
   ament_add_gtest(tron_side_node_test test/test_side_node.cpp)
   target_link_libraries(tron_side_node_test tron_side_node_lib)
+  target_compile_definitions(tron_side_node_test PRIVATE FAKE_MPP_LIB="$<TARGET_FILE:tron_vision_fake_mpp>")
+  add_dependencies(tron_side_node_test tron_vision_fake_mpp)
   ament_add_gtest(tron_stereo_node_test test/test_stereo_node.cpp)
   target_link_libraries(tron_stereo_node_test tron_stereo_node_lib)
   target_compile_definitions(tron_stereo_node_test PRIVATE FAKE_MPP_LIB="$<TARGET_FILE:tron_vision_fake_mpp>")

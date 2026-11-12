@@ -1,12 +1,11 @@
 #include "tron_vision/stereo_node.h"
 
-#include <ament_index_cpp/get_package_prefix.hpp>
 #include <chrono>
-#include <filesystem>
 #include <stdexcept>
 #include <utility>
 
 #include "tron_mcu/serial_port.h"
+#include "tron_vision/encoder_library.h"
 
 namespace tron_vision {
 
@@ -18,16 +17,6 @@ constexpr double kReportPeriod = 1.0;
 // Silence of the loop thread or of the ROS thread that ends the process.
 constexpr double kWatchLimit = 2.0;
 constexpr auto kFailedWait = std::chrono::milliseconds(200);
-
-// The image puts the media library next to the packages, under <install>/mpp.
-std::string DefaultEncoderLibrary() {
-  try {
-    const std::filesystem::path prefix = ament_index_cpp::get_package_prefix("tron_vision");
-    return (prefix.parent_path() / "mpp/lib/librockchip_mpp.so.1").string();
-  } catch (const std::exception&) {
-    return "";
-  }
-}
 
 std::string StateText(const StereoStatus& status) {
   std::string text = StateName(status.state);

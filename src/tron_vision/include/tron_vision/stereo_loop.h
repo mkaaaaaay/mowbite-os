@@ -10,7 +10,7 @@
 #include "tron_vision/budget.h"
 #include "tron_vision/crash_guard.h"
 #include "tron_vision/h264_encoder.h"
-#include "tron_vision/h264_rtp.h"
+#include "tron_vision/h264_stream.h"
 #include "tron_vision/rtsp_server.h"
 #include "tron_vision/v4l2_camera.h"
 
@@ -166,7 +166,7 @@ class StereoLoop {
   void StepIdle(double now);
   void StartStream(double now);
   void StepStream(double now);
-  bool SendFrame(const CapturedFrame& frame);
+  void SendFrame(const CapturedFrame& frame);
   void StopStream();
   // Notes that the camera gave no picture, which holds for this boot.
   void FailForThisBoot(StereoState state, const std::string& detail);
@@ -199,14 +199,7 @@ class StereoLoop {
   int64_t test_last_us_ = 0;
   bool have_sequence_ = false;
   uint32_t last_sequence_ = 0;
-  ParameterSets sets_;
-  RtpPacketizer packetizer_;
-  RtpClock clock_;
-  std::vector<std::vector<uint8_t>> packets_;
-  // Sums of the running second for fps and kbps.
-  double window_start_ = 0.0;
-  int window_frames_ = 0;
-  size_t window_bytes_ = 0;
+  H264Stream stream_;
 };
 
 }  // namespace tron_vision
