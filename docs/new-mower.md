@@ -47,7 +47,8 @@ Duties:
   and the release goes by app only.
 - Capabilities: `platform` is the same name as in the geometry file; set `gnss_receiver_time` only where
   `receiver_time_ms` of `gps/absolute_pose` is the UTC time of day of the receiver (Tron), not a clock of the board
-  (xCore). Nothing in the code asks for a platform name.
+  (xCore). `mowbite_clock` compares it with the wall clock: off by more than 60 s, date and sun count as unknown
+  (`time/clock`, `gnss_mismatch`). Nothing in the code asks for a platform name.
 - Limits until driving tests show more: 0.3 m/s and 0.3 rad/s.
 - Before opening a port: no other process holds it.
 - A restarted driver starts latched (`start_latched`).
@@ -94,6 +95,13 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   has no body. Two steps of 5 cm backwards in a row of `localization/pose` also take points back.
 - Driver parameters (ports, baud rates, limits) in the file of the driver; values measured on one mower in a file on
   that mower. No value in two files.
+- The clock: date, weekday and sunset count only while `time/clock` is ok (`mowbite_clock`): the kernel synchronized
+  (NTP), or synchronized once since the start and no jump since. `rtc` under `mowbite_clock` (default off) lets the
+  real-time clock alone count for 30 days after the last synchronization (`<data_dir>/clock.json`), when the kernel
+  set the clock from it at boot (`/sys/class/rtc/rtc0/hctosys`). Turn it on only after measuring on the mower: the
+  kernel writes the clock back to it, its drift over at least 3 days without network, 30 days times that drift under
+  5 min. A board without a real-time clock that keeps the time of its last shutdown gives the same signs and keeps
+  `rtc` off.
 - The datum of the garden: one place on the mower, `MOWBITE_DATUM_LAT`, `_LONG`, `_HEIGHT` (Tron `/etc/mowbite/os.conf`,
   NX60i the environment of the compose file), handed to the GNSS node as launch arguments `datum_*` after every
   parameter file. Without a datum no pose is published.
@@ -309,6 +317,7 @@ Around `mowbite_camera`:
 - [ ] clang-tidy without findings in the package (`.clang-tidy` of the repo)
 - [ ] Fake board, contract test passes, the start test too where the driver has a start time
 - [ ] Geometry file and platform file, inherited values checked
+- [ ] `gnss_receiver_time` only with UTC from the receiver; `rtc` of `mowbite_clock` only after the measurement
 - [ ] Start file, driver restarts latched
 - [ ] Every node of your own in the container attached to the watch (`test_stack.py`)
 - [ ] Simulation: mowing, going home, docking; `app_interface_check`

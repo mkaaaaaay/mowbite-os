@@ -428,3 +428,10 @@ mowbite_planner:
     # data_dir/planner (tron.launch.py sets data_dir): plans kept and maps before at most this many days and MB.
     keep_days: 60
     keep_mb: 50.0
+
+mowbite_clock:
+  ros__parameters:
+    # Whether the system clock from the real-time clock alone counts as safe, for 30 days after the last
+    # synchronization. Off until measured on the mower: the kernel writes it back, its drift over at least 3 days
+    # without network, 30 days times that drift under 5 min.
+    rtc: false

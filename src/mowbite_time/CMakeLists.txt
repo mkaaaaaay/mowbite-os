@@ -8,6 +8,12 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 add_compile_options(-ffp-contract=off)
 
 find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(mowbite_msgs REQUIRED)
+find_package(mowbite_hold REQUIRED)
+find_package(mowbite_watch REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 # The sun and the judgement of the clock, without ROS.
 add_library(mowbite_time_core STATIC src/sun.cpp src/clock_guard.cpp)
@@ -16,8 +22,16 @@ target_include_directories(mowbite_time_core PUBLIC
   $<INSTALL_INTERFACE:include>)
 set_target_properties(mowbite_time_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+add_library(mowbite_time_component SHARED src/clock_node.cpp)
+target_link_libraries(mowbite_time_component mowbite_time_core mowbite_hold::mowbite_hold_core
+  mowbite_watch::mowbite_watch nlohmann_json::nlohmann_json)
+ament_target_dependencies(mowbite_time_component rclcpp rclcpp_components mowbite_msgs)
+rclcpp_components_register_node(mowbite_time_component
+  PLUGIN "mowbite_time::ClockNode"
+  EXECUTABLE mowbite_clock_node)
+
 install(DIRECTORY include/ DESTINATION include)
-install(TARGETS mowbite_time_core
+install(TARGETS mowbite_time_core mowbite_time_component
   EXPORT export_mowbite_time
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib

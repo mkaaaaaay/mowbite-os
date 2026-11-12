@@ -26,6 +26,7 @@
   <exec_depend>mowbite_safety</exec_depend>
   <exec_depend>mowbite_ntrip</exec_depend>
   <exec_depend>mowbite_calibration</exec_depend>
+  <exec_depend>mowbite_time</exec_depend>
   <exec_depend>mowbite_light</exec_depend>
   <exec_depend>mowbite_sound</exec_depend>
   <exec_depend>mowbite_planner</exec_depend>

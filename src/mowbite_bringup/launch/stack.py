@@ -151,7 +151,11 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal):
     calibration = ComposableNode(
         package="mowbite_calibration", plugin="mowbite_calibration::CalibrationNode", name="mowbite_calibration",
         parameters=[*files, {"data_dir": data_dir}])
-    return [localization, safety, logic, bridge, map_node, follower, ntrip, calibration]
+    # Whether the wall clock can be trusted for date and sun (time/clock); data_dir holds its last synchronization.
+    clock = ComposableNode(
+        package="mowbite_time", plugin="mowbite_time::ClockNode", name="mowbite_clock",
+        parameters=[*files, {"data_dir": data_dir}])
+    return [localization, safety, logic, bridge, map_node, follower, ntrip, calibration, clock]
 
 
 # The names of these composable nodes, as their watch knows them.

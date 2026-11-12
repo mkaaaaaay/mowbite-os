@@ -41,10 +41,10 @@ struct ClockVerdict {
   bool operator!=(const ClockVerdict& other) const { return !(*this == other); }
 };
 
-// Whether the wall clock can be trusted for date, weekday and sun. Safe while the kernel is synchronized (a jump then is
-// the correction itself); after a synchronization while the clock has not jumped since; never synchronized since the
-// start only with clock.rtc, when the kernel took the clock from the real-time clock, it lies within kRtcTrust after
-// synced_at and has not jumped. A GNSS time of day off by more than kClockTolerance makes each of them unsafe until
+// Whether the wall clock can be trusted for date, weekday and sun. Safe while the kernel is synchronized (a jump then
+// is the correction itself); after a synchronization while the clock has not jumped since; never synchronized since
+// the start only with clock.rtc, when the kernel took the clock from the real-time clock, it lies within kRtcTrust
+// after synced_at and has not jumped. A GNSS time of day off by more than kClockTolerance makes each of them unsafe until
 // the two agree again.
 class ClockGuard {
  public:

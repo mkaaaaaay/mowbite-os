@@ -35,7 +35,8 @@ with open(os.path.join(get_package_share_directory("mowbite_bridge"), "data_sche
     IMAGE_SCHEMA = json.load(f)["schema"]
 NEWER = IMAGE_SCHEMA + 1
 OS_NODES = {"tron_mcu", "tron_gnss", "tron_imu", "mowbite_localization", "mowbite_logic", "mowbite_bridge",
-            "mowbite_map", "mowbite_follower", "mowbite_ntrip", "mowbite_safety", "mowbite_planner"}
+            "mowbite_map", "mowbite_follower", "mowbite_ntrip", "mowbite_safety", "mowbite_planner",
+            "mowbite_clock"}
 MAP = '{"areas": []}'
 
 
