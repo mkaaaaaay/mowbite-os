@@ -90,7 +90,8 @@ TEST_F(VisionNodeTest, ReportsTheCameraLatched) {
   EXPECT_EQ(c.id, "oa_left");
   EXPECT_EQ(c.process, "vision");
   EXPECT_EQ(c.kind, mowbite_msgs::msg::Camera::KIND_OBSTACLE);
-  EXPECT_EQ(c.position, mowbite_msgs::msg::Camera::POSITION_FRONT);
+  EXPECT_EQ(c.name, "Left camera");
+  EXPECT_EQ(c.position, mowbite_msgs::msg::Camera::POSITION_LEFT);
   EXPECT_EQ(c.width, 640U);
   EXPECT_EQ(c.height, 360U);
   EXPECT_TRUE(c.detections);

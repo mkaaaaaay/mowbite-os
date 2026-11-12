@@ -70,11 +70,11 @@ VisionNode::VisionNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_
 
   TronCameraConfig camera;
   camera_entry_.id = camera_id_;
-  camera_entry_.name = "Front camera";
+  camera_entry_.name = "Left camera";
   // The name the start file gives stack.own_process, so the OS can tie an exit note to this camera.
   camera_entry_.process = declare_parameter("process", std::string("vision"));
   camera_entry_.kind = mowbite_msgs::msg::Camera::KIND_OBSTACLE;
-  camera_entry_.position = mowbite_msgs::msg::Camera::POSITION_FRONT;
+  camera_entry_.position = mowbite_msgs::msg::Camera::POSITION_LEFT;
   PreviewSize(camera.width, camera.height, config.preview.width, camera_entry_.width, camera_entry_.height);
   camera_entry_.detections = true;
   camera_entry_.protocols = {mowbite_msgs::msg::Camera::PROTOCOL_MJPEG};
