@@ -1,8 +1,13 @@
 #include <gtest/gtest.h>
 #include <turbojpeg.h>
 
+#include <algorithm>
 #include <random>
+#include <string>
+#include <utility>
+#include <vector>
 
+#include "dock_jpeg.h"
 #include "test_util.h"
 #include "tron_vision/preview.h"
 
@@ -112,6 +117,76 @@ TEST(Preview, QualityComesBackWithRoom) {
   for (int i = 1; i <= 20; i++) ASSERT_TRUE(limited.Make(test::View(flat), ColorGains{}, {}, i, error));
   EXPECT_GT(limited.Quality(), low);
   EXPECT_EQ(limited.Quality(), config.quality);
+}
+
+// A gray image with a bright left half, as the rear camera would send it.
+test::SceneImage HalfBright(uint32_t width, uint32_t height) {
+  test::SceneImage image;
+  image.width = width;
+  image.height = height;
+  image.px.assign(static_cast<size_t>(width) * height, 40);
+  for (uint32_t y = 0; y < height; y++) {
+    std::fill_n(image.px.begin() + static_cast<long>(y) * width, width / 2, 200);
+  }
+  return image;
+}
+
+TEST(JpegDecoder, ScalesInTheDecoder) {
+  EXPECT_EQ(ScaledSize(1920, {3, 8}), 720U);
+  EXPECT_EQ(ScaledSize(1080, {3, 8}), 405U);
+  EXPECT_EQ(ScaledSize(1081, {1, 2}), 541U);
+  const std::vector<uint8_t> jpeg = test::EncodeJpeg(HalfBright(1920, 1080));
+  ASSERT_FALSE(jpeg.empty());
+  JpegDecoder decoder;
+  std::vector<uint8_t> rgb;
+  std::string error;
+  ASSERT_TRUE(decoder.Decode(jpeg.data(), jpeg.size(), 1920, 1080, {3, 8}, rgb, error)) << error;
+  ASSERT_EQ(rgb.size(), 720U * 405U * 3U);
+  EXPECT_NEAR(At(rgb, 720, 100, 200)[0], 200, 4);
+  EXPECT_NEAR(At(rgb, 720, 620, 200)[1], 40, 4);
+  // Full size too.
+  ASSERT_TRUE(decoder.Decode(jpeg.data(), jpeg.size(), 1920, 1080, {1, 1}, rgb, error)) << error;
+  EXPECT_EQ(rgb.size(), 1920U * 1080U * 3U);
+}
+
+TEST(JpegDecoder, RefusesOtherSizesBrokenImagesAndOtherScales) {
+  const std::vector<uint8_t> jpeg = test::EncodeJpeg(HalfBright(640, 480));
+  JpegDecoder decoder;
+  std::vector<uint8_t> rgb;
+  std::string error;
+  EXPECT_FALSE(decoder.Decode(jpeg.data(), jpeg.size(), 1920, 1080, {3, 8}, rgb, error));
+  EXPECT_EQ(error, "JPEG of 640x480");
+  const std::vector<uint8_t> cut(jpeg.begin(), jpeg.begin() + static_cast<long>(jpeg.size() / 3));
+  error.clear();
+  EXPECT_FALSE(decoder.Decode(cut.data(), cut.size(), 640, 480, {3, 8}, rgb, error));
+  EXPECT_EQ(error.rfind("JPEG: ", 0), 0U) << error;
+  const std::vector<uint8_t> noise = {1, 2, 3, 4, 5, 6, 7, 8};
+  EXPECT_FALSE(decoder.Decode(noise.data(), noise.size(), 640, 480, {3, 8}, rgb, error));
+  EXPECT_EQ(error.rfind("JPEG header: ", 0), 0U) << error;
+  EXPECT_FALSE(decoder.Decode(jpeg.data(), jpeg.size(), 640, 480, {1, 3}, rgb, error));
+  EXPECT_EQ(error, "no decoder scale 1/3");
+}
+
+// The limits of Preview without a frame: rate, size and quality on an RGB image.
+TEST(BoundedJpeg, RateAndSizeOfAnRgbImage) {
+  std::vector<uint8_t> rgb(720 * 405 * 3, 90);
+  JpegLimits limits;
+  limits.max_rate = 2.0;
+  BoundedJpeg pictures(limits);
+  std::string error;
+  int made = 0;
+  for (double t = 0.0; t < 2.0; t += 1.0 / 30.0) {
+    if (pictures.Due(t) && pictures.Make(rgb, 720, 405, t, error)) made++;
+  }
+  EXPECT_EQ(made, 4);
+  EXPECT_EQ(pictures.Count(), 4U);
+  EXPECT_EQ(pictures.Width(), 720U);
+  EXPECT_EQ(pictures.Height(), 405U);
+  EXPECT_EQ(JpegSize(pictures.Jpeg()), std::make_pair(720, 405));
+  EXPECT_LE(pictures.Jpeg().size(), limits.max_bytes);
+  EXPECT_FALSE(pictures.Make(rgb, 720, 404, 10.0, error));
+  EXPECT_EQ(error, "RGB buffer does not match the image size");
+  EXPECT_EQ(pictures.Count(), 4U);
 }
 
 }  // namespace
