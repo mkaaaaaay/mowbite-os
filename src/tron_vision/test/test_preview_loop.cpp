@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -83,9 +82,9 @@ struct Rig {
     if (!loop) loop = std::make_unique<PreviewLoop>(config, camera, guard, [this] { return Now(); });
     return *loop;
   }
-  // The clock of the loop: camera time plus the real time the test took.
+  // The clock of the loop is the camera time alone, so the load of the machine changes no result.
   double Now() const {
-    return clock + std::chrono::duration<double>(std::chrono::steady_clock::now() - real_start).count();
+    return clock;
   }
   // Steps for `seconds` of camera time, idle steps move the clock on by 0.1 s.
   void Run(double seconds) {
@@ -103,7 +102,6 @@ struct Rig {
 
   test::TempDir tmp;
   double clock = 100.0;
-  std::chrono::steady_clock::time_point real_start = std::chrono::steady_clock::now();
   FakeCamera camera{clock};
   CrashGuard guard{tmp.Path() + "/vision", tmp.Path() + "/crash", tmp.Write("boot_id", "boot-1\n")};
   PreviewLoopConfig config;

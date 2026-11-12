@@ -24,10 +24,11 @@ class SideNodeTest : public ::testing::Test {
   void TearDown() override {
     rclcpp::shutdown();
   }
-  // The process name tron.launch.py gives, and a crash directory of the test.
+  // The process name tron.launch.py gives, a crash directory of the test, and a memory limit above what the test
+  // process itself takes, also under a sanitizer.
   rclcpp::NodeOptions Options() const {
     rclcpp::NodeOptions options;
-    options.parameter_overrides({{"process", "right"}, {"crash_dir", dir_.Path()}});
+    options.parameter_overrides({{"process", "right"}, {"crash_dir", dir_.Path()}, {"max_rss_mb", 8192}});
     return options;
   }
 
