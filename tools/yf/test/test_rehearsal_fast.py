@@ -44,6 +44,7 @@ GROUP_PORT = random.randint(42000, 48000)
 BIND_IP = f"127.{random.randint(1, 250)}.{random.randint(1, 250)}.{random.randint(2, 250)}"
 SERVICES = os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "config", "xcore_nx60i_services.json")
 FAKE = os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_xcore")
+BATTERY_PARAMS = os.path.join(FindPackageShare("mowbite_bringup").find("mowbite_bringup"), "config", "nx60i.yaml")
 # The driver and the fake share the speed model of nx60i.yaml: 0.5 m/s needs duty 0.881, below max_duty 1.0.
 TOP_SPEED = 0.5
 REFUSED = "is for the measurement image only"
@@ -59,8 +60,9 @@ def generate_test_description():
     driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "launch",
                                                    "measure.launch.py")),
-        launch_arguments={"interface": "lo", "bind_ip": BIND_IP, "announcement_port": str(GROUP_PORT),
-                          "respawn": "true", "respawn_delay": "1.0", "speed_limit": "0.5", "max_duty": "1.0"}.items())
+        launch_arguments={"battery_params": BATTERY_PARAMS, "interface": "lo", "bind_ip": BIND_IP,
+                          "announcement_port": str(GROUP_PORT), "respawn": "true", "respawn_delay": "1.0",
+                          "speed_limit": "0.5", "max_duty": "1.0"}.items())
     return launch.LaunchDescription([
         fake_xcore,
         TimerAction(period=0.5, actions=[driver, launch_testing.actions.ReadyToTest()]),

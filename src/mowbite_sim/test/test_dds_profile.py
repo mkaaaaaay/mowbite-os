@@ -30,12 +30,13 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix
 from mowbite_msgs.msg import HardwareStatus
 
-# The battery voltages of the platform file, which nx60i.launch.py hands to the driver (stack.py of mowbite_bringup).
-sys.path.insert(0, os.path.join(get_package_share_directory("mowbite_bringup"), "launch"))
-import stack  # noqa: E402
+# The battery voltages of the platform file, which nx60i.launch.py hands to the driver (logic_params.py of
+# xcore_driver).
+sys.path.insert(0, os.path.join(get_package_share_directory("xcore_driver"), "launch"))
+import logic_params  # noqa: E402
 
-BATTERY = stack.battery_voltages([os.path.join(get_package_share_directory("mowbite_bringup"), "config",
-                                               "nx60i.yaml")])
+BATTERY = logic_params.battery_voltages([os.path.join(get_package_share_directory("mowbite_bringup"), "config",
+                                                      "nx60i.yaml")])
 
 WORK = tempfile.mkdtemp(prefix="mowbite_dds_")
 PROFILE = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "fastdds_loopback.xml")

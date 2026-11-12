@@ -36,6 +36,7 @@ GROUP_PORT = random.randint(42000, 48000)
 BIND_IP = f"127.{random.randint(1, 250)}.{random.randint(1, 250)}.{random.randint(2, 250)}"
 SERVICES = os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "config", "xcore_nx60i_services.json")
 FAKE = os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_xcore")
+BATTERY_PARAMS = os.path.join(FindPackageShare("mowbite_bringup").find("mowbite_bringup"), "config", "nx60i.yaml")
 # The fake's speed model by default, as in nx60i.yaml: the wheels turn as fast as the driver commands.
 DUTY_SLOPE = 0.58
 DUTY_DEADBAND = 0.019
@@ -51,8 +52,9 @@ def generate_test_description():
     driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "launch",
                                                    "measure.launch.py")),
-        launch_arguments={"interface": "lo", "bind_ip": BIND_IP, "announcement_port": str(GROUP_PORT),
-                          "allow_blade": "true", "respawn": "true", "respawn_delay": "1.0"}.items())
+        launch_arguments={"battery_params": BATTERY_PARAMS, "interface": "lo", "bind_ip": BIND_IP,
+                          "announcement_port": str(GROUP_PORT), "allow_blade": "true", "respawn": "true",
+                          "respawn_delay": "1.0"}.items())
     return launch.LaunchDescription([
         fake_xcore,
         TimerAction(period=0.5, actions=[driver, launch_testing.actions.ReadyToTest()]),
@@ -100,7 +102,7 @@ class TestRehearsal(unittest.TestCase):
         self.assertEqual(self.code, 0, self.output)
         self.assertNotIn("ABORT", self.output)
         steps = {m["text"].split()[0] for m in self.boot()["marks"] if m["kind"] == "mark"}
-        self.assertEqual(steps, {"M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8"})
+        self.assertEqual(steps, {"STOP", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8"})
         c = self.report["capture"]
         self.assertEqual((c["malformed"], c["dangerous_ports"], c["cut_at_end"]), ({}, {}, False))
 

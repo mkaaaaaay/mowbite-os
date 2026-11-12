@@ -201,7 +201,7 @@ class TestRehearsalTron(unittest.TestCase):
         self.assertTrue(check["released"], check)
         self.assertFalse([r for r in rec[:rec.index(check)] if r["kind"] == "blade" and r["on"]])
         offs = [r for r in rec if r["kind"] == "blade_off"]
-        self.assertEqual([(r["percent"], r["rpm"]) for r in offs], [(30, 840), (100, 2800)])
+        self.assertEqual([(r["percent"], r["rpm"]) for r in offs], [(30, 3000), (100, 3000)])
         lease, = [r for r in rec if r["kind"] == "blade_lease"]
         for r in offs + [lease]:
             self.assertLessEqual(r["still_s"], 3.0, r)
@@ -237,7 +237,7 @@ class TestRehearsalTron(unittest.TestCase):
         self.assertTrue(any("kept the motor turning for 10 s" in f for f in end["findings"]), end["findings"])
         run, = [r for r in rec if r["kind"] == "blade_gone"]
         self.assertIsNone(run["still_s"])
-        self.assertEqual(run["last_rpm"], 840)
+        self.assertEqual(run["last_rpm"], 3000)
         self.assertIn("abort", [r["kind"] for r in rec])
         starts = [r["params"]["allow_blade"] for r in rec if r["kind"] == "process" and r["node"] == "tron_mcu"]
         self.assertEqual(starts, [False, True, False])
@@ -251,9 +251,9 @@ class TestRehearsalTron(unittest.TestCase):
         self.assertEqual(end["findings"], [])
         self.assertTrue(end["complete"])
         self.assertEqual(code, 0)
-        self.assertEqual([(r["percent"], r["rpm"]) for r in rec if r["kind"] == "blade_off"], [(100, 2800)])
+        self.assertEqual([(r["percent"], r["rpm"]) for r in rec if r["kind"] == "blade_off"], [(100, 3000)])
         self.assertEqual([r["percent"] for r in rec if r["kind"] == "blade_lease"], [100])
-        self.assertEqual([r["rpm"] for r in rec if r["kind"] == "blade_emergency"], [2800] * 3)
+        self.assertEqual([r["rpm"] for r in rec if r["kind"] == "blade_emergency"], [3000] * 3)
         self.assertTrue(all(r["percent"] == 100 for r in rec if r["kind"] == "blade" and r["on"]))
         runs = [r for r in rec if r["kind"] == "blade_gone"]
         self.assertEqual([(r["way"], r["percent"]) for r in runs], [("freeze", 100), ("kill", 100)])
@@ -280,7 +280,7 @@ class TestRehearsalTron(unittest.TestCase):
         self.assertIn("kept the motor turning for 25 s", finding)
         run, = [r for r in rec if r["kind"] == "blade_gone"]
         self.assertIsNone(run["still_s"])
-        self.assertEqual(run["last_rpm"], 840)
+        self.assertEqual(run["last_rpm"], 3000)
         # The fake reports the motors once a second: the capture holds the whole window.
         self.assertGreaterEqual(run["samples"], 24)
         status = [r for r in rec if r["kind"] == "status"]

@@ -75,8 +75,8 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   not built yet.
 - `mowbite_bringup/config/<platform>.yaml`: what differs from `tron.yaml`, which lies underneath (battery voltages
   empty, full and critical, charge check, temperatures). Check every value you inherit. The battery voltages stand only
-  here: a driver that sets them on its board gets them in the start file from `stack.battery_voltages`, under the
-  same names (see `nx60i.launch.py`).
+  here: a driver that sets them on its board gets them in the start file from `battery_voltages` of
+  `xcore_driver/launch/logic_params.py`, under the same names (see `nx60i.launch.py`).
 - The way home without the planner (`docking_direct`, `direct_margin`, inherited from `tron.yaml`): a planner that
   gives no answer does not keep the mower from the station. It drives the straight line to the point
   `docking_approach_distance` m in front of the station, where no obstacle and no end of the mowing and navigation

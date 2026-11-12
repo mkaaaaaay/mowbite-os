@@ -20,8 +20,8 @@ BRINGUP = get_package_share_directory("mowbite_bringup")
 SIM = get_package_share_directory("mowbite_sim")
 XCORE = get_package_share_directory("xcore_driver")
 
-sys.path.insert(0, os.path.join(BRINGUP, "launch"))
-import stack  # noqa: E402
+sys.path.insert(0, os.path.join(XCORE, "launch"))
+import logic_params  # noqa: E402
 
 
 def load(path):
@@ -89,13 +89,13 @@ class Nx60iConsistency(unittest.TestCase):
 
     def test_the_driver_gets_the_battery_of_the_platform_file_only(self):
         files = [os.path.join(BRINGUP, "config", name) for name in ("tron.yaml", "nx60i.yaml")]
-        battery = stack.battery_voltages(files)
+        battery = logic_params.battery_voltages(files)
         logic = self.nx60i["mowbite_logic"]["ros__parameters"]
-        self.assertEqual(battery, {key: logic[key] for key in stack.BATTERY_VOLTAGES})
+        self.assertEqual(battery, {key: logic[key] for key in logic_params.BATTERY_VOLTAGES})
         self.assertLess(battery["battery_critical_voltage"], battery["battery_empty_voltage"])
         self.assertLess(battery["battery_empty_voltage"], battery["battery_full_voltage"])
         self.assertLess(battery["battery_full_voltage"], self.driver["battery_critical_high_voltage"])
-        self.assertFalse([key for key in self.driver if key in stack.BATTERY_VOLTAGES or "critical_low" in key])
+        self.assertFalse([key for key in self.driver if key in logic_params.BATTERY_VOLTAGES or "critical_low" in key])
 
     def test_only_known_nodes_and_keys_change(self):
         for node, section in self.nx60i.items():

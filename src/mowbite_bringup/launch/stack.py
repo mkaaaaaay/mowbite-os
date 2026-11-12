@@ -7,7 +7,6 @@ import os
 import sys
 import time
 
-import yaml
 from launch.actions import (DeclareLaunchArgument, OpaqueCoroutine, RegisterEventHandler, SetEnvironmentVariable,
                             TimerAction)
 from launch.event_handlers import OnProcessExit, OnProcessStart
@@ -28,9 +27,6 @@ STABLE_AFTER = 600.0
 EXIT_NOTE = "container_exit.json"
 # In data_dir: the node the watch of the container (mowbite_watch) ended it for, taken into EXIT_NOTE as stalled.
 WATCH_NOTE = "watch_exit.json"
-# Battery voltages that stand only in the parameter files of the logic; a driver that sets them on its board gets them
-# from there under the same names.
-BATTERY_VOLTAGES = ("battery_empty_voltage", "battery_full_voltage", "battery_critical_voltage")
 
 
 # Stands in for the nodes after a halt, so that the launch stays without a restart loop until SIGINT. It ends quietly
@@ -101,16 +97,6 @@ def journal_dir(path, data_dir, logger):
             logger.error(f"journal_dir {path} lies in data_dir {data_dir}: no journal")
             return ""
     return path
-
-
-# The battery voltages of the logic in the parameter files, the last file winning as for the node.
-def battery_voltages(files):
-    values = {}
-    for path in files:
-        with open(path) as f:
-            params = ((yaml.safe_load(f) or {}).get("mowbite_logic") or {}).get("ros__parameters") or {}
-        values.update({key: params[key] for key in BATTERY_VOLTAGES if key in params})
-    return values
 
 
 # The arguments every platform shares, after its own.

@@ -255,6 +255,8 @@ class Pose:
         return (self.linear * c - self.angular * (s * ax + c * ay), self.linear * s + self.angular * (c * ax - s * ay))
 
 
+# The blade turns at about 3000 rpm whatever percentage it was given (measured on the Tron, 2954 to 3060).
+BLADE_RPM = 3000
 FAST_SPEED_GAP = 0.075
 FAST_SPEED_RUN = 3
 FAST_SPEED_HOLD = 3.6
@@ -915,8 +917,8 @@ def main():
                                   for rpm in (-right_rpm, -left_rpm, 0))
                 if blocked or (host.silent(now) and not flags.get("cutter_holds", 0)):
                     cutter_percent = 0
-                # Assumed 2800 rpm at full speed, 0.8 A while turning (10 mA steps).
-                cutter = struct.pack("<hhhbb", 28 * cutter_percent, 80 if cutter_percent else 0, 2450,
+                # 0.8 A while turning (10 mA steps).
+                cutter = struct.pack("<hhhbb", BLADE_RPM if cutter_percent else 0, 80 if cutter_percent else 0, 2450,
                                      celsius(flags.get("blade_temperature", 30)), 0)
                 version = bytes([0, 6, 36, 0, 6, 34, 0, 0, 0])
                 send(mcu.fd, encode([(FROM_MCU, 5, battery), (FROM_MCU, 12, version),

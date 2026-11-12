@@ -19,6 +19,9 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import data_store  # noqa: E402
 import stack  # noqa: E402
 
+sys.path.insert(0, os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "launch"))
+import logic_params  # noqa: E402
+
 DRIVER_RESTARTS = 3
 # In data_dir: how the driver ended, written before it starts again.
 DRIVER_EXIT_NOTE = "driver_exit.json"
@@ -52,7 +55,7 @@ def launch_setup(context):
     # voltages of the logic and the arguments.
     driver_files = [arg("driver_params")] + ([arg("mower_params")] if arg("mower_params") else [])
     overrides = {"hold_file": os.path.join(data_dir, data_store.HOLD_FILE) if data_dir else "",
-                 **stack.battery_voltages(files)}
+                 **logic_params.battery_voltages(files)}
     for name in ("datum_lat", "datum_long", "datum_height"):
         value = number(arg(name), name)
         if value is not None:
