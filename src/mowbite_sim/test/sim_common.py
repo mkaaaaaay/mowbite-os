@@ -59,21 +59,32 @@ def sim_files(work):
             os.path.join(work, "data"))
 
 
-def sim_stack(work, mqtt_port, **arguments):
-    """sim.launch.py with its links and files in work; arguments add to or replace the launch arguments."""
+def without_sunset(data_dir):
+    """Settings of params.set in data_dir with dock_at_sunset 0: a run in the simulation keeps mowing past the real
+    sunset at its datum, which falls into working hours in winter."""
+    os.makedirs(os.path.join(data_dir, "params"), exist_ok=True)
+    with open(os.path.join(data_dir, "params", "mower_logic.json"), "w") as f:
+        json.dump({"dock_at_sunset": 0}, f)
+
+
+def sim_stack(work, mqtt_port, sunset=False, **arguments):
+    """sim.launch.py with its links and files in work; arguments add to or replace the launch arguments. Without sunset
+    the run ignores the sunset (without_sunset)."""
     state, flags, log, data = sim_files(work)
     values = {"link": os.path.join(work, "mcu"), "gnss_link": os.path.join(work, "gnss"),
               "imu_link": os.path.join(work, "imu"), "state": state, "flags": flags, "log": log, "data_dir": data,
               "mqtt_port": str(mqtt_port), **arguments}
+    if not sunset:
+        without_sunset(values["data_dir"])
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),
         launch_arguments=values.items())
 
 
-def sim_description(work, mqtt_port, **arguments):
+def sim_description(work, mqtt_port, sunset=False, **arguments):
     """The return value of generate_test_description for the stack of sim.launch.py alone."""
-    return launch.LaunchDescription([sim_stack(work, mqtt_port, **arguments),
+    return launch.LaunchDescription([sim_stack(work, mqtt_port, sunset, **arguments),
                                      launch_testing.actions.ReadyToTest()]), {}
 
 

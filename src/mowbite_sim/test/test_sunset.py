@@ -74,7 +74,7 @@ with open(CONFIG, "w") as f:
 
 
 def generate_test_description():
-    return sim_description(WORK, 18874, extra_config=CONFIG, datum_lat=str(LAT), datum_long=f"{LON:.6f}")
+    return sim_description(WORK, 18874, sunset=True, extra_config=CONFIG, datum_lat=str(LAT), datum_long=f"{LON:.6f}")
 
 
 class Probe(SimProbe):

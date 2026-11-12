@@ -33,7 +33,7 @@ from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import (LATCHED, ROSOUT, SimProbe, fake_xcore, loopback_group, read_json, sim_files,  # noqa: E402
-                        station_frame, write_json)
+                        station_frame, without_sunset, write_json)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_nx60i_home_")
 STATE, FLAGS, _, DATA = sim_files(WORK)
@@ -57,6 +57,7 @@ with open(EXTRA, "w") as f:
 
 
 def generate_test_description():
+    without_sunset(DATA)
     board = fake_xcore(GROUP_PORT, "--origin", str(DATUM[0]), str(DATUM[1]), "--flags", FLAGS, "--state", STATE)
     stack = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(FindPackageShare("mowbite_bringup").find("mowbite_bringup"),
