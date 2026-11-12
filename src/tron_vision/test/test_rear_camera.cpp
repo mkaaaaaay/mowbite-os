@@ -1,6 +1,12 @@
 #include <gtest/gtest.h>
 #include <linux/videodev2.h>
 
+#include <algorithm>
+#include <cerrno>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "fake_video_device.h"
 #include "test_util.h"
 #include "tron_vision/rear_camera.h"
@@ -20,11 +26,24 @@ struct RearRig {
     device.controls[V4L2_CID_EXPOSURE_ABSOLUTE] = {1, 5000, 313, V4L2_CTRL_FLAG_INACTIVE};
     device.controls[V4L2_CID_GAIN] = {0, 63, 10, 0};
     config.device = dir.Write("mowbite-rear", "");
+    config.control_retried = [this](const std::string& error, int tries, bool taken) {
+      retried.push_back(error + (taken ? ", taken on try " : ", failed on try ") + std::to_string(tries));
+    };
+  }
+  // S_CTRL calls the driver saw, the refused ones too.
+  size_t ControlWrites() const {
+    return static_cast<size_t>(
+        std::count(device.requests.begin(), device.requests.end(), static_cast<unsigned long>(VIDIOC_S_CTRL)));
   }
   test::TempDir dir;
   FakeVideoDevice device;
   RearCameraConfig config;
+  std::vector<std::string> retried;
 };
+
+std::string Refused(uint32_t id) {
+  return "set control " + std::to_string(id) + ": Broken pipe";
+}
 
 TEST(UvcRearCamera, OpensMjpegAtFullSize) {
   RearRig rig;
@@ -116,6 +135,79 @@ TEST(UvcRearCamera, NoManualExposureLeavesTheCameraAlone) {
   EXPECT_FALSE(camera.SetExposure({40, 20}, error));
   camera.Close();
   EXPECT_TRUE(rig.device.writes.empty());
+}
+
+// Right after the end of a stream the camera refuses a control now and then (EPIPE): the write is tried again.
+TEST(UvcRearCamera, ARefusedControlIsTriedAgain) {
+  RearRig rig;
+  UvcRearCamera camera(rig.config, &rig.device);
+  std::string error;
+  ASSERT_TRUE(camera.Open(error)) << error;
+  ExposureRange range;
+  ExposureSetting now;
+  // The switch to manual and the exposure time pass, the gain only the second time.
+  rig.device.set_errnos = {0, 0, EPIPE};
+  ASSERT_TRUE(camera.ManualExposure(range, now, error)) << error;
+  ASSERT_TRUE(camera.SetExposure({40, 20}, error)) << error;
+  EXPECT_TRUE(error.empty());
+  EXPECT_EQ(rig.ControlWrites(), 4U);
+  EXPECT_EQ(rig.device.writes.back(), (std::pair<uint32_t, int>{V4L2_CID_GAIN, 20}));
+  EXPECT_EQ(rig.retried, std::vector<std::string>{Refused(V4L2_CID_GAIN) + ", taken on try 2"});
+}
+
+TEST(UvcRearCamera, ARefusalThatStaysFails) {
+  RearRig rig;
+  UvcRearCamera camera(rig.config, &rig.device);
+  std::string error;
+  ASSERT_TRUE(camera.Open(error)) << error;
+  ExposureRange range;
+  ExposureSetting now;
+  ASSERT_TRUE(camera.ManualExposure(range, now, error)) << error;
+  rig.device.set_errnos = {0, EPIPE, EPIPE, EPIPE};
+  EXPECT_FALSE(camera.SetExposure({40, 20}, error));
+  EXPECT_EQ(error, Refused(V4L2_CID_GAIN));
+  // The switch, the exposure time and three tries of the gain, which keeps its value.
+  EXPECT_EQ(rig.ControlWrites(), 5U);
+  EXPECT_EQ(rig.device.controls[V4L2_CID_GAIN].value, 10);
+  EXPECT_EQ(rig.retried, std::vector<std::string>{Refused(V4L2_CID_GAIN) + ", failed on try 3"});
+}
+
+// A camera that is gone must not hold up the fault.
+TEST(UvcRearCamera, OtherErrorsAreNotTriedAgain) {
+  RearRig rig;
+  UvcRearCamera camera(rig.config, &rig.device);
+  std::string error;
+  ASSERT_TRUE(camera.Open(error)) << error;
+  ExposureRange range;
+  ExposureSetting now;
+  ASSERT_TRUE(camera.ManualExposure(range, now, error)) << error;
+  rig.device.set_errno = ENODEV;
+  EXPECT_FALSE(camera.SetExposure({40, 20}, error));
+  EXPECT_EQ(error, "set control " + std::to_string(V4L2_CID_EXPOSURE_ABSOLUTE) + ": No such device");
+  EXPECT_EQ(rig.ControlWrites(), 2U);
+  EXPECT_TRUE(rig.retried.empty());
+}
+
+TEST(UvcRearCamera, TheSwitchToManualAndTheWayBackAreTriedAgain) {
+  RearRig rig;
+  UvcRearCamera camera(rig.config, &rig.device);
+  std::string error;
+  ASSERT_TRUE(camera.Open(error)) << error;
+  ExposureRange range;
+  ExposureSetting now;
+  rig.device.set_errnos = {EPIPE};
+  ASSERT_TRUE(camera.ManualExposure(range, now, error)) << error;
+  ASSERT_TRUE(camera.SetExposure({40, 20}, error)) << error;
+  // On the way back the exposure time and the automatic mode are refused once each.
+  rig.device.set_errnos = {EPIPE, 0, 0, EPIPE};
+  camera.Close();
+  EXPECT_EQ(rig.device.controls[V4L2_CID_EXPOSURE_ABSOLUTE].value, 313);
+  EXPECT_EQ(rig.device.controls[V4L2_CID_GAIN].value, 10);
+  EXPECT_EQ(rig.device.controls[V4L2_CID_EXPOSURE_AUTO].value, V4L2_EXPOSURE_APERTURE_PRIORITY);
+  const std::vector<std::string> retried = {Refused(V4L2_CID_EXPOSURE_AUTO) + ", taken on try 2",
+                                            Refused(V4L2_CID_EXPOSURE_ABSOLUTE) + ", taken on try 2",
+                                            Refused(V4L2_CID_EXPOSURE_AUTO) + ", taken on try 2"};
+  EXPECT_EQ(rig.retried, retried);
 }
 
 }  // namespace

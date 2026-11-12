@@ -136,6 +136,11 @@ class FakeVideoDevice : public VideoDevice {
         const auto c = controls.find(control->id);
         if (c == controls.end()) return Error(EINVAL);
         if (control->value < c->second.min || control->value > c->second.max) return Error(ERANGE);
+        if (!set_errnos.empty()) {
+          const int code = set_errnos.front();
+          set_errnos.pop_front();
+          if (code != 0) return Error(code);
+        }
         if (set_errno != 0) return Error(set_errno);
         c->second.value = control->value;
         writes.emplace_back(control->id, control->value);
@@ -204,6 +209,8 @@ class FakeVideoDevice : public VideoDevice {
   int streamon_errno = 0;
   // Not 0: S_CTRL fails with it.
   int set_errno = 0;
+  // The next calls of S_CTRL fail with these in turn, a 0 lets its call through.
+  std::deque<int> set_errnos;
   struct Control {
     int min = 0;
     int max = 0;

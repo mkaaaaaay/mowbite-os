@@ -2,6 +2,7 @@
 #define TRON_VISION_REAR_CAMERA_H
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <utility>
 
@@ -29,9 +30,14 @@ struct RearCameraConfig {
   uint32_t buffers = 4;
   // Other processes that have a device open; Open refuses the node while one does. Empty: no check.
   ProcessesUsing processes_using;
+  // Told of every control write that took more than one try: the error of the tries before, their count and whether
+  // the last one was taken. Empty: nobody is told.
+  std::function<void(const std::string& error, int tries, bool taken)> control_retried;
 };
 
-// The exposure controls of UVC; Close() gives them back the values they had before ManualExposure().
+// The exposure controls of UVC; Close() gives them back the values they had before ManualExposure(). A write the
+// camera refuses (EPIPE, seen right after the end of a stream) is tried again after a pause, any other error counts
+// at once.
 class UvcRearCamera : public DockCamera {
  public:
   // Without a device the real system calls are used.
@@ -48,6 +54,8 @@ class UvcRearCamera : public DockCamera {
   bool SetExposure(const ExposureSetting& setting, std::string& error) override;
 
  private:
+  bool Write(uint32_t id, int value, std::string& error);
+
   RearCameraConfig config_;
   V4l2Capture capture_;
   // Values before the switch to manual, written back on Close().

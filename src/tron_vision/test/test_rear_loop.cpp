@@ -118,6 +118,10 @@ class FakeDockCamera : public DockCamera {
     return true;
   }
   bool SetExposure(const ExposureSetting& setting, std::string& error) override {
+    if (fail_set_from >= 0 && settings.size() >= static_cast<size_t>(fail_set_from)) {
+      error = "set control 9963795: Broken pipe";
+      return false;
+    }
     settings.push_back(setting);
     if (!manual) error = "exposure not manual";
     return manual;
@@ -132,6 +136,8 @@ class FakeDockCamera : public DockCamera {
   bool fail_open = false;
   bool fail_start = false;
   bool fail_next = false;
+  // Not negative: SetExposure fails once this many settings went through.
+  int fail_set_from = -1;
   // What the calls cost on the clock of the test.
   double open_s = 0.0;
   double start_s = 0.0;
@@ -485,6 +491,26 @@ TEST(RearLoop, ExposureFollowsTheMarker) {
   EXPECT_EQ(measured[0].exposure.exposure, 50);
   EXPECT_EQ(measured[0].exposure.gain, 10);
   EXPECT_EQ(measured[0].reason, DockReason::kTooBright);
+}
+
+// A setting the camera refuses for good ends the request, at the start as well as on a step of the rule.
+TEST(RearLoop, ARefusedExposureIsAFault) {
+  for (int from = 0; from < 2; from++) {
+    Rig rig;
+    rig.camera.jpeg = &Drawn().glowing;
+    rig.camera.fail_set_from = from;
+    rig.Make();
+    rig.asking = true;
+    ASSERT_TRUE(rig.RunUntil(101.5));
+    const std::vector<DockReport> fault = rig.Of(DockState::kFault);
+    ASSERT_FALSE(fault.empty()) << from;
+    EXPECT_EQ(fault[0].reason, DockReason::kNoSignal);
+    EXPECT_EQ(fault[0].detail, "exposure: set control 9963795: Broken pipe");
+    EXPECT_EQ(rig.Of(DockState::kMeasuring).empty(), from == 0) << from;
+    EXPECT_EQ(rig.camera.settings.size(), static_cast<size_t>(from));
+    EXPECT_FALSE(rig.camera.open);
+    EXPECT_FALSE(rig.Armed());
+  }
 }
 
 TEST(RearLoop, CameraWithoutManualExposureKeepsItsOwn) {

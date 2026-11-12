@@ -30,6 +30,11 @@ std::string Joined(const std::string& a, const std::string& b) {
   return a.empty() ? b : a + ", " + b;
 }
 
+// End of a log line after others of its kind were held back.
+std::string More(int suppressed) {
+  return suppressed > 0 ? " (" + std::to_string(suppressed) + " more since)" : "";
+}
+
 diagnostic_msgs::msg::KeyValue Value(const std::string& key, const std::string& value) {
   diagnostic_msgs::msg::KeyValue kv;
   kv.key = key;
@@ -128,6 +133,9 @@ RearNode::RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seam
   RearCameraConfig camera;
   camera.device = declare_parameter("device", camera.device);
   camera.processes_using = tron::ProcessesUsing;
+  camera.control_retried = [this](const std::string& error, int tries, bool taken) {
+    LogControl(error, tries, taken);
+  };
   if (seams.adjust) seams.adjust(config, camera);
   camera.width = config.width;
   camera.height = config.height;
@@ -167,6 +175,8 @@ RearNode::~RearNode() {
   running_ = false;
   request_cv_.notify_all();
   if (thread_.joinable()) thread_.join();
+  // Before the members go: closing the camera may log a control it wrote more than once.
+  loop_->Shutdown();
 }
 
 void RearNode::OnRequest() {
@@ -275,9 +285,15 @@ void RearNode::Log(const DockReport& report, double now) {
   logged_ = line;
   int suppressed = 0;
   if (!log_gate_.Allow(line, now, suppressed)) return;
-  const std::string more = suppressed > 0 ? " (" + std::to_string(suppressed) + " more since)" : "";
   const std::string detail = report.detail.empty() ? "" : ": " + report.detail;
-  RCLCPP_INFO(get_logger(), "%s%s%s", line.c_str(), detail.c_str(), more.c_str());
+  RCLCPP_INFO(get_logger(), "%s%s%s", line.c_str(), detail.c_str(), More(suppressed).c_str());
+}
+
+void RearNode::LogControl(const std::string& error, int tries, bool taken) {
+  int suppressed = 0;
+  if (!log_gate_.Allow(taken ? "control taken" : "control refused", MonotonicSeconds(), suppressed)) return;
+  RCLCPP_WARN(get_logger(), "%s, %s on try %d%s", error.c_str(), taken ? "taken" : "failed", tries,
+              More(suppressed).c_str());
 }
 
 void RearNode::PublishCamera() {
@@ -291,9 +307,8 @@ void RearNode::PublishCamera() {
   cameras_pub_->publish(camera_entry_);
   int suppressed = 0;
   if (!log_gate_.Allow("camera " + reason, MonotonicSeconds(), suppressed)) return;
-  const std::string more = suppressed > 0 ? " (" + std::to_string(suppressed) + " more since)" : "";
   const std::string why = now.available ? "available" : reason + ": " + now.detail;
-  RCLCPP_INFO(get_logger(), "Camera %s%s", why.c_str(), more.c_str());
+  RCLCPP_INFO(get_logger(), "Camera %s%s", why.c_str(), More(suppressed).c_str());
 }
 
 void RearNode::PublishPicture() {

@@ -2,9 +2,20 @@
 
 #include <linux/videodev2.h>
 
+#include <array>
+#include <cerrno>
+#include <chrono>
 #include <filesystem>
+#include <thread>
 
 namespace tron_vision {
+
+namespace {
+
+// Pauses before the further tries of a control write the camera refused.
+constexpr std::array<int, 2> kRetryAfterMs = {20, 40};
+
+}  // namespace
 
 bool UvcRearCamera::Present(std::string& error) {
   std::error_code ec;
@@ -33,9 +44,9 @@ void UvcRearCamera::Close() {
   if (manual_) {
     // Automatic last: a camera in automatic mode may refuse the manual values.
     std::string ignored;
-    capture_.SetControl(V4L2_CID_EXPOSURE_ABSOLUTE, saved_.exposure, ignored);
-    if (has_gain_) capture_.SetControl(V4L2_CID_GAIN, saved_.gain, ignored);
-    capture_.SetControl(V4L2_CID_EXPOSURE_AUTO, saved_mode_, ignored);
+    Write(V4L2_CID_EXPOSURE_ABSOLUTE, saved_.exposure, ignored);
+    if (has_gain_) Write(V4L2_CID_GAIN, saved_.gain, ignored);
+    Write(V4L2_CID_EXPOSURE_AUTO, saved_mode_, ignored);
     manual_ = false;
   }
   capture_.Close();
@@ -56,7 +67,7 @@ bool UvcRearCamera::ManualExposure(ExposureRange& range, ExposureSetting& now, s
   ControlRange gain{1, 1, 1};
   std::string no_gain;
   has_gain_ = capture_.QueryControl(V4L2_CID_GAIN, gain, no_gain);
-  if (!capture_.SetControl(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL, error)) return false;
+  if (!Write(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL, error)) return false;
   manual_ = true;
   saved_mode_ = mode.value;
   saved_ = {exposure.value, gain.value};
@@ -70,8 +81,23 @@ bool UvcRearCamera::SetExposure(const ExposureSetting& setting, std::string& err
     error = "exposure not manual";
     return false;
   }
-  return capture_.SetControl(V4L2_CID_EXPOSURE_ABSOLUTE, setting.exposure, error) &&
-         (!has_gain_ || capture_.SetControl(V4L2_CID_GAIN, setting.gain, error));
+  return Write(V4L2_CID_EXPOSURE_ABSOLUTE, setting.exposure, error) &&
+         (!has_gain_ || Write(V4L2_CID_GAIN, setting.gain, error));
+}
+
+bool UvcRearCamera::Write(uint32_t id, int value, std::string& error) {
+  std::string failure;
+  for (size_t attempt = 1;; attempt++) {
+    int code = 0;
+    const bool written = capture_.SetControl(id, value, failure, &code);
+    if (!written && code == EPIPE && attempt <= kRetryAfterMs.size()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(kRetryAfterMs[attempt - 1]));
+      continue;
+    }
+    if (attempt > 1 && config_.control_retried) config_.control_retried(failure, static_cast<int>(attempt), written);
+    if (!written) error = failure;
+    return written;
+  }
 }
 
 }  // namespace tron_vision

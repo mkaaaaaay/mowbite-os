@@ -61,6 +61,8 @@ class RearNode : public rclcpp::Node {
   void Publish(const DockReport& report);
   void PublishPixels(const DockReport& report, const builtin_interfaces::msg::Time& stamp);
   void Log(const DockReport& report, double now);
+  // A control the camera took only on a later try, or not at all.
+  void LogControl(const std::string& error, int tries, bool taken);
   void PublishCamera();
   void PublishPicture();
 

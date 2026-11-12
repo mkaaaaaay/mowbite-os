@@ -142,7 +142,8 @@ class V4l2Capture {
 
   // Range and value of a control of the open node; false if it has none or it is disabled.
   bool QueryControl(uint32_t id, ControlRange& range, std::string& error);
-  bool SetControl(uint32_t id, int value, std::string& error);
+  // `code` takes the errno of a write the driver refused, 0 otherwise.
+  bool SetControl(uint32_t id, int value, std::string& error, int* code = nullptr);
 
  private:
   bool Fail(std::string message, std::string& error);

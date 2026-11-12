@@ -287,12 +287,18 @@ bool V4l2Capture::QueryControl(uint32_t id, ControlRange& range, std::string& er
   return true;
 }
 
-bool V4l2Capture::SetControl(uint32_t id, int value, std::string& error) {
+bool V4l2Capture::SetControl(uint32_t id, int value, std::string& error, int* code) {
   v4l2_control control{};
   control.id = id;
   control.value = value;
-  if (fd_ < 0 || device_->Ioctl(fd_, VIDIOC_S_CTRL, &control) < 0) {
-    error = fd_ < 0 ? "camera not open" : ErrnoText("set control " + std::to_string(id));
+  if (code != nullptr) *code = 0;
+  if (fd_ < 0) {
+    error = "camera not open";
+    return false;
+  }
+  if (device_->Ioctl(fd_, VIDIOC_S_CTRL, &control) < 0) {
+    if (code != nullptr) *code = errno;
+    error = ErrnoText("set control " + std::to_string(id));
     return false;
   }
   return true;
