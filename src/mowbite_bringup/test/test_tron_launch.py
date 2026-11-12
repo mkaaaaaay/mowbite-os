@@ -88,19 +88,19 @@ def test_no_camera_without_the_own_driver(tmp_path, monkeypatch, hardware):
 def test_another_value_starts_nothing(tmp_path, monkeypatch):
     assert not {"tron_stereo_node", "mowbite_camera_node"} & executables(tmp_path, monkeypatch, stereo="yes")
     assert not {"tron_side_node", "mowbite_camera_node"} & executables(tmp_path, monkeypatch, right="yes")
-    assert "tron_rear_node" not in executables(tmp_path, monkeypatch, rear="1")
+    assert not {"tron_rear_node", "mowbite_camera_node"} & executables(tmp_path, monkeypatch, rear="1")
 
 
-# The camera service comes with a camera that has a picture on hw/cameras and only then; the dock marker has none.
-@pytest.mark.parametrize("switches", [{"stereo": "on"}, {"vision": "on"}, {"right": "on"},
-                                      {"stereo": "on", "vision": "on"}, {"stereo": "on", "rear": "on"}])
+# The camera service comes with any camera process, each has a picture on hw/cameras, and only then.
+@pytest.mark.parametrize("switches", [{"stereo": "on"}, {"vision": "on"}, {"right": "on"}, {"rear": "on"},
+                                      {"stereo": "on", "vision": "on", "right": "on", "rear": "on"}])
 def test_the_camera_service_starts_with_a_camera(tmp_path, monkeypatch, switches):
     assert "mowbite_camera_node" in executables(tmp_path, monkeypatch, **switches)
 
 
 def test_no_camera_service_without_a_camera(tmp_path, monkeypatch):
     assert "mowbite_camera_node" not in executables(tmp_path, monkeypatch)
-    assert "mowbite_camera_node" not in executables(tmp_path, monkeypatch, rear="on")
     for hardware in ("read", "false"):
-        started = executables(tmp_path, monkeypatch, hardware=hardware, stereo="on", vision="on", right="on")
+        started = executables(tmp_path, monkeypatch, hardware=hardware, stereo="on", vision="on", right="on",
+                              rear="on")
         assert started and "mowbite_camera_node" not in started

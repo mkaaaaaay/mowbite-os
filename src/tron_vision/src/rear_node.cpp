@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
-#include <mowbite_msgs/msg/camera.hpp>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -101,6 +100,7 @@ std::string DockReasonText(DockReason reason) {
 
 RearNode::RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seams)
     : rclcpp::Node("tron_rear", options) {
+  using mowbite_msgs::msg::Camera;
   RearConfig config;
   ReadCalibration(*this, config);
   config.request_hold_s = DockMarker::REQUEST_HOLD_S;
@@ -121,6 +121,9 @@ RearNode::RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seam
       static_cast<size_t>(declare_parameter("max_rss_mb", static_cast<int64_t>(config.max_rss_bytes >> 20))) << 20;
   config.temp_file = FindThermalZone("/sys/class/thermal", "soc-thermal");
   if (config.temp_file.empty()) RCLCPP_WARN(get_logger(), "No soc-thermal zone: no pause when hot");
+  config.view.max_rate = declare_parameter("jpeg_max_rate", config.view.max_rate);
+  const auto max_kb = static_cast<int64_t>(config.view.max_bytes / 1024);
+  config.view.max_bytes = static_cast<size_t>(declare_parameter("jpeg_max_kb", max_kb)) * 1024;
 
   RearCameraConfig camera;
   camera.device = declare_parameter("device", camera.device);
@@ -129,12 +132,25 @@ RearNode::RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seam
   camera.width = config.width;
   camera.height = config.height;
   if (!config.not_set_up.empty()) RCLCPP_WARN(get_logger(), "Not set up: %s", config.not_set_up.c_str());
+  camera_entry_.id = config.camera_id;
+  camera_entry_.name = "Rear camera";
+  // The name the start file gives stack.own_process, so the OS can tie an exit note to this camera.
+  camera_entry_.process = declare_parameter("process", std::string("rear"));
+  camera_entry_.kind = Camera::KIND_REAR;
+  camera_entry_.position = Camera::POSITION_REAR;
+  camera_entry_.width = ScaledSize(config.width, config.view_scale);
+  camera_entry_.height = ScaledSize(config.height, config.view_scale);
+  camera_entry_.detections = false;
+  camera_entry_.protocols = {Camera::PROTOCOL_MJPEG};
 
   // The only publishers and the only subscription of this process; test_rear_node checks the lists.
   const auto reliable = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
   marker_pub_ = create_publisher<DockMarker>("hw/dock_marker", reliable);
   pixels_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
       "tron_rear/marker_pixels", rclcpp::QoS(rclcpp::KeepLast(10)).best_effort());
+  cameras_pub_ = create_publisher<Camera>("hw/cameras", rclcpp::QoS(rclcpp::KeepLast(4)).reliable().transient_local());
+  picture_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>("camera/" + camera_entry_.id + "/jpeg",
+                                                                     rclcpp::QoS(rclcpp::KeepLast(1)).best_effort());
   request_sub_ = create_subscription<std_msgs::msg::Empty>("hw/dock_marker_request", reliable,
                                                            [this](const std_msgs::msg::Empty&) { OnRequest(); });
 
@@ -178,7 +194,11 @@ void RearNode::Run() {
   // Signed after each step: a step that hangs in the camera ends the process.
   mowbite_watch::Watch watch("tron_rear_loop", kWatchLimit);
   while (running_) {
+    // The OS subscribes to the pictures only while a viewer watches.
+    loop_->SetViewWanted(picture_pub_->get_subscription_count() > 0);
     const bool go_on = loop_->Step();
+    if (loop_->Picture().Count() != published_pictures_) PublishPicture();
+    PublishCamera();
     watch.Sign();
     if (!go_on) {
       exit_code_ = loop_->ExitCode();
@@ -258,6 +278,33 @@ void RearNode::Log(const DockReport& report, double now) {
   const std::string more = suppressed > 0 ? " (" + std::to_string(suppressed) + " more since)" : "";
   const std::string detail = report.detail.empty() ? "" : ": " + report.detail;
   RCLCPP_INFO(get_logger(), "%s%s%s", line.c_str(), detail.c_str(), more.c_str());
+}
+
+void RearNode::PublishCamera() {
+  const ViewAvailability now = loop_->Viewable();
+  const std::string reason = DockReasonText(now.reason);
+  if (camera_published_ && now.available == camera_entry_.available && reason == camera_entry_.reason) return;
+  camera_published_ = true;
+  camera_entry_.available = now.available;
+  camera_entry_.reason = reason;
+  camera_entry_.detail = now.detail;
+  cameras_pub_->publish(camera_entry_);
+  int suppressed = 0;
+  if (!log_gate_.Allow("camera " + reason, MonotonicSeconds(), suppressed)) return;
+  const std::string more = suppressed > 0 ? " (" + std::to_string(suppressed) + " more since)" : "";
+  const std::string why = now.available ? "available" : reason + ": " + now.detail;
+  RCLCPP_INFO(get_logger(), "Camera %s%s", why.c_str(), more.c_str());
+}
+
+void RearNode::PublishPicture() {
+  const BoundedJpeg& picture = loop_->Picture();
+  published_pictures_ = picture.Count();
+  sensor_msgs::msg::CompressedImage msg;
+  msg.header.stamp = now();
+  msg.header.frame_id = camera_entry_.id;
+  msg.format = "jpeg";
+  msg.data = picture.Jpeg();
+  picture_pub_->publish(msg);
 }
 
 }  // namespace tron_vision

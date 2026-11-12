@@ -157,16 +157,28 @@ struct Rig {
     guard = std::make_unique<CrashGuard>(config.marker_dir, dir.Path() + "/crash", dir.Path() + "/boot_id");
     loop = std::make_unique<RearLoop>(
         config, camera, *guard, [this] { return clock; }, [this] { return request_at; },
-        [this](double s) { clock += s; }, [this](const DockReport& r) { reports.push_back(r); });
+        [this](double s) { clock += s; },
+        [this](const DockReport& r) {
+          reports.push_back(r);
+          pictures_at_report.push_back(loop->Picture().Count());
+        });
     return *loop;
   }
-  // Steps until the clock reaches `until`; while `asking`, a request every second as the logic sends them.
+  // One step; while `asking`, a request every second as the logic sends them, while `viewing` a viewer.
+  bool Step() {
+    if (asking && (request_at < 0.0 || clock - request_at >= 1.0)) request_at = clock;
+    loop->SetViewWanted(viewing);
+    return loop->Step();
+  }
+  // Steps until the clock reaches `until`.
   bool RunUntil(double until) {
     while (clock < until) {
-      if (asking && (request_at < 0.0 || clock - request_at >= 1.0)) request_at = clock;
-      if (!loop->Step()) return false;
+      if (!Step()) return false;
     }
     return true;
+  }
+  uint64_t Pictures() const {
+    return loop->Picture().Count();
   }
   std::vector<DockReport> Of(DockState state) const {
     std::vector<DockReport> out;
@@ -183,11 +195,14 @@ struct Rig {
   double clock = 100.0;
   double request_at = -1.0;
   bool asking = false;
+  bool viewing = false;
   RearConfig config;
   FakeDockCamera camera{clock};
   std::unique_ptr<CrashGuard> guard;
   std::unique_ptr<RearLoop> loop;
   std::vector<DockReport> reports;
+  // The count of pictures when each report went out.
+  std::vector<uint64_t> pictures_at_report;
 };
 
 TEST(RearLoop, OffReportsOncePerPeriodAndOpensNothing) {
@@ -510,6 +525,255 @@ TEST(RearLoop, MemoryOverTheLimitEndsTheProcess) {
   EXPECT_EQ(rig.reports.back().detail.rfind("resident memory ", 0), 0U) << rig.reports.back().detail;
   EXPECT_FALSE(rig.camera.open);
   EXPECT_FALSE(rig.Armed());
+}
+
+// A viewer alone: the camera opens with its own exposure, pictures of 720x405 come at most 5 a second, the reports
+// stay those of OFF, and two seconds after the last sign of the viewer the camera closes.
+TEST(RearLoop, AViewerAloneGetsPicturesWithTheExposureOfTheCamera) {
+  Rig rig;
+  rig.camera.jpeg = &Drawn().marker;
+  rig.Make();
+  rig.viewing = true;
+  ASSERT_TRUE(rig.RunUntil(102.0));
+  EXPECT_EQ(rig.camera.calls, "open start ");
+  EXPECT_FALSE(rig.camera.manual);
+  EXPECT_TRUE(rig.camera.settings.empty());
+  EXPECT_TRUE(rig.Armed());
+  EXPECT_GE(rig.Pictures(), 9U);
+  EXPECT_LE(rig.Pictures(), 11U);
+  EXPECT_EQ(rig.loop->Picture().Width(), 720U);
+  EXPECT_EQ(rig.loop->Picture().Height(), 405U);
+  EXPECT_LE(rig.loop->Picture().Jpeg().size(), 100U * 1024);
+  EXPECT_TRUE(rig.loop->Viewable().available);
+  ASSERT_GE(rig.reports.size(), 2U);
+  for (const DockReport& r : rig.reports) {
+    EXPECT_EQ(r.state, DockState::kOff);
+    EXPECT_EQ(r.reason, DockReason::kNone);
+  }
+  const double last = rig.clock;
+  ASSERT_TRUE(rig.Step());
+  rig.viewing = false;
+  double closed = 0.0;
+  while (rig.camera.open && rig.clock < last + 5.0) {
+    closed = rig.clock;
+    ASSERT_TRUE(rig.Step());
+  }
+  EXPECT_NEAR(closed, last + 2.0, kFramePeriod + 1e-6);
+  EXPECT_EQ(rig.camera.calls, "open start stop close ");
+  EXPECT_FALSE(rig.Armed());
+}
+
+// The live picture needs no calibration; the reports still say NOT_SET_UP.
+TEST(RearLoop, AViewerWithoutCalibration) {
+  Rig rig;
+  rig.config.not_set_up = "no lens";
+  rig.camera.jpeg = &Drawn().marker;
+  rig.Make();
+  rig.viewing = true;
+  ASSERT_TRUE(rig.RunUntil(101.0));
+  EXPECT_EQ(rig.camera.calls, "open start ");
+  EXPECT_GE(rig.Pictures(), 4U);
+  EXPECT_TRUE(rig.loop->Viewable().available);
+  ASSERT_FALSE(rig.reports.empty());
+  EXPECT_EQ(rig.reports.back().state, DockState::kOff);
+  EXPECT_EQ(rig.reports.back().reason, DockReason::kNotSetUp);
+}
+
+// A request takes the camera from the viewer: it opens anew with the manual exposure of the marker and measures; when
+// the requests run out, OFF, then the viewer gets the camera back with its own exposure.
+TEST(RearLoop, ARequestGoesFirstAndTheViewerComesBack) {
+  Rig rig;
+  rig.camera.jpeg = &Drawn().marker;
+  rig.Make();
+  rig.viewing = true;
+  ASSERT_TRUE(rig.RunUntil(101.0));
+  const uint64_t before = rig.Pictures();
+  rig.asking = true;
+  ASSERT_TRUE(rig.RunUntil(103.0));
+  EXPECT_EQ(rig.camera.calls, "open start stop close open start ");
+  EXPECT_TRUE(rig.camera.manual);
+  EXPECT_FALSE(rig.camera.settings.empty());
+  EXPECT_GT(rig.Pictures(), before + 5);
+  const std::vector<DockReport> measured = rig.Of(DockState::kMeasuring);
+  ASSERT_GE(measured.size(), 20U);
+  for (const DockReport& r : measured) {
+    EXPECT_TRUE(r.pose.valid);
+    EXPECT_TRUE(r.manual_exposure);
+  }
+  rig.asking = false;
+  ASSERT_TRUE(rig.RunUntil(106.5));
+  const std::vector<DockReport> off = rig.Of(DockState::kOff);
+  ASSERT_FALSE(off.empty());
+  EXPECT_GT(off.back().stamp, measured.back().stamp);
+  EXPECT_EQ(rig.reports.back().state, DockState::kOff);
+  EXPECT_EQ(rig.camera.calls, "open start stop close open start stop close open start ");
+  EXPECT_FALSE(rig.camera.manual);
+  const uint64_t after_off = rig.Pictures();
+  ASSERT_TRUE(rig.RunUntil(107.5));
+  EXPECT_GE(rig.Pictures(), after_off + 4);
+}
+
+// For the same frames and clock the reports with a viewer are those without one, up to OFF after the requests.
+TEST(RearLoop, AViewerChangesNoReport) {
+  std::vector<std::vector<DockReport>> runs;
+  for (bool viewing : {false, true}) {
+    Rig rig;
+    rig.camera.jpeg = &Drawn().marker;
+    rig.Make();
+    rig.viewing = viewing;
+    rig.asking = true;
+    while (rig.clock < 101.0) {
+      ASSERT_TRUE(rig.Step());
+      // Glowing for a while, so that the exposure moves too.
+      rig.camera.jpeg = rig.clock < 100.5 ? &Drawn().marker : &Drawn().glowing;
+    }
+    rig.camera.jpeg = &Drawn().marker;
+    ASSERT_TRUE(rig.RunUntil(102.0));
+    rig.asking = false;
+    ASSERT_TRUE(rig.RunUntil(106.0));
+    EXPECT_EQ(rig.Pictures() > 0, viewing);
+    std::vector<DockReport> until_off;
+    for (const DockReport& r : rig.reports) {
+      until_off.push_back(r);
+      if (r.state == DockState::kOff) break;
+    }
+    ASSERT_EQ(until_off.back().state, DockState::kOff);
+    runs.push_back(until_off);
+  }
+  ASSERT_EQ(runs[0].size(), runs[1].size());
+  for (size_t i = 0; i < runs[0].size(); i++) {
+    const DockReport& a = runs[0][i];
+    const DockReport& b = runs[1][i];
+    EXPECT_EQ(a.state, b.state) << i;
+    EXPECT_EQ(a.stamp, b.stamp) << i;
+    EXPECT_EQ(a.reason, b.reason) << i;
+    EXPECT_EQ(a.detail, b.detail) << i;
+    EXPECT_EQ(a.pose.valid, b.pose.valid) << i;
+    EXPECT_EQ(a.exposure.exposure, b.exposure.exposure) << i;
+    EXPECT_EQ(a.exposure.gain, b.exposure.gain) << i;
+  }
+}
+
+// While measuring, the picture of a frame comes after its report, also from frames the evaluation drops; a broken
+// image gives none.
+TEST(RearLoop, PicturesWhileMeasuringComeAfterTheReport) {
+  Rig rig;
+  rig.config.eval_rate = 2.0;
+  rig.camera.jpeg = &Drawn().marker;
+  rig.Make();
+  rig.viewing = true;
+  rig.asking = true;
+  int with_report = 0;
+  int without_report = 0;
+  while (rig.clock < 102.0) {
+    const uint64_t pictures = rig.Pictures();
+    const size_t reports = rig.reports.size();
+    ASSERT_TRUE(rig.Step());
+    if (rig.Pictures() == pictures) continue;
+    if (rig.reports.size() == reports) {
+      without_report++;
+      continue;
+    }
+    with_report++;
+    EXPECT_EQ(rig.reports.back().state, DockState::kMeasuring);
+    EXPECT_EQ(rig.pictures_at_report.back(), pictures);
+  }
+  EXPECT_GE(with_report, 1);
+  EXPECT_GE(without_report, 5);
+  rig.camera.jpeg = &Drawn().broken;
+  const uint64_t pictures = rig.Pictures();
+  ASSERT_TRUE(rig.RunUntil(102.4));
+  EXPECT_EQ(rig.Pictures(), pictures);
+}
+
+// Failures while the viewer alone has the camera: NO_SIGNAL for the viewer, three attempts five seconds apart, never
+// a FAULT; a new viewing starts with three attempts again.
+TEST(RearLoop, FailuresOfTheViewerAreNoFault) {
+  for (int which = 0; which < 4; which++) {
+    Rig rig;
+    rig.camera.jpeg = which == 3 ? &Drawn().broken : which == 2 ? nullptr : &Drawn().marker;
+    rig.camera.fail_open = which == 0;
+    rig.camera.fail_start = which == 1;
+    rig.Make();
+    rig.viewing = true;
+    ASSERT_TRUE(rig.RunUntil(100.5 + (which == 2 ? 3.0 : 0.0)));
+    const ViewAvailability view = rig.loop->Viewable();
+    EXPECT_FALSE(view.available) << which;
+    EXPECT_EQ(view.reason, DockReason::kNoSignal) << which;
+    const std::vector<std::string> details = {"open /dev/mowbite-rear: Device or resource busy",
+                                              "stream on: Input/output error", "no image within 3.0 s",
+                                              "broken images: "};
+    EXPECT_EQ(view.detail.rfind(details[which], 0), 0U) << view.detail;
+    EXPECT_FALSE(rig.camera.open);
+    EXPECT_FALSE(rig.Armed());
+    ASSERT_TRUE(rig.RunUntil(125.0));
+    const auto opens = [&rig] {
+      size_t n = 0;
+      for (size_t at = rig.camera.calls.find("open"); at != std::string::npos;
+           at = rig.camera.calls.find("open", at + 1)) {
+        n++;
+      }
+      return n;
+    };
+    EXPECT_EQ(opens(), 3U) << which << ": " << rig.camera.calls;
+    EXPECT_EQ(rig.Pictures(), 0U);
+    for (const DockReport& r : rig.reports) {
+      EXPECT_EQ(r.state, DockState::kOff);
+      EXPECT_EQ(r.reason, DockReason::kNone);
+    }
+    rig.viewing = false;
+    ASSERT_TRUE(rig.RunUntil(128.0));
+    EXPECT_TRUE(rig.loop->Viewable().available);
+    rig.viewing = true;
+    ASSERT_TRUE(rig.RunUntil(128.5));
+    EXPECT_EQ(opens(), 4U) << which << ": " << rig.camera.calls;
+  }
+}
+
+TEST(RearLoop, TooHotStopsTheViewer) {
+  Rig rig;
+  rig.camera.jpeg = &Drawn().marker;
+  rig.config.temp_file = rig.dir.Write("temp", "60000\n");
+  rig.config.check_s = 0.1;
+  rig.Make();
+  rig.viewing = true;
+  ASSERT_TRUE(rig.RunUntil(100.5));
+  EXPECT_TRUE(rig.camera.open);
+  rig.dir.Write("temp", "81000\n");
+  ASSERT_TRUE(rig.RunUntil(100.8));
+  EXPECT_FALSE(rig.camera.open);
+  EXPECT_EQ(rig.loop->Viewable().reason, DockReason::kTooHot);
+  rig.dir.Write("temp", "70000\n");
+  ASSERT_TRUE(rig.RunUntil(106.0));
+  EXPECT_TRUE(rig.camera.open);
+  EXPECT_TRUE(rig.loop->Viewable().available);
+  EXPECT_EQ(rig.camera.calls, "open start stop close open start ");
+  EXPECT_TRUE(rig.Of(DockState::kFault).empty());
+}
+
+TEST(RearLoop, LockedOrMissingCameraHasNoViewer) {
+  Rig locked;
+  locked.dir.Write("markers/stream-rear", "an-earlier-boot\n");
+  locked.dir.Write("crash", "panic in uvcvideo\n");
+  locked.Make();
+  ASSERT_TRUE(locked.Step());
+  ViewAvailability view = locked.loop->Viewable();
+  EXPECT_FALSE(view.available);
+  EXPECT_EQ(view.reason, DockReason::kLockedAfterCrash);
+  EXPECT_NE(view.detail.find("panic in uvcvideo"), std::string::npos) << view.detail;
+  locked.viewing = true;
+  ASSERT_TRUE(locked.RunUntil(110.0));
+  EXPECT_EQ(locked.camera.calls, "");
+
+  Rig missing;
+  missing.camera.present = false;
+  missing.Make();
+  missing.viewing = true;
+  ASSERT_TRUE(missing.RunUntil(110.0));
+  view = missing.loop->Viewable();
+  EXPECT_EQ(view.reason, DockReason::kNoSignal);
+  EXPECT_EQ(view.detail, "no /dev/mowbite-rear");
+  EXPECT_EQ(missing.camera.calls, "");
 }
 
 }  // namespace

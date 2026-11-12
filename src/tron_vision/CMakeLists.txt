@@ -59,7 +59,7 @@ install(TARGETS tron_side_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 # The dock marker seen by the rear camera, a process of its own: a crash in the USB camera takes nothing else along.
 add_library(tron_rear_node_lib STATIC src/rear_node.cpp)
 target_link_libraries(tron_rear_node_lib tron_vision_core tron_mcu::tron_mcu_core mowbite_watch::mowbite_watch)
-ament_target_dependencies(tron_rear_node_lib rclcpp mowbite_msgs std_msgs diagnostic_msgs)
+ament_target_dependencies(tron_rear_node_lib rclcpp mowbite_msgs sensor_msgs std_msgs diagnostic_msgs)
 add_executable(tron_rear_node src/rear_node_main.cpp)
 target_link_libraries(tron_rear_node tron_rear_node_lib)
 install(TARGETS tron_rear_node RUNTIME DESTINATION lib/${PROJECT_NAME})

@@ -7,9 +7,11 @@
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <functional>
 #include <memory>
+#include <mowbite_msgs/msg/camera.hpp>
 #include <mowbite_msgs/msg/dock_marker.hpp>
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <string>
 #include <thread>
@@ -36,8 +38,9 @@ struct RearNodeSeams {
 
 // The dock marker seen by the rear camera, in a process of its own. It subscribes to hw/dock_marker_request alone and
 // publishes hw/dock_marker and, for the measurements, the pixel values of each image on tron_rear/marker_pixels; it
-// cannot move the mower. A loop thread runs RearLoop; the watch of the process ends it when that thread or the ROS
-// thread stays silent for 2 s (exit code 86), the loop ends it over its memory limit (3).
+// cannot move the mower. Beside it the camera on hw/cameras and its live picture for a viewer (a subscriber of the
+// pictures), which never delays a measurement. A loop thread runs RearLoop; the watch of the process ends it when that
+// thread or the ROS thread stays silent for 2 s (exit code 86), the loop ends it over its memory limit (3).
 class RearNode : public rclcpp::Node {
  public:
   explicit RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seams = {});
@@ -58,13 +61,20 @@ class RearNode : public rclcpp::Node {
   void Publish(const DockReport& report);
   void PublishPixels(const DockReport& report, const builtin_interfaces::msg::Time& stamp);
   void Log(const DockReport& report, double now);
+  void PublishCamera();
+  void PublishPicture();
 
   std::unique_ptr<UvcRearCamera> camera_;
   std::unique_ptr<CrashGuard> guard_;
   std::unique_ptr<RearLoop> loop_;
   rclcpp::Publisher<mowbite_msgs::msg::DockMarker>::SharedPtr marker_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pixels_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::Camera>::SharedPtr cameras_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr picture_pub_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr request_sub_;
+  mowbite_msgs::msg::Camera camera_entry_;
+  bool camera_published_ = false;
+  uint64_t published_pictures_ = 0;
   // From the ROS thread to the loop thread: arrival of the last request on the monotonic clock, and their count.
   std::mutex request_mutex_;
   std::condition_variable request_cv_;

@@ -17,6 +17,7 @@ constexpr double kExposureUnitS = 1e-4;
 constexpr double kDropShare = 0.75;
 // Reports of the state alone come at this share of the period, so that a late step never stretches the gap beyond it.
 constexpr double kReportShare = 0.8;
+constexpr char kHot[] = "SoC too hot";
 
 std::string Fixed(double value, const char* format = "%.1f") {
   char buf[32];
@@ -58,7 +59,8 @@ RearLoop::RearLoop(RearConfig config, DockCamera& camera, CrashGuard& guard, std
       last_request_(std::move(last_request)),
       wait_(std::move(wait)),
       publish_(std::move(publish)),
-      thermal_(config_.pause_at_c, config_.resume_below_c) {}
+      thermal_(config_.pause_at_c, config_.resume_below_c),
+      picture_(config_.view) {}
 
 RearLoop::~RearLoop() {
   Shutdown();
@@ -83,37 +85,64 @@ bool RearLoop::CheckBudget(double now) {
   return true;
 }
 
+DockReason RearLoop::CameraBlocked(std::string& detail) {
+  // The lock is read only while the camera is closed: MayStream takes away the marker of a stream of this boot.
+  if (!armed_) locked_ = !guard_.MayStream(config_.camera_id, locked_detail_);
+  missing_ = !camera_.Present(missing_detail_);
+  if (locked_) {
+    detail = locked_detail_;
+    return DockReason::kLockedAfterCrash;
+  }
+  if (hot_) {
+    detail = kHot;
+    return DockReason::kTooHot;
+  }
+  if (missing_) {
+    detail = missing_detail_;
+    return DockReason::kNoSignal;
+  }
+  detail.clear();
+  return DockReason::kNone;
+}
+
 DockReason RearLoop::WouldFail(std::string& detail) {
+  const DockReason camera = CameraBlocked(detail);
   if (!config_.not_set_up.empty()) {
     detail = config_.not_set_up;
     return DockReason::kNotSetUp;
   }
-  if (!guard_.MayStream(config_.camera_id, detail)) return DockReason::kLockedAfterCrash;
-  if (hot_) {
-    detail = "SoC too hot";
-    return DockReason::kTooHot;
-  }
-  if (!camera_.Present(detail)) return DockReason::kNoSignal;
-  detail.clear();
-  return DockReason::kNone;
+  return camera;
+}
+
+ViewAvailability RearLoop::Viewable() const {
+  if (locked_) return {false, DockReason::kLockedAfterCrash, locked_detail_};
+  if (hot_) return {false, DockReason::kTooHot, kHot};
+  if (missing_) return {false, DockReason::kNoSignal, missing_detail_};
+  if (!view_error_.empty()) return {false, DockReason::kNoSignal, view_error_};
+  return {true, DockReason::kNone, ""};
 }
 
 bool RearLoop::Step() {
   if (exit_code_ != kExitNone) return false;
   const double now = now_();
+  if (view_wanted_) last_view_wanted_ = now;
   if (!CheckBudget(now)) return false;
   const bool asked = Asked(now);
+  const bool viewer = last_view_wanted_ >= 0.0 && now < last_view_wanted_ + config_.view_hold_s;
+  if (!viewer) EndView();
   switch (state_) {
-    case DockState::kOff: StepOff(now, asked); break;
+    case DockState::kOff: StepOff(now, asked, viewer); break;
     case DockState::kFault: StepFault(now, asked); break;
     case DockState::kStarting:
-    case DockState::kMeasuring: StepCamera(now, asked); break;
+    case DockState::kMeasuring: StepCamera(now, asked, viewer); break;
   }
   return true;
 }
 
-void RearLoop::StepOff(double now, bool asked) {
+void RearLoop::StepOff(double now, bool asked, bool viewer) {
   if (asked) {
+    // The request goes first: the viewer's stream ends and the camera opens anew for the marker.
+    if (viewing_) StopCamera();
     Begin(now);
     return;
   }
@@ -122,7 +151,93 @@ void RearLoop::StepOff(double now, bool asked) {
     const DockReason reason = WouldFail(detail);
     ReportIfDue(now, reason, detail);
   }
-  wait_(config_.idle_wait_s);
+  if (viewer) {
+    StepView(now);
+  } else {
+    wait_(config_.idle_wait_s);
+  }
+}
+
+void RearLoop::StepView(double now) {
+  // A pause when hot is no failed attempt.
+  if (viewing_ && hot_) StopCamera();
+  if (!viewing_ && (view_attempts_ >= config_.view_attempts || now < view_next_try_ || !StartView(now))) {
+    wait_(config_.idle_wait_s);
+    return;
+  }
+  const bool first = view_last_frame_ < 0.0;
+  const double limit = first ? config_.first_frame_s : config_.view_gap_s;
+  const double deadline = (first ? view_started_ : view_last_frame_) + limit;
+  if (now >= deadline) {
+    ViewFailed("no image within " + Fixed(limit) + " s");
+    return;
+  }
+  CapturedFrame frame;
+  std::string error;
+  // As long as a step of the marker at most, so that a request is seen as soon.
+  const auto wait_ms = static_cast<int>(std::ceil(std::min(deadline - now, kFrameStepS) * 1000.0));
+  const int got = camera_.Next(wait_ms, frame, error);
+  if (got < 0) {
+    ViewFailed(error);
+    return;
+  }
+  if (got == 0) return;
+  view_last_frame_ = now_();
+  if (MakePicture(frame, view_last_frame_, error)) {
+    view_broken_ = 0;
+  } else if (++view_broken_ >= config_.view_broken) {
+    ViewFailed("broken images: " + error);
+  }
+}
+
+bool RearLoop::StartView(double now) {
+  // Locked, hot or missing is no failed attempt, only looked at again later; Viewable() says why.
+  std::string detail;
+  if (CameraBlocked(detail) != DockReason::kNone) {
+    view_next_try_ = now + config_.view_retry_s;
+    return false;
+  }
+  if (!camera_.Open(detail)) {
+    ViewFailed(detail);
+    return false;
+  }
+  if (!guard_.Arm(config_.camera_id, detail)) {
+    ViewFailed(detail);
+    return false;
+  }
+  armed_ = true;
+  // No ManualExposure: the camera keeps its own exposure for the viewer.
+  if (!camera_.Start(detail)) {
+    ViewFailed(detail);
+    return false;
+  }
+  viewing_ = true;
+  view_started_ = now;
+  view_last_frame_ = -1.0;
+  view_broken_ = 0;
+  view_error_.clear();
+  return true;
+}
+
+void RearLoop::ViewFailed(const std::string& detail) {
+  StopCamera();
+  view_attempts_++;
+  view_next_try_ = now_() + config_.view_retry_s;
+  view_error_ = detail;
+}
+
+void RearLoop::EndView() {
+  if (viewing_) StopCamera();
+  view_attempts_ = 0;
+  view_error_.clear();
+}
+
+bool RearLoop::MakePicture(const CapturedFrame& frame, double now, std::string& error) {
+  if (!picture_.Due(now)) return true;
+  return view_decoder_.Decode(frame.data, frame.bytes, config_.width, config_.height, config_.view_scale, view_rgb_,
+                              error) &&
+         picture_.Make(view_rgb_, ScaledSize(config_.width, config_.view_scale),
+                       ScaledSize(config_.height, config_.view_scale), now, error);
 }
 
 void RearLoop::StepFault(double now, bool asked) {
@@ -193,13 +308,13 @@ ExposureSetting RearLoop::Controls(const ExposureSetting& rule) const {
   return {rule.exposure, rule.gain - gain_offset_};
 }
 
-void RearLoop::StepCamera(double now, bool asked) {
+void RearLoop::StepCamera(double now, bool asked, bool viewer) {
   if (!asked) {
     Off(now);
     return;
   }
   if (hot_) {
-    Fault(DockReason::kTooHot, "SoC too hot");
+    Fault(DockReason::kTooHot, kHot);
     return;
   }
   const bool first = last_good_ < 0.0;
@@ -218,7 +333,10 @@ void RearLoop::StepCamera(double now, bool asked) {
     Fault(DockReason::kNoSignal, error);
     return;
   }
-  if (got == 1) Evaluate(frame, now_());
+  if (got != 1) return;
+  Evaluate(frame, now_());
+  // The picture comes after the report of its frame, so it never delays a measurement; a broken image gives none.
+  if (viewer && state_ != DockState::kFault) MakePicture(frame, now_(), error);
 }
 
 void RearLoop::Evaluate(const CapturedFrame& frame, double now) {
@@ -307,6 +425,7 @@ void RearLoop::StopCamera() {
   if (armed_) guard_.Disarm(config_.camera_id);
   armed_ = false;
   manual_ = false;
+  viewing_ = false;
 }
 
 void RearLoop::Send(const DockReport& report) {

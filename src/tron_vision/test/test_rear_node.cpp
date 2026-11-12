@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <linux/videodev2.h>
+#include <turbojpeg.h>
 
 #include <atomic>
 #include <chrono>
@@ -9,9 +10,11 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mowbite_msgs/msg/camera.hpp>
 #include <mowbite_msgs/msg/dock_marker.hpp>
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <set>
 #include <std_msgs/msg/empty.hpp>
 #include <string>
@@ -28,6 +31,7 @@ namespace tron_vision {
 namespace {
 
 using diagnostic_msgs::msg::DiagnosticArray;
+using mowbite_msgs::msg::Camera;
 using mowbite_msgs::msg::DockMarker;
 using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
@@ -193,6 +197,8 @@ struct Rig {
     const test::Scene s = test::RearScene();
     rclcpp::NodeOptions options;
     options.append_parameter_override("crash_dir", dir.Path() + "/markers");
+    // As tron.launch.py names the process.
+    options.append_parameter_override("process", "rear");
     if (calibrated) {
       const LensModel& l = s.lens;
       const CameraMount& m = s.mount;
@@ -213,15 +219,15 @@ struct Rig {
   RearNodeSeams seams;
 };
 
-// It measures and nothing else: one subscription, two publishers, no client.
+// It measures and shows and nothing else: one subscription, four publishers, no client.
 TEST_F(RearNodeTest, TopicsOfTheDesignOnly) {
   Rig rig;
   auto node = rig.Make();
-  const std::set<std::string> allowed = {"/hw/dock_marker", "/tron_rear/marker_pixels", "/rosout", "/parameter_events"};
+  const std::set<std::string> allowed = {"/hw/dock_marker", "/tron_rear/marker_pixels", "/hw/cameras",
+                                         "/camera/rear/jpeg", "/rosout", "/parameter_events"};
   const auto graph = node->get_node_graph_interface();
   const auto publishers = graph->get_publisher_names_and_types_by_node("tron_rear", "/");
-  EXPECT_TRUE(publishers.count("/hw/dock_marker"));
-  EXPECT_TRUE(publishers.count("/tron_rear/marker_pixels"));
+  for (const std::string& topic : allowed) EXPECT_TRUE(publishers.count(topic)) << topic;
   for (const auto& [topic, types] : publishers) EXPECT_TRUE(allowed.count(topic)) << topic;
   const auto subscribers = graph->get_subscriber_names_and_types_by_node("tron_rear", "/");
   EXPECT_TRUE(subscribers.count("/hw/dock_marker_request"));
@@ -233,6 +239,13 @@ TEST_F(RearNodeTest, TopicsOfTheDesignOnly) {
   ASSERT_EQ(out.size(), 1U);
   EXPECT_EQ(out[0].qos_profile().reliability(), rclcpp::ReliabilityPolicy::Reliable);
   EXPECT_EQ(out[0].qos_profile().durability(), rclcpp::DurabilityPolicy::Volatile);
+  const auto cameras = node->get_publishers_info_by_topic("/hw/cameras");
+  ASSERT_EQ(cameras.size(), 1U);
+  EXPECT_EQ(cameras[0].qos_profile().reliability(), rclcpp::ReliabilityPolicy::Reliable);
+  EXPECT_EQ(cameras[0].qos_profile().durability(), rclcpp::DurabilityPolicy::TransientLocal);
+  const auto pictures = node->get_publishers_info_by_topic("/camera/rear/jpeg");
+  ASSERT_EQ(pictures.size(), 1U);
+  EXPECT_EQ(pictures[0].qos_profile().reliability(), rclcpp::ReliabilityPolicy::BestEffort);
   const auto in = node->get_subscriptions_info_by_topic("/hw/dock_marker_request");
   ASSERT_EQ(in.size(), 1U);
   EXPECT_EQ(in[0].qos_profile().reliability(), rclcpp::ReliabilityPolicy::Reliable);
@@ -321,6 +334,87 @@ TEST_F(RearNodeTest, MeasuresWhileAsked) {
   // The camera got its exposure back.
   EXPECT_EQ(rig.device.controls[V4L2_CID_EXPOSURE_AUTO].value, V4L2_EXPOSURE_APERTURE_PRIORITY);
   EXPECT_EQ(rig.device.controls[V4L2_CID_EXPOSURE_ABSOLUTE].value, 313);
+}
+
+// One entry on hw/cameras, latched; a subscriber of the pictures opens the camera with its own exposure and gets
+// pictures of 720x405; two seconds after it left the camera closes.
+TEST_F(RearNodeTest, ReportsTheCameraAndShowsItsPicture) {
+  Rig rig;
+  auto node = rig.Make(false);
+  Spinner spinner;
+  spinner.Add(node);
+  auto listener = std::make_shared<rclcpp::Node>("viewer");
+  std::mutex mutex;
+  std::vector<Camera> cameras;
+  std::vector<sensor_msgs::msg::CompressedImage> pictures;
+  auto cameras_sub = listener->create_subscription<Camera>(
+      "hw/cameras", rclcpp::QoS(rclcpp::KeepLast(4)).reliable().transient_local(), [&](const Camera& m) {
+        std::lock_guard<std::mutex> lock(mutex);
+        cameras.push_back(m);
+      });
+  spinner.Add(listener);
+  spinner.Start();
+  const auto wait_until = [&mutex](const std::function<bool()>& done, double seconds) {
+    const auto end = Clock::now() + std::chrono::duration<double>(seconds);
+    for (;;) {
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (done()) return true;
+      }
+      if (Clock::now() >= end) return false;
+      std::this_thread::sleep_for(10ms);
+    }
+  };
+  ASSERT_TRUE(wait_until([&] { return !cameras.empty(); }, 5.0));
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    const Camera& c = cameras.back();
+    EXPECT_EQ(c.id, "rear");
+    EXPECT_EQ(c.name, "Rear camera");
+    EXPECT_EQ(c.process, "rear");
+    EXPECT_EQ(c.kind, Camera::KIND_REAR);
+    EXPECT_EQ(c.position, Camera::POSITION_REAR);
+    EXPECT_EQ(c.width, 720U);
+    EXPECT_EQ(c.height, 405U);
+    EXPECT_FALSE(c.detections);
+    EXPECT_EQ(c.protocols, std::vector<std::string>{"mjpeg"});
+    // Without calibration the marker is not set up; the camera still is.
+    EXPECT_TRUE(c.available);
+    EXPECT_EQ(c.reason, "");
+  }
+  EXPECT_EQ(rig.device.ons, 0);
+  auto pictures_sub = listener->create_subscription<sensor_msgs::msg::CompressedImage>(
+      "camera/rear/jpeg", rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
+      [&](const sensor_msgs::msg::CompressedImage& m) {
+        std::lock_guard<std::mutex> lock(mutex);
+        pictures.push_back(m);
+      });
+  ASSERT_TRUE(wait_until([&] { return pictures.size() >= 5; }, 10.0));
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto& p = pictures.back();
+    EXPECT_EQ(p.format, "jpeg");
+    EXPECT_EQ(p.header.frame_id, "rear");
+    tjhandle h = tjInitDecompress();
+    int w = 0;
+    int ht = 0;
+    int sub = 0;
+    int space = 0;
+    EXPECT_EQ(tjDecompressHeader3(h, p.data.data(), p.data.size(), &w, &ht, &sub, &space), 0);
+    tjDestroy(h);
+    EXPECT_EQ(w, 720);
+    EXPECT_EQ(ht, 405);
+  }
+  EXPECT_EQ(rig.device.ons, 1);
+  // The camera keeps its own exposure for a viewer.
+  EXPECT_EQ(rig.device.controls[V4L2_CID_EXPOSURE_AUTO].value, V4L2_EXPOSURE_APERTURE_PRIORITY);
+  pictures_sub.reset();
+  const auto left = Clock::now();
+  while (rig.device.offs == 0 && Clock::now() < left + 5s) std::this_thread::sleep_for(10ms);
+  EXPECT_EQ(rig.device.offs, 1);
+  const double closed_after = std::chrono::duration<double>(Clock::now() - left).count();
+  EXPECT_GT(closed_after, 1.5);
+  EXPECT_LT(closed_after, 3.0);
 }
 
 // A loop thread that hangs in the camera ends the process with the code of the watch.
