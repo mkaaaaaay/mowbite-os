@@ -137,7 +137,12 @@ void LogicCore::ResumedByUser() {
 }
 
 void LogicCore::SetSunsetSettings(bool dock_at_sunset) {
+  if (!dock_at_sunset) {
+    sunset_due_.reset();
+    sunset_tried_ = sunset_told_ = false;
+  }
   sunset_on_ = dock_at_sunset;
+  sunset_try_ = true;
 }
 
 void LogicCore::OnClock(bool safe, const std::string& reason, double unix_minus_mono_s) {

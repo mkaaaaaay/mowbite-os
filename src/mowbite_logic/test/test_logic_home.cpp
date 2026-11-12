@@ -688,6 +688,29 @@ TEST(Sunset, NothingWithTheSwitchOff) {
   EXPECT_EQ(Lines(fresh.TakeNotices(), "sunset"), 0);
 }
 
+TEST(Sunset, TheSwitchActsWithinTheRun) {
+  TestCore off = ReadyForTheSun(Before(100));
+  Start(off);
+  Hold(off, Healthy(), 0, 50);
+  off.SetSunsetSettings(false);
+  Hold(off, Healthy(), 51, 200);
+  EXPECT_TRUE(off.Mowing());
+  EXPECT_FALSE(Find(off.TakeEvents(), "DOCKING"));
+
+  TestCore on = ReadyForTheSun(Before(100));
+  on.SetSunsetSettings(false);
+  Start(on);
+  Hold(on, Healthy(), 0, 50);
+  on.SetSunsetSettings(true);
+  Hold(on, Healthy(), 51, 99);
+  EXPECT_TRUE(on.Mowing());
+  on.OnTick(100);
+  const auto events = on.TakeEvents();
+  const Event* docking = Find(events, "DOCKING");
+  ASSERT_NE(docking, nullptr);
+  EXPECT_EQ(docking->details["reason"], "DARK");
+}
+
 TEST(Sunset, AnUnsafeClockIsToldOnceAndASafeOneSetsTheDeadline) {
   TestCore core = ReadyForTheSun(Before(100));
   core.OnClock(false, "never_synced", Before(100));

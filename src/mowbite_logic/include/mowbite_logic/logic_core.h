@@ -519,6 +519,7 @@ class LogicCore {
   void SetHomeSettings(int rain_mode, double rain_check_seconds, double motor_hot_temperature,
                        double motor_cold_temperature);
   // dock_at_sunset of params.set: a run goes home at the first sunset after its start or after the user resumed it.
+  // At once in a run: off drops its deadline, on reckons the first sunset from now.
   void SetSunsetSettings(bool dock_at_sunset);
   // time/clock: whether the wall clock is safe, why not, and wall minus monotonic s when it came.
   void OnClock(bool safe, const std::string& reason, double unix_minus_mono_s);
