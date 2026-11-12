@@ -183,6 +183,33 @@ TEST(Table, NamesComeFromTheMacro) {
   EXPECT_NE(definition.at("methods")[2].at("signature").get<std::string>().find("int*"), std::string::npos);
 }
 
+// The definition of a build of toy whose table has the first n methods, or the methods in the order given.
+json DefinitionWith(const std::vector<size_t>& order) {
+  json definition = CoreDefinition<toy::Toy>(toy::ToyConfig{}, json::object());
+  const auto names = detail::MethodNames(CoreTraits<toy::Toy>::kMethodText);
+  const auto signatures = detail::Table<CoreTraits<toy::Toy>::Methods>::Signatures();
+  std::vector<std::string> some_names, some_signatures;
+  json methods = json::array();
+  for (size_t i : order) {
+    some_names.push_back(names[i]);
+    some_signatures.push_back(signatures[i]);
+    methods.push_back(definition.at("methods")[i]);
+  }
+  definition["methods"] = methods;
+  definition["table"] = detail::TableChecksum(some_names, some_signatures);
+  return definition;
+}
+
+TEST(Table, AJournalOfAnEarlierTablePlaysOneOfAnotherDoesNot) {
+  EXPECT_NO_THROW(Replayer<toy::Toy>{DefinitionWith({0, 1, 2, 3, 4})});
+  EXPECT_NO_THROW(Replayer<toy::Toy>{DefinitionWith({0, 1, 2})});
+  EXPECT_THROW(Replayer<toy::Toy>{DefinitionWith({1, 0, 2})}, std::runtime_error);
+  EXPECT_THROW(Replayer<toy::Toy>{DefinitionWith({0, 2})}, std::runtime_error);
+  json longer = DefinitionWith({0, 1, 2, 3, 4});
+  longer["methods"].push_back(longer["methods"][0]);
+  EXPECT_THROW(Replayer<toy::Toy>{longer}, std::runtime_error);
+}
+
 TEST_F(JournalTest, AReplayOfTheSameCoreIsBitIdentical) {
   Record(200);
   const CheckReport report = CheckRuns(dir_.string(), registry_);

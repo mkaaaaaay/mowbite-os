@@ -69,11 +69,16 @@ class Replayer : public CoreReplay {
   using Methods = typename Traits::Methods;
   using Config = typename Traits::Config;
 
+  // A journal plays if its method table is the start of this one: new methods only come at the end.
   explicit Replayer(const json& definition) : core_(definition.at("config").get<Config>()) {
-    const json expected = CoreDefinition<Core>(definition.at("config").get<Config>(), json::object());
-    if (definition.at("table") != expected.at("table")) {
-      throw std::runtime_error("method table " + definition.at("table").get<std::string>() + " of the journal, " +
-                               expected.at("table").get<std::string>() + " here: another build of " + Traits::kName);
+    const auto names = detail::MethodNames(Traits::kMethodText);
+    const auto signatures = detail::Table<Methods>::Signatures();
+    const size_t n = definition.at("methods").size();
+    const std::string table = definition.at("table").get<std::string>();
+    if (n > names.size() || table != detail::TableChecksum({names.begin(), names.begin() + n},
+                                                           {signatures.begin(), signatures.begin() + n})) {
+      throw std::runtime_error("method table " + table + " of the journal is not the start of " +
+                               detail::TableChecksum(names, signatures) + " here: another build of " + Traits::kName);
     }
     UpdateView();
   }
