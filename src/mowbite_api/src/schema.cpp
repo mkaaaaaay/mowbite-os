@@ -310,7 +310,8 @@ Json BuildSchema(const Json& planner) {
   for (const auto& word : ScheduleLogWords()) {
     log_words[word.word] = {{"description", word.text},
                             {"detail", word.detail.empty() ? Json() : Json(word.detail)},
-                            {"more", word.more.empty() ? Json() : Json(word.more)}};
+                            {"more", word.more.empty() ? Json() : Json(word.more)},
+                            {"push", word.push}};
     if (word.ready) ready_reasons.push_back(word.word);
   }
   defs["schedule_ready"] = {

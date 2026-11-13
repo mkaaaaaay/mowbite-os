@@ -32,6 +32,13 @@ Field Ranged(std::string name, std::string unit, double min, double max, std::st
   return field;
 }
 
+// A whole number of this unit from min to max.
+Field Whole(std::string name, std::string unit, double min, double max, std::string text, bool required = true) {
+  Field field = Ranged(std::move(name), std::move(unit), min, max, std::move(text), required);
+  field.type = Type::kInteger;
+  return field;
+}
+
 Field Bool(std::string name, std::string text, bool required = true) {
   return {std::move(name), Type::kBoolean, "", required, std::move(text), {}, false, {}, ""};
 }
@@ -190,6 +197,56 @@ Field ScheduleAnswer() {
        Schedule(true),
        Object("sun", "Of the local day after tz at the datum of the map; null without a datum or without one that day",
               {Time("rise", "Sunrise"), Time("set", "Sunset")})});
+}
+
+// The settings of the pushes as notify.get gives them; in notify.set every key optional.
+std::vector<Field> NotifySettings(bool required) {
+  Field topic = Text("topic", "ntfy topic, [A-Za-z0-9_-]{1,64}; empty for none", required);
+  topic.pattern = "^[A-Za-z0-9_-]{0,64}$";
+  std::string keys;
+  for (const auto& key : NotifyEvents()) keys += (keys.empty() ? "" : ", ") + key;
+  const Field events = List("events", "The events that send a push: " + keys, Type::kString, required);
+  return {Bool("enabled", "false: nothing is sent, the rest stays", required),
+          Text("server", "ntfy server, http(s)://host[:port][/path]", required),
+          topic,
+          Text("lang", "Language of the texts", required, {"de", "en"}),
+          Text("name", "Name of the mower in the texts, at most 40 characters; empty: the mower", required),
+          Text("url", "Address of MowBite for the button in the message; empty for none", required),
+          events,
+          Whole("remind", "min", 0, 1440, "Between reminders of a problem that stays; 0 for none", required),
+          Whole("emergency_wait", "s", 0, 600, "How long an emergency lasts before it is told", required)};
+}
+
+Field NotifyAnswer() {
+  std::vector<Field> fields = {Integer("schema", "Always 1")};
+  for (auto& field : NotifySettings(true)) fields.push_back(std::move(field));
+  fields.push_back(Bool("has_token", "A token for the ntfy server is stored; the token itself never comes back"));
+  fields.push_back(List("pushes", "UnifiedPush addresses of the phones, at most 10, oldest first", Type::kString));
+  fields.push_back(UnixTime("snooze", "Reminders snoozed until then, 0 for not"));
+  fields.push_back(Bool("stored", "Saved before: without, nothing is sent"));
+  return Object("result", "The settings of the pushes", std::move(fields));
+}
+
+std::vector<Field> StatsAmounts() {
+  return {Integer("blade_s", "Seconds the blade turned"), Number("mowed_m", "m", "Driven with the blade turning"),
+          Number("driven_m", "m", "Driven without it, not in IDLE"),
+          Integer("runs", "Left IDLE to undock or to mow")};
+}
+
+Field StatsAnswer() {
+  std::vector<Field> hour = {UnixTime("t", "Start of the hour, a whole UTC hour")};
+  for (auto& field : StatsAmounts()) hour.push_back(std::move(field));
+  return Object(
+      "result", "The statistics",
+      {Integer("schema", "Always 1"), UnixTime("since", "Counting started then"),
+       UnixTime("from", "The hours from then on: from of the request, later when the newest 9000 are all"),
+       Object("total", "Since counting started", StatsAmounts()),
+       Rows("hours", "Each hour with something in it from from on, oldest first, the one going on last", hour),
+       Rows("parts", "The parts to see to",
+            {Text("key", "The part", true, {"blade", "clean"}),
+             Number("due_h", "h", "Due again after so many blade hours"),
+             Integer("base_blade_s", "total blade_s when it was last seen to"),
+             UnixTime("done_at", "Last seen to, 0 not since counting started")})});
 }
 
 // The version of a planner or an app; the OS has none besides its revision.
@@ -663,6 +720,45 @@ const std::vector<Method>& Methods() {
        Object("result", "The leftovers now",
               {Switch("enabled", "1: leftovers after a job"), Number("min_m2", "m2", "Less is not mowed")}),
        ""},
+      {"stats.get", "mowbite_stats", "Mowing statistics per hour and the parts to see to",
+       Object("params", "None: the hours since the turn of the year, less a day",
+              {UnixTime("from", "The hours from then on")}, false),
+       StatsAnswer(), ""},
+      {"stats.part_done", "mowbite_stats", "The part was seen to now: its blade hours start from 0; as stats.get from now",
+       Object("params", "The part", {Text("part", "Its key", true, {"blade", "clean"})}), StatsAnswer(), ""},
+      {"stats.part_due", "mowbite_stats", "After how many blade hours the part is due again; as stats.get from now",
+       Object("params", "The part and its hours",
+              {Text("part", "Its key", true, {"blade", "clean"}), Whole("hours", "h", 1, 10000, "Blade hours")}),
+       StatsAnswer(), ""},
+      {"notify.get", "mowbite_net", "The settings of the pushes; of the token only whether there is one", NoParams(),
+       NotifyAnswer(), ""},
+      {"notify.set", "mowbite_net",
+       "Changes settings, all or nothing: -32602 with data {field, reason}. A push says so to the targets of before",
+       Object("params", "The change",
+              [] {
+                std::vector<Field> fields = NotifySettings(false);
+                fields.push_back(Text("token", "New token for the ntfy server; empty drops it", false));
+                return fields;
+              }()),
+       NotifyAnswer(), ""},
+      {"notify.test", "mowbite_net", "Sends a test push to the topic and the phones, or to one address",
+       Object("params", "None for all", {Text("address", "One UnifiedPush address of pushes", false)}, false),
+       Object("result", "How it went",
+              {Text("result", "sent: to at least one; no_target: no topic and no phone", true,
+                    {"sent", "failed", "no_target"})}),
+       ""},
+      {"notify.push_add", "mowbite_net", "A phone's UnifiedPush address; past 10 the oldest goes",
+       Object("params", "The address", {Text("address", "https URL, at most 1000 characters")}), NotifyAnswer(), ""},
+      {"notify.push_remove", "mowbite_net", "Drops a phone's UnifiedPush address",
+       Object("params", "The address", {Text("address", "As in pushes")}), NotifyAnswer(), ""},
+      {"notify.snooze", "mowbite_net", "No reminders for so long; 0 lifts it",
+       Object("params", "How long", {Whole("seconds", "s", 0, 86400, "Seconds from now")}), NotifyAnswer(), ""},
+      {"notify.log", "mowbite_net", "The last pushes, newest first",
+       Object("params", "How many", {Whole("limit", "", 1, 50, "The last so many", false)}, false),
+       Rows("result", "A push",
+            {UnixTime("t", "When"), Bool("sent", "Reached at least one target"), Text("kind", "Its event or test"),
+             Text("title", "Its title")}),
+       ""},
       {"light.get_profile", "mowbite_light",
        "The lights: the states and effects there are, the profile by state, its defaults, the fixed signal of an "
        "emergency and the limits",
@@ -833,24 +929,32 @@ const std::vector<Method>& Methods() {
   return methods;
 }
 
+const std::vector<std::string>& NotifyEvents() {
+  static const std::vector<std::string> events = {
+      "emergency", "dock_failed", "undock_failed", "nav_error", "spinup", "standstill", "refused",
+      "done",      "rain",        "battery",       "dark",      "maintenance", "schedule_skipped"};
+  return events;
+}
+
 const std::vector<ScheduleLogWord>& ScheduleLogWords() {
   static const std::vector<ScheduleLogWord> words = {
-      {"skip_missed", "The time of the plan passed while the OS was off, the clock jumped or the plan waited", "", ""},
-      {"skip_offline", "The logic was silent through the minute of the plan", "", "", true},
-      {"skip_clock", "The clock was not safe", "clock_reason of schedule.get", "", true},
+      {"skip_missed", "The time of the plan passed while the OS was off, the clock jumped or the plan waited", "", "",
+       false, true},
+      {"skip_offline", "The logic was silent through the minute of the plan", "", "", true, true},
+      {"skip_clock", "The clock was not safe", "clock_reason of schedule.get", "", true, true},
       {"skip_paused", "The pause covers every area of the plan", "", "", true},
-      {"skip_no_area", "No area of the plan is a mowing area of the map", "", "", true},
+      {"skip_no_area", "No area of the plan is a mowing area of the map", "", "", true, true},
       {"skip_end", "The end of the plan came while it waited", "", ""},
-      {"skip_emergency", "An emergency, its latch or the restart hold", "", "", true},
+      {"skip_emergency", "An emergency, its latch or the restart hold", "", "", true, true},
       {"skip_busy", "The mower was busy", "The state of robot_state or the phase of a start of the schedule", "", true},
-      {"skip_not_docked", "The mower was not on the contacts", "", "", true},
+      {"skip_not_docked", "The mower was not on the contacts", "", "", true, true},
       {"skip_rain", "The rain sensor was wet with skip_rain 1 or rain_mode not 0", "", "", true},
       {"skip_dark", "The sun was down for a plan without dark", "", "", true},
-      {"skip_no_position", "No datum for the sun, for a plan without dark", "", "", true},
+      {"skip_no_position", "No datum for the sun, for a plan without dark", "", "", true, true},
       {"waiting_battery", "The plan waits up to 2 h for min_battery", "Battery %", "", true},
-      {"skip_battery", "The battery stayed below min_battery for 2 h", "Battery %", ""},
+      {"skip_battery", "The battery stayed below min_battery for 2 h", "Battery %", "", false, true},
       {"waiting_hold", "The plan waits up to 2 h for the end of a hold", "", "", true},
-      {"skip_hold", "A hold stayed for 2 h", "", ""},
+      {"skip_hold", "A hold stayed for 2 h", "", "", false, true},
       {"skip_gone", "The plan was removed while it waited", "", ""},
       {"weather_unknown", "No usable weather; the plan goes on", "forecast or cold", ""},
       {"skip_forecast", "Rain now or in the next forecast_hours", "", ""},
@@ -860,7 +964,7 @@ const std::vector<ScheduleLogWord>& ScheduleLogWords() {
       {"start_refused", "The logic refused the start", "The reason of MOWING_REFUSED", "Its value, or null"},
       {"start_canceled", "The announcement was canceled", "Its source: emergency, rpc, undocked or hold", ""},
       {"start_failed", "The start did not reach mowing",
-       "storage, service, timeout, or the end of the run (UNDOCKING_FAILED, EMERGENCY, ...)", ""},
+       "storage, service, timeout, or the end of the run (UNDOCKING_FAILED, EMERGENCY, ...)", "", false, true},
       {"started", "The mower mows", "Battery %", ""},
       {"stopped_end", "Home at the end of the plan", "", ""},
       {"stopped_dark", "Home at sunset", "", ""},

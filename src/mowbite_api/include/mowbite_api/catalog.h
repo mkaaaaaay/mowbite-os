@@ -12,7 +12,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 25;
+constexpr int kApi = 26;
 
 // Who owns the names of the interface file; readers keep a copy of it.
 constexpr char kOwner[] = "mowbite-os";
@@ -116,7 +116,7 @@ struct Command {
 struct Method {
   std::string name;
   // mowbite_bridge, mowbite_logic, mowbite_map, mowbite_ntrip, mowbite_calibration, mowbite_light, mowbite_sound,
-  // mowbite_camera, mowbite_schedule or mowbite_host.
+  // mowbite_camera, mowbite_schedule, mowbite_stats, mowbite_net or mowbite_host.
   std::string node;
   std::string text;
   // The params as one value, mostly an object of fields.
@@ -201,8 +201,11 @@ struct ScheduleLogWord {
   std::string detail;
   std::string more;
   bool ready = false;  // also a reason of mowbite/schedule/ready
+  bool push = false;   // a start of a plan fell through: schedule_skipped of notify.* tells it
 };
 const std::vector<ScheduleLogWord>& ScheduleLogWords();
+// The events notify.* can send a push for, by key.
+const std::vector<std::string>& NotifyEvents();
 // The situations of sound.list in their order.
 const std::vector<SoundSituation>& SoundSituations();
 

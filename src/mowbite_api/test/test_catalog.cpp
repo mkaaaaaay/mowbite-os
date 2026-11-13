@@ -494,7 +494,7 @@ TEST(Catalog, ParamsOfACommand) {
 TEST(Catalog, MethodsSensorsSettingsAndGeometry) {
   const std::set<std::string> nodes = {"mowbite_bridge",      "mowbite_logic", "mowbite_map",   "mowbite_ntrip",
                                        "mowbite_calibration", "mowbite_light", "mowbite_sound", "mowbite_camera",
-                                       "mowbite_schedule",    "mowbite_host"};
+                                       "mowbite_schedule",    "mowbite_stats", "mowbite_net",   "mowbite_host"};
   std::set<std::string> names;
   for (const auto& command : Commands()) names.insert(command.name);
   for (const auto& method : Methods()) {
