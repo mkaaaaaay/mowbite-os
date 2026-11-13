@@ -67,7 +67,7 @@ Reason LogicCore::RequestMowProblem(const StartRequest& request) const {
     if (!Contains(request.pass_over, id)) left.push_back(id);
   }
   if (!left.empty()) return MowProblem(left);
-  const Reason why = MowProblem(request.tasks);
+  Reason why = MowProblem(request.tasks);
   if (!why.empty()) return why;
   return Reason("NO_MOWING_AREA", "Every area of the plan is paused or not on the map");
 }
@@ -124,6 +124,7 @@ Reason LogicCore::StartRun(const ScheduleRun& run, const Reason& node_problem, d
 }
 
 void LogicCore::EndAnnouncement(double now_s) {
+  if (!run_) return;
   StartRequest request = RunRequest(run_->request);
   const Reason why = ScheduleProblem(request, run_->request, now_s);
   if (!why.empty()) {
@@ -153,6 +154,7 @@ void LogicCore::CommandCancels() {
 }
 
 void LogicCore::CancelAnnouncement(const std::string& source) {
+  if (!run_) return;
   AddEvent("SCHEDULE_START_CANCELED", {{"source", source}, {"severity", "info"}, {"resume", "auto"}});
   Notify("Schedule: the start of " + run_->request.run_id + " was canceled (" + source + ")");
   RunEnds("CANCELED", source);

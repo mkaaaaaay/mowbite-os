@@ -10,18 +10,22 @@ namespace mowbite_logic {
 void LogicNode::SetUpRuns() {
   run_pub_ = create_publisher<mowbite_msgs::msg::RunStatus>("logic/run", LatchedQos(1));
   next_start_sub_ = create_subscription<std_msgs::msg::Int64>("schedule/next_start", LatchedQos(1),
-                                                              [this](std_msgs::msg::Int64::ConstSharedPtr msg) {
+                                                              [this](const std_msgs::msg::Int64::ConstSharedPtr& msg) {
                                                                 std::lock_guard<std::mutex> lock(mutex_);
                                                                 next_start_ = msg->data;
                                                               });
   start_run_srv_ = create_service<mowbite_msgs::srv::StartRun>(
       "logic/start_run",
-      [this](std::shared_ptr<mowbite_msgs::srv::StartRun::Request> request,
-             std::shared_ptr<mowbite_msgs::srv::StartRun::Response> response) { OnStartRun(*request, *response); });
+      [this](const std::shared_ptr<mowbite_msgs::srv::StartRun::Request>& request,
+             const std::shared_ptr<mowbite_msgs::srv::StartRun::Response>& response) {
+        OnStartRun(*request, *response);
+      });
   drop_tasks_srv_ = create_service<mowbite_msgs::srv::DropTasks>(
       "logic/drop_tasks",
-      [this](std::shared_ptr<mowbite_msgs::srv::DropTasks::Request> request,
-             std::shared_ptr<mowbite_msgs::srv::DropTasks::Response> response) { OnDropTasks(*request, *response); });
+      [this](const std::shared_ptr<mowbite_msgs::srv::DropTasks::Request>& request,
+             const std::shared_ptr<mowbite_msgs::srv::DropTasks::Response>& response) {
+        OnDropTasks(*request, *response);
+      });
 }
 
 void LogicNode::OnStartRun(const mowbite_msgs::srv::StartRun::Request& request,

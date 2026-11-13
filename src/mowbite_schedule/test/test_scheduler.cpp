@@ -977,7 +977,8 @@ TEST_F(SchedulerTest, WaitOverWhenTheWeatherIsAsked) {
 }
 
 TEST_F(SchedulerTest, ADuePlanWaitsWhileTheWeatherIsAsked) {
-  Make(File({{"skip_forecast", 1}, {"plans", {{{"days", {1}}, {"time", "10:00"}}, {{"days", {1}}, {"time", "10:30"}}}}}));
+  Make(File({{"skip_forecast", 1},
+             {"plans", {{{"days", {1}}, {"time", "10:00"}}, {{"days", {1}}, {"time", "10:30"}}}}}));
   Facts facts = Good(At(kMonday, "10:00"));
   facts.battery = 60;
   Tick(facts);

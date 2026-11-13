@@ -77,7 +77,7 @@ class LightNode : public rclcpp::Node {
           service_.SetRobotState(msg->current_state, msg->emergency, msg->is_charging, msg->battery_percentage);
         });
     publish_sub_ = create_subscription<mowbite_msgs::msg::MqttPublish>(
-        "bridge/publish", 100, [this](mowbite_msgs::msg::MqttPublish::ConstSharedPtr msg) {
+        "bridge/publish", 100, [this](const mowbite_msgs::msg::MqttPublish::ConstSharedPtr& msg) {
           if (msg->topic != "events/json") return;
           service_.OnEvent(Json::parse(msg->payload, nullptr, false), MonotonicSeconds());
         });

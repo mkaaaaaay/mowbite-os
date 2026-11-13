@@ -40,7 +40,7 @@ namespace {
 // robot_state older than this (s) counts as a silent logic.
 constexpr double kLogicFresh = 5.0;
 // The files of the schedule are small; larger ones are not read.
-constexpr size_t kMaxFileBytes = 64 * 1024;
+constexpr size_t kMaxFileBytes = size_t{64} * 1024;
 // How long a start waits for its mark on the disk (S4) before it fails with storage.
 constexpr auto kMarkWait = std::chrono::seconds(2);
 // mowbite/schedule/ready again after this long (s) while a start is to come.
@@ -76,11 +76,11 @@ json FirstValue(const std::string& data) {
 
 }  // namespace
 
-// The schedule (FP22): once a second the plans against the state of the mower, starts only through logic/start_run
-// from the station, pauses of a running plan through logic/drop_tasks, schedule/next_start for the update hold, and
-// schedule.get, .set, .log and .leftovers through the bridge, mowbite/schedule/ready for App and HA. Files in data_dir: schedule.json, schedule-state.json
-// (the mark of each start, written before the start goes out) and schedule-log.json. Nothing under hw/ or safety/,
-// no cmd_vel, no follow_path.
+// The schedule (FP22): once a second the plans against the state of the mower, starts only through logic/start_run from
+// the station, pauses of a running plan through logic/drop_tasks, schedule/next_start for the update hold, and
+// schedule.get, .set, .log and .leftovers through the bridge, mowbite/schedule/ready for App and HA. Files in data_dir:
+// schedule.json, schedule-state.json (the mark of each start, written before the start goes out) and schedule-log.json.
+// Nothing under hw/ or safety/, no cmd_vel, no follow_path.
 class ScheduleNode : public rclcpp::Node {
  public:
   explicit ScheduleNode(const rclcpp::NodeOptions& options)
@@ -101,45 +101,50 @@ class ScheduleNode : public rclcpp::Node {
     drop_client_ = create_client<mowbite_msgs::srv::DropTasks>("logic/drop_tasks");
 
     request_sub_ = create_subscription<mowbite_msgs::msg::RpcRequest>(
-        "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRequest(*msg); });
+        "bridge/rpc/request", 100,
+        [this](const mowbite_msgs::msg::RpcRequest::ConstSharedPtr& msg) { OnRequest(*msg); });
     state_sub_ = create_subscription<mowbite_msgs::msg::RobotState>(
-        "bridge/robot_state", 10, [this](mowbite_msgs::msg::RobotState::ConstSharedPtr msg) {
+        "bridge/robot_state", 10, [this](const mowbite_msgs::msg::RobotState::ConstSharedPtr& msg) {
           robot_state_ = *msg;
           robot_state_mono_ = MonotonicSeconds();
         });
     hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
-        "hw/status", 10, [this](mowbite_msgs::msg::HardwareStatus::ConstSharedPtr msg) { hw_ = *msg; });
+        "hw/status", 10, [this](const mowbite_msgs::msg::HardwareStatus::ConstSharedPtr& msg) { hw_ = *msg; });
     caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
         "hw/capabilities", LatchedQos(1),
-        [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) { rain_sensor_ = msg->rain_sensor; });
+        [this](const mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr& msg) {
+          rain_sensor_ = msg->rain_sensor;
+        });
     hold_sub_ = create_subscription<std_msgs::msg::Int64>(
-        "logic/hold", LatchedQos(1), [this](std_msgs::msg::Int64::ConstSharedPtr msg) { hold_until_ = msg->data; });
+        "logic/hold", LatchedQos(1),
+        [this](const std_msgs::msg::Int64::ConstSharedPtr& msg) { hold_until_ = msg->data; });
     clock_sub_ = create_subscription<mowbite_msgs::msg::ClockStatus>(
-        "time/clock", LatchedQos(1), [this](mowbite_msgs::msg::ClockStatus::ConstSharedPtr msg) {
+        "time/clock", LatchedQos(1), [this](const mowbite_msgs::msg::ClockStatus::ConstSharedPtr& msg) {
           clock_ = ClockState{msg->ok, msg->reason};
         });
     datum_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
-        "gps/datum", LatchedQos(1), [this](sensor_msgs::msg::NavSatFix::ConstSharedPtr msg) {
+        "gps/datum", LatchedQos(1), [this](const sensor_msgs::msg::NavSatFix::ConstSharedPtr& msg) {
           latitude_ = msg->latitude;
           longitude_ = msg->longitude;
         });
     map_sub_ = create_subscription<std_msgs::msg::String>(
-        "map/json", LatchedQos(1), [this](std_msgs::msg::String::ConstSharedPtr msg) { map_.SetMap(msg->data); });
+        "map/json", LatchedQos(1),
+        [this](const std_msgs::msg::String::ConstSharedPtr& msg) { map_.SetMap(msg->data); });
     // rain_mode of the logic, from the settings it publishes for the app.
     params_sub_ = create_subscription<std_msgs::msg::String>(
-        "bridge/params", LatchedQos(50), [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        "bridge/params", LatchedQos(50), [this](const std_msgs::msg::String::ConstSharedPtr& msg) {
           const json params = json::parse(msg->data, nullptr, false);
           if (!params.is_object() || params.value("node", "") != mowbite_logic::kLogicParamsNode) return;
           const json value = params.value("params", json::object()).value("rain_mode", json());
           if (value.is_number()) rain_mode_ = static_cast<int>(std::lround(value.get<double>()));
         });
     run_sub_ = create_subscription<mowbite_msgs::msg::RunStatus>(
-        "logic/run", LatchedQos(1), [this](mowbite_msgs::msg::RunStatus::ConstSharedPtr msg) {
+        "logic/run", LatchedQos(1), [this](const mowbite_msgs::msg::RunStatus::ConstSharedPtr& msg) {
           core_.Call<&Scheduler::OnRunStatus>(RunStatus{msg->run_id, PhaseOf(msg->phase), msg->end_code, msg->detail});
           Carry();
         });
     weather_sub_ = create_subscription<mowbite_msgs::msg::Weather>(
-        "net/weather", 10, [this](mowbite_msgs::msg::Weather::ConstSharedPtr msg) {
+        "net/weather", 10, [this](const mowbite_msgs::msg::Weather::ConstSharedPtr& msg) {
           core_.Call<&Scheduler::OnWeather>(Weather{msg->id, msg->ok, msg->age_s, msg->has_rain, msg->rain_now_mm,
                                                     msg->rain_hour_mm, msg->has_temp, msg->temp_c});
           Carry();
@@ -288,8 +293,9 @@ class ScheduleNode : public rclcpp::Node {
     RCLCPP_INFO(get_logger(), "Schedule: starting %s", run.run_id.c_str());
     const std::string run_id = run.run_id;
     start_client_->async_send_request(
+        // NOLINTNEXTLINE(performance-unnecessary-value-param): the signature rclcpp takes
         request, [this, run_id](rclcpp::Client<mowbite_msgs::srv::StartRun>::SharedFuture future) {
-          const auto answer = future.get();
+          const auto& answer = future.get();
           if (!answer->accepted) {
             RCLCPP_WARN(get_logger(), "Schedule: %s refused: %s %s", run_id.c_str(), answer->code.c_str(),
                         answer->message.c_str());
@@ -310,8 +316,9 @@ class ScheduleNode : public rclcpp::Node {
     request->run_id = drop.run_id;
     request->area_ids = drop.area_ids;
     drop_client_->async_send_request(
+        // NOLINTNEXTLINE(performance-unnecessary-value-param): the signature rclcpp takes
         request, [this](rclcpp::Client<mowbite_msgs::srv::DropTasks>::SharedFuture future) {
-          const auto answer = future.get();
+          const auto& answer = future.get();
           if (!answer->accepted) RCLCPP_WARN(get_logger(), "Schedule: pause refused: %s", answer->message.c_str());
         });
   }
