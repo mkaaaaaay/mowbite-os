@@ -10,6 +10,7 @@ add_compile_options(-ffp-contract=off)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(mowbite_component REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
@@ -30,7 +31,7 @@ add_library(mowbite_map_component SHARED src/map_node.cpp)
 target_link_libraries(mowbite_map_component mowbite_map_core mowbite_bridge::mowbite_bridge_core
   mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_map_component rclcpp rclcpp_components sensor_msgs std_msgs mowbite_msgs)
-rclcpp_components_register_node(mowbite_map_component
+mowbite_component_register(mowbite_map_component
   PLUGIN "mowbite_map::MapNode"
   EXECUTABLE mowbite_map_node)
 

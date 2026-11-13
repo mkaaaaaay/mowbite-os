@@ -6,6 +6,7 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <mowbite_component/node_options.h>
 #include <rclcpp_components/register_node_macro.hpp>
 #include "mowbite_bridge/event_builder.h"
 
@@ -48,7 +49,7 @@ Reason FollowerMissing() {
 }  // namespace
 
 LogicNode::LogicNode(const rclcpp::NodeOptions& options)
-    : rclcpp::Node("mowbite_logic", options),
+    : rclcpp::Node("mowbite_logic", mowbite_component::StartupOnly(options)),
       journal_(mowbite_journal::OpenFromParameters(*this)),
       core_(journal_, LoadLogicConfig(*this), {{"api", mowbite_api::kApi}}),
       journal_watch_(journal_),
@@ -1107,8 +1108,7 @@ void LogicNode::JudgeRestart(const std::string& crash_record) {
         mowbite_hold::CauseName(verdict.cause),
         verdict.detail,
         verdict.crashed_at,
-        verdict.state_before,
-        verdict.job_id_before,
+        verdict.state_before, verdict.job_id_before,
         held,
         stall ? json{{"node", stall->node}, {"seconds", stall->seconds}, {"limit", stall->limit}} : json()};
     const std::string line = mowbite_hold::RestartLine(verdict, held);

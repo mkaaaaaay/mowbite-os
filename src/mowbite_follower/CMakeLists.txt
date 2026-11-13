@@ -11,6 +11,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(mowbite_component REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -28,7 +29,7 @@ add_library(mowbite_follower_component SHARED src/follower_node.cpp)
 target_link_libraries(mowbite_follower_component mowbite_follower_core mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_follower_component rclcpp rclcpp_action rclcpp_components geometry_msgs mowbite_msgs
   std_msgs)
-rclcpp_components_register_node(mowbite_follower_component
+mowbite_component_register(mowbite_follower_component
   PLUGIN "mowbite_follower::FollowerNode"
   EXECUTABLE mowbite_follower_node)
 

@@ -3,6 +3,7 @@
 #include <cmath>
 #include <geometry_msgs/msg/twist.hpp>
 #include <memory>
+#include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/robot_pose.hpp>
 #include <mowbite_msgs/msg/drive_command.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
@@ -71,7 +72,7 @@ std::string BitNames(uint32_t bits) {
 class SafetyNode : public rclcpp::Node {
  public:
   explicit SafetyNode(const rclcpp::NodeOptions& options)
-      : rclcpp::Node("mowbite_safety", options),
+      : rclcpp::Node("mowbite_safety", mowbite_component::StartupOnly(options)),
         journal_(mowbite_journal::OpenFromParameters(*this)),
         filter_(journal_, LoadConfig()),
         journal_watch_(journal_) {

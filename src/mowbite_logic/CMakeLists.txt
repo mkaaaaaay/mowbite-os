@@ -10,6 +10,7 @@ add_compile_options(-ffp-contract=off)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(mowbite_component REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
@@ -44,7 +45,7 @@ target_link_libraries(mowbite_logic_component mowbite_logic_core mowbite_bridge:
   mowbite_hold::mowbite_hold_core mowbite_journal::mowbite_journal mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_logic_component rclcpp rclcpp_components rclcpp_action geometry_msgs std_msgs
   sensor_msgs std_srvs mowbite_msgs mowbite_planner_interfaces mowbite_planner_os_interfaces rcl_interfaces)
-rclcpp_components_register_node(mowbite_logic_component
+mowbite_component_register(mowbite_logic_component
   PLUGIN "mowbite_logic::LogicNode"
   EXECUTABLE mowbite_logic_node)
 

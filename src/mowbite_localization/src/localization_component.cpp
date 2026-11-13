@@ -3,6 +3,7 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <memory>
+#include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
@@ -69,7 +70,7 @@ double YawOf(const geometry_msgs::msg::Quaternion& q) {
 class LocalizationNode : public rclcpp::Node {
  public:
   explicit LocalizationNode(const rclcpp::NodeOptions& options)
-      : Node("mowbite_localization", options),
+      : Node("mowbite_localization", mowbite_component::StartupOnly(options)),
         journal_(mowbite_journal::OpenFromParameters(*this)),
         estimator_(journal_, ReadConfig()),
         journal_watch_(journal_) {

@@ -7,6 +7,7 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <map>
 #include <memory>
+#include <mowbite_component/node_options.h>
 #include <mowbite_msgs/action/calibrate.hpp>
 #include <mowbite_msgs/msg/calibration_status.hpp>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
@@ -163,7 +164,7 @@ std::optional<Dimensions> ReadDimensions(const std::string& text) {
 class CalibrationNode : public rclcpp::Node {
  public:
   explicit CalibrationNode(const rclcpp::NodeOptions& options)
-      : rclcpp::Node("mowbite_calibration", options), program_(ProgramConfig()) {
+      : rclcpp::Node("mowbite_calibration", mowbite_component::StartupOnly(options)), program_(ProgramConfig()) {
     data_dir_ = declare_parameter("data_dir", std::string());
     software_ = declare_parameter("software_version", std::string());
     evaluate_timeout_ = declare_parameter("evaluate_timeout", 120.0);

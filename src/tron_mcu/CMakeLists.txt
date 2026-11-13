@@ -10,6 +10,7 @@ add_compile_options(-ffp-contract=off)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(mowbite_component REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
@@ -28,7 +29,7 @@ set_target_properties(tron_mcu_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_library(tron_mcu_component SHARED src/mcu_node.cpp)
 target_link_libraries(tron_mcu_component tron_mcu_core mowbite_hold::mowbite_hold_core mowbite_journal::mowbite_journal)
 ament_target_dependencies(tron_mcu_component rclcpp rclcpp_components geometry_msgs sensor_msgs diagnostic_msgs mowbite_msgs)
-rclcpp_components_register_node(tron_mcu_component
+mowbite_component_register(tron_mcu_component
   PLUGIN "tron_mcu::McuNode"
   EXECUTABLE tron_mcu_node)
 

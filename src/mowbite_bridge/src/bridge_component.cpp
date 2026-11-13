@@ -16,6 +16,7 @@
 
 #include <netdb.h>
 #include <poll.h>
+#include <mowbite_component/node_options.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -212,7 +213,7 @@ class Wakeup : public rclcpp::Waitable {
 class BridgeNode : public rclcpp::Node {
  public:
   explicit BridgeNode(const rclcpp::NodeOptions& options)
-      : Node("mowbite_bridge", options),
+      : Node("mowbite_bridge", mowbite_component::StartupOnly(options)),
         host_(declare_parameter("mqtt_host", std::string("127.0.0.1"))),
         port_(declare_parameter("mqtt_port", 1883)),
         data_dir_(declare_parameter("data_dir", std::string())),

@@ -14,6 +14,7 @@ find_package(mowbite_safety REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(mowbite_component REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -33,7 +34,7 @@ add_library(mowbite_calibration_component SHARED src/calibration_node.cpp)
 target_link_libraries(mowbite_calibration_component mowbite_calibration_core mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_calibration_component rclcpp rclcpp_action rclcpp_components geometry_msgs
   sensor_msgs std_msgs mowbite_msgs)
-rclcpp_components_register_node(mowbite_calibration_component
+mowbite_component_register(mowbite_calibration_component
   PLUGIN "mowbite_calibration::CalibrationNode"
   EXECUTABLE mowbite_calibration_node)
 

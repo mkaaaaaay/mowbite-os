@@ -10,6 +10,7 @@ add_compile_options(-ffp-contract=off)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(mowbite_component REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_hold REQUIRED)
 find_package(mowbite_watch REQUIRED)
@@ -26,7 +27,7 @@ add_library(mowbite_time_component SHARED src/clock_node.cpp)
 target_link_libraries(mowbite_time_component mowbite_time_core mowbite_hold::mowbite_hold_core
   mowbite_watch::mowbite_watch nlohmann_json::nlohmann_json)
 ament_target_dependencies(mowbite_time_component rclcpp rclcpp_components mowbite_msgs)
-rclcpp_components_register_node(mowbite_time_component
+mowbite_component_register(mowbite_time_component
   PLUGIN "mowbite_time::ClockNode"
   EXECUTABLE mowbite_clock_node)
 

@@ -11,6 +11,7 @@ find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(mowbite_component REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -36,7 +37,7 @@ target_link_libraries(mowbite_localization_component mowbite_localization_core n
   mowbite_journal::mowbite_journal mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_localization_component rclcpp rclcpp_components geometry_msgs nav_msgs sensor_msgs
   std_msgs std_srvs tf2_ros mowbite_msgs)
-rclcpp_components_register_node(mowbite_localization_component
+mowbite_component_register(mowbite_localization_component
   PLUGIN "mowbite_localization::LocalizationNode"
   EXECUTABLE mowbite_localization_node)
 

@@ -7,6 +7,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <diagnostic_msgs/msg/key_value.hpp>
+#include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/button_event.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
@@ -117,7 +118,7 @@ tron::WallClock LocalWallClock() {
 class McuNode : public rclcpp::Node {
  public:
   explicit McuNode(const rclcpp::NodeOptions& options)
-      : rclcpp::Node("tron_mcu", options),
+      : rclcpp::Node("tron_mcu", mowbite_component::StartupOnly(options)),
         journal_(mowbite_journal::OpenFromParameters(*this)),
         control_(journal_, LoadConfig()),
         journal_watch_(journal_) {

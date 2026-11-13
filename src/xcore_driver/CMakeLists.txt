@@ -10,6 +10,7 @@ add_compile_options(-ffp-contract=off)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(mowbite_component REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
@@ -38,7 +39,7 @@ target_link_libraries(xcore_driver_component xcore_io mowbite_hold::mowbite_hold
 option(XCORE_MEASUREMENT_BUILD "driver of the measurement image, see docker/measure.Dockerfile" OFF)
 target_compile_definitions(xcore_driver_component PRIVATE XCORE_MEASUREMENT_BUILD=$<BOOL:${XCORE_MEASUREMENT_BUILD}>)
 ament_target_dependencies(xcore_driver_component rclcpp rclcpp_components geometry_msgs sensor_msgs diagnostic_msgs mowbite_msgs)
-rclcpp_components_register_node(xcore_driver_component
+mowbite_component_register(xcore_driver_component
   PLUGIN "xcore_driver::XcoreNode"
   EXECUTABLE xcore_driver_node)
 

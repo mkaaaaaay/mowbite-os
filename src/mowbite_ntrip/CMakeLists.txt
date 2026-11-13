@@ -10,6 +10,7 @@ add_compile_options(-ffp-contract=off)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(mowbite_component REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
@@ -30,7 +31,7 @@ add_library(mowbite_ntrip_component SHARED src/ntrip_node.cpp)
 target_link_libraries(mowbite_ntrip_component mowbite_ntrip_core mowbite_bridge::mowbite_bridge_core
   mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_ntrip_component rclcpp rclcpp_components std_msgs mowbite_msgs)
-rclcpp_components_register_node(mowbite_ntrip_component
+mowbite_component_register(mowbite_ntrip_component
   PLUGIN "mowbite_ntrip::NtripNode"
   EXECUTABLE mowbite_ntrip_node)
 

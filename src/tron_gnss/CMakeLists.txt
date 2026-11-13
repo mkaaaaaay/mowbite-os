@@ -10,6 +10,7 @@ add_compile_options(-ffp-contract=off)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(mowbite_component REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
@@ -28,7 +29,7 @@ set_target_properties(tron_gnss_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_library(tron_gnss_component SHARED src/gnss_node.cpp)
 target_link_libraries(tron_gnss_component tron_gnss_core tron_mcu::tron_mcu_core mowbite_watch::mowbite_watch)
 ament_target_dependencies(tron_gnss_component rclcpp rclcpp_components sensor_msgs std_msgs mowbite_msgs)
-rclcpp_components_register_node(tron_gnss_component
+mowbite_component_register(tron_gnss_component
   PLUGIN "tron_gnss::GnssNode"
   EXECUTABLE tron_gnss_node)
 

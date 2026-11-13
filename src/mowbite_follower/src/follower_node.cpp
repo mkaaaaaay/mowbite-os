@@ -2,6 +2,7 @@
 #include <cmath>
 #include <geometry_msgs/msg/twist.hpp>
 #include <memory>
+#include <mowbite_component/node_options.h>
 #include <mowbite_msgs/action/follow_path.hpp>
 #include <mowbite_msgs/msg/robot_pose.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
@@ -49,7 +50,8 @@ Ring ToRing(const geometry_msgs::msg::Polygon& polygon) {
 // sending one zero and then nothing, the cmd_vel watchdog of the driver does the rest.
 class FollowerNode : public rclcpp::Node {
  public:
-  explicit FollowerNode(const rclcpp::NodeOptions& options) : rclcpp::Node("mowbite_follower", options) {
+  explicit FollowerNode(const rclcpp::NodeOptions& options)
+      : rclcpp::Node("mowbite_follower", mowbite_component::StartupOnly(options)) {
     FollowerConfig& c = follower_config_;
     SpeedLimits& v = c.speed;
     v.speed_fast = declare_parameter("speed_fast", v.speed_fast);

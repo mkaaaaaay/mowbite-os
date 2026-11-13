@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/rtcm.hpp>
 #include <mowbite_msgs/msg/sensor_spec.hpp>
@@ -52,7 +53,8 @@ constexpr size_t kMaxQueue = 32 * 1024;
 // handshake and the RTCM from gnss/rtcm, as the port's only writer.
 class GnssNode : public rclcpp::Node {
  public:
-  explicit GnssNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_gnss", options), board_(tron::BoardConfig()) {
+  explicit GnssNode(const rclcpp::NodeOptions& options)
+      : rclcpp::Node("tron_gnss", mowbite_component::StartupOnly(options)), board_(tron::BoardConfig()) {
     port_name_ = declare_parameter("port", "/dev/ttyS4");
     baud_ = static_cast<int>(declare_parameter("baud", 115200));
     frame_id_ = declare_parameter("frame_id", "map");

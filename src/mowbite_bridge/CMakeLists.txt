@@ -10,6 +10,7 @@ add_compile_options(-ffp-contract=off)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(mowbite_component REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -45,7 +46,7 @@ add_library(mowbite_bridge_component SHARED src/bridge_component.cpp)
 target_link_libraries(mowbite_bridge_component mowbite_bridge_core PahoMqttCpp::paho-mqttpp3
   mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_bridge_component rclcpp rclcpp_components rcl_interfaces geometry_msgs std_msgs mowbite_msgs)
-rclcpp_components_register_node(mowbite_bridge_component
+mowbite_component_register(mowbite_bridge_component
   PLUGIN "mowbite_bridge::BridgeNode"
   EXECUTABLE mowbite_bridge_node)
 

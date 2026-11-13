@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 
+#include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/clock_status.hpp>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
@@ -49,7 +50,7 @@ rclcpp::QoS LatchedQos(size_t depth) {
 class ClockNode : public rclcpp::Node {
  public:
   explicit ClockNode(const rclcpp::NodeOptions& options)
-      : rclcpp::Node("mowbite_clock", options),
+      : rclcpp::Node("mowbite_clock", mowbite_component::StartupOnly(options)),
         data_dir_(declare_parameter("data_dir", std::string())),
         guard_(LoadStart()),
         writer_(mowbite_hold::WriteFileSafely, [this](const mowbite_hold::FileWriter::Done& done) {

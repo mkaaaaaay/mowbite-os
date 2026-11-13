@@ -10,6 +10,7 @@ add_compile_options(-ffp-contract=off)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(mowbite_component REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tron_mcu REQUIRED)
 find_package(mowbite_watch REQUIRED)
@@ -24,7 +25,7 @@ set_target_properties(tron_imu_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_library(tron_imu_component SHARED src/imu_node.cpp)
 target_link_libraries(tron_imu_component tron_imu_core tron_mcu::tron_mcu_core mowbite_watch::mowbite_watch)
 ament_target_dependencies(tron_imu_component rclcpp rclcpp_components sensor_msgs)
-rclcpp_components_register_node(tron_imu_component
+mowbite_component_register(tron_imu_component
   PLUGIN "tron_imu::ImuNode"
   EXECUTABLE tron_imu_node)
 

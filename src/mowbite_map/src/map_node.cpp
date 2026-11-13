@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <chrono>
 #include <map>
+#include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/map_status.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/rpc_error.hpp>
@@ -47,7 +48,8 @@ uint8_t ToMsg(DatumState state) {
 // bridge, services for the logic and the planner and the status that says whether the map fits the datum.
 class MapNode : public rclcpp::Node {
  public:
-  explicit MapNode(const rclcpp::NodeOptions& options) : rclcpp::Node("mowbite_map", options), service_(LoadConfig()) {
+  explicit MapNode(const rclcpp::NodeOptions& options)
+      : rclcpp::Node("mowbite_map", mowbite_component::StartupOnly(options)), service_(LoadConfig()) {
     map_pub_ = create_publisher<std_msgs::msg::String>("map/json", LatchedQos(1));
     status_pub_ = create_publisher<mowbite_msgs::msg::MapStatus>("map/status", LatchedQos(1));
     methods_pub_ = create_publisher<mowbite_msgs::msg::RpcMethods>("bridge/rpc/methods", LatchedQos(50));

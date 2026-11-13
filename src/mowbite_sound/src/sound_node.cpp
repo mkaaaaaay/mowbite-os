@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <future>
 #include <memory>
+#include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
@@ -75,7 +76,9 @@ struct Imported {
 class SoundNode : public rclcpp::Node {
  public:
   explicit SoundNode(const rclcpp::NodeOptions& options)
-      : rclcpp::Node("mowbite_sound", options), config_(LoadConfig()), player_(MakePlayer()),
+      : rclcpp::Node("mowbite_sound", mowbite_component::StartupOnly(options)),
+        config_(LoadConfig()),
+        player_(MakePlayer()),
         service_(config_.sound, player_.get()) {
     watch_ = mowbite_watch::Attach(*this);
     if (!player_) {

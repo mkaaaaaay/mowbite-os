@@ -8,6 +8,7 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <cstdio>
 #include <limits>
+#include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
@@ -139,7 +140,7 @@ Bytes F64(double value) {
 class XcoreNode : public rclcpp::Node {
  public:
   explicit XcoreNode(const rclcpp::NodeOptions& options)
-      : rclcpp::Node("xcore_driver", options), inputs_(LoadInputs()) {
+      : rclcpp::Node("xcore_driver", mowbite_component::StartupOnly(options)), inputs_(LoadInputs()) {
     const xcore::ControlConfig control = LoadControl();
     blade_lease_max_s_ = get_parameter("blade_lease_max").as_double();
     max_linear_speed_ = control.max_linear_speed;

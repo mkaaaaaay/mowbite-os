@@ -10,6 +10,7 @@ add_compile_options(-ffp-contract=off)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(mowbite_component REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -32,7 +33,7 @@ target_link_libraries(mowbite_safety_component mowbite_safety_core mowbite_journ
   mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_safety_component rclcpp rclcpp_components geometry_msgs sensor_msgs std_msgs
   mowbite_msgs)
-rclcpp_components_register_node(mowbite_safety_component
+mowbite_component_register(mowbite_safety_component
   PLUGIN "mowbite_safety::SafetyNode"
   EXECUTABLE mowbite_safety_node)
 

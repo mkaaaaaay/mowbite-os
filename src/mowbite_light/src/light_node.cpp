@@ -2,6 +2,7 @@
 #include <chrono>
 #include <memory>
 #include <optional>
+#include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/button_event.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
@@ -58,7 +59,9 @@ struct NodeConfig {
 class LightNode : public rclcpp::Node {
  public:
   explicit LightNode(const rclcpp::NodeOptions& options)
-      : rclcpp::Node("mowbite_light", options), config_(LoadConfig()), service_(config_.light) {
+      : rclcpp::Node("mowbite_light", mowbite_component::StartupOnly(options)),
+        config_(LoadConfig()),
+        service_(config_.light) {
     watch_ = mowbite_watch::Attach(*this);
     if (config_.output == "none") {
       RCLCPP_INFO(get_logger(), "output none: no light.* methods, nothing is sent to the lights");

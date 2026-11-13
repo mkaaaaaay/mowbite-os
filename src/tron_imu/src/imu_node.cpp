@@ -1,6 +1,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mowbite_component/node_options.h>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -26,7 +27,8 @@ double MonotonicSeconds() {
 // Reads the WIT sensor and publishes imu/data. Never writes to the port.
 class ImuNode : public rclcpp::Node {
  public:
-  explicit ImuNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_imu", options) {
+  explicit ImuNode(const rclcpp::NodeOptions& options)
+      : rclcpp::Node("tron_imu", mowbite_component::StartupOnly(options)) {
     port_name_ = declare_parameter("port", "/dev/ttyS1");
     baud_ = static_cast<int>(declare_parameter("baud", 115200));
     frame_id_ = declare_parameter("frame_id", "base_link");
