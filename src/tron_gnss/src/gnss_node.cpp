@@ -45,7 +45,7 @@ static_assert(static_cast<uint8_t>(tron::Solution::kRtkFloat) == GnssFix::RTK_FL
 static_assert(static_cast<uint8_t>(tron::Solution::kRtkFixed) == GnssFix::RTK_FIXED);
 static_assert(static_cast<uint8_t>(tron::Solution::kDeadReckoning) == GnssFix::DEAD_RECKONING);
 // RTCM waiting for the port; beyond this the newest is dropped (the receiver wants fresh corrections, not all of them).
-constexpr size_t kMaxQueue = 32 * 1024;
+constexpr size_t kMaxQueue = size_t{32} * 1024;
 
 }  // namespace
 
@@ -115,7 +115,8 @@ class GnssNode : public rclcpp::Node {
     }
     gga_pub_ = create_publisher<std_msgs::msg::String>("gnss/gga", 10);
     rtcm_sub_ = create_subscription<mowbite_msgs::msg::Rtcm>(
-        "gnss/rtcm", rclcpp::QoS(50).reliable(), [this](mowbite_msgs::msg::Rtcm::ConstSharedPtr msg) { OnRtcm(*msg); });
+        "gnss/rtcm", rclcpp::QoS(50).reliable(),
+        [this](const mowbite_msgs::msg::Rtcm::ConstSharedPtr& msg) { OnRtcm(*msg); });
     sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorSpec>(
         "bridge/sensor_info", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().transient_local());
     sensor_value_pub_ = create_publisher<mowbite_msgs::msg::SensorValue>("bridge/sensor_value", 100);
