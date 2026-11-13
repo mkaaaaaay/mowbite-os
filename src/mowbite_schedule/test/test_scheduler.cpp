@@ -48,7 +48,7 @@ class SchedulerTest : public ::testing::Test {
   }
 
   void Make(const ScheduleFile& file, bool available = true, const json& state = nullptr) {
-    scheduler_.emplace(file, available, state, nullptr, At(kMonday, "00:00"));
+    scheduler_.emplace(SchedulerStart{file, available, state, nullptr, At(kMonday, "00:00")});
   }
 
   Output Tick(const Facts& facts) {
@@ -797,7 +797,7 @@ TEST_F(SchedulerTest, StateAndLogSurviveARestart) {
   scheduler_->OnStartAnswer(out.start->run_id, false, "BATTERY_HOT", 61.5);
   const json state = scheduler_->StateJson();
   const json log = scheduler_->LogJson();
-  scheduler_.emplace(File(), true, state, log, At(kMonday, "10:00", 20));
+  scheduler_.emplace(SchedulerStart{File(), true, state, log, At(kMonday, "10:00", 20)});
   EXPECT_FALSE(TickAt(kMonday, "10:00", 30).start);
   EXPECT_EQ(Words(), (Lines{"start_refused BATTERY_HOT"}));
   EXPECT_EQ(scheduler_->LogJson(), log);
@@ -813,7 +813,7 @@ TEST_F(SchedulerTest, LogKeepsTheLastHundred) {
   json entries = json::array();
   for (int i = 0; i < 120; ++i) entries.push_back({{"t", i}, {"what", "skip_rain"}, {"detail", nullptr}});
   entries.push_back({{"what", "no time"}});
-  scheduler_.emplace(File(), true, nullptr, json{{"schema", 1}, {"entries", entries}}, 0);
+  scheduler_.emplace(SchedulerStart{File(), true, nullptr, json{{"schema", 1}, {"entries", entries}}, 0});
   const json kept = scheduler_->LogEntries(kLogEntries);
   ASSERT_EQ(kept.size(), kLogEntries);
   EXPECT_EQ(kept[0]["t"], 20);
@@ -1129,7 +1129,7 @@ TEST_F(SchedulerTest, ChangesMarkTheFile) {
 TEST_F(SchedulerTest, LogStaysAtAHundred) {
   json entries = json::array();
   for (int i = 0; i < 100; ++i) entries.push_back({{"t", i}, {"what", "skip_rain"}});
-  scheduler_.emplace(File(), true, nullptr, json{{"schema", 1}, {"entries", entries}}, 0);
+  scheduler_.emplace(SchedulerStart{File(), true, nullptr, json{{"schema", 1}, {"entries", entries}}, 0});
   Facts facts = Good(At(kMonday, "10:00"));
   facts.emergency = true;
   Tick(facts);
@@ -1142,7 +1142,7 @@ TEST_F(SchedulerTest, LogStaysAtAHundred) {
 TEST_F(SchedulerTest, StoredTextsOnlyAsWritten) {
   const json entry = {{"t", 5}, {"what", "skip_rain"}};
   const auto log_size = [&](const json& log) {
-    scheduler_.emplace(File(), true, nullptr, log, 0);
+    scheduler_.emplace(SchedulerStart{File(), true, nullptr, log, 0});
     return scheduler_->LogEntries(kLogEntries).size();
   };
   EXPECT_EQ(log_size(json{{"schema", 1}, {"entries", {entry}}}), 1u);
@@ -1153,7 +1153,7 @@ TEST_F(SchedulerTest, StoredTextsOnlyAsWritten) {
   EXPECT_EQ(log_size(json{{"schema", 1}, {"entries", {{{"t", 5}}, {{"what", "x"}}, 3, {{"t", "5"}, {"what", "x"}}}}}),
             0u);
   const auto handled = [&](const json& state) {
-    scheduler_.emplace(File(), true, state, nullptr, 0);
+    scheduler_.emplace(SchedulerStart{File(), true, state, nullptr, 0});
     return scheduler_->StateJson()["handled"];
   };
   EXPECT_EQ(handled(json{{"schema", 1}, {"handled", {{"2026-06-15", {"10:00", "25:00", 3}}}}}),
@@ -1163,7 +1163,7 @@ TEST_F(SchedulerTest, StoredTextsOnlyAsWritten) {
   EXPECT_EQ(handled(json{{"schema", 1}, {"handled", {{"2026-02-30", {"10:00"}}, {"2026-06-16", "10:00"}}}}),
             json::object());
   const auto missed = [&](const json& waiting) {
-    scheduler_.emplace(File(), true, json{{"schema", 1}, {"waiting", waiting}}, nullptr, 0);
+    scheduler_.emplace(SchedulerStart{File(), true, json{{"schema", 1}, {"waiting", waiting}}, nullptr, 0});
     return Words().size();
   };
   EXPECT_EQ(missed(json{{"date", "2026-06-15"}, {"time", "10:00"}, {"kind", "hold"}}), 1u);

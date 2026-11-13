@@ -12,6 +12,7 @@ find_package(mowbite_journal REQUIRED)
 find_package(mowbite_localization REQUIRED)
 find_package(mowbite_logic REQUIRED)
 find_package(mowbite_safety REQUIRED)
+find_package(mowbite_schedule REQUIRED)
 find_package(tron_mcu REQUIRED)
 
 # The cores this tool knows, also for the tests.
@@ -22,6 +23,7 @@ target_link_libraries(mowbite_replay_cores PUBLIC
   mowbite_localization::mowbite_localization_core
   mowbite_logic::mowbite_logic_core
   mowbite_safety::mowbite_safety_core
+  mowbite_schedule::mowbite_schedule_core
   tron_mcu::tron_mcu_core)
 
 add_executable(mowbite_replay src/main.cpp)

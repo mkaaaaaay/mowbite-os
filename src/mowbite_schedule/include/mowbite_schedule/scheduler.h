@@ -119,13 +119,22 @@ struct Output {
   bool file_changed = false;
 };
 
+// What the scheduler starts from: file and state as stored (state: schedule-state.json, null when missing), log:
+// schedule-log.json, now in unix s.
+struct SchedulerStart {
+  ScheduleFile file;
+  bool available = false;
+  json state;
+  json log;
+  int64_t now = 0;
+};
+
 // The decision of the schedule without clock, files or ROS: the node gives it the time and the states, carries out
 // what it asks for and stores its texts. A plan fires at most once per local date (S4), only from the station (S1)
 // with a safe clock (S3); one missed while the OS was off is not made up (S5).
 class Scheduler {
  public:
-  // file and state as stored (state: schedule-state.json, null when missing), log: schedule-log.json entries.
-  Scheduler(ScheduleFile file, bool available, const json& state, const json& log, int64_t now);
+  explicit Scheduler(const SchedulerStart& start);
 
   void Tick(const Facts& facts);
   void OnWeather(const Weather& weather);

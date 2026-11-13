@@ -15,6 +15,7 @@ CORES = {
     "mowbite_safety": "mowbite_safety_core",
     "tron_mcu": "tron_mcu_core",
     "mowbite_api": "mowbite_api_core",
+    "mowbite_schedule": "mowbite_schedule_core",
 }
 # Not part of a core although in its library: the port belongs to the I/O thread of the node.
 NOT_CORE = {"tron_mcu/src/serial_port.cpp", "tron_mcu/include/tron_mcu/serial_port.h"}

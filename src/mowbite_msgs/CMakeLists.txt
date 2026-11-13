@@ -42,6 +42,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DockMarker.msg"
   "msg/ClockStatus.msg"
   "msg/RunStatus.msg"
+  "msg/WeatherRequest.msg"
+  "msg/Weather.msg"
   "srv/AddArea.srv"
   "srv/ReplaceMap.srv"
   "srv/SetBlade.srv"

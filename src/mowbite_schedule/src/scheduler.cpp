@@ -73,9 +73,10 @@ json EntryToJson(const LogEntry& entry) {
   return {{"t", entry.t}, {"what", entry.what}, {"detail", entry.detail}, {"more", entry.more}, {"at", entry.at}};
 }
 
-Scheduler::Scheduler(ScheduleFile file, bool available, const json& state, const json& log, int64_t now)
-    : file_(std::move(file)), available_(available) {
-  facts_.wall = now;
+Scheduler::Scheduler(const SchedulerStart& start) : file_(start.file), available_(start.available) {
+  const json& log = start.log;
+  const json& state = start.state;
+  facts_.wall = start.now;
   if (log.is_object() && log.value("schema", 0) == kLogSchema && log.contains("entries") && log["entries"].is_array()) {
     for (const json& item : log["entries"]) {
       if (!item.is_object() || !item.contains("t") || !item["t"].is_number_integer() || !item.contains("what") ||

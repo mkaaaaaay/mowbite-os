@@ -155,7 +155,11 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal):
     clock = ComposableNode(
         package="mowbite_time", plugin="mowbite_time::ClockNode", name="mowbite_clock",
         parameters=[*files, {"data_dir": data_dir}])
-    return [localization, safety, logic, bridge, map_node, follower, ntrip, calibration, clock]
+    # The plans that start the mower from the station, only through the logic; the platform allows it (allowed).
+    schedule = ComposableNode(
+        package="mowbite_schedule", plugin="mowbite_schedule::ScheduleNode", name="mowbite_schedule",
+        parameters=[*files, {"data_dir": data_dir}, journal_dir])
+    return [localization, safety, logic, bridge, map_node, follower, ntrip, calibration, clock, schedule]
 
 
 # The names of these composable nodes, as their watch knows them.
