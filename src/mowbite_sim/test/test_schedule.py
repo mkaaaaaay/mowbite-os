@@ -336,8 +336,10 @@ class TestSchedule(unittest.TestCase):
         self.assertTrue(wait_until(lambda: self.broker.ready() == {"ok": False, "reason": "waiting_battery"}, 5),
                         self.broker.ready())
         self.assertIsNotNone(self.logged("waiting_battery", at, at - time.time() + 10), self.log())
-        state = read_json(os.path.join(DATA, "schedule-state.json"), tries=20)
-        self.assertEqual(state["waiting"]["time"], clock_time(at), state)
+        path = os.path.join(DATA, "schedule-state.json")
+        # The file is written beside the node; the mark of the wait comes shortly after the log.
+        waiting = wait_until(lambda: ((read_json(path, tries=5) or {}).get("waiting") or {}).get("time"), 10)
+        self.assertEqual(waiting, clock_time(at), read_json(path))
         since = len(p.events)
         pid = container_pid(proc_info)
         self.assertIsNotNone(pid)
@@ -346,7 +348,6 @@ class TestSchedule(unittest.TestCase):
         self.assertIsNotNone(self.logged("skip_missed", at, 40), self.log())
         p.flags(battery_percentage=90, charge_current=0)
         self.assertIsNone(p.event(since, "SCHEDULE_START", 10), p.events[since:])
-        path = os.path.join(DATA, "schedule-state.json")
         state = wait_until(lambda: (read_json(path, tries=5) or {"waiting": True})["waiting"] is None
                            and read_json(path, tries=5), 10)
         self.assertTrue(state, read_json(path))

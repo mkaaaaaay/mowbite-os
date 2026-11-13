@@ -822,7 +822,7 @@ if ntrip_write:
     check("os_ntrip_state off after ntrip.delete", bool(off), str(latest("sensors/os_ntrip_state/data")))
 
 
-HOLD_ANSWER = {"state", "is_charging", "hold_until", "sub_state", "idle", "emergency_reason"}
+HOLD_ANSWER = {"state", "is_charging", "hold_until", "sub_state", "idle", "emergency_reason", "next_start"}
 
 
 def hold_refused(r):
