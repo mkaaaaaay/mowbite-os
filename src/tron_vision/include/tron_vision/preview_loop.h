@@ -64,9 +64,6 @@ struct PreviewStatus {
   double fps = 0.0;
   double kbps = 0.0;
   double encode_ms = 0.0;
-  // Chroma shift of the gray world for the H.264 picture.
-  int shift_u = 0;
-  int shift_v = 0;
   int exit_code = kExitNone;
 };
 

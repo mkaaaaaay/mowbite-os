@@ -52,7 +52,6 @@ class TronCamera : public Camera {
   V4l2Capture capture_;
   ExposureSetting pending_;
   CapturedFrame last_;
-  bool have_last_ = false;
 };
 
 }  // namespace tron_vision

@@ -1,7 +1,6 @@
 #include "tron_vision/dma_frames.h"
 
 #include <fcntl.h>
-#include <linux/dma-buf.h>
 #include <linux/dma-heap.h>
 
 #include <utility>
@@ -66,13 +65,7 @@ void DmaFrames::Close() {
 }
 
 bool DmaFrames::Sync(const Buffer& buffer, bool start, std::string& error) {
-  dma_buf_sync sync{};
-  sync.flags = (start ? DMA_BUF_SYNC_START : DMA_BUF_SYNC_END) | DMA_BUF_SYNC_RW;
-  if (device_->Ioctl(buffer.fd, DMA_BUF_IOCTL_SYNC, &sync) < 0) {
-    error = ErrnoText("sync dma-buf");
-    return false;
-  }
-  return true;
+  return SyncDmaBuf(*device_, buffer.fd, start, "dma-buf", error);
 }
 
 bool DmaFrames::Write(const Fill& fill, CapturedFrame& frame, std::string& error) {

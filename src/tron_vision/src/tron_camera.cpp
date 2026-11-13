@@ -32,18 +32,17 @@ bool TronCamera::Start(std::string& error) {
 }
 
 void TronCamera::Stop() {
-  have_last_ = false;
+  last_ = CapturedFrame{};
   capture_.Close();
   sensor_.Close();
 }
 
 int TronCamera::Next(int timeout_ms, Nv12View& frame, std::string& error) {
-  have_last_ = false;
+  last_ = CapturedFrame{};
   CapturedFrame raw;
   const int got = capture_.Next(timeout_ms, raw, error);
   if (got <= 0) return got;
   last_ = raw;
-  have_last_ = true;
   frame.y = raw.data;
   frame.uv = raw.data + static_cast<size_t>(raw.stride) * config_.height;
   frame.width = config_.width;
@@ -53,7 +52,7 @@ int TronCamera::Next(int timeout_ms, Nv12View& frame, std::string& error) {
 }
 
 const CapturedFrame* TronCamera::Captured() const {
-  return have_last_ && last_.dmabuf >= 0 ? &last_ : nullptr;
+  return last_.dmabuf >= 0 ? &last_ : nullptr;
 }
 
 bool TronCamera::EditFrame(const std::function<void(const Nv12Buffer&)>& edit, std::string& error) {

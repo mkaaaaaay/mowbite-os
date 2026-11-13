@@ -33,9 +33,6 @@ class H264Stream {
 
   // Opens the encoder once for SPS and PPS and closes it again; Offer() then gives them to the server.
   bool Prepare(const EncoderSettings& settings, std::string& error);
-  bool Prepared() const {
-    return prepared_;
-  }
   // DESCRIBE offers the prepared stream, or answers 503 and drops the client.
   void Offer();
   void Withdraw();
@@ -70,9 +67,6 @@ class H264Stream {
   }
   uint64_t Frames() const {
     return frames_;
-  }
-  const ParameterSets& Sets() const {
-    return sets_;
   }
 
  private:

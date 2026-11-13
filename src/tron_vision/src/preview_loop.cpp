@@ -179,8 +179,8 @@ bool PreviewLoop::Step() {
 
 void PreviewLoop::SendVideo() {
   if (!video_ || !video_->Playing()) return;
-  const int du = status_.shift_u;
-  const int dv = status_.shift_v;
+  const int du = white_.ShiftU();
+  const int dv = white_.ShiftV();
   const auto shift = [du, dv](const Nv12Buffer& f) { ShiftChroma(f.uv, f.width, f.height, f.stride, du, dv); };
   const std::string detail = video_->Send(camera_, shift);
   if (!detail.empty()) status_.detail = detail;
@@ -198,8 +198,6 @@ void PreviewLoop::OnFrame(const Nv12View& frame, double now) {
 
   white_.Update(stats);
   status_.display_gains = white_.Gains();
-  status_.shift_u = white_.ShiftU();
-  status_.shift_v = white_.ShiftV();
 
   if (++frames_since_exposure_ >= config_.settle_frames) {
     const ExposureSetting next = NextExposure(status_.exposure, stats.y, config_.exposure);

@@ -5,7 +5,7 @@
 namespace tron_vision {
 
 VideoFeed::VideoFeed(VideoFeedConfig config, H264Stream& stream, std::function<double()> now)
-    : config_(std::move(config)), stream_(stream), now_(std::move(now)) {}
+    : config_(config), stream_(stream), now_(std::move(now)) {}
 
 std::string VideoFeed::Step(bool may_start, bool streaming) {
   std::string detail;
@@ -66,14 +66,6 @@ bool VideoFeed::Begun(std::string& detail) {
 std::string VideoFeed::Encode(const CapturedFrame& frame) {
   std::string error;
   return stream_.Send(frame, error) == H264Stream::Sent::kEncoderFailed ? Failed(error) : "";
-}
-
-double VideoFeed::Fps() const {
-  return stream_.Running() ? stream_.Fps() : 0.0;
-}
-
-double VideoFeed::Kbps() const {
-  return stream_.Running() ? stream_.Kbps() : 0.0;
 }
 
 std::string VideoFeed::Failed(const std::string& detail) {

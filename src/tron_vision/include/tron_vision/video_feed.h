@@ -44,8 +44,12 @@ class VideoFeed {
   void End() {
     stream_.End();
   }
-  double Fps() const;
-  double Kbps() const;
+  double Fps() const {
+    return stream_.Fps();
+  }
+  double Kbps() const {
+    return stream_.Kbps();
+  }
   double EncodeMs() const {
     return stream_.EncodeMs();
   }

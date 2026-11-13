@@ -130,6 +130,16 @@ std::string UniqueNode(const std::string& sysfs_root, const std::function<bool(c
   return matches == 1 ? found : "";
 }
 
+bool SyncDmaBuf(VideoDevice& device, int fd, bool start, const char* what, std::string& error) {
+  dma_buf_sync sync{};
+  sync.flags = (start ? DMA_BUF_SYNC_START : DMA_BUF_SYNC_END) | DMA_BUF_SYNC_RW;
+  if (device.Ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) < 0) {
+    error = ErrnoText(std::string("sync ") + what);
+    return false;
+  }
+  return true;
+}
+
 bool DeviceFree(const ProcessesUsing& processes_using, const std::string& device, std::string& error) {
   const std::vector<int> users = processes_using ? processes_using(device) : std::vector<int>{};
   if (users.empty()) return true;
@@ -491,13 +501,7 @@ bool V4l2Capture::SyncForCpu(uint32_t index, bool start, std::string& error) {
     error = "buffer " + std::to_string(index) + " is not exported";
     return false;
   }
-  dma_buf_sync sync{};
-  sync.flags = (start ? DMA_BUF_SYNC_START : DMA_BUF_SYNC_END) | DMA_BUF_SYNC_RW;
-  if (device_->Ioctl(exported_[index], DMA_BUF_IOCTL_SYNC, &sync) < 0) {
-    error = ErrnoText("sync buffer");
-    return false;
-  }
-  return true;
+  return SyncDmaBuf(*device_, exported_[index], start, "buffer", error);
 }
 
 }  // namespace tron_vision

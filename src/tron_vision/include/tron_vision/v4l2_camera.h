@@ -73,6 +73,9 @@ class VideoDevice {
   virtual int WaitReadable(int fd, int timeout_ms);
 };
 
+// Starts (start) or ends CPU access to the dma-buf fd; `what` names it in the error.
+bool SyncDmaBuf(VideoDevice& device, int fd, bool start, const char* what, std::string& error);
+
 enum class PixelFormat {
   kNv12,
   kYuyv,
