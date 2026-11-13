@@ -214,8 +214,9 @@ std::optional<Effect> EffectFromJson(const Json& value, std::string* error) {
 }
 
 const std::vector<std::string>& ProfileStates() {
-  static const std::vector<std::string> states = {"IDLE",     "MOWING",   "PAUSED",  "DOCKING",    "UNDOCKING",
-                                                  "AREA_RECORDING", "CHARGING", "CHARGED", "BATTERY_LOW"};
+  static const std::vector<std::string> states = {"IDLE",        "MOWING",         "PAUSED",   "DOCKING",
+                                                  "UNDOCKING",   "AREA_RECORDING", "CHARGING", "CHARGED",
+                                                  "BATTERY_LOW", "SCHEDULE_START"};
   return states;
 }
 
@@ -228,7 +229,8 @@ Profile DefaultProfile() {
           {"AREA_RECORDING", Make(EffectKind::kPulse, {kBlue}, 2.0)},
           {"CHARGING", Make(EffectKind::kChase, {kGreen}, 2.0)},
           {"CHARGED", Make(EffectKind::kSolid, {kGreen}, 1.0)},
-          {"BATTERY_LOW", Make(EffectKind::kPulse, {kRed}, 3.0)}};
+          {"BATTERY_LOW", Make(EffectKind::kPulse, {kRed}, 3.0)},
+          {"SCHEDULE_START", Make(EffectKind::kBlink, {kYellow}, 0.5)}};
 }
 
 Effect EmergencyEffect() {

@@ -110,9 +110,12 @@ TEST(SoundService, EventsAndStatesBecomeSituations) {
   f.service->OnEvent(f.Event("STATE", {{"state", "AREA_RECORDING"}}), 11);
   f.service->OnEvent(f.Event("BLADES", {{"enabled", true}}), 12);
   f.service->OnEvent(Json("not an object"), 13);
+  f.service->OnEvent(f.Event("SCHEDULE_START", {{"seconds", 10}}), 14);
+  f.service->OnEvent(f.Event("SCHEDULE_START_CANCELED", {{"source", "rpc"}}), 15);
   EXPECT_EQ(f.sink.calls, (std::vector<std::string>{"play MOWING_START", "play MOWING_PAUSED", "play MOWING_COMPLETE",
                                                      "play DOCKING_START", "play RAIN_DETECTED", "play LOW_BATTERY",
-                                                     "play DOCKING_FAILED", "play AREA_RECORDING_MODE"}));
+                                                     "play DOCKING_FAILED", "play AREA_RECORDING_MODE",
+                                                     "play SCHEDULE_START"}));
 }
 
 TEST(SoundService, ASituationPlaysAtMostOnceInMinGap) {
@@ -210,7 +213,7 @@ TEST(SoundService, VolumeIsKeptAndRefusedOnlyToChangeInAHold) {
   SoundService again(f.config, &f.sink);
   EXPECT_EQ(again.Load(), "");
   EXPECT_EQ(again.volume(), 35);
-  EXPECT_EQ(again.files().size(), 12u);
+  EXPECT_EQ(again.files().size(), mowbite_api::SoundSituations().size());
 
   f.service->SetHold(1800000000);
   const auto refused = f.service->Call("sound.volume", {{"volume", 50}}, 0);
@@ -231,7 +234,7 @@ TEST(SoundService, ListShowsEverySituationAndPlayAndStopReachTheSink) {
   const auto list = f.service->Call("sound.list", Json::object(), 0);
   ASSERT_TRUE(list && list->ok);
   const Json& situations = list->result["situations"];
-  ASSERT_EQ(situations.size(), 12u);
+  ASSERT_EQ(situations.size(), 13u);
   EXPECT_EQ(situations[0]["name"], "MOWING_START");
   EXPECT_EQ(situations[0]["file"],
             (Json{{"source", "vendor"}, {"size", 1000}, {"sha256", kSha}, {"seconds", 1.5}}));

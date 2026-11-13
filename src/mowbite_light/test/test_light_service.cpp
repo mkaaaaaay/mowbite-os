@@ -128,6 +128,43 @@ TEST(LightService, TheFrameFollowsTheStateAndTheEmergencyGoesOverAll) {
   EXPECT_EQ(service.Frame(11.0)[0], Render(DefaultProfile().at("CHARGING"), 10, 0)[0]);
 }
 
+TEST(LightService, TheAnnouncementOfAStartBlinksOverChargingUntilItEnds) {
+  LightService service(Config());
+  const Rgb yellow{255, 160, 0};
+  const Json start = {{"type", "SCHEDULE_START"}, {"seconds", 10}, {"until", 1794484810}};
+  service.SetRobotState("IDLE", false, true, 0.9);
+  const Rgb charging = service.Frame(0.0)[0];
+  // Twice a second for its seconds.
+  service.OnEvent(start, 1.0);
+  EXPECT_EQ(service.Frame(1.0)[0], yellow);
+  EXPECT_EQ(service.Frame(1.3)[0], Rgb{});
+  EXPECT_EQ(service.Frame(1.5)[0], yellow);
+  EXPECT_EQ(service.Frame(10.7)[0], yellow);
+  EXPECT_EQ(service.Frame(11.0)[0], charging);
+  // Canceled.
+  service.OnEvent(start, 20.0);
+  EXPECT_EQ(service.Frame(20.0)[0], yellow);
+  service.OnEvent(Json{{"type", "SCHEDULE_START_CANCELED"}, {"source", "rpc"}}, 20.4);
+  EXPECT_EQ(service.Frame(20.5)[0], charging);
+  // The state changed.
+  service.OnEvent(start, 30.0);
+  service.SetRobotState("UNDOCKING", false, false, 0.9);
+  EXPECT_EQ(service.Frame(30.0)[0], Render(DefaultProfile().at("UNDOCKING"), 10, 0)[0]);
+  service.SetRobotState("IDLE", false, true, 0.9);
+  EXPECT_NE(service.Frame(31.0)[0], yellow);
+  // An emergency ends it for good.
+  service.OnEvent(start, 40.0);
+  service.SetRobotState("IDLE", true, true, 0.9);
+  EXPECT_EQ(service.Frame(40.0)[0], kRed);
+  service.SetRobotState("IDLE", false, true, 0.9);
+  EXPECT_NE(service.Frame(41.0)[0], yellow);
+  // Without seconds, or other events: nothing.
+  service.OnEvent(Json{{"type", "SCHEDULE_START"}}, 50.0);
+  service.OnEvent(Json{{"type", "JOB_COMPLETE"}}, 50.0);
+  service.OnEvent(Json("no event"), 50.0);
+  EXPECT_NE(service.Frame(50.0)[0], yellow);
+}
+
 // STOP held in an emergency: green over the red until canceled, the end of the emergency, or the time is up.
 TEST(LightService, TheReadySignalOfStop) {
   const Rgb green{0, 255, 0};

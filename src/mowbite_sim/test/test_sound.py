@@ -138,7 +138,7 @@ class TestSound(unittest.TestCase):
         for method in ("sound.play", "sound.stop", "sound.volume", "sound.upload", "sound.delete"):
             self.assertIn(method, methods)
         listed = self.rpc("sound.list")["result"]
-        self.assertEqual(len(listed["situations"]), 12)
+        self.assertEqual(len(listed["situations"]), 13)
         with_file = {s["name"] for s in listed["situations"] if s["file"]}
         self.assertEqual(with_file, set(CODES))
         self.assertEqual(listed["volume"], 60)

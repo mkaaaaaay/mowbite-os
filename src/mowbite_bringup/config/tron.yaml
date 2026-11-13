@@ -338,6 +338,7 @@ mowbite_sound:
       - CHARGING_DONE=900013
       - EMERGENCY=900017
       - LIFT_TRIGGERED=900018
+      - SCHEDULE_START=900006
 
 # tron_vision, the camera AI on a side camera: left with MOWBITE_VISION=on, right with MOWBITE_RIGHT=on as a second
 # instance in the namespace /right. These values hold for both.

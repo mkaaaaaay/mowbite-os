@@ -66,6 +66,20 @@ void LightService::SetRobotState(const std::string& current_state, bool emergenc
   battery_ = battery;
 }
 
+void LightService::OnEvent(const Json& event, double now) {
+  if (!event.is_object()) return;
+  const std::string type = event.value("type", "");
+  if (type == "SCHEDULE_START") {
+    const Json seconds = event.value("seconds", Json());
+    const double s = seconds.is_number() ? seconds.get<double>() : 0.0;
+    if (!(s > 0)) return;
+    announce_until_ = now + std::min(s, kMaxAnnouncementS);
+    announce_state_ = state_;
+  } else if (type == "SCHEDULE_START_CANCELED") {
+    announce_until_.reset();
+  }
+}
+
 void LightService::OnStopPress(StopPress press, double now) {
   if (!emergency_ || press == StopPress::kCanceled) {
     stop_ready_until_.reset();
@@ -77,6 +91,7 @@ void LightService::OnStopPress(StopPress press, double now) {
 std::vector<Rgb> LightService::Frame(double now) {
   if (preview_ && now >= preview_until_) preview_.reset();
   if (stop_ready_until_ && now >= *stop_ready_until_) stop_ready_until_.reset();
+  if (announce_until_ && (now >= *announce_until_ || emergency_ || state_ != announce_state_)) announce_until_.reset();
   std::string key;
   Effect effect;
   if (emergency_ && stop_ready_until_) {
@@ -85,6 +100,9 @@ std::vector<Rgb> LightService::Frame(double now) {
   } else if (emergency_) {
     key = "EMERGENCY";
     effect = EmergencyEffect();
+  } else if (announce_until_) {
+    key = "SCHEDULE_START";
+    effect = profile_.at(key);
   } else if (preview_) {
     key = "PREVIEW " + std::to_string(previews_);
     effect = *preview_;

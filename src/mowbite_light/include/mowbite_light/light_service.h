@@ -11,6 +11,8 @@ namespace mowbite_light {
 
 // Longest light.preview in s.
 constexpr double kMaxPreview = 10.0;
+// Longest announcement of a start of the schedule the lights show, whatever its event says.
+constexpr double kMaxAnnouncementS = 30.0;
 // The ready signal of STOP shows at most this long after held, and this long after let go while the release runs.
 constexpr double kStopReadyMaxS = 10.0;
 constexpr double kStopReleasingS = 2.0;
@@ -54,6 +56,9 @@ class LightService {
   std::optional<RpcOutcome> Call(const std::string& method, const Json& params, double now);
 
   void SetRobotState(const std::string& current_state, bool emergency, bool is_charging, double battery);
+  // SCHEDULE_START shows SCHEDULE_START for its seconds over every state until SCHEDULE_START_CANCELED, a change of
+  // the state or an emergency; other events change nothing.
+  void OnEvent(const Json& event, double now);
   // In an emergency held shows the ready signal over the emergency, long keeps it while the release runs, canceled
   // ends it; the end of the emergency ends it too.
   void OnStopPress(StopPress press, double now);
@@ -75,6 +80,9 @@ class LightService {
   bool emergency_ = false;
   bool charging_ = false;
   double battery_ = 1.0;
+  // Until when the announcement of a start shows, and the state it began in.
+  std::optional<double> announce_until_;
+  std::string announce_state_;
   // Until when the ready signal of STOP shows.
   std::optional<double> stop_ready_until_;
   std::optional<Effect> preview_;

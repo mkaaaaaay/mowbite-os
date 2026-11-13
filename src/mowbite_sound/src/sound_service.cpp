@@ -356,6 +356,8 @@ void SoundService::OnEvent(const Json& event, double now) {
     Announce("RAIN_DETECTED", now);
   } else if (type == "DOCKING_FAILED") {
     Announce("DOCKING_FAILED", now);
+  } else if (type == "SCHEDULE_START") {
+    Announce("SCHEDULE_START", now);
   }
 }
 

@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <mowbite_msgs/msg/button_event.hpp>
+#include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
 #include <mowbite_msgs/msg/rpc_error.hpp>
 #include <mowbite_msgs/msg/rpc_methods.hpp>
@@ -74,6 +75,11 @@ class LightNode : public rclcpp::Node {
     state_sub_ = create_subscription<mowbite_msgs::msg::RobotState>(
         "bridge/robot_state", 10, [this](mowbite_msgs::msg::RobotState::ConstSharedPtr msg) {
           service_.SetRobotState(msg->current_state, msg->emergency, msg->is_charging, msg->battery_percentage);
+        });
+    publish_sub_ = create_subscription<mowbite_msgs::msg::MqttPublish>(
+        "bridge/publish", 100, [this](mowbite_msgs::msg::MqttPublish::ConstSharedPtr msg) {
+          if (msg->topic != "events/json") return;
+          service_.OnEvent(Json::parse(msg->payload, nullptr, false), MonotonicSeconds());
         });
     button_sub_ = create_subscription<mowbite_msgs::msg::ButtonEvent>(
         "hw/button", rclcpp::QoS(10).reliable(), [this](const mowbite_msgs::msg::ButtonEvent& msg) {
@@ -226,6 +232,7 @@ class LightNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::RpcError>::SharedPtr error_pub_;
   rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr request_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotState>::SharedPtr state_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::ButtonEvent>::SharedPtr button_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
   std::unique_ptr<mowbite_watch::Attached> watch_;
