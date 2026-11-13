@@ -16,18 +16,22 @@ import measure as m  # noqa: E402
 
 
 class Board:
-    """Stands in for Mower: hw/status follows the flags, an emergency latches until the release with stop free."""
+    """Stands in for Mower: hw/status follows the flags, an emergency latches until the release with stop free; with
+    `keeps` stop stays after the flags until the release, as on the Tron."""
 
-    def __init__(self, emergency=True, stale=False):
+    def __init__(self, emergency=True, stale=False, keeps=False):
         self.stop_checked = False
         self.flags = set()
         self.latched = False
         self.with_emergency = emergency
         self.stale = stale
+        self.keeps = keeps
+        self.kept = False
         self.releases = 0
 
     def snapshot(self):
-        stop = bool(self.flags)
+        self.kept = self.keeps and (self.kept or bool(self.flags))
+        stop = bool(self.flags) or self.kept
         self.latched = self.with_emergency and (self.latched or stop)
         status = types.SimpleNamespace(stop=stop, emergency=self.latched, emergency_latched=self.latched,
                                        emergency_reason=4 if self.latched else 0, telemetry_ok=True, lift=False,
@@ -42,6 +46,7 @@ class Board:
 
     def release(self):
         self.releases += 1
+        self.kept = False
         if not self.flags:
             self.latched = False
         return types.SimpleNamespace(success=not self.flags, message="", code=0)
@@ -73,7 +78,7 @@ class Hand:
 
 
 def programme(kind=m.Measurement, **hand):
-    board = Board(**{k: hand.pop(k) for k in ("emergency", "stale") if k in hand})
+    board = Board(**{k: hand.pop(k) for k in ("emergency", "stale", "keeps") if k in hand})
     run = kind.__new__(kind)
     run.findings, run.written = [], []
     run.rec = types.SimpleNamespace(write=lambda kind, **fields: run.written.append((kind, fields)), over=lambda: False)
@@ -90,6 +95,8 @@ def checks(run):
 
 @mock.patch.object(m, "STOP_CHECK_S", 1.0)
 @mock.patch.object(m, "STOP_EMERGENCY_S", 1.0)
+@mock.patch.object(m, "STOP_LET_GO_S", 0.2)
+@mock.patch.object(m, "STOP_FREE_S", 0.2)
 class TestStopCheck(unittest.TestCase):
     def test_every_button_pressed_and_let_go(self):
         run = programme()
@@ -98,17 +105,50 @@ class TestStopCheck(unittest.TestCase):
         self.assertEqual(run.findings, [])
         self.assertEqual([c["button"] for c in checks(run)], ["STOP top", "STOP rear"])
         for check in checks(run):
-            self.assertTrue(check["free"] and check["released"] and check["latched"])
+            self.assertTrue(check["let_go"] and check["released"] and check["free"] and check["latched"])
             self.assertEqual(check["reason"], 4)
             self.assertAlmostEqual(check["pressed_after_s"], 0.05, delta=0.05)
             self.assertAlmostEqual(check["held_s"], 0.1, delta=0.05)
         self.assertEqual(run.mower.releases, 2)
         self.assertIn("before M3", run.person.asked[0])
 
-    def test_the_tron_has_one_button(self):
-        run = programme(m.TronMeasurement)
+    def test_the_tron_has_one_button_kept_until_the_release(self):
+        run = programme(m.TronMeasurement, keeps=True)
         self.assertTrue(run.stop_check("T2"))
-        self.assertEqual([c["button"] for c in checks(run)], ["STOP"])
+        self.assertEqual(run.findings, [])
+        check, = checks(run)
+        self.assertEqual(check["button"], "STOP")
+        self.assertIsNone(check["let_go"])
+        self.assertTrue(check["released"] and check["free"])
+        self.assertAlmostEqual(check["held_s"], 0.2, delta=0.05)
+        self.assertEqual(run.mower.releases, 1)
+
+    def test_the_tron_button_held_through_the_release_ends_it(self):
+        run = programme(m.TronMeasurement, keeps=True, hold=None)
+        with self.assertRaises(m.Abort):
+            run.stop_check("T2")
+        self.assertFalse(run.mower.stop_checked)
+        self.assertEqual(run.findings[0], "STOP: no release within 5 s")
+        self.assertIn("stays after the release: STOP stuck or held", run.findings[1])
+        check, = checks(run)
+        self.assertFalse(check["released"] or check["free"])
+
+    def test_stop_back_after_the_release_ends_it(self):
+        run = programme(m.TronMeasurement, keeps=True)
+        release = run.mower.release
+
+        def back():
+            threading.Timer(0.05, run.mower.flags.add, ["stop"]).start()
+            return release()
+        run.mower.release = back
+        with self.assertRaises(m.Abort):
+            run.stop_check("T2")
+        self.assertFalse(run.mower.stop_checked)
+        finding, = run.findings
+        self.assertIn("stays after the release: STOP stuck or held", finding)
+        check, = checks(run)
+        self.assertTrue(check["released"])
+        self.assertFalse(check["free"])
 
     def test_a_passed_check_is_not_asked_again(self):
         run = programme()
@@ -171,9 +211,10 @@ class TestStopCheck(unittest.TestCase):
         with self.assertRaises(m.Abort):
             run.stop_check("M3")
         self.assertFalse(run.mower.stop_checked)
-        self.assertIn("still shows stop", run.findings[0])
+        finding, = run.findings
+        self.assertIn("still shows stop", finding)
         check, = checks(run)
-        self.assertFalse(check["free"] or check["released"])
+        self.assertFalse(check["let_go"] or check["released"] or check["free"])
         self.assertEqual(run.mower.releases, 0)
 
     def test_an_emergency_that_stays_ends_it(self):
@@ -182,9 +223,10 @@ class TestStopCheck(unittest.TestCase):
         with self.assertRaises(m.Abort):
             run.stop_check("M3")
         self.assertFalse(run.mower.stop_checked)
+        self.assertIn("stays after the release: STOP top stuck or held", run.findings[0])
         check, = checks(run)
-        self.assertTrue(check["free"])
-        self.assertFalse(check["released"])
+        self.assertTrue(check["let_go"])
+        self.assertFalse(check["released"] or check["free"])
 
     def test_skipped_by_the_person(self):
         run = programme(answer=False)

@@ -8,8 +8,10 @@ off. With --blade-percent 100 and --blade-window 5 every blade run has to take t
 lease of a DDS participant (20 s) has to end with the same finding and nothing else. T7: every side lifted by hand
 has to show lift at the tilt of the fake, latched until the release, the mower lifted level too, and each lift on the
 turning blade motor has to stop it; with the flag lift_tilt the fake shows no lift for the level lift, which has to be
-the one finding (G1) without an abort. The STOP check has to pass before the first wheel command and before the first
-blade on. No process may be left.
+the one finding (G1) without an abort. The fake keeps STOP until a clear frame, as the Tron does, so a run may start
+with STOP kept from the last one, as on the Tron after each start of tron_mcu, and has to release it first. The STOP
+check has to pass before the first wheel command and before the first blade on; STOP held through its release has to
+end the run before any. No process may be left.
 
 Reading the port while tron_mcu holds it (TIOCEXCL) needs root with CAP_SYS_ADMIN, as on the Tron:
   docker run --user 0 --cap-add SYS_ADMIN ... python3 -m unittest tools/yf/test/test_rehearsal_tron.py
@@ -78,13 +80,15 @@ class TestRehearsalTron(unittest.TestCase):
         shutil.rmtree(cls.work, ignore_errors=True)
 
     @classmethod
-    def set_flags(cls, flags):
+    def set_flags(cls, flags=None):
+        """`flags` over STOP kept until a clear frame and the hold time HOLD_S."""
         with open(cls.flags + ".tmp", "w") as f:
-            json.dump(flags, f)
+            json.dump({"host_timeout": HOLD_S, "stop_latches": 1, **(flags or {})}, f)
         os.replace(cls.flags + ".tmp", cls.flags)
 
-    def measure(self, name, *args, abort_when=None, timeout=900):
-        """measure.py in its own record dir; abort_when(records) makes the abort file once it holds."""
+    def measure(self, name, *args, abort_when=None, hold_stop_when=None, timeout=900):
+        """measure.py in its own record dir; abort_when(records) makes the abort file once it holds, from when
+        hold_stop_when(records) holds STOP stays pressed."""
         record = os.path.join(self.work, name)
         abort = os.path.join(self.work, f"{name}.abort")
         argv = [sys.executable, MEASURE, "--platform", "tron", "--yes", "--fake-flags", self.flags, "--mcu-port",
@@ -97,6 +101,8 @@ class TestRehearsalTron(unittest.TestCase):
                 found = glob.glob(os.path.join(record, RECORDING))
                 if abort_when and found and not os.path.exists(abort) and abort_when(records(found[0])):
                     open(abort, "w").close()
+                if hold_stop_when and found and hold_stop_when(records(found[0])):
+                    self.set_flags({"stop": 1})
                 time.sleep(0.05)
             if process.poll() is None:
                 process.kill()
@@ -111,6 +117,23 @@ class TestRehearsalTron(unittest.TestCase):
         self.assertEqual(nodes_left(), [])
         self.assertEqual(m.port_holders(self.links["mcu"]), [])
 
+    def test_0_stop_held_through_the_release(self):
+        def asked(lines):
+            return any(r["kind"] == "mark" and r["step"] == "STOP" for r in lines)
+        try:
+            code, output, rec = self.measure("stop-held", "--steps", "T3", hold_stop_when=asked)
+        finally:
+            self.set_flags()
+        self.assertEqual(code, 1)
+        self.assertIn("STOP: stop or the emergency stays after the release: STOP stuck or held", rec[-1]["findings"])
+        check, = [r for r in rec if r["kind"] == "stop_check"]
+        self.assertIsNone(check["let_go"])
+        self.assertFalse(check["released"] or check["free"])
+        self.assertIn("abort", [r["kind"] for r in rec])
+        self.assertNotIn("T3", [r["step"] for r in rec if r["kind"] == "mark"])
+        self.assertFalse([r for r in rec if r["kind"] == "cmd" and (r["v"] or r["w"])])
+        self.assertIn("let go of STOP now", output)
+
     def test_1_programme(self):
         self.set_flags({"host_timeout": HOLD_S})
         code, output, rec = self.measure("all", "--repeats", "2")
@@ -122,7 +145,8 @@ class TestRehearsalTron(unittest.TestCase):
         self.assertEqual([r for r in rec if r["kind"] == "firmware"][0]["cutter"], "0.6.36")
         check, = [r for r in rec if r["kind"] == "stop_check"]
         self.assertEqual(check["button"], "STOP")
-        self.assertTrue(check["free"] and check["released"] and check["latched"], check)
+        self.assertIsNone(check["let_go"])
+        self.assertTrue(check["released"] and check["free"] and check["latched"], check)
         self.assertEqual(m.reason_text(check["reason"]), "LATCH|STOP")
         before = rec[:rec.index(check)]
         self.assertIn("T1", [r["step"] for r in before if r["kind"] == "mark"])
@@ -312,11 +336,18 @@ class TestRehearsalTron(unittest.TestCase):
         return level
 
     def test_8_lift_on_the_blade(self):
+        # STOP kept from before the start: the run releases it before the STOP check, as on the Tron.
+        self.set_flags({"stop": 1})
+        time.sleep(0.2)
+        self.set_flags()
         code, output, rec = self.measure("lift", "--steps", "T7", "--blade", "--repeats", "2")
         end = rec[-1]
         self.assertEqual(end["findings"], [])
         self.assertTrue(end["complete"])
         self.assertEqual(code, 0)
+        before = rec[:rec.index(next(r for r in rec if r["kind"] == "stop_check"))]
+        self.assertTrue(any(r["kind"] == "status" and r["stop"] and r["emergency"] for r in before))
+        self.assertTrue(any(r["kind"] == "release" and r["success"] for r in before))
         level = self.lift_records(rec)
         self.assertTrue(level["lift"] and level["latched"] and level["released"], level)
         self.assertLess(level["tilt_at_lift"], 5.0)

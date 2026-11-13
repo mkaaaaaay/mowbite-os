@@ -10,7 +10,8 @@ a wheel above 0.6 m/s for 0.2 s, the wheels standing late or after too long a wa
 Any key while a step runs aborts it: three stops on hw/cmd_vel, the blade off, the emergency latched
 over hw/emergency; keys within 0.4 s after an answer are dropped, so a double tap does not abort the step it started.
 Before the first step that can turn a motor (any step but STANDSTILL_STEPS) comes the STOP check: each STOP button
-pressed and let go once, hw/status has to show stop with its emergency, then stop free and the emergency released. Only
+pressed and let go once, hw/status has to show stop with its emergency, after the release neither (the release goes
+out once stop is free, on the Tron, whose MCU keeps stop until it, a few seconds after the request to let go). Only
 what this run saw counts and nothing switches it off: before it this programme sends no wheel command and no blade on.
 Records hw/status, hw/wheel_odom, imu/data, hw/capabilities and its own commands as JSON lines with a size and a time
 limit. The capture of the inner network (tcpdump on the host) is the second record; the report on both
@@ -76,9 +77,12 @@ TRON_STILL_SPEED = 0.015
 # Keys this soon after an answer belong to it (a double tap on a phone), not to the step it starts.
 KEY_SETTLE_S = 0.4
 # STOP check: hw/status has to show a STOP button within STOP_CHECK_S of the request to press it, the emergency within
-# STOP_EMERGENCY_S of that, and the button free within STOP_CHECK_S of then.
+# STOP_EMERGENCY_S of that. The release goes out once the button is free, within STOP_CHECK_S, or on a board that keeps
+# stop until the release STOP_LET_GO_S after the request to let go; stop and the emergency then stay off STOP_FREE_S.
 STOP_CHECK_S = 60.0
 STOP_EMERGENCY_S = 1.0
+STOP_LET_GO_S = 3.0
+STOP_FREE_S = 2.0
 # Emergency bits of hw/status by bit number, named as in the catalog of mowbite_api (x-emergency-bits);
 # test/test_names.py holds them against the catalog, the message and the board's own names.
 EMERGENCY_BITS = {0: "LATCH", 1: "TIMEOUT_INPUTS", 2: "STOP", 3: "LIFT", 4: "LIFT_MULTIPLE", 5: "COLLISION",
@@ -710,6 +714,11 @@ class Person:
         timer.start()
         self.timers.append(timer)
 
+    def done(self):
+        """Until the rehearsal's actions of act_later are over."""
+        for timer in self.timers:
+            timer.join()
+
     def number(self, text):
         if self.assume_yes:
             print(f"  {text}: (skipped)")
@@ -742,6 +751,8 @@ class Measurement:
     STANDSTILL_STEPS = ("M1", "M2")
     # The STOP buttons, each with its flag of the rehearsal.
     STOP_BUTTONS = (("STOP top", {"stop": True}), ("STOP rear", {"rear_stop": True}))
+    # True: the board reports a pressed STOP until the release, also once it is let go.
+    STOP_LATCHES = False
 
     def __init__(self, args, rec, mower, person, keys):
         self.args, self.rec, self.mower, self.person, self.keys = args, rec, mower, person, keys
@@ -877,9 +888,9 @@ class Measurement:
 
     def stop_check(self, before):
         """Before the first step that can turn a motor: each STOP button pressed and let go once, seen in hw/status
-        with its emergency, then free and released; before each press hw/status has to show neither. False if the
-        person skipped it. A button hw/status did not show that way ends the step; the motors stay locked until a
-        check of this run passed."""
+        with its emergency, then released, after which hw/status has to show neither for STOP_FREE_S; before each press
+        hw/status has to show neither. False if the person skipped it. A button hw/status did not show that way ends
+        the step; the motors stay locked until a check of this run passed."""
         if self.mower.stop_checked:
             return True
         step = "STOP"
@@ -910,20 +921,36 @@ class Measurement:
                 self.finding(step, f"no emergency within {STOP_EMERGENCY_S:.0f} s of {button}")
                 raise Abort()
             s = self.status()
-            print(f"     {button} seen after {pressed - asked:.1f} s, reason {reason_text(s.emergency_reason)}; "
-                  "waiting for it to be free")
-            free = self.wait(STOP_CHECK_S, until=lambda: self.stop_shown() is False)
+            print(f"     {button} seen after {pressed - asked:.1f} s, reason {reason_text(s.emergency_reason)}")
+            let_go = self.let_go_of(step, button)
             held = time.monotonic() - pressed
+            released = let_go is not False and self.release(step)
+            free = released and not self.wait(STOP_FREE_S, until=lambda: self.stop_shown() is not False
+                                              or self.in_emergency())
+            if let_go is not False and not free:
+                self.show("after the release")
+                self.finding(step, f"stop or the emergency stays after the release: {button} stuck or held")
+            self.rec.write("stop_check", button=button, pressed_after_s=pressed - asked, let_go=let_go, held_s=held,
+                           latched=s.emergency_latched, reason=s.emergency_reason, released=released, free=free)
             if not free:
-                self.finding(step, f"hw/status still shows stop {STOP_CHECK_S:.0f} s after {button} was pressed")
-            released = free and self.release(step)
-            self.rec.write("stop_check", button=button, pressed_after_s=pressed - asked, free=free, held_s=held,
-                           latched=s.emergency_latched, reason=s.emergency_reason, released=released)
-            if not released:
                 raise Abort()
-            print(f"     {button} free after {held:.1f} s, emergency released")
+            print(f"     {button} released {held:.1f} s after the press, stop and the emergency stayed off")
         self.mower.stop_checked = True
         return True
+
+    def let_go_of(self, step, button):
+        """Until the person let go of a pressed button: True once hw/status shows it free, False if it does not within
+        STOP_CHECK_S; on a board that keeps stop until the release None, after STOP_LET_GO_S."""
+        if self.STOP_LATCHES:
+            print(f"  -> let go of {button} now (unlock it if it stays down); the release follows in "
+                  f"{STOP_LET_GO_S:.0f} s")
+            self.wait(STOP_LET_GO_S)
+            return None
+        print("     waiting for it to be free")
+        if self.wait(STOP_CHECK_S, until=lambda: self.stop_shown() is False):
+            return True
+        self.finding(step, f"hw/status still shows stop {STOP_CHECK_S:.0f} s after {button} was pressed")
+        return False
 
     def safe_stop(self, why):
         """The abort: three stops, blade off, emergency latched."""
@@ -1607,6 +1634,7 @@ class TronMeasurement(Measurement):
     still_speed = TRON_STILL_SPEED
     STANDSTILL_STEPS = ("T1",)
     STOP_BUTTONS = (("STOP", {"stop": True}),)
+    STOP_LATCHES = True
 
     def __init__(self, args, rec, mower, person, keys, start):
         super().__init__(args, rec, mower, person, keys)
@@ -1674,7 +1702,9 @@ class TronMeasurement(Measurement):
         return stand
 
     def let_go(self, text, then=""):
-        if not self.person.fake:
+        if self.person.fake:
+            self.person.done()
+        else:
             self.person.act(f"let go ({text}); unlock STOP if it stays down" + (f". {then}" if then else ""))
 
     # Steps ------------------------------------------------------------------------------------------------------------
@@ -2339,9 +2369,11 @@ class TronMeasurement(Measurement):
     STEPS = {"T1": t1, "T2": t2, "T3": t3, "T4": t4, "T5": t5, "T6": t6, "T7": t7}
 
     def run(self, steps):
-        """The firmware first: another one than TRON_FIRMWARE ends the run before any step."""
+        """The firmware and the first IMU sample first: another firmware than TRON_FIRMWARE ends the run before any
+        step. tron_mcu releases nothing before that sample, and the MCU reports stop from the start until a release."""
         end = time.monotonic() + 20.0
-        while time.monotonic() < end and not all(self.mower.firmware.get(b) for b in TRON_FIRMWARE):
+        while time.monotonic() < end and (not all(self.mower.firmware.get(b) for b in TRON_FIRMWARE)
+                                          or self.mower.tilt is None):
             time.sleep(0.1)
         self.firmware = dict(self.mower.firmware)
         print(f"Firmware: {self.firmware}")

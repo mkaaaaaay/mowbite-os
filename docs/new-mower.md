@@ -197,10 +197,12 @@ process is outside this watch and stops the mower by its own timeouts.
 Before the mower drives by itself. On blocks, wheels free, blade off, someone at the stop button:
 
 1. Before any motor turns, in every run again: press and let go each stop button once and see it in `hw/status`,
-   `stop` with its emergency, then free and released. A button `hw/status` does not show, an unplugged one for
-   instance, stops nothing: no motor step until it does. `tools/yf/measure.py` asks for it before the first step that
-   can turn a motor and sends no wheel command and no blade on before; your programme there names its stop buttons
-   (`STOP_BUTTONS`) and the steps that turn nothing (`STANDSTILL_STEPS`).
+   `stop` with its emergency, then released and neither left. A button `hw/status` does not show, an unplugged one for
+   instance, stops nothing: no motor step until it does; one that stays or comes back after the release is stuck or
+   held, no motor step either. `tools/yf/measure.py` asks for it before the first step that can turn a motor and sends
+   no wheel command and no blade on before; your programme there names its stop buttons (`STOP_BUTTONS`), the steps
+   that turn nothing (`STANDSTILL_STEPS`) and whether the board keeps `stop` until the release (`STOP_LATCHES`, the
+   Tron's MCU): then the release follows a few seconds after the request to let go, else once `stop` is free.
 2. How long the board keeps the last setpoint without the host: `failsafe_without_host`.
 3. Stop button, lift, bumper left and right: wheels and blade stop, the reason bits are right, latched until release.
    With a release at the mower: the press that latched never releases, a held press does, anything else does not.
@@ -343,7 +345,7 @@ Around `mowbite_camera`:
 - [ ] mowbite-host with its carrier: base version, two keys in allowed_signers, `test_e2e.py` green
 - [ ] The app served (mowbite-web or the like) without root, `/cgi-bin/*` 404, the cross-origin header as above,
       broker WebSocket open
-- [ ] Every stop button seen in `hw/status`, pressed and free again, before the first motor turned
+- [ ] Every stop button seen in `hw/status`, pressed and free again after the release, before the first motor turned
 - [ ] Safety measurement done, date set
 - [ ] Lights, if any: device rights, `output` on only after a look on the mower
 - [ ] Cameras, if any: own process, publisher list tested, hw/cameras entry, vendor files only on the mower, limits

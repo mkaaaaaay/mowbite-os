@@ -707,6 +707,31 @@ class ProcessTest(unittest.TestCase):
         self.set_flags()
         read_available(self.fds["mcu"], 0.9)
 
+    def test_1b_stop_latches_until_a_clear_frame(self):
+        def stop_bytes():
+            read_available(self.fds["mcu"], 0.1)
+            return {payload[3] for packets in ft.Decoder().feed(read_available(self.fds["mcu"], 0.3))
+                    for t, m, payload in packets or [] if t == ft.FROM_MCU and m == 10}
+        clear = ft.encode([(ft.TO_MCU, 10, bytes(8))])
+        self.set_flags(stop=1, stop_latches=1)
+        time.sleep(0.1)
+        self.set_flags(stop_latches=1)
+        self.assertEqual(stop_bytes(), {1})
+        # Cleared while still pressed, it comes back at once.
+        self.set_flags(stop=1, stop_latches=1)
+        time.sleep(0.05)
+        os.write(self.fds["mcu"], clear)
+        time.sleep(0.05)
+        self.set_flags(stop_latches=1)
+        self.assertEqual(stop_bytes(), {1})
+        os.write(self.fds["mcu"], clear)
+        self.assertEqual(stop_bytes(), {0})
+        # Without stop_latches stop follows the flag.
+        self.set_flags(stop=1)
+        time.sleep(0.1)
+        self.set_flags()
+        self.assertEqual(stop_bytes(), {0})
+
     def test_2_gnss_follows_pose(self):
         self.set_flags()
         read_available(self.fds["gnss"], 0.1)
