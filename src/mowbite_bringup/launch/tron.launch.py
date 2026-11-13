@@ -76,10 +76,11 @@ def launch_setup(context):
         logger.warning("hardware:=read: tron_mcu and tron_imu only listen, nothing moves; tron_gnss does not start")
         return [mcu, *stack.container_and_planner([imu, *nodes], data_dir, files, logger, oom)]
     # Only here: with hardware:=read another host drives the blade, and blade_on of hw/status would always be false.
-    cameras = [*camera(files, data_dir, arg("vision"), logger, "vision", "tron_vision_node", "tron_vision"),
+    video = camera_video(arg("camera_video"), logger)
+    cameras = [*camera(files, data_dir, arg("vision"), logger, "vision", "tron_vision_node", "tron_vision", video),
                *camera(files, data_dir, arg("stereo"), logger, "stereo", "tron_stereo_node", "tron_stereo"),
-               *right_camera(files, data_dir, arg("right"), arg("right_node"), logger),
-               *camera(files, data_dir, arg("rear"), logger, "rear", "tron_rear_node", "tron_rear")]
+               *right_camera(files, data_dir, arg("right"), arg("right_node"), logger, video),
+               *camera(files, data_dir, arg("rear"), logger, "rear", "tron_rear_node", "tron_rear", video)]
     # The camera service of the OS shows their pictures in the app; without a camera process it has none to show.
     if cameras:
         cameras += stack.camera_service(files, data_dir, logger, **CAMERA_LIMITS)
@@ -93,7 +94,7 @@ CAMERA_LIMITS = {"oom_score_adj": 1000, "nice": 10, "cpus": "0-3"}
 
 # A camera process of tron_vision with <process>:=on, each of its own, so that a crash of the NPU runtime, of the
 # media library or in a USB camera takes nothing along. They only report.
-def camera(files, data_dir, switch, logger, process, executable, name, namespace="/"):
+def camera(files, data_dir, switch, logger, process, executable, name, video=None, namespace="/"):
     if switch != "on":
         # Another value in os.conf must not stop the stack.
         if switch != "off":
@@ -104,20 +105,29 @@ def camera(files, data_dir, switch, logger, process, executable, name, namespace
     # The node names this process in hw/cameras, so the OS ties its exit note to its cameras.
     return stack.own_process(
         lambda prefix: Node(package="tron_vision", executable=executable, name=name, namespace=namespace,
-                            parameters=[*files, {"process": process}], output="screen", prefix=prefix,
+                            parameters=[*files, {"process": process, **(video or {})}], output="screen", prefix=prefix,
                             exec_name=label),
         process, data_dir, logger, **CAMERA_LIMITS)
 
 
 # The right side camera under the switch right: the camera AI as a second tron_vision in the namespace /right (its
 # values in config under /right/tron_vision on top of those of both), or with right_node:=side only its live picture.
-def right_camera(files, data_dir, switch, node, logger):
+def right_camera(files, data_dir, switch, node, logger, video):
     if node == "side":
-        return camera(files, data_dir, switch, logger, "right", "tron_side_node", "tron_side")
+        return camera(files, data_dir, switch, logger, "right", "tron_side_node", "tron_side", video)
     if node != "vision" and switch == "on":
         logger.warning(f"right_node:={node} is neither vision nor side: the right camera does not start")
         return []
-    return camera(files, data_dir, switch, logger, "right", "tron_vision_node", "tron_vision", "/right")
+    return camera(files, data_dir, switch, logger, "right", "tron_vision_node", "tron_vision", video, "/right")
+
+
+# The H.264 stream of the side and rear cameras: off turns it off without a new bundle, unset keeps config.
+def camera_video(switch, logger):
+    if switch == "off":
+        return {"video": False}
+    if switch not in ("", "on"):
+        logger.warning(f"camera_video:={switch} is neither on nor off: the cameras keep video from the config")
+    return {}
 
 
 def generate_launch_description():
@@ -151,6 +161,9 @@ def generate_launch_description():
         # on: the dock marker of the rear camera with its live picture starts as well, only with hardware:=true;
         # MOWBITE_REAR in os.conf.
         DeclareLaunchArgument("rear", default_value=EnvironmentVariable("MOWBITE_REAR", default_value="off")),
+        # off: the side and rear cameras send no H.264, only JPEG pictures; MOWBITE_CAMERA_VIDEO in os.conf.
+        DeclareLaunchArgument("camera_video",
+                              default_value=EnvironmentVariable("MOWBITE_CAMERA_VIDEO", default_value="")),
         *stack.arguments(),
         OpaqueFunction(function=launch_setup),
     ])

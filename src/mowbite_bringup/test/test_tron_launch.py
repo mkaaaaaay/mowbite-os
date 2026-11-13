@@ -23,7 +23,7 @@ def launched(tmp_path, monkeypatch, **switches):
               "geometry": "geometry.yaml", "mcu_port": "/dev/ttyS9", "gnss_port": "/dev/ttyS4",
               "imu_port": "/dev/ttyS1", "hardware": "true", "datum_lat": "nan", "datum_long": "nan",
               "datum_height": "0.0", "vision": "off", "stereo": "off", "right": "off", "right_node": "vision",
-              "rear": "off",
+              "rear": "off", "camera_video": "",
               "mqtt_host": "127.0.0.1",
               "mqtt_port": "1883", "journal_dir": "", "oom_score_adj": ""}
     values.update(switches)
@@ -109,6 +109,35 @@ def test_each_camera_process_names_itself(tmp_path, monkeypatch):
     for process, (exec_name, executable) in names.items():
         assert made[process].node_executable == executable
         assert params[exec_name][-1] == {"process": process}
+
+
+def camera_params(tmp_path, monkeypatch, **switches):
+    params = {}
+
+    class Recorded(Node):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            params[kwargs.get("exec_name")] = kwargs.get("parameters")[-1]
+
+    monkeypatch.setattr(tron_launch, "Node", Recorded)
+    launched(tmp_path, monkeypatch, **switches)
+    return params
+
+
+def test_camera_video_off_turns_off_each_h264_stream(tmp_path, monkeypatch):
+    params = camera_params(tmp_path, monkeypatch, vision="on", stereo="on", right="on", rear="on", camera_video="off")
+    for exec_name in ("tron_vision", "tron_vision_right", "tron_rear"):
+        assert params[exec_name]["video"] is False
+    assert "video" not in params["tron_stereo"]
+    side = camera_params(tmp_path, monkeypatch, right="on", right_node="side", camera_video="off")
+    assert side["tron_side"]["video"] is False
+
+
+# Unset, on or another value: video stays as config has it.
+@pytest.mark.parametrize("value", ["", "on", "no"])
+def test_camera_video_otherwise_keeps_the_config(tmp_path, monkeypatch, value):
+    params = camera_params(tmp_path, monkeypatch, vision="on", right="on", rear="on", camera_video=value)
+    assert params and all("video" not in p for p in params.values())
 
 
 # With hardware:=read another host drives the blade; without hardware nothing reports it.
