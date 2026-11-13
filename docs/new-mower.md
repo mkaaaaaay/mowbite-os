@@ -10,7 +10,10 @@ The drivers there are: `tron_mcu` (Airseekers Tron, serial MCU, GNSS and IMU as 
 ## 1. Driver
 
 One package, its own process: a crash of another node must leave the watchdog of the driver running. Protocol code
-without ROS in a library of its own with gtests; the node stays thin.
+without ROS in a library of its own with gtests; the node stays thin. Build the node like every component: register it
+with `mowbite_component_register` instead of `rclcpp_components_register_node` (hidden symbols, several MB less RSS)
+and give the base class `mowbite_component::StartupOnly(options)`: parameters are read once at the start, there are
+no parameter services.
 
 | What | Name | Type |
 |---|---|---|
@@ -327,6 +330,7 @@ Around `mowbite_camera`:
 
 - [ ] Driver package: protocol code with gtests, build without warnings
 - [ ] clang-tidy without findings in the package (`.clang-tidy` of the repo)
+- [ ] Every node registered with `mowbite_component_register` and built on `StartupOnly(options)`
 - [ ] Fake board, contract test passes, the start test too where the driver has a start time
 - [ ] Geometry file and platform file, inherited values checked
 - [ ] `gnss_receiver_time` only with UTC from the receiver; `rtc` of `mowbite_clock` only after the measurement
