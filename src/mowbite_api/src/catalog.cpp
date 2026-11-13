@@ -305,6 +305,10 @@ const std::vector<Field>& LogicFields() {
       Text("job_id", "The job of mowing it belongs to", false),
       Text("session_id", "The session of the logic since its start", false),
       Client(),
+      Text("source",
+           "schedule while a run of the schedule lasts, from its start until the mower is idle again; an event with "
+           "a source of its own names that instead",
+           false, {"schedule"}),
   };
   return fields;
 }

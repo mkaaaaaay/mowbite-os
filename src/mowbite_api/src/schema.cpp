@@ -107,8 +107,14 @@ std::vector<const Field*> Pointers(const std::vector<Field>& fields) {
 
 Json EventSchema(const EventEntry& event) {
   std::vector<const Field*> fields = Pointers(Envelope());
+  // A field of the event replaces the one of the logic with the same name.
+  const auto own = [&event](const std::string& name) {
+    return std::any_of(event.fields.begin(), event.fields.end(), [&name](const Field& f) { return f.name == name; });
+  };
   if (event.emitter == "logic") {
-    for (const auto& field : LogicFields()) fields.push_back(&field);
+    for (const auto& field : LogicFields()) {
+      if (!own(field.name)) fields.push_back(&field);
+    }
   }
   for (const auto& field : event.fields) fields.push_back(&field);
   for (const auto& reason : event.reasons) {

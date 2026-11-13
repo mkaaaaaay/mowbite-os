@@ -75,8 +75,8 @@ std::set<std::string> CodesOf(const std::string& type) {
 }  // namespace
 
 // RateReason reads the catalog now and rates every reason of an event as the table did, also one it does not know;
-// the pauses of api 5 (O11) and the release refusals of api 10 are rated anew, STORAGE_NOT_WRITABLE of api 12 and
-// REVERSING of api 21 are new.
+// the pauses of api 5 (O11) and the release refusals of api 10 are rated anew, STORAGE_NOT_WRITABLE of api 12,
+// REVERSING of api 21 and the reasons of the schedule of api 25 are new.
 TEST(Catalog, RateReasonAsTheTableBefore) {
   const std::map<std::string, Rating> paused_since_api_5 = {{"BATTERY_HOT", {"warning", "user"}},
                                                              {"MOTOR_HOT", {"warning", "user"}},
@@ -84,6 +84,11 @@ TEST(Catalog, RateReasonAsTheTableBefore) {
                                                              {"DARK", {"info", "user"}}};
   const std::map<std::string, Rating> refused_since_api_10 = {{"STILL_ACTIVE", {"warning", "user"}},
                                                               {"LATCH_CHANGED", {"warning", "user"}}};
+  const std::map<std::string, Rating> schedule_since_api_25 = {{"MOWING_REFUSED NOT_DOCKED", {"info", "user"}},
+                                                               {"MOWING_REFUSED CLOCK_UNSAFE", {"info", "user"}},
+                                                               {"MOWING_REFUSED DARK", {"info", "user"}},
+                                                               {"STATE SCHEDULE", {"info", "user"}},
+                                                               {"AREA_SKIPPED SCHEDULE", {"info", "auto"}}};
   for (const char* event : {"MOWING_REFUSED", "DRIVE_REFUSED", "RECORDING_REFUSED", "CALIBRATION_REFUSED",
                             "CALIBRATION_FAILED", "STATE", "DRIVE", "POSITION_JUMP", "AREA_SKIPPED", "UNDOCKING_FAILED",
                             "DOCKING_RETRY", "DOCKING_FAILED", "EMERGENCY_RESET_REFUSED", "NOT_AN_EVENT"}) {
@@ -92,7 +97,9 @@ TEST(Catalog, RateReasonAsTheTableBefore) {
         const Rating now = RateReason(event, code, Json{{"action", action}});
         const auto paused = paused_since_api_5.find(code);
         const auto refused = refused_since_api_10.find(code);
-        const Rating before = code == "STORAGE_NOT_WRITABLE" ? Rating{"error", "user"}
+        const auto scheduled = schedule_since_api_25.find(std::string(event) + " " + code);
+        const Rating before = scheduled != schedule_since_api_25.end() ? scheduled->second
+                              : code == "STORAGE_NOT_WRITABLE"   ? Rating{"error", "user"}
                               : code == "REVERSING" ? Rating{"info", "auto"}
                               : std::string(event) == "STATE" && paused != paused_since_api_5.end() ? paused->second
                               : std::string(event) == "EMERGENCY_RESET_REFUSED" && refused != refused_since_api_10.end()
