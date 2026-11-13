@@ -302,7 +302,10 @@ second what `mowbite_camera` needs around it.
   as a hardware encoder and the dma-buf heaps (`60-mowbite-stereo.rules`); in Docker the devices passed in.
 - A camera that measures for the logic, like the dock marker (section 1), has its own process too and opens the
   camera only while asked. Its calibration (lens, mount, marker) has no defaults in the code: what is missing makes it
-  report `NOT_SET_UP` and never measure. A USB camera gets a fixed name by a udev rule on its USB id
+  report `NOT_SET_UP` and never measure. The mount comes from a reference run: the mower pushed straight out of the
+  dock in steps against a tape; distance and side of the marker are checked against it, a wrong roll or pitch shows as
+  a corner fit error well above the corner noise and as a marker height that changes with distance. A 4 cm marker
+  gives its yaw only to a few degrees beyond 0.2 m, so a dock approach steers by its side offset. A USB camera gets a fixed name by a udev rule on its USB id
   (`60-mowbite-rear.rules`), never `/dev/videoN`. Pixel values for measurements go on a topic outside `hw/*`
   (`tron_rear/marker_pixels`). It may show a live picture from the same process (`tron_rear`), but the measurement
   comes first and the picture must never delay it: a request takes the camera from a viewer, a picture is made after
