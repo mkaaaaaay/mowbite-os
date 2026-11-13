@@ -83,8 +83,11 @@ json FirstValue(const std::string& data) {
 // Nothing under hw/ or safety/, no cmd_vel, no follow_path.
 class ScheduleNode : public rclcpp::Node {
  public:
+  // Parameters are read once at the start: no parameter services or events.
   explicit ScheduleNode(const rclcpp::NodeOptions& options)
-      : rclcpp::Node("mowbite_schedule", options),
+      : rclcpp::Node("mowbite_schedule", rclcpp::NodeOptions(options)
+                                             .start_parameter_services(false)
+                                             .start_parameter_event_publisher(false)),
         journal_(mowbite_journal::OpenFromParameters(*this)),
         data_dir_(declare_parameter("data_dir", std::string())),
         core_(journal_, Load()),

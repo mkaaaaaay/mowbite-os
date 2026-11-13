@@ -33,6 +33,10 @@ add_library(mowbite_schedule_component SHARED src/schedule_node.cpp)
 target_link_libraries(mowbite_schedule_component mowbite_schedule_core mowbite_logic::mowbite_logic_core
   mowbite_hold::mowbite_hold_core mowbite_journal::mowbite_journal mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_schedule_component rclcpp rclcpp_components std_msgs sensor_msgs mowbite_msgs)
+# Only the registration with class_loader leaves the library: without the symbols of the templates and the static
+# cores the loader touches 18 MB less (measured with test_nx60i_stack).
+set_target_properties(mowbite_schedule_component PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+target_link_options(mowbite_schedule_component PRIVATE -Wl,--exclude-libs,ALL)
 rclcpp_components_register_node(mowbite_schedule_component
   PLUGIN "mowbite_schedule::ScheduleNode"
   EXECUTABLE mowbite_schedule_node)
