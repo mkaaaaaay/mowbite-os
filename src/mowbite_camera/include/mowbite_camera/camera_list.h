@@ -60,8 +60,6 @@ struct CameraNews {
 struct CameraChange {
   std::string camera_id;
   CameraNews news;
-  // Protocols of the change before that this one lacks; their viewers are to be ended.
-  std::vector<std::string> dropped;
 };
 
 // An id the OS takes: a letter, then letters, digits and underscores, 32 at most. It is part of a topic, of urls

@@ -14,6 +14,8 @@ namespace {
 constexpr char kRefused[] = "CAMERA_REFUSED";
 constexpr char kPathPrefix[] = "/camera/";
 constexpr char kPathSuffix[] = ".mjpg";
+// The protocols kept of a camera that cannot stream.
+const std::vector<std::string> kNone;
 // A session the stream server lacks this often in a row is over.
 constexpr int kMissingLimit = 2;
 
@@ -87,15 +89,8 @@ void CameraService::CollectLocked() {
     details["severity"] = "info";
     details["resume"] = "auto";
     effects_.events.push_back(std::move(details));
-    std::vector<Seat> ended;
-    if (!state.available) {
-      ended = seats_.DropCamera(change.camera_id);
-    } else {
-      for (const std::string& protocol : change.dropped) {
-        for (Seat& seat : seats_.DropCamera(change.camera_id, protocol)) ended.push_back(std::move(seat));
-      }
-    }
-    for (const Seat& seat : ended) {
+    // Places that no longer fit what the camera offers end.
+    for (const Seat& seat : seats_.DropCamera(change.camera_id, state.available ? change.news.protocols : kNone)) {
       if (seat.protocol == kMjpeg) {
         effects_.close.push_back(std::stoull(seat.connection));
       } else {

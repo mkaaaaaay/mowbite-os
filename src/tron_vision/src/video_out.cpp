@@ -92,16 +92,18 @@ void VideoOut::Close() {
 
 bool VideoOut::Describe(bool active, mowbite_msgs::msg::Camera& entry) const {
   using mowbite_msgs::msg::Camera;
+  static const std::vector<std::string> kBoth = {Camera::PROTOCOL_WEBRTC, Camera::PROTOCOL_MJPEG};
+  static const std::vector<std::string> kJpeg = {Camera::PROTOCOL_MJPEG};
+  static const std::string kNoSource;
   const bool webrtc = active && !source_.empty();
-  std::vector<std::string> protocols = {Camera::PROTOCOL_MJPEG};
-  if (webrtc) protocols.insert(protocols.begin(), Camera::PROTOCOL_WEBRTC);
-  const std::string source = webrtc ? source_ : "";
+  const std::vector<std::string>& protocols = webrtc ? kBoth : kJpeg;
+  const std::string& source = webrtc ? source_ : kNoSource;
   const uint32_t width = webrtc ? width_ : jpeg_width_;
   const uint32_t height = webrtc ? height_ : jpeg_height_;
   if (entry.protocols == protocols && entry.source == source && entry.width == width && entry.height == height) {
     return false;
   }
-  entry.protocols = std::move(protocols);
+  entry.protocols = protocols;
   entry.source = source;
   entry.width = width;
   entry.height = height;

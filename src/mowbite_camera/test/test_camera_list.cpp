@@ -136,14 +136,11 @@ TEST(CameraList, EveryNewStateIsAChangeOnce) {
 TEST(CameraList, OtherProtocolsOrAnotherSizeAreAChange) {
   CameraList list;
   std::string problem;
-  CameraEntry entry = Obstacle();
-  entry.protocols = {"webrtc", "mjpeg"};
-  entry.source = "rtsp://127.0.0.1:8556/oa_left";
+  CameraEntry entry = ObstacleWithWebrtc();
   ASSERT_TRUE(list.Update(entry, 1, &problem));
   std::vector<CameraChange> changes = list.TakeChanges();
   ASSERT_EQ(changes.size(), 1u);
   EXPECT_EQ(changes[0].news, (CameraNews{{true, "", ""}, {"webrtc", "mjpeg"}, 640, 480}));
-  EXPECT_TRUE(changes[0].dropped.empty());
 
   // The source alone is no news.
   entry.source = "rtsp://127.0.0.1:8557/oa_left";
@@ -157,7 +154,6 @@ TEST(CameraList, OtherProtocolsOrAnotherSizeAreAChange) {
   changes = list.TakeChanges();
   ASSERT_EQ(changes.size(), 1u);
   EXPECT_EQ(changes[0].news, (CameraNews{{true, "", ""}, {"mjpeg"}, 320, 240}));
-  EXPECT_EQ(changes[0].dropped, (std::vector<std::string>{"webrtc"}));
 
   entry.width = 640;
   entry.height = 480;
@@ -165,17 +161,14 @@ TEST(CameraList, OtherProtocolsOrAnotherSizeAreAChange) {
   changes = list.TakeChanges();
   ASSERT_EQ(changes.size(), 1u);
   EXPECT_EQ(changes[0].news.width, 640u);
-  EXPECT_TRUE(changes[0].dropped.empty());
 
-  // Another order of the same protocols is news, but drops none.
+  // The first protocol is the one camera.stream takes, so another order is news too.
   entry.protocols = {"webrtc", "mjpeg"};
   ASSERT_TRUE(list.Update(entry, 5, &problem));
   list.TakeChanges();
   entry.protocols = {"mjpeg", "webrtc"};
   ASSERT_TRUE(list.Update(entry, 6, &problem));
-  changes = list.TakeChanges();
-  ASSERT_EQ(changes.size(), 1u);
-  EXPECT_TRUE(changes[0].dropped.empty());
+  EXPECT_EQ(list.TakeChanges().size(), 1u);
 }
 
 TEST(CameraList, AProcessThatEndedGivesNoPictureUntilItReportsAgain) {
@@ -222,10 +215,7 @@ TEST(CameraList, WithoutTheStreamServerACameraWithOnlyWebrtcCannotStream) {
   CameraList list;
   std::string problem;
   ASSERT_TRUE(list.Update(Stereo(), 1, &problem));
-  CameraEntry both = Obstacle();
-  both.protocols = {"webrtc", "mjpeg"};
-  both.source = "rtsp://127.0.0.1:8556/oa_left";
-  ASSERT_TRUE(list.Update(both, 1, &problem));
+  ASSERT_TRUE(list.Update(ObstacleWithWebrtc(), 1, &problem));
   list.TakeChanges();
 
   list.SetWebrtc("NOT_SET_UP", "stream server missing");

@@ -293,10 +293,7 @@ TEST_F(CameraServiceTest, TheExitNoteOfItsProcessTakesACameraOffUntilItReportsAg
 
 TEST_F(CameraServiceTest, WebrtcWaitsForTheStreamServer) {
   service_.OnCamera(Stereo());
-  CameraEntry both = Obstacle();
-  both.protocols = {"webrtc", "mjpeg"};
-  both.source = "rtsp://127.0.0.1:8556/oa_left";
-  service_.OnCamera(both);
+  service_.OnCamera(ObstacleWithWebrtc());
   EXPECT_EQ(service_.WebrtcSources().size(), 2u);
   Events();
 
@@ -389,9 +386,7 @@ TEST_F(CameraServiceTest, AWebrtcCameraThatCanNoLongerStreamHasItsSessionsKicked
 }
 
 TEST_F(CameraServiceTest, AProtocolThatIsGoneLosesItsViewers) {
-  CameraEntry both = Obstacle();
-  both.protocols = {"webrtc", "mjpeg"};
-  both.source = "rtsp://127.0.0.1:8556/oa_left";
+  CameraEntry both = ObstacleWithWebrtc();
   both.width = 1280;
   both.height = 720;
   service_.OnCamera(both);

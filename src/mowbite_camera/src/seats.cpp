@@ -86,12 +86,11 @@ void Seats::Expire(double now) {
   Drop([now](const Seat& seat) { return seat.connection.empty() && now > seat.expires; });
 }
 
-std::vector<Seat> Seats::DropCamera(const std::string& camera_id) {
-  return Drop([&](const Seat& seat) { return seat.camera_id == camera_id; });
-}
-
-std::vector<Seat> Seats::DropCamera(const std::string& camera_id, const std::string& protocol) {
-  return Drop([&](const Seat& seat) { return seat.camera_id == camera_id && seat.protocol == protocol; });
+std::vector<Seat> Seats::DropCamera(const std::string& camera_id, const std::vector<std::string>& kept_protocols) {
+  return Drop([&](const Seat& seat) {
+    return seat.camera_id == camera_id &&
+           std::find(kept_protocols.begin(), kept_protocols.end(), seat.protocol) == kept_protocols.end();
+  });
 }
 
 std::vector<Seat> Seats::DropProtocol(const std::string& protocol) {

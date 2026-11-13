@@ -27,6 +27,14 @@ inline CameraEntry Obstacle() {
   return entry;
 }
 
+// The obstacle camera with webrtc first, as the Tron has it while its encoder runs.
+inline CameraEntry ObstacleWithWebrtc() {
+  CameraEntry entry = Obstacle();
+  entry.protocols = {"webrtc", "mjpeg"};
+  entry.source = "rtsp://127.0.0.1:8556/oa_left";
+  return entry;
+}
+
 inline CameraEntry Stereo() {
   CameraEntry entry;
   entry.id = "stereo";
