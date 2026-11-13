@@ -97,9 +97,10 @@ Scheduler::Scheduler(ScheduleFile file, bool available, const json& state, const
     for (const auto& item : state["handled"].items()) {
       const std::optional<Date> date = ParseDate(item.key());
       if (!date || !item.value().is_array()) continue;
+      std::set<int>& times = handled_[*date];
       for (const json& time : item.value()) {
         const std::optional<int> minutes = time.is_string() ? ParseClockTime(time.get<std::string>()) : std::nullopt;
-        if (minutes) handled_[*date].insert(*minutes);
+        if (minutes) times.insert(*minutes);
       }
     }
   }
@@ -169,6 +170,7 @@ void Scheduler::SweepMissed() {
 }
 
 void Scheduler::EndWait(const char* battery_word, const char* hold_word) {
+  if (!waiting_) return;
   const Waiting wait = *waiting_;
   waiting_.reset();
   out_.state_changed = true;
@@ -242,7 +244,7 @@ void Scheduler::Tick(const Facts& facts) {
   const Plan* plan = PlanAt(file_.schedule, due->date, due->time);
   if (run_) {
     Mark(*due);
-    Log("skip_busy", PhaseName(run_->phase), nullptr, *due);
+    Log("skip_busy", PhaseName(run_->phase), nullptr, due);
     return;
   }
   Ask(*due, *plan, false);

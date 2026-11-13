@@ -17,7 +17,7 @@ namespace mowbite_schedule {
 // A plan fires in this many seconds after its time, later only from waiting.
 constexpr int64_t kWindow = 60;
 // How long a plan waits for the battery or the end of a hold, from its time.
-constexpr int64_t kWaitLimit = 2 * 3600;
+constexpr int64_t kWaitLimit = int64_t{2} * 3600;
 // How long the answer of the weather may take.
 constexpr double kWeatherDeadline = 15.0;
 // Weather older than this counts as none.

@@ -283,7 +283,7 @@ LocalTime TimeZone::ToLocal(int64_t unix_s) const {
 }
 
 int64_t TimeZone::ToUnix(const Date& date, int minutes) const {
-  const int64_t local = DaysFromDate(date) * kDay + minutes * 60;
+  const int64_t local = DaysFromDate(date) * kDay + int64_t{minutes} * 60;
   const int64_t as_std = local - std_east_;
   const int64_t as_dst = local - dst_east_;
   const bool std_fits = OffsetAt(as_std) == std_east_;
