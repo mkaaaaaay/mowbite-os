@@ -47,6 +47,8 @@ class Outbox {
   void Add(const Push& push, const NotifyConfig& config, double t, double mono);
   // Whether an item is due at mono.
   bool Due(double mono) const;
+  // The mono of the next try, none while empty.
+  std::optional<double> NextDue() const;
   // The first item due at mono, taken out.
   std::optional<Item> Take(double mono);
   // After a try that wants another: back in, unless it had kTries.

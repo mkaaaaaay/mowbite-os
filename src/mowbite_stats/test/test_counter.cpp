@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_stats/counter.h"
 
 using namespace mowbite_stats;
@@ -81,7 +82,7 @@ TEST(Counter, HoursCloseAndARestartLosesNothing) {
 TEST(Counter, AnEmptyHourIsNotKept) {
   Counter c = Fresh();
   c.Add(At(0, "IDLE", false, 0));
-  c.Add(At(7200, "IDLE", false, 0));
+  EXPECT_FALSE(c.Add(At(7200, "IDLE", false, 0)).hour_closed);
   EXPECT_TRUE(c.HoursJson().empty());
 }
 
@@ -103,10 +104,11 @@ TEST(Counter, HoursAreCapped) {
 
 TEST(Counter, GetFromAndItsCap) {
   json rows = json::array();
-  for (size_t i = 0; i < kMaxAnswerHours + 10; ++i) rows.push_back({3600 * static_cast<int64_t>(i), 1, 0, 0, 0});
+  const size_t most = mowbite_api::kStatsMaxAnswerHours;
+  for (size_t i = 0; i < most + 10; ++i) rows.push_back({3600 * static_cast<int64_t>(i), 1, 0, 0, 0});
   const Counter c(nullptr, rows, nullptr, kHour);
   const json all = c.Get(0, kHour);
-  ASSERT_EQ(all["hours"].size(), kMaxAnswerHours);
+  ASSERT_EQ(all["hours"].size(), most);
   EXPECT_EQ(all["from"], 3600 * 10);
   EXPECT_EQ(all["hours"][0]["t"], 3600 * 10);
   const json some = c.Get(3600 * 9000, kHour);

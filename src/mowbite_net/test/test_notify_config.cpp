@@ -23,7 +23,8 @@ TEST(NotifyConfig, Defaults) {
   EXPECT_TRUE(config.enabled);
   EXPECT_FALSE(config.stored);
   EXPECT_EQ(config.server, "https://ntfy.sh");
-  EXPECT_EQ(config.events, DefaultEvents());
+  EXPECT_EQ(config.events, (std::vector<std::string>{"emergency", "dock_failed", "undock_failed", "nav_error",
+                                                     "spinup", "standstill", "refused", "maintenance"}));
   EXPECT_EQ(config.remind, 30);
   EXPECT_EQ(config.emergency_wait, 10);
 }
@@ -111,12 +112,12 @@ TEST(NotifyConfig, PushesTenAtMostOldestGoes) {
     ASSERT_FALSE(AddPush({{"address", "https://up.example/" + std::to_string(i)}}, &c));
   }
   ASSERT_FALSE(AddPush({{"address", "https://up.example/11"}}, &c));
-  ASSERT_EQ(c.pushes.size(), kMaxPushes);
+  ASSERT_EQ(c.pushes.size(), 10u);
   EXPECT_EQ(c.pushes.front(), "https://up.example/2");
   EXPECT_EQ(Field(AddPush(json::parse(R"({"address": "mailto:x"})"), &c)), "address/format");
   EXPECT_EQ(Field(AddPush(json::parse(R"({})"), &c)), "address/missing");
   ASSERT_FALSE(RemovePush({{"address", "https://up.example/5"}}, &c));
-  EXPECT_EQ(c.pushes.size(), kMaxPushes - 1);
+  EXPECT_EQ(c.pushes.size(), 9u);
   std::optional<std::string> address;
   EXPECT_EQ(Field(CheckTest({{"address", "https://up.example/5"}}, c, &address)), "address/unknown");
   EXPECT_FALSE(CheckTest({{"address", "https://up.example/6"}}, c, &address));

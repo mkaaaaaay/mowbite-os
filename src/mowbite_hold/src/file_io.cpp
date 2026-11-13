@@ -56,8 +56,6 @@ namespace {
 
 bool WriteAtomic(const std::string& path, const std::string& text, std::string* error, mode_t mode) {
   const std::string temp = path + ".tmp";
-  // A temp file left over keeps its mode under O_TRUNC.
-  ::unlink(temp.c_str());
   const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
   if (fd < 0) {
     *error = "cannot write " + temp + ": " + std::strerror(errno);
@@ -105,15 +103,14 @@ bool WriteFileAtomic(const std::string& path, const std::string& text, std::stri
 }
 
 bool WriteFileOwnerOnly(const std::string& path, const std::string& text, std::string* error) {
-  return MakeFolder(path, error) && WriteAtomic(path, text, error, 0600);
+  if (!MakeFolder(path, error)) return false;
+  // A temp file left over keeps its mode under O_TRUNC.
+  ::unlink((path + ".tmp").c_str());
+  return WriteAtomic(path, text, error, 0600);
 }
 
 bool WriteFileSafely(const std::string& path, const std::string& text, std::string* error) {
-  std::error_code ec;
-  std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-  if (!ec) return WriteFileAtomic(path, text, error);
-  *error = "cannot create the folder of " + path + ": " + ec.message();
-  return false;
+  return MakeFolder(path, error) && WriteAtomic(path, text, error, 0644);
 }
 
 bool RemoveFileSynced(const std::string& path, std::string* error) {

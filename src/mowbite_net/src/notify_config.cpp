@@ -10,13 +10,8 @@ namespace mowbite_net {
 
 namespace {
 
-constexpr size_t kMaxName = 40;
 constexpr size_t kMaxToken = 200;
 constexpr size_t kMaxAddress = 1000;
-constexpr int kMaxRemind = 1440;
-constexpr int kMaxEmergencyWait = 600;
-constexpr int64_t kMaxSnooze = 86400;
-constexpr size_t kMaxLog = 50;
 
 const std::regex& WebAddress() {
   static const std::regex re("^https?://[A-Za-z0-9.:/_-]{1,200}$");
@@ -51,7 +46,7 @@ std::optional<Rejection> CheckKeys(const json& params, const std::set<std::strin
   return std::nullopt;
 }
 
-std::optional<Rejection> Whole(const json& params, const char* key, int64_t min, int64_t max, int64_t* out) {
+std::optional<Rejection> CheckWhole(const json& params, const char* key, int64_t min, int64_t max, int64_t* out) {
   const json& value = params[key];
   if (!value.is_number_integer()) return Bad(key, "type", "a whole number");
   const int64_t n = value.get<int64_t>();
@@ -90,7 +85,11 @@ bool NotifyConfig::operator==(const NotifyConfig& o) const {
 }
 
 std::vector<std::string> DefaultEvents() {
-  return {"emergency", "dock_failed", "undock_failed", "nav_error", "spinup", "standstill", "refused", "maintenance"};
+  std::vector<std::string> events;
+  for (const auto& event : mowbite_api::NotifyEvents()) {
+    if (event.picked) events.push_back(event.key);
+  }
+  return events;
 }
 
 NotifyConfig DefaultConfig() {
@@ -163,7 +162,8 @@ std::optional<Rejection> ApplySet(const json& params, NotifyConfig* config) {
     } else if (key == "remind" || key == "emergency_wait") {
       int64_t n = 0;
       const bool remind = key == "remind";
-      if (auto bad = Whole(params, key.c_str(), 0, remind ? kMaxRemind : kMaxEmergencyWait, &n)) return bad;
+      const int64_t max = remind ? mowbite_api::kNotifyMaxRemind : mowbite_api::kNotifyMaxEmergencyWait;
+      if (auto bad = CheckWhole(params, key.c_str(), 0, max, &n)) return bad;
       (remind ? next.remind : next.emergency_wait) = static_cast<int>(n);
     } else if (key == "events") {
       if (!value.is_array()) return Bad(key, "type", "a list of event keys");
@@ -172,7 +172,9 @@ std::optional<Rejection> ApplySet(const json& params, NotifyConfig* config) {
       for (const json& event : value) {
         if (!event.is_string()) return Bad(key, "type", "a list of event keys");
         const std::string name = event.get<std::string>();
-        if (std::find(known.begin(), known.end(), name) == known.end()) return Bad(key, "unknown", "no event " + name);
+        if (std::none_of(known.begin(), known.end(), [&](const auto& e) { return e.key == name; })) {
+          return Bad(key, "unknown", "no event " + name);
+        }
         if (std::find(events.begin(), events.end(), name) != events.end()) {
           return Bad(key, "duplicate", name + " twice");
         }
@@ -192,7 +194,7 @@ std::optional<Rejection> ApplySet(const json& params, NotifyConfig* config) {
         if (!url.empty() && !std::regex_match(url, WebAddress())) return Bad(key, "format", "an http(s) address");
         next.url = url;
       } else if (key == "topic") {
-        static const std::regex re("^[A-Za-z0-9_-]{0,64}$");
+        static const std::regex re(mowbite_api::kNotifyTopicPattern);
         if (!std::regex_match(text, re)) return Bad(key, "format", "letters, digits, - and _, at most 64");
         next.topic = text;
       } else if (key == "token") {
@@ -204,7 +206,9 @@ std::optional<Rejection> ApplySet(const json& params, NotifyConfig* config) {
         if (text != "de" && text != "en") return Bad(key, "range", "de or en");
         next.lang = text;
       } else {
-        if (Length(text) > kMaxName) return Bad(key, "range", "at most 40 characters");
+        if (Length(text) > mowbite_api::kNotifyMaxName) {
+          return Bad(key, "range", "at most " + std::to_string(mowbite_api::kNotifyMaxName) + " characters");
+        }
         next.name = text;
       }
     }
@@ -220,7 +224,7 @@ std::optional<Rejection> AddPush(const json& params, NotifyConfig* config) {
   if (auto bad = Address(params, &address)) return bad;
   auto& pushes = config->pushes;
   if (std::find(pushes.begin(), pushes.end(), address) != pushes.end()) return std::nullopt;
-  if (pushes.size() >= kMaxPushes) pushes.erase(pushes.begin());
+  if (pushes.size() >= static_cast<size_t>(mowbite_api::kNotifyMaxPushes)) pushes.erase(pushes.begin());
   pushes.push_back(address);
   return std::nullopt;
 }
@@ -237,7 +241,7 @@ std::optional<Rejection> RemovePush(const json& params, NotifyConfig* config) {
 std::optional<Rejection> CheckSnooze(const json& params, int64_t* seconds) {
   if (auto bad = CheckKeys(params, {"seconds"}, false)) return bad;
   if (!params.contains("seconds")) return Bad("seconds", "missing", "seconds from 0 to 86400");
-  return Whole(params, "seconds", 0, kMaxSnooze, seconds);
+  return CheckWhole(params, "seconds", 0, mowbite_api::kNotifyMaxSnooze, seconds);
 }
 
 std::optional<Rejection> CheckTest(const json& params, const NotifyConfig& config,
@@ -254,11 +258,11 @@ std::optional<Rejection> CheckTest(const json& params, const NotifyConfig& confi
 }
 
 std::optional<Rejection> CheckLog(const json& params, size_t* limit) {
-  *limit = kMaxLog;
+  *limit = mowbite_api::kNotifyMaxLog;
   if (auto bad = CheckKeys(params, {"limit"}, true)) return bad;
   if (params.is_null() || !params.contains("limit")) return std::nullopt;
   int64_t n = 0;
-  if (auto bad = Whole(params, "limit", 1, kMaxLog, &n)) return bad;
+  if (auto bad = CheckWhole(params, "limit", 1, mowbite_api::kNotifyMaxLog, &n)) return bad;
   *limit = static_cast<size_t>(n);
   return std::nullopt;
 }

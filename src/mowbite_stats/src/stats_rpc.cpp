@@ -2,11 +2,11 @@
 
 #include <set>
 
+#include "mowbite_api/catalog.h"
+
 namespace mowbite_stats {
 
 namespace {
-
-constexpr int64_t kMaxDueHours = 10000;
 
 RpcOutcome Bad(const std::string& field, const std::string& reason, const std::string& message) {
   RpcOutcome out;
@@ -60,10 +60,11 @@ RpcOutcome HandleStats(Counter& counter, const std::string& method, const json& 
   }
   if (auto bad = CheckKeys(params, {"part", "hours"}, false)) return *bad;
   if (auto bad = CheckPart(counter, params)) return *bad;
-  if (!params.contains("hours")) return Bad("hours", "missing", "blade hours from 1 to 10000");
-  if (!params["hours"].is_number_integer()) return Bad("hours", "type", "blade hours from 1 to 10000");
+  const std::string range = "blade hours from 1 to " + std::to_string(mowbite_api::kStatsMaxDueHours);
+  if (!params.contains("hours")) return Bad("hours", "missing", range);
+  if (!params["hours"].is_number_integer()) return Bad("hours", "type", range);
   const int64_t hours = params["hours"].get<int64_t>();
-  if (hours < 1 || hours > kMaxDueHours) return Bad("hours", "range", "blade hours from 1 to 10000");
+  if (hours < 1 || hours > mowbite_api::kStatsMaxDueHours) return Bad("hours", "range", range);
   counter.PartDue(params["part"].get<std::string>(), static_cast<double>(hours));
   return {counter.Get(static_cast<int64_t>(now), now), std::nullopt, true};
 }

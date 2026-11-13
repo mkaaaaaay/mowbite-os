@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_net/notifier.h"
 #include "mowbite_net/notify_config.h"
 
@@ -271,4 +272,16 @@ TEST(Notifier, EveryEventKeyHasItsWay) {
   json all = json::array();
   for (const auto& key : All().events) all.push_back(key);
   EXPECT_FALSE(ApplySet({{"events", all}}, &config));
+}
+
+TEST(Notifier, EveryPushWordAndPartHasItsTexts) {
+  for (const char* lang : {"de", "en"}) {
+    for (const auto& word : mowbite_api::ScheduleLogWords()) {
+      if (word.push) EXPECT_NE(Say(lang, word.word), word.word) << lang << " " << word.word;
+    }
+    for (const char* part : {"maintenance_blade", "maintenance_clean"}) {
+      EXPECT_NE(Say(lang, part), part) << lang;
+      EXPECT_NE(Say(lang, std::string(part) + ".title"), std::string(part) + ".title") << lang;
+    }
+  }
 }

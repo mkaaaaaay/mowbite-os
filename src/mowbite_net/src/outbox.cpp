@@ -89,6 +89,12 @@ bool Outbox::Due(double mono) const {
   return std::any_of(items_.begin(), items_.end(), [mono](const Item& item) { return item.next <= mono; });
 }
 
+std::optional<double> Outbox::NextDue() const {
+  if (items_.empty()) return std::nullopt;
+  return std::min_element(items_.begin(), items_.end(), [](const Item& a, const Item& b) { return a.next < b.next; })
+      ->next;
+}
+
 std::optional<Outbox::Item> Outbox::Take(double mono) {
   for (auto it = items_.begin(); it != items_.end(); ++it) {
     if (it->next > mono) continue;

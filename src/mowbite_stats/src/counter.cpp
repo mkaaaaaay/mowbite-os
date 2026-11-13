@@ -4,6 +4,8 @@
 #include <cmath>
 #include <ctime>
 
+#include "mowbite_api/catalog.h"
+
 namespace mowbite_stats {
 
 namespace {
@@ -103,9 +105,8 @@ Changed Counter::Add(const Sample& sample) {
   Changed changed;
   const int64_t hour = HourOf(sample.wall);
   if (hour != hour_.t) {
-    CloseHour();
+    changed.hour_closed = CloseHour();
     hour_ = Hour{hour, {}};
-    changed.hour_closed = true;
   }
   if (last_) {
     const Sample& last = *last_;
@@ -126,10 +127,11 @@ Changed Counter::Add(const Sample& sample) {
   return changed;
 }
 
-void Counter::CloseHour() {
-  if (hour_.amounts.Empty()) return;
+bool Counter::CloseHour() {
+  if (hour_.amounts.Empty()) return false;
   hours_.push_back(hour_);
   while (hours_.size() > kMaxHours) hours_.pop_front();
+  return true;
 }
 
 json Counter::StateJson() const {
@@ -167,8 +169,10 @@ json Counter::Get(std::optional<int64_t> from, double now) const {
   if (!hour_.amounts.Empty() && hour_.t >= start) picked.push_back(&hour_);
   // Cut to the newest; from then says where the hours begin.
   int64_t begins = start;
-  if (picked.size() > kMaxAnswerHours) {
-    picked.erase(picked.begin(), picked.end() - static_cast<std::ptrdiff_t>(kMaxAnswerHours));
+  // About 0.7 MB of JSON at the most, well below what MQTT carries.
+  const size_t most = mowbite_api::kStatsMaxAnswerHours;
+  if (picked.size() > most) {
+    picked.erase(picked.begin(), picked.end() - static_cast<std::ptrdiff_t>(most));
     begins = picked.front()->t;
   }
   json rows = json::array();

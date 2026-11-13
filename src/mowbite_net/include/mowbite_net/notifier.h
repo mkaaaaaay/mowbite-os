@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "mowbite_net/texts.h"
+
 namespace mowbite_net {
 
 using json = nlohmann::ordered_json;
@@ -30,7 +32,6 @@ struct Push {
   std::string title;
   std::string message;
   std::string path = "/activity/";  // where a tap opens MowBite
-  bool operator==(const Push& o) const;
 };
 
 // What the notifier reads of the settings.
@@ -94,11 +95,16 @@ class Notifier {
   };
 
   std::string Name() const;
+  // {n}: the name of the mower.
+  Vars N() const { return {{"n", Name()}}; }
   bool Wanted(const std::string& key) const { return rules_.events.count(key) > 0; }
+  void Emit(const std::string& kind, const std::string& phase, int prio, const std::string& tag,
+            const std::string& title, const std::string& message, const std::string& path = "/activity/");
   void Once(const std::string& key, const std::string& kind, const std::string& tag, const std::string& title,
             const std::string& message);
-  // Opens a problem when none is open, or replaces standstill, or any when key is emergency.
-  bool OpenProblem(const std::string& key, const std::string& variant, double mono, bool reminds,
+  // Opens a problem when none is open, or replaces standstill, or any when key is emergency; since (mono) is when
+  // it began, now when it is told.
+  bool OpenProblem(const std::string& key, const std::string& variant, double since, double now, bool reminds,
                    const std::string& title, const std::string& message, int prio, const std::string& tag);
   void Clear(const std::string& title, const std::string& message);
   void Close() { open_.reset(); }

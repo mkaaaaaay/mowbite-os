@@ -16,11 +16,10 @@ constexpr int kPrioProblem = 4;
 constexpr int kPrioInfo = 3;
 constexpr int kPrioClear = 2;
 
-// The kinds the app shows as a problem.
+// The kinds the app shows as a problem, after the catalog.
 bool IsProblem(const std::string& kind) {
-  static const std::set<std::string> problems = {"emergency", "dock_failed", "undock_failed", "nav_error",
-                                                  "spinup",    "standstill",  "refused"};
-  return problems.count(kind) > 0;
+  const auto& events = mowbite_api::NotifyEvents();
+  return std::any_of(events.begin(), events.end(), [&](const auto& e) { return e.key == kind && e.problem; });
 }
 
 std::string Minutes(double seconds) {
@@ -41,11 +40,6 @@ bool PushWord(const std::string& what) {
 
 }  // namespace
 
-bool Push::operator==(const Push& o) const {
-  return kind == o.kind && phase == o.phase && problem == o.problem && prio == o.prio && tag == o.tag &&
-         title == o.title && message == o.message && path == o.path;
-}
-
 void Notifier::SetRules(const NotifyRules& rules) {
   rules_ = rules;
 }
@@ -54,48 +48,28 @@ std::string Notifier::Name() const {
   return rules_.name.empty() ? Say(rules_.lang, "mower") : rules_.name;
 }
 
-void Notifier::Once(const std::string& key, const std::string& kind, const std::string& tag, const std::string& title,
-                    const std::string& message) {
-  if (!Wanted(key)) return;
-  Push push;
-  push.kind = kind;
-  push.problem = IsProblem(kind);
-  push.prio = kPrioInfo;
-  push.tag = tag;
-  push.title = title;
-  push.message = message;
-  out_.push_back(push);
+void Notifier::Emit(const std::string& kind, const std::string& phase, int prio, const std::string& tag,
+                    const std::string& title, const std::string& message, const std::string& path) {
+  out_.push_back(Push{kind, phase, IsProblem(kind), prio, tag, title, message, path});
 }
 
-bool Notifier::OpenProblem(const std::string& key, const std::string& variant, double mono, bool reminds,
+void Notifier::Once(const std::string& key, const std::string& kind, const std::string& tag, const std::string& title,
+                    const std::string& message) {
+  if (Wanted(key)) Emit(kind, "", kPrioInfo, tag, title, message);
+}
+
+bool Notifier::OpenProblem(const std::string& key, const std::string& variant, double since, double now, bool reminds,
                            const std::string& title, const std::string& message, int prio, const std::string& tag) {
   if (!Wanted(key)) return false;
-  if (open_ && open_->key != "standstill" && key != "emergency") return false;
-  if (open_ && open_->key == "emergency") return false;
-  open_ = Open{key, variant, mono, mono, reminds};
-  Push push;
-  push.kind = key;
-  push.phase = "new";
-  push.problem = true;
-  push.prio = prio;
-  push.tag = tag;
-  push.title = title;
-  push.message = message;
-  out_.push_back(push);
+  if (open_ && (open_->key == "emergency" || (open_->key != "standstill" && key != "emergency"))) return false;
+  open_ = Open{key, variant, since, now, reminds};
+  Emit(key, "new", prio, tag, title, message);
   return true;
 }
 
 void Notifier::Clear(const std::string& title, const std::string& message) {
   if (!open_) return;
-  Push push;
-  push.kind = open_->key;
-  push.phase = "clear";
-  push.problem = true;
-  push.prio = kPrioClear;
-  push.tag = "white_check_mark";
-  push.title = title;
-  push.message = message;
-  out_.push_back(push);
+  Emit(open_->key, "clear", kPrioClear, "white_check_mark", title, message);
   open_.reset();
 }
 
@@ -104,55 +78,48 @@ void Notifier::OnEvent(const json& event, double mono) {
   const std::string type = Text(event, "type");
   const std::string reason = Text(event, "reason");
   const std::string& lang = rules_.lang;
-  const Vars n = {{"n", Name()}};
-  const std::string variant = open_ ? open_->variant : "";
   if (type == "STATE") {
     OnStateEvent(event);
   } else if (type == "MOW_MOTOR_SPINUP_FAILED") {
     spinup_at_ = mono;
     // With emergency picked, its text says it.
-    if (!Wanted("emergency")) Once("spinup", "spinup", "warning", Say(lang, "spinup.title"), Say(lang, "spinup", n));
+    if (!Wanted("emergency")) Once("spinup", "spinup", "warning", Say(lang, "spinup.title"), Say(lang, "spinup", N()));
   } else if (type == "DOCKING_FAILED") {
-    if (reason == "NO_CHARGE_CURRENT") {
-      OpenProblem("dock_failed", "not_charging", mono, false, Say(lang, "not_charging.title"),
-                  Say(lang, "not_charging.new", n), kPrioProblem, "warning");
-    } else if (!event.contains("attempts")) {
-      OpenProblem("dock_failed", "cant_go_home", mono, true, Say(lang, "cant_go_home.title"),
-                  Say(lang, "cant_go_home.new",
-                      {{"n", Name()}, {"reason", ReasonName(lang, type, reason, Text(event, "message"))}}),
-                  kPrioProblem, "warning");
-    } else {
-      OpenProblem("dock_failed", "dock_failed", mono, true, Say(lang, "dock_failed.title"),
-                  Say(lang, "dock_failed.new", n), kPrioProblem, "warning");
-    }
+    // Not charging in the dock, could not set off for it, or gave up after its tries.
+    const std::string id = reason == "NO_CHARGE_CURRENT"   ? "not_charging"
+                           : !event.contains("attempts") ? "cant_go_home"
+                                                         : "dock_failed";
+    const Vars vars = {{"n", Name()}, {"reason", ReasonName(lang, type, reason, Text(event, "message"))}};
+    OpenProblem("dock_failed", id, mono, mono, id != "not_charging", Say(lang, id + ".title"),
+                Say(lang, id + ".new", vars), kPrioProblem, "warning");
   } else if (type == "CHARGING_LOST") {
     const auto pct = event.find("battery_percentage");
     const Vars vars = {{"n", Name()},
                        {"pct", pct != event.end() && pct->is_number() ? std::to_string(pct->get<int64_t>()) : "?"}};
-    OpenProblem("dock_failed", "charging_lost", mono, false, Say(lang, "not_charging.title"),
+    OpenProblem("dock_failed", "charging_lost", mono, mono, false, Say(lang, "not_charging.title"),
                 Say(lang, reason == "NO_DOCK_CONTACT" ? "charging_lost.contact" : "charging_lost.power", vars),
                 kPrioProblem, "warning");
   } else if (type == "DOCKED") {
     if (open_ && open_->key == "dock_failed") {
-      const bool charging = variant == "not_charging" || variant == "charging_lost";
-      Clear(Say(lang, charging ? "charging_again.title" : "back_in_dock.title"), Say(lang, "charging_again", n));
+      const bool charging = open_->variant == "not_charging" || open_->variant == "charging_lost";
+      Clear(Say(lang, charging ? "charging_again.title" : "back_in_dock.title"), Say(lang, "charging_again", N()));
     }
   } else if (type == "UNDOCKING_FAILED") {
     const bool no_gps = reason == "no_gps";
     const std::string id = no_gps ? "no_gps" : "undock_failed";
-    OpenProblem("undock_failed", id, mono, true, Say(lang, id + ".title"), Say(lang, id + ".new", n), kPrioProblem,
-                "warning");
+    OpenProblem("undock_failed", id, mono, mono, true, Say(lang, id + ".title"), Say(lang, id + ".new", N()),
+                kPrioProblem, "warning");
   } else if (type == "UNDOCKED") {
-    if (open_ && open_->key == "undock_failed") Clear(Say(lang, "on_its_way.title"), Say(lang, "undocked", n));
+    if (open_ && open_->key == "undock_failed") Clear(Say(lang, "on_its_way.title"), Say(lang, "undocked", N()));
   } else if (type == "JOB_COMPLETE") {
-    Once("done", "done", "seedling", Say(lang, "done.title"), Say(lang, "done", n));
+    Once("done", "done", "seedling", Say(lang, "done.title"), Say(lang, "done", N()));
   } else if (type == "DOCKING") {
     if (reason == "RAIN") {
-      Once("rain", "rain", "cloud_with_rain", Say(lang, "rain.title"), Say(lang, "rain.home", n));
+      Once("rain", "rain", "cloud_with_rain", Say(lang, "rain.title"), Say(lang, "rain.home", N()));
     } else if (reason == "BATTERY_LOW" || reason == "BATTERY_CRITICAL") {
-      Once("battery", "battery", "battery", Say(lang, "battery.title"), Say(lang, "battery.home", n));
+      Once("battery", "battery", "battery", Say(lang, "battery.title"), Say(lang, "battery.home", N()));
     } else if (reason == "DARK") {
-      Once("dark", "dark", "city_sunset", Say(lang, "dark.title"), Say(lang, "dark.home", n));
+      Once("dark", "dark", "city_sunset", Say(lang, "dark.title"), Say(lang, "dark.home", N()));
     }
   } else if (type == "BATTERY_LOW") {
     const auto volt = event.find("battery_voltage");
@@ -180,12 +147,11 @@ void Notifier::OnStateEvent(const json& event) {
   paused_reason_ = reason;
   if (Text(event, "resume") != "user") return;
   const std::string& lang = rules_.lang;
-  const Vars n = {{"n", Name()}};
   const Vars why = {{"n", Name()}, {"reason", ReasonName(lang, "STATE", reason, Text(event, "message"))}};
   if (reason == "RAIN") {
-    Once("rain", "rain", "cloud_with_rain", Say(lang, "rain.title"), Say(lang, "rain.stopped", n));
+    Once("rain", "rain", "cloud_with_rain", Say(lang, "rain.title"), Say(lang, "rain.stopped", N()));
   } else if (reason == "DARK") {
-    Once("dark", "dark", "city_sunset", Say(lang, "dark.title"), Say(lang, "dark.stopped", n));
+    Once("dark", "dark", "city_sunset", Say(lang, "dark.title"), Say(lang, "dark.stopped", N()));
   } else if (reason == "BLADE_REFUSED") {
     Once("spinup", "spinup", "warning", Say(lang, "spinup.title"), Say(lang, "paused", why));
   } else if (reason != "MANUAL" && reason != "EMERGENCY" && reason != "BLADE_SPINUP_FAILED" &&
@@ -196,22 +162,22 @@ void Notifier::OnStateEvent(const json& event) {
 
 void Notifier::OnState(const StateView& state) {
   const std::string& lang = rules_.lang;
-  const Vars n = {{"n", Name()}};
   if (state.emergency) {
     if (!emergency_since_) emergency_since_ = state.mono;
     if ((!open_ || open_->key != "emergency") && state.mono - *emergency_since_ >= rules_.emergency_wait_s &&
         !emergency_told_) {
-      std::string message = Say(lang, "emergency.new", n);
+      std::string message = Say(lang, "emergency.new", N());
       if (spinup_at_ && *spinup_at_ >= *emergency_since_ - kSpinupBefore) message += Say(lang, "emergency.spinup");
-      emergency_told_ = OpenProblem("emergency", "emergency", state.mono, true, Say(lang, "emergency.title"), message,
-                                    kPrioEmergency, "rotating_light");
       // Reminders count from now, their minutes from the start of the emergency.
-      if (emergency_told_) open_->since = *emergency_since_;
+      emergency_told_ = OpenProblem("emergency", "emergency", *emergency_since_, state.mono, true,
+                                    Say(lang, "emergency.title"), message, kPrioEmergency, "rotating_light");
     }
   } else {
     emergency_since_.reset();
     emergency_told_ = false;
-    if (open_ && open_->key == "emergency") Clear(Say(lang, "emergency.clear.title"), Say(lang, "emergency.clear", n));
+    if (open_ && open_->key == "emergency") {
+      Clear(Say(lang, "emergency.clear.title"), Say(lang, "emergency.clear", N()));
+    }
   }
   const bool changed = !last_ || last_->state != state.state;
   if (open_ && open_->key == "dock_failed" && changed) {
@@ -222,7 +188,7 @@ void Notifier::OnState(const StateView& state) {
   }
   if (open_ && open_->key == "undock_failed") {
     if (changed && state.state == "MOWING") {
-      Clear(Say(lang, "on_its_way.title"), Say(lang, "undocked", n));
+      Clear(Say(lang, "on_its_way.title"), Say(lang, "undocked", N()));
     } else if (open_->variant != "no_gps" && state.charging && last_ && !last_->charging) {
       Close();
     }
@@ -240,26 +206,19 @@ void Notifier::Remind(const StateView& state) {
   const std::string& v = open_->variant;
   // cant_go_home and dock_failed share the text of a reminder.
   const std::string id = v == "emergency" || v == "no_gps" || v == "undock_failed" ? v : "dock_failed";
-  Push push;
-  push.kind = open_->key;
-  push.phase = "again";
-  push.problem = true;
-  push.prio = kPrioProblem;
-  push.tag = open_->key == "emergency" ? "rotating_light" : "warning";
-  push.title = Say(rules_.lang, v == "cant_go_home" ? "cant_go_home.title" : id + ".title");
-  push.message = Say(rules_.lang, id + ".again", vars);
-  out_.push_back(push);
+  Emit(open_->key, "again", kPrioProblem, open_->key == "emergency" ? "rotating_light" : "warning",
+       Say(rules_.lang, v == "cant_go_home" ? "cant_go_home.title" : id + ".title"),
+       Say(rules_.lang, id + ".again", vars));
 }
 
 void Notifier::Standstill(const StateView& state) {
   const std::string& lang = rules_.lang;
-  const Vars n = {{"n", Name()}};
   const bool moved = state.pose && still_since_ && std::hypot(state.x - still_x_, state.y - still_y_) > kStandstillMove;
   if (open_ && open_->key == "standstill") {
     if (state.charging) {
-      Clear(Say(lang, "charging_again.title"), Say(lang, "charging_again", n));
+      Clear(Say(lang, "charging_again.title"), Say(lang, "charging_again", N()));
     } else if (moved) {
-      Clear(Say(lang, "on_its_way.title"), Say(lang, "moving_again", n));
+      Clear(Say(lang, "on_its_way.title"), Say(lang, "moving_again", N()));
     }
   }
   const bool counts = !state.emergency && state.state != "AREA_RECORDING" && !state.charging &&
@@ -292,8 +251,8 @@ void Notifier::Standstill(const StateView& state) {
     message += Say(lang, "standstill.stuck");
   }
   still_told_ = true;
-  OpenProblem("standstill", "standstill", state.mono, false, Say(lang, "standstill.title"), message, kPrioProblem,
-              "warning");
+  OpenProblem("standstill", "standstill", state.mono, state.mono, false, Say(lang, "standstill.title"), message,
+              kPrioProblem, "warning");
 }
 
 void Notifier::OnParts(const std::vector<PartView>& parts) {
@@ -307,24 +266,15 @@ void Notifier::OnParts(const std::vector<PartView>& parts) {
     if (!Wanted("maintenance")) continue;
     maintenance_told_[part.key] = part.due_h;
     const std::string kind = "maintenance_" + part.key;
-    Push push;
-    push.kind = kind;
-    push.prio = kPrioInfo;
-    push.tag = part.key == "blade" ? "wrench" : "broom";
-    push.title = Say(rules_.lang, kind + ".title");
-    push.message = Say(rules_.lang, kind,
-                       {{"n", Name()}, {"hours", std::to_string(static_cast<int64_t>(std::floor(part.used_h)))}});
-    out_.push_back(push);
+    Emit(kind, "", kPrioInfo, part.key == "blade" ? "wrench" : "broom", Say(rules_.lang, kind + ".title"),
+         Say(rules_.lang, kind,
+             {{"n", Name()}, {"hours", std::to_string(static_cast<int64_t>(std::floor(part.used_h)))}}));
   }
 }
 
 void Notifier::OnScheduleChanged() {
-  Push push;
-  push.kind = "schedule_changed";
-  push.tag = "calendar";
-  push.title = Say(rules_.lang, "schedule_changed.title");
-  push.message = Say(rules_.lang, "schedule_changed", {{"n", Name()}});
-  out_.push_back(push);
+  Emit("schedule_changed", "", kPrioInfo, "calendar", Say(rules_.lang, "schedule_changed.title"),
+       Say(rules_.lang, "schedule_changed", N()));
 }
 
 void Notifier::OnScheduleLogged(const std::string& what, const std::string& at) {
@@ -335,13 +285,8 @@ void Notifier::OnScheduleLogged(const std::string& what, const std::string& at) 
 }
 
 void Notifier::OnNotifyChanged() {
-  Push push;
-  push.kind = "notify_changed";
-  push.tag = "bell";
-  push.path = "/settings/";
-  push.title = Say(rules_.lang, "notify_changed.title");
-  push.message = Say(rules_.lang, "notify_changed", {{"n", Name()}});
-  out_.push_back(push);
+  Emit("notify_changed", "", kPrioInfo, "bell", Say(rules_.lang, "notify_changed.title"),
+       Say(rules_.lang, "notify_changed", N()), "/settings/");
 }
 
 std::vector<Push> Notifier::Take() {

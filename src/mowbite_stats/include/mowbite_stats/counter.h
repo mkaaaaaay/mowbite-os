@@ -14,8 +14,6 @@ using json = nlohmann::ordered_json;
 
 // Hours with something in them that are kept, about three years of mowing.
 constexpr size_t kMaxHours = 10000;
-// Most hours one stats.get gives; about 0.7 MB of JSON, well below what MQTT carries.
-constexpr size_t kMaxAnswerHours = 9000;
 // Samples further apart (s) do not count: the stream had a gap.
 constexpr double kMaxGap = 5.0;
 // A step of the pose longer than this (m) between two samples is a jump of the position, not driven.
@@ -55,7 +53,7 @@ struct Sample {
 
 // What a sample changed: which files are to be written.
 struct Changed {
-  bool hour_closed = false;
+  bool hour_closed = false;  // an hour with something in it went into the hours
 };
 
 // Counts blade time, distance and runs per hour from the samples, and the blade hours of the parts since they were
@@ -86,7 +84,8 @@ class Counter {
   const Amounts& total() const { return total_; }
 
  private:
-  void CloseHour();
+  // Keeps the hour going on when it has something in it.
+  bool CloseHour();
 
   double since_ = 0;
   Amounts total_;

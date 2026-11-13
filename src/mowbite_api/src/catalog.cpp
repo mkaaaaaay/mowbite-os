@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <map>
+#include <string>
 
 #include "mowbite_api/catalog.h"
 
@@ -202,26 +203,32 @@ Field ScheduleAnswer() {
 // The settings of the pushes as notify.get gives them; in notify.set every key optional.
 std::vector<Field> NotifySettings(bool required) {
   Field topic = Text("topic", "ntfy topic, [A-Za-z0-9_-]{1,64}; empty for none", required);
-  topic.pattern = "^[A-Za-z0-9_-]{0,64}$";
+  topic.pattern = kNotifyTopicPattern;
   std::string keys;
-  for (const auto& key : NotifyEvents()) keys += (keys.empty() ? "" : ", ") + key;
+  for (const auto& event : NotifyEvents()) keys += (keys.empty() ? "" : ", ") + event.key;
   const Field events = List("events", "The events that send a push: " + keys, Type::kString, required);
   return {Bool("enabled", "false: nothing is sent, the rest stays", required),
           Text("server", "ntfy server, http(s)://host[:port][/path]", required),
           topic,
           Text("lang", "Language of the texts", required, {"de", "en"}),
-          Text("name", "Name of the mower in the texts, at most 40 characters; empty: the mower", required),
+          Text("name", "Name of the mower in the texts, at most " + std::to_string(kNotifyMaxName) +
+                           " characters; empty: the mower",
+               required),
           Text("url", "Address of MowBite for the button in the message; empty for none", required),
           events,
-          Whole("remind", "min", 0, 1440, "Between reminders of a problem that stays; 0 for none", required),
-          Whole("emergency_wait", "s", 0, 600, "How long an emergency lasts before it is told", required)};
+          Whole("remind", "min", 0, kNotifyMaxRemind, "Between reminders of a problem that stays; 0 for none",
+                required),
+          Whole("emergency_wait", "s", 0, kNotifyMaxEmergencyWait, "How long an emergency lasts before it is told",
+                required)};
 }
 
 Field NotifyAnswer() {
   std::vector<Field> fields = {Integer("schema", "Always 1")};
   for (auto& field : NotifySettings(true)) fields.push_back(std::move(field));
   fields.push_back(Bool("has_token", "A token for the ntfy server is stored; the token itself never comes back"));
-  fields.push_back(List("pushes", "UnifiedPush addresses of the phones, at most 10, oldest first", Type::kString));
+  fields.push_back(List("pushes", "UnifiedPush addresses of the phones, oldest first; past " +
+                                      std::to_string(kNotifyMaxPushes) + " the oldest goes",
+                        Type::kString));
   fields.push_back(UnixTime("snooze", "Reminders snoozed until then, 0 for not"));
   fields.push_back(Bool("stored", "Saved before: without, nothing is sent"));
   return Object("result", "The settings of the pushes", std::move(fields));
@@ -239,7 +246,8 @@ Field StatsAnswer() {
   return Object(
       "result", "The statistics",
       {Integer("schema", "Always 1"), UnixTime("since", "Counting started then"),
-       UnixTime("from", "The hours from then on: from of the request, later when the newest 9000 are all"),
+       UnixTime("from", "The hours from then on: from of the request, later when the newest " +
+                            std::to_string(kStatsMaxAnswerHours) + " are all"),
        Object("total", "Since counting started", StatsAmounts()),
        Rows("hours", "Each hour with something in it from from on, oldest first, the one going on last", hour),
        Rows("parts", "The parts to see to",
@@ -724,11 +732,13 @@ const std::vector<Method>& Methods() {
        Object("params", "None: the hours since the turn of the year, less a day",
               {UnixTime("from", "The hours from then on")}, false),
        StatsAnswer(), ""},
-      {"stats.part_done", "mowbite_stats", "The part was seen to now: its blade hours start from 0; as stats.get from now",
+      {"stats.part_done", "mowbite_stats",
+       "The part was seen to now: its blade hours start from 0; as stats.get from now",
        Object("params", "The part", {Text("part", "Its key", true, {"blade", "clean"})}), StatsAnswer(), ""},
       {"stats.part_due", "mowbite_stats", "After how many blade hours the part is due again; as stats.get from now",
        Object("params", "The part and its hours",
-              {Text("part", "Its key", true, {"blade", "clean"}), Whole("hours", "h", 1, 10000, "Blade hours")}),
+              {Text("part", "Its key", true, {"blade", "clean"}),
+               Whole("hours", "h", 1, kStatsMaxDueHours, "Blade hours")}),
        StatsAnswer(), ""},
       {"notify.get", "mowbite_net", "The settings of the pushes; of the token only whether there is one", NoParams(),
        NotifyAnswer(), ""},
@@ -747,14 +757,16 @@ const std::vector<Method>& Methods() {
               {Text("result", "sent: to at least one; no_target: no topic and no phone", true,
                     {"sent", "failed", "no_target"})}),
        ""},
-      {"notify.push_add", "mowbite_net", "A phone's UnifiedPush address; past 10 the oldest goes",
+      {"notify.push_add", "mowbite_net",
+       "A phone's UnifiedPush address; past " + std::to_string(kNotifyMaxPushes) + " the oldest goes",
        Object("params", "The address", {Text("address", "https URL, at most 1000 characters")}), NotifyAnswer(), ""},
       {"notify.push_remove", "mowbite_net", "Drops a phone's UnifiedPush address",
        Object("params", "The address", {Text("address", "As in pushes")}), NotifyAnswer(), ""},
       {"notify.snooze", "mowbite_net", "No reminders for so long; 0 lifts it",
-       Object("params", "How long", {Whole("seconds", "s", 0, 86400, "Seconds from now")}), NotifyAnswer(), ""},
+       Object("params", "How long", {Whole("seconds", "s", 0, kNotifyMaxSnooze, "Seconds from now")}), NotifyAnswer(),
+       ""},
       {"notify.log", "mowbite_net", "The last pushes, newest first",
-       Object("params", "How many", {Whole("limit", "", 1, 50, "The last so many", false)}, false),
+       Object("params", "How many", {Whole("limit", "", 1, kNotifyMaxLog, "The last so many", false)}, false),
        Rows("result", "A push",
             {UnixTime("t", "When"), Bool("sent", "Reached at least one target"), Text("kind", "Its event or test"),
              Text("title", "Its title")}),
@@ -929,10 +941,13 @@ const std::vector<Method>& Methods() {
   return methods;
 }
 
-const std::vector<std::string>& NotifyEvents() {
-  static const std::vector<std::string> events = {
-      "emergency", "dock_failed", "undock_failed", "nav_error", "spinup", "standstill", "refused",
-      "done",      "rain",        "battery",       "dark",      "maintenance", "schedule_skipped"};
+const std::vector<NotifyEvent>& NotifyEvents() {
+  static const std::vector<NotifyEvent> events = {
+      {"emergency", true, true}, {"dock_failed", true, true}, {"undock_failed", true, true},
+      {"nav_error", true, true}, {"spinup", true, true},      {"standstill", true, true},
+      {"refused", true, true},   {"done"},                    {"rain"},
+      {"battery"},               {"dark"},                    {"maintenance", false, true},
+      {"schedule_skipped"}};
   return events;
 }
 

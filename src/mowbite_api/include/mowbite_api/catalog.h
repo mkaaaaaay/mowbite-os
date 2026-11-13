@@ -204,8 +204,23 @@ struct ScheduleLogWord {
   bool push = false;   // a start of a plan fell through: schedule_skipped of notify.* tells it
 };
 const std::vector<ScheduleLogWord>& ScheduleLogWords();
-// The events notify.* can send a push for, by key.
-const std::vector<std::string>& NotifyEvents();
+// An event notify.* can send a push for: problem as the app shows it, picked until notify.set picks others.
+struct NotifyEvent {
+  std::string key;
+  bool problem = false;
+  bool picked = false;
+};
+const std::vector<NotifyEvent>& NotifyEvents();
+// Bounds of notify.* and stats.*, for the catalog and the checks of the nodes.
+constexpr int kNotifyMaxRemind = 1440;
+constexpr int kNotifyMaxEmergencyWait = 600;
+constexpr int kNotifyMaxSnooze = 86400;
+constexpr int kNotifyMaxLog = 50;
+constexpr int kNotifyMaxName = 40;
+constexpr int kNotifyMaxPushes = 10;
+constexpr char kNotifyTopicPattern[] = "^[A-Za-z0-9_-]{0,64}$";
+constexpr int kStatsMaxDueHours = 10000;
+constexpr int kStatsMaxAnswerHours = 9000;
 // The situations of sound.list in their order.
 const std::vector<SoundSituation>& SoundSituations();
 

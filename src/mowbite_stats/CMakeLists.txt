@@ -15,13 +15,14 @@ find_package(mowbite_component REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_hold REQUIRED)
 find_package(mowbite_watch REQUIRED)
+find_package(mowbite_api REQUIRED)
 
 # The counter and the answers of stats.* without clock, files or ROS.
 add_library(mowbite_stats_core STATIC src/counter.cpp src/stats_rpc.cpp)
 target_include_directories(mowbite_stats_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(mowbite_stats_core PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(mowbite_stats_core PUBLIC nlohmann_json::nlohmann_json mowbite_api::mowbite_api_core)
 set_target_properties(mowbite_stats_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_stats_component SHARED src/stats_node.cpp)
@@ -41,9 +42,8 @@ install(TARGETS mowbite_stats_core mowbite_stats_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  find_package(mowbite_api REQUIRED)
   ament_add_gtest(mowbite_stats_test test/test_counter.cpp test/test_stats_rpc.cpp)
-  target_link_libraries(mowbite_stats_test mowbite_stats_core mowbite_api::mowbite_api_core)
+  target_link_libraries(mowbite_stats_test mowbite_stats_core)
 endif()
 
 ament_export_targets(export_mowbite_stats HAS_LIBRARY_TARGET)

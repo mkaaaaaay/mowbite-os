@@ -12,7 +12,6 @@ namespace mowbite_net {
 using json = nlohmann::ordered_json;
 
 constexpr char kDefaultServer[] = "https://ntfy.sh";
-constexpr size_t kMaxPushes = 10;
 
 // notify.json: where the pushes go and which. The token never leaves the file but towards the ntfy server.
 struct NotifyConfig {
@@ -32,7 +31,7 @@ struct NotifyConfig {
   bool operator!=(const NotifyConfig& other) const { return !(*this == other); }
 };
 
-// Problems and maintenance until notify.set picks others.
+// The events picked in the catalog until notify.set picks others.
 std::vector<std::string> DefaultEvents();
 NotifyConfig DefaultConfig();
 

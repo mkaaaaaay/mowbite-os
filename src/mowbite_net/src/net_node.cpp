@@ -342,8 +342,8 @@ class NetNode : public rclcpp::Node {
       mowbite_msgs::msg::WeatherRequest request;
       {
         std::unique_lock<std::mutex> lock(weather_mutex_);
-        weather_wake_.wait_for(lock, std::chrono::seconds(1), [this] { return stop_ || !weather_queue_.empty(); });
-        if (stop_ || weather_queue_.empty()) continue;
+        weather_wake_.wait(lock, [this] { return stop_ || !weather_queue_.empty(); });
+        if (stop_) break;
         request = weather_queue_.front();
         weather_queue_.pop_front();
       }
@@ -351,7 +351,8 @@ class NetNode : public rclcpp::Node {
       double age = 0;
       std::optional<WeatherData> data = cache.Get(request.latitude, request.longitude, hours, MonotonicSeconds(), &age);
       if (!data && cache.MayFetch(MonotonicSeconds())) {
-        const HttpResult result = http->Send({WeatherUrl(weather_server_, request.latitude, request.longitude, kWeatherHours), {}, ""});
+        const std::string url = WeatherUrl(weather_server_, request.latitude, request.longitude, kWeatherHours);
+        const HttpResult result = http->Send({url, {}, ""});
         WeatherData fetched = result.status == 200 ? ParseWeather(result.body, kWeatherHours) : WeatherData();
         if (!fetched.ok) {
           RCLCPP_WARN(get_logger(), "Weather: no usable answer (%s)",
@@ -382,8 +383,13 @@ class NetNode : public rclcpp::Node {
       std::optional<Outbox::Item> item;
       {
         std::unique_lock<std::mutex> lock(mutex_);
-        push_wake_.wait_for(lock, std::chrono::seconds(1),
-                            [this] { return stop_ || !tests_.empty() || outbox_.Due(MonotonicSeconds()); });
+        const auto ready = [this] { return stop_ || !tests_.empty() || outbox_.Due(MonotonicSeconds()); };
+        // Asleep until a push, a test or the next try of one that did not go through.
+        if (const std::optional<double> next = outbox_.NextDue()) {
+          push_wake_.wait_for(lock, std::chrono::duration<double>(std::max(0.0, *next - MonotonicSeconds())), ready);
+        } else {
+          push_wake_.wait(lock, ready);
+        }
         if (stop_) break;
         if (!tests_.empty()) {
           test = tests_.front();
