@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mowbite_net</name>
+  <version>0.0.0</version>
+  <description>The way of the OS to the internet: weather for the schedule and pushes to ntfy and the phones</description>
+  <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
+  <license>GPL-3.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>mowbite_component</build_depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>mowbite_msgs</depend>
+  <depend>mowbite_api</depend>
+  <depend>mowbite_hold</depend>
+  <depend>mowbite_watch</depend>
+  <depend>nlohmann-json-dev</depend>
+  <depend>libcurl-dev</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

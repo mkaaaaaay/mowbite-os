@@ -116,7 +116,7 @@ FROM ros:${ROS_DISTRO}-ros-base AS build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libpaho-mqttpp-dev libpaho-mqtt-dev nlohmann-json3-dev libssl-dev libeigen3-dev zlib1g-dev libasound2-dev \
-      libturbojpeg0-dev git ccache \
+      libturbojpeg0-dev libcurl4-openssl-dev git ccache \
  && rm -rf /var/lib/apt/lists/*
 
 # No Rust bindings: rosidl generates for every package in this index group, and nothing here uses Rust.
@@ -204,6 +204,7 @@ RUN rosdep keys --from-paths /ws/install/*/ /opt/mowbite_planner/*/ --ignore-src
         libpaho-mqttpp-dev) echo libpaho-mqttpp3-1 ;; \
         libssl-dev) echo libssl3t64 ;; \
         libasound2-dev) echo libasound2t64 ;; \
+        libcurl-dev) echo libcurl4t64 ;; \
         zlib) echo zlib1g ;; \
         libzstd-dev) echo libzstd1 ;; \
         python3-shapely|python3-numpy|python3-paho-mqtt|python3-yaml|libturbojpeg) echo $k ;; \
