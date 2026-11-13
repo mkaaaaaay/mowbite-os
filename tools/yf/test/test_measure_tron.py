@@ -201,6 +201,45 @@ class TestBladeArguments(unittest.TestCase):
                 m.main([*t7, "--input-wait", value])
             self.assertTrue(str(refused.exception.code).startswith("--input-wait: "), refused.exception.code)
 
+    def test_lift_sides_values(self):
+        self.assertEqual(m.lift_sides("front"), ("front",))
+        self.assertEqual(m.lift_sides(" right, left "), ("right", "left"))
+        self.assertEqual(m.lift_sides("rear,front,left,right"), ("rear", "front", "left", "right"))
+        for text in ("", "top", "front,", "Front", "front,,left", "left;right"):
+            with self.assertRaisesRegex(ValueError, "each side one of front, rear, left, right", msg=text):
+                m.lift_sides(text)
+        for text in ("left,left", "front,right,front"):
+            with self.assertRaisesRegex(ValueError, "each side once", msg=text):
+                m.lift_sides(text)
+
+    def test_lift_sides_only_with_t7_on_the_tron(self):
+        for argv in (["--lift-sides", "left"],
+                     ["--platform", "tron", "--steps", "T6", "--blade", "--lift-sides", "left"],
+                     ["--platform", "tron", "--steps", "T2", "--lift-sides", "front"]):
+            with self.assertRaises(SystemExit) as refused:
+                m.main(argv)
+            self.assertIn("--lift-sides is for T7 on the Tron", str(refused.exception.code), argv)
+        t7 = ["--platform", "tron", "--steps", "T7", "--blade", "--record-dir", "/nonexistent/record"]
+        for value in ("top", "left,left", ""):
+            with self.assertRaises(SystemExit) as refused:
+                m.main([*t7, "--lift-sides", value])
+            self.assertTrue(str(refused.exception.code).startswith("--lift-sides: "), refused.exception.code)
+
+    def lift_sides_of(self, *argv):
+        seen = []
+
+        def start(args, rec):
+            seen.append(args.lift_sides)
+            raise RuntimeError("past the options")
+        with mock.patch.object(m, "Recorder"), mock.patch.object(m, "TronStart", side_effect=start):
+            with self.assertRaisesRegex(RuntimeError, "past the options"):
+                m.main(["--platform", "tron", "--steps", "T7", "--blade", *argv])
+        return seen[0]
+
+    def test_lift_sides_default_to_the_front_and_keep_their_order(self):
+        self.assertEqual(self.lift_sides_of(), ("front",))
+        self.assertEqual(self.lift_sides_of("--lift-sides", "right,rear,front"), ("right", "rear", "front"))
+
     def test_t6_and_t7_are_not_in_the_default_steps(self):
         self.assertIn("T6", m.TronMeasurement.STEPS)
         self.assertIn("T7", m.TronMeasurement.STEPS)
@@ -210,27 +249,88 @@ class TestBladeArguments(unittest.TestCase):
 
 
 class TestLiftItems(unittest.TestCase):
-    def test_front_and_left_past_the_tilt_of_t71(self):
-        items = m.lift_blade_items({"front": 37.6, "rear": 41.0, "left": 39.4, "right": 40.0}, set(), 3)
-        self.assertEqual([(text, runs, free) for text, _, runs, free in items],
-                         [("lift the front past 38 deg while the blade motor turns", 3, "set the front down"),
-                          ("lift the left side past 39 deg while the blade motor turns", 1, "set the left side down")])
-        self.assertEqual([fake for _, fake, _, _ in items],
-                         [{"lift": True, "tilt_pitch": -38.0}, {"lift": True, "tilt_roll": 38.0}])
+    def test_only_the_front_past_the_tilt_of_t71(self):
+        items = m.lift_blade_items({"front": 37.6, "rear": 41.0, "left": 39.4, "right": 40.0}, {"rear"}, 3)
+        self.assertEqual([(text, fake, runs, free) for text, fake, runs, free in items],
+                         [("lift the front past 38 deg while the blade motor turns",
+                           {"lift": True, "tilt_pitch": -38.0}, 3, "set the front down")])
 
-    def test_a_side_without_lift_is_left_out(self):
-        items = m.lift_blade_items({"left": 39.0}, {"front"}, 3)
-        self.assertEqual([text for text, _, _, _ in items],
-                         ["lift the left side past 39 deg while the blade motor turns"])
-        self.assertEqual(m.lift_blade_items({}, {"front", "left"}, 3), [])
-        # Only the front and the left side go up on the blade motor.
-        self.assertEqual(len(m.lift_blade_items({}, {"rear", "right"}, 1)), 2)
+    def test_none_if_t71_saw_no_lift_at_the_front(self):
+        self.assertEqual(m.lift_blade_items({"left": 39.0}, {"front"}, 3), [])
 
-    def test_a_side_skipped_or_without_tilt_goes_until_lift_shows(self):
-        items = m.lift_blade_items({"front": None}, set(), 1)
+    def test_the_front_not_lifted_or_without_tilt_goes_until_lift_shows(self):
+        for tilts, unlifted in (({}, {"left", "right"}), ({"front": None}, set())):
+            items = m.lift_blade_items(tilts, unlifted, 1)
+            self.assertEqual([(text, runs) for text, _, runs, _ in items],
+                             [("lift the front until lift shows while the blade motor turns", 1)])
+
+
+def lift_programme(sides, results):
+    """A TronMeasurement that lifts `sides` in T7.1, each giving its entry of `results` (lift, tilt at lift)."""
+    run = m.TronMeasurement.__new__(m.TronMeasurement)
+    run.findings, run.written, run.lifted = [], [], []
+    run.args = types.SimpleNamespace(lift_sides=sides, repeats=5, input_wait=10.0)
+    run.rec = types.SimpleNamespace(write=lambda kind, **fields: run.written.append((kind, fields)))
+    run.ask = lambda text: True
+
+    def by_hand(label, text, down, hold, tilt):
+        run.lifted.append(label)
+        lift, at = results[label.split()[-1]]
+        return {"lift": lift, "tilt_at_lift": at, "latched": lift or None, "max_tilt": 40.0, "released": True}
+    run.lift_by_hand = by_hand
+    return run
+
+
+class TestLiftAngles(unittest.TestCase):
+    def test_the_sides_go_up_in_their_order(self):
+        run = lift_programme(("right", "front", "rear"), {"right": (False, None), "front": (True, 3.5),
+                                                           "rear": (False, None)})
+        with mock.patch("builtins.print"):
+            tilts, unlifted = run.lift_angles("T7.1")
+        self.assertEqual(run.lifted, ["T7.1 right", "T7.1 front", "T7.1 rear"])
+        self.assertEqual((tilts, unlifted), ({"front": 3.5}, {"right", "rear"}))
+        angles = [f for kind, f in run.written if kind == "lift_angle"]
+        self.assertEqual([(f["side"], f["expected_lift"], f["lift"]) for f in angles],
+                         [("right", False, False), ("front", True, True), ("rear", False, False)])
+
+    def test_no_lift_is_a_finding_only_at_the_front(self):
+        run = lift_programme(("left", "right"), {"left": (False, None), "right": (True, 20.0)})
+        with mock.patch("builtins.print") as shown:
+            run.lift_angles("T7.1")
+        self.assertEqual(run.findings, [])
+        notes = [c.args[0] for c in shown.call_args_list if "note:" in c.args[0]]
+        self.assertEqual(len(notes), 2)
+        self.assertIn("no lift lifting the left side (largest tilt 40.0 deg), as expected", notes[0])
+        self.assertIn("lift lifting the right side, where the MCU is not expected to show it", notes[1])
+        run = lift_programme(("front",), {"front": (False, None)})
+        with mock.patch("builtins.print"):
+            run.lift_angles("T7.1")
+        finding, = run.findings
+        self.assertTrue(finding.startswith("T7.1 front: no lift in hw/status lifting the front"), finding)
+
+    def t73_items(self, sides, results):
+        run = lift_programme(sides, results)
+        run.lift_level = lambda step: None
+        run.blade_setup = lambda: None
+        run.blade_stop_s = 5.0
+        run.blade_allowed = lambda step, act: act()
+        inputs = []
+        run.blade_inputs = lambda step, items, percent: inputs.append((step, items, percent))
+        with mock.patch("builtins.print"):
+            run.t7()
+        return inputs
+
+    def test_t73_lifts_the_front_only(self):
+        (step, items, percent), = self.t73_items(("front", "left"), {"front": (True, 4.2), "left": (True, 30.0)})
+        self.assertEqual((step, percent), ("T7.3", m.LIFT_BLADE_PERCENT))
+        self.assertEqual([(text, runs) for text, _, runs, _ in items],
+                         [("lift the front past 4 deg while the blade motor turns", m.TRON_SHORT_REPEATS)])
+        (_, items, _), = self.t73_items(("left", "right"), {"left": (False, None), "right": (False, None)})
         self.assertEqual([text for text, _, _, _ in items],
-                         ["lift the front until lift shows while the blade motor turns",
-                          "lift the left side until lift shows while the blade motor turns"])
+                         ["lift the front until lift shows while the blade motor turns"])
+
+    def test_t73_skipped_without_lift_at_the_front(self):
+        self.assertEqual(self.t73_items(("front",), {"front": (False, None)}), [])
 
 
 class TestLimits(unittest.TestCase):

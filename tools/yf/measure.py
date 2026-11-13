@@ -27,10 +27,12 @@ touching its settings, into a capture file (at most capture_limit bytes each), w
 codec of tron_mcu. The values for the parameter file of the Tron come out as a proposal only; nothing is written there.
 T6 (only with --blade, the blade disc off) asks the same of the blade motor: tron_mcu runs with the blade allowed for
 that step alone, the motor turns free on the lease of mowing, and the host goes the same two ways.
-T7 (also only with --blade) lifts the mower by hand: each side without a motor until hw/status shows lift (with the
-tilt of imu/data then), the whole mower level, then the front and the left side while the blade motor turns. Where the
-person has to act while the blade motor turns, --input-wait gives the time; lifting without a motor waits for lift.
-On the Tron as root: mowbite-measure --steps T6 --blade, or --steps T7 --blade (optionally --input-wait 30).
+T7 (also only with --blade) lifts the mower by hand: without a motor each side of --lift-sides (default the front) in
+that order until hw/status shows lift (with the tilt of imu/data then), the whole mower level, then the front while the
+blade motor turns. The Tron's MCU shows lift only with both front wheels off the ground: no lift at another side is a
+note, not a finding. Where the person has to act while the blade motor turns, --input-wait gives the time; lifting
+without a motor waits for lift. On the Tron as root: mowbite-measure --steps T6 --blade, or --steps T7 --blade
+(optionally --input-wait 30, --lift-sides left,right).
 """
 import argparse
 import collections
@@ -126,9 +128,10 @@ BLADE_WINDOW_RANGE_S = (5, 120)
 # The person acts within --input-wait s (default BLADE_INPUT_WAIT_S) once the blade motor turns (T6, T7).
 BLADE_INPUT_WAIT_S = 10.0
 INPUT_WAIT_RANGE_S = (5, 60)
-# Lift (T7), the disc off: by hand each side goes up to LIFT_MAX_DEG, the programme waits up to LIFT_WAIT_S for lift
-# and as long for the set-down; on the blade motor at LIFT_BLADE_PERCENT the front goes up to TRON_SHORT_REPEATS times,
-# the left side once. Per side: how the person reads it and the tilt of fake_tron (degrees; the front up is pitch < 0).
+# Lift (T7), the disc off: by hand each side of --lift-sides goes up to LIFT_MAX_DEG, the programme waits up to
+# LIFT_WAIT_S for lift and as long for the set-down; on the blade motor at LIFT_BLADE_PERCENT LIFT_SHOWN_SIDE goes up to
+# TRON_SHORT_REPEATS times. Per side: how the person reads it and the tilt of fake_tron (degrees; the front up is
+# pitch < 0). The Tron's MCU shows lift only with both front wheels off the ground, so only at LIFT_SHOWN_SIDE.
 LIFT_MAX_DEG = 45
 # An imu/data sample off 1 g by more than this is a knock or a jolt of the hands, not a tilt; the tilt is the median
 # of the last TILT_MEDIAN samples left (about 0.1 s), since a knock also brings single samples near 1 g far off.
@@ -138,6 +141,7 @@ LIFT_WAIT_S = 60.0
 LIFT_BLADE_PERCENT = 100
 LIFT_SIDES = {"front": ("the front", {"tilt_pitch": -38.0}), "rear": ("the rear", {"tilt_pitch": 38.0}),
               "left": ("the left side", {"tilt_roll": 38.0}), "right": ("the right side", {"tilt_roll": -38.0})}
+LIFT_SHOWN_SIDE = "front"
 # A tilt of the rehearsal goes up this long before the lift it brings.
 LEAD_S = 0.5
 # Limit of a capture: CAPTURE_MAX_BYTES, for a long window CAPTURE_BYTES_PER_S where that is more (capture_limit). The
@@ -277,19 +281,28 @@ def whole_seconds(text, bounds):
     return float(seconds)
 
 
-def lift_blade_items(tilts, unlifted, front_runs):
-    """The lifts of T7.3 as inputs of blade_inputs: the front `front_runs` times, the left side once, each but a side in
-    `unlifted` (T7.1 saw no lift there); past the tilt at lift T7.1 found (`tilts` by side, None: unknown)."""
-    items = []
-    for side, runs in (("front", front_runs), ("left", 1)):
-        if side in unlifted:
-            continue
-        name, tilt = LIFT_SIDES[side]
-        angle = tilts.get(side)
-        how = "until lift shows" if angle is None else f"past {angle:.0f} deg"
-        items.append((f"lift {name} {how} while the blade motor turns", {"lift": True, **tilt}, runs,
-                      f"set {name} down"))
-    return items
+def lift_sides(text):
+    """The value of --lift-sides: sides of LIFT_SIDES, comma separated, each once, in the order given. ValueError with
+    the reason otherwise."""
+    sides = [item.strip() for item in text.split(",")]
+    unknown = [side for side in sides if side not in LIFT_SIDES]
+    if unknown:
+        raise ValueError(f"each side one of {', '.join(LIFT_SIDES)}, got {text!r}")
+    if len(set(sides)) < len(sides):
+        raise ValueError(f"each side once, got {text!r}")
+    return tuple(sides)
+
+
+def lift_blade_items(tilts, unlifted, runs):
+    """The lifts of T7.3 as inputs of blade_inputs: LIFT_SHOWN_SIDE `runs` times, none if it is in `unlifted` (T7.1 saw
+    no lift there); past the tilt at lift T7.1 found (`tilts` by side), until lift shows if that is unknown."""
+    side = LIFT_SHOWN_SIDE
+    if side in unlifted:
+        return []
+    name, tilt = LIFT_SIDES[side]
+    angle = tilts.get(side)
+    how = "until lift shows" if angle is None else f"past {angle:.0f} deg"
+    return [(f"lift {name} {how} while the blade motor turns", {"lift": True, **tilt}, runs, f"set {name} down")]
 
 
 def capture_limit(window):
@@ -2256,7 +2269,7 @@ class TronMeasurement(Measurement):
         step = "T7.3"
         items = lift_blade_items(tilts, unlifted, min(self.args.repeats, TRON_SHORT_REPEATS))
         if not items:
-            print(f"\n{step} skipped: T7.1 saw no lift at the front nor at the left side")
+            print(f"\n{step} skipped: T7.1 saw no lift at {LIFT_SIDES[LIFT_SHOWN_SIDE][0]}")
             return
         self.blade_setup()
         longest = BLADE_RUN_S + self.args.input_wait + self.blade_stop_s
@@ -2268,23 +2281,33 @@ class TronMeasurement(Measurement):
         self.blade_allowed(step, lambda: self.blade_inputs(step, items, LIFT_BLADE_PERCENT))
 
     def lift_angles(self, step):
-        """Each side lifted by hand without a motor until hw/status shows lift: the tilt at the first lift by side,
-        and the sides without lift (a finding each, T7.3 leaves them out)."""
+        """Each side of --lift-sides lifted by hand without a motor until hw/status shows lift: the tilt at the first
+        lift by side, and the sides without lift. No lift is a finding only at LIFT_SHOWN_SIDE (T7.3 leaves it out
+        then); at another side it is expected and only noted."""
         tilts, unlifted = {}, set()
-        for side, (name, tilt) in LIFT_SIDES.items():
+        for side in self.args.lift_sides:
+            name, tilt = LIFT_SIDES[side]
             label = f"{step} {side}"
+            expected = side == LIFT_SHOWN_SIDE
+            note = "" if expected else "; the MCU is not expected to show lift here"
             if not self.ask(f"{label} no motor, sends nothing but the release (clear frame) afterwards: lift {name} "
-                            f"slowly until lift shows, at most {LIFT_MAX_DEG} deg, hold 2 s, set it down"):
+                            f"slowly until lift shows, at most {LIFT_MAX_DEG} deg, hold 2 s, set it down{note}"):
                 continue
             result = self.lift_by_hand(label, f"lift {name} slowly by the top edge of the hood until lift shows, at "
                                               f"most {LIFT_MAX_DEG} deg", f"set {name} down", 2.0, tilt)
-            self.rec.write("lift_angle", step=step, side=side, **result)
+            self.rec.write("lift_angle", step=step, side=side, expected_lift=expected, **result)
             if result["lift"]:
                 tilts[side] = result["tilt_at_lift"]
+                if not expected:
+                    print(f"     note: lift lifting {name}, where the MCU is not expected to show it")
+                continue
+            unlifted.add(side)
+            largest = f"largest tilt {result['max_tilt']:.1f} deg"
+            if expected:
+                self.finding(label, f"no lift in hw/status lifting {name} ({largest}): T7.3 leaves it out")
             else:
-                unlifted.add(side)
-                self.finding(label, f"no lift in hw/status lifting {name} (largest tilt {result['max_tilt']:.1f} deg): "
-                                    "T7.3 leaves this side out")
+                print(f"     note: no lift lifting {name} ({largest}), as expected: the MCU shows lift only with "
+                      "both front wheels off the ground")
         return tilts, unlifted
 
     def lift_level(self, step):
@@ -2435,6 +2458,9 @@ def main(argv=None):
     parser.add_argument("--input-wait", help=f"tron T6 and T7: whole s to act in once the blade motor turns, "
                                              f"{INPUT_WAIT_RANGE_S[0]} to {INPUT_WAIT_RANGE_S[1]}, default "
                                              f"{BLADE_INPUT_WAIT_S:g}")
+    parser.add_argument("--lift-sides", help=f"tron T7: sides T7.1 lifts, in this order, each once, comma separated "
+                                             f"of {','.join(LIFT_SIDES)}, default {LIFT_SHOWN_SIDE}; the MCU shows "
+                                             f"lift only at {LIFT_SHOWN_SIDE}, T7.3 lifts {LIFT_SHOWN_SIDE}")
     parser.add_argument("--ground", action="store_true", help="allow M8 on the ground, 0.3 m/s per wheel")
     parser.add_argument("--fast", action="store_true",
                         help="with --ground: the fast runs of M8 up to 0.5 m/s in stages, in the raised start of the "
@@ -2470,6 +2496,12 @@ def main(argv=None):
         sys.exit(f"--blade-percent: {error}")
     if args.input_wait is not None and not blade_steps:
         sys.exit("--input-wait is for T6 and T7 on the Tron")
+    if args.lift_sides is not None and not (tron and "T7" in steps):
+        sys.exit("--lift-sides is for T7 on the Tron")
+    try:
+        args.lift_sides = (LIFT_SHOWN_SIDE,) if args.lift_sides is None else lift_sides(args.lift_sides)
+    except ValueError as error:
+        sys.exit(f"--lift-sides: {error}")
     for option, default, bounds in (("blade_window", BLADE_GONE_WINDOW_S, BLADE_WINDOW_RANGE_S),
                                     ("input_wait", BLADE_INPUT_WAIT_S, INPUT_WAIT_RANGE_S)):
         text = getattr(args, option)

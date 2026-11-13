@@ -5,13 +5,15 @@ that time and the proposal has to follow from it; with 4 s the limit has to end 
 has to continue it and stop the wheels. T6: the blade motor of the fake stops without host like its wheels, and the
 runs have to find that; with the flag cutter_holds it keeps turning, which has to end T6 with the finding and the blade
 off. With --blade-percent 100 and --blade-window 5 every blade run has to take those values; a window longer than the
-lease of a DDS participant (20 s) has to end with the same finding and nothing else. T7: every side lifted by hand
-has to show lift at the tilt of the fake, latched until the release, the mower lifted level too, and each lift on the
-turning blade motor has to stop it; with the flag lift_tilt the fake shows no lift for the level lift, which has to be
-the one finding (G1) without an abort. The fake keeps STOP until a clear frame, as the Tron does, so a run may start
-with STOP kept from the last one, as on the Tron after each start of tron_mcu, and has to release it first. The STOP
-check has to pass before the first wheel command and before the first blade on; STOP held through its release has to
-end the run before any. No process may be left.
+lease of a DDS participant (20 s) has to end with the same finding and nothing else. T7: by default only the front
+goes up by hand and has to show lift at the tilt of the fake, latched until the release, the mower lifted level too,
+and each lift of the front on the turning blade motor has to stop it; with the flag lift_tilt the fake shows no lift
+for the level lift, which has to be the one finding (G1) without an abort. With the flag lift_front_only the fake
+shows lift as the Tron, only with the front up or level: --lift-sides left,right sees no lift at both sides, which is
+no finding, and the front on the blade motor goes up until lift shows. The fake keeps STOP until a clear frame, as the
+Tron does, so a run may start with STOP kept from the last one, as on the Tron after each start of tron_mcu, and has to
+release it first. The STOP check has to pass before the first wheel command and before the first blade on; STOP held
+through its release has to end the run before any. No process may be left.
 
 Reading the port while tron_mcu holds it (TIOCEXCL) needs root with CAP_SYS_ADMIN, as on the Tron:
   docker run --user 0 --cap-add SYS_ADMIN ... python3 -m unittest tools/yf/test/test_rehearsal_tron.py
@@ -313,27 +315,29 @@ class TestRehearsalTron(unittest.TestCase):
         status = [r for r in rec if r["kind"] == "status"]
         self.assertEqual(status[-1]["blade_rpm"], 0)
 
-    def lift_records(self, rec):
-        sides = [r for r in rec if r["kind"] == "lift_angle"]
-        self.assertEqual([r["side"] for r in sides], ["front", "rear", "left", "right"])
-        for r in sides:
-            self.assertTrue(r["lift"] and r["latched"] and r["released"], r)
-            # The fake tilts 38 deg ahead of the lift.
-            self.assertAlmostEqual(r["tilt_at_lift"], 38.0, delta=2.0)
-            self.assertGreaterEqual(r["max_tilt"], r["tilt_at_lift"])
+    def lift_records(self, rec, sides=("front",)):
+        """The lift_level record and the lift_angle records, which have to be `sides` in that order."""
+        angles = [r for r in rec if r["kind"] == "lift_angle"]
+        self.assertEqual([(r["side"], r["expected_lift"]) for r in angles], [(s, s == "front") for s in sides])
         level, = [r for r in rec if r["kind"] == "lift_level"]
         starts = [r for r in rec if r["kind"] == "process" and r["node"] == "tron_mcu"]
         self.assertEqual([r["params"]["allow_blade"] for r in starts], [False, True, False])
         # Without a motor before the blade is allowed; the blade only at 100 % and no wheel command.
         self.assertLess(level["t"], starts[1]["t"])
         check, = [r for r in rec if r["kind"] == "stop_check"]
-        self.assertLess(check["t"], sides[0]["t"])
+        self.assertLess(check["t"], angles[0]["t"])
         requests = [r for r in rec if r["kind"] == "blade" and r["on"]]
         self.assertTrue(requests)
         self.assertGreater(requests[0]["t"], starts[1]["t"])
         self.assertTrue(all(r["percent"] == m.LIFT_BLADE_PERCENT for r in requests))
         self.assertFalse(any(r["kind"] == "cmd" and (r["v"] or r["w"]) for r in rec))
-        return level
+        return level, angles
+
+    def assert_lifted(self, angle):
+        self.assertTrue(angle["lift"] and angle["latched"] and angle["released"], angle)
+        # The fake tilts 38 deg ahead of the lift.
+        self.assertAlmostEqual(angle["tilt_at_lift"], 38.0, delta=2.0)
+        self.assertGreaterEqual(angle["max_tilt"], angle["tilt_at_lift"])
 
     def test_8_lift_on_the_blade(self):
         # STOP kept from before the start: the run releases it before the STOP check, as on the Tron.
@@ -348,14 +352,14 @@ class TestRehearsalTron(unittest.TestCase):
         before = rec[:rec.index(next(r for r in rec if r["kind"] == "stop_check"))]
         self.assertTrue(any(r["kind"] == "status" and r["stop"] and r["emergency"] for r in before))
         self.assertTrue(any(r["kind"] == "release" and r["success"] for r in before))
-        level = self.lift_records(rec)
+        level, (front,) = self.lift_records(rec)
+        self.assert_lifted(front)
         self.assertTrue(level["lift"] and level["latched"] and level["released"], level)
         self.assertLess(level["tilt_at_lift"], 5.0)
         stops = [r for r in rec if r["kind"] == "blade_emergency"]
         self.assertEqual([(r["text"], r["run"]) for r in stops],
                          [("lift the front past 38 deg while the blade motor turns", 1),
-                          ("lift the front past 38 deg while the blade motor turns", 2),
-                          ("lift the left side past 38 deg while the blade motor turns", 1)])
+                          ("lift the front past 38 deg while the blade motor turns", 2)])
         self.assertTrue(all(r["rpm"] == 3000 for r in stops))
         self.assertIn("T7.3 now, within 10 s: lift the front past 38 deg", output)
 
@@ -373,12 +377,35 @@ class TestRehearsalTron(unittest.TestCase):
         self.assertTrue(finding.startswith("T7.2: no lift"), finding)
         self.assertIn("G1", finding)
         self.assertNotIn("abort", [r["kind"] for r in rec])
-        level = self.lift_records(rec)
+        level, (front,) = self.lift_records(rec)
+        self.assert_lifted(front)
         self.assertEqual((level["lift"], level["tilt_at_lift"], level["latched"], level["released"]),
                          (False, None, None, True))
         stops = [r for r in rec if r["kind"] == "blade_emergency"]
-        self.assertEqual(len(stops), 2)
-        self.assertIn("T7.3 now, within 5 s: lift the left side past 38 deg", output)
+        self.assertEqual(len(stops), 1)
+        self.assertIn("T7.3 now, within 5 s: lift the front past 38 deg", output)
+
+    def test_10_sides_without_lift_are_no_finding(self):
+        self.set_flags({"host_timeout": HOLD_S, "lift_front_only": 1})
+        try:
+            code, output, rec = self.measure("sides", "--steps", "T7", "--blade", "--repeats", "1",
+                                             "--lift-sides", "left,right")
+        finally:
+            self.set_flags({"host_timeout": HOLD_S})
+        end = rec[-1]
+        self.assertEqual(end["findings"], [])
+        self.assertTrue(end["complete"])
+        self.assertEqual(code, 0)
+        level, angles = self.lift_records(rec, ("left", "right"))
+        for angle in angles:
+            self.assertEqual((angle["lift"], angle["tilt_at_lift"], angle["latched"], angle["released"]),
+                             (False, None, None, True), angle)
+            self.assertAlmostEqual(angle["max_tilt"], 38.0, delta=2.0)
+        self.assertEqual(output.count("as expected: the MCU shows lift only with both front wheels off the ground"), 2)
+        self.assertTrue(level["lift"] and level["latched"] and level["released"], level)
+        stops = [r for r in rec if r["kind"] == "blade_emergency"]
+        self.assertEqual([(r["text"], r["run"]) for r in stops],
+                         [("lift the front until lift shows while the blade motor turns", 1)])
 
 
 if __name__ == "__main__":
