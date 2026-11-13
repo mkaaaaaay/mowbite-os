@@ -34,16 +34,17 @@ std::string ReadFile(const std::string& path) {
 
 int main() {
   using namespace mowbite_bridge;
-  const char* halt_file = std::getenv("MOWBITE_HALT_FILE");
+  const char* halt_file = std::getenv("MOWBITE_HALT_FILE");  // NOLINT(concurrency-mt-unsafe): one thread at start
   const std::string halt = HaltLine(ReadFile(halt_file && *halt_file ? halt_file : kHaltFile));
   if (!halt.empty()) {
-    std::cout << halt << std::endl;
+    std::cout << halt << "\n";
     return 1;
   }
   std::string error;
+  // NOLINTNEXTLINE(concurrency-mt-unsafe): read once at start, before the MQTT client starts its threads
   const auto broker = BrokerFromEnvironment(std::getenv("MOWBITE_MQTT_HOST"), std::getenv("MOWBITE_MQTT_PORT"), &error);
   if (!broker) {
-    std::cout << "BAD_CONFIG " << error << std::endl;
+    std::cout << "BAD_CONFIG " << error << "\n";
     return 1;
   }
   const std::string where = broker->host + ":" + std::to_string(broker->port);
@@ -64,15 +65,15 @@ int main() {
       const std::string why = RobotStateProblem(payload);
       if (why.empty()) {
         client.disconnect();
-        std::cout << "OK " << nlohmann::json::parse(payload)["current_state"].get<std::string>() << std::endl;
+        std::cout << "OK " << nlohmann::json::parse(payload)["current_state"].get<std::string>() << "\n";
         return 0;
       }
       problem = why;
     }
     client.disconnect();
-    std::cout << "NO_ROBOT_STATE " << problem << " (broker " << where << ")" << std::endl;
+    std::cout << "NO_ROBOT_STATE " << problem << " (broker " << where << ")" << "\n";
   } catch (const mqtt::exception& e) {
-    std::cout << "MQTT_UNREACHABLE " << where << ": " << e.what() << std::endl;
+    std::cout << "MQTT_UNREACHABLE " << where << ": " << e.what() << "\n";
   }
   return 1;
 }

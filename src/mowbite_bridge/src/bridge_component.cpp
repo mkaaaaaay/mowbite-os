@@ -180,14 +180,14 @@ bool TakesTcp(const std::string& host, int64_t port) {
 // Runs a callback in the executor once another thread has called Wake().
 class Wakeup : public rclcpp::Waitable {
  public:
-  Wakeup(rclcpp::Context::SharedPtr context, std::function<void()> callback)
-      : condition_(std::move(context)), callback_(std::move(callback)) {}
+  Wakeup(const rclcpp::Context::SharedPtr& context, std::function<void()> callback)
+      : condition_(context), callback_(std::move(callback)) {}
 
   // Called from the MQTT client's thread, so it must not throw there; the next wake drains what is left.
   void Wake() noexcept {
     try {
       condition_.trigger();
-    } catch (...) {
+    } catch (...) {  // NOLINT(bugprone-empty-catch): must not throw on the client's thread
     }
   }
 
@@ -222,7 +222,8 @@ class BridgeNode : public rclcpp::Node {
         events_(JoinPath(data_dir_, "event_history"),
                 static_cast<std::size_t>(std::max<int64_t>(0, declare_parameter("event_history_days", 60))),
                 static_cast<std::uintmax_t>(std::max(0.0, declare_parameter("event_history_max_mb", 20.0)) * 1e6)),
-        track_(JoinPath(data_dir_, "position_history"), declare_parameter("position_history_days", 60),
+        track_(JoinPath(data_dir_, "position_history"),
+               static_cast<double>(declare_parameter("position_history_days", 60)),
                static_cast<std::uintmax_t>(std::max(0.0, declare_parameter("position_history_max_mb", 50.0)) * 1e6)) {
     if (data_dir_.empty()) RCLCPP_WARN(get_logger(), "No data_dir: event history and track are not kept");
     track_.Open(WallNow());
@@ -370,7 +371,7 @@ class BridgeNode : public rclcpp::Node {
         [this](const std::string&) { Post({Arrival::kConnected, "", "", false, {}, 0, false}); });
     client_->set_connection_lost_handler(
         [this](const std::string&) { Post({Arrival::kLost, "", "", false, {}, 0, false}); });
-    client_->set_message_callback([this](mqtt::const_message_ptr m) {
+    client_->set_message_callback([this](const mqtt::const_message_ptr& m) {
       if (!m) return;
       Arrival arrival{Arrival::kMessage, m->get_topic(), m->get_payload_str(), m->is_retained(), {}, 0, false};
       const mqtt::properties& props = m->get_properties();

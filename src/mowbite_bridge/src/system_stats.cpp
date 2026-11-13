@@ -91,7 +91,7 @@ void CpuTemperature(const std::string& thermal, Json* out) {
       break;
     }
   }
-  if (first) (*out)["cpu_temp"] = *first;
+  if (first) (*out)["cpu_temp"] = *first;  // NOLINT(bugprone-unchecked-optional-access): checked in the if
 }
 
 // The first wifi interface and its signal in dBm; some drivers count it from 0 up to 255.
