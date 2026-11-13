@@ -170,9 +170,13 @@ class TestSchedule(unittest.TestCase):
         return answer["result"]["entries"]
 
     def logged(self, what, at, timeout=10.0):
-        """The entry of schedule.log with that word for the plan at that time."""
-        return wait_until(lambda: next((e for e in self.log() if e["what"] == what and e["at"] == clock_time(at)),
-                                       None), timeout, poll=0.5)
+        """The entry of schedule.log with that word for the plan at that time; no answer (a restart) counts as not
+        yet."""
+        def entry():
+            answer = self.broker.rpc("schedule.log", {"limit": 100}) or {}
+            entries = (answer.get("result") or {}).get("entries", [])
+            return next((e for e in entries if e["what"] == what and e["at"] == clock_time(at)), None)
+        return wait_until(entry, timeout, poll=0.5)
 
     def wait_announced(self, since, at):
         """SCHEDULE_START of the plan at that time; the wheels have not turned."""
