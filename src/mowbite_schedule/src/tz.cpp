@@ -177,7 +177,7 @@ std::optional<Date> ParseDate(const std::string& text) {
 }
 
 std::string FormatDate(const Date& date) {
-  char text[16];
+  char text[32];
   std::snprintf(text, sizeof(text), "%04d-%02d-%02d", date.year, date.month, date.day);
   return text;
 }
@@ -194,7 +194,7 @@ std::optional<int> ParseClockTime(const std::string& text) {
 }
 
 std::string FormatClockTime(int minutes) {
-  char text[8];
+  char text[32];
   std::snprintf(text, sizeof(text), "%02d:%02d", minutes / 60, minutes % 60);
   return text;
 }

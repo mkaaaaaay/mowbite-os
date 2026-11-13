@@ -211,6 +211,16 @@ TEST_F(SchedulerTest, T4_NothingLeft) {
   Make(File({{"plans", {{{"days", {1}}, {"time", "10:00"}, {"areas", {"b"}}}}},
              {"pause", {{"until", "2026-06-15"}, {"areas", {"b"}}}}}));
   EXPECT_FALSE(TickAt(kMonday, "10:00").start);
+  EXPECT_EQ(Words(), (Lines{"skip_paused"}));
+  // An inactive area paused leaves nothing to mow either way.
+  Make(File({{"plans", {{{"days", {1}}, {"time", "10:00"}, {"areas", {"c"}}}}},
+             {"pause", {{"until", "2026-06-15"}, {"areas", {"c"}}}}}));
+  EXPECT_FALSE(TickAt(kMonday, "10:00").start);
+  EXPECT_EQ(Words(), (Lines{"skip_no_area"}));
+  // A pause over all areas covers unknown ones too.
+  Make(File({{"plans", {{{"days", {1}}, {"time", "10:00"}, {"areas", {"x"}}}}}, {"pause", {{"until", "2026-06-15"}}}}));
+  EXPECT_FALSE(TickAt(kMonday, "10:00").start);
+  EXPECT_EQ(Words(), (Lines{"skip_paused"}));
   Make(File({{"plans", {{{"days", {1}}, {"time", "10:00"}, {"areas", {"x", "c"}}}}}}));
   EXPECT_FALSE(TickAt(kMonday, "10:00").start);
   EXPECT_EQ(Words(), (Lines{"skip_no_area"}));
@@ -228,6 +238,7 @@ TEST_F(SchedulerTest, T5_EndReachedWhileWaiting) {
   Tick(facts);
   facts.wall = At(kMonday, "10:59", 59);
   Tick(facts);
+  EXPECT_EQ(Words(), (Lines{"waiting_battery 50"}));
   facts.wall = At(kMonday, "11:00");
   Tick(facts);
   EXPECT_EQ(Words(), (Lines{"waiting_battery 50", "skip_end"}));
@@ -285,6 +296,7 @@ TEST_F(SchedulerTest, T8_BusyWithOwnRun) {
   Status("2026-06-15T10:00", Phase::kAnnouncing);
   EXPECT_FALSE(TickAt(kMonday, "10:01").start);
   EXPECT_EQ(Words(), (Lines{"skip_busy ANNOUNCING"}));
+  EXPECT_EQ(scheduler_->StateJson()["handled"]["2026-06-15"], json({"10:00", "10:01"}));
 }
 
 TEST_F(SchedulerTest, T9_NotDocked) {
@@ -416,8 +428,11 @@ TEST_F(SchedulerTest, WaitEndsWhenThePlanIsGone) {
   Tick(facts);
   ASSERT_FALSE(scheduler_->SetSchedule({{"plans", {{{"days", {1}}, {"time", "10:10"}}}}}, At(kMonday, "10:05")));
   facts.wall = At(kMonday, "10:06");
+  EXPECT_TRUE(Tick(facts).state_changed);
+  facts.wall += 1;
   Tick(facts);
   EXPECT_EQ(Words(), (Lines{"waiting_battery 60", "skip_gone"}));
+  EXPECT_TRUE(scheduler_->StateJson()["waiting"].is_null());
 }
 
 TEST_F(SchedulerTest, WaitEndsSilentlyWhenSwitchedOff) {
@@ -428,7 +443,9 @@ TEST_F(SchedulerTest, WaitEndsSilentlyWhenSwitchedOff) {
   ASSERT_FALSE(scheduler_->SetSchedule({{"enabled", 0}}, At(kMonday, "10:05")));
   facts.wall = At(kMonday, "10:06");
   facts.battery = 100;
-  EXPECT_FALSE(Tick(facts).start);
+  const Output out = Tick(facts);
+  EXPECT_FALSE(out.start);
+  EXPECT_TRUE(out.state_changed);
   EXPECT_TRUE(scheduler_->StateJson()["waiting"].is_null());
   EXPECT_EQ(Words(), (Lines{"waiting_battery 60"}));
 }
@@ -608,7 +625,8 @@ TEST_F(SchedulerTest, T20_WhyARunWentHome) {
   const std::vector<std::pair<std::pair<std::string, std::string>, std::string>> cases = {
       {{"SCHEDULE", "end"}, "stopped_end"},   {{"SCHEDULE", "pause"}, "stopped_paused"},
       {{"DARK", ""}, "stopped_dark"},         {{"RAIN", ""}, "stopped_rain"},
-      {{"JOB_COMPLETE", ""}, ""},             {{"BATTERY_LOW", ""}, ""}};
+      {{"JOB_COMPLETE", ""}, ""},             {{"BATTERY_LOW", ""}, ""},
+      {{"MANUAL", "pause"}, ""}};
   for (const auto& item : cases) {
     Make(File());
     const RunRequest run = StartAndAccept();
@@ -787,6 +805,356 @@ TEST_F(SchedulerTest, LogKeepsTheLastHundred) {
   EXPECT_EQ(kept[0]["t"], 20);
   EXPECT_EQ(scheduler_->LogEntries(2).size(), 2u);
   EXPECT_EQ(scheduler_->LogEntries(2)[1]["t"], 119);
+}
+
+TEST_F(SchedulerTest, EveryDecisionIsStoredOnce) {
+  Make(File());
+  Facts facts = Good(At(kMonday, "10:00"));
+  facts.emergency = true;
+  Output out = Tick(facts);
+  EXPECT_TRUE(out.state_changed);
+  EXPECT_TRUE(out.log_changed);
+  facts.wall += 1;
+  out = Tick(facts);
+  EXPECT_FALSE(out.state_changed);
+  EXPECT_FALSE(out.log_changed);
+  // A new day prunes the marks of the day before yesterday.
+  TickAt(Date{2026, 6, 17}, "09:00");
+  EXPECT_TRUE(TickAt(Date{2026, 6, 17}, "09:00", 1).state_changed == false);
+  Make(File(), true, json{{"schema", 1}, {"handled", {{"2026-06-10", {"10:00"}}}}, {"waiting", nullptr}});
+  EXPECT_TRUE(TickAt(kMonday, "09:00").state_changed);
+  EXPECT_EQ(scheduler_->StateJson()["handled"], json::object());
+}
+
+TEST_F(SchedulerTest, WindowEdges) {
+  Make(File());
+  // The first second after the window: missed, not started.
+  EXPECT_FALSE(TickAt(kMonday, "10:01").start);
+  EXPECT_EQ(Words(), (Lines{"skip_missed"}));
+  // A plan saved in the very second of its time does not fire, and is not missed either.
+  Make(File());
+  ASSERT_FALSE(scheduler_->SetSchedule({{"plans", {{{"days", {1}}, {"time", "10:00"}}}}}, At(kMonday, "10:00")));
+  EXPECT_FALSE(TickAt(kMonday, "10:00").start);
+  TickAt(kMonday, "10:01");
+  EXPECT_TRUE(Words().empty());
+  EXPECT_EQ(scheduler_->NextStart(), At(Date{2026, 6, 22}, "10:00"));
+}
+
+TEST_F(SchedulerTest, NextStartEdges) {
+  Make(File());
+  TickAt(kMonday, "10:00", 59);
+  ASSERT_FALSE(scheduler_->SetSchedule({{"enabled", 0}}, At(kMonday, "09:00")));
+  EXPECT_FALSE(scheduler_->NextStart());
+  Make(File());
+  Facts facts = Good(At(kMonday, "10:00"));
+  facts.clock_ok = false;
+  Tick(facts);
+  TickAt(kMonday, "10:00", 20);
+  EXPECT_EQ(scheduler_->NextStart(), At(Date{2026, 6, 16}, "10:00"));
+  // A plan whose window has just passed is no longer next.
+  Make(File({{"plans", {{{"days", {1}}, {"time", "10:00"}}, {{"days", {1}}, {"time", "11:00"}}}}}));
+  facts = Good(At(kMonday, "10:00"));
+  facts.logic_fresh = false;
+  Tick(facts);
+  EXPECT_EQ(scheduler_->NextStart(), At(kMonday, "10:00"));
+  facts.wall = At(kMonday, "10:01");
+  Tick(facts);
+  EXPECT_EQ(scheduler_->NextStart(), At(kMonday, "11:00"));
+}
+
+TEST_F(SchedulerTest, ClockSkipsOnTwoDaysAreTwo) {
+  Make(File());
+  Facts facts = Good(At(kMonday, "10:00"));
+  facts.clock_ok = false;
+  facts.clock_reason = "gnss_mismatch";
+  Tick(facts);
+  facts.wall = At(Date{2026, 6, 16}, "10:00");
+  Tick(facts);
+  EXPECT_EQ(Words(), (Lines{"skip_clock gnss_mismatch", "skip_clock gnss_mismatch"}));
+}
+
+TEST_F(SchedulerTest, ClockSkipBeforeMidnightIsNotMissedAfterIt) {
+  Make(File({{"plans", {{{"days", {1}}, {"time", "23:59"}, {"dark", 1}}}}}));
+  Facts facts = Good(At(kMonday, "23:59"));
+  facts.clock_ok = false;
+  facts.clock_reason = "never_synced";
+  Tick(facts);
+  TickAt(Date{2026, 6, 16}, "00:05");
+  EXPECT_EQ(Words(), (Lines{"skip_clock never_synced"}));
+  EXPECT_EQ(scheduler_->StateJson()["handled"]["2026-06-15"], json({"23:59"}));
+}
+
+TEST_F(SchedulerTest, WaitEndsOnAnUnsafeClockOrSilentLogic) {
+  Make(File());
+  Facts facts = Good(At(kMonday, "10:00"));
+  facts.battery = 60;
+  Tick(facts);
+  facts.wall = At(kMonday, "10:10");
+  facts.clock_ok = false;
+  facts.clock_reason = "clock_jump";
+  EXPECT_TRUE(Tick(facts).state_changed);
+  EXPECT_EQ(Words(), (Lines{"waiting_battery 60", "skip_clock clock_jump"}));
+  EXPECT_TRUE(scheduler_->StateJson()["waiting"].is_null());
+  Make(File());
+  facts = Good(At(kMonday, "10:00"));
+  facts.battery = 60;
+  Tick(facts);
+  facts.wall = At(kMonday, "10:10");
+  facts.logic_fresh = false;
+  Tick(facts);
+  EXPECT_EQ(Words(), (Lines{"waiting_battery 60", "skip_offline"}));
+}
+
+TEST_F(SchedulerTest, WaitEndsOnASkipOfItsOwn) {
+  Make(File());
+  Facts facts = Good(At(kMonday, "10:00"));
+  facts.battery = 60;
+  Tick(facts);
+  facts.wall = At(kMonday, "10:10");
+  facts.emergency = true;
+  EXPECT_TRUE(Tick(facts).state_changed);
+  EXPECT_TRUE(scheduler_->StateJson()["waiting"].is_null());
+  facts.wall += 1;
+  facts.emergency = false;
+  facts.battery = 100;
+  EXPECT_FALSE(Tick(facts).start);
+  EXPECT_EQ(Words(), (Lines{"waiting_battery 60", "skip_emergency"}));
+}
+
+TEST_F(SchedulerTest, WaitEndsForTheNextPlanEvenIfThatOneIsSkipped) {
+  Make(File({{"plans", {{{"days", {1}}, {"time", "10:00"}}, {{"days", {1}}, {"time", "10:30"}}}}}));
+  Facts facts = Good(At(kMonday, "10:00"));
+  facts.battery = 60;
+  Tick(facts);
+  facts.wall = At(kMonday, "10:30");
+  facts.emergency = true;
+  Tick(facts);
+  facts.wall += 1;
+  facts.emergency = false;
+  facts.battery = 100;
+  EXPECT_FALSE(Tick(facts).start);
+  EXPECT_EQ(Words(), (Lines{"waiting_battery 60", "skip_battery 60", "skip_emergency"}));
+  EXPECT_TRUE(scheduler_->StateJson()["waiting"].is_null());
+}
+
+TEST_F(SchedulerTest, WaitFromBatteryToHoldIsStored) {
+  Make(File());
+  Facts facts = Good(At(kMonday, "10:00"));
+  facts.battery = 60;
+  Tick(facts);
+  facts.wall += 600;
+  facts.battery = 90;
+  facts.hold = true;
+  EXPECT_TRUE(Tick(facts).state_changed);
+}
+
+TEST_F(SchedulerTest, WaitOverWhenTheWeatherIsAsked) {
+  Make(File({{"skip_forecast", 1}}));
+  Facts facts = Good(At(kMonday, "10:00"));
+  facts.battery = 60;
+  Tick(facts);
+  facts.wall += 600;
+  facts.battery = 90;
+  const Output out = Tick(facts);
+  EXPECT_TRUE(out.weather);
+  EXPECT_TRUE(out.state_changed);
+  EXPECT_TRUE(scheduler_->StateJson()["waiting"].is_null());
+}
+
+TEST_F(SchedulerTest, ADuePlanWaitsWhileTheWeatherIsAsked) {
+  Make(File({{"skip_forecast", 1}, {"plans", {{{"days", {1}}, {"time", "10:00"}}, {{"days", {1}}, {"time", "10:30"}}}}}));
+  Facts facts = Good(At(kMonday, "10:00"));
+  facts.battery = 60;
+  Tick(facts);
+  facts.wall = At(kMonday, "10:29", 55);
+  facts.battery = 90;
+  const Output asked = Tick(facts);
+  ASSERT_TRUE(asked.weather);
+  facts.wall = At(kMonday, "10:30");
+  EXPECT_FALSE(Tick(facts).weather);
+  Weather weather;
+  weather.id = asked.weather->id;
+  weather.ok = true;
+  weather.has_rain = true;
+  scheduler_->OnWeather(weather);
+  facts.wall += 1;
+  const Output started = Tick(facts);
+  ASSERT_TRUE(started.start);
+  EXPECT_EQ(started.start->run_id, "2026-06-15T10:00");
+  EXPECT_EQ(Words(), (Lines{"waiting_battery 60", "skip_busy NONE"}));
+}
+
+TEST_F(SchedulerTest, WeatherEdges) {
+  Make(File({{"skip_cold", 1}}));
+  Output out = TickAt(kMonday, "10:00");
+  Weather weather;
+  weather.id = out.weather->id;
+  weather.ok = true;
+  weather.age_s = kWeatherMaxAge;
+  weather.has_temp = true;
+  weather.temp_c = 5;
+  scheduler_->OnWeather(weather);
+  EXPECT_TRUE(TickAt(kMonday, "10:00", 1).start);
+  EXPECT_TRUE(Words().empty());
+}
+
+TEST_F(SchedulerTest, NoPositionForTheWeatherBothUnknown) {
+  Make(File({{"skip_forecast", 1}, {"skip_cold", 1}, {"plans", {{{"days", {1}}, {"time", "10:00"}, {"dark", 1}}}}}));
+  Facts facts = Good(At(kMonday, "10:00"));
+  facts.longitude.reset();
+  EXPECT_TRUE(Tick(facts).start);
+  EXPECT_EQ(Words(), (Lines{"weather_unknown forecast", "weather_unknown cold"}));
+}
+
+TEST_F(SchedulerTest, AfterTheWeather) {
+  // The plan is gone.
+  Make(File({{"skip_cold", 1}}));
+  Output out = TickAt(kMonday, "10:00");
+  ASSERT_FALSE(scheduler_->SetSchedule({{"plans", json::array()}}, At(kMonday, "10:00", 5)));
+  EXPECT_FALSE(TickAt(kMonday, "10:00", 15).start);
+  EXPECT_EQ(Words(), (Lines{"skip_gone"}));
+  EXPECT_FALSE(TickAt(kMonday, "10:00", 16).start);
+  EXPECT_EQ(Words(), (Lines{"skip_gone"}));
+  // The clock became unsafe.
+  Make(File({{"skip_cold", 1}}));
+  TickAt(kMonday, "10:00");
+  Facts facts = Good(At(kMonday, "10:00", 15));
+  facts.clock_ok = false;
+  facts.clock_reason = "clock_jump";
+  EXPECT_FALSE(Tick(facts).start);
+  EXPECT_EQ(Words(), (Lines{"weather_unknown cold", "skip_clock clock_jump"}));
+  // The logic went silent.
+  Make(File({{"skip_cold", 1}}));
+  TickAt(kMonday, "10:00");
+  facts = Good(At(kMonday, "10:00", 15));
+  facts.logic_fresh = false;
+  EXPECT_FALSE(Tick(facts).start);
+  EXPECT_EQ(Words(), (Lines{"weather_unknown cold", "skip_offline"}));
+}
+
+TEST_F(SchedulerTest, SwitchedOffWhileTheWeatherIsAsked) {
+  Make(File({{"skip_cold", 1}}));
+  const Output out = TickAt(kMonday, "10:00");
+  ASSERT_FALSE(scheduler_->SetSchedule({{"enabled", 0}}, At(kMonday, "10:00", 2)));
+  TickAt(kMonday, "10:00", 3);
+  ASSERT_FALSE(scheduler_->SetSchedule({{"enabled", 1}}, At(kMonday, "10:00", 4)));
+  Weather weather;
+  weather.id = out.weather->id;
+  weather.ok = true;
+  weather.has_temp = true;
+  weather.temp_c = 20;
+  scheduler_->OnWeather(weather);
+  EXPECT_FALSE(TickAt(kMonday, "10:00", 5).start);
+  EXPECT_TRUE(Words().empty());
+}
+
+TEST_F(SchedulerTest, TheRequestCarriesThePlan) {
+  Make(File({{"plans", {{{"days", {1}}, {"time", "10:00"}, {"fresh", 1}, {"angle_offset_deg", 30}}}}}));
+  const Output out = TickAt(kMonday, "10:00");
+  ASSERT_TRUE(out.start);
+  EXPECT_TRUE(out.start->restart);
+  EXPECT_EQ(out.start->angle_offset_deg, 30.0);
+}
+
+TEST_F(SchedulerTest, AnswersInAnOddOrder) {
+  // The silence counts from the answer.
+  Make(File());
+  Output out = TickAt(kMonday, "10:00");
+  TickAt(kMonday, "10:01", 50);
+  scheduler_->OnStartAnswer(out.start->run_id, true, "", nullptr);
+  TickAt(kMonday, "10:03");
+  EXPECT_TRUE(Words().empty());
+  // A status means taken: a refusal after it is left alone.
+  Make(File());
+  out = TickAt(kMonday, "10:00");
+  Status(out.start->run_id, Phase::kAnnouncing);
+  scheduler_->OnStartAnswer(out.start->run_id, false, "BUSY", nullptr);
+  EXPECT_TRUE(Words().empty());
+  // A refusal ends the run: the next plan is not busy.
+  Make(File({{"plans", {{{"days", {1}}, {"time", "10:00"}}, {{"days", {1}}, {"time", "10:01"}}}}}));
+  out = TickAt(kMonday, "10:00");
+  scheduler_->OnStartAnswer(out.start->run_id, false, "BUSY", nullptr);
+  scheduler_->OnStartAnswer(out.start->run_id, true, "", nullptr);
+  EXPECT_TRUE(TickAt(kMonday, "10:01").start);
+  // So does the end of a run, and a silence.
+  Make(File({{"plans", {{{"days", {1}}, {"time", "10:00"}}, {{"days", {1}}, {"time", "10:03"}}}}}));
+  out = TickAt(kMonday, "10:00");
+  TickAt(kMonday, "10:02", 1);
+  EXPECT_TRUE(TickAt(kMonday, "10:03").start);
+  Make(File({{"plans", {{{"days", {1}}, {"time", "10:00"}}, {{"days", {1}}, {"time", "10:01"}}}}}));
+  out = TickAt(kMonday, "10:00");
+  Status(out.start->run_id, Phase::kEnded, "DARK");
+  EXPECT_EQ(Words(), (Lines{"start_failed DARK"}));
+  EXPECT_TRUE(TickAt(kMonday, "10:01").start);
+}
+
+TEST_F(SchedulerTest, ExactlyTheSilenceIsNoFailure) {
+  Make(File());
+  StartAndAccept();
+  TickAt(kMonday, "10:02");
+  EXPECT_TRUE(Words().empty());
+}
+
+TEST_F(SchedulerTest, ChangesMarkTheFile) {
+  Make(File());
+  EXPECT_TRUE(scheduler_->SetSchedule({{"min_temp", 4}}, 0));
+  EXPECT_FALSE(scheduler_->TakeOutput().file_changed);
+  EXPECT_TRUE(scheduler_->SetLeftovers({{"enabled", 1}}));
+  EXPECT_FALSE(scheduler_->TakeOutput().file_changed);
+  EXPECT_FALSE(scheduler_->SetLeftovers({{"min_m2", 3}}));
+  EXPECT_TRUE(scheduler_->TakeOutput().file_changed);
+  EXPECT_EQ(scheduler_->file().leftovers.min_m2, 3.0);
+  // A refused change leaves a run alone.
+  StartAndAccept();
+  scheduler_->TakeOutput();
+  EXPECT_TRUE(scheduler_->SetSchedule({{"pause", {{"until", "2026-06-15"}}}, {"min_temp", 4}}, At(kMonday, "10:01")));
+  EXPECT_FALSE(scheduler_->TakeOutput().drop);
+}
+
+TEST_F(SchedulerTest, LogStaysAtAHundred) {
+  json entries = json::array();
+  for (int i = 0; i < 100; ++i) entries.push_back({{"t", i}, {"what", "skip_rain"}});
+  scheduler_.emplace(File(), true, nullptr, json{{"schema", 1}, {"entries", entries}}, 0);
+  Facts facts = Good(At(kMonday, "10:00"));
+  facts.emergency = true;
+  Tick(facts);
+  const json kept = scheduler_->LogEntries(kLogEntries);
+  ASSERT_EQ(kept.size(), kLogEntries);
+  EXPECT_EQ(kept[0]["t"], 1);
+  EXPECT_EQ(kept[99]["what"], "skip_emergency");
+}
+
+TEST_F(SchedulerTest, StoredTextsOnlyAsWritten) {
+  const json entry = {{"t", 5}, {"what", "skip_rain"}};
+  const auto log_size = [&](const json& log) {
+    scheduler_.emplace(File(), true, nullptr, log, 0);
+    return scheduler_->LogEntries(kLogEntries).size();
+  };
+  EXPECT_EQ(log_size(json{{"schema", 1}, {"entries", {entry}}}), 1u);
+  EXPECT_EQ(log_size(json{{"entries", {entry}}}), 0u);
+  EXPECT_EQ(log_size(json{{"schema", 1}}), 0u);
+  EXPECT_EQ(log_size(json{{"schema", 1}, {"entries", entry}}), 0u);
+  EXPECT_EQ(log_size(json::array({entry})), 0u);
+  EXPECT_EQ(log_size(json{{"schema", 1}, {"entries", {{{"t", 5}}, {{"what", "x"}}, 3, {{"t", "5"}, {"what", "x"}}}}}),
+            0u);
+  const auto handled = [&](const json& state) {
+    scheduler_.emplace(File(), true, state, nullptr, 0);
+    return scheduler_->StateJson()["handled"];
+  };
+  EXPECT_EQ(handled(json{{"schema", 1}, {"handled", {{"2026-06-15", {"10:00", "25:00", 3}}}}}),
+            (json{{"2026-06-15", {"10:00"}}}));
+  EXPECT_EQ(handled(json{{"handled", {{"2026-06-15", {"10:00"}}}}}), json::object());
+  EXPECT_EQ(handled(json{{"schema", 1}, {"handled", json::array()}}), json::object());
+  EXPECT_EQ(handled(json{{"schema", 1}, {"handled", {{"2026-02-30", {"10:00"}}, {"2026-06-16", "10:00"}}}}),
+            json::object());
+  const auto missed = [&](const json& waiting) {
+    scheduler_.emplace(File(), true, json{{"schema", 1}, {"waiting", waiting}}, nullptr, 0);
+    return Words().size();
+  };
+  EXPECT_EQ(missed(json{{"date", "2026-06-15"}, {"time", "10:00"}, {"kind", "hold"}}), 1u);
+  EXPECT_EQ(missed(json{{"date", "2026-06-15"}}), 0u);
+  EXPECT_EQ(missed(json{{"time", 600}}), 0u);
+  EXPECT_EQ(missed("10:00"), 0u);
 }
 
 }  // namespace

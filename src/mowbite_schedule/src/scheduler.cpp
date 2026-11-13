@@ -238,7 +238,7 @@ void Scheduler::Tick(const Facts& facts) {
       Log("skip_gone", nullptr, nullptr, key);
     }
   }
-  if (!due || pending_ || Handled(*due)) return;
+  if (!due || pending_) return;
   const Plan* plan = PlanAt(file_.schedule, due->date, due->time);
   if (run_) {
     Mark(*due);
@@ -264,7 +264,6 @@ void Scheduler::Ask(const PlanKey& key, const Plan& plan, bool from_wait) {
     return;
   }
   Mark(key);
-  seen_offline_.erase(key);
   if (verdict != Verdict::kGo) return;
   const Schedule& schedule = file_.schedule;
   if (schedule.skip_forecast || schedule.skip_cold) {
@@ -403,7 +402,7 @@ void Scheduler::Start(const PlanKey& key, const Plan& plan) {
   request.until_sunset = !plan.dark || plan.sunset;
   if (plan.end) {
     const Date end_date = *plan.end > plan.time ? key.date : AddDays(key.date, 1);
-    request.end_in_s = std::max<int64_t>(1, schedule.zone.ToUnix(end_date, *plan.end) - facts_.wall);
+    request.end_in_s = schedule.zone.ToUnix(end_date, *plan.end) - facts_.wall;
   }
   Run run;
   run.key = key;
@@ -519,7 +518,6 @@ std::optional<int64_t> Scheduler::NextStart() const {
       if (at + kWindow <= facts_.wall || at <= file_.changed_at) continue;
       if (!next || at < *next) next = at;
     }
-    if (next) break;
   }
   return next;
 }
