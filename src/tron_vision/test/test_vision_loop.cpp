@@ -131,8 +131,9 @@ struct Rig {
   std::string Url(const std::string& rest = "") const {
     return "rtsp://127.0.0.1:" + std::to_string(server->Port()) + "/oa_left" + rest;
   }
-  // The clock of the loop: camera time plus the real time the test took.
+  // The clock of the loop: camera time plus the real time the test took, or camera time alone without `real_time`.
   double Now() const {
+    if (!real_time) return clock;
     return clock + std::chrono::duration<double>(std::chrono::steady_clock::now() - real_start).count();
   }
   // Steps for `seconds` of camera time, idle steps move the clock on by 0.1 s. With `wait` each step waits for the
@@ -150,6 +151,8 @@ struct Rig {
 
   test::TempDir tmp;
   double clock = 100.0;
+  // Runs of the model, network and timeouts need real time; a rate is only exact on camera time.
+  bool real_time = true;
   std::chrono::steady_clock::time_point real_start = std::chrono::steady_clock::now();
   FakeCamera camera{clock};
   CrashGuard guard{tmp.Path() + "/vision", tmp.Path() + "/crash", tmp.Write("boot_id", "boot-1\n")};
@@ -219,6 +222,7 @@ TEST(VisionLoop, MissingFilesAndBrokenModel) {
 
 TEST(VisionLoop, DetectsAndReports) {
   Rig rig(kPersonModel);
+  rig.real_time = false;
   ASSERT_TRUE(rig.Loop().Load()) << rig.Loop().Status().detail;
   EXPECT_NE(rig.Loop().Status().detail.find("3 classes"), std::string::npos);
   rig.Run(5.0);
@@ -227,8 +231,8 @@ TEST(VisionLoop, DetectsAndReports) {
   EXPECT_EQ(rig.camera.starts, 1);
   EXPECT_EQ(st.last, "person 0.80");
   EXPECT_NEAR(st.rate, 2.0, 0.3);
-  // The clock of the rig also runs in real time, so a slow build sees more.
   EXPECT_GE(st.inferences, 9U);
+  EXPECT_LE(st.inferences, 11U);
   EXPECT_EQ(st.frame_width, kWidth);
   EXPECT_EQ(st.frame_height, kHeight);
   ASSERT_EQ(rig.Loop().Detections().size(), 1U);
