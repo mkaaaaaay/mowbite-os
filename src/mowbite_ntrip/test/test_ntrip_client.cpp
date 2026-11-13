@@ -32,6 +32,11 @@ NtripConfig Config(const std::string& mountpoint = "M") {
 }
 
 struct Fixture : ::testing::Test {
+  // The receiver has a position unless a test says otherwise.
+  Fixture() {
+    client.SetGga(kGga);
+  }
+
   NtripClient client{ClientTiming()};
   std::vector<std::vector<uint8_t>> frames;
 
@@ -242,11 +247,77 @@ TEST_F(Fixture, GgaRightAfterTheAnswerThenEveryInterval) {
 }
 
 TEST_F(Fixture, NoGgaWithoutAPosition) {
+  NtripClient fresh{ClientTiming()};
+  fresh.SetConfig(Config(), 0);
+  fresh.SetGga("$GNRMC,120001.00,A*00");
+  fresh.SetGga("garbage");
+  ASSERT_TRUE(fresh.ShouldConnect(60));
+  fresh.BeginAttempt(60);
+  const std::string answer = "ICY 200 OK\r\n";
+  fresh.OnBytes(reinterpret_cast<const uint8_t*>(answer.data()), answer.size(), 60, frames);
+  EXPECT_EQ(fresh.state(), ClientState::kConnected);
+  EXPECT_FALSE(fresh.TakeGga(60));
+}
+
+TEST_F(Fixture, FirstAttemptWaitsForAGga) {
+  NtripClient fresh{ClientTiming()};
+  fresh.SetConfig(Config(), 100);
+  EXPECT_FALSE(fresh.ShouldConnect(100));
+  EXPECT_NEAR(fresh.retry_in(100), 60.0, 1e-9);
+  fresh.SetGga(kGga);
+  EXPECT_TRUE(fresh.ShouldConnect(130));
+  EXPECT_NEAR(fresh.retry_in(130), 0.0, 1e-9);
+}
+
+TEST_F(Fixture, WithoutAGgaItConnectsAfterTheWait) {
+  NtripClient fresh{ClientTiming()};
+  fresh.SetConfig(Config(), 100);
+  EXPECT_FALSE(fresh.ShouldConnect(159.9));
+  EXPECT_TRUE(fresh.ShouldConnect(160));
+  // A failure waits as usual from then on.
+  fresh.BeginAttempt(160);
+  fresh.OnClosed(160, "connect: Connection refused");
+  EXPECT_NEAR(fresh.retry_in(160), 5.0, 1e-9);
+}
+
+TEST_F(Fixture, AGgaAfterTheAnswerIsNoFailure) {
+  NtripClient fresh{ClientTiming()};
+  fresh.SetConfig(Config(), 0);
+  const std::string answer = "ICY 200 OK\r\n";
+  double now = 60;
+  // Answered, nothing to send, no data: the wait doubles.
+  for (double wait : {5.0, 10.0}) {
+    ASSERT_TRUE(fresh.ShouldConnect(now));
+    fresh.BeginAttempt(now);
+    fresh.OnBytes(reinterpret_cast<const uint8_t*>(answer.data()), answer.size(), now, frames);
+    ASSERT_TRUE(fresh.CloseReason(now + 15.1));
+    fresh.OnClosed(now + 15.1, "");
+    EXPECT_NEAR(fresh.retry_in(now + 15.1), wait, 1e-9);
+    now += 15.1 + wait;
+  }
+  // The GGA comes during the next one, too late for it: once more after the first wait, not after 20 s.
+  fresh.BeginAttempt(now);
+  fresh.OnBytes(reinterpret_cast<const uint8_t*>(answer.data()), answer.size(), now, frames);
+  fresh.SetGga(kGga);
+  fresh.OnClosed(now + 15.1, "");
+  EXPECT_NEAR(fresh.retry_in(now + 15.1), 5.0, 1e-9);
+  // Then the GGA goes out right after the answer; if the caster stays silent, the wait goes on doubling.
+  now += 20.1;
+  ASSERT_TRUE(fresh.ShouldConnect(now));
+  fresh.BeginAttempt(now);
+  fresh.OnBytes(reinterpret_cast<const uint8_t*>(answer.data()), answer.size(), now, frames);
+  EXPECT_TRUE(fresh.TakeGga(now));
+  fresh.OnClosed(now + 15.1, "");
+  EXPECT_NEAR(fresh.retry_in(now + 15.1), 20.0, 1e-9);
+}
+
+TEST_F(Fixture, NoAnswerWithAGgaIsAFailure) {
   client.SetConfig(Config(), 0);
-  client.SetGga("$GNRMC,120001.00,A*00");
-  client.SetGga("garbage");
-  Stream(0);
-  EXPECT_FALSE(client.TakeGga(0));
+  client.BeginAttempt(0);
+  client.OnClosed(15.1, "no answer for 15 s");
+  client.BeginAttempt(20.1);
+  client.OnClosed(35.2, "no answer for 15 s");
+  EXPECT_NEAR(client.retry_in(35.2), 10.0, 1e-9);
 }
 
 TEST_F(Fixture, CasterErrorsCloseWithTheirLine) {

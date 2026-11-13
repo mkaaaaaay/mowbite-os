@@ -55,6 +55,7 @@ void NtripClient::SetConfig(const std::optional<NtripConfig>& config, double now
   source_checked_ = false;
   retry_delay_ = timing_.first_retry_s;
   next_attempt_ = now;
+  gga_wait_until_ = now + timing_.gga_wait_s;
   // A new access may be refused again: that is worth an event again.
   rejected_reported_ = false;
   if (!config_) {
@@ -72,7 +73,7 @@ void NtripClient::SetConfig(const std::optional<NtripConfig>& config, double now
 
 bool NtripClient::ShouldConnect(double now) const {
   return config_ && !socket_open_ && (state_ == ClientState::kWaiting || state_ == ClientState::kRejected) &&
-         now >= next_attempt_;
+         now >= next_attempt_ && (!gga_.empty() || now >= gga_wait_until_);
 }
 
 std::string NtripClient::BeginAttempt(double now) {
@@ -116,6 +117,7 @@ void NtripClient::OnBytes(const uint8_t* data, size_t size, double now, std::vec
       close_reason_ = last_error_;
       return;
   }
+  if (state_ != ClientState::kConnected) answered_without_gga_ = gga_.empty();
   state_ = ClientState::kConnected;
   const size_t before = frames.size();
   const uint64_t crc_before = framer_.crc_errors();
@@ -167,7 +169,14 @@ void NtripClient::OnClosed(double now, const std::string& error) {
     next_attempt_ = now + timing_.rejected_retry_s;
     return;
   }
+  // The caster answered and waited for a GGA that came only after the attempt: no failure, once more soon.
+  const bool gga_came_late = state_ == ClientState::kConnected && answered_without_gga_ && !last_gga_sent_ &&
+                             !gga_.empty();
   state_ = ClientState::kWaiting;
+  if (gga_came_late) {
+    next_attempt_ = now + timing_.first_retry_s;
+    return;
+  }
   if (retry_delay_ <= 0) retry_delay_ = timing_.first_retry_s;
   next_attempt_ = now + retry_delay_;
   retry_delay_ = std::min(retry_delay_ * 2.0, timing_.max_retry_s);
@@ -229,7 +238,8 @@ std::optional<double> NtripClient::last_frame_age(double now) const {
 
 double NtripClient::retry_in(double now) const {
   if (socket_open_ || (state_ != ClientState::kWaiting && state_ != ClientState::kRejected)) return 0.0;
-  return std::max(0.0, next_attempt_ - now);
+  const double next = gga_.empty() ? std::max(next_attempt_, gga_wait_until_) : next_attempt_;
+  return std::max(0.0, next - now);
 }
 
 }  // namespace mowbite_ntrip

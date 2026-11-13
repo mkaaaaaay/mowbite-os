@@ -24,6 +24,8 @@ struct ClientTiming {
   double data_timeout_s = 15.0;
   // GGA to the caster, the first right after its answer; VRS mountpoints need the rover's position.
   double gga_interval_s = 10.0;
+  // Without a GGA yet the first attempt waits this long for one: a VRS mountpoint sends nothing before it.
+  double gga_wait_s = 60.0;
   // No frame for this long after there were some gives the LOST event: max_correction_age, when the fix counts as float.
   double lost_after_s = 30.0;
 };
@@ -129,6 +131,10 @@ class NtripClient {
   ResponseReader reader_;
   RtcmFramer framer_;
   double next_attempt_ = 0;
+  // No attempt before this while no GGA has come.
+  double gga_wait_until_ = 0;
+  // The caster answered this attempt before there was a GGA to send.
+  bool answered_without_gga_ = false;
   double retry_delay_ = 0;
   double last_data_ = 0;
   std::optional<double> last_frame_;

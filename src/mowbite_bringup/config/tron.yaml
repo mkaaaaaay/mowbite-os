@@ -82,12 +82,14 @@ mowbite_ntrip:
     access_over_rpc: false
     connect_timeout: 10.0
     # After a failure the next attempt after first_retry s, doubled up to max_retry; after a refused login rejected_retry
-    # (or at once when the file changes). No byte for data_timeout s ends a connection. GGA every gga_interval s.
+    # (or at once when the file changes). No byte for data_timeout s ends a connection. GGA every gga_interval s; the
+    # first attempt waits up to gga_wait s for one (a VRS mountpoint sends nothing before it).
     first_retry: 5.0
     max_retry: 300.0
     rejected_retry: 300.0
     data_timeout: 15.0
     gga_interval: 10.0
+    gga_wait: 60.0
     # The CORRECTIONS event LOST after max_correction_age (/** above) without corrections, RESTORED once when they are
     # back, SOURCE_CHANGED with the first corrections from another caster, port or mountpoint than the ones used last
     # (data_dir/ntrip_source.json, kept over restarts and ntrip.delete).
