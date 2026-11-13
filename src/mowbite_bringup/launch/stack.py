@@ -159,7 +159,11 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal):
     schedule = ComposableNode(
         package="mowbite_schedule", plugin="mowbite_schedule::ScheduleNode", name="mowbite_schedule",
         parameters=[*files, {"data_dir": data_dir}, journal_dir])
-    return [localization, safety, logic, bridge, map_node, follower, ntrip, calibration, clock, schedule]
+    # Mowing statistics and the blade hours of the parts (stats.*), for the app and the pushes of maintenance.
+    stats = ComposableNode(
+        package="mowbite_stats", plugin="mowbite_stats::StatsNode", name="mowbite_stats",
+        parameters=[*files, {"data_dir": data_dir}])
+    return [localization, safety, logic, bridge, map_node, follower, ntrip, calibration, clock, schedule, stats]
 
 
 # The names of these composable nodes, as their watch knows them.
@@ -282,6 +286,15 @@ def camera_service(files, data_dir, logger, **limits):
         "camera", data_dir, logger, **limits)
 
 
+# mowbite_net in a process of its own, the only one that talks to the internet: weather and pushes (notify.*).
+def net_service(files, data_dir, logger):
+    return own_process(
+        lambda prefix: Node(package="mowbite_net", executable="mowbite_net_node", name="mowbite_net", namespace="/",
+                            parameters=[*files, {"data_dir": data_dir}], output="screen", prefix=prefix,
+                            exec_name="mowbite_net"),
+        "net", data_dir, logger)
+
+
 # The container with these components, started again after a crash, and the planner. The driver of the platform runs
 # beside them in a process of its own and keeps motion and blade blocked until a release; the logic comes back idle.
 def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
@@ -309,4 +322,4 @@ def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
                    output="screen", respawn=True, respawn_delay=5.0)
     return [*restarting(container, os.path.join(data_dir, EXIT_NOTE), "The container", logger, CONTAINER_RESTARTS,
                         oom_score_adj, watch_note),
-            *oom_score(planner, oom_score_adj, logger), planner]
+            *oom_score(planner, oom_score_adj, logger), planner, *net_service(files, data_dir, logger)]

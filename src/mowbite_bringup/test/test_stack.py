@@ -203,7 +203,8 @@ def test_the_watch_of_the_container_expects_its_nodes(tmp_path):
     env = {"".join(p.text for p in key): "".join(p.text for p in value)
            for key, value in container.process_description.additional_env}
     names = ["mowbite_localization", "mowbite_safety", "mowbite_logic", "mowbite_bridge", "mowbite_map",
-             "mowbite_follower", "mowbite_ntrip", "mowbite_calibration", "mowbite_clock", "mowbite_schedule"]
+             "mowbite_follower", "mowbite_ntrip", "mowbite_calibration", "mowbite_clock", "mowbite_schedule",
+             "mowbite_stats"]
     assert stack.node_names(nodes) == names
     assert env == {"MOWBITE_WATCH_NODES": ",".join(names),
                    "MOWBITE_WATCH_NOTE": os.path.join(str(tmp_path), stack.WATCH_NOTE)}
