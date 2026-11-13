@@ -81,7 +81,7 @@ class NmeaParser {
     return decoded_;
   }
   // One text per address among the ignored sentences, in the order first seen, at most kMaxIgnoredKinds: the address,
-  // the number of fields and the first field unless it is a number (no coordinates).
+  // the number of fields and the first field unless it is a number (no coordinates); version and hardware lines whole.
   const std::vector<std::string>& ignored_kinds() const {
     return ignored_kinds_;
   }

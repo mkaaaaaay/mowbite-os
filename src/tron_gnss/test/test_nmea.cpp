@@ -170,6 +170,16 @@ TEST(Nmea, EachIgnoredKindIsNamedOnceWithoutNumbers) {
   EXPECT_EQ(parser.ignored_kinds().size(), NmeaParser::kMaxIgnoredKinds);
 }
 
+TEST(Nmea, VersionAndHardwareLinesAreNamedInFull) {
+  NmeaParser parser;
+  Parse(parser, Sentence("GNVER,1.2.3"));
+  Parse(parser, Sentence("GHARDM,7,LG290P"));
+  Parse(parser, Sentence("GNVER," + std::string(200, 'v')));
+  ASSERT_EQ(parser.ignored_kinds().size(), 2u);
+  EXPECT_EQ(parser.ignored_kinds()[0], "$GNVER (1 fields: 1.2.3)");
+  EXPECT_EQ(parser.ignored_kinds()[1], "$GHARDM (2 fields: 7,LG290P)");
+}
+
 TEST(Nmea, SentenceSplitAcrossReads) {
   NmeaParser parser;
   std::string s = Sentence("GNGGA,120000.00,5200.0,N,01000.0,E,4,20,0.6,10.0,M,0.0,M,1.0,0000");

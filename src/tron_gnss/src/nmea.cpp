@@ -9,6 +9,12 @@ namespace tron {
 namespace {
 
 constexpr double kKnotsToMps = 0.514444444;
+constexpr size_t kMaxIdentificationText = 96;
+
+// Version and hardware lines of the RTK board: no coordinates, shown in full.
+bool IsIdentification(const std::string& address) {
+  return address == "GNVER" || address == "GHARDM";
+}
 
 std::vector<std::string> Split(const std::string& s) {
   std::vector<std::string> fields;
@@ -159,7 +165,13 @@ void NmeaParser::Ignore(const std::vector<std::string>& fields) {
     return;
   }
   kind += std::to_string(fields.size() - 1) + " fields";
-  if (fields.size() > 1 && !fields[1].empty() && !Number(fields[1])) kind += ", first " + fields[1].substr(0, 24);
+  if (IsIdentification(fields[0])) {
+    std::string text;
+    for (size_t i = 1; i < fields.size(); ++i) text += (i > 1 ? "," : "") + fields[i];
+    kind += ": " + text.substr(0, kMaxIdentificationText);
+  } else if (fields.size() > 1 && !fields[1].empty() && !Number(fields[1])) {
+    kind += ", first " + fields[1].substr(0, 24);
+  }
   ignored_kinds_.push_back(kind + ")");
 }
 
