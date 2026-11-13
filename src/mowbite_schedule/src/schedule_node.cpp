@@ -334,7 +334,6 @@ class ScheduleNode : public rclcpp::Node {
     RCLCPP_INFO(get_logger(), "Schedule: starting %s", run.run_id.c_str());
     const std::string run_id = run.run_id;
     start_client_->async_send_request(
-        // NOLINTNEXTLINE(performance-unnecessary-value-param): the signature rclcpp takes
         request, [this, run_id](rclcpp::Client<mowbite_msgs::srv::StartRun>::SharedFuture future) {
           const auto& answer = future.get();
           if (!answer->accepted) {
@@ -357,7 +356,6 @@ class ScheduleNode : public rclcpp::Node {
     request->run_id = drop.run_id;
     request->area_ids = drop.area_ids;
     drop_client_->async_send_request(
-        // NOLINTNEXTLINE(performance-unnecessary-value-param): the signature rclcpp takes
         request, [this](rclcpp::Client<mowbite_msgs::srv::DropTasks>::SharedFuture future) {
           const auto& answer = future.get();
           if (!answer->accepted) RCLCPP_WARN(get_logger(), "Schedule: pause refused: %s", answer->message.c_str());
