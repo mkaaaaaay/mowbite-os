@@ -60,8 +60,8 @@ FROM scratch AS app
 # against the sum, docker/min_app and the api of this tree. A stage of its own on the build machine, so a wrong zip
 # stops the build at its start. An empty APP_VERSION builds the image without the app.
 FROM --platform=$BUILDPLATFORM ros:${ROS_DISTRO}-ros-base AS app_export
-ARG APP_VERSION=1.5.0-preview.3
-ARG APP_SHA256=db7a37b51508d7a61cbbe2505ed14979d5c8c2d341b6c0767ff5adab9f6342fa
+ARG APP_VERSION=1.5.0-preview.4
+ARG APP_SHA256=afeb1309b1b3c5529dfef8796ca7caade81bfcea5ecb1d5d031c6cfdf2b27f57
 RUN --mount=type=bind,from=app,target=/src/app --mount=type=bind,source=host,target=/src/host \
     --mount=type=bind,source=docker/min_app,target=/tmp/min_app \
     --mount=type=bind,source=src/mowbite_api/api.schema.json,target=/tmp/api.schema.json \
