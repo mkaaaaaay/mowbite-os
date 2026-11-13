@@ -207,8 +207,9 @@ bool JpegDecoder::DecodeNv12(const uint8_t* jpeg, size_t bytes, uint32_t width, 
     const size_t from = static_cast<size_t>(std::min(2 * y * plane_h / out_h, plane_h - 1)) * plane_w;
     for (uint32_t x = 0; x < chroma_w; x++) {
       const size_t at = from + std::min(2 * x * plane_w / out_w, plane_w - 1);
-      row[2 * x] = chroma[u_[at]];
-      row[2 * x + 1] = chroma[v_[at]];
+      const size_t pair = 2 * static_cast<size_t>(x);
+      row[pair] = chroma[u_[at]];
+      row[pair + 1] = chroma[v_[at]];
     }
   }
   // The rows below the picture repeat its last one, so that the encoder reads whole macroblocks of it.

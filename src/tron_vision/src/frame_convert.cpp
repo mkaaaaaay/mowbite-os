@@ -171,9 +171,9 @@ void ShiftChroma(uint8_t* uv, uint32_t width, uint32_t height, uint32_t stride, 
   const uint32_t pairs = width / 2;
   for (uint32_t line = 0; line < height / 2; line++) {
     uint8_t* p = uv + static_cast<size_t>(line) * stride;
-    for (uint32_t i = 0; i < pairs; i++) {
-      p[2 * i] = u_map[p[2 * i]];
-      p[2 * i + 1] = v_map[p[2 * i + 1]];
+    for (size_t i = 0; i < 2 * static_cast<size_t>(pairs); i += 2) {
+      p[i] = u_map[p[i]];
+      p[i + 1] = v_map[p[i + 1]];
     }
   }
 }
