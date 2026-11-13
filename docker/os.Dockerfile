@@ -119,28 +119,23 @@ RUN apt-get update \
       libturbojpeg0-dev git ccache \
  && rm -rf /var/lib/apt/lists/*
 
-# On an amd64 build machine the compiler and binutils of the stage cross replace the emulated ones of the same
-# versions, under the same names; the build stops if the version lines differ.
+# No Rust bindings: rosidl generates for every package in this index group, and nothing here uses Rust.
+RUN rm -f /opt/ros/$ROS_DISTRO/share/ament_index/resource_index/rosidl_generator_packages/rosidl_generator_rs
+
+# On an amd64 build machine the stage cross takes over, and the build stops if a version differs from the emulated
+# one: its compiler and binutils replace those of the image under the same names, and its Python runs the rosidl
+# code generators: docker/rosidl_cross.py takes the place of each generator script (the generators and typesupports
+# of the ament index) and of the module rosidl_adapter, and runs the original, renamed to *.native.
 RUN --mount=type=bind,from=cross,source=/cross,target=/cross \
+    --mount=type=bind,source=docker/rosidl_cross.py,target=/tmp/rosidl_cross.py \
     if [ -d /cross/usr ]; then \
       emulated="$(c++ --version | head -n 1), $(ld --version | head -n 1)" \
       && cp -a /cross/usr/. /usr/ \
       && if [ ! -e /lib64 ]; then ln -s usr/lib64 /lib64; fi \
       && direct="$(c++ --version | head -n 1), $(ld --version | head -n 1)" \
       && echo "emulated: $emulated" && echo "direct:   $direct" \
-      && if [ "$emulated" != "$direct" ]; then echo "the compiler of the stage cross differs" >&2; exit 1; fi; \
-    fi
-
-# No Rust bindings: rosidl generates for every package in this index group, and nothing here uses Rust.
-RUN rm -f /opt/ros/$ROS_DISTRO/share/ament_index/resource_index/rosidl_generator_packages/rosidl_generator_rs
-
-# On an amd64 build machine the rosidl code generators run in the Python of the stage cross, which has to be the
-# version of the image's: docker/rosidl_cross.py takes the place of each generator script (the generators and
-# typesupports of the ament index) and of the module rosidl_adapter, and runs the original, renamed to *.native.
-RUN --mount=type=bind,from=cross,source=/cross,target=/cross \
-    --mount=type=bind,source=docker/rosidl_cross.py,target=/tmp/rosidl_cross.py \
-    if [ -d /cross/opt/cross-python ]; then \
-      cp -a /cross/opt/cross-python /opt/ \
+      && if [ "$emulated" != "$direct" ]; then echo "the compiler of the stage cross differs" >&2; exit 1; fi \
+      && cp -a /cross/opt/cross-python /opt/ \
       && v='import sys; print(tuple(sys.version_info))' \
       && emulated=$(python3 -c "$v") && direct=$(/opt/cross-python/bin/python3 -I -S -c "$v") \
       && echo "python emulated: $emulated, direct: $direct" \
