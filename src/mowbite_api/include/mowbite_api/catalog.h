@@ -116,7 +116,7 @@ struct Command {
 struct Method {
   std::string name;
   // mowbite_bridge, mowbite_logic, mowbite_map, mowbite_ntrip, mowbite_calibration, mowbite_light, mowbite_sound,
-  // mowbite_camera or mowbite_host.
+  // mowbite_camera, mowbite_schedule or mowbite_host.
   std::string node;
   std::string text;
   // The params as one value, mostly an object of fields.
@@ -194,6 +194,14 @@ const SensorEntry* FindSensor(const std::string& id);
 const std::vector<SettingEntry>& LogicSettings();
 // The keys of the geometry in the order of the answers; robot_outline is the only list.
 const std::vector<GeometryEntry>& GeometryKeys();
+// A word of schedule.log: what it means, what its detail and more hold (empty: null).
+struct ScheduleLogWord {
+  std::string word;
+  std::string text;
+  std::string detail;
+  std::string more;
+};
+const std::vector<ScheduleLogWord>& ScheduleLogWords();
 // The situations of sound.list in their order.
 const std::vector<SoundSituation>& SoundSituations();
 

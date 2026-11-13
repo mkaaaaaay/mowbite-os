@@ -305,6 +305,12 @@ Json BuildSchema(const Json& planner) {
     }
     geometry[key.name] = entry;
   }
+  Json log_words = Json::object();
+  for (const auto& word : ScheduleLogWords()) {
+    log_words[word.word] = {{"description", word.text},
+                            {"detail", word.detail.empty() ? Json() : Json(word.detail)},
+                            {"more", word.more.empty() ? Json() : Json(word.more)}};
+  }
   Json bits = Json::array();
   for (const auto& bit : EmergencyBits()) {
     Json entry = {{"bit", bit.bit}, {"name", bit.name}, {"description", bit.text}};
@@ -323,7 +329,8 @@ Json BuildSchema(const Json& planner) {
                   "emergency, x-commands the commands with params, result, the event of their refusal and the actions "
                   "that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, "
                   "sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set "
-                  "with the ranges of the OS, x-geometry the keys of robot.geometry."},
+                  "with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of "
+                  "schedule.log with what detail and more hold (null: always null)."},
                  {"x-api", kApi},
                  {"x-owner", kOwner},
                  {"$defs", defs},
@@ -333,7 +340,8 @@ Json BuildSchema(const Json& planner) {
                  {"x-methods", methods},
                  {"x-sensors", sensors},
                  {"x-settings", settings},
-                 {"x-geometry", geometry}};
+                 {"x-geometry", geometry},
+                 {"x-schedule-log", log_words}};
   if (planner.is_object()) schema["x-planner"] = {{"version", planner.value("version", 0)}};
   return Sorted(schema);
 }

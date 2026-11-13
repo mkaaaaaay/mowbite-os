@@ -153,6 +153,45 @@ Field Time(std::string name, std::string text) {
   return Nullable(UnixTime(std::move(name), std::move(text)));
 }
 
+// The schedule of schedule.get; in schedule.set every key optional, each replaced whole.
+Field Schedule(bool required) {
+  const Field plan = Object(
+      "plan", "A start time",
+      {List("days", "1 Monday to 7 Sunday, none twice", Type::kInteger), Text("time", "HH:MM local, names the plan"),
+       List("areas", "Area ids in order, none for every mowing area", Type::kString, false),
+       Text("end", "HH:MM local, home then; not after time: the next day", false),
+       Switch("dark", "1: also starts and mows in the dark"), Switch("sunset", "With dark 1: still home at sunset"),
+       Switch("fresh", "1: a job of its own, the open one is dropped"),
+       Ranged("angle_offset_deg", "deg", -180, 180, "Added to the lane direction of the planner for its job", false)});
+  return Object(
+      "schedule", "The schedule; its times local after tz",
+      {Switch("enabled", "1: the plans start the mower"), Integer("min_battery", "% a plan waits for, 0 to 100"),
+       Switch("skip_rain", "1: no start while the rain sensor is wet"),
+       Switch("skip_forecast", "1: no start with rain now or in the next forecast_hours"),
+       Integer("forecast_hours", "1, 2 or 3"), Switch("skip_cold", "1: no start below min_temp"),
+       Integer("min_temp", "deg C: 3, 5, 8 or 10"), Text("tz", "POSIX TZ of the local times"),
+       Rows("plans", "At most 32, no two at one time on a day", plan.fields),
+       Nullable(Object("pause", "Paused through until, null for none",
+                       {Text("until", "YYYY-MM-DD local"),
+                        Field{"areas", Type::kAny, "", true, "all, or a list of area ids", {}, false, {}, ""}}))},
+      required);
+}
+
+Field ScheduleAnswer() {
+  return Object(
+      "result", "The schedule now",
+      {Integer("schema", "Always 1"), Integer("version", "Goes up with every change; schedule.set may name it"),
+       Bool("available", "Whether the platform lets the schedule start the mower"),
+       Nullable(Text("reason", "platform_off without available, else null", true, {"platform_off"})),
+       Bool("clock_ok", "Whether the wall clock is safe for date, weekday and sun"),
+       Nullable(Text("clock_reason", "Why it is not safe, null when it is", true,
+                     {"never_synced", "clock_jump", "gnss_mismatch"})),
+       Time("next_start", "The next start, now while a plan waits or is announced; null without one"),
+       Schedule(true),
+       Object("sun", "Of the local day after tz at the datum of the map; null without a datum or without one that day",
+              {Time("rise", "Sunrise"), Time("set", "Sunset")})});
+}
+
 // The version of a planner or an app; the OS has none besides its revision.
 Field Version() {
   return Nullable(Text("version", "Its version, null for os"));
@@ -570,14 +609,16 @@ const std::vector<Method>& Methods() {
                List("reset", "Keys back to the platform's value", Type::kString, false)}),
        GeometryAnswer(), ""},
       {"system.hold", "mowbite_logic",
-       "Holds the mower for an update: granted only in IDLE with nothing on its way, 0 lets go",
+       "Holds the mower for an update: granted only in IDLE with nothing on its way and no start of the schedule within "
+       "1800 s, 0 lets go",
        Object("params", "The hold", {Integer("seconds", "0 to 1800")}),
        Object("result", "What the gate of the updater looks at",
               {Text("state", "current_state of robot_state"), Text("sub_state", "current_sub_state of robot_state"),
                Bool("is_charging", "On the charging contacts"),
                Integer("hold_until", "End of the hold in unix s, 0 without one"),
-               Bool("idle", "Whether a hold can be granted now"),
-               Integer("emergency_reason", "The bits of the emergency, 0 without one")}),
+               Bool("idle", "Whether a hold can be granted now: also false within 1800 s before next_start"),
+               Integer("emergency_reason", "The bits of the emergency, 0 without one"),
+               Time("next_start", "The next start of the schedule, null without one")}),
        ""},
       {"calibration.check", "mowbite_logic", "Whether a calibration drive could start here, without a drive",
        NoParams(),
@@ -597,6 +638,31 @@ const std::vector<Method>& Methods() {
        "while the calibration program runs"},
       {"calibration.result", "mowbite_calibration", "The result of the last calibration, null before one",
        NoParams(), Nullable(Object("result", "As the calibration wrote it")), ""},
+      {"schedule.get", "mowbite_schedule", "The schedule, whether it may start, the clock and the sun", NoParams(),
+       ScheduleAnswer(), ""},
+      {"schedule.set", "mowbite_schedule",
+       "Changes keys of the schedule, all or nothing: -32602 with data {field, reason}, -32001 when version is not the "
+       "one of the last schedule.get",
+       Object("params", "The change",
+              {Schedule(true), Integer("version", "version of the last schedule.get", false)}),
+       ScheduleAnswer(), ""},
+      {"schedule.log", "mowbite_schedule", "The log of the schedule, oldest first; words in x-schedule-log",
+       Object("params", "How many", {Integer("limit", "The last so many, at most 100", false)}, false),
+       Object("result", "The log",
+              {Rows("entries", "Each with t (unix s), what, detail, more and at (HH:MM of the plan or null)",
+                    {UnixTime("t", "When"), Text("what", "A word of x-schedule-log"),
+                     Nullable(Text("detail", "As x-schedule-log has it")),
+                     Nullable(Text("more", "As x-schedule-log has it")),
+                     Nullable(Text("at", "HH:MM of the plan, null for none"))})}),
+       ""},
+      {"schedule.leftovers", "mowbite_schedule",
+       "The leftovers after a job: enabled 1 is refused (-32602 unsupported) until the planner prepares them on the OS",
+       Object("params", "The change, none to read",
+              {Switch("enabled", "1: leftovers after a job"), Number("min_m2", "m2", "Less is not mowed", false)},
+              false),
+       Object("result", "The leftovers now",
+              {Switch("enabled", "1: leftovers after a job"), Number("min_m2", "m2", "Less is not mowed")}),
+       ""},
       {"light.get_profile", "mowbite_light",
        "The lights: the states and effects there are, the profile by state, its defaults, the fixed signal of an "
        "emergency and the limits",
@@ -767,6 +833,43 @@ const std::vector<Method>& Methods() {
   return methods;
 }
 
+const std::vector<ScheduleLogWord>& ScheduleLogWords() {
+  static const std::vector<ScheduleLogWord> words = {
+      {"skip_missed", "The time of the plan passed while the OS was off, the clock jumped or the plan waited", "", ""},
+      {"skip_offline", "The logic was silent through the minute of the plan", "", ""},
+      {"skip_clock", "The clock was not safe", "clock_reason of schedule.get", ""},
+      {"skip_paused", "The pause covers every area of the plan", "", ""},
+      {"skip_no_area", "No area of the plan is a mowing area of the map", "", ""},
+      {"skip_end", "The end of the plan came while it waited", "", ""},
+      {"skip_emergency", "An emergency, its latch or the restart hold", "", ""},
+      {"skip_busy", "The mower was busy", "The state of robot_state or the phase of a start of the schedule", ""},
+      {"skip_not_docked", "The mower was not on the contacts", "", ""},
+      {"skip_rain", "The rain sensor was wet with skip_rain 1 or rain_mode not 0", "", ""},
+      {"skip_dark", "The sun was down for a plan without dark", "", ""},
+      {"skip_no_position", "No datum for the sun, for a plan without dark", "", ""},
+      {"waiting_battery", "The plan waits up to 2 h for min_battery", "Battery %", ""},
+      {"skip_battery", "The battery stayed below min_battery for 2 h", "Battery %", ""},
+      {"waiting_hold", "The plan waits up to 2 h for the end of a hold", "", ""},
+      {"skip_hold", "A hold stayed for 2 h", "", ""},
+      {"skip_gone", "The plan was removed while it waited", "", ""},
+      {"weather_unknown", "No usable weather; the plan goes on", "forecast or cold", ""},
+      {"skip_forecast", "Rain now or in the next forecast_hours", "", ""},
+      {"skip_cold", "Colder than min_temp", "deg C", ""},
+      {"unknown_area", "An area of the plan is not on the map; the run leaves it out", "The area id", ""},
+      {"paused_area", "An area of the plan is paused; the run leaves it out", "The area id", ""},
+      {"start_refused", "The logic refused the start", "The reason of MOWING_REFUSED", "Its value, or null"},
+      {"start_canceled", "The announcement was canceled", "Its source: emergency, rpc, undocked or hold", ""},
+      {"start_failed", "The start did not reach mowing",
+       "storage, service, timeout, or the end of the run (UNDOCKING_FAILED, EMERGENCY, ...)", ""},
+      {"started", "The mower mows", "Battery %", ""},
+      {"stopped_end", "Home at the end of the plan", "", ""},
+      {"stopped_dark", "Home at sunset", "", ""},
+      {"stopped_rain", "Home for rain", "", ""},
+      {"stopped_paused", "The pause covered every area left of the run", "", ""},
+  };
+  return words;
+}
+
 const std::vector<SoundSituation>& SoundSituations() {
   static const std::vector<SoundSituation> situations = {
       {"MOWING_START", "STATE MOWING, not after PAUSED"},
@@ -781,6 +884,7 @@ const std::vector<SoundSituation>& SoundSituations() {
       {"CHARGING_DONE", "battery_percentage reaches 0.99 while charging"},
       {"EMERGENCY", "An emergency begins without LIFT or LIFT_MULTIPLE"},
       {"LIFT_TRIGGERED", "An emergency with LIFT or LIFT_MULTIPLE begins, or one of them joins it"},
+      {"SCHEDULE_START", "SCHEDULE_START: a plan of the schedule starts in seconds"},
   };
   return situations;
 }
