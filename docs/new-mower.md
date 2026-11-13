@@ -204,6 +204,8 @@ Before the mower drives by itself. On blocks, wheels free, blade off, someone at
 2. How long the board keeps the last setpoint without the host: `failsafe_without_host`.
 3. Stop button, lift, bumper left and right: wheels and blade stop, the reason bits are right, latched until release.
    With a release at the mower: the press that latched never releases, a held press does, anything else does not.
+   Lift each side and the whole mower level by hand: note the tilt lift comes at, or that it does not come; with the
+   blade turning, lift has to stop it like the stop button (`measure.py` T7 on the Tron).
 4. Drive in the air: forwards, backwards, turning; left and right the right way round.
 5. The blade last: briefly, in the air, heights within the limits.
 

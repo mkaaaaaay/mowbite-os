@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Safety measurement of a mower behind hw/*: programme M1-M8 of the NX60i (xcore_driver, next to the minimal launch)
-and T1-T6 of the Tron (--platform tron: this programme starts tron_imu and tron_mcu itself, see TronStart).
+and T1-T7 of the Tron (--platform tron: this programme starts tron_imu and tron_mcu itself, see TronStart).
 
 Asks before every step and shows what it will send. In the air the wheels get at most 0.1 m/s each, on the ground in
 M8 (only with --ground) 0.3 m/s, in the fast runs of M8 (only with --fast as well, and only up to the limit the driver
@@ -26,6 +26,10 @@ touching its settings, into a capture file (at most capture_limit bytes each), w
 codec of tron_mcu. The values for the parameter file of the Tron come out as a proposal only; nothing is written there.
 T6 (only with --blade, the blade disc off) asks the same of the blade motor: tron_mcu runs with the blade allowed for
 that step alone, the motor turns free on the lease of mowing, and the host goes the same two ways.
+T7 (also only with --blade) lifts the mower by hand: each side without a motor until hw/status shows lift (with the
+tilt of imu/data then), the whole mower level, then the front and the left side while the blade motor turns. Where the
+person has to act while the blade motor turns, --input-wait gives the time; lifting without a motor waits for lift.
+On the Tron as root: mowbite-measure --steps T6 --blade, or --steps T7 --blade (optionally --input-wait 30).
 """
 import argparse
 import collections
@@ -85,10 +89,11 @@ EMERGENCY_BITS = {0: "LATCH", 1: "TIMEOUT_INPUTS", 2: "STOP", 3: "LIFT", 4: "LIF
 DRIVER = "xcore_driver_node"
 SERVICE_NOT_READY = 256
 
-# The Tron (T1-T6). The firmware this programme was written against, read on the Tron 07.11.; another one ends the run.
+# The Tron (T1-T7). The firmware this programme was written against, read on the Tron 07.11.; another one ends the run.
 TRON_FIRMWARE = {"cutter": "0.6.36", "chassis": "0.6.34"}
 TRON_FIRST_SPEED = 0.05
-# Runs of heartbeat alone, of each input in T4 and of the driver's watchdog in T5 (host gone: --repeats).
+# Runs of heartbeat alone, of each input in T4, of the driver's watchdog in T5 and of the front lift in T7 (host gone:
+# --repeats).
 TRON_SHORT_REPEATS = 3
 # Host gone (T2): the programme reads the port for HOST_GONE_WINDOW_S after the signal. In every run the wheels have to
 # stand within HOST_GONE_LIMIT_S of it, the runs of one way within HOST_GONE_SPREAD_S of each other.
@@ -113,7 +118,19 @@ TRON_BLADE_HEIGHT_MM = 90
 BLADE_RUN_S = 4.0
 BLADE_GONE_WINDOW_S = 10.0
 BLADE_WINDOW_RANGE_S = (5, 120)
+# The person acts within --input-wait s (default BLADE_INPUT_WAIT_S) once the blade motor turns (T6, T7).
 BLADE_INPUT_WAIT_S = 10.0
+INPUT_WAIT_RANGE_S = (5, 60)
+# Lift (T7), the disc off: by hand each side goes up to LIFT_MAX_DEG, the programme waits up to LIFT_WAIT_S for lift
+# and as long for the set-down; on the blade motor at LIFT_BLADE_PERCENT the front goes up to TRON_SHORT_REPEATS times,
+# the left side once. Per side: how the person reads it and the tilt of fake_tron (degrees; the front up is pitch < 0).
+LIFT_MAX_DEG = 45
+LIFT_WAIT_S = 60.0
+LIFT_BLADE_PERCENT = 100
+LIFT_SIDES = {"front": ("the front", {"tilt_pitch": -38.0}), "rear": ("the rear", {"tilt_pitch": 38.0}),
+              "left": ("the left side", {"tilt_roll": 38.0}), "right": ("the right side", {"tilt_roll": -38.0})}
+# A tilt of the rehearsal goes up this long before the lift it brings.
+LEAD_S = 0.5
 # Limit of a capture: CAPTURE_MAX_BYTES, for a long window CAPTURE_BYTES_PER_S where that is more (capture_limit). The
 # Tron's MCU filled 8.4 kB a second (T2, 08.11.). A capture that reached its limit ends the step.
 CAPTURE_MAX_BYTES = 1024 * 1024
@@ -234,14 +251,29 @@ def blade_percents(text):
     return tuple(values)
 
 
-def blade_window(text):
-    """The value of --blade-window: whole seconds within BLADE_WINDOW_RANGE_S, as the questions show them. ValueError
-    with the reason otherwise."""
-    low, high = BLADE_WINDOW_RANGE_S
-    window = whole_number(text, low, high)
-    if window is None:
+def whole_seconds(text, bounds):
+    """The value of --blade-window or --input-wait: whole seconds within `bounds`, as the questions show them.
+    ValueError with the reason otherwise."""
+    low, high = bounds
+    seconds = whole_number(text, low, high)
+    if seconds is None:
         raise ValueError(f"a whole number from {low} to {high}, got {text!r}")
-    return float(window)
+    return float(seconds)
+
+
+def lift_blade_items(tilts, unlifted, front_runs):
+    """The lifts of T7.3 as inputs of blade_inputs: the front `front_runs` times, the left side once, each but a side in
+    `unlifted` (T7.1 saw no lift there); past the tilt at lift T7.1 found (`tilts` by side, None: unknown)."""
+    items = []
+    for side, runs in (("front", front_runs), ("left", 1)):
+        if side in unlifted:
+            continue
+        name, tilt = LIFT_SIDES[side]
+        angle = tilts.get(side)
+        how = "until lift shows" if angle is None else f"past {angle:.0f} deg"
+        items.append((f"lift {name} {how} while the blade motor turns", {"lift": True, **tilt}, runs,
+                      f"set {name} down"))
+    return items
 
 
 def capture_limit(window):
@@ -417,6 +449,9 @@ class Mower:
         self.odom = (0.0, 0.0)
         self.odom_at = 0.0
         self.max_tilt = 0.0
+        # The tilt of the last imu/data sample; the time and that tilt of the first lift since reset_tilt.
+        self.tilt = None
+        self.first_lift = None
         self.max_linear_speed = None
         self.emergency_since = None
         self.last_cmd_at = None
@@ -455,6 +490,8 @@ class Mower:
             self.status, self.status_at = msg, time.monotonic()
             self.counts["status"] += 1
             self.seen.update(name for name in ("stop", "lift", "bumper_left", "bumper_right") if getattr(msg, name))
+            if msg.lift and self.first_lift is None:
+                self.first_lift = (self.status_at, self.tilt)
         self.rec.write("status", emergency=msg.emergency, latched=msg.emergency_latched,
                        reason=msg.emergency_reason, telemetry_ok=msg.telemetry_ok, stop=msg.stop, lift=msg.lift,
                        bumper=msg.bumper, moving=msg.moving, blade_on=msg.blade_on, blade_rpm=msg.blade_motor.rpm,
@@ -475,6 +512,7 @@ class Mower:
         tilt = math.degrees(math.atan2(math.hypot(acc[0], acc[1]), acc[2]))
         with self.lock:
             self.max_tilt = max(self.max_tilt, tilt)
+            self.tilt = tilt
             self.counts["imu"] += 1
             self.acc_z.append(acc[2])
         self.rec.imu(a=list(acc), g=list(rate))
@@ -504,6 +542,12 @@ class Mower:
             self.seen.clear()
             self.acc_z.clear()
             return self.status
+
+    def reset_tilt(self):
+        """Starts a new largest tilt and a new first lift."""
+        with self.lock:
+            self.max_tilt = 0.0
+            self.first_lift = None
 
     def set_guard(self, guard):
         with self.lock:
@@ -647,17 +691,21 @@ class Person:
         self.keys.settle()
         return True
 
-    def act_later(self, text, fake=None, after=1.0, hold=1.0):
-        """The person acts while a step runs; in a rehearsal the flags go up after `after` s for `hold` s."""
+    def act_later(self, text, fake=None, after=1.0, hold=1.0, lead=None):
+        """The person acts while a step runs; in a rehearsal the flags go up after `after` s for `hold` s, those of
+        `lead` LEAD_S before them."""
         print(f"  -> {text}")
         if not self.fake or fake is None:
             return
 
         def run():
             time.sleep(after)
+            if lead:
+                self.set(lead)
+                time.sleep(LEAD_S)
             self.set(fake)
             time.sleep(hold)
-            self.clear(fake)
+            self.clear({**(lead or {}), **fake})
         timer = threading.Thread(target=run, daemon=True)
         timer.start()
         self.timers.append(timer)
@@ -819,10 +867,13 @@ class Measurement:
         self.finding(step, "the wheels do not stand still before the step")
         raise Abort()
 
-    def stop_shown(self):
-        """stop of a fresh hw/status; None without one."""
+    def shown(self, name):
+        """The input `name` (stop, lift) of a fresh hw/status; None without one."""
         s, age, _, _ = self.mower.snapshot()
-        return bool(s.stop) if s is not None and age < 0.5 else None
+        return bool(getattr(s, name)) if s is not None and age < 0.5 else None
+
+    def stop_shown(self):
+        return self.shown("stop")
 
     def stop_check(self, before):
         """Before the first step that can turn a motor: each STOP button pressed and let go once, seen in hw/status
@@ -1552,7 +1603,7 @@ class TronStart:
 
 
 class TronMeasurement(Measurement):
-    """T1-T6 of phase 6 on the Tron, in the air: the driver is this programme's process (TronStart)."""
+    """T1-T7 of phase 6 on the Tron, in the air: the driver is this programme's process (TronStart)."""
     still_speed = TRON_STILL_SPEED
     STANDSTILL_STEPS = ("T1",)
     STOP_BUTTONS = (("STOP", {"stop": True}),)
@@ -1564,8 +1615,8 @@ class TronMeasurement(Measurement):
         # Stand times of the host-gone runs by way (freeze, kill), the firmware the driver reported.
         self.host_gone = {}
         self.firmware = {}
-        # T6, from the parameter files of the start: a blade motor below blade_still_rpm stands, within blade_stop_s of
-        # going off; the lease and its renewal are those of mowing.
+        # T6 and T7, from the parameter files of the start: a blade motor below blade_still_rpm stands, within
+        # blade_stop_s of going off; the lease and its renewal are those of mowing.
         self.blade_still_rpm = self.blade_stop_s = self.blade_lease_s = self.blade_renew_s = None
         self.blade_renewed = None
 
@@ -1999,23 +2050,39 @@ class TronMeasurement(Measurement):
 
     def t6(self):
         step = "T6"
-        self.blade_still_rpm = int(self.start.param("tron_mcu", "blade_still_rpm"))
-        self.blade_stop_s = float(self.start.param("tron_mcu", "blade_stop_time"))
-        self.blade_lease_s = float(self.start.param("mowbite_logic", "blade_lease"))
-        self.blade_renew_s = float(self.start.param("mowbite_logic", "blade_renew"))
+        self.blade_setup()
         longest = BLADE_RUN_S + self.args.blade_window + self.blade_stop_s
         if not self.ask(f"{step} blade motor with the disc OFF (jacked up, you at STOP and battery): tron_mcu starts "
                         f"again with the blade allowed, for this step only; the motor turns up to {longest:.0f} s a "
                         f"run at {TRON_BLADE_HEIGHT_MM} mm, the wheels get no command"):
             return
+        items = [("press STOP while the blade motor turns", {"stop": True}, 1,
+                  "let go of STOP, unlock it if it stays down"),
+                 ("push the bumper left while the blade motor turns", {"bumper_left": True}, 1, "let go of the bumper"),
+                 ("push the bumper right while the blade motor turns", {"bumper_right": True}, 1,
+                  "let go of the bumper")]
+
+        def parts():
+            self.blade_basics(step)
+            self.blade_inputs(step, items, self.args.blade_percent[0])
+            self.blade_host_gone(step)
+        self.blade_allowed(step, parts)
+
+    def blade_setup(self):
+        self.blade_still_rpm = int(self.start.param("tron_mcu", "blade_still_rpm"))
+        self.blade_stop_s = float(self.start.param("tron_mcu", "blade_stop_time"))
+        self.blade_lease_s = float(self.start.param("mowbite_logic", "blade_lease"))
+        self.blade_renew_s = float(self.start.param("mowbite_logic", "blade_renew"))
+
+    def blade_allowed(self, step, parts):
+        """`parts` with tron_mcu started again with the blade allowed; after them, also on an abort, it starts again
+        without."""
         self.blade_used = True
         old = self.start.driver_pid
         self.start.restart_driver(allow_blade=True)
         try:
             self.wait_driver_back(step, old)
-            self.blade_basics(step)
-            self.blade_inputs(step)
-            self.blade_host_gone(step)
+            parts()
         finally:
             # tron_mcu switches the blade off on its way out; the next start does not allow it.
             old = self.start.driver_pid
@@ -2102,35 +2169,126 @@ class TronMeasurement(Measurement):
                                       self.blade_lease_s + self.blade_stop_s)
             self.rec.write("blade_lease", step=step, percent=percent, rpm=rpm, still_s=still)
 
-    def blade_inputs(self, step):
-        items = [("press STOP while the blade motor turns", {"stop": True}),
-                 ("push the bumper left while the blade motor turns", {"bumper_left": True}),
-                 ("push the bumper right while the blade motor turns", {"bumper_right": True})]
-        percent = self.args.blade_percent[0]
-        for text, fake in items:
-            if not self.ask(f"{step} {text}: on at {percent} % for up to {BLADE_RUN_S + BLADE_INPUT_WAIT_S:.0f} s, "
-                            "it has to stand on the emergency and stay so after the release"):
+    def blade_inputs(self, step, items, percent):
+        """Each input (text, flags of the rehearsal, runs, how it goes free) while the blade motor turns at `percent`:
+        the emergency within --input-wait s, the motor standing within blade_stop_s of it, still standing once the input
+        is free and after the release."""
+        wait = self.args.input_wait
+        for text, fake, runs, free in items:
+            for i in range(runs):
+                run = f", run {i + 1}/{runs}" if runs > 1 else ""
+                if not self.ask(f"{step} {text}{run}: on at {percent} % for up to {BLADE_RUN_S + wait:.0f} s, it has "
+                                "to stand on the emergency and stay so after the release"):
+                    break
+                self.ready(step)
+                self.mark(step, text + run)
+                rpm = self.blade_turning(step, percent)
+                self.person.act_later(f"{step} now, within {wait:.0f} s: {text}", fake, after=1.0, hold=1.0)
+                started = time.monotonic()
+                if not self.blade_run(step, percent, wait, until=self.in_emergency):
+                    self.mower.set_blade(False)
+                    self.finding(step, f"no emergency within {wait:.0f} s: {text}")
+                    raise Abort()
+                since = self.mower.emergency_since
+                since = since if since is not None and since >= started else time.monotonic()
+                still = self.blade_stands(step, since, "the emergency")
+                self.rec.write("blade_emergency", step=step, text=text, run=i + 1, rpm=rpm, still_s=still)
+                self.show("emergency")
+                self.wait(1.5)
+                if not self.person.fake:
+                    self.person.act(f"{step}: the blade motor stands; {free}, hands off")
+                if self.wait(1.0, until=self.blade_turns):
+                    self.finding(step, f"the blade motor turned with the input free, before the release: {text}")
+                    raise Abort()
+                self.release(step)
+                if self.wait(2.0, until=self.blade_turns):
+                    self.finding(step, f"the blade motor turned after the release without a request: {text}")
+                    raise Abort()
+
+    def t7(self):
+        tilts, unlifted = self.lift_angles("T7.1")
+        self.lift_level("T7.2")
+        step = "T7.3"
+        items = lift_blade_items(tilts, unlifted, min(self.args.repeats, TRON_SHORT_REPEATS))
+        if not items:
+            print(f"\n{step} skipped: T7.1 saw no lift at the front nor at the left side")
+            return
+        self.blade_setup()
+        longest = BLADE_RUN_S + self.args.input_wait + self.blade_stop_s
+        if not self.ask(f"{step} lift on the blade motor with the disc OFF (jacked up, you at STOP and battery, hands "
+                        "only at the top edge of the hood): tron_mcu starts again with the blade allowed, for this "
+                        f"part only; the motor turns at {LIFT_BLADE_PERCENT} % up to {longest:.0f} s a run at "
+                        f"{TRON_BLADE_HEIGHT_MM} mm, the wheels get no command"):
+            return
+        self.blade_allowed(step, lambda: self.blade_inputs(step, items, LIFT_BLADE_PERCENT))
+
+    def lift_angles(self, step):
+        """Each side lifted by hand without a motor until hw/status shows lift: the tilt at the first lift by side,
+        and the sides without lift (a finding each, T7.3 leaves them out)."""
+        tilts, unlifted = {}, set()
+        for side, (name, tilt) in LIFT_SIDES.items():
+            label = f"{step} {side}"
+            if not self.ask(f"{label} no motor, sends nothing but the release (clear frame) afterwards: lift {name} "
+                            f"slowly until lift shows, at most {LIFT_MAX_DEG} deg, hold 2 s, set it down"):
                 continue
-            self.ready(step)
-            self.mark(step, text)
-            rpm = self.blade_turning(step, percent)
-            self.person.act_later(text, fake, after=1.0, hold=1.0)
-            started = time.monotonic()
-            if not self.blade_run(step, percent, BLADE_INPUT_WAIT_S, until=self.in_emergency):
-                self.mower.set_blade(False)
-                self.finding(step, f"no emergency within {BLADE_INPUT_WAIT_S:.0f} s: {text}")
+            result = self.lift_by_hand(label, f"lift {name} slowly by the top edge of the hood until lift shows, at "
+                                              f"most {LIFT_MAX_DEG} deg", f"set {name} down", 2.0, tilt)
+            self.rec.write("lift_angle", step=step, side=side, **result)
+            if result["lift"]:
+                tilts[side] = result["tilt_at_lift"]
+            else:
+                unlifted.add(side)
+                self.finding(label, f"no lift in hw/status lifting {name} (largest tilt {result['max_tilt']:.1f} deg): "
+                                    "T7.3 leaves this side out")
+        return tilts, unlifted
+
+    def lift_level(self, step):
+        text = "lift the whole mower level with both hands at the top edge of the hood about 5 cm off the stand"
+        if not self.ask(f"{step} no motor, sends nothing but the release (clear frame) afterwards: {text}, hold 3 s, "
+                        "set it down; lift or no lift is the result"):
+            return
+        result = self.lift_by_hand(step, text, "set it down on the stand", 3.0)
+        self.rec.write("lift_level", step=step, **result)
+        if not result["lift"]:
+            self.finding(step, "no lift in hw/status with the mower lifted level (safety finding G1: lift does not "
+                               "cover a Tron lifted level)")
+
+    def lift_by_hand(self, label, text, down, hold, tilt=None):
+        """The person lifts the mower, no motor runs. Waits up to LIFT_WAIT_S for lift in hw/status (or a tilt past
+        LIFT_MAX_DEG), then as long for lift free; the emergency has to stay latched until the release. Returns what
+        it saw: lift, the tilt at the first lift, the largest tilt, latched, released."""
+        self.ready(label)
+        self.mark(label, text)
+        self.mower.reset_tilt()
+        self.person.act_later(f"{label} now: {text}, hold {hold:.0f} s, {down}; this programme waits up to "
+                              f"{LIFT_WAIT_S:.0f} s for lift", {"lift": True}, after=1.0, hold=hold, lead=tilt)
+
+        def steep():
+            return (self.mower.tilt or 0.0) > LIFT_MAX_DEG
+        self.wait(LIFT_WAIT_S, until=lambda: self.shown("lift") or steep())
+        with self.mower.lock:
+            first = self.mower.first_lift
+        result = {"lift": first is not None, "tilt_at_lift": first[1] if first else None, "latched": None}
+        if first is None:
+            why = f"up to {LIFT_MAX_DEG} deg" if steep() else f"within {LIFT_WAIT_S:.0f} s"
+            print(f"     no lift {why}")
+            if not self.person.fake:
+                self.person.act(f"{label}: no lift {why}; {down} now")
+        else:
+            shown = "no tilt from imu/data" if first[1] is None else f"{first[1]:.1f} deg"
+            self.person.act_later(f"{label}: lift seen at {shown}; hold {hold:.0f} s, then {down}")
+            if not self.wait(LIFT_WAIT_S, until=lambda: self.shown("lift") is False):
+                self.finding(label, f"hw/status still shows lift {LIFT_WAIT_S:.0f} s after it came")
                 raise Abort()
-            since = self.mower.emergency_since
-            since = since if since is not None and since >= started else time.monotonic()
-            still = self.blade_stands(step, since, "the emergency")
-            self.rec.write("blade_emergency", step=step, text=text, rpm=rpm, still_s=still)
-            self.show("emergency")
-            self.wait(1.5)
-            self.let_go(text)
-            self.release(step)
-            if self.wait(2.0, until=self.blade_turns):
-                self.finding(step, f"the blade motor turned after the release without a request: {text}")
-                raise Abort()
+            self.wait(0.5)
+            result["latched"] = self.in_emergency()
+            if not result["latched"]:
+                self.finding(label, "the emergency of the lift did not stay after setting down")
+        with self.mower.lock:
+            result["max_tilt"] = self.mower.max_tilt
+        self.show("after")
+        result["released"] = self.release(label)
+        return result
 
     def blade_host_gone(self, step):
         ways = [("freeze", signal.SIGSTOP, "frozen (SIGSTOP), continued after the window"),
@@ -2178,7 +2336,7 @@ class TronMeasurement(Measurement):
         self.release(step)
         return still
 
-    STEPS = {"T1": t1, "T2": t2, "T3": t3, "T4": t4, "T5": t5, "T6": t6}
+    STEPS = {"T1": t1, "T2": t2, "T3": t3, "T4": t4, "T5": t5, "T6": t6, "T7": t7}
 
     def run(self, steps):
         """The firmware first: another one than TRON_FIRMWARE ends the run before any step."""
@@ -2212,7 +2370,7 @@ def interrupted(*_):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--platform", choices=["nx60i", "tron"], default="nx60i")
-    parser.add_argument("--steps", help="comma separated, of M1..M8 (nx60i, default M1-M6) or T1..T6 (tron, default "
+    parser.add_argument("--steps", help="comma separated, of M1..M8 (nx60i, default M1-M6) or T1..T7 (tron, default "
                                         "T1-T5)")
     parser.add_argument("--record-dir", default=".", help="directory of the recording")
     parser.add_argument("--max-mb", type=float, default=100.0, help="size limit of the recording")
@@ -2221,12 +2379,15 @@ def main(argv=None):
     parser.add_argument("--repeats", type=int, default=5, help="runs per case in M4 and M5, host-gone runs in T2")
     parser.add_argument("--wheel-distance", type=float, default=0.3556, help="nx60i; the Tron's driver reports its own")
     parser.add_argument("--restart-wait", type=float, default=120.0, help="s to wait for a restarted driver")
-    parser.add_argument("--blade", action="store_true", help="allow M7, on the Tron T6 (blade, the disc off)")
+    parser.add_argument("--blade", action="store_true", help="allow M7, on the Tron T6 and T7 (blade, the disc off)")
     parser.add_argument("--blade-percent",
                         help=f"tron T6: up to {BLADE_PERCENT_COUNT} whole numbers from 1 to 100, comma separated, "
                              f"default {','.join(map(str, TRON_BLADE_PERCENT))}; the lease and the inputs at the first")
     parser.add_argument("--blade-window", help=f"tron T6: whole s without host, {BLADE_WINDOW_RANGE_S[0]} to "
                                                f"{BLADE_WINDOW_RANGE_S[1]}, default {BLADE_GONE_WINDOW_S:g}")
+    parser.add_argument("--input-wait", help=f"tron T6 and T7: whole s to act in once the blade motor turns, "
+                                             f"{INPUT_WAIT_RANGE_S[0]} to {INPUT_WAIT_RANGE_S[1]}, default "
+                                             f"{BLADE_INPUT_WAIT_S:g}")
     parser.add_argument("--ground", action="store_true", help="allow M8 on the ground, 0.3 m/s per wheel")
     parser.add_argument("--fast", action="store_true",
                         help="with --ground: the fast runs of M8 up to 0.5 m/s in stages, in the raised start of the "
@@ -2251,18 +2412,24 @@ def main(argv=None):
         sys.exit(f"unknown steps for {args.platform}: {unknown}")
     if tron and (args.ground or args.fast):
         sys.exit("--ground and --fast are not for the Tron")
-    if tron and args.blade != ("T6" in steps):
-        sys.exit("on the Tron --blade and T6 go together")
+    blade_steps = tron and bool({"T6", "T7"} & set(steps))
+    if tron and args.blade != blade_steps:
+        sys.exit("on the Tron --blade and T6 or T7 go together")
     if (args.blade_percent is not None or args.blade_window is not None) and not (tron and "T6" in steps):
         sys.exit("--blade-percent and --blade-window are for T6 on the Tron")
     try:
         args.blade_percent = TRON_BLADE_PERCENT if args.blade_percent is None else blade_percents(args.blade_percent)
     except ValueError as error:
         sys.exit(f"--blade-percent: {error}")
-    try:
-        args.blade_window = BLADE_GONE_WINDOW_S if args.blade_window is None else blade_window(args.blade_window)
-    except ValueError as error:
-        sys.exit(f"--blade-window: {error}")
+    if args.input_wait is not None and not blade_steps:
+        sys.exit("--input-wait is for T6 and T7 on the Tron")
+    for option, default, bounds in (("blade_window", BLADE_GONE_WINDOW_S, BLADE_WINDOW_RANGE_S),
+                                    ("input_wait", BLADE_INPUT_WAIT_S, INPUT_WAIT_RANGE_S)):
+        text = getattr(args, option)
+        try:
+            setattr(args, option, default if text is None else whole_seconds(text, bounds))
+        except ValueError as error:
+            sys.exit(f"--{option.replace('_', '-')}: {error}")
     if "M8" in steps and not args.ground:
         sys.exit("M8 needs --ground")
     if args.fast and not args.ground:

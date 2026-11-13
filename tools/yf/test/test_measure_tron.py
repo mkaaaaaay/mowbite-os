@@ -1,6 +1,6 @@
 """The Tron part of measure.py without a mower: the evaluation of the host-gone captures, the limits and the proposal,
 the port settings it reads under, the port reader and the window without host on a pty, the parameters of the minimal
-start, and the blade motor without host (T6) with its options.
+start, the blade motor without host (T6) with its options, and the lifts on the blade motor (T7).
 
 Run in a sourced workspace (measure.py imports rclpy): python3 -m unittest tools/yf/test/test_measure_tron.py
 """
@@ -105,8 +105,9 @@ class TestBladeGone(unittest.TestCase):
 
 
 class TestBladeArguments(unittest.TestCase):
-    def test_blade_and_t6_go_together(self):
-        for argv in (["--steps", "T6"], ["--blade"], ["--steps", "T1,T6"], ["--steps", "T1", "--blade"]):
+    def test_blade_and_t6_or_t7_go_together(self):
+        for argv in (["--steps", "T6"], ["--blade"], ["--steps", "T1,T6"], ["--steps", "T1", "--blade"],
+                     ["--steps", "T7"], ["--steps", "T6,T7"]):
             with self.assertRaises(SystemExit) as refused:
                 m.main(["--platform", "tron", *argv])
             self.assertIn("go together", str(refused.exception.code), argv)
@@ -125,11 +126,19 @@ class TestBladeArguments(unittest.TestCase):
                 m.blade_percents(text)
 
     def test_window_values(self):
-        self.assertEqual(m.blade_window("5"), 5.0)
-        self.assertEqual(m.blade_window(" 120 "), 120.0)
+        self.assertEqual(m.whole_seconds("5", m.BLADE_WINDOW_RANGE_S), 5.0)
+        self.assertEqual(m.whole_seconds(" 120 ", m.BLADE_WINDOW_RANGE_S), 120.0)
         for text in ("4", "121", "60.5", "1e1", "0", "-10", "nan", "inf", "", "ten"):
             with self.assertRaisesRegex(ValueError, "a whole number from 5 to 120", msg=text):
-                m.blade_window(text)
+                m.whole_seconds(text, m.BLADE_WINDOW_RANGE_S)
+
+    def test_input_wait_values(self):
+        self.assertEqual(m.whole_seconds("5", m.INPUT_WAIT_RANGE_S), 5.0)
+        self.assertEqual(m.whole_seconds("60", m.INPUT_WAIT_RANGE_S), 60.0)
+        self.assertEqual(m.BLADE_INPUT_WAIT_S, 10.0)
+        for text in ("4", "61", "10.5", "0", "-10", "", "ten"):
+            with self.assertRaisesRegex(ValueError, "a whole number from 5 to 60", msg=text):
+                m.whole_seconds(text, m.INPUT_WAIT_RANGE_S)
 
     def test_the_capture_limit_follows_a_long_window(self):
         self.assertEqual(m.capture_limit(m.HOST_GONE_WINDOW_S), m.CAPTURE_MAX_BYTES)
@@ -146,6 +155,24 @@ class TestBladeArguments(unittest.TestCase):
                 m.main(argv)
             self.assertIn("for T6 on the Tron", str(refused.exception.code), argv)
 
+    def test_input_wait_only_with_t6_or_t7_on_the_tron(self):
+        for argv in (["--input-wait", "30"], ["--platform", "tron", "--steps", "T2", "--input-wait", "30"],
+                     ["--platform", "nx60i", "--steps", "M7", "--blade", "--input-wait", "30"]):
+            with self.assertRaises(SystemExit) as refused:
+                m.main(argv)
+            self.assertIn("for T6 and T7 on the Tron", str(refused.exception.code), argv)
+        # Accepted, the options pass: the run would begin with the record dir.
+        for steps in ("T6", "T7", "T1,T7"):
+            with mock.patch.object(m.os, "makedirs", side_effect=RuntimeError("past the options")):
+                with self.assertRaisesRegex(RuntimeError, "past the options"):
+                    m.main(["--platform", "tron", "--steps", steps, "--blade", "--input-wait", "60"])
+
+    def test_blade_options_of_t6_are_not_for_t7(self):
+        for option, value in (("--blade-percent", "100"), ("--blade-window", "60")):
+            with self.assertRaises(SystemExit) as refused:
+                m.main(["--platform", "tron", "--steps", "T7", "--blade", option, value])
+            self.assertIn("for T6 on the Tron", str(refused.exception.code))
+
     def test_wrong_values_are_refused_before_anything_starts(self):
         t6 = ["--platform", "tron", "--steps", "T6", "--blade", "--record-dir", "/nonexistent/record"]
         for option, value in (("--blade-percent", "0"), ("--blade-percent", "30,60,90,100"),
@@ -154,12 +181,42 @@ class TestBladeArguments(unittest.TestCase):
             with self.assertRaises(SystemExit) as refused:
                 m.main([*t6, option, value])
             self.assertTrue(str(refused.exception.code).startswith(option + ": "), refused.exception.code)
+        t7 = ["--platform", "tron", "--steps", "T7", "--blade", "--record-dir", "/nonexistent/record"]
+        for value in ("4", "61", "7.5", ""):
+            with self.assertRaises(SystemExit) as refused:
+                m.main([*t7, "--input-wait", value])
+            self.assertTrue(str(refused.exception.code).startswith("--input-wait: "), refused.exception.code)
 
-    def test_t6_is_not_in_the_default_steps(self):
+    def test_t6_and_t7_are_not_in_the_default_steps(self):
         self.assertIn("T6", m.TronMeasurement.STEPS)
+        self.assertIn("T7", m.TronMeasurement.STEPS)
         with self.assertRaises(SystemExit) as refused:
             m.main(["--platform", "tron", "--ground"])
         self.assertIn("not for the Tron", str(refused.exception.code))
+
+
+class TestLiftItems(unittest.TestCase):
+    def test_front_and_left_past_the_tilt_of_t71(self):
+        items = m.lift_blade_items({"front": 37.6, "rear": 41.0, "left": 39.4, "right": 40.0}, set(), 3)
+        self.assertEqual([(text, runs, free) for text, _, runs, free in items],
+                         [("lift the front past 38 deg while the blade motor turns", 3, "set the front down"),
+                          ("lift the left side past 39 deg while the blade motor turns", 1, "set the left side down")])
+        self.assertEqual([fake for _, fake, _, _ in items],
+                         [{"lift": True, "tilt_pitch": -38.0}, {"lift": True, "tilt_roll": 38.0}])
+
+    def test_a_side_without_lift_is_left_out(self):
+        items = m.lift_blade_items({"left": 39.0}, {"front"}, 3)
+        self.assertEqual([text for text, _, _, _ in items],
+                         ["lift the left side past 39 deg while the blade motor turns"])
+        self.assertEqual(m.lift_blade_items({}, {"front", "left"}, 3), [])
+        # Only the front and the left side go up on the blade motor.
+        self.assertEqual(len(m.lift_blade_items({}, {"rear", "right"}, 1)), 2)
+
+    def test_a_side_skipped_or_without_tilt_goes_until_lift_shows(self):
+        items = m.lift_blade_items({"front": None}, set(), 1)
+        self.assertEqual([text for text, _, _, _ in items],
+                         ["lift the front until lift shows while the blade motor turns",
+                          "lift the left side until lift shows while the blade motor turns"])
 
 
 class TestLimits(unittest.TestCase):
