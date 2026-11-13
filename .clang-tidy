@@ -18,3 +18,6 @@ Checks: >
 WarningsAsErrors: ''
 HeaderFilterRegex: '/src/(mowbite_[a-z_]+|tron_[a-z_]+|xcore_driver)/(include|src)/'
 FormatStyle: none
+CheckOptions:
+  # rclcpp takes the callback of async_send_request only with the future by value
+  performance-unnecessary-value-param.AllowedTypes: '^::rclcpp::Client<.*>::SharedFuture$'
