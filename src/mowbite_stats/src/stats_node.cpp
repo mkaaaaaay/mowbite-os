@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <cmath>
 #include <filesystem>
 #include <memory>
@@ -69,14 +70,14 @@ class StatsNode : public rclcpp::Node {
     error_pub_ = create_publisher<mowbite_msgs::msg::RpcError>("bridge/rpc/error", 100);
     request_sub_ = create_subscription<mowbite_msgs::msg::RpcRequest>(
         "bridge/rpc/request", 100,
-        [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRequest(*msg); });
+        [this](const mowbite_msgs::msg::RpcRequest& msg) { OnRequest(msg); });
     hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
-        "hw/status", 10, [this](mowbite_msgs::msg::HardwareStatus::ConstSharedPtr msg) {
+        "hw/status", 10, [this](const mowbite_msgs::msg::HardwareStatus& msg) {
           // The motor's report where there is one, else what the driver commanded.
-          blade_ = msg->blade_motor.ok ? msg->blade_motor.rpm != 0 : msg->blade_on;
+          blade_ = msg.blade_motor.ok ? msg.blade_motor.rpm != 0 : msg.blade_on;
         });
     state_sub_ = create_subscription<mowbite_msgs::msg::RobotState>(
-        "bridge/robot_state", 10, [this](mowbite_msgs::msg::RobotState::ConstSharedPtr msg) { OnState(*msg); });
+        "bridge/robot_state", 10, [this](const mowbite_msgs::msg::RobotState& msg) { OnState(msg); });
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_stats";
     methods.methods = StatsMethods();
@@ -87,7 +88,16 @@ class StatsNode : public rclcpp::Node {
     watch_ = mowbite_watch::Attach(*this);
   }
 
-  ~StatsNode() override { Save(false); }
+  // The last minute of counting on the way out; a failure to write it is logged, never thrown.
+  ~StatsNode() override {
+    try {
+      Save(false);
+    } catch (const std::exception& error) {
+      RCLCPP_ERROR(get_logger(), "Statistics not saved: %s", error.what());
+    } catch (...) {
+      RCLCPP_ERROR(get_logger(), "Statistics not saved");
+    }
+  }
 
  private:
   json Read(const char* name) {

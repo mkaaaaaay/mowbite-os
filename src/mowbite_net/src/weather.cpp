@@ -39,7 +39,7 @@ WeatherData ParseWeather(const std::string& body, int hours) {
   const nlohmann::json minutely = j.value("minutely_15", nlohmann::json());
   const nlohmann::json quarters = minutely.is_object() ? minutely.value("precipitation", nlohmann::json()) : nullptr;
   const bool now = current.is_object() && current.contains("precipitation") && Number(current["precipitation"]);
-  if (now && quarters.is_array() && quarters.size() >= static_cast<size_t>(hours * kQuarters)) {
+  if (now && quarters.is_array() && quarters.size() >= static_cast<size_t>(hours) * kQuarters) {
     bool all = true;
     std::vector<double> per_hour(static_cast<size_t>(hours), 0.0);
     for (size_t i = 0; i < per_hour.size() * kQuarters; ++i) {

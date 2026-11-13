@@ -98,31 +98,31 @@ class NetNode : public rclcpp::Node {
     methods_pub_ = create_publisher<mowbite_msgs::msg::RpcMethods>("bridge/rpc/methods", LatchedQos(50));
     weather_pub_ = create_publisher<mowbite_msgs::msg::Weather>("net/weather", 10);
     request_sub_ = create_subscription<mowbite_msgs::msg::RpcRequest>(
-        "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRequest(*msg); });
+        "bridge/rpc/request", 100, [this](const mowbite_msgs::msg::RpcRequest& msg) { OnRequest(msg); });
     publish_sub_ = create_subscription<mowbite_msgs::msg::MqttPublish>(
-        "bridge/publish", 100, [this](mowbite_msgs::msg::MqttPublish::ConstSharedPtr msg) {
-          if (msg->topic != "events/json") return;
-          notifier_.OnEvent(json::parse(msg->payload, nullptr, false), MonotonicSeconds());
+        "bridge/publish", 100, [this](const mowbite_msgs::msg::MqttPublish& msg) {
+          if (msg.topic != "events/json") return;
+          notifier_.OnEvent(json::parse(msg.payload, nullptr, false), MonotonicSeconds());
           Flush();
         });
     state_sub_ = create_subscription<mowbite_msgs::msg::RobotState>(
-        "bridge/robot_state", 10, [this](mowbite_msgs::msg::RobotState::ConstSharedPtr msg) { OnState(*msg); });
+        "bridge/robot_state", 10, [this](const mowbite_msgs::msg::RobotState& msg) { OnState(msg); });
     parts_sub_ = create_subscription<mowbite_msgs::msg::PartsUse>(
-        "stats/parts", LatchedQos(1), [this](mowbite_msgs::msg::PartsUse::ConstSharedPtr msg) { OnParts(*msg); });
+        "stats/parts", LatchedQos(1), [this](const mowbite_msgs::msg::PartsUse& msg) { OnParts(msg); });
     notice_sub_ = create_subscription<mowbite_msgs::msg::ScheduleNotice>(
-        "schedule/notice", 20, [this](mowbite_msgs::msg::ScheduleNotice::ConstSharedPtr msg) {
-          if (msg->kind == mowbite_msgs::msg::ScheduleNotice::KIND_CHANGED) {
+        "schedule/notice", 20, [this](const mowbite_msgs::msg::ScheduleNotice& msg) {
+          if (msg.kind == mowbite_msgs::msg::ScheduleNotice::KIND_CHANGED) {
             notifier_.OnScheduleChanged();
           } else {
-            notifier_.OnScheduleLogged(msg->what, msg->at);
+            notifier_.OnScheduleLogged(msg.what, msg.at);
           }
           Flush();
         });
     weather_sub_ = create_subscription<mowbite_msgs::msg::WeatherRequest>(
-        "net/weather/request", 10, [this](mowbite_msgs::msg::WeatherRequest::ConstSharedPtr msg) {
+        "net/weather/request", 10, [this](const mowbite_msgs::msg::WeatherRequest& msg) {
           std::lock_guard<std::mutex> lock(weather_mutex_);
           if (weather_queue_.size() >= kWeatherQueue) weather_queue_.pop_front();
-          weather_queue_.push_back(*msg);
+          weather_queue_.push_back(msg);
           weather_wake_.notify_one();
         });
     mowbite_msgs::msg::RpcMethods methods;
