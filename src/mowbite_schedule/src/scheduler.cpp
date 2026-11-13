@@ -517,6 +517,8 @@ std::optional<int64_t> Scheduler::NextStart() const {
       if (at + kWindow <= facts_.wall || at <= file_.changed_at) continue;
       if (!next || at < *next) next = at;
     }
+    // Later days start later.
+    if (next) break;
   }
   return next;
 }

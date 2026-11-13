@@ -4,7 +4,6 @@
 #include <cctype>
 #include <cstdio>
 #include <utility>
-#include <vector>
 
 namespace mowbite_schedule {
 
@@ -264,19 +263,13 @@ int64_t TimeZone::OffsetAt(int64_t unix_s) const {
   if (!has_dst_) return std_east_;
   // The changes of the years around, in order; the last one before the moment decides.
   const int year = DateFromDays(FloorDiv(unix_s + std_east_, kDay)).year;
-  std::vector<std::pair<int64_t, bool>> changes;
+  std::optional<std::pair<int64_t, bool>> last;
   for (int y = year - 1; y <= year + 1; ++y) {
-    changes.emplace_back(StartOf(y), true);
-    changes.emplace_back(EndOf(y), false);
+    for (const auto& change : {std::make_pair(StartOf(y), true), std::make_pair(EndOf(y), false)}) {
+      if (change.first <= unix_s && (!last || change.first >= last->first)) last = change;
+    }
   }
-  std::stable_sort(changes.begin(), changes.end(),
-                   [](const auto& a, const auto& b) { return a.first < b.first; });
-  bool dst = false;
-  for (const auto& change : changes) {
-    if (change.first > unix_s) break;
-    dst = change.second;
-  }
-  return dst ? dst_east_ : std_east_;
+  return last && last->second ? dst_east_ : std_east_;
 }
 
 LocalTime TimeZone::ToLocal(int64_t unix_s) const {
