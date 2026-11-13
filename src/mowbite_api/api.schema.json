@@ -1539,7 +1539,7 @@
     },
     "event.CAMERA_CHANGED": {
       "additionalProperties": false,
-      "description": "A camera of camera.list can stream again, or no longer and why; viewers of a camera that no longer can were disconnected",
+      "description": "A camera of camera.list can stream again, or no longer and why, or streams with other protocols or at another size. Viewers of a camera that no longer can stream, and viewers over a protocol it no longer has, were disconnected; another size alone disconnects nobody",
       "properties": {
         "available": {
           "description": "Whether it can stream now",
@@ -1549,6 +1549,10 @@
           "description": "Its id in camera.list",
           "type": "string"
         },
+        "height": {
+          "description": "Height of the picture in pixels now",
+          "type": "integer"
+        },
         "id": {
           "description": "Random id of the event, 32 letters and digits",
           "type": "string"
@@ -1556,6 +1560,14 @@
         "message": {
           "description": "English text for the log, only with a reason",
           "type": "string"
+        },
+        "protocols": {
+          "description": "Its protocols now, as camera.list has them",
+          "items": {
+            "description": "One item",
+            "type": "string"
+          },
+          "type": "array"
         },
         "reason": {
           "description": "Why not, only while it is not available (x-reasons)",
@@ -1592,6 +1604,10 @@
         "type": {
           "const": "CAMERA_CHANGED",
           "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "width": {
+          "description": "Width of the picture in pixels now",
+          "type": "integer"
         }
       },
       "required": [
@@ -1600,6 +1616,9 @@
         "type",
         "camera_id",
         "available",
+        "protocols",
+        "width",
+        "height",
         "severity",
         "resume"
       ],
@@ -9272,11 +9291,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:23",
+  "$id": "urn:mowbite-os:api:24",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry.",
   "title": "MowBite OS app interface",
-  "x-api": 23,
+  "x-api": 24,
   "x-commands": {
     "docking.abort": {
       "action": "mower_logic:docking/abort_docking",
@@ -9867,7 +9886,7 @@
       "result": "#/$defs/calibration.start.result"
     },
     "camera.list": {
-      "description": "The cameras of the mower; CAMERA_CHANGED tells when one of them can stream again or no longer",
+      "description": "The cameras of the mower; CAMERA_CHANGED tells when one of them can stream again or no longer, or streams with other protocols or at another size",
       "node": "mowbite_camera",
       "offered": "with at least one camera",
       "params": "#/$defs/camera.list.params",

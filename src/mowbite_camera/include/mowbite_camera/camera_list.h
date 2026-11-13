@@ -45,9 +45,23 @@ struct CameraState {
   }
 };
 
+// What CAMERA_CHANGED tells of a camera besides its id: whether it can stream and how.
+struct CameraNews {
+  CameraState state;
+  std::vector<std::string> protocols;
+  uint32_t width = 0;
+  uint32_t height = 0;
+
+  bool operator==(const CameraNews& other) const {
+    return state == other.state && protocols == other.protocols && width == other.width && height == other.height;
+  }
+};
+
 struct CameraChange {
   std::string camera_id;
-  CameraState state;
+  CameraNews news;
+  // Protocols of the change before that this one lacks; their viewers are to be ended.
+  std::vector<std::string> dropped;
 };
 
 // An id the OS takes: a letter, then letters, digits and underscores, 32 at most. It is part of a topic, of urls
@@ -69,7 +83,7 @@ class CameraList {
   void ProcessEnded(const std::string& process, double t, bool down);
   // Why webrtc does not work now, a reason of the cameras with a few words; an empty reason: it works.
   void SetWebrtc(const std::string& reason, const std::string& detail);
-  // The cameras whose state is another one than at the last call, new ones among them.
+  // The cameras whose news differ from those of the last call, new ones among them.
   std::vector<CameraChange> TakeChanges();
 
   bool Empty() const {
@@ -97,8 +111,8 @@ class CameraList {
     CameraEntry entry;
     // When its last entry came.
     double reported = 0;
-    // The state TakeChanges gave last, none before the first one.
-    std::optional<CameraState> told;
+    // The news TakeChanges gave last, none before the first one.
+    std::optional<CameraNews> told;
   };
   struct Ended {
     double t = 0;

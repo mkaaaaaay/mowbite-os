@@ -267,7 +267,9 @@ second what `mowbite_camera` needs around it.
   `video_out` for the parameters of a camera node); a hardware encoder is loaded at run time like the other vendor
   libraries. Up to 1280 x 720 the stream stays at level 3.1, which the OS announces to the browser; a larger picture
   needs level 4.0. A camera can offer both protocols, `webrtc` first (`tron_side` and `tron_vision`: H.264 at 1280 x
-  720 for the RTSP client, JPEG for a subscriber, and only JPEG if the encoder fails). A camera with detections draws
+  720 for the RTSP client, JPEG for a subscriber, and only JPEG if the encoder fails). When its protocols or its size
+  change, it publishes its entry again: the OS tells the app (CAMERA_CHANGED) and ends the viewers of a protocol that
+  is gone. A camera with detections draws
   its boxes into the frame before the encoder takes it and runs the model on a thread of its own, so the stream does
   not wait for the NPU. A camera that sends JPEG, like a USB camera, is decoded scaled in the DCT into NV12 frames
   of the process (`dma_frames`, from a dma-buf heap, lines rounded up to whole macroblocks) that the encoder reads

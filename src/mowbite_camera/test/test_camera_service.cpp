@@ -104,7 +104,8 @@ TEST_F(CameraServiceTest, ListsTheCamerasAndTellsEachNewOne) {
   EXPECT_EQ(list.result[1]["protocols"], Json::parse(R"(["webrtc"])"));
   const std::vector<Json> events = Events();
   ASSERT_EQ(events.size(), 2u);
-  EXPECT_EQ(events[0], Json::parse(R"({"camera_id":"oa_left","available":true,"severity":"info","resume":"auto"})"));
+  EXPECT_EQ(events[0], Json::parse(R"({"camera_id":"oa_left","available":true,"protocols":["mjpeg"],"width":640,
+      "height":480,"severity":"info","resume":"auto"})"));
   EXPECT_EQ(events[1]["camera_id"], "stereo");
   EXPECT_EQ(service_.Processes(), (std::vector<std::string>{"vision", "stereo"}));
 
@@ -240,7 +241,7 @@ TEST_F(CameraServiceTest, RefusesWhileTheCameraCannotStream) {
   const std::vector<Json> events = Events();
   ASSERT_EQ(events.size(), 7u);
   EXPECT_EQ(events[3], Json::parse(R"({"camera_id":"oa_left","available":false,"reason":"TOO_HOT","message":"why",
-      "severity":"info","resume":"auto"})"));
+      "protocols":["mjpeg"],"width":640,"height":480,"severity":"info","resume":"auto"})"));
 }
 
 TEST_F(CameraServiceTest, ACameraThatCanNoLongerStreamLosesItsViewers) {
@@ -385,6 +386,41 @@ TEST_F(CameraServiceTest, AWebrtcCameraThatCanNoLongerStreamHasItsSessionsKicked
   EXPECT_EQ(effects.kick, std::vector<std::string>{"s1"});
   EXPECT_TRUE(effects.close.empty());
   EXPECT_TRUE(service_.WebrtcSessions().empty());
+}
+
+TEST_F(CameraServiceTest, AProtocolThatIsGoneLosesItsViewers) {
+  CameraEntry both = Obstacle();
+  both.protocols = {"webrtc", "mjpeg"};
+  both.source = "rtsp://127.0.0.1:8556/oa_left";
+  both.width = 1280;
+  both.height = 720;
+  service_.OnCamera(both);
+  ASSERT_EQ(Reader("oa_left", TokenOf(Call("camera.stream", {{"id", "oa_left"}, {"protocol", "webrtc"}})), "s1").status,
+            200);
+  ASSERT_EQ(View("oa_left", TokenOf(Call("camera.stream", {{"id", "oa_left"}, {"protocol", "mjpeg"}})), 7).status,
+            200);
+  Events();
+
+  CameraEntry jpeg = Obstacle();
+  service_.OnCamera(jpeg);
+  Effects effects = service_.TakeEffects();
+  ASSERT_EQ(effects.events.size(), 1u);
+  EXPECT_EQ(effects.events[0], Json::parse(R"({"camera_id":"oa_left","available":true,"protocols":["mjpeg"],
+      "width":640,"height":480,"severity":"info","resume":"auto"})"));
+  EXPECT_EQ(effects.kick, std::vector<std::string>{"s1"});
+  EXPECT_TRUE(effects.close.empty());
+  EXPECT_TRUE(service_.WebrtcSessions().empty());
+  EXPECT_EQ(service_.MjpegCameras(), std::vector<std::string>{"oa_left"});
+
+  // Another size alone ends nobody.
+  jpeg.width = 320;
+  jpeg.height = 240;
+  service_.OnCamera(jpeg);
+  ASSERT_EQ(Events().size(), 1u);
+  effects = service_.TakeEffects();
+  EXPECT_TRUE(effects.kick.empty());
+  EXPECT_TRUE(effects.close.empty());
+  EXPECT_EQ(service_.MjpegCameras(), std::vector<std::string>{"oa_left"});
 }
 
 TEST_F(CameraServiceTest, OnlyTheNodeMayUseTheApiOfTheStreamServer) {

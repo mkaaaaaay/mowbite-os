@@ -680,7 +680,8 @@ const std::vector<Method>& Methods() {
                                 Number("seconds", "s", "How long it plays")}))}),
        kSoundOffered},
       {"camera.list", "mowbite_camera",
-       "The cameras of the mower; CAMERA_CHANGED tells when one of them can stream again or no longer", NoParams(),
+       "The cameras of the mower; CAMERA_CHANGED tells when one of them can stream again or no longer, or streams "
+       "with other protocols or at another size", NoParams(),
        Rows("result", "A camera, in the order they first reported",
             {Text("id", "Its id for camera.stream"), Text("name", "Its name to show"),
              Text("kind", "What it is for: obstacle, stereo, rear or another kind of the platform"),

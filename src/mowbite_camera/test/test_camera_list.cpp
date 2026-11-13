@@ -119,7 +119,7 @@ TEST(CameraList, EveryNewStateIsAChangeOnce) {
   std::vector<CameraChange> changes = list.TakeChanges();
   ASSERT_EQ(changes.size(), 1u);
   EXPECT_EQ(changes[0].camera_id, "oa_left");
-  EXPECT_TRUE(changes[0].state.available);
+  EXPECT_TRUE(changes[0].news.state.available);
   EXPECT_TRUE(list.TakeChanges().empty());
   ASSERT_TRUE(list.Update(Obstacle(), 2, &problem));
   EXPECT_TRUE(list.TakeChanges().empty());
@@ -130,7 +130,52 @@ TEST(CameraList, EveryNewStateIsAChangeOnce) {
   ASSERT_TRUE(list.Update(entry, 3, &problem));
   changes = list.TakeChanges();
   ASSERT_EQ(changes.size(), 1u);
-  EXPECT_EQ(changes[0].state, (CameraState{false, "SELF_TEST", ""}));
+  EXPECT_EQ(changes[0].news.state, (CameraState{false, "SELF_TEST", ""}));
+}
+
+TEST(CameraList, OtherProtocolsOrAnotherSizeAreAChange) {
+  CameraList list;
+  std::string problem;
+  CameraEntry entry = Obstacle();
+  entry.protocols = {"webrtc", "mjpeg"};
+  entry.source = "rtsp://127.0.0.1:8556/oa_left";
+  ASSERT_TRUE(list.Update(entry, 1, &problem));
+  std::vector<CameraChange> changes = list.TakeChanges();
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes[0].news, (CameraNews{{true, "", ""}, {"webrtc", "mjpeg"}, 640, 480}));
+  EXPECT_TRUE(changes[0].dropped.empty());
+
+  // The source alone is no news.
+  entry.source = "rtsp://127.0.0.1:8557/oa_left";
+  ASSERT_TRUE(list.Update(entry, 2, &problem));
+  EXPECT_TRUE(list.TakeChanges().empty());
+
+  entry.protocols = {"mjpeg"};
+  entry.width = 320;
+  entry.height = 240;
+  ASSERT_TRUE(list.Update(entry, 3, &problem));
+  changes = list.TakeChanges();
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes[0].news, (CameraNews{{true, "", ""}, {"mjpeg"}, 320, 240}));
+  EXPECT_EQ(changes[0].dropped, (std::vector<std::string>{"webrtc"}));
+
+  entry.width = 640;
+  entry.height = 480;
+  ASSERT_TRUE(list.Update(entry, 4, &problem));
+  changes = list.TakeChanges();
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes[0].news.width, 640u);
+  EXPECT_TRUE(changes[0].dropped.empty());
+
+  // Another order of the same protocols is news, but drops none.
+  entry.protocols = {"webrtc", "mjpeg"};
+  ASSERT_TRUE(list.Update(entry, 5, &problem));
+  list.TakeChanges();
+  entry.protocols = {"mjpeg", "webrtc"};
+  ASSERT_TRUE(list.Update(entry, 6, &problem));
+  changes = list.TakeChanges();
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_TRUE(changes[0].dropped.empty());
 }
 
 TEST(CameraList, AProcessThatEndedGivesNoPictureUntilItReportsAgain) {
@@ -147,7 +192,7 @@ TEST(CameraList, AProcessThatEndedGivesNoPictureUntilItReportsAgain) {
   std::vector<CameraChange> changes = list.TakeChanges();
   ASSERT_EQ(changes.size(), 1u);
   EXPECT_EQ(changes[0].camera_id, "oa_left");
-  EXPECT_EQ(changes[0].state, (CameraState{false, "NO_SIGNAL", "process vision ended"}));
+  EXPECT_EQ(changes[0].news.state, (CameraState{false, "NO_SIGNAL", "process vision ended"}));
   EXPECT_TRUE(list.State("stereo").available);
   list.ProcessEnded("vision", 11, false);
   EXPECT_TRUE(list.TakeChanges().empty());
@@ -155,7 +200,7 @@ TEST(CameraList, AProcessThatEndedGivesNoPictureUntilItReportsAgain) {
   ASSERT_TRUE(list.Update(Obstacle(), 13, &problem));
   changes = list.TakeChanges();
   ASSERT_EQ(changes.size(), 1u);
-  EXPECT_TRUE(changes[0].state.available);
+  EXPECT_TRUE(changes[0].news.state.available);
 
   list.ProcessEnded("vision", 20, true);
   EXPECT_EQ(list.State("oa_left"), (CameraState{false, "NO_SIGNAL", "process vision ended and stays down"}));
@@ -187,7 +232,7 @@ TEST(CameraList, WithoutTheStreamServerACameraWithOnlyWebrtcCannotStream) {
   std::vector<CameraChange> changes = list.TakeChanges();
   ASSERT_EQ(changes.size(), 1u);
   EXPECT_EQ(changes[0].camera_id, "stereo");
-  EXPECT_EQ(changes[0].state, (CameraState{false, "NOT_SET_UP", "stream server missing"}));
+  EXPECT_EQ(changes[0].news.state, (CameraState{false, "NOT_SET_UP", "stream server missing"}));
   EXPECT_TRUE(list.State("oa_left").available);
 
   // What the camera says itself comes first.

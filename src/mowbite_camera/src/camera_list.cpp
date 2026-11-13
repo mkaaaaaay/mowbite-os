@@ -126,10 +126,18 @@ CameraState CameraList::StateOf(const Camera& camera) const {
 std::vector<CameraChange> CameraList::TakeChanges() {
   std::vector<CameraChange> changes;
   for (Camera& camera : cameras_) {
-    CameraState state = StateOf(camera);
-    if (camera.told == state) continue;
-    camera.told = state;
-    changes.push_back({camera.entry.id, std::move(state)});
+    CameraNews news = {StateOf(camera), camera.entry.protocols, camera.entry.width, camera.entry.height};
+    if (camera.told == news) continue;
+    std::vector<std::string> dropped;
+    if (camera.told) {
+      for (const std::string& protocol : camera.told->protocols) {
+        if (std::find(news.protocols.begin(), news.protocols.end(), protocol) == news.protocols.end()) {
+          dropped.push_back(protocol);
+        }
+      }
+    }
+    camera.told = news;
+    changes.push_back({camera.entry.id, std::move(news), std::move(dropped)});
   }
   return changes;
 }

@@ -90,6 +90,10 @@ std::vector<Seat> Seats::DropCamera(const std::string& camera_id) {
   return Drop([&](const Seat& seat) { return seat.camera_id == camera_id; });
 }
 
+std::vector<Seat> Seats::DropCamera(const std::string& camera_id, const std::string& protocol) {
+  return Drop([&](const Seat& seat) { return seat.camera_id == camera_id && seat.protocol == protocol; });
+}
+
 std::vector<Seat> Seats::DropProtocol(const std::string& protocol) {
   return Drop([&](const Seat& seat) { return seat.protocol == protocol; });
 }

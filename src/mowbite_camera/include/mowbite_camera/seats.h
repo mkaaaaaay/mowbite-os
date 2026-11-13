@@ -57,9 +57,10 @@ class Seats {
   bool Release(const std::string& protocol, const std::string& connection);
   // Tokens nobody connected with in time give their place back.
   void Expire(double now);
-  // Frees the places of a camera, or of a protocol over all cameras. Returns those with a connection, which is to
-  // be ended.
+  // Frees the places of a camera, of one protocol of a camera, or of a protocol over all cameras. Returns those with
+  // a connection, which is to be ended.
   std::vector<Seat> DropCamera(const std::string& camera_id);
+  std::vector<Seat> DropCamera(const std::string& camera_id, const std::string& protocol);
   std::vector<Seat> DropProtocol(const std::string& protocol);
 
   const std::vector<Seat>& seats() const {

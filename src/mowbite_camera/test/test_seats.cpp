@@ -121,6 +121,19 @@ TEST(Seats, DroppingACameraOrAProtocolReturnsTheConnections) {
   EXPECT_TRUE(seats.seats().empty());
 }
 
+TEST(Seats, DroppingOneProtocolOfACameraKeepsItsOthers) {
+  Seats seats(Counting());
+  std::string a;
+  std::string b;
+  ASSERT_EQ(seats.Grant("front", "mjpeg", 0, &a), Seats::Granted::kOk);
+  ASSERT_EQ(seats.Grant("front", "webrtc", 0, &b), Seats::Granted::kOk);
+  ASSERT_TRUE(seats.Connect(b, "front", "webrtc", "session", 0));
+  const std::vector<Seat> dropped = seats.DropCamera("front", "webrtc");
+  ASSERT_EQ(dropped.size(), 1u);
+  EXPECT_EQ(dropped[0].connection, "session");
+  EXPECT_TRUE(seats.Waiting(a, "front", "mjpeg", 0));
+}
+
 TEST(Seats, SameTextComparesWholeTexts) {
   EXPECT_TRUE(SameText("", ""));
   EXPECT_TRUE(SameText("abc", "abc"));

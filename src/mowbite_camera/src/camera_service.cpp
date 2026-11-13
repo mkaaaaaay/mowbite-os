@@ -75,16 +75,27 @@ void CameraService::SetWebrtc(const std::string& reason, const std::string& deta
 
 void CameraService::CollectLocked() {
   for (const CameraChange& change : list_.TakeChanges()) {
-    Json details = {{"camera_id", change.camera_id}, {"available", change.state.available}};
-    if (!change.state.available) {
-      details["reason"] = change.state.reason;
-      if (!change.state.detail.empty()) details["message"] = change.state.detail;
+    const CameraState& state = change.news.state;
+    Json details = {{"camera_id", change.camera_id}, {"available", state.available}};
+    if (!state.available) {
+      details["reason"] = state.reason;
+      if (!state.detail.empty()) details["message"] = state.detail;
     }
+    details["protocols"] = change.news.protocols;
+    details["width"] = change.news.width;
+    details["height"] = change.news.height;
     details["severity"] = "info";
     details["resume"] = "auto";
     effects_.events.push_back(std::move(details));
-    if (change.state.available) continue;
-    for (const Seat& seat : seats_.DropCamera(change.camera_id)) {
+    std::vector<Seat> ended;
+    if (!state.available) {
+      ended = seats_.DropCamera(change.camera_id);
+    } else {
+      for (const std::string& protocol : change.dropped) {
+        for (Seat& seat : seats_.DropCamera(change.camera_id, protocol)) ended.push_back(std::move(seat));
+      }
+    }
+    for (const Seat& seat : ended) {
       if (seat.protocol == kMjpeg) {
         effects_.close.push_back(std::stoull(seat.connection));
       } else {

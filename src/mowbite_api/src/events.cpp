@@ -1267,11 +1267,15 @@ const std::vector<EventEntry>& Events() {
             {R("LOST", "warning", "auto"), R("RESTORED", "info", "auto"), R("REJECTED", "error", "user"),
              R("SOURCE_CHANGED", "warning", "auto")}),
       Event("CAMERA_CHANGED", "camera",
-            "A camera of camera.list can stream again, or no longer and why; viewers of a camera that no longer can "
-            "were disconnected",
+            "A camera of camera.list can stream again, or no longer and why, or streams with other protocols or at "
+            "another size. Viewers of a camera that no longer can stream, and viewers over a protocol it no longer "
+            "has, were disconnected; another size alone disconnects nobody",
             Notice({Text("camera_id", "Its id in camera.list", true), Bool("available", "Whether it can stream now"),
                     Text("reason", "Why not, only while it is not available (x-reasons)"),
-                    Text("message", "English text for the log, only with a reason")}),
+                    Text("message", "English text for the log, only with a reason"),
+                    Names("protocols", "Its protocols now, as camera.list has them"),
+                    Integer("width", "", "Width of the picture in pixels now", true),
+                    Integer("height", "", "Height of the picture in pixels now", true)}),
             CameraReasons(true), "info", "auto"),
       Event("METHODS_CHANGED", "bridge",
             "rpc.methods lists other methods than before: the changes of one second together, also those of the start",

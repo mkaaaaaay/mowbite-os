@@ -402,16 +402,22 @@ TEST(Catalog, ReasonsOfTheCameras) {
   EXPECT_STREQ(RateReason("CAMERA_REFUSED", "LOCKED_AFTER_CRASH").severity, "warning");
 
   // The events as the camera node and the bridge send them.
-  EXPECT_TRUE(CheckEvent("CAMERA_CHANGED", Json{{"camera_id", "stereo"}, {"available", true}, {"severity", "info"},
-                                                {"resume", "auto"}}).empty());
-  EXPECT_TRUE(CheckEvent("CAMERA_CHANGED",
-                         Json{{"camera_id", "stereo"}, {"available", false}, {"reason", "TOO_HOT"},
+  const Json offer = {{"protocols", {"webrtc", "mjpeg"}}, {"width", 1280}, {"height", 720}};
+  const auto camera_changed = [&offer](Json details) {
+    details.update(offer);
+    return CheckEvent("CAMERA_CHANGED", details);
+  };
+  EXPECT_TRUE(camera_changed({{"camera_id", "stereo"}, {"available", true}, {"severity", "info"}, {"resume", "auto"}})
+                  .empty());
+  EXPECT_TRUE(camera_changed({{"camera_id", "stereo"}, {"available", false}, {"reason", "TOO_HOT"},
                               {"message", "Stereo camera: TOO_HOT (SoC 81 C)"}, {"severity", "info"},
                               {"resume", "auto"}}).empty());
-  EXPECT_FALSE(CheckEvent("CAMERA_CHANGED", Json{{"camera_id", "stereo"}, {"available", false},
-                                                 {"reason", "CAMERA_BUSY"}, {"severity", "info"},
-                                                 {"resume", "auto"}}).empty());
-  EXPECT_FALSE(CheckEvent("CAMERA_CHANGED", Json{{"id", "stereo"}, {"available", true}, {"severity", "info"},
+  EXPECT_FALSE(camera_changed({{"camera_id", "stereo"}, {"available", false}, {"reason", "CAMERA_BUSY"},
+                               {"severity", "info"}, {"resume", "auto"}}).empty());
+  EXPECT_FALSE(camera_changed({{"id", "stereo"}, {"available", true}, {"severity", "info"}, {"resume", "auto"}})
+                   .empty());
+  // How it streams is always there.
+  EXPECT_FALSE(CheckEvent("CAMERA_CHANGED", Json{{"camera_id", "stereo"}, {"available", true}, {"severity", "info"},
                                                  {"resume", "auto"}}).empty());
   EXPECT_TRUE(CheckEvent("METHODS_CHANGED", Json{{"added", {"camera.list", "camera.stream"}},
                                                  {"removed", Json::array()}, {"severity", "info"},

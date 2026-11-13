@@ -57,6 +57,8 @@ sys.exit(3)
 # camera.list for the camera of this test while it can stream.
 LISTED = {"id": "front", "name": "Front camera", "kind": "obstacle", "position": "front", "width": 640, "height": 480,
           "detections": True, "protocols": ["mjpeg"], "available": True}
+# What CAMERA_CHANGED tells of how the camera streams.
+OFFER = {"protocols": ["mjpeg"], "width": 640, "height": 480}
 METHODS = ["camera.list", "camera.stream"]
 PICTURE_BYTES = 20000
 
@@ -291,8 +293,8 @@ class TestCamera(unittest.TestCase):
         self.assertEqual((sorted(changed["added"]), changed["removed"]), (METHODS, []))
         self.assertTrue(set(METHODS) <= set(self.rpc("rpc.methods")["result"]))
         self.assertEqual(self.wait_event("CAMERA_CHANGED", before),
-                         {"type": "CAMERA_CHANGED", "camera_id": "front", "available": True, "severity": "info",
-                          "resume": "auto"})
+                         {"type": "CAMERA_CHANGED", "camera_id": "front", "available": True, **OFFER,
+                          "severity": "info", "resume": "auto"})
         self.assertEqual(self.rpc("camera.list")["result"], [LISTED])
 
     def test_2_a_viewer_gets_the_pictures_of_its_token(self):
@@ -352,7 +354,7 @@ class TestCamera(unittest.TestCase):
         self.report(False, Camera.REASON_TOO_HOT, "SoC 81 C")
         self.assertEqual(self.wait_event("CAMERA_CHANGED", before),
                          {"type": "CAMERA_CHANGED", "camera_id": "front", "available": False, "reason": "TOO_HOT",
-                          "message": "SoC 81 C", "severity": "info", "resume": "auto"})
+                          "message": "SoC 81 C", **OFFER, "severity": "info", "resume": "auto"})
         self.assertTrue(self.viewer.wait_closed(), "the viewer stayed connected")
         self.assertTrue(self.wait_until(lambda: self.subscribers == 0), "the picture topic is still subscribed")
         self.assertEqual(self.rpc("camera.list")["result"],
@@ -376,7 +378,7 @@ class TestCamera(unittest.TestCase):
         open(END_FILE, "w").close()
         self.assertEqual(self.wait_event("CAMERA_CHANGED", before),
                          {"type": "CAMERA_CHANGED", "camera_id": "front", "available": False, "reason": "NO_SIGNAL",
-                          "message": f"process {PROCESS} ended", "severity": "info", "resume": "auto"})
+                          "message": f"process {PROCESS} ended", **OFFER, "severity": "info", "resume": "auto"})
         self.assertTrue(self.viewer.wait_closed(), "the viewer stayed connected")
         with open(os.path.join(DATA_DIR, f"{PROCESS}_exit.json")) as f:
             note = json.load(f)
