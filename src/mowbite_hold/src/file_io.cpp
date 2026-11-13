@@ -52,9 +52,13 @@ FileRead ReadSmallFile(const std::string& path, size_t max_bytes, std::string* t
   return text->size() > max_bytes ? FileRead::kTooLarge : FileRead::kText;
 }
 
-bool WriteFileAtomic(const std::string& path, const std::string& text, std::string* error) {
+namespace {
+
+bool WriteAtomic(const std::string& path, const std::string& text, std::string* error, mode_t mode) {
   const std::string temp = path + ".tmp";
-  const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+  // A temp file left over keeps its mode under O_TRUNC.
+  ::unlink(temp.c_str());
+  const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
   if (fd < 0) {
     *error = "cannot write " + temp + ": " + std::strerror(errno);
     return false;
@@ -85,6 +89,23 @@ bool WriteFileAtomic(const std::string& path, const std::string& text, std::stri
   }
   SyncFolder(path);
   return true;
+}
+
+bool MakeFolder(const std::string& path, std::string* error) {
+  std::error_code ec;
+  std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+  if (ec) *error = "cannot create the folder of " + path + ": " + ec.message();
+  return !ec;
+}
+
+}  // namespace
+
+bool WriteFileAtomic(const std::string& path, const std::string& text, std::string* error) {
+  return WriteAtomic(path, text, error, 0644);
+}
+
+bool WriteFileOwnerOnly(const std::string& path, const std::string& text, std::string* error) {
+  return MakeFolder(path, error) && WriteAtomic(path, text, error, 0600);
 }
 
 bool WriteFileSafely(const std::string& path, const std::string& text, std::string* error) {

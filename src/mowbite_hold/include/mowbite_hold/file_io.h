@@ -14,6 +14,8 @@ FileRead ReadSmallFile(const std::string& path, size_t max_bytes, std::string* t
 bool WriteFileAtomic(const std::string& path, const std::string& text, std::string* error);
 // As WriteFileAtomic, in a folder made when missing.
 bool WriteFileSafely(const std::string& path, const std::string& text, std::string* error);
+// As WriteFileSafely, readable and writable by the owner alone (0600), also when it was open to others before.
+bool WriteFileOwnerOnly(const std::string& path, const std::string& text, std::string* error);
 // Removes it and syncs the folder; a file that is not there counts as removed.
 bool RemoveFileSynced(const std::string& path, std::string* error);
 
