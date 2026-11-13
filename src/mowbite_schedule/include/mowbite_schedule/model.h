@@ -24,13 +24,13 @@ struct Plan {
   int time = 0;                    // minutes of the local day
   std::vector<std::string> areas;  // in order; empty: every mowing area
   std::optional<int> end;          // minutes of the local day; not after time: on the next day
-  bool dark = false;               // may start and mow in the dark
-  bool sunset = false;             // with dark: home at sunset all the same
-  bool fresh = false;              // begins a new job instead of carrying on the open one
+  bool dark = false;               // also allowed outside daylight
+  bool sunset = false;             // with dark: still docks when the sun sets
+  bool fresh = false;              // restart: a job of its own, the open one is dropped
   std::optional<double> angle_offset_deg;
 };
 
-// No starts up to and including until; for every area or the ones listed.
+// Paused through the date until, over all areas or the listed ones.
 struct Pause {
   Date until;
   std::optional<std::vector<std::string>> areas;

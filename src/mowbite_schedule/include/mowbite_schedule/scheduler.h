@@ -80,7 +80,7 @@ struct RunRequest {
   bool restart = false;
   std::optional<double> angle_offset_deg;
   bool dark_allowed = false;  // starts and mows in the dark
-  bool until_sunset = true;   // home at the first sunset
+  bool until_sunset = true;   // docks at the next sunset
   int64_t end_in_s = 0;       // home after this long; 0: no end
 };
 
