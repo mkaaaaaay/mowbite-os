@@ -78,12 +78,84 @@ RUN --mount=type=bind,from=app,target=/src/app --mount=type=bind,source=host,tar
            --min-app "$(cat /tmp/min_app)" --api-schema /tmp/api.schema.json; \
     fi
 
+# The compiler for an arm64 image built on an amd64 machine: the programs of Ubuntu's cross GCC and binutils with the
+# libraries they load, under /cross. They belong to the build machine, so inside the emulated build stage the kernel
+# runs them directly. Only programs come from here: where the cross compiler looks for its headers, start files and
+# libraries, links lead to those of the image, the ones the emulated compiler uses. Likewise the Python interpreter
+# with its standard library under /cross/opt/cross-python, for the rosidl code generators of the image. Empty otherwise.
+FROM --platform=$BUILDPLATFORM ros:${ROS_DISTRO}-ros-base AS cross
+ARG BUILDARCH
+ARG TARGETARCH
+RUN mkdir /cross \
+ && if [ "$BUILDARCH" = amd64 ] && [ "$TARGETARCH" = arm64 ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends g++-aarch64-linux-gnu \
+      && v=$(aarch64-linux-gnu-gcc -dumpversion) \
+      && py=$(readlink -f /usr/bin/python3) \
+      && mkdir -p /cross/usr/bin /cross/usr/lib/x86_64-linux-gnu /cross/usr/lib64 /cross/usr/libexec \
+           /cross/usr/aarch64-linux-gnu/include/c++ /cross/usr/include/c++/$v /cross/opt/cross-python/bin \
+           /cross/opt/cross-python/lib \
+      && cp -a /usr/bin/aarch64-linux-gnu-* /cross/usr/bin/ \
+      && cp -a /usr/libexec/gcc-cross /cross/usr/libexec/ \
+      && cp -a /usr/aarch64-linux-gnu/bin /cross/usr/aarch64-linux-gnu/ \
+      && cp -L /lib64/ld-linux-x86-64.so.2 /cross/usr/lib64/ \
+      && cp "$py" /cross/opt/cross-python/bin/ \
+      && ln -s "${py##*/}" /cross/opt/cross-python/bin/python3 \
+      && cp -a /usr/lib/"${py##*/}" /cross/opt/cross-python/lib/ \
+      && rm -rf /cross/opt/cross-python/lib/"${py##*/}"/config-* \
+      && for f in /usr/bin/aarch64-linux-gnu-* $(find /usr/libexec/gcc-cross -type f) "$py" \
+             /usr/lib/"${py##*/}"/lib-dynload/*.so; do \
+           ldd "$f" 2> /dev/null | awk '$3 ~ "^/" { print $3 }'; \
+         done | sort -u | xargs cp -L -t /cross/usr/lib/x86_64-linux-gnu/ \
+      && ln -s gcc /cross/usr/lib/gcc-cross \
+      && ln -s /usr/include/c++/$v /cross/usr/aarch64-linux-gnu/include/c++/$v \
+      && ln -s ../../aarch64-linux-gnu/c++/$v /cross/usr/include/c++/$v/aarch64-linux-gnu; \
+    fi
+
 FROM ros:${ROS_DISTRO}-ros-base AS build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libpaho-mqttpp-dev libpaho-mqtt-dev nlohmann-json3-dev libssl-dev libeigen3-dev zlib1g-dev libasound2-dev \
       libturbojpeg0-dev git ccache \
  && rm -rf /var/lib/apt/lists/*
+
+# On an amd64 build machine the compiler and binutils of the stage cross replace the emulated ones of the same
+# versions, under the same names; the build stops if the version lines differ.
+RUN --mount=type=bind,from=cross,source=/cross,target=/cross \
+    if [ -d /cross/usr ]; then \
+      emulated="$(c++ --version | head -n 1), $(ld --version | head -n 1)" \
+      && cp -a /cross/usr/. /usr/ \
+      && if [ ! -e /lib64 ]; then ln -s usr/lib64 /lib64; fi \
+      && direct="$(c++ --version | head -n 1), $(ld --version | head -n 1)" \
+      && echo "emulated: $emulated" && echo "direct:   $direct" \
+      && if [ "$emulated" != "$direct" ]; then echo "the compiler of the stage cross differs" >&2; exit 1; fi; \
+    fi
+
+# No Rust bindings: rosidl generates for every package in this index group, and nothing here uses Rust.
+RUN rm -f /opt/ros/$ROS_DISTRO/share/ament_index/resource_index/rosidl_generator_packages/rosidl_generator_rs
+
+# On an amd64 build machine the rosidl code generators run in the Python of the stage cross, which has to be the
+# version of the image's: docker/rosidl_cross.py takes the place of each generator script (the generators and
+# typesupports of the ament index) and of the module rosidl_adapter, and runs the original, renamed to *.native.
+RUN --mount=type=bind,from=cross,source=/cross,target=/cross \
+    --mount=type=bind,source=docker/rosidl_cross.py,target=/tmp/rosidl_cross.py \
+    if [ -d /cross/opt/cross-python ]; then \
+      cp -a /cross/opt/cross-python /opt/ \
+      && v='import sys; print(tuple(sys.version_info))' \
+      && emulated=$(python3 -c "$v") && direct=$(/opt/cross-python/bin/python3 -I -S -c "$v") \
+      && echo "python emulated: $emulated, direct: $direct" \
+      && if [ "$emulated" != "$direct" ]; then echo "the Python of the stage cross differs" >&2; exit 1; fi \
+      && index=/opt/ros/$ROS_DISTRO/share/ament_index/resource_index lib=/opt/ros/$ROS_DISTRO/lib \
+      && for f in $(find $index/rosidl_generator_packages -mindepth 1 -printf "$lib/%f/%f\n" \
+                    && find $index/rosidl_typesupport_c $index/rosidl_typesupport_cpp -maxdepth 1 \
+                         -printf "$lib/%f/%f\n") \
+           $lib/python3*/site-packages/rosidl_adapter/__main__.py; do \
+           cp -a "$f" "$f.native" && cat /tmp/rosidl_cross.py > "$f" && echo "direct: $f" || exit 1; \
+         done; \
+    fi
+
+# Fixed hash seed: the generators collect includes in sets, so their output and the compiler cache stay stable.
+ENV PYTHONHASHSEED=0
 
 # Compilers at once: BUILD_WORKERS packages with BUILD_JOBS jobs each.
 ARG BUILD_WORKERS=2
