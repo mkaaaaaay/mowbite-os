@@ -1,0 +1,8 @@
+# The schedule leaves areas out of its own running run from now on (a pause); empty area_ids: all of them. Refused for
+# another run_id and for runs started by hand.
+
+string run_id
+string[] area_ids
+---
+bool accepted
+string message

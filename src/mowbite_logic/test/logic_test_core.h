@@ -66,6 +66,9 @@ class TestCore : public LogicCore {
   std::optional<std::string> TakeCheckpoint() {
     return Last<Checkpoint>([](const Checkpoint& checkpoint) { return checkpoint.text; });
   }
+  std::vector<RunChanged> TakeRuns() {
+    return Take<RunChanged>();
+  }
   std::vector<std::string> TakeNotices() {
     std::vector<std::string> lines;
     for (auto& notice : Take<Notice>()) lines.push_back(std::move(notice.line));

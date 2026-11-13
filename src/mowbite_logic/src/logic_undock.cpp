@@ -31,6 +31,7 @@ void LogicCore::BeginDockCheck(DockCheck purpose) {
 }
 
 void LogicCore::CheckDockBeforeDrive(double x, double y) {
+  CommandCancels();
   drive_x_ = x;
   drive_y_ = y;
   BeginDockCheck(DockCheck::kDrive);
@@ -51,7 +52,9 @@ Reason LogicCore::OnDockCheck(bool ok, double x, double y, float accuracy, const
   if (why.empty() && !DockContact()) {
     why = Reason("NO_DOCK_CONTACT", "The contact with the docking station ended during the reference check");
   }
-  if (why.empty()) why = purpose == DockCheck::kMowing ? StartProblem(start_request_.tasks) : DriveProblem();
+  if (why.empty() && purpose == DockCheck::kMowing) why = Busy();
+  if (why.empty() && purpose == DockCheck::kMowing) why = HoldProblem();
+  if (why.empty()) why = purpose == DockCheck::kMowing ? RequestMowProblem(start_request_) : DriveProblem();
   if (why.empty() && !ok) why = Reason("NO_POSITION", message.empty() ? "No answer from the localization" : message);
   if (why.empty() && !(accuracy <= DockAccuracyLimit())) {
     why = AccuracyReason(accuracy, DockAccuracyLimit());
@@ -87,6 +90,8 @@ Reason LogicCore::OnDockCheck(bool ok, double x, double y, float accuracy, const
   }
   if (purpose == DockCheck::kMowing) {
     RefuseStart(why);
+    RunEnds("REFUSED", why.code);
+    FinishRun();
   } else {
     RefuseDrive(why);
   }
@@ -114,6 +119,7 @@ void LogicCore::StartUndocking(DockCheck purpose, double x, double y) {
     Replace(PlanUndock(undock_x_, undock_y_, undock_heading_, config_.undock));
   }
   SetState(State::kUndocking);
+  if (purpose == DockCheck::kMowing) SetRunPhase(RunPhase::kUndocking);
 }
 
 bool LogicCore::Undocking() const {
@@ -184,6 +190,8 @@ void LogicCore::EndUndocking(const std::optional<Reason>& failure, const Reason&
     json details = json::object();
     PutReason(&details, "UNDOCKING_FAILED", *failure);
     AddEvent("UNDOCKING_FAILED", std::move(details));
+    // No second try of the schedule after it ((7a), G15).
+    RunEnds("UNDOCKING_FAILED", failure->code);
   }
   if (!failure) Notify("Undocking stopped: " + why.message);
   UndockOutcome outcome;
@@ -207,12 +215,13 @@ void LogicCore::Undocked() {
   outcome.for_drive = undock_for_ == DockCheck::kDrive;
   undock_for_ = DockCheck::kNone;
   // On like a start away from the station; what changed meanwhile comes first.
-  outcome.why = outcome.for_drive ? MoveProblem() : MowProblem(start_request_.tasks);
+  outcome.why = outcome.for_drive ? MoveProblem() : RequestMowProblem(start_request_);
   if (!outcome.why.empty()) {
     if (outcome.for_drive) {
       RefuseDrive(outcome.why);
     } else {
       RefuseStart(outcome.why);
+      RunEnds("REFUSED", outcome.why.code);
     }
     SetState(State::kIdle);
   } else if (outcome.for_drive) {

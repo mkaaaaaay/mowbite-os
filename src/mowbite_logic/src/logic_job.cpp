@@ -61,6 +61,7 @@ void LogicCore::StartMowing() {
   }
   // A job not begun takes the list as asked: one that names every area does not grow with the map.
   if (!job_.Unfinished()) job_.SetTasks(request.tasks);
+  job_.SetPassOver(request.pass_over);
   // Planned anew on every start, the map may have changed; the fingerprint keeps the place if the plan is the same.
   job_.Restore(job_.progress());
   leg_ = Leg::kNone;
@@ -68,6 +69,7 @@ void LogicCore::StartMowing() {
   planner_silent_ = 0;
   announced_area_.clear();
   SetState(State::kMowing);
+  SetRunPhase(RunPhase::kMowing);
   sunset_try_ = true;
   CheckpointNow();
 }
@@ -81,7 +83,7 @@ void LogicCore::ApplySkips() {
   if (skip_area_) {
     if (const JobArea* area = job_.CurrentArea()) {
       json details = {{"area_id", area->id}, {"area_name", area->name}};
-      PutReason(&details, "AREA_SKIPPED", Reason("MANUAL", "Skipped by the app"));
+      PutReason(&details, "AREA_SKIPPED", skip_why_);
       AddEvent("AREA_SKIPPED", std::move(details));
     }
     job_.SkipArea();
@@ -99,6 +101,7 @@ void LogicCore::ApplySkips() {
     CheckpointNow();
   }
   skip_area_ = skip_path_ = false;
+  skip_why_ = Reason();
   skip_client_.clear();
   client_ = client;
 }
@@ -137,6 +140,11 @@ void LogicCore::Unpause(int why) {
 void LogicCore::EndJob(bool finished, bool home, const Reason& why) {
   if (state_ != State::kMowing) return;
   if (finished) {
+    RunEnds("JOB_COMPLETE");
+  } else if (!why.empty()) {
+    RunEnds(why.code, why.fields.value("detail", ""));
+  }
+  if (finished) {
     AddEvent("JOB_COMPLETE", json::object());
     job_.Complete();
   }
@@ -153,7 +161,10 @@ JobStep LogicCore::NextJobStep(double now_s) {
   if (state_ != State::kMowing || pause_ != 0 || emergency_ || leg_ != Leg::kNone) return step;
   if (!job_.HasPlan()) {
     std::string notice;
-    if (!job_.SeekArea(&notice)) {
+    std::vector<JobArea> passed;
+    const bool found = job_.SeekArea(&notice, &passed);
+    AreasPassedOver(passed);
+    if (!found) {
       if (!notice.empty()) Notify(notice);
       EndJob(true, true);
       return step;

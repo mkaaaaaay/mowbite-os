@@ -282,10 +282,19 @@ struct Notice {
 struct Checkpoint {
   std::string text;
 };
+// The phases of a run of the schedule, numbered as in mowbite_msgs/RunStatus.
+enum class RunPhase : uint8_t { kNone = 0, kAnnouncing, kChecking, kUndocking, kMowing, kEnded };
+// logic/run: the run of the schedule is in a new phase; with kEnded how it ended (end_code, detail).
+struct RunChanged {
+  std::string run_id;
+  RunPhase phase = RunPhase::kNone;
+  std::string end_code;
+  std::string detail;
+};
 // The index of a type is its number in the journal: new ones only at the end.
 using Effect = std::variant<DriveCancel, StopRequest, CalibrationCancel, ChargeOff, ChargeOn, ReferenceCheck,
                             UndockPath, UndockOutcome, CalibrationGoal, MapEdit, Event, ReasonChange, ActionsChanged,
-                            Notice, Checkpoint>;
+                            Notice, Checkpoint, RunChanged>;
 
 // When the node carries an effect out in its step: what halts first, then (after os-session.json) what acts, among
 // it what starts a motion, and last what is written or published.
@@ -363,6 +372,32 @@ constexpr double kSkippedPathPiece = 2.0;
 
 // Whether the planner gave no answer: PLANNER_TIMEOUT or PLANNER_MISSING.
 bool PlannerSilent(const Reason& why);
+
+// A start of a plan of the schedule (mowbite_msgs/StartRun).
+struct ScheduleRun {
+  std::string run_id;
+  // The list of the plan in order, the job it names; empty: every mowing area.
+  std::vector<std::string> area_ids;
+  // Paused or not on the map: this run leaves them out, the job keeps them.
+  std::vector<std::string> pass_over;
+  bool restart = false;
+  bool has_angle = false;
+  double angle_offset_deg = 0;
+  bool dark_allowed = false;
+  // Home at the next sunset.
+  bool until_sunset = true;
+  // Home this long (s) after the start; 0: no end.
+  int64_t end_in_s = 0;
+};
+
+// s a start of the schedule is announced (S7) before the logic checks again and leaves the station.
+constexpr double kAnnounceS = 10.0;
+
+// s before the next start of the schedule within which no update hold is granted.
+constexpr int64_t kHoldBeforeStartS = 1800;
+// Whether the next start of the schedule (unix s, 0 for none) keeps a hold from being granted at now (unix s): within
+// kHoldBeforeStartS of it, or once it is due.
+bool StartBlocksHold(int64_t next_start, int64_t now);
 
 // The app repeats teleop every 100 ms while the joystick is held and sends one zero when it is let go.
 constexpr double kTeleopQuietS = 1.0;
@@ -527,6 +562,20 @@ class LogicCore {
   void OnDatum(double latitude, double longitude);
   // The checkpoint read at the start.
   void RestoreJob(const JobProgress& progress);
+  // A plan of the schedule starts (S1, S3, S7): empty when its announcement began, else why not. INVALID (no event)
+  // for a list the logic does not take; any other refusal is MOWING_REFUSED with source schedule. Checked in this
+  // order: busy, hold, on the contacts (NOT_DOCKED), the clock (CLOCK_UNSAFE), the start problems of the areas left,
+  // without dark_allowed the sun (NO_POSITION without datum, DARK), then node_problem. kAnnounceS later (OnTick) the
+  // checks run again, then the reference check and undocking as for mowing.start. An emergency, a hold, leaving the
+  // contacts and any command to the logic cancel the announcement (SCHEDULE_START_CANCELED); the command then runs.
+  // logic/run (RunChanged) follows the run until the mower is idle again; nothing of it is kept over a restart (S5).
+  Reason StartRun(const ScheduleRun& run, const Reason& node_problem, double now_s);
+  // The schedule pauses areas of its run run_id while it mows, empty for all: empty when taken, else why not. The
+  // current area among them is skipped (AREA_SKIPPED SCHEDULE); with none left the run ends with SCHEDULE pause and
+  // the job stays open, going home as for a reason of HomeWatch, else idle where it is.
+  Reason DropTasks(const std::string& run_id, const std::vector<std::string>& area_ids);
+  // The angle of the lanes the running run of the schedule asks of the planner, none without.
+  std::optional<double> PlanAngle() const;
   // Why mowing of these areas (none for all) cannot start now, empty if it can.
   Reason StartProblem(const std::vector<std::string>& tasks = {}) const;
   // A start refused by the node (planner or follower missing): event MOWING_REFUSED.
@@ -742,11 +791,36 @@ class LogicCore {
   void Docked();
   // IDLE; a leg on its way stops with why.
   void EndDocking(const Reason& why);
-  // What a mowing.start asks for: the areas in order (none for all) and whether to begin anew.
+  // What a mowing.start asks for: the areas in order (none for all) and whether to begin anew; a start of the schedule
+  // also the areas it leaves out.
   struct StartRequest {
     std::vector<std::string> tasks;
     bool restart = false;
+    std::vector<std::string> pass_over;
   };
+  // The start problems of the areas of the request that are not passed over; NO_MOWING_AREA when none is left.
+  Reason RequestMowProblem(const StartRequest& request) const;
+  // Why a start of the schedule cannot go now (StartRun without node_problem), empty if it can.
+  Reason ScheduleProblem(const StartRequest& request, const ScheduleRun& run, double now_s) const;
+  // Why the list of a start of the schedule is not taken, empty if it is.
+  std::string InvalidRun(const ScheduleRun& run) const;
+  // The announcement ran out: checked again, then the reference check, or the refusal ends the run.
+  void EndAnnouncement(double now_s);
+  // An emergency, a hold or leaving the contacts cancels the announcement; a command cancels it with source rpc.
+  void WatchAnnouncement();
+  void CommandCancels();
+  void CancelAnnouncement(const std::string& source);
+  void SetRunPhase(RunPhase phase);
+  // How the run ends, the first word counts; FinishRun tells it (EMERGENCY or STOPPED without one) and drops the run.
+  void RunEnds(const std::string& code, const std::string& detail = "");
+  void FinishRun();
+  // Whether a run goes home at sunset: one of the schedule unless it may mow in the dark without until_sunset, one by
+  // hand with dock_at_sunset.
+  bool SunsetWanted() const;
+  // AREA_SKIPPED SCHEDULE for the areas the job passed over.
+  void AreasPassedOver(const std::vector<JobArea>& areas);
+  // The first deadline of the run that is due: the sunset, then the end of the plan; empty when none is.
+  Reason DeadlineDue(double now_s);
   // tasks and restart of mowing.start; the problem with them for -32602 and its field, empty if none. The request
   // is set only without a problem.
   std::string ReadStartRequest(const json& params, StartRequest* request, std::string* field) const;
@@ -886,6 +960,20 @@ class LogicCore {
   std::optional<double> gps_good_since_;
   // The rules of going home while mowing or calibrating.
   HomeWatch home_;
+  // The run of the schedule from StartRun until the mower is idle again: its request, phase, the end of the
+  // announcement and of the plan (monotonic s), whether that end came, and how it ends.
+  struct Run {
+    ScheduleRun request;
+    RunPhase phase = RunPhase::kNone;
+    double announce_until = 0;
+    std::optional<double> end_due;
+    bool end_passed = false;
+    std::string end_code;
+    std::string detail;
+  };
+  std::optional<Run> run_;
+  // Why the next skip of an area is made: MANUAL by the app, SCHEDULE for a pause of the schedule.
+  Reason skip_why_;
   // The sunset: the switch, the clock and the datum it needs, and the deadline of this run (monotonic s), due once
   // more after a start, a continue, a clock or a datum. sunset_told_: the first try of the run could not reckon it.
   bool sunset_on_ = false;

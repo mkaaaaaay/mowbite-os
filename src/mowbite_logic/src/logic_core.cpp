@@ -106,7 +106,7 @@ const char* EffectName(const Effect& effect) {
   static constexpr const char* kNames[] = {"DriveCancel",     "StopRequest",    "CalibrationCancel", "ChargeOff",
                                            "ChargeOn",        "ReferenceCheck", "UndockPath",        "UndockOutcome",
                                            "CalibrationGoal", "MapEdit",        "Event",             "ReasonChange",
-                                           "ActionsChanged",  "Notice",         "Checkpoint"};
+                                           "ActionsChanged",  "Notice",         "Checkpoint",        "RunChanged"};
   static_assert(std::size(kNames) == std::variant_size_v<Effect>, "a name for every effect");
   return kNames[effect.index()];
 }
@@ -117,7 +117,7 @@ EffectPhase PhaseOf(const Effect& effect) {
         using T = std::decay_t<decltype(value)>;
         if constexpr (kOneOf<T, DriveCancel, StopRequest, CalibrationCancel>) {
           return EffectPhase::kHalt;
-        } else if constexpr (kOneOf<T, Event, ReasonChange, ActionsChanged, Notice, Checkpoint>) {
+        } else if constexpr (kOneOf<T, Event, ReasonChange, ActionsChanged, Notice, Checkpoint, RunChanged>) {
           return EffectPhase::kRecord;
         } else {
           static_assert(
@@ -142,6 +142,7 @@ void LogicCore::OnHardwareStatus(const HardwareSnapshot& hw) {
     blades_running_ = running;
     AddEvent("BLADES", {{"enabled", running}});
   }
+  WatchAnnouncement();
 }
 
 void LogicCore::OnHardwareTimeout() {
@@ -150,6 +151,7 @@ void LogicCore::OnHardwareTimeout() {
   recorder_.SetDockContact(false);
   charge_watch_.OnBusy(false);
   UpdateEmergency();
+  WatchAnnouncement();
 }
 
 void LogicCore::OnPose(const PoseSnapshot& pose) {
@@ -234,6 +236,10 @@ std::string LogicCore::AddEvent(const std::string& type, json details) {
   if (!job_.progress().job_id.empty()) details["job_id"] = job_.progress().job_id;
   if (!session_id_.empty()) details["session_id"] = session_id_;
   if (!client_.empty() && !details.contains("client")) details["client"] = client_;
+  // Who released or asked names the source there.
+  if (run_ && !details.contains("source") && type != "EMERGENCY" && type != "EMERGENCY_RESET_REFUSED") {
+    details["source"] = "schedule";
+  }
   if (event_observer) event_observer(type, details);
   std::string id = NewId();
   effects_.push_back(Event{type, std::move(details), id});
@@ -311,10 +317,12 @@ ActionResult LogicCore::OnAction(const std::string& action_id) {
                             action_id.rfind(kRecordingPrefix + "/", 0) == 0 ||
                             action_id.rfind(kUndockingPrefix + "/", 0) == 0 ||
                             action_id.rfind(kDockingPrefix + "/", 0) == 0;
+  if (known_prefix) CommandCancels();
   return known_prefix ? ActionResult::kRejected : ActionResult::kUnknown;
 }
 
 CommandOutcome LogicCore::Command(const std::string& name, const json& params, const Reason& node_problem) {
+  CommandCancels();
   CommandOutcome out;
   const mowbite_api::Command* command = mowbite_api::FindCommand(name);
   if (!command) {
@@ -450,6 +458,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     }
     out->result[key] = now;
     (area ? skip_area_ : skip_path_) = true;
+    if (area) skip_why_ = Reason("MANUAL", "Skipped by the app");
     skip_client_ = client_;
     // A leg on its way ends first, its index counts.
     if (LegDrives()) {
@@ -574,6 +583,7 @@ Reason LogicCore::MoveProblem() const {
 }
 
 Reason LogicCore::StartDrive(double x, double y) {
+  CommandCancels();
   const Reason why = DriveProblem();
   if (!why.empty()) {
     RefuseDrive(why);
@@ -590,6 +600,7 @@ void LogicCore::BeginDrive(double x, double y) {
 }
 
 void LogicCore::RefuseDrive(const Reason& why) {
+  CommandCancels();
   json details = json::object();
   PutReason(&details, "DRIVE_REFUSED", why);
   AddEvent("DRIVE_REFUSED", std::move(details));
@@ -658,6 +669,8 @@ void LogicCore::SetState(State state) {
   if (state == State::kCalibrating) details["sub_state"] = "CALIBRATING";
   AddEvent("STATE", std::move(details));
   SetDue<ActionsChanged>(true);
+  // The run of the schedule ends once the mower is idle again after it left the station.
+  if (state == State::kIdle && run_ && run_->phase >= RunPhase::kUndocking) FinishRun();
 }
 
 std::string LogicCore::CurrentStateName() const {
@@ -807,171 +820,6 @@ std::vector<SensorReading> LogicCore::Readings() const {
   if (hw_.left.ok) readings.push_back({"om_left_esc_temp", static_cast<double>(hw_.left.temperature), ""});
   if (hw_.right.ok) readings.push_back({"om_right_esc_temp", static_cast<double>(hw_.right.temperature), ""});
   return readings;
-}
-
-void LogicCore::OnCalibrationStatus(const CalibrationStatus& status, double now_s) {
-  calibration_status_ = status;
-  calibration_status_s_ = now_s;
-}
-
-std::optional<CalibrationStatus> LogicCore::CalibrationStatusNow(double now_s) const {
-  if (!calibration_status_ || now_s - calibration_status_s_ > config_.calibration.status_timeout) return std::nullopt;
-  return calibration_status_;
-}
-
-std::vector<Reason> LogicCore::CalibrationProblems(double now_s) const {
-  std::vector<Reason> problems;
-  // One reason of each name; the first one found tells best.
-  const auto add = [&problems](const Reason& why) {
-    if (why.empty()) return;
-    for (const auto& known : problems) {
-      if (known.code == why.code) return;
-    }
-    problems.push_back(why);
-  };
-  add(Busy());
-  add(HoldProblem());
-  add(Unsafe());
-  if (DockContact()) add(Reason("ON_DOCK", "The mower is on the docking station: calibrate on the lawn"));
-  if (!pose_) {
-    add(Reason("NO_POSITION", "No position from the localization"));
-  } else {
-    const double limit = std::min(config_.calibration.max_position_accuracy, config_.max_position_accuracy);
-    if (!(pose_->position_accuracy <= limit)) {
-      Reason why = AccuracyReason(pose_->position_accuracy, limit);
-      why.message += " for a calibration";
-      add(why);
-    }
-    if (!pose_->orientation_valid) add(Reason("NO_HEADING", "The heading is not aligned yet"));
-  }
-  if (!hw_.battery_ok) {
-    add(Reason("BATTERY_LOW", "No battery level from the driver"));
-  } else if (hw_.battery_percentage < config_.calibration.min_battery) {
-    char text[120];
-    std::snprintf(text, sizeof(text), "Battery %d %%, at least %d %% for a calibration", hw_.battery_percentage,
-                  config_.calibration.min_battery);
-    add(Reason("BATTERY_LOW", text)
-            .With("battery_percentage", static_cast<int>(hw_.battery_percentage))
-            .With("limit", config_.calibration.min_battery));
-  }
-  add(drivable_problem_);
-  const auto status = CalibrationStatusNow(now_s);
-  if (!status) {
-    add(Reason("CALIBRATION_MISSING", "The calibration program is not running"));
-    return problems;
-  }
-  if (status->running && state_ != State::kCalibrating) {
-    add(Reason("STILL_STOPPING", "The last calibration drive is still stopping, try again in a moment"));
-  }
-  for (const auto& why : status->problems) add(why);
-  if (status->lane_length <= 0) add(Reason("NO_ROOM", "No room for a calibration drive here"));
-  return problems;
-}
-
-Reason LogicCore::StartCalibration(double now_s) {
-  const std::vector<Reason> problems = CalibrationProblems(now_s);
-  if (!problems.empty()) {
-    RefuseCalibration(problems.front());
-    return problems.front();
-  }
-  const CalibrationStatus status = *CalibrationStatusNow(now_s);
-  Replace(CalibrationGoal{status.heading, status.lane_length});
-  Drop<CalibrationCancel>();
-  calibration_sign_s_ = now_s;
-  calibration_phase_ = "start";
-  calibration_index_ = 0;
-  home_.Reset();
-  SetState(State::kCalibrating);
-  AddEvent("CALIBRATION", {{"phase", "start"}, {"index", 0}});
-  Notify("Calibration: lanes of " + Metres(status.lane_length) + " m, heading " +
-                     Degrees(status.heading) + " deg");
-  return {};
-}
-
-void LogicCore::RefuseCalibration(const Reason& why) {
-  json details = json::object();
-  PutReason(&details, "CALIBRATION_REFUSED", why);
-  AddEvent("CALIBRATION_REFUSED", std::move(details));
-}
-
-void LogicCore::OnCalibrationSign(double now_s) {
-  if (state_ == State::kCalibrating) calibration_sign_s_ = now_s;
-}
-
-void LogicCore::OnCalibrationFeedback(const std::string& phase, int index, double now_s) {
-  if (state_ != State::kCalibrating) return;
-  calibration_sign_s_ = now_s;
-  if (phase == calibration_phase_ && index == calibration_index_) return;
-  calibration_phase_ = phase;
-  calibration_index_ = index;
-  AddEvent("CALIBRATION", {{"phase", phase}, {"index", index}});
-}
-
-void LogicCore::OnCalibrationEnded(const CalibrationOutcome& outcome) {
-  if (state_ != State::kCalibrating) return;
-  if (outcome.reason == "DONE") {
-    AddEvent("CALIBRATED", {{"status", outcome.status},
-                            {"summary", outcome.summary},
-                            {"severity", outcome.status == "done" ? "info" : "warning"}});
-    Notify("Calibration done: " + outcome.summary);
-    EndCalibration(std::nullopt, false);
-    return;
-  }
-  // A program that ends without saying why counts as gone.
-  EndCalibration(Reason(outcome.reason.empty() ? "CALIBRATION_MISSING" : outcome.reason, outcome.message), false);
-}
-
-bool LogicCore::AbortCalibration(const Reason& why) {
-  if (state_ != State::kCalibrating) return false;
-  EndCalibration(why, true);
-  return true;
-}
-
-bool LogicCore::TickCalibration(double now_s) {
-  if (state_ != State::kCalibrating) return false;
-  const double quiet = now_s - calibration_sign_s_;
-  if (quiet > config_.calibration.timeout) {
-    char text[96];
-    std::snprintf(text, sizeof(text), "No sign of the calibration program for %.1f s", quiet);
-    EndCalibration(Reason("CALIBRATION_MISSING", text).With("seconds", quiet).With("limit", config_.calibration.timeout),
-                   true);
-    return true;
-  }
-  // The battery rules of mowing: a voltage dips under load.
-  home_.OnSample(HomeSampleOf(hw_, now_s));
-  const bool critical = home_.Holds(HomeReason::kBatteryCritical);
-  if (critical || home_.Holds(HomeReason::kBatteryLow)) {
-    const double voltage = critical ? hw_.battery_voltage : home_.WindowVoltage();
-    const double limit = critical ? config_.battery_critical_voltage : config_.battery_empty_voltage;
-    char text[160];
-    std::snprintf(text, sizeof(text), "Battery %.1f V is below %.1f V", voltage, limit);
-    EndCalibration(Reason("BATTERY_LOW", text).With("battery_voltage", voltage).With("limit", limit), true);
-    return true;
-  }
-  return false;
-}
-
-bool LogicCore::Calibrating() const {
-  return state_ == State::kCalibrating;
-}
-
-bool LogicCore::CalibrationActive() const {
-  return state_ == State::kCalibrating && !emergency_;
-}
-
-void LogicCore::EndCalibration(const std::optional<Reason>& failure, bool cancel) {
-  if (failure) {
-    json details = json::object();
-    PutReason(&details, "CALIBRATION_FAILED", *failure);
-    AddEvent("CALIBRATION_FAILED", std::move(details));
-    Notify("Calibration stopped: " + failure->message);
-  }
-  AddEvent("CALIBRATION", {{"phase", "end"}, {"index", calibration_index_}});
-  if (cancel) SetDue<CalibrationCancel>(true);
-  Drop<CalibrationGoal>();
-  home_.Reset();
-  // One zero follows from leaving the state; the mower stays where it stopped.
-  SetState(State::kIdle);
 }
 
 void LogicCore::OnMowMap(std::vector<JobArea> areas, const Reason& problem) {
@@ -1146,6 +994,7 @@ void LogicCore::SetHold(int64_t until) {
   if (until == hold_until_) return;
   hold_until_ = until;
   SetDue<ActionsChanged>(true);
+  WatchAnnouncement();
 }
 
 bool LogicCore::Held() const {
@@ -1161,7 +1010,7 @@ Reason LogicCore::HoldProblem() const {
 }
 
 bool LogicCore::HoldAllowed() const {
-  return state_ == State::kIdle && dock_check_ == DockCheck::kNone;
+  return state_ == State::kIdle && dock_check_ == DockCheck::kNone && !run_;
 }
 
 void LogicCore::SetGpsSettings(double max_position_accuracy, double gps_wait_time, double gps_timeout) {
@@ -1177,6 +1026,8 @@ void LogicCore::OnTick(double now_s) {
     RefuseReset(Reason("STILL_ACTIVE", "The emergency stays: " + EmergencyReasonNames(reason_))
                     .With("bits", mowbite_api::EmergencyNameList(reason_)));
   }
+  WatchAnnouncement();
+  if (run_ && run_->phase == RunPhase::kAnnouncing && now_s >= run_->announce_until) EndAnnouncement(now_s);
   if (state_ == State::kDocking) TickDocking(now_s);
   if (state_ == State::kAreaRecording) TickRecording(now_s);
   if (state_ != State::kMowing) return;

@@ -152,8 +152,36 @@ bool MowingJob::Unfinished() const {
   return place > 0 || progress_.path > 0 || progress_.index > 0 || has_plan_;
 }
 
-bool MowingJob::SeekArea(std::string* notice) {
-  if (!progress_.tasks.empty()) return SeekTask(notice);
+void MowingJob::SetPassOver(std::vector<std::string> ids) {
+  pass_over_ = std::move(ids);
+}
+
+void MowingJob::PassOver(const std::vector<std::string>& ids) {
+  for (const auto& id : ids) {
+    if (!PassedOver(id)) pass_over_.push_back(id);
+  }
+}
+
+bool MowingJob::PassedOver(const std::string& id) const {
+  return std::find(pass_over_.begin(), pass_over_.end(), id) != pass_over_.end();
+}
+
+bool MowingJob::AreaLeft() const {
+  const auto to_mow = [this](const JobArea* area) { return area && area->mowable && !PassedOver(area->id); };
+  if (progress_.tasks.empty()) {
+    for (size_t at = static_cast<size_t>(progress_.area); at < areas_.size(); ++at) {
+      if (to_mow(&areas_[at])) return true;
+    }
+    return false;
+  }
+  for (size_t at = static_cast<size_t>(progress_.task); at < progress_.tasks.size(); ++at) {
+    if (to_mow(FindArea(progress_.tasks[at]))) return true;
+  }
+  return false;
+}
+
+bool MowingJob::SeekArea(std::string* notice, std::vector<JobArea>* passed) {
+  if (!progress_.tasks.empty()) return SeekTask(notice, passed);
   const size_t at = static_cast<size_t>(progress_.area);
   if (!progress_.area_id.empty() && (at >= areas_.size() || areas_[at].id != progress_.area_id)) {
     if (notice) *notice = "The area " + progress_.area_id + " of the checkpoint is not where it was, starting over";
@@ -164,7 +192,12 @@ bool MowingJob::SeekArea(std::string* notice) {
     paths_.clear();
     has_plan_ = false;
   }
-  while (static_cast<size_t>(progress_.area) < areas_.size() && !areas_[progress_.area].mowable) NextArea();
+  while (static_cast<size_t>(progress_.area) < areas_.size()) {
+    const JobArea& area = areas_[progress_.area];
+    if (area.mowable && !PassedOver(area.id)) break;
+    if (area.mowable && passed) passed->push_back(area);
+    NextArea();
+  }
   if (static_cast<size_t>(progress_.area) >= areas_.size()) {
     progress_.area_id.clear();
     return false;
@@ -173,11 +206,16 @@ bool MowingJob::SeekArea(std::string* notice) {
   return true;
 }
 
-bool MowingJob::SeekTask(std::string* notice) {
+bool MowingJob::SeekTask(std::string* notice, std::vector<JobArea>* passed) {
   // Found by its id: the place in the map may have changed, the fingerprint of the plan tells about path and index.
   while (static_cast<size_t>(progress_.task) < progress_.tasks.size()) {
     const std::string& id = progress_.tasks[progress_.task];
     const JobArea* area = FindArea(id);
+    if (area && area->mowable && PassedOver(id)) {
+      if (passed) passed->push_back(*area);
+      NextArea();
+      continue;
+    }
     if (area && area->mowable) {
       progress_.area = static_cast<int>(area - areas_.data());
       progress_.area_id = id;

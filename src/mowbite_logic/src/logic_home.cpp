@@ -83,6 +83,7 @@ void LogicCore::BatteryEndsMowing(HomeReason reason) {
   const double voltage = critical ? hw_.battery_voltage : home_.WindowVoltage();
   const double limit = critical ? config_.battery_critical_voltage : config_.battery_empty_voltage;
   AddEvent("BATTERY_LOW", {{"battery_voltage", voltage}, {"limit", limit}});
+  RunEnds("BATTERY_LOW");
   Notify("Mowing ends: the battery is low and the mower cannot go home");
   EndJob(false, false);
 }
@@ -90,7 +91,7 @@ void LogicCore::BatteryEndsMowing(HomeReason reason) {
 void LogicCore::WatchHome(double now_s) {
   home_.OnSample(HomeSampleOf(hw_, now_s));
   if (sunset_try_) TrySunset(now_s);
-  ActOnHome(sunset_due_ && now_s >= *sunset_due_ ? DarkWhy(now_s) : Reason());
+  ActOnHome(DeadlineDue(now_s));
 }
 
 void LogicCore::ActOnHome(const Reason& dark) {
@@ -131,17 +132,19 @@ Reason LogicCore::ContinueProblem() const {
 }
 
 void LogicCore::ResumedByUser() {
+  // The user took over: deadlines that came are dropped, those to come stay.
+  if (run_ && run_->end_passed) run_->end_due.reset();
   sunset_due_.reset();
   sunset_try_ = true;
   ActOnHome(Reason());
 }
 
 void LogicCore::SetSunsetSettings(bool dock_at_sunset) {
-  if (!dock_at_sunset) {
+  sunset_on_ = dock_at_sunset;
+  if (!SunsetWanted()) {
     sunset_due_.reset();
     sunset_tried_ = sunset_told_ = false;
   }
-  sunset_on_ = dock_at_sunset;
   sunset_try_ = true;
 }
 
@@ -159,7 +162,7 @@ void LogicCore::OnDatum(double latitude, double longitude) {
 
 void LogicCore::TrySunset(double now_s) {
   sunset_try_ = false;
-  if (!sunset_on_ || sunset_due_) return;
+  if (!SunsetWanted() || sunset_due_) return;
   const bool first = !std::exchange(sunset_tried_, true);
   std::string missing;
   if (!clock_safe_) missing = "the clock is not safe (" + clock_reason_ + ")";

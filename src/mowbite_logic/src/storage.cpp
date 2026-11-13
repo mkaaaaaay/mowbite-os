@@ -25,6 +25,7 @@ void LogicCore::SetUnwritableFile(const std::string& file) {
 void LogicCore::AbandonStart(const std::string& file) {
   SetUnwritableFile(file);
   const Reason why = StorageProblem();
+  if (state_ != State::kIdle) RunEnds("REFUSED", why.code);
   switch (state_) {
     case State::kIdle: return;
     case State::kMowing:

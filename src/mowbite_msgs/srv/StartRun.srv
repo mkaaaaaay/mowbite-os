@@ -1,0 +1,24 @@
+# A start of the schedule (mowbite_schedule) at the logic, the only way it starts mowing. The same checks as
+# mowing.start, and only from the contacts with a safe clock and, without dark_allowed, the sun up. Accepted means the
+# announcement runs; how the run goes is on logic/run.
+
+string run_id
+# The list of the plan in order, the job it names; empty: every mowing area.
+string[] area_ids
+# Of area_ids: paused or not on the map, left out by this run only.
+string[] pass_over
+bool restart
+bool has_angle
+float64 angle_offset_deg
+bool dark_allowed
+# Home at the next sunset.
+bool until_sunset
+# Home after this long (s); 0: no end.
+int64 end_in_s
+---
+bool accepted
+# The reason of the refusal (masterplan 3.1a), or INVALID for a list the logic does not take.
+string code
+string message
+# The fields of the reason as JSON.
+string data

@@ -41,6 +41,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Camera.msg"
   "msg/DockMarker.msg"
   "msg/ClockStatus.msg"
+  "msg/RunStatus.msg"
   "srv/AddArea.srv"
   "srv/ReplaceMap.srv"
   "srv/SetBlade.srv"
@@ -51,6 +52,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetRecordedBody.srv"
   "srv/SetHeading.srv"
   "srv/DriveTo.srv"
+  "srv/StartRun.srv"
+  "srv/DropTasks.srv"
   "action/FollowPath.action"
   "action/Calibrate.action"
   DEPENDENCIES builtin_interfaces std_msgs geometry_msgs diagnostic_msgs action_msgs

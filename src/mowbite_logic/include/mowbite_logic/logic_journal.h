@@ -61,6 +61,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DriveCancel, why)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ReferenceCheck, heading)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Notice, line)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Checkpoint, text)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(RunChanged, run_id, phase, end_code, detail)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ScheduleRun, run_id, area_ids, pass_over, restart, has_angle, angle_offset_deg,
+                                   dark_allowed, until_sunset, end_in_s)
 
 // An effect in the export of a journal: the name of its type and its fields; for json and ordered_json.
 template <typename Json>
@@ -105,6 +108,8 @@ static_assert(sizeof(DriveCancel) == 80);
 static_assert(sizeof(ReferenceCheck) == 8);
 static_assert(sizeof(Notice) == 32);
 static_assert(sizeof(Checkpoint) == 32);
+static_assert(sizeof(RunChanged) == 104);
+static_assert(sizeof(ScheduleRun) == 112);
 
 // What the logic decides: state, sub_state, the reason bits of an emergency, blade wanted, follower driving.
 struct LogicView {
@@ -135,7 +140,8 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::SetGpsSettings, &L::NextJobStep, &L::OnJobPlanned, &L::OnJobPlanFailed, &L::OnJobProgress, &L::OnLegEnded,
       &L::OnTick, &L::OnBladeRefused, &L::TakeOverlayChanged, &L::SetRestartHold, &L::ReportRestart, &L::OnStopRelease,
       &L::TakeEffects, &L::SetUnwritableFile, &L::AbandonStart, &L::SetTurningRadius,
-      &L::RecordedBodyKept, &L::OnWheelOdom, &L::SetSunsetSettings, &L::OnClock, &L::OnDatum);
+      &L::RecordedBodyKept, &L::OnWheelOdom, &L::SetSunsetSettings, &L::OnClock, &L::OnDatum,
+      &L::StartRun, &L::DropTasks);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};

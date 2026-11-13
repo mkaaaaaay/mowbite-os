@@ -78,10 +78,16 @@ class MowingJob {
   // Something was mowed or planned and not finished.
   bool Unfinished() const;
 
+  // Areas this run leaves out (a start or a pause of the schedule); never in the checkpoint.
+  void SetPassOver(std::vector<std::string> ids);
+  void PassOver(const std::vector<std::string>& ids);
+  bool PassedOver(const std::string& id) const;
+  // Whether a mowable area that is not passed over is left, the current one included.
+  bool AreaLeft() const;
   // Moves on to the first mowable area from the current one. If the saved area has another id now, the job starts
   // over from the first area (notice says so). With tasks the next one of them on the map, the others are passed
-  // over. False when no area is left.
-  bool SeekArea(std::string* notice);
+  // over. Areas on the map in the pass over list are left out and go to passed. False when no area is left.
+  bool SeekArea(std::string* notice, std::vector<JobArea>* passed = nullptr);
   const JobArea* CurrentArea() const;
   bool HasPlan() const {
     return has_plan_;
@@ -106,11 +112,12 @@ class MowingJob {
 
  private:
   void NextArea();
-  bool SeekTask(std::string* notice);
+  bool SeekTask(std::string* notice, std::vector<JobArea>* passed);
   const JobArea* FindArea(const std::string& id) const;
 
   std::vector<JobArea> areas_;
   JobProgress progress_;
+  std::vector<std::string> pass_over_;
   std::vector<JobPath> paths_;
   bool has_plan_ = false;
 };
