@@ -646,15 +646,17 @@ TEST_F(SchedulerTest, OtherRunsAreLeftAlone) {
   const RunRequest run = StartAndAccept();
   Status("2026-06-15T09:00", Phase::kMowing);
   scheduler_->OnStartAnswer("2026-06-15T09:00", false, "X", nullptr);
+  scheduler_->StartFailed("other", "storage");
+  EXPECT_TRUE(Words().empty());
+  Status(run.run_id, Phase::kMowing);
+  EXPECT_EQ(Words(), (Lines{"started 100"}));
   // Also while its own answer is still to come.
   Make(File());
   const Output asked = TickAt(kMonday, "10:00");
   scheduler_->OnStartAnswer("2026-06-15T09:00", false, "X", nullptr);
   EXPECT_TRUE(Words().empty());
   scheduler_->OnStartAnswer(asked.start->run_id, true, "", nullptr);
-  scheduler_->StartFailed("other", "storage");
-  EXPECT_TRUE(Words().empty());
-  Status(run.run_id, Phase::kMowing);
+  Status(asked.start->run_id, Phase::kMowing);
   EXPECT_EQ(Words(), (Lines{"started 100"}));
 }
 
@@ -792,13 +794,14 @@ TEST_F(SchedulerTest, PauseWhileTheStartIsAskedComesWithTheAnswer) {
 TEST_F(SchedulerTest, StateAndLogSurviveARestart) {
   Make(File());
   const Output out = TickAt(kMonday, "10:00");
-  scheduler_->StartFailed(out.start->run_id, "storage");
+  scheduler_->OnStartAnswer(out.start->run_id, false, "BATTERY_HOT", 61.5);
   const json state = scheduler_->StateJson();
   const json log = scheduler_->LogJson();
   scheduler_.emplace(File(), true, state, log, At(kMonday, "10:00", 20));
   EXPECT_FALSE(TickAt(kMonday, "10:00", 30).start);
-  EXPECT_EQ(Words(), (Lines{"start_failed storage"}));
+  EXPECT_EQ(Words(), (Lines{"start_refused BATTERY_HOT"}));
   EXPECT_EQ(scheduler_->LogJson(), log);
+  EXPECT_EQ(log["entries"][0]["more"], 61.5);
   EXPECT_EQ(log["entries"][0]["t"], At(kMonday, "10:00"));
   EXPECT_EQ(log["entries"][0]["at"], "10:00");
   // Marks of days before yesterday fall out; yesterday's plan was missed.
