@@ -497,5 +497,23 @@ TEST(DockReasonText, NamesOfTheMessage) {
   for (const auto& [reason, name] : names) EXPECT_EQ(DockReasonText(reason), name);
 }
 
+// The entry goes out the first time, on another availability or reason, and on another offer with the same
+// availability, as when the encoder starts while the camera is available.
+TEST(UpdateAvailability, OnlyOnAChange) {
+  Camera entry;
+  bool published = false;
+  EXPECT_TRUE(UpdateAvailability(entry, published, {false, ""}, false));
+  EXPECT_TRUE(published);
+  EXPECT_FALSE(UpdateAvailability(entry, published, {false, ""}, false));
+  EXPECT_TRUE(UpdateAvailability(entry, published, {true, ""}, false));
+  EXPECT_TRUE(entry.available);
+  EXPECT_FALSE(UpdateAvailability(entry, published, {true, ""}, false));
+  EXPECT_TRUE(UpdateAvailability(entry, published, {true, ""}, true));
+  EXPECT_TRUE(UpdateAvailability(entry, published, {false, "TOO_HOT"}, false));
+  EXPECT_TRUE(UpdateAvailability(entry, published, {false, "NO_SIGNAL"}, false));
+  EXPECT_EQ(entry.reason, "NO_SIGNAL");
+  EXPECT_FALSE(UpdateAvailability(entry, published, {false, "NO_SIGNAL"}, false));
+}
+
 }  // namespace
 }  // namespace tron_vision

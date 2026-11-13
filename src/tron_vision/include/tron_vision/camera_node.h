@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <mowbite_msgs/msg/camera.hpp>
 #include <mowbite_msgs/msg/sensor_spec.hpp>
 #include <string>
 
@@ -19,6 +20,17 @@ struct Availability {
   bool available = false;
   std::string reason;
 };
+
+// Sets availability and reason of the hw/cameras entry. True when it goes out: the first time, with another
+// availability or reason, or when the offer changed; a new detail alone waits for the next of these.
+inline bool UpdateAvailability(mowbite_msgs::msg::Camera& entry, bool& published, const Availability& now,
+                               bool offer_changed) {
+  if (published && now.available == entry.available && now.reason == entry.reason && !offer_changed) return false;
+  published = true;
+  entry.available = now.available;
+  entry.reason = now.reason;
+  return true;
+}
 
 // The clock of the loops, also for the receive time of hw/status.
 inline double MonotonicSeconds() {

@@ -317,13 +317,7 @@ void RearNode::PublishCamera() {
   const ViewAvailability now = loop_->Viewable();
   const std::string reason = DockReasonText(now.reason);
   const bool described = video_->Describe(loop_->VideoActive(), camera_entry_);
-  if (camera_published_ && now.available == camera_entry_.available && reason == camera_entry_.reason &&
-      !described) {
-    return;
-  }
-  camera_published_ = true;
-  camera_entry_.available = now.available;
-  camera_entry_.reason = reason;
+  if (!UpdateAvailability(camera_entry_, camera_published_, {now.available, reason}, described)) return;
   camera_entry_.detail = now.detail;
   cameras_pub_->publish(camera_entry_);
   int suppressed = 0;

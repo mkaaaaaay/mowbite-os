@@ -181,12 +181,8 @@ void StereoNode::Report(const StereoStatus& status, double now) {
 }
 
 void StereoNode::PublishCamera(const StereoStatus& status) {
-  const Availability now = StereoAvailability(status.state);
-  if (camera_published_ && now.available == camera_entry_.available && now.reason == camera_entry_.reason) return;
-  camera_published_ = true;
-  camera_entry_.available = now.available;
-  camera_entry_.reason = now.reason;
-  camera_entry_.detail = now.available ? "" : StateText(status);
+  if (!UpdateAvailability(camera_entry_, camera_published_, StereoAvailability(status.state), false)) return;
+  camera_entry_.detail = camera_entry_.available ? "" : StateText(status);
   cameras_pub_->publish(camera_entry_);
 }
 
