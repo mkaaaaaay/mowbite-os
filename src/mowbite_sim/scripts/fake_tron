@@ -12,8 +12,9 @@ the MCU pty (host_bytes). The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (5 Hz), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an upright sensor.
 Optional: a JSON file with flags (lift, stop, bumper, bumper_left, bumper_right, rain, dock, host_timeout, fast_speed_hold, gnss_quality, gnss_noise, gnss_age, gnss_delay,
 yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, cutter_holds, gnss_rtcm, dock_shift_x,
-dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps, charge_current, battery_percentage, battery_voltage,
-battery_temperature, blade_temperature, standstill_noise) is read every 10 ms, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON; a thread
+dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, lift_tilt, gyro_bias_dps, charge_current,
+battery_percentage, battery_voltage, battery_temperature, blade_temperature, standstill_noise) is read every 10 ms,
+every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON; a thread
 of its own does all of this file work, so a slow disk never holds the ptys (Files). The
 GNSS pty also plays the RTK board in front of the receiver (Board). gnss_rtcm true makes the fix depend on the RTCM the
 board passes: RTK fixed with the real age while corrections are at most 120 s old, otherwise single without age.
@@ -22,9 +23,10 @@ gnss_noise is the standard deviation (m) of the antenna position, gnss_age the a
 per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below which a wheel stands, odom_scale the factor
 between the reported and the real wheel speed, track the real track (m). imu_off stops the IMU frames,
 cutter_ignores_off keeps the blade turning on off frames, cutter_holds also without any frame from the host. tilt_roll and tilt_pitch (degrees) stand the base on a slope
-for the IMU; the wheels and the GNSS do not notice it. gyro_bias_dps overrides --gyro-bias-dps, e.g. a bias that changes
-with the temperature. battery_voltage (V, 24.5), battery_temperature and blade_temperature (degC, 30) go into the battery
-and the blade motor report.
+for the IMU; the wheels and the GNSS do not notice it. With lift_tilt (degrees) the lift flag counts only while
+tilt_roll or tilt_pitch is at least that far, as for an MCU that takes lift from the tilt. gyro_bias_dps overrides
+--gyro-bias-dps, e.g. a bias that changes with the temperature. battery_voltage (V, 24.5), battery_temperature and
+blade_temperature (degC, 30) go into the battery and the blade motor report.
 --dock places a charging station (Dock): the mower stops at it, gets contact there (dock_ok in the battery report) and a
 charge current only after the host sent Charge 1: charge_current A (3.0; 0 for a contact that does not charge), none
 once battery_percentage (80) reaches 100. Its wheels leave the hollows of the station only at
@@ -779,8 +781,9 @@ def main():
                         "host_timeout, gnss_quality, gnss_noise, "
                         "gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, "
                         "cutter_holds, "
-                        "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, gyro_bias_dps, "
-                        "charge_current, battery_percentage, battery_voltage, battery_temperature, blade_temperature, "
+                        "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, "
+                        "lift_tilt, gyro_bias_dps, charge_current, battery_percentage, battery_voltage, "
+                        "battery_temperature, blade_temperature, "
                         "standstill_noise, fast_speed_hold")
     parser.add_argument("--log", help="JSON lines log of received sub packets")
     parser.add_argument("--log-max-mb", type=float, default=20.0)
@@ -866,7 +869,9 @@ def main():
                     log.write({"t": round(now, 3), "placed": [round(float(v), 3) for v in place]})
                     if dock and dock.settle(pose):
                         log.write({"t": round(now, 3), "dock": "contact"})
-            blocked = bool(flags.get("lift", 0) or flags.get("stop", 0))
+            tilt = (float(flags.get("tilt_roll", 0.0)), float(flags.get("tilt_pitch", 0.0)))
+            lifted = bool(flags.get("lift", 0)) and max(map(abs, tilt)) >= float(flags.get("lift_tilt", 0.0))
+            blocked = lifted or bool(flags.get("stop", 0))
             host.timeout = float(flags.get("host_timeout", args.host_timeout))
             host.fast_hold = float(flags.get("fast_speed_hold", args.fast_speed_hold))
             drive.track = float(flags.get("track", args.track or args.mcu_track))
@@ -897,7 +902,7 @@ def main():
                 right = int(bool(flags.get("bumper", 0) or flags.get("bumper_right", 0)))
                 left = int(bool(flags.get("bumper_left", 0)))
                 # bumper, rain, lift, stop, power_off, battery_gate, cutter_size (2 = large), press_module, right, left
-                sensor = bytes([right | left, int(flags.get("rain", 0)), int(flags.get("lift", 0)),
+                sensor = bytes([right | left, int(flags.get("rain", 0)), int(lifted),
                                 int(flags.get("stop", 0)), 0, 0, 2, 0, right, left])
                 measured = drive.measured(float(flags.get("odom_scale", args.odom_scale)))
                 if drive.standing() and flags.get("standstill_noise", args.standstill_noise):
@@ -951,7 +956,6 @@ def main():
             if now >= next_imu:
                 next_imu = now + IMU_PERIOD
                 if not flags.get("imu_off", 0):
-                    tilt = (float(flags.get("tilt_roll", 0.0)), float(flags.get("tilt_pitch", 0.0)))
                     bias = float(flags.get("gyro_bias_dps", args.gyro_bias_dps))
                     send(imu.fd, wit_frames(pose, args.mount_rpy_deg, bias, tilt, args.imu_error_rpy_deg,
                                             (args.slope[0], args.slope[1]), args.gyro_scale))
