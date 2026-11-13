@@ -151,10 +151,7 @@ RearNode::RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seam
   camera_entry_.process = declare_parameter("process", std::string("rear"));
   camera_entry_.kind = Camera::KIND_REAR;
   camera_entry_.position = Camera::POSITION_REAR;
-  jpeg_width_ = ScaledSize(config.width, config.view_scale);
-  jpeg_height_ = ScaledSize(config.height, config.view_scale);
-  camera_entry_.width = jpeg_width_;
-  camera_entry_.height = jpeg_height_;
+  video_->SetJpegSize(ScaledSize(config.width, config.view_scale), ScaledSize(config.height, config.view_scale));
   camera_entry_.detections = false;
   camera_entry_.protocols = {Camera::PROTOCOL_MJPEG};
 
@@ -319,10 +316,9 @@ void RearNode::LogControl(const std::string& error, int tries, bool taken) {
 void RearNode::PublishCamera() {
   const ViewAvailability now = loop_->Viewable();
   const std::string reason = DockReasonText(now.reason);
-  const auto protocols = camera_entry_.protocols;
-  video_->Describe(loop_->VideoActive(), jpeg_width_, jpeg_height_, camera_entry_);
+  const bool described = video_->Describe(loop_->VideoActive(), camera_entry_);
   if (camera_published_ && now.available == camera_entry_.available && reason == camera_entry_.reason &&
-      protocols == camera_entry_.protocols) {
+      !described) {
     return;
   }
   camera_published_ = true;

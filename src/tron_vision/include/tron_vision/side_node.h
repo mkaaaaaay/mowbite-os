@@ -51,8 +51,6 @@ class SideNode : public rclcpp::Node {
   std::unique_ptr<PreviewLoop> loop_;
   std::string camera_id_;
   mowbite_msgs::msg::Camera camera_entry_;
-  uint32_t jpeg_width_ = 0;
-  uint32_t jpeg_height_ = 0;
   bool camera_published_ = false;
   rclcpp::Publisher<mowbite_msgs::msg::Camera>::SharedPtr cameras_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr picture_pub_;

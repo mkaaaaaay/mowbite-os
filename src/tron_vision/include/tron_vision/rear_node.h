@@ -83,8 +83,6 @@ class RearNode : public rclcpp::Node {
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr picture_pub_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr request_sub_;
   mowbite_msgs::msg::Camera camera_entry_;
-  uint32_t jpeg_width_ = 0;
-  uint32_t jpeg_height_ = 0;
   bool camera_published_ = false;
   uint64_t published_pictures_ = 0;
   // From the ROS thread to the loop thread: arrival of the last request on the monotonic clock, and their count.

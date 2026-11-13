@@ -90,20 +90,22 @@ void VideoOut::Close() {
   encoder_.reset();
 }
 
-void VideoOut::Describe(bool active, uint32_t jpeg_width, uint32_t jpeg_height,
-                        mowbite_msgs::msg::Camera& entry) const {
+bool VideoOut::Describe(bool active, mowbite_msgs::msg::Camera& entry) const {
   using mowbite_msgs::msg::Camera;
-  if (active && !source_.empty()) {
-    entry.protocols = {Camera::PROTOCOL_WEBRTC, Camera::PROTOCOL_MJPEG};
-    entry.source = source_;
-    entry.width = width_;
-    entry.height = height_;
-  } else {
-    entry.protocols = {Camera::PROTOCOL_MJPEG};
-    entry.source.clear();
-    entry.width = jpeg_width;
-    entry.height = jpeg_height;
+  const bool webrtc = active && !source_.empty();
+  std::vector<std::string> protocols = {Camera::PROTOCOL_MJPEG};
+  if (webrtc) protocols.insert(protocols.begin(), Camera::PROTOCOL_WEBRTC);
+  const std::string source = webrtc ? source_ : "";
+  const uint32_t width = webrtc ? width_ : jpeg_width_;
+  const uint32_t height = webrtc ? height_ : jpeg_height_;
+  if (entry.protocols == protocols && entry.source == source && entry.width == width && entry.height == height) {
+    return false;
   }
+  entry.protocols = std::move(protocols);
+  entry.source = source;
+  entry.width = width;
+  entry.height = height;
+  return true;
 }
 
 }  // namespace tron_vision

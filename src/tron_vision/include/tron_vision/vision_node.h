@@ -60,8 +60,6 @@ class VisionNode : public rclcpp::Node {
   std::string last_sensor_;
   std::string rate_sensor_;
   mowbite_msgs::msg::Camera camera_entry_;
-  uint32_t jpeg_width_ = 0;
-  uint32_t jpeg_height_ = 0;
   bool camera_published_ = false;
   rclcpp::Publisher<mowbite_msgs::msg::SensorSpec>::SharedPtr sensor_info_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_pub_;

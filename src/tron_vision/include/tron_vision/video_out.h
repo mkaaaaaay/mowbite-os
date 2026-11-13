@@ -42,9 +42,14 @@ class VideoOut {
   }
   // Ends the stream before the loop that feeds it goes.
   void Close();
+  // The size of the JPEG pictures of the camera.
+  void SetJpegSize(uint32_t width, uint32_t height) {
+    jpeg_width_ = width;
+    jpeg_height_ = height;
+  }
   // Protocols, source and size of the camera entry: WebRTC before MJPEG while the feed is active, else MJPEG at the
-  // size of the JPEG pictures.
-  void Describe(bool active, uint32_t jpeg_width, uint32_t jpeg_height, mowbite_msgs::msg::Camera& entry) const;
+  // size of the JPEG pictures. True when one of them changed.
+  bool Describe(bool active, mowbite_msgs::msg::Camera& entry) const;
 
  private:
   // Declares video, stream_fps, bitrate_kbps, rtsp_port and encoder_library.
@@ -53,6 +58,8 @@ class VideoOut {
   bool video_ = false;
   uint32_t width_ = 0;
   uint32_t height_ = 0;
+  uint32_t jpeg_width_ = 0;
+  uint32_t jpeg_height_ = 0;
   int fps_ = 0;
   int bitrate_bps_ = 0;
   uint16_t port_ = 0;

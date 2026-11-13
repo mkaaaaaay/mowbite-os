@@ -65,7 +65,10 @@ SideNode::SideNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_side
   camera_entry_.process = declare_parameter("process", std::string("right"));
   camera_entry_.kind = mowbite_msgs::msg::Camera::KIND_OBSTACLE;
   camera_entry_.position = mowbite_msgs::msg::Camera::POSITION_RIGHT;
-  PreviewSize(camera.width, camera.height, config.preview.width, jpeg_width_, jpeg_height_);
+  uint32_t jpeg_width = 0;
+  uint32_t jpeg_height = 0;
+  PreviewSize(camera.width, camera.height, config.preview.width, jpeg_width, jpeg_height);
+  video_->SetJpegSize(jpeg_width, jpeg_height);
   camera_entry_.detections = false;
   camera_entry_.protocols = {mowbite_msgs::msg::Camera::PROTOCOL_MJPEG};
   camera_ = std::make_unique<TronCamera>(std::move(camera));
@@ -135,10 +138,9 @@ void SideNode::Log(double now) {
 
 void SideNode::PublishCamera(const PreviewStatus& status) {
   const Availability now = CameraAvailability(status.state);
-  const auto protocols = camera_entry_.protocols;
-  video_->Describe(status.video, jpeg_width_, jpeg_height_, camera_entry_);
+  const bool described = video_->Describe(status.video, camera_entry_);
   if (camera_published_ && now.available == camera_entry_.available && now.reason == camera_entry_.reason &&
-      protocols == camera_entry_.protocols) {
+      !described) {
     return;
   }
   camera_published_ = true;
