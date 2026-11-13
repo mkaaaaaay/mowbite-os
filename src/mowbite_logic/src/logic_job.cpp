@@ -60,7 +60,10 @@ void LogicCore::StartMowing() {
     job_.Reset();
   }
   // A job not begun takes the list as asked: one that names every area does not grow with the map.
-  if (!job_.Unfinished()) job_.SetTasks(request.tasks);
+  if (!job_.Unfinished()) {
+    job_.SetTasks(request.tasks);
+    job_.SetAngle(request.angle_offset_deg);
+  }
   job_.SetPassOver(request.pass_over);
   // Planned anew on every start, the map may have changed; the fingerprint keeps the place if the plan is the same.
   job_.Restore(job_.progress());

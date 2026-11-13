@@ -696,13 +696,63 @@ TEST(ScheduleHold, NotWithinHalfAnHourOfTheNextStartNorOnceItIsDue) {
   EXPECT_TRUE(StartBlocksHold(900, 1000));
 }
 
-TEST(ScheduleRunEnd, NoAngleWithoutARunOrWithoutOne) {
-  TestCore core = Docked();
-  EXPECT_FALSE(core.PlanAngle());
+TEST(ScheduleAngle, AJobTakesTheAngleOfThePlanThatBeginsIt) {
   ScheduleRun run = Plan();
   run.has_angle = true;
   run.angle_offset_deg = 30;
+  TestCore core = Docked();
   ASSERT_TRUE(core.StartRun(run, Reason(), 0).empty());
+  // Nothing before the job begins.
+  EXPECT_FALSE(core.PlanAngle());
+  ToMowing(core);
   ASSERT_TRUE(core.PlanAngle());
+  EXPECT_DOUBLE_EQ(*core.PlanAngle(), 30);
+  const auto checkpoint = core.TakeCheckpoint();
+  ASSERT_TRUE(checkpoint);
+  EXPECT_DOUBLE_EQ(*ParseCheckpoint(*checkpoint)->angle_offset_deg, 30);
+  EXPECT_FALSE(MowingRun().PlanAngle());
+}
+
+namespace {
+
+// An open job of areas a and b, begun with 30 deg.
+JobProgress OpenJob() {
+  JobProgress saved;
+  saved.job_id = "job";
+  saved.tasks = {"a", "b"};
+  saved.task = 1;
+  saved.area = 1;
+  saved.area_id = "b";
+  saved.angle_offset_deg = 30;
+  return saved;
+}
+
+}  // namespace
+
+TEST(ScheduleAngle, AnOpenJobKeepsItsAngleUntilARestart) {
+  ScheduleRun run = Plan();
+  run.has_angle = true;
+  run.angle_offset_deg = 50;
+  TestCore core = Docked();
+  core.RestoreJob(OpenJob());
+  ASSERT_TRUE(core.StartRun(run, Reason(), 0).empty());
+  ToMowing(core);
+  EXPECT_EQ(core.JobId(), "job");
+  EXPECT_DOUBLE_EQ(*core.PlanAngle(), 30);
+
+  run.restart = true;
+  TestCore fresh = Docked();
+  fresh.RestoreJob(OpenJob());
+  ASSERT_TRUE(fresh.StartRun(run, Reason(), 0).empty());
+  ToMowing(fresh);
+  EXPECT_NE(fresh.JobId(), "job");
+  EXPECT_DOUBLE_EQ(*fresh.PlanAngle(), 50);
+}
+
+TEST(ScheduleAngle, AStartByHandGoesOnWithTheAngleOfTheJob) {
+  TestCore core = Docked();
+  core.RestoreJob(OpenJob());
+  ASSERT_TRUE(
+      core.Command("mowing.start", json{{"tasks", json::array({{{"area_id", "a"}}, {{"area_id", "b"}}})}}).accepted);
   EXPECT_DOUBLE_EQ(*core.PlanAngle(), 30);
 }

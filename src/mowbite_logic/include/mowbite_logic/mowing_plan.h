@@ -38,6 +38,8 @@ struct CoverageRequest {
   // Parameters of the planner node, set for this request only
   std::optional<int> lane_overlap_passes;
   std::optional<double> perimeter_offset;
+  // deg on the lane direction of the planner, from the plan of the schedule that runs
+  std::optional<double> angle_offset_deg;
 };
 
 // The route the planner answered ~/plan_coverage with.

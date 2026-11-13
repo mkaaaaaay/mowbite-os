@@ -64,6 +64,7 @@ std::string CheckpointText(const JobProgress& p) {
     j["tasks"] = p.tasks;
     j["task"] = p.task;
   }
+  if (p.angle_offset_deg) j["angle_offset_deg"] = *p.angle_offset_deg;
   return j.dump();
 }
 
@@ -85,6 +86,10 @@ std::optional<JobProgress> ParseCheckpoint(const std::string& text) {
       p.task = j.at("task").get<int>();
       // Never all areas for a list that lost its ids.
       if (p.tasks.empty()) return std::nullopt;
+    }
+    if (j.contains("angle_offset_deg")) {
+      p.angle_offset_deg = j.at("angle_offset_deg").get<double>();
+      if (!std::isfinite(*p.angle_offset_deg)) return std::nullopt;
     }
   } catch (const json::exception&) {
     return std::nullopt;
@@ -125,6 +130,10 @@ std::vector<std::string> MowingJob::TaskIds(const std::vector<std::string>& task
 void MowingJob::SetTasks(std::vector<std::string> tasks) {
   progress_.tasks = std::move(tasks);
   progress_.task = 0;
+}
+
+void MowingJob::SetAngle(std::optional<double> angle_offset_deg) {
+  progress_.angle_offset_deg = angle_offset_deg;
 }
 
 int MowingJob::TaskIndex() const {

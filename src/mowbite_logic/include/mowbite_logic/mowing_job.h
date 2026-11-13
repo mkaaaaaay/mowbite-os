@@ -45,6 +45,8 @@ struct JobProgress {
   // The ids of the areas of the job in order, none for every active mowing area; task is the place in them.
   std::vector<std::string> tasks;
   int task = 0;
+  // deg the planner adds to its lane direction, from the plan of the schedule that began the job; none: its own.
+  std::optional<double> angle_offset_deg;
 };
 
 std::string CheckpointText(const JobProgress& progress);
@@ -65,6 +67,7 @@ class MowingJob {
   std::vector<std::string> TaskIds(const std::vector<std::string>& tasks) const;
   // A new job over these areas, none for all; it starts at the first.
   void SetTasks(std::vector<std::string> tasks);
+  void SetAngle(std::optional<double> angle_offset_deg);
   // The place of the current area in the areas of the job and their number; -1 where there is no such place.
   int TaskIndex() const;
   int TaskCount() const;

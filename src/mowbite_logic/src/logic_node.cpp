@@ -298,6 +298,7 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
     Step();
   });
   blade_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { UpdateBlade(); });
+  SetUpRuns();
   // What the core has for the node waits for the first callback; the actions go out at once.
   PublishActions();
   PublishIdleIfChanged();
@@ -839,7 +840,8 @@ void LogicNode::PumpJob() {
 }
 
 void LogicNode::PlanJobArea(const std::string& area_id) {
-  const PlanQuestion question = planner_.Prepare(json{{"area_id", area_id}});
+  PlanQuestion question = planner_.Prepare(json{{"area_id", area_id}});
+  question.request.angle_offset_deg = core_.View().PlanAngle();
   if (!question.ok) {
     core_.Call<&LogicCore::OnJobPlanFailed>(Reason("PLANNING_FAILED", question.message));
     return;
@@ -1456,11 +1458,13 @@ void LogicNode::OnSystemHold(const mowbite_msgs::msg::RpcRequest& request) {
   const int64_t wanted = seconds.get<int64_t>();
   std::string error;
   json answer;
+  bool schedule_blocks = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     const double t = MonotonicSeconds();
     const int64_t wall = WallSeconds();
-    if (wanted > 0 && core_.View().HoldAllowed()) {
+    schedule_blocks = ScheduleBlocksHoldLocked(wall);
+    if (wanted > 0 && core_.View().HoldAllowed() && !schedule_blocks) {
       const mowbite_hold::HoldRecord record{wall + wanted, wall};
       if (hold_path_.empty() || mowbite_hold::WriteHoldFile(hold_path_, record, &error)) {
         hold_.Start(record, t, wall);
@@ -1480,6 +1484,9 @@ void LogicNode::OnSystemHold(const mowbite_msgs::msg::RpcRequest& request) {
     if (until > 0) {
       RCLCPP_INFO(get_logger(), "system.hold: held for %lld s until %lld (unix s), nothing starts",
                   static_cast<long long>(wanted), static_cast<long long>(until));
+    } else if (wanted > 0 && schedule_blocks) {
+      RCLCPP_WARN(get_logger(), "system.hold %lld: not granted, the schedule starts at %s (unix s)",
+                  static_cast<long long>(wanted), answer["next_start"].dump().c_str());
     } else if (wanted > 0) {
       RCLCPP_WARN(get_logger(), "system.hold %lld: not granted, the mower is %s %s", static_cast<long long>(wanted),
                   answer["state"].get<std::string>().c_str(), answer["sub_state"].get<std::string>().c_str());
@@ -1506,8 +1513,9 @@ json LogicNode::HoldAnswerLocked() const {
               {"is_charging", state.is_charging},
               {"hold_until", HoldUntilLocked()},
               {"sub_state", state.sub_state},
-              {"idle", core_.View().HoldAllowed()},
-              {"emergency_reason", state.emergency_reason}};
+              {"idle", core_.View().HoldAllowed() && !ScheduleBlocksHoldLocked(WallSeconds())},
+              {"emergency_reason", state.emergency_reason},
+              {"next_start", next_start_ > 0 ? json(next_start_) : json()}};
 }
 
 // unix s while the logic holds, else 0. Called with the mutex held.
@@ -2136,6 +2144,7 @@ std::shared_ptr<mowbite_planner_interfaces::srv::PlanCoverage::Request> LogicNod
   request->angle = r.angle;
   if (r.lane_overlap_passes) request->overrides.push_back(Override("lane_overlap_passes", *r.lane_overlap_passes));
   if (r.perimeter_offset) request->overrides.push_back(Override("perimeter_offset", *r.perimeter_offset));
+  if (r.angle_offset_deg) request->overrides.push_back(Override("angle_offset_deg", *r.angle_offset_deg));
   return request;
 }
 
@@ -2501,6 +2510,7 @@ void LogicNode::Record(const std::vector<Effect>& effects) {
     msg.payload = mowbite_bridge::BuildEvent(event->type, event->details, now().seconds(), event->id).dump();
     publish_pub_->publish(msg);
   }
+  PublishRuns(effects);
   if (actions_changed) PublishActions();
   PublishIdleIfChanged();
   PublishHoldIfChanged();

@@ -35,6 +35,12 @@ bool StartBlocksHold(int64_t next_start, int64_t now) {
   return next_start != 0 && next_start - now <= kHoldBeforeStartS;
 }
 
+LogicCore::StartRequest LogicCore::RunRequest(const ScheduleRun& run) {
+  StartRequest request{run.area_ids, run.restart, run.pass_over, std::nullopt};
+  if (run.has_angle) request.angle_offset_deg = run.angle_offset_deg;
+  return request;
+}
+
 std::string LogicCore::InvalidRun(const ScheduleRun& run) const {
   if (run.run_id.empty()) return "run_id is empty";
   if (const std::string id = Twice(run.area_ids); !id.empty()) return "area_ids: " + id + " is in the list twice";
@@ -94,7 +100,7 @@ Reason LogicCore::StartRun(const ScheduleRun& run, const Reason& node_problem, d
     Notify("Start of the schedule " + run.run_id + " refused: " + invalid);
     return Reason("INVALID", invalid);
   }
-  const StartRequest request{run.area_ids, run.restart, run.pass_over};
+  const StartRequest request = RunRequest(run);
   Reason why;
   if (run_) why = Reason("BUSY", "The mower is busy: a start of the schedule is announced").With("state", "announcing");
   if (why.empty()) why = ScheduleProblem(request, run, now_s);
@@ -118,7 +124,7 @@ Reason LogicCore::StartRun(const ScheduleRun& run, const Reason& node_problem, d
 }
 
 void LogicCore::EndAnnouncement(double now_s) {
-  StartRequest request{run_->request.area_ids, run_->request.restart, run_->request.pass_over};
+  StartRequest request = RunRequest(run_->request);
   const Reason why = ScheduleProblem(request, run_->request, now_s);
   if (!why.empty()) {
     RefuseStart(why);
@@ -174,8 +180,7 @@ void LogicCore::FinishRun() {
 }
 
 std::optional<double> LogicCore::PlanAngle() const {
-  if (!run_ || !run_->request.has_angle) return std::nullopt;
-  return run_->request.angle_offset_deg;
+  return job_.progress().angle_offset_deg;
 }
 
 bool LogicCore::SunsetWanted() const {

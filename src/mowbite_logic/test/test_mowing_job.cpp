@@ -297,6 +297,16 @@ TEST(MowingJobCheckpoint, AJobOverAllAreasKeepsTheTextOfBefore) {
   EXPECT_TRUE(ParseCheckpoint(CheckpointText(p))->tasks.empty());
 }
 
+TEST(MowingJobCheckpoint, CarriesTheAngleOfTheJob) {
+  JobProgress p;
+  p.job_id = "abc";
+  EXPECT_FALSE(ParseCheckpoint(CheckpointText(p))->angle_offset_deg);
+  p.angle_offset_deg = -12.5;
+  EXPECT_DOUBLE_EQ(*ParseCheckpoint(CheckpointText(p))->angle_offset_deg, -12.5);
+  EXPECT_FALSE(ParseCheckpoint(
+      R"({"version":1,"job_id":"","area":0,"area_id":"","path":0,"index":0,"fingerprint":"","angle_offset_deg":"x"})"));
+}
+
 TEST(MowingJobCheckpoint, CarriesTheTasksAndThePlaceInThem) {
   JobProgress p;
   p.job_id = "abc";

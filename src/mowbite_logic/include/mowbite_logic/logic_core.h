@@ -574,7 +574,7 @@ class LogicCore {
   // current area among them is skipped (AREA_SKIPPED SCHEDULE); with none left the run ends with SCHEDULE pause and
   // the job stays open, going home as for a reason of HomeWatch, else idle where it is.
   Reason DropTasks(const std::string& run_id, const std::vector<std::string>& area_ids);
-  // The angle of the lanes the running run of the schedule asks of the planner, none without.
+  // The angle of the lanes the open job asks of the planner (the one of the plan that began it), none without.
   std::optional<double> PlanAngle() const;
   // Why mowing of these areas (none for all) cannot start now, empty if it can.
   Reason StartProblem(const std::vector<std::string>& tasks = {}) const;
@@ -797,11 +797,14 @@ class LogicCore {
     std::vector<std::string> tasks;
     bool restart = false;
     std::vector<std::string> pass_over;
+    // Taken by a job that begins with this start, kept by one it goes on with.
+    std::optional<double> angle_offset_deg;
   };
   // The start problems of the areas of the request that are not passed over; NO_MOWING_AREA when none is left.
   Reason RequestMowProblem(const StartRequest& request) const;
   // Why a start of the schedule cannot go now (StartRun without node_problem), empty if it can.
   Reason ScheduleProblem(const StartRequest& request, const ScheduleRun& run, double now_s) const;
+  static StartRequest RunRequest(const ScheduleRun& run);
   // Why the list of a start of the schedule is not taken, empty if it is.
   std::string InvalidRun(const ScheduleRun& run) const;
   // The announcement ran out: checked again, then the reference check, or the refusal ends the run.

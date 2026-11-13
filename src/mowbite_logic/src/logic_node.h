@@ -30,6 +30,7 @@
 #include <mowbite_msgs/msg/position_jump.hpp>
 #include <mowbite_msgs/msg/robot_pose.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
+#include <mowbite_msgs/msg/run_status.hpp>
 #include <mowbite_msgs/msg/rpc_error.hpp>
 #include <mowbite_msgs/msg/rpc_methods.hpp>
 #include <mowbite_msgs/msg/rpc_request.hpp>
@@ -38,12 +39,14 @@
 #include <mowbite_msgs/msg/sensor_value.hpp>
 #include <mowbite_msgs/srv/add_area.hpp>
 #include <mowbite_msgs/srv/drive_to.hpp>
+#include <mowbite_msgs/srv/drop_tasks.hpp>
 #include <mowbite_msgs/srv/set_blade.hpp>
 #include <mowbite_msgs/srv/set_charge.hpp>
 #include <mowbite_msgs/srv/set_dock.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mowbite_msgs/srv/set_heading.hpp>
 #include <mowbite_msgs/srv/set_recorded_body.hpp>
+#include <mowbite_msgs/srv/start_run.hpp>
 #include <mowbite_hold/file_io.h>
 #include <mowbite_hold/file_writer.h>
 #include <mowbite_hold/hold.h>
@@ -205,6 +208,14 @@ class LogicNode : public rclcpp::Node {
   void Record(const std::vector<Effect>& effects);
   void PublishIdleIfChanged();
   void PublishActions();
+
+  // The runs of the schedule (logic_node_run.cpp).
+  void SetUpRuns();
+  void OnStartRun(const mowbite_msgs::srv::StartRun::Request& request, mowbite_msgs::srv::StartRun::Response& response);
+  void OnDropTasks(const mowbite_msgs::srv::DropTasks::Request& request,
+                   mowbite_msgs::srv::DropTasks::Response& response);
+  void PublishRuns(const std::vector<Effect>& effects);
+  bool ScheduleBlocksHoldLocked(int64_t wall) const;
 
   // The drive to a pose: its number tells late answers apart, the request waits for its answer until the follower
   // has taken the path.
@@ -403,6 +414,12 @@ class LogicNode : public rclcpp::Node {
   rclcpp::TimerBase::SharedPtr plan_timer_;
   rclcpp::TimerBase::SharedPtr blade_timer_;
   std::unique_ptr<mowbite_watch::Attached> watch_;
+  // The next start of the schedule (schedule/next_start, unix s, 0 none), under mutex_.
+  int64_t next_start_ = 0;
+  rclcpp::Publisher<mowbite_msgs::msg::RunStatus>::SharedPtr run_pub_;
+  rclcpp::Service<mowbite_msgs::srv::StartRun>::SharedPtr start_run_srv_;
+  rclcpp::Service<mowbite_msgs::srv::DropTasks>::SharedPtr drop_tasks_srv_;
+  rclcpp::Subscription<std_msgs::msg::Int64>::SharedPtr next_start_sub_;
 };
 
 }  // namespace mowbite_logic
