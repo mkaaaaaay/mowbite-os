@@ -41,6 +41,7 @@ import os
 import pwd
 import select
 import signal
+import statistics
 import subprocess
 import sys
 import termios
@@ -129,6 +130,10 @@ INPUT_WAIT_RANGE_S = (5, 60)
 # and as long for the set-down; on the blade motor at LIFT_BLADE_PERCENT the front goes up to TRON_SHORT_REPEATS times,
 # the left side once. Per side: how the person reads it and the tilt of fake_tron (degrees; the front up is pitch < 0).
 LIFT_MAX_DEG = 45
+# An imu/data sample off 1 g by more than this is a knock or a jolt of the hands, not a tilt; the tilt is the median
+# of the last TILT_MEDIAN samples left (about 0.1 s), since a knock also brings single samples near 1 g far off.
+TILT_SHOCK_MS2 = 1.5
+TILT_MEDIAN = 9
 LIFT_WAIT_S = 60.0
 LIFT_BLADE_PERCENT = 100
 LIFT_SIDES = {"front": ("the front", {"tilt_pitch": -38.0}), "rear": ("the rear", {"tilt_pitch": 38.0}),
@@ -160,6 +165,13 @@ def reason_text(bits):
 
 def fastest_wheel(v, w, wheel_distance):
     return max(abs(v - w * wheel_distance / 2), abs(v + w * wheel_distance / 2))
+
+
+def tilt_of(acc):
+    """Degrees from upright of one accelerometer sample (m/s2); None during a knock, when |a| is off 1 g."""
+    if abs(math.hypot(*acc) - 9.81) > TILT_SHOCK_MS2:
+        return None
+    return math.degrees(math.atan2(math.hypot(acc[0], acc[1]), acc[2]))
 
 
 def steady_speed(log, start, end, wheel_distance):
@@ -455,6 +467,7 @@ class Mower:
         self.max_tilt = 0.0
         # The tilt of the last imu/data sample; the time and that tilt of the first lift since reset_tilt.
         self.tilt = None
+        self.tilts = collections.deque(maxlen=TILT_MEDIAN)
         self.first_lift = None
         self.max_linear_speed = None
         self.emergency_since = None
@@ -513,10 +526,12 @@ class Mower:
     def _imu(self, msg):
         acc = (msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z)
         rate = (msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z)
-        tilt = math.degrees(math.atan2(math.hypot(acc[0], acc[1]), acc[2]))
+        tilt = tilt_of(acc)
         with self.lock:
-            self.max_tilt = max(self.max_tilt, tilt)
-            self.tilt = tilt
+            if tilt is not None:
+                self.tilts.append(tilt)
+                self.tilt = statistics.median(self.tilts)
+                self.max_tilt = max(self.max_tilt, self.tilt)
             self.counts["imu"] += 1
             self.acc_z.append(acc[2])
         self.rec.imu(a=list(acc), g=list(rate))

@@ -4,6 +4,7 @@ start, the blade motor without host (T6) with its options, and the lifts on the 
 
 Run in a sourced workspace (measure.py imports rclpy): python3 -m unittest tools/yf/test/test_measure_tron.py
 """
+import math
 import os
 import signal
 import subprocess
@@ -25,6 +26,19 @@ D = 0.40
 def speeds(*samples):
     return [{"t": t, "speed": [v, w]} for t, v, w in samples]
 
+
+class TestTilt(unittest.TestCase):
+    def test_upright_and_on_its_side(self):
+        self.assertAlmostEqual(m.tilt_of((0.0, 0.0, 9.81)), 0.0)
+        self.assertAlmostEqual(m.tilt_of((0.0, 9.81, 0.0)), 90.0)
+
+    def test_a_tilted_sample(self):
+        self.assertAlmostEqual(m.tilt_of((0.0, 9.81 * math.sin(math.radians(30)), 9.81 * math.cos(math.radians(30)))), 30.0)
+
+    def test_a_knock_is_no_tilt(self):
+        # Seen on the Tron when a hand took the hood.
+        self.assertIsNone(m.tilt_of((-0.1, -10.03, 17.38)))
+        self.assertIsNone(m.tilt_of((-0.54, -1.81, 6.34)))
 
 class TestHostGone(unittest.TestCase):
     def test_stands_after_the_last_turning_sample(self):
