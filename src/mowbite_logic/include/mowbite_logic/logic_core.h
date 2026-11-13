@@ -772,6 +772,7 @@ class LogicCore {
   void DockingWithoutPlanner(const Reason& silent);
   // The leg for the node; a way out from the contacts waits until charging is off, where the driver can stop it.
   void SetDockingLeg(DockingLeg leg);
+  // Only while docking_out_after_charge_off_ holds the way out; OnChargeOff checks it.
   void DockingChargeOff(bool ok, const std::string& message);
   // Once the docking switched charging off: allowed again after the way out and when docking ends.
   void AllowChargeAgain();

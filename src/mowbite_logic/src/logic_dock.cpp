@@ -84,7 +84,7 @@ Reason LogicCore::DockingProblem() const {
 }
 
 Reason LogicCore::StartDocking() {
-  const Reason why = DockingProblem();
+  Reason why = DockingProblem();
   if (!why.empty()) {
     RefuseDrive(why);
     return why;
@@ -157,7 +157,7 @@ void LogicCore::BeginDocking() {
 }
 
 void LogicCore::NextDockingTry() {
-  if (!PoseGood()) {
+  if (!pose_ || !PoseGood()) {
     WaitForDockingGps();
     return;
   }
@@ -301,7 +301,7 @@ void LogicCore::DockingWithoutPlanner(const Reason& silent) {
     return;
   }
   // The way is checked from where the mower stands, so only with a good position.
-  if (!PoseGood()) {
+  if (!pose_ || !PoseGood()) {
     WaitForDockingGps();
     return;
   }
@@ -359,7 +359,7 @@ void LogicCore::SetDockingLeg(DockingLeg leg) {
 }
 
 void LogicCore::DockingChargeOff(bool ok, const std::string& message) {
-  DockingLeg out = std::move(*docking_out_after_charge_off_);
+  DockingLeg out = std::move(*docking_out_after_charge_off_);  // NOLINT(bugprone-unchecked-optional-access)
   docking_out_after_charge_off_.reset();
   if (ok) {
     docking_charge_stopped_ = true;
@@ -445,7 +445,7 @@ void LogicCore::OnChargeResult(ChargeCheck::Result result) {
   }
 }
 
-void LogicCore::CountDockingFailure(Reason why, bool last) {
+void LogicCore::CountDockingFailure(Reason why, bool last) {  // NOLINT(performance-unnecessary-value-param): may alias
   docking_failure_.reset();
   const bool again = docking_.Failed() && !last;
   const char* type = again ? "DOCKING_RETRY" : "DOCKING_FAILED";

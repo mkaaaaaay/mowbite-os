@@ -74,6 +74,7 @@ Reason LogicCore::StartCalibration(double now_s) {
     RefuseCalibration(problems.front());
     return problems.front();
   }
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access): no problems means CalibrationProblems found a status
   const CalibrationStatus status = *CalibrationStatusNow(now_s);
   Replace(CalibrationGoal{status.heading, status.lane_length});
   Drop<CalibrationCancel>();

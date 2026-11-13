@@ -335,6 +335,7 @@ const JobPath* LogicCore::SkippedPathHere() const {
 
 JobStep LogicCore::SkippedPiece(const JobPath& path) {
   const std::vector<JobPose>& poses = path.poses;
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access): the caller got path from SkippedPathHere, which checks skipped_
   const size_t from = static_cast<size_t>(skipped_->index);
   size_t to = from + 1;
   double length = std::hypot(poses[to].x - poses[from].x, poses[to].y - poses[from].y);

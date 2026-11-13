@@ -177,6 +177,7 @@ void LogicCore::TrySunset(double now_s) {
   // The first sunset after now; before it lies daylight, whenever the run started.
   const double unix_s = now_s + clock_offset_;
   for (const double day : {unix_s, unix_s + 86400.0}) {
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access): missing is set above when datum_ is empty
     const mowbite_time::SunDay sun = mowbite_time::SunTimes(datum_->first, datum_->second, day);
     if (sun.set && *sun.set > unix_s) {
       sunset_due_ = *sun.set - clock_offset_;
@@ -189,6 +190,7 @@ void LogicCore::TrySunset(double now_s) {
 }
 
 Reason LogicCore::DarkWhy(double now_s) const {
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access): sunset_due_ is set only with datum_, which is never cleared
   const double elevation = mowbite_time::SunElevation(datum_->first, datum_->second, now_s + clock_offset_);
   return Reason("DARK", "the sun has set")
       .With("sun_elevation", elevation)

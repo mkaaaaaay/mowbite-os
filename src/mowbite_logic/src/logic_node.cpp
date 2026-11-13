@@ -136,9 +136,9 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   rpc_error_pub_ = create_publisher<mowbite_msgs::msg::RpcError>("bridge/rpc/error", 100);
   rpc_methods_pub_ = create_publisher<mowbite_msgs::msg::RpcMethods>("bridge/rpc/methods", LatchedQos(50));
   rpc_sub_ = create_subscription<mowbite_msgs::msg::RpcRequest>(
-      "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRpcRequest(*msg); });
+      "bridge/rpc/request", 100, [this](const mowbite_msgs::msg::RpcRequest& msg) { OnRpcRequest(msg); });
   map_sub_ = create_subscription<std_msgs::msg::String>(
-      "map/json", LatchedQos(1), [this](std_msgs::msg::String::ConstSharedPtr msg) {
+      "map/json", LatchedQos(1), [this](const std_msgs::msg::String::ConstSharedPtr& msg) {
         {
           std::lock_guard<std::mutex> lock(mutex_);
           planner_.SetMap(msg->data);
@@ -153,9 +153,9 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   calibration_client_ = rclcpp_action::create_client<Calibrate>(this, "calibration/run");
   calibration_status_sub_ = create_subscription<mowbite_msgs::msg::CalibrationStatus>(
       "calibration/status", 10,
-      [this](mowbite_msgs::msg::CalibrationStatus::ConstSharedPtr msg) { OnCalibrationStatus(*msg); });
+      [this](const mowbite_msgs::msg::CalibrationStatus::ConstSharedPtr& msg) { OnCalibrationStatus(*msg); });
   calibration_cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-      "calibration/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) {
+      "calibration/cmd_vel", 10, [this](const geometry_msgs::msg::Twist::ConstSharedPtr& msg) {
         bool active;
         {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -166,12 +166,12 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   PublishRpcMethods();
 
   hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
-      "hw/status", 10, [this](mowbite_msgs::msg::HardwareStatus::ConstSharedPtr msg) { OnHardwareStatus(*msg); });
+      "hw/status", 10, [this](const mowbite_msgs::msg::HardwareStatus& msg) { OnHardwareStatus(msg); });
   pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
-      "localization/pose", 10, [this](mowbite_msgs::msg::RobotPose::ConstSharedPtr msg) { OnPose(*msg); });
+      "localization/pose", 10, [this](const mowbite_msgs::msg::RobotPose::ConstSharedPtr& msg) { OnPose(*msg); });
   // RTK fixed positions of the antenna for the course probe of undocking.
   gnss_sub_ = create_subscription<mowbite_msgs::msg::GnssFix>(
-      "gps/absolute_pose", 10, [this](mowbite_msgs::msg::GnssFix::ConstSharedPtr msg) {
+      "gps/absolute_pose", 10, [this](const mowbite_msgs::msg::GnssFix::ConstSharedPtr& msg) {
         if (msg->solution != mowbite_msgs::msg::GnssFix::RTK_FIXED) return;
         bool undocking;
         {
@@ -183,18 +183,18 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
       });
   // The sunset needs a safe wall clock and the datum in use.
   clock_sub_ = create_subscription<mowbite_msgs::msg::ClockStatus>(
-      "time/clock", LatchedQos(1), [this](mowbite_msgs::msg::ClockStatus::ConstSharedPtr msg) {
+      "time/clock", LatchedQos(1), [this](const mowbite_msgs::msg::ClockStatus::ConstSharedPtr& msg) {
         const double wall = rclcpp::Clock(RCL_SYSTEM_TIME).now().seconds();
         std::lock_guard<std::mutex> lock(mutex_);
         core_.Call<&LogicCore::OnClock>(msg->ok, msg->reason, wall - MonotonicSeconds());
       });
   datum_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
-      "gps/datum", LatchedQos(1), [this](sensor_msgs::msg::NavSatFix::ConstSharedPtr msg) {
+      "gps/datum", LatchedQos(1), [this](const sensor_msgs::msg::NavSatFix::ConstSharedPtr& msg) {
         std::lock_guard<std::mutex> lock(mutex_);
         core_.Call<&LogicCore::OnDatum>(msg->latitude, msg->longitude);
       });
   jump_sub_ = create_subscription<mowbite_msgs::msg::PositionJump>(
-      "localization/jump", 10, [this](mowbite_msgs::msg::PositionJump::ConstSharedPtr msg) {
+      "localization/jump", 10, [this](const mowbite_msgs::msg::PositionJump::ConstSharedPtr& msg) {
         {
           std::lock_guard<std::mutex> lock(mutex_);
           core_.Call<&LogicCore::OnPositionJump>(msg->after.x, msg->after.y, msg->distance,
@@ -210,7 +210,7 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
         core_.Call<&LogicCore::OnWheelOdom>(msg->twist.linear.x, MonotonicSeconds());
       });
   map_status_sub_ = create_subscription<mowbite_msgs::msg::MapStatus>(
-      "map/status", LatchedQos(1), [this](mowbite_msgs::msg::MapStatus::ConstSharedPtr msg) {
+      "map/status", LatchedQos(1), [this](const mowbite_msgs::msg::MapStatus::ConstSharedPtr& msg) {
         {
           std::lock_guard<std::mutex> lock(mutex_);
           core_.Call<&LogicCore::OnMapStatus>(ToDatum(msg->datum_state), msg->reason);
@@ -222,11 +222,11 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
         Step();
       });
   action_sub_ = create_subscription<std_msgs::msg::String>(
-      "bridge/action", 10, [this](std_msgs::msg::String::ConstSharedPtr msg) { OnAction(msg->data); });
+      "bridge/action", 10, [this](const std_msgs::msg::String::ConstSharedPtr& msg) { OnAction(msg->data); });
   teleop_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-      "bridge/teleop", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) { OnTeleop(*msg); });
+      "bridge/teleop", 10, [this](const geometry_msgs::msg::Twist::ConstSharedPtr& msg) { OnTeleop(*msg); });
   follower_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-      "follower/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) {
+      "follower/cmd_vel", 10, [this](const geometry_msgs::msg::Twist::ConstSharedPtr& msg) {
         bool active;
         {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -238,7 +238,7 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   button_sub_ = create_subscription<mowbite_msgs::msg::ButtonEvent>(
       "hw/button", rclcpp::QoS(10).reliable(), [this](const mowbite_msgs::msg::ButtonEvent& msg) { OnButton(msg); });
   caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
-      "hw/capabilities", LatchedQos(1), [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
+      "hw/capabilities", LatchedQos(1), [this](const mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr& msg) {
         {
           std::lock_guard<std::mutex> lock(mutex_);
           core_.Call<&LogicCore::OnCapabilities>(!msg->safety_measurement_date.empty(), msg->charge_stop);
@@ -254,13 +254,13 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   transit_client_ = create_client<PlanTransit>("mowbite_planner/plan_transit");
   follow_client_ = rclcpp_action::create_client<FollowPath>(this, "follow_path");
   drive_srv_ = create_service<mowbite_msgs::srv::DriveTo>(
-      "logic/drive_to",
-      [this](std::shared_ptr<rmw_request_id_t> header, std::shared_ptr<mowbite_msgs::srv::DriveTo::Request> request) {
+      "logic/drive_to", [this](const std::shared_ptr<rmw_request_id_t>& header,
+                               const std::shared_ptr<mowbite_msgs::srv::DriveTo::Request>& request) {
         OnDriveTo(header, *request);
       });
   stop_drive_srv_ = create_service<std_srvs::srv::Trigger>(
-      "logic/stop_drive", [this](std::shared_ptr<std_srvs::srv::Trigger::Request>,
-                                 std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+      "logic/stop_drive", [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>&,
+                                 const std::shared_ptr<std_srvs::srv::Trigger::Response>& response) {
         {
           std::lock_guard<std::mutex> lock(mutex_);
           // Leaving the station for a drive is part of the drive.
@@ -517,7 +517,7 @@ void LogicNode::ReleaseEmergency(const std::string& rpc_id, uint32_t latch_count
       emergency_client_
           ->async_send_request(request,
                                [this](rclcpp::Client<mowbite_msgs::srv::SetEmergency>::SharedFuture future) {
-                                 const auto response = future.get();
+                                 const auto& response = future.get();
                                  {
                                    std::lock_guard<std::mutex> lock(mutex_);
                                    release_sent_.reset();
@@ -702,8 +702,8 @@ void LogicNode::SendFollow(const FollowPath::Goal& goal, const std::string& what
     }
     Step();
   };
-  options.feedback_callback = [this, seq](FollowHandle::SharedPtr,
-                                          const std::shared_ptr<const FollowPath::Feedback> feedback) {
+  options.feedback_callback = [this, seq](const FollowHandle::SharedPtr&,
+                                          const std::shared_ptr<const FollowPath::Feedback>& feedback) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (seq != drive_.seq) return;
     drive_.follower_sign = MonotonicSeconds();
@@ -756,7 +756,7 @@ bool LogicNode::CheckFollowerLocked() {
   if (canceled) why = Reason(*drive_.cancel_reason).WithMessage(drive_.cancel_reason->message + " (" + text + ")");
   try {
     if (drive_.handle) follow_client_->async_cancel_goal(drive_.handle);
-  } catch (const rclcpp_action::exceptions::UnknownGoalHandleError&) {
+  } catch (const rclcpp_action::exceptions::UnknownGoalHandleError&) {  // NOLINT(bugprone-empty-catch)
     // The client has dropped the goal already; there is nothing left to cancel.
   }
   EndDrive(false, why, canceled ? FollowPath::Result::REASON_CANCELED : FollowPath::Result::REASON_TIMEOUT,
@@ -899,7 +899,7 @@ void LogicNode::Approach(const JobPose& goal) {
 Reason LogicNode::PlanWay(Purpose purpose, double x, double y, double heading) {
   std::vector<Ring> drivable;
   std::vector<Ring> obstacles;
-  const Reason why = planner_.TransitAreas(&drivable, &obstacles);
+  Reason why = planner_.TransitAreas(&drivable, &obstacles);
   if (!why.empty()) return why;
   if (!transit_client_->service_is_ready()) return PlannerMissing();
   const RobotStateData state = core_.View().RobotState();
@@ -1064,7 +1064,7 @@ void LogicNode::SendBlade(bool on) {
   if (blade_lease_max_s_ > 0) lease = std::min(lease, static_cast<double>(blade_lease_max_s_));
   request->lease_s = static_cast<float>(lease);
   blade_client_->async_send_request(request, [this, on](rclcpp::Client<mowbite_msgs::srv::SetBlade>::SharedFuture f) {
-    const auto response = f.get();
+    const auto& response = f.get();
     if (response->success) return;
     RCLCPP_WARN(get_logger(), "hw/blade refused %s: %s (reason bits 0x%x)", on ? "on" : "off",
                 response->message.c_str(), response->emergency_reason);
@@ -1768,8 +1768,8 @@ void LogicNode::SendCalibration(const CalibrationGoal& goal) {
     }
     Step();
   };
-  options.feedback_callback = [this, seq](CalibrateHandle::SharedPtr,
-                                          const std::shared_ptr<const Calibrate::Feedback> feedback) {
+  options.feedback_callback = [this, seq](const CalibrateHandle::SharedPtr&,
+                                          const std::shared_ptr<const Calibrate::Feedback>& feedback) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (seq != calibration_.seq) return;
@@ -1806,7 +1806,7 @@ void LogicNode::CancelCalibration() {
   }
   try {
     calibration_client_->async_cancel_goal(calibration_.handle);
-  } catch (const rclcpp_action::exceptions::UnknownGoalHandleError&) {
+  } catch (const rclcpp_action::exceptions::UnknownGoalHandleError&) {  // NOLINT(bugprone-empty-catch)
     // The client has dropped the goal already; there is nothing left to cancel.
   }
 }
@@ -1934,7 +1934,7 @@ void LogicNode::SendRecordedBody() {
       recorded_body_client_
           ->async_send_request(request,
                                [this, seq](rclcpp::Client<mowbite_msgs::srv::SetRecordedBody>::SharedFuture f) {
-                                 const auto r = f.get();
+                                 const auto& r = f.get();
                                  {
                                    std::lock_guard<std::mutex> lock(mutex_);
                                    // A late answer after the timeout, or one to an older change.
@@ -2223,7 +2223,7 @@ void LogicNode::SendMapEdit(const MapEdit& edit) {
     edit_request_id_ = set_dock_client_
                            ->async_send_request(request,
                                                 [answer](rclcpp::Client<mowbite_msgs::srv::SetDock>::SharedFuture f) {
-                                                  const auto r = f.get();
+                                                  const auto& r = f.get();
                                                   answer(r->success, r->id, r->code, r->message);
                                                 })
                            .request_id;
@@ -2251,7 +2251,7 @@ void LogicNode::SendMapEdit(const MapEdit& edit) {
   edit_request_id_ = add_area_client_
                          ->async_send_request(request,
                                               [answer](rclcpp::Client<mowbite_msgs::srv::AddArea>::SharedFuture f) {
-                                                const auto r = f.get();
+                                                const auto& r = f.get();
                                                 answer(r->success, r->id, r->code, r->message);
                                               })
                          .request_id;
@@ -2276,7 +2276,7 @@ void LogicNode::SendDockCheck(double heading) {
                                    std::lock_guard<std::mutex> lock(mutex_);
                                    // A late answer after the timeout is not the current one any more.
                                    if (seq != dock_check_seq_ || !dock_check_sent_) return;
-                                   const auto r = f.get();
+                                   const auto& r = f.get();
                                    FinishDockCheck(r->success, r->x, r->y, r->position_accuracy, r->message);
                                  }
                                  Step();
@@ -2328,7 +2328,7 @@ void LogicNode::SendCharge(bool on) {
       charge_client_
           ->async_send_request(request,
                                [this, seq, on](rclcpp::Client<mowbite_msgs::srv::SetCharge>::SharedFuture f) {
-                                 const auto r = f.get();
+                                 const auto& r = f.get();
                                  if (on) {
                                    if (!r->success) RCLCPP_WARN(get_logger(), "hw/charge on: %s", r->message.c_str());
                                    return;

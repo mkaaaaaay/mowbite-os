@@ -435,7 +435,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
       if ((pause_ & waiting) == 0) return WrongState();
       // The EMERGENCY event told already: no MOWING_REFUSED.
       if (emergency_) return Reason("EMERGENCY", "Emergency: reset it first");
-      const Reason why = Held() ? HoldProblem() : ContinueProblem();
+      Reason why = Held() ? HoldProblem() : ContinueProblem();
       if (!why.empty()) {
         RefuseStart(why);
         return why;
@@ -584,7 +584,7 @@ Reason LogicCore::MoveProblem() const {
 
 Reason LogicCore::StartDrive(double x, double y) {
   CommandCancels();
-  const Reason why = DriveProblem();
+  Reason why = DriveProblem();
   if (!why.empty()) {
     RefuseDrive(why);
     return why;
@@ -710,7 +710,7 @@ RobotStateData LogicCore::RobotState() const {
   s.is_charging = hw_.battery_ok && hw_.dock_contact;
   s.rain_detected = hw_.telemetry_ok && hw_.rain;
   if (hw_.battery_ok) {
-    s.battery_percentage = std::clamp(hw_.battery_percentage / 100.0f, 0.0f, 1.0f);
+    s.battery_percentage = std::clamp(static_cast<float>(hw_.battery_percentage) / 100.0f, 0.0f, 1.0f);
   }
   if (pose_) {
     s.pose_x = pose_->x;
