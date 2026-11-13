@@ -11,8 +11,8 @@ import unittest
 HERE = os.path.dirname(__file__)
 NODE = os.path.join(HERE, "..", "src", "schedule_node.cpp")
 RPC = os.path.join(HERE, "..", "include", "mowbite_schedule", "schedule_rpc.h")
-OUT = {"schedule/next_start", "net/weather/request", "bridge/rpc/methods", "bridge/rpc/response", "bridge/rpc/error",
-       "bridge/publish", "logic/start_run", "logic/drop_tasks"}
+OUT = {"schedule/next_start", "net/weather/request", "schedule/notice", "bridge/rpc/methods", "bridge/rpc/response",
+       "bridge/rpc/error", "bridge/publish", "logic/start_run", "logic/drop_tasks"}
 
 
 class Topics(unittest.TestCase):

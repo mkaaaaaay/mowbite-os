@@ -16,6 +16,7 @@
 #include <mowbite_msgs/msg/rpc_request.hpp>
 #include <mowbite_msgs/msg/rpc_response.hpp>
 #include <mowbite_msgs/msg/run_status.hpp>
+#include <mowbite_msgs/msg/schedule_notice.hpp>
 #include <mowbite_msgs/msg/weather.hpp>
 #include <mowbite_msgs/msg/weather_request.hpp>
 #include <mowbite_msgs/srv/drop_tasks.hpp>
@@ -94,6 +95,8 @@ class ScheduleNode : public rclcpp::Node {
         }) {
     next_start_pub_ = create_publisher<std_msgs::msg::Int64>("schedule/next_start", LatchedQos(1));
     weather_pub_ = create_publisher<mowbite_msgs::msg::WeatherRequest>("net/weather/request", 10);
+    notice_pub_ = create_publisher<mowbite_msgs::msg::ScheduleNotice>("schedule/notice", 20);
+    noticed_ = LastLogEntry();
     publish_pub_ = create_publisher<mowbite_msgs::msg::MqttPublish>("bridge/publish", 100);
     methods_pub_ = create_publisher<mowbite_msgs::msg::RpcMethods>("bridge/rpc/methods", LatchedQos(50));
     response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
@@ -252,7 +255,10 @@ class ScheduleNode : public rclcpp::Node {
         weather_pub_->publish(request);
       }
       if (out.file_changed) Write(kFile, FileToJson(core_.View().file()));
-      if (out.log_changed) Write(kLogFile, core_.View().LogJson());
+      if (out.log_changed) {
+        Write(kLogFile, core_.View().LogJson());
+        NoticeLogged();
+      }
       if (out.state_changed || out.start) Write(kStateFile, core_.View().StateJson());
       if (out.start) Start(*out.start);
       if (out.drop) Drop(*out.drop);
@@ -260,6 +266,40 @@ class ScheduleNode : public rclcpp::Node {
     }
     PublishNextStart();
     MirrorReady();
+  }
+
+  json LastLogEntry() const {
+    const json entries = core_.View().LogEntries(1);
+    return entries.empty() ? json() : entries.back();
+  }
+
+  // The entries of the log since the last notice, for the pushes of mowbite_net.
+  void NoticeLogged() {
+    const json entries = core_.View().LogEntries(kLogEntries);
+    size_t first = 0;
+    for (size_t i = entries.size(); i > 0; --i) {
+      if (entries[i - 1] == noticed_) {
+        first = i;
+        break;
+      }
+    }
+    if (first == 0 && !entries.empty()) first = entries.size() - 1;
+    for (size_t i = first; i < entries.size(); ++i) {
+      const json& entry = entries[i];
+      mowbite_msgs::msg::ScheduleNotice msg;
+      msg.kind = mowbite_msgs::msg::ScheduleNotice::KIND_LOGGED;
+      msg.what = entry.value("what", "");
+      msg.detail = TextOf(entry["detail"]);
+      msg.more = TextOf(entry["more"]);
+      msg.at = TextOf(entry["at"]);
+      notice_pub_->publish(msg);
+    }
+    if (!entries.empty()) noticed_ = entries.back();
+  }
+
+  static std::string TextOf(const json& value) {
+    if (value.is_null()) return "";
+    return value.is_string() ? value.get<std::string>() : value.dump();
   }
 
   void Write(const char* name, const json& value) {
@@ -383,6 +423,9 @@ class ScheduleNode : public rclcpp::Node {
         const ScheduleFile& file = core_.View().file();
         RCLCPP_INFO(get_logger(), "schedule.set: version %lld, %s, %zu plan(s)", static_cast<long long>(file.version),
                     file.schedule.enabled ? "on" : "off", file.schedule.plans.size());
+        mowbite_msgs::msg::ScheduleNotice notice;
+        notice.kind = mowbite_msgs::msg::ScheduleNotice::KIND_CHANGED;
+        notice_pub_->publish(notice);
         result = Answer();
       }
     } else if (method == "schedule.log") {
@@ -436,12 +479,15 @@ class ScheduleNode : public rclcpp::Node {
   std::optional<double> longitude_;
   mowbite_logic::MowingPlanner map_;
   std::optional<int64_t> published_next_;
+  // The last log entry told on schedule/notice.
+  json noticed_;
   bool ready_mirrored_ = false;
   std::optional<Ready> ready_sent_;
   double ready_mirrored_mono_ = 0;
 
   rclcpp::Publisher<std_msgs::msg::Int64>::SharedPtr next_start_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::WeatherRequest>::SharedPtr weather_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::ScheduleNotice>::SharedPtr notice_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcMethods>::SharedPtr methods_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcResponse>::SharedPtr response_pub_;
