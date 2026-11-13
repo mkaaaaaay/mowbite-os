@@ -58,7 +58,9 @@ os.environ["MOWBITE_HALT_FILE"] = HALT
 
 def generate_test_description():
     return launch.LaunchDescription([mosquitto(WORK, MQTT_PORT),
-                                     TimerAction(period=1.0, actions=[sim_stack(WORK, MQTT_PORT, data_dir=DATA)]),
+                                     # sunset: no params file of the test in DATA, which is to stay unchanged.
+                                     TimerAction(period=1.0,
+                                                 actions=[sim_stack(WORK, MQTT_PORT, sunset=True, data_dir=DATA)]),
                                      launch_testing.actions.ReadyToTest()]), {}
 
 
