@@ -4,7 +4,7 @@ the wheel reports of the driver; without a safety measurement mowing and drives 
 and is released; on the station the charge of the board is confirmed (DOCKED) and its loss told (CHARGING_LOST), with
 the values of the NX60i; a killed driver stands the wheels (the board's own timeout) and its successor holds the board
 from its first frame until a release; a crashed container comes back beside the running driver; after three restarts the
-driver stays down. Prints the RSS of driver, container and planner.
+driver stays down. Prints the RSS of driver, container, planner and mowbite_net.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_nx60i_stack.py
 """
@@ -181,9 +181,10 @@ class TestNx60iStack(unittest.TestCase):
         self.assertTrue(p.wait(lambda: p.pose, 30), "no pose: the gyro never calibrated")
         self.assertTrue(p.wait(lambda: any("Gyro offset" in line for line in p.logs), 5))
         rss = {name: [round(rss_mb(pid), 1) for pid in running(proc_info, name)]
-               for name in ("xcore_driver_node", "component_container_isolated", "mowbite_planner_os_node")}
+               for name in ("xcore_driver_node", "component_container_isolated", "mowbite_planner_os_node",
+                            "mowbite_net")}
         print(f"RSS MB: {rss}", flush=True)
-        self.assertEqual([len(v) for v in rss.values()], [1, 1, 1], rss)
+        self.assertEqual([len(v) for v in rss.values()], [1, 1, 1, 1], rss)
 
     def test_2_mowing_and_drives_wait_for_the_safety_measurement(self):
         p = self.probe
