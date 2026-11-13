@@ -169,7 +169,7 @@ class TestNet(unittest.TestCase):
 
         # An event of the logic: done is picked.
         mark = len(REQUESTS)
-        event = MqttPublish(topic="events/json", payload=json.dumps({"type": "JOB_COMPLETE", "t": time.time()}))
+        event = MqttPublish(topic="events/json", payload=json.dumps({"type": "JOB_COMPLETE", "t": time.time(), "x": 0.0, "y": 0.0}))
         self.publish.publish(event)
         done = wait_until(lambda: posts(mark, "/up/phone"), 20)
         self.assertTrue(done)
@@ -203,10 +203,16 @@ class TestNet(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         for root, _, files in os.walk(DATA):
             for name in files:
-                if name == "notify.json":
+                path = os.path.join(root, name)
+                try:
+                    if name in ("notify.json", "notify.json.tmp"):
+                        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600, name)
+                        continue
+                    with open(path, "rb") as f:
+                        self.assertNotIn(TOKEN.encode(), f.read(), name)
+                except FileNotFoundError:
+                    # A temp file renamed in the meantime.
                     continue
-                with open(os.path.join(root, name), "rb") as f:
-                    self.assertNotIn(TOKEN.encode(), f.read(), name)
 
 
 @launch_testing.post_shutdown_test()
