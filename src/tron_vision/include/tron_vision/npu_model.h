@@ -29,8 +29,8 @@ class NpuModel {
   NpuModel& operator=(const NpuModel&) = delete;
   ~NpuModel();
 
-  // Loads the library and the model, reads the tensor attributes and binds the model to NPU core 0.
-  bool Open(const std::string& library_path, const std::string& model_path, std::string& error);
+  // Loads the library and the model, reads the tensor attributes and binds the model to `core` (0 to 2) alone.
+  bool Open(const std::string& library_path, const std::string& model_path, int core, std::string& error);
   void Close();
   bool IsOpen() const {
     return context_ != 0;

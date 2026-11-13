@@ -1,18 +1,73 @@
+#include <dlfcn.h>
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <functional>
+#include <map>
 #include <memory>
 #include <mowbite_msgs/msg/camera.hpp>
+#include <mowbite_msgs/msg/detections.hpp>
+#include <mowbite_msgs/msg/sensor_spec.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <regex>
 #include <set>
 #include <string>
+#include <thread>
+#include <vector>
 
+#include "test_util.h"
 #include "tron_vision/vision_node.h"
 
 namespace tron_vision {
 namespace {
+
+using mowbite_msgs::msg::Camera;
+
+// A gray camera at 15 fps in real time.
+class GrayCamera : public tron_vision::Camera {
+ public:
+  bool Start(std::string&) override {
+    return true;
+  }
+  void Stop() override {}
+  int Next(int timeout_ms, Nv12View& frame, std::string&) override {
+    const int wait_ms = std::min(timeout_ms, 66);
+    std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
+    if (wait_ms < 66) return 0;
+    frame = test::View(frame_);
+    return 1;
+  }
+  bool SetExposure(const ExposureSetting&, std::string&) override {
+    return true;
+  }
+
+ private:
+  test::Nv12Frame frame_{320, 180, 90, 128, 128};
+};
+
+// Spins a listener until `done` or 10 s.
+void SpinUntil(const rclcpp::Node::SharedPtr& listener, const std::function<bool()>& done) {
+  rclcpp::executors::SingleThreadedExecutor spinner;
+  spinner.add_node(listener);
+  const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (!done() && std::chrono::steady_clock::now() < end) {
+    spinner.spin_some(std::chrono::milliseconds(100));
+  }
+}
+
+// The core mask the stand-in runtime got for the highest open context, -1 without one.
+int OpenCoreMask() {
+  void* lib = dlopen(FAKE_NPU_LIB, RTLD_NOW | RTLD_NOLOAD);
+  if (lib == nullptr) return -1;
+  auto core_mask = reinterpret_cast<int (*)(abi::Context)>(dlsym(lib, "fake_core_mask"));
+  int mask = -1;
+  for (abi::Context c = 1; core_mask != nullptr && c < 100; c++) {
+    if (core_mask(c) >= 0) mask = core_mask(c);
+  }
+  dlclose(lib);
+  return mask;
+}
 
 class VisionNodeTest : public ::testing::Test {
  protected:
@@ -118,6 +173,119 @@ TEST_F(VisionNodeTest, RefusesAnUnknownFit) {
   rclcpp::NodeOptions options;
   options.parameter_overrides({{"fit", "stretch"}});
   EXPECT_THROW(VisionNode node(options), std::invalid_argument);
+}
+
+// The right instance: camera, sensors and hardware follow camera_id and sensor_suffix.
+TEST_F(VisionNodeTest, RightInstanceReportsItsCameraAndSensors) {
+  rclcpp::NodeOptions options;
+  options.parameter_overrides(
+      {{"process", "right"}, {"camera_id", "oa_right"}, {"sensor_suffix", "_right"}, {"video", false}});
+  auto node = std::make_shared<VisionNode>(options);
+  EXPECT_EQ(node->get_parameter("sensor_name").as_string(), "m00_b_gc2093");
+  EXPECT_EQ(node->get_parameter("video_device").as_string(), "/dev/video44");
+  auto listener = std::make_shared<rclcpp::Node>("listener");
+  std::vector<Camera> cameras;
+  std::map<std::string, std::string> names;
+  std::map<std::string, std::string> texts;
+  auto info = listener->create_subscription<mowbite_msgs::msg::SensorSpec>(
+      "bridge/sensor_info", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().transient_local(),
+      [&](const mowbite_msgs::msg::SensorSpec& m) { names[m.id] = m.name; });
+  auto values = listener->create_subscription<mowbite_msgs::msg::SensorValue>(
+      "bridge/sensor_value", 100, [&](const mowbite_msgs::msg::SensorValue& m) { texts[m.sensor_id] = m.text; });
+  auto entries = listener->create_subscription<Camera>(
+      "hw/cameras", rclcpp::QoS(rclcpp::KeepLast(4)).reliable().transient_local(),
+      [&](const Camera& m) { cameras.push_back(m); });
+  SpinUntil(listener, [&] { return names.size() == 3 && texts.count("vision_right_state") && !cameras.empty(); });
+  EXPECT_EQ(names["vision_right_state"], "Camera AI right");
+  EXPECT_EQ(names["vision_right_last"], "Camera AI right Detections");
+  EXPECT_EQ(names["vision_right_rate"], "Camera AI right Rate");
+  EXPECT_EQ(texts["vision_right_state"], "model_missing: path not set");
+  EXPECT_FALSE(texts.count("vision_state"));
+  ASSERT_FALSE(cameras.empty());
+  EXPECT_EQ(cameras.back().id, "oa_right");
+  EXPECT_EQ(cameras.back().name, "Right camera");
+  EXPECT_EQ(cameras.back().position, Camera::POSITION_RIGHT);
+  EXPECT_EQ(cameras.back().process, "right");
+  EXPECT_TRUE(cameras.back().detections);
+}
+
+// Each instance runs the model on its own NPU core and names its camera in the detections.
+class VisionNodeDetects : public VisionNodeTest, public ::testing::WithParamInterface<std::tuple<std::string, int>> {};
+
+TEST_P(VisionNodeDetects, OnItsCoreForItsCamera) {
+  const auto& [camera_id, core] = GetParam();
+  test::TempDir dir;
+  rclcpp::NodeOptions options;
+  options.parameter_overrides({{"camera_id", camera_id},
+                               {"npu_core", core},
+                               {"library_path", std::string(FAKE_NPU_LIB)},
+                               {"model_path", dir.Write("m.rknn", "classes 3\nhit 0 0.8 8 30 40 2 2 2 2\n")},
+                               {"labels_path", dir.Write("labels.txt", "person\ndog\ncat\n")},
+                               {"crash_dir", dir.Path() + "/vision"},
+                               {"max_rss_mb", 8192},
+                               {"video", false}});
+  auto node = std::make_shared<VisionNode>(options, std::make_unique<GrayCamera>());
+  auto listener = std::make_shared<rclcpp::Node>("listener");
+  std::vector<mowbite_msgs::msg::Detections> got;
+  auto sub = listener->create_subscription<mowbite_msgs::msg::Detections>(
+      "vision/detections", 5, [&](const mowbite_msgs::msg::Detections& m) { got.push_back(m); });
+  SpinUntil(listener, [&] { return !got.empty(); });
+  ASSERT_FALSE(got.empty());
+  EXPECT_EQ(got.back().camera_id, camera_id);
+  EXPECT_EQ(got.back().header.frame_id, camera_id);
+  ASSERT_EQ(got.back().detections.size(), 1U);
+  EXPECT_EQ(got.back().detections[0].class_name, "person");
+  // The runtime takes one bit per core.
+  EXPECT_EQ(OpenCoreMask(), 1 << core);
+}
+
+INSTANTIATE_TEST_SUITE_P(LeftAndRight, VisionNodeDetects,
+                         ::testing::Values(std::make_tuple(std::string("oa_left"), 0),
+                                           std::make_tuple(std::string("oa_right"), 1)));
+
+// One section for both instances, the right one in its namespace adds its own values on top.
+TEST_F(VisionNodeTest, ParameterFileWithASharedAndARightSection) {
+  test::TempDir dir;
+  const std::string file = dir.Write("tron.yaml",
+                                     "/**/tron_vision:\n"
+                                     "  ros__parameters:\n"
+                                     "    labels_path: /shared/labels.txt\n"
+                                     "    infer_rate: 1.5\n"
+                                     "    video: false\n"
+                                     "/right/tron_vision:\n"
+                                     "  ros__parameters:\n"
+                                     "    camera_id: oa_right\n"
+                                     "    npu_core: 1\n"
+                                     "    rtsp_port: 8557\n"
+                                     "    sensor_suffix: _right\n");
+  rclcpp::NodeOptions left_options;
+  left_options.arguments({"--ros-args", "--params-file", file});
+  rclcpp::NodeOptions right_options;
+  right_options.arguments({"--ros-args", "--params-file", file, "-r", "__ns:=/right"});
+  auto left = std::make_shared<VisionNode>(left_options);
+  auto right = std::make_shared<VisionNode>(right_options);
+  EXPECT_EQ(right->get_fully_qualified_name(), std::string("/right/tron_vision"));
+  for (const auto& node : {left, right}) {
+    EXPECT_EQ(node->get_parameter("labels_path").as_string(), "/shared/labels.txt");
+    EXPECT_EQ(node->get_parameter("infer_rate").as_double(), 1.5);
+  }
+  EXPECT_EQ(left->get_parameter("camera_id").as_string(), "oa_left");
+  EXPECT_EQ(left->get_parameter("npu_core").as_int(), 0);
+  EXPECT_EQ(left->get_parameter("rtsp_port").as_int(), 8556);
+  EXPECT_EQ(left->get_parameter("sensor_suffix").as_string(), "");
+  EXPECT_EQ(right->get_parameter("camera_id").as_string(), "oa_right");
+  EXPECT_EQ(right->get_parameter("npu_core").as_int(), 1);
+  EXPECT_EQ(right->get_parameter("rtsp_port").as_int(), 8557);
+  EXPECT_EQ(right->get_parameter("sensor_suffix").as_string(), "_right");
+}
+
+TEST_F(VisionNodeTest, RefusesAnUnknownCameraOrSuffix) {
+  for (const auto& [name, value] : std::vector<std::pair<std::string, std::string>>{
+           {"camera_id", "oa_rear"}, {"sensor_suffix", "right"}, {"sensor_suffix", "_Right"}}) {
+    rclcpp::NodeOptions options;
+    options.parameter_overrides({{name, value}, {"video", false}});
+    EXPECT_THROW(VisionNode node(options), std::invalid_argument) << name << " " << value;
+  }
 }
 
 }  // namespace

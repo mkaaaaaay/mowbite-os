@@ -82,7 +82,7 @@ bool VisionLoop::Load() {
   StopWorker();
   auto worker = std::make_shared<InferenceWorker>();
   NpuModel& model = worker->Model();
-  if (!model.Open(config_.library_path, config_.model_path, error)) {
+  if (!model.Open(config_.library_path, config_.model_path, config_.npu_core, error)) {
     Set(VisionState::kModelError, error);
     return false;
   }

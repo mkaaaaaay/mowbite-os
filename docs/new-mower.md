@@ -231,9 +231,9 @@ the emergency signal is fixed. Load it as a component of the container only when
 ## 8. Cameras (optional)
 
 A camera of the mower, shown in the app, optionally with object detection for display only. The Tron's setup is the
-example: `tron_vision` (camera AI on the left side camera), `tron_stereo` (live picture), `tron_side` (live picture of
-the right side camera) and `tron_rear` (dock marker with a live picture) with their start in `tron.launch.py` and
-their parameters in `config/tron.yaml`.
+example: `tron_vision` (camera AI on the left and, as a second instance, on the right side camera), `tron_stereo` (live
+picture), `tron_side` (only the live picture of the right side camera, with `right_node:=side`) and `tron_rear` (dock
+marker with a live picture) with their start in `tron.launch.py` and their parameters in `config/tron.yaml`.
 
 The platform makes the pictures, the OS takes them to the app: `mowbite_camera` keeps the cameras of `hw/cameras`,
 answers `camera.list` and `camera.stream` (both show up in `rpc.methods` with the first camera), lets two viewers in
@@ -244,6 +244,9 @@ second what `mowbite_camera` needs around it.
   Start it from the start file with `stack.own_process` only when the drivers run and a switch in
   `/etc/mowbite/os.conf` says so. It restarts at most three times and leaves `<name>_exit.json`; give it
   `oom_score_adj` 1000, a `nice` value and CPUs apart from the driver. Pass the same name to the node as `process`.
+- The same node on a second camera is a second process: the same node name in a namespace of its own, absolute topic
+  names in the node, the shared values under `/**/<node>` and only what differs under `/<namespace>/<node>` (Tron:
+  `/right/tron_vision` with camera id, NPU core, RTSP port and a suffix for its sensor ids).
 - It reports and nothing else: sensors over `bridge/sensor_info` and `bridge/sensor_value`, detections on
   `vision/detections` (`mowbite_msgs/Detections`, boxes in pixels of the camera image), each camera latched on
   `hw/cameras` (`mowbite_msgs/Camera`: id, process, size of the shown image, protocols, and while it cannot stream

@@ -29,6 +29,8 @@ struct VisionConfig {
   std::string labels_path;
   // Inferences per second, held within 0.5..5.
   double infer_rate = 2.0;
+  // The NPU core the model runs on alone, one per camera process.
+  int npu_core = 0;
   Fit fit = Fit::kCrop;
   bool swap_rb = false;
   // Gray world for the inference too; for the shown image it is always on.

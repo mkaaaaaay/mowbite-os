@@ -15,6 +15,7 @@
 #include <thread>
 
 #include "tron_vision/budget.h"
+#include "tron_vision/camera.h"
 #include "tron_vision/camera_node.h"
 #include "tron_vision/crash_guard.h"
 #include "tron_vision/tron_camera.h"
@@ -25,14 +26,16 @@ namespace tron_vision {
 
 Availability CameraAvailability(VisionState state);
 
-// The camera AI of the Tron in a process of its own: it reports state, detections and the camera with its pictures and
-// nothing else. It subscribes to no topic and calls no service, so it cannot move the mower. With `video` the
-// pictures with the boxes also go out as H.264 to the client of an RTSP server on the loopback address (MediaMTX), and
-// hw/cameras offers WebRTC before MJPEG. A loop thread runs VisionLoop; it ends the process with the exit code of the
-// loop when the limits are broken.
+// The camera AI of a side camera of the Tron in a process of its own, one per camera (camera_id, npu_core, rtsp_port,
+// sensor_suffix): it reports state, detections and the camera with its pictures and nothing else. It subscribes to no
+// topic and calls no service, so it cannot move the mower. With `video` the pictures with the boxes also go out as
+// H.264 to the client of an RTSP server on the loopback address (MediaMTX), and hw/cameras offers WebRTC before MJPEG.
+// A loop thread runs VisionLoop; it ends the process with the exit code of the loop when the limits are broken.
 class VisionNode : public rclcpp::Node {
  public:
   explicit VisionNode(const rclcpp::NodeOptions& options);
+  // With another camera than the one the parameters name, for tests.
+  VisionNode(const rclcpp::NodeOptions& options, std::unique_ptr<Camera> camera);
   ~VisionNode() override;
   VisionNode(const VisionNode&) = delete;
   VisionNode& operator=(const VisionNode&) = delete;
@@ -48,11 +51,14 @@ class VisionNode : public rclcpp::Node {
   void PublishCamera(const VisionStatus& status);
   void PublishPicture();
 
-  std::unique_ptr<TronCamera> camera_;
+  std::unique_ptr<Camera> camera_;
   std::unique_ptr<VideoOut> video_;
   std::unique_ptr<CrashGuard> guard_;
   std::unique_ptr<VisionLoop> loop_;
   std::string camera_id_;
+  std::string state_sensor_;
+  std::string last_sensor_;
+  std::string rate_sensor_;
   mowbite_msgs::msg::Camera camera_entry_;
   uint32_t jpeg_width_ = 0;
   uint32_t jpeg_height_ = 0;

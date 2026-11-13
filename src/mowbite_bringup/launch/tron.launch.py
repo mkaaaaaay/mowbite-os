@@ -1,7 +1,7 @@
 # All nodes of MowBite OS in one process (one ROS context, one DDS participant) except seven: tron_mcu, so that a
-# crash of any other node leaves its watchdogs running (G25), the MowBite Planner (Python, shapely), the camera AI, the
-# live pictures of the stereo camera and of the right side camera, the dock marker of the rear camera with its live
-# picture, and with any of these the camera service. The part every platform shares is in stack.py.
+# crash of any other node leaves its watchdogs running (G25), the MowBite Planner (Python, shapely), the camera AI on
+# the left and on the right side camera, the live picture of the stereo camera, the dock marker of the rear camera with
+# its live picture, and with any of these the camera service. The part every platform shares is in stack.py.
 import os
 import sys
 
@@ -78,7 +78,7 @@ def launch_setup(context):
     # Only here: with hardware:=read another host drives the blade, and blade_on of hw/status would always be false.
     cameras = [*camera(files, data_dir, arg("vision"), logger, "vision", "tron_vision_node", "tron_vision"),
                *camera(files, data_dir, arg("stereo"), logger, "stereo", "tron_stereo_node", "tron_stereo"),
-               *camera(files, data_dir, arg("right"), logger, "right", "tron_side_node", "tron_side"),
+               *right_camera(files, data_dir, arg("right"), arg("right_node"), logger),
                *camera(files, data_dir, arg("rear"), logger, "rear", "tron_rear_node", "tron_rear")]
     # The camera service of the OS shows their pictures in the app; without a camera process it has none to show.
     if cameras:
@@ -93,18 +93,31 @@ CAMERA_LIMITS = {"oom_score_adj": 1000, "nice": 10, "cpus": "0-3"}
 
 # A camera process of tron_vision with <process>:=on, each of its own, so that a crash of the NPU runtime, of the
 # media library or in a USB camera takes nothing along. They only report.
-def camera(files, data_dir, switch, logger, process, executable, name):
+def camera(files, data_dir, switch, logger, process, executable, name, namespace="/"):
     if switch != "on":
         # Another value in os.conf must not stop the stack.
         if switch != "off":
             logger.warning(f"{process}:={switch} is neither on nor off: {name} does not start")
         return []
+    # A second instance of a node takes the name of its namespace into its output lines.
+    label = name if namespace == "/" else f"{name}_{namespace.strip('/')}"
     # The node names this process in hw/cameras, so the OS ties its exit note to its cameras.
     return stack.own_process(
-        lambda prefix: Node(package="tron_vision", executable=executable, name=name, namespace="/",
+        lambda prefix: Node(package="tron_vision", executable=executable, name=name, namespace=namespace,
                             parameters=[*files, {"process": process}], output="screen", prefix=prefix,
-                            exec_name=name),
+                            exec_name=label),
         process, data_dir, logger, **CAMERA_LIMITS)
+
+
+# The right side camera under the switch right: the camera AI as a second tron_vision in the namespace /right (its
+# values in config under /right/tron_vision on top of those of both), or with right_node:=side only its live picture.
+def right_camera(files, data_dir, switch, node, logger):
+    if node == "side":
+        return camera(files, data_dir, switch, logger, "right", "tron_side_node", "tron_side")
+    if node != "vision" and switch == "on":
+        logger.warning(f"right_node:={node} is neither vision nor side: the right camera does not start")
+        return []
+    return camera(files, data_dir, switch, logger, "right", "tron_vision_node", "tron_vision", "/right")
 
 
 def generate_launch_description():
@@ -130,9 +143,11 @@ def generate_launch_description():
         DeclareLaunchArgument("vision", default_value=EnvironmentVariable("MOWBITE_VISION", default_value="off")),
         # on: the live picture of the stereo camera starts as well, only with hardware:=true; MOWBITE_STEREO in os.conf.
         DeclareLaunchArgument("stereo", default_value=EnvironmentVariable("MOWBITE_STEREO", default_value="off")),
-        # on: the live picture of the right side camera starts as well, only with hardware:=true; MOWBITE_RIGHT in
-        # os.conf.
+        # on: the right side camera starts as well, only with hardware:=true; MOWBITE_RIGHT in os.conf.
         DeclareLaunchArgument("right", default_value=EnvironmentVariable("MOWBITE_RIGHT", default_value="off")),
+        # vision: the camera AI on the right side camera; side: only its live picture. MOWBITE_RIGHT_NODE in os.conf.
+        DeclareLaunchArgument("right_node",
+                              default_value=EnvironmentVariable("MOWBITE_RIGHT_NODE", default_value="vision")),
         # on: the dock marker of the rear camera with its live picture starts as well, only with hardware:=true;
         # MOWBITE_REAR in os.conf.
         DeclareLaunchArgument("rear", default_value=EnvironmentVariable("MOWBITE_REAR", default_value="off")),

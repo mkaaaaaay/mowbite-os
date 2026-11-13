@@ -38,8 +38,11 @@ enum QuantType : int {
   kQuantAffine = 2,
 };
 
-// Core mask value for core 0 only.
-constexpr int kCore0 = 1;
+// Cores of the NPU (RK3588), and the core mask that runs a model on core n alone: 1, 2, 4.
+constexpr int kCores = 3;
+constexpr int CoreMask(int core) {
+  return 1 << core;
+}
 
 struct InOutNum {
   uint32_t inputs;

@@ -22,7 +22,8 @@ def launched(tmp_path, monkeypatch, **switches):
     values = {"data_dir": str(tmp_path / "data"), "config": "tron.yaml", "extra_config": "tron.yaml",
               "geometry": "geometry.yaml", "mcu_port": "/dev/ttyS9", "gnss_port": "/dev/ttyS4",
               "imu_port": "/dev/ttyS1", "hardware": "true", "datum_lat": "nan", "datum_long": "nan",
-              "datum_height": "0.0", "vision": "off", "stereo": "off", "right": "off", "rear": "off",
+              "datum_height": "0.0", "vision": "off", "stereo": "off", "right": "off", "right_node": "vision",
+              "rear": "off",
               "mqtt_host": "127.0.0.1",
               "mqtt_port": "1883", "journal_dir": "", "oom_score_adj": ""}
     values.update(switches)
@@ -45,9 +46,40 @@ def test_rear_starts_with_the_hardware_and_its_switch(tmp_path, monkeypatch):
     assert "tron_rear_node" not in executables(tmp_path, monkeypatch, stereo="on", vision="on", right="on")
 
 
+def nodes(tmp_path, monkeypatch, **switches):
+    return [a for a in launched(tmp_path, monkeypatch, **switches) if isinstance(a, Node)]
+
+
 def test_right_starts_with_the_hardware_and_its_switch(tmp_path, monkeypatch):
-    assert "tron_side_node" in executables(tmp_path, monkeypatch, right="on")
-    assert "tron_side_node" not in executables(tmp_path, monkeypatch, stereo="on", vision="on", rear="on")
+    started = executables(tmp_path, monkeypatch, right="on")
+    assert "tron_vision_node" in started and "tron_side_node" not in started
+    assert "tron_vision_node" not in executables(tmp_path, monkeypatch, stereo="on", rear="on")
+
+
+# The camera AI on both sides: two instances of tron_vision, the right one in its namespace.
+def test_left_and_right_are_two_instances(tmp_path, monkeypatch):
+    made = []
+
+    class Recorded(Node):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            made.append(kwargs)
+
+    monkeypatch.setattr(tron_launch, "Node", Recorded)
+    launched(tmp_path, monkeypatch, vision="on", right="on")
+    vision = sorted((k["namespace"], k["name"], k["exec_name"]) for k in made if k["executable"] == "tron_vision_node")
+    assert vision == [("/", "tron_vision", "tron_vision"), ("/right", "tron_vision", "tron_vision_right")]
+
+
+# side: the live picture alone, never next to a second camera AI.
+def test_right_node_side_starts_only_the_picture(tmp_path, monkeypatch):
+    started = [n.node_executable for n in nodes(tmp_path, monkeypatch, vision="on", right="on", right_node="side")]
+    assert "tron_side_node" in started and started.count("tron_vision_node") == 1
+
+
+def test_another_right_node_starts_no_right_camera(tmp_path, monkeypatch):
+    started = executables(tmp_path, monkeypatch, right="on", right_node="ai")
+    assert not {"tron_vision_node", "tron_side_node", "mowbite_camera_node"} & started
 
 
 # Each node names its process as stack.own_process does, so the OS ties an exit note to its cameras.
@@ -72,9 +104,10 @@ def test_each_camera_process_names_itself(tmp_path, monkeypatch):
     monkeypatch.setattr(tron_launch.stack, "own_process", own_process)
     monkeypatch.setattr(tron_launch, "Node", Recorded)
     launched(tmp_path, monkeypatch, vision="on", stereo="on", right="on", rear="on")
-    names = {"vision": "tron_vision", "stereo": "tron_stereo", "right": "tron_side", "rear": "tron_rear"}
-    for process, exec_name in names.items():
-        assert made[process].node_executable == exec_name + "_node"
+    names = {"vision": ("tron_vision", "tron_vision_node"), "stereo": ("tron_stereo", "tron_stereo_node"),
+             "right": ("tron_vision_right", "tron_vision_node"), "rear": ("tron_rear", "tron_rear_node")}
+    for process, (exec_name, executable) in names.items():
+        assert made[process].node_executable == executable
         assert params[exec_name][-1] == {"process": process}
 
 

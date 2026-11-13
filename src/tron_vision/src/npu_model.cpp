@@ -64,8 +64,12 @@ bool NpuModel::Resolve(std::string& error) {
          Symbol(library_, "rknn_destroy", destroy_, error);
 }
 
-bool NpuModel::Open(const std::string& library_path, const std::string& model_path, std::string& error) {
+bool NpuModel::Open(const std::string& library_path, const std::string& model_path, int core, std::string& error) {
   Close();
+  if (core < 0 || core >= abi::kCores) {
+    error = "NPU core " + std::to_string(core) + " is not 0 to " + std::to_string(abi::kCores - 1);
+    return false;
+  }
   library_ = OpenLibrary(library_path, error);
   if (library_ == nullptr) return false;
   if (!Resolve(error)) {
@@ -95,7 +99,7 @@ bool NpuModel::Open(const std::string& library_path, const std::string& model_pa
     Close();
     return false;
   }
-  const int ret = set_core_mask_(context_, abi::kCore0);
+  const int ret = set_core_mask_(context_, abi::CoreMask(core));
   if (ret != 0) {
     error = "rknn_set_core_mask " + std::to_string(ret);
     Close();
