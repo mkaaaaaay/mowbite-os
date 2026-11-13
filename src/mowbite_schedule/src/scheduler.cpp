@@ -301,7 +301,6 @@ Scheduler::Verdict Scheduler::Check(const PlanKey& key, const Plan& plan, bool f
   if (!facts_.logic_fresh) return from_wait ? decided("skip_offline") : Verdict::kWaitOffline;
   // T7 to T11
   if (facts_.emergency) return decided("skip_emergency");
-  if (run_) return decided("skip_busy", PhaseName(run_->phase));
   if (facts_.state != kIdle) return decided("skip_busy", facts_.state);
   if (!facts_.docked) return decided("skip_not_docked");
   if (facts_.rain_sensor && facts_.rain_wet && (schedule.skip_rain || facts_.rain_mode != 0)) {

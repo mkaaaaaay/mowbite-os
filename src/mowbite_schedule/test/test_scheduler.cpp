@@ -157,6 +157,7 @@ TEST_F(SchedulerTest, T1_RestartWhileWaitingEndsTheWait) {
                       {"waiting", {{"date", "2026-06-15"}, {"time", "10:00"}, {"kind", "battery"}}}};
   Make(File(), true, state);
   EXPECT_EQ(Words(), (Lines{"skip_missed"}));
+  EXPECT_EQ(scheduler_->LogEntries(1)[0]["t"], At(kMonday, "00:00"));
   EXPECT_TRUE(scheduler_->TakeOutput().state_changed);
   EXPECT_FALSE(TickAt(kMonday, "10:00", 30).start);
   EXPECT_FALSE(TickAt(kMonday, "10:30").start);
@@ -528,14 +529,15 @@ TEST_F(SchedulerTest, T14_OldOrUnusableAnswerCountsAsNone) {
   scheduler_->OnWeather(weather);
   EXPECT_TRUE(TickAt(kMonday, "10:00", 1).start);
   EXPECT_EQ(Words(), (Lines{"weather_unknown forecast", "weather_unknown cold"}));
-  // An answer to another request is left alone.
+  // An answer to another request is left alone, even one that would start.
   Make(File({{"skip_cold", 1}}));
   const Output again = TickAt(kMonday, "10:00");
   weather.id = again.weather->id + 1;
   weather.age_s = 0;
-  weather.temp_c = 0;
+  weather.temp_c = 20;
   scheduler_->OnWeather(weather);
   EXPECT_FALSE(TickAt(kMonday, "10:00", 1).start);
+  EXPECT_TRUE(Words().empty());
 }
 
 TEST_F(SchedulerTest, T14_NoPositionForTheWeather) {
@@ -644,6 +646,12 @@ TEST_F(SchedulerTest, OtherRunsAreLeftAlone) {
   const RunRequest run = StartAndAccept();
   Status("2026-06-15T09:00", Phase::kMowing);
   scheduler_->OnStartAnswer("2026-06-15T09:00", false, "X", nullptr);
+  // Also while its own answer is still to come.
+  Make(File());
+  const Output asked = TickAt(kMonday, "10:00");
+  scheduler_->OnStartAnswer("2026-06-15T09:00", false, "X", nullptr);
+  EXPECT_TRUE(Words().empty());
+  scheduler_->OnStartAnswer(asked.start->run_id, true, "", nullptr);
   scheduler_->StartFailed("other", "storage");
   EXPECT_TRUE(Words().empty());
   Status(run.run_id, Phase::kMowing);
@@ -790,6 +798,9 @@ TEST_F(SchedulerTest, StateAndLogSurviveARestart) {
   scheduler_.emplace(File(), true, state, log, At(kMonday, "10:00", 20));
   EXPECT_FALSE(TickAt(kMonday, "10:00", 30).start);
   EXPECT_EQ(Words(), (Lines{"start_failed storage"}));
+  EXPECT_EQ(scheduler_->LogJson(), log);
+  EXPECT_EQ(log["entries"][0]["t"], At(kMonday, "10:00"));
+  EXPECT_EQ(log["entries"][0]["at"], "10:00");
   // Marks of days before yesterday fall out; yesterday's plan was missed.
   TickAt(Date{2026, 6, 17}, "09:00");
   EXPECT_EQ(scheduler_->StateJson()["handled"], (json{{"2026-06-16", {"10:00"}}}));
@@ -835,6 +846,7 @@ TEST_F(SchedulerTest, WindowEdges) {
   Make(File());
   ASSERT_FALSE(scheduler_->SetSchedule({{"plans", {{{"days", {1}}, {"time", "10:00"}}}}}, At(kMonday, "10:00")));
   EXPECT_FALSE(TickAt(kMonday, "10:00").start);
+  EXPECT_EQ(scheduler_->NextStart(), At(Date{2026, 6, 22}, "10:00"));
   TickAt(kMonday, "10:01");
   EXPECT_TRUE(Words().empty());
   EXPECT_EQ(scheduler_->NextStart(), At(Date{2026, 6, 22}, "10:00"));
@@ -1155,6 +1167,36 @@ TEST_F(SchedulerTest, StoredTextsOnlyAsWritten) {
   EXPECT_EQ(missed(json{{"date", "2026-06-15"}}), 0u);
   EXPECT_EQ(missed(json{{"time", 600}}), 0u);
   EXPECT_EQ(missed("10:00"), 0u);
+}
+
+TEST_F(SchedulerTest, EveryWeatherRequestHasItsOwnId) {
+  Make(File({{"skip_cold", 1}, {"plans", {{{"days", {1}}, {"time", "10:00"}}, {{"days", {1}}, {"time", "10:01"}}}}}));
+  const Output first = TickAt(kMonday, "10:00");
+  TickAt(kMonday, "10:00", 15);
+  scheduler_->StartFailed("2026-06-15T10:00", "storage");
+  const Output second = TickAt(kMonday, "10:01");
+  ASSERT_TRUE(first.weather && second.weather);
+  EXPECT_NE(first.weather->id, second.weather->id);
+  Weather weather;
+  weather.id = first.weather->id;
+  weather.ok = true;
+  weather.has_temp = true;
+  weather.temp_c = 20;
+  scheduler_->OnWeather(weather);
+  EXPECT_FALSE(TickAt(kMonday, "10:01", 1).start);
+}
+
+TEST_F(SchedulerTest, T5_EndAfterMidnightWhileWaiting) {
+  Make(File({{"plans", {{{"days", {1}}, {"time", "23:00"}, {"end", "00:30"}, {"dark", 1}}}}}));
+  Facts facts = Good(At(kMonday, "23:00"));
+  facts.battery = 50;
+  Tick(facts);
+  facts.wall = At(Date{2026, 6, 16}, "00:29", 59);
+  Tick(facts);
+  EXPECT_EQ(Words(), (Lines{"waiting_battery 50"}));
+  facts.wall = At(Date{2026, 6, 16}, "00:30");
+  Tick(facts);
+  EXPECT_EQ(Words(), (Lines{"waiting_battery 50", "skip_end"}));
 }
 
 }  // namespace
