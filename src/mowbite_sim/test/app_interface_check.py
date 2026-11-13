@@ -460,6 +460,23 @@ if args.target == "mowbite-os" and offers("ntrip.get"):
     check("ntrip.get without user and password", fields == expected, json.dumps(fields or r))
     writable = [m for m in ("ntrip.set", "ntrip.delete") if m in methods]
     check("ntrip.set and ntrip.delete only together", len(writable) in (0, 2), ",".join(writable))
+if args.target == "mowbite-os" and offers("schedule.get"):
+    # FP22: the schedule; where the platform does not allow it, it says so and cannot be switched on.
+    r = rpc("schedule.get", None, "schedule_get")
+    got = (r or {}).get("result") or {}
+    check("schedule.get answers schema, version, available, reason, clock, next_start, schedule and sun",
+          got.get("schema") == 1 and isinstance(got.get("available"), bool) and
+          got.get("reason") == (None if got.get("available") else "platform_off") and
+          isinstance(got.get("schedule"), dict) and isinstance(got.get("sun"), dict) and "next_start" in got,
+          json.dumps(r)[:300])
+    r = rpc("schedule.log", {"limit": 5}, "schedule_log")
+    check("schedule.log answers entries", isinstance(((r or {}).get("result") or {}).get("entries"), list),
+          json.dumps(r)[:200])
+    if args.write and got.get("available") is False:
+        r = rpc("schedule.set", {"schedule": {"enabled": 1}}, "schedule_on")
+        error = (r or {}).get("error") or {}
+        check("schedule.set refuses enabled 1 with platform_off", error.get("code") == -32602 and
+              error.get("data") == {"field": "enabled", "reason": "platform_off"}, json.dumps(r)[:200])
 CALIBRATION_METHODS = ["calibration.check", "calibration.start", "calibration.abort"]
 calibration_offered = [m for m in CALIBRATION_METHODS if methods is not None and m in methods]
 if args.target == "mowbite-os":
@@ -1392,6 +1409,14 @@ def check_against_schema():
         bad += [e.message[:160] for e in validator("actions").iter_errors(json.loads(p))]
     check(f"every actions/json seen ({len(payloads)}) as in system.api", bool(payloads) and not bad,
           "; ".join(sorted(set(bad))[:4]), point="I2 actions")
+    # I2: the next start of the schedule, only where a start is to come (empty texts clear it).
+    payloads = [p for _, top, p, _ in msgs if top == "mowbite/schedule/ready" and p]
+    if payloads and "schedule_ready" in defs:
+        bad = []
+        for p in payloads:
+            bad += [e.message[:160] for e in validator("schedule_ready").iter_errors(json.loads(p))]
+        check(f"every mowbite/schedule/ready seen ({len(payloads)}) as in system.api", not bad,
+              "; ".join(sorted(set(bad))[:4]), point="I2 schedule ready")
 
 
 check_against_schema()
