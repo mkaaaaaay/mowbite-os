@@ -32,12 +32,8 @@ std::string VideoFeed::Step(bool may_start, bool streaming) {
 }
 
 std::string VideoFeed::Send(Camera& camera, const std::function<void(const Nv12Buffer&)>& edit) {
-  if (!Playing()) return "";
-  std::string error;
-  if (!stream_.Running() && !stream_.Begin(error)) {
-    stream_.DropClient();
-    return Failed(error);
-  }
+  std::string detail;
+  if (!Begun(detail)) return detail;
   const CapturedFrame* frame = camera.Captured();
   if (frame == nullptr) {
     stream_.End();
@@ -45,10 +41,31 @@ std::string VideoFeed::Send(Camera& camera, const std::function<void(const Nv12B
     return Failed("the camera does not export its frames");
   }
   // Without the edit the picture goes on as it is.
-  std::string detail;
+  std::string error;
   if (!camera.EditFrame(edit, error)) detail = error;
-  if (stream_.Send(*frame, error) == H264Stream::Sent::kEncoderFailed) detail = Failed(error);
-  return detail;
+  const std::string failed = Encode(*frame);
+  return failed.empty() ? detail : failed;
+}
+
+std::string VideoFeed::Send(const CapturedFrame& frame) {
+  std::string detail;
+  return Begun(detail) ? Encode(frame) : detail;
+}
+
+bool VideoFeed::Begun(std::string& detail) {
+  if (!Playing()) return false;
+  std::string error;
+  if (!stream_.Running() && !stream_.Begin(error)) {
+    stream_.DropClient();
+    detail = Failed(error);
+    return false;
+  }
+  return true;
+}
+
+std::string VideoFeed::Encode(const CapturedFrame& frame) {
+  std::string error;
+  return stream_.Send(frame, error) == H264Stream::Sent::kEncoderFailed ? Failed(error) : "";
 }
 
 double VideoFeed::Fps() const {

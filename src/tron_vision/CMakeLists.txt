@@ -26,7 +26,7 @@ add_library(tron_vision_core STATIC src/npu_model.cpp src/model_check.cpp src/yo
   src/text_file.cpp src/preview.cpp src/h264_rtp.cpp src/rtsp_server.cpp src/h264_encoder.cpp src/h264_stream.cpp
   src/stereo_camera.cpp src/stereo_loop.cpp src/lens_model.cpp src/dock_marker.cpp src/dock_pose.cpp src/dock_exposure.cpp
   src/jpeg_luma.cpp src/rear_camera.cpp src/rear_loop.cpp src/preview_loop.cpp src/inference_worker.cpp
-  src/video_feed.cpp)
+  src/video_feed.cpp src/dma_frames.cpp)
 target_include_directories(tron_vision_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -34,7 +34,7 @@ target_link_libraries(tron_vision_core ${CMAKE_DL_LIBS} PkgConfig::TURBOJPEG)
 set_target_properties(tron_vision_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # The node, a process of its own outside the container: a crash of the NPU runtime takes nothing else along.
-# The H.264 stream of the side cameras with its parameters.
+# The H.264 stream of the camera nodes with its parameters.
 add_library(tron_video_out_lib STATIC src/video_out.cpp)
 target_link_libraries(tron_video_out_lib tron_vision_core)
 ament_target_dependencies(tron_video_out_lib rclcpp mowbite_msgs ament_index_cpp)
@@ -64,7 +64,8 @@ install(TARGETS tron_side_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 # The dock marker seen by the rear camera, a process of its own: a crash in the USB camera takes nothing else along.
 add_library(tron_rear_node_lib STATIC src/rear_node.cpp)
-target_link_libraries(tron_rear_node_lib tron_vision_core tron_mcu::tron_mcu_core mowbite_watch::mowbite_watch)
+target_link_libraries(tron_rear_node_lib tron_vision_core tron_video_out_lib tron_mcu::tron_mcu_core
+  mowbite_watch::mowbite_watch)
 ament_target_dependencies(tron_rear_node_lib rclcpp mowbite_msgs sensor_msgs std_msgs diagnostic_msgs)
 add_executable(tron_rear_node src/rear_node_main.cpp)
 target_link_libraries(tron_rear_node tron_rear_node_lib)
@@ -99,7 +100,7 @@ if(BUILD_TESTING)
                   test/test_vision_loop.cpp test/test_tron_camera.cpp test/test_preview.cpp
                   test/test_v4l2_capture.cpp test/test_h264_rtp.cpp test/test_rtsp_server.cpp
                   test/test_h264_encoder.cpp test/test_stereo_camera.cpp test/test_stereo_loop.cpp
-                  test/test_rear_camera.cpp test/test_preview_loop.cpp
+                  test/test_rear_camera.cpp test/test_preview_loop.cpp test/test_dma_frames.cpp
                   # The loops are tested in real time, about a minute in all.
                   TIMEOUT 180)
   target_link_libraries(tron_vision_test tron_vision_core)
@@ -126,6 +127,8 @@ if(BUILD_TESTING)
   add_dependencies(tron_stereo_node_test tron_vision_fake_mpp)
   ament_add_gtest(tron_rear_node_test test/test_rear_node.cpp TIMEOUT 120)
   target_link_libraries(tron_rear_node_test tron_rear_node_lib)
+  target_compile_definitions(tron_rear_node_test PRIVATE FAKE_MPP_LIB="$<TARGET_FILE:tron_vision_fake_mpp>")
+  add_dependencies(tron_rear_node_test tron_vision_fake_mpp)
 endif()
 
 ament_export_targets(export_tron_vision HAS_LIBRARY_TARGET)

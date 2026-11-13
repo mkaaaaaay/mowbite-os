@@ -54,7 +54,7 @@ DockReason ReasonOf(MarkerResult result) {
 }
 
 RearLoop::RearLoop(RearConfig config, DockCamera& camera, CrashGuard& guard, std::function<double()> now,
-                   LastRequest last_request, Wait wait, Publish publish)
+                   LastRequest last_request, Wait wait, Publish publish, H264Stream* stream, DmaFrames* frames)
     : config_(std::move(config)),
       camera_(camera),
       guard_(guard),
@@ -63,7 +63,10 @@ RearLoop::RearLoop(RearConfig config, DockCamera& camera, CrashGuard& guard, std
       wait_(std::move(wait)),
       publish_(std::move(publish)),
       thermal_(config_.pause_at_c, config_.resume_below_c),
-      picture_(config_.view) {}
+      picture_(config_.view),
+      frames_(frames) {
+  if (stream != nullptr && frames != nullptr) video_ = std::make_unique<VideoFeed>(config_.video, *stream, now_);
+}
 
 RearLoop::~RearLoop() {
   Shutdown();
@@ -129,9 +132,10 @@ bool RearLoop::Step() {
   if (exit_code_ != kExitNone) return false;
   const double now = now_();
   if (view_wanted_) last_view_wanted_ = now;
+  if (video_ && video_->Playing()) last_video_wanted_ = now;
   if (!CheckBudget(now)) return false;
   const bool asked = Asked(now);
-  const bool viewer = last_view_wanted_ >= 0.0 && now < last_view_wanted_ + config_.view_hold_s;
+  const bool viewer = Held(last_view_wanted_, now) || Held(last_video_wanted_, now);
   if (!viewer) EndView();
   switch (state_) {
     case DockState::kOff: StepOff(now, asked, viewer); break;
@@ -139,7 +143,15 @@ bool RearLoop::Step() {
     case DockState::kStarting:
     case DockState::kMeasuring: StepCamera(now, asked, viewer); break;
   }
+  if (video_) StepVideo();
   return true;
+}
+
+void RearLoop::StepVideo() {
+  const bool may_start = !locked_ && !hot_ && !missing_ && view_attempts_ < config_.view_attempts;
+  // The loop waits itself, for a request or a frame.
+  const std::string detail = video_->Step(may_start, true);
+  if (!detail.empty()) video_error_ = detail;
 }
 
 void RearLoop::StepOff(double now, bool asked, bool viewer) {
@@ -190,7 +202,7 @@ void RearLoop::StepView(double now) {
   }
   if (got == 0) return;
   view_last_frame_ = now_();
-  if (MakePicture(frame, view_last_frame_, error)) {
+  if (ShowFrame(frame, view_last_frame_, error)) {
     view_broken_ = 0;
   } else if (++view_broken_ >= config_.view_broken) {
     ViewFailed("broken images: " + error);
@@ -242,6 +254,26 @@ void RearLoop::EndView() {
   }
   view_attempts_ = 0;
   view_error_.clear();
+}
+
+bool RearLoop::ShowFrame(const CapturedFrame& frame, double now, std::string& error) {
+  bool shown = !Held(last_view_wanted_, now) || MakePicture(frame, now, error);
+  if (video_ && video_->Playing()) shown = SendVideo(frame, error) && shown;
+  return shown;
+}
+
+bool RearLoop::SendVideo(const CapturedFrame& jpeg, std::string& error) {
+  const auto decode = [this, &jpeg](const Nv12Buffer& out, std::string& decode_error) {
+    return view_decoder_.DecodeNv12(jpeg.data, jpeg.bytes, config_.width, config_.height, config_.video_scale, out,
+                                    config_.video.encoder.lines, decode_error);
+  };
+  CapturedFrame frame;
+  if (!frames_->Write(decode, frame, error)) return false;
+  frame.sequence = jpeg.sequence;
+  frame.timestamp_us = jpeg.timestamp_us;
+  const std::string detail = video_->Send(frame);
+  if (!detail.empty()) video_error_ = detail;
+  return true;
 }
 
 bool RearLoop::MakePicture(const CapturedFrame& frame, double now, std::string& error) {
@@ -348,7 +380,7 @@ void RearLoop::StepCamera(double now, bool asked, bool viewer) {
   if (got != 1) return;
   Evaluate(frame, now_());
   // The picture comes after the report of its frame, so it never delays a measurement; a broken image gives none.
-  if (viewer && state_ != DockState::kFault) MakePicture(frame, now_(), error);
+  if (viewer && state_ != DockState::kFault) ShowFrame(frame, now_(), error);
 }
 
 void RearLoop::Evaluate(const CapturedFrame& frame, double now) {
@@ -469,6 +501,7 @@ void RearLoop::ReportOffIfStale(double now) {
 }
 
 void RearLoop::Shutdown() {
+  if (video_) video_->End();
   StopCamera();
 }
 

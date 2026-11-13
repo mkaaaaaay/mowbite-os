@@ -20,8 +20,10 @@
 #include "tron_vision/budget.h"
 #include "tron_vision/camera_node.h"
 #include "tron_vision/crash_guard.h"
+#include "tron_vision/dma_frames.h"
 #include "tron_vision/rear_camera.h"
 #include "tron_vision/rear_loop.h"
+#include "tron_vision/video_out.h"
 
 namespace tron_vision {
 
@@ -31,6 +33,8 @@ std::string DockReasonText(DockReason reason);
 // Stand-ins for the tests; left empty, the node uses the system.
 struct RearNodeSeams {
   VideoDevice* device = nullptr;
+  // The dma-buf heap of the H.264 frames.
+  VideoDevice* heap = nullptr;
   // Applied to the configuration before the loop is made.
   std::function<void(RearConfig&, RearCameraConfig&)> adjust;
   std::string crash_flag = kCrashFlag;
@@ -39,8 +43,9 @@ struct RearNodeSeams {
 // The dock marker seen by the rear camera, in a process of its own. It subscribes to hw/dock_marker_request alone and
 // publishes hw/dock_marker and, for the measurements, the pixel values of each image on tron_rear/marker_pixels; it
 // cannot move the mower. Beside it the camera on hw/cameras and its live picture for a viewer (a subscriber of the
-// pictures), which never delays a measurement. A loop thread runs RearLoop; the watch of the process ends it when that
-// thread or the ROS thread stays silent for 2 s (exit code 86), the loop ends it over its memory limit (3).
+// pictures, or the client of its RTSP server for H.264), which never delays a measurement. A loop thread runs
+// RearLoop; the watch of the process ends it when that thread or the ROS thread stays silent for 2 s (exit code 86),
+// the loop ends it over its memory limit (3).
 class RearNode : public rclcpp::Node {
  public:
   explicit RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seams = {});
@@ -65,9 +70,12 @@ class RearNode : public rclcpp::Node {
   void LogControl(const std::string& error, int tries, bool taken);
   void PublishCamera();
   void PublishPicture();
+  void LogVideo();
 
   std::unique_ptr<UvcRearCamera> camera_;
   std::unique_ptr<CrashGuard> guard_;
+  std::unique_ptr<DmaFrames> frames_;
+  std::unique_ptr<VideoOut> video_;
   std::unique_ptr<RearLoop> loop_;
   rclcpp::Publisher<mowbite_msgs::msg::DockMarker>::SharedPtr marker_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pixels_pub_;
@@ -75,6 +83,8 @@ class RearNode : public rclcpp::Node {
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr picture_pub_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr request_sub_;
   mowbite_msgs::msg::Camera camera_entry_;
+  uint32_t jpeg_width_ = 0;
+  uint32_t jpeg_height_ = 0;
   bool camera_published_ = false;
   uint64_t published_pictures_ = 0;
   // From the ROS thread to the loop thread: arrival of the last request on the monotonic clock, and their count.
@@ -84,6 +94,7 @@ class RearNode : public rclcpp::Node {
   uint64_t requests_ = 0;
   LogGate log_gate_{60.0};
   std::string logged_;
+  std::string logged_video_;
   std::atomic<int> exit_code_{0};
   std::atomic<bool> running_{true};
   std::unique_ptr<mowbite_watch::Attached> watch_;

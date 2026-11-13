@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <functional>
@@ -8,6 +9,9 @@
 #include <vector>
 
 #include "dock_jpeg.h"
+#include "fake_dma_heap.h"
+#include "fake_encoder.h"
+#include "rtsp_test_client.h"
 #include "test_util.h"
 #include "tron_vision/rear_loop.h"
 
@@ -177,8 +181,44 @@ struct Rig {
           reports.push_back(r);
           sent_at.push_back(clock);
           pictures_at_report.push_back(loop->Picture().Count());
-        });
+        },
+        stream.get(), frames.get());
     return *loop;
+  }
+  // H.264 for an RTSP client on any free port, from an encoder of the test, in frames of a heap of the test.
+  void WithVideo() {
+    RtspConfig rtsp;
+    rtsp.port = 0;
+    rtsp.path = "rear";
+    server = std::make_unique<RtspServer>(rtsp, [this] { return clock; });
+    std::string error;
+    ASSERT_TRUE(server->Listen(error)) << error;
+    stream = std::make_unique<H264Stream>(encoder, *server, 0.5, [this] { return clock; });
+    EncoderSettings& e = config.video.encoder;
+    e.format = PixelFormat::kNv12;
+    e.width = e.line_bytes = 960;
+    e.height = 540;
+    e.lines = 544;
+    frames = std::make_unique<DmaFrames>(kSystemHeap, &heap);
+    ASSERT_TRUE(frames->Open(e, 3, error)) << error;
+  }
+  std::string Ask(const test::Client& client, const std::string& request) {
+    client.Send(request);
+    RunUntil(clock + 0.3);
+    return client.Receive();
+  }
+  std::string Url(const std::string& rest = "") const {
+    return "rtsp://127.0.0.1:" + std::to_string(server->Port()) + "/rear" + rest;
+  }
+  // A client that has asked for the stream and sent PLAY.
+  std::unique_ptr<test::Client> Play() {
+    auto client = std::make_unique<test::Client>(server->Port());
+    Ask(*client, "DESCRIBE " + Url() + " RTSP/1.0\r\nCSeq: 1\r\n\r\n");
+    const std::string setup =
+        Ask(*client, "SETUP " + Url("/trackID=0") +
+                         " RTSP/1.0\r\nCSeq: 2\r\nTransport: RTP/AVP/TCP;interleaved=0-1\r\n\r\n");
+    client->Send("PLAY " + Url("/") + " RTSP/1.0\r\nCSeq: 3\r\nSession: " + test::SessionOf(setup) + "\r\n\r\n");
+    return client;
   }
   // One step; while `asking`, a request every second as the logic sends them, while `viewing` a viewer.
   bool Step() {
@@ -215,6 +255,11 @@ struct Rig {
   RearConfig config;
   FakeDockCamera camera{clock};
   std::unique_ptr<CrashGuard> guard;
+  test::FakeEncoder encoder{clock};
+  std::unique_ptr<RtspServer> server;
+  std::unique_ptr<H264Stream> stream;
+  test::FakeDmaHeap heap;
+  std::unique_ptr<DmaFrames> frames;
   std::unique_ptr<RearLoop> loop;
   std::vector<DockReport> reports;
   std::vector<double> sent_at;
@@ -843,6 +888,121 @@ TEST(RearLoop, SlowCameraStepsLeaveNoGapInTheReports) {
           << "shift " << shift << ", report " << i << " at " << rig.sent_at[i];
     }
   }
+}
+
+// The RTSP client is a viewer: the camera opens for it with its own exposure and every image goes out as H.264 at
+// half size; without a client the encoder only gave its parameter sets, and when the client leaves it closes.
+TEST(RearLoop, H264ForTheRtspClient) {
+  Rig rig;
+  rig.camera.jpeg = &Drawn().marker;
+  rig.WithVideo();
+  rig.Make();
+  ASSERT_TRUE(rig.RunUntil(103.0));
+  EXPECT_TRUE(rig.loop->VideoActive());
+  EXPECT_EQ(rig.encoder.opens, 1);
+  EXPECT_FALSE(rig.encoder.is_open);
+  EXPECT_EQ(rig.camera.calls, "");
+  EXPECT_EQ(rig.stream->Frames(), 0U);
+  {
+    const std::unique_ptr<test::Client> client = rig.Play();
+    ASSERT_TRUE(rig.RunUntil(rig.clock + 2.0));
+    EXPECT_EQ(rig.camera.calls, "open start ");
+    EXPECT_FALSE(rig.camera.manual);
+    EXPECT_EQ(rig.encoder.opens, 2);
+    EXPECT_TRUE(rig.encoder.is_open);
+    EXPECT_EQ(rig.encoder.settings.width, 960U);
+    EXPECT_EQ(rig.encoder.settings.height, 540U);
+    EXPECT_EQ(rig.encoder.settings.lines, 544U);
+    EXPECT_GT(rig.stream->Frames(), 45U);
+    // No JPEG without a subscriber of the pictures.
+    EXPECT_EQ(rig.Pictures(), 0U);
+    EXPECT_TRUE(rig.loop->Viewable().available);
+    EXPECT_TRUE(rig.loop->VideoError().empty()) << rig.loop->VideoError();
+    EXPECT_NE(client->Receive().find('$'), std::string::npos);
+    // The drawn image is gray; the rows below the picture repeat its last one.
+    EXPECT_EQ(rig.heap.allocations, 3);
+    const std::vector<uint8_t>& frame = rig.heap.memory[test::FakeDmaHeap::kFirstBufferFd];
+    const uint8_t* uv = frame.data() + 960 * 544;
+    EXPECT_NEAR(uv[135 * 960 + 480], 128, 1);
+    EXPECT_NEAR(uv[135 * 960 + 481], 128, 1);
+    EXPECT_TRUE(std::equal(frame.begin() + 539 * 960, frame.begin() + 540 * 960, frame.begin() + 543 * 960));
+  }
+  ASSERT_TRUE(rig.RunUntil(rig.clock + 0.5));
+  EXPECT_FALSE(rig.encoder.is_open);
+  ASSERT_TRUE(rig.RunUntil(rig.clock + 3.0));
+  EXPECT_EQ(rig.camera.calls, "open start stop close ");
+}
+
+// After three failures of the encoder the stream is withdrawn and the pictures stay.
+TEST(RearLoop, AFailingEncoderLeavesThePictures) {
+  Rig rig;
+  rig.camera.jpeg = &Drawn().marker;
+  rig.WithVideo();
+  rig.encoder.fail_open = true;
+  rig.Make();
+  ASSERT_TRUE(rig.RunUntil(112.0));
+  EXPECT_FALSE(rig.loop->VideoActive());
+  EXPECT_EQ(rig.encoder.opens, 3);
+  EXPECT_EQ(rig.loop->VideoError(), "video: mpp_init -1002");
+  test::Client client(rig.server->Port());
+  EXPECT_NE(rig.Ask(client, "DESCRIBE " + rig.Url() + " RTSP/1.0\r\nCSeq: 1\r\n\r\n").find("503"),
+            std::string::npos);
+  rig.viewing = true;
+  ASSERT_TRUE(rig.RunUntil(114.0));
+  EXPECT_GE(rig.Pictures(), 7U);
+  EXPECT_EQ(rig.encoder.opens, 3);
+}
+
+// With an RTSP client next to a subscriber of the pictures the reports are those without one, and the stream goes on
+// while the marker measures.
+TEST(RearLoop, AnRtspClientChangesNoReport) {
+  std::vector<std::vector<DockReport>> runs;
+  for (bool video : {false, true}) {
+    Rig rig;
+    rig.camera.jpeg = &Drawn().marker;
+    if (video) rig.WithVideo();
+    // Encoding costs no time on the clock, so that both runs see the same frames.
+    rig.encoder.encode_s = 0.0;
+    rig.Make();
+    rig.viewing = true;
+    std::unique_ptr<test::Client> client;
+    if (video) client = rig.Play();
+    ASSERT_TRUE(rig.RunUntil(101.0));
+    const uint64_t before = video ? rig.stream->Frames() : 0;
+    rig.asking = true;
+    ASSERT_TRUE(rig.RunUntil(103.0));
+    if (video) {
+      EXPECT_GT(before, 0U);
+      EXPECT_GT(rig.stream->Frames(), before + 40);
+    }
+    rig.asking = false;
+    ASSERT_TRUE(rig.RunUntil(106.0));
+    EXPECT_EQ(rig.camera.calls, "open start stop close open start stop close open start ");
+    std::vector<DockReport> until_off;
+    bool measured = false;
+    for (const DockReport& r : rig.reports) {
+      until_off.push_back(r);
+      measured = measured || r.state == DockState::kMeasuring;
+      if (measured && r.state == DockState::kOff) break;
+    }
+    ASSERT_EQ(until_off.back().state, DockState::kOff);
+    runs.push_back(until_off);
+  }
+  ASSERT_EQ(runs[0].size(), runs[1].size());
+  int valid = 0;
+  for (size_t i = 0; i < runs[0].size(); i++) {
+    const DockReport& a = runs[0][i];
+    const DockReport& b = runs[1][i];
+    EXPECT_EQ(a.state, b.state) << i;
+    EXPECT_EQ(a.stamp, b.stamp) << i;
+    EXPECT_EQ(a.reason, b.reason) << i;
+    EXPECT_EQ(a.detail, b.detail) << i;
+    EXPECT_EQ(a.pose.valid, b.pose.valid) << i;
+    EXPECT_EQ(a.exposure.exposure, b.exposure.exposure) << i;
+    EXPECT_EQ(a.exposure.gain, b.exposure.gain) << i;
+    valid += b.pose.valid ? 1 : 0;
+  }
+  EXPECT_GE(valid, 20);
 }
 
 }  // namespace

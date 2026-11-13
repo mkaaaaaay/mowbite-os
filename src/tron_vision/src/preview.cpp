@@ -106,8 +106,8 @@ JpegDecoder::~JpegDecoder() {
   if (handle_ != nullptr) tjDestroy(handle_);
 }
 
-bool JpegDecoder::Decode(const uint8_t* jpeg, size_t bytes, uint32_t width, uint32_t height, JpegScale scale,
-                         std::vector<uint8_t>& rgb, std::string& error) {
+bool JpegDecoder::Open(const uint8_t* jpeg, size_t bytes, uint32_t width, uint32_t height, JpegScale scale,
+                       int& subsampling, std::string& error) {
   if (handle_ == nullptr) {
     error = "no JPEG decoder";
     return false;
@@ -124,11 +124,9 @@ bool JpegDecoder::Decode(const uint8_t* jpeg, size_t bytes, uint32_t width, uint
   }
   int w = 0;
   int h = 0;
-  int subsampling = 0;
   int colorspace = 0;
   // libturbojpeg takes a non-const pointer but does not write through it.
-  auto* data = const_cast<uint8_t*>(jpeg);
-  if (tjDecompressHeader3(handle_, data, bytes, &w, &h, &subsampling, &colorspace) != 0) {
+  if (tjDecompressHeader3(handle_, const_cast<uint8_t*>(jpeg), bytes, &w, &h, &subsampling, &colorspace) != 0) {
     error = std::string("JPEG header: ") + tjGetErrorStr2(handle_);
     return false;
   }
@@ -136,13 +134,89 @@ bool JpegDecoder::Decode(const uint8_t* jpeg, size_t bytes, uint32_t width, uint
     error = "JPEG of " + std::to_string(w) + "x" + std::to_string(h);
     return false;
   }
+  return true;
+}
+
+bool JpegDecoder::Decode(const uint8_t* jpeg, size_t bytes, uint32_t width, uint32_t height, JpegScale scale,
+                         std::vector<uint8_t>& rgb, std::string& error) {
+  int subsampling = 0;
+  if (!Open(jpeg, bytes, width, height, scale, subsampling, error)) return false;
   const auto out_w = static_cast<int>(ScaledSize(width, scale));
   const auto out_h = static_cast<int>(ScaledSize(height, scale));
   rgb.resize(static_cast<size_t>(out_w) * out_h * 3);
   // With the scaled size asked for, the library picks exactly that scale.
-  if (tjDecompress2(handle_, data, bytes, rgb.data(), out_w, 0, out_h, TJPF_RGB, TJFLAG_FASTDCT) != 0) {
+  if (tjDecompress2(handle_, const_cast<uint8_t*>(jpeg), bytes, rgb.data(), out_w, 0, out_h, TJPF_RGB,
+                    TJFLAG_FASTDCT) != 0) {
     error = std::string("JPEG: ") + tjGetErrorStr2(handle_);
     return false;
+  }
+  return true;
+}
+
+bool JpegDecoder::DecodeNv12(const uint8_t* jpeg, size_t bytes, uint32_t width, uint32_t height, JpegScale scale,
+                             const Nv12Buffer& out, uint32_t lines, std::string& error) {
+  const uint32_t out_w = ScaledSize(width, scale);
+  const uint32_t out_h = ScaledSize(height, scale);
+  if (out.width != out_w || out.height != out_h || out.stride < out_w || lines < out_h || out_h == 0) {
+    error = "NV12 frame of " + std::to_string(out.width) + "x" + std::to_string(out.height) + " for a picture of " +
+            std::to_string(out_w) + "x" + std::to_string(out_h);
+    return false;
+  }
+  int subsampling = 0;
+  if (!Open(jpeg, bytes, width, height, scale, subsampling, error)) return false;
+  const bool gray = subsampling == TJSAMP_GRAY;
+  const auto w = static_cast<int>(out_w);
+  const auto h = static_cast<int>(out_h);
+  const int chroma_plane_w = gray ? 0 : tjPlaneWidth(1, w, subsampling);
+  const int chroma_plane_h = gray ? 0 : tjPlaneHeight(1, h, subsampling);
+  if (chroma_plane_w < 0 || chroma_plane_h < 0) {
+    error = std::string("JPEG: ") + tjGetErrorStr2(handle_);
+    return false;
+  }
+  const auto plane_w = static_cast<uint32_t>(chroma_plane_w);
+  const auto plane_h = static_cast<uint32_t>(chroma_plane_h);
+  u_.resize(static_cast<size_t>(plane_w) * plane_h);
+  v_.resize(u_.size());
+  unsigned char* planes[3] = {out.y, u_.data(), v_.data()};
+  int strides[3] = {static_cast<int>(out.stride), chroma_plane_w, chroma_plane_w};
+  // Without TJFLAG_FASTDCT: with it libturbojpeg 2.1 gives four times the chroma of 4:2:0 at half size.
+  if (tjDecompressToYUVPlanes(handle_, const_cast<uint8_t*>(jpeg), bytes, planes, w, strides, h, 0) != 0) {
+    error = std::string("JPEG: ") + tjGetErrorStr2(handle_);
+    return false;
+  }
+  // JPEG uses the full range, the encoder signals the limited one of BT.601.
+  uint8_t luma[256];
+  uint8_t chroma[256];
+  for (int i = 0; i < 256; i++) {
+    luma[i] = static_cast<uint8_t>((i * 219 + 127) / 255 + 16);
+    chroma[i] = static_cast<uint8_t>(((i - 128) * 224 + (i < 128 ? -127 : 127)) / 255 + 128);
+  }
+  for (uint32_t y = 0; y < out_h; y++) {
+    uint8_t* row = out.y + static_cast<size_t>(y) * out.stride;
+    for (uint32_t x = 0; x < out_w; x++) row[x] = luma[row[x]];
+  }
+  // Nearest chroma sample of each 2 x 2 block.
+  const uint32_t chroma_w = (out_w + 1) / 2;
+  const uint32_t chroma_h = (out_h + 1) / 2;
+  for (uint32_t y = 0; y < chroma_h; y++) {
+    uint8_t* row = out.uv + static_cast<size_t>(y) * out.stride;
+    if (gray) {
+      std::fill_n(row, chroma_w * 2, 128);
+      continue;
+    }
+    const size_t from = static_cast<size_t>(std::min(2 * y * plane_h / out_h, plane_h - 1)) * plane_w;
+    for (uint32_t x = 0; x < chroma_w; x++) {
+      const size_t at = from + std::min(2 * x * plane_w / out_w, plane_w - 1);
+      row[2 * x] = chroma[u_[at]];
+      row[2 * x + 1] = chroma[v_[at]];
+    }
+  }
+  // The rows below the picture repeat its last one, so that the encoder reads whole macroblocks of it.
+  const uint8_t* last_luma = out.y + static_cast<size_t>(out_h - 1) * out.stride;
+  for (uint32_t y = out_h; y < lines; y++) std::copy_n(last_luma, out_w, out.y + static_cast<size_t>(y) * out.stride);
+  const uint8_t* last_chroma = out.uv + static_cast<size_t>(chroma_h - 1) * out.stride;
+  for (uint32_t y = chroma_h; y < lines / 2; y++) {
+    std::copy_n(last_chroma, chroma_w * 2, out.uv + static_cast<size_t>(y) * out.stride);
   }
   return true;
 }

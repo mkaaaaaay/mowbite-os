@@ -16,19 +16,24 @@
 namespace tron_vision {
 
 // The H.264 stream of a camera process of the Tron: its parameters, the encoder and the RTSP server on the loopback
-// address that MediaMTX reads. The ISP scales the sensor picture to the stream size; the frame rate is that of the
-// sensor.
+// address that MediaMTX reads. The ISP scales the sensor picture to the stream size, or the process decodes the
+// camera's JPEG to it; the frame rate is that of the camera.
 class VideoOut {
  public:
   // Declares video, stream_width, stream_height, stream_fps, bitrate_kbps, rtsp_port and encoder_library; throws
   // std::invalid_argument on a bad value.
   VideoOut(rclcpp::Node& node, int64_t default_port);
+  // For frames of this size in buffers of the process: the same without stream_width and stream_height.
+  VideoOut(rclcpp::Node& node, int64_t default_port, uint32_t width, uint32_t height);
   ~VideoOut();
   VideoOut(const VideoOut&) = delete;
   VideoOut& operator=(const VideoOut&) = delete;
 
   // With video: the camera at the stream size with exported buffers, and the settings of the feed.
   void Configure(TronCameraConfig& camera, VideoFeedConfig& feed) const;
+  // With video: the settings of the feed for frames in buffers of the process, whose line bytes and lines are those
+  // of whole macroblocks.
+  void Configure(VideoFeedConfig& feed) const;
   // Listens under `path`; false with the error if the server cannot, then there is no stream.
   bool Open(const std::string& path, std::string& error);
   // Null without video or before Open().
@@ -42,6 +47,9 @@ class VideoOut {
   void Describe(bool active, uint32_t jpeg_width, uint32_t jpeg_height, mowbite_msgs::msg::Camera& entry) const;
 
  private:
+  // Declares video, stream_fps, bitrate_kbps, rtsp_port and encoder_library.
+  void Declare(rclcpp::Node& node, int64_t default_port);
+
   bool video_ = false;
   uint32_t width_ = 0;
   uint32_t height_ = 0;

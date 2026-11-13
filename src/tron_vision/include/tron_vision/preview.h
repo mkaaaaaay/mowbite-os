@@ -38,8 +38,8 @@ struct JpegScale {
 // A side of an image after the decoder scaled it, rounded up as libturbojpeg does.
 uint32_t ScaledSize(uint32_t size, JpegScale scale);
 
-// JPEG to RGB through libturbojpeg, scaled in the DCT, which costs much less than decoding at full size; one handle
-// per object.
+// JPEG to RGB or NV12 through libturbojpeg, scaled in the DCT, which costs much less than decoding at full size; one
+// handle per object.
 class JpegDecoder {
  public:
   JpegDecoder();
@@ -51,9 +51,19 @@ class JpegDecoder {
   // scale; else `rgb` holds the image at ScaledSize of both sides, 3 bytes per pixel.
   bool Decode(const uint8_t* jpeg, size_t bytes, uint32_t width, uint32_t height, JpegScale scale,
               std::vector<uint8_t>& rgb, std::string& error);
+  // The same into an NV12 frame of the scaled size in BT.601 limited range; the rows below the picture down to
+  // `lines` repeat its last one. The frame may be the mapped dma-buf of an encoder.
+  bool DecodeNv12(const uint8_t* jpeg, size_t bytes, uint32_t width, uint32_t height, JpegScale scale,
+                  const Nv12Buffer& out, uint32_t lines, std::string& error);
 
  private:
+  // Checks decoder, scale and size of the JPEG and reads its chroma subsampling.
+  bool Open(const uint8_t* jpeg, size_t bytes, uint32_t width, uint32_t height, JpegScale scale, int& subsampling,
+            std::string& error);
+
   void* handle_ = nullptr;
+  std::vector<uint8_t> u_;
+  std::vector<uint8_t> v_;
 };
 
 // Box outlines, 2 pixels wide, a color per class; boxes in source pixels, `scale` maps them onto the RGB image.

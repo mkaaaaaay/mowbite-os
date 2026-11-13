@@ -31,6 +31,8 @@ class VideoFeed {
   std::string Step(bool may_start, bool streaming);
   // One frame of the camera to the client, changed by `edit` before the encoder takes it. Returns as Step().
   std::string Send(Camera& camera, const std::function<void(const Nv12Buffer&)>& edit);
+  // One frame in a dma-buf of the caller to the client. Returns as Step().
+  std::string Send(const CapturedFrame& frame);
   // Prepared and not given up.
   bool Active() const {
     return active_;
@@ -49,6 +51,9 @@ class VideoFeed {
   }
 
  private:
+  // A client plays and the encoder is open; else false, with what went wrong if anything did.
+  bool Begun(std::string& detail);
+  std::string Encode(const CapturedFrame& frame);
   std::string Failed(const std::string& detail);
 
   VideoFeedConfig config_;

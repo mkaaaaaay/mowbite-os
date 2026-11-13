@@ -192,6 +192,82 @@ TEST(JpegDecoder, RefusesOtherSizesBrokenImagesAndOtherScales) {
   EXPECT_EQ(error, "no decoder scale 1/3");
 }
 
+// Red on the left, blue on the right, as JPEG with the given chroma subsampling.
+std::vector<uint8_t> RedBlue(uint32_t width, uint32_t height, int subsampling) {
+  std::vector<uint8_t> rgb(static_cast<size_t>(width) * height * 3);
+  for (size_t i = 0; i < rgb.size() / 3; i++) {
+    const bool left = i % width < width / 2;
+    rgb[i * 3] = left ? 200 : 40;
+    rgb[i * 3 + 1] = 40;
+    rgb[i * 3 + 2] = left ? 40 : 200;
+  }
+  tjhandle handle = tjInitCompress();
+  unsigned char* out = nullptr;
+  unsigned long size = 0;
+  const int failed = tjCompress2(handle, rgb.data(), static_cast<int>(width), 0, static_cast<int>(height), TJPF_RGB,
+                                 &out, &size, subsampling, 95, 0);
+  std::vector<uint8_t> jpeg;
+  if (failed == 0) jpeg.assign(out, out + size);
+  tjFree(out);
+  tjDestroy(handle);
+  return jpeg;
+}
+
+// BT.601 limited range of an RGB color.
+std::vector<double> Limited(double r, double g, double b) {
+  return {16.0 + (65.481 * r + 128.553 * g + 24.966 * b) / 255.0,
+          128.0 + (-37.797 * r - 74.203 * g + 112.0 * b) / 255.0,
+          128.0 + (112.0 * r - 93.786 * g - 18.214 * b) / 255.0};
+}
+
+// Half size into an NV12 frame as the encoder takes it: luma and chroma of each half in limited range, the rows below
+// the picture a copy of its last one.
+TEST(JpegDecoder, Nv12AtHalfSizeForTheEncoder) {
+  const std::vector<double> red = Limited(200, 40, 40);
+  const std::vector<double> blue = Limited(40, 40, 200);
+  for (int subsampling : {TJSAMP_422, TJSAMP_420, TJSAMP_444, TJSAMP_GRAY}) {
+    SCOPED_TRACE(subsampling);
+    const std::vector<uint8_t> jpeg = RedBlue(1920, 1080, subsampling);
+    ASSERT_FALSE(jpeg.empty());
+    std::vector<uint8_t> frame(960U * 544U * 3U / 2U, 7);
+    uint8_t* y = frame.data();
+    uint8_t* uv = frame.data() + 960 * 544;
+    const Nv12Buffer out{y, uv, 960, 540, 960};
+    JpegDecoder decoder;
+    std::string error;
+    ASSERT_TRUE(decoder.DecodeNv12(jpeg.data(), jpeg.size(), 1920, 1080, {1, 2}, out, 544, error)) << error;
+    const bool gray = subsampling == TJSAMP_GRAY;
+    EXPECT_NEAR(y[300 * 960 + 100], red[0], 4);
+    EXPECT_NEAR(y[300 * 960 + 860], gray ? 16.0 + (0.299 * 40 + 0.587 * 40 + 0.114 * 200) * 219.0 / 255.0 : blue[0],
+                4);
+    EXPECT_NEAR(uv[150 * 960 + 100], gray ? 128 : red[1], 4);
+    EXPECT_NEAR(uv[150 * 960 + 101], gray ? 128 : red[2], 4);
+    EXPECT_NEAR(uv[150 * 960 + 860], gray ? 128 : blue[1], 4);
+    EXPECT_NEAR(uv[150 * 960 + 861], gray ? 128 : blue[2], 4);
+    for (size_t row = 540; row < 544; row++) {
+      EXPECT_TRUE(std::equal(y + 539 * 960, y + 540 * 960, y + row * 960)) << row;
+    }
+    for (size_t row = 270; row < 272; row++) {
+      EXPECT_TRUE(std::equal(uv + 269 * 960, uv + 270 * 960, uv + row * 960)) << row;
+    }
+  }
+}
+
+TEST(JpegDecoder, Nv12RefusesAFrameOfAnotherSize) {
+  const std::vector<uint8_t> jpeg = RedBlue(640, 480, TJSAMP_422);
+  std::vector<uint8_t> frame(640U * 480U * 3U / 2U);
+  JpegDecoder decoder;
+  std::string error;
+  const Nv12Buffer full{frame.data(), frame.data() + 640 * 480, 640, 480, 640};
+  EXPECT_FALSE(decoder.DecodeNv12(jpeg.data(), jpeg.size(), 640, 480, {1, 2}, full, 480, error));
+  EXPECT_EQ(error, "NV12 frame of 640x480 for a picture of 320x240");
+  const Nv12Buffer half{frame.data(), frame.data() + 320 * 240, 320, 240, 320};
+  EXPECT_FALSE(decoder.DecodeNv12(jpeg.data(), jpeg.size(), 640, 480, {1, 2}, half, 236, error));
+  EXPECT_FALSE(decoder.DecodeNv12(jpeg.data(), jpeg.size(), 1920, 1080, {1, 2}, half, 240, error));
+  EXPECT_EQ(error, "NV12 frame of 320x240 for a picture of 960x540");
+  EXPECT_TRUE(decoder.DecodeNv12(jpeg.data(), jpeg.size(), 640, 480, {1, 2}, half, 240, error)) << error;
+}
+
 // The limits of Preview without a frame: rate, size and quality on an RGB image.
 TEST(BoundedJpeg, RateAndSizeOfAnRgbImage) {
   std::vector<uint8_t> rgb(720 * 405 * 3, 90);

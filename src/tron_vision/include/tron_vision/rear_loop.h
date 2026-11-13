@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -12,10 +13,13 @@
 #include "tron_vision/dock_exposure.h"
 #include "tron_vision/dock_marker.h"
 #include "tron_vision/dock_pose.h"
+#include "tron_vision/dma_frames.h"
+#include "tron_vision/h264_stream.h"
 #include "tron_vision/jpeg_luma.h"
 #include "tron_vision/lens_model.h"
 #include "tron_vision/preview.h"
 #include "tron_vision/rear_camera.h"
+#include "tron_vision/video_feed.h"
 
 namespace tron_vision {
 
@@ -95,6 +99,10 @@ struct RearConfig {
   int view_broken = 5;
   int view_attempts = 3;
   double view_retry_s = 5.0;
+  // H.264 for the client of the RTSP server, a viewer too: each image decoded at video_scale into a frame of the
+  // process, of the size and lines of the encoder settings.
+  JpegScale video_scale{1, 2};
+  VideoFeedConfig video;
 };
 
 // One message of hw/dock_marker, with the pixel values of its image for the measurements.
@@ -130,6 +138,8 @@ struct ViewAvailability {
 // A viewer gets a live picture from the same camera: without a request the camera opens for the viewer alone with
 // its own exposure. A request goes first and takes the camera with the manual exposure of the marker; its pictures
 // are made after the report of their frame. Failures while only a viewer has the camera never reach hw/dock_marker.
+// With a stream the client of its RTSP server is a viewer as well and gets every image as H.264; after max_failures
+// of the encoder there are only the pictures.
 class RearLoop {
  public:
   // Arrival of the last request on the clock of the loop, a negative value without one.
@@ -138,8 +148,10 @@ class RearLoop {
   using Wait = std::function<void(double)>;
   using Publish = std::function<void(const DockReport&)>;
 
+  // `stream` and `frames` both or neither: without them no H.264.
   RearLoop(RearConfig config, DockCamera& camera, CrashGuard& guard, std::function<double()> now,
-           LastRequest last_request, Wait wait, Publish publish);
+           LastRequest last_request, Wait wait, Publish publish, H264Stream* stream = nullptr,
+           DmaFrames* frames = nullptr);
   ~RearLoop();
   RearLoop(const RearLoop&) = delete;
   RearLoop& operator=(const RearLoop&) = delete;
@@ -155,6 +167,14 @@ class RearLoop {
     return picture_;
   }
   ViewAvailability Viewable() const;
+  // The H.264 stream is prepared and not given up.
+  bool VideoActive() const {
+    return video_ && video_->Active();
+  }
+  // The last failure of the H.264 stream; empty while there was none.
+  const std::string& VideoError() const {
+    return video_error_;
+  }
 
   int ExitCode() const {
     return exit_code_;
@@ -179,8 +199,16 @@ class RearLoop {
   // An attempt of the viewer failed: the camera closes and the next attempt waits.
   void ViewFailed(const std::string& detail);
   void EndView();
-  // A picture of the frame when one is due; false with the error if the image does not decode or encode.
+  // The frame for the viewers: a picture when one is due and wanted, and H.264 while the client plays; false with the
+  // error if the image does not decode or encode. A failure of the encoder counts in the feed.
+  bool ShowFrame(const CapturedFrame& frame, double now, std::string& error);
   bool MakePicture(const CapturedFrame& frame, double now, std::string& error);
+  bool SendVideo(const CapturedFrame& jpeg, std::string& error);
+  // Prepares and offers the stream while a viewer could get pictures and serves its client, without waiting.
+  void StepVideo();
+  bool Held(double since, double now) const {
+    return since >= 0.0 && now < since + config_.view_hold_s;
+  }
   void Begin(double now);
   // Manual exposure with the range of the camera; true also for a camera that keeps its own.
   bool SetUpExposure(std::string& error);
@@ -233,7 +261,9 @@ class RearLoop {
   std::vector<uint8_t> view_rgb_;
   BoundedJpeg picture_;
   bool view_wanted_ = false;
+  // Of a subscriber of the pictures, and of the RTSP client.
   double last_view_wanted_ = -1.0;
+  double last_video_wanted_ = -1.0;
   // The camera is open for the viewer alone.
   bool viewing_ = false;
   int view_attempts_ = 0;
@@ -243,6 +273,9 @@ class RearLoop {
   double view_next_try_ = 0.0;
   // Why the last attempt of this viewing failed; empty after a good start.
   std::string view_error_;
+  std::unique_ptr<VideoFeed> video_;
+  DmaFrames* frames_;
+  std::string video_error_;
 };
 
 }  // namespace tron_vision

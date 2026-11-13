@@ -19,6 +19,8 @@ using mowbite_msgs::msg::DockMarker;
 // Silence of the loop thread or of the ROS thread that ends the process.
 constexpr double kWatchLimit = 2.0;
 constexpr int kMaxPattern = 0xFFFF;
+// H.264 frames in turn, so that a write never meets one the encoder may still read.
+constexpr uint32_t kVideoFrames = 3;
 
 std::string Fixed(double value, const char* format = "%.2f") {
   char buf[32];
@@ -139,6 +141,9 @@ RearNode::RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seam
   if (seams.adjust) seams.adjust(config, camera);
   camera.width = config.width;
   camera.height = config.height;
+  video_ = std::make_unique<VideoOut>(*this, int64_t{8558}, ScaledSize(config.width, config.video_scale),
+                                      ScaledSize(config.height, config.video_scale));
+  video_->Configure(config.video);
   if (!config.not_set_up.empty()) RCLCPP_WARN(get_logger(), "Not set up: %s", config.not_set_up.c_str());
   camera_entry_.id = config.camera_id;
   camera_entry_.name = "Rear camera";
@@ -146,8 +151,10 @@ RearNode::RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seam
   camera_entry_.process = declare_parameter("process", std::string("rear"));
   camera_entry_.kind = Camera::KIND_REAR;
   camera_entry_.position = Camera::POSITION_REAR;
-  camera_entry_.width = ScaledSize(config.width, config.view_scale);
-  camera_entry_.height = ScaledSize(config.height, config.view_scale);
+  jpeg_width_ = ScaledSize(config.width, config.view_scale);
+  jpeg_height_ = ScaledSize(config.height, config.view_scale);
+  camera_entry_.width = jpeg_width_;
+  camera_entry_.height = jpeg_height_;
   camera_entry_.detections = false;
   camera_entry_.protocols = {Camera::PROTOCOL_MJPEG};
 
@@ -164,9 +171,17 @@ RearNode::RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seam
 
   camera_ = std::make_unique<UvcRearCamera>(std::move(camera), seams.device);
   guard_ = std::make_unique<CrashGuard>(config.marker_dir, seams.crash_flag, kBootId);
+  frames_ = std::make_unique<DmaFrames>(kSystemHeap, seams.heap);
+  std::string error;
+  if (!video_->Open(camera_entry_.id, error) ||
+      (video_->Stream() != nullptr && !frames_->Open(config.video.encoder, kVideoFrames, error))) {
+    RCLCPP_WARN(get_logger(), "No H.264, only JPEG: %s", error.c_str());
+    video_->Close();
+  }
   loop_ = std::make_unique<RearLoop>(
       std::move(config), *camera_, *guard_, MonotonicSeconds, [this] { return LastRequest(); },
-      [this](double seconds) { WaitForRequest(seconds); }, [this](const DockReport& r) { Publish(r); });
+      [this](double seconds) { WaitForRequest(seconds); }, [this](const DockReport& r) { Publish(r); },
+      video_->Stream(), frames_.get());
   thread_ = std::thread([this] { Run(); });
   watch_ = mowbite_watch::Attach(*this, kWatchLimit);
 }
@@ -177,6 +192,10 @@ RearNode::~RearNode() {
   if (thread_.joinable()) thread_.join();
   // Before the members go: closing the camera may log a control it wrote more than once.
   loop_->Shutdown();
+  // The encoder lets go of the frames before they are freed.
+  loop_.reset();
+  video_->Close();
+  frames_->Close();
 }
 
 void RearNode::OnRequest() {
@@ -209,6 +228,7 @@ void RearNode::Run() {
     const bool go_on = loop_->Step();
     if (loop_->Picture().Count() != published_pictures_) PublishPicture();
     PublishCamera();
+    LogVideo();
     watch.Sign();
     if (!go_on) {
       exit_code_ = loop_->ExitCode();
@@ -299,7 +319,12 @@ void RearNode::LogControl(const std::string& error, int tries, bool taken) {
 void RearNode::PublishCamera() {
   const ViewAvailability now = loop_->Viewable();
   const std::string reason = DockReasonText(now.reason);
-  if (camera_published_ && now.available == camera_entry_.available && reason == camera_entry_.reason) return;
+  const auto protocols = camera_entry_.protocols;
+  video_->Describe(loop_->VideoActive(), jpeg_width_, jpeg_height_, camera_entry_);
+  if (camera_published_ && now.available == camera_entry_.available && reason == camera_entry_.reason &&
+      protocols == camera_entry_.protocols) {
+    return;
+  }
   camera_published_ = true;
   camera_entry_.available = now.available;
   camera_entry_.reason = reason;
@@ -309,6 +334,14 @@ void RearNode::PublishCamera() {
   if (!log_gate_.Allow("camera " + reason, MonotonicSeconds(), suppressed)) return;
   const std::string why = now.available ? "available" : reason + ": " + now.detail;
   RCLCPP_INFO(get_logger(), "Camera %s%s", why.c_str(), More(suppressed).c_str());
+}
+
+void RearNode::LogVideo() {
+  if (loop_->VideoError() == logged_video_) return;
+  logged_video_ = loop_->VideoError();
+  int suppressed = 0;
+  if (!log_gate_.Allow("video", MonotonicSeconds(), suppressed)) return;
+  RCLCPP_WARN(get_logger(), "%s%s", logged_video_.c_str(), More(suppressed).c_str());
 }
 
 void RearNode::PublishPicture() {

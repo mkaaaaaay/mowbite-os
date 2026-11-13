@@ -266,7 +266,9 @@ second what `mowbite_camera` needs around it.
   needs level 4.0. A camera can offer both protocols, `webrtc` first (`tron_side` and `tron_vision`: H.264 at 1280 x
   720 for the RTSP client, JPEG for a subscriber, and only JPEG if the encoder fails). A camera with detections draws
   its boxes into the frame before the encoder takes it and runs the model on a thread of its own, so the stream does
-  not wait for the NPU.
+  not wait for the NPU. A camera that sends JPEG, like a USB camera, is decoded scaled in the DCT into NV12 frames
+  of the process (`dma_frames`, from a dma-buf heap, lines rounded up to whole macroblocks) that the encoder reads
+  (`tron_rear`: 960 x 540 from 1920 x 1080, port 8558; the dock marker still goes first).
 - A stream whose driver can crash the kernel does not run next to the blade by default: the loop ends it when the
   blade starts (`BLADE_RUNNING`) or the state of the mower is unknown (`DRIVER_MISSING`: no `hw/status` yet or the
   last one older than 1 s by the time it came, not by its stamp), and tests the camera once per boot while the mower

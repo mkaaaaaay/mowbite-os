@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "dock_jpeg.h"
+#include "fake_dma_heap.h"
 #include "fake_video_device.h"
 #include "mowbite_watch/watch.h"
 #include "test_util.h"
@@ -186,6 +187,7 @@ struct Rig {
     std::filesystem::create_directories(dir.Path() + "/markers");
     dir.Write("statm", "30000 5000 900 1 0 20000 0\n");
     seams.device = &device;
+    seams.heap = &heap;
     seams.crash_flag = dir.Path() + "/crash";
     seams.adjust = [this](RearConfig& config, RearCameraConfig& camera) {
       config.statm = dir.Path() + "/statm";
@@ -199,6 +201,9 @@ struct Rig {
     options.append_parameter_override("crash_dir", dir.Path() + "/markers");
     // As tron.launch.py names the process.
     options.append_parameter_override("process", "rear");
+    options.append_parameter_override("video", video);
+    options.append_parameter_override("rtsp_port", 0);
+    options.append_parameter_override("encoder_library", std::string(FAKE_MPP_LIB));
     if (calibrated) {
       const LensModel& l = s.lens;
       const CameraMount& m = s.mount;
@@ -216,7 +221,9 @@ struct Rig {
 
   test::TempDir dir;
   TimedRearDevice device;
+  test::FakeDmaHeap heap;
   RearNodeSeams seams;
+  bool video = false;
 };
 
 // It measures and shows and nothing else: one subscription, four publishers, no client.
@@ -415,6 +422,45 @@ TEST_F(RearNodeTest, ReportsTheCameraAndShowsItsPicture) {
   const double closed_after = std::chrono::duration<double>(Clock::now() - left).count();
   EXPECT_GT(closed_after, 1.5);
   EXPECT_LT(closed_after, 3.0);
+}
+
+// With video the encoder is tried once at the start and the frames come from the heap; then WebRTC comes first at
+// half the size of the camera, from the RTSP server of the process, and the camera stays closed without a client.
+TEST_F(RearNodeTest, OffersVideoOnceTheEncoderWorks) {
+  Rig rig;
+  rig.video = true;
+  std::mutex mutex;
+  std::vector<Camera> cameras;
+  auto node = rig.Make(false);
+  auto listener = std::make_shared<rclcpp::Node>("video_viewer");
+  auto cameras_sub = listener->create_subscription<Camera>(
+      "hw/cameras", rclcpp::QoS(rclcpp::KeepLast(4)).reliable().transient_local(), [&](const Camera& m) {
+        std::lock_guard<std::mutex> lock(mutex);
+        cameras.push_back(m);
+      });
+  Spinner spinner;
+  spinner.Add(node);
+  spinner.Add(listener);
+  spinner.Start();
+  Camera c;
+  const auto end = Clock::now() + 10s;
+  for (bool found = false; !found;) {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      found = !cameras.empty() && !cameras.back().source.empty();
+      if (found) c = cameras.back();
+    }
+    ASSERT_LT(Clock::now(), end);
+    std::this_thread::sleep_for(10ms);
+  }
+  EXPECT_EQ(c.protocols, (std::vector<std::string>{"webrtc", "mjpeg"}));
+  EXPECT_EQ(c.source.rfind("rtsp://127.0.0.1:", 0), 0U) << c.source;
+  EXPECT_EQ(c.source.substr(c.source.size() - 5), "/rear");
+  EXPECT_EQ(c.width, 960U);
+  EXPECT_EQ(c.height, 540U);
+  EXPECT_TRUE(c.available);
+  EXPECT_EQ(rig.heap.allocations, 3);
+  EXPECT_EQ(rig.device.ons, 0);
 }
 
 // A loop thread that hangs in the camera ends the process with the code of the watch.

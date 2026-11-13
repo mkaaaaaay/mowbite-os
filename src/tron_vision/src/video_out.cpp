@@ -11,24 +11,35 @@ namespace {
 
 // An encode that takes longer counts as a failure of the encoder.
 constexpr double kSlowEncodeS = 0.5;
+// Side of a macroblock in pixels.
+constexpr uint32_t kMacroblock = 16;
 
 }  // namespace
 
 VideoOut::VideoOut(rclcpp::Node& node, int64_t default_port) {
-  video_ = node.declare_parameter("video", true);
   const int64_t width = node.declare_parameter("stream_width", int64_t{1280});
   const int64_t height = node.declare_parameter("stream_height", int64_t{720});
+  if (width < 16 || width > 1920 || height < 16 || height > 1080 || width % 2 != 0 || height % 2 != 0) {
+    throw std::invalid_argument("stream size " + std::to_string(width) + "x" + std::to_string(height));
+  }
+  Declare(node, default_port);
+  width_ = static_cast<uint32_t>(width);
+  height_ = static_cast<uint32_t>(height);
+}
+
+VideoOut::VideoOut(rclcpp::Node& node, int64_t default_port, uint32_t width, uint32_t height)
+    : width_(width), height_(height) {
+  Declare(node, default_port);
+}
+
+void VideoOut::Declare(rclcpp::Node& node, int64_t default_port) {
+  video_ = node.declare_parameter("video", true);
   const int64_t fps = node.declare_parameter("stream_fps", int64_t{30});
   const int64_t kbps = node.declare_parameter("bitrate_kbps", int64_t{2500});
   const int64_t port = node.declare_parameter("rtsp_port", default_port);
   library_ = node.declare_parameter("encoder_library", DefaultEncoderLibrary());
-  if (width < 16 || width > 1920 || height < 16 || height > 1080 || width % 2 != 0 || height % 2 != 0) {
-    throw std::invalid_argument("stream size " + std::to_string(width) + "x" + std::to_string(height));
-  }
   // 0 takes any free port.
   if (port < 0 || port > 65535) throw std::invalid_argument("rtsp_port " + std::to_string(port) + " is no port");
-  width_ = static_cast<uint32_t>(width);
-  height_ = static_cast<uint32_t>(height);
   fps_ = static_cast<int>(fps);
   bitrate_bps_ = static_cast<int>(kbps) * 1000;
   port_ = static_cast<uint16_t>(port);
@@ -43,9 +54,19 @@ void VideoOut::Configure(TronCameraConfig& camera, VideoFeedConfig& feed) const 
   camera.width = width_;
   camera.height = height_;
   camera.export_buffers = true;
+  Configure(feed);
+  // The ISP writes lines of exactly the stream size.
+  feed.encoder.line_bytes = width_;
+  feed.encoder.lines = height_;
+}
+
+void VideoOut::Configure(VideoFeedConfig& feed) const {
+  if (!video_) return;
   feed.encoder.format = PixelFormat::kNv12;
-  feed.encoder.width = feed.encoder.line_bytes = width_;
-  feed.encoder.height = feed.encoder.lines = height_;
+  feed.encoder.width = width_;
+  feed.encoder.height = height_;
+  feed.encoder.line_bytes = (width_ + kMacroblock - 1) / kMacroblock * kMacroblock;
+  feed.encoder.lines = (height_ + kMacroblock - 1) / kMacroblock * kMacroblock;
   feed.encoder.fps = fps_;
   feed.encoder.bitrate_bps = bitrate_bps_;
 }
