@@ -285,59 +285,78 @@ void Scheduler::Ask(const PlanKey& key, const Plan& plan, bool from_wait) {
   Start(key, plan);
 }
 
-Scheduler::Verdict Scheduler::Check(const PlanKey& key, const Plan& plan, bool from_wait) {
+Scheduler::Row Scheduler::Rows(const PlanKey& key, const Plan& plan, bool from_wait) const {
   const Schedule& schedule = file_.schedule;
-  const auto decided = [&](const char* what, json detail = nullptr) {
-    Decide(key, what, std::move(detail));
-    return Verdict::kDecided;
+  const auto skip = [](const char* what, json detail = nullptr) {
+    return Row{Row::kSkip, what, std::move(detail), WaitKind::kBattery};
   };
   // T3, T4
-  if (PausedAll(schedule, key.date)) return decided("skip_paused");
+  if (PausedAll(schedule, key.date)) return skip("skip_paused");
   const AreaSplit split = SplitAreas(schedule, plan, key.date, facts_.areas);
-  if (!split.left) return decided(split.left_without_pause ? "skip_paused" : "skip_no_area");
+  if (!split.left) return skip(split.left_without_pause ? "skip_paused" : "skip_no_area");
   // T5
   if (from_wait && plan.end) {
     const Date end_date = *plan.end > plan.time ? key.date : AddDays(key.date, 1);
-    if (facts_.wall >= schedule.zone.ToUnix(end_date, *plan.end)) return decided("skip_end");
+    if (facts_.wall >= schedule.zone.ToUnix(end_date, *plan.end)) return skip("skip_end");
   }
-  // T6: within the window the logic may still come.
-  if (!facts_.logic_fresh) return from_wait ? decided("skip_offline") : Verdict::kWaitOffline;
+  // T6
+  if (!facts_.logic_fresh) return Row{Row::kOffline, "skip_offline", nullptr, WaitKind::kBattery};
   // T7 to T11
-  if (facts_.emergency) return decided("skip_emergency");
-  if (facts_.state != kIdle) return decided("skip_busy", facts_.state);
-  if (!facts_.docked) return decided("skip_not_docked");
+  if (facts_.emergency) return skip("skip_emergency");
+  if (facts_.state != kIdle) return skip("skip_busy", facts_.state);
+  if (!facts_.docked) return skip("skip_not_docked");
   if (facts_.rain_sensor && facts_.rain_wet && (schedule.skip_rain || facts_.rain_mode != 0)) {
-    return decided("skip_rain");
+    return skip("skip_rain");
   }
   if (!plan.dark) {
-    if (!facts_.latitude || !facts_.longitude) return decided("skip_no_position");
-    if (mowbite_time::SunElevation(*facts_.latitude, *facts_.longitude, static_cast<double>(facts_.wall)) <
+    if (!facts_.latitude || !facts_.longitude) return skip("skip_no_position");
+    // The sun at the time of the plan, for a plan still to come.
+    const int64_t at = std::max(facts_.wall, PlanUnix(key));
+    if (mowbite_time::SunElevation(*facts_.latitude, *facts_.longitude, static_cast<double>(at)) <
         mowbite_time::kSunsetElevation) {
-      return decided("skip_dark");
+      return skip("skip_dark");
     }
   }
-  // T12 and T13: wait, up to kWaitLimit after the time of the plan.
-  const bool low = facts_.battery < schedule.min_battery;
-  if (low || facts_.hold) {
-    const WaitKind kind = low ? WaitKind::kBattery : WaitKind::kHold;
-    if (facts_.wall >= PlanUnix(key) + kWaitLimit) {
-      return low ? decided("skip_battery", std::to_string(facts_.battery)) : decided("skip_hold");
-    }
-    if (!waiting_ || !(waiting_->key == key)) {
-      waiting_ = Waiting{key, kind, false, false};
-      out_.state_changed = true;
-    }
-    if (waiting_->kind != kind) {
-      waiting_->kind = kind;
-      out_.state_changed = true;
-    }
-    bool& logged = low ? waiting_->battery_logged : waiting_->hold_logged;
-    if (!logged) {
-      logged = true;
-      if (low) Log("waiting_battery", std::to_string(facts_.battery), nullptr, key);
-      else Log("waiting_hold", nullptr, nullptr, key);
-    }
+  // T12 and T13
+  if (facts_.battery < schedule.min_battery) {
+    return Row{Row::kWait, "waiting_battery", std::to_string(facts_.battery), WaitKind::kBattery};
+  }
+  if (facts_.hold) return Row{Row::kWait, "waiting_hold", nullptr, WaitKind::kHold};
+  return Row{Row::kGo, "", nullptr, WaitKind::kBattery};
+}
+
+Scheduler::Verdict Scheduler::Check(const PlanKey& key, const Plan& plan, bool from_wait) {
+  const Row row = Rows(key, plan, from_wait);
+  const auto decided = [&](const char* what, json detail) {
+    Decide(key, what, std::move(detail));
     return Verdict::kDecided;
+  };
+  switch (row.kind) {
+    case Row::kSkip: return decided(row.word, row.detail);
+    // Within the window the logic may still come.
+    case Row::kOffline: return from_wait ? decided(row.word, nullptr) : Verdict::kWaitOffline;
+    case Row::kGo: break;
+    case Row::kWait: {
+      // Up to kWaitLimit after the time of the plan.
+      const bool low = row.wait == WaitKind::kBattery;
+      if (facts_.wall >= PlanUnix(key) + kWaitLimit) {
+        return low ? decided("skip_battery", row.detail) : decided("skip_hold", nullptr);
+      }
+      if (!waiting_ || !(waiting_->key == key)) {
+        waiting_ = Waiting{key, row.wait, false, false};
+        out_.state_changed = true;
+      }
+      if (waiting_->kind != row.wait) {
+        waiting_->kind = row.wait;
+        out_.state_changed = true;
+      }
+      bool& logged = low ? waiting_->battery_logged : waiting_->hold_logged;
+      if (!logged) {
+        logged = true;
+        Log(row.word, row.detail, nullptr, key);
+      }
+      return Verdict::kDecided;
+    }
   }
   if (waiting_ && waiting_->key == key) {
     waiting_.reset();
@@ -504,12 +523,15 @@ Output Scheduler::TakeOutput() {
   return std::exchange(out_, Output());
 }
 
-std::optional<int64_t> Scheduler::NextStart() const {
+bool Scheduler::Planning() const {
+  return available_ && file_.schedule.enabled && ticked_;
+}
+
+std::optional<Scheduler::PlanKey> Scheduler::NextPlan() const {
   const Schedule& schedule = file_.schedule;
-  if (!available_ || !schedule.enabled || !ticked_ || !facts_.clock_ok) return std::nullopt;
-  if (waiting_ || pending_ || (run_ && !run_->mowing && run_->phase != Phase::kEnded)) return facts_.wall;
   const Date today = schedule.zone.ToLocal(facts_.wall).date;
-  std::optional<int64_t> next;
+  std::optional<PlanKey> next;
+  std::optional<int64_t> next_at;
   for (int64_t day = 0; day <= 7; ++day) {
     const Date date = AddDays(today, day);
     if (PausedAll(schedule, date)) continue;
@@ -518,12 +540,43 @@ std::optional<int64_t> Scheduler::NextStart() const {
       if (PlanAt(schedule, date, plan.time) != &plan || Handled(key) || clock_skipped_.count(key) > 0) continue;
       const int64_t at = PlanUnix(key);
       if (at + kWindow <= facts_.wall || at <= file_.changed_at) continue;
-      if (!next || at < *next) next = at;
+      if (!next_at || at < *next_at) {
+        next = key;
+        next_at = at;
+      }
     }
     // Later days start later.
     if (next) break;
   }
   return next;
+}
+
+bool Scheduler::Starting() const {
+  return waiting_ || pending_ || (run_ && !run_->mowing && run_->phase != Phase::kEnded);
+}
+
+std::optional<int64_t> Scheduler::NextStart() const {
+  if (!Planning() || !facts_.clock_ok) return std::nullopt;
+  if (Starting()) return facts_.wall;
+  const std::optional<PlanKey> next = NextPlan();
+  if (!next) return std::nullopt;
+  return PlanUnix(*next);
+}
+
+std::optional<Ready> Scheduler::ReadyNow() const {
+  if (!Planning()) return std::nullopt;
+  // T2: without a safe clock no start is known, but every plan would be skipped.
+  if (!facts_.clock_ok) {
+    if (file_.schedule.plans.empty()) return std::nullopt;
+    return Ready{false, "skip_clock"};
+  }
+  if (waiting_) return Ready{false, waiting_->kind == WaitKind::kBattery ? "waiting_battery" : "waiting_hold"};
+  if (Starting()) return Ready{true, ""};
+  const std::optional<PlanKey> next = NextPlan();
+  if (!next) return std::nullopt;
+  const Row row = Rows(*next, *PlanAt(file_.schedule, next->date, next->time), false);
+  if (row.kind == Row::kGo) return Ready{true, ""};
+  return Ready{false, row.word};
 }
 
 json Scheduler::StateJson() const {

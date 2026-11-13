@@ -200,6 +200,7 @@ struct ScheduleLogWord {
   std::string text;
   std::string detail;
   std::string more;
+  bool ready = false;  // also a reason of mowbite/schedule/ready
 };
 const std::vector<ScheduleLogWord>& ScheduleLogWords();
 // The situations of sound.list in their order.

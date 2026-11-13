@@ -306,11 +306,26 @@ Json BuildSchema(const Json& planner) {
     geometry[key.name] = entry;
   }
   Json log_words = Json::object();
+  Json ready_reasons = Json::array({nullptr});
   for (const auto& word : ScheduleLogWords()) {
     log_words[word.word] = {{"description", word.text},
                             {"detail", word.detail.empty() ? Json() : Json(word.detail)},
                             {"more", word.more.empty() ? Json() : Json(word.more)}};
+    if (word.ready) ready_reasons.push_back(word.word);
   }
+  defs["schedule_ready"] = {
+      {"type", "object"},
+      {"description",
+       "mowbite/schedule/ready, retained while a start of the schedule is to come, empty once none is: whether the "
+       "next start would go with the states of now. Shown only, the start checks again; the weather is not asked"},
+      {"required", {"ok", "reason"}},
+      {"additionalProperties", false},
+      {"properties",
+       {{"ok", {{"type", "boolean"}}},
+        {"reason",
+         {{"type", {"string", "null"}},
+          {"enum", ready_reasons},
+          {"description", "null with ok, else the word schedule.log would write, see x-schedule-log"}}}}}};
   Json bits = Json::array();
   for (const auto& bit : EmergencyBits()) {
     Json entry = {{"bit", bit.bit}, {"name", bit.name}, {"description", bit.text}};

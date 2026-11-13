@@ -8,6 +8,7 @@
 #include <mowbite_msgs/msg/clock_status.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
+#include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
 #include <mowbite_msgs/msg/rpc_error.hpp>
 #include <mowbite_msgs/msg/rpc_methods.hpp>
@@ -42,6 +43,8 @@ constexpr double kLogicFresh = 5.0;
 constexpr size_t kMaxFileBytes = 64 * 1024;
 // How long a start waits for its mark on the disk (S4) before it fails with storage.
 constexpr auto kMarkWait = std::chrono::seconds(2);
+// mowbite/schedule/ready again after this long (s) while a start is to come.
+constexpr double kReadyRepeat = 60.0;
 constexpr char kFile[] = "schedule.json";
 constexpr char kStateFile[] = "schedule-state.json";
 constexpr char kLogFile[] = "schedule-log.json";
@@ -75,7 +78,7 @@ json FirstValue(const std::string& data) {
 
 // The schedule (FP22): once a second the plans against the state of the mower, starts only through logic/start_run
 // from the station, pauses of a running plan through logic/drop_tasks, schedule/next_start for the update hold, and
-// schedule.get, .set, .log and .leftovers through the bridge. Files in data_dir: schedule.json, schedule-state.json
+// schedule.get, .set, .log and .leftovers through the bridge, mowbite/schedule/ready for App and HA. Files in data_dir: schedule.json, schedule-state.json
 // (the mark of each start, written before the start goes out) and schedule-log.json. Nothing under hw/ or safety/,
 // no cmd_vel, no follow_path.
 class ScheduleNode : public rclcpp::Node {
@@ -90,6 +93,7 @@ class ScheduleNode : public rclcpp::Node {
         }) {
     next_start_pub_ = create_publisher<std_msgs::msg::Int64>("schedule/next_start", LatchedQos(1));
     weather_pub_ = create_publisher<mowbite_msgs::msg::WeatherRequest>("net/weather/request", 10);
+    publish_pub_ = create_publisher<mowbite_msgs::msg::MqttPublish>("bridge/publish", 100);
     methods_pub_ = create_publisher<mowbite_msgs::msg::RpcMethods>("bridge/rpc/methods", LatchedQos(50));
     response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
     error_pub_ = create_publisher<mowbite_msgs::msg::RpcError>("bridge/rpc/error", 100);
@@ -249,6 +253,7 @@ class ScheduleNode : public rclcpp::Node {
       if (!out.start) break;
     }
     PublishNextStart();
+    MirrorReady();
   }
 
   void Write(const char* name, const json& value) {
@@ -318,6 +323,23 @@ class ScheduleNode : public rclcpp::Node {
     std_msgs::msg::Int64 msg;
     msg.data = next;
     next_start_pub_->publish(msg);
+  }
+
+  // On every change, again every kReadyRepeat while a start is to come, empty once after the start and once none is.
+  // It waits for the bridge.
+  void MirrorReady() {
+    if (publish_pub_->get_subscription_count() == 0) return;
+    const std::optional<Ready> ready = core_.View().ReadyNow();
+    const double now = MonotonicSeconds();
+    if (ready_mirrored_ && ready == ready_sent_ && (!ready || now - ready_mirrored_mono_ < kReadyRepeat)) return;
+    ready_mirrored_ = true;
+    ready_sent_ = ready;
+    ready_mirrored_mono_ = now;
+    mowbite_msgs::msg::MqttPublish msg;
+    msg.topic = kReadyTopic;
+    msg.payload = ready ? ReadyToJson(*ready).dump() : "";
+    msg.retain = true;
+    publish_pub_->publish(msg);
   }
 
   json Answer() const {
@@ -406,9 +428,13 @@ class ScheduleNode : public rclcpp::Node {
   std::optional<double> longitude_;
   mowbite_logic::MowingPlanner map_;
   std::optional<int64_t> published_next_;
+  bool ready_mirrored_ = false;
+  std::optional<Ready> ready_sent_;
+  double ready_mirrored_mono_ = 0;
 
   rclcpp::Publisher<std_msgs::msg::Int64>::SharedPtr next_start_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::WeatherRequest>::SharedPtr weather_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcMethods>::SharedPtr methods_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcResponse>::SharedPtr response_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcError>::SharedPtr error_pub_;

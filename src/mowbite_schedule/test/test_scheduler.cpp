@@ -1202,5 +1202,113 @@ TEST_F(SchedulerTest, T5_EndAfterMidnightWhileWaiting) {
   EXPECT_EQ(Words(), (Lines{"waiting_battery 50", "skip_end"}));
 }
 
+// mowbite/schedule/ready: the word the log would write for the next plan, with the states of now.
+TEST_F(SchedulerTest, ReadyNothingWithoutAStartToCome) {
+  Make(File());
+  EXPECT_FALSE(scheduler_->ReadyNow());
+  Make(File(), false);
+  TickAt(kMonday, "09:00");
+  EXPECT_FALSE(scheduler_->ReadyNow());
+  Make(File({{"enabled", 0}}));
+  TickAt(kMonday, "09:00");
+  EXPECT_FALSE(scheduler_->ReadyNow());
+  Make(File({{"plans", json::array()}}));
+  TickAt(kMonday, "09:00");
+  EXPECT_FALSE(scheduler_->ReadyNow());
+  Facts facts = Good(At(kMonday, "09:00"));
+  facts.clock_ok = false;
+  Tick(facts);
+  EXPECT_FALSE(scheduler_->ReadyNow());
+}
+
+TEST_F(SchedulerTest, ReadyWordOfEachRowWithoutLogOrWait) {
+  const auto ready = [this](const Facts& facts, const json& extra = json::object()) {
+    Make(File(extra));
+    Tick(facts);
+    EXPECT_TRUE(Words().empty());
+    EXPECT_TRUE(scheduler_->StateJson()["waiting"].is_null());
+    const std::optional<Ready> value = scheduler_->ReadyNow();
+    return value ? value->reason + (value->ok ? " ok" : "") : std::string("none");
+  };
+  const Facts good = Good(At(kMonday, "09:00"));
+  EXPECT_EQ(ready(good), " ok");
+  Facts facts = good;
+  facts.clock_ok = false;
+  facts.clock_reason = "never_synced";
+  EXPECT_EQ(ready(facts), "skip_clock");
+  EXPECT_EQ(ready(good, {{"pause", {{"until", "2026-06-15"}, {"areas", {"a", "b"}}}}}), "skip_paused");
+  EXPECT_EQ(ready(good, {{"plans", {{{"days", {1}}, {"time", "10:00"}, {"areas", {"x", "c"}}}}}}), "skip_no_area");
+  facts = good;
+  facts.logic_fresh = false;
+  EXPECT_EQ(ready(facts), "skip_offline");
+  facts = good;
+  facts.emergency = true;
+  EXPECT_EQ(ready(facts), "skip_emergency");
+  facts = good;
+  facts.state = "MOWING";
+  EXPECT_EQ(ready(facts), "skip_busy");
+  facts = good;
+  facts.docked = false;
+  EXPECT_EQ(ready(facts), "skip_not_docked");
+  facts = good;
+  facts.rain_wet = true;
+  EXPECT_EQ(ready(facts), "skip_rain");
+  facts = good;
+  facts.latitude.reset();
+  EXPECT_EQ(ready(facts), "skip_no_position");
+  EXPECT_EQ(ready(facts, {{"plans", {{{"days", {1}}, {"time", "10:00"}, {"dark", 1}}}}}), " ok");
+  facts = good;
+  facts.battery = 60;
+  EXPECT_EQ(ready(facts), "waiting_battery");
+  facts = good;
+  facts.hold = true;
+  EXPECT_EQ(ready(facts), "waiting_hold");
+}
+
+TEST_F(SchedulerTest, ReadyLooksAtTheSunAtTheTimeOfThePlan) {
+  Make(File());
+  TickAt(kMonday, "02:00");
+  ASSERT_TRUE(scheduler_->ReadyNow());
+  EXPECT_TRUE(scheduler_->ReadyNow()->ok);
+  Make(File({{"plans", {{{"days", {1}}, {"time", "23:00"}}}}}));
+  TickAt(kMonday, "12:00");
+  ASSERT_TRUE(scheduler_->ReadyNow());
+  EXPECT_EQ(scheduler_->ReadyNow()->reason, "skip_dark");
+}
+
+TEST_F(SchedulerTest, ReadyWhileAPlanWaitsOrStarts) {
+  Make(File());
+  Facts facts = Good(At(kMonday, "10:00"));
+  facts.battery = 60;
+  Tick(facts);
+  EXPECT_EQ(scheduler_->ReadyNow(), (Ready{false, "waiting_battery"}));
+  facts.battery = 90;
+  facts.hold = true;
+  facts.wall = At(kMonday, "10:01");
+  Tick(facts);
+  EXPECT_EQ(scheduler_->ReadyNow(), (Ready{false, "waiting_hold"}));
+  facts.hold = false;
+  facts.wall = At(kMonday, "10:02");
+  const Output out = Tick(facts);
+  ASSERT_TRUE(out.start);
+  EXPECT_EQ(scheduler_->ReadyNow(), (Ready{true, ""}));
+  scheduler_->OnStartAnswer(out.start->run_id, true, "", nullptr);
+  Status(out.start->run_id, Phase::kAnnouncing);
+  EXPECT_EQ(scheduler_->ReadyNow(), (Ready{true, ""}));
+  Status(out.start->run_id, Phase::kMowing);
+  facts.state = "MOWING";
+  facts.docked = false;
+  facts.wall = At(kMonday, "10:03");
+  Tick(facts);
+  // The next plan, tomorrow, while this one mows.
+  EXPECT_EQ(scheduler_->ReadyNow(), (Ready{false, "skip_busy"}));
+}
+
+TEST_F(SchedulerTest, ReadyWhileTheWeatherIsAsked) {
+  Make(File({{"skip_forecast", 1}}));
+  ASSERT_TRUE(TickAt(kMonday, "10:00").weather);
+  EXPECT_EQ(scheduler_->ReadyNow(), (Ready{true, ""}));
+}
+
 }  // namespace
 }  // namespace mowbite_schedule

@@ -1,5 +1,6 @@
 """H4: the schedule only asks the logic. What schedule_node.cpp publishes, calls and offers is this list; it subscribes
-to nothing that drives, and nothing it names lies under hw/ or safety/, nor is cmd_vel or follow_path.
+to nothing that drives, and nothing it names lies under hw/ or safety/, nor is cmd_vel or follow_path. On MQTT it
+sends only mowbite/schedule/ready.
 
 Run: python3 test_topics.py
 """
@@ -7,9 +8,11 @@ import os
 import re
 import unittest
 
-NODE = os.path.join(os.path.dirname(__file__), "..", "src", "schedule_node.cpp")
+HERE = os.path.dirname(__file__)
+NODE = os.path.join(HERE, "..", "src", "schedule_node.cpp")
+RPC = os.path.join(HERE, "..", "include", "mowbite_schedule", "schedule_rpc.h")
 OUT = {"schedule/next_start", "net/weather/request", "bridge/rpc/methods", "bridge/rpc/response", "bridge/rpc/error",
-       "logic/start_run", "logic/drop_tasks"}
+       "bridge/publish", "logic/start_run", "logic/drop_tasks"}
 
 
 class Topics(unittest.TestCase):
@@ -25,6 +28,13 @@ class Topics(unittest.TestCase):
             self.assertFalse(name.startswith(("hw/", "safety/")) and kind != "subscription", name)
             self.assertNotIn("cmd_vel", name)
             self.assertNotIn("follow_path", name)
+
+    def test_what_the_node_sends_on_mqtt(self):
+        with open(NODE) as f:
+            text = f.read()
+        self.assertEqual(re.findall(r"msg\.topic = ([^;]+);", text), ["kReadyTopic"])
+        with open(RPC) as f:
+            self.assertIn('kReadyTopic[] = "mowbite/schedule/ready";', f.read())
 
 
 if __name__ == "__main__":

@@ -100,6 +100,13 @@ struct RunStatus {
   std::string detail;
 };
 
+// mowbite/schedule/ready: whether the next start of a plan would go with the states of now.
+struct Ready {
+  bool ok = false;
+  std::string reason;  // the word schedule.log would write for it; empty with ok
+  bool operator==(const Ready& other) const { return ok == other.ok && reason == other.reason; }
+};
+
 struct LogEntry {
   int64_t t = 0;
   std::string what;
@@ -155,6 +162,8 @@ class Scheduler {
   // The next start (unix s): now while a plan waits or starts; nothing without one, switched off or with an unsafe
   // clock.
   std::optional<int64_t> NextStart() const;
+  // Nothing while no start is to come; T2 to T13 without the weather, for the next plan or the one that waits.
+  std::optional<Ready> ReadyNow() const;
   json StateJson() const;
   json LogJson() const;
   json LogEntries(size_t limit) const;
@@ -189,6 +198,13 @@ class Scheduler {
     double last_word = 0;  // mono
   };
   enum class Verdict { kGo, kDecided, kWaitOffline };
+  // The first row a plan fails with the states of now: its word and detail, or kGo.
+  struct Row {
+    enum Kind { kGo, kSkip, kWait, kOffline } kind = kGo;
+    const char* word = "";
+    json detail;
+    WaitKind wait = WaitKind::kBattery;
+  };
 
   void Log(const std::string& what, json detail, json more, const std::optional<PlanKey>& key);
   // Logs the word that decides the plan and ends its wait.
@@ -200,8 +216,15 @@ class Scheduler {
   void SweepMissed();
   void EndWait(const char* battery_word, const char* hold_word);
   void TickWaiting();
-  // Rows T2 to T13 for a plan; kGo when it may start.
+  // Rows T3 to T13 without a side effect.
+  Row Rows(const PlanKey& key, const Plan& plan, bool from_wait) const;
+  // Rows T3 to T13 with their log and wait; kGo when it may start.
   Verdict Check(const PlanKey& key, const Plan& plan, bool from_wait);
+  bool Planning() const;
+  // A plan waits, asks for the weather or its start has not reached mowing.
+  bool Starting() const;
+  // The next plan that has not fired yet.
+  std::optional<PlanKey> NextPlan() const;
   void Ask(const PlanKey& key, const Plan& plan, bool from_wait);
   void ResolveWeather();
   void Start(const PlanKey& key, const Plan& plan);

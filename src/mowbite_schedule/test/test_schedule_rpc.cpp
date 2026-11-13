@@ -136,3 +136,44 @@ TEST(ScheduleRpc, EveryLogWordIsInTheCatalog) {
   for (const auto& entry : mowbite_api::ScheduleLogWords()) EXPECT_TRUE(catalog.insert(entry.word).second);
   EXPECT_EQ(logged, catalog);
 }
+
+namespace {
+
+// The text of a function in scheduler.cpp, from its head to the closing brace at the start of a line.
+std::string Body(const std::string& source, const std::string& head) {
+  const size_t begin = source.find(head);
+  EXPECT_NE(begin, std::string::npos) << head;
+  if (begin == std::string::npos) return "";
+  return source.substr(begin, source.find("\n}\n", begin) - begin);
+}
+
+// The words mowbite/schedule/ready can give are those marked ready in the catalog.
+TEST(ScheduleRpc, EveryReadyWordIsMarkedInTheCatalog) {
+  std::ifstream file(SCHEDULER_SOURCE);
+  ASSERT_TRUE(file);
+  std::stringstream text;
+  text << file.rdbuf();
+  const std::string source = text.str();
+  const std::regex word("\"((skip|waiting)_[a-z_]+)\"");
+  std::set<std::string> given;
+  for (const char* head : {"Scheduler::Row Scheduler::Rows(", "Scheduler::ReadyNow() const {"}) {
+    const std::string body = Body(source, head);
+    for (auto it = std::sregex_iterator(body.begin(), body.end(), word); it != std::sregex_iterator(); ++it) {
+      given.insert((*it)[1]);
+    }
+  }
+  // Only for a plan that waits, never for one to come.
+  given.erase("skip_end");
+  std::set<std::string> marked;
+  for (const auto& entry : mowbite_api::ScheduleLogWords()) {
+    if (entry.ready) marked.insert(entry.word);
+  }
+  EXPECT_EQ(given, marked);
+}
+
+TEST(ScheduleRpc, ReadyAsJson) {
+  EXPECT_EQ(ReadyToJson(Ready{true, ""}), (json{{"ok", true}, {"reason", nullptr}}));
+  EXPECT_EQ(ReadyToJson(Ready{false, "skip_rain"}), (json{{"ok", false}, {"reason", "skip_rain"}}));
+}
+
+}  // namespace

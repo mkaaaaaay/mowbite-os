@@ -34,6 +34,11 @@ struct SunTimes {
 // Sunrise and sunset of the local day of wall after the zone, at the datum; none without a datum.
 SunTimes SunOfDay(const TimeZone& zone, int64_t wall, std::optional<double> latitude, std::optional<double> longitude);
 
+// The MQTT topic of ReadyNow, retained; empty once no start is to come.
+constexpr char kReadyTopic[] = "mowbite/schedule/ready";
+// {ok, reason}, reason null with ok.
+json ReadyToJson(const Ready& ready);
+
 // The answer of schedule.get and schedule.set.
 json GetAnswer(const Scheduler& scheduler, const ClockState& clock, const SunTimes& sun);
 

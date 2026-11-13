@@ -32,6 +32,10 @@ SunTimes SunOfDay(const TimeZone& zone, int64_t wall, std::optional<double> lati
   return {Rounded(day.rise), Rounded(day.set)};
 }
 
+json ReadyToJson(const Ready& ready) {
+  return {{"ok", ready.ok}, {"reason", ready.reason.empty() ? json() : json(ready.reason)}};
+}
+
 json GetAnswer(const Scheduler& scheduler, const ClockState& clock, const SunTimes& sun) {
   const ScheduleFile& file = scheduler.file();
   return {{"schema", kSchema},
