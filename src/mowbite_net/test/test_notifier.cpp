@@ -277,7 +277,9 @@ TEST(Notifier, EveryEventKeyHasItsWay) {
 TEST(Notifier, EveryPushWordAndPartHasItsTexts) {
   for (const char* lang : {"de", "en"}) {
     for (const auto& word : mowbite_api::ScheduleLogWords()) {
-      if (word.push) EXPECT_NE(Say(lang, word.word), word.word) << lang << " " << word.word;
+      if (word.push) {
+        EXPECT_NE(Say(lang, word.word), word.word) << lang << " " << word.word;
+      }
     }
     for (const char* part : {"maintenance_blade", "maintenance_clean"}) {
       EXPECT_NE(Say(lang, part), part) << lang;
