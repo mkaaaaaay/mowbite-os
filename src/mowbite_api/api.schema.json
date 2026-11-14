@@ -14837,10 +14837,22 @@
         "severity": "error"
       },
       "NO_CHARGE_CONTACTS": {
-        "description": "The mower has no charging contacts and cannot dock",
+        "description": "This mower has no charge contacts to dock onto",
         "fields": {},
         "resume": "user",
-        "severity": "warning"
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Die Lage der Ladekontakte in der Plattform-Datei eintragen.",
+            "help": "Für diesen Mäher sind keine Ladekontakte eingetragen, er kann nicht andocken.",
+            "name": "Keine Ladekontakte"
+          },
+          "en": {
+            "fix": "Set the position of the charge contacts in the platform file.",
+            "help": "No charge contacts are set for this mower, it cannot dock.",
+            "name": "No charge contacts"
+          }
+        }
       },
       "NO_DOCK": {
         "description": "The map has no docking station",

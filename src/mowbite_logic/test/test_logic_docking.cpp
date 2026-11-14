@@ -467,7 +467,7 @@ TEST(Docking, WithoutAStationOrChargingContactsTheJobEndsInIdle) {
   EXPECT_FALSE(other.TakeDockingLeg());
   const Reason why = other.DockingProblem();
   EXPECT_EQ(why.code, "NO_CHARGE_CONTACTS");
-  EXPECT_NE(why.message.find("no charging contacts"), std::string::npos);
+  EXPECT_NE(why.message.find("no charge contacts"), std::string::npos);
   // Also from the contacts of a station: it is no dock to it.
   other.OnHardwareStatus(Healthy(true));
   EXPECT_EQ(other.DockingProblem().code, "NO_CHARGE_CONTACTS");

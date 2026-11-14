@@ -82,7 +82,7 @@ Reason LogicCore::DockingProblem() const {
   if (why.empty()) why = HoldProblem();
   if (!why.empty()) return why;
   if (!CanDock()) {
-    return Reason("NO_CHARGE_CONTACTS", "This mower has no charging contacts (geometry.dock_contact_x 0): it cannot dock");
+    return Reason("NO_CHARGE_CONTACTS", "This mower has no charge contacts to dock onto (geometry.dock_contact_x 0)");
   }
   if (DockContact()) return Reason("ALREADY_THERE", "The mower is on the docking station already");
   why = Unsafe();
