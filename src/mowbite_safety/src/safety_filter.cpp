@@ -15,6 +15,8 @@ constexpr double kRadToDeg = 180.0 / M_PI;
 // s between two requests of a latch that hw/status does not show yet.
 constexpr double kLatchResend = 1.0;
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+// m/s the follower may reverse at most, whatever the driver allows: nothing watches behind the mower (G40).
+constexpr double kFollowerMaxReverse = 0.12;
 
 std::string Format(const char* format, double a, double b = 0, double c = 0) {
   char text[200];
@@ -268,7 +270,8 @@ Decision SafetyFilter::OnCommand(Source source, double linear, double angular, d
   }
   owner_s_ = now;
   moving_ = source;
-  decision.out = Twist2{std::clamp(linear, -max_linear_, max_linear_), std::clamp(angular, -max_angular_, max_angular_)};
+  const double reverse = source == Source::kFollower ? std::min(max_linear_, kFollowerMaxReverse) : max_linear_;
+  decision.out = Twist2{std::clamp(linear, -reverse, max_linear_), std::clamp(angular, -max_angular_, max_angular_)};
   return decision;
 }
 

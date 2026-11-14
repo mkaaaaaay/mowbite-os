@@ -174,6 +174,26 @@ TEST_F(FilterTest, PassesBothSourcesWithinTheLimitsOfTheDriver) {
   EXPECT_EQ(filter_.Refused(), 0u);
 }
 
+TEST_F(FilterTest, TheFollowerReversesAtMostTwelveCentimetresASecond) {
+  Decision d = Cmd(Source::kFollower, -0.25, 0.2);
+  ASSERT_TRUE(Moves(d)) << d.refusal;
+  EXPECT_DOUBLE_EQ(d.out->linear, -0.12);
+  EXPECT_DOUBLE_EQ(d.out->angular, 0.2);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kFollower, -0.1).out->linear, -0.1);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kFollower, 0.25).out->linear, 0.25);
+  EXPECT_EQ(filter_.Refused(), 0u);
+  // A driver limit below it holds.
+  filter_.OnCapabilities(true, 0.05, 0.3);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kFollower, -0.25).out->linear, -0.05);
+  // The remote control reverses up to the limit of the driver.
+  filter_.OnCapabilities(true, 0.3, 0.3);
+  EXPECT_TRUE(Stops(Cmd(Source::kFollower, 0)));
+  Run(now_ + 1.1);
+  d = Cmd(Source::kTeleop, -0.25);
+  ASSERT_TRUE(Moves(d)) << d.refusal;
+  EXPECT_DOUBLE_EQ(d.out->linear, -0.25);
+}
+
 TEST_F(FilterTest, NothingMovesWithoutHardwareStatusCapabilitiesOrImu) {
   SafetyFilter fresh{SafetyConfig{}};
   EXPECT_EQ(fresh.OnCommand(Source::kTeleop, 0.1, 0, 1.0).refusal, "emergency");

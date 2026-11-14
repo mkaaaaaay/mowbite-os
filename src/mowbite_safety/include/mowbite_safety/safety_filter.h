@@ -82,7 +82,7 @@ struct Release {
 
 // S2 between all sources of drive commands and the driver: one source at a time, armed after every emergency, a
 // tilt limit for all of them, and for autonomous drives a recent accurate pose with a heading and the fence of the
-// map. Time is passed in (monotonic s), nothing here talks to ROS.
+// map. The follower reverses at most 0.12 m/s. Time is passed in (monotonic s), nothing here talks to ROS.
 class SafetyFilter {
  public:
   explicit SafetyFilter(const SafetyConfig& config);
