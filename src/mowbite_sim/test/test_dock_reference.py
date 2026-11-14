@@ -46,7 +46,8 @@ def garden(docks):
 with open(CONFIG, "w") as f:
     f.write("tron_mcu:\n  ros__parameters:\n    safety_measurement_date: \"simulation\"\n"
             # The antenna of fake_tron, as in sim.yaml, which this file replaces.
-            "mowbite_logic:\n  ros__parameters:\n    geometry:\n      antenna_x: 0.098\n      antenna_y: 0.0\n"
+            "mowbite_logic:\n  ros__parameters:\n    dock_guide: none\n"
+            "    geometry:\n      antenna_x: 0.098\n      antenna_y: 0.0\n"
             # The station of sim.yaml: the docked mower at (-1, 0), backing in going west.
             "fake_tron:\n  ros__parameters:\n    dock: [-1.0, 0.0, 180.0]\n    dock_contact_x: -0.10\n")
 

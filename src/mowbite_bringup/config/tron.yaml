@@ -185,7 +185,7 @@ mowbite_logic:
     undock_course_limit: 10.0
     # Docking after JOB_COMPLETE, abort_mowing and on docking.start: over the drivable areas to the point
     # docking_approach_distance m in front of the station, facing away from it, then backwards along its line at
-    # docking_speed m/s, steered by RTK (the camera takes over the last part in O8). dock_gate_distance m before the
+    # docking_speed m/s, steered by RTK, or by the dock marker with dock_guide (below). dock_gate_distance m before the
     # station the mower stops: base_link at most dock_gate_lateral m beside the line, the heading within
     # dock_gate_heading degrees and the position at least dock_max_position_accuracy, else the try fails. Then at
     # contact_speed m/s up to dock_overshoot m past the station: the first raw contact stops it (three zero frames, then
@@ -217,6 +217,10 @@ mowbite_logic:
     marker_wait: 25.0
     marker_cross_track: 0.10
     marker_scale_limit: 0.15
+    # docking.start and going home dock by the marker too (dock_guide): none never, prefer by the position where its
+    # source cannot measure (DOCKING_WITHOUT_MARKER), require never without it. require until docking by RTK is
+    # measured on the Tron (P7).
+    dock_guide: require
     # The debounced contact is not DOCKED yet (G19): contact and a charge current of at least charge_confirm_current A
     # have to hold charge_confirm_time s without a gap, at charge_expected_below percent or more the contact alone, as
     # the charger stays off near full. Without either within charge_confirm_timeout s the try fails (NO_CHARGE_CURRENT):

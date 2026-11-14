@@ -67,7 +67,7 @@ SUNSET = sun(LAT, LON, SUNSET)["set"]
 with open(CONFIG, "w") as f:
     f.write("tron_mcu:\n  ros__parameters:\n    safety_measurement_date: \"simulation\"\n"
             # The antenna of fake_tron, as in sim.yaml, which this file replaces.
-            "mowbite_logic:\n  ros__parameters:\n    gps_wait_time: 2.0\n"
+            "mowbite_logic:\n  ros__parameters:\n    dock_guide: none\n    gps_wait_time: 2.0\n"
             "    geometry:\n      antenna_x: 0.098\n      antenna_y: 0.0\n"
             # The station of sim.yaml.
             "fake_tron:\n  ros__parameters:\n    dock: [-1.0, 0.0, 180.0]\n    dock_contact_x: -0.10\n")
