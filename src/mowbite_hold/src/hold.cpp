@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cerrno>
-#include <cstring>
 #include <nlohmann/json.hpp>
 
 #include "mowbite_hold/file_io.h"
@@ -91,7 +90,8 @@ bool HoldTimer::Active(double now_mono) const {
 }
 
 int64_t HoldTimer::Until(double now_mono) const {
-  return Active(now_mono) ? record_->until : 0;
+  if (!record_ || now_mono >= end_mono_) return 0;
+  return record_->until;
 }
 
 HoldWatch::HoldWatch(std::string path) : path_(std::move(path)) {
@@ -106,7 +106,7 @@ HoldView HoldWatch::Poll(double now_mono, int64_t now_wall) {
     timer_.Clear();
     unreadable_ = e != ENOENT;
     if (!unreadable_) return {};
-    error_ = "cannot stat " + path_ + ": " + std::strerror(e);
+    error_ = "cannot stat " + path_ + ": " + ErrorText(e);
     return {true, true, 0, error_};
   }
   const Identity id{st.st_dev, st.st_ino, st.st_size, static_cast<int64_t>(st.st_mtim.tv_sec),

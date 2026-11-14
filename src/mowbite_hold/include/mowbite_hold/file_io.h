@@ -18,6 +18,8 @@ bool WriteFileSafely(const std::string& path, const std::string& text, std::stri
 bool WriteFileOwnerOnly(const std::string& path, const std::string& text, std::string* error);
 // Removes it and syncs the folder; a file that is not there counts as removed.
 bool RemoveFileSynced(const std::string& path, std::string* error);
+// The text of an errno value, safe from any thread.
+std::string ErrorText(int error);
 
 }  // namespace mowbite_hold
 

@@ -28,12 +28,18 @@ void SyncFolder(const std::string& path) {
 
 }  // namespace
 
+std::string ErrorText(int error) {
+  char text[128];
+  // The GNU strerror_r gives the text, in text or a static string.
+  return strerror_r(error, text, sizeof(text));
+}
+
 FileRead ReadSmallFile(const std::string& path, size_t max_bytes, std::string* text, std::string* error) {
   text->clear();
   const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) {
     if (errno == ENOENT) return FileRead::kMissing;
-    *error = "cannot open " + path + ": " + std::strerror(errno);
+    *error = "cannot open " + path + ": " + ErrorText(errno);
     return FileRead::kFailed;
   }
   char buffer[512];
@@ -41,7 +47,7 @@ FileRead ReadSmallFile(const std::string& path, size_t max_bytes, std::string* t
     const ssize_t n = ::read(fd, buffer, sizeof(buffer));
     if (n < 0 && errno == EINTR) continue;
     if (n < 0) {
-      *error = "cannot read " + path + ": " + std::strerror(errno);
+      *error = "cannot read " + path + ": " + ErrorText(errno);
       ::close(fd);
       return FileRead::kFailed;
     }
@@ -58,7 +64,7 @@ bool WriteAtomic(const std::string& path, const std::string& text, std::string* 
   const std::string temp = path + ".tmp";
   const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
   if (fd < 0) {
-    *error = "cannot write " + temp + ": " + std::strerror(errno);
+    *error = "cannot write " + temp + ": " + ErrorText(errno);
     return false;
   }
   size_t done = 0;
@@ -66,7 +72,7 @@ bool WriteAtomic(const std::string& path, const std::string& text, std::string* 
     const ssize_t n = ::write(fd, text.data() + done, text.size() - done);
     if (n < 0 && errno == EINTR) continue;
     if (n < 0) {
-      *error = "cannot write " + temp + ": " + std::strerror(errno);
+      *error = "cannot write " + temp + ": " + ErrorText(errno);
       ::close(fd);
       ::unlink(temp.c_str());
       return false;
@@ -76,12 +82,12 @@ bool WriteAtomic(const std::string& path, const std::string& text, std::string* 
   const bool synced = ::fsync(fd) == 0;
   ::close(fd);
   if (!synced) {
-    *error = "cannot sync " + temp + ": " + std::strerror(errno);
+    *error = "cannot sync " + temp + ": " + ErrorText(errno);
     ::unlink(temp.c_str());
     return false;
   }
   if (std::rename(temp.c_str(), path.c_str()) != 0) {
-    *error = "cannot replace " + path + ": " + std::strerror(errno);
+    *error = "cannot replace " + path + ": " + ErrorText(errno);
     ::unlink(temp.c_str());
     return false;
   }
@@ -115,7 +121,7 @@ bool WriteFileSafely(const std::string& path, const std::string& text, std::stri
 
 bool RemoveFileSynced(const std::string& path, std::string* error) {
   if (::unlink(path.c_str()) != 0 && errno != ENOENT) {
-    *error = "cannot remove " + path + ": " + std::strerror(errno);
+    *error = "cannot remove " + path + ": " + ErrorText(errno);
     return false;
   }
   SyncFolder(path);
