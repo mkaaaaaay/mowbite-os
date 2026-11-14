@@ -23,6 +23,7 @@ TOOL = os.path.join(HERE, "..", "rootfs", "files", "usr", "sbin", "mowbite-updat
 HOST_LIB = os.path.join(HERE, "..", "..", "..", "host")
 SIGN = os.path.join(HERE, "sign-bundle.sh")
 MAKE_APP = os.path.join(HERE, "make-app-bundle.sh")
+PUBLISH = os.path.join(HERE, "publish.py")
 sys.path.insert(0, os.path.join(HOST_LIB, "bundle"))
 import app_export  # noqa: E402
 import planner_meta  # noqa: E402
@@ -95,7 +96,7 @@ def load_tool():
     return importlib.reload(module.cli)
 
 
-class UpdateTest(unittest.TestCase):
+class Base(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="mowbite-update-")
         self.prefix = os.path.join(self.root, "fs")
@@ -233,6 +234,8 @@ class UpdateTest(unittest.TestCase):
         with open(self.state("service")) as f:
             return f.read().strip()
 
+
+class UpdateTest(Base):
     def test_first_install(self):
         self.assertEqual(self.install(self.bundle(A)), 0)
         self.assertEqual(self.link("current"), A)
@@ -670,12 +673,28 @@ class UpdateTest(unittest.TestCase):
         self.assertIsNone(self.link("current"))
 
     # sign-bundle.sh with its state, the signers of this mower and a gate folder in the test folder.
-    def sign(self, path, answer="y"):
+    def sign(self, path, answer="y", yes=False):
         signers = os.path.join(self.prefix, "etc/mowbite/allowed_signers")
         env = {**self.env, "MOWBITE_SIGN_STATE": os.path.join(self.root, "sign"), "MOWBITE_SIGNERS": signers,
                "MOWBITE_GATE": os.path.join(self.root, "gate")}
-        return subprocess.run([SIGN, path, self.key], input=answer + "\n", env=env, capture_output=True, text=True,
-                              timeout=30)
+        return subprocess.run([SIGN, *(["--yes"] if yes else []), path, self.key], input=answer + "\n", env=env,
+                              capture_output=True, text=True, timeout=30)
+
+    # --yes asks nothing and signs only with an ok gate result of the commit.
+    def test_sign_without_asking_needs_the_gate(self):
+        os.makedirs(os.path.join(self.root, "gate"))
+        path = self.bundle(B, serial=2000)
+        os.remove(path + ".sig")
+        self.assertEqual(self.sign(path, "y", yes=True).returncode, 1)
+        self.write(os.path.join(self.root, "gate", "bbbbbbb.json"),
+                   json.dumps({"ok": False, "updated": "now", "steps": {"gtest": {"ok": False}}}))
+        self.assertEqual(self.sign(path, "y", yes=True).returncode, 1)
+        self.assertFalse(os.path.exists(path + ".sig"))
+        self.write(os.path.join(self.root, "gate", "bbbbbbb.json"),
+                   json.dumps({"ok": True, "updated": "now", "steps": {"gtest": {"ok": True}}}))
+        signed = self.sign(path, "n", yes=True)
+        self.assertEqual(signed.returncode, 0, signed.stderr)
+        self.assertEqual(self.install(path), 0)
 
     # It shows the bundle and the gate result, signs only on y and refuses a serial not newer than the last.
     def test_sign_newer_serials_only(self):
@@ -783,6 +802,106 @@ class BundleToolsTest(unittest.TestCase):
         shutil.rmtree(base)
         with self.assertRaises(planner_meta.Refused):
             planner_meta.read(self.planner({"interface": 1, "files_version": 1, "requires": ["numpy>=1.17"]}))
+
+
+# gh for publish.py: releases as folders of $GH_STORE, .prerelease marks a pre-release.
+GH = """#!/bin/sh
+s="$GH_STORE"
+echo "$*" >> "$s.log"
+[ "$1" = release ] || exit 2
+cmd=$2; tag=$3; shift 3
+case $cmd in
+  view) [ -d "$s/$tag" ];;
+  create) [ -d "$s/$tag" ] && { echo "release $tag exists" >&2; exit 1; }
+    mkdir -p "$s/$tag"; for a; do [ -f "$a" ] && cp "$a" "$s/$tag/"; done
+    case " $* " in *" --prerelease "*) touch "$s/$tag/.prerelease";; esac; true;;
+  upload) [ -d "$s/$tag" ] || exit 1; for a; do [ -f "$a" ] && cp "$a" "$s/$tag/"; done; true;;
+  download) [ -d "$s/$tag" ] || exit 1; d=; p=
+    while [ $# -gt 0 ]; do case $1 in -D) d=$2; shift;; -p) p="$p $2"; shift;; esac; shift; done
+    for f in $p; do cp "$s/$tag/$f" "$d/" || exit 1; done;;
+  edit) [ -d "$s/$tag" ] || exit 1; case " $* " in *" --prerelease=false "*) rm -f "$s/$tag/.prerelease";; esac;;
+  *) exit 2;;
+esac
+"""
+
+
+class PublishTest(Base):
+    """publish.py against the gh above, then the net origin of mowbite-host reading what it published."""
+
+    def setUp(self):
+        super().setUp()
+        self.store = os.path.join(self.root, "releases")
+        os.makedirs(self.store)
+        self.write(os.path.join(self.root, "bin", "gh"), GH, 0o755)
+        signers = os.path.join(self.root, "allowed_signers")
+        with open(self.key + ".pub") as f:
+            public = " ".join(f.read().split()[:2])
+        self.write(signers, f'mowbite namespaces="mowbite-os,mowbite-app,mowbite-index" {public}\n')
+        os.environ.update(GH_STORE=self.store, MOWBITE_SIGNERS=signers,
+                          MOWBITE_PUBLISH_LOCK=os.path.join(self.root, "publish.lock"))
+
+    def publish(self, *args):
+        return subprocess.run([sys.executable, "-I", PUBLISH, *args], capture_output=True, text=True)
+
+    def index(self):
+        with open(os.path.join(self.store, "index", "index.json")) as f:
+            return json.load(f)
+
+    # What the net origin of a mower takes from the published releases in channel.
+    def taken(self, channel):
+        sys.path.insert(0, HOST_LIB)
+        from mowbite_host import net, paths
+        where = paths.Paths(os.path.join(self.root, "mower"))
+        os.makedirs(os.path.dirname(where.signers), exist_ok=True)
+        shutil.copyfile(os.environ["MOWBITE_SIGNERS"], where.signers)
+
+        def fetch(url, path, limit, seconds):
+            shutil.copyfile(os.path.join(self.store, url[len(net.BASE):]), path)
+        origin = net.Net(where, fetch=fetch)
+        result = origin.refresh(channel, 0, lambda component: 0)
+        return result, sorted((c["component"], c["revision"]) for c in origin.candidates(channel))
+
+    def test_publish_and_take(self):
+        os_bundle, app_bundle = self.bundle(A), self.bundle(B, component="app")
+        done = self.publish(self.key, os_bundle, app_bundle)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        index = self.index()
+        self.assertEqual(sorted(e["url"] for e in index["bundles"]),
+                         [f"app-{B}/mowbite-app-{B}.tar.gz", f"os-{A}/mowbite-os-{A}.tar.gz"])
+        self.assertEqual({e["channel"] for e in index["bundles"]}, {"preview"})
+        self.assertTrue(os.path.exists(os.path.join(self.store, f"os-{A}", ".prerelease")))
+        result, taken = self.taken("preview")
+        self.assertEqual((result["result"], taken), ("ok", [("app", B), ("os", A)]))
+        self.assertEqual(self.taken("stable")[1], [])
+
+    def test_serial_rises_and_twice_is_refused(self):
+        a = self.bundle(A)
+        self.assertEqual(self.publish(self.key, a).returncode, 0)
+        first = self.index()["serial"]
+        self.assertNotEqual(self.publish(self.key, a).returncode, 0)
+        self.assertEqual(self.index()["serial"], first)
+        self.assertEqual(self.publish(self.key, self.bundle(B)).returncode, 0)
+        self.assertGreater(self.index()["serial"], first)
+
+    def test_promote(self):
+        self.assertEqual(self.publish(self.key, self.bundle(A)).returncode, 0)
+        done = self.publish("--promote", self.key, f"os-{A}")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual([e["channel"] for e in self.index()["bundles"]], ["stable"])
+        self.assertFalse(os.path.exists(os.path.join(self.store, f"os-{A}", ".prerelease")))
+        self.assertEqual(self.taken("stable")[1], [("os", A)])
+
+    def test_vendor_files_are_never_published(self):
+        for name in ("install/share/models/x.rknn", "install/lib/librknnrt.so"):
+            done = self.publish(self.key, self.bundle(A, extra={f"{A}/{name}": b"x"}))
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("never published", done.stderr)
+        self.assertEqual(os.listdir(self.store), [])
+
+    def test_signed_by_another_key_publishes_nothing(self):
+        done = self.publish(self.key, self.bundle(A, key=self.other_key))
+        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(os.listdir(self.store), [])
 
 
 A, B, C, D, E = "aaaaaaa", "bbbbbbb", "ccccccc", "ddddddd", "eeeeeee"

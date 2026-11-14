@@ -2,13 +2,19 @@
 # Signs a bundle of make-bundle.sh for mowbite-host: shows what it holds and the test gate result of its commit,
 # refuses a serial not newer than the last one signed for its component, asks, signs (namespace of mowbite-host)
 # and checks the signature against allowed_signers of the rootfs.
-#   sign-bundle.sh <bundle.tar.gz> <private key>
+#   sign-bundle.sh [--yes] <bundle.tar.gz> <private key>
+# --yes signs without asking, only when the gate result of its commit is there and ok (for publishing after a merge).
 # The last serial per component and a log of what was signed stay in $MOWBITE_SIGN_STATE (default
 # ~/.local/state/mowbite-sign). The gate result is <commit, 7 digits>.json in $MOWBITE_GATE (a folder or host:folder,
 # as start.sh of the test gate writes it); without MOWBITE_GATE it is not looked up.
 set -euo pipefail
+yes=false
+if [ "${1:-}" = --yes ]; then
+    yes=true
+    shift
+fi
 if [ $# -ne 2 ]; then
-    echo "usage: $0 <bundle.tar.gz> <private key>" >&2
+    echo "usage: $0 [--yes] <bundle.tar.gz> <private key>" >&2
     exit 2
 fi
 bundle=$1
@@ -73,20 +79,25 @@ if [ -n "${MOWBITE_GATE:-}" ] && [ -n "$commit" ]; then
     if [ -z "$gate" ]; then
         echo "  test gate: NO RESULT for ${commit:0:7}"
     else
-        python3 -I - "$gate" <<'PY'
+        python3 -I - "$gate" <<'PY' && gate_ok=true
 import json, sys
 gate = json.loads(sys.argv[1])
 print(f"  test gate: {'ok' if gate.get('ok') else 'NOT OK'}, updated {gate.get('updated')}")
 for name, step in sorted(gate.get("steps", {}).items()):
     print(f"    {'ok  ' if step.get('ok') else 'FAIL'} {name} ({step.get('at')}, {step.get('res')})")
+sys.exit(0 if gate.get("ok") is True else 1)
 PY
     fi
 else
     echo "  test gate: not looked up (MOWBITE_GATE unset)"
 fi
 
-read -r -p "Sign $revision for $component? [y/N] " answer
-[ "$answer" = y ] || { echo "not signed"; exit 1; }
+if $yes; then
+    [ "${gate_ok:-false}" = true ] || { echo "not signed: --yes needs an ok gate result of the commit" >&2; exit 1; }
+else
+    read -r -p "Sign $revision for $component? [y/N] " answer
+    [ "$answer" = y ] || { echo "not signed"; exit 1; }
+fi
 rm -f "$bundle.sig"
 ssh-keygen -q -Y sign -f "$key" -n "$namespace" "$bundle"
 ssh-keygen -q -Y verify -f "$signers" -I mowbite -n "$namespace" -s "$bundle.sig" < "$bundle" > /dev/null || {

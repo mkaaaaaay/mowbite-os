@@ -194,7 +194,13 @@ process is outside this watch and stops the mower by its own timeouts.
   `--build-arg APP_VERSION=` builds an image without the app. Each is
   signed with `sign-bundle.sh` under the namespace of its component (refuses a serial not newer than the last one
   signed for it, shows its fields and the result of the test gate), then into the inbox
-  `/userdata/mowbite-update/inbox` and `update.check`.
+  `/userdata/mowbite-update/inbox` and `update.check`, or published with `publish.py` as releases of
+  `mkaaaaaay/mowbite-releases` with a signed `index.json` (channel preview, stable on the owner's word).
+- The host asks that index every 6 h and on `update.check` (`host/mowbite_host/net.py`) and downloads the newest
+  bundle per component newer than what runs into `/userdata/mowbite-update/net`; installing stays `update.start` or
+  the automatic in its window. `update.set_channel` chooses stable or preview (default stable).
+  `MOWBITE_UPDATE_NET=off` in the environment files keeps a mower off the net. A new platform needs nothing more
+  than `ca-certificates` and the index key in `allowed_signers` (namespace `mowbite-index`).
 
 ## 6. Safety measurement
 
