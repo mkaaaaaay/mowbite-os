@@ -8,6 +8,10 @@
 
 namespace mowbite_logic {
 
+bool LogicCore::Mowing() const {
+  return state_ == State::kMowing;
+}
+
 std::string LogicCore::ReadStartRequest(const json& params, StartRequest* request, std::string* field) const {
   const auto fail = [field](const char* name, const std::string& text) {
     *field = name;

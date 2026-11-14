@@ -965,10 +965,6 @@ void LogicCore::GeometryChanged(const std::vector<std::string>& changed, const s
   AddEvent("GEOMETRY_CHANGED", std::move(details));
 }
 
-bool LogicCore::Mowing() const {
-  return state_ == State::kMowing;
-}
-
 bool LogicCore::Idle() const {
   return state_ == State::kIdle;
 }
