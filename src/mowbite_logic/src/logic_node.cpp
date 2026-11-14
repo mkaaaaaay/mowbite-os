@@ -303,6 +303,7 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   });
   blade_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { UpdateBlade(); });
   SetUpRuns();
+  SetUpDocking();
   // What the core has for the node waits for the first callback; the actions go out at once.
   PublishActions();
   PublishIdleIfChanged();
@@ -359,6 +360,7 @@ Reason LogicNode::NodeProblemLocked(const std::string& command) const {
       why = Reason("STILL_STOPPING", "The last job is still stopping, try again in a moment");
     }
   }
+  if (command == "docking.test") why = DockTestProblemLocked();
   if (command == "docking.start") {
     if (!transit_client_->service_is_ready()) why = PlannerMissing();
     if (why.empty() && !follow_client_->action_server_is_ready()) why = FollowerMissing();
@@ -1507,7 +1509,7 @@ void LogicNode::PublishRpcMethods() {
   }
   for (const auto& command : mowbite_api::Commands()) {
     // "Home" from IDLE, only where the platform has charging contacts.
-    if (!Ours(command) || (command.name == "docking.start" && !core_.View().CanDock())) continue;
+    if (!Ours(command) || !Offered(command.name)) continue;
     methods.methods.push_back(command.name);
   }
   calibration_offered_ = calibration_client_->action_server_is_ready();

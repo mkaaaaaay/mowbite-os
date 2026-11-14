@@ -15,6 +15,7 @@
 #include "mowbite_logic/area_recorder.h"
 #include "mowbite_logic/docking.h"
 #include "mowbite_logic/home_watch.h"
+#include "mowbite_logic/marker_dock.h"
 #include "mowbite_logic/mowing_job.h"
 #include "mowbite_logic/reasons.h"
 #include "mowbite_logic/undocking.h"
@@ -127,6 +128,8 @@ struct LogicConfig {
   // After JOB_COMPLETE, abort_mowing and on docking.start the mower drives onto the station contacts first; a try that
   // fails also drives out like undocking.
   DockConfig dock;
+  // Docking by the dock marker in the station frame, where the platform has one: so far only docking.test.
+  MarkerConfig marker;
   // DOCKED only with the charge confirmed on the contacts, CHARGING_LOST in IDLE on the station (G19).
   ChargeConfig charge;
   CalibrationConfig calibration;
@@ -546,6 +549,24 @@ class LogicCore {
   Reason StartDocking();
   std::optional<DockingLeg> TakeDockingLeg();
   void OnDockingLegEnded(LegEnd end, const Reason& reason);
+  // docking.test (G43): docking by the dock marker alone, from where the mower stands in front of the station, without
+  // map or position; offered only where the platform has a marker (MarkerSource). Refused like docking.start, and with
+  // MARKER_UNAVAILABLE without a marker. DOCKING with the reason TEST, then every leg in the station frame
+  // (FRAME_DOCK, SOURCE_DOCK): a sight first (MarkerWanted asks hw/dock_marker, localization/dock_pose good within
+  // marker_wait, the direction from the marker itself), the start checked (on the line or at the approach point,
+  // facing it, the straight way out ending on the line), out to the approach point, the line, the gate with the
+  // pose of the marker and the scale of its way against the wheels, kClose up to marker_blind_distance, the blind
+  // contact, the charge. The marker lost on the way: the mower stands and waits up to marker_wait s for gps_wait_time
+  // s of a good pose; a try failed by the marker carries cause (MARKER_UNAVAILABLE, MARKER_NOT_SEEN,
+  // MARKER_LOST) and detail. Without a good pose of the marker nothing drives: docking ends (DOCKING_FAILED).
+  // DOCKED, DOCKING_RETRY and DOCKING_FAILED of a docking carry guide: marker or position.
+  bool MarkerSource() const;
+  bool MarkerWanted() const;
+  // The follower drives a leg in the station frame now: its commands go out as SOURCE_DOCK.
+  bool DockFollowerActive() const;
+  // hw/dock_marker and localization/dock_pose, which the node passes only while MarkerWanted.
+  void OnDockMarker(const DockMarkerSample& sample);
+  void OnDockPose(const DockPoseSample& pose);
   // docking_approach_distance and docking_retry_count of params.set, for the next docking.
   void SetDockingSettings(double approach_distance, int retry_count);
   // m from base_link to the farthest point of the body (Geometry::TurningRadius), once the dimensions are loaded and
@@ -770,6 +791,22 @@ class LogicCore {
   void BeginDocking();
   // The first leg of the next try from where the mower stands, or the wait for a good position.
   void NextDockingTry();
+  // Busy, hold, no charge contacts, on the contacts already, unsafe: what refuses docking.start and docking.test.
+  Reason DockStartProblem() const;
+  Reason StartDockingTest(const Reason& node_problem);
+  // Docking by the marker (logic_marker.cpp): the next try in the station frame or the sight; a failed try, which
+  // drives out only with a good pose of the marker; the waits; why the mower may not go on at the gate (also by the
+  // map); a try failed by the marker; the end.
+  void NextMarkerTry();
+  void WaitForMarker(bool sight);
+  void MarkerTryFailed(const Reason& why);
+  void TickMarkerDocking(double now_s);
+  std::string GateProblem();
+  void MarkerFailed(const std::string& cause, const std::string& text);
+  void EndMarkerDocking();
+  bool DockPoseGood() const;
+  // marker or position, for the events of docking.
+  const char* Guide() const;
   void OnDockingContact();
   // A try failed: counted at once, or once the mower drove out to the approach point when it stands on the line.
   void DockingTryFailed(const Reason& why);
@@ -949,6 +986,15 @@ class LogicCore {
   // Why the planner gave no way for the try that drives straight, and the turning circle of the body for its check.
   std::string docking_direct_cause_;
   double turning_radius_ = 0;
+  // Docking by the marker: this docking, the test, whether a leg went out, whether the scale of the marker failed (no
+  // drive by it then), whether the next wait is a sight, what the marker told, and the latest monotonic s of it.
+  bool marker_docking_ = false;
+  bool docking_test_ = false;
+  bool marker_started_ = false;
+  bool marker_untrusted_ = false;
+  bool marker_sight_ = false;
+  MarkerWatch marker_;
+  double marker_clock_ = 0;
   // Whether charging is confirmed on the station, and its loss.
   ChargeWatch charge_watch_;
   std::string session_id_;

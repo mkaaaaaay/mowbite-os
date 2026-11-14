@@ -206,6 +206,14 @@ mowbite_logic:
     # values, not settings of params.set. Assumptions until phase 7.
     docking_direct: true
     direct_margin: 0.15
+    # docking.test docks by the dock marker alone (marker_range under /**), every leg in the station frame: it waits
+    # up to marker_wait s for a good pose from the marker before a try fails, and when the marker was lost on the way
+    # in; base_link may be marker_cross_track m off each path there; at the gate the way along the line by the marker
+    # may differ from the way of the wheels by marker_scale_limit of it (a marker of the wrong size). Assumptions until
+    # the docking test on the Tron (M7).
+    marker_wait: 25.0
+    marker_cross_track: 0.10
+    marker_scale_limit: 0.15
     # The debounced contact is not DOCKED yet (G19): contact and a charge current of at least charge_confirm_current A
     # have to hold charge_confirm_time s without a gap, at charge_expected_below percent or more the contact alone, as
     # the charger stays off near full. Without either within charge_confirm_timeout s the try fails (NO_CHARGE_CURRENT):

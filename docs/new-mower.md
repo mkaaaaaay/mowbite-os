@@ -88,13 +88,21 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   before the docked pose where it leaves the image), `marker_range` (m up to which it is found; 0: no marker, then
   no `localization/dock_pose`) and `marker_max_age` (s from the image to its arrival, measured on the mower). The
   localization then estimates base_link in the station frame (origin base_link of the docked mower, x the way in)
-  from the marker alone, never mixed with the map pose. The camera has to look to the side of the contacts. In the
-  simulation `fake_dock_marker` plays the marker with an error model of its own (parameters, flags file).
+  from the marker alone, never mixed with the map pose. The camera has to look to the side of the contacts: every
+  drive by the marker runs contacts first. In the simulation `fake_dock_marker` plays the marker with an error model
+  of its own (parameters, flags file).
   Paths in the station frame (`FollowPath` frame `FRAME_DOCK`) go out on `follower/dock_cmd_vel`; the safety filter
   passes them as the dock source with the safety measurement and a recent pose from the marker with a heading and
   `dock_max_position_accuracy` (under `/**`, also the limit of the reference check and the gate in the map), within
   the zone of the station in that frame (FENCE beyond `fence_margin`), at most 0.17 m/s forwards and 0.12 m/s
   backwards, with no map needed.
+- With a marker the logic offers `docking.test`: docking by the marker alone, without map or RTK, from where the
+  mower stands by hand on the line in front of the station (at most half of `marker_cross_track` beside it, facing
+  along it, so that the straight way out ends on the line) or at its start. Every leg runs in the station frame and
+  reaches the wheels only as the dock source. Check on the new mower, in this order: the reference measurement of
+  the marker (`dock_marker`), `marker_blind_distance` (the last part is blind from there), then the test with the
+  mower watched, before any docking by the marker with RTK. Its values `marker_wait`, `marker_cross_track` and
+  `marker_scale_limit` stand in `mowbite_logic` of the platform file.
 - `mowbite_bringup/config/<platform>.yaml`: what differs from `tron.yaml`, which lies underneath (battery voltages
   empty, full and critical, charge check, temperatures). Check every value you inherit. The battery voltages stand only
   here: a driver that sets them on its board gets them in the start file from `battery_voltages` of

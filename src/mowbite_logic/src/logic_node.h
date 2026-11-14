@@ -19,6 +19,7 @@
 #include <mowbite_msgs/msg/button_event.hpp>
 #include <mowbite_msgs/msg/calibration_status.hpp>
 #include <mowbite_msgs/msg/clock_status.hpp>
+#include <mowbite_msgs/msg/dock_marker.hpp>
 #include <mowbite_msgs/msg/drive_command.hpp>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
@@ -62,6 +63,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/int64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
@@ -135,6 +137,11 @@ class LogicNode : public rclcpp::Node {
   Reason PlanWay(Purpose purpose, double x, double y, double heading);
   void PumpDocking();
   void SendDockingLeg(const DockingLeg& leg);
+  // Docking by the dock marker (logic_node_dock.cpp).
+  void SetUpDocking();
+  void RequestMarker();
+  bool Offered(const std::string& command) const;
+  Reason DockTestProblemLocked() const;
   void FollowJobPath(const JobPath& path, size_t start_index);
   void UpdateBlade();
   void UpdateBladeLocked();
@@ -425,6 +432,14 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Service<mowbite_msgs::srv::StartRun>::SharedPtr start_run_srv_;
   rclcpp::Service<mowbite_msgs::srv::DropTasks>::SharedPtr drop_tasks_srv_;
   rclcpp::Subscription<std_msgs::msg::Int64>::SharedPtr next_start_sub_;
+  // Docking by the dock marker: the requests and when the last went out, the measurements, the pose in the station
+  // frame and the commands of the follower there.
+  rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr marker_request_pub_;
+  std::optional<double> marker_requested_;
+  rclcpp::TimerBase::SharedPtr marker_request_timer_;
+  rclcpp::Subscription<mowbite_msgs::msg::DockMarker>::SharedPtr marker_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr dock_pose_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr dock_cmd_sub_;
 };
 
 }  // namespace mowbite_logic

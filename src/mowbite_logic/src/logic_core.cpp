@@ -171,7 +171,7 @@ void LogicCore::OnPoseTimeout() {
     StopUndocking(Reason("no_gps", "Undocking stopped: no position from the localization"),
                   Reason("POSE_LOST", "No position from the localization"));
   }
-  if (state_ == State::kDocking && (docking_leg_ || docking_leg_due_)) {
+  if (state_ == State::kDocking && !marker_docking_ && (docking_leg_ || docking_leg_due_)) {
     CancelDockingLeg(Reason("POSE_LOST", "No position from the localization"));
     WaitForDockingGps();
   }
@@ -472,6 +472,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     }
     return StartDocking();
   }
+  if (name == "docking.test") return StartDockingTest(node_problem);
   if (name == "recording.start") {
     if (state_ != State::kIdle) return WrongState();
     // The EMERGENCY event told already: no RECORDING_REFUSED.
@@ -606,7 +607,7 @@ bool LogicCore::FollowerActive() const {
   if (emergency_) return false;
   if (state_ == State::kDriving) return true;
   if (state_ == State::kUndocking) return undock_step_ == UndockStep::kDrive && !undock_stopping_;
-  if (state_ == State::kDocking) return docking_leg_.has_value() && !docking_hold_;
+  if (state_ == State::kDocking) return docking_leg_.has_value() && !docking_hold_ && !marker_docking_;
   return state_ == State::kMowing && pause_ == 0 && LegDrives();
 }
 

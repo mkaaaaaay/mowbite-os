@@ -65,14 +65,57 @@ Field PlannerCause(bool required) {
               {"PLANNER_TIMEOUT", "PLANNER_MISSING"});
 }
 
+Field DockingCause();
+Field MarkerDetail();
+Field Guide();
+
 // The tries of docking in DOCKING_RETRY and DOCKING_FAILED, whatever the reason; cause and direct_blocked come with
-// approach_failed where the planner gave no way.
+// approach_failed where the planner gave no way, cause and detail with dock_failed where the dock camera failed.
 std::vector<Field> DockingTries() {
-  return Rated(true, {Integer("attempts", "", "Tries of docking so far"), PlannerCause(false),
+  return Rated(true, {Integer("attempts", "", "Tries of docking so far"), DockingCause(),
                       Bool("direct_blocked",
-                           "With a cause, where the mower may drive straight to the station then: true when that way "
-                           "was not free, false when it drove it and failed",
-                           false)});
+                           "With a cause of the planner, where the mower may drive straight to the station then: true "
+                           "when that way was not free, false when it drove it and failed",
+                           false),
+                      MarkerDetail(), Guide()});
+}
+
+// What the app shows of the reasons of the dock camera, by name; the same for every platform and dock_guide.
+UserTexts MarkerTexts(const std::string& code) {
+  static const std::map<std::string, UserTexts> texts = {
+      {"MARKER_UNAVAILABLE",
+       {{"de",
+         {"Dock-Kamera misst nicht", "Die Kamera zur Ladestation kann den Marker gerade nicht messen.",
+          "Kamera und ihre Einrichtung prüfen; das Detail nennt den Grund."}},
+        {"en",
+         {"Dock camera not measuring", "The camera towards the docking station cannot measure the marker right now.",
+          "Check the camera and its setup; the detail names the cause."}}}},
+      {"MARKER_NOT_SEEN",
+       {{"de",
+         {"Marker nicht gefunden",
+          "Die Kamera läuft, sieht den Marker der Ladestation aber nicht. Der Mäher dockt dann nicht nach der Position "
+          "an.",
+          "Marker freimachen und säubern; bei Dunkelheit prüfen, ob die Station Strom hat und die Beleuchtung des "
+          "Markers an ist; prüfen, ob die Station am aufgenommenen Platz steht."}},
+        {"en",
+         {"Marker not found",
+          "The camera is running but does not see the marker of the docking station. The mower does not dock by its "
+          "position then.",
+          "Clear and clean the marker; in the dark check that the station has power and the marker light is on; check "
+          "that the station stands where it was recorded."}}}},
+      {"MARKER_LOST",
+       {{"de",
+         {"Marker verloren",
+          "Der Marker der Ladestation war auf dem Weg hinein zu lange nicht zu sehen. Der Mäher hat angehalten und den "
+          "Versuch beendet.",
+          "Die Sicht zwischen Mäher und Station freimachen."}},
+        {"en",
+         {"Marker lost",
+          "The marker of the docking station was out of sight for too long on the way in. The mower stopped and ended "
+          "the attempt.",
+          "Clear the view between the mower and the station."}}}},
+  };
+  return texts.at(code);
 }
 
 Field Object(std::string name, std::string text, std::vector<Field> fields, bool required = false) {
@@ -106,6 +149,11 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
            "This version of the app is too old for the MowBite OS that is installed and is not used.",
            "Install a newer version of the app."}}}}},
       {"APPROACH_FAILED", {"No way to the start of the next path while mowing", {}}},
+      {"MARKER_UNAVAILABLE", {"The dock camera cannot measure the marker", {}, MarkerTexts("MARKER_UNAVAILABLE")}},
+      {"TEST",
+       {"Docking test by camera",
+        {},
+        {{"de", {"Andock-Test nach Kamera", "", ""}}, {"en", {"Docking test by camera", "", ""}}}}},
       {"BAD_BUNDLE",
        {"The update file is damaged or not what its origin names",
         {},
@@ -989,6 +1037,59 @@ const std::vector<std::string> kRecordingActions = {"start_area_recording",
                                                     "undo_points",
                                                     "point"};
 
+// cause in DOCKING_RETRY and DOCKING_FAILED: the planner (with approach_failed), or the dock camera (with dock_failed).
+Field DockingCause() {
+  Field field = Text("cause",
+                     "Why: the planner gave no way (with approach_failed, a reason in x-reasons), or the dock camera "
+                     "did not guide the mower (with dock_failed, texts here)",
+                     false,
+                     {"PLANNER_TIMEOUT", "PLANNER_MISSING", "MARKER_UNAVAILABLE", "MARKER_NOT_SEEN", "MARKER_LOST"});
+  for (const char* code : {"MARKER_UNAVAILABLE", "MARKER_NOT_SEEN", "MARKER_LOST"}) {
+    field.value_texts[code] = MarkerTexts(code);
+  }
+  return field;
+}
+
+// detail with a cause of the dock camera: why its source gave no measurement, a reason of the image (DockMarker.msg)
+// or of the camera (Camera.msg, texts as in CAMERA_REFUSED).
+Field MarkerDetail() {
+  const auto texts = [](const char* de_name, const char* de_fix, const char* en_name, const char* en_fix) {
+    return UserTexts{{"de", {de_name, "", de_fix}}, {"en", {en_name, "", en_fix}}};
+  };
+  Field field = Text("detail", "With a cause of the dock camera: why it gave no measurement", false,
+                     {"NO_MARKER", "MARKER_CLIPPED", "MARKER_AMBIGUOUS", "TOO_DARK", "TOO_BRIGHT", "BLURRED",
+                      "FIT_REJECTED"});
+  field.value_texts = {
+      {"NO_MARKER", texts("Kein Marker im Bild", "", "No marker in the image", "")},
+      {"MARKER_CLIPPED", texts("Marker am Bildrand abgeschnitten", "", "The marker touches the edge of the image", "")},
+      {"MARKER_AMBIGUOUS",
+       texts("Mehr als ein Marker im Bild", "Nur einen Marker im Blick der Kamera lassen.",
+             "More than one marker in the image", "Leave only one marker in view of the camera.")},
+      {"TOO_DARK",
+       texts("Bild zu dunkel",
+             "Prüfen, ob die Station Strom hat und die Beleuchtung des Markers an ist; sonst für Licht an der Station "
+             "sorgen.",
+             "The image is too dark",
+             "Check that the station has power and the marker light is on; otherwise provide light at the station.")},
+      {"TOO_BRIGHT",
+       texts("Bild zu hell", "Blendung vermeiden, etwa tief stehende Sonne oder eine Lampe hinter der Station.",
+             "The image is too bright", "Avoid glare, such as a low sun or a lamp behind the station.")},
+      {"BLURRED", texts("Bild unscharf", "Die Linse säubern.", "The image is blurred", "Clean the lens.")},
+      {"FIT_REJECTED",
+       texts("Marker gefunden, Lage nicht sicher messbar", "",
+             "The marker was found, but its position could not be measured reliably", "")}};
+  for (const ReasonEntry& camera : CameraReasons(false)) {
+    field.values.push_back(camera.code);
+    field.value_texts[camera.code] = camera.texts;
+  }
+  return field;
+}
+
+Field Guide() {
+  return Text("guide", "What guided the mower onto the station: marker by the dock camera, position by the map", false,
+              {"marker", "position"});
+}
+
 }  // namespace
 
 const std::vector<EventEntry>& Events() {
@@ -1063,7 +1164,8 @@ const std::vector<EventEntry>& Events() {
                   {"NO_CHARGE_CONTACTS", "warning"},
                   {"DOCK_UNREACHABLE", "warning"},
                   {"NO_DOCK_CONTACT", "warning"},
-                  {"REFERENCE_MISMATCH", "warning"}})),
+                  {"REFERENCE_MISMATCH", "warning"},
+                  {"MARKER_UNAVAILABLE", "warning"}})),
       Event("RECORDING_REFUSED", "logic", "A step of the recording of an area was refused",
             Rated(true, {Text("action", "The step that was refused; point for an automatic point", true,
                               kRecordingActions)}),
@@ -1245,7 +1347,7 @@ const std::vector<EventEntry>& Events() {
             {R("MANUAL", "info", "user"), R("BATTERY_CRITICAL", "warning", "user"), R("BATTERY_HOT", "warning", "user"),
              R("BATTERY_LOW", "info", "user"), R("MOTOR_HOT", "warning", "user"), R("RAIN", "info", "user"),
              R("DARK", "info", "user"), PlannerHome("PLANNER_TIMEOUT"), PlannerHome("PLANNER_MISSING"),
-             R("SCHEDULE", "info", "auto")},
+             R("SCHEDULE", "info", "auto"), R("TEST", "info", "user")},
             "info", "user"),
       Event("DOCKING_DIRECT", "logic",
             "The planner gave no way to the docking station: this try drives straight to the point in front of it, "
@@ -1253,7 +1355,8 @@ const std::vector<EventEntry>& Events() {
             {PlannerCause(true), Number("distance", "m", "Length of the straight way", true),
              Text("message", "English text for the log", true), Text("severity", "Always warning", true, {"warning"}),
              Text("resume", "Always auto", true, {"auto"})}),
-      Event("DOCKED", "logic", "The mower is on the contacts of the docking station"),
+      Event("DOCKED", "logic", "The mower is on the contacts of the docking station; guide only after docking",
+            {Guide()}),
       Event("DOCKING_RETRY", "logic", "Docking failed, the next try follows by itself", DockingTries(),
             {R("approach_failed", "warning", "auto"), R("dock_failed", "warning", "auto"),
              R("NO_CHARGE_CURRENT", "warning", "auto")},

@@ -54,6 +54,7 @@ void LogicCore::SetTurningRadius(double radius) {
 }
 
 DockingSequence LogicCore::NewDocking() const {
+  if (marker_docking_) return MarkerDocking(config_.dock, config_.undock, ContactsBack(), config_.marker);
   return DockingSequence(config_.dock, config_.undock, dock_.value_or(DockPose()), ContactsBack());
 }
 
@@ -68,14 +69,7 @@ Reason LogicCore::ApproachProblem() const {
 }
 
 Reason LogicCore::DockingProblem() const {
-  Reason why = Busy();
-  if (why.empty()) why = HoldProblem();
-  if (!why.empty()) return why;
-  if (!CanDock()) {
-    return Reason("NO_CHARGE_CONTACTS", "This mower has no charge contacts to dock onto (geometry.dock_contact_x 0)");
-  }
-  if (DockContact()) return Reason("ALREADY_THERE", "The mower is on the docking station already");
-  why = Unsafe();
+  Reason why = DockStartProblem();
   if (why.empty()) why = PositionProblem();
   if (why.empty()) why = drivable_problem_;
   if (why.empty() && !dock_) why = Reason("NO_DOCK", "The map has no docking station: record it first");
@@ -157,6 +151,7 @@ void LogicCore::BeginDocking() {
 }
 
 void LogicCore::NextDockingTry() {
+  if (marker_docking_) return NextMarkerTry();
   if (!pose_ || !PoseGood()) {
     WaitForDockingGps();
     return;
@@ -194,8 +189,7 @@ void LogicCore::OnDockingContact() {
   }
   // A leg onto the station failed, and before the way out the contact is there after all: the charge decides, once
   // per try. Charging that went off for the way out is allowed again.
-  const bool failed_onto =
-      docking_last_kind_ == DockingLeg::Kind::kLine || docking_last_kind_ == DockingLeg::Kind::kContact;
+  const bool failed_onto = OntoStation(docking_last_kind_);
   if (DockContact() && docking_failure_ && !docking_leg_ && failed_onto && !docking_checked_) {
     docking_leg_due_.reset();
     docking_out_after_charge_off_.reset();
@@ -209,8 +203,7 @@ void LogicCore::OnDockingContact() {
     return;
   }
   // On the way onto the station, or waiting there for a good position; driving out starts on the contacts.
-  const bool onto =
-      docking_leg_ && (*docking_leg_ == DockingLeg::Kind::kLine || *docking_leg_ == DockingLeg::Kind::kContact);
+  const bool onto = docking_leg_ && OntoStation(*docking_leg_);
   if (!onto && !docking_gps_wait_) return;
   if (DockContact()) {
     BeginChargeCheck();
@@ -275,17 +268,16 @@ void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
       }
       break;
     case DockingLeg::Kind::kLine: {
-      const std::string gate = pose_ ? docking_.CheckGate(pose_->x, pose_->y, pose_->heading,
-                                                          pose_->position_accuracy, DockAccuracyLimit())
-                                     : "at the gate there was no position";
+      const std::string gate = GateProblem();
       if (gate.empty()) {
         Notify("Docking: through the gate, onto the contacts");
-        docking_leg_due_ = docking_.Contact();
+        docking_leg_due_ = docking_.AfterGate();
       } else {
         DockingTryFailed(Reason("dock_failed", "Docking failed: " + gate));
       }
       break;
     }
+    case DockingLeg::Kind::kClose: docking_leg_due_ = docking_.Contact(); break;
     case DockingLeg::Kind::kContact:
       DockingTryFailed(Reason("dock_failed", "Docking failed: no contact with the docking station up to " +
                                                  Metres(config_.dock.overshoot) + " m past it"));
@@ -336,6 +328,7 @@ void LogicCore::DockingWithoutPlanner(const Reason& silent) {
 
 void LogicCore::DockingTryFailed(const Reason& why) {
   Notify(why.message);
+  if (marker_docking_) return MarkerTryFailed(why);
   // Out to the approach point first; the try counts once the mower got there.
   if (pose_ && docking_last_kind_ != DockingLeg::Kind::kOut && docking_.OnLine(pose_->x, pose_->y, pose_->heading)) {
     docking_failure_ = why;
@@ -450,7 +443,7 @@ void LogicCore::CountDockingFailure(Reason why, bool last) {  // NOLINT(performa
   const bool again = docking_.Failed() && !last;
   const char* type = again ? "DOCKING_RETRY" : "DOCKING_FAILED";
   json details = json::object();
-  PutReason(&details, type, Reason(why).With("attempts", docking_.failures()));
+  PutReason(&details, type, Reason(why).With("attempts", docking_.failures()).With("guide", Guide()));
   AddEvent(type, std::move(details));
   if (!again) {
     Notify("Docking failed, tries: " + std::to_string(docking_.failures()));
@@ -467,7 +460,7 @@ void LogicCore::WaitForDockingGps() {
   docking_gps_wait_ = true;
   docking_gps_since_.reset();
   docking_gps_good_since_.reset();
-  Notify("Docking waits for a good position");
+  Notify(marker_docking_ ? "Docking waits for the marker" : "Docking waits for a good position");
 }
 
 void LogicCore::TickDocking(double now_s) {
@@ -475,6 +468,7 @@ void LogicCore::TickDocking(double now_s) {
     OnChargeResult(docking_charge_->OnTick(now_s));
     return;
   }
+  if (marker_docking_) return TickMarkerDocking(now_s);
   if (!docking_gps_wait_) return;
   if (!docking_gps_since_) docking_gps_since_ = now_s;
   if (PoseGood()) {
@@ -513,7 +507,7 @@ void LogicCore::CancelDockingLeg(const Reason& why) {
 
 void LogicCore::Docked() {
   charge_watch_.Confirm();
-  AddEvent("DOCKED", json::object());
+  AddEvent("DOCKED", {{"guide", Guide()}});
   Notify("Docked");
   EndDocking(Reason("STOPPED", "Docked"));
 }
@@ -525,6 +519,7 @@ void LogicCore::EndDocking(const Reason& why) {
   docking_charge_.reset();
   docking_out_after_charge_off_.reset();
   AllowChargeAgain();
+  EndMarkerDocking();
   SetState(State::kIdle);
 }
 

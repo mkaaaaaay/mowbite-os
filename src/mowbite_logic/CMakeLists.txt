@@ -33,7 +33,7 @@ add_library(mowbite_logic_core STATIC src/reasons.cpp src/logic_core.cpp src/are
   src/logic_params.cpp src/undocking.cpp src/docking.cpp src/geometry.cpp src/home_watch.cpp
   src/storage.cpp src/logic_dock.cpp src/logic_undock.cpp src/logic_home.cpp src/logic_job.cpp src/direct_route.cpp
   src/logic_recording.cpp src/logic_run.cpp src/logic_calibration.cpp src/logic_charge.cpp
-  src/marker_dock.cpp)
+  src/marker_dock.cpp src/logic_marker.cpp)
 target_include_directories(mowbite_logic_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -65,7 +65,7 @@ if(BUILD_TESTING)
     test/test_logic_hold.cpp test/test_logic_calibration.cpp test/test_event_catalog.cpp
     test/test_logic_commands.cpp test/test_home_watch.cpp test/test_logic_home.cpp
     test/test_logic_restart.cpp test/test_logic_effects.cpp test/test_direct_route.cpp test/test_logic_run.cpp
-    test/test_marker_dock.cpp)
+    test/test_marker_dock.cpp test/test_logic_marker.cpp)
   target_link_libraries(mowbite_logic_test mowbite_logic_core)
 endif()
 

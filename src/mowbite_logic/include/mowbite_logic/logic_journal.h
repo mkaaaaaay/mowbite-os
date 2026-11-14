@@ -35,8 +35,36 @@ inline void from_json(const nlohmann::json& j, UndockPath& path) {
 }
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockConfig, approach_distance, speed, contact_speed, gate_distance, gate_lateral,
                                    gate_heading, overshoot, contact_timeout, retry_count, direct, direct_margin)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockingLeg, kind, goal, poses, corridor, straight, reverse, speed, stall_time,
-                                   end_tolerance, max_cross_track)
+// frame only where it is the station frame, so that journals of legs in the map stay as they were.
+inline void to_json(nlohmann::json& j, const DockingLeg& leg) {
+  j = nlohmann::json{{"kind", leg.kind},
+                     {"goal", leg.goal},
+                     {"poses", leg.poses},
+                     {"corridor", leg.corridor},
+                     {"straight", leg.straight},
+                     {"reverse", leg.reverse},
+                     {"speed", leg.speed},
+                     {"stall_time", leg.stall_time},
+                     {"end_tolerance", leg.end_tolerance},
+                     {"max_cross_track", leg.max_cross_track}};
+  if (leg.frame != LegFrame::kMap) j["frame"] = leg.frame;
+}
+inline void from_json(const nlohmann::json& j, DockingLeg& leg) {
+  j.at("kind").get_to(leg.kind);
+  j.at("goal").get_to(leg.goal);
+  j.at("poses").get_to(leg.poses);
+  j.at("corridor").get_to(leg.corridor);
+  j.at("straight").get_to(leg.straight);
+  j.at("reverse").get_to(leg.reverse);
+  j.at("speed").get_to(leg.speed);
+  j.at("stall_time").get_to(leg.stall_time);
+  j.at("end_tolerance").get_to(leg.end_tolerance);
+  j.at("max_cross_track").get_to(leg.max_cross_track);
+  leg.frame = j.value("frame", LegFrame::kMap);
+}
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(MarkerConfig, range, blind_distance, wait, cross_track, scale_limit)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockMarkerSample, time, state, valid, yaw_valid, reason)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockPoseSample, time, x, y, heading, heading_valid, position_accuracy, speed)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ChargeConfig, current, time, timeout, expected_below, lost_time)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobPose, x, y, heading, kind)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobPath, is_outline, poses)
@@ -50,14 +78,17 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(HardwareSnapshot, telemetry_ok, emergency, em
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(PoseSnapshot, x, y, heading, position_accuracy, orientation_accuracy,
                                    orientation_valid)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationConfig, max_position_accuracy, min_battery, status_timeout, timeout)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LogicConfig, battery_empty_voltage, battery_full_voltage, battery_low_window,
-                                   dock_charge_voltage, max_position_accuracy, recorder, mow_with_blade,
-                                   mower_spinup_rpm, mower_spinup_timeout, blade_running_rpm, gps_wait_time,
-                                   gps_timeout, battery_critical_voltage, battery_critical_time,
-                                   battery_hot_temperature, motor_hot_temperature, motor_cold_temperature, rain_mode,
-                                   rain_check_seconds, approach_distance, checkpoint_period, dock_contact_x,
-                                   dock_max_position_accuracy, dock_reference_limit, undock, dock, charge, calibration,
-                                   id_seed)
+// With defaults: marker came later, journals from before stay readable.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LogicConfig, battery_empty_voltage, battery_full_voltage,
+                                                battery_low_window, dock_charge_voltage, max_position_accuracy,
+                                                recorder, mow_with_blade, mower_spinup_rpm, mower_spinup_timeout,
+                                                blade_running_rpm, gps_wait_time, gps_timeout,
+                                                battery_critical_voltage, battery_critical_time,
+                                                battery_hot_temperature, motor_hot_temperature,
+                                                motor_cold_temperature, rain_mode, rain_check_seconds,
+                                                approach_distance, checkpoint_period, dock_contact_x,
+                                                dock_max_position_accuracy, dock_reference_limit, undock, dock,
+                                                marker, charge, calibration, id_seed)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationStatus, problems, heading, lane_length, strip_length, strip_width,
                                    running)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationGoal, heading, lane_length)
@@ -108,7 +139,10 @@ static_assert(sizeof(JobProgress) == 160);
 static_assert(sizeof(HardwareSnapshot) == 72);
 static_assert(sizeof(PoseSnapshot) == 40);
 static_assert(sizeof(CalibrationConfig) == 32);
-static_assert(sizeof(LogicConfig) == 440);
+static_assert(sizeof(LogicConfig) == 480);
+static_assert(sizeof(MarkerConfig) == 40);
+static_assert(sizeof(DockMarkerSample) == 48);
+static_assert(sizeof(DockPoseSample) == 48);
 static_assert(sizeof(CalibrationStatus) == 64);
 static_assert(sizeof(CalibrationGoal) == 16);
 static_assert(sizeof(CalibrationOutcome) == 128);
@@ -153,7 +187,7 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::OnTick, &L::OnBladeRefused, &L::TakeOverlayChanged, &L::SetRestartHold, &L::ReportRestart, &L::OnStopRelease,
       &L::TakeEffects, &L::SetUnwritableFile, &L::AbandonStart, &L::SetTurningRadius,
       &L::RecordedBodyKept, &L::OnWheelOdom, &L::SetSunsetSettings, &L::OnClock, &L::OnDatum,
-      &L::StartRun, &L::DropTasks);
+      &L::StartRun, &L::DropTasks, &L::OnDockMarker, &L::OnDockPose);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};

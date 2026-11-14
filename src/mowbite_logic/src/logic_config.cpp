@@ -76,6 +76,18 @@ LogicConfig LoadLogicConfig(rclcpp::Node& node) {
   if (!(config.dock.direct_margin > 0) || !std::isfinite(config.dock.direct_margin)) {
     throw std::invalid_argument("direct_margin needs to be above 0");
   }
+  // Docking by the dock marker: marker_range and marker_blind_distance are the platform's (/**), the rest the logic's.
+  config.marker.range = param("marker_range", config.marker.range);
+  config.marker.blind_distance = param("marker_blind_distance", config.marker.blind_distance);
+  config.marker.wait = param("marker_wait", config.marker.wait);
+  config.marker.cross_track = param("marker_cross_track", config.marker.cross_track);
+  config.marker.scale_limit = param("marker_scale_limit", config.marker.scale_limit);
+  if (!(config.marker.range >= 0) || !(config.marker.blind_distance >= 0) || !(config.marker.wait > 0) ||
+      !(config.marker.cross_track > 0) || !(config.marker.scale_limit > 0) || !std::isfinite(config.marker.range)) {
+    throw std::invalid_argument(
+        "marker_range and marker_blind_distance need to be 0 or more, marker_wait, marker_cross_track and "
+        "marker_scale_limit above 0");
+  }
   // The charge that confirms docking and whose loss on the station is told, the platform's.
   config.charge.current = param("charge_confirm_current", config.charge.current);
   config.charge.time = param("charge_confirm_time", config.charge.time);

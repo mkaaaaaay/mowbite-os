@@ -549,6 +549,10 @@ const std::vector<Command>& Commands() {
       Logic("docking.start",
             "Drives home from IDLE to the docking station where the OS docks by itself; offered only there", {},
             Answer({}, {"DOCKING"}), "DRIVE_REFUSED", {}),
+      Logic("docking.test",
+            "Docks by the dock camera alone from where the mower stands in front of the station, without map or "
+            "position (the reason TEST at DOCKING); offered only where the platform has a dock marker",
+            {}, Answer({}, {"DOCKING"}), "DRIVE_REFUSED", {}),
       Logic("recording.start", "Enters the recording of areas from IDLE", {}, Answer(), "RECORDING_REFUSED",
             {{kIdle + "start_area_recording"}}),
       Logic("recording.exit", "Leaves the recording; what was not saved is gone", {}, Answer(), "COMMAND_REFUSED",
