@@ -234,7 +234,6 @@ void LogicCore::MarkerTryFailed(const Reason& why) {
 }
 
 void LogicCore::TickMarkerDocking(double now_s) {
-  marker_clock_ = std::max(marker_clock_, now_s);
   marker_.Expire(now_s);
   if (!docking_gps_wait_) return;
   if (!docking_gps_since_) {

@@ -90,8 +90,9 @@ DockingLeg Take(TestCore& core, DockingLeg::Kind kind, LegFrame frame) {
   return *leg;
 }
 
-// IDLE 2 m east of the station with map, lawn and station, safety measured; docking.start sent, the approach taken.
-TestCore Approaching(const LogicConfig& config = Tron()) {
+// IDLE 2 m east of the station with map, lawn and station, safety measured; docking.start sent, the approach taken
+// (its goal in approach, if given).
+TestCore Approaching(const LogicConfig& config = Tron(), DockPose* approach = nullptr) {
   TestCore core{config};
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
@@ -101,7 +102,8 @@ TestCore Approaching(const LogicConfig& config = Tron()) {
   core.OnMapDock(kDock);
   core.OnDrivableAreas({kLawn}, {});
   EXPECT_TRUE(core.Command("docking.start", json{{"client", "app"}}).accepted);
-  Take(core, DockingLeg::Kind::kApproach, LegFrame::kMap);
+  const DockingLeg leg = Take(core, DockingLeg::Kind::kApproach, LegFrame::kMap);
+  if (approach) *approach = leg.goal;
   core.TakeEvents();
   return core;
 }
@@ -145,7 +147,9 @@ void Charge(TestCore& core, double from) {
 TEST(LogicMarkerGuide, TheApproachEndsWithinRange) {
   LogicConfig config = Tron();
   config.dock.approach_distance = 2.0;
-  TestCore core = Approaching(config);
+  DockPose approach;
+  TestCore core = Approaching(config, &approach);
+  EXPECT_NEAR(approach.x, 0.2, 1e-9);
   core.OnPose(Map(0.2, 0.0));
   core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
   core.OnTick(100.0);
@@ -155,7 +159,8 @@ TEST(LogicMarkerGuide, TheApproachEndsWithinRange) {
   EXPECT_NEAR(line.poses.front().x, -1.2, 1e-9);
   LogicConfig off = Tron(DockGuide::kNone);
   off.dock.approach_distance = 2.0;
-  TestCore by_map = Approaching(off);
+  TestCore by_map = Approaching(off, &approach);
+  EXPECT_NEAR(approach.x, 1.0, 1e-9);
   by_map.OnPose(Map(1.0, 0.0));
   by_map.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
   EXPECT_NEAR(Take(by_map, DockingLeg::Kind::kLine, LegFrame::kMap).poses.front().x, 1.0, 1e-9);
@@ -399,4 +404,13 @@ TEST(LogicMarkerGuide, MapLegsStayMapLegs) {
   core.OnDockPose(ByMarker(50.5, 1.0, 0.0, M_PI));
   core.OnTick(51.0);
   EXPECT_FALSE(core.TakeDockingLeg());
+  // The map good again: poor poses of the marker between the ticks do not restart its wait.
+  core.OnPose(Map(1.0, 0.0, M_PI));
+  for (int i = 0; i <= 10; i++) {
+    DockPoseSample poor = ByMarker(52.0 + i - 0.5, 1.0, 0.0, M_PI);
+    poor.position_accuracy = 0.5f;
+    core.OnDockPose(poor);
+    core.OnTick(52.0 + i);
+  }
+  Take(core, DockingLeg::Kind::kApproach, LegFrame::kMap);
 }

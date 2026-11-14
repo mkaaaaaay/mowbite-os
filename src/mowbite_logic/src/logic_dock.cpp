@@ -484,6 +484,8 @@ void LogicCore::WaitForDockingGps() {
 }
 
 void LogicCore::TickDocking(double now_s) {
+  // Poses of the marker age also while a leg in the map drives.
+  marker_clock_ = std::max(marker_clock_, now_s);
   if (docking_charge_) {
     OnChargeResult(docking_charge_->OnTick(now_s));
     return;

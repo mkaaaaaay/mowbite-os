@@ -96,7 +96,12 @@ class Probe(SimProbe):
         time.sleep(0.5)
 
     def put_on_the_station(self):
-        """Carried onto the contacts; waits for the contact, an RTK position fit for the check and DOCKED."""
+        """Carried off the station and onto its contacts; waits for the contact, an RTK position fit for the check and
+        DOCKED."""
+        self.flags()
+        time.sleep(0.3)
+        self.flags(place=[0.5, 0.0, 0.0])
+        assert self.wait(lambda: self.hw and not self.hw.dock_contact, 10), "still on the contacts"
         since = len(self.events)
         self.flags()
         time.sleep(0.3)
