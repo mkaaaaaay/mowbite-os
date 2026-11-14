@@ -17,6 +17,19 @@
     journal_max_mb: 2048.0
     journal_max_days: 14.0
     journal_reserve_mb: 1024.0
+    # The dock marker of the rear camera (hw/dock_marker): x, y (m) and yaw (rad) of the marker in base_link of the
+    # docked mower (until M3b from the mount of tron_rear and about 0.07 m from the camera to the marker); it leaves
+    # the image marker_blind_distance m before the docked pose (M3c, estimated) and is found up to marker_range m
+    # (every image up to 1.2 m, measured 14.11. in a dark room with the station lit); an image older than
+    # marker_max_age s on arrival is dropped (M5). marker_range 0: no marker, no localization/dock_pose.
+    dock_marker: [-0.175, 0.0, 0.0]
+    marker_blind_distance: 0.07
+    marker_range: 1.2
+    marker_max_age: 0.3
+    # The contact stretch of docking (mowbite_logic, below) ends dock_overshoot m past the station or contact_timeout s
+    # after the gate; the pose at the station stays good without the marker for that long.
+    dock_overshoot: 0.05
+    contact_timeout: 10.0
 tron_mcu:
   ros__parameters:
     port: /dev/ttyS9
@@ -173,7 +186,7 @@ mowbite_logic:
     # nothing, G18), the debounced one is DOCKED. Standing contact_timeout s there without it, or undock_stall_time s
     # before the gate, fails the try: forwards out to the approach point like undocking, DOCKING_RETRY, after
     # docking_retry_count retries DOCKING_FAILED. docking_approach_distance (0.5 to 2 m) and docking_retry_count (0 to
-    # 5) are settings of params.set. Assumptions until phase 7.
+    # 5) are settings of params.set; dock_overshoot and contact_timeout stand under /**. Assumptions until phase 7.
     docking_approach_distance: 0.8
     docking_retry_count: 4
     docking_speed: 0.1
@@ -181,8 +194,6 @@ mowbite_logic:
     dock_gate_distance: 0.25
     dock_gate_lateral: 0.02
     dock_gate_heading: 8.0
-    dock_overshoot: 0.05
-    contact_timeout: 10.0
     # A planner that gives no answer for the way to the point in front of the station within plan_timeout, or does
     # not run, does not keep the mower from it (docking_direct): the mower turns on the spot, drives the straight
     # line there and turns again (DOCKING_DIRECT), where no obstacle and no end of the mowing and navigation areas

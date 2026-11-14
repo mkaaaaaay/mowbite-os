@@ -63,7 +63,8 @@ Duties:
 - Dock marker (optional): a process of its own that measures only while asked on `hw/dock_marker_request`, one
   image per message on `hw/dock_marker`, never an old or estimated pose; the times, states and reasons are in
   `DockMarker.msg`. What the mower drives with it and when it stops is up to the logic. The Tron's process is
-  `tron_rear` (`tron_vision`, section 8).
+  `tron_rear` (`tron_vision`, section 8). The stamp is the time the image was taken, on the clock of the host: the
+  localization fuses each image at that moment and drops it when it arrives more than `marker_max_age` late.
 
 ## 2. Fake board
 
@@ -82,6 +83,13 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   straight back off it, never faster than `docking_speed`; the safety filter cuts every reversing of the follower to
   0.12 m/s), 0 none (no docking, `docking.start` answers NO_CHARGE_CONTACTS). Set `contact_speed` and `dock_overshoot`
   to how late the board reports the contact (`nx60i.yaml`).
+- The dock marker, under `/**` of the platform file (one place for all nodes): `dock_marker` [x, y, yaw], the marker
+  in base_link while the mower stands docked (m, rad, the direction its front faces), `marker_blind_distance` (m
+  before the docked pose where it leaves the image), `marker_range` (m up to which it is found; 0: no marker, then
+  no `localization/dock_pose`) and `marker_max_age` (s from the image to its arrival, measured on the mower). The
+  localization then estimates base_link in the station frame (origin base_link of the docked mower, x the way in)
+  from the marker alone, never mixed with the map pose. The camera has to look to the side of the contacts. In the
+  simulation `fake_dock_marker` plays the marker with an error model of its own (parameters, flags file).
 - `mowbite_bringup/config/<platform>.yaml`: what differs from `tron.yaml`, which lies underneath (battery voltages
   empty, full and critical, charge check, temperatures). Check every value you inherit. The battery voltages stand only
   here: a driver that sets them on its board gets them in the start file from `battery_voltages` of

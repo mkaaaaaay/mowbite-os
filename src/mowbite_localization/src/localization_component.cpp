@@ -1,9 +1,11 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <memory>
 #include <mowbite_component/node_options.h>
+#include <mowbite_msgs/msg/dock_marker.hpp>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
@@ -17,13 +19,16 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <stdexcept>
 #include <string>
+#include <vector>
 #include <mowbite_journal/node_options.h>
 #include <tf2_ros/transform_broadcaster.h>
 
+#include "mowbite_localization/dock_estimator_journal.h"
 #include "mowbite_localization/estimator.h"
 #include "mowbite_localization/estimator_journal.h"
 #include "mowbite_watch/attach.h"
@@ -39,6 +44,7 @@ static_assert(kSolutionRtkFloat == GnssMsg::RTK_FLOAT);
 using mowbite_msgs::msg::PositionJump;
 using GyroMsg = sensor_msgs::msg::Imu;
 using OdometryMsg = nav_msgs::msg::Odometry;
+using DockMarkerMsg = mowbite_msgs::msg::DockMarker;
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -66,7 +72,9 @@ double YawOf(const geometry_msgs::msg::Quaternion& q) {
 
 // The pose of base_link from gyro, wheel speed and RTK GNSS (Estimator), on localization/pose with every gyro sample,
 // odom and TF. The antenna offset comes from the geometry of the logic on bridge/params, the GNSS limits from
-// logic/gps_limits.
+// logic/gps_limits. On a platform with a dock marker (marker_range above 0) also the pose in the station frame
+// (DockEstimator) from hw/dock_marker on localization/dock_pose, on the same motions, with every gyro sample while
+// there is an estimate; logic/dock_heading_hint gives its start heading where the marker has no direction yet.
 class LocalizationNode : public rclcpp::Node {
  public:
   explicit LocalizationNode(const rclcpp::NodeOptions& options)
@@ -136,6 +144,11 @@ class LocalizationNode : public rclcpp::Node {
       RCLCPP_INFO(get_logger(), "Gyro calibration: keep the mower still for %.0f s",
                   get_parameter("gyro_calibration_time").as_double());
     }
+    if (declare_parameter("marker_range", 0.0) > 0.0) {
+      StartDock();
+    } else {
+      RCLCPP_INFO(get_logger(), "No dock marker on this platform (marker_range 0): no localization/dock_pose");
+    }
     watch_ = mowbite_watch::Attach(*this);
   }
 
@@ -166,6 +179,82 @@ class LocalizationNode : public rclcpp::Node {
     return config;
   }
 
+  // The platform values of the marker stand in the platform file for all nodes, the final stretch of the docking with
+  // them: dock_overshoot and contact_timeout of the logic.
+  DockConfig ReadDockConfig() {
+    DockConfig config;
+    config.noise.odometry = get_parameter("odometry_noise").as_double();
+    config.noise.gyro = get_parameter("gyro_noise").as_double();
+    const std::vector<double> marker = declare_parameter<std::vector<double>>("dock_marker");
+    config.max_age = declare_parameter<double>("marker_max_age");
+    config.blind_distance = declare_parameter<double>("marker_blind_distance");
+    const double overshoot = declare_parameter<double>("dock_overshoot");
+    const double contact_timeout = declare_parameter<double>("contact_timeout");
+    const bool finite = std::all_of(marker.begin(), marker.end(), [](double v) { return std::isfinite(v); });
+    if (marker.size() != 3 || !finite || !(config.max_age > 0) || !(config.blind_distance >= 0) ||
+        !(overshoot >= 0) || !(contact_timeout > 0)) {
+      throw std::invalid_argument("dock_marker must be [x, y, yaw], marker_max_age and contact_timeout above 0, "
+                                  "marker_blind_distance and dock_overshoot 0 or more");
+    }
+    config.marker_x = marker[0];
+    config.marker_y = marker[1];
+    config.marker_yaw = marker[2];
+    config.final_way = config.blind_distance + overshoot + 0.02;
+    config.final_time = contact_timeout + 2.0;
+    config.hint_hold = DockMarkerMsg::REQUEST_HOLD_S;
+    return config;
+  }
+
+  void StartDock() {
+    dock_ = std::make_unique<mowbite_journal::Journaled<DockEstimator>>(journal_, ReadDockConfig());
+    dock_pub_ = create_publisher<PoseMsg>("localization/dock_pose", 10);
+    marker_sub_ = create_subscription<DockMarkerMsg>(
+        "hw/dock_marker", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile(),
+        [this](const DockMarkerMsg::ConstSharedPtr& msg) { OnMarker(*msg); });
+    hint_sub_ = create_subscription<std_msgs::msg::Float64>(
+        "logic/dock_heading_hint", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile(),
+        [this](const std_msgs::msg::Float64::ConstSharedPtr& msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          dock_->Call<&DockEstimator::SetHint>(msg->data, MonotonicSeconds());
+        });
+  }
+
+  void OnMarker(const DockMarkerMsg& msg) {
+    if (msg.state != DockMarkerMsg::STATE_MEASURING || !msg.valid) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    const double now = MonotonicSeconds();
+    // The time of the image on the clock of the motions: its age on the ROS clock taken from now.
+    const double age = (this->now() - rclcpp::Time(msg.header.stamp, get_clock()->get_clock_type())).seconds();
+    MarkerImage image;
+    image.time = now - age;
+    image.x = msg.x;
+    image.y = msg.y;
+    image.yaw = msg.yaw;
+    image.yaw_valid = msg.yaw_valid;
+    std::copy(msg.covariance.begin(), msg.covariance.end(), image.covariance.begin());
+    switch (dock_->Call<&DockEstimator::AddMarker>(image, now)) {
+      case MarkerResult::kStarted:
+        RCLCPP_INFO(get_logger(), "Dock pose set from the marker, heading from the %s",
+                    dock_->View().heading_from_hint() ? "hint of the logic" : "marker");
+        break;
+      case MarkerResult::kDropped:
+        RCLCPP_WARN(get_logger(), "The dock marker contradicted the dock pose %d times in a row: dock pose dropped",
+                    DockConfig().outlier_reset);
+        dock_dropped_ = true;
+        PublishDock(now);
+        break;
+      case MarkerResult::kNoFrame:
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                             "Dock marker ignored: no charging contacts in the geometry (dock_contact_x)");
+        break;
+      case MarkerResult::kTooOld:
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "Dock marker dropped: %.3f s old on arrival", age);
+        break;
+      default:
+        break;
+    }
+  }
+
   void OnImu(const GyroMsg& msg) {
     std::lock_guard<std::mutex> lock(mutex_);
     const double now = MonotonicSeconds();
@@ -177,7 +266,10 @@ class LocalizationNode : public rclcpp::Node {
     if (!was_calibrated && estimator_.View().calibrated()) {
       RCLCPP_INFO(get_logger(), "Gyro offset: %.5f rad/s", estimator_.View().gyro_offset());
     }
-    if (moved) Publish(now);
+    if (!moved) return;
+    if (dock_) dock_->Call<&DockEstimator::AddMotion>(estimator_.View().motion());
+    Publish(now);
+    PublishDock(now);
   }
 
   void OnGps(const GnssMsg& msg) {
@@ -222,6 +314,11 @@ class LocalizationNode : public rclcpp::Node {
     bool known, changed;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      // The docked mower faces the way in with the contacts in front, against it with them behind; 0 is no contacts.
+      if (dock_ && params.contains("dock_contact_x") && params["dock_contact_x"].is_number()) {
+        const double contact_x = params["dock_contact_x"].get<double>();
+        if (contact_x != 0.0) dock_->Call<&DockEstimator::SetDockedHeading>(contact_x < 0.0 ? M_PI : 0.0);
+      }
       if (params.contains("ticks_per_m") && params["ticks_per_m"].is_number()) {
         ticks_per_m_ = params["ticks_per_m"].get<double>();
         ApplyWheelScale();
@@ -324,6 +421,31 @@ class LocalizationNode : public rclcpp::Node {
     }
   }
 
+  // localization/dock_pose while there is an estimate, and once with the accuracy unknown when it was dropped. Called
+  // with the mutex held.
+  void PublishDock(double now) {
+    if (!dock_ || (!dock_->View().has_estimate() && !dock_dropped_)) return;
+    dock_dropped_ = false;
+    const DockEstimator& dock = dock_->View();
+    const Pose2 pose = dock.pose();
+    const Covariance& p = dock.covariance();
+    PoseMsg msg;
+    msg.header.stamp = this->now();
+    msg.header.frame_id = "dock";
+    msg.x = pose.x;
+    msg.y = pose.y;
+    msg.heading = WrapAngle(pose.heading);
+    msg.heading_valid = dock.has_estimate();
+    msg.position_accuracy = static_cast<float>(dock.PositionAccuracy(now));
+    msg.heading_accuracy = static_cast<float>(dock.HeadingAccuracy());
+    msg.gnss_recent = false;
+    msg.speed = estimator_.View().speed();
+    for (int r = 0; r < 3; ++r) {
+      for (int c = 0; c < 3; ++c) msg.covariance[3 * r + c] = p(r, c);
+    }
+    dock_pub_->publish(msg);
+  }
+
   void PublishJump(const Jump& jump) {
     PositionJump msg;
     msg.header.stamp = now();
@@ -364,6 +486,12 @@ class LocalizationNode : public rclcpp::Node {
   rclcpp::Service<mowbite_msgs::srv::SetPose>::SharedPtr set_pose_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetHeading>::SharedPtr set_heading_srv_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_gps_srv_;
+  // Null without a dock marker on the platform.
+  std::unique_ptr<mowbite_journal::Journaled<DockEstimator>> dock_;
+  bool dock_dropped_ = false;
+  rclcpp::Publisher<PoseMsg>::SharedPtr dock_pub_;
+  rclcpp::Subscription<DockMarkerMsg>::SharedPtr marker_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr hint_sub_;
   std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 
