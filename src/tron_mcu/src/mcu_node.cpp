@@ -160,21 +160,24 @@ class McuNode : public rclcpp::Node {
 
     if (!read_only_) {
       cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-          "hw/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) { OnCmdVel(*msg); });
+          "hw/cmd_vel", 10, [this](const geometry_msgs::msg::Twist::ConstSharedPtr& msg) { OnCmdVel(*msg); });
     }
     if (get_parameter("send_imu").as_bool() && !read_only_) {
       imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
-          "imu/data", rclcpp::SensorDataQoS(), [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) { OnImu(*msg); });
+          "imu/data", rclcpp::SensorDataQoS(),
+          [this](const sensor_msgs::msg::Imu::ConstSharedPtr& msg) { OnImu(*msg); });
     }
     emergency_srv_ = create_service<mowbite_msgs::srv::SetEmergency>(
-        "hw/emergency", [this](const mowbite_msgs::srv::SetEmergency::Request::SharedPtr req,
-                               mowbite_msgs::srv::SetEmergency::Response::SharedPtr res) { OnEmergency(*req, *res); });
+        "hw/emergency", [this](const mowbite_msgs::srv::SetEmergency::Request::SharedPtr& req,
+                               const mowbite_msgs::srv::SetEmergency::Response::SharedPtr& res) {
+          OnEmergency(*req, *res);
+        });
     blade_srv_ = create_service<mowbite_msgs::srv::SetBlade>(
-        "hw/blade", [this](const mowbite_msgs::srv::SetBlade::Request::SharedPtr req,
-                           mowbite_msgs::srv::SetBlade::Response::SharedPtr res) { OnBlade(*req, *res); });
+        "hw/blade", [this](const mowbite_msgs::srv::SetBlade::Request::SharedPtr& req,
+                           const mowbite_msgs::srv::SetBlade::Response::SharedPtr& res) { OnBlade(*req, *res); });
     charge_srv_ = create_service<mowbite_msgs::srv::SetCharge>(
-        "hw/charge", [this](const mowbite_msgs::srv::SetCharge::Request::SharedPtr req,
-                            mowbite_msgs::srv::SetCharge::Response::SharedPtr res) { OnCharge(*req, *res); });
+        "hw/charge", [this](const mowbite_msgs::srv::SetCharge::Request::SharedPtr& req,
+                            const mowbite_msgs::srv::SetCharge::Response::SharedPtr& res) { OnCharge(*req, *res); });
     status_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { PublishStatus(); });
     journal_timer_ = create_wall_timer(std::chrono::seconds(10), [this] { journal_watch_.Check(get_logger()); });
     LogTimeZone();
@@ -228,7 +231,7 @@ class McuNode : public rclcpp::Node {
 
   // The heartbeat carries local time; without TZ that is UTC in a container.
   void LogTimeZone() {
-    const char* tz = std::getenv("TZ");
+    const char* tz = std::getenv("TZ");  // NOLINT(concurrency-mt-unsafe): read once at start, nothing sets it
     std::time_t now = std::time(nullptr);
     std::tm local{};
     localtime_r(&now, &local);
@@ -290,6 +293,7 @@ class McuNode : public rclcpp::Node {
 
   // The hold of an update, from hold.json itself: it stands without the logic and right after a restart.
   void PollHold() {
+    if (!hold_watch_) return;
     const mowbite_hold::HoldView view = hold_watch_->Poll(MonotonicSeconds(), WallSeconds());
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -357,7 +361,7 @@ class McuNode : public rclcpp::Node {
     std::vector<tron::SubPacket> packets;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (control_.View().Status(MonotonicSeconds()).moving) packets.push_back(*tron::SpeedPacket(0.0f, 0.0f));
+      if (control_.View().Status(MonotonicSeconds()).moving) packets.push_back(tron::ZeroSpeedPacket());
     }
     packets.push_back(tron::CutterPacket(tron::CutterCommand{}));
     Send(packets);

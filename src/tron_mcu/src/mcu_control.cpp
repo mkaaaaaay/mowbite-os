@@ -162,7 +162,7 @@ void McuControl::OnConnected(double now) {
   firmware_ok_.reset();
   if (moving_) {
     moving_ = false;
-    StartRepeat(stop_repeat_, ZeroSpeed(), now);
+    StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
   }
   stop_release_.Interrupt();
 }
@@ -222,15 +222,15 @@ bool McuControl::FirmwareIncompatible() const {
 }
 
 bool McuControl::Lift(double now) const {
-  return !TelemetryStale(now) && sensor_->lift;
+  return sensor_ && !TelemetryStale(now) && sensor_->lift;
 }
 
 bool McuControl::Stop(double now) const {
-  return !TelemetryStale(now) && sensor_->stop;
+  return sensor_ && !TelemetryStale(now) && sensor_->stop;
 }
 
 bool McuControl::Bumper(double now) const {
-  return !TelemetryStale(now) && (sensor_->bumper || sensor_->bumper_left || sensor_->bumper_right);
+  return sensor_ && !TelemetryStale(now) && (sensor_->bumper || sensor_->bumper_left || sensor_->bumper_right);
 }
 
 void McuControl::StartRepeat(Repeat& repeat, const SubPacket& packet, double now) {
@@ -244,10 +244,6 @@ void McuControl::EmitRepeat(Repeat& repeat, double now, std::vector<SubPacket>& 
   out.push_back(repeat.packet);
   repeat.remaining--;
   repeat.next_s = now + config_.repeat_interval_s;
-}
-
-SubPacket McuControl::ZeroSpeed() const {
-  return *SpeedPacket(0.0f, 0.0f);
 }
 
 // Silence on cmd_vel after which the wheels get the stop.
@@ -308,7 +304,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
       last_clear_s_ = now;
       // The MCU might pick up the last setpoint again once the latch is gone.
       if (last_motion_s_ && now - *last_motion_s_ < config_.clear_zero_after_motion_s) {
-        StartRepeat(stop_repeat_, ZeroSpeed(), now);
+        StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
       }
     }
   }
@@ -333,7 +329,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     pending_cmd_.reset();
     if (moving_) {
       moving_ = false;
-      StartRepeat(stop_repeat_, ZeroSpeed(), now);
+      StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
     }
   } else if (pending_cmd_) {
     std::optional<SubPacket> packet;
@@ -343,7 +339,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     if (!packet) {
       if (moving_) {
         moving_ = false;
-        StartRepeat(stop_repeat_, ZeroSpeed(), now);
+        StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
       }
       pending_cmd_.reset();
     } else if (now + kDeadlineSlackS >= next_speed_s_) {
@@ -359,9 +355,9 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
 
   if (moving_ && now - last_cmd_s_ > StopAfter()) {
     moving_ = false;
-    StartRepeat(stop_repeat_, ZeroSpeed(), now);
+    StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
   }
-  if (moving_ && config_.speed_repeat_window_s > 0 && now + kDeadlineSlackS >= next_speed_s_) {
+  if (moving_ && last_speed_ && config_.speed_repeat_window_s > 0 && now + kDeadlineSlackS >= next_speed_s_) {
     out.push_back(*last_speed_);
     last_motion_s_ = now;
     next_speed_s_ = now + config_.speed_period_s;

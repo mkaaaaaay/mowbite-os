@@ -8,9 +8,11 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <charconv>
 #include <climits>
-#include <cstdlib>
 #include <cstring>
+
+#include "mowbite_hold/file_io.h"
 
 namespace tron {
 
@@ -59,12 +61,12 @@ bool SerialPort::Open(const std::string& path, int baud, std::string& error, boo
   }
   int fd = open(path.c_str(), (read_only ? O_RDONLY : O_RDWR) | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
   if (fd < 0) {
-    error = "open " + path + ": " + strerror(errno);
+    error = "open " + path + ": " + mowbite_hold::ErrorText(errno);
     return false;
   }
   termios tio{};
   if (tcgetattr(fd, &tio) != 0) {
-    error = "tcgetattr: " + std::string(strerror(errno));
+    error = "tcgetattr: " + mowbite_hold::ErrorText(errno);
     ::close(fd);
     return false;
   }
@@ -77,7 +79,7 @@ bool SerialPort::Open(const std::string& path, int baud, std::string& error, boo
   cfsetispeed(&tio, speed);
   cfsetospeed(&tio, speed);
   if (tcsetattr(fd, TCSANOW, &tio) != 0) {
-    error = "tcsetattr: " + std::string(strerror(errno));
+    error = "tcsetattr: " + mowbite_hold::ErrorText(errno);
     ::close(fd);
     return false;
   }
@@ -90,7 +92,7 @@ bool SerialPort::Open(const std::string& path, int baud, std::string& error, boo
     return false;
   }
   if (ioctl(fd, TIOCEXCL) != 0) {
-    error = "TIOCEXCL: " + std::string(strerror(errno));
+    error = "TIOCEXCL: " + mowbite_hold::ErrorText(errno);
     ::close(fd);
     return false;
   }
@@ -141,14 +143,17 @@ std::vector<int> ProcessesUsing(const std::string& path) {
   const int self = getpid();
   DIR* proc = opendir("/proc");
   if (proc == nullptr) return pids;
-  while (dirent* entry = readdir(proc)) {
+  // readdir is safe for a stream no other thread uses; both streams here are local.
+  while (dirent* entry = readdir(proc)) {  // NOLINT(concurrency-mt-unsafe)
     if (!IsNumber(entry->d_name)) continue;
-    int pid = std::atoi(entry->d_name);
+    int pid = 0;
+    const char* name = entry->d_name;
+    if (std::from_chars(name, name + std::strlen(name), pid).ec != std::errc()) continue;
     if (pid == self) continue;
     std::string fd_dir = std::string("/proc/") + entry->d_name + "/fd";
     DIR* fds = opendir(fd_dir.c_str());
     if (fds == nullptr) continue;
-    while (dirent* fd_entry = readdir(fds)) {
+    while (dirent* fd_entry = readdir(fds)) {  // NOLINT(concurrency-mt-unsafe)
       if (!IsNumber(fd_entry->d_name)) continue;
       char link[PATH_MAX];
       std::string fd_path = fd_dir + "/" + fd_entry->d_name;

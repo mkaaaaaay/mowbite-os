@@ -214,7 +214,6 @@ class McuControl {
   bool Bumper(double now) const;
   void StartRepeat(Repeat& repeat, const SubPacket& packet, double now);
   void EmitRepeat(Repeat& repeat, double now, std::vector<SubPacket>& out);
-  SubPacket ZeroSpeed() const;
   double StopAfter() const;
   SubPacket BladeOff() const;
 

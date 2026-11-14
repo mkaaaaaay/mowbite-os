@@ -111,6 +111,8 @@ SubPacket HeartbeatPacket(const WallClock& now);
 
 // Clamped to the speed limits; returns nothing for non-finite input.
 std::optional<SubPacket> SpeedPacket(float linear, float angular);
+// Speed 0, 0: the stop of the wheels.
+SubPacket ZeroSpeedPacket();
 
 struct CutterCommand {
   bool blade_on = false;

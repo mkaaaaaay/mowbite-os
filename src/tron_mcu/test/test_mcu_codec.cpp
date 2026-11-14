@@ -182,6 +182,16 @@ TEST(Commands, SpeedIsClampedAndFinite) {
   EXPECT_EQ(SpeedPacket(0.0f, 0.0f)->payload, std::vector<uint8_t>(8, 0));
 }
 
+TEST(Commands, ZeroSpeedIsTheSpeedPacketOfZero) {
+  const SubPacket zero = ZeroSpeedPacket();
+  const auto speed = SpeedPacket(0.0f, 0.0f);
+  ASSERT_TRUE(speed);
+  EXPECT_EQ(zero.type, speed->type);
+  EXPECT_EQ(zero.module, speed->module);
+  EXPECT_EQ(zero.payload, std::vector<uint8_t>(8, 0));
+  EXPECT_EQ(EncodeFrame({zero}), EncodeFrame({*speed}));
+}
+
 TEST(Commands, SpeedIsLittleEndianFloat) {
   // 0.25f = 0x3E800000
   EXPECT_EQ(SpeedPacket(0.25f, 0.0f)->payload, Bytes({0x00, 0x00, 0x80, 0x3E, 0, 0, 0, 0}));

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 
 namespace tron {
@@ -66,6 +67,13 @@ Version GetVersion(const std::vector<uint8_t>& in, size_t at) {
   return Version{in[at], in[at + 1], in[at + 2]};
 }
 
+SubPacket SpeedFrame(float linear, float angular) {
+  std::vector<uint8_t> payload;
+  PutF32(payload, std::clamp(linear, -kMaxLinearSpeed, kMaxLinearSpeed));
+  PutF32(payload, std::clamp(angular, -kMaxAngularSpeed, kMaxAngularSpeed));
+  return Command(Module::kSpeed, std::move(payload));
+}
+
 }  // namespace
 
 uint8_t Checksum(const uint8_t* data, size_t length) {
@@ -127,7 +135,8 @@ bool DecodeInner(const std::vector<uint8_t>& inner, std::vector<SubPacket>& pack
     SubPacket packet;
     packet.type = inner[pos + 1];
     packet.module = inner[pos + 2];
-    packet.payload.assign(inner.begin() + pos + 3, inner.begin() + pos + 3 + sub_len);
+    const auto first = inner.begin() + static_cast<std::ptrdiff_t>(pos + 3);
+    packet.payload.assign(first, first + static_cast<std::ptrdiff_t>(sub_len));
     packets.push_back(std::move(packet));
     pos += 3 + sub_len;
   }
@@ -215,10 +224,11 @@ SubPacket HeartbeatPacket(const WallClock& now) {
 
 std::optional<SubPacket> SpeedPacket(float linear, float angular) {
   if (!std::isfinite(linear) || !std::isfinite(angular)) return std::nullopt;
-  std::vector<uint8_t> payload;
-  PutF32(payload, std::clamp(linear, -kMaxLinearSpeed, kMaxLinearSpeed));
-  PutF32(payload, std::clamp(angular, -kMaxAngularSpeed, kMaxAngularSpeed));
-  return Command(Module::kSpeed, std::move(payload));
+  return SpeedFrame(linear, angular);
+}
+
+SubPacket ZeroSpeedPacket() {
+  return SpeedFrame(0.0f, 0.0f);
 }
 
 SubPacket CutterPacket(const CutterCommand& command) {
