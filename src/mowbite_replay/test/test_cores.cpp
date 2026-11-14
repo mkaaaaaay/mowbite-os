@@ -4,6 +4,8 @@
 #include <cmath>
 #include <filesystem>
 #include <sstream>
+#include <string>
+#include <vector>
 
 #include <mowbite_localization/dock_estimator_journal.h>
 #include <mowbite_localization/estimator_journal.h>
@@ -117,6 +119,36 @@ TEST_F(CoreReplay, SafetyFilter) {
   const auto report = Replay();
   EXPECT_EQ(report.outcome, CheckOutcome::kSame) << Text(report);
   EXPECT_NE(Text(report).find("safety: bit-identical"), std::string::npos) << Text(report);
+}
+
+// Journals from before the dock source: no dock_max_position_accuracy in the config and no OnDockPose in the table.
+TEST(SafetyJournal, ConfigFromBeforeTheDockSourceTakesTheDefault) {
+  using F = mowbite_safety::SafetyFilter;
+  mowbite_safety::SafetyConfig config;
+  config.dock_max_position_accuracy = 0.07;
+  config.max_position_accuracy = 0.08;
+  auto definition = mowbite_journal::CoreDefinition<F>(config, nlohmann::json::object());
+  definition["config"].erase("dock_max_position_accuracy");
+  auto& methods = definition["methods"];
+  ASSERT_EQ(methods.back().at("name"), "OnDockPose");
+  methods.erase(methods.size() - 1);
+  std::vector<std::string> names, signatures;
+  for (const auto& method : methods) {
+    names.push_back(method.at("name"));
+    signatures.push_back(method.at("signature"));
+  }
+  definition["table"] = mowbite_journal::detail::TableChecksum(names, signatures);
+
+  const auto read = definition.at("config").get<mowbite_safety::SafetyConfig>();
+  EXPECT_EQ(read.dock_max_position_accuracy, 0.03);
+  EXPECT_EQ(read.max_position_accuracy, 0.08);
+  EXPECT_NO_THROW(mowbite_journal::Replayer<F>{definition});
+}
+
+TEST(SafetyJournal, ConfigWithoutAnOlderFieldIsRefused) {
+  nlohmann::json config = mowbite_safety::SafetyConfig{};
+  config.erase("max_position_accuracy");
+  EXPECT_THROW(config.get<mowbite_safety::SafetyConfig>(), nlohmann::json::exception);
 }
 
 TEST_F(CoreReplay, Estimator) {
