@@ -305,7 +305,25 @@ Field Available() {
                        "of this revision tries it anyway",
                        {Text("reason", "A reason of UPDATE in x-reasons, never BLOCKED"),
                         Text("result", "How the attempt ended", false, {"rolled_back", "failed"}),
-                        Time("t", "When, null for a reason reckoned from the installed OS (kept nowhere)")}))}));
+                        Time("t", "When, null for a reason reckoned from the installed OS (kept nowhere)")})),
+       Text("from", "Where it was found: the inbox on the mower or the net (the release index)", false,
+            {"inbox", "net"})}));
+}
+
+// The release index on the net the updater asks every 6 h and on update.check.
+Field UpdateOrigin() {
+  return Object(
+      "origin", "The release index on the net and the last time it was asked",
+      {Text("channel", "stable, or preview for previews as well", true, {"stable", "preview"}),
+       Nullable(Text("url", "The address of the index, null without one")),
+       Bool("downloading", "Whether the index or a bundle is being downloaded"),
+       Text("result", "How the last asking ended; absent before the first", false,
+            {"ok", "unreachable", "bad_index", "too_large", "no_space", "bad_bundle", "failed"}),
+       Nullable(Text("message", "English text for the log, null when ok", false)),
+       Integer("checked_at", "When it was last asked, unix s; absent before the first", false),
+       Integer("index_serial", "The serial of the last index taken", false),
+       Nullable(Integer("index_date", "When that index was published, unix s", false))},
+      false);
 }
 
 // update.status, the same as retained on mowbite/update/status.
@@ -330,7 +348,7 @@ Field UpdateStatus() {
                              "planner and app: their own installation the OS does not use, null without one",
                              {Text("revision", "The revision"),
                               Text("reason", "Why: a reason of UPDATE in x-reasons")}, false))}),
-       Object("auto", "The automatic update", Auto(true)),
+       Object("auto", "The automatic update", Auto(true)), UpdateOrigin(),
        Nullable(Object(
            "last", "The result of the last update or rollback, null before the first",
            {Text("result", "How it ended", true, {"installed", "rolled_back", "refused", "aborted", "failed"}),
@@ -924,8 +942,14 @@ const std::vector<Method>& Methods() {
        "the bundled one, the host to its seed in the rootfs; that revision is then not installed by itself. "
        "NO_PREVIOUS on the bundled one or the seed",
        UpdateParams({Component(), ResetJobs()}, true), UpdateStatus(), kHostOffered},
-      {"update.check", "mowbite_host", "Looks for bundles in the origins now (the inbox), as it does every 6 h",
+      {"update.check", "mowbite_host",
+       "Looks for bundles in the inbox now and asks the release index on the net in the background, as it does every "
+       "6 h; a bundle newer than what runs is downloaded, never installed by that",
        UpdateParams({}), UpdateStatus(), kHostOffered},
+      {"update.set_channel", "mowbite_host",
+       "Chooses which releases of the index count: stable, or preview for previews as well; then asks the index",
+       UpdateParams({Text("channel", "stable or preview", true, {"stable", "preview"})}, true), UpdateStatus(),
+       kHostOffered},
       {"update.set_auto", "mowbite_host",
        "Switches the automatic update on or off and sets its window; it needs an app as new as min_app. It takes "
        "the switch also without a sure clock, only the update in the window waits for one",
