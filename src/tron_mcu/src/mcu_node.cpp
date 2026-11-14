@@ -134,8 +134,8 @@ class McuNode : public rclcpp::Node {
                   port_name_.c_str());
     }
     blade_lease_max_s_ = get_parameter("blade_lease_max").as_double();
-    mow_height_mm_ = std::clamp(static_cast<uint16_t>(get_parameter("mow_height_mm").as_int()), tron::kMinCutterHeightMm,
-                                tron::kMaxCutterHeightMm);
+    mow_height_mm_ = static_cast<uint16_t>(std::clamp<int64_t>(get_parameter("mow_height_mm").as_int(),
+                                                               tron::kMinCutterHeightMm, tron::kMaxCutterHeightMm));
     stop_release_ = get_parameter("stop_release").as_bool() && !read_only_;
     imu_timeout_s_ = get_parameter("imu_timeout").as_double();
     measured_linear_scale_ = declare_parameter("measured_linear_scale", 1.0);
@@ -202,7 +202,9 @@ class McuNode : public rclcpp::Node {
     config.telemetry_timeout_s = declare_parameter("telemetry_timeout", config.telemetry_timeout_s);
     config.allow_blade = declare_parameter("allow_blade", false) && !read_only;
     config.blade_speed_percent = static_cast<uint16_t>(declare_parameter("blade_speed_percent", 100));
-    config.mow_height_mm = static_cast<uint16_t>(declare_parameter("mow_height_mm", 60));
+    config.mow_height_mm = static_cast<uint16_t>(std::clamp<int64_t>(declare_parameter("mow_height_mm", 60),
+                                                                      tron::kMinCutterHeightMm,
+                                                                      tron::kMaxCutterHeightMm));
     config.blade_lease_max_s = declare_parameter("blade_lease_max", config.blade_lease_max_s);
     config.bumper_latches_emergency = declare_parameter("bumper_latches_emergency", true);
     const bool send_imu = declare_parameter("send_imu", true) && !read_only;
