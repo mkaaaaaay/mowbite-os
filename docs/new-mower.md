@@ -77,8 +77,11 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
 - `mowbite_bringup/config/geometry/<platform>.yaml`: `geometry.*` in m, base_link in the middle of the drive axle, x
   forward, y left: `platform`, `robot_width`, `robot_front`, `robot_rear`, `mower_width`, `blade_ahead`,
   `blade_offset`, `antenna_x`, `antenna_y`, `track`, `wheel_radius`, `dock_contact_x`, `ticks_per_m`, `imu_roll`,
-  `imu_pitch`. Without `platform` or a number the start stops. `dock_contact_x` below 0: contacts at the back, the mower backs onto the station. Contacts in front are
-  not built yet.
+  `imu_pitch`. Without `platform` or a number the start stops. `dock_contact_x` says where the charging contacts are:
+  below 0 at the back (the mower backs onto the station and leaves it forwards), above 0 in front (forwards onto it,
+  straight back off it, never faster than `docking_speed`; the safety filter cuts every reversing of the follower to
+  0.12 m/s), 0 none (no docking, `docking.start` answers NO_CHARGE_CONTACTS). Set `contact_speed` and `dock_overshoot`
+  to how late the board reports the contact (`nx60i.yaml`).
 - `mowbite_bringup/config/<platform>.yaml`: what differs from `tron.yaml`, which lies underneath (battery voltages
   empty, full and critical, charge check, temperatures). Check every value you inherit. The battery voltages stand only
   here: a driver that sets them on its board gets them in the start file from `battery_voltages` of

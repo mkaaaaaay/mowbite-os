@@ -2720,6 +2720,7 @@
             "NO_HEADING",
             "NO_MOWING_AREA",
             "NO_DOCK",
+            "NO_CHARGE_CONTACTS",
             "DOCK_UNREACHABLE",
             "NO_DOCK_CONTACT",
             "REFERENCE_MISMATCH"
@@ -12569,11 +12570,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:28",
+  "$id": "urn:mowbite-os:api:29",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null).",
   "title": "MowBite OS app interface",
-  "x-api": 28,
+  "x-api": 29,
   "x-commands": {
     "docking.abort": {
       "action": "mower_logic:docking/abort_docking",
@@ -14834,6 +14835,12 @@
         "fields": {},
         "resume": "user",
         "severity": "error"
+      },
+      "NO_CHARGE_CONTACTS": {
+        "description": "The mower has no charging contacts and cannot dock",
+        "fields": {},
+        "resume": "user",
+        "severity": "warning"
       },
       "NO_DOCK": {
         "description": "The map has no docking station",

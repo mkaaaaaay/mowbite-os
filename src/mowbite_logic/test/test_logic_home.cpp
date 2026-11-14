@@ -293,13 +293,13 @@ TEST(GoingHome, WithoutAWayHomeHeatAndRainPauseTheBatteryEnds) {
   ASSERT_TRUE(battery);
   EXPECT_DOUBLE_EQ(battery->details["limit"].get<double>(), 21.0);
 
-  // Contacts in front: no docking yet, the same.
-  LogicConfig front = Tron();
-  front.dock_contact_x = 0.3;
-  TestCore yf = Mowing(front);
-  Hold(yf, Volts(19.0f), 0, 2);
-  EXPECT_TRUE(yf.Idle());
-  EXPECT_TRUE(Find(yf.TakeEvents(), "BATTERY_LOW"));
+  // Without charging contacts: no docking, the same.
+  LogicConfig bare = Tron();
+  bare.dock_contact_x = 0.0;
+  TestCore other = Mowing(bare);
+  Hold(other, Volts(19.0f), 0, 2);
+  EXPECT_TRUE(other.Idle());
+  EXPECT_TRUE(Find(other.TakeEvents(), "BATTERY_LOW"));
 }
 
 TEST(GoingHome, StartRefusedLowHotOrWarm) {

@@ -11,10 +11,11 @@ constexpr double kPoseSpacing = 0.1;
 
 }  // namespace
 
-UndockPath PlanUndock(double x, double y, double heading, const UndockConfig& config) {
+UndockPath PlanUndock(double x, double y, double heading, bool reverse, const UndockConfig& config) {
   UndockPath path;
-  const double c = std::cos(heading);
-  const double s = std::sin(heading);
+  const double course = reverse ? heading + M_PI : heading;
+  const double c = std::cos(course);
+  const double s = std::sin(course);
   const int steps = std::max(2, static_cast<int>(std::ceil(config.distance / kPoseSpacing - 1e-9)));
   for (int i = 0; i <= steps; i++) {
     const double along = config.distance * i / steps;
@@ -31,6 +32,7 @@ UndockPath PlanUndock(double x, double y, double heading, const UndockConfig& co
                    {end_x - side_x, end_y - side_y}, {end_x + side_x, end_y + side_y}};
   path.speed = config.speed;
   path.stall_time = config.stall_time;
+  path.reverse = reverse;
   return path;
 }
 

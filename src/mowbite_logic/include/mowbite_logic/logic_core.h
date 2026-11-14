@@ -113,18 +113,19 @@ struct LogicConfig {
   // s between checkpoints while a path is mowed.
   double checkpoint_period = 30.0;
   // m ahead of base_link where the charging contacts of the mower are. Below 0 they are behind it: it backs onto the
-  // docking station and stands there facing away from the heading of the station in the map.
+  // docking station and stands there facing away from the heading of the station in the map. Above 0 it drives on
+  // forwards and faces that heading. 0: the platform has no charging contacts and does not dock (NO_CHARGE_CONTACTS).
   double dock_contact_x = 0;
   // On the docking station mowing and drives start only after the reference check (G24): a position at least
   // dock_max_position_accuracy (m) and, with the heading of the station set, base_link within dock_reference_limit (m)
   // of the recorded station.
   double dock_max_position_accuracy = 0.03;
   double dock_reference_limit = 0.10;
-  // After the reference check the mower leaves the station before mowing or a drive starts (contacts behind base_link
-  // only; it drives forwards out of the station).
+  // After the reference check the mower leaves the station before mowing or a drive starts, straight against the way
+  // in: forwards with the contacts behind base_link, else backwards (PlanLeave).
   UndockConfig undock;
-  // After JOB_COMPLETE, abort_mowing and on docking.start the mower backs onto the station (contacts behind base_link
-  // only); a try that fails also drives out like undocking.
+  // After JOB_COMPLETE, abort_mowing and on docking.start the mower drives onto the station contacts first; a try that
+  // fails also drives out like undocking.
   DockConfig dock;
   // DOCKED only with the charge confirmed on the contacts, CHARGING_LOST in IDLE on the station (G19).
   ChargeConfig charge;
@@ -520,7 +521,7 @@ class LogicCore {
   // Stops undocking without UNDOCKING_FAILED, like abort_undocking (also logic/stop_drive for a drive).
   void AbortUndocking(const Reason& why);
   // DOCKING: back onto the station of the map after JOB_COMPLETE, abort_mowing or a reason of HomeWatch, or on
-  // docking.start, where the contacts are at the back (CanDock); else IDLE as before. Each but JOB_COMPLETE begins with
+  // docking.start, where the platform has charging contacts (CanDock); else IDLE as before. Each but JOB_COMPLETE begins with
   // the event DOCKING and its reason. The node hands the leg of TakeDockingLeg to the follower,
   // once and when nothing else is on its way, and its end to OnDockingLegEnded. On the way onto the station the first
   // raw contact stops the mower (one zero command, G18); the debounced one, also at the end of a leg that failed,
@@ -538,8 +539,8 @@ class LogicCore {
   // approach_failed with cause and direct_blocked; with the switch off only with cause.
   bool CanDock() const;
   bool Docking() const;
-  // Why docking.start cannot start now, empty if it can: BUSY, ALREADY_THERE on the contacts, EMERGENCY or
-  // NO_SAFETY_MEASUREMENT, the position, MAP_*, NO_DOCK, DOCK_UNREACHABLE.
+  // Why docking.start cannot start now, empty if it can: BUSY, NO_CHARGE_CONTACTS, ALREADY_THERE on the contacts,
+  // EMERGENCY or NO_SAFETY_MEASUREMENT, the position, MAP_*, NO_DOCK, DOCK_UNREACHABLE.
   Reason DockingProblem() const;
   // docking.start: empty when DOCKING began, else why not (also as DRIVE_REFUSED).
   Reason StartDocking();
@@ -728,6 +729,10 @@ class LogicCore {
   double DockAccuracyLimit() const;
   // The heading of the mower on the docking station.
   double DockedHeading() const;
+  // The contacts lie behind base_link: the mower backs onto the station and leaves it forwards.
+  bool ContactsBack() const;
+  // "straight ahead" or "straight back": the way off the station, for the messages.
+  const char* LeaveWords() const;
   enum class DockCheck { kNone, kMowing, kDrive };
   void BeginDockCheck(DockCheck purpose);
   void BeginDrive(double x, double y);

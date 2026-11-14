@@ -25,6 +25,11 @@ mowbite_logic:
     charge_confirm_current: 0.1
     charge_confirm_timeout: 15.0
     charge_expected_below: 75.0
+    # The contacts sit in front (geometry dock_contact_x): forwards onto the station, backwards off it at most at
+    # docking_speed. The board reports the contact up to 1 s late, so the last part is slower and reaches farther than
+    # on the Tron. Assumptions until "Dock YF" measures them at the station.
+    contact_speed: 0.04
+    dock_overshoot: 0.08
 
 mowbite_localization:
   ros__parameters:

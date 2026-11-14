@@ -8,14 +8,13 @@
 namespace mowbite_logic {
 
 Reason LogicCore::UndockEndProblem(double x, double y) const {
-  // Contacts in front: undocking backwards is not built, the reference check ends in ON_DOCK.
-  if (config_.dock_contact_x >= 0) return {};
-  const double heading = DockedHeading();
+  // The way off the station runs against the way in, whichever way the mower faces.
+  const double way_in = dock_ ? dock_->heading : 0.0;
   const double distance = config_.undock.distance;
-  if (Reachable(drivable_, obstacles_, x + distance * std::cos(heading), y + distance * std::sin(heading))) return {};
-  return Reason("DOCK_UNREACHABLE", "Leaving the docking station " + Metres(distance) +
-                                        " m straight ahead ends outside of the mowing and navigation areas: let an "
-                                        "area reach there, or place the station closer to one")
+  if (Reachable(drivable_, obstacles_, x - distance * std::cos(way_in), y - distance * std::sin(way_in))) return {};
+  return Reason("DOCK_UNREACHABLE", "Leaving the docking station " + Metres(distance) + " m " + LeaveWords() +
+                                        " ends outside of the mowing and navigation areas: let an area reach there, "
+                                        "or place the station closer to one")
       .With("distance", distance);
 }
 
@@ -73,15 +72,8 @@ Reason LogicCore::OnDockCheck(bool ok, double x, double y, float accuracy, const
     } else {
       Notify("Reference check on the docking station passed: " + Metres(distance) +
                          " m from the recorded position");
-      if (config_.dock_contact_x >= 0) {
-        why = Reason("ON_DOCK", "The position on the docking station fits, but undocking backwards is not built yet: "
-                                "drive the mower off by remote control first")
-                  .With("distance", distance)
-                  .With("limit", limit);
-      } else {
-        // The way out from where the mower stands.
-        why = UndockEndProblem(x, y);
-      }
+      // The way out from where the mower stands.
+      why = UndockEndProblem(x, y);
     }
   }
   if (why.empty()) {
@@ -111,12 +103,12 @@ void LogicCore::StartUndocking(DockCheck purpose, double x, double y) {
   undock_failure_.reset();
   undock_stop_why_ = Reason();
   if (charge_stop_) {
-    Notify("Undocking: charging off, then " + Metres(config_.undock.distance) + " m straight ahead");
+    Notify("Undocking: charging off, then " + Metres(config_.undock.distance) + " m " + LeaveWords());
   } else {
     // The hardware charges by itself and cannot stop it: straight to the path.
-    Notify("Undocking: " + Metres(config_.undock.distance) + " m straight ahead");
+    Notify("Undocking: " + Metres(config_.undock.distance) + " m " + LeaveWords());
     undock_step_ = UndockStep::kDrive;
-    Replace(PlanUndock(undock_x_, undock_y_, undock_heading_, config_.undock));
+    Replace(PlanLeave(undock_x_, undock_y_, undock_heading_, ContactsBack(), config_.undock, config_.dock));
   }
   SetState(State::kUndocking);
   if (purpose == DockCheck::kMowing) SetRunPhase(RunPhase::kUndocking);
@@ -142,7 +134,7 @@ void LogicCore::OnChargeOff(bool ok, const std::string& message) {
     return;
   }
   undock_step_ = UndockStep::kDrive;
-  Replace(PlanUndock(undock_x_, undock_y_, undock_heading_, config_.undock));
+  Replace(PlanLeave(undock_x_, undock_y_, undock_heading_, ContactsBack(), config_.undock, config_.dock));
 }
 
 void LogicCore::StopUndocking(const std::optional<Reason>& failure, const Reason& why) {

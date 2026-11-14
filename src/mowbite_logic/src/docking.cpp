@@ -39,9 +39,18 @@ const char* DockingLegName(DockingLeg::Kind kind) {
   }
 }
 
+UndockPath PlanLeave(double x, double y, double heading, bool contacts_back, UndockConfig out, const DockConfig& dock) {
+  if (!contacts_back) out.speed = std::min(out.speed, dock.speed);
+  return PlanUndock(x, y, heading, !contacts_back, out);
+}
+
 DockingSequence::DockingSequence(const DockConfig& config, const UndockConfig& out, const DockPose& station,
-                                 double facing)
-    : config_(config), out_(out), station_(station), facing_(facing) {}
+                                 bool contacts_back)
+    : config_(config),
+      out_(out),
+      station_(station),
+      contacts_back_(contacts_back),
+      facing_(Normalize(contacts_back ? station.heading + M_PI : station.heading)) {}
 
 Point2 DockingSequence::ApproachPoint() const {
   return {station_.x - config_.approach_distance * std::cos(station_.heading),
@@ -82,26 +91,27 @@ DockingLeg DockingSequence::Approach() const {
 }
 
 DockingLeg DockingSequence::Out(double x, double y, double heading) const {
-  // Straight ahead the way it faces, as far as the approach point lies along the line: the line onto the station then
+  // Straight along the way it faces, as far as the approach point lies along the line: the line onto the station then
   // steers it back onto it.
   UndockConfig out = out_;
   out.distance = std::max(Along(x, y), kPoseSpacing);
-  const UndockPath path = PlanUndock(x, y, heading, out);
+  const UndockPath path = PlanLeave(x, y, heading, contacts_back_, out, config_);
   DockingLeg leg;
   leg.kind = DockingLeg::Kind::kOut;
   leg.poses = path.poses;
   leg.corridor = path.corridor;
   leg.straight = true;
+  leg.reverse = path.reverse;
   leg.speed = path.speed;
   leg.stall_time = path.stall_time;
   leg.end_tolerance = kLineEndTolerance;
   return leg;
 }
 
-DockingLeg DockingSequence::Backwards(DockingLeg::Kind kind, double from, double to) const {
+DockingLeg DockingSequence::Onto(DockingLeg::Kind kind, double from, double to) const {
   DockingLeg leg;
   leg.kind = kind;
-  leg.reverse = true;
+  leg.reverse = contacts_back_;
   const Point2 a = ApproachPoint();
   const double c = std::cos(station_.heading);
   const double s = std::sin(station_.heading);
@@ -124,7 +134,7 @@ DockingLeg DockingSequence::Backwards(DockingLeg::Kind kind, double from, double
 
 DockingLeg DockingSequence::Line() const {
   const double gate = std::max(config_.approach_distance - config_.gate_distance, kPoseSpacing);
-  DockingLeg leg = Backwards(DockingLeg::Kind::kLine, 0.0, gate);
+  DockingLeg leg = Onto(DockingLeg::Kind::kLine, 0.0, gate);
   leg.speed = config_.speed;
   // Nothing should stop the mower before the gate: standing there counts as stuck as soon as on the way out.
   leg.stall_time = out_.stall_time;
@@ -134,7 +144,7 @@ DockingLeg DockingSequence::Line() const {
 
 DockingLeg DockingSequence::Contact() const {
   const double gate = std::max(config_.approach_distance - config_.gate_distance, kPoseSpacing);
-  DockingLeg leg = Backwards(DockingLeg::Kind::kContact, gate, config_.approach_distance + config_.overshoot);
+  DockingLeg leg = Onto(DockingLeg::Kind::kContact, gate, config_.approach_distance + config_.overshoot);
   leg.speed = config_.contact_speed;
   // At the station the contacts need some pushing.
   leg.stall_time = config_.contact_timeout;

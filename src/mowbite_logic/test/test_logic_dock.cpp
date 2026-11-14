@@ -211,20 +211,16 @@ TEST(DockStart, WhatChangedDuringTheCheckComesFirst) {
   EXPECT_FALSE(lifted.Mowing());
 }
 
-TEST(DockStart, ContactsInFrontFaceTheWayIn) {
+TEST(DockStart, ContactsInFrontFaceTheWayInAndUndockBackwards) {
   LogicConfig config;
   config.dock_contact_x = 0.3;
   TestCore core = Docked(config);
   StartChecking(core);
   EXPECT_NEAR(core.TakeDockCheck().value_or(99), M_PI / 2, 1e-12);
-  // Undocking backwards is not built: a check that passes ends on the station.
   core.TakeEvents();
-  EXPECT_EQ(core.OnDockCheck(true, kDock.x, kDock.y, 0.02f, "").code, "ON_DOCK");
-  EXPECT_FALSE(core.Undocking());
-  const auto events = core.TakeEvents();
-  const Event* refused = Find(events, "MOWING_REFUSED");
-  ASSERT_TRUE(refused);
-  EXPECT_EQ(refused->details["severity"], "info");
+  EXPECT_TRUE(core.OnDockCheck(true, kDock.x, kDock.y, 0.02f, "").empty());
+  EXPECT_TRUE(core.Undocking());
+  EXPECT_FALSE(Find(core.TakeEvents(), "MOWING_REFUSED"));
 }
 
 TEST(DockStart, OffTheStationNoCheck) {

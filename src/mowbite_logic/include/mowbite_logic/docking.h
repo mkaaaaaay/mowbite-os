@@ -11,14 +11,15 @@
 
 namespace mowbite_logic {
 
-// Docking onto the station of the map with the contacts at the back: over the drivable areas to the point
-// approach_distance m in front of it, facing away from it, then backwards along its line to the gate, where the mower
-// stops and is checked, and on at contact_speed until the contacts. RTK steers the whole way; a camera may take over
-// the last part later (O8). Assumptions until measured on the Tron in phase 7.
+// Docking onto the station of the map, contacts first: over the drivable areas to the point approach_distance m in
+// front of it, facing the way the mower faces on it, then along its line to the gate (backwards with the contacts at
+// the back, forwards with them in front), where the mower stops and is checked, and on at contact_speed until the
+// contacts. RTK steers the whole way; a camera may take over the last part later (O8). Assumptions until measured on
+// the Tron in phase 7.
 struct DockConfig {
   // m in front of the station along its way in (docking_approach_distance of params.set).
   double approach_distance = 0.8;
-  // m/s backwards along the line, and from the gate on.
+  // m/s along the line, and from the gate on; also the most for any way off the station backwards.
   double speed = 0.1;
   double contact_speed = 0.06;
   // gate_distance m before the station base_link has to stand at most gate_lateral m beside the line, its heading
@@ -41,9 +42,9 @@ struct DockConfig {
 
 // What the follower drives for docking.
 struct DockingLeg {
-  // kApproach: over the drivable areas to the point in front of the station, planned like a drive. kOut: forwards along
-  // the mower's own heading out of the station to that point. kLine: backwards along the line to the gate. kContact:
-  // from the gate onto the contacts. kDirect: straight to the point in front of the station, without the planner.
+  // kApproach: over the drivable areas to the point in front of the station, planned like a drive. kOut: straight along
+  // the mower's own heading against the way in, out to that point. kLine: along the line to the gate. kContact: from
+  // the gate onto the contacts. kDirect: straight to the point in front of the station, without the planner.
   enum class Kind { kApproach, kOut, kLine, kContact, kDirect };
   Kind kind = Kind::kApproach;
   // kApproach: the point in front of the station, facing the way the mower faces on it.
@@ -63,13 +64,17 @@ struct DockingLeg {
 
 const char* DockingLegName(DockingLeg::Kind kind);
 
+// The way off the station from base_link at (x, y) facing heading, straight against the way in: forwards with the
+// contacts at the back, else backwards at most at the docking speed (G40).
+UndockPath PlanLeave(double x, double y, double heading, bool contacts_back, UndockConfig out, const DockConfig& dock);
+
 // The geometry and the tries of one docking, without ROS. LogicCore decides which leg comes next.
 class DockingSequence {
  public:
   DockingSequence() = default;
-  // station as in the map (heading: the way in), facing: the heading of the mower on it; out: how the mower leaves the
-  // station forwards, like undocking.
-  DockingSequence(const DockConfig& config, const UndockConfig& out, const DockPose& station, double facing);
+  // station as in the map (heading: the way in); contacts_back: the mower faces away from it there and backs in; out:
+  // how the mower leaves the station, like undocking.
+  DockingSequence(const DockConfig& config, const UndockConfig& out, const DockPose& station, bool contacts_back);
 
   // Where the line onto the station begins.
   Point2 ApproachPoint() const;
@@ -77,7 +82,7 @@ class DockingSequence {
   double Along(double x, double y) const;
   double Across(double x, double y) const;
   // Whether base_link stands on the line between the approach point and the station, where a try begins by driving
-  // forwards out to the approach point.
+  // out to the approach point.
   bool OnLine(double x, double y) const;
 
   // The first leg of a try from base_link at (x, y) facing heading: out to the approach point from the line, the line
@@ -110,13 +115,14 @@ class DockingSequence {
   }
 
  private:
-  // Poses facing the mower's heading on the station from along m to to m (from the approach point), and the corridor
-  // of the line.
-  DockingLeg Backwards(DockingLeg::Kind kind, double from, double to) const;
+  // Poses facing the mower's heading on the station from along m to to m (from the approach point), driven contacts
+  // first, and the corridor of the line.
+  DockingLeg Onto(DockingLeg::Kind kind, double from, double to) const;
 
   DockConfig config_;
   UndockConfig out_;
   DockPose station_;
+  bool contacts_back_ = true;
   double facing_ = 0;
   int failures_ = 0;
 };

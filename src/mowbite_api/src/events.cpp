@@ -510,6 +510,7 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
            "working, the mower waits for a release; in IDLE it goes on by itself.",
            "Look at the mower and around it, then reset the emergency. If it happens again, keep the log for a "
            "report."}}}}},
+      {"NO_CHARGE_CONTACTS", {"The mower has no charging contacts and cannot dock", {}}},
       {"NO_CHARGE_CURRENT",
        {"Contact with the docking station, but no charge current",
         {Number("current", "A", "The charge current seen; while docking the largest one of the check"), Limit("A")}}},
@@ -923,6 +924,7 @@ Field DrivenReason() {
 // A list of reasons that all wait for the user: codes with their severity.
 std::vector<ReasonEntry> User(const std::vector<std::pair<std::string, std::string>>& codes) {
   std::vector<ReasonEntry> out;
+  out.reserve(codes.size());
   for (const auto& [code, severity] : codes) out.push_back(R(code, severity, "user"));
   return out;
 }
@@ -1050,6 +1052,7 @@ const std::vector<EventEntry>& Events() {
                   {"NO_HEADING", "warning"},
                   {"NO_MOWING_AREA", "warning"},
                   {"NO_DOCK", "warning"},
+                  {"NO_CHARGE_CONTACTS", "warning"},
                   {"DOCK_UNREACHABLE", "warning"},
                   {"NO_DOCK_CONTACT", "warning"},
                   {"REFERENCE_MISMATCH", "warning"}})),

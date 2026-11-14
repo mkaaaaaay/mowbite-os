@@ -20,7 +20,19 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(MapEdit, kind, type, outline, ob
                                                 obstacles_driven_reason, x, y, heading)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobArea, id, name, mowable)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UndockConfig, distance, speed, stall_time, course_limit, course_distance, corridor)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UndockPath, poses, corridor, speed, stall_time)
+// reverse only where set, so that journals of mowers leaving forwards stay as they were.
+inline void to_json(nlohmann::json& j, const UndockPath& path) {
+  j = nlohmann::json{
+      {"poses", path.poses}, {"corridor", path.corridor}, {"speed", path.speed}, {"stall_time", path.stall_time}};
+  if (path.reverse) j["reverse"] = true;
+}
+inline void from_json(const nlohmann::json& j, UndockPath& path) {
+  j.at("poses").get_to(path.poses);
+  j.at("corridor").get_to(path.corridor);
+  j.at("speed").get_to(path.speed);
+  j.at("stall_time").get_to(path.stall_time);
+  path.reverse = j.value("reverse", false);
+}
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockConfig, approach_distance, speed, contact_speed, gate_distance, gate_lateral,
                                    gate_heading, overshoot, contact_timeout, retry_count, direct, direct_margin)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockingLeg, kind, goal, poses, corridor, straight, reverse, speed, stall_time,
@@ -86,7 +98,7 @@ static_assert(sizeof(RecorderConfig) == 56);
 static_assert(sizeof(MapEdit) == 168);
 static_assert(sizeof(JobArea) == 72);
 static_assert(sizeof(UndockConfig) == 48);
-static_assert(sizeof(UndockPath) == 64);
+static_assert(sizeof(UndockPath) == 72);
 static_assert(sizeof(DockConfig) == 80);
 static_assert(sizeof(DockingLeg) == 120);
 static_assert(sizeof(ChargeConfig) == 40);

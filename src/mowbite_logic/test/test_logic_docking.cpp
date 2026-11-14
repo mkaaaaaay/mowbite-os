@@ -175,7 +175,7 @@ TestCore OntoTheContacts(LogicConfig config = Tron()) {
 
 TEST(DockingSequence, TheLineOntoTheStation) {
   DockConfig config;
-  const DockingSequence docking(config, UndockConfig(), kDock, 0.0);
+  const DockingSequence docking(config, UndockConfig(), kDock, true);
   const Point2 p = docking.ApproachPoint();
   EXPECT_NEAR(p.x, -0.2, 1e-9);
   EXPECT_NEAR(p.y, 0.0, 1e-9);
@@ -216,7 +216,7 @@ TEST(DockingSequence, TheLineOntoTheStation) {
 }
 
 TEST(DockingSequence, WhereATryBegins) {
-  const DockingSequence docking(DockConfig(), UndockConfig(), kDock, 0.0);
+  const DockingSequence docking(DockConfig(), UndockConfig(), kDock, true);
   // Far from the line: the approach to the point in front of the station, facing away from it.
   DockingLeg leg = docking.FirstLeg(2.0, 1.0, M_PI);
   EXPECT_EQ(leg.kind, DockingLeg::Kind::kApproach);
@@ -240,8 +240,56 @@ TEST(DockingSequence, WhereATryBegins) {
   EXPECT_FALSE(docking.OnLine(-1.3, 0.0));
 }
 
+TEST(DockingSequence, WithTheContactsInFrontForwardsOnAndBackwardsOut) {
+  // The same station; on it the mower faces west, the way in.
+  const DockingSequence docking(DockConfig(), UndockConfig(), kDock, false);
+  DockingLeg leg = docking.FirstLeg(2.0, 1.0, 0.0);
+  EXPECT_EQ(leg.kind, DockingLeg::Kind::kApproach);
+  EXPECT_NEAR(leg.goal.x, -0.2, 1e-9);
+  EXPECT_NEAR(Angle(leg.goal.heading - M_PI), 0.0, 1e-9);
+  EXPECT_EQ(docking.FirstLeg(-0.25, 0.05, M_PI - Rad(15)).kind, DockingLeg::Kind::kLine);
+  EXPECT_EQ(docking.FirstLeg(-0.25, 0.05, Rad(15)).kind, DockingLeg::Kind::kApproach);
+  const DockingLeg line = docking.Line();
+  EXPECT_FALSE(line.reverse);
+  EXPECT_NEAR(line.poses.front().x, -0.2, 1e-9);
+  EXPECT_NEAR(line.poses.back().x, -0.75, 1e-9);
+  for (const auto& p : line.poses) EXPECT_NEAR(Angle(p.heading - M_PI), 0.0, 1e-9);
+  const DockingLeg contact = docking.Contact();
+  EXPECT_FALSE(contact.reverse);
+  EXPECT_DOUBLE_EQ(contact.speed, 0.06);
+  EXPECT_NEAR(contact.poses.back().x, -1.05, 1e-9);
+  // On the line: straight back along its own heading out to the approach point, at most at the docking speed.
+  leg = docking.FirstLeg(-0.9, 0.1, M_PI + Rad(5));
+  EXPECT_EQ(leg.kind, DockingLeg::Kind::kOut);
+  EXPECT_TRUE(leg.straight);
+  EXPECT_TRUE(leg.reverse);
+  EXPECT_DOUBLE_EQ(leg.speed, 0.1);
+  EXPECT_NEAR(leg.poses.front().x, -0.9, 1e-9);
+  EXPECT_NEAR(leg.poses.back().x, -0.9 + 0.7 * std::cos(Rad(5)), 1e-9);
+  EXPECT_NEAR(leg.poses.back().y, 0.1 + 0.7 * std::sin(Rad(5)), 1e-9);
+  EXPECT_NEAR(Angle(leg.poses.back().heading - M_PI - Rad(5)), 0.0, 1e-9);
+  EXPECT_TRUE(InsideRing(leg.corridor, -0.9, 0.1));
+}
+
+TEST(DockingSequence, TheWayOffTheStation) {
+  UndockConfig out;
+  DockConfig dock;
+  // Forwards at the speed of undocking.
+  UndockPath path = PlanLeave(0.0, 0.0, 0.0, true, out, dock);
+  EXPECT_FALSE(path.reverse);
+  EXPECT_DOUBLE_EQ(path.speed, 0.15);
+  EXPECT_NEAR(path.poses.back().x, 0.8, 1e-9);
+  // Backwards at most at the docking speed, also where undocking would be slower.
+  path = PlanLeave(0.0, 0.0, 0.0, false, out, dock);
+  EXPECT_TRUE(path.reverse);
+  EXPECT_DOUBLE_EQ(path.speed, 0.1);
+  EXPECT_NEAR(path.poses.back().x, -0.8, 1e-9);
+  out.speed = 0.05;
+  EXPECT_DOUBLE_EQ(PlanLeave(0.0, 0.0, 0.0, false, out, dock).speed, 0.05);
+}
+
 TEST(DockingSequence, TheGateChecksSideHeadingAndAccuracy) {
-  const DockingSequence docking(DockConfig(), UndockConfig(), kDock, 0.0);
+  const DockingSequence docking(DockConfig(), UndockConfig(), kDock, true);
   EXPECT_EQ(docking.CheckGate(-0.75, 0.019, Rad(7.9), 0.02f, 0.03), "");
   EXPECT_NE(docking.CheckGate(-0.75, 0.025, 0.0, 0.02f, 0.03).find("0.025 m beside the line"), std::string::npos);
   EXPECT_NE(docking.CheckGate(-0.75, 0.0, Rad(-9), 0.02f, 0.03).find("faced 9.0 deg off"), std::string::npos);
@@ -251,7 +299,7 @@ TEST(DockingSequence, TheGateChecksSideHeadingAndAccuracy) {
 TEST(DockingSequence, TriesAgainRetryCountTimes) {
   DockConfig config;
   config.retry_count = 2;
-  DockingSequence docking(config, UndockConfig(), kDock, 0.0);
+  DockingSequence docking(config, UndockConfig(), kDock, true);
   EXPECT_TRUE(docking.Failed());
   EXPECT_TRUE(docking.Failed());
   EXPECT_FALSE(docking.Failed());
@@ -261,7 +309,7 @@ TEST(DockingSequence, TriesAgainRetryCountTimes) {
 TEST(DockingSequence, TheStraightWayToTheApproachPoint) {
   DockConfig config;
   config.direct_margin = 0.2;
-  const DockingSequence docking(config, UndockConfig(), kDock, 0.0);
+  const DockingSequence docking(config, UndockConfig(), kDock, true);
   // From 0.25 m north of the approach point: poses at most 0.1 m apart facing south, the last one facing east as on
   // the station.
   const auto leg = docking.Direct(-0.2, 0.25);
@@ -402,7 +450,7 @@ TEST(Docking, AbortMowingDocksToo) {
   Take(core, DockingLeg::Kind::kApproach);
 }
 
-TEST(Docking, WithoutAStationOrWithContactsInFrontTheJobEndsInIdle) {
+TEST(Docking, WithoutAStationOrChargingContactsTheJobEndsInIdle) {
   TestCore core = Ready();
   core.OnMapDock(std::nullopt);
   CompleteJob(core);
@@ -410,13 +458,61 @@ TEST(Docking, WithoutAStationOrWithContactsInFrontTheJobEndsInIdle) {
   EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"JOB_COMPLETE", "STATE"}));
   EXPECT_FALSE(core.TakeDockingLeg());
 
-  LogicConfig front;
-  front.dock_contact_x = 0.3;
-  TestCore other = Ready(front);
+  LogicConfig bare;
+  bare.dock_contact_x = 0.0;
+  TestCore other = Ready(bare);
   EXPECT_FALSE(other.CanDock());
   CompleteJob(other);
   EXPECT_TRUE(other.Idle());
-  EXPECT_EQ(other.DockingProblem().code, "NO_DOCK");
+  EXPECT_FALSE(other.TakeDockingLeg());
+  const Reason why = other.DockingProblem();
+  EXPECT_EQ(why.code, "NO_CHARGE_CONTACTS");
+  EXPECT_NE(why.message.find("no charging contacts"), std::string::npos);
+  // Also from the contacts of a station: it is no dock to it.
+  other.OnHardwareStatus(Healthy(true));
+  EXPECT_EQ(other.DockingProblem().code, "NO_CHARGE_CONTACTS");
+}
+
+TEST(Docking, WithTheContactsInFrontTheMowerDrivesOnForwardsAndBacksOut) {
+  LogicConfig front;
+  front.dock_contact_x = 0.3;
+  TestCore core = Ready(front);
+  EXPECT_TRUE(core.CanDock());
+  CompleteJob(core);
+  const auto notices = core.TakeNotices();
+  EXPECT_TRUE(std::any_of(notices.begin(), notices.end(), [](const std::string& n) {
+    return n.find("in front of the docking station, then forwards onto it") != std::string::npos;
+  }));
+  // To the point in front of the station facing west, the way in.
+  const DockingLeg approach = Take(core, DockingLeg::Kind::kApproach);
+  EXPECT_NEAR(approach.goal.x, -0.2, 1e-9);
+  EXPECT_NEAR(Angle(approach.goal.heading - M_PI), 0.0, 1e-9);
+  core.OnPose(PoseAt(-0.21, 0.01, M_PI + Rad(3)));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  const DockingLeg line = Take(core, DockingLeg::Kind::kLine);
+  EXPECT_FALSE(line.reverse);
+  EXPECT_DOUBLE_EQ(line.speed, 0.1);
+  EXPECT_NEAR(line.poses.back().x, -0.75, 1e-9);
+  for (const auto& p : line.poses) EXPECT_NEAR(Angle(p.heading - M_PI), 0.0, 1e-9);
+  // 3 cm beside the line at the gate: backwards out to the approach point, at most at the docking speed.
+  core.OnPose(PoseAt(-0.74, 0.03, M_PI - Rad(2)));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  const DockingLeg out = Take(core, DockingLeg::Kind::kOut);
+  EXPECT_TRUE(out.straight);
+  EXPECT_TRUE(out.reverse);
+  EXPECT_DOUBLE_EQ(out.speed, 0.1);
+  EXPECT_NEAR(out.poses.front().x, -0.74, 1e-9);
+  EXPECT_NEAR(out.poses.back().x, -0.74 + 0.54 * std::cos(Rad(2)), 1e-9);
+  EXPECT_NEAR(Angle(out.poses.back().heading - M_PI + Rad(2)), 0.0, 1e-9);
+  EXPECT_TRUE(InsideRing(out.corridor, -0.74, 0.03));
+  core.OnPose(PoseAt(-0.21, 0.01, M_PI + Rad(1)));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  Take(core, DockingLeg::Kind::kLine);
+  core.OnPose(PoseAt(-0.74, 0.01, M_PI - Rad(3)));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  const DockingLeg contact = Take(core, DockingLeg::Kind::kContact);
+  EXPECT_FALSE(contact.reverse);
+  EXPECT_NEAR(contact.poses.back().x, -1.05, 1e-9);
 }
 
 TEST(Docking, AnApproachPointOutsideOfTheAreasFailsAtOnce) {

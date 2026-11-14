@@ -51,6 +51,13 @@ LogicConfig Tron() {
   return config;
 }
 
+// Contacts in front: on the same station the mower faces west, the way in.
+LogicConfig Front() {
+  LogicConfig config;
+  config.dock_contact_x = 0.3;
+  return config;
+}
+
 // On the contacts of the recorded station, as after a start there.
 TestCore Docked(const Ring& lawn = kLawn, LogicConfig config = Tron()) {
   TestCore core{config};
@@ -110,7 +117,7 @@ void Out(TestCore& core) {
 
 TEST(UndockPlan, StraightAheadInPosesAtMostATenthApart) {
   UndockConfig config;
-  const UndockPath path = PlanUndock(1.0, 2.0, M_PI / 2, config);
+  const UndockPath path = PlanUndock(1.0, 2.0, M_PI / 2, false, config);
   ASSERT_EQ(path.poses.size(), 9u);
   for (size_t i = 0; i < path.poses.size(); i++) {
     EXPECT_NEAR(path.poses[i].x, 1.0, 1e-9);
@@ -118,21 +125,38 @@ TEST(UndockPlan, StraightAheadInPosesAtMostATenthApart) {
     EXPECT_DOUBLE_EQ(path.poses[i].heading, M_PI / 2);
   }
   config.distance = 0.15;
-  EXPECT_EQ(PlanUndock(0, 0, 0, config).poses.size(), 3u);
+  EXPECT_EQ(PlanUndock(0, 0, 0, false, config).poses.size(), 3u);
   config.distance = 0.85;
-  const UndockPath odd = PlanUndock(0, 0, 0, config);
+  const UndockPath odd = PlanUndock(0, 0, 0, false, config);
   EXPECT_EQ(odd.poses.size(), 10u);
   EXPECT_NEAR(odd.poses.back().x, 0.85, 1e-9);
 }
 
 TEST(UndockPlan, TheCorridorReachesBehindTheStartAndAlongTheWay) {
-  const UndockPath path = PlanUndock(1.0, 2.0, M_PI / 2, UndockConfig());
+  const UndockPath path = PlanUndock(1.0, 2.0, M_PI / 2, false, UndockConfig());
   EXPECT_TRUE(InsideRing(path.corridor, 1.0, 2.0));
   EXPECT_TRUE(InsideRing(path.corridor, 1.0, 1.95));
   EXPECT_TRUE(InsideRing(path.corridor, 1.09, 2.5));
   EXPECT_FALSE(InsideRing(path.corridor, 1.11, 2.5));
   EXPECT_TRUE(InsideRing(path.corridor, 0.95, 2.79));
   EXPECT_FALSE(InsideRing(path.corridor, 1.0, 2.81));
+}
+
+TEST(UndockPlan, StraightBackFacingTheWayTheMowerFaces) {
+  const UndockPath path = PlanUndock(1.0, 2.0, M_PI / 2, true, UndockConfig());
+  EXPECT_TRUE(path.reverse);
+  ASSERT_EQ(path.poses.size(), 9u);
+  for (size_t i = 0; i < path.poses.size(); i++) {
+    EXPECT_NEAR(path.poses[i].x, 1.0, 1e-9);
+    EXPECT_NEAR(path.poses[i].y, 2.0 - 0.1 * i, 1e-9);
+    EXPECT_DOUBLE_EQ(path.poses[i].heading, M_PI / 2);
+  }
+  // The corridor reaches behind the start along the way out, which lies behind the mower.
+  EXPECT_TRUE(InsideRing(path.corridor, 1.0, 2.05));
+  EXPECT_TRUE(InsideRing(path.corridor, 1.0, 1.21));
+  EXPECT_FALSE(InsideRing(path.corridor, 1.0, 1.19));
+  EXPECT_FALSE(InsideRing(path.corridor, 1.0, 2.11));
+  EXPECT_FALSE(PlanUndock(1.0, 2.0, M_PI / 2, false, UndockConfig()).reverse);
 }
 
 TEST(UndockPlan, ReachableInAnAreaOutsideOfTheObstacles) {
@@ -193,6 +217,60 @@ TEST(Undock, TheWayOutStartsWhereTheMowerStands) {
   EXPECT_TRUE(core.FollowerActive());
   EXPECT_FALSE(core.TakeUndockPath());
   EXPECT_FALSE(core.BladeWanted());
+}
+
+TEST(Undock, WithTheContactsInFrontTheMowerLeavesBackwards) {
+  TestCore core = Docked(kLawn, Front());
+  ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  EXPECT_NEAR(core.TakeDockCheck().value_or(99), M_PI, 1e-12);
+  core.TakeNotices();
+  const Reason why = core.OnDockCheck(true, kStartX, kDock.y, 0.02f, "");
+  ASSERT_TRUE(why.empty()) << why.code << ": " << why.message;
+  EXPECT_TRUE(core.Undocking());
+  const auto notices = core.TakeNotices();
+  EXPECT_TRUE(std::any_of(notices.begin(), notices.end(), [](const std::string& n) {
+    return n == "Undocking: charging off, then 0.80 m straight back";
+  }));
+  const UndockPath path = ChargedOff(core);
+  EXPECT_TRUE(path.reverse);
+  ASSERT_EQ(path.poses.size(), 9u);
+  EXPECT_NEAR(path.poses.front().x, kStartX, 1e-9);
+  EXPECT_NEAR(path.poses.back().x, kStartX + 0.8, 1e-9);
+  for (const auto& p : path.poses) {
+    EXPECT_NEAR(p.y, 0.0, 1e-9);
+    EXPECT_NEAR(std::remainder(p.heading - M_PI, 2 * M_PI), 0.0, 1e-9);
+  }
+  // Backwards at most at the docking speed (G40).
+  EXPECT_DOUBLE_EQ(path.speed, 0.1);
+  EXPECT_TRUE(InsideRing(path.corridor, kStartX, 0.0));
+  Out(core);
+  core.OnUndockEnded(LegEnd::kDone, Reason("DONE", "done"));
+  EXPECT_TRUE(core.Mowing());
+}
+
+TEST(Undock, WithTheContactsInFrontTheCourseProbeLooksAlongTheWayBack) {
+  TestCore core = Docked(kLawn, Front());
+  StartUndocking(core);
+  ChargedOff(core);
+  core.TakeEvents();
+  // The GNSS antenna 0.1 m ahead of base_link, which faces west; the mower leaves east.
+  const double ax = kStartX - 0.1;
+  core.OnGnssFix(ax, 0.0);
+  core.OnGnssFix(ax + 0.4 * std::cos(Rad(8)), 0.4 * std::sin(Rad(8)));
+  EXPECT_TRUE(core.FollowerActive());
+  EXPECT_FALSE(core.TakeDriveCancel());
+  core.OnGnssFix(ax + 0.45 * std::cos(Rad(-15)), 0.45 * std::sin(Rad(-15)));
+  EXPECT_FALSE(core.FollowerActive());
+  EXPECT_TRUE(core.TakeDriveCancel());
+}
+
+TEST(Undock, WithTheContactsInFrontTheEndOfTheWayBackCounts) {
+  TestCore core = Docked(kFarLawn, Front());
+  const Reason why = core.StartProblem();
+  EXPECT_EQ(why.code, "DOCK_UNREACHABLE");
+  EXPECT_NE(why.message.find("0.80 m straight back ends outside"), std::string::npos) << why.message;
+  core.SetUndockDistance(1.2);
+  EXPECT_TRUE(core.StartProblem().empty()) << core.StartProblem().code;
 }
 
 TEST(Undock, UndockedThenMowing) {

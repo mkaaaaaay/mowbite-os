@@ -9,12 +9,13 @@
 
 namespace mowbite_logic {
 
-// Leaving the docking station before mowing or a drive starts on it: straight ahead the way the mower faces there, out
-// of the hollows and guides for its wheels, without steering. Assumptions until measured on the Tron in phase 7.
+// Leaving the docking station before mowing or a drive starts on it: straight against the way in, out of the hollows
+// and guides for its wheels, without steering; forwards with the contacts at the back, else backwards. Assumptions
+// until measured on the Tron in phase 7.
 struct UndockConfig {
   // m along the line (undock_distance of params.set).
   double distance = 0.8;
-  // m/s at most, also while the wheels climb out of the hollows.
+  // m/s at most forwards, also while the wheels climb out of the hollows; backwards at most the docking speed.
   double speed = 0.15;
   // s the mower may stand while driven, then undocking fails instead of pushing on.
   double stall_time = 2.0;
@@ -29,16 +30,19 @@ struct UndockConfig {
 
 // The way out, as the follower drives it.
 struct UndockPath {
-  // From where base_link stands to distance m ahead, at most 0.1 m apart, all facing the way out; at least 3.
+  // From where base_link stands to distance m along the way out, at most 0.1 m apart, all facing the way the mower
+  // faces; at least 3.
   std::vector<DockPose> poses;
   // The line, corridor wide to each side and reaching that far behind the start.
   Ring corridor;
   double speed = 0;
   double stall_time = 0;
+  // The way out lies behind the mower.
+  bool reverse = false;
 };
 
-// The way out from base_link at (x, y) facing heading.
-UndockPath PlanUndock(double x, double y, double heading, const UndockConfig& config);
+// The way out from base_link at (x, y) facing heading: straight ahead, or straight back with reverse.
+UndockPath PlanUndock(double x, double y, double heading, bool reverse, const UndockConfig& config);
 
 // Whether (x, y) lies in the open ring.
 bool InsideRing(const Ring& ring, double x, double y);

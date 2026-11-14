@@ -1,6 +1,6 @@
 """Going home on the NX60i (O11) as nx60i.launch.py starts it, against fake_xcore, with a safety measurement given in
-mower_params (test_nx60i_stack.py runs without one and cannot mow). The mower docks with the contacts in front, which
-the logic does not build yet: it has no way home. A start with the blade motor at motor_cold_temperature or more is
+mower_params (test_nx60i_stack.py runs without one and cannot mow). The map has no docking station: the mower has no
+way home. A start with the blade motor at motor_cold_temperature or more is
 refused, the default temperature of fake_xcore lies below it; while mowing a hot blade motor pauses the run with
 MOTOR_HOT until the user resumes it (question 47 iii); a low battery ends the run, also from that pause, with
 BATTERY_LOW and IDLE where the mower stands, without DOCKING. rain_mode other than 0 without the rain sensor of hw/capabilities is told once in the log.

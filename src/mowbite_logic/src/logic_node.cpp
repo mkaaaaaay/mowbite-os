@@ -1556,7 +1556,7 @@ void LogicNode::PublishRpcMethods() {
     if (method.node == "mowbite_logic" && method.offered.empty()) methods.methods.push_back(method.name);
   }
   for (const auto& command : mowbite_api::Commands()) {
-    // "Home" from IDLE, only where the OS docks (contacts at the back).
+    // "Home" from IDLE, only where the platform has charging contacts.
     if (!Ours(command) || (command.name == "docking.start" && !core_.View().CanDock())) continue;
     methods.methods.push_back(command.name);
   }
@@ -2239,13 +2239,8 @@ void LogicNode::FinishDockCheck(bool ok, double x, double y, float accuracy, con
                 drive ? "Drive" : "Mowing");
     return;
   }
-  if (why.code == "ON_DOCK") {
-    RCLCPP_INFO(get_logger(), "%s from the docking station refused: %s (%s)", drive ? "Drive" : "Mowing",
-                why.code.c_str(), why.message.c_str());
-  } else {
-    RCLCPP_WARN(get_logger(), "%s from the docking station refused: %s (%s)", drive ? "Drive" : "Mowing",
-                why.code.c_str(), why.message.c_str());
-  }
+  RCLCPP_WARN(get_logger(), "%s from the docking station refused: %s (%s)", drive ? "Drive" : "Mowing",
+              why.code.c_str(), why.message.c_str());
   if (drive) {
     RespondDrive(dock_drive_->header, false, why.message);
     dock_drive_.reset();
@@ -2305,6 +2300,7 @@ void LogicNode::SendUndock(const UndockPath& path) {
   goal.max_speed = static_cast<float>(path.speed);
   goal.stall_time = static_cast<float>(path.stall_time);
   goal.straight = true;
+  goal.reverse = path.reverse;
   drive_ = Drive();
   drive_.purpose = Purpose::kUndock;
   drive_.seq = ++drive_seq_;
@@ -2312,8 +2308,9 @@ void LogicNode::SendUndock(const UndockPath& path) {
   drive_.sent = MonotonicSeconds();
   const auto& end = path.poses.back();
   char text[96];
-  std::snprintf(text, sizeof(text), "%.2f m straight ahead to (%.2f, %.2f) at %.2f m/s",
-                std::hypot(end.x - path.poses.front().x, end.y - path.poses.front().y), end.x, end.y, path.speed);
+  std::snprintf(text, sizeof(text), "%.2f m straight %s to (%.2f, %.2f) at %.2f m/s",
+                std::hypot(end.x - path.poses.front().x, end.y - path.poses.front().y),
+                path.reverse ? "back" : "ahead", end.x, end.y, path.speed);
   SendFollow(goal, text);
 }
 

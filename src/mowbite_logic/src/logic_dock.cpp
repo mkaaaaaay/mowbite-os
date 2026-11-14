@@ -34,12 +34,20 @@ void LogicCore::OnMapDock(const std::optional<DockPose>& dock) {
 
 double LogicCore::DockedHeading() const {
   const double heading = dock_ ? dock_->heading : 0.0;
-  const double facing = config_.dock_contact_x < 0 ? heading + M_PI : heading;
+  const double facing = ContactsBack() ? heading + M_PI : heading;
   return std::atan2(std::sin(facing), std::cos(facing));
 }
 
-bool LogicCore::CanDock() const {
+bool LogicCore::ContactsBack() const {
   return config_.dock_contact_x < 0;
+}
+
+const char* LogicCore::LeaveWords() const {
+  return ContactsBack() ? "straight ahead" : "straight back";
+}
+
+bool LogicCore::CanDock() const {
+  return config_.dock_contact_x != 0;
 }
 
 bool LogicCore::Docking() const {
@@ -56,7 +64,7 @@ void LogicCore::SetTurningRadius(double radius) {
 }
 
 DockingSequence LogicCore::NewDocking() const {
-  return DockingSequence(config_.dock, config_.undock, dock_.value_or(DockPose()), DockedHeading());
+  return DockingSequence(config_.dock, config_.undock, dock_.value_or(DockPose()), ContactsBack());
 }
 
 Reason LogicCore::ApproachProblem() const {
@@ -73,12 +81,14 @@ Reason LogicCore::DockingProblem() const {
   Reason why = Busy();
   if (why.empty()) why = HoldProblem();
   if (!why.empty()) return why;
+  if (!CanDock()) {
+    return Reason("NO_CHARGE_CONTACTS", "This mower has no charging contacts (geometry.dock_contact_x 0): it cannot dock");
+  }
   if (DockContact()) return Reason("ALREADY_THERE", "The mower is on the docking station already");
   why = Unsafe();
   if (why.empty()) why = PositionProblem();
   if (why.empty()) why = drivable_problem_;
   if (why.empty() && !dock_) why = Reason("NO_DOCK", "The map has no docking station: record it first");
-  if (why.empty() && !CanDock()) why = Reason("NO_DOCK", "Docking onto contacts in front is not built");
   if (why.empty()) why = ApproachProblem();
   return why;
 }
@@ -151,8 +161,8 @@ void LogicCore::BeginDocking() {
   docking_direct_cause_.clear();
   SetState(State::kDocking);
   const Point2 p = docking_.ApproachPoint();
-  Notify("Docking: to (" + Metres(p.x) + ", " + Metres(p.y) +
-                     ") in front of the docking station, then backwards onto it");
+  Notify("Docking: to (" + Metres(p.x) + ", " + Metres(p.y) + ") in front of the docking station, then " +
+         (ContactsBack() ? "backwards" : "forwards") + " onto it");
   NextDockingTry();
 }
 
