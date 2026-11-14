@@ -70,7 +70,8 @@ void DockEstimator::AddMotion(const Motion& motion) {
   }
   if (!estimate_) return;
   filter_.Predict(motion.distance, motion.turn, motion.gyro_time);
-  history_.Add(Moment{motion.time, filter_.state(), way_}, motion.time - config_.max_age - 0.5);
+  history_.Add(Moment{motion.time, motion, filter_.state(), filter_.covariance(), way_},
+               motion.time - config_.max_age - 0.5);
 }
 
 void DockEstimator::SetHint(double heading, double t) {
@@ -102,21 +103,24 @@ MarkerResult DockEstimator::AddMarker(const MarkerImage& image, double t) {
     return TryStart(t) ? MarkerResult::kStarted : MarkerResult::kCollecting;
   }
 
+  // Images go in in the order they were taken: an older one would undo what a newer one corrected.
+  if (image.time < fix_time_) return MarkerResult::kTooOld;
+  const auto [taken, end] = history_.From(image.time);
+  if (taken == end) return MarkerResult::kTooOld;
   const State marker = Marker();
-  const Moment* found = history_.At(image.time);
-  const Moment then = found ? *found : Moment{image.time, filter_.state(), way_};
+  const State& then = taken->state;
   // The marker as base_link sees it: R(heading)^T (marker - position). The Jacobian comes from the state, not from the
   // noisy image, so that images of one place tell nothing about the heading.
-  const Eigen::Vector2d to_marker = marker.head<2>() - then.state.head<2>();
-  const Eigen::Matrix2d turned = Rotation(then.state(2)).transpose();
+  const Eigen::Vector2d to_marker = marker.head<2>() - then.head<2>();
+  const Eigen::Matrix2d turned = Rotation(then(2)).transpose();
   const Eigen::Vector2d innovation = Eigen::Vector2d(image.x, image.y) - turned * to_marker;
   AntennaJacobian jacobian;
   jacobian.leftCols<2>() = -turned;
-  jacobian.col(2) = Rotation(then.state(2) + 0.5 * M_PI).transpose() * to_marker;
+  jacobian.col(2) = Rotation(then(2) + 0.5 * M_PI).transpose() * to_marker;
   const Eigen::Matrix2d noise = PositionCovariance(image);
   std::optional<double> yaw_innovation;
-  if (image.yaw_valid) yaw_innovation = WrapAngle(marker(2) - image.yaw - then.state(2));
-  if (Outlier(innovation, jacobian, noise, yaw_innovation, image.covariance[8])) {
+  if (image.yaw_valid) yaw_innovation = WrapAngle(marker(2) - image.yaw - then(2));
+  if (Outlier(taken->covariance, innovation, jacobian, noise, yaw_innovation, image.covariance[8])) {
     if (++outliers_ < config_.outlier_reset) return MarkerResult::kOutlier;
     Drop();
     return MarkerResult::kDropped;
@@ -126,22 +130,23 @@ MarkerResult DockEstimator::AddMarker(const MarkerImage& image, double t) {
   // add no knowledge but feed the error of the linearization back from image to image.
   if (!still_since_ || !rest_fused_) {
     rest_fused_ = still_since_.has_value();
-    const State before = filter_.state();
-    filter_.UpdatePosition(innovation, jacobian, noise);
-    history_.Shift(before, filter_.state());
+    // Fused into the estimate of the moment it was taken, which the motions since then carry on to now.
+    PoseFilter at = filter_;
+    at.Reset(then, taken->covariance);
+    at.UpdatePosition(innovation, jacobian, noise);
     if (yaw_innovation && YawMoved()) {
-      // Against the moment as the position fix just moved it.
-      const Moment* moved = history_.At(image.time);
-      const double heading_then = moved ? moved->state(2) : filter_.state()(2);
-      FuseYaw(WrapAngle(marker(2) - image.yaw - heading_then), image.covariance[8]);
+      FuseYaw(at, WrapAngle(marker(2) - image.yaw - at.state()(2)), image.covariance[8]);
     }
+    for (auto it = taken; it != end; ++it) {
+      if (it != taken) at.Predict(it->motion.distance, it->motion.turn, it->motion.gyro_time);
+      it->state = at.state();
+      it->covariance = at.covariance();
+    }
+    filter_ = at;
   }
-  if (image.time >= fix_time_) {
-    fix_time_ = image.time;
-    fix_way_ = then.way;
-    const Moment* now_then = history_.At(image.time);
-    fix_x_ = now_then ? now_then->state(0) : filter_.state()(0);
-  }
+  fix_time_ = image.time;
+  fix_way_ = taken->way;
+  fix_x_ = taken->state(0);
   return MarkerResult::kFused;
 }
 
@@ -150,23 +155,20 @@ bool DockEstimator::YawMoved() const {
          std::abs(WrapAngle(gyro_heading_ - yaw_gyro_)) >= config_.yaw_move_turn;
 }
 
-void DockEstimator::FuseYaw(double innovation, double variance) {
-  const double spread = filter_.covariance()(2, 2);
+void DockEstimator::FuseYaw(PoseFilter& filter, double innovation, double variance) {
+  const double spread = filter.covariance()(2, 2);
   // A heading known better than one image keeps it; else the fix leaves exactly the spread of the image.
   if (spread - variance <= 1e-12) return;
-  const State before = filter_.state();
-  filter_.UpdateHeading(innovation, spread * variance / (spread - variance));
-  history_.Shift(before, filter_.state());
+  filter.UpdateHeading(innovation, spread * variance / (spread - variance));
   yaw_used_ = true;
   yaw_way_ = way_;
   yaw_gyro_ = gyro_heading_;
   yaw_fixes_++;
 }
 
-bool DockEstimator::Outlier(const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian,
+bool DockEstimator::Outlier(const Covariance& p, const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian,
                             const Eigen::Matrix2d& noise, std::optional<double> yaw_innovation,
                             double yaw_variance) const {
-  const Covariance& p = filter_.covariance();
   if (innovation.norm() > config_.min_outlier) {
     const Eigen::Matrix2d s = jacobian * p * jacobian.transpose() + noise;
     if (innovation.dot(s.ldlt().solve(innovation)) > config_.position_chi2) return true;
@@ -234,6 +236,8 @@ bool DockEstimator::TryStart(double t) {
   fix_x_ = position(0);
   start_.clear();
   history_.Clear();
+  // The mower stood since the first image of the start: the estimate holds for every image taken until now.
+  history_.Add(Moment{t, Motion{}, filter_.state(), filter_.covariance(), way_}, t);
   return true;
 }
 

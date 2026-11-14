@@ -286,9 +286,27 @@ TEST(DockEstimator, LateImagesCountAtTheirTime) {
   EXPECT_LT(w.PositionError(), 0.003);
 }
 
-TEST(DockEstimator, DropsImagesOlderThanMaxAgeOrFromTheFuture) {
+TEST(DockEstimator, ALateImageLeavesTheNoiseOfTheWayDrivenSinceItWasTaken) {
+  // Taken 0.28 s before it arrives at 0.17 m/s: no image knows the last 0.048 m, their odometry noise stays.
+  DockWorld w;
+  w.delay = 0.28;
+  w.Settle();
+  w.Run(1.5, 0.0, 0.0, true);
+  ASSERT_TRUE(w.est.has_estimate());
+  const double since = std::pow(TronConfig().noise.odometry, 2) * 0.17 * 0.28;
+  w.Run(0.3, -0.17, 0.0, true, 0.003, 2.0 * kDeg);
+  for (int i = 0; i < 30; ++i) {
+    w.Run(0.1, -0.17, 0.0, true, 0.003, 2.0 * kDeg);
+    EXPECT_GE(w.est.covariance()(0, 0), 0.999 * since) << i;
+    EXPECT_GE(w.est.covariance()(1, 1), 0.999 * since) << i;
+  }
+  EXPECT_LT(w.PositionError(), 3.0 * w.est.PositionAccuracy(w.t));
+}
+
+TEST(DockEstimator, DropsImagesOlderThanMaxAgeOrFromTheFutureOrOutOfOrder) {
   DockWorld w;
   w.Started();
+  w.Run(0.5, 0.0, 0.0);
   MarkerImage image = w.Image();
   image.time = w.t - 0.31;
   EXPECT_EQ(w.est.AddMarker(image, w.t), MarkerResult::kTooOld);
@@ -296,6 +314,8 @@ TEST(DockEstimator, DropsImagesOlderThanMaxAgeOrFromTheFuture) {
   EXPECT_EQ(w.est.AddMarker(image, w.t), MarkerResult::kTooOld);
   image.time = w.t - 0.29;
   EXPECT_EQ(w.est.AddMarker(image, w.t), MarkerResult::kFused);
+  image.time = w.t - 0.295;
+  EXPECT_EQ(w.est.AddMarker(image, w.t), MarkerResult::kTooOld) << "taken before the image of the last fix";
   image.covariance[4] = 0.0;
   EXPECT_EQ(w.est.AddMarker(image, w.t), MarkerResult::kInvalid);
   image.covariance[4] = 1e-4;

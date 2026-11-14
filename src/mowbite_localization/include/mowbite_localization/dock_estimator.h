@@ -63,7 +63,7 @@ struct MarkerImage {
 enum class MarkerResult {
   kNoFrame,     // the heading of the docked mower is not known yet
   kInvalid,     // not a number, or a variance that is not above 0
-  kTooOld,      // older than max_age, or taken after it arrived
+  kTooOld,      // older than max_age, taken after it arrived or before the image of the last fix
   kCollecting,  // no estimate: kept for the start while the mower stands, else dropped
   kStarted,     // the images of the start set the estimate
   kFused,       // corrected the estimate
@@ -100,9 +100,12 @@ class DockEstimator {
   double HeadingAccuracy() const;
 
  private:
+  // The motion that led to a moment and the estimate after it, with the way driven until then.
   struct Moment {
     double time;
+    Motion motion;
     State state;
+    Covariance covariance;
     double way;
   };
 
@@ -110,9 +113,9 @@ class DockEstimator {
   State Marker() const;
   bool TryStart(double t);
   bool YawMoved() const;
-  void FuseYaw(double innovation, double variance);
-  bool Outlier(const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian, const Eigen::Matrix2d& noise,
-               std::optional<double> yaw_innovation, double yaw_variance) const;
+  void FuseYaw(PoseFilter& filter, double innovation, double variance);
+  bool Outlier(const Covariance& p, const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian,
+               const Eigen::Matrix2d& noise, std::optional<double> yaw_innovation, double yaw_variance) const;
   void Drop();
 
   DockConfig config_;
