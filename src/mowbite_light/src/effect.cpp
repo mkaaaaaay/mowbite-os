@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <string_view>
 
 namespace mowbite_light {
@@ -16,9 +17,26 @@ constexpr double kChargedFrom = 0.99;
 // The darkest step of a pulse, of its colour.
 constexpr double kPulseFloor = 0.05;
 // One flash and the gap after it, of the period.
-constexpr double kFlash = 0.08;
+constexpr double kFlashShare = 0.08;
 // Every this many LEDs one sparkles, on average.
 constexpr uint32_t kSparkleEvery = 5;
+
+// Per kind in the order of EffectKind: its name, whether it takes no colours and whether it may stand still (period 0).
+struct KindRule {
+  const char* name;
+  bool colorless;
+  bool still;
+};
+constexpr KindRule kKinds[] = {
+    {"off", true, false},      {"solid", false, false},   {"blink", false, false},  {"pulse", false, false},
+    {"chase", false, false},   {"gradient", false, true}, {"fade", false, false},   {"comet", false, false},
+    {"scanner", false, false}, {"rainbow", true, true},   {"sparkle", false, false}, {"flash", false, false},
+    {"level", false, true}};
+static_assert(std::size(kKinds) == static_cast<size_t>(EffectKind::kLevel) + 1, "one rule per EffectKind");
+
+const KindRule& Rule(EffectKind kind) {
+  return kKinds[static_cast<size_t>(kind)];
+}
 
 const Rgb kWhite{255, 255, 255};
 const Rgb kYellow{255, 160, 0};
@@ -106,7 +124,7 @@ bool Index(std::string_view text, size_t* value) {
 // The colours of one run of n LEDs.
 std::vector<Rgb> Along(const Effect& effect, size_t n, double t, double level) {
   std::vector<Rgb> leds(n);
-  if (n == 0 || (effect.colors.empty() && effect.kind != EffectKind::kRainbow)) return leds;
+  if (n == 0 || (effect.colors.empty() && !Rule(effect.kind).colorless)) return leds;
   const Rgb first = effect.colors.empty() ? Rgb{} : effect.colors[0];
   const Rgb second = effect.colors.size() > 1 ? effect.colors[1] : Rgb{};
   const double phase = Phase(t, effect.period);
@@ -161,14 +179,14 @@ std::vector<Rgb> Along(const Effect& effect, size_t n, double t, double level) {
     case EffectKind::kSparkle: {
       const double slot = effect.period > 0 ? std::floor(t / effect.period) : 0;
       const auto slot_index = static_cast<uint32_t>(static_cast<int64_t>(slot));
+      const Rgb spark = Mix(second, first, Swell(phase));
       for (size_t i = 0; i < n; ++i) {
-        const bool chosen = Hash(static_cast<uint32_t>(i), slot_index) % kSparkleEvery == 0;
-        leds[i] = chosen ? Mix(second, first, Swell(phase)) : second;
+        leds[i] = Hash(static_cast<uint32_t>(i), slot_index) % kSparkleEvery == 0 ? spark : second;
       }
       break;
     }
     case EffectKind::kFlash: {
-      const bool on = phase < kFlash || (phase >= 2 * kFlash && phase < 3 * kFlash);
+      const bool on = phase < kFlashShare || (phase >= 2 * kFlashShare && phase < 3 * kFlashShare);
       std::fill(leds.begin(), leds.end(), on ? first : second);
       break;
     }
@@ -187,8 +205,11 @@ std::vector<Rgb> Along(const Effect& effect, size_t n, double t, double level) {
 }  // namespace
 
 const std::vector<std::string>& EffectNames() {
-  static const std::vector<std::string> names = {"off",   "solid",   "blink",   "pulse",   "chase", "gradient", "fade",
-                                                 "comet", "scanner", "rainbow", "sparkle", "flash", "level"};
+  static const std::vector<std::string> names = [] {
+    std::vector<std::string> all;
+    for (const KindRule& rule : kKinds) all.emplace_back(rule.name);
+    return all;
+  }();
   return names;
 }
 
@@ -265,8 +286,7 @@ std::optional<Effect> EffectFromJson(const Json& value, std::string* error) {
   }
   effect.kind = static_cast<EffectKind>(name - names.begin());
   const Json colors = value.value("colors", Json::array());
-  const bool colorless = effect.kind == EffectKind::kOff || effect.kind == EffectKind::kRainbow;
-  if (!colors.is_array() || colors.size() > kMaxColors || (colors.empty() && !colorless)) {
+  if (!colors.is_array() || colors.size() > kMaxColors || (colors.empty() && !Rule(effect.kind).colorless)) {
     *error = "colors are 1 to 4 texts #rrggbb";
     return std::nullopt;
   }
@@ -280,9 +300,7 @@ std::optional<Effect> EffectFromJson(const Json& value, std::string* error) {
   }
   const Json period = value.value("period", Json(1.0));
   const double p = period.is_number() ? period.get<double>() : -1.0;
-  const bool still = effect.kind == EffectKind::kGradient || effect.kind == EffectKind::kRainbow ||
-                     effect.kind == EffectKind::kLevel;
-  if (!((p >= kMinPeriod && p <= kMaxPeriod) || (p == 0 && still))) {
+  if (!((p >= kMinPeriod && p <= kMaxPeriod) || (p == 0 && Rule(effect.kind).still))) {
     *error = "period is 0.2 to 20 s, for gradient, rainbow and level also 0";
     return std::nullopt;
   }
