@@ -180,6 +180,51 @@ TEST(DockEstimator, ADirectionCountsOnlyAfterTheMowerMoved) {
   EXPECT_EQ(w.est.yaw_fixes(), 2);
 }
 
+TEST(DockEstimator, ALateDirectionCountsByWhereItWasTaken) {
+  // Images 0.28 s late: on arrival the mower moved on by 0.048 m or 4.8 degrees since they were taken.
+  for (const bool turning : {false, true}) {
+    DockConfig config = TronConfig();
+    config.noise.gyro = 0.05;
+    DockWorld w(config);
+    w.delay = 0.28;
+    w.yaw_reported = 1.0 * kDeg;
+    w.Settle();
+    w.Run(1.4, 0.0, 0.0, true, 0.003, 0.1 * kDeg);
+    ASSERT_TRUE(w.est.has_estimate());
+    const double speed = turning ? 0.0 : -0.17;
+    const double turn = turning ? 0.3 : 0.0;
+    // Taken 0.017 m or 1.7 degrees and 0.034 m or 3.4 degrees after the start.
+    w.Run(turning ? 0.4 : 0.5, speed, turn, true, 0.003, 0.1 * kDeg);
+    EXPECT_EQ(w.est.yaw_fixes(), 0) << turning;
+    w.Run(0.1, speed, turn, true, 0.003, 0.1 * kDeg);
+    EXPECT_EQ(w.est.yaw_fixes(), 1) << turning;
+  }
+}
+
+TEST(DockEstimator, ALateImageEndsWhereAnImageOnTimeWould) {
+  DockWorld on_time;
+  DockWorld late;
+  late.delay = 0.28;
+  for (DockWorld* w : {&on_time, &late}) {
+    w->yaw_reported = 3.0 * kDeg;
+    w->Settle();
+    w->Run(1.6, 0.0, 0.0, true, 0.003, 0.1 * kDeg);
+    ASSERT_TRUE(w->est.has_estimate());
+    for (int i = 0; i < 30; ++i) {
+      w->yaw_bias = 3.5 * kDeg * std::cos(10.0 * (w->x + 0.8));
+      w->Run(0.1, -0.17, 0.1 * std::sin(0.3 * i), true, 0.003, 0.1 * kDeg);
+    }
+    w->Run(0.4, -0.17, 0.0);
+  }
+  EXPECT_EQ(on_time.results, late.results);
+  EXPECT_EQ(on_time.est.yaw_fixes(), late.est.yaw_fixes());
+  EXPECT_GE(late.est.yaw_fixes(), 2);
+  EXPECT_NEAR(on_time.est.pose().x, late.est.pose().x, 1e-12);
+  EXPECT_NEAR(on_time.est.pose().y, late.est.pose().y, 1e-12);
+  EXPECT_NEAR(on_time.est.pose().heading, late.est.pose().heading, 1e-12);
+  EXPECT_LT((on_time.est.covariance() - late.est.covariance()).cwiseAbs().maxCoeff(), 1e-15);
+}
+
 TEST(DockEstimator, ABiasThatChangesWithThePlaceStaysWithinTheReportedSpread) {
   for (const double amplitude : {3.5, 6.0}) {
     DockWorld w;

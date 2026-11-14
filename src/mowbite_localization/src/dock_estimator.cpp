@@ -64,13 +64,12 @@ void DockEstimator::AddMotion(const Motion& motion) {
   if (!motion.still) {
     still_since_.reset();
     start_.clear();
-    rest_fused_ = false;
   } else if (!still_since_) {
     still_since_ = motion.time;
   }
   if (!estimate_) return;
   filter_.Predict(motion.distance, motion.turn, motion.gyro_time);
-  history_.Add(Moment{motion.time, motion, filter_.state(), filter_.covariance(), way_},
+  history_.Add(Moment{motion.time, motion, filter_.state(), filter_.covariance(), way_, gyro_heading_, still_since_},
                motion.time - config_.max_age - 0.5);
 }
 
@@ -126,16 +125,16 @@ MarkerResult DockEstimator::AddMarker(const MarkerImage& image, double t) {
     return MarkerResult::kDropped;
   }
   outliers_ = 0;
-  // Standing, the first image is the measurement of this place; the next ones only confirm it. Fused they would
-  // add no knowledge but feed the error of the linearization back from image to image.
-  if (!still_since_ || !rest_fused_) {
-    rest_fused_ = still_since_.has_value();
+  // Taken standing, the first image is the measurement of this place; the next ones only confirm it. Fused they
+  // would add no knowledge but feed the error of the linearization back from image to image.
+  if (!taken->rest || taken->rest != fused_rest_) {
+    fused_rest_ = taken->rest;
     // Fused into the estimate of the moment it was taken, which the motions since then carry on to now.
     PoseFilter at = filter_;
     at.Reset(then, taken->covariance);
     at.UpdatePosition(innovation, jacobian, noise);
-    if (yaw_innovation && YawMoved()) {
-      FuseYaw(at, WrapAngle(marker(2) - image.yaw - at.state()(2)), image.covariance[8]);
+    if (yaw_innovation && YawMoved(*taken)) {
+      FuseYaw(at, WrapAngle(marker(2) - image.yaw - at.state()(2)), image.covariance[8], *taken);
     }
     for (auto it = taken; it != end; ++it) {
       if (it != taken) at.Predict(it->motion.distance, it->motion.turn, it->motion.gyro_time);
@@ -150,19 +149,19 @@ MarkerResult DockEstimator::AddMarker(const MarkerImage& image, double t) {
   return MarkerResult::kFused;
 }
 
-bool DockEstimator::YawMoved() const {
-  return !yaw_used_ || way_ - yaw_way_ >= config_.yaw_move_way ||
-         std::abs(WrapAngle(gyro_heading_ - yaw_gyro_)) >= config_.yaw_move_turn;
+bool DockEstimator::YawMoved(const Moment& then) const {
+  return !yaw_used_ || then.way - yaw_way_ >= config_.yaw_move_way ||
+         std::abs(WrapAngle(then.gyro - yaw_gyro_)) >= config_.yaw_move_turn;
 }
 
-void DockEstimator::FuseYaw(PoseFilter& filter, double innovation, double variance) {
+void DockEstimator::FuseYaw(PoseFilter& filter, double innovation, double variance, const Moment& then) {
   const double spread = filter.covariance()(2, 2);
   // A heading known better than one image keeps it; else the fix leaves exactly the spread of the image.
   if (spread - variance <= 1e-12) return;
   filter.UpdateHeading(innovation, spread * variance / (spread - variance));
   yaw_used_ = true;
-  yaw_way_ = way_;
-  yaw_gyro_ = gyro_heading_;
+  yaw_way_ = then.way;
+  yaw_gyro_ = then.gyro;
   yaw_fixes_++;
 }
 
@@ -226,7 +225,7 @@ bool DockEstimator::TryStart(double t) {
   estimate_ = true;
   from_hint_ = !all_yaw;
   yaw_used_ = all_yaw;
-  rest_fused_ = true;
+  fused_rest_ = still_since_;
   yaw_way_ = way_;
   yaw_gyro_ = gyro_heading_;
   yaw_fixes_ = 0;
@@ -237,7 +236,7 @@ bool DockEstimator::TryStart(double t) {
   start_.clear();
   history_.Clear();
   // The mower stood since the first image of the start: the estimate holds for every image taken until now.
-  history_.Add(Moment{t, Motion{}, filter_.state(), filter_.covariance(), way_}, t);
+  history_.Add(Moment{t, Motion{}, filter_.state(), filter_.covariance(), way_, gyro_heading_, still_since_}, t);
   return true;
 }
 

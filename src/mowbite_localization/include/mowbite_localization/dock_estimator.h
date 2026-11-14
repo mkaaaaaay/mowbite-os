@@ -100,20 +100,23 @@ class DockEstimator {
   double HeadingAccuracy() const;
 
  private:
-  // The motion that led to a moment and the estimate after it, with the way driven until then.
+  // The motion that led to a moment and the estimate after it; the way driven and the gyro heading then, and since
+  // when the mower stood, none while it moved.
   struct Moment {
     double time;
     Motion motion;
     State state;
     Covariance covariance;
     double way;
+    double gyro;
+    std::optional<double> rest;
   };
 
   // Where the marker is in the station frame.
   State Marker() const;
   bool TryStart(double t);
-  bool YawMoved() const;
-  void FuseYaw(PoseFilter& filter, double innovation, double variance);
+  bool YawMoved(const Moment& then) const;
+  void FuseYaw(PoseFilter& filter, double innovation, double variance, const Moment& then);
   bool Outlier(const Covariance& p, const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian,
                const Eigen::Matrix2d& noise, std::optional<double> yaw_innovation, double yaw_variance) const;
   void Drop();
@@ -131,9 +134,9 @@ class DockEstimator {
   std::optional<double> hint_offset_;
   double hint_time_ = 0.0;
   int outliers_ = 0;
-  // An image went into the estimate since the mower stands.
-  bool rest_fused_ = false;
-  // The last direction that counted: whether there is one, and the way and the gyro heading then.
+  // The rest (since when the mower stood) of the last image that went into the estimate.
+  std::optional<double> fused_rest_;
+  // The last direction that counted: whether there is one, and the way and the gyro heading when it was taken.
   bool yaw_used_ = false;
   double yaw_way_ = 0.0;
   double yaw_gyro_ = 0.0;
