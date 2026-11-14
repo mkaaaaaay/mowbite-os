@@ -33,10 +33,13 @@ struct SafetyConfig {
   double imu_timeout = 0.5;
   double hw_timeout = 1.0;
   // Autonomous drives need a pose not older than pose_timeout s, max_position_accuracy m or better, with a heading;
-  // drives in the station frame one from the dock marker of dock_max_position_accuracy m or better.
+  // drives in the station frame one from the dock marker of dock_max_position_accuracy m or better at the docked place,
+  // dock_accuracy_per_m worse per m away from it: the direction of the marker errs some degrees (M3b), which moves the
+  // pose sideways by that angle times the distance and less the nearer the station.
   double pose_timeout = 0.5;
   double max_position_accuracy = 0.1;
   double dock_max_position_accuracy = 0.03;
+  double dock_accuracy_per_m = 0.09;
   // FENCE: an autonomous drive with base_link farther than fence_margin m outside of the allowed areas, or deeper than
   // obstacle_margin m in an obstacle. The follower stops at 0.5 m already, so this only acts when it does not.
   double fence_margin = 0.6;

@@ -87,6 +87,10 @@ class MarkerWatch {
   bool sight() const {
     return sight_;
   }
+  // The marker came with its direction since the wait began.
+  bool seen() const {
+    return valid_ && yaw_;
+  }
   // Drops the pose at its age and forgets everything at the end of docking.
   void Expire(double now);
   void Reset();

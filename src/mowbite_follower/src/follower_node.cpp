@@ -80,8 +80,10 @@ class FollowerNode : public rclcpp::Node {
     guard_config_.hw_timeout = declare_parameter("hw_status_timeout", guard_config_.hw_timeout);
     guard_config_.max_position_accuracy = declare_parameter("max_position_accuracy", guard_config_.max_position_accuracy);
     dock_max_position_accuracy_ = declare_parameter("dock_max_position_accuracy", 0.03);
-    if (!(dock_max_position_accuracy_ > 0)) {
-      throw std::invalid_argument("mowbite_follower: dock_max_position_accuracy above 0 needed");
+    dock_accuracy_per_m_ = declare_parameter("dock_accuracy_per_m", 0.09);
+    if (!(dock_max_position_accuracy_ > 0) || !(dock_accuracy_per_m_ >= 0)) {
+      throw std::invalid_argument(
+          "mowbite_follower: dock_max_position_accuracy above 0 and dock_accuracy_per_m from 0 needed");
     }
     guard_config_.max_cross_track = declare_parameter("max_cross_track", guard_config_.max_cross_track);
     geofence_margin_ = declare_parameter("geofence_margin", 0.5);
@@ -235,7 +237,10 @@ class FollowerNode : public rclcpp::Node {
     // The pose and accuracy limit of the frame of the path; guard and controller are the same in both.
     const PoseInput& pose = dock_frame_ ? dock_pose_ : map_pose_;
     GuardConfig guard_config = guard_config_;
-    if (dock_frame_) guard_config.max_position_accuracy = dock_max_position_accuracy_;
+    if (dock_frame_) {
+      guard_config.max_position_accuracy =
+          dock_max_position_accuracy_ + dock_accuracy_per_m_ * std::hypot(pose.pose.x, pose.pose.y);
+    }
     GuardInput in;
     in.safety_measured = safety_measured_;
     in.driver_moves = driver_moves_;
@@ -321,8 +326,10 @@ class FollowerNode : public rclcpp::Node {
   std::mutex mutex_;
   FollowerConfig follower_config_;
   GuardConfig guard_config_;
-  // m localization/dock_pose has to be accurate to at least on a path in the station frame.
+  // m localization/dock_pose has to be accurate to at least on a path in the station frame: at the docked place, and
+  // worse by that per m away from it (the frame turns with the error in the direction of the marker).
   double dock_max_position_accuracy_ = 0.03;
+  double dock_accuracy_per_m_ = 0.09;
   double geofence_margin_ = 0.5;
   // max_cross_track of the active goal, 0 for none.
   double max_off_path_ = 0;

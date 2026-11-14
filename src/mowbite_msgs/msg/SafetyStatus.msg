@@ -10,7 +10,8 @@ float32 fence_distance
 # fits the datum.
 bool autonomous_ok
 # Drives in the station frame (SOURCE_DOCK) may pass: a safety measurement and a recent pose from the dock marker
-# (localization/dock_pose) of dock_max_position_accuracy with a heading.
+# (localization/dock_pose) of dock_max_position_accuracy plus dock_accuracy_per_m per m from the docked place, with a
+# heading.
 bool dock_ok
 # The source that moves the mower now, as in DriveCommand; SOURCE_STOP while none does.
 uint8 owner

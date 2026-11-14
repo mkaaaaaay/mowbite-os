@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -47,8 +48,13 @@ const char* LogicCore::Guide() const {
   return marker_docking_ ? "marker" : "position";
 }
 
+double LogicCore::MarkerAccuracyLimit(double x, double y) const {
+  return DockAccuracyLimit() + config_.dock_accuracy_per_m * std::hypot(x, y);
+}
+
 bool LogicCore::DockPoseGood() const {
-  return marker_.PoseGood(marker_clock_, DockAccuracyLimit());
+  const auto& pose = marker_.pose();
+  return pose && marker_.PoseGood(marker_clock_, MarkerAccuracyLimit(pose->x, pose->y));
 }
 
 void LogicCore::OnDockMarker(const DockMarkerSample& sample) {
@@ -167,7 +173,12 @@ void LogicCore::TickMarkerDocking(double now_s) {
       MarkerFailed("MARKER_UNAVAILABLE", "the dock camera cannot measure the marker");
       return;
     case MarkerWatch::Verdict::kNotSeen:
-      std::snprintf(text, sizeof(text), "the dock camera saw no marker within %.0f s", config_.marker.wait);
+      if (marker_.seen()) {
+        std::snprintf(text, sizeof(text), "the pose from the marker was not accurate enough within %.0f s",
+                      config_.marker.wait);
+      } else {
+        std::snprintf(text, sizeof(text), "the dock camera saw no marker within %.0f s", config_.marker.wait);
+      }
       MarkerFailed("MARKER_NOT_SEEN", text);
       return;
     case MarkerWatch::Verdict::kLost:
@@ -203,7 +214,7 @@ std::string LogicCore::GateProblem() {
   }
   if (!DockPoseGood()) return "at the gate the marker gave no good pose";
   const DockPoseSample& p = *marker_.pose();  // NOLINT(bugprone-unchecked-optional-access): good means there is one
-  std::string why = docking_.CheckGate(p.x, p.y, p.heading, p.position_accuracy, DockAccuracyLimit());
+  std::string why = docking_.CheckGate(p.x, p.y, p.heading, p.position_accuracy, MarkerAccuracyLimit(p.x, p.y));
   if (!why.empty()) return why;
   why = marker_.ScaleProblem();
   marker_untrusted_ = !why.empty();

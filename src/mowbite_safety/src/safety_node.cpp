@@ -39,6 +39,8 @@ using mowbite_msgs::srv::SetEmergency;
 constexpr double kDriverAnswerS = 2.0;
 // The watch of S2 (s): silent for longer, the process ends and the blade stops with it (G22, G39).
 constexpr double kWatchLimit = 2.0;
+// Beyond about 11 degrees of error in the direction of the marker the station frame is no guide for the dock source.
+constexpr double kMaxDockAccuracyPerM = 0.2;
 
 static_assert(kReasonTilt == HardwareStatus::REASON_TILT);
 static_assert(kReasonFence == HardwareStatus::REASON_FENCE);
@@ -156,12 +158,15 @@ class SafetyNode : public rclcpp::Node {
     config.max_position_accuracy = declare_parameter("max_position_accuracy", config.max_position_accuracy);
     config.dock_max_position_accuracy =
         declare_parameter("dock_max_position_accuracy", config.dock_max_position_accuracy);
+    config.dock_accuracy_per_m = declare_parameter("dock_accuracy_per_m", config.dock_accuracy_per_m);
     // Values that would let the filter pass everything or nothing keep it from starting; without it nothing moves.
     if (!(config.tilt_release > 0 && config.tilt_release < config.tilt_limit && config.tilt_limit < 90) ||
         !(config.tilt_time >= 0) || !(config.fence_margin >= 0) || !(config.imu_timeout > 0) ||
-        !(config.pose_timeout > 0) || !(config.hw_timeout > 0) || !(config.dock_max_position_accuracy > 0)) {
+        !(config.pose_timeout > 0) || !(config.hw_timeout > 0) || !(config.dock_max_position_accuracy > 0) ||
+        !(config.dock_accuracy_per_m >= 0 && config.dock_accuracy_per_m <= kMaxDockAccuracyPerM)) {
       throw std::invalid_argument(
-          "mowbite_safety: tilt_release < tilt_limit < 90, timeouts and dock_max_position_accuracy above 0 needed");
+          "mowbite_safety: tilt_release < tilt_limit < 90, timeouts and dock_max_position_accuracy above 0, "
+          "dock_accuracy_per_m from 0 to 0.2 needed");
     }
     RCLCPP_INFO(get_logger(), "Tilt limit %.1f deg for %.1f s, release below %.1f deg; fence %.2f m beyond the areas",
                 config.tilt_limit, config.tilt_time, config.tilt_release, config.fence_margin);

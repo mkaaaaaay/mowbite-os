@@ -224,6 +224,30 @@ TEST(LogicMarker, AtTheApproachPointTheLineFirst) {
   Take(core, DockingLeg::Kind::kLine);
 }
 
+// The pose from the marker may be worse by dock_accuracy_per_m (0.09) per m from the docked place: 0.102 m at 0.8 m,
+// 0.039 m at 0.1 m.
+TEST(LogicMarker, ThePoseMayBeWorseFartherFromTheStation) {
+  const auto leg_after_sight = [](double x, float accuracy) {
+    TestCore core = Started();
+    core.OnDockMarker(Message(100.4, kMeasuring, true, true));
+    core.OnDockPose(Pose(100.5, x, 0.0, M_PI, 0.0, accuracy));
+    return core.TakeDockingLeg().has_value();
+  };
+  EXPECT_TRUE(leg_after_sight(-0.8, 0.1f));
+  EXPECT_FALSE(leg_after_sight(-0.8, 0.104f));
+  EXPECT_TRUE(leg_after_sight(-0.1, 0.038f));
+  EXPECT_FALSE(leg_after_sight(-0.1, 0.04f));
+}
+
+TEST(LogicMarker, WithoutGrowthThePoseNeedsTheLimitOfTheStationEverywhere) {
+  LogicConfig config = Tron();
+  config.dock_accuracy_per_m = 0;
+  TestCore core = Started(config);
+  core.OnDockMarker(Message(100.4, kMeasuring, true, true));
+  core.OnDockPose(Pose(100.5, -0.8, 0.0, M_PI, 0.0, 0.031f));
+  EXPECT_FALSE(core.TakeDockingLeg());
+}
+
 // The sight: the source cannot measure (at once), images without a marker (after marker_wait), silence.
 TEST(LogicMarker, CameraOffIsUnavailable) {
   TestCore core = Started();
@@ -261,6 +285,22 @@ TEST(LogicMarker, TooDarkIsNotSeen) {
   const Event& failed = Failed(core);
   EXPECT_EQ(failed.details["cause"], "MARKER_NOT_SEEN");
   EXPECT_EQ(failed.details["detail"], "TOO_DARK");
+}
+
+TEST(LogicMarker, SeenButNeverAccurateIsNotSeenWithItsOwnText) {
+  TestCore core = Started();
+  for (int i = 1; i < 50; i++) {
+    const double t = 100.0 + 0.5 * i;
+    core.OnDockMarker(Message(t, kMeasuring, true, true));
+    core.OnDockPose(Pose(t, -0.8, 0.0, M_PI, 0.0, 0.2f));
+    core.OnTick(t);
+  }
+  core.OnTick(125.1);
+  const Event& failed = Failed(core);
+  EXPECT_EQ(failed.details["cause"], "MARKER_NOT_SEEN");
+  const std::string message = failed.details["message"].get<std::string>();
+  EXPECT_NE(message.find("not accurate enough"), std::string::npos) << message;
+  EXPECT_EQ(message.find("saw no marker"), std::string::npos) << message;
 }
 
 // A word the catalog does not have stays out of detail.

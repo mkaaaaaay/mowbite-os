@@ -34,6 +34,9 @@
     # (mowbite_logic), from the marker for every drive in the station frame (mowbite_follower, mowbite_safety).
     # Assumption until phase 7.
     dock_max_position_accuracy: 0.03
+    # From the marker the limit grows by this per m from the docked place: its direction errs 3 to 5 degrees (M3b),
+    # which moves the pose sideways by that angle times the distance; at the contacts it stays near the limit above.
+    dock_accuracy_per_m: 0.09
 tron_mcu:
   ros__parameters:
     port: /dev/ttyS9

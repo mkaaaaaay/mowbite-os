@@ -53,6 +53,7 @@ LogicConfig LoadLogicConfig(rclcpp::Node& node) {
   // Where the charging contacts are belongs to the dimensions of the platform (geometry.dock_contact_x).
   config.dock_contact_x = GeometryNumber(node, "dock_contact_x");
   config.dock_max_position_accuracy = param("dock_max_position_accuracy", config.dock_max_position_accuracy);
+  config.dock_accuracy_per_m = param("dock_accuracy_per_m", config.dock_accuracy_per_m);
   config.dock_reference_limit = param("dock_reference_limit", config.dock_reference_limit);
   // undock_distance is a setting of params.set (LoadLogicParams), the rest is the platform's.
   config.undock.distance = param("undock_distance", config.undock.distance);

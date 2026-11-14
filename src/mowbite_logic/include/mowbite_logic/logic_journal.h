@@ -87,8 +87,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LogicConfig, battery_empty_volta
                                                 battery_hot_temperature, motor_hot_temperature,
                                                 motor_cold_temperature, rain_mode, rain_check_seconds,
                                                 approach_distance, checkpoint_period, dock_contact_x,
-                                                dock_max_position_accuracy, dock_reference_limit, undock, dock,
-                                                marker, charge, calibration, id_seed)
+                                                dock_max_position_accuracy, dock_accuracy_per_m, dock_reference_limit,
+                                                undock, dock, marker, charge, calibration, id_seed)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationStatus, problems, heading, lane_length, strip_length, strip_width,
                                    running)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationGoal, heading, lane_length)
@@ -139,7 +139,7 @@ static_assert(sizeof(JobProgress) == 160);
 static_assert(sizeof(HardwareSnapshot) == 72);
 static_assert(sizeof(PoseSnapshot) == 40);
 static_assert(sizeof(CalibrationConfig) == 32);
-static_assert(sizeof(LogicConfig) == 480);
+static_assert(sizeof(LogicConfig) == 488);
 static_assert(sizeof(MarkerConfig) == 40);
 static_assert(sizeof(DockMarkerSample) == 48);
 static_assert(sizeof(DockPoseSample) == 48);

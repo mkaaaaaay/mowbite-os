@@ -19,6 +19,7 @@ inline void to_json(nlohmann::json& j, const SafetyConfig& c) {
                      {"pose_timeout", c.pose_timeout},
                      {"max_position_accuracy", c.max_position_accuracy},
                      {"dock_max_position_accuracy", c.dock_max_position_accuracy},
+                     {"dock_accuracy_per_m", c.dock_accuracy_per_m},
                      {"fence_margin", c.fence_margin},
                      {"obstacle_margin", c.obstacle_margin},
                      {"station_ahead", c.station_ahead},
@@ -27,7 +28,7 @@ inline void to_json(nlohmann::json& j, const SafetyConfig& c) {
                      {"arm_quiet", c.arm_quiet},
                      {"owner_timeout", c.owner_timeout}};
 }
-// dock_max_position_accuracy came with the dock source: journals from before take its default, all else is required.
+// Fields that came later take the value the journals from before ran with; all else is required.
 inline void from_json(const nlohmann::json& j, SafetyConfig& c) {
   j.at("tilt_limit").get_to(c.tilt_limit);
   j.at("tilt_time").get_to(c.tilt_time);
@@ -37,6 +38,7 @@ inline void from_json(const nlohmann::json& j, SafetyConfig& c) {
   j.at("pose_timeout").get_to(c.pose_timeout);
   j.at("max_position_accuracy").get_to(c.max_position_accuracy);
   c.dock_max_position_accuracy = j.value("dock_max_position_accuracy", SafetyConfig{}.dock_max_position_accuracy);
+  c.dock_accuracy_per_m = j.value("dock_accuracy_per_m", 0.0);
   j.at("fence_margin").get_to(c.fence_margin);
   j.at("obstacle_margin").get_to(c.obstacle_margin);
   j.at("station_ahead").get_to(c.station_ahead);
@@ -50,7 +52,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Decision, out, refusal, conflict)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LatchRequest, bits, reason, again)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Release, allowed, message, code, value, limit)
 
-static_assert(sizeof(SafetyConfig) == 120);
+static_assert(sizeof(SafetyConfig) == 128);
 static_assert(sizeof(Twist2) == 16);
 static_assert(sizeof(Decision) == 64);
 static_assert(sizeof(LatchRequest) == 48);

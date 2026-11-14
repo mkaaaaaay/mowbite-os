@@ -93,7 +93,9 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   of its own (parameters, flags file).
   Paths in the station frame (`FollowPath` frame `FRAME_DOCK`) go out on `follower/dock_cmd_vel`; the safety filter
   passes them as the dock source with the safety measurement and a recent pose from the marker with a heading and
-  `dock_max_position_accuracy` (under `/**`, also the limit of the reference check and the gate in the map), within
+  `dock_max_position_accuracy` at the docked place plus `dock_accuracy_per_m` per m from it (both under `/**`; the
+  first is also the limit of the reference check and the gate in the map; the second follows from the error in the
+  direction of the marker, measured for each platform, Tron 0.09 for 3 to 5 degrees), within
   the zone of the station in that frame (FENCE beyond `fence_margin`), at most 0.17 m/s forwards and 0.12 m/s
   backwards, with no map needed.
 - With a marker the logic offers `docking.test`: docking by the marker alone, without map or RTK, from where the

@@ -178,9 +178,10 @@ std::string SafetyFilter::DockProblem(double now) const {
   if (!dock_pose_ || now - dock_pose_->s > config_.pose_timeout + kTimeEpsilon) {
     return "no recent pose from the dock marker";
   }
-  if (!(dock_pose_->accuracy <= config_.dock_max_position_accuracy)) {
-    return Format("position accuracy from the dock marker %.3f m, %.3f m needed", dock_pose_->accuracy,
-                  config_.dock_max_position_accuracy);
+  const double limit =
+      config_.dock_max_position_accuracy + config_.dock_accuracy_per_m * std::hypot(dock_pose_->x, dock_pose_->y);
+  if (!(dock_pose_->accuracy <= limit)) {
+    return Format("position accuracy from the dock marker %.3f m, %.3f m needed", dock_pose_->accuracy, limit);
   }
   if (!dock_pose_->heading_valid) return "no heading from the dock marker";
   return "";

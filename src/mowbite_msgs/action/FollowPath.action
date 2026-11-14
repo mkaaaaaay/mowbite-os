@@ -37,7 +37,8 @@ float32 end_tolerance
 float32 max_cross_track
 # The frame of poses and areas. FRAME_MAP: the pose from localization/pose, commands on follower/cmd_vel. FRAME_DOCK:
 # the station frame (origin base_link of the docked mower, x the way in), the pose from localization/dock_pose with
-# dock_max_position_accuracy, commands on follower/dock_cmd_vel, which mowbite_safety passes as SOURCE_DOCK only.
+# dock_max_position_accuracy plus dock_accuracy_per_m per m from the origin, commands on follower/dock_cmd_vel, which
+# mowbite_safety passes as SOURCE_DOCK only.
 uint8 FRAME_MAP=0
 uint8 FRAME_DOCK=1
 uint8 frame

@@ -121,7 +121,8 @@ TEST_F(CoreReplay, SafetyFilter) {
   EXPECT_NE(Text(report).find("safety: bit-identical"), std::string::npos) << Text(report);
 }
 
-// Journals from before the dock source: no dock_max_position_accuracy in the config and no OnDockPose in the table.
+// Journals from before the dock source: no dock_max_position_accuracy and dock_accuracy_per_m in the config and no
+// OnDockPose in the table; they ran with a limit the same everywhere.
 TEST(SafetyJournal, ConfigFromBeforeTheDockSourceTakesTheDefault) {
   using F = mowbite_safety::SafetyFilter;
   mowbite_safety::SafetyConfig config;
@@ -129,6 +130,7 @@ TEST(SafetyJournal, ConfigFromBeforeTheDockSourceTakesTheDefault) {
   config.max_position_accuracy = 0.08;
   auto definition = mowbite_journal::CoreDefinition<F>(config, nlohmann::json::object());
   definition["config"].erase("dock_max_position_accuracy");
+  definition["config"].erase("dock_accuracy_per_m");
   auto& methods = definition["methods"];
   ASSERT_EQ(methods.back().at("name"), "OnDockPose");
   methods.erase(methods.size() - 1);
@@ -141,6 +143,7 @@ TEST(SafetyJournal, ConfigFromBeforeTheDockSourceTakesTheDefault) {
 
   const auto read = definition.at("config").get<mowbite_safety::SafetyConfig>();
   EXPECT_EQ(read.dock_max_position_accuracy, 0.03);
+  EXPECT_EQ(read.dock_accuracy_per_m, 0.0);
   EXPECT_EQ(read.max_position_accuracy, 0.08);
   EXPECT_NO_THROW(mowbite_journal::Replayer<F>{definition});
 }

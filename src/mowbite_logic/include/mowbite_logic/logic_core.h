@@ -121,6 +121,8 @@ struct LogicConfig {
   // dock_max_position_accuracy (m) and, with the heading of the station set, base_link within dock_reference_limit (m)
   // of the recorded station.
   double dock_max_position_accuracy = 0.03;
+  // The pose from the dock marker may be worse by this per m from the docked place (mowbite_safety, same value).
+  double dock_accuracy_per_m = 0.09;
   double dock_reference_limit = 0.10;
   // After the reference check the mower leaves the station before mowing or a drive starts, straight against the way
   // in: forwards with the contacts behind base_link, else backwards (PlanLeave).
@@ -748,6 +750,8 @@ class LogicCore {
   // DOCK_UNREACHABLE when the line onto the station begins outside of the drivable areas.
   Reason ApproachProblem() const;
   double DockAccuracyLimit() const;
+  // The limit for a pose from the dock marker at (x, y) in the station frame.
+  double MarkerAccuracyLimit(double x, double y) const;
   // The heading of the mower on the docking station.
   double DockedHeading() const;
   // The contacts lie behind base_link: the mower backs onto the station and leaves it forwards.

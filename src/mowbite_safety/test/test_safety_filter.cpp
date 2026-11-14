@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <limits>
+#include <string>
 #include <utility>
 
 #include "mowbite_safety/safety_filter.h"
@@ -877,16 +878,17 @@ TEST_F(FilterTest, TheDockFollowerNeedsARecentAccuratePoseFromTheMarkerWithAHead
     EXPECT_TRUE(Stops(Cmd(Source::kTeleop, 0)));
     Run(now_ + 1.1);
   };
-  // A good pose in the map does not stand in for the one from the marker, whose limit is its own.
-  dock_accuracy_ = 0.031;
-  refused("position accuracy from the dock marker 0.031 m, 0.030 m needed");
+  // A good pose in the map does not stand in for the one from the marker, whose limit is its own: 0.03 m at the docked
+  // place and 0.09 m per m from it, here 0.8 m.
+  dock_accuracy_ = 0.103;
+  refused("position accuracy from the dock marker 0.103 m, 0.102 m needed");
   filter_.SetMaxPositionAccuracy(0.5);
-  refused("position accuracy from the dock marker 0.031 m, 0.030 m needed");
+  refused("position accuracy from the dock marker 0.103 m, 0.102 m needed");
   dock_accuracy_ = std::numeric_limits<double>::infinity();
-  refused("position accuracy from the dock marker inf m, 0.030 m needed");
+  refused("position accuracy from the dock marker inf m, 0.102 m needed");
   dock_accuracy_ = std::numeric_limits<double>::quiet_NaN();
-  refused("position accuracy from the dock marker nan m, 0.030 m needed");
-  dock_accuracy_ = 0.03;
+  refused("position accuracy from the dock marker nan m, 0.102 m needed");
+  dock_accuracy_ = 0.1;
   Run(now_ + 0.1);
   EXPECT_TRUE(Moves(Cmd(Source::kDock, -0.1))) << filter_.LastRefusal();
   EXPECT_TRUE(Stops(Cmd(Source::kDock, 0)));
@@ -916,12 +918,30 @@ TEST_F(FilterTest, ADockPoseExactlyPoseTimeoutOldIsRecent) {
 TEST_F(FilterTest, TheDockAccuracyLimitComesFromTheConfig) {
   SafetyConfig config;
   config.dock_max_position_accuracy = 0.05;
+  config.dock_accuracy_per_m = 0.05;
   SafetyFilter filter = Ready(1.0, config);
-  filter.OnDockPose(-0.8, 0, 0.04, true, 1.0);
-  EXPECT_TRUE(Moves(filter.OnCommand(Source::kDock, -0.1, 0, 1.0))) << filter.LastRefusal();
-  filter.OnDockPose(-0.8, 0, 0.06, true, 1.0);
+  // Each moving command is followed by a zero, so that the next one starts from a stop.
+  const auto refusal = [&filter](double x, double y, double accuracy) {
+    filter.OnDockPose(x, y, accuracy, true, 1.0);
+    const std::string why = filter.OnCommand(Source::kDock, -0.1, 0, 1.0).refusal;
+    EXPECT_TRUE(Stops(filter.OnCommand(Source::kDock, 0, 0, 1.0)));
+    return why;
+  };
+  // At the docked place the limit is dock_max_position_accuracy.
+  EXPECT_EQ(refusal(0, 0, 0.049), "");
+  EXPECT_EQ(refusal(0, 0, 0.051), "position accuracy from the dock marker 0.051 m, 0.050 m needed");
+  // 1 m in front of it dock_accuracy_per_m worse.
+  EXPECT_EQ(refusal(-1.0, 0, 0.099), "");
+  EXPECT_EQ(refusal(-1.0, 0, 0.101), "position accuracy from the dock marker 0.101 m, 0.100 m needed");
+}
+
+TEST_F(FilterTest, WithoutGrowthTheDockAccuracyLimitIsTheSameEverywhere) {
+  SafetyConfig config;
+  config.dock_accuracy_per_m = 0;
+  SafetyFilter filter = Ready(1.0, config);
+  filter.OnDockPose(-0.8, 0, 0.031, true, 1.0);
   EXPECT_EQ(filter.OnCommand(Source::kDock, -0.1, 0, 1.0).refusal,
-            "position accuracy from the dock marker 0.060 m, 0.050 m needed");
+            "position accuracy from the dock marker 0.031 m, 0.030 m needed");
 }
 
 TEST_F(FilterTest, TheDockFollowerStaysInTheZoneOfTheStationInItsFrame) {

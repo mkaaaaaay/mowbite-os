@@ -7,8 +7,8 @@ beside the line is refused where the mower stands, a marker of the wrong size is
 wheels), a marker hidden for a moment on the line stops the mower until it is back, one hidden for good ends the try
 with MARKER_LOST, a dark image with MARKER_NOT_SEEN and a camera that is off with MARKER_UNAVAILABLE.
 
-The camera here gives the direction of the marker to 1 deg: with the 3 to 5 deg of M3b the pose in the station frame
-stays above dock_max_position_accuracy farther than about 0.4 m from the station, and nothing drives there.
+The camera errs in the direction of the marker as measured in M3b (3 to 5 deg); the limit of the pose grows with the
+distance from the station (dock_accuracy_per_m) and allows that.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_dock_test.py
 """
@@ -41,8 +41,7 @@ with open(CONFIG, "w") as f:
     f.write("tron_mcu:\n  ros__parameters:\n    safety_measurement_date: \"simulation\"\n"
             "mowbite_logic:\n  ros__parameters:\n    docking_retry_count: 0\n    geometry:\n"
             "      antenna_x: 0.098\n      antenna_y: 0.0\n"
-            "fake_tron:\n  ros__parameters:\n    dock: [-1.0, 0.0, 180.0]\n    dock_contact_x: -0.10\n"
-            "fake_dock_marker:\n  ros__parameters:\n    yaw_bias_deg: 0.5\n    yaw_sigma_deg: [1.0, 1.0]\n")
+            "fake_tron:\n  ros__parameters:\n    dock: [-1.0, 0.0, 180.0]\n    dock_contact_x: -0.10\n")
 
 
 def generate_test_description():
