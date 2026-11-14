@@ -239,6 +239,16 @@ TEST(LogicMarker, ThePoseMayBeWorseFartherFromTheStation) {
   EXPECT_FALSE(leg_after_sight(-0.1, 0.04f));
 }
 
+// The limit of the map pose (max_position_accuracy) does not narrow that of the marker.
+TEST(LogicMarker, TheMapLimitDoesNotNarrowTheMarker) {
+  LogicConfig config = Tron();
+  config.max_position_accuracy = 0.01;
+  TestCore core = Started(config);
+  core.OnDockMarker(Message(100.4, kMeasuring, true, true));
+  core.OnDockPose(Pose(100.5, -0.1, 0.0, M_PI, 0.0, 0.038f));
+  EXPECT_TRUE(core.TakeDockingLeg());
+}
+
 TEST(LogicMarker, WithoutGrowthThePoseNeedsTheLimitOfTheStationEverywhere) {
   LogicConfig config = Tron();
   config.dock_accuracy_per_m = 0;

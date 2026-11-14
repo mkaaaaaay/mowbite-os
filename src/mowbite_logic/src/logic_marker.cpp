@@ -49,7 +49,8 @@ const char* LogicCore::Guide() const {
 }
 
 double LogicCore::MarkerAccuracyLimit(double x, double y) const {
-  return DockAccuracyLimit() + config_.dock_accuracy_per_m * std::hypot(x, y);
+  // As follower and safety filter: the limit of the map pose has no say here.
+  return config_.dock_max_position_accuracy + config_.dock_accuracy_per_m * std::hypot(x, y);
 }
 
 bool LogicCore::DockPoseGood() const {

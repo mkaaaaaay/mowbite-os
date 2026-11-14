@@ -55,8 +55,9 @@ class Probe(SimProbe):
     def __init__(self):
         super().__init__("dock_test_probe", state=STATE, flags=FLAGS, log=RX)
         self.robot = None
-        # The sources of the drive commands that moved, with their time.
+        # The sources of the drive commands that moved, with their time, and the times of the stops.
         self.drives = []
+        self.stops = []
         self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
         self.node.create_subscription(HardwareStatus, "hw/status", self._hw, 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
@@ -69,7 +70,10 @@ class Probe(SimProbe):
         self.start()
 
     def _drive(self, msg):
-        if msg.twist.linear.x != 0.0 or msg.twist.angular.z != 0.0:
+        if msg.source == DriveCommand.SOURCE_STOP:
+            with self.lock:
+                self.stops.append(time.time())
+        elif msg.twist.linear.x != 0.0 or msg.twist.angular.z != 0.0:
             with self.lock:
                 self.drives.append((time.time(), msg.source))
 
@@ -177,9 +181,12 @@ class TestDockTest(unittest.TestCase):
         since = len(p.events)
         p.test()
         self.assertTrue(self.wait_on_the_line(60), p.station())
-        logs = len(p.logs)
+        logs, hidden = len(p.logs), time.time()
         p.flags(marker_hidden=True)
         self.assertTrue(p.logged("Docking waits for the marker", 10, logs), p.logs[logs:])
+        # The leg that ended sends a stop of its own, whether the last zero of the follower got through or not.
+        with p.lock:
+            self.assertTrue(any(t >= hidden for t in p.stops), p.stops)
         standing, states = p.standing()
         self.assertTrue(standing, states)
         time.sleep(3.0)

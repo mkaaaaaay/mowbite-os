@@ -558,8 +558,8 @@ class LogicCore {
   // marker_wait, the direction from the marker itself), the start checked (on the line or at the approach point,
   // facing it, the straight way out ending on the line), out to the approach point, the line, the gate with the
   // pose of the marker and the scale of its way against the wheels, kClose up to marker_blind_distance, the blind
-  // contact, the charge. The marker lost on the way: the mower stands and waits up to marker_wait s for gps_wait_time
-  // s of a good pose; a try failed by the marker carries cause (MARKER_UNAVAILABLE, MARKER_NOT_SEEN,
+  // contact, the charge. The marker lost on the way: the mower stands; a good pose back within marker_wait s lets it
+  // go on after gps_wait_time s of it; a try failed by the marker carries cause (MARKER_UNAVAILABLE, MARKER_NOT_SEEN,
   // MARKER_LOST) and detail. Without a good pose of the marker nothing drives: docking ends (DOCKING_FAILED).
   // DOCKED, DOCKING_RETRY and DOCKING_FAILED of a docking carry guide: marker or position.
   bool MarkerSource() const;
