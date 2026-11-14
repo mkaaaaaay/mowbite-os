@@ -6,7 +6,8 @@ the heading hint and the drive on hw/cmd_vel, steered by the true pose. The mowe
 the marker has no direction yet, starts from the hint, backs onto the contacts and leaves again. It checks: no start
 without a heading, the estimate against the truth, single outliers without a jump, outliers in a row drop it, the
 final stretch without the marker stays good for its time, a hidden marker ends good within 0.05 m, the faults of
-fake_dock_marker.
+fake_dock_marker, and that the heading keeps the spread of one image of the marker, whose direction errs by degrees
+that stay at one place (M3b), and stays within three times its reported accuracy, also with 6 degrees at one place.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_dock_marker.py
 """
@@ -99,7 +100,7 @@ class Probe(SimProbe):
         self.setpoint = (0.0, 0.0)
         self.asking = False
         self.hint = False
-        # (wall time, truth in the station frame, estimate or None)
+        # (wall time, truth in the station frame, estimate or None, heading accuracy of the newest dock pose)
         self.samples = []
         self.node.create_subscription(RobotPose, "localization/dock_pose", self._dock, 50)
         self.node.create_subscription(RobotPose, "localization/pose", self._set("map_pose"), 10)
@@ -140,7 +141,8 @@ class Probe(SimProbe):
                 last = truth["t"]
                 time.sleep(0.06)
                 with self.lock:
-                    self.samples.append((written, in_station(truth), estimate_at(self.estimates, written)))
+                    accuracy = self.poses[-1][1].heading_accuracy if self.poses else None
+                    self.samples.append((written, in_station(truth), estimate_at(self.estimates, written), accuracy))
             time.sleep(0.02)
 
     def _drive(self):
@@ -201,8 +203,18 @@ class Probe(SimProbe):
 
 def error(sample):
     """(position error m, heading error rad) of one sample."""
-    _, (tx, ty, tyaw), (x, y, yaw) = sample
+    _, (tx, ty, tyaw), (x, y, yaw), _ = sample
     return math.hypot(x - tx, y - ty), wrap(yaw - tyaw)
+
+
+def heading_ratio(samples):
+    """The largest heading error of the samples in units of their reported heading accuracy."""
+    return max(abs(error(s)[1]) / s[3] for s in samples)
+
+
+def yaw_spread(msg):
+    """The spread of the direction an image of the marker reports, rad."""
+    return math.sqrt(msg.covariance[8])
 
 
 class TestDockMarker(unittest.TestCase):
@@ -297,13 +309,16 @@ class TestDockMarker(unittest.TestCase):
         errors = [error(s)[0] for s in samples]
         near = [error(s)[0] for s in p.samples_since(at_gate)]
         headings = [abs(error(s)[1]) for s in p.samples_since(at_gate)]
+        ratio = heading_ratio(samples)
         print(f"\ndock: way in {len(errors)} samples, worst {max(errors):.3f} m; from 0.3 m {len(near)} samples, worst "
-              f"{max(near):.3f} m, heading {math.degrees(max(headings)):.1f} deg", flush=True)
+              f"{max(near):.3f} m, heading {math.degrees(max(headings)):.1f} deg; heading error at most {ratio:.2f} "
+              "times its accuracy", flush=True)
         self.assertGreater(len(errors), 40)
         # From the hint (5 degrees) at 0.87 m until the marker gives the direction, as at the start.
         self.assertLess(max(errors), 0.06)
         self.assertLess(max(near), 0.02)
-        self.assertLess(max(headings), math.radians(3.0))
+        # The direction of the marker errs up to 3.5 degrees at a place: the heading within its reported accuracy.
+        self.assertLessEqual(ratio, 3.0)
         # Good all the way, the blind stretch included.
         poses = p.poses_since(since)
         self.assertTrue(all(good(m) for m in poses), [m.position_accuracy for m in poses if not good(m)][:5])
@@ -349,3 +364,36 @@ class TestDockMarker(unittest.TestCase):
                                DockMarker.REQUEST_HOLD_S + 2))
         self.assertEqual(p.markers_since(since)[-1].reason, Camera.REASON_NO_SIGNAL)
         p.flags(dock_hollow_speed=0.0)
+
+    def test_08_six_degrees_at_one_place(self):
+        p = self.probe
+        p.asking = True
+        p.hint = True
+        # Outliers in a row drop the estimate, which starts again at rest from images whose direction errs 6 degrees.
+        since = time.time()
+        p.flags(dock_hollow_speed=0.0, marker_yaw_bias=6.0, marker_outlier=[0.3, 0.0, 1])
+        self.assertTrue(p.wait(lambda: any(not m.heading_valid for m in p.poses_since(since)), 6), "not dropped")
+        p.flags(dock_hollow_speed=0.0, marker_yaw_bias=6.0)
+        started = time.time()
+        self.assertTrue(p.wait(lambda: any(good(m) for m in p.poses_since(started + 0.3)), 6), "no new start")
+        time.sleep(4.0)
+        _, _, yaw = p.station()
+        poses = [m for m in p.poses_since(started + 0.3) if good(m)]
+        spread = min(yaw_spread(m) for m in p.markers_since(started) if m.valid and m.yaw_valid)
+        miss = abs(wrap(poses[-1].heading - yaw))
+        print(f"\ndock: 6 deg at one place: heading error {math.degrees(miss):.1f} deg, accuracy "
+              f"{math.degrees(min(m.heading_accuracy for m in poses)):.1f} to "
+              f"{math.degrees(max(m.heading_accuracy for m in poses)):.1f} deg, one image {math.degrees(spread):.1f} "
+              "deg", flush=True)
+        # Standing, more images of the place do not make the heading surer than one of them.
+        self.assertGreaterEqual(min(m.heading_accuracy for m in poses), 0.999 * spread)
+        self.assertGreater(miss, math.radians(4.0))
+        self.assertLessEqual(miss, 3.0 * poses[-1].heading_accuracy)
+        # Into the station, the error of the direction changing with the place again.
+        p.flags(dock_hollow_speed=0.0)
+        since = time.time()
+        self.assertTrue(p.back_in(0.05, lambda s: s[0] >= -0.12, 10), p.station())
+        p.stop_driving(0.5)
+        samples = p.samples_since(since)
+        self.assertGreater(len(samples), 10)
+        self.assertLessEqual(heading_ratio(samples), 3.0)

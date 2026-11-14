@@ -10,15 +10,16 @@ like fake_tron moves it) with dock_marker of the platform; the camera at mount i
 the state file of fake_tron, carried to now with its speeds.
 
 Error model: per image a spread of x and y of position_sigma[0] + position_sigma[1] * d (m, d the distance from the
-camera), of yaw growing linearly through yaw_sigma_deg at the distances yaw_sigma_at; yaw only up to
-yaw_valid_distance. No marker beyond detect_range, outside half_fov_deg off the axis of the camera or seen at more
-than max_view_deg from its front; MARKER_CLIPPED within clip_deg of the edge of the image and closer than
-marker_blind_distance before the docked pose.
+camera). The direction errs by up to yaw_bias_deg, fixed at one place of the camera and changing over yaw_bias_length
+m (from the place and seed), plus yaw_noise_deg from image to image; each image reports a spread growing linearly
+through yaw_sigma_deg at the distances yaw_sigma_at; yaw only up to yaw_valid_distance. No marker beyond
+detect_range, outside half_fov_deg off the axis of the camera or seen at more than max_view_deg from its front;
+MARKER_CLIPPED within clip_deg of the edge of the image and closer than marker_blind_distance before the docked pose.
 
 Faults from the flags file (read at every image): marker_hidden (NO_MARKER), marker_dark (TOO_DARK), camera_off
 (FAULT while asked, reason NO_SIGNAL), marker_scale (factor on the distance from the camera, a marker of the wrong
-size), marker_outlier [dx, dy, n] (every n-th image off by dx, dy m in base_link), marker_start_time (s, overrides
-start_time).
+size), marker_outlier [dx, dy, n] (every n-th image off by dx, dy m in base_link), marker_yaw_bias (deg, the error of
+the direction everywhere instead of the one of the place), marker_start_time (s, overrides start_time).
 """
 import json
 import math
@@ -29,6 +30,7 @@ import rclpy
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Empty
 
@@ -73,10 +75,10 @@ class FakeDockMarker(Node):
         self.flags_path = self.declare_parameter("flags", "").value
         self.dock = list(self.declare_parameter("dock", [-1.0, 0.0, 180.0]).value)
         self.contact_x = self.declare_parameter("dock_contact_x", -0.10).value
-        self.mount = list(self.declare_parameter("mount", [-0.105, 0.0, 0.074, math.pi, 0.0, 0.0]).value)
-        # Platform values (tron.yaml, /**).
-        self.marker = list(self.declare_parameter("dock_marker", [-0.175, 0.0, 0.0]).value)
-        self.blind = self.declare_parameter("marker_blind_distance", 0.07).value
+        self.mount = list(self.declare_parameter("mount", Parameter.Type.DOUBLE_ARRAY).value)
+        # Platform values, only from tron.yaml (/**).
+        self.marker = list(self.declare_parameter("dock_marker", Parameter.Type.DOUBLE_ARRAY).value)
+        self.blind = self.declare_parameter("marker_blind_distance", Parameter.Type.DOUBLE).value
         # Measured on the Tron 14.11. (TM4 part, dark room, lit station): every image valid at 0.28 to 1.2 m, the
         # direction up to 0.8 m.
         self.yaw_valid_distance = self.declare_parameter("yaw_valid_distance", 0.8).value
@@ -90,8 +92,15 @@ class FakeDockMarker(Node):
         self.max_view = math.radians(self.declare_parameter("max_view_deg", 60.0).value)
         self.position_sigma = list(self.declare_parameter("position_sigma", [0.002, 0.004]).value)
         self.yaw_sigma_at = list(self.declare_parameter("yaw_sigma_at", [0.3, 0.8]).value)
-        self.yaw_sigma = [math.radians(v) for v in self.declare_parameter("yaw_sigma_deg", [1.0, 7.0]).value]
+        # M3b 13./14.11.: the direction errs 0.6 to 5.8 deg, steady at one place; 0.04 to 0.25 deg from image to image;
+        # each image reports about 3 deg near the station, 4 to 6 deg farther away.
+        self.yaw_bias = math.radians(self.declare_parameter("yaw_bias_deg", 3.5).value)
+        self.yaw_bias_length = self.declare_parameter("yaw_bias_length", 0.3).value
+        self.yaw_noise = math.radians(self.declare_parameter("yaw_noise_deg", 0.1).value)
+        self.yaw_sigma = [math.radians(v) for v in self.declare_parameter("yaw_sigma_deg", [3.0, 5.0]).value]
         self.rng = random.Random(self.declare_parameter("seed", 3).value)
+        # Phases of the error of the direction over the place of the camera.
+        self.yaw_phase = (self.rng.uniform(0.0, 2.0 * math.pi), self.rng.uniform(0.0, 2.0 * math.pi))
 
         reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
                               durability=DurabilityPolicy.VOLATILE)
@@ -160,7 +169,7 @@ class FakeDockMarker(Node):
         yaw_sigma = interpolate(self.yaw_sigma_at, self.yaw_sigma, distance)
         scale = float(flags.get("marker_scale", 1.0))
         seen = (seen[0] * scale + self.rng.gauss(0.0, sigma), seen[1] * scale + self.rng.gauss(0.0, sigma),
-                seen[2] + self.rng.gauss(0.0, yaw_sigma))
+                seen[2] + self.yaw_error(seen, flags) + self.rng.gauss(0.0, self.yaw_noise))
         measured = compose(camera, seen)
         x, y = measured[0], measured[1]
         self.images += 1
@@ -175,6 +184,16 @@ class FakeDockMarker(Node):
         msg.covariance = [sigma * sigma, 0.0, 0.0, 0.0, sigma * sigma, 0.0, 0.0, 0.0,
                           yaw_sigma * yaw_sigma if msg.yaw_valid else 0.0]
         return msg
+
+    def yaw_error(self, seen, flags):
+        """The error of the direction at this place of the camera (seen: the marker in the camera frame)."""
+        if "marker_yaw_bias" in flags:
+            return math.radians(float(flags["marker_yaw_bias"]))
+        place = relative(seen, (0.0, 0.0, 0.0))
+        k = 2.0 * math.pi / self.yaw_bias_length
+        along = math.sin(k * place[0] + self.yaw_phase[0])
+        across = math.sin(k * place[1] + self.yaw_phase[1])
+        return self.yaw_bias * (0.7 * along + 0.3 * across)
 
     def report(self, now, msg):
         self.pub.publish(msg)
