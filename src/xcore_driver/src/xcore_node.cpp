@@ -672,6 +672,7 @@ class XcoreNode : public rclcpp::Node {
     msg.blade_height_control = false;
     msg.blade_height_min_mm = 0;
     msg.blade_height_max_mm = 0;
+    msg.blade_height_default_mm = 0;
     msg.blade_lease_max_s = static_cast<float>(blade_lease_max_s_);
     // The board charges by itself and ignores the host: there is nothing to start or stop.
     msg.host_charge_control = false;

@@ -134,6 +134,8 @@ class McuNode : public rclcpp::Node {
                   port_name_.c_str());
     }
     blade_lease_max_s_ = get_parameter("blade_lease_max").as_double();
+    mow_height_mm_ = std::clamp(static_cast<uint16_t>(get_parameter("mow_height_mm").as_int()), tron::kMinCutterHeightMm,
+                                tron::kMaxCutterHeightMm);
     stop_release_ = get_parameter("stop_release").as_bool() && !read_only_;
     imu_timeout_s_ = get_parameter("imu_timeout").as_double();
     measured_linear_scale_ = declare_parameter("measured_linear_scale", 1.0);
@@ -502,6 +504,7 @@ class McuNode : public rclcpp::Node {
     msg.blade_height_control = true;
     msg.blade_height_min_mm = tron::kMinCutterHeightMm;
     msg.blade_height_max_mm = tron::kMaxCutterHeightMm;
+    msg.blade_height_default_mm = mow_height_mm_;
     msg.blade_lease_max_s = static_cast<float>(blade_lease_max_s_);
     // The driver sends Charge itself after a debounced dock contact.
     msg.host_charge_control = false;
@@ -734,6 +737,8 @@ class McuNode : public rclcpp::Node {
   // seq of the last StopEvent published, only for the I/O thread.
   uint32_t published_stop_seq_ = 0;
   double blade_lease_max_s_;
+  // mow_height_mm as the codec sends it.
+  uint16_t mow_height_mm_;
   double failsafe_without_host_s_;
   std::string safety_measurement_date_;
   bool blade_on_logged_ = false;

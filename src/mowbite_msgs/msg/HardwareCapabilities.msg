@@ -9,6 +9,8 @@ bool blade_speed_control
 bool blade_height_control
 uint16 blade_height_min_mm
 uint16 blade_height_max_mm
+# Height the driver cuts at when hw/blade asks for 0; 0 without blade_height_control.
+uint16 blade_height_default_mm
 # Longest lease hw/blade accepts.
 float32 blade_lease_max_s
 
