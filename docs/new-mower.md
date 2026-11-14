@@ -105,6 +105,10 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   kernel writes the clock back to it, its drift over at least 3 days without network, 30 days times that drift under
   5 min. A board without a real-time clock that keeps the time of its last shutdown gives the same signs and keeps
   `rtc` off.
+- The schedule: plans start the mower only where the platform file allows it (`allowed` under `mowbite_schedule`,
+  default off; `schedule.get` then says so and `enabled` 1 is refused). Turn it on only after the way home, pushes,
+  the incident log, the stop book and the safety measurement are done on this mower. A plan starts only from the
+  station, with a safe clock, after 10 s of sound and light.
 - The datum of the garden: one place on the mower, `MOWBITE_DATUM_LAT`, `_LONG`, `_HEIGHT` (Tron `/etc/mowbite/os.conf`,
   NX60i the environment of the compose file), handed to the GNSS node as launch arguments `datum_*` after every
   parameter file. Without a datum no pose is published.
@@ -341,6 +345,7 @@ Around `mowbite_camera`:
 - [ ] Fake board, contract test passes, the start test too where the driver has a start time
 - [ ] Geometry file and platform file, inherited values checked
 - [ ] `gnss_receiver_time` only with UTC from the receiver; `rtc` of `mowbite_clock` only after the measurement
+- [ ] `allowed` of `mowbite_schedule` only after the gates of the schedule
 - [ ] Start file, driver restarts latched
 - [ ] Every node of your own in the container attached to the watch (`test_stack.py`)
 - [ ] Simulation: mowing, going home, docking; `app_interface_check`

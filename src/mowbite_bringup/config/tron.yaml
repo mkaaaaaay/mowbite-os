@@ -451,3 +451,9 @@ mowbite_clock:
     # synchronization. Off until measured on the mower: the kernel writes it back, its drift over at least 3 days
     # without network, 30 days times that drift under 5 min.
     rtc: false
+
+mowbite_schedule:
+  ros__parameters:
+    # Whether plans may start the mower from the station. Off until the user turns it on after the gates (way home,
+    # pushes, incidents, stop book, safety measurement).
+    allowed: false
