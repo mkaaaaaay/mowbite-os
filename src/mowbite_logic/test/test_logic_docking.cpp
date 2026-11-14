@@ -235,9 +235,23 @@ TEST(DockingSequence, WhereATryBegins) {
   EXPECT_NEAR(leg.poses.front().x, -0.9, 1e-9);
   EXPECT_NEAR(leg.poses.back().x, -0.9 + 0.7 * std::cos(Rad(5)), 1e-9);
   EXPECT_NEAR(Angle(leg.poses.back().heading), Rad(5), 1e-9);
+  // Facing the station on the line: backwards out, away from it, at most at the docking speed.
+  leg = docking.FirstLeg(-0.9, 0.1, M_PI + Rad(5));
+  EXPECT_EQ(leg.kind, DockingLeg::Kind::kOut);
+  EXPECT_TRUE(leg.reverse);
+  EXPECT_DOUBLE_EQ(leg.speed, 0.1);
+  EXPECT_NEAR(leg.poses.back().x, -0.9 + 0.7 * std::cos(Rad(5)), 1e-9);
+  EXPECT_NEAR(Angle(leg.poses.back().heading - M_PI - Rad(5)), 0.0, 1e-9);
+  for (const auto& p : leg.poses) EXPECT_GE(p.x, -0.9 - 1e-9);
+  // Facing across the line it does not drive straight from there: the approach.
+  EXPECT_TRUE(docking.OnLine(-0.9, 0.1, Rad(19)));
+  EXPECT_TRUE(docking.OnLine(-0.9, 0.1, M_PI - Rad(19)));
+  EXPECT_FALSE(docking.OnLine(-0.9, 0.1, Rad(21)));
+  EXPECT_FALSE(docking.OnLine(-0.9, 0.1, M_PI + Rad(21)));
+  EXPECT_EQ(docking.FirstLeg(-0.9, 0.1, Rad(90)).kind, DockingLeg::Kind::kApproach);
   // Beside the line or past the station it is no try from the line.
-  EXPECT_FALSE(docking.OnLine(-0.9, 0.4));
-  EXPECT_FALSE(docking.OnLine(-1.3, 0.0));
+  EXPECT_FALSE(docking.OnLine(-0.9, 0.4, 0.0));
+  EXPECT_FALSE(docking.OnLine(-1.3, 0.0, 0.0));
 }
 
 TEST(DockingSequence, WithTheContactsInFrontForwardsOnAndBackwardsOut) {
@@ -269,23 +283,30 @@ TEST(DockingSequence, WithTheContactsInFrontForwardsOnAndBackwardsOut) {
   EXPECT_NEAR(leg.poses.back().y, 0.1 + 0.7 * std::sin(Rad(5)), 1e-9);
   EXPECT_NEAR(Angle(leg.poses.back().heading - M_PI - Rad(5)), 0.0, 1e-9);
   EXPECT_TRUE(InsideRing(leg.corridor, -0.9, 0.1));
+  // Facing away from the station on the line: forwards out, never backwards into it.
+  leg = docking.FirstLeg(-0.9, 0.0, 0.0);
+  EXPECT_EQ(leg.kind, DockingLeg::Kind::kOut);
+  EXPECT_FALSE(leg.reverse);
+  EXPECT_DOUBLE_EQ(leg.speed, 0.15);
+  EXPECT_NEAR(leg.poses.back().x, -0.2, 1e-9);
+  for (const auto& p : leg.poses) EXPECT_GE(p.x, -0.9 - 1e-9);
 }
 
 TEST(DockingSequence, TheWayOffTheStation) {
   UndockConfig out;
   DockConfig dock;
   // Forwards at the speed of undocking.
-  UndockPath path = PlanLeave(0.0, 0.0, 0.0, true, out, dock);
+  UndockPath path = PlanLeave(0.0, 0.0, 0.0, false, out, dock);
   EXPECT_FALSE(path.reverse);
   EXPECT_DOUBLE_EQ(path.speed, 0.15);
   EXPECT_NEAR(path.poses.back().x, 0.8, 1e-9);
   // Backwards at most at the docking speed, also where undocking would be slower.
-  path = PlanLeave(0.0, 0.0, 0.0, false, out, dock);
+  path = PlanLeave(0.0, 0.0, 0.0, true, out, dock);
   EXPECT_TRUE(path.reverse);
   EXPECT_DOUBLE_EQ(path.speed, 0.1);
   EXPECT_NEAR(path.poses.back().x, -0.8, 1e-9);
   out.speed = 0.05;
-  EXPECT_DOUBLE_EQ(PlanLeave(0.0, 0.0, 0.0, false, out, dock).speed, 0.05);
+  EXPECT_DOUBLE_EQ(PlanLeave(0.0, 0.0, 0.0, true, out, dock).speed, 0.05);
 }
 
 TEST(DockingSequence, TheGateChecksSideHeadingAndAccuracy) {
@@ -574,6 +595,20 @@ TEST(Docking, MissingTheGateDrivesOutAndTriesAgain) {
   EXPECT_NE(retry["message"].get<std::string>().find("0.030 m beside the line"), std::string::npos) << retry;
   // From the approach point straight onto the line again.
   Take(core, DockingLeg::Kind::kLine);
+}
+
+TEST(Docking, AFailedTryFacingAcrossTheLineDoesNotDriveOut) {
+  TestCore core = AtTheGate();
+  // Turned 30 degrees at the gate: no straight way out from there, the try counts at once and the next one begins
+  // with the approach.
+  core.OnPose(PoseAt(-0.74, 0.0, Rad(30)));
+  core.TakeEvents();
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(Types(events), (std::vector<std::string>{"DOCKING_RETRY"}));
+  EXPECT_NE(events[0].details["message"].get<std::string>().find("faced 30.0 deg off"), std::string::npos)
+      << events[0].details;
+  Take(core, DockingLeg::Kind::kApproach);
 }
 
 TEST(Docking, AfterTheLastRetryItFailsAtTheApproachPoint) {

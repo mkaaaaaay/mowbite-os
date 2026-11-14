@@ -162,7 +162,7 @@ void LogicCore::NextDockingTry() {
     return;
   }
   // A failed try is counted at once where the mower does not drive out first.
-  if (docking_failure_ && !docking_.OnLine(pose_->x, pose_->y)) {
+  if (docking_failure_ && !docking_.OnLine(pose_->x, pose_->y, pose_->heading)) {
     CountDockingFailure(*docking_failure_);
     return;
   }
@@ -337,7 +337,7 @@ void LogicCore::DockingWithoutPlanner(const Reason& silent) {
 void LogicCore::DockingTryFailed(const Reason& why) {
   Notify(why.message);
   // Out to the approach point first; the try counts once the mower got there.
-  if (pose_ && docking_last_kind_ != DockingLeg::Kind::kOut && docking_.OnLine(pose_->x, pose_->y)) {
+  if (pose_ && docking_last_kind_ != DockingLeg::Kind::kOut && docking_.OnLine(pose_->x, pose_->y, pose_->heading)) {
     docking_failure_ = why;
     SetDockingLeg(docking_.Out(pose_->x, pose_->y, pose_->heading));
     return;

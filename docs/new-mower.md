@@ -81,7 +81,7 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   `imu_pitch`. Without `platform` or a number the start stops. `dock_contact_x` says where the charging contacts are:
   below 0 at the back (the mower backs onto the station and leaves it forwards), above 0 in front (forwards onto it,
   straight back off it, never faster than `docking_speed`; the safety filter cuts every reversing of the follower to
-  0.12 m/s), 0 none (no docking, `docking.start` answers NO_CHARGE_CONTACTS). Set `contact_speed` and `dock_overshoot`
+  0.12 m/s), 0 none (no docking, `docking.start` is not offered). Set `contact_speed` and `dock_overshoot`
   to how late the board reports the contact (`nx60i.yaml`).
 - The dock marker, under `/**` of the platform file (one place for all nodes): `dock_marker` [x, y, yaw], the marker
   in base_link while the mower stands docked (m, rad, the direction its front faces), `marker_blind_distance` (m

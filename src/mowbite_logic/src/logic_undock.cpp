@@ -137,7 +137,7 @@ void LogicCore::StartUndocking(DockCheck purpose, double x, double y) {
     // The hardware charges by itself and cannot stop it: straight to the path.
     Notify("Undocking: " + Metres(config_.undock.distance) + " m " + LeaveWords());
     undock_step_ = UndockStep::kDrive;
-    Replace(PlanLeave(undock_x_, undock_y_, undock_heading_, ContactsBack(), config_.undock, config_.dock));
+    Replace(PlanLeave(undock_x_, undock_y_, undock_heading_, !ContactsBack(), config_.undock, config_.dock));
   }
   SetState(State::kUndocking);
   if (purpose == DockCheck::kMowing) SetRunPhase(RunPhase::kUndocking);
@@ -163,7 +163,7 @@ void LogicCore::OnChargeOff(bool ok, const std::string& message) {
     return;
   }
   undock_step_ = UndockStep::kDrive;
-  Replace(PlanLeave(undock_x_, undock_y_, undock_heading_, ContactsBack(), config_.undock, config_.dock));
+  Replace(PlanLeave(undock_x_, undock_y_, undock_heading_, !ContactsBack(), config_.undock, config_.dock));
 }
 
 void LogicCore::StopUndocking(const std::optional<Reason>& failure, const Reason& why) {

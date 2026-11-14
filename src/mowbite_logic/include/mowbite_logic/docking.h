@@ -64,9 +64,9 @@ struct DockingLeg {
 
 const char* DockingLegName(DockingLeg::Kind kind);
 
-// The way off the station from base_link at (x, y) facing heading, straight against the way in: forwards with the
-// contacts at the back, else backwards at most at the docking speed (G40).
-UndockPath PlanLeave(double x, double y, double heading, bool contacts_back, UndockConfig out, const DockConfig& dock);
+// The straight way from base_link at (x, y) along its heading, forwards or backwards; backwards at most at the docking
+// speed (G41).
+UndockPath PlanLeave(double x, double y, double heading, bool reverse, UndockConfig out, const DockConfig& dock);
 
 // The geometry and the tries of one docking, without ROS. LogicCore decides which leg comes next.
 class DockingSequence {
@@ -81,9 +81,9 @@ class DockingSequence {
   // m from the approach point along the way in (towards the station), and across it (left positive).
   double Along(double x, double y) const;
   double Across(double x, double y) const;
-  // Whether base_link stands on the line between the approach point and the station, where a try begins by driving
-  // out to the approach point.
-  bool OnLine(double x, double y) const;
+  // Whether base_link stands on the line between the approach point and the station facing along it either way, where
+  // a try begins by driving straight out to the approach point.
+  bool OnLine(double x, double y, double heading) const;
 
   // The first leg of a try from base_link at (x, y) facing heading: out to the approach point from the line, the line
   // from the approach point, else the approach over the drivable areas.

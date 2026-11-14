@@ -14,10 +14,11 @@ constexpr double kLineEndTolerance = 0.02;
 // m before its end, 0.05 m past the station, where the contact leg is done without contact.
 constexpr double kContactEndTolerance = 0.005;
 // A try begins by driving out when base_link stands at most kOnLineAcross m beside the line, more than kOutMin m past
-// the approach point and at most kOutMin m past the end of the line. Within kOutMin of the approach point there is no
-// straight way to drive.
+// the approach point and at most kOutMin m past the end of the line, facing along the line within kOnLineAngle either
+// way. Within kOutMin of the approach point there is no straight way to drive.
 constexpr double kOutMin = 0.1;
 constexpr double kOnLineAcross = 0.3;
+constexpr double kOnLineAngle = 20.0 * M_PI / 180.0;
 // Within kOutMin of the approach point and facing within this of the way the mower faces on the station, a try begins
 // with the line: the follower starts it without turning on the spot.
 constexpr double kAtApproachHeading = 20.0 * M_PI / 180.0;
@@ -39,9 +40,9 @@ const char* DockingLegName(DockingLeg::Kind kind) {
   }
 }
 
-UndockPath PlanLeave(double x, double y, double heading, bool contacts_back, UndockConfig out, const DockConfig& dock) {
-  if (!contacts_back) out.speed = std::min(out.speed, dock.speed);
-  return PlanUndock(x, y, heading, !contacts_back, out);
+UndockPath PlanLeave(double x, double y, double heading, bool reverse, UndockConfig out, const DockConfig& dock) {
+  if (reverse) out.speed = std::min(out.speed, dock.speed);
+  return PlanUndock(x, y, heading, reverse, out);
 }
 
 DockingSequence::DockingSequence(const DockConfig& config, const UndockConfig& out, const DockPose& station,
@@ -67,14 +68,15 @@ double DockingSequence::Across(double x, double y) const {
   return (y - a.y) * std::cos(station_.heading) - (x - a.x) * std::sin(station_.heading);
 }
 
-bool DockingSequence::OnLine(double x, double y) const {
+bool DockingSequence::OnLine(double x, double y, double heading) const {
   const double along = Along(x, y);
   return along > kOutMin && along <= config_.approach_distance + config_.overshoot + kOutMin &&
-         std::abs(Across(x, y)) <= kOnLineAcross;
+         std::abs(Across(x, y)) <= kOnLineAcross &&
+         std::abs(std::sin(heading - station_.heading)) <= std::sin(kOnLineAngle);
 }
 
 DockingLeg DockingSequence::FirstLeg(double x, double y, double heading) const {
-  if (OnLine(x, y)) return Out(x, y, heading);
+  if (OnLine(x, y, heading)) return Out(x, y, heading);
   if (std::abs(Along(x, y)) <= kOutMin && std::abs(Across(x, y)) <= kOutMin &&
       std::abs(Normalize(heading - facing_)) < kAtApproachHeading) {
     return Line();
@@ -91,11 +93,12 @@ DockingLeg DockingSequence::Approach() const {
 }
 
 DockingLeg DockingSequence::Out(double x, double y, double heading) const {
-  // Straight along the way it faces, as far as the approach point lies along the line: the line onto the station then
-  // steers it back onto it.
+  // Straight along the way it faces, away from the station whichever way it faces: backwards where it faces the way
+  // in. As far as the approach point lies along the line, which then steers it back onto it.
   UndockConfig out = out_;
   out.distance = std::max(Along(x, y), kPoseSpacing);
-  const UndockPath path = PlanLeave(x, y, heading, contacts_back_, out, config_);
+  const bool reverse = std::cos(heading - station_.heading) > 0;
+  const UndockPath path = PlanLeave(x, y, heading, reverse, out, config_);
   DockingLeg leg;
   leg.kind = DockingLeg::Kind::kOut;
   leg.poses = path.poses;

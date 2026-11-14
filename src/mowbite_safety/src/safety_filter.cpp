@@ -15,7 +15,7 @@ constexpr double kRadToDeg = 180.0 / M_PI;
 // s between two requests of a latch that hw/status does not show yet.
 constexpr double kLatchResend = 1.0;
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-// m/s the follower may reverse at most, whatever the driver allows: nothing watches behind the mower (G40).
+// m/s the follower may reverse at most, whatever the driver allows: nothing watches behind the mower (G41).
 constexpr double kFollowerMaxReverse = 0.12;
 
 std::string Format(const char* format, double a, double b = 0, double c = 0) {

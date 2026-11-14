@@ -240,7 +240,7 @@ TEST(Undock, WithTheContactsInFrontTheMowerLeavesBackwards) {
     EXPECT_NEAR(p.y, 0.0, 1e-9);
     EXPECT_NEAR(std::remainder(p.heading - M_PI, 2 * M_PI), 0.0, 1e-9);
   }
-  // Backwards at most at the docking speed (G40).
+  // Backwards at most at the docking speed (G41).
   EXPECT_DOUBLE_EQ(path.speed, 0.1);
   EXPECT_TRUE(InsideRing(path.corridor, kStartX, 0.0));
   Out(core);
