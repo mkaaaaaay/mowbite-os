@@ -13,11 +13,12 @@ namespace mowbite_localization {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockConfig, noise, marker_x, marker_y, marker_yaw, max_age, start_images,
                                    hint_hold, hint_sigma, position_chi2, yaw_chi2, min_outlier, min_outlier_yaw,
-                                   outlier_reset, good_way, good_time, blind_distance, final_way, final_time)
+                                   outlier_reset, good_way, good_time, blind_distance, final_way, final_time,
+                                   yaw_move_way, yaw_move_turn)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Motion, time, distance, turn, gyro_time, still)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(MarkerImage, time, x, y, yaw, yaw_valid, covariance)
 
-static_assert(sizeof(DockConfig) == 152);
+static_assert(sizeof(DockConfig) == 168);
 static_assert(sizeof(Motion) == 40);
 static_assert(sizeof(MarkerImage) == 112);
 

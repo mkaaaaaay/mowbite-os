@@ -61,7 +61,7 @@ bool Estimator::AddImu(double t, double rate) {
   speed_ = speed;
   turn_rate_ = bias_.Corrected(rate);
   gyro_heading_ = WrapAngle(gyro_heading_ + turn_rate_ * dt);
-  motion_ = Motion{t, speed * dt, turn_rate_ * dt, bias_.holding() ? 0.0 : dt, bias_.holding()};
+  motion_ = Motion{t, speed * dt, turn_rate_ * dt, bias_.holding() ? 0.0 : dt, still};
   filter_.Predict(motion_.distance, motion_.turn, motion_.gyro_time);
   accuracy_.OnDistance(motion_.distance);
   Remember(t);

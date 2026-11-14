@@ -49,10 +49,11 @@ class DockWorld {
     image.x = c * dx + s * dy + sigma * noise_(rng_);
     image.y = -s * dx + c * dy + sigma * noise_(rng_);
     image.yaw_valid = yaw_valid;
-    image.yaw = yaw_valid ? WrapAngle(m(2) - heading + yaw_sigma * noise_(rng_)) : 0.0;
+    image.yaw = yaw_valid ? WrapAngle(m(2) - heading + yaw_bias + yaw_sigma * noise_(rng_)) : 0.0;
     const double variance = std::max(sigma * sigma, 1e-6);
+    const double yaw_spread = yaw_reported > 0.0 ? yaw_reported : yaw_sigma;
     image.covariance = {variance, 0.0, 0.0, 0.0, variance, 0.0, 0.0, 0.0,
-                        yaw_valid ? std::max(yaw_sigma * yaw_sigma, 1e-6) : 0.0};
+                        yaw_valid ? std::max(yaw_spread * yaw_spread, 1e-6) : 0.0};
     return image;
   }
 
@@ -97,6 +98,9 @@ class DockWorld {
   double y = 0.0;
   double heading = M_PI;
   bool yaw_valid = true;
+  // The error of the direction that stays at one place, and the spread an image reports (0: that of its noise).
+  double yaw_bias = 0.0;
+  double yaw_reported = 0.0;
   double image_period = 0.1;
   double delay = 0.0;
   std::vector<MarkerResult> results;
@@ -135,7 +139,67 @@ TEST(DockEstimator, StartsAtRestFromTenImagesWithTheirDirection) {
   EXPECT_LT(std::abs(w.HeadingError()), 1.0 * kDeg);
   EXPECT_TRUE(w.est.Good(w.t));
   EXPECT_LT(w.est.PositionAccuracy(w.t), 0.03);
-  EXPECT_LT(w.est.HeadingAccuracy(), 1.0 * kDeg);
+  EXPECT_NEAR(w.est.HeadingAccuracy(), 1.0 * kDeg, 1e-9) << "the spread of one image, not of ten";
+}
+
+TEST(DockEstimator, ImagesOfOnePlaceAreOneHeading) {
+  // 4 degrees off at this place, 0.1 degrees from image to image, 3.5 degrees reported (as measured 13./14.11.).
+  DockWorld w;
+  w.yaw_bias = 4.0 * kDeg;
+  w.yaw_reported = 3.5 * kDeg;
+  w.Settle();
+  w.Run(1.0, 0.0, 0.0, true, 0.003, 0.1 * kDeg);
+  ASSERT_TRUE(w.est.has_estimate());
+  EXPECT_NEAR(w.HeadingError(), -4.0 * kDeg, 0.2 * kDeg);
+  EXPECT_NEAR(w.est.HeadingAccuracy(), 3.5 * kDeg, 1e-9);
+  // Standing, more images of the same place neither correct the heading nor make it surer.
+  w.Run(10.0, 0.0, 0.0, true, 0.003, 0.1 * kDeg);
+  EXPECT_EQ(w.est.yaw_fixes(), 0);
+  EXPECT_GE(w.est.HeadingAccuracy(), 3.5 * kDeg * 0.999);
+  EXPECT_LE(std::abs(w.HeadingError()), 3.0 * w.est.HeadingAccuracy());
+  for (MarkerResult result : w.results) EXPECT_NE(result, MarkerResult::kOutlier);
+}
+
+TEST(DockEstimator, ADirectionCountsOnlyAfterTheMowerMoved) {
+  DockConfig config = TronConfig();
+  // A gyro this noisy makes the heading less sure than an image while driving.
+  config.noise.gyro = 0.05;
+  DockWorld w(config);
+  w.yaw_reported = 2.0 * kDeg;
+  w.Settle();
+  w.Run(1.0, 0.0, 0.0, true, 0.003, 0.1 * kDeg);
+  ASSERT_TRUE(w.est.has_estimate());
+  w.Run(0.4, -0.1, 0.0, true, 0.003, 0.1 * kDeg);
+  EXPECT_EQ(w.est.yaw_fixes(), 0) << "0.04 m since the start";
+  w.Run(0.2, -0.1, 0.0, true, 0.003, 0.1 * kDeg);
+  EXPECT_EQ(w.est.yaw_fixes(), 1);
+  w.Run(0.3, -0.1, 0.0, true, 0.003, 0.1 * kDeg);
+  EXPECT_EQ(w.est.yaw_fixes(), 1) << "0.03 m since the last one";
+  // Turning 2 degrees on the spot counts as well.
+  w.Run(0.2, 0.0, 0.2, true, 0.003, 0.1 * kDeg);
+  EXPECT_EQ(w.est.yaw_fixes(), 2);
+}
+
+TEST(DockEstimator, ABiasThatChangesWithThePlaceStaysWithinTheReportedSpread) {
+  for (const double amplitude : {3.5, 6.0}) {
+    DockWorld w;
+    w.yaw_reported = 3.0 * kDeg;
+    w.yaw_bias = amplitude * kDeg;
+    w.Settle();
+    w.Run(1.0, 0.0, 0.0, true, 0.003, 0.1 * kDeg);
+    ASSERT_TRUE(w.est.has_estimate());
+    double worst = 0.0;
+    for (int i = 0; i < 70; ++i) {
+      // Changes slowly along the way in: a different error every few cm, 0.1 degrees from image to image.
+      w.yaw_bias = amplitude * kDeg * std::cos(10.0 * (w.x + 0.8));
+      w.Run(0.1, -0.1, 0.0, true, 0.003, 0.1 * kDeg);
+      worst = std::max(worst, std::abs(w.HeadingError()) / w.est.HeadingAccuracy());
+      ASSERT_TRUE(w.est.has_estimate()) << amplitude << " " << i;
+    }
+    for (MarkerResult result : w.results) EXPECT_NE(result, MarkerResult::kDropped) << amplitude;
+    EXPECT_LE(worst, 3.0) << amplitude;
+    EXPECT_LE(w.PositionError(), 3.0 * w.est.PositionAccuracy(w.t)) << amplitude;
+  }
 }
 
 TEST(DockEstimator, TheStartImagesAgreeInARow) {

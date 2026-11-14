@@ -20,9 +20,9 @@ struct DockConfig {
   double marker_yaw = 0.0;
   // An image older than max_age s when it arrives is dropped.
   double max_age = 0.3;
-  // The start, at rest, takes the last start_images images in a row that agree with each other: the heading from their
-  // directions if all have one, else from a hint of the logic at most hint_hold s old with hint_sigma rad, else there
-  // is no estimate.
+  // The start, at rest, takes the last start_images images in a row that agree with each other: the heading from the
+  // median of their directions with the spread of one image if all have one, else from a hint of the logic at most
+  // hint_hold s old with hint_sigma rad, else there is no estimate.
   int start_images = 10;
   double hint_hold = 3.0;
   double hint_sigma = 5.0 * M_PI / 180.0;
@@ -42,6 +42,11 @@ struct DockConfig {
   double blind_distance = 0.07;
   double final_way = 0.14;
   double final_time = 12.0;
+  // The direction of the marker errs by degrees that stay put at one place of the mower (measured 13./14.11.), so the
+  // images of one place are one heading measurement: a direction counts only yaw_move_way m or yaw_move_turn rad after
+  // the last one that counted, and never pulls the spread of the heading below that of its image.
+  double yaw_move_way = 0.05;
+  double yaw_move_turn = 2.0 * M_PI / 180.0;
 };
 
 // One image of the marker: when it was taken (s, the clock of the motions), its centre in base_link (m), the direction
@@ -84,6 +89,8 @@ class DockEstimator {
   bool has_estimate() const { return estimate_; }
   // The start took its heading from the hint.
   bool heading_from_hint() const { return from_hint_; }
+  // Directions of the marker that corrected the heading since the start.
+  int yaw_fixes() const { return yaw_fixes_; }
   Pose2 pose() const;
   const Covariance& covariance() const { return filter_.covariance(); }
   bool Good(double t) const;
@@ -102,6 +109,8 @@ class DockEstimator {
   // Where the marker is in the station frame.
   State Marker() const;
   bool TryStart(double t);
+  bool YawMoved() const;
+  void FuseYaw(double innovation, double variance);
   bool Outlier(const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian, const Eigen::Matrix2d& noise,
                std::optional<double> yaw_innovation, double yaw_variance) const;
   void Drop();
@@ -119,6 +128,13 @@ class DockEstimator {
   std::optional<double> hint_offset_;
   double hint_time_ = 0.0;
   int outliers_ = 0;
+  // An image went into the estimate since the mower stands.
+  bool rest_fused_ = false;
+  // The last direction that counted: whether there is one, and the way and the gyro heading then.
+  bool yaw_used_ = false;
+  double yaw_way_ = 0.0;
+  double yaw_gyro_ = 0.0;
+  int yaw_fixes_ = 0;
   // The image of the last fix: when it was taken, the way and x in the station frame then.
   double fix_time_ = 0.0;
   double fix_way_ = 0.0;

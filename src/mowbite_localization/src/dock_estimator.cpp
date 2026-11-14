@@ -3,6 +3,7 @@
 #include <Eigen/Cholesky>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "mowbite_localization/position_accuracy.h"
 
@@ -63,6 +64,7 @@ void DockEstimator::AddMotion(const Motion& motion) {
   if (!motion.still) {
     still_since_.reset();
     start_.clear();
+    rest_fused_ = false;
   } else if (!still_since_) {
     still_since_ = motion.time;
   }
@@ -103,11 +105,15 @@ MarkerResult DockEstimator::AddMarker(const MarkerImage& image, double t) {
   const State marker = Marker();
   const Moment* found = history_.At(image.time);
   const Moment then = found ? *found : Moment{image.time, filter_.state(), way_};
-  const Eigen::Vector2d lever(image.x, image.y);
-  const Eigen::Vector2d innovation = marker.head<2>() - AntennaPosition(then.state, lever);
-  const AntennaJacobian jacobian = AntennaPositionJacobian(then.state, lever);
-  const Eigen::Matrix2d rotation = Rotation(then.state(2));
-  const Eigen::Matrix2d noise = rotation * PositionCovariance(image) * rotation.transpose();
+  // The marker as base_link sees it: R(heading)^T (marker - position). The Jacobian comes from the state, not from the
+  // noisy image, so that images of one place tell nothing about the heading.
+  const Eigen::Vector2d to_marker = marker.head<2>() - then.state.head<2>();
+  const Eigen::Matrix2d turned = Rotation(then.state(2)).transpose();
+  const Eigen::Vector2d innovation = Eigen::Vector2d(image.x, image.y) - turned * to_marker;
+  AntennaJacobian jacobian;
+  jacobian.leftCols<2>() = -turned;
+  jacobian.col(2) = Rotation(then.state(2) + 0.5 * M_PI).transpose() * to_marker;
+  const Eigen::Matrix2d noise = PositionCovariance(image);
   std::optional<double> yaw_innovation;
   if (image.yaw_valid) yaw_innovation = WrapAngle(marker(2) - image.yaw - then.state(2));
   if (Outlier(innovation, jacobian, noise, yaw_innovation, image.covariance[8])) {
@@ -116,16 +122,19 @@ MarkerResult DockEstimator::AddMarker(const MarkerImage& image, double t) {
     return MarkerResult::kDropped;
   }
   outliers_ = 0;
-  State before = filter_.state();
-  filter_.UpdatePosition(innovation, jacobian, noise);
-  history_.Shift(before, filter_.state());
-  if (yaw_innovation) {
-    // Against the moment as the position fix just moved it.
-    const Moment* moved = history_.At(image.time);
-    const double heading_then = moved ? moved->state(2) : filter_.state()(2);
-    before = filter_.state();
-    filter_.UpdateHeading(WrapAngle(marker(2) - image.yaw - heading_then), image.covariance[8]);
+  // Standing, the first image is the measurement of this place; the next ones only confirm it. Fused they would
+  // add no knowledge but feed the error of the linearization back from image to image.
+  if (!still_since_ || !rest_fused_) {
+    rest_fused_ = still_since_.has_value();
+    const State before = filter_.state();
+    filter_.UpdatePosition(innovation, jacobian, noise);
     history_.Shift(before, filter_.state());
+    if (yaw_innovation && YawMoved()) {
+      // Against the moment as the position fix just moved it.
+      const Moment* moved = history_.At(image.time);
+      const double heading_then = moved ? moved->state(2) : filter_.state()(2);
+      FuseYaw(WrapAngle(marker(2) - image.yaw - heading_then), image.covariance[8]);
+    }
   }
   if (image.time >= fix_time_) {
     fix_time_ = image.time;
@@ -134,6 +143,24 @@ MarkerResult DockEstimator::AddMarker(const MarkerImage& image, double t) {
     fix_x_ = now_then ? now_then->state(0) : filter_.state()(0);
   }
   return MarkerResult::kFused;
+}
+
+bool DockEstimator::YawMoved() const {
+  return !yaw_used_ || way_ - yaw_way_ >= config_.yaw_move_way ||
+         std::abs(WrapAngle(gyro_heading_ - yaw_gyro_)) >= config_.yaw_move_turn;
+}
+
+void DockEstimator::FuseYaw(double innovation, double variance) {
+  const double spread = filter_.covariance()(2, 2);
+  // A heading known better than one image keeps it; else the fix leaves exactly the spread of the image.
+  if (spread - variance <= 1e-12) return;
+  const State before = filter_.state();
+  filter_.UpdateHeading(innovation, spread * variance / (spread - variance));
+  history_.Shift(before, filter_.state());
+  yaw_used_ = true;
+  yaw_way_ = way_;
+  yaw_gyro_ = gyro_heading_;
+  yaw_fixes_++;
 }
 
 bool DockEstimator::Outlier(const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian,
@@ -157,24 +184,26 @@ bool DockEstimator::TryStart(double t) {
   const State marker = Marker();
   Eigen::Vector2d lever = Eigen::Vector2d::Zero();
   Eigen::Matrix2d lever_covariance = Eigen::Matrix2d::Zero();
-  double sin_sum = 0.0;
-  double cos_sum = 0.0;
-  double yaw_variance = 0.0;
+  // Headings around that of the first image, and the variances of the directions.
+  const double first = marker(2) - start_.front().yaw;
+  std::vector<double> headings;
+  std::vector<double> variances;
   bool all_yaw = true;
   for (const MarkerImage& image : start_) {
     lever += Eigen::Vector2d(image.x, image.y) / count;
     lever_covariance += PositionCovariance(image) / count;
     all_yaw = all_yaw && image.yaw_valid;
-    sin_sum += std::sin(marker(2) - image.yaw);
-    cos_sum += std::cos(marker(2) - image.yaw);
-    yaw_variance += image.covariance[8] / count;
+    headings.push_back(WrapAngle(marker(2) - image.yaw - first));
+    variances.push_back(image.covariance[8]);
   }
   double heading = 0.0;
   double heading_variance = 0.0;
   if (all_yaw) {
-    // The mean of independent images.
-    heading = std::atan2(sin_sum, cos_sum);
-    heading_variance = yaw_variance / count;
+    // Images of one place share the error of their direction: the median, as good as one image.
+    std::nth_element(headings.begin(), headings.begin() + count / 2, headings.end());
+    std::nth_element(variances.begin(), variances.begin() + count / 2, variances.end());
+    heading = WrapAngle(first + headings[count / 2]);
+    heading_variance = variances[count / 2];
   } else if (hint_offset_ && t - hint_time_ <= config_.hint_hold) {
     heading = WrapAngle(*hint_offset_ + gyro_heading_);
     heading_variance = config_.hint_sigma * config_.hint_sigma;
@@ -194,6 +223,11 @@ bool DockEstimator::TryStart(double t) {
   filter_.Reset(State(position(0), position(1), heading), covariance);
   estimate_ = true;
   from_hint_ = !all_yaw;
+  yaw_used_ = all_yaw;
+  rest_fused_ = true;
+  yaw_way_ = way_;
+  yaw_gyro_ = gyro_heading_;
+  yaw_fixes_ = 0;
   outliers_ = 0;
   fix_time_ = start_.back().time;
   fix_way_ = way_;
