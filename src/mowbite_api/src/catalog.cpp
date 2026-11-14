@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <iterator>
 #include <map>
 #include <string>
 
@@ -773,6 +774,31 @@ const std::vector<Method>& Methods() {
               {Text("part", "Its key", true, {"blade", "clean"}),
                Whole("hours", "h", 1, kStatsMaxDueHours, "Blade hours")}),
        StatsAnswer(), ""},
+      {"sensors.history", "mowbite_stats",
+       "Min, mean and max of the number sensors per step over the last " + std::to_string(kSensorsHistoryHours) +
+           " h; the answer stays below " + std::to_string(kSensorsHistoryMaxAnswerBytes) +
+           " bytes: the step grows to 300 or 900, then the oldest points go",
+       Object("params", "None: all number sensors over the last " + std::to_string(kSensorsHistoryHours) + " h",
+              {Client(), List("sensor_ids", "Sensor ids, none for all; ids the history does not know are left out",
+                              Type::kString, false),
+               Count("from", "unix s", "Points from the one that holds this time on; none for " +
+                                           std::to_string(kSensorsHistoryHours) + " h before to"),
+               Count("to", "unix s", "Points that begin up to then, the one going on included; none for now"),
+               Whole("step", "s", 1, std::end(kSensorsHistorySteps)[-1], "At least so long a point: 60, 300 or 900", false)},
+              false),
+       Object("result", "The history",
+              {Whole("step", "s", kSensorsHistorySteps[0], std::end(kSensorsHistorySteps)[-1], "The step taken: 60, 300 or 900"),
+               UnixTime("from", "The points from then on: from rounded down to the step, later when truncated"),
+               UnixTime("to", "The points that begin up to then"),
+               Bool("truncated", "The oldest points were left out to keep the answer small"),
+               Rows("sensors", "Each number sensor asked for that is recorded now or has values kept, by sensor_id",
+                    {Text("sensor_id", "Id of x-sensors or of the platform"), Text("name", "Name to show"),
+                     Text("unit", "Unit of the values, empty for none"),
+                     List("points",
+                          "[t, min, avg, max] per step with values, oldest first: t its start in unix s, avg "
+                          "weighted by the values in it; a step without values is left out",
+                          Type::kArray)})}),
+       ""},
       {"notify.get", "mowbite_net", "The settings of the pushes; of the token only whether there is one", NoParams(),
        NotifyAnswer(), ""},
       {"notify.set", "mowbite_net",

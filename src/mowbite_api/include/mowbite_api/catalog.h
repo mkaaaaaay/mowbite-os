@@ -225,6 +225,10 @@ constexpr int kNotifyMaxPushes = 10;
 constexpr char kNotifyTopicPattern[] = "^[A-Za-z0-9_-]{0,64}$";
 constexpr int kStatsMaxDueHours = 10000;
 constexpr int kStatsMaxAnswerHours = 9000;
+// sensors.history: hours kept, the steps (s) from small to large, and the most bytes of an answer (MQTT ends at 2 MB).
+constexpr int kSensorsHistoryHours = 48;
+constexpr int kSensorsHistorySteps[] = {60, 300, 900};
+constexpr int kSensorsHistoryMaxAnswerBytes = 900000;
 // The situations of sound.list in their order.
 const std::vector<SoundSituation>& SoundSituations();
 
