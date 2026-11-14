@@ -136,7 +136,7 @@ BladeResult XcoreControl::SetBlade(const BladeRequest& request, double now, uint
     return BladeResult::kDocked;
   }
   uint16_t percent = request.speed_percent ? request.speed_percent : config_.blade_speed_percent;
-  float speed = std::min<uint16_t>(percent, 100) / 100.0f;
+  float speed = static_cast<float>(std::min<uint16_t>(percent, 100)) / 100.0f;
   if (!blade_ || blade_->speed != speed) next_blade_s_.reset();
   blade_ = BladeLease{speed, now + request.lease_s};
   blade_off_repeat_.remaining = 0;

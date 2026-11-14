@@ -124,14 +124,14 @@ std::optional<Cbor> Decoder::Item(int depth) {
       case 23:
         return Cbor::Null();
       case 25: {
-        uint64_t bits;
-        bool indefinite;
+        uint64_t bits = 0;
+        bool indefinite = false;
         if (!Argument(info, bits, indefinite)) return std::nullopt;
         return Cbor::Float(HalfToDouble(static_cast<uint16_t>(bits)));
       }
       case 26: {
-        uint64_t bits;
-        bool indefinite;
+        uint64_t bits = 0;
+        bool indefinite = false;
         if (!Argument(info, bits, indefinite)) return std::nullopt;
         uint32_t b32 = static_cast<uint32_t>(bits);
         float f;
@@ -139,8 +139,8 @@ std::optional<Cbor> Decoder::Item(int depth) {
         return Cbor::Float(f);
       }
       case 27: {
-        uint64_t bits;
-        bool indefinite;
+        uint64_t bits = 0;
+        bool indefinite = false;
         if (!Argument(info, bits, indefinite)) return std::nullopt;
         double d;
         std::memcpy(&d, &bits, sizeof(d));
@@ -150,8 +150,8 @@ std::optional<Cbor> Decoder::Item(int depth) {
         return std::nullopt;
     }
   }
-  uint64_t argument;
-  bool indefinite;
+  uint64_t argument = 0;
+  bool indefinite = false;
   if (!Argument(info, argument, indefinite)) return std::nullopt;
   switch (major) {
     case 0:
@@ -220,10 +220,10 @@ void Head(std::vector<uint8_t>& out, uint8_t major, uint64_t value) {
 void Encode(const Cbor& item, std::vector<uint8_t>& out) {
   switch (item.kind()) {
     case Cbor::Kind::kUnsigned:
-      Head(out, 0, static_cast<uint64_t>(*item.AsInt()));
+      Head(out, 0, item.unsigned_value());
       break;
     case Cbor::Kind::kNegative:
-      Head(out, 1, static_cast<uint64_t>(-1 - *item.AsInt()));
+      Head(out, 1, static_cast<uint64_t>(-1 - item.negative_value()));
       break;
     case Cbor::Kind::kBytes:
     case Cbor::Kind::kText: {
@@ -250,7 +250,7 @@ void Encode(const Cbor& item, std::vector<uint8_t>& out) {
       out.push_back(0xF6);
       break;
     case Cbor::Kind::kFloat: {
-      double d = *item.AsNumber();
+      double d = item.float_value();
       uint64_t bits;
       std::memcpy(&bits, &d, sizeof(bits));
       out.push_back(0xFB);

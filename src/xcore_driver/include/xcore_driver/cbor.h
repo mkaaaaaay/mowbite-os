@@ -48,6 +48,16 @@ class Cbor {
   bool bool_value() const {
     return bool_;
   }
+  // The stored values by kind, 0 for another kind.
+  uint64_t unsigned_value() const {
+    return unsigned_;
+  }
+  int64_t negative_value() const {
+    return negative_;
+  }
+  double float_value() const {
+    return float_;
+  }
   // The value of a map entry whose key is this text, nullptr if there is none or this is no map.
   const Cbor* Find(const std::string& key) const;
 

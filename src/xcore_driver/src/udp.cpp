@@ -9,7 +9,8 @@
 #include <unistd.h>
 
 #include <cerrno>
-#include <cstring>
+
+#include "mowbite_hold/file_io.h"
 
 namespace xcore {
 
@@ -71,18 +72,18 @@ bool UdpSocket::Bind(uint32_t ip, uint16_t port, bool reuse, std::string& error)
   Close();
   fd_ = ::socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
   if (fd_ < 0) {
-    error = std::strerror(errno);
+    error = mowbite_hold::ErrorText(errno);
     return false;
   }
   int one = 1;
   if (reuse && ::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) != 0) {
-    error = std::strerror(errno);
+    error = mowbite_hold::ErrorText(errno);
     Close();
     return false;
   }
   sockaddr_in addr = Address(ip, port);
   if (::bind(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-    error = std::strerror(errno);
+    error = mowbite_hold::ErrorText(errno);
     Close();
     return false;
   }
@@ -97,7 +98,7 @@ bool UdpSocket::JoinGroup(const std::string& group, uint32_t interface_ip, std::
   }
   request.imr_interface.s_addr = htonl(interface_ip);
   if (::setsockopt(fd_, IPPROTO_IP, IP_ADD_MEMBERSHIP, &request, sizeof(request)) != 0) {
-    error = std::strerror(errno);
+    error = mowbite_hold::ErrorText(errno);
     return false;
   }
   return true;

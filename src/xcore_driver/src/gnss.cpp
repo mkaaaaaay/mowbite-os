@@ -53,6 +53,8 @@ std::optional<GnssSolution> DecodeGnss(const std::vector<Output>& outputs) {
         }
         break;
       }
+      default:
+        break;
     }
   }
   if (!has_position) return std::nullopt;

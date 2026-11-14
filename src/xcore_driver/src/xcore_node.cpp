@@ -184,7 +184,7 @@ class XcoreNode : public rclcpp::Node {
     // Started again by the launch after the last driver ended: it took the board without a latch (M4), so this one
     // holds it from the first frame until a release by the app or a key.
     if (declare_parameter("start_latched", false)) {
-      io_->LatchEmergency(xcore::kReasonHighLevel);
+      Io().LatchEmergency(xcore::kReasonHighLevel);
       RCLCPP_WARN(get_logger(), "Started again after the last driver ended: emergency latched from the first frame on, "
                   "motion and blade wait for a release");
     }
@@ -195,30 +195,32 @@ class XcoreNode : public rclcpp::Node {
     PollHold();
 
     cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-        "hw/cmd_vel", 10, [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) {
-          io_->OnCmdVel(msg->linear.x, msg->angular.z);
+        "hw/cmd_vel", 10, [this](const geometry_msgs::msg::Twist::ConstSharedPtr& msg) {
+          Io().OnCmdVel(msg->linear.x, msg->angular.z);
         });
     emergency_srv_ = create_service<mowbite_msgs::srv::SetEmergency>(
-        "hw/emergency", [this](const mowbite_msgs::srv::SetEmergency::Request::SharedPtr req,
-                               mowbite_msgs::srv::SetEmergency::Response::SharedPtr res) { OnEmergency(*req, *res); });
+        "hw/emergency", [this](const mowbite_msgs::srv::SetEmergency::Request::SharedPtr& req,
+                               const mowbite_msgs::srv::SetEmergency::Response::SharedPtr& res) {
+          OnEmergency(*req, *res);
+        });
     blade_srv_ = create_service<mowbite_msgs::srv::SetBlade>(
-        "hw/blade", [this](const mowbite_msgs::srv::SetBlade::Request::SharedPtr req,
-                           mowbite_msgs::srv::SetBlade::Response::SharedPtr res) { OnBlade(*req, *res); });
+        "hw/blade", [this](const mowbite_msgs::srv::SetBlade::Request::SharedPtr& req,
+                           const mowbite_msgs::srv::SetBlade::Response::SharedPtr& res) { OnBlade(*req, *res); });
     charge_srv_ = create_service<mowbite_msgs::srv::SetCharge>(
-        "hw/charge", [this](const mowbite_msgs::srv::SetCharge::Request::SharedPtr req,
-                            mowbite_msgs::srv::SetCharge::Response::SharedPtr res) { OnCharge(*req, *res); });
+        "hw/charge", [this](const mowbite_msgs::srv::SetCharge::Request::SharedPtr& req,
+                            const mowbite_msgs::srv::SetCharge::Response::SharedPtr& res) { OnCharge(*req, *res); });
 
     // At the end of the process the loop sends its stop inputs before the node goes away.
     context_ = get_node_base_interface()->get_context();
-    on_shutdown_ = context_->add_on_shutdown_callback([this] { io_->RequestStop(); });
-    io_->Start();
+    on_shutdown_ = context_->add_on_shutdown_callback([this] { Io().RequestStop(); });
+    Io().Start();
     output_thread_ = std::thread([this] { OutputLoop(); });
   }
 
   ~XcoreNode() override {
     context_->remove_on_shutdown_callback(on_shutdown_);
-    io_->Stop();
-    io_->outbox().wakeup.Stop();
+    Io().Stop();
+    Io().outbox().wakeup.Stop();
     if (output_thread_.joinable()) output_thread_.join();
   }
 
@@ -240,7 +242,8 @@ class XcoreNode : public rclcpp::Node {
 
     gga_pub_ = create_publisher<std_msgs::msg::String>("gnss/gga", 10);
     rtcm_sub_ = create_subscription<mowbite_msgs::msg::Rtcm>(
-        "gnss/rtcm", rclcpp::QoS(50).reliable(), [this](mowbite_msgs::msg::Rtcm::ConstSharedPtr msg) { OnRtcm(*msg); });
+        "gnss/rtcm", rclcpp::QoS(50).reliable(),
+        [this](const mowbite_msgs::msg::Rtcm::ConstSharedPtr& msg) { OnRtcm(*msg); });
     sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorSpec>(
         "bridge/sensor_info", rclcpp::QoS(rclcpp::KeepLast(10)).reliable().transient_local());
     sensor_value_pub_ = create_publisher<mowbite_msgs::msg::SensorValue>("bridge/sensor_value", 100);
@@ -471,7 +474,7 @@ class XcoreNode : public rclcpp::Node {
   // Publishes, logs and makes the slow checks, in this order of each round: a changed block first, then the
   // capabilities, the readings in their order, the log lines, the counts, hold.json and the sockets of other programs.
   void OutputLoop() {
-    auto& out = io_->outbox();
+    auto& out = Io().outbox();
     double now = MonotonicSeconds();
     double next_status = now;
     double next_hold = now + kHoldPollS;
@@ -482,9 +485,9 @@ class XcoreNode : public rclcpp::Node {
       now = MonotonicSeconds();
       if (out.status_due.exchange(false) || now >= next_status) {
         next_status = now + kStatusPeriodS;
-        PublishStatus(io_->Snapshot());
+        PublishStatus(Io().Snapshot());
       }
-      if (out.capabilities_due.exchange(false)) PublishCapabilities(io_->Snapshot().firmware_version);
+      if (out.capabilities_due.exchange(false)) PublishCapabilities(Io().Snapshot().firmware_version);
       for (const auto& reading : out.twists.TakeAll()) PublishTwist(reading);
       for (const auto& reading : out.imu.TakeAll()) PublishImu(reading);
       for (const auto& reading : out.gps.TakeAll()) OnGnss(reading);
@@ -495,11 +498,11 @@ class XcoreNode : public rclcpp::Node {
         PollHold();
       }
       // While the board is claimed, a second host beside this driver latches (FOREIGN_HOST).
-      if (!io_->open()) {
+      if (!Io().open()) {
         next_foreign = now + kForeignCheckS;
       } else if (now >= next_foreign) {
         next_foreign = now + kForeignCheckS;
-        if (auto foreign = xcore::ForeignHosts(bind_ip_, group_port_)) io_->LatchForeignHost(*foreign);
+        if (auto foreign = xcore::ForeignHosts(bind_ip_, group_port_)) Io().LatchForeignHost(*foreign);
       }
     }
   }
@@ -516,7 +519,7 @@ class XcoreNode : public rclcpp::Node {
 
   // Counts of the I/O thread and of what the outbox gave up, as throttled lines.
   void ReportCounts(double now) {
-    auto& out = io_->outbox();
+    auto& out = Io().outbox();
     send_failed_ += out.send_failed.Take();
     if (send_failed_ > 0 && send_failed_log_.Allow(now)) {
       RCLCPP_ERROR(get_logger(), "Cannot send to the board: %lu datagrams not sent",
@@ -542,7 +545,7 @@ class XcoreNode : public rclcpp::Node {
     if (rtcm_full_pending_ && rtcm_full_log_.Allow(now)) {
       rtcm_full_pending_ = false;
       RCLCPP_WARN(get_logger(), "RTCM queue full, %lu bytes dropped so far",
-                  static_cast<unsigned long>(io_->rtcm_dropped_bytes()));
+                  static_cast<unsigned long>(Io().rtcm_dropped_bytes()));
     }
     // Only after a hang of this thread: the I/O thread went on, what did not fit is gone.
     dropped_twists_ += out.twists.TakeDropped();
@@ -560,8 +563,9 @@ class XcoreNode : public rclcpp::Node {
 
   // The hold of an update, from hold.json itself: it stands without the logic and right after a restart.
   void PollHold() {
+    if (!hold_watch_) return;
     const mowbite_hold::HoldView view = hold_watch_->Poll(MonotonicSeconds(), WallSeconds());
-    io_->SetHold(view.held);
+    Io().SetHold(view.held);
     if (view.held == hold_logged_.held && view.unreadable == hold_logged_.unreadable &&
         view.until == hold_logged_.until) {
       return;
@@ -754,10 +758,10 @@ class XcoreNode : public rclcpp::Node {
   // Executor callbacks: computing under the lock of the I/O core, their lines through the outbox.
   void OnEmergency(const mowbite_msgs::srv::SetEmergency::Request& req,
                    mowbite_msgs::srv::SetEmergency::Response& res) {
-    auto& log = io_->outbox().log;
+    auto& log = Io().outbox().log;
     if (req.latch) {
       const uint32_t bits = req.bits ? req.bits : xcore::kReasonHighLevel;
-      if (!io_->LatchEmergency(bits)) {
+      if (!Io().LatchEmergency(bits)) {
         log.Error(mowbite_outbox::Format(
             "Refused to latch with reason bits 0x%x: only HIGH_LEVEL, TILT, FENCE, STUCK and UNEXPECTED_RESTART", bits));
         res.success = false;
@@ -773,7 +777,7 @@ class XcoreNode : public rclcpp::Node {
       if (auto foreign = xcore::ForeignHosts(bind_ip_, group_port_)) {
         refused = xcore::ReleaseRefusal{"FOREIGN_HOST", *foreign};
       } else {
-        refused = io_->ReleaseEmergency();
+        refused = Io().ReleaseEmergency();
       }
       if (refused) {
         log.Error("Emergency release refused: " + refused->message);
@@ -795,27 +799,32 @@ class XcoreNode : public rclcpp::Node {
     request.speed_percent = req.speed_percent;
     request.height_mm = req.height_mm;
     request.lease_s = req.lease_s;
-    auto result = io_->SetBlade(request, &res.emergency_reason);
+    auto result = Io().SetBlade(request, &res.emergency_reason);
     res.success = result == xcore::BladeResult::kOk;
     res.message = xcore::BladeResultText(result);
     if (!res.success && blade_refused_log_.Allow(MonotonicSeconds())) {
-      io_->outbox().log.Warn("Blade request refused: " + res.message);
+      Io().outbox().log.Warn("Blade request refused: " + res.message);
     }
   }
 
   // The board charges whenever the station delivers and has no input to stop it (charge_stop false).
   void OnCharge(const mowbite_msgs::srv::SetCharge::Request& req, mowbite_msgs::srv::SetCharge::Response& res) {
-    io_->outbox().log.Warn(std::string("hw/charge ") + (req.on ? "on" : "off") +
+    Io().outbox().log.Warn(std::string("hw/charge ") + (req.on ? "on" : "off") +
                            " refused: the board controls charging");
     res.success = false;
     res.message = "charging is controlled by the board";
   }
 
   void OnRtcm(const mowbite_msgs::msg::Rtcm& msg) {
-    if (!io_->PushRtcm(msg.data.data(), msg.data.size())) {
+    if (!Io().PushRtcm(msg.data.data(), msg.data.size())) {
       rtcm_full_ = true;
-      io_->outbox().wakeup.Notify();
+      Io().outbox().wakeup.Notify();
     }
+  }
+
+  // Emplaced in the constructor before any callback or thread starts.
+  xcore::XcoreIo& Io() {
+    return *io_;  // NOLINT(bugprone-unchecked-optional-access)
   }
 
   std::optional<mowbite_hold::HoldWatch> hold_watch_;

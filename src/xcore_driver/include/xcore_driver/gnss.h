@@ -94,7 +94,7 @@ mowbite_gnss::GgaFields GgaOf(const GnssSolution& solution, double utc_s);
 // passes them on to the receiver as a stream, so a piece may end anywhere.
 class RtcmQueue {
  public:
-  explicit RtcmQueue(size_t max_bytes = 32 * 1024, size_t max_piece = kMaxPayload)
+  explicit RtcmQueue(size_t max_bytes = size_t{32} * 1024, size_t max_piece = kMaxPayload)
       : max_bytes_(max_bytes), max_piece_(max_piece) {
   }
 

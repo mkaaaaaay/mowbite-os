@@ -141,6 +141,8 @@ class XcoreIo {
   void Tick(double now);
   void Send(const std::vector<Datagram>& datagrams, std::optional<double> computed = std::nullopt);
   void AskFirmware(double now);
+  // The link while the service socket is open; called with mutex_ held.
+  XcoreLink& Link();
   void HandleEvents(const std::vector<LinkEvent>& events);
   bool OnFirmwareAnswer(const LinkEvent& e, double now);
   // Wakes the output thread for hw/status when the block changed since the last request.

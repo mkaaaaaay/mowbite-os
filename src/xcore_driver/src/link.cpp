@@ -53,7 +53,9 @@ XcoreLink::XcoreLink(const LinkConfig& config) : config_(config) {
 bool XcoreLink::NeedsConfig(uint16_t id) const {
   // A service with registers waits for a configuration, even if none of them is required.
   auto it = services_.find(id);
-  return it != services_.end() && it->second.description && !it->second.description->registers.empty();
+  if (it == services_.end()) return false;
+  const auto& description = it->second.description;
+  return description && !description->registers.empty();
 }
 
 std::vector<std::string> XcoreLink::CheckConfig(uint16_t id, const ServiceDescription& description) const {
@@ -243,10 +245,9 @@ Datagram XcoreLink::Make(const Service& s, uint16_t service_id, MessageType type
 std::vector<Datagram> XcoreLink::Tick(double now, std::vector<LinkEvent>& events) {
   std::vector<Datagram> out;
   for (auto& [id, s] : services_) {
-    bool claimed = s.state == ServiceState::kConfiguring || s.state == ServiceState::kRunning;
+    const bool claimed = s.state == ServiceState::kConfiguring || s.state == ServiceState::kRunning;
     if (claimed && now - s.last_heard_s > config_.service_timeout_s) {
       Lose(id, s, "silent for " + std::to_string(now - s.last_heard_s).substr(0, 4) + " s", now, events);
-      claimed = false;
     }
     if (s.state == ServiceState::kClaiming && now >= s.next_claim_s) {
       Writer w;
@@ -288,7 +289,10 @@ std::vector<Datagram> XcoreLink::Tick(double now, std::vector<LinkEvent>& events
 std::optional<Datagram> XcoreLink::Input(uint16_t service_id, uint16_t channel_id, const Bytes& value) {
   auto it = services_.find(service_id);
   if (it == services_.end() || it->second.state != ServiceState::kRunning) return std::nullopt;
-  const Channel* in = Find(it->second.description->inputs, channel_id);
+  // A running service was described before it was configured.
+  const auto& description = it->second.description;
+  if (!description) return std::nullopt;
+  const Channel* in = Find(description->inputs, channel_id);
   if (!in || in->type.base == ValueType::Base::kBlob) return std::nullopt;
   // Byte arrays (RTCM) may run longer than announced, up to one datagram: the firmware passes them on as a stream.
   bool byte_stream = in->type.base == ValueType::Base::kU8 && in->type.count && value.size() <= kMaxPayload;

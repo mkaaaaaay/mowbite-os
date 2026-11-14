@@ -40,7 +40,7 @@ bool ParseLocal(const std::string& field, ForeignSocket& socket, bool& any) {
   }
   if (address.size() != 32) return false;
   uint32_t words[4];
-  for (int i = 0; i < 4; i++) {
+  for (size_t i = 0; i < 4; i++) {
     if (!Hex32(address.substr(i * 8, 8), words[i])) return false;
   }
   socket.ipv6 = true;

@@ -124,3 +124,8 @@ TEST(Cbor, EncodeRoundTrip) {
   EXPECT_EQ(EncodeCbor(Cbor::Unsigned(1000)), (std::vector<uint8_t>{0x19, 0x03, 0xe8}));
   EXPECT_EQ(EncodeCbor(Cbor::Integer(-100)), (std::vector<uint8_t>{0x38, 0x63}));
 }
+
+TEST(Cbor, EncodesUnsignedBeyondInt64) {
+  EXPECT_EQ(EncodeCbor(Cbor::Unsigned(UINT64_MAX)),
+            (std::vector<uint8_t>{0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}));
+}

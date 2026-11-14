@@ -219,6 +219,7 @@ std::vector<std::string> CheckDescription(const ExpectedService& expected, const
 Cbor DescriptionToCbor(const ServiceDescription& description) {
   auto channels = [](const std::vector<Channel>& list) {
     std::vector<Cbor> items;
+    items.reserve(list.size());
     for (const auto& c : list) {
       items.push_back(Cbor::Map({{Cbor::Text("id"), Cbor::Unsigned(c.id)},
                                  {Cbor::Text("name"), Cbor::Text(c.name)},

@@ -4,11 +4,13 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <set>
 #include <sstream>
+#include <string_view>
 
 #include "xcore_driver/services.h"
 #include "xcore_driver/socket_table.h"
@@ -39,8 +41,22 @@ const char* ServiceName(uint16_t id) {
     case kGpsService: return "gps";
     case kInputService: return "input";
     case kMetaService: return "meta";
+    default: return "unknown";
   }
-  return "unknown";
+}
+
+// The inode of a link target socket:[<inode>], nothing for any other target.
+std::optional<uint64_t> SocketInode(std::string_view target) {
+  constexpr std::string_view kPrefix = "socket:[";
+  if (target.size() < kPrefix.size() + 2 || target.substr(0, kPrefix.size()) != kPrefix || target.back() != ']') {
+    return std::nullopt;
+  }
+  const char* first = target.data() + kPrefix.size();
+  const char* last = target.data() + target.size() - 1;
+  uint64_t inode = 0;
+  const auto [end, error] = std::from_chars(first, last, inode);
+  if (error != std::errc() || end != last) return std::nullopt;
+  return inode;
 }
 
 }  // namespace
@@ -73,15 +89,16 @@ std::optional<std::string> ForeignHosts(uint32_t bind_ip, uint16_t group_port) {
   // Own sockets after the tables: one opened in between is not in them.
   std::set<uint64_t> own;
   if (DIR* dir = opendir("/proc/self/fd")) {
-    while (const dirent* entry = readdir(dir)) {
+    // readdir is safe for a stream no other thread uses; this one is local.
+    while (const dirent* entry = readdir(dir)) {  // NOLINT(concurrency-mt-unsafe)
       char path[300];
       char target[64];
       std::snprintf(path, sizeof(path), "/proc/self/fd/%s", entry->d_name);
       const ssize_t n = readlink(path, target, sizeof(target) - 1);
       if (n <= 0) continue;
-      target[n] = '\0';
-      unsigned long long inode = 0;
-      if (std::sscanf(target, "socket:[%llu]", &inode) == 1) own.insert(inode);
+      if (const std::optional<uint64_t> inode = SocketInode(std::string_view(target, static_cast<size_t>(n)))) {
+        own.insert(*inode);
+      }
     }
     closedir(dir);
   } else {
@@ -268,7 +285,7 @@ void XcoreIo::Loop() {
       std::vector<LinkEvent> events;
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        link_->OnAnnouncement(buffer, static_cast<size_t>(n), MonotonicSeconds(), events);
+        Link().OnAnnouncement(buffer, static_cast<size_t>(n), MonotonicSeconds(), events);
       }
       HandleEvents(events);
     }
@@ -303,7 +320,7 @@ void XcoreIo::HandleDatagram(const uint8_t* data, size_t size, const Endpoint& f
   {
     std::lock_guard<std::mutex> lock(mutex_);
     const double now = MonotonicSeconds();
-    link_->OnDatagram(data, size, from, now, outputs, events);
+    Link().OnDatagram(data, size, from, now, outputs, events);
     for (auto& out : outputs) {
       if (out.service_id == kImuService && out.channel_id == imu::kOutAxes) {
         if (auto axes = DecodeDoubles(out.value, 9)) {
@@ -344,22 +361,22 @@ void XcoreIo::Tick(double now) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (major_ == std::nullopt && next_rpc_s_ && now >= *next_rpc_s_) AskFirmware(now);
-    datagrams = link_->Tick(now, events);
-    control_.SetServicesReady(link_->AllRunning() && major_ == config_.expected_major,
+    datagrams = Link().Tick(now, events);
+    control_.SetServicesReady(Link().AllRunning() && major_ == config_.expected_major,
                               !major_ || *major_ == config_.expected_major);
     for (const auto& value : control_.Tick(now)) {
-      if (auto datagram = link_->Input(value.service_id, value.channel_id, value.value)) {
+      if (auto datagram = Link().Input(value.service_id, value.channel_id, value.value)) {
         datagrams.push_back(*datagram);
       }
     }
     // The queued RTCM to a running GPS service, dropped while it does not run.
     if (rtcm_.size() > 0) {
-      if (link_->State(kGpsService) != ServiceState::kRunning) {
+      if (Link().State(kGpsService) != ServiceState::kRunning) {
         rtcm_dropped = rtcm_.size();
         rtcm_.Clear();
       } else {
         for (const auto& piece : rtcm_.Take()) {
-          if (auto datagram = link_->Input(kGpsService, gps::kInRtcm, piece)) {
+          if (auto datagram = Link().Input(kGpsService, gps::kInRtcm, piece)) {
             datagrams.push_back(*datagram);
             last_rtcm_s_ = now;
           }
@@ -386,11 +403,16 @@ void XcoreIo::Send(const std::vector<Datagram>& datagrams, std::optional<double>
   }
 }
 
+XcoreLink& XcoreIo::Link() {
+  // Open, which opens the service socket, sets link_ before it returns; nothing resets it.
+  return *link_;  // NOLINT(bugprone-unchecked-optional-access)
+}
+
 // Called with mutex_ held.
 void XcoreIo::AskFirmware(double now) {
   next_rpc_s_.reset();
-  bool asked = link_->CallRpc(kMetaService, kGetMajorVersion, now);
-  asked = link_->CallRpc(kMetaService, kGetFirmwareVersion, now) && asked;
+  bool asked = Link().CallRpc(kMetaService, kGetMajorVersion, now);
+  asked = Link().CallRpc(kMetaService, kGetFirmwareVersion, now) && asked;
   if (!asked) next_rpc_s_ = now + kRpcRetryS;
 }
 

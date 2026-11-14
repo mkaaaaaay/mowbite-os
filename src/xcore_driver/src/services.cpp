@@ -5,7 +5,8 @@ namespace xcore {
 namespace {
 
 Channel C(uint16_t id, const char* name, const char* type) {
-  return Channel{id, name, *ParseValueType(type)};
+  // The types are the literals of the tables below, each a known type.
+  return Channel{id, name, *ParseValueType(type)};  // NOLINT(bugprone-unchecked-optional-access)
 }
 
 }  // namespace
