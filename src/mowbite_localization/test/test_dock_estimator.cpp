@@ -493,3 +493,32 @@ TEST(DockEstimator, MovesWithTheMotionsOfTheMapEstimate) {
   EXPECT_NEAR(std::hypot(w.est.pose().x - dock_before.x, w.est.pose().y - dock_before.y),
               std::hypot(map.pose().x - map_before.x, map.pose().y - map_before.y), 1e-12);
 }
+
+TEST(DockEstimator, NoRestWhileTheGyroTurnsOnStandingWheels) {
+  // The wheels report standing while the body turns at 0.1 rad/s, pushed or slipping: no start from images of
+  // changing headings, only once the gyro offset holds again.
+  EstimatorConfig map_config;
+  map_config.gyro.calibration_time = 1.0;
+  Estimator map(map_config);
+  DockWorld w;
+  double turn = 0.0;
+  const auto run = [&](double seconds) {
+    for (long i = 0; i < std::lround(seconds / kStep); ++i) {
+      w.t += kStep;
+      w.heading = WrapAngle(w.heading + turn * kStep);
+      map.AddWheels(w.t, 0.0, 0.0);
+      if (map.AddImu(w.t, turn + 0.01)) w.est.AddMotion(map.motion());
+      if (i % 5 == 4) w.results.push_back(w.est.AddMarker(w.Image(), w.t));
+    }
+  };
+  run(1.1);
+  ASSERT_TRUE(map.calibrated());
+  turn = 0.1;
+  run(3.0);
+  for (MarkerResult result : w.results) EXPECT_EQ(result, MarkerResult::kCollecting);
+  turn = 0.0;
+  run(2.5);
+  ASSERT_TRUE(w.est.has_estimate());
+  EXPECT_LT(std::abs(w.HeadingError()), 0.1 * kDeg);
+  EXPECT_LT(w.PositionError(), 0.002);
+}

@@ -67,7 +67,8 @@ struct Jump {
 };
 
 // What one gyro sample moved the estimate by, so that a second estimate on the same gyro and wheels (DockEstimator)
-// moves the same way: m along the mean heading, rad, and the s of gyro noise. still: the wheels stand.
+// moves the same way: m along the mean heading, rad, and the s of gyro noise. still: wheels and gyro stand, the gyro
+// offset holds.
 struct Motion {
   double time = 0.0;
   double distance = 0.0;
