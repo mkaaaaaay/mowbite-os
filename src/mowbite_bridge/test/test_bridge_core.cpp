@@ -223,6 +223,7 @@ TEST_F(Core, LocalMethods) {
   const Json info = Call(core_, "system.info", Json{{"x", 1}})["result"];
   EXPECT_EQ(info.dump(), R"({"name":"mowbite-os","version":"1.2.3","platform":"","schema":)" +
                              std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) +
+                             R"(,"api_break":)" + std::to_string(mowbite_api::kApiBreak) +
                              R"(,"mqtt":5,"stop_release":null,"blade_height":null})");
   core_.OnPlatform("airseekers_tron", StopRelease(2.0, 3.0, 10.0), BladeHeight(true, 30, 90, 60));
   const Json tron = Call(core_, "system.info")["result"];
@@ -239,6 +240,8 @@ TEST_F(Core, LocalMethods) {
   EXPECT_EQ(api["api"], mowbite_api::kApi);
   EXPECT_EQ(api["json_schema"], mowbite_api::Schema());
   EXPECT_EQ(api["json_schema"]["x-api"], mowbite_api::kApi);
+  EXPECT_EQ(api["api_break"], mowbite_api::kApiBreak);
+  EXPECT_EQ(api["json_schema"]["x-api-break"], mowbite_api::kApiBreak);
 }
 
 TEST_F(Core, AddedLocalMethodsAndTheirErrors) {

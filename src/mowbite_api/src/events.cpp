@@ -137,6 +137,19 @@ struct ReasonText {
 const std::map<std::string, ReasonText>& ReasonTexts() {
   static const std::map<std::string, ReasonText> texts = {
       {"ALREADY_THERE", {"The mower is there already", {}}},
+      {"APP_API_BREAK",
+       {"The app of the bundle was built for another break of the interface than the OS installed",
+        {},
+        {{"de",
+          {"App passt nicht",
+           "Diese Version der App ist für eine andere Bruchstufe der Schnittstelle gebaut als das installierte "
+           "MowBite OS und wird nicht verwendet.",
+           "Eine Version der App installieren, die zu diesem MowBite OS passt, oder MowBite OS aktualisieren."}},
+         {"en",
+          {"App doesn't match",
+           "This version of the app was built for another break of the interface than the MowBite OS that is "
+           "installed and is not used.",
+           "Install a version of the app that matches this MowBite OS, or update MowBite OS."}}}}},
       {"APP_TOO_OLD",
        {"The app of the bundle is too old for the OS that is installed",
         {},
@@ -1538,6 +1551,7 @@ std::vector<ReasonEntry> UpdateReasons() {
           R("LIBRARY_MISSING", "error", "user"),
           R("BASE_TOO_OLD", "error", "user"),
           R("APP_TOO_OLD", "error", "user"),
+          R("APP_API_BREAK", "error", "user"),
           R("OS_TOO_OLD", "warning", "user"),
           R("PLANNER_INTERFACE", "error", "user"),
           R("PLANNER_DATA", "error", "user"),

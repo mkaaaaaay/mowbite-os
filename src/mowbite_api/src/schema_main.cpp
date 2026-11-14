@@ -1,6 +1,7 @@
 // mowbite_api_schema: prints the JSON Schema of the app interface. With --write <dir> it writes <dir>/api.schema.json;
 // a file there of an older api (1 or more) moves to <dir>/schema/api-<N>.schema.json first, where test_schema.cpp
-// checks that the new schema only adds to it. A file of the same api with other content is refused: raise kApi first.
+// checks that the new schema only adds to it within the same break. A file of the same api with other content is
+// refused: raise kApi first.
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -34,8 +35,11 @@ int Write(const std::filesystem::path& dir) {
       std::cerr << file << " has api " << old_api << " with other content: raise kApi in catalog.h first\n";
       return 1;
     }
-    for (const auto& problem : mowbite_api::CheckAdditive(old, mowbite_api::Schema())) {
-      std::cerr << "not only added: " << problem << "\n";
+    // Within a break the new schema only adds; a raised kApiBreak may take away.
+    if (mowbite_api::ApiBreakOf(old) == mowbite_api::kApiBreak) {
+      for (const auto& problem : mowbite_api::CheckAdditive(old, mowbite_api::Schema())) {
+        std::cerr << "not only added: " << problem << "\n";
+      }
     }
     // Without a version (the placeholder before the first schema) there is nothing to keep.
     if (old_api >= 1) {

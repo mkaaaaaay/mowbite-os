@@ -180,6 +180,7 @@ TEST(Fixed, CapabilitiesVersionAndSystemInfo) {
   EXPECT_EQ(SystemInfo("", "airseekers_tron", 5).dump(),
             R"({"name":"mowbite-os","version":"UNKNOWN VERSION","platform":"airseekers_tron","schema":)" +
                 std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) +
+                R"(,"api_break":)" + std::to_string(mowbite_api::kApiBreak) +
                 R"(,"mqtt":5,"stop_release":null,"blade_height":null})");
   EXPECT_EQ(SystemInfo("1.2.3", "", 3)["platform"], "");
   EXPECT_EQ(SystemInfo("1.2.3", "", 3)["mqtt"], 3);

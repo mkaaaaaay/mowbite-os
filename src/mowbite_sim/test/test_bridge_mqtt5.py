@@ -32,10 +32,12 @@ WORK = tempfile.mkdtemp(prefix="mowbite_mqtt5_")
 BROKERS = {"a": 18851, "b": 18852, "c": 18853}
 GATES = {"b": (18862, "connack"), "c": (18863, "close")}
 WARN = "the bridge uses 3.1.1 until it restarts"
-# The api version the bridge reports: kApi of the source tree next to this test.
+# The api version and break the bridge reports: kApi and kApiBreak of the source tree next to this test.
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mowbite_api", "include", "mowbite_api",
                        "catalog.h")) as f:
-    API = int(re.search(r"constexpr int kApi = (\d+);", f.read()).group(1))
+    CATALOG = f.read()
+API = int(re.search(r"constexpr int kApi = (\d+);", CATALOG).group(1))
+API_BREAK = int(re.search(r"constexpr int kApiBreak = (\d+);", CATALOG).group(1))
 
 
 def generate_test_description():
@@ -171,6 +173,7 @@ class TestBridgeMqtt5(unittest.TestCase):
         self.assertTrue(got, "no answer on rpc/response/five")
         self.assertEqual(got[0][1]["result"]["mqtt"], 5)
         self.assertEqual(got[0][1]["result"]["api"], API)
+        self.assertEqual(got[0][1]["result"]["api_break"], API_BREAK)
 
     def test_1_system_stats_of_the_machine(self):
         self.assertIn("system.stats", self.methods_of(self.old))

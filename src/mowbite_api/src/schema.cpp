@@ -346,8 +346,13 @@ Json BuildSchema(const Json& planner) {
                   "that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, "
                   "sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set "
                   "with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of "
-                  "schedule.log with what detail and more hold (null: always null)."},
+                  "schedule.log with what detail and more hold (null: always null). x-api counts every change, "
+                  "x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or "
+                  "meaning changed, a parameter newly required, fewer values taken in a request, an event a client "
+                  "waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break "
+                  "from the one it needs on."},
                  {"x-api", kApi},
+                 {"x-api-break", kApiBreak},
                  {"x-owner", kOwner},
                  {"$defs", defs},
                  {"x-reasons", reasons},
@@ -448,6 +453,10 @@ const Json& Schema() {
 
 Json SchemaWithPlanner(const Json& planner) {
   return BuildSchema(planner);
+}
+
+int ApiBreakOf(const Json& schema) {
+  return schema.value("x-api-break", 1);
 }
 
 std::vector<std::string> CheckAdditive(const Json& older, const Json& newer) {

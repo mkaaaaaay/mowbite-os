@@ -9516,6 +9516,10 @@
           "description": "Version of this interface",
           "type": "integer"
         },
+        "api_break": {
+          "description": "Break of this interface",
+          "type": "integer"
+        },
         "json_schema": {
           "description": "This schema",
           "type": "object"
@@ -9523,6 +9527,7 @@
       },
       "required": [
         "api",
+        "api_break",
         "json_schema"
       ],
       "type": "object"
@@ -9602,6 +9607,10 @@
       "properties": {
         "api": {
           "description": "Version of this interface, the x-api of the schema system.api gives",
+          "type": "integer"
+        },
+        "api_break": {
+          "description": "Break of this interface, the x-api-break of the schema system.api gives",
           "type": "integer"
         },
         "blade_height": {
@@ -9688,6 +9697,7 @@
         "platform",
         "schema",
         "api",
+        "api_break",
         "mqtt"
       ],
       "type": "object"
@@ -10015,6 +10025,20 @@
                 "additionalProperties": false,
                 "description": "The newest revision found that is newer than what runs, null without one",
                 "properties": {
+                  "api": {
+                    "description": "os: the api it speaks, null for a bundle that does not say; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "api_break": {
+                    "description": "os: the break of its api, null for a bundle from before it; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
                   "blocked": {
                     "additionalProperties": false,
                     "description": "Not installed by itself: why, the result of the attempt that ended so and when; update.start of this revision tries it anyway",
@@ -10455,6 +10479,20 @@
                 "additionalProperties": false,
                 "description": "The newest revision found that is newer than what runs, null without one",
                 "properties": {
+                  "api": {
+                    "description": "os: the api it speaks, null for a bundle that does not say; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "api_break": {
+                    "description": "os: the break of its api, null for a bundle from before it; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
                   "blocked": {
                     "additionalProperties": false,
                     "description": "Not installed by itself: why, the result of the attempt that ended so and when; update.start of this revision tries it anyway",
@@ -10911,6 +10949,20 @@
                 "additionalProperties": false,
                 "description": "The newest revision found that is newer than what runs, null without one",
                 "properties": {
+                  "api": {
+                    "description": "os: the api it speaks, null for a bundle that does not say; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "api_break": {
+                    "description": "os: the break of its api, null for a bundle from before it; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
                   "blocked": {
                     "additionalProperties": false,
                     "description": "Not installed by itself: why, the result of the attempt that ended so and when; update.start of this revision tries it anyway",
@@ -11363,6 +11415,20 @@
                 "additionalProperties": false,
                 "description": "The newest revision found that is newer than what runs, null without one",
                 "properties": {
+                  "api": {
+                    "description": "os: the api it speaks, null for a bundle that does not say; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "api_break": {
+                    "description": "os: the break of its api, null for a bundle from before it; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
                   "blocked": {
                     "additionalProperties": false,
                     "description": "Not installed by itself: why, the result of the attempt that ended so and when; update.start of this revision tries it anyway",
@@ -11813,6 +11879,20 @@
                 "additionalProperties": false,
                 "description": "The newest revision found that is newer than what runs, null without one",
                 "properties": {
+                  "api": {
+                    "description": "os: the api it speaks, null for a bundle that does not say; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "api_break": {
+                    "description": "os: the break of its api, null for a bundle from before it; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
                   "blocked": {
                     "additionalProperties": false,
                     "description": "Not installed by itself: why, the result of the attempt that ended so and when; update.start of this revision tries it anyway",
@@ -12273,6 +12353,20 @@
                 "additionalProperties": false,
                 "description": "The newest revision found that is newer than what runs, null without one",
                 "properties": {
+                  "api": {
+                    "description": "os: the api it speaks, null for a bundle that does not say; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "api_break": {
+                    "description": "os: the break of its api, null for a bundle from before it; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
                   "blocked": {
                     "additionalProperties": false,
                     "description": "Not installed by itself: why, the result of the attempt that ended so and when; update.start of this revision tries it anyway",
@@ -12713,6 +12807,20 @@
                 "additionalProperties": false,
                 "description": "The newest revision found that is newer than what runs, null without one",
                 "properties": {
+                  "api": {
+                    "description": "os: the api it speaks, null for a bundle that does not say; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "api_break": {
+                    "description": "os: the break of its api, null for a bundle from before it; absent for the others",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
                   "blocked": {
                     "additionalProperties": false,
                     "description": "Not installed by itself: why, the result of the attempt that ended so and when; update.start of this revision tries it anyway",
@@ -13093,11 +13201,12 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:30",
+  "$id": "urn:mowbite-os:api:31",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null).",
+  "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null). x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 30,
+  "x-api": 31,
+  "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
       "action": "mower_logic:docking/abort_docking",
@@ -16701,6 +16810,24 @@
       }
     },
     "UPDATE": {
+      "APP_API_BREAK": {
+        "description": "The app of the bundle was built for another break of the interface than the OS installed",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Eine Version der App installieren, die zu diesem MowBite OS passt, oder MowBite OS aktualisieren.",
+            "help": "Diese Version der App ist für eine andere Bruchstufe der Schnittstelle gebaut als das installierte MowBite OS und wird nicht verwendet.",
+            "name": "App passt nicht"
+          },
+          "en": {
+            "fix": "Install a version of the app that matches this MowBite OS, or update MowBite OS.",
+            "help": "This version of the app was built for another break of the interface than the MowBite OS that is installed and is not used.",
+            "name": "App doesn't match"
+          }
+        }
+      },
       "APP_TOO_OLD": {
         "description": "The app of the bundle is too old for the OS that is installed",
         "fields": {},

@@ -12,7 +12,11 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 30;
+constexpr int kApi = 31;
+
+// The break of the app interface: one up for a change that is not only adding (what counts: x-api-break in the
+// schema); an app goes with the OS of the same break whose api is at least the one it needs.
+constexpr int kApiBreak = 1;
 
 // Who owns the names of the interface file; readers keep a copy of it.
 constexpr char kOwner[] = "mowbite-os";
@@ -270,6 +274,9 @@ std::string CheckParams(const Command& command, const Json& params, std::string*
 // What in the newer schema takes away from the older one: a definition, field, type, value, reason, emergency bit or
 // command gone, a field of robot_state or an event no longer always there, a parameter newly required.
 std::vector<std::string> CheckAdditive(const Json& older, const Json& newer);
+
+// The break of a schema: its x-api-break, 1 for a schema from before it (api 30 and older).
+int ApiBreakOf(const Json& schema);
 
 }  // namespace mowbite_api
 

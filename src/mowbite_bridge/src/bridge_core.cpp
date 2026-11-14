@@ -70,7 +70,7 @@ BridgeCore::BridgeCore(BridgeConfig config)
   };
   // The catalog of the interface as JSON Schema; system.info.api tells whether a client knows it already.
   local_["system.api"] = [](const Json&) {
-    return Json{{"api", mowbite_api::kApi}, {"json_schema", mowbite_api::Schema()}};
+    return Json{{"api", mowbite_api::kApi}, {"api_break", mowbite_api::kApiBreak}, {"json_schema", mowbite_api::Schema()}};
   };
   local_["sensors.list"] = [this](const Json& params) { return SensorList(sensors_, readings_, params); };
   local_["logs.recent"] = [this](const Json& params) { return warnings_.Recent(params); };

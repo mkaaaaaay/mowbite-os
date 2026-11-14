@@ -160,6 +160,7 @@ Json SystemInfo(const std::string& version, const std::string& platform, int mqt
               {"platform", platform},
               {"schema", DataSchema()},
               {"api", mowbite_api::kApi},
+              {"api_break", mowbite_api::kApiBreak},
               {"mqtt", mqtt_version},
               {"stop_release", stop_release},
               {"blade_height", blade_height}};

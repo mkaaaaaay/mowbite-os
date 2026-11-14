@@ -37,7 +37,7 @@ TEST(Schema, TheFileInTheRepoIsTheGeneratedOne) {
   FAIL() << "api.schema.json is of api " << file.value("x-api", 0) << ": mowbite_api_schema --write " MOWBITE_API_DIR;
 }
 
-// Every older version stays in schema/api-<N>.schema.json, and the current one only adds to it.
+// Every older version stays in schema/api-<N>.schema.json, and the current one only adds to those of its break.
 TEST(Schema, OlderVersionsAreOnlyAddedTo) {
   const std::filesystem::path dir = std::filesystem::path(MOWBITE_API_DIR) / "schema";
   if (!std::filesystem::exists(dir)) {
@@ -50,6 +50,8 @@ TEST(Schema, OlderVersionsAreOnlyAddedTo) {
     ASSERT_FALSE(old.is_discarded()) << entry.path();
     EXPECT_EQ(entry.path().filename(), "api-" + std::to_string(old.value("x-api", 0)) + ".schema.json");
     EXPECT_LT(old.value("x-api", 0), kApi) << entry.path();
+    EXPECT_LE(ApiBreakOf(old), kApiBreak) << entry.path();
+    if (ApiBreakOf(old) != kApiBreak) continue;
     for (const auto& problem : CheckAdditive(old, Schema())) ADD_FAILURE() << entry.path() << ": " << problem;
     older++;
   }
@@ -61,6 +63,15 @@ TEST(Schema, IdAndVersion) {
   EXPECT_EQ(schema["$schema"], "https://json-schema.org/draft/2020-12/schema");
   EXPECT_EQ(schema["$id"], "urn:mowbite-os:api:" + std::to_string(kApi));
   EXPECT_EQ(schema["x-api"], kApi);
+  EXPECT_EQ(schema["x-api-break"], kApiBreak);
+  EXPECT_EQ(ApiBreakOf(schema), kApiBreak);
+}
+
+// A schema from before x-api-break is of break 1.
+TEST(Schema, BreakOfAnOlderSchema) {
+  EXPECT_EQ(ApiBreakOf(Json::object()), 1);
+  EXPECT_EQ(ApiBreakOf(Json{{"x-api", 30}}), 1);
+  EXPECT_EQ(ApiBreakOf(Json{{"x-api", 40}, {"x-api-break", 2}}), 2);
 }
 
 // Every event of the catalog by its type, any other type only with the envelope.
@@ -88,6 +99,8 @@ TEST(Schema, CommandsAndBits) {
   }
   EXPECT_EQ(schema["x-emergency-bits"].size(), EmergencyBits().size());
   EXPECT_EQ(schema["$defs"]["system.info.result"]["properties"]["api"]["type"], "integer");
+  EXPECT_EQ(schema["$defs"]["system.info.result"]["properties"]["api_break"]["type"], "integer");
+  EXPECT_EQ(schema["$defs"]["system.api.result"]["properties"]["api_break"]["type"], "integer");
   EXPECT_EQ(schema["$defs"]["system.info.result"]["properties"]["mqtt"]["type"], "integer");
   // Action and RPC: recording.save stands for both finish actions, with its type.
   const Json& save = schema["x-commands"]["recording.save"];

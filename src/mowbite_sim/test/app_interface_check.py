@@ -315,13 +315,17 @@ if args.target == "mowbite-os":
     api_version = info.get("api") if offers("system.info") else None
     check("system.info.api is the version of the interface", isinstance(api_version, int) and api_version >= 1,
           json.dumps(api_version), point="AS3 system.info.api")
+    api_break = info.get("api_break") if offers("system.info") else None
+    check("system.info.api_break is the break of the interface", isinstance(api_break, int) and api_break >= 1,
+          json.dumps(api_break), point="AS3 system.info.api_break")
     if offers("system.api"):
         r = rpc("system.api", None, "api")
         api = (r or {}).get("result") or {}
         API_SCHEMA = api.get("json_schema") if isinstance(api.get("json_schema"), dict) else None
-        check("system.api gives api and json_schema of the version of system.info",
+        check("system.api gives api, api_break and json_schema of the version of system.info",
               api.get("api") == api_version and bool(API_SCHEMA) and API_SCHEMA.get("x-api") == api_version
-              and API_SCHEMA.get("$id") == f"urn:mowbite-os:api:{api_version}",
+              and API_SCHEMA.get("$id") == f"urn:mowbite-os:api:{api_version}"
+              and api.get("api_break") == api_break and API_SCHEMA.get("x-api-break") == api_break,
               json.dumps({k: v for k, v in api.items() if k != "json_schema"}), point="AS3 system.api")
     # AM4: an id comes back as it was sent, also a number, from the bridge and from a node.
     r = rpc("rpc.ping", None, 42)

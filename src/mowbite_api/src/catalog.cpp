@@ -300,6 +300,10 @@ Field Available() {
       "available", "The newest revision found that is newer than what runs, null without one",
       {Text("revision", "The revision"), Time("date", "When it was built"), Version(),
        Nullable(Text("min_app", "The oldest app it works with")),
+       Nullable(Integer("api", "os: the api it speaks, null for a bundle that does not say; absent for the others",
+                        false)),
+       Nullable(Integer("api_break",
+                        "os: the break of its api, null for a bundle from before it; absent for the others", false)),
        Nullable(Object("blocked",
                        "Not installed by itself: why, the result of the attempt that ended so and when; update.start "
                        "of this revision tries it anyway",
@@ -485,6 +489,7 @@ const std::vector<Command>& Commands() {
         Text("platform", "The platform its driver reports, empty until it did"),
         Integer("schema", "Version of the data in data_dir"),
         Integer("api", "Version of this interface, the x-api of the schema system.api gives"),
+        Integer("api_break", "Break of this interface, the x-api-break of the schema system.api gives"),
         Integer("mqtt", "MQTT version of the bridge at the broker: 5 sends each answer to the response topic of its "
                         "request, 3 sends all to rpc/response"),
         Nullable(Object("stop_release",
@@ -506,6 +511,7 @@ const std::vector<Command>& Commands() {
        "This interface as JSON Schema with its version",
        {},
        {Integer("api", "Version of this interface"),
+        Integer("api_break", "Break of this interface"),
         {"json_schema", Type::kObject, "", true, "This schema", {}, false, {}, ""}},
        "",
        {}},
