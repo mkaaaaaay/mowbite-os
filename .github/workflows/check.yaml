@@ -31,10 +31,12 @@ jobs:
         with:
           persist-credentials: false
 
-      # Every package with its own C++ code builds without fused multiply-add, so the mower computes like the PC.
+      # Every package with its own C++ code builds without fused multiply-add, so the mower computes like the PC;
+      # header-only (INTERFACE) libraries compile nothing themselves.
       - name: Floating-point contraction off in every C++ package
         run: |
-          missing=$(grep -L -e '-ffp-contract=off' $(grep -lE 'add_(library|executable)\(' src/*/CMakeLists.txt) || true)
+          missing=$(grep -L -e '-ffp-contract=off' \
+            $(grep -lP 'add_(library|executable)\(\S++(?!\s+INTERFACE\b)' src/*/CMakeLists.txt) || true)
           if [ -n "$missing" ]; then echo "::error::-ffp-contract=off missing in: $missing"; exit 1; fi
 
       - uses: ./.github/actions/dev-image

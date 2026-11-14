@@ -166,7 +166,10 @@ class EndToEnd(unittest.TestCase):
             except ProcessLookupError:
                 pass
         for pid in self.fake_pids():
-            os.kill(pid, signal.SIGKILL)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         self.app.stop()
         self.mosquitto.terminate()
         self.mosquitto.wait()
