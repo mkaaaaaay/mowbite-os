@@ -37,6 +37,9 @@ class PoseFilter {
   // expected position, variance that of each axis. Without correct_heading only the position moves.
   void UpdatePosition(const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian, double variance,
                       bool correct_heading = true);
+  // The same with the covariance of the two axes.
+  void UpdatePosition(const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian, const Eigen::Matrix2d& noise,
+                      bool correct_heading = true);
   // A heading: innovation is the measured minus the expected heading.
   void UpdateHeading(double innovation, double variance);
   // Sets the position and its variance, keeps the heading; the two are no longer correlated.

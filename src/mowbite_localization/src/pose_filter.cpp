@@ -66,6 +66,11 @@ void PoseFilter::UpdatePosition(const Eigen::Vector2d& innovation, const Antenna
   Update<2>(innovation, jacobian, Eigen::Matrix2d::Identity() * variance, correct_heading);
 }
 
+void PoseFilter::UpdatePosition(const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian,
+                                const Eigen::Matrix2d& noise, bool correct_heading) {
+  Update<2>(innovation, jacobian, noise, correct_heading);
+}
+
 void PoseFilter::UpdateHeading(double innovation, double variance) {
   Update<1>(Eigen::Matrix<double, 1, 1>(innovation), Eigen::Matrix<double, 1, 3>(0.0, 0.0, 1.0),
             Eigen::Matrix<double, 1, 1>(variance));

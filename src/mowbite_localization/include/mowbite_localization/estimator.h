@@ -3,7 +3,6 @@
 
 #include <Eigen/Core>
 #include <cmath>
-#include <deque>
 #include <optional>
 #include <string>
 #include <vector>
@@ -13,6 +12,7 @@
 #include "mowbite_localization/gyro_bias.h"
 #include "mowbite_localization/pose_filter.h"
 #include "mowbite_localization/position_accuracy.h"
+#include "mowbite_localization/state_history.h"
 
 namespace mowbite_localization {
 
@@ -66,6 +66,17 @@ struct Jump {
   double distance() const;
 };
 
+// What one gyro sample moved the estimate by, so that a second estimate on the same gyro and wheels (DockEstimator)
+// moves the same way: m along the mean heading, rad, and the s of gyro noise. still: the gyro offset holds, the mower
+// stands.
+struct Motion {
+  double time = 0.0;
+  double distance = 0.0;
+  double turn = 0.0;
+  double gyro_time = 0.0;
+  bool still = false;
+};
+
 // The localization without ROS: gyro and wheel speed move the pose of base_link, RTK fixes of the antenna and its
 // course correct it. Without a valid heading the position comes from the fixes alone. Times are seconds of one
 // monotonic clock.
@@ -103,6 +114,8 @@ class Estimator {
   // m/s and rad/s of the last step.
   double speed() const { return speed_; }
   double turn_rate() const { return turn_rate_; }
+  // The step of the last AddImu that returned true.
+  const Motion& motion() const { return motion_; }
   bool calibrated() const { return bias_.calibrated(); }
   double gyro_offset() const { return bias_.offset(); }
   // Calibration windows of the gyro thrown away since the last call, for the log.
@@ -164,6 +177,7 @@ class Estimator {
   double wheel_turn_ = 0.0;
   double speed_ = 0.0;
   double turn_rate_ = 0.0;
+  Motion motion_;
   // The gyro integrated since the start, never corrected: courses in a row are compared on it.
   double gyro_heading_ = 0.0;
   std::optional<LastFix> last_fix_;
@@ -171,7 +185,7 @@ class Estimator {
   std::optional<Jump> jump_;
   std::optional<Eigen::Vector2d> last_innovation_;
   // The last moments, to compare late GNSS data with.
-  std::deque<Moment> history_;
+  StateHistory<Moment> history_;
 };
 
 }  // namespace mowbite_localization

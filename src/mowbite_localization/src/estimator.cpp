@@ -3,7 +3,6 @@
 #include <Eigen/Cholesky>
 #include <algorithm>
 #include <cmath>
-#include <iterator>
 #include <utility>
 
 namespace mowbite_localization {
@@ -62,9 +61,9 @@ bool Estimator::AddImu(double t, double rate) {
   speed_ = speed;
   turn_rate_ = bias_.Corrected(rate);
   gyro_heading_ = WrapAngle(gyro_heading_ + turn_rate_ * dt);
-  const double distance = speed * dt;
-  filter_.Predict(distance, turn_rate_ * dt, bias_.holding() ? 0.0 : dt);
-  accuracy_.OnDistance(distance);
+  motion_ = Motion{t, speed * dt, turn_rate_ * dt, bias_.holding() ? 0.0 : dt, bias_.holding()};
+  filter_.Predict(motion_.distance, motion_.turn, motion_.gyro_time);
+  accuracy_.OnDistance(motion_.distance);
   Remember(t);
   return true;
 }
@@ -234,7 +233,7 @@ void Estimator::SetPose(const Pose2& pose) {
   gate_.Forget();
   accuracy_.Forget();
   course_.Clear();
-  history_.clear();
+  history_.Clear();
   last_fix_.reset();
   contradictions_ = 0;
   jump_.reset();
@@ -285,25 +284,16 @@ double Estimator::PositionAccuracy(double t) const {
 
 Estimator::Moment Estimator::MomentAt(double t) const {
   if (config_.gnss_latency <= 0.0 || history_.empty()) return Moment{t, filter_.state(), gyro_heading_};
-  // The newest moment not after t, else the oldest one kept.
-  auto it = std::upper_bound(history_.begin(), history_.end(), t + 1e-9,
-                             [](double time, const Moment& moment) { return time < moment.time; });
-  return it == history_.begin() ? history_.front() : *std::prev(it);
+  return *history_.At(t);
 }
 
 void Estimator::Remember(double t) {
   if (config_.gnss_latency <= 0.0) return;
-  history_.push_back(Moment{t, filter_.state(), gyro_heading_});
-  while (!history_.empty() && history_.front().time < t - config_.gnss_latency - 0.5) history_.pop_front();
+  history_.Add(Moment{t, filter_.state(), gyro_heading_}, t - config_.gnss_latency - 0.5);
 }
 
 void Estimator::ShiftHistory(const State& before) {
-  State delta = filter_.state() - before;
-  delta(2) = WrapAngle(delta(2));
-  for (Moment& moment : history_) {
-    moment.state += delta;
-    moment.state(2) = WrapAngle(moment.state(2));
-  }
+  history_.Shift(before, filter_.state());
 }
 
 }  // namespace mowbite_localization
