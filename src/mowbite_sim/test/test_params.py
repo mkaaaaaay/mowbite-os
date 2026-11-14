@@ -33,6 +33,9 @@ P = "/mower_logic/"
 
 # The dimensions of the platform, which the logic needs to start.
 GEOMETRY = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
+# The names of the settings of params.set, as the catalog of the interface gives them.
+with open(os.path.join(get_package_share_directory("mowbite_api"), "api.schema.json")) as schema:
+    SETTINGS = json.load(schema)["x-settings"]
 
 
 def generate_test_description():
@@ -111,10 +114,8 @@ class TestParams(unittest.TestCase):
                         str(self.probe.methods))
         self.assertTrue(self.probe.wait(lambda: self.probe.limits == (0.1, 7.0)), str(self.probe.limits))
         self.assertTrue(self.probe.wait(lambda: self.probe.params.get(P + "gps_timeout") == 7.0), str(self.probe.params))
-        logic = {k for k in self.probe.params if k.startswith(P)}
-        self.assertEqual(len(logic), 15, sorted(logic))
-        # 0: the driver keeps its own cutting height.
-        self.assertEqual(self.probe.params[P + "mow_height_mm"], 0)
+        logic = sorted(k[len(P):] for k in self.probe.params if k.startswith(P))
+        self.assertEqual(logic, sorted(SETTINGS))
         self.assertEqual(self.probe.params[P + "rain_mode"], 1)
         self.assertEqual(self.probe.params["/ll/board"], "MowBite")
         self.assertTrue(self.probe.logged("GPS limits: accuracy 0.100 m, timeout 7.0 s"))

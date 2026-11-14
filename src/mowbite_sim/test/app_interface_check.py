@@ -155,10 +155,6 @@ def rpc(method, params=None, rid="1", timeout=5.0, response_topic=RESPONSE, corr
 
 
 REC = "mower_logic:area_recording/"
-LOGIC_SETTINGS = ["rain_mode", "rain_delay_minutes", "rain_check_seconds", "automatic_mode", "gps_timeout",
-                  "max_position_accuracy", "gps_wait_time", "docking_approach_distance", "docking_distance",
-                  "docking_retry_count", "undock_distance", "motor_hot_temperature", "motor_cold_temperature",
-                  "dock_at_sunset", "mow_height_mm"]
 GEOMETRY_KEYS = ["robot_width", "robot_front", "robot_rear", "robot_outline", "mower_width", "blade_ahead",
                  "blade_offset", "antenna_x", "antenna_y", "track", "wheel_radius", "dock_contact_x", "ticks_per_m",
                  "imu_roll", "imu_pitch"]
@@ -408,7 +404,9 @@ if offers("map.area_properties"):
 if offers("params.set") and args.target == "mowbite-os":
     p = json.loads(latest("params/json") or "{}")
     logic = sorted(k[len("/mower_logic/"):] for k in p if k.startswith("/mower_logic/"))
-    check("params/json has the settings of params.set", logic == sorted(LOGIC_SETTINGS), ",".join(logic))
+    # The settings of params.set as the schema of system.api lists them.
+    settings = sorted((API_SCHEMA or {}).get("x-settings") or {})
+    check("params/json has the settings of params.set", bool(settings) and logic == settings, ",".join(logic))
 if args.target == "mowbite-os" and offers("robot.geometry.set") and offers("robot.geometry.get"):
     # The dimensions of the mower: every key with value, default, stored and whether the user can set it, the version
     # and the platform; the same values with the version in params/json for the planner.
