@@ -18,11 +18,11 @@
     journal_max_days: 14.0
     journal_reserve_mb: 1024.0
     # The dock marker of the rear camera (hw/dock_marker): x, y (m) and yaw (rad) of the marker in base_link of the
-    # docked mower (until M3b from the mount of tron_rear and about 0.07 m from the camera to the marker); it leaves
+    # docked mower (M3b 13.11.: seen by the camera from 0.1 to 0.8 m and carried to the docked pose); it leaves
     # the image marker_blind_distance m before the docked pose (M3c, estimated) and is found up to marker_range m
     # (every image up to 1.2 m, measured 14.11. in a dark room with the station lit); an image older than
     # marker_max_age s on arrival is dropped (M5). marker_range 0: no marker, no localization/dock_pose.
-    dock_marker: [-0.175, 0.0, 0.0]
+    dock_marker: [-0.160, 0.0, 0.0]
     marker_blind_distance: 0.07
     marker_range: 1.2
     marker_max_age: 0.3
