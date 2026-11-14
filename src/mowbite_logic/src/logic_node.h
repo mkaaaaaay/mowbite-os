@@ -138,7 +138,7 @@ class LogicNode : public rclcpp::Node {
   void FollowJobPath(const JobPath& path, size_t start_index);
   void UpdateBlade();
   void UpdateBladeLocked();
-  void SendBlade(bool on);
+  void SendBlade(bool on, uint16_t height_mm);
   void JudgeRestart(const std::string& crash_record);
   bool WriteSession(bool clean);
   void StartWriter();
@@ -309,6 +309,11 @@ class LogicNode : public rclcpp::Node {
   double blade_lease_s_ = 1.0;
   double blade_renew_s_ = 0.5;
   float blade_lease_max_s_ = 0;
+  // Height range of hw/capabilities, none until they came; the height of the blade's run, taken at its start.
+  bool blade_height_control_ = false;
+  uint16_t blade_height_min_mm_ = 0;
+  uint16_t blade_height_max_mm_ = 0;
+  uint16_t blade_height_mm_ = 0;
   // rain_sensor of hw/capabilities, unknown until they came; whether the useless rain_mode was told.
   std::optional<bool> rain_sensor_;
   bool rain_told_ = false;

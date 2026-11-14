@@ -152,8 +152,8 @@ class BridgeCore {
   void OnParams(std::string_view message);
   void OnPublish(const std::string& topic, const std::string& payload, bool retain);
   void OnMap(const std::string& text);
-  // From hw/capabilities: the platform and stop_release of system.info.
-  void OnPlatform(const std::string& platform, const Json& stop_release = Json());
+  // From hw/capabilities: the platform, stop_release and blade_height of system.info.
+  void OnPlatform(const std::string& platform, const Json& stop_release = Json(), const Json& blade_height = Json());
   // provider as for OnSensor. Another provider under the name of a node is a new instance of it: the calls its old
   // one still owes an answer get -32601.
   void OnRpcMethods(const std::string& node, const std::vector<std::string>& methods,
@@ -210,6 +210,7 @@ class BridgeCore {
   int mqtt_version_ = 5;
   std::string platform_;
   Json stop_release_;
+  Json blade_height_;
   // current_state and current_sub_state of the last robot_state, for refused requests.
   std::string state_;
   std::string sub_state_;

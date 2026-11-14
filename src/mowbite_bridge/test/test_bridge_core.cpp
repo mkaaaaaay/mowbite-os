@@ -223,13 +223,15 @@ TEST_F(Core, LocalMethods) {
   const Json info = Call(core_, "system.info", Json{{"x", 1}})["result"];
   EXPECT_EQ(info.dump(), R"({"name":"mowbite-os","version":"1.2.3","platform":"","schema":)" +
                              std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) +
-                             R"(,"mqtt":5,"stop_release":null})");
-  core_.OnPlatform("airseekers_tron", StopRelease(2.0, 3.0, 10.0));
+                             R"(,"mqtt":5,"stop_release":null,"blade_height":null})");
+  core_.OnPlatform("airseekers_tron", StopRelease(2.0, 3.0, 10.0), BladeHeight(true, 30, 90, 60));
   const Json tron = Call(core_, "system.info")["result"];
   EXPECT_EQ(tron["platform"], "airseekers_tron");
   EXPECT_EQ(tron["stop_release"].dump(), R"({"free_s":2.0,"hold_s":3.0,"max_hold_s":10.0})");
+  EXPECT_EQ(tron["blade_height"].dump(), R"({"min_mm":30,"max_mm":90,"default_mm":60})");
   core_.OnPlatform("airseekers_tron", StopRelease(0.0, 0.0, 0.0));
   EXPECT_TRUE(Call(core_, "system.info")["result"]["stop_release"].is_null());
+  EXPECT_TRUE(Call(core_, "system.info")["result"]["blade_height"].is_null());
   EXPECT_EQ(Call(core_, "rpc.methods", Json::array())["result"],
             Json({"logs.recent", "rpc.methods", "rpc.ping", "sensors.list", "system.api", "system.info"}));
   // The schema of the interface with its version, the same as system.info.api.

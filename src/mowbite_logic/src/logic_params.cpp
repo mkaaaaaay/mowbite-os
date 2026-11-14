@@ -123,4 +123,9 @@ ParamsResult LogicParams::Set(const json& request) {
   return result;
 }
 
+uint16_t BladeHeightMm(double setting, bool control, uint16_t min_mm, uint16_t max_mm) {
+  if (!control || !(setting >= 1) || min_mm == 0 || min_mm > max_mm) return 0;
+  return static_cast<uint16_t>(std::clamp(std::round(setting), static_cast<double>(min_mm), static_cast<double>(max_mm)));
+}
+
 }  // namespace mowbite_logic

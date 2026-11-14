@@ -493,6 +493,12 @@ const std::vector<Command>& Commands() {
                         {Number("free_s", "s", "STOP not pressed for this long before"),
                          Number("hold_s", "s", "Held at least this long"),
                          Number("max_hold_s", "s", "Let go before this")},
+                        false)),
+        Nullable(Object("blade_height",
+                        "Cutting heights the platform sets for /mower_logic/mow_height_mm; null or missing where it "
+                        "sets none, then the setting has no effect",
+                        {Integer("min_mm", "Lowest height"), Integer("max_mm", "Highest height"),
+                         Integer("default_mm", "Height of the platform for 0")},
                         false))},
        "",
        {}},
@@ -1086,6 +1092,8 @@ const std::vector<SettingEntry>& LogicSettings() {
       {"motor_cold_temperature", false, 20.0, 150.0, 40.0, "deg.C",
        "The blade motor may run again below this; below motor_hot_temperature"},
       {"dock_at_sunset", true, 0, 1, 1, "", "Whether a run started by hand goes home at sunset"},
+      {"mow_height_mm", true, 0, 150, 0, "mm",
+       "Cutting height from the next start of the blade, within blade_height of system.info; 0 = that of the platform"},
   };
   return settings;
 }

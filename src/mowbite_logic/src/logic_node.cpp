@@ -243,6 +243,9 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
           std::lock_guard<std::mutex> lock(mutex_);
           core_.Call<&LogicCore::OnCapabilities>(!msg->safety_measurement_date.empty(), msg->charge_stop);
           blade_lease_max_s_ = msg->blade_lease_max_s;
+          blade_height_control_ = msg->blade_height_control;
+          blade_height_min_mm_ = msg->blade_height_min_mm;
+          blade_height_max_mm_ = msg->blade_height_max_mm;
           rain_sensor_ = msg->rain_sensor;
           TellRainWithoutSensor();
         }
@@ -1043,7 +1046,7 @@ void LogicNode::UpdateBladeLocked() {
   if (!wanted) {
     if (!blade_on_requested_) return;
     blade_on_requested_ = false;
-    SendBlade(false);
+    SendBlade(false, 0);
     return;
   }
   if (blade_on_requested_ && t - blade_sent_s_ < blade_renew_s_) return;
@@ -1051,15 +1054,21 @@ void LogicNode::UpdateBladeLocked() {
     core_.Call<&LogicCore::OnBladeRefused>("hw/blade is not available", 0);
     return;
   }
+  // The renewals keep the height of the start: a change of mow_height_mm waits for the next start.
+  if (!blade_on_requested_) {
+    blade_height_mm_ = BladeHeightMm(logic_params_.Get("mow_height_mm"), blade_height_control_, blade_height_min_mm_,
+                                     blade_height_max_mm_);
+  }
   blade_on_requested_ = true;
   blade_sent_s_ = t;
-  SendBlade(true);
+  SendBlade(true, blade_height_mm_);
 }
 
 // Called with the mutex held.
-void LogicNode::SendBlade(bool on) {
+void LogicNode::SendBlade(bool on, uint16_t height_mm) {
   auto request = std::make_shared<mowbite_msgs::srv::SetBlade::Request>();
   request->on = on;
+  request->height_mm = height_mm;
   double lease = blade_lease_s_;
   if (blade_lease_max_s_ > 0) lease = std::min(lease, static_cast<double>(blade_lease_max_s_));
   request->lease_s = static_cast<float>(lease);

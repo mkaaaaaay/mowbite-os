@@ -3,6 +3,7 @@
 #ifndef MOWBITE_LOGIC_LOGIC_PARAMS_H
 #define MOWBITE_LOGIC_LOGIC_PARAMS_H
 
+#include <cstdint>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -24,7 +25,7 @@ struct ParamSpec {
   double def;
 };
 
-// The 13 settings of mowbite_api::LogicSettings() in the order of the app's groups. max_position_accuracy at most 0.3 m,
+// The settings of mowbite_api::LogicSettings() in the order of the app's groups. max_position_accuracy at most 0.3 m,
 // gps_timeout at least 1 s, docking_approach_distance and undock_distance 0.5 to 2 m and docking_retry_count at most 5
 // are bounds of MowBite OS; MowerLogic.cfg allows 1 m, 0 s, 0 to 5 m, 0 to 100 m and 50.
 const std::vector<ParamSpec>& LogicParamSpecs();
@@ -61,6 +62,10 @@ class LogicParams {
 
   std::map<std::string, double> values_;
 };
+
+// height_mm of hw/blade from mow_height_mm and hw/capabilities: 0 (the driver's height) without height control, for 0
+// or for bounds that make no range, else the setting within min_mm..max_mm.
+uint16_t BladeHeightMm(double setting, bool control, uint16_t min_mm, uint16_t max_mm);
 
 }  // namespace mowbite_logic
 

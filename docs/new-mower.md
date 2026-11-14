@@ -38,7 +38,9 @@ Duties:
 - Drive: at most one frame per 100 ms to the board. Without `hw/cmd_vel` for a fixed time: three zero frames 100 ms
   apart, then none. A heartbeat alone stops nothing.
 - Blade: on only with a lease (`lease_s`), off when it runs out; heights outside the limits of `hw/capabilities` are
-  refused; never on while an emergency is latched.
+  refused; never on while an emergency is latched. With `blade_height_control` the driver gives its limits and the
+  height it cuts at for `height_mm` 0 (`blade_height_default_mm`); the app then offers `mow_height_mm`, which the logic
+  sends at each start of the blade. Without it the logic always sends 0.
 - Emergency: reason bits numbered like the EMERGENCY event; stop button and lift stay latched until a release. The host
   latches only its own bits (`kHostLatchReasons` in `mowbite_hold/restart.h`). A release waits a short window for the
   flags to drop; a new reason within it ends the window without releasing.

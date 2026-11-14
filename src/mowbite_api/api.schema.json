@@ -9080,6 +9080,33 @@
           "description": "Version of this interface, the x-api of the schema system.api gives",
           "type": "integer"
         },
+        "blade_height": {
+          "additionalProperties": false,
+          "description": "Cutting heights the platform sets for /mower_logic/mow_height_mm; null or missing where it sets none, then the setting has no effect",
+          "properties": {
+            "default_mm": {
+              "description": "Height of the platform for 0",
+              "type": "integer"
+            },
+            "max_mm": {
+              "description": "Highest height",
+              "type": "integer"
+            },
+            "min_mm": {
+              "description": "Lowest height",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "min_mm",
+            "max_mm",
+            "default_mm"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "mqtt": {
           "description": "MQTT version of the bridge at the broker: 5 sends each answer to the response topic of its request, 3 sends all to rpc/response",
           "type": "integer"
@@ -12542,11 +12569,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:27",
+  "$id": "urn:mowbite-os:api:28",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null).",
   "title": "MowBite OS app interface",
-  "x-api": 27,
+  "x-api": 28,
   "x-commands": {
     "docking.abort": {
       "action": "mower_logic:docking/abort_docking",
@@ -17020,6 +17047,14 @@
       "min": 20.0,
       "type": "number",
       "unit": "deg.C"
+    },
+    "mow_height_mm": {
+      "default": 0.0,
+      "description": "Cutting height from the next start of the blade, within blade_height of system.info; 0 = that of the platform",
+      "max": 150.0,
+      "min": 0.0,
+      "type": "integer",
+      "unit": "mm"
     },
     "rain_check_seconds": {
       "default": 20.0,

@@ -153,19 +153,26 @@ std::string VersionText(const std::string& version) {
   return Dump(Json{{"version", version.empty() ? "UNKNOWN VERSION" : version}});
 }
 
-Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version, const Json& stop_release) {
+Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version, const Json& stop_release,
+                const Json& blade_height) {
   return Json{{"name", "mowbite-os"},
               {"version", version.empty() ? "UNKNOWN VERSION" : version},
               {"platform", platform},
               {"schema", DataSchema()},
               {"api", mowbite_api::kApi},
               {"mqtt", mqtt_version},
-              {"stop_release", stop_release}};
+              {"stop_release", stop_release},
+              {"blade_height", blade_height}};
 }
 
 Json StopRelease(double free_s, double hold_s, double max_hold_s) {
   if (!(free_s > 0)) return Json();
   return Json{{"free_s", free_s}, {"hold_s", hold_s}, {"max_hold_s", max_hold_s}};
+}
+
+Json BladeHeight(bool control, int min_mm, int max_mm, int default_mm) {
+  if (!control) return Json();
+  return Json{{"min_mm", min_mm}, {"max_mm", max_mm}, {"default_mm", default_mm}};
 }
 
 int DataSchema() {

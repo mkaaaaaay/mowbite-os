@@ -108,12 +108,15 @@ std::string CapabilitiesText();
 // version/json; an empty version is "UNKNOWN VERSION".
 std::string VersionText(const std::string& version);
 
-// system.info; stop_release is null where the platform offers no release with STOP.
+// system.info; stop_release and blade_height are null where the platform offers no release with STOP or no height.
 Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version,
-                const Json& stop_release = Json());
+                const Json& stop_release = Json(), const Json& blade_height = Json());
 
 // stop_release of system.info from the times of hw/capabilities: null without a free time.
 Json StopRelease(double free_s, double hold_s, double max_hold_s);
+
+// blade_height of system.info from hw/capabilities: null without blade_height_control.
+Json BladeHeight(bool control, int min_mm, int max_mm, int default_mm);
 
 // The schema of data_dir this image writes, from data_schema.json of the package (tron.launch.py reads the same file).
 int DataSchema();

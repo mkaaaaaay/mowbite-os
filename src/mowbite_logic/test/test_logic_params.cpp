@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "mowbite_api/catalog.h"
 #include "mowbite_logic/logic_params.h"
 
@@ -139,6 +141,31 @@ TEST(LogicParams, BadFileChangesNothing) {
   EXPECT_FALSE(params.Load("[1, 2]"));
   EXPECT_FALSE(params.Load(R"({"gps_wait_time": 5, "motor_cold_temperature": 90})"));
   EXPECT_EQ(params.Values(), before);
+}
+
+TEST(BladeHeight, ZeroLeavesTheHeightToTheDriver) {
+  EXPECT_EQ(BladeHeightMm(0, true, 30, 90), 0);
+  EXPECT_EQ(BladeHeightMm(0.4, true, 30, 90), 0);
+  EXPECT_EQ(BladeHeightMm(std::nan(""), true, 30, 90), 0);
+  EXPECT_EQ(BladeHeightMm(60, false, 0, 0), 0);
+  EXPECT_EQ(BladeHeightMm(60, false, 30, 90), 0);
+  EXPECT_EQ(BladeHeightMm(60, true, 0, 0), 0);
+  EXPECT_EQ(BladeHeightMm(60, true, 90, 30), 0);
+}
+
+TEST(BladeHeight, WithinTheRangeOfThePlatform) {
+  EXPECT_EQ(BladeHeightMm(60, true, 30, 90), 60);
+  EXPECT_EQ(BladeHeightMm(45.6, true, 30, 90), 46);
+  EXPECT_EQ(BladeHeightMm(1, true, 30, 90), 30);
+  EXPECT_EQ(BladeHeightMm(150, true, 30, 90), 90);
+}
+
+TEST(BladeHeight, TheSettingIsZeroUntilSet) {
+  LogicParams params;
+  EXPECT_EQ(params.Values()["mow_height_mm"], 0);
+  ASSERT_TRUE(params.Set(Request({{"/mower_logic/mow_height_mm", 75}})).ok);
+  EXPECT_DOUBLE_EQ(params.Get("mow_height_mm"), 75);
+  EXPECT_EQ(params.Set(Request({{"/mower_logic/mow_height_mm", 400}})).applied["/mower_logic/mow_height_mm"], 150);
 }
 
 }  // namespace
