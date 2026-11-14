@@ -112,7 +112,9 @@ class TestParams(unittest.TestCase):
         self.assertTrue(self.probe.wait(lambda: self.probe.limits == (0.1, 7.0)), str(self.probe.limits))
         self.assertTrue(self.probe.wait(lambda: self.probe.params.get(P + "gps_timeout") == 7.0), str(self.probe.params))
         logic = {k for k in self.probe.params if k.startswith(P)}
-        self.assertEqual(len(logic), 14, sorted(logic))
+        self.assertEqual(len(logic), 15, sorted(logic))
+        # 0: the driver keeps its own cutting height.
+        self.assertEqual(self.probe.params[P + "mow_height_mm"], 0)
         self.assertEqual(self.probe.params[P + "rain_mode"], 1)
         self.assertEqual(self.probe.params["/ll/board"], "MowBite")
         self.assertTrue(self.probe.logged("GPS limits: accuracy 0.100 m, timeout 7.0 s"))
