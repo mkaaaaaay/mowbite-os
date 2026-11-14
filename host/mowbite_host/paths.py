@@ -38,6 +38,8 @@ class Paths:
         self.os_setup = p + "/usr/lib/mowbite/os-setup"
         self.env_files = [p + path for path in ENV_FILES]
         self.inbox = p + "/userdata/mowbite-update/inbox"
+        # Filled by mowbite-host from the net (net.py), root only.
+        self.net = p + "/userdata/mowbite-update/net"
         # The installations of the host itself and the seed in the rootfs; mowbite_boot chooses between them.
         self.host = Place("host", p + mowbite_boot.OPT, False)
         self.host_seed = p + mowbite_boot.SEED

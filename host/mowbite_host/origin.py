@@ -35,9 +35,9 @@ def _component(name):
 
 
 class Inbox:
-    def __init__(self, paths):
+    def __init__(self, paths, folder=None):
         self.paths = paths
-        self.folder = paths.inbox
+        self.folder = folder or paths.inbox
         # Bundles read without an index: (name, size, mtime_ns) -> candidate or None when it is no good bundle.
         self._read = {}
 

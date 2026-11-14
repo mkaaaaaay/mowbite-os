@@ -19,7 +19,7 @@ import threading
 import time
 
 import mowbite_host
-from mowbite_host import Refused, bundle, carrier as carriers, compat, files, gate
+from mowbite_host import Refused, bundle, carrier as carriers, compat, files, gate, net
 from mowbite_host.compat import app_suffices
 from mowbite_host.installer import HOLD_SECONDS, AppFiles, HostInstaller, Installer, WithPlanner, os_meta, skipped
 
@@ -39,6 +39,7 @@ SETTLED = ("active", "inactive", "failed")
 # A revision cut off this often during its switch (power cut) is blocked.
 MAX_ATTEMPTS = 2
 AUTO_DEFAULT = {"enabled": False, "from": "02:00", "to": "05:00"}
+ORIGIN_DEFAULT = {"channel": "stable", "index_serial": 0, "last": None}
 IDLE = {"phase": "idle", "component": None, "revision": None, "reason": None}
 HHMM = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
 
@@ -70,10 +71,11 @@ class Restarting(Exception):
 
 class Updater:
     """os_rpc: request_hold(seconds) and release_hold() over the broker; their answers are not trusted, the gate reads
-    the files. on_change(status) after every change of the status."""
+    the files. on_change(status) after every change of the status. net: net.Net, None without bundles from the
+    net."""
 
-    def __init__(self, paths, carrier, health, inbox, os_rpc, on_change=None):
-        self.paths, self.carrier, self.inbox, self.os_rpc = paths, carrier, inbox, os_rpc
+    def __init__(self, paths, carrier, health, inbox, os_rpc, on_change=None, net=None):
+        self.paths, self.carrier, self.inbox, self.os_rpc, self.net = paths, carrier, inbox, os_rpc, net
         places = paths.places
         self.installers = {"os": Installer(paths, places["os"], carrier, health),
                            "planner": Installer(paths, places["planner"], carrier, WithPlanner(health)),
@@ -95,11 +97,13 @@ class Updater:
         self.gate_wait = GATE_WAIT
         self.state = self._load()
 
-    # update.json: {auto, app_version, last, components {id: {serial, installed_at, crashes_since_install, last_crash,
-    # blocked {revision: {reason, result?, t}}, attempts {revision: n}, auto_tried {revision, t}}}}.
+    # update.json: {auto, origin {channel, index_serial, last}, app_version, last, components {id: {serial,
+    # installed_at, crashes_since_install, last_crash, blocked {revision: {reason, result?, t}}, attempts {revision: n},
+    # auto_tried {revision, t}}}}.
     def _load(self):
         state = files.read_json(self.paths.state) or {}
         state.setdefault("auto", dict(AUTO_DEFAULT))
+        state["origin"] = {**ORIGIN_DEFAULT, **state.get("origin", {})}
         state.setdefault("app_version", None)
         state.setdefault("last", None)
         components = state.setdefault("components", {})
@@ -173,7 +177,7 @@ class Updater:
             why = compat.reason(component, best, self._running_meta())
             blocked = {"reason": why, "t": None} if why else None
         return {"revision": best["revision"], "date": best.get("date", best["serial"]), "min_app": best.get("min_app"),
-                "version": best.get("version"), "blocked": blocked}
+                "version": best.get("version"), "blocked": blocked, "from": best.get("from", "inbox")}
 
     # running, previous (where a rollback goes) and for the planner and the app source (own while active names their
     # installation, else bundled) and own_skipped {revision, reason} for an own installation left aside.
@@ -207,8 +211,11 @@ class Updater:
                     "available": self._available(component),
                     "installed_at": entry["installed_at"], "crashes_since_install": entry["crashes_since_install"],
                     "auto": self.state["auto"]["enabled"]})
+            origin = self.state["origin"]
             return {**self._phase, "components": components, "auto": dict(self.state["auto"]),
-                    "last": self.state["last"]}
+                    "last": self.state["last"],
+                    "origin": {"channel": origin["channel"], "url": net.INDEX_URL if self.net else None,
+                               "downloading": bool(self.net and self.net.busy()), **(origin["last"] or {})}}
 
     def _set_phase(self, phase, reason=None, **extra):
         with self._lock:
@@ -276,16 +283,50 @@ class Updater:
     def busy(self):
         return self._worker is not None and self._worker.is_alive()
 
-    # Reads the inbox again; the candidates and the inbox within its limits.
-    def check(self):
-        try:
-            candidates = self.inbox.candidates()
-        except Refused as why:
-            print(f"inbox: {why}", flush=True)
-            candidates = []
+    # Reads the inbox and the net folder again; the candidates and both folders within their limits. fetch: also
+    # asks the net for a newer index in the background, poll takes its result.
+    def check(self, fetch=False):
+        candidates = []
+        for name, source, read in (("inbox", self.inbox, self.inbox.candidates),
+                                   ("net", self.net, lambda: self.net.candidates(self.state["origin"]["channel"]))):
+            if source is None:
+                continue
+            try:
+                found = read()
+            except Refused as why:
+                print(f"{name}: {why}", flush=True)
+                found = []
+            with self._lock:
+                candidates += source.prune(found, self.serial_of)
         with self._lock:
-            self._candidates = self.inbox.prune(candidates, self.serial_of)
+            self._candidates = candidates
+        if fetch and self.net:
+            self.net.start(self.state["origin"]["channel"], self.state["origin"]["index_serial"], self.serial_of)
         self._changed()
+
+    # From the main loop: the result of a refresh from the net that ended, then its bundles as candidates.
+    def poll(self):
+        if not self.net or not self.net.done.is_set():
+            return
+        self.net.done.clear()
+        result = dict(self.net.result)
+        with self._lock:
+            origin = self.state["origin"]
+            if isinstance(result.get("index_serial"), int):
+                origin["index_serial"] = max(origin["index_serial"], result["index_serial"])
+            origin["last"] = result
+            self._save()
+        if result["result"] != "ok":
+            print(f"net: {result['result']}: {result.get('message')}", flush=True)
+        self.check()
+
+    def set_channel(self, channel):
+        if channel not in net.CHANNELS:
+            raise Refused("INVALID", f"channel is one of {', '.join(net.CHANNELS)}")
+        with self._lock:
+            self.state["origin"]["channel"] = channel
+            self._save()
+        self.check(fetch=True)
 
     def set_auto(self, enabled, start, end):
         if not isinstance(enabled, bool) or not all(isinstance(t, str) and HHMM.fullmatch(t) for t in (start, end)):
@@ -302,7 +343,7 @@ class Updater:
         if revision is None:
             available = self._available(component)
             if available is None:
-                raise Refused("NO_NEWER", "no newer revision found; scp it into the inbox and check again")
+                raise Refused("NO_NEWER", "no newer revision found in the inbox or from the net")
             revision = available["revision"]
         for candidate in self._candidates:
             if candidate["component"] == component and candidate["revision"] == revision:
@@ -546,7 +587,7 @@ class Updater:
         place = installer.place
         try:
             self._set_phase("verifying", component=component, revision=revision)
-            staged = self.inbox.stage(candidate)
+            staged = (self.net if candidate.get("from") == "net" else self.inbox).stage(candidate)
             if staged.serial <= self.serial_of(component):
                 raise Refused("OLD_SERIAL", f"serial {staged.serial} is not newer than the installed "
                                             f"{self.serial_of(component)}")

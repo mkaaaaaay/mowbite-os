@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "boot"))
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import support  # noqa: E402
-from mowbite_host import Refused, bundle, carrier, files, gate, installer, origin, paths, updater  # noqa: E402
+from mowbite_host import Refused, bundle, carrier, files, gate, installer, net, origin, paths, updater  # noqa: E402
 
 A, B, C = "aaaaaaa", "bbbbbbb", "ccccccc"
 
@@ -222,6 +222,167 @@ class InboxTest(Base):
         self.index([self.entry(a, file="../" + os.path.basename(a))])
         self.updater.check()
         self.assertIsNone(self.updater.status()["components"][0]["available"])
+
+
+class NetTest(Base):
+    """The net as a folder of files: fetch copies BASE + <path> from self.served, the way download writes it."""
+
+    def setUp(self):
+        super().setUp()
+        self.served = os.path.join(self.root, "served")
+        os.makedirs(os.path.join(self.served, "index"))
+        self.fetched = []
+        self.net = net.Net(self.paths, fetch=self.fetch)
+        self.updater = updater.Updater(self.paths, self.fake, self.updater.installers["os"].health,
+                                       origin.Inbox(self.paths), self.fake, net=self.net)
+        self.updater.gate_wait = 0
+        self.index_serial = 100
+
+    def fetch(self, url, path, limit, seconds):
+        self.assertTrue(url.startswith(net.BASE))
+        self.fetched.append(url[len(net.BASE):])
+        source = os.path.join(self.served, url[len(net.BASE):])
+        if not os.path.isfile(source):
+            raise net.Failed("unreachable", f"{url}: 404")
+        if os.path.getsize(source) > limit:
+            raise net.Failed("too_large", f"{url} has more than {limit} bytes")
+        shutil.copyfile(source, path)
+
+    # A signed bundle of rev published as release os-<rev>: its index entry.
+    def publish(self, rev, channel="preview", **fields):
+        folder = os.path.join(self.served, f"os-{rev}")
+        os.makedirs(folder)
+        path = self.bundle(rev, folder=folder)
+        with open(path, "rb") as f:
+            data = f.read()
+        meta = json.loads(tarfile.open(path).extractfile(f"{rev}/bundle.json").read())
+        name = os.path.basename(path)
+        return {"component": "os", "revision": rev, "serial": meta["serial"], "date": meta["serial"],
+                "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "min_app": meta["min_app"],
+                "file": name, "url": f"os-{rev}/{name}", "channel": channel, **fields}
+
+    def index(self, entries, serial=None, namespace="mowbite-index"):
+        self.index_serial += 1
+        path = os.path.join(self.served, "index", origin.INDEX)
+        with open(path, "w") as f:
+            json.dump({"schema": 1, "serial": serial or self.index_serial, "date": 1, "bundles": entries}, f)
+        self.sign(path, namespace)
+
+    # update.check with the net, then what the main loop does once the refresh ended.
+    def refresh(self):
+        self.updater.check(fetch=True)
+        self.assertTrue(self.net.done.wait(10))
+        self.updater.poll()
+        return self.updater.status()
+
+    def available(self):
+        return self.updater.status()["components"][0]["available"]
+
+    def test_preview_only_in_preview(self):
+        self.index([self.publish(A)])
+        status = self.refresh()
+        self.assertEqual((status["origin"]["channel"], status["origin"]["result"]), ("stable", "ok"))
+        self.assertIsNone(self.available())
+        self.assertNotIn(f"os-{A}/mowbite-os-{A}.tar.gz", self.fetched)
+        self.updater.set_channel("preview")
+        self.assertTrue(self.net.done.wait(10))
+        self.updater.poll()
+        self.assertEqual((self.available()["revision"], self.available()["from"]), (A, "net"))
+        self.assertEqual(self.run_update("os")["result"], "installed")
+        self.assertEqual(self.updater.state["origin"]["index_serial"], self.index_serial)
+
+    def test_stable_is_taken_in_both(self):
+        self.index([self.publish(A, channel="stable")])
+        self.refresh()
+        self.assertEqual(self.available()["revision"], A)
+
+    def test_newest_only_and_nothing_twice(self):
+        self.updater.set_channel("preview")
+        self.assertTrue(self.net.done.wait(10))
+        self.index([self.publish(A), self.publish(B)])
+        self.fetched = []
+        self.refresh()
+        self.assertEqual(self.available()["revision"], B)
+        self.assertNotIn(f"os-{A}/mowbite-os-{A}.tar.gz", self.fetched)
+        self.fetched = []
+        self.refresh()
+        self.assertEqual(self.fetched, ["index/index.json", "index/index.json.sig"])
+
+    def test_not_newer_than_installed(self):
+        self.updater.set_channel("preview")
+        self.assertTrue(self.net.done.wait(10))
+        self.index([self.publish(A)])
+        self.refresh()
+        self.assertEqual(self.run_update("os")["result"], "installed")
+        self.fetched = []
+        self.refresh()
+        self.assertEqual(self.fetched, ["index/index.json", "index/index.json.sig"])
+        self.assertIsNone(self.available())
+
+    def test_index_badly_signed(self):
+        self.index([self.publish(A, channel="stable")], namespace="mowbite-os")
+        self.assertEqual(self.refresh()["origin"]["result"], "bad_index")
+        self.assertIsNone(self.available())
+        self.assertEqual(os.listdir(self.paths.net), [])
+
+    def test_older_index_refused(self):
+        self.index([self.publish(A, channel="stable")])
+        self.refresh()
+        self.index([], serial=self.index_serial - 5)
+        self.assertEqual(self.refresh()["origin"]["result"], "bad_index")
+        self.assertEqual(self.available()["revision"], A)
+
+    def test_bundle_not_the_one_named(self):
+        self.index([self.publish(A, channel="stable", sha256="0" * 64)])
+        self.assertEqual(self.refresh()["origin"]["result"], "bad_bundle")
+        self.assertIsNone(self.available())
+        self.assertNotIn(f"mowbite-os-{A}.tar.gz", os.listdir(self.paths.net))
+
+    def test_larger_than_a_bundle_may_be(self):
+        entry = self.publish(A, channel="stable")
+        self.index([{**entry, "size": bundle.MAX_BUNDLE["os"] + 1}])
+        self.assertEqual(self.refresh()["origin"]["result"], "too_large")
+        self.assertNotIn(f"os-{A}/mowbite-os-{A}.tar.gz", self.fetched)
+
+    def test_entries_with_a_path_left_out(self):
+        entry = self.publish(A, channel="stable")
+        bad = [{**entry, "url": "../os-a/" + entry["file"]}, {**entry, "url": "/etc/" + entry["file"]},
+               {**entry, "url": "https://example.com/" + entry["file"]}, {**entry, "file": "other.tar.gz"},
+               {**entry, "channel": "nightly"}]
+        self.index(bad)
+        self.assertEqual(self.refresh()["origin"]["result"], "ok")
+        self.assertIsNone(self.available())
+        self.assertEqual(sorted(os.listdir(self.paths.net)), [origin.INDEX, origin.INDEX + ".sig"])
+
+    def test_files_the_index_drops_leave(self):
+        self.index([self.publish(A, channel="stable")])
+        self.refresh()
+        self.index([])
+        self.refresh()
+        self.assertEqual(sorted(os.listdir(self.paths.net)), [origin.INDEX, origin.INDEX + ".sig"])
+        self.assertIsNone(self.available())
+
+    def test_unreachable_keeps_what_is_there(self):
+        self.index([self.publish(A, channel="stable")])
+        self.refresh()
+        os.remove(os.path.join(self.served, "index", origin.INDEX))
+        self.assertEqual(self.refresh()["origin"]["result"], "unreachable")
+        self.assertEqual(self.available()["revision"], A)
+
+    def test_channel_is_checked(self):
+        with self.assertRaises(Refused):
+            self.updater.set_channel("nightly")
+
+    def test_addresses(self):
+        for url in ("http://github.com/x", "https://example.com/x", "https://github.com.example.com/x",
+                    "https://objects.githubusercontent.com.evil.org/x", "file:///etc/passwd"):
+            with self.assertRaises(net.Failed, msg=url):
+                net._allowed(url)
+        for url in ("https://github.com/mkaaaaaay/mowbite-releases/releases/download/index/index.json",
+                    "https://release-assets.githubusercontent.com/x?y=1"):
+            net._allowed(url)
+        with self.assertRaises(net.Failed):
+            net._Redirect().redirect_request(None, None, 302, "Found", {}, "https://example.com/x")
 
 
 class StageTest(Base):

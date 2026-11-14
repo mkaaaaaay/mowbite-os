@@ -139,7 +139,8 @@ class EndToEnd(unittest.TestCase):
         self.write("usr/lib/mowbite/base", "1\n")
         self.write("usr/lib/mowbite/os-setup", OS_SETUP.format(P=P))
         self.write("usr/lib/mowbite/run-os", RUN_OS.format(P=P), mode=0o755)
-        self.write("etc/mowbite/os.conf", f"MOWBITE_HOST_CARRIER=process\nMOWBITE_MQTT_PORT={self.port}\n")
+        self.write("etc/mowbite/os.conf",
+                   f"MOWBITE_HOST_CARRIER=process\nMOWBITE_MQTT_PORT={self.port}\nMOWBITE_UPDATE_NET=off\n")
         self.bin = os.path.join(self.root, "bin")
         os.makedirs(self.bin)
         with open(os.path.join(self.bin, "dpkg-query"), "w") as f:

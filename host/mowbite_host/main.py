@@ -13,7 +13,7 @@ import socket
 import time
 
 import mowbite_boot
-from mowbite_host import broker, carrier, installer, origin, os_state, paths, service, updater
+from mowbite_host import broker, carrier, installer, net, origin, os_state, paths, service, updater
 
 
 # The socket of systemd for this service (Type=notify, WatchdogSec), none outside one. Taken out of the environment:
@@ -86,7 +86,8 @@ def run():
                                        on_connect=lambda: host and host.connected(),
                                        will=(service.HOST_STATUS, service.OFFLINE))
     service_os = carrier.of(where)
-    tool = updater.Updater(where, service_os, installer.health_of(where, service_os, check), origin.Inbox(where), rpc)
+    tool = updater.Updater(where, service_os, installer.health_of(where, service_os, check), origin.Inbox(where), rpc,
+                           net=net.of(where))
     check.api_of_running = tool.running_api
     # A switch of the host ends this process; systemd starts the new one.
     tool.restart_self = lambda: stopping.append(True)

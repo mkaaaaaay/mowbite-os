@@ -17,8 +17,8 @@ from mowbite_host.updater import COMPONENTS
 SCHEMA = 1
 HOST_STATUS = "mowbite/host/status"
 UPDATE_STATUS = "mowbite/update/status"
-METHODS = ("host.restart_os", "update.abort", "update.check", "update.rollback", "update.set_auto", "update.start",
-           "update.status")
+METHODS = ("host.restart_os", "update.abort", "update.check", "update.rollback", "update.set_auto",
+           "update.set_channel", "update.start", "update.status")
 OFFLINE = json.dumps({"schema": SCHEMA, "online": False})
 TICK_EVERY = 5 * 60.0
 CHECK_EVERY = 6 * 3600.0
@@ -78,8 +78,9 @@ class Host:
                                                          reset_jobs=_reset_jobs(p)),
             "update.abort": lambda p: self.updater.abort(),
             "update.rollback": lambda p: self.updater.rollback(_component(p), reset_jobs=_reset_jobs(p)),
-            "update.check": lambda p: self.updater.check(),
+            "update.check": lambda p: self.updater.check(fetch=True),
             "update.set_auto": self._set_auto,
+            "update.set_channel": lambda p: self.updater.set_channel(_text(p, "channel")),
             "host.restart_os": self._restart_os,
         }
 
@@ -201,13 +202,14 @@ class Host:
             now = time.monotonic()
             if now >= next_check:
                 next_check = now + CHECK_EVERY
-                self._step("check", self.updater.check)
+                self._step("check", lambda: self.updater.check(fetch=True))
             if now >= next_tick:
                 next_tick = now + TICK_EVERY
                 self._step("tick", self.updater.tick)
             if now >= next_look:
                 next_look = now + LOOK_EVERY
                 self._step("look", self.look)
+                self._step("net", self.updater.poll)
             try:
                 item = self.requests.get(timeout=max(0.05, min(next_look, next_tick) - time.monotonic()))
             except queue.Empty:
