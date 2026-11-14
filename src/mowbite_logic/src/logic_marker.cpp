@@ -74,6 +74,8 @@ void LogicCore::OnDockPose(const DockPoseSample& pose) {
   if (!MarkerWanted()) return;
   marker_clock_ = std::max(marker_clock_, pose.time);
   marker_.OnPose(pose, docking_leg_ == DockingLeg::Kind::kLine);
+  // Back after a loss only with every pose good for gps_wait_time, also those between the ticks.
+  if (docking_gps_wait_ && !DockPoseGood()) docking_gps_good_since_.reset();
   if (docking_gps_wait_ && docking_gps_since_ && SightDone()) {
     docking_gps_wait_ = false;
     NextDockingTry();

@@ -405,6 +405,21 @@ TEST(LogicMarker, LostOnTheLineGoesOnWhenBack) {
   EXPECT_FALSE(Find(core.TakeEvents(), "DOCKING_RETRY"));
 }
 
+// A pose that is not good between the ticks starts the gps_wait_time of the return again.
+TEST(LogicMarker, ABadPoseBetweenTheTicksCountsAgainstTheReturn) {
+  TestCore core = OnTheLine();
+  core.OnDockPose(Pose(103.0, -0.6));
+  core.OnDockingLegEnded(LegEnd::kGps, Reason("POSITION_ACCURACY", "the pose is not good"));
+  core.OnTick(110.0);
+  for (int i = 0; i < 11; i++) {
+    const double t = 111.0 + i;
+    core.OnDockPose(Pose(t - 0.5, -0.6, 0.0, M_PI, 0.0, 0.5f));
+    core.OnDockPose(Pose(t, -0.6));
+    core.OnTick(t);
+    EXPECT_FALSE(core.TakeDockingLeg()) << t;
+  }
+}
+
 TEST(LogicMarker, LostForGoodIsMarkerLost) {
   TestCore core = OnTheLine();
   core.OnDockingLegEnded(LegEnd::kGps, Reason("POSITION_ACCURACY", "the pose is not good"));
