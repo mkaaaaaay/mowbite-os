@@ -610,9 +610,7 @@ bool LogicCore::FollowerActive() const {
   if (emergency_) return false;
   if (state_ == State::kDriving) return true;
   if (state_ == State::kUndocking) return undock_step_ == UndockStep::kDrive && !undock_stopping_;
-  if (state_ == State::kDocking) {
-    return docking_leg_.has_value() && docking_leg_frame_ == LegFrame::kMap && !docking_hold_;
-  }
+  if (state_ == State::kDocking) return docking_leg_ && docking_leg_frame_ == LegFrame::kMap && !docking_hold_;
   return state_ == State::kMowing && pause_ == 0 && LegDrives();
 }
 
