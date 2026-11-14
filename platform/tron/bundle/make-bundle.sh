@@ -1,11 +1,11 @@
 #!/bin/bash
-# A bundle of MowBite OS for mowbite-host on the Tron from an arm64 image of docker/os.Dockerfile (a loaded image or
-# the .tar of docker save): <out dir>/mowbite-os-<revision>.tar.gz with <revision>/install, planner, app (when the
-# image has one, readable for mowbite-web), tools (the safety measurement for mowbite-measure), revision and
-# bundle.json (format 2). serial is the commit time of the image's commit and base the rootfs version it needs, both
-# read from this repo at that commit; from the image api (its schema), planner_files_version (data_schema.json of
-# mowbite_bridge), planner_interface (contract.json of its planner, none without one) and bundled, what it brings of
-# planner and app. Unsigned; the owner signs it with sign-bundle.sh.
+# A bundle of MowBite OS for mowbite-host on the Tron from an arm64 image of docker/os.Dockerfile (a loaded image or the
+# .tar of docker save): <out dir>/mowbite-os-<revision>.tar.gz with <revision>/install, planner, app (when the image has
+# one, readable for mowbite-web), tools (the safety measurement for mowbite-measure), revision, LICENSE (of this repo at
+# the commit; planner and app keep their own) and bundle.json (format 2). serial is the commit time of the image's
+# commit and base the rootfs version it needs, both read from this repo at that commit; from the image api (its schema),
+# planner_files_version (data_schema.json of mowbite_bridge), planner_interface (contract.json of its planner, none
+# without one) and bundled, what it brings of planner and app. Unsigned; the owner signs it with sign-bundle.sh.
 set -euo pipefail
 if [ $# -ne 2 ]; then
     echo "usage: $0 <image or image.tar> <out dir>" >&2
@@ -50,6 +50,7 @@ fi
 docker cp -q "$container:/ws/tools" "$work/$revision/tools"
 docker cp -q "$container:/opt/runtime-packages.txt" "$work/runtime-packages.txt"
 printf '%s\n' "$commit" > "$work/$revision/revision"
+git -C "$here" show "$commit:LICENSE" > "$work/$revision/LICENSE"
 fields=$(python3 -I - "$HOST_LIB" "$work" "$revision" "$commit" "$min_app" "$serial" "$base" <<'PY'
 import json, os, sys
 host, work, revision, commit, min_app, serial, base = sys.argv[1:]
