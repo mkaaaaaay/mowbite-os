@@ -790,9 +790,12 @@ class BundleToolsTest(unittest.TestCase):
         self.assertEqual(export("a", 16, 1, **with_break)["api"], {"min": 14, "max": 15, "break": 1})
         self.assertEqual(export("b", 14, 1, api_min=14, api_max=None, api_break=1)["api"], {"min": 14, "break": 1})
         self.assertEqual(export("c", 15, 2, api_min=14, api_max=15)["api"], {"min": 14, "max": 15})
+        # An OS without x-api-break: the range with max.
+        self.assertEqual(export("d", 15, None, **with_break)["api"], {"min": 14, "max": 15, "break": 1})
         for api, api_break, app, why in ((13, 1, with_break, "too old"), (16, 2, with_break, "another break"),
-                                         (16, None, with_break, "too old"), (16, 1, {"api_min": 14, "api_max": 15},
-                                                                             "too old"),
+                                         (16, None, with_break, "app is too old"),
+                                         (15, None, {**with_break, "api_max": None}, "OS that is installed is too old"),
+                                         (16, 1, {"api_min": 14, "api_max": 15}, "too old"),
                                          (16, 1, {**with_break, "api_break": "1"}, "missing or wrong"),
                                          (16, 1, {**with_break, "api_max": None, "api_min": None},
                                           "missing or wrong")):

@@ -50,6 +50,11 @@ FITS = (
     ("app", {"api": {"min": 14, "max": 15, "break": 0}}, {}, "APP_API_BREAK"),
     ("app", {"api": {"min": 14, "break": 1}}, {"api_break": 2}, "APP_API_BREAK"),
     ("app", {"api": {"min": 16, "break": 2}}, {}, "APP_API_BREAK"),
+    # An OS without api_break (api 30 or older): the range with max, without max too old.
+    ("app", {"api": {"min": 14, "max": 15, "break": 1}}, {"api_break": None}, None),
+    ("app", {"api": {"min": 15, "max": 15, "break": 1}}, {"api_break": None}, None),
+    ("app", {"api": {"min": 14, "max": 14, "break": 1}}, {"api_break": None}, "APP_TOO_OLD"),
+    ("app", {"api": {"min": 16, "max": 17, "break": 1}}, {"api_break": None}, "OS_TOO_OLD"),
     ("app", {"api": {"min": 14, "break": 1}}, {"api_break": None}, "OS_TOO_OLD"),
     ("app", {"api": {"min": 14, "break": 1}}, {"api_break": "1"}, "OS_TOO_OLD"),
     ("app", {"api": {"min": 14, "break": 1}}, {"api": None}, "OS_TOO_OLD"),

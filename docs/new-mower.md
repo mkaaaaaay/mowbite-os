@@ -188,11 +188,12 @@ process is outside this watch and stops the mower by its own timeouts.
   (`/opt/mowbite`), the planner (`/opt/mowbite-planner`) and the app (`/opt/mowbite-app`). The OS brings a planner and
   an app along and names them in its `bundle.json` (`bundled`, `planner_interface`, `planner_files_version`, `api`,
   `api_break`, `min_app`). An app goes with the OS when its `app.json` names `api.break` equal to `api_break` and an
-  `api.min` not above `api` (`api.max` is shown only); an app without `api.break` needs `api` within `api.min` to
-  `api.max` (`host/mowbite_host/compat.py`, the same for `app_export.py`). `kApiBreak` in
-  `src/mowbite_api/include/mowbite_api/catalog.h` goes up only for a break, as the description of the schema names
-  it (a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required,
-  fewer values taken in a request, an event a client waits for no longer sent); all else only adds and raises `kApi`.
+  `api.min` not above `api` (`api.max` is shown only); an app without `api.break`, and one beside an OS without
+  `api_break` (api 30 and older), needs `api` within `api.min` to `api.max` (`host/mowbite_host/compat.py`, the same
+  for `app_export.py`). `kApiBreak` in `src/mowbite_api/include/mowbite_api/catalog.h` goes up only for a break, as
+  the description of the schema names it (a method, field, event, reason or topic gone or renamed, a type or meaning
+  changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent);
+  all else only adds and raises `kApi`.
   An own planner or app is used only while the link `active` in its folder names it; the host alone sets it, when
   the own one goes with the installed OS and is newer than the bundled one. Whatever starts the planner or
   serves the app on your mower reads `active` first and else `<os>/planner` or `<os>/app`, and decides nothing itself.

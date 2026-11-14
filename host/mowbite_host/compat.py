@@ -41,18 +41,19 @@ def valid_span(span):
     return whole(span["max"]) and span["min"] <= span["max"] and ("break" not in span or whole(span["break"]))
 
 
-# Why an app of api span does not go with an OS of api and api_break, None when it does. With break: the same break
-# and api at least min. Without (an app from before the break): api within min..max, max a hard limit.
+# Why an app of api span does not go with an OS of api and api_break, None when it does. Both with break: the same
+# break and api at least min. Else (an app from before the break, or an OS of api 30 or older): api within min..max,
+# max a hard limit; an app without max needs an OS with api_break.
 def api_fits(span, api, api_break):
     if not valid_span(span):
         return "APP_TOO_OLD"
     if not whole(api):
         return "OS_TOO_OLD"
-    if "break" in span:
-        if not whole(api_break):
-            return "OS_TOO_OLD"
+    if "break" in span and whole(api_break):
         if span["break"] != api_break:
             return "APP_API_BREAK"
+    elif "max" not in span:
+        return "OS_TOO_OLD"
     elif api > span["max"]:
         return "APP_TOO_OLD"
     return "OS_TOO_OLD" if api < span["min"] else None
