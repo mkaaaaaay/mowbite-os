@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
+#include <stdexcept>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -46,8 +47,9 @@ Ring ToRing(const geometry_msgs::msg::Polygon& polygon) {
 
 }  // namespace
 
-// Follows the paths of the follow_path action on follower/cmd_vel; the logic passes them on to mowbite_safety. Stops by
-// sending one zero and then nothing, the cmd_vel watchdog of the driver does the rest.
+// Follows the paths of the follow_path action on follower/cmd_vel by localization/pose, or in the station frame on
+// follower/dock_cmd_vel by localization/dock_pose; the logic passes them on to mowbite_safety. Stops by sending one
+// zero and then nothing, the cmd_vel watchdog of the driver does the rest.
 class FollowerNode : public rclcpp::Node {
  public:
   explicit FollowerNode(const rclcpp::NodeOptions& options)
@@ -77,25 +79,32 @@ class FollowerNode : public rclcpp::Node {
     guard_config_.pose_timeout = declare_parameter("pose_timeout", guard_config_.pose_timeout);
     guard_config_.hw_timeout = declare_parameter("hw_status_timeout", guard_config_.hw_timeout);
     guard_config_.max_position_accuracy = declare_parameter("max_position_accuracy", guard_config_.max_position_accuracy);
+    dock_max_position_accuracy_ = declare_parameter("dock_max_position_accuracy", 0.03);
+    if (!(dock_max_position_accuracy_ > 0)) {
+      throw std::invalid_argument("mowbite_follower: dock_max_position_accuracy above 0 needed");
+    }
     guard_config_.max_cross_track = declare_parameter("max_cross_track", guard_config_.max_cross_track);
     geofence_margin_ = declare_parameter("geofence_margin", 0.5);
     const double rate = declare_parameter("control_rate", 20.0);
 
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("follower/cmd_vel", 10);
+    dock_cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("follower/dock_cmd_vel", 10);
     // The speeds the planner plans with, latched: whoever starts later gets the last. Sent once the driver's limits
     // are known, so the planner never sees the follower's own ones above them.
     params_pub_ = create_publisher<std_msgs::msg::String>(
         "bridge/params", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
     pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
-        "localization/pose", 10, [this](mowbite_msgs::msg::RobotPose::ConstSharedPtr msg) {
+        "localization/pose", 10, [this](const mowbite_msgs::msg::RobotPose::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          pose_ = Pose2{msg->x, msg->y, msg->heading};
-          position_accuracy_ = msg->position_accuracy;
-          heading_valid_ = msg->heading_valid;
-          pose_time_ = MonotonicSeconds();
+          map_pose_.Set(*msg, MonotonicSeconds());
+        });
+    dock_pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
+        "localization/dock_pose", 10, [this](const mowbite_msgs::msg::RobotPose::ConstSharedPtr& msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          dock_pose_.Set(*msg, MonotonicSeconds());
         });
     hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
-        "hw/status", 10, [this](mowbite_msgs::msg::HardwareStatus::ConstSharedPtr msg) {
+        "hw/status", 10, [this](const mowbite_msgs::msg::HardwareStatus::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);
           // Without telemetry the driver cannot stop the mower either.
           emergency_ = msg->emergency || !msg->telemetry_ok;
@@ -103,7 +112,7 @@ class FollowerNode : public rclcpp::Node {
         });
     caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
         "hw/capabilities", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
-        [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
+        [this](const mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);
           safety_measured_ = !msg->safety_measurement_date.empty();
           // A limit of 0 (max_duty 0) lets nothing move: the guard stops every path, the planner gets no speeds.
@@ -121,7 +130,7 @@ class FollowerNode : public rclcpp::Node {
     // max_position_accuracy of tron.yaml holds until the logic tells its own (params.set).
     limits_sub_ = create_subscription<mowbite_msgs::msg::GpsLimits>(
         "logic/gps_limits", rclcpp::QoS(1).reliable().transient_local(),
-        [this](mowbite_msgs::msg::GpsLimits::ConstSharedPtr msg) {
+        [this](const mowbite_msgs::msg::GpsLimits::ConstSharedPtr& msg) {
           if (!(msg->max_position_accuracy > 0) || !std::isfinite(msg->max_position_accuracy)) {
             RCLCPP_ERROR(get_logger(), "Ignored accuracy limit %g m from the logic", msg->max_position_accuracy);
             return;
@@ -135,7 +144,7 @@ class FollowerNode : public rclcpp::Node {
 
     server_ = rclcpp_action::create_server<FollowPath>(
         this, "follow_path",
-        [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const FollowPath::Goal>) {
+        [this](const rclcpp_action::GoalUUID&, const std::shared_ptr<const FollowPath::Goal>&) {
           std::lock_guard<std::mutex> lock(mutex_);
           // One path at a time: the logic cancels the old one before it sends a new one.
           if (active_) {
@@ -144,8 +153,8 @@ class FollowerNode : public rclcpp::Node {
           }
           return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
         },
-        [](const std::shared_ptr<GoalHandle>) { return rclcpp_action::CancelResponse::ACCEPT; },
-        [this](const std::shared_ptr<GoalHandle> handle) { OnAccepted(handle); });
+        [](const std::shared_ptr<GoalHandle>&) { return rclcpp_action::CancelResponse::ACCEPT; },
+        [this](const std::shared_ptr<GoalHandle>& handle) { OnAccepted(handle); });
 
     timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / rate), [this] { OnTimer(); });
     watch_ = mowbite_watch::Attach(*this);
@@ -177,6 +186,7 @@ class FollowerNode : public rclcpp::Node {
     if (!(goal->max_cross_track >= 0) || !std::isfinite(goal->max_cross_track)) {
       problem = "max_cross_track must be 0 or more";
     }
+    if (goal->frame > FollowPath::Goal::FRAME_DOCK) problem = "unknown frame " + std::to_string(goal->frame);
     std::vector<Ring> allowed;
     std::vector<Ring> obstacles;
     for (const auto& p : goal->allowed_areas) allowed.push_back(ToRing(p));
@@ -195,6 +205,7 @@ class FollowerNode : public rclcpp::Node {
     config.reverse = goal->reverse;
     config.end_tolerance = goal->end_tolerance > 0 ? goal->end_tolerance : 0.0;
     max_off_path_ = goal->max_cross_track;
+    dock_frame_ = goal->frame == FollowPath::Goal::FRAME_DOCK;
     follower_ = std::make_unique<PathFollower>(config);
     fence_ = Geofence(std::move(allowed), std::move(obstacles), geofence_margin_);
     if (problem.empty()) problem = fence_.Problem();
@@ -206,9 +217,9 @@ class FollowerNode : public rclcpp::Node {
       Finish(FollowPath::Result::REASON_INVALID, "invalid path: " + problem, goal->start_index);
       return;
     }
-    RCLCPP_INFO(get_logger(), "Following %zu poses from %u%s%s, at most %.2f m/s", poses.size(), goal->start_index,
-                goal->reverse ? " backwards" : "", goal->straight ? " straight without steering" : "",
-                config.speed.max_linear);
+    RCLCPP_INFO(get_logger(), "Following %zu poses from %u%s%s%s, at most %.2f m/s", poses.size(), goal->start_index,
+                dock_frame_ ? " in the station frame" : "", goal->reverse ? " backwards" : "",
+                goal->straight ? " straight without steering" : "", config.speed.max_linear);
   }
 
   void OnTimer() {
@@ -221,26 +232,30 @@ class FollowerNode : public rclcpp::Node {
       Finish(FollowPath::Result::REASON_CANCELED, "canceled", follower_->index());
       return;
     }
+    // The pose and accuracy limit of the frame of the path; guard and controller are the same in both.
+    const PoseInput& pose = dock_frame_ ? dock_pose_ : map_pose_;
+    GuardConfig guard_config = guard_config_;
+    if (dock_frame_) guard_config.max_position_accuracy = dock_max_position_accuracy_;
     GuardInput in;
     in.safety_measured = safety_measured_;
     in.driver_moves = driver_moves_;
     in.hw_age = hw_time_ ? now - *hw_time_ : 1e9;
     in.emergency = emergency_;
-    in.pose_age = pose_time_ ? now - *pose_time_ : 1e9;
-    in.pose = pose_;
-    in.position_accuracy = position_accuracy_;
-    in.heading_valid = heading_valid_;
+    in.pose_age = pose.time ? now - *pose.time : 1e9;
+    in.pose = pose.pose;
+    in.position_accuracy = pose.accuracy;
+    in.heading_valid = pose.heading_valid;
     // Off the path counts only while on it; before the start the follower checks the distance itself.
-    in.cross_track = follower_->OnPath() ? follower_->CrossTrack(pose_) : 0.0;
+    in.cross_track = follower_->OnPath() ? follower_->CrossTrack(pose.pose) : 0.0;
     // The limit of the goal counts from the first command and around the whole path.
-    in.off_path = max_off_path_ > 0 ? follower_->OffPath(pose_) : 0.0;
+    in.off_path = max_off_path_ > 0 ? follower_->OffPath(pose.pose) : 0.0;
     in.max_off_path = max_off_path_;
-    const GuardResult guard = CheckGuard(guard_config_, in, fence_);
+    const GuardResult guard = CheckGuard(guard_config, in, fence_);
     if (guard.reason != StopReason::kNone) {
       Finish(static_cast<uint8_t>(guard.reason), guard.message, follower_->index());
       return;
     }
-    const PathFollower::Command cmd = follower_->Step(pose_, dt);
+    const PathFollower::Command cmd = follower_->Step(pose.pose, dt);
     if (follower_->phase() == Phase::kFailed) {
       const bool start = follower_->failure_kind() == Failure::kStart;
       Finish(start ? FollowPath::Result::REASON_INVALID : FollowPath::Result::REASON_TIMEOUT, follower_->failure(),
@@ -254,19 +269,22 @@ class FollowerNode : public rclcpp::Node {
     geometry_msgs::msg::Twist twist;
     twist.linear.x = cmd.linear;
     twist.angular.z = cmd.angular;
-    cmd_pub_->publish(twist);
+    CmdPublisher().publish(twist);
     if (now - last_feedback_ >= 0.5) {
       last_feedback_ = now;
       auto feedback = std::make_shared<FollowPath::Feedback>();
       feedback->index = static_cast<uint32_t>(follower_->index());
-      feedback->cross_track = static_cast<float>(follower_->CrossTrack(pose_));
+      feedback->cross_track = static_cast<float>(follower_->CrossTrack(pose.pose));
       active_->publish_feedback(feedback);
     }
   }
 
+  // The topic of the frame of the active path. Called with the mutex held.
+  rclcpp::Publisher<geometry_msgs::msg::Twist>& CmdPublisher() { return dock_frame_ ? *dock_cmd_pub_ : *cmd_pub_; }
+
   // Ends the active goal with one zero command. Called with the mutex held.
   void Finish(uint8_t reason, const std::string& message, size_t index) {
-    cmd_pub_->publish(geometry_msgs::msg::Twist());
+    CmdPublisher().publish(geometry_msgs::msg::Twist());
     follower_->Cancel();
     auto result = std::make_shared<FollowPath::Result>();
     result->reason = reason;
@@ -285,22 +303,39 @@ class FollowerNode : public rclcpp::Node {
     active_.reset();
   }
 
+  // The last pose of one frame.
+  struct PoseInput {
+    Pose2 pose;
+    float accuracy = 999;
+    bool heading_valid = false;
+    std::optional<double> time;
+
+    void Set(const mowbite_msgs::msg::RobotPose& msg, double now) {
+      pose = Pose2{msg.x, msg.y, msg.heading};
+      accuracy = msg.position_accuracy;
+      heading_valid = msg.heading_valid;
+      time = now;
+    }
+  };
+
   std::mutex mutex_;
   FollowerConfig follower_config_;
   GuardConfig guard_config_;
+  // m localization/dock_pose has to be accurate to at least on a path in the station frame.
+  double dock_max_position_accuracy_ = 0.03;
   double geofence_margin_ = 0.5;
   // max_cross_track of the active goal, 0 for none.
   double max_off_path_ = 0;
+  // The active goal is in the station frame.
+  bool dock_frame_ = false;
   std::unique_ptr<PathFollower> follower_;
   Geofence fence_;
   std::shared_ptr<GoalHandle> active_;
   double last_step_ = 0;
   double last_feedback_ = 0;
 
-  Pose2 pose_;
-  float position_accuracy_ = 999;
-  bool heading_valid_ = false;
-  std::optional<double> pose_time_;
+  PoseInput map_pose_;
+  PoseInput dock_pose_;
   bool emergency_ = true;
   std::optional<double> hw_time_;
   bool safety_measured_ = false;
@@ -309,9 +344,11 @@ class FollowerNode : public rclcpp::Node {
   double driver_max_angular_ = 1e9;
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr dock_cmd_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
   std::string last_params_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr pose_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr dock_pose_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;

@@ -1,5 +1,7 @@
 """mowbite_follower on its own: the test plays the driver (hw/status, hw/capabilities) and the localization, which
-moves a unicycle by what the follower sends on follower/cmd_vel, and sends paths on follow_path.
+moves a unicycle by what the follower sends on follower/cmd_vel, and sends paths on follow_path. In the station frame
+the unicycle moves by follower/dock_cmd_vel and is seen on localization/dock_pose, while localization/pose shows it
+somewhere else.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_follower.py
 """
@@ -35,6 +37,14 @@ def polygon(points):
     return Polygon(points=[Point32(x=float(x), y=float(y)) for x, y in points])
 
 
+def facing(poses, yaw):
+    """The same poses facing yaw, as a path driven backwards has them."""
+    for p in poses:
+        p.orientation.z = math.sin(yaw / 2)
+        p.orientation.w = math.cos(yaw / 2)
+    return poses
+
+
 def line_poses(x0, y0, yaw, length, spacing=0.1):
     poses = []
     for i in range(int(round(length / spacing)) + 1):
@@ -60,10 +70,16 @@ class World(SimProbe):
         self.emergency = False
         self.accuracy = 0.02
         self.publish_pose = True
+        # The pose in the station frame: the unicycle itself while dock is set; the map pose then lies 5 m away.
+        self.dock = False
+        self.dock_accuracy = 0.02
+        self.dock_cmds = []
         self.caps_pub = self.node.create_publisher(HardwareCapabilities, "hw/capabilities", LATCHED)
         self.hw_pub = self.node.create_publisher(HardwareStatus, "hw/status", 10)
         self.pose_pub = self.node.create_publisher(RobotPose, "localization/pose", 10)
+        self.dock_pub = self.node.create_publisher(RobotPose, "localization/dock_pose", 10)
         self.node.create_subscription(Twist, "follower/cmd_vel", self._cmd, 50)
+        self.node.create_subscription(Twist, "follower/dock_cmd_vel", self._dock_cmd, 50)
         self.client = ActionClient(self.node, FollowPath, "follow_path")
         self.start()
         threading.Thread(target=self._world, daemon=True).start()
@@ -89,6 +105,13 @@ class World(SimProbe):
             self.last_cmd = time.time()
             self.cmds.append((time.time(), msg.linear.x, msg.angular.z))
 
+    def _dock_cmd(self, msg):
+        with self.lock:
+            self.dock_cmds.append((time.time(), msg.linear.x, msg.angular.z))
+            if self.dock:
+                self.v, self.w = msg.linear.x, msg.angular.z
+                self.last_cmd = time.time()
+
     def _world(self):
         dt = 0.02
         while self.running:
@@ -103,19 +126,33 @@ class World(SimProbe):
                 hw.telemetry_ok = True
                 hw.emergency = self.emergency
                 pose = RobotPose()
-                pose.x = self.x
+                pose.x = self.x + (5.0 if self.dock else 0.0)
                 pose.y = self.y
                 pose.heading = self.yaw
                 pose.position_accuracy = self.accuracy
                 pose.heading_valid = True
                 publish_pose = self.publish_pose
+                dock = None
+                if self.dock:
+                    dock = RobotPose()
+                    dock.header.frame_id = "dock"
+                    dock.x = self.x
+                    dock.y = self.y
+                    dock.heading = self.yaw
+                    dock.position_accuracy = self.dock_accuracy
+                    dock.heading_valid = True
             self.hw_pub.publish(hw)
             if publish_pose:
                 self.pose_pub.publish(pose)
+            if dock is not None:
+                self.dock_pub.publish(dock)
             time.sleep(dt)
 
-    def follow(self, poses, start_index=0, allowed=None, obstacles=(), wait=True):
+    def follow(self, poses, start_index=0, allowed=None, obstacles=(), wait=True, frame=FollowPath.Goal.FRAME_MAP,
+               reverse=False):
         goal = FollowPath.Goal()
+        goal.frame = frame
+        goal.reverse = reverse
         goal.poses = poses
         goal.start_index = start_index
         goal.allowed_areas = [polygon(allowed or LAWN)]
@@ -142,6 +179,10 @@ class World(SimProbe):
         with self.lock:
             return [c for c in self.cmds if c[0] >= t]
 
+    def dock_commands_since(self, t):
+        with self.lock:
+            return [c for c in self.dock_cmds if c[0] >= t]
+
 
 class TestFollower(unittest.TestCase):
     @classmethod
@@ -160,6 +201,8 @@ class TestFollower(unittest.TestCase):
             w.emergency = False
             w.accuracy = 0.02
             w.publish_pose = True
+            w.dock = False
+            w.dock_accuracy = 0.02
         w.capabilities("2026-01-01")
         w.place(0.0, 0.0, 0.0)
         time.sleep(0.3)
@@ -268,3 +311,52 @@ class TestFollower(unittest.TestCase):
         self.assertEqual(result.reason, Result.REASON_DONE, result.message)
         with self.world.lock:
             self.assertAlmostEqual(self.world.x, 3.0, delta=0.15)
+
+    def test_11_follows_a_path_in_the_station_frame(self):
+        # The station frame: the docked pose at the origin, the way in along +x; backwards onto it from 0.8 m.
+        w = self.world
+        with w.lock:
+            w.dock = True
+        w.place(-0.8, 0.0, math.pi)
+        t = time.time()
+        corridor = [(-1.0, -0.1), (0.1, -0.1), (0.1, 0.1), (-1.0, 0.1)]
+        result = w.follow(facing(line_poses(-0.8, 0.0, 0.0, 0.7), math.pi), allowed=corridor,
+                          frame=FollowPath.Goal.FRAME_DOCK, reverse=True)
+        self.assertEqual(result.reason, Result.REASON_DONE, result.message)
+        with w.lock:
+            x, y = w.x, w.y
+        self.assertAlmostEqual(x, -0.1, delta=0.12)
+        self.assertAlmostEqual(y, 0.0, delta=0.05)
+        # Only on follower/dock_cmd_vel, backwards, ending with a zero; nothing on follower/cmd_vel.
+        dock_cmds = w.dock_commands_since(t)
+        self.assertGreater(len(dock_cmds), 10)
+        self.assertTrue(all(v <= 0 for _, v, _ in dock_cmds))
+        self.assertEqual(dock_cmds[-1][1:], (0.0, 0.0))
+        self.assertEqual(w.commands_since(t), [])
+
+    def test_12_the_station_frame_needs_the_accuracy_of_the_dock(self):
+        # 4 cm is good enough in the map, not from the marker (dock_max_position_accuracy 0.03).
+        w = self.world
+        with w.lock:
+            w.dock = True
+            w.accuracy = 0.04
+            w.dock_accuracy = 0.04
+        w.place(-0.8, 0.0, math.pi)
+        result = w.follow(facing(line_poses(-0.8, 0.0, 0.0, 0.7), math.pi), frame=FollowPath.Goal.FRAME_DOCK,
+                          reverse=True)
+        self.assertEqual(result.reason, Result.REASON_POSITION_ACCURACY, result.message)
+        self.assertIn("0.03", result.message)
+        # The map pose is 5 m away: a path there in the map frame is fine, its accuracy is the map's.
+        with w.lock:
+            w.dock_accuracy = 0.02
+        result = w.follow(facing(line_poses(4.2, 0.0, 0.0, 0.7), math.pi), frame=FollowPath.Goal.FRAME_MAP,
+                          reverse=True)
+        self.assertEqual(result.reason, Result.REASON_DONE, result.message)
+
+    def test_13_without_a_dock_pose_or_with_an_unknown_frame(self):
+        w = self.world
+        result = w.follow(line_poses(0, 0, 0, 1.0), frame=FollowPath.Goal.FRAME_DOCK)
+        self.assertEqual(result.reason, Result.REASON_POSE_LOST, result.message)
+        result = w.follow(line_poses(0, 0, 0, 1.0), frame=2)
+        self.assertEqual(result.reason, Result.REASON_INVALID)
+        self.assertIn("unknown frame 2", result.message)

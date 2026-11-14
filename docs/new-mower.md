@@ -90,6 +90,11 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   localization then estimates base_link in the station frame (origin base_link of the docked mower, x the way in)
   from the marker alone, never mixed with the map pose. The camera has to look to the side of the contacts. In the
   simulation `fake_dock_marker` plays the marker with an error model of its own (parameters, flags file).
+  Paths in the station frame (`FollowPath` frame `FRAME_DOCK`) go out on `follower/dock_cmd_vel`; the safety filter
+  passes them as the dock source with the safety measurement and a recent pose from the marker with a heading and
+  `dock_max_position_accuracy` (under `/**`, also the limit of the reference check and the gate in the map), within
+  the zone of the station in that frame (FENCE beyond `fence_margin`), at most 0.17 m/s forwards and 0.12 m/s
+  backwards, with no map needed.
 - `mowbite_bringup/config/<platform>.yaml`: what differs from `tron.yaml`, which lies underneath (battery voltages
   empty, full and critical, charge check, temperatures). Check every value you inherit. The battery voltages stand only
   here: a driver that sets them on its board gets them in the start file from `battery_voltages` of
