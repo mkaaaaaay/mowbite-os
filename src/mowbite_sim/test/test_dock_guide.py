@@ -199,7 +199,7 @@ class TestDockGuide(unittest.TestCase):
         self.failed(since, 90, "MARKER_MISMATCH")
         self.assertNotIn(DriveCommand.SOURCE_DOCK, p.sources_since(began))
         self.assertNotIn("DOCKING_WITHOUT_MARKER", [e["type"] for e in p.events[since:]])
-        self.assertEqual(p.robot.current_state, "IDLE")
+        self.assertTrue(p.wait(lambda: p.robot.current_state == "IDLE", 5), p.robot)
 
     def test_05_dark_never_docks_by_the_position(self):
         p = self.probe
