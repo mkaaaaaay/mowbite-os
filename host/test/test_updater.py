@@ -157,6 +157,17 @@ class InboxTest(Base):
         self.updater.check()
         self.assertEqual(self.updater.status()["components"][0]["available"]["revision"], B)
 
+    # update.status names api and api_break of an OS on offer, null when its bundle.json does not.
+    def test_available_os_names_its_api(self):
+        self.bundle(A)
+        self.updater.check()
+        self.assertEqual({k: self.updater.status()["components"][0]["available"][k] for k in ("api", "api_break")},
+                         {"api": None, "api_break": None})
+        self.bundle(B, api=31, api_break=1)
+        self.updater.check()
+        self.assertEqual({k: self.updater.status()["components"][0]["available"][k] for k in ("api", "api_break")},
+                         {"api": 31, "api_break": 1})
+
     def test_install_from_inbox_and_prune(self):
         self.bundle(A)
         self.updater.check()

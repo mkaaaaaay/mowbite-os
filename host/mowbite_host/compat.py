@@ -1,8 +1,9 @@
 """Whether an installation of the planner or the app goes with an OS: pure functions over their bundle.json.
 
-The OS names api, min_app, planner_interface, planner_files_version and what it brings along (bundled {app, planner:
-{revision, version, serial}}); the app names version and api {min, max}, the planner interface and files_version.
-The reasons are those of UPDATE in the catalog. A value that is missing or no whole number never fits.
+The OS names api, api_break, min_app, planner_interface, planner_files_version and what it brings along (bundled
+{app, planner: {revision, version, serial}}); the app names version and api {min, max, break}, the planner interface
+and files_version. The reasons are those of UPDATE in the catalog. A value that is missing or no whole number never
+fits.
 """
 
 
@@ -31,18 +32,36 @@ def whole(value):
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
-# api.max is a hard limit: an app does not run beside an OS newer than the newest it was built for.
-def app_with_os(app, os_meta):
-    span = app.get("api")
-    low, high = (span.get("min"), span.get("max")) if isinstance(span, dict) else (None, None)
-    if not whole(low) or not whole(high) or not app_suffices(app.get("version"), os_meta.get("min_app")):
+# Whether api {min, max, break} of an app is as the app writes it: with break, max is shown only and may be missing.
+def valid_span(span):
+    if not isinstance(span, dict) or not whole(span.get("min")):
+        return False
+    if "max" not in span:
+        return "break" in span and whole(span["break"])
+    return whole(span["max"]) and span["min"] <= span["max"] and ("break" not in span or whole(span["break"]))
+
+
+# Why an app of api span does not go with an OS of api and api_break, None when it does. With break: the same break
+# and api at least min. Without (an app from before the break): api within min..max, max a hard limit.
+def api_fits(span, api, api_break):
+    if not valid_span(span):
         return "APP_TOO_OLD"
-    api = os_meta.get("api")
     if not whole(api):
         return "OS_TOO_OLD"
-    if api > high:
+    if "break" in span:
+        if not whole(api_break):
+            return "OS_TOO_OLD"
+        if span["break"] != api_break:
+            return "APP_API_BREAK"
+    elif api > span["max"]:
         return "APP_TOO_OLD"
-    return "OS_TOO_OLD" if api < low else None
+    return "OS_TOO_OLD" if api < span["min"] else None
+
+
+def app_with_os(app, os_meta):
+    if not app_suffices(app.get("version"), os_meta.get("min_app")):
+        return "APP_TOO_OLD"
+    return api_fits(app.get("api"), os_meta.get("api"), os_meta.get("api_break"))
 
 
 # files_version: a planner with another one writes files the OS, or the planner it goes back to, does not read.
@@ -57,6 +76,7 @@ def planner_with_os(planner, os_meta):
 CHECKS = {"app": app_with_os, "planner": planner_with_os}
 # English text for the log, by reason.
 EXPLAIN = {"APP_TOO_OLD": "the app is too old for the OS that is installed",
+           "APP_API_BREAK": "the app was built for another break of the api than the OS that is installed",
            "OS_TOO_OLD": "the OS that is installed is too old for the app",
            "PLANNER_INTERFACE": "the planner speaks another interface than the OS that is installed",
            "PLANNER_DATA": "the planner keeps its files in another version than the OS that is installed"}

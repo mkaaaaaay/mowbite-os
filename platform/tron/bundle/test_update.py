@@ -73,8 +73,10 @@ export MOWBITE_OS_REVISION
 
 
 # A small web export of the app as a zip, as the release of the app has it.
-def probe(zip_path, version="1.5.0", api_min=15, api_max=15, serial=1700000000):
-    app = {"schema": 1, "owner": app_export.OWNER, "version": version, "api": {"min": api_min, "max": api_max},
+def probe(zip_path, version="1.5.0", api_min=15, api_max=15, serial=1700000000, api_break=None):
+    span = {"min": api_min, **({} if api_max is None else {"max": api_max}),
+            **({} if api_break is None else {"break": api_break})}
+    app = {"schema": 1, "owner": app_export.OWNER, "version": version, "api": span,
            "commit": "%040x" % serial, "serial": serial}
     page = "<!doctype html><title>MowBite probe</title>" + "<p>probe export</p>" * 40
     entries = {"index.html": page, "404.html": "<!doctype html><title>not found</title>",
@@ -774,6 +776,39 @@ class BundleToolsTest(unittest.TestCase):
         fields = app_export.export(good, os.path.join(self.root, "out"), sha=app_export.sha256(good),
                                    version="1.5.0", min_app="1.4.0-beta.20", api=15)
         self.assertEqual(fields["api"], {"min": 14, "max": 15})
+
+    # With break in app.json the export goes with an OS of that break and api at least min, max is shown only;
+    # without, api within min..max whatever the break of the OS.
+    def test_app_export_break(self):
+        def export(name, os_api, os_break, **app):
+            path = os.path.join(self.root, f"{name}.zip")
+            probe(path, **app)
+            out = os.path.join(self.root, name)
+            shutil.rmtree(out, ignore_errors=True)
+            return app_export.export(path, out, api=os_api, api_break=os_break)
+        with_break = {"api_min": 14, "api_max": 15, "api_break": 1}
+        self.assertEqual(export("a", 16, 1, **with_break)["api"], {"min": 14, "max": 15, "break": 1})
+        self.assertEqual(export("b", 14, 1, api_min=14, api_max=None, api_break=1)["api"], {"min": 14, "break": 1})
+        self.assertEqual(export("c", 15, 2, api_min=14, api_max=15)["api"], {"min": 14, "max": 15})
+        for api, api_break, app, why in ((13, 1, with_break, "too old"), (16, 2, with_break, "another break"),
+                                         (16, None, with_break, "too old"), (16, 1, {"api_min": 14, "api_max": 15},
+                                                                             "too old"),
+                                         (16, 1, {**with_break, "api_break": "1"}, "missing or wrong"),
+                                         (16, 1, {**with_break, "api_max": None, "api_min": None},
+                                          "missing or wrong")):
+            with self.subTest(api=api, api_break=api_break, app=app):
+                with self.assertRaisesRegex(app_export.Refused, why):
+                    export("x", api, api_break, **app)
+        # The command line takes api and break from x-api and x-api-break of the schema.
+        schema = os.path.join(self.root, "api.schema.json")
+        path = os.path.join(self.root, "cli.zip")
+        probe(path, **with_break)
+        for x_break, rc in ((1, 0), (2, 1)):
+            with open(schema, "w") as f:
+                json.dump({"x-api": 16, "x-api-break": x_break}, f)
+            out = os.path.join(self.root, f"cli-{x_break}")
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(app_export.main(["export", path, out, "--api-schema", schema]), rc)
 
     def planner(self, contract=None, where="python"):
         base = os.path.join(self.root, "install")

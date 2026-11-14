@@ -176,8 +176,12 @@ class Updater:
             # Not kept: after an update of the OS it may fit.
             why = compat.reason(component, best, self._running_meta())
             blocked = {"reason": why, "t": None} if why else None
-        return {"revision": best["revision"], "date": best.get("date", best["serial"]), "min_app": best.get("min_app"),
-                "version": best.get("version"), "blocked": blocked, "from": best.get("from", "inbox")}
+        available = {"revision": best["revision"], "date": best.get("date", best["serial"]),
+                     "min_app": best.get("min_app"), "version": best.get("version"), "blocked": blocked,
+                     "from": best.get("from", "inbox")}
+        if component == "os":
+            available.update(api=best.get("api"), api_break=best.get("api_break"))
+        return available
 
     # running, previous (where a rollback goes) and for the planner and the app source (own while active names their
     # installation, else bundled) and own_skipped {revision, reason} for an own installation left aside.

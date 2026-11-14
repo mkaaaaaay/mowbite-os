@@ -4,9 +4,10 @@
       unpacks the zip into the new folder <out dir>, readable by everyone, with a .gz copy of each text file worth
       it; refused: a zip of another sha256, names outside the folder, links, .gz files, more than MAX_FILES files or
       MAX_BYTES, an export without the files of NEEDS, app.json not as the app writes it, version.json or --version
-      of another version, a version older than min_app or an api range without x-api of the schema
+      of another version, a version older than min_app or an api that does not go with x-api and x-api-break of the
+      schema (the rule of compat.api_fits)
   app_export.py meta <dir>
-      prints what bundle.json takes from app.json of an export: version, api {min, max}, commit and serial
+      prints what bundle.json takes from app.json of an export: version, api {min, max, break}, commit and serial
 """
 import argparse
 import gzip
@@ -19,7 +20,7 @@ import sys
 import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-from mowbite_host.compat import version_tuple, whole  # noqa: E402
+from mowbite_host.compat import EXPLAIN, api_fits, valid_span, version_tuple, whole  # noqa: E402
 from mowbite_host.origin import sha256  # noqa: E402
 
 MAX_FILES = 5000
@@ -94,17 +95,22 @@ def meta(folder):
     if not isinstance(app, dict) or app.get("schema") != 1 or app.get("owner") != OWNER:
         raise Refused(f"app.json is not schema 1 of {OWNER}")
     span = app.get("api")
-    if (version_tuple(app.get("version")) is None or not isinstance(span, dict) or not whole(span.get("min")) or
-            not whole(span.get("max")) or span["min"] > span["max"]):
-        raise Refused("app.json: version or api {min, max} missing or wrong")
+    if version_tuple(app.get("version")) is None or not valid_span(span):
+        raise Refused("app.json: version or api {min, max, break} missing or wrong")
     if not isinstance(app.get("commit"), str) or not COMMIT.fullmatch(app["commit"]) or not whole(app.get("serial")) \
             or app["serial"] == 0:
         raise Refused("app.json: commit and serial missing (an app built without git)")
-    return {"version": app["version"], "api": {"min": span["min"], "max": span["max"]}, "commit": app["commit"],
-            "serial": app["serial"]}
+    return {"version": app["version"], "api": {key: span[key] for key in ("min", "max", "break") if key in span},
+            "commit": app["commit"], "serial": app["serial"]}
 
 
-def _check(out, version, min_app, api):
+# How api {min, max, break} reads in a message.
+def span_text(span):
+    text = f"{span['min']}..{span.get('max', '')}"
+    return f"{text} break {span['break']}" if "break" in span else text
+
+
+def _check(out, version, min_app, api, api_break):
     for name in NEEDS:
         if not os.path.isfile(os.path.join(out, name)):
             raise Refused(f"the export has no {name}")
@@ -117,8 +123,10 @@ def _check(out, version, min_app, api):
         need = version_tuple(min_app)
         if need is None or version_tuple(fields["version"]) < need:
             raise Refused(f"app {fields['version']} is older than min_app {min_app}")
-    if api is not None and not fields["api"]["min"] <= api <= fields["api"]["max"]:
-        raise Refused(f"api {api} of the OS is outside {fields['api']['min']}..{fields['api']['max']} of the app")
+    why = None if api is None else api_fits(fields["api"], api, api_break)
+    if why:
+        raise Refused(f"api {api} break {api_break} of the OS against api {span_text(fields['api'])} of the app: "
+                      f"{EXPLAIN[why]}")
     return fields
 
 
@@ -140,13 +148,13 @@ def _finish(out):
                 os.chmod(path + ".gz", 0o644)
 
 
-def export(zip_path, out, sha=None, version=None, min_app=None, api=None):
+def export(zip_path, out, sha=None, version=None, min_app=None, api=None, api_break=None):
     if sha is not None and sha256(zip_path) != sha:
         raise Refused(f"{zip_path} has sha256 {sha256(zip_path)}, not {sha}")
     os.mkdir(out)
     try:
         _unpack(zip_path, out)
-        fields = _check(out, version, min_app, api)
+        fields = _check(out, version, min_app, api, api_break)
         _finish(out)
     except BaseException:
         shutil.rmtree(out, ignore_errors=True)
@@ -168,12 +176,13 @@ def main(argv):
     args = parser.parse_args(argv)
     try:
         if args.command == "export":
-            api = None
+            api = api_break = None
             if args.api_schema:
                 with open(args.api_schema) as f:
-                    api = json.load(f)["x-api"]
-            fields = export(args.zip, args.out, args.sha256, args.version, args.min_app, api)
-            print(f"app {fields['version']}, api {fields['api']['min']}..{fields['api']['max']}, "
+                    schema = json.load(f)
+                api, api_break = schema["x-api"], schema.get("x-api-break")
+            fields = export(args.zip, args.out, args.sha256, args.version, args.min_app, api, api_break)
+            print(f"app {fields['version']}, api {span_text(fields['api'])}, "
                   f"commit {fields['commit'][:12]} in {args.out}")
         else:
             print(json.dumps(meta(args.dir)))

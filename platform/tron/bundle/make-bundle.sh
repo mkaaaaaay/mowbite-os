@@ -3,9 +3,10 @@
 # .tar of docker save): <out dir>/mowbite-os-<revision>.tar.gz with <revision>/install, planner, app (when the image has
 # one, readable for mowbite-web), tools (the safety measurement for mowbite-measure), revision, LICENSE (of this repo at
 # the commit; planner and app keep their own) and bundle.json (format 2). serial is the commit time of the image's
-# commit and base the rootfs version it needs, both read from this repo at that commit; from the image api (its schema),
-# planner_files_version (data_schema.json of mowbite_bridge), planner_interface (contract.json of its planner, none
-# without one) and bundled, what it brings of planner and app. Unsigned; the owner signs it with sign-bundle.sh.
+# commit and base the rootfs version it needs, both read from this repo at that commit; from the image api and
+# api_break (its schema), planner_files_version (data_schema.json of mowbite_bridge), planner_interface (contract.json
+# of its planner, none without one) and bundled, what it brings of planner and app. Unsigned; the owner signs it with
+# sign-bundle.sh.
 set -euo pipefail
 if [ $# -ne 2 ]; then
     echo "usage: $0 <image or image.tar> <out dir>" >&2
@@ -59,10 +60,11 @@ import app_export, planner_meta
 tree = f"{work}/{revision}"
 packages = sorted({line.strip() for line in open(f"{work}/runtime-packages.txt") if line.strip()})
 with open(f"{tree}/install/mowbite_api/share/mowbite_api/api.schema.json") as f:
-    api = json.load(f)["x-api"]
+    schema = json.load(f)
 with open(f"{tree}/install/mowbite_bridge/share/mowbite_bridge/data_schema.json") as f:
     table = json.load(f)
-meta = {"commit": commit, "serial": int(serial), "base": int(base.strip()), "api": api, "min_app": min_app,
+meta = {"commit": commit, "serial": int(serial), "base": int(base.strip()), "api": schema["x-api"],
+        "api_break": schema["x-api-break"], "min_app": min_app,
         "runtime_packages": packages,
         "planner_files_version": table["planner_files_version"][str(table["schema"])]}
 planner = planner_meta.read(f"{tree}/planner")

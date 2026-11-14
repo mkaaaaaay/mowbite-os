@@ -1,10 +1,10 @@
 """A signed bundle: a root-owned copy of it, its signature, its bundle.json and what it needs before a switch.
 
 A bundle is a tar.gz of one directory <revision>/ with bundle.json (format 2: component, revision, commit, serial,
-date) beside what the component brings: os with base, api, min_app, runtime_packages, planner_interface,
+date) beside what the component brings: os with base, api, api_break, min_app, runtime_packages, planner_interface,
 planner_files_version and bundled beside install/, planner/, app/ and tools/; planner with version, interface,
-files_version and requires beside planner/; app with version and api {min, max} beside app/; host with base beside
-mowbite_host/. Only the copy in the
+files_version and requires beside planner/; app with version and api {min, max, break} beside app/; host with base
+beside mowbite_host/. Only the copy in the
 stage folder is checked and unpacked: the file in the inbox may change after its signature was checked. What comes
 out of a bundle is never run as root, but the host itself, and a bundle of the planner, the app or the host holds
 no machine code.
@@ -180,10 +180,8 @@ def read_meta(path):
 def _check_fields(meta, names):
     component = meta["component"]
     if component == "app":
-        span = meta.get("api")
-        if (compat.version_tuple(meta.get("version")) is None or not isinstance(span, dict) or
-                not compat.whole(span.get("min")) or not compat.whole(span.get("max")) or span["min"] > span["max"]):
-            raise Refused("BAD_BUNDLE", "version or api {min, max} in bundle.json are missing or wrong")
+        if compat.version_tuple(meta.get("version")) is None or not compat.valid_span(meta.get("api")):
+            raise Refused("BAD_BUNDLE", "version or api {min, max, break} in bundle.json are missing or wrong")
     elif component == "planner":
         requires = meta.get("requires", {})
         if (not isinstance(meta.get("version"), str) or not compat.whole(meta.get("interface")) or

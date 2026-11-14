@@ -41,7 +41,8 @@ day = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) if isinstance
 print(f"  component {meta['component']}, revision {meta['revision']}, commit {meta.get('commit', '-')}")
 print(f"  serial {meta['serial']} (commit time {day(meta['serial'])}), built {day(meta.get('date'))}")
 if meta["component"] == "os":
-    print(f"  base {meta.get('base', 0)}, api {meta.get('api', '-')}, min_app {meta.get('min_app', '-')}, "
+    print(f"  base {meta.get('base', 0)}, api {meta.get('api', '-')} break {meta.get('api_break', '-')}, "
+          f"min_app {meta.get('min_app', '-')}, "
           f"{len(meta.get('runtime_packages', []))} runtime packages")
     print(f"  planner_interface {meta.get('planner_interface', '-')}, "
           f"planner_files_version {meta.get('planner_files_version', '-')}")
@@ -51,7 +52,8 @@ elif meta["component"] == "planner":
     print(f"  version {meta['version']}, interface {meta['interface']}, files_version {meta['files_version']}, "
           f"requires {', '.join(f'{k} {v}' for k, v in sorted(meta.get('requires', {}).items())) or '-'}")
 elif meta["component"] == "app":
-    print(f"  version {meta['version']}, api {meta['api']['min']}..{meta['api']['max']}")
+    print(f"  version {meta['version']}, api {meta['api']['min']}..{meta['api'].get('max', '')} "
+          f"break {meta['api'].get('break', '-')}")
 else:
     print(f"  base {meta.get('base', 0)}")
 PY

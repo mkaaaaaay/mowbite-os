@@ -18,7 +18,7 @@ MAX_INDEX = 1024 * 1024
 MAX_PER_COMPONENT = 2
 MAX_BYTES = 1024 * 1024 * 1024
 # What a candidate carries of its bundle.json to tell before the install whether it goes with the OS.
-FIELDS = ("min_app", "version", "api", "interface", "files_version")
+FIELDS = ("min_app", "version", "api", "api_break", "interface", "files_version")
 
 
 def sha256(path):

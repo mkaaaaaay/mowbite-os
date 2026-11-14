@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "boot"))
 from mowbite_host import bundle, compat, paths, updater  # noqa: E402
 
-OS = {"api": 15, "min_app": "1.5.0", "planner_interface": 2, "planner_files_version": 3,
+OS = {"api": 15, "api_break": 1, "min_app": "1.5.0", "planner_interface": 2, "planner_files_version": 3,
       "bundled": {"app": {"revision": "aaaaaaa", "version": "1.5.0", "serial": 100},
                   "planner": {"revision": "bbbbbbb", "version": "2.0.0", "serial": 200}}}
 APP = {"version": "1.5.0", "api": {"min": 14, "max": 15}, "serial": 101}
@@ -37,6 +37,29 @@ FITS = (
     ("app", {}, {"api": "15"}, "OS_TOO_OLD"),
     # Too old in both ways: the app says so.
     ("app", {"version": "1.4.0", "api": {"min": 16, "max": 17}}, {}, "APP_TOO_OLD"),
+    # Without break the break of the OS does not count.
+    ("app", {}, {"api_break": 2}, None),
+    ("app", {}, {"api_break": None}, None),
+    # With break: the same break and api at least min; max is shown only.
+    ("app", {"api": {"min": 14, "max": 15, "break": 1}}, {}, None),
+    ("app", {"api": {"min": 15, "break": 1}}, {}, None),
+    ("app", {"api": {"min": 14, "max": 14, "break": 1}}, {}, None),
+    ("app", {"api": {"min": 16, "max": 17, "break": 1}}, {}, "OS_TOO_OLD"),
+    ("app", {"api": {"min": 16, "break": 1}}, {}, "OS_TOO_OLD"),
+    ("app", {"api": {"min": 14, "max": 15, "break": 2}}, {}, "APP_API_BREAK"),
+    ("app", {"api": {"min": 14, "max": 15, "break": 0}}, {}, "APP_API_BREAK"),
+    ("app", {"api": {"min": 14, "break": 1}}, {"api_break": 2}, "APP_API_BREAK"),
+    ("app", {"api": {"min": 16, "break": 2}}, {}, "APP_API_BREAK"),
+    ("app", {"api": {"min": 14, "break": 1}}, {"api_break": None}, "OS_TOO_OLD"),
+    ("app", {"api": {"min": 14, "break": 1}}, {"api_break": "1"}, "OS_TOO_OLD"),
+    ("app", {"api": {"min": 14, "break": 1}}, {"api": None}, "OS_TOO_OLD"),
+    ("app", {"api": {"min": 14, "break": "1"}}, {}, "APP_TOO_OLD"),
+    ("app", {"api": {"min": 14, "break": None}}, {}, "APP_TOO_OLD"),
+    ("app", {"api": {"min": 14, "break": True}}, {}, "APP_TOO_OLD"),
+    ("app", {"api": {"break": 1}}, {}, "APP_TOO_OLD"),
+    ("app", {"api": {"min": 15, "max": 14, "break": 1}}, {}, "APP_TOO_OLD"),
+    ("app", {"api": {"min": 14, "max": None, "break": 1}}, {}, "APP_TOO_OLD"),
+    ("app", {"version": "1.4.0", "api": {"min": 14, "break": 2}}, {}, "APP_TOO_OLD"),
     ("planner", {}, {}, None),
     ("planner", {"interface": 1}, {}, "PLANNER_INTERFACE"),
     ("planner", {"interface": 3}, {}, "PLANNER_INTERFACE"),
@@ -60,6 +83,7 @@ OWN = (
     ("app", {}, {"bundled": None}, None),
     ("app", {}, {"bundled": {"app": {"serial": "100"}}}, None),
     ("app", {"api": {"min": 14, "max": 14}, "serial": 99}, {}, "APP_TOO_OLD"),
+    ("app", {"api": {"min": 14, "break": 2}}, {}, "APP_API_BREAK"),
     ("planner", {}, {}, None),
     ("planner", {"serial": 200}, {}, "OLD_SERIAL"),
     ("planner", {"interface": 1}, {}, "PLANNER_INTERFACE"),

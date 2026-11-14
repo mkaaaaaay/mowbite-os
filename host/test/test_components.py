@@ -21,7 +21,7 @@ from test_updater import A, B, Base  # noqa: E402
 
 P1, P2, P3 = "1111111", "2222222", "3333333"
 X, Y, Z = "d0d0d0d", "e0e0e0e", "f0f0f0f"
-OS_META = {"api": 15, "planner_interface": 1, "planner_files_version": 1}
+OS_META = {"api": 15, "api_break": 1, "planner_interface": 1, "planner_files_version": 1}
 
 
 class Cut(BaseException):
@@ -134,7 +134,8 @@ class AppTest(ComponentBase):
         self.assertIsNone(self.entry("app")["available"])
 
     def test_has_to_go_with_the_os(self):
-        for meta, reason in (({"api": {"min": 13, "max": 14}}, "APP_TOO_OLD"),
+        for meta, reason in (({"api": {"min": 14, "max": 15, "break": 2}}, "APP_API_BREAK"),
+                             ({"api": {"min": 13, "max": 14}}, "APP_TOO_OLD"),
                              ({"api": {"min": 16, "max": 16}}, "OS_TOO_OLD")):
             last = self.install("app", X, **meta)
             self.assertEqual((last["result"], last["reason"]), ("refused", reason), last)
@@ -145,6 +146,11 @@ class AppTest(ComponentBase):
         self.installed("os", B, api=16)
         self.assertIsNone(self.entry("app")["available"]["blocked"])
         self.assertEqual(self.run_update("app", X)["result"], "installed")
+
+    # With break, max is shown only: an app of max 14 runs beside an OS of api 15 of its break.
+    def test_with_break_max_is_shown_only(self):
+        self.assertEqual(self.install("app", X, api={"min": 14, "max": 14, "break": 1})["result"], "installed")
+        self.assertEqual(self.install("app", Y, api={"min": 14, "break": 1})["result"], "installed")
 
     def test_machine_code_refused(self):
         last = self.install("app", X, extra={"app/_next/static/tool": b"\x7fELF" + bytes(60)})

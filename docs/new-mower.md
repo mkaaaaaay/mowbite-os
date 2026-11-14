@@ -187,8 +187,14 @@ process is outside this watch and stops the mower by its own timeouts.
 - The host keeps three components, each in a folder of its own with `current`, `previous` and `pending`: the OS
   (`/opt/mowbite`), the planner (`/opt/mowbite-planner`) and the app (`/opt/mowbite-app`). The OS brings a planner and
   an app along and names them in its `bundle.json` (`bundled`, `planner_interface`, `planner_files_version`, `api`,
-  `min_app`). An own planner or app is used only while the link `active` in its folder names it; the host alone sets
-  it, when the own one goes with the installed OS and is newer than the bundled one. Whatever starts the planner or
+  `api_break`, `min_app`). An app goes with the OS when its `app.json` names `api.break` equal to `api_break` and an
+  `api.min` not above `api` (`api.max` is shown only); an app without `api.break` needs `api` within `api.min` to
+  `api.max` (`host/mowbite_host/compat.py`, the same for `app_export.py`). `kApiBreak` in
+  `src/mowbite_api/include/mowbite_api/catalog.h` goes up only for a break, as the description of the schema names
+  it (a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required,
+  fewer values taken in a request, an event a client waits for no longer sent); all else only adds and raises `kApi`.
+  An own planner or app is used only while the link `active` in its folder names it; the host alone sets it, when
+  the own one goes with the installed OS and is newer than the bundled one. Whatever starts the planner or
   serves the app on your mower reads `active` first and else `<os>/planner` or `<os>/app`, and decides nothing itself.
   A planner update restarts the OS through the gate of the OS; an app update only changes files and needs no gate.
   Bundles of the planner and the app hold no machine code. On the Tron `os-setup` puts the planner `active` names
@@ -213,9 +219,9 @@ process is outside this watch and stops the mower by its own timeouts.
   `/_next/static/` are also taken from the older installations so an open page keeps working after an update. The
   app reaches the broker over WebSocket on 9001 (`docker/mower/mosquitto.conf`). A compose stack can serve the same
   export with any static server that follows these rules. `web/test/test_web.py` runs without a mower.
-- Bundles, all in `platform/tron/bundle/`: `make-bundle.sh` for the OS (serial = commit time, base, api, the planner's
-  `contract.json` and what it brings along from the image), `make-planner-bundle.sh <repo> <commit> <out>` (only
-  `mowbite_planner` and `mowbite_planner_os`, built in a throwaway container, `contract.json` required),
+- Bundles, all in `platform/tron/bundle/`: `make-bundle.sh` for the OS (serial = commit time, base, api, api_break,
+  the planner's `contract.json` and what it brings along from the image), `make-planner-bundle.sh <repo> <commit>
+  <out>` (only `mowbite_planner` and `mowbite_planner_os`, built in a throwaway container, `contract.json` required),
   `make-app-bundle.sh <zip> <out>` (the
   web export of the app release, `app.json` required), `make-host-bundle.sh <commit> <out>` (`host/mowbite_host` of
   that commit). `host/bundle/app_export.py` unpacks and checks the export for
