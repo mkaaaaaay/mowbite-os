@@ -39,11 +39,12 @@ tron_mcu:
     # The MCU tells tilt only from the forwarded IMU: without a sample for imu_timeout s motion and blade are blocked
     # (G1, G10). The first sample may take imu_start_timeout s after the start (the IMU runs in another process, G25),
     # blocked as well but without an emergency. An off frame is not confirmed: a blade still at blade_still_rpm or more
-    # blade_stop_time s after it went off blocks as well and is sent off again (G23). Assumptions until measured on the
-    # Tron in phases 5 and 6.
+    # blade_stop_time s after it went off blocks as well and is sent off again (G23). The IMU times are assumptions
+    # until measured on the Tron. With the disc on, the blade stood within 0.6 s of every off, STOP, bumper, lift and
+    # lost host (measured 2026-11-14).
     imu_timeout: 0.5
     imu_start_timeout: 2.0
-    blade_stop_time: 5.0
+    blade_stop_time: 1.5
     blade_still_rpm: 100
     # STOP at the mower releases the emergency (G37): free 2 s, held 3 to 10 s, let go. The driver reports it on
     # hw/button, the logic releases as for emergency.reset.
