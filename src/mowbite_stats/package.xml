@@ -3,7 +3,7 @@
 <package format="3">
   <name>mowbite_stats</name>
   <version>0.0.0</version>
-  <description>Mowing statistics and maintenance: blade time, distance and runs per hour, blade hours of the parts</description>
+  <description>Mowing statistics and maintenance: blade time, distance and runs per hour, blade hours of the parts, 48 h of the number sensors</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
   <license>PolyForm-Strict-1.0.0</license>
 
@@ -13,6 +13,7 @@
   <depend>rclcpp_components</depend>
   <depend>mowbite_msgs</depend>
   <depend>mowbite_hold</depend>
+  <depend>mowbite_journal</depend>
   <depend>mowbite_watch</depend>
   <depend>nlohmann-json-dev</depend>
   <depend>mowbite_api</depend>

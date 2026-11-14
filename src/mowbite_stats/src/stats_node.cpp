@@ -1,11 +1,16 @@
+#include <sys/statvfs.h>
+
 #include <algorithm>
+#include <atomic>
 #include <chrono>
-#include <exception>
 #include <cmath>
+#include <exception>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/hardware_status.hpp>
@@ -15,12 +20,16 @@
 #include <mowbite_msgs/msg/rpc_methods.hpp>
 #include <mowbite_msgs/msg/rpc_request.hpp>
 #include <mowbite_msgs/msg/rpc_response.hpp>
+#include <mowbite_msgs/msg/sensor_spec.hpp>
+#include <mowbite_msgs/msg/sensor_value.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 
 #include "mowbite_hold/file_io.h"
 #include "mowbite_hold/file_writer.h"
+#include "mowbite_journal/journal.h"
 #include "mowbite_stats/counter.h"
+#include "mowbite_stats/sensor_history.h"
 #include "mowbite_stats/stats_rpc.h"
 #include "mowbite_watch/attach.h"
 
@@ -35,10 +44,27 @@ constexpr char kPartsFile[] = "stats/parts.json";
 constexpr size_t kMaxFileBytes = size_t{2} * 1024 * 1024;
 // The state goes to the disk this often (s); at most this much counting is lost when the OS stops hard.
 constexpr double kSaveEvery = 60.0;
+// One file per hour of the sensor history, <hour unix s>.jsonl.
+constexpr char kHistoryDir[] = "stats/sensors";
+constexpr char kHistoryExtension[] = ".jsonl";
+// The sensor history goes to the disk this often (s) and at the end; at most this much is lost when the OS stops hard.
+constexpr double kHistorySaveEvery = 900.0;
 
 double MonotonicSeconds() {
   using namespace std::chrono;
   return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+// Bytes free for this user on the file system of path, -1 when unknown.
+int64_t FreeBytes(const std::string& path) {
+  struct statvfs fs {};
+  if (::statvfs(path.c_str(), &fs) != 0) return -1;
+  return static_cast<int64_t>(fs.f_bavail) * static_cast<int64_t>(fs.f_frsize);
+}
+
+// An empty text removes the file: hours of the sensor history that are over.
+bool WriteOrRemove(const std::string& path, const std::string& text, std::string* error) {
+  return text.empty() ? mowbite_hold::RemoveFileSynced(path, error) : mowbite_hold::WriteFileSafely(path, text, error);
 }
 
 double WallSeconds() {
@@ -54,15 +80,20 @@ rclcpp::QoS LatchedQos(size_t depth) {
 
 // Mowing statistics and maintenance: blade time, distance and runs per hour from hw/status and bridge/robot_state,
 // the blade hours of the parts since they were last seen to; stats.get, .part_done and .part_due through the bridge,
-// stats/parts for the pushes of mowbite_net. Files under <data_dir>/stats. Reads only, moves nothing.
+// stats/parts for the pushes of mowbite_net; min, mean and max of the number sensors of bridge/sensor_value per
+// minute for sensors.history. Files under <data_dir>/stats. Reads only, moves nothing.
 class StatsNode : public rclcpp::Node {
  public:
   explicit StatsNode(const rclcpp::NodeOptions& options)
       : rclcpp::Node("mowbite_stats", mowbite_component::StartupOnly(options)),
         data_dir_(declare_parameter("data_dir", std::string())),
         counter_(Read(kStateFile), Read(kHoursFile), Read(kPartsFile), WallSeconds()),
-        writer_(mowbite_hold::WriteFileSafely, [this](const mowbite_hold::FileWriter::Done& done) {
-          if (!done.ok) RCLCPP_ERROR(get_logger(), "Cannot write %s: %s", done.path.c_str(), done.error.c_str());
+        reserve_bytes_(std::max(0.0, declare_parameter("journal_reserve_mb", mowbite_journal::Options().reserve_mb)) *
+                       1e6),
+        writer_(WriteOrRemove, [this](const mowbite_hold::FileWriter::Done& done) {
+          if (done.ok) return;
+          RCLCPP_ERROR(get_logger(), "Cannot write %s: %s", done.path.c_str(), done.error.c_str());
+          if (done.path.rfind(PathOf(kHistoryDir), 0) == 0) history_failed_ = true;
         }) {
     parts_pub_ = create_publisher<mowbite_msgs::msg::PartsUse>("stats/parts", LatchedQos(1));
     methods_pub_ = create_publisher<mowbite_msgs::msg::RpcMethods>("bridge/rpc/methods", LatchedQos(50));
@@ -78,6 +109,19 @@ class StatsNode : public rclcpp::Node {
         });
     state_sub_ = create_subscription<mowbite_msgs::msg::RobotState>(
         "bridge/robot_state", 10, [this](const mowbite_msgs::msg::RobotState& msg) { OnState(msg); });
+    LoadHistory();
+    // As the bridge takes them for sensor_infos/json and sensors/<id>/data.
+    sensor_info_sub_ = create_subscription<mowbite_msgs::msg::SensorSpec>(
+        "bridge/sensor_info", LatchedQos(100), [this](const mowbite_msgs::msg::SensorSpec& msg) {
+          const bool number = msg.kind == mowbite_msgs::msg::SensorSpec::KIND_NUMBER;
+          if (!history_.Describe(msg.id, msg.name, msg.unit, number) && number) {
+            RCLCPP_WARN(get_logger(), "Sensor %s has no history: too long a text or more than %zu sensors",
+                        msg.id.c_str(), kMaxSensors);
+          }
+        });
+    sensor_value_sub_ = create_subscription<mowbite_msgs::msg::SensorValue>(
+        "bridge/sensor_value", rclcpp::QoS(100),
+        [this](const mowbite_msgs::msg::SensorValue& msg) { history_.Add(msg.sensor_id, msg.value, WallSeconds()); });
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_stats";
     methods.methods = StatsMethods();
@@ -85,13 +129,16 @@ class StatsNode : public rclcpp::Node {
     PublishParts();
     if (data_dir_.empty()) RCLCPP_WARN(get_logger(), "No data_dir: the statistics are not kept");
     timer_ = create_wall_timer(std::chrono::duration<double>(kSaveEvery), [this] { Save(false); });
+    history_timer_ =
+        create_wall_timer(std::chrono::duration<double>(kHistorySaveEvery), [this] { SaveHistory(); });
     watch_ = mowbite_watch::Attach(*this);
   }
 
-  // The last minute of counting on the way out; a failure to write it is logged, never thrown.
+  // The last minute of counting and the sensor history on the way out; a failure to write is logged, never thrown.
   ~StatsNode() override {
     try {
       Save(false);
+      SaveHistory();
     } catch (const std::exception& error) {
       RCLCPP_ERROR(get_logger(), "Statistics not saved: %s", error.what());
     } catch (...) {
@@ -118,6 +165,57 @@ class StatsNode : public rclcpp::Node {
 
   void Write(const char* name, const json& value) {
     if (!data_dir_.empty()) writer_.Submit(PathOf(name), value.dump() + "\n");
+  }
+
+  std::string PathOfHour(int64_t hour) const {
+    return PathOf(kHistoryDir) + "/" + std::to_string(hour) + kHistoryExtension;
+  }
+
+  // The hour files newest first; a file that cannot be read is removed at the next save.
+  void LoadHistory() {
+    if (data_dir_.empty()) return;
+    std::vector<int64_t> hours;
+    std::error_code error;
+    for (const auto& entry : std::filesystem::directory_iterator(PathOf(kHistoryDir), error)) {
+      const std::string stem = entry.path().stem().string();
+      if (entry.path().extension() != kHistoryExtension || stem.empty() || stem.size() > 12 ||
+          !std::all_of(stem.begin(), stem.end(), [](char c) { return c >= '0' && c <= '9'; })) {
+        continue;
+      }
+      hours.push_back(std::stoll(stem));
+    }
+    std::sort(hours.begin(), hours.end(), std::greater<>());
+    for (const int64_t hour : hours) {
+      std::string text, why;
+      const auto read = mowbite_hold::ReadSmallFile(PathOfHour(hour), kMaxHistoryBytes, &text, &why);
+      if (read != mowbite_hold::FileRead::kText) {
+        RCLCPP_ERROR(get_logger(), "Cannot read the sensor history of %lld: %s", static_cast<long long>(hour),
+                     why.empty() ? "too large" : why.c_str());
+        text.clear();
+      }
+      history_.Load(hour, text);
+    }
+    RCLCPP_INFO(get_logger(), "Sensor history: %zu values of minutes in %zu bytes", history_.Buckets(),
+                history_.Bytes());
+  }
+
+  // Writes the hours changed since the last save; below journal_reserve_mb free only removes.
+  void SaveHistory() {
+    if (history_failed_.exchange(false)) history_.AllUnwritten();
+    std::vector<HourFile> files = history_.TakeFiles(WallSeconds());
+    if (data_dir_.empty()) return;
+    size_t bytes = 0;
+    for (const auto& file : files) bytes += file.text.size();
+    const int64_t free = FreeBytes(data_dir_);
+    if (bytes > 0 && free >= 0 && static_cast<double>(free) - static_cast<double>(bytes) < reserve_bytes_) {
+      RCLCPP_WARN(get_logger(), "Sensor history not written: the journal keeps %.0f MB free", reserve_bytes_ / 1e6);
+      std::vector<HourFile> removals;
+      std::vector<HourFile> writes;
+      for (auto& file : files) (file.text.empty() ? removals : writes).push_back(std::move(file));
+      history_.Unwritten(writes);
+      files = std::move(removals);
+    }
+    for (auto& file : files) writer_.Submit(PathOfHour(file.hour), std::move(file.text));
   }
 
   void OnState(const mowbite_msgs::msg::RobotState& state) {
@@ -166,6 +264,8 @@ class StatsNode : public rclcpp::Node {
     RpcOutcome out;
     if (params.is_discarded()) {
       out.error = RpcError{kInvalidParams, "The parameters are not valid JSON", nullptr};
+    } else if (request.method == kHistoryMethod) {
+      out = HandleHistory(history_, params, WallSeconds());
     } else {
       out = HandleStats(counter_, request.method, params, WallSeconds());
     }
@@ -191,6 +291,10 @@ class StatsNode : public rclcpp::Node {
 
   const std::string data_dir_;
   Counter counter_;
+  SensorHistory history_;
+  const double reserve_bytes_;
+  // A write of the sensor history failed: the next save writes every hour.
+  std::atomic<bool> history_failed_{false};
   mowbite_hold::FileWriter writer_;
   bool blade_ = false;
   json saved_;
@@ -203,7 +307,10 @@ class StatsNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr request_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotState>::SharedPtr state_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::SensorSpec>::SharedPtr sensor_info_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::TimerBase::SharedPtr history_timer_;
   std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 

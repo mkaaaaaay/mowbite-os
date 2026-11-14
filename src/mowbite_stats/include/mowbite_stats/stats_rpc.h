@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "mowbite_stats/counter.h"
+#include "mowbite_stats/sensor_history.h"
 
 namespace mowbite_stats {
 
@@ -23,11 +24,15 @@ struct RpcOutcome {
   bool parts_changed = false;  // stats/parts.json to be written
 };
 
-// stats.get, stats.part_done and stats.part_due.
+constexpr char kHistoryMethod[] = "sensors.history";
+
+// stats.get, stats.part_done, stats.part_due and sensors.history.
 const std::vector<std::string>& StatsMethods();
 
-// The answer to one of StatsMethods; params as sent (null without any), now in unix s.
+// The answer to one of StatsMethods but sensors.history; params as sent (null without any), now in unix s.
 RpcOutcome HandleStats(Counter& counter, const std::string& method, const json& params, double now);
+// The answer to sensors.history.
+RpcOutcome HandleHistory(const SensorHistory& history, const json& params, double now);
 
 }  // namespace mowbite_stats
 
