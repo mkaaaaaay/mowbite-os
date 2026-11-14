@@ -766,9 +766,9 @@ def send(fd, data):
 
 
 def state_text(now, pose, dock_ok=False, host_bytes=0, clock=None):
-    """clock: time.monotonic() of the pose, for readers in other processes."""
+    """clock: time.monotonic() of the pose, for readers in other processes; angular is the turn with the slip."""
     return json.dumps({"t": round(now, 3), "x": pose.x, "y": pose.y, "yaw": pose.yaw, "linear": pose.linear,
-                       "angular": pose.angular, "dock_ok": dock_ok, "host_bytes": host_bytes, "clock": clock})
+                       "angular": pose.angular + pose.slip, "dock_ok": dock_ok, "host_bytes": host_bytes, "clock": clock})
 
 
 def write_state(path, text):

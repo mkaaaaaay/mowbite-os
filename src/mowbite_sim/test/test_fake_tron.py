@@ -90,6 +90,11 @@ class SlipAndNoiseTest(unittest.TestCase):
         self.assertAlmostEqual(pose.yaw, 0.1, places=6)
         self.assertEqual(pose.angular, 0.0)
 
+    def test_state_reports_the_turn_with_the_slip(self):
+        pose = ft.Pose()
+        pose.step(0.01, 0.2, 0.1, 0.05)
+        self.assertAlmostEqual(json.loads(ft.state_text(0.0, pose))["angular"], 0.11)
+
     def test_no_drift_without_driving(self):
         pose = ft.Pose()
         pose.step(1.0, 0.0, 0.0, 0.05)
