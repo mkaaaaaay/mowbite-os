@@ -1,4 +1,5 @@
-# Follows a path of base_link poses in the map frame (mowbite_follower). Stops by no longer sending follower/cmd_vel.
+# Follows a path of base_link poses in the map or the station frame (mowbite_follower). Stops by no longer sending
+# commands.
 
 # Kinds of poses, the segment types of the planner
 uint8 KIND_PERIMETER=0
@@ -34,6 +35,12 @@ float32 end_tolerance
 # past its end; farther off the path ends with REASON_CROSS_TRACK. For a path whose surroundings were checked only that
 # far. 0: only the limit of the follower beside the path, which counts once the mower came onto it.
 float32 max_cross_track
+# The frame of poses and areas. FRAME_MAP: the pose from localization/pose, commands on follower/cmd_vel. FRAME_DOCK:
+# the station frame (origin base_link of the docked mower, x the way in), the pose from localization/dock_pose with
+# dock_max_position_accuracy, commands on follower/dock_cmd_vel, which mowbite_safety passes as SOURCE_DOCK only.
+uint8 FRAME_MAP=0
+uint8 FRAME_DOCK=1
+uint8 frame
 ---
 uint8 REASON_DONE=0
 uint8 REASON_CANCELED=1

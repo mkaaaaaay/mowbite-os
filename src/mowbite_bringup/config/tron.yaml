@@ -30,6 +30,10 @@
     # after the gate; the pose at the station stays good without the marker for that long.
     dock_overshoot: 0.05
     contact_timeout: 10.0
+    # m the position has to be at least at the station: in the map for the reference check and the gate of docking
+    # (mowbite_logic), from the marker for every drive in the station frame (mowbite_follower, mowbite_safety).
+    # Assumption until phase 7.
+    dock_max_position_accuracy: 0.03
 tron_mcu:
   ros__parameters:
     port: /dev/ttyS9
@@ -163,9 +167,8 @@ mowbite_logic:
     map_edit_timeout: 5.0
     # The charging contacts lie 0.10 m behind base_link (geometry.dock_contact_x): the Tron backs onto the docking
     # station and faces away from it there. On the contacts mowing and drives start only after the reference check
-    # (G24): position accuracy at least dock_max_position_accuracy m, then with the heading of the station set,
-    # base_link within dock_reference_limit m of the recorded station (assumptions until phase 7).
-    dock_max_position_accuracy: 0.03
+    # (G24): position accuracy at least dock_max_position_accuracy m (under /**), then with the heading of the station
+    # set, base_link within dock_reference_limit m of the recorded station (assumptions until phase 7).
     dock_reference_limit: 0.10
     # After the check charging goes off (hw/charge), then the mower leaves the station undock_distance m straight
     # ahead without steering, at most undock_speed m/s: its wheels climb out of the 10 mm hollows of the station, a
