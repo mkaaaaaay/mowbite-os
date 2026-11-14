@@ -32,18 +32,8 @@ void LogicCore::OnMapDock(const std::optional<DockPose>& dock) {
   dock_ = dock;
 }
 
-double LogicCore::DockedHeading() const {
-  const double heading = dock_ ? dock_->heading : 0.0;
-  const double facing = ContactsBack() ? heading + M_PI : heading;
-  return std::atan2(std::sin(facing), std::cos(facing));
-}
-
 bool LogicCore::ContactsBack() const {
   return config_.dock_contact_x < 0;
-}
-
-const char* LogicCore::LeaveWords() const {
-  return ContactsBack() ? "straight ahead" : "straight back";
 }
 
 bool LogicCore::CanDock() const {

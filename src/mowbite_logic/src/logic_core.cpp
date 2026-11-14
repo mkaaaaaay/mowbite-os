@@ -163,25 +163,6 @@ void LogicCore::OnPose(const PoseSnapshot& pose) {
   PullRecorder();
 }
 
-void LogicCore::OnGnssFix(double x, double y) {
-  if (state_ != State::kUndocking || undock_stopping_) return;
-  // The first fix of the undocking is where the course is measured from; the mower stands or drives straight, against
-  // its heading where it leaves backwards.
-  if (!undock_fix_start_) {
-    undock_fix_start_ = Point2{x, y};
-    return;
-  }
-  if (undock_step_ != UndockStep::kDrive) return;
-  const double course = ContactsBack() ? undock_heading_ : undock_heading_ + M_PI;
-  const auto error = CourseError(undock_fix_start_->x, undock_fix_start_->y, course, x, y,
-                                 config_.undock.course_distance);
-  if (!error || std::abs(*error) <= config_.undock.course_limit) return;
-  const std::string text = "Undocking stopped: the mower drove " + Degrees(std::abs(*error)) +
-                           " deg off the line of the docking station, at most " + Degrees(config_.undock.course_limit) +
-                           " deg allowed: the station may be turned, or its heading was recorded wrong";
-  StopUndocking(Reason("path_failed", text), Reason("STOPPED", text));
-}
-
 void LogicCore::OnPoseTimeout() {
   pose_.reset();
   if (state_ == State::kDriving) CancelDrive(Reason("POSE_LOST", "No position from the localization"));
