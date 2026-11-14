@@ -335,20 +335,31 @@ class TestFollower(unittest.TestCase):
         self.assertEqual(w.commands_since(t), [])
 
     def test_12_the_station_frame_needs_the_accuracy_of_the_dock(self):
-        # 4 cm is good enough in the map, not from the marker (dock_max_position_accuracy 0.03).
+        # From the marker 0.03 m at the docked place and 0.09 m worse per m from it, whatever the map allows: 0.11 m
+        # is refused 0.8 m out (limit 0.102 m), 0.04 m drives until about 0.11 m before the station.
         w = self.world
         with w.lock:
             w.dock = True
             w.accuracy = 0.04
-            w.dock_accuracy = 0.04
+            w.dock_accuracy = 0.11
         w.place(-0.8, 0.0, math.pi)
         result = w.follow(facing(line_poses(-0.8, 0.0, 0.0, 0.7), math.pi), frame=FollowPath.Goal.FRAME_DOCK,
                           reverse=True)
         self.assertEqual(result.reason, Result.REASON_POSITION_ACCURACY, result.message)
-        self.assertIn("0.03", result.message)
+        self.assertIn("worse than 0.10 m", result.message)
+        with w.lock:
+            self.assertAlmostEqual(w.x, -0.8, delta=0.02)
+            w.dock_accuracy = 0.04
+        result = w.follow(facing(line_poses(-0.8, 0.0, 0.0, 0.7), math.pi), frame=FollowPath.Goal.FRAME_DOCK,
+                          reverse=True)
+        self.assertEqual(result.reason, Result.REASON_POSITION_ACCURACY, result.message)
+        with w.lock:
+            self.assertLess(w.x, -0.08)
+            self.assertGreater(w.x, -0.2)
         # The map pose is 5 m away: a path there in the map frame is fine, its accuracy is the map's.
         with w.lock:
             w.dock_accuracy = 0.02
+        w.place(-0.8, 0.0, math.pi)
         result = w.follow(facing(line_poses(4.2, 0.0, 0.0, 0.7), math.pi), frame=FollowPath.Goal.FRAME_MAP,
                           reverse=True)
         self.assertEqual(result.reason, Result.REASON_DONE, result.message)
