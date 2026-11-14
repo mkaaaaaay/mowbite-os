@@ -57,6 +57,12 @@ bool LogicCore::DockPoseGood() const {
   return pose && marker_.PoseGood(marker_clock_, MarkerAccuracyLimit(pose->x, pose->y));
 }
 
+// A sight ends with a good pose once the marker came with its own direction since it began: a pose kept from before
+// does not start a leg.
+bool LogicCore::SightDone() const {
+  return marker_.sight() && marker_.seen() && DockPoseGood();
+}
+
 void LogicCore::OnDockMarker(const DockMarkerSample& sample) {
   if (!MarkerWanted()) return;
   marker_clock_ = std::max(marker_clock_, sample.time);
@@ -67,8 +73,7 @@ void LogicCore::OnDockPose(const DockPoseSample& pose) {
   if (!MarkerWanted()) return;
   marker_clock_ = std::max(marker_clock_, pose.time);
   marker_.OnPose(pose, docking_leg_ == DockingLeg::Kind::kLine);
-  // A sight ends as soon as the pose is good.
-  if (docking_gps_wait_ && docking_gps_since_ && marker_.sight() && DockPoseGood()) {
+  if (docking_gps_wait_ && docking_gps_since_ && SightDone()) {
     docking_gps_wait_ = false;
     NextDockingTry();
   }
@@ -133,7 +138,7 @@ void LogicCore::WaitForMarker(bool sight) {
 }
 
 void LogicCore::MarkerTryFailed(const Reason& why) {
-  // Nothing drives blind, nor by a marker whose scale failed (G42).
+  // Nothing drives blind, nor by a marker whose scale failed or whose source cannot measure (G42).
   if (!DockPoseGood() || marker_untrusted_) {
     CountDockingFailure(why, true);
     return;
@@ -156,12 +161,15 @@ void LogicCore::TickMarkerDocking(double now_s) {
     marker_.BeginWait(now_s, marker_sight_);
     marker_sight_ = false;
   }
-  if (DockPoseGood()) {
-    if (!marker_.sight()) {
-      if (!docking_gps_good_since_) docking_gps_good_since_ = now_s;
-      if (now_s - *docking_gps_good_since_ < config_.gps_wait_time) return;
-      Notify("Docking goes on: the marker is back");
-    }
+  if (SightDone()) {
+    docking_gps_wait_ = false;
+    NextDockingTry();
+    return;
+  }
+  if (!marker_.sight() && DockPoseGood()) {
+    if (!docking_gps_good_since_) docking_gps_good_since_ = now_s;
+    if (now_s - *docking_gps_good_since_ < config_.gps_wait_time) return;
+    Notify("Docking goes on: the marker is back");
     docking_gps_wait_ = false;
     NextDockingTry();
     return;
@@ -213,12 +221,12 @@ std::string LogicCore::GateProblem() {
     return docking_.CheckGate(pose_->x, pose_->y, pose_->heading, pose_->position_accuracy, DockAccuracyLimit());
   }
   if (!DockPoseGood()) return "at the gate the marker gave no good pose";
+  // The scale first: a marker of the wrong size guides nothing, whatever else fails here.
+  const std::string scale = marker_.ScaleProblem();
+  marker_untrusted_ = !scale.empty();
+  if (marker_untrusted_) return "at the gate " + scale;
   const DockPoseSample& p = *marker_.pose();  // NOLINT(bugprone-unchecked-optional-access): good means there is one
-  std::string why = docking_.CheckGate(p.x, p.y, p.heading, p.position_accuracy, MarkerAccuracyLimit(p.x, p.y));
-  if (!why.empty()) return why;
-  why = marker_.ScaleProblem();
-  marker_untrusted_ = !why.empty();
-  return why.empty() ? why : "at the gate " + why;
+  return docking_.CheckGate(p.x, p.y, p.heading, p.position_accuracy, MarkerAccuracyLimit(p.x, p.y));
 }
 
 void LogicCore::EndMarkerDocking() {

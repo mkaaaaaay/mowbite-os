@@ -66,8 +66,7 @@ void MarkerWatch::BeginWait(double now, bool sight) {
 }
 
 MarkerWatch::Verdict MarkerWatch::Check(double now) const {
-  const bool cannot = last_ && last_->time >= since_ &&
-                      (last_->state == kFault || (last_->state == kOff && !last_->reason.empty()));
+  const bool cannot = last_ && last_->time >= since_ && SourceFault();
   if (cannot || now - heard_ >= kMarkerSilentS) return Verdict::kUnavailable;
   if (now - since_ < config_.wait) return Verdict::kWaiting;
   if (!sight_) return Verdict::kLost;
@@ -92,8 +91,12 @@ std::string MarkerWatch::ScaleProblem() const {
   return text;
 }
 
+bool MarkerWatch::SourceFault() const {
+  return last_ && (last_->state == kFault || (last_->state == kOff && !last_->reason.empty()));
+}
+
 bool MarkerWatch::PoseGood(double now, double limit) const {
-  return pose_ && pose_->heading_valid && pose_->position_accuracy <= limit && now - pose_->time <= kDockPoseMaxAgeS;
+  return !SourceFault() && pose_ && pose_->heading_valid && pose_->position_accuracy <= limit && now - pose_->time <= kDockPoseMaxAgeS;
 }
 
 void MarkerWatch::Expire(double now) {

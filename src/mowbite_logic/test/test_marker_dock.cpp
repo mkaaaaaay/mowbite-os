@@ -128,6 +128,20 @@ TEST(MarkerWatch, PoseGoodIsRecentAccurateWithHeading) {
   EXPECT_FALSE(watch.pose());
 }
 
+// A pose kept by the localization counts for nothing while the source says it cannot measure, until it measures again.
+TEST(MarkerWatch, NoGoodPoseWhileTheSourceCannotMeasure) {
+  MarkerWatch watch(Tron());
+  watch.OnPose(Pose(10.0, -0.5), false);
+  watch.OnMarker(Message(10.1, kFault, false, false, "NOT_SET_UP"));
+  EXPECT_TRUE(watch.SourceFault());
+  EXPECT_FALSE(watch.PoseGood(10.2, 0.03));
+  watch.OnMarker(Message(10.2, kOff, false, false, "TOO_HOT"));
+  EXPECT_FALSE(watch.PoseGood(10.3, 0.03));
+  watch.OnMarker(Message(10.3, kMeasuring, true, true));
+  EXPECT_FALSE(watch.SourceFault());
+  EXPECT_TRUE(watch.PoseGood(10.4, 0.03));
+}
+
 // The way by the marker against the wheels from the start of the line: within 15 %, else a marker of the wrong size.
 TEST(MarkerWatch, ScaleOfTheMarkerAtTheGate) {
   const auto line = [](double scale) {

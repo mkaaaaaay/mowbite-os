@@ -326,6 +326,45 @@ TEST(LogicMarker, MarkerWithoutDirectionRefused) {
   EXPECT_NE(failed.details["message"].get<std::string>().find("no direction"), std::string::npos);
 }
 
+// A good pose alone ends no sight: the marker has to come with its own direction since the sight began.
+TEST(LogicMarker, TheSightNeedsTheDirectionOfTheMarker) {
+  TestCore core = Started();
+  core.OnDockPose(Pose(100.2, -0.5));
+  core.OnTick(100.3);
+  EXPECT_FALSE(core.TakeDockingLeg());
+  core.OnDockMarker(Message(100.4, kMeasuring, true, false));
+  core.OnDockPose(Pose(100.5, -0.5));
+  core.OnTick(100.6);
+  EXPECT_FALSE(core.TakeDockingLeg());
+  core.OnDockMarker(Message(100.7, kMeasuring, true, true));
+  core.OnDockPose(Pose(100.8, -0.5));
+  Take(core, DockingLeg::Kind::kOut);
+}
+
+// The source reports that it cannot measure while a pose kept from before is still good: no leg, unavailable.
+TEST(LogicMarker, AFaultWithAGoodPoseStartsNothing) {
+  TestCore core = Started();
+  core.OnDockMarker(Message(100.3, kMeasuring, true, true));
+  core.OnDockMarker(Message(100.4, kFault, false, false, "NOT_SET_UP"));
+  core.OnDockPose(Pose(100.5, -0.5));
+  core.OnTick(100.6);
+  EXPECT_FALSE(core.TakeDockingLeg());
+  const Event& failed = Failed(core);
+  EXPECT_EQ(failed.details["cause"], "MARKER_UNAVAILABLE");
+  EXPECT_EQ(core.RobotState().state, "IDLE");
+}
+
+// A try that fails while the source cannot measure does not drive out by the pose kept from before.
+TEST(LogicMarker, NoDriveOutWhileTheSourceCannotMeasure) {
+  TestCore core = OnTheLine();
+  core.OnDockPose(Pose(103.0, -0.6));
+  core.OnDockMarker(Message(103.1, kFault, false, false, "NOT_SET_UP"));
+  core.OnDockingLegEnded(LegEnd::kFailed, Reason("TIMEOUT", "stuck"));
+  EXPECT_FALSE(core.TakeDockingLeg());
+  EXPECT_EQ(Failed(core).details["reason"], "dock_failed");
+  EXPECT_EQ(core.RobotState().state, "IDLE");
+}
+
 TEST(LogicMarker, BesideTheLineRefused) {
   TestCore core = Started();
   See(core, -0.5, 0.3);
@@ -392,6 +431,17 @@ TEST(LogicMarker, GateBesideTheLineTriesAgain) {
 TEST(LogicMarker, WrongMarkerSizeEndsAtTheGate) {
   TestCore core = OnTheLine();
   DriveTheLine(core, 1.3);
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  EXPECT_FALSE(core.TakeDockingLeg());
+  const Event& failed = Failed(core);
+  EXPECT_NE(failed.details["message"].get<std::string>().find("right size"), std::string::npos);
+  EXPECT_EQ(core.RobotState().state, "IDLE");
+}
+
+// The scale counts before the rest of the gate: beside the line as well, a marker of the wrong size guides no way out.
+TEST(LogicMarker, WrongMarkerSizeBesideTheLineEndsAtTheGate) {
+  TestCore core = OnTheLine();
+  DriveTheLine(core, 1.3, 0.03);
   core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
   EXPECT_FALSE(core.TakeDockingLeg());
   const Event& failed = Failed(core);

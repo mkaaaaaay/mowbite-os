@@ -79,8 +79,10 @@ class MarkerWatch {
   std::string Detail() const;
   // Why the way along the line by the marker does not fit the way of the wheels, empty if it does or was too short.
   std::string ScaleProblem() const;
-  // A good pose: recent, with a heading and accurate to limit m.
+  // A good pose: recent, with a heading, accurate to limit m and the source not reporting that it cannot measure.
   bool PoseGood(double now, double limit) const;
+  // The latest message of the source says it cannot measure: FAULT, or OFF with a reason.
+  bool SourceFault() const;
   const std::optional<DockPoseSample>& pose() const {
     return pose_;
   }

@@ -809,6 +809,7 @@ class LogicCore {
   void MarkerFailed(const std::string& cause, const std::string& text);
   void EndMarkerDocking();
   bool DockPoseGood() const;
+  bool SightDone() const;
   // marker or position, for the events of docking.
   const char* Guide() const;
   void OnDockingContact();
