@@ -74,9 +74,10 @@ class LightNode : public rclcpp::Node {
     response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
     error_pub_ = create_publisher<mowbite_msgs::msg::RpcError>("bridge/rpc/error", 100);
     request_sub_ = create_subscription<mowbite_msgs::msg::RpcRequest>(
-        "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRequest(*msg); });
+        "bridge/rpc/request", 100,
+        [this](const mowbite_msgs::msg::RpcRequest::ConstSharedPtr& msg) { OnRequest(*msg); });
     state_sub_ = create_subscription<mowbite_msgs::msg::RobotState>(
-        "bridge/robot_state", 10, [this](mowbite_msgs::msg::RobotState::ConstSharedPtr msg) {
+        "bridge/robot_state", 10, [this](const mowbite_msgs::msg::RobotState::ConstSharedPtr& msg) {
           service_.SetRobotState(msg->current_state, msg->emergency, msg->is_charging, msg->battery_percentage);
         });
     publish_sub_ = create_subscription<mowbite_msgs::msg::MqttPublish>(

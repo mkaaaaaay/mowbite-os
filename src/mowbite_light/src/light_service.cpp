@@ -10,7 +10,7 @@ namespace mowbite_light {
 namespace {
 
 constexpr int kProfileSchema = 1;
-constexpr size_t kProfileMaxBytes = 64 * 1024;
+constexpr size_t kProfileMaxBytes = size_t{64} * 1024;
 
 RpcOutcome Invalid(std::string message) {
   return {false, Json(), mowbite_bridge::kInvalidParams, std::move(message)};

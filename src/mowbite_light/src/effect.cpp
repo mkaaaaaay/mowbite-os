@@ -1,7 +1,6 @@
 #include "mowbite_light/effect.h"
 
 #include <algorithm>
-#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
@@ -102,12 +101,15 @@ std::optional<Rgb> ParseHex(const Json& value) {
   if (!value.is_string()) return std::nullopt;
   const std::string text = value.get<std::string>();
   if (text.size() != 7 || text[0] != '#') return std::nullopt;
-  unsigned r = 0, g = 0, b = 0;
-  for (size_t i = 1; i < 7; ++i) {
-    if (!std::isxdigit(static_cast<unsigned char>(text[i]))) return std::nullopt;
+  uint8_t channels[3] = {};
+  for (size_t k = 0; k < 3; ++k) {
+    const char* first = text.data() + 1 + 2 * k;
+    unsigned value = 0;
+    const auto [end, error] = std::from_chars(first, first + 2, value, 16);
+    if (error != std::errc() || end != first + 2) return std::nullopt;
+    channels[k] = static_cast<uint8_t>(value);
   }
-  if (std::sscanf(text.c_str() + 1, "%2x%2x%2x", &r, &g, &b) != 3) return std::nullopt;
-  return Rgb{static_cast<uint8_t>(r), static_cast<uint8_t>(g), static_cast<uint8_t>(b)};
+  return Rgb{channels[0], channels[1], channels[2]};
 }
 
 Effect Make(EffectKind kind, std::vector<Rgb> colors, double period) {
@@ -128,6 +130,7 @@ std::vector<Rgb> Along(const Effect& effect, size_t n, double t, double level) {
   const Rgb first = effect.colors.empty() ? Rgb{} : effect.colors[0];
   const Rgb second = effect.colors.size() > 1 ? effect.colors[1] : Rgb{};
   const double phase = Phase(t, effect.period);
+  const auto count = static_cast<double>(n);
   switch (effect.kind) {
     case EffectKind::kOff:
       break;
@@ -142,7 +145,7 @@ std::vector<Rgb> Along(const Effect& effect, size_t n, double t, double level) {
       break;
     case EffectKind::kChase: {
       const size_t run = std::max<size_t>(1, n / 5);
-      const size_t head = static_cast<size_t>(phase * n);
+      const size_t head = static_cast<size_t>(phase * count);
       for (size_t i = 0; i < n; ++i) leds[i] = (i + n - head) % n < run ? first : second;
       break;
     }
@@ -150,7 +153,7 @@ std::vector<Rgb> Along(const Effect& effect, size_t n, double t, double level) {
       const size_t parts = effect.colors.size();
       for (size_t i = 0; i < n; ++i) {
         // Along the chain and back to the first colour, so that a moving gradient has no seam.
-        const double x = std::fmod(static_cast<double>(i) / n + phase, 1.0) * parts;
+        const double x = std::fmod(static_cast<double>(i) / count + phase, 1.0) * static_cast<double>(parts);
         const size_t k = static_cast<size_t>(x) % parts;
         leds[i] = Mix(effect.colors[k], effect.colors[(k + 1) % parts], x - std::floor(x));
       }
@@ -161,20 +164,23 @@ std::vector<Rgb> Along(const Effect& effect, size_t n, double t, double level) {
       break;
     case EffectKind::kComet: {
       const size_t tail = std::max<size_t>(2, n / 3);
-      const size_t head = static_cast<size_t>(phase * n);
+      const auto fade = static_cast<double>(tail + 1);
+      const size_t head = static_cast<size_t>(phase * count);
       for (size_t i = 0; i < n; ++i) {
         const size_t behind = (head + n - i) % n;
-        leds[i] = behind <= tail ? Mix(first, second, static_cast<double>(behind) / (tail + 1)) : second;
+        leds[i] = behind <= tail ? Mix(first, second, static_cast<double>(behind) / fade) : second;
       }
       break;
     }
     case EffectKind::kScanner: {
-      const double dot = (1 - std::fabs(2 * phase - 1)) * (n - 1);
-      for (size_t i = 0; i < n; ++i) leds[i] = Mix(second, first, std::max(0.0, 1 - std::fabs(i - dot)));
+      const double dot = (1 - std::fabs(2 * phase - 1)) * (count - 1);
+      for (size_t i = 0; i < n; ++i) {
+        leds[i] = Mix(second, first, std::max(0.0, 1 - std::fabs(static_cast<double>(i) - dot)));
+      }
       break;
     }
     case EffectKind::kRainbow:
-      for (size_t i = 0; i < n; ++i) leds[i] = Hue(static_cast<double>(i) / n - phase);
+      for (size_t i = 0; i < n; ++i) leds[i] = Hue(static_cast<double>(i) / count - phase);
       break;
     case EffectKind::kSparkle: {
       const double slot = effect.period > 0 ? std::floor(t / effect.period) : 0;
@@ -192,7 +198,7 @@ std::vector<Rgb> Along(const Effect& effect, size_t n, double t, double level) {
     }
     case EffectKind::kLevel: {
       const double filled = std::clamp(level, 0.0, 1.0);
-      const size_t lit = filled > 0 ? std::max<size_t>(1, static_cast<size_t>(std::lround(filled * n))) : 0;
+      const size_t lit = filled > 0 ? std::max<size_t>(1, static_cast<size_t>(std::lround(filled * count))) : 0;
       for (size_t i = 0; i < n; ++i) leds[i] = i < lit ? first : second;
       if (lit > 0 && effect.period > 0) leds[lit - 1] = Mix(second, first, Breath(phase));
       break;

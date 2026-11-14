@@ -18,7 +18,9 @@ constexpr uint32_t kSpiHz = 8000000;
 constexpr uint8_t kSpiBits = 8;
 
 std::string Errno(const std::string& what) {
-  return what + ": " + std::strerror(errno);
+  char text[128];
+  // The GNU strerror_r gives the text, in text or a static string.
+  return what + ": " + strerror_r(errno, text, sizeof(text));
 }
 
 class SpidevOutput : public Output {
