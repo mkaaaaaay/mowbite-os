@@ -171,7 +171,8 @@ double SafetyFilter::OutsideDistance(double x, double y) const {
 }
 
 std::string SafetyFilter::FenceProblem(double x, double y) const {
-  for (const auto& ring : region_->obstacles) {
+  // Called only after AutonomousProblem found nothing, which needs region_.
+  for (const auto& ring : region_->obstacles) {  // NOLINT(bugprone-unchecked-optional-access)
     if (!InsideRing(ring, x, y)) continue;
     const double depth = DistanceToRing(ring, x, y);
     if (depth > config_.obstacle_margin) {
@@ -203,9 +204,10 @@ std::string SafetyFilter::MoveProblem(Source source, double linear, double quiet
   if (!capabilities_) return "no hw/capabilities from the driver";
   if (!ImuFresh(now)) return imu_s_ ? Format("no IMU sample for %.1f s", now - *imu_s_) : "no IMU sample yet";
   if (source != Source::kFollower && source != Source::kCalibration) return "";
-  const std::string problem = AutonomousProblem(now);
+  std::string problem = AutonomousProblem(now);
   if (!problem.empty()) return problem;
-  const std::string fence = FenceProblem(pose_->x, pose_->y);
+  // AutonomousProblem found nothing, so pose_ is there.
+  std::string fence = FenceProblem(pose_->x, pose_->y);  // NOLINT(bugprone-unchecked-optional-access)
   if (fence.empty()) return "";
   Latch(kReasonFence, "autonomous drive with " + fence);
   UpdateEmergency(now);

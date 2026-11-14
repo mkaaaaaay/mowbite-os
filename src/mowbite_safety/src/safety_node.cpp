@@ -82,49 +82,50 @@ class SafetyNode : public rclcpp::Node {
     emergency_client_ = create_client<SetEmergency>("hw/emergency");
 
     drive_sub_ = create_subscription<DriveCommand>(
-        "safety/drive", 10, [this](DriveCommand::ConstSharedPtr msg) { OnDrive(*msg); });
-    hw_sub_ = create_subscription<HardwareStatus>("hw/status", 10, [this](HardwareStatus::ConstSharedPtr msg) {
+        "safety/drive", 10, [this](const DriveCommand::ConstSharedPtr& msg) { OnDrive(*msg); });
+    hw_sub_ = create_subscription<HardwareStatus>("hw/status", 10, [this](const HardwareStatus::ConstSharedPtr& msg) {
       std::lock_guard<std::mutex> lock(mutex_);
       // Without telemetry the driver cannot stop the mower either.
       filter_.Call<&SafetyFilter::OnHardware>(msg->emergency || !msg->telemetry_ok, msg->emergency_reason,
                                               MonotonicSeconds());
     });
     caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
-        "hw/capabilities", LatchedQos(), [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
+        "hw/capabilities", LatchedQos(), [this](const mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);
           filter_.Call<&SafetyFilter::OnCapabilities>(!msg->safety_measurement_date.empty(), msg->max_linear_speed,
                                                       msg->max_angular_speed);
         });
     imu_in_ = create_subscription<sensor_msgs::msg::Imu>(
-        "imu/data", rclcpp::SensorDataQoS(), [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) { OnImu(*msg); });
+        "imu/data", rclcpp::SensorDataQoS(), [this](const sensor_msgs::msg::Imu::ConstSharedPtr& msg) { OnImu(*msg); });
     pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
-        "localization/pose", 10, [this](mowbite_msgs::msg::RobotPose::ConstSharedPtr msg) {
+        "localization/pose", 10, [this](const mowbite_msgs::msg::RobotPose::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);
           filter_.Call<&SafetyFilter::OnPose>(msg->x, msg->y, msg->position_accuracy, msg->heading_valid,
                                               MonotonicSeconds());
         });
     map_sub_ = create_subscription<std_msgs::msg::String>(
-        "map/json", LatchedQos(), [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        "map/json", LatchedQos(), [this](const std_msgs::msg::String::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);
           filter_.Call<&SafetyFilter::SetMap>(msg->data);
         });
     map_status_sub_ = create_subscription<mowbite_msgs::msg::MapStatus>(
-        "map/status", LatchedQos(), [this](mowbite_msgs::msg::MapStatus::ConstSharedPtr msg) {
+        "map/status", LatchedQos(), [this](const mowbite_msgs::msg::MapStatus::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);
           filter_.Call<&SafetyFilter::SetMapFits>(msg->datum_state == mowbite_msgs::msg::MapStatus::DATUM_MATCH);
         });
     // max_position_accuracy of tron.yaml holds until the logic tells its own (params.set).
     limits_sub_ = create_subscription<mowbite_msgs::msg::GpsLimits>(
-        "logic/gps_limits", LatchedQos(), [this](mowbite_msgs::msg::GpsLimits::ConstSharedPtr msg) {
+        "logic/gps_limits", LatchedQos(), [this](const mowbite_msgs::msg::GpsLimits::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);
           filter_.Call<&SafetyFilter::SetMaxPositionAccuracy>(msg->max_position_accuracy);
         });
     // The mounting of the IMU (robot.geometry imu_roll, imu_pitch): the tilt counts from it.
     params_sub_ = create_subscription<std_msgs::msg::String>(
-        "bridge/params", LatchedQos(50), [this](std_msgs::msg::String::ConstSharedPtr msg) { OnParams(msg->data); });
+        "bridge/params", LatchedQos(50),
+        [this](const std_msgs::msg::String::ConstSharedPtr& msg) { OnParams(msg->data); });
     release_srv_ = create_service<SetEmergency>(
         "safety/release_emergency",
-        [this](std::shared_ptr<rmw_request_id_t> header, const SetEmergency::Request::SharedPtr req) {
+        [this](const std::shared_ptr<rmw_request_id_t>& header, const SetEmergency::Request::SharedPtr& req) {
           OnRelease(header, *req);
         });
     // The restart hold of the logic, looked at with every tick; empty without data_dir.
@@ -271,7 +272,7 @@ class SafetyNode : public rclcpp::Node {
     // Answered already as NO_ANSWER.
     if (it == pending_.end()) return;
     pending_.erase(it);
-    const auto response = future.get();
+    const auto& response = future.get();
     if (!response->success) RCLCPP_WARN(get_logger(), "The driver refused the release: %s", response->message.c_str());
     release_srv_->send_response(*header, *response);
   }
@@ -342,7 +343,7 @@ class SafetyNode : public rclcpp::Node {
     request->bits = latch.bits;
     request->reason = latch.reason;
     emergency_client_->async_send_request(request, [this](rclcpp::Client<SetEmergency>::SharedFuture future) {
-      const auto response = future.get();
+      const auto& response = future.get();
       if (!response->success) {
         RCLCPP_ERROR(get_logger(), "hw/emergency refused the latch: %s", response->message.c_str());
       }
