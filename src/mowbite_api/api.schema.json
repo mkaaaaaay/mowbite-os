@@ -8558,6 +8558,116 @@
       ],
       "type": "object"
     },
+    "sensors.history.params": {
+      "additionalProperties": false,
+      "description": "The params of sensors.history: None: all number sensors over the last 48 h",
+      "properties": {
+        "client": {
+          "description": "Who sent the command (app, ha), for the log and the events of its step",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "type": "string"
+        },
+        "from": {
+          "description": "Points from the one that holds this time on; none for 48 h before to",
+          "type": "integer",
+          "x-unit": "unix s"
+        },
+        "sensor_ids": {
+          "description": "Sensor ids, none for all; ids the history does not know are left out",
+          "items": {
+            "description": "One item",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "step": {
+          "description": "At least so long a point: 60, 300 or 900",
+          "maximum": 900.0,
+          "minimum": 1.0,
+          "type": "integer",
+          "x-unit": "s"
+        },
+        "to": {
+          "description": "Points that begin up to then, the one going on included; none for now",
+          "type": "integer",
+          "x-unit": "unix s"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "sensors.history.result": {
+      "additionalProperties": false,
+      "description": "The result of sensors.history: The history",
+      "properties": {
+        "from": {
+          "description": "The points from then on: from rounded down to the step, later when truncated",
+          "type": "integer",
+          "x-unit": "unix s"
+        },
+        "sensors": {
+          "description": "Each number sensor asked for that is recorded now or has values kept, by sensor_id",
+          "items": {
+            "additionalProperties": false,
+            "description": "One item",
+            "properties": {
+              "name": {
+                "description": "Name to show",
+                "type": "string"
+              },
+              "points": {
+                "description": "[t, min, avg, max] per step with values, oldest first: t its start in unix s, avg weighted by the values in it; a step without values is left out",
+                "items": {
+                  "description": "One item",
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sensor_id": {
+                "description": "Id of x-sensors or of the platform",
+                "type": "string"
+              },
+              "unit": {
+                "description": "Unit of the values, empty for none",
+                "type": "string"
+              }
+            },
+            "required": [
+              "sensor_id",
+              "name",
+              "unit",
+              "points"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "step": {
+          "description": "The step taken: 60, 300 or 900",
+          "maximum": 900.0,
+          "minimum": 60.0,
+          "type": "integer",
+          "x-unit": "s"
+        },
+        "to": {
+          "description": "The points that begin up to then",
+          "type": "integer",
+          "x-unit": "unix s"
+        },
+        "truncated": {
+          "description": "The oldest points were left out to keep the answer small",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "step",
+        "from",
+        "to",
+        "truncated",
+        "sensors"
+      ],
+      "type": "object"
+    },
     "sensors.list.params": {
       "additionalProperties": false,
       "description": "The params of sensors.list: None for all",
@@ -13201,11 +13311,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:31",
+  "$id": "urn:mowbite-os:api:32",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null). x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 31,
+  "x-api": 32,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -14202,6 +14312,13 @@
       "offered": "",
       "params": "#/$defs/schedule.set.params",
       "result": "#/$defs/schedule.set.result"
+    },
+    "sensors.history": {
+      "description": "Min, mean and max of the number sensors per step over the last 48 h; the answer stays below 900000 bytes: the step grows to 300 or 900, then the oldest points go",
+      "node": "mowbite_stats",
+      "offered": "",
+      "params": "#/$defs/sensors.history.params",
+      "result": "#/$defs/sensors.history.result"
     },
     "sensors.list": {
       "description": "Every sensor of sensor_infos/json with its last value; ids selects some, unknown ids are left out",
