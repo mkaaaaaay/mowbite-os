@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <sstream>
 
+#include <mowbite_localization/dock_estimator_journal.h>
 #include <mowbite_localization/estimator_journal.h>
 #include <mowbite_logic/logic_journal.h>
 #include <mowbite_safety/safety_journal.h>
@@ -152,6 +153,34 @@ TEST_F(CoreReplay, Estimator) {
   const auto report = Replay();
   EXPECT_EQ(report.outcome, CheckOutcome::kSame) << Text(report);
   EXPECT_NE(Text(report).find("localization: bit-identical, 2556 calls"), std::string::npos) << Text(report);
+}
+
+TEST_F(CoreReplay, DockEstimator) {
+  using D = mowbite_localization::DockEstimator;
+  mowbite_localization::DockConfig config;
+  config.marker_x = -0.175;
+  {
+    Journaled<D> dock(journal_.get(), config);
+    dock.Call<&D::SetDockedHeading>(M_PI);
+    dock.Call<&D::SetHint>(M_PI, 0.0);
+    for (int i = 0; i < 400; ++i) {
+      const double t = 0.02 * i;
+      const bool still = i < 200;
+      dock.Call<&D::AddMotion>(mowbite_localization::Motion{t, still ? 0.0 : -0.002, 0.0001, 0.02, still});
+      if (i % 5 == 0 && i > 60) {
+        mowbite_localization::MarkerImage image;
+        image.time = t - 0.1;
+        image.x = -0.975 + (still ? 0.0 : 0.002 * (i - 200));
+        image.y = 0.001 * (i % 3);
+        image.covariance = {1e-5, 0.0, 0.0, 0.0, 1e-5, 0.0, 0.0, 0.0, 0.0};
+        if (i == 300) image.x += 0.5;
+        dock.Call<&D::AddMarker>(image, t);
+      }
+    }
+  }
+  const auto report = Replay();
+  EXPECT_EQ(report.outcome, CheckOutcome::kSame) << Text(report);
+  EXPECT_NE(Text(report).find("dock_localization: bit-identical"), std::string::npos) << Text(report);
 }
 
 TEST_F(CoreReplay, LogicCore) {
