@@ -5,7 +5,7 @@
   <version>0.0.0</version>
   <description>The watch of a process: ends it when a node stops signing from its thread or never comes</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
-  <license>GPL-3.0</license>
+  <license>PolyForm-Strict-1.0.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend>

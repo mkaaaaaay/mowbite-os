@@ -5,7 +5,7 @@
   <version>0.0.0</version>
   <description>Cameras of MowBite OS for the app: their list, places for viewers, MJPEG and WebRTC</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
-  <license>GPL-3.0</license>
+  <license>PolyForm-Strict-1.0.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>ament_index_cpp</depend>
