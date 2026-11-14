@@ -13,6 +13,8 @@ using namespace mowbite_logic;
 namespace {
 
 const std::string kPrefix = "mower_logic:area_recording/";
+// hw/wheel_odom of the Tron comes every 10 ms.
+constexpr double kTick = 0.01;
 
 AreaRecorder Writable(const RecorderConfig& config = RecorderConfig{}) {
   AreaRecorder recorder(config);
@@ -1086,7 +1088,7 @@ TEST(RecorderDriven, ReversingTakesPointsBackAndTheRingIsNotDriven) {
   const size_t before = recorder.current().size();
   // 1 m straight back, heading east, then forward again; the wheels show it first, one hint for both.
   for (int s = 1; s <= 20; s++) {
-    recorder.OnWheelTravel(-0.05);
+    recorder.OnWheelTravel(-0.05, kTick);
     recorder.OnPose(2 - 0.05 * s, 0, 0, 0.02f, true);
   }
   EXPECT_LT(recorder.current().size(), before - 7);
@@ -1172,7 +1174,7 @@ TEST(RecorderDriven, OneHintForEachStretchBackwards) {
     for (int round = 0; round < 2; round++) {
       for (const double step : {-0.05, 0.05}) {
         for (int s = 1; s <= 10; s++) {
-          if (wheels) recorder.OnWheelTravel(step);
+          if (wheels) recorder.OnWheelTravel(step, kTick);
           recorder.OnPose(step < 0 ? 3 - 0.05 * s : 2.5 + 0.05 * s, 0, 0, 0.02f, true);
         }
       }
@@ -1190,7 +1192,7 @@ TEST(RecorderDriven, OneHintAlsoWhenAPointComesWhileReversing) {
   recorder.OnAction("start_recording");
   for (int k = 0; k <= 32; k++) recorder.OnPose(k / 16.0, 0, 0, 0.02f, true);
   for (int k = 1; k <= 30; k++) {
-    recorder.OnWheelTravel(-1 / 64.0);
+    recorder.OnWheelTravel(-1 / 64.0, kTick);
     recorder.OnPose(2 - k / 64.0, 0, 0, 0.02f, true);
     if (k == 7) {
       ASSERT_EQ(recorder.current().back().x, 2 - 7 / 64.0);
@@ -1212,13 +1214,51 @@ TEST(RecorderDriven, TheWheelsShowReversingFromTwoCentimetres) {
     recorder.OnAction("start_recording");
     Drive(recorder, {{0, 0}, {2, 0}});
     const size_t before = recorder.current().size();
-    for (const double metres : travel) recorder.OnWheelTravel(metres);
+    for (const double metres : travel) recorder.OnWheelTravel(metres, kTick);
     EXPECT_EQ(recorder.current().size(), before);
     Drive(recorder, {{2, 0}, {3, 0}, {3, 2}, {0, 2}, {0, 0.15}, {0.6, -0.05}});
     int hints = 0;
     for (const auto& event : recorder.TakeEvents()) hints += event.details["reason"] == "REVERSING";
     EXPECT_EQ(hints, reversing ? 1 : 0) << travel.size();
     EXPECT_EQ(DrivenReason(recorder), reversing ? "REVERSED" : "") << travel.size();
+  }
+}
+
+// Standing wheels: the reported speed swings by up to 9 mm/s around a bias of -0.5 mm/s, as measured on the Tron.
+TEST(RecorderDriven, StandingWheelsAreNoReversingForTenMinutes) {
+  AreaRecorder recorder = Writable();
+  recorder.OnAction("start_recording");
+  Drive(recorder, {{0, 0}, {2, 0}});
+  std::mt19937 source(7);
+  std::uniform_real_distribution<double> noise(-0.009, 0.009);
+  for (int k = 0; k < 60000; k++) recorder.OnWheelTravel((-0.0005 + noise(source)) * kTick, kTick);
+  Drive(recorder, {{2, 0}, {3, 0}, {3, 2}, {0, 2}, {0, 0.15}, {0.6, -0.05}});
+  for (const auto& event : recorder.TakeEvents()) EXPECT_NE(event.details["reason"], "REVERSING");
+  EXPECT_EQ(DrivenReason(recorder), "");
+}
+
+// Back at speed (m/s) for seconds: reversing, and when it is seen at the latest (s).
+TEST(RecorderDriven, ReversingAboveTheLeakIsSeen) {
+  const struct {
+    double speed, seconds;
+    bool reversing;
+    double by;
+  } cases[] = {{0.05, 1.0, true, 0.5}, {0.04, 1.0, true, 0.6}, {0.006, 30.0, true, 21.0}, {0.004, 120.0, false, 0}};
+  for (const auto& c : cases) {
+    AreaRecorder recorder = Writable();
+    recorder.OnAction("start_recording");
+    Drive(recorder, {{0, 0}, {2, 0}});
+    double seen = -1;
+    for (int k = 1; k * kTick <= c.seconds + 1e-9; k++) {
+      recorder.OnWheelTravel(-c.speed * kTick, kTick);
+      for (const auto& event : recorder.TakeEvents()) {
+        if (event.details["reason"] == "REVERSING" && seen < 0) seen = k * kTick;
+      }
+    }
+    EXPECT_EQ(seen >= 0, c.reversing) << c.speed;
+    if (c.reversing) {
+      EXPECT_LE(seen, c.by) << c.speed;
+    }
   }
 }
 
@@ -1230,7 +1270,7 @@ TEST(RecorderDriven, UnderTenCentimetresBackOnlyTheWheelsShowIt) {
     recorder.OnAction("start_recording");
     Drive(recorder, {{0, 0}, {3, 0}, {3, 1}});
     for (int k = 1; k <= 9; k++) {
-      if (wheels) recorder.OnWheelTravel(-0.01);
+      if (wheels) recorder.OnWheelTravel(-0.01, kTick);
       recorder.OnPose(3, 1 - 0.01 * k, M_PI / 2, 0.02f, true);
     }
     const Point2 out{3 + 0.5 * std::cos(M_PI / 6), 0.91 + 0.5 * std::sin(M_PI / 6)};
@@ -1420,7 +1460,7 @@ TEST(RecorderDriven, PointsSetWhileTheWheelsWereLostDoNotJoin) {
     AreaRecorder recorder = Writable();
     recorder.OnAction("start_recording");
     LapCrossingAt(recorder, 15, 0.15, 0.5, [&](int k) {
-      if (k <= last_travel) recorder.OnWheelTravel(0.11);
+      if (k <= last_travel) recorder.OnWheelTravel(0.11, kTick);
       if (k == 8) recorder.OnWheelsLost();
     });
     EXPECT_EQ(DrivenReason(recorder), last_travel < 6 ? "INTERRUPTED" : "") << last_travel;

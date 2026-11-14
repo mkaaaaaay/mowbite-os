@@ -95,7 +95,9 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   its line without a margin; robot.geometry.set of the body moves it on those areas. So measure the body before the
   first recording. The recorder tells reversing by `hw/wheel_odom`, so its `twist.linear.x` needs the sign (negative
   backwards) and has to come at least every 0.5 s: wheels more than 2 cm backwards, or no wheel travel, and the ring
-  has no body. Two steps of 5 cm backwards in a row of `localization/pose` also take points back.
+  has no body. Backwards slower than 5 mm/s does not add up, so the speed may swing around zero while the wheels
+  stand (the Tron does); a driver reports no speed it does not measure. Two steps of 5 cm backwards in a row of
+  `localization/pose` also take points back.
 - Driver parameters (ports, baud rates, limits) in the file of the driver; values measured on one mower in a file on
   that mower. No value in two files.
 - The clock: date, weekday and sunset count only while `time/clock` is ok (`mowbite_clock`): the kernel synchronized

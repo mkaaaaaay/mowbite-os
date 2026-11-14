@@ -22,7 +22,8 @@ void LogicCore::OnWheelOdom(double vx, double now_s) {
   if (state_ != State::kAreaRecording) return;
   // A value that is no number is no measurement.
   if (std::isfinite(vx) && last_wheel_s_ && now_s - *last_wheel_s_ <= RecorderConfig::kWheelGap) {
-    recorder_.OnWheelTravel(vx * (now_s - *last_wheel_s_));
+    const double seconds = now_s - *last_wheel_s_;
+    recorder_.OnWheelTravel(vx * seconds, seconds);
   } else {
     recorder_.OnWheelsLost();
   }

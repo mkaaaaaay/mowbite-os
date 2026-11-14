@@ -667,10 +667,10 @@ void AreaRecorder::OnPositionJump() {
   Interrupt();
 }
 
-void AreaRecorder::OnWheelTravel(double metres) {
+void AreaRecorder::OnWheelTravel(double metres, double seconds) {
   if (!recording_) return;
   wheel_points_ = marks_.size();
-  wheel_back_ = std::max(0.0, wheel_back_ - metres);
+  wheel_back_ = std::max(0.0, wheel_back_ - metres - RecorderConfig::kWheelLeak * seconds);
   // Forward up to where they were again ends the stretch backwards.
   if (metres > 0 && wheel_back_ == 0) reverse_hinted_ = false;
   if (wheel_back_ <= RecorderConfig::kReverseTravel) return;
