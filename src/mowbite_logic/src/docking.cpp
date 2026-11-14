@@ -35,9 +35,14 @@ const char* DockingLegName(DockingLeg::Kind kind) {
     case DockingLeg::Kind::kLine: return "line";
     case DockingLeg::Kind::kContact: return "contact";
     case DockingLeg::Kind::kDirect: return "direct";
+    case DockingLeg::Kind::kClose: return "close";
     case DockingLeg::Kind::kApproach:
     default: return "approach";
   }
+}
+
+bool OntoStation(DockingLeg::Kind kind) {
+  return kind == DockingLeg::Kind::kLine || kind == DockingLeg::Kind::kClose || kind == DockingLeg::Kind::kContact;
 }
 
 UndockPath PlanLeave(double x, double y, double heading, bool reverse, UndockConfig out, const DockConfig& dock) {
@@ -46,11 +51,12 @@ UndockPath PlanLeave(double x, double y, double heading, bool reverse, UndockCon
 }
 
 DockingSequence::DockingSequence(const DockConfig& config, const UndockConfig& out, const DockPose& station,
-                                 bool contacts_back)
+                                 bool contacts_back, const std::optional<StationLegs>& station_frame)
     : config_(config),
       out_(out),
       station_(station),
       contacts_back_(contacts_back),
+      station_frame_(station_frame),
       facing_(Normalize(contacts_back ? station.heading + M_PI : station.heading)) {}
 
 Point2 DockingSequence::ApproachPoint() const {
@@ -108,7 +114,7 @@ DockingLeg DockingSequence::Out(double x, double y, double heading) const {
   leg.speed = path.speed;
   leg.stall_time = path.stall_time;
   leg.end_tolerance = kLineEndTolerance;
-  return leg;
+  return Framed(std::move(leg));
 }
 
 DockingLeg DockingSequence::Onto(DockingLeg::Kind kind, double from, double to) const {
@@ -132,12 +138,26 @@ DockingLeg DockingSequence::Onto(DockingLeg::Kind kind, double from, double to) 
                   {a.x + begin * c - side_x, a.y + begin * s - side_y},
                   {a.x + end * c - side_x, a.y + end * s - side_y},
                   {a.x + end * c + side_x, a.y + end * s + side_y}};
+  return Framed(std::move(leg));
+}
+
+double DockingSequence::GateAlong() const {
+  return std::max(config_.approach_distance - config_.gate_distance, kPoseSpacing);
+}
+
+double DockingSequence::BlindAlong() const {
+  return config_.approach_distance - (station_frame_ ? station_frame_->blind_distance : 0.0);
+}
+
+DockingLeg DockingSequence::Framed(DockingLeg leg) const {
+  if (!station_frame_) return leg;
+  leg.frame = LegFrame::kDock;
+  leg.max_cross_track = station_frame_->cross_track;
   return leg;
 }
 
 DockingLeg DockingSequence::Line() const {
-  const double gate = std::max(config_.approach_distance - config_.gate_distance, kPoseSpacing);
-  DockingLeg leg = Onto(DockingLeg::Kind::kLine, 0.0, gate);
+  DockingLeg leg = Onto(DockingLeg::Kind::kLine, 0.0, GateAlong());
   leg.speed = config_.speed;
   // Nothing should stop the mower before the gate: standing there counts as stuck as soon as on the way out.
   leg.stall_time = out_.stall_time;
@@ -145,9 +165,27 @@ DockingLeg DockingSequence::Line() const {
   return leg;
 }
 
+bool DockingSequence::Split() const {
+  // The blind part needs a guided part before it: no split where the gate lies within it.
+  return station_frame_ && station_frame_->blind_distance > 0 && BlindAlong() - GateAlong() >= kPoseSpacing;
+}
+
+DockingLeg DockingSequence::AfterGate() const {
+  return Split() ? Close() : Contact();
+}
+
+DockingLeg DockingSequence::Close() const {
+  DockingLeg leg = Onto(DockingLeg::Kind::kClose, GateAlong(), BlindAlong());
+  leg.speed = config_.contact_speed;
+  // Guided by the marker: standing counts as stuck as on the line.
+  leg.stall_time = out_.stall_time;
+  leg.end_tolerance = kLineEndTolerance;
+  return leg;
+}
+
 DockingLeg DockingSequence::Contact() const {
-  const double gate = std::max(config_.approach_distance - config_.gate_distance, kPoseSpacing);
-  DockingLeg leg = Onto(DockingLeg::Kind::kContact, gate, config_.approach_distance + config_.overshoot);
+  DockingLeg leg = Onto(DockingLeg::Kind::kContact, Split() ? BlindAlong() : GateAlong(),
+                        config_.approach_distance + config_.overshoot);
   leg.speed = config_.contact_speed;
   // At the station the contacts need some pushing.
   leg.stall_time = config_.contact_timeout;

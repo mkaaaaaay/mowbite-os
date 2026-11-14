@@ -2,6 +2,7 @@
 #define MOWBITE_LOGIC_DOCKING_H
 
 #include <cmath>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -40,12 +41,16 @@ struct DockConfig {
   double direct_margin = 0.15;
 };
 
+// The frame of a leg: the map (localization/pose) or the station frame (localization/dock_pose, SOURCE_DOCK).
+enum class LegFrame : uint8_t { kMap = 0, kDock = 1 };
+
 // What the follower drives for docking.
 struct DockingLeg {
   // kApproach: over the drivable areas to the point in front of the station, planned like a drive. kOut: straight along
   // the mower's own heading against the way in, out to that point. kLine: along the line to the gate. kContact: from
-  // the gate onto the contacts. kDirect: straight to the point in front of the station, without the planner.
-  enum class Kind { kApproach, kOut, kLine, kContact, kDirect };
+  // the gate onto the contacts, or blind from the end of kClose. kDirect: straight to the point in front of the
+  // station, without the planner. kClose: in the station frame from the gate to where the marker leaves the image.
+  enum class Kind { kApproach, kOut, kLine, kContact, kDirect, kClose };
   Kind kind = Kind::kApproach;
   // kApproach: the point in front of the station, facing the way the mower faces on it.
   DockPose goal;
@@ -55,14 +60,25 @@ struct DockingLeg {
   Ring corridor;
   bool straight = false;
   bool reverse = false;
+  LegFrame frame = LegFrame::kMap;
   double speed = 0;
   double stall_time = 0;
   double end_tolerance = 0;
-  // kDirect: m base_link may get off its path, beyond that the follower ends the leg; 0: the limit of the follower.
+  // m base_link may get off its path (kDirect, every leg in the station frame), beyond that the follower ends the leg;
+  // 0: the limit of the follower.
   double max_cross_track = 0;
 };
 
 const char* DockingLegName(DockingLeg::Kind kind);
+// The legs that drive onto the station: the line, the close part and the contact.
+bool OntoStation(DockingLeg::Kind kind);
+
+// Docking in the station frame: every leg at most cross_track m off its path, and the contact stretch split
+// blind_distance m before the station into kClose, where the marker guides, and the blind kContact.
+struct StationLegs {
+  double cross_track = 0;
+  double blind_distance = 0;
+};
 
 // The straight way from base_link at (x, y) along its heading, forwards or backwards; backwards at most at the docking
 // speed (G41).
@@ -73,8 +89,9 @@ class DockingSequence {
  public:
   DockingSequence() = default;
   // station as in the map (heading: the way in); contacts_back: the mower faces away from it there and backs in; out:
-  // how the mower leaves the station, like undocking.
-  DockingSequence(const DockConfig& config, const UndockConfig& out, const DockPose& station, bool contacts_back);
+  // how the mower leaves the station, like undocking; station_frame: the legs are in the station frame.
+  DockingSequence(const DockConfig& config, const UndockConfig& out, const DockPose& station, bool contacts_back,
+                  const std::optional<StationLegs>& station_frame = std::nullopt);
 
   // Where the line onto the station begins.
   Point2 ApproachPoint() const;
@@ -91,6 +108,9 @@ class DockingSequence {
   DockingLeg Approach() const;
   DockingLeg Out(double x, double y, double heading) const;
   DockingLeg Line() const;
+  // From the gate: kClose where the contact stretch is split, else kContact.
+  DockingLeg AfterGate() const;
+  DockingLeg Close() const;
   DockingLeg Contact() const;
   // The straight way from base_link at (x, y) to the approach point: poses along it, the last one facing the way the
   // mower faces on the station, base_link at most direct_margin off them. None from within 0.1 m of the approach
@@ -113,16 +133,26 @@ class DockingSequence {
   const DockConfig& config() const {
     return config_;
   }
+  bool station_frame() const {
+    return station_frame_.has_value();
+  }
 
  private:
   // Poses facing the mower's heading on the station from along m to to m (from the approach point), driven contacts
   // first, and the corridor of the line.
   DockingLeg Onto(DockingLeg::Kind kind, double from, double to) const;
+  // m along the line where the gate is, and where the blind part begins.
+  double GateAlong() const;
+  double BlindAlong() const;
+  bool Split() const;
+  // Sets the frame of a leg and its limit beside the path.
+  DockingLeg Framed(DockingLeg leg) const;
 
   DockConfig config_;
   UndockConfig out_;
   DockPose station_;
   bool contacts_back_ = true;
+  std::optional<StationLegs> station_frame_;
   double facing_ = 0;
   int failures_ = 0;
 };
