@@ -83,6 +83,17 @@ LogicConfig LoadLogicConfig(rclcpp::Node& node) {
   config.marker.wait = param("marker_wait", config.marker.wait);
   config.marker.cross_track = param("marker_cross_track", config.marker.cross_track);
   config.marker.scale_limit = param("marker_scale_limit", config.marker.scale_limit);
+  const std::string guide = param("dock_guide", std::string("none"));
+  if (guide == "prefer") {
+    config.marker.guide = DockGuide::kPrefer;
+  } else if (guide == "require") {
+    config.marker.guide = DockGuide::kRequire;
+  } else if (guide != "none") {
+    throw std::invalid_argument("dock_guide needs to be none, prefer or require");
+  }
+  if (config.marker.guide != DockGuide::kNone && !(config.marker.range > 0)) {
+    throw std::invalid_argument("dock_guide prefer or require needs a dock marker (marker_range above 0)");
+  }
   if (!(config.marker.range >= 0) || !(config.marker.blind_distance >= 0) || !(config.marker.wait > 0) ||
       !(config.marker.cross_track > 0) || !(config.marker.scale_limit > 0) || !std::isfinite(config.marker.range)) {
     throw std::invalid_argument(

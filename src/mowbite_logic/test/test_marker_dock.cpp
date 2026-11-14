@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <string>
 
 #include "mowbite_logic/marker_dock.h"
 
@@ -231,4 +232,37 @@ TEST(TestStart, RefusedBesideTurnedOrAway) {
   EXPECT_NE(TestStartProblem(docking, -0.2, 0.0, M_PI + 0.1, 0.05).find("straight out"), std::string::npos);
   EXPECT_EQ(TestStartProblem(docking, -0.2, 0.02, M_PI + 0.1, 0.05), "");
   EXPECT_NE(TestStartProblem(docking, -0.2, -0.02, M_PI + 0.1, 0.05).find("straight out"), std::string::npos);
+}
+
+// The station by the marker in the map: base_link 0.8 m east of the station of the map facing east, its pose in the
+// station frame 0.8 m in front facing away; 0.1 m left of the line there (station frame, the way in going west) puts
+// the station 0.1 m south of base_link; turned, the station turns with it.
+TEST(StationByMarker, FromMapAndStationFrame) {
+  DockPoseSample pose;
+  pose.x = -0.8;
+  pose.heading = M_PI;
+  DockPose station = StationByMarker(-0.2, 0.0, 0.0, pose);
+  EXPECT_NEAR(station.x, -1.0, 1e-9);
+  EXPECT_NEAR(station.y, 0.0, 1e-9);
+  EXPECT_NEAR(std::cos(station.heading), -1.0, 1e-9);
+  pose.y = -0.1;
+  station = StationByMarker(-0.2, 0.0, 0.0, pose);
+  EXPECT_NEAR(station.y, -0.1, 1e-9);
+  // A map heading 0.1 rad off turns the station by it, and moves it by 0.1 rad times the 0.8 m.
+  pose.y = 0.0;
+  station = StationByMarker(-0.2, 0.0, 0.1, pose);
+  EXPECT_NEAR(station.x, -0.2 - 0.8 * std::cos(0.1), 1e-9);
+  EXPECT_NEAR(station.y, -0.8 * std::sin(0.1), 1e-9);
+  EXPECT_NEAR(std::remainder(station.heading - M_PI, 2 * M_PI), 0.1, 1e-9);
+}
+
+TEST(StationByMarker, ProblemByDistanceAndHeading) {
+  const DockPose map{-1.0, 0.0, M_PI};
+  EXPECT_EQ(MarkerMapProblem(DockPose{-1.0, 0.09, M_PI}, map, 0.1, 0.0), "");
+  EXPECT_NE(MarkerMapProblem(DockPose{-1.0, 0.11, M_PI}, map, 0.1, 0.0).find("0.11 m"), std::string::npos);
+  // The heading only where a limit is given, across the wrap of the angle.
+  const DockPose turned{-1.0, 0.0, -M_PI + 0.2};
+  EXPECT_EQ(MarkerMapProblem(turned, map, 0.1, 0.0), "");
+  EXPECT_EQ(MarkerMapProblem(DockPose{-1.0, 0.0, -M_PI + 0.15}, map, 0.1, kMarkerMapHeading), "");
+  EXPECT_NE(MarkerMapProblem(turned, map, 0.1, kMarkerMapHeading).find("11 deg"), std::string::npos);
 }

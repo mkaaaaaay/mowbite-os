@@ -54,14 +54,18 @@ void LogicCore::SetTurningRadius(double radius) {
 }
 
 DockingSequence LogicCore::NewDocking() const {
-  if (marker_docking_) return MarkerDocking(config_.dock, config_.undock, ContactsBack(), config_.marker);
-  return DockingSequence(config_.dock, config_.undock, dock_.value_or(DockPose()), ContactsBack());
+  if (docking_test_) return MarkerDocking(config_.dock, config_.undock, ContactsBack(), config_.marker);
+  DockConfig dock = config_.dock;
+  // The line by the marker begins where the camera finds it, and so does the one by the position.
+  if (Guided()) dock.approach_distance = std::min(dock.approach_distance, config_.marker.range);
+  return DockingSequence(dock, config_.undock, dock_.value_or(DockPose()), ContactsBack());
 }
 
 Reason LogicCore::ApproachProblem() const {
-  const Point2 p = NewDocking().ApproachPoint();
+  const DockingSequence docking = NewDocking();
+  const Point2 p = docking.ApproachPoint();
   if (Reachable(drivable_, obstacles_, p.x, p.y)) return {};
-  const double distance = config_.dock.approach_distance;
+  const double distance = docking.config().approach_distance;
   return Reason("DOCK_UNREACHABLE", "The way onto the docking station begins " + Metres(distance) +
                                         " m in front of it, outside of the mowing and navigation areas: let an area "
                                         "reach there, or place the station closer to one")
@@ -129,6 +133,7 @@ bool LogicCore::HomeReachable() const {
 
 void LogicCore::BeginDocking() {
   docking_ = NewDocking();
+  if (MarkerSource()) marker_legs_ = MarkerDocking(config_.dock, config_.undock, ContactsBack(), config_.marker);
   docking_leg_due_.reset();
   docking_leg_.reset();
   docking_last_kind_ = DockingLeg::Kind::kApproach;
@@ -152,7 +157,10 @@ void LogicCore::BeginDocking() {
 
 void LogicCore::NextDockingTry() {
   if (marker_docking_) return NextMarkerTry();
+  const bool may_use_marker = Guided() && !try_by_position_;
   if (!pose_ || !PoseGood()) {
+    // A marker in sight may guide the try without the map, then without the comparison.
+    if (may_use_marker && DockPoseGood()) return ChooseGuide();
     WaitForDockingGps();
     return;
   }
@@ -162,7 +170,10 @@ void LogicCore::NextDockingTry() {
     return;
   }
   docking_checked_ = false;
-  SetDockingLeg(docking_.FirstLeg(pose_->x, pose_->y, pose_->heading));
+  DockingLeg leg = docking_.FirstLeg(pose_->x, pose_->y, pose_->heading);
+  // At the approach point the try chooses its way.
+  if (leg.kind == DockingLeg::Kind::kLine && may_use_marker) return ChooseGuide();
+  SetDockingLeg(std::move(leg));
 }
 
 std::optional<DockingLeg> LogicCore::TakeDockingLeg() {
@@ -177,6 +188,7 @@ std::optional<DockingLeg> LogicCore::TakeDockingLeg() {
   std::optional<DockingLeg> leg;
   leg.swap(docking_leg_due_);
   docking_leg_ = leg->kind;
+  docking_leg_frame_ = leg->frame;
   docking_last_kind_ = leg->kind;
   docking_hold_ = false;
   return leg;
@@ -259,7 +271,13 @@ void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
   }
   switch (kind) {
     case DockingLeg::Kind::kApproach:
-    case DockingLeg::Kind::kDirect: docking_leg_due_ = docking_.Line(); break;
+    case DockingLeg::Kind::kDirect:
+      if (Guided() && !try_by_position_) {
+        ChooseGuide();
+      } else {
+        docking_leg_due_ = docking_.Line();
+      }
+      break;
     case DockingLeg::Kind::kOut:
       if (docking_failure_) {
         CountDockingFailure(*docking_failure_);
@@ -268,16 +286,16 @@ void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
       }
       break;
     case DockingLeg::Kind::kLine: {
-      const std::string gate = GateProblem();
+      const Reason gate = GateProblem();
       if (gate.empty()) {
         Notify("Docking: through the gate, onto the contacts");
-        docking_leg_due_ = docking_.AfterGate();
+        docking_leg_due_ = Legs().AfterGate();
       } else {
-        DockingTryFailed(Reason("dock_failed", "Docking failed: " + gate));
+        DockingTryFailed(gate);
       }
       break;
     }
-    case DockingLeg::Kind::kClose: docking_leg_due_ = docking_.Contact(); break;
+    case DockingLeg::Kind::kClose: docking_leg_due_ = Legs().Contact(); break;
     case DockingLeg::Kind::kContact:
       DockingTryFailed(Reason("dock_failed", "Docking failed: no contact with the docking station up to " +
                                                  Metres(config_.dock.overshoot) + " m past it"));
@@ -445,6 +463,8 @@ void LogicCore::CountDockingFailure(Reason why, bool last) {  // NOLINT(performa
   json details = json::object();
   PutReason(&details, type, Reason(why).With("attempts", docking_.failures()).With("guide", Guide()));
   AddEvent(type, std::move(details));
+  // Each try chooses its way anew.
+  if (!docking_test_) marker_docking_ = try_by_marker_ = try_by_position_ = false;
   if (!again) {
     Notify("Docking failed, tries: " + std::to_string(docking_.failures()));
     EndDocking(Reason("STOPPED", why.message));

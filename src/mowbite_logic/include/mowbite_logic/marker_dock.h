@@ -9,6 +9,10 @@
 
 namespace mowbite_logic {
 
+// When docking uses the marker (dock_guide): kNone never; kPrefer by the marker, by the position where its source
+// cannot measure; kRequire never without it. docking.test always requires it.
+enum class DockGuide : uint8_t { kNone = 0, kPrefer = 1, kRequire = 2 };
+
 // Docking by the dock marker of the station (hw/dock_marker, localization/dock_pose): every leg in the station frame,
 // origin base_link of the docked mower, x the way in; the map pose never steers it (G42). Platform values.
 struct MarkerConfig {
@@ -24,6 +28,8 @@ struct MarkerConfig {
   // At the gate the way along the line by the marker may differ from the way of the wheels by at most this part of it
   // (marker_scale_limit): a marker of the wrong size measures every distance wrong.
   double scale_limit = 0.15;
+  // Whether docking.start and going home dock by the marker (dock_guide).
+  DockGuide guide = DockGuide::kNone;
 };
 
 // What one message of hw/dock_marker tells the logic; time: monotonic s on arrival.
@@ -53,6 +59,18 @@ constexpr double kMarkerSilentS = 3.0;
 constexpr double kDockPoseMaxAgeS = 0.5;
 // m of way by the wheels below which the gate does not compare the scale.
 constexpr double kScaleMinWay = 0.1;
+// m before the approach point from which docking asks for the marker, so that the camera has found its exposure there.
+constexpr double kMarkerRequestDistance = 3.0;
+// rad the heading of the station by the marker may differ from the one of the map at the gate.
+constexpr double kMarkerMapHeading = 10.0 * M_PI / 180.0;
+
+// The station by the marker in the map: base_link at (x, y) facing heading in the map, and at pose in the station
+// frame. Its position errs little with the direction of the marker, as the marker sits close to the docked base_link.
+DockPose StationByMarker(double x, double y, double heading, const DockPoseSample& pose);
+
+// Why the station by the marker does not fit the station of the map, empty if it does: further than limit m from it,
+// or with heading_limit above 0 a heading further off than that (rad).
+std::string MarkerMapProblem(const DockPose& by_marker, const DockPose& map, double limit, double heading_limit);
 
 // The legs of docking by the marker: the station at the origin of the station frame, the line at most range m long.
 DockingSequence MarkerDocking(DockConfig config, const UndockConfig& out, bool contacts_back,
@@ -92,6 +110,10 @@ class MarkerWatch {
   // The marker came with its direction since the wait began.
   bool seen() const {
     return valid_ && yaw_;
+  }
+  // The marker came since the wait began, with a direction or without.
+  bool found() const {
+    return valid_;
   }
   // Drops the pose at its age and forgets everything at the end of docking.
   void Expire(double now);

@@ -65,7 +65,7 @@ if(BUILD_TESTING)
     test/test_logic_hold.cpp test/test_logic_calibration.cpp test/test_event_catalog.cpp
     test/test_logic_commands.cpp test/test_home_watch.cpp test/test_logic_home.cpp
     test/test_logic_restart.cpp test/test_logic_effects.cpp test/test_direct_route.cpp test/test_logic_run.cpp
-    test/test_marker_dock.cpp test/test_logic_marker.cpp)
+    test/test_marker_dock.cpp test/test_logic_marker.cpp test/test_logic_marker_guide.cpp)
   target_link_libraries(mowbite_logic_test mowbite_logic_core)
 endif()
 

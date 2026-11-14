@@ -158,6 +158,7 @@ void LogicCore::OnPose(const PoseSnapshot& pose) {
   pose_ = pose;
   last_x_ = pose.x;
   last_y_ = pose.y;
+  if (state_ == State::kDocking) WatchMarkerNear();
   if (state_ != State::kAreaRecording) return;
   recorder_.OnPose(pose.x, pose.y, pose.heading, pose.position_accuracy, pose.orientation_valid);
   PullRecorder();
@@ -171,7 +172,9 @@ void LogicCore::OnPoseTimeout() {
     StopUndocking(Reason("no_gps", "Undocking stopped: no position from the localization"),
                   Reason("POSE_LOST", "No position from the localization"));
   }
-  if (state_ == State::kDocking && !marker_docking_ && (docking_leg_ || docking_leg_due_)) {
+  const bool map_leg = (docking_leg_ && docking_leg_frame_ == LegFrame::kMap) ||
+                       (docking_leg_due_ && docking_leg_due_->frame == LegFrame::kMap);
+  if (state_ == State::kDocking && map_leg) {
     CancelDockingLeg(Reason("POSE_LOST", "No position from the localization"));
     WaitForDockingGps();
   }
@@ -607,7 +610,9 @@ bool LogicCore::FollowerActive() const {
   if (emergency_) return false;
   if (state_ == State::kDriving) return true;
   if (state_ == State::kUndocking) return undock_step_ == UndockStep::kDrive && !undock_stopping_;
-  if (state_ == State::kDocking) return docking_leg_.has_value() && !docking_hold_ && !marker_docking_;
+  if (state_ == State::kDocking) {
+    return docking_leg_.has_value() && docking_leg_frame_ == LegFrame::kMap && !docking_hold_;
+  }
   return state_ == State::kMowing && pause_ == 0 && LegDrives();
 }
 

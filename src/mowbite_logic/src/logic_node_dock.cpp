@@ -6,6 +6,7 @@
 
 #include <mowbite_msgs/msg/dock_marker.hpp>
 #include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/float64.hpp>
 
 #include "logic_node.h"
 
@@ -17,6 +18,7 @@ void LogicNode::SetUpDocking() {
   if (!core_.View().MarkerSource()) return;
   const auto volatile_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
   marker_request_pub_ = create_publisher<std_msgs::msg::Empty>("hw/dock_marker_request", volatile_qos);
+  heading_hint_pub_ = create_publisher<std_msgs::msg::Float64>("logic/dock_heading_hint", volatile_qos);
   // Measurements and the pose in the station frame reach the core only while it wants them, so the journal stays small.
   marker_sub_ = create_subscription<DockMarkerMsg>(
       "hw/dock_marker", volatile_qos, [this](const DockMarkerMsg::ConstSharedPtr& msg) {
@@ -60,12 +62,15 @@ void LogicNode::SetUpDocking() {
   marker_request_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { RequestMarker(); });
 }
 
-// Asks for measurements every REQUEST_PERIOD_S while the core wants them, the first at once.
+// Asks for measurements every REQUEST_PERIOD_S while the core wants them, the first at once, each with the heading
+// hint for the estimate where the core has one.
 void LogicNode::RequestMarker() {
   bool wanted;
+  std::optional<double> hint;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     wanted = core_.View().MarkerWanted();
+    hint = core_.View().DockHeadingHint();
   }
   const double now = MonotonicSeconds();
   if (!wanted) {
@@ -75,6 +80,10 @@ void LogicNode::RequestMarker() {
   if (marker_requested_ && now - *marker_requested_ < DockMarkerMsg::REQUEST_PERIOD_S) return;
   marker_requested_ = now;
   marker_request_pub_->publish(std_msgs::msg::Empty());
+  if (!hint) return;
+  std_msgs::msg::Float64 msg;
+  msg.data = *hint;
+  heading_hint_pub_->publish(msg);
 }
 
 // Whether rpc.methods lists a command: docking.start only with charging contacts, docking.test also with a marker.

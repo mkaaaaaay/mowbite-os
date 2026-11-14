@@ -36,16 +36,68 @@ bool LogicCore::MarkerSource() const {
   return config_.marker.range > 0;
 }
 
+bool LogicCore::Guided() const {
+  return MarkerSource() && config_.marker.guide != DockGuide::kNone;
+}
+
 bool LogicCore::MarkerWanted() const {
-  return state_ == State::kDocking && marker_docking_;
+  return state_ == State::kDocking && (marker_docking_ || (marker_near_ && !try_by_position_));
+}
+
+std::optional<double> LogicCore::DockHeadingHint() const {
+  if (!MarkerWanted() || docking_test_ || !dock_ || !PoseGood()) return std::nullopt;
+  return std::remainder(pose_->heading - dock_->heading, 2 * M_PI);  // NOLINT(bugprone-unchecked-optional-access)
 }
 
 bool LogicCore::DockFollowerActive() const {
-  return !emergency_ && MarkerWanted() && docking_leg_.has_value() && !docking_hold_;
+  return !emergency_ && state_ == State::kDocking && docking_leg_.has_value() &&
+         docking_leg_frame_ == LegFrame::kDock && !docking_hold_;
 }
 
 const char* LogicCore::Guide() const {
-  return marker_docking_ ? "marker" : "position";
+  return try_by_marker_ ? "marker" : "position";
+}
+
+const DockingSequence& LogicCore::Legs() const {
+  return marker_docking_ ? marker_legs_ : docking_;
+}
+
+void LogicCore::WatchMarkerNear() {
+  if (marker_near_ || !Guided() || !PoseGood()) return;
+  const Point2 p = docking_.ApproachPoint();
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access): good means there is one
+  if (std::hypot(pose_->x - p.x, pose_->y - p.y) <= kMarkerRequestDistance) marker_near_ = true;
+}
+
+void LogicCore::ChooseGuide() {
+  marker_docking_ = try_by_marker_ = marker_near_ = true;
+  WaitForMarker(true);
+}
+
+void LogicCore::DockByPosition() {
+  marker_docking_ = try_by_marker_ = false;
+  try_by_position_ = true;
+  docking_gps_wait_ = false;
+  const std::string text = "Docking by the position: the dock camera cannot measure the marker";
+  json details = {{"cause", "MARKER_UNAVAILABLE"}, {"message", text}, {"severity", "warning"}, {"resume", "auto"}};
+  const std::string detail = marker_.Detail();
+  if (KnownDetail(detail)) details["detail"] = detail;
+  AddEvent("DOCKING_WITHOUT_MARKER", std::move(details));
+  Notify(text + (detail.empty() ? "" : " (" + detail + ")"));
+  NextDockingTry();
+}
+
+std::string LogicCore::MarkerMapCheck(bool gate) {
+  const auto& marker = marker_.pose();
+  if (!dock_ || !PoseGood() || !marker) return "";
+  const PoseSnapshot& map = *pose_;  // NOLINT(bugprone-unchecked-optional-access): good means there is one
+  const DockPose by_marker = StationByMarker(map.x, map.y, map.heading, *marker);
+  // The position of the map errs by its accuracy on top of the limit of the reference check.
+  std::string problem = MarkerMapProblem(by_marker, *dock_, config_.dock_reference_limit + map.position_accuracy,
+                                         gate ? kMarkerMapHeading : 0.0);
+  if (problem.empty() || !docking_test_) return problem;
+  Notify("Docking test: " + problem + ", not checked in the test");
+  return "";
 }
 
 double LogicCore::MarkerAccuracyLimit(double x, double y) const {
@@ -58,10 +110,11 @@ bool LogicCore::DockPoseGood() const {
   return pose && marker_.PoseGood(marker_clock_, MarkerAccuracyLimit(pose->x, pose->y));
 }
 
-// A sight ends with a good pose once the marker came with its own direction since it began: a pose kept from before
-// does not start a leg.
+// A sight ends with a good pose once the marker came since it began, in docking.test with its own direction (there is
+// no hint there): a pose kept from before does not start a leg.
 bool LogicCore::SightDone() const {
-  return marker_.sight() && marker_.seen() && DockPoseGood();
+  const bool came = docking_test_ ? marker_.seen() : marker_.found();
+  return marker_.sight() && came && DockPoseGood();
 }
 
 void LogicCore::OnDockMarker(const DockMarkerSample& sample) {
@@ -73,7 +126,9 @@ void LogicCore::OnDockMarker(const DockMarkerSample& sample) {
 void LogicCore::OnDockPose(const DockPoseSample& pose) {
   if (!MarkerWanted()) return;
   marker_clock_ = std::max(marker_clock_, pose.time);
-  marker_.OnPose(pose, docking_leg_ == DockingLeg::Kind::kLine);
+  marker_.OnPose(pose, docking_leg_ == DockingLeg::Kind::kLine && docking_leg_frame_ == LegFrame::kDock);
+  // The waits below are those of the marker, not of the map.
+  if (!marker_docking_) return;
   // Back after a loss only with every pose good for gps_wait_time, also those between the ticks.
   if (docking_gps_wait_ && !DockPoseGood()) docking_gps_good_since_.reset();
   if (docking_gps_wait_ && docking_gps_since_ && SightDone()) {
@@ -96,7 +151,7 @@ Reason LogicCore::StartDockingTest(const Reason& node_problem) {
   PutReason(&details, "DOCKING", Reason("TEST", "Docking test by the dock marker, without map and position"));
   AddEvent("DOCKING", std::move(details));
   marker_ = MarkerWatch(config_.marker);
-  marker_docking_ = docking_test_ = true;
+  marker_docking_ = docking_test_ = try_by_marker_ = true;
   BeginDocking();
   return {};
 }
@@ -107,12 +162,18 @@ void LogicCore::NextMarkerTry() {
     return;
   }
   const DockPoseSample& p = *marker_.pose();  // NOLINT(bugprone-unchecked-optional-access): good means there is one
-  if (docking_failure_ && !docking_.OnLine(p.x, p.y, p.heading)) {
+  if (docking_failure_ && !marker_legs_.OnLine(p.x, p.y, p.heading)) {
     CountDockingFailure(*docking_failure_);
     return;
   }
+  const std::string mismatch = MarkerMapCheck(false);
+  if (!mismatch.empty()) {
+    marker_untrusted_ = true;
+    DockingTryFailed(Reason("dock_failed", "Docking failed: " + mismatch).With("cause", "MARKER_MISMATCH"));
+    return;
+  }
   if (docking_test_ && !marker_started_) {
-    const std::string problem = TestStartProblem(docking_, p.x, p.y, p.heading, config_.marker.cross_track / 2);
+    const std::string problem = TestStartProblem(marker_legs_, p.x, p.y, p.heading, config_.marker.cross_track / 2);
     if (!problem.empty()) {
       const Reason why("dock_failed", "Docking test refused: " + problem);
       Notify(why.message);
@@ -120,7 +181,7 @@ void LogicCore::NextMarkerTry() {
       return;
     }
   }
-  DockingLeg leg = docking_.FirstLeg(p.x, p.y, p.heading);
+  DockingLeg leg = marker_legs_.FirstLeg(p.x, p.y, p.heading);
   // In the station frame there is no way over the areas.
   if (leg.kind == DockingLeg::Kind::kApproach) {
     const Reason why("dock_failed",
@@ -141,15 +202,32 @@ void LogicCore::WaitForMarker(bool sight) {
 }
 
 void LogicCore::MarkerTryFailed(const Reason& why) {
-  // Nothing drives blind, nor by a marker whose scale failed or whose source cannot measure (G42).
-  if (!DockPoseGood() || marker_untrusted_) {
+  // Nothing drives blind, nor by a marker whose scale failed or that does not fit the map (G42).
+  if (marker_untrusted_) {
     CountDockingFailure(why, true);
     return;
   }
-  const DockPoseSample& p = *marker_.pose();  // NOLINT(bugprone-unchecked-optional-access): good means there is one
-  if (docking_last_kind_ != DockingLeg::Kind::kOut && docking_.OnLine(p.x, p.y, p.heading)) {
+  const bool out_done = docking_last_kind_ == DockingLeg::Kind::kOut;
+  if (DockPoseGood()) {
+    const DockPoseSample& p = *marker_.pose();  // NOLINT(bugprone-unchecked-optional-access): good means there is one
+    if (!out_done && marker_legs_.OnLine(p.x, p.y, p.heading)) {
+      docking_failure_ = why;
+      SetDockingLeg(marker_legs_.Out(p.x, p.y, p.heading));
+      return;
+    }
+    CountDockingFailure(why);
+    return;
+  }
+  // Without a good pose of the marker out of docking.test the map may take the mower out; without either it stays.
+  if (docking_test_ || !PoseGood()) {
+    CountDockingFailure(why, true);
+    return;
+  }
+  marker_docking_ = false;
+  const PoseSnapshot& map = *pose_;  // NOLINT(bugprone-unchecked-optional-access): good means there is one
+  if (!out_done && docking_.OnLine(map.x, map.y, map.heading)) {
     docking_failure_ = why;
-    SetDockingLeg(docking_.Out(p.x, p.y, p.heading));
+    SetDockingLeg(docking_.Out(map.x, map.y, map.heading));
     return;
   }
   CountDockingFailure(why);
@@ -181,10 +259,25 @@ void LogicCore::TickMarkerDocking(double now_s) {
   char text[200];
   switch (marker_.Check(now_s)) {
     case MarkerWatch::Verdict::kUnavailable:
+      if (!docking_test_ && marker_.sight() && config_.marker.guide == DockGuide::kPrefer) {
+        DockByPosition();
+        return;
+      }
       MarkerFailed("MARKER_UNAVAILABLE", "the dock camera cannot measure the marker");
       return;
+    case MarkerWatch::Verdict::kNoDirection:
+      if (docking_test_) {
+        docking_gps_wait_ = false;
+        const Reason why("dock_failed",
+                         "Docking test refused: the marker gives no direction of its own from here: place the mower "
+                         "closer and straighter in front of the docking station");
+        Notify(why.message);
+        CountDockingFailure(why, true);
+        return;
+      }
+      [[fallthrough]];
     case MarkerWatch::Verdict::kNotSeen:
-      if (marker_.seen()) {
+      if (marker_.found()) {
         std::snprintf(text, sizeof(text), "the pose from the marker was not accurate enough within %.0f s",
                       config_.marker.wait);
       } else {
@@ -196,15 +289,6 @@ void LogicCore::TickMarkerDocking(double now_s) {
       std::snprintf(text, sizeof(text), "the marker was out of sight for %.0f s on the way in", config_.marker.wait);
       MarkerFailed("MARKER_LOST", text);
       return;
-    case MarkerWatch::Verdict::kNoDirection: {
-      docking_gps_wait_ = false;
-      const Reason why("dock_failed",
-                       "Docking test refused: the marker gives no direction of its own from here: place the mower "
-                       "closer and straighter in front of the docking station");
-      Notify(why.message);
-      CountDockingFailure(why, true);
-      return;
-    }
     case MarkerWatch::Verdict::kWaiting:
     default: return;
   }
@@ -218,22 +302,30 @@ void LogicCore::MarkerFailed(const std::string& cause, const std::string& text) 
   DockingTryFailed(why);
 }
 
-std::string LogicCore::GateProblem() {
+Reason LogicCore::GateProblem() {
+  const auto failed = [](const std::string& text) {
+    return text.empty() ? Reason() : Reason("dock_failed", "Docking failed: " + text);
+  };
   if (!marker_docking_) {
-    if (!pose_) return "at the gate there was no position";
-    return docking_.CheckGate(pose_->x, pose_->y, pose_->heading, pose_->position_accuracy, DockAccuracyLimit());
+    if (!pose_) return failed("at the gate there was no position");
+    return failed(
+        docking_.CheckGate(pose_->x, pose_->y, pose_->heading, pose_->position_accuracy, DockAccuracyLimit()));
   }
-  if (!DockPoseGood()) return "at the gate the marker gave no good pose";
-  // The scale first: a marker of the wrong size guides nothing, whatever else fails here.
+  if (!DockPoseGood()) return failed("at the gate the marker gave no good pose");
+  // The scale and the map first: a marker of the wrong size or at the wrong place guides nothing, whatever else fails.
   const std::string scale = marker_.ScaleProblem();
   marker_untrusted_ = !scale.empty();
-  if (marker_untrusted_) return "at the gate " + scale;
+  if (marker_untrusted_) return failed("at the gate " + scale);
+  const std::string map = MarkerMapCheck(true);
+  marker_untrusted_ = !map.empty();
+  if (marker_untrusted_) return failed("at the gate " + map).With("cause", "MARKER_MISMATCH");
   const DockPoseSample& p = *marker_.pose();  // NOLINT(bugprone-unchecked-optional-access): good means there is one
-  return docking_.CheckGate(p.x, p.y, p.heading, p.position_accuracy, MarkerAccuracyLimit(p.x, p.y));
+  return failed(marker_legs_.CheckGate(p.x, p.y, p.heading, p.position_accuracy, MarkerAccuracyLimit(p.x, p.y)));
 }
 
 void LogicCore::EndMarkerDocking() {
   marker_docking_ = docking_test_ = marker_started_ = marker_untrusted_ = marker_sight_ = false;
+  try_by_marker_ = try_by_position_ = marker_near_ = false;
   marker_.Reset();
 }
 

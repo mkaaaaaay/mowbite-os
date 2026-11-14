@@ -32,6 +32,30 @@ DockingSequence MarkerDocking(DockConfig config, const UndockConfig& out, bool c
                          StationLegs{marker.cross_track, marker.blind_distance});
 }
 
+DockPose StationByMarker(double x, double y, double heading, const DockPoseSample& pose) {
+  const double station = Normalize(heading - pose.heading);
+  const double c = std::cos(station);
+  const double s = std::sin(station);
+  return DockPose{x - (c * pose.x - s * pose.y), y - (s * pose.x + c * pose.y), station};
+}
+
+std::string MarkerMapProblem(const DockPose& by_marker, const DockPose& map, double limit, double heading_limit) {
+  const double off = std::hypot(by_marker.x - map.x, by_marker.y - map.y);
+  const double turned = std::abs(Normalize(by_marker.heading - map.heading));
+  char text[200];
+  if (off > limit) {
+    std::snprintf(text, sizeof(text), "by the marker the docking station stands %.2f m from the recorded one, at most "
+                  "%.2f m allowed", off, limit);
+    return text;
+  }
+  if (heading_limit > 0 && turned > heading_limit) {
+    std::snprintf(text, sizeof(text), "by the marker the docking station faces %.0f deg off the recorded one, at most "
+                  "%.0f deg allowed", turned * 180.0 / M_PI, heading_limit * 180.0 / M_PI);
+    return text;
+  }
+  return "";
+}
+
 void MarkerWatch::OnMarker(const DockMarkerSample& sample) {
   last_ = sample;
   heard_ = sample.time;

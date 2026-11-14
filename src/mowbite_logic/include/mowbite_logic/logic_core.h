@@ -130,7 +130,8 @@ struct LogicConfig {
   // After JOB_COMPLETE, abort_mowing and on docking.start the mower drives onto the station contacts first; a try that
   // fails also drives out like undocking.
   DockConfig dock;
-  // Docking by the dock marker in the station frame, where the platform has one: so far only docking.test.
+  // Docking by the dock marker in the station frame, where the platform has one: docking.test, and with its guide
+  // docking.start and going home.
   MarkerConfig marker;
   // DOCKED only with the charge confirmed on the contacts, CHARGING_LOST in IDLE on the station (G19).
   ChargeConfig charge;
@@ -562,8 +563,20 @@ class LogicCore {
   // go on after gps_wait_time s of it; a try failed by the marker carries cause (MARKER_UNAVAILABLE, MARKER_NOT_SEEN,
   // MARKER_LOST) and detail. Without a good pose of the marker nothing drives: docking ends (DOCKING_FAILED).
   // DOCKED, DOCKING_RETRY and DOCKING_FAILED of a docking carry guide: marker or position.
+  // With dock_guide prefer or require (Guided) docking.start and going home use the marker as well: the approach over
+  // the areas ends at most marker_range in front of the station, from kMarkerRequestDistance m before that point
+  // docking asks for the marker (with DockHeadingHint for the start of the estimate), and there each try chooses its
+  // way: a sight as above, where the marker may come without a direction of its own. While the map has a good position
+  // the station by the marker has to fit the recorded one, at the gate also its heading (MARKER_MISMATCH): else the
+  // marker guides nothing more and docking ends where the mower stands, never by the position. Where the source cannot
+  // measure, prefer docks this try by the position (DOCKING_WITHOUT_MARKER), require fails it. A try by the marker that
+  // failed drives out in the station frame, else in the map with a good position, else docking ends.
   bool MarkerSource() const;
+  bool Guided() const;
   bool MarkerWanted() const;
+  // The heading of base_link in the station frame by the map and the recorded station, for the start of the estimate
+  // without the direction of the marker: while docking asks for the marker with a good position, not in docking.test.
+  std::optional<double> DockHeadingHint() const;
   // The follower drives a leg in the station frame now: its commands go out as SOURCE_DOCK.
   bool DockFollowerActive() const;
   // hw/dock_marker and localization/dock_pose, which the node passes only while MarkerWanted.
@@ -767,7 +780,8 @@ class LogicCore {
   void StopUndocking(const std::optional<Reason>& failure, const Reason& why);
   void EndUndocking(const std::optional<Reason>& failure, const Reason& why);
   void Undocked();
-  // Docking with the current settings onto the station of the map.
+  // Docking with the current settings onto the station of the map, the line within marker_range where Guided; in
+  // docking.test onto the station of the marker.
   DockingSequence NewDocking() const;
   // After JOB_COMPLETE, abort_mowing and a reason to go home: DOCKING where the platform docks and the map has a
   // station, else IDLE. why: the reason of the event DOCKING, none after JOB_COMPLETE.
@@ -802,10 +816,21 @@ class LogicCore {
   // drives out only with a good pose of the marker; the waits; why the mower may not go on at the gate (also by the
   // map); a try failed by the marker; the end.
   void NextMarkerTry();
+  // At the approach point of a try that may use the marker: its sight. Where the source cannot measure under prefer:
+  // the try by the position, with DOCKING_WITHOUT_MARKER.
+  void ChooseGuide();
+  void DockByPosition();
+  // The legs of the try: in the station frame by the marker, else in the map.
+  const DockingSequence& Legs() const;
+  // Docking asks for the marker once the map puts the mower within kMarkerRequestDistance of the approach point.
+  void WatchMarkerNear();
+  // Why the station by the marker does not fit the one of the map (gate: also the heading), empty if it does or there
+  // is no good position to compare; in docking.test only told.
+  std::string MarkerMapCheck(bool gate);
   void WaitForMarker(bool sight);
   void MarkerTryFailed(const Reason& why);
   void TickMarkerDocking(double now_s);
-  std::string GateProblem();
+  Reason GateProblem();
   void MarkerFailed(const std::string& cause, const std::string& text);
   void EndMarkerDocking();
   bool DockPoseGood() const;
@@ -998,6 +1023,13 @@ class LogicCore {
   bool marker_started_ = false;
   bool marker_untrusted_ = false;
   bool marker_sight_ = false;
+  // The legs in the station frame; the try chose the marker or the position; docking asks for the marker; the frame of
+  // the leg on its way.
+  DockingSequence marker_legs_;
+  bool try_by_marker_ = false;
+  bool try_by_position_ = false;
+  bool marker_near_ = false;
+  LegFrame docking_leg_frame_ = LegFrame::kMap;
   MarkerWatch marker_;
   double marker_clock_ = 0;
   // Whether charging is confirmed on the station, and its loss.

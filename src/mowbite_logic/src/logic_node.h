@@ -64,6 +64,7 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
@@ -435,6 +436,7 @@ class LogicNode : public rclcpp::Node {
   // Docking by the dock marker: the requests and when the last went out, the measurements, the pose in the station
   // frame and the commands of the follower there.
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr marker_request_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr heading_hint_pub_;
   std::optional<double> marker_requested_;
   rclcpp::TimerBase::SharedPtr marker_request_timer_;
   rclcpp::Subscription<mowbite_msgs::msg::DockMarker>::SharedPtr marker_sub_;

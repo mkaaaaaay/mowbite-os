@@ -114,6 +114,17 @@ UserTexts MarkerTexts(const std::string& code) {
           "The marker of the docking station was out of sight for too long on the way in. The mower stopped and ended "
           "the attempt.",
           "Clear the view between the mower and the station."}}}},
+      {"MARKER_MISMATCH",
+       {{"de",
+         {"Marker passt nicht zur Karte",
+          "Der Marker steht nicht dort, wo die Ladestation in der Karte aufgenommen ist. Der Mäher dockt dann weder "
+          "nach der Kamera noch nach der Position an.",
+          "Die Station neu aufnehmen oder die Kalibrierung der Kamera prüfen."}},
+        {"en",
+         {"Marker does not match the map",
+          "The marker is not where the docking station was recorded in the map. The mower then docks neither by "
+          "camera nor by its position.",
+          "Record the station again or check the calibration of the camera."}}}},
   };
   return texts.at(code);
 }
@@ -1056,8 +1067,9 @@ Field DockingCause() {
                      "Why: the planner gave no way (with approach_failed, a reason in x-reasons), or the dock camera "
                      "did not guide the mower (with dock_failed, texts here)",
                      false,
-                     {"PLANNER_TIMEOUT", "PLANNER_MISSING", "MARKER_UNAVAILABLE", "MARKER_NOT_SEEN", "MARKER_LOST"});
-  for (const char* code : {"MARKER_UNAVAILABLE", "MARKER_NOT_SEEN", "MARKER_LOST"}) {
+                     {"PLANNER_TIMEOUT", "PLANNER_MISSING", "MARKER_UNAVAILABLE", "MARKER_NOT_SEEN", "MARKER_LOST",
+                      "MARKER_MISMATCH"});
+  for (const char* code : {"MARKER_UNAVAILABLE", "MARKER_NOT_SEEN", "MARKER_LOST", "MARKER_MISMATCH"}) {
     field.value_texts[code] = MarkerTexts(code);
   }
   return field;
@@ -1095,6 +1107,23 @@ Field MarkerDetail() {
     field.values.push_back(camera.code);
     field.value_texts[camera.code] = camera.texts;
   }
+  return field;
+}
+
+// cause of DOCKING_WITHOUT_MARKER, with the texts of that event: the mower docks, by its position.
+Field WithoutMarkerCause() {
+  Field field = Text("cause", "Why the dock camera does not guide this try: it cannot measure the marker", true,
+                     {"MARKER_UNAVAILABLE"});
+  field.value_texts["MARKER_UNAVAILABLE"] = {
+      {"de",
+       {"Andocken ohne Kamera",
+        "Die Kamera zur Ladestation misst nicht, der Mäher dockt nach seiner Position an. Das ist ungenauer.",
+        "Die Kamera prüfen; die Meldung nennt den Grund."}},
+      {"en",
+       {"Docking without camera",
+        "The camera towards the docking station does not measure, the mower docks by its position. That is less "
+        "exact.",
+        "Check the camera; the message names the cause."}}};
   return field;
 }
 
@@ -1368,6 +1397,11 @@ const std::vector<EventEntry>& Events() {
             {PlannerCause(true), Number("distance", "m", "Length of the straight way", true),
              Text("message", "English text for the log", true), Text("severity", "Always warning", true, {"warning"}),
              Text("resume", "Always auto", true, {"auto"})}),
+      Event("DOCKING_WITHOUT_MARKER", "logic",
+            "Where the platform docks by its dock camera and may do without it (dock_guide prefer): this try docks by "
+            "the position, as the camera cannot measure the marker",
+            {WithoutMarkerCause(), MarkerDetail(), Text("message", "English text for the log", true),
+             Text("severity", "Always warning", true, {"warning"}), Text("resume", "Always auto", true, {"auto"})}),
       Event("DOCKED", "logic", "The mower is on the contacts of the docking station; guide only after docking",
             {Guide()}),
       Event("DOCKING_RETRY", "logic", "Docking failed, the next try follows by itself", DockingTries(),
