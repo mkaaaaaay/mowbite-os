@@ -1,14 +1,19 @@
 # MowBite OS against the simulated Tron (MCU, GNSS, IMU), e.g. on the PC with a local mosquitto.
+import os
+
 import yaml
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, OpaqueFunction, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
 
 
 # fake_tron with the charging station of the section fake_tron in extra_config, if it has one (sim.yaml does), and the
-# command line options of its list args (a test makes the simulated Tron differ from its configuration with them).
+# command line options of its list args (a test makes the simulated Tron differ from its configuration with them). With
+# a station also fake_dock_marker, its camera where tron.yaml mounts tron_rear.
 def fake_tron_setup(context):
     try:
         with open(LaunchConfiguration("extra_config").perform(context)) as f:
@@ -16,10 +21,19 @@ def fake_tron_setup(context):
     except (OSError, yaml.YAMLError, AttributeError):
         values = {}
     station = []
+    marker = []
     if "dock" in values:
-        station = ["--dock", *(str(float(v)) for v in values["dock"]),
-                   "--dock-contact-x", str(float(values.get("dock_contact_x", -0.10)))]
-    return [ExecuteProcess(
+        contact_x = float(values.get("dock_contact_x", -0.10))
+        station = ["--dock", *(str(float(v)) for v in values["dock"]), "--dock-contact-x", str(contact_x)]
+        tron = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "tron.yaml")
+        with open(tron) as f:
+            mount = yaml.safe_load(f)["tron_rear"]["ros__parameters"]["mount"]
+        marker = [Node(package="mowbite_sim", executable="fake_dock_marker", name="fake_dock_marker", output="screen",
+                       parameters=[tron, LaunchConfiguration("extra_config"),
+                                   {"state": LaunchConfiguration("state"), "flags": LaunchConfiguration("flags"),
+                                    "dock": [float(v) for v in values["dock"]], "dock_contact_x": contact_x,
+                                    "mount": [float(v) for v in mount]}])]
+    return marker + [ExecuteProcess(
         cmd=[PathJoinSubstitution([FindPackagePrefix("mowbite_sim"), "lib", "mowbite_sim", "fake_tron"]),
              "--link", LaunchConfiguration("link"), "--gnss-link", LaunchConfiguration("gnss_link"),
              "--imu-link", LaunchConfiguration("imu_link"),

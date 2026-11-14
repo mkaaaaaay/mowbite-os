@@ -14,10 +14,11 @@ Optional: a JSON file with flags (lift, stop, bumper, bumper_left, bumper_right,
 yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, cutter_holds, gnss_rtcm, dock_shift_x,
 dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, lift_tilt, lift_front_only, gyro_bias_dps,
 charge_current, battery_percentage, battery_voltage, battery_temperature, blade_temperature, standstill_noise,
-stop_latches) is read every 10 ms, every received sub packet goes to a JSON lines log, and --state writes the true pose as JSON; a thread
-of its own does all of this file work, so a slow disk never holds the ptys (Files). The
-GNSS pty also plays the RTK board in front of the receiver (Board). gnss_rtcm true makes the fix depend on the RTCM the
-board passes: RTK fixed with the real age while corrections are at most 120 s old, otherwise single without age.
+stop_latches) is read every 10 ms, every received sub packet goes to a JSON lines log, and --state writes the true
+pose as JSON with the time.monotonic() it was taken (clock); a thread of its own does all of this file work, so a
+slow disk never holds the ptys (Files). The GNSS pty also plays the RTK board in front of the receiver (Board).
+gnss_rtcm true makes the fix depend on the RTCM the board passes: RTK fixed with the real age while corrections are
+at most 120 s old, otherwise single without age.
 gnss_noise is the standard deviation (m) of the antenna position, gnss_age the age of the corrections in GGA (s, default
 1.0, null leaves the field empty), gnss_delay how old (s) the position is when it is sent, yaw_drift the yaw error (rad)
 per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below which a wheel stands, odom_scale the factor
@@ -764,9 +765,10 @@ def send(fd, data):
                   flush=True)
 
 
-def state_text(now, pose, dock_ok=False, host_bytes=0):
+def state_text(now, pose, dock_ok=False, host_bytes=0, clock=None):
+    """clock: time.monotonic() of the pose, for readers in other processes."""
     return json.dumps({"t": round(now, 3), "x": pose.x, "y": pose.y, "yaw": pose.yaw, "linear": pose.linear,
-                       "angular": pose.angular, "dock_ok": dock_ok, "host_bytes": host_bytes})
+                       "angular": pose.angular, "dock_ok": dock_ok, "host_bytes": host_bytes, "clock": clock})
 
 
 def write_state(path, text):
@@ -970,7 +972,7 @@ def main():
                                             (args.slope[0], args.slope[1]), args.gyro_scale))
             if args.state and now >= next_state:
                 next_state = now + 0.2
-                files.state(state_text(now, pose, dock_ok, host_bytes))
+                files.state(state_text(now, pose, dock_ok, host_bytes, now + t0))
 
             if now >= next_port_check:
                 next_port_check = now + 0.1

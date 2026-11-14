@@ -3,7 +3,8 @@ project(mowbite_sim)
 
 find_package(ament_cmake REQUIRED)
 
-install(PROGRAMS scripts/fake_tron scripts/fake_xcore scripts/sim_control scripts/mqtt311_gate DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/fake_tron scripts/fake_xcore scripts/fake_dock_marker scripts/sim_control scripts/mqtt311_gate
+  DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
@@ -71,6 +72,7 @@ if(BUILD_TESTING)
   add_journaled_launch_test(test/test_undock.py TIMEOUT 400)
   add_journaled_launch_test(test/test_dock.py TIMEOUT 1500)
   add_journaled_launch_test(test/test_dock_front.py TIMEOUT 900)
+  add_journaled_launch_test(test/test_dock_marker.py TIMEOUT 300)
   add_journaled_launch_test(test/test_going_home.py TIMEOUT 1200)
   add_journaled_launch_test(test/test_home_direct.py TIMEOUT 600)
   add_journaled_launch_test(test/test_sunset.py TIMEOUT 600)

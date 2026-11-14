@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""Simulated dock marker of the rear camera: hw/dock_marker from the true pose of fake_tron, on request.
+
+A request on hw/dock_marker_request holds for REQUEST_HOLD_S. While asked the camera starts (STARTING for start_time s),
+then measures (MEASURING, one message per image at rate, each delay s after its image), or reports FAULT; unasked it
+is OFF. In every state at least one message per REPORT_PERIOD_S.
+
+Where the marker is: the station of fake_tron (dock, dock_contact_x, moved by the flags dock_shift_x and dock_shift_y
+like fake_tron moves it) with dock_marker of the platform; the camera at mount in base_link. The true pose comes from
+the state file of fake_tron, carried to now with its speeds.
+
+Error model: per image a spread of x and y of position_sigma[0] + position_sigma[1] * d (m, d the distance from the
+camera), of yaw growing linearly through yaw_sigma_deg at the distances yaw_sigma_at; yaw only up to
+yaw_valid_distance. No marker beyond detect_range, outside half_fov_deg off the axis of the camera or seen at more
+than max_view_deg from its front; MARKER_CLIPPED within clip_deg of the edge of the image and closer than
+marker_blind_distance before the docked pose.
+
+Faults from the flags file (read at every image): marker_hidden (NO_MARKER), marker_dark (TOO_DARK), camera_off
+(FAULT while asked, reason NO_SIGNAL), marker_scale (factor on the distance from the camera, a marker of the wrong
+size), marker_outlier [dx, dy, n] (every n-th image off by dx, dy m in base_link), marker_start_time (s, overrides
+start_time).
+"""
+import json
+import math
+import random
+import time
+
+import rclpy
+from rclpy.duration import Duration
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Empty
+
+from mowbite_msgs.msg import Camera, DockMarker
+
+
+def read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def compose(a, b):
+    """Pose b given in the frame of pose a, in the frame of a: (x, y, yaw)."""
+    c, s = math.cos(a[2]), math.sin(a[2])
+    return a[0] + c * b[0] - s * b[1], a[1] + s * b[0] + c * b[1], a[2] + b[2]
+
+
+def relative(a, b):
+    """Pose b in the frame of pose a."""
+    c, s = math.cos(a[2]), math.sin(a[2])
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    return c * dx + s * dy, -s * dx + c * dy, math.atan2(math.sin(b[2] - a[2]), math.cos(b[2] - a[2]))
+
+
+def interpolate(points, values, at):
+    """Linear through (points, values), held beyond the ends."""
+    if at <= points[0]:
+        return values[0]
+    for (p0, v0), (p1, v1) in zip(zip(points, values), zip(points[1:], values[1:])):
+        if at <= p1:
+            return v0 + (v1 - v0) * (at - p0) / (p1 - p0)
+    return values[-1]
+
+
+class FakeDockMarker(Node):
+    def __init__(self):
+        super().__init__("fake_dock_marker")
+        self.state_path = self.declare_parameter("state", "").value
+        self.flags_path = self.declare_parameter("flags", "").value
+        self.dock = list(self.declare_parameter("dock", [-1.0, 0.0, 180.0]).value)
+        self.contact_x = self.declare_parameter("dock_contact_x", -0.10).value
+        self.mount = list(self.declare_parameter("mount", [-0.105, 0.0, 0.074, math.pi, 0.0, 0.0]).value)
+        # Platform values (tron.yaml, /**).
+        self.marker = list(self.declare_parameter("dock_marker", [-0.175, 0.0, 0.0]).value)
+        self.blind = self.declare_parameter("marker_blind_distance", 0.07).value
+        # Measured on the Tron 14.11. (TM4 part, dark room, lit station): every image valid at 0.28 to 1.2 m, the
+        # direction up to 0.8 m.
+        self.yaw_valid_distance = self.declare_parameter("yaw_valid_distance", 0.8).value
+        # The rest of the error model from C7 (TG 11 B, B2), estimated until TM3 measures it.
+        self.rate = self.declare_parameter("rate", 10.0).value
+        self.delay = self.declare_parameter("delay", 0.1).value
+        self.start_time = self.declare_parameter("start_time", 2.0).value
+        self.detect_range = self.declare_parameter("detect_range", 1.5).value
+        self.half_fov = math.radians(self.declare_parameter("half_fov_deg", 32.0).value)
+        self.clip = math.radians(self.declare_parameter("clip_deg", 2.0).value)
+        self.max_view = math.radians(self.declare_parameter("max_view_deg", 60.0).value)
+        self.position_sigma = list(self.declare_parameter("position_sigma", [0.002, 0.004]).value)
+        self.yaw_sigma_at = list(self.declare_parameter("yaw_sigma_at", [0.3, 0.8]).value)
+        self.yaw_sigma = [math.radians(v) for v in self.declare_parameter("yaw_sigma_deg", [1.0, 7.0]).value]
+        self.rng = random.Random(self.declare_parameter("seed", 3).value)
+
+        reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
+                              durability=DurabilityPolicy.VOLATILE)
+        self.pub = self.create_publisher(DockMarker, "hw/dock_marker", reliable)
+        self.create_subscription(Empty, "hw/dock_marker_request", self.on_request, reliable)
+        self.asked_until = 0.0
+        self.started = None
+        self.fault = False
+        self.images = 0
+        self.last_report = -math.inf
+        self.next_image = 0.0
+        # (due, message) of images taken, sent delay s later.
+        self.pending = []
+        self.create_timer(0.01, self.tick)
+
+    def on_request(self, _):
+        self.asked_until = time.monotonic() + DockMarker.REQUEST_HOLD_S
+
+    def truth(self, now):
+        """The true pose (x, y, yaw) at now, None without a state file."""
+        state = read_json(self.state_path)
+        if not all(k in state for k in ("x", "y", "yaw")):
+            return None
+        dt = min(max(now - state.get("clock", now), 0.0), 0.5)
+        linear, angular = state.get("linear", 0.0), state.get("angular", 0.0)
+        mid = state["yaw"] + 0.5 * angular * dt
+        return (state["x"] + linear * dt * math.cos(mid), state["y"] + linear * dt * math.sin(mid),
+                state["yaw"] + angular * dt)
+
+    def message(self, state, stamp_mono, reason="", detail=""):
+        msg = DockMarker()
+        msg.header.frame_id = "base_link"
+        age = time.monotonic() - stamp_mono
+        msg.header.stamp = (self.get_clock().now() - Duration(seconds=age)).to_msg()
+        msg.state = state
+        msg.reason = reason
+        msg.detail = detail
+        return msg
+
+    def image(self, now, flags):
+        """The message of an image taken now."""
+        if flags.get("marker_dark"):
+            return self.message(DockMarker.STATE_MEASURING, now, DockMarker.REASON_TOO_DARK, "flag marker_dark")
+        if flags.get("marker_hidden"):
+            return self.message(DockMarker.STATE_MEASURING, now, DockMarker.REASON_NO_MARKER, "flag marker_hidden")
+        pose = self.truth(now)
+        if pose is None:
+            return self.message(DockMarker.STATE_MEASURING, now, DockMarker.REASON_NO_MARKER, "no true pose")
+        heading = math.radians(self.dock[2])
+        station = (self.dock[0] + float(flags.get("dock_shift_x", 0.0)),
+                   self.dock[1] + float(flags.get("dock_shift_y", 0.0)), heading)
+        docked = (station[0], station[1], heading + (math.pi if self.contact_x < 0 else 0.0))
+        marker = relative(pose, compose(docked, self.marker))
+        camera = (self.mount[0], self.mount[1], self.mount[3])
+        seen = relative(camera, marker)
+        distance = math.hypot(seen[0], seen[1])
+        bearing = math.atan2(seen[1], seen[0])
+        # The angle between the front of the marker and the way back to the camera.
+        view = math.atan2(math.sin(seen[2] + math.pi - bearing), math.cos(seen[2] + math.pi - bearing))
+        along = relative(station, pose)[0]
+        if distance > self.detect_range or abs(bearing) > self.half_fov or abs(view) > self.max_view:
+            return self.message(DockMarker.STATE_MEASURING, now, DockMarker.REASON_NO_MARKER)
+        if abs(bearing) > self.half_fov - self.clip or along > -self.blind:
+            return self.message(DockMarker.STATE_MEASURING, now, DockMarker.REASON_MARKER_CLIPPED)
+        sigma = self.position_sigma[0] + self.position_sigma[1] * distance
+        yaw_sigma = interpolate(self.yaw_sigma_at, self.yaw_sigma, distance)
+        scale = float(flags.get("marker_scale", 1.0))
+        seen = (seen[0] * scale + self.rng.gauss(0.0, sigma), seen[1] * scale + self.rng.gauss(0.0, sigma),
+                seen[2] + self.rng.gauss(0.0, yaw_sigma))
+        measured = compose(camera, seen)
+        x, y = measured[0], measured[1]
+        self.images += 1
+        outlier = flags.get("marker_outlier")
+        if outlier and int(outlier[2]) > 0 and self.images % int(outlier[2]) == 0:
+            x, y = x + float(outlier[0]), y + float(outlier[1])
+        msg = self.message(DockMarker.STATE_MEASURING, now)
+        msg.valid = True
+        msg.x, msg.y = x, y
+        msg.yaw_valid = distance <= self.yaw_valid_distance
+        msg.yaw = math.atan2(math.sin(measured[2]), math.cos(measured[2])) if msg.yaw_valid else 0.0
+        msg.covariance = [sigma * sigma, 0.0, 0.0, 0.0, sigma * sigma, 0.0, 0.0, 0.0,
+                          yaw_sigma * yaw_sigma if msg.yaw_valid else 0.0]
+        return msg
+
+    def report(self, now, msg):
+        self.pub.publish(msg)
+        self.last_report = now
+
+    def tick(self):
+        now = time.monotonic()
+        while self.pending and self.pending[0][0] <= now:
+            self.report(now, self.pending.pop(0)[1])
+        flags = read_json(self.flags_path)
+        if now >= self.asked_until:
+            self.started = None
+            self.fault = False
+            if now - self.last_report >= DockMarker.REPORT_PERIOD_S:
+                reason = Camera.REASON_NO_SIGNAL if flags.get("camera_off") else ""
+                self.report(now, self.message(DockMarker.STATE_OFF, now, reason))
+            return
+        if self.started is None:
+            self.started = now
+            self.fault = bool(flags.get("camera_off"))
+        if self.fault:
+            if now - self.last_report >= DockMarker.REPORT_PERIOD_S:
+                self.report(now, self.message(DockMarker.STATE_FAULT, now, Camera.REASON_NO_SIGNAL,
+                                              "flag camera_off"))
+            return
+        if now - self.started < float(flags.get("marker_start_time", self.start_time)):
+            if now - self.last_report >= DockMarker.REPORT_PERIOD_S:
+                self.report(now, self.message(DockMarker.STATE_STARTING, now))
+            return
+        if flags.get("camera_off"):
+            self.fault = True
+            return
+        if now >= self.next_image:
+            self.next_image = max(self.next_image + 1.0 / self.rate, now)
+            self.pending.append((now + self.delay, self.image(now, flags)))
+
+
+def main():
+    rclpy.init()
+    node = FakeDockMarker()
+    # SIGINT from launch, as an interrupt or as the shutdown of rclpy, is a normal end.
+    try:
+        rclpy.spin(node)
+    except (ExternalShutdownException, KeyboardInterrupt):
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == "__main__":
+    main()
