@@ -26,6 +26,8 @@ from mowbite_msgs.msg import HardwareStatus
 from mowbite_msgs.srv import SetEmergency
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "launch"))
+import logic_params  # noqa: E402
 import xcore_capture as xc  # noqa: E402
 
 WORK = tempfile.mkdtemp(prefix="mowbite_capture_fake_")
@@ -46,8 +48,12 @@ def generate_test_description():
              "--pcap-max-mb", "40"],
         output="screen")
     config = os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "config", "nx60i.yaml")
+    # The battery voltages of the logic, as nx60i.launch.py hands them over.
+    battery = logic_params.battery_voltages(
+        [os.path.join(FindPackageShare("mowbite_bringup").find("mowbite_bringup"), "config", "nx60i.yaml")])
     driver = Node(package="xcore_driver", executable="xcore_driver_node", output="screen",
-                  parameters=[config, {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT}])
+                  parameters=[config, {"interface": "lo", "bind_ip": BIND_IP, "announcement_port": GROUP_PORT,
+                                       **battery}])
     return launch.LaunchDescription([
         fake_xcore,
         TimerAction(period=0.5, actions=[driver, launch_testing.actions.ReadyToTest()]),
