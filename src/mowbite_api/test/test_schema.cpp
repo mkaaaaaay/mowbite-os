@@ -124,7 +124,7 @@ TEST(Schema, CommandsAndBits) {
 }
 
 TEST(Additive, WhatIsTakenAwayIsFound) {
-  const Json older = Schema();
+  const Json& older = Schema();
   const auto changed = [&older](const std::function<void(Json&)>& change) {
     Json newer = older;
     change(newer);

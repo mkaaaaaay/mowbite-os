@@ -2,6 +2,7 @@
 // a file there of an older api (1 or more) moves to <dir>/schema/api-<N>.schema.json first, where test_schema.cpp
 // checks that the new schema only adds to it within the same break. A file of the same api with other content is
 // refused: raise kApi first.
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -56,12 +57,17 @@ int Write(const std::filesystem::path& dir) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  const std::string option = argc > 1 ? argv[1] : "";
-  if (option == "--write" && argc == 3) return Write(argv[2]);
-  if (argc == 1) {
-    std::cout << Text(mowbite_api::Schema());
-    return 0;
+  try {
+    const std::string option = argc > 1 ? argv[1] : "";
+    if (option == "--write" && argc == 3) return Write(argv[2]);
+    if (argc == 1) {
+      std::cout << Text(mowbite_api::Schema());
+      return 0;
+    }
+    std::cerr << "usage: mowbite_api_schema [--write <dir of api.schema.json>]\n";
+    return 2;
+  } catch (const std::exception& error) {
+    std::cerr << "mowbite_api_schema: " << error.what() << "\n";
+    return 1;
   }
-  std::cerr << "usage: mowbite_api_schema [--write <dir of api.schema.json>]\n";
-  return 2;
 }

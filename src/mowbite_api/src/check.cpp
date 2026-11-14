@@ -102,6 +102,7 @@ std::vector<std::string> CheckEvent(const std::string& type, const Json& details
     return problems;
   }
   std::vector<const Field*> fields;
+  fields.reserve(event->fields.size() + LogicFields().size());
   for (const auto& field : event->fields) fields.push_back(&field);
   if (event->emitter == "logic") {
     for (const auto& field : LogicFields()) fields.push_back(&field);

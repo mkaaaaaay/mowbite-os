@@ -55,7 +55,7 @@ Json Property(const Field& field) {
   if (!field.unit.empty()) property["x-unit"] = field.unit;
   if (field.type == Type::kArray && (!field.fields.empty() || field.items)) {
     Field item = field;
-    item.type = field.fields.empty() ? *field.items : Type::kObject;
+    item.type = field.fields.empty() && field.items ? *field.items : Type::kObject;
     item.items.reset();
     item.nullable = false;
     item.values.clear();
@@ -101,6 +101,7 @@ Json Object(const std::string& text, const std::vector<const Field*>& fields, bo
 
 std::vector<const Field*> Pointers(const std::vector<Field>& fields) {
   std::vector<const Field*> out;
+  out.reserve(fields.size());
   for (const auto& field : fields) out.push_back(&field);
   return out;
 }
