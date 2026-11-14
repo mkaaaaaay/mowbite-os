@@ -14,8 +14,9 @@
 namespace mowbite_safety {
 
 // Sources of drive commands, numbered like DriveCommand; kStop is the logic stopping the mower. The calibration drive
-// moves autonomously like the follower, and forward only.
-enum class Source : uint8_t { kStop = 0, kTeleop = 1, kFollower = 2, kCalibration = 3 };
+// moves autonomously like the follower, and forward only. kDock is the follower in the station frame, by the pose from
+// the dock marker.
+enum class Source : uint8_t { kStop = 0, kTeleop = 1, kFollower = 2, kCalibration = 3, kDock = 4 };
 
 // The reason bits of hw/status the filter latches over hw/emergency.
 constexpr uint32_t kReasonTilt = 1u << 13;
@@ -31,15 +32,18 @@ struct SafetyConfig {
   // Nothing moves without an IMU sample for imu_timeout s or without hw/status for hw_timeout s.
   double imu_timeout = 0.5;
   double hw_timeout = 1.0;
-  // Autonomous drives need a pose not older than pose_timeout s, max_position_accuracy m or better, with a heading.
+  // Autonomous drives need a pose not older than pose_timeout s, max_position_accuracy m or better, with a heading;
+  // drives in the station frame one from the dock marker of dock_max_position_accuracy m or better.
   double pose_timeout = 0.5;
   double max_position_accuracy = 0.1;
+  double dock_max_position_accuracy = 0.03;
   // FENCE: an autonomous drive with base_link farther than fence_margin m outside of the allowed areas, or deeper than
   // obstacle_margin m in an obstacle. The follower stops at 0.5 m already, so this only acts when it does not.
   double fence_margin = 0.6;
   double obstacle_margin = 0.1;
   // The zone of the docking station: the longest approach and undocking of params.set (2 m) and the corridor of the
-  // logic (0.1 m) on its line, and the overshoot of docking behind it.
+  // logic (0.1 m) on its line, and the overshoot of docking behind it. Drives in the station frame stay in it, with
+  // fence_margin as in the map.
   double station_ahead = 2.1;
   double station_behind = 0.15;
   double station_half_width = 0.1;
@@ -82,7 +86,9 @@ struct Release {
 
 // S2 between all sources of drive commands and the driver: one source at a time, armed after every emergency, a
 // tilt limit for all of them, and for autonomous drives a recent accurate pose with a heading and the fence of the
-// map. The follower reverses at most 0.12 m/s. Time is passed in (monotonic s), nothing here talks to ROS.
+// map. Drives in the station frame (kDock) need neither map nor map pose: a recent accurate pose from the dock marker
+// with a heading, the zone of the station in that frame, at most 0.17 m/s forwards. The follower reverses at most
+// 0.12 m/s in either frame. Time is passed in (monotonic s), nothing here talks to ROS.
 class SafetyFilter {
  public:
   explicit SafetyFilter(const SafetyConfig& config);
@@ -94,6 +100,8 @@ class SafetyFilter {
   // The angle of the body to the vertical (degrees) of an IMU sample.
   void OnTilt(double tilt_deg, double now);
   void OnPose(double x, double y, double accuracy, bool heading_valid, double now);
+  // localization/dock_pose: base_link in the station frame (origin base_link of the docked mower, x the way in).
+  void OnDockPose(double x, double y, double accuracy, bool heading_valid, double now);
   // map/json, and whether map/status says it fits the datum.
   void SetMap(const std::string& map_json);
   void SetMapFits(bool fits);
@@ -117,6 +125,7 @@ class SafetyFilter {
   // m base_link lies outside of the allowed areas (0 inside), NaN without a map that fits or a recent pose.
   double FenceDistance(double now) const;
   bool AutonomousOk(double now) const;
+  bool DockOk(double now) const;
   // The source that moves the mower, kStop while none does.
   Source Owner(double now) const;
   uint32_t Refused() const;
@@ -141,10 +150,13 @@ class SafetyFilter {
   void DisarmAll();
   bool ImuFresh(double now) const;
   std::string AutonomousProblem(double now) const;
+  std::string DockProblem(double now) const;
   // m (x, y) lies outside of the allowed areas and the zone of the station, 0 inside.
   double OutsideDistance(double x, double y) const;
   // Empty if base_link may be at (x, y), else why not.
   std::string FenceProblem(double x, double y) const;
+  // The same for (x, y) in the station frame.
+  std::string DockFenceProblem(double x, double y) const;
   // Why a moving command of source may not pass, empty if it may; latches FENCE.
   std::string MoveProblem(Source source, double linear, double quiet, double now, bool* conflict);
   void Latch(uint32_t bits, const std::string& reason);
@@ -163,12 +175,15 @@ class SafetyFilter {
   double tilt_deg_ = 0;
   std::optional<double> tilt_since_;
   std::optional<Pose> pose_;
+  std::optional<Pose> dock_pose_;
+  // The zone of the station in the station frame.
+  Ring dock_zone_;
   std::optional<Region> region_;
   // The allowed areas of the region and the zone of its station.
   std::vector<Ring> allowed_;
   std::string region_error_ = "no map yet";
   bool map_fits_ = false;
-  std::array<SourceState, 4> sources_;
+  std::array<SourceState, 5> sources_;
   Source owner_ = Source::kStop;
   double owner_s_ = 0;
   // The source whose moving command went out last, empty after a stop.

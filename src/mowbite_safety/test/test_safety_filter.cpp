@@ -48,6 +48,7 @@ class FilterTest : public ::testing::Test {
       if (hw_) filter_.OnHardware(hw_emergency_, hw_reason_, now_);
       if (imu_) filter_.OnTilt(tilt_, now_);
       if (pose_) filter_.OnPose(x_, y_, accuracy_, heading_valid_, now_);
+      if (dock_) filter_.OnDockPose(dock_x_, dock_y_, dock_accuracy_, dock_heading_valid_, now_);
       if (filter_.Tick(now_)) stops_++;
     }
   }
@@ -103,6 +104,12 @@ class FilterTest : public ::testing::Test {
   double y_ = 2;
   double accuracy_ = 0.02;
   bool heading_valid_ = true;
+  // The pose from the dock marker, in the station frame: 0.8 m in front of the docked pose on its line.
+  bool dock_ = false;
+  double dock_x_ = -0.8;
+  double dock_y_ = 0;
+  double dock_accuracy_ = 0.02;
+  bool dock_heading_valid_ = true;
   int stops_ = 0;
 };
 
@@ -832,4 +839,172 @@ TEST_F(FilterTest, AReleaseNamesTheAgeOfTheLastSampleAndNeedsLessThanTheReleaseA
   release = filter.OnRelease(1.8);
   EXPECT_FALSE(release.allowed);
   EXPECT_EQ(release.code, "STILL_TILTED");
+}
+
+TEST_F(FilterTest, TheDockFollowerDrivesInTheStationFrameWithoutMapOrMapPose) {
+  filter_.SetMap("{}");
+  filter_.SetMapFits(false);
+  pose_ = false;
+  dock_ = true;
+  Run(now_ + 0.6);
+  EXPECT_FALSE(filter_.AutonomousOk(now_));
+  EXPECT_TRUE(filter_.DockOk(now_));
+  Decision d = Cmd(Source::kDock, -0.1, 0.05);
+  ASSERT_TRUE(Moves(d)) << d.refusal;
+  EXPECT_DOUBLE_EQ(d.out->linear, -0.1);
+  EXPECT_DOUBLE_EQ(d.out->angular, 0.05);
+  EXPECT_EQ(filter_.Owner(now_), Source::kDock);
+  EXPECT_TRUE(Stops(Cmd(Source::kDock, 0)));
+  // The pose from the marker lets only the dock follower drive, never the follower in the map.
+  Run(now_ + 1.1);
+  EXPECT_EQ(Cmd(Source::kFollower, 0.1).refusal, "no recent pose from the localization");
+  EXPECT_EQ(Cmd(Source::kCalibration, 0.1).refusal, "no recent pose from the localization");
+  EXPECT_EQ(filter_.Latched(), 0u);
+}
+
+TEST_F(FilterTest, TheDockFollowerNeedsARecentAccuratePoseFromTheMarkerWithAHeading) {
+  dock_ = true;
+  const auto refused = [this](const std::string& why) {
+    Run(now_ + 0.1);
+    EXPECT_FALSE(filter_.DockOk(now_));
+    const Decision d = Cmd(Source::kDock, -0.1);
+    EXPECT_EQ(d.refusal, why);
+    // None of these latches, and remote control still drives.
+    EXPECT_EQ(filter_.Latched(), 0u);
+    EXPECT_TRUE(Stops(Cmd(Source::kDock, 0)));
+    Run(now_ + 1.1);
+    EXPECT_TRUE(Moves(Cmd(Source::kTeleop, 0.1))) << filter_.LastRefusal();
+    EXPECT_TRUE(Stops(Cmd(Source::kTeleop, 0)));
+    Run(now_ + 1.1);
+  };
+  // A good pose in the map does not stand in for the one from the marker, whose limit is its own.
+  dock_accuracy_ = 0.031;
+  refused("position accuracy from the dock marker 0.031 m, 0.030 m needed");
+  filter_.SetMaxPositionAccuracy(0.5);
+  refused("position accuracy from the dock marker 0.031 m, 0.030 m needed");
+  dock_accuracy_ = std::numeric_limits<double>::infinity();
+  refused("position accuracy from the dock marker inf m, 0.030 m needed");
+  dock_accuracy_ = std::numeric_limits<double>::quiet_NaN();
+  refused("position accuracy from the dock marker nan m, 0.030 m needed");
+  dock_accuracy_ = 0.03;
+  Run(now_ + 0.1);
+  EXPECT_TRUE(Moves(Cmd(Source::kDock, -0.1))) << filter_.LastRefusal();
+  EXPECT_TRUE(Stops(Cmd(Source::kDock, 0)));
+  dock_heading_valid_ = false;
+  refused("no heading from the dock marker");
+  dock_heading_valid_ = true;
+  dock_ = false;
+  Run(now_ + 0.6);
+  refused("no recent pose from the dock marker");
+  dock_ = true;
+  filter_.OnCapabilities(false, 0.3, 0.3);
+  refused("no safety measurement of this platform (hw/capabilities)");
+  filter_.OnCapabilities(true, 0.3, 0.3);
+  Run(now_ + 0.1);
+  EXPECT_TRUE(Moves(Cmd(Source::kDock, -0.1))) << filter_.LastRefusal();
+}
+
+TEST_F(FilterTest, ADockPoseExactlyPoseTimeoutOldIsRecent) {
+  filter_.OnDockPose(-0.8, 0, 0.02, true, now_);
+  Run(now_ + 0.5);
+  EXPECT_TRUE(Moves(Cmd(Source::kDock, -0.1))) << filter_.LastRefusal();
+  EXPECT_TRUE(Stops(Cmd(Source::kDock, 0)));
+  Run(now_ + 0.02);
+  EXPECT_EQ(Cmd(Source::kDock, -0.1).refusal, "no recent pose from the dock marker");
+}
+
+TEST_F(FilterTest, TheDockAccuracyLimitComesFromTheConfig) {
+  SafetyConfig config;
+  config.dock_max_position_accuracy = 0.05;
+  SafetyFilter filter = Ready(1.0, config);
+  filter.OnDockPose(-0.8, 0, 0.04, true, 1.0);
+  EXPECT_TRUE(Moves(filter.OnCommand(Source::kDock, -0.1, 0, 1.0))) << filter.LastRefusal();
+  filter.OnDockPose(-0.8, 0, 0.06, true, 1.0);
+  EXPECT_EQ(filter.OnCommand(Source::kDock, -0.1, 0, 1.0).refusal,
+            "position accuracy from the dock marker 0.060 m, 0.050 m needed");
+}
+
+TEST_F(FilterTest, TheDockFollowerStaysInTheZoneOfTheStationInItsFrame) {
+  filter_.SetMap("{}");
+  dock_ = true;
+  // The zone: 2.1 m in front of the docked pose (x negative), 0.15 m past it, 0.1 m to each side; FENCE beyond 0.6 m.
+  const auto passes = [this](double x, double y) {
+    dock_x_ = x;
+    dock_y_ = y;
+    Run(now_ + 0.1);
+    const Decision d = Cmd(Source::kDock, -0.1);
+    EXPECT_TRUE(Moves(d)) << x << ", " << y << ": " << d.refusal;
+  };
+  passes(0.1, 0);
+  passes(-2.0, -0.05);
+  passes(-0.8, 0.69);
+  passes(0.74, 0);
+  passes(-2.69, 0);
+  dock_x_ = -0.8;
+  dock_y_ = -0.75;
+  Run(now_ + 0.1);
+  const Decision d = Cmd(Source::kDock, -0.1);
+  EXPECT_EQ(d.refusal, "base_link is 0.65 m outside of the zone of the station at (-0.80, -0.75) in its frame");
+  EXPECT_TRUE(Stops(d));
+  EXPECT_EQ(filter_.Latched(), kReasonFence);
+  ASSERT_TRUE(filter_.TakeLatchRequest(now_).has_value());
+  // Past the docked pose as well.
+  ASSERT_TRUE(filter_.OnRelease(now_).allowed);
+  dock_x_ = 0.8;
+  dock_y_ = 0;
+  Run(now_ + 1.1);
+  EXPECT_EQ(Cmd(Source::kDock, -0.1).refusal,
+            "base_link is 0.65 m outside of the zone of the station at (0.80, 0.00) in its frame");
+  EXPECT_EQ(filter_.Latched(), kReasonFence);
+}
+
+TEST_F(FilterTest, TheDockFollowerDrivesAtMostSeventeenForwardsAndTwelveBackwards) {
+  dock_ = true;
+  Run(now_ + 0.1);
+  Decision d = Cmd(Source::kDock, 0.3, -0.5);
+  ASSERT_TRUE(Moves(d)) << d.refusal;
+  EXPECT_DOUBLE_EQ(d.out->linear, 0.17);
+  EXPECT_DOUBLE_EQ(d.out->angular, -0.3);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kDock, -0.3).out->linear, -0.12);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kDock, 0.16).out->linear, 0.16);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kDock, -0.11).out->linear, -0.11);
+  // A driver limit below them holds.
+  filter_.OnCapabilities(true, 0.05, 0.3);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kDock, 0.3).out->linear, 0.05);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kDock, -0.3).out->linear, -0.05);
+  // The follower in the map keeps the limit of the driver forwards.
+  filter_.OnCapabilities(true, 0.3, 0.3);
+  EXPECT_TRUE(Stops(Cmd(Source::kDock, 0)));
+  Run(now_ + 1.1);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kFollower, 0.3).out->linear, 0.3);
+}
+
+TEST_F(FilterTest, TheDockFollowerIsOneSourceAmongOthers) {
+  dock_ = true;
+  Run(now_ + 0.1);
+  ASSERT_TRUE(Moves(Cmd(Source::kFollower, 0.2)));
+  Decision d = Cmd(Source::kDock, -0.1);
+  EXPECT_TRUE(d.conflict);
+  EXPECT_EQ(d.refusal, "the follower drives");
+  EXPECT_TRUE(Stops(Cmd(Source::kStop, 0)));
+  Run(now_ + 1.1);
+  ASSERT_TRUE(Moves(Cmd(Source::kDock, -0.1))) << filter_.LastRefusal();
+  d = Cmd(Source::kTeleop, 0.2);
+  EXPECT_TRUE(d.conflict);
+  EXPECT_EQ(d.refusal, "the dock follower drives");
+  // An emergency stops it once, and it has to arm again like any source.
+  const int stops = stops_;
+  hw_emergency_ = true;
+  Run(now_ + 0.2);
+  EXPECT_EQ(stops_, stops + 1);
+  hw_emergency_ = false;
+  Run(now_ + 0.1);
+  EXPECT_EQ(Cmd(Source::kDock, -0.1).refusal, "waits for a zero or 1.0 s without commands");
+  EXPECT_TRUE(Stops(Cmd(Source::kDock, 0)));
+  EXPECT_TRUE(Moves(Cmd(Source::kDock, -0.1))) << filter_.LastRefusal();
+  // A tilt latches for it like for every source.
+  tilt_ = 40;
+  Run(now_ + 1.1);
+  EXPECT_EQ(filter_.Latched(), kReasonTilt);
+  EXPECT_EQ(Cmd(Source::kDock, -0.1).refusal, "emergency");
 }

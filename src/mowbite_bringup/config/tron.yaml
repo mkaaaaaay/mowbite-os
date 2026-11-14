@@ -294,8 +294,9 @@ mowbite_safety:
     # degrees off the vertical for tilt_time s, for every source and also standing; a release needs it below
     # tilt_release (the Tron mows slopes up to 31 degrees, vendor; its MCU reports a lift from about 37). FENCE: an
     # autonomous drive with base_link more than fence_margin m outside of the active mow and navigation areas and the
-    # line of the station, beyond the geofence_margin of the follower, so it acts only when the follower does not.
-    # Without an IMU sample for 0.5 s nothing moves. Assumptions until phases 6 and 7.
+    # line of the station, beyond the geofence_margin of the follower, so it acts only when the follower does not; in
+    # the station frame (docking by the marker) the line of the station alone, with no map needed. Without an IMU
+    # sample for 0.5 s nothing moves. Assumptions until phases 6 and 7.
     tilt_limit: 31.0
     tilt_time: 1.0
     tilt_release: 26.0

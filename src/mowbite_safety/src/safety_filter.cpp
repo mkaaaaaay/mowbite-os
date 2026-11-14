@@ -15,8 +15,11 @@ constexpr double kRadToDeg = 180.0 / M_PI;
 // s between two requests of a latch that hw/status does not show yet.
 constexpr double kLatchResend = 1.0;
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-// m/s the follower may reverse at most, whatever the driver allows: nothing watches behind the mower (G41).
+// m/s the follower may reverse at most in either frame, whatever the driver allows: nothing watches behind the mower
+// (G41).
 constexpr double kFollowerMaxReverse = 0.12;
+// m/s forwards in the station frame at most: the pose from the dock marker holds for 5 cm past an image (G42).
+constexpr double kDockMaxForward = 0.17;
 
 std::string Format(const char* format, double a, double b = 0, double c = 0) {
   char text[200];
@@ -32,6 +35,7 @@ const char* SourceName(Source source) {
     case Source::kTeleop: return "remote control";
     case Source::kFollower: return "follower";
     case Source::kCalibration: return "calibration";
+    case Source::kDock: return "dock follower";
   }
   return "unknown source";
 }
@@ -66,7 +70,9 @@ double TiltFromGravity(double ax, double ay, double az, double roll, double pitc
   return TiltFromMounting(ax, ay, az, roll, pitch);
 }
 
-SafetyFilter::SafetyFilter(const SafetyConfig& config) : config_(config) {
+SafetyFilter::SafetyFilter(const SafetyConfig& config)
+    : config_(config),
+      dock_zone_(StationZone(Station{}, config.station_behind, config.station_ahead, config.station_half_width)) {
 }
 
 void SafetyFilter::OnHardware(bool emergency, uint32_t reason, double now) {
@@ -102,6 +108,10 @@ void SafetyFilter::OnTilt(double tilt_deg, double now) {
 
 void SafetyFilter::OnPose(double x, double y, double accuracy, bool heading_valid, double now) {
   pose_ = Pose{x, y, accuracy, heading_valid, now};
+}
+
+void SafetyFilter::OnDockPose(double x, double y, double accuracy, bool heading_valid, double now) {
+  dock_pose_ = Pose{x, y, accuracy, heading_valid, now};
 }
 
 void SafetyFilter::SetMap(const std::string& map_json) {
@@ -163,6 +173,23 @@ bool SafetyFilter::AutonomousOk(double now) const {
   return AutonomousProblem(now).empty();
 }
 
+std::string SafetyFilter::DockProblem(double now) const {
+  if (!capabilities_ || !safety_measured_) return "no safety measurement of this platform (hw/capabilities)";
+  if (!dock_pose_ || now - dock_pose_->s > config_.pose_timeout + kTimeEpsilon) {
+    return "no recent pose from the dock marker";
+  }
+  if (!(dock_pose_->accuracy <= config_.dock_max_position_accuracy)) {
+    return Format("position accuracy from the dock marker %.3f m, %.3f m needed", dock_pose_->accuracy,
+                  config_.dock_max_position_accuracy);
+  }
+  if (!dock_pose_->heading_valid) return "no heading from the dock marker";
+  return "";
+}
+
+bool SafetyFilter::DockOk(double now) const {
+  return DockProblem(now).empty();
+}
+
 double SafetyFilter::OutsideDistance(double x, double y) const {
   double closest = std::numeric_limits<double>::infinity();
   for (const auto& ring : allowed_) {
@@ -188,6 +215,14 @@ std::string SafetyFilter::FenceProblem(double x, double y) const {
   return "";
 }
 
+std::string SafetyFilter::DockFenceProblem(double x, double y) const {
+  const double outside = InsideRing(dock_zone_, x, y) ? 0.0 : DistanceToRing(dock_zone_, x, y);
+  if (outside > config_.fence_margin) {
+    return Format("base_link is %.2f m outside of the zone of the station at (%.2f, %.2f) in its frame", outside, x, y);
+  }
+  return "";
+}
+
 std::string SafetyFilter::MoveProblem(Source source, double linear, double quiet, double now, bool* conflict) {
   if (emergency_) return "emergency";
   // Backwards it would leave the strip it checked (G9: behind the mower is not watched everywhere).
@@ -205,11 +240,18 @@ std::string SafetyFilter::MoveProblem(Source source, double linear, double quiet
   }
   if (!capabilities_) return "no hw/capabilities from the driver";
   if (!ImuFresh(now)) return imu_s_ ? Format("no IMU sample for %.1f s", now - *imu_s_) : "no IMU sample yet";
-  if (source != Source::kFollower && source != Source::kCalibration) return "";
-  std::string problem = AutonomousProblem(now);
-  if (!problem.empty()) return problem;
-  // AutonomousProblem found nothing, so pose_ is there.
-  std::string fence = FenceProblem(pose_->x, pose_->y);  // NOLINT(bugprone-unchecked-optional-access)
+  std::string fence;
+  if (source == Source::kDock) {
+    std::string problem = DockProblem(now);
+    if (!problem.empty()) return problem;
+    // DockProblem found nothing, so dock_pose_ is there.
+    fence = DockFenceProblem(dock_pose_->x, dock_pose_->y);  // NOLINT(bugprone-unchecked-optional-access)
+  } else if (source == Source::kFollower || source == Source::kCalibration) {
+    std::string problem = AutonomousProblem(now);
+    if (!problem.empty()) return problem;
+    // AutonomousProblem found nothing, so pose_ is there.
+    fence = FenceProblem(pose_->x, pose_->y);  // NOLINT(bugprone-unchecked-optional-access)
+  }
   if (fence.empty()) return "";
   Latch(kReasonFence, "autonomous drive with " + fence);
   UpdateEmergency(now);
@@ -270,8 +312,10 @@ Decision SafetyFilter::OnCommand(Source source, double linear, double angular, d
   }
   owner_s_ = now;
   moving_ = source;
-  const double reverse = source == Source::kFollower ? std::min(max_linear_, kFollowerMaxReverse) : max_linear_;
-  decision.out = Twist2{std::clamp(linear, -reverse, max_linear_), std::clamp(angular, -max_angular_, max_angular_)};
+  const bool follower = source == Source::kFollower || source == Source::kDock;
+  const double forward = source == Source::kDock ? std::min(max_linear_, kDockMaxForward) : max_linear_;
+  const double reverse = follower ? std::min(max_linear_, kFollowerMaxReverse) : max_linear_;
+  decision.out = Twist2{std::clamp(linear, -reverse, forward), std::clamp(angular, -max_angular_, max_angular_)};
   return decision;
 }
 

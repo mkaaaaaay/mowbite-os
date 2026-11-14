@@ -46,6 +46,7 @@ static_assert(static_cast<uint8_t>(Source::kStop) == DriveCommand::SOURCE_STOP);
 static_assert(static_cast<uint8_t>(Source::kTeleop) == DriveCommand::SOURCE_TELEOP);
 static_assert(static_cast<uint8_t>(Source::kFollower) == DriveCommand::SOURCE_FOLLOWER);
 static_assert(static_cast<uint8_t>(Source::kCalibration) == DriveCommand::SOURCE_CALIBRATION);
+static_assert(static_cast<uint8_t>(Source::kDock) == DriveCommand::SOURCE_DOCK);
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -103,6 +104,13 @@ class SafetyNode : public rclcpp::Node {
           filter_.Call<&SafetyFilter::OnPose>(msg->x, msg->y, msg->position_accuracy, msg->heading_valid,
                                               MonotonicSeconds());
         });
+    // Published only on a platform with a dock marker; without it SOURCE_DOCK never passes.
+    dock_pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
+        "localization/dock_pose", 10, [this](const mowbite_msgs::msg::RobotPose::ConstSharedPtr& msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          filter_.Call<&SafetyFilter::OnDockPose>(msg->x, msg->y, msg->position_accuracy, msg->heading_valid,
+                                                  MonotonicSeconds());
+        });
     map_sub_ = create_subscription<std_msgs::msg::String>(
         "map/json", LatchedQos(), [this](const std_msgs::msg::String::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -146,11 +154,14 @@ class SafetyNode : public rclcpp::Node {
     config.pose_timeout = declare_parameter("pose_timeout", config.pose_timeout);
     config.hw_timeout = declare_parameter("hw_status_timeout", config.hw_timeout);
     config.max_position_accuracy = declare_parameter("max_position_accuracy", config.max_position_accuracy);
+    config.dock_max_position_accuracy =
+        declare_parameter("dock_max_position_accuracy", config.dock_max_position_accuracy);
     // Values that would let the filter pass everything or nothing keep it from starting; without it nothing moves.
     if (!(config.tilt_release > 0 && config.tilt_release < config.tilt_limit && config.tilt_limit < 90) ||
         !(config.tilt_time >= 0) || !(config.fence_margin >= 0) || !(config.imu_timeout > 0) ||
-        !(config.pose_timeout > 0) || !(config.hw_timeout > 0)) {
-      throw std::invalid_argument("mowbite_safety: tilt_release < tilt_limit < 90 and timeouts above 0 needed");
+        !(config.pose_timeout > 0) || !(config.hw_timeout > 0) || !(config.dock_max_position_accuracy > 0)) {
+      throw std::invalid_argument(
+          "mowbite_safety: tilt_release < tilt_limit < 90, timeouts and dock_max_position_accuracy above 0 needed");
     }
     RCLCPP_INFO(get_logger(), "Tilt limit %.1f deg for %.1f s, release below %.1f deg; fence %.2f m beyond the areas",
                 config.tilt_limit, config.tilt_time, config.tilt_release, config.fence_margin);
@@ -158,13 +169,13 @@ class SafetyNode : public rclcpp::Node {
   }
 
   void OnDrive(const DriveCommand& msg) {
-    if (msg.source > DriveCommand::SOURCE_CALIBRATION) {
+    if (msg.source > DriveCommand::SOURCE_DOCK) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "Drive command of unknown source %u: stopped",
                             msg.source);
     }
     // An unknown source stops like the logic.
     const Source source =
-        msg.source > DriveCommand::SOURCE_CALIBRATION ? Source::kStop : static_cast<Source>(msg.source);
+        msg.source > DriveCommand::SOURCE_DOCK ? Source::kStop : static_cast<Source>(msg.source);
     Decision decision;
     std::optional<LatchRequest> latch;
     {
@@ -312,6 +323,7 @@ class SafetyNode : public rclcpp::Node {
       status.tilt_deg = static_cast<float>(filter_.View().TiltDeg(now));
       status.fence_distance = static_cast<float>(filter_.View().FenceDistance(now));
       status.autonomous_ok = filter_.View().AutonomousOk(now);
+      status.dock_ok = filter_.View().DockOk(now);
       status.owner = static_cast<uint8_t>(filter_.View().Owner(now));
       status.refused = filter_.View().Refused();
       status.last_refusal = filter_.View().LastRefusal();
@@ -372,6 +384,7 @@ class SafetyNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_in_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr pose_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr dock_pose_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr map_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::MapStatus>::SharedPtr map_status_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;

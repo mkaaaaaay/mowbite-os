@@ -1,8 +1,9 @@
 """mowbite_safety (S2) in the whole stack of sim.launch.py: it is the only writer of hw/cmd_vel; a tilt beyond the limit
 latches TILT for remote control and drives alike and keeps it until the mower is level; an autonomous command outside
 of the map latches FENCE, remote control has no fence; a bad position refuses autonomous commands without a latch; one
-source drives at a time and a source moves after an emergency only after a zero. Some commands go straight to
-safety/drive, as from a source that misbehaves; the logic would not send them.
+source drives at a time and a source moves after an emergency only after a zero; the dock follower drives by the pose
+from the dock marker alone, at most 0.17 m/s, and latches FENCE outside of the zone of the station in its frame. Some
+commands go straight to safety/drive, as from a source that misbehaves; the logic would not send them.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_safety_filter.py
 """
@@ -59,10 +60,30 @@ class Probe(SimProbe):
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.teleop_pub = self.node.create_publisher(Twist, "bridge/teleop", 10)
         self.drive_pub = self.node.create_publisher(DriveCommand, "safety/drive", 10)
+        self.dock_pub = self.node.create_publisher(RobotPose, "localization/dock_pose", 10)
+        self.hw_cmds = []
+        self.node.create_subscription(Twist, "hw/cmd_vel", self._hw_cmd, 50)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
         self.drive_to = self.node.create_client(DriveTo, "logic/drive_to")
         self.start()
+
+    def _hw_cmd(self, msg):
+        with self.lock:
+            self.hw_cmds.append(msg.linear.x)
+
+    def dock_pose(self, x, y, seconds, accuracy=0.02):
+        """localization/dock_pose at 50 Hz for that long, as the localization sends it while the marker is seen."""
+        end = time.time() + seconds
+        while time.time() < end:
+            msg = RobotPose()
+            msg.header.frame_id = "dock"
+            msg.x, msg.y = float(x), float(y)
+            msg.heading = math.pi
+            msg.heading_valid = True
+            msg.position_accuracy = accuracy
+            self.dock_pub.publish(msg)
+            time.sleep(0.02)
 
     def logged(self, text, since=0, timeout=10.0):
         return super().logged(text, timeout, since)
@@ -263,3 +284,40 @@ class TestSafetyFilter(unittest.TestCase):
         self.assertGreater(p.moved(0.5), 0.02, "a zero does not arm the follower")
         time.sleep(1.0)
         p.send(DriveCommand.SOURCE_FOLLOWER, 0.0, 0.1)
+
+    def test_07_the_dock_follower_by_the_pose_from_the_marker(self):
+        p = self.probe
+        logs = len(p.logs)
+        # No pose from the marker yet: refused without a latch.
+        p.send(DriveCommand.SOURCE_DOCK, -0.1, 1.0)
+        self.assertTrue(p.logged("Refused the dock follower: no recent pose from the dock marker", logs))
+        self.assertFalse(p.safety.dock_ok)
+        self.assertLess(p.moved(0.5), 0.01)
+        # 0.8 m in front of the docked pose on its line: it drives, forwards at most 0.17 m/s.
+        threading.Thread(target=p.dock_pose, args=(-0.8, 0.0, 4.0), daemon=True).start()
+        self.assertTrue(p.wait(lambda: p.safety.dock_ok, 5), "no dock_ok with a pose from the marker")
+        with p.lock:
+            p.hw_cmds.clear()
+        threading.Thread(target=p.send, args=(DriveCommand.SOURCE_DOCK, 0.3, 2.0), daemon=True).start()
+        time.sleep(0.5)
+        self.assertGreater(p.moved(1.0), 0.1, "the dock follower does not move")
+        self.assertEqual(p.safety.owner, DriveCommand.SOURCE_DOCK)
+        time.sleep(1.0)
+        p.send(DriveCommand.SOURCE_DOCK, 0.0, 0.1)
+        with p.lock:
+            moving = [v for v in p.hw_cmds if v != 0]
+        self.assertTrue(moving)
+        self.assertLessEqual(max(moving), 0.17 + 1e-6)
+        time.sleep(1.5)
+        # 0.75 m beside the line of the station in its frame: FENCE.
+        since = len(p.events)
+        threading.Thread(target=p.dock_pose, args=(-0.8, 0.75, 2.0), daemon=True).start()
+        time.sleep(0.3)
+        p.send(DriveCommand.SOURCE_DOCK, -0.1, 1.0)
+        fence = p.event(since, lambda e: e["type"] == "EMERGENCY" and e["emergency"], 5)
+        self.assertIsNotNone(fence, "no emergency for a dock drive outside of the zone of the station")
+        self.assertEqual(fence["reason"], FENCE)
+        self.assertTrue(p.logged("Emergency FENCE: autonomous drive with base_link is 0.65 m outside of the zone "
+                                 "of the station", logs))
+        time.sleep(2.0)
+        self.assertTrue(p.reset())
