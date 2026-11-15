@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <memory>
 
 #include "mowbite_journal/format.h"
 
@@ -49,6 +50,12 @@ bool ReadSegment(const std::string& path, Segment* segment, std::string* error) 
       segment->problem = "cut off in a block";
       break;
     }
+    // The writer puts the size into every frame: a block header that disagrees is broken, not a reason to allocate.
+    const unsigned long long content = ZSTD_getFrameContentSize(bytes.data() + at + kBlockHeaderSize, packed_size);
+    if (content != raw_size) {
+      segment->problem = "broken block at byte " + std::to_string(at);
+      break;
+    }
     const size_t start = segment->raw.size();
     segment->raw.resize(start + raw_size);
     const size_t n = ZSTD_decompress(segment->raw.data() + start, raw_size, bytes.data() + at + kBlockHeaderSize,
@@ -71,6 +78,69 @@ bool ReadSegment(const std::string& path, Segment* segment, std::string* error) 
     segment->records.push_back({h.stream, h.method, h.t_ns, raw.data() + pos + kRecordHeaderSize, h.size});
     pos += kRecordHeaderSize + h.size;
   }
+  return true;
+}
+
+namespace {
+
+// A head carries versions and build ids, a few kB; more is a broken size.
+constexpr size_t kMaxHeadBytes = 1 << 20;
+constexpr size_t kHeadChunk = 16 * 1024;
+
+}  // namespace
+
+bool ReadSegmentHead(const std::string& path, json* head, std::string* error) {
+  auto fail = [&](const std::string& why) {
+    if (error) *error = path + ": " + why;
+    return false;
+  };
+  std::ifstream file(path, std::ios::binary);
+  if (!file) return fail("cannot open");
+  uint8_t start[kFileHeaderSize + kBlockHeaderSize];
+  file.read(reinterpret_cast<char*>(start), sizeof(start));
+  const size_t got = static_cast<size_t>(file.gcount());
+  if (got < kFileHeaderSize || std::memcmp(start, kMagic, 4) != 0) return fail("no journal segment");
+  uint32_t version;
+  std::memcpy(&version, start + 4, 4);
+  if (version != kFormatVersion) return fail("format " + std::to_string(version));
+  if (got < sizeof(start)) return fail("cut off before its first block");
+  uint32_t packed_left;
+  std::memcpy(&packed_left, start + kFileHeaderSize + 4, 4);
+
+  std::unique_ptr<ZSTD_DCtx, size_t (*)(ZSTD_DCtx*)> zstd(ZSTD_createDCtx(), ZSTD_freeDCtx);
+  if (!zstd) return fail("no zstd context");
+  std::vector<uint8_t> raw(kRecordHeaderSize);
+  std::vector<char> chunk(kHeadChunk);
+  ZSTD_outBuffer out{raw.data(), raw.size(), 0};
+  ZSTD_inBuffer in{chunk.data(), 0, 0};
+  bool sized = false;
+  for (;;) {
+    if (out.pos == out.size) {
+      if (sized) break;
+      const RecordHeader h = GetRecordHeader(raw.data());
+      if (h.stream != kJournalStream || h.method != kHead) return fail("first record is no head");
+      if (h.size > kMaxHeadBytes) return fail("head of " + std::to_string(h.size) + " bytes");
+      raw.resize(kRecordHeaderSize + h.size);
+      out = {raw.data(), raw.size(), out.pos};
+      sized = true;
+      continue;
+    }
+    if (in.pos == in.size) {
+      if (packed_left == 0) break;
+      file.read(chunk.data(), static_cast<std::streamsize>(std::min<size_t>(chunk.size(), packed_left)));
+      const size_t n = static_cast<size_t>(file.gcount());
+      if (n == 0) break;
+      packed_left -= static_cast<uint32_t>(n);
+      in = {chunk.data(), n, 0};
+    }
+    const size_t left = ZSTD_decompressStream(zstd.get(), &out, &in);
+    if (ZSTD_isError(left)) return fail("broken first block");
+    if (left == 0 && out.pos < out.size) break;
+  }
+  if (!sized || out.pos < out.size) return fail("cut off before the end of its head");
+  json value = json::from_cbor(raw.begin() + kRecordHeaderSize, raw.end(), true, false);
+  if (!value.is_object()) return fail("broken head");
+  *head = std::move(value);
   return true;
 }
 

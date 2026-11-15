@@ -14,7 +14,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
 
 # Shared, so that all components of a process write one journal.
-add_library(mowbite_journal SHARED src/journal.cpp src/reader.cpp src/replay.cpp)
+add_library(mowbite_journal SHARED src/journal.cpp src/reader.cpp src/replay.cpp src/run_index.cpp src/tar.cpp)
 target_include_directories(mowbite_journal PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -31,6 +31,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(mowbite_journal_test test/test_journal.cpp)
   target_link_libraries(mowbite_journal_test mowbite_journal)
+  ament_add_gtest(mowbite_journal_index_test test/test_run_index.cpp test/test_tar.cpp)
+  target_link_libraries(mowbite_journal_index_test mowbite_journal)
 endif()
 
 ament_export_targets(export_mowbite_journal HAS_LIBRARY_TARGET)

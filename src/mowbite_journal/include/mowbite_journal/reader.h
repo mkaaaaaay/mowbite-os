@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "mowbite_journal/codec.h"
+
 namespace mowbite_journal {
 
 struct Record {
@@ -25,6 +27,8 @@ struct Segment {
 };
 
 bool ReadSegment(const std::string& path, Segment* segment, std::string* error);
+// Only the head record of a segment, unpacked from the start of its first block.
+bool ReadSegmentHead(const std::string& path, json* head, std::string* error);
 
 // A run: the segment files of one process in their order, and whether some before the first are missing.
 struct RunFiles {

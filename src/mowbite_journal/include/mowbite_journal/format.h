@@ -32,6 +32,10 @@ enum JournalMethod : uint16_t {
   kStats = 4,
 };
 
+// The reasons of kEnd: the next segment follows, or the process ended.
+constexpr const char* kEndRotate = "rotate";
+constexpr const char* kEndExit = "exit";
+
 // A core call: [u32 size of the arguments][arguments][result][out parameters]. The view of a core after a call that
 // changed it comes as its own record.
 constexpr uint16_t kViewMethod = 0xFFFF;
