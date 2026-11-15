@@ -9,13 +9,13 @@ namespace tron {
 // A tick that lands on a deadline up to this many seconds early still counts as on time.
 constexpr double kDeadlineSlackS = 1e-6;
 
-// Timing of the release with the STOP button (G37). STOP is free for kStopReleaseFreeS before the press, held for
-// kStopReleaseHoldS and let go before kStopReleaseMaxHoldS. Free means stop 0 for at least kStopDebounceS, so a bounce
-// does not split a press.
-constexpr double kStopReleaseFreeS = 2.0;
-constexpr double kStopReleaseHoldS = 3.0;
-constexpr double kStopReleaseMaxHoldS = 10.0;
+// Timing of the release with the STOP button (G37): a short press. STOP is free for kStopReleaseFreeS before the press,
+// held for kStopReleaseHoldS and let go before kStopReleaseMaxHoldS. Free means stop 0 for at least kStopDebounceS, so
+// a bounce does not split a press.
 constexpr double kStopDebounceS = 0.1;
+constexpr double kStopReleaseFreeS = 2.0;
+constexpr double kStopReleaseHoldS = kStopDebounceS;
+constexpr double kStopReleaseMaxHoldS = 2.0;
 
 // Numbered like ButtonEvent of mowbite_msgs.
 enum class StopPress : uint8_t { kNone = 0, kHeld = 1, kLong = 2, kCanceled = 3 };
@@ -32,8 +32,9 @@ struct StopReleaseInput {
 
 // The STOP gesture without ROS: it only recognises the press, the release is up to the logic. Time is passed in
 // (monotonic seconds). A press counts only while the emergency was latched before it began (the press that latched it
-// never releases), after STOP was free for kStopReleaseFreeS with usable telemetry and an unchanged lift. Telemetry or
-// IMU going stale, lift changing, a new reason or a reopened port end it and restart the free time.
+// never releases), after STOP was free for kStopReleaseFreeS with usable telemetry and without lift rising. Telemetry
+// or IMU going stale, lift rising, a new reason or a reopened port end it and restart the free time. Lift falling is
+// the clear frame dropping the board's latch.
 class StopRelease {
  public:
   // Debounces the STOP sample of a tick; true when it begins a press.

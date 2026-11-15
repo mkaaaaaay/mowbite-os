@@ -1,8 +1,9 @@
 """Releasing the emergency with STOP at the mower (G37) in the simulation: the whole stack of sim.launch.py with the
-gesture on (stop_release of tron_mcu). While mowing, STOP pauses; the press that latched never releases, however long;
-after 2 s free a press held 3 to 10 s releases once let go, with source button, and mowing stays paused until continue.
-Too short, too long, too quick and an IMU gap release nothing. The app asking while STOP is still held gets
-STILL_ACTIVE, the gesture releases afterwards. The flags file of fake_tron plays the button.
+gesture on (stop_release of tron_mcu) and fake_tron keeping STOP until a clear frame as the Tron does, so tron_mcu clears
+it during the emergency (stop_clear_period). While mowing, STOP pauses; the press that latched never releases, however
+long; after 2 s free a short press (0.1 to 2 s) releases once let go, with source button, and mowing stays paused until
+continue. Too long, too quick and an IMU gap release nothing. The app asking while STOP is still held gets
+STILL_ACTIVE, a new short press releases afterwards. The flags file of fake_tron plays the button.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_stop_release.py
 """
@@ -29,9 +30,9 @@ STATE, FLAGS, _, _ = sim_files(WORK)
 CONFIG = os.path.join(WORK, "stop.yaml")
 # hw/button is reliable and never latched.
 BUTTON = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE, depth=10)
-# Free and held with a margin to the limits of 2, 3 and 10 s, for a loaded machine.
+# Free and held with a margin to the limits of 2, 0.1 and 2 s, for a loaded machine.
 FREE = 3.0
-HOLD = 5.0
+HOLD = 0.8
 
 LAWN = [(-0.41, -0.11), (2.59, -0.11), (2.59, 1.49), (-0.41, 1.49)]
 GARDEN = {
@@ -42,6 +43,7 @@ GARDEN = {
 
 with open(CONFIG, "w") as f:
     f.write("tron_mcu:\n  ros__parameters:\n    safety_measurement_date: \"simulation\"\n    stop_release: true\n"
+            "    stop_clear_period: 0.25\n"
             "mowbite_logic:\n  ros__parameters:\n    gps_wait_time: 2.0\n"
             # The antenna of fake_tron, as in sim.yaml, which this file replaces.
             "    geometry:\n      antenna_x: 0.098\n      antenna_y: 0.0\n")
@@ -52,6 +54,9 @@ def generate_test_description():
 
 
 class Probe(SimProbe):
+    # The board keeps STOP until a clear frame, as the Tron's MCU.
+    faults = {"stop_latches": 1}
+
     def __init__(self):
         super().__init__("stop_release_probe", state=STATE, flags=FLAGS)
         self.status = None
@@ -141,10 +146,10 @@ class TestStopRelease(unittest.TestCase):
         time.sleep(FREE)
         since, presses = len(p.events), len(p.presses)
         p.flags(stop=1)
-        held = p.press(presses, ButtonEvent.PRESS_HELD, 4.0)
-        self.assertIsNotNone(held, "no HELD after 3 s")
+        held = p.press(presses, ButtonEvent.PRESS_HELD, HOLD)
+        self.assertIsNotNone(held, "no HELD after 0.1 s")
         self.assertTrue(p.robot.emergency)
-        time.sleep(HOLD - 3.0)
+        time.sleep(0.3)
         p.flags()
         released = p.press(presses, ButtonEvent.PRESS_LONG, 2.0)
         self.assertIsNotNone(released)
@@ -163,7 +168,7 @@ class TestStopRelease(unittest.TestCase):
         p.act("mower_logic:mowing/continue")
         self.assertIsNotNone(p.event(since, "STATE", 5, state="MOWING"))
 
-    def test_04_too_short_too_long_too_quick_and_an_imu_gap_release_nothing(self):
+    def test_04_too_long_too_quick_and_an_imu_gap_release_nothing(self):
         p = self.probe
         time.sleep(2.0)
         since = len(p.events)
@@ -171,16 +176,10 @@ class TestStopRelease(unittest.TestCase):
         self.assertIsNotNone(p.event(since, "STATE", 5, state="PAUSED"))
         self.assertIsNotNone(p.event(since, "EMERGENCY", 5, emergency=True))
         since = len(p.events)
-        # Too short.
+        # Too long: held at 0.1 s, canceled at 2 s, letting go does nothing.
         time.sleep(FREE)
         presses = len(p.presses)
-        p.hold(2.0)
-        self.assertNoRelease(since, presses)
-        self.assertEqual(p.presses[presses:], [])
-        # Too long: held at 3 s, canceled at 10 s, letting go does nothing.
-        time.sleep(FREE)
-        presses = len(p.presses)
-        p.hold(11.0)
+        p.hold(3.5)
         self.assertNoRelease(since, presses)
         self.assertEqual([m.press for m in p.presses[presses:]], [ButtonEvent.PRESS_HELD, ButtonEvent.PRESS_CANCELED])
         # Too quick after the last press.
@@ -193,7 +192,7 @@ class TestStopRelease(unittest.TestCase):
         time.sleep(FREE)
         presses = len(p.presses)
         p.flags(stop=1)
-        self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_HELD, 4.0))
+        self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_HELD, HOLD))
         p.flags(stop=1, imu_off=1)
         self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_CANCELED, 2.0))
         p.flags(stop=1)
@@ -206,7 +205,7 @@ class TestStopRelease(unittest.TestCase):
         time.sleep(FREE)
         since, presses = len(p.events), len(p.presses)
         p.flags(stop=1)
-        self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_HELD, 4.0))
+        self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_HELD, HOLD))
         # The driver takes the request, but STOP is held beyond its window: the emergency stays, and the answer says so
         # with the same event, which goes out as well.
         asked = time.time()
@@ -223,7 +222,11 @@ class TestStopRelease(unittest.TestCase):
         self.assertIn("STOP", refused["bits"])
         self.assertEqual(refused["severity"], "warning")
         self.assertTrue(p.robot.emergency)
+        # Held past 2 s by now: letting go does nothing, a new short press after the free time releases.
         p.flags()
+        time.sleep(FREE)
+        presses = len(p.presses)
+        p.hold(HOLD)
         self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_LONG, 2.0))
         end = p.event(since, "EMERGENCY", 5, emergency=False)
         self.assertIsNotNone(end)

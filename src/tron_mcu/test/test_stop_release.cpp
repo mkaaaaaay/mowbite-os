@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -16,6 +17,11 @@ bool IsClear(const SubPacket& packet) {
          packet.module == static_cast<uint8_t>(Module::kSensor) && packet.payload == std::vector<uint8_t>(8, 0);
 }
 
+bool IsZeroSpeed(const SubPacket& packet) {
+  const SubPacket zero = ZeroSpeedPacket();
+  return packet.type == zero.type && packet.module == zero.module && packet.payload == zero.payload;
+}
+
 McuControlConfig GestureConfig(bool imu = false) {
   McuControlConfig config;
   config.stop_release = true;
@@ -26,7 +32,8 @@ McuControlConfig GestureConfig(bool imu = false) {
   return config;
 }
 
-// Runs the driver core in 10 ms steps with a sensor sample each, and records the STOP gestures it reports.
+// Runs the driver core in 10 ms steps with a sensor sample each, and records the STOP gestures it reports. With
+// board_keeps_ the sample shows stop and lift as the Tron's MCU does: kept after the input went, until a clear frame.
 class GestureTest : public ::testing::Test {
  protected:
   struct Event {
@@ -41,10 +48,22 @@ class GestureTest : public ::testing::Test {
   void Run(double until) {
     while (now_ < until - 1e-9) {
       now_ = ++step_ * 0.01;
-      if (feed_sensor_) control_.OnSensorInfo(sensor_, now_);
+      SensorInfo sample = sensor_;
+      if (board_keeps_) {
+        kept_stop_ = kept_stop_ || sensor_.stop;
+        kept_lift_ = kept_lift_ || sensor_.lift;
+        sample.stop = kept_stop_;
+        sample.lift = kept_lift_;
+      }
+      if (feed_sensor_) control_.OnSensorInfo(sample, now_);
       if (feed_imu_) control_.OnImu(ImuCounts{}, now_);
-      for (auto& packet : control_.Tick(now_, kWall)) {
-        if (IsClear(packet)) clears_.push_back(now_);
+      const std::vector<SubPacket> packets = control_.Tick(now_, kWall);
+      for (const auto& packet : packets) {
+        if (!IsClear(packet)) continue;
+        clears_.push_back(now_);
+        clear_ticks_.push_back(packets);
+        kept_stop_ = sensor_.stop;
+        kept_lift_ = sensor_.lift;
       }
       const StopEvent event = control_.Status(now_).stop_event;
       if (event.seq != seq_) {
@@ -79,11 +98,16 @@ class GestureTest : public ::testing::Test {
   SensorInfo sensor_;
   bool feed_sensor_ = true;
   bool feed_imu_ = false;
+  bool board_keeps_ = false;
+  bool kept_stop_ = false;
+  bool kept_lift_ = false;
   int step_ = 0;
   double now_ = 0;
   uint32_t seq_ = 0;
   std::vector<Event> events_;
   std::vector<double> clears_;
+  // The frames of each tick that sent a clear frame.
+  std::vector<std::vector<SubPacket>> clear_ticks_;
 };
 
 using PressList = std::vector<StopPress>;
@@ -98,17 +122,17 @@ TEST_F(GestureTest, ThePressThatLatchesNeverReleasesHoweverLong) {
   EXPECT_TRUE(events_.empty());
 }
 
-TEST_F(GestureTest, HeldAfterThreeSecondsLongTenthAfterLettingGo) {
+TEST_F(GestureTest, HeldAfterATenthLongATenthAfterLettingGo) {
   Run(1.0);
   Trigger(2.0);
   const double start = now_;
   sensor_.stop = 1;
-  Run(start + 2.95);
+  Run(start + 0.05);
   EXPECT_TRUE(events_.empty());
-  Run(start + 3.05);
+  Run(start + 0.15);
   ASSERT_EQ(Presses(), PressList{kHeld});
-  EXPECT_NEAR(events_[0].t, start + 3.01, 0.015);
-  Run(start + 4.0);
+  EXPECT_NEAR(events_[0].t, start + 0.11, 0.015);
+  Run(start + 1.0);
   sensor_.stop = 0;
   const double let_go = now_;
   Run(let_go + 0.5);
@@ -128,43 +152,41 @@ TEST_F(GestureTest, HeldAfterThreeSecondsLongTenthAfterLettingGo) {
 TEST_F(GestureTest, FreeTimeOfTwoSecondsCountsFromLettingGo) {
   Run(1.0);
   Trigger(1.9);
-  Press(4.0, 2.0);
+  Press(1.0, 2.0);
   EXPECT_TRUE(events_.empty());
   // Two seconds free after it: the next press counts.
-  Press(4.0);
+  Press(1.0);
   EXPECT_EQ(Presses(), (PressList{kHeld, kLong}));
 }
 
-TEST_F(GestureTest, HoldOfJustUnderThreeSecondsDoesNothing) {
+TEST_F(GestureTest, APressUnderATenthDoesNothing) {
   Run(1.0);
   Trigger();
-  Press(2.9, 2.5);
+  // The last sample with STOP at 0.09 s: not yet held.
+  Press(0.1, 2.5);
   EXPECT_TRUE(events_.empty());
-  // The last sample with STOP at 2.99 s: not yet held.
-  Press(3.0, 2.5);
-  EXPECT_TRUE(events_.empty());
-  Press(3.02);
+  Press(0.12);
   EXPECT_EQ(Presses(), (PressList{kHeld, kLong}));
 }
 
-TEST_F(GestureTest, TenSecondsCancelAndLettingGoAfterDoesNothing) {
+TEST_F(GestureTest, TwoSecondsCancelAndLettingGoAfterDoesNothing) {
   Run(1.0);
   Trigger();
   const double start = now_;
-  Press(12.0, 0.5);
+  Press(3.0, 0.5);
   ASSERT_EQ(Presses(), (PressList{kHeld, kCanceled}));
-  EXPECT_NEAR(events_[1].t, start + 10.01, 0.015);
+  EXPECT_NEAR(events_[1].t, start + 2.01, 0.015);
   // The next try needs the free time again.
   Run(now_ + 1.6);
-  Press(4.0);
+  Press(1.0);
   EXPECT_EQ(Presses(), (PressList{kHeld, kCanceled, kHeld, kLong}));
   EXPECT_TRUE(control_.Status(now_).latched);
 }
 
-TEST_F(GestureTest, LettingGoJustBeforeTenSecondsReleases) {
+TEST_F(GestureTest, LettingGoJustBeforeTwoSecondsReleases) {
   Run(1.0);
   Trigger();
-  Press(9.95);
+  Press(1.95);
   EXPECT_EQ(Presses(), (PressList{kHeld, kLong}));
 }
 
@@ -178,11 +200,11 @@ TEST_F(GestureTest, BounceUnderATenthNeitherSplitsNorCounts) {
   sensor_.stop = 0;
   Run(now_ + 0.05);
   sensor_.stop = 1;
-  Run(now_ + 2.0);
+  Run(now_ + 0.5);
   sensor_.stop = 0;
   Run(now_ + 0.08);
   sensor_.stop = 1;
-  Run(now_ + 2.0);
+  Run(now_ + 0.5);
   sensor_.stop = 0;
   Run(now_ + 0.5);
   EXPECT_EQ(Presses(), (PressList{kHeld, kLong}));
@@ -194,21 +216,21 @@ TEST_F(GestureTest, ATenthOfFreeTimeSplitsThePress) {
   Run(1.0);
   Trigger();
   sensor_.stop = 1;
-  Run(now_ + 2.0);
+  Run(now_ + 2.5);
   sensor_.stop = 0;
   Run(now_ + 0.12);
   sensor_.stop = 1;
-  Run(now_ + 2.0);
+  Run(now_ + 1.0);
   sensor_.stop = 0;
   Run(now_ + 0.5);
-  // Two presses of 2 s, the second without free time before it.
-  EXPECT_TRUE(events_.empty());
+  // A press too long, then one without free time before it.
+  EXPECT_EQ(Presses(), (PressList{kHeld, kCanceled}));
 }
 
 TEST_F(GestureTest, QuickDoublePressDoesNotCount) {
   Run(1.0);
   Trigger(0.5);
-  Press(4.0);
+  Press(1.0);
   EXPECT_TRUE(events_.empty());
 }
 
@@ -216,7 +238,7 @@ TEST_F(GestureTest, TelemetryGapEndsTheGesture) {
   Run(1.0);
   Trigger();
   sensor_.stop = 1;
-  Run(now_ + 3.5);
+  Run(now_ + 0.5);
   feed_sensor_ = false;
   Run(now_ + 1.2);
   feed_sensor_ = true;
@@ -233,17 +255,17 @@ TEST_F(GestureTest, ATelemetryGapInTheFreeTimeRestartsIt) {
   Run(now_ + 1.1);
   feed_sensor_ = true;
   Run(now_ + 1.5);
-  Press(4.0, 2.5);
+  Press(1.0, 2.5);
   EXPECT_TRUE(events_.empty());
-  Press(4.0);
+  Press(1.0);
   EXPECT_EQ(Presses(), (PressList{kHeld, kLong}));
 }
 
-TEST_F(GestureTest, LiftChangingEndsTheGestureAndRestartsTheFreeTime) {
+TEST_F(GestureTest, LiftRisingEndsTheGestureAndRestartsTheFreeTime) {
   Run(1.0);
   Trigger();
   sensor_.stop = 1;
-  Run(now_ + 3.5);
+  Run(now_ + 0.5);
   sensor_.lift = 1;
   Run(now_ + 0.3);
   sensor_.lift = 0;
@@ -251,13 +273,29 @@ TEST_F(GestureTest, LiftChangingEndsTheGestureAndRestartsTheFreeTime) {
   sensor_.stop = 0;
   Run(now_ + 1.0);
   ASSERT_EQ(Presses(), (PressList{kHeld, kCanceled}));
-  // Lifted again within the free time: that try does not count either.
+  // Lifted again: the free time counts from lift rising, a press 1.9 s after it does not count either.
   sensor_.lift = 1;
   Run(now_ + 0.2);
   sensor_.lift = 0;
-  Run(now_ + 1.9);
-  Press(4.0);
+  Run(now_ + 1.7);
+  Press(1.0);
   EXPECT_EQ(Presses(), (PressList{kHeld, kCanceled}));
+}
+
+TEST_F(GestureTest, LiftFallingKeepsTheGesture) {
+  Run(1.0);
+  sensor_.lift = 1;
+  Run(now_ + 0.5);
+  ASSERT_TRUE(control_.Status(now_).latched);
+  Run(now_ + 2.5);
+  sensor_.stop = 1;
+  Run(now_ + 0.3);
+  // The clear frame drops the lift the board kept.
+  sensor_.lift = 0;
+  Run(now_ + 0.3);
+  sensor_.stop = 0;
+  Run(now_ + 0.5);
+  EXPECT_EQ(Presses(), (PressList{kHeld, kLong}));
 }
 
 TEST_F(GestureTest, LiftKeptByTheBoardStillReleasesWithTheClearFrame) {
@@ -266,7 +304,7 @@ TEST_F(GestureTest, LiftKeptByTheBoardStillReleasesWithTheClearFrame) {
   Run(now_ + 0.5);
   ASSERT_TRUE(control_.Status(now_).latched);
   Run(now_ + 2.5);
-  Press(4.0, 0.15);
+  Press(1.0, 0.15);
   ASSERT_EQ(Presses(), (PressList{kHeld, kLong}));
   ASSERT_TRUE(control_.ReleaseEmergency(now_, events_.back().latch_count));
   Run(now_ + 0.05);
@@ -282,7 +320,7 @@ TEST_F(GestureTest, ABumperWhileHoldingEndsTheGesture) {
   Run(1.0);
   Trigger();
   sensor_.stop = 1;
-  Run(now_ + 3.5);
+  Run(now_ + 0.5);
   sensor_.bumper_left = 1;
   Run(now_ + 0.05);
   sensor_.bumper_left = 0;
@@ -296,7 +334,7 @@ TEST_F(GestureTest, AHostLatchWhileHoldingEndsTheGesture) {
   Run(1.0);
   Trigger();
   sensor_.stop = 1;
-  Run(now_ + 1.0);
+  Run(now_ + 0.05);
   control_.LatchEmergency(kReasonTilt);
   Run(now_ + 3.0);
   sensor_.stop = 0;
@@ -309,7 +347,7 @@ TEST_F(GestureTest, AReopenedPortEndsTheGesture) {
   Run(1.0);
   Trigger();
   sensor_.stop = 1;
-  Run(now_ + 3.5);
+  Run(now_ + 0.5);
   control_.OnConnected(now_);
   Run(now_ + 0.5);
   sensor_.stop = 0;
@@ -321,7 +359,7 @@ TEST_F(GestureTest, ReleasedByTheAppWhileHeldEndsCanceled) {
   Run(1.0);
   Trigger();
   sensor_.stop = 1;
-  Run(now_ + 3.5);
+  Run(now_ + 0.5);
   // The app asks while STOP is held; letting go within the window releases.
   EXPECT_TRUE(control_.ReleaseEmergency(now_, 0));
   Run(now_ + 0.5);
@@ -365,7 +403,7 @@ TEST_F(GestureImuTest, AnImuGapEndsTheGesture) {
   Run(1.0);
   Trigger();
   sensor_.stop = 1;
-  Run(now_ + 3.5);
+  Run(now_ + 0.5);
   feed_imu_ = false;
   Run(now_ + 0.6);
   feed_imu_ = true;
@@ -378,8 +416,176 @@ TEST_F(GestureImuTest, AnImuGapEndsTheGesture) {
 TEST_F(GestureImuTest, WithAFreshImuItReleases) {
   Run(1.0);
   Trigger();
-  Press(4.0);
+  Press(1.0);
   EXPECT_EQ(Presses(), (PressList{kHeld, kLong}));
+}
+
+// The Tron's MCU keeps STOP: without clear frames during the emergency no press ever shows free.
+class BoardKeepsStopTest : public GestureTest {
+ protected:
+  BoardKeepsStopTest() {
+    board_keeps_ = true;
+  }
+};
+
+TEST_F(BoardKeepsStopTest, WithoutClearFramesNothingReleases) {
+  Run(1.0);
+  Trigger();
+  Run(now_ + 3.0);
+  Press(1.0, 3.0);
+  Press(1.0);
+  EXPECT_TRUE(events_.empty());
+  EXPECT_TRUE(clears_.empty());
+  EXPECT_TRUE(control_.Status(now_).stop);
+}
+
+McuControlConfig StopClearConfig() {
+  McuControlConfig config = GestureConfig();
+  config.stop_clear_period_s = 0.25;
+  return config;
+}
+
+// STOP cleared during the emergency (G37), the mark written.
+class StopClearTest : public GestureTest {
+ protected:
+  StopClearTest() : GestureTest(StopClearConfig()) {
+    board_keeps_ = true;
+    control_.SetStopClearMark(true);
+  }
+};
+
+TEST_F(StopClearTest, AShortPressAfterTwoSecondsFreeReleases) {
+  Run(1.0);
+  Press(0.3, 1.0);
+  const double latched = 1.01;
+  ASSERT_TRUE(control_.Status(now_).latched);
+  EXPECT_TRUE(control_.Status(now_).stop);
+  EXPECT_TRUE(clears_.empty());
+  Run(now_ + 3.5);
+  // One clear stop_clear_delay_s after the latch drops the let go STOP; none while stop is not shown.
+  ASSERT_EQ(clears_.size(), 1u);
+  EXPECT_NEAR(clears_[0], latched + 1.5, 0.015);
+  EXPECT_FALSE(control_.Status(now_).stop);
+  Press(0.5, 0.6);
+  ASSERT_EQ(Presses(), (PressList{kHeld, kLong}));
+  // Held, the MCU kept stop through the clear frames; let go, the next one dropped it.
+  EXPECT_GE(clears_.size(), 3u);
+  ASSERT_TRUE(control_.ReleaseEmergency(now_, events_.back().latch_count));
+  Run(now_ + 0.05);
+  EXPECT_FALSE(control_.Status(now_).latched);
+  const size_t after_release = clears_.size();
+  Press(0.3, 3.0);
+  // A new press latches again, the clear frames start after the delay once more.
+  EXPECT_TRUE(control_.Status(now_).latched);
+  EXPECT_EQ(clears_.size(), after_release + 1);
+}
+
+TEST_F(StopClearTest, AHeldTriggerStaysShownAndNeverReleases) {
+  Run(1.0);
+  sensor_.stop = 1;
+  Run(now_ + 5.0);
+  ASSERT_GE(clears_.size(), 10u);
+  for (size_t i = 1; i < clears_.size(); i++) EXPECT_GE(clears_[i] - clears_[i - 1], 0.25 - 1e-6);
+  EXPECT_TRUE(control_.Status(now_).stop);
+  sensor_.stop = 0;
+  Run(now_ + 1.0);
+  EXPECT_FALSE(control_.Status(now_).stop);
+  EXPECT_TRUE(events_.empty());
+  EXPECT_TRUE(control_.Status(now_).latched);
+}
+
+TEST_F(StopClearTest, APressOverTwoSecondsCancels) {
+  Run(1.0);
+  Press(0.3, 4.5);
+  Press(2.5, 0.6);
+  EXPECT_EQ(Presses(), (PressList{kHeld, kCanceled}));
+  EXPECT_TRUE(control_.Status(now_).latched);
+}
+
+TEST_F(StopClearTest, TwoPressesWithinTwoSecondsReleaseNothing) {
+  Run(1.0);
+  Press(0.3, 1.6);
+  Press(0.3, 1.0);
+  Press(0.3, 1.0);
+  EXPECT_TRUE(events_.empty());
+  EXPECT_TRUE(control_.Status(now_).latched);
+}
+
+TEST_F(StopClearTest, NoClearFrameBeforeTheMarkIsWritten) {
+  control_.SetStopClearMark(false);
+  Run(1.0);
+  Press(0.3, 2.0);
+  EXPECT_TRUE(clears_.empty());
+  EXPECT_TRUE(control_.Status(now_).stop_clear_mark_wanted);
+  control_.SetStopClearMark(true);
+  Run(now_ + 0.05);
+  EXPECT_EQ(clears_.size(), 1u);
+  EXPECT_FALSE(control_.Status(now_).stop_clear_mark_wanted);
+}
+
+TEST_F(StopClearTest, NoClearFrameWhileTheBladeTurns) {
+  Run(5.5);
+  // A blade still turning after it went off latches and holds the clear frames back.
+  control_.OnBladeRpm(3000, now_);
+  Press(0.3, 3.0);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  EXPECT_TRUE(clears_.empty());
+  EXPECT_FALSE(control_.Status(now_).stop_clear_mark_wanted);
+  control_.OnBladeRpm(0, now_);
+  Run(now_ + 0.05);
+  EXPECT_EQ(clears_.size(), 1u);
+}
+
+TEST_F(StopClearTest, NoClearFrameWithStaleTelemetry) {
+  Run(1.0);
+  Press(0.3, 0.0);
+  feed_sensor_ = false;
+  Run(now_ + 3.0);
+  EXPECT_TRUE(clears_.empty());
+}
+
+TEST_F(StopClearTest, ZeroSpeedGoesBeforeTheClearAfterMotion) {
+  Run(1.0);
+  control_.OnCmdVel(0.1f, 0.0f, now_);
+  Run(now_ + 0.2);
+  ASSERT_TRUE(control_.Status(now_).moving);
+  Press(0.3, 2.0);
+  ASSERT_FALSE(clear_ticks_.empty());
+  const auto& tick = clear_ticks_.front();
+  const auto clear = std::find_if(tick.begin(), tick.end(), IsClear);
+  ASSERT_NE(clear, tick.begin());
+  EXPECT_TRUE(IsZeroSpeed(*(clear - 1)));
+}
+
+TEST_F(StopClearTest, LiftKeptByTheBoardDropsWithTheClearAndAPressReleases) {
+  Run(1.0);
+  sensor_.lift = 1;
+  Run(now_ + 0.5);
+  sensor_.lift = 0;
+  Run(now_ + 3.0);
+  // Stop is not shown: no clear frame, the board keeps lift.
+  EXPECT_TRUE(clears_.empty());
+  EXPECT_TRUE(control_.Status(now_).lift);
+  Press(0.5, 0.6);
+  ASSERT_EQ(Presses(), (PressList{kHeld, kLong}));
+  EXPECT_FALSE(control_.Status(now_).lift);
+  ASSERT_TRUE(control_.ReleaseEmergency(now_, events_.back().latch_count));
+  Run(now_ + 0.05);
+  EXPECT_FALSE(control_.Status(now_).latched);
+}
+
+TEST_F(StopClearTest, NoClearFrameWithoutTheGesture) {
+  McuControlConfig config = StopClearConfig();
+  config.stop_release = false;
+  McuControl control(config);
+  control.SetStopClearMark(true);
+  SensorInfo sensor;
+  sensor.stop = 1;
+  for (int i = 1; i <= 500; i++) {
+    control.OnSensorInfo(sensor, i * 0.01);
+    for (const auto& packet : control.Tick(i * 0.01, kWall)) EXPECT_FALSE(IsClear(packet)) << i;
+  }
+  EXPECT_TRUE(control.Status(5.0).latched);
 }
 
 // latch_count of the driver core.
@@ -429,7 +635,7 @@ TEST_F(LatchCountTest, AnImuGapCountsOnce) {
 TEST_F(LatchCountTest, AnOutdatedCountIsRefused) {
   Run(1.0);
   Trigger();
-  Press(4.0, 0.15);
+  Press(1.0, 0.15);
   ASSERT_EQ(Presses(), (PressList{kHeld, kLong}));
   const uint32_t count = events_.back().latch_count;
   // A short new press between letting go and the request.
@@ -484,7 +690,7 @@ TEST(StopRelease, CountsOnlyWhileLatchedAndFree) {
   for (int i = 0; i < 400; i++) EXPECT_EQ(tick(true, i > 0), StopPress::kNone);
   for (int i = 0; i < 210; i++) EXPECT_EQ(tick(false, true), StopPress::kNone);
   std::vector<StopPress> events;
-  for (int i = 0; i < 400; i++) {
+  for (int i = 0; i < 100; i++) {
     const StopPress press = tick(true, true);
     if (press != StopPress::kNone) events.push_back(press);
   }

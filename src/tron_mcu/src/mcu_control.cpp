@@ -171,6 +171,16 @@ void McuControl::SetHold(bool held) {
   held_ = held;
 }
 
+void McuControl::SetStopClearMark(bool written) {
+  stop_clear_mark_ = written;
+}
+
+bool McuControl::StopClearReady(double now) const {
+  return config_.stop_release && config_.stop_clear_period_s > 0 && latched_ && latched_since_s_ &&
+         now - *latched_since_s_ + kDeadlineSlackS >= config_.stop_clear_delay_s && !release_until_s_ &&
+         !blade_on_ && !blade_turning_ && !TelemetryStale(now) && !ImuStale(now) && !NoImuYet();
+}
+
 bool McuControl::Blocked(double now) const {
   return held_ || latched_ || TelemetryStale(now) || NoImuYet() || FirmwareIncompatible();
 }
@@ -317,6 +327,19 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
       release_until_s_.reset();
     }
   }
+  if (!latched_) {
+    latched_since_s_.reset();
+  } else if (!latched_since_s_) {
+    latched_since_s_ = now;
+  }
+  // STOP kept by the MCU during the emergency: cleared, so that letting go and a new press show (G37).
+  if (stop && stop_clear_mark_ && StopClearReady(now) &&
+      (!last_stop_clear_s_ || now - *last_stop_clear_s_ + kDeadlineSlackS >= config_.stop_clear_period_s)) {
+    // The MCU might pick up the last setpoint again once its latch is gone.
+    if (last_motion_s_ && now - *last_motion_s_ < config_.clear_zero_after_motion_s) out.push_back(ZeroSpeedPacket());
+    out.push_back(SensorClearPacket());
+    last_stop_clear_s_ = now;
+  }
 
   const bool blocked = Blocked(now);
   const bool dock_contact = DockContact();
@@ -440,6 +463,7 @@ McuControlStatus McuControl::Status(double now) const {
   status.held = held_;
   status.latch_count = latch_count_;
   status.stop_event = stop_event_;
+  status.stop_clear_mark_wanted = !stop_clear_mark_ && Stop(now) && StopClearReady(now);
   return status;
 }
 

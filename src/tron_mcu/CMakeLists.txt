@@ -19,7 +19,7 @@ find_package(mowbite_hold REQUIRED)
 find_package(mowbite_journal REQUIRED)
 
 # Codec, control logic and port without ROS, testable on any machine.
-add_library(tron_mcu_core STATIC src/mcu_codec.cpp src/mcu_control.cpp src/stop_release.cpp src/serial_port.cpp src/capture_dump.cpp)
+add_library(tron_mcu_core STATIC src/mcu_codec.cpp src/mcu_control.cpp src/stop_release.cpp src/stop_clear_mark.cpp src/serial_port.cpp src/capture_dump.cpp)
 target_include_directories(tron_mcu_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -48,7 +48,7 @@ install(TARGETS tron_mcu_core tron_mcu_component
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(tron_mcu_test test/test_mcu_codec.cpp test/test_mcu_control.cpp test/test_stop_release.cpp test/test_capture_dump.cpp
-                  test/test_serial_port.cpp)
+                  test/test_serial_port.cpp test/test_stop_clear_mark.cpp)
   target_link_libraries(tron_mcu_test tron_mcu_core util)
 endif()
 

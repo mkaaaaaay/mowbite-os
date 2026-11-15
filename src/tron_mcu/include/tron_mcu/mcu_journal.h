@@ -18,7 +18,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(McuControlConfig, heartbeat_period_s, cmd_vel
                                    blade_speed_percent, mow_height_mm, blade_lease_max_s, blade_off_height_mm,
                                    blade_stop_time_s, blade_still_rpm, bumper_latches_emergency, release_window_s,
                                    clear_min_interval_s, clear_zero_after_motion_s, expected_cutter_version,
-                                   expected_chassis_version, stop_release)
+                                   expected_chassis_version, stop_release, stop_clear_period_s, stop_clear_delay_s)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SensorInfo, bumper, rain, lift, stop, power_off, battery_gate, cutter_size,
                                    press_module, bumper_right, bumper_left)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ImuCounts, pitch, roll, yaw, acc, gyro)
@@ -28,7 +28,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WallClock, year, month, day, hour, minute, se
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BladeRequest, on, speed_percent, height_mm, lease_s)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SubPacket, type, module, payload)
 
-static_assert(sizeof(McuControlConfig) == 232);
+static_assert(sizeof(McuControlConfig) == 248);
 static_assert(sizeof(SensorInfo) == 10);
 static_assert(sizeof(ImuCounts) == 18);
 static_assert(sizeof(VersionInfo) == 9);
@@ -70,7 +70,7 @@ struct mowbite_journal::CoreTraits<tron::McuControl> {
                           &tron::McuControl::OnBladeRpm, &tron::McuControl::OnVersions,
                           &tron::McuControl::LatchEmergency, &tron::McuControl::ReleaseEmergency,
                           &tron::McuControl::SetBlade, &tron::McuControl::SetCharging, &tron::McuControl::OnConnected,
-                          &tron::McuControl::SetHold, &tron::McuControl::Tick);
+                          &tron::McuControl::SetHold, &tron::McuControl::Tick, &tron::McuControl::SetStopClearMark);
 };
 
 #endif  // TRON_MCU_MCU_JOURNAL_H

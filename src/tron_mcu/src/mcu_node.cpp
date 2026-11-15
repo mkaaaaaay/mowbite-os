@@ -27,6 +27,7 @@
 #include "tron_mcu/mcu_control.h"
 #include "tron_mcu/mcu_journal.h"
 #include "tron_mcu/serial_port.h"
+#include "tron_mcu/stop_clear_mark.h"
 
 namespace tron_mcu {
 
@@ -78,6 +79,8 @@ constexpr double kStandardGravity = 9.80665;
 constexpr double kReportMaxAge = 3.0;
 // hold.json is looked at this often.
 constexpr double kHoldPollS = 0.5;
+// Wait after a failed write or removal of the STOP clear mark.
+constexpr double kMarkRetryS = 1.0;
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -152,6 +155,7 @@ class McuNode : public rclcpp::Node {
     hold_watch_.emplace(declare_parameter("hold_file", ""));
     if (hold_watch_->path().empty()) RCLCPP_WARN(get_logger(), "No hold_file: an update cannot hold this driver");
     PollHold();
+    CheckStopClearMark(get_parameter("stop_clear_mark").as_string());
 
     twist_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("hw/wheel_odom", 10);
     status_pub_ = create_publisher<HardwareStatus>("hw/status", 10);
@@ -218,9 +222,19 @@ class McuNode : public rclcpp::Node {
     config.expected_cutter_version = declare_parameter("expected_cutter_version", "");
     config.expected_chassis_version = declare_parameter("expected_chassis_version", "");
     config.stop_release = declare_parameter("stop_release", false) && !read_only;
+    config.stop_clear_period_s = declare_parameter("stop_clear_period", config.stop_clear_period_s);
+    config.stop_clear_delay_s = declare_parameter("stop_clear_delay", config.stop_clear_delay_s);
+    // <data_dir>/stop-clear-mark; without it STOP is never cleared during an emergency.
+    if (declare_parameter("stop_clear_mark", "").empty() && config.stop_clear_period_s > 0) {
+      RCLCPP_WARN(get_logger(), "stop_clear_period without stop_clear_mark: STOP is not cleared during an emergency");
+      config.stop_clear_period_s = 0;
+    }
+    if (!config.stop_release) config.stop_clear_period_s = 0;
     if (config.stop_release) {
-      RCLCPP_INFO(get_logger(), "stop_release: STOP free %.1f s, then held %.1f to %.1f s, reports a release on hw/button",
-                  tron::kStopReleaseFreeS, tron::kStopReleaseHoldS, tron::kStopReleaseMaxHoldS);
+      RCLCPP_INFO(get_logger(), "stop_release: STOP free %.1f s, then pressed %.1f to %.1f s, reports a release on "
+                  "hw/button; STOP cleared during the emergency every %.2f s from %.1f s on (0: never)",
+                  tron::kStopReleaseFreeS, tron::kStopReleaseHoldS, tron::kStopReleaseMaxHoldS,
+                  config.stop_clear_period_s, config.stop_clear_delay_s);
     }
     RCLCPP_INFO(get_logger(), "allow_blade: %d, cmd_vel_timeout: %.2f s, speed_repeat_window: %.2f s, mow_height: %u "
                 "mm", config.allow_blade, config.cmd_vel_timeout_s, config.speed_repeat_window_s, config.mow_height_mm);
@@ -287,6 +301,7 @@ class McuNode : public rclcpp::Node {
           packets = control_.Call<&C::Tick>(now, LocalWallClock());
         }
         if (!read_only_) Send(packets);
+        UpdateStopClearMark(now);
         PublishButton();
       }
       // So that the logic learns of a block before a blade request it refuses, not only at the next status tick.
@@ -317,6 +332,56 @@ class McuNode : public rclcpp::Node {
       RCLCPP_INFO(get_logger(), "Hold ended: motion and blade allowed again");
     }
     hold_logged_ = view;
+  }
+
+  // A mark from before this start: STOP was cleared during an emergency the driver no longer knows of.
+  void CheckStopClearMark(const std::string& path) {
+    if (path.empty() || read_only_) return;
+    stop_clear_mark_.emplace(path);
+    std::string error;
+    switch (stop_clear_mark_->Check(error)) {
+      case tron::StopClearMark::State::kAbsent: return;
+      case tron::StopClearMark::State::kPresent:
+        mark_written_ = true;
+        control_.Call<&C::SetStopClearMark>(true);
+        RCLCPP_ERROR(get_logger(), "STOP was cleared on the MCU during an emergency before this start (%s): latched "
+                     "until released", path.c_str());
+        break;
+      case tron::StopClearMark::State::kUnknown:
+        RCLCPP_ERROR(get_logger(), "Cannot tell whether STOP was cleared during an emergency before this start (%s: "
+                     "%s): latched until released", path.c_str(), error.c_str());
+        break;
+    }
+    control_.Call<&C::LatchEmergency>(tron::kReasonHighLevel);
+  }
+
+  // The mark is on disk before the first clear frame of STOP in an emergency, and goes once it is released.
+  void UpdateStopClearMark(double now) {
+    if (!stop_clear_mark_ || now < next_mark_try_s_) return;
+    tron::McuControlStatus status;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      status = control_.View().Status(now);
+    }
+    const bool write = status.stop_clear_mark_wanted && !mark_written_;
+    const bool remove = !status.latched && mark_written_;
+    if (!write && !remove) return;
+    std::string error;
+    if (!(write ? stop_clear_mark_->Write(error) : stop_clear_mark_->Remove(error))) {
+      next_mark_try_s_ = now + kMarkRetryS;
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Cannot %s %s: %s", write ? "write" : "remove",
+                            stop_clear_mark_->path().c_str(), error.c_str());
+      return;
+    }
+    mark_written_ = write;
+    if (write) {
+      RCLCPP_INFO(get_logger(), "STOP is cleared on the MCU during this emergency (mark %s)",
+                  stop_clear_mark_->path().c_str());
+    } else {
+      RCLCPP_INFO(get_logger(), "Emergency released: mark %s removed", stop_clear_mark_->path().c_str());
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    control_.Call<&C::SetStopClearMark>(write);
   }
 
   bool BlockChanged() {
@@ -726,6 +791,10 @@ class McuNode : public rclcpp::Node {
   std::string bms_version_;
 
   std::optional<mowbite_hold::HoldWatch> hold_watch_;
+  // Only for the I/O thread after the start; empty without stop_clear_mark or read only.
+  std::optional<tron::StopClearMark> stop_clear_mark_;
+  bool mark_written_ = false;
+  double next_mark_try_s_ = 0;
   // What PollHold logged last, only for the I/O thread after the start.
   mowbite_hold::HoldView hold_logged_;
 

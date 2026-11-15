@@ -43,11 +43,12 @@ def launch_setup(context):
     # the port in the node's own section of config would win.
     # The driver reads the hold of an update itself, also without the logic and right after its own restart.
     hold_file = os.path.join(data_dir, data_store.HOLD_FILE) if data_dir else ""
+    stop_clear_mark = os.path.join(data_dir, data_store.STOP_CLEAR_MARK_FILE) if data_dir else ""
     journal = stack.journal_dir(arg("journal_dir"), data_dir, logger)
     hardware = arg("hardware")
     mcu = Node(package="tron_mcu", executable="tron_mcu_node", name="tron_mcu", namespace="/",
                parameters=[*files, {"port": arg("mcu_port"), "hold_file": hold_file, "journal_dir": journal,
-                                    "read_only": hardware == "read"}],
+                                    "stop_clear_mark": stop_clear_mark, "read_only": hardware == "read"}],
                output="screen")
     gnss = ComposableNode(
         package="tron_gnss", plugin="tron_gnss::GnssNode", name="tron_gnss",

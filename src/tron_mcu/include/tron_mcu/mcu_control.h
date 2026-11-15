@@ -58,6 +58,13 @@ struct McuControlConfig {
   std::string expected_chassis_version;
   // The STOP gesture (G37) is recognised and reported in Status; the release is up to the logic.
   bool stop_release = false;
+  // With stop_release: the MCU keeps stop after a press until a clear frame, so while the emergency is latched and the
+  // MCU shows stop, a clear frame goes out at most every stop_clear_period_s (0: never), from stop_clear_delay_s after
+  // the latch on, with the blade off and still, fresh telemetry and IMU, no release running and the mark written
+  // (SetStopClearMark). A held STOP stays shown, a let go one drops, a new press shows again. The MCU no longer locks
+  // itself in that time, the driver's latch is the lock.
+  double stop_clear_period_s = 0;
+  double stop_clear_delay_s = 1.5;
 };
 
 // Bits of the emergency reason, numbered like EmergencyReason of OpenMower.
@@ -134,6 +141,8 @@ struct McuControlStatus {
   // something counted.
   uint32_t latch_count = 0;
   StopEvent stop_event;
+  // The next clear frame for STOP waits for the mark (SetStopClearMark).
+  bool stop_clear_mark_wanted = false;
 };
 
 // Decides what goes to the MCU and when. Time is passed in (monotonic seconds), nothing here touches the port.
@@ -169,6 +178,8 @@ class McuControl {
   // The hold of an update (hold.json): motion and blade blocked like before the first IMU sample, without an
   // emergency; a moving mower gets a stop, the blade goes off. Charging goes on.
   void SetHold(bool held);
+  // Whether the mark of a STOP cleared during the emergency is on disk; without it no such clear frame goes out.
+  void SetStopClearMark(bool written);
 
   std::vector<SubPacket> Tick(double now, const WallClock& wall);
   McuControlStatus Status(double now) const;
@@ -199,6 +210,7 @@ class McuControl {
   void Latch(uint32_t reason, bool rising = false);
   void CountReason();
   void UpdateStopRelease(bool stop, bool lift, bool latched_before, double now);
+  bool StopClearReady(double now) const;
   bool Blocked(double now) const;
   bool Reported(double now) const;
   uint32_t EmergencyReason(double now) const;
@@ -248,7 +260,12 @@ class McuControl {
   bool last_bumper_ = false;
   StopRelease stop_release_;
   StopEvent stop_event_;
+  // Clear frames of a release, and those of STOP during the emergency.
   std::optional<double> last_clear_s_;
+  std::optional<double> last_stop_clear_s_;
+  // Since when the emergency is latched; empty while it is not.
+  std::optional<double> latched_since_s_;
+  bool stop_clear_mark_ = false;
 
   std::optional<BladeLease> blade_request_;
   // Setting of the last on frame, empty while the blade is off.

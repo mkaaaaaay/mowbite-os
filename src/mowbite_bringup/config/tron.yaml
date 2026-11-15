@@ -66,9 +66,15 @@ tron_mcu:
     imu_start_timeout: 2.0
     blade_stop_time: 1.5
     blade_still_rpm: 100
-    # STOP at the mower releases the emergency (G37): free 2 s, held 3 to 10 s, let go. The driver reports it on
-    # hw/button, the logic releases as for emergency.reset.
+    # STOP at the mower releases the emergency (G37): free 2 s, then a short press (0.1 to 2 s). The driver reports it
+    # on hw/button, the logic releases as for emergency.reset. The MCU keeps stop until a clear frame (measured
+    # 2026-11-15), so the gesture works only with stop_clear_period > 0: STOP cleared every stop_clear_period s during
+    # the emergency, from stop_clear_delay s after the latch on; a held STOP stays shown. The MCU no longer locks itself
+    # then: before the first such clear the driver writes data_dir/stop-clear-mark, and a start with it latches. 0 until
+    # the gesture passed its measurement on this Tron.
     stop_release: true
+    stop_clear_period: 0.0
+    stop_clear_delay: 1.5
     # Set after reading the versions of this Tron in phase 4.
     expected_cutter_version: ""
     expected_chassis_version: ""

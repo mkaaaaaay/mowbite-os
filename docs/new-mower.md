@@ -45,11 +45,15 @@ Duties:
   latches only its own bits (`kHostLatchReasons` in `mowbite_hold/restart.h`). A release waits a short window for the
   flags to drop; a new reason within it ends the window without releasing.
 - Release at the mower (optional, G37): a driver that sees every sample of its stop button may recognise the gesture
-  itself (`tron_mcu/stop_release.h`: free 2 s, held 3 to 10 s, let go) and report HELD, LONG and CANCELED on
-  `hw/button`. It never releases by itself: the logic does, like `emergency.reset`, with the `latch_count` of LONG, and
-  the driver refuses that with `LATCH_CHANGED` once another reason latched since. It then fills the
+  itself (`tron_mcu/stop_release.h`: free 2 s, then a short press of 0.1 to 2 s) and report HELD, LONG and CANCELED
+  on `hw/button`. It never releases by itself: the logic does, like `emergency.reset`, with the `latch_count` of LONG,
+  and the driver refuses that with `LATCH_CHANGED` once another reason latched since. It then fills the
   `stop_release_*` times of `hw/capabilities` (the app shows them, `system.info.stop_release`). Without it they stay 0
-  and the release goes by app only.
+  and the release goes by app only. A board that keeps its stop flag until a clear frame (the Tron) shows no second
+  press: the driver clears it during the emergency (`stop_clear_period`), so the board no longer locks itself then.
+  Before the first such clear it writes a mark in `data_dir` and removes it on the release; a start with the mark
+  latches, so a crash in that time never unlocks unseen. Measure first how the board keeps stop, bumper and lift
+  (Tron: `mowbite-measure --steps T8`).
 - Capabilities: `platform` is the same name as in the geometry file; set `gnss_receiver_time` only where
   `receiver_time_ms` of `gps/absolute_pose` is the UTC time of day of the receiver (Tron), not a clock of the board
   (xCore). `mowbite_clock` compares it with the wall clock: off by more than 60 s, date and sun count as unknown

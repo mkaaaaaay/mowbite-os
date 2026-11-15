@@ -8,7 +8,7 @@ uint8 button
 
 # STOP while the emergency is latched, after it was free for stop_release_free_s of hw/capabilities: HELD once it was
 # held for stop_release_hold_s, LONG once it was let go after that and before stop_release_max_hold_s, CANCELED when a
-# held press ends without LONG (too long, lift changed, a new reason latched, telemetry or IMU stale, released already).
+# held press ends without LONG (too long, lift rose, a new reason latched, telemetry or IMU stale, released already).
 uint8 PRESS_HELD=1
 uint8 PRESS_LONG=2
 uint8 PRESS_CANCELED=3

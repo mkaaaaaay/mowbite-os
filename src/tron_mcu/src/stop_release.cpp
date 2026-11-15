@@ -23,9 +23,9 @@ bool StopRelease::Sample(bool stop, double now) {
 }
 
 StopPress StopRelease::Update(const StopReleaseInput& input, double now) {
-  const bool lift_changed = lift_ && *lift_ != input.lift;
+  const bool lift_rose = lift_ && !*lift_ && input.lift;
   lift_ = input.lift;
-  const bool fault = !input.usable || lift_changed || input.new_reason || interrupted_;
+  const bool fault = !input.usable || lift_rose || input.new_reason || interrupted_;
   interrupted_ = false;
   const bool began = began_;
   began_ = false;
