@@ -801,6 +801,9 @@ void LogicNode::EndDrive(bool arrived, const Reason& why, uint8_t reason, uint32
   const char* name = PurposeName(drive_.purpose);
   if (arrived) {
     RCLCPP_INFO(get_logger(), "%s: done", name);
+  } else if (drive_.cancel_reason) {
+    // Stopped by the logic itself, which logged its cause where it decided.
+    RCLCPP_INFO(get_logger(), "%s ended: %s (%s)", name, why.code.c_str(), why.message.c_str());
   } else {
     RCLCPP_WARN(get_logger(), "%s ended: %s (%s)", name, why.code.c_str(), why.message.c_str());
   }
