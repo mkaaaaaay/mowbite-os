@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <random>
+#include <utility>
 
 #include "dock_scene.h"
 #include "tron_vision/dock_pose.h"
@@ -24,6 +25,17 @@ std::array<Point2, 4> Corners(const Scene& s, const SceneMarker& m) {
   const std::array<Point2, 4> px = test::CornerPixels(s, m);
   for (size_t k = 0; k < 4; k++) EXPECT_TRUE(ToRay(s.lens, px[k], rays[k]));
   return rays;
+}
+
+// The yaw spread from the corners alone, as beyond the measured range.
+PoseLimits CornersOnly() {
+  PoseLimits limits;
+  limits.measured_yaw_range = 0.0;
+  return limits;
+}
+
+double Range(const Scene& s, const MarkerPose& pose) {
+  return std::hypot(pose.x - s.mount.x, pose.y - s.mount.y, pose.z - s.mount.z);
 }
 
 // Independent corners with the same standard deviation, given in pixels.
@@ -75,9 +87,9 @@ TEST(DockPose, CovarianceGrowsWithTheCornerScatterAndTheDistance) {
   const Scene s = RearScene();
   const SceneMarker near = Behind(s, 0.3, 0.02, 10.0 * kDeg);
   const SceneMarker far = Behind(s, 0.9, 0.06, 10.0 * kDeg);
-  const MarkerPose fine = FitMarkerPose(Corners(s, near), Covariance(0.1), kFocal, s.mount, s.side, PoseLimits{});
-  const MarkerPose coarse = FitMarkerPose(Corners(s, near), Covariance(0.2), kFocal, s.mount, s.side, PoseLimits{});
-  const MarkerPose away = FitMarkerPose(Corners(s, far), Covariance(0.1), kFocal, s.mount, s.side, PoseLimits{});
+  const MarkerPose fine = FitMarkerPose(Corners(s, near), Covariance(0.1), kFocal, s.mount, s.side, CornersOnly());
+  const MarkerPose coarse = FitMarkerPose(Corners(s, near), Covariance(0.2), kFocal, s.mount, s.side, CornersOnly());
+  const MarkerPose away = FitMarkerPose(Corners(s, far), Covariance(0.1), kFocal, s.mount, s.side, CornersOnly());
   ASSERT_TRUE(fine.valid && coarse.valid && away.valid);
   for (const size_t i : {0U, 4U, 8U}) {
     EXPECT_NEAR(coarse.covariance[i] / fine.covariance[i], 4.0, 1e-3) << i;
@@ -109,7 +121,7 @@ TEST(DockPose, ReportedCovarianceMatchesTheScatterOfNoisyCorners) {
         *value += noise * kSigmaPx / kFocal;
       }
     }
-    const MarkerPose pose = FitMarkerPose(corners, Covariance(kSigmaPx), kFocal, s.mount, s.side, PoseLimits{});
+    const MarkerPose pose = FitMarkerPose(corners, Covariance(kSigmaPx), kFocal, s.mount, s.side, CornersOnly());
     ASSERT_TRUE(pose.valid && pose.yaw_valid);
     const std::array<double, 3> error = {pose.x - m.x, pose.y - m.y, pose.yaw - m.yaw};
     for (size_t i = 0; i < 3; i++) {
@@ -149,6 +161,76 @@ TEST(DockPose, YawDoesNotCountWhileItsMirrorImageFitsAsWell) {
   // And from near by even with the rough corners.
   const SceneMarker near = Behind(s, 0.3, 0.0, 25.0 * kDeg);
   EXPECT_TRUE(FitMarkerPose(Corners(s, near), Covariance(0.3), kFocal, s.mount, s.side, PoseLimits{}).yaw_valid);
+}
+
+TEST(DockPose, WithinTheMeasuredRangeTheYawHasTheMeasuredSpread) {
+  const Scene s = RearScene();
+  const PoseLimits limits;
+  for (const double distance : {0.15, 0.5, 0.8}) {
+    for (const double sigma_px : {0.02, 0.3}) {
+      const SceneMarker m = Behind(s, distance, 0.05, 15.0 * kDeg);
+      const MarkerPose corners = FitMarkerPose(Corners(s, m), Covariance(sigma_px), kFocal, s.mount, s.side,
+                                               CornersOnly());
+      const MarkerPose pose = FitMarkerPose(Corners(s, m), Covariance(sigma_px), kFocal, s.mount, s.side, limits);
+      ASSERT_TRUE(pose.valid && pose.yaw_valid) << distance << " " << sigma_px;
+      ASSERT_LE(Range(s, pose), limits.measured_yaw_range);
+      EXPECT_NEAR(std::sqrt(pose.covariance[8]), 4.0 * kDeg, 1e-12) << distance << " " << sigma_px;
+      // Position as from the corners, the correlations with the yaw kept.
+      for (const size_t i : {0U, 1U, 3U, 4U}) EXPECT_EQ(pose.covariance[i], corners.covariance[i]) << i;
+      for (const size_t i : {2U, 5U}) {
+        const size_t row = i == 2U ? 0U : 4U;
+        const auto correlation = [&](const MarkerPose& p) {
+          return p.covariance[i] / std::sqrt(p.covariance[row] * p.covariance[8]);
+        };
+        EXPECT_NEAR(correlation(pose), correlation(corners), 1e-9) << i;
+      }
+      for (const auto& [a, b] : {std::pair<size_t, size_t>{2U, 6U}, {5U, 7U}}) {
+        EXPECT_NEAR(pose.covariance[a], pose.covariance[b], 1e-9 * std::fabs(pose.covariance[a])) << a;
+      }
+      // Still a covariance: positive definite.
+      const std::array<double, 9>& c = pose.covariance;
+      const double det = c[0] * (c[4] * c[8] - c[5] * c[7]) - c[1] * (c[3] * c[8] - c[5] * c[6]) +
+                         c[2] * (c[3] * c[7] - c[4] * c[6]);
+      EXPECT_GT(c[0] * c[4] - c[1] * c[3], 0.0);
+      EXPECT_GT(det, 0.0);
+    }
+  }
+}
+
+TEST(DockPose, BeyondTheMeasuredRangeTheCornersGiveTheYawSpread) {
+  const Scene s = RearScene();
+  const SceneMarker m = Behind(s, 0.9, 0.05, 15.0 * kDeg);
+  const MarkerPose corners = FitMarkerPose(Corners(s, m), Covariance(0.05), kFocal, s.mount, s.side, CornersOnly());
+  const MarkerPose pose = FitMarkerPose(Corners(s, m), Covariance(0.05), kFocal, s.mount, s.side, PoseLimits{});
+  ASSERT_TRUE(pose.valid && pose.yaw_valid);
+  ASSERT_GT(Range(s, pose), PoseLimits{}.measured_yaw_range);
+  EXPECT_EQ(pose.covariance, corners.covariance);
+}
+
+TEST(DockPose, TheRangeIsTheDistanceFromTheCamera) {
+  // 0.84 m behind the camera, 0.2 m to the side: further than 0.85 m from it.
+  const Scene s = RearScene();
+  const SceneMarker m = Behind(s, 0.84, 0.2, 0.0);
+  const MarkerPose corners = FitMarkerPose(Corners(s, m), Covariance(0.05), kFocal, s.mount, s.side, CornersOnly());
+  const MarkerPose pose = FitMarkerPose(Corners(s, m), Covariance(0.05), kFocal, s.mount, s.side, PoseLimits{});
+  ASSERT_TRUE(pose.valid && pose.yaw_valid);
+  EXPECT_GT(Range(s, pose), 0.85);
+  EXPECT_EQ(pose.covariance[8], corners.covariance[8]);
+}
+
+TEST(DockPose, AYawThatDoesNotCountStaysWithoutSpreadWithinTheRange) {
+  // Seen from the side with rough corners the mirror image fits as well, also within the measured range.
+  const Scene s = RearScene();
+  bool seen = false;
+  for (const double sigma_px : {0.5, 1.0, 2.0, 4.0}) {
+    const SceneMarker m = Behind(s, 0.8, 0.0, 25.0 * kDeg);
+    const MarkerPose pose = FitMarkerPose(Corners(s, m), Covariance(sigma_px), kFocal, s.mount, s.side, PoseLimits{});
+    if (!pose.valid || pose.yaw_valid) continue;
+    seen = true;
+    ASSERT_LE(Range(s, pose), PoseLimits{}.measured_yaw_range);
+    for (const size_t i : {2U, 5U, 6U, 7U, 8U}) EXPECT_EQ(pose.covariance[i], 0.0) << i;
+  }
+  EXPECT_TRUE(seen) << "no corner spread made the yaw uncertain";
 }
 
 TEST(DockPose, RejectsWhatIsNoUprightSquareOfThatSide) {

@@ -275,6 +275,8 @@ void RearNode::PublishPixels(const DockReport& report, const builtin_interfaces:
                    Value("corners_px", corners),
                    Value("corner_sigma_px", Fixed(d.corner_sigma_px, "%.3f")),
                    Value("fit_error_px", Fixed(report.pose.fit_error_px, "%.3f")),
+                   Value("widen", Fixed(report.pose.widen, "%.2f")),
+                   Value("corner_yaw_sigma_deg", Fixed(report.pose.corner_yaw_sigma * 180.0 / M_PI, "%.2f")),
                    Value("edge_px", Fixed(d.edge_px)),
                    Value("white", Fixed(d.white, "%.1f")),
                    Value("black", Fixed(d.black, "%.1f")),

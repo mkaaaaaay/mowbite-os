@@ -114,8 +114,10 @@ TEST(DockMarker, ReportedCovarianceMatchesTheScatterOverNoise) {
   s.noise = 6.0;
   const SceneMarker& m = s.markers[0];
   MarkerParams params = Params();
-  // Only what the edge points show, so that the two can be compared.
+  // Only what the edge points show, so that the two can be compared; the yaw spread from the corners alone.
   params.corner_sigma_floor_px = 0.0F;
+  PoseLimits limits;
+  limits.measured_yaw_range = 0.0;
   const std::vector<float> exposed = test::Expose(s);
   constexpr int kRuns = 30;
   std::array<double, 3> sum{};
@@ -125,8 +127,7 @@ TEST(DockMarker, ReportedCovarianceMatchesTheScatterOverNoise) {
     const SceneImage image = test::Develop(exposed, s, 100 + static_cast<uint32_t>(run));
     const MarkerDetection found = DetectMarker(image.View(), s.lens, params);
     ASSERT_EQ(found.result, MarkerResult::kFound);
-    const MarkerPose pose =
-        FitMarkerPose(found.corners, found.corner_covariance, s.lens.fx, s.mount, s.side, PoseLimits{});
+    const MarkerPose pose = FitMarkerPose(found.corners, found.corner_covariance, s.lens.fx, s.mount, s.side, limits);
     ASSERT_TRUE(pose.valid && pose.yaw_valid);
     const std::array<double, 3> error = {pose.x - m.x, pose.y - m.y, pose.yaw - m.yaw};
     for (size_t i = 0; i < 3; i++) {

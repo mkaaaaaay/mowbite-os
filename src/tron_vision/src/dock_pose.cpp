@@ -254,6 +254,7 @@ MarkerPose FitMarkerPose(const std::array<Point2, 4>& corners, const std::array<
   if (!(expected > 0.0)) return pose;
   // A square that fits worse than that widens the covariance instead of hiding in it.
   const double widen = std::max(1.0, best.cost / expected);
+  pose.widen = widen;
   constexpr std::array<size_t, 3> kReported = {0, 1, 3};
   for (size_t a = 0; a < 3; a++) {
     for (size_t b = 0; b < 3; b++) {
@@ -270,12 +271,21 @@ MarkerPose FitMarkerPose(const std::array<Point2, 4>& corners, const std::array<
   pose.valid = true;
 
   const double yaw_sigma = std::sqrt(pose.covariance[8]);
+  pose.corner_yaw_sigma = yaw_sigma;
   const bool two_minima = other.ok && std::fabs(Wrap(other.q[3] - best.q[3])) > 0.5 * yaw_sigma;
   pose.yaw_valid =
       !two_minima || other.cost - best.cost >= limits.mirror_sigmas * limits.mirror_sigmas * widen * expected /
                                                    static_cast<double>(kResiduals - kUnknowns);
   if (!pose.yaw_valid) {
     for (const size_t i : {2U, 5U, 6U, 7U, 8U}) pose.covariance[i] = 0.0;
+    return pose;
+  }
+  // The yaw and its rows scaled alike keep the correlations and the covariance positive definite.
+  const double range = std::hypot(pose.x - mount.x, pose.y - mount.y, pose.z - mount.z);
+  if (range <= limits.measured_yaw_range) {
+    const double scale = limits.measured_yaw_sigma / yaw_sigma;
+    for (const size_t i : {2U, 5U, 6U, 7U}) pose.covariance[i] *= scale;
+    pose.covariance[8] = limits.measured_yaw_sigma * limits.measured_yaw_sigma;
   }
   return pose;
 }

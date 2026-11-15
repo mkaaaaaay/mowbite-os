@@ -25,6 +25,12 @@ struct PoseLimits {
   // The yaw counts only if its mirror image about the line of sight fits worse by this many standard deviations
   // of the corners.
   double mirror_sigmas = 4.0;
+  // Up to measured_yaw_range m from the camera the yaw of one image has the standard deviation measured_yaw_sigma (rad):
+  // on the Tron (2026-11-13 and -15, 0.11 to 0.85 m) the yaw was off by a fixed 3 to 4 degrees per place while the
+  // images agreed within 0.3 degrees; the corners gave 10 to 24 degrees, swinging with the light. Beyond it the
+  // corners give it. 0 m leaves it to the corners everywhere.
+  double measured_yaw_sigma = 4.0 * 3.14159265358979323846 / 180.0;
+  double measured_yaw_range = 0.85;
 };
 
 // Marker center and the direction its face looks in, in base_link (m, rad).
@@ -36,9 +42,13 @@ struct MarkerPose {
   double z = 0.0;
   double yaw = 0.0;
   // Of x, y, yaw, row by row, from the covariance of the corners, widened if the square fits worse than that
-  // explains; the yaw entries are 0 without yaw_valid.
+  // explains; the yaw entries are 0 without yaw_valid. Within measured_yaw_range the yaw has measured_yaw_sigma, with
+  // the correlations of the corners.
   std::array<double, 9> covariance{};
   double fit_error_px = 0.0;
+  // For the record: the factor the fit widened the covariance by, and the yaw spread (rad) the corners gave.
+  double widen = 0.0;
+  double corner_yaw_sigma = 0.0;
 };
 
 // Fits a square of the given side that hangs upright (its face contains the z axis of base_link) to the directions of
