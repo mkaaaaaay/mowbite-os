@@ -68,7 +68,11 @@ class GnssNode : public rclcpp::Node {
     config.accuracy_rtk_float_m = declare_parameter("accuracy_rtk_float", config.accuracy_rtk_float_m);
     config.accuracy_dgps_m = declare_parameter("accuracy_dgps", config.accuracy_dgps_m);
     config.accuracy_single_m = declare_parameter("accuracy_single", config.accuracy_single_m);
+    config.motion_from_fixes = declare_parameter("motion_from_fixes", config.motion_from_fixes);
     config.motion_max_age_s = declare_parameter("motion_max_age", config.motion_max_age_s);
+    config.motion_min_way_m = declare_parameter("motion_min_way", config.motion_min_way_m);
+    config.motion_max_window_s = declare_parameter("motion_max_window", config.motion_max_window_s);
+    config.motion_straight_deg = declare_parameter("motion_straight_deg", config.motion_straight_deg);
     config.max_correction_age_s = declare_parameter("max_correction_age", config.max_correction_age_s);
     max_correction_age_s_ = config.max_correction_age_s;
     tron::BoardConfig board;

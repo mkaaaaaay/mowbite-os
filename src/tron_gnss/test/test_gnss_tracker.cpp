@@ -43,9 +43,16 @@ NmeaMessage Rmc(double speed, double course, bool valid = true) {
   return m;
 }
 
+GnssConfig ReceiverMotion() {
+  GnssConfig config;
+  config.motion_from_fixes = false;
+  return config;
+}
+
+// The motion vector from speed and course of the receiver; the poses themselves do not depend on it.
 class TrackerTest : public ::testing::Test {
  protected:
-  GnssTracker tracker{GnssConfig{}, LocalFrame(52.0, 9.0, 60.0)};
+  GnssTracker tracker{ReceiverMotion(), LocalFrame(52.0, 9.0, 60.0)};
 };
 
 TEST_F(TrackerTest, FixTypesGiveSolutionAndAccuracy) {
@@ -284,6 +291,121 @@ TEST_F(TrackerTest, BoardReportGivesNoPose) {
   m.type = NmeaMessage::Type::kBoardRtk;
   m.board.on = true;
   EXPECT_FALSE(tracker.Update(m, 0));
+}
+
+// The motion vector from the RTK fixed positions at 10 Hz, as on the Tron; positions in m east and north of the datum.
+class FixMotionTest : public ::testing::Test {
+ protected:
+  static constexpr double kM = 1.0 / 111320.0;
+
+  std::optional<GnssPose> At(double east, double north, int quality = 4) {
+    utc_ += 0.1;
+    return tracker.Update(Gga(quality, 52.0 + north * kM, 9.0 + east * kM / std::cos(52.0 * M_PI / 180.0), 60.0, utc_),
+                          utc_);
+  }
+
+  // Drives from (east, north) in direction heading (rad from east) at speed for seconds; the last pose.
+  std::optional<GnssPose> Drive(double& east, double& north, double heading, double speed, double seconds,
+                                int* valid = nullptr) {
+    std::optional<GnssPose> pose;
+    for (int i = 0; i < std::lround(seconds * 10.0); i++) {
+      east += std::cos(heading) * speed * 0.1;
+      north += std::sin(heading) * speed * 0.1;
+      // The board of the Tron reports this course whatever the way.
+      tracker.Update(Rmc(speed, 285.91), utc_);
+      pose = At(east, north);
+      if (valid && pose && pose->motion_valid) (*valid)++;
+    }
+    return pose;
+  }
+
+  GnssTracker tracker{GnssConfig{}, LocalFrame(52.0, 9.0, 60.0)};
+  double utc_ = 43200.0;
+};
+
+TEST_F(FixMotionTest, TheWayGivesTheMotionNotTheCourseOfTheBoard) {
+  for (const double heading : {0.0, 0.9, M_PI / 2, 2.8, -2.0}) {
+    double e = 0.0;
+    double n = 0.0;
+    const auto pose = Drive(e, n, heading, 0.25, 3.0);
+    ASSERT_TRUE(pose && pose->motion_valid) << heading;
+    EXPECT_NEAR(std::hypot(pose->motion_east_mps, pose->motion_north_mps), 0.25, 0.005) << heading;
+    EXPECT_NEAR(std::remainder(pose->motion_heading - heading, 2.0 * M_PI), 0.0, 0.01) << heading;
+  }
+}
+
+TEST_F(FixMotionTest, NothingBeforeTheWayAndNothingStanding) {
+  double e = 0.0;
+  double n = 0.0;
+  int valid = 0;
+  // 0.09 m in 0.9 s: not yet.
+  Drive(e, n, 0.0, 0.1, 0.9, &valid);
+  EXPECT_EQ(valid, 0);
+  const auto pose = Drive(e, n, 0.0, 0.1, 0.2, &valid);
+  EXPECT_TRUE(pose && pose->motion_valid);
+  // Standing with 5 mm of noise, from 0.3 s after the stop on.
+  valid = 0;
+  for (int i = 0; i < 50; i++) {
+    const auto p = At(e + 0.005 * std::sin(i * 1.7), n + 0.005 * std::cos(i * 2.3));
+    if (i >= 3 && p && p->motion_valid) valid++;
+  }
+  EXPECT_EQ(valid, 0);
+}
+
+TEST_F(FixMotionTest, StoppingEndsTheMotionAtOnce) {
+  double e = 0.0;
+  double n = 0.0;
+  ASSERT_TRUE(Drive(e, n, 0.0, 0.25, 2.0)->motion_valid);
+  // Standing still: the window still reaches back into the drive, but its second half has no way.
+  int valid = 0;
+  for (int i = 0; i < 20; i++) {
+    const auto p = At(e, n);
+    if (i >= 3 && p && p->motion_valid) valid++;
+  }
+  EXPECT_EQ(valid, 0);
+}
+
+TEST_F(FixMotionTest, TooSlowForTheWayInTheWindowGivesNone) {
+  double e = 0.0;
+  double n = 0.0;
+  int valid = 0;
+  // 0.06 m/s: 0.09 m within the 1.5 s.
+  Drive(e, n, 0.0, 0.06, 5.0, &valid);
+  EXPECT_EQ(valid, 0);
+}
+
+TEST_F(FixMotionTest, ATurnGivesNone) {
+  // 0.25 m/s on a circle of 0.3 m: the halves of a 0.1 m way bend by about 10 degrees.
+  int valid = 0;
+  for (int i = 1; i <= 60; i++) {
+    const double angle = 0.25 * 0.1 * i / 0.3;
+    const auto pose = At(0.3 * std::sin(angle), 0.3 - 0.3 * std::cos(angle));
+    if (pose && pose->motion_valid) valid++;
+  }
+  EXPECT_EQ(valid, 0);
+}
+
+TEST_F(FixMotionTest, AFixThatIsNotRtkFixedStartsAgain) {
+  double e = 0.0;
+  double n = 0.0;
+  ASSERT_TRUE(Drive(e, n, 0.0, 0.25, 2.0)->motion_valid);
+  e += 0.025;
+  const auto floating = At(e, n, 5);
+  ASSERT_TRUE(floating);
+  EXPECT_FALSE(floating->motion_valid);
+  int valid = 0;
+  // 0.075 m of fixed positions after it: not yet.
+  Drive(e, n, 0.0, 0.25, 0.3, &valid);
+  EXPECT_EQ(valid, 0);
+  EXPECT_TRUE(Drive(e, n, 0.0, 0.25, 0.2)->motion_valid);
+}
+
+TEST_F(FixMotionTest, ReceiverCourseWhenSwitchedBack) {
+  GnssTracker receiver(ReceiverMotion(), LocalFrame(52.0, 9.0, 60.0));
+  receiver.Update(Rmc(0.25, 285.91), 0.0);
+  const auto pose = receiver.Update(Gga(4, 52.0, 9.0), 0.1);
+  ASSERT_TRUE(pose && pose->motion_valid);
+  EXPECT_NEAR(pose->motion_heading, (90.0 - 285.91) * M_PI / 180.0 + 2.0 * M_PI, 1e-9);
 }
 
 }  // namespace

@@ -2,6 +2,7 @@
 #define TRON_GNSS_GNSS_TRACKER_H
 
 #include <cstdint>
+#include <deque>
 #include <optional>
 
 #include "mowbite_gnss/geodesy.h"
@@ -21,8 +22,19 @@ struct GnssConfig {
   double accuracy_dgps_m = 1.0;
   double accuracy_single_m = 3.0;
   double accuracy_dead_reckoning_m = 5.0;
-  // Speed and course older than this are not used as motion vector.
+  // Where the motion vector comes from: the speed and course of the receiver (RMC, VTG), or the RTK fixed positions
+  // themselves. The RTK board of the Tron (LG290P, firmware 0.9.50) holds its course at one value at mowing speed
+  // (285.91 in every RMC while driving, measured 2026-11-15), so there it is the positions.
+  bool motion_from_fixes = true;
+  // Receiver: speed and course older than this are not used as motion vector.
   double motion_max_age_s = 1.0;
+  // Positions: from the newest RTK fixed position back to the latest one at least motion_min_way_m away, within
+  // motion_max_window_s, with only RTK fixed positions between; the way through the middle position has to bend by no
+  // more than motion_straight_deg, so that a turn gives no course late by half the window, and each half has to be at
+  // least a third of it, so that a start or a stop gives none.
+  double motion_min_way_m = 0.10;
+  double motion_max_window_s = 1.5;
+  double motion_straight_deg = 5.0;
   // A receiver can hold RTK fixed for a while after its corrections stop. Fixed counts as float when the corrections are
   // older than this or of unknown age.
   double max_correction_age_s = 30.0;
@@ -40,8 +52,9 @@ struct GnssPose {
   int satellites = 0;
 };
 
-// Combines position from GGA with speed and course from RMC or VTG. One pose per usable GGA whose UTC time is later
-// than the one of the GGA before, so a receiver that hangs and repeats its last sentence gives no pose.
+// Combines position from GGA with a motion vector, from the speed and course of RMC or VTG or from the RTK fixed
+// positions (motion_from_fixes). One pose per usable GGA whose UTC time is later than the one of the GGA before, so a
+// receiver that hangs and repeats its last sentence gives no pose.
 class GnssTracker {
  public:
   GnssTracker(const GnssConfig& config, const LocalFrame& frame) : config_(config), frame_(frame) {
@@ -84,11 +97,19 @@ class GnssTracker {
     double course_deg;
     double time_s;
   };
+  struct Fix {
+    double utc_s;
+    Enu position;
+  };
   void SetMotion(bool valid, const std::optional<double>& speed, const std::optional<double>& course, double now_s);
+  // The motion of the recent RTK fixed positions into pose, or nothing.
+  void MotionFromFixes(GnssPose& pose);
 
   GnssConfig config_;
   LocalFrame frame_;
   std::optional<Motion> motion_;
+  // RTK fixed positions within motion_max_window_s, oldest first.
+  std::deque<Fix> fixes_;
   std::optional<double> last_gga_utc_s_;
   uint64_t stale_gga_ = 0;
   uint64_t old_corrections_ = 0;
