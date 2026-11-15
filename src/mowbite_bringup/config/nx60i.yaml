@@ -9,6 +9,9 @@
     journal_max_mb: 64.0
     journal_max_days: 3.0
     journal_reserve_mb: 200.0
+    incidents_max_mb: 64.0
+    incidents_max_days: 10.0
+    incidents_max_days_safety: 30.0
     # No dock marker. The board reports the contact up to 1 s late, so the last part of docking reaches farther than
     # on the Tron (with contact_speed below). Assumption until "Dock YF" measures it at the station.
     marker_range: 0.0

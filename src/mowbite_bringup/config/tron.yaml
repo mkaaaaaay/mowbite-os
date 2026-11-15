@@ -17,6 +17,12 @@
     journal_max_mb: 2048.0
     journal_max_days: 14.0
     journal_reserve_mb: 1024.0
+    # Incidents (mowbite_stats) in journal_dir/incidents: hard links of the segments around a trigger, together at most
+    # incidents_max_mb (each file once, the oldest that are no safety go first), kept incidents_max_days, safety ones
+    # (emergency, crash, restart) incidents_max_days_safety.
+    incidents_max_mb: 512.0
+    incidents_max_days: 30.0
+    incidents_max_days_safety: 90.0
     # The dock marker of the rear camera (hw/dock_marker): x, y (m) and yaw (rad) of the marker in base_link of the
     # docked mower (M3b 13.11.: seen by the camera from 0.1 to 0.8 m and carried to the docked pose); it leaves
     # the image marker_blind_distance m before the docked pose (M3c, estimated) and is found up to marker_range m

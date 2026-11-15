@@ -162,7 +162,7 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal):
     # Mowing statistics and the blade hours of the parts (stats.*), for the app and the pushes of maintenance.
     stats = ComposableNode(
         package="mowbite_stats", plugin="mowbite_stats::StatsNode", name="mowbite_stats",
-        parameters=[*files, {"data_dir": data_dir}])
+        parameters=[*files, {"data_dir": data_dir}, journal_dir])
     return [localization, safety, logic, bridge, map_node, follower, ntrip, calibration, clock, schedule, stats]
 
 
