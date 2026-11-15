@@ -326,9 +326,10 @@ class TestDockMarker(unittest.TestCase):
         final = p.latest()
         self.assertTrue(good(final))
         self.assertLess(abs(final.x - x), 0.03)
-        # Without a fix it stays good up to contact_timeout + 2 s after the last one, then not.
-        self.assertTrue(p.wait(lambda: not good(p.latest()), 16), p.latest().position_accuracy)
-        self.assertGreater(time.time() - on_station, 7.0)
+        # On the contacts it stays good without a fix, also past contact_timeout + 2 s after the last one.
+        time.sleep(13.0)
+        self.assertTrue(good(p.latest()), p.latest().position_accuracy)
+        self.assertGreater(time.time() - on_station, 12.0)
 
     def test_06_a_hidden_marker_ends_good(self):
         p = self.probe
@@ -344,8 +345,9 @@ class TestDockMarker(unittest.TestCase):
             after = [(t, m) for t, m in p.poses if t >= hidden]
         lost = next((t for t, m in after if not good(m)), None)
         self.assertIsNotNone(lost)
-        # 0.05 m at 0.1 m/s, the delay of the camera and a message on its way.
-        self.assertLess(lost - hidden, 1.0)
+        # From the contacts: the blind distance and 0.05 m past it at 0.1 m/s, the delay of the camera and a message
+        # on its way.
+        self.assertLess(lost - hidden, 1.6)
         self.assertFalse([m for t, m in after if t > lost and t < hidden + 2.0 and good(m)])
 
     def test_07_faults_of_the_camera(self):
