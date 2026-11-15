@@ -106,7 +106,8 @@ class DockingSequence {
   // from the approach point, else the approach over the drivable areas.
   DockingLeg FirstLeg(double x, double y, double heading) const;
   DockingLeg Approach() const;
-  DockingLeg Out(double x, double y, double heading) const;
+  // To stop_along m from the approach point along the way in (0: to the approach point).
+  DockingLeg Out(double x, double y, double heading, double stop_along = 0.0) const;
   DockingLeg Line() const;
   // From the gate: kClose where the contact stretch is split, else kContact.
   DockingLeg AfterGate() const;

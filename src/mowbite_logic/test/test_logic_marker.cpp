@@ -707,3 +707,23 @@ TEST(LogicMarkerSeries, OneRunIsThePlainTest) {
   EXPECT_FALSE(RunEnded(events));
   Take(core, DockingLeg::Kind::kLine);
 }
+
+// Run 1 began on the line 0.3 m inside its start, where the marker gave a direction: the drive out for run 2 ends
+// there too, not at the approach point.
+TEST(LogicMarkerSeries, TheWayOutEndsWhereTheFirstRunBegan) {
+  TestCore core = Ready();
+  ASSERT_TRUE(Series(core, 2).accepted);
+  core.TakeEvents();
+  core.OnTick(100.0);
+  See(core, -0.5);
+  Take(core, DockingLeg::Kind::kOut);
+  core.OnDockPose(Pose(101.0, -0.8));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  Take(core, DockingLeg::Kind::kLine);
+  DockFrom(core, 102.0);
+  ASSERT_TRUE(Find(core.TakeEvents(), "DOCKED"));
+  EXPECT_TRUE(core.TakeChargeOff());
+  core.OnChargeOff(true, "");
+  const DockingLeg out = Take(core, DockingLeg::Kind::kOut);
+  EXPECT_NEAR(out.poses.back().x, -0.5, 0.02);
+}

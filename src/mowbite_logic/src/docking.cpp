@@ -98,11 +98,11 @@ DockingLeg DockingSequence::Approach() const {
   return leg;
 }
 
-DockingLeg DockingSequence::Out(double x, double y, double heading) const {
+DockingLeg DockingSequence::Out(double x, double y, double heading, double stop_along) const {
   // Straight along the way it faces, away from the station whichever way it faces: backwards where it faces the way
   // in. As far as the approach point lies along the line, which then steers it back onto it.
   UndockConfig out = out_;
-  out.distance = std::max(Along(x, y), kPoseSpacing);
+  out.distance = std::max(Along(x, y) - std::max(stop_along, 0.0), kPoseSpacing);
   const bool reverse = std::cos(heading - station_.heading) > 0;
   const UndockPath path = PlanLeave(x, y, heading, reverse, out, config_);
   DockingLeg leg;

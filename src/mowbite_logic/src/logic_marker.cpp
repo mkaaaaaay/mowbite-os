@@ -188,7 +188,7 @@ void LogicCore::DriveOutForNextRun() {
   test_next_run_ = true;
   marker_started_ = false;
   Notify("Docking test: out to the start of the line, then " + next);
-  SetDockingLeg(marker_legs_.Out(p.x, p.y, p.heading));
+  SetDockingLeg(marker_legs_.Out(p.x, p.y, p.heading, test_start_along_));
 }
 
 void LogicCore::NextMarkerTry() {
@@ -215,6 +215,7 @@ void LogicCore::NextMarkerTry() {
       CountDockingFailure(why, true);
       return;
     }
+    if (test_run_ <= 1) test_start_along_ = std::max(marker_legs_.Along(p.x, p.y), 0.0);
   }
   DockingLeg leg = marker_legs_.FirstLeg(p.x, p.y, p.heading);
   // In the station frame there is no way over the areas.
@@ -364,6 +365,7 @@ void LogicCore::EndMarkerDocking() {
   marker_docking_ = docking_test_ = marker_started_ = marker_untrusted_ = marker_sight_ = false;
   test_runs_ = test_run_ = 0;
   test_run_open_ = test_next_run_ = false;
+  test_start_along_ = 0.0;
   try_by_marker_ = try_by_position_ = marker_near_ = false;
   marker_.Reset();
 }

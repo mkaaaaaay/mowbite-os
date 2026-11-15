@@ -1048,6 +1048,9 @@ class LogicCore {
   int test_run_ = 0;
   bool test_run_open_ = false;
   bool test_next_run_ = false;
+  // m along the line from its start where run 1 began: the drive out for the next run ends there, where the marker
+  // gave a direction.
+  double test_start_along_ = 0.0;
   bool marker_started_ = false;
   bool marker_untrusted_ = false;
   bool marker_sight_ = false;
