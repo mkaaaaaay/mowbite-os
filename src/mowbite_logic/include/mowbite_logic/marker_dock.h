@@ -30,6 +30,9 @@ struct MarkerConfig {
   double scale_limit = 0.15;
   // Whether docking.start and going home dock by the marker (dock_guide).
   DockGuide guide = DockGuide::kNone;
+  // m of the marker in base_link of the docked mower (dock_marker, the platform's).
+  double marker_x = 0;
+  double marker_y = 0;
 };
 
 // What one message of hw/dock_marker tells the logic; time: monotonic s on arrival.
@@ -50,6 +53,8 @@ struct DockPoseSample {
   double heading = 0;
   bool heading_valid = false;
   float position_accuracy = 999;
+  // rad; 999 unknown.
+  float heading_accuracy = 999;
   double speed = 0;
 };
 
@@ -138,10 +143,18 @@ class MarkerWatch {
   double wheel_way_ = 0;
 };
 
-// Why a docking test cannot begin from base_link at (x, y) facing heading in the station frame of docking, empty if
-// it can: on the line within lateral m of it, from where the straight way out ends within lateral m of the approach
-// point, or at the approach point within lateral m, facing the way the mower faces on the station.
-std::string TestStartProblem(const DockingSequence& docking, double x, double y, double heading, double lateral);
+// m the marker lies beside the axis of base_link at (x, y) facing heading in the station frame, against where it lies
+// on the docked mower, left positive: driving straight the mower passes it that far off. The marker yaw errs by
+// degrees that stay at one place, and the station frame turns with it about the marker; this does not.
+double SideOffset(const DockingSequence& docking, const MarkerConfig& marker, double x, double y, double heading);
+
+// Why a docking test cannot begin from pose (station frame of docking), empty if it can: facing the way the mower faces
+// on the station; at the approach point, or on the line with the marker at most lateral m beside its axis
+// (SideOffset); and where the line begins (the approach point after the straight way out, or where it stands there)
+// at most lateral m plus the spread of the heading times the way from there to the marker beside the line, never more
+// than marker.cross_track: the heading of the marker counts only with its spread.
+std::string TestStartProblem(const DockingSequence& docking, const MarkerConfig& marker, const DockPoseSample& pose,
+                             double lateral);
 
 }  // namespace mowbite_logic
 

@@ -23,6 +23,13 @@ double Normalize(double angle) {
   return std::atan2(std::sin(angle), std::cos(angle));
 }
 
+// The marker in the station frame, whose origin is base_link of the docked mower.
+Point2 MarkerAt(const DockingSequence& docking, const MarkerConfig& marker) {
+  const double c = std::cos(docking.facing());
+  const double s = std::sin(docking.facing());
+  return {c * marker.marker_x - s * marker.marker_y, s * marker.marker_x + c * marker.marker_y};
+}
+
 }  // namespace
 
 DockingSequence MarkerDocking(DockConfig config, const UndockConfig& out, bool contacts_back,
@@ -131,12 +138,17 @@ void MarkerWatch::Reset() {
   *this = MarkerWatch(config_);
 }
 
-std::string TestStartProblem(const DockingSequence& docking, double x, double y, double heading, double lateral) {
-  const double along = docking.Along(x, y);
-  const double across = docking.Across(x, y);
-  // The way the mower faces on the station: the poses of the line face it.
-  const double docked = docking.Line().poses.front().heading;
-  const double off = Normalize(heading - docked);
+double SideOffset(const DockingSequence& docking, const MarkerConfig& marker, double x, double y, double heading) {
+  const Point2 at = MarkerAt(docking, marker);
+  return -std::sin(heading) * (at.x - x) + std::cos(heading) * (at.y - y) - marker.marker_y;
+}
+
+std::string TestStartProblem(const DockingSequence& docking, const MarkerConfig& marker, const DockPoseSample& pose,
+                             double lateral) {
+  const double along = docking.Along(pose.x, pose.y);
+  const double across = docking.Across(pose.x, pose.y);
+  const double off = Normalize(pose.heading - docking.facing());
+  const double side = SideOffset(docking, marker, pose.x, pose.y, pose.heading);
   char text[240];
   if (std::abs(off) >= kAtApproachHeading) {
     std::snprintf(text, sizeof(text),
@@ -145,28 +157,37 @@ std::string TestStartProblem(const DockingSequence& docking, double x, double y,
                   std::abs(off) * 180.0 / M_PI, kAtApproachHeading * 180.0 / M_PI);
     return text;
   }
-  if (std::abs(across) > lateral) {
+  // On the line it drives straight out first: the marker has to lie close to its axis. At the approach point the line
+  // begins where it stands.
+  const bool at_approach = std::abs(along) <= kAtApproach;
+  if (!at_approach && std::abs(side) > lateral) {
     std::snprintf(text, sizeof(text),
-                  "the mower stands %.2f m beside the line of the docking station, at most %.2f m allowed: place it "
-                  "straight in front of the station",
-                  std::abs(across), lateral);
+                  "the dock marker lies %.2f m beside the axis of the mower, at most %.2f m allowed: place it straight "
+                  "in front of the station",
+                  std::abs(side), lateral);
     return text;
   }
-  if (std::abs(along) <= kAtApproach) return "";
-  if (!docking.OnLine(x, y, heading)) {
+  if (!at_approach && !docking.OnLine(pose.x, pose.y, pose.heading)) {
     std::snprintf(text, sizeof(text),
                   "the mower stands %.2f m from the approach point, neither on the line nor at its start: place it "
                   "on the line in front of the docking station",
                   std::abs(along));
     return text;
   }
-  // The way out is straight along the heading, against the way in, as far as the approach point lies along the line.
-  const double end = across - std::max(along, kAtApproach) * std::sin(off);
-  if (std::abs(end) > lateral) {
+  // Where the line begins: there, or after the straight way out along the heading, against the way in, as far as the
+  // approach point lies along the line. An error of the heading moves it beside the line by the way to the marker.
+  const double begin = at_approach ? across : across - along * std::sin(off);
+  const Point2 start = docking.ApproachPoint();
+  const Point2 at = MarkerAt(docking, marker);
+  const double to_marker = std::hypot(at.x - start.x, at.y - start.y);
+  // A spread that is unknown (999, or a journal from before it) widens nothing.
+  const double spread = pose.heading_accuracy >= 0 && pose.heading_accuracy <= M_PI ? pose.heading_accuracy : 0.0;
+  const double allowed = std::min(lateral + to_marker * spread, marker.cross_track);
+  if (std::abs(begin) > allowed) {
     std::snprintf(text, sizeof(text),
-                  "driving straight out the mower would reach the approach point %.2f m beside the line, at most "
-                  "%.2f m allowed: place it straighter in front of the station",
-                  std::abs(end), lateral);
+                  "the line of the docking station would begin %.2f m beside it, at most %.2f m allowed: place the "
+                  "mower straighter in front of the station",
+                  std::abs(begin), allowed);
     return text;
   }
   return "";

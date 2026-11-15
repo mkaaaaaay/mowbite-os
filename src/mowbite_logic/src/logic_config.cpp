@@ -7,6 +7,7 @@
 #include <limits>
 #include <random>
 #include <stdexcept>
+#include <vector>
 
 #include <mowbite_hold/file_io.h>
 
@@ -83,6 +84,12 @@ LogicConfig LoadLogicConfig(rclcpp::Node& node) {
   config.marker.wait = param("marker_wait", config.marker.wait);
   config.marker.cross_track = param("marker_cross_track", config.marker.cross_track);
   config.marker.scale_limit = param("marker_scale_limit", config.marker.scale_limit);
+  const std::vector<double> marker = param("dock_marker", std::vector<double>{0.0, 0.0, 0.0});
+  if (marker.size() != 3 || !std::isfinite(marker[0]) || !std::isfinite(marker[1])) {
+    throw std::invalid_argument("dock_marker needs to be [x, y, yaw]");
+  }
+  config.marker.marker_x = marker[0];
+  config.marker.marker_y = marker[1];
   const std::string guide = param("dock_guide", std::string("none"));
   if (guide == "prefer") {
     config.marker.guide = DockGuide::kPrefer;
