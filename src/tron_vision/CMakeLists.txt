@@ -26,7 +26,7 @@ add_library(tron_vision_core STATIC src/npu_model.cpp src/model_check.cpp src/yo
   src/text_file.cpp src/preview.cpp src/h264_rtp.cpp src/rtsp_server.cpp src/h264_encoder.cpp src/h264_stream.cpp
   src/stereo_camera.cpp src/stereo_loop.cpp src/lens_model.cpp src/dock_marker.cpp src/dock_pose.cpp
   src/dock_exposure.cpp src/jpeg_luma.cpp src/rear_camera.cpp src/rear_loop.cpp src/preview_loop.cpp src/inference_worker.cpp
-  src/video_feed.cpp src/dma_frames.cpp)
+  src/video_feed.cpp src/dma_frames.cpp src/frame_recorder.cpp)
 target_include_directories(tron_vision_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -110,6 +110,7 @@ if(BUILD_TESTING)
   # The marker of the docking station on drawn images; a test of its own, it takes a while with the sanitizers.
   ament_add_gtest(tron_vision_dock_test test/test_lens_model.cpp test/test_dock_marker.cpp test/test_dock_pose.cpp
                   test/test_dock_exposure.cpp test/test_jpeg_luma.cpp test/test_rear_loop.cpp
+                  test/test_frame_recorder.cpp
                   TIMEOUT 300)
   target_link_libraries(tron_vision_dock_test tron_vision_core)
   # The stream without the Tron, for a trial by hand against a real RTSP client.

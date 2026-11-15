@@ -19,6 +19,9 @@ using mowbite_msgs::msg::DockMarker;
 // Silence of the loop thread or of the ROS thread that ends the process.
 constexpr double kWatchLimit = 2.0;
 constexpr int kMaxPattern = 0xFFFF;
+constexpr char kRecordDir[] = "/run/mowbite-os/rear-record";
+// /run is RAM; the Tron has 4 GB and /run 781 MB.
+constexpr int64_t kMaxRecordMb = 300;
 // H.264 frames in turn, so that a write never meets one the encoder may still read.
 constexpr uint32_t kVideoFrames = 3;
 
@@ -84,6 +87,32 @@ void ReadCalibration(rclcpp::Node& node, RearConfig& config) {
   }
 }
 
+// The recording lives in RAM under /run only, within kMaxRecordMb; off with record_max_mb 0. A wrong value leaves it
+// off and the marker goes on.
+void ReadRecordLimits(rclcpp::Node& node, RecordLimits& record) {
+  record.dir = node.declare_parameter("record_dir", std::string(kRecordDir));
+  const int64_t max_mb = node.declare_parameter("record_max_mb", int64_t{0});
+  record.keep_s = node.declare_parameter("record_keep_min", record.keep_s / 60.0) * 60.0;
+  record.interval_s = node.declare_parameter("record_interval_s", record.interval_s);
+  std::string wrong;
+  if (max_mb < 0 || max_mb > kMaxRecordMb) wrong = "record_max_mb is not within 0.." + std::to_string(kMaxRecordMb);
+  if (record.dir.rfind("/run/", 0) != 0 || record.dir.find("..") != std::string::npos) {
+    wrong = "record_dir " + record.dir + " is not below /run";
+  }
+  if (!(record.keep_s > 0.0) || !(record.interval_s > 0.0)) {
+    wrong = "record_keep_min and record_interval_s are not above 0";
+  }
+  if (!wrong.empty()) {
+    RCLCPP_WARN(node.get_logger(), "No recording: %s", wrong.c_str());
+    return;
+  }
+  record.max_bytes = static_cast<size_t>(max_mb) << 20;
+  if (record.max_bytes > 0) {
+    RCLCPP_INFO(node.get_logger(), "Recording to %s, at most %ld MB, %.0f min, one image per %.2f s",
+                record.dir.c_str(), static_cast<long>(max_mb), record.keep_s / 60.0, record.interval_s);
+  }
+}
+
 }  // namespace
 
 std::string DockReasonText(DockReason reason) {
@@ -131,6 +160,7 @@ RearNode::RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seam
   config.view.max_rate = declare_parameter("jpeg_max_rate", config.view.max_rate);
   const auto max_kb = static_cast<int64_t>(config.view.max_bytes / 1024);
   config.view.max_bytes = static_cast<size_t>(declare_parameter("jpeg_max_kb", max_kb)) * 1024;
+  ReadRecordLimits(*this, config.record);
 
   RearCameraConfig camera;
   camera.device = declare_parameter("device", camera.device);
@@ -329,6 +359,10 @@ void RearNode::PublishCamera() {
 }
 
 void RearNode::LogVideo() {
+  if (loop_->RecordError() != logged_record_) {
+    logged_record_ = loop_->RecordError();
+    RCLCPP_WARN(get_logger(), "%s", logged_record_.c_str());
+  }
   if (loop_->VideoError() == logged_video_) return;
   logged_video_ = loop_->VideoError();
   int suppressed = 0;

@@ -443,7 +443,9 @@ mowbite_camera:
 # Beside it the live picture of the camera, only while a viewer is there and needing no calibration; the marker goes
 # first: a request takes the camera from the viewer, and a picture never delays a measurement.
 # device, eval_rate, max_exposure_ms, first_frame_s, frame_gap_s, jpeg_max_rate, jpeg_max_kb, max_rss_mb and crash_dir:
-# the defaults of the node.
+# the defaults of the node. record_max_mb above 0 (at most 300) keeps the evaluated images with their report under
+# record_dir (below /run, in RAM), one per record_interval_s, none older than record_keep_min; off by default, for
+# offline checks set in <data_dir>/tron.yaml.
 tron_rear:
   ros__parameters:
     # fx, fy, cx, cy (px at 1920x1080), k1, k2, p1, p2, k3 (plumb_bob): the vendor's value for all Trons, until M2.

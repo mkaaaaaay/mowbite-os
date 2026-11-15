@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -536,6 +538,44 @@ TEST(RearLoop, ExposureFollowsTheMarker) {
   EXPECT_EQ(measured[0].exposure.exposure, 50);
   EXPECT_EQ(measured[0].exposure.gain, 10);
   EXPECT_EQ(measured[0].reason, DockReason::kTooBright);
+}
+
+// With a recording each evaluated image goes to it as it came, at most one per interval, with its reason and the
+// setting it was taken with; a recording that fails leaves the measurement alone.
+TEST(RearLoop, RecordsTheEvaluatedImagesWithTheirSetting) {
+  Rig rig;
+  rig.camera.jpeg = &Drawn().glowing;
+  rig.config.record.dir = rig.dir.Path() + "/rec";
+  rig.config.record.max_bytes = 50UL << 20;
+  rig.config.record.interval_s = 0.5;
+  rig.Make();
+  rig.asking = true;
+  ASSERT_TRUE(rig.RunUntil(101.6));
+  std::vector<std::string> texts;
+  for (const auto& e : std::filesystem::directory_iterator(rig.config.record.dir)) {
+    if (e.path().extension() != ".txt") continue;
+    std::ifstream in(e.path());
+    texts.emplace_back(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    std::ifstream jpg(e.path().parent_path() / (e.path().stem().string() + ".jpg"), std::ios::binary);
+    const std::vector<uint8_t> image{std::istreambuf_iterator<char>(jpg), std::istreambuf_iterator<char>()};
+    EXPECT_EQ(image, Drawn().glowing);
+  }
+  ASSERT_GE(texts.size(), 2U);
+  EXPECT_LE(texts.size(), 4U);
+  std::sort(texts.begin(), texts.end());
+  EXPECT_NE(texts[0].find("\nreason " + std::to_string(static_cast<int>(DockReason::kTooBright)) + "\n"),
+            std::string::npos)
+      << texts[0];
+  EXPECT_NE(texts[0].find("\nexposure 50\ngain 10\n"), std::string::npos) << texts[0];
+  EXPECT_NE(texts[0].find("\nmanual 1\n"), std::string::npos) << texts[0];
+  EXPECT_TRUE(rig.loop->RecordError().empty());
+
+  std::filesystem::remove_all(rig.config.record.dir);
+  rig.dir.Write("rec", "a file where the directory was");
+  const size_t before = rig.Of(DockState::kMeasuring).size();
+  ASSERT_TRUE(rig.RunUntil(102.5));
+  EXPECT_NE(rig.loop->RecordError().find("recording ended"), std::string::npos);
+  EXPECT_GE(rig.Of(DockState::kMeasuring).size(), before + 10);
 }
 
 // A setting the camera refuses for good ends the request, at the start as well as on a step of the rule.

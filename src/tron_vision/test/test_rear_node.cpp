@@ -269,6 +269,45 @@ TEST_F(RearNodeTest, RefusesWrongLimits) {
   EXPECT_THROW(RearNode node(options, rig.seams), std::invalid_argument);
 }
 
+// The recording is off by default; a wrong value of it leaves it off and the node runs.
+TEST_F(RearNodeTest, RecordingOffByDefaultAndOnlyBelowRun) {
+  struct Case {
+    std::string dir;
+    int64_t max_mb;
+    double keep_min;
+    size_t expect_bytes;
+  };
+  const std::vector<Case> cases = {
+      {"", -1, 0.0, 0},
+      {"/run/mowbite-os/rear-record", 200, 90.0, 200UL << 20},
+      {"/run/mowbite-os/rear-record", 301, 90.0, 0},
+      {"/run/mowbite-os/rear-record", -1, 90.0, 0},
+      {"/userdata/rear-record", 200, 90.0, 0},
+      {"/run/../userdata", 200, 90.0, 0},
+      {"/run/mowbite-os/rear-record", 200, 0.0, 0},
+  };
+  for (const Case& c : cases) {
+    Rig rig;
+    RecordLimits seen;
+    rig.seams.adjust = [&seen, adjust = rig.seams.adjust](RearConfig& config, RearCameraConfig& camera) {
+      adjust(config, camera);
+      seen = config.record;
+    };
+    rclcpp::NodeOptions options = rig.Options();
+    if (!c.dir.empty()) {
+      options.append_parameter_override("record_dir", c.dir);
+      options.append_parameter_override("record_max_mb", c.max_mb);
+      options.append_parameter_override("record_keep_min", c.keep_min);
+    }
+    EXPECT_NO_THROW(RearNode node(options, rig.seams)) << c.dir << " " << c.max_mb;
+    EXPECT_EQ(seen.max_bytes, c.expect_bytes) << c.dir << " " << c.max_mb << " " << c.keep_min;
+    if (c.expect_bytes > 0) {
+      EXPECT_EQ(seen.dir, c.dir);
+      EXPECT_DOUBLE_EQ(seen.keep_s, c.keep_min * 60.0);
+    }
+  }
+}
+
 // Without calibration: OFF with NOT_SET_UP at least once a second, a request does not open the camera.
 TEST_F(RearNodeTest, NotSetUpWithoutCalibration) {
   Rig rig;

@@ -64,7 +64,8 @@ RearLoop::RearLoop(RearConfig config, DockCamera& camera, CrashGuard& guard, std
       publish_(std::move(publish)),
       thermal_(config_.pause_at_c, config_.resume_below_c),
       picture_(config_.view),
-      frames_(frames) {
+      frames_(frames),
+      recorder_(config_.record) {
   if (stream != nullptr && frames != nullptr) video_ = std::make_unique<VideoFeed>(config_.video, *stream, now_);
 }
 
@@ -412,6 +413,7 @@ void RearLoop::Evaluate(const CapturedFrame& frame, double now) {
     report.reason = DockReason::kNoSignal;
     report.detail = "broken image: " + error;
     Send(report);
+    Record(frame, report);
     return;
   }
   last_good_ = now;
@@ -428,6 +430,7 @@ void RearLoop::Evaluate(const CapturedFrame& frame, double now) {
   report.detect_ms = (now_() - before_detect) * 1000.0;
   if (!manual_) {
     Send(report);
+    Record(frame, report);
     return;
   }
   const DockExposureState next = NextDockExposure(exposure_, report.detection, config_.exposure);
@@ -437,7 +440,27 @@ void RearLoop::Evaluate(const CapturedFrame& frame, double now) {
   Send(report);
   if (changed && !camera_.SetExposure(Controls(next.setting), error)) {
     Fault(DockReason::kNoSignal, "exposure: " + error);
+    return;
   }
+  Record(frame, report);
+}
+
+void RearLoop::Record(const CapturedFrame& frame, const DockReport& report) {
+  if (!recorder_.Due(report.stamp)) return;
+  const MarkerDetection& d = report.detection;
+  // One "name value" per line; reason is the number of DockReason, search_down and without_marker as after this image.
+  std::string text = "taken " + Fixed(report.stamp, "%.3f") + "\nreason " +
+                     std::to_string(static_cast<int>(report.reason)) + "\ndetail " + report.detail + "\nmanual " +
+                     (report.manual_exposure ? "1" : "0") + "\nexposure " + std::to_string(report.exposure.exposure) +
+                     "\ngain " + std::to_string(report.exposure.gain) + "\nimage_mean " + Fixed(d.image_mean, "%.1f") +
+                     "\nimage_saturated " + Fixed(d.image_saturated, "%.5f") + "\nwhite " + Fixed(d.white, "%.1f") +
+                     "\nblack " + Fixed(d.black, "%.1f") + "\nsaturated " + Fixed(d.saturated, "%.3f") + "\nside_px " +
+                     Fixed(d.side_px, "%.1f") + "\nedge_px " + Fixed(d.edge_px, "%.2f") + "\ncorner_sigma_px " +
+                     Fixed(d.corner_sigma_px, "%.3f") + "\nfit_error_px " + Fixed(report.pose.fit_error_px, "%.3f") +
+                     "\nsearch_down " + (exposure_.search_down ? "1" : "0") + "\nwithout_marker " +
+                     std::to_string(exposure_.without_marker) + "\n";
+  std::string error;
+  if (!recorder_.Write(report.stamp, frame.data, frame.bytes, text, error)) record_error_ = "recording ended: " + error;
 }
 
 void RearLoop::Fault(DockReason reason, const std::string& detail) {

@@ -93,6 +93,7 @@ class RearNode : public rclcpp::Node {
   LogGate log_gate_{60.0};
   std::string logged_;
   std::string logged_video_;
+  std::string logged_record_;
   std::atomic<int> exit_code_{0};
   std::atomic<bool> running_{true};
   std::unique_ptr<mowbite_watch::Attached> watch_;

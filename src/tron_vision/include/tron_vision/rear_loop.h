@@ -14,6 +14,7 @@
 #include "tron_vision/dock_marker.h"
 #include "tron_vision/dock_pose.h"
 #include "tron_vision/dma_frames.h"
+#include "tron_vision/frame_recorder.h"
 #include "tron_vision/h264_stream.h"
 #include "tron_vision/jpeg_luma.h"
 #include "tron_vision/lens_model.h"
@@ -103,6 +104,8 @@ struct RearConfig {
   // process, of the size and lines of the encoder settings.
   JpegScale video_scale{1, 2};
   VideoFeedConfig video;
+  // The evaluated images as they came from the camera, with the report and exposure of each, for offline checks.
+  RecordLimits record;
 };
 
 // One message of hw/dock_marker, with the pixel values of its image for the measurements.
@@ -175,6 +178,10 @@ class RearLoop {
   const std::string& VideoError() const {
     return video_error_;
   }
+  // Why the recording ended; empty while it runs or is off.
+  const std::string& RecordError() const {
+    return record_error_;
+  }
 
   int ExitCode() const {
     return exit_code_;
@@ -215,6 +222,8 @@ class RearLoop {
   // A setting of the rule in the units of the camera controls.
   ExposureSetting Controls(const ExposureSetting& rule) const;
   void Evaluate(const CapturedFrame& frame, double now);
+  // Records the image of the report when one is due, after the report and the next exposure went out.
+  void Record(const CapturedFrame& frame, const DockReport& report);
   void Fault(DockReason reason, const std::string& detail);
   void Off(double now);
   void StopCamera();
@@ -276,6 +285,8 @@ class RearLoop {
   std::unique_ptr<VideoFeed> video_;
   DmaFrames* frames_;
   std::string video_error_;
+  FrameRecorder recorder_;
+  std::string record_error_;
 };
 
 }  // namespace tron_vision
