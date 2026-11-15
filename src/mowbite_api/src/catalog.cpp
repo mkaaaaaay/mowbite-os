@@ -833,7 +833,8 @@ const std::vector<Method>& Methods() {
                Whole("size", "B", 1, kIncidentChunkBytes, "Its size at most"),
                Bool("location", "true for the archive with the place of the mower; none or false without", false)}),
        Object("result", "The piece, or error for an unknown id or an incident still collecting",
-              {Count("size", "B", "Size of the whole archive"), Count("offset", "B", "Where the piece begins"),
+              {Bool("ready", "false while the archive is made (the first call starts it): no data yet, ask again"),
+               Count("size", "B", "Size of the whole archive"), Count("offset", "B", "Where the piece begins"),
                Text("data", "The piece in base64, empty at the end"),
                Text("sha256", "sha256 of the piece"), Text("archive_sha256", "sha256 of the whole archive")}),
        ""},
@@ -1200,6 +1201,8 @@ const std::vector<SettingEntry>& LogicSettings() {
       {"dock_at_sunset", true, 0, 1, 1, "", "Whether a run started by hand goes home at sunset"},
       {"mow_height_mm", true, 0, 150, 0, "mm",
        "Cutting height from the next start of the blade, within blade_height of system.info; 0 = that of the platform"},
+      {"journal_enabled", true, 0, 1, 1, "",
+       "Whether the OS keeps a journal of its processes for incidents; a change counts from the next start"},
   };
   return settings;
 }

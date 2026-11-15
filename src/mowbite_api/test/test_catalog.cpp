@@ -522,7 +522,7 @@ TEST(Catalog, MethodsSensorsSettingsAndGeometry) {
     EXPECT_LE(setting.min, setting.def) << setting.name;
     EXPECT_LE(setting.def, setting.max) << setting.name;
   }
-  EXPECT_EQ(settings.size(), 15u);
+  EXPECT_EQ(settings.size(), 16u);
   std::set<std::string> keys;
   for (const auto& key : GeometryKeys()) {
     EXPECT_TRUE(keys.insert(key.name).second) << key.name;
