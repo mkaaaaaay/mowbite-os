@@ -180,11 +180,15 @@ process is outside this watch and stops the mower by its own timeouts.
 
 - Docker Compose like the NX60i (`docker/mower/nx60i.compose.yaml`), or a native bundle on the mower's own rootfs like
   the Tron (`platform/tron/`).
-- Map, settings and journal live in the data dir, never in a container volume.
+- Map and settings live in the data dir, never in a container volume. The journal has a folder of its own outside it
+  (`journal_dir`, a bind mount like the data dir); its incidents lie in `journal_dir/incidents`.
 - The data dir has to stay writable for the OS: while `os-session.json` or `restart-hold.json` cannot be written
   there, nothing starts from IDLE (`STORAGE_NOT_WRITABLE`, event `STORAGE`), a job already running goes on. Put it
   on storage that lasts across power cuts and is not mounted read only on errors without a way back.
-- Every log, recording and cache gets a limit in days and MB.
+- Every log, recording and cache gets a limit in days and MB. In the platform file: `journal_max_mb`,
+  `journal_max_days` for the journal and `incidents_max_mb`, `incidents_max_days`, `incidents_max_days_safety` for its
+  incidents (`tron.yaml`, `nx60i.yaml`); an incident keeps a run from its start while the run takes less than a quarter
+  of `incidents_max_mb`.
 - `mowbite-host` (`host/`, unit `mowbite-host.service` on the Tron) runs beside the OS as root, not in its bundle:
   it installs signed bundles (update.*), answers `host.restart_os` and keeps `mowbite/host/status` retained, also
   while the OS is off. It needs the broker of the OS, `python3-paho-mqtt` (1.x or 2.x), `ssh-keygen`, systemd for
