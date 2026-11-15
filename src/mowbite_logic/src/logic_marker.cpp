@@ -137,7 +137,7 @@ void LogicCore::OnDockPose(const DockPoseSample& pose) {
   }
 }
 
-Reason LogicCore::StartDockingTest(const Reason& node_problem) {
+Reason LogicCore::StartDockingTest(const Reason& node_problem, int runs) {
   Reason why = DockStartProblem();
   if (why.empty() && !MarkerSource()) {
     why = Reason("MARKER_UNAVAILABLE", "This mower has no dock marker (marker_range 0): no docking test");
@@ -152,8 +152,43 @@ Reason LogicCore::StartDockingTest(const Reason& node_problem) {
   AddEvent("DOCKING", std::move(details));
   marker_ = MarkerWatch(config_.marker);
   marker_docking_ = docking_test_ = try_by_marker_ = true;
+  test_runs_ = runs;
+  test_run_ = 1;
+  test_run_open_ = runs > 1;
+  test_next_run_ = false;
+  if (runs > 1) Notify("Docking test: " + std::to_string(runs) + " dockings one after the other, run 1");
   BeginDocking();
   return {};
+}
+
+void LogicCore::TestRunEnded(const Reason& why) {
+  if (!test_run_open_) return;
+  test_run_open_ = false;
+  json details = {{"run", test_run_}, {"of", test_runs_}, {"ok", why.empty()}};
+  if (!why.empty()) {
+    Reason run(why.code, why.message);
+    if (why.fields.contains("cause")) run.With("cause", why.fields["cause"]);
+    PutReason(&details, "DOCKING_TEST_RUN", run);
+  }
+  AddEvent("DOCKING_TEST_RUN", std::move(details));
+}
+
+void LogicCore::DriveOutForNextRun() {
+  const std::string next = "run " + std::to_string(test_run_ + 1) + " of " + std::to_string(test_runs_);
+  if (!DockPoseGood()) {
+    CountDockingFailure(Reason("dock_failed", "Docking test ended before " + next +
+                                                  ": no good pose of the marker on the contacts to drive out by")
+                            .With("cause", "MARKER_LOST"),
+                        true);
+    return;
+  }
+  const DockPoseSample& p = *marker_.pose();  // NOLINT(bugprone-unchecked-optional-access): good means there is one
+  ++test_run_;
+  test_run_open_ = true;
+  test_next_run_ = true;
+  marker_started_ = false;
+  Notify("Docking test: out to the start of the line, then " + next);
+  SetDockingLeg(marker_legs_.Out(p.x, p.y, p.heading));
 }
 
 void LogicCore::NextMarkerTry() {
@@ -327,6 +362,8 @@ Reason LogicCore::GateProblem() {
 
 void LogicCore::EndMarkerDocking() {
   marker_docking_ = docking_test_ = marker_started_ = marker_untrusted_ = marker_sight_ = false;
+  test_runs_ = test_run_ = 0;
+  test_run_open_ = test_next_run_ = false;
   try_by_marker_ = try_by_position_ = marker_near_ = false;
   marker_.Reset();
 }

@@ -321,6 +321,13 @@ CommandOutcome LogicCore::Command(const std::string& name, const json& params, c
   if (out.invalid.empty() && name == "mowing.start") {
     out.invalid = ReadStartRequest(params, &start, &out.invalid_field);
   }
+  if (out.invalid.empty() && name == "docking.test" && params.contains("runs")) {
+    const json& runs = params["runs"];
+    if (!runs.is_number_integer() || runs.get<int64_t>() < 1 || runs.get<int64_t>() > 10) {
+      out.invalid = "runs must be a whole number from 1 to 10";
+      out.invalid_field = "runs";
+    }
+  }
   if (!out.invalid.empty()) return out;
   client_ = params.is_object() ? params.value("client", "") : "";
   // Effects may go away while the command runs, events never: its events are those after the ones before it.
@@ -476,7 +483,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     }
     return StartDocking();
   }
-  if (name == "docking.test") return StartDockingTest(node_problem);
+  if (name == "docking.test") return StartDockingTest(node_problem, params.is_object() ? params.value("runs", 1) : 1);
   if (name == "recording.start") {
     if (state_ != State::kIdle) return WrongState();
     // The EMERGENCY event told already: no RECORDING_REFUSED.

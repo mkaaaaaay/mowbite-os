@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <utility>
 
 #include "mowbite_logic/direct_route.h"
 
@@ -263,6 +264,9 @@ void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
       Reason why = *docking_failure_;
       why.message += "; then driving out failed: " + reason.message;
       CountDockingFailure(why);
+    } else if (kind == DockingLeg::Kind::kOut && std::exchange(test_next_run_, false)) {
+      CountDockingFailure(Reason("dock_failed", "Docking test: driving out of the station failed: " + reason.message),
+                          true);
     } else {
       DockingTryFailed(Reason("dock_failed", std::string("Docking failed on the ") + DockingLegName(kind) + ": " +
                                                  reason.message));
@@ -281,6 +285,9 @@ void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
     case DockingLeg::Kind::kOut:
       if (docking_failure_) {
         CountDockingFailure(*docking_failure_);
+      } else if (std::exchange(test_next_run_, false)) {
+        // The next run of the series begins at the start of the line with a sight of the marker.
+        WaitForMarker(true);
       } else {
         NextDockingTry();
       }
@@ -443,7 +450,7 @@ void LogicCore::OnChargeResult(ChargeCheck::Result result) {
                     config_.charge.expected_below, check.percentage());
       const Reason why =
           Reason("NO_CHARGE_CURRENT", text).With("current", check.max_current()).With("limit", config_.charge.current);
-      if (!docking_.LastTry()) {
+      if (!docking_.LastTry() && !Series()) {
         DockingTryFailed(why);
         return;
       }
@@ -458,8 +465,10 @@ void LogicCore::OnChargeResult(ChargeCheck::Result result) {
 
 void LogicCore::CountDockingFailure(Reason why, bool last) {  // NOLINT(performance-unnecessary-value-param): may alias
   docking_failure_.reset();
-  const bool again = docking_.Failed() && !last;
+  // In a series of docking.test the first failure ends it.
+  const bool again = docking_.Failed() && !last && !Series();
   const char* type = again ? "DOCKING_RETRY" : "DOCKING_FAILED";
+  if (!again) TestRunEnded(why);
   json details = json::object();
   PutReason(&details, type, Reason(why).With("attempts", docking_.failures()).With("guide", Guide()));
   AddEvent(type, std::move(details));
@@ -531,10 +540,16 @@ void LogicCore::Docked() {
   charge_watch_.Confirm();
   AddEvent("DOCKED", {{"guide", Guide()}});
   Notify("Docked");
+  if (Series()) {
+    TestRunEnded(Reason());
+    if (test_run_ < test_runs_) return DriveOutForNextRun();
+  }
   EndDocking(Reason("STOPPED", "Docked"));
 }
 
 void LogicCore::EndDocking(const Reason& why) {
+  // A run of a series ended on its way by a stop of any kind.
+  TestRunEnded(Reason("STOPPED", why.message));
   CancelDockingLeg(why);
   docking_failure_.reset();
   docking_gps_wait_ = false;

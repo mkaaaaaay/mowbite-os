@@ -526,3 +526,184 @@ TEST(LogicMarker, DockingByTheMapIsNoDockSource) {
   ASSERT_TRUE(retry);
   EXPECT_EQ(retry->details["guide"], "position");
 }
+
+namespace {
+
+CommandOutcome Series(TestCore& core, json runs) {
+  return core.Command("docking.test", json{{"client", "app"}, {"runs", std::move(runs)}});
+}
+
+const Event* RunEnded(const std::vector<Event>& events) {
+  return Find(events, "DOCKING_TEST_RUN");
+}
+
+// From the approach point at time t the line, the close part and the contact with a charge: DOCKED at about t + 14 s,
+// the gate y beside the line. The pose on the contacts stays good unless accuracy says otherwise.
+void DockFrom(TestCore& core, double t, double y = 0.0, float accuracy = 0.01f) {
+  for (int i = 0; i <= 55; i++) core.OnDockPose(Pose(t + 0.1 * i, -0.8 + 0.01 * i, y * i / 55.0, M_PI, 0.1));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  if (y != 0.0) return;
+  Take(core, DockingLeg::Kind::kClose);
+  core.OnDockPose(Pose(t + 6.0, -0.08));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  Take(core, DockingLeg::Kind::kContact);
+  for (int i = 0; i <= 6; i++) {
+    core.OnDockPose(Pose(t + 8.0 + i, 0.0, 0.0, M_PI, 0.0, accuracy));
+    HardwareSnapshot hw = Healthy(t + 8.0 + i, true);
+    hw.battery_current = -3.0f;
+    core.OnHardwareStatus(hw);
+  }
+}
+
+// Charging off, out forwards to the approach point, and the sight of the next run there at t: on the line again.
+void OutAndSee(TestCore& core, double t) {
+  EXPECT_TRUE(core.TakeChargeOff());
+  EXPECT_FALSE(core.TakeDockingLeg());
+  core.OnChargeOff(true, "");
+  const DockingLeg out = Take(core, DockingLeg::Kind::kOut);
+  EXPECT_FALSE(out.reverse);
+  EXPECT_NEAR(out.poses.back().x, -0.8, 0.02);
+  core.OnHardwareStatus(Healthy(t - 1.0));
+  core.OnDockPose(Pose(t - 1.0, -0.8, 0.0, M_PI, 0.1));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  EXPECT_TRUE(core.TakeChargeOn());
+  // The next run begins with a sight of the marker, not with the pose from the way out.
+  EXPECT_FALSE(core.TakeDockingLeg());
+  core.OnTick(t);
+  core.OnDockMarker(Message(t + 0.4, kMeasuring, true, true));
+  core.OnDockPose(Pose(t + 0.5, -0.8));
+  Take(core, DockingLeg::Kind::kLine);
+}
+
+// A series at the approach point at 100 s, on the line.
+TestCore SeriesOnTheLine(int runs) {
+  TestCore core = Ready();
+  EXPECT_TRUE(Series(core, runs).accepted);
+  core.TakeEvents();
+  core.OnTick(100.0);
+  See(core, -0.8);
+  Take(core, DockingLeg::Kind::kLine);
+  return core;
+}
+
+}  // namespace
+
+TEST(LogicMarkerSeries, ThreeRunsOneAfterTheOther) {
+  TestCore core = SeriesOnTheLine(3);
+  for (int run = 1; run <= 3; run++) {
+    const double t = 100.0 + 30.0 * run;
+    DockFrom(core, t - 28.0);
+    const auto events = core.TakeEvents();
+    ASSERT_TRUE(Find(events, "DOCKED")) << run;
+    const Event* ended = RunEnded(events);
+    ASSERT_TRUE(ended) << run;
+    EXPECT_EQ(ended->details["run"], run);
+    EXPECT_EQ(ended->details["of"], 3);
+    EXPECT_EQ(ended->details["ok"], true);
+    EXPECT_FALSE(ended->details.contains("reason"));
+    if (run == 3) break;
+    EXPECT_EQ(core.RobotState().state, "DOCKING");
+    EXPECT_TRUE(core.MarkerWanted());
+    OutAndSee(core, t);
+  }
+  EXPECT_EQ(core.RobotState().state, "IDLE");
+  EXPECT_FALSE(core.TakeChargeOff());
+  EXPECT_FALSE(core.TakeDockingLeg());
+  EXPECT_FALSE(core.MarkerWanted());
+}
+
+TEST(LogicMarkerSeries, TheFirstFailureEndsItWithoutAnotherTry) {
+  TestCore core = SeriesOnTheLine(3);
+  DockFrom(core, 102.0);
+  core.TakeEvents();
+  OutAndSee(core, 130.0);
+  // Run 2 beside the line at the gate: out to the approach point, then the end instead of a retry.
+  DockFrom(core, 131.0, 0.03);
+  Take(core, DockingLeg::Kind::kOut);
+  core.OnDockPose(Pose(140.0, -0.8));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  const auto events = core.TakeEvents();
+  EXPECT_FALSE(Find(events, "DOCKING_RETRY"));
+  ASSERT_TRUE(Find(events, "DOCKING_FAILED"));
+  const Event* ended = RunEnded(events);
+  ASSERT_TRUE(ended);
+  EXPECT_EQ(ended->details["run"], 2);
+  EXPECT_EQ(ended->details["ok"], false);
+  EXPECT_EQ(ended->details["reason"], "dock_failed");
+  EXPECT_NE(ended->details["message"].get<std::string>().find("beside the line"), std::string::npos);
+  EXPECT_EQ(core.RobotState().state, "IDLE");
+  EXPECT_FALSE(core.TakeDockingLeg());
+}
+
+TEST(LogicMarkerSeries, WithoutAGoodPoseOnTheContactsNothingDrivesOut) {
+  TestCore core = SeriesOnTheLine(2);
+  DockFrom(core, 102.0, 0.0, 0.5f);
+  const auto events = core.TakeEvents();
+  const Event* ended = RunEnded(events);
+  ASSERT_TRUE(ended);
+  EXPECT_EQ(ended->details["ok"], true);
+  const Event* failed = Find(events, "DOCKING_FAILED");
+  ASSERT_TRUE(failed);
+  EXPECT_EQ(failed->details["cause"], "MARKER_LOST");
+  EXPECT_EQ(core.RobotState().state, "IDLE");
+  EXPECT_FALSE(core.TakeChargeOff());
+  EXPECT_FALSE(core.TakeDockingLeg());
+}
+
+TEST(LogicMarkerSeries, AnAbortOnTheWayOutEndsTheNextRun) {
+  TestCore core = SeriesOnTheLine(2);
+  DockFrom(core, 102.0);
+  core.TakeEvents();
+  ASSERT_TRUE(core.TakeChargeOff());
+  core.OnChargeOff(true, "");
+  Take(core, DockingLeg::Kind::kOut);
+  ASSERT_TRUE(core.Command("docking.abort", json{{"client", "app"}}).accepted);
+  const auto events = core.TakeEvents();
+  const Event* ended = RunEnded(events);
+  ASSERT_TRUE(ended);
+  EXPECT_EQ(ended->details["run"], 2);
+  EXPECT_EQ(ended->details["ok"], false);
+  EXPECT_EQ(ended->details["reason"], "STOPPED");
+  EXPECT_EQ(core.RobotState().state, "IDLE");
+}
+
+TEST(LogicMarkerSeries, ChargingThatStaysOnKeepsTheMowerOnTheStation) {
+  TestCore core = SeriesOnTheLine(2);
+  DockFrom(core, 102.0);
+  core.TakeEvents();
+  ASSERT_TRUE(core.TakeChargeOff());
+  core.OnChargeOff(false, "no answer");
+  EXPECT_FALSE(core.TakeDockingLeg());
+  const auto events = core.TakeEvents();
+  ASSERT_TRUE(Find(events, "DOCKING_FAILED"));
+  const Event* ended = RunEnded(events);
+  ASSERT_TRUE(ended);
+  EXPECT_EQ(ended->details["run"], 2);
+  EXPECT_EQ(ended->details["ok"], false);
+  EXPECT_EQ(core.RobotState().state, "IDLE");
+}
+
+TEST(LogicMarkerSeries, RunsFromOneToTen) {
+  for (const json& runs : {json(0), json(11), json(2.5), json("3"), json(-1)}) {
+    TestCore core = Ready();
+    const CommandOutcome out = Series(core, runs);
+    EXPECT_FALSE(out.accepted) << runs.dump();
+    EXPECT_EQ(out.invalid_field, "runs") << runs.dump();
+    EXPECT_EQ(core.RobotState().state, "IDLE");
+  }
+  TestCore core = Ready();
+  EXPECT_TRUE(Series(core, 10).accepted);
+}
+
+// One run is the docking test as without runs: retries, no DOCKING_TEST_RUN.
+TEST(LogicMarkerSeries, OneRunIsThePlainTest) {
+  TestCore core = SeriesOnTheLine(1);
+  DockFrom(core, 102.0, 0.03);
+  Take(core, DockingLeg::Kind::kOut);
+  core.OnDockPose(Pose(110.0, -0.8));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  const auto events = core.TakeEvents();
+  EXPECT_TRUE(Find(events, "DOCKING_RETRY"));
+  EXPECT_FALSE(RunEnded(events));
+  Take(core, DockingLeg::Kind::kLine);
+}

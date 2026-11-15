@@ -5,7 +5,8 @@ docks from there: DOCKING with the reason TEST, out to the approach point, the l
 blind contact and the charge, DOCKED with guide marker; every drive command reaches safety/drive as SOURCE_DOCK. A start
 with the marker beside the axis of the mower is refused where it stands, one whose marker yaw errs by 4 deg docks, a marker of the wrong size is caught at the gate (scale against the
 wheels), a marker hidden for a moment on the line stops the mower until it is back, one hidden for good ends the try
-with MARKER_LOST, a dark image with MARKER_NOT_SEEN and a camera that is off with MARKER_UNAVAILABLE.
+with MARKER_LOST, a dark image with MARKER_NOT_SEEN and a camera that is off with MARKER_UNAVAILABLE. A series of
+three runs docks three times, driving out forwards by the marker in between, with DOCKING_TEST_RUN after each.
 
 The camera errs in the direction of the marker as measured in M3b (3 to 5 deg); the limit of the pose grows with the
 distance from the station (dock_accuracy_per_m) and allows that.
@@ -98,8 +99,8 @@ class Probe(SimProbe):
         truth = self.truth()
         return -(truth["x"] + 1.0), -truth["y"], wrap(truth["yaw"] + math.pi)
 
-    def test(self):
-        answer = self.rpc("docking.test", {"client": "test"})
+    def test(self, **params):
+        answer = self.rpc("docking.test", {"client": "test", **params})
         assert answer and "result" in answer, answer
         return answer["result"]
 
@@ -246,3 +247,21 @@ class TestDockTest(unittest.TestCase):
         self.assertLess(abs(truth["y"]), 0.02, truth)
         self.assertEqual(p.sources_since(began), {DriveCommand.SOURCE_DOCK})
         p.flags()
+
+    def test_10_a_series_of_three_runs(self):
+        p = self.probe
+        p.carry(ON_THE_LINE)
+        since, began = len(p.events), time.time()
+        self.assertEqual(p.test(runs=3)["state"], "DOCKING")
+        ended = lambda: (len([e for e in p.events[since:] if e["type"] == "DOCKING_TEST_RUN"]) >= 3 or
+                         any(e["type"] == "DOCKING_FAILED" for e in p.events[since:]))  # noqa: E731
+        self.assertTrue(p.wait(ended, 420), p.events[since:])
+        runs = [e for e in p.events[since:] if e["type"] == "DOCKING_TEST_RUN"]
+        self.assertEqual([(e["run"], e["of"], e["ok"]) for e in runs], [(1, 3, True), (2, 3, True), (3, 3, True)])
+        self.assertEqual(len([e for e in p.events[since:] if e["type"] == "DOCKED"]), 3)
+        self.assertIsNone(next((e for e in p.events[since:] if e["type"] in ("DOCKING_RETRY", "DOCKING_FAILED")), None))
+        self.assertTrue(p.wait(lambda: p.robot and p.robot.current_state == "IDLE", 10))
+        truth = p.truth()
+        self.assertTrue(truth["dock_ok"], truth)
+        self.assertLess(abs(truth["y"]), 0.02, truth)
+        self.assertEqual(p.sources_since(began), {DriveCommand.SOURCE_DOCK})

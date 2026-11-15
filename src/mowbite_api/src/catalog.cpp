@@ -570,7 +570,12 @@ const std::vector<Command>& Commands() {
       Logic("docking.test",
             "Docks by the dock camera alone from where the mower stands in front of the station, without map or "
             "position (the reason TEST at DOCKING); offered only where the platform has a dock marker",
-            {}, Answer({}, {"DOCKING"}), "DRIVE_REFUSED", {}),
+            {Integer("runs",
+                     "1 to 10 (default 1): above 1 a series, after each DOCKED the mower drives out forwards to the "
+                     "start of the line by the marker and docks again; DOCKING_TEST_RUN ends every run, the first "
+                     "failure ends the series without a further try",
+                     false)},
+            Answer({}, {"DOCKING"}), "DRIVE_REFUSED", {}),
       Logic("recording.start", "Enters the recording of areas from IDLE", {}, Answer(), "RECORDING_REFUSED",
             {{kIdle + "start_area_recording"}}),
       Logic("recording.exit", "Leaves the recording; what was not saved is gone", {}, Answer(), "COMMAND_REFUSED",

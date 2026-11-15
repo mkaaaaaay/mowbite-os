@@ -823,7 +823,17 @@ class LogicCore {
   void NextDockingTry();
   // Busy, hold, no charge contacts, on the contacts already, unsafe: what refuses docking.start and docking.test.
   Reason DockStartProblem() const;
-  Reason StartDockingTest(const Reason& node_problem);
+  // runs 1 to 10: with more than one a series (runs above 1): after each DOCKED out to the start of the line in the
+  // station frame and docking again, every run ends with DOCKING_TEST_RUN, the first failure ends the series.
+  Reason StartDockingTest(const Reason& node_problem, int runs);
+  bool Series() const {
+    return docking_test_ && test_runs_ > 1;
+  }
+  // The run of the series ends: DOCKING_TEST_RUN, ok without a reason; nothing without an open run.
+  void TestRunEnded(const Reason& why);
+  // After a DOCKED of the series: out of the station to the start of the line for the next run, charging off first;
+  // without a good pose of the marker the series ends.
+  void DriveOutForNextRun();
   // Docking by the marker (logic_marker.cpp): the next try in the station frame or the sight; a failed try, which
   // drives out only with a good pose of the marker; the waits; why the mower may not go on at the gate (also by the
   // map); a try failed by the marker; the end.
@@ -1032,6 +1042,12 @@ class LogicCore {
   // drive by it then), whether the next wait is a sight, what the marker told, and the latest monotonic s of it.
   bool marker_docking_ = false;
   bool docking_test_ = false;
+  // The series of docking.test: its runs, the one on its way (from the drive out on), whether its event is due, and
+  // whether the drive out of the station leads to the next run.
+  int test_runs_ = 0;
+  int test_run_ = 0;
+  bool test_run_open_ = false;
+  bool test_next_run_ = false;
   bool marker_started_ = false;
   bool marker_untrusted_ = false;
   bool marker_sight_ = false;
