@@ -350,6 +350,8 @@ class TestFollower(unittest.TestCase):
         with w.lock:
             self.assertAlmostEqual(w.x, -0.8, delta=0.02)
             w.dock_accuracy = 0.04
+        # As in place: under load the follower takes a while to see the new accuracy.
+        time.sleep(0.3)
         result = w.follow(facing(line_poses(-0.8, 0.0, 0.0, 0.7), math.pi), frame=FollowPath.Goal.FRAME_DOCK,
                           reverse=True)
         self.assertEqual(result.reason, Result.REASON_POSITION_ACCURACY, result.message)
