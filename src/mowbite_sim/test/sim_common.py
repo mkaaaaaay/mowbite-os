@@ -38,10 +38,11 @@ HISTORY = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durabilit
 ROSOUT = QoSProfile(depth=1000, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 # A node stopped by launch ends with 0 or by its signal (SIGINT, SIGTERM; negative or 128 + n).
 EXIT_CODES = [0, -2, -15, 130, 143]
-# fake_tron flags of a real Tron: RTK about 1 cm rms, the fix 0.1 s late, wheels report 6 % too little, a wheel below
-# 0.05 m/s stands, the base turns on 0.395 m while the MCU counts 0.40 m, 0.01 rad of yaw per metre from slip.
-REAL_FAULTS = {"gnss_noise": 0.01, "gnss_delay": 0.1, "odom_scale": 0.94, "wheel_deadband": 0.05, "track": 0.395,
-               "yaw_drift": 0.01}
+# fake_tron flags of a real Tron: RTK about 1 cm rms drifting over 30 s at 10 Hz (fixes in a row differ by mm, as
+# measured 15.11.), the fix 0.1 s late, wheels report 6 % too little, a wheel below 0.05 m/s stands, the base turns on
+# 0.395 m while the MCU counts 0.40 m, 0.01 rad of yaw per metre from slip.
+REAL_FAULTS = {"gnss_noise": 0.01, "gnss_noise_tau": 30.0, "gnss_period": 0.1, "gnss_delay": 0.1, "odom_scale": 0.94,
+               "wheel_deadband": 0.05, "track": 0.395, "yaw_drift": 0.01}
 
 
 @launch_testing.post_shutdown_test()
