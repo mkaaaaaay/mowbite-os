@@ -609,6 +609,40 @@ TEST(LogicCommands, ReleaseCarriesSourceAndClient) {
   EXPECT_FALSE(core.TakeEvents().back().details.contains("source"));
 }
 
+// The answer of emergency.reset waits for the outcome: the end of the emergency, or the refusal with its event.
+TEST(LogicCommands, ReleaseOutcomeForTheAnswer) {
+  TestCore core = Idle();
+  core.OnHardwareStatus(InEmergency());
+  core.TakeEvents();
+  const uint64_t start = core.LastReleaseOutcome().seq;
+  Rpc(core, "emergency.reset");
+  core.OnReleaseAnswered(10.0);
+  core.OnTick(10.0 + kReleaseSourceS - 0.1);
+  EXPECT_EQ(core.LastReleaseOutcome().seq, start);
+  core.OnHardwareStatus(Healthy());
+  EXPECT_EQ(core.LastReleaseOutcome().seq, start + 1);
+  EXPECT_TRUE(core.LastReleaseOutcome().released);
+  core.TakeEvents();
+  // The board still holds STOP: STILL_ACTIVE with the id of the event that goes out as well.
+  core.OnHardwareStatus(InEmergency());
+  core.TakeEvents();
+  Rpc(core, "emergency.reset");
+  core.OnReleaseAnswered(20.0);
+  core.OnTick(20.0 + kReleaseSourceS + 0.1);
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  const ReleaseOutcome& refused = core.LastReleaseOutcome();
+  EXPECT_EQ(refused.seq, start + 2);
+  EXPECT_FALSE(refused.released);
+  EXPECT_EQ(refused.why.code, "STILL_ACTIVE");
+  EXPECT_EQ(refused.why.fields["bits"], json::array({"LATCH", "STOP"}));
+  EXPECT_EQ(refused.event_id, events[0].id);
+  // An emergency that ends or begins without a release asked for is no outcome.
+  core.OnHardwareStatus(Healthy());
+  core.OnHardwareStatus(InEmergency());
+  EXPECT_EQ(core.LastReleaseOutcome().seq, start + 2);
+}
+
 // STOP let go after the gesture of the driver: released like emergency.reset, with source button.
 TEST(LogicCommands, StopAtTheMowerReleasesWithSourceButton) {
   TestCore core = Idle();

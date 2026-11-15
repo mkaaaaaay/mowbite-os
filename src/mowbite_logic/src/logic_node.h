@@ -115,6 +115,7 @@ class LogicNode : public rclcpp::Node {
   void OnAction(const std::string& action_id);
   void OnCommandRpc(const mowbite_msgs::msg::RpcRequest& request, const mowbite_api::Command& command);
   void AnswerReleaseLocked(bool released, const Reason& why = Reason(), const std::string& event_id = "");
+  void AnswerReleaseOutcomeLocked();
   void RefuseReleaseLocked(const Reason& why);
   void OnButton(const mowbite_msgs::msg::ButtonEvent& msg);
   void ReleaseEmergency(const std::string& rpc_id = "", uint32_t latch_count = 0,
@@ -350,8 +351,9 @@ class LogicNode : public rclcpp::Node {
   uint64_t body_seq_ = 0;
   // The release asked of S2, under mutex_.
   std::optional<double> release_sent_;
-  // ids of the emergency.reset calls that wait for the safety node.
+  // ids of the emergency.reset calls that wait for the outcome, and the count of outcomes when the first came.
   std::vector<std::string> release_rpc_ids_;
+  uint64_t release_seq_ = 0;
   int64_t release_request_id_ = 0;
   bool edit_is_dock_ = false;
   uint64_t edit_seq_ = 0;

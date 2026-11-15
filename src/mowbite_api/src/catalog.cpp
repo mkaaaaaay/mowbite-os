@@ -527,8 +527,9 @@ const std::vector<Command>& Commands() {
        "",
        {}},
       Logic("emergency.reset",
-            "Asks the safety node to release the emergency and answers with its answer, after at most 3 s",
-            {}, Answer({Bool("released", "Always true: released; a reason the board still holds keeps it")}),
+            "Asks the safety node to release the emergency; answers once the emergency ended, or with the refusal of "
+            "the safety node or STILL_ACTIVE with the bits that stay, after at most 5 s",
+            {}, Answer({Bool("released", "Always true: the emergency ended")}),
             "EMERGENCY_RESET_REFUSED", {{"mower_logic/reset_emergency"}}),
       Logic("mowing.start", "Starts or continues the job of mowing from IDLE",
             {Rows("tasks",

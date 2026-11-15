@@ -460,6 +460,14 @@ void LogicNode::AnswerReleaseLocked(bool released, const Reason& why, const std:
   release_rpc_ids_.clear();
 }
 
+// The RPCs waiting get the outcome once the core has one: the end of the emergency, or its refusal with the same event
+// (STILL_ACTIVE kReleaseSourceS after the answer of the safety node). Called with the mutex held.
+void LogicNode::AnswerReleaseOutcomeLocked() {
+  const ReleaseOutcome& outcome = core_.View().LastReleaseOutcome();
+  if (release_rpc_ids_.empty() || outcome.seq == release_seq_) return;
+  AnswerReleaseLocked(outcome.released, outcome.why, outcome.event_id);
+}
+
 // Called with the mutex held: refused here, the event and the answers to the RPCs waiting for it.
 void LogicNode::RefuseReleaseLocked(const Reason& why) {
   const std::string event_id = core_.Call<&LogicCore::RefuseReset>(why);
@@ -485,12 +493,15 @@ void LogicNode::OnButton(const mowbite_msgs::msg::ButtonEvent& msg) {
   Step();
 }
 
-// The answer comes from S2 once the driver answered; a refusal goes to the app as EMERGENCY_RESET_REFUSED and to the
-// RPCs waiting for it (rpc_id: the one of emergency.reset, empty for the action and STOP). latch_count of a STOP
+// S2 answers once the driver answered; the RPCs waiting (rpc_id: the one of emergency.reset, empty for the action and
+// STOP) get the outcome after that, a refusal goes to the app as EMERGENCY_RESET_REFUSED as well. latch_count of a STOP
 // gesture lets the driver refuse when another reason latched since, 0 releases without that check.
 void LogicNode::ReleaseEmergency(const std::string& rpc_id, uint32_t latch_count, const std::string& reason) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!rpc_id.empty()) release_rpc_ids_.push_back(rpc_id);
+  if (!rpc_id.empty()) {
+    if (release_rpc_ids_.empty()) release_seq_ = core_.View().LastReleaseOutcome().seq;
+    release_rpc_ids_.push_back(rpc_id);
+  }
   // The user looked at the mower: the restart hold goes first, the file before the flag, so S2 does not latch it
   // again; the release of S2 and the driver follows as for any emergency.
   if (core_.View().RestartHeld()) {
@@ -528,7 +539,6 @@ void LogicNode::ReleaseEmergency(const std::string& rpc_id, uint32_t latch_count
                                    release_sent_.reset();
                                    if (response->success) {
                                      core_.Call<&LogicCore::OnReleaseAnswered>(MonotonicSeconds());
-                                     AnswerReleaseLocked(true);
                                    } else {
                                      RCLCPP_WARN(get_logger(), "Emergency stays (%s): %s", response->code.c_str(),
                                                  response->message.c_str());
@@ -2332,6 +2342,10 @@ void LogicNode::Step() {
       PumpDocking();
     }
     UpdateBladeLocked();
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    AnswerReleaseOutcomeLocked();
   }
   Record(record);
 }

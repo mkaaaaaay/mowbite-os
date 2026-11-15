@@ -207,11 +207,17 @@ class TestStopRelease(unittest.TestCase):
         since, presses = len(p.events), len(p.presses)
         p.flags(stop=1)
         self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_HELD, 4.0))
-        # The driver takes the request, but STOP is held beyond its window: the emergency stays.
+        # The driver takes the request, but STOP is held beyond its window: the emergency stays, and the answer says so
+        # with the same event, which goes out as well.
+        asked = time.time()
         answer = p.rpc("emergency.reset", {"client": "test"})
-        self.assertEqual((answer or {}).get("result", {}).get("released"), True, answer)
+        self.assertLess(time.time() - asked, 5.0)
+        data = ((answer or {}).get("error") or {}).get("data") or {}
+        self.assertEqual((data.get("event"), data.get("reason")), ("EMERGENCY_RESET_REFUSED", "STILL_ACTIVE"), answer)
+        self.assertIn("STOP", data.get("bits", []))
         refused = p.event(since, "EMERGENCY_RESET_REFUSED", 5, reason="STILL_ACTIVE")
         self.assertIsNotNone(refused, [e["type"] for e in p.events[since:]])
+        self.assertEqual(data.get("event_id"), refused.get("id"))
         self.assertEqual(refused["source"], "rpc")
         self.assertEqual(refused["client"], "test")
         self.assertIn("STOP", refused["bits"])

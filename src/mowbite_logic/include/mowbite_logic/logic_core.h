@@ -256,6 +256,15 @@ struct CommandOutcome {
   json data = json::object();
 };
 
+// How the latest release of the emergency ended: released, or refused with the reason and the id of its event; seq
+// counts the outcomes since the start.
+struct ReleaseOutcome {
+  uint64_t seq = 0;
+  bool released = false;
+  Reason why;
+  std::string event_id;
+};
+
 struct ReasonChange {
   int from = 0;
   int to = 0;
@@ -620,6 +629,9 @@ class LogicCore {
   // reset_emergency did not release: EMERGENCY_RESET_REFUSED with the reason of the driver, of S2 or of the node;
   // returns the id of the event.
   std::string RefuseReset(const Reason& why);
+  const ReleaseOutcome& LastReleaseOutcome() const {
+    return release_outcome_;
+  }
   // The restart hold (G35): while it stands the logic counts as in emergency with UNEXPECTED_RESTART, so nothing that
   // drives or mows starts, whatever the driver reports. The node sets it at the start and clears it on emergency.reset
   // once the file is gone.
@@ -1097,6 +1109,7 @@ class LogicCore {
   std::string release_source_;
   std::string release_client_;
   std::optional<double> release_answered_s_;
+  ReleaseOutcome release_outcome_;
 };
 
 template <typename T>
