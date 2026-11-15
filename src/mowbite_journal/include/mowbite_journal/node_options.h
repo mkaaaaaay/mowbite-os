@@ -1,6 +1,8 @@
 #ifndef MOWBITE_JOURNAL_NODE_OPTIONS_H
 #define MOWBITE_JOURNAL_NODE_OPTIONS_H
 
+#include <sys/stat.h>
+
 #include <cstdlib>
 #include <rclcpp/rclcpp.hpp>
 #include <string>
@@ -12,7 +14,8 @@ namespace mowbite_journal {
 // For nodes; header only, so that the library needs no ROS.
 
 // The journal of the process from the parameters of a node (journal_dir, else MOWBITE_JOURNAL_DIR, and the limits of
-// the platform config under /**), opened by the first node that asks; a problem goes to the node's log.
+// the platform config under /**), opened by the first node that asks; a problem goes to the node's log. None while
+// journal_dir holds kDisabledFile.
 template <typename Node>
 Journal* OpenFromParameters(Node& node) {
   Options options;
@@ -22,9 +25,15 @@ Journal* OpenFromParameters(Node& node) {
   options.max_mb = node.declare_parameter("journal_max_mb", options.max_mb);
   options.max_days = node.declare_parameter("journal_max_days", options.max_days);
   options.reserve_mb = node.declare_parameter("journal_reserve_mb", options.reserve_mb);
+  options.segment_s = node.declare_parameter("journal_segment_s", options.segment_s);
   options.buffer_kb = static_cast<size_t>(
       node.declare_parameter("journal_buffer_kb", static_cast<int64_t>(options.buffer_kb)));
   if (options.dir.empty()) return nullptr;
+  struct stat st {};
+  if (stat((options.dir + "/" + kDisabledFile).c_str(), &st) == 0) {
+    RCLCPP_INFO(node.get_logger(), "No journal: journal_enabled is 0");
+    return nullptr;
+  }
   std::string error;
   Journal* journal = Journal::Open(options, &error);
   if (!journal) {

@@ -11,6 +11,10 @@
 
 namespace mowbite_journal {
 
+// The file in journal_dir that turns the journal off from the next start of each process (journal_enabled 0 of the
+// logic, mowbite_stats writes it; OpenFromParameters looks for it).
+constexpr char kDisabledFile[] = "disabled";
+
 struct Options {
   // journal_dir; empty: no journal.
   std::string dir;
