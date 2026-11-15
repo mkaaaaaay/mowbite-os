@@ -118,7 +118,7 @@ TEST(Catalog, EntriesAreWellFormed) {
   std::set<std::string> types;
   for (const auto& event : Events()) {
     EXPECT_TRUE(types.insert(event.type).second) << "twice: " << event.type;
-    EXPECT_TRUE(std::set<std::string>({"logic", "map", "ntrip", "camera", "bridge"}).count(event.emitter))
+    EXPECT_TRUE(std::set<std::string>({"logic", "map", "ntrip", "camera", "bridge", "stats"}).count(event.emitter))
         << event.type;
     EXPECT_FALSE(event.text.empty()) << event.type;
     EXPECT_TRUE(severities.count(event.other_severity)) << event.type;

@@ -78,7 +78,7 @@ struct ReasonEntry {
 
 struct EventEntry {
   std::string type;
-  // logic, map, ntrip, camera or bridge; logic events carry x, y, job_id and session_id as well.
+  // logic, map, ntrip, camera, bridge or stats; logic events carry x, y, job_id and session_id as well.
   std::string emitter;
   std::string text;
   // The fields beyond the envelope (id, t, type) and those of the emitter.
