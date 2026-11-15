@@ -142,7 +142,7 @@ class IncidentsTest : public ::testing::Test {
     const auto notices = incidents_->OnEmergency(5, now_, Wall());
     EXPECT_EQ(notices.size(), 1u);
     if (notices.empty()) return {};
-    const std::string id = notices[0]["id"];
+    const std::string id = notices[0]["incident"];
     Feed(*journal, 0.2);
     journal.reset();
     Pass();
@@ -201,7 +201,7 @@ TEST_F(IncidentsTest, AnEmergencyKeepsTheSegmentsOfItsWindowAndSealsThemWhenThey
   EXPECT_EQ(notices[0]["reason"], "EMERGENCY");
   EXPECT_EQ(notices[0]["detail"], "LATCH, STOP");
   EXPECT_TRUE(notices[0]["safety"].get<bool>());
-  const std::string id = notices[0]["id"];
+  const std::string id = notices[0]["incident"];
   // A further bit grows the same incident without a new event; the same bits again are nothing.
   EXPECT_TRUE(incidents_->OnEmergency(7, now_ + kS, Wall()).empty());
   EXPECT_TRUE(incidents_->OnEmergency(7, now_ + kS, Wall()).empty());
@@ -280,7 +280,7 @@ TEST_F(IncidentsTest, ARunWithoutItsEndIsACrashOnce) {
   ASSERT_EQ(notices.size(), 1u);
   EXPECT_EQ(notices[0]["reason"], "CRASH");
   EXPECT_TRUE(notices[0]["safety"].get<bool>());
-  const std::string id = notices[0]["id"];
+  const std::string id = notices[0]["incident"];
   Pass();
   Pass();
   const json manifest = Call("incidents.get", {{"id", id}})["manifest"];
@@ -327,7 +327,7 @@ TEST_F(IncidentsTest, DeleteOnlyWhatIsDone) {
   ASSERT_FALSE(id.empty());
   const auto notices = incidents_->OnEvent(json{{"type", "DOCKING_FAILED"}, {"reason", "dock_failed"}}, now_, Wall());
   ASSERT_EQ(notices.size(), 1u);
-  const std::string open = notices[0]["id"];
+  const std::string open = notices[0]["incident"];
   std::optional<RpcError> error;
   Call("incidents.delete", {{"id", open}}, &error);
   ASSERT_TRUE(error);

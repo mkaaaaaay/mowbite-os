@@ -139,11 +139,19 @@ TEST(Catalog, EntriesAreWellFormed) {
         EXPECT_EQ(first->unit, field.unit) << event.type << "." << field.name;
       }
     };
-    for (const auto& field : Envelope()) add(field, false);
+    std::set<std::string> envelope;
+    for (const auto& field : Envelope()) {
+      add(field, false);
+      envelope.insert(field.name);
+    }
     if (event.emitter == "logic") {
       for (const auto& field : LogicFields()) add(field, false);
     }
-    for (const auto& field : event.fields) add(field, false);
+    // The envelope (id, t, type) wins over a detail of the same name.
+    for (const auto& field : event.fields) {
+      EXPECT_EQ(envelope.count(field.name), 0u) << event.type << "." << field.name;
+      add(field, false);
+    }
     std::set<std::string> codes;
     for (const auto& reason : event.reasons) {
       EXPECT_TRUE(severities.count(reason.severity)) << event.type << " " << reason.code;

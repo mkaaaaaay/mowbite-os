@@ -229,7 +229,7 @@ Incidents::Notices Incidents::Open(const Trigger& trigger, double wall_s, std::s
                {"message", "Incident " + id + ": " + trigger.kind},
                {"severity", "info"},
                {"resume", "auto"},
-               {"id", id},
+               {"incident", id},
                {"detail", trigger.reason},
                {"safety", trigger.safety}}};
 }

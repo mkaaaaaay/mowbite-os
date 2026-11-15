@@ -1484,7 +1484,7 @@ const std::vector<EventEntry>& Events() {
       Event("INCIDENT", "stats",
             "An incident is kept: the journal of all processes around a trigger, for incidents.get and "
             "incidents.download",
-            Rated(true, {Text("id", "The incident", true),
+            Rated(true, {Text("incident", "The id of the incident", true),
                          Text("detail", "The reason of the trigger or the emergency bits, empty for none", true),
                          Bool("safety", "Whether the trigger is about safety: kept longest")}),
             IncidentKinds(), "info", "auto"),
