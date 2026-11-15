@@ -3,7 +3,7 @@
 The mower is carried in front of the station of sim.yaml (the docked mower at (-1, 0), the way in going west) and
 docks from there: DOCKING with the reason TEST, out to the approach point, the line, the gate, the close part, the
 blind contact and the charge, DOCKED with guide marker; every drive command reaches safety/drive as SOURCE_DOCK. A start
-beside the line is refused where the mower stands, a marker of the wrong size is caught at the gate (scale against the
+with the marker beside the axis of the mower is refused where it stands, one whose marker yaw errs by 4 deg docks, a marker of the wrong size is caught at the gate (scale against the
 wheels), a marker hidden for a moment on the line stops the mower until it is back, one hidden for good ends the try
 with MARKER_LOST, a dark image with MARKER_NOT_SEEN and a camera that is off with MARKER_UNAVAILABLE.
 
@@ -154,7 +154,7 @@ class TestDockTest(unittest.TestCase):
         since, began = len(p.events), time.time()
         p.test()
         failed = self.failed(since, 40)
-        self.assertIn("beside the line", failed["message"])
+        self.assertIn("beside the axis", failed["message"])
         self.assertEqual(p.sources_since(began), set())
         standing, states = p.standing()
         self.assertTrue(standing, states)
@@ -227,4 +227,21 @@ class TestDockTest(unittest.TestCase):
         self.assertEqual(failed["cause"], "MARKER_UNAVAILABLE", failed)
         self.assertEqual(failed["detail"], "NO_SIGNAL", failed)
         self.assertEqual(p.sources_since(began), set())
+        p.flags()
+
+    def test_09_marker_yaw_off_by_4_deg_docks(self):
+        # Measured on the Tron: the marker yaw errs by 3 to 4 deg at one place. On the line facing along it, the line of
+        # the station frame turned by 4 deg about the marker would begin 0.07 m beside it after the way out; that counts
+        # only with the spread of the heading, and the marker beside the axis is measured without it.
+        p = self.probe
+        p.carry(ON_THE_LINE, marker_yaw_bias=4.0)
+        since, began = len(p.events), time.time()
+        self.assertEqual(p.test()["state"], "DOCKING")
+        docked = p.event(since, "DOCKED", 150)
+        self.assertIsNotNone(docked, p.events[since:])
+        self.assertEqual(docked["guide"], "marker")
+        truth = p.truth()
+        self.assertTrue(truth["dock_ok"], truth)
+        self.assertLess(abs(truth["y"]), 0.02, truth)
+        self.assertEqual(p.sources_since(began), {DriveCommand.SOURCE_DOCK})
         p.flags()

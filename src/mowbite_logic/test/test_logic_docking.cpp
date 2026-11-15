@@ -311,10 +311,12 @@ TEST(DockingSequence, TheWayOffTheStation) {
 
 TEST(DockingSequence, TheGateChecksSideHeadingAndAccuracy) {
   const DockingSequence docking(DockConfig(), UndockConfig(), kDock, true);
-  EXPECT_EQ(docking.CheckGate(-0.75, 0.019, Rad(7.9), 0.02f, 0.03), "");
-  EXPECT_NE(docking.CheckGate(-0.75, 0.025, 0.0, 0.02f, 0.03).find("0.025 m beside the line"), std::string::npos);
-  EXPECT_NE(docking.CheckGate(-0.75, 0.0, Rad(-9), 0.02f, 0.03).find("faced 9.0 deg off"), std::string::npos);
-  EXPECT_NE(docking.CheckGate(-0.75, 0.0, 0.0, 0.05f, 0.03).find("accuracy 0.050 m"), std::string::npos);
+  EXPECT_EQ(docking.CheckGate(0.019, Rad(7.9), 0.02f, 0.03), "");
+  EXPECT_EQ(docking.CheckGate(-0.019, Rad(7.9), 0.02f, 0.03), "");
+  EXPECT_NE(docking.CheckGate(0.025, 0.0, 0.02f, 0.03).find("0.025 m beside the line"), std::string::npos);
+  EXPECT_NE(docking.CheckGate(-0.025, 0.0, 0.02f, 0.03).find("0.025 m beside the line"), std::string::npos);
+  EXPECT_NE(docking.CheckGate(0.0, Rad(-9), 0.02f, 0.03).find("faced 9.0 deg off"), std::string::npos);
+  EXPECT_NE(docking.CheckGate(0.0, 0.0, 0.05f, 0.03).find("accuracy 0.050 m"), std::string::npos);
 }
 
 TEST(DockingSequence, TriesAgainRetryCountTimes) {

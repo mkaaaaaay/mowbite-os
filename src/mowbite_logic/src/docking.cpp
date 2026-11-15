@@ -211,10 +211,8 @@ std::optional<DockingLeg> DockingSequence::Direct(double x, double y) const {
   return leg;
 }
 
-std::string DockingSequence::CheckGate(double x, double y, double heading, float accuracy,
-                                       double accuracy_limit) const {
+std::string DockingSequence::CheckGate(double across, double heading, float accuracy, double accuracy_limit) const {
   char text[200];
-  const double across = Across(x, y);
   if (std::abs(across) > config_.gate_lateral) {
     std::snprintf(text, sizeof(text),
                   "at the gate the mower stood %.3f m beside the line of the docking station, at most %.3f m allowed",

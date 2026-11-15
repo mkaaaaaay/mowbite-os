@@ -380,7 +380,7 @@ TEST(LogicMarker, BesideTheLineRefused) {
   See(core, -0.5, 0.3);
   EXPECT_FALSE(core.TakeDockingLeg());
   const Event& failed = Failed(core);
-  EXPECT_NE(failed.details["message"].get<std::string>().find("beside the line"), std::string::npos);
+  EXPECT_NE(failed.details["message"].get<std::string>().find("beside the axis"), std::string::npos);
   EXPECT_EQ(failed.details["attempts"], 1);
   EXPECT_EQ(core.RobotState().state, "IDLE");
 }

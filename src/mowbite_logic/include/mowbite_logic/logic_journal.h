@@ -62,11 +62,12 @@ inline void from_json(const nlohmann::json& j, DockingLeg& leg) {
   j.at("max_cross_track").get_to(leg.max_cross_track);
   leg.frame = j.value("frame", LegFrame::kMap);
 }
-// With defaults: guide came later, journals from before stay readable.
+// With defaults: guide and the marker place came later, journals from before stay readable.
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(MarkerConfig, range, blind_distance, wait, cross_track, scale_limit,
-                                                guide)
+                                                guide, marker_x, marker_y)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockMarkerSample, time, state, valid, yaw_valid, reason)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DockPoseSample, time, x, y, heading, heading_valid, position_accuracy, speed)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(DockPoseSample, time, x, y, heading, heading_valid, position_accuracy,
+                                                heading_accuracy, speed)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ChargeConfig, current, time, timeout, expected_below, lost_time)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobPose, x, y, heading, kind)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobPath, is_outline, poses)
@@ -141,10 +142,10 @@ static_assert(sizeof(JobProgress) == 160);
 static_assert(sizeof(HardwareSnapshot) == 72);
 static_assert(sizeof(PoseSnapshot) == 40);
 static_assert(sizeof(CalibrationConfig) == 32);
-static_assert(sizeof(LogicConfig) == 496);
-static_assert(sizeof(MarkerConfig) == 48);
+static_assert(sizeof(LogicConfig) == 512);
+static_assert(sizeof(MarkerConfig) == 64);
 static_assert(sizeof(DockMarkerSample) == 48);
-static_assert(sizeof(DockPoseSample) == 48);
+static_assert(sizeof(DockPoseSample) == 56);
 static_assert(sizeof(CalibrationStatus) == 64);
 static_assert(sizeof(CalibrationGoal) == 16);
 static_assert(sizeof(CalibrationOutcome) == 128);

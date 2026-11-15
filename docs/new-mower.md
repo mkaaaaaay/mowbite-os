@@ -103,12 +103,14 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   the zone of the station in that frame (FENCE beyond `fence_margin`), at most 0.17 m/s forwards and 0.12 m/s
   backwards, with no map needed.
 - With a marker the logic offers `docking.test`: docking by the marker alone, without map or RTK, from where the
-  mower stands by hand on the line in front of the station (at most half of `marker_cross_track` beside it, facing
-  along it, so that the straight way out ends on the line) or at its start. Every leg runs in the station frame and
-  reaches the wheels only as the dock source. Check on the new mower, in this order: the reference measurement of
-  the marker (`dock_marker`), `marker_blind_distance` (the last part is blind from there), then the test with the
-  mower watched, before any docking by the marker with RTK. Its values `marker_wait`, `marker_cross_track` and
-  `marker_scale_limit` stand in `mowbite_logic` of the platform file.
+  mower stands by hand on the line in front of the station (the marker at most half of `marker_cross_track` beside
+  the axis of the mower, facing along the line, so that the straight way out ends on it) or at its start. The heading
+  of the marker counts there only with its spread: where the line begins may lie that spread times the way to the
+  marker further beside it, up to `marker_cross_track`; the gate by the marker also takes the marker beside the axis.
+  Every leg runs in the station frame and reaches the wheels only as the dock source. Check on the new mower, in
+  this order: the reference measurement of the marker (`dock_marker`), `marker_blind_distance` (the last part is
+  blind from there), then the test with the mower watched, before any docking by the marker with RTK. Its values
+  `marker_wait`, `marker_cross_track` and `marker_scale_limit` stand in `mowbite_logic` of the platform file.
 - `dock_guide` in `mowbite_logic` of the platform file decides whether `docking.start` and going home use the marker:
   `none` (by RTK only; `tron.yaml` underneath has `require`, so a platform without a marker sets `none`), `prefer` (by
   the marker; where its source cannot measure, this try by RTK with `DOCKING_WITHOUT_MARKER`) or `require` (never
