@@ -151,8 +151,8 @@ class TestDockReference(unittest.TestCase):
         p = self.probe
         p.act("mower_logic:idle/start_area_recording")
         self.assertTrue(p.wait(lambda: p.robot and p.robot.current_state == "AREA_RECORDING", 10))
-        # Forwards and back: the GPS course aligns the heading, which both points need.
-        p.teleop(0.2, 2.5)
+        # Forwards until the GPS course aligns the heading, which both points need, then back.
+        p.teleop(0.2, 4.0, until=lambda: p.pose is not None and p.pose.heading_valid)
         self.assertTrue(p.wait(lambda: p.pose.heading_valid, 10), "the heading did not align")
         p.teleop(-0.2, 2.5)
         since = len(p.events)
