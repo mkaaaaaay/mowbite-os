@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -12,8 +13,10 @@
 #include <thread>
 #include <variant>
 
+#include "mowbite_journal/anonymize.h"
 #include "mowbite_journal/journaled.h"
 #include "mowbite_journal/replay.h"
+#include "mowbite_journal/timeline.h"
 
 namespace fs = std::filesystem;
 
@@ -318,6 +321,142 @@ TEST_F(JournalTest, ARunWithoutItsFirstSegmentIsNotReplayable) {
   const CheckReport report = CheckRuns(dir_.string(), registry_);
   EXPECT_EQ(report.outcome, CheckOutcome::kNotReplayable);
   EXPECT_NE(report.lines[0].find("segment 0 is missing"), std::string::npos) << report.lines[0];
+}
+
+std::vector<json> Lines(const std::string& text) {
+  std::vector<json> lines;
+  std::istringstream in(text);
+  std::string line;
+  while (std::getline(in, line)) lines.push_back(json::parse(line));
+  return lines;
+}
+
+// Two runs at once in their own journal_dirs: a calls Add, b calls OnSample, in turns; a also has a raw stream.
+class TimelineTest : public JournalTest {
+ protected:
+  void SetUp() override {
+    JournalTest::SetUp();
+    std::string error;
+    for (const char* name : {"a", "b"}) {
+      Options options = options_;
+      options.dir = (dir_ / name).string();
+      journals_.push_back(Journal::Create(options, &error));
+      ASSERT_TRUE(journals_.back()) << error;
+    }
+    Journaled<toy::Toy> a(journals_[0].get(), toy::ToyConfig{1.0, "a"});
+    Journaled<toy::Toy> b(journals_[1].get(), toy::ToyConfig{1.0, "b"});
+    const uint16_t port = journals_[0]->Define({{"name", "port.rx"}, {"kind", "raw"}});
+    const uint8_t bytes[3] = {1, 2, 3};
+    for (int i = 0; i < 20; ++i) {
+      a.Call<&toy::Toy::Add>(1.0);
+      b.Call<&toy::Toy::OnSample>(toy::Sample{1.0, 1});
+      journals_[0]->Append(port, kRawBytes, bytes, sizeof(bytes));
+    }
+    journals_.clear();
+  }
+
+  std::string Run(int64_t from_ns, int64_t to_ns, size_t max_bytes) {
+    std::string error;
+    const std::string text =
+        Timeline({(dir_ / "a").string(), (dir_ / "b").string()}, from_ns, to_ns, max_bytes, &error);
+    EXPECT_TRUE(error.empty()) << error;
+    return text;
+  }
+
+  std::vector<std::unique_ptr<Journal>> journals_;
+};
+
+TEST_F(TimelineTest, TakesTheRunsInTheOrderOfTime) {
+  const auto lines = Lines(Run(INT64_MIN, INT64_MAX, 1 << 20));
+  std::vector<std::string> methods;
+  int64_t last = INT64_MIN;
+  int views = 0, ends = 0;
+  uint64_t raw_records = 0, raw_bytes = 0;
+  for (const auto& line : lines) {
+    ASSERT_FALSE(line.contains("truncated")) << line;
+    EXPECT_GE(line.at("t_ns").get<int64_t>(), last) << line;
+    last = line.at("t_ns");
+    if (line.contains("method")) methods.push_back(line.at("method"));
+    if (line.contains("view")) {
+      ++views;
+      EXPECT_TRUE(line.at("view").contains("big")) << line;
+    }
+    if (line.contains("end")) ++ends;
+    if (line.contains("records")) {
+      EXPECT_EQ(line.at("stream"), "port.rx");
+      raw_records += line.at("records").get<uint64_t>();
+      raw_bytes += line.at("bytes").get<uint64_t>();
+    }
+  }
+  ASSERT_EQ(methods.size(), 40u);
+  for (size_t i = 0; i < methods.size(); ++i) EXPECT_EQ(methods[i], i % 2 == 0 ? "Add" : "OnSample") << i;
+  // Both views come once each from false to true: after 11 of a, after 11 of b; the first view of a core is a change.
+  EXPECT_EQ(views, 4);
+  EXPECT_EQ(ends, 2);
+  EXPECT_EQ(raw_records, 20u);
+  EXPECT_EQ(raw_bytes, 60u);
+}
+
+TEST_F(TimelineTest, KeepsToTheWindow) {
+  const auto all = Lines(Run(INT64_MIN, INT64_MAX, 1 << 20));
+  std::vector<int64_t> calls;
+  for (const auto& line : all) {
+    if (line.contains("method")) calls.push_back(line.at("t_ns"));
+  }
+  ASSERT_EQ(calls.size(), 40u);
+  const auto lines = Lines(Run(calls[10], calls[19], 1 << 20));
+  int methods = 0;
+  for (const auto& line : lines) {
+    EXPECT_GE(line.at("t_ns").get<int64_t>(), calls[10]) << line;
+    EXPECT_LE(line.at("t_ns").get<int64_t>(), calls[19]) << line;
+    if (line.contains("method")) ++methods;
+    EXPECT_FALSE(line.contains("end")) << line;
+  }
+  EXPECT_EQ(methods, 10);
+}
+
+TEST_F(TimelineTest, CutsTheEarliestMethodsFirstAndKeepsTheViews) {
+  const std::string full = Run(INT64_MIN, INT64_MAX, 1 << 20);
+  size_t fixed = 0;
+  std::vector<int64_t> calls;
+  for (const auto& line : Lines(full)) {
+    if (line.contains("method")) {
+      calls.push_back(line.at("t_ns"));
+    } else {
+      fixed += line.dump().size() + 1;
+    }
+  }
+  const auto lines = Lines(Run(INT64_MIN, INT64_MAX, fixed + 600));
+  ASSERT_FALSE(lines.empty());
+  ASSERT_TRUE(lines.back().contains("truncated"));
+  const auto kept = std::count_if(lines.begin(), lines.end(), [](const json& j) { return j.contains("method"); });
+  EXPECT_GT(kept, 0);
+  EXPECT_EQ(lines.back().at("truncated").get<long>() + kept, 40);
+  int views = 0;
+  int64_t first_method = INT64_MAX;
+  for (const auto& line : lines) {
+    if (line.contains("view")) ++views;
+    if (line.contains("method")) first_method = std::min(first_method, line.at("t_ns").get<int64_t>());
+  }
+  EXPECT_EQ(views, 4);
+  EXPECT_EQ(first_method, calls[calls.size() - static_cast<size_t>(kept)]);
+  std::string error;
+  EXPECT_TRUE(Timeline({(dir_ / "none").string()}, 0, 1, 100, &error).empty());
+  EXPECT_FALSE(error.empty());
+}
+
+TEST(Anonymize, MovesDatesByWholeDays) {
+  AnonymizeOptions options;
+  options.shift_days = -1001;
+  EXPECT_EQ(options.ShiftDates("run 2026-11-15T10:00, until 2024-02-29; 12026-11-15 and 2026-02-30 stay"),
+            "run 2024-02-18T10:00, until 2021-06-03; 12026-11-15 and 2026-02-30 stay");
+  int year = 2026, month = 1, day = 1;
+  options.ShiftDate(&year, &month, &day);
+  EXPECT_EQ(std::vector<int>({year, month, day}), std::vector<int>({2023, 4, 6}));
+  json value = {{"2026-06-15", {"10:00"}}, {"until", 1781510400}, {"t", 5}, {"at", "2026-06-15"}};
+  options.ShiftWallIn(&value, {"until"});
+  EXPECT_EQ(value, json({{"2023-09-18", {"10:00"}}, {"until", 1781510400 - 1001 * 86400}, {"t", 5},
+                         {"at", "2023-09-18"}}));
 }
 
 }  // namespace

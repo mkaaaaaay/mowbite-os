@@ -194,6 +194,68 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};
   }
+
+  // Fields of details and reasons in unix s.
+  static inline const std::vector<std::string> kUnixKeys = {"until", "crashed_at"};
+  template <typename O>
+  static void AnonymizeReason(const O& o, mowbite_logic::Reason& why) {
+    why.message = o.ShiftDates(why.message);
+    o.ShiftWallIn(&why.fields, kUnixKeys);
+  }
+
+  // Every call with a place or the wall clock, for a copy of a journal without its place (mowbite_replay anonymize).
+  template <typename A>
+  static void Anonymize(A& a) {
+    using mowbite_logic::Reason;
+    a.template Args<&L::OnDatum>([](const auto& o, double& latitude, double& longitude) {
+      latitude = o.latitude;
+      longitude = o.longitude;
+    });
+    a.template Args<&L::OnClock>(
+        [](const auto& o, bool&, std::string&, double& unix_minus_mono_s) { unix_minus_mono_s += o.shift_s(); });
+    a.template Args<&L::SetHold>([](const auto& o, int64_t& until) {
+      if (until > 0) until += o.shift_s();
+    });
+    a.template Args<&L::ReportRestart>([](const auto& o, mowbite_logic::RestartReport& report) {
+      if (report.crashed_at > 0) report.crashed_at += o.shift_s();
+    });
+    a.template Args<&L::Command>([](const auto& o, std::string&, mowbite_logic::json& params,
+                                    Reason& node_problem) {
+      o.ShiftWallIn(&params, kUnixKeys);
+      AnonymizeReason(o, node_problem);
+    });
+    a.template Result<&L::Command>([](const auto& o, mowbite_logic::CommandOutcome& outcome, std::string&,
+                                      mowbite_logic::json&, Reason&) {
+      AnonymizeReason(o, outcome.why);
+      o.ShiftWallIn(&outcome.data, kUnixKeys);
+    });
+    a.template Args<&L::StartRun>([](const auto& o, mowbite_logic::ScheduleRun& run, Reason& node_problem, double&) {
+      run.run_id = o.ShiftDates(run.run_id);
+      AnonymizeReason(o, node_problem);
+    });
+    a.template Result<&L::StartRun>(
+        [](const auto& o, Reason& why, mowbite_logic::ScheduleRun&, Reason&, double&) { AnonymizeReason(o, why); });
+    a.template Args<&L::DropTasks>(
+        [](const auto& o, std::string& run_id, std::vector<std::string>&) { run_id = o.ShiftDates(run_id); });
+    a.template Result<&L::DropTasks>(
+        [](const auto& o, Reason& why, std::string&, std::vector<std::string>&) { AnonymizeReason(o, why); });
+    a.template Result<&L::StartDrive>([](const auto& o, Reason& why, double&, double&) { AnonymizeReason(o, why); });
+    a.template Result<&L::StartCalibration>([](const auto& o, Reason& why, double&) { AnonymizeReason(o, why); });
+    a.template Result<&L::StartDocking>([](const auto& o, Reason& why) { AnonymizeReason(o, why); });
+    a.template Result<&L::OnDockCheck>(
+        [](const auto& o, Reason& why, bool&, double&, double&, float&, std::string&) { AnonymizeReason(o, why); });
+    a.template Result<&L::TakeEffects>([](const auto& o, std::vector<mowbite_logic::Effect>& effects) {
+      for (auto& effect : effects) {
+        if (auto* event = std::get_if<mowbite_logic::Event>(&effect)) {
+          o.ShiftWallIn(&event->details, kUnixKeys);
+        } else if (auto* run = std::get_if<mowbite_logic::RunChanged>(&effect)) {
+          run->run_id = o.ShiftDates(run->run_id);
+        } else if (auto* notice = std::get_if<mowbite_logic::Notice>(&effect)) {
+          notice->line = o.ShiftDates(notice->line);
+        }
+      }
+    });
+  }
 };
 
 #endif  // MOWBITE_LOGIC_LOGIC_JOURNAL_H

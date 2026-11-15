@@ -20,4 +20,9 @@ mowbite_journal::ReplayRegistry Cores() {
   return registry;
 }
 
+bool AnonymizeRun(const std::string& run_dir, const std::string& out_dir,
+                  const mowbite_journal::AnonymizeOptions& options, std::string* error) {
+  return mowbite_journal::AnonymizeRun(run_dir, out_dir, Cores(), options, error);
+}
+
 }  // namespace mowbite_replay

@@ -57,6 +57,48 @@ struct mowbite_journal::CoreTraits<mowbite_schedule::Scheduler> {
   using Config = mowbite_schedule::SchedulerStart;
   MOWBITE_JOURNAL_METHODS(&S::Tick, &S::OnWeather, &S::OnStartAnswer, &S::StartFailed, &S::OnRunStatus, &S::SetSchedule,
                           &S::SetLeftovers, &S::TakeOutput);
+
+  // Every call with a place or the wall clock, for a copy of a journal without its place (mowbite_replay anonymize).
+  template <typename A>
+  static void Anonymize(A& a) {
+    using namespace mowbite_schedule;
+    a.Config([](const auto& o, SchedulerStart& start) {
+      start.now += o.shift_s();
+      if (start.file.changed_at > 0) start.file.changed_at += o.shift_s();
+      if (start.file.schedule.pause) {
+        Date& until = start.file.schedule.pause->until;
+        o.ShiftDate(&until.year, &until.month, &until.day);
+      }
+      o.ShiftWallIn(&start.state);
+      o.ShiftWallIn(&start.log, {"t"});
+    });
+    a.template Args<&S::Tick>([](const auto& o, Facts& facts) {
+      facts.wall += o.shift_s();
+      if (facts.latitude) facts.latitude = o.latitude;
+      if (facts.longitude) facts.longitude = o.longitude;
+    });
+    a.template Args<&S::OnStartAnswer>([](const auto& o, std::string& run_id, bool&, std::string&, json& value) {
+      run_id = o.ShiftDates(run_id);
+      o.ShiftWallIn(&value);
+    });
+    a.template Args<&S::StartFailed>(
+        [](const auto& o, std::string& run_id, std::string&) { run_id = o.ShiftDates(run_id); });
+    a.template Args<&S::OnRunStatus>([](const auto& o, RunStatus& status) {
+      status.run_id = o.ShiftDates(status.run_id);
+    });
+    a.template Args<&S::SetSchedule>([](const auto& o, json& change, int64_t& now) {
+      o.ShiftWallIn(&change);
+      now += o.shift_s();
+    });
+    a.template Result<&S::TakeOutput>([](const auto& o, Output& out) {
+      if (out.weather) {
+        out.weather->latitude = o.latitude;
+        out.weather->longitude = o.longitude;
+      }
+      if (out.start) out.start->run_id = o.ShiftDates(out.start->run_id);
+      if (out.drop) out.drop->run_id = o.ShiftDates(out.drop->run_id);
+    });
+  }
 };
 
 #endif  // MOWBITE_SCHEDULE_SCHEDULE_JOURNAL_H

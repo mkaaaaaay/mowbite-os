@@ -125,6 +125,25 @@ struct mowbite_journal::CoreTraits<tron::McuControl> {
                           &tron::McuControl::LatchEmergency, &tron::McuControl::ReleaseEmergency,
                           &tron::McuControl::SetBlade, &tron::McuControl::SetCharging, &tron::McuControl::OnConnected,
                           &tron::McuControl::SetHold, &tron::McuControl::Tick, &tron::McuControl::SetStopClearMark);
+
+  // Every call with the wall clock, for a copy of a journal without its place (mowbite_replay anonymize): the date of
+  // a tick and of the heartbeat it sends.
+  template <typename A>
+  static void Anonymize(A& a) {
+    a.template Args<&tron::McuControl::Tick>([](const auto& o, double&, tron::WallClock& wall) {
+      int year = wall.year, month = wall.month, day = wall.day;
+      o.ShiftDate(&year, &month, &day);
+      wall.year = static_cast<uint16_t>(year);
+      wall.month = static_cast<uint8_t>(month);
+      wall.day = static_cast<uint8_t>(day);
+    });
+    a.template Result<&tron::McuControl::Tick>(
+        [](const auto&, std::vector<tron::SubPacket>& packets, double&, tron::WallClock& wall) {
+          for (auto& packet : packets) {
+            if (packet.type == static_cast<uint8_t>(tron::PacketType::kHeartbeat)) packet = tron::HeartbeatPacket(wall);
+          }
+        });
+  }
 };
 
 #endif  // TRON_MCU_MCU_JOURNAL_H
