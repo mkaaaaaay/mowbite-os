@@ -458,6 +458,66 @@ TEST(DockEstimator, TheFinalStretchEndsAfterItsWay) {
   EXPECT_FALSE(w.est.Good(w.t)) << "more than final_way since the last fix";
 }
 
+// Docked for longer than final_time with the contacts touching, then out: good through the blind distance and
+// good_way past it, until the marker is in the image again.
+TEST(DockEstimator, TheContactsKeepItGoodToLeave) {
+  DockWorld w;
+  w.x = -0.1;
+  w.Started();
+  w.Run(0.2, -0.1, 0.0, true);
+  w.Run(1.8, -0.05, 0.0);
+  ASSERT_TRUE(w.est.Good(w.t));
+  for (int i = 0; i < 15; i++) {
+    w.est.AtContacts(w.t);
+    w.Run(1.0, 0.0, 0.0);
+  }
+  EXPECT_TRUE(w.est.Good(w.t));
+  w.Run(0.7, 0.15, 0.0);
+  EXPECT_TRUE(w.est.Good(w.t)) << "0.105 m off the contacts";
+  EXPECT_NE(w.est.PositionAccuracy(w.t), kNoAccuracy);
+  w.Run(0.2, 0.15, 0.0);
+  EXPECT_FALSE(w.est.Good(w.t)) << "0.135 m off the contacts without an image";
+}
+
+TEST(DockEstimator, LeavingTheContactsTheMarkerTakesOver) {
+  DockWorld w;
+  w.x = -0.1;
+  w.Started();
+  w.Run(0.2, -0.1, 0.0, true);
+  w.Run(1.8, -0.05, 0.0);
+  w.est.AtContacts(w.t);
+  w.Run(3.0, 0.0, 0.0);
+  w.est.AtContacts(w.t);
+  // Images again from 0.08 m off the docked pose on.
+  w.Run(0.5, 0.15, 0.0);
+  w.Run(2.0, 0.15, 0.0, true);
+  EXPECT_TRUE(w.est.Good(w.t));
+  EXPECT_LT(w.PositionError(), 0.01);
+}
+
+TEST(DockEstimator, TheContactsDoNotReviveAnEstimate) {
+  DockWorld w;
+  w.x = -0.1;
+  w.Started();
+  w.Run(0.2, -0.1, 0.0, true);
+  w.Run(1.8, -0.05, 0.0);
+  // Standing past final_time without the contacts: no longer good, and touching them later changes nothing.
+  w.Run(13.0, 0.0, 0.0);
+  ASSERT_FALSE(w.est.Good(w.t));
+  w.est.AtContacts(w.t);
+  EXPECT_FALSE(w.est.Good(w.t));
+}
+
+TEST(DockEstimator, ContactsFarFromTheStationCountForNothing) {
+  DockWorld w;
+  w.x = -0.5;
+  w.Started();
+  ASSERT_TRUE(w.est.Good(w.t));
+  w.est.AtContacts(w.t);
+  w.Run(0.6, 0.15, 0.0);
+  EXPECT_FALSE(w.est.Good(w.t)) << "0.09 m without an image away from the station";
+}
+
 TEST(DockEstimator, ANewDockedHeadingDropsTheEstimate) {
   DockWorld w;
   w.Started();

@@ -240,7 +240,14 @@ bool DockEstimator::TryStart(double t) {
   return true;
 }
 
+void DockEstimator::AtContacts(double t) {
+  if (!std::isfinite(t) || !Good(t) || filter_.state()(0) < -config_.blind_distance - config_.good_way) return;
+  contact_time_ = t;
+  contact_way_ = way_;
+}
+
 void DockEstimator::Drop() {
+  contact_time_.reset();
   estimate_ = false;
   from_hint_ = false;
   outliers_ = 0;
@@ -258,6 +265,10 @@ bool DockEstimator::Good(double t) const {
   const double way = way_ - fix_way_;
   const double age = t - fix_time_;
   if (way <= config_.good_way && age <= config_.good_time) return true;
+  if (contact_time_ && way_ - contact_way_ <= config_.blind_distance + config_.good_way &&
+      t - *contact_time_ <= config_.final_time) {
+    return true;
+  }
   const bool closing = filter_.state()(0) >= -config_.blind_distance &&
                      fix_x_ >= -config_.blind_distance - config_.good_way;
   return closing && way <= config_.final_way && age <= config_.final_time;

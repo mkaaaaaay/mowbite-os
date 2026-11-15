@@ -122,6 +122,12 @@ class LocalizationNode : public rclcpp::Node {
             RCLCPP_INFO(get_logger(), "Lift ended: the heading counts as uncertain until the next course");
           }
           lifted_ = msg->lift;
+          // Once a second while on the contacts, so that hours of charging do not fill the journal.
+          const double now = MonotonicSeconds();
+          if (dock_ && msg->dock_contact && now - contact_call_s_ >= 1.0) {
+            dock_->Call<&DockEstimator::AtContacts>(now);
+            contact_call_s_ = now;
+          }
         });
     caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
         "hw/capabilities", LatchedQos(1), [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
@@ -546,6 +552,7 @@ class LocalizationNode : public rclcpp::Node {
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_gps_srv_;
   // Null without a dock marker on the platform.
   std::unique_ptr<mowbite_journal::Journaled<DockEstimator>> dock_;
+  double contact_call_s_ = -1e9;
   bool dock_dropped_ = false;
   rclcpp::Publisher<PoseMsg>::SharedPtr dock_pub_;
   rclcpp::Subscription<DockMarkerMsg>::SharedPtr marker_sub_;

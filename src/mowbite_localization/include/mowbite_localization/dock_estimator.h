@@ -85,6 +85,9 @@ class DockEstimator {
   // The heading of the docked mower in the station frame: 0 with the contacts in front, pi with them behind. A new one
   // drops the estimate.
   void SetDockedHeading(double heading);
+  // The charging contacts touch at t (hw/status dock_contact). While the estimate is good at the station they confirm
+  // it, and leaving them it stays good for blind_distance + good_way m, until the marker is in the image again.
+  void AtContacts(double t);
 
   bool has_estimate() const { return estimate_; }
   // The start took its heading from the hint.
@@ -145,6 +148,9 @@ class DockEstimator {
   double fix_time_ = 0.0;
   double fix_way_ = 0.0;
   double fix_x_ = 0.0;
+  // The last confirmation by the contacts: when, and the way then.
+  std::optional<double> contact_time_;
+  double contact_way_ = 0.0;
   StateHistory<Moment> history_;
 };
 

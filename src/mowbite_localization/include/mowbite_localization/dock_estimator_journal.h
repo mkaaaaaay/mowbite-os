@@ -29,7 +29,7 @@ struct mowbite_journal::CoreTraits<mowbite_localization::DockEstimator> {
   using D = mowbite_localization::DockEstimator;
   static constexpr const char* kName = "dock_localization";
   using Config = mowbite_localization::DockConfig;
-  MOWBITE_JOURNAL_METHODS(&D::AddMotion, &D::AddMarker, &D::SetHint, &D::SetDockedHeading);
+  MOWBITE_JOURNAL_METHODS(&D::AddMotion, &D::AddMarker, &D::SetHint, &D::SetDockedHeading, &D::AtContacts);
   static bool View(const D& core) { return core.has_estimate(); }
 };
 MOWBITE_JOURNAL_POD(mowbite_localization::Motion);
