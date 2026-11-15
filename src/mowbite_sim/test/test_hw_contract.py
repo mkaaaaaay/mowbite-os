@@ -114,7 +114,8 @@ class TestHardwareContract(unittest.TestCase):
         self.assertTrue(caps.charge_stop)
         self.assertAlmostEqual(caps.wheel_ticks_per_m, 1000.0)
         self.assertAlmostEqual(caps.wheel_distance, 0.40)
-        self.assertAlmostEqual(caps.max_linear_speed, 0.3, places=5)
+        self.assertAlmostEqual(caps.max_linear_speed, 0.55, places=5)
+        self.assertAlmostEqual(caps.max_angular_speed, 0.5, places=5)
         self.assertTrue(caps.gnss_receiver_time)
         self.assertLess(caps.failsafe_without_host_s, 0)
         self.assertEqual(caps.safety_measurement_date, "")
@@ -147,14 +148,14 @@ class TestHardwareContract(unittest.TestCase):
     def test_c_drive_watchdog_three_zeros(self):
         t0 = sim_time()
         for _ in range(5):
-            self.probe.cmd_vel.publish(Twist(linear=Vector3(x=0.5)))
+            self.probe.cmd_vel.publish(Twist(linear=Vector3(x=0.7)))
             time.sleep(0.1)
         time.sleep(1.2)
         speeds = [(e["t"], e["speed"]) for e in received(t0, SPEED)]
         moving = [t for t, v in speeds if v != [0.0, 0.0]]
         zeros = [t for t, v in speeds if v == [0.0, 0.0]]
         self.assertGreaterEqual(len(moving), 4)
-        self.assertTrue(all(v[0] == 0.3 for t, v in speeds if v != [0.0, 0.0]), "not clamped to 0.3")
+        self.assertTrue(all(abs(v[0] - 0.55) < 1e-6 for t, v in speeds if v != [0.0, 0.0]), "not clamped to 0.55")
         self.assertEqual(len(zeros), 3, str(speeds))
         self.assertAlmostEqual(zeros[0] - moving[-1], 0.5, delta=0.1)
         self.assertAlmostEqual(zeros[2] - zeros[0], 0.2, delta=0.05)

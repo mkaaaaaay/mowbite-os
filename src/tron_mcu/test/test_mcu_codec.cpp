@@ -177,10 +177,11 @@ TEST(Commands, SpeedIsClampedAndFinite) {
   ASSERT_TRUE(decoded);
   EXPECT_FLOAT_EQ(decoded->linear, kMaxLinearSpeed);
   EXPECT_FLOAT_EQ(decoded->angular, -kMaxAngularSpeed);
-  // Turning on the spot at 0.45 rad/s passes, more is cut to 0.5 rad/s; driving stays at 0.3 m/s.
+  // Turning on the spot at 0.45 rad/s passes, more is cut to 0.5 rad/s; 0.5 m/s passes, more is cut to 0.55 m/s.
   EXPECT_FLOAT_EQ(DecodeSpeed(SpeedPacket(0.0f, 0.45f)->payload)->angular, 0.45f);
   EXPECT_FLOAT_EQ(DecodeSpeed(SpeedPacket(0.0f, 0.6f)->payload)->angular, 0.5f);
-  EXPECT_FLOAT_EQ(DecodeSpeed(SpeedPacket(0.31f, 0.0f)->payload)->linear, 0.3f);
+  EXPECT_FLOAT_EQ(DecodeSpeed(SpeedPacket(0.5f, 0.0f)->payload)->linear, 0.5f);
+  EXPECT_FLOAT_EQ(DecodeSpeed(SpeedPacket(-0.7f, 0.0f)->payload)->linear, -0.55f);
   EXPECT_FALSE(SpeedPacket(NAN, 0.0f));
   EXPECT_FALSE(SpeedPacket(0.0f, INFINITY));
   EXPECT_EQ(SpeedPacket(0.0f, 0.0f)->payload, std::vector<uint8_t>(8, 0));
