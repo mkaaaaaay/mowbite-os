@@ -1138,10 +1138,11 @@ check("reset while tilted -> EMERGENCY_RESET_REFUSED STILL_TILTED with angle and
       and r.get("limit") == 26 and r.get("severity") == "warning" and r.get("resume") == "user"
       and bool(r.get("message")), json.dumps(refused), point="3.1a EMERGENCY_RESET_REFUSED STILL_TILTED")
 
-# Leaving the recording mode while the joystick is held stops at once, not after the 0.5 s watchdog.
+# Leaving the recording mode while the joystick is held stops at once, not after the 0.5 s watchdog. 3 s of driving
+# give the course from the positions (0.1 m of straight way) and the run of courses that aligns the heading.
 t0 = sim_time()
 hold = Hold(0.2, 0.0)
-time.sleep(0.6)
+time.sleep(3.0)
 c.publish("action", "mower_logic:area_recording/exit_recording_mode")
 time.sleep(1.0)
 hold.release()
