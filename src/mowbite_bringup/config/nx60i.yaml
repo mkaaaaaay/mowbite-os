@@ -33,6 +33,8 @@ mowbite_logic:
     # docking_speed. The board reports the contact up to 1 s late, so the last part is slower (dock_overshoot under
     # /**). Assumption until "Dock YF" measures it at the station.
     contact_speed: 0.04
+    # No dock marker: docking by RTK alone, not the require of tron.yaml.
+    dock_guide: none
 
 mowbite_localization:
   ros__parameters:

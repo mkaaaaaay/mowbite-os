@@ -106,14 +106,14 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   mower watched, before any docking by the marker with RTK. Its values `marker_wait`, `marker_cross_track` and
   `marker_scale_limit` stand in `mowbite_logic` of the platform file.
 - `dock_guide` in `mowbite_logic` of the platform file decides whether `docking.start` and going home use the marker:
-  `none` (by RTK only, the default), `prefer` (by the marker; where its source cannot measure, this try by RTK with
-  `DOCKING_WITHOUT_MARKER`) or `require` (never without it). With the marker the line begins at most `marker_range` in
-  front of the station, the logic asks for the marker from 3 m before that point and gives the estimate the heading
-  of the map as a hint. Each try chooses there: while RTK is good the station by the marker has to lie within
-  `dock_reference_limit` plus the accuracy of the map from the recorded one, at the gate also within 10 degrees of
-  its heading (`MARKER_MISMATCH`, docking ends where the mower stands). Start with `require` once `docking.test`
-  passed, and switch to `prefer` only after docking by RTK was measured on the mower. A camera that does not look to
-  the side of the contacts takes `none`.
+  `none` (by RTK only; `tron.yaml` underneath has `require`, so a platform without a marker sets `none`), `prefer` (by
+  the marker; where its source cannot measure, this try by RTK with `DOCKING_WITHOUT_MARKER`) or `require` (never
+  without it). With the marker the line begins at most `marker_range` in front of the station, the logic asks for the
+  marker from 3 m before that point and gives the estimate the heading of the map as a hint. Each try chooses there:
+  while RTK is good the station by the marker has to lie within `dock_reference_limit` plus the accuracy of the map from
+  the recorded one, at the gate also within 10 degrees of its heading (`MARKER_MISMATCH`, docking ends where the mower
+  stands). Start with `require` once `docking.test` passed, and switch to `prefer` only after docking by RTK was
+  measured on the mower. A camera that does not look to the side of the contacts takes `none`.
 - `mowbite_bringup/config/<platform>.yaml`: what differs from `tron.yaml`, which lies underneath (battery voltages
   empty, full and critical, charge check, temperatures). Check every value you inherit. The battery voltages stand only
   here: a driver that sets them on its board gets them in the start file from `battery_voltages` of
