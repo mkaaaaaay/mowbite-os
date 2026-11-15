@@ -16,7 +16,7 @@ import time
 import unittest
 
 import rclpy
-from mowbite_msgs.msg import (ButtonEvent, MapStatus, MqttPublish, RobotPose, RobotState, RpcError, RpcRequest,
+from mowbite_msgs.msg import (ButtonEvent, HardwareStatus, MapStatus, MqttPublish, RobotPose, RobotState, RpcError, RpcRequest,
                               RpcResponse)
 from mowbite_msgs.srv import ReplaceMap, SetPose
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -62,12 +62,14 @@ class Probe(SimProbe):
         self.status = None
         self.pose = None
         self.robot = None
+        self.hw = None
         self.presses = []
         self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
         self.node.create_subscription(RobotPose, "localization/pose", self._set("pose"), 10)
         self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.node.create_subscription(ButtonEvent, "hw/button", self._button, BUTTON)
+        self.node.create_subscription(HardwareStatus, "hw/status", self._set("hw"), 10)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
         self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
@@ -82,6 +84,12 @@ class Probe(SimProbe):
 
     def press(self, since, kind, timeout):
         return self.wait(lambda: next((m for m in self.presses[since:] if m.press == kind), None), timeout)
+
+    def free(self):
+        """STOP free for FREE, counted from the clear frame that lets the board drop it."""
+        if not self.wait(lambda: self.hw is not None and not self.hw.stop, 10):
+            raise AssertionError("the board kept STOP, no clear frame")
+        time.sleep(FREE)
 
     def hold(self, seconds, **during):
         """STOP held for seconds, then let go."""
@@ -143,7 +151,7 @@ class TestStopRelease(unittest.TestCase):
 
     def test_03_free_then_held_releases_and_mowing_stays_paused(self):
         p = self.probe
-        time.sleep(FREE)
+        p.free()
         since, presses = len(p.events), len(p.presses)
         p.flags(stop=1)
         held = p.press(presses, ButtonEvent.PRESS_HELD, HOLD)
@@ -177,7 +185,7 @@ class TestStopRelease(unittest.TestCase):
         self.assertIsNotNone(p.event(since, "EMERGENCY", 5, emergency=True))
         since = len(p.events)
         # Too long: held at 0.1 s, canceled at 2 s, letting go does nothing.
-        time.sleep(FREE)
+        p.free()
         presses = len(p.presses)
         p.hold(3.5)
         self.assertNoRelease(since, presses)
@@ -189,7 +197,7 @@ class TestStopRelease(unittest.TestCase):
         self.assertNoRelease(since, presses)
         self.assertEqual(p.presses[presses:], [])
         # The IMU stops while it is held.
-        time.sleep(FREE)
+        p.free()
         presses = len(p.presses)
         p.flags(stop=1)
         self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_HELD, HOLD))
@@ -202,7 +210,7 @@ class TestStopRelease(unittest.TestCase):
 
     def test_05_the_app_while_held_then_the_gesture(self):
         p = self.probe
-        time.sleep(FREE)
+        p.free()
         since, presses = len(p.events), len(p.presses)
         p.flags(stop=1)
         self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_HELD, HOLD))
@@ -224,7 +232,7 @@ class TestStopRelease(unittest.TestCase):
         self.assertTrue(p.robot.emergency)
         # Held past 2 s by now: letting go does nothing, a new short press after the free time releases.
         p.flags()
-        time.sleep(FREE)
+        p.free()
         presses = len(p.presses)
         p.hold(HOLD)
         self.assertIsNotNone(p.press(presses, ButtonEvent.PRESS_LONG, 2.0))
