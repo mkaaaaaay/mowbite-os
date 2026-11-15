@@ -1049,14 +1049,15 @@ check("RECORDING_REFUSED RING_FEW_POINTS with points and limit", fixed_reason(la
 teleop(0.0, 0.0)
 t0 = sim_time()
 for _ in range(10):
-    teleop(0.5, 0.1)
+    teleop(0.7, 0.1)
     time.sleep(0.1)
 teleop(0.0, 0.0)
 time.sleep(1.0)
 speeds = sent_speeds(t0)
 moving = [s for t, s in speeds if s != [0.0, 0.0]]
 zeros = [t for t, s in speeds if s == [0.0, 0.0]]
-check_log("teleop drives, clamped to 0.3", len(moving) >= 8 and all(s[0] == 0.3 for s in moving), f"{len(moving)} frames, {moving[:2]}")
+check_log("teleop drives, clamped to the driver's 0.55", len(moving) >= 8 and all(abs(s[0] - 0.55) < 1e-3 for s in moving),
+          f"{len(moving)} frames, {moving[:2]}")
 check_log("stop after teleop: 3 zeros", len(zeros) == 3, str(zeros))
 line = wait_for(lambda: [p for p in overlay_lines("blue") if len(p["poly"]) >= 2], 3)
 check("map_overlay: the open line as poly, in mm", bool(line) and line[0]["is_closed"] == 0
