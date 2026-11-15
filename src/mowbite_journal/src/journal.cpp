@@ -26,6 +26,7 @@
 #include <thread>
 
 #include "mowbite_journal/format.h"
+#include "mowbite_journal/run_index.h"
 
 namespace mowbite_journal {
 
@@ -142,10 +143,6 @@ void PutCbor(std::vector<uint8_t>& out, uint16_t method, const json& value) {
   PutRecord(out, kJournalStream, method, MonotonicNs(), cbor.data(), cbor.size());
 }
 
-bool IsRunName(const std::string& name) {
-  return name.size() > 17 && std::isdigit(static_cast<unsigned char>(name[0])) && name[8] == 'T' && name[15] == 'Z';
-}
-
 struct FileInfo {
   std::string path;
   uint64_t bytes = 0;
@@ -170,15 +167,6 @@ std::vector<FileInfo> Segments(const std::string& run) {
   closedir(dir);
   std::sort(files.begin(), files.end(), [](const FileInfo& a, const FileInfo& b) { return a.path < b.path; });
   return files;
-}
-
-// True while another process holds the lock of the run.
-bool RunActive(const std::string& run) {
-  int fd = open((run + "/lock").c_str(), O_RDONLY | O_CLOEXEC);
-  if (fd < 0) return false;
-  const bool active = flock(fd, LOCK_EX | LOCK_NB) != 0 && errno == EWOULDBLOCK;
-  close(fd);
-  return active;
 }
 
 void RemoveRun(const std::string& run) {
@@ -329,7 +317,7 @@ class Journal::Impl {
       if (stop) break;
       if (fd_ >= 0 && (now - segment_start_s_ >= options_.segment_s ||
                        static_cast<double>(segment_bytes_) >= options_.segment_mb * 1e6)) {
-        EndSegment("rotate");
+        EndSegment(kEndRotate);
         last_limits = -kLimitsCheckS;
       }
       if (now - last_limits >= kLimitsCheckS) {
@@ -337,7 +325,7 @@ class Journal::Impl {
         KeepLimits();
       }
     }
-    EndSegment("exit");
+    EndSegment(kEndExit);
   }
 
   void CheckSpace() {

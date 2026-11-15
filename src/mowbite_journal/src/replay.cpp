@@ -109,7 +109,7 @@ class RunWalk {
         }
       }
     } else if (record.method == kEnd) {
-      ended_ = value.value("reason", "") == "exit";
+      ended_ = value.value("reason", "") == kEndExit;
     }
     return true;
   }
