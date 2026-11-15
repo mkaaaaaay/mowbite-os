@@ -1,6 +1,5 @@
 #include "mowbite_stats/stats_rpc.h"
 
-#include <iterator>
 #include <regex>
 #include <set>
 
@@ -105,7 +104,7 @@ RpcOutcome HandleHistory(const SensorHistory& history, const json& params, doubl
   if (auto bad = UnixTime(params, "to", &query.to)) return *bad;
   if (query.from && query.to && *query.from > *query.to) return Bad("from", "range", "not after to");
   if (params.contains("step")) {
-    const int64_t largest = std::end(mowbite_api::kSensorsHistorySteps)[-1];
+    const int64_t largest = mowbite_api::kSensorsHistoryMaxStep;
     const std::string range = "s from 1 to " + std::to_string(largest);
     if (!params["step"].is_number_integer()) return Bad("step", "type", range);
     query.step = params["step"].get<int64_t>();

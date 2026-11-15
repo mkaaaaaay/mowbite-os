@@ -97,7 +97,9 @@ TEST(StatsRpc, HistoryGivesTheKeysOfTheCatalog) {
   EXPECT_EQ(keys(out.result), names(method->result.fields));
   ASSERT_EQ(out.result["sensors"].size(), 1u);
   for (const auto& field : method->result.fields) {
-    if (field.name == "sensors") EXPECT_EQ(keys(out.result["sensors"][0]), names(field.fields));
+    if (field.name == "sensors") {
+      EXPECT_EQ(keys(out.result["sensors"][0]), names(field.fields));
+    }
   }
   EXPECT_EQ(names(method->params.fields), std::set<std::string>({"client", "sensor_ids", "from", "to", "step"}));
   EXPECT_EQ(out.result["sensors"][0]["points"], json::parse("[[1794563940, 25, 25, 25]]"));

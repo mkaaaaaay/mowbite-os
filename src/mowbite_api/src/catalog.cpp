@@ -152,6 +152,16 @@ const char kHostOffered[] = "while mowbite/host/status says online";
 
 const char kCameraOffered[] = "with at least one camera";
 
+// The steps of sensors.history from first on, as "60, 300 or 900".
+std::string HistorySteps(size_t first) {
+  std::string text;
+  for (size_t i = first; i < std::size(kSensorsHistorySteps); ++i) {
+    if (i > first) text += i + 1 == std::size(kSensorsHistorySteps) ? " or " : ", ";
+    text += std::to_string(kSensorsHistorySteps[i]);
+  }
+  return text;
+}
+
 Field UnixTime(std::string name, std::string text) {
   return {std::move(name), Type::kInteger, "unix s", true, std::move(text), {}, false, {}, ""};
 }
@@ -777,17 +787,17 @@ const std::vector<Method>& Methods() {
       {"sensors.history", "mowbite_stats",
        "Min, mean and max of the number sensors per step over the last " + std::to_string(kSensorsHistoryHours) +
            " h; the answer stays below " + std::to_string(kSensorsHistoryMaxAnswerBytes) +
-           " bytes: the step grows to 300 or 900, then the oldest points go",
+           " bytes: the step grows to " + HistorySteps(1) + ", then the oldest points go",
        Object("params", "None: all number sensors over the last " + std::to_string(kSensorsHistoryHours) + " h",
               {Client(), List("sensor_ids", "Sensor ids, none for all; ids the history does not know are left out",
                               Type::kString, false),
                Count("from", "unix s", "Points from the one that holds this time on; none for " +
                                            std::to_string(kSensorsHistoryHours) + " h before to"),
                Count("to", "unix s", "Points that begin up to then, the one going on included; none for now"),
-               Whole("step", "s", 1, std::end(kSensorsHistorySteps)[-1], "At least so long a point: 60, 300 or 900", false)},
+               Whole("step", "s", 1, kSensorsHistoryMaxStep, "At least so long a point: " + HistorySteps(0), false)},
               false),
        Object("result", "The history",
-              {Whole("step", "s", kSensorsHistorySteps[0], std::end(kSensorsHistorySteps)[-1], "The step taken: 60, 300 or 900"),
+              {Whole("step", "s", kSensorsHistorySteps[0], kSensorsHistoryMaxStep, "The step taken: " + HistorySteps(0)),
                UnixTime("from", "The points from then on: from rounded down to the step, later when truncated"),
                UnixTime("to", "The points that begin up to then"),
                Bool("truncated", "The oldest points were left out to keep the answer small"),

@@ -16,13 +16,13 @@
 namespace mowbite_stats {
 
 // Width of a bucket (s), and how long buckets are kept (s).
-constexpr int64_t kBucketSeconds = 60;
+constexpr int64_t kBucketSeconds = mowbite_api::kSensorsHistorySteps[0];
 constexpr int64_t kKeepSeconds = int64_t{mowbite_api::kSensorsHistoryHours} * 3600;
 // Number sensors recorded at once; about 20 on the Tron.
 constexpr size_t kMaxSensors = 64;
 // Longest id, name or unit (bytes); a sensor with a longer one is not recorded.
 constexpr size_t kMaxSensorText = 100;
-// All hour files together: kMaxSensors x 49 h x 60 buckets x at most about 60 bytes a line is 11.3 MB.
+// All hour files together; at kMaxSensors full about 11.3 MB.
 constexpr size_t kMaxHistoryBytes = size_t{16} * 1024 * 1024;
 // Wall times before 2026-01-01 come from a clock that is not set: their values are not recorded.
 constexpr double kEarliestWall = 1767225600;

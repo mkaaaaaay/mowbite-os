@@ -1,6 +1,7 @@
 #ifndef MOWBITE_API_CATALOG_H
 #define MOWBITE_API_CATALOG_H
 
+#include <iterator>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -228,6 +229,7 @@ constexpr int kStatsMaxAnswerHours = 9000;
 // sensors.history: hours kept, the steps (s) from small to large, and the most bytes of an answer (MQTT ends at 2 MB).
 constexpr int kSensorsHistoryHours = 48;
 constexpr int kSensorsHistorySteps[] = {60, 300, 900};
+constexpr int kSensorsHistoryMaxStep = kSensorsHistorySteps[std::size(kSensorsHistorySteps) - 1];
 constexpr int kSensorsHistoryMaxAnswerBytes = 900000;
 // The situations of sound.list in their order.
 const std::vector<SoundSituation>& SoundSituations();

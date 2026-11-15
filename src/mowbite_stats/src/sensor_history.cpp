@@ -36,7 +36,7 @@ double Mean(double sum, uint64_t n, double min, double max) {
   return std::clamp(sum / static_cast<double>(n), min, max);
 }
 
-bool Fits(const std::string& text) {
+bool TextFits(const std::string& text) {
   if (text.size() > kMaxSensorText) return false;
   try {
     (void)json(text).dump();
@@ -46,34 +46,28 @@ bool Fits(const std::string& text) {
   return true;
 }
 
-bool Fits(const json& value, size_t max_bytes) {
+bool AnswerFits(const json& value, size_t max_bytes) {
   return value.dump().size() <= max_bytes;
 }
 
-auto FirstFrom(const std::deque<Bucket>& buckets, int64_t t) {
-  return std::lower_bound(buckets.begin(), buckets.end(), t, [](const Bucket& b, int64_t v) { return b.t < v; });
-}
-
-auto FirstFrom(std::deque<Bucket>& buckets, int64_t t) {
+template <class Buckets>
+auto FirstFrom(Buckets& buckets, int64_t t) {
   return std::lower_bound(buckets.begin(), buckets.end(), t, [](const Bucket& b, int64_t v) { return b.t < v; });
 }
 
 }  // namespace
 
 bool SensorHistory::Describe(const std::string& id, const std::string& name, const std::string& unit, bool number) {
-  auto it = series_.find(id);
-  const bool fits = !id.empty() && Fits(id) && Fits(name) && Fits(unit);
-  if (it == series_.end()) {
-    if (!number || !fits || series_.size() >= kMaxSensors) return false;
-    it = series_.emplace(id, Series{}).first;
-  }
-  Series& series = it->second;
-  series.recorded = number && fits;
+  const bool fits = !id.empty() && TextFits(id) && TextFits(name) && TextFits(unit);
+  if (series_.count(id) == 0 && !(number && fits)) return false;
+  Series* series = SeriesFor(id);
+  if (!series) return false;
+  series->recorded = number && fits;
   if (fits) {
-    series.name = name;
-    series.unit = unit;
+    series->name = name;
+    series->unit = unit;
   }
-  return series.recorded;
+  return series->recorded;
 }
 
 void SensorHistory::Add(const std::string& id, double value, double wall) {
@@ -131,15 +125,18 @@ void SensorHistory::Load(int64_t hour, const std::string& text) {
       }
       for (const json& entry : line["sensors"]) {
         Series* series = nullptr;
-        if (entry.is_array() && entry.size() == 3 && entry[0].is_string() && entry[1].is_string() &&
-            entry[2].is_string() && !entry[0].get<std::string>().empty() && Fits(entry[0].get<std::string>()) &&
-            Fits(entry[1].get<std::string>()) && Fits(entry[2].get<std::string>())) {
-          const bool known = series_.count(entry[0].get<std::string>()) > 0;
-          series = SeriesFor(entry[0].get<std::string>());
+        const bool texts = entry.is_array() && entry.size() == 3 && entry[0].is_string() && entry[1].is_string() &&
+                           entry[2].is_string();
+        const std::string id = texts ? entry[0].get<std::string>() : "";
+        const std::string name = texts ? entry[1].get<std::string>() : "";
+        const std::string unit = texts ? entry[2].get<std::string>() : "";
+        if (!id.empty() && TextFits(id) && TextFits(name) && TextFits(unit)) {
+          const bool known = series_.count(id) > 0;
+          series = SeriesFor(id);
           // Files come newest first: the first name found is the newest.
           if (series && !known) {
-            series->name = entry[1].get<std::string>();
-            series->unit = entry[2].get<std::string>();
+            series->name = name;
+            series->unit = unit;
           }
         }
         clean = clean && series;
@@ -290,12 +287,11 @@ json SensorHistory::Query(const HistoryQuery& query, double now, size_t max_byte
   std::optional<std::set<std::string>> ids;
   if (query.ids) ids.emplace(query.ids->begin(), query.ids->end());
   const std::set<std::string>* only = ids ? &*ids : nullptr;
-  const auto& steps = mowbite_api::kSensorsHistorySteps;
-  const int64_t largest = std::end(steps)[-1];
-  for (const int64_t step : steps) {
+  const int64_t largest = mowbite_api::kSensorsHistoryMaxStep;
+  for (const int64_t step : mowbite_api::kSensorsHistorySteps) {
     if (step < query.step && step != largest) continue;
     json answer = Answer(only, step, AlignDown(from, step), to);
-    if (Fits(answer, max_bytes)) return answer;
+    if (AnswerFits(answer, max_bytes)) return answer;
   }
   // Even the largest step is too much: the smallest number of its oldest points left out that makes it fit.
   const int64_t base = AlignDown(from, largest);
@@ -303,7 +299,7 @@ json SensorHistory::Query(const HistoryQuery& query, double now, size_t max_byte
   int64_t high = to < base ? 1 : (AlignDown(to, largest) - base) / largest + 1;
   while (low < high) {
     const int64_t mid = low + (high - low) / 2;
-    if (Fits(Answer(only, largest, base + mid * largest, to), max_bytes)) {
+    if (AnswerFits(Answer(only, largest, base + mid * largest, to), max_bytes)) {
       high = mid;
     } else {
       low = mid + 1;
