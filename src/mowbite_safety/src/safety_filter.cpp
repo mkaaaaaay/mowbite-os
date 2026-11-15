@@ -20,6 +20,14 @@ constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr double kFollowerMaxReverse = 0.12;
 // m/s forwards in the station frame at most: the pose from the dock marker holds for 5 cm past an image (G42).
 constexpr double kDockMaxForward = 0.17;
+// s of growth a command may take at most: the follower sends every 0.05 s, the app every 0.1 s.
+constexpr double kRampStep = 0.1;
+
+// Towards target from prev, growing by step at most; less, and the other direction from zero.
+double Ramp(double prev, double target, double step) {
+  const double from = prev * target > 0 ? std::abs(prev) : 0.0;
+  return std::abs(target) <= from + step ? target : std::copysign(from + step, target);
+}
 
 std::string Format(const char* format, double a, double b = 0, double c = 0) {
   char text[200];
@@ -311,12 +319,20 @@ Decision SafetyFilter::OnCommand(Source source, double linear, double angular, d
     }
     owner_ = source;
   }
+  const bool goes_on = moving_ == source;
   owner_s_ = now;
   moving_ = source;
   const bool follower = source == Source::kFollower || source == Source::kDock;
   const double forward = source == Source::kDock ? std::min(max_linear_, kDockMaxForward) : max_linear_;
   const double reverse = follower ? std::min(max_linear_, kFollowerMaxReverse) : max_linear_;
-  decision.out = Twist2{std::clamp(linear, -reverse, forward), std::clamp(angular, -max_angular_, max_angular_)};
+  Twist2 out{std::clamp(linear, -reverse, forward), std::clamp(angular, -max_angular_, max_angular_)};
+  const Twist2 before = goes_on ? out_ : Twist2{};
+  const double dt = goes_on ? std::clamp(now - out_s_, 0.0, kRampStep) : kRampStep;
+  if (config_.ramp_linear > 0) out.linear = Ramp(before.linear, out.linear, config_.ramp_linear * dt);
+  if (config_.ramp_angular > 0) out.angular = Ramp(before.angular, out.angular, config_.ramp_angular * dt);
+  out_ = out;
+  out_s_ = now;
+  decision.out = out;
   return decision;
 }
 

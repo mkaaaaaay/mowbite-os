@@ -22,6 +22,11 @@ struct FollowerConfig {
   // target such a turn ends.
   double min_turn_rate = 0.28;
   double turn_tolerance = 2.0 * M_PI / 180.0;
+  // rad/s at most when turning on the spot, 0 for max_angular.
+  double spot_max_angular = 0;
+  // rad/s² a turn on the spot slows down with before its target, from sqrt(2 * turn_deceleration * error); 0 for
+  // heading_gain * error.
+  double turn_deceleration = 0;
   // m from the start pose at most when the path begins.
   double max_start_distance = 1.0;
   // m from the last pose at most when the mower got there.

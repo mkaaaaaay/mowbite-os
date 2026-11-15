@@ -127,6 +127,12 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   the recorded one, at the gate also within 10 degrees of its heading (`MARKER_MISMATCH`, docking ends where the mower
   stands). Start with `require` once `docking.test` passed, and switch to `prefer` only after docking by RTK was
   measured on the mower. A camera that does not look to the side of the contacts takes `none`.
+- How the mower drives, in the platform file: `mowbite_follower` speeds up at `acceleration` and brakes before corners
+  and the end at `deceleration` (m/s², by default the same), turns on the spot up to `spot_max_angular` (0: as on the
+  path, `max_angular`; in the station frame always `max_angular`) and slows such a turn down before its target at
+  `turn_deceleration` (rad/s², 0: `heading_gain` times the error). `mowbite_safety` lets every moving command grow at
+  most `ramp_linear` m/s² and `ramp_angular` rad/s² from the one before, whatever its source (0: no limit); less, a stop
+  and an emergency go out at once. Measure how fast the wheels follow before raising any of them.
 - `mowbite_bringup/config/<platform>.yaml`: what differs from `tron.yaml`, which lies underneath (battery voltages
   empty, full and critical, charge check, temperatures). Check every value you inherit. The battery voltages stand only
   here: a driver that sets them on its board gets them in the start file from `battery_voltages` of

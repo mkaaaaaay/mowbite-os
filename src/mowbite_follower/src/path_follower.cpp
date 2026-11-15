@@ -234,8 +234,10 @@ std::optional<PathFollower::Command> PathFollower::TurnTowards(double heading, d
   if (time_ - phase_start_ > config_.phase_timeout) {
     return Fail(Failure::kTimeout, Format("turning on the spot took longer than %.0f s", config_.phase_timeout));
   }
-  const double rate = std::clamp(config_.steering.heading_gain * std::abs(error),
-                                 std::min(config_.min_turn_rate, config_.max_angular), config_.max_angular);
+  const double cap = config_.spot_max_angular > 0 ? config_.spot_max_angular : config_.max_angular;
+  const double slowing = config_.turn_deceleration > 0 ? std::sqrt(2.0 * config_.turn_deceleration * std::abs(error))
+                                                       : config_.steering.heading_gain * std::abs(error);
+  const double rate = std::clamp(slowing, std::min(config_.min_turn_rate, cap), cap);
   return Command{0.0, std::copysign(rate, error)};
 }
 

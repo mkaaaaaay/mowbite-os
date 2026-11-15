@@ -24,14 +24,14 @@ SpeedPlan::SpeedPlan(const Path& path, const SpeedLimits& limits) : limits_(limi
   }
   at_pose_[n - 1] = std::min(limits.creep_speed, cap_[n - 2]);
   for (size_t i = n - 1; i-- > 0;) {
-    const double braking = std::sqrt(at_pose_[i + 1] * at_pose_[i + 1] + 2.0 * limits.acceleration * path.length(i));
+    const double braking = std::sqrt(at_pose_[i + 1] * at_pose_[i + 1] + 2.0 * limits.deceleration * path.length(i));
     at_pose_[i] = std::min(at_pose_[i], braking);
   }
 }
 
 double SpeedPlan::At(size_t segment, double remaining) const {
   const double next = at_pose_[segment + 1];
-  return std::min(cap_[segment], std::sqrt(next * next + 2.0 * limits_.acceleration * std::max(remaining, 0.0)));
+  return std::min(cap_[segment], std::sqrt(next * next + 2.0 * limits_.deceleration * std::max(remaining, 0.0)));
 }
 
 double SpeedPlan::Floor(size_t segment) const { return std::min(limits_.creep_speed, cap_[segment]); }

@@ -1028,3 +1028,87 @@ TEST_F(FilterTest, TheDockFollowerIsOneSourceAmongOthers) {
   EXPECT_EQ(filter_.Latched(), kReasonTilt);
   EXPECT_EQ(Cmd(Source::kDock, -0.1).refusal, "emergency");
 }
+
+TEST_F(FilterTest, ACommandGrowsAtMostAtTheRampAndShrinksAtOnce) {
+  SafetyConfig config;
+  config.ramp_linear = 0.5;
+  config.ramp_angular = 1.0;
+  SafetyFilter filter = Ready(1.0, config);
+  filter.OnCapabilities(true, 0.55, 0.7);
+  double t = 1.0;
+  const auto send = [&filter, &t](double linear, double angular) {
+    Feed(filter, t);
+    const Decision d = filter.OnCommand(Source::kTeleop, linear, angular, t);
+    t += 0.05;
+    return d.out.value_or(Twist2{-9, -9});
+  };
+  ASSERT_TRUE(Stops(filter.OnCommand(Source::kTeleop, 0, 0, t)));
+  // From a stop one step of 0.1 s, then by the time between the commands.
+  Twist2 out = send(0.55, 0.7);
+  EXPECT_NEAR(out.linear, 0.05, 1e-9);
+  EXPECT_NEAR(out.angular, 0.1, 1e-9);
+  out = send(0.55, 0.7);
+  EXPECT_NEAR(out.linear, 0.075, 1e-9);
+  EXPECT_NEAR(out.angular, 0.15, 1e-9);
+  for (int i = 0; i < 30; i++) out = send(0.55, 0.7);
+  EXPECT_NEAR(out.linear, 0.55, 1e-9);
+  EXPECT_NEAR(out.angular, 0.7, 1e-9);
+  // Less goes out at once, the other direction grows from zero.
+  out = send(0.1, -0.7);
+  EXPECT_NEAR(out.linear, 0.1, 1e-9);
+  EXPECT_NEAR(out.angular, -0.05, 1e-9);
+  // A gap counts 0.1 s at most.
+  t += 2.0;
+  out = send(0.55, -0.7);
+  EXPECT_NEAR(out.linear, 0.15, 1e-9);
+  EXPECT_NEAR(out.angular, -0.15, 1e-9);
+  // A zero stops at once, and the next command starts from a stop.
+  EXPECT_TRUE(Stops(filter.OnCommand(Source::kTeleop, 0, 0, t)));
+  out = send(0.55, 0.0);
+  EXPECT_NEAR(out.linear, 0.05, 1e-9);
+}
+
+TEST_F(FilterTest, AnEmergencyStopsARampedCommandAtOnce) {
+  SafetyConfig config;
+  config.ramp_linear = 0.5;
+  config.ramp_angular = 1.0;
+  SafetyFilter filter = Ready(1.0, config);
+  ASSERT_TRUE(Stops(filter.OnCommand(Source::kTeleop, 0, 0, 1.0)));
+  double t = 1.0;
+  for (int i = 0; i < 10; i++, t += 0.05) {
+    Feed(filter, t);
+    ASSERT_TRUE(Moves(filter.OnCommand(Source::kTeleop, 0.3, 0.3, t)));
+  }
+  filter.OnHardware(true, 1, t);
+  const auto stop = filter.Tick(t);
+  ASSERT_TRUE(stop);
+  EXPECT_EQ(stop->linear, 0);
+  EXPECT_EQ(stop->angular, 0);
+  // After the release the source arms again and starts from a stop.
+  Feed(filter, t + 0.05);
+  ASSERT_TRUE(Stops(filter.OnCommand(Source::kTeleop, 0, 0, t + 0.05)));
+  Feed(filter, t + 1.2);
+  const Decision d = filter.OnCommand(Source::kTeleop, 0.3, 0.3, t + 1.2);
+  ASSERT_TRUE(d.out);
+  EXPECT_NEAR(d.out->linear, 0.05, 1e-9);
+  EXPECT_NEAR(d.out->angular, 0.1, 1e-9);
+}
+
+TEST_F(FilterTest, AnotherSourceStartsFromAStop) {
+  SafetyConfig config;
+  config.ramp_linear = 0.5;
+  SafetyFilter filter = Ready(1.0, config);
+  ASSERT_TRUE(Stops(filter.OnCommand(Source::kTeleop, 0, 0, 1.0)));
+  double t = 1.0;
+  for (int i = 0; i < 10; i++, t += 0.05) {
+    Feed(filter, t);
+    ASSERT_TRUE(Moves(filter.OnCommand(Source::kTeleop, 0.3, 0, t)));
+  }
+  // Teleop stops, the follower arms and takes over after it from zero.
+  ASSERT_TRUE(Stops(filter.OnCommand(Source::kTeleop, 0, 0, t)));
+  ASSERT_TRUE(Stops(filter.OnCommand(Source::kFollower, 0, 0, t)));
+  Feed(filter, t);
+  const Decision d = filter.OnCommand(Source::kFollower, 0.3, 0, t);
+  ASSERT_TRUE(d.out) << d.refusal;
+  EXPECT_NEAR(d.out->linear, 0.05, 1e-9);
+}

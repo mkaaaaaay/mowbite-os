@@ -159,17 +159,23 @@ class SafetyNode : public rclcpp::Node {
     config.dock_max_position_accuracy =
         declare_parameter("dock_max_position_accuracy", config.dock_max_position_accuracy);
     config.dock_accuracy_per_m = declare_parameter("dock_accuracy_per_m", config.dock_accuracy_per_m);
+    config.ramp_linear = declare_parameter("ramp_linear", config.ramp_linear);
+    config.ramp_angular = declare_parameter("ramp_angular", config.ramp_angular);
     // Values that would let the filter pass everything or nothing keep it from starting; without it nothing moves.
     if (!(config.tilt_release > 0 && config.tilt_release < config.tilt_limit && config.tilt_limit < 90) ||
         !(config.tilt_time >= 0) || !(config.fence_margin >= 0) || !(config.imu_timeout > 0) ||
         !(config.pose_timeout > 0) || !(config.hw_timeout > 0) || !(config.dock_max_position_accuracy > 0) ||
-        !(config.dock_accuracy_per_m >= 0 && config.dock_accuracy_per_m <= kMaxDockAccuracyPerM)) {
+        !(config.dock_accuracy_per_m >= 0 && config.dock_accuracy_per_m <= kMaxDockAccuracyPerM) ||
+        !(config.ramp_linear >= 0 && std::isfinite(config.ramp_linear)) ||
+        !(config.ramp_angular >= 0 && std::isfinite(config.ramp_angular))) {
       throw std::invalid_argument(
           "mowbite_safety: tilt_release < tilt_limit < 90, timeouts and dock_max_position_accuracy above 0, "
-          "dock_accuracy_per_m from 0 to 0.2 needed");
+          "dock_accuracy_per_m from 0 to 0.2, ramp_linear and ramp_angular 0 or above needed");
     }
-    RCLCPP_INFO(get_logger(), "Tilt limit %.1f deg for %.1f s, release below %.1f deg; fence %.2f m beyond the areas",
-                config.tilt_limit, config.tilt_time, config.tilt_release, config.fence_margin);
+    RCLCPP_INFO(get_logger(), "Tilt limit %.1f deg for %.1f s, release below %.1f deg; fence %.2f m beyond the areas; "
+                "commands grow at most %.2f m/s2 and %.2f rad/s2 (0 for no limit)",
+                config.tilt_limit, config.tilt_time, config.tilt_release, config.fence_margin, config.ramp_linear,
+                config.ramp_angular);
     return config;
   }
 

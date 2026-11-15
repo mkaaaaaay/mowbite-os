@@ -26,7 +26,9 @@ inline void to_json(nlohmann::json& j, const SafetyConfig& c) {
                      {"station_behind", c.station_behind},
                      {"station_half_width", c.station_half_width},
                      {"arm_quiet", c.arm_quiet},
-                     {"owner_timeout", c.owner_timeout}};
+                     {"owner_timeout", c.owner_timeout},
+                     {"ramp_linear", c.ramp_linear},
+                     {"ramp_angular", c.ramp_angular}};
 }
 // Fields that came later take the value the journals from before ran with; all else is required.
 inline void from_json(const nlohmann::json& j, SafetyConfig& c) {
@@ -46,13 +48,15 @@ inline void from_json(const nlohmann::json& j, SafetyConfig& c) {
   j.at("station_half_width").get_to(c.station_half_width);
   j.at("arm_quiet").get_to(c.arm_quiet);
   j.at("owner_timeout").get_to(c.owner_timeout);
+  c.ramp_linear = j.value("ramp_linear", 0.0);
+  c.ramp_angular = j.value("ramp_angular", 0.0);
 }
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Twist2, linear, angular)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Decision, out, refusal, conflict)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LatchRequest, bits, reason, again)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Release, allowed, message, code, value, limit)
 
-static_assert(sizeof(SafetyConfig) == 128);
+static_assert(sizeof(SafetyConfig) == 144);
 static_assert(sizeof(Twist2) == 16);
 static_assert(sizeof(Decision) == 64);
 static_assert(sizeof(LatchRequest) == 48);

@@ -19,8 +19,9 @@ struct SpeedLimits {
   double max_linear = 0.3;
   // rad/s the path itself may ask for on arcs; the rest up to max_angular is left to correct with.
   double turn_rate = 0.25;
-  // m/s² to brake with before corners and the end.
+  // m/s² to speed up with, and to brake with before corners and the end.
   double acceleration = 0.1;
+  double deceleration = 0.1;
   // m/s the mower creeps onto corners and the end with, above the dead band of the wheels.
   double creep_speed = 0.06;
 };

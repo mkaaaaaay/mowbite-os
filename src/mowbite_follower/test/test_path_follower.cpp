@@ -895,3 +895,49 @@ TEST(PathFollower, OffPathIsTheDistanceToTheWholePath) {
   ASSERT_EQ(follower.Start(Line(0, 0, 0, 2.0), {}, 10), "");
   EXPECT_NEAR(follower.OffPath({0.2, 0.1, 0}), 0.1, 1e-9);
 }
+
+// Turning on the spot up to spot_max_angular, slowing down before the target by turn_deceleration; driving on the
+// path stays within max_angular.
+TEST(PathFollower, TurnsOnTheSpotFasterAndSlowsDownBeforeTheTarget) {
+  FollowerConfig config;
+  config.max_angular = 0.5;
+  config.min_turn_rate = 0.45;
+  config.spot_max_angular = 0.7;
+  config.turn_deceleration = 1.0;
+  PathFollower follower{config};
+  ASSERT_EQ(follower.Start(Line(0, 0, M_PI - 0.01, 2.0), {}, 0), "");
+  Robot robot;
+  double t = 0;
+  double fastest = 0;
+  while (t < 20) {
+    const auto cmd = follower.Step(robot.pose, kDt);
+    if (follower.phase() != Phase::kStartTurn) break;
+    const double error = std::abs(NormalizeAngle(M_PI - 0.01 - robot.pose.yaw));
+    EXPECT_EQ(cmd.linear, 0.0);
+    EXPECT_NEAR(std::abs(cmd.angular), std::clamp(std::sqrt(2.0 * error), 0.45, 0.7), 1e-9);
+    fastest = std::max(fastest, std::abs(cmd.angular));
+    robot.Move(cmd, kDt);
+    t += kDt;
+  }
+  EXPECT_DOUBLE_EQ(fastest, 0.7);
+  // 179 degrees at 0.7 rad/s and slowing down over the last 14 degrees.
+  EXPECT_LT(t, 5.0);
+  robot.max_angular = 0;
+  Drive(follower, robot);
+  EXPECT_EQ(follower.phase(), Phase::kDone) << follower.failure();
+  EXPECT_LE(robot.max_angular, 0.5);
+}
+
+TEST(PathFollower, WithoutSpotValuesTurnsAsBefore) {
+  FollowerConfig config;
+  config.max_angular = 0.5;
+  config.min_turn_rate = 0.3;
+  PathFollower follower{config};
+  ASSERT_EQ(follower.Start(Line(0, 0, 0.5, 2.0), {}, 0), "");
+  const auto cmd = follower.Step(Pose2{0, 0, 0}, kDt);
+  ASSERT_EQ(follower.phase(), Phase::kStartTurn);
+  // heading_gain 2 * 0.5 rad, at most max_angular.
+  EXPECT_NEAR(cmd.angular, 0.5, 1e-9);
+  const auto near = follower.Step(Pose2{0, 0, 0.4}, kDt);
+  EXPECT_NEAR(near.angular, 0.3, 1e-9);
+}

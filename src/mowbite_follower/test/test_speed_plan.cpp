@@ -89,3 +89,16 @@ TEST(SpeedPlan, NeverAboveMaxLinear) {
     EXPECT_DOUBLE_EQ(plan.Floor(i), 0.04);
   }
 }
+
+TEST(SpeedPlan, BrakesWithItsOwnDeceleration) {
+  const Path path = Built(Line(0, 0, 0, 5.0));
+  SpeedLimits limits;
+  limits.acceleration = 0.5;
+  limits.deceleration = 0.8;
+  const SpeedPlan plan(path, limits);
+  // 0.02 m before the end: sqrt(0.06² + 2 * 0.8 * 0.02), whatever acceleration says.
+  EXPECT_NEAR(plan.At(49, 0.02), std::sqrt(0.0036 + 0.032), 1e-12);
+  EXPECT_DOUBLE_EQ(plan.at_pose(49), 0.3);
+  // From 0.3 m/s the brake takes (0.09 - 0.0036) / 1.6 = 0.054 m.
+  EXPECT_DOUBLE_EQ(plan.at_pose(48), 0.3);
+}

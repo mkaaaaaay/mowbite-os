@@ -277,15 +277,20 @@ mowbite_logic:
 mowbite_follower:
   ros__parameters:
     # m/s where the next metre of the path runs straight (within 20 degrees), elsewhere and on turns, and the limits
-    # of every command (the lower of these and the limits in hw/capabilities); speeding up and braking at
-    # acceleration m/s². Up to 0.55 m/s and 0.5 rad/s (the user, 15.11., without a braking measurement); braking from
-    # 0.55 at 0.3 m/s² takes 0.5 m of the path.
+    # of every command (the lower of these and the limits in hw/capabilities); speeding up at acceleration and braking
+    # at deceleration m/s² (the user 15.11., as the vendor firmware, without a braking measurement); braking from 0.55
+    # at 0.8 m/s² takes 0.19 m of the path. Up to 0.55 m/s and 0.5 rad/s on the path (the user, 15.11.); turning on
+    # the spot up to spot_max_angular rad/s (the user 15.11., as the vendor) and slowing down before the target at
+    # turn_deceleration rad/s² (assumption).
     speed_fast: 0.55
     speed_slow: 0.3
     speed_turn: 0.15
     max_linear: 0.55
     max_angular: 0.5
-    acceleration: 0.3
+    spot_max_angular: 0.7
+    turn_deceleration: 1.0
+    acceleration: 0.5
+    deceleration: 0.8
     # rad/s an arc of the path asks for at most, below max_angular so that the mower can still correct on arcs of
     # turn_radius (0.25 * 0.44 = 0.11 m/s there).
     turn_rate: 0.25
@@ -332,6 +337,10 @@ mowbite_safety:
     tilt_time: 1.0
     tilt_release: 26.0
     fence_margin: 0.6
+    # A moving command grows at most ramp_linear m/s² and ramp_angular rad/s² from the one before (as the vendor
+    # firmware smooths, mikey's notes); less, a stop and an emergency go out at once.
+    ramp_linear: 0.5
+    ramp_angular: 1.0
 
 mowbite_map:
   ros__parameters:

@@ -55,6 +55,10 @@ struct SafetyConfig {
   double arm_quiet = 1.0;
   // A source keeps the drive for owner_timeout s after its last moving command, the cmd_vel timeout of the driver.
   double owner_timeout = 0.5;
+  // m/s² and rad/s² a moving command of a source grows at most from the one of it that went out before; less, a
+  // stop and the way to the other direction go out at once. 0 for no limit.
+  double ramp_linear = 0;
+  double ramp_angular = 0;
 };
 
 struct Twist2 {
@@ -191,6 +195,9 @@ class SafetyFilter {
   double owner_s_ = 0;
   // The source whose moving command went out last, empty after a stop.
   std::optional<Source> moving_;
+  // That command and when.
+  Twist2 out_;
+  double out_s_ = 0;
   uint32_t latched_ = 0;
   bool restart_hold_ = false;
   std::string latch_reason_;
