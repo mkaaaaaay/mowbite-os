@@ -14313,11 +14313,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:37",
+  "$id": "urn:mowbite-os:api:38",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null). x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 37,
+  "x-api": 38,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -14797,6 +14797,12 @@
       "relative": false,
       "settable": false,
       "type": "number",
+      "unit": "m"
+    },
+    "dock_footprint": {
+      "description": "Footprint of the docking station as points [x, y] in base_link of the docked mower (x to its front, y left), each at most 1.5 m away; [] for the planner's own",
+      "settable": false,
+      "type": "points",
       "unit": "m"
     },
     "imu_pitch": {

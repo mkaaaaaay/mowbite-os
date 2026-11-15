@@ -1234,6 +1234,9 @@ const std::vector<GeometryEntry>& GeometryKeys() {
       {"wheel_width", false, false, 0.01, 0.3, "m", false,
        "Width of the tread of the drive wheels; the body has to cover the wheels from above"},
       {"dock_contact_x", false, false, -1.5, 1.5, "m", false, "Charging contacts ahead of the drive axle"},
+      {"dock_footprint", true, false, 0.0, 0.0, "m", false,
+       "Footprint of the docking station as points [x, y] in base_link of the docked mower (x to its front, y left), "
+       "each at most 1.5 m away; [] for the planner's own"},
       {"ticks_per_m", false, true, 100.0, 10000.0, "1/m", false, "Wheel ticks per metre"},
       {"imu_roll", false, true, -0.087, 0.087, "rad", true, "Roll of the IMU against the platform's value"},
       {"imu_pitch", false, true, -0.087, 0.087, "rad", true, "Pitch of the IMU against the platform's value"},

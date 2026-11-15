@@ -18,6 +18,8 @@ mowbite_logic:
       # The bevel runs to the full width, so it holds front wheels up to 0.01 m beside the bar. The planner uses it
       # instead of the rectangle.
       robot_outline: [0.60, 0.14, 0.53, 0.235, -0.12, 0.235, -0.12, -0.235, 0.53, -0.235, 0.60, -0.14]
+      # dock_footprint (the station from above in base_link of the docked mower, as x0, y0, ...) follows once measured;
+      # until then the planner takes its own.
       # Cutting width of the big deck: its radius 0.1225 m plus the blades, which stand at most 0.018 m over it, both
       # sides (measured by the user, 05.11.); the label allows 0.30 m.
       mower_width: 0.281

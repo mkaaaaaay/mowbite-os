@@ -86,6 +86,8 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   not cover the drive wheels from above (`wheel_radius` ahead and behind the axle, `track` / 2 ± `wheel_width` / 2
   aside); `robot.geometry.set` refuses such a body with `WHEELS_OUTSIDE`. Optional `robot_outline`: the contour from above as a
   flat list x0, y0, x1, y1, ... (at least 3 points); the planner then uses it instead of the rectangle (`tron.yaml`).
+  Optional `dock_footprint`: the docking station from above in base_link of the docked mower, the same kind of list,
+  for the planner to keep its lanes and turns off it; the platform's alone, without it the planner takes its own.
   `dock_contact_x` says where the charging contacts are: below 0 at the back (the mower backs onto the station and
   leaves it forwards), above 0 in front (forwards onto it, straight back off it, never faster than `docking_speed`;
   the safety filter cuts every reversing of the follower to 0.12 m/s), 0 none (no docking, `docking.start` is not

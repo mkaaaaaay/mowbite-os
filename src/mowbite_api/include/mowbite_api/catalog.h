@@ -13,7 +13,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 37;
+constexpr int kApi = 38;
 
 // The break of the app interface: one up for a change that is not only adding (what counts: x-api-break in the
 // schema); an app goes with the OS of the same break whose api is at least the one it needs.
@@ -157,7 +157,7 @@ struct SettingEntry {
 // A key of robot.geometry.get and .set; a number outside the range is refused.
 struct GeometryEntry {
   std::string name;
-  // A list of points (robot_outline), else a number.
+  // A list of points (robot_outline, dock_footprint), else a number.
   bool points = false;
   // The user can set it; wheel_radius and dock_contact_x are the platform's alone.
   bool settable = true;

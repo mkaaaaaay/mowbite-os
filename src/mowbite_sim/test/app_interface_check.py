@@ -157,7 +157,7 @@ def rpc(method, params=None, rid="1", timeout=5.0, response_topic=RESPONSE, corr
 REC = "mower_logic:area_recording/"
 GEOMETRY_KEYS = ["robot_width", "robot_front", "robot_rear", "robot_outline", "mower_width", "blade_ahead",
                  "blade_offset", "antenna_x", "antenna_y", "track", "wheel_radius", "wheel_width", "dock_contact_x",
-                 "ticks_per_m", "imu_roll", "imu_pitch"]
+                 "dock_footprint", "ticks_per_m", "imu_roll", "imu_pitch"]
 
 
 def enabled(action_id):
@@ -428,8 +428,8 @@ if args.target == "mowbite-os" and offers("robot.geometry.set") and offers("robo
     check("robot.geometry.get names the platform of system.info",
           answer.get("platform") == ((r or {}).get("result") or {}).get("platform"),
           f'{answer.get("platform")} / {((r or {}).get("result") or {}).get("platform")}')
-    fixed = ("wheel_radius", "wheel_width", "dock_contact_x")
-    check("robot.geometry.get: only the platform sets wheel_radius, wheel_width and dock_contact_x", all(
+    fixed = ("wheel_radius", "wheel_width", "dock_contact_x", "dock_footprint")
+    check("robot.geometry.get: only the platform sets wheel_radius, wheel_width, dock_contact_x and dock_footprint", all(
         settings.get(k, {}).get("settable") is False for k in fixed) and all(
         settings.get(k, {}).get("settable") is True for k in GEOMETRY_KEYS if k not in fixed), "")
     p = json.loads(latest("params/json") or "{}")

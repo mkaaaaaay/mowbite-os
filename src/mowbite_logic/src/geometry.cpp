@@ -52,15 +52,16 @@ GeometryProblem Problem(const std::string& reason, const std::string& key, const
 }
 
 // [[x, y], ...] or nothing, why says what is wrong.
-std::optional<std::vector<Point>> ParsePoints(const json& value, std::string* why) {
+std::optional<std::vector<Point>> ParsePoints(const json& value, std::string* why,
+                                              const std::string& key = "robot_outline") {
   std::vector<Point> points;
   if (!value.is_array()) {
-    *why = "robot_outline must be a list of [x, y] pairs";
+    *why = key + " must be a list of [x, y] pairs";
     return std::nullopt;
   }
   for (const auto& item : value) {
     if (!item.is_array() || item.size() != 2 || !item[0].is_number() || !item[1].is_number()) {
-      *why = "robot_outline must be a list of [x, y] pairs";
+      *why = key + " must be a list of [x, y] pairs";
       return std::nullopt;
     }
     points.push_back({item[0].get<double>(), item[1].get<double>()});
@@ -197,9 +198,9 @@ Geometry::Geometry(std::string platform, const json& factory) : platform_(std::m
       factory_.numbers[key.name] = factory[key.name].get<double>();
     } else if (factory.contains(key.name)) {
       std::string why;
-      auto points = ParsePoints(factory[key.name], &why);
+      auto points = ParsePoints(factory[key.name], &why, key.name);
       if (!points) throw std::invalid_argument(why);
-      factory_.outline = std::move(*points);
+      (key.name == "dock_footprint" ? factory_.dock_footprint : factory_.outline) = std::move(*points);
     }
   }
   if (auto problem = Check(factory_)) {
@@ -213,6 +214,10 @@ Geometry::Values Geometry::Effective(const Entries& entries) const {
   for (const auto& [name, value] : entries.numbers) values.numbers[name] = value;
   if (entries.outline) values.outline = *entries.outline;
   return values;
+}
+
+const std::vector<Point>& Geometry::PointsOf(const Values& values, const std::string& key) {
+  return key == "dock_footprint" ? values.dock_footprint : values.outline;
 }
 
 std::pair<double, double> Geometry::Range(const GeometryKey& key) const {
@@ -242,6 +247,17 @@ std::optional<GeometryProblem> Geometry::Check(const Values& values) const {
         return OutOfRange("robot_outline",
                           "A point of robot_outline is farther than " + Num(kBodyMax) + " m from base_link", -kBodyMax,
                           kBodyMax);
+      }
+    }
+  }
+  if (!values.dock_footprint.empty()) {
+    if (values.dock_footprint.size() < 3)
+      return Problem("INVALID_VALUE", "dock_footprint", "dock_footprint needs at least 3 points or none");
+    for (const Point& point : values.dock_footprint) {
+      if (!std::isfinite(point[0]) || !std::isfinite(point[1]) || std::hypot(point[0], point[1]) > kBodyMax + kEps) {
+        return OutOfRange("dock_footprint",
+                          "A point of dock_footprint is farther than " + Num(kBodyMax) + " m from base_link",
+                          -kBodyMax, kBodyMax);
       }
     }
   }
@@ -386,7 +402,7 @@ std::string Geometry::Text() const {
     if (key.type == GeometryType::kNumber) {
       const auto it = entries_.numbers.find(key.name);
       if (it != entries_.numbers.end()) entries[key.name] = it->second;
-    } else if (entries_.outline) {
+    } else if (key.settable && entries_.outline) {
       entries[key.name] = PointsJson(*entries_.outline);
     }
   }
@@ -410,9 +426,9 @@ json Geometry::Get() const {
       entry["min"] = min;
       entry["max"] = max;
     } else {
-      entry["value"] = PointsJson(now_.outline);
-      entry["default"] = PointsJson(factory_.outline);
-      entry["stored"] = entries_.outline.has_value();
+      entry["value"] = PointsJson(PointsOf(now_, key.name));
+      entry["default"] = PointsJson(PointsOf(factory_, key.name));
+      entry["stored"] = key.settable && entries_.outline.has_value();
       entry["type"] = "points";
       entry["unit"] = "m";
     }
@@ -429,12 +445,14 @@ json Geometry::Get() const {
 json Geometry::Params() const {
   json out = json::object();
   for (const auto& key : GeometryKeys()) {
-    out[key.name] = key.type == GeometryType::kNumber ? json(now_.numbers.at(key.name)) : PointsJson(now_.outline);
+    out[key.name] =
+        key.type == GeometryType::kNumber ? json(now_.numbers.at(key.name)) : PointsJson(PointsOf(now_, key.name));
   }
   out["version"] = version_;
   json stored = json::array();
   for (const auto& key : GeometryKeys()) {
-    if (key.type == GeometryType::kNumber ? entries_.numbers.count(key.name) != 0 : entries_.outline.has_value()) {
+    if (key.type == GeometryType::kNumber ? entries_.numbers.count(key.name) != 0
+                                          : key.settable && entries_.outline.has_value()) {
       stored.push_back(key.name);
     }
   }
@@ -526,7 +544,7 @@ GeometryChange Geometry::Set(const json& request) {
   for (const auto& key : GeometryKeys()) {
     const bool differs = key.type == GeometryType::kNumber
                              ? std::abs(values.numbers.at(key.name) - now_.numbers.at(key.name)) > 1e-12
-                             : values.outline != now_.outline;
+                             : PointsOf(values, key.name) != PointsOf(now_, key.name);
     if (differs) change.changed.push_back(key.name);
   }
   entries_ = std::move(entries);

@@ -996,3 +996,25 @@ TEST(MapServiceHold, OtherErrorsCarryNoData) {
   EXPECT_EQ(answer->code, mowbite_map::kRpcInvalidParams);
   EXPECT_TRUE(answer->data.is_null());
 }
+
+// drawn marks a ring the app drew (hard edges for the planner): it comes only with map.replace, every later write
+// keeps it, and an area recorded by driving never has it.
+TEST(MapServiceEdits, DrawnStaysWithItsRingAndRecordingNeverSetsIt) {
+  TempDir dir;
+  MapService service = Started(NumberedIds(dir));
+  json map = AppMap();
+  map["areas"][0]["properties"]["drawn"] = true;
+  map["areas"][0]["properties"]["recorded_body"] = json::parse(Body(0.47, 0.6, 0.12, "b1"));
+  ASSERT_TRUE(service.Call("map.replace", json::array({map}))->ok);
+  const std::string ours = Body(0.47, 0.6, 0.12, "b1");
+  ASSERT_TRUE(service.AddArea("mow", "Driven", Square(4), {{{1, 1}, {2, 1}, {2, 2}}}, ours, {ours}).ok);
+  int areas = -1;
+  ASSERT_TRUE(service.SetRecordedBody("b1", Body(0.5, 0.6, 0.12, "b1"), &areas).ok);
+  ASSERT_TRUE(service.SetDock({0.5, 0.5}, 1.0).ok);
+  const json stored = json::parse(ReadAll(dir.path() / "map.json"));
+  EXPECT_EQ(stored["areas"][0]["properties"]["drawn"], true);
+  for (size_t i = 1; i < stored["areas"].size(); i++) {
+    EXPECT_FALSE(stored["areas"][i]["properties"].contains("drawn")) << i;
+  }
+  EXPECT_EQ(json::parse(service.map_text())["areas"][0]["properties"]["drawn"], true);
+}

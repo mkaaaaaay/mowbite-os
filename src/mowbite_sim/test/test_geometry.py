@@ -117,6 +117,8 @@ class TestGeometry(unittest.TestCase):
         # The outline of the platform file, as pairs.
         self.assertEqual(len(OUTLINE), 6)
         self.assertEqual(params[G + "robot_outline"], OUTLINE)
+        # No footprint of the station on the Tron yet: the planner's own.
+        self.assertEqual(params[G + "dock_footprint"], [])
         self.assertTrue(self.probe.logged("Dimensions of the mower from " + FILE + " (version 7)"))
         # The localization takes the antenna from it and tells the app.
         self.assertTrue(self.probe.logged("Antenna offset: 0.120, 0.000"))
@@ -135,7 +137,7 @@ class TestGeometry(unittest.TestCase):
         self.assertEqual(settings["robot_width"]["min"], 0.1)
         self.assertEqual(settings["robot_width"]["max"], 1.5)
         self.assertEqual(settings["robot_outline"]["type"], "points")
-        for name in ("wheel_radius", "wheel_width", "dock_contact_x"):
+        for name in ("wheel_radius", "wheel_width", "dock_contact_x", "dock_footprint"):
             self.assertFalse(settings[name]["settable"], name)
         for name in ("robot_width", "mower_width", "antenna_x", "blade_offset", "track", "ticks_per_m", "imu_pitch"):
             self.assertTrue(settings[name]["settable"], name)

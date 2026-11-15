@@ -52,8 +52,8 @@ TEST(Geometry, GetListsEveryKeyInOrderWithItsRules) {
   for (const auto& item : answer["settings"].items()) names.push_back(item.key());
   EXPECT_EQ(names, (std::vector<std::string>{"robot_width", "robot_front", "robot_rear", "robot_outline", "mower_width",
                                              "blade_ahead", "blade_offset", "antenna_x", "antenna_y", "track",
-                                             "wheel_radius", "wheel_width", "dock_contact_x", "ticks_per_m",
-                                             "imu_roll", "imu_pitch"}));
+                                             "wheel_radius", "wheel_width", "dock_contact_x", "dock_footprint",
+                                             "ticks_per_m", "imu_roll", "imu_pitch"}));
   const json& width = answer["settings"]["robot_width"];
   EXPECT_DOUBLE_EQ(width["value"].get<double>(), 0.47);
   EXPECT_DOUBLE_EQ(width["default"].get<double>(), 0.47);
@@ -67,7 +67,7 @@ TEST(Geometry, GetListsEveryKeyInOrderWithItsRules) {
   EXPECT_EQ(outline["type"], "points");
   EXPECT_EQ(outline["value"], json::array());
   EXPECT_FALSE(outline["stored"].get<bool>());
-  for (const char* name : {"wheel_radius", "wheel_width", "dock_contact_x"}) {
+  for (const char* name : {"wheel_radius", "wheel_width", "dock_contact_x", "dock_footprint"}) {
     EXPECT_FALSE(answer["settings"][name]["settable"].get<bool>()) << name;
   }
   for (const char* name : {"antenna_x", "track", "ticks_per_m", "imu_roll", "imu_pitch"}) {
@@ -82,9 +82,10 @@ TEST(Geometry, ParamsCarryEveryKeyAndTheVersion) {
   EXPECT_DOUBLE_EQ(params["blade_ahead"].get<double>(), 0.23);
   EXPECT_DOUBLE_EQ(params["dock_contact_x"].get<double>(), -0.10);
   EXPECT_EQ(params["robot_outline"], json::array());
+  EXPECT_EQ(params["dock_footprint"], json::array());
   EXPECT_EQ(params["version"], 0);
   EXPECT_EQ(params["stored"], json::array());
-  EXPECT_EQ(params.size(), 18u);
+  EXPECT_EQ(params.size(), 19u);
 }
 
 TEST(Geometry, ThePlatformsFileHasToBeWholeAndKeepTheRules) {
@@ -374,6 +375,44 @@ TEST(Geometry, AnOutlineHasToBeAListOfPairsWithThreePointsOrMore) {
   // An empty list is the rectangle again.
   EXPECT_TRUE(geometry.Set(Request(geometry, {{"robot_outline", json::array()}})).ok);
   EXPECT_EQ(geometry.Params()["robot_outline"], json::array());
+}
+
+// The footprint of the station is the platform's: in the answers, never set by hand or from the file.
+TEST(Geometry, TheFootprintOfTheStationIsThePlatforms) {
+  json values = TronValues();
+  const json footprint = {{-0.05, 0.3}, {-0.05, -0.3}, {-0.55, -0.3}, {-0.55, 0.3}};
+  values["dock_footprint"] = footprint;
+  Geometry geometry("tron", values);
+  EXPECT_EQ(geometry.Params()["dock_footprint"], footprint);
+  EXPECT_EQ(geometry.Params()["robot_outline"], json::array());
+  const json entry = geometry.Get()["settings"]["dock_footprint"];
+  EXPECT_EQ(entry["type"], "points");
+  EXPECT_EQ(entry["value"], footprint);
+  EXPECT_EQ(entry["default"], footprint);
+  EXPECT_FALSE(entry["stored"].get<bool>());
+  EXPECT_FALSE(entry["settable"].get<bool>());
+  ExpectRefused(geometry, Request(geometry, {{"dock_footprint", json::array()}}), "NOT_SETTABLE", "dock_footprint");
+  ExpectRefused(geometry, Request(geometry, json::object(), {"dock_footprint"}), "NOT_SETTABLE", "dock_footprint");
+  // An outline set by hand leaves it as it is, and the file keeps only the outline.
+  ASSERT_TRUE(geometry.Set(Request(geometry, {{"robot_outline", kRectangle}})).ok);
+  EXPECT_EQ(geometry.Params()["dock_footprint"], footprint);
+  EXPECT_EQ(geometry.Params()["robot_outline"].size(), 4u);
+  EXPECT_EQ(json::parse(geometry.Text())["entries"].count("dock_footprint"), 0u);
+  std::string why;
+  EXPECT_FALSE(geometry.Load(R"({"entries": {"dock_footprint": []}})", &why));
+  EXPECT_EQ(why, "dock_footprint is the platform's alone");
+}
+
+TEST(Geometry, TheFootprintOfTheStationHasThreePointsOrNoneWithinReach) {
+  json values = TronValues();
+  values["dock_footprint"] = json{{-0.05, 0.3}, {-0.55, 0.3}};
+  EXPECT_THROW(Geometry("tron", values), std::invalid_argument);
+  values["dock_footprint"] = json{{-0.05, 0.3}, {-1.6, 0.0}, {-0.55, 0.3}};
+  EXPECT_THROW(Geometry("tron", values), std::invalid_argument);
+  values["dock_footprint"] = json::array({0.1, 0.2});
+  EXPECT_THROW(Geometry("tron", values), std::invalid_argument);
+  values["dock_footprint"] = json::array();
+  EXPECT_EQ(Geometry("tron", values).Params()["dock_footprint"], json::array());
 }
 
 TEST(Geometry, TheTurningRadiusReachesTheFarthestPointOfTheBody) {

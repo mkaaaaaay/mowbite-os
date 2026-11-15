@@ -1804,13 +1804,15 @@ Geometry LogicNode::FactoryGeometry() {
   for (const auto& key : GeometryKeys()) {
     if (key.type == GeometryType::kNumber) factory[key.name] = GeometryNumber(*this, key.name);
   }
-  // The outline of the body, if the platform has one: x0, y0, x1, y1, ...
-  const std::vector<double> flat = declare_parameter("geometry.robot_outline", std::vector<double>());
-  if (flat.size() % 2 != 0) throw std::invalid_argument("geometry.robot_outline needs pairs of x and y");
-  if (!flat.empty()) {
+  // The outline of the body and the footprint of the station, if the platform has them: x0, y0, x1, y1, ...
+  for (const char* key : {"robot_outline", "dock_footprint"}) {
+    const std::string name = std::string("geometry.") + key;
+    const std::vector<double> flat = declare_parameter(name, std::vector<double>());
+    if (flat.size() % 2 != 0) throw std::invalid_argument(name + " needs pairs of x and y");
+    if (flat.empty()) continue;
     json points = json::array();
     for (size_t i = 0; i < flat.size(); i += 2) points.push_back(json::array({flat[i], flat[i + 1]}));
-    factory["robot_outline"] = std::move(points);
+    factory[key] = std::move(points);
   }
   const std::string platform = declare_parameter("geometry.platform", std::string());
   if (platform.empty()) throw std::invalid_argument("platform is missing in the geometry file of the platform");

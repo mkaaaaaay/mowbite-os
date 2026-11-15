@@ -34,7 +34,7 @@ struct GeometryKey {
   bool relative = false;
 };
 
-// All keys in the order of the answers; robot_outline is the only list.
+// All keys in the order of the answers; robot_outline and dock_footprint are lists.
 const std::vector<GeometryKey>& GeometryKeys();
 
 using Point = std::array<double, 2>;
@@ -63,7 +63,7 @@ struct GeometryChange {
 class Geometry {
  public:
   // The platform's values: {"robot_width": 0.47, ...} with every number key of GeometryKeys(), and optionally
-  // "robot_outline": [[x, y], ...]. Throws std::invalid_argument naming the problem if a number is missing, is none or
+  // "robot_outline" and "dock_footprint": [[x, y], ...]. Throws std::invalid_argument naming the problem if a number is missing, is none or
   // the values break a rule.
   Geometry(std::string platform, const json& factory);
 
@@ -87,7 +87,7 @@ class Geometry {
   // robot.geometry.get: {"settings": {key: {value, default, stored, type, unit, min, max, settable}}, "version",
   // "platform"}.
   json Get() const;
-  // The "params" of the bridge/params entry: every key as it counts now (robot_outline [] without one), version, and
+  // The "params" of the bridge/params entry: every key as it counts now (a list [] without one), version, and
   // stored: the keys the user entered.
   json Params() const;
 
@@ -110,6 +110,8 @@ class Geometry {
     std::map<std::string, double> numbers;
     // Empty: the rectangle of robot_width, robot_front and robot_rear.
     std::vector<Point> outline;
+    // The platform's alone; empty: the planner's own.
+    std::vector<Point> dock_footprint;
   };
   struct Entries {
     std::map<std::string, double> numbers;
@@ -118,6 +120,8 @@ class Geometry {
   };
 
   Values Effective(const Entries& entries) const;
+  // The list of a points key.
+  static const std::vector<Point>& PointsOf(const Values& values, const std::string& key);
   std::optional<GeometryProblem> Check(const Values& values) const;
   static std::vector<std::string> Below(const Values& factory, const Values& now);
   static json PointsJson(const std::vector<Point>& points);
