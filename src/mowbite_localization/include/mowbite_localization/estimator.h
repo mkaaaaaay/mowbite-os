@@ -108,6 +108,8 @@ class Estimator {
   std::optional<Jump> TakeJump();
   // True once after the course set the heading.
   bool TakeAligned();
+  // Courses dropped because they point away from the track of the fixes, since the last call.
+  int TakeCourseRejections();
 
   Pose2 pose() const;
   const Covariance& covariance() const { return filter_.covariance(); }
@@ -163,6 +165,8 @@ class Estimator {
   PoseFilter filter_;
   FixGate gate_;
   CourseAlignment course_;
+  CourseTrack track_;
+  int course_rejections_ = 0;
   FixAccuracy accuracy_;
   Eigen::Vector2d lever_ = Eigen::Vector2d::Zero();
   bool geometry_known_ = false;

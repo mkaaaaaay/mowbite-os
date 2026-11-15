@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 #include "mowbite_localization/pose_filter.h"
 
@@ -50,6 +51,28 @@ std::optional<double> CourseAlignment::Add(double difference, double t) {
   }
   if (high - low > config_.agreement) return std::nullopt;
   return WrapAngle(first + sum / config_.run);
+}
+
+CourseTrack::CourseTrack(const CourseConfig& config) : config_(config) {
+}
+
+void CourseTrack::Add(const Eigen::Vector2d& antenna, double t) {
+  if (!antenna.allFinite() || !std::isfinite(t)) return;
+  if (!fixes_.empty() && t < fixes_.back().first) fixes_.clear();
+  fixes_.emplace_back(t, antenna);
+  while (t - fixes_.front().first > config_.track_window) fixes_.pop_front();
+}
+
+TrackCheck CourseTrack::Check(const Eigen::Vector2d& velocity) const {
+  if (fixes_.size() < 2 || !velocity.allFinite()) return TrackCheck::kNoTrack;
+  const Eigen::Vector2d& last = fixes_.back().second;
+  for (auto it = std::next(fixes_.rbegin()); it != fixes_.rend(); ++it) {
+    const Eigen::Vector2d chord = last - it->second;
+    if (chord.norm() < config_.track_distance) continue;
+    const double angle = std::atan2(chord(0) * velocity(1) - chord(1) * velocity(0), chord.dot(velocity));
+    return std::abs(angle) > config_.track_agreement ? TrackCheck::kContradicts : TrackCheck::kAgrees;
+  }
+  return TrackCheck::kNoTrack;
 }
 
 }  // namespace mowbite_localization

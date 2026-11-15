@@ -21,6 +21,12 @@ struct CourseConfig {
   double max_age = 30.0;
   // Noise of each axis of the GNSS velocity (m/s): the variance of a heading from it.
   double velocity_noise = 0.02;
+  // A course counts only along the track of the fixes: the antenna moved at least track_distance m within track_window
+  // s, and the course points that way within track_agreement rad; one that points elsewhere is dropped and breaks the
+  // run (a receiver can report a wrong course with the right speed).
+  double track_window = 1.5;
+  double track_distance = 0.1;
+  double track_agreement = 30.0 * M_PI / 180.0;
 };
 
 enum class CourseKind {
@@ -56,6 +62,29 @@ class CourseAlignment {
   CourseConfig config_;
   // (time, difference)
   std::deque<std::pair<double, double>> differences_;
+};
+
+enum class TrackCheck {
+  kNoTrack,      // the antenna did not move far enough within the window
+  kAgrees,
+  kContradicts,  // the course points away from the track
+};
+
+// The antenna positions of the last fixes: whether a course goes the way the antenna went.
+class CourseTrack {
+ public:
+  explicit CourseTrack(const CourseConfig& config);
+
+  // A fix at t (s); fixes older than the window leave.
+  void Add(const Eigen::Vector2d& antenna, double t);
+  void Clear() { fixes_.clear(); }
+  // The velocity (m/s) of the antenna at the last fix against the chord from the latest earlier fix far enough back.
+  TrackCheck Check(const Eigen::Vector2d& velocity) const;
+
+ private:
+  CourseConfig config_;
+  // (time, antenna)
+  std::deque<std::pair<double, Eigen::Vector2d>> fixes_;
 };
 
 }  // namespace mowbite_localization

@@ -40,10 +40,10 @@ class World {
     EXPECT_TRUE(est.gps_valid());
   }
 
-  // Calibrated, GNSS set, heading aligned by a short drive.
+  // Calibrated, GNSS set, heading aligned by a short drive (fixes up to 0.2 s late included).
   void Aligned() {
     Ready();
-    Run(1.2, 0.3, 0.0);
+    Run(1.4, 0.3, 0.0);
     EXPECT_TRUE(est.heading_valid());
     Run(0.4, 0.0, 0.0);
   }
@@ -97,6 +97,8 @@ class World {
   double gnss_delay = 0.0;
   double accuracy = 0.02;
   Eigen::Vector2d fix_offset = Eigen::Vector2d::Zero();
+  // The receiver reports its velocity turned by this (rad), at the right speed.
+  double course_error = 0.0;
   std::vector<FixResult> results;
 
  private:
@@ -119,8 +121,8 @@ class World {
     fix.x = then->antenna(0) + fix_offset(0);
     fix.y = then->antenna(1) + fix_offset(1);
     fix.motion_valid = true;
-    fix.motion_x = then->velocity(0);
-    fix.motion_y = then->velocity(1);
+    fix.motion_x = std::cos(course_error) * then->velocity(0) - std::sin(course_error) * then->velocity(1);
+    fix.motion_y = std::sin(course_error) * then->velocity(0) + std::cos(course_error) * then->velocity(1);
     results.push_back(est.AddFix(fix, t));
   }
 
@@ -510,13 +512,13 @@ TEST(L8Heading, NotValidStandingOrCreeping) {
 TEST(L8Heading, PausesDoNotBreakTheRun) {
   World w;
   w.Ready();
-  // Short pushes of the joystick with stops between them, as in the app.
+  // Short pushes of the joystick with stops between them, as in the app; each counts from 0.1 m of track on.
   w.Run(0.6, 0.3, 0.0);
   w.Run(2.0, 0.0, 0.0);
-  w.Run(0.2, 0.3, 0.1);
+  w.Run(0.6, 0.3, 0.1);
   EXPECT_FALSE(w.est.heading_valid());
   w.Run(1.0, 0.0, 0.0);
-  w.Run(0.2, 0.3, 0.0);
+  w.Run(0.4, 0.3, 0.0);
   EXPECT_TRUE(w.est.heading_valid());
   EXPECT_LT(std::abs(w.HeadingError()), 0.5 * kDeg);
 }
@@ -538,7 +540,8 @@ TEST(L8Heading, AnInconsistentCourseBreaksTheRun) {
 TEST(L8Heading, ValidWithTheFifthAgreeingCourseAndThenStays) {
   World w;
   w.Ready();
-  w.Run(0.8, 0.3, 0.0);
+  // The first fix after the start has no track of 0.1 m yet.
+  w.Run(1.0, 0.3, 0.0);
   EXPECT_FALSE(w.est.heading_valid());
   w.Run(0.2, 0.3, 0.0);
   EXPECT_TRUE(w.est.heading_valid());
@@ -685,7 +688,7 @@ TEST(E1Alignment, FromAHeading90DegreesOff) {
   World w;
   w.heading = M_PI / 2;
   w.Ready();
-  w.Run(0.8, 0.3, 0.0);
+  w.Run(1.0, 0.3, 0.0);
   EXPECT_FALSE(w.est.heading_valid());
   w.Run(0.2, 0.3, 0.0);
   ASSERT_TRUE(w.est.heading_valid());
@@ -698,13 +701,13 @@ TEST(E1Alignment, BackwardsAndOnACurve) {
   World w({}, Eigen::Vector2d(0.2, 0.05));
   w.heading = -2.0;
   w.Ready();
-  w.Run(1.0, -0.2, 0.0);
+  w.Run(1.4, -0.2, 0.0);
   ASSERT_TRUE(w.est.heading_valid());
   EXPECT_LT(std::abs(w.HeadingError()), 0.5 * kDeg);
   World curve({}, Eigen::Vector2d(0.2, 0.05));
   curve.heading = 2.5;
   curve.Ready();
-  curve.Run(1.0, 0.3, 0.3);
+  curve.Run(1.2, 0.3, 0.3);
   ASSERT_TRUE(curve.est.heading_valid());
   EXPECT_LT(std::abs(curve.HeadingError()), 0.5 * kDeg);
 }
@@ -715,7 +718,7 @@ TEST(E1Alignment, AValidHeadingTheCoursesContradictIsSetFromThem) {
   w.est.TakeAligned();
   // Turned 90 degrees by hand: the gyro did not see it.
   w.Place(w.x, w.y, w.heading + M_PI / 2);
-  w.Run(1.0, 0.3, 0.0);
+  w.Run(1.2, 0.3, 0.0);
   EXPECT_TRUE(w.est.TakeAligned());
   w.Run(1.0, 0.3, 0.0);
   EXPECT_LT(std::abs(w.HeadingError()), 0.5 * kDeg);
@@ -769,7 +772,7 @@ TEST(E3HeadingAccuracy, FromTheFilter) {
   World w;
   w.Ready();
   EXPECT_EQ(w.est.HeadingAccuracy(), kNoAccuracy);
-  w.Run(1.0, 0.3, 0.0);
+  w.Run(1.2, 0.3, 0.0);
   ASSERT_TRUE(w.est.heading_valid());
   // Five courses of 0.3 m/s with 0.02 m/s noise.
   const double aligned = w.est.HeadingAccuracy();
@@ -870,6 +873,45 @@ TEST(Consistency, CovarianceMatchesTheErrorsOfRandomRuns) {
   RecordProperty("mean_nees", std::to_string(mean));
   EXPECT_GT(mean, 2.0);
   EXPECT_LT(mean, 4.0);
+}
+
+// E5: courses against the track of the fixes (LG290P 0.9.50: 155-164 deg whatever the way, at the right speed).
+TEST(E5CourseTrack, AWrongCourseNeverAlignsAnUnknownHeading) {
+  World w;
+  w.Ready();
+  w.course_error = 160.0 * kDeg;
+  w.Run(6.0, 0.3, 0.0);
+  EXPECT_FALSE(w.est.heading_valid());
+  EXPECT_GE(w.est.TakeCourseRejections(), 25);
+  EXPECT_EQ(w.est.TakeCourseRejections(), 0);
+  // The right course aligns as before once it comes.
+  w.course_error = 0.0;
+  w.Run(1.0, 0.3, 0.0);
+  ASSERT_TRUE(w.est.heading_valid());
+  EXPECT_LT(std::abs(w.HeadingError()), 0.5 * kDeg);
+}
+
+TEST(E5CourseTrack, AWrongCourseDoesNotResetAValidHeading) {
+  World w;
+  w.Aligned();
+  w.est.TakeAligned();
+  w.course_error = 160.0 * kDeg;
+  w.Run(6.0, 0.3, 0.0);
+  EXPECT_FALSE(w.est.TakeAligned());
+  EXPECT_TRUE(w.est.heading_valid());
+  EXPECT_LT(std::abs(w.HeadingError()), 0.5 * kDeg);
+  EXPECT_LT(w.PositionError(), 0.02);
+  EXPECT_GE(w.est.TakeCourseRejections(), 25);
+}
+
+TEST(E5CourseTrack, ASmallErrorStillAlignsOnACurve) {
+  // 20 deg off on a curve of 0.5 rad/s: within the agreement, the run sets the heading.
+  World w;
+  w.Ready();
+  w.course_error = 20.0 * kDeg;
+  w.Run(1.2, 0.3, 0.5);
+  EXPECT_TRUE(w.est.heading_valid());
+  EXPECT_EQ(w.est.TakeCourseRejections(), 0);
 }
 
 }  // namespace

@@ -14,8 +14,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GyroBiasConfig, calibration_time, still_sprea
                                    initial_offset, still_time, still_rate, tracking_time)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(FilterNoise, odometry, gyro)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GateConfig, max_accuracy, restart_gap, warmup_fixes, outlier_distance, outlier_reset)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CourseConfig, min_speed, speed_tolerance, speed_ratio, run, agreement, max_age,
-                                   velocity_noise)
+// With defaults: journals before the track check have none of its fields.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(CourseConfig, min_speed, speed_tolerance, speed_ratio, run, agreement,
+                                                max_age, velocity_noise, track_window, track_distance, track_agreement)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(AccuracyConfig, growth_per_m, growth_per_s, timeout)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(EstimatorConfig, gyro, noise, gate, course, accuracy, max_imu_gap, wheel_timeout,
                                    min_speed, motion_confirm_time, gnss_latency, heading_reset_angle, contradiction_chi2,
@@ -28,9 +29,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Jump, reason, from_x, from_y, to_x, to_y)
 static_assert(sizeof(GyroBiasConfig) == 64);
 static_assert(sizeof(FilterNoise) == 16);
 static_assert(sizeof(GateConfig) == 40);
-static_assert(sizeof(CourseConfig) == 56);
+static_assert(sizeof(CourseConfig) == 80);
 static_assert(sizeof(AccuracyConfig) == 24);
-static_assert(sizeof(EstimatorConfig) == 296);
+static_assert(sizeof(EstimatorConfig) == 320);
 static_assert(sizeof(GnssFix) == 56);
 static_assert(sizeof(Pose2) == 24);
 static_assert(sizeof(Jump) == 40);
@@ -53,7 +54,7 @@ struct mowbite_journal::CoreTraits<mowbite_localization::Estimator> {
   using Config = mowbite_localization::EstimatorConfig;
   MOWBITE_JOURNAL_METHODS(&E::AddImu, &E::AddWheels, &E::SetWheelScale, &E::AddFix, &E::SetGpsEnabled,
                           &E::SetGpsLimits, &E::SetAntennaOffset, &E::SetPose, &E::SetHeading, &E::TakeJump,
-                          &E::TakeAligned, &E::TakeGyroWarnings);
+                          &E::TakeAligned, &E::TakeGyroWarnings, &E::TakeCourseRejections);
   static mowbite_localization::EstimatorView View(const E& core) {
     return {core.calibrated(), core.heading_valid(), core.gps_valid(), core.geometry_known()};
   }

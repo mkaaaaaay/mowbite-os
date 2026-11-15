@@ -30,6 +30,7 @@ Estimator::Estimator(const EstimatorConfig& config)
       filter_(config.noise),
       gate_(config.gate),
       course_(config.course),
+      track_(config.course),
       accuracy_(config.accuracy) {
   filter_.Reset(State::Zero(), InitialCovariance());
 }
@@ -89,6 +90,9 @@ FixResult Estimator::AddFix(const GnssFix& fix, double t) {
   const Eigen::Vector2d antenna(fix.x, fix.y);
   const double then_time = t - config_.gnss_latency;
   FixResult result = gate_.Classify(t, antenna, AntennaPosition(MomentAt(then_time).state, lever_));
+  // A new warmup starts the track again; an outlier is no part of it.
+  if (result == FixResult::kRestarted || result == FixResult::kOutlierReset) track_.Clear();
+  if (result != FixResult::kOutlier) track_.Add(antenna, t);
   if (result != FixResult::kFused) contradictions_ = 0;
   switch (result) {
     case FixResult::kRestarted:
@@ -174,6 +178,16 @@ bool Estimator::Course(const GnssFix& fix, const Moment& then, double t) {
   const CourseHeading course = HeadingFromCourse(velocity, speed_, turn_rate_, lever_, config_.course);
   if (course.kind == CourseKind::kInconsistent) course_.Clear();
   if (course.kind != CourseKind::kUsable) return false;
+  switch (track_.Check(velocity)) {
+    case TrackCheck::kNoTrack:
+      return false;
+    case TrackCheck::kContradicts:
+      course_.Clear();
+      ++course_rejections_;
+      return false;
+    case TrackCheck::kAgrees:
+      break;
+  }
   const std::optional<double> heading = course.heading;
   const double variance = CourseVariance(velocity.norm(), config_.course);
   const double heading_variance = filter_.covariance()(2, 2);
@@ -262,6 +276,10 @@ std::optional<Jump> Estimator::TakeJump() {
 
 bool Estimator::TakeAligned() {
   return std::exchange(aligned_, false);
+}
+
+int Estimator::TakeCourseRejections() {
+  return std::exchange(course_rejections_, 0);
 }
 
 Pose2 Estimator::pose() const {

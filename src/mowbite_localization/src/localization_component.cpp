@@ -15,6 +15,7 @@
 #include <mowbite_msgs/srv/set_pose.hpp>
 #include <mutex>
 #include <nav_msgs/msg/odometry.hpp>
+#include <optional>
 #include <nlohmann/json.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
@@ -298,7 +299,18 @@ class LocalizationNode : public rclcpp::Node {
       RCLCPP_INFO(get_logger(), "Position set onto GPS: %.3f, %.3f", pose.x, pose.y);
     }
     if (estimator_.Call<&Estimator::TakeAligned>()) RCLCPP_INFO(get_logger(), "Heading aligned with the GPS course");
+    WarnCourseRejections();
     if (auto jump = estimator_.Call<&Estimator::TakeJump>()) PublishJump(*jump);
+  }
+
+  // At most every 10 s, with the count since the last warning.
+  void WarnCourseRejections() {
+    rejected_courses_ += estimator_.Call<&Estimator::TakeCourseRejections>();
+    const double now = MonotonicSeconds();
+    if (rejected_courses_ == 0 || (course_warned_ && now - *course_warned_ < 10.0)) return;
+    RCLCPP_WARN(get_logger(), "GPS course against the track of the fixes, dropped: %d times", rejected_courses_);
+    rejected_courses_ = 0;
+    course_warned_ = now;
   }
 
   void OnParams(const std::string& text) {
@@ -468,6 +480,8 @@ class LocalizationNode : public rclcpp::Node {
   mowbite_journal::JournalWatch journal_watch_;
   rclcpp::TimerBase::SharedPtr journal_timer_;
   bool had_gps_ = false;
+  int rejected_courses_ = 0;
+  std::optional<double> course_warned_;
   std::string frame_id_;
   std::string child_frame_id_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_;

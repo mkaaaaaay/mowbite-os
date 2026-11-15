@@ -119,4 +119,61 @@ TEST(E1CourseAlignment, OldOnesLeaveTheRun) {
   EXPECT_TRUE(alignment.Add(0.5, t += 0.2));
 }
 
+// E5: a course counts only along the track of the fixes.
+TEST(E5CourseTrack, NeedsATenthOfAMetreWithinTheWindow) {
+  CourseTrack track({});
+  const Eigen::Vector2d east(0.3, 0.0);
+  EXPECT_EQ(track.Check(east), TrackCheck::kNoTrack);
+  track.Add({0.0, 0.0}, 0.0);
+  track.Add({0.06, 0.0}, 0.2);
+  EXPECT_EQ(track.Check(east), TrackCheck::kNoTrack);
+  track.Add({0.12, 0.0}, 0.4);
+  EXPECT_EQ(track.Check(east), TrackCheck::kAgrees);
+  // 0.1 m over more than 1.5 s is no track.
+  CourseTrack slow({});
+  for (int i = 0; i <= 8; ++i) slow.Add({0.0125 * i, 0.0}, 0.2 * i);
+  EXPECT_EQ(slow.Check(east), TrackCheck::kNoTrack);
+}
+
+TEST(E5CourseTrack, ThirtyDegreesBothWays) {
+  CourseTrack track({});
+  track.Add({0.0, 0.0}, 0.0);
+  track.Add({0.2, 0.0}, 0.4);
+  const auto at = [](double deg) { return Eigen::Vector2d(0.3 * std::cos(deg * kDeg), 0.3 * std::sin(deg * kDeg)); };
+  EXPECT_EQ(track.Check(at(25.0)), TrackCheck::kAgrees);
+  EXPECT_EQ(track.Check(at(-25.0)), TrackCheck::kAgrees);
+  EXPECT_EQ(track.Check(at(35.0)), TrackCheck::kContradicts);
+  EXPECT_EQ(track.Check(at(-35.0)), TrackCheck::kContradicts);
+  // The wrong course of the LG290P: the right speed, 160 deg off.
+  EXPECT_EQ(track.Check(at(160.0)), TrackCheck::kContradicts);
+  // Backwards the antenna goes the way of its velocity as well.
+  CourseTrack back({});
+  back.Add({0.0, 0.0}, 0.0);
+  back.Add({-0.2, 0.0}, 0.4);
+  EXPECT_EQ(back.Check(at(180.0)), TrackCheck::kAgrees);
+}
+
+TEST(E5CourseTrack, TheLatestChordFarEnough) {
+  CourseTrack track({});
+  // North, then east: the chord from the last fix 0.1 m back says east.
+  track.Add({0.0, 0.0}, 0.0);
+  track.Add({0.0, 0.3}, 0.6);
+  track.Add({0.06, 0.3}, 0.8);
+  track.Add({0.12, 0.3}, 1.0);
+  EXPECT_EQ(track.Check({0.3, 0.0}), TrackCheck::kAgrees);
+  EXPECT_EQ(track.Check({0.0, 0.3}), TrackCheck::kContradicts);
+}
+
+TEST(E5CourseTrack, ClearAndTimeBackStartAgain) {
+  CourseTrack track({});
+  track.Add({0.0, 0.0}, 1.0);
+  track.Add({0.2, 0.0}, 1.4);
+  track.Clear();
+  track.Add({0.4, 0.0}, 1.6);
+  EXPECT_EQ(track.Check({0.3, 0.0}), TrackCheck::kNoTrack);
+  track.Add({0.6, 0.0}, 2.0);
+  track.Add({0.0, 0.0}, 0.5);
+  EXPECT_EQ(track.Check({0.3, 0.0}), TrackCheck::kNoTrack);
+}
+
 }  // namespace
