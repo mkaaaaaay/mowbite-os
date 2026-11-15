@@ -23,7 +23,8 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import LATCHED, SimProbe, distance_to, inside, read_json, sim_description, sim_files  # noqa: E402
+from sim_common import (LATCHED, SimProbe, distance_to, follower_max_linear, inside, read_json,  # noqa: E402
+                        sim_description, sim_files)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_mowing_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
@@ -268,7 +269,7 @@ class TestMowing(unittest.TestCase):
         # Within the lawn and the margin of the follower's geofence, never faster than 0.3 m/s.
         worst = max(outside_by(LAWN, t["x"], t["y"]) for t in track)
         self.assertLess(worst, 0.5, f"{worst:.2f} m outside")
-        self.assertLessEqual(max(abs(t["linear"]) for t in track), 0.3 + 1e-3)
+        self.assertLessEqual(max(abs(t["linear"]) for t in track), follower_max_linear() + 1e-3)
         # Every path that ended done is followed by a stop of the logic, whether the last zero of the follower got
         # through or not, also where the next path follows in the same state.
         with p.lock:

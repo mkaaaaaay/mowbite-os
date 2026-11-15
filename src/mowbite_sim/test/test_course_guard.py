@@ -68,6 +68,8 @@ class Probe(SimProbe):
     def __init__(self):
         super().__init__("course_guard_probe", state=STATE, flags=FLAGS)
         self.pose = None
+        # heading_accuracy of every pose
+        self.accuracies = []
         self.setpoint = (0.0, 0.0)
         self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
         self.node.create_subscription(Log, "/rosout", self._log, ROSOUT)
@@ -81,6 +83,7 @@ class Probe(SimProbe):
     def _pose(self, msg):
         with self.lock:
             self.pose = msg
+            self.accuracies.append(msg.heading_accuracy)
 
     def _drive(self):
         while self.running:
@@ -136,9 +139,11 @@ class TestCourseGuard(unittest.TestCase):
     def test_3_a_lift_makes_the_heading_uncertain(self):
         p = self.probe
         self.assertTrue(p.wait(lambda: p.pose.heading_accuracy < 0.1, 10), p.pose)
-        logs = len(p.logs)
+        logs, poses = len(p.logs), len(p.accuracies)
         p.flags(lift=1)
         time.sleep(1.0)
         p.flags()
         self.assertTrue(p.logged("Lift ended", 10, logs), p.logs[logs:])
-        self.assertTrue(p.wait(lambda: p.pose.heading_valid and p.pose.heading_accuracy > 0.3, 5), p.pose)
+        # 20 deg right after; standing, the fixes and the antenna lever narrow it again within seconds.
+        self.assertTrue(p.wait(lambda: max(p.accuracies[poses:], default=0.0) > 0.3, 5), p.accuracies[poses:][-5:])
+        self.assertTrue(p.pose.heading_valid)

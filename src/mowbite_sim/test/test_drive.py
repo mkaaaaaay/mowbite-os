@@ -19,7 +19,8 @@ from mowbite_msgs.srv import DriveTo, ReplaceMap, SetPose
 from std_srvs.srv import Trigger
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import LATCHED, SimProbe, distance_to, inside, sim_description, sim_files  # noqa: E402
+from sim_common import (LATCHED, SimProbe, distance_to, follower_max_linear, inside, sim_description,  # noqa: E402
+                        sim_files)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_drive_")
 STATE, FLAGS, _, _ = sim_files(WORK)
@@ -125,7 +126,7 @@ class TestDrive(unittest.TestCase):
         self.assertLess(worst, 0.1, f"{worst:.2f} m outside")
         self.assertFalse(any(inside(BED, t["x"], t["y"]) for t in track))
         self.assertTrue(any(inside(PATH, t["x"], t["y"]) and 6.5 < t["x"] < 9.5 for t in track), "not over the path")
-        self.assertLessEqual(max(abs(t["linear"]) for t in track), 0.3 + 1e-3)
+        self.assertLessEqual(max(abs(t["linear"]) for t in track), follower_max_linear() + 1e-3)
         types = [e["type"] for e in p.events[since:]]
         self.assertIn("STATE", types)
 

@@ -25,8 +25,8 @@ from mowbite_msgs.srv import SetPose
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (LATCHED, REAL_FAULTS, SimProbe, estimate_at, pose_stamp, quantile,  # noqa: E402
-                        sim_description, sim_files, wrap)
+from sim_common import (LATCHED, REAL_FAULTS, SimProbe, estimate_at, follower_max_linear, pose_stamp,  # noqa: E402
+                        quantile, sim_description, sim_files, wrap)
 
 REAL = os.environ.get("MOWBITE_FULL_RUN") == "real"
 # Limits of the cross track error (m) of the base while the blade turns: median, 95 %, worst.
@@ -315,4 +315,4 @@ class TestFullRun(unittest.TestCase):
         self.assertLess(median, LIMITS[0])
         self.assertLess(p95, LIMITS[1])
         self.assertLess(worst, LIMITS[2])
-        self.assertLessEqual(max(abs(t["linear"]) for _, t in track), 0.3 + 1e-3)
+        self.assertLessEqual(max(abs(t["linear"]) for _, t in track), follower_max_linear() + 1e-3)
