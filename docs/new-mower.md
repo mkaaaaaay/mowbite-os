@@ -82,11 +82,12 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
 - `mowbite_bringup/config/geometry/<platform>.yaml`: `geometry.*` in m, base_link in the middle of the drive axle, x
   forward, y left: `platform`, `robot_width`, `robot_front`, `robot_rear`, `mower_width`, `blade_ahead`,
   `blade_offset`, `antenna_x`, `antenna_y`, `track`, `wheel_radius`, `dock_contact_x`, `ticks_per_m`, `imu_roll`,
-  `imu_pitch`. Without `platform` or a number the start stops. `dock_contact_x` says where the charging contacts are:
-  below 0 at the back (the mower backs onto the station and leaves it forwards), above 0 in front (forwards onto it,
-  straight back off it, never faster than `docking_speed`; the safety filter cuts every reversing of the follower to
-  0.12 m/s), 0 none (no docking, `docking.start` is not offered). Set `contact_speed` and `dock_overshoot`
-  to how late the board reports the contact (`nx60i.yaml`).
+  `imu_pitch`. Without `platform` or a number the start stops. Optional `robot_outline`: the contour from above as a
+  flat list x0, y0, x1, y1, ... (at least 3 points); the planner then uses it instead of the rectangle (`tron.yaml`).
+  `dock_contact_x` says where the charging contacts are: below 0 at the back (the mower backs onto the station and
+  leaves it forwards), above 0 in front (forwards onto it, straight back off it, never faster than `docking_speed`;
+  the safety filter cuts every reversing of the follower to 0.12 m/s), 0 none (no docking, `docking.start` is not
+  offered). Set `contact_speed` and `dock_overshoot` to how late the board reports the contact (`nx60i.yaml`).
 - The dock marker, under `/**` of the platform file (one place for all nodes): `dock_marker` [x, y, yaw], the marker
   in base_link while the mower stands docked (m, rad, the direction its front faces), `marker_blind_distance` (m
   before the docked pose where it leaves the image), `marker_range` (m up to which it is found; 0: no marker, then
