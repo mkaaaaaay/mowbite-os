@@ -18,8 +18,9 @@ find_package(mowbite_watch REQUIRED)
 find_package(mowbite_api REQUIRED)
 find_package(mowbite_journal REQUIRED)
 
-# The counter, the sensor history and the answers of stats.* and sensors.history without clock, files or ROS.
-add_library(mowbite_stats_core STATIC src/counter.cpp src/sensor_history.cpp src/stats_rpc.cpp)
+# The counter, the sensor history, the incident keeper and the answers of stats.* and sensors.history without clock,
+# files or ROS.
+add_library(mowbite_stats_core STATIC src/counter.cpp src/sensor_history.cpp src/stats_rpc.cpp src/incident_keeper.cpp)
 target_include_directories(mowbite_stats_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -43,7 +44,8 @@ install(TARGETS mowbite_stats_core mowbite_stats_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(mowbite_stats_test test/test_counter.cpp test/test_sensor_history.cpp test/test_stats_rpc.cpp)
+  ament_add_gtest(mowbite_stats_test test/test_counter.cpp test/test_sensor_history.cpp test/test_stats_rpc.cpp
+    test/test_incident_keeper.cpp)
   target_link_libraries(mowbite_stats_test mowbite_stats_core)
 endif()
 
