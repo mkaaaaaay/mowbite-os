@@ -12,8 +12,8 @@ the MCU pty (host_bytes). The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (every 0.2 s, flag gnss_period), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an
 upright sensor.
 Optional: a JSON file with flags (lift, stop, bumper, bumper_left, bumper_right, rain, dock, host_timeout, fast_speed_hold, gnss_quality, gnss_noise, gnss_age, gnss_delay,
-gnss_noise_tau, gnss_period, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off, cutter_holds,
-gnss_rtcm, dock_shift_x,
+gnss_drift, gnss_noise_tau, gnss_period, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off,
+cutter_holds, gnss_rtcm, dock_shift_x,
 dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, lift_tilt, lift_front_only, gyro_bias_dps,
 charge_current, battery_percentage, battery_voltage, battery_temperature, blade_temperature, standstill_noise,
 stop_latches) is read every 10 ms, every received sub packet goes to a JSON lines log, and --state writes the true
@@ -21,8 +21,8 @@ pose as JSON with the time.monotonic() it was taken (clock); a thread of its own
 slow disk never holds the ptys (Files). The GNSS pty also plays the RTK board in front of the receiver (Board).
 gnss_rtcm true makes the fix depend on the RTCM the board passes: RTK fixed with the real age while corrections are
 at most 120 s old, otherwise single without age.
-gnss_noise is the standard deviation (m) of the antenna position, new each fix, or with gnss_noise_tau (s) an error
-that drifts with that time constant as RTK does (fixes in a row differ by little), gnss_age the age of the
+gnss_noise is the standard deviation (m) of the antenna position, new each fix; gnss_drift adds an error of that
+standard deviation that drifts with the time constant gnss_noise_tau (s), as multipath does; gnss_age the age of the
 corrections in GGA (s, default
 1.0, null leaves the field empty), gnss_delay how old (s) the position is when it is sent, yaw_drift the yaw error (rad)
 per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below which a wheel stands, odom_scale the factor
@@ -806,7 +806,7 @@ def main():
     parser.add_argument("--gnss-link", default="/tmp/mowbite_sim_gnss", help="symlink to the GNSS pty")
     parser.add_argument("--imu-link", default="/tmp/mowbite_sim_imu", help="symlink to the IMU pty")
     parser.add_argument("--flags", help="JSON file with lift, stop, bumper, bumper_left, bumper_right, rain, dock, "
-                        "host_timeout, gnss_quality, gnss_noise, "
+                        "host_timeout, gnss_quality, gnss_noise, gnss_drift, "
                         "gnss_noise_tau, gnss_period, gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, "
                         "track, imu_off, cutter_ignores_off, "
                         "cutter_holds, "
@@ -966,15 +966,15 @@ def main():
             if now >= next_gnss:
                 next_gnss = now + min(max(float(flags.get("gnss_period", GNSS_PERIOD)), 0.05), 1.0)
                 sigma = float(flags.get("gnss_noise", args.gnss_noise_m))
+                drift = float(flags.get("gnss_drift", 0.0))
                 tau = float(flags.get("gnss_noise_tau", 0.0))
                 # The receiver sends the position of an earlier epoch, with the time of that epoch.
                 delay = min(max(float(flags.get("gnss_delay", args.gnss_delay)), 0.0), antenna_history.limit)
                 antenna, (vx, vy) = antenna_history.get(now, delay)
-                if tau > 0.0 and sigma > 0.0:
-                    ex, ey = gnss_error.get(rng, sigma, tau, now)
-                    ax, ay = antenna[0] + ex, antenna[1] + ey
-                else:
-                    ax, ay = noisy(rng, sigma, *antenna)
+                ax, ay = noisy(rng, sigma, *antenna)
+                if tau > 0.0 and drift > 0.0:
+                    ex, ey = gnss_error.get(rng, drift, tau, now)
+                    ax, ay = ax + ex, ay + ey
                 speed = math.hypot(vx, vy)
                 if speed > 0.01:
                     course = math.degrees(math.atan2(vx, vy)) % 360.0
