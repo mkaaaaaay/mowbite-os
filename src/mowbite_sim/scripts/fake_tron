@@ -12,7 +12,7 @@ the MCU pty (host_bytes). The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (every 0.2 s, flag gnss_period), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an
 upright sensor.
 Optional: a JSON file with flags (lift, stop, bumper, bumper_left, bumper_right, rain, dock, host_timeout, fast_speed_hold, gnss_quality, gnss_noise, gnss_age, gnss_delay,
-gnss_drift, gnss_noise_tau, gnss_period, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off,
+gnss_drift, gnss_noise_tau, gnss_period, gnss_course_error, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off,
 cutter_holds, gnss_rtcm, dock_shift_x,
 dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, lift_tilt, lift_front_only, gyro_bias_dps,
 charge_current, battery_percentage, battery_voltage, battery_temperature, blade_temperature, standstill_noise,
@@ -24,7 +24,8 @@ at most 120 s old, otherwise single without age.
 gnss_noise is the standard deviation (m) of the antenna position, new each fix; gnss_drift adds an error of that
 standard deviation that drifts with the time constant gnss_noise_tau (s), as multipath does; gnss_age the age of the
 corrections in GGA (s, default
-1.0, null leaves the field empty), gnss_delay how old (s) the position is when it is sent, yaw_drift the yaw error (rad)
+1.0, null leaves the field empty), gnss_delay how old (s) the position is when it is sent, gnss_course_error degrees
+added to the course of RMC and VTG (a receiver with a wrong course at the right speed), yaw_drift the yaw error (rad)
 per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below which a wheel stands, odom_scale the factor
 between the reported and the real wheel speed, track the real track (m). With stop_latches stop stays set after
 the stop flag, as on the Tron, until a clear frame (sensor, eight zero bytes) comes with the flag down. imu_off stops
@@ -807,7 +808,7 @@ def main():
     parser.add_argument("--imu-link", default="/tmp/mowbite_sim_imu", help="symlink to the IMU pty")
     parser.add_argument("--flags", help="JSON file with lift, stop, bumper, bumper_left, bumper_right, rain, dock, "
                         "host_timeout, gnss_quality, gnss_noise, gnss_drift, "
-                        "gnss_noise_tau, gnss_period, gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, "
+                        "gnss_noise_tau, gnss_period, gnss_course_error, gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, "
                         "track, imu_off, cutter_ignores_off, "
                         "cutter_holds, "
                         "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, "
@@ -977,7 +978,7 @@ def main():
                     ax, ay = ax + ex, ay + ey
                 speed = math.hypot(vx, vy)
                 if speed > 0.01:
-                    course = math.degrees(math.atan2(vx, vy)) % 360.0
+                    course = (math.degrees(math.atan2(vx, vy)) + float(flags.get("gnss_course_error", 0.0))) % 360.0
                 lat, lon, height = enu_to_geodetic(args.datum, ax, ay, 0.0)
                 age = flags.get("gnss_age", 1.0)
                 quality = int(flags.get("gnss_quality", 4))
