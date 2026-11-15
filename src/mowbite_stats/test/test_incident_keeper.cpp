@@ -21,13 +21,13 @@ Trigger Make(const std::string& kind, int64_t t_s, bool safety = false) {
 
 TEST(TriggerOfEvent, OnlyTheEventsThatSetOffAnIncident) {
   const auto emergency = TriggerOfEvent(
-      json{{"type", "EMERGENCY"}, {"emergency", true}, {"bits", json::array({"LATCH", "STOP"})}}, 5, "u");
+      json{{"type", "EMERGENCY"}, {"emergency", true}, {"reason", 5}}, 5, "u");
   ASSERT_TRUE(emergency);
   EXPECT_EQ(emergency->kind, "EMERGENCY");
   EXPECT_EQ(emergency->reason, "LATCH, STOP");
   EXPECT_TRUE(emergency->safety);
   EXPECT_EQ(emergency->t_ns, 5);
-  EXPECT_FALSE(TriggerOfEvent(json{{"type", "EMERGENCY"}, {"emergency", false}}, 0, "u"));
+  EXPECT_FALSE(TriggerOfEvent(json{{"type", "EMERGENCY"}, {"emergency", false}, {"reason", 0}}, 0, "u"));
   EXPECT_FALSE(TriggerOfEvent(json{{"type", "EMERGENCY"}}, 0, "u"));
 
   const auto docking = TriggerOfEvent(json{{"type", "DOCKING_FAILED"}, {"reason", "dock_failed"}}, 0, "u");

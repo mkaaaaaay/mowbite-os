@@ -231,6 +231,11 @@ constexpr int kSensorsHistoryHours = 48;
 constexpr int kSensorsHistorySteps[] = {60, 300, 900};
 constexpr int kSensorsHistoryMaxStep = kSensorsHistorySteps[std::size(kSensorsHistorySteps) - 1];
 constexpr int kSensorsHistoryMaxAnswerBytes = 900000;
+// incidents.*: the most bytes of a timeline in incidents.get, of a piece of incidents.download (raw, before base64) and
+// characters of the note of incidents.mark.
+constexpr int kIncidentTimelineBytes = 65536;
+constexpr int kIncidentChunkBytes = 262144;
+constexpr int kIncidentMaxNote = 500;
 // The situations of sound.list in their order.
 const std::vector<SoundSituation>& SoundSituations();
 

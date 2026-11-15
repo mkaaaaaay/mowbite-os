@@ -4,6 +4,8 @@
 #include <cmath>
 #include <utility>
 
+#include "mowbite_api/catalog.h"
+
 namespace mowbite_stats {
 
 namespace {
@@ -20,19 +22,18 @@ std::string Text(const json& object, const char* key) {
   return it != object.end() && it->is_string() ? it->get<std::string>() : std::string();
 }
 
-// The emergency bits as names, a list or one text.
-std::string Bits(const json& event) {
-  const auto it = event.find("bits");
-  if (it == event.end()) return std::string();
-  if (it->is_string()) return it->get<std::string>();
-  std::string bits;
-  if (!it->is_array()) return bits;
-  for (const auto& bit : *it) {
-    if (!bit.is_string()) continue;
-    if (!bits.empty()) bits += ", ";
-    bits += bit.get<std::string>();
+// The bits of an emergency (reason of the EMERGENCY event) by their names in x-emergency-bits.
+std::string BitNames(const json& event) {
+  const auto it = event.find("reason");
+  if (it == event.end() || !it->is_number_integer()) return std::string();
+  const auto bits = it->get<uint64_t>();
+  std::string names;
+  for (const auto& bit : mowbite_api::EmergencyBits()) {
+    if (bit.bit < 0 || bit.bit >= 64 || (bits & (uint64_t{1} << bit.bit)) == 0) continue;
+    if (!names.empty()) names += ", ";
+    names += bit.name;
   }
-  return bits;
+  return names;
 }
 
 bool EndsWith(const std::string& text, const std::string& end) {
@@ -55,7 +56,7 @@ std::optional<Trigger> TriggerOfEvent(const json& event, int64_t t_ns, const std
     // Only the start: the end of an emergency is no incident.
     if (emergency == event.end() || !emergency->is_boolean() || !emergency->get<bool>()) return std::nullopt;
     trigger.kind = type;
-    trigger.reason = Bits(event);
+    trigger.reason = BitNames(event);
     trigger.safety = true;
   } else if (type == "UNEXPECTED_RESTART") {
     trigger.kind = type;

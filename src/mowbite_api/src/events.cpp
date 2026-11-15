@@ -1039,6 +1039,24 @@ std::vector<ReasonEntry> CameraReasons(bool notice) {
           rated("SELF_TEST", "info", "auto")};
 }
 
+// The triggers of an incident, the reasons of INCIDENT: each a notice without fields of its own.
+std::vector<ReasonEntry> IncidentKinds() {
+  const auto kind = [](const char* code, const char* text) {
+    return ReasonEntry{code, "info", "auto", text, {}, Json::object(), {}};
+  };
+  return {kind("EMERGENCY", "An emergency began"),
+          kind("UNEXPECTED_RESTART", "The OS started again without its own stop"),
+          kind("CRASH", "A process of the OS ended without its own end"),
+          kind("CALIBRATION_FAILED", "A calibration drive failed"),
+          kind("DOCKING_FAILED", "Docking failed"),
+          kind("MOW_MOTOR_SPINUP_FAILED", "The blade did not come up to speed"),
+          kind("UNDOCKING_FAILED", "Undocking failed"),
+          kind("POSITION_JUMP", "The position jumped back onto GPS"),
+          kind("FOLLOWER_MISSING", "The path follower did not answer"),
+          kind("BLADE_REFUSED", "The driver refused to start the blade"),
+          kind("MARK", "The user marked the last minutes (incidents.mark)")};
+}
+
 // severity and resume of an event that is always a notice.
 std::vector<Field> Notice(std::vector<Field> fields) {
   fields.push_back(Text("severity", "Always info", true, {"info"}));
@@ -1463,6 +1481,13 @@ const std::vector<EventEntry>& Events() {
                     Integer("until", "unix s", "When it ends", true)})),
       Event("SCHEDULE_START_CANCELED", "logic", "The announced start of a plan was canceled; the plan does not mow",
             Notice({Text("source", "What canceled it", true, {"emergency", "rpc", "undocked", "hold"})})),
+      Event("INCIDENT", "stats",
+            "An incident is kept: the journal of all processes around a trigger, for incidents.get and "
+            "incidents.download",
+            Rated(true, {Text("id", "The incident", true),
+                         Text("detail", "The reason of the trigger or the emergency bits, empty for none", true),
+                         Bool("safety", "Whether the trigger is about safety: kept longest")}),
+            IncidentKinds(), "info", "auto"),
       Event("MAP_DATUM", "map", "The map does not fit the datum of the GNSS: no mowing",
             Rated(true, {Text("state", "How it does not fit", true, {"mismatch", "unbound"})}),
             User({{"MAP_MISMATCH", "error"}}), "error", "user"),
