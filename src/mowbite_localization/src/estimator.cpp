@@ -147,7 +147,17 @@ void Estimator::SetOntoFix(const Eigen::Vector2d& antenna, double accuracy, cons
   jump.from_y = before(1);
   jump.to_x = base(0);
   jump.to_y = base(1);
-  if (jump.distance() > config_.gate.max_accuracy) jump_ = jump;
+  if (jump.distance() > config_.gate.max_accuracy) {
+    jump_ = jump;
+    LoosenHeading();
+  }
+}
+
+void Estimator::LoosenHeading() {
+  if (!heading_valid_) return;
+  const double variance = config_.disturbed_heading_sigma * config_.disturbed_heading_sigma;
+  if (filter_.covariance()(2, 2) >= variance) return;
+  filter_.SetHeading(filter_.state()(2), variance);
 }
 
 bool Estimator::Contradicts(const Eigen::Vector2d& antenna, double accuracy, const Moment& then) const {

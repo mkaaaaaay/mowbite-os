@@ -9,6 +9,7 @@
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
+#include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/position_jump.hpp>
 #include <mowbite_msgs/msg/robot_pose.hpp>
 #include <mowbite_msgs/srv/set_heading.hpp>
@@ -110,6 +111,16 @@ class LocalizationNode : public rclcpp::Node {
                       msg->gps_timeout);
         });
     // The ticks per m the driver computes the wheel speeds with; robot.geometry holds the true ones.
+    // A lift that ends: the mower may have been carried with the gyro tilted.
+    status_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
+        "hw/status", 10, [this](mowbite_msgs::msg::HardwareStatus::ConstSharedPtr msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          if (lifted_ && !msg->lift) {
+            estimator_.Call<&Estimator::LoosenHeading>();
+            RCLCPP_INFO(get_logger(), "Lift ended: the heading counts as uncertain until the next course");
+          }
+          lifted_ = msg->lift;
+        });
     caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
         "hw/capabilities", LatchedQos(1), [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -495,6 +506,8 @@ class LocalizationNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr params_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr status_sub_;
+  bool lifted_ = false;
   double driver_ticks_per_m_ = 0;
   double ticks_per_m_ = 0;
   rclcpp::Service<mowbite_msgs::srv::SetPose>::SharedPtr set_pose_srv_;

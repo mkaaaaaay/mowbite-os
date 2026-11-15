@@ -47,6 +47,9 @@ struct EstimatorConfig {
   double pose_variance = 1.0;
   double pose_heading_variance = 0.0025;
   double set_heading_variance = 0.0004;
+  // After a jump of the position or a lift the heading may be off (a gyro tilted while carried): its standard deviation
+  // (rad) is at least this, so that the next course corrects it at once.
+  double disturbed_heading_sigma = 20.0 * M_PI / 180.0;
 };
 
 // base_link in the map frame: m, and rad counterclockwise from east.
@@ -103,6 +106,8 @@ class Estimator {
   void SetPose(const Pose2& pose);
   // Sets the heading and puts base_link behind the antenna of the last fix, if the estimate took a recent one.
   std::optional<Pose2> SetHeading(double heading, double t);
+  // The mower was lifted or moved by other means than its wheels: a valid heading gets disturbed_heading_sigma.
+  void LoosenHeading();
 
   // The last jump, once.
   std::optional<Jump> TakeJump();

@@ -132,3 +132,13 @@ class TestCourseGuard(unittest.TestCase):
         p = self.probe
         p.flags(gnss_course_error=0.0)
         self.assertTrue(p.drive(4.0, SPEED, p.heading_valid))
+
+    def test_3_a_lift_makes_the_heading_uncertain(self):
+        p = self.probe
+        self.assertTrue(p.wait(lambda: p.pose.heading_accuracy < 0.1, 10), p.pose)
+        logs = len(p.logs)
+        p.flags(lift=1)
+        time.sleep(1.0)
+        p.flags()
+        self.assertTrue(p.logged("Lift ended", 10, logs), p.logs[logs:])
+        self.assertTrue(p.wait(lambda: p.pose.heading_valid and p.pose.heading_accuracy > 0.3, 5), p.pose)

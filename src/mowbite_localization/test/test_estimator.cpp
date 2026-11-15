@@ -914,4 +914,43 @@ TEST(E5CourseTrack, ASmallErrorStillAlignsOnACurve) {
   EXPECT_EQ(w.est.TakeCourseRejections(), 0);
 }
 
+// E6: after a jump of the position or a lift the heading is uncertain, so that the next course corrects it.
+TEST(E6DisturbedHeading, CarriedWithATiltedGyroTheNextCoursesCorrectIt) {
+  World w;
+  w.Aligned();
+  w.Run(2.0, 0.0, 0.0);
+  EXPECT_LT(w.est.HeadingAccuracy(), 2.0 * kDeg);
+  // Carried 1.2 m without GNSS; the gyro, tilted, missed 10 degrees of the turn.
+  w.gnss = false;
+  w.Run(6.0, 0.0, 0.0);
+  w.Place(w.x + 1.2, w.y, w.heading + 10.0 * kDeg);
+  w.gnss = true;
+  w.Run(2.4, 0.0, 0.0);
+  ASSERT_TRUE(w.est.TakeJump());
+  EXPECT_TRUE(w.est.heading_valid());
+  EXPECT_NEAR(w.est.HeadingAccuracy(), 20.0 * kDeg, 0.5 * kDeg);
+  // Two courses along the track, not the five of a run.
+  w.Run(0.6, 0.3, 0.0);
+  EXPECT_LT(std::abs(w.HeadingError()), 1.0 * kDeg);
+  EXPECT_LT(w.est.HeadingAccuracy(), 5.0 * kDeg);
+}
+
+TEST(E6DisturbedHeading, ALiftLoosensAValidHeadingOnly) {
+  World w;
+  w.Ready();
+  w.est.LoosenHeading();
+  EXPECT_FALSE(w.est.heading_valid());
+  EXPECT_EQ(w.est.HeadingAccuracy(), kNoAccuracy);
+  w.Run(1.2, 0.3, 0.0);
+  ASSERT_TRUE(w.est.heading_valid());
+  const double heading = w.est.pose().heading;
+  w.est.LoosenHeading();
+  EXPECT_NEAR(w.est.HeadingAccuracy(), 20.0 * kDeg, 0.5 * kDeg);
+  EXPECT_DOUBLE_EQ(w.est.pose().heading, heading);
+  EXPECT_TRUE(w.est.heading_valid());
+  // A larger uncertainty stays as it is.
+  w.est.LoosenHeading();
+  EXPECT_NEAR(w.est.HeadingAccuracy(), 20.0 * kDeg, 0.5 * kDeg);
+}
+
 }  // namespace
