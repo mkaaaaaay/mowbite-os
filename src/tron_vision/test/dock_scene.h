@@ -28,6 +28,8 @@ struct SceneMarker {
   int quarter_turns = 0;
   // Leaning back by this angle, top away from the viewer.
   double lean = 0.0;
+  // Turned in its face by this angle, from its right side up as the viewer sees it.
+  double roll = 0.0;
 };
 
 // Rectangle on the first marker's plane, painted over it: right and up from the center, in sides of the square.
@@ -109,7 +111,9 @@ inline bool ToImage(const Scene& s, const Vec3& point, Point2& px) {
 }
 
 // Point on the marker's plane, `right` and `up` from its center as the viewer in front of it sees them, in meters.
-inline Vec3 OnMarker(const SceneMarker& m, double right, double up) {
+inline Vec3 OnMarker(const SceneMarker& m, double right_in_face, double up_in_face) {
+  const double right = right_in_face * std::cos(m.roll) - up_in_face * std::sin(m.roll);
+  const double up = right_in_face * std::sin(m.roll) + up_in_face * std::cos(m.roll);
   // The face direction turned by a quarter to the left is the viewer's right; leaning back moves the top along
   // the direction opposite to the face.
   const double out = -up * std::sin(m.lean);
@@ -129,8 +133,11 @@ inline double Look(const Scene& s, const Point2& ray) {
     const double t = (n.x * (m.x - s.mount.x) + n.y * (m.y - s.mount.y) + n.z * (m.z - s.mount.z)) / approach;
     if (t <= 0.0) continue;
     const Vec3 p{s.mount.x + t * dir.x - m.x, s.mount.y + t * dir.y - m.y, s.mount.z + t * dir.z - m.z};
-    double right = (-std::sin(m.yaw) * p.x + std::cos(m.yaw) * p.y) / s.side;
-    double up = (-std::sin(m.lean) * (std::cos(m.yaw) * p.x + std::sin(m.yaw) * p.y) + std::cos(m.lean) * p.z) / s.side;
+    const double plane_right = (-std::sin(m.yaw) * p.x + std::cos(m.yaw) * p.y) / s.side;
+    const double plane_up =
+        (-std::sin(m.lean) * (std::cos(m.yaw) * p.x + std::sin(m.yaw) * p.y) + std::cos(m.lean) * p.z) / s.side;
+    double right = plane_right * std::cos(m.roll) + plane_up * std::sin(m.roll);
+    double up = -plane_right * std::sin(m.roll) + plane_up * std::cos(m.roll);
     const double reach = std::max(std::fabs(right), std::fabs(up));
     if (reach > 0.5 + s.field + s.housing) continue;
     if (i == 0) {

@@ -25,8 +25,9 @@ struct PoseLimits {
   double fit_error_px = 0.5;
   double fit_error_share = 0.004;
   // Largest turn of the square in its face against the camera (rad): a station or a mower that leans, the ground. On
-  // the Tron 1 to 3 degrees were measured (2026-11-14 and -15).
-  double max_roll = 8.0 * 3.14159265358979323846 / 180.0;
+  // the Tron 1 to 3 degrees were measured (2026-11-14 and -15); well below the 45 degrees where a quarter turn of the
+  // pattern would look alike.
+  double max_roll = 30.0 * 3.14159265358979323846 / 180.0;
   // The yaw counts only if its mirror image about the line of sight fits worse by this many standard deviations
   // of the corners.
   double mirror_sigmas = 4.0;
