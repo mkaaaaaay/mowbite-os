@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <functional>
@@ -14,6 +15,7 @@
 
 #include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/hardware_status.hpp>
+#include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/parts_use.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
 #include <mowbite_msgs/msg/rpc_error.hpp>
@@ -22,13 +24,17 @@
 #include <mowbite_msgs/msg/rpc_response.hpp>
 #include <mowbite_msgs/msg/sensor_spec.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
+#include <rcl_interfaces/msg/log.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 
+#include "mowbite_bridge/event_builder.h"
 #include "mowbite_hold/file_io.h"
 #include "mowbite_hold/file_writer.h"
 #include "mowbite_journal/journal.h"
 #include "mowbite_stats/counter.h"
+#include "mowbite_stats/incidents.h"
 #include "mowbite_stats/sensor_history.h"
 #include "mowbite_stats/stats_rpc.h"
 #include "mowbite_watch/attach.h"
@@ -49,6 +55,8 @@ constexpr char kHistoryDir[] = "stats/sensors";
 constexpr char kHistoryExtension[] = ".jsonl";
 // The sensor history goes to the disk this often (s) and at the end; at most this much is lost when the OS stops hard.
 constexpr double kHistorySaveEvery = 900.0;
+// Log lines of /rosout kept for incidents are cut to this many bytes.
+constexpr size_t kLogLineBytes = 1000;
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -81,7 +89,8 @@ rclcpp::QoS LatchedQos(size_t depth) {
 // Mowing statistics and maintenance: blade time, distance and runs per hour from hw/status and bridge/robot_state,
 // the blade hours of the parts since they were last seen to; stats.get, .part_done and .part_due through the bridge,
 // stats/parts for the pushes of mowbite_net; min, mean and max of the number sensors of bridge/sensor_value per
-// minute for sensors.history. Files under <data_dir>/stats. Reads only, moves nothing.
+// minute for sensors.history. Files under <data_dir>/stats. The incidents of the journal in journal_dir/incidents
+// (journal.status, incidents.*, event INCIDENT): Incidents. Reads only, moves nothing.
 class StatsNode : public rclcpp::Node {
  public:
   explicit StatsNode(const rclcpp::NodeOptions& options)
@@ -95,6 +104,8 @@ class StatsNode : public rclcpp::Node {
           RCLCPP_ERROR(get_logger(), "Cannot write %s: %s", done.path.c_str(), done.error.c_str());
           if (done.path.rfind(PathOf(kHistoryDir), 0) == 0) history_failed_ = true;
         }) {
+    incidents_ = std::make_unique<Incidents>(ReadIncidentsConfig(*this, reserve_bytes_ / 1e6), FreeBytes,
+                                             [this](const std::string& why) { RCLCPP_WARN(get_logger(), "%s", why.c_str()); });
     parts_pub_ = create_publisher<mowbite_msgs::msg::PartsUse>("stats/parts", LatchedQos(1));
     methods_pub_ = create_publisher<mowbite_msgs::msg::RpcMethods>("bridge/rpc/methods", LatchedQos(50));
     response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
@@ -106,6 +117,7 @@ class StatsNode : public rclcpp::Node {
         "hw/status", 10, [this](const mowbite_msgs::msg::HardwareStatus& msg) {
           // The motor's report where there is one, else what the driver commanded.
           blade_ = msg.blade_motor.ok ? msg.blade_motor.rpm != 0 : msg.blade_on;
+          Publish(incidents_->OnEmergency(msg.emergency_reason, mowbite_journal::MonotonicNs(), WallSeconds()));
         });
     state_sub_ = create_subscription<mowbite_msgs::msg::RobotState>(
         "bridge/robot_state", 10, [this](const mowbite_msgs::msg::RobotState& msg) { OnState(msg); });
@@ -131,6 +143,34 @@ class StatsNode : public rclcpp::Node {
     timer_ = create_wall_timer(std::chrono::duration<double>(kSaveEvery), [this] { Save(false); });
     history_timer_ =
         create_wall_timer(std::chrono::duration<double>(kHistorySaveEvery), [this] { SaveHistory(); });
+    publish_pub_ = create_publisher<mowbite_msgs::msg::MqttPublish>("bridge/publish", 100);
+    publish_sub_ = create_subscription<mowbite_msgs::msg::MqttPublish>(
+        "bridge/publish", 100, [this](const mowbite_msgs::msg::MqttPublish& msg) {
+          if (msg.topic != "events/json") return;
+          const json event = json::parse(msg.payload, nullptr, false);
+          Publish(incidents_->OnEvent(event, mowbite_journal::MonotonicNs(), WallSeconds()));
+        });
+    log_sub_ = create_subscription<rcl_interfaces::msg::Log>(
+        "/rosout", rclcpp::QoS(100), [this](const rcl_interfaces::msg::Log& msg) {
+          if (msg.level < rcl_interfaces::msg::Log::WARN) return;
+          const double t = static_cast<double>(msg.stamp.sec) + static_cast<double>(msg.stamp.nanosec) / 1e9;
+          incidents_->OnLog(mowbite_journal::MonotonicNs(),
+                            json{{"t", t}, {"level", msg.level}, {"name", msg.name},
+                                 {"msg", msg.msg.substr(0, kLogLineBytes)}});
+        });
+    params_sub_ = create_subscription<std_msgs::msg::String>(
+        "bridge/params", rclcpp::QoS(rclcpp::KeepLast(50)).reliable().transient_local(),
+        [this](const std_msgs::msg::String& msg) {
+          const json value = json::parse(msg.data, nullptr, false);
+          if (!value.is_object() || value.value("node", "") != "/mower_logic") return;
+          const auto params = value.find("params");
+          if (params == value.end() || !params->is_object()) return;
+          const auto enabled = params->find("journal_enabled");
+          if (enabled != params->end() && enabled->is_number()) incidents_->SetJournalEnabled(enabled->get<double>() != 0);
+        });
+    incidents_timer_ = create_wall_timer(std::chrono::seconds(1), [this] {
+      Publish(incidents_->Tick(mowbite_journal::MonotonicNs(), WallSeconds()));
+    });
     watch_ = mowbite_watch::Attach(*this);
   }
 
@@ -218,7 +258,44 @@ class StatsNode : public rclcpp::Node {
     for (auto& file : files) writer_.Submit(PathOfHour(file.hour), std::move(file.text));
   }
 
+  static IncidentsConfig ReadIncidentsConfig(rclcpp::Node& node, double reserve_mb) {
+    IncidentsConfig config;
+    const char* env = std::getenv("MOWBITE_JOURNAL_DIR");
+    config.journal_dir = node.declare_parameter("journal_dir", std::string(env ? env : ""));
+    config.journal_max_mb = node.declare_parameter("journal_max_mb", config.journal_max_mb);
+    config.journal_max_days = node.declare_parameter("journal_max_days", config.journal_max_days);
+    config.reserve_mb = reserve_mb;
+    IncidentLimits& limits = config.limits;
+    limits.max_mb = node.declare_parameter("incidents_max_mb", limits.max_mb);
+    limits.max_days = node.declare_parameter("incidents_max_days", limits.max_days);
+    limits.max_days_safety = node.declare_parameter("incidents_max_days_safety", limits.max_days_safety);
+    config.boot_id = BootId();
+    return config;
+  }
+
+  // INCIDENT events from Incidents.
+  void Publish(const Incidents::Notices& notices) {
+    for (const json& details : notices) {
+      mowbite_msgs::msg::MqttPublish msg;
+      msg.topic = "events/json";
+      msg.payload = mowbite_bridge::BuildEvent("INCIDENT", nlohmann::ordered_json(details), WallSeconds()).dump();
+      publish_pub_->publish(msg);
+    }
+  }
+
   void OnState(const mowbite_msgs::msg::RobotState& state) {
+    incidents_->OnRobot(json{{"state", state.current_state},
+                             {"sub_state", state.current_sub_state},
+                             {"area", state.current_area},
+                             {"path", state.current_path},
+                             {"path_index", state.current_path_index},
+                             {"task_index", state.task_index},
+                             {"task_count", state.task_count},
+                             {"battery", state.battery_percentage},
+                             {"gps", state.gps_percentage},
+                             {"emergency", state.emergency},
+                             {"emergency_reason", state.emergency_reason},
+                             {"charging", state.is_charging}});
     Sample sample;
     sample.wall = WallSeconds();
     sample.mono = MonotonicSeconds();
@@ -266,6 +343,11 @@ class StatsNode : public rclcpp::Node {
       out.error = RpcError{kInvalidParams, "The parameters are not valid JSON", nullptr};
     } else if (request.method == kHistoryMethod) {
       out = HandleHistory(history_, params, WallSeconds());
+    } else if (std::find(Incidents::Methods().begin(), Incidents::Methods().end(), request.method) !=
+               Incidents::Methods().end()) {
+      Incidents::Notices notices;
+      out = incidents_->Handle(request.method, params, mowbite_journal::MonotonicNs(), WallSeconds(), &notices);
+      Publish(notices);
     } else {
       out = HandleStats(counter_, request.method, params, WallSeconds());
     }
@@ -299,6 +381,7 @@ class StatsNode : public rclcpp::Node {
   bool blade_ = false;
   json saved_;
   std::optional<mowbite_msgs::msg::PartsUse> published_;
+  std::unique_ptr<Incidents> incidents_;
 
   rclcpp::Publisher<mowbite_msgs::msg::PartsUse>::SharedPtr parts_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcMethods>::SharedPtr methods_pub_;
@@ -311,6 +394,11 @@ class StatsNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::TimerBase::SharedPtr history_timer_;
+  rclcpp::Publisher<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_pub_;
+  rclcpp::Subscription<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_sub_;
+  rclcpp::Subscription<rcl_interfaces::msg::Log>::SharedPtr log_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr params_sub_;
+  rclcpp::TimerBase::SharedPtr incidents_timer_;
   std::unique_ptr<mowbite_watch::Attached> watch_;
 };
 

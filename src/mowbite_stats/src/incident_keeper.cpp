@@ -22,11 +22,8 @@ std::string Text(const json& object, const char* key) {
   return it != object.end() && it->is_string() ? it->get<std::string>() : std::string();
 }
 
-// The bits of an emergency (reason of the EMERGENCY event) by their names in x-emergency-bits.
-std::string BitNames(const json& event) {
-  const auto it = event.find("reason");
-  if (it == event.end() || !it->is_number_integer()) return std::string();
-  const auto bits = it->get<uint64_t>();
+// The names of emergency bits as in x-emergency-bits.
+std::string BitNames(uint64_t bits) {
   std::string names;
   for (const auto& bit : mowbite_api::EmergencyBits()) {
     if (bit.bit < 0 || bit.bit >= 64 || (bits & (uint64_t{1} << bit.bit)) == 0) continue;
@@ -51,14 +48,7 @@ std::optional<Trigger> TriggerOfEvent(const json& event, int64_t t_ns, const std
   trigger.utc = utc;
   trigger.reason = reason;
   trigger.detail = event;
-  const auto emergency = event.find("emergency");
-  if (type == "EMERGENCY") {
-    // Only the start: the end of an emergency is no incident.
-    if (emergency == event.end() || !emergency->is_boolean() || !emergency->get<bool>()) return std::nullopt;
-    trigger.kind = type;
-    trigger.reason = BitNames(event);
-    trigger.safety = true;
-  } else if (type == "UNEXPECTED_RESTART") {
+  if (type == "UNEXPECTED_RESTART") {
     trigger.kind = type;
     trigger.safety = true;
   } else if (EndsWith(type, "_FAILED") || type == "POSITION_JUMP") {
@@ -68,6 +58,19 @@ std::optional<Trigger> TriggerOfEvent(const json& event, int64_t t_ns, const std
   } else {
     return std::nullopt;
   }
+  return trigger;
+}
+
+std::optional<Trigger> EmergencyTrigger(uint32_t before, uint32_t now, int64_t t_ns, const std::string& utc) {
+  const uint32_t rising = now & ~before;
+  if (rising == 0) return std::nullopt;
+  Trigger trigger;
+  trigger.kind = "EMERGENCY";
+  trigger.reason = BitNames(rising);
+  trigger.safety = true;
+  trigger.t_ns = t_ns;
+  trigger.utc = utc;
+  trigger.detail = json{{"bits", now}, {"rising", rising}};
   return trigger;
 }
 
@@ -122,6 +125,13 @@ const Incident* IncidentKeeper::Find(const std::string& id) const {
   if (collecting_ && collecting_->id == id) return &*collecting_;
   const auto it = sealing_.find(id);
   return it == sealing_.end() ? nullptr : &it->second;
+}
+
+std::vector<std::string> IncidentKeeper::OpenIds() const {
+  std::vector<std::string> ids;
+  for (const auto& item : sealing_) ids.push_back(item.first);
+  if (collecting_) ids.push_back(collecting_->id);
+  return ids;
 }
 
 void IncidentKeeper::ToSealing() {

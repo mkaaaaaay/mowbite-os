@@ -20,16 +20,6 @@ Trigger Make(const std::string& kind, int64_t t_s, bool safety = false) {
 }
 
 TEST(TriggerOfEvent, OnlyTheEventsThatSetOffAnIncident) {
-  const auto emergency = TriggerOfEvent(
-      json{{"type", "EMERGENCY"}, {"emergency", true}, {"reason", 5}}, 5, "u");
-  ASSERT_TRUE(emergency);
-  EXPECT_EQ(emergency->kind, "EMERGENCY");
-  EXPECT_EQ(emergency->reason, "LATCH, STOP");
-  EXPECT_TRUE(emergency->safety);
-  EXPECT_EQ(emergency->t_ns, 5);
-  EXPECT_FALSE(TriggerOfEvent(json{{"type", "EMERGENCY"}, {"emergency", false}, {"reason", 0}}, 0, "u"));
-  EXPECT_FALSE(TriggerOfEvent(json{{"type", "EMERGENCY"}}, 0, "u"));
-
   const auto docking = TriggerOfEvent(json{{"type", "DOCKING_FAILED"}, {"reason", "dock_failed"}}, 0, "u");
   ASSERT_TRUE(docking);
   EXPECT_EQ(docking->kind, "DOCKING_FAILED");
@@ -48,6 +38,24 @@ TEST(TriggerOfEvent, OnlyTheEventsThatSetOffAnIncident) {
   EXPECT_FALSE(TriggerOfEvent(json{{"type", "DOCKING_RETRY"}, {"reason", "dock_failed"}}, 0, "u"));
   EXPECT_FALSE(TriggerOfEvent(json{{"type", 3}, {"reason", 4}}, 0, "u"));
   EXPECT_FALSE(TriggerOfEvent(json::array(), 0, "u"));
+  // Emergencies come from hw/status.
+  EXPECT_FALSE(TriggerOfEvent(json{{"type", "EMERGENCY"}, {"emergency", true}, {"reason", 5}}, 0, "u"));
+}
+
+TEST(EmergencyTrigger, EveryRisingBit) {
+  const auto first = EmergencyTrigger(0, 5, 7, "u");
+  ASSERT_TRUE(first);
+  EXPECT_EQ(first->kind, "EMERGENCY");
+  EXPECT_EQ(first->reason, "LATCH, STOP");
+  EXPECT_TRUE(first->safety);
+  EXPECT_EQ(first->t_ns, 7);
+  // A further bit while others stay set.
+  const auto second = EmergencyTrigger(5, 7, 8, "u");
+  ASSERT_TRUE(second);
+  EXPECT_EQ(second->detail["rising"], 2);
+  EXPECT_FALSE(EmergencyTrigger(7, 7, 9, "u"));
+  EXPECT_FALSE(EmergencyTrigger(7, 1, 9, "u"));
+  EXPECT_FALSE(EmergencyTrigger(0, 0, 9, "u"));
 }
 
 TEST(IncidentKeeper, ATriggerOpensAWindowLaterOnesGrowIt) {

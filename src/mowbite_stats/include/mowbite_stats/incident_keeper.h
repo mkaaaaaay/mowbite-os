@@ -48,8 +48,11 @@ struct Trigger {
   json detail;
 };
 
-// The trigger an event of events/json sets off, if any.
+// The trigger an event of events/json sets off, if any; emergencies come from EmergencyTrigger.
 std::optional<Trigger> TriggerOfEvent(const json& event, int64_t t_ns, const std::string& utc);
+// Every bit of emergency_reason in hw/status that was not set before opens or grows an incident, also while others
+// stay set and whether the logic tells of it or not.
+std::optional<Trigger> EmergencyTrigger(uint32_t before, uint32_t now, int64_t t_ns, const std::string& utc);
 
 enum class IncidentState { kCollecting, kSealing };
 
@@ -85,6 +88,7 @@ class IncidentKeeper {
 
   // The collecting incident and those waiting to be sealed.
   const Incident* Find(const std::string& id) const;
+  std::vector<std::string> OpenIds() const;
   const std::optional<Incident>& collecting() const { return collecting_; }
   // Throttled triggers by kind since the start.
   const std::map<std::string, uint64_t>& throttled() const { return throttled_; }

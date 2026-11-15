@@ -1,7 +1,10 @@
 #include "mowbite_stats/incident_store.h"
 
+#include <fcntl.h>
 #include <openssl/evp.h>
+#include <spawn.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -12,11 +15,15 @@
 #include <fstream>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <utility>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_hold/file_io.h"
 #include "mowbite_journal/tar.h"
-#include "mowbite_replay/anonymize.h"
+#include "mowbite_journal/timeline.h"
+
+extern char** environ;
 
 namespace mowbite_stats {
 
@@ -26,9 +33,15 @@ namespace {
 
 constexpr char kIncidentsDir[] = "incidents";
 constexpr char kManifest[] = "manifest.json";
-// The copy without location, inside the incident.
+constexpr char kTimeline[] = "timeline.jsonl";
+// The copy without location, inside the incident; made in kAnonWork and renamed when complete.
 constexpr char kAnonDir[] = ".anon";
+constexpr char kAnonWork[] = ".anon.work";
 constexpr size_t kMaxManifestBytes = size_t{4} * 1024 * 1024;
+// The tool that copies a run without its place, in its own process: it knows every core, the stats do not.
+constexpr char kAnonymizeTool[] = "mowbite_replay";
+constexpr char kToolErrors[] = ".errors";
+constexpr size_t kMaxToolErrorBytes = 2000;
 constexpr int kManifestFormat = 1;
 
 std::string Hex(const unsigned char* data, size_t size) {
@@ -86,31 +99,75 @@ std::string IsoUtc(double unix_s) {
   return text;
 }
 
-// The files of an incident below its folder, relative and sorted; the manifest and the copy without location apart.
-std::vector<std::string> Files(const fs::path& folder, bool anon) {
+bool SafeId(const std::string& id) {
+  return !id.empty() && id.find('/') == std::string::npos && id[0] != '.';
+}
+
+// The segment files of an incident below root, relative and sorted: in the folders of its runs.
+std::vector<std::string> SegmentFiles(const fs::path& root) {
   std::vector<std::string> files;
   std::error_code error;
-  const fs::path root = anon ? folder / kAnonDir : folder;
-  for (auto it = fs::recursive_directory_iterator(root, error); !error && it != fs::recursive_directory_iterator();
-       it.increment(error)) {
-    if (!anon && it->is_directory() && it->path().filename() == kAnonDir) {
-      it.disable_recursion_pending();
-      continue;
+  for (const auto& run : fs::directory_iterator(root, error)) {
+    const std::string name = run.path().filename().string();
+    if (!run.is_directory() || name.empty() || name[0] == '.') continue;
+    std::error_code inner;
+    for (const auto& file : fs::directory_iterator(run.path(), inner)) {
+      if (file.is_regular_file()) files.push_back(name + "/" + file.path().filename().string());
     }
-    if (!it->is_regular_file()) continue;
-    const std::string relative = fs::relative(it->path(), root).string();
-    if (relative == kManifest) continue;
-    files.push_back(relative);
   }
   std::sort(files.begin(), files.end());
   return files;
 }
 
+std::vector<std::string> RunFolders(const fs::path& root) {
+  std::vector<std::string> dirs;
+  std::error_code error;
+  for (const auto& entry : fs::directory_iterator(root, error)) {
+    const std::string name = entry.path().filename().string();
+    if (entry.is_directory() && !name.empty() && name[0] != '.') dirs.push_back(entry.path().string());
+  }
+  std::sort(dirs.begin(), dirs.end());
+  return dirs;
+}
+
+// mowbite_replay anonymize of one run into out_dir; its errors go to errors_file.
+bool AnonymizeRun(const std::string& run, const std::string& out_dir, const std::string& errors_file,
+                  const mowbite_journal::AnonymizeOptions& options, std::string* error) {
+  std::vector<std::string> args = {kAnonymizeTool, "anonymize", "--shift-days", std::to_string(options.shift_days)};
+  if (options.keep_raw) args.push_back("--keep-raw");
+  args.push_back(run);
+  args.push_back(out_dir);
+  std::vector<char*> argv;
+  for (auto& arg : args) argv.push_back(arg.data());
+  argv.push_back(nullptr);
+  posix_spawn_file_actions_t actions;
+  posix_spawn_file_actions_init(&actions);
+  posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+  posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, errors_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  pid_t pid = 0;
+  const int spawned = posix_spawnp(&pid, kAnonymizeTool, &actions, nullptr, argv.data(), environ);
+  posix_spawn_file_actions_destroy(&actions);
+  if (spawned != 0) {
+    *error = std::string("cannot start ") + kAnonymizeTool + ": " + std::strerror(spawned);
+    return false;
+  }
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+  }
+  if (WIFEXITED(status) && WEXITSTATUS(status) == 0) return true;
+  std::string text, why;
+  mowbite_hold::ReadSmallFile(errors_file, kMaxToolErrorBytes, &text, &why);
+  *error = std::string(kAnonymizeTool) + " anonymize " + run + " failed (" +
+           (WIFEXITED(status) ? "exit " + std::to_string(WEXITSTATUS(status)) : std::string("signal")) +
+           "): " + text;
+  return false;
+}
+
+// ended and end_reason come at sealing, from the copy in the incident.
 json RunFacts(const mowbite_journal::RunInfo& run, bool from_start) {
-  return json{{"name", run.name},         {"process", run.process},   {"pid", run.pid},
-              {"boot_id", run.boot_id},   {"revision", run.revision}, {"image", run.image},
-              {"platform", run.platform}, {"ended", run.ended},       {"end_reason", run.end_reason},
-              {"from_start", from_start}};
+  return json{{"name", run.name},       {"process", run.process},   {"pid", run.pid},
+              {"boot_id", run.boot_id}, {"revision", run.revision}, {"image", run.image},
+              {"platform", run.platform}, {"from_start", from_start}};
 }
 
 json TriggerJson(const Trigger& trigger) {
@@ -121,7 +178,74 @@ json TriggerJson(const Trigger& trigger) {
   return out;
 }
 
+// The manifest of the copy without location: no log lines, boot ids, wall clock of triggers or event details; dates
+// in names and texts moved.
+json AnonymousManifest(json manifest, const mowbite_journal::AnonymizeOptions& options) {
+  manifest.erase("log");
+  manifest["window"].erase("boot_id");
+  for (auto& trigger : manifest["triggers"]) {
+    trigger.erase("utc");
+    trigger.erase("detail");
+    if (trigger.contains("run")) trigger["run"] = ShiftNameDate(trigger["run"].get<std::string>(), options);
+  }
+  for (auto& run : manifest["runs"]) {
+    run.erase("files");
+    run.erase("boot_id");
+    run["name"] = ShiftNameDate(run.value("name", ""), options);
+  }
+  manifest["id"] = ShiftNameDate(manifest.value("id", ""), options);
+  options.ShiftWallIn(&manifest, {"created"});
+  manifest["location"] = false;
+  return manifest;
+}
+
+// The archive of an incident: its manifest first, then the segments of its runs, then (with location) its timeline.
+mowbite_journal::VirtualTar Archive(const std::string& id, const fs::path& folder, const json& manifest,
+                                    bool location) {
+  const auto& options = IncidentStore::Anonymous();
+  const fs::path root = location ? folder : folder / kAnonDir;
+  const std::string name = location ? id : ShiftNameDate(id, options);
+  const auto mtime =
+      static_cast<int64_t>(manifest.value("created", 0.0) + (location ? 0.0 : static_cast<double>(options.shift_s())));
+  std::vector<mowbite_journal::TarEntry> entries;
+  const auto add = [&](const std::string& relative) {
+    mowbite_journal::TarEntry entry;
+    entry.name = name + "/" + relative;
+    entry.path = (root / relative).string();
+    std::error_code ec;
+    entry.size = fs::file_size(entry.path, ec);
+    entry.mtime = std::max<int64_t>(0, mtime);
+    entries.push_back(std::move(entry));
+  };
+  add(kManifest);
+  for (const std::string& file : SegmentFiles(root)) add(file);
+  std::error_code ec;
+  if (location && fs::exists(root / kTimeline, ec)) add(kTimeline);
+  return mowbite_journal::VirtualTar(std::move(entries));
+}
+
 }  // namespace
+
+std::string Sha256Hex(const std::string& data) {
+  Sha256 sha;
+  sha.Add(data.data(), data.size());
+  return sha.Hex();
+}
+
+std::string ShiftNameDate(const std::string& name, const mowbite_journal::AnonymizeOptions& options) {
+  if (name.size() < 8 || !std::all_of(name.begin(), name.begin() + 8, [](char c) { return c >= '0' && c <= '9'; })) {
+    return name;
+  }
+  const std::string date = name.substr(0, 4) + "-" + name.substr(4, 2) + "-" + name.substr(6, 2);
+  const std::string moved = options.ShiftDates(date);
+  if (moved == date) return name;
+  return moved.substr(0, 4) + moved.substr(5, 2) + moved.substr(8, 2) + name.substr(8);
+}
+
+const mowbite_journal::AnonymizeOptions& IncidentStore::Anonymous() {
+  static const mowbite_journal::AnonymizeOptions options;
+  return options;
+}
 
 IncidentStore::IncidentStore(std::string journal_dir, IncidentLimits limits)
     : journal_dir_(std::move(journal_dir)),
@@ -133,7 +257,7 @@ std::string IncidentStore::Folder(const std::string& id) const {
 }
 
 std::optional<json> IncidentStore::Manifest(const std::string& id) const {
-  if (id.empty() || id.find('/') != std::string::npos || id[0] == '.') return std::nullopt;
+  if (!SafeId(id)) return std::nullopt;
   std::string text, error;
   const auto read =
       mowbite_hold::ReadSmallFile((fs::path(Folder(id)) / kManifest).string(), kMaxManifestBytes, &text, &error);
@@ -143,15 +267,32 @@ std::optional<json> IncidentStore::Manifest(const std::string& id) const {
   return manifest;
 }
 
+json IncidentStore::Timeline(const std::string& id) const {
+  json lines = json::array();
+  if (!SafeId(id)) return lines;
+  std::string text, error;
+  const auto read = mowbite_hold::ReadSmallFile((fs::path(Folder(id)) / kTimeline).string(),
+                                                2 * mowbite_api::kIncidentTimelineBytes, &text, &error);
+  if (read != mowbite_hold::FileRead::kText) return lines;
+  std::istringstream in(text);
+  for (std::string line; std::getline(in, line);) {
+    json value = json::parse(line, nullptr, false);
+    if (!value.is_discarded()) lines.push_back(std::move(value));
+  }
+  return lines;
+}
+
 std::vector<StoredIncident> IncidentStore::Load() {
   std::error_code error;
   fs::create_directories(dir_, error);
   for (const auto& entry : fs::directory_iterator(dir_, error)) {
     if (!entry.is_directory()) continue;
     const std::string id = entry.path().filename().string();
+    std::error_code ec;
+    fs::remove_all(entry.path() / kAnonWork, ec);
     std::optional<json> manifest = Manifest(id);
     if (!manifest || manifest->value("state", "") == "done") continue;
-    // Left open by an earlier process: what it linked stays, without hashes it could not finish.
+    // Left open by an earlier process: what it linked stays, without the hashes it could not finish.
     (*manifest)["state"] = "done";
     (*manifest)["cut"] = true;
     std::string why;
@@ -161,24 +302,25 @@ std::vector<StoredIncident> IncidentStore::Load() {
 }
 
 bool IncidentStore::WriteManifest(const Incident& incident, const IncidentContext& context, const std::string& state,
-                                  const json& runs, std::string* error) {
+                                  const json& runs, std::string* error) const {
   json triggers = json::array();
   for (const Trigger& trigger : incident.triggers) triggers.push_back(TriggerJson(trigger));
   bool from_start = !runs.empty();
   for (const auto& run : runs) from_start = from_start && run.value("from_start", false);
-  const json manifest = {{"format", kManifestFormat},
-                         {"id", incident.id},
-                         {"state", state},
-                         {"created", context.created_s},
-                         {"created_utc", IsoUtc(context.created_s)},
-                         {"safety", incident.safety},
-                         {"window", {{"from_ns", incident.from_ns}, {"to_ns", incident.to_ns}, {"boot_id", context.boot_id}}},
-                         {"triggers", triggers},
-                         {"more_triggers", incident.more},
-                         {"replay", from_start ? "from_start" : "window"},
-                         {"robot", context.robot},
-                         {"log", context.log},
-                         {"runs", runs}};
+  const json manifest = {
+      {"format", kManifestFormat},
+      {"id", incident.id},
+      {"state", state},
+      {"created", context.created_s},
+      {"created_utc", IsoUtc(context.created_s)},
+      {"safety", incident.safety},
+      {"window", {{"from_ns", incident.from_ns}, {"to_ns", incident.to_ns}, {"boot_id", context.boot_id}}},
+      {"triggers", triggers},
+      {"more_triggers", incident.more},
+      {"replay", from_start ? "from_start" : "window"},
+      {"robot", context.robot},
+      {"log", context.log},
+      {"runs", runs}};
   return mowbite_hold::WriteFileSafely((fs::path(Folder(incident.id)) / kManifest).string(), manifest.dump(1) + "\n",
                                        error);
 }
@@ -197,6 +339,7 @@ bool IncidentStore::Link(const Incident& incident, const IncidentContext& contex
   for (const Trigger& trigger : incident.triggers) {
     if (!trigger.run.empty()) crashed.insert(trigger.run);
   }
+  std::lock_guard<std::mutex> lock(mutex_);
   json& linked = runs_[incident.id];
   if (!linked.is_object()) linked = json::object();
   bool ok = true;
@@ -235,15 +378,13 @@ bool IncidentStore::Link(const Incident& incident, const IncidentContext& contex
     linked[run.name] = RunFacts(run, from_start || before);
   }
   json facts = json::array();
-  for (const auto& [name, run] : linked.items()) {
-    (void)name;
-    facts.push_back(run);
-  }
+  for (const auto& item : linked.items()) facts.push_back(item.value());
   return WriteManifest(incident, context, state, facts, error) && ok;
 }
 
 bool IncidentStore::ReadyToSeal(const Incident& incident,
                                 const std::vector<mowbite_journal::RunInfo>& runs) const {
+  std::lock_guard<std::mutex> lock(mutex_);
   const auto it = runs_.find(incident.id);
   if (it == runs_.end()) return true;
   const fs::path folder = Folder(incident.id);
@@ -261,10 +402,20 @@ bool IncidentStore::ReadyToSeal(const Incident& incident,
 
 bool IncidentStore::Seal(const Incident& incident, const IncidentContext& context, std::string* error) {
   const fs::path folder = Folder(incident.id);
+  json linked;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = runs_.find(incident.id);
+    if (it != runs_.end()) linked = it->second;
+  }
+  std::string timeline_error;
+  const std::string timeline = mowbite_journal::Timeline(RunFolders(folder), incident.from_ns, incident.to_ns,
+                                                         mowbite_api::kIncidentTimelineBytes, &timeline_error);
+  if (!mowbite_hold::WriteFileSafely((folder / kTimeline).string(), timeline, error)) return false;
   json facts = json::array();
-  const auto it = runs_.find(incident.id);
-  if (it != runs_.end()) {
-    for (auto& [name, run] : it->second.items()) {
+  if (linked.is_object()) {
+    for (const auto& item : linked.items()) {
+      const std::string& name = item.key();
       json files = json::array();
       std::error_code ec;
       std::vector<std::string> names;
@@ -277,13 +428,20 @@ bool IncidentStore::Seal(const Incident& incident, const IncidentContext& contex
         if (!FileSha256((folder / name / file).string(), &hex, error)) return false;
         files.push_back({{"name", file}, {"bytes", fs::file_size(folder / name / file, ec)}, {"sha256", hex}});
       }
-      json fact = run;
+      json fact = item.value();
+      const mowbite_journal::RunInfo copy = mowbite_journal::InspectRun((folder / name).string(), true);
+      fact["ended"] = copy.ended;
+      fact["end_reason"] = copy.end_reason;
       fact["files"] = files;
       facts.push_back(fact);
     }
   }
+  IncidentContext sealed = context;
+  if (!timeline_error.empty()) sealed.robot["timeline_error"] = timeline_error;
+  if (!WriteManifest(incident, sealed, "done", facts, error)) return false;
+  std::lock_guard<std::mutex> lock(mutex_);
   runs_.erase(incident.id);
-  return WriteManifest(incident, context, "done", facts, error);
+  return true;
 }
 
 std::vector<StoredIncident> IncidentStore::Stored() const {
@@ -312,27 +470,18 @@ std::vector<StoredIncident> IncidentStore::Stored() const {
   return stored;
 }
 
-std::vector<std::string> IncidentStore::RunDirs(const std::string& id) const {
-  std::vector<std::string> dirs;
-  if (!Manifest(id)) return dirs;
-  std::error_code ec;
-  for (const auto& entry : fs::directory_iterator(Folder(id), ec)) {
-    if (entry.is_directory() && entry.path().filename() != kAnonDir) dirs.push_back(entry.path().string());
-  }
-  std::sort(dirs.begin(), dirs.end());
-  return dirs;
-}
-
 bool IncidentStore::Remove(const std::string& id, std::string* error) {
-  if (!Manifest(id) && !fs::is_directory(Folder(id))) {
+  if (!SafeId(id) || !fs::is_directory(Folder(id))) {
     *error = "no incident " + id;
     return false;
   }
   std::error_code ec;
   fs::remove_all(Folder(id), ec);
-  runs_.erase(id);
-  for (auto it = archive_sha_.begin(); it != archive_sha_.end();) {
-    it = it->first.first == id ? archive_sha_.erase(it) : std::next(it);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    runs_.erase(id);
+    archive_sha_.erase({id, false});
+    archive_sha_.erase({id, true});
   }
   if (ec) {
     *error = "cannot remove " + Folder(id) + ": " + ec.message();
@@ -341,9 +490,13 @@ bool IncidentStore::Remove(const std::string& id, std::string* error) {
   return true;
 }
 
-bool IncidentStore::Piece(const std::string& id, uint64_t offset, size_t size, bool location, IncidentPiece* piece,
-                          std::string* error) {
-  std::optional<json> manifest = Manifest(id);
+bool IncidentStore::Prepared(const std::string& id, bool location) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return archive_sha_.count({id, location}) != 0;
+}
+
+bool IncidentStore::Prepare(const std::string& id, bool location, std::string* error) {
+  const std::optional<json> manifest = Manifest(id);
   if (!manifest) {
     *error = "no incident " + id;
     return false;
@@ -353,72 +506,67 @@ bool IncidentStore::Piece(const std::string& id, uint64_t offset, size_t size, b
     return false;
   }
   const fs::path folder = Folder(id);
-  if (!location) {
-    // The copy without location, made once: the runs anonymized, the manifest without log lines and the date shifted.
-    std::error_code ec;
-    if (!fs::exists(folder / kAnonDir / kManifest, ec)) {
-      for (const std::string& run : RunDirs(id)) {
-        mowbite_replay::AnonymizeOptions options;
-        options.shift_days = kIncidentShiftDays;
-        if (!mowbite_replay::AnonymizeRun(run, (folder / kAnonDir / fs::path(run).filename()).string(), options,
-                                          error)) {
-          return false;
-        }
-      }
-      json anon = *manifest;
-      const double shift = kIncidentShiftDays * 86400.0;
-      anon["created"] = anon.value("created", 0.0) + shift;
-      anon["created_utc"] = IsoUtc(anon["created"].get<double>());
-      anon.erase("log");
-      for (auto& trigger : anon["triggers"]) {
-        trigger.erase("utc");
-        trigger.erase("detail");
-      }
-      for (auto& run : anon["runs"]) {
-        run.erase("files");
-        run.erase("boot_id");
-      }
-      anon["window"].erase("boot_id");
-      anon["location"] = false;
-      if (!mowbite_hold::WriteFileSafely((folder / kAnonDir / kManifest).string(), anon.dump(1) + "\n", error)) {
+  std::error_code ec;
+  if (!location && !fs::exists(folder / kAnonDir, ec)) {
+    const fs::path work = folder / kAnonWork;
+    fs::remove_all(work, ec);
+    fs::create_directories(work, ec);
+    if (ec) {
+      *error = "cannot create " + work.string() + ": " + ec.message();
+      return false;
+    }
+    for (const std::string& run : RunFolders(folder)) {
+      const std::string name = ShiftNameDate(fs::path(run).filename().string(), Anonymous());
+      if (!AnonymizeRun(run, (work / name).string(), (work / kToolErrors).string(), Anonymous(), error)) {
         return false;
       }
     }
-  }
-  const fs::path root = location ? folder : folder / kAnonDir;
-  const auto mtime = static_cast<int64_t>(manifest->value("created", 0.0) + (location ? 0 : kIncidentShiftDays * 86400.0));
-  std::vector<mowbite_journal::TarEntry> entries;
-  mowbite_journal::TarEntry head;
-  head.name = id + "/" + kManifest;
-  head.path = (root / kManifest).string();
-  std::error_code ec;
-  head.size = fs::file_size(head.path, ec);
-  head.mtime = mtime;
-  entries.push_back(head);
-  for (const std::string& file : Files(folder, !location)) {
-    mowbite_journal::TarEntry entry;
-    entry.name = id + "/" + file;
-    entry.path = (root / file).string();
-    entry.size = fs::file_size(entry.path, ec);
-    entry.mtime = mtime;
-    entries.push_back(entry);
-  }
-  const mowbite_journal::VirtualTar tar(std::move(entries));
-  piece->size = tar.size();
-  if (offset < tar.size() && !tar.Read(offset, size, &piece->data, error)) return false;
-  if (offset >= tar.size()) piece->data.clear();
-  std::string& sha = archive_sha_[{id, location}];
-  if (sha.empty()) {
-    Sha256 whole;
-    std::string chunk;
-    for (uint64_t at = 0; at < tar.size(); at += chunk.size()) {
-      if (!tar.Read(at, 1 << 20, &chunk, error) || chunk.empty()) return false;
-      whole.Add(chunk.data(), chunk.size());
+    const json anon = AnonymousManifest(*manifest, Anonymous());
+    if (!mowbite_hold::WriteFileSafely((work / kManifest).string(), anon.dump(1) + "\n", error)) return false;
+    fs::rename(work, folder / kAnonDir, ec);
+    if (ec) {
+      *error = "cannot finish " + work.string() + ": " + ec.message();
+      return false;
     }
-    sha = whole.Hex();
   }
-  piece->archive_sha256 = sha;
+  const mowbite_journal::VirtualTar tar = Archive(id, folder, *manifest, location);
+  if (!tar.error().empty()) {
+    *error = tar.error();
+    return false;
+  }
+  Sha256 whole;
+  std::string chunk;
+  for (uint64_t at = 0; at < tar.size(); at += chunk.size()) {
+    if (!tar.Read(at, size_t{1} << 20, &chunk, error)) return false;
+    if (chunk.empty()) break;
+    whole.Add(chunk.data(), chunk.size());
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  archive_sha_[{id, location}] = whole.Hex();
   return true;
+}
+
+bool IncidentStore::Piece(const std::string& id, uint64_t offset, size_t size, bool location, IncidentPiece* piece,
+                          std::string* error) const {
+  const std::optional<json> manifest = Manifest(id);
+  if (!manifest) {
+    *error = "no incident " + id;
+    return false;
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = archive_sha_.find({id, location});
+    if (it == archive_sha_.end()) {
+      *error = "the archive is not prepared";
+      return false;
+    }
+    piece->archive_sha256 = it->second;
+  }
+  const mowbite_journal::VirtualTar tar = Archive(id, Folder(id), *manifest, location);
+  piece->size = tar.size();
+  piece->data.clear();
+  if (offset >= tar.size()) return true;
+  return tar.Read(offset, size, &piece->data, error);
 }
 
 }  // namespace mowbite_stats
