@@ -33,6 +33,10 @@ blade motor turns. The Tron's MCU shows lift only with both front wheels off the
 note, not a finding. Where the person has to act while the blade motor turns, --input-wait gives the time; lifting
 without a motor waits for lift. On the Tron as root: mowbite-measure --steps T6 --blade, or --steps T7 --blade
 (optionally --input-wait 30, --lift-sides left,right).
+T8 asks how the MCU keeps STOP, bumper and lift and what a clear frame drops (G37), without a motor and without a
+wheel command: tron_mcu sends the clear frame with each release while stop or lift shows, at most one a second. A short
+press of STOP, STOP held through releases, a bumper, the front lifted with a release while it is up and once it is
+down, then tron_mcu killed with the port read until the MCU shows stop or lift on its own: mowbite-measure --steps T8.
 """
 import argparse
 import collections
@@ -149,6 +153,15 @@ LEAD_S = 0.5
 CAPTURE_MAX_BYTES = 1024 * 1024
 CAPTURE_BYTES_PER_S = 32 * 1024
 NODE_LOG_BYTES = 5 * 1024 * 1024
+# STOP latch of the MCU (T8, G37), no motor: a press is let go within G37_LET_GO_S; a held STOP gets a release every
+# G37_RELEASE_EVERY_S for G37_HOLD_S; a release counts as dropping a flag within G37_CLEAR_WAIT_S; the front stays up
+# G37_LIFT_HOLD_S in the rehearsal; with tron_mcu killed the port is read for G37_GONE_WINDOW_S.
+G37_LET_GO_S = 2.0
+G37_HOLD_S = 6.0
+G37_RELEASE_EVERY_S = 1.0
+G37_CLEAR_WAIT_S = 1.5
+G37_LIFT_HOLD_S = 4.0
+G37_GONE_WINDOW_S = 20.0
 
 
 class Abort(Exception):
@@ -1660,7 +1673,7 @@ class TronStart:
 class TronMeasurement(Measurement):
     """T1-T7 of phase 6 on the Tron, in the air: the driver is this programme's process (TronStart)."""
     still_speed = TRON_STILL_SPEED
-    STANDSTILL_STEPS = ("T1",)
+    STANDSTILL_STEPS = ("T1", "T8")
     STOP_BUTTONS = (("STOP", {"stop": True}),)
     STOP_LATCHES = True
 
@@ -2404,7 +2417,146 @@ class TronMeasurement(Measurement):
         self.release(step)
         return still
 
-    STEPS = {"T1": t1, "T2": t2, "T3": t3, "T4": t4, "T5": t5, "T6": t6, "T7": t7}
+    def t8(self):
+        parts = (("T8.1", "a short press of STOP, then one release", self.g37_short),
+                 ("T8.2", f"STOP held about {G37_HOLD_S:.0f} s with a release every {G37_RELEASE_EVERY_S:.0f} s, "
+                          "then let go and released", self.g37_held),
+                 ("T8.3", "a short press of a bumper; if the MCU keeps it, a short press of STOP and one release",
+                  self.g37_bumper),
+                 ("T8.4", f"{LIFT_SIDES[LIFT_SHOWN_SIDE][0]} lifted until lift shows, one release while it is up, "
+                          "one once it is down", self.g37_lift),
+                 ("T8.5", f"tron_mcu killed (SIGKILL) with stop and lift free, the port read for "
+                          f"{G37_GONE_WINDOW_S:.0f} s, then tron_mcu starts again", self.g37_gone))
+        for step, text, run in parts:
+            if self.ask(f"{step} no motor, no wheel command, sends nothing but the release (clear frame): {text}"):
+                result = run(step)
+                self.rec.write("g37", step=step, **result)
+                print(f"     {step}: {result}")
+
+    def g37_press(self, step, text, fake, name, hold=0.5):
+        """The person presses something and lets go; waits until hw/status shows `name` with the emergency."""
+        self.ready(step)
+        self.mark(step, text)
+        self.person.act_later(f"{step} now: {text}", fake, after=1.0, hold=hold)
+        if not self.wait(STOP_CHECK_S, until=lambda: self.shown(name) and self.in_emergency()):
+            self.finding(step, f"hw/status did not show {name} with the emergency within {STOP_CHECK_S:.0f} s")
+            raise Abort()
+
+    def g37_clear(self, name, wait_s=G37_CLEAR_WAIT_S):
+        """One release (tron_mcu sends the clear frame with it while stop or lift shows): s until hw/status shows
+        `name` free, None if it does not within `wait_s`."""
+        sent = time.monotonic()
+        self.mower.release()
+        if self.wait(max(0.0, sent + wait_s - time.monotonic()), until=lambda: self.shown(name) is False):
+            return round(time.monotonic() - sent, 2)
+        return None
+
+    def g37_short(self, step):
+        self.g37_press(step, "press STOP briefly (under 1 s) and let go", {"stop": True}, "stop")
+        self.wait(G37_LET_GO_S)
+        self.person.done()
+        kept = self.shown("stop")
+        if not kept:
+            print("     note: the MCU did not keep stop after it was let go")
+        free_s = self.g37_clear("stop")
+        if kept and free_s is None:
+            self.finding(step, "stop stayed after the clear frame with STOP let go")
+        return {"kept": kept, "free_s": free_s, "released": self.release(step)}
+
+    def g37_held(self, step):
+        hold = G37_HOLD_S + 2 * G37_RELEASE_EVERY_S
+        self.g37_press(step, f"press STOP and keep it pressed until this programme says let go (about {hold:.0f} s)",
+                       {"stop": True}, "stop", hold=hold)
+        releases, dropped_s = 0, None
+        end = time.monotonic() + G37_HOLD_S
+        while time.monotonic() < end and dropped_s is None:
+            releases += 1
+            dropped_s = self.g37_clear("stop", G37_RELEASE_EVERY_S)
+        self.let_go("STOP")
+        self.wait(G37_RELEASE_EVERY_S)
+        free_s = self.g37_clear("stop")
+        if free_s is None:
+            free_s = self.g37_clear("stop")
+        held = None
+        if dropped_s is not None:
+            held = self.ask(f"{step}: stop fell {dropped_s:.2f} s after release {releases}. Was STOP pressed all the "
+                            "time until 'let go'? y = yes, s = no")
+            if held:
+                self.finding(step, "stop fell after a clear frame while STOP was held: a held STOP is not seen this "
+                                   "way (G37 draft)")
+        if free_s is None:
+            self.finding(step, "stop stayed after the clear frame with STOP let go")
+        return {"releases": releases, "dropped_s": dropped_s, "held_confirmed": held, "free_s": free_s,
+                "released": self.release(step)}
+
+    def g37_bumper(self, step):
+        self.g37_press(step, "press a bumper briefly and let go", {"bumper_left": True}, "bumper")
+        self.wait(G37_LET_GO_S)
+        self.person.done()
+        result = {"kept": self.shown("bumper")}
+        if result["kept"]:
+            print("     the MCU keeps the bumper after it was let go; a short press of STOP brings the clear frame")
+            self.person.act_later(f"{step} now: press STOP briefly (under 1 s) and let go", {"stop": True}, after=0.5,
+                                  hold=0.5)
+            if not self.wait(STOP_CHECK_S, until=lambda: self.shown("stop")):
+                self.finding(step, f"hw/status did not show stop within {STOP_CHECK_S:.0f} s")
+                raise Abort()
+            self.wait(G37_LET_GO_S)
+            self.person.done()
+            result["stop_free_s"] = self.g37_clear("stop")
+            self.wait(0.5)
+            result["kept_after_clear"] = self.shown("bumper")
+        result["released"] = self.release(step)
+        return result
+
+    def g37_lift(self, step):
+        name, tilt = LIFT_SIDES[LIFT_SHOWN_SIDE]
+        self.ready(step)
+        self.mark(step, f"lift {name}")
+        self.person.act_later(f"{step} now: lift {name} slowly by the top edge of the hood until lift shows, at most "
+                              f"{LIFT_MAX_DEG} deg, and keep it up until this programme says set it down",
+                              {"lift": True}, after=1.0, hold=G37_LIFT_HOLD_S, lead=tilt)
+        if not self.wait(LIFT_WAIT_S, until=lambda: self.shown("lift")):
+            self.finding(step, f"no lift in hw/status within {LIFT_WAIT_S:.0f} s")
+            raise Abort()
+        self.wait(0.5)
+        free_up_s = self.g37_clear("lift")
+        if free_up_s is not None:
+            self.finding(step, f"lift fell {free_up_s:.2f} s after a clear frame with {name} still up")
+        if self.person.fake:
+            self.person.done()
+        else:
+            self.person.act(f"set {name} down now")
+        self.wait(G37_LET_GO_S)
+        kept = self.shown("lift")
+        free_down_s = self.g37_clear("lift")
+        if free_down_s is None:
+            self.finding(step, f"lift stayed after the clear frame with {name} down")
+        return {"free_up_s": free_up_s, "kept_after_down": kept, "free_down_s": free_down_s,
+                "released": self.release(step)}
+
+    def g37_gone(self, step):
+        """What the MCU shows on its own once its host is gone after a clear: when stop and lift come up."""
+        self.ready(step)
+        before = {"stop": self.shown("stop"), "lift": self.shown("lift")}
+        self.mark(step, "tron_mcu killed")
+        since, capture = self.without_host(step, "kill", signal.SIGKILL, "g37", G37_GONE_WINDOW_S)
+        packets, summary, code = self.start.decode(capture)
+        gone = host_gone_result(packets, since, self.mower.wheel_distance)
+        if code != 0 or not gone["samples"]:
+            self.finding(step, f"the capture {capture} has no reports of the MCU (tron_mcu_capture exit {code})")
+            raise Abort()
+        after = self.status()
+        if gone["stop_s"] is None and gone["lift_s"] is None:
+            print(f"     note: the MCU showed neither stop nor lift within {G37_GONE_WINDOW_S:.0f} s without its host")
+        self.show("tron_mcu back")
+        return {"before": before, "stop_s": gone["stop_s"], "lift_s": gone["lift_s"], "capture": capture,
+                "checksum_errors": summary.get("checksum_errors", 0),
+                "restart_emergency": bool(after and after.emergency),
+                "restart_reason": reason_text(after.emergency_reason) if after else None,
+                "released": self.release(step)}
+
+    STEPS = {"T1": t1, "T2": t2, "T3": t3, "T4": t4, "T5": t5, "T6": t6, "T7": t7, "T8": t8}
 
     def run(self, steps):
         """The firmware and the first IMU sample first: another firmware than TRON_FIRMWARE ends the run before any
@@ -2440,7 +2592,7 @@ def interrupted(*_):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--platform", choices=["nx60i", "tron"], default="nx60i")
-    parser.add_argument("--steps", help="comma separated, of M1..M8 (nx60i, default M1-M6) or T1..T7 (tron, default "
+    parser.add_argument("--steps", help="comma separated, of M1..M8 (nx60i, default M1-M6) or T1..T8 (tron, default "
                                         "T1-T5)")
     parser.add_argument("--record-dir", default=".", help="directory of the recording")
     parser.add_argument("--max-mb", type=float, default=100.0, help="size limit of the recording")

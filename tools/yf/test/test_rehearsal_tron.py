@@ -13,7 +13,8 @@ shows lift as the Tron, only with the front up or level: --lift-sides left,right
 no finding, and the front on the blade motor goes up until lift shows. The fake keeps STOP until a clear frame, as the
 Tron does, so a run may start with STOP kept from the last one, as on the Tron after each start of tron_mcu, and has to
 release it first. The STOP check has to pass before the first wheel command and before the first blade on; STOP held
-through its release has to end the run before any. No process may be left.
+through its release has to end the run before any. T8: STOP kept until the clear frame and while pressed, bumper and
+lift not kept, no wheel command and no blade at all. No process may be left.
 
 Reading the port while tron_mcu holds it (TIOCEXCL) needs root with CAP_SYS_ADMIN, as on the Tron:
   docker run --user 0 --cap-add SYS_ADMIN ... python3 -m unittest tools/yf/test/test_rehearsal_tron.py
@@ -406,6 +407,39 @@ class TestRehearsalTron(unittest.TestCase):
         stops = [r for r in rec if r["kind"] == "blade_emergency"]
         self.assertEqual([(r["text"], r["run"]) for r in stops],
                          [("lift the front until lift shows while the blade motor turns", 1)])
+
+    def test_11_stop_latch_g37(self):
+        self.set_flags({"stop": 1})
+        time.sleep(0.2)
+        self.set_flags()
+        code, output, rec = self.measure("g37", "--steps", "T8")
+        end = rec[-1]
+        self.assertEqual(end["findings"], [])
+        self.assertTrue(end["complete"])
+        self.assertEqual(code, 0)
+        parts = {r["step"]: r for r in rec if r["kind"] == "g37"}
+        self.assertEqual(list(parts), ["T8.1", "T8.2", "T8.3", "T8.4", "T8.5"])
+        # The fake keeps STOP until a clear frame, keeps it while pressed, and keeps neither bumper nor lift.
+        short = parts["T8.1"]
+        self.assertTrue(short["kept"] and short["released"], short)
+        self.assertLess(short["free_s"], m.G37_CLEAR_WAIT_S)
+        held = parts["T8.2"]
+        self.assertIsNone(held["dropped_s"], held)
+        self.assertGreaterEqual(held["releases"], m.G37_HOLD_S / m.G37_RELEASE_EVERY_S - 1)
+        self.assertIsNotNone(held["free_s"])
+        self.assertTrue(held["released"])
+        self.assertEqual((parts["T8.3"]["kept"], parts["T8.3"]["released"]), (False, True))
+        lift = parts["T8.4"]
+        self.assertIsNone(lift["free_up_s"], lift)
+        self.assertTrue(lift["released"])
+        gone = parts["T8.5"]
+        self.assertEqual(gone["before"], {"stop": False, "lift": False})
+        self.assertEqual(gone["checksum_errors"], 0)
+        self.assertTrue(gone["released"])
+        self.assertNotIn("stop_check", [r["kind"] for r in rec])
+        self.assertFalse([r for r in rec if r["kind"] == "cmd" and (r["v"] or r["w"])])
+        self.assertFalse([r for r in rec if r["kind"] == "blade" and r["on"]])
+        self.assertIn("keep it pressed until this programme says let go", output)
 
 
 if __name__ == "__main__":
