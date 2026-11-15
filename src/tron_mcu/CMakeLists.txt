@@ -49,7 +49,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(tron_mcu_test test/test_mcu_codec.cpp test/test_mcu_control.cpp test/test_stop_release.cpp test/test_capture_dump.cpp
                   test/test_serial_port.cpp test/test_stop_clear_mark.cpp)
-  target_link_libraries(tron_mcu_test tron_mcu_core util)
+  target_link_libraries(tron_mcu_test tron_mcu_core util mowbite_journal::mowbite_journal)
 endif()
 
 ament_export_targets(export_tron_mcu HAS_LIBRARY_TARGET)

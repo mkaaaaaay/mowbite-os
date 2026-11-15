@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "tron_mcu/mcu_control.h"
+#include "tron_mcu/mcu_journal.h"
 
 using namespace tron;
 
@@ -1833,4 +1834,21 @@ TEST_F(ShortTimeoutRepeatTest, AShorterCmdVelTimeoutStopsFirst) {
   EXPECT_GE(zeros[0] - start, 0.2 - 1e-6);
   EXPECT_LT(zeros[0] - start, 0.22);
   EXPECT_LE(Times(IsMovingSpeed).back() - start, 0.2 + 1e-6);
+}
+
+// Journals from before the clear of STOP during an emergency replay with what they ran with: never cleared.
+TEST(McuJournal, ConfigFromBeforeTheStopClearReplays) {
+  tron::McuControlConfig config;
+  config.stop_clear_period_s = 0.25;
+  config.stop_clear_delay_s = 3.0;
+  nlohmann::json j = config;
+  EXPECT_EQ(j.get<tron::McuControlConfig>().stop_clear_delay_s, 3.0);
+  j.erase("stop_clear_period_s");
+  j.erase("stop_clear_delay_s");
+  const auto old = j.get<tron::McuControlConfig>();
+  EXPECT_EQ(old.stop_clear_period_s, 0.0);
+  EXPECT_EQ(old.stop_clear_delay_s, tron::McuControlConfig{}.stop_clear_delay_s);
+  // Every other field stays required.
+  j.erase("release_window_s");
+  EXPECT_THROW(j.get<tron::McuControlConfig>(), nlohmann::json::out_of_range);
 }
