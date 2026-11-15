@@ -40,3 +40,9 @@ mowbite_logic:
       ticks_per_m: 1000.0
       imu_roll: 0.0
       imu_pitch: 0.0
+
+mowbite_localization:
+  ros__parameters:
+    # The GPS antenna about 0.30 m above the ground (the user, 15.11., to be measured): on a slope it stands beside the
+    # point under base_link by this times the sine of the tilt, which the localization takes from the IMU.
+    antenna_height: 0.30

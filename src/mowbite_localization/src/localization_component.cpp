@@ -33,6 +33,7 @@
 #include "mowbite_localization/dock_estimator_journal.h"
 #include "mowbite_localization/estimator.h"
 #include "mowbite_localization/estimator_journal.h"
+#include "mowbite_localization/tilt.h"
 #include "mowbite_watch/attach.h"
 
 namespace mowbite_localization {
@@ -73,7 +74,8 @@ double YawOf(const geometry_msgs::msg::Quaternion& q) {
 }  // namespace
 
 // The pose of base_link from gyro, wheel speed and RTK GNSS (Estimator), on localization/pose with every gyro sample,
-// odom and TF. The antenna offset comes from the geometry of the logic on bridge/params, the GNSS limits from
+// odom and TF. The antenna offset comes from the geometry of the logic on bridge/params, its height above the ground
+// from the platform file (antenna_height), the tilt that turns this lever from imu/data, the GNSS limits from
 // logic/gps_limits. On a platform with a dock marker (marker_range above 0) also the pose in the station frame
 // (DockEstimator) from hw/dock_marker on localization/dock_pose, on the same motions, with every gyro sample while
 // there is an estimate; logic/dock_heading_hint gives its start heading where the marker has no direction yet.
@@ -188,6 +190,10 @@ class LocalizationNode : public rclcpp::Node {
     config.noise.odometry = declare_parameter("odometry_noise", config.noise.odometry);
     config.noise.gyro = declare_parameter("gyro_noise", config.noise.gyro);
     config.gnss_latency = declare_parameter("gnss_latency", config.gnss_latency);
+    config.antenna_height = declare_parameter("antenna_height", config.antenna_height);
+    if (!(config.antenna_height >= 0.0 && config.antenna_height <= 1.0)) {
+      throw std::invalid_argument("antenna_height must be 0 to 1 m");
+    }
     return config;
   }
 
@@ -270,6 +276,7 @@ class LocalizationNode : public rclcpp::Node {
   void OnImu(const GyroMsg& msg) {
     std::lock_guard<std::mutex> lock(mutex_);
     const double now = MonotonicSeconds();
+    AddTilt(msg, now);
     const bool was_calibrated = estimator_.View().calibrated();
     const bool moved = estimator_.Call<&Estimator::AddImu>(now, msg.angular_velocity.z);
     for (const auto& warning : estimator_.Call<&Estimator::TakeGyroWarnings>()) {
@@ -282,6 +289,22 @@ class LocalizationNode : public rclcpp::Node {
     if (dock_) dock_->Call<&DockEstimator::AddMotion>(estimator_.View().motion());
     Publish(now);
     PublishDock(now);
+  }
+
+  // Called with the mutex held: the tilt from the orientation of the IMU, else from its gravity, ten times a second.
+  void AddTilt(const GyroMsg& msg, double now) {
+    std::optional<Eigen::Vector3d> gravity;
+    if (msg.orientation_covariance[0] >= 0) {
+      const auto& q = msg.orientation;
+      gravity = GravityFromOrientation(q.x, q.y, q.z, q.w);
+    } else {
+      const auto& a = msg.linear_acceleration;
+      gravity = gravity_filter_.Add(now, Eigen::Vector3d(a.x, a.y, a.z));
+    }
+    if (!gravity || (tilt_sent_ && now - *tilt_sent_ < 0.1)) return;
+    tilt_sent_ = now;
+    const Tilt tilt = TiltFromGravity(*gravity, imu_mounting_);
+    estimator_.Call<&Estimator::AddTilt>(now, tilt.roll, tilt.pitch);
   }
 
   void OnGps(const GnssMsg& msg) {
@@ -341,6 +364,10 @@ class LocalizationNode : public rclcpp::Node {
       if (dock_ && params.contains("dock_contact_x") && params["dock_contact_x"].is_number()) {
         const double contact_x = params["dock_contact_x"].get<double>();
         if (contact_x != 0.0) dock_->Call<&DockEstimator::SetDockedHeading>(contact_x < 0.0 ? M_PI : 0.0);
+      }
+      if (params.contains("imu_roll") && params["imu_roll"].is_number() && params.contains("imu_pitch") &&
+          params["imu_pitch"].is_number()) {
+        imu_mounting_ = Tilt{params["imu_roll"].get<double>(), params["imu_pitch"].get<double>()};
       }
       if (params.contains("ticks_per_m") && params["ticks_per_m"].is_number()) {
         ticks_per_m_ = params["ticks_per_m"].get<double>();
@@ -508,6 +535,10 @@ class LocalizationNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr status_sub_;
   bool lifted_ = false;
+  // Without an orientation in imu/data the tilt comes from gravity; imu_roll and imu_pitch of the geometry.
+  GravityFilter gravity_filter_;
+  Tilt imu_mounting_;
+  std::optional<double> tilt_sent_;
   double driver_ticks_per_m_ = 0;
   double ticks_per_m_ = 0;
   rclcpp::Service<mowbite_msgs::srv::SetPose>::SharedPtr set_pose_srv_;

@@ -120,10 +120,18 @@ def sim_links(work):
     return {name: os.path.join(work, name) for name in ("mcu", "gnss", "imu")}
 
 
+def antenna_height():
+    """antenna_height (m) of the Tron in config/geometry/tron.yaml."""
+    path = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
+    with open(path) as f:
+        return float(yaml.safe_load(f)["mowbite_localization"]["ros__parameters"]["antenna_height"])
+
+
 def fake_tron(links, *args):
-    """fake_tron on the ptys of sim_links; args add its other options."""
+    """fake_tron on the ptys of sim_links with the antenna as high as on the Tron; args add its other options."""
     return ExecuteProcess(cmd=[sim_program("fake_tron"), "--link", links["mcu"], "--gnss-link", links["gnss"],
-                               "--imu-link", links["imu"], *args], output="screen")
+                               "--imu-link", links["imu"], "--antenna-height", str(antenna_height()), *args],
+                          output="screen")
 
 
 def loopback_group():

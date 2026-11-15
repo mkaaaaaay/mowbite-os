@@ -80,6 +80,18 @@ class PoseTest(unittest.TestCase):
         self.assertAlmostEqual((x1 - x0) / 1e-6, vx, places=4)
         self.assertAlmostEqual((y1 - y0) / 1e-6, vy, places=4)
 
+    def test_a_high_antenna_leans_downhill(self):
+        pose = ft.Pose(0.0, 0.0, math.pi / 2)
+        self.assertEqual(ft.antenna_lever((0.098, 0.0), 0.3, pose, (0.0, 0.0), (0.0, 0.0)), (0.098, 0.0))
+        # Right side 10 degrees down: 5.2 cm to the right of the base.
+        lx, ly = ft.antenna_lever((0.098, 0.0), 0.3, pose, (10.0, 0.0), (0.0, 0.0))
+        self.assertAlmostEqual(lx, 0.098, places=9)
+        self.assertAlmostEqual(ly, -0.3 * math.sin(math.radians(10.0)), places=9)
+        # The same from a ground that rises 10 degrees to the west, the mower facing north.
+        gx, gy = ft.antenna_lever((0.098, 0.0), 0.3, pose, (0.0, 0.0), (10.0, 180.0))
+        self.assertAlmostEqual(gx, lx, places=9)
+        self.assertAlmostEqual(gy, ly, places=9)
+
 
 class SlipAndNoiseTest(unittest.TestCase):
     def test_drift_turns_the_base_while_driving_straight(self):

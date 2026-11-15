@@ -23,10 +23,10 @@ find_package(nlohmann_json REQUIRED)
 find_package(mowbite_journal REQUIRED)
 find_package(mowbite_watch REQUIRED)
 
-# Filter, gyro offset, GNSS gate, heading from the course and the pose at the station without ROS, testable on any
+# Filter, gyro offset, GNSS gate, heading from the course, tilt and the pose at the station without ROS, testable on any
 # machine.
 add_library(mowbite_localization_core STATIC src/gyro_bias.cpp src/pose_filter.cpp src/fix_gate.cpp
-  src/course_alignment.cpp src/estimator.cpp src/dock_estimator.cpp)
+  src/course_alignment.cpp src/estimator.cpp src/dock_estimator.cpp src/tilt.cpp)
 target_include_directories(mowbite_localization_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -52,7 +52,7 @@ install(TARGETS mowbite_localization_core mowbite_localization_component
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(mowbite_localization_test test/test_gyro_bias.cpp test/test_pose_filter.cpp test/test_fix_gate.cpp
-    test/test_course_alignment.cpp test/test_estimator.cpp test/test_dock_estimator.cpp)
+    test/test_course_alignment.cpp test/test_estimator.cpp test/test_dock_estimator.cpp test/test_tilt.cpp)
   target_link_libraries(mowbite_localization_test mowbite_localization_core)
 endif()
 

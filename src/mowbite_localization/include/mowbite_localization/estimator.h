@@ -13,6 +13,7 @@
 #include "mowbite_localization/pose_filter.h"
 #include "mowbite_localization/position_accuracy.h"
 #include "mowbite_localization/state_history.h"
+#include "mowbite_localization/tilt.h"
 
 namespace mowbite_localization {
 
@@ -50,6 +51,9 @@ struct EstimatorConfig {
   // After a jump of the position or a lift the heading may be off (a gyro tilted while carried): its standard deviation
   // (rad) is at least this, so that the next course corrects it at once.
   double disturbed_heading_sigma = 20.0 * M_PI / 180.0;
+  // The antenna above the ground (m): on a slope it stands that lever times the sine of the tilt beside the ground
+  // point under base_link, which the pose follows.
+  double antenna_height = 0.0;
 };
 
 // base_link in the map frame: m, and rad counterclockwise from east.
@@ -108,6 +112,8 @@ class Estimator {
   std::optional<Pose2> SetHeading(double heading, double t);
   // The mower was lifted or moved by other means than its wheels: a valid heading gets disturbed_heading_sigma.
   void LoosenHeading();
+  // Roll and pitch (rad) of base_link at t; without one for max_imu_gap s the lever counts level.
+  void AddTilt(double t, double roll, double pitch);
 
   // The last jump, once.
   std::optional<Jump> TakeJump();
@@ -146,14 +152,20 @@ class Estimator {
     Eigen::Vector2d antenna;
     double time;
   };
-  // The estimate and the heading of the gyro alone at a moment.
+  // The estimate, the heading of the gyro alone and the tilt at a moment.
   struct Moment {
     double time;
     State state;
     double gyro_heading;
+    Tilt tilt;
   };
 
   Moment MomentAt(double t) const;
+  Tilt TiltAt(double t) const;
+  // The horizontal lever of the antenna (m, frame of base_link turned by the heading) at that tilt.
+  Eigen::Vector2d Lever(const Tilt& tilt) const;
+  // With a recent fix base_link moves behind its antenna for the lever and the heading now.
+  void PlaceBehindLastFix(double t);
   void Remember(double t);
   void ShiftHistory(const State& before);
   // Puts base_link behind the antenna of a fix; with a reason it may be a jump.
@@ -174,6 +186,8 @@ class Estimator {
   int course_rejections_ = 0;
   FixAccuracy accuracy_;
   Eigen::Vector2d lever_ = Eigen::Vector2d::Zero();
+  Tilt tilt_;
+  std::optional<double> tilt_time_;
   bool geometry_known_ = false;
   double wheel_scale_ = 1.0;
   bool gps_enabled_ = true;

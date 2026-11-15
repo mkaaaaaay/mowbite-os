@@ -21,3 +21,8 @@ mowbite_logic:
       # The IMU sits about 4.5 degrees nose up (gravity at rest, M2 03.11.); roll level.
       imu_roll: 0.0
       imu_pitch: 0.079
+
+mowbite_localization:
+  ros__parameters:
+    # The height of the GPS antenna above the ground (m), level lever until it is measured on the device.
+    antenna_height: 0.0

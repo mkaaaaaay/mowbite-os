@@ -89,7 +89,8 @@ FixResult Estimator::AddFix(const GnssFix& fix, double t) {
   if (auto rejected = gate_.Reject(fix)) return *rejected;
   const Eigen::Vector2d antenna(fix.x, fix.y);
   const double then_time = t - config_.gnss_latency;
-  FixResult result = gate_.Classify(t, antenna, AntennaPosition(MomentAt(then_time).state, lever_));
+  const Moment then = MomentAt(then_time);
+  FixResult result = gate_.Classify(t, antenna, AntennaPosition(then.state, Lever(then.tilt)));
   // A new warmup starts the track again; an outlier is no part of it.
   if (result == FixResult::kRestarted || result == FixResult::kOutlierReset) track_.Clear();
   if (result != FixResult::kOutlier) track_.Add(antenna, t);
@@ -135,7 +136,7 @@ void Estimator::SetOntoFix(const Eigen::Vector2d& antenna, double accuracy, cons
   const State before = filter_.state();
   // base_link behind the antenna at the moment of the fix, moved on by what the estimate did since.
   const Eigen::Vector2d base =
-      antenna - Turned(lever_, then.state(2)) + (before.head<2>() - then.state.head<2>());
+      antenna - Turned(Lever(then.tilt), then.state(2)) + (before.head<2>() - then.state.head<2>());
   filter_.SetPosition(base(0), base(1), accuracy * accuracy);
   ShiftHistory(before);
   accuracy_.OnFix(accuracy, t);
@@ -161,9 +162,10 @@ void Estimator::LoosenHeading() {
 }
 
 bool Estimator::Contradicts(const Eigen::Vector2d& antenna, double accuracy, const Moment& then) const {
-  const Eigen::Vector2d innovation = antenna - AntennaPosition(then.state, lever_);
+  const Eigen::Vector2d lever = Lever(then.tilt);
+  const Eigen::Vector2d innovation = antenna - AntennaPosition(then.state, lever);
   if (innovation.norm() <= config_.gate.max_accuracy) return false;
-  const AntennaJacobian h = AntennaPositionJacobian(then.state, lever_);
+  const AntennaJacobian h = AntennaPositionJacobian(then.state, lever);
   const double sigma = std::max(accuracy, 0.005);
   const Eigen::Matrix2d s = h * filter_.covariance() * h.transpose() + sigma * sigma * Eigen::Matrix2d::Identity();
   return innovation.dot(s.ldlt().solve(innovation)) > config_.contradiction_chi2;
@@ -171,9 +173,10 @@ bool Estimator::Contradicts(const Eigen::Vector2d& antenna, double accuracy, con
 
 void Estimator::Fuse(const Eigen::Vector2d& antenna, double accuracy, const Moment& then, double t) {
   const State before = filter_.state();
-  const Eigen::Vector2d innovation = antenna - AntennaPosition(then.state, lever_);
+  const Eigen::Vector2d lever = Lever(then.tilt);
+  const Eigen::Vector2d innovation = antenna - AntennaPosition(then.state, lever);
   const double sigma = std::max(accuracy, 0.005);
-  filter_.UpdatePosition(innovation, AntennaPositionJacobian(then.state, lever_), sigma * sigma,
+  filter_.UpdatePosition(innovation, AntennaPositionJacobian(then.state, lever), sigma * sigma,
                          std::abs(turn_rate_) <= config_.steady_turn_rate);
   ShiftHistory(before);
   accuracy_.OnFix(accuracy, t);
@@ -185,7 +188,7 @@ bool Estimator::Course(const GnssFix& fix, const Moment& then, double t) {
   // Without a velocity, or too slow, a fix says nothing about the heading; an inconsistent course breaks the run.
   if (!fix.motion_valid) return false;
   const Eigen::Vector2d velocity(fix.motion_x, fix.motion_y);
-  const CourseHeading course = HeadingFromCourse(velocity, speed_, turn_rate_, lever_, config_.course);
+  const CourseHeading course = HeadingFromCourse(velocity, speed_, turn_rate_, Lever(then.tilt), config_.course);
   if (course.kind == CourseKind::kInconsistent) course_.Clear();
   if (course.kind != CourseKind::kUsable) return false;
   switch (track_.Check(velocity)) {
@@ -241,11 +244,29 @@ void Estimator::SetAntennaOffset(double x, double y, double t) {
   if (!std::isfinite(x) || !std::isfinite(y)) return;
   lever_ = Eigen::Vector2d(x, y);
   geometry_known_ = true;
+  PlaceBehindLastFix(t);
+}
+
+void Estimator::PlaceBehindLastFix(double t) {
   if (!gate_.initialized() || !last_fix_ || t - last_fix_->time >= accuracy_.timeout()) return;
   const State before = filter_.state();
-  const Eigen::Vector2d base = last_fix_->antenna - Turned(lever_, before(2));
+  const Eigen::Vector2d base = last_fix_->antenna - Turned(Lever(TiltAt(t)), before(2));
   filter_.Shift(State(base(0) - before(0), base(1) - before(1), 0.0));
   ShiftHistory(before);
+}
+
+void Estimator::AddTilt(double t, double roll, double pitch) {
+  if (!std::isfinite(t) || !std::isfinite(roll) || !std::isfinite(pitch)) return;
+  tilt_ = Tilt{roll, pitch};
+  tilt_time_ = t;
+}
+
+Tilt Estimator::TiltAt(double t) const {
+  return tilt_time_ && std::abs(t - *tilt_time_) <= config_.max_imu_gap ? tilt_ : Tilt{};
+}
+
+Eigen::Vector2d Estimator::Lever(const Tilt& tilt) const {
+  return TiltedLever(Eigen::Vector3d(lever_(0), lever_(1), config_.antenna_height), tilt);
 }
 
 void Estimator::SetPose(const Pose2& pose) {
@@ -268,7 +289,7 @@ std::optional<Pose2> Estimator::SetHeading(double heading, double t) {
     return std::nullopt;
   }
   const State before = filter_.state();
-  const Eigen::Vector2d base = last_fix_->antenna - Turned(lever_, heading);
+  const Eigen::Vector2d base = last_fix_->antenna - Turned(Lever(TiltAt(t)), heading);
   filter_.SetHeading(heading, config_.set_heading_variance);
   filter_.Shift(State(base(0) - before(0), base(1) - before(1), 0.0));
   ShiftHistory(before);
@@ -311,13 +332,13 @@ double Estimator::PositionAccuracy(double t) const {
 }
 
 Estimator::Moment Estimator::MomentAt(double t) const {
-  if (config_.gnss_latency <= 0.0 || history_.empty()) return Moment{t, filter_.state(), gyro_heading_};
+  if (config_.gnss_latency <= 0.0 || history_.empty()) return Moment{t, filter_.state(), gyro_heading_, TiltAt(t)};
   return *history_.At(t);
 }
 
 void Estimator::Remember(double t) {
   if (config_.gnss_latency <= 0.0) return;
-  history_.Add(Moment{t, filter_.state(), gyro_heading_}, t - config_.gnss_latency - 0.5);
+  history_.Add(Moment{t, filter_.state(), gyro_heading_, TiltAt(t)}, t - config_.gnss_latency - 0.5);
 }
 
 void Estimator::ShiftHistory(const State& before) {

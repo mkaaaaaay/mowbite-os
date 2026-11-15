@@ -4,7 +4,8 @@ The chain is fake_tron, tron_mcu, tron_gnss, tron_imu and the localization with 
 the logic (the geometry on bridge/params) and drives on hw/cmd_vel, steered by the true pose, so every localization
 drives the same way. It measures: the heading alignment from the start heading and from a heading 90 degrees off (time
 and distance until the heading is good), the position and heading error on a square, the error after 8 s without GNSS
-at 0.3 m/s, and the heading drift standing for 60 s after the gyro bias changed. Every value is printed as one line
+at 0.3 m/s, the heading drift standing for 60 s after the gyro bias changed, and the error on a 10 degree side slope with
+the antenna at the height of config/geometry/tron.yaml (at rest and across the way while driving). Every value is printed as one line
 "quality: ...".
 
 MOWBITE_GNSS_LATENCY=<s> gives the localization that gnss_latency.
@@ -39,6 +40,7 @@ WORK = tempfile.mkdtemp(prefix="mowbite_quality_")
 LINKS = sim_links(WORK)
 STATE, FLAGS, _, _ = sim_files(WORK)
 TRON = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "tron.yaml")
+GEOMETRY = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
 # The ports of the simulation: a section of the node wins over values for all nodes, so these come as one too.
 LOCAL = os.path.join(WORK, "local.yaml")
 GOOD_HEADING = math.radians(5.0)
@@ -55,6 +57,9 @@ LIMITS = {
     "outage_position_m": 0.3,
     "outage_heading_deg": 1.0,
     "drift_deg_per_min": 0.5,
+    # Level the antenna would put the pose 0.30 m * sin(10 deg) = 5.2 cm downhill.
+    "slope_still_median_m": 0.015,
+    "slope_across_driving_median_m": 0.015,
 }
 
 
@@ -74,7 +79,7 @@ def generate_test_description():
         Node(package="tron_imu", executable="tron_imu_node", name="tron_imu", output="screen",
              parameters=[TRON, LOCAL]),
         Node(package="mowbite_localization", executable="mowbite_localization_node", name="mowbite_localization",
-             output="screen", parameters=[TRON, LOCAL]),
+             output="screen", parameters=[GEOMETRY, TRON, LOCAL]),
     ]
     # The ptys have to exist before the drivers look for them.
     return launch.LaunchDescription([
@@ -320,3 +325,23 @@ class TestLocalizationQuality(unittest.TestCase):
         report("after_drift_heading_max_deg", max(heading) if heading else None, "deg")
         p.flags()
         self.check("drift_deg_per_min", drift)
+
+    def test_07_on_a_side_slope(self):
+        p = self.probe
+        p.stop_driving(1.0)
+        p.flags(tilt_roll=10.0)
+        p.stop_driving(3.0)
+        since = len(p.samples)
+        p.stop_driving(3.0)
+        p.straight(6.0)
+        p.stop_driving(2.0)
+        samples = p.samples_since(since)
+        p.flags()
+        still = [errors(s)[0] for s in samples if abs(s[1]["linear"]) < 0.01]
+        across = [abs(-(s[2][0] - s[1]["x"]) * math.sin(s[1]["yaw"]) + (s[2][1] - s[1]["y"]) * math.cos(s[1]["yaw"]))
+                  for s in samples if abs(s[1]["linear"]) > 0.1]
+        self.assertTrue(still and across, "no samples at rest or driving")
+        report("slope_still_median", quantile(still, 0.5), "m")
+        report("slope_across_driving_median", quantile(across, 0.5), "m")
+        self.check("slope_still_median_m", quantile(still, 0.5))
+        self.check("slope_across_driving_median_m", quantile(across, 0.5))

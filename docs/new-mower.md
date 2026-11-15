@@ -88,6 +88,10 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   leaves it forwards), above 0 in front (forwards onto it, straight back off it, never faster than `docking_speed`;
   the safety filter cuts every reversing of the follower to 0.12 m/s), 0 none (no docking, `docking.start` is not
   offered). Set `contact_speed` and `dock_overshoot` to how late the board reports the contact (`nx60i.yaml`).
+  In the same file under `mowbite_localization`: `antenna_height`, the GPS antenna above the ground (m, 0 to 1). On a
+  slope the localization tilts the lever (`antenna_x`, `antenna_y`, `antenna_height`) by roll and pitch from
+  `imu/data` (its orientation, or gravity when `orientation_covariance[0]` is -1), so the pose stays over the ground
+  point under base_link. 0 until measured keeps the lever level.
 - The dock marker, under `/**` of the platform file (one place for all nodes): `dock_marker` [x, y, yaw], the marker
   in base_link while the mower stands docked (m, rad, the direction its front faces), `marker_blind_distance` (m
   before the docked pose where it leaves the image), `marker_range` (m up to which it is found; 0: no marker, then

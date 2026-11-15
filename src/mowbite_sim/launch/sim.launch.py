@@ -14,6 +14,12 @@ from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
 # fake_tron with the charging station of the section fake_tron in extra_config, if it has one (sim.yaml does), and the
 # command line options of its list args (a test makes the simulated Tron differ from its configuration with them). With
 # a station also fake_dock_marker, its camera where tron.yaml mounts tron_rear.
+def antenna_height():
+    path = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
+    with open(path) as f:
+        return float(yaml.safe_load(f)["mowbite_localization"]["ros__parameters"]["antenna_height"])
+
+
 def fake_tron_setup(context):
     try:
         with open(LaunchConfiguration("extra_config").perform(context)) as f:
@@ -40,7 +46,8 @@ def fake_tron_setup(context):
              "--flags", LaunchConfiguration("flags"), "--log", LaunchConfiguration("log"),
              "--state", LaunchConfiguration("state"),
              "--datum", LaunchConfiguration("datum_lat"), LaunchConfiguration("datum_long"),
-             LaunchConfiguration("datum_height"), *station, *(str(v) for v in values.get("args", []))],
+             LaunchConfiguration("datum_height"), "--antenna-height", str(antenna_height()), *station,
+             *(str(v) for v in values.get("args", []))],
         output="screen")]
 
 

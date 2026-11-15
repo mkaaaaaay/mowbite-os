@@ -126,7 +126,7 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal):
     journal_dir = {"journal_dir": journal}
     localization = ComposableNode(
         package="mowbite_localization", plugin="mowbite_localization::LocalizationNode", name="mowbite_localization",
-        parameters=[*files, journal_dir])
+        parameters=[geometry, *files, journal_dir])
     logic = ComposableNode(
         package="mowbite_logic", plugin="mowbite_logic::LogicNode", name="mowbite_logic",
         parameters=[geometry, *files, {"data_dir": data_dir}, journal_dir])

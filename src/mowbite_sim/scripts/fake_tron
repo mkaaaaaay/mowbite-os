@@ -30,8 +30,8 @@ per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below whic
 between the reported and the real wheel speed, track the real track (m). With stop_latches stop stays set after
 the stop flag, as on the Tron, until a clear frame (sensor, eight zero bytes) comes with the flag down. imu_off stops
 the IMU frames, cutter_ignores_off keeps the blade turning on off frames, cutter_holds also without any frame from the
-host. tilt_roll and tilt_pitch (degrees) stand the base on a slope for the IMU; the wheels and the GNSS do not notice
-it. With lift_tilt (degrees) the lift flag counts only while
+host. tilt_roll and tilt_pitch (degrees) stand the base on a slope for the IMU and turn the antenna with it, at
+--antenna-height above the ground point under the base (as do --slope); the wheels do not notice it. With lift_tilt (degrees) the lift flag counts only while
 tilt_roll or tilt_pitch is at least that far, as for an MCU that takes lift from the tilt. With lift_front_only it
 counts only while tilt_roll is 0 and tilt_pitch at most 0 (level or the front up), as the Tron's MCU, which shows lift
 only with both front wheels off the ground. gyro_bias_dps overrides
@@ -673,6 +673,20 @@ def ground(slope_deg, slope_heading_deg):
             [-uy * s, ux * s, c]]
 
 
+def antenna_lever(offset, height, pose, tilt_deg, slope):
+    """The horizontal lever (m) of the antenna in the frame of the base turned by its yaw alone: offset (x, y) and height
+    above the ground point under the base, tilted and on the slope like the IMU."""
+    tilt = rotation_rpy(math.radians(tilt_deg[0]), math.radians(tilt_deg[1]), 0.0)
+    lever = [sum(tilt[i][j] * v for j, v in enumerate((offset[0], offset[1], height))) for i in range(3)]
+    if not slope[0]:
+        return lever[0], lever[1]
+    # The ground turns the lever in the map frame; back into the frame of the yaw.
+    c, s = math.cos(pose.yaw), math.sin(pose.yaw)
+    turned = [c * lever[0] - s * lever[1], s * lever[0] + c * lever[1], lever[2]]
+    east, north = (sum(row[j] * turned[j] for j in range(3)) for row in ground(*slope)[:2])
+    return c * east + s * north, -s * east + c * north
+
+
 def wit_frames(pose, mount_rpy_deg, gyro_bias_dps=0.0, tilt_deg=(0.0, 0.0), error_rpy_deg=(0.0, 0.0, 0.0),
                slope=(0.0, 0.0), gyro_scale=1.0):
     """Acceleration, rate and angle frames of the base, tilted by roll and pitch (in the frame of the base) and standing
@@ -828,6 +842,7 @@ def main():
                         help="geodetic origin of the local frame (test value, not a real garden)")
     parser.add_argument("--start", type=float, nargs=3, default=[0.0, 0.0, 0.0], metavar=("X", "Y", "YAW_DEG"))
     parser.add_argument("--antenna-offset", type=float, nargs=2, default=[0.098, 0.0], metavar=("X", "Y"))
+    parser.add_argument("--antenna-height", type=float, default=0.0, help="the antenna above the ground (m)")
     parser.add_argument("--mount-rpy-deg", type=float, nargs=3, default=[0.0, 0.0, 0.0],
                         help="IMU mount rotation, upright by default like the Tron")
     parser.add_argument("--gyro-bias-dps", type=float, default=0.0, help="constant yaw rate error of the sensor")
@@ -930,7 +945,8 @@ def main():
             dock_ok = bool(flags.get("dock", 0)) or bool(dock and dock.contact)
             if not dock_ok:
                 charging = False
-            antenna_history.push(now, (pose.antenna(*args.antenna_offset), pose.antenna_velocity(*args.antenna_offset)))
+            lever = antenna_lever(args.antenna_offset, args.antenna_height, pose, tilt, args.slope)
+            antenna_history.push(now, (pose.antenna(*lever), pose.antenna_velocity(*lever)))
 
             if now >= next_sensor:
                 next_sensor = now + SENSOR_PERIOD

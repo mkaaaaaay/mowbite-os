@@ -2,9 +2,11 @@
 
 #include <Eigen/LU>
 
+#include <algorithm>
 #include <cmath>
 #include <deque>
 #include <limits>
+#include <optional>
 #include <random>
 #include <vector>
 
@@ -58,10 +60,12 @@ class World {
       y += speed * kStep * std::sin(mid);
       heading = WrapAngle(heading + turn * kStep);
       est.AddWheels(t, odom_scale * speed, odom_scale * turn);
+      if (tilt) est.AddTilt(t, tilt->roll, tilt->pitch);
       if (est.AddImu(t, turn + gyro_bias)) moved++;
+      const Eigen::Vector2d at = true_lever.value_or(lever);
       const Eigen::Vector2d velocity =
-          AntennaPosition(State(0.0, 0.0, heading), Eigen::Vector2d(speed - turn * lever(1), turn * lever(0)));
-      past_.push_back({t, AntennaPosition(Truth(), lever), velocity});
+          AntennaPosition(State(0.0, 0.0, heading), Eigen::Vector2d(speed - turn * at(1), turn * at(0)));
+      past_.push_back({t, AntennaPosition(Truth(), at), velocity});
       while (past_.size() > 200) past_.pop_front();
       if (++steps_ % 10 == 0 && gnss) Fix();
     }
@@ -99,6 +103,9 @@ class World {
   Eigen::Vector2d fix_offset = Eigen::Vector2d::Zero();
   // The receiver reports its velocity turned by this (rad), at the right speed.
   double course_error = 0.0;
+  // The horizontal lever where the antenna really is (frame of base_link), if not lever; the tilt the IMU reports.
+  std::optional<Eigen::Vector2d> true_lever;
+  std::optional<Tilt> tilt;
   std::vector<FixResult> results;
 
  private:
@@ -951,6 +958,93 @@ TEST(E6DisturbedHeading, ALiftLoosensAValidHeadingOnly) {
   // A larger uncertainty stays as it is.
   w.est.LoosenHeading();
   EXPECT_NEAR(w.est.HeadingAccuracy(), 20.0 * kDeg, 0.5 * kDeg);
+}
+
+// E7: the antenna above the ground leans downhill on a slope; the tilt of the IMU turns the lever, the pose stays over
+// the ground point under base_link.
+EstimatorConfig HighAntenna() {
+  EstimatorConfig config;
+  config.antenna_height = 0.3;
+  return config;
+}
+
+TEST(E7AntennaHeight, OnASideSlopeThePoseStaysOverTheGroundPoint) {
+  World w(HighAntenna());
+  // Right side 10 degrees down: the antenna 5.2 cm to the right of the level lever.
+  w.true_lever = Eigen::Vector2d(0.1, -0.3 * std::sin(10.0 * kDeg));
+  w.tilt = Tilt{10.0 * kDeg, 0.0};
+  w.Aligned();
+  w.Run(4.0, 0.3, 0.0);
+  w.Run(1.0, 0.0, 0.0);
+  EXPECT_LT(w.PositionError(), 0.005);
+  EXPECT_LT(std::abs(w.HeadingError()), 1.0 * kDeg);
+}
+
+TEST(E7AntennaHeight, WithoutTheTiltTheLeverStaysLevel) {
+  World w(HighAntenna());
+  w.true_lever = Eigen::Vector2d(0.1, -0.3 * std::sin(10.0 * kDeg));
+  w.Aligned();
+  w.Run(4.0, 0.3, 0.0);
+  w.Run(1.0, 0.0, 0.0);
+  EXPECT_NEAR(w.PositionError(), 0.052, 0.005);
+}
+
+TEST(E7AntennaHeight, FrontDownAlongTheWayAndTurning) {
+  World w(HighAntenna());
+  w.true_lever = Eigen::Vector2d(0.1 * std::cos(10.0 * kDeg) + 0.3 * std::sin(10.0 * kDeg), 0.0);
+  w.tilt = Tilt{0.0, 10.0 * kDeg};
+  w.Aligned();
+  w.Run(3.0, 0.3, 0.3);
+  w.Run(1.0, 0.0, 0.0);
+  EXPECT_LT(w.PositionError(), 0.005);
+  EXPECT_LT(std::abs(w.HeadingError()), 1.0 * kDeg);
+}
+
+TEST(E7AntennaHeight, LevelItIsTheSameAsWithoutHeight) {
+  World high(HighAntenna());
+  high.tilt = Tilt{};
+  World flat;
+  for (World* w : {&high, &flat}) {
+    w->Aligned();
+    w->Run(3.0, 0.3, 0.2);
+  }
+  EXPECT_EQ(high.est.pose().x, flat.est.pose().x);
+  EXPECT_EQ(high.est.pose().y, flat.est.pose().y);
+  EXPECT_EQ(high.est.pose().heading, flat.est.pose().heading);
+}
+
+TEST(E7AntennaHeight, AnOldTiltCountsLevel) {
+  World high(HighAntenna());
+  World flat;
+  // A tilt longer than max_imu_gap ago.
+  high.est.AddTilt(high.t - 1.0, 10.0 * kDeg, 10.0 * kDeg);
+  high.est.AddTilt(high.t, NAN, 0.0);
+  for (World* w : {&high, &flat}) {
+    w->Aligned();
+    w->Run(1.0, 0.3, 0.0);
+  }
+  EXPECT_EQ(high.est.pose().x, flat.est.pose().x);
+  EXPECT_EQ(high.est.pose().y, flat.est.pose().y);
+}
+
+TEST(E7AntennaHeight, LateFixesTakeTheTiltOfTheirMoment) {
+  EstimatorConfig config = HighAntenna();
+  config.gnss_latency = 0.2;
+  World w(config);
+  w.gnss_delay = 0.2;
+  w.Aligned();
+  // Rocking between level and 10 degrees: a fix 0.2 s late belongs to the tilt before the change.
+  double worst = 0.0;
+  for (int i = 0; i < 10; ++i) {
+    const double roll = i % 2 ? 10.0 * kDeg : 0.0;
+    w.tilt = Tilt{roll, 0.0};
+    w.true_lever = Eigen::Vector2d(0.1, -0.3 * std::sin(roll));
+    for (int j = 0; j < 6; ++j) {
+      w.Run(0.1, 0.0, 0.0);
+      worst = std::max(worst, w.PositionError());
+    }
+  }
+  EXPECT_LT(worst, 0.005);
 }
 
 }  // namespace
