@@ -8,7 +8,8 @@ bridge logs why, S2 latches UNEXPECTED_RESTART at the driver, a release at the d
 emergency.reset of the logic does. A crash in IDLE only tells, and after the fourth crash the container stays down.
 With a disk that cannot be written (a folder where the file is written first): a start whose os-session.json does not
 get there is refused and nothing moves; a job goes on when the disk fails meanwhile; a restart hold that cannot be
-written holds in memory and is written once it can.
+written holds in memory and is written once it can. The runs the kill left without their end come back as an incident
+CRASH (FP23 B2a) that replays bit-identically.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_stack_crash.py
 """
@@ -16,6 +17,7 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -23,15 +25,17 @@ import unittest
 
 import launch_testing.asserts
 import rclpy
+from ament_index_python.packages import get_package_prefix
 from launch.events.process import ProcessStarted
-from mowbite_msgs.msg import HardwareStatus, MapStatus, MqttPublish, RobotPose, RobotState
+from mowbite_msgs.msg import (HardwareStatus, MapStatus, MqttPublish, RobotPose, RobotState, RpcError, RpcRequest,
+                              RpcResponse)
 from mowbite_msgs.srv import ReplaceMap, SetEmergency, SetPose
 from rcl_interfaces.msg import Log
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import (EXIT_CODES, LATCHED, ROSOUT, SimProbe, container_pid, last_time, restarted,  # noqa: E402
-                        sim_description, sim_files)
+                        sim_description, sim_files, wait_until)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_crash_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
@@ -40,6 +44,9 @@ SESSION = os.path.join(DATA, "os-session.json")
 HISTORY = os.path.join(DATA, "event_history")
 UNEXPECTED_RESTART = HardwareStatus.REASON_UNEXPECTED_RESTART
 CONFIG = os.path.join(WORK, "crash.yaml")
+# The journal of ctest (MOWBITE_JOURNAL_DIR), else one of its own.
+JOURNAL = os.environ.get("MOWBITE_JOURNAL_DIR") or os.path.join(WORK, "journal")
+REPLAY = os.path.join(get_package_prefix("mowbite_replay"), "bin", "mowbite_replay")
 # tron.yaml: cmd_vel_timeout of tron_mcu and blade_lease of the logic. fake_tron stops on its own only after 2 s
 # without any frame of the host.
 CMD_VEL_TIMEOUT = 0.5
@@ -61,14 +68,16 @@ GARDEN = {
 }
 
 with open(CONFIG, "w") as f:
-    f.write("tron_mcu:\n  ros__parameters:\n    safety_measurement_date: \"simulation\"\n    allow_blade: true\n"
+    # Short segments, so that an incident is sealed soon after its window.
+    f.write("/**:\n  ros__parameters:\n    journal_segment_s: 20.0\n"
+            "tron_mcu:\n  ros__parameters:\n    safety_measurement_date: \"simulation\"\n    allow_blade: true\n"
             "mowbite_logic:\n  ros__parameters:\n    mow_with_blade: true\n    gps_wait_time: 2.0\n"
             # The antenna of fake_tron, as in sim.yaml, which this file replaces.
             "    geometry:\n      antenna_x: 0.098\n      antenna_y: 0.0\n")
 
 
 def generate_test_description():
-    return sim_description(WORK, 18833, extra_config=CONFIG)
+    return sim_description(WORK, 18833, extra_config=CONFIG, journal_dir=JOURNAL)
 
 
 class Probe(SimProbe):
@@ -88,6 +97,9 @@ class Probe(SimProbe):
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
         self.emergency = self.node.create_client(SetEmergency, "hw/emergency")
+        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
+        self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
+        self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
         self.start()
 
     def sim_time(self):
@@ -291,6 +303,28 @@ class TestStackCrash(unittest.TestCase):
         speeds = [e for e in p.received(TestStackCrash.stop) if "speed" in e]
         self.assertTrue(all(e["hex"] == ZERO for e in speeds) and len(speeds) <= 3, speeds)
         self.assertFalse([e for e in p.received(t0) if e.get("cutter", 0) != 0], "the blade on again")
+
+    def test_05b_the_runs_without_their_end_are_an_incident(self):
+        p = self.probe
+        pid, _ = TestStackCrash.crash
+
+        def crash():
+            answer = p.rpc("incidents.list", timeout=2) or {}
+            return next((i for i in answer.get("result", []) if "CRASH" in i["triggers"] and i["state"] == "done"),
+                        None)
+        # Found at the first pass after the start, sealed once its window and segments are closed.
+        self.assertTrue([n for n in os.listdir(JOURNAL) if n.endswith(f"_{pid}")], os.listdir(JOURNAL))
+        row = wait_until(crash, 120)
+        self.assertTrue(row, p.rpc("incidents.list"))
+        self.assertTrue(row["safety"], row)
+        manifest = p.rpc("incidents.get", {"id": row["id"]})["result"]["manifest"]
+        crashed = [r for r in manifest["runs"] if r["pid"] == pid]
+        self.assertTrue(crashed, [(r["name"], r["pid"]) for r in manifest["runs"]])
+        self.assertFalse(any(r["ended"] for r in crashed), crashed)
+        self.assertTrue(any(t["kind"] == "CRASH" and t["safety"] for t in manifest["triggers"]), manifest["triggers"])
+        out = subprocess.run([REPLAY, "check", os.path.join(JOURNAL, "incidents", row["id"])], capture_output=True,
+                             text=True, timeout=300)
+        self.assertEqual(out.returncode, 0, out.stdout[-3000:] + out.stderr[-2000:])
 
     def test_06_a_release_leaves_the_mower_standing(self):
         p = self.probe
