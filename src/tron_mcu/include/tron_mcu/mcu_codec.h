@@ -44,10 +44,13 @@ struct SubPacket {
 };
 
 // Limits applied by the command builders, independent of any caller. 0.55 m/s is the vendor's working speed, raised
-// without a braking test on the user's word (15.11.); turning on the spot at 0.5 rad/s moves the farthest point of the
-// body (0.62 m out) at 0.31 m/s.
+// without a braking test on the user's word (15.11.); turning on the spot at 0.7 rad/s, as the vendor does, moves the
+// farthest point of the body (0.62 m out) at 0.43 m/s. Driving and turning together, the faster wheel (0.20 m from the
+// middle, as the MCU counts) stays at kMaxWheelSpeed, both scaled alike so that the curve keeps its radius.
 constexpr float kMaxLinearSpeed = 0.55f;
-constexpr float kMaxAngularSpeed = 0.5f;
+constexpr float kMaxAngularSpeed = 0.7f;
+constexpr float kMaxWheelSpeed = 0.65f;
+constexpr float kHalfTrack = 0.20f;
 constexpr uint16_t kMinCutterHeightMm = 30;
 constexpr uint16_t kMaxCutterHeightMm = 90;
 // The MCU turns speed and turn rate into wheel speeds with 0.40 m between the wheels and reports them in mm/s.

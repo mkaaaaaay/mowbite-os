@@ -175,11 +175,22 @@ TEST(Commands, SpeedIsClampedAndFinite) {
   ASSERT_TRUE(packet);
   auto decoded = DecodeSpeed(packet->payload);
   ASSERT_TRUE(decoded);
-  EXPECT_FLOAT_EQ(decoded->linear, kMaxLinearSpeed);
-  EXPECT_FLOAT_EQ(decoded->angular, -kMaxAngularSpeed);
-  // Turning on the spot at 0.45 rad/s passes, more is cut to 0.5 rad/s; 0.5 m/s passes, more is cut to 0.55 m/s.
-  EXPECT_FLOAT_EQ(DecodeSpeed(SpeedPacket(0.0f, 0.45f)->payload)->angular, 0.45f);
-  EXPECT_FLOAT_EQ(DecodeSpeed(SpeedPacket(0.0f, 0.6f)->payload)->angular, 0.5f);
+  // Each cut to its limit, then both alike to the wheel limit.
+  const float scale = kMaxWheelSpeed / (kMaxLinearSpeed + kMaxAngularSpeed * kHalfTrack);
+  EXPECT_FLOAT_EQ(decoded->linear, kMaxLinearSpeed * scale);
+  EXPECT_FLOAT_EQ(decoded->angular, -kMaxAngularSpeed * scale);
+  // Turning on the spot at 0.65 rad/s passes, more is cut to 0.7 rad/s; 0.5 m/s passes, more is cut to 0.55 m/s.
+  EXPECT_FLOAT_EQ(DecodeSpeed(SpeedPacket(0.0f, 0.65f)->payload)->angular, 0.65f);
+  EXPECT_FLOAT_EQ(DecodeSpeed(SpeedPacket(0.0f, 0.8f)->payload)->angular, 0.7f);
+  // A curve at 0.55 m/s and 0.5 rad/s keeps the faster wheel at 0.65 m/s and passes; at 0.7 rad/s both are scaled
+  // down alike, the radius stays.
+  auto curve = DecodeSpeed(SpeedPacket(0.55f, 0.5f)->payload);
+  EXPECT_FLOAT_EQ(curve->linear, 0.55f);
+  EXPECT_FLOAT_EQ(curve->angular, 0.5f);
+  curve = DecodeSpeed(SpeedPacket(-0.55f, -0.7f)->payload);
+  EXPECT_NEAR(std::fabs(curve->linear) + std::fabs(curve->angular) * kHalfTrack, kMaxWheelSpeed, 1e-5);
+  EXPECT_NEAR(curve->linear / curve->angular, 0.55f / 0.7f, 1e-5);
+  EXPECT_LT(curve->linear, 0.0f);
   EXPECT_FLOAT_EQ(DecodeSpeed(SpeedPacket(0.5f, 0.0f)->payload)->linear, 0.5f);
   EXPECT_FLOAT_EQ(DecodeSpeed(SpeedPacket(-0.7f, 0.0f)->payload)->linear, -0.55f);
   EXPECT_FALSE(SpeedPacket(NAN, 0.0f));

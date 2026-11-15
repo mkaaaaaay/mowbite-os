@@ -68,9 +68,17 @@ Version GetVersion(const std::vector<uint8_t>& in, size_t at) {
 }
 
 SubPacket SpeedFrame(float linear, float angular) {
+  linear = std::clamp(linear, -kMaxLinearSpeed, kMaxLinearSpeed);
+  angular = std::clamp(angular, -kMaxAngularSpeed, kMaxAngularSpeed);
+  const float wheel = std::fabs(linear) + std::fabs(angular) * kHalfTrack;
+  if (wheel > kMaxWheelSpeed) {
+    const float scale = kMaxWheelSpeed / wheel;
+    linear *= scale;
+    angular *= scale;
+  }
   std::vector<uint8_t> payload;
-  PutF32(payload, std::clamp(linear, -kMaxLinearSpeed, kMaxLinearSpeed));
-  PutF32(payload, std::clamp(angular, -kMaxAngularSpeed, kMaxAngularSpeed));
+  PutF32(payload, linear);
+  PutF32(payload, angular);
   return Command(Module::kSpeed, std::move(payload));
 }
 

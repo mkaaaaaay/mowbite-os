@@ -115,7 +115,7 @@ class TestHardwareContract(unittest.TestCase):
         self.assertAlmostEqual(caps.wheel_ticks_per_m, 1000.0)
         self.assertAlmostEqual(caps.wheel_distance, 0.40)
         self.assertAlmostEqual(caps.max_linear_speed, 0.55, places=5)
-        self.assertAlmostEqual(caps.max_angular_speed, 0.5, places=5)
+        self.assertAlmostEqual(caps.max_angular_speed, 0.7, places=5)
         self.assertTrue(caps.gnss_receiver_time)
         self.assertLess(caps.failsafe_without_host_s, 0)
         self.assertEqual(caps.safety_measurement_date, "")
