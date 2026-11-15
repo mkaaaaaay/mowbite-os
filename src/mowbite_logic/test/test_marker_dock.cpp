@@ -40,8 +40,34 @@ DockPoseSample Pose(double t, double x, double y = 0.0, double heading = M_PI, d
 MarkerConfig Tron() {
   MarkerConfig config;
   config.range = 1.2;
+  config.marker_x = -0.16;
   return config;
 }
+
+double Rad(double degrees) {
+  return degrees * M_PI / 180.0;
+}
+
+// A pose from the marker in the station frame with the spread of its heading (rad).
+DockPoseSample At(double x, double y, double heading, double spread = 0.0) {
+  DockPoseSample pose;
+  pose.x = x;
+  pose.y = y;
+  pose.heading = heading;
+  pose.heading_valid = true;
+  pose.position_accuracy = 0.01f;
+  pose.heading_accuracy = static_cast<float>(spread);
+  return pose;
+}
+
+// The same place seen in a station frame turned by angle about the marker, as a marker yaw that errs by angle does.
+DockPoseSample Turned(const DockPoseSample& pose, double angle, double spread = 0.0) {
+  const double mx = 0.16;
+  const double c = std::cos(angle);
+  const double s = std::sin(angle);
+  return At(mx + c * (pose.x - mx) - s * pose.y, s * (pose.x - mx) + c * pose.y, pose.heading + angle, spread);
+}
+
 
 // A sight that began at 100 s, with a message every 0.1 s of this kind up to t.
 MarkerWatch Sight(uint8_t state, bool valid, bool yaw, const std::string& reason, double until, bool sight = true) {
@@ -55,6 +81,10 @@ MarkerWatch Sight(uint8_t state, bool valid, bool yaw, const std::string& reason
 
 DockingSequence StationDocking() {
   return MarkerDocking(DockConfig(), UndockConfig(), true, Tron());
+}
+
+std::string Start(const DockPoseSample& pose) {
+  return TestStartProblem(StationDocking(), Tron(), pose, 0.05);
 }
 
 }  // namespace
@@ -211,27 +241,63 @@ TEST(MarkerDocking, NoCloseLegWhereTheGateIsBlind) {
   EXPECT_NEAR(docking.Contact().poses.front().x, -0.25, 1e-9);
 }
 
-// The hand start of the test: on the line within 0.05 m or at its start, facing along it, the way out ending on it.
-TEST(TestStart, OnTheLineOrAtItsStart) {
+// The marker beside the axis of the mower: on the line facing along it none, 0.03 m beside the line 0.03 m (left
+// positive), turned by 10 deg at 0.66 m from the marker 0.66 sin 10 deg; a station frame turned about the marker, as a
+// marker yaw that errs does, leaves it as it is.
+TEST(SideOffset, BesideTheAxisAndNotTurnedWithTheFrame) {
   const DockingSequence docking = StationDocking();
-  EXPECT_EQ(TestStartProblem(docking, -0.5, 0.0, M_PI, 0.05), "");
-  EXPECT_EQ(TestStartProblem(docking, -0.5, 0.04, M_PI, 0.05), "");
-  EXPECT_EQ(TestStartProblem(docking, -0.8, -0.03, M_PI - 0.2, 0.05), "");
-  EXPECT_EQ(TestStartProblem(docking, -0.85, 0.0, M_PI, 0.05), "");
+  EXPECT_NEAR(SideOffset(docking, Tron(), -0.5, 0.0, M_PI), 0.0, 1e-9);
+  EXPECT_NEAR(SideOffset(docking, Tron(), -0.5, 0.03, M_PI), 0.03, 1e-9);
+  EXPECT_NEAR(std::abs(SideOffset(docking, Tron(), -0.5, 0.0, M_PI + Rad(10))), 0.66 * std::sin(Rad(10)), 1e-9);
+  for (const double angle : {Rad(-5), Rad(4)}) {
+    const DockPoseSample turned = Turned(At(-0.5, 0.02, M_PI + Rad(3)), angle);
+    EXPECT_NEAR(SideOffset(docking, Tron(), turned.x, turned.y, turned.heading),
+                SideOffset(docking, Tron(), -0.5, 0.02, M_PI + Rad(3)), 1e-9);
+  }
+  // The docked mower has the marker where dock_marker puts it.
+  MarkerConfig aside = Tron();
+  aside.marker_y = 0.02;
+  EXPECT_NEAR(SideOffset(docking, aside, 0.0, 0.0, M_PI), 0.0, 1e-9);
+}
+
+// The hand start of the test: on the line with the marker within 0.05 m of its axis, or at its start, facing along it,
+// the line beginning on it.
+TEST(TestStart, OnTheLineOrAtItsStart) {
+  EXPECT_EQ(Start(At(-0.5, 0.0, M_PI)), "");
+  EXPECT_EQ(Start(At(-0.5, 0.04, M_PI)), "");
+  EXPECT_EQ(Start(At(-0.8, -0.03, M_PI - 0.2)), "");
+  EXPECT_EQ(Start(At(-0.85, 0.0, M_PI)), "");
 }
 
 TEST(TestStart, RefusedBesideTurnedOrAway) {
-  const DockingSequence docking = StationDocking();
-  EXPECT_NE(TestStartProblem(docking, -0.5, 0.06, M_PI, 0.05).find("beside the line"), std::string::npos);
-  EXPECT_NE(TestStartProblem(docking, -0.5, 0.3, M_PI, 0.05).find("beside the line"), std::string::npos);
-  EXPECT_NE(TestStartProblem(docking, -0.5, 0.0, M_PI - 0.4, 0.05).find("deg off"), std::string::npos);
+  EXPECT_NE(Start(At(-0.5, 0.06, M_PI)).find("0.06 m beside the axis"), std::string::npos);
+  EXPECT_NE(Start(At(-0.5, 0.3, M_PI)).find("beside the axis"), std::string::npos);
+  EXPECT_NE(Start(At(-0.5, 0.0, M_PI - 0.4)).find("deg off"), std::string::npos);
   // Contacts away from the station.
-  EXPECT_NE(TestStartProblem(docking, -0.5, 0.0, 0.0, 0.05).find("deg off"), std::string::npos);
-  EXPECT_NE(TestStartProblem(docking, -1.1, 0.0, M_PI, 0.05).find("neither on the line"), std::string::npos);
-  // 0.6 m out at 6 deg ends 0.06 m beside; 0.02 m on the other side of the line makes up for it.
-  EXPECT_NE(TestStartProblem(docking, -0.2, 0.0, M_PI + 0.1, 0.05).find("straight out"), std::string::npos);
-  EXPECT_EQ(TestStartProblem(docking, -0.2, 0.02, M_PI + 0.1, 0.05), "");
-  EXPECT_NE(TestStartProblem(docking, -0.2, -0.02, M_PI + 0.1, 0.05).find("straight out"), std::string::npos);
+  EXPECT_NE(Start(At(-0.5, 0.0, 0.0)).find("deg off"), std::string::npos);
+  EXPECT_NE(Start(At(-1.1, 0.0, M_PI)).find("neither on the line"), std::string::npos);
+  // At the approach point beside the line.
+  EXPECT_NE(Start(At(-0.8, 0.06, M_PI)).find("begin 0.06 m beside"), std::string::npos);
+  // 0.6 m out at 6 deg ends 0.06 m beside; 0.012 m on the other side of the line makes up for it.
+  EXPECT_NE(Start(At(-0.2, 0.0, M_PI + 0.1)).find("would begin 0.06 m"), std::string::npos);
+  EXPECT_EQ(Start(At(-0.2, 0.012, M_PI + 0.1)), "");
+  EXPECT_NE(Start(At(-0.2, -0.02, M_PI + 0.1)).find("would begin"), std::string::npos);
+}
+
+// Measured on the Tron (15.11.): the marker yaw errs by 3 to 4 deg at one place, which turns the station frame about
+// the marker. A mower on the line facing along it stands 0.66 sin 5 deg beside the line of such a frame, and the
+// straight way out would end 0.96 sin 5 deg beside it: refused without the spread of the heading, started with it.
+TEST(TestStart, AMarkerYawThatErrsCountsWithItsSpread) {
+  const DockPoseSample turned = Turned(At(-0.5, 0.0, M_PI), Rad(5));
+  EXPECT_GT(std::abs(StationDocking().Across(turned.x, turned.y)), 0.05);
+  EXPECT_NE(Start(turned).find("would begin 0.08 m"), std::string::npos);
+  EXPECT_EQ(Start(Turned(At(-0.5, 0.0, M_PI), Rad(5), Rad(4))), "");
+  EXPECT_EQ(Start(Turned(At(-0.8, 0.0, M_PI), Rad(-5), Rad(4))), "");
+  // The spread widens up to the limit of the follower on the line, not beyond.
+  EXPECT_NE(Start(At(-0.8, 0.12, M_PI, Rad(20))).find("at most 0.10 m"), std::string::npos);
+  // The marker beside the axis is measured, its spread widens nothing; nor does an unknown spread.
+  EXPECT_NE(Start(At(-0.5, 0.06, M_PI, Rad(4))).find("beside the axis"), std::string::npos);
+  EXPECT_NE(Start(Turned(At(-0.5, 0.0, M_PI), Rad(5), 999.0)).find("would begin"), std::string::npos);
 }
 
 // The station by the marker in the map: base_link 0.8 m east of the station of the map facing east, its pose in the

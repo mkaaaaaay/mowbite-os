@@ -117,9 +117,9 @@ class DockingSequence {
   // point: the line begins there.
   std::optional<DockingLeg> Direct(double x, double y) const;
 
-  // Why the mower may not go on from where it stands at the gate, empty if it may: base_link beside the line, the
+  // Why the mower may not go on from where it stands at the gate, empty if it may: across (m) beside the line, the
   // heading off, or the position accuracy worse than accuracy_limit.
-  std::string CheckGate(double x, double y, double heading, float accuracy, double accuracy_limit) const;
+  std::string CheckGate(double across, double heading, float accuracy, double accuracy_limit) const;
 
   // Counts a failed try; true when another one follows.
   bool Failed();
@@ -132,6 +132,10 @@ class DockingSequence {
   }
   const DockConfig& config() const {
     return config_;
+  }
+  // The heading of the mower on the station.
+  double facing() const {
+    return facing_;
   }
   bool station_frame() const {
     return station_frame_.has_value();

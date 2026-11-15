@@ -44,6 +44,7 @@ void LogicNode::SetUpDocking() {
           pose.heading = msg->heading;
           pose.heading_valid = msg->heading_valid;
           pose.position_accuracy = msg->position_accuracy;
+          pose.heading_accuracy = msg->heading_accuracy;
           pose.speed = msg->speed;
           core_.Call<&LogicCore::OnDockPose>(pose);
         }

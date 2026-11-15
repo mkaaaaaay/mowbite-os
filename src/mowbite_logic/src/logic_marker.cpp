@@ -173,7 +173,7 @@ void LogicCore::NextMarkerTry() {
     return;
   }
   if (docking_test_ && !marker_started_) {
-    const std::string problem = TestStartProblem(marker_legs_, p.x, p.y, p.heading, config_.marker.cross_track / 2);
+    const std::string problem = TestStartProblem(marker_legs_, config_.marker, p, config_.marker.cross_track / 2);
     if (!problem.empty()) {
       const Reason why("dock_failed", "Docking test refused: " + problem);
       Notify(why.message);
@@ -307,8 +307,8 @@ Reason LogicCore::GateProblem() {
   };
   if (!marker_docking_) {
     if (!pose_) return failed("at the gate there was no position");
-    return failed(
-        docking_.CheckGate(pose_->x, pose_->y, pose_->heading, pose_->position_accuracy, DockAccuracyLimit()));
+    return failed(docking_.CheckGate(docking_.Across(pose_->x, pose_->y), pose_->heading, pose_->position_accuracy,
+                                     DockAccuracyLimit()));
   }
   if (!DockPoseGood()) return failed("at the gate the marker gave no good pose");
   // The scale and the map first: a marker of the wrong size or at the wrong place guides nothing, whatever else fails.
@@ -319,7 +319,9 @@ Reason LogicCore::GateProblem() {
   marker_untrusted_ = !map.empty();
   if (marker_untrusted_) return failed("at the gate " + map).With("cause", "MARKER_MISMATCH");
   const DockPoseSample& p = *marker_.pose();  // NOLINT(bugprone-unchecked-optional-access): good means there is one
-  return failed(marker_legs_.CheckGate(p.x, p.y, p.heading, p.position_accuracy, MarkerAccuracyLimit(p.x, p.y)));
+  // Beside the line by the marker beside the axis: the marker yaw turns the station frame about the marker.
+  const double side = SideOffset(marker_legs_, config_.marker, p.x, p.y, p.heading);
+  return failed(marker_legs_.CheckGate(side, p.heading, p.position_accuracy, MarkerAccuracyLimit(p.x, p.y)));
 }
 
 void LogicCore::EndMarkerDocking() {
