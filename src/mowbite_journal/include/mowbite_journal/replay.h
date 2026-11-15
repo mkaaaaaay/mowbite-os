@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "mowbite_journal/anonymize.h"
 #include "mowbite_journal/journaled.h"
 #include "mowbite_journal/reader.h"
 
@@ -35,18 +36,13 @@ class CoreReplay {
   // {"args": [...], "result": ..., "out": [...]} of a call record, without calling anything.
   virtual json Decode(uint16_t method, const uint8_t* data, size_t size) const = 0;
   virtual json DecodeView(const uint8_t* data, size_t size) const = 0;
+  // The call record with its places and wall clock replaced (Anonymizer); false when the method has neither.
+  virtual bool Anonymize(uint16_t method, const uint8_t* data, size_t size, const AnonymizeOptions& options,
+                         Out* out) const = 0;
+  virtual json AnonymizeConfig(const json& config, const AnonymizeOptions& options) const = 0;
 };
 
 namespace detail {
-
-template <typename P>
-struct OutSlot {
-  bool given = false;
-  std::remove_pointer_t<P> value{};
-};
-
-template <typename P>
-using Stored = std::conditional_t<IsOut<P>::value, OutSlot<P>, std::decay_t<P>>;
 
 template <typename P>
 decltype(auto) Pass(Stored<P>& stored) {
@@ -102,6 +98,15 @@ class Replayer : public CoreReplay {
     return DecodeTable(std::make_index_sequence<Methods::kSize>())[method](in);
   }
 
+  bool Anonymize(uint16_t method, const uint8_t* data, size_t size, const AnonymizeOptions& options,
+                 Out* out) const override {
+    return Anonymizer<Core>::Get().Rewrite(method, data, size, options, out);
+  }
+
+  json AnonymizeConfig(const json& config, const AnonymizeOptions& options) const override {
+    return Anonymizer<Core>::Get().RewriteConfig(config, options);
+  }
+
   json DecodeView(const uint8_t* data, size_t size) const override {
     if constexpr (detail::HasView<Core>::value) {
       In in(data, size);
@@ -126,25 +131,6 @@ class Replayer : public CoreReplay {
     return table;
   }
 
-  template <typename Params, size_t... I>
-  static auto ReadArgs(In& in, std::index_sequence<I...>) {
-    using Tuple = std::tuple<detail::Stored<std::tuple_element_t<I, Params>>...>;
-    Tuple args;
-    (ReadArg<std::tuple_element_t<I, Params>>(in, std::get<I>(args)), ...);
-    return args;
-  }
-
-  template <typename P>
-  static void ReadArg(In& in, detail::Stored<P>& slot) {
-    if constexpr (detail::IsOut<P>::value) {
-      uint8_t given;
-      in.Get(&given, 1);
-      slot.given = given != 0;
-    } else {
-      slot = Read<std::decay_t<P>>(in);
-    }
-  }
-
   template <size_t I>
   static std::optional<Mismatch> ApplyAt(Replayer* self, In& in) {
     constexpr auto M = detail::MethodAt<I, Methods>::kValue;
@@ -154,7 +140,7 @@ class Replayer : public CoreReplay {
     constexpr size_t N = std::tuple_size_v<Params>;
     const uint32_t args_size = in.GetU32();
     In args_in(in.Take(args_size), args_size);
-    auto args = ReadArgs<Params>(args_in, std::make_index_sequence<N>());
+    auto args = detail::ReadArgs<Params>(args_in, std::make_index_sequence<N>());
     Out& out = detail::CallScratch();
     out.Clear();
     self->Invoke<M, Params, R>(args, out, std::make_index_sequence<N>());
@@ -230,7 +216,7 @@ class Replayer : public CoreReplay {
     constexpr size_t N = std::tuple_size_v<Params>;
     const uint32_t args_size = in.GetU32();
     In args_in(in.Take(args_size), args_size);
-    auto args = ReadArgs<Params>(args_in, std::make_index_sequence<N>());
+    auto args = detail::ReadArgs<Params>(args_in, std::make_index_sequence<N>());
     json decoded = {{"args", ArgsJson<Params>(args, std::make_index_sequence<N>())}};
     decoded.update(DecodeTail<Params, R>(in, std::make_index_sequence<N>(), args));
     return decoded;
@@ -287,6 +273,12 @@ struct CheckReport {
 
 // Replays every core of every run in dir (a journal_dir or one run) from the start of its process and compares.
 CheckReport CheckRuns(const std::string& dir, const ReplayRegistry& registry);
+
+// A copy of one run in out_dir (created, without segments yet) with every place and the wall clock of its cores
+// replaced as their Anonymizer tables say, the head moved and its boot ID replaced, raw streams zeroed unless kept.
+// A core the registry does not know stops it: its calls could not be read.
+bool AnonymizeRun(const std::string& run_dir, const std::string& out_dir, const ReplayRegistry& registry,
+                  const AnonymizeOptions& options, std::string* error);
 
 struct ExportFilter {
   std::string stream;

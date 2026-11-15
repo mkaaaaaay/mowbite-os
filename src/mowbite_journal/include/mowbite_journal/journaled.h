@@ -86,6 +86,81 @@ struct HasView : std::false_type {};
 template <typename Core>
 struct HasView<Core, std::void_t<decltype(CoreTraits<Core>::View(std::declval<const Core&>()))>> : std::true_type {};
 
+// How the view of a core is written, so that a reader without the core can show it: none, cbor, bool, u32, f64 and
+// the like for numbers, bytes for anything else.
+template <typename Core>
+std::string ViewEncoding() {
+  if constexpr (!HasView<Core>::value) {
+    return "none";
+  } else {
+    using V = std::decay_t<decltype(CoreTraits<Core>::View(std::declval<const Core&>()))>;
+    if constexpr (std::is_same_v<V, bool>) {
+      return "bool";
+    } else if constexpr (std::is_integral_v<V>) {
+      return (std::is_signed_v<V> ? "i" : "u") + std::to_string(8 * sizeof(V));
+    } else if constexpr (std::is_floating_point_v<V>) {
+      return "f" + std::to_string(8 * sizeof(V));
+    } else if constexpr (kRaw<V> || std::is_same_v<V, std::string> || IsVector<V>::value || IsOptional<V>::value ||
+                         IsPair<V>::value || IsArray<V>::value || IsVariant<V>::value || std::is_empty_v<V> ||
+                         HasCodec<V>::value) {
+      return "bytes";
+    } else {
+      return "cbor";
+    }
+  }
+}
+
+// An argument as a replay holds it: an out parameter as whether it was given and its value.
+template <typename P>
+struct OutSlot {
+  bool given = false;
+  std::remove_pointer_t<P> value{};
+};
+
+template <typename P>
+using Stored = std::conditional_t<IsOut<P>::value, OutSlot<P>, std::decay_t<P>>;
+
+template <typename Params>
+struct StoredArgs;
+template <typename... P>
+struct StoredArgs<std::tuple<P...>> {
+  using Type = std::tuple<Stored<P>...>;
+};
+
+template <typename P>
+void ReadArg(In& in, Stored<P>& slot) {
+  if constexpr (IsOut<P>::value) {
+    uint8_t given;
+    in.Get(&given, 1);
+    slot.given = given != 0;
+  } else {
+    slot = Read<std::decay_t<P>>(in);
+  }
+}
+
+template <typename Params, size_t... I>
+typename StoredArgs<Params>::Type ReadArgs(In& in, std::index_sequence<I...>) {
+  typename StoredArgs<Params>::Type args;
+  (ReadArg<std::tuple_element_t<I, Params>>(in, std::get<I>(args)), ...);
+  return args;
+}
+
+// An argument as Journaled writes it: an out parameter only as whether it was given.
+template <typename P>
+void WriteArg(Out& out, const Stored<P>& slot) {
+  if constexpr (IsOut<P>::value) {
+    const uint8_t given = slot.given;
+    out.Put(&given, 1);
+  } else {
+    Write<std::decay_t<P>>(out, slot);
+  }
+}
+
+template <typename Params, size_t... I>
+void WriteArgs(Out& out, const typename StoredArgs<Params>::Type& args, std::index_sequence<I...>) {
+  (WriteArg<std::tuple_element_t<I, Params>>(out, std::get<I>(args)), ...);
+}
+
 // Names of the methods from the text of the macro: "&Core::A, &Core::B" gives A and B.
 std::vector<std::string> MethodNames(const char* text);
 
@@ -128,6 +203,7 @@ json CoreDefinition(const typename CoreTraits<Core>::Config& config, const json&
           {"config", config},
           {"methods", methods},
           {"table", detail::TableChecksum(names, signatures)},
+          {"view", detail::ViewEncoding<Core>()},
           {"extra", extra}};
 }
 

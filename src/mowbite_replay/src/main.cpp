@@ -1,10 +1,15 @@
 #include <unistd.h>
 
+#include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
+
+#include <mowbite_journal/timeline.h>
 
 #include "mowbite_replay/cores.h"
 
@@ -18,7 +23,12 @@ int Usage() {
                "mowbite_replay export --jsonl|--csv [--stream <name>] [--method <name>] <journal_dir or run>\n"
                "  the records as JSON lines, or one method of one stream as a table (--csv needs both)\n"
                "mowbite_replay cat <journal_dir or run>\n"
-               "  the unpacked bytes of every segment, to search them\n";
+               "  the unpacked bytes of every segment, to search them\n"
+               "mowbite_replay timeline [--from-ns N] [--to-ns N] [--max-bytes N] <journal_dir or run>...\n"
+               "  views, gaps, ends and raw counts per second in the order of time, method names while room is left\n"
+               "mowbite_replay anonymize [--shift-days N] [--keep-raw] <run> <out_dir>\n"
+               "  a copy of the run without its place: fixed latitude and longitude, wall clock moved by whole days\n"
+               "  (default -1001), boot ID replaced, raw streams zeroed unless kept\n";
   return 3;
 }
 
@@ -86,6 +96,68 @@ int Cat(const std::string& dir) {
   return 0;
 }
 
+// The number after a flag; false for a missing or bad one.
+bool Number(const std::vector<std::string>& args, size_t* i, int64_t* value) {
+  if (*i + 1 >= args.size()) return false;
+  const std::string& text = args[++*i];
+  char* end = nullptr;
+  errno = 0;
+  const long long number = std::strtoll(text.c_str(), &end, 10);
+  if (errno != 0 || end == text.c_str() || *end != '\0') return false;
+  *value = number;
+  return true;
+}
+
+int Timeline(const std::vector<std::string>& args) {
+  int64_t from_ns = std::numeric_limits<int64_t>::min();
+  int64_t to_ns = std::numeric_limits<int64_t>::max();
+  int64_t max_bytes = 256 * 1024;
+  std::vector<std::string> dirs;
+  for (size_t i = 0; i < args.size(); ++i) {
+    if (args[i] == "--from-ns") {
+      if (!Number(args, &i, &from_ns)) return Usage();
+    } else if (args[i] == "--to-ns") {
+      if (!Number(args, &i, &to_ns)) return Usage();
+    } else if (args[i] == "--max-bytes") {
+      if (!Number(args, &i, &max_bytes) || max_bytes < 0) return Usage();
+    } else {
+      dirs.push_back(args[i]);
+    }
+  }
+  if (dirs.empty()) return Usage();
+  std::string error;
+  const std::string lines = mowbite_journal::Timeline(dirs, from_ns, to_ns, static_cast<size_t>(max_bytes), &error);
+  if (!error.empty()) {
+    std::cerr << error << '\n';
+    return 3;
+  }
+  std::cout << lines;
+  return 0;
+}
+
+int Anonymize(const std::vector<std::string>& args) {
+  mowbite_journal::AnonymizeOptions options;
+  std::vector<std::string> dirs;
+  for (size_t i = 0; i < args.size(); ++i) {
+    int64_t days;
+    if (args[i] == "--shift-days") {
+      if (!Number(args, &i, &days) || days < -100000 || days > 100000) return Usage();
+      options.shift_days = static_cast<int>(days);
+    } else if (args[i] == "--keep-raw") {
+      options.keep_raw = true;
+    } else {
+      dirs.push_back(args[i]);
+    }
+  }
+  if (dirs.size() != 2) return Usage();
+  std::string error;
+  if (!mowbite_replay::AnonymizeRun(dirs[0], dirs[1], options, &error)) {
+    std::cerr << error << '\n';
+    return 3;
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -95,5 +167,7 @@ int main(int argc, char** argv) {
   if (command == "check") return Check(args);
   if (command == "export") return Export(args);
   if (command == "cat" && args.size() == 1) return Cat(args[0]);
+  if (command == "timeline") return Timeline(args);
+  if (command == "anonymize") return Anonymize(args);
   return Usage();
 }

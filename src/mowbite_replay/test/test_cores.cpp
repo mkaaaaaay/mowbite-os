@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <sstream>
 #include <string>
@@ -9,8 +12,10 @@
 
 #include <mowbite_localization/dock_estimator_journal.h>
 #include <mowbite_localization/estimator_journal.h>
+#include <mowbite_journal/timeline.h>
 #include <mowbite_logic/logic_journal.h>
 #include <mowbite_safety/safety_journal.h>
+#include <mowbite_schedule/schedule_journal.h>
 #include <tron_mcu/mcu_journal.h>
 
 #include "mowbite_replay/cores.h"
@@ -261,6 +266,167 @@ TEST_F(CoreReplay, LogicCore) {
   const auto report = Replay();
   EXPECT_EQ(report.outcome, CheckOutcome::kSame) << Text(report);
   EXPECT_NE(Text(report).find("logic: bit-identical"), std::string::npos) << Text(report);
+}
+
+// The bytes of a double as a call has them (little endian) and as CBOR has them (big endian).
+std::string DoubleBytes(double value, bool big_endian) {
+  std::string bytes(sizeof(value), '\0');
+  std::memcpy(bytes.data(), &value, sizeof(value));
+  if (big_endian) std::reverse(bytes.begin(), bytes.end());
+  return bytes;
+}
+
+std::string Unpacked(const std::string& run) {
+  std::string bytes;
+  for (const auto& path : mowbite_journal::ListRun(run).segments) {
+    mowbite_journal::Segment segment;
+    std::string error;
+    EXPECT_TRUE(mowbite_journal::ReadSegment(path, &segment, &error)) << error;
+    bytes.append(segment.raw.begin(), segment.raw.end());
+  }
+  return bytes;
+}
+
+// Days since 1970 of the date an ISO text or a run name starts with.
+int64_t DayOf(const std::string& text) {
+  std::tm tm{};
+  const bool dashes = text.size() > 4 && text[4] == '-';
+  tm.tm_year = std::stoi(text.substr(0, 4)) - 1900;
+  tm.tm_mon = std::stoi(text.substr(dashes ? 5 : 4, 2)) - 1;
+  tm.tm_mday = std::stoi(text.substr(dashes ? 8 : 6, 2));
+  return static_cast<int64_t>(timegm(&tm)) / 86400;
+}
+
+nlohmann::json FirstHead(const std::string& run) {
+  mowbite_journal::Segment segment;
+  std::string error;
+  EXPECT_TRUE(mowbite_journal::ReadSegment(mowbite_journal::ListRun(run).segments.at(0), &segment, &error)) << error;
+  const auto& head = segment.records.at(0);
+  EXPECT_EQ(head.method, mowbite_journal::kHead);
+  return nlohmann::json::from_cbor(head.data, head.data + head.size);
+}
+
+std::vector<nlohmann::json> Exported(const std::string& run, const std::string& stream, const std::string& method) {
+  std::ostringstream out;
+  std::string error;
+  EXPECT_TRUE(mowbite_journal::ExportJsonl(run, mowbite_replay::Cores(), {stream, method}, out, &error)) << error;
+  std::vector<nlohmann::json> lines;
+  std::istringstream in(out.str());
+  std::string line;
+  while (std::getline(in, line)) lines.push_back(nlohmann::json::parse(line));
+  return lines;
+}
+
+// The logic with its datum and clock, the schedule asking the weather at its place and the MCU sending a heartbeat:
+// the copy has none of the coordinates, the wall clock 1001 days earlier and reads and replays.
+TEST_F(CoreReplay, AnonymizedCopyHasNoPlace) {
+  using L = mowbite_logic::LogicCore;
+  using S = mowbite_schedule::Scheduler;
+  using C = tron::McuControl;
+  constexpr double kLatitude = 51.123456;
+  constexpr double kLongitude = 7.654321;
+  constexpr char kBerlin[] = "CET-1CEST,M3.5.0,M10.5.0/3";
+  std::string reason;
+  // Monday 15 June 2026, 10:00 in Berlin.
+  const int64_t wall = mowbite_schedule::TimeZone::Parse(kBerlin, &reason)->ToUnix({2026, 6, 15}, 600);
+  {
+    mowbite_logic::LogicConfig config;
+    config.id_seed = 7;
+    Journaled<L> logic(journal_.get(), config, {{"api", 6}});
+    logic.Call<&L::OnClock>(true, std::string(), static_cast<double>(wall) - 100.0);
+    logic.Call<&L::OnDatum>(kLatitude, kLongitude);
+    logic.Call<&L::OnTick>(100.0);
+    logic.Call<&L::TakeEffects>();
+
+    mowbite_schedule::ScheduleFile file;
+    const nlohmann::json change = {{"enabled", 1},
+                                   {"tz", kBerlin},
+                                   {"skip_forecast", 1},
+                                   {"plans", {{{"days", {1, 2, 3, 4, 5, 6, 7}}, {"time", "10:00"}}}}};
+    ASSERT_FALSE(mowbite_schedule::ApplySchedule(change, true, 0, &file));
+    file.changed_at = wall - 36000;
+    Journaled<S> schedule(journal_.get(), mowbite_schedule::SchedulerStart{file, true, nullptr, nullptr, wall - 36000});
+    mowbite_schedule::Facts facts;
+    facts.wall = wall;
+    facts.mono = 100.0;
+    facts.clock_ok = true;
+    facts.logic_fresh = true;
+    facts.state = "IDLE";
+    facts.docked = true;
+    facts.battery = 100;
+    facts.rain_sensor = true;
+    facts.latitude = kLatitude;
+    facts.longitude = kLongitude;
+    facts.areas = {{"a", true}};
+    schedule.Call<&S::Tick>(facts);
+    ASSERT_TRUE(schedule.Call<&S::TakeOutput>().weather);
+
+    Journaled<C> mcu(journal_.get(), tron::McuControlConfig{});
+    mcu.Call<&C::OnConnected>(0.0);
+    mcu.Call<&C::Tick>(0.0, tron::WallClock{2026, 6, 15, 8, 0, 0, 0});
+    const uint16_t port = journal_->Define({{"name", "port.tx"}, {"kind", "raw"}});
+    const uint8_t frame[4] = {0xA5, 26, 6, 15};
+    journal_->Append(port, mowbite_journal::kRawBytes, frame, sizeof(frame));
+  }
+  journal_.reset();
+  const auto runs = mowbite_journal::ListRuns(dir_.string());
+  ASSERT_EQ(runs.size(), 1u);
+  const std::string copy = (dir_ / "copy").string();
+  std::string error;
+  ASSERT_TRUE(mowbite_replay::AnonymizeRun(runs[0], copy, mowbite_journal::AnonymizeOptions{}, &error)) << error;
+  EXPECT_FALSE(mowbite_replay::AnonymizeRun(runs[0], copy, mowbite_journal::AnonymizeOptions{}, &error));
+
+  const std::string before = Unpacked(runs[0]);
+  const std::string after = Unpacked(copy);
+  for (double value : {kLatitude, kLongitude}) {
+    EXPECT_NE(before.find(DoubleBytes(value, false)), std::string::npos);
+    EXPECT_NE(before.find(DoubleBytes(value, true)), std::string::npos);
+    EXPECT_EQ(after.find(DoubleBytes(value, false)), std::string::npos) << value;
+    EXPECT_EQ(after.find(DoubleBytes(value, true)), std::string::npos) << value;
+  }
+  for (const char* text : {"51.123456", "7.654321"}) {
+    EXPECT_EQ(after.find(text), std::string::npos) << text;
+  }
+  EXPECT_NE(after.find(DoubleBytes(52.0, false)), std::string::npos);
+  EXPECT_NE(after.find(DoubleBytes(9.0, false)), std::string::npos);
+
+  const auto head_before = FirstHead(runs[0]);
+  const auto head_after = FirstHead(copy);
+  for (const char* key : {"start_utc", "segment_start_utc", "run"}) {
+    EXPECT_EQ(DayOf(head_before.at(key)) - DayOf(head_after.at(key)), 1001) << key;
+  }
+  EXPECT_EQ(head_after.at("boot_id"), "00000000-0000-0000-0000-000000000000");
+  EXPECT_NE(head_before.at("boot_id"), head_after.at("boot_id"));
+
+  const int64_t shift = int64_t{1001} * 86400;
+  const auto ticks = Exported(copy, "schedule", "Tick");
+  ASSERT_EQ(ticks.size(), 1u);
+  EXPECT_EQ(ticks[0]["args"][0]["wall"], wall - shift);
+  EXPECT_EQ(ticks[0]["args"][0]["latitude"], 52.0);
+  EXPECT_EQ(ticks[0]["args"][0]["longitude"], 9.0);
+  const auto outputs = Exported(copy, "schedule", "TakeOutput");
+  ASSERT_EQ(outputs.size(), 1u);
+  EXPECT_EQ(outputs[0]["result"]["weather"]["latitude"], 52.0);
+  const auto clocks = Exported(copy, "logic", "OnClock");
+  ASSERT_EQ(clocks.size(), 1u);
+  EXPECT_EQ(clocks[0]["args"][2], static_cast<double>(wall - 100 - shift));
+  const auto mcu_ticks = Exported(copy, "mcu", "Tick");
+  ASSERT_EQ(mcu_ticks.size(), 1u);
+  const auto& clock = mcu_ticks[0]["args"][1];
+  EXPECT_EQ((std::vector<int>{clock["year"].get<int>(), clock["month"].get<int>(), clock["day"].get<int>()}),
+            (std::vector<int>{2023, 9, 18}));
+  const auto port = Exported(copy, "port.tx", "bytes");
+  ASSERT_EQ(port.size(), 1u);
+  EXPECT_EQ(port[0]["hex"], "00000000");
+
+  const auto report = mowbite_journal::CheckRuns(copy, mowbite_replay::Cores());
+  EXPECT_NE(report.outcome, CheckOutcome::kError) << Text(report);
+  EXPECT_EQ(Text(report).find("cannot"), std::string::npos) << Text(report);
+  EXPECT_NE(Text(report).find("mcu: bit-identical, 2 calls"), std::string::npos) << Text(report);
+  error.clear();
+  const std::string timeline = mowbite_journal::Timeline({copy}, INT64_MIN, INT64_MAX, 1 << 20, &error);
+  EXPECT_TRUE(error.empty()) << error;
+  EXPECT_NE(timeline.find("\"method\":\"OnDatum\""), std::string::npos) << timeline;
 }
 
 }  // namespace

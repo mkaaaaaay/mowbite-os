@@ -14,7 +14,8 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
 
 # Shared, so that all components of a process write one journal.
-add_library(mowbite_journal SHARED src/journal.cpp src/reader.cpp src/replay.cpp src/run_index.cpp src/tar.cpp)
+add_library(mowbite_journal SHARED src/journal.cpp src/reader.cpp src/replay.cpp src/run_index.cpp src/tar.cpp
+  src/anonymize.cpp src/timeline.cpp)
 target_include_directories(mowbite_journal PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
