@@ -34,6 +34,8 @@ struct AnonymizeOptions {
   void ShiftDate(int* year, int* month, int* day) const;
   // Every date YYYY-MM-DD in the text moved by shift_days.
   std::string ShiftDates(const std::string& text) const;
+  // A name that begins with YYYYMMDD (runs, incidents) with that date moved.
+  std::string ShiftName(const std::string& name) const;
   // The same in every string and key of the value, and numbers under one of unix_keys (unix s, above 0) moved; for
   // json and ordered_json.
   template <typename Json>
@@ -108,7 +110,7 @@ class Anonymizer {
 
   template <typename F>
   void Config(F f) {
-    config_ = [f](const AnonymizeOptions& options, CoreConfig& config) { f(options, config); };
+    config_ = std::move(f);
   }
 
   // Whether the table names the method.

@@ -126,6 +126,9 @@ struct StoredIncident {
   std::vector<StoredFile> files;
 };
 
+// Bytes of the files, each inode once.
+uint64_t UniqueBytes(const std::vector<StoredFile>& files);
+
 // Expired incidents (max_days, max_days_safety), then while there are more than max_count or their files take more
 // than max_mb (each inode counted once) the oldest that are no safety, then the oldest safety ones.
 std::vector<std::string> IncidentsToRemove(const std::vector<StoredIncident>& stored, double now_s,

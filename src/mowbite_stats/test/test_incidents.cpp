@@ -386,13 +386,13 @@ TEST_F(IncidentsTest, ParamsAreChecked) {
   EXPECT_EQ(error->data["field"], "client");
 }
 
-TEST(ShiftNameDate, MovesTheLeadingDate) {
+TEST(AnonymizeOptions, ShiftNameMovesTheLeadingDate) {
   mowbite_journal::AnonymizeOptions options;
   options.shift_days = -7;
-  EXPECT_EQ(ShiftNameDate("20261115T121314Z", options), "20261108T121314Z");
-  EXPECT_EQ(ShiftNameDate("20260301T000000Z_logic_12", options), "20260222T000000Z_logic_12");
-  EXPECT_EQ(ShiftNameDate("seen.json", options), "seen.json");
-  EXPECT_EQ(ShiftNameDate("20261399T", options), "20261399T");
+  EXPECT_EQ(options.ShiftName("20261115T121314Z"), "20261108T121314Z");
+  EXPECT_EQ(options.ShiftName("20260301T000000Z_logic_12"), "20260222T000000Z_logic_12");
+  EXPECT_EQ(options.ShiftName("seen.json"), "seen.json");
+  EXPECT_EQ(options.ShiftName("20261399T"), "20261399T");
 }
 
 }  // namespace

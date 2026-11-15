@@ -45,7 +45,7 @@ bool RealDate(int year, int month, int day) {
   return back.tm_year == year - 1900 && back.tm_mon == month - 1 && back.tm_mday == day;
 }
 
-// The run name YYYYMMDDTHHMMSSZ_process_pid with its date moved.
+// A name YYYYMMDD... with its date moved.
 std::string ShiftRunName(const std::string& name, const AnonymizeOptions& options) {
   if (!Digits(name, 0, 8)) return name;
   int year = std::stoi(name.substr(0, 4)), month = std::stoi(name.substr(4, 2)), day = std::stoi(name.substr(6, 2));
@@ -136,6 +136,10 @@ void AnonymizeOptions::ShiftDate(int* year, int* month, int* day) const {
   *year = moved.tm_year + 1900;
   *month = moved.tm_mon + 1;
   *day = moved.tm_mday;
+}
+
+std::string AnonymizeOptions::ShiftName(const std::string& name) const {
+  return ShiftRunName(name, *this);
 }
 
 std::string AnonymizeOptions::ShiftDates(const std::string& text) const {

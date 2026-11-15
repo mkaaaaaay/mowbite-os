@@ -88,8 +88,8 @@ class IncidentStore {
 // sha256 of data as lower-case hex.
 std::string Sha256Hex(const std::string& data);
 
-// A name that begins with YYYYMMDD (ids of incidents, runs of the journal) with that date moved as options say.
-std::string ShiftNameDate(const std::string& name, const mowbite_journal::AnonymizeOptions& options);
+// Unix s as ISO 8601 UTC to the second.
+std::string IsoUtc(double unix_s);
 
 }  // namespace mowbite_stats
 

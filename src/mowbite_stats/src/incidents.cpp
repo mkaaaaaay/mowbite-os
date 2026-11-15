@@ -31,15 +31,6 @@ constexpr double kMarkBefore = 300.0;
 constexpr int kSealTries = 3;
 constexpr size_t kMaxSeenBytes = size_t{4} * 1024 * 1024;
 
-std::string IsoUtc(double unix_s) {
-  const std::time_t t = static_cast<std::time_t>(unix_s);
-  std::tm tm{};
-  gmtime_r(&t, &tm);
-  char text[32];
-  std::strftime(text, sizeof(text), "%Y-%m-%dT%H:%M:%SZ", &tm);
-  return text;
-}
-
 std::string Base64(const std::string& data) {
   static const char kDigits[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   std::string out;
@@ -397,14 +388,10 @@ json Incidents::Status() const {
     if (run.active) ++active;
   }
   const int64_t free = config_.journal_dir.empty() ? -1 : free_bytes_(config_.journal_dir);
-  std::map<uint64_t, uint64_t> inodes;
   const std::vector<StoredIncident> stored = config_.journal_dir.empty() ? std::vector<StoredIncident>()
                                                                           : store_.Stored();
-  for (const StoredIncident& incident : stored) {
-    for (const StoredFile& file : incident.files) inodes[file.inode] = file.bytes;
-  }
-  uint64_t incident_bytes = 0;
-  for (const auto& item : inodes) incident_bytes += item.second;
+  std::vector<StoredFile> files;
+  for (const StoredIncident& incident : stored) files.insert(files.end(), incident.files.begin(), incident.files.end());
   json throttled = json::array();
   for (const auto& [kind, count] : keeper_.throttled()) throttled.push_back({{"kind", kind}, {"count", count}});
   const auto& limits = config_.limits;
@@ -419,7 +406,7 @@ json Incidents::Status() const {
           {"active", active},
           {"incidents",
            {{"count", stored.size()},
-            {"bytes", incident_bytes},
+            {"bytes", UniqueBytes(files)},
             {"max_bytes", static_cast<uint64_t>(limits.max_mb * 1e6)},
             {"max_days", limits.max_days},
             {"max_days_safety", limits.max_days_safety},
@@ -439,17 +426,13 @@ json Incidents::List() const {
       if (kinds.empty()) reason = trigger.value("reason", "");
       if (std::find(kinds.begin(), kinds.end(), kind) == kinds.end()) kinds.push_back(kind);
     }
-    std::map<uint64_t, uint64_t> inodes;
-    for (const StoredFile& file : incident.files) inodes[file.inode] = file.bytes;
-    uint64_t bytes = 0;
-    for (const auto& item : inodes) bytes += item.second;
     rows.emplace_back(incident.created_s, json{{"id", incident.id},
                                                {"created", static_cast<int64_t>(incident.created_s)},
                                                {"state", StateOf(incident.id, *manifest)},
                                                {"safety", incident.safety},
                                                {"triggers", kinds},
                                                {"reason", reason},
-                                               {"bytes", bytes},
+                                               {"bytes", UniqueBytes(incident.files)},
                                                {"replay", manifest->value("replay", "window")}});
   }
   std::stable_sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.first > b.first; });

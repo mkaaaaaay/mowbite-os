@@ -164,6 +164,14 @@ std::string IncidentKeeper::NewId(const std::string& utc) {
   return id;
 }
 
+uint64_t UniqueBytes(const std::vector<StoredFile>& files) {
+  std::map<uint64_t, uint64_t> inodes;
+  for (const StoredFile& file : files) inodes[file.inode] = file.bytes;
+  uint64_t bytes = 0;
+  for (const auto& item : inodes) bytes += item.second;
+  return bytes;
+}
+
 std::vector<std::string> IncidentsToRemove(const std::vector<StoredIncident>& stored, double now_s,
                                            const IncidentLimits& limits) {
   std::vector<std::string> removed;

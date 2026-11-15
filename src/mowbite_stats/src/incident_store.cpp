@@ -90,15 +90,6 @@ bool FileSha256(const std::string& path, std::string* hex, std::string* error) {
   return true;
 }
 
-std::string IsoUtc(double unix_s) {
-  const std::time_t t = static_cast<std::time_t>(unix_s);
-  std::tm tm{};
-  gmtime_r(&t, &tm);
-  char text[32];
-  std::strftime(text, sizeof(text), "%Y-%m-%dT%H:%M:%SZ", &tm);
-  return text;
-}
-
 bool SafeId(const std::string& id) {
   return !id.empty() && id.find('/') == std::string::npos && id[0] != '.';
 }
@@ -186,14 +177,14 @@ json AnonymousManifest(json manifest, const mowbite_journal::AnonymizeOptions& o
   for (auto& trigger : manifest["triggers"]) {
     trigger.erase("utc");
     trigger.erase("detail");
-    if (trigger.contains("run")) trigger["run"] = ShiftNameDate(trigger["run"].get<std::string>(), options);
+    if (trigger.contains("run")) trigger["run"] = options.ShiftName(trigger["run"].get<std::string>());
   }
   for (auto& run : manifest["runs"]) {
     run.erase("files");
     run.erase("boot_id");
-    run["name"] = ShiftNameDate(run.value("name", ""), options);
+    run["name"] = options.ShiftName(run.value("name", ""));
   }
-  manifest["id"] = ShiftNameDate(manifest.value("id", ""), options);
+  manifest["id"] = options.ShiftName(manifest.value("id", ""));
   options.ShiftWallIn(&manifest, {"created"});
   manifest["location"] = false;
   return manifest;
@@ -204,7 +195,7 @@ mowbite_journal::VirtualTar Archive(const std::string& id, const fs::path& folde
                                     bool location) {
   const auto& options = IncidentStore::Anonymous();
   const fs::path root = location ? folder : folder / kAnonDir;
-  const std::string name = location ? id : ShiftNameDate(id, options);
+  const std::string name = location ? id : options.ShiftName(id);
   const auto mtime =
       static_cast<int64_t>(manifest.value("created", 0.0) + (location ? 0.0 : static_cast<double>(options.shift_s())));
   std::vector<mowbite_journal::TarEntry> entries;
@@ -226,20 +217,19 @@ mowbite_journal::VirtualTar Archive(const std::string& id, const fs::path& folde
 
 }  // namespace
 
+std::string IsoUtc(double unix_s) {
+  const std::time_t t = static_cast<std::time_t>(unix_s);
+  std::tm tm{};
+  gmtime_r(&t, &tm);
+  char text[32];
+  std::strftime(text, sizeof(text), "%Y-%m-%dT%H:%M:%SZ", &tm);
+  return text;
+}
+
 std::string Sha256Hex(const std::string& data) {
   Sha256 sha;
   sha.Add(data.data(), data.size());
   return sha.Hex();
-}
-
-std::string ShiftNameDate(const std::string& name, const mowbite_journal::AnonymizeOptions& options) {
-  if (name.size() < 8 || !std::all_of(name.begin(), name.begin() + 8, [](char c) { return c >= '0' && c <= '9'; })) {
-    return name;
-  }
-  const std::string date = name.substr(0, 4) + "-" + name.substr(4, 2) + "-" + name.substr(6, 2);
-  const std::string moved = options.ShiftDates(date);
-  if (moved == date) return name;
-  return moved.substr(0, 4) + moved.substr(5, 2) + moved.substr(8, 2) + name.substr(8);
 }
 
 const mowbite_journal::AnonymizeOptions& IncidentStore::Anonymous() {
@@ -516,7 +506,7 @@ bool IncidentStore::Prepare(const std::string& id, bool location, std::string* e
       return false;
     }
     for (const std::string& run : RunFolders(folder)) {
-      const std::string name = ShiftNameDate(fs::path(run).filename().string(), Anonymous());
+      const std::string name = Anonymous().ShiftName(fs::path(run).filename().string());
       if (!AnonymizeRun(run, (work / name).string(), (work / kToolErrors).string(), Anonymous(), error)) {
         return false;
       }
