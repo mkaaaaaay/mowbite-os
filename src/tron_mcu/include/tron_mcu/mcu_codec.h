@@ -43,9 +43,10 @@ struct SubPacket {
   std::vector<uint8_t> payload;
 };
 
-// Limits applied by the command builders, independent of any caller.
+// Limits applied by the command builders, independent of any caller. Turning on the spot at 0.5 rad/s moves the
+// farthest point of the body (0.62 m out) at 0.31 m/s, as fast as the body moves at kMaxLinearSpeed (user, 15.11.).
 constexpr float kMaxLinearSpeed = 0.3f;
-constexpr float kMaxAngularSpeed = 0.3f;
+constexpr float kMaxAngularSpeed = 0.5f;
 constexpr uint16_t kMinCutterHeightMm = 30;
 constexpr uint16_t kMaxCutterHeightMm = 90;
 // The MCU turns speed and turn rate into wheel speeds with 0.40 m between the wheels and reports them in mm/s.
