@@ -233,6 +233,36 @@ TEST(DockPose, AYawThatDoesNotCountStaysWithoutSpreadWithinTheRange) {
   EXPECT_TRUE(seen) << "no corner spread made the yaw uncertain";
 }
 
+// A station or mower that leans sideways turns the square in its face: measured up to max_roll, the place and the
+// yaw as without it; beyond that no measurement. On the Tron 3 degrees left 1.8 px without the roll (2026-11-15). The
+// scene turns the camera about its view instead, which comes close.
+TEST(DockPose, ASquareTurnedInItsFaceStillGivesPlaceAndYaw) {
+  for (const double distance : {0.3, 0.8, 1.2}) {
+    for (const double turn : {-3.0, 3.0, 7.0}) {
+      Scene s = RearScene();
+      const SceneMarker m = Behind(s, distance, 0.04, 6.0 * kDeg);
+      const CameraMount fitted = s.mount;
+      s.mount.roll += turn * kDeg;
+      const MarkerPose pose = FitMarkerPose(Corners(s, m), Covariance(0.05), kFocal, fitted, s.side, PoseLimits{});
+      ASSERT_TRUE(pose.valid) << distance << " m " << turn << " deg";
+      // Turning the camera about its view is not quite the square turning in its face: a little is left.
+      EXPECT_LT(pose.fit_error_px, 0.25) << distance << " m " << turn << " deg";
+      EXPECT_NEAR(std::fabs(pose.roll), std::fabs(turn) * kDeg, 0.2 * kDeg) << distance << " m " << turn << " deg";
+      // The camera turned about its view sees the marker where a level one would within the lever of the turn.
+      EXPECT_NEAR(pose.x, m.x, 0.01 * distance) << distance << " m " << turn << " deg";
+      EXPECT_NEAR(pose.y, m.y, 0.02 * distance) << distance << " m " << turn << " deg";
+      EXPECT_NEAR(pose.yaw, m.yaw, 1.5 * kDeg) << distance << " m " << turn << " deg";
+    }
+  }
+  Scene s = RearScene();
+  const SceneMarker m = Behind(s, 0.8, 0.0, 0.0);
+  const CameraMount fitted = s.mount;
+  s.mount.roll += 10.0 * kDeg;
+  const MarkerPose pose = FitMarkerPose(Corners(s, m), Covariance(0.05), kFocal, fitted, s.side, PoseLimits{});
+  EXPECT_FALSE(pose.valid);
+  EXPECT_NEAR(std::fabs(pose.roll), 10.0 * kDeg, 0.2 * kDeg);
+}
+
 TEST(DockPose, RejectsWhatIsNoUprightSquareOfThatSide) {
   const Scene s = RearScene();
   // Leaning back by 20 degrees.

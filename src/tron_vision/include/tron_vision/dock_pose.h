@@ -19,9 +19,14 @@ struct CameraMount {
 };
 
 struct PoseLimits {
-  // Largest RMS distance between the corners and the fitted square: these pixels plus this share of the side.
+  // Largest RMS distance between the corners and the fitted square: these pixels plus this share of the side. With
+  // the roll the Tron's markers fit within 0.02 to 0.23 px from 0.28 to 1.2 m (2026-11-14 and -15); a corner off by a
+  // twentieth of the side stays out.
   double fit_error_px = 0.5;
-  double fit_error_share = 0.01;
+  double fit_error_share = 0.004;
+  // Largest turn of the square in its face against the camera (rad): a station or a mower that leans, the ground. On
+  // the Tron 1 to 3 degrees were measured (2026-11-14 and -15).
+  double max_roll = 8.0 * 3.14159265358979323846 / 180.0;
   // The yaw counts only if its mirror image about the line of sight fits worse by this many standard deviations
   // of the corners.
   double mirror_sigmas = 4.0;
@@ -41,6 +46,8 @@ struct MarkerPose {
   double y = 0.0;
   double z = 0.0;
   double yaw = 0.0;
+  // Turn of the square in its face against the camera, positive from its right side up (rad); for the record.
+  double roll = 0.0;
   // Of x, y, yaw, row by row, from the covariance of the corners, widened if the square fits worse than that
   // explains; the yaw entries are 0 without yaw_valid. Within measured_yaw_range the yaw has measured_yaw_sigma, with
   // the correlations of the corners.
@@ -52,8 +59,9 @@ struct MarkerPose {
 };
 
 // Fits a square of the given side that hangs upright (its face contains the z axis of base_link) to the directions of
-// its corners: top left, top right, bottom right, bottom left as the camera sees them. Four unknowns (x, y, height,
-// yaw); pitch and roll come from the mount alone. `corner_covariance` is that of the directions (x and y of each
+// its corners: top left, top right, bottom right, bottom left as the camera sees them. Five unknowns (x, y, height,
+// yaw, and the roll of the square in its face up to max_roll, which a leaning station or mower gives); the pitch comes
+// from the mount alone. `corner_covariance` is that of the directions (x and y of each
 // corner in turn, 8 x 8 row by row); `focal_px` turns the fit error into pixels.
 MarkerPose FitMarkerPose(const std::array<Point2, 4>& corners, const std::array<double, 64>& corner_covariance,
                          double focal_px, const CameraMount& mount, double marker_side, const PoseLimits& limits);

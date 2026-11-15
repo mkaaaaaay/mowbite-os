@@ -8,7 +8,7 @@ namespace tron_vision {
 
 namespace {
 
-constexpr size_t kUnknowns = 4;  // x, y, z, yaw
+constexpr size_t kUnknowns = 5;  // x, y, z, yaw, roll
 constexpr size_t kResiduals = 8;
 constexpr int kMaxIterations = 60;
 constexpr double kStep = 1e-6;
@@ -16,8 +16,8 @@ constexpr double kSettled = 1e-10;
 constexpr double kMinDepth = 1e-3;
 constexpr double kPi = 3.14159265358979323846;
 
-using Vec4 = std::array<double, kUnknowns>;
-using Mat4 = std::array<double, kUnknowns * kUnknowns>;
+using Vec = std::array<double, kUnknowns>;
+using Mat = std::array<double, kUnknowns * kUnknowns>;
 using Residuals = std::array<double, kResiduals>;
 
 // Corner offsets along the marker's right and up, in half sides: top left, top right, bottom right, bottom left.
@@ -48,14 +48,19 @@ std::array<double, 9> MountRotation(const CameraMount& mount) {
 }
 
 // Predicted minus measured corner directions; false if a corner would lie behind the camera.
-bool Evaluate(const Problem& p, const Vec4& q, Residuals& e) {
+bool Evaluate(const Problem& p, const Vec& q, Residuals& e) {
   const double right_x = -std::sin(q[3]);
   const double right_y = std::cos(q[3]);
+  const double cr = std::cos(q[4]);
+  const double sr = std::sin(q[4]);
   for (size_t k = 0; k < 4; k++) {
-    const double along = kCornerSigns[k][0] * p.half_side;
+    // The corner turned by the roll about the middle of the face.
+    const double side = kCornerSigns[k][0] * p.half_side;
+    const double high = kCornerSigns[k][1] * p.half_side;
+    const double along = side * cr - high * sr;
     const double dx = q[0] + along * right_x - p.mount.x;
     const double dy = q[1] + along * right_y - p.mount.y;
-    const double dz = q[2] + kCornerSigns[k][1] * p.half_side - p.mount.z;
+    const double dz = q[2] + side * sr + high * cr - p.mount.z;
     const double view = p.rotation[0] * dx + p.rotation[3] * dy + p.rotation[6] * dz;
     const double left = p.rotation[1] * dx + p.rotation[4] * dy + p.rotation[7] * dz;
     const double up = p.rotation[2] * dx + p.rotation[5] * dy + p.rotation[8] * dz;
@@ -73,7 +78,7 @@ double SquareSum(const Residuals& e) {
 }
 
 // Gaussian elimination with row pivoting; false if the matrix is singular.
-bool Solve(Mat4 a, Vec4 b, Vec4& x) {
+bool Solve(Mat a, Vec b, Vec& x) {
   for (size_t col = 0; col < kUnknowns; col++) {
     size_t pivot = col;
     for (size_t row = col + 1; row < kUnknowns; row++) {
@@ -101,10 +106,10 @@ bool Solve(Mat4 a, Vec4 b, Vec4& x) {
 using Jacobian = std::array<Residuals, kUnknowns>;
 
 // Derivatives of the residuals by each unknown at q, by central differences.
-bool Derive(const Problem& p, const Vec4& q, Jacobian& columns) {
+bool Derive(const Problem& p, const Vec& q, Jacobian& columns) {
   for (size_t u = 0; u < kUnknowns; u++) {
-    Vec4 plus = q;
-    Vec4 minus = q;
+    Vec plus = q;
+    Vec minus = q;
     plus[u] += kStep;
     minus[u] -= kStep;
     Residuals e_plus{};
@@ -115,8 +120,8 @@ bool Derive(const Problem& p, const Vec4& q, Jacobian& columns) {
   return true;
 }
 
-Mat4 NormalMatrix(const Jacobian& columns) {
-  Mat4 jtj{};
+Mat NormalMatrix(const Jacobian& columns) {
+  Mat jtj{};
   for (size_t a = 0; a < kUnknowns; a++) {
     for (size_t b = 0; b < kUnknowns; b++) {
       for (size_t r = 0; r < kResiduals; r++) jtj[a * kUnknowns + b] += columns[a][r] * columns[b][r];
@@ -127,13 +132,13 @@ Mat4 NormalMatrix(const Jacobian& columns) {
 
 struct Fit {
   bool ok = false;
-  Vec4 q{};
+  Vec q{};
   double cost = 0.0;
   Jacobian columns{};
 };
 
 // Damped least squares from the start value to the nearest minimum.
-Fit Minimize(const Problem& p, const Vec4& start) {
+Fit Minimize(const Problem& p, const Vec& start) {
   Fit fit;
   fit.q = start;
   Residuals e{};
@@ -142,18 +147,18 @@ Fit Minimize(const Problem& p, const Vec4& start) {
   double damping = 1e-3;
   for (int i = 0; i < kMaxIterations; i++) {
     if (!Derive(p, fit.q, fit.columns)) return fit;
-    const Mat4 jtj = NormalMatrix(fit.columns);
+    const Mat jtj = NormalMatrix(fit.columns);
     bool stepped = false;
     double step_size = 0.0;
     while (!stepped && damping < 1e9) {
-      Mat4 damped = jtj;
-      Vec4 rhs{};
+      Mat damped = jtj;
+      Vec rhs{};
       for (size_t u = 0; u < kUnknowns; u++) {
         damped[u * kUnknowns + u] *= 1.0 + damping;
         for (size_t r = 0; r < kResiduals; r++) rhs[u] -= fit.columns[u][r] * e[r];
       }
-      Vec4 step{};
-      Vec4 next = fit.q;
+      Vec step{};
+      Vec next = fit.q;
       Residuals e_next{};
       if (Solve(damped, rhs, step)) {
         for (size_t u = 0; u < kUnknowns; u++) next[u] += step[u];
@@ -176,16 +181,16 @@ Fit Minimize(const Problem& p, const Vec4& start) {
 }
 
 // Direction from the marker to the camera on the ground plane.
-double LineOfSight(const CameraMount& mount, const Vec4& q) {
+double LineOfSight(const CameraMount& mount, const Vec& q) {
   return std::atan2(mount.y - q[1], mount.x - q[0]);
 }
 
 // How the unknowns follow the corner coordinates near the minimum: (J^T J)^-1 J^T, one row per unknown.
 bool Gain(const Jacobian& columns, std::array<Residuals, kUnknowns>& gain) {
-  const Mat4 jtj = NormalMatrix(columns);
+  const Mat jtj = NormalMatrix(columns);
   for (size_t r = 0; r < kResiduals; r++) {
-    Vec4 rhs{};
-    Vec4 x{};
+    Vec rhs{};
+    Vec x{};
     for (size_t u = 0; u < kUnknowns; u++) rhs[u] = columns[u][r];
     if (!Solve(jtj, rhs, x)) return false;
     for (size_t u = 0; u < kUnknowns; u++) gain[u][r] = x[u];
@@ -216,7 +221,7 @@ MarkerPose FitMarkerPose(const std::array<Point2, 4>& corners, const std::array<
   const double mid_x = (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4.0;
   const double mid_y = (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4.0;
   const std::array<double, 3> body = {depth, -mid_x * depth, -mid_y * depth};
-  Vec4 start{};
+  Vec start{};
   start[0] = mount.x + p.rotation[0] * body[0] + p.rotation[1] * body[1] + p.rotation[2] * body[2];
   start[1] = mount.y + p.rotation[3] * body[0] + p.rotation[4] * body[1] + p.rotation[5] * body[2];
   start[2] = mount.z + p.rotation[6] * body[0] + p.rotation[7] * body[1] + p.rotation[8] * body[2];
@@ -226,7 +231,7 @@ MarkerPose FitMarkerPose(const std::array<Point2, 4>& corners, const std::array<
   if (!best.ok) return pose;
   // From far away the square turned by the same angle to the other side of the line of sight looks almost the same.
   const double sight = LineOfSight(mount, best.q);
-  Vec4 mirrored = best.q;
+  Vec mirrored = best.q;
   mirrored[3] = sight - Wrap(best.q[3] - sight);
   Fit other = Minimize(p, mirrored);
   if (other.ok && other.cost < best.cost) std::swap(best, other);
@@ -237,7 +242,9 @@ MarkerPose FitMarkerPose(const std::array<Point2, 4>& corners, const std::array<
   pose.y = best.q[1];
   pose.z = best.q[2];
   pose.yaw = Wrap(best.q[3]);
+  pose.roll = Wrap(best.q[4]);
   if (pose.fit_error_px > limits.fit_error_px + limits.fit_error_share * side_px) return pose;
+  if (std::fabs(pose.roll) > limits.max_roll) return pose;
 
   std::array<Residuals, kUnknowns> gain{};
   if (!Gain(best.columns, gain)) return pose;
