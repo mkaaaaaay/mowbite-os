@@ -41,6 +41,12 @@ def valid_span(span):
     return whole(span["max"]) and span["min"] <= span["max"] and ("break" not in span or whole(span["break"]))
 
 
+# How api {min, max, break} of an app reads in a message.
+def span_text(span):
+    text = f"{span['min']}..{span.get('max', '')}"
+    return f"{text} break {span['break']}" if "break" in span else text
+
+
 # Why an app of api span does not go with an OS of api and api_break, None when it does. Both with break: the same
 # break and api at least min. Else (an app from before the break, or an OS of api 30 or older): api within min..max,
 # max a hard limit; an app without max needs an OS with api_break.

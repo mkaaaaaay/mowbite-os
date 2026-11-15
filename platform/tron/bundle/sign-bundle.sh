@@ -30,6 +30,7 @@ read_meta() {
 import sys, time
 sys.path.insert(0, sys.argv[1])
 from mowbite_host import Refused, bundle
+from mowbite_host.compat import span_text
 try:
     meta, _ = bundle.read_meta(sys.argv[2])
 except Refused as why:
@@ -52,8 +53,7 @@ elif meta["component"] == "planner":
     print(f"  version {meta['version']}, interface {meta['interface']}, files_version {meta['files_version']}, "
           f"requires {', '.join(f'{k} {v}' for k, v in sorted(meta.get('requires', {}).items())) or '-'}")
 elif meta["component"] == "app":
-    print(f"  version {meta['version']}, api {meta['api']['min']}..{meta['api'].get('max', '')} "
-          f"break {meta['api'].get('break', '-')}")
+    print(f"  version {meta['version']}, api {span_text(meta['api'])}")
 else:
     print(f"  base {meta.get('base', 0)}")
 PY

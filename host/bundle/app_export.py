@@ -20,7 +20,7 @@ import sys
 import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-from mowbite_host.compat import EXPLAIN, api_fits, valid_span, version_tuple, whole  # noqa: E402
+from mowbite_host.compat import EXPLAIN, api_fits, span_text, valid_span, version_tuple, whole  # noqa: E402
 from mowbite_host.origin import sha256  # noqa: E402
 
 MAX_FILES = 5000
@@ -102,12 +102,6 @@ def meta(folder):
         raise Refused("app.json: commit and serial missing (an app built without git)")
     return {"version": app["version"], "api": {key: span[key] for key in ("min", "max", "break") if key in span},
             "commit": app["commit"], "serial": app["serial"]}
-
-
-# How api {min, max, break} reads in a message.
-def span_text(span):
-    text = f"{span['min']}..{span.get('max', '')}"
-    return f"{text} break {span['break']}" if "break" in span else text
 
 
 def _check(out, version, min_app, api, api_break):
