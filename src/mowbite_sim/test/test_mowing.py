@@ -15,8 +15,11 @@ import time
 import unittest
 
 import rclpy
-from mowbite_msgs.msg import MapStatus, MqttPublish, RobotPose, RobotState, RpcError, RpcRequest, RpcResponse
+from action_msgs.msg import GoalStatus, GoalStatusArray
+from mowbite_msgs.msg import (DriveCommand, MapStatus, MqttPublish, RobotPose, RobotState, RpcError, RpcRequest,
+                              RpcResponse)
 from mowbite_msgs.srv import ReplaceMap, SetPose
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -69,6 +72,13 @@ class Probe(SimProbe):
         self.robot = None
         # (time, position accuracy) of every localization/pose, for the report of a failure
         self.accuracy = []
+        # When each follow_path goal first showed as succeeded, by its id, and the times of the stops of the logic.
+        self.succeeded = {}
+        self.stops = []
+        self.node.create_subscription(
+            GoalStatusArray, "follow_path/_action/status", self._goals,
+            QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.node.create_subscription(DriveCommand, "safety/drive", self._drive, 100)
         self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
         self.node.create_subscription(RobotPose, "localization/pose", self._pose, 10)
         self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
@@ -86,6 +96,18 @@ class Probe(SimProbe):
         with self.lock:
             self.pose = msg
             self.accuracy.append((time.time(), msg.position_accuracy))
+
+    def _goals(self, msg):
+        now = time.time()
+        with self.lock:
+            for goal in msg.status_list:
+                if goal.status == GoalStatus.STATUS_SUCCEEDED:
+                    self.succeeded.setdefault(bytes(goal.goal_info.goal_id.uuid), now)
+
+    def _drive(self, msg):
+        if msg.source == DriveCommand.SOURCE_STOP:
+            with self.lock:
+                self.stops.append(time.time())
 
     def accuracy_report(self, since):
         """The worst accuracy since that time and when it was above 0.1 m."""
@@ -247,6 +269,13 @@ class TestMowing(unittest.TestCase):
         worst = max(outside_by(LAWN, t["x"], t["y"]) for t in track)
         self.assertLess(worst, 0.5, f"{worst:.2f} m outside")
         self.assertLessEqual(max(abs(t["linear"]) for t in track), 0.3 + 1e-3)
+        # Every path that ended done is followed by a stop of the logic, whether the last zero of the follower got
+        # through or not, also where the next path follows in the same state.
+        with p.lock:
+            ended, stops = sorted(p.succeeded.values()), list(p.stops)
+        self.assertGreater(len(ended), 1, ended)
+        unstopped = [round(t - ended[0], 2) for t in ended if not any(t - 0.5 <= s <= t + 1.5 for s in stops)]
+        self.assertEqual(unstopped, [], f"{len(ended)} paths done, stops at {[round(s - ended[0], 2) for s in stops]}")
         # The last cutter frame switches the blade off.
         frames = p.cutter_frames()
         self.assertEqual(frames[-1]["cutter"], 0)

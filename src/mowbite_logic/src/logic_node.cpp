@@ -796,6 +796,8 @@ void LogicNode::EndDrive(bool arrived, const Reason& why, uint8_t reason, uint32
   }
   const Drive ended = drive_;
   drive_ = Drive();
+  // The last zero of the follower may come after its result, when the core no longer passes it on.
+  SendStop();
   if (ended.purpose == Purpose::kDriveTo) {
     core_.Call<&LogicCore::OnDriveEnded>(arrived, why);
     return;
@@ -805,8 +807,6 @@ void LogicNode::EndDrive(bool arrived, const Reason& why, uint8_t reason, uint32
     return;
   }
   if (ended.purpose == Purpose::kDock) {
-    // The last zero of the follower may come after its result, when the leg no longer passes it on.
-    SendStop();
     core_.Call<&LogicCore::OnDockingLegEnded>(ToLegEnd(reason), why);
     return;
   }
