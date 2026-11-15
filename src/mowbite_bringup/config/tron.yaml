@@ -278,14 +278,14 @@ mowbite_follower:
   ros__parameters:
     # m/s where the next metre of the path runs straight (within 20 degrees), elsewhere and on turns, and the limits
     # of every command (the lower of these and the limits in hw/capabilities); speeding up and braking at
-    # acceleration m/s². Turning up to 0.5 rad/s (the user, 15.11.): the farthest point of the body (0.62 m) then moves
-    # at 0.31 m/s, no faster than straight at 0.3.
-    speed_fast: 0.3
-    speed_slow: 0.25
-    speed_turn: 0.1
-    max_linear: 0.3
+    # acceleration m/s². Up to 0.55 m/s and 0.5 rad/s (the user, 15.11., without a braking measurement); braking from
+    # 0.55 at 0.3 m/s² takes 0.5 m of the path.
+    speed_fast: 0.55
+    speed_slow: 0.3
+    speed_turn: 0.15
+    max_linear: 0.55
     max_angular: 0.5
-    acceleration: 0.2
+    acceleration: 0.3
     # rad/s an arc of the path asks for at most, below max_angular so that the mower can still correct on arcs of
     # turn_radius (0.25 * 0.44 = 0.11 m/s there).
     turn_rate: 0.25
