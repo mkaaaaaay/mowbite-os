@@ -15,6 +15,7 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
 from mowbite_msgs.msg import ActionList, HardwareStatus, MqttPublish, RpcError, RpcMethods, RpcRequest, RpcResponse
@@ -31,6 +32,9 @@ WORK = tempfile.mkdtemp(prefix="mowbite_geometry_")
 FILE = os.path.join(WORK, "geometry.json")
 GEOMETRY = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
 G = "/mowbite_geometry/"
+with open(GEOMETRY) as f:
+    FLAT = yaml.safe_load(f)["mowbite_logic"]["ros__parameters"]["geometry"]["robot_outline"]
+OUTLINE = [list(p) for p in zip(FLAT[::2], FLAT[1::2])]
 
 
 def generate_test_description():
@@ -110,7 +114,9 @@ class TestGeometry(unittest.TestCase):
         self.assertEqual(params[G + "robot_front"], 0.60)
         self.assertEqual(params[G + "dock_contact_x"], -0.10)
         self.assertEqual(params[G + "track"], 0.395)
-        self.assertEqual(params[G + "robot_outline"], [])
+        # The outline of the platform file, as pairs.
+        self.assertEqual(len(OUTLINE), 6)
+        self.assertEqual(params[G + "robot_outline"], OUTLINE)
         self.assertTrue(self.probe.logged("Dimensions of the mower from " + FILE + " (version 7)"))
         # The localization takes the antenna from it and tells the app.
         self.assertTrue(self.probe.logged("Antenna offset: 0.120, 0.000"))
