@@ -2250,14 +2250,15 @@
           "type": "integer"
         },
         "cause": {
-          "description": "Why: the planner gave no way (with approach_failed, a reason in x-reasons), or the dock camera did not guide the mower (with dock_failed, texts here)",
+          "description": "Why: the planner gave no way (with approach_failed, a reason in x-reasons), the dock camera did not guide the mower, or a docking test started where it cannot measure (with dock_failed, texts here)",
           "enum": [
             "PLANNER_TIMEOUT",
             "PLANNER_MISSING",
             "MARKER_UNAVAILABLE",
             "MARKER_NOT_SEEN",
             "MARKER_LOST",
-            "MARKER_MISMATCH"
+            "MARKER_MISMATCH",
+            "TEST_START"
           ],
           "type": "string",
           "x-texts": {
@@ -2307,6 +2308,18 @@
                 "fix": "Check the camera and its setup; the detail names the cause.",
                 "help": "The camera towards the docking station cannot measure the marker right now.",
                 "name": "Dock camera not measuring"
+              }
+            },
+            "TEST_START": {
+              "de": {
+                "fix": "Mäher näher, gerade und mittig vor die Ladestation stellen und den Test neu starten.",
+                "help": "Der Mäher steht für den Andocktest nicht passend vor der Ladestation; die Meldung nennt den Grund. Das ist kein Fehler der Hardware.",
+                "name": "Andocktest abgelehnt"
+              },
+              "en": {
+                "fix": "Place the mower closer, straight and centered in front of the docking station and start the test again.",
+                "help": "The mower does not stand right in front of the docking station for the docking test; the message names the reason. This is no fault of the hardware.",
+                "name": "Docking test refused"
               }
             }
           }
@@ -2621,14 +2634,15 @@
           "type": "integer"
         },
         "cause": {
-          "description": "Why: the planner gave no way (with approach_failed, a reason in x-reasons), or the dock camera did not guide the mower (with dock_failed, texts here)",
+          "description": "Why: the planner gave no way (with approach_failed, a reason in x-reasons), the dock camera did not guide the mower, or a docking test started where it cannot measure (with dock_failed, texts here)",
           "enum": [
             "PLANNER_TIMEOUT",
             "PLANNER_MISSING",
             "MARKER_UNAVAILABLE",
             "MARKER_NOT_SEEN",
             "MARKER_LOST",
-            "MARKER_MISMATCH"
+            "MARKER_MISMATCH",
+            "TEST_START"
           ],
           "type": "string",
           "x-texts": {
@@ -2678,6 +2692,18 @@
                 "fix": "Check the camera and its setup; the detail names the cause.",
                 "help": "The camera towards the docking station cannot measure the marker right now.",
                 "name": "Dock camera not measuring"
+              }
+            },
+            "TEST_START": {
+              "de": {
+                "fix": "Mäher näher, gerade und mittig vor die Ladestation stellen und den Test neu starten.",
+                "help": "Der Mäher steht für den Andocktest nicht passend vor der Ladestation; die Meldung nennt den Grund. Das ist kein Fehler der Hardware.",
+                "name": "Andocktest abgelehnt"
+              },
+              "en": {
+                "fix": "Place the mower closer, straight and centered in front of the docking station and start the test again.",
+                "help": "The mower does not stand right in front of the docking station for the docking test; the message names the reason. This is no fault of the hardware.",
+                "name": "Docking test refused"
               }
             }
           }
@@ -14083,11 +14109,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:35",
+  "$id": "urn:mowbite-os:api:36",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null). x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 35,
+  "x-api": 36,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {

@@ -70,7 +70,8 @@ Field MarkerDetail();
 Field Guide();
 
 // The tries of docking in DOCKING_RETRY and DOCKING_FAILED, whatever the reason; cause and direct_blocked come with
-// approach_failed where the planner gave no way, cause and detail with dock_failed where the dock camera failed.
+// approach_failed where the planner gave no way, cause and detail with dock_failed where the dock camera failed or a
+// docking test was refused.
 std::vector<Field> DockingTries() {
   return Rated(true, {Integer("attempts", "", "Tries of docking so far"), DockingCause(),
                       Bool("direct_blocked",
@@ -1079,17 +1080,30 @@ const std::vector<std::string> kRecordingActions = {"start_area_recording",
                                                     "undo_points",
                                                     "point"};
 
-// cause in DOCKING_RETRY and DOCKING_FAILED: the planner (with approach_failed), or the dock camera (with dock_failed).
+// cause in DOCKING_RETRY and DOCKING_FAILED: the planner (with approach_failed), the dock camera or the start of a
+// docking test (with dock_failed).
 Field DockingCause() {
   Field field = Text("cause",
-                     "Why: the planner gave no way (with approach_failed, a reason in x-reasons), or the dock camera "
-                     "did not guide the mower (with dock_failed, texts here)",
+                     "Why: the planner gave no way (with approach_failed, a reason in x-reasons), the dock camera did "
+                     "not guide the mower, or a docking test started where it cannot measure (with dock_failed, texts "
+                     "here)",
                      false,
                      {"PLANNER_TIMEOUT", "PLANNER_MISSING", "MARKER_UNAVAILABLE", "MARKER_NOT_SEEN", "MARKER_LOST",
-                      "MARKER_MISMATCH"});
+                      "MARKER_MISMATCH", "TEST_START"});
   for (const char* code : {"MARKER_UNAVAILABLE", "MARKER_NOT_SEEN", "MARKER_LOST", "MARKER_MISMATCH"}) {
     field.value_texts[code] = MarkerTexts(code);
   }
+  field.value_texts["TEST_START"] = {
+      {"de",
+       {"Andocktest abgelehnt",
+        "Der Mäher steht für den Andocktest nicht passend vor der Ladestation; die Meldung nennt den Grund. Das ist "
+        "kein Fehler der Hardware.",
+        "Mäher näher, gerade und mittig vor die Ladestation stellen und den Test neu starten."}},
+      {"en",
+       {"Docking test refused",
+        "The mower does not stand right in front of the docking station for the docking test; the message names the "
+        "reason. This is no fault of the hardware.",
+        "Place the mower closer, straight and centered in front of the docking station and start the test again."}}};
   return field;
 }
 
