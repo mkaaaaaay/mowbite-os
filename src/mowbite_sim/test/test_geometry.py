@@ -135,7 +135,7 @@ class TestGeometry(unittest.TestCase):
         self.assertEqual(settings["robot_width"]["min"], 0.1)
         self.assertEqual(settings["robot_width"]["max"], 1.5)
         self.assertEqual(settings["robot_outline"]["type"], "points")
-        for name in ("wheel_radius", "dock_contact_x"):
+        for name in ("wheel_radius", "wheel_width", "dock_contact_x"):
             self.assertFalse(settings[name]["settable"], name)
         for name in ("robot_width", "mower_width", "antenna_x", "blade_offset", "track", "ticks_per_m", "imu_pitch"):
             self.assertTrue(settings[name]["settable"], name)

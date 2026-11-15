@@ -16,6 +16,8 @@ mowbite_logic:
       antenna_y: 0.0
       track: 0.3556
       wheel_radius: 0.10
+      # Width of the tread of the drive wheels: an assumption until measured.
+      wheel_width: 0.04
       dock_contact_x: 0.35
       ticks_per_m: 2025.0
       # The IMU sits about 4.5 degrees nose up (gravity at rest, M2 03.11.); roll level.

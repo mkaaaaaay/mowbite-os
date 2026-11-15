@@ -25,7 +25,7 @@ enum class GeometryType { kNumber, kPoints };
 struct GeometryKey {
   std::string name;
   GeometryType type;
-  // The user can set it; wheel_radius and dock_contact_x are the platform's alone.
+  // The user can set it; wheel_radius, wheel_width and dock_contact_x are the platform's alone.
   bool settable;
   // The range of a number in its unit; with relative, around the platform's value.
   double min;
@@ -40,7 +40,7 @@ const std::vector<GeometryKey>& GeometryKeys();
 using Point = std::array<double, 2>;
 
 // Why a request or a file was refused. reason: INVALID_REQUEST, VERSION, UNKNOWN_KEY, NOT_SETTABLE, INVALID_VALUE,
-// OUT_OF_RANGE or OUTSIDE_BODY; key: what it is about, if one; data: more fields for the answer (min, max, version).
+// OUT_OF_RANGE, OUTSIDE_BODY or WHEELS_OUTSIDE (the body does not cover the drive wheels from above); key: what it is about, if one; data: more fields for the answer (min, max, version).
 struct GeometryProblem {
   std::string reason;
   std::string key;

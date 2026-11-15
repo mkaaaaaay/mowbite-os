@@ -14,7 +14,7 @@ json TronValues() {
   return json{{"robot_width", 0.47}, {"robot_front", 0.60},    {"robot_rear", 0.12},     {"mower_width", 0.22},
               {"blade_ahead", 0.23}, {"blade_offset", 0.0},    {"antenna_x", 0.0},       {"antenna_y", 0.0},
               {"track", 0.395},      {"wheel_radius", 0.1125}, {"dock_contact_x", -0.10}, {"ticks_per_m", 1000.0},
-              {"imu_roll", 0.0},     {"imu_pitch", 0.0}};
+              {"imu_roll", 0.0},     {"imu_pitch", 0.0},       {"wheel_width", 0.055}};
 }
 
 Geometry Tron() {
@@ -52,8 +52,8 @@ TEST(Geometry, GetListsEveryKeyInOrderWithItsRules) {
   for (const auto& item : answer["settings"].items()) names.push_back(item.key());
   EXPECT_EQ(names, (std::vector<std::string>{"robot_width", "robot_front", "robot_rear", "robot_outline", "mower_width",
                                              "blade_ahead", "blade_offset", "antenna_x", "antenna_y", "track",
-                                             "wheel_radius", "dock_contact_x", "ticks_per_m", "imu_roll",
-                                             "imu_pitch"}));
+                                             "wheel_radius", "wheel_width", "dock_contact_x", "ticks_per_m",
+                                             "imu_roll", "imu_pitch"}));
   const json& width = answer["settings"]["robot_width"];
   EXPECT_DOUBLE_EQ(width["value"].get<double>(), 0.47);
   EXPECT_DOUBLE_EQ(width["default"].get<double>(), 0.47);
@@ -67,7 +67,7 @@ TEST(Geometry, GetListsEveryKeyInOrderWithItsRules) {
   EXPECT_EQ(outline["type"], "points");
   EXPECT_EQ(outline["value"], json::array());
   EXPECT_FALSE(outline["stored"].get<bool>());
-  for (const char* name : {"wheel_radius", "dock_contact_x"}) {
+  for (const char* name : {"wheel_radius", "wheel_width", "dock_contact_x"}) {
     EXPECT_FALSE(answer["settings"][name]["settable"].get<bool>()) << name;
   }
   for (const char* name : {"antenna_x", "track", "ticks_per_m", "imu_roll", "imu_pitch"}) {
@@ -84,7 +84,7 @@ TEST(Geometry, ParamsCarryEveryKeyAndTheVersion) {
   EXPECT_EQ(params["robot_outline"], json::array());
   EXPECT_EQ(params["version"], 0);
   EXPECT_EQ(params["stored"], json::array());
-  EXPECT_EQ(params.size(), 17u);
+  EXPECT_EQ(params.size(), 18u);
 }
 
 TEST(Geometry, ThePlatformsFileHasToBeWholeAndKeepTheRules) {
@@ -222,15 +222,15 @@ TEST(Geometry, ValuesOutsideTheRangeAreRefusedNotCut) {
   EXPECT_DOUBLE_EQ(change.problem.data["min"].get<double>(), 0.1);
   EXPECT_DOUBLE_EQ(change.problem.data["max"].get<double>(), 1.5);
   EXPECT_NE(change.problem.message.find("robot_width"), std::string::npos);
-  // The boundaries themselves are fine.
-  EXPECT_TRUE(geometry
-                  .Set(Request(geometry, {{"robot_width", 0.1},
-                                          {"robot_front", 0.5},
-                                          {"robot_rear", 0.0},
-                                          {"mower_width", 0.1},
-                                          {"blade_ahead", 0.1},
-                                          {"antenna_x", 0.0}}))
-                  .ok);
+  // The boundaries themselves pass the ranges; such a small body then leaves out the drive wheels.
+  ExpectRefused(geometry,
+                Request(geometry, {{"robot_width", 0.1},
+                                   {"robot_front", 0.5},
+                                   {"robot_rear", 0.0},
+                                   {"mower_width", 0.1},
+                                   {"blade_ahead", 0.1},
+                                   {"antenna_x", 0.0}}),
+                "WHEELS_OUTSIDE", "robot_rear");
 }
 
 TEST(Geometry, TheCalibratedValuesHaveTheirOwnRanges) {
@@ -326,6 +326,38 @@ TEST(Geometry, AnOutlineTakesTheBodyFromTheRectangle) {
   EXPECT_FALSE(geometry.Get()["settings"]["robot_outline"]["stored"].get<bool>());
 }
 
+TEST(Geometry, TheBodyHasToCoverTheDriveWheels) {
+  // The drive wheels of the Tron from above: 0.1125 m ahead and behind the axle, 0.17 to 0.225 m to each side.
+  Geometry geometry = Tron();
+  ExpectRefused(geometry, Request(geometry, {{"robot_width", 0.44}}), "WHEELS_OUTSIDE", "robot_width");
+  ExpectRefused(geometry, Request(geometry, {{"robot_rear", 0.10}}), "WHEELS_OUTSIDE", "robot_rear");
+  ExpectRefused(geometry, Request(geometry, {{"robot_front", 0.11}, {"blade_ahead", 0.0}}), "WHEELS_OUTSIDE",
+                "robot_front");
+  // A wider track from the calibration drive pushes the wheels out of the body as well.
+  ExpectRefused(geometry, Request(geometry, {{"track", 0.45}}), "WHEELS_OUTSIDE", "robot_width");
+  const GeometryChange refused = geometry.Set(Request(geometry, {{"robot_width", 0.44}}));
+  EXPECT_DOUBLE_EQ(refused.problem.data["wheel_width"].get<double>(), 0.055);
+  EXPECT_DOUBLE_EQ(refused.problem.data["track"].get<double>(), 0.395);
+  EXPECT_DOUBLE_EQ(refused.problem.data["wheel_radius"].get<double>(), 0.1125);
+  // Up to the edge of the wheels is enough.
+  EXPECT_TRUE(geometry.Set(Request(geometry, {{"robot_width", 0.45}, {"robot_rear", 0.1125}})).ok);
+  // The real outline of the Tron covers them.
+  geometry = Tron();
+  const json tron = {{0.60, 0.14}, {0.53, 0.235}, {-0.12, 0.235}, {-0.12, -0.235}, {0.53, -0.235}, {0.60, -0.14}};
+  EXPECT_TRUE(geometry.Set(Request(geometry, {{"robot_outline", tron}})).ok);
+  // A back narrower than the wheels, as a shape from a photo.
+  const json narrow_back = {{0.6, -0.235}, {0.6, 0.235}, {0.0, 0.235}, {-0.12, 0.1}, {-0.12, -0.1}, {0.0, -0.235}};
+  ExpectRefused(geometry, Request(geometry, {{"robot_outline", narrow_back}}), "WHEELS_OUTSIDE", "robot_outline");
+  // A notch into the right wheel, its corners all inside.
+  const json notch = {{0.6, -0.235}, {0.6, 0.235}, {-0.12, 0.235}, {-0.12, -0.235}, {-0.01, -0.235}, {0.0, -0.19},
+                      {0.01, -0.235}};
+  ExpectRefused(geometry, Request(geometry, {{"robot_outline", notch}}), "WHEELS_OUTSIDE", "robot_outline");
+  // A platform file that leaves its wheels out does not start.
+  json wide = TronValues();
+  wide["track"] = 0.45;
+  EXPECT_THROW(Geometry("tron", wide), std::invalid_argument);
+}
+
 TEST(Geometry, AnOutlineHasToBeAListOfPairsWithThreePointsOrMore) {
   Geometry geometry = Tron();
   ExpectRefused(geometry, Request(geometry, {{"robot_outline", 3}}), "INVALID_VALUE", "robot_outline");
@@ -363,7 +395,7 @@ TEST(Geometry, TheTurningRadiusReachesTheFarthestPointOfTheBody) {
 TEST(Geometry, BodyKeysBelowThePlatformsValueAreNamed) {
   Geometry geometry = Tron();
   EXPECT_TRUE(geometry.BelowDefault().empty());
-  GeometryChange change = geometry.Set(Request(geometry, {{"robot_width", 0.40}, {"robot_rear", 0.10}}));
+  GeometryChange change = geometry.Set(Request(geometry, {{"robot_width", 0.46}, {"robot_rear", 0.115}}));
   ASSERT_TRUE(change.ok) << change.problem.message;
   EXPECT_EQ(change.below_default, (std::vector<std::string>{"robot_width", "robot_rear"}));
   EXPECT_EQ(geometry.BelowDefault(), change.below_default);
@@ -378,7 +410,7 @@ TEST(Geometry, BodyKeysBelowThePlatformsValueAreNamed) {
 
 TEST(Geometry, AnOutlineBelowThePlatformsBodyIsNamed) {
   Geometry geometry = Tron();
-  const json narrow = {{0.6, -0.2}, {0.6, 0.2}, {-0.12, 0.2}, {-0.12, -0.2}};
+  const json narrow = {{0.6, -0.23}, {0.6, 0.23}, {-0.12, 0.23}, {-0.12, -0.23}};
   GeometryChange change = geometry.Set(Request(geometry, {{"robot_outline", narrow}}));
   ASSERT_TRUE(change.ok) << change.problem.message;
   EXPECT_EQ(change.below_default, (std::vector<std::string>{"robot_outline"}));

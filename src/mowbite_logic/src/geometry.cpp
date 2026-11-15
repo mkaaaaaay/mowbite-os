@@ -88,6 +88,83 @@ Body BodyOf(const std::map<std::string, double>& numbers, const std::vector<Poin
   return body;
 }
 
+// An axis-parallel box from above: the left drive wheel, the right one mirrored at y 0.
+struct Box {
+  double x_min;
+  double x_max;
+  double y_min;
+  double y_max;
+};
+
+double DistanceToSegment(const Point& a, const Point& b, double x, double y) {
+  const double dx = b[0] - a[0], dy = b[1] - a[1];
+  const double length = dx * dx + dy * dy;
+  const double t = length > 0 ? std::clamp(((x - a[0]) * dx + (y - a[1]) * dy) / length, 0.0, 1.0) : 0.0;
+  return std::hypot(a[0] + t * dx - x, a[1] + t * dy - y);
+}
+
+// Inside the polygon or on its edge.
+bool Inside(const std::vector<Point>& polygon, double x, double y) {
+  bool inside = false;
+  for (size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++) {
+    const Point& a = polygon[j];
+    const Point& b = polygon[i];
+    if (DistanceToSegment(a, b, x, y) <= kEps) return true;
+    if ((a[1] > y) != (b[1] > y) && x < a[0] + (y - a[1]) * (b[0] - a[0]) / (b[1] - a[1])) inside = !inside;
+  }
+  return inside;
+}
+
+// The segment passes through the inside of the box, not only along its edge.
+bool Enters(const Point& a, const Point& b, const Box& box) {
+  const double dx = b[0] - a[0], dy = b[1] - a[1];
+  const double p[] = {-dx, dx, -dy, dy};
+  const double q[] = {a[0] - box.x_min - kEps, box.x_max - kEps - a[0], a[1] - box.y_min - kEps,
+                      box.y_max - kEps - a[1]};
+  double t0 = 0.0, t1 = 1.0;
+  for (int i = 0; i < 4; ++i) {
+    if (p[i] == 0.0) {
+      if (q[i] < 0.0) return false;
+    } else if (p[i] < 0.0) {
+      t0 = std::max(t0, q[i] / p[i]);
+    } else {
+      t1 = std::min(t1, q[i] / p[i]);
+    }
+  }
+  return t0 < t1;
+}
+
+// The box lies within the outline: its corners inside and no edge of the outline through it.
+bool Encloses(const std::vector<Point>& outline, const Box& box) {
+  for (const double x : {box.x_min, box.x_max}) {
+    for (const double y : {box.y_min, box.y_max}) {
+      if (!Inside(outline, x, y)) return false;
+    }
+  }
+  for (size_t i = 0, j = outline.size() - 1; i < outline.size(); j = i++) {
+    if (Enters(outline[j], outline[i], box)) return false;
+  }
+  return true;
+}
+
+// The key of the body that leaves out the drive wheels, if one does.
+std::optional<std::string> WheelsOutside(const std::map<std::string, double>& numbers,
+                                         const std::vector<Point>& outline) {
+  const double radius = numbers.at("wheel_radius");
+  const double half_track = numbers.at("track") / 2;
+  const double half_width = numbers.at("wheel_width") / 2;
+  const Box left{-radius, radius, half_track - half_width, half_track + half_width};
+  const Box right{-radius, radius, -left.y_max, -left.y_min};
+  if (!outline.empty()) {
+    if (Encloses(outline, left) && Encloses(outline, right)) return std::nullopt;
+    return "robot_outline";
+  }
+  if (radius > numbers.at("robot_rear") + kEps) return "robot_rear";
+  if (radius > numbers.at("robot_front") + kEps) return "robot_front";
+  if (left.y_max > numbers.at("robot_width") / 2 + kEps) return "robot_width";
+  return std::nullopt;
+}
+
 GeometryProblem OutOfRange(const std::string& key, const std::string& message, double min, double max) {
   GeometryProblem problem = Problem("OUT_OF_RANGE", key, message);
   problem.data["min"] = min;
@@ -200,6 +277,18 @@ std::optional<GeometryProblem> Geometry::Check(const Values& values) const {
   }
   if (values.numbers.at("mower_width") > width + kEps) {
     return OutsideBody("mower_width", values.numbers.at("mower_width"), 0.0, width);
+  }
+  // The drive wheels from above: x within wheel_radius of the axle, track / 2 plus and minus wheel_width / 2 aside.
+  if (auto key = WheelsOutside(values.numbers, values.outline)) {
+    const double reach = (values.numbers.at("track") + values.numbers.at("wheel_width")) / 2;
+    GeometryProblem problem =
+        Problem("WHEELS_OUTSIDE", *key,
+                "The body leaves out the drive wheels: they reach " + Num(values.numbers.at("wheel_radius")) +
+                    " m ahead of and behind the axle and " + Num(reach) + " m to each side");
+    problem.data["wheel_radius"] = values.numbers.at("wheel_radius");
+    problem.data["wheel_width"] = values.numbers.at("wheel_width");
+    problem.data["track"] = values.numbers.at("track");
+    return problem;
   }
   return std::nullopt;
 }

@@ -30,9 +30,11 @@ mowbite_logic:
       # 0.395 m between the middles of the drive wheels (the MCU computes with 0.40 m); the calibration drive measures
       # the one that acts.
       track: 0.395
-      # Only this file sets these: the radius of the wheels, and the charging contacts 0.10 m behind base_link (the Tron
-      # backs onto its station).
+      # Only this file sets these: the radius of the wheels, the width of their tread (55 mm, measured by the user
+      # 31.10.; robot.geometry refuses a body that leaves them out), and the charging contacts 0.10 m behind base_link
+      # (the Tron backs onto its station).
       wheel_radius: 0.1125
+      wheel_width: 0.055
       dock_contact_x: -0.10
       # The Tron reports wheel speed, not ticks: 1000 per m is its scale (mm), the calibration drive measures the true
       # one. The IMU as mounted (rad, gravity read on level ground: roll atan2(ay, az), pitch atan2(-ax, hypot(ay,
