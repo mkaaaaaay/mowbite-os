@@ -155,6 +155,7 @@ class TestDockTest(unittest.TestCase):
         p.test()
         failed = self.failed(since, 40)
         self.assertIn("beside the axis", failed["message"])
+        self.assertEqual(failed.get("cause"), "TEST_START")
         self.assertEqual(p.sources_since(began), set())
         standing, states = p.standing()
         self.assertTrue(standing, states)

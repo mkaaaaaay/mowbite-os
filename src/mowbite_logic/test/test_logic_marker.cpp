@@ -332,7 +332,7 @@ TEST(LogicMarker, MarkerWithoutDirectionRefused) {
   core.OnTick(125.1);
   const Event& failed = Failed(core);
   EXPECT_EQ(failed.details["reason"], "dock_failed");
-  EXPECT_FALSE(failed.details.contains("cause"));
+  EXPECT_EQ(failed.details["cause"], "TEST_START");
   EXPECT_NE(failed.details["message"].get<std::string>().find("no direction"), std::string::npos);
 }
 
@@ -381,6 +381,7 @@ TEST(LogicMarker, BesideTheLineRefused) {
   EXPECT_FALSE(core.TakeDockingLeg());
   const Event& failed = Failed(core);
   EXPECT_NE(failed.details["message"].get<std::string>().find("beside the axis"), std::string::npos);
+  EXPECT_EQ(failed.details["cause"], "TEST_START");
   EXPECT_EQ(failed.details["attempts"], 1);
   EXPECT_EQ(core.RobotState().state, "IDLE");
 }

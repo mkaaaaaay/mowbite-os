@@ -175,7 +175,7 @@ void LogicCore::NextMarkerTry() {
   if (docking_test_ && !marker_started_) {
     const std::string problem = TestStartProblem(marker_legs_, config_.marker, p, config_.marker.cross_track / 2);
     if (!problem.empty()) {
-      const Reason why("dock_failed", "Docking test refused: " + problem);
+      const Reason why = Reason("dock_failed", "Docking test refused: " + problem).With("cause", "TEST_START");
       Notify(why.message);
       CountDockingFailure(why, true);
       return;
@@ -267,9 +267,10 @@ void LogicCore::TickMarkerDocking(double now_s) {
     case MarkerWatch::Verdict::kNoDirection:
       if (docking_test_) {
         docking_gps_wait_ = false;
-        const Reason why("dock_failed",
-                         "Docking test refused: the marker gives no direction of its own from here: place the mower "
-                         "closer and straighter in front of the docking station");
+        const Reason why = Reason("dock_failed",
+                                  "Docking test refused: the marker gives no direction of its own from here: place the "
+                                  "mower closer and straighter in front of the docking station")
+                               .With("cause", "TEST_START");
         Notify(why.message);
         CountDockingFailure(why, true);
         return;
