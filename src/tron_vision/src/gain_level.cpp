@@ -10,7 +10,9 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
-#include <cstring>
+
+#include "tron_vision/errno_text.h"
+#include "tron_vision/text_file.h"
 
 namespace tron_vision {
 namespace {
@@ -74,7 +76,7 @@ GainWishState NextGainWish(const GainWishState& state, double now_s, float luma,
     next.try_down_wait = 0.0;
   }
   const double wait = next.try_down_wait > 0.0 ? next.try_down_wait : limits.try_down_s;
-  if (luma < limits.dark_below) {
+  if (luma < limits.dark_luma_below) {
     next.bright_since = -1.0;
     if (next.dark_since < 0.0) next.dark_since = now_s;
     if (now_s - next.dark_since >= limits.dark_s && next.level != GainLevel::kNight) {
@@ -111,34 +113,18 @@ bool GainLevelFromLine(const std::string& line, GainLevel& level) {
 
 bool WriteGainWish(const std::string& path, GainLevel level, double monotonic_s, double unix_s, std::string& error) {
   const size_t slash = path.rfind('/');
-  if (slash != std::string::npos && slash > 0 && mkdir(path.substr(0, slash).c_str(), 0755) != 0 && errno != EEXIST) {
-    error = path.substr(0, slash) + ": " + std::strerror(errno);
-    return false;
+  if (slash != std::string::npos && slash > 0) {
+    const std::string dir = path.substr(0, slash);
+    if (mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST) {
+      error = ErrnoText("create " + dir);
+      return false;
+    }
   }
-  const std::string temporary = path + ".tmp";
-  const std::string line = GainWishLine(level, monotonic_s, unix_s);
-  const int fd = open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-  if (fd < 0) {
-    error = temporary + ": " + std::strerror(errno);
-    return false;
-  }
-  const bool written = write(fd, line.data(), line.size()) == static_cast<ssize_t>(line.size());
-  const int write_errno = errno;
-  close(fd);
-  if (!written || rename(temporary.c_str(), path.c_str()) != 0) {
-    error = path + ": " + std::strerror(written ? errno : write_errno);
-    unlink(temporary.c_str());
-    return false;
-  }
-  return true;
+  return WriteDurably(path, GainWishLine(level, monotonic_s, unix_s), error);
 }
 
 FileLock::FileLock(const std::string& path, double wait_s) {
-  if (path.empty()) {
-    held_ = true;
-    return;
-  }
-  fd_ = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (!path.empty()) fd_ = open(path.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd_ < 0) {
     held_ = true;
     return;

@@ -82,6 +82,11 @@ inline bool Number(const rclcpp::ParameterValue& value, double& number) {
   return true;
 }
 
+// True for a path below /run without a step up.
+inline bool BelowRun(const std::string& path) {
+  return path.rfind("/run/", 0) == 0 && path.find("..") == std::string::npos;
+}
+
 // record_dir, record_max_mb, record_keep_min and record_interval_s of a camera. The recording lives in RAM under /run
 // only, within kMaxRecordMb; off with record_max_mb 0. A wrong value, also one of the wrong type, leaves it off and
 // the camera goes on.
@@ -102,7 +107,7 @@ inline void ReadRecordLimits(rclcpp::Node& node, const std::string& preset_dir, 
     wrong = "record_max_mb, record_keep_min and record_interval_s are not all numbers";
   } else if (!(max_mb >= 0.0 && max_mb <= static_cast<double>(kMaxRecordMb)) || max_mb != std::floor(max_mb)) {
     wrong = "record_max_mb is not a whole number within 0.." + std::to_string(kMaxRecordMb);
-  } else if (dir.get<std::string>().rfind("/run/", 0) != 0 || dir.get<std::string>().find("..") != std::string::npos) {
+  } else if (!BelowRun(dir.get<std::string>())) {
     wrong = "record_dir " + dir.get<std::string>() + " is not below /run";
   } else if (!(keep_min > 0.0) || !(interval_s > 0.0)) {
     wrong = "record_keep_min and record_interval_s are not above 0";

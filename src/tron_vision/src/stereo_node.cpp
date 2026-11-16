@@ -67,11 +67,9 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   const rclcpp::ParameterValue wish = AnyType(*this, "gain_wish_file", rclcpp::ParameterValue(std::string()));
   if (wish.get_type() != rclcpp::ParameterType::PARAMETER_STRING) {
     RCLCPP_WARN(get_logger(), "No gain wish: gain_wish_file is not a string");
-  } else if (const std::string& file = wish.get<std::string>(); file.empty()) {
-    // Off.
-  } else if (file.rfind("/run/", 0) != 0 || file.find("..") != std::string::npos) {
+  } else if (const std::string& file = wish.get<std::string>(); !file.empty() && !BelowRun(file)) {
     RCLCPP_WARN(get_logger(), "No gain wish: gain_wish_file %s is not below /run", file.c_str());
-  } else {
+  } else if (!file.empty()) {
     config.gain_wish_file = file;
     RCLCPP_INFO(get_logger(), "Gain level wished for in %s", file.c_str());
   }

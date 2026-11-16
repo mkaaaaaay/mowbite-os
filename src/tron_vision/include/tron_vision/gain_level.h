@@ -19,7 +19,7 @@ float MeanLumaLeft(const uint8_t* yuyv, uint32_t width, uint32_t height, uint32_
 
 struct GainWishLimits {
   // The control holds the mean luma near 145 while it has reserve. Below this for dark_s it is at its limit.
-  float dark_below = 95.0F;
+  float dark_luma_below = 95.0F;
   double dark_s = 20.0;
   // Above this for bright_s the picture is burnt out: one level down without a wait.
   float bright_above = 200.0F;

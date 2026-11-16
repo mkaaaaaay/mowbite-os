@@ -939,7 +939,7 @@ TEST(StereoLoop, WishesForDayFromTheStartAndWritesItAnew) {
   rig.clock += 1.5;
   rig.Steps(1);
   EXPECT_EQ(ReadFile(rig.config.gain_wish_file).rfind("day 2010.500 ", 0), 0U);
-  EXPECT_FALSE(std::filesystem::exists(rig.config.gain_wish_file + ".tmp"));
+  EXPECT_FALSE(std::filesystem::exists(rig.config.gain_wish_file + ".new"));
   EXPECT_EQ(rig.loop->Status().gain_error, "");
 }
 

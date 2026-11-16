@@ -181,7 +181,7 @@ TEST(GainWishFile, IsWrittenWholeIntoADirectoryItMakes) {
   EXPECT_EQ(FirstLine(path), "dusk 12.500 1794800000.000");
   ASSERT_TRUE(WriteGainWish(path, GainLevel::kNight, 22.5, 1794800010.0, error)) << error;
   EXPECT_EQ(FirstLine(path), "night 22.500 1794800010.000");
-  EXPECT_FALSE(std::filesystem::exists(dir.Path() + "/gain/wish.tmp"));
+  EXPECT_FALSE(std::filesystem::exists(dir.Path() + "/gain/wish.new"));
 }
 
 TEST(GainWishFile, SaysWhyItCouldNotBeWritten) {
