@@ -1,6 +1,7 @@
-"""Duties of a platform driver behind the hardware contract hw/*, here xcore_driver against fake_xcore on UDP over the
-loopback: configuration of the board, capabilities, status, IMU, drive watchdog, blade lease, emergency with its reason
-and release, charging left to the board, a restart of the board and incompatible firmware.
+"""What xcore_driver owes the board of the NX60i beyond the driver contract (test_driver_contract.py), against
+fake_xcore on UDP over the loopback: configuration of the board, the values of its capabilities and status, IMU, the
+datagrams of drive, blade, emergency and hold, charging left to the board, a restart of the board and incompatible
+firmware.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_xcore_contract.py
 """
@@ -21,20 +22,20 @@ from geometry_msgs.msg import Twist, TwistStamped, Vector3
 from launch.actions import TimerAction
 from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus
 from mowbite_msgs.srv import SetBlade, SetCharge, SetEmergency
-from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (DriverProbe, TestShutdown, fake_xcore, log_entries, loopback_group,  # noqa: E402,F401
-                        read_json, sim_files, write_json, xcore_driver)
+from contract_nx60i import DATA, DIFF_DRIVE, MOWER  # noqa: E402
+from sim_common import (LATCHED, DriverProbe, TestShutdown, fake_xcore, log_entries,  # noqa: E402,F401
+                        loopback_group, read_json, sim_files, write_json, xcore_driver)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_xcore_")
 STATE, FLAGS, LOG, _ = sim_files(WORK)
 HOLD = os.path.join(WORK, "hold.json")
 GROUP_PORT, BIND_IP = loopback_group()
-EMERGENCY, DIFF_DRIVE, MOWER = 1, 2, 3
-DATA = 1
-LATCH, LIFT, LIFT_MULTIPLE = HardwareStatus.REASON_LATCH, HardwareStatus.REASON_LIFT, 16
+EMERGENCY = 1
+LATCH, LIFT = HardwareStatus.REASON_LATCH, HardwareStatus.REASON_LIFT
 
 
 def generate_test_description():
@@ -72,9 +73,8 @@ class Probe(DriverProbe):
         self.capabilities = None
         self.odom = []
         self.imu = []
-        caps_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
-        self.node.create_subscription(HardwareCapabilities, "hw/capabilities", self._set("capabilities"), caps_qos)
+        self.node.create_subscription(HardwareCapabilities, "hw/capabilities", self._set("capabilities"), LATCHED)
         self.node.create_subscription(TwistStamped, "hw/wheel_odom", self._odom, 10)
         self.node.create_subscription(Imu, "imu/data", self._imu, qos_profile_sensor_data)
         self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
@@ -281,17 +281,6 @@ class TestXcoreContract(unittest.TestCase):
         self.assertTrue(self.probe.wait_for(lambda p: not p.status.bumper, 2))
         self.assertTrue(self.release(), "release failed")
 
-    def test_j_host_latches_with_its_own_bits_only(self):
-        tilt = SetEmergency.Request(latch=True, bits=HardwareStatus.REASON_TILT, reason="xcore contract test")
-        self.assertTrue(self.probe.call(self.probe.emergency, tilt).success)
-        self.assertTrue(self.probe.wait_for(lambda p: p.status.emergency_reason & HardwareStatus.REASON_TILT, 2))
-        self.assertTrue(self.release(), "release failed")
-        answer = self.probe.set_emergency(True, HardwareStatus.REASON_LIFT)
-        self.assertFalse(answer.success)
-        self.assertIn("only HIGH_LEVEL, TILT, FENCE, STUCK and UNEXPECTED_RESTART", answer.message)
-        time.sleep(0.3)
-        self.assertFalse(self.probe.status.emergency)
-
     def test_k_charging_is_left_to_the_board(self):
         for on in (False, True):
             r = self.probe.call(self.probe.charge, SetCharge.Request(on=on))
@@ -305,11 +294,9 @@ class TestXcoreContract(unittest.TestCase):
         set_flags()
         self.assertTrue(self.probe.wait_for(lambda p: not p.status.dock_contact_raw, 3))
 
-    def test_ka_hold_blocks_without_emergency(self):
+    def test_ka_hold_is_no_latch_for_the_board(self):
         now = int(time.time())
-        with open(HOLD + ".new", "w") as f:
-            json.dump({"until": now + 600, "set_at": now}, f)
-        os.replace(HOLD + ".new", HOLD)
+        write_json(HOLD, {"until": now + 600, "set_at": now})
         s = self.probe.wait_for(lambda p: p.status.hold and p.status, 2)
         self.assertTrue(s, "hold.json not seen")
         self.assertFalse(s.emergency)
@@ -318,27 +305,12 @@ class TestXcoreContract(unittest.TestCase):
         for _ in range(10):
             self.probe.cmd_vel.publish(Twist(linear=Vector3(x=0.2)))
             time.sleep(0.1)
-        r = self.probe.set_blade(True, lease_s=1.0)
-        self.assertFalse(r.success)
-        self.assertIn("held", r.message)
-        self.assertEqual(r.emergency_reason, 0)
         time.sleep(0.3)
-        twists = [struct.unpack("<6d", bytes.fromhex(e["hex"])) for e in received(t0, DIFF_DRIVE, DATA, 0)]
-        self.assertEqual([v for v in twists if v[0] != 0 or v[5] != 0], [])
-        speeds = [struct.unpack("<f", bytes.fromhex(e["hex"]))[0] for e in received(t0, MOWER, DATA, 0)]
-        self.assertEqual([v for v in speeds if v != 0], [])
         # No latch for the board: the emergency input stays clear.
         sets = [struct.unpack("<HH", bytes.fromhex(e["hex"]))[0] for e in received(t0, EMERGENCY, DATA, 0)]
         self.assertTrue(sets and all(v == 0 for v in sets), str(sets))
         os.remove(HOLD)
         self.assertTrue(self.probe.wait_for(lambda p: not p.status.hold, 2), "still held after the file went")
-        t1 = board_time()
-        for _ in range(5):
-            self.probe.cmd_vel.publish(Twist(linear=Vector3(x=0.2)))
-            time.sleep(0.1)
-        time.sleep(0.8)
-        twists = [struct.unpack("<6d", bytes.fromhex(e["hex"])) for e in received(t1, DIFF_DRIVE, DATA, 0)]
-        self.assertGreater(len([v for v in twists if v[0] != 0]), 2)
 
     def test_l_board_restart(self):
         port = board()["port"]

@@ -1,5 +1,5 @@
-"""Duties of a platform driver behind the hardware contract hw/*, here tron_mcu against fake_tron on a pty:
-capabilities, status, drive frame rate and watchdog, blade lease, emergency with its reason and release.
+"""What tron_mcu owes the board of the Tron beyond the driver contract (test_driver_contract.py), against fake_tron on
+a pty: the values of its capabilities and status, the rate of the drive frames and the frames of the blade.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_hw_contract.py
 """
@@ -14,22 +14,20 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
-from geometry_msgs.msg import Twist, TwistStamped, Vector3
+from geometry_msgs.msg import Twist, Vector3
 from launch.actions import TimerAction
 from launch_ros.actions import Node
 from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus
-from mowbite_msgs.srv import SetBlade, SetEmergency
-from rclpy.qos import DurabilityPolicy, QoSProfile
+from mowbite_msgs.srv import SetBlade
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (DriverProbe, TestShutdown, fake_tron, last_time, sim_files, sim_links,  # noqa: E402,F401
-                        sub_packets, write_json)
+from contract_tron import CUTTER, SPEED  # noqa: E402
+from sim_common import (LATCHED, DriverProbe, TestShutdown, fake_tron, last_time, sim_files,  # noqa: E402,F401
+                        sim_links, sub_packets, write_json)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_hw_")
 LINKS = sim_links(WORK)
 _, FLAGS, LOG, _ = sim_files(WORK)
-CUTTER = 11
-SPEED = 4
 
 
 def generate_test_description():
@@ -50,38 +48,23 @@ received = functools.partial(sub_packets, LOG)
 sim_time = functools.partial(last_time, LOG)
 
 
-def set_flags(**flags):
-    write_json(FLAGS, flags)
-
-
 class Probe(DriverProbe):
-    emergency_reason = "hw contract test"
-
     def __init__(self):
         super().__init__("hw_contract_probe")
         self.status = None
         self.capabilities = None
-        self.odom = 0
-        # Reliable by default; transient local gets the capabilities published before the probe started.
-        caps_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
-        self.node.create_subscription(HardwareCapabilities, "hw/capabilities", self._set("capabilities"), caps_qos)
-        self.node.create_subscription(TwistStamped, "hw/wheel_odom", self._odom, 10)
+        self.node.create_subscription(HardwareCapabilities, "hw/capabilities", self._set("capabilities"), LATCHED)
         self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
         self.blade = self.node.create_client(SetBlade, "hw/blade")
-        self.emergency = self.node.create_client(SetEmergency, "hw/emergency")
         self.start()
-
-    def _odom(self, _msg):
-        with self.lock:
-            self.odom += 1
 
 
 class TestHardwareContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         rclpy.init()
-        set_flags()
+        write_json(FLAGS, {})
         cls.probe = Probe()
         # Free once telemetry and a matching version frame arrived.
         ready = cls.probe.wait_for(
@@ -93,10 +76,6 @@ class TestHardwareContract(unittest.TestCase):
         cls.probe.stop()
         rclpy.shutdown()
         shutil.rmtree(WORK, ignore_errors=True)
-
-    def release(self):
-        self.probe.set_emergency(False)
-        return self.probe.wait_for(lambda p: not p.status.emergency, 3)
 
     def test_a_capabilities_latched_with_firmware(self):
         caps = self.probe.wait_for(
@@ -120,16 +99,10 @@ class TestHardwareContract(unittest.TestCase):
         self.assertLess(caps.failsafe_without_host_s, 0)
         self.assertEqual(caps.safety_measurement_date, "")
 
-    def test_b_status_healthy(self):
+    def test_b_battery_from_the_bms(self):
         s = self.probe.status
-        self.assertTrue(s.telemetry_ok)
-        self.assertFalse(s.emergency)
-        self.assertEqual(s.emergency_reason, 0)
         self.assertEqual(s.battery_source, HardwareStatus.BATTERY_SOURCE_BMS)
         self.assertAlmostEqual(s.battery_voltage, 24.5, places=3)
-        self.assertTrue(s.blade_motor.ok)
-        self.assertGreater(s.link_messages_ok, 0)
-        self.assertTrue(self.probe.wait_for(lambda p: p.odom > 10), "no hw/wheel_odom")
 
     def test_c_drive_frames_at_most_every_100ms(self):
         # At 20 SpeedData/s the MCU of the Tron kept a setpoint up to 3.6 s without host (08.11.).
@@ -146,6 +119,7 @@ class TestHardwareContract(unittest.TestCase):
         self.assertAlmostEqual(moving[-1]["speed"][0], 0.138, delta=0.0025)
 
     def test_c_drive_watchdog_three_zeros(self):
+        # Tighter than the driver contract: measured from the last frame the MCU got, and the limit by its number.
         t0 = sim_time()
         for _ in range(5):
             self.probe.cmd_vel.publish(Twist(linear=Vector3(x=0.7)))
@@ -193,56 +167,3 @@ class TestHardwareContract(unittest.TestCase):
         frames = received(t0, CUTTER)
         self.assertEqual(len([e for e in frames if e["hex"][:2] == "01"]), 1, str(frames))
         self.assertEqual(len([e for e in frames if e["hex"][:2] == "00"]), 3, str(frames))
-
-    def test_f_blade_requests_out_of_range_refused(self):
-        r = self.probe.set_blade(True, lease_s=2.5)
-        self.assertFalse(r.success)
-        self.assertEqual(r.emergency_reason, 0)
-        self.assertFalse(self.probe.set_blade(True, lease_s=0.0).success)
-        self.assertFalse(self.probe.set_blade(True, lease_s=1.0, height=20).success)
-        self.assertFalse(self.probe.set_blade(True, lease_s=1.0, speed=150).success)
-        self.assertFalse(self.probe.status.blade_on)
-
-    def test_g_host_emergency_blocks_blade(self):
-        self.assertTrue(self.probe.set_emergency(True).success)
-        s = self.probe.wait_for(lambda p: p.status.emergency and p.status, 2)
-        self.assertTrue(s, "no emergency")
-        self.assertEqual(s.emergency_reason, HardwareStatus.REASON_LATCH | HardwareStatus.REASON_HIGH_LEVEL)
-        r = self.probe.set_blade(True, lease_s=1.0)
-        self.assertFalse(r.success)
-        self.assertIn("blocked", r.message)
-        # The refusal names the emergency, so the logic need not wait for the status.
-        self.assertEqual(r.emergency_reason, HardwareStatus.REASON_LATCH | HardwareStatus.REASON_HIGH_LEVEL)
-        self.assertTrue(self.release(), "release failed")
-        self.assertEqual(self.probe.status.emergency_reason, 0)
-
-    def test_h_lift_reason_stays_until_release(self):
-        set_flags(lift=1)
-        s = self.probe.wait_for(lambda p: p.status.emergency and p.status, 2)
-        self.assertTrue(s, "lift gave no emergency")
-        self.assertEqual(s.emergency_reason, HardwareStatus.REASON_LATCH | HardwareStatus.REASON_LIFT)
-        set_flags()
-        self.assertTrue(self.probe.wait_for(lambda p: not p.status.lift, 2))
-        time.sleep(0.3)
-        s = self.probe.status
-        self.assertTrue(s.emergency)
-        self.assertEqual(s.emergency_reason, HardwareStatus.REASON_LATCH | HardwareStatus.REASON_LIFT)
-        self.assertTrue(self.release(), "release failed")
-        self.assertEqual(self.probe.status.emergency_reason, 0)
-
-    def test_i_host_latches_with_its_own_bits_only(self):
-        # The bits of the safety filter stay until the release; a node above the driver cannot fake a lift.
-        tilt = SetEmergency.Request(latch=True, bits=HardwareStatus.REASON_TILT, reason="hw contract test")
-        self.assertTrue(self.probe.call(self.probe.emergency, tilt).success)
-        fence = SetEmergency.Request(latch=True, bits=HardwareStatus.REASON_FENCE, reason="hw contract test")
-        self.assertTrue(self.probe.call(self.probe.emergency, fence).success)
-        both = HardwareStatus.REASON_LATCH | HardwareStatus.REASON_TILT | HardwareStatus.REASON_FENCE
-        self.assertTrue(self.probe.wait_for(lambda p: p.status.emergency_reason == both, 2), "bits not shown")
-        self.assertTrue(self.release(), "release failed")
-        self.assertEqual(self.probe.status.emergency_reason, 0)
-        lift = SetEmergency.Request(latch=True, bits=HardwareStatus.REASON_LIFT, reason="hw contract test")
-        answer = self.probe.call(self.probe.emergency, lift)
-        self.assertFalse(answer.success)
-        self.assertIn("only HIGH_LEVEL, TILT, FENCE, STUCK and UNEXPECTED_RESTART", answer.message)
-        time.sleep(0.3)
-        self.assertFalse(self.probe.status.emergency)

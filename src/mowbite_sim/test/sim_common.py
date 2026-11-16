@@ -165,11 +165,16 @@ def xcore_battery():
     return logic_params.battery_voltages(layers.parameters(layers.files("nx60i"), "mowbite_logic"))
 
 
+def xcore_config():
+    """nx60i.yaml of xcore_driver."""
+    return os.path.join(get_package_share_directory("xcore_driver"), "config", "nx60i.yaml")
+
+
 def xcore_driver(bind_ip, group_port, config=None, node=None, **params):
     """xcore_driver on the loopback with config (its nx60i.yaml by default), the battery voltages of the nx60i and
     params; node adds arguments of the Node (name, namespace)."""
     if config is None:
-        config = os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "config", "nx60i.yaml")
+        config = xcore_config()
     return Node(package="xcore_driver", executable="xcore_driver_node", output="screen", **(node or {}),
                 parameters=[config, xcore_battery(),
                             {"interface": "lo", "bind_ip": bind_ip, "announcement_port": group_port, **params}])

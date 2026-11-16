@@ -8,6 +8,7 @@ charges at 29.4 V at most (G29) and has the speed model of A2.
 
 Run in a sourced workspace: python3 /ws/src/mowbite_sim/test/test_config_consistency.py
 """
+import glob
 import os
 import sys
 import unittest
@@ -79,7 +80,6 @@ class ConfigConsistency(unittest.TestCase):
         self.assertTrue(set(changes) <= set(self.geometry), set(changes) - set(self.geometry))
 
 
-
 class Nx60iConsistency(unittest.TestCase):
     def setUp(self):
         platform = load(layers.geometry("nx60i"))
@@ -106,6 +106,14 @@ class Nx60iConsistency(unittest.TestCase):
         self.assertLess(self.driver["duty_deadband"], self.driver["max_duty"])
         self.assertFalse(self.driver["allow_blade"])
         self.assertEqual(self.driver["safety_measurement_date"], "")
+
+
+class DriverContract(unittest.TestCase):
+    def test_every_platform_has_its_case_of_the_driver_contract(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        cases = {os.path.basename(path)[len("contract_"):-len(".py")]
+                 for path in glob.glob(os.path.join(here, "contract_*.py"))}
+        self.assertEqual(cases, set(layers.platforms()))
 
 
 if __name__ == "__main__":

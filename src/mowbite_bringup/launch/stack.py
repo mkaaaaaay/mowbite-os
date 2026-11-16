@@ -458,12 +458,17 @@ def launch_setup(context, platform, module):
                                    arg("oom_score_adj"))]
 
 
+# The launch arguments of a start on this platform: those of its package, then those every platform has.
+def all_arguments(platform, module):
+    return [*module.arguments(), *arguments(platform, module)]
+
+
 # The start on this platform: its arguments, then the nodes. A name no package of the image entered halts with
 # PLATFORM_CONFIG.
 def start(context, platform):
     try:
         module = platform_module(platform)
-        declared = [*module.arguments(), *arguments(platform, module)]
+        declared = all_arguments(platform, module)
     except (LookupError, ValueError, OSError) as error:
         text = (f"The image has no platform '{platform}' (platform:=<name> or MOWBITE_PLATFORM), it has "
                 f"{', '.join(layers.platforms()) or 'none'}: {error}.")

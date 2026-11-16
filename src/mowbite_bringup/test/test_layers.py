@@ -16,6 +16,7 @@ LAUNCH = os.path.normpath(os.path.join(HERE, "..", "launch"))
 sys.path.insert(0, LAUNCH)
 import layers  # noqa: E402
 import stack  # noqa: E402
+from stack_probe import start  # noqa: E402,F401
 
 
 STACK_NODES = stack.started(stack.components([], "", "", "127.0.0.1", "1883", ""))
@@ -141,6 +142,13 @@ def test_a_platform_has_what_the_start_asks_for(platform):
     assert module.DRIVER in module.NODES and module.DRIVER_RESTARTS >= 0
     assert callable(module.arguments) and callable(module.parts)
     assert os.path.isfile(layers.geometry(platform))
+
+
+# The check of the parameter files is asked for every node the start builds, so none starts on a value left unset.
+@pytest.mark.parametrize("platform", PLATFORMS)
+def test_the_parameter_check_knows_every_node_of_a_platform(start, platform):  # noqa: F811
+    built = start(platform)
+    assert built.names() and built.names() <= built.checked, built.names() - built.checked
 
 
 @pytest.mark.parametrize("platform", ["", "no_mower", "../tron"])

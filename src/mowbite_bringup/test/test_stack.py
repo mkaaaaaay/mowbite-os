@@ -20,6 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "launch")))
 import layers  # noqa: E402
 import stack  # noqa: E402
+from stack_probe import start  # noqa: E402,F401
 
 LOGGER = logging.getLogger("test_stack")
 
@@ -145,7 +146,7 @@ def test_the_last_end_says_down_with_the_stalled_node(tmp_path, monkeypatch):
     script = tmp_path / "probe.py"
     script.write_text(WATCH_PROBE)
     logged = Lines()
-    actions = stack.restarting(lambda start: ExecuteProcess(cmd=[sys.executable, str(script), str(watch_note)]),
+    actions = stack.restarting(lambda number: ExecuteProcess(cmd=[sys.executable, str(script), str(watch_note)]),
                                str(note), "The container", logged, 1, watch_note=str(watch_note))
     service = LaunchService()
     service.include_launch_description(LaunchDescription(actions))
@@ -165,8 +166,8 @@ def test_a_stable_run_counts_the_crashes_from_zero(tmp_path, monkeypatch):
     times = iter([0, 1, 1, 1 + stack.STABLE_AFTER, 1 + stack.STABLE_AFTER, 2 + stack.STABLE_AFTER])
     starts = []
 
-    def make(start):
-        starts.append(start)
+    def make(number):
+        starts.append(number)
         return ExecuteProcess(cmd=[sys.executable, "-c", "import sys; sys.exit(5)"])
     actions = stack.restarting(make, str(note), "The container", LOGGER, 1, clock=lambda: next(times))
     service = LaunchService()
@@ -213,11 +214,14 @@ def test_the_watch_of_the_container_expects_its_nodes(tmp_path):
 
 
 SRC = os.path.normpath(os.path.join(HERE, "..", ".."))
-# Components that run in a process of their own and not in the container: the driver of each platform.
-OWN_PROCESS = {stack.platform_module(platform).DRIVER for platform in layers.platforms()}
 
 
-def test_every_component_in_the_container_has_its_watch():
+# Every component attaches itself to the watch, but for the driver of each platform.
+def test_every_component_has_its_watch_but_the_drivers(start):  # noqa: F811
+    drivers = set()
+    for platform in layers.platforms():
+        drivers.add(start(platform).node(stack.platform_module(platform).DRIVER)["package"])
+    assert drivers
     seen = set()
     for path in glob.glob(os.path.join(SRC, "*", "src", "*.cpp")):
         text = open(path).read()
@@ -226,7 +230,7 @@ def test_every_component_in_the_container_has_its_watch():
         package = os.path.relpath(path, SRC).split(os.sep)[0]
         seen.add(package)
         calls = len(re.findall(r"mowbite_watch::Attach\(\*this", text))
-        assert calls == (0 if package in OWN_PROCESS else 1), path
+        assert calls == (0 if package in drivers else 1), path
     assert len(seen) >= 14, seen
 
 

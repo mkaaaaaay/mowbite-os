@@ -9,12 +9,12 @@ import sys
 
 import pytest
 from ament_index_python.packages import get_package_share_directory
-from launch import LaunchContext
-from launch_ros.actions import Node
 
-sys.path.insert(0, os.path.join(get_package_share_directory("mowbite_bringup"), "launch"))
+BRINGUP = get_package_share_directory("mowbite_bringup")
+sys.path[:0] = [os.path.join(BRINGUP, "test"), os.path.join(BRINGUP, "launch")]
 import layers  # noqa: E402
 import stack  # noqa: E402
+from stack_probe import start  # noqa: E402,F401
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLATFORM_FILE = os.path.join(HERE, "..", "platform.yaml")
@@ -22,38 +22,15 @@ platform = stack.platform_module("nx60i", os.path.join(HERE, ".."))
 
 
 @pytest.fixture
-def drivers(tmp_path, monkeypatch):
-    """launched(**arguments) starts the stack and gives the parameters of each driver built, by its start number."""
-    made = []
-    starts = []
-
-    class Recorded(Node):
-        def __init__(self, **kwargs):
-            super().__init__(**kwargs)
-            made.append(kwargs["parameters"])
-
-    def restarting(make, note, label, logger, restarts, *args, **kwargs):
-        starts.append((note, label, restarts))
-        return [make(0), make(1)]
-
-    # The data schema needs the installed bridge; here only the driver counts.
-    monkeypatch.setattr(stack, "prepare_data_dir", lambda data_dir, logger: None)
-    monkeypatch.setattr(stack, "restarting", restarting)
-    monkeypatch.setattr(platform, "Node", Recorded)
+def drivers(start, monkeypatch):  # noqa: F811
+    """drivers(**arguments) builds the stack with the files of this tree and gives the parameters of the driver for
+    its first start and for a restart; drivers.starts are the calls of stack.restarting."""
+    monkeypatch.setattr(stack, "restarting", lambda make, *args, **kwargs: [make(0), make(1)])
 
     def launched(**arguments):
-        del made[:]
-        context = LaunchContext()
-        values = {"data_dir": str(tmp_path), "config": layers.STACK, "platform_config": PLATFORM_FILE,
-                  "extra_config": PLATFORM_FILE, "geometry": "geometry.yaml", "driver_params": "driver.yaml",
-                  "datum_lat": "", "datum_long": "", "datum_height": "", "interface": "", "bind_ip": "",
-                  "announcement_port": "", "mqtt_host": "127.0.0.1", "mqtt_port": "1883", "journal_dir": "",
-                  "oom_score_adj": ""}
-        values.update(arguments)
-        context.launch_configurations.update(values)
-        stack.launch_setup(context, "nx60i", platform)
-        return made
-    launched.starts = starts
+        built = start("nx60i", platform, platform_config=PLATFORM_FILE, driver_params="driver.yaml", **arguments)
+        launched.starts = built.restarting
+        return [k["parameters"] for k in built.nodes if k["name"] == platform.DRIVER]
     return launched
 
 

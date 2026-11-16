@@ -36,12 +36,14 @@ no parameter services.
 
 Duties:
 
-- Drive: at most one frame per 100 ms to the board. Without `hw/cmd_vel` for a fixed time: three zero frames 100 ms
-  apart, then none. A heartbeat alone stops nothing.
-- Blade: on only with a lease (`lease_s`), off when it runs out; heights outside the limits of `hw/capabilities` are
-  refused; never on while an emergency is latched. With `blade_height_control` the driver gives its limits and the
-  height it cuts at for `height_mm` 0 (`blade_height_default_mm`); the app then offers `mow_height_mm`, which the logic
-  sends at each start of the blade. Without it the logic always sends 0.
+- Drive: `hw/cmd_vel` goes on to the board as it comes, at most one frame per 100 ms. Without `hw/cmd_vel` for the
+  `cmd_vel_timeout` of your driver (0.5 s at most): three zero frames 100 ms apart, then none. A heartbeat alone stops
+  nothing.
+- Blade: on only with a lease (`lease_s`), off when it runs out, told to the board at least three times; heights
+  outside the limits of `hw/capabilities` are refused; never on while an emergency is latched. With
+  `blade_height_control` the driver gives its limits and the height it cuts at for `height_mm` 0
+  (`blade_height_default_mm`); the app then offers `mow_height_mm`, which the logic sends at each start of the blade.
+  Without it the logic always sends 0.
 - Emergency: reason bits numbered like the EMERGENCY event; stop button and lift stay latched until a release. The host
   latches only its own bits (`kHostLatchReasons` in `mowbite_hold/restart.h`). A release waits a short window for the
   flags to drop; a new reason within it ends the window without releasing.
@@ -74,9 +76,29 @@ Duties:
 ## 2. Fake board
 
 A fake board on a pty or a socket, so driver, logic and app run without the mower: see `mowbite_sim/scripts/fake_tron`
-and `fake_xcore`. Then a contract test like `mowbite_sim/test/test_hw_contract.py` with your driver and your fake. It
-checks capabilities, status, the frame rate, the watchdog, the blade lease, the emergency and its release.
-`test_hw_start.py` checks the start time of a driver that has one.
+and `fake_xcore`. In `mowbite_sim` a new mower adds: its fake in `scripts/` (and in `install(PROGRAMS ...)` of
+`CMakeLists.txt`), a `test_depend` on its platform package in `package.xml`, and its case in the driver contract,
+`test/contract_<platform>.py` with a class `Case` like `contract_tron.py`. The case starts your fake and your driver
+with the values your platform ships, presses stop and lifts the mower at the fake and reads the drive and blade
+commands the fake got; what it has to offer is listed at the top of `test_driver_contract.py`. That test runs once per
+case (`MOWBITE_PLATFORM=<platform>`), a platform without a case fails `test_config_consistency.py`, and it checks
+through `hw/*` alone:
+
+- `a` capabilities latched and complete, `platform` as in the geometry file
+- `b` status healthy, wheel odometry there
+- `c` drive passed on and cut to `max_linear_speed`; after `cmd_vel_timeout` without `hw/cmd_vel`: three stops
+  100 ms apart, then nothing
+- `d` blade off when its lease runs out, told three times
+- `e` blade stays on while the lease is renewed
+- `f` blade requests outside lease, height or speed refused
+- `g` an emergency of the host blocks blade and drive
+- `h` stop and `i` lift stay latched until the release
+- `j` the host latches with its own bits only
+- `k` a hold blocks blade and drive without an emergency
+
+What only your board has (frames, configuration, restarts, firmware) goes into a test of its own like
+`test_hw_contract.py` (Tron) and `test_xcore_contract.py`. `test_hw_start.py` checks the start time of a driver that
+has one.
 
 ## 3. Dimensions and settings
 
@@ -487,7 +509,8 @@ Around `mowbite_camera`:
 - [ ] Driver package: protocol code with gtests, build without warnings
 - [ ] clang-tidy without findings in the package (`.clang-tidy` of the repo)
 - [ ] Every node registered with `mowbite_component_register` and built on `StartupOnly(options)`
-- [ ] Fake board, contract test passes, the start test too where the driver has a start time
+- [ ] Fake board, `test_driver_contract.py` passes with your case, the start test too where the driver has a start
+      time
 - [ ] Platform package: `geometry.yaml`, `platform.yaml` with inherited values checked, `platform.py`, the name in the
       ament index; `test_layers.py` green with it
 - [ ] `gnss_receiver_time` only with UTC from the receiver; `rtc` of `mowbite_clock` only after the measurement
