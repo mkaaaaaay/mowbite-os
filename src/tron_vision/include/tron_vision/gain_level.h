@@ -56,8 +56,29 @@ GainWishState NextGainWish(const GainWishState& state, double now_s, float luma,
 // The line of the wish file: level, monotonic clock and wall clock in seconds.
 std::string GainWishLine(GainLevel level, double monotonic_s, double unix_s);
 
+// Writes that line to `path` through a temporary file beside it; makes the directory of the file if it is missing.
+bool WriteGainWish(const std::string& path, GainLevel level, double monotonic_s, double unix_s, std::string& error);
+
 // The level in the first field of such a line; false for anything else.
 bool GainLevelFromLine(const std::string& line, GainLevel& level);
+
+// An exclusive flock on a file that another program makes, tried for at most `wait_s` and held until the object goes.
+// Without a path or without the file it counts as held: then nobody else holds it either.
+class FileLock {
+ public:
+  FileLock(const std::string& path, double wait_s);
+  ~FileLock();
+  FileLock(const FileLock&) = delete;
+  FileLock& operator=(const FileLock&) = delete;
+
+  bool held() const {
+    return held_;
+  }
+
+ private:
+  int fd_ = -1;
+  bool held_ = false;
+};
 
 }  // namespace tron_vision
 

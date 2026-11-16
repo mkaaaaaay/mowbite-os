@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
+#include "test_util.h"
 #include "tron_vision/gain_level.h"
+#include "tron_vision/text_file.h"
 
 namespace tron_vision {
 namespace {
@@ -168,6 +171,43 @@ TEST(GainWish, AClockThatJumpsBackCountsAsAGap) {
   GainWishState state = Feed({}, 100.0, 15, 60.0F);
   state = Feed(state, 50.0, 20, 60.0F);
   EXPECT_EQ(state.level, GainLevel::kDay);
+}
+
+TEST(GainWishFile, IsWrittenWholeIntoADirectoryItMakes) {
+  test::TempDir dir;
+  const std::string path = dir.Path() + "/gain/wish";
+  std::string error;
+  ASSERT_TRUE(WriteGainWish(path, GainLevel::kDusk, 12.5, 1794800000.0, error)) << error;
+  EXPECT_EQ(FirstLine(path), "dusk 12.500 1794800000.000");
+  ASSERT_TRUE(WriteGainWish(path, GainLevel::kNight, 22.5, 1794800010.0, error)) << error;
+  EXPECT_EQ(FirstLine(path), "night 22.500 1794800010.000");
+  EXPECT_FALSE(std::filesystem::exists(dir.Path() + "/gain/wish.tmp"));
+}
+
+TEST(GainWishFile, SaysWhyItCouldNotBeWritten) {
+  test::TempDir dir;
+  dir.Write("gain", "no directory\n");
+  std::string error;
+  EXPECT_FALSE(WriteGainWish(dir.Path() + "/gain/wish", GainLevel::kDay, 1.0, 2.0, error));
+  EXPECT_NE(error.find("gain"), std::string::npos) << error;
+}
+
+TEST(FileLock, CountsAsHeldWithoutAFile) {
+  test::TempDir dir;
+  EXPECT_TRUE(FileLock("", 0.0).held());
+  EXPECT_TRUE(FileLock(dir.Path() + "/none", 0.0).held());
+}
+
+TEST(FileLock, IsNotHeldWhileAnotherHoldsIt) {
+  test::TempDir dir;
+  dir.Write("lock", "");
+  const std::string path = dir.Path() + "/lock";
+  {
+    const FileLock first(path, 0.0);
+    EXPECT_TRUE(first.held());
+    EXPECT_FALSE(FileLock(path, 0.03).held());
+  }
+  EXPECT_TRUE(FileLock(path, 0.0).held());
 }
 
 }  // namespace

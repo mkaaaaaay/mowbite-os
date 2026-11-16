@@ -10,6 +10,7 @@
 #include "tron_vision/budget.h"
 #include "tron_vision/crash_guard.h"
 #include "tron_vision/frame_recorder.h"
+#include "tron_vision/gain_level.h"
 #include "tron_vision/h264_encoder.h"
 #include "tron_vision/h264_stream.h"
 #include "tron_vision/jpeg_luma.h"
@@ -56,6 +57,16 @@ struct StereoConfig {
   // max_bytes 0. It records only while a viewer holds the stream.
   RecordLimits record = {"", 0, 3600.0, 0.07};
   int record_quality = 92;
+  // Where the gain level is wished for by the luma of the frames of a stream, written anew every gain_wish_s with
+  // the clock of the loop, which must be CLOCK_MONOTONIC; empty: no wish and no lock. The setup of the platform sets
+  // the level (tron-stereo-ae watch), names it in gain_level_file and holds gain_lock_file while it writes
+  // registers; the loop holds that lock while a stream starts or stops, waiting for it at most gain_lock_wait_s.
+  std::string gain_wish_file;
+  std::string gain_level_file = "/run/mowbite/stereo-level";
+  std::string gain_lock_file = "/run/mowbite/stereo.lock";
+  double gain_wish_s = 10.0;
+  double gain_lock_wait_s = 0.5;
+  GainWishLimits gain;
 };
 
 // The mower as the last message on hw/status gave it.
@@ -114,6 +125,11 @@ struct StereoStatus {
   uint64_t lost = 0;
   // Why the recording ended; empty while it runs or is off.
   std::string record_error;
+  // The gain level wished for and the mean luma of the last second of frames it came from; empty without a wish.
+  std::string gain_level;
+  float luma = 0.0F;
+  // Why the last wish could not be written; empty after one that could.
+  std::string gain_error;
   int exit_code = kExitNone;
 };
 
@@ -177,6 +193,12 @@ class StereoLoop {
   void SendFrame(const CapturedFrame& frame);
   // Keeps the frame when one is due, after it went to the viewer.
   void Record(const CapturedFrame& frame);
+  // Writes the wish when it is due.
+  void StepGainWish(double now);
+  // Takes the luma of a frame of the stream; once a second of frames is full the wish follows it.
+  void AddLuma(const CapturedFrame& frame, double now);
+  // The lock file while a wish is on, else none.
+  std::string GainLock() const;
   void StopStream();
   // Notes that the camera gave no picture, which holds for this boot.
   void FailForThisBoot(StereoState state, const std::string& detail);
@@ -213,6 +235,12 @@ class StereoLoop {
   FrameRecorder recorder_;
   YuyvGrayJpeg record_jpeg_;
   std::vector<uint8_t> record_image_;
+  GainWishState gain_;
+  bool gain_started_ = false;
+  double next_wish_ = 0.0;
+  double luma_sum_ = 0.0;
+  int luma_frames_ = 0;
+  double luma_from_ = 0.0;
 };
 
 }  // namespace tron_vision

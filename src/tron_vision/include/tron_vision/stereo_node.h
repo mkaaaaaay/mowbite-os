@@ -74,6 +74,8 @@ class StereoNode : public rclcpp::Node {
   LogGate log_gate_{60.0};
   std::string reported_state_;
   std::string logged_record_;
+  std::string logged_gain_;
+  std::string logged_gain_error_;
   double next_report_ = 0.0;
   std::atomic<int> exit_code_{0};
   std::atomic<bool> running_{true};

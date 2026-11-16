@@ -1,8 +1,16 @@
 #include "tron_vision/gain_level.h"
 
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <algorithm>
+#include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
 
 namespace tron_vision {
 namespace {
@@ -99,6 +107,51 @@ std::string GainWishLine(GainLevel level, double monotonic_s, double unix_s) {
 
 bool GainLevelFromLine(const std::string& line, GainLevel& level) {
   return GainLevelFromName(line.substr(0, line.find(' ')), level);
+}
+
+bool WriteGainWish(const std::string& path, GainLevel level, double monotonic_s, double unix_s, std::string& error) {
+  const size_t slash = path.rfind('/');
+  if (slash != std::string::npos && slash > 0 && mkdir(path.substr(0, slash).c_str(), 0755) != 0 && errno != EEXIST) {
+    error = path.substr(0, slash) + ": " + std::strerror(errno);
+    return false;
+  }
+  const std::string temporary = path + ".tmp";
+  const std::string line = GainWishLine(level, monotonic_s, unix_s);
+  const int fd = open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+  if (fd < 0) {
+    error = temporary + ": " + std::strerror(errno);
+    return false;
+  }
+  const bool written = write(fd, line.data(), line.size()) == static_cast<ssize_t>(line.size());
+  const int write_errno = errno;
+  close(fd);
+  if (!written || rename(temporary.c_str(), path.c_str()) != 0) {
+    error = path + ": " + std::strerror(written ? errno : write_errno);
+    unlink(temporary.c_str());
+    return false;
+  }
+  return true;
+}
+
+FileLock::FileLock(const std::string& path, double wait_s) {
+  if (path.empty()) {
+    held_ = true;
+    return;
+  }
+  fd_ = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd_ < 0) {
+    held_ = true;
+    return;
+  }
+  const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(wait_s);
+  while (!(held_ = flock(fd_, LOCK_EX | LOCK_NB) == 0) && std::chrono::steady_clock::now() < until) {
+    usleep(10000);
+  }
+}
+
+FileLock::~FileLock() {
+  // Closing lets the lock go.
+  if (fd_ >= 0) close(fd_);
 }
 
 }  // namespace tron_vision

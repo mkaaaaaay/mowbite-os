@@ -63,6 +63,18 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   if (config.stream_while_mowing) RCLCPP_WARN(get_logger(), "stream_while_mowing: the stream runs next to the blade");
   const std::string library = declare_parameter("encoder_library", DefaultEncoderLibrary());
   ReadRecordLimits(*this, kRecordDir, config.record);
+  // A wrong value, also one of the wrong type, leaves the wish off and the camera goes on.
+  const rclcpp::ParameterValue wish = AnyType(*this, "gain_wish_file", rclcpp::ParameterValue(std::string()));
+  if (wish.get_type() != rclcpp::ParameterType::PARAMETER_STRING) {
+    RCLCPP_WARN(get_logger(), "No gain wish: gain_wish_file is not a string");
+  } else if (const std::string& file = wish.get<std::string>(); file.empty()) {
+    // Off.
+  } else if (file.rfind("/run/", 0) != 0 || file.find("..") != std::string::npos) {
+    RCLCPP_WARN(get_logger(), "No gain wish: gain_wish_file %s is not below /run", file.c_str());
+  } else {
+    config.gain_wish_file = file;
+    RCLCPP_INFO(get_logger(), "Gain level wished for in %s", file.c_str());
+  }
 
   StereoCameraConfig camera;
   camera.capture_device = declare_parameter("capture_device", camera.capture_device);
@@ -151,6 +163,14 @@ void StereoNode::Run() {
     if (status.record_error != logged_record_) {
       logged_record_ = status.record_error;
       RCLCPP_WARN(get_logger(), "%s", logged_record_.c_str());
+    }
+    if (status.gain_level != logged_gain_) {
+      logged_gain_ = status.gain_level;
+      RCLCPP_INFO(get_logger(), "Gain level %s wished for, mean luma %.0f", logged_gain_.c_str(), status.luma);
+    }
+    if (status.gain_error != logged_gain_error_) {
+      logged_gain_error_ = status.gain_error;
+      if (!logged_gain_error_.empty()) RCLCPP_WARN(get_logger(), "Gain wish: %s", logged_gain_error_.c_str());
     }
     PublishCamera(status);
     Report(status, MonotonicSeconds());

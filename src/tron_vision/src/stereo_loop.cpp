@@ -151,6 +151,7 @@ bool StereoLoop::Step() {
   if (status_.exit_code != kExitNone) return false;
   const double now = now_();
   if (!CheckBudget(now)) return false;
+  StepGainWish(now);
   switch (phase_) {
     case Phase::kInit: {
       std::string text;
@@ -245,6 +246,11 @@ void StereoLoop::StartSelftest(double now) {
   }
   if (!guard_.MayStream(config_.camera_id, text)) {
     End(StereoState::kLocked, text);
+    return;
+  }
+  const FileLock lock(GainLock(), config_.gain_lock_wait_s);
+  if (!lock.held()) {
+    if (status_.state != StereoState::kWaitingIdle) Set(StereoState::kWaitingIdle, "the gain level is being set");
     return;
   }
   if (!camera_.Open(text)) {
@@ -373,6 +379,13 @@ void StereoLoop::StartStream(double now) {
     End(StereoState::kLocked, text);
     return;
   }
+  const FileLock lock(GainLock(), config_.gain_lock_wait_s);
+  if (!lock.held()) {
+    // The viewer comes again on its own.
+    server_.DropClient();
+    Set(StereoState::kReady, "the gain level is being set");
+    return;
+  }
   if (!stream_.Begin(text)) {
     server_.DropClient();
     if (CountFailure(encoder_failures_, now)) {
@@ -407,11 +420,14 @@ void StereoLoop::StartStream(double now) {
   stream_start_ = now;
   last_frame_ = -1.0;
   have_sequence_ = false;
+  luma_frames_ = 0;
   Set(StereoState::kStreaming, "");
   phase_ = Phase::kStream;
 }
 
 void StereoLoop::StopStream() {
+  // Without the lock in time the stream stops all the same.
+  const FileLock lock(streaming_ ? GainLock() : std::string(), config_.gain_lock_wait_s);
   // The stream ends first; the encoder lets go of the buffers before the camera frees them.
   camera_.Stop();
   stream_.End();
@@ -457,7 +473,49 @@ void StereoLoop::StepStream(double now) {
   if (have_sequence_ && frame.sequence > last_sequence_ + 1) status_.lost += frame.sequence - last_sequence_ - 1;
   have_sequence_ = true;
   last_sequence_ = frame.sequence;
+  AddLuma(frame, last_frame_);
   SendFrame(frame);
+}
+
+std::string StereoLoop::GainLock() const {
+  return config_.gain_wish_file.empty() ? std::string() : config_.gain_lock_file;
+}
+
+void StereoLoop::StepGainWish(double now) {
+  if (config_.gain_wish_file.empty()) return;
+  if (!gain_started_) {
+    gain_started_ = true;
+    // The level the setup holds from before this process; day without one.
+    GainLevelFromLine(FirstLine(config_.gain_level_file), gain_.level);
+    status_.gain_level = GainLevelName(gain_.level);
+  }
+  if (now < next_wish_) return;
+  next_wish_ = now + config_.gain_wish_s;
+  status_.gain_error.clear();
+  WriteGainWish(config_.gain_wish_file, gain_.level, now, UnixSeconds(), status_.gain_error);
+}
+
+void StereoLoop::AddLuma(const CapturedFrame& frame, double now) {
+  const uint32_t line_bytes = config_.encoder.line_bytes;
+  const uint32_t lines = config_.encoder.lines;
+  if (config_.gain_wish_file.empty() || frame.data == nullptr ||
+      frame.bytes < static_cast<size_t>(line_bytes) * lines) {
+    return;
+  }
+  if (luma_frames_++ == 0) {
+    luma_from_ = now;
+    luma_sum_ = 0.0;
+  }
+  luma_sum_ += MeanLumaLeft(frame.data, line_bytes / 2, lines, line_bytes);
+  if (now - luma_from_ < 1.0) return;
+  status_.luma = static_cast<float>(luma_sum_ / luma_frames_);
+  luma_frames_ = 0;
+  const GainLevel before = gain_.level;
+  gain_ = NextGainWish(gain_, now, status_.luma, config_.gain);
+  if (gain_.level == before) return;
+  status_.gain_level = GainLevelName(gain_.level);
+  // Written with the next step.
+  next_wish_ = now;
 }
 
 void StereoLoop::SendFrame(const CapturedFrame& frame) {

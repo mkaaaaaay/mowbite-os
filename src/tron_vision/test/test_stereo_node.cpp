@@ -415,27 +415,39 @@ TEST_F(StereoNodeTest, LoopThatHangsEndsTheProcess) {
       ::testing::ExitedWithCode(mowbite_watch::kExitCode), "tron_stereo_loop silent");
 }
 
-// The recording is off by default and stays below /run; a value of the wrong type leaves it off and the node runs.
-TEST_F(StereoNodeTest, RecordingOffByDefaultAndSurvivesWrongValues) {
+// The recording and the gain wish are off by default and stay below /run; a value of the wrong type leaves them off
+// and the node runs. One list for both: the watch of a process has places for a few nodes only.
+TEST_F(StereoNodeTest, RecordingAndGainWishOffByDefaultAndSurviveWrongValues) {
   struct Case {
     std::vector<rclcpp::Parameter> set;
     size_t expect_bytes;
+    std::string expect_wish;
   };
+  const std::string wish = "/run/mowbite-os/stereo-gain/wish";
   const std::vector<Case> cases = {
-      {{}, 0},
-      {{{"record_max_mb", 250}}, 250UL << 20},
-      {{{"record_max_mb", 250.0}, {"record_keep_min", 30}, {"record_interval_s", 1}}, 250UL << 20},
-      {{{"record_max_mb", 301}}, 0},
-      {{{"record_max_mb", 250}, {"record_dir", "/userdata/stereo-record"}}, 0},
-      {{{"record_max_mb", "250"}}, 0},
-      {{{"record_max_mb", 250}, {"record_interval_s", "fast"}}, 0},
+      {{}, 0, ""},
+      {{{"record_max_mb", 250}, {"gain_wish_file", wish}}, 250UL << 20, wish},
+      {{{"record_max_mb", 250.0}, {"record_keep_min", 30}, {"record_interval_s", 1}, {"gain_wish_file", ""}},
+       250UL << 20,
+       ""},
+      {{{"record_max_mb", 301}, {"gain_wish_file", "/userdata/wish"}}, 0, ""},
+      {{{"record_max_mb", 250}, {"record_dir", "/userdata/stereo-record"}, {"gain_wish_file", "/run/../etc/wish"}},
+       0,
+       ""},
+      {{{"record_max_mb", "250"}, {"gain_wish_file", 1}}, 0, ""},
+      {{{"record_max_mb", 250}, {"record_interval_s", "fast"}, {"gain_wish_file", true}}, 0, ""},
   };
   for (size_t i = 0; i < cases.size(); i++) {
     Rig rig;
     RecordLimits seen;
-    rig.seams.adjust = [&seen, adjust = rig.seams.adjust](StereoConfig& config, StereoCameraConfig& camera) {
+    std::string seen_wish = "unset";
+    rig.seams.adjust = [&seen, &seen_wish, adjust = rig.seams.adjust](StereoConfig& config,
+                                                                      StereoCameraConfig& camera) {
       adjust(config, camera);
       seen = config.record;
+      seen_wish = config.gain_wish_file;
+      // The node of the test writes no wish.
+      config.gain_wish_file.clear();
     };
     rclcpp::NodeOptions options = Options(rig.dir.Path() + "/markers", rig.port, FAKE_MPP_LIB);
     for (const rclcpp::Parameter& p : cases[i].set) {
@@ -443,6 +455,7 @@ TEST_F(StereoNodeTest, RecordingOffByDefaultAndSurvivesWrongValues) {
     }
     EXPECT_NO_THROW(StereoNode node(options, rig.seams)) << i;
     EXPECT_EQ(seen.max_bytes, cases[i].expect_bytes) << i;
+    EXPECT_EQ(seen_wish, cases[i].expect_wish) << i;
     if (cases[i].expect_bytes > 0) {
       EXPECT_EQ(seen.dir, "/run/mowbite-os/stereo-record") << i;
     }

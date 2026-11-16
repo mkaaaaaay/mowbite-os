@@ -1,4 +1,7 @@
+#include <fcntl.h>
 #include <gtest/gtest.h>
+#include <sys/file.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -880,6 +883,155 @@ TEST(StereoLoop, ShutdownEndsTheStream) {
   EXPECT_FALSE(rig.camera.streaming);
   EXPECT_FALSE(rig.camera.open);
   EXPECT_EQ(rig.Marker("stream-stereo"), "");
+}
+
+// A picture of one gray value.
+std::vector<uint8_t> FlatPicture(uint8_t luma) {
+  std::vector<uint8_t> yuyv(2560 * 480, 128);
+  for (size_t i = 0; i < yuyv.size(); i += 2) yuyv[i] = luma;
+  return yuyv;
+}
+
+// The rig with the gain wish on, its files in the directory of the test.
+void WithGainWish(Rig& rig) {
+  rig.config.gain_wish_file = rig.dir.Path() + "/gain/wish";
+  rig.config.gain_level_file = rig.dir.Path() + "/stereo-level";
+  rig.config.gain_lock_file = rig.dir.Path() + "/stereo.lock";
+  rig.config.gain_lock_wait_s = 0.03;
+  rig.config.stream_while_mowing = true;
+}
+
+// Holds the lock the way the setup of the platform does, until it goes.
+struct HeldLock {
+  explicit HeldLock(const std::string& path) : fd(open(path.c_str(), O_RDWR | O_CREAT, 0644)) {
+    flock(fd, LOCK_EX);
+  }
+  ~HeldLock() {
+    close(fd);
+  }
+  int fd;
+};
+
+TEST(StereoLoop, NoGainWishUnlessSetSo) {
+  Rig rig;
+  rig.camera.pixels = FlatPicture(40);
+  rig.Ready();
+  Client client(rig.server.Port());
+  ASSERT_TRUE(rig.Play(client));
+  rig.Steps(600);
+  EXPECT_EQ(rig.loop->Status().gain_level, "");
+  EXPECT_FALSE(std::filesystem::exists(rig.dir.Path() + "/gain"));
+}
+
+TEST(StereoLoop, WishesForDayFromTheStartAndWritesItAnew) {
+  Rig rig;
+  WithGainWish(rig);
+  rig.Ready();
+  EXPECT_EQ(rig.loop->Status().gain_level, "day");
+  EXPECT_EQ(ReadFile(rig.config.gain_wish_file).rfind("day 10", 0), 0U);
+  rig.clock = 2000.0;
+  rig.Steps(1);
+  const std::string first = ReadFile(rig.config.gain_wish_file);
+  EXPECT_EQ(first.rfind("day 2000.000 ", 0), 0U) << first;
+  rig.clock += 9.0;
+  rig.Steps(1);
+  EXPECT_EQ(ReadFile(rig.config.gain_wish_file), first);
+  rig.clock += 1.5;
+  rig.Steps(1);
+  EXPECT_EQ(ReadFile(rig.config.gain_wish_file).rfind("day 2010.500 ", 0), 0U);
+  EXPECT_FALSE(std::filesystem::exists(rig.config.gain_wish_file + ".tmp"));
+  EXPECT_EQ(rig.loop->Status().gain_error, "");
+}
+
+TEST(StereoLoop, StartsFromTheLevelTheSetupHolds) {
+  Rig rig;
+  WithGainWish(rig);
+  rig.dir.Write("stereo-level", "night 12.000 1794800000.000\n");
+  rig.Ready();
+  EXPECT_EQ(rig.loop->Status().gain_level, "night");
+  EXPECT_EQ(ReadFile(rig.config.gain_wish_file).rfind("night ", 0), 0U);
+}
+
+TEST(StereoLoop, ADarkStreamWishesForTheNextLevel) {
+  Rig rig;
+  WithGainWish(rig);
+  rig.camera.pixels = FlatPicture(40);
+  rig.Ready();
+  Client client(rig.server.Port());
+  ASSERT_TRUE(rig.Play(client));
+  // Frames come every 42 ms: 19 s of them.
+  rig.Steps(452, true, true);
+  EXPECT_EQ(rig.loop->Status().gain_level, "day");
+  EXPECT_NEAR(rig.loop->Status().luma, 40.0F, 0.01F);
+  rig.Steps(120, true, true);
+  EXPECT_EQ(rig.loop->Status().gain_level, "dusk");
+  EXPECT_EQ(ReadFile(rig.config.gain_wish_file).rfind("dusk ", 0), 0U);
+  // The level is not there yet: the picture stays dark and the wish goes on to night.
+  rig.Steps(650, true, true);
+  EXPECT_EQ(rig.loop->Status().gain_level, "night");
+}
+
+TEST(StereoLoop, ABrightStreamKeepsDay) {
+  Rig rig;
+  WithGainWish(rig);
+  rig.camera.pixels = FlatPicture(145);
+  rig.Ready();
+  Client client(rig.server.Port());
+  ASSERT_TRUE(rig.Play(client));
+  rig.Steps(1500, true, true);
+  EXPECT_EQ(rig.loop->Status().gain_level, "day");
+  EXPECT_NEAR(rig.loop->Status().luma, 145.0F, 0.01F);
+}
+
+TEST(StereoLoop, NoStreamStartsWhileTheGainLevelIsBeingSet) {
+  Rig rig;
+  WithGainWish(rig);
+  rig.Configured();
+  rig.Make();
+  {
+    const HeldLock held(rig.config.gain_lock_file);
+    rig.Steps(40);
+    EXPECT_EQ(rig.State(), StereoState::kWaitingIdle);
+    EXPECT_EQ(rig.loop->Status().detail, "the gain level is being set");
+    EXPECT_EQ(rig.camera.calls, "");
+  }
+  rig.Steps(40);
+  ASSERT_EQ(rig.State(), StereoState::kReady) << rig.loop->Status().detail;
+  {
+    const HeldLock held(rig.config.gain_lock_file);
+    Client client(rig.server.Port());
+    EXPECT_FALSE(rig.Play(client));
+    EXPECT_EQ(rig.State(), StereoState::kReady);
+    EXPECT_EQ(rig.loop->Status().detail, "the gain level is being set");
+    EXPECT_EQ(rig.camera.starts, 1);
+  }
+  Client client(rig.server.Port());
+  EXPECT_TRUE(rig.Play(client));
+}
+
+TEST(StereoLoop, TheStreamStopsEvenWithTheLockHeld) {
+  Rig rig;
+  WithGainWish(rig);
+  rig.Ready();
+  {
+    Client client(rig.server.Port());
+    ASSERT_TRUE(rig.Play(client));
+    rig.Steps(5);
+  }
+  const HeldLock held(rig.config.gain_lock_file);
+  rig.Steps(3);
+  EXPECT_EQ(rig.State(), StereoState::kReady);
+  EXPECT_FALSE(rig.camera.streaming);
+}
+
+TEST(StereoLoop, AWishThatCannotBeWrittenIsSaidAndTheStreamGoesOn) {
+  Rig rig;
+  WithGainWish(rig);
+  rig.dir.Write("gain", "a file where the directory would be\n");
+  rig.Ready();
+  EXPECT_NE(rig.loop->Status().gain_error, "");
+  Client client(rig.server.Port());
+  EXPECT_TRUE(rig.Play(client));
 }
 
 }  // namespace
