@@ -213,11 +213,12 @@ class FollowerNode : public rclcpp::Node {
     // The path keeps its share of max_angular when the driver allows less.
     v.turn_rate *= config.max_angular / follower_config_.max_angular;
     // Faster turns on the spot only in the map: in the station frame the marker has to stay in view.
-    config.spot_max_angular = goal->frame == FollowPath::Goal::FRAME_DOCK || config.spot_max_angular <= 0
+    const bool dock = goal->frame == FollowPath::Goal::FRAME_DOCK;
+    config.spot_max_angular = dock || config.spot_max_angular <= 0
                                   ? config.max_angular
                                   : std::min(config.spot_max_angular, driver_max_angular_);
     // In the station frame turns stay as commanded: the pose there comes from the marker, not from the gyro alone.
-    if (goal->frame == FollowPath::Goal::FRAME_DOCK) config.turn_feedback = 0;
+    if (dock) config.turn_feedback = 0;
     config.stall_time = goal->stall_time > 0 ? goal->stall_time : 0.0;
     config.straight = goal->straight;
     config.reverse = goal->reverse;

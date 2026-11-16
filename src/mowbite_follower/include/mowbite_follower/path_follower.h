@@ -143,11 +143,11 @@ class PathFollower {
   double phase_start_ = 0;
   double speed_ = 0;
   double step_dt_ = 0;
-  // Of the turn on the spot going on: the heading of the last step, its command, and both rates smoothed alike.
+  // Of the turn on the spot going on: the heading of the last step, its command, and the rad/s the turn stayed
+  // behind the commands, smoothed.
   std::optional<double> turn_heading_;
   double turn_command_ = 0;
-  double turn_expected_ = 0;
-  double turn_measured_ = 0;
+  double turn_missing_ = 0;
   std::optional<Pose2> still_at_;
   double still_since_ = 0;
   double progress_along_ = 0;

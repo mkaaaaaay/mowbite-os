@@ -17,8 +17,8 @@ constexpr double kMoved = 0.05;
 // A straight path: every pose within this many m of the line and facing along it within this many rad.
 constexpr double kStraightOffset = 0.01;
 constexpr double kStraightAngle = 2.0 * M_PI / 180.0;
-// s the command of a turn on the spot and the turn of the heading are smoothed over to compare them, and the rad/s a
-// step of the heading counts as at most (a heading set anew is no turn).
+// s the difference of the command of a turn on the spot and the turn of the heading is smoothed over, and the rad/s
+// a step of the heading counts as at most (a heading set anew is no turn).
 constexpr double kTurnFilterS = 0.15;
 constexpr double kMaxTurnRate = 2.0;
 
@@ -88,8 +88,8 @@ std::string PathFollower::Start(const std::vector<Pose2>& poses, const std::vect
 
 PathFollower::Command PathFollower::Step(const Pose2& pose, double dt) {
   if (phase_ == Phase::kIdle || phase_ == Phase::kDone || phase_ == Phase::kFailed) return {};
-  time_ += std::clamp(dt, 0.0, 0.2);
   step_dt_ = std::clamp(dt, 0.0, 0.2);
+  time_ += step_dt_;
   const Pose2 travel = Travel(pose);
   if (!begun_) {
     begun_ = true;
@@ -251,16 +251,13 @@ std::optional<PathFollower::Command> PathFollower::TurnTowards(double heading, d
 
 double PathFollower::TurnBoost(double heading, double sign) {
   if (turn_heading_ && step_dt_ > 0) {
-    // The last command and the turn it made, through the same filter: a mower that follows shows no difference.
-    const double share = std::min(1.0, step_dt_ / kTurnFilterS);
+    // What the turn since the last step stayed behind its command, smoothed: a mower that follows shows none.
     const double turned = std::clamp(NormalizeAngle(heading - *turn_heading_) / step_dt_, -kMaxTurnRate, kMaxTurnRate);
-    turn_expected_ += (turn_command_ - turn_expected_) * share;
-    turn_measured_ += (turned - turn_measured_) * share;
+    turn_missing_ += (turn_command_ - turned - turn_missing_) * std::min(1.0, step_dt_ / kTurnFilterS);
   }
   turn_heading_ = heading;
   if (!(config_.turn_feedback > 0) || !(config_.turn_feedback_max > 0)) return 0.0;
-  const double missing = std::max(0.0, sign * (turn_expected_ - turn_measured_));
-  return std::min(config_.turn_feedback * missing, config_.turn_feedback_max);
+  return std::min(config_.turn_feedback * std::max(0.0, sign * turn_missing_), config_.turn_feedback_max);
 }
 
 void PathFollower::Enter(Phase phase) {
@@ -271,7 +268,7 @@ void PathFollower::Enter(Phase phase) {
   if (phase == Phase::kFollowing || Turning(phase)) still_at_.reset();
   if (Turning(phase)) speed_ = 0;
   turn_heading_.reset();
-  turn_command_ = turn_expected_ = turn_measured_ = 0;
+  turn_command_ = turn_missing_ = 0;
   phase_ = phase;
   phase_start_ = time_;
 }
