@@ -168,7 +168,10 @@ class CalibrationNode : public rclcpp::Node {
       : rclcpp::Node("mowbite_calibration", mowbite_component::StartupOnly(options)), program_(ProgramConfig()) {
     ProgramConfig config;
     config.spin_rate = declare_parameter("spin_rate", config.spin_rate);
-    if (!(config.spin_rate > 0)) throw std::invalid_argument("mowbite_calibration: spin_rate above 0 needed");
+    config.turn_min_ratio = declare_parameter("turn_min_ratio", config.turn_min_ratio);
+    if (!(config.spin_rate > 0) || !(config.turn_min_ratio > 0 && config.turn_min_ratio < 1)) {
+      throw std::invalid_argument("mowbite_calibration: spin_rate above 0 and turn_min_ratio between 0 and 1 needed");
+    }
     program_ = Program(config);
     data_dir_ = declare_parameter("data_dir", std::string());
     software_ = declare_parameter("software_version", std::string());

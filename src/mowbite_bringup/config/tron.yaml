@@ -277,9 +277,11 @@ mowbite_logic:
 mowbite_calibration:
   ros__parameters:
     # rad/s of the turns on the spot of the calibration drive, within the limit of the driver. At 0.3 (0.06 m/s per
-    # wheel, at their dead band) the Tron turned in jerks between 0.04 and 0.46 rad/s (16.11.); 0.5 is 0.10 m/s per
-    # wheel (assumption, to be measured).
-    spin_rate: 0.5
+    # wheel, where they stick) the Tron turned in jerks between 0.04 and 0.46 rad/s; from 0.41 to 0.67 the wheels slipped
+    # by a third on wet lawn (16.11.). 0.4 is 0.08 m/s per wheel, the least the vendor turns at.
+    spin_rate: 0.4
+    # NOT_TURNING below this share of spin_rate on average: slipping wheels are no dead zone.
+    turn_min_ratio: 0.5
 
 mowbite_follower:
   ros__parameters:
@@ -297,8 +299,9 @@ mowbite_follower:
     spot_max_angular: 0.7
     turn_deceleration: 1.0
     # On the spot the Tron turned at 0.81 of what its wheels reported and 0.61 of the command (mowing, 15.11.): what
-    # the heading stays behind the command comes on top, up to 0.2 rad/s (assumption), within spot_max_angular.
-    turn_feedback: 1.0
+    # the heading stays behind the command could come on top (turn_feedback 1.0, up to turn_feedback_max rad/s, within
+    # spot_max_angular). Off until measured: fast turns slipped more than slow ones on wet lawn (16.11.).
+    turn_feedback: 0.0
     turn_feedback_max: 0.2
     acceleration: 0.5
     deceleration: 0.8

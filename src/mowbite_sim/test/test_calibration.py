@@ -4,7 +4,7 @@ purpose: wheel speeds reported 6 % short (ticks_per_m 940 against 1000), 0.395 m
 pitch on ground that rises 3 deg, RTK noise of 1 cm and 0.1 s of delay, wheels that stand below 0.05 m/s. The planner
 evaluates the recording (planner.calib.evaluate): the drive ends done with its values.
 
-Checks calibration.check, a whole drive (phase events, forward only, at most 0.3 m/s and 0.5 rad/s, the blade never on,
+Checks calibration.check, a whole drive (phase events, forward only, at most 0.3 m/s and 0.4 rad/s, the blade never on,
 the recording in the format mowbite-calib/1 with its marks and rates, calibration.result) and the ends: calibration.abort,
 RTK lost, no room and the bumper.
 
@@ -216,9 +216,9 @@ class TestCalibration(unittest.TestCase):
             commands = list(p.commands)
             blade = p.blade_on
         self.assertTrue(commands)
-        self.assertTrue(all(c[2] >= 0.0 and c[2] <= 0.3 + 1e-6 and abs(c[3]) <= 0.5 + 1e-6 for c in commands),
-                        [c for c in commands if c[2] < 0 or c[2] > 0.3 or abs(c[3]) > 0.5][:5])
-        self.assertAlmostEqual(max(abs(c[3]) for c in commands), 0.5, delta=1e-6)
+        self.assertTrue(all(c[2] >= 0.0 and c[2] <= 0.3 + 1e-6 and abs(c[3]) <= 0.4 + 1e-6 for c in commands),
+                        [c for c in commands if c[2] < 0 or c[2] > 0.3 or abs(c[3]) > 0.4][:5])
+        self.assertAlmostEqual(max(abs(c[3]) for c in commands), 0.4, delta=1e-6)
         self.assertFalse(blade)
         self.assertEqual(cutter_on_since(sim_since), [])
         # The recording.
