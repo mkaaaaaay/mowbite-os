@@ -146,3 +146,25 @@ TEST(Guard, AGoalWithItsOwnLimitStopsFartherOffThePath) {
   in.emergency = true;
   EXPECT_EQ(CheckGuard(GuardConfig(), in, fence).reason, StopReason::kEmergency);
 }
+
+// A turn on the spot that slides farther than max_turn_slide from its place ends the path; without the limit and
+// outside of a turn nothing does.
+TEST(Guard, ATurnThatSlidesTooFarStops) {
+  const Geofence fence({kLawn}, {}, 0.5);
+  GuardConfig config;
+  GuardInput in = Healthy();
+  in.turn_slide = 0.4;
+  EXPECT_EQ(CheckGuard(config, in, fence).reason, StopReason::kNone);
+  config.max_turn_slide = 0.15;
+  const auto result = CheckGuard(config, in, fence);
+  EXPECT_EQ(result.reason, StopReason::kTurnSlide);
+  EXPECT_EQ(result.message, "slid 0.40 m from the place of the turn on the spot (limit 0.15 m)");
+  in.turn_slide = 0.15;
+  EXPECT_EQ(CheckGuard(config, in, fence).reason, StopReason::kNone);
+  in.turn_slide = std::nan("");
+  EXPECT_EQ(CheckGuard(config, in, fence).reason, StopReason::kTurnSlide);
+  // Outside of the area counts first.
+  in.turn_slide = 0.4;
+  in.pose = {-1, 3, 0};
+  EXPECT_EQ(CheckGuard(config, in, fence).reason, StopReason::kOutside);
+}

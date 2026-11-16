@@ -86,6 +86,7 @@ std::string FollowerCode(uint8_t reason) {
     case Result::REASON_CROSS_TRACK: return "CROSS_TRACK";
     case Result::REASON_OUTSIDE: return "OUTSIDE";
     case Result::REASON_TIMEOUT: return "TIMEOUT";
+    case Result::REASON_TURN_SLIDE: return "TURN_SLIDE";
     default: return "INVALID";
   }
 }

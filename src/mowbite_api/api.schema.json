@@ -3656,6 +3656,7 @@
             "CROSS_TRACK",
             "OUTSIDE",
             "TIMEOUT",
+            "TURN_SLIDE",
             "MAP_UNKNOWN",
             "NO_MOWING_AREA",
             "MAP_MISMATCH",
@@ -5377,6 +5378,7 @@
             "CROSS_TRACK",
             "OUTSIDE",
             "TIMEOUT",
+            "TURN_SLIDE",
             "APPROACH_FAILED",
             "FOLLOWER_MISSING",
             "BATTERY_HOT",
@@ -14313,11 +14315,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:38",
+  "$id": "urn:mowbite-os:api:39",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null). x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 38,
+  "x-api": 39,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -16659,6 +16661,24 @@
         "fields": {},
         "resume": "user",
         "severity": "error"
+      },
+      "TURN_SLIDE": {
+        "description": "Turning on the spot, the mower slid too far from its place",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Fortsetzen, wenn es trockener ist, oder die Stelle auslassen.",
+            "help": "Auf nassem Rasen oder am Hang können die Räder beim Drehen auf der Stelle rutschen. Der Mäher kam dabei zu weit von seinem Platz.",
+            "name": "Beim Drehen auf der Stelle weggerutscht"
+          },
+          "en": {
+            "fix": "Continue once it's drier, or leave out that spot.",
+            "help": "On wet grass or a slope the wheels can slip while the mower turns on the spot. It got too far from its place.",
+            "name": "Slid away while turning on the spot"
+          }
+        }
       }
     },
     "DRIVE_REFUSED": {
@@ -17964,6 +17984,24 @@
         "fields": {},
         "resume": "user",
         "severity": "error"
+      },
+      "TURN_SLIDE": {
+        "description": "Turning on the spot, the mower slid too far from its place",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Fortsetzen, wenn es trockener ist, oder die Stelle auslassen.",
+            "help": "Auf nassem Rasen oder am Hang können die Räder beim Drehen auf der Stelle rutschen. Der Mäher kam dabei zu weit von seinem Platz.",
+            "name": "Beim Drehen auf der Stelle weggerutscht"
+          },
+          "en": {
+            "fix": "Continue once it's drier, or leave out that spot.",
+            "help": "On wet grass or a slope the wheels can slip while the mower turns on the spot. It got too far from its place.",
+            "name": "Slid away while turning on the spot"
+          }
+        }
       }
     },
     "STORAGE": {

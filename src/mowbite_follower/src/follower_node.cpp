@@ -121,6 +121,10 @@ class FollowerNode : public rclcpp::Node {
           "turn_feedback from 0 to 1, turn_hold_gain from 0 to 4 needed");
     }
     guard_config_.max_cross_track = declare_parameter("max_cross_track", guard_config_.max_cross_track);
+    guard_config_.max_turn_slide = declare_parameter("max_turn_slide", guard_config_.max_turn_slide);
+    if (!(guard_config_.max_turn_slide >= 0)) {
+      throw std::invalid_argument("mowbite_follower: max_turn_slide from 0 needed");
+    }
     geofence_margin_ = declare_parameter("geofence_margin", 0.5);
     const double rate = declare_parameter("control_rate", 20.0);
 
@@ -206,8 +210,9 @@ class FollowerNode : public rclcpp::Node {
         [this](const std::shared_ptr<GoalHandle>& handle) { OnAccepted(handle); });
 
     RCLCPP_INFO(get_logger(), "Turns on the spot at %.2f to %.2f rad/s, hold gain %.1f, wheels at least %.2f m/s, "
-                "fix at most %.1f s old", c.min_turn_rate, c.spot_max_angular > 0 ? c.spot_max_angular : c.max_angular,
-                c.turn_hold_gain, c.wheel_min_speed, turn_fix_timeout_);
+                "fix at most %.1f s old, at most %.2f m from their place", c.min_turn_rate,
+                c.spot_max_angular > 0 ? c.spot_max_angular : c.max_angular, c.turn_hold_gain, c.wheel_min_speed,
+                turn_fix_timeout_, guard_config_.max_turn_slide);
     timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / rate), [this] { OnTimer(); });
     watch_ = mowbite_watch::Attach(*this);
   }
@@ -315,6 +320,8 @@ class FollowerNode : public rclcpp::Node {
     // The limit of the goal counts from the first command and around the whole path.
     in.off_path = max_off_path_ > 0 ? follower_->OffPath(pose.pose) : 0.0;
     in.max_off_path = max_off_path_;
+    // In the station frame a new sight of the marker moves the pose, not the mower.
+    in.turn_slide = dock_frame_ ? 0.0 : follower_->TurnSlide(pose.pose);
     const GuardResult guard = CheckGuard(guard_config, in, fence_);
     if (guard.reason != StopReason::kNone) {
       Finish(static_cast<uint8_t>(guard.reason), guard.message, follower_->index());

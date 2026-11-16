@@ -140,6 +140,8 @@ class PathFollower {
   double CrossTrack(const Pose2& pose) const;
   // m to the nearest point of the whole path, its ends included.
   double OffPath(const Pose2& pose) const;
+  // m the pose is from the place the turn on the spot going on began at, 0 outside of such a turn.
+  double TurnSlide(const Pose2& pose) const;
   // The turns on the spot ended since the path began, and the last of them.
   size_t turns() const { return turns_; }
   const TurnRecord& last_turn() const { return last_turn_; }

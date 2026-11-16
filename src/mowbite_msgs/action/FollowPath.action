@@ -56,6 +56,8 @@ uint8 REASON_CROSS_TRACK=8
 uint8 REASON_OUTSIDE=9
 # the mower stays behind (stuck) or a phase takes too long
 uint8 REASON_TIMEOUT=10
+# turning on the spot, base_link got too far from the place the turn began at (wheels that slip, a slope)
+uint8 REASON_TURN_SLIDE=11
 
 uint8 reason
 string message

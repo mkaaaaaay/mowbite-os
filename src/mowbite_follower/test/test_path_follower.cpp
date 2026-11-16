@@ -1195,3 +1195,24 @@ TEST(PathFollower, DoesNotTurnOnTheSpotWithoutAFreshFix) {
   const auto cmd = straight.Step(other.pose, kDt, 0.0, false);
   EXPECT_GT(cmd.linear, 0.0);
 }
+
+// The way from the place of a turn on the spot counts while it turns, not before and not after.
+TEST(PathFollower, TellsHowFarATurnOnTheSpotSlid) {
+  PathFollower follower{HoldConfig(0.0)};
+  ASSERT_EQ(follower.Start(Line(0, 0, 2.0, 2.0), {}, 0), "");
+  Robot robot;
+  EXPECT_EQ(follower.TurnSlide(robot.pose), 0.0);
+  robot.slide_per_rad = 0.1;
+  double farthest = 0;
+  for (double t = 0; t < 20; t += kDt) {
+    const auto cmd = follower.Step(robot.pose, kDt);
+    if (follower.phase() != Phase::kStartTurn) break;
+    robot.Move(cmd, kDt);
+    farthest = std::max(farthest, follower.TurnSlide(robot.pose));
+    EXPECT_NEAR(follower.TurnSlide(robot.pose), robot.pose.y, 1e-9);
+  }
+  // 0.1 m per rad over the turn.
+  EXPECT_GT(farthest, 0.15);
+  ASSERT_EQ(follower.phase(), Phase::kFollowing);
+  EXPECT_EQ(follower.TurnSlide(robot.pose), 0.0);
+}

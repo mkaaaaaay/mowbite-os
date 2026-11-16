@@ -223,6 +223,11 @@ double PathFollower::OffPath(const Pose2& pose) const {
   return path_.Project(pose.x, pose.y, 0, path_.size()).distance;
 }
 
+double PathFollower::TurnSlide(const Pose2& pose) const {
+  if (!Turning(phase_) || !pivot_) return 0.0;
+  return std::hypot(pose.x - pivot_->x, pose.y - pivot_->y);
+}
+
 Projection PathFollower::Foot(const Pose2& pose) const {
   size_t last = segment_;
   const double reach = std::max(along_, path_.s(segment_)) + kWindow;

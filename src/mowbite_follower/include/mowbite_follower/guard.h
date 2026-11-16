@@ -51,6 +51,7 @@ enum class StopReason {
   kCrossTrack = 8,
   kOutside = 9,
   kTimeout = 10,
+  kTurnSlide = 11,
 };
 
 struct GuardConfig {
@@ -62,6 +63,8 @@ struct GuardConfig {
   double max_position_accuracy = 0.1;
   // m from the path.
   double max_cross_track = 0.5;
+  // m base_link may get from the place a turn on the spot began at; 0: no such limit.
+  double max_turn_slide = 0;
 };
 
 // What the follower knows when it checks, ages in s.
@@ -81,6 +84,8 @@ struct GuardInput {
   // may be; 0: no such limit.
   double off_path = 0;
   double max_off_path = 0;
+  // m base_link is from the place the turn on the spot going on began at, 0 outside of such a turn.
+  double turn_slide = 0;
 };
 
 struct GuardResult {

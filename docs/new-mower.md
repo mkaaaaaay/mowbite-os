@@ -140,7 +140,9 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   of the mower stick or jerk; measure it) on the `wheel_distance` the driver reports in `hw/capabilities`. With that
   distance the localization also widens the accuracy of the position by half of it times what the gyro turns less
   than the wheels, so report the real one. Without a fix younger than `turn_fix_timeout` (0.5 s, 0: no such rule) the
-  follower does not turn on the spot in the map. Every such turn goes out on `follower/spot_turn` (commanded, wheels,
+  follower does not turn on the spot in the map. With `max_turn_slide` (m, 0: no such limit) the path ends with
+  `TURN_SLIDE` once base_link is that far from the place such a turn began at: take what the body may leave its lane
+  by next to an edge. Every such turn goes out on `follower/spot_turn` (commanded, wheels,
   heading, how far base_link got) and the log sums them up per path. The calibration drive
   turns on the spot at `spin_rate` of `mowbite_calibration` (0.3 rad/s, at most what the driver allows): raise it where
   the wheels stand in their dead band at that rate, the drive ends with `NOT_TURNING` then (the gyro on average

@@ -29,7 +29,8 @@ Result = FollowPath.Result
 
 
 def generate_test_description():
-    follower = Node(package="mowbite_follower", executable="mowbite_follower_node", output="screen")
+    follower = Node(package="mowbite_follower", executable="mowbite_follower_node", output="screen",
+                    parameters=[{"max_turn_slide": 0.15}])
     return launch.LaunchDescription([follower, launch_testing.actions.ReadyToTest()]), {}
 
 
@@ -74,6 +75,9 @@ class World(SimProbe):
         self.dock = False
         self.dock_accuracy = 0.02
         self.dock_cmds = []
+        # s the last fix behind the map pose is old, and m/s the mower slides towards +y while it turns.
+        self.fix_age = 0.0
+        self.slide = 0.0
         self.caps_pub = self.node.create_publisher(HardwareCapabilities, "hw/capabilities", LATCHED)
         self.hw_pub = self.node.create_publisher(HardwareStatus, "hw/status", 10)
         self.pose_pub = self.node.create_publisher(RobotPose, "localization/pose", 10)
@@ -121,7 +125,7 @@ class World(SimProbe):
                     self.v = self.w = 0.0
                 self.yaw += self.w * dt
                 self.x += self.v * dt * math.cos(self.yaw)
-                self.y += self.v * dt * math.sin(self.yaw)
+                self.y += self.v * dt * math.sin(self.yaw) + (self.slide * dt if self.w else 0.0)
                 hw = HardwareStatus()
                 hw.telemetry_ok = True
                 hw.emergency = self.emergency
@@ -131,6 +135,7 @@ class World(SimProbe):
                 pose.heading = self.yaw
                 pose.position_accuracy = self.accuracy
                 pose.heading_valid = True
+                pose.fix_age = self.fix_age
                 publish_pose = self.publish_pose
                 dock = None
                 if self.dock:
@@ -203,6 +208,8 @@ class TestFollower(unittest.TestCase):
             w.publish_pose = True
             w.dock = False
             w.dock_accuracy = 0.02
+            w.fix_age = 0.0
+            w.slide = 0.0
         w.capabilities("2026-01-01")
         w.place(0.0, 0.0, 0.0)
         time.sleep(0.3)
@@ -373,3 +380,44 @@ class TestFollower(unittest.TestCase):
         result = w.follow(line_poses(0, 0, 0, 1.0), frame=2)
         self.assertEqual(result.reason, Result.REASON_INVALID)
         self.assertIn("unknown frame 2", result.message)
+
+    def test_14_no_turn_on_the_spot_without_a_fresh_fix(self):
+        w = self.world
+        with w.lock:
+            w.fix_age = 3.0
+        # The follower turns by the pose it has; the old one first.
+        time.sleep(0.3)
+        began = time.time()
+        handle = w.follow(line_poses(0, 0, math.pi / 2, 1.0), wait=False)
+        time.sleep(3.0)
+        # It stands and keeps saying so; the path goes on.
+        commands = w.commands_since(began)
+        self.assertGreater(len(commands), 20)
+        self.assertFalse([c for c in commands if c[1] != 0.0 or c[2] != 0.0], commands[:5])
+        with w.lock:
+            self.assertEqual(w.yaw, 0.0)
+            w.fix_age = 0.1
+        result = w.result(handle)
+        self.assertEqual(result.reason, Result.REASON_DONE, result.message)
+        # A fix that old does not stop a drive along the path.
+        w.place(0.0, 0.0, 0.0)
+        with w.lock:
+            w.fix_age = 3.0
+        time.sleep(0.3)
+        result = w.follow(line_poses(0, 0, 0, 1.0))
+        self.assertEqual(result.reason, Result.REASON_DONE, result.message)
+
+    def test_15_a_turn_that_slides_away_ends_the_path(self):
+        w = self.world
+        with w.lock:
+            w.slide = 0.12
+        result = w.follow(line_poses(0, 0, math.pi, 1.0))
+        self.assertEqual(result.reason, Result.REASON_TURN_SLIDE, result.message)
+        self.assertIn("from the place of the turn on the spot (limit 0.15 m)", result.message)
+        time.sleep(0.7)
+        with w.lock:
+            y, turned = w.y, w.yaw
+        # Stopped soon after the limit, in the middle of the turn.
+        self.assertGreater(y, 0.15)
+        self.assertLess(y, 0.25)
+        self.assertLess(abs(turned), 2.5)

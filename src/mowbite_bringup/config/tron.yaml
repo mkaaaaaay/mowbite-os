@@ -343,6 +343,9 @@ mowbite_follower:
     pose_timeout: 0.5
     max_cross_track: 0.5
     geofence_margin: 0.5
+    # m base_link may get from the place a turn on the spot began at, the path ends with TURN_SLIDE beyond (the user
+    # 16.11.; 0: no such limit).
+    max_turn_slide: 0.15
     phase_timeout: 20.0
     progress_timeout: 10.0
     control_rate: 20.0
