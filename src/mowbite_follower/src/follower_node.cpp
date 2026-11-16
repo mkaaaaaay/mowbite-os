@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cmath>
 #include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <memory>
 #include <mowbite_component/node_options.h>
 #include <mowbite_msgs/action/follow_path.hpp>
@@ -8,6 +9,7 @@
 #include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
+#include <mowbite_msgs/msg/spot_turn.hpp>
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -28,6 +30,11 @@ using FollowPath = mowbite_msgs::action::FollowPath;
 using GoalHandle = rclcpp_action::ServerGoalHandle<FollowPath>;
 // turn_feedback at most: up to 1 the loop of command and turn cannot swing up, whatever the delay of the wheels.
 constexpr double kMaxTurnFeedback = 1.0;
+// turn_hold_gain at most (1/s): above, the pose that comes a few tenths of a second late lets the hold swing.
+constexpr double kMaxTurnHoldGain = 4.0;
+// s between two reports of hw/wheel_odom at most to count the turn in between, and without one until the wheels
+// count as not reporting.
+constexpr double kWheelGap = 0.2;
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -36,6 +43,16 @@ double MonotonicSeconds() {
 
 double Yaw(const geometry_msgs::msg::Quaternion& q) {
   return std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+}
+
+uint8_t TurnKind(Phase phase) {
+  using mowbite_msgs::msg::SpotTurn;
+  switch (phase) {
+    case Phase::kCornerTurn: return SpotTurn::KIND_CORNER;
+    case Phase::kRealign: return SpotTurn::KIND_REALIGN;
+    case Phase::kGoalTurn: return SpotTurn::KIND_GOAL;
+    default: return SpotTurn::KIND_START;
+  }
 }
 
 double Degrees(double radians) { return radians * 180.0 / M_PI; }
@@ -72,6 +89,10 @@ class FollowerNode : public rclcpp::Node {
     c.turn_deceleration = declare_parameter("turn_deceleration", c.turn_deceleration);
     c.turn_feedback = declare_parameter("turn_feedback", c.turn_feedback);
     c.turn_feedback_max = declare_parameter("turn_feedback_max", c.turn_feedback_max);
+    c.turn_hold_gain = declare_parameter("turn_hold_gain", c.turn_hold_gain);
+    c.turn_hold_deadband = declare_parameter("turn_hold_deadband", c.turn_hold_deadband);
+    c.wheel_min_speed = declare_parameter("wheel_min_speed", c.wheel_min_speed);
+    turn_fix_timeout_ = declare_parameter("turn_fix_timeout", 0.5);
     c.max_start_distance = declare_parameter("max_start_distance", c.max_start_distance);
     c.goal_tolerance = declare_parameter("goal_tolerance", c.goal_tolerance);
     // Angles in degrees.
@@ -90,10 +111,14 @@ class FollowerNode : public rclcpp::Node {
     dock_accuracy_per_m_ = declare_parameter("dock_accuracy_per_m", 0.09);
     if (!(dock_max_position_accuracy_ > 0) || !(dock_accuracy_per_m_ >= 0) || !(v.acceleration > 0) ||
         !(v.deceleration > 0) || !(c.spot_max_angular >= 0) || !(c.turn_deceleration >= 0) ||
-        !(c.turn_feedback >= 0 && c.turn_feedback <= kMaxTurnFeedback) || !(c.turn_feedback_max >= 0)) {
+        !(c.turn_feedback >= 0 && c.turn_feedback <= kMaxTurnFeedback) || !(c.turn_feedback_max >= 0) ||
+        !(c.turn_hold_gain >= 0 && c.turn_hold_gain <= kMaxTurnHoldGain) || !(c.turn_hold_deadband >= 0) ||
+        !(c.wheel_min_speed >= 0) || !(turn_fix_timeout_ >= 0)) {
       throw std::invalid_argument(
           "mowbite_follower: dock_max_position_accuracy, acceleration and deceleration above 0, dock_accuracy_per_m, "
-          "spot_max_angular, turn_deceleration and turn_feedback_max from 0, turn_feedback from 0 to 1 needed");
+          "spot_max_angular, turn_deceleration, turn_feedback_max, turn_hold_deadband, wheel_min_speed and "
+          "turn_fix_timeout from 0, "
+          "turn_feedback from 0 to 1, turn_hold_gain from 0 to 4 needed");
     }
     guard_config_.max_cross_track = declare_parameter("max_cross_track", guard_config_.max_cross_track);
     geofence_margin_ = declare_parameter("geofence_margin", 0.5);
@@ -105,6 +130,7 @@ class FollowerNode : public rclcpp::Node {
     // are known, so the planner never sees the follower's own ones above them.
     params_pub_ = create_publisher<std_msgs::msg::String>(
         "bridge/params", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+    turn_pub_ = create_publisher<mowbite_msgs::msg::SpotTurn>("follower/spot_turn", 10);
     pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
         "localization/pose", 10, [this](const mowbite_msgs::msg::RobotPose::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -132,12 +158,23 @@ class FollowerNode : public rclcpp::Node {
           // The tighter of the driver's limits and our own.
           if (msg->max_linear_speed > 0) driver_max_linear_ = msg->max_linear_speed;
           if (msg->max_angular_speed > 0) driver_max_angular_ = msg->max_angular_speed;
+          wheel_distance_ = msg->wheel_distance > 0 && std::isfinite(msg->wheel_distance) ? msg->wheel_distance : 0.0;
           if (driver_moves_) {
             PublishParams();
           } else {
             RCLCPP_WARN(get_logger(), "The driver allows no speed (%.3f m/s, %.3f rad/s): no paths, no planner speeds",
                         msg->max_linear_speed, msg->max_angular_speed);
           }
+        });
+    wheel_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
+        "hw/wheel_odom", 10, [this](const geometry_msgs::msg::TwistStamped::ConstSharedPtr& msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          // The turn of the wheels between two reports; a gap counts as none.
+          const double stamp = rclcpp::Time(msg->header.stamp).seconds();
+          const double dt = stamp - wheel_stamp_;
+          if (dt > 0 && dt <= kWheelGap) wheel_angle_ += msg->twist.angular.z * dt;
+          wheel_stamp_ = stamp;
+          wheel_time_ = MonotonicSeconds();
         });
     // max_position_accuracy of tron.yaml holds until the logic tells its own (params.set).
     limits_sub_ = create_subscription<mowbite_msgs::msg::GpsLimits>(
@@ -168,6 +205,9 @@ class FollowerNode : public rclcpp::Node {
         [](const std::shared_ptr<GoalHandle>&) { return rclcpp_action::CancelResponse::ACCEPT; },
         [this](const std::shared_ptr<GoalHandle>& handle) { OnAccepted(handle); });
 
+    RCLCPP_INFO(get_logger(), "Turns on the spot at %.2f to %.2f rad/s, hold gain %.1f, wheels at least %.2f m/s, "
+                "fix at most %.1f s old", c.min_turn_rate, c.spot_max_angular > 0 ? c.spot_max_angular : c.max_angular,
+                c.turn_hold_gain, c.wheel_min_speed, turn_fix_timeout_);
     timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / rate), [this] { OnTimer(); });
     watch_ = mowbite_watch::Attach(*this);
   }
@@ -218,7 +258,8 @@ class FollowerNode : public rclcpp::Node {
                                   ? config.max_angular
                                   : std::min(config.spot_max_angular, driver_max_angular_);
     // In the station frame turns stay as commanded: the pose there comes from the marker, not from the gyro alone.
-    if (dock) config.turn_feedback = 0;
+    if (dock) config.turn_feedback = config.turn_hold_gain = 0;
+    config.wheel_distance = wheel_distance_;
     config.stall_time = goal->stall_time > 0 ? goal->stall_time : 0.0;
     config.straight = goal->straight;
     config.reverse = goal->reverse;
@@ -232,6 +273,8 @@ class FollowerNode : public rclcpp::Node {
     active_ = handle;
     last_step_ = MonotonicSeconds();
     last_feedback_ = 0;
+    wheel_step_.reset();
+    turns_ = {};
     if (!problem.empty()) {
       Finish(FollowPath::Result::REASON_INVALID, "invalid path: " + problem, goal->start_index);
       return;
@@ -277,7 +320,14 @@ class FollowerNode : public rclcpp::Node {
       Finish(static_cast<uint8_t>(guard.reason), guard.message, follower_->index());
       return;
     }
-    const PathFollower::Command cmd = follower_->Step(pose.pose, dt);
+    // What the wheels turned since the last step, no number while they do not report.
+    const bool wheels = wheel_time_ && now - *wheel_time_ <= kWheelGap;
+    const double wheel_turn = wheels && wheel_step_ ? wheel_angle_ - *wheel_step_ : std::nan("");
+    wheel_step_ = wheels ? std::optional<double>(wheel_angle_) : std::nullopt;
+    // In the map no turn on the spot on a pose whose last fix is older than turn_fix_timeout; 0: no such rule.
+    const bool fresh_fix = dock_frame_ || !(turn_fix_timeout_ > 0) || pose.fix_age <= turn_fix_timeout_;
+    const PathFollower::Command cmd = follower_->Step(pose.pose, dt, wheel_turn, fresh_fix);
+    ReportTurn();
     if (follower_->phase() == Phase::kFailed) {
       const bool start = follower_->failure_kind() == Failure::kStart;
       Finish(start ? FollowPath::Result::REASON_INVALID : FollowPath::Result::REASON_TIMEOUT, follower_->failure(),
@@ -304,10 +354,40 @@ class FollowerNode : public rclcpp::Node {
   // The topic of the frame of the active path. Called with the mutex held.
   rclcpp::Publisher<geometry_msgs::msg::Twist>& CmdPublisher() { return dock_frame_ ? *dock_cmd_pub_ : *cmd_pub_; }
 
+  // Publishes a turn on the spot that ended since the last call. Called with the mutex held.
+  void ReportTurn() {
+    if (follower_->turns() == turns_.count) return;
+    turns_.count = follower_->turns();
+    const TurnRecord& turn = follower_->last_turn();
+    mowbite_msgs::msg::SpotTurn msg;
+    msg.stamp = now();
+    msg.kind = TurnKind(turn.phase);
+    msg.frame = dock_frame_ ? FollowPath::Goal::FRAME_DOCK : FollowPath::Goal::FRAME_MAP;
+    msg.seconds = static_cast<float>(turn.seconds);
+    msg.commanded = static_cast<float>(turn.commanded);
+    msg.wheels = static_cast<float>(turn.wheels);
+    msg.turned = static_cast<float>(turn.turned);
+    msg.slide = static_cast<float>(turn.slide);
+    msg.end_slide = static_cast<float>(turn.end_slide);
+    msg.hold = static_cast<float>(turn.hold);
+    turn_pub_->publish(msg);
+    if (std::isfinite(turn.wheels)) {
+      turns_.wheels += std::abs(turn.wheels);
+      turns_.turned += std::abs(turn.turned);
+    }
+    turns_.slide = std::max(turns_.slide, turn.slide);
+  }
+
   // Ends the active goal with one zero command. Called with the mutex held.
   void Finish(uint8_t reason, const std::string& message, size_t index) {
     CmdPublisher().publish(geometry_msgs::msg::Twist());
     follower_->Cancel();
+    ReportTurn();
+    if (turns_.count > 0) {
+      RCLCPP_INFO(get_logger(), "%zu turns on the spot: the heading made %.2f of the turn of the wheels, base_link "
+                  "slid at most %.2f m", turns_.count, turns_.wheels > 0 ? turns_.turned / turns_.wheels : std::nan(""),
+                  turns_.slide);
+    }
     auto result = std::make_shared<FollowPath::Result>();
     result->reason = reason;
     result->message = message;
@@ -330,12 +410,14 @@ class FollowerNode : public rclcpp::Node {
     Pose2 pose;
     float accuracy = 999;
     bool heading_valid = false;
+    float fix_age = 999;
     std::optional<double> time;
 
     void Set(const mowbite_msgs::msg::RobotPose& msg, double now) {
       pose = Pose2{msg.x, msg.y, msg.heading};
       accuracy = msg.position_accuracy;
       heading_valid = msg.heading_valid;
+      fix_age = msg.fix_age;
       time = now;
     }
   };
@@ -347,6 +429,8 @@ class FollowerNode : public rclcpp::Node {
   // worse by that per m away from it (the frame turns with the error in the direction of the marker).
   double dock_max_position_accuracy_ = 0.03;
   double dock_accuracy_per_m_ = 0.09;
+  // s the last fix behind localization/pose may be old for a turn on the spot.
+  double turn_fix_timeout_ = 0.5;
   double geofence_margin_ = 0.5;
   // max_cross_track of the active goal, 0 for none.
   double max_off_path_ = 0;
@@ -357,6 +441,15 @@ class FollowerNode : public rclcpp::Node {
   std::shared_ptr<GoalHandle> active_;
   double last_step_ = 0;
   double last_feedback_ = 0;
+  // The turns on the spot of the active path: how many were reported, the rad of wheels and heading over those with
+  // odometry, and the farthest m from the place of a turn.
+  struct Turns {
+    size_t count = 0;
+    double wheels = 0;
+    double turned = 0;
+    double slide = 0;
+  };
+  Turns turns_;
 
   PoseInput map_pose_;
   PoseInput dock_pose_;
@@ -366,15 +459,25 @@ class FollowerNode : public rclcpp::Node {
   bool driver_moves_ = false;
   double driver_max_linear_ = 1e9;
   double driver_max_angular_ = 1e9;
+  // m between the drive wheels by the driver, 0 while unknown.
+  double wheel_distance_ = 0;
+  // hw/wheel_odom: the rad the wheels turned the base by so far, the stamp of the last report and when it came, and
+  // the angle at the last step of the path.
+  double wheel_angle_ = 0;
+  double wheel_stamp_ = 0;
+  std::optional<double> wheel_time_;
+  std::optional<double> wheel_step_;
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr dock_cmd_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::SpotTurn>::SharedPtr turn_pub_;
   std::string last_params_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr pose_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr dock_pose_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr wheel_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;
   rclcpp_action::Server<FollowPath>::SharedPtr server_;
   rclcpp::TimerBase::SharedPtr timer_;

@@ -17,6 +17,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MapStatus.msg"
   "msg/MotorState.msg"
   "msg/RobotState.msg"
+  "msg/SpotTurn.msg"
   "msg/SensorSpec.msg"
   "msg/SensorValue.msg"
   "msg/ActionEntry.msg"

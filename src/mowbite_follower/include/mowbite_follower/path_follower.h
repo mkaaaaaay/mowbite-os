@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -31,6 +32,15 @@ struct FollowerConfig {
   // missing rate on top, at most turn_feedback_max rad/s and never above the limit of such turns; 0: none.
   double turn_feedback = 0;
   double turn_feedback_max = 0;
+  // A turn on the spot holds the place it began at, since wheels that slip unevenly move base_link along its
+  // heading: the mower drives turn_hold_gain (1/s) times what base_link is off that place along its heading beyond
+  // turn_hold_deadband m, plus the sum of that offset over the turn at turn_hold_gain squared / 4, as far as the
+  // slower wheel keeps wheel_min_speed m/s on a track of wheel_distance m (hw/capabilities). Gain or track 0: no
+  // such drive.
+  double turn_hold_gain = 0;
+  double turn_hold_deadband = 0.02;
+  double wheel_min_speed = 0;
+  double wheel_distance = 0;
   // m from the start pose at most when the path begins.
   double max_start_distance = 1.0;
   // m from the last pose at most when the mower got there.
@@ -83,6 +93,20 @@ enum class Failure {
   kTimeout,  // stuck, no progress or a turn took too long
 };
 
+// What a turn on the spot did, by the commands, the wheels and the pose.
+struct TurnRecord {
+  Phase phase = Phase::kIdle;
+  double seconds = 0;
+  // rad commanded, reported by the wheels (NaN without their odometry) and turned by the heading.
+  double commanded = 0;
+  double wheels = 0;
+  double turned = 0;
+  // m base_link got from the place the turn began at, at most and at its end, and m driven to hold that place.
+  double slide = 0;
+  double end_slide = 0;
+  double hold = 0;
+};
+
 // Drives a mower along a path of base_link poses: turns on the spot at the start, at corners and at the end, steers
 // along the path in between at the speed of its speed plan. Without ROS; the follower node calls Step with every
 // pose and sends what it returns.
@@ -97,8 +121,12 @@ class PathFollower {
 
   // Empty if the path can be followed from start_index, else why not.
   std::string Start(const std::vector<Pose2>& poses, const std::vector<Kind>& kinds, size_t start_index);
-  // The command for the pose of base_link, dt s after the last step.
-  Command Step(const Pose2& pose, double dt);
+  // The command for the pose of base_link, dt s after the last step; wheel_turn is the rad the wheels turned the
+  // base by since then, by their odometry, NaN without. Without a fresh fix behind the pose the mower does not turn
+  // on the spot: wheels that slip there move it unseen. It stands until the fix is back, which is no part of
+  // phase_timeout.
+  Command Step(const Pose2& pose, double dt, double wheel_turn = std::numeric_limits<double>::quiet_NaN(),
+               bool fresh_fix = true);
   void Cancel();
 
   Phase phase() const { return phase_; }
@@ -112,6 +140,9 @@ class PathFollower {
   double CrossTrack(const Pose2& pose) const;
   // m to the nearest point of the whole path, its ends included.
   double OffPath(const Pose2& pose) const;
+  // The turns on the spot ended since the path began, and the last of them.
+  size_t turns() const { return turns_; }
+  const TurnRecord& last_turn() const { return last_turn_; }
 
  private:
   Projection Foot(const Pose2& pose) const;
@@ -119,8 +150,14 @@ class PathFollower {
   Command Fail(Failure kind, const std::string& message);
   // Turns on the spot towards target (rad, for the heading of travel); empty once within turn_tolerance.
   std::optional<Command> TurnTowards(double heading, double target);
-  // rad/s to add to a turn at rate towards sign: what the heading stayed behind the commands so far.
-  double TurnBoost(double heading, double sign);
+  // Takes what the mower did since the last step of the turn on the spot going on.
+  void TrackTurn(double heading);
+  // Ends the record of the turn going on.
+  void EndTurn();
+  // rad/s to add to a turn towards sign: what the heading stayed behind the commands so far.
+  double TurnBoost(double sign) const;
+  // m/s to hold the place of the turn while it turns at rate.
+  double HoldSpeed(double rate);
   void Enter(Phase phase);
   Command Follow(const Pose2& pose, const Pose2& travel, double dt);
   Command FromTravel(double speed, double angular) const;
@@ -143,11 +180,20 @@ class PathFollower {
   double phase_start_ = 0;
   double speed_ = 0;
   double step_dt_ = 0;
-  // Of the turn on the spot going on: the heading of the last step, its command, and the rad/s the turn stayed
-  // behind the commands, smoothed.
+  // Of this step: the pose, the turn of the wheels and a fresh fix behind the pose.
+  Pose2 at_;
+  double wheel_turn_ = 0;
+  bool fresh_fix_ = true;
+  // Of the turn on the spot going on: the place it began at, the heading of the last step, its command, the rad/s
+  // the turn stayed behind the commands, smoothed, what holds its place, and its record.
+  std::optional<Pose2> pivot_;
   std::optional<double> turn_heading_;
-  double turn_command_ = 0;
+  Command turn_command_;
   double turn_missing_ = 0;
+  double hold_sum_ = 0;
+  TurnRecord turn_;
+  TurnRecord last_turn_;
+  size_t turns_ = 0;
   std::optional<Pose2> still_at_;
   double still_since_ = 0;
   double progress_along_ = 0;

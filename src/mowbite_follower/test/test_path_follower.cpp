@@ -32,6 +32,17 @@ struct Robot {
   double last_linear = 0;
   // The share of a commanded turn on the spot the base makes: wheels that slip.
   double turn_share = 1.0;
+  // The share of its speed each wheel loses on the ground while the two run against each other, and the m base_link
+  // slides towards +y per rad it turns.
+  double slip_left = 0;
+  double slip_right = 0;
+  double slide_per_rad = 0;
+  // rad the wheels turned the base by their own count in the last move, m/s the slower wheel ran at least while the
+  // mower drove in a turn on the spot, and m base_link got from far_from at most.
+  double wheel_turn = 0;
+  double slowest_wheel = 1e9;
+  Pose2 far_from;
+  double farthest = 0;
 
   void Move(const PathFollower::Command& cmd, double dt) {
     max_linear = std::max(max_linear, std::abs(cmd.linear));
@@ -49,10 +60,23 @@ struct Robot {
       w = (right - left) / 0.395;
     }
     if (cmd.linear == 0.0) w *= turn_share;
+    wheel_turn = cmd.angular * dt;
+    double left = cmd.linear - cmd.angular * 0.2;
+    double right = cmd.linear + cmd.angular * 0.2;
+    if (left * right < 0) {
+      if (cmd.linear != 0.0) slowest_wheel = std::min({slowest_wheel, std::abs(left), std::abs(right)});
+      if (slip_left != 0 || slip_right != 0) {
+        left *= 1.0 - slip_left;
+        right *= 1.0 - slip_right;
+        v = (left + right) / 2;
+        w = (right - left) / 0.4;
+      }
+    }
     pose.yaw = NormalizeAngle(pose.yaw + w * dt * 0.5);
     pose.x += v * dt * std::cos(pose.yaw);
-    pose.y += v * dt * std::sin(pose.yaw);
+    pose.y += v * dt * std::sin(pose.yaw) + slide_per_rad * std::abs(w) * dt;
     pose.yaw = NormalizeAngle(pose.yaw + w * dt * 0.5);
+    farthest = std::max(farthest, std::hypot(pose.x - far_from.x, pose.y - far_from.y));
   }
 };
 
@@ -64,7 +88,7 @@ bool Running(const PathFollower& follower) {
 double Drive(PathFollower& follower, Robot& robot, double max_s = 300) {
   double t = 0;
   while (t < max_s && Running(follower)) {
-    const auto cmd = follower.Step(robot.pose, kDt);
+    const auto cmd = follower.Step(robot.pose, kDt, robot.wheel_turn);
     if (follower.OnPath()) robot.max_cross = std::max(robot.max_cross, std::abs(follower.CrossTrack(robot.pose)));
     robot.Move(cmd, kDt);
     t += kDt;
@@ -1017,4 +1041,157 @@ TEST(PathFollower, WithoutSpotValuesTurnsAsBefore) {
   EXPECT_NEAR(cmd.angular, 0.5, 1e-9);
   const auto near = follower.Step(Pose2{0, 0, 0.4}, kDt);
   EXPECT_NEAR(near.angular, 0.3, 1e-9);
+}
+
+FollowerConfig HoldConfig(double gain) {
+  FollowerConfig config = SpotConfig(0.0);
+  config.turn_hold_gain = gain;
+  config.wheel_min_speed = 0.06;
+  config.wheel_distance = 0.4;
+  return config;
+}
+
+// Turns on the spot by angle (rad) at the start of a line with the robot as it is; the follower is left in the phase
+// after the turn.
+void TurnAtTheStart(PathFollower& follower, Robot& robot, double angle) {
+  ASSERT_EQ(follower.Start(Line(0, 0, angle, 2.0), {}, 0), "");
+  for (double t = 0; t < 20; t += kDt) {
+    const auto cmd = follower.Step(robot.pose, kDt, robot.wheel_turn);
+    if (follower.phase() != Phase::kStartTurn) break;
+    robot.Move(cmd, kDt);
+  }
+}
+
+// A wheel that slips more than the other moves base_link while it turns on the spot; with turn_hold_gain the
+// follower drives against that and no wheel gets slower than wheel_min_speed.
+TEST(PathFollower, HoldsThePlaceOfATurnWithWheelsThatSlipUnevenly) {
+  for (double degrees : {90.0, -90.0, 179.0}) {
+    const double angle = degrees * M_PI / 180.0;
+    Robot loose;
+    loose.slip_left = 0.5;
+    PathFollower plain{HoldConfig(0.0)};
+    TurnAtTheStart(plain, loose, angle);
+    EXPECT_EQ(plain.phase(), Phase::kFollowing) << plain.failure();
+    EXPECT_GT(loose.farthest, 0.07) << degrees;
+
+    Robot held;
+    held.slip_left = 0.5;
+    PathFollower holding{HoldConfig(2.0)};
+    TurnAtTheStart(holding, held, angle);
+    EXPECT_EQ(holding.phase(), Phase::kFollowing) << holding.failure();
+    EXPECT_LT(held.farthest, 0.035) << degrees;
+    EXPECT_GE(held.slowest_wheel, 0.06 - 1e-9) << degrees;
+    EXPECT_GT(holding.last_turn().hold, 0.02) << degrees;
+  }
+}
+
+// A mower that stays on its place gets no drive, whatever the gain; without the track of the wheels neither.
+TEST(PathFollower, ATurnThatStaysOnItsPlaceGetsNoDrive) {
+  Robot robot;
+  PathFollower holding{HoldConfig(2.0)};
+  TurnAtTheStart(holding, robot, 2.0);
+  EXPECT_EQ(robot.max_linear, 0.0);
+  Robot slipping;
+  slipping.slip_left = 0.5;
+  FollowerConfig config = HoldConfig(2.0);
+  config.wheel_distance = 0;
+  PathFollower blind{config};
+  TurnAtTheStart(blind, slipping, 2.0);
+  EXPECT_EQ(slipping.max_linear, 0.0);
+}
+
+// Below wheel_min_speed per wheel there is no room to drive: the turn stays a turn.
+TEST(PathFollower, HoldsOnlyAsFarAsTheSlowerWheelKeepsItsSpeed) {
+  Robot robot;
+  robot.slip_left = 0.5;
+  FollowerConfig config = HoldConfig(2.0);
+  // 0.7 rad/s on 0.4 m: 0.14 m/s per wheel.
+  config.wheel_min_speed = 0.14;
+  PathFollower follower{config};
+  TurnAtTheStart(follower, robot, 2.0);
+  EXPECT_EQ(robot.max_linear, 0.0);
+  config.wheel_min_speed = 0.13;
+  Robot tight;
+  tight.slip_left = 0.5;
+  PathFollower narrow{config};
+  TurnAtTheStart(narrow, tight, 2.0);
+  EXPECT_GT(tight.max_linear, 0.0);
+  EXPECT_LE(tight.max_linear, 0.01 + 1e-9);
+  EXPECT_GE(tight.slowest_wheel, 0.13 - 1e-9);
+}
+
+// Every turn on the spot leaves a record: the angles by command, wheels and heading, and how far base_link got.
+TEST(PathFollower, RecordsWhatATurnOnTheSpotDid) {
+  Robot robot;
+  robot.slip_left = 0.4;
+  robot.slip_right = 0.2;
+  PathFollower follower{HoldConfig(0.0)};
+  EXPECT_EQ(follower.turns(), 0u);
+  TurnAtTheStart(follower, robot, M_PI / 2);
+  ASSERT_EQ(follower.turns(), 1u);
+  const auto& turn = follower.last_turn();
+  EXPECT_EQ(turn.phase, Phase::kStartTurn);
+  EXPECT_GT(turn.seconds, 2.0);
+  EXPECT_NEAR(turn.turned, robot.pose.yaw, 1e-9);
+  EXPECT_GT(turn.turned, 1.4);
+  EXPECT_NEAR(turn.wheels, turn.commanded, 1e-9);
+  // Both wheels together lose 0.3 of the turn.
+  EXPECT_NEAR(turn.turned / turn.wheels, 0.7, 0.01);
+  EXPECT_NEAR(turn.slide, robot.farthest, 0.005);
+  EXPECT_GT(turn.slide, 0.02);
+  EXPECT_EQ(turn.hold, 0.0);
+  // Without the odometry of the wheels their angle is no number.
+  Robot blind;
+  PathFollower other{HoldConfig(0.0)};
+  ASSERT_EQ(other.Start(Line(0, 0, 1.0, 2.0), {}, 0), "");
+  for (double t = 0; t < 20 && other.turns() == 0; t += kDt) blind.Move(other.Step(blind.pose, kDt), kDt);
+  ASSERT_EQ(other.turns(), 1u);
+  EXPECT_TRUE(std::isnan(other.last_turn().wheels));
+  EXPECT_NEAR(other.last_turn().turned, 1.0, 0.04);
+}
+
+// A turn that ends by its timeout or with the path is recorded too.
+TEST(PathFollower, RecordsATurnThatDoesNotEnd) {
+  FollowerConfig config = HoldConfig(0.0);
+  config.phase_timeout = 2.0;
+  PathFollower follower{config};
+  ASSERT_EQ(follower.Start(Line(0, 0, 3.0, 2.0), {}, 0), "");
+  Robot robot;
+  robot.turn_share = 0.0;
+  Drive(follower, robot);
+  ASSERT_EQ(follower.phase(), Phase::kFailed);
+  ASSERT_EQ(follower.turns(), 1u);
+  EXPECT_NEAR(follower.last_turn().seconds, 2.0, 0.1);
+  EXPECT_NEAR(follower.last_turn().turned, 0.0, 1e-9);
+  EXPECT_GT(follower.last_turn().commanded, 1.0);
+}
+
+// Without a fresh fix behind the pose the mower does not turn on the spot: it stands, which is no part of the time a
+// turn may take, and goes on when the fix is back.
+TEST(PathFollower, DoesNotTurnOnTheSpotWithoutAFreshFix) {
+  FollowerConfig config = HoldConfig(2.0);
+  config.phase_timeout = 5.0;
+  PathFollower follower{config};
+  ASSERT_EQ(follower.Start(Line(0, 0, 2.0, 2.0), {}, 0), "");
+  Robot robot;
+  for (double t = 0; t < 1.0; t += kDt) robot.Move(follower.Step(robot.pose, kDt), kDt);
+  ASSERT_EQ(follower.phase(), Phase::kStartTurn);
+  const double turned = robot.pose.yaw;
+  EXPECT_GT(turned, 0.3);
+  for (double t = 0; t < 30.0; t += kDt) {
+    const auto cmd = follower.Step(robot.pose, kDt, robot.wheel_turn, false);
+    EXPECT_EQ(cmd.linear, 0.0);
+    EXPECT_EQ(cmd.angular, 0.0);
+    robot.Move(cmd, kDt);
+  }
+  EXPECT_EQ(follower.phase(), Phase::kStartTurn) << follower.failure();
+  EXPECT_DOUBLE_EQ(robot.pose.yaw, turned);
+  Drive(follower, robot);
+  EXPECT_EQ(follower.phase(), Phase::kDone) << follower.failure();
+  // Driving along the path needs no fresh fix of its own: the accuracy of the pose guards that.
+  PathFollower straight{config};
+  ASSERT_EQ(straight.Start(Line(0, 0, 0, 2.0), {}, 0), "");
+  Robot other;
+  const auto cmd = straight.Step(other.pose, kDt, 0.0, false);
+  EXPECT_GT(cmd.linear, 0.0);
 }

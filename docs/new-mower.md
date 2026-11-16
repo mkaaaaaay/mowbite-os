@@ -134,7 +134,14 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   path, `max_angular`; in the station frame always `max_angular`) and slows such a turn down before its target at
   `turn_deceleration` (rad/s², 0: `heading_gain` times the error). Where the wheels slip on such turns,
   `turn_feedback` (0 to 1, 0: none) adds that share of the rate the heading stays behind the command, at most
-  `turn_feedback_max` rad/s and never above the limit of the turn; not in the station frame. The calibration drive
+  `turn_feedback_max` rad/s and never above the limit of the turn; not in the station frame. Wheels that slip
+  unevenly move the mower while it turns: with `turn_hold_gain` (1/s, 0: off, at most 4) the follower drives against
+  that along the heading, as far as the slower wheel keeps `wheel_min_speed` (m/s, the speed below which the wheels
+  of the mower stick or jerk; measure it) on the `wheel_distance` the driver reports in `hw/capabilities`. With that
+  distance the localization also widens the accuracy of the position by half of it times what the gyro turns less
+  than the wheels, so report the real one. Without a fix younger than `turn_fix_timeout` (0.5 s, 0: no such rule) the
+  follower does not turn on the spot in the map. Every such turn goes out on `follower/spot_turn` (commanded, wheels,
+  heading, how far base_link got) and the log sums them up per path. The calibration drive
   turns on the spot at `spin_rate` of `mowbite_calibration` (0.3 rad/s, at most what the driver allows): raise it where
   the wheels stand in their dead band at that rate, the drive ends with `NOT_TURNING` then (the gyro on average
   below `turn_min_ratio` of the rate, 0.7). `mowbite_safety` lets every moving command grow at

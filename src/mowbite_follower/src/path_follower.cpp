@@ -81,15 +81,24 @@ std::string PathFollower::Start(const std::vector<Pose2>& poses, const std::vect
   along_ = path_.s(segment_);
   time_ = 0;
   speed_ = 0;
+  pivot_.reset();
+  turn_heading_.reset();
+  turn_command_ = {};
+  turn_missing_ = hold_sum_ = 0;
+  turn_ = {};
+  turns_ = 0;
   phase_ = Phase::kFollowing;
   phase_start_ = 0;
   return "";
 }
 
-PathFollower::Command PathFollower::Step(const Pose2& pose, double dt) {
+PathFollower::Command PathFollower::Step(const Pose2& pose, double dt, double wheel_turn, bool fresh_fix) {
   if (phase_ == Phase::kIdle || phase_ == Phase::kDone || phase_ == Phase::kFailed) return {};
   step_dt_ = std::clamp(dt, 0.0, 0.2);
   time_ += step_dt_;
+  at_ = pose;
+  wheel_turn_ = wheel_turn;
+  fresh_fix_ = fresh_fix;
   const Pose2 travel = Travel(pose);
   if (!begun_) {
     begun_ = true;
@@ -189,6 +198,7 @@ PathFollower::Command PathFollower::Follow(const Pose2& pose, const Pose2& trave
 }
 
 void PathFollower::Cancel() {
+  EndTurn();
   phase_ = Phase::kIdle;
   speed_ = 0;
 }
@@ -226,6 +236,7 @@ Pose2 PathFollower::Travel(const Pose2& pose) const {
 }
 
 PathFollower::Command PathFollower::Fail(Failure kind, const std::string& message) {
+  EndTurn();
   phase_ = Phase::kFailed;
   failure_kind_ = kind;
   failure_ = message;
@@ -234,8 +245,14 @@ PathFollower::Command PathFollower::Fail(Failure kind, const std::string& messag
 }
 
 std::optional<PathFollower::Command> PathFollower::TurnTowards(double heading, double target) {
+  TrackTurn(heading);
   const double error = NormalizeAngle(target - heading);
   if (std::abs(error) <= config_.turn_tolerance) return std::nullopt;
+  if (!fresh_fix_) {
+    phase_start_ += step_dt_;
+    turn_command_ = {};
+    return turn_command_;
+  }
   if (time_ - phase_start_ > config_.phase_timeout) {
     return Fail(Failure::kTimeout, Format("turning on the spot took longer than %.0f s", config_.phase_timeout));
   }
@@ -244,20 +261,54 @@ std::optional<PathFollower::Command> PathFollower::TurnTowards(double heading, d
                                                        : config_.steering.heading_gain * std::abs(error);
   const double sign = error > 0 ? 1.0 : -1.0;
   const double planned = std::clamp(slowing, std::min(config_.min_turn_rate, cap), cap);
-  const double rate = std::min(planned + TurnBoost(heading, sign), cap);
-  turn_command_ = sign * rate;
-  return Command{0.0, turn_command_};
+  const double rate = std::min(planned + TurnBoost(sign), cap);
+  turn_command_ = {HoldSpeed(rate), sign * rate};
+  return turn_command_;
 }
 
-double PathFollower::TurnBoost(double heading, double sign) {
+void PathFollower::TrackTurn(double heading) {
+  if (!pivot_) pivot_ = at_;
+  const double slide = std::hypot(at_.x - pivot_->x, at_.y - pivot_->y);
+  turn_.slide = std::max(turn_.slide, slide);
+  turn_.end_slide = slide;
   if (turn_heading_ && step_dt_ > 0) {
-    // What the turn since the last step stayed behind its command, smoothed: a mower that follows shows none.
     const double turned = std::clamp(NormalizeAngle(heading - *turn_heading_) / step_dt_, -kMaxTurnRate, kMaxTurnRate);
-    turn_missing_ += (turn_command_ - turned - turn_missing_) * std::min(1.0, step_dt_ / kTurnFilterS);
+    // What the turn since the last step stayed behind its command, smoothed: a mower that follows shows none.
+    turn_missing_ += (turn_command_.angular - turned - turn_missing_) * std::min(1.0, step_dt_ / kTurnFilterS);
+    turn_.seconds += step_dt_;
+    turn_.commanded += turn_command_.angular * step_dt_;
+    turn_.wheels += wheel_turn_;
+    turn_.turned += turned * step_dt_;
+    turn_.hold += std::abs(turn_command_.linear) * step_dt_;
   }
   turn_heading_ = heading;
+}
+
+void PathFollower::EndTurn() {
+  if (turn_.seconds > 0) {
+    turn_.phase = phase_;
+    last_turn_ = turn_;
+    turns_++;
+  }
+  turn_ = {};
+}
+
+double PathFollower::TurnBoost(double sign) const {
   if (!(config_.turn_feedback > 0) || !(config_.turn_feedback_max > 0)) return 0.0;
   return std::min(config_.turn_feedback * std::max(0.0, sign * turn_missing_), config_.turn_feedback_max);
+}
+
+double PathFollower::HoldSpeed(double rate) {
+  if (!(config_.turn_hold_gain > 0) || !(config_.wheel_distance > 0)) return 0.0;
+  // The slower wheel of the turn runs at rate * wheel_distance / 2 less what the mower drives.
+  const double room = std::abs(rate) * config_.wheel_distance / 2.0 - config_.wheel_min_speed;
+  if (!(room > 0)) return 0.0;
+  const double along = std::cos(at_.yaw) * (pivot_->x - at_.x) + std::sin(at_.yaw) * (pivot_->y - at_.y);
+  // Uneven slip pushes at a steady speed: the sum takes it, damped like the offset itself.
+  const double sum_gain = config_.turn_hold_gain * config_.turn_hold_gain / 4.0;
+  hold_sum_ = std::clamp(hold_sum_ + sum_gain * along * step_dt_, -room, room);
+  const double off = std::max(0.0, std::abs(along) - config_.turn_hold_deadband);
+  return std::clamp(std::copysign(config_.turn_hold_gain * off, along) + hold_sum_, -room, room);
 }
 
 void PathFollower::Enter(Phase phase) {
@@ -267,8 +318,12 @@ void PathFollower::Enter(Phase phase) {
   }
   if (phase == Phase::kFollowing || Turning(phase)) still_at_.reset();
   if (Turning(phase)) speed_ = 0;
+  EndTurn();
+  pivot_.reset();
   turn_heading_.reset();
-  turn_command_ = turn_missing_ = 0;
+  turn_command_ = {};
+  turn_missing_ = 0;
+  hold_sum_ = 0;
   phase_ = phase;
   phase_start_ = time_;
 }

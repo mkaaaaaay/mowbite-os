@@ -305,6 +305,13 @@ mowbite_follower:
     # spot_max_angular). Off until measured: fast turns slipped more than slow ones on wet lawn (16.11.).
     turn_feedback: 0.0
     turn_feedback_max: 0.2
+    # A turn on the spot holds its place: on wet lawn one wheel gripped while the other spun, and the Tron swung up
+    # to 0.3 m off (16.11.). The follower drives against that along the heading (gain 1/s, assumption until measured)
+    # while no wheel gets slower than wheel_min_speed m/s, below which the wheels stick and jerk (0.06, 13.11.). It
+    # does not turn on the spot on a pose whose last fix is older than turn_fix_timeout s.
+    turn_hold_gain: 2.0
+    wheel_min_speed: 0.06
+    turn_fix_timeout: 0.5
     acceleration: 0.5
     deceleration: 0.8
     # rad/s an arc of the path asks for at most, below max_angular so that the mower can still correct on arcs of
