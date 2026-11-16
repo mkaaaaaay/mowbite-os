@@ -3,11 +3,14 @@
   python3 -I platform/tron/rootfs/test_stereo_ae.py
 """
 import contextlib
+import fcntl
 import importlib.machinery
 import importlib.util
 import io
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 
 sys.dont_write_bytecode = True
@@ -182,6 +185,227 @@ class StereoAe(unittest.TestCase):
         code, out = self.run_tool(stuck)
         self.assertEqual(code, 2)
         self.assertIn("004d or page not set back", out)
+
+
+def quiet(call, *args):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        return call(*args), out.getvalue()
+
+
+class GainLevel(unittest.TestCase):
+    def setUp(self):
+        self.tool = load()
+        self.bridge = Bridge(exposure=(0x53, 0x00), gain=(0x00, 0x7F))
+        self.tool.read, self.tool.put = self.bridge.read, self.bridge.put
+        for sensor in self.bridge.sensor.values():
+            sensor[0x3E03] = 0x2B
+
+    def set_level(self, level):
+        return quiet(self.tool.set_level, None, level)[0]
+
+    def limits(self):
+        return [self.bridge.pair(reg) for reg in GAIN_MIN + GAIN]
+
+    def assert_left_clean(self):
+        self.assertEqual(self.bridge.bypass(), 0)
+        self.assertEqual(self.bridge.page, KERNEL_PAGE)
+
+    def test_a_coarse_step_gets_both_limits_of_both_channels(self):
+        self.assertEqual(self.set_level("dusk"), "set")
+        self.assertEqual(self.limits(), [(0x27, 0x3F)] * 4)
+        self.assertEqual(self.set_level("night"), "set")
+        self.assertEqual(self.limits(), [(0x2F, 0x3F)] * 4)
+        self.assert_left_clean()
+
+    def test_day_is_the_fine_range(self):
+        self.set_level("night")
+        self.assertEqual(self.set_level("day"), "set")
+        self.assertEqual(self.limits(), [(0x00, 0x20)] * 2 + [(0x00, 0x7F)] * 2)
+        self.assertEqual([self.bridge.pair(reg) for reg in EXPOSURE], [(0x53, 0x00)] * 2)
+
+    def test_the_limits_change_with_the_control_off_and_one_take_over(self):
+        self.set_level("dusk")
+        writes = self.bridge.writes
+        first_limit = next(i for i, (page, _, _) in enumerate(writes) if page == LIMITS_PAGE)
+        self.assertIn((BYPASS_PAGE, 0x004D, 0x03), writes[:first_limit])
+        self.assertEqual(self.bridge.limit_writes()[-2:], [(reg, 0x01) for reg in TAKE_OVER])
+        self.assertEqual([w for w in writes if w[0] in ("sensor1", "sensor2")],
+                         [("sensor1", 0x3E03, 0x2B), ("sensor2", 0x3E03, 0x2B)])
+        self.assertEqual(writes[-1], (BYPASS_PAGE, 0x004D, 0x00))
+
+    def test_a_level_that_is_there_writes_no_register(self):
+        self.assertEqual(self.set_level("day"), "kept")
+        self.assertEqual(self.bridge.writes, [])
+        self.assert_left_clean()
+
+    def test_the_bridge_table_takes_a_level(self):
+        for reg in GAIN:
+            self.bridge.set_pair(reg, (0x00, 0x40))
+        self.assertEqual(self.set_level("dusk"), "set")
+        self.assertEqual(self.limits(), [(0x27, 0x3F)] * 4)
+
+    def test_limits_of_someone_else_stay(self):
+        self.bridge.set_pair(GAIN[1], (0x00, 0xFF))
+        self.assertEqual(self.set_level("dusk"), "foreign")
+        self.assertEqual(self.bridge.writes, [])
+        self.assert_left_clean()
+
+    def test_limits_left_half_written_are_written_again(self):
+        self.bridge.set_pair(GAIN_MIN[0], (0x27, 0x3F))
+        self.bridge.set_pair(GAIN[1], (0x27, 0x7F))
+        self.assertEqual(self.set_level("day"), "set")
+        self.assertEqual(self.limits(), [(0x00, 0x20)] * 2 + [(0x00, 0x7F)] * 2)
+
+    def test_a_value_that_does_not_read_back_leaves_the_control_on(self):
+        self.bridge.stuck.add((LIMITS_PAGE, 0x0AB0))
+        self.assertEqual(self.set_level("dusk"), "failed")
+        self.assertFalse([reg for reg, _ in self.bridge.limit_writes() if reg in TAKE_OVER])
+        self.assertEqual([w for w in self.bridge.writes if w[0] in ("sensor1", "sensor2")],
+                         [("sensor1", 0x3E03, 0x2B), ("sensor2", 0x3E03, 0x2B)])
+        self.assert_left_clean()
+
+    def test_a_bus_error_counts_as_failed(self):
+        self.bridge.read_error.add((LIMITS_PAGE, 0x00FA))
+        self.assertEqual(self.set_level("dusk"), "failed")
+        self.assertEqual(self.bridge.writes, [])
+        self.assert_left_clean()
+
+    def test_a_bypass_that_stays_is_unknown(self):
+        self.bridge.regs[(BYPASS_PAGE, 0x004D)] = 0x02
+        self.bridge.stuck.add((BYPASS_PAGE, 0x004D))
+        self.assertEqual(self.set_level("dusk"), "unknown")
+
+
+class Wish(unittest.TestCase):
+    def setUp(self):
+        self.tool = load()
+        self.dir = tempfile.mkdtemp(prefix="stereo-ae-")
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.path = os.path.join(self.dir, "wish")
+
+    def wished(self, text, now=1000.0):
+        if text is not None:
+            with open(self.path, "w") as f:
+                f.write(text)
+        return self.tool.wished_level(now, self.path)
+
+    def test_a_fresh_wish_counts(self):
+        self.assertEqual(self.wished("night 990.5 1794800000.0\n"), "night")
+        self.assertEqual(self.wished("dusk 940.0 1794800000.0\n"), "dusk")
+
+    def test_anything_else_is_the_base_level(self):
+        for text in (None, "", "night\n", "night 939.9 1.0\n", "night 1000.1 1.0\n", "night abc 1.0\n",
+                     "night nan 1.0\n", "noon 990.0 1.0\n", "night 990.0 1.0 extra\n", "night  990.0 1.0\n",
+                     "\xff\xfe 990.0 1.0\n", "night 990.0 " + "1" * 60 + "\n"):
+            with self.subTest(text=text):
+                self.assertEqual(self.wished(text), "day")
+
+    def test_a_link_and_a_directory_are_not_read(self):
+        target = os.path.join(self.dir, "target")
+        with open(target, "w") as f:
+            f.write("night 990.0 1.0\n")
+        os.symlink(target, self.path)
+        self.assertEqual(self.wished(None), "day")
+        os.unlink(self.path)
+        os.mkdir(self.path)
+        self.assertEqual(self.wished(None), "day")
+
+
+class Watching(unittest.TestCase):
+    def setUp(self):
+        self.tool = load()
+        self.bridge = Bridge(exposure=(0x53, 0x00), gain=(0x00, 0x7F))
+        self.tool.read, self.tool.put = self.bridge.read, self.bridge.put
+        self.dir = tempfile.mkdtemp(prefix="stereo-ae-")
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.paths = {name: os.path.join(self.dir, name) for name in ("wish", "level_set", "lock", "setup_result")}
+        self.now = 1000.0
+        self.put("setup_result", "configured\n")
+        self.watch = self.tool.Watch(None, clock=lambda: self.now, sleep=lambda s: None, **self.paths)
+
+    def put(self, name, text):
+        with open(self.paths[name], "w") as f:
+            f.write(text)
+
+    def wish(self, level):
+        self.put("wish", f"{level} {self.now} 1794800000.0\n")
+
+    def step(self, after=0.0):
+        self.now += after
+        return quiet(self.watch.step)[0]
+
+    def level_set(self):
+        with open(self.paths["level_set"]) as f:
+            return f.read().split(" ")[0]
+
+    def gain_max(self):
+        return [self.bridge.pair(reg) for reg in GAIN]
+
+    def test_follows_the_wish_and_names_the_level(self):
+        self.assertIsNone(self.step())
+        self.assertEqual(self.level_set(), "day")
+        self.assertEqual(self.bridge.writes, [])
+        self.wish("dusk")
+        self.assertIsNone(self.step(31.0))
+        self.assertEqual(self.gain_max(), [(0x27, 0x3F)] * 2)
+        self.assertEqual(self.level_set(), "dusk")
+
+    def test_waits_between_two_writes(self):
+        self.wish("dusk")
+        self.step()
+        self.wish("night")
+        self.step(29.0)
+        self.assertEqual(self.gain_max(), [(0x27, 0x3F)] * 2)
+        self.wish("night")
+        self.step(1.5)
+        self.assertEqual(self.gain_max(), [(0x2F, 0x3F)] * 2)
+
+    def test_a_wish_that_goes_stale_ends_at_day(self):
+        self.wish("night")
+        self.step()
+        self.assertEqual(self.level_set(), "night")
+        self.step(61.0)
+        self.assertEqual(self.gain_max(), [(0x00, 0x7F)] * 2)
+        self.assertEqual(self.level_set(), "day")
+
+    def test_nothing_without_a_camera_that_is_set_up(self):
+        self.put("setup_result", "failed exposure\n")
+        self.wish("night")
+        self.assertIsNone(self.step())
+        self.assertEqual(self.bridge.writes, [])
+        self.assertFalse(os.path.exists(self.paths["level_set"]))
+
+    def test_a_held_lock_puts_the_write_off(self):
+        self.wish("dusk")
+        holder = os.open(self.paths["lock"], os.O_RDONLY | os.O_CREAT, 0o644)
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        self.assertIsNone(self.step())
+        self.assertEqual(self.bridge.writes, [])
+        os.close(holder)
+        self.assertIsNone(self.step(5.0))
+        self.assertEqual(self.gain_max(), [(0x27, 0x3F)] * 2)
+
+    def test_ends_at_limits_of_someone_else(self):
+        self.bridge.set_pair(GAIN[0], (0x00, 0xFF))
+        self.assertEqual(self.step(), 0)
+
+    def test_ends_after_three_failed_writes(self):
+        self.bridge.stuck.add((LIMITS_PAGE, 0x00FB))
+        self.wish("dusk")
+        self.assertIsNone(self.step())
+        self.wish("dusk")
+        self.assertIsNone(self.step(31.0))
+        self.wish("dusk")
+        self.assertEqual(self.step(31.0), 1)
+
+    def test_an_unknown_bridge_ends_it_and_marks_the_setup(self):
+        self.bridge.regs[(BYPASS_PAGE, 0x004D)] = 0x02
+        self.bridge.stuck.add((BYPASS_PAGE, 0x004D))
+        self.wish("dusk")
+        self.assertEqual(self.step(), 2)
+        with open(self.paths["setup_result"]) as f:
+            self.assertEqual(f.read(), "failed exposure\n")
 
 
 if __name__ == "__main__":

@@ -8,10 +8,19 @@ as it is, one that does not read back stops the limits without the take-over; th
 
 Exit 0: control on. 1: stopped at a value that did not read back, 004d and page set back, the exposure stays fixed.
 2: 004d or page could not be set back, the state of the bridge is unknown.
+
+"tron-stereo-ae watch" stays and follows the gain level that the camera node wishes for in a file: day, dusk or night
+(LEVELS). The file is input of another user: anything but a fresh line with a known level means day. It writes at most
+every 30 s, under the lock that the node holds around the start and the stop of a stream, and names the level it set
+in /run/mowbite/stereo-level. It ends with 0 at limits it does not know, 1 after three writes in a row that did not
+read back, 2 with the bridge in an unknown state, which it also notes in the setup result.
 """
 import ctypes
+import fcntl
 import os
+import stat
 import sys
+import time
 
 BUS = "/dev/i2c-8"
 XC9080, SC132 = 0x1B, 0x30
@@ -19,11 +28,30 @@ XC9080, SC132 = 0x1B, 0x30
 # value wanted. Exposure in lines << 4: 1328 lines (28.6 ms, below the frame time) instead of 512, which leave the
 # picture nearly black at night. Gain as the control writes it raw into SC132 3e08/3e09: the fine range holds up to
 # 7f (2.1 times 40); a high byte other than 00 flickers as a mere limit and 00 ff leaves the picture black.
+# Gain levels as (smallest, largest) of the control. A coarse step of the sensor (27, 2f) is quiet only with both limits
+# on it, the control then works by the exposure alone; day is the fine range.
+LEVELS = {
+    "day": ((0x00, 0x20), (0x00, 0x7F)),
+    "dusk": ((0x27, 0x3F), (0x27, 0x3F)),
+    "night": ((0x2F, 0x3F), (0x2F, 0x3F)),
+}
+BASE_LEVEL = "day"
+GAIN_MIN, GAIN_MAX, GAIN_MAX_TABLE = (0x00FC, 0x0AB0), (0x00FA, 0x0AAE), (0x00, 0x40)
 LIMITS = (
     ("exposure", (0x00E2, 0x0A96), (0x20, 0x00), (0x53, 0x00)),
-    ("gain", (0x00FA, 0x0AAE), (0x00, 0x40), (0x00, 0x7F)),
+    ("gain", GAIN_MAX, GAIN_MAX_TABLE, LEVELS[BASE_LEVEL][1]),
 )
 LIMIT_TAKE_OVER = (0x0050, 0x0A04)
+SETUP_RESULT = "/run/mowbite/stereo"
+# Written by tron_stereo (parameter gain_wish_file): "<level> <CLOCK_MONOTONIC s> <unix s>".
+WISH = "/run/mowbite-os/stereo-gain/wish"
+WISH_MAX_AGE_S = 60.0
+LEVEL_SET = "/run/mowbite/stereo-level"
+LOCK = "/run/mowbite/stereo.lock"
+LOCK_WAIT_S = 2.0
+WATCH_STEP_S = 5.0
+WRITE_GAP_S = 30.0
+WRITE_FAILURES = 3
 I2C_RDWR, I2C_M_RD = 0x0707, 0x0001
 
 
@@ -106,31 +134,174 @@ def raise_limits(fd, xc):
     return xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50)
 
 
+def sensors_on(fd, xc):
+    """The control takes both sensors; the page is 80/50."""
+    return all(xc(0x004D, sensor) and write(fd, SC132, 0x3E03, 0x2B, f"SC132 #{sensor}") for sensor in (1, 2))
+
+
+def set_back(xc):
+    """004d lives on page 80/50; back to 0 there, then the page the kernel driver left (80/26)."""
+    back = xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50) and xc(0x004D, 0x00)
+    return xc(0xFFFD, 0x80) and xc(0xFFFE, 0x26) and back
+
+
 def control_on(fd):
     xc = lambda reg, v: write(fd, XC9080, reg, v, "XC9080")
     ok = False
     try:
-        if not (xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50) and raise_limits(fd, xc)):
-            return 1
-        for sensor in (1, 2):
-            if not (xc(0x004D, sensor) and write(fd, SC132, 0x3E03, 0x2B, f"SC132 #{sensor}")):
-                return 1
-        ok = True
-        return 0
+        ok = xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50) and raise_limits(fd, xc) and sensors_on(fd, xc)
+        return 0 if ok else 1
     finally:
-        # 004d lives on page 80/50; back to 0 there, then the page the kernel driver left (80/26).
-        back = xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50) and xc(0x004D, 0x00)
-        back = xc(0xFFFD, 0x80) and xc(0xFFFE, 0x26) and back
-        if not back:
+        if not set_back(xc):
             print("tron-stereo-ae: 004d or page not set back", flush=True)
             sys.exit(2)
         print("tron-stereo-ae: " + ("exposure control on" if ok else "exposure stays fixed"), flush=True)
 
 
+def set_level(fd, level):
+    """Puts the gain limits of both channels on a level: control off, the four pairs, one take-over, control on.
+    "kept": they were there. "set". "foreign": a byte this file never writes there, left. "failed": a value did not
+    read back or the bus failed, 004d and page set back. "unknown": 004d or page not set back."""
+    xc = lambda reg, v: write(fd, XC9080, reg, v, "XC9080")
+    pair = lambda reg: (read(fd, XC9080, reg), read(fd, XC9080, reg + 1))
+    wanted = dict(zip(GAIN_MIN + GAIN_MAX, (LEVELS[level][0],) * 2 + (LEVELS[level][1],) * 2))
+    # Per byte, so that limits left half written by a failed try can be written again.
+    pairs = [pair for limits in LEVELS.values() for pair in limits] + [GAIN_MAX_TABLE]
+    known = [{pair[i] for pair in pairs} for i in (0, 1)]
+    result, control_off = "failed", False
+    try:
+        if not (xc(0xFFFD, 0x80) and xc(0xFFFE, 0x14)):
+            return result
+        now = {reg: pair(reg) for reg in wanted}
+        if now == wanted:
+            result = "kept"
+        elif any(hi not in known[0] or lo not in known[1] for hi, lo in now.values()):
+            print("tron-stereo-ae: gain limits left at " + ", ".join(f"{hi:02x} {lo:02x}" for hi, lo in now.values()),
+                  flush=True)
+            result = "foreign"
+        else:
+            control_off = True
+            taken = False
+            if (xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50) and xc(0x004D, 0x03) and xc(0xFFFD, 0x80) and xc(0xFFFE, 0x14)
+                    and all(xc(reg, hi) and xc(reg + 1, lo) for reg, (hi, lo) in wanted.items())):
+                for reg in LIMIT_TAKE_OVER:
+                    put(fd, XC9080, reg, 0x01)
+                taken = {reg: pair(reg) for reg in wanted} == wanted
+            # In any case: the control must not stay off.
+            on = xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50) and sensors_on(fd, xc)
+            result = "set" if taken and on else "failed"
+    except OSError as e:
+        print(f"tron-stereo-ae: gain level {level}: {e}", flush=True)
+    finally:
+        try:
+            back = set_back(xc) if control_off else xc(0xFFFD, 0x80) and xc(0xFFFE, 0x26)
+        except OSError:
+            back = False
+        if not back:
+            result = "unknown"
+    return result
+
+
+def first_line(path, limit=64):
+    """The first line of a small regular file, without following a link; empty for anything else."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return ""
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""
+        data = os.read(fd, limit + 1)
+    except OSError:
+        return ""
+    finally:
+        os.close(fd)
+    if len(data) > limit:
+        return ""
+    return data.decode("ascii", "replace").split("\n", 1)[0].strip()
+
+
+def wished_level(now, path=WISH):
+    """The level of a wish that is fresh on the monotonic clock; the base level for anything else."""
+    fields = first_line(path).split(" ")
+    if len(fields) != 3 or fields[0] not in LEVELS:
+        return BASE_LEVEL
+    try:
+        age = now - float(fields[1])
+    except ValueError:
+        return BASE_LEVEL
+    return fields[0] if 0.0 <= age <= WISH_MAX_AGE_S else BASE_LEVEL
+
+
+def replace_file(path, text):
+    with open(path + ".tmp", "w") as f:
+        f.write(text)
+    os.replace(path + ".tmp", path)
+
+
+class Watch:
+    """Follows the wish; step() returns None to go on or the exit code."""
+
+    def __init__(self, fd, clock=time.monotonic, sleep=time.sleep, wish=WISH, level_set=LEVEL_SET, lock=LOCK,
+                 setup_result=SETUP_RESULT):
+        self.fd, self.clock, self.sleep = fd, clock, sleep
+        self.wish, self.level_set, self.lock, self.setup_result = wish, level_set, lock, setup_result
+        self.level = None
+        self.tried_at = None
+        self.failures = 0
+
+    def locked(self, lock_fd):
+        """The lock within LOCK_WAIT_S, else False: a stream starts or stops right now."""
+        for _ in range(int(LOCK_WAIT_S / 0.1)):
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except OSError:
+                self.sleep(0.1)
+        return False
+
+    def step(self):
+        now = self.clock()
+        if first_line(self.setup_result) != "configured":
+            return None
+        wanted = wished_level(now, self.wish)
+        if wanted == self.level or (self.tried_at is not None and now - self.tried_at < WRITE_GAP_S):
+            return None
+        lock_fd = os.open(self.lock, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o644)
+        try:
+            if not self.locked(lock_fd):
+                return None
+            self.tried_at = now
+            result = set_level(self.fd, wanted)
+        finally:
+            os.close(lock_fd)
+        print(f"tron-stereo-ae: gain level {wanted}: {result}", flush=True)
+        if result in ("kept", "set"):
+            self.level, self.failures = wanted, 0
+            replace_file(self.level_set, f"{wanted} {now:.3f} {time.time():.3f}\n")
+            return None
+        if result == "foreign":
+            return 0
+        if result == "unknown":
+            replace_file(self.setup_result, "failed exposure\n")
+            return 2
+        self.failures += 1
+        return 1 if self.failures >= WRITE_FAILURES else None
+
+
 def main():
+    if sys.argv[1:] not in ([], ["watch"]):
+        sys.exit("usage: tron-stereo-ae [watch]")
     fd = os.open(BUS, os.O_RDWR | os.O_CLOEXEC)
     try:
-        sys.exit(control_on(fd))
+        if not sys.argv[1:]:
+            sys.exit(control_on(fd))
+        watch = Watch(fd)
+        while True:
+            code = watch.step()
+            if code is not None:
+                sys.exit(code)
+            time.sleep(WATCH_STEP_S)
     finally:
         os.close(fd)
 

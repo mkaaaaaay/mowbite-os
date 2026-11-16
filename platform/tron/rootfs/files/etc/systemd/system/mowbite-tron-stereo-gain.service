@@ -1,0 +1,13 @@
+[Unit]
+Description=Tron stereo camera gain level
+ConditionPathExists=/run/mowbite/stereo
+After=mowbite-tron-hwinit.service
+
+[Service]
+ExecStart=/usr/lib/mowbite/tron-stereo-ae watch
+# It ends by itself where it must not go on; the gain then stays as it is until the next boot.
+Restart=no
+MemoryMax=32M
+
+[Install]
+WantedBy=multi-user.target

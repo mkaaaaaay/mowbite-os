@@ -416,7 +416,11 @@ second what `mowbite_camera` needs around it.
   comes first and the picture must never delay it: a request takes the camera from a viewer, a picture is made after
   the report of its frame, and a failure of the viewer's stream never reaches the reports for the logic.
 - Settings of a camera that need register writes (exposure control of the Tron's bridge chip, `tron-stereo-ae`) come
-  from the setup at boot, read back, before it reports the camera ready; the node never writes to i2c.
+  from the setup at boot, read back, before it reports the camera ready; the node never writes to i2c. A setting that
+  follows the light (the gain level of the Tron) is a wish of the node in a one-line file with a level from a fixed
+  list and a time; a root helper of the platform reads it as foreign input, falls back to the base level at anything
+  unknown or stale, limits its rate and writes the registers under a lock that the node holds around stream start
+  and stop.
 
 Around `mowbite_camera`:
 
