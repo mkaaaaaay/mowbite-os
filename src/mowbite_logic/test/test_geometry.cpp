@@ -344,7 +344,7 @@ TEST(Geometry, TheBodyHasToCoverTheDriveWheels) {
   EXPECT_TRUE(geometry.Set(Request(geometry, {{"robot_width", 0.45}, {"robot_rear", 0.1125}})).ok);
   // The real outline of the Tron covers them.
   geometry = Tron();
-  const json tron = {{0.60, 0.14}, {0.53, 0.235}, {-0.12, 0.235}, {-0.12, -0.235}, {0.53, -0.235}, {0.60, -0.14}};
+  const json tron = {{0.605, 0.15}, {0.54, 0.235}, {-0.12, 0.235}, {-0.12, -0.235}, {0.54, -0.235}, {0.605, -0.15}};
   EXPECT_TRUE(geometry.Set(Request(geometry, {{"robot_outline", tron}})).ok);
   // A back narrower than the wheels, as a shape from a photo.
   const json narrow_back = {{0.6, -0.235}, {0.6, 0.235}, {0.0, 0.235}, {-0.12, 0.1}, {-0.12, -0.1}, {0.0, -0.235}};

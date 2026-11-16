@@ -13,11 +13,11 @@ mowbite_logic:
       robot_width: 0.47
       robot_front: 0.60
       robot_rear: 0.12
-      # The real contour from above as x0, y0, x1, y1, ... (measured by the user, 15.11.): the bar in front is straight
-      # over 0.28 m at the front, its ends 0.45 m apart and 0.07 m further back; from there to the back the full width.
-      # The bevel runs to the full width, so it holds front wheels up to 0.01 m beside the bar. The planner uses it
-      # instead of the rectangle.
-      robot_outline: [0.60, 0.14, 0.53, 0.235, -0.12, 0.235, -0.12, -0.235, 0.53, -0.235, 0.60, -0.14]
+      # The real contour from above as x0, y0, x1, y1, ... (measured from photos with a rule, 16.11.): the bar in front
+      # is straight over y +-0.144 at x 0.603, its tips are at (0.546, +-0.2205), the front wheels reach y +-0.227 at
+      # x 0.42. The points lie 4 to 5 mm outside the bar; from the tips to the back the full width. The planner uses
+      # it instead of the rectangle.
+      robot_outline: [0.605, 0.15, 0.54, 0.235, -0.12, 0.235, -0.12, -0.235, 0.54, -0.235, 0.605, -0.15]
       # dock_footprint (the station from above in base_link of the docked mower, as x0, y0, ...) follows once measured;
       # until then the planner takes its own.
       # Cutting width of the big deck: its radius 0.1225 m plus the blades, which stand at most 0.018 m over it, both
