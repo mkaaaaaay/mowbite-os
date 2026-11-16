@@ -26,6 +26,8 @@ namespace {
 
 using FollowPath = mowbite_msgs::action::FollowPath;
 using GoalHandle = rclcpp_action::ServerGoalHandle<FollowPath>;
+// turn_feedback at most: up to 1 the loop of command and turn cannot swing up, whatever the delay of the wheels.
+constexpr double kMaxTurnFeedback = 1.0;
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -68,6 +70,8 @@ class FollowerNode : public rclcpp::Node {
     c.min_turn_rate = declare_parameter("min_turn_rate", c.min_turn_rate);
     c.spot_max_angular = declare_parameter("spot_max_angular", c.spot_max_angular);
     c.turn_deceleration = declare_parameter("turn_deceleration", c.turn_deceleration);
+    c.turn_feedback = declare_parameter("turn_feedback", c.turn_feedback);
+    c.turn_feedback_max = declare_parameter("turn_feedback_max", c.turn_feedback_max);
     c.max_start_distance = declare_parameter("max_start_distance", c.max_start_distance);
     c.goal_tolerance = declare_parameter("goal_tolerance", c.goal_tolerance);
     // Angles in degrees.
@@ -85,10 +89,11 @@ class FollowerNode : public rclcpp::Node {
     dock_max_position_accuracy_ = declare_parameter("dock_max_position_accuracy", 0.03);
     dock_accuracy_per_m_ = declare_parameter("dock_accuracy_per_m", 0.09);
     if (!(dock_max_position_accuracy_ > 0) || !(dock_accuracy_per_m_ >= 0) || !(v.acceleration > 0) ||
-        !(v.deceleration > 0) || !(c.spot_max_angular >= 0) || !(c.turn_deceleration >= 0)) {
+        !(v.deceleration > 0) || !(c.spot_max_angular >= 0) || !(c.turn_deceleration >= 0) ||
+        !(c.turn_feedback >= 0 && c.turn_feedback <= kMaxTurnFeedback) || !(c.turn_feedback_max >= 0)) {
       throw std::invalid_argument(
           "mowbite_follower: dock_max_position_accuracy, acceleration and deceleration above 0, dock_accuracy_per_m, "
-          "spot_max_angular and turn_deceleration from 0 needed");
+          "spot_max_angular, turn_deceleration and turn_feedback_max from 0, turn_feedback from 0 to 1 needed");
     }
     guard_config_.max_cross_track = declare_parameter("max_cross_track", guard_config_.max_cross_track);
     geofence_margin_ = declare_parameter("geofence_margin", 0.5);
@@ -211,6 +216,8 @@ class FollowerNode : public rclcpp::Node {
     config.spot_max_angular = goal->frame == FollowPath::Goal::FRAME_DOCK || config.spot_max_angular <= 0
                                   ? config.max_angular
                                   : std::min(config.spot_max_angular, driver_max_angular_);
+    // In the station frame turns stay as commanded: the pose there comes from the marker, not from the gyro alone.
+    if (goal->frame == FollowPath::Goal::FRAME_DOCK) config.turn_feedback = 0;
     config.stall_time = goal->stall_time > 0 ? goal->stall_time : 0.0;
     config.straight = goal->straight;
     config.reverse = goal->reverse;

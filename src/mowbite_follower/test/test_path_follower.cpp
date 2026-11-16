@@ -30,6 +30,8 @@ struct Robot {
   double max_angular = 0;
   double max_forwards = 0;
   double last_linear = 0;
+  // The share of a commanded turn on the spot the base makes: wheels that slip.
+  double turn_share = 1.0;
 
   void Move(const PathFollower::Command& cmd, double dt) {
     max_linear = std::max(max_linear, std::abs(cmd.linear));
@@ -46,6 +48,7 @@ struct Robot {
       v = (left + right) / 2;
       w = (right - left) / 0.395;
     }
+    if (cmd.linear == 0.0) w *= turn_share;
     pose.yaw = NormalizeAngle(pose.yaw + w * dt * 0.5);
     pose.x += v * dt * std::cos(pose.yaw);
     pose.y += v * dt * std::sin(pose.yaw);
@@ -926,6 +929,80 @@ TEST(PathFollower, TurnsOnTheSpotFasterAndSlowsDownBeforeTheTarget) {
   Drive(follower, robot);
   EXPECT_EQ(follower.phase(), Phase::kDone) << follower.failure();
   EXPECT_LE(robot.max_angular, 0.5);
+}
+
+FollowerConfig SpotConfig(double feedback) {
+  FollowerConfig config;
+  config.max_angular = 0.5;
+  config.min_turn_rate = 0.45;
+  config.spot_max_angular = 0.7;
+  config.turn_deceleration = 1.0;
+  config.turn_feedback = feedback;
+  config.turn_feedback_max = 0.2;
+  // Small turns on the spot too.
+  config.corner_angle = 3.0 * M_PI / 180.0;
+  return config;
+}
+
+struct SpotTurn {
+  double seconds = 0;
+  double fastest = 0;
+  int reversals = 0;
+};
+
+// Turns on the spot by angle (rad) at the start of a line; the base makes turn_share of the commanded turn.
+SpotTurn TurnOnTheSpot(const FollowerConfig& config, double angle, double turn_share) {
+  PathFollower follower{config};
+  EXPECT_EQ(follower.Start(Line(0, 0, angle, 2.0), {}, 0), "");
+  Robot robot;
+  robot.turn_share = turn_share;
+  SpotTurn turn;
+  double last = 0;
+  while (turn.seconds < 20) {
+    const auto cmd = follower.Step(robot.pose, kDt);
+    if (follower.phase() != Phase::kStartTurn) break;
+    EXPECT_EQ(cmd.linear, 0.0);
+    if (last * cmd.angular < 0) turn.reversals++;
+    last = cmd.angular;
+    turn.fastest = std::max(turn.fastest, std::abs(cmd.angular));
+    robot.Move(cmd, kDt);
+    turn.seconds += kDt;
+  }
+  EXPECT_EQ(follower.phase(), Phase::kFollowing) << follower.failure();
+  EXPECT_LE(std::abs(NormalizeAngle(angle - robot.pose.yaw)), config.turn_tolerance + 1e-9);
+  return turn;
+}
+
+// With turn_feedback a turn the heading follows slower than commanded gets more, within its limits.
+TEST(PathFollower, ASlippingTurnOnTheSpotGetsMoreCommand) {
+  const double angle = 10.0 * M_PI / 180.0;
+  const SpotTurn plain = TurnOnTheSpot(SpotConfig(0.0), angle, 0.6);
+  const SpotTurn fed = TurnOnTheSpot(SpotConfig(1.0), angle, 0.6);
+  EXPECT_DOUBLE_EQ(plain.fastest, std::sqrt(2.0 * angle));
+  EXPECT_GT(fed.fastest, plain.fastest + 0.05);
+  EXPECT_LE(fed.fastest, std::sqrt(2.0 * angle) + 0.2 + 1e-9);
+  EXPECT_LT(fed.seconds, plain.seconds);
+  EXPECT_EQ(fed.reversals, 0);
+}
+
+TEST(PathFollower, AFollowingTurnOnTheSpotGetsNoMore) {
+  for (double degrees : {5.0, 10.0, 90.0, 179.0}) {
+    const double angle = degrees * M_PI / 180.0;
+    const SpotTurn plain = TurnOnTheSpot(SpotConfig(0.0), angle, 1.0);
+    const SpotTurn fed = TurnOnTheSpot(SpotConfig(1.0), angle, 1.0);
+    EXPECT_NEAR(fed.fastest, plain.fastest, 1e-9) << degrees;
+    EXPECT_DOUBLE_EQ(fed.seconds, plain.seconds) << degrees;
+    EXPECT_EQ(fed.reversals, 0) << degrees;
+  }
+}
+
+TEST(PathFollower, TheFeedbackStaysWithinTheLimitOfTheTurn) {
+  // Hardly turning at all: the full addition, but never above spot_max_angular.
+  const SpotTurn far = TurnOnTheSpot(SpotConfig(1.0), 90.0 * M_PI / 180.0, 0.3);
+  EXPECT_DOUBLE_EQ(far.fastest, 0.7);
+  const SpotTurn near = TurnOnTheSpot(SpotConfig(1.0), 5.0 * M_PI / 180.0, 0.3);
+  EXPECT_NEAR(near.fastest, 0.45 + 0.2, 1e-9);
+  EXPECT_EQ(near.reversals, 0);
 }
 
 TEST(PathFollower, WithoutSpotValuesTurnsAsBefore) {

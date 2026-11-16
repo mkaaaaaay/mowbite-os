@@ -132,7 +132,9 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
 - How the mower drives, in the platform file: `mowbite_follower` speeds up at `acceleration` and brakes before corners
   and the end at `deceleration` (m/s², by default the same), turns on the spot up to `spot_max_angular` (0: as on the
   path, `max_angular`; in the station frame always `max_angular`) and slows such a turn down before its target at
-  `turn_deceleration` (rad/s², 0: `heading_gain` times the error). `mowbite_safety` lets every moving command grow at
+  `turn_deceleration` (rad/s², 0: `heading_gain` times the error). Where the wheels slip on such turns,
+  `turn_feedback` (0 to 1, 0: none) adds that share of the rate the heading stays behind the command, at most
+  `turn_feedback_max` rad/s and never above the limit of the turn; not in the station frame. `mowbite_safety` lets every moving command grow at
   most `ramp_linear` m/s² and `ramp_angular` rad/s² from the one before, whatever its source (0: no limit); less, a stop
   and an emergency go out at once. Measure how fast the wheels follow before raising any of them.
 - `mowbite_bringup/config/<platform>.yaml`: what differs from `tron.yaml`, which lies underneath (battery voltages

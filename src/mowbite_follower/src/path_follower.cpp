@@ -17,6 +17,10 @@ constexpr double kMoved = 0.05;
 // A straight path: every pose within this many m of the line and facing along it within this many rad.
 constexpr double kStraightOffset = 0.01;
 constexpr double kStraightAngle = 2.0 * M_PI / 180.0;
+// s the command of a turn on the spot and the turn of the heading are smoothed over to compare them, and the rad/s a
+// step of the heading counts as at most (a heading set anew is no turn).
+constexpr double kTurnFilterS = 0.15;
+constexpr double kMaxTurnRate = 2.0;
 
 std::string Format(const char* format, double a, double b = 0) {
   char text[200];
@@ -85,6 +89,7 @@ std::string PathFollower::Start(const std::vector<Pose2>& poses, const std::vect
 PathFollower::Command PathFollower::Step(const Pose2& pose, double dt) {
   if (phase_ == Phase::kIdle || phase_ == Phase::kDone || phase_ == Phase::kFailed) return {};
   time_ += std::clamp(dt, 0.0, 0.2);
+  step_dt_ = std::clamp(dt, 0.0, 0.2);
   const Pose2 travel = Travel(pose);
   if (!begun_) {
     begun_ = true;
@@ -237,8 +242,25 @@ std::optional<PathFollower::Command> PathFollower::TurnTowards(double heading, d
   const double cap = config_.spot_max_angular > 0 ? config_.spot_max_angular : config_.max_angular;
   const double slowing = config_.turn_deceleration > 0 ? std::sqrt(2.0 * config_.turn_deceleration * std::abs(error))
                                                        : config_.steering.heading_gain * std::abs(error);
-  const double rate = std::clamp(slowing, std::min(config_.min_turn_rate, cap), cap);
-  return Command{0.0, std::copysign(rate, error)};
+  const double sign = error > 0 ? 1.0 : -1.0;
+  const double planned = std::clamp(slowing, std::min(config_.min_turn_rate, cap), cap);
+  const double rate = std::min(planned + TurnBoost(heading, sign), cap);
+  turn_command_ = sign * rate;
+  return Command{0.0, turn_command_};
+}
+
+double PathFollower::TurnBoost(double heading, double sign) {
+  if (turn_heading_ && step_dt_ > 0) {
+    // The last command and the turn it made, through the same filter: a mower that follows shows no difference.
+    const double share = std::min(1.0, step_dt_ / kTurnFilterS);
+    const double turned = std::clamp(NormalizeAngle(heading - *turn_heading_) / step_dt_, -kMaxTurnRate, kMaxTurnRate);
+    turn_expected_ += (turn_command_ - turn_expected_) * share;
+    turn_measured_ += (turned - turn_measured_) * share;
+  }
+  turn_heading_ = heading;
+  if (!(config_.turn_feedback > 0) || !(config_.turn_feedback_max > 0)) return 0.0;
+  const double missing = std::max(0.0, sign * (turn_expected_ - turn_measured_));
+  return std::min(config_.turn_feedback * missing, config_.turn_feedback_max);
 }
 
 void PathFollower::Enter(Phase phase) {
@@ -248,6 +270,8 @@ void PathFollower::Enter(Phase phase) {
   }
   if (phase == Phase::kFollowing || Turning(phase)) still_at_.reset();
   if (Turning(phase)) speed_ = 0;
+  turn_heading_.reset();
+  turn_command_ = turn_expected_ = turn_measured_ = 0;
   phase_ = phase;
   phase_start_ = time_;
 }

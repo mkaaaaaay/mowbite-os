@@ -27,6 +27,10 @@ struct FollowerConfig {
   // rad/s² a turn on the spot slows down with before its target, from sqrt(2 * turn_deceleration * error); 0 for
   // heading_gain * error.
   double turn_deceleration = 0;
+  // A turn on the spot that the heading follows slower than commanded (slipping wheels) gets turn_feedback times the
+  // missing rate on top, at most turn_feedback_max rad/s and never above the limit of such turns; 0: none.
+  double turn_feedback = 0;
+  double turn_feedback_max = 0;
   // m from the start pose at most when the path begins.
   double max_start_distance = 1.0;
   // m from the last pose at most when the mower got there.
@@ -115,6 +119,8 @@ class PathFollower {
   Command Fail(Failure kind, const std::string& message);
   // Turns on the spot towards target (rad, for the heading of travel); empty once within turn_tolerance.
   std::optional<Command> TurnTowards(double heading, double target);
+  // rad/s to add to a turn at rate towards sign: what the heading stayed behind the commands so far.
+  double TurnBoost(double heading, double sign);
   void Enter(Phase phase);
   Command Follow(const Pose2& pose, const Pose2& travel, double dt);
   Command FromTravel(double speed, double angular) const;
@@ -136,6 +142,12 @@ class PathFollower {
   double time_ = 0;
   double phase_start_ = 0;
   double speed_ = 0;
+  double step_dt_ = 0;
+  // Of the turn on the spot going on: the heading of the last step, its command, and both rates smoothed alike.
+  std::optional<double> turn_heading_;
+  double turn_command_ = 0;
+  double turn_expected_ = 0;
+  double turn_measured_ = 0;
   std::optional<Pose2> still_at_;
   double still_since_ = 0;
   double progress_along_ = 0;

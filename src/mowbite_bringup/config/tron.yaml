@@ -289,6 +289,10 @@ mowbite_follower:
     max_angular: 0.5
     spot_max_angular: 0.7
     turn_deceleration: 1.0
+    # On the spot the Tron turned at 0.81 of what its wheels reported and 0.61 of the command (mowing, 15.11.): what
+    # the heading stays behind the command comes on top, up to 0.2 rad/s (assumption), within spot_max_angular.
+    turn_feedback: 1.0
+    turn_feedback_max: 0.2
     acceleration: 0.5
     deceleration: 0.8
     # rad/s an arc of the path asks for at most, below max_angular so that the mower can still correct on arcs of
