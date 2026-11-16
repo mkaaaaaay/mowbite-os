@@ -32,7 +32,9 @@ class PoseFilter {
 
   void Reset(const State& state, const Covariance& covariance);
   // Moves distance m along the mean heading of a turn by turn rad; gyro_time s of gyro integration add their noise.
-  void Predict(double distance, double turn, double gyro_time);
+  // slip: m base_link may have moved besides, any way; they add to the standard deviation of both axes, since slip
+  // pushes one way for as long as it lasts.
+  void Predict(double distance, double turn, double gyro_time, double slip = 0.0);
   // A position of the antenna: innovation is the measured minus the expected position, jacobian the one of the
   // expected position, variance that of each axis. Without correct_heading only the position moves.
   void UpdatePosition(const Eigen::Vector2d& innovation, const AntennaJacobian& jacobian, double variance,

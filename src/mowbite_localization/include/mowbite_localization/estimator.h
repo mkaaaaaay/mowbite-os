@@ -100,6 +100,11 @@ class Estimator {
   // driver/geometry. Values that are not positive leave the scale at 1.
   void SetWheelScale(double driver_ticks_per_m, double ticks_per_m);
   double wheel_scale() const { return wheel_scale_; }
+  // The distance between the drive wheels (m) the driver computes the turn rate of the wheels with. With it, wheels
+  // that turn the base more or less than the gyro shows count as slipping: base_link may then move by up to half that
+  // distance times the difference without the wheels reporting it (one wheel grips, the base swings around it), which
+  // the accuracy and the covariance of the position take. Not positive: unknown, no such slip.
+  void SetWheelDistance(double wheel_distance);
   FixResult AddFix(const GnssFix& fix, double t);
 
   void SetGpsEnabled(bool enabled) { gps_enabled_ = enabled; }
@@ -143,6 +148,8 @@ class Estimator {
   // A fix counted (warmup included) within gps_timeout before t.
   bool RecentGps(double t) const;
   double PositionAccuracy(double t) const;
+  // s since the estimate took its last fix, kNoAccuracy without one.
+  double FixAge(double t) const;
   bool geometry_known() const { return geometry_known_; }
   const Eigen::Vector2d& antenna_offset() const { return lever_; }
   // Measured minus expected antenna position of the last fused fix (m).
@@ -191,6 +198,7 @@ class Estimator {
   std::optional<double> tilt_time_;
   bool geometry_known_ = false;
   double wheel_scale_ = 1.0;
+  double wheel_distance_ = 0.0;
   bool gps_enabled_ = true;
   bool heading_valid_ = false;
   bool aligned_ = false;

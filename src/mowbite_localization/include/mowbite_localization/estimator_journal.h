@@ -57,7 +57,7 @@ struct mowbite_journal::CoreTraits<mowbite_localization::Estimator> {
   MOWBITE_JOURNAL_METHODS(&E::AddImu, &E::AddWheels, &E::SetWheelScale, &E::AddFix, &E::SetGpsEnabled,
                           &E::SetGpsLimits, &E::SetAntennaOffset, &E::SetPose, &E::SetHeading, &E::TakeJump,
                           &E::TakeAligned, &E::TakeGyroWarnings, &E::TakeCourseRejections, &E::LoosenHeading,
-                          &E::AddTilt);
+                          &E::AddTilt, &E::SetWheelDistance);
   static mowbite_localization::EstimatorView View(const E& core) {
     return {core.calibrated(), core.heading_valid(), core.gps_valid(), core.geometry_known()};
   }

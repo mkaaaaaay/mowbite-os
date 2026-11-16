@@ -143,3 +143,22 @@ TEST(Set, PositionAndHeadingDropTheirCorrelation) {
 }
 
 }  // namespace
+
+// Slip adds its m to the standard deviation of both axes and leaves the heading alone.
+TEST(PoseFilter, SlipWidensThePositionByItsMetres) {
+  PoseFilter filter{FilterNoise()};
+  Covariance start = Covariance::Zero();
+  start.diagonal() << 0.0004, 0.0009, 0.01;
+  filter.Reset(State::Zero(), start);
+  filter.Predict(0.0, 0.1, 0.0, 0.05);
+  EXPECT_NEAR(std::sqrt(filter.covariance()(0, 0)), 0.02 + 0.05, 1e-12);
+  EXPECT_NEAR(std::sqrt(filter.covariance()(1, 1)), 0.03 + 0.05, 1e-12);
+  EXPECT_DOUBLE_EQ(filter.covariance()(2, 2), 0.01);
+  EXPECT_DOUBLE_EQ(filter.state()(0), 0.0);
+  filter.Predict(0.0, 0.1, 0.0, 0.05);
+  EXPECT_NEAR(std::sqrt(filter.covariance()(0, 0)), 0.02 + 0.10, 1e-12);
+  // Without slip nothing changes.
+  const Covariance before = filter.covariance();
+  filter.Predict(0.0, 0.0, 0.0);
+  EXPECT_EQ(filter.covariance(), before);
+}

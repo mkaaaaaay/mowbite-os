@@ -134,6 +134,7 @@ class LocalizationNode : public rclcpp::Node {
           std::lock_guard<std::mutex> lock(mutex_);
           driver_ticks_per_m_ = msg->wheel_ticks_per_m;
           ApplyWheelScale();
+          estimator_.Call<&Estimator::SetWheelDistance>(msg->wheel_distance);
         });
     // Several nodes leave their parameters latched here; the geometry of the logic is the one that counts.
     params_sub_ = create_subscription<std_msgs::msg::String>(
@@ -445,6 +446,7 @@ class LocalizationNode : public rclcpp::Node {
     msg.position_accuracy = static_cast<float>(estimator_.View().PositionAccuracy(now));
     msg.heading_accuracy = static_cast<float>(estimator_.View().HeadingAccuracy());
     msg.gnss_recent = estimator_.View().RecentGps(now);
+    msg.fix_age = static_cast<float>(estimator_.View().FixAge(now));
     msg.speed = estimator_.View().speed();
     for (int r = 0; r < 3; ++r) {
       for (int c = 0; c < 3; ++c) msg.covariance[3 * r + c] = p(r, c);

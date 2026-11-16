@@ -149,7 +149,9 @@ mowbite_localization:
     min_speed: 0.04
     motion_confirm_time: 0.1
     # The antenna offset is part of the geometry (config/geometry/tron.yaml, robot.geometry), measured in phase 7.
-    # Without a fix the accuracy grows by this much per m driven and per s. Assumptions until measured in phase 7.
+    # Without a fix the accuracy grows by this much per m driven and per s (assumptions until measured in phase 7),
+    # and by half the track times what the gyro turns less than the wheels (in 7 turns on wet lawn the Tron moved
+    # 0.46 to 0.70 of that, 16.11.).
     accuracy_growth_per_m: 0.05
     accuracy_growth_per_s: 0.01
     # Random walk of the filter: position in m per square root of m driven, heading in rad per square root of s the

@@ -63,8 +63,10 @@ bool Estimator::AddImu(double t, double rate) {
   turn_rate_ = bias_.Corrected(rate);
   gyro_heading_ = WrapAngle(gyro_heading_ + turn_rate_ * dt);
   motion_ = Motion{t, speed * dt, turn_rate_ * dt, bias_.holding() ? 0.0 : dt, bias_.holding()};
-  filter_.Predict(motion_.distance, motion_.turn, motion_.gyro_time);
+  const double slip = fresh ? 0.5 * wheel_distance_ * std::abs(wheel_turn - turn_rate_) * dt : 0.0;
+  filter_.Predict(motion_.distance, motion_.turn, motion_.gyro_time, slip);
   accuracy_.OnDistance(motion_.distance);
+  accuracy_.OnSlip(slip);
   Remember(t);
   return true;
 }
@@ -80,6 +82,10 @@ void Estimator::SetWheelScale(double driver_ticks_per_m, double ticks_per_m) {
   const bool known = std::isfinite(driver_ticks_per_m) && std::isfinite(ticks_per_m) && driver_ticks_per_m > 0 &&
                      ticks_per_m > 0;
   wheel_scale_ = known ? driver_ticks_per_m / ticks_per_m : 1.0;
+}
+
+void Estimator::SetWheelDistance(double wheel_distance) {
+  wheel_distance_ = std::isfinite(wheel_distance) && wheel_distance > 0 ? wheel_distance : 0.0;
 }
 
 FixResult Estimator::AddFix(const GnssFix& fix, double t) {
@@ -330,6 +336,10 @@ bool Estimator::RecentGps(double t) const {
 
 double Estimator::PositionAccuracy(double t) const {
   return gate_.initialized() ? accuracy_.Value(t) : kNoAccuracy;
+}
+
+double Estimator::FixAge(double t) const {
+  return gate_.initialized() && last_fix_ ? std::max(0.0, t - last_fix_->time) : kNoAccuracy;
 }
 
 Estimator::Moment Estimator::MomentAt(double t) const {

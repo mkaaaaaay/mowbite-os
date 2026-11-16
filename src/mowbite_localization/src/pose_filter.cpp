@@ -34,7 +34,7 @@ void PoseFilter::Reset(const State& state, const Covariance& covariance) {
   covariance_ = covariance;
 }
 
-void PoseFilter::Predict(double distance, double turn, double gyro_time) {
+void PoseFilter::Predict(double distance, double turn, double gyro_time, double slip) {
   const double mid = state_(2) + 0.5 * turn;
   Covariance transition = Covariance::Identity();
   transition(0, 2) = -distance * std::sin(mid);
@@ -46,6 +46,12 @@ void PoseFilter::Predict(double distance, double turn, double gyro_time) {
   process(0, 0) = process(1, 1) = noise_.odometry * noise_.odometry * std::abs(distance);
   process(2, 2) = noise_.gyro * noise_.gyro * gyro_time;
   covariance_ = transition * covariance_ * transition.transpose() + process;
+  if (slip > 0.0) {
+    for (int axis : {0, 1}) {
+      const double sigma = std::sqrt(std::max(0.0, covariance_(axis, axis))) + slip;
+      covariance_(axis, axis) = sigma * sigma;
+    }
+  }
 }
 
 template <int N>

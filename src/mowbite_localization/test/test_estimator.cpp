@@ -52,6 +52,19 @@ class World {
 
   // Drives at speed (m/s) and turn rate (rad/s); returns how many steps moved the estimate.
   int Run(double seconds, double speed, double turn) {
+    return Move(seconds, speed, turn, odom_scale * speed, odom_scale * turn);
+  }
+
+  // The wheels turn on the spot at wheel_turn (rad/s on a track of 0.4 m) and lose slip_left and slip_right of their
+  // speed on the ground: the base turns less and moves along its heading, the wheels report neither.
+  int Spin(double seconds, double wheel_turn, double slip_left, double slip_right) {
+    const double left = -0.2 * wheel_turn * (1.0 - slip_left);
+    const double right = 0.2 * wheel_turn * (1.0 - slip_right);
+    return Move(seconds, (left + right) / 2, (right - left) / 0.4, 0.0, wheel_turn);
+  }
+
+  // Moves at speed and turn while the wheels report wheel_speed and wheel_turn.
+  int Move(double seconds, double speed, double turn, double wheel_speed, double wheel_turn) {
     int moved = 0;
     for (long i = 0; i < std::lround(seconds / kStep); ++i) {
       t += kStep;
@@ -59,7 +72,7 @@ class World {
       x += speed * kStep * std::cos(mid);
       y += speed * kStep * std::sin(mid);
       heading = WrapAngle(heading + turn * kStep);
-      est.AddWheels(t, odom_scale * speed, odom_scale * turn);
+      est.AddWheels(t, wheel_speed, wheel_turn);
       if (tilt) est.AddTilt(t, tilt->roll, tilt->pitch);
       if (est.AddImu(t, turn + gyro_bias)) moved++;
       const Eigen::Vector2d at = true_lever.value_or(lever);
@@ -1079,3 +1092,103 @@ TEST(E7AntennaHeight, LateFixesTakeTheTiltOfTheirMoment) {
 }
 
 }  // namespace
+
+// E8: wheels that turn the base less than they report slip, and a base that swings around the wheel that grips moves
+// without the wheels reporting it.
+
+// Without fixes the accuracy grows by half the track times what the gyro stays behind the wheels: the limit of
+// 0.10 m comes while the real error is still below it.
+TEST(E8Slip, WithoutFixesTheAccuracyGrowsWithWhatTheGyroStaysBehindTheWheels) {
+  World w;
+  w.est.SetWheelDistance(0.4);
+  w.Aligned();
+  w.gnss = false;
+  const double start = w.est.PositionAccuracy(w.t);
+  // The left wheel loses 0.8 of 0.6 rad/s: the base turns at 0.36 rad/s and moves at 0.048 m/s.
+  double worst = -1.0;
+  double stopped = 0;
+  for (int i = 0; i < 25 && stopped == 0; i++) {
+    w.Spin(0.2, 0.6, 0.8, 0.0);
+    worst = std::max(worst, w.PositionError() - w.est.PositionAccuracy(w.t));
+    if (w.est.PositionAccuracy(w.t) > 0.10) stopped = w.PositionError();
+  }
+  // The accuracy stays ahead of the error and passes the limit before the error does.
+  EXPECT_LT(worst, 0.0);
+  EXPECT_GT(stopped, 0.0);
+  EXPECT_LT(stopped, 0.10);
+  // 0.2 m * 0.24 rad/s = 0.048 m per s on top of the growth with time.
+  World same;
+  same.est.SetWheelDistance(0.4);
+  same.Aligned();
+  same.gnss = false;
+  same.Spin(1.0, 0.6, 0.8, 0.0);
+  EXPECT_NEAR(same.est.PositionAccuracy(same.t), start + 0.01 + 0.048, 1e-6);
+}
+
+// Wheels and gyro that agree show no slip, and without the track of the wheels nobody knows: as before.
+TEST(E8Slip, NoneWhileWheelsAndGyroAgreeOrTheTrackIsUnknown) {
+  World w;
+  w.est.SetWheelDistance(0.4);
+  w.Aligned();
+  w.gnss = false;
+  const double start = w.est.PositionAccuracy(w.t);
+  w.Run(2.0, 0.0, 0.6);
+  EXPECT_NEAR(w.est.PositionAccuracy(w.t), start + 0.02, 1e-9);
+  World unknown;
+  unknown.Aligned();
+  unknown.gnss = false;
+  unknown.Spin(2.0, 0.6, 0.8, 0.0);
+  EXPECT_NEAR(unknown.est.PositionAccuracy(unknown.t), start + 0.02, 1e-9);
+  unknown.est.SetWheelDistance(std::nan(""));
+  unknown.Spin(1.0, 0.6, 0.8, 0.0);
+  EXPECT_NEAR(unknown.est.PositionAccuracy(unknown.t), start + 0.03, 1e-9);
+}
+
+// With fixes the estimate follows a base that slips away while it turns on the spot; without the track of the
+// wheels the fixes end as contradictions and a jump.
+TEST(E8Slip, WithFixesTheEstimateFollowsTheSlidingBase) {
+  World blind;
+  blind.Aligned();
+  blind.Run(20.0, 0.0, 0.0);
+  double blind_worst = 0;
+  bool jumped = false;
+  for (int i = 0; i < 40; i++) {
+    blind.Spin(0.2, 0.6, 0.8, 0.0);
+    blind_worst = std::max(blind_worst, blind.PositionError());
+    jumped = jumped || blind.est.TakeJump().has_value();
+  }
+  EXPECT_GT(blind_worst, 0.10);
+  EXPECT_TRUE(jumped);
+
+  World w;
+  w.est.SetWheelDistance(0.4);
+  w.Aligned();
+  w.Run(20.0, 0.0, 0.0);
+  double worst = 0;
+  for (int i = 0; i < 40; i++) {
+    w.Spin(0.2, 0.6, 0.8, 0.0);
+    worst = std::max(worst, w.PositionError());
+    EXPECT_EQ(w.last(), FixResult::kFused);
+    EXPECT_FALSE(w.est.TakeJump());
+  }
+  EXPECT_LT(worst, 0.03);
+  EXPECT_LT(std::abs(w.HeadingError()), 1.0 * kDeg);
+}
+
+TEST(L7Accuracy, TheAgeOfTheLastFixTheEstimateTook) {
+  World w;
+  EXPECT_EQ(w.est.FixAge(w.t), kNoAccuracy);
+  w.Ready();
+  EXPECT_NEAR(w.est.FixAge(w.t), 0.0, 1e-9);
+  w.gnss = false;
+  w.Run(1.2, 0.0, 0.0);
+  EXPECT_NEAR(w.est.FixAge(w.t), 1.2, 1e-9);
+  // A fix the estimate does not take leaves the age.
+  w.gnss = true;
+  w.accuracy = 0.3;
+  w.Run(0.4, 0.0, 0.0);
+  EXPECT_NEAR(w.est.FixAge(w.t), 1.6, 1e-9);
+  w.accuracy = 0.02;
+  w.Run(0.2, 0.0, 0.0);
+  EXPECT_NEAR(w.est.FixAge(w.t), 0.0, 1e-9);
+}
