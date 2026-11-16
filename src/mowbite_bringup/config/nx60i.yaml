@@ -55,3 +55,6 @@ mowbite_follower:
     max_angular: 0.3
     acceleration: 0.1
     min_turn_rate: 0.28
+    # A turn on the spot does not hold its place: the speed below which these wheels stick is not measured.
+    # turn_fix_timeout and max_turn_slide are those of tron.yaml, assumptions until the safety measurement.
+    turn_hold_gain: 0.0
