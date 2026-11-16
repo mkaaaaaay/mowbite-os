@@ -9,11 +9,11 @@ as it is, one that does not read back stops the limits without the take-over; th
 Exit 0: control on. 1: stopped at a value that did not read back, 004d and page set back, the exposure stays fixed.
 2: 004d or page could not be set back, the state of the bridge is unknown.
 
-"tron-stereo-ae watch" stays and follows the gain level that the camera node wishes for in a file: day, dusk or night
-(LEVELS). The file is input of another user: anything but a fresh line with a known level means day. It writes at most
-every 30 s, under the lock that the node holds around the start and the stop of a stream, and names the level it set
-in /run/mowbite/stereo-level. It ends with 0 at limits it does not know, 1 after three writes in a row that did not
-read back, 2 with the bridge in an unknown state, which it also notes in the setup result.
+"tron-stereo-ae watch" stays and follows the gain level that the camera node wishes for in WISH (LEVELS). The file is
+input of another user: anything but a fresh line with a known level means day. It writes at most every 30 s, under
+the lock that the node holds around the start and the stop of a stream, and names the level it set in LEVEL_SET.
+Exit 0 at limits it does not know, 1 after three writes in a row that did not read back, 2 with the bridge in an
+unknown state, which it also notes in the setup result.
 """
 import ctypes
 import fcntl
@@ -37,6 +37,9 @@ LEVELS = {
 }
 BASE_LEVEL = "day"
 GAIN_MIN, GAIN_MAX, GAIN_MAX_TABLE = (0x00FC, 0x0AB0), (0x00FA, 0x0AAE), (0x00, 0x40)
+# High and low bytes this file writes into a gain limit. Per byte, so that limits left half written by a failed try
+# can be written again.
+GAIN_BYTES = [{pair[i] for limits in LEVELS.values() for pair in limits} | {GAIN_MAX_TABLE[i]} for i in (0, 1)]
 LIMITS = (
     ("exposure", (0x00E2, 0x0A96), (0x20, 0x00), (0x53, 0x00)),
     ("gain", GAIN_MAX, GAIN_MAX_TABLE, LEVELS[BASE_LEVEL][1]),
@@ -100,11 +103,20 @@ def write(fd, addr, reg, value, name):
     return back == value
 
 
+def read_pair(fd, reg):
+    return read(fd, XC9080, reg), read(fd, XC9080, reg + 1)
+
+
+def page(xc, low):
+    """Selects page 80/<low> of the bridge."""
+    return xc(0xFFFD, 0x80) and xc(0xFFFE, low)
+
+
 def raise_limits(fd, xc):
     """Raises each limit where both pairs still hold the bridge table; the page is 80/50 before and after."""
-    if not (xc(0x004D, 0x03) and xc(0xFFFD, 0x80) and xc(0xFFFE, 0x14)):
+    if not (xc(0x004D, 0x03) and page(xc, 0x14)):
         return False
-    pairs = lambda regs: [(read(fd, XC9080, reg), read(fd, XC9080, reg + 1)) for reg in regs]
+    pairs = lambda regs: [read_pair(fd, reg) for reg in regs]
     try:
         written, failed = [], False
         for name, regs, table, wanted in LIMITS:
@@ -131,7 +143,7 @@ def raise_limits(fd, xc):
                       flush=True)
     except OSError as e:
         print(f"tron-stereo-ae: limits: {e}", flush=True)
-    return xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50)
+    return page(xc, 0x50)
 
 
 def sensors_on(fd, xc):
@@ -141,15 +153,15 @@ def sensors_on(fd, xc):
 
 def set_back(xc):
     """004d lives on page 80/50; back to 0 there, then the page the kernel driver left (80/26)."""
-    back = xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50) and xc(0x004D, 0x00)
-    return xc(0xFFFD, 0x80) and xc(0xFFFE, 0x26) and back
+    back = page(xc, 0x50) and xc(0x004D, 0x00)
+    return page(xc, 0x26) and back
 
 
 def control_on(fd):
     xc = lambda reg, v: write(fd, XC9080, reg, v, "XC9080")
     ok = False
     try:
-        ok = xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50) and raise_limits(fd, xc) and sensors_on(fd, xc)
+        ok = page(xc, 0x50) and raise_limits(fd, xc) and sensors_on(fd, xc)
         return 0 if ok else 1
     finally:
         if not set_back(xc):
@@ -163,38 +175,34 @@ def set_level(fd, level):
     "kept": they were there. "set". "foreign": a byte this file never writes there, left. "failed": a value did not
     read back or the bus failed, 004d and page set back. "unknown": 004d or page not set back."""
     xc = lambda reg, v: write(fd, XC9080, reg, v, "XC9080")
-    pair = lambda reg: (read(fd, XC9080, reg), read(fd, XC9080, reg + 1))
     wanted = dict(zip(GAIN_MIN + GAIN_MAX, (LEVELS[level][0],) * 2 + (LEVELS[level][1],) * 2))
-    # Per byte, so that limits left half written by a failed try can be written again.
-    pairs = [pair for limits in LEVELS.values() for pair in limits] + [GAIN_MAX_TABLE]
-    known = [{pair[i] for pair in pairs} for i in (0, 1)]
     result, control_off = "failed", False
     try:
-        if not (xc(0xFFFD, 0x80) and xc(0xFFFE, 0x14)):
+        if not page(xc, 0x14):
             return result
-        now = {reg: pair(reg) for reg in wanted}
+        now = {reg: read_pair(fd, reg) for reg in wanted}
         if now == wanted:
             result = "kept"
-        elif any(hi not in known[0] or lo not in known[1] for hi, lo in now.values()):
+        elif any(hi not in GAIN_BYTES[0] or lo not in GAIN_BYTES[1] for hi, lo in now.values()):
             print("tron-stereo-ae: gain limits left at " + ", ".join(f"{hi:02x} {lo:02x}" for hi, lo in now.values()),
                   flush=True)
             result = "foreign"
         else:
             control_off = True
             taken = False
-            if (xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50) and xc(0x004D, 0x03) and xc(0xFFFD, 0x80) and xc(0xFFFE, 0x14)
+            if (page(xc, 0x50) and xc(0x004D, 0x03) and page(xc, 0x14)
                     and all(xc(reg, hi) and xc(reg + 1, lo) for reg, (hi, lo) in wanted.items())):
                 for reg in LIMIT_TAKE_OVER:
                     put(fd, XC9080, reg, 0x01)
-                taken = {reg: pair(reg) for reg in wanted} == wanted
+                taken = {reg: read_pair(fd, reg) for reg in wanted} == wanted
             # In any case: the control must not stay off.
-            on = xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50) and sensors_on(fd, xc)
+            on = page(xc, 0x50) and sensors_on(fd, xc)
             result = "set" if taken and on else "failed"
     except OSError as e:
         print(f"tron-stereo-ae: gain level {level}: {e}", flush=True)
     finally:
         try:
-            back = set_back(xc) if control_off else xc(0xFFFD, 0x80) and xc(0xFFFE, 0x26)
+            back = set_back(xc) if control_off else page(xc, 0x26)
         except OSError:
             back = False
         if not back:
