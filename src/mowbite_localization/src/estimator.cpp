@@ -176,8 +176,9 @@ void Estimator::Fuse(const Eigen::Vector2d& antenna, double accuracy, const Mome
   const Eigen::Vector2d lever = Lever(then.tilt);
   const Eigen::Vector2d innovation = antenna - AntennaPosition(then.state, lever);
   const double sigma = std::max(accuracy, 0.005);
-  filter_.UpdatePosition(innovation, AntennaPositionJacobian(then.state, lever), sigma * sigma,
-                         std::abs(turn_rate_) <= config_.steady_turn_rate);
+  // An antenna at rest says nothing about the heading: only the fixes of a drive correct it.
+  const bool heading = std::abs(speed_) >= config_.min_speed && std::abs(turn_rate_) <= config_.steady_turn_rate;
+  filter_.UpdatePosition(innovation, AntennaPositionJacobian(then.state, lever), sigma * sigma, heading);
   ShiftHistory(before);
   accuracy_.OnFix(accuracy, t);
   last_fix_ = LastFix{antenna, t};

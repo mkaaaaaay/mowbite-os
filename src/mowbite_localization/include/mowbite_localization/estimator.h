@@ -42,7 +42,8 @@ struct EstimatorConfig {
   int contradiction_reset = 5;
   // While the gyro turns faster than this (rad/s), GNSS corrects the heading neither by a fix nor by a single course: a
   // fix later than gnss_latency lies behind the turn and would hold the heading back. Runs of courses still align an
-  // unknown or contradicted heading.
+  // unknown or contradicted heading. Fixes do not correct the heading of a standing mower either (wheels below
+  // min_speed): the errors of a position at rest would turn it over the lever of the antenna.
   double steady_turn_rate = 0.05;
   // Variances after set_pose (m², rad²) and of a heading given by set_heading (rad²).
   double pose_variance = 1.0;

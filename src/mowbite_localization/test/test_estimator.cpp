@@ -774,6 +774,37 @@ TEST(E2StandingStill, ATurnByHandIsIntegrated) {
   EXPECT_LT(std::abs(w.HeadingError()), 0.1 * kDeg);
 }
 
+TEST(E2StandingStill, FixesBesideTheEstimateDoNotTurnALooseHeading) {
+  World w;
+  w.Aligned();
+  w.Run(2.0, 0.0, 0.0);
+  w.est.LoosenHeading();
+  const double heading = w.est.pose().heading;
+  // The fixes drift 5 cm to the side while the mower stands.
+  w.fix_offset = Eigen::Vector2d(0.0, 0.05);
+  w.Run(5.0, 0.0, 0.0);
+  EXPECT_EQ(w.est.pose().heading, heading);
+  EXPECT_NEAR(w.est.HeadingAccuracy(), 20.0 * kDeg, 0.5 * kDeg);
+  // Driving on, the fixes and courses correct it.
+  w.fix_offset = Eigen::Vector2d::Zero();
+  w.Run(2.0, 0.3, 0.0);
+  EXPECT_LT(std::abs(w.HeadingError()), 1.0 * kDeg);
+  EXPECT_LT(w.est.HeadingAccuracy(), 5.0 * kDeg);
+}
+
+TEST(E2StandingStill, AfterATurnOnTheSpotWithAWrongOffsetTheHeadingHolds) {
+  // The antenna 10 cm ahead where the geometry says 2 cm: the turn throws the position, which loosens the heading.
+  World w({}, Eigen::Vector2d(0.02, 0.0));
+  w.true_lever = Eigen::Vector2d(0.1, 0.0);
+  w.Aligned();
+  w.Run(3.0, 0.3, 0.0);
+  w.Run(2.0, 0.0, 0.0);
+  w.Run(3.0 * M_PI / 0.3, 0.0, -0.3);
+  EXPECT_GT(w.est.HeadingAccuracy(), 10.0 * kDeg);
+  w.Run(5.0, 0.0, 0.0);
+  EXPECT_LT(std::abs(w.HeadingError()), 1.0 * kDeg);
+}
+
 // E3: the heading accuracy comes from the filter.
 TEST(E3HeadingAccuracy, FromTheFilter) {
   World w;
