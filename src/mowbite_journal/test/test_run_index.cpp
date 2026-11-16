@@ -4,6 +4,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <thread>
 
 #include "mowbite_journal/format.h"
@@ -43,6 +44,15 @@ class RunIndexTest : public ::testing::Test {
     for (int i = 0; i < static_cast<int>(seconds / 0.02); ++i) {
       journal.Append(stream, kRawBytes, bytes, sizeof(bytes));
       Wait(0.02);
+    }
+  }
+
+  // Records until the run has at least `segments` files, for 5 s at most: a busy machine flushes late.
+  static void FeedUntil(Journal& journal, const std::string& run, size_t segments) {
+    for (int i = 0; i < 25; ++i) {
+      Feed(journal, 0.2);
+      const auto files = std::distance(fs::directory_iterator(run), fs::directory_iterator());
+      if (static_cast<size_t>(files) >= segments + 1) return;
     }
   }
 
@@ -212,13 +222,13 @@ TEST_F(RunIndexTest, TheIndexReadsWhatNoLongerChangesOnce) {
   auto journal = Journal::Create(options_, &error);
   ASSERT_TRUE(journal) << error;
   const std::string run = journal->GetStats().run_dir;
-  Feed(*journal, 0.4);
+  FeedUntil(*journal, run, 2);
   const size_t first = index.Refresh(true).at(0).segments.size();
   EXPECT_GE(first, 2u);
   EXPECT_EQ(index.heads_read(), first);
   EXPECT_TRUE(index.Refresh(true).at(0).active);
 
-  Feed(*journal, 0.4);
+  FeedUntil(*journal, run, first + 1);
   uint64_t heads = index.heads_read();
   const size_t second = index.Refresh(true).at(0).segments.size();
   EXPECT_GT(second, first);
