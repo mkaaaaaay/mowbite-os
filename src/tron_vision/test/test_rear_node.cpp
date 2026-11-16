@@ -308,6 +308,36 @@ TEST_F(RearNodeTest, RecordingOffByDefaultAndOnlyBelowRun) {
   }
 }
 
+// A value of the wrong type, as a device file may carry it, does not end the node: a whole number where a decimal one
+// is meant and the other way round count, anything else leaves the recording off.
+TEST_F(RearNodeTest, RecordingTakesWholeNumbersAndSurvivesWrongTypes) {
+  for (const bool numbers : {true, false}) {
+    Rig rig;
+    RecordLimits seen;
+    rig.seams.adjust = [&seen, adjust = rig.seams.adjust](RearConfig& config, RearCameraConfig& camera) {
+      adjust(config, camera);
+      seen = config.record;
+    };
+    rclcpp::NodeOptions options = rig.Options();
+    if (numbers) {
+      options.append_parameter_override("record_max_mb", 200.0);
+      options.append_parameter_override("record_keep_min", 120);
+      options.append_parameter_override("record_interval_s", 1);
+    } else {
+      options.append_parameter_override("record_dir", 7);
+      options.append_parameter_override("record_max_mb", "200");
+      options.append_parameter_override("record_keep_min", true);
+      options.append_parameter_override("record_interval_s", "fast");
+    }
+    EXPECT_NO_THROW(RearNode node(options, rig.seams)) << numbers;
+    EXPECT_EQ(seen.max_bytes, numbers ? 200UL << 20 : 0UL);
+    if (numbers) {
+      EXPECT_DOUBLE_EQ(seen.keep_s, 7200.0);
+      EXPECT_DOUBLE_EQ(seen.interval_s, 1.0);
+    }
+  }
+}
+
 // Without calibration: OFF with NOT_SET_UP at least once a second, a request does not open the camera.
 TEST_F(RearNodeTest, NotSetUpWithoutCalibration) {
   Rig rig;
