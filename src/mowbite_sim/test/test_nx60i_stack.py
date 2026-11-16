@@ -1,4 +1,5 @@
-"""MowBite OS on the NX60i as nx60i.launch.py starts it, against fake_xcore on UDP over the loopback: the stack comes up
+"""MowBite OS on the NX60i as mowbite.launch.py starts it, against fake_xcore on UDP over the loopback: the stack
+comes up
 IDLE with the capabilities of the speed model and the speeds for the planner on bridge/params, the gyro calibrates on
 the wheel reports of the driver; without a safety measurement mowing and drives are refused; the emergency stop latches
 and is released; on the station the charge of the board is confirmed (DOCKED) and its loss told (CHARGING_LOST), with
@@ -41,13 +42,15 @@ from sim_common import (HISTORY, LATCHED, ROSOUT, SimProbe, fake_xcore, log_entr
 
 WORK = tempfile.mkdtemp(prefix="mowbite_nx60i_")
 STATE, FLAGS, LOG, DATA = sim_files(WORK)
+# The journal of ctest (MOWBITE_JOURNAL_DIR), else one of its own: the incidents need one.
+JOURNAL = os.environ.get("MOWBITE_JOURNAL_DIR") or os.path.join(WORK, "journal")
 GROUP_PORT, BIND_IP = loopback_group()
 DATUM = (52.0, 9.0, 80.0)
 EMERGENCY = 1
 CLAIM, DATA_MSG = 3, 1
 # The bits of the board as the driver sends them.
 BOARD_LATCH, BOARD_HIGH_LEVEL = 1, 128
-# nx60i.launch.py and stack.py.
+# platform.py of the NX60i and stack.py.
 DRIVER_RESTARTS = 3
 # max_duty 0.3 of nx60i.yaml in the speed model 0.58 x (duty - 0.019).
 REACHED = 0.58 * (0.3 - 0.019)
@@ -60,10 +63,12 @@ def generate_test_description():
                        "--log", LOG, "--log-max-mb", "60")
     stack = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(FindPackageShare("mowbite_bringup").find("mowbite_bringup"),
-                                                   "launch", "nx60i.launch.py")),
-        launch_arguments={"interface": "lo", "bind_ip": BIND_IP, "announcement_port": str(GROUP_PORT),
-                          "data_dir": DATA, "datum_lat": str(DATUM[0]), "datum_long": str(DATUM[1]),
-                          "datum_height": str(DATUM[2]), "mqtt_port": str(random.randint(18000, 18999))}.items())
+                                                   "launch", "mowbite.launch.py")),
+        launch_arguments={"platform": "nx60i", "interface": "lo", "bind_ip": BIND_IP,
+                          "announcement_port": str(GROUP_PORT), "data_dir": DATA, "journal_dir": JOURNAL,
+                          "datum_lat": str(DATUM[0]),
+                          "datum_long": str(DATUM[1]), "datum_height": str(DATUM[2]),
+                          "mqtt_port": str(random.randint(18000, 18999))}.items())
     return launch.LaunchDescription([
         board,
         TimerAction(period=0.5, actions=[stack, launch_testing.actions.ReadyToTest()]),

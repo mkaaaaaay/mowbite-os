@@ -1,7 +1,7 @@
 """A receiver that reports a wrong course at the right speed: the localization keeps to the track of the fixes.
 
 The chain is fake_tron, tron_mcu, tron_gnss (motion vector from the course of the receiver, not from the positions),
-tron_imu and the localization with the values of tron.yaml; the test plays the logic (the geometry on bridge/params)
+tron_imu and the localization with the values of the Tron; the test plays the logic (the geometry on bridge/params)
 and drives straight on hw/cmd_vel. With every course 160 deg off (as the LG290P 0.9.50 sent it) the heading stays
 invalid and the localization warns; with the right course it aligns.
 

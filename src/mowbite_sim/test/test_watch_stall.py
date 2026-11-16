@@ -36,7 +36,7 @@ EXIT_NOTE = os.path.join(DATA, "container_exit.json")
 WATCH_NOTE = os.path.join(DATA, "watch_exit.json")
 CONFIG = os.path.join(WORK, "watch.yaml")
 UNEXPECTED_RESTART = HardwareStatus.REASON_UNEXPECTED_RESTART
-# tron.yaml: cmd_vel_timeout of tron_mcu and blade_lease of the logic.
+# The Tron: cmd_vel_timeout of tron_mcu and blade_lease of the logic.
 CMD_VEL_TIMEOUT = 0.5
 BLADE_LEASE = 1.0
 # mowbite_watch: limits of the bridge and of S2, how often it judges, and its exit code.

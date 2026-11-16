@@ -180,7 +180,7 @@ class FollowerNode : public rclcpp::Node {
           wheel_stamp_ = stamp;
           wheel_time_ = MonotonicSeconds();
         });
-    // max_position_accuracy of tron.yaml holds until the logic tells its own (params.set).
+    // max_position_accuracy of the parameter files holds until the logic tells its own (params.set).
     limits_sub_ = create_subscription<mowbite_msgs::msg::GpsLimits>(
         "logic/gps_limits", rclcpp::QoS(1).reliable().transient_local(),
         [this](const mowbite_msgs::msg::GpsLimits::ConstSharedPtr& msg) {

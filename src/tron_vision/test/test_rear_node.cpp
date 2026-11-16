@@ -199,7 +199,7 @@ struct Rig {
     const test::Scene s = test::RearScene();
     rclcpp::NodeOptions options;
     options.append_parameter_override("crash_dir", dir.Path() + "/markers");
-    // As tron.launch.py names the process.
+    // As platform.py of the Tron names the process.
     options.append_parameter_override("process", "rear");
     options.append_parameter_override("video", video);
     options.append_parameter_override("rtsp_port", 0);

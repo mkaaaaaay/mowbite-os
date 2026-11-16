@@ -67,6 +67,11 @@ class TestShutdown(unittest.TestCase):
 # --- the stack
 
 
+def journal_dir(work):
+    """The journal of ctest (MOWBITE_JOURNAL_DIR), else one in work."""
+    return os.environ.get("MOWBITE_JOURNAL_DIR") or os.path.join(work, "journal")
+
+
 def sim_files(work):
     """Where sim_stack puts the files of fake_tron: (state, flags, rx log, data dir)."""
     return (os.path.join(work, "state.json"), os.path.join(work, "flags.json"), os.path.join(work, "rx.jsonl"),
@@ -123,9 +128,8 @@ def sim_links(work):
 
 
 def antenna_height():
-    """antenna_height (m) of the Tron in config/geometry/tron.yaml."""
-    path = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
-    with open(path) as f:
+    """antenna_height (m) of the Tron in its geometry.yaml."""
+    with open(layers.geometry("tron")) as f:
         return float(yaml.safe_load(f)["mowbite_localization"]["ros__parameters"]["antenna_height"])
 
 
@@ -152,13 +156,13 @@ def fake_xcore(group_port, *args):
 
 
 def xcore_battery():
-    """The battery voltages of nx60i.yaml as nx60i.launch.py hands them to the driver (logic_params.py of
+    """The battery voltages of the logic on the NX60i as its platform.py hands them to the driver (logic_params.py of
     xcore_driver)."""
     launch_dir = os.path.join(get_package_share_directory("xcore_driver"), "launch")
     if launch_dir not in sys.path:
         sys.path.insert(0, launch_dir)
     import logic_params
-    return logic_params.battery_voltages(layers.files("nx60i"))
+    return logic_params.battery_voltages(layers.parameters(layers.files("nx60i"), "mowbite_logic"))
 
 
 def xcore_driver(bind_ip, group_port, config=None, node=None, **params):
@@ -187,8 +191,31 @@ def stop_process(proc, sig=signal.SIGTERM, group=False):
     return proc.returncode
 
 
+def pids(proc_info, name):
+    """Pids of the processes with that name that started, oldest first."""
+    out = []
+    for action in proc_info.processes():
+        event = proc_info[action]
+        if name in action.process_details["name"] and isinstance(event, ProcessStarted):
+            out.append(event.pid)
+    return out
+
+
+def alive(pid):
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            return "State:\tZ" not in f.read()
+    except OSError:
+        return False
+
+
+def running(proc_info, name):
+    """Pids of the processes with that name that run now."""
+    return [pid for pid in pids(proc_info, name) if alive(pid)]
+
+
 def container_pid(proc_info):
-    """The pid of the container that runs now; tron.launch.py starts a new one after each crash."""
+    """The pid of the container that runs now; the start makes a new one after each crash."""
     for action in proc_info.processes():
         event = proc_info[action]
         if "component_container_isolated" in action.process_details["name"] and isinstance(event, ProcessStarted):

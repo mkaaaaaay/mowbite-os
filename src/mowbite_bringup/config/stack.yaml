@@ -1,5 +1,5 @@
 # Parameters of MowBite OS on every mower. The start loads this file first, then the file of the platform
-# (<platform>.yaml), then the measured values of one mower from data_dir.
+# (platform.yaml of its package), then the measured values of one mower from data_dir (<platform>.yaml).
 # <platform> marks a value every platform has to set in its own file, in the same section: the start halts with
 # PLATFORM_CONFIG while a node it starts has one left. A part that is off here (0, none, "") is turned on by the
 # platforms that have it. Every value has its meaning here and its value in one file.

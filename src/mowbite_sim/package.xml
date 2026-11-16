@@ -9,6 +9,7 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <exec_depend>mowbite_bringup</exec_depend>
+  <exec_depend>platform_tron</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>rclpy</exec_depend>
@@ -30,6 +31,7 @@
   <test_depend>tron_mcu</test_depend>
   <test_depend>mowbite_replay</test_depend>
   <test_depend>xcore_driver</test_depend>
+  <test_depend>platform_nx60i</test_depend>
   <test_depend>tron_gnss</test_depend>
   <test_depend>tron_imu</test_depend>
   <test_depend>mowbite_localization</test_depend>

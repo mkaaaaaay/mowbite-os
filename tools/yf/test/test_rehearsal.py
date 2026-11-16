@@ -36,7 +36,7 @@ GROUP_PORT = random.randint(42000, 48000)
 BIND_IP = f"127.{random.randint(1, 250)}.{random.randint(1, 250)}.{random.randint(2, 250)}"
 SERVICES = os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "config", "xcore_nx60i_services.json")
 FAKE = os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_xcore")
-BATTERY_PARAMS = os.path.join(FindPackageShare("mowbite_bringup").find("mowbite_bringup"), "config", "nx60i.yaml")
+BATTERY_PARAMS = os.path.join(FindPackageShare("platform_nx60i").find("platform_nx60i"), "platform.yaml")
 # The fake's speed model by default, as in nx60i.yaml: the wheels turn as fast as the driver commands.
 DUTY_SLOPE = 0.58
 DUTY_DEADBAND = 0.019

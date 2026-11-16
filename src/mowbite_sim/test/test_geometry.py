@@ -16,7 +16,6 @@ import launch
 import launch_testing.actions
 import rclpy
 import yaml
-from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
 from mowbite_msgs.msg import ActionList, HardwareStatus, MqttPublish, RpcError, RpcMethods, RpcRequest, RpcResponse
 from mowbite_msgs.msg import RobotPose
@@ -25,12 +24,12 @@ from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import HISTORY, LATCHED, ROSOUT, SimProbe, TestShutdown  # noqa: E402,F401
+from sim_common import HISTORY, LATCHED, ROSOUT, SimProbe, TestShutdown, layers  # noqa: E402,F401
 
 DATUM = (52.0, 9.0, 50.0)
 WORK = tempfile.mkdtemp(prefix="mowbite_geometry_")
 FILE = os.path.join(WORK, "geometry.json")
-GEOMETRY = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
+GEOMETRY = layers.geometry("tron")
 G = "/mowbite_geometry/"
 with open(GEOMETRY) as f:
     FLAT = yaml.safe_load(f)["mowbite_logic"]["ros__parameters"]["geometry"]["robot_outline"]

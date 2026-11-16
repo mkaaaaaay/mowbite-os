@@ -1,8 +1,9 @@
 # Adding a mower
 
 MowBite OS reaches the hardware only through the contract `hw/*`. A new mower needs a driver for it, a fake board for
-the simulation, its dimensions, a start file, a way onto the mower and a safety measurement. Logic, follower, safety
-filter, map, planner, bridge and app stay as they are.
+the simulation, a platform package (its dimensions, its values and its part of the start), a way onto the mower and a
+safety measurement. Logic, follower, safety filter, map, planner, bridge, app and the start of the stack stay as they
+are: no file of `mowbite_bringup` names a mower.
 
 The drivers there are: `tron_mcu` (Airseekers Tron, serial MCU, GNSS and IMU as nodes of their own) and `xcore_driver`
 (YardForce NX60i, OpenMower v2 board on Ethernet, passes IMU and GNSS on). Start from the closer one.
@@ -79,19 +80,21 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
 
 ## 3. Dimensions and settings
 
-- `mowbite_bringup/config/geometry/<platform>.yaml`: `geometry.*` in m, base_link in the middle of the drive axle, x
+- `geometry.yaml` of the platform package (section 4): `geometry.*` in m, base_link in the middle of the drive axle, x
   forward, y left: `platform`, `robot_width`, `robot_front`, `robot_rear`, `mower_width`, `blade_ahead`,
   `blade_offset`, `antenna_x`, `antenna_y`, `track`, `wheel_radius`, `wheel_width`, `dock_contact_x`, `ticks_per_m`,
   `imu_roll`, `imu_pitch`. Without `platform` or a number the start stops, also when the body (box or outline) does
   not cover the drive wheels from above (`wheel_radius` ahead and behind the axle, `track` / 2 ± `wheel_width` / 2
   aside); `robot.geometry.set` refuses such a body with `WHEELS_OUTSIDE`. Optional `robot_outline`: the contour from above as a
-  flat list x0, y0, x1, y1, ... (at least 3 points); the planner then uses it instead of the rectangle (`tron.yaml`).
+  flat list x0, y0, x1, y1, ... (at least 3 points); the planner then uses it instead of the rectangle (the Tron has
+  one).
   Optional `dock_footprint`: the docking station from above in base_link of the docked mower, the same kind of list,
   for the planner to keep its lanes and turns off it; the platform's alone, without it the planner takes its own.
   `dock_contact_x` says where the charging contacts are: below 0 at the back (the mower backs onto the station and
   leaves it forwards), above 0 in front (forwards onto it, straight back off it, never faster than `docking_speed`;
   the safety filter cuts every reversing of the follower to 0.12 m/s), 0 none (no docking, `docking.start` is not
-  offered). Set `contact_speed` and `dock_overshoot` to how late the board reports the contact (`nx60i.yaml`).
+  offered). Set `contact_speed` and `dock_overshoot` to how late the board reports the contact (`platform.yaml` of the
+  NX60i).
   In the same file under `mowbite_localization`: `antenna_height`, the GPS antenna above the ground (m, 0 to 1). On a
   slope the localization tilts the lever (`antenna_x`, `antenna_y`, `antenna_height`) by roll and pitch from
   `imu/data` (its orientation, or gravity when `orientation_covariance[0]` is -1), so the pose stays over the ground
@@ -144,23 +147,25 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   `TURN_SLIDE` once base_link is that far from the place such a turn began at: take what the body may leave its lane
   by next to an edge. Every such turn goes out on `follower/spot_turn` (commanded, wheels,
   heading, how far base_link got) and the log sums them up per path. The calibration drive
-  turns on the spot at `spin_rate` of `mowbite_calibration` (0.3 rad/s, at most what the driver allows): raise it where
+  turns on the spot at `spin_rate` of `mowbite_calibration` (at most what the driver allows): raise it where
   the wheels stand in their dead band at that rate, the drive ends with `NOT_TURNING` then (the gyro on average
   below `turn_min_ratio` of the rate, 0.7). `mowbite_safety` lets every moving command grow at
   most `ramp_linear` m/s² and `ramp_angular` rad/s² from the one before, whatever its source (0: no limit); less, a stop
   and an emergency go out at once. Measure how fast the wheels follow before raising any of them.
-- `mowbite_bringup/config/<platform>.yaml`: the values of this mower on top of `stack.yaml`, which holds for every
-  mower and has the meaning of each value. `stack.yaml` marks what a platform has to set as `<platform>`: battery and
+- `platform.yaml` of the platform package: the values of this mower on top of `stack.yaml` of `mowbite_bringup`, which
+  holds for every mower and has the meaning of each value. `stack.yaml` marks what a platform has to set as
+  `<platform>`: battery and
   charge check, docking and the contacts, how the mower drives, tilt and ramps, gyro and noise, the limits of the
   journal, and the devices of light and sound for a platform that starts them. Set each in the same section of your
   file. While one is left for a node the platform starts, the start halts with `PLATFORM_CONFIG` and its names before
-  any node runs; `test_layers.py` of `mowbite_bringup` holds the same for every platform of the repo, so add yours to
-  its `NODES`. A part that is off in `stack.yaml` (dock marker, `dock_guide`, `turn_hold_gain`, `crash_record`) is
+  any node runs; `test_layers.py` of `mowbite_bringup` holds the same for every platform of the workspace, yours
+  among them once its package is built. A part that is off in `stack.yaml` (dock marker, `dock_guide`, `turn_hold_gain`,
+  `crash_record`) is
   turned on only where the mower has it. No value of another mower comes along by itself: one you take over
-  unmeasured stands in your file as an assumption (`nx60i.yaml` marks them "Of the Tron"), and that list is what the
+  unmeasured stands in your file as an assumption (the NX60i marks them "Of the Tron"), and that list is what the
   safety measurement has to settle. The battery voltages stand only
-  here: a driver that sets them on its board gets them in the start file from `battery_voltages` of
-  `xcore_driver/launch/logic_params.py`, under the same names (see `nx60i.launch.py`).
+  here: a driver that sets them on its board gets them from `platform.py`, which reads them with
+  `start.parameters("mowbite_logic")` and hands them over under the same names (see `platform_nx60i`).
 - The way home without the planner (`docking_direct`, `direct_margin` of `stack.yaml`): a planner that
   gives no answer does not keep the mower from the station. It drives the straight line to the point
   `docking_approach_distance` m in front of the station, where no obstacle and no end of the mowing and navigation
@@ -178,8 +183,9 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   has no body. Backwards slower than 5 mm/s does not add up, so the speed may swing around zero while the wheels
   stand (the Tron does); a driver reports no speed it does not measure. Two steps of 5 cm backwards in a row of
   `localization/pose` also take points back.
-- Driver parameters (ports, baud rates, limits) in the file of the driver; values measured on one mower in a file on
-  that mower. No value in two files.
+- Driver parameters (ports, baud rates, limits) in the file of the driver; values measured on one mower in
+  `<data_dir>/<platform>.yaml` on that mower, which the start reads last, for the driver and for every node. No value
+  in two files.
 - The clock: date, weekday and sunset count only while `time/clock` is ok (`mowbite_clock`): the kernel synchronized
   (NTP), or synchronized once since the start and no jump since. `rtc` under `mowbite_clock` (default off) lets the
   real-time clock alone count for 30 days after the last synchronization (`<data_dir>/clock.json`), when the kernel
@@ -195,13 +201,43 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   NX60i the environment of the compose file), handed to the GNSS node as launch arguments `datum_*` after every
   parameter file. Without a datum no pose is published.
 
-## 4. Start file
+## 4. Platform package
 
-`mowbite_bringup/launch/<platform>.launch.py`: the driver as its own process, the rest from `stack.py` (container with
-all nodes above the contract, and the planner). Copy `nx60i.launch.py`: it restarts the driver at most three times,
-each time latched, and leaves `driver_exit.json`. Its parameter files in their order: `stack.yaml` (`config`), the
-platform file (`platform_config`), values on top for a test (`extra_config`); before the first node it checks them for
-the nodes it starts (`stack.check_parameters`).
+One package per mower, `platform_<name>`, with four files and no code to build. Copy `platform_nx60i` (a driver that
+brings IMU and GNSS along) or `platform_tron` (nodes of its own in the container, cameras in their own processes):
+
+- `platform.yaml` and `geometry.yaml`, the values and dimensions of section 3.
+- `CMakeLists.txt` installs the three files and enters the name of the platform in the ament index
+  (`ament_index_register_resource(mowbite_platform PACKAGE_NAME <name> CONTENT ${PROJECT_NAME})`); `package.xml` names
+  the driver and what else the platform starts as `exec_depend`.
+- `platform.py`, the part of the start only this mower has:
+
+| Name | What |
+|---|---|
+| `NODES` | its nodes beside those of the stack, as the parameter files name them; the start checks their values |
+| `DRIVER` | the node that holds the motors, also the label of its exit note |
+| `DRIVER_RESTARTS` | how often the driver starts again after it ended (the NX60i 3, each time latched) |
+| `DATA_DIR` | optional: `data_dir` when the start names none |
+| `arguments()` | its launch arguments (ports, datum, switches), as `DeclareLaunchArgument` |
+| `parts(start)` | `start.Parts(driver=, before=, after=, processes=)` |
+
+`parts` gets `start` with `arg(name)` (a launch argument), `files` (the parameter files in their order), `device` (the
+file of this mower in `data_dir`, empty without one), `data_dir`, `data_file(name)`, `journal`, `logger`,
+`parameters(node)` (what the files give a node), `data_store` (the file names in `data_dir`, e.g. `HOLD_FILE`) and, for
+processes of its own, `own_process(make, name, **limits)` and `camera_service(**limits)`. It answers with
+`driver(restart)`, which builds the driver for its start number (0 the first; every later one has to come up latched,
+`start_latched` of `xcore_driver`), the components `before` and `after` those of the stack in the container, and
+`processes`, its other actions. Read every argument before `driver` is built: a restart comes when the arguments may be
+out of scope.
+
+The start is the same for every mower: `ros2 launch mowbite_bringup mowbite.launch.py platform:=<name>`, by default the
+platform `MOWBITE_PLATFORM` names, a value of the device (the compose file of the mower sets it, the Tron in
+`/usr/lib/mowbite/os.defaults`); an update does not change it. `stack.py` prepares `data_dir`, lays the parameter files
+on top of each other (`stack.yaml`, `platform.yaml`, `extra_config` for a simulation or a test, then
+`<data_dir>/<name>.yaml`), checks them for the nodes the platform can start, runs the driver in a process of its own
+(restarted `DRIVER_RESTARTS` times, each end in `<data_dir>/driver_exit.json`) and beside it the container with all
+nodes above the contract, the planner and the net service. A name no package entered halts with `PLATFORM_CONFIG`.
+`tron.launch.py` and `nx60i.launch.py` only name their platform, for start commands that name these files.
 
 Every node in the container runs in its own thread (`component_container_isolated`), so a node that waits stalls only
 itself. A node of your own (lights, sound, camera) follows the same rule as the others: nothing that blocks in a
@@ -228,7 +264,7 @@ process is outside this watch and stops the mower by its own timeouts.
   on storage that lasts across power cuts and is not mounted read only on errors without a way back.
 - Every log, recording and cache gets a limit in days and MB. In the platform file: `journal_max_mb`,
   `journal_max_days` for the journal and `incidents_max_mb`, `incidents_max_days`, `incidents_max_days_safety` for its
-  incidents (`tron.yaml`, `nx60i.yaml`); an incident keeps a run from its start while the run takes less than a quarter
+  incidents; an incident keeps a run from its start while the run takes less than a quarter
   of `incidents_max_mb`.
 - `mowbite-host` (`host/`, unit `mowbite-host.service` on the Tron) runs beside the OS as root, not in its bundle:
   it installs signed bundles (update.*), answers `host.restart_os` and keeps `mowbite/host/status` retained, also
@@ -245,7 +281,10 @@ process is outside this watch and stops the mower by its own timeouts.
 - The host keeps three components, each in a folder of its own with `current`, `previous` and `pending`: the OS
   (`/opt/mowbite`), the planner (`/opt/mowbite-planner`) and the app (`/opt/mowbite-app`). The OS brings a planner and
   an app along and names them in its `bundle.json` (`bundled`, `planner_interface`, `planner_files_version`, `api`,
-  `api_break`, `min_app`). An app goes with the OS when its `app.json` names `api.break` equal to `api_break` and an
+  `api_break`, `min_app`), beside `platforms`, the mowers it is built for: the host refuses a bundle that names
+  platforms without the one of this mower (`PLATFORM_MISMATCH`), which is `MOWBITE_PLATFORM` of the device or, without
+  it, the only platform of the running OS. An app goes with the OS when its `app.json` names `api.break` equal to
+  `api_break` and an
   `api.min` not above `api` (`api.max` is shown only); an app without `api.break`, and one beside an OS without
   `api_break` (api 30 and older), needs `api` within `api.min` to `api.max` (`host/mowbite_host/compat.py`, the same
   for `app_export.py`). `kApiBreak` in `src/mowbite_api/include/mowbite_api/catalog.h` goes up only for a break, as
@@ -279,7 +318,8 @@ process is outside this watch and stops the mower by its own timeouts.
   app reaches the broker over WebSocket on 9001 (`docker/mower/mosquitto.conf`). A compose stack can serve the same
   export with any static server that follows these rules. `web/test/test_web.py` runs without a mower.
 - Bundles, all in `platform/tron/bundle/`: `make-bundle.sh` for the OS (serial = commit time, base, api, api_break,
-  the planner's `contract.json` and what it brings along from the image), `make-planner-bundle.sh <repo> <commit>
+  `platforms` from `PLATFORMS`, each with its package in the image, the planner's `contract.json` and what it brings
+  along from the image), `make-planner-bundle.sh <repo> <commit>
   <out>` (only `mowbite_planner` and `mowbite_planner_os`, built in a throwaway container, `contract.json` required),
   `make-app-bundle.sh <zip> <out>` (the
   web export of the app release, `app.json` required), `make-host-bundle.sh <commit> <out>` (`host/mowbite_host` of
@@ -328,7 +368,7 @@ Then set `safety_measurement_date` in the driver parameters. Without it the mowe
 
 `mowbite_light` drives a WS2812 chain on spidev after the robot state, with a profile per state in the app (`light.*`);
 the emergency signal is fixed. Load it as a component of the container only when the drivers run, like
-`tron.launch.py` with `hardware:=true`.
+`platform.py` of the Tron with `hardware:=true` (`after` of its parts).
 
 - Parameters under `mowbite_light` in `<platform>.yaml`: `output` (`none` until checked on the mower, then `spidev`;
   `file` in the simulation), `device`, `leds` (lit), `buffer_leds` (driven), `strips` (runs `first-last` that chase
@@ -345,7 +385,7 @@ the emergency signal is fixed. Load it as a component of the container only when
 A camera of the mower, shown in the app, optionally with object detection for display only. The Tron's setup is the
 example: `tron_vision` (camera AI on the left and, as a second instance, on the right side camera), `tron_stereo` (live
 picture), `tron_side` (only the live picture of the right side camera, with `right_node:=side`) and `tron_rear` (dock
-marker with a live picture) with their start in `tron.launch.py` and their parameters in `config/tron.yaml`.
+marker with a live picture) with their start in `platform.py` of the Tron and their parameters in its `platform.yaml`.
 
 The platform makes the pictures, the OS takes them to the app: `mowbite_camera` keeps the cameras of `hw/cameras`,
 answers `camera.list` and `camera.stream` (both show up in `rpc.methods` with the first camera), lets two viewers in
@@ -353,7 +393,7 @@ at a time and gives each an address with a token of its own. The first list is w
 second what `mowbite_camera` needs around it.
 
 - A process of its own, never a component of the container: a crash of a vendor library takes nothing else along.
-  Start it from the start file with `stack.own_process` only when the drivers run and a switch in
+  Start it in `platform.py` with `start.own_process` only when the drivers run and a switch in
   `/etc/mowbite/os.conf` says so. It restarts at most three times and leaves `<name>_exit.json`; give it
   `oom_score_adj` 1000, a `nice` value and CPUs apart from the driver. Pass the same name to the node as `process`.
 - The same node on a second camera is a second process: the same node name in a namespace of its own, absolute topic
@@ -392,7 +432,7 @@ second what `mowbite_camera` needs around it.
   stands with the blade off (`SELF_TEST` until then). `stream_while_mowing: true` in the file of the platform lets
   the stream run next to the blade and without `hw/status`; the self-test, the pause when hot and the lock after a
   kernel crash stay. Set it only after measuring on the mower how long the blade runs without the host, or with that
-  risk accepted and written next to the value (the Tron: `config/tron.yaml`).
+  risk accepted and written next to the value (the Tron: its `platform.yaml`).
   Start such a process only with `hardware:=true`: with another host at the board `blade_on` says nothing.
 - Vendor runtimes and models are loaded at run time from a directory on the mower and never go into the repo, a bundle
   or an image. Check the model when loading it (inputs, outputs, classes against the class list), else report it and
@@ -425,8 +465,8 @@ second what `mowbite_camera` needs around it.
 Around `mowbite_camera`:
 
 - Start it beside the camera processes that report on `hw/cameras` and only with them; a camera that only measures
-  for the logic and shows no picture does not bring it along. `stack.camera_service(files, data_dir, logger, ...)`
-  takes their limits (`tron.launch.py`). It is a process of its own too and leaves `camera_exit.json`.
+  for the logic and shows no picture does not bring it along. `start.camera_service(...)`
+  takes their limits (`platform.py` of the Tron). It is a process of its own too and leaves `camera_exit.json`.
 - The app has to reach `mjpeg_port` 8890 (HTTP, protocol `mjpeg`), `webrtc_port` 8889 (HTTP, the WHEP exchange of
   protocol `webrtc`) and `ice_port` 8189 over UDP (its pictures). `media_api_port` 9997 and the RTSP sources stay on
   the loopback address. Other ports go under `mowbite_camera` in the file of the platform.
@@ -448,10 +488,11 @@ Around `mowbite_camera`:
 - [ ] clang-tidy without findings in the package (`.clang-tidy` of the repo)
 - [ ] Every node registered with `mowbite_component_register` and built on `StartupOnly(options)`
 - [ ] Fake board, contract test passes, the start test too where the driver has a start time
-- [ ] Geometry file and platform file, inherited values checked
+- [ ] Platform package: `geometry.yaml`, `platform.yaml` with inherited values checked, `platform.py`, the name in the
+      ament index; `test_layers.py` green with it
 - [ ] `gnss_receiver_time` only with UTC from the receiver; `rtc` of `mowbite_clock` only after the measurement
 - [ ] `allowed` of `mowbite_schedule` only after the gates of the schedule
-- [ ] Start file, driver restarts latched
+- [ ] `mowbite.launch.py platform:=<name>` starts the stack, driver restarts latched
 - [ ] Every node of your own in the container attached to the watch (`test_stack.py`)
 - [ ] Simulation: mowing, going home, docking; `app_interface_check`
 - [ ] Way onto the mower chosen, limits for logs and journal, data dir writable (a start works)

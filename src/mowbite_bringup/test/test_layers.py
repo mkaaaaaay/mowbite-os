@@ -1,11 +1,10 @@
-"""layers.py and the parameter files: stack.yaml leaves values to the platform, every platform sets all of them for
-its nodes, in sections of its nodes only and under names stack.yaml knows. A value left over halts the start
-(stack.check_parameters).
+"""layers.py and the parameter files: stack.yaml leaves values to the platform, every platform of the workspace sets
+all of them for its nodes, in sections of its nodes only and under names stack.yaml knows. A value left over halts the
+start (stack.check_parameters), and so does a platform the image does not have.
 
-Run in a sourced workspace (nx60i.launch.py looks for xcore_driver): python3 -m pytest
+Run in a sourced workspace (the platforms are found by their entries in the ament index): python3 -m pytest
 /ws/src/mowbite_bringup/test/test_layers.py
 """
-import importlib.util
 import logging
 import os
 import sys
@@ -19,18 +18,15 @@ import layers  # noqa: E402
 import stack  # noqa: E402
 
 
-def launch_file(name):
-    spec = importlib.util.spec_from_file_location(name, os.path.join(LAUNCH, f"{name}.launch.py"))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 STACK_NODES = stack.started(stack.components([], "", "", "127.0.0.1", "1883", ""))
+PLATFORMS = layers.platforms()
 # The nodes a platform can start.
-NODES = {platform: [*STACK_NODES, *launch_file(platform).NODES] for platform in ("nx60i", "tron")}
-PLATFORMS = sorted(NODES)
+NODES = {platform: [*STACK_NODES, *stack.platform_module(platform).NODES] for platform in PLATFORMS}
 LOGGER = logging.getLogger("test_layers")
+
+
+def test_the_workspace_has_platforms():
+    assert PLATFORMS
 
 
 def test_the_stack_alone_leaves_values_to_the_platform():
@@ -113,8 +109,9 @@ def halt_file(tmp_path, monkeypatch):
     return path
 
 
-def test_a_complete_platform_goes_on(halt_file):
-    assert stack.check_parameters(layers.files("tron"), NODES["tron"], LOGGER) is None
+@pytest.mark.parametrize("platform", PLATFORMS)
+def test_a_complete_platform_goes_on(halt_file, platform):
+    assert stack.check_parameters(layers.files(platform), NODES[platform], LOGGER) is None
     assert not halt_file.exists()
 
 
@@ -136,3 +133,27 @@ def test_a_file_that_cannot_be_read_halts(tmp_path, halt_file, content):
     assert len(stack.check_parameters([str(path)], ["node"], LOGGER)) == 1
     assert halt_file.read_text().startswith("MOWBITE_OS_HALT reason=PLATFORM_CONFIG data_schema=- image_schema=- "
                                             "A parameter file cannot be read: ")
+
+
+@pytest.mark.parametrize("platform", PLATFORMS)
+def test_a_platform_has_what_the_start_asks_for(platform):
+    module = stack.platform_module(platform)
+    assert module.DRIVER in module.NODES and module.DRIVER_RESTARTS >= 0
+    assert callable(module.arguments) and callable(module.parts)
+    assert os.path.isfile(layers.geometry(platform))
+
+
+@pytest.mark.parametrize("platform", ["", "no_mower", "../tron"])
+def test_a_platform_the_image_does_not_have_halts(halt_file, platform):
+    assert len(stack.start(None, platform)) == 1
+    line = halt_file.read_text()
+    assert line.startswith("MOWBITE_OS_HALT reason=PLATFORM_CONFIG data_schema=- image_schema=- The image has no "
+                           f"platform '{platform}'")
+    assert ", ".join(PLATFORMS) in line
+
+
+@pytest.mark.parametrize("platform", PLATFORMS)
+def test_the_start_of_a_platform_has_its_arguments(platform):
+    names = {action.name for action in stack.start(None, platform) if hasattr(action, "default_value")}
+    own = {action.name for action in stack.platform_module(platform).arguments()}
+    assert {"config", "platform_config", "extra_config", "geometry", "data_dir", "journal_dir"} | own <= names

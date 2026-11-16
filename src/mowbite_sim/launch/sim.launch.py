@@ -20,8 +20,7 @@ import layers  # noqa: E402
 # command line options of its list args (a test makes the simulated Tron differ from its configuration with them). With
 # a station also fake_dock_marker, its camera where the Tron mounts tron_rear.
 def antenna_height():
-    path = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
-    with open(path) as f:
+    with open(layers.geometry("tron")) as f:
         return float(yaml.safe_load(f)["mowbite_localization"]["ros__parameters"]["antenna_height"])
 
 
@@ -68,8 +67,8 @@ def generate_launch_description():
         output="screen")
     stack = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(PathJoinSubstitution([FindPackageShare("mowbite_bringup"), "launch",
-                                                            "tron.launch.py"])),
-        launch_arguments={"mcu_port": link, "gnss_port": gnss_link, "imu_port": imu_link,
+                                                            "mowbite.launch.py"])),
+        launch_arguments={"platform": "tron", "mcu_port": link, "gnss_port": gnss_link, "imu_port": imu_link,
                           "datum_lat": datum_lat, "datum_long": datum_long, "datum_height": datum_height,
                           "mqtt_host": LaunchConfiguration("mqtt_host"),
                           "mqtt_port": LaunchConfiguration("mqtt_port"),
@@ -92,7 +91,7 @@ def generate_launch_description():
         DeclareLaunchArgument("mqtt_port", default_value=EnvironmentVariable("MOWBITE_MQTT_PORT",
                                                                              default_value="1883")),
         DeclareLaunchArgument("data_dir", default_value="/tmp/mowbite_sim_data"),
-        # read: tron_mcu and tron_imu only read the ptys, as hardware:=read of tron.launch.py.
+        # read: tron_mcu and tron_imu only read the ptys, as hardware:=read of the Tron.
         DeclareLaunchArgument("hardware", default_value="true", choices=["true", "read"]),
         DeclareLaunchArgument("extra_config", default_value=PathJoinSubstitution(
             [FindPackageShare("mowbite_sim"), "config", "sim.yaml"])),

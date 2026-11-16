@@ -91,7 +91,8 @@ jobs:
           TAG: ${{ env.IMAGE }}:${{ steps.rev.outputs.short }}-${{ matrix.arch }}
         run: |
           docker run --rm "$TAG" ros2 pkg list > pkgs.txt
-          grep -E '^(mowbite_|tron_|xcore_)' pkgs.txt
+          grep -E '^(mowbite_|tron_|xcore_|platform_)' pkgs.txt
+          grep -q '^platform_' pkgs.txt
           if grep -q '^mowbite_sim$' pkgs.txt; then echo "mowbite_sim must not be in the image"; exit 1; fi
           docker run --rm "$TAG" python3 -c 'import mowbite_planner_os.node'
           # The app docker/os.Dockerfile pins came along.
@@ -119,7 +120,7 @@ jobs:
             echo "### ${{ matrix.arch }}"
             echo "- image: \`$TAG\`"
             echo "- size unpacked: $((size / 1000000)) MB, saved and gzipped: $((packed / 1000000)) MB"
-            echo "- packages: $(grep -cE '^(mowbite_|tron_|xcore_)' pkgs.txt)"
+            echo "- packages: $(grep -cE '^(mowbite_|tron_|xcore_|platform_)' pkgs.txt)"
             echo "- mowbite.min_app: $min_app"
             echo "- app: $app"
           } | tee -a "$GITHUB_STEP_SUMMARY"

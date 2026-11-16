@@ -1798,7 +1798,7 @@ void LogicNode::PublishLogicParams() {
   gps_limits_pub_->publish(limits);
 }
 
-// The dimensions of the platform (mowbite_bringup/config/geometry/<platform>.yaml); the entries of the user follow.
+// The dimensions of the platform (geometry.yaml of its package); the entries of the user follow.
 Geometry LogicNode::FactoryGeometry() {
   json factory = json::object();
   for (const auto& key : GeometryKeys()) {

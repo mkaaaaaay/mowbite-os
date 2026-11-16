@@ -22,6 +22,8 @@ constexpr char kSessionFile[] = "os-session.json";
 constexpr char kRestartHoldFile[] = "restart-hold.json";
 // How the container ended, written by the launch before it starts it again (stack.py EXIT_NOTE).
 constexpr char kExitNoteFile[] = "container_exit.json";
+// How the driver of the platform ended outside the shutdown, written by the launch (stack.py DRIVER_EXIT_NOTE).
+constexpr char kDriverExitNoteFile[] = "driver_exit.json";
 
 constexpr char kIdle[] = "IDLE";
 

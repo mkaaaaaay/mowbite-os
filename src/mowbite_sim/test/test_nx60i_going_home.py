@@ -1,9 +1,10 @@
 """Going home on the NX60i (O11) as nx60i.launch.py starts it, against fake_xcore, with a safety measurement given in
-mower_params (test_nx60i_stack.py runs without one and cannot mow). The map has no docking station: the mower has no
-way home. A start with the blade motor at motor_cold_temperature or more is
-refused, the default temperature of fake_xcore lies below it; while mowing a hot blade motor pauses the run with
-MOTOR_HOT until the user resumes it (question 47 iii); a low battery ends the run, also from that pause, with
-BATTERY_LOW and IDLE where the mower stands, without DOCKING. rain_mode other than 0 without the rain sensor of hw/capabilities is told once in the log.
+the file of the mower in data_dir (test_nx60i_stack.py runs without one and cannot mow). The map has no docking
+station: the mower has no way home. A start with the blade motor at motor_cold_temperature or more is refused, the
+default temperature of fake_xcore lies below it; while mowing a hot blade motor pauses the run with MOTOR_HOT until
+the user resumes it (question 47 iii); a low battery ends the run, also from that pause, with BATTERY_LOW and IDLE
+where the mower stands, without DOCKING. rain_mode other than 0 without the rain sensor of hw/capabilities is told
+once in the log.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_nx60i_going_home.py
 """
@@ -32,24 +33,25 @@ from rclpy.qos import QoSProfile
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (LATCHED, ROSOUT, SimProbe, fake_xcore, loopback_group, read_json, sim_files,  # noqa: E402
-                        station_frame, without_sunset, write_json)
+from sim_common import (LATCHED, ROSOUT, SimProbe, fake_xcore, layers, loopback_group, read_json,  # noqa: E402
+                        sim_files, station_frame, without_sunset, write_json)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_nx60i_home_")
 STATE, FLAGS, _, DATA = sim_files(WORK)
-MOWER = os.path.join(WORK, "mower.yaml")
+MOWER = layers.device_file(DATA, "nx60i")
 EXTRA = os.path.join(WORK, "extra.yaml")
 GROUP_PORT, BIND_IP = loopback_group()
 DATUM = (52.0, 9.0, 80.0)
 START = "mower_logic:idle/start_mowing"
 P = "/mower_logic/"
 LAWN = [(-2.0, -2.5), (6.0, -2.5), (6.0, 2.5), (-2.0, 2.5)]
-# nx60i.yaml: empty 24.5 V (the highest voltage of 20 s); motor_hot/cold_temperature 70/40 of the logic.
+# The NX60i: empty 24.5 V (the highest voltage of 20 s); motor_hot/cold_temperature 70/40 of the logic.
 EMPTY, LOW_WINDOW = 24.5, 20.0
 MOTOR_COLD = 40.0
 
 with open(FLAGS, "w") as f:
     json.dump({"gps_fix": "fix"}, f)
+os.makedirs(DATA, exist_ok=True)
 with open(MOWER, "w") as f:
     f.write("xcore_driver:\n  ros__parameters:\n    safety_measurement_date: \"simulation\"\n")
 with open(EXTRA, "w") as f:
@@ -63,7 +65,7 @@ def generate_test_description():
         PythonLaunchDescriptionSource(os.path.join(FindPackageShare("mowbite_bringup").find("mowbite_bringup"),
                                                    "launch", "nx60i.launch.py")),
         launch_arguments={"interface": "lo", "bind_ip": BIND_IP, "announcement_port": str(GROUP_PORT),
-                          "data_dir": DATA, "mower_params": MOWER, "extra_config": EXTRA,
+                          "data_dir": DATA, "extra_config": EXTRA,
                           "datum_lat": str(DATUM[0]), "datum_long": str(DATUM[1]), "datum_height": str(DATUM[2]),
                           "mqtt_port": str(random.randint(18000, 18999))}.items())
     return launch.LaunchDescription([

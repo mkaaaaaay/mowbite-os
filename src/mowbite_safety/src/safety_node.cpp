@@ -123,7 +123,7 @@ class SafetyNode : public rclcpp::Node {
           std::lock_guard<std::mutex> lock(mutex_);
           filter_.Call<&SafetyFilter::SetMapFits>(msg->datum_state == mowbite_msgs::msg::MapStatus::DATUM_MATCH);
         });
-    // max_position_accuracy of tron.yaml holds until the logic tells its own (params.set).
+    // max_position_accuracy of the parameter files holds until the logic tells its own (params.set).
     limits_sub_ = create_subscription<mowbite_msgs::msg::GpsLimits>(
         "logic/gps_limits", LatchedQos(), [this](const mowbite_msgs::msg::GpsLimits::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);

@@ -1,8 +1,8 @@
 """Only xcore_driver_node, for the safety measurement of a mower with an xCore board (no logic, bridge or MQTT).
 
-Parameters: the platform file (default nx60i.yaml of this package), then the parameter file of the mower if given
-(datum, measured values), then the battery voltages of the logic from battery_params (the platform file of
-mowbite_bringup, which the measurement image keeps in /etc/mowbite) and the overrides given here. respawn:=true starts a
+Parameters: the file of the driver (default nx60i.yaml of this package), then the parameter file of the mower if given
+(datum, measured values), then the battery voltages of the logic from battery_params (platform.yaml of the platform,
+which the measurement image keeps in /etc/mowbite) and the overrides given here. respawn:=true starts a
 killed or ended driver again after respawn_delay s (M4, M7, M8 with the driver killed). speed_limit and max_duty hold
 for this start only: without them the files hold (driving at most 0.3 m/s). speed_limit above 0.3, with max_duty above
 0.3 if wanted, is the raised start for the fast runs of M8 (own word of the user): only the driver of the measurement
@@ -27,10 +27,10 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import logic_params  # noqa: E402
 
 ARGUMENTS = {
-    "params": ("", "platform parameter file, empty = nx60i.yaml of xcore_driver"),
-    "mower_params": ("", "parameter file of this mower, read after the platform file"),
+    "params": ("", "parameter file of the driver, empty = nx60i.yaml of xcore_driver"),
+    "mower_params": ("", "parameter file of this mower, read after the file of the driver"),
     "battery_params": ("/etc/mowbite/nx60i.yaml", "parameter file of the logic with the battery voltages, as "
-                                                  "nx60i.launch.py hands them to the driver"),
+                                                  "the start of the OS hands them to the driver"),
     "interface": ("", "network interface of the board, empty = from the files"),
     "bind_ip": ("", "address of the host at the board, empty = from the files"),
     "announcement_port": ("", "port of the board's announcements, empty = from the files"),
@@ -90,7 +90,7 @@ def driver(context):
     if value["mower_params"]:
         files.append(value["mower_params"])
     overrides = {"allow_blade": value["allow_blade"].lower() == "true",
-                 **logic_params.battery_voltages([value["battery_params"]])}
+                 **logic_params.battery_voltages(logic_params.logic_section(value["battery_params"]))}
     for name in ("interface", "bind_ip"):
         if value[name]:
             overrides[name] = value[name]

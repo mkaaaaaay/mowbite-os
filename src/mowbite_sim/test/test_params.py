@@ -23,7 +23,7 @@ from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import Bool, String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import HISTORY, LATCHED, ROSOUT, SimProbe, TestShutdown  # noqa: E402,F401
+from sim_common import HISTORY, LATCHED, ROSOUT, SimProbe, TestShutdown, layers  # noqa: E402,F401
 
 DATUM = (52.0, 9.0, 50.0)
 WORK = tempfile.mkdtemp(prefix="mowbite_params_")
@@ -32,7 +32,7 @@ P = "/mower_logic/"
 
 
 # The dimensions of the platform, which the logic needs to start.
-GEOMETRY = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
+GEOMETRY = layers.geometry("tron")
 # The names of the settings of params.set, as the catalog of the interface gives them.
 with open(os.path.join(get_package_share_directory("mowbite_api"), "api.schema.json")) as schema:
     SETTINGS = json.load(schema)["x-settings"]

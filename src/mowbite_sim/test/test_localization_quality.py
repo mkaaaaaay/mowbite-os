@@ -1,12 +1,12 @@
 """How good the pose of mowbite_localization is against the true pose of fake_tron, with the faults of a real Tron.
 
-The chain is fake_tron, tron_mcu, tron_gnss, tron_imu and the localization with the values of tron.yaml; the test plays
+The chain is fake_tron, tron_mcu, tron_gnss, tron_imu and the localization with the values of the Tron; the test plays
 the logic (the geometry on bridge/params) and drives on hw/cmd_vel, steered by the true pose, so every localization
 drives the same way. It measures: the heading alignment from the start heading and from a heading 90 degrees off (time
 and distance until the heading is good), the position and heading error on a square, the error after 8 s without GNSS
-at 0.3 m/s, the heading drift standing for 60 s after the gyro bias changed, and the error on a 10 degree side slope with
-the antenna at the height of config/geometry/tron.yaml (at rest and across the way while driving). Every value is printed as one line
-"quality: ...".
+at 0.3 m/s, the heading drift standing for 60 s after the gyro bias changed, and the error on a 10 degree side slope
+with the antenna at the height of geometry.yaml of the Tron (at rest and across the way while driving). Every value
+is printed as one line "quality: ...".
 
 MOWBITE_GNSS_LATENCY=<s> gives the localization that gnss_latency.
 
@@ -24,7 +24,6 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from launch.actions import TimerAction
 from launch_ros.actions import Node
@@ -40,7 +39,7 @@ WORK = tempfile.mkdtemp(prefix="mowbite_quality_")
 LINKS = sim_links(WORK)
 STATE, FLAGS, _, _ = sim_files(WORK)
 TRON = layers.files("tron")
-GEOMETRY = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
+GEOMETRY = layers.geometry("tron")
 # The ports of the simulation: a section of the node wins over values for all nodes, so these come as one too.
 LOCAL = os.path.join(WORK, "local.yaml")
 GOOD_HEADING = math.radians(5.0)

@@ -15,7 +15,6 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from launch.actions import TimerAction
 from launch_ros.actions import Node
 from mowbite_msgs.msg import GnssFix, HardwareStatus
@@ -25,7 +24,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (DriverProbe, ROSOUT, TestShutdown, fake_tron, last_time, sim_files,  # noqa: E402,F401
+from sim_common import (DriverProbe, ROSOUT, TestShutdown, fake_tron, last_time, layers, sim_files,  # noqa: E402,F401
                         sim_links, sub_packets, write_json)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_safety_")
@@ -40,7 +39,7 @@ FLOAT = GnssFix.RTK_FLOAT
 
 
 # The dimensions of the platform, which the logic needs to start.
-GEOMETRY = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
+GEOMETRY = layers.geometry("tron")
 
 
 def generate_test_description():

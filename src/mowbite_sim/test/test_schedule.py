@@ -37,7 +37,7 @@ STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "schedule.yaml")
 READY = "mowbite/schedule/ready"
 DAYS = [1, 2, 3, 4, 5, 6, 7]
-# tron.launch.py: the wait before the container starts again.
+# stack.py: the wait before the container starts again.
 RESTART_DELAY = 2.0
 
 # The yard, the patch and the station of test_sunset.py.

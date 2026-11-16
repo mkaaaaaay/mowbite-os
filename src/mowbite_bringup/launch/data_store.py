@@ -1,4 +1,4 @@
-"""data_dir before any node of MowBite OS starts (tron.launch.py, updater contract 3.5).
+"""data_dir before any node of MowBite OS starts (stack.py, updater contract 3.5).
 
 One number, the data schema, stands for the formats of everything in data_dir, planner/ and calibration/ included.
 <data_dir>/data_schema.json holds the number of the data, data_schema.json of mowbite_bridge the one of the image.
@@ -39,8 +39,6 @@ SESSION_FILE = "os-session.json"
 # Written by tron_mcu before STOP is cleared on the MCU during an emergency, removed once it is released; a start with
 # it latches. It outlives an update and a way back.
 STOP_CLEAR_MARK_FILE = "stop-clear-mark"
-# The measured values of this Tron (safety measurement, firmware), read after the platform file; kept like the data.
-TRON_PARAMS_FILE = "tron.yaml"
 BACKUP = "backup-"
 TEMP = ".tmp"
 OLD = ".old"

@@ -1,28 +1,31 @@
-"""tron.launch.py: which processes start for hardware and the camera switches.
+"""platform.py of the Tron in the start of the stack: which processes start for hardware and the camera switches.
 
-Run: python3 -m pytest /ws/src/mowbite_bringup/test/test_tron_launch.py
+Run in a sourced workspace (stack.py of mowbite_bringup): python3 -m pytest /ws/src/platform_tron/test/test_platform.py
 """
-import importlib.util
 import os
+import sys
 
 import pytest
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchContext
 from launch_ros.actions import Node
 from launch_ros.descriptions import ComposableNode
 
+sys.path.insert(0, os.path.join(get_package_share_directory("mowbite_bringup"), "launch"))
+import layers  # noqa: E402
+import stack  # noqa: E402
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-CONFIG = os.path.join(HERE, "..", "config")
-spec = importlib.util.spec_from_file_location("tron_launch", os.path.join(HERE, "..", "launch", "tron.launch.py"))
-tron_launch = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(tron_launch)
+PLATFORM_FILE = os.path.join(HERE, "..", "platform.yaml")
+platform = stack.platform_module("tron", os.path.join(HERE, ".."))
 
 
 def launched(tmp_path, monkeypatch, **switches):
     # The data schema needs the installed bridge; here only the choice of processes counts.
-    monkeypatch.setattr(tron_launch.stack, "prepare_data_dir", lambda data_dir, logger: None)
+    monkeypatch.setattr(stack, "prepare_data_dir", lambda data_dir, logger: None)
     context = LaunchContext()
-    values = {"data_dir": str(tmp_path / "data"), "config": os.path.join(CONFIG, "stack.yaml"),
-              "platform_config": os.path.join(CONFIG, "tron.yaml"), "extra_config": os.path.join(CONFIG, "tron.yaml"),
+    values = {"data_dir": str(tmp_path / "data"), "config": layers.STACK,
+              "platform_config": PLATFORM_FILE, "extra_config": PLATFORM_FILE,
               "geometry": "geometry.yaml", "mcu_port": "/dev/ttyS9", "gnss_port": "/dev/ttyS4",
               "imu_port": "/dev/ttyS1", "hardware": "true", "datum_lat": "nan", "datum_long": "nan",
               "datum_height": "0.0", "vision": "off", "stereo": "off", "right": "off", "right_node": "vision",
@@ -31,7 +34,7 @@ def launched(tmp_path, monkeypatch, **switches):
               "mqtt_port": "1883", "journal_dir": "", "oom_score_adj": ""}
     values.update(switches)
     context.launch_configurations.update(values)
-    return tron_launch.launch_setup(context)
+    return stack.launch_setup(context, "tron", platform)
 
 
 def executables(tmp_path, monkeypatch, **switches):
@@ -68,7 +71,7 @@ def test_left_and_right_are_two_instances(tmp_path, monkeypatch):
             super().__init__(**kwargs)
             made.append(kwargs)
 
-    monkeypatch.setattr(tron_launch, "Node", Recorded)
+    monkeypatch.setattr(platform, "Node", Recorded)
     launched(tmp_path, monkeypatch, vision="on", right="on")
     vision = sorted((k["namespace"], k["name"], k["exec_name"]) for k in made if k["executable"] == "tron_vision_node")
     assert vision == [("/", "tron_vision", "tron_vision"), ("/right", "tron_vision", "tron_vision_right")]
@@ -88,7 +91,7 @@ def test_another_right_node_starts_no_right_camera(tmp_path, monkeypatch):
 # Each node names its process as stack.own_process does, so the OS ties an exit note to its cameras.
 def test_each_camera_process_names_itself(tmp_path, monkeypatch):
     made = {}
-    real = tron_launch.stack.own_process
+    real = stack.own_process
 
     def own_process(make, name, *args, **kwargs):
         def keep(prefix):
@@ -104,8 +107,8 @@ def test_each_camera_process_names_itself(tmp_path, monkeypatch):
             super().__init__(**kwargs)
             params[kwargs.get("exec_name")] = kwargs.get("parameters")
 
-    monkeypatch.setattr(tron_launch.stack, "own_process", own_process)
-    monkeypatch.setattr(tron_launch, "Node", Recorded)
+    monkeypatch.setattr(stack, "own_process", own_process)
+    monkeypatch.setattr(platform, "Node", Recorded)
     launched(tmp_path, monkeypatch, vision="on", stereo="on", right="on", rear="on")
     names = {"vision": ("tron_vision", "tron_vision_node"), "stereo": ("tron_stereo", "tron_stereo_node"),
              "right": ("tron_vision_right", "tron_vision_node"), "rear": ("tron_rear", "tron_rear_node")}
@@ -122,7 +125,7 @@ def camera_params(tmp_path, monkeypatch, **switches):
             super().__init__(**kwargs)
             params[kwargs.get("exec_name")] = kwargs.get("parameters")[-1]
 
-    monkeypatch.setattr(tron_launch, "Node", Recorded)
+    monkeypatch.setattr(platform, "Node", Recorded)
     launched(tmp_path, monkeypatch, **switches)
     return params
 
@@ -183,12 +186,45 @@ def test_the_parameter_check_knows_every_node(tmp_path, monkeypatch):
                 built.add(f"{(kwargs.get('namespace') or '/').strip('/')}/{kwargs['name']}".lstrip("/"))
         return Recorded
 
-    for module in (tron_launch, tron_launch.stack):
+    for module in (platform, stack):
         monkeypatch.setattr(module, "Node", recording(Node))
         monkeypatch.setattr(module, "ComposableNode", recording(ComposableNode))
-    monkeypatch.setattr(tron_launch.stack, "check_parameters", lambda files, nodes, logger: checked.update(nodes))
+    monkeypatch.setattr(stack, "check_parameters", lambda files, nodes, logger: checked.update(nodes))
     for right_node in ("vision", "side"):
         launched(tmp_path, monkeypatch, vision="on", stereo="on", right="on", rear="on", right_node=right_node)
     assert built and built <= checked, built - checked
-    assert checked == {*tron_launch.NODES, *tron_launch.stack.started([])} | built
+    assert checked == {*platform.NODES, *stack.started([])} | built
 
+
+
+# tron_mcu is not started again after it ended: its exit note says down at once.
+def test_the_driver_stays_down_after_it_ended(tmp_path, monkeypatch):
+    calls = []
+    real = stack.restarting
+
+    def restarting(make, note, label, logger, restarts, *args, **kwargs):
+        calls.append((note, label, restarts))
+        return real(make, note, label, logger, restarts, *args, **kwargs)
+
+    monkeypatch.setattr(stack, "restarting", restarting)
+    launched(tmp_path, monkeypatch)
+    assert (str(tmp_path / "data" / stack.DRIVER_EXIT_NOTE), "tron_mcu", 0) in calls
+
+
+# The measured values of this Tron in data_dir come last, for the driver as for every node.
+def test_the_file_of_the_mower_comes_last(tmp_path, monkeypatch):
+    made = {}
+
+    class Recorded(Node):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            made[kwargs["name"]] = kwargs["parameters"]
+
+    monkeypatch.setattr(platform, "Node", Recorded)
+    (tmp_path / "data").mkdir()
+    device = tmp_path / "data" / "tron.yaml"
+    launched(tmp_path, monkeypatch)
+    assert str(device) not in made["tron_mcu"]
+    device.write_text("tron_mcu:\n  ros__parameters:\n    wheel_distance: 0.4\n")
+    launched(tmp_path, monkeypatch)
+    assert made["tron_mcu"][:4] == [layers.STACK, PLATFORM_FILE, PLATFORM_FILE, str(device)]

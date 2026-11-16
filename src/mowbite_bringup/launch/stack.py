@@ -1,15 +1,17 @@
-"""The part of MowBite OS every platform starts (tron.launch.py, nx60i.launch.py): DDS, data_dir and the parameter
-files before any node, the container with the nodes above the hardware contract, restarted after a crash, and the
-MowBite Planner.
+"""The start of MowBite OS on a platform (mowbite.launch.py): DDS, data_dir and the parameter files before any node,
+the driver of the platform in a process of its own, the container with the nodes above the hardware contract,
+restarted after a crash, and the MowBite Planner. What the platform adds comes from platform.py of its package.
 """
 import asyncio
+import importlib.util
 import json
 import os
 import sys
 import time
 
-from launch.actions import (DeclareLaunchArgument, OpaqueCoroutine, RegisterEventHandler, SetEnvironmentVariable,
-                            TimerAction)
+import launch.logging
+from launch.actions import (DeclareLaunchArgument, OpaqueCoroutine, OpaqueFunction, RegisterEventHandler,
+                            SetEnvironmentVariable, TimerAction)
 from launch.event_handlers import OnProcessExit, OnProcessStart
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, Node
@@ -29,6 +31,8 @@ STABLE_AFTER = 600.0
 EXIT_NOTE = "container_exit.json"
 # In data_dir: the node the watch of the container (mowbite_watch) ended it for, taken into EXIT_NOTE as stalled.
 WATCH_NOTE = "watch_exit.json"
+# In data_dir: how the driver of the platform ended outside the shutdown, written before it starts again.
+DRIVER_EXIT_NOTE = "driver_exit.json"
 # The nodes beside the container, in their own processes.
 PLANNER = "mowbite_planner"
 NET = "mowbite_net"
@@ -127,15 +131,24 @@ def journal_dir(path, data_dir, logger):
     return path
 
 
-# The arguments every platform shares, after its own.
-def arguments():
+# The arguments every platform has, beside its own.
+def arguments(platform, module):
     return [
+        DeclareLaunchArgument("config", default_value=layers.STACK),
+        # The values of this platform, on top of config.
+        DeclareLaunchArgument("platform_config", default_value=layers.platform_file(platform)),
+        # Values on top of both, e.g. those of the simulation or a test; by default the platform file once more.
+        DeclareLaunchArgument("extra_config", default_value=LaunchConfiguration("platform_config")),
+        DeclareLaunchArgument("geometry", default_value=layers.geometry(platform)),
+        # Without it nothing is kept and no update can hold the driver; with it, it is prepared for the data schema of
+        # the image before any node starts.
+        DeclareLaunchArgument("data_dir", default_value=getattr(module, "DATA_DIR", "")),
         # The broker of the OS, the same one mowbite_health asks.
         DeclareLaunchArgument("mqtt_host", default_value=EnvironmentVariable("MOWBITE_MQTT_HOST",
                                                                              default_value="127.0.0.1")),
         DeclareLaunchArgument("mqtt_port", default_value=EnvironmentVariable("MOWBITE_MQTT_PORT",
                                                                              default_value="1883")),
-        # Local time for the heartbeat of the MCU (and later the schedules); a TZ from the environment wins.
+        # Local time for the schedules and a driver that needs it; a TZ from the environment wins.
         DeclareLaunchArgument("tz", default_value=EnvironmentVariable("TZ", default_value="Europe/Berlin")),
         SetEnvironmentVariable("TZ", LaunchConfiguration("tz")),
         # The journal of the cores (mowbite_journal), outside of data_dir; empty: none. Its limits are in the config.
@@ -250,8 +263,8 @@ def take_watch_note(path, logger):
 
 # make(start) as a process that starts again after it ended outside the shutdown, at most `restarts` times in a row,
 # each time after RESTART_DELAY s; start counts every start for a name of its own. A run of STABLE_AFTER s begins the
-# count again. Each end goes into `note` (None: none) with what the watch of the process left in `watch_note` (None:
-# none) as stalled, the last one with down true. Every start gets oom_score_adj.
+# count again. Each end goes into `note` (None: none) under the name `label`, with what the watch of the process left
+# in `watch_note` (None: none) as stalled, the last one with down true. Every start gets oom_score_adj.
 def restarting(make, note, label, logger, restarts, oom_score_adj="", watch_note=None, clock=time.monotonic):
     # A start by hand begins without restarts.
     remove(note, logger)
@@ -285,7 +298,8 @@ def restarting(make, note, label, logger, restarts, oom_score_adj="", watch_note
             if note:
                 # mono is the end on `clock`: a reader compares it with its own CLOCK_MONOTONIC, t may jump.
                 data_store.write_json(os.path.dirname(note), os.path.basename(note),
-                                      {"exit_code": event.returncode, "restart": crashes if down else crashes + 1,
+                                      {"name": label, "exit_code": event.returncode,
+                                       "restart": crashes if down else crashes + 1,
                                        "max_restarts": restarts, "t": time.time(), "mono": now, "stalled": stalled,
                                        "down": down, "stable_s": STABLE_AFTER})
         except OSError as error:
@@ -356,3 +370,103 @@ def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
     return [*restarting(container, os.path.join(data_dir, EXIT_NOTE), "The container", logger, CONTAINER_RESTARTS,
                         oom_score_adj, watch_note),
             *oom_score(planner, oom_score_adj, logger), planner, *net_service(files, data_dir, logger)]
+
+
+# platform.py of this platform as a module (new-mower.md, "Platform package"), from folder instead of the index.
+def platform_module(platform, folder=None):
+    spec = importlib.util.spec_from_file_location(f"mowbite_platform_{platform}",
+                                                  os.path.join(folder or layers.folder(platform), "platform.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class Parts:
+    """What a platform adds to the stack: driver(restart) builds the process that holds the motors for its start
+    number restart (None: no driver starts), before and after are its components in the container around those of
+    the stack, processes its other actions."""
+
+    def __init__(self, driver=None, before=(), after=(), processes=()):
+        self.driver = driver
+        self.before = list(before)
+        self.after = list(after)
+        self.processes = list(processes)
+
+
+class Start:
+    """What parts(start) of a platform builds on: arg(name) gives a launch argument, files are the parameter files in
+    their order, device is the last of them, the file of this mower in data_dir (empty: it has none), journal is the
+    journal directory (empty: none)."""
+
+    Parts = Parts
+    data_store = data_store
+
+    def __init__(self, arg, files, device, data_dir, journal, logger):
+        self.arg = arg
+        self.files = files
+        self.device = device
+        self.data_dir = data_dir
+        self.journal = journal
+        self.logger = logger
+
+    def data_file(self, name):
+        """<data_dir>/<name>, empty without data_dir."""
+        return os.path.join(self.data_dir, name) if self.data_dir else ""
+
+    def parameters(self, node):
+        """What the files give the node of this name."""
+        return layers.parameters(self.files, node)
+
+    def own_process(self, make, name, **limits):
+        return own_process(make, name, self.data_dir, self.logger, **limits)
+
+    def camera_service(self, **limits):
+        return camera_service(self.files, self.data_dir, self.logger, **limits)
+
+
+# The nodes with the values of the launch arguments taken now: the components are loaded again after a crash of the
+# container, when the arguments of an including launch may be out of scope (sim.launch.py has them in a TimerAction).
+def launch_setup(context, platform, module):
+    def arg(name):
+        return LaunchConfiguration(name).perform(context)
+
+    logger = launch.logging.get_logger(f"{platform}.launch")
+    data_dir = arg("data_dir")
+    halt = prepare_data_dir(data_dir, logger)
+    if halt:
+        return halt
+    # What every mower shares, the values of the platform, values on top of both, then the measured values of this
+    # mower, if there are any.
+    device = layers.device_file(data_dir, platform) if data_dir else ""
+    device = device if os.path.isfile(device) else ""
+    files = [arg("config"), arg("platform_config"), arg("extra_config")] + ([device] if device else [])
+    journal = journal_dir(arg("journal_dir"), data_dir, logger)
+    # The dimensions of the platform come before the files, which can change single values (the simulation does).
+    nodes = components(files, arg("geometry"), data_dir, arg("mqtt_host"), arg("mqtt_port"), journal)
+    halt = check_parameters(files, [*started(nodes), *module.NODES], logger)
+    if halt:
+        return halt
+    parts = module.parts(Start(arg, files, device, data_dir, journal, logger))
+    driver = []
+    if parts.driver:
+        # Should the container die, the driver stops the wheels after its own timeout and the blade lease runs out; a
+        # driver that ends starts again at most DRIVER_RESTARTS times.
+        note = os.path.join(data_dir, DRIVER_EXIT_NOTE) if data_dir else None
+        driver = restarting(parts.driver, note, module.DRIVER, logger, module.DRIVER_RESTARTS)
+    return [*driver, *parts.processes,
+            *container_and_planner([*parts.before, *nodes, *parts.after], data_dir, files, logger,
+                                   arg("oom_score_adj"))]
+
+
+# The start on this platform: its arguments, then the nodes. A name no package of the image entered halts with
+# PLATFORM_CONFIG.
+def start(context, platform):
+    try:
+        module = platform_module(platform)
+        declared = [*module.arguments(), *arguments(platform, module)]
+    except (LookupError, ValueError, OSError) as error:
+        text = (f"The image has no platform '{platform}' (platform:=<name> or MOWBITE_PLATFORM), it has "
+                f"{', '.join(layers.platforms()) or 'none'}: {error}.")
+        return halt_actions(data_store.Halt("PLATFORM_CONFIG", text).line("-"),
+                            launch.logging.get_logger("mowbite.launch"))
+    return [*declared, OpaqueFunction(function=lambda context: launch_setup(context, platform, module))]

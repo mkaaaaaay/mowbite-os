@@ -40,7 +40,7 @@ struct ParamsResult {
 
 class LogicParams {
  public:
-  // Defaults of the specs, then base ({"name": value}, e.g. from tron.yaml) for the names it has, within range.
+  // Defaults of the specs, then base ({"name": value}, e.g. from the parameter files) for the names it has, within range.
   explicit LogicParams(const json& base = json::object());
 
   // A file written from Text(): known names are taken within range, others are left out. False if it is no JSON

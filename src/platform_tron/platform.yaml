@@ -82,9 +82,9 @@ tron_gnss:
     board_gate: true
     # The motion vector comes from the RTK fixed positions, not from the course of the board, which holds it fixed
     # (motion_from_fixes and its limits in tron_gnss/gnss_tracker.h).
-    # With data_dir/ntrip.yaml (tron.launch.py sets data_dir) RTK fixed counts as float until the first NTRIP
+    # With data_dir/ntrip.yaml (the start sets data_dir) RTK fixed counts as float until the first NTRIP
     # corrections went to the receiver: before that a LoRa base with a reference of its own may give the fix (G24).
-    # The datum of the garden comes only from MOWBITE_DATUM_* in /etc/mowbite/os.conf: tron.launch.py overrides files.
+    # The datum of the garden comes only from MOWBITE_DATUM_* in /etc/mowbite/os.conf: the start overrides files.
 
 tron_imu:
   ros__parameters:

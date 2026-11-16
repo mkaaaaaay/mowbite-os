@@ -1,6 +1,6 @@
 # The YardForce NX60i (OpenMower v2 carrier): its values on top of stack.yaml, which has the meaning of each. The
 # driver has its own file, config/nx60i.yaml of xcore_driver, and gets the battery voltages from here; the dimensions
-# are in geometry/nx60i.yaml.
+# are in geometry.yaml.
 # "Of the Tron" marks a value this mower took over from the Tron and never had measured: an assumption until its
 # safety measurement, and the list of what that measurement has to settle.
 
@@ -41,7 +41,7 @@ mowbite_logic:
   ros__parameters:
     # Of the Tron, the record of its rootfs; this mower has none.
     crash_record: /run/mowbite/crash
-    # 7S pack, also the voltages of the board (nx60i.launch.py hands them to xcore_driver): mowing goes home below
+    # 7S pack, also the voltages of the board (platform.py hands them to xcore_driver): mowing goes home below
     # 24.5 V (the highest voltage of 20 s), at once below 23.0 V; no battery temperature, so battery_hot_temperature
     # stays 0.
     battery_empty_voltage: 24.5

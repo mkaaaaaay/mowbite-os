@@ -1,7 +1,7 @@
 # The dimensions of the Tron: the values of robot.geometry, read by mowbite_logic as the parameters geometry.*. What the
 # user enters with robot.geometry.set goes to data_dir/geometry.json and counts before these. base_link is the middle of
-# the axle of the drive wheels, x points forward and y to the left, everything in m. Another platform brings a file like
-# this one with its driver.
+# the axle of the drive wheels, x points forward and y to the left, everything in m. Every platform has a file like
+# this one in its package.
 mowbite_logic:
   ros__parameters:
     geometry:

@@ -39,7 +39,7 @@ xcore_driver:
     imu_frame_id: base_link
 
     # 7S pack. The board switches the CM4 off below 21.0 V after about 11 s. battery_empty_voltage, _full_ and
-    # _critical_ come from the logic (mowbite_bringup/config/nx60i.yaml), handed over by nx60i.launch.py and
+    # _critical_ come from the logic (platform.yaml of the platform), handed over by its platform.py and
     # measure.launch.py.
     battery_critical_high_voltage: 29.9
     charge_voltage: 29.4

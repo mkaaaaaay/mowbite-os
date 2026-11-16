@@ -26,12 +26,12 @@ from mowbite_msgs.msg import HardwareStatus, MqttPublish, RobotState, RpcError, 
 from rcl_interfaces.msg import Log
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import ROSOUT, SimProbe, TestShutdown, sim_description, sim_files, wait_until  # noqa: E402,F401
+from sim_common import (ROSOUT, SimProbe, TestShutdown, journal_dir, sim_description, sim_files,  # noqa: E402,F401
+                        wait_until)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_incidents_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
-# The journal of ctest (MOWBITE_JOURNAL_DIR), else one of its own.
-JOURNAL = os.environ.get("MOWBITE_JOURNAL_DIR") or os.path.join(WORK, "journal")
+JOURNAL = journal_dir(WORK)
 INCIDENTS = os.path.join(JOURNAL, "incidents")
 REPLAY = os.path.join(get_package_prefix("mowbite_replay"), "bin", "mowbite_replay")
 CONFIG = os.path.join(WORK, "incidents.yaml")

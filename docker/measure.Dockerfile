@@ -28,7 +28,7 @@ RUN printf '#!/bin/bash\nsource /ws/install/setup.bash\nexec python3 /ws/tools/m
 # DDS on the loopback only, without shared memory (fastdds_loopback.xml of mowbite_bringup); the launch halts without it.
 COPY src/mowbite_bringup/config/fastdds_loopback.xml /etc/mowbite/fastdds_loopback.xml
 # The battery voltages of the logic, which measure.launch.py hands to the driver.
-COPY src/mowbite_bringup/config/nx60i.yaml /etc/mowbite/nx60i.yaml
+COPY src/platform_nx60i/platform.yaml /etc/mowbite/nx60i.yaml
 ENV ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT FASTRTPS_DEFAULT_PROFILES_FILE=/etc/mowbite/fastdds_loopback.xml
 # Every library a binary of the image links must be there.
 RUN . /ws/install/setup.sh \

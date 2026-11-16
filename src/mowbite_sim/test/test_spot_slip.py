@@ -1,7 +1,7 @@
 """Wheels that slip while the mower turns on the spot: the pose follows the fixes, and without them its accuracy
 grows with what the gyro stays behind the wheels.
 
-The chain is fake_tron, tron_mcu, tron_gnss, tron_imu and the localization with the values of tron.yaml; the test
+The chain is fake_tron, tron_mcu, tron_gnss, tron_imu and the localization with the values of the Tron; the test
 plays the logic (the geometry on bridge/params) and drives on hw/cmd_vel. The left wheel loses 0.8 of its speed on
 the ground: the base swings around it and moves some 5 cm/s, which the wheels do not report.
 

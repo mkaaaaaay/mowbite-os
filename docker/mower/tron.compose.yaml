@@ -36,7 +36,7 @@ services:
     volumes:
       # data_dir at the same path inside and out.
       - /userdata/mowbite:/userdata/mowbite
-      # The journal of the cores, outside of data_dir (its backup leaves it out); limits in tron.yaml.
+      # The journal of the cores, outside of data_dir (its backup leaves it out); limits in platform.yaml of the Tron.
       - /userdata/mowbite-journal:/userdata/mowbite-journal
     environment:
       - TZ=${TZ:-Europe/Berlin}

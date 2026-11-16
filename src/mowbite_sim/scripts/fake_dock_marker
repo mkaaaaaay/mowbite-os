@@ -76,7 +76,7 @@ class FakeDockMarker(Node):
         self.dock = list(self.declare_parameter("dock", [-1.0, 0.0, 180.0]).value)
         self.contact_x = self.declare_parameter("dock_contact_x", -0.10).value
         self.mount = list(self.declare_parameter("mount", Parameter.Type.DOUBLE_ARRAY).value)
-        # Platform values, only from tron.yaml (/**).
+        # Platform values, only from platform.yaml of the Tron (/**).
         self.marker = list(self.declare_parameter("dock_marker", Parameter.Type.DOUBLE_ARRAY).value)
         self.blind = self.declare_parameter("marker_blind_distance", Parameter.Type.DOUBLE).value
         # Measured on the Tron 14.11. (TM4 part, dark room, lit station): every image valid at 0.28 to 1.2 m, the

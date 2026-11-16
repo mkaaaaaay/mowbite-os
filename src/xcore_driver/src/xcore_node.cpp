@@ -433,7 +433,7 @@ class XcoreNode : public rclcpp::Node {
 
     const double empty = declare_parameter("battery_empty_voltage", 0.0);
     const double full = declare_parameter("battery_full_voltage", 0.0);
-    // The first three as the logic has them (nx60i.launch.py hands them over), the last the board's alone.
+    // The first three as the logic has them (the start hands them over), the last the board's alone.
     const double low = declare_parameter("battery_critical_voltage", 0.0);
     const double high = declare_parameter("battery_critical_high_voltage", 0.0);
     if (!(low > 0) || !(empty > low) || !(full > empty) || !(high > full)) {

@@ -1,7 +1,7 @@
 """The pose at the docking station from the dock marker (localization/dock_pose) against the true pose of fake_tron.
 
 The chain is fake_tron with the station of sim.yaml, tron_mcu, tron_imu, fake_dock_marker and the localization with the
-values of tron.yaml; the test plays the logic: the geometry on bridge/params, the requests on hw/dock_marker_request,
+values of the Tron; the test plays the logic: the geometry on bridge/params, the requests on hw/dock_marker_request,
 the heading hint and the drive on hw/cmd_vel, steered by the true pose. The mower stands at the approach point, where
 the marker has no direction yet, starts from the hint, backs onto the contacts and leaves again. It checks: no start
 without a heading, the estimate against the truth, single outliers without a jump, outliers in a row drop it, the

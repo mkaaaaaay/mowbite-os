@@ -1546,7 +1546,7 @@ def capped_copy(stream, path, max_bytes):
 
 class TronStart:
     """The minimal start of the Tron: tron_imu and tron_mcu as processes of this programme, nothing else (no GNSS,
-    logic, bridge or MQTT). Parameters: the files of the Tron in mowbite_bringup, then its measured values in data_dir,
+    logic, bridge or MQTT). Parameters: stack.yaml and the file of the Tron, then its measured values in data_dir,
     then the overrides of this start (only here, e.g. the long cmd_vel_timeout of heartbeat alone). The output of each
     process goes to a file next to the recording, at most NODE_LOG_BYTES."""
 
@@ -1557,7 +1557,7 @@ class TronStart:
         import data_store
         import layers
         self.files = layers.files("tron")
-        mower = os.path.join(args.data_dir, data_store.TRON_PARAMS_FILE)
+        mower = layers.device_file(args.data_dir, "tron")
         if os.path.isfile(mower):
             self.files.append(mower)
         self.common = {"hold_file": os.path.join(args.data_dir, data_store.HOLD_FILE), "allow_blade": False}

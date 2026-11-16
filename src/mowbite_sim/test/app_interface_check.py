@@ -1249,7 +1249,7 @@ if "recording.start" in COMMANDS:
           and bool(wait_for(lambda: b'"current_state":"IDLE"' in (latest("robot_state/json") or b""), 3)),
           json.dumps(r), point="AS2 recording")
 
-# The heartbeat carries the local time of TZ (default of tron.launch.py: Europe/Berlin), not UTC.
+# The heartbeat carries the local time of TZ (default of the start: Europe/Berlin), not UTC.
 beats = []
 if LOG:
     with open(LOG) as f:

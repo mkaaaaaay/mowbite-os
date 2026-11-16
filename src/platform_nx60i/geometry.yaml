@@ -1,5 +1,5 @@
 # The dimensions of the YardForce NX60i (OpenMower v2 carrier), read by mowbite_logic as the parameters geometry.*,
-# like tron.yaml. base_link is the middle of the axle of the drive wheels, x points forward and y to the left, in m.
+# like the one of the Tron. base_link is the middle of the axle of the drive wheels, x points forward and y to the left, in m.
 # The body, the blade, the wheel radius and the contacts are assumptions until they are measured on the device (before
 # M9); antenna, track and ticks are those OpenMower drives it with.
 mowbite_logic:

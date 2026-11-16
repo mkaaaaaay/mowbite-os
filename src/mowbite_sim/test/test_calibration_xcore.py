@@ -1,5 +1,5 @@
 """The calibration drive on an OpenMower v2 mower (NX60i): xcore_driver against fake_xcore and the nodes of the container
-with the geometry of config/geometry/nx60i.yaml, the board off its configuration on purpose: ticks 3 % more than the
+with geometry.yaml of the NX60i, the board off its configuration on purpose: ticks 3 % more than the
 2025 per m of the driver, 0.37 m between the wheels against 0.3556, the antenna at -0.10/0.02 where the geometry says
 0/0, the IMU at 2 deg roll and 3 deg pitch (the platform's mounting is 4.5 deg pitch) on ground that rises 3 deg.
 
@@ -26,7 +26,6 @@ import rclpy
 from launch.actions import TimerAction
 from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
-from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import (HardwareStatus, MapStatus, MqttPublish, RobotPose, Rtcm, RpcError, RpcRequest,
                               RpcResponse)
 from mowbite_msgs.srv import ReplaceMap, SetPose
@@ -51,9 +50,8 @@ with open(FLAGS, "w") as f:
 
 
 def generate_test_description():
-    bringup = FindPackageShare("mowbite_bringup").find("mowbite_bringup")
     config = layers.files("tron")
-    geometry = os.path.join(bringup, "config", "geometry", "nx60i.yaml")
+    geometry = layers.geometry("nx60i")
     board = fake_xcore(GROUP_PORT, "--origin", str(DATUM[0]), str(DATUM[1]), "--flags", FLAGS, "--state", STATE,
                        "--ticks-scale", "1.03", "--track", "0.37", "--antenna-offset", "-0.10", "0.02",
                        "--imu-error-rpy-deg", "2.0", "3.0", "0.0", "--slope", "3.0", "40.0", "--gnss-noise-m", "0.01",

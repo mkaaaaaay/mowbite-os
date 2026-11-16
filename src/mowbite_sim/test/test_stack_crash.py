@@ -47,13 +47,13 @@ CONFIG = os.path.join(WORK, "crash.yaml")
 # The journal of ctest (MOWBITE_JOURNAL_DIR), else one of its own.
 JOURNAL = os.environ.get("MOWBITE_JOURNAL_DIR") or os.path.join(WORK, "journal")
 REPLAY = os.path.join(get_package_prefix("mowbite_replay"), "bin", "mowbite_replay")
-# tron.yaml: cmd_vel_timeout of tron_mcu and blade_lease of the logic. fake_tron stops on its own only after 2 s
+# The Tron: cmd_vel_timeout of tron_mcu and blade_lease of the logic. fake_tron stops on its own only after 2 s
 # without any frame of the host.
 CMD_VEL_TIMEOUT = 0.5
 BLADE_LEASE = 1.0
 HOST_TIMEOUT = 2.0
 HEARTBEAT = 0xFF
-# tron.launch.py: restarts of the container and the wait before each.
+# stack.py: restarts of the container and the wait before each.
 RESTARTS = 3
 RESTART_DELAY = 2.0
 # SpeedData 0, 0 as sent.

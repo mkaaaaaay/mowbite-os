@@ -40,7 +40,7 @@ P = "/mower_logic/"
 YARD = [(-0.5, -2.0), (4.0, -2.0), (4.0, 2.0), (-0.5, 2.0)]
 PATCH = [(0.8, -1.5), (3.6, -1.5), (3.6, 1.5), (0.8, 1.5)]
 DOCKED = [-1.0, 0.0, 0.0]
-# tron.yaml: empty 21.0 V (the highest voltage of 20 s), critical 19.7 V for 2 s; motor_hot/cold_temperature 70/40.
+# The Tron: empty 21.0 V (the highest voltage of 20 s), critical 19.7 V for 2 s; motor_hot/cold_temperature 70/40.
 EMPTY, CRITICAL, LOW_WINDOW = 21.0, 19.7, 20.0
 MOTOR_HOT, MOTOR_COLD = 70.0, 40.0
 RAIN_CHECK = 20

@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>platform_tron</name>
+  <version>0.0.0</version>
+  <description>The Airseekers Tron as a platform of MowBite OS: its values, dimensions and its part of the start</description>
+  <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
+  <license>PolyForm-Strict-1.0.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>mowbite_bringup</exec_depend>
+  <exec_depend>tron_mcu</exec_depend>
+  <exec_depend>tron_gnss</exec_depend>
+  <exec_depend>tron_imu</exec_depend>
+  <exec_depend>tron_vision</exec_depend>
+  <exec_depend>mowbite_light</exec_depend>
+  <exec_depend>mowbite_sound</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

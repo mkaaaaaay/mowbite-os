@@ -1,7 +1,8 @@
 """stack.own_process: a process beside the stack with its limits as command prefix, restarts and an exit note. The
 container: its watch knows the nodes, the note of the watch goes into the exit note, every component has its watch.
 
-Run: python3 -m pytest /ws/src/mowbite_bringup/test/test_stack.py
+Run in a sourced workspace (the drivers of the platforms are found by the ament index): python3 -m pytest
+/ws/src/mowbite_bringup/test/test_stack.py
 """
 import glob
 import json
@@ -17,6 +18,7 @@ from launch_ros.actions import ComposableNodeContainer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "launch")))
+import layers  # noqa: E402
 import stack  # noqa: E402
 
 LOGGER = logging.getLogger("test_stack")
@@ -211,8 +213,8 @@ def test_the_watch_of_the_container_expects_its_nodes(tmp_path):
 
 
 SRC = os.path.normpath(os.path.join(HERE, "..", ".."))
-# Components that run in a process of their own and not in the container.
-OWN_PROCESS = {"tron_mcu", "xcore_driver"}
+# Components that run in a process of their own and not in the container: the driver of each platform.
+OWN_PROCESS = {stack.platform_module(platform).DRIVER for platform in layers.platforms()}
 
 
 def test_every_component_in_the_container_has_its_watch():
@@ -229,5 +231,8 @@ def test_every_component_in_the_container_has_its_watch():
 
 
 def test_no_parameter_file_names_a_limit_of_the_watch():
-    for path in glob.glob(os.path.join(SRC, "*", "config", "**", "*.yaml"), recursive=True):
+    paths = [*glob.glob(os.path.join(SRC, "*", "config", "**", "*.yaml"), recursive=True),
+             *glob.glob(os.path.join(SRC, "platform_*", "*.yaml"))]
+    assert len(paths) >= 6, paths
+    for path in paths:
         assert "watch" not in open(path).read().lower(), path

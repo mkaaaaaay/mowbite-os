@@ -1,8 +1,8 @@
-"""The dimensions of the platform stand in one file, config/geometry/tron.yaml. One place repeats one of them, the
+"""The dimensions of the platform stand in one file, its geometry.yaml. One place repeats one of them, the
 station of fake_tron in sim.yaml: it has to agree. No node may be given an antenna offset or contact position of its
 own any more, and no planner section the body or the blade, which the planner takes from /mowbite_geometry.
 The fence of mowbite_safety lies beyond the one of the follower, so that it acts only when the follower does not.
-The NX60i the same way: config/nx60i.yaml on top of stack.yaml has the battery voltages, which nx60i.launch.py hands
+The NX60i the same way: its platform.yaml on top of stack.yaml has the battery voltages, which its platform.py hands
 to the driver, so its own file has none; the driver
 charges at 29.4 V at most (G29) and has the speed model of A2.
 
@@ -39,7 +39,7 @@ def from_geometry(config):
 
 class ConfigConsistency(unittest.TestCase):
     def setUp(self):
-        platform = load(os.path.join(BRINGUP, "config", "geometry", "tron.yaml"))
+        platform = load(layers.geometry("tron"))
         self.geometry = platform["mowbite_logic"]["ros__parameters"]["geometry"]
         self.files = layers.files("tron")
         self.configs = [load(path) for path in self.files]
@@ -82,16 +82,16 @@ class ConfigConsistency(unittest.TestCase):
 
 class Nx60iConsistency(unittest.TestCase):
     def setUp(self):
-        platform = load(os.path.join(BRINGUP, "config", "geometry", "nx60i.yaml"))
+        platform = load(layers.geometry("nx60i"))
         self.geometry = platform["mowbite_logic"]["ros__parameters"]["geometry"]
-        self.nx60i = load(os.path.join(BRINGUP, "config", "nx60i.yaml"))
+        self.nx60i = load(layers.platform_file("nx60i"))
         self.driver = load(os.path.join(XCORE, "config", "nx60i.yaml"))["xcore_driver"]["ros__parameters"]
 
     def test_the_planner_section_has_no_body_or_blade(self):
         self.assertFalse(from_geometry(self.nx60i))
 
     def test_the_driver_gets_the_battery_of_the_platform_file_only(self):
-        battery = logic_params.battery_voltages(layers.files("nx60i"))
+        battery = logic_params.battery_voltages(layers.parameters(layers.files("nx60i"), "mowbite_logic"))
         logic = self.nx60i["mowbite_logic"]["ros__parameters"]
         self.assertEqual(battery, {key: logic[key] for key in logic_params.BATTERY_VOLTAGES})
         self.assertLess(battery["battery_critical_voltage"], battery["battery_empty_voltage"])

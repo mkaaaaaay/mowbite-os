@@ -16,7 +16,6 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import TwistStamped
 from launch_ros.actions import Node
 from mowbite_msgs.msg import (ActionList, HardwareStatus, MapStatus, MqttPublish, RobotPose, RpcError, RpcRequest,
@@ -25,7 +24,7 @@ from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import HISTORY, LATCHED, SimProbe, read_json  # noqa: E402
+from sim_common import HISTORY, LATCHED, SimProbe, layers, read_json  # noqa: E402
 
 DATUM = (52.0, 9.0, 50.0)
 WORK = tempfile.mkdtemp(prefix="mowbite_recording_")
@@ -33,7 +32,7 @@ REC = "mower_logic:area_recording/"
 
 
 # The dimensions of the platform, which the logic needs to start.
-GEOMETRY = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
+GEOMETRY = layers.geometry("tron")
 
 
 def generate_test_description():

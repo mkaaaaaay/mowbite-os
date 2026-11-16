@@ -44,7 +44,7 @@ GROUP_PORT = random.randint(42000, 48000)
 BIND_IP = f"127.{random.randint(1, 250)}.{random.randint(1, 250)}.{random.randint(2, 250)}"
 SERVICES = os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "config", "xcore_nx60i_services.json")
 FAKE = os.path.join(FindPackagePrefix("mowbite_sim").find("mowbite_sim"), "lib", "mowbite_sim", "fake_xcore")
-BATTERY_PARAMS = os.path.join(FindPackageShare("mowbite_bringup").find("mowbite_bringup"), "config", "nx60i.yaml")
+BATTERY_PARAMS = os.path.join(FindPackageShare("platform_nx60i").find("platform_nx60i"), "platform.yaml")
 # The driver and the fake share the speed model of nx60i.yaml: 0.5 m/s needs duty 0.881, below max_duty 1.0.
 TOP_SPEED = 0.5
 REFUSED = "is for the measurement image only"
