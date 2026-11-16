@@ -125,6 +125,9 @@ class SafetyFilter {
   // A release asked for by the logic: refused while tilted or without an IMU sample; else the own latch is gone, every
   // source has to arm again, and the node asks the driver.
   Release OnRelease(double now);
+  // What became of the release the node asked the driver for: refused or without an answer (released false), the
+  // latch OnRelease took comes back, so that the emergency stays whatever the driver shows.
+  void OnReleaseAnswer(bool released, double now);
 
   uint32_t Latched() const;
   // NaN without a recent IMU sample.
@@ -201,6 +204,9 @@ class SafetyFilter {
   uint32_t latched_ = 0;
   bool restart_hold_ = false;
   std::string latch_reason_;
+  // The latch a release took, until the driver answered.
+  uint32_t released_ = 0;
+  std::string released_reason_;
   bool latch_new_ = false;
   std::optional<double> latch_sent_s_;
   uint32_t refused_ = 0;

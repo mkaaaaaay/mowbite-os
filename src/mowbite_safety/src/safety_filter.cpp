@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <utility>
 
 namespace mowbite_safety {
 
@@ -380,6 +381,10 @@ Release SafetyFilter::OnRelease(double now) {
     return {false, Format("still tilted by %.0f deg, below %.0f deg needed", tilt_deg_, config_.tilt_release),
             "STILL_TILTED", tilt_deg_, config_.tilt_release};
   }
+  if (latched_ != 0) {
+    released_ |= latched_;
+    released_reason_ = latch_reason_;
+  }
   latched_ = 0;
   latch_reason_.clear();
   latch_new_ = false;
@@ -390,6 +395,16 @@ Release SafetyFilter::OnRelease(double now) {
   DisarmAll();
   UpdateEmergency(now);
   return {true, "", ""};
+}
+
+void SafetyFilter::OnReleaseAnswer(bool released, double now) {
+  const uint32_t bits = std::exchange(released_, 0);
+  if (released || bits == 0) return;
+  // A latch that came meanwhile keeps its reason.
+  Latch(bits, latched_ != 0 ? latch_reason_ : released_reason_);
+  // What the driver still shows needs no new request.
+  if (hw_emergency_ && (hw_reason_ & latched_) == latched_) latch_new_ = false;
+  UpdateEmergency(now);
 }
 
 uint32_t SafetyFilter::Latched() const {

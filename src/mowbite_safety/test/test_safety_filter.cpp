@@ -806,6 +806,50 @@ TEST_F(FilterTest, ARefusedMovingSourceStopsOnce) {
   EXPECT_FALSE(Cmd(Source::kCalibration, -0.1).out.has_value());
 }
 
+TEST_F(FilterTest, AReleaseTheDriverRefusesBringsTheLatchBack) {
+  ASSERT_TRUE(Moves(Cmd(Source::kTeleop, 0.2))) << filter_.LastRefusal();
+  // Latched here, and the driver does not show it yet.
+  filter_.OnRestartHold(true);
+  filter_.OnRestartHold(false);
+  ASSERT_TRUE(filter_.OnRelease(now_).allowed);
+  EXPECT_EQ(filter_.Latched(), 0u);
+  // Refused or not answered: the emergency is back and goes to the driver again.
+  filter_.OnReleaseAnswer(false, now_);
+  EXPECT_EQ(filter_.Latched(), kReasonUnexpectedRestart);
+  EXPECT_EQ(Cmd(Source::kTeleop, 0.2).refusal, "emergency");
+  const auto latch = filter_.TakeLatchRequest(now_);
+  ASSERT_TRUE(latch.has_value());
+  EXPECT_EQ(latch->bits, kReasonUnexpectedRestart);
+  // A second answer changes nothing, the next release goes through.
+  filter_.OnReleaseAnswer(false, now_);
+  EXPECT_EQ(filter_.Latched(), kReasonUnexpectedRestart);
+  ASSERT_TRUE(filter_.OnRelease(now_).allowed);
+  filter_.OnReleaseAnswer(true, now_);
+  EXPECT_EQ(filter_.Latched(), 0u);
+  filter_.OnReleaseAnswer(false, now_);
+  EXPECT_EQ(filter_.Latched(), 0u);
+}
+
+TEST_F(FilterTest, ARefusedReleaseOfWhatTheDriverShowsAsksItNothingNew) {
+  filter_.OnRestartHold(true);
+  ASSERT_TRUE(filter_.TakeLatchRequest(now_).has_value());
+  hw_emergency_ = true;
+  hw_reason_ = 1u | kReasonUnexpectedRestart;
+  Run(now_ + 0.1);
+  filter_.OnRestartHold(false);
+  ASSERT_TRUE(filter_.OnRelease(now_).allowed);
+  filter_.OnReleaseAnswer(false, now_);
+  EXPECT_EQ(filter_.Latched(), kReasonUnexpectedRestart);
+  EXPECT_FALSE(filter_.TakeLatchRequest(now_).has_value());
+  EXPECT_EQ(Cmd(Source::kTeleop, 0.2).refusal, "emergency");
+}
+
+TEST_F(FilterTest, AReleaseWithoutALatchLeavesNothingToBringBack) {
+  ASSERT_TRUE(filter_.OnRelease(now_).allowed);
+  filter_.OnReleaseAnswer(false, now_);
+  EXPECT_EQ(filter_.Latched(), 0u);
+}
+
 TEST_F(FilterTest, AReleaseDisarmsEverySource) {
   ASSERT_TRUE(Moves(Cmd(Source::kTeleop, 0.2)));
   ASSERT_TRUE(filter_.OnRelease(now_).allowed);

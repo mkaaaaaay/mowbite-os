@@ -296,6 +296,7 @@ class SafetyNode : public rclcpp::Node {
     pending_.erase(it);
     const auto& response = future.get();
     if (!response->success) RCLCPP_WARN(get_logger(), "The driver refused the release: %s", response->message.c_str());
+    filter_.Call<&SafetyFilter::OnReleaseAnswer>(response->success, MonotonicSeconds());
     release_srv_->send_response(*header, *response);
   }
 
@@ -308,6 +309,7 @@ class SafetyNode : public rclcpp::Node {
       }
       emergency_client_->remove_pending_request(it->request_id);
       RCLCPP_ERROR(get_logger(), "hw/emergency did not answer the release, emergency stays");
+      filter_.Call<&SafetyFilter::OnReleaseAnswer>(false, now);
       SetEmergency::Response res;
       res.success = false;
       res.message = "hw/emergency did not answer";
