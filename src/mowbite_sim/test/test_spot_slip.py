@@ -19,7 +19,6 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from launch.actions import TimerAction
 from launch_ros.actions import Node
@@ -28,14 +27,14 @@ from rcl_interfaces.msg import Log
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (LATCHED, REAL_FAULTS, ROSOUT, SimProbe, TestShutdown, fake_tron, sim_files,  # noqa: E402, F401
-                        sim_links)
+from sim_common import (LATCHED, REAL_FAULTS, ROSOUT, SimProbe, TestShutdown, fake_tron, layers,  # noqa: E402, F401
+                        sim_files, sim_links)
 
 ANTENNA_X = 0.098
 WORK = tempfile.mkdtemp(prefix="mowbite_spot_slip_")
 LINKS = sim_links(WORK)
 STATE, FLAGS, _, _ = sim_files(WORK)
-TRON = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "tron.yaml")
+TRON = layers.files("tron")
 LOCAL = os.path.join(WORK, "local.yaml")
 SLIP = [0.8, 0.0]
 TURN = 0.6
@@ -51,13 +50,13 @@ def generate_test_description():
                 f"tron_imu:\n  ros__parameters:\n    port: {LINKS['imu']}\n")
     nodes = [
         Node(package="tron_mcu", executable="tron_mcu_node", name="tron_mcu", output="screen",
-             parameters=[TRON, LOCAL]),
+             parameters=[*TRON, LOCAL]),
         Node(package="tron_gnss", executable="tron_gnss_node", name="tron_gnss", output="screen",
-             parameters=[TRON, LOCAL, {"datum_lat": 52.0, "datum_long": 9.0, "datum_height": 50.0}]),
+             parameters=[*TRON, LOCAL, {"datum_lat": 52.0, "datum_long": 9.0, "datum_height": 50.0}]),
         Node(package="tron_imu", executable="tron_imu_node", name="tron_imu", output="screen",
-             parameters=[TRON, LOCAL]),
+             parameters=[*TRON, LOCAL]),
         Node(package="mowbite_localization", executable="mowbite_localization_node", name="mowbite_localization",
-             output="screen", parameters=[TRON, LOCAL]),
+             output="screen", parameters=[*TRON, LOCAL]),
     ]
     return launch.LaunchDescription([
         fake_tron(LINKS, "--flags", FLAGS, "--state", STATE, "--antenna-offset", str(ANTENNA_X), "0.0"),

@@ -30,14 +30,12 @@ def launch_setup(context):
     halt = stack.prepare_data_dir(data_dir, logger)
     if halt:
         return halt
-    config = arg("config")
-    # The dimensions of the platform; config and extra come after it and can change single values (the simulation does).
+    # The dimensions of the platform; the files come after it and can change single values (the simulation does).
     geometry = arg("geometry")
-    # Values on top of config, e.g. those of the simulation; by default config once more. Then the measured values of
-    # this Tron (data_dir/tron.yaml), if there are any.
-    extra = arg("extra_config")
+    # What every mower shares, the values of the Tron, values on top of both, e.g. those of the simulation (by default
+    # the platform file once more), then the measured values of this Tron (data_dir/tron.yaml), if there are any.
     mower = os.path.join(data_dir, data_store.TRON_PARAMS_FILE) if data_dir else ""
-    files = [config, extra] + ([mower] if os.path.isfile(mower) else [])
+    files = [arg("config"), arg("platform_config"), arg("extra_config")] + ([mower] if os.path.isfile(mower) else [])
     # Should the container die, the driver stops the wheels after cmd_vel_timeout, the blade lease runs out and the
     # missing IMU latches IMU_TIMEOUT. With the namespace the dict goes under the full name; without it, under /**,
     # the port in the node's own section of config would win.
@@ -67,6 +65,9 @@ def launch_setup(context):
         package="mowbite_sound", plugin="mowbite_sound::SoundNode", name="mowbite_sound",
         parameters=[*files, {"data_dir": data_dir}])
     nodes = stack.components(files, geometry, data_dir, arg("mqtt_host"), arg("mqtt_port"), journal)
+    halt = stack.check_parameters(files, [*stack.started(nodes), *NODES], logger)
+    if halt:
+        return halt
     oom = arg("oom_score_adj")
     # Without hardware no process opens the MCU, GNSS or IMU port: the stack runs, the logic finds no driver.
     if hardware == "false":
@@ -87,6 +88,11 @@ def launch_setup(context):
         cameras += stack.camera_service(files, data_dir, logger, **CAMERA_LIMITS)
     return [mcu, *cameras,
             *stack.container_and_planner([gnss, imu, *nodes, light, sound], data_dir, files, logger, oom)]
+
+
+# The nodes of the Tron beside those of stack.py, as the parameter files name them.
+NODES = ("tron_mcu", "tron_gnss", "tron_imu", "mowbite_light", "mowbite_sound", "tron_vision", "right/tron_vision",
+         "tron_stereo", "tron_side", "tron_rear", "mowbite_camera")
 
 
 # What every process around the cameras gets: the kernel ends it first when memory runs out, and it keeps CPU 4-7 free.
@@ -134,8 +140,10 @@ def camera_video(switch, logger):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("config", default_value=PathJoinSubstitution(
+            [FindPackageShare("mowbite_bringup"), "config", "stack.yaml"])),
+        DeclareLaunchArgument("platform_config", default_value=PathJoinSubstitution(
             [FindPackageShare("mowbite_bringup"), "config", "tron.yaml"])),
-        DeclareLaunchArgument("extra_config", default_value=LaunchConfiguration("config")),
+        DeclareLaunchArgument("extra_config", default_value=LaunchConfiguration("platform_config")),
         DeclareLaunchArgument("geometry", default_value=PathJoinSubstitution(
             [FindPackageShare("mowbite_bringup"), "config", "geometry", "tron.yaml"])),
         DeclareLaunchArgument("mcu_port", default_value="/dev/ttyS9"),

@@ -3515,7 +3515,7 @@
           "type": "string"
         },
         "heading": {
-          "description": "The heading it drives in with, counter-clockwise from east",
+          "description": "The direction the mower drives onto it, from the point in front of it to the docked place, counter-clockwise from east; docked, the mower faces that way with the contacts in front and the other way with them behind",
           "type": "number",
           "x-unit": "rad"
         },
@@ -14315,11 +14315,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:39",
+  "$id": "urn:mowbite-os:api:40",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null). x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 39,
+  "x-api": 40,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -14497,7 +14497,7 @@
           "params": {}
         }
       ],
-      "description": "Records a point of the docking station: first in front of it, then on the contacts; DOCK_RECORDED follows",
+      "description": "Records a point of the docking station: first in front of it, then on the contacts, where base_link of the docked mower becomes the position of the station; DOCK_RECORDED follows",
       "params": "#/$defs/recording.dock.params",
       "refused": "RECORDING_REFUSED",
       "result": "#/$defs/recording.dock.result"
@@ -15263,7 +15263,7 @@
       "result": "#/$defs/recording.discard.result"
     },
     "recording.dock": {
-      "description": "Records a point of the docking station: first in front of it, then on the contacts; DOCK_RECORDED follows",
+      "description": "Records a point of the docking station: first in front of it, then on the contacts, where base_link of the docked mower becomes the position of the station; DOCK_RECORDED follows",
       "node": "mowbite_logic",
       "offered": "",
       "params": "#/$defs/recording.dock.params",
@@ -17065,6 +17065,24 @@
             "fix": "Go back to the version before or install MowBite OS again.",
             "help": "The profile the parts of MowBite OS use to talk to each other is missing or unreadable.",
             "name": "Network profile missing"
+          }
+        }
+      },
+      "PLATFORM_CONFIG": {
+        "description": "The platform leaves a value of the parameter files unset, it does not start",
+        "fields": {},
+        "resume": "user",
+        "severity": "error",
+        "texts": {
+          "de": {
+            "fix": "Zur vorigen Version zurück und das Protokoll für eine Meldung sichern.",
+            "help": "In den Werten dieses Mähermodells fehlen Pflichtangaben, MowBite OS startet nicht.",
+            "name": "Plattformwerte fehlen"
+          },
+          "en": {
+            "fix": "Go back to the version before and keep the log for a report.",
+            "help": "Required values of this mower model are missing, MowBite OS does not start.",
+            "name": "Platform values missing"
           }
         }
       },

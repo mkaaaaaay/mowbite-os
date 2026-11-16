@@ -1,5 +1,6 @@
-"""The part of MowBite OS every platform starts (tron.launch.py, nx60i.launch.py): DDS and data_dir before any node,
-the container with the nodes above the hardware contract, restarted after a crash, and the MowBite Planner.
+"""The part of MowBite OS every platform starts (tron.launch.py, nx60i.launch.py): DDS, data_dir and the parameter
+files before any node, the container with the nodes above the hardware contract, restarted after a crash, and the
+MowBite Planner.
 """
 import asyncio
 import json
@@ -17,6 +18,7 @@ from launch_ros.descriptions import ComposableNode
 # data_store.py lies next to this file, in the source tree and in the install space alike.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import data_store  # noqa: E402
+import layers  # noqa: E402
 
 # After a crash the container starts again at most this often, each time after RESTART_DELAY s, then it stays down
 # until the next start by hand. A run of STABLE_AFTER s counts the crashes from 0 again.
@@ -27,6 +29,9 @@ STABLE_AFTER = 600.0
 EXIT_NOTE = "container_exit.json"
 # In data_dir: the node the watch of the container (mowbite_watch) ended it for, taken into EXIT_NOTE as stalled.
 WATCH_NOTE = "watch_exit.json"
+# The nodes beside the container, in their own processes.
+PLANNER = "mowbite_planner"
+NET = "mowbite_net"
 
 
 # Stands in for the nodes after a halt, so that the launch stays without a restart loop until SIGINT. It ends quietly
@@ -56,11 +61,25 @@ def check_dds(logger):
                    "and listens on every interface")
 
 
+def halt_file():
+    return os.environ.get("MOWBITE_HALT_FILE") or data_store.HALT_FILE
+
+
+# The halt line on stderr and in the halt file for mowbite_health, then the launch only waits for SIGINT.
+def halt_actions(line, logger):
+    print(line, file=sys.stderr, flush=True)
+    path = halt_file()
+    try:
+        data_store.write_halt(path, line)
+    except OSError as error:
+        logger.error(f"Cannot write {path}: {error}")
+    return [OpaqueCoroutine(coroutine=halted)]
+
+
 # DDS and data_dir for this image before any node starts (data_store.py): None to go on, else the halt.
 def prepare_data_dir(data_dir, logger):
-    halt_file = os.environ.get("MOWBITE_HALT_FILE") or data_store.HALT_FILE
     try:
-        os.remove(halt_file)
+        os.remove(halt_file())
     except FileNotFoundError:
         pass
     schema = "-"
@@ -80,12 +99,21 @@ def prepare_data_dir(data_dir, logger):
             logger.warning(f"data_dir went back from schema {note['from']} to {note['to']}, the changes since the "
                            f"update are in {os.path.join(data_dir, note['backup'])}")
         return None
-    print(line, file=sys.stderr, flush=True)
+    return halt_actions(line, logger)
+
+
+# The parameter files before any node starts (layers.py): None when they can be read and the platform set every value
+# stack.yaml leaves to it for these nodes, else the halt PLATFORM_CONFIG.
+def check_parameters(files, nodes, logger):
     try:
-        data_store.write_halt(halt_file, line)
-    except OSError as error:
-        logger.error(f"Cannot write {halt_file}: {error}")
-    return [OpaqueCoroutine(coroutine=halted)]
+        missing = layers.unset(files, nodes)
+    except (OSError, ValueError) as error:
+        text = f"A parameter file cannot be read: {error}."
+    else:
+        if not missing:
+            return None
+        text = f"The platform does not set {', '.join(missing)}."
+    return halt_actions(data_store.Halt("PLATFORM_CONFIG", text).line("-"), logger)
 
 
 # journal_dir as given, or empty with an error when it lies in data_dir: the backup of data_dir would take it along
@@ -169,6 +197,11 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal):
 # The names of these composable nodes, as their watch knows them.
 def node_names(nodes):
     return ["".join(part.text for part in node.node_name) for node in nodes]
+
+
+# The nodes container_and_planner starts with these components, as the parameter files name them.
+def started(nodes):
+    return [*node_names(nodes), PLANNER, NET]
 
 
 # On every start of action its oom_score_adj; raising it needs no privilege. Empty: inherited.
@@ -289,7 +322,7 @@ def camera_service(files, data_dir, logger, **limits):
 # mowbite_net in a process of its own, the only one that talks to the internet: weather and pushes (notify.*).
 def net_service(files, data_dir, logger):
     return own_process(
-        lambda prefix: Node(package="mowbite_net", executable="mowbite_net_node", name="mowbite_net", namespace="/",
+        lambda prefix: Node(package="mowbite_net", executable="mowbite_net_node", name=NET, namespace="/",
                             parameters=[*files, {"data_dir": data_dir}], output="screen", prefix=prefix,
                             exec_name="mowbite_net"),
         "net", data_dir, logger)
@@ -317,7 +350,7 @@ def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
     # dict of parameters goes under its full name. calib_root is the folder of mowbite_calibration: only under it
     # planner.calib.evaluate reads a recording.
     calib_root = os.path.join(data_dir, "calibration") if data_dir else ""
-    planner = Node(package="mowbite_planner_os", executable="mowbite_planner_os_node", name="mowbite_planner",
+    planner = Node(package="mowbite_planner_os", executable="mowbite_planner_os_node", name=PLANNER,
                    namespace="/", parameters=[*files, {"data_dir": data_dir, "calib_root": calib_root}],
                    output="screen", respawn=True, respawn_delay=5.0)
     return [*restarting(container, os.path.join(data_dir, EXIT_NOTE), "The container", logger, CONTAINER_RESTARTS,

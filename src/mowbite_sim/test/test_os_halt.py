@@ -1,8 +1,9 @@
 """tron.launch.py halts when data_dir does not fit the image: no node starts, one MOWBITE_OS_HALT line, the launch stays
 without nodes until SIGINT (no restart loop under restart: unless-stopped) and mowbite_health reports the line, even
 with the broker up. Here inside sim.launch.py with data newer than the image and no backup to go back to; then
-ros2 launch of tron.launch.py on its own for the same case and for a data_dir another OS holds. At the end every process
-of the launch has ended, the broker and the simulation beside the halt included.
+ros2 launch of tron.launch.py on its own for the same case, for a data_dir another OS holds and for a platform file
+that leaves a value of stack.yaml unset. At the end every process of the launch has ended, the broker and the simulation
+beside the halt included.
 
 Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite_sim/test/test_os_halt.py
 """
@@ -21,12 +22,13 @@ import launch
 import launch_testing
 import launch_testing.actions
 import rclpy
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import TimerAction
 from launch.events.process import ProcessExited
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import mosquitto, package_program, sim_stack  # noqa: E402
+from sim_common import layers, mosquitto, package_program, sim_stack  # noqa: E402
 
 MQTT_PORT = 18842
 WORK = tempfile.mkdtemp(prefix="mowbite_halt_")
@@ -80,11 +82,11 @@ def health(halt):
     return done.returncode, done.stdout.strip()
 
 
-def tron_launch(data_dir, halt):
+def tron_launch(data_dir, halt, *arguments):
     """ros2 launch of tron.launch.py as on the mower, in a process group of its own."""
     env = dict(os.environ, MOWBITE_HALT_FILE=halt, MOWBITE_MQTT_PORT=str(MQTT_PORT))
-    return subprocess.Popen(["ros2", "launch", "mowbite_bringup", "tron.launch.py", f"data_dir:={data_dir}"],
-                            env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    return subprocess.Popen(["ros2", "launch", "mowbite_bringup", "tron.launch.py", f"data_dir:={data_dir}",
+                             *arguments], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             start_new_session=True)
 
 
@@ -169,6 +171,29 @@ class TestHalt(unittest.TestCase):
         self.assertGreaterEqual(took, 29.0)
         self.assertEqual(code, 0, output)
         self.assertFalse(os.path.exists(os.path.join(data, "data_schema.json")))
+
+    def test_05_a_platform_file_that_leaves_a_value_unset_halts(self):
+        data = os.path.join(WORK, "unset")
+        os.makedirs(data)
+        halt = os.path.join(WORK, "halt_unset")
+        platform = os.path.join(WORK, "mower.yaml")
+        with open(layers.files("tron")[1]) as f:
+            content = yaml.safe_load(f)
+        del content["mowbite_safety"]["ros__parameters"]["tilt_limit"]
+        with open(platform, "w") as f:
+            yaml.safe_dump(content, f)
+        process = tron_launch(data, halt, f"platform_config:={platform}")
+        line = (wait_for(halt, 30) or "").strip()
+        time.sleep(5.0)
+        running = process.poll() is None
+        code, text = health(halt)
+        _, output = stop(process)
+        self.assertTrue(running, output)
+        self.assertEqual(line, "MOWBITE_OS_HALT reason=PLATFORM_CONFIG data_schema=- image_schema=- The platform "
+                               "does not set mowbite_safety.tilt_limit.", output)
+        self.assertEqual(output.count("MOWBITE_OS_HALT"), 1, output)
+        self.assertNotIn("tron_mcu_node", output)
+        self.assertEqual((code, text), (1, line))
 
 
 @launch_testing.post_shutdown_test()

@@ -56,7 +56,8 @@ STEPS = {}
 
 
 class Halt(Exception):
-    """No node may start: reason (DATA_DIR_LOCKED, DATA_NO_SPACE, SCHEMA_NEWER, DATA_ERROR, DDS_PROFILE) and one sentence."""
+    """No node may start: reason (DATA_DIR_LOCKED, DATA_NO_SPACE, SCHEMA_NEWER, DATA_ERROR, DDS_PROFILE,
+    PLATFORM_CONFIG) and one sentence."""
 
     def __init__(self, reason, text, data_schema=None):
         super().__init__(text)

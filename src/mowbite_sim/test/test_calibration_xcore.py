@@ -34,7 +34,7 @@ from rclpy.qos import QoSProfile
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (LATCHED, SimProbe, fake_xcore, loopback_group, read_json, sim_files,  # noqa: E402
+from sim_common import (LATCHED, SimProbe, fake_xcore, layers, loopback_group, read_json, sim_files,  # noqa: E402
                         station_frame, xcore_driver)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_calibration_xcore_")
@@ -52,7 +52,7 @@ with open(FLAGS, "w") as f:
 
 def generate_test_description():
     bringup = FindPackageShare("mowbite_bringup").find("mowbite_bringup")
-    config = os.path.join(bringup, "config", "tron.yaml")
+    config = layers.files("tron")
     geometry = os.path.join(bringup, "config", "geometry", "nx60i.yaml")
     board = fake_xcore(GROUP_PORT, "--origin", str(DATUM[0]), str(DATUM[1]), "--flags", FLAGS, "--state", STATE,
                        "--ticks-scale", "1.03", "--track", "0.37", "--antenna-offset", "-0.10", "0.02",
@@ -64,7 +64,7 @@ def generate_test_description():
 
     def component(package, plugin, name, extra=None):
         return ComposableNode(package=package, plugin=plugin, name=name,
-                              parameters=[geometry, config, CONFIG, *([extra] if extra else [])])
+                              parameters=[geometry, *config, CONFIG, *([extra] if extra else [])])
 
     container = ComposableNodeContainer(
         name="mowbite", namespace="", package="rclcpp_components", executable="component_container_isolated",

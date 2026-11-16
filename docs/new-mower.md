@@ -119,9 +119,9 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   Every leg runs in the station frame and reaches the wheels only as the dock source. Check on the new mower, in
   this order: the reference measurement of the marker (`dock_marker`), `marker_blind_distance` (the last part is
   blind from there), then the test with the mower watched, before any docking by the marker with RTK. Its values
-  `marker_wait`, `marker_cross_track` and `marker_scale_limit` stand in `mowbite_logic` of the platform file.
+  `marker_wait`, `marker_cross_track` and `marker_scale_limit` stand in `mowbite_logic` of `stack.yaml`.
 - `dock_guide` in `mowbite_logic` of the platform file decides whether `docking.start` and going home use the marker:
-  `none` (by RTK only; `tron.yaml` underneath has `require`, so a platform without a marker sets `none`), `prefer` (by
+  `none` (by RTK only, as `stack.yaml` has it for a platform without a marker), `prefer` (by
   the marker; where its source cannot measure, this try by RTK with `DOCKING_WITHOUT_MARKER`) or `require` (never
   without it). With the marker the line begins at most `marker_range` in front of the station, the logic asks for the
   marker from 3 m before that point and gives the estimate the heading of the map as a hint. Each try chooses there:
@@ -149,11 +149,19 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   below `turn_min_ratio` of the rate, 0.7). `mowbite_safety` lets every moving command grow at
   most `ramp_linear` m/s² and `ramp_angular` rad/s² from the one before, whatever its source (0: no limit); less, a stop
   and an emergency go out at once. Measure how fast the wheels follow before raising any of them.
-- `mowbite_bringup/config/<platform>.yaml`: what differs from `tron.yaml`, which lies underneath (battery voltages
-  empty, full and critical, charge check, temperatures). Check every value you inherit. The battery voltages stand only
+- `mowbite_bringup/config/<platform>.yaml`: the values of this mower on top of `stack.yaml`, which holds for every
+  mower and has the meaning of each value. `stack.yaml` marks what a platform has to set as `<platform>`: battery and
+  charge check, docking and the contacts, how the mower drives, tilt and ramps, gyro and noise, the limits of the
+  journal, and the devices of light and sound for a platform that starts them. Set each in the same section of your
+  file. While one is left for a node the platform starts, the start halts with `PLATFORM_CONFIG` and its names before
+  any node runs; `test_layers.py` of `mowbite_bringup` holds the same for every platform of the repo, so add yours to
+  its `NODES`. A part that is off in `stack.yaml` (dock marker, `dock_guide`, `turn_hold_gain`, `crash_record`) is
+  turned on only where the mower has it. No value of another mower comes along by itself: one you take over
+  unmeasured stands in your file as an assumption (`nx60i.yaml` marks them "Of the Tron"), and that list is what the
+  safety measurement has to settle. The battery voltages stand only
   here: a driver that sets them on its board gets them in the start file from `battery_voltages` of
   `xcore_driver/launch/logic_params.py`, under the same names (see `nx60i.launch.py`).
-- The way home without the planner (`docking_direct`, `direct_margin`, inherited from `tron.yaml`): a planner that
+- The way home without the planner (`docking_direct`, `direct_margin` of `stack.yaml`): a planner that
   gives no answer does not keep the mower from the station. It drives the straight line to the point
   `docking_approach_distance` m in front of the station, where no obstacle and no end of the mowing and navigation
   areas lies closer to that line than the turning circle of the body (base_link to its farthest point) plus
@@ -191,7 +199,9 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
 
 `mowbite_bringup/launch/<platform>.launch.py`: the driver as its own process, the rest from `stack.py` (container with
 all nodes above the contract, and the planner). Copy `nx60i.launch.py`: it restarts the driver at most three times,
-each time latched, and leaves `driver_exit.json`.
+each time latched, and leaves `driver_exit.json`. Its parameter files in their order: `stack.yaml` (`config`), the
+platform file (`platform_config`), values on top for a test (`extra_config`); before the first node it checks them for
+the nodes it starts (`stack.check_parameters`).
 
 Every node in the container runs in its own thread (`component_container_isolated`), so a node that waits stalls only
 itself. A node of your own (lights, sound, camera) follows the same rule as the others: nothing that blocks in a

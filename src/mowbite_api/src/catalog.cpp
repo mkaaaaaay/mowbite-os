@@ -595,7 +595,8 @@ const std::vector<Command>& Commands() {
       Logic("recording.discard", "Drops what was recorded and not saved", {}, Answer(), "RECORDING_REFUSED",
             {{kRecord + "finish_discard"}}),
       Logic("recording.dock",
-            "Records a point of the docking station: first in front of it, then on the contacts; DOCK_RECORDED follows",
+            "Records a point of the docking station: first in front of it, then on the contacts, where base_link of the "
+            "docked mower becomes the position of the station; DOCK_RECORDED follows",
             {}, Answer(), "RECORDING_REFUSED", {{kRecord + "record_dock"}}),
       Logic("recording.auto_points", "Switches the automatic points of the ring on or off",
             {Bool("enabled", "True: a point every few centimetres by itself; false: only recording.point")}, Answer(),

@@ -33,13 +33,13 @@ from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import (LATCHED, REAL_FAULTS, SimProbe, TestShutdown, estimate_at, fake_tron,  # noqa: E402, F401
-                        pose_stamp, quantile, sim_files, sim_links, wrap)
+                        layers, pose_stamp, quantile, sim_files, sim_links, wrap)
 
 ANTENNA_X = 0.098
 WORK = tempfile.mkdtemp(prefix="mowbite_quality_")
 LINKS = sim_links(WORK)
 STATE, FLAGS, _, _ = sim_files(WORK)
-TRON = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "tron.yaml")
+TRON = layers.files("tron")
 GEOMETRY = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "geometry", "tron.yaml")
 # The ports of the simulation: a section of the node wins over values for all nodes, so these come as one too.
 LOCAL = os.path.join(WORK, "local.yaml")
@@ -73,13 +73,13 @@ def generate_test_description():
                     f"    gnss_latency: {float(os.environ['MOWBITE_GNSS_LATENCY'])}\n")
     nodes = [
         Node(package="tron_mcu", executable="tron_mcu_node", name="tron_mcu", output="screen",
-             parameters=[TRON, LOCAL]),
+             parameters=[*TRON, LOCAL]),
         Node(package="tron_gnss", executable="tron_gnss_node", name="tron_gnss", output="screen",
-             parameters=[TRON, LOCAL, {"datum_lat": 52.0, "datum_long": 9.0, "datum_height": 50.0}]),
+             parameters=[*TRON, LOCAL, {"datum_lat": 52.0, "datum_long": 9.0, "datum_height": 50.0}]),
         Node(package="tron_imu", executable="tron_imu_node", name="tron_imu", output="screen",
-             parameters=[TRON, LOCAL]),
+             parameters=[*TRON, LOCAL]),
         Node(package="mowbite_localization", executable="mowbite_localization_node", name="mowbite_localization",
-             output="screen", parameters=[GEOMETRY, TRON, LOCAL]),
+             output="screen", parameters=[GEOMETRY, *TRON, LOCAL]),
     ]
     # The ptys have to exist before the drivers look for them.
     return launch.LaunchDescription([

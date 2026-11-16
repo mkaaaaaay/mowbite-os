@@ -33,6 +33,10 @@ from mowbite_msgs.srv import SetBlade, SetEmergency
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
+# layers.py of mowbite_bringup: the parameter files of a platform as its start loads them.
+sys.path.insert(0, os.path.join(get_package_share_directory("mowbite_bringup"), "launch"))
+import layers  # noqa: E402
+
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 # Latched topics that keep a history (methods, actions, params), and /rosout from the start of the stack.
 HISTORY = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -42,10 +46,8 @@ EXIT_CODES = [0, -2, -15, 130, 143]
 
 
 def follower_max_linear():
-    """max_linear (m/s) of mowbite_follower in tron.yaml: no drive command of a sim goes faster."""
-    path = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "tron.yaml")
-    with open(path) as f:
-        return float(yaml.safe_load(f)["mowbite_follower"]["ros__parameters"]["max_linear"])
+    """max_linear (m/s) of mowbite_follower on the Tron: no drive command of a sim goes faster."""
+    return float(layers.parameters(layers.files("tron"), "mowbite_follower")["max_linear"])
 
 
 # fake_tron flags of a real Tron: RTK at 10 Hz with 2 mm per fix (measured 15.11. at rest: 1.0 mm east, 1.7 mm north,
@@ -156,8 +158,7 @@ def xcore_battery():
     if launch_dir not in sys.path:
         sys.path.insert(0, launch_dir)
     import logic_params
-    return logic_params.battery_voltages([os.path.join(get_package_share_directory("mowbite_bringup"), "config",
-                                                       "nx60i.yaml")])
+    return logic_params.battery_voltages(layers.files("nx60i"))
 
 
 def xcore_driver(bind_ip, group_port, config=None, node=None, **params):

@@ -14,16 +14,14 @@ import time
 import unittest
 
 import launch
-import yaml
 import launch_testing.actions
 import rclpy
 from launch.actions import TimerAction
-from ament_index_python.packages import get_package_share_directory
 from mowbite_msgs.msg import RobotState
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (bridge_node, mosquitto, mqtt_connect, mqtt_rpc, package_program, stop_process,  # noqa: E402
-                        store_answer)
+from sim_common import (bridge_node, layers, mosquitto, mqtt_connect, mqtt_rpc, package_program,  # noqa: E402
+                        stop_process, store_answer)
 
 MQTT_PORT = 18834
 WORK = tempfile.mkdtemp(prefix="mowbite_light_")
@@ -65,8 +63,7 @@ def decode(data):
 
 
 def tron_strips():
-    with open(os.path.join(get_package_share_directory("mowbite_bringup"), "config", "tron.yaml")) as f:
-        return yaml.safe_load(f)["mowbite_light"]["ros__parameters"]["strips"]
+    return layers.parameters(layers.files("tron"), "mowbite_light")["strips"]
 
 
 class TestLight(unittest.TestCase):

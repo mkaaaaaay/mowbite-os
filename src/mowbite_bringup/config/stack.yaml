@@ -1,0 +1,383 @@
+# Parameters of MowBite OS on every mower. The start loads this file first, then the file of the platform
+# (<platform>.yaml), then the measured values of one mower from data_dir.
+# <platform> marks a value every platform has to set in its own file, in the same section: the start halts with
+# PLATFORM_CONFIG while a node it starts has one left. A part that is off here (0, none, "") is turned on by the
+# platforms that have it. Every value has its meaning here and its value in one file.
+
+# Shared by all nodes, so it is set only here.
+/**:
+  ros__parameters:
+    # GPS counts as good up to this accuracy in m: the localization fuses only such fixes, the logic works only with
+    # such a position. Without a usable fix for gps_timeout s the position counts as lost. Start values: what an app
+    # sets with params.set is saved by the logic and sent to the localization and the follower.
+    max_position_accuracy: 0.1
+    gps_timeout: 10.0
+    # RTK fixed on corrections older than max_correction_age s, or without their age in GGA, counts as float (G7);
+    # mowbite_ntrip reports CORRECTIONS LOST at the same age.
+    max_correction_age: 30.0
+    # The journal in journal_dir (launch argument): all runs of all processes together at most journal_max_mb and
+    # journal_max_days (whole old runs go first); below journal_reserve_mb free on its file system nothing is written.
+    # journal_platform names the platform in every run.
+    journal_platform: <platform>
+    journal_max_mb: <platform>
+    journal_max_days: <platform>
+    journal_reserve_mb: <platform>
+    # Incidents (mowbite_stats) in journal_dir/incidents: hard links of the segments around a trigger, together at most
+    # incidents_max_mb (each file once, the oldest that are no safety go first), kept incidents_max_days, safety ones
+    # (emergency, crash, restart) incidents_max_days_safety.
+    incidents_max_mb: <platform>
+    incidents_max_days: <platform>
+    incidents_max_days_safety: <platform>
+    # A dock marker seen by a camera of the platform (hw/dock_marker): found up to marker_range m, 0 without one (no
+    # localization/dock_pose). dock_marker is x, y (m) and yaw (rad) of the marker in base_link of the docked mower; it
+    # leaves the image marker_blind_distance m before the docked pose; an image older than marker_max_age s on arrival
+    # is dropped.
+    marker_range: 0.0
+    dock_marker: [0.0, 0.0, 0.0]
+    marker_blind_distance: 0.0
+    marker_max_age: 0.3
+    # The contact stretch of docking (mowbite_logic, below) ends dock_overshoot m past the station or contact_timeout s
+    # after the gate; the pose at the station stays good without the marker for that long.
+    dock_overshoot: <platform>
+    contact_timeout: <platform>
+    # m the position has to be at least at the station: in the map for the reference check and the gate of docking
+    # (mowbite_logic), from the marker for every drive in the station frame (mowbite_follower, mowbite_safety).
+    dock_max_position_accuracy: <platform>
+    # From the marker the limit grows by this per m from the docked place: an error of its direction moves the pose
+    # sideways by that angle times the distance.
+    dock_accuracy_per_m: 0.0
+
+mowbite_ntrip:
+  ros__parameters:
+    # Access in data_dir/ntrip.yaml (host, port, mountpoint, user, password, version), filled in by the user on the
+    # mower, mode 600; template in mowbite_bringup/config/ntrip.yaml.example. Read every config_check s.
+    config_check: 5.0
+    # ntrip.set and ntrip.delete (the access over RPC, only in IDLE); ntrip.get is always there. Off until MQTT writes
+    # need a login and rpc/request cannot be read without one (G13): the password goes through rpc/request.
+    access_over_rpc: false
+    connect_timeout: 10.0
+    # After a failure the next attempt after first_retry s, doubled up to max_retry; after a refused login rejected_retry
+    # (or at once when the file changes). No byte for data_timeout s ends a connection. GGA every gga_interval s; the
+    # first attempt waits up to gga_wait s for one (a VRS mountpoint sends nothing before it).
+    first_retry: 5.0
+    max_retry: 300.0
+    rejected_retry: 300.0
+    data_timeout: 15.0
+    gga_interval: 10.0
+    gga_wait: 60.0
+    # The CORRECTIONS event LOST after max_correction_age (/** above) without corrections, RESTORED once when they are
+    # back, SOURCE_CHANGED with the first corrections from another caster, port or mountpoint than the ones used last
+    # (data_dir/ntrip_source.json, kept over restarts and ntrip.delete).
+
+mowbite_localization:
+  ros__parameters:
+    gyro_calibration_time: 5.0
+    # A calibration window counts only with the wheels reported still, no sample more than gyro_still_spread rad/s
+    # off its mean and an offset of gyro_offset_limit rad/s or less; following at rest stays within the limit too.
+    gyro_still_spread: <platform>
+    gyro_offset_limit: <platform>
+    # Wheels below min_speed (m/s, and rad/s for their turn) stand, above what the standing mower reports. Above it
+    # they move after motion_confirm_time s.
+    min_speed: <platform>
+    motion_confirm_time: 0.1
+    # The antenna offset is part of the geometry (robot.geometry).
+    # Without a fix the accuracy grows by this much per m driven and per s, and by half the track times what the gyro
+    # turns less than the wheels.
+    accuracy_growth_per_m: <platform>
+    accuracy_growth_per_s: <platform>
+    # Random walk of the filter: position in m per square root of m driven, heading in rad per square root of s the
+    # gyro integrates.
+    odometry_noise: <platform>
+    gyro_noise: <platform>
+    # How old (s) a GNSS position is when it arrives, 0 until the receiver of the platform is measured.
+    gnss_latency: 0.0
+
+mowbite_logic:
+  ros__parameters:
+    # The record a rootfs keeps of a kernel crash: with one the restart hold stands in every state. Empty: none.
+    crash_record: ""
+    # empty is 0 % for the app and where mowing goes home: the highest voltage of battery_low_window s below it. The
+    # start checks critical < empty < full.
+    battery_empty_voltage: <platform>
+    battery_full_voltage: <platform>
+    battery_low_window: 20.0
+    dock_charge_voltage: <platform>
+    # localization/pose older than this (s) counts as lost: accuracy 999, GPS 0.
+    pose_timeout: 2.0
+    # s without a sign of the follower (it sends feedback every 0.5 s) while it has a path: the logic ends the path
+    # itself and stops the mower and the blade (G22).
+    follower_timeout: 2.0
+    # Area recording: smallest area in m², most points of one recording (the map must fit one MQTT message), distance
+    # in m between the two points of the docking station, and how long (s) a save waits for mowbite_map. Both points of
+    # the station need a valid heading, the one on the contacts the contact.
+    recording_min_area: 0.05
+    recording_max_points: 5000
+    recording_min_dock_distance: 0.5
+    map_edit_timeout: 5.0
+    # The charging contacts lie at geometry.dock_contact_x: behind base_link the mower backs onto the docking station,
+    # in front of it it drives on forwards. On the contacts mowing and drives start only after the reference check
+    # (G24): position accuracy at least dock_max_position_accuracy m (under /**), then with the heading of the station
+    # set, base_link within dock_reference_limit m of the recorded station.
+    dock_reference_limit: <platform>
+    # After the check charging goes off (hw/charge), then the mower leaves the station undock_distance m straight
+    # without steering, at most undock_speed m/s. Standing undock_stall_time s while driven, or the way the GNSS
+    # antenna moves (RTK fixed, from 0.3 m on) turning more than undock_course_limit degrees off the line of the
+    # station in the map, ends undocking (UNDOCKING_FAILED).
+    # undock_distance is a setting of params.set (0.5 to 2 m).
+    undock_distance: <platform>
+    undock_speed: <platform>
+    undock_stall_time: 2.0
+    undock_course_limit: 10.0
+    # Docking after JOB_COMPLETE, abort_mowing and on docking.start: over the drivable areas to the point
+    # docking_approach_distance m in front of the station, the contacts towards it, then along its line at
+    # docking_speed m/s, steered by RTK, or by the dock marker with dock_guide (below). dock_gate_distance m before the
+    # station the mower stops: base_link at most dock_gate_lateral m beside the line, the heading within
+    # dock_gate_heading degrees and the position at least dock_max_position_accuracy, else the try fails. Then at
+    # contact_speed m/s up to dock_overshoot m past the station: the first raw contact stops it (three zero frames, then
+    # nothing, G18), the debounced one is DOCKED. Standing contact_timeout s there without it, or undock_stall_time s
+    # before the gate, fails the try: out to the approach point like undocking, DOCKING_RETRY, after
+    # docking_retry_count retries DOCKING_FAILED. docking_approach_distance (0.5 to 2 m) and docking_retry_count (0 to
+    # 5) are settings of params.set; dock_overshoot and contact_timeout stand under /**.
+    docking_approach_distance: <platform>
+    docking_retry_count: 4
+    docking_speed: <platform>
+    contact_speed: <platform>
+    dock_gate_distance: <platform>
+    dock_gate_lateral: <platform>
+    dock_gate_heading: <platform>
+    # A planner that gives no answer for the way to the point in front of the station within plan_timeout, or does
+    # not run, does not keep the mower from it (docking_direct): the mower turns on the spot, drives the straight
+    # line there and turns again (DOCKING_DIRECT), where no obstacle and no end of the mowing and navigation areas
+    # lies closer to that line than the turning circle of the body plus direct_margin m plus max_position_accuracy.
+    # The follower ends the leg once base_link is direct_margin m off the line. Not free, the try fails
+    # (DOCKING_RETRY with cause and direct_blocked), and a way the planner refuses is never replaced. No settings of
+    # params.set.
+    docking_direct: true
+    direct_margin: 0.15
+    # docking.test docks by the dock marker alone (marker_range under /**), every leg in the station frame: it waits
+    # up to marker_wait s for a good pose from the marker before a try fails, and when the marker was lost on the way
+    # in; base_link may be marker_cross_track m off each path there; at the gate the way along the line by the marker
+    # may differ from the way of the wheels by marker_scale_limit of it (a marker of the wrong size).
+    marker_wait: 25.0
+    marker_cross_track: 0.10
+    marker_scale_limit: 0.15
+    # docking.start and going home dock by the marker too (dock_guide): none never, prefer by the position where its
+    # source cannot measure (DOCKING_WITHOUT_MARKER), require never without it.
+    dock_guide: none
+    # The debounced contact is not DOCKED yet (G19): contact and a charge current of at least charge_confirm_current A
+    # have to hold charge_confirm_time s without a gap, at charge_expected_below percent or more the contact alone, as
+    # a charger stays off near full. Without either within charge_confirm_timeout s the try fails (NO_CHARGE_CURRENT):
+    # charging off over hw/charge, out to the approach point, the next try; after the last one the mower stays on the
+    # contacts (DOCKING_FAILED). In IDLE on the station CHARGING_LOST tells when the contact, or the current it had
+    # below charge_expected_below, is gone for charge_lost_time s.
+    charge_confirm_current: <platform>
+    charge_confirm_time: 5.0
+    charge_confirm_timeout: <platform>
+    charge_expected_below: <platform>
+    charge_lost_time: 10.0
+    # mowing.plan and the job ask the planner for a plan and set only what the request carries: width, passes and angle
+    # are the planner's (mowbite_planner below). plan_timeout in s, also for the way to a path or to the station. A
+    # job asks for a way again up to three times, standing with the blade off; after that, or once the plan of an area
+    # got no answer, mowing ends, the job kept, and the mower goes home (DOCKING with the reason PLANNER_TIMEOUT).
+    # Where it cannot go home it pauses as for a way or a plan that failed.
+    plan_timeout: 30.0
+    # Mowing. The blade turns only with mow_with_blade here and where the driver allows it, and only on mow segments.
+    # It runs on a lease of blade_lease s, renewed every blade_renew s. mower_spinup_rpm 0: no wait for the blade;
+    # BLADES events from blade_running_rpm on. gps_wait_time s of good position before mowing goes on.
+    # Below battery_critical_voltage for battery_critical_time s mowing goes home at once. battery_hot_temperature (°C)
+    # sends mowing home and stops a start, 0 for never. A path that starts farther than approach_distance m away is
+    # reached over the drivable areas first. The checkpoint in data_dir is written every checkpoint_period s while
+    # mowing.
+    mow_with_blade: false
+    blade_lease: 1.0
+    blade_renew: 0.5
+    mower_spinup_rpm: 0
+    mower_spinup_timeout: 10.0
+    blade_running_rpm: <platform>
+    gps_wait_time: 10.0
+    battery_critical_voltage: <platform>
+    battery_critical_time: 2.0
+    battery_hot_temperature: 0.0
+    approach_distance: 0.5
+    checkpoint_period: 30.0
+
+mowbite_calibration:
+  ros__parameters:
+    # rad/s of the turns on the spot of the calibration drive, within the limit of the driver and fast enough that
+    # the wheels do not stick.
+    spin_rate: <platform>
+    # NOT_TURNING below this share of spin_rate on average: slipping wheels are no dead zone.
+    turn_min_ratio: 0.5
+
+mowbite_follower:
+  ros__parameters:
+    # m/s where the next metre of the path runs straight (within 20 degrees), elsewhere and on turns, and the limits
+    # of every command (the lower of these and the limits in hw/capabilities); speeding up at acceleration and braking
+    # at deceleration m/s². Turning on the spot up to spot_max_angular rad/s and slowing down before the target at
+    # turn_deceleration rad/s².
+    speed_fast: <platform>
+    speed_slow: <platform>
+    speed_turn: <platform>
+    max_linear: <platform>
+    max_angular: <platform>
+    spot_max_angular: <platform>
+    turn_deceleration: <platform>
+    # What the heading stays behind the command on the spot comes on top (turn_feedback 1.0, up to turn_feedback_max
+    # rad/s, within spot_max_angular). 0: off.
+    turn_feedback: 0.0
+    turn_feedback_max: 0.2
+    # A turn on the spot holds its place: the follower drives against a swing along the heading (turn_hold_gain 1/s,
+    # 0: off) while no wheel gets slower than wheel_min_speed m/s, below which the wheels stick. It does not turn on
+    # the spot on a pose whose last fix is older than turn_fix_timeout s.
+    turn_hold_gain: 0.0
+    wheel_min_speed: <platform>
+    turn_fix_timeout: 0.5
+    acceleration: <platform>
+    deceleration: <platform>
+    # rad/s an arc of the path asks for at most, below max_angular so that the mower can still correct on arcs of
+    # turn_radius.
+    turn_rate: <platform>
+    # Above the dead band of the wheels: creeping onto corners and the end at creep_speed m/s, turning on the spot at
+    # min_turn_rate rad/s or faster.
+    creep_speed: <platform>
+    min_turn_rate: <platform>
+    # Steering: beside the path the mower heads towards it at half of approach_angle degrees approach_distance m off;
+    # heading errors decay at heading_gain 1/s.
+    approach_distance: 0.15
+    approach_angle: 45.0
+    heading_gain: 2.0
+    # Where the path turns by more than corner_angle degrees from one pose to the next (as where the planner turns on
+    # the spot) and more than max_drive_angle degrees off the course, the mower turns on the spot.
+    corner_angle: 15.0
+    max_drive_angle: 45.0
+    # Arcs tighter than min_arc_radius m are taken as corners too: on them the inner wheel would run under its dead
+    # band at turn_rate.
+    min_arc_radius: <platform>
+    # A path starts at most max_start_distance m from its first pose and ends within goal_tolerance m of its last.
+    max_start_distance: 1.0
+    goal_tolerance: 0.1
+    # Stops: no pose for pose_timeout s, base_link further than max_cross_track m from the path or geofence_margin m
+    # outside of the allowed areas, a turn on the spot longer than phase_timeout s, less than 5 cm of progress along
+    # the path in progress_timeout s (stuck).
+    pose_timeout: 0.5
+    max_cross_track: 0.5
+    geofence_margin: 0.5
+    # m base_link may get from the place a turn on the spot began at, the path ends with TURN_SLIDE beyond (0: no such
+    # limit).
+    max_turn_slide: <platform>
+    phase_timeout: 20.0
+    progress_timeout: 10.0
+    control_rate: 20.0
+
+mowbite_safety:
+  ros__parameters:
+    # S2, the only writer of hw/cmd_vel, checks every drive command of the logic. TILT: the body more than tilt_limit
+    # degrees off the vertical for tilt_time s, for every source and also standing; a release needs it below
+    # tilt_release. FENCE: an autonomous drive with base_link more than fence_margin m outside of the active mow and
+    # navigation areas and the line of the station, beyond the geofence_margin of the follower, so it acts only when
+    # the follower does not; in the station frame (docking by the marker) the line of the station alone, with no map
+    # needed. Without an IMU sample for 0.5 s nothing moves.
+    tilt_limit: <platform>
+    tilt_time: 1.0
+    tilt_release: <platform>
+    fence_margin: 0.6
+    # A moving command grows at most ramp_linear m/s² and ramp_angular rad/s² from the one before; less, a stop and an
+    # emergency go out at once.
+    ramp_linear: <platform>
+    ramp_angular: <platform>
+
+mowbite_map:
+  ros__parameters:
+    # Largest map.json in bytes (MQTT drops messages from about 2 MB) and the distance in m under which two datums count
+    # as the same. The map is kept in data_dir, which the start sets for the nodes that keep files.
+    max_map_bytes: 1500000
+    datum_tolerance: 0.01
+
+# The lights of a platform that starts mowbite_light.
+mowbite_light:
+  ros__parameters:
+    # none: no light.* methods, nothing on the device. spidev or file (sim).
+    output: none
+    device: <platform>
+    # LEDs that are lit, of the buffer_leds the chain is driven with.
+    leds: <platform>
+    # Chase and gradient run along each strip at once, each "first-last" in the order the effect runs.
+    strips: <platform>
+    buffer_leds: <platform>
+    frame_rate: 25.0
+    # Share of full brightness (0 to 1).
+    max_brightness: <platform>
+    # The whole chain and one channel of an LED at 255.
+    max_current_ma: <platform>
+    ma_per_channel: <platform>
+    low_battery: 0.2
+
+# The speaker of a platform that starts mowbite_sound.
+mowbite_sound:
+  ros__parameters:
+    # none: no sound.* methods, no sound. alsa or file (sim).
+    output: none
+    device: <platform>
+    # Gain at volume 100 (0 to 1); the mixer stays as the platform sets it.
+    max_volume: 1.0
+    volume: 60
+    min_gap: 10.0
+    # The announcements the platform brings (MP3), the folder searched first at the top; converted once into
+    # <data_dir>/sounds. vendor_codes: situation=code of their list.
+    vendor_dirs: <platform>
+    vendor_codes: <platform>
+
+# mowbite_camera, the pictures of the cameras of a platform for the app (starts with any of them): mjpeg_port,
+# webrtc_port, ice_port, media_api_port, media_server and runtime_dir have the defaults of the node.
+mowbite_camera:
+  ros__parameters:
+    # The host in the addresses of camera.stream; empty: the IPv4 address of the default route at that moment.
+    public_host: ""
+
+mowbite_bridge:
+  ros__parameters:
+    mqtt_host: 127.0.0.1
+    mqtt_port: 1883
+    # Event history on the mower: at most this many days and MB, oldest days go first.
+    event_history_days: 60
+    event_history_max_mb: 20.0
+    # Mowing track on the mower: at most this many days and MB, oldest files go first (the active job's file stays).
+    position_history_days: 60
+    position_history_max_mb: 50.0
+
+mowbite_planner:
+  ros__parameters:
+    frame_id: map
+    # The body and the blade (robot_*, mower_width, blade_*) are those of robot.geometry: the planner takes them from
+    # /mowbite_geometry (bridge/params) and plans nothing before it has them. None of them counts here.
+    # Lane overlap: lanes lie (1 - overlap) * mower_width apart. It holds for every plan, also the ones of
+    # mowbite_logic. perimeter_passes: loops along the outline, an area's own outline_count in the map goes before it.
+    overlap: 0.15
+    perimeter_passes: 3
+    # Turns forwards only, every lane change a U-turn of turn_radius with the lanes 2 * turn_radius apart (lane_order
+    # skip). Turning on the spot only where no arc fits. turn_radius keeps the inner wheel at the follower's turn_rate
+    # above its dead band.
+    turn_radius: <platform>
+    lane_order: skip
+    turn_on_spot: false
+    turn_types: [u_turn, bulb, detour]
+    # MowBite OS drives every plan forwards, so none may hold a stretch to back up on.
+    back_up_with_plan: false
+    # Nobody listens to ~/coverage_path, so do not publish every plan.
+    publish_path: false
+    # data_dir/planner: plans kept and maps before at most this many days and MB.
+    keep_days: 60
+    keep_mb: 50.0
+
+mowbite_clock:
+  ros__parameters:
+    # Whether the system clock from the real-time clock alone counts as safe, for 30 days after the last
+    # synchronization. Off until measured on the mower: the kernel writes it back, its drift over at least 3 days
+    # without network, 30 days times that drift under 5 min.
+    rtc: false
+
+mowbite_schedule:
+  ros__parameters:
+    # Whether plans may start the mower from the station. Off until the user turns it on after the gates (way home,
+    # pushes, incidents, stop book, safety measurement).
+    allowed: false

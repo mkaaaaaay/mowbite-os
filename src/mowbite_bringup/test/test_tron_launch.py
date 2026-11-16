@@ -8,8 +8,10 @@ import os
 import pytest
 from launch import LaunchContext
 from launch_ros.actions import Node
+from launch_ros.descriptions import ComposableNode
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+CONFIG = os.path.join(HERE, "..", "config")
 spec = importlib.util.spec_from_file_location("tron_launch", os.path.join(HERE, "..", "launch", "tron.launch.py"))
 tron_launch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tron_launch)
@@ -19,7 +21,8 @@ def launched(tmp_path, monkeypatch, **switches):
     # The data schema needs the installed bridge; here only the choice of processes counts.
     monkeypatch.setattr(tron_launch.stack, "prepare_data_dir", lambda data_dir, logger: None)
     context = LaunchContext()
-    values = {"data_dir": str(tmp_path / "data"), "config": "tron.yaml", "extra_config": "tron.yaml",
+    values = {"data_dir": str(tmp_path / "data"), "config": os.path.join(CONFIG, "stack.yaml"),
+              "platform_config": os.path.join(CONFIG, "tron.yaml"), "extra_config": os.path.join(CONFIG, "tron.yaml"),
               "geometry": "geometry.yaml", "mcu_port": "/dev/ttyS9", "gnss_port": "/dev/ttyS4",
               "imu_port": "/dev/ttyS1", "hardware": "true", "datum_lat": "nan", "datum_long": "nan",
               "datum_height": "0.0", "vision": "off", "stereo": "off", "right": "off", "right_node": "vision",
@@ -166,3 +169,26 @@ def test_no_camera_service_without_a_camera(tmp_path, monkeypatch):
         started = executables(tmp_path, monkeypatch, hardware=hardware, stereo="on", vision="on", right="on",
                               rear="on")
         assert started and "mowbite_camera_node" not in started
+
+
+# The check of the parameter files is asked for every node the launch can build, so none starts on a value left unset.
+def test_the_parameter_check_knows_every_node(tmp_path, monkeypatch):
+    built = set()
+    checked = set()
+
+    def recording(base):
+        class Recorded(base):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                built.add(f"{(kwargs.get('namespace') or '/').strip('/')}/{kwargs['name']}".lstrip("/"))
+        return Recorded
+
+    for module in (tron_launch, tron_launch.stack):
+        monkeypatch.setattr(module, "Node", recording(Node))
+        monkeypatch.setattr(module, "ComposableNode", recording(ComposableNode))
+    monkeypatch.setattr(tron_launch.stack, "check_parameters", lambda files, nodes, logger: checked.update(nodes))
+    for right_node in ("vision", "side"):
+        launched(tmp_path, monkeypatch, vision="on", stereo="on", right="on", rear="on", right_node=right_node)
+    assert built and built <= checked, built - checked
+    assert checked == {*tron_launch.NODES, *tron_launch.stack.started([])} | built
+

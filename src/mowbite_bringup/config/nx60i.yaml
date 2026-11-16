@@ -1,10 +1,12 @@
-# Parameters of MowBite OS on the YardForce NX60i on top of tron.yaml (nx60i.launch.py loads tron.yaml, then this
-# file). The driver has its own file, config/nx60i.yaml of xcore_driver, and gets the battery voltages from here; the
-# dimensions are in geometry/nx60i.yaml.
+# The YardForce NX60i (OpenMower v2 carrier): its values on top of stack.yaml, which has the meaning of each. The
+# driver has its own file, config/nx60i.yaml of xcore_driver, and gets the battery voltages from here; the dimensions
+# are in geometry/nx60i.yaml.
+# "Of the Tron" marks a value this mower took over from the Tron and never had measured: an assumption until its
+# safety measurement, and the list of what that measurement has to settle.
 
 /**:
   ros__parameters:
-    # The journal on the CM4: much less room than on the Tron (tron.yaml has the meaning of the values).
+    # The journal on the CM4: much less room than on the Tron.
     journal_platform: nx60i
     journal_max_mb: 64.0
     journal_max_days: 3.0
@@ -12,19 +14,41 @@
     incidents_max_mb: 64.0
     incidents_max_days: 10.0
     incidents_max_days_safety: 30.0
-    # No dock marker. The board reports the contact up to 1 s late, so the last part of docking reaches farther than
-    # on the Tron (with contact_speed below). Assumption until "Dock YF" measures it at the station.
-    marker_range: 0.0
+    # No dock marker (marker_range stays 0). Of the Tron, not used without one:
+    dock_marker: [-0.160, 0.0, 0.0]
+    marker_blind_distance: 0.07
+    dock_accuracy_per_m: 0.09
+    # The board reports the contact up to 1 s late, so the last part of docking reaches farther than on the Tron (with
+    # contact_speed below). Assumption until "Dock YF" measures it at the station.
     dock_overshoot: 0.08
+    # Of the Tron:
+    contact_timeout: 10.0
+    dock_max_position_accuracy: 0.03
+
+mowbite_localization:
+  ros__parameters:
+    # The gyro of the xCore read about 0.0025 rad/s at rest (M-A, raw z); assumptions until the safety measurement.
+    gyro_still_spread: 0.02
+    gyro_offset_limit: 0.02
+    # Of the Tron:
+    min_speed: 0.04
+    accuracy_growth_per_m: 0.05
+    accuracy_growth_per_s: 0.01
+    odometry_noise: 0.03
+    gyro_noise: 0.005
 
 mowbite_logic:
   ros__parameters:
+    # Of the Tron, the record of its rootfs; this mower has none.
+    crash_record: /run/mowbite/crash
     # 7S pack, also the voltages of the board (nx60i.launch.py hands them to xcore_driver): mowing goes home below
     # 24.5 V (the highest voltage of 20 s), at once below 23.0 V; no battery temperature, so battery_hot_temperature
     # stays 0.
     battery_empty_voltage: 24.5
     battery_full_voltage: 28.2
     battery_critical_voltage: 23.0
+    # Of the Tron (6S):
+    dock_charge_voltage: 28.0
     # The charge on the station as the NX60i showed it under OpenMower (October): 0.87 to 0.89 A constant current,
     # done at 0.25 A (+-50 %), exactly 0 without charging; after done the charger starts again only below about
     # 27.5 V, 82 % on the linear scale between the voltages above, so up to there no current is no fault. The board
@@ -36,14 +60,21 @@ mowbite_logic:
     # docking_speed. The board reports the contact up to 1 s late, so the last part is slower (dock_overshoot under
     # /**). Assumption until "Dock YF" measures it at the station.
     contact_speed: 0.04
-    # No dock marker: docking by RTK alone, not the require of tron.yaml.
-    dock_guide: none
+    # Of the Tron:
+    dock_reference_limit: 0.10
+    undock_distance: 0.8
+    undock_speed: 0.15
+    docking_approach_distance: 0.8
+    docking_speed: 0.1
+    dock_gate_distance: 0.25
+    dock_gate_lateral: 0.02
+    dock_gate_heading: 8.0
+    blade_running_rpm: 100
 
-mowbite_localization:
+mowbite_calibration:
   ros__parameters:
-    # The gyro of the xCore read about 0.0025 rad/s at rest (M-A, raw z); assumptions until the safety measurement.
-    gyro_still_spread: 0.02
-    gyro_offset_limit: 0.02
+    # Of the Tron:
+    spin_rate: 0.4
 
 # The follower as before the faster values of the Tron: the driver of the NX60i drives at most 0.3 m/s and 0.3 rad/s.
 mowbite_follower:
@@ -55,6 +86,27 @@ mowbite_follower:
     max_angular: 0.3
     acceleration: 0.1
     min_turn_rate: 0.28
-    # A turn on the spot does not hold its place: the speed below which these wheels stick is not measured.
-    # turn_fix_timeout and max_turn_slide are those of tron.yaml, assumptions until the safety measurement.
-    turn_hold_gain: 0.0
+    # A turn on the spot does not hold its place (turn_hold_gain stays 0): the speed below which these wheels stick is
+    # not measured.
+    # Of the Tron:
+    spot_max_angular: 0.45
+    turn_deceleration: 1.0
+    wheel_min_speed: 0.06
+    deceleration: 0.8
+    turn_rate: 0.25
+    creep_speed: 0.06
+    min_arc_radius: 0.3
+    max_turn_slide: 0.15
+
+mowbite_safety:
+  ros__parameters:
+    # Of the Tron:
+    tilt_limit: 31.0
+    tilt_release: 26.0
+    ramp_linear: 0.5
+    ramp_angular: 1.0
+
+mowbite_planner:
+  ros__parameters:
+    # Of the Tron:
+    turn_radius: 0.44

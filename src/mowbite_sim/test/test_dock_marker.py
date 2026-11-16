@@ -32,15 +32,15 @@ from mowbite_msgs.msg import Camera, DockMarker, RobotPose
 from std_msgs.msg import Empty, Float64, String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (LATCHED, SimProbe, TestShutdown, estimate_at, fake_tron,  # noqa: E402, F401
-                        pose_stamp, sim_files, sim_links, wrap)
+from sim_common import (LATCHED, SimProbe, TestShutdown, estimate_at, fake_tron, layers, pose_stamp,  # noqa: E402, F401
+                        sim_files, sim_links, wrap)
 
 ANTENNA_X = 0.098
 CONTACT_X = -0.10
 WORK = tempfile.mkdtemp(prefix="mowbite_dock_marker_")
 LINKS = sim_links(WORK)
 STATE, FLAGS, _, _ = sim_files(WORK)
-TRON = os.path.join(get_package_share_directory("mowbite_bringup"), "config", "tron.yaml")
+TRON = layers.files("tron")
 SIM = os.path.join(get_package_share_directory("mowbite_sim"), "config", "sim.yaml")
 LOCAL = os.path.join(WORK, "local.yaml")
 # The station of sim.yaml: the docked mower at (-1, 0), the way in going west; the Tron backs in and faces east there.
@@ -48,7 +48,7 @@ STATION = yaml.safe_load(open(SIM))["fake_tron"]["ros__parameters"]["dock"]
 STATION_POSE = (STATION[0], STATION[1], math.radians(STATION[2]))
 # The approach point 0.8 m before the docked pose, a little off the line.
 START = (STATION[0] + 0.8, 0.02, math.radians(2.0))
-MOUNT = yaml.safe_load(open(TRON))["tron_rear"]["ros__parameters"]["mount"]
+MOUNT = layers.parameters(TRON, "tron_rear")["mount"]
 HINT_ERROR = math.radians(2.0)
 NO_ACCURACY = 999.0
 
@@ -59,13 +59,13 @@ def generate_test_description():
                 f"tron_imu:\n  ros__parameters:\n    port: {LINKS['imu']}\n")
     nodes = [
         Node(package="tron_mcu", executable="tron_mcu_node", name="tron_mcu", output="screen",
-             parameters=[TRON, LOCAL]),
+             parameters=[*TRON, LOCAL]),
         Node(package="tron_imu", executable="tron_imu_node", name="tron_imu", output="screen",
-             parameters=[TRON, LOCAL]),
+             parameters=[*TRON, LOCAL]),
         Node(package="mowbite_localization", executable="mowbite_localization_node", name="mowbite_localization",
-             output="screen", parameters=[TRON, LOCAL]),
+             output="screen", parameters=[*TRON, LOCAL]),
         Node(package="mowbite_sim", executable="fake_dock_marker", name="fake_dock_marker", output="screen",
-             parameters=[TRON, {"state": STATE, "flags": FLAGS, "dock": [float(v) for v in STATION],
+             parameters=[*TRON, {"state": STATE, "flags": FLAGS, "dock": [float(v) for v in STATION],
                                 "dock_contact_x": CONTACT_X, "mount": [float(v) for v in MOUNT]}]),
     ]
     return launch.LaunchDescription([

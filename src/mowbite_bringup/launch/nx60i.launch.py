@@ -22,6 +22,8 @@ import stack  # noqa: E402
 sys.path.insert(0, os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "launch"))
 import logic_params  # noqa: E402
 
+# The node of the NX60i beside those of stack.py, as the parameter files name it.
+NODES = ("xcore_driver",)
 DRIVER_RESTARTS = 3
 # In data_dir: how the driver ended, written before it starts again.
 DRIVER_EXIT_NOTE = "driver_exit.json"
@@ -66,12 +68,15 @@ def launch_setup(context):
     if arg("announcement_port"):
         overrides["announcement_port"] = int(arg("announcement_port"))
     def driver(restart):
-        return Node(package="xcore_driver", executable="xcore_driver_node", name="xcore_driver", namespace="/",
+        return Node(package="xcore_driver", executable="xcore_driver_node", name=NODES[0], namespace="/",
                     parameters=[*driver_files, {**overrides, "start_latched": restart > 0}], output="screen")
 
     note = os.path.join(data_dir, DRIVER_EXIT_NOTE) if data_dir else None
     journal = stack.journal_dir(arg("journal_dir"), data_dir, logger)
     nodes = stack.components(files, arg("geometry"), data_dir, arg("mqtt_host"), arg("mqtt_port"), journal)
+    halt = stack.check_parameters(files, [*stack.started(nodes), *NODES], logger)
+    if halt:
+        return halt
     return [*stack.restarting(driver, note, "xcore_driver", logger, DRIVER_RESTARTS),
             *stack.container_and_planner(nodes, data_dir, files, logger, arg("oom_score_adj"))]
 
@@ -79,8 +84,8 @@ def launch_setup(context):
 def generate_launch_description():
     bringup = FindPackageShare("mowbite_bringup")
     return LaunchDescription([
-        DeclareLaunchArgument("config", default_value=PathJoinSubstitution([bringup, "config", "tron.yaml"])),
-        # What differs on this platform, on top of config.
+        DeclareLaunchArgument("config", default_value=PathJoinSubstitution([bringup, "config", "stack.yaml"])),
+        # The values of this platform, on top of config.
         DeclareLaunchArgument("platform_config", default_value=PathJoinSubstitution([bringup, "config", "nx60i.yaml"])),
         # Values on top of both, e.g. those of a test; by default the platform file once more.
         DeclareLaunchArgument("extra_config", default_value=LaunchConfiguration("platform_config")),

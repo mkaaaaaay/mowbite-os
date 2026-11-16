@@ -1,4 +1,4 @@
-# Values of the simulated Tron on top of tron.yaml (sim.launch.py passes this file as extra_config).
+# Values of the simulated Tron on top of stack.yaml and tron.yaml (sim.launch.py passes this file as extra_config).
 /**:
   ros__parameters:
     # The journal of a simulation (journal_dir from MOWBITE_JOURNAL_DIR) stays small on the PC.
