@@ -265,7 +265,7 @@ mowbite_sound:
 # both eyes of the frames of a stream as gray JPEG under record_dir (below /run, in RAM, shared with the recording of
 # tron_rear), one per record_interval_s (0.07: every second frame), none older than record_keep_min; only while a
 # viewer holds the stream; off by default, for work on the pictures set in <data_dir>/tron.yaml.
-# gain_wish_file (below /run; /run/mowbite-os/stereo-gain/wish is where tron-stereo-ae watch of the root file system
+# gain_wish_file (below /run; /run/mowbite-os/stereo-gain/wish is where tron-stereo-ae of the root file system
 # looks) lets the camera wish for the gain level day, dusk or night by the luma of its frames; off without it.
 tron_stereo:
   ros__parameters:
