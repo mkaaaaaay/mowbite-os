@@ -26,6 +26,7 @@
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sstream>
+#include <stdexcept>
 #include <std_msgs/msg/string.hpp>
 #include <string>
 #include <vector>
@@ -165,6 +166,10 @@ class CalibrationNode : public rclcpp::Node {
  public:
   explicit CalibrationNode(const rclcpp::NodeOptions& options)
       : rclcpp::Node("mowbite_calibration", mowbite_component::StartupOnly(options)), program_(ProgramConfig()) {
+    ProgramConfig config;
+    config.spin_rate = declare_parameter("spin_rate", config.spin_rate);
+    if (!(config.spin_rate > 0)) throw std::invalid_argument("mowbite_calibration: spin_rate above 0 needed");
+    program_ = Program(config);
     data_dir_ = declare_parameter("data_dir", std::string());
     software_ = declare_parameter("software_version", std::string());
     evaluate_timeout_ = declare_parameter("evaluate_timeout", 120.0);

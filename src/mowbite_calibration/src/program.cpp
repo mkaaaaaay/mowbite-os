@@ -94,6 +94,10 @@ void Program::OnImu(const ImuSample& sample, double now) {
     const double dt = now - *imu_s_;
     const Phase current = phase();
     if (dt > 0 && dt <= kMaxImuGap && Turning(current)) turned_ += (0.5 * (imu_.gz + sample.gz) - gyro_bias_) * dt;
+    if (Turning(current)) {
+      turn_track_.emplace_back(now, turned_);
+      while (turn_track_.front().first < now - config_.turn_mean_window - kTimeEpsilon) turn_track_.pop_front();
+    }
     if (current == Phase::kStand && now - step_s_ >= kSettle) {
       gyro_sum_ += sample.gz;
       gyro_count_++;
@@ -288,6 +292,8 @@ void Program::Begin(size_t index, double now) {
   last_tick_s_ = now;
   cmd_ = 0;
   slow_hold_ = fast_hold_ = lane_hold_ = Hold();
+  turn_track_.clear();
+  full_rate_s_.reset();
   Step& step = steps_[index_];
   switch (step.phase) {
     case Phase::kAlign: {
@@ -494,15 +500,25 @@ std::optional<double> Program::AntennaSpeed(double now) const {
 std::optional<Problem> Program::TurnChecks(double rate_cmd, double now) {
   const double gyro = imu_.gz - gyro_bias_;
   const double direction = rate_cmd >= 0 ? 1.0 : -1.0;
-  const bool full = std::abs(rate_cmd) >= config_.spin_rate - kTimeEpsilon;
-  const bool slow = now - step_s_ + kTimeEpsilon >= config_.turn_check_after && full &&
-                    gyro * direction < config_.turn_min_ratio * std::abs(rate_cmd);
-  if (slow_hold_.Failing(slow, now, config_.hold_time)) {
+  if (std::abs(rate_cmd) < config_.spin_rate - kTimeEpsilon) {
+    full_rate_s_.reset();
+  } else if (!full_rate_s_) {
+    full_rate_s_ = now;
+  }
+  // The average over a window that the full rate filled and the IMU covered.
+  const double window = config_.turn_mean_window;
+  if (now - step_s_ + kTimeEpsilon >= config_.turn_check_after && full_rate_s_ &&
+      now - *full_rate_s_ + kTimeEpsilon >= window && turn_track_.size() >= 2 &&
+      turn_track_.back().first - turn_track_.front().first >= 0.9 * window) {
+    const double mean = direction * (turn_track_.back().second - turn_track_.front().second) /
+                        (turn_track_.back().first - turn_track_.front().first);
     const double limit = config_.turn_min_ratio * std::abs(rate_cmd);
-    return Make("NOT_TURNING",
-                Text("The mower turns at %.2f rad/s, at least %.2f rad/s expected: dead zone or slipping wheels",
-                     gyro * direction, limit),
-                {{"rate", gyro * direction}, {"limit", limit}});
+    if (mean < limit) {
+      return Make("NOT_TURNING",
+                  Text("The mower turns at %.2f rad/s, at least %.2f rad/s expected: dead zone or slipping wheels",
+                       mean, limit),
+                  {{"rate", mean}, {"limit", limit}});
+    }
   }
   const double allowed = config_.overspeed_ratio * CommandPeak(true, now) + config_.overspeed_floor;
   if (fast_hold_.Failing(std::abs(gyro) > allowed, now, config_.hold_time)) {

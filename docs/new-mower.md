@@ -134,7 +134,9 @@ checks capabilities, status, the frame rate, the watchdog, the blade lease, the 
   path, `max_angular`; in the station frame always `max_angular`) and slows such a turn down before its target at
   `turn_deceleration` (rad/s², 0: `heading_gain` times the error). Where the wheels slip on such turns,
   `turn_feedback` (0 to 1, 0: none) adds that share of the rate the heading stays behind the command, at most
-  `turn_feedback_max` rad/s and never above the limit of the turn; not in the station frame. `mowbite_safety` lets every moving command grow at
+  `turn_feedback_max` rad/s and never above the limit of the turn; not in the station frame. The calibration drive
+  turns on the spot at `spin_rate` of `mowbite_calibration` (0.3 rad/s, at most what the driver allows): raise it where
+  the wheels stand in their dead band at that rate, the drive ends with `NOT_TURNING` then. `mowbite_safety` lets every moving command grow at
   most `ramp_linear` m/s² and `ramp_angular` rad/s² from the one before, whatever its source (0: no limit); less, a stop
   and an emergency go out at once. Measure how fast the wheels follow before raising any of them.
 - `mowbite_bringup/config/<platform>.yaml`: what differs from `tron.yaml`, which lies underneath (battery voltages

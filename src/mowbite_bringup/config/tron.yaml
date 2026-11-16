@@ -274,6 +274,13 @@ mowbite_logic:
     approach_distance: 0.5
     checkpoint_period: 30.0
 
+mowbite_calibration:
+  ros__parameters:
+    # rad/s of the turns on the spot of the calibration drive, within the limit of the driver. At 0.3 (0.06 m/s per
+    # wheel, at their dead band) the Tron turned in jerks between 0.04 and 0.46 rad/s (16.11.); 0.5 is 0.10 m/s per
+    # wheel (assumption, to be measured).
+    spin_rate: 0.5
+
 mowbite_follower:
   ros__parameters:
     # m/s where the next metre of the path runs straight (within 20 degrees), elsewhere and on turns, and the limits

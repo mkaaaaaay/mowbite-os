@@ -54,9 +54,11 @@ struct ProgramConfig {
   double start_timeout = 3.0;
   // LEFT_LANE: the antenna farther than lane_limit (m) from its line, or the pivot of a turn moved that far.
   double lane_limit = 0.3;
-  // NOT_TURNING: turn_check_after (s) into a turn, the gyro below turn_min_ratio of the commanded rate.
+  // NOT_TURNING: turn_check_after (s) into a turn, the gyro over the last turn_mean_window (s) at the full rate on
+  // average below turn_min_ratio of it; wheels near their dead zone turn in jerks, which the average takes.
   double turn_check_after = 2.0;
   double turn_min_ratio = 0.7;
+  double turn_mean_window = 1.5;
   // NOT_MOVING: move_check_after (s) into a line, the antenna slower than move_min_ratio of the commanded speed.
   double move_check_after = 3.0;
   double move_min_ratio = 0.5;
@@ -248,6 +250,9 @@ class Program {
   size_t stand_count_ = 0;
   std::vector<StandGravity> stands_;
   double turned_ = 0;
+  // Time and turned_ of the IMU samples of the last turn_mean_window, and since when the turn has its full rate.
+  std::deque<std::pair<double, double>> turn_track_;
+  std::optional<double> full_rate_s_;
 
   bool running_ = false;
   Lane lane_;

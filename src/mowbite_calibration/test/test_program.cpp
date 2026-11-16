@@ -407,6 +407,41 @@ TEST_F(ProgramTest, NotTurningInTheDeadZone) {
   EXPECT_EQ(EndsWith(400), "NOT_TURNING");
 }
 
+TEST_F(ProgramTest, TurningInJerksCountsByItsAverage) {
+  // Half a second at 0.6 of the rate and half a second at 1.2, as wheels near their dead band do: 0.9 on average.
+  StartOn(Lane{2, 3, 0.0, 3.0});
+  const std::string end = EndsWith(400, [this] { mower_.w_scale = std::fmod(now_, 1.0) < 0.5 ? 0.6 : 1.2; });
+  EXPECT_EQ(end, "DONE") << (program_.outcome() ? program_.outcome()->message : "");
+}
+
+TEST_F(ProgramTest, JerksBelowTheAverageStillEndIt) {
+  // 0.2 and 1.0 of the rate in turns: 0.6 on average, below turn_min_ratio.
+  StartOn(Lane{2, 3, 0.0, 3.0});
+  const std::string end = EndsWith(400, [this] { mower_.w_scale = std::fmod(now_, 1.0) < 0.5 ? 0.2 : 1.0; });
+  EXPECT_EQ(end, "NOT_TURNING");
+  double rate = -1;
+  for (const auto& [name, value] : program_.outcome()->numbers) {
+    if (name == "rate") rate = value;
+  }
+  EXPECT_NEAR(rate, 0.6 * 0.3, 0.03);
+}
+
+TEST_F(ProgramTest, AFasterSpinRateTurnsAtIt) {
+  config_.spin_rate = 0.5;
+  Rebuild();
+  double fastest = 0;
+  StartOn(Lane{2, 3, 0.0, 3.0});
+  EXPECT_EQ(EndsWith(400, [&] { fastest = std::max(fastest, std::abs(mower_.cmd_w)); }), "DONE");
+  EXPECT_NEAR(fastest, 0.5, 1e-9);
+  // The driver's limit stays above it.
+  Rebuild();
+  program_.SetSpeedLimits(0.3, 0.3);
+  fastest = 0;
+  StartOn(Lane{2, 3, 0.0, 3.0});
+  EXPECT_EQ(EndsWith(400, [&] { fastest = std::max(fastest, std::abs(mower_.cmd_w)); }), "DONE");
+  EXPECT_NEAR(fastest, 0.3, 1e-9);
+}
+
 TEST_F(ProgramTest, NotMovingOnALine) {
   mower_.v_scale = 0.3;
   StartOn(Lane{2, 3, 0.0, 3.0});
