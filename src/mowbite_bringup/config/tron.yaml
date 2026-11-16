@@ -291,14 +291,14 @@ mowbite_follower:
     # of every command (the lower of these and the limits in hw/capabilities); speeding up at acceleration and braking
     # at deceleration m/s² (the user 15.11., as the vendor firmware, without a braking measurement); braking from 0.55
     # at 0.8 m/s² takes 0.19 m of the path. Up to 0.55 m/s and 0.5 rad/s on the path (the user, 15.11.); turning on
-    # the spot up to spot_max_angular rad/s (the user 15.11., as the vendor) and slowing down before the target at
-    # turn_deceleration rad/s² (assumption).
+    # the spot up to spot_max_angular rad/s (the user 16.11.: at 0.7 the wheels slipped more on wet lawn) and slowing
+    # down before the target at turn_deceleration rad/s² (assumption).
     speed_fast: 0.55
     speed_slow: 0.3
     speed_turn: 0.15
     max_linear: 0.55
     max_angular: 0.5
-    spot_max_angular: 0.7
+    spot_max_angular: 0.45
     turn_deceleration: 1.0
     # On the spot the Tron turned at 0.81 of what its wheels reported and 0.61 of the command (mowing, 15.11.): what
     # the heading stays behind the command could come on top (turn_feedback 1.0, up to turn_feedback_max rad/s, within
