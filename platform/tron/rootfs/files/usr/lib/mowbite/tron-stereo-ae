@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Switches on the exposure control inside the XC9080 for both SC132 of the stereo camera, over i2c-8 (2 byte register,
-1 byte value). Fixed sequence, every write read back: page 80/50, 004d = 3, the largest exposure on page 80/14
-(00e2/e3 and 0a96/97 = 53 00, only where both read 20 00, then 0050 = 1 and 0a04 = 1), page 80/50, 004d = 1, SC132
-3e03 = 2b, 004d = 2, SC132 3e03 = 2b, then 004d = 0 and page 80/26 in any case. Run by tron-hwinit while nothing
-streams. A limit that is not as expected or does not read back stays as it is; the control goes on anyway.
+1 byte value). Fixed sequence, every write read back: page 80/50, 004d = 3, the limits of the control on page 80/14
+(largest exposure 00e2/e3 and 0a96/97 = 53 00 where both read 20 00, largest gain 00fa/fb and 0aae/af = 00 7f where
+both read 00 40, then 0050 = 1 and 0a04 = 1), page 80/50, 004d = 1, SC132 3e03 = 2b, 004d = 2, SC132 3e03 = 2b, then
+004d = 0 and page 80/26 in any case. Run by tron-hwinit while nothing streams. A limit that is not as expected stays
+as it is, one that does not read back stops the limits without the take-over; the control goes on anyway.
 
 Exit 0: control on. 1: stopped at a value that did not read back, 004d and page set back, the exposure stays fixed.
 2: 004d or page could not be set back, the state of the bridge is unknown.
@@ -14,10 +15,14 @@ import sys
 
 BUS = "/dev/i2c-8"
 XC9080, SC132 = 0x1B, 0x30
-# Largest exposure of the control, register pairs on page 80/14 in lines << 4: 1328 lines (28.6 ms, below the frame
-# time) instead of the 512 of the bridge table, which leave the picture nearly black at night.
-EXPOSURE_LIMIT = (0x00E2, 0x0A96)
-EXPOSURE_TABLE, EXPOSURE_WANTED = (0x20, 0x00), (0x53, 0x00)
+# Limits of the control, register pairs of both channels on page 80/14: name, registers, value of the bridge table,
+# value wanted. Exposure in lines << 4: 1328 lines (28.6 ms, below the frame time) instead of 512, which leave the
+# picture nearly black at night. Gain as the control writes it raw into SC132 3e08/3e09: the fine range holds up to
+# 7f (2.1 times 40); a high byte other than 00 flickers as a mere limit and 00 ff leaves the picture black.
+LIMITS = (
+    ("exposure", (0x00E2, 0x0A96), (0x20, 0x00), (0x53, 0x00)),
+    ("gain", (0x00FA, 0x0AAE), (0x00, 0x40), (0x00, 0x7F)),
+)
 LIMIT_TAKE_OVER = (0x0050, 0x0A04)
 I2C_RDWR, I2C_M_RD = 0x0707, 0x0001
 
@@ -67,28 +72,37 @@ def write(fd, addr, reg, value, name):
     return back == value
 
 
-def exposure_limit(fd, xc):
-    """Raises the largest exposure where both pairs still hold the bridge table; the page is 80/50 before and after."""
+def raise_limits(fd, xc):
+    """Raises each limit where both pairs still hold the bridge table; the page is 80/50 before and after."""
     if not (xc(0x004D, 0x03) and xc(0xFFFD, 0x80) and xc(0xFFFE, 0x14)):
         return False
-    pairs = lambda: [(read(fd, XC9080, reg), read(fd, XC9080, reg + 1)) for reg in EXPOSURE_LIMIT]
+    pairs = lambda regs: [(read(fd, XC9080, reg), read(fd, XC9080, reg + 1)) for reg in regs]
     try:
-        now = pairs()
-        if all(pair == EXPOSURE_WANTED for pair in now):
-            print("tron-stereo-ae: exposure limit already raised", flush=True)
-        elif any(pair != EXPOSURE_TABLE for pair in now):
-            print("tron-stereo-ae: exposure limit left at " + ", ".join(f"{hi:02x} {lo:02x}" for hi, lo in now),
-                  flush=True)
-        elif all(xc(reg, EXPOSURE_WANTED[0]) and xc(reg + 1, EXPOSURE_WANTED[1]) for reg in EXPOSURE_LIMIT):
+        written, failed = [], False
+        for name, regs, table, wanted in LIMITS:
+            now = pairs(regs)
+            if all(pair == wanted for pair in now):
+                print(f"tron-stereo-ae: {name} limit already raised", flush=True)
+            elif any(pair != table for pair in now):
+                print(f"tron-stereo-ae: {name} limit left at " + ", ".join(f"{hi:02x} {lo:02x}" for hi, lo in now),
+                      flush=True)
+            elif all(xc(reg, wanted[0]) and xc(reg + 1, wanted[1]) for reg in regs):
+                written.append((name, regs, wanted))
+            else:
+                failed = True
+                break
+        if failed:
+            print("tron-stereo-ae: limits not raised, no take-over", flush=True)
+        elif written:
             for reg in LIMIT_TAKE_OVER:
                 # A take-over flag may clear itself: written, not read back.
                 put(fd, XC9080, reg, 0x01)
-            kept = all(pair == EXPOSURE_WANTED for pair in pairs())
-            print("tron-stereo-ae: exposure limit " + ("raised" if kept else "changed with the take-over"), flush=True)
-        else:
-            print("tron-stereo-ae: exposure limit not raised, no take-over", flush=True)
+            for name, regs, wanted in written:
+                kept = all(pair == wanted for pair in pairs(regs))
+                print(f"tron-stereo-ae: {name} limit " + ("raised" if kept else "changed with the take-over"),
+                      flush=True)
     except OSError as e:
-        print(f"tron-stereo-ae: exposure limit: {e}", flush=True)
+        print(f"tron-stereo-ae: limits: {e}", flush=True)
     return xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50)
 
 
@@ -96,7 +110,7 @@ def control_on(fd):
     xc = lambda reg, v: write(fd, XC9080, reg, v, "XC9080")
     ok = False
     try:
-        if not (xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50) and exposure_limit(fd, xc)):
+        if not (xc(0xFFFD, 0x80) and xc(0xFFFE, 0x50) and raise_limits(fd, xc)):
             return 1
         for sensor in (1, 2):
             if not (xc(0x004D, sensor) and write(fd, SC132, 0x3E03, 0x2B, f"SC132 #{sensor}")):
