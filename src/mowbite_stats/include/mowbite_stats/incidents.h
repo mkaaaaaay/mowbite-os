@@ -28,6 +28,9 @@ struct IncidentsConfig {
   double reserve_mb = 1024;
   // Of this boot; segments of runs with another one count only for CRASH.
   std::string boot_id;
+  // The note of the launch about a driver that ended outside the shutdown (driver_exit.json in data_dir): each such
+  // end is a CRASH, also of a driver without a journal of its own. Empty: none.
+  std::string driver_note;
 };
 
 // The boot id of the kernel, as the journal writes it into the head of every segment.
@@ -110,7 +113,7 @@ class Incidents {
   json robot_ = json::object();
   std::deque<std::pair<int64_t, json>> log_;
   uint32_t bits_ = 0;
-  // Runs whose end was looked at for a crash, kept in incidents/seen.json.
+  // Runs whose end was looked at for a crash and the end of the driver in driver_note, kept in incidents/seen.json.
   std::set<std::string> seen_;
   bool first_pass_ = true;
   double last_runs_ = -1e18;

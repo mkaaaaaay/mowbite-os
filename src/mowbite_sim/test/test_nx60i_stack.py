@@ -1,11 +1,10 @@
 """MowBite OS on the NX60i as mowbite.launch.py starts it, against fake_xcore on UDP over the loopback: the stack
-comes up
-IDLE with the capabilities of the speed model and the speeds for the planner on bridge/params, the gyro calibrates on
-the wheel reports of the driver; without a safety measurement mowing and drives are refused; the emergency stop latches
-and is released; on the station the charge of the board is confirmed (DOCKED) and its loss told (CHARGING_LOST), with
-the values of the NX60i; a killed driver stands the wheels (the board's own timeout) and its successor holds the board
-from its first frame until a release; a crashed container comes back beside the running driver; after three restarts the
-driver stays down. Prints the RSS of driver, container, planner and mowbite_net.
+comes up IDLE with the capabilities of the speed model and the speeds for the planner on bridge/params, the gyro
+calibrates on the wheel reports of the driver; without a safety measurement mowing and drives are refused; the
+emergency stop latches and is released; on the station the charge of the board is confirmed (DOCKED) and its loss
+told (CHARGING_LOST), with the values of the NX60i; a killed driver stands the wheels (the board's own timeout) and
+its successor holds the board from its first frame until a release; a crashed container comes back beside the running
+driver; after three restarts the driver stays down. Prints the RSS of driver, container, planner and mowbite_net.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_nx60i_stack.py
 """
@@ -28,30 +27,32 @@ import launch_testing.asserts
 import rclpy
 from geometry_msgs.msg import Twist, Vector3
 from launch.actions import IncludeLaunchDescription, TimerAction
-from launch.events.process import ProcessStarted
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
-from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus, MqttPublish, RobotPose, RobotState
+from mowbite_msgs.msg import (HardwareCapabilities, HardwareStatus, MqttPublish, RobotPose, RobotState, RpcError,
+                              RpcRequest, RpcResponse)
 from mowbite_msgs.srv import DriveTo, SetEmergency
 from rcl_interfaces.msg import Log
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (HISTORY, LATCHED, ROSOUT, SimProbe, fake_xcore, log_entries, loopback_group,  # noqa: E402
-                        read_json, sim_files, write_json)
+from sim_common import (HISTORY, LATCHED, ROSOUT, SimProbe, fake_xcore, journal_dir, log_entries,  # noqa: E402
+                        loopback_group, read_json, running, sim_files, wait_until, write_json)
+
+# stack.py of mowbite_bringup; sim_common put its folder on the path.
+import stack as bringup  # noqa: E402
 
 WORK = tempfile.mkdtemp(prefix="mowbite_nx60i_")
 STATE, FLAGS, LOG, DATA = sim_files(WORK)
-# The journal of ctest (MOWBITE_JOURNAL_DIR), else one of its own: the incidents need one.
-JOURNAL = os.environ.get("MOWBITE_JOURNAL_DIR") or os.path.join(WORK, "journal")
+# The incidents need a journal.
+JOURNAL = journal_dir(WORK)
 GROUP_PORT, BIND_IP = loopback_group()
 DATUM = (52.0, 9.0, 80.0)
 EMERGENCY = 1
 CLAIM, DATA_MSG = 3, 1
 # The bits of the board as the driver sends them.
 BOARD_LATCH, BOARD_HIGH_LEVEL = 1, 128
-# platform.py of the NX60i and stack.py.
-DRIVER_RESTARTS = 3
+DRIVER_RESTARTS = bringup.platform_module("nx60i").DRIVER_RESTARTS
 # max_duty 0.3 of nx60i.yaml in the speed model 0.58 x (duty - 0.019).
 REACHED = 0.58 * (0.3 - 0.019)
 
@@ -106,6 +107,9 @@ class Probe(SimProbe):
         self.node.create_subscription(String, "bridge/params", self._param, HISTORY)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.node.create_subscription(Log, "/rosout", self._log, ROSOUT)
+        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
+        self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
+        self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
         self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.emergency = self.node.create_client(SetEmergency, "hw/emergency")
@@ -120,28 +124,6 @@ class Probe(SimProbe):
         return self.set_emergency(False)
 
     drive = SimProbe.cmd_vel_for
-
-
-def pids(proc_info, name):
-    """Pids of the processes with that name that started, oldest first."""
-    out = []
-    for action in proc_info.processes():
-        event = proc_info[action]
-        if name in action.process_details["name"] and isinstance(event, ProcessStarted):
-            out.append(event.pid)
-    return out
-
-
-def alive(pid):
-    try:
-        with open(f"/proc/{pid}/status") as f:
-            return "State:\tZ" not in f.read()
-    except OSError:
-        return False
-
-
-def running(proc_info, name):
-    return [pid for pid in pids(proc_info, name) if alive(pid)]
 
 
 def rss_mb(pid):
@@ -259,6 +241,7 @@ class TestNx60iStack(unittest.TestCase):
                 time.sleep(0.1)
         thread = threading.Thread(target=keep_driving, daemon=True)
         thread.start()
+        since = len(p.events)
         try:
             os.kill(driver, signal.SIGKILL)
             # The board stops on its own 1 s after the last message of the host.
@@ -283,8 +266,16 @@ class TestNx60iStack(unittest.TestCase):
         finally:
             stop_driving.set()
             thread.join()
-        self.assertEqual(note("driver_exit.json")["restart"], 1)
-        self.assertEqual(note("driver_exit.json")["exit_code"], -signal.SIGKILL)
+        self.assertEqual(note(bringup.DRIVER_EXIT_NOTE)["restart"], 1)
+        self.assertEqual(note(bringup.DRIVER_EXIT_NOTE)["exit_code"], -signal.SIGKILL)
+        # The app sees an emergency with a reason it knows. The end of the driver is a trigger of an incident, its own
+        # or the one that emergency opened before, though xcore_driver keeps no journal of its own.
+        self.assertTrue(p.robot.emergency and p.robot.emergency_reason
+                        & (HardwareStatus.REASON_TIMEOUT_INPUTS | HardwareStatus.REASON_HIGH_LEVEL), p.robot)
+        trigger = wait_until(lambda: p.crash_trigger(since, "xcore_driver"), 20, poll=1.0)
+        self.assertTrue(trigger, [(e["type"], e.get("reason")) for e in p.events[since:]])
+        self.assertEqual((trigger["safety"], trigger["detail"]),
+                         (True, {"exit_code": -signal.SIGKILL, "restart": 1, "down": False}), trigger)
         self.assertTrue(p.release().success)
         self.assertTrue(p.wait(lambda: not p.status.emergency, 3), p.status)
         # Released, the new driver drives again.
@@ -300,7 +291,7 @@ class TestNx60iStack(unittest.TestCase):
         new = p.wait(lambda: [pid for pid in running(proc_info, "component_container_isolated") if pid != container],
                      15)
         self.assertTrue(new, "no new container")
-        self.assertEqual(note("container_exit.json")["restart"], 1)
+        self.assertEqual(note(bringup.EXIT_NOTE)["restart"], 1)
         self.assertEqual(running(proc_info, "xcore_driver_node"), driver)
         p.robot = None
         self.assertTrue(p.wait(lambda: p.robot is not None and p.robot.current_state == "IDLE", 60), p.robot)
@@ -312,7 +303,7 @@ class TestNx60iStack(unittest.TestCase):
             os.kill(driver, signal.SIGKILL)
             self.assertTrue(p.wait(lambda: [pid for pid in running(proc_info, "xcore_driver_node")
                                             if pid != driver], 10), f"no driver for restart {restart}")
-            self.assertEqual(note("driver_exit.json")["restart"], restart)
+            self.assertEqual(note(bringup.DRIVER_EXIT_NOTE)["restart"], restart)
         driver, = running(proc_info, "xcore_driver_node")
         os.kill(driver, signal.SIGKILL)
         time.sleep(4.0)

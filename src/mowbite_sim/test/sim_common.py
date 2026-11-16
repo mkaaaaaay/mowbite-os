@@ -619,6 +619,15 @@ class SimProbe:
         return self.wait(lambda: next((e for e in self.events[since:] if e["type"] == type_
                                        and all(e.get(k) == v for k, v in match.items())), None), timeout)
 
+    def crash_trigger(self, since, process):
+        """The trigger CRASH named after the process in an incident told since index since, else None."""
+        for event in [e for e in self.events[since:] if e["type"] == "INCIDENT"]:
+            answer = self.rpc("incidents.get", {"id": event["incident"]}, 5) or {}
+            for trigger in answer.get("result", {}).get("manifest", {}).get("triggers", []):
+                if (trigger["kind"], trigger["reason"]) == ("CRASH", process):
+                    return trigger
+        return None
+
     def logged(self, text, timeout=10.0, since=0):
         """Whether a log line with that text came within timeout s, among the lines from index since on."""
         return self.wait(lambda: any(text in line for line in self.logs[since:]), timeout)

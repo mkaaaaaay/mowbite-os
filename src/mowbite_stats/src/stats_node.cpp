@@ -32,6 +32,7 @@
 #include "mowbite_bridge/event_builder.h"
 #include "mowbite_hold/file_io.h"
 #include "mowbite_hold/file_writer.h"
+#include "mowbite_hold/restart.h"
 #include "mowbite_journal/journal.h"
 #include "mowbite_stats/counter.h"
 #include "mowbite_stats/incidents.h"
@@ -104,8 +105,9 @@ class StatsNode : public rclcpp::Node {
           RCLCPP_ERROR(get_logger(), "Cannot write %s: %s", done.path.c_str(), done.error.c_str());
           if (done.path.rfind(PathOf(kHistoryDir), 0) == 0) history_failed_ = true;
         }) {
-    incidents_ = std::make_unique<Incidents>(ReadIncidentsConfig(*this, reserve_bytes_ / 1e6), FreeBytes,
-                                             [this](const std::string& why) { RCLCPP_WARN(get_logger(), "%s", why.c_str()); });
+    incidents_ = std::make_unique<Incidents>(
+        ReadIncidentsConfig(*this, reserve_bytes_ / 1e6, data_dir_), FreeBytes,
+        [this](const std::string& why) { RCLCPP_WARN(get_logger(), "%s", why.c_str()); });
     parts_pub_ = create_publisher<mowbite_msgs::msg::PartsUse>("stats/parts", LatchedQos(1));
     methods_pub_ = create_publisher<mowbite_msgs::msg::RpcMethods>("bridge/rpc/methods", LatchedQos(50));
     response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
@@ -258,7 +260,7 @@ class StatsNode : public rclcpp::Node {
     for (auto& file : files) writer_.Submit(PathOfHour(file.hour), std::move(file.text));
   }
 
-  static IncidentsConfig ReadIncidentsConfig(rclcpp::Node& node, double reserve_mb) {
+  static IncidentsConfig ReadIncidentsConfig(rclcpp::Node& node, double reserve_mb, const std::string& data_dir) {
     IncidentsConfig config;
     const char* env = std::getenv("MOWBITE_JOURNAL_DIR");
     config.journal_dir = node.declare_parameter("journal_dir", std::string(env ? env : ""));
@@ -270,6 +272,9 @@ class StatsNode : public rclcpp::Node {
     limits.max_days = node.declare_parameter("incidents_max_days", limits.max_days);
     limits.max_days_safety = node.declare_parameter("incidents_max_days_safety", limits.max_days_safety);
     config.boot_id = BootId();
+    if (!data_dir.empty()) {
+      config.driver_note = (std::filesystem::path(data_dir) / mowbite_hold::kDriverExitNoteFile).string();
+    }
     return config;
   }
 

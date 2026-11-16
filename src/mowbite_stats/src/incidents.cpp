@@ -30,6 +30,21 @@ constexpr double kMarkBefore = 300.0;
 // A failed seal is tried again this often before the incident is given up (it stays cut on the disk).
 constexpr int kSealTries = 3;
 constexpr size_t kMaxSeenBytes = size_t{4} * 1024 * 1024;
+constexpr size_t kMaxNoteBytes = 64 * 1024;
+// In seen_ before the time (ms) of an end of the driver; no run of the journal has such a name.
+constexpr char kDriverEnd[] = "driver_exit.json ";
+
+// The note of the launch about the last end of the driver with its time t; null without one that can be read.
+json ReadDriverNote(const std::string& path) {
+  std::string text, error;
+  if (path.empty() ||
+      mowbite_hold::ReadSmallFile(path, kMaxNoteBytes, &text, &error) != mowbite_hold::FileRead::kText) {
+    return nullptr;
+  }
+  json note = json::parse(text, nullptr, false);
+  if (!note.is_object() || !note.contains("t") || !note["t"].is_number()) return nullptr;
+  return note;
+}
 
 std::string Base64(const std::string& data) {
   static const char kDigits[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -317,6 +332,28 @@ void Incidents::LinkOpen() {
 void Incidents::FindCrashes(int64_t now_ns, double wall_s, Notices* notices) {
   std::set<std::string> present;
   bool changed = false;
+  const json note = ReadDriverNote(config_.driver_note);
+  if (!note.is_null()) {
+    const double ended_s = note["t"].get<double>();
+    const std::string name = kDriverEnd + std::to_string(static_cast<int64_t>(ended_s * 1e3));
+    present.insert(name);
+    if (seen_.insert(name).second) {
+      changed = true;
+      // A note found at the first pass counts only when written shortly before, like a run.
+      if (!first_pass_ || wall_s - ended_s <= kIncidentCrashBefore) {
+        Trigger trigger;
+        trigger.kind = "CRASH";
+        trigger.reason = note.contains("name") && note["name"].is_string() ? note["name"].get<std::string>() : "driver";
+        trigger.safety = true;
+        trigger.t_ns = now_ns;
+        trigger.utc = IsoUtc(wall_s);
+        trigger.detail = json{{"exit_code", note.value("exit_code", json())},
+                              {"restart", note.value("restart", json())},
+                              {"down", note.value("down", json())}};
+        for (json& notice : Open(trigger, wall_s)) notices->push_back(std::move(notice));
+      }
+    }
+  }
   for (const mowbite_journal::RunInfo& run : runs_) {
     present.insert(run.name);
     if (run.active || seen_.count(run.name) != 0) continue;

@@ -293,6 +293,37 @@ TEST_F(IncidentsTest, ARunWithoutItsEndIsACrashOnce) {
   EXPECT_TRUE(incidents_->Tick(now_ + 100 * kS, Wall()).empty());
 }
 
+TEST_F(IncidentsTest, AnEndOfTheDriverInTheNoteOfTheLaunchIsACrashOnce) {
+  config_.driver_note = (dir_ / "driver_exit.json").string();
+  const auto write = [this](double t, int restart) {
+    std::ofstream(config_.driver_note) << json{{"name", "xcore_driver"}, {"exit_code", -9}, {"restart", restart},
+                                               {"down", false}, {"t", t}}.dump();
+  };
+  now_ = mowbite_journal::MonotonicNs();
+  // An old note at the start of the stats tells nothing.
+  write(Wall() - 2 * kIncidentCrashBefore, 1);
+  Make();
+  EXPECT_TRUE(incidents_->Tick(now_, Wall()).empty());
+  write(Wall(), 2);
+  now_ += 20 * kS;
+  Incidents::Notices notices = incidents_->Tick(now_, Wall());
+  ASSERT_EQ(notices.size(), 1u);
+  EXPECT_EQ(notices[0]["reason"], "CRASH");
+  EXPECT_EQ(notices[0]["detail"], "xcore_driver");
+  EXPECT_TRUE(notices[0]["safety"].get<bool>());
+  const std::string id = notices[0]["incident"];
+  const json trigger = Call("incidents.get", {{"id", id}})["manifest"]["triggers"][0];
+  EXPECT_EQ(trigger["detail"]["exit_code"], -9);
+  EXPECT_EQ(trigger["detail"]["restart"], 2);
+  // The same note again, also for a new process of the stats, opens nothing; nor does one that cannot be read.
+  now_ += 20 * kS;
+  EXPECT_TRUE(incidents_->Tick(now_, Wall()).empty());
+  Make();
+  EXPECT_TRUE(incidents_->Tick(now_ + 20 * kS, Wall()).empty());
+  std::ofstream(config_.driver_note) << "{";
+  EXPECT_TRUE(incidents_->Tick(now_ + 40 * kS, Wall()).empty());
+}
+
 TEST_F(IncidentsTest, MarksAreThrottledAndChecked) {
   auto journal = Open();
   Feed(*journal, 0.1);
