@@ -26,7 +26,7 @@ add_library(tron_vision_core STATIC src/npu_model.cpp src/model_check.cpp src/yo
   src/text_file.cpp src/preview.cpp src/h264_rtp.cpp src/rtsp_server.cpp src/h264_encoder.cpp src/h264_stream.cpp
   src/stereo_camera.cpp src/stereo_loop.cpp src/lens_model.cpp src/dock_marker.cpp src/dock_pose.cpp
   src/dock_exposure.cpp src/jpeg_luma.cpp src/rear_camera.cpp src/rear_loop.cpp src/preview_loop.cpp src/inference_worker.cpp
-  src/video_feed.cpp src/dma_frames.cpp src/frame_recorder.cpp)
+  src/video_feed.cpp src/dma_frames.cpp src/frame_recorder.cpp src/gain_level.cpp)
 target_include_directories(tron_vision_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -101,6 +101,7 @@ if(BUILD_TESTING)
                   test/test_v4l2_capture.cpp test/test_h264_rtp.cpp test/test_rtsp_server.cpp
                   test/test_h264_encoder.cpp test/test_stereo_camera.cpp test/test_stereo_loop.cpp
                   test/test_rear_camera.cpp test/test_preview_loop.cpp test/test_dma_frames.cpp
+                  test/test_gain_level.cpp
                   # The loops are tested in real time, about a minute in all.
                   TIMEOUT 180)
   target_link_libraries(tron_vision_test tron_vision_core)
