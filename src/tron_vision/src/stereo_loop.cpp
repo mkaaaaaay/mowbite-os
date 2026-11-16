@@ -1,6 +1,7 @@
 #include "tron_vision/stereo_loop.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -23,6 +24,11 @@ std::string Fixed(double value, const char* format = "%.1f") {
   char buf[32];
   std::snprintf(buf, sizeof(buf), format, value);
   return buf;
+}
+
+double UnixSeconds() {
+  using namespace std::chrono;
+  return duration<double>(system_clock::now().time_since_epoch()).count();
 }
 
 }  // namespace
@@ -66,7 +72,8 @@ StereoLoop::StereoLoop(StereoConfig config, FrameSource& camera, H264Encoder& en
       now_(std::move(now)),
       thermal_(config_.pause_at_c, config_.resume_below_c),
       started_(now_()),
-      stream_(encoder_, server_, config_.slow_encode_s, now_) {}
+      stream_(encoder_, server_, config_.slow_encode_s, now_),
+      recorder_(config_.record) {}
 
 StereoLoop::~StereoLoop() {
   Shutdown();
@@ -476,6 +483,29 @@ void StereoLoop::SendFrame(const CapturedFrame& frame) {
   status_.fps = stream_.Fps();
   status_.kbps = stream_.Kbps();
   status_.encode_ms = stream_.EncodeMs();
+  Record(frame);
+}
+
+void StereoLoop::Record(const CapturedFrame& frame) {
+  if (!status_.record_error.empty()) return;
+  const double taken = static_cast<double>(frame.timestamp_us) / 1e6;
+  if (!recorder_.Due(taken)) return;
+  const uint32_t line_bytes = config_.encoder.line_bytes;
+  const uint32_t lines = config_.encoder.lines;
+  std::string error;
+  if (frame.data == nullptr || frame.bytes < static_cast<size_t>(line_bytes) * lines) {
+    error = "frame of " + std::to_string(frame.bytes) + " bytes without its picture";
+  } else if (record_jpeg_.Encode(frame.data, line_bytes / 2, lines, line_bytes, config_.record_quality, record_image_,
+                                 error)) {
+    // One "name value" per line; taken on the clock of the driver, unix the same moment on the clock of the system.
+    const std::string text = "taken " + Fixed(taken, "%.6f") + "\nunix " +
+                             Fixed(UnixSeconds() - (now_() - taken), "%.6f") + "\nsequence " +
+                             std::to_string(frame.sequence) + "\nwidth " + std::to_string(line_bytes / 2) +
+                             "\nheight " + std::to_string(lines) + "\nblade_on " + (mower_.blade_on ? "1" : "0") +
+                             "\nmoving " + (mower_.moving ? "1" : "0") + "\n";
+    if (recorder_.Write(taken, record_image_.data(), record_image_.size(), text, error)) return;
+  }
+  status_.record_error = "recording ended: " + error;
 }
 
 void StereoLoop::Shutdown() {

@@ -453,7 +453,10 @@ mowbite_sound:
     sensor_suffix: _right
 
 # tron_stereo, the live picture of the stereo camera (MOWBITE_STEREO=on): bitrate_kbps, rtsp_port, capture_device,
-# stream_name, encoder_library and crash_dir have the defaults of the node.
+# stream_name, encoder_library and crash_dir have the defaults of the node. record_max_mb above 0 (at most 300) keeps
+# both eyes of the frames of a stream as gray JPEG under record_dir (below /run, in RAM, shared with the recording of
+# tron_rear), one per record_interval_s (0.07: every second frame), none older than record_keep_min; only while a
+# viewer holds the stream; off by default, for work on the pictures set in <data_dir>/tron.yaml.
 tron_stereo:
   ros__parameters:
     # The stream also runs while the blade runs or hw/status is missing. The self-test per boot (mower standing, blade

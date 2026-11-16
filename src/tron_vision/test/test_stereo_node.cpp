@@ -415,6 +415,47 @@ TEST_F(StereoNodeTest, LoopThatHangsEndsTheProcess) {
       ::testing::ExitedWithCode(mowbite_watch::kExitCode), "tron_stereo_loop silent");
 }
 
+// The recording is off by default and stays below /run; a value of the wrong type leaves it off and the node runs.
+TEST_F(StereoNodeTest, RecordingOffByDefaultAndSurvivesWrongValues) {
+  struct Case {
+    std::vector<rclcpp::Parameter> set;
+    size_t expect_bytes;
+  };
+  const std::vector<Case> cases = {
+      {{}, 0},
+      {{{"record_max_mb", 250}}, 250UL << 20},
+      {{{"record_max_mb", 250.0}, {"record_keep_min", 30}, {"record_interval_s", 1}}, 250UL << 20},
+      {{{"record_max_mb", 301}}, 0},
+      {{{"record_max_mb", 250}, {"record_dir", "/userdata/stereo-record"}}, 0},
+      {{{"record_max_mb", "250"}}, 0},
+      {{{"record_max_mb", 250}, {"record_interval_s", "fast"}}, 0},
+  };
+  for (size_t i = 0; i < cases.size(); i++) {
+    Rig rig;
+    RecordLimits seen;
+    rig.seams.adjust = [&seen, adjust = rig.seams.adjust](StereoConfig& config, StereoCameraConfig& camera) {
+      adjust(config, camera);
+      seen = config.record;
+    };
+    rclcpp::NodeOptions options = Options(rig.dir.Path() + "/markers", rig.port, FAKE_MPP_LIB);
+    for (const rclcpp::Parameter& p : cases[i].set) {
+      options.append_parameter_override(p.get_name(), p.get_parameter_value());
+    }
+    EXPECT_NO_THROW(StereoNode node(options, rig.seams)) << i;
+    EXPECT_EQ(seen.max_bytes, cases[i].expect_bytes) << i;
+    if (cases[i].expect_bytes > 0) {
+      EXPECT_EQ(seen.dir, "/run/mowbite-os/stereo-record") << i;
+    }
+    if (i == 1) {
+      EXPECT_DOUBLE_EQ(seen.interval_s, 0.07);
+    }
+    if (i == 2) {
+      EXPECT_DOUBLE_EQ(seen.keep_s, 1800.0);
+      EXPECT_DOUBLE_EQ(seen.interval_s, 1.0);
+    }
+  }
+}
+
 TEST(StereoAvailability, ReasonsOfTheStates) {
   for (StereoState s : {StereoState::kReady, StereoState::kStreaming}) {
     EXPECT_TRUE(StereoAvailability(s).available);

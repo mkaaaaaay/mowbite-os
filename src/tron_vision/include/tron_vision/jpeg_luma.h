@@ -26,6 +26,24 @@ class JpegLuma {
   std::vector<uint8_t> plane_;
 };
 
+// The luma of a YUYV frame as a gray JPEG through libturbojpeg; the chroma is left out. One handle per object.
+class YuyvGrayJpeg {
+ public:
+  YuyvGrayJpeg();
+  ~YuyvGrayJpeg();
+  YuyvGrayJpeg(const YuyvGrayJpeg&) = delete;
+  YuyvGrayJpeg& operator=(const YuyvGrayJpeg&) = delete;
+
+  // `yuyv` holds `height` lines of `line_bytes` bytes, the first 2 * width of each are the picture. False with the
+  // error, then `jpeg` is empty.
+  bool Encode(const uint8_t* yuyv, uint32_t width, uint32_t height, uint32_t line_bytes, int quality,
+              std::vector<uint8_t>& jpeg, std::string& error);
+
+ private:
+  void* handle_ = nullptr;
+  std::vector<uint8_t> gray_;
+};
+
 }  // namespace tron_vision
 
 #endif  // TRON_VISION_JPEG_LUMA_H

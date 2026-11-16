@@ -49,5 +49,40 @@ TEST(JpegLuma, RefusesAnotherSizeAndBrokenData) {
   EXPECT_FALSE(error.empty());
 }
 
+// The Y bytes of a YUYV frame come back as a gray JPEG of the same size; bytes after the picture in a line are left.
+TEST(YuyvGrayJpeg, KeepsTheLumaAndLeavesTheChromaOut) {
+  const test::SceneImage image = Gradient(320, 240);
+  const uint32_t line_bytes = 2 * 320 + 16;
+  std::vector<uint8_t> yuyv(static_cast<size_t>(line_bytes) * 240, 0xEE);
+  for (uint32_t y = 0; y < 240; y++) {
+    for (uint32_t x = 0; x < 320; x++) {
+      yuyv[y * line_bytes + 2 * x] = image.px[y * 320 + x];
+      yuyv[y * line_bytes + 2 * x + 1] = static_cast<uint8_t>(40 + 150 * (x % 2));
+    }
+  }
+  YuyvGrayJpeg encoder;
+  std::vector<uint8_t> jpeg;
+  std::string error;
+  ASSERT_TRUE(encoder.Encode(yuyv.data(), 320, 240, line_bytes, 95, jpeg, error)) << error;
+  JpegLuma decoder;
+  GrayView luma;
+  ASSERT_TRUE(decoder.Decode(jpeg.data(), jpeg.size(), 320, 240, luma, error)) << error;
+  int worst = 0;
+  for (size_t i = 0; i < image.px.size(); i++) worst = std::max(worst, std::abs(luma.data[i] - image.px[i]));
+  EXPECT_LE(worst, 12);
+}
+
+TEST(YuyvGrayJpeg, RefusesAFrameThatIsNotThere) {
+  const std::vector<uint8_t> yuyv(640 * 240, 0x80);
+  YuyvGrayJpeg encoder;
+  std::vector<uint8_t> jpeg = {1, 2, 3};
+  std::string error;
+  EXPECT_FALSE(encoder.Encode(nullptr, 320, 240, 640, 92, jpeg, error));
+  EXPECT_EQ(error, "no YUYV frame of 320x240");
+  EXPECT_TRUE(jpeg.empty());
+  EXPECT_FALSE(encoder.Encode(yuyv.data(), 320, 240, 639, 92, jpeg, error));
+  EXPECT_FALSE(encoder.Encode(yuyv.data(), 0, 240, 640, 92, jpeg, error));
+}
+
 }  // namespace
 }  // namespace tron_vision

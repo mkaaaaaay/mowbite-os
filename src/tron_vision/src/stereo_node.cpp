@@ -12,6 +12,7 @@ namespace tron_vision {
 namespace {
 
 const char kStateSensor[] = "stereo_state";
+constexpr char kRecordDir[] = "/run/mowbite-os/stereo-record";
 const char kFpsSensor[] = "stereo_fps";
 constexpr double kReportPeriod = 1.0;
 // Silence of the loop thread or of the ROS thread that ends the process.
@@ -61,6 +62,7 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   config.stream_while_mowing = declare_parameter("stream_while_mowing", config.stream_while_mowing);
   if (config.stream_while_mowing) RCLCPP_WARN(get_logger(), "stream_while_mowing: the stream runs next to the blade");
   const std::string library = declare_parameter("encoder_library", DefaultEncoderLibrary());
+  ReadRecordLimits(*this, kRecordDir, config.record);
 
   StereoCameraConfig camera;
   camera.capture_device = declare_parameter("capture_device", camera.capture_device);
@@ -146,6 +148,10 @@ void StereoNode::Run() {
     }
     watch.Sign();
     const StereoStatus& status = loop_ ? loop_->Status() : failed_;
+    if (status.record_error != logged_record_) {
+      logged_record_ = status.record_error;
+      RCLCPP_WARN(get_logger(), "%s", logged_record_.c_str());
+    }
     PublishCamera(status);
     Report(status, MonotonicSeconds());
     if (!go_on) {

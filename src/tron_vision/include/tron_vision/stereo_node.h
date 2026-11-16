@@ -73,6 +73,7 @@ class StereoNode : public rclcpp::Node {
   MowerView mower_;
   LogGate log_gate_{60.0};
   std::string reported_state_;
+  std::string logged_record_;
   double next_report_ = 0.0;
   std::atomic<int> exit_code_{0};
   std::atomic<bool> running_{true};

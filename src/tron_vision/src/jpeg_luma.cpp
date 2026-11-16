@@ -40,4 +40,43 @@ bool JpegLuma::Decode(const uint8_t* jpeg, size_t bytes, uint32_t width, uint32_
   return true;
 }
 
+YuyvGrayJpeg::YuyvGrayJpeg() : handle_(tjInitCompress()) {}
+
+YuyvGrayJpeg::~YuyvGrayJpeg() {
+  if (handle_ != nullptr) tjDestroy(handle_);
+}
+
+bool YuyvGrayJpeg::Encode(const uint8_t* yuyv, uint32_t width, uint32_t height, uint32_t line_bytes, int quality,
+                          std::vector<uint8_t>& jpeg, std::string& error) {
+  jpeg.clear();
+  if (handle_ == nullptr) {
+    error = "no JPEG encoder";
+    return false;
+  }
+  if (yuyv == nullptr || width == 0 || height == 0 || line_bytes < 2 * width) {
+    error = "no YUYV frame of " + std::to_string(width) + "x" + std::to_string(height);
+    return false;
+  }
+  gray_.resize(static_cast<size_t>(width) * height);
+  uint8_t* out = gray_.data();
+  for (uint32_t y = 0; y < height; y++) {
+    const uint8_t* line = yuyv + static_cast<size_t>(y) * line_bytes;
+    for (uint32_t x = 0; x < width; x++) *out++ = line[2 * x];
+  }
+  const auto w = static_cast<int>(width);
+  const auto h = static_cast<int>(height);
+  // Large enough for any quality, so the library never reallocates the buffer.
+  jpeg.resize(tjBufSize(w, h, TJSAMP_GRAY));
+  unsigned char* data = jpeg.data();
+  unsigned long size = jpeg.size();
+  if (tjCompress2(handle_, gray_.data(), w, 0, h, TJPF_GRAY, &data, &size, TJSAMP_GRAY, quality, TJFLAG_NOREALLOC) !=
+      0) {
+    error = std::string("JPEG: ") + tjGetErrorStr2(handle_);
+    jpeg.clear();
+    return false;
+  }
+  jpeg.resize(size);
+  return true;
+}
+
 }  // namespace tron_vision

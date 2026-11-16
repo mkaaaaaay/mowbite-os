@@ -9,8 +9,10 @@
 
 #include "tron_vision/budget.h"
 #include "tron_vision/crash_guard.h"
+#include "tron_vision/frame_recorder.h"
 #include "tron_vision/h264_encoder.h"
 #include "tron_vision/h264_stream.h"
+#include "tron_vision/jpeg_luma.h"
 #include "tron_vision/rtsp_server.h"
 #include "tron_vision/v4l2_camera.h"
 
@@ -50,6 +52,10 @@ struct StereoConfig {
   double check_s = 5.0;
   // Wait for a viewer per step while nothing streams.
   int idle_wait_ms = 200;
+  // Keeps both eyes of the frames of a stream as gray JPEG, for work on the pictures off the mower; off with
+  // max_bytes 0. It records only while a viewer holds the stream.
+  RecordLimits record = {"", 0, 3600.0, 0.07};
+  int record_quality = 92;
 };
 
 // The mower as the last message on hw/status gave it.
@@ -106,6 +112,8 @@ struct StereoStatus {
   // Since the start of the process: frames sent, and frames the driver dropped during a stream.
   uint64_t frames = 0;
   uint64_t lost = 0;
+  // Why the recording ended; empty while it runs or is off.
+  std::string record_error;
   int exit_code = kExitNone;
 };
 
@@ -167,6 +175,8 @@ class StereoLoop {
   void StartStream(double now);
   void StepStream(double now);
   void SendFrame(const CapturedFrame& frame);
+  // Keeps the frame when one is due, after it went to the viewer.
+  void Record(const CapturedFrame& frame);
   void StopStream();
   // Notes that the camera gave no picture, which holds for this boot.
   void FailForThisBoot(StereoState state, const std::string& detail);
@@ -200,6 +210,9 @@ class StereoLoop {
   bool have_sequence_ = false;
   uint32_t last_sequence_ = 0;
   H264Stream stream_;
+  FrameRecorder recorder_;
+  YuyvGrayJpeg record_jpeg_;
+  std::vector<uint8_t> record_image_;
 };
 
 }  // namespace tron_vision

@@ -1,6 +1,11 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <vector>
 
 #include "fake_encoder.h"
 #include "rtsp_test_client.h"
@@ -68,6 +73,7 @@ class FakeSource : public FrameSource {
     frame.sequence = sequence;
     frame.timestamp_us = static_cast<int64_t>(clock_ * 1e6);
     frame.dmabuf = 200 + static_cast<int>(frame.index);
+    frame.data = pixels.empty() ? nullptr : pixels.data();
     return 1;
   }
 
@@ -83,6 +89,8 @@ class FakeSource : public FrameSource {
   // Frames the driver drops before the next one.
   uint32_t skip = 0;
   uint32_t sequence = 0;
+  // What the mapped buffers hold; empty: frames without a mapping.
+  std::vector<uint8_t> pixels;
 
  private:
   double& clock_;
@@ -753,6 +761,98 @@ TEST(StereoLoop, CountsFramesTheDriverDropped) {
   rig.Steps(3);
   EXPECT_EQ(rig.loop->Status().lost, 2U);
   EXPECT_EQ(rig.loop->Status().frames, 6U);
+}
+
+std::string ReadFile(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+// Names of the files with that ending in a directory, sorted.
+std::vector<std::string> Recorded(const std::string& dir, const std::string& ending) {
+  std::vector<std::string> names;
+  std::error_code ec;
+  for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+    if (entry.path().extension() == ending) names.push_back(entry.path().filename().string());
+  }
+  std::sort(names.begin(), names.end());
+  return names;
+}
+
+// Both eyes side by side, each line a ramp of its own.
+std::vector<uint8_t> YuyvPicture() {
+  std::vector<uint8_t> yuyv(2560 * 480, 0x80);
+  for (uint32_t y = 0; y < 480; y++) {
+    for (uint32_t x = 0; x < 1280; x++) yuyv[y * 2560 + 2 * x] = static_cast<uint8_t>(16 + (x / 8 + y / 4) % 200);
+  }
+  return yuyv;
+}
+
+TEST(StereoLoop, RecordsBothEyesOfEverySecondFrameOfAStream) {
+  Rig rig;
+  rig.config.record.dir = rig.dir.Path() + "/record";
+  rig.config.record.max_bytes = 64UL << 20;
+  rig.config.stream_while_mowing = true;
+  rig.camera.pixels = YuyvPicture();
+  rig.Ready();
+  // The self-test keeps nothing.
+  EXPECT_TRUE(Recorded(rig.config.record.dir, ".jpg").empty());
+  {
+    Client client(rig.server.Port());
+    ASSERT_TRUE(rig.Play(client));
+    rig.Steps(30, true, true);
+    EXPECT_EQ(rig.loop->Status().frames, 30U);
+  }
+  rig.Steps(3);
+  // Frames come every 42 ms, one per 70 ms is kept.
+  const std::vector<std::string> images = Recorded(rig.config.record.dir, ".jpg");
+  ASSERT_EQ(images.size(), 15U);
+  EXPECT_EQ(Recorded(rig.config.record.dir, ".txt").size(), 15U);
+  EXPECT_TRUE(Recorded(rig.config.record.dir, ".part").empty());
+  EXPECT_EQ(rig.loop->Status().record_error, "");
+
+  const std::string stem = rig.config.record.dir + "/" + images[1].substr(0, images[1].size() - 4);
+  const std::string jpeg = ReadFile(stem + ".jpg");
+  JpegLuma decoder;
+  GrayView luma;
+  std::string error;
+  ASSERT_TRUE(decoder.Decode(reinterpret_cast<const uint8_t*>(jpeg.data()), jpeg.size(), 1280, 480, luma, error))
+      << error;
+  EXPECT_NEAR(luma.data[100 * 1280 + 800], 16 + (800 / 8 + 100 / 4) % 200, 6);
+  const std::string text = ReadFile(stem + ".txt");
+  EXPECT_NE(text.find("taken " + images[1].substr(0, 4) + "."), std::string::npos) << text;
+  EXPECT_NE(text.find("\nunix 1"), std::string::npos) << text;
+  EXPECT_NE(text.find("\nsequence "), std::string::npos) << text;
+  EXPECT_NE(text.find("\nwidth 1280\nheight 480\nblade_on 1\nmoving 1\n"), std::string::npos) << text;
+}
+
+TEST(StereoLoop, NoRecordingUnlessSetSo) {
+  Rig rig;
+  rig.config.record.dir = rig.dir.Path() + "/record";
+  rig.camera.pixels = YuyvPicture();
+  rig.Ready();
+  Client client(rig.server.Port());
+  ASSERT_TRUE(rig.Play(client));
+  rig.Steps(10);
+  EXPECT_FALSE(std::filesystem::exists(rig.config.record.dir));
+  EXPECT_EQ(rig.loop->Status().record_error, "");
+}
+
+// A frame the recording cannot read ends the recording; the stream goes on.
+TEST(StereoLoop, AFrameWithoutItsPictureEndsTheRecordingOnly) {
+  Rig rig;
+  rig.config.record.dir = rig.dir.Path() + "/record";
+  rig.config.record.max_bytes = 64UL << 20;
+  rig.Ready();
+  Client client(rig.server.Port());
+  ASSERT_TRUE(rig.Play(client));
+  rig.Steps(4);
+  EXPECT_EQ(rig.loop->Status().record_error, "recording ended: frame of 1228800 bytes without its picture");
+  rig.camera.pixels = YuyvPicture();
+  rig.Steps(6);
+  EXPECT_EQ(rig.State(), StereoState::kStreaming);
+  EXPECT_EQ(rig.loop->Status().frames, 10U);
+  EXPECT_TRUE(Recorded(rig.config.record.dir, ".jpg").empty());
 }
 
 TEST(StereoLoop, MemoryLimitEndsTheProcess) {

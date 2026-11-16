@@ -20,8 +20,6 @@ using mowbite_msgs::msg::DockMarker;
 constexpr double kWatchLimit = 2.0;
 constexpr int kMaxPattern = 0xFFFF;
 constexpr char kRecordDir[] = "/run/mowbite-os/rear-record";
-// /run is RAM; the Tron has 4 GB and /run 781 MB.
-constexpr int64_t kMaxRecordMb = 300;
 // H.264 frames in turn, so that a write never meets one the encoder may still read.
 constexpr uint32_t kVideoFrames = 3;
 
@@ -87,63 +85,6 @@ void ReadCalibration(rclcpp::Node& node, RearConfig& config) {
   }
 }
 
-// Declares a value that may come with any type: one of the wrong type in the device file must not end the node.
-rclcpp::ParameterValue AnyType(rclcpp::Node& node, const std::string& name, const rclcpp::ParameterValue& preset) {
-  rcl_interfaces::msg::ParameterDescriptor any;
-  any.dynamic_typing = true;
-  return node.declare_parameter(name, preset, any);
-}
-
-// A whole or a decimal number; false for any other type.
-bool Number(const rclcpp::ParameterValue& value, double& number) {
-  if (value.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
-    number = value.get<double>();
-  } else if (value.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
-    number = static_cast<double>(value.get<int64_t>());
-  } else {
-    return false;
-  }
-  return true;
-}
-
-// The recording lives in RAM under /run only, within kMaxRecordMb; off with record_max_mb 0. A wrong value, also one
-// of the wrong type, leaves it off and the marker goes on.
-void ReadRecordLimits(rclcpp::Node& node, RecordLimits& record) {
-  const rclcpp::ParameterValue dir = AnyType(node, "record_dir", rclcpp::ParameterValue(std::string(kRecordDir)));
-  const rclcpp::ParameterValue max_value = AnyType(node, "record_max_mb", rclcpp::ParameterValue(int64_t{0}));
-  const rclcpp::ParameterValue keep_value =
-      AnyType(node, "record_keep_min", rclcpp::ParameterValue(record.keep_s / 60.0));
-  const rclcpp::ParameterValue interval_value =
-      AnyType(node, "record_interval_s", rclcpp::ParameterValue(record.interval_s));
-  double max_mb = 0.0;
-  double keep_min = 0.0;
-  double interval_s = 0.0;
-  std::string wrong;
-  if (dir.get_type() != rclcpp::ParameterType::PARAMETER_STRING) {
-    wrong = "record_dir is not a string";
-  } else if (!Number(max_value, max_mb) || !Number(keep_value, keep_min) || !Number(interval_value, interval_s)) {
-    wrong = "record_max_mb, record_keep_min and record_interval_s are not all numbers";
-  } else if (!(max_mb >= 0.0 && max_mb <= static_cast<double>(kMaxRecordMb)) || max_mb != std::floor(max_mb)) {
-    wrong = "record_max_mb is not a whole number within 0.." + std::to_string(kMaxRecordMb);
-  } else if (dir.get<std::string>().rfind("/run/", 0) != 0 || dir.get<std::string>().find("..") != std::string::npos) {
-    wrong = "record_dir " + dir.get<std::string>() + " is not below /run";
-  } else if (!(keep_min > 0.0) || !(interval_s > 0.0)) {
-    wrong = "record_keep_min and record_interval_s are not above 0";
-  }
-  if (!wrong.empty()) {
-    RCLCPP_WARN(node.get_logger(), "No recording: %s", wrong.c_str());
-    return;
-  }
-  record.dir = dir.get<std::string>();
-  record.keep_s = keep_min * 60.0;
-  record.interval_s = interval_s;
-  record.max_bytes = static_cast<size_t>(max_mb) << 20;
-  if (record.max_bytes > 0) {
-    RCLCPP_INFO(node.get_logger(), "Recording to %s, at most %.0f MB, %.0f min, one image per %.2f s",
-                record.dir.c_str(), max_mb, record.keep_s / 60.0, record.interval_s);
-  }
-}
-
 }  // namespace
 
 std::string DockReasonText(DockReason reason) {
@@ -191,7 +132,7 @@ RearNode::RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seam
   config.view.max_rate = declare_parameter("jpeg_max_rate", config.view.max_rate);
   const auto max_kb = static_cast<int64_t>(config.view.max_bytes / 1024);
   config.view.max_bytes = static_cast<size_t>(declare_parameter("jpeg_max_kb", max_kb)) * 1024;
-  ReadRecordLimits(*this, config.record);
+  ReadRecordLimits(*this, kRecordDir, config.record);
 
   RearCameraConfig camera;
   camera.device = declare_parameter("device", camera.device);
