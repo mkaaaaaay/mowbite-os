@@ -12,7 +12,8 @@ the MCU pty (host_bytes). The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (every 0.2 s, flag gnss_period), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an
 upright sensor.
 Optional: a JSON file with flags (lift, stop, bumper, bumper_left, bumper_right, rain, dock, host_timeout, fast_speed_hold, gnss_quality, gnss_noise, gnss_age, gnss_delay,
-gnss_drift, gnss_noise_tau, gnss_period, gnss_course_error, yaw_drift, wheel_deadband, odom_scale, track, imu_off, cutter_ignores_off,
+gnss_drift, gnss_noise_tau, gnss_period, gnss_course_error, yaw_drift, wheel_deadband, odom_scale, track, spot_slip,
+imu_off, cutter_ignores_off,
 cutter_holds, gnss_rtcm, dock_shift_x,
 dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, lift_tilt, lift_front_only, gyro_bias_dps,
 charge_current, battery_percentage, battery_voltage, battery_temperature, blade_temperature, standstill_noise,
@@ -27,7 +28,9 @@ corrections in GGA (s, default
 1.0, null leaves the field empty), gnss_delay how old (s) the position is when it is sent, gnss_course_error degrees
 added to the course of RMC and VTG (a receiver with a wrong course at the right speed), yaw_drift the yaw error (rad)
 per metre driven, as omni wheels slip, wheel_deadband the speed (m/s) below which a wheel stands, odom_scale the factor
-between the reported and the real wheel speed, track the real track (m). With stop_latches stop stays set after
+between the reported and the real wheel speed, track the real track (m), spot_slip the shares [left, right] of
+their speed the wheels lose on the ground while they run against each other (wet lawn). With stop_latches stop stays
+set after
 the stop flag, as on the Tron, until a clear frame (sensor, eight zero bytes) comes with the flag down. imu_off stops
 the IMU frames, cutter_ignores_off keeps the blade turning on off frames, cutter_holds also without any frame from the
 host. tilt_roll and tilt_pitch (degrees) stand the base on a slope for the IMU and turn the antenna with it, at
@@ -315,11 +318,16 @@ class Drive:
         self.mcu_track, self.track = mcu_track, track
         self.left = self.right = 0.0
 
-    def move(self, linear, angular, deadband=0.0):
-        """The (linear, angular) the base drives for a setpoint; a wheel slower than the deadband stands."""
+    def move(self, linear, angular, deadband=0.0, spot_slip=(0.0, 0.0)):
+        """The (linear, angular) the base drives for a setpoint; a wheel slower than the deadband stands. While the
+        wheels run against each other, the left and the right one lose their share spot_slip of the speed on the
+        ground: the base turns less and moves along its heading, the MCU reports the wheels as they turn."""
         half = angular * self.mcu_track / 2.0
         self.left, self.right = (0.0 if abs(v) < deadband else v for v in (linear - half, linear + half))
-        return (self.left + self.right) / 2.0, (self.right - self.left) / self.track
+        left, right = self.left, self.right
+        if left * right < 0.0:
+            left, right = left * (1.0 - spot_slip[0]), right * (1.0 - spot_slip[1])
+        return (left + right) / 2.0, (right - left) / self.track
 
     def measured(self, scale=1.0):
         """The (linear, angular) the MCU reports: its wheel speeds times scale, on its own track."""
@@ -927,7 +935,8 @@ def main():
             host.fast_hold = float(flags.get("fast_speed_hold", args.fast_speed_hold))
             drive.track = float(flags.get("track", args.track or args.mcu_track))
             linear, angular = drive.move(*host.setpoint(now, blocked),
-                                         float(flags.get("wheel_deadband", args.wheel_deadband)))
+                                         float(flags.get("wheel_deadband", args.wheel_deadband)),
+                                         tuple(map(float, flags.get("spot_slip", (0.0, 0.0)))))
             before = Pose(pose.x, pose.y, pose.yaw)
             pose.step(now - last, linear, angular, float(flags.get("yaw_drift", args.yaw_drift)))
             last = now
