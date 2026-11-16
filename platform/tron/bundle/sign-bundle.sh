@@ -42,6 +42,7 @@ day = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) if isinstance
 print(f"  component {meta['component']}, revision {meta['revision']}, commit {meta.get('commit', '-')}")
 print(f"  serial {meta['serial']} (commit time {day(meta['serial'])}), built {day(meta.get('date'))}")
 if meta["component"] == "os":
+    print(f"  platforms {', '.join(meta.get('platforms', ['any']))}")
     print(f"  base {meta.get('base', 0)}, api {meta.get('api', '-')} break {meta.get('api_break', '-')}, "
           f"min_app {meta.get('min_app', '-')}, "
           f"{len(meta.get('runtime_packages', []))} runtime packages")

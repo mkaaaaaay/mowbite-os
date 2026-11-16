@@ -1,13 +1,12 @@
 """A signed bundle: a root-owned copy of it, its signature, its bundle.json and what it needs before a switch.
 
 A bundle is a tar.gz of one directory <revision>/ with bundle.json (format 2: component, revision, commit, serial,
-date) beside what the component brings: os with base, api, api_break, min_app, runtime_packages, planner_interface,
-planner_files_version and bundled beside install/, planner/, app/ and tools/; planner with version, interface,
-files_version and requires beside planner/; app with version and api {min, max, break} beside app/; host with base
-beside mowbite_host/. Only the copy in the
-stage folder is checked and unpacked: the file in the inbox may change after its signature was checked. What comes
-out of a bundle is never run as root, but the host itself, and a bundle of the planner, the app or the host holds
-no machine code.
+date) beside what the component brings: os with base, platforms (the mowers it is built for, any without it), api,
+api_break, min_app, runtime_packages, planner_interface, planner_files_version and bundled beside install/, planner/,
+app/ and tools/; planner with version, interface, files_version and requires beside planner/; app with version and
+api {min, max, break} beside app/; host with base beside mowbite_host/. Only the copy in the stage folder is checked
+and unpacked: the file in the inbox may change after its signature was checked. What comes out of a bundle is never
+run as root, but the host itself, and a bundle of the planner, the app or the host holds no machine code.
 """
 import json
 import os
@@ -31,6 +30,8 @@ MAX_SIGNATURE = 64 * 1024
 SPACE_MARGIN = 100 * 1024 * 1024
 PRINCIPAL = "mowbite"
 REVISION = re.compile(r"[0-9a-f]{7,40}")
+# The reason of a bundle built for other platforms than the one of this mower.
+PLATFORM_MISMATCH = "PLATFORM_MISMATCH"
 # The user that runs the OS; the libraries of a bundle are checked as this user.
 USER = "mowbite"
 
@@ -169,6 +170,10 @@ def read_meta(path):
         raise Refused("BAD_BUNDLE", f"revision {meta.get('revision')} does not match the directory {top}")
     if not isinstance(meta.get("component"), str) or not isinstance(meta.get("runtime_packages", []), list):
         raise Refused("BAD_BUNDLE", "component or runtime_packages in bundle.json are missing or wrong")
+    platforms = meta.get("platforms")
+    if "platforms" in meta and (not isinstance(platforms, list) or not platforms or
+                                not all(isinstance(name, str) and name for name in platforms)):
+        raise Refused("BAD_BUNDLE", f"platforms in bundle.json is {platforms!r}, not a list of names")
     if _integer(meta, "serial") == 0:
         raise Refused("BAD_BUNDLE", "serial in bundle.json is 0")
     _integer(meta, "base", 0)
@@ -210,6 +215,13 @@ def missing_packages(packages):
         if result.returncode != 0 or result.stdout.strip() != "install ok installed":
             missing.append(str(package))
     return missing
+
+
+# Refused PLATFORM_MISMATCH when the bundle names its platforms and platform, the one of this mower, is not one of them.
+def check_platform(bundle, platform):
+    platforms = bundle.meta.get("platforms")
+    if platforms and platform and platform not in platforms:
+        raise Refused(PLATFORM_MISMATCH, f"the bundle is built for {', '.join(platforms)}, this mower is {platform}")
 
 
 # Refused BASE_TOO_OLD when the rootfs is older than the bundle needs or misses a package it runs on.

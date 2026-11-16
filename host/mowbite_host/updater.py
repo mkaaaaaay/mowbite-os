@@ -127,6 +127,15 @@ class Updater:
     def _running_meta(self):
         return os_meta(self.paths)
 
+    # The platform of this mower: MOWBITE_PLATFORM of the device, else the one its running OS is built for alone; None
+    # when neither names one.
+    def _platform(self):
+        named = self.paths.env().get("MOWBITE_PLATFORM")
+        if named:
+            return named
+        platforms = self._running_meta().get("platforms")
+        return platforms[0] if isinstance(platforms, list) and len(platforms) == 1 else None
+
     # The api the running installation names, None without one.
     def running_api(self):
         return self._running_meta().get("api")
@@ -539,12 +548,13 @@ class Updater:
             self._save()
 
     # Refused when the staged bundle does not go with the installed OS (not kept: another OS may take it) or with
-    # this rootfs (blocked).
+    # this mower and its rootfs (blocked).
     def _check_fits(self, component, staged):
         why = compat.reason(component, staged.meta, self._running_meta())
         if why:
             raise Refused(why, compat.EXPLAIN[why])
         try:
+            bundle.check_platform(staged, self._platform())
             bundle.check_base(staged, self.paths.base)
             bundle.check_requires(staged, self._env())
         except Refused as refused:

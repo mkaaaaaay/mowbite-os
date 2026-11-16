@@ -5,9 +5,10 @@
 # the commit; planner and app keep their own) and bundle.json (format 2). serial is the commit time of the image's
 # commit and base the rootfs version it needs, both read from this repo at that commit; from the image api and
 # api_break (its schema), planner_files_version (data_schema.json of mowbite_bridge), planner_interface (contract.json
-# of its planner, none without one) and bundled, what it brings of planner and app. Unsigned; the owner signs it with
-# sign-bundle.sh.
+# of its planner, none without one) and bundled, what it brings of planner and app; platforms, the mowers it is for,
+# from PLATFORMS (names separated by spaces, tron without it). Unsigned; the owner signs it with sign-bundle.sh.
 set -euo pipefail
+platforms=${PLATFORMS:-tron}
 if [ $# -ne 2 ]; then
     echo "usage: $0 <image or image.tar> <out dir>" >&2
     exit 2
@@ -52,19 +53,23 @@ docker cp -q "$container:/ws/tools" "$work/$revision/tools"
 docker cp -q "$container:/opt/runtime-packages.txt" "$work/runtime-packages.txt"
 printf '%s\n' "$commit" > "$work/$revision/revision"
 git -C "$here" show "$commit:LICENSE" > "$work/$revision/LICENSE"
-fields=$(python3 -I - "$HOST_LIB" "$work" "$revision" "$commit" "$min_app" "$serial" "$base" <<'PY'
-import json, os, sys
-host, work, revision, commit, min_app, serial, base = sys.argv[1:]
+fields=$(python3 -I - "$HOST_LIB" "$work" "$revision" "$commit" "$min_app" "$serial" "$base" "$platforms" <<'PY'
+import glob, json, os, sys
+host, work, revision, commit, min_app, serial, base, platforms = sys.argv[1:]
 sys.path.insert(0, os.path.join(host, "bundle"))
 import app_export, planner_meta
 tree = f"{work}/{revision}"
+# Every platform the bundle names has its package in the image, under its name in the ament index.
+for name in platforms.split():
+    if not glob.glob(f"{tree}/install/*/share/ament_index/resource_index/mowbite_platform/{name}"):
+        sys.exit(f"the image has no platform {name}")
 packages = sorted({line.strip() for line in open(f"{work}/runtime-packages.txt") if line.strip()})
 with open(f"{tree}/install/mowbite_api/share/mowbite_api/api.schema.json") as f:
     schema = json.load(f)
 with open(f"{tree}/install/mowbite_bridge/share/mowbite_bridge/data_schema.json") as f:
     table = json.load(f)
-meta = {"commit": commit, "serial": int(serial), "base": int(base.strip()), "api": schema["x-api"],
-        "api_break": schema["x-api-break"], "min_app": min_app,
+meta = {"commit": commit, "serial": int(serial), "base": int(base.strip()), "platforms": platforms.split(),
+        "api": schema["x-api"], "api_break": schema["x-api-break"], "min_app": min_app,
         "runtime_packages": packages,
         "planner_files_version": table["planner_files_version"][str(table["schema"])]}
 planner = planner_meta.read(f"{tree}/planner")

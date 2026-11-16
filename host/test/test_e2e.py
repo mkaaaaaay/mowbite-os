@@ -140,7 +140,8 @@ class EndToEnd(unittest.TestCase):
         self.write("usr/lib/mowbite/os-setup", OS_SETUP.format(P=P))
         self.write("usr/lib/mowbite/run-os", RUN_OS.format(P=P), mode=0o755)
         self.write("etc/mowbite/os.conf",
-                   f"MOWBITE_HOST_CARRIER=process\nMOWBITE_MQTT_PORT={self.port}\nMOWBITE_UPDATE_NET=off\n")
+                   f"MOWBITE_HOST_CARRIER=process\nMOWBITE_MQTT_PORT={self.port}\nMOWBITE_UPDATE_NET=off\n"
+                   "MOWBITE_PLATFORM=tron\n")
         self.bin = os.path.join(self.root, "bin")
         os.makedirs(self.bin)
         with open(os.path.join(self.bin, "dpkg-query"), "w") as f:
@@ -196,7 +197,7 @@ class EndToEnd(unittest.TestCase):
             serial = self.serial
         meta = {"format": 2, "component": component, "revision": rev, "commit": rev * 5 + "abcde", "serial": serial,
                 "date": serial, "runtime_packages": ["fake-runtime"]}
-        meta.update({"os": {"base": 1, "api": 14, "min_app": "1.4.0", "planner_interface": 1,
+        meta.update({"os": {"base": 1, "platforms": ["tron"], "api": 14, "min_app": "1.4.0", "planner_interface": 1,
                             "planner_files_version": 1},
                      "planner": {"version": "2.0.0", "interface": 1, "files_version": 1},
                      "app": {"version": "1.5.0", "api": {"min": 14, "max": 14}},

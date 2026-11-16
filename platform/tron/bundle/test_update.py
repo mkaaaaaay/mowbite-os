@@ -441,6 +441,34 @@ class UpdateTest(Base):
         self.assertEqual(self.install(self.bundle(A, meta=meta)), 1)
         self.assertEqual(self.last()["reason"], "BASE_TOO_OLD")
 
+    # An OS bundle of serial 5 for platforms, without platforms when None, on a mower of platform (None: not set).
+    def install_on(self, rev, platforms, platform):
+        self.write(os.path.join(self.prefix, "usr/lib/mowbite/os.defaults"),
+                   "MOWBITE_HARDWARE=false\n" + (f"MOWBITE_PLATFORM={platform}\n" if platform else ""))
+        meta = {"format": 2, "component": "os", "revision": rev, "serial": 5, "base": 1, "runtime_packages": [],
+                **({} if platforms is None else {"platforms": platforms})}
+        return self.install(self.bundle(rev, meta=meta))
+
+    def test_other_platform(self):
+        self.assertEqual(self.install_on(A, ["xcore"], "tron"), 1)
+        self.assertEqual(self.last()["reason"], self.tool.bundle.PLATFORM_MISMATCH)
+        self.assertEqual(self.installed(), [])
+        with open(os.path.join(self.prefix, "var/lib/mowbite-host/update.json")) as f:
+            self.assertEqual(json.load(f)["components"]["os"]["blocked"][A]["reason"],
+                             self.tool.bundle.PLATFORM_MISMATCH)
+
+    def test_own_platform(self):
+        self.assertEqual(self.install_on(A, ["xcore", "tron"], "tron"), 0)
+        self.assertEqual(self.link("current"), A)
+
+    def test_bundle_without_platforms(self):
+        self.assertEqual(self.install_on(A, None, "tron"), 0)
+        self.assertEqual(self.link("current"), A)
+
+    def test_mower_without_platform(self):
+        self.assertEqual(self.install_on(A, ["xcore"], None), 0)
+        self.assertEqual(self.link("current"), A)
+
     def test_missing_library(self):
         self.install(self.bundle(A))
         self.assertEqual(self.install(self.bundle(B, extra={f"{B}/install/lib/broken.so": b"\x7fELF"})), 1)

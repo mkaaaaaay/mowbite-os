@@ -8,6 +8,8 @@ MOWBITE_MQTT_PORT=1883
 MOWBITE_JOURNAL_DIR=/userdata/mowbite-journal
 MOWBITE_OOM_SCORE_ADJ=500
 MOWBITE_HARDWARE=false
+# The platform of this mower; mowbite-update refuses an OS bundle whose platforms do not name it.
+MOWBITE_PLATFORM=tron
 MOWBITE_DATUM_LAT=nan
 MOWBITE_DATUM_LONG=nan
 MOWBITE_DATUM_HEIGHT=0.0

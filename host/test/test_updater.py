@@ -406,6 +406,13 @@ class StageTest(Base):
         partial = bundle.unpack(staged, self.paths.os.opt)
         self.assertTrue(os.path.isfile(os.path.join(partial, A, "bundle.json")))
 
+    def test_platforms_not_a_list_of_names(self):
+        for platforms in ("tron", [], ["tron", 1], ["tron", ""], None):
+            path = self.bundle(A, platforms=platforms)
+            with self.assertRaises(Refused) as caught:
+                bundle.stage(path, path + ".sig", "os", os.path.join(self.paths.stage, "t"), self.paths.signers)
+            self.assertEqual(caught.exception.reason, "BAD_BUNDLE", platforms)
+
     def test_fifo_refused(self):
         fifo = os.path.join(self.paths.inbox, "mowbite-os-fifo.tar.gz")
         os.mkfifo(fifo)
@@ -687,6 +694,38 @@ class FlowTest(Base):
         self.assertEqual((last["result"], last["reason"]), ("refused", "BASE_TOO_OLD"))
         self.assertEqual(self.blocked()[A]["reason"], "BASE_TOO_OLD")
         self.assertNotIn("result", self.blocked()[A])
+
+    def test_other_platform_blocks(self):
+        self.write(self.paths.env_files[0], "MOWBITE_PLATFORM=tron\n")
+        last = self.install(A, platforms=["xcore", "yardforce"])
+        self.assertEqual((last["result"], last["reason"]), ("refused", bundle.PLATFORM_MISMATCH))
+        self.assertIn("xcore, yardforce", last["message"])
+        self.assertIn("tron", last["message"])
+        self.assertEqual(self.blocked()[A]["reason"], bundle.PLATFORM_MISMATCH)
+        self.assertNotIn("result", self.blocked()[A])
+        self.assertFalse(os.path.isdir(self.paths.os.of(A)))
+        with self.assertRaises(Refused):
+            self.updater.start("os", A, by_hand=False)
+
+    def test_own_platform_installs(self):
+        self.write(self.paths.env_files[0], "MOWBITE_PLATFORM=xcore\n")
+        self.write(self.paths.env_files[1], "MOWBITE_PLATFORM=tron\n")
+        self.assertEqual(self.install(A, platforms=["xcore", "tron"])["result"], "installed")
+
+    # A mower without MOWBITE_PLATFORM is of the platform its running OS is built for alone.
+    def test_platform_of_the_running_os(self):
+        self.write(self.paths.env_files[0], "MOWBITE_HARDWARE=false\n")
+        self.assertEqual(self.install(A, platforms=["tron"])["result"], "installed")
+        last = self.install(B, platforms=["xcore"])
+        self.assertEqual((last["result"], last["reason"]), ("refused", bundle.PLATFORM_MISMATCH))
+        self.assertEqual(self.install(C, platforms=["xcore", "tron"])["result"], "installed")
+
+    # Bundles built before platforms and mowers without MOWBITE_PLATFORM take any bundle.
+    def test_platform_unknown_installs(self):
+        self.write(self.paths.env_files[0], "MOWBITE_PLATFORM=tron\n")
+        self.assertEqual(self.install(A)["result"], "installed")
+        self.write(self.paths.env_files[0], "MOWBITE_HARDWARE=false\n")
+        self.assertEqual(self.install(B, platforms=["xcore"])["result"], "installed")
 
     def test_rollback_by_hand_blocks_the_newer(self):
         self.install(A)
