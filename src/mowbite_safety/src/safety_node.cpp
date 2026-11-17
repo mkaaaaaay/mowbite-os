@@ -24,6 +24,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <vector>
 
+#include "mowbite_hold/lock.h"
 #include "mowbite_safety/safety_filter.h"
 #include "mowbite_safety/safety_journal.h"
 #include "mowbite_watch/attach.h"
@@ -45,6 +46,7 @@ constexpr double kMaxDockAccuracyPerM = 0.2;
 
 static_assert(kReasonTilt == HardwareStatus::REASON_TILT);
 static_assert(kReasonFence == HardwareStatus::REASON_FENCE);
+static_assert(kReasonHighLevel == HardwareStatus::REASON_HIGH_LEVEL);
 static_assert(static_cast<uint8_t>(Source::kStop) == DriveCommand::SOURCE_STOP);
 static_assert(static_cast<uint8_t>(Source::kTeleop) == DriveCommand::SOURCE_TELEOP);
 static_assert(static_cast<uint8_t>(Source::kFollower) == DriveCommand::SOURCE_FOLLOWER);
@@ -63,7 +65,8 @@ rclcpp::QoS LatchedQos(size_t depth = 1) {
 
 std::string BitNames(uint32_t bits) {
   std::string names;
-  if (bits & kReasonTilt) names = "TILT";
+  if (bits & kReasonHighLevel) names = "HIGH_LEVEL";
+  if (bits & kReasonTilt) names += names.empty() ? "TILT" : ", TILT";
   if (bits & kReasonFence) names += names.empty() ? "FENCE" : ", FENCE";
   if (bits & kReasonUnexpectedRestart) names += names.empty() ? "UNEXPECTED_RESTART" : ", UNEXPECTED_RESTART";
   return names;
@@ -72,8 +75,9 @@ std::string BitNames(uint32_t bits) {
 }  // namespace
 
 // S2, the only writer of hw/cmd_vel: passes the drive commands of the logic (safety/drive) that SafetyFilter allows,
-// latches TILT, FENCE and UNEXPECTED_RESTART over hw/emergency, and lets a release of the logic (safety/release_emergency) through to the
-// driver only while the mower is not tilted; the driver's answer is the answer to the logic.
+// latches TILT, FENCE, UNEXPECTED_RESTART and HIGH_LEVEL (a safety check failed) over hw/emergency, and lets a release
+// of the logic (safety/release_emergency) through to the driver only while the mower is not tilted; the driver's answer
+// is the answer to the logic.
 class SafetyNode : public rclcpp::Node {
  public:
   explicit SafetyNode(const rclcpp::NodeOptions& options)
@@ -146,9 +150,16 @@ class SafetyNode : public rclcpp::Node {
         [this](const std::shared_ptr<rmw_request_id_t>& header, const SetEmergency::Request::SharedPtr& req) {
           OnRelease(header, *req);
         });
-    // The restart hold of the logic, looked at with every tick; empty without data_dir.
+    // The restart hold of the logic and the lock of the setup program, looked at with every tick; empty without
+    // data_dir. The lock is read before the first command.
     const std::string data_dir = declare_parameter("data_dir", std::string());
     restart_hold_path_ = data_dir.empty() ? "" : data_dir + "/" + mowbite_hold::kRestartHoldFile;
+    lock_watch_ = std::make_unique<mowbite_hold::SafetyLockWatch>(
+        data_dir.empty() ? "" : data_dir + "/" + mowbite_hold::kSafetyLockFile);
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      PollLock();
+    }
     timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { OnTimer(); });
     watch_ = mowbite_watch::Attach(*this, kWatchLimit);
   }
@@ -338,6 +349,7 @@ class SafetyNode : public rclcpp::Node {
       if (!restart_hold_path_.empty()) {
         filter_.Call<&SafetyFilter::OnRestartHold>(mowbite_hold::RestartHoldPresent(restart_hold_path_));
       }
+      PollLock();
       stop = filter_.Call<&SafetyFilter::Tick>(now);
       latch = filter_.Call<&SafetyFilter::TakeLatchRequest>(now);
       status.latched = filter_.View().Latched();
@@ -348,11 +360,23 @@ class SafetyNode : public rclcpp::Node {
       status.owner = static_cast<uint8_t>(filter_.View().Owner(now));
       status.refused = filter_.View().Refused();
       status.last_refusal = filter_.View().LastRefusal();
+      status.lock_closed = filter_.View().LockClosed();
     }
     if (stop) Publish(*stop);
     if (latch) SendLatch(*latch);
     status.stamp = now();
     status_pub_->publish(status);
+  }
+
+  // Called with mutex_ held: the lock goes to the filter when it changed.
+  void PollLock() {
+    const mowbite_hold::SafetyLock& lock = lock_watch_->Poll();
+    const LockSeen seen{lock.closed, lock.unreadable, lock.failures};
+    if (lock_seen_ && *lock_seen_ == seen) return;
+    if (lock.closed) RCLCPP_WARN(get_logger(), "Autonomous drives are locked: %s", lock.text.c_str());
+    if (lock_seen_ && !lock.closed) RCLCPP_INFO(get_logger(), "The setup program opened the lock again");
+    lock_seen_ = seen;
+    filter_.Call<&SafetyFilter::OnSafetyLock>(lock.closed, lock.unreadable, lock.failures);
   }
 
   void Publish(const Twist2& twist) {
@@ -382,6 +406,15 @@ class SafetyNode : public rclcpp::Node {
       }
     });
   }
+
+  struct LockSeen {
+    bool closed;
+    bool unreadable;
+    uint32_t failures;
+    bool operator==(const LockSeen& other) const {
+      return closed == other.closed && unreadable == other.unreadable && failures == other.failures;
+    }
+  };
 
   struct PendingRelease {
     std::shared_ptr<rmw_request_id_t> header;
@@ -413,6 +446,8 @@ class SafetyNode : public rclcpp::Node {
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr params_sub_;
   rclcpp::Service<SetEmergency>::SharedPtr release_srv_;
   std::string restart_hold_path_;
+  std::unique_ptr<mowbite_hold::SafetyLockWatch> lock_watch_;
+  std::optional<LockSeen> lock_seen_;
   // Level until the geometry is there.
   double imu_roll_ = 0.0;
   double imu_pitch_ = 0.0;

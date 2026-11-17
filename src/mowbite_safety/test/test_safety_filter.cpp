@@ -1248,3 +1248,89 @@ TEST_F(FilterTest, SetupIsOneSourceAmongTheOthers) {
   EXPECT_EQ(d.refusal, "the remote control drives");
   EXPECT_STREQ(SourceName(Source::kSetup), "setup");
 }
+
+TEST_F(FilterTest, AClosedLockStopsAutonomousDrivesWhateverTheDateSays) {
+  dock_ = true;
+  Run(now_ + 0.2);
+  ASSERT_TRUE(filter_.AutonomousOk(now_));
+  ASSERT_TRUE(filter_.DockOk(now_));
+  // The first look after the start finds it closed: no latch, but no autonomous drive either.
+  filter_.OnSafetyLock(true, false, 2);
+  EXPECT_TRUE(filter_.LockClosed());
+  EXPECT_EQ(filter_.Latched(), 0u);
+  EXPECT_FALSE(filter_.AutonomousOk(now_));
+  EXPECT_FALSE(filter_.DockOk(now_));
+  const std::string why = "the setup program closed the lock: a safety check failed";
+  EXPECT_EQ(Cmd(Source::kFollower, 0.1).refusal, why);
+  EXPECT_EQ(Cmd(Source::kCalibration, 0.1).refusal, why);
+  EXPECT_EQ(Cmd(Source::kDock, 0.1).refusal, why);
+  // Remote control and the setup program are free.
+  Run(now_ + 1.1);
+  EXPECT_TRUE(Moves(Cmd(Source::kTeleop, 0.2))) << filter_.LastRefusal();
+  EXPECT_TRUE(Stops(Cmd(Source::kTeleop, 0)));
+  filter_.OnSetupMotion(true, true, 0.08, 0.3, now_);
+  EXPECT_TRUE(Moves(Cmd(Source::kSetup, 0.05))) << filter_.LastRefusal();
+  EXPECT_TRUE(Stops(Cmd(Source::kSetup, 0)));
+  // Opened again, the date counts.
+  filter_.OnSafetyLock(false, false, 0);
+  EXPECT_FALSE(filter_.LockClosed());
+  EXPECT_TRUE(filter_.AutonomousOk(now_));
+  EXPECT_TRUE(filter_.DockOk(now_));
+}
+
+TEST_F(FilterTest, AClosingStopsTheFollowerAtTheNextCommand) {
+  ASSERT_TRUE(Moves(Cmd(Source::kFollower, 0.2))) << filter_.LastRefusal();
+  filter_.OnSafetyLock(false, false, 0);
+  filter_.OnSafetyLock(true, false, 1);
+  EXPECT_TRUE(Stops(Cmd(Source::kFollower, 0.2)));
+  EXPECT_EQ(filter_.Latched(), kReasonHighLevel);
+}
+
+TEST_F(FilterTest, AFailureLatchesHighLevelOnceAndTheReleaseLeavesTheLockClosed) {
+  filter_.OnSafetyLock(false, false, 0);
+  EXPECT_EQ(filter_.Latched(), 0u);
+  filter_.OnSafetyLock(true, false, 1);
+  EXPECT_EQ(filter_.Latched(), kReasonHighLevel);
+  const auto latch = filter_.TakeLatchRequest(now_);
+  ASSERT_TRUE(latch.has_value());
+  EXPECT_EQ(latch->bits, kReasonHighLevel);
+  EXPECT_EQ(latch->reason, "the setup program closed the lock: a safety check failed");
+  // The same count again latches nothing new.
+  ASSERT_TRUE(filter_.OnRelease(now_).allowed);
+  filter_.OnReleaseAnswer(true, now_);
+  filter_.OnSafetyLock(true, false, 1);
+  EXPECT_EQ(filter_.Latched(), 0u);
+  EXPECT_TRUE(filter_.LockClosed());
+  EXPECT_FALSE(filter_.AutonomousOk(now_));
+  // The next failure, also with the lock still closed, latches again.
+  filter_.OnSafetyLock(true, false, 2);
+  EXPECT_EQ(filter_.Latched(), kReasonHighLevel);
+}
+
+TEST_F(FilterTest, TheFirstLookAndTheOneAfterAnUnreadableFileOnlyTakeTheCount) {
+  filter_.OnSafetyLock(true, false, 4);
+  EXPECT_EQ(filter_.Latched(), 0u);
+  // Unreadable: closed, and the count of the program starts anew after it.
+  filter_.OnSafetyLock(true, true, 0);
+  EXPECT_TRUE(filter_.LockClosed());
+  EXPECT_EQ(filter_.Latched(), 0u);
+  filter_.OnSafetyLock(true, false, 0);
+  EXPECT_EQ(filter_.Latched(), 0u);
+  filter_.OnSafetyLock(true, false, 1);
+  EXPECT_EQ(filter_.Latched(), kReasonHighLevel);
+  ASSERT_TRUE(filter_.OnRelease(now_).allowed);
+  filter_.OnReleaseAnswer(true, now_);
+  // The same file readable again after a look that failed: nothing new.
+  filter_.OnSafetyLock(true, true, 0);
+  filter_.OnSafetyLock(true, false, 1);
+  EXPECT_EQ(filter_.Latched(), 0u);
+}
+
+TEST_F(FilterTest, AfterAnOpenLockTheCountStartsAtZero) {
+  filter_.OnSafetyLock(true, false, 3);
+  filter_.OnSafetyLock(false, false, 0);
+  EXPECT_EQ(filter_.Latched(), 0u);
+  // The program keeps its count: the next failure is 4, and any count over 0 is new.
+  filter_.OnSafetyLock(true, false, 4);
+  EXPECT_EQ(filter_.Latched(), kReasonHighLevel);
+}

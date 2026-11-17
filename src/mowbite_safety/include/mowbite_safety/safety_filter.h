@@ -28,6 +28,7 @@ constexpr double kSetupMotionTimeout = 0.6;
 // The reason bits of hw/status the filter latches over hw/emergency.
 constexpr uint32_t kReasonTilt = 1u << 13;
 constexpr uint32_t kReasonFence = 1u << 14;
+constexpr uint32_t kReasonHighLevel = 1u << 7;
 using mowbite_hold::kReasonUnexpectedRestart;
 
 struct SafetyConfig {
@@ -129,6 +130,11 @@ class SafetyFilter {
   // Whether <data_dir>/restart-hold.json is there: when it appears, UNEXPECTED_RESTART latches like TILT and goes only
   // with a release; the logic removes the file before it asks for one.
   void OnRestartHold(bool present);
+  // <data_dir>/safety_lock.json of the setup program (mowbite_hold::ReadSafetyLock): while closed, autonomous drives
+  // and those in the station frame do not pass, whatever the date says. When failures goes up over what the last
+  // readable look showed, HIGH_LEVEL latches like TILT; the first look after the start and the one after an unreadable
+  // file only take the count. A release does not open the lock.
+  void OnSafetyLock(bool closed, bool unreadable, uint32_t failures);
   // The own latch for hw/emergency: once when it is new, again every second while hw/status does not show it.
   std::optional<LatchRequest> TakeLatchRequest(double now);
   // A release asked for by the logic: refused while tilted or without an IMU sample; else the own latch is gone, every
@@ -139,6 +145,7 @@ class SafetyFilter {
   void OnReleaseAnswer(bool released, double now);
 
   uint32_t Latched() const;
+  bool LockClosed() const;
   // NaN without a recent IMU sample.
   double TiltDeg(double now) const;
   // m base_link lies outside of the allowed areas (0 inside), NaN without a map that fits or a recent pose.
@@ -222,6 +229,9 @@ class SafetyFilter {
   double out_s_ = 0;
   uint32_t latched_ = 0;
   bool restart_hold_ = false;
+  bool lock_closed_ = false;
+  // failures of the last readable look at the lock, none before it and after an unreadable one.
+  std::optional<uint32_t> lock_failures_;
   std::string latch_reason_;
   // The latch a release took, until the driver answered.
   uint32_t released_ = 0;

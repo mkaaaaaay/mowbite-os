@@ -23,6 +23,7 @@ constexpr double kFollowerMaxReverse = 0.12;
 constexpr double kDockMaxForward = 0.17;
 // s of growth a command may take at most: the follower sends every 0.05 s, the app every 0.1 s.
 constexpr double kRampStep = 0.1;
+constexpr const char* kLockClosed = "the setup program closed the lock: a safety check failed";
 
 // Towards target from prev, growing by step at most; less, and the other direction from zero.
 double Ramp(double prev, double target, double step) {
@@ -168,6 +169,7 @@ bool SafetyFilter::ImuFresh(double now) const {
 
 std::string SafetyFilter::AutonomousProblem(double now) const {
   if (!capabilities_ || !safety_measured_) return "no safety measurement of this platform (hw/capabilities)";
+  if (lock_closed_) return kLockClosed;
   if (!pose_ || now - pose_->s > config_.pose_timeout + kTimeEpsilon) return "no recent pose from the localization";
   if (!(pose_->accuracy <= config_.max_position_accuracy)) {
     return Format("position accuracy %.3f m, %.3f m needed", pose_->accuracy, config_.max_position_accuracy);
@@ -185,6 +187,7 @@ bool SafetyFilter::AutonomousOk(double now) const {
 
 std::string SafetyFilter::DockProblem(double now) const {
   if (!capabilities_ || !safety_measured_) return "no safety measurement of this platform (hw/capabilities)";
+  if (lock_closed_) return kLockClosed;
   if (!dock_pose_ || now - dock_pose_->s > config_.pose_timeout + kTimeEpsilon) {
     return "no recent pose from the dock marker";
   }
@@ -385,6 +388,23 @@ std::string SafetyFilter::SetupProblem(double now) const {
 void SafetyFilter::OnRestartHold(bool present) {
   if (present && !restart_hold_) Latch(kReasonUnexpectedRestart, "unexpected restart: the mower waits for a release");
   restart_hold_ = present;
+}
+
+void SafetyFilter::OnSafetyLock(bool closed, bool unreadable, uint32_t failures) {
+  lock_closed_ = closed;
+  if (unreadable) {
+    lock_failures_.reset();
+    return;
+  }
+  if (!closed) failures = 0;
+  if (lock_failures_ && failures > *lock_failures_) {
+    Latch(kReasonHighLevel, kLockClosed);
+  }
+  lock_failures_ = failures;
+}
+
+bool SafetyFilter::LockClosed() const {
+  return lock_closed_;
 }
 
 std::optional<LatchRequest> SafetyFilter::TakeLatchRequest(double now) {

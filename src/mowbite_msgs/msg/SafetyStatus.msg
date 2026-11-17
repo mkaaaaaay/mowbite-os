@@ -18,3 +18,6 @@ uint8 owner
 # Moving commands refused since the start, and why the last one was.
 uint32 refused
 string last_refusal
+# The setup program closed the lock of autonomous driving and mowing (<data_dir>/safety_lock.json): a safety check
+# failed. autonomous_ok and dock_ok are false while it is.
+bool lock_closed
