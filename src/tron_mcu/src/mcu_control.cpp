@@ -467,4 +467,13 @@ McuControlStatus McuControl::Status(double now) const {
   return status;
 }
 
+std::array<McuInput, 4> McuControl::Inputs(double now) const {
+  const bool fresh = sensor_ && !TelemetryStale(now);
+  const char* collision = config_.bumper_latches_emergency ? "collision" : "";
+  return {{{"stop", "stop", true, Stop(now)},
+           {"lift", "lift", true, Lift(now)},
+           {"bumper_left", collision, false, fresh && sensor_->bumper_left},
+           {"bumper_right", collision, false, fresh && sensor_->bumper_right}}};
+}
+
 }  // namespace tron

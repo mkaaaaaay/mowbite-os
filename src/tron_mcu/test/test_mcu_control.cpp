@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <iterator>
 
 #include "tron_mcu/mcu_control.h"
 #include "tron_mcu/mcu_journal.h"
@@ -546,6 +547,68 @@ TEST_F(ControlTest, NonLatchingBumperGivesNoReason) {
   EXPECT_TRUE(control.Status(0.01).bumper);
   EXPECT_FALSE(control.Status(0.01).blocked);
   EXPECT_EQ(control.Status(0.01).emergency_reason, 0u);
+}
+
+// One bit per input of hw/inputs in its order: stop, lift, bumper_left, bumper_right.
+unsigned ActiveInputs(const McuControl& control, double now) {
+  unsigned active = 0;
+  const auto inputs = control.Inputs(now);
+  for (size_t i = 0; i < inputs.size(); i++) active |= static_cast<unsigned>(inputs[i].active) << i;
+  return active;
+}
+
+TEST_F(ControlTest, InputsNameStopLiftAndEachBumper) {
+  Run(0.1);
+  const auto inputs = control_.Inputs(now_);
+  EXPECT_STREQ(inputs[0].name, "stop");
+  EXPECT_STREQ(inputs[0].reason, "stop");
+  EXPECT_STREQ(inputs[1].name, "lift");
+  EXPECT_STREQ(inputs[1].reason, "lift");
+  EXPECT_STREQ(inputs[2].name, "bumper_left");
+  EXPECT_STREQ(inputs[3].name, "bumper_right");
+  for (size_t i = 0; i < inputs.size(); i++) {
+    // The MCU keeps stop and lift until a clear frame, a bumper goes with its sensor.
+    EXPECT_EQ(inputs[i].held, i < 2) << i;
+    if (i >= 2) {
+      EXPECT_STREQ(inputs[i].reason, "collision");
+    }
+  }
+  EXPECT_EQ(ActiveInputs(control_, now_), 0u);
+
+  bool SensorInfo::* const flags[] = {&SensorInfo::stop, &SensorInfo::lift, &SensorInfo::bumper_left,
+                                      &SensorInfo::bumper_right};
+  for (size_t i = 0; i < std::size(flags); i++) {
+    sensor_ = SensorInfo{};
+    sensor_.*flags[i] = true;
+    Run(now_ + 0.01);
+    EXPECT_EQ(ActiveInputs(control_, now_), 1u << i) << i;
+  }
+  // The sum byte of the bumpers alone names no side.
+  sensor_ = SensorInfo{};
+  sensor_.bumper = true;
+  Run(now_ + 0.01);
+  EXPECT_TRUE(control_.Status(now_).bumper);
+  EXPECT_EQ(ActiveInputs(control_, now_), 0u);
+}
+
+TEST_F(ControlTest, NoInputIsActiveWithoutFreshTelemetry) {
+  EXPECT_EQ(ActiveInputs(control_, 0.0), 0u);
+  sensor_.stop = sensor_.lift = sensor_.bumper_left = sensor_.bumper_right = true;
+  Run(0.1);
+  EXPECT_EQ(ActiveInputs(control_, now_), 0xfu);
+  Run(now_ + 1.5, false);
+  ASSERT_TRUE(control_.Status(now_).telemetry_stale);
+  EXPECT_EQ(ActiveInputs(control_, now_), 0u);
+}
+
+TEST_F(ControlTest, ANonLatchingBumperNamesNoEmergency) {
+  McuControlConfig config;
+  config.bumper_latches_emergency = false;
+  const McuControl control(config);
+  const auto inputs = control.Inputs(0.0);
+  EXPECT_STREQ(inputs[2].reason, "");
+  EXPECT_STREQ(inputs[3].reason, "");
+  EXPECT_STREQ(inputs[0].reason, "stop");
 }
 
 TEST_F(ControlTest, WithoutExpectedVersionsTheFirmwareIsNotChecked) {

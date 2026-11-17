@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -10,6 +11,7 @@
 #include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/button_event.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
+#include <mowbite_msgs/msg/hardware_inputs.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/srv/set_blade.hpp>
 #include <mowbite_msgs/srv/set_charge.hpp>
@@ -162,6 +164,7 @@ class McuNode : public rclcpp::Node {
     capabilities_pub_ = create_publisher<mowbite_msgs::msg::HardwareCapabilities>("hw/capabilities", LatchedQos());
     // Never latched: a late subscriber must not act on an old press.
     button_pub_ = create_publisher<mowbite_msgs::msg::ButtonEvent>("hw/button", rclcpp::QoS(10).reliable());
+    inputs_pub_ = create_publisher<mowbite_msgs::msg::HardwareInputs>("hw/inputs", LatchedQos());
     PublishCapabilities();
 
     if (!read_only_) {
@@ -306,6 +309,7 @@ class McuNode : public rclcpp::Node {
       }
       // So that the logic learns of a block before a blade request it refuses, not only at the next status tick.
       if (BlockChanged()) PublishStatus();
+      PublishInputs();
     }
     SendShutdownFrames();
   }
@@ -608,6 +612,33 @@ class McuNode : public rclcpp::Node {
     return msg;
   }
 
+  // hw/inputs at the start and with every change of an input; only the I/O thread calls it.
+  void PublishInputs() {
+    std::array<tron::McuInput, 4> inputs;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      inputs = control_.View().Inputs(MonotonicSeconds());
+    }
+    uint8_t active = 0;
+    for (size_t i = 0; i < inputs.size(); i++) active |= static_cast<uint8_t>(inputs[i].active << i);
+    if (published_inputs_ == active) return;
+    published_inputs_ = active;
+    mowbite_msgs::msg::HardwareInputs msg;
+    msg.stamp = now();
+    for (const auto& input : inputs) {
+      mowbite_msgs::msg::HardwareInput line;
+      line.name = input.name;
+      line.role = input.name;
+      line.reason = input.reason;
+      line.active = input.active;
+      line.assigned = true;
+      line.held = input.held;
+      line.active_high = true;
+      msg.inputs.push_back(line);
+    }
+    inputs_pub_->publish(msg);
+  }
+
   // Called by the timer and by the I/O thread, one at a time, so that the messages go out in the order they were made.
   void PublishStatus() {
     std::lock_guard<std::mutex> publish_lock(publish_mutex_);
@@ -621,6 +652,7 @@ class McuNode : public rclcpp::Node {
       msg.emergency = state.blocked;
       msg.emergency_latched = state.latched;
       msg.emergency_reason = state.emergency_reason;
+      msg.latch_count = state.latch_count;
       const uint32_t added = state.emergency_reason & ~logged_reason_;
       logged_reason_ = state.emergency_reason;
       // Before its first sample the IMU only blocks, that is no gap.
@@ -816,6 +848,8 @@ class McuNode : public rclcpp::Node {
   uint32_t logged_reason_ = 0;
   // BlockOf the last hw/status, under mutex_.
   uint64_t published_block_ = 0;
+  // One bit per input of the last hw/inputs, none before the first; only for the I/O thread.
+  std::optional<uint8_t> published_inputs_;
   double imu_timeout_s_;
   bool imu_seen_ = false;
   double measured_linear_scale_;
@@ -828,6 +862,7 @@ class McuNode : public rclcpp::Node {
   rclcpp::Publisher<HardwareStatus>::SharedPtr status_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr capabilities_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::ButtonEvent>::SharedPtr button_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::HardwareInputs>::SharedPtr inputs_pub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Service<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_srv_;

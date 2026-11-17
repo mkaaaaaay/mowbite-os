@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <iterator>
 #include <utility>
 #include <vector>
 
@@ -671,6 +672,68 @@ TEST_F(LatchCountTest, ANewReasonBetweenRequestAndTickSendsNoClearFrame) {
   control_.LatchEmergency(kReasonTilt);
   Run(now_ + 0.5);
   EXPECT_TRUE(clears_.empty());
+}
+
+// hw/status carries the count for a release with it: a latched driver never shows 0.
+TEST_F(LatchCountTest, NeverZeroOnceLatched) {
+  using Cause = void (*)(McuControl&, SensorInfo&);
+  const Cause causes[] = {[](McuControl&, SensorInfo& sensor) { sensor.stop = true; },
+                          [](McuControl&, SensorInfo& sensor) { sensor.lift = true; },
+                          [](McuControl&, SensorInfo& sensor) { sensor.bumper_left = true; },
+                          [](McuControl& control, SensorInfo&) { control.LatchEmergency(kReasonHighLevel); }};
+  for (size_t i = 0; i < std::size(causes); i++) {
+    McuControl control(GestureConfig());
+    SensorInfo sensor;
+    causes[i](control, sensor);
+    // From the first sample on, as after a start with STOP kept by the board.
+    for (int step = 1; step <= 3; step++) {
+      control.OnSensorInfo(sensor, step * 0.01);
+      control.Tick(step * 0.01, kWall);
+      const McuControlStatus status = control.Status(step * 0.01);
+      EXPECT_TRUE(status.latched) << i;
+      EXPECT_NE(status.latch_count, 0u) << i;
+    }
+  }
+}
+
+// A release with the count of hw/status, as the setup program asks for after its own STOP. The board keeps STOP, so
+// the try itself tells whether the button is free.
+TEST_F(BoardKeepsStopTest, AReleaseWithTheCountOfTheStatusShowsWhetherStopIsFree) {
+  Run(1.0);
+  sensor_.stop = true;
+  Run(now_ + 1.5);
+  const uint32_t count = control_.Status(now_).latch_count;
+  ASSERT_NE(count, 0u);
+  // Held: taken, one clear frame, STOP and the latch stay, and the count with them.
+  EXPECT_TRUE(control_.ReleaseEmergency(now_, count));
+  Run(now_ + 1.5);
+  EXPECT_EQ(clears_.size(), 1u);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  EXPECT_TRUE(control_.Status(now_).stop);
+  EXPECT_EQ(control_.Status(now_).latch_count, count);
+  // Let go: the board shows it until the next try, which releases.
+  sensor_.stop = false;
+  Run(now_ + 1.5);
+  EXPECT_TRUE(control_.Status(now_).stop);
+  EXPECT_TRUE(control_.ReleaseEmergency(now_, count));
+  Run(now_ + 0.1);
+  EXPECT_EQ(clears_.size(), 2u);
+  EXPECT_FALSE(control_.Status(now_).latched);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+}
+
+TEST_F(BoardKeepsStopTest, AShortBumperSinceTheStatusRefusesTheReleaseAndStaysInTheReason) {
+  Run(1.0);
+  Press(0.3, 1.5);
+  const uint32_t count = control_.Status(now_).latch_count;
+  sensor_.bumper_right = true;
+  Run(now_ + 0.02);
+  sensor_.bumper_right = false;
+  Run(now_ + 0.1);
+  EXPECT_FALSE(control_.ReleaseEmergency(now_, count));
+  Run(now_ + 1.5);
+  EXPECT_TRUE(clears_.empty());
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonStop | kReasonCollision);
 }
 
 // The core of the gesture alone, with a sample per tick as the caller gives it.

@@ -1,6 +1,7 @@
 #ifndef TRON_MCU_MCU_CONTROL_H
 #define TRON_MCU_MCU_CONTROL_H
 
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -112,6 +113,16 @@ struct StopEvent {
   uint32_t latch_count = 0;
 };
 
+// One fixed input of the Tron as hw/inputs lists it; its name is also its role in hw/status.
+struct McuInput {
+  const char* name = "";
+  // The emergency the driver latches with it: stop, lift or collision; empty for none.
+  const char* reason = "";
+  // The MCU keeps it after the sensor is free, until a clear frame.
+  bool held = false;
+  bool active = false;
+};
+
 enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked, kHeld };
 
 const char* BladeResultText(BladeResult result);
@@ -183,6 +194,8 @@ class McuControl {
 
   std::vector<SubPacket> Tick(double now, const WallClock& wall);
   McuControlStatus Status(double now) const;
+  // STOP, lift and the two bumpers; none active without fresh telemetry.
+  std::array<McuInput, 4> Inputs(double now) const;
 
  private:
   struct Repeat {
