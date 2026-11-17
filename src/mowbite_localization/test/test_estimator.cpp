@@ -853,6 +853,22 @@ TEST(E4GnssLatency, LateFixesDoNotHoldTheEstimateBack) {
   EXPECT_LT(std::abs(known.HeadingError()), 0.2 * kDeg);
 }
 
+// E4: a course that sets the heading turns the way of the latency with it, which went along the heading before.
+TEST(E4GnssLatency, AHeadingSetByTheCourseTurnsTheWaySinceTheFix) {
+  EstimatorConfig config;
+  config.gnss_latency = 0.2;
+  World w(config);
+  w.gnss_delay = 0.2;
+  w.heading = 90.0 * kDeg;
+  w.Ready();
+  ASSERT_FALSE(w.est.heading_valid());
+  for (int i = 0; i < 20 && !w.est.heading_valid(); ++i) w.Run(0.2, 0.5, 0.0);
+  ASSERT_TRUE(w.est.heading_valid());
+  EXPECT_LT(std::abs(w.HeadingError()), 0.5 * kDeg);
+  // Without the turn the 0.1 m of the latency lie along the heading of before, 0.14 m off.
+  EXPECT_LT(w.PositionError(), 0.01);
+}
+
 // E4: fixes later than gnss_latency say do not hold a turn back, on the spot or on an arc, with the wheels reporting
 // too little (the docking rate of 02.11.: about 2 degrees after the arcs and the turn in front of the station).
 TEST(E4GnssLatency, LateFixesDoNotHoldTurnsBack) {

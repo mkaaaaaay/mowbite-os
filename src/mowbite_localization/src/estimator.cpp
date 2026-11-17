@@ -101,6 +101,9 @@ FixResult Estimator::AddFix(const GnssFix& fix, double t) {
   if (result == FixResult::kRestarted || result == FixResult::kOutlierReset) track_.Clear();
   if (result != FixResult::kOutlier) track_.Add(antenna, t);
   if (result != FixResult::kFused) contradictions_ = 0;
+  // What the course of this fix changes the heading by.
+  const double heading_before = filter_.state()(2);
+  const auto turn = [&] { return WrapAngle(filter_.state()(2) - heading_before); };
   switch (result) {
     case FixResult::kRestarted:
     case FixResult::kWarmup:
@@ -108,7 +111,7 @@ FixResult Estimator::AddFix(const GnssFix& fix, double t) {
       break;
     case FixResult::kInitialized:
       Course(fix, MomentAt(then_time), t);
-      SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t,
+      SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t, turn(),
                  gate_.reason() == WarmupReason::kFirst ? std::nullopt : std::optional(gate_.reason()));
       break;
     case FixResult::kFused: {
@@ -117,7 +120,7 @@ FixResult Estimator::AddFix(const GnssFix& fix, double t) {
       const bool turned = Course(fix, MomentAt(then_time), t);
       if (turned || !heading_valid_) {
         contradictions_ = 0;
-        SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t, std::nullopt);
+        SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t, turn(), std::nullopt);
       } else if (!Contradicts(antenna, fix.accuracy, MomentAt(then_time))) {
         contradictions_ = 0;
         Fuse(antenna, fix.accuracy, MomentAt(then_time), t);
@@ -125,7 +128,7 @@ FixResult Estimator::AddFix(const GnssFix& fix, double t) {
         result = FixResult::kContradicting;
       } else {
         contradictions_ = 0;
-        SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t, WarmupReason::kOutliers);
+        SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t, turn(), WarmupReason::kOutliers);
         result = FixResult::kContradictionReset;
       }
       break;
@@ -137,12 +140,13 @@ FixResult Estimator::AddFix(const GnssFix& fix, double t) {
   return result;
 }
 
-void Estimator::SetOntoFix(const Eigen::Vector2d& antenna, double accuracy, const Moment& then, double t,
+void Estimator::SetOntoFix(const Eigen::Vector2d& antenna, double accuracy, const Moment& then, double t, double turn,
                            std::optional<WarmupReason> jump_reason) {
   const State before = filter_.state();
-  // base_link behind the antenna at the moment of the fix, moved on by what the estimate did since.
-  const Eigen::Vector2d base =
-      antenna - Turned(Lever(then.tilt), then.state(2)) + (before.head<2>() - then.state.head<2>());
+  // base_link behind the antenna at the moment of the fix, moved on by what the estimate did since: that way was
+  // integrated along the heading from before the course of the fix.
+  const Eigen::Vector2d since = before.head<2>() - then.state.head<2>();
+  const Eigen::Vector2d base = antenna - Turned(Lever(then.tilt), then.state(2)) + Turned(since, turn);
   filter_.SetPosition(base(0), base(1), accuracy * accuracy);
   ShiftHistory(before);
   accuracy_.OnFix(accuracy, t);

@@ -176,8 +176,9 @@ class Estimator {
   void PlaceBehindLastFix(double t);
   void Remember(double t);
   void ShiftHistory(const State& before);
-  // Puts base_link behind the antenna of a fix; with a reason it may be a jump.
-  void SetOntoFix(const Eigen::Vector2d& antenna, double accuracy, const Moment& then, double t,
+  // Puts base_link behind the antenna of a fix, the way since its moment turned by turn, what its course changed the
+  // heading by; with a reason it may be a jump.
+  void SetOntoFix(const Eigen::Vector2d& antenna, double accuracy, const Moment& then, double t, double turn,
                   std::optional<WarmupReason> jump_reason);
   // The fix lies further from the estimate than its covariance allows and than max_position_accuracy.
   bool Contradicts(const Eigen::Vector2d& antenna, double accuracy, const Moment& then) const;
