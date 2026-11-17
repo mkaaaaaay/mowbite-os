@@ -58,7 +58,29 @@ bool IsSpace(char c) {
   return std::isspace(static_cast<unsigned char>(c)) != 0;
 }
 
+bool IsNameChar(char c) {
+  return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+}
+
+// In lower case; a name that holds one of them has a secret value.
+constexpr std::string_view kSecretWords[] = {"password", "passwd", "token", "secret", "api_key", "private_key"};
+
+// Length of the secret word at text[at], 0 for none.
+std::size_t SecretWordAt(std::string_view text, std::size_t at) {
+  for (const std::string_view word : kSecretWords) {
+    if (StartsWithNoCase(text, at, word)) return word.size();
+  }
+  return 0;
+}
+
 }  // namespace
+
+bool IsSecretName(std::string_view name) {
+  for (std::size_t at = 0; at < name.size(); ++at) {
+    if (SecretWordAt(name, at) != 0) return true;
+  }
+  return false;
+}
 
 std::string CleanUtf8(std::string_view text) {
   std::string out;
@@ -110,20 +132,28 @@ std::string HideSecrets(std::string_view text) {
     while (end < out.size() && out[end] != '/' && out[end] != '@' && !IsSpace(out[end])) ++end;
     if (end < out.size() && out[end] == '@' && end > begin) out.replace(begin, end - begin, "***");
   }
-  // The value after a key word and = or :.
-  for (const std::string_view word : {"password", "passwd", "token", "secret"}) {
-    for (std::size_t at = 0; at < out.size(); ++at) {
-      if (!StartsWithNoCase(out, at, word)) continue;
-      std::size_t k = at + word.size();
-      while (k < out.size() && IsSpace(out[k])) ++k;
-      if (k >= out.size() || (out[k] != '=' && out[k] != ':')) continue;
-      ++k;
-      while (k < out.size() && IsSpace(out[k])) ++k;
-      std::size_t end = k;
+  // The value after a secret name and = or :, the name and a quoted value each in " or ' as in JSON.
+  for (std::size_t at = 0; at < out.size(); ++at) {
+    const std::size_t word = SecretWordAt(out, at);
+    if (word == 0) continue;
+    std::size_t k = at + word;
+    while (k < out.size() && IsNameChar(out[k])) ++k;
+    if (k < out.size() && (out[k] == '"' || out[k] == '\'')) ++k;
+    while (k < out.size() && IsSpace(out[k])) ++k;
+    if (k >= out.size() || (out[k] != '=' && out[k] != ':')) continue;
+    ++k;
+    while (k < out.size() && IsSpace(out[k])) ++k;
+    std::size_t end = k;
+    if (k < out.size() && (out[k] == '"' || out[k] == '\'')) {
+      const char quote = out[k];
+      end = ++k;
+      while (end < out.size() && out[end] != quote) end += out[end] == '\\' ? 2 : 1;
+      end = std::min(end, out.size());
+    } else {
       while (end < out.size() && !IsSpace(out[end])) ++end;
-      if (end > k) out.replace(k, end - k, "***");
-      at = k + 2;
     }
+    if (end > k) out.replace(k, end - k, "***");
+    at = k + 2;
   }
   return out;
 }

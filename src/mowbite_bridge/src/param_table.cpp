@@ -1,8 +1,5 @@
 #include "mowbite_bridge/param_table.h"
 
-#include <algorithm>
-#include <cctype>
-
 #include "mowbite_bridge/text.h"
 
 namespace mowbite_bridge {
@@ -15,11 +12,6 @@ nlohmann::json ParseObject(std::string_view text) {
   if (NestingDepth(text) > kMaxDepth) return nlohmann::json::object();
   nlohmann::json j = nlohmann::json::parse(text.begin(), text.end(), nullptr, false);
   return j.is_object() ? j : nlohmann::json::object();
-}
-
-bool IsSecret(std::string name) {
-  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
-  return name.find("password") != std::string::npos;
 }
 
 // "/name" without a slash at the end, whatever the node wrote.
@@ -44,7 +36,7 @@ bool ParamTable::Apply(std::string_view message) {
   if (key == "/") return false;
   nlohmann::json flat = nlohmann::json::object();
   for (const auto& [name, value] : params->items()) {
-    flat[key + "/" + name] = IsSecret(name) ? nlohmann::json() : value;
+    flat[key + "/" + name] = IsSecretName(name) ? nlohmann::json() : value;
   }
   nodes_[key] = std::move(flat);
   const std::string before = text_;

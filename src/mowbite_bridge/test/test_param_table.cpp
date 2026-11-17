@@ -44,6 +44,14 @@ TEST(ParamTable, PasswordsAreNull) {
   EXPECT_EQ(table.Text(), R"({"/ntrip/caster_Password":null,"/ntrip/password":null,"/ntrip/user":"x"})");
 }
 
+TEST(ParamTable, SecretsAreNull) {
+  ParamTable table;
+  table.Apply(R"({"node":"/n","params":{"api_token":"t1","client_secret":"s1","passwd":"p1","api_key":"k1",)"
+              R"("private_key":"k2","geometry_key":"g","user":"x"}})");
+  EXPECT_EQ(table.Text(), R"({"/n/api_key":null,"/n/api_token":null,"/n/client_secret":null,"/n/geometry_key":"g",)"
+                          R"("/n/passwd":null,"/n/private_key":null,"/n/user":"x"})");
+}
+
 TEST(ParamTable, MessagesOfAnotherShapeChangeNothing) {
   ParamTable table(R"({"/a/b":1})");
   for (const std::string& bad : std::vector<std::string>{

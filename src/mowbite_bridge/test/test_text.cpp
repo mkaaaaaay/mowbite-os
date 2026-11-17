@@ -41,3 +41,12 @@ TEST(HideSecrets, LoginsInUrlsAndValuesAfterKeyWords) {
   EXPECT_EQ(HideSecrets("http://caster:2101/MOUNT and a@b"), "http://caster:2101/MOUNT and a@b");
   EXPECT_EQ(HideSecrets("password missing"), "password missing");
 }
+
+TEST(HideSecrets, QuotedNamesAndValuesAsInJson) {
+  EXPECT_EQ(HideSecrets(R"({"password": "two words", "user": "u"})"), R"({"password": "***", "user": "u"})");
+  EXPECT_EQ(HideSecrets(R"({"api_token":"a\"b c","n":1})"), R"({"api_token":"***","n":1})");
+  EXPECT_EQ(HideSecrets("client_secret='x y' private_key: k1 api_key=k2"),
+            "client_secret='***' private_key: *** api_key=***");
+  EXPECT_EQ(HideSecrets(R"({"token": "open)"), R"({"token": "***)");
+  EXPECT_EQ(HideSecrets(R"({"geometry_key": "g"})"), R"({"geometry_key": "g"})");
+}
