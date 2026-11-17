@@ -94,8 +94,12 @@ steps:
             help: Press the bumper in on the right alone until the proposal comes, then let go.
     symbol: board
     note:
-      de: Bei Verkabelung nach Standard kann dieser Schritt übersprungen werden.
-      en: Wired as standard, this step can be skipped.
+      de: >-
+        Bei Verkabelung nach Standard kann dieser Schritt übersprungen werden. Nach der Zuordnung bleibt der Mäher im
+        Notaus, bis er in der App aufgehoben wird.
+      en: >-
+        Wired as standard, this step can be skipped. After it the mower stays in emergency stop until it is released
+        in the app.
   - id: stop
     stage: inputs
     check: input

@@ -3,8 +3,9 @@ the launch runs as a process of its own that is started again whenever it ends, 
 inputs_assign restarts the OS with the driver learning (INPUTS_LEARNING, nothing stops), takes one line per sensor,
 writes the table into the parameter file of the program and restarts once more: the driver comes up with that table.
 Each end of the launch is a stop in order (clean session, no note of a crash, no restart hold). A latch from above
-during learning waits for a release before the restart. After it the steps of the inputs run against the new table,
-and the program itself releases the emergency each press brought.
+during learning waits for a release before the restart. The board stays held from learning until the user releases it;
+after that the steps of the inputs run against the new table, and the program itself releases the emergency each
+press brought.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_nx60i_inputs.py
 """
@@ -262,7 +263,7 @@ class TestNx60iInputs(unittest.TestCase):
         answer = p.change("setup.start")
         self.assertIn("result", answer, answer)
         self.restarted(2)
-        self.assertTrue(p.wait(lambda: p.inputs.learning, 10), "the driver does not learn")
+        self.assertTrue(p.wait(lambda: p.inputs.learning and p.inputs.inputs, 10), "the driver does not learn")
         self.assertEqual([line.name for line in p.inputs.inputs], CANDIDATES)
         for line in p.inputs.inputs:
             self.assertEqual((line.role, line.assigned, line.active), ("", False, False), line.name)
@@ -348,7 +349,12 @@ class TestNx60iInputs(unittest.TestCase):
                                  "inputs.gpio_delays_ms": [10, 10, 2500, 2500, 500, 500],
                                  "inputs.gpio_roles": [part["role"] for part in STEPS[STEP]["parts"]]})
         self.assertTrue(p.wait(lambda: p.robot.current_state == "IDLE", 60), p.robot)
-        # Nothing of learning is left on the board or in the driver.
+        # The driver that learned held the board, and no restart takes that away: it waits for the release of the user.
+        held = HardwareStatus.REASON_LATCH | HardwareStatus.REASON_HIGH_LEVEL
+        self.assertTrue(p.wait(lambda: p.status.emergency_reason == held, 10), p.status.emergency_reason)
+        time.sleep(2.0)
+        self.assertEqual(p.status.emergency_reason, held)
+        self.assertIn("result", p.rpc("emergency.reset"))
         self.assertTrue(p.wait(lambda: p.status.emergency_reason == 0, 10), p.status.emergency_reason)
         self.assertEqual([name for name in CRASH_NOTES if os.path.exists(os.path.join(DATA, name))], [])
 

@@ -322,18 +322,22 @@ table of the platform. `params.node` names the node of the driver, each part is 
 lift, bumper_left, bumper_right) and the `delay_ms` its line gets. The step writes `inputs.learn` for that node into
 `<data_dir>/<name>.setup.yaml` and restarts the OS: with `restart: self` the node ends the container in order and the
 launch ends with it, for whatever runs the launch to start it again (compose on the NX60i); with `restart: host` it
-asks mowbite-host (`host.restart_os`). It restarts only in IDLE and with no emergency but the one of learning: a
-restart never takes an emergency away. With the driver learning the step looks at the lines untouched for `quiet`,
+asks mowbite-host (`host.restart_os`). It restarts only with the mower standing in IDLE (not driven by hand, not
+calibrating), not held by an update and with no emergency but the one of learning: a restart never takes an emergency
+away. With the driver learning the step looks at the lines untouched for `quiet`,
 then takes one line per part, each confirmed by the user, writes the table in place of `inputs.learn`, restarts again
 and holds `hw/inputs` against the table; a value the file kept by hand overrules fails it with `NOT_APPLIED` and the
 key. The checks `input` are open again after it, and once it is ok the user can make the delay of a line shorter than
 `delay_ms` (`delay_<part>` in `inputs[]` of the step), never longer. Make the step skippable where the table of the
-platform fits a mower wired as standard.
+platform fits a mower wired as standard. A driver that holds its board while it learns leaves it held: the xCore
+comes back with HIGH_LEVEL after the last restart and waits for `emergency.reset`, which the note of the step should
+tell.
 
 A driver that learns takes these parameters under its node (names in `mowbite_api/setup.h`): `inputs.learn`, and the
 table as lists with one entry per line, `inputs.gpio_lines`, `inputs.gpio_active_high`, `inputs.gpio_reasons` (stop,
 lift, collision), `inputs.gpio_delays_ms` and `inputs.gpio_roles`. Started with `inputs.learn` it reports its
-candidate lines in `hw/inputs` with `learning` true, `assigned` false and `active` as the level of the line; started
+candidate lines in `hw/inputs` with `learning` true, `assigned` false and `active` as the level of the line, and no
+line at all while it does not know the levels (the step waits, and ends with `NO_DATA` when they are lost); started
 with the table, every line with `assigned`, its role, level and delay. `test_nx60i_inputs.py` runs the step against
 the real start, both restarts included.
 
