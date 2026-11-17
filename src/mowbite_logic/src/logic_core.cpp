@@ -195,9 +195,7 @@ std::vector<Effect> LogicCore::TakeEffects() {
   for (auto& effect : effects_) {
     if (auto* checkpoint = std::get_if<Checkpoint>(&effect)) checkpoint->text = CheckpointText(job_.progress());
   }
-  std::vector<Effect> out;
-  out.swap(effects_);
-  return out;
+  return effects_.Take();
 }
 
 void LogicCore::OnPositionJump(double to_x, double to_y, double distance_m, bool after_outliers) {
