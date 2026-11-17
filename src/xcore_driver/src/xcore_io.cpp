@@ -146,9 +146,9 @@ bool XcoreIo::LatchEmergency(uint32_t bits) {
   return control_.LatchEmergency(bits);
 }
 
-std::optional<ReleaseRefusal> XcoreIo::ReleaseEmergency() {
+std::optional<ReleaseRefusal> XcoreIo::ReleaseEmergency(uint32_t latch_count) {
   std::lock_guard<std::mutex> lock(mutex_);
-  return control_.ReleaseEmergency(MonotonicSeconds());
+  return control_.ReleaseEmergency(MonotonicSeconds(), latch_count);
 }
 
 BladeResult XcoreIo::SetBlade(const BladeRequest& request, uint32_t* emergency_reason) {

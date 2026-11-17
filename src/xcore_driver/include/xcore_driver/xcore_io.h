@@ -120,7 +120,7 @@ class XcoreIo {
   void OnCmdVel(double linear, double angular);
   bool LatchEmergency(uint32_t bits);
   // The caller has checked for other hosts (ForeignHosts) before.
-  std::optional<ReleaseRefusal> ReleaseEmergency();
+  std::optional<ReleaseRefusal> ReleaseEmergency(uint32_t latch_count);
   BladeResult SetBlade(const BladeRequest& request, uint32_t* emergency_reason);
   // False when the queue was full; the bytes dropped so far in rtcm_dropped_bytes.
   bool PushRtcm(const uint8_t* data, size_t size);

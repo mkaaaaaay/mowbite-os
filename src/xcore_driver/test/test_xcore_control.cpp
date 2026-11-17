@@ -472,6 +472,68 @@ TEST(XcoreControl, CauseStillThereLatchesAgainAfterRelease) {
   EXPECT_EQ(f.control.Status(0.3).emergency_reason, kReasonStop | kReasonLatch);
 }
 
+TEST(XcoreControl, EveryReasonThatLatchesCounts) {
+  Fixture f;
+  EXPECT_EQ(f.control.Status(0).latch_count, 0u);
+  f.Board(reason::kStop | reason::kLatch, 0.1);
+  f.control.Tick(0.1);
+  EXPECT_EQ(f.control.Status(0.1).latch_count, 1u);
+  // The same reason once more is none, another one is.
+  f.Board(reason::kStop | reason::kLatch, 0.2);
+  f.control.Tick(0.2);
+  EXPECT_EQ(f.control.Status(0.2).latch_count, 1u);
+  f.Board(reason::kCollision | reason::kLatch, 0.3);
+  f.control.Tick(0.3);
+  EXPECT_EQ(f.control.Status(0.3).latch_count, 2u);
+  // After the release the reason counts again.
+  f.Board(reason::kLatch, 0.4);
+  EXPECT_FALSE(f.control.ReleaseEmergency(0.4).has_value());
+  f.Board(0, 0.5);
+  f.Board(reason::kStop | reason::kLatch, 0.6);
+  f.control.Tick(0.6);
+  EXPECT_EQ(f.control.Status(0.6).latch_count, 3u);
+}
+
+TEST(XcoreControl, AReleaseWithTheCountOfBeforeAnotherReasonIsRefused) {
+  Fixture f;
+  f.Board(reason::kStop | reason::kLatch, 0.1);
+  f.control.Tick(0.1);
+  const uint32_t count = f.control.Status(0.1).latch_count;
+  f.Board(reason::kLatch, 0.2);
+  // The lift latches before the release arrives, without a tick between.
+  f.Board(reason::kLift | reason::kLatch, 0.3);
+  f.Board(reason::kLatch, 0.35);
+  const auto refused = f.control.ReleaseEmergency(0.4, count);
+  ASSERT_TRUE(refused);
+  EXPECT_EQ(refused->code, "LATCH_CHANGED");
+  EXPECT_EQ(f.control.Status(0.4).emergency_reason, kReasonStop | kReasonLift | kReasonLatch);
+  EXPECT_EQ(f.control.Status(0.4).latch_count, count + 1);
+  // With the count of now it releases, as without one.
+  EXPECT_FALSE(f.control.ReleaseEmergency(0.5, count + 1).has_value());
+  f.Board(0, 0.6);
+  EXPECT_FALSE(f.control.Status(0.6).blocked);
+}
+
+TEST(XcoreControl, LearningHoldsTheBoardAndTakesNoRelease) {
+  ControlConfig config = Fixture::Config();
+  config.learn_inputs = true;
+  Fixture f(config);
+  EXPECT_EQ(f.control.Status(0).emergency_reason, kReasonInputsLearning | kReasonLatch);
+  auto out = Of(f.control.Tick(0), kEmergencyService);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(EmergencyOf(out[0]).first, reason::kHighLevel | reason::kLatch);
+  const auto refused = f.control.ReleaseEmergency(0.1);
+  ASSERT_TRUE(refused);
+  EXPECT_EQ(refused->code, "LEARNING");
+  f.control.OnCmdVel(0.2, 0, 0.2);
+  EXPECT_TRUE(Of(f.control.Tick(0.2), kDiffDriveService).empty());
+  EXPECT_TRUE(f.control.Status(0.2).blocked);
+  // The lines show as the board reports them.
+  f.control.OnOutput(kInputService, input::kOutActive, U64(1u << 3), 0, 0.3);
+  ASSERT_TRUE(f.control.Status(0.3).inputs);
+  EXPECT_EQ(*f.control.Status(0.3).inputs, 1u << 3);
+}
+
 namespace {
 
 constexpr double kG = 9.80665;

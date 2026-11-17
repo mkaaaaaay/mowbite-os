@@ -672,9 +672,10 @@ class SimProbe:
         """hw/blade (self.blade)."""
         return self.call(self.blade, SetBlade.Request(on=on, lease_s=lease_s, speed_percent=speed, height_mm=height))
 
-    def set_emergency(self, latch, bits=0):
+    def set_emergency(self, latch, bits=0, latch_count=0):
         """hw/emergency (self.emergency)."""
-        return self.call(self.emergency, SetEmergency.Request(latch=latch, bits=bits, reason=self.emergency_reason))
+        return self.call(self.emergency, SetEmergency.Request(latch=latch, bits=bits, reason=self.emergency_reason,
+                                                              latch_count=latch_count))
 
     def cmd_vel_for(self, linear, seconds):
         """cmd_vel (self.cmd_vel) at 10 Hz for that long; the time of the board when it began, if it has a log."""

@@ -11,6 +11,7 @@
 #include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
+#include <mowbite_msgs/msg/hardware_inputs.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/rtcm.hpp>
 #include <mowbite_msgs/msg/sensor_spec.hpp>
@@ -67,6 +68,7 @@ static_assert(xcore::kReasonMowerNotStopped == HardwareStatus::REASON_MOWER_NOT_
 static_assert(xcore::kReasonWheelRunaway == HardwareStatus::REASON_WHEEL_RUNAWAY);
 static_assert(xcore::kReasonForeignHost == HardwareStatus::REASON_FOREIGN_HOST);
 static_assert(xcore::kReasonDriverStall == HardwareStatus::REASON_DRIVER_STALL);
+static_assert(xcore::kReasonInputsLearning == HardwareStatus::REASON_INPUTS_LEARNING);
 static_assert(static_cast<uint8_t>(xcore::BladeOffReason::kLeaseExpired) == HardwareStatus::BLADE_OFF_LEASE_EXPIRED);
 static_assert(static_cast<uint8_t>(xcore::BladeOffReason::kReconnect) == HardwareStatus::BLADE_OFF_RECONNECT);
 static_assert(static_cast<uint8_t>(mowbite_gnss::Solution::kSingle) == GnssFix::SINGLE);
@@ -174,6 +176,12 @@ class XcoreNode : public rclcpp::Node {
     status_pub_ = create_publisher<HardwareStatus>("hw/status", 10);
     capabilities_pub_ = create_publisher<mowbite_msgs::msg::HardwareCapabilities>("hw/capabilities", LatchedQos());
     PublishCapabilities("");
+    inputs_pub_ = create_publisher<mowbite_msgs::msg::HardwareInputs>("hw/inputs", LatchedQos());
+    PublishInputs(std::nullopt);
+    if (inputs_.learning) {
+      RCLCPP_WARN(get_logger(), "inputs.learn: watching %zu candidate lines, none of them stops anything; motion and "
+                  "blade stay blocked until a start without it", inputs_.gpio.size());
+    }
     if (gnss_source_ == get_name()) {
       SetUpGnss();
     } else {
@@ -296,6 +304,9 @@ class XcoreNode : public rclcpp::Node {
     auto delays = declare_parameter("inputs.gpio_delays_ms", std::vector<int64_t>{});
     auto roles = declare_parameter("inputs.gpio_roles", std::vector<std::string>{});
     auto cover = declare_parameter("inputs.cover", std::vector<std::string>{});
+    // The lines a sensor can be on, and whether this start watches them instead of the table.
+    const auto candidates = declare_parameter("inputs.candidates", std::vector<std::string>{});
+    const bool learn = declare_parameter("inputs.learn", false);
     const size_t n = lines.size();
     if (active_high.size() != n || reasons.size() != n || delays.size() != n || roles.size() != n) {
       throw std::invalid_argument("inputs.gpio_* need one entry per line");
@@ -312,6 +323,11 @@ class XcoreNode : public rclcpp::Node {
       auto equals = entry.find('=');
       if (equals == std::string::npos) throw std::invalid_argument("inputs.cover entries are id=value");
       config.cover.push_back(xcore::CoverSetting{entry.substr(0, equals), entry.substr(equals + 1)});
+    }
+    if (learn) {
+      if (candidates.empty()) throw std::invalid_argument("inputs.learn needs inputs.candidates");
+      config.gpio = xcore::CandidateInputs(candidates);
+      config.learning = true;
     }
     if (auto problem = xcore::CheckInputConfig(config)) throw std::invalid_argument("inputs: " + *problem);
     return config;
@@ -343,6 +359,7 @@ class XcoreNode : public rclcpp::Node {
 
   xcore::ControlConfig LoadControl() {
     xcore::ControlConfig c;
+    c.learn_inputs = inputs_.learning;
     c.cmd_vel_timeout_s = declare_parameter("cmd_vel_timeout", c.cmd_vel_timeout_s);
     c.max_linear_speed =
         xcore::CappedLimit("max_linear_speed", declare_parameter("max_linear_speed", c.max_linear_speed), LinearCap());
@@ -705,6 +722,27 @@ class XcoreNode : public rclcpp::Node {
     return msg;
   }
 
+  // hw/inputs: every line of the table with bit i of the mask of the board, none switched while the mask is unknown.
+  void PublishInputs(const std::optional<uint64_t>& mask) {
+    mowbite_msgs::msg::HardwareInputs msg;
+    msg.stamp = now();
+    msg.learning = inputs_.learning;
+    for (size_t i = 0; i < inputs_.gpio.size(); i++) {
+      const xcore::GpioInput& in = inputs_.gpio[i];
+      mowbite_msgs::msg::HardwareInput line;
+      line.name = in.line;
+      line.role = in.role;
+      line.reason = in.reason;
+      line.active = mask && i < 64 && ((*mask >> i) & 1u) != 0;
+      line.assigned = !inputs_.learning;
+      line.active_high = in.active_high;
+      line.delay_ms = in.delay_ms;
+      msg.inputs.push_back(line);
+    }
+    inputs_pub_->publish(msg);
+    inputs_sent_ = mask;
+  }
+
   // Only in the output thread, so that the messages go out in the order they were made.
   void PublishStatus(const xcore::IoSnapshot& snapshot) {
     const auto& s = snapshot.status;
@@ -713,6 +751,7 @@ class XcoreNode : public rclcpp::Node {
     msg.emergency = s.blocked;
     msg.emergency_latched = s.latched;
     msg.emergency_reason = s.emergency_reason;
+    msg.latch_count = s.latch_count;
     msg.telemetry_ok = s.telemetry_ok;
     msg.hold = s.held;
     msg.lift = s.lift;
@@ -742,6 +781,7 @@ class XcoreNode : public rclcpp::Node {
       msg.link_errors = snapshot.link_dropped;
     }
     status_pub_->publish(msg);
+    if (s.inputs != inputs_sent_) PublishInputs(s.inputs);
     if (s.blade_on != blade_on_logged_) {
       blade_on_logged_ = s.blade_on;
       if (s.blade_on) {
@@ -778,7 +818,7 @@ class XcoreNode : public rclcpp::Node {
       if (auto foreign = xcore::ForeignHosts(bind_ip_, group_port_)) {
         refused = xcore::ReleaseRefusal{"FOREIGN_HOST", *foreign};
       } else {
-        refused = Io().ReleaseEmergency();
+        refused = Io().ReleaseEmergency(req.latch_count);
       }
       if (refused) {
         log.Error("Emergency release refused: " + refused->message);
@@ -858,6 +898,8 @@ class XcoreNode : public rclcpp::Node {
   // Only the output thread.
   bool blade_on_logged_ = false;
   uint32_t logged_reason_ = 0;
+  // The mask hw/inputs went out with the last time.
+  std::optional<uint64_t> inputs_sent_;
   uint64_t send_failed_ = 0;
   uint64_t late_ticks_ = 0;
   double late_max_s_ = 0;
@@ -881,6 +923,7 @@ class XcoreNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
   rclcpp::Publisher<HardwareStatus>::SharedPtr status_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::HardwareInputs>::SharedPtr inputs_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr capabilities_pub_;
   rclcpp::Publisher<GnssFix>::SharedPtr pose_pub_;
   rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr datum_pub_;

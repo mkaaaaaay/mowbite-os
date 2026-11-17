@@ -154,7 +154,14 @@ bool XcoreControl::LatchEmergency(uint32_t bits) {
   return true;
 }
 
-std::optional<ReleaseRefusal> XcoreControl::ReleaseEmergency(double now) {
+std::optional<ReleaseRefusal> XcoreControl::ReleaseEmergency(double now, uint32_t latch_count) {
+  if (config_.learn_inputs) {
+    return ReleaseRefusal{"LEARNING", "the driver learns its inputs, only a start without inputs.learn ends it"};
+  }
+  CountLatches();
+  if (latch_count != 0 && latch_count != latch_count_) {
+    return ReleaseRefusal{"LATCH_CHANGED", "another reason latched since the release was asked for"};
+  }
   if (tilt_latched_) {
     ReleaseRefusal refusal;
     if (!last_imu_s_ || now - *last_imu_s_ > config_.imu_fresh_s + kTimeEpsilon) {
@@ -186,6 +193,7 @@ std::optional<ReleaseRefusal> XcoreControl::ReleaseEmergency(double now) {
   stalled_ = false;
   drive_fault_ = false;
   regulator_.ClearFault();
+  counted_ = Kept();
   clear_remaining_ = config_.repeat_count;
   next_emergency_s_ = now;
   return std::nullopt;
@@ -474,6 +482,7 @@ std::vector<InputValue> XcoreControl::Tick(double now) {
   std::vector<InputValue> out;
   // Before anything goes out: after a stall of this thread the board may have stopped on its own.
   CheckStall(now);
+  CountLatches();
   bool blocked = Blocked(now);
 
   // Emergency: the host's latch, a pending release, and in any case the heartbeat for the board.
@@ -564,7 +573,24 @@ bool XcoreControl::Blocked(double now) const {
 }
 
 bool XcoreControl::HoldsBoard() const {
-  return host_latch_ || mower_not_stopped_ || link_lost_ || drive_fault_ || fault_bits_ || tilt_latched_;
+  return host_latch_ || mower_not_stopped_ || link_lost_ || drive_fault_ || fault_bits_ || tilt_latched_ ||
+         config_.learn_inputs;
+}
+
+uint32_t XcoreControl::Kept() const {
+  uint32_t bits = host_latch_ | latched_causes_ | fault_bits_;
+  if (tilt_latched_) bits |= kReasonTilt;
+  if (drive_fault_) bits |= kReasonWheelRunaway;
+  if (mower_not_stopped_) bits |= kReasonMowerNotStopped;
+  if (stalled_) bits |= kReasonDriverStall;
+  if (link_lost_) bits |= reason::kTimeoutHighLevel;
+  return bits;
+}
+
+void XcoreControl::CountLatches() {
+  const uint32_t kept = Kept();
+  if ((kept & ~counted_) != 0 && ++latch_count_ == 0) latch_count_ = 1;
+  counted_ = kept;
 }
 
 uint32_t XcoreControl::Reason(double now) const {
@@ -587,6 +613,7 @@ uint32_t XcoreControl::Reason(double now) const {
   if (tilt_latched_) bits |= kReasonTilt | kReasonLatch;
   if (host_latch_ || latched_causes_) bits |= kReasonLatch;
   bits |= latched_causes_;
+  if (config_.learn_inputs) bits |= kReasonInputsLearning | kReasonLatch;
   if (TelemetryStale(now)) bits |= kReasonTimeoutInputs;
   if (!services_ready_) bits |= reason::kServiceNotReady;
   if (!firmware_compatible_) bits |= kReasonFirmwareIncompatible;
@@ -611,6 +638,8 @@ ControlStatus XcoreControl::Status(double now) const {
   s.blocked = s.emergency_reason != 0;
   s.held = held_;
   s.latched = (s.emergency_reason & kReasonLatch) != 0;
+  s.latch_count = latch_count_;
+  s.inputs = active_inputs_;
   s.telemetry_ok = !TelemetryStale(now);
   s.lift = InputActive(inputs_.lift);
   s.stop = InputActive(inputs_.stop);

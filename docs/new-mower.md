@@ -26,6 +26,7 @@ no parameter services.
 | service | `hw/blade` | `mowbite_msgs/SetBlade` |
 | service | `hw/charge` | `mowbite_msgs/SetCharge` |
 | publishes, optional | `hw/button` | `mowbite_msgs/ButtonEvent` (reliable, never latched) |
+| publishes, latched, optional | `hw/inputs` | `mowbite_msgs/HardwareInputs` |
 | publishes | `imu/data` | `sensor_msgs/Imu` |
 | publishes | `gps/absolute_pose` | `mowbite_msgs/GnssFix` |
 | publishes, latched | `gps/datum` | `sensor_msgs/NavSatFix` |
@@ -47,6 +48,17 @@ Duties:
 - Emergency: reason bits numbered like the EMERGENCY event; stop button and lift stay latched until a release. The host
   latches only its own bits (`kHostLatchReasons` in `mowbite_hold/restart.h`). A release waits a short window for the
   flags to drop; a new reason within it ends the window without releasing.
+- `latch_count` of `hw/status` goes up with every reason that latches and is never 0 once one did. A release that
+  carries it is refused with `LATCH_CHANGED` when another reason latched since: so the setup program releases the
+  emergency of an input it just checked and never one that came meanwhile. A driver that leaves it 0 gets no such
+  release, the user releases in the app.
+- Inputs one by one (optional): `hw/inputs` names every input with its role, the emergency it brings, whether it is
+  switched, and `held` when the board keeps it switched until the release (then a release is the only way to see
+  that the sensor is free). The setup program checks every line of a role with it, so a dead contact of a pair
+  shows. A driver whose table of inputs is a setting (`xcore_driver`: `inputs.*`) also takes `inputs.candidates`,
+  the lines a sensor can be on, and `inputs.learn`: started with it, it watches the candidates instead of the table,
+  none of them stops anything, and it holds the emergency `INPUTS_LEARNING` that no release ends, so nothing moves
+  until a start without it.
 - Release at the mower (optional, G37): a driver that sees every sample of its stop button may recognise the gesture
   itself (`tron_mcu/stop_release.h`: free 2 s, then a short press of 0.1 to 2 s) and report HELD, LONG and CANCELED
   on `hw/button`. It never releases by itself: the logic does, like `emergency.reset`, with the `latch_count` of LONG,

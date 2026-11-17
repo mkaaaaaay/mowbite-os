@@ -32,7 +32,12 @@ struct CoverSetting {
 struct InputConfig {
   std::vector<GpioInput> gpio;
   std::vector<CoverSetting> cover;
+  // gpio holds the candidate lines of the platform, none with a reason or a role: the driver learns its inputs.
+  bool learning = false;
 };
+
+// The candidate lines as the table of a driver that learns: active high, without reason, delay and role.
+std::vector<GpioInput> CandidateInputs(const std::vector<std::string>& lines);
 
 // nullopt with a message if a value is out of what the board accepts.
 std::optional<std::string> CheckInputConfig(const InputConfig& config);

@@ -29,7 +29,7 @@ import launch_testing.actions
 import rclpy
 from geometry_msgs.msg import Twist, TwistStamped, Vector3
 from launch.actions import TimerAction
-from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus
+from mowbite_msgs.msg import HardwareCapabilities, HardwareInputs, HardwareStatus
 from mowbite_msgs.srv import SetBlade, SetEmergency
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -69,9 +69,11 @@ class Probe(DriverProbe):
         super().__init__("driver_contract_probe")
         self.status = None
         self.capabilities = None
+        self.inputs = None
         self.odom = 0
         self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
         self.node.create_subscription(HardwareCapabilities, "hw/capabilities", self._set("capabilities"), LATCHED)
+        self.node.create_subscription(HardwareInputs, "hw/inputs", self._set("inputs"), LATCHED)
         self.node.create_subscription(TwistStamped, "hw/wheel_odom", self._odom, 10)
         self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
         self.blade = self.node.create_client(SetBlade, "hw/blade")
@@ -256,6 +258,48 @@ class TestDriverContract(unittest.TestCase):
     def test_i_lift_stays_until_release(self):
         # A board may wait before raised wheels count as a lift.
         self.latched_until_release("lift", HardwareStatus.REASON_LIFT, 5)
+
+    def test_ia_release_with_an_old_count_is_refused(self):
+        # A driver that counts its latches refuses a release that carries the count of before another reason.
+        p = self.probe
+        CASE.inputs(stop=True)
+        s = p.wait_for(lambda p: p.status.emergency and p.status.stop and p.status, 2)
+        self.assertTrue(s, "stop gave no emergency")
+        CASE.inputs()
+        self.assertTrue(p.wait_for(lambda p: not p.status.stop, 2), "stop stays shown")
+        count = p.status.latch_count
+        if count == 0:
+            self.assertTrue(self.release(), "release failed")
+            self.skipTest("the driver does not count its latches")
+        self.assertTrue(p.set_emergency(True, HardwareStatus.REASON_TILT).success)
+        self.assertTrue(p.wait_for(lambda p: p.status.latch_count != count, 2), "the count stays")
+        answer = p.set_emergency(False, latch_count=count)
+        self.assertFalse(answer.success)
+        self.assertEqual(answer.code, "LATCH_CHANGED")
+        time.sleep(0.3)
+        self.assertEqual(p.status.emergency_reason, LATCH | HardwareStatus.REASON_STOP | HardwareStatus.REASON_TILT)
+        self.assertTrue(p.set_emergency(False, latch_count=p.status.latch_count).success)
+        self.assertTrue(p.wait_for(lambda p: not p.status.emergency, 3), "release failed")
+
+    def test_ib_inputs_one_by_one(self):
+        # hw/inputs, where the driver has it: every input of the table, the stop ones switched with the button.
+        p = self.probe
+        if not p.wait_for(lambda p: p.inputs is not None, 2):
+            self.skipTest("the driver has no hw/inputs")
+        self.assertFalse(p.inputs.learning)
+        roles = [i.role for i in p.inputs.inputs]
+        for role in ("stop", "lift"):
+            self.assertIn(role, roles)
+        self.assertTrue(all(i.assigned and not i.active for i in p.inputs.inputs), p.inputs.inputs)
+        CASE.inputs(stop=True)
+        switched = p.wait_for(lambda p: [i.name for i in p.inputs.inputs if i.active], 2)
+        CASE.inputs()
+        self.assertTrue(switched, "no input shows the stop button")
+        by_name = {i.name: i for i in p.inputs.inputs}
+        self.assertTrue(all(by_name[name].role == "stop" for name in switched), switched)
+        self.assertTrue(p.wait_for(lambda p: not p.status.stop, 2), "stop stays shown")
+        self.assertTrue(self.release(), "release failed")
+        self.assertTrue(p.wait_for(lambda p: not any(i.active for i in p.inputs.inputs), 2), "an input stays switched")
 
     def test_j_host_latches_with_its_own_bits_only(self):
         # The bits of the safety filter stay until the release; a node above the driver cannot fake a lift.

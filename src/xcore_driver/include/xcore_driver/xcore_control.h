@@ -29,6 +29,8 @@ double MeasurementSpeedCap(double measurement_speed_limit);
 double CappedLimit(const char* name, double value, double cap);
 
 struct ControlConfig {
+  // Started with inputs.learn: INPUTS_LEARNING stands and holds the board, no release ends it.
+  bool learn_inputs = false;
   // The emergency input goes out this often; the board latches TIMEOUT_HIGH_LEVEL after 1 s without one.
   double emergency_period_s = 0.25;
   // Drive commands go out this often while the wheels are commanded; the board stops them after 1 s without one.
@@ -102,6 +104,8 @@ constexpr uint32_t kReasonMowerNotStopped = 1u << 17;
 constexpr uint32_t kReasonWheelRunaway = 1u << 18;
 constexpr uint32_t kReasonForeignHost = 1u << 19;
 constexpr uint32_t kReasonDriverStall = 1u << 20;
+// The driver started with inputs.learn: the board watches the candidate lines and none of them stops anything.
+constexpr uint32_t kReasonInputsLearning = 1u << 22;
 // Causes the board latches; the driver keeps them in its reason until the release, also across a restart of the board.
 constexpr uint32_t kLatchedCauses = (1u << 2) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 9) | (1u << 10) | (1u << 11);
 // The bits a node above the driver may latch with over hw/emergency.
@@ -131,7 +135,7 @@ const char* BladeResultText(BladeResult result);
 
 // Why a release over hw/emergency is refused; nothing is cleared then.
 struct ReleaseRefusal {
-  // STILL_TILTED, TILT_UNKNOWN or FOREIGN_HOST.
+  // STILL_TILTED, TILT_UNKNOWN, FOREIGN_HOST, LATCH_CHANGED or LEARNING.
   std::string code;
   std::string message;
   // STILL_TILTED: the angle and the release limit in degrees; TILT_UNKNOWN: seconds since the last IMU sample. NaN
@@ -182,12 +186,16 @@ struct ControlStatus {
   bool held = false;
   uint32_t emergency_reason = 0;
   bool latched = false;
+  // Goes up with every reason that latches, never 0 once one did.
+  uint32_t latch_count = 0;
   bool telemetry_ok = false;
   // Live flags from the inputs, false while unknown.
   bool lift = false;
   bool stop = false;
   bool bumper_left = false;
   bool bumper_right = false;
+  // The mask of the input service, bit i for line i of the table; nothing while unknown.
+  std::optional<uint64_t> inputs;
   bool rain = false;
   bool dock_contact = false;
   bool dock_contact_raw = false;
@@ -221,8 +229,9 @@ class XcoreControl {
   // Bits must be within kHostLatchReasons; 0 means HIGH_LEVEL. Returns false for other bits.
   bool LatchEmergency(uint32_t bits);
   // Clears the host's own latches and asks the board to clear its own; the board sets a cause again that is still there.
-  // Returns why a release is refused (the mower still tilted, or no fresh IMU after a tilt); nothing is cleared then.
-  std::optional<ReleaseRefusal> ReleaseEmergency(double now);
+  // Returns why a release is refused (the mower still tilted, no fresh IMU after a tilt, a latch_count that is not 0
+  // and not the current one, the driver learning its inputs); nothing is cleared then.
+  std::optional<ReleaseRefusal> ReleaseEmergency(double now, uint32_t latch_count = 0);
   // Latches FOREIGN_HOST for another host the node found at the board; the text goes to TakeErrors.
   void LatchForeignHost(const std::string& why, double now);
   // Acceleration in m/s² in the body frame from the board's IMU.
@@ -257,6 +266,10 @@ class XcoreControl {
   bool Blocked(double now) const;
   // The driver sends HIGH_LEVEL|LATCH to the board: a latch from above or one of its own causes.
   bool HoldsBoard() const;
+  // The reasons the driver keeps until a release.
+  uint32_t Kept() const;
+  // Counts a reason that is kept now and was not at the last call.
+  void CountLatches();
   void Fault(uint32_t bit, const std::string& why, double now);
   void CheckWheels(const WheelTwist& twist, double now);
   void CheckStall(double now);
@@ -281,6 +294,9 @@ class XcoreControl {
   uint32_t host_latch_ = 0;
   // Causes the board reported with its latch, held until a release.
   uint32_t latched_causes_ = 0;
+  // Every reason that latched since the start, and the reasons counted in it that still stand.
+  uint32_t latch_count_ = 0;
+  uint32_t counted_ = 0;
   // A release asks the board to clear this many more times.
   int clear_remaining_ = 0;
   std::optional<double> next_emergency_s_;

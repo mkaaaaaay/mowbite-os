@@ -83,6 +83,13 @@ std::optional<std::string> CheckInputConfig(const InputConfig& config) {
   return std::nullopt;
 }
 
+std::vector<GpioInput> CandidateInputs(const std::vector<std::string>& lines) {
+  std::vector<GpioInput> inputs;
+  inputs.reserve(lines.size());
+  for (const auto& line : lines) inputs.push_back(GpioInput{line, true, "", 0, ""});
+  return inputs;
+}
+
 std::string InputConfigJson(const InputConfig& config) {
   std::string json = "{";
   if (!config.gpio.empty()) {
