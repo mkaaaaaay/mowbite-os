@@ -17,13 +17,12 @@ import rclpy
 from geometry_msgs.msg import Twist, Vector3
 from launch.actions import TimerAction
 from launch_ros.actions import Node
-from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus
-from mowbite_msgs.srv import SetBlade
+from mowbite_msgs.msg import HardwareStatus
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import TRON_CUTTER as CUTTER, TRON_SPEED as SPEED  # noqa: E402
-from sim_common import (LATCHED, DriverProbe, TestShutdown, fake_tron, last_time, sim_files,  # noqa: E402,F401
-                        sim_links, sub_packets, write_json)
+from sim_common import (HwProbe, TestShutdown, fake_tron, last_time, sim_files, sim_links,  # noqa: E402,F401
+                        sub_packets, write_json)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_hw_")
 LINKS = sim_links(WORK)
@@ -48,15 +47,9 @@ received = functools.partial(sub_packets, LOG)
 sim_time = functools.partial(last_time, LOG)
 
 
-class Probe(DriverProbe):
+class Probe(HwProbe):
     def __init__(self):
         super().__init__("hw_contract_probe")
-        self.status = None
-        self.capabilities = None
-        self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
-        self.node.create_subscription(HardwareCapabilities, "hw/capabilities", self._set("capabilities"), LATCHED)
-        self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
-        self.blade = self.node.create_client(SetBlade, "hw/blade")
         self.start()
 
 

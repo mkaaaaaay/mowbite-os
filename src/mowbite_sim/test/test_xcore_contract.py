@@ -20,16 +20,16 @@ import launch_testing.actions
 import rclpy
 from geometry_msgs.msg import Twist, TwistStamped, Vector3
 from launch.actions import TimerAction
-from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus
-from mowbite_msgs.srv import SetBlade, SetCharge, SetEmergency
+from mowbite_msgs.msg import HardwareStatus
+from mowbite_msgs.srv import SetCharge, SetEmergency
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import XCORE_DATA as DATA, XCORE_DIFF_DRIVE as DIFF_DRIVE  # noqa: E402
 from sim_common import XCORE_EMERGENCY as EMERGENCY, XCORE_MOWER as MOWER  # noqa: E402
-from sim_common import (LATCHED, DriverProbe, TestShutdown, fake_xcore, loopback_group, read_json,  # noqa: E402,F401
-                        sim_files, write_json, xcore_datagrams, xcore_driver)
+from sim_common import (HwProbe, TestShutdown, fake_xcore, loopback_group, read_json, sim_files,  # noqa: E402,F401
+                        write_json, xcore_datagrams, xcore_driver)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_xcore_")
 STATE, FLAGS, LOG, _ = sim_files(WORK)
@@ -61,21 +61,15 @@ def board_time():
     return board()["t"]
 
 
-class Probe(DriverProbe):
+class Probe(HwProbe):
     emergency_reason = "xcore contract test"
 
     def __init__(self):
         super().__init__("xcore_contract_probe")
-        self.status = None
-        self.capabilities = None
         self.odom = []
         self.imu = []
-        self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
-        self.node.create_subscription(HardwareCapabilities, "hw/capabilities", self._set("capabilities"), LATCHED)
         self.node.create_subscription(TwistStamped, "hw/wheel_odom", self._odom, 10)
         self.node.create_subscription(Imu, "imu/data", self._imu, qos_profile_sensor_data)
-        self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
-        self.blade = self.node.create_client(SetBlade, "hw/blade")
         self.emergency = self.node.create_client(SetEmergency, "hw/emergency")
         self.charge = self.node.create_client(SetCharge, "hw/charge")
         self.start()

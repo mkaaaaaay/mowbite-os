@@ -29,11 +29,11 @@ import launch_testing.actions
 import rclpy
 from geometry_msgs.msg import Twist, TwistStamped, Vector3
 from launch.actions import TimerAction
-from mowbite_msgs.msg import HardwareCapabilities, HardwareInputs, HardwareStatus
-from mowbite_msgs.srv import SetBlade, SetEmergency
+from mowbite_msgs.msg import HardwareInputs, HardwareStatus
+from mowbite_msgs.srv import SetEmergency
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import LATCHED, DriverProbe, TestShutdown, layers, write_json  # noqa: E402,F401
+from sim_common import LATCHED, HwProbe, TestShutdown, layers, write_json  # noqa: E402,F401
 
 PLATFORM = os.environ["MOWBITE_PLATFORM"]
 WORK = tempfile.mkdtemp(prefix="mowbite_contract_")
@@ -62,21 +62,15 @@ def blade_on(commands):
     return [t for t, running in commands if running]
 
 
-class Probe(DriverProbe):
+class Probe(HwProbe):
     emergency_reason = "driver contract test"
 
     def __init__(self):
         super().__init__("driver_contract_probe")
-        self.status = None
-        self.capabilities = None
         self.inputs = None
         self.odom = 0
-        self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
-        self.node.create_subscription(HardwareCapabilities, "hw/capabilities", self._set("capabilities"), LATCHED)
         self.node.create_subscription(HardwareInputs, "hw/inputs", self._set("inputs"), LATCHED)
         self.node.create_subscription(TwistStamped, "hw/wheel_odom", self._odom, 10)
-        self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
-        self.blade = self.node.create_client(SetBlade, "hw/blade")
         self.emergency = self.node.create_client(SetEmergency, "hw/emergency")
         self.start()
 

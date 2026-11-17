@@ -28,7 +28,7 @@ from launch.events.process import ProcessStarted
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
-from mowbite_msgs.msg import HardwareStatus, RobotPose, RpcRequest
+from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus, RobotPose, RpcRequest
 from mowbite_msgs.srv import SetBlade, SetEmergency
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
@@ -765,3 +765,16 @@ class DriverProbe(SimProbe):
     offer_timeout = 5.0
     call_timeout = 5.0
     call_poll = 0.01
+
+
+class HwProbe(DriverProbe):
+    """A driver probe on hw/status, hw/capabilities, hw/cmd_vel and hw/blade; a test adds its own and calls start()."""
+
+    def __init__(self, name, **kwargs):
+        super().__init__(name, **kwargs)
+        self.status = None
+        self.capabilities = None
+        self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
+        self.node.create_subscription(HardwareCapabilities, "hw/capabilities", self._set("capabilities"), LATCHED)
+        self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
+        self.blade = self.node.create_client(SetBlade, "hw/blade")
