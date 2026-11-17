@@ -174,6 +174,14 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
         {
           std::lock_guard<std::mutex> lock(mutex_);
           why = core_.Call<&LogicCore::OnSetupMotion>(msg->active, msg->step, MonotonicSeconds());
+          if (msg->active) {
+            setup_blade_percent_ = msg->blade_percent;
+            setup_blade_height_mm_ = msg->blade_height_mm;
+            setup_blade_lease_s_ = msg->blade_lease_s;
+            core_.Call<&LogicCore::OnSetupBlade>(msg->step, static_cast<int>(msg->blade));
+          }
+          // At once, not with the next tick: an end of the step or an off of the blade.
+          UpdateBladeLocked();
         }
         if (why.code != setup_refusal_ && !why.empty()) {
           RCLCPP_WARN(get_logger(), "Setup step %s refused: %s", msg->step.c_str(), why.message.c_str());

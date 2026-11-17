@@ -34,8 +34,22 @@ Reason LogicCore::OnSetupMotion(bool active, const std::string& step, double now
   CommandCancels();
   setup_step_ = step;
   setup_sign_s_ = now_s;
+  setup_blade_ = 0;
+  setup_blade_refused_ = false;
   SetState(State::kSetup);
   return {};
+}
+
+void LogicCore::OnSetupBlade(const std::string& step, int blade) {
+  if (state_ != State::kSetup || step != setup_step_) return;
+  const int asked = blade == 1 || blade == 2 ? blade : 0;
+  if (asked == setup_blade_) return;
+  setup_blade_ = asked;
+  setup_blade_refused_ = false;
+}
+
+bool LogicCore::SetupBladeOnce() const {
+  return state_ == State::kSetup && setup_blade_ == 2;
 }
 
 bool LogicCore::TickSetup(double now_s) {
@@ -67,6 +81,9 @@ bool LogicCore::SetupActive() const {
 void LogicCore::EndSetup(const std::optional<std::string>& why) {
   if (why) Notify("Setup step " + setup_step_ + " stopped: " + *why);
   setup_step_.clear();
+  // The blade goes off with the state: BladeWanted holds outside SETUP only while mowing.
+  setup_blade_ = 0;
+  setup_blade_refused_ = false;
   // One zero follows from leaving the state; the wheels stand.
   SetState(State::kIdle);
 }

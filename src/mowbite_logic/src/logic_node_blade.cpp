@@ -41,35 +41,49 @@ bool LogicNode::TellSafetyLocked() {
 }
 
 void LogicNode::UpdateBladeLocked() {
-  const bool wanted = core_.View().BladeWanted();
+  const auto& view = core_.View();
+  const bool wanted = view.BladeWanted();
+  const bool setup = view.InSetup();
+  const bool once = view.SetupBladeOnce();
   const double t = MonotonicSeconds();
   if (!wanted) {
+    blade_once_sent_ = false;
     if (!blade_on_requested_) return;
     blade_on_requested_ = false;
-    SendBlade(false, 0);
+    SendBlade(false, 0, 0, blade_lease_s_);
     return;
   }
-  if (blade_on_requested_ && t - blade_sent_s_ < blade_renew_s_) return;
+  // A setup step: its lease, renewed at the latest after half of it, or once and never again (BLADE_ONCE).
+  const double lease = setup && setup_blade_lease_s_ > 0 ? setup_blade_lease_s_ : blade_lease_s_;
+  if (once) {
+    if (blade_once_sent_) return;
+  } else {
+    blade_once_sent_ = false;
+    const double renew = setup ? std::min(blade_renew_s_, lease / 2) : blade_renew_s_;
+    if (blade_on_requested_ && t - blade_sent_s_ < renew) return;
+  }
   if (!blade_client_->service_is_ready()) {
     core_.Call<&LogicCore::OnBladeRefused>("hw/blade is not available", 0);
     return;
   }
   // The renewals keep the height of the start: a change of mow_height_mm waits for the next start.
   if (!blade_on_requested_) {
-    blade_height_mm_ = BladeHeightMm(logic_params_.Get("mow_height_mm"), blade_height_control_, blade_height_min_mm_,
-                                     blade_height_max_mm_);
+    const double setting = setup ? setup_blade_height_mm_ : logic_params_.Get("mow_height_mm");
+    blade_height_mm_ = BladeHeightMm(setting, blade_height_control_, blade_height_min_mm_, blade_height_max_mm_);
   }
   blade_on_requested_ = true;
+  blade_once_sent_ = once;
   blade_sent_s_ = t;
-  SendBlade(true, blade_height_mm_);
+  SendBlade(true, blade_height_mm_, setup ? setup_blade_percent_ : 0, lease);
 }
 
 // Called with the mutex held.
-void LogicNode::SendBlade(bool on, uint16_t height_mm) {
+void LogicNode::SendBlade(bool on, uint16_t height_mm, uint8_t speed_percent, double lease_s) {
   auto request = std::make_shared<mowbite_msgs::srv::SetBlade::Request>();
   request->on = on;
   request->height_mm = height_mm;
-  double lease = blade_lease_s_;
+  request->speed_percent = speed_percent;
+  double lease = lease_s;
   if (blade_lease_max_s_ > 0) lease = std::min(lease, static_cast<double>(blade_lease_max_s_));
   request->lease_s = static_cast<float>(lease);
   blade_client_->async_send_request(request, [this, on](rclcpp::Client<mowbite_msgs::srv::SetBlade>::SharedFuture f) {

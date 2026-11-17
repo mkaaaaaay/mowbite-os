@@ -141,3 +141,82 @@ TEST(LogicSetup, AnotherStepBeginsAnew) {
   EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"STATE", "STATE"}));
   EXPECT_TRUE(core.TakeStopRequest());
 }
+
+TEST(LogicSetup, TheBladeTurnsAsTheStepAsksWithoutASafetyMeasurement) {
+  TestCore core = Ready();
+  EXPECT_FALSE(core.BladeWanted());
+  // Outside SETUP the program asks for nothing.
+  core.OnSetupBlade("blade", 1);
+  EXPECT_FALSE(core.BladeWanted());
+  ASSERT_TRUE(core.OnSetupMotion(true, "blade", 10.0).empty());
+  EXPECT_FALSE(core.BladeWanted());
+  core.OnSetupBlade("other", 1);
+  EXPECT_FALSE(core.BladeWanted());
+  core.OnSetupBlade("blade", 1);
+  EXPECT_TRUE(core.BladeWanted());
+  EXPECT_FALSE(core.SetupBladeOnce());
+  core.OnSetupBlade("blade", 2);
+  EXPECT_TRUE(core.BladeWanted());
+  EXPECT_TRUE(core.SetupBladeOnce());
+  core.OnSetupBlade("blade", 7);
+  EXPECT_FALSE(core.BladeWanted());
+  core.OnSetupBlade("blade", 1);
+  // An emergency, no telemetry or the station switch it off.
+  HardwareSnapshot hw = Healthy();
+  hw.emergency = true;
+  hw.emergency_reason = 1u << 2;
+  core.OnHardwareStatus(hw);
+  EXPECT_FALSE(core.BladeWanted());
+  hw = Healthy();
+  hw.telemetry_ok = false;
+  core.OnHardwareStatus(hw);
+  EXPECT_FALSE(core.BladeWanted());
+  hw = Healthy();
+  hw.dock_contact = true;
+  core.OnHardwareStatus(hw);
+  EXPECT_FALSE(core.BladeWanted());
+  core.OnHardwareStatus(Healthy());
+  EXPECT_TRUE(core.BladeWanted());
+}
+
+TEST(LogicSetup, TheBladeGoesOffWithTheEndOfSetup) {
+  for (int end = 0; end < 3; ++end) {
+    TestCore core = Ready();
+    ASSERT_TRUE(core.OnSetupMotion(true, "blade", 10.0).empty());
+    core.OnSetupBlade("blade", 1);
+    ASSERT_TRUE(core.BladeWanted());
+    if (end == 0) {
+      core.OnSetupMotion(false, "blade", 10.1);
+    } else if (end == 1) {
+      EXPECT_TRUE(core.TickSetup(11.05));
+    } else {
+      // Another step begins anew, without the blade of the first.
+      EXPECT_TRUE(core.OnSetupMotion(true, "ground", 10.1).empty());
+    }
+    EXPECT_FALSE(core.BladeWanted()) << end;
+    EXPECT_FALSE(core.SetupBladeOnce()) << end;
+    // A blade asked for later in IDLE turns nothing.
+    core.OnSetupBlade("blade", 1);
+    EXPECT_FALSE(core.BladeWanted()) << end;
+  }
+}
+
+TEST(LogicSetup, ARefusedBladeStaysOffUntilTheStepAsksAnew) {
+  TestCore core = Ready();
+  ASSERT_TRUE(core.OnSetupMotion(true, "blade", 10.0).empty());
+  core.OnSetupBlade("blade", 1);
+  core.TakeNotices();
+  core.OnBladeRefused("not allowed", 0);
+  EXPECT_FALSE(core.BladeWanted());
+  // No pause and no emergency of mowing: the step sees the blade stand.
+  EXPECT_TRUE(core.InSetup());
+  EXPECT_TRUE(core.SetupActive());
+  const auto notices = core.TakeNotices();
+  ASSERT_EQ(notices.size(), 1u);
+  EXPECT_NE(notices[0].find("the blade was refused"), std::string::npos) << notices[0];
+  core.OnSetupBlade("blade", 1);
+  EXPECT_FALSE(core.BladeWanted());
+  core.OnSetupBlade("blade", 0);
+  core.OnSetupBlade("blade", 1);
+  EXPECT_TRUE(core.BladeWanted());
+}

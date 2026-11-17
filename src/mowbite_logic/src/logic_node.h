@@ -152,7 +152,7 @@ class LogicNode : public rclcpp::Node {
   // Tells the core the safety measurement by the one rule (date and lock) when it changed; true if it did. Called with
   // the mutex held.
   bool TellSafetyLocked();
-  void SendBlade(bool on, uint16_t height_mm);
+  void SendBlade(bool on, uint16_t height_mm, uint8_t speed_percent, double lease_s);
   void JudgeRestart(const std::string& crash_record);
   bool WriteSession(bool clean);
   void StartWriter();
@@ -339,6 +339,12 @@ class LogicNode : public rclcpp::Node {
   bool rain_told_ = false;
   bool blade_on_requested_ = false;
   double blade_sent_s_ = 0;
+  // The blade a setup step asks for in its setup/motion: speed, height, lease (0: the defaults); and whether its one
+  // lease without renewal went out.
+  uint8_t setup_blade_percent_ = 0;
+  uint16_t setup_blade_height_mm_ = 0;
+  double setup_blade_lease_s_ = 0;
+  bool blade_once_sent_ = false;
   uint64_t drive_seq_ = 0;
   double transit_max_outside_ = 0.3;
   MowingPlanner planner_;

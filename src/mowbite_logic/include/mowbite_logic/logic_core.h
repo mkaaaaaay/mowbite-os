@@ -514,6 +514,11 @@ class LogicCore {
   bool TickSetup(double now_s);
   bool InSetup() const;
   bool SetupActive() const;
+  // The blade the step of setup/motion asks for (SetupMotion BLADE_*): it turns in SETUP without a safety measurement,
+  // otherwise under the conditions of BladeWanted; a refusal holds it off until the step asks for another blade.
+  void OnSetupBlade(const std::string& step, int blade);
+  // The blade in SETUP on one lease that is not renewed (BLADE_ONCE).
+  bool SetupBladeOnce() const;
 
   // The mow areas of the map and why mowing may not plan from it (empty if it may).
   void OnMowMap(std::vector<JobArea> areas, const Reason& problem);
@@ -723,9 +728,11 @@ class LogicCore {
   // only the battery ends it the same way.
   void OnTick(double now_s);
   // Whether the blade should turn now: mowing, not paused, a mow segment (or spinning up for one), mow_with_blade, a
-  // safety measurement, telemetry and not on the dock. The node keeps the lease of hw/blade alive only while it is.
+  // safety measurement, telemetry and not on the dock; or in SETUP as the setup program asks, without emergency, with
+  // telemetry and not on the dock. The node keeps the lease of hw/blade alive only while it is.
   bool BladeWanted() const;
-  // hw/blade refused while the blade was wanted: mowing pauses, with reason bits of the answer as for that emergency.
+  // hw/blade refused while the blade was wanted: mowing pauses, with reason bits of the answer as for that emergency;
+  // in SETUP the blade stays off for the step, which sees it.
   void OnBladeRefused(const std::string& message, int emergency_reason = 0);
 
   RobotStateData RobotState() const;
@@ -1133,6 +1140,9 @@ class LogicCore {
   // SETUP: the step of the program and its last setup/motion.
   std::string setup_step_;
   double setup_sign_s_ = 0;
+  // SETUP: the blade the step asks for (SetupMotion BLADE_*) and whether hw/blade refused it.
+  int setup_blade_ = 0;
+  bool setup_blade_refused_ = false;
   // Calibration: the program's status and when it came, its last sign and the phase it reported last.
   std::optional<CalibrationStatus> calibration_status_;
   double calibration_status_s_ = 0;
