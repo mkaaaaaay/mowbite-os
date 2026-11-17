@@ -13,6 +13,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GnssFix.msg"
   "msg/RobotPose.msg"
   "msg/HardwareCapabilities.msg"
+  "msg/HardwareInput.msg"
+  "msg/HardwareInputs.msg"
   "msg/HardwareStatus.msg"
   "msg/MapStatus.msg"
   "msg/MotorState.msg"

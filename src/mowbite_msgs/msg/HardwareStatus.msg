@@ -25,6 +25,10 @@ uint32 REASON_FOREIGN_HOST = 524288
 uint32 REASON_DRIVER_STALL = 1048576
 # Latched by mowbite_safety while <data_dir>/restart-hold.json is there: the hold after an unexpected restart.
 uint32 REASON_UNEXPECTED_RESTART = 2097152
+# The driver started with inputs.learn: it watches the candidate lines of the platform and none of them stops
+# anything, so that the setup program sees which sensor is on which line (hw/inputs). No release ends it, only a start
+# without inputs.learn.
+uint32 REASON_INPUTS_LEARNING = 4194304
 
 # Motion and blade are blocked by the driver: latched, stale telemetry or incompatible firmware.
 bool emergency
@@ -32,6 +36,9 @@ bool emergency
 bool emergency_latched
 # Reason bits while emergency is set, 0 otherwise. A cause that latched stays in it until the release.
 uint32 emergency_reason
+# Goes up with every reason that latches and is never 0 once one did; 0 for a driver that does not count. A release
+# over hw/emergency with it is refused with LATCH_CHANGED when another reason latched since.
+uint32 latch_count
 # Sensor data from the hardware within the timeout of the driver.
 bool telemetry_ok
 # An update holds the mower (<data_dir>/hold.json, also one the driver cannot read): motion and blade are blocked

@@ -5,14 +5,14 @@ bool latch
 uint32 bits
 # Why, for the log of the driver.
 string reason
-# Release only: the latch_count of a STOP LONG on hw/button. The driver refuses with LATCH_CHANGED when another reason
-# latched since. 0 releases without that check (app and HA).
+# Release only: the latch_count of hw/status or of a STOP LONG on hw/button. The driver refuses with LATCH_CHANGED when
+# another reason latched since. 0 releases without that check (app and HA).
 uint32 latch_count
 ---
 bool success
 string message
 # Why a release was refused, empty otherwise: STILL_TILTED, TILT_UNKNOWN, FOREIGN_HOST, DRIVER_MISSING, NO_ANSWER,
-# LATCH_CHANGED.
+# LATCH_CHANGED, LEARNING.
 string code
 # STILL_TILTED: the angle and the release limit in degrees; TILT_UNKNOWN: seconds since the last IMU sample, NaN
 # without one. Not used with the other codes.
