@@ -5320,12 +5320,20 @@
       "additionalProperties": false,
       "description": "The setup program reached a mark",
       "properties": {
+        "cause": {
+          "description": "With safety_closed: its reason of SETUP_STEP",
+          "type": "string"
+        },
         "id": {
           "description": "Random id of the event, 32 letters and digits",
           "type": "string"
         },
         "stage": {
           "description": "With stage_done: the stage",
+          "type": "string"
+        },
+        "step": {
+          "description": "With safety_closed: the step that failed",
           "type": "string"
         },
         "t": {
@@ -5338,11 +5346,13 @@
           "description": "What happened; a type this version does not know carries only the envelope for sure"
         },
         "what": {
-          "description": "stage_done: every step of stage is ok or skipped; complete: every step is; reset: setup.reset took all results back",
+          "description": "stage_done: every step of stage is ok or skipped; complete: every step is; reset: setup.reset took all results back; safety_closed: a safety step failed and closed the lock of autonomous driving and mowing; safety_opened: the lock is open again",
           "enum": [
             "stage_done",
             "complete",
-            "reset"
+            "reset",
+            "safety_closed",
+            "safety_opened"
           ],
           "type": "string"
         }
@@ -5441,7 +5451,8 @@
             "NO_DATA",
             "NO_RTK",
             "STOPPED",
-            "INTERRUPTED"
+            "INTERRUPTED",
+            "NOT_DONE"
           ],
           "type": "string"
         },
@@ -10067,6 +10078,47 @@
           "additionalProperties": false,
           "description": "The lock of autonomous driving and mowing",
           "properties": {
+            "closed": {
+              "description": "What keeps the lock closed: a failed safety step until it passes again, or a reset",
+              "items": {
+                "additionalProperties": false,
+                "description": "One item",
+                "properties": {
+                  "part": {
+                    "description": "The part",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "reason": {
+                    "description": "A reason of SETUP_STEP, or for a reset RESET or UNREADABLE",
+                    "type": "string"
+                  },
+                  "step": {
+                    "description": "The step, null for a reset",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "t": {
+                    "description": "When",
+                    "type": "number",
+                    "x-unit": "unix s"
+                  }
+                },
+                "required": [
+                  "step",
+                  "part",
+                  "reason",
+                  "t"
+                ],
+                "type": "object"
+              },
+              "maxItems": 32.0,
+              "type": "array"
+            },
             "date": {
               "description": "Its date, YYYY-MM-DD",
               "type": [
@@ -10082,11 +10134,29 @@
               ]
             },
             "open": {
-              "description": "The platform has a safety measurement",
+              "description": "The platform has a safety measurement and no safety step closed the lock",
               "type": "boolean"
             },
+            "source": {
+              "description": "Who gave the date: hand (the file kept by hand or the platform) or program (the summary of the setup program); null without one",
+              "enum": [
+                "hand",
+                "program",
+                null
+              ],
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "why": {
-              "description": "NO_SAFETY_MEASUREMENT while closed",
+              "description": "While closed: NO_SAFETY_MEASUREMENT (no date), CHECK_FAILED (a safety step failed) or RESET (the program was reset or its file could not be read)",
+              "enum": [
+                "NO_SAFETY_MEASUREMENT",
+                "CHECK_FAILED",
+                "RESET",
+                null
+              ],
               "type": [
                 "string",
                 "null"
@@ -10097,7 +10167,9 @@
             "open",
             "date",
             "firmware",
-            "why"
+            "why",
+            "source",
+            "closed"
           ],
           "type": "object"
         },
@@ -10319,7 +10391,7 @@
                       "type": "boolean"
                     },
                     "ask": {
-                      "description": "A question of the running step that waits for its answer: accept while ask of the step is set, wheel while the part one_wheel of a step wheels turns one wheel",
+                      "description": "A question of the running step that waits for its answer: accept while ask of the step is set, wheel while the part one_wheel of a step wheels turns one wheel, pressed while a safety step saw nothing of the action of a part",
                       "type": "boolean"
                     },
                     "max": {
@@ -10655,6 +10727,10 @@
                   "null"
                 ]
               },
+              "safety": {
+                "description": "A safety step: failing it with a reason that closes closes the lock, passing it opens it again",
+                "type": "boolean"
+              },
               "skip_reasons": {
                 "description": "Reasons setup.skip takes",
                 "items": {
@@ -10790,6 +10866,7 @@
               "check",
               "kind",
               "state",
+              "safety",
               "attempt",
               "needs",
               "blocked",
@@ -15594,11 +15671,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:44",
+  "$id": "urn:mowbite-os:api:45",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 44,
+  "x-api": 45,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -19528,6 +19605,7 @@
     },
     "SETUP_STEP": {
       "AMBIGUOUS": {
+        "closes": false,
         "description": "More than one line changed with the action of the part",
         "fields": {
           "lines": "",
@@ -19549,6 +19627,7 @@
         }
       },
       "DRIVER_REFUSED": {
+        "closes": false,
         "description": "The driver refused hw/silence or hw/end",
         "fields": {
           "code": "",
@@ -19570,6 +19649,7 @@
         }
       },
       "EMERGENCY": {
+        "closes": false,
         "description": "An emergency the step did not ask for came up",
         "fields": {
           "emergency": "",
@@ -19591,6 +19671,7 @@
         }
       },
       "FLUTTER": {
+        "closes": false,
         "description": "A line changed while nothing was to be touched",
         "fields": {
           "lines": ""
@@ -19611,6 +19692,7 @@
         }
       },
       "INTERRUPTED": {
+        "closes": false,
         "description": "The OS restarted while the step ran",
         "fields": {},
         "resume": "user",
@@ -19629,6 +19711,7 @@
         }
       },
       "LIMIT": {
+        "closes": true,
         "description": "A value is outside of its bounds",
         "fields": {
           "limit": "",
@@ -19653,6 +19736,7 @@
         }
       },
       "LINE_SILENT": {
+        "closes": false,
         "description": "A line of the role did not switch in the whole step",
         "fields": {
           "lines": "",
@@ -19674,6 +19758,7 @@
         }
       },
       "LOGIC_REFUSED": {
+        "closes": false,
         "description": "The logic did not take the step into SETUP within its time",
         "fields": {
           "mower_state": "",
@@ -19695,6 +19780,7 @@
         }
       },
       "NOT_APPLIED": {
+        "closes": false,
         "description": "After the restart hw/inputs does not show the table the step wrote",
         "fields": {
           "key": ""
@@ -19714,7 +19800,29 @@
           }
         }
       },
+      "NOT_DONE": {
+        "closes": false,
+        "description": "The step saw nothing of the action of a part, and the answer to pressed was no or did not come: the step is open again and the lock stays as it was",
+        "fields": {
+          "part": ""
+        },
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Den Schritt wiederholen und den Handgriff in der angezeigten Zeit machen.",
+            "help": "Der Handgriff wurde nicht gemacht. Die Prüfung zählt nicht.",
+            "name": "Nicht gemacht"
+          },
+          "en": {
+            "fix": "Repeat the step and do the action within the time shown.",
+            "help": "The action wasn't done. The check doesn't count.",
+            "name": "Not done"
+          }
+        }
+      },
       "NOT_RELEASED": {
+        "closes": false,
         "description": "The emergency the step brought did not end with the release of the program",
         "fields": {
           "part": ""
@@ -19735,6 +19843,7 @@
         }
       },
       "NOT_SEEN": {
+        "closes": true,
         "description": "The OS did not see what the part asked for within its time",
         "fields": {
           "part": ""
@@ -19755,6 +19864,7 @@
         }
       },
       "NO_DATA": {
+        "closes": false,
         "description": "A source the step needs sent nothing",
         "fields": {
           "part": "",
@@ -19776,6 +19886,7 @@
         }
       },
       "NO_EMERGENCY": {
+        "closes": true,
         "description": "The input switched, or the silence or end of the driver came, but the emergency of the step did not follow within its limit",
         "fields": {
           "limit": "s",
@@ -19797,6 +19908,7 @@
         }
       },
       "NO_LINE": {
+        "closes": false,
         "description": "No line changed within the time of the part",
         "fields": {
           "part": ""
@@ -19817,6 +19929,7 @@
         }
       },
       "NO_RESTART": {
+        "closes": false,
         "description": "After the release a new command did not turn the wheels within its time",
         "fields": {
           "part": ""
@@ -19837,6 +19950,7 @@
         }
       },
       "NO_RETURN": {
+        "closes": false,
         "description": "The driver was not back within return_max after hw/end",
         "fields": {
           "limit": "s"
@@ -19857,6 +19971,7 @@
         }
       },
       "NO_RTK": {
+        "closes": false,
         "description": "No position of the solution, accuracy and rate asked for within the timeout",
         "fields": {},
         "resume": "user",
@@ -19875,6 +19990,7 @@
         }
       },
       "NO_START": {
+        "closes": false,
         "description": "The wheels did not turn within the time after the first command",
         "fields": {
           "part": ""
@@ -19895,6 +20011,7 @@
         }
       },
       "RELEASED": {
+        "closes": false,
         "description": "setup.keep stayed away: the app lost its connection or let go of the step",
         "fields": {
           "part": ""
@@ -19915,6 +20032,7 @@
         }
       },
       "RESTART_FAILED": {
+        "closes": false,
         "description": "The OS was not back within the time after the restart the step asked for",
         "fields": {
           "limit": "s"
@@ -19935,6 +20053,7 @@
         }
       },
       "STARTED_AGAIN": {
+        "closes": true,
         "description": "A wheel turned while nothing was to turn: after the stop or the release",
         "fields": {
           "part": "",
@@ -19956,6 +20075,7 @@
         }
       },
       "STOPPED": {
+        "closes": false,
         "description": "Ended with setup.abort",
         "fields": {},
         "resume": "user",
@@ -19974,6 +20094,7 @@
         }
       },
       "STOPPED_EARLY": {
+        "closes": false,
         "description": "A short switch of the input brought the emergency already",
         "fields": {
           "part": ""
@@ -19994,6 +20115,7 @@
         }
       },
       "WRONG_DIRECTION": {
+        "closes": true,
         "description": "A part turned the wheels the other way than asked",
         "fields": {
           "part": ""
@@ -20014,6 +20136,7 @@
         }
       },
       "WRONG_INPUT": {
+        "closes": false,
         "description": "Another input switched than the one the part asked for",
         "fields": {
           "part": "",
@@ -20035,6 +20158,7 @@
         }
       },
       "WRONG_SIGN": {
+        "closes": false,
         "description": "The IMU showed the move the other way round",
         "fields": {
           "part": ""
@@ -20055,6 +20179,7 @@
         }
       },
       "WRONG_WHEEL": {
+        "closes": true,
         "description": "In the part one_wheel the answer or the odometry named another wheel than the right",
         "fields": {
           "answer": "",
@@ -21722,6 +21847,7 @@
           "STOPPED",
           "INTERRUPTED"
         ],
+        "safety": false,
         "start": true,
         "texts": {
           "de": {
@@ -21867,6 +21993,7 @@
           }
         },
         "reasons": [],
+        "safety": false,
         "start": false,
         "values": {}
       },
@@ -21876,6 +22003,7 @@
         "kind": "confirm",
         "params": {},
         "reasons": [],
+        "safety": false,
         "start": true,
         "values": {}
       },
@@ -21898,6 +22026,7 @@
           }
         },
         "reasons": [],
+        "safety": false,
         "start": false,
         "values": {}
       },
@@ -21978,6 +22107,7 @@
           "STOPPED",
           "INTERRUPTED"
         ],
+        "safety": true,
         "start": true,
         "texts": {
           "de": {
@@ -22023,6 +22153,7 @@
           }
         },
         "reasons": [],
+        "safety": false,
         "start": false,
         "texts": {
           "de": {
@@ -22077,8 +22208,10 @@
           "NO_EMERGENCY",
           "NO_DATA",
           "STOPPED",
-          "INTERRUPTED"
+          "INTERRUPTED",
+          "NOT_DONE"
         ],
+        "safety": true,
         "start": true,
         "texts": {
           "de": {
@@ -22163,8 +22296,10 @@
           "LINE_SILENT",
           "NO_DATA",
           "STOPPED",
-          "INTERRUPTED"
+          "INTERRUPTED",
+          "NOT_DONE"
         ],
+        "safety": true,
         "start": true,
         "values": {
           "delay": {
@@ -22221,6 +22356,7 @@
           "STOPPED",
           "INTERRUPTED"
         ],
+        "safety": false,
         "start": true,
         "texts": {
           "de": {
@@ -22286,6 +22422,7 @@
           "STOPPED",
           "INTERRUPTED"
         ],
+        "safety": true,
         "start": true,
         "texts": {
           "de": {
@@ -22353,6 +22490,7 @@
           }
         },
         "reasons": [],
+        "safety": false,
         "start": false,
         "values": {}
       },
@@ -22415,6 +22553,7 @@
           "STOPPED",
           "INTERRUPTED"
         ],
+        "safety": false,
         "start": true,
         "texts": {
           "de": {
@@ -22574,6 +22713,7 @@
           "STOPPED",
           "INTERRUPTED"
         ],
+        "safety": true,
         "start": true,
         "texts": {
           "de": {
@@ -22672,6 +22812,7 @@
           "NO_EMERGENCY",
           "NOT_RELEASED",
           "NO_RESTART",
+          "NOT_DONE",
           "LOGIC_REFUSED",
           "RELEASED",
           "EMERGENCY",
@@ -22679,6 +22820,7 @@
           "STOPPED",
           "INTERRUPTED"
         ],
+        "safety": true,
         "start": true,
         "texts": {
           "de": {
@@ -22750,6 +22892,7 @@
           "WRONG_WHEEL",
           "LIMIT",
           "NOT_SEEN",
+          "NOT_DONE",
           "LOGIC_REFUSED",
           "RELEASED",
           "EMERGENCY",
@@ -22757,6 +22900,7 @@
           "STOPPED",
           "INTERRUPTED"
         ],
+        "safety": true,
         "start": true,
         "texts": {
           "de": {
@@ -22894,8 +23038,9 @@
       },
       "unit": "ms"
     },
-    "description": "The setup program: stages in their order, the checks a step of setup/setup.yaml of a platform can be (kind, whether setup.start begins it, params with the bounds and defaults of the code, values, reasons of SETUP_STEP, the screen it opens), roles of the inputs (group, emergency of a press; a role is named as its flag in hw/status) and modes of a part, moves of a step imu, conditions of a step done_when with their screen, points to confirm, reasons to skip, the question of a step inputs_assign and the delays it takes once it is ok, the ways to restart, the parts of a step wheels and its question, and the limits; texts by language where the OS has them. The steps themselves come with setup.get",
+    "description": "The setup program: stages in their order, the checks a step of setup/setup.yaml of a platform can be (kind, whether setup.start begins it, params with the bounds and defaults of the code, values, reasons of SETUP_STEP, the screen it opens), roles of the inputs (group, emergency of a press; a role is named as its flag in hw/status) and modes of a part, moves of a step imu, conditions of a step done_when with their screen, points to confirm, reasons to skip, the question of a step inputs_assign and the delays it takes once it is ok, the ways to restart, the parts of a step wheels and its question, the question pressed of a safety step that saw nothing (a check with safety closes the lock when it fails with a reason that has closes in x-reasons of SETUP_STEP), and the limits; texts by language where the OS has them. The steps themselves come with setup.get",
     "limits": {
+      "closed": 32,
       "image_bytes": 65536,
       "keep": 1.0,
       "move_time": 10.0,
@@ -23131,6 +23276,56 @@
             "fix": "",
             "help": "",
             "name": "Mower jacked up, wheels free"
+          }
+        }
+      }
+    },
+    "pressed": {
+      "description": "Whether the user did the action of the part the step saw nothing of",
+      "texts": {
+        "de": {
+          "fix": "",
+          "help": "Der Mäher hat in der Zeit nichts bemerkt. Hast du gedrückt, angehoben oder gekippt, wie angezeigt?",
+          "name": "Hast du es gemacht?"
+        },
+        "en": {
+          "fix": "",
+          "help": "The mower noticed nothing in time. Did you press, lift or tilt as shown?",
+          "name": "Did you do it?"
+        }
+      },
+      "time": 30.0,
+      "values": {
+        "no": {
+          "description": "The action was not done: the step ends open with NOT_DONE",
+          "order": 1,
+          "texts": {
+            "de": {
+              "fix": "",
+              "help": "",
+              "name": "Nein, noch nicht"
+            },
+            "en": {
+              "fix": "",
+              "help": "",
+              "name": "No, not yet"
+            }
+          }
+        },
+        "yes": {
+          "description": "The action was done: the sensor or its line is dead, the step fails with NOT_SEEN",
+          "order": 0,
+          "texts": {
+            "de": {
+              "fix": "",
+              "help": "",
+              "name": "Ja, gemacht"
+            },
+            "en": {
+              "fix": "",
+              "help": "",
+              "name": "Yes, I did"
+            }
           }
         }
       }
