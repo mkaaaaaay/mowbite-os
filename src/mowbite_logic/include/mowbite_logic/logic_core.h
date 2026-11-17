@@ -21,6 +21,7 @@
 #include "mowbite_logic/marker_dock.h"
 #include "mowbite_logic/mowing_job.h"
 #include "mowbite_logic/reasons.h"
+#include "mowbite_logic/recording_part.h"
 #include "mowbite_logic/release_part.h"
 #include "mowbite_logic/setup_part.h"
 #include "mowbite_logic/undocking.h"
@@ -357,7 +358,7 @@ class LogicCore {
   json MapOverlay() const;
   bool TakeOverlayChanged();
   const AreaRecorder& recorder() const {
-    return recorder_;
+    return recording_.recorder();
   }
 
  private:
@@ -373,10 +374,6 @@ class LogicCore {
   Reason RecordingCommand(const mowbite_api::Command& command, const json& params, CommandOutcome* out);
   // WRONG_STATE with state and sub_state of robot_state.
   Reason WrongState() const;
-  // Moves the events of the recorder into the events of the logic, at the current position.
-  void PullRecorder();
-  // A break of the driven track while OnWheelOdom does not come.
-  void TickRecording(double now_s);
   // Returns the id of the event.
   std::string AddEvent(const std::string& type, json details);
   // 32 letters and digits from id_seed: the ids of jobs, sessions and events.
@@ -603,18 +600,12 @@ class LogicCore {
   bool restart_hold_ = false;
   // The file of SetUnwritableFile.
   std::string unwritable_file_;
-  bool teleop_armed_ = false;
   bool safety_measured_ = false;
   // Until the driver says otherwise, undocking waits for charging to be off.
   bool charge_stop_ = true;
-  double last_teleop_s_ = -std::numeric_limits<double>::infinity();
   // What the node has not taken yet, oldest first; flags (StopRequest, ChargeOff, ...) at most once.
   EffectQueue effects_;
-  AreaRecorder recorder_;
-  // The last OnWheelOdom.
-  std::optional<double> last_wheel_s_;
-  bool map_writable_ = false;
-  Reason map_reason_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
+  RecordingPart recording_;
 
   MowingJob job_;
   // The start accepted last, until mowing begins.

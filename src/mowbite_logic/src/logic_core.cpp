@@ -83,7 +83,7 @@ std::string BatteryVoltagesProblem(const LogicConfig& config) {
 LogicCore::LogicCore(const LogicConfig& config)
     : config_(config),
       ids_(config.id_seed),
-      recorder_(RecorderConfigOf(config)),
+      recording_(RecorderConfigOf(config)),
       charge_watch_(config.charge),
       home_(HomeRules()) {
   // Without telemetry the mower counts as stopped until the driver reports.
@@ -132,7 +132,7 @@ EffectPhase PhaseOf(const Effect& effect) {
 void LogicCore::OnHardwareStatus(const HardwareSnapshot& hw) {
   if (hw.hold != hw_.hold) SetDue<ActionsChanged>(true);
   hw_ = hw;
-  recorder_.SetDockContact(DockContact());
+  recording_.recorder().SetDockContact(DockContact());
   UpdateEmergency();
   if (state_ == State::kDocking) OnDockingContact();
   WatchCharge();
@@ -148,7 +148,7 @@ void LogicCore::OnHardwareStatus(const HardwareSnapshot& hw) {
 void LogicCore::OnHardwareTimeout() {
   hw_.telemetry_ok = false;
   hw_.battery_ok = false;
-  recorder_.SetDockContact(false);
+  recording_.recorder().SetDockContact(false);
   charge_watch_.OnBusy(false);
   UpdateEmergency();
   WatchAnnouncement();
@@ -160,8 +160,8 @@ void LogicCore::OnPose(const PoseSnapshot& pose) {
   last_y_ = pose.y;
   if (state_ == State::kDocking) WatchMarkerNear();
   if (state_ != State::kAreaRecording) return;
-  recorder_.OnPose(pose.x, pose.y, pose.heading, pose.position_accuracy, pose.orientation_valid);
-  PullRecorder();
+  recording_.recorder().OnPose(pose.x, pose.y, pose.heading, pose.position_accuracy, pose.orientation_valid);
+  recording_.PullRecorder(CoreAccess(*this));
 }
 
 void LogicCore::OnPoseTimeout() {
@@ -181,13 +181,13 @@ void LogicCore::OnPoseTimeout() {
   if (state_ == State::kCalibrating) {
     calibration_.EndCalibration(CoreAccess(*this), Reason("POSE_LOST", "No position from the localization"), true);
   }
-  recorder_.OnPoseLost();
-  PullRecorder();
+  recording_.recorder().OnPoseLost();
+  recording_.PullRecorder(CoreAccess(*this));
 }
 
 std::vector<Effect> LogicCore::TakeEffects() {
-  if (auto edit = recorder_.TakeMapEdit()) effects_.push_back(std::move(*edit));
-  for (auto& line : recorder_.TakeNotices()) Notify(std::move(line));
+  if (auto edit = recording_.recorder().TakeMapEdit()) effects_.push_back(std::move(*edit));
+  for (auto& line : recording_.recorder().TakeNotices()) Notify(std::move(line));
   // start_mowing and its reason follow the position, the battery and more, which change without an event.
   const std::string start_reason = StartProblem().code;
   if (start_reason != last_start_reason_) {
@@ -210,8 +210,8 @@ void LogicCore::OnPositionJump(double to_x, double to_y, double distance_m, bool
                 .With("distance", distance_m));
   AddEvent("POSITION_JUMP", std::move(details));
   if (state_ == State::kAreaRecording) {
-    recorder_.OnPositionJump();
-    PullRecorder();
+    recording_.recorder().OnPositionJump();
+    recording_.PullRecorder(CoreAccess(*this));
   }
 }
 
@@ -266,7 +266,7 @@ void LogicCore::UpdateEmergency(bool report) {
   }
   if (emergency != emergency_) {
     emergency_ = emergency;
-    if (emergency) teleop_armed_ = false;
+    if (emergency) recording_.DisarmTeleop();
     const Reason why = EmergencyWhy(reason_);
     if (emergency && state_ == State::kDriving) CancelDrive(why);
     if (emergency && state_ == State::kMowing) Pause(kPauseEmergency, why);
@@ -479,7 +479,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     // The EMERGENCY event told already: no RECORDING_REFUSED.
     if (emergency_) return Reason("EMERGENCY", "Emergency: reset it first");
     Reason why = HoldProblem();
-    if (why.empty() && !map_writable_) why = map_reason_;
+    if (why.empty() && !recording_.map_writable()) why = recording_.map_reason();
     if (!why.empty()) {
       json details = {{"action", "start_area_recording"}};
       PutReason(&details, "RECORDING_REFUSED", why);
@@ -511,30 +511,15 @@ Reason LogicCore::RecordingCommand(const mowbite_api::Command& command, const js
   }
   if (action.rfind(kRecordingPrefix + "/", 0) != 0) return WrongState();
   Reason why;
-  const AreaRecorder::Result result = recorder_.OnAction(action.substr(kRecordingPrefix.size() + 1), &why,
-                                                        params.value("meters", kUndoDefaultM));
-  PullRecorder();
+  const AreaRecorder::Result result = recording_.recorder().OnAction(
+      action.substr(kRecordingPrefix.size() + 1), &why, params.value("meters", kUndoDefaultM));
+  recording_.PullRecorder(CoreAccess(*this));
   if (result != AreaRecorder::Result::kDone) return why.empty() ? WrongState() : why;
-  if (command.name == "recording.undo") out->result["points"] = recorder_.current().size();
+  if (command.name == "recording.undo") out->result["points"] = recording_.recorder().current().size();
   if (command.name == "recording.ring_stop" || command.name == "recording.save") {
-    out->result["trimmed_points"] = recorder_.trimmed_points();
+    out->result["trimmed_points"] = recording_.recorder().trimmed_points();
   }
   return {};
-}
-
-std::optional<std::pair<double, double>> LogicCore::OnTeleop(double vx, double vz, double now_s) {
-  const double quiet_s = now_s - last_teleop_s_;
-  last_teleop_s_ = now_s;
-  if (state_ != State::kAreaRecording || emergency_) {
-    teleop_armed_ = false;
-    return std::nullopt;
-  }
-  if (!teleop_armed_) {
-    const bool zero = vx == 0.0 && vz == 0.0;
-    if (!zero && quiet_s < kTeleopQuietS) return std::nullopt;
-    teleop_armed_ = true;
-  }
-  return std::make_pair(vx, vz);
 }
 
 void LogicCore::OnCapabilities(bool safety_measured, bool charge_stop) {
@@ -646,10 +631,10 @@ void LogicCore::SetState(State state) {
     sunset_try_ = sunset_tried_ = sunset_told_ = false;
   }
   // Entering and leaving both start from nothing; what was not saved is gone, like with OpenMower.
-  recorder_.Reset();
-  recorder_.TakeActionsChanged();
+  recording_.recorder().Reset();
+  recording_.recorder().TakeActionsChanged();
   state_ = state;
-  teleop_armed_ = false;
+  recording_.DisarmTeleop();
   json details = {{"state", CurrentStateName()}};
   if (state == State::kDriving) details["sub_state"] = "DRIVING";
   if (state == State::kCalibrating) details["sub_state"] = "CALIBRATING";
@@ -690,7 +675,7 @@ RobotStateData LogicCore::RobotState() const {
     s.task_index = job_.TaskIndex();
     s.task_count = job_.TaskCount();
   }
-  if (state_ == State::kAreaRecording) s.sub_state = recorder_.SubState();
+  if (state_ == State::kAreaRecording) s.sub_state = recording_.recorder().SubState();
   if (state_ == State::kDriving) s.sub_state = "DRIVING";
   if (state_ == State::kCalibrating) s.sub_state = "CALIBRATING";
   if (state_ == State::kSetup) s.sub_state = "SETUP";
@@ -726,7 +711,7 @@ std::vector<ActionGroup> LogicCore::Actions() const {
   groups.push_back({kIdlePrefix,
                     {{"start_mowing", "Begin mowing", start.empty(), start.code},
                      {"start_area_recording", "Record an area",
-                      idle && !emergency_ && map_writable_ && HoldProblem().empty()},
+                      idle && !emergency_ && recording_.map_writable() && HoldProblem().empty()},
                      {"reset_job", "Discard unfinished job", idle && job_.Unfinished()}}});
   // Pause and continue take turns, like in OpenMower; continue waits for the emergency to be reset.
   const bool waits = (pause_ & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
@@ -739,7 +724,7 @@ std::vector<ActionGroup> LogicCore::Actions() const {
   groups.push_back({kUndockingPrefix, {{"abort_undocking", "Cancel undocking", state_ == State::kUndocking}}});
   groups.push_back({kDockingPrefix, {{"abort_docking", "Cancel docking", state_ == State::kDocking}}});
   // The recorder decides while recording; outside of it all are off.
-  const std::vector<bool> enabled = recorder_.Enabled();
+  const std::vector<bool> enabled = recording_.recorder().Enabled();
   const std::vector<std::string>& names = AreaRecorder::ActionLabels();
   ActionGroup recording_group{kRecordingPrefix, {}};
   for (size_t i = 0; i < names.size(); i++) {
@@ -989,7 +974,7 @@ void LogicCore::SetGpsSettings(double max_position_accuracy, double gps_wait_tim
   config_.max_position_accuracy = max_position_accuracy;
   config_.gps_wait_time = gps_wait_time;
   config_.gps_timeout = gps_timeout;
-  recorder_.SetMaxPositionAccuracy(max_position_accuracy);
+  recording_.recorder().SetMaxPositionAccuracy(max_position_accuracy);
 }
 
 void LogicCore::OnTick(double now_s) {
@@ -1001,7 +986,7 @@ void LogicCore::OnTick(double now_s) {
   WatchAnnouncement();
   if (run_ && run_->phase == RunPhase::kAnnouncing && now_s >= run_->announce_until) EndAnnouncement(now_s);
   if (state_ == State::kDocking) TickDocking(now_s);
-  if (state_ == State::kAreaRecording) TickRecording(now_s);
+  if (state_ == State::kAreaRecording) recording_.TickRecording(CoreAccess(*this), now_s);
   if (state_ != State::kMowing) return;
   if (pause_ & kPauseGps) {
     if (!PoseGood()) {
