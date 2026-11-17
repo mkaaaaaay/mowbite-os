@@ -909,7 +909,11 @@ TEST(Program, TheRestOfTheImuCountsFromItsFirstSample) {
   bench.imu_on = false;
   ASSERT_EQ(bench.Refused(bench.Start("imu")), "");
   bench.Run(0.8);
+  // Until the rest is taken the part is not free for its move.
+  EXPECT_EQ(bench.StepState("imu")["blocked"][0]["reason"], "INPUT_ACTIVE");
   bench.imu_on = true;
+  bench.Run(0.2);
+  EXPECT_EQ(bench.StepState("imu")["blocked"][0]["reason"], "INPUT_ACTIVE");
   bench.Run(0.8);
   const json step = bench.StepState("imu");
   EXPECT_EQ(step["state"], "running");

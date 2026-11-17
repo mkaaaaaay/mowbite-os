@@ -1520,7 +1520,8 @@ json Program::Blocked(const Step& step, double now) const {
     if (!rest) return blocked;
     if (part.move == "tilt_stop") {
       if ((hardware_.emergency_reason & TiltBit()) != 0) add("EMERGENCY", "The emergency TILT is still latched");
-    } else if (run.rest_began >= 0 && now - run.rest_began > kRestTime) {
+    } else {
+      // Also while the rest is taken: a move before its end would count as part of the rest.
       add("INPUT_ACTIVE", "The mower does not stand level yet");
     }
     return blocked;
