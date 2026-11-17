@@ -1,7 +1,9 @@
 """The Airseekers Tron for mowbite.launch.py: tron_mcu in a process of its own, so that a crash of any other node
 leaves its watchdogs running (G25), tron_gnss, tron_imu, the LEDs and the speaker in the container, and in processes
 of their own the camera AI on the left and on the right side camera, the live picture of the stereo camera, the dock
-marker of the rear camera with its live picture, and with any of these the camera service.
+marker of the rear camera with its live picture, and with any of these the camera service. A driver that ends outside
+the shutdown starts again at most DRIVER_RESTARTS times, each new one latched from its first frame (start_latched):
+the MCU does not latch by itself when its host is gone.
 """
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import EnvironmentVariable
@@ -12,8 +14,7 @@ from launch_ros.descriptions import ComposableNode
 NODES = ("tron_gnss", "tron_imu", "mowbite_light", "mowbite_sound", "tron_vision", "right/tron_vision", "tron_stereo",
          "tron_side", "tron_rear", "mowbite_camera")
 DRIVER = "tron_mcu"
-# tron_mcu stays down after it ended, until the next start of the OS.
-DRIVER_RESTARTS = 0
+DRIVER_RESTARTS = 3
 # Where the rootfs of the Tron keeps the data of the OS.
 DATA_DIR = "/userdata/mowbite"
 
@@ -62,9 +63,10 @@ def parts(start):
                   "stop_clear_mark": start.data_file(start.data_store.STOP_CLEAR_MARK_FILE),
                   "read_only": hardware == "read"}
 
+    # Also with hardware:=read; the driver takes no latch there.
     def mcu(restart):
         return Node(package="tron_mcu", executable="tron_mcu_node", name=DRIVER, namespace="/",
-                    parameters=[*files, mcu_values], output="screen")
+                    parameters=[*files, {**mcu_values, "start_latched": restart > 0}], output="screen")
 
     gnss = ComposableNode(
         package="tron_gnss", plugin="tron_gnss::GnssNode", name="tron_gnss",

@@ -262,7 +262,7 @@ brings IMU and GNSS along) or `platform_tron` (nodes of its own in the container
 |---|---|
 | `NODES` | its other nodes, as the parameter files name them; the start checks their values and those of `DRIVER` |
 | `DRIVER` | the node that holds the motors, also the label of its exit note |
-| `DRIVER_RESTARTS` | how often the driver starts again after it ended (the NX60i 3, each time latched) |
+| `DRIVER_RESTARTS` | how often the driver starts again after it ended (3 on both mowers, each time latched) |
 | `DATA_DIR` | optional: `data_dir` when the start names none |
 | `arguments()` | its launch arguments (ports, datum, switches), as `DeclareLaunchArgument` |
 | `parts(start)` | `start.Parts(driver=, before=, after=, processes=)` |
@@ -275,9 +275,9 @@ itself), `data_store` (the names of the other files in `data_dir`), `parameters(
 and, for processes of its own,
 `own_process(make, name, **limits)` and `camera_service(**limits)`. It answers with
 `driver(restart)`, which builds the driver for its start number (0 the first; every later one has to come up latched,
-`start_latched` of `xcore_driver`), the components `before` and `after` those of the stack in the container, and
-`processes`, its other actions. Read every argument before `driver` is built: a restart comes when the arguments may be
-out of scope.
+`start_latched` of `tron_mcu` and `xcore_driver`), the components `before` and `after` those of the stack in the
+container, and `processes`, its other actions. Read every argument before `driver` is built: a restart comes when the
+arguments may be out of scope.
 
 Optional `setup/setup.yaml` with `setup/images/`: the steps of the setup program the app walks the user through
 (`setup.*`, node `mowbite_setup`). Without the file the methods are not offered. `catalog` counts up with every change

@@ -1,4 +1,5 @@
-"""platform.py of the Tron in the start of the stack: which processes start for hardware and the camera switches.
+"""platform.py of the Tron in the start of the stack: which processes start for hardware and the camera switches,
+and the latch of a restarted driver.
 
 Run in a sourced workspace (stack.py of mowbite_bringup): python3 -m pytest /ws/src/platform_tron/test/test_platform.py
 """
@@ -37,6 +38,16 @@ def camera_params(launched):
     """camera_params(**arguments): the last parameters of each camera process by its name."""
     return lambda **arguments: {k["exec_name"]: k["parameters"][-1] for k in launched(**arguments).nodes
                                 if k.get("package") == "tron_vision"}
+
+
+@pytest.mark.parametrize("hardware", ["true", "read"])
+def test_the_driver_restarts_latched(start, monkeypatch, tmp_path, hardware):  # noqa: F811
+    monkeypatch.setattr(stack, "restarting", lambda make, *args, **kwargs: [make(0), make(1)])
+    built = start("tron", platform, platform_config=PLATFORM_FILE, hardware=hardware)
+    first, second = [k["parameters"][-1] for k in built.nodes if k["name"] == platform.DRIVER]
+    assert first["start_latched"] is False and second["start_latched"] is True
+    assert built.restarting[0] == (str(tmp_path / stack.DRIVER_EXIT_NOTE), "tron_mcu", platform.DRIVER_RESTARTS)
+    assert platform.DRIVER_RESTARTS > 0
 
 
 def test_stereo_starts_with_the_hardware_and_its_switch(executables):
@@ -143,11 +154,6 @@ def test_the_parameter_check_knows_every_node(launched):
     checked = set().union(*(s.checked for s in starts))
     assert built and built <= checked, built - checked
     assert checked == set(stack.checked_nodes([], platform)) | built
-
-
-# tron_mcu is not started again after it ended: its exit note says down at once.
-def test_the_driver_stays_down_after_it_ended(launched, tmp_path):
-    assert (str(tmp_path / stack.DRIVER_EXIT_NOTE), "tron_mcu", 0) in launched().restarting
 
 
 # The measured values of this Tron in data_dir come last, for the driver as for every node.
