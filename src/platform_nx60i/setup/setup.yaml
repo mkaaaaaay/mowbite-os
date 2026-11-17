@@ -1,0 +1,134 @@
+# The steps of the setup program of the NX60i (mowbite_setup, setup.*), in the order the app shows them. A step is one
+# of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
+# change of the steps or of an image.
+catalog: 1
+steps:
+  - id: variant
+    stage: device
+    check: choice
+    params: {name: variant, values: [standard, other]}
+    value_texts:
+      standard:
+        de: {name: Verkabelt nach Standard}
+        en: {name: Wired as standard}
+      other:
+        de: {name: Anders verkabelt}
+        en: {name: Wired another way}
+    texts:
+      de:
+        name: Verkabelung
+        help: >-
+          Sind STOP-Tasten, Hebesensoren und Stoßfänger so an die Platine angeschlossen wie in der Anleitung des
+          Umbaus?
+        fix: Im Zweifel Standard wählen. Die Prüfung der Eingänge zeigt, ob jeder Sensor ankommt.
+      en:
+        name: Wiring
+        help: Are the STOP buttons, lift sensors and bumper connected to the board as the guide of the conversion says?
+        fix: When in doubt pick standard. The check of the inputs shows whether every sensor arrives.
+  - id: board
+    stage: device
+    check: board
+    params: {time: 5}
+    image: board.svg
+    symbol: board
+  - id: stop
+    stage: inputs
+    check: input
+    params: {role: stop}
+    parts:
+      - id: top
+        texts:
+          de: {name: STOP oben}
+          en: {name: STOP on top}
+      - id: rear
+        texts:
+          de: {name: STOP hinten}
+          en: {name: STOP at the rear}
+    image: stop.svg
+    accent: stop-accent.svg
+    symbol: stop
+    note:
+      de: Nach jeder Taste den Notaus in der App aufheben, dann die nächste drücken.
+      en: Release the emergency stop in the app after each button, then press the next.
+  # The board stops 2.5 s after a lift sensor switches, so a bump of 1.5 s must not stop.
+  - id: lift
+    stage: inputs
+    check: input
+    params: {role: lift, within: 3.5, short_max: 1.5, time: 90}
+    parts:
+      - id: left
+        texts:
+          de: {name: Links anheben und halten}
+          en: {name: Lift the left side and hold}
+      - id: right
+        texts:
+          de: {name: Rechts anheben und halten}
+          en: {name: Lift the right side and hold}
+      - id: short
+        mode: short
+        texts:
+          de: {name: Kurz anheben und sofort absetzen}
+          en: {name: Lift briefly and put down at once}
+    image: lift.svg
+    accent: lift-accent.svg
+    symbol: lift
+    note:
+      de: Der Notaus kommt erst nach gut zwei Sekunden. Danach absetzen und den Notaus in der App aufheben.
+      en: The emergency stop comes only after a good two seconds. Then put the mower down and release it in the app.
+  - id: bumper
+    stage: inputs
+    check: input
+    params: {role: bumper, within: 1.5}
+    parts:
+      - id: left
+        role: bumper_left
+      - id: right
+        role: bumper_right
+    image: bumper.svg
+    accent: bumper-accent.svg
+    symbol: bumper
+  - id: imu
+    stage: inputs
+    check: imu
+    parts: [front_up, left_up, turn_left, tilt_stop]
+    image: imu.svg
+  - id: ntrip
+    stage: position
+    check: done_when
+    params: {condition: ntrip}
+    open: ntrip
+    symbol: antenna
+  - id: fix
+    stage: position
+    check: position
+    params: {rate: 2}
+    symbol: antenna
+  - id: dimensions
+    stage: dimensions
+    check: geometry
+    params:
+      keys: [robot_width, robot_front, robot_rear, mower_width, blade_ahead, blade_offset, antenna_x, antenna_y, track]
+  - id: station
+    stage: station
+    check: done_when
+    params: {condition: station}
+    open: dock
+    symbol: dock
+  - id: area
+    stage: map
+    check: done_when
+    params: {condition: area}
+    open: recording
+    symbol: map
+  - id: dock_test
+    stage: trial
+    check: done_when
+    params: {condition: dock_test}
+    open: dock_test
+    symbol: dock
+  - id: mow
+    stage: trial
+    check: done_when
+    params: {condition: mow}
+    open: mow
+    symbol: blade

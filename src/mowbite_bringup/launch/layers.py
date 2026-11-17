@@ -1,8 +1,9 @@
 """The parameter files of a platform in their order: stack.yaml for every mower, then the file of the platform. A value
 of stack.yaml that every platform has to set stands there as PLACEHOLDER; no node starts while one is left (stack.py).
 A platform is a package that enters its name in the ament index under RESOURCE and has platform.yaml, geometry.yaml
-and platform.py in its share folder.
+and platform.py in its share folder, and setup/setup.yaml with the steps of the setup program if it has one.
 """
+import json
 import os
 import re
 
@@ -44,6 +45,27 @@ def files(platform):
 def geometry(platform):
     """The dimensions of this platform."""
     return os.path.join(folder(platform), "geometry.yaml")
+
+
+def setup(platform, folder_of=None):
+    """The parameters of mowbite_setup for this platform: the name its driver reports (geometry.platform of its
+    geometry.yaml), the step list of setup/setup.yaml as JSON and the folder of its images; an empty list for a
+    platform without one. OSError or ValueError when it cannot be read."""
+    home = folder_of or folder(platform)
+    root = os.path.join(home, "setup")
+    if not os.path.isfile(os.path.join(root, "setup.yaml")):
+        return {"platform": platform, "steps": "", "image_dir": ""}
+    path = os.path.join(root, "setup.yaml")
+    try:
+        with open(path) as f:
+            steps = yaml.safe_load(f)
+    except yaml.YAMLError as error:
+        raise ValueError(f"{path}: {error}")
+    dimensions = os.path.join(home, "geometry.yaml")
+    name = parameters([dimensions], "mowbite_logic").get("geometry.platform")
+    if not name:
+        raise ValueError(f"{dimensions}: geometry.platform is missing")
+    return {"platform": name, "steps": json.dumps(steps), "image_dir": os.path.join(root, "images")}
 
 
 def device_file(data_dir, platform):

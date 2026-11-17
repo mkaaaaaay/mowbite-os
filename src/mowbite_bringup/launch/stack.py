@@ -6,6 +6,7 @@ import asyncio
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -15,7 +16,7 @@ from launch.actions import (DeclareLaunchArgument, OpaqueCoroutine, OpaqueFuncti
 from launch.event_handlers import OnProcessExit, OnProcessStart
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, Node
-from launch_ros.descriptions import ComposableNode
+from launch_ros.descriptions import ComposableNode, ParameterValue
 
 # data_store.py lies next to this file, in the source tree and in the install space alike.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -120,6 +121,26 @@ def check_parameters(files, nodes, logger):
     return halt_actions(data_store.Halt("PLATFORM_CONFIG", text).line("-"), logger)
 
 
+# The step list of the setup program and its images before any node starts, by the rules of mowbite_setup: None when
+# the platform has none or all is well, else the halt PLATFORM_CONFIG.
+def check_setup(setup, logger):
+    if not setup["steps"]:
+        return None
+    from ament_index_python.packages import get_package_prefix
+    tool = os.path.join(get_package_prefix("mowbite_setup"), "lib", "mowbite_setup", "mowbite_setup_check")
+    try:
+        result = subprocess.run([tool, setup["image_dir"]], input=setup["steps"], capture_output=True, text=True,
+                                timeout=20)
+    except (OSError, subprocess.SubprocessError) as error:
+        text = f"The step list of the platform cannot be checked: {error}."
+    else:
+        if result.returncode == 0:
+            return None
+        lines = (result.stdout or result.stderr).strip().splitlines()
+        text = f"The step list of the platform: {lines[0] if lines else 'not valid'}."
+    return halt_actions(data_store.Halt("PLATFORM_CONFIG", text).line("-"), logger)
+
+
 # journal_dir as given, or empty with an error when it lies in data_dir: the backup of data_dir would take it along
 # (contract 3.5 (7)), and the journal has limits of its own.
 def journal_dir(path, data_dir, logger):
@@ -163,7 +184,7 @@ def arguments(platform, module):
 
 # The nodes above the hardware contract, the same on every platform; files are the parameter files of the platform in
 # their order (later ones change single values), geometry its dimensions.
-def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal):
+def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=None):
     journal_dir = {"journal_dir": journal}
     localization = ComposableNode(
         package="mowbite_localization", plugin="mowbite_localization::LocalizationNode", name="mowbite_localization",
@@ -204,7 +225,14 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal):
     stats = ComposableNode(
         package="mowbite_stats", plugin="mowbite_stats::StatsNode", name="mowbite_stats",
         parameters=[*files, {"data_dir": data_dir}, journal_dir])
-    return [localization, safety, logic, bridge, map_node, follower, ntrip, calibration, clock, schedule, stats]
+    # The setup program of the platform (setup.*): it only watches, its steps come from layers.setup.
+    setup = setup or {"platform": "", "steps": "", "image_dir": ""}
+    program = ComposableNode(
+        package="mowbite_setup", plugin="mowbite_setup::SetupNode", name="mowbite_setup",
+        parameters=[*files, {"data_dir": data_dir},
+                    {name: ParameterValue(value, value_type=str) for name, value in setup.items()}])
+    return [localization, safety, logic, bridge, map_node, follower, ntrip, calibration, clock, schedule, stats,
+            program]
 
 
 # The names of these composable nodes, as their watch knows them.
@@ -442,8 +470,13 @@ def launch_setup(context, platform, module):
     files = [arg("config"), arg("platform_config"), arg("extra_config")] + ([device] if device else [])
     journal = journal_dir(arg("journal_dir"), data_dir, logger)
     # The dimensions of the platform come before the files, which can change single values (the simulation does).
-    nodes = components(files, arg("geometry"), data_dir, arg("mqtt_host"), arg("mqtt_port"), journal)
-    halt = check_parameters(files, [*started(nodes), *module.NODES], logger)
+    try:
+        setup = layers.setup(platform)
+    except (OSError, ValueError) as error:
+        return halt_actions(data_store.Halt("PLATFORM_CONFIG", f"The step list cannot be read: {error}.").line("-"),
+                            logger)
+    nodes = components(files, arg("geometry"), data_dir, arg("mqtt_host"), arg("mqtt_port"), journal, setup)
+    halt = check_parameters(files, [*started(nodes), *module.NODES], logger) or check_setup(setup, logger)
     if halt:
         return halt
     parts = module.parts(Start(arg, files, device, data_dir, journal, logger))

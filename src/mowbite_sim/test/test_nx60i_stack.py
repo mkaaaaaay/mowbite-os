@@ -30,7 +30,7 @@ from launch.actions import IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
 from mowbite_msgs.msg import (HardwareCapabilities, HardwareStatus, MqttPublish, RobotPose, RobotState, RpcError,
-                              RpcRequest, RpcResponse)
+                              RpcMethods, RpcRequest, RpcResponse)
 from mowbite_msgs.srv import DriveTo, SetEmergency
 from rcl_interfaces.msg import Log
 from std_msgs.msg import String
@@ -55,8 +55,16 @@ BOARD_LATCH, BOARD_HIGH_LEVEL = 1, 128
 DRIVER_RESTARTS = bringup.platform_module("nx60i").DRIVER_RESTARTS
 # max_duty 0.3 of nx60i.yaml in the speed model 0.58 x (duty - 0.019).
 REACHED = 0.58 * (0.3 - 0.019)
+SETUP_METHODS = ["setup.get", "setup.start", "setup.answer", "setup.skip", "setup.abort", "setup.reset", "setup.image"]
+# Given as user and password of an NTRIP access: neither may reach the state or the record of the setup program.
+ACCESS_MARKERS = {"user": "marker-user-5b1f", "password": "marker-password-93ce"}
+
+# ntrip.set, which the stack leaves off, for the test that an access never reaches the setup program.
+CONFIG = os.path.join(WORK, "extra.yaml")
 
 write_json(FLAGS, {"gps_fix": "fix"})
+with open(CONFIG, "w") as f:
+    f.write("mowbite_ntrip:\n  ros__parameters:\n    access_over_rpc: true\n")
 
 
 def generate_test_description():
@@ -67,6 +75,7 @@ def generate_test_description():
                                                    "launch", "mowbite.launch.py")),
         launch_arguments={"platform": "nx60i", "interface": "lo", "bind_ip": BIND_IP,
                           "announcement_port": str(GROUP_PORT), "data_dir": DATA, "journal_dir": JOURNAL,
+                          "extra_config": CONFIG,
                           "datum_lat": str(DATUM[0]),
                           "datum_long": str(DATUM[1]), "datum_height": str(DATUM[2]),
                           "mqtt_port": str(random.randint(18000, 18999))}.items())
@@ -100,6 +109,8 @@ class Probe(SimProbe):
         self.robot = None
         self.pose = None
         self.params = []
+        # Every setup/json as (payload, retained).
+        self.setup_states = []
         self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
         self.node.create_subscription(HardwareCapabilities, "hw/capabilities", self._set("caps"), LATCHED)
         self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
@@ -109,6 +120,7 @@ class Probe(SimProbe):
         self.node.create_subscription(Log, "/rosout", self._log, ROSOUT)
         self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
         self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
+        self.node.create_subscription(RpcMethods, "bridge/rpc/methods", self._methods, HISTORY)
         self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
         self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
@@ -120,8 +132,28 @@ class Probe(SimProbe):
         with self.lock:
             self.params.append(json.loads(msg.data))
 
+    def _publish(self, msg):
+        if msg.topic == "setup/json":
+            with self.lock:
+                self.setup_states.append((msg.payload, msg.retain))
+        super()._publish(msg)
+
     def release(self):
         return self.set_emergency(False)
+
+    def setup_state(self):
+        answer = self.rpc("setup.get")
+        assert answer and "result" in answer, f"setup.get: {answer}"
+        return answer["result"]
+
+    def setup_change(self, method, **params):
+        """A setup.* call with the version of now, once more if the state moved by itself in between; its answer."""
+        for _ in range(2):
+            answer = self.rpc(method, {**params, "version": self.setup_state()["version"]})
+            data = ((answer or {}).get("error") or {}).get("data") or {}
+            if data.get("reason") != "VERSION":
+                break
+        return answer
 
     drive = SimProbe.cmd_vel_for
 
@@ -226,6 +258,49 @@ class TestNx60iStack(unittest.TestCase):
         set_flags()
         self.assertTrue(p.event(since, "CHARGING_LOST", 20, reason="NO_DOCK_CONTACT"), p.events[since:])
         self.assertEqual(p.robot.current_state, "IDLE")
+
+    def test_3c_the_setup_program_answers_and_sends_its_state_retained(self):
+        p = self.probe
+        self.assertEqual(p.wait(lambda: p.methods.get("mowbite_setup"), 10), SETUP_METHODS)
+        state = p.setup_state()
+        self.assertEqual(state["platform"], p.caps.platform)
+        self.assertTrue(state["steps"])
+        # Sent on every change and every 30 s, always retained for an app that comes later.
+        self.assertTrue(p.wait(lambda: p.setup_states, 35), "no setup/json")
+        with p.lock:
+            sent = list(p.setup_states)
+        self.assertTrue(all(retained for _, retained in sent), [retained for _, retained in sent])
+        last = json.loads(sent[-1][0])
+        self.assertEqual((last["platform"], last["catalog"]), (state["platform"], state["catalog"]))
+        self.assertEqual([step["id"] for step in last["steps"]], [step["id"] for step in state["steps"]])
+
+    def test_3d_no_access_data_in_the_state_or_the_record_of_the_setup_program(self):
+        p = self.probe
+        self.assertIn("ntrip.set", p.wait(lambda: p.methods.get("mowbite_ntrip"), 10) or [])
+        self.assertEqual(p.rpc("ntrip.get"), {"result": {"configured": False}})
+        access = p.rpc("ntrip.set", {"host": "127.0.0.1", "port": 9, "mountpoint": "CHECK", **ACCESS_MARKERS})
+        self.assertIn("result", access or {}, access)
+        try:
+            step = next((s for s in p.setup_state()["steps"] if s["skippable"] and s["state"] in ("open", "locked")
+                         and "later" in [reason["id"] for reason in s["skip_reasons"]]), None)
+            self.assertIsNotNone(step, "no step to skip with later")
+            # The skip writes the record and sends the state.
+            answer = p.setup_change("setup.skip", step=step["id"], reason="later")
+            self.assertIn("result", answer or {}, answer)
+            version = answer["result"]["version"]
+            self.assertTrue(p.wait(lambda: p.setup_states and json.loads(p.setup_states[-1][0])["version"] >= version,
+                                   5), "no setup/json after the skip")
+            with open(os.path.join(DATA, "setup.json")) as f:
+                record = f.read()
+            with p.lock:
+                sent = p.setup_states[-1][0]
+            texts = {"setup.get": json.dumps(p.setup_state()), "setup/json": sent, "setup.json": record}
+            for where, text in texts.items():
+                for marker in ACCESS_MARKERS.values():
+                    self.assertNotIn(marker, text, where)
+        finally:
+            deleted = p.rpc("ntrip.delete")
+        self.assertEqual(deleted, {"result": {"configured": False}})
 
     def test_4_a_killed_driver_leaves_a_latched_successor(self, proc_info):
         p = self.probe

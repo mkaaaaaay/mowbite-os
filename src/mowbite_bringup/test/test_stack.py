@@ -12,6 +12,8 @@ import re
 import sys
 import time
 
+import pytest
+import yaml
 from launch import LaunchDescription, LaunchService
 from launch.actions import ExecuteProcess, RegisterEventHandler
 from launch_ros.actions import ComposableNodeContainer
@@ -207,7 +209,7 @@ def test_the_watch_of_the_container_expects_its_nodes(tmp_path):
            for key, value in container.process_description.additional_env}
     names = ["mowbite_localization", "mowbite_safety", "mowbite_logic", "mowbite_bridge", "mowbite_map",
              "mowbite_follower", "mowbite_ntrip", "mowbite_calibration", "mowbite_clock", "mowbite_schedule",
-             "mowbite_stats"]
+             "mowbite_stats", "mowbite_setup"]
     assert stack.node_names(nodes) == names
     assert env == {"MOWBITE_WATCH_NODES": ",".join(names),
                    "MOWBITE_WATCH_NOTE": os.path.join(str(tmp_path), stack.WATCH_NOTE)}
@@ -240,3 +242,70 @@ def test_no_parameter_file_names_a_limit_of_the_watch():
     assert len(paths) >= 6, paths
     for path in paths:
         assert "watch" not in open(path).read().lower(), path
+
+
+def geometry_file(folder, text="mowbite_logic: {ros__parameters: {geometry: {platform: some_mower}}}"):
+    (folder / "geometry.yaml").write_text(text)
+
+
+def step_list(folder, text):
+    (folder / "setup").mkdir()
+    (folder / "setup" / "setup.yaml").write_text(text)
+
+
+def test_the_step_list_goes_out_under_the_name_of_the_driver():
+    with_list = 0
+    for platform in layers.platforms():
+        setup = layers.setup(platform)
+        if not setup["steps"]:
+            assert setup == {"platform": platform, "steps": "", "image_dir": ""}
+            continue
+        with_list += 1
+        with open(layers.geometry(platform)) as f:
+            name = yaml.safe_load(f)["mowbite_logic"]["ros__parameters"]["geometry"]["platform"]
+        assert setup["platform"] == name
+        assert json.loads(setup["steps"])["steps"]
+        assert os.path.isdir(setup["image_dir"])
+        assert stack.check_setup(setup, LOGGER) is None
+    assert with_list >= 2
+
+
+def test_a_platform_without_step_list_offers_none(tmp_path):
+    geometry_file(tmp_path)
+    setup = layers.setup("some", folder_of=str(tmp_path))
+    assert setup == {"platform": "some", "steps": "", "image_dir": ""}
+    assert stack.check_setup(setup, LOGGER) is None
+
+
+def test_a_step_list_that_cannot_be_read_is_an_error(tmp_path):
+    step_list(tmp_path, "catalog: 1\nsteps: [")
+    geometry_file(tmp_path)
+    with pytest.raises(ValueError, match="setup.yaml"):
+        layers.setup("some", folder_of=str(tmp_path))
+    (tmp_path / "setup" / "setup.yaml").write_text("catalog: 1\nsteps: []\n")
+    geometry_file(tmp_path, "mowbite_logic: {ros__parameters: {geometry: {}}}")
+    with pytest.raises(ValueError, match="geometry.platform is missing"):
+        layers.setup("some", folder_of=str(tmp_path))
+    os.remove(tmp_path / "geometry.yaml")
+    with pytest.raises(OSError):
+        layers.setup("some", folder_of=str(tmp_path))
+
+
+def test_a_step_list_against_the_rules_halts_the_start(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(stack, "halt_file", lambda: str(tmp_path / "halt"))
+    step_list(tmp_path, "catalog: 1\nsteps:\n  - {id: board, stage: device, check: nothing}\n")
+    geometry_file(tmp_path)
+    setup = layers.setup("some", folder_of=str(tmp_path))
+    assert setup["platform"] == "some_mower"
+    assert stack.check_setup(setup, LOGGER) is not None
+    line = (tmp_path / "halt").read_text()
+    assert line.startswith("MOWBITE_OS_HALT reason=PLATFORM_CONFIG data_schema=- image_schema=- The step list of the "
+                           "platform: "), line
+    assert "nothing" in line
+    assert "PLATFORM_CONFIG" in capsys.readouterr().err
+    # An image the list names has to be there and keep the rules of the node.
+    step_list_text = "catalog: 1\nsteps:\n  - {id: board, stage: device, check: board, image: board.svg}\n"
+    (tmp_path / "setup" / "setup.yaml").write_text(step_list_text)
+    setup = layers.setup("some", folder_of=str(tmp_path))
+    assert stack.check_setup(setup, LOGGER) is not None
+    assert "board.svg: it is missing" in (tmp_path / "halt").read_text()

@@ -8,7 +8,9 @@ stdout: one JSON document with a status (ok, missing, different, skipped) per po
 Exit 0 without missing or different, 1 with, 2 for a wrong call or a mower that cannot be reached.
 """
 import argparse
+import base64
 import datetime
+import hashlib
 import json
 import math
 import os
@@ -157,7 +159,7 @@ def rpc(method, params=None, rid="1", timeout=5.0, response_topic=RESPONSE, corr
 REC = "mower_logic:area_recording/"
 GEOMETRY_KEYS = ["robot_width", "robot_front", "robot_rear", "robot_outline", "mower_width", "blade_ahead",
                  "blade_offset", "antenna_x", "antenna_y", "track", "wheel_radius", "wheel_width", "dock_contact_x",
-                 "dock_footprint", "ticks_per_m", "imu_roll", "imu_pitch"]
+                 "dock_footprint", "ticks_per_m", "imu_roll", "imu_pitch", "robot_shape"]
 
 
 def enabled(action_id):
@@ -428,15 +430,16 @@ if args.target == "mowbite-os" and offers("robot.geometry.set") and offers("robo
     check("robot.geometry.get names the platform of system.info",
           answer.get("platform") == ((r or {}).get("result") or {}).get("platform"),
           f'{answer.get("platform")} / {((r or {}).get("result") or {}).get("platform")}')
-    fixed = ("wheel_radius", "wheel_width", "dock_contact_x", "dock_footprint")
-    check("robot.geometry.get: only the platform sets wheel_radius, wheel_width, dock_contact_x and dock_footprint", all(
+    fixed = ("wheel_radius", "wheel_width", "dock_contact_x", "dock_footprint", "robot_shape")
+    check("robot.geometry.get: only the platform sets " + ", ".join(fixed), all(
         settings.get(k, {}).get("settable") is False for k in fixed) and all(
         settings.get(k, {}).get("settable") is True for k in GEOMETRY_KEYS if k not in fixed), "")
     p = json.loads(latest("params/json") or "{}")
-    shown = {k: p.get("/mowbite_geometry/" + k) for k in GEOMETRY_KEYS}
+    # The shape is for drawing only, the planner does not read it: it stays out of params/json.
+    shown = {k: p.get("/mowbite_geometry/" + k) for k in GEOMETRY_KEYS if k != "robot_shape"}
     check("params/json has the dimensions of the mower with the version", None not in shown.values() and
           p.get("/mowbite_geometry/version") == answer.get("version") and all(
-              shown[k] == settings[k]["value"] for k in GEOMETRY_KEYS if k in settings), json.dumps(shown)[:200])
+              shown[k] == settings[k]["value"] for k in shown if k in settings), json.dumps(shown)[:200])
     check("params/json has the antenna offset of the localization from the geometry",
           p.get("/xbot_positioning/antenna_offset_x") == settings.get("antenna_x", {}).get("value") and
           p.get("/xbot_positioning/antenna_offset_y") == settings.get("antenna_y", {}).get("value"),
@@ -462,6 +465,68 @@ if args.target == "mowbite-os" and offers("ntrip.get"):
     check("ntrip.get without user and password", fields == expected, json.dumps(fields or r))
     writable = [m for m in ("ntrip.set", "ntrip.delete") if m in methods]
     check("ntrip.set and ntrip.delete only together", len(writable) in (0, 2), ",".join(writable))
+SETUP_METHODS = ["setup.get", "setup.start", "setup.answer", "setup.skip", "setup.abort", "setup.reset", "setup.image"]
+setup_offered = [m for m in SETUP_METHODS if methods is not None and m in methods]
+if args.target == "mowbite-os":
+    # The setup program, offered where the platform has a step list. Nothing here starts, skips or resets a step.
+    check("setup.* only together", len(setup_offered) in (0, len(SETUP_METHODS)), ",".join(setup_offered),
+          point="B1 setup methods")
+if "setup.get" in setup_offered:
+    r = rpc("setup.get", None, "setup_get")
+    setup_state = (r or {}).get("result") or {}
+    setup_steps = setup_state.get("steps") or []
+    setup_unnamed = [s.get("id") for s in setup_steps
+                     if not all(bool(((s.get("texts") or {}).get(lang) or {}).get("name")) for lang in ("de", "en"))]
+    check("setup.get answers version, catalog and steps with names in de and en",
+          isinstance(setup_state.get("version"), int) and isinstance(setup_state.get("catalog"), int)
+          and bool(setup_steps) and not setup_unnamed, json.dumps(setup_unnamed or r)[:300], point="B1 setup.get")
+    if methods is not None and "robot.geometry.get" in methods:
+        r = rpc("robot.geometry.get", None, "setup_geometry")
+        geometry_platform = ((r or {}).get("result") or {}).get("platform")
+        check("setup.get names the platform of robot.geometry.get",
+              bool(geometry_platform) and setup_state.get("platform") == geometry_platform,
+              f'{setup_state.get("platform")} / {geometry_platform}', point="B1 setup.get")
+    else:
+        skip("setup.get names the platform of robot.geometry.get", "robot.geometry.get not in rpc.methods",
+             point="B1 setup.get")
+    # The one that came on subscribe; a live one reaches a subscribed client without the retain flag.
+    setup_kept = [p for _, top, p, ret in msgs if top == "setup/json" and ret]
+    setup_sent = json.loads(setup_kept[-1]) if setup_kept else {}
+    check("setup/json retained with the platform, catalog and steps of setup.get",
+          bool(setup_kept) and bool(setup_steps)
+          and all(setup_sent.get(k) == setup_state.get(k) for k in ("platform", "catalog"))
+          and [s.get("id") for s in setup_sent.get("steps") or []] == [s.get("id") for s in setup_steps],
+          json.dumps({k: setup_sent.get(k) for k in ("platform", "catalog", "version")}), point="B1 setup/json")
+    # An old version is refused before anything else; the state may move by itself in between, then once more.
+    setup_first = setup_steps[0].get("id") if setup_steps else "none"
+    for _ in range(2):
+        setup_version = setup_state.get("version") if isinstance(setup_state.get("version"), int) else 0
+        r = rpc("setup.start", {"step": setup_first, "version": setup_version - 1}, "setup_start_old")
+        setup_error = (r or {}).get("error") or {}
+        setup_data = setup_error.get("data") or {}
+        if setup_data.get("version") == setup_version:
+            break
+        setup_state = (rpc("setup.get", None, "setup_get_again") or {}).get("result") or {}
+    check("setup.start with an old version refused -32600 SETUP_REFUSED VERSION with the version of now",
+          setup_error.get("code") == -32600 and setup_data.get("event") == "SETUP_REFUSED"
+          and setup_data.get("reason") == "VERSION" and setup_data.get("version") == setup_version,
+          json.dumps(r)[:300], point="B1 setup refused")
+    setup_image = next((s["image"] for s in setup_steps if isinstance(s.get("image"), dict)), None)
+    if setup_image:
+        r = rpc("setup.image", {"name": setup_image.get("name")}, "setup_image")
+        setup_piece = (r or {}).get("result") or {}
+        setup_bytes = base64.b64decode(setup_piece.get("data") or "")
+        setup_hash = hashlib.sha256(setup_bytes).hexdigest()
+        check("setup.image: the sha256 of the data is that of the answer and of the step",
+              setup_piece.get("offset") == 0 and setup_piece.get("size") == len(setup_bytes) == setup_image.get("bytes")
+              and setup_hash == setup_piece.get("sha256") == setup_image.get("sha256")
+              and setup_piece.get("type") == "image/svg+xml",
+              f'{setup_image.get("name")}: {setup_hash} / {setup_piece.get("sha256")} / {setup_image.get("sha256")}',
+              point="B1 setup.image")
+    else:
+        skip("setup.image", "no step names an image", point="B1 setup.image")
+else:
+    skip("setup.get", "not in rpc.methods: the platform has no step list", point="B1 setup.get")
 if args.target == "mowbite-os" and offers("schedule.get"):
     # FP22: the schedule; where the platform does not allow it, it says so and cannot be switched on.
     r = rpc("schedule.get", None, "schedule_get")
@@ -805,10 +870,19 @@ if ntrip_write and ((rpc("ntrip.get", None, "ntrip_before") or {}).get("result")
     skip("ntrip.set", "the simulation has an NTRIP access, it stays as it is")
     ntrip_write = False
 if ntrip_write:
+    setup_seen = sum(top == "setup/json" for _, top, _, _ in msgs)
     r = rpc("ntrip.set", TEST_ACCESS, "ntrip_set")
     check("ntrip.set answers like ntrip.get", (r or {}).get("result") == {
         "configured": True, "host": "127.0.0.1", "port": 9, "mountpoint": "CHECK", "version": 2, "has_user": True,
         "has_password": True}, json.dumps(r))
+    if "setup.get" in setup_offered:
+        # The step of the corrections sees the access: the state goes out again, within its 0.5 s.
+        wait_for(lambda: sum(top == "setup/json" for _, top, _, _ in msgs) > setup_seen, 2.0)
+        r = rpc("setup.get", None, "setup_access")
+        setup_texts = [json.dumps(r).encode()] + [p for _, top, p, _ in msgs if top == "setup/json"]
+        setup_secret = TEST_ACCESS["password"].encode()
+        check("the password of the NTRIP access is not in setup.get or setup/json",
+              bool(r) and not any(setup_secret in text for text in setup_texts), point="B1 setup access")
     r = rpc("ntrip.set", {"host": "localhost", "port": 9, "mountpoint": "CHECK"}, "ntrip_move")
     check("ntrip.set keeps no login for another caster -32602", bool(r) and r.get("error", {}).get("code") == -32602,
           json.dumps(r and r.get("error")))
@@ -1384,6 +1458,18 @@ def check_against_schema():
     errors = list(validator("system.info.result").iter_errors((r or {}).get("result")))
     check("system.info as in system.api", bool(r) and not errors, errors[0].message[:200] if errors else "",
           point="AS3 schema system.info")
+    # B1: the state of the setup program as setup.get answers it and as setup/json sends it.
+    if "setup" in defs and methods is not None and "setup.get" in methods:
+        r = rpc("setup.get", None, "setup_schema")
+        errors = list(validator("setup").iter_errors((r or {}).get("result")))
+        check("setup.get as $defs.setup", bool(r) and not errors, errors[0].message[:200] if errors else "",
+              point="B1 schema setup")
+        payloads = [p for _, top, p, _ in msgs if top == "setup/json" and p]
+        bad = []
+        for p in payloads:
+            bad += [e.message[:160] for e in validator("setup").iter_errors(json.loads(p))]
+        check(f"every setup/json seen ({len(payloads)}) as $defs.setup", bool(payloads) and not bad,
+              "; ".join(sorted(set(bad))[:4]), point="B1 schema setup")
     # AS2: the answers of the commands and the data of their refusals.
     bad = []
     for method, r in COMMAND_ANSWERS:

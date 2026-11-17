@@ -1,0 +1,120 @@
+# The steps of the setup program of the Tron (mowbite_setup, setup.*), in the order the app shows them. A step is one
+# of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
+# change of the steps or of an image. mark names parts of robot_shape (geometry.yaml).
+catalog: 1
+steps:
+  - id: board
+    stage: device
+    check: board
+    params: {time: 5}
+    image: board.svg
+    symbol: board
+  - id: stop
+    stage: inputs
+    check: input
+    params: {role: stop}
+    parts:
+      - id: top
+    image: stop.svg
+    accent: stop-accent.svg
+    symbol: stop
+    mark: [stop_top]
+  - id: lift
+    stage: inputs
+    check: input
+    params: {role: lift, within: 3, time: 90}
+    parts:
+      - id: front
+        texts:
+          de: {name: Vorn an der Haube anheben und halten}
+          en: {name: Lift the front by the hood and hold}
+    image: lift.svg
+    accent: lift-accent.svg
+    symbol: lift
+    note:
+      de: >-
+        Die Sensoren sitzen vorn unter der Haube. Danach absetzen und den Notaus mit einem kurzen Druck auf STOP
+        lösen.
+      en: The sensors sit at the front under the hood. Then put the mower down and release with a short press of STOP.
+  - id: bumper
+    stage: inputs
+    check: input
+    params: {role: bumper, within: 1.5}
+    parts:
+      - id: left
+        role: bumper_left
+      - id: right
+        role: bumper_right
+    image: bumper.svg
+    accent: bumper-accent.svg
+    symbol: bumper
+    mark: [bumper_left, bumper_right]
+  - id: imu
+    stage: inputs
+    check: imu
+    parts: [front_up, left_up, turn_left, tilt_stop]
+    image: imu.svg
+  - id: correction
+    stage: position
+    check: choice
+    params: {name: correction, values: [ntrip, radio]}
+    value_texts:
+      ntrip:
+        de: {name: Korrekturdienst über das Netz (NTRIP)}
+        en: {name: Correction service over the network (NTRIP)}
+      radio:
+        de: {name: Eigene Station per Funk am Empfänger}
+        en: {name: Own station by radio at the receiver}
+    texts:
+      de:
+        name: Korrekturquelle
+        help: Woher bekommt der Mäher die Korrekturdaten für die genaue Position?
+        fix: Mit einem Dienst wie SAPOS oder einer eigenen Station im Heimnetz NTRIP wählen.
+      en:
+        name: Source of corrections
+        help: Where does the mower get the correction data for its exact position from?
+        fix: Pick NTRIP for a service or for a station of your own in the home network.
+    symbol: antenna
+  - id: ntrip
+    stage: position
+    check: done_when
+    params: {condition: ntrip}
+    open: ntrip
+    symbol: antenna
+    note:
+      de: Mit einer eigenen Station per Funk diesen Schritt überspringen.
+      en: Skip this step with a station of your own by radio.
+  - id: fix
+    stage: position
+    check: position
+    symbol: antenna
+  - id: dimensions
+    stage: dimensions
+    check: geometry
+    params:
+      keys: [robot_width, robot_front, robot_rear, mower_width, blade_ahead, blade_offset, antenna_x, antenna_y, track]
+    mark: [outline]
+  - id: station
+    stage: station
+    check: done_when
+    params: {condition: station}
+    open: dock
+    symbol: dock
+  - id: area
+    stage: map
+    check: done_when
+    params: {condition: area}
+    open: recording
+    symbol: map
+  - id: dock_test
+    stage: trial
+    check: done_when
+    params: {condition: dock_test}
+    open: dock_test
+    symbol: dock
+  - id: mow
+    stage: trial
+    check: done_when
+    params: {condition: mow}
+    open: mow
+    symbol: blade

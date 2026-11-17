@@ -110,6 +110,13 @@ has one.
   aside); `robot.geometry.set` refuses such a body with `WHEELS_OUTSIDE`. Optional `robot_outline`: the contour from above as a
   flat list x0, y0, x1, y1, ... (at least 3 points); the planner then uses it instead of the rectangle (the Tron has
   one).
+  Optional `robot_shape`: how the mower looks from above, for the app to draw it and to mark a part in a step of the
+  setup program. `robot_shape.parts` lists the ids in the order they are drawn, each part has `kind` (one of
+  `x-setup.shape_kinds`: body, wheel, caster, bumper, button, sensor, handle), `points` as a flat list in base_link and
+  `closed` (true by default; false for a line or a single point). At most 32 parts, 200 points a part and 1000 in all,
+  none farther than 1.5 m from base_link. It is shown only: the body the mower plans with stays box or outline, and
+  that has to cover every part (`test_config_consistency.py`). An outline of the user that leaves a part out is told
+  with `SHAPE_OUTSIDE`.
   Optional `dock_footprint`: the docking station from above in base_link of the docked mower, the same kind of list,
   for the planner to keep its lanes and turns off it; the platform's alone, without it the planner takes its own.
   `dock_contact_x` says where the charging contacts are: below 0 at the back (the mower backs onto the station and
@@ -251,6 +258,38 @@ processes of its own, `own_process(make, name, **limits)` and `camera_service(**
 `start_latched` of `xcore_driver`), the components `before` and `after` those of the stack in the container, and
 `processes`, its other actions. Read every argument before `driver` is built: a restart comes when the arguments may be
 out of scope.
+
+Optional `setup/setup.yaml` with `setup/images/`: the steps of the setup program the app walks the user through
+(`setup.*`, node `mowbite_setup`). Without the file the methods are not offered. `catalog` counts up with every change
+of a step or an image, `steps` come in the order the app shows them:
+
+| Field | What |
+|---|---|
+| `id`, `stage`, `check` | its name, one of `x-setup.stages` and one of `x-setup.checks` of the schema |
+| `params` | the params of the check, within the bounds the schema names; without an entry the default there |
+| `parts` | of `input`: `id`, optional `mode` (press, short), `role` and `texts`; of `imu`: the moves in their order |
+| `value_texts` | of `choice`: `de` and `en` with `name` for every value |
+| `confirm` | points the user ticks before the step begins (`x-setup.points`, or own ones with texts) |
+| `needs` | steps ahead of it that have to be ok first |
+| `skippable` | false for a step the user must not skip |
+| `texts`, `note` | `de` and `en` with `name`, `help`, `fix`; needed where the check brings none; `note` adds to help |
+| `image`, `accent` | files of `setup/images/`: the drawing and the part to look at, drawn over it in another colour |
+| `symbol`, `mark`, `open` | a sign for a step without image, ids of `robot_shape` to mark, the screen the app opens |
+
+A step is one of: `choice` and `number` (the user answers), `confirm`, `board` (the driver reports, firmware, link,
+inputs at rest, motor controllers, battery, gravity), `input` (a STOP button, the lift or the bumper by hand: every
+part has to bring its emergency within `within`, a part of mode `short` must not), `imu` (tilting and turning by hand
+with the right sign), `position` (the fix holds), `geometry` (the dimensions confirmed) and `done_when` (done as soon
+as the OS sees corrections, a station, an area, a docking test or a trial run). None of them moves the mower. Take
+`within` from what the board does: the NX60i stops 2.5 s after a lift sensor, so its list waits 3.5 s and counts 1.5 s
+as short. An emergency that is on for more than 0.3 s before its input shows in `hw/status` counts as brought by
+something else, and the part waits for its release: a driver reports the input with or before the emergency it brings.
+
+An image is an SVG of one colour without text, raster images, scripts, styles or references, at most 65536 bytes;
+image and accent share one viewBox. The start checks list and images by the rules of the node (`mowbite_setup_check`)
+and halts with `PLATFORM_CONFIG` and the first problem. `CMakeLists.txt` installs the folder
+(`install(DIRECTORY setup DESTINATION share/${PROJECT_NAME})`). `test_setup.py` does every step of the list of each
+platform by hand against the node (`test_setup_<name>`, with the case of the driver contract).
 
 The start is the same for every mower: `ros2 launch mowbite_bringup mowbite.launch.py platform:=<name>`, by default the
 platform `MOWBITE_PLATFORM` names, a value of the device (the compose file of the mower sets it, the Tron in
@@ -515,6 +554,9 @@ Around `mowbite_camera`:
       ament index; `test_layers.py` green with it
 - [ ] `gnss_receiver_time` only with UTC from the receiver; `rtc` of `mowbite_clock` only after the measurement
 - [ ] `allowed` of `mowbite_schedule` only after the gates of the schedule
+- [ ] `robot_shape` drawn from measured points, covered by box or outline
+- [ ] `setup/setup.yaml` with the inputs and sensors this mower has, `within` from the board, images of one colour,
+      `test_setup_<name>` passes
 - [ ] `mowbite.launch.py platform:=<name>` starts the stack, driver restarts latched
 - [ ] Every node of your own in the container attached to the watch (`test_stack.py`)
 - [ ] Simulation: mowing, going home, docking; `app_interface_check`

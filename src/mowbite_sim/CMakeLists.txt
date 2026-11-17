@@ -40,12 +40,14 @@ if(BUILD_TESTING)
   add_journaled_launch_test(test/test_localization_quality.py TIMEOUT 600)
   add_journaled_launch_test(test/test_course_guard.py TIMEOUT 180)
   add_journaled_launch_test(test/test_spot_slip.py TIMEOUT 180)
-  # The driver contract once for each case test/contract_<platform>.py.
+  # The driver contract and the setup program once for each case test/contract_<platform>.py.
   file(GLOB cases CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/test/contract_*.py)
   foreach(case ${cases})
     get_filename_component(platform ${case} NAME_WE)
     string(REPLACE "contract_" "" platform ${platform})
     add_journaled_launch_test(test/test_driver_contract.py TARGET test_driver_contract_${platform} TIMEOUT 180
+      ENV MOWBITE_PLATFORM=${platform})
+    add_journaled_launch_test(test/test_setup.py TARGET test_setup_${platform} TIMEOUT 240
       ENV MOWBITE_PLATFORM=${platform})
   endforeach()
   add_journaled_launch_test(test/test_hw_contract.py TIMEOUT 120)
