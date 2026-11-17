@@ -1,8 +1,8 @@
 # The steps of the setup program of the NX60i (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image.
-catalog: 5
-# inputs_assign ends with a restart of the OS: the launch ends and whatever runs it starts it again.
+catalog: 6
+# inputs_assign, blade and summary restart the OS: the launch ends and whatever runs it starts it again.
 restart: self
 steps:
   - id: variant
@@ -235,6 +235,12 @@ steps:
       emergency: [HIGH_LEVEL, TIMEOUT_HIGH_LEVEL]
     confirm: [blade_removed, hand_at_stop]
     symbol: blade
+  # Once every safety step passed: the date and the stand time without the host for xcore_driver, then a restart.
+  - id: summary
+    stage: safety
+    check: summary
+    params: {node: xcore_driver}
+    confirm: [seen_myself]
   - id: dimensions
     stage: dimensions
     check: geometry
