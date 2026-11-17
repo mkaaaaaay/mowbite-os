@@ -4,7 +4,7 @@ geometry) and does every step of the list by hand, as a user would, until the pr
 the steps that move the wheels are left out (test_setup_motion_<platform>.py).
 The emergency a press of an input brings is released by the program, over safety/release_emergency, which the test
 plays as well. A step inputs_assign is left out of the list: it restarts the OS and needs a driver that learns
-(test_nx60i_inputs.py).
+(test_nx60i_inputs.py); so is summary, which restarts the OS too.
 
 Run in a sourced workspace: MOWBITE_PLATFORM=<platform> launch_test /ws/src/mowbite_sim/test/test_setup.py
 """
@@ -41,7 +41,8 @@ FILE = os.path.join(WORK, "setup.json")
 SETUP = layers.setup(PLATFORM)
 LIST = json.loads(SETUP["steps"]) if SETUP["steps"] else {"catalog": 0, "steps": []}
 DRIVE = ("wheels", "stop_moving", "no_command", "silence", "driver_end", "ground", "blade")
-LIST["steps"] = [step for step in LIST["steps"] if step["check"] != "inputs_assign" and step["check"] not in DRIVE]
+# inputs_assign and summary restart the OS; summary needs the step silence before it as well.
+LIST["steps"] = [step for step in LIST["steps"] if step["check"] not in ("inputs_assign", "summary") + DRIVE]
 SETUP["steps"] = json.dumps(LIST) if LIST["steps"] else ""
 STEPS = {step["id"]: step for step in LIST["steps"]}
 BOARD = next((step["id"] for step in LIST["steps"] if step["check"] == "board"), None)
