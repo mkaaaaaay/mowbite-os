@@ -40,7 +40,7 @@ WORK = tempfile.mkdtemp(prefix="mowbite_setup_")
 FILE = os.path.join(WORK, "setup.json")
 SETUP = layers.setup(PLATFORM)
 LIST = json.loads(SETUP["steps"]) if SETUP["steps"] else {"catalog": 0, "steps": []}
-DRIVE = ("wheels", "stop_moving", "no_command", "silence", "driver_end")
+DRIVE = ("wheels", "stop_moving", "no_command", "silence", "driver_end", "ground")
 LIST["steps"] = [step for step in LIST["steps"] if step["check"] != "inputs_assign" and step["check"] not in DRIVE]
 SETUP["steps"] = json.dumps(LIST) if LIST["steps"] else ""
 STEPS = {step["id"]: step for step in LIST["steps"]}

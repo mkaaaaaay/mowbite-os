@@ -8,6 +8,8 @@ setup.keep ends a step, an emergency of the app ends it, and driver_end is not o
 driver left. The failed step closes the lock of autonomous driving (safety_lock.json): HIGH_LEVEL latches, its release
 leaves the lock closed and a calibration is refused, until the step passes again; a file that cannot be read closes
 it as well. The Tron has a safety measurement date in its simulation, so there it is the date the lock closes against.
+At the end the step ground drives on the simulated ground: straight, turn, back until STOP, against the bumper; on the
+NX60i, whose lock stays closed without a date, only once every step jacked up passed again.
 
 Run in a sourced workspace: MOWBITE_PLATFORM=<platform> launch_test /ws/src/mowbite_sim/test/test_setup_motion.py
 """
@@ -28,12 +30,12 @@ import rclpy
 from geometry_msgs.msg import TwistStamped
 from launch.actions import ExecuteProcess, TimerAction
 from mowbite_msgs.msg import (HardwareStatus, MqttPublish, RobotState, RpcError, RpcMethods, RpcRequest, RpcResponse,
-                              SafetyStatus)
+                              Rtcm, SafetyStatus)
 from mowbite_msgs.srv import SetEmergency
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import (EXIT_CODES, HISTORY, SimProbe, fake_xcore, journal_dir, layers,  # noqa: E402,F401
-                        loopback_group, sim_description, sim_files, wait_until, write_json)
+                        loopback_group, sim_description, sim_files, station_frame, wait_until, write_json)
 
 PLATFORM = os.environ["MOWBITE_PLATFORM"]
 WORK = tempfile.mkdtemp(prefix=f"mowbite_setup_motion_{PLATFORM}_")
@@ -109,6 +111,10 @@ class Probe(SimProbe):
         # setup.keep as the app sends it while a step that moves runs.
         self.keeping = None
         self.keeper = threading.Thread(target=self._keep, daemon=True)
+        if PLATFORM == "nx60i":
+            # Corrections once a second, as a caster sends them: the xCore counts RTK fixed only with them (ground).
+            self.rtcm_pub = self.node.create_publisher(Rtcm, "gnss/rtcm", 10)
+            self.node.create_timer(1.0, lambda: self.rtcm_pub.publish(Rtcm(data=list(station_frame()))))
         self.start()
         self.keeper.start()
 
@@ -126,6 +132,9 @@ class Probe(SimProbe):
 
     def turning(self):
         return self.wheels is not None and abs(self.wheels.twist.linear.x) > 0.02
+
+    def driving(self, sign):
+        return self.wheels is not None and self.wheels.twist.linear.x * sign > 0.02
 
     def up(self, timeout=90.0):
         return self.wait(lambda: self.status is not None and self.status.telemetry_ok and self.robot is not None
@@ -164,12 +173,12 @@ class TestSetupMotion(unittest.TestCase):
         rclpy.shutdown()
         shutil.rmtree(WORK, ignore_errors=True)
 
-    def start(self, step, keep=True):
+    def start(self, step, keep=True, confirm=CONFIRM):
         p = self.probe
         entry = wait_until(lambda: (lambda e: e if not e["blocked"] else None)(p.step(step)), 15)
         self.assertIsNotNone(entry, f"{step} stays blocked: {p.step(step)['blocked']}")
         p.keeping = step if keep else None
-        answer = p.change("setup.start", step, confirm=CONFIRM)
+        answer = p.change("setup.start", step, confirm=confirm)
         self.assertIn("result", answer, answer)
 
     def ended(self, step, timeout):
@@ -198,6 +207,7 @@ class TestSetupMotion(unittest.TestCase):
             entry = p.step(step)
             self.assertEqual((entry["kind"], entry["state"]), ("drive", "open"), step)
             self.assertEqual(entry["motion"]["raised"], True, step)
+        self.assertEqual(p.step("ground")["motion"]["raised"], False)
         refused = p.change("setup.start", "wheels", confirm=["raised"])
         self.assertEqual(refused["error"]["data"]["reason"], "CONFIRM_MISSING", refused)
 
@@ -349,6 +359,43 @@ class TestSetupMotion(unittest.TestCase):
         finally:
             os.remove(LOCK)
         self.assertTrue(p.wait(lambda: not p.safety.lock_closed, 2), p.safety)
+
+    def press_while(self, part, sign, flag):
+        """Waits until part n of ground drives in the way of sign, then triggers flag for 0.5 s."""
+        p = self.probe
+        ready = wait_until(lambda: (lambda e: e if e["state"] != "running" or (
+            e["progress"]["n"] == part and p.driving(sign) and p.status.emergency_reason == 0) else None)(
+                p.step("ground")), 40)
+        self.assertEqual((ready or {}).get("state"), "running", p.step("ground"))
+        time.sleep(0.5)
+        set_flags(**{flag: 1})
+        self.assertTrue(p.wait(lambda: p.status.emergency_reason != 0, 2), flag)
+        time.sleep(0.5)
+        set_flags()
+
+    def test_13_ground(self):
+        p = self.probe
+        if PLATFORM == "nx60i":
+            # The lock is closed: the steps jacked up that ended failed above come first.
+            blocked = p.step("ground")["blocked"]
+            self.assertEqual([b["reason"] for b in blocked], ["SAFETY_AIR"], blocked)
+            self.start("wheels")
+            asked = wait_until(lambda: (lambda e: e if e["state"] != "running" or any(
+                i["name"] == "wheel" and i["ask"] for i in e["inputs"]) else None)(p.step("wheels")), 40)
+            self.assertEqual((asked or {}).get("state"), "running", asked)
+            time.sleep(0.5)
+            self.assertIn("result", p.change("setup.answer", "wheels", values={"wheel": "right"}))
+            self.passed("wheels", 10)
+            self.test_03_stop_moving()
+        refused = p.change("setup.start", "ground", confirm=CONFIRM)
+        self.assertEqual(refused["error"]["data"]["reason"], "CONFIRM_MISSING", refused)
+        self.start("ground", confirm=["area_clear"])
+        self.press_while(3, -1, "stop")
+        self.press_while(4, -1 if STEPS["ground"]["params"]["bumper_direction"] == "backward" else 1, "bumper")
+        entry = self.passed("ground", 30)
+        for value in entry["values"]:
+            self.assertTrue(value["ok"], value)
+        self.assertFalse(os.path.exists(LOCK))
 
 
 @launch_testing.post_shutdown_test()
