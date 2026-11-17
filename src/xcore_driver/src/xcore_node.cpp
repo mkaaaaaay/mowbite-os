@@ -7,6 +7,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
@@ -16,9 +17,11 @@
 #include <mowbite_msgs/msg/rtcm.hpp>
 #include <mowbite_msgs/msg/sensor_spec.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
+#include <mowbite_msgs/srv/end_driver.hpp>
 #include <mowbite_msgs/srv/set_blade.hpp>
 #include <mowbite_msgs/srv/set_charge.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
+#include <mowbite_msgs/srv/silence_driver.hpp>
 #include <mowbite_hold/hold.h>
 #include <mutex>
 #include <optional>
@@ -217,6 +220,14 @@ class XcoreNode : public rclcpp::Node {
     charge_srv_ = create_service<mowbite_msgs::srv::SetCharge>(
         "hw/charge", [this](const mowbite_msgs::srv::SetCharge::Request::SharedPtr& req,
                             const mowbite_msgs::srv::SetCharge::Response::SharedPtr& res) { OnCharge(*req, *res); });
+    silence_srv_ = create_service<mowbite_msgs::srv::SilenceDriver>(
+        "hw/silence", [this](const mowbite_msgs::srv::SilenceDriver::Request::SharedPtr& req,
+                             const mowbite_msgs::srv::SilenceDriver::Response::SharedPtr& res) {
+          OnSilence(*req, *res);
+        });
+    end_srv_ = create_service<mowbite_msgs::srv::EndDriver>(
+        "hw/end", [this](const mowbite_msgs::srv::EndDriver::Request::SharedPtr&,
+                         const mowbite_msgs::srv::EndDriver::Response::SharedPtr& res) { OnEnd(*res); });
 
     // At the end of the process the loop sends its stop inputs before the node goes away.
     context_ = get_node_base_interface()->get_context();
@@ -382,6 +393,12 @@ class XcoreNode : public rclcpp::Node {
     c.overspeed_factor = declare_parameter("overspeed_factor", c.overspeed_factor);
     c.overspeed_time_s = declare_parameter("overspeed_time", c.overspeed_time_s);
     c.io_stall_s = declare_parameter("io_stall", c.io_stall_s);
+    // hw/silence of the setup program, 0 without; at most 5 s.
+    c.silence_max_s = declare_parameter("silence_max", c.silence_max_s);
+    if (!(c.silence_max_s == 0 || (c.silence_max_s >= xcore::kSilenceMinS && c.silence_max_s <= 5.0))) {
+      throw std::invalid_argument("silence_max must be 0 or from 0.2 to 5 s");
+    }
+    silence_max_s_ = c.silence_max_s;
     // The board stops after 1.0 s without the host; a stall must count as lost before that.
     if (!(c.tilt_limit_deg > 0) || !(c.tilt_time_s >= 0) || !(c.uncommanded_speed > 0) || !(c.overspeed_factor >= 1) ||
         !(c.io_stall_s > 0) || c.io_stall_s >= 1.0) {
@@ -704,6 +721,8 @@ class XcoreNode : public rclcpp::Node {
     msg.max_linear_speed = static_cast<float>(max_linear_speed_);
     msg.max_angular_speed = static_cast<float>(max_angular_speed_);
     msg.failsafe_without_host_s = static_cast<float>(failsafe_without_host_s_);
+    msg.silence_max_s = static_cast<float>(silence_max_s_);
+    msg.driver_end = true;
     msg.safety_measurement_date = safety_measurement_date_;
     capabilities_pub_->publish(msg);
   }
@@ -858,6 +877,33 @@ class XcoreNode : public rclcpp::Node {
     res.message = "charging is controlled by the board";
   }
 
+  void OnSilence(const mowbite_msgs::srv::SilenceDriver::Request& req,
+                 mowbite_msgs::srv::SilenceDriver::Response& res) {
+    res.code = silence_max_s_ > 0 ? Io().Silence(req.seconds) : "OUT_OF_RANGE";
+    res.success = res.code.empty();
+    char text[120];
+    std::snprintf(text, sizeof(text), res.success ? "silent for %.2f s" : "silence of %.2f s refused", req.seconds);
+    res.message = text;
+    if (res.success) {
+      Io().outbox().log.Warn(std::string("hw/silence: ") + text + ", then HIGH_LEVEL");
+    } else {
+      Io().outbox().log.Warn(std::string("hw/silence: ") + text + ": " + res.code);
+    }
+  }
+
+  // After the answer the process ends with exit code 3 and nothing more to the board, as if it had crashed.
+  void OnEnd(mowbite_msgs::srv::EndDriver::Response& res) {
+    res.code = Io().Mute();
+    res.success = res.code.empty();
+    res.message = res.success ? "ending with exit code 3" : "end refused";
+    if (!res.success) {
+      Io().outbox().log.Warn("hw/end refused: " + res.code);
+      return;
+    }
+    RCLCPP_WARN(get_logger(), "hw/end: nothing more to the board, ending with exit code 3");
+    end_timer_ = create_wall_timer(std::chrono::milliseconds(200), [] { std::_Exit(3); });
+  }
+
   void OnRtcm(const mowbite_msgs::msg::Rtcm& msg) {
     if (!Io().PushRtcm(msg.data.data(), msg.data.size())) {
       rtcm_full_ = true;
@@ -896,6 +942,7 @@ class XcoreNode : public rclcpp::Node {
   double max_linear_speed_ = 0;
   double max_angular_speed_ = 0;
   double failsafe_without_host_s_ = -1;
+  double silence_max_s_ = 0;
   std::string safety_measurement_date_;
   // Only the output thread.
   bool blade_on_logged_ = false;
@@ -938,6 +985,9 @@ class XcoreNode : public rclcpp::Node {
   rclcpp::Service<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetBlade>::SharedPtr blade_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetCharge>::SharedPtr charge_srv_;
+  rclcpp::Service<mowbite_msgs::srv::SilenceDriver>::SharedPtr silence_srv_;
+  rclcpp::Service<mowbite_msgs::srv::EndDriver>::SharedPtr end_srv_;
+  rclcpp::TimerBase::SharedPtr end_timer_;
 };
 
 }  // namespace xcore_driver

@@ -1867,3 +1867,84 @@ TEST(XcoreControl, DockContactAtItsLimits) {
   EXPECT_FALSE(f.control.Status(6.5).dock_contact_raw);
   EXPECT_FALSE(f.control.Status(6.5).dock_contact);
 }
+
+namespace {
+
+ControlConfig SilenceConfig() {
+  ControlConfig c = Fixture::Config();
+  c.silence_max_s = 3.0;
+  return c;
+}
+
+}  // namespace
+
+TEST(XcoreControl, SilenceIsRefusedOutOfRangeOnTheDockWithTheBladeAndTwice) {
+  Fixture none;
+  EXPECT_EQ(none.control.Silence(1.0, 0), "OUT_OF_RANGE");
+  Fixture f(SilenceConfig());
+  EXPECT_EQ(f.control.Silence(0.1, 0), "OUT_OF_RANGE");
+  EXPECT_EQ(f.control.Silence(3.5, 0), "OUT_OF_RANGE");
+  EXPECT_EQ(f.control.Silence(std::nan(""), 0), "OUT_OF_RANGE");
+  ASSERT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0), BladeResult::kOk);
+  EXPECT_EQ(f.control.Silence(1.0, 0), "BLADE");
+  EXPECT_EQ(f.control.EndRefusal(), "BLADE");
+  ASSERT_EQ(f.control.SetBlade({false, 0, 0, 0}, 0), BladeResult::kOk);
+  EXPECT_EQ(f.control.EndRefusal(), "");
+  EXPECT_EQ(f.control.Silence(1.0, 0), "");
+  EXPECT_EQ(f.control.Silence(1.0, 0.5), "BUSY");
+  f.control.OnOutput(kPowerService, power::kOutChargeVoltage, F32(29.0f), 0, 2);
+  EXPECT_EQ(f.control.EndRefusal(), "CHARGING");
+  EXPECT_EQ(f.control.Silence(1.0, 2), "CHARGING");
+}
+
+TEST(XcoreControl, SilenceSendsNothingThenLatchesAndStops) {
+  Fixture f(SilenceConfig());
+  f.control.OnCmdVel(0.1, 0, 0);
+  ASSERT_EQ(Of(f.control.Tick(0), kDiffDriveService).size(), 1u);
+  ASSERT_EQ(f.control.Silence(1.0, 0.05), "");
+  EXPECT_TRUE(f.control.Silent(0.5));
+  // Nothing goes out, a command is dropped, blade and release are refused.
+  for (double t = 0.06; t < 1.04; t += 0.01) {
+    f.Board(0, t);
+    f.control.OnCmdVel(0.1, 0, t);
+    EXPECT_TRUE(f.control.Tick(t).empty()) << t;
+  }
+  EXPECT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0.5), BladeResult::kSilent);
+  auto refusal = f.control.ReleaseEmergency(0.5);
+  ASSERT_TRUE(refusal);
+  EXPECT_EQ(refusal->code, "SILENT");
+  // At the end: HIGH_LEVEL latched, the board held, three stops of the wheels, offs of the blade.
+  std::vector<InputValue> all;
+  for (double t = 1.05; t < 1.5; t += 0.01) {
+    f.Board(0, t);
+    for (auto& v : f.control.Tick(t)) all.push_back(v);
+  }
+  EXPECT_FALSE(f.control.Silent(1.1));
+  const auto s = f.control.Status(1.5);
+  EXPECT_TRUE(s.blocked);
+  EXPECT_TRUE(s.emergency_reason & kReasonHighLevel);
+  EXPECT_GE(s.latch_count, 1u);
+  const auto emergency = Of(all, kEmergencyService);
+  ASSERT_FALSE(emergency.empty());
+  EXPECT_EQ(EmergencyOf(emergency[0]).first, reason::kHighLevel | reason::kLatch);
+  const auto drive = Of(all, kDiffDriveService);
+  ASSERT_EQ(drive.size(), 3u);
+  for (const auto& v : drive) {
+    for (double x : TwistOf(v)) EXPECT_EQ(x, 0);
+  }
+  EXPECT_GE(Of(all, kMowerService).size(), 3u);
+  for (const auto& v : Of(all, kMowerService)) EXPECT_EQ(SpeedOf(v), 0);
+  EXPECT_EQ(f.control.TakeErrors(), (std::vector<std::string>{"end of hw/silence: HIGH_LEVEL latched"}));
+  // Nothing runs again until a release and a new command.
+  f.control.OnCmdVel(0.1, 0, 1.5);
+  EXPECT_TRUE(Of(f.control.Tick(1.51), kDiffDriveService).empty());
+  EXPECT_FALSE(f.control.ReleaseEmergency(1.6, s.latch_count));
+  for (double t = 1.6; t < 2.0; t += 0.01) {
+    f.Board(0, t);
+    f.control.Tick(t);
+  }
+  EXPECT_FALSE(f.control.Status(2.0).blocked);
+  EXPECT_TRUE(Of(f.control.Tick(2.01), kDiffDriveService).empty());
+  f.control.OnCmdVel(0.1, 0, 2.02);
+  EXPECT_EQ(Of(f.control.Tick(2.02), kDiffDriveService).size(), 1u);
+}

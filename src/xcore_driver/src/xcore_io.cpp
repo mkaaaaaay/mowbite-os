@@ -151,6 +151,21 @@ std::optional<ReleaseRefusal> XcoreIo::ReleaseEmergency(uint32_t latch_count) {
   return control_.ReleaseEmergency(MonotonicSeconds(), latch_count);
 }
 
+std::string XcoreIo::Silence(double seconds) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const double now = MonotonicSeconds();
+  std::string refused = control_.Silence(seconds, now);
+  silent_ = control_.Silent(now);
+  return refused;
+}
+
+std::string XcoreIo::Mute() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::string refused = control_.EndRefusal();
+  if (refused.empty()) muted_ = true;
+  return refused;
+}
+
 BladeResult XcoreIo::SetBlade(const BladeRequest& request, uint32_t* emergency_reason) {
   std::lock_guard<std::mutex> lock(mutex_);
   return control_.SetBlade(request, MonotonicSeconds(), emergency_reason);
@@ -369,9 +384,10 @@ void XcoreIo::Tick(double now) {
         datagrams.push_back(*datagram);
       }
     }
-    // The queued RTCM to a running GPS service, dropped while it does not run.
+    silent_ = control_.Silent(now);
+    // The queued RTCM to a running GPS service, dropped while it does not run or the driver is silent.
     if (rtcm_.size() > 0) {
-      if (Link().State(kGpsService) != ServiceState::kRunning) {
+      if (silent_ || Link().State(kGpsService) != ServiceState::kRunning) {
         rtcm_dropped = rtcm_.size();
         rtcm_.Clear();
       } else {
@@ -392,6 +408,7 @@ void XcoreIo::Tick(double now) {
 }
 
 void XcoreIo::Send(const std::vector<Datagram>& datagrams, std::optional<double> computed) {
+  if (silent_ || muted_) return;
   for (size_t i = 0; i < datagrams.size(); i++) {
     const auto& d = datagrams[i];
     const double age = computed ? MonotonicSeconds() - *computed : 0.0;
@@ -499,6 +516,8 @@ bool XcoreIo::OnFirmwareAnswer(const LinkEvent& e, double now) {
 }
 
 void XcoreIo::Shutdown() {
+  // Stopped during hw/silence the stops go out all the same.
+  silent_ = false;
   std::vector<Datagram> datagrams;
   {
     std::lock_guard<std::mutex> lock(mutex_);

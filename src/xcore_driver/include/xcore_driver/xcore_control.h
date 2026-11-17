@@ -79,6 +79,8 @@ struct ControlConfig {
   // A gap this long between two passes of the I/O thread counts as a lost link: the board may have stopped and would
   // otherwise take the next setpoints.
   double io_stall_s = 0.8;
+  // The longest hw/silence it takes (s), 0 for none.
+  double silence_max_s = 0;
 
   OdometryConfig odometry;
   RegulatorConfig regulator;
@@ -130,13 +132,26 @@ struct BladeRequest {
   double lease_s = 0;
 };
 
-enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked, kHeld };
+enum class BladeResult {
+  kOk,
+  kNotAllowed,
+  kInvalidLease,
+  kInvalidSpeed,
+  kInvalidHeight,
+  kBlocked,
+  kDocked,
+  kHeld,
+  kSilent
+};
+
+// The shortest hw/silence (s).
+constexpr double kSilenceMinS = 0.2;
 
 const char* BladeResultText(BladeResult result);
 
 // Why a release over hw/emergency is refused; nothing is cleared then, but with LEARNING all except INPUTS_LEARNING.
 struct ReleaseRefusal {
-  // STILL_TILTED, TILT_UNKNOWN, FOREIGN_HOST, LATCH_CHANGED or LEARNING.
+  // STILL_TILTED, TILT_UNKNOWN, FOREIGN_HOST, LATCH_CHANGED, LEARNING or SILENT.
   std::string code;
   std::string message;
   // STILL_TILTED: the angle and the release limit in degrees; TILT_UNKNOWN: seconds since the last IMU sample. NaN
@@ -253,6 +268,14 @@ class XcoreControl {
   // The board restarted or a service was claimed again: its state is unknown.
   void OnServiceRestart(uint16_t service_id, double now);
 
+  // hw/silence: from now on nothing goes to the board for seconds, drive commands are dropped, blade requests and
+  // releases refused; then HIGH_LEVEL latches, the blade gets its offs and the wheels three stops. Empty when it began,
+  // else why not: BUSY, OUT_OF_RANGE, CHARGING or BLADE.
+  std::string Silence(double seconds, double now);
+  bool Silent(double now) const;
+  // Why hw/end is refused now, empty if it may end: CHARGING or BLADE.
+  std::string EndRefusal() const;
+
   std::vector<InputValue> Tick(double now);
   // Wheels and blade to 0 once, for a driver that stops; the board's own timeouts follow.
   std::vector<InputValue> StopInputs() const;
@@ -364,6 +387,7 @@ class XcoreControl {
   std::optional<double> overspeed_since_s_;
 
   std::optional<double> last_alive_s_;
+  std::optional<double> silent_until_s_;
 };
 
 }  // namespace xcore

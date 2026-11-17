@@ -127,6 +127,11 @@ class XcoreIo {
   uint64_t rtcm_dropped_bytes();
   void SetHold(bool held);
   void LatchForeignHost(const std::string& why);
+  // hw/silence as XcoreControl::Silence: no datagram goes out meanwhile, not even the heartbeat.
+  std::string Silence(double seconds);
+  // hw/end: empty when it may end, then from now on no datagram goes out, also not the stops at the end of the
+  // loop; else why not, as XcoreControl::EndRefusal.
+  std::string Mute();
   // While the sockets are open, i.e. the board is or is being claimed.
   bool open() const {
     return open_;
@@ -168,6 +173,9 @@ class XcoreIo {
   mowbite_outbox::Throttle foreign_at_start_{10.0};
 
   std::atomic<bool> open_{false};
+  // Nothing goes to the board: during hw/silence, and for good after hw/end.
+  std::atomic<bool> silent_{false};
+  std::atomic<bool> muted_{false};
   std::atomic<bool> running_{true};
   std::thread thread_;
 };

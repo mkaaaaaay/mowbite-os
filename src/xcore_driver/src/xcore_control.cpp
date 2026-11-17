@@ -69,6 +69,8 @@ const char* BladeResultText(BladeResult result) {
       return "on the dock";
     case BladeResult::kHeld:
       return "held for an update";
+    case BladeResult::kSilent:
+      return "the driver is silent (hw/silence)";
   }
   return "unknown";
 }
@@ -95,6 +97,7 @@ XcoreControl::XcoreControl(const ControlConfig& config, const InputMap& inputs)
 }
 
 void XcoreControl::OnCmdVel(double linear, double angular, double now) {
+  if (Silent(now)) return;
   Command command{Clamp(linear, config_.max_linear_speed), Clamp(angular, config_.max_angular_speed)};
   last_cmd_s_ = now;
   if (command.linear == 0 && command.angular == 0) {
@@ -116,6 +119,7 @@ BladeResult XcoreControl::SetBlade(const BladeRequest& request, double now, uint
     DropBlade(BladeOffReason::kRequest);
     return BladeResult::kOk;
   }
+  if (Silent(now)) return BladeResult::kSilent;
   if (!config_.allow_blade) return BladeResult::kNotAllowed;
   if (!std::isfinite(request.lease_s) || request.lease_s <= 0 ||
       request.lease_s > config_.blade_lease_max_s + kTimeEpsilon) {
@@ -155,6 +159,7 @@ bool XcoreControl::LatchEmergency(uint32_t bits) {
 }
 
 std::optional<ReleaseRefusal> XcoreControl::ReleaseEmergency(double now, uint32_t latch_count) {
+  if (Silent(now)) return ReleaseRefusal{"SILENT", "the driver is silent (hw/silence), the release waits for its end"};
   CountLatches();
   if (latch_count != 0 && latch_count != latch_count_) {
     return ReleaseRefusal{"LATCH_CHANGED", "another reason latched since the release was asked for"};
@@ -479,10 +484,48 @@ InputValue XcoreControl::MowerSpeed(float speed) const {
   return InputValue{kMowerService, mower::kInSpeed, w.Take()};
 }
 
+std::string XcoreControl::Silence(double seconds, double now) {
+  if (Silent(now)) return "BUSY";
+  if (!(seconds >= kSilenceMinS - kTimeEpsilon && seconds <= config_.silence_max_s + kTimeEpsilon)) {
+    return "OUT_OF_RANGE";
+  }
+  std::string refused = EndRefusal();
+  if (!refused.empty()) return refused;
+  silent_until_s_ = now + seconds;
+  // What was commanded is gone: nothing runs again after the silence.
+  command_.reset();
+  regulator_.Reset();
+  moving_ = false;
+  stop_repeat_ = Repeat{};
+  return "";
+}
+
+std::string XcoreControl::EndRefusal() const {
+  if (DockContact() || dock_raw_) return "CHARGING";
+  if (blade_ || blade_turning_) return "BLADE";
+  return "";
+}
+
+bool XcoreControl::Silent(double now) const {
+  return silent_until_s_ && now + kTimeEpsilon < *silent_until_s_;
+}
+
 std::vector<InputValue> XcoreControl::Tick(double now) {
   std::vector<InputValue> out;
   // Before anything goes out: after a stall of this thread the board may have stopped on its own.
   CheckStall(now);
+  if (Silent(now)) return out;
+  if (silent_until_s_) {
+    silent_until_s_.reset();
+    errors_.push_back("end of hw/silence: HIGH_LEVEL latched");
+    host_latch_ |= kReasonHighLevel;
+    clear_remaining_ = 0;
+    next_emergency_s_.reset();
+    command_.reset();
+    stop_repeat_ = Repeat{config_.repeat_count, now};
+    DropBlade(BladeOffReason::kBlocked);
+    blade_off_repeat_ = Repeat{config_.repeat_count, now};
+  }
   CountLatches();
   bool blocked = Blocked(now);
 
