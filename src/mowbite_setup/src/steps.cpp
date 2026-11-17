@@ -429,9 +429,7 @@ std::optional<StepList> ParseSteps(const json& list, std::string* why) {
     for (const Step& step : out.steps) {
       if (step.check != "inputs_assign") continue;
       if (out.restart.empty()) throw Wrong(step.id + " needs restart at the top of the list");
-      if (!Layer().Set(step.Word("node"), mowbite_api::kInputsLearn, true)) {
-        throw Wrong(step.id + ": node is no name of a node");
-      }
+      if (!Layer::IsNode(step.Word("node"))) throw Wrong(step.id + ": node is no name of a node");
     }
     return out;
   } catch (const Wrong& wrong) {

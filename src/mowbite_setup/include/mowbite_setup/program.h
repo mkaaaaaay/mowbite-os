@@ -290,6 +290,10 @@ class Program {
   void BeginAssignPart(double now, double wall);
   void FinishAssign(double now, double wall);
   void NoteLevels();
+  // Takes the levels of the lines as those at rest: a change is counted from here.
+  void TakeLevels();
+  // Ends a part of inputs_assign no single line came for: AMBIGUOUS after more than one changed, else NO_LINE.
+  void FailNoLine(const std::string& message, double now, double wall);
   bool AtRest() const;
   bool TableApplied(const Step& step) const;
   std::optional<Refusal> AnswerAssign(const Step& step, const json& params);

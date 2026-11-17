@@ -1236,6 +1236,22 @@ void Program::TickPosition(double now, double wall) {
   }
 }
 
+void Program::TakeLevels() {
+  Run& run = *run_;
+  run.levels.clear();
+  for (const Line& line : lines_) run.levels[line.name] = line.active;
+  run.changed.clear();
+}
+
+void Program::FailNoLine(const std::string& message, double now, double wall) {
+  const json lines = run_->ambiguous;
+  if (lines.empty()) {
+    Fail("NO_LINE", message, json::object(), now, wall);
+  } else {
+    Fail("AMBIGUOUS", "More than one line changed: " + lines.dump(), {{"lines", lines}}, now, wall);
+  }
+}
+
 void Program::EnterAssign(Assign stage, double now) {
   run_->assign = stage;
   run_->stage_began = now;
@@ -1246,9 +1262,7 @@ void Program::BeginAssignPart(double now, double wall) {
   EnterAssign(Assign::kPart, now);
   run.part_began = now;
   run.part_wall = wall;
-  run.levels.clear();
-  for (const Line& line : lines_) run.levels[line.name] = line.active;
-  run.changed.clear();
+  TakeLevels();
   run.first_change = -1;
   run.part_states[run.part] = "waiting";
 }
@@ -1314,7 +1328,6 @@ void Program::TickAssign(double now, double wall) {
   if (run.began < 0) run.began = now;
   const bool learn = RecordOf(step).assign["phase"] == "learn";
   const double restart_time = step.Number("restart_time");
-  const bool ambiguous = !run.ambiguous.empty();
   // A driver that fell silent, or one that lost the levels of its lines (hw/inputs without a line), shows nothing.
   const bool watches = run.assign != Assign::kRestart && run.assign != Assign::kDriver;
   if (watches && (!Fresh(hardware_at_, now, kNoData) || lines_.empty())) {
@@ -1333,9 +1346,7 @@ void Program::TickAssign(double now, double wall) {
       if (inputs_known_ && Fresh(hardware_at_, now, kFresh) && learning_ == learn && !lines_.empty()) {
         if (learn) {
           EnterAssign(Assign::kQuiet, now);
-          run.levels.clear();
-          for (const Line& line : lines_) run.levels[line.name] = line.active;
-          run.changed.clear();
+          TakeLevels();
           break;
         }
         if (TableApplied(step)) {
@@ -1379,9 +1390,7 @@ void Program::TickAssign(double now, double wall) {
           EnterAssign(Assign::kRest, now);
         }
       } else if (now - run.part_began > step.Number("time")) {
-        Fail(ambiguous ? "AMBIGUOUS" : "NO_LINE",
-             ambiguous ? "More than one line changed: " + run.ambiguous.dump() : "No line changed in time",
-             ambiguous ? json{{"lines", run.ambiguous}} : json::object(), now, wall);
+        FailNoLine("No line changed in time", now, wall);
       }
       break;
     case Assign::kAsk:
@@ -1395,9 +1404,7 @@ void Program::TickAssign(double now, double wall) {
           BeginAssignPart(now, wall);
         }
       } else if (now - run.stage_began > step.Number("time")) {
-        Fail(ambiguous ? "AMBIGUOUS" : "NO_LINE",
-             ambiguous ? "More than one line changed: " + run.ambiguous.dump() : "The lines did not come back to rest",
-             ambiguous ? json{{"lines", run.ambiguous}} : json::object(), now, wall);
+        FailNoLine("The lines did not come back to rest", now, wall);
       }
       break;
   }

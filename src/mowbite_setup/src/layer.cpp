@@ -14,11 +14,6 @@ constexpr char kHead[] =
     "# mower beside it, which is read after this one.\n";
 constexpr char kParameters[] = "  ros__parameters:";
 
-bool IsNode(const std::string& name) {
-  static const std::regex pattern("[a-z][a-z0-9_]*");
-  return std::regex_match(name, pattern);
-}
-
 bool IsKey(const std::string& name) {
   static const std::regex pattern("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*");
   return std::regex_match(name, pattern);
@@ -61,6 +56,11 @@ std::string ValueText(const json& value) {
 }
 
 }  // namespace
+
+bool Layer::IsNode(const std::string& name) {
+  static const std::regex pattern("[a-z][a-z0-9_]*");
+  return std::regex_match(name, pattern);
+}
 
 bool Layer::Set(const std::string& node, const std::string& key, const json& value) {
   if (!IsNode(node) || !IsKey(key) || !IsValue(value)) return false;
