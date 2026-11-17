@@ -13,6 +13,8 @@ uint16 blade_height_max_mm
 uint16 blade_height_default_mm
 # Longest lease hw/blade accepts.
 float32 blade_lease_max_s
+# hw/blade may switch the blade on (allow_blade of the driver); false: it refuses every on.
+bool blade_allowed
 
 # The host starts charging over hw/charge; false where the driver or the hardware does it.
 bool host_charge_control
