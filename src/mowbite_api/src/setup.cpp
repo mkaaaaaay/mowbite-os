@@ -153,6 +153,29 @@ std::vector<ReasonEntry> DriveBlocks() {
                        "Check allow_blade in the settings file kept by hand, then restart MowBite OS."}))};
 }
 
+// What keeps a step summary from starting; the same in SETUP_REFUSED and SETUP_BLOCKED.
+std::vector<ReasonEntry> SummaryBlocks() {
+  return {Reason("SAFETY_STEPS", "info", "user",
+                 "A safety step of the list is not ok, or the lock holds a cause of it: steps names them, skipped "
+                 "those of them that were skipped",
+                 {List("steps", "The safety steps to pass first", Type::kString, false),
+                  List("skipped", "Those of them that were skipped", Type::kString, false)},
+                 Both({"Erst alle Sicherheitsprüfungen",
+                       "Freigeben geht erst, wenn jede Sicherheitsprüfung bestanden ist. Übersprungene zählen nicht.",
+                       "Die genannten Schritte abschließen."},
+                      {"All safety checks first",
+                       "Releasing works only once every safety check passed. Skipped ones don't count.",
+                       "Finish the steps named."})),
+          Reason("CLOCK_UNSAFE", "info", "user", "The clock is not safe (time/clock): the date would be wrong",
+                 {Text("clock_reason", "never_synced, clock_jump or gnss_mismatch", false)},
+                 Both({"Uhrzeit unsicher",
+                       "Der Mäher kennt das Datum nicht sicher. Die Freigabe trägt aber das Datum von heute ein.",
+                       "Den Mäher ins Internet bringen oder auf eine genaue Position warten, dann erneut versuchen."},
+                      {"Clock not safe",
+                       "The mower doesn't know the date for sure, but the release records today's date.",
+                       "Connect the mower to the internet or wait for an exact position, then try again."}))};
+}
+
 // What holds for every check of kind drive.
 std::string DriveRules() {
   return "Every step that moves the wheels: jacked up (motion.raised) setup.start confirms raised and hand_at_stop, on "
@@ -357,6 +380,9 @@ const std::vector<SetupName>& SetupPoints() {
              "3 m clear in front of and behind the mower, I stand next to it at the STOP button")},
       {"outdoors", "The mower stands under the open sky",
        Named("Mäher steht im Freien", "Mower stands under the open sky")},
+      {"seen_myself", "The user saw every safety check pass on this mower",
+       Named("Ich habe jede Sicherheitsprüfung an diesem Mäher selbst gesehen",
+             "I saw every safety check on this mower myself")},
   };
   return points;
 }
@@ -866,6 +892,32 @@ const std::vector<SetupCheck>& SetupChecks() {
              "without control, then with the STOP button, lifting and the bumper. It has to stand in time each time "
              "and must not start again.",
              "If the motor does not stand in time or starts again, don't let the mower mow; check board and motor."})},
+      {"summary", "confirm", true, false,
+       "Opens the lock of autonomous driving and mowing with one tap: blocked while a safety step of the list is not "
+       "ok (SAFETY_STEPS, skipped ones named apart) or the clock is not safe (CLOCK_UNSAFE). setup.start confirms "
+       "seen_myself, writes into the parameter file of the program for node the date of today (UTC) as " +
+           std::string(kSafetyDate) + " and the longest stand time of the step silence as " + kFailsafeWithoutHost +
+           ", and restarts the OS (restart of the step list). After the restart hw/capabilities has to show the date "
+           "written, or a date the file kept by hand sets, and the stand time unless that file sets it: then the step "
+           "is ok, a reset of the lock goes and the lock opens (SETUP safety_opened). Else NOT_APPLIED, naming the "
+           "setting of the file kept by hand. Until it passes, a date the program wrote does not open the lock. A "
+           "safety step that fails later makes it open again; the lock itself only closes for that step",
+       {Word("node", "The node of the driver the date and the stand time are written for", {}, true),
+        Seconds("restart_time", 20, 600, 120, "The OS is back within this time after the restart")},
+       {{"date", "", "The date written, YYYY-MM-DD", Named("Datum", "Date")},
+        {"failsafe", "s", "The stand time written: the longest of the step silence",
+         Named("Halt ohne Steuerung", "Stop without control")}},
+       {"NOT_APPLIED", "RESTART_FAILED", "NO_DATA", "STOPPED", "INTERRUPTED"},
+       Both({"Sicherheit freigeben",
+             "Alle Sicherheitsprüfungen sind bestanden. Mit einem Tipp gibt der Mäher das selbstständige Fahren und "
+             "Mähen frei. Dafür startet MowBite OS einmal neu.",
+             "Fehlt eine Prüfung, zuerst sie abschließen. Kommt der Haken nach dem Neustart nicht: die von Hand "
+             "gepflegte Gerätedatei prüfen."},
+            {"Release safety",
+             "All safety checks passed. With one tap the mower allows driving and mowing on its own. MowBite OS "
+             "restarts once for it.",
+             "If a check is missing, finish it first. If the tick does not come after the restart, check the device "
+             "file kept by hand."})},
   });
   return checks;
 }
@@ -1092,7 +1144,7 @@ Field SetupState() {
                         Integer("attempt", "The attempt it ended"),
                         Text("firmware", "Firmware of the boards then, empty while unknown")})),
        Bool("restart", "The program restarts the OS for it by itself: a step inputs_assign for its result, a step "
-                       "blade at its first start while the driver does not allow the blade")});
+                       "blade at its first start while the driver does not allow the blade, a step summary")});
   return Object(
       "setup", "The state of the setup program",
       {Integer("version", "Goes up with every change of a step; setup.start, answer, skip and reset need the one "
@@ -1105,9 +1157,11 @@ Field SetupState() {
        Object("safety", "The lock of autonomous driving and mowing",
               {Bool("open", "The platform has a safety measurement and no safety step closed the lock"),
                Nullable(Text("date", "Its date, YYYY-MM-DD")),
-               Nullable(Text("firmware", "The firmware it was made with, null while unknown")),
+               Nullable(Text("firmware", "With source program: the firmware of the boards when the summary passed; "
+                                         "null else")),
                Nullable(Text("why", "While closed: NO_SAFETY_MEASUREMENT (no date), CHECK_FAILED (a safety step "
-                                    "failed) or RESET (the program was reset or its file could not be read)",
+                                    "failed) or RESET (the program was reset, a summary did not pass after it wrote a date, or its file "
+                                    "could not be read)",
                              true, {"NO_SAFETY_MEASUREMENT", "CHECK_FAILED", "RESET"})),
                Nullable(Text("source", "Who gave the date: hand (the file kept by hand or the platform) or program "
                                        "(the summary of the setup program); null without one",
@@ -1205,18 +1259,19 @@ EventEntry SetupStepEvent() {
                        {"Line unsteady",
                         "A line changes while nobody touches anything. A sensor or cable has a loose contact.",
                         "Don't touch the mower. Check the line named, its plug and sensor, then repeat."})),
-           failed("NOT_APPLIED", "After the restart hw/inputs does not show the table the step wrote",
+           failed("NOT_APPLIED",
+                  "After the restart the driver does not show what the step wrote: hw/inputs the table of "
+                  "inputs_assign, hw/capabilities the date and stand time of summary",
                   {Text("key", "A setting the file kept by hand sets as well", false)},
-                  Both({"Zuordnung nicht übernommen",
-                        "Nach dem Neustart arbeitet der Mäher nicht mit der neuen Zuordnung. Ein Eintrag in der von "
-                        "Hand gepflegten Gerätedatei hat Vorrang.",
-                        "Die Einträge zu den Eingängen aus der Gerätedatei des Mähers entfernen, dann den Schritt "
+                  Both({"Nicht übernommen",
+                        "Nach dem Neustart arbeitet der Mäher nicht mit dem, was der Schritt eingetragen hat. Ein "
+                        "Eintrag in der von Hand gepflegten Gerätedatei hat Vorrang.",
+                        "Den genannten Eintrag in der Gerätedatei des Mähers prüfen oder entfernen, dann den Schritt "
                         "wiederholen."},
-                       {"Assignment not applied",
-                        "After the restart the mower does not work with the new assignment. An entry in the device "
+                       {"Not applied",
+                        "After the restart the mower does not work with what the step wrote. An entry in the device "
                         "file kept by hand comes first.",
-                        "Remove the entries of the inputs from the device file of the mower, then repeat the "
-                        "step."})),
+                        "Check or remove the entry named in the device file of the mower, then repeat the step."})),
            failed("RESTART_FAILED", "The OS was not back within the time after the restart the step asked for",
                   {Number("limit", "s", "The time it had", false)},
                   Both({"Neustart blieb aus", "MowBite OS ist nicht rechtzeitig neu gestartet.",
@@ -1373,13 +1428,14 @@ EventEntry SetupProgramEvent() {
   return {"SETUP", "setup", "The setup program reached a mark",
           {Text("what", "stage_done: every step of stage is ok or skipped; complete: every step is; reset: "
                         "setup.reset took all results back; safety_closed: a safety step failed and closed the lock "
-                        "of autonomous driving and mowing; safety_opened: the lock is open again; blade_allowed: the "
+                        "of autonomous driving and mowing; safety_opened: the lock is open (again); blade_allowed: the "
                         "first start of a step blade allowed the blade, the OS restarts and the step waits for its "
                         "next start",
                 true, {"stage_done", "complete", "reset", "safety_closed", "safety_opened", "blade_allowed"}),
            Text("stage", "With stage_done: the stage", false),
            Text("step", "With safety_closed: the step that failed; with blade_allowed: the step blade", false),
-           Text("cause", "With safety_closed: its reason of SETUP_STEP", false)},
+           Text("cause", "With safety_closed: its reason of SETUP_STEP", false),
+           Text("date", "With safety_opened by a step summary: the date it wrote", false)},
           {}};
 }
 
@@ -1439,6 +1495,7 @@ EventEntry SetupRefused() {
            DriverMissing("info"), NotWritable("error")},
           "info", "user"};
   for (auto& reason : DriveBlocks()) entry.reasons.push_back(std::move(reason));
+  for (auto& reason : SummaryBlocks()) entry.reasons.push_back(std::move(reason));
   return entry;
 }
 
@@ -1469,6 +1526,7 @@ EventEntry SetupBlocked() {
                         "Switch the mower on and check the cables."}))},
           "info", "user"};
   for (auto& reason : DriveBlocks()) entry.reasons.push_back(std::move(reason));
+  for (auto& reason : SummaryBlocks()) entry.reasons.push_back(std::move(reason));
   return entry;
 }
 

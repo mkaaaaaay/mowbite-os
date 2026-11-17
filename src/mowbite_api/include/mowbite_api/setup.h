@@ -150,6 +150,10 @@ constexpr char kInputsRoles[] = "inputs.gpio_roles";
 constexpr int kInputsMaxDelayMs = 65535;
 // The parameter of the driver a step blade names that lets hw/blade switch the blade on.
 constexpr char kAllowBlade[] = "allow_blade";
+// The parameters of the driver a step summary names: the date of the safety measurement (YYYY-MM-DD, UTC) and how long
+// the board stops the wheels without the host (s).
+constexpr char kSafetyDate[] = "safety_measurement_date";
+constexpr char kFailsafeWithoutHost[] = "failsafe_without_host";
 
 // Bounds of a step list and of setup.*.
 constexpr int kSetupMaxSteps = 100;

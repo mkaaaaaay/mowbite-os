@@ -869,7 +869,11 @@ const std::vector<Method>& Methods() {
        Object("params", "The step", {SetupStep()}),
        Object("result", "Whether the step still runs", {Bool("running", "It runs; false once it ended")}),
        kSetupOffered},
-      {"setup.reset", "mowbite_setup", "Takes every result back: all steps are open again, the record starts anew",
+      {"setup.reset", "mowbite_setup",
+       "Takes every result back: all steps are open again, the record starts anew. It takes the date, the stand time "
+       "and allow_blade out of the parameter file of the program; a lock the program opened (safety.source program) "
+       "closes with a reset until a summary passes again, a date from the file kept by hand stays as it is. The "
+       "causes of failed safety steps stay",
        Object("params", "The version", {SetupVersion()}), SetupAnswer(), kSetupOffered},
       {"setup.image", "mowbite_setup",
        "An image of a step in pieces of at most " + std::to_string(kSetupImageBytes) + " bytes",

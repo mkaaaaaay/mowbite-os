@@ -803,3 +803,21 @@ TEST(Catalog, BladeIsASafetyCheck) {
   EXPECT_TRUE(blocks.count("BLADE_NOT_ALLOWED"));
   EXPECT_TRUE(ReasonsOf("SETUP_REFUSED").count("BLADE_NOT_ALLOWED"));
 }
+
+// summary opens the lock with one tap: it is no safety step itself, restarts the OS and names why it cannot start.
+TEST(Catalog, SummaryOpensTheLock) {
+  const SetupCheck* summary = FindSetupCheck("summary");
+  ASSERT_NE(summary, nullptr);
+  EXPECT_FALSE(summary->safety);
+  EXPECT_EQ(summary->kind, "confirm");
+  EXPECT_TRUE(summary->start);
+  for (const char* reason : {"NOT_APPLIED", "RESTART_FAILED", "STOPPED", "INTERRUPTED"}) {
+    EXPECT_EQ(std::count(summary->reasons.begin(), summary->reasons.end(), reason), 1) << reason;
+    EXPECT_FALSE(SetupClosesLock("summary", reason)) << reason;
+  }
+  EXPECT_NE(FindSetupName(SetupPoints(), "seen_myself"), nullptr);
+  for (const char* reason : {"SAFETY_STEPS", "CLOCK_UNSAFE"}) {
+    EXPECT_TRUE(ReasonsOf("SETUP_BLOCKED").count(reason)) << reason;
+    EXPECT_TRUE(ReasonsOf("SETUP_REFUSED").count(reason)) << reason;
+  }
+}
