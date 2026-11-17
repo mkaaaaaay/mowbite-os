@@ -191,7 +191,7 @@ struct Rig {
   void WithVideo() {
     RtspConfig rtsp;
     rtsp.port = 0;
-    rtsp.path = "rear";
+    rtsp.paths = {"rear"};
     server = std::make_unique<RtspServer>(rtsp, [this] { return clock; });
     std::string error;
     ASSERT_TRUE(server->Listen(error)) << error;

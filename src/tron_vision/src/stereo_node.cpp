@@ -84,7 +84,7 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   const int64_t port = declare_parameter("rtsp_port", static_cast<int64_t>(rtsp.port));
   if (port < 1 || port > 65535) throw std::invalid_argument("rtsp_port " + std::to_string(port) + " is no port");
   rtsp.port = static_cast<uint16_t>(port);
-  rtsp.path = config.camera_id;
+  rtsp.paths = {config.camera_id};
 
   using mowbite_msgs::msg::Camera;
   camera_entry_.id = config.camera_id;
@@ -97,7 +97,7 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   camera_entry_.height = config.encoder.height;
   camera_entry_.detections = false;
   camera_entry_.protocols = {Camera::PROTOCOL_WEBRTC};
-  camera_entry_.source = "rtsp://127.0.0.1:" + std::to_string(rtsp.port) + "/" + rtsp.path;
+  camera_entry_.source = "rtsp://127.0.0.1:" + std::to_string(rtsp.port) + "/" + config.camera_id;
 
   // The only publishers and the only subscription of this process; test_stereo_node checks the lists.
   sensor_info_pub_ = create_publisher<mowbite_msgs::msg::SensorSpec>(

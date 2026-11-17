@@ -85,7 +85,11 @@ std::string StreamSdp(const ParameterSets& sets, const std::string& name) {
 }
 
 RtspServer::RtspServer(RtspConfig config, std::function<double()> now)
-    : config_(std::move(config)), now_(std::move(now)), session_counter_(std::random_device{}()) {}
+    : config_(std::move(config)),
+      now_(std::move(now)),
+      mounts_(config_.paths.size()),
+      connections_(config_.paths.size()),
+      session_counter_(std::random_device{}()) {}
 
 RtspServer::~RtspServer() {
   Close();
@@ -116,92 +120,127 @@ bool RtspServer::Listen(std::string& error) {
 }
 
 void RtspServer::Close() {
-  DropClient();
+  for (Connection& c : connections_) Drop(c);
   CloseFd(listen_fd_);
   port_ = 0;
 }
 
-void RtspServer::SetAvailable(const ParameterSets& sets) {
-  sets_ = sets;
-  available_ = true;
+void RtspServer::SetAvailable(const ParameterSets& sets, size_t path) {
+  if (path >= mounts_.size()) return;
+  mounts_[path].sets = sets;
+  mounts_[path].available = true;
 }
 
-void RtspServer::SetUnavailable() {
-  available_ = false;
-  DropClient();
+void RtspServer::SetUnavailable(size_t path) {
+  if (path >= mounts_.size()) return;
+  mounts_[path].available = false;
+  DropClient(path);
 }
 
-void RtspServer::DropClient() {
-  CloseFd(client_fd_);
-  input_.clear();
-  session_.clear();
-  playing_ = false;
+bool RtspServer::Playing(size_t path) const {
+  const Connection* c = ClientOf(path);
+  return c != nullptr && c->playing;
+}
+
+void RtspServer::DropClient(size_t path) {
+  Connection* c = ClientOf(path);
+  if (c != nullptr) Drop(*c);
+}
+
+RtspServer::Connection* RtspServer::ClientOf(size_t path) {
+  for (Connection& c : connections_) {
+    if (c.fd >= 0 && c.path == path) return &c;
+  }
+  return nullptr;
+}
+
+const RtspServer::Connection* RtspServer::ClientOf(size_t path) const {
+  for (const Connection& c : connections_) {
+    if (c.fd >= 0 && c.path == path) return &c;
+  }
+  return nullptr;
+}
+
+void RtspServer::Drop(Connection& c) {
+  CloseFd(c.fd);
+  c = Connection{};
 }
 
 void RtspServer::Accept() {
   const int fd = accept4(listen_fd_, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
   if (fd < 0) return;
-  if (client_fd_ >= 0) {
-    // One client at a time; a second one is turned away.
+  const auto free_slot =
+      std::find_if(connections_.begin(), connections_.end(), [](const Connection& c) { return c.fd < 0; });
+  if (free_slot == connections_.end()) {
+    // As many connections as paths; one more is turned away.
     close(fd);
     return;
   }
   const int on = 1;
   setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
-  client_fd_ = fd;
-  last_activity_ = now_();
+  free_slot->fd = fd;
+  free_slot->last_activity = now_();
 }
 
 void RtspServer::Poll(int timeout_ms) {
   if (listen_fd_ < 0) return;
-  pollfd fds[2] = {{listen_fd_, POLLIN, 0}, {client_fd_, POLLIN, 0}};
-  const int ready = poll(fds, client_fd_ >= 0 ? 2 : 1, timeout_ms);
+  std::vector<pollfd> fds{{listen_fd_, POLLIN, 0}};
+  for (const Connection& c : connections_) fds.push_back({c.fd, POLLIN, 0});
+  // A negative fd is skipped by poll().
+  const int ready = poll(fds.data(), fds.size(), timeout_ms);
   if (ready > 0) {
-    if (client_fd_ >= 0 && fds[1].revents != 0) Read();
+    for (size_t i = 0; i < connections_.size(); i++) {
+      Connection& c = connections_[i];
+      if (c.fd >= 0 && c.fd == fds[i + 1].fd && fds[i + 1].revents != 0) Read(c);
+    }
     if ((fds[0].revents & POLLIN) != 0) Accept();
   }
-  if (client_fd_ >= 0 && now_() - last_activity_ > config_.idle_timeout_s) DropClient();
+  const double now = now_();
+  for (Connection& c : connections_) {
+    if (c.fd >= 0 && now - c.last_activity > config_.idle_timeout_s) Drop(c);
+  }
 }
 
-void RtspServer::Read() {
+void RtspServer::Read(Connection& c) {
   char chunk[2048];
   for (;;) {
-    const ssize_t n = recv(client_fd_, chunk, sizeof(chunk), 0);
+    const ssize_t n = recv(c.fd, chunk, sizeof(chunk), 0);
     if (n > 0) {
-      input_.append(chunk, static_cast<size_t>(n));
-      last_activity_ = now_();
-      if (!Consume()) return;
+      c.input.append(chunk, static_cast<size_t>(n));
+      c.last_activity = now_();
+      if (!Consume(c)) return;
       continue;
     }
     if (n < 0 && errno == EINTR) continue;
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
-    DropClient();
+    Drop(c);
     return;
   }
 }
 
-bool RtspServer::Consume() {
-  while (!input_.empty()) {
-    if (input_[0] == '$') {
+bool RtspServer::Consume(Connection& c) {
+  while (!c.input.empty()) {
+    std::string& input = c.input;
+    if (input[0] == '$') {
       // Interleaved frame from the client (RTCP): marker, channel, length, data.
-      if (input_.size() < 4) return true;
-      const size_t length = static_cast<uint8_t>(input_[2]) << 8 | static_cast<uint8_t>(input_[3]);
-      if (input_.size() < 4 + length) return true;
-      input_.erase(0, 4 + length);
+      if (input.size() < 4) return true;
+      const size_t length = static_cast<uint8_t>(input[2]) << 8 | static_cast<uint8_t>(input[3]);
+      if (input.size() < 4 + length) return true;
+      input.erase(0, 4 + length);
       continue;
     }
-    const size_t end = input_.find("\r\n\r\n");
+    const size_t end = input.find("\r\n\r\n");
     if (end == std::string::npos) {
-      if (input_.size() > kMaxRequestBytes) {
-        DropClient();
+      if (input.size() > kMaxRequestBytes) {
+        Drop(c);
         return false;
       }
       return true;
     }
     Request request;
-    size_t line_end = input_.find("\r\n");
+    size_t line_end = input.find("\r\n");
     {
-      const std::string line = input_.substr(0, line_end);
+      const std::string line = input.substr(0, line_end);
       const size_t a = line.find(' ');
       const size_t b = line.rfind(' ');
       if (a != std::string::npos && b > a && line.compare(b + 1, std::string::npos, "RTSP/1.0") == 0) {
@@ -211,8 +250,8 @@ bool RtspServer::Consume() {
     }
     while (line_end < end) {
       const size_t start = line_end + 2;
-      line_end = input_.find("\r\n", start);
-      const std::string line = input_.substr(start, line_end - start);
+      line_end = input.find("\r\n", start);
+      const std::string line = input.substr(start, line_end - start);
       const size_t colon = line.find(':');
       if (colon != std::string::npos) request.headers[Lower(line.substr(0, colon))] = Trim(line.substr(colon + 1));
     }
@@ -220,126 +259,148 @@ bool RtspServer::Consume() {
     const auto length = request.headers.find("content-length");
     if (length != request.headers.end()) body = std::strtoul(length->second.c_str(), nullptr, 10);
     if (body > kMaxRequestBytes) {
-      DropClient();
+      Drop(c);
       return false;
     }
-    if (input_.size() < end + 4 + body) return true;
-    input_.erase(0, end + 4 + body);
-    Handle(request);
-    if (client_fd_ < 0) return false;
+    if (input.size() < end + 4 + body) return true;
+    input.erase(0, end + 4 + body);
+    Handle(c, request);
+    if (c.fd < 0) return false;
   }
   return true;
 }
 
-bool RtspServer::OwnPath(const std::string& url) const {
+size_t RtspServer::PathOf(const std::string& url) const {
   size_t start = 0;
   const size_t scheme = url.find("://");
   if (scheme != std::string::npos) {
     start = url.find('/', scheme + 3);
-    if (start == std::string::npos) return false;
+    if (start == std::string::npos) return kNoPath;
   }
   std::string path = url.substr(start, url.find('?', start) - start);
   path.erase(0, path.find_first_not_of('/'));
-  return path == config_.path || path.rfind(config_.path + "/", 0) == 0;
+  for (size_t i = 0; i < config_.paths.size(); i++) {
+    const std::string& own = config_.paths[i];
+    if (path == own || path.rfind(own + "/", 0) == 0) return i;
+  }
+  return kNoPath;
 }
 
-void RtspServer::Reply(const Request& request, int code, const std::string& headers, const std::string& body) {
+void RtspServer::Reply(Connection& c, const Request& request, int code, const std::string& headers,
+                       const std::string& body) {
   std::string out = "RTSP/1.0 " + std::to_string(code) + " " + Phrase(code) + "\r\n";
   const auto cseq = request.headers.find("cseq");
   if (cseq != request.headers.end()) out += "CSeq: " + cseq->second + "\r\n";
   out += headers;
   if (!body.empty()) out += "Content-Length: " + std::to_string(body.size()) + "\r\n";
   out += "\r\n" + body;
-  SendAll(reinterpret_cast<const uint8_t*>(out.data()), out.size(), SendDeadline());
+  SendAll(c, reinterpret_cast<const uint8_t*>(out.data()), out.size(), SendDeadline());
 }
 
-void RtspServer::Handle(const Request& request) {
+void RtspServer::Handle(Connection& c, const Request& request) {
   if (request.method.empty() || request.headers.count("cseq") == 0) {
-    Reply(request, 400);
+    Reply(c, request, 400);
     return;
   }
-  const std::string session_header = session_.empty() ? "" : "Session: " + session_ + "\r\n";
+  const std::string session_header = c.session.empty() ? "" : "Session: " + c.session + "\r\n";
   if (request.method == "OPTIONS") {
-    Reply(request, 200, std::string("Public: ") + kMethods + "\r\n" + session_header);
+    Reply(c, request, 200, std::string("Public: ") + kMethods + "\r\n" + session_header);
     return;
   }
   if (request.method == "GET_PARAMETER") {
-    Reply(request, 200, session_header);
+    Reply(c, request, 200, session_header);
     return;
   }
   if (request.method == "TEARDOWN") {
-    Reply(request, 200, session_header);
-    DropClient();
+    Reply(c, request, 200, session_header);
+    Drop(c);
     return;
   }
   const bool describe = request.method == "DESCRIBE";
   const bool setup = request.method == "SETUP";
   if (!describe && !setup && request.method != "PLAY") {
-    Reply(request, 405, std::string("Allow: ") + kMethods + "\r\n");
+    Reply(c, request, 405, std::string("Allow: ") + kMethods + "\r\n");
     return;
   }
-  if (!OwnPath(request.url)) {
-    Reply(request, 404);
+  const size_t path = PathOf(request.url);
+  if (path == kNoPath) {
+    Reply(c, request, 404);
     return;
   }
-  if (!available_) {
-    Reply(request, 503);
+  if (c.path != path) {
+    if (c.path != kNoPath) {
+      // A connection serves the one path it began with.
+      Reply(c, request, 455);
+      return;
+    }
+    if (ClientOf(path) != nullptr) {
+      // The path has its client; this connection would only hold the slot of another path.
+      Reply(c, request, 503);
+      Drop(c);
+      return;
+    }
+    c.path = path;
+  }
+  const Mount& mount = mounts_[path];
+  if (!mount.available) {
+    Reply(c, request, 503);
     return;
   }
   if (describe) {
     std::string base = request.url.substr(0, request.url.find('?'));
     if (base.empty() || base.back() != '/') base += '/';
-    Reply(request, 200, "Content-Base: " + base + "\r\nContent-Type: application/sdp\r\n",
-          StreamSdp(sets_, config_.path));
+    Reply(c, request, 200, "Content-Base: " + base + "\r\nContent-Type: application/sdp\r\n",
+          StreamSdp(mount.sets, config_.paths[path]));
     return;
   }
   if (setup) {
     const auto transport = request.headers.find("transport");
     uint8_t channel = 0;
-    if (playing_) {
-      Reply(request, 455);
+    if (c.playing) {
+      Reply(c, request, 455);
       return;
     }
     if (transport == request.headers.end() || !InterleavedChannel(transport->second, channel)) {
-      Reply(request, 461);
+      Reply(c, request, 461);
       return;
     }
-    rtp_channel_ = channel;
-    if (session_.empty()) session_ = std::to_string(++session_counter_);
-    Reply(request, 200,
+    c.rtp_channel = channel;
+    if (c.session.empty()) c.session = std::to_string(++session_counter_);
+    Reply(c, request, 200,
           "Transport: RTP/AVP/TCP;unicast;interleaved=" + std::to_string(channel) + "-" + std::to_string(channel + 1) +
-              "\r\nSession: " + session_ + ";timeout=" + std::to_string(static_cast<int>(config_.idle_timeout_s)) +
+              "\r\nSession: " + c.session + ";timeout=" + std::to_string(static_cast<int>(config_.idle_timeout_s)) +
               "\r\n");
     return;
   }
-  if (session_.empty()) {
-    Reply(request, 455);
+  if (c.session.empty()) {
+    Reply(c, request, 455);
     return;
   }
   const auto session = request.headers.find("session");
-  if (session == request.headers.end() || session->second.substr(0, session->second.find(';')) != session_) {
-    Reply(request, 454);
+  if (session == request.headers.end() || session->second.substr(0, session->second.find(';')) != c.session) {
+    Reply(c, request, 454);
     return;
   }
-  Reply(request, 200, session_header + "Range: npt=0.000-\r\n");
-  playing_ = client_fd_ >= 0;
+  Reply(c, request, 200, session_header + "Range: npt=0.000-\r\n");
+  c.playing = c.fd >= 0;
 }
 
-bool RtspServer::SendRtp(const std::vector<std::vector<uint8_t>>& packets) {
-  if (!playing_) return false;
+bool RtspServer::SendRtp(const std::vector<std::vector<uint8_t>>& packets, size_t path) {
+  Connection* c = ClientOf(path);
+  if (c == nullptr || !c->playing) return false;
   const auto give_up = SendDeadline();
   for (const std::vector<uint8_t>& packet : packets) {
     if (packet.size() > 0xFFFF) {
-      DropClient();
+      Drop(*c);
       return false;
     }
     frame_.resize(4 + packet.size());
     frame_[0] = '$';
-    frame_[1] = rtp_channel_;
+    frame_[1] = c->rtp_channel;
     frame_[2] = static_cast<uint8_t>(packet.size() >> 8);
     frame_[3] = static_cast<uint8_t>(packet.size());
     std::memcpy(frame_.data() + 4, packet.data(), packet.size());
-    if (!SendAll(frame_.data(), frame_.size(), give_up)) return false;
+    if (!SendAll(*c, frame_.data(), frame_.size(), give_up)) return false;
   }
   return true;
 }
@@ -348,11 +409,12 @@ std::chrono::steady_clock::time_point RtspServer::SendDeadline() const {
   return std::chrono::steady_clock::now() + std::chrono::milliseconds(config_.send_timeout_ms);
 }
 
-bool RtspServer::SendAll(const uint8_t* data, size_t size, std::chrono::steady_clock::time_point give_up) {
-  if (client_fd_ < 0) return false;
+bool RtspServer::SendAll(Connection& c, const uint8_t* data, size_t size,
+                         std::chrono::steady_clock::time_point give_up) {
+  if (c.fd < 0) return false;
   size_t sent = 0;
   while (sent < size) {
-    const ssize_t n = send(client_fd_, data + sent, size - sent, MSG_NOSIGNAL);
+    const ssize_t n = send(c.fd, data + sent, size - sent, MSG_NOSIGNAL);
     if (n > 0) {
       sent += static_cast<size_t>(n);
       continue;
@@ -361,11 +423,11 @@ bool RtspServer::SendAll(const uint8_t* data, size_t size, std::chrono::steady_c
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
       const auto left =
           std::chrono::duration_cast<std::chrono::milliseconds>(give_up - std::chrono::steady_clock::now());
-      pollfd pfd{client_fd_, POLLOUT, 0};
+      pollfd pfd{c.fd, POLLOUT, 0};
       if (left.count() > 0 && poll(&pfd, 1, static_cast<int>(left.count())) >= 0) continue;
     }
     // A message cut in the middle cannot be resumed; the client has to come again.
-    DropClient();
+    Drop(c);
     return false;
   }
   return true;

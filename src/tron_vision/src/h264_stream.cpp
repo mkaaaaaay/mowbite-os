@@ -14,9 +14,11 @@ uint32_t Random() {
 
 }  // namespace
 
-H264Stream::H264Stream(H264Encoder& encoder, RtspServer& server, double slow_encode_s, std::function<double()> now)
+H264Stream::H264Stream(H264Encoder& encoder, RtspServer& server, double slow_encode_s, std::function<double()> now,
+                       size_t path)
     : encoder_(encoder),
       server_(server),
+      path_(path),
       slow_encode_s_(slow_encode_s),
       now_(std::move(now)),
       packetizer_(Random(), static_cast<uint16_t>(Random())),
@@ -43,12 +45,12 @@ bool H264Stream::Prepare(const EncoderSettings& settings, std::string& error) {
 }
 
 void H264Stream::Offer() {
-  if (prepared_) server_.SetAvailable(sets_);
+  if (prepared_) server_.SetAvailable(sets_, path_);
 }
 
 void H264Stream::Withdraw() {
   End();
-  server_.SetUnavailable();
+  server_.SetUnavailable(path_);
 }
 
 bool H264Stream::Begin(std::string& error) {
@@ -84,12 +86,12 @@ H264Stream::Sent H264Stream::Send(const CapturedFrame& frame, std::string& error
   }
   if (!ok) {
     End();
-    server_.DropClient();
+    server_.DropClient(path_);
     return Sent::kEncoderFailed;
   }
   encode_ms_ = (after - before) * 1000.0;
   packetizer_.Packetize(SplitAnnexB(data, size), clock_.Next(frame.timestamp_us), packets_);
-  if (!server_.SendRtp(packets_)) {
+  if (!server_.SendRtp(packets_, path_)) {
     End();
     return Sent::kClientGone;
   }

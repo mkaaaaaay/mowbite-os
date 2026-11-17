@@ -193,7 +193,7 @@ TEST(RtspServer, OneClientAtATime) {
   Client second(rig.server.Port());
   rig.server.Poll(100);
   EXPECT_EQ(second.Receive(), "<closed>");
-  EXPECT_NE(rig.Ask(first, "OPTIONS " + rig.Url() + " RTSP/1.0\r\nCSeq: 1\r\n\r\n").find("200 OK"), std::string::npos);
+  EXPECT_NE(rig.Ask(first, "DESCRIBE " + rig.Url() + " RTSP/1.0\r\nCSeq: 1\r\n\r\n").find("200 OK"), std::string::npos);
   rig.server.DropClient();
   EXPECT_EQ(first.Receive(), "<closed>");
   Client third(rig.server.Port());
@@ -272,6 +272,75 @@ TEST(RtspServer, PictureForAClientThatReadsSlowlyHasOneDeadline) {
   EXPECT_FALSE(rig.server.Playing());
   reading = false;
   reader.join();
+}
+
+// Two paths on one port: each has its own client, parameter sets, availability and packets.
+TEST(RtspServer, TwoPathsEachWithItsClient) {
+  RtspConfig config;
+  config.port = 0;
+  config.paths = {"oa_left", "oa_left_plain"};
+  double clock = 100.0;
+  RtspServer server(config, [&clock] { return clock; });
+  std::string error;
+  ASSERT_TRUE(server.Listen(error)) << error;
+  const ParameterSets plain_sets{{0x67, 0x42, 0xe0, 0x1e}, {0x68, 0xce, 0x3c, 0x81}};
+  server.SetAvailable(kSets, 0);
+  server.SetAvailable(plain_sets, 1);
+  const std::string base = "rtsp://127.0.0.1:" + std::to_string(server.Port()) + "/";
+  const auto ask = [&server](const Client& client, const std::string& request) {
+    client.Send(request);
+    server.Poll(100);
+    server.Poll(0);
+    return client.Receive();
+  };
+  const auto play = [&](const Client& client, const std::string& path) {
+    server.Poll(100);
+    const std::string session = test::SessionOf(ask(
+        client, "SETUP " + base + path +
+                    "/trackID=0 RTSP/1.0\r\nCSeq: 1\r\nTransport: RTP/AVP/TCP;interleaved=0-1\r\n\r\n"));
+    if (session.empty()) return session;
+    ask(client, "PLAY " + base + path + "/ RTSP/1.0\r\nCSeq: 2\r\nSession: " + session + "\r\n\r\n");
+    return session;
+  };
+  Client plain(server.Port());
+  server.Poll(100);
+  const std::string sdp = ask(plain, "DESCRIBE " + base + "oa_left_plain RTSP/1.0\r\nCSeq: 1\r\n\r\n");
+  EXPECT_NE(sdp.find(StreamSdp(plain_sets, "oa_left_plain")), std::string::npos) << sdp;
+  // A connection serves the path it began with.
+  EXPECT_EQ(ask(plain, "DESCRIBE " + base + "oa_left RTSP/1.0\r\nCSeq: 2\r\n\r\n"),
+            "RTSP/1.0 455 Method Not Valid in This State\r\nCSeq: 2\r\n\r\n");
+  ASSERT_FALSE(play(plain, "oa_left_plain").empty());
+  EXPECT_TRUE(server.Playing(1));
+  EXPECT_FALSE(server.Playing(0));
+  EXPECT_FALSE(server.SendRtp({{1, 2}}, 0));
+
+  Client boxes(server.Port());
+  ASSERT_FALSE(play(boxes, "oa_left").empty());
+  EXPECT_TRUE(server.Playing(0));
+  // As many connections as paths.
+  Client third(server.Port());
+  server.Poll(100);
+  EXPECT_EQ(third.Receive(), "<closed>");
+
+  ASSERT_TRUE(server.SendRtp({{0x80, 1}}, 0));
+  ASSERT_TRUE(server.SendRtp({{0x80, 2, 2}}, 1));
+  EXPECT_EQ(boxes.Receive(), std::string("$\0\0\2\x80\1", 6));
+  EXPECT_EQ(plain.Receive(), std::string("$\0\0\3\x80\2\2", 7));
+
+  // Withdrawing one path drops only its client; another client for a taken path gets 503 and is closed.
+  server.SetUnavailable(1);
+  EXPECT_FALSE(server.Playing(1));
+  EXPECT_TRUE(server.Playing(0));
+  EXPECT_EQ(plain.Receive(), "<closed>");
+  Client late(server.Port());
+  server.Poll(100);
+  EXPECT_EQ(ask(late, "DESCRIBE " + base + "oa_left RTSP/1.0\r\nCSeq: 1\r\n\r\n"),
+            "RTSP/1.0 503 Service Unavailable\r\nCSeq: 1\r\n\r\n");
+  EXPECT_EQ(late.Receive(), "<closed>");
+  EXPECT_TRUE(server.Playing(0));
+  server.DropClient(0);
+  EXPECT_FALSE(server.Playing(0));
+  EXPECT_EQ(boxes.Receive(), "<closed>");
 }
 
 }  // namespace

@@ -107,7 +107,7 @@ struct Rig {
   void WithVideo() {
     RtspConfig rtsp;
     rtsp.port = 0;
-    rtsp.path = "oa_right";
+    rtsp.paths = {"oa_right"};
     server = std::make_unique<RtspServer>(rtsp, [this] { return Now(); });
     std::string error;
     ASSERT_TRUE(server->Listen(error)) << error;
