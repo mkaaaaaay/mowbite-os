@@ -240,6 +240,7 @@ void Program::EnterDrive(Drive drive, double now, double wall) {
     case Drive::kRelease:
     case Drive::kArm:
     case Drive::kPause:
+    case Drive::kAsk:
       command = Command{0, 0};
       break;
     case Drive::kEnter:
@@ -349,6 +350,18 @@ void Program::TickDrive(double now, double wall) {
       return;
     }
   }
+  // Where the user did not act in time: before the limit of a single move, which is no measurement.
+  const bool stop_moving = step.check == "stop_moving";
+  if (stop_moving && run.drive == Drive::kTrigger && run.move_began >= 0 &&
+      now - run.move_began > step.Number("time")) {
+    AskPressed("NOT_SEEN", json::object(), now, wall);
+    return;
+  }
+  if (step.check == "wheels" && run.drive == Drive::kMeasure && WheelPartOf(step.parts[run.part].id).left == 0 &&
+      run.answer.empty() && now - run.move_began > step.Number("answer_time")) {
+    DriveFail("NOT_DONE", "No answer which wheel turns", json::object(), now, wall);
+    return;
+  }
   // A single move: while the wheels are to turn. After a trigger the commands go on only to show that the wheels stay.
   const bool turns = run.drive == Drive::kRunUp || run.drive == Drive::kTrigger || run.drive == Drive::kMeasure ||
                      run.drive == Drive::kRestart;
@@ -363,7 +376,6 @@ void Program::TickDrive(double now, double wall) {
   }
   const double elapsed = now - run.drive_began;
   const double speed = Speed(step);
-  const bool stop_moving = step.check == "stop_moving";
   switch (run.drive) {
     case Drive::kEnter:
       if (world_.state == "SETUP") {
@@ -413,10 +425,6 @@ void Program::TickDrive(double now, double wall) {
           own_ = own;
           EnterDrive(Drive::kStop, now, wall);
           return;
-        }
-        if (now - run.move_began > step.Number("time")) {
-          DriveFail("NOT_SEEN", "The input " + part.role + " did not switch while the wheels turned", json::object(),
-                    now, wall);
         }
       } else if (run.asked && now - run.asked_at > kServiceWait) {
         DriveFail("DRIVER_REFUSED", "The driver did not answer", {{"code", "NO_ANSWER"}}, now, wall);
@@ -523,6 +531,9 @@ void Program::TickDrive(double now, double wall) {
       return;
     case Drive::kMeasure:
       return;
+    case Drive::kAsk:
+      TickPressed(now, wall);
+      return;
   }
 }
 
@@ -551,12 +562,7 @@ void Program::TickWheels(double now, double wall) {
       const Part& part = step.parts[run.part];
       const WheelPart& signs = WheelPartOf(part.id);
       const bool one = signs.left == 0;
-      if (one ? run.answer.empty() : elapsed < step.Number("time")) {
-        if (one && now - run.move_began > step.Number("answer_time")) {
-          DriveFail("NOT_SEEN", "No answer which wheel turns", json::object(), now, wall);
-        }
-        return;
-      }
+      if (one ? run.answer.empty() : elapsed < step.Number("time")) return;
       if (run.samples == 0) {
         DriveFail("NO_DATA", "No hw/wheel_odom while the part drove", {{"source", "hw/wheel_odom"}}, now, wall);
         return;

@@ -38,6 +38,7 @@
 #include "mowbite_api/setup.h"
 #include "mowbite_bridge/event_builder.h"
 #include "mowbite_hold/file_io.h"
+#include "mowbite_hold/lock.h"
 #include "mowbite_hold/restart.h"
 #include "mowbite_map/sha256.h"
 #include "mowbite_ntrip/ntrip_protocol.h"
@@ -61,8 +62,9 @@ constexpr const char* kRefused = "SETUP_REFUSED";
 constexpr const char* kGeometryNode = "/mowbite_geometry";
 // setup/json goes out again this often without a change (s), for a bridge that came later.
 constexpr double kRepeat = 30.0;
-// A write that failed is tried again this often (s).
+// A write that failed is tried again this often (s); the lock of autonomous driving sooner.
 constexpr double kWriteRetry = 5.0;
+constexpr double kLockRetry = 1.0;
 // Correction data counts as arriving with a frame this young (s).
 constexpr double kFrameAge = 10.0;
 // In data_dir: the setup program asked for a restart of the OS; the launch ends when it sees it (stack.py).
@@ -134,6 +136,7 @@ class SetupNode : public rclcpp::Node {
         LoadImages(*list, image_dir);
         program_.emplace(*list, platform);
         LoadRecord();
+        LoadLock();
         LoadLayer(shadowed);
         for (const auto& method : mowbite_api::Methods()) {
           if (method.node == methods.node_id) methods.methods.push_back(method.name);
@@ -282,6 +285,38 @@ class SetupNode : public rclcpp::Node {
     }
   }
 
+  std::string LockPath() const { return data_dir_ + "/" + mowbite_hold::kSafetyLockFile; }
+
+  // The lock as the last start left it; one that cannot be read closes with a reset.
+  void LoadLock() {
+    if (data_dir_.empty()) return;
+    std::string text, error;
+    const auto read = mowbite_hold::ReadSmallFile(LockPath(), 1024 * 1024, &text, &error);
+    if (read == mowbite_hold::FileRead::kMissing) return;
+    if (read != mowbite_hold::FileRead::kText) text.clear();
+    program_->LoadLock(text, WallSeconds());
+    if (!mowbite_hold::ParseSafetyLock(text)) {
+      RCLCPP_ERROR(get_logger(), "%s cannot be read (%s): the lock stays closed until a summary passes",
+                   LockPath().c_str(), error.empty() ? "not a lock" : error.c_str());
+    }
+  }
+
+  // Writes or removes the lock; a failure keeps it due and blocks every change. Called with the mutex held.
+  void WriteLock(double now) {
+    if (data_dir_.empty() || (!program_->lock_writable() && now - lock_tried_ < kLockRetry)) return;
+    const auto text = program_->TakeLock();
+    if (!text) return;
+    std::string error;
+    const bool written = text->empty() ? mowbite_hold::RemoveFileSynced(LockPath(), &error)
+                                       : mowbite_hold::WriteFileAtomic(LockPath(), *text, &error);
+    const bool before = program_->lock_writable();
+    if (!written && before) RCLCPP_ERROR(get_logger(), "Cannot write %s: %s", LockPath().c_str(), error.c_str());
+    if (written && !before) RCLCPP_INFO(get_logger(), "%s is written again", LockPath().c_str());
+    lock_tried_ = now;
+    program_->LockWritten(written);
+    if (written != before) state_due_ = true;
+  }
+
   // The parameter file the program wrote for this mower, and what the file kept by hand overrules of it
   // (<node>.<parameter>, with commas, from the start).
   void LoadLayer(const std::string& shadowed) {
@@ -342,8 +377,10 @@ class SetupNode : public rclcpp::Node {
     state_due_ = true;
   }
 
-  // What the program has to tell after a change. Called with the mutex held.
+  // What the program has to tell after a change: the lock first, then the record and the events. Called with the
+  // mutex held.
   void Flush(double now) {
+    WriteLock(now);
     if (program_->TakeChanged()) {
       state_due_ = true;
       Save(now);
@@ -641,6 +678,7 @@ class SetupNode : public rclcpp::Node {
   std::map<std::string, std::pair<std::string, int>> image_infos_;
   World world_;
   double write_tried_ = 0;
+  double lock_tried_ = 0;
   bool state_due_ = true;
   std::string blocked_;
   double state_sent_ = -1;

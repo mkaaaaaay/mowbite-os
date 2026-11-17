@@ -28,7 +28,8 @@ add_library(mowbite_setup_core STATIC src/steps.cpp src/program.cpp src/motion.c
 target_include_directories(mowbite_setup_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(mowbite_setup_core mowbite_api::mowbite_api_core nlohmann_json::nlohmann_json)
+target_link_libraries(mowbite_setup_core mowbite_api::mowbite_api_core mowbite_hold::mowbite_hold_core
+  nlohmann_json::nlohmann_json)
 set_target_properties(mowbite_setup_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Checks a step list (JSON on stdin) and its images (folder as argument) by the rules of the node.
@@ -61,5 +62,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_mowbite_setup HAS_LIBRARY_TARGET)
-ament_export_dependencies(mowbite_api nlohmann_json)
+ament_export_dependencies(mowbite_api mowbite_hold nlohmann_json)
 ament_package()

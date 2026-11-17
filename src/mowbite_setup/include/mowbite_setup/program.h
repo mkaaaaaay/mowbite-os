@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "mowbite_hold/lock.h"
 #include "mowbite_setup/layer.h"
 #include "mowbite_setup/steps.h"
 
@@ -149,6 +150,16 @@ class Program {
   // Whether setup.json could be written the last time; without, nothing changes the state.
   void SetWritable(bool writable);
   bool writable() const { return writable_; }
+
+  // The lock of autonomous driving and mowing (mowbite_hold/lock.h): <data_dir>/safety_lock.json as the start found
+  // it, nothing when it is not there, an empty text when it cannot be read (then a reset closes it). A cause of a
+  // step the list does not have as a safety step becomes a reset. A safety step that fails with a reason that closes
+  // puts its cause in (failures + 1), passing it takes the cause out; skip and setup.reset leave them.
+  void LoadLock(const std::optional<std::string>& text, double wall);
+  // The file to write now, once, before setup.json and the events (empty: to remove); LockWritten tells how it went.
+  std::optional<std::string> TakeLock();
+  void LockWritten(bool written);
+  bool lock_writable() const { return lock_writable_; }
   // Moves the running step on and ends the steps that wait for what the OS sees.
   void Tick(double now, double wall);
 
@@ -235,6 +246,7 @@ class Program {
     kRestart,
     kPause,
     kMeasure,
+    kAsk,
   };
   struct Run {
     size_t step = 0;
@@ -315,6 +327,12 @@ class Program {
     int samples = 0;
     std::string answer;
     std::optional<double> returned_after;
+    // A safety step that saw nothing of the action of a part asks pressed (below 0: it does not): since when, and the
+    // reason it fails with on yes.
+    double pressed_at = -1;
+    double pressed_wall = 0;
+    std::string pressed_reason;
+    json pressed_fields;
   };
 
   // The emergency a part of mode press brought, which the program releases itself. It exists only while every
@@ -352,6 +370,18 @@ class Program {
   void End(const Step& step, const std::string& state, const std::string& reason, const std::string& message,
            json fields, double wall);
   void Pass(const Step& step, double now, double wall);
+  // The cause of a failed safety step into the lock, and out again when it passes.
+  void CloseLock(const Step& step, const std::string& reason, const json& fields, double wall);
+  void ReleaseLock(const Step& step);
+  bool LockOpen() const;
+  json SafetyState() const;
+  // The part of the running safety step saw nothing within its time: it asks pressed. On yes it fails with reason and
+  // fields, on no or without an answer within kSetupPressedTime it ends open with NOT_DONE.
+  void AskPressed(const std::string& reason, json fields, double now, double wall);
+  void TickPressed(double now, double wall);
+  std::optional<Refusal> AnswerPressed(const Step& step, const json& params, double now, double wall);
+  // Whether a step of this check can ask pressed.
+  static bool CanAsk(const Step& step);
   void Fail(const std::string& reason, const std::string& message, json fields, double now, double wall);
   bool StageDone(const std::string& stage) const;
   bool Complete() const;
@@ -480,6 +510,10 @@ class Program {
   std::optional<std::string> motion_end_;
   std::optional<double> silence_due_;
   bool end_due_ = false;
+  // The lock as the file holds it, whether it is to be written, and whether the last write went through.
+  mowbite_hold::LockRecord lock_;
+  bool lock_due_ = false;
+  bool lock_writable_ = true;
 };
 
 }  // namespace mowbite_setup

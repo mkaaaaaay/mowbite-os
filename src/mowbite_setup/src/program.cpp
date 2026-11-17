@@ -566,6 +566,8 @@ void Program::End(const Step& step, const std::string& state, const std::string&
     if (!item.value().is_null()) details[item.key()] = item.value();
   }
   events_.push_back({kStepEvent, std::move(details)});
+  if (state == "failed" && mowbite_api::SetupClosesLock(step.check, reason)) CloseLock(step, reason, fields, wall);
+  if (state == "ok") ReleaseLock(step);
   if (!stage_done && StageDone(step.stage)) {
     events_.push_back({"SETUP", {{"what", "stage_done"}, {"stage", step.stage}}});
   }
@@ -588,16 +590,167 @@ void Program::Fail(const std::string& reason, const std::string& message, json f
   const Step& step = StepOf(*run_);
   Record& record = RecordOf(step);
   const bool stopped = reason == "STOPPED";
+  // Stopped, or the action of the part was not done: the step is open again.
+  const bool open = stopped || reason == "NOT_DONE";
   record.values = Values(step, now, true);
   // A step inputs_assign is in a part only while it asks for its line.
   const bool in_part = !IsAssign(step) || run_->assign == Assign::kPart || run_->assign == Assign::kAsk;
   if (!step.parts.empty() && in_part && run_->part < step.parts.size()) {
-    run_->part_states[run_->part] = stopped ? "open" : "failed";
+    run_->part_states[run_->part] = open ? "open" : "failed";
     if (!stopped) fields["part"] = step.parts[run_->part].id;
   }
   if (!step.parts.empty()) record.parts = run_->part_states;
   EndRun(now);
-  End(step, stopped ? "open" : "failed", reason, message, std::move(fields), wall);
+  End(step, open ? "open" : "failed", reason, message, std::move(fields), wall);
+}
+
+void Program::LoadLock(const std::optional<std::string>& text, double wall) {
+  lock_ = mowbite_hold::LockRecord();
+  if (!text) return;
+  const auto record = mowbite_hold::ParseSafetyLock(*text);
+  mowbite_hold::LockCause reset;
+  reset.reset = true;
+  reset.t = static_cast<int64_t>(std::floor(wall));
+  if (!record) {
+    // Nothing tells which check failed: closed until a summary passes.
+    reset.reason = "UNREADABLE";
+    lock_.causes.push_back(reset);
+    lock_due_ = true;
+    return;
+  }
+  lock_.failures = record->failures;
+  bool reset_due = false;
+  bool changed = false;
+  for (const auto& cause : record->causes) {
+    if (cause.reset) {
+      reset_due = true;
+      reset.reason = cause.reason;
+      reset.t = cause.t;
+      continue;
+    }
+    const Step* step = list_.Find(cause.step);
+    const mowbite_api::SetupCheck* check = step ? mowbite_api::FindSetupCheck(step->check) : nullptr;
+    if (!check || !check->safety) {
+      // No step of the list can take it out: the step list changed under a failed check.
+      reset_due = changed = true;
+      continue;
+    }
+    lock_.causes.push_back(cause);
+  }
+  if (!reset_due) return;
+  if (reset.reason.empty()) reset.reason = "RESET";
+  lock_.causes.push_back(reset);
+  lock_due_ = changed;
+}
+
+std::optional<std::string> Program::TakeLock() {
+  if (!lock_due_) return std::nullopt;
+  lock_due_ = false;
+  return lock_.causes.empty() ? std::string() : mowbite_hold::SafetyLockText(lock_);
+}
+
+void Program::LockWritten(bool written) {
+  lock_writable_ = written;
+  if (!written) lock_due_ = true;
+}
+
+void Program::CloseLock(const Step& step, const std::string& reason, const json& fields, double wall) {
+  auto& causes = lock_.causes;
+  causes.erase(std::remove_if(causes.begin(), causes.end(),
+                              [&step](const auto& cause) { return !cause.reset && cause.step == step.id; }),
+               causes.end());
+  mowbite_hold::LockCause cause;
+  cause.step = step.id;
+  cause.reason = reason;
+  if (fields.contains("part") && fields["part"].is_string()) cause.part = fields["part"].get<std::string>();
+  if (fields.contains("value") && fields["value"].is_number()) cause.value = fields["value"].get<double>();
+  if (fields.contains("limit") && fields["limit"].is_number()) cause.limit = fields["limit"].get<double>();
+  cause.t = static_cast<int64_t>(std::floor(wall));
+  cause.firmware = FirmwareText();
+  causes.push_back(std::move(cause));
+  ++lock_.failures;
+  lock_due_ = true;
+  // The emergency stays for the user to release: an own release could take the latch of mowbite_safety with it.
+  own_.reset();
+  release_.reset();
+  events_.push_back({"SETUP", {{"what", "safety_closed"}, {"step", step.id}, {"cause", reason}}});
+}
+
+void Program::ReleaseLock(const Step& step) {
+  auto& causes = lock_.causes;
+  const auto end = std::remove_if(causes.begin(), causes.end(),
+                                  [&step](const auto& cause) { return !cause.reset && cause.step == step.id; });
+  if (end == causes.end()) return;
+  causes.erase(end, causes.end());
+  lock_due_ = true;
+  if (LockOpen()) events_.push_back({"SETUP", {{"what", "safety_opened"}}});
+}
+
+bool Program::LockOpen() const {
+  return !capabilities_.safety_measurement_date.empty() && lock_.causes.empty();
+}
+
+json Program::SafetyState() const {
+  const std::string& date = capabilities_.safety_measurement_date;
+  json closed = json::array();
+  bool failed = false;
+  for (const auto& cause : lock_.causes) {
+    failed = failed || !cause.reset;
+    if (closed.size() >= static_cast<size_t>(mowbite_api::kSetupMaxClosed)) continue;
+    closed.push_back({{"step", cause.reset ? json() : json(cause.step)},
+                      {"part", cause.part.empty() ? json() : json(cause.part)},
+                      {"reason", cause.reason},
+                      {"t", cause.t}});
+  }
+  json why;
+  if (!LockOpen()) {
+    why = lock_.causes.empty() ? "NO_SAFETY_MEASUREMENT" : failed ? "CHECK_FAILED" : "RESET";
+  }
+  // The program writes no date yet: every date is one of the platform or of the file kept by hand.
+  return {{"open", LockOpen()},
+          {"date", date.empty() ? json() : json(date)},
+          {"firmware", nullptr},
+          {"why", std::move(why)},
+          {"source", date.empty() ? json() : json("hand")},
+          {"closed", std::move(closed)}};
+}
+
+bool Program::CanAsk(const Step& step) {
+  return step.check == "input" || step.check == "imu" || step.check == "stop_moving";
+}
+
+void Program::AskPressed(const std::string& reason, json fields, double now, double wall) {
+  Run& run = *run_;
+  run.pressed_at = now;
+  run.pressed_wall = wall;
+  run.pressed_reason = reason;
+  run.pressed_fields = std::move(fields);
+  if (IsDrive(StepOf(run))) EnterDrive(Drive::kAsk, now, wall);
+  Changed();
+}
+
+void Program::TickPressed(double now, double wall) {
+  if (now - run_->pressed_at <= mowbite_api::kSetupPressedTime) return;
+  Fail("NOT_DONE", "No answer whether the action was done", json::object(), now, wall);
+}
+
+std::optional<Refusal> Program::AnswerPressed(const Step& step, const json& params, double now, double wall) {
+  const std::string& name = mowbite_api::SetupPressed().id;
+  const json none = json::object();
+  const json& values = params.contains("values") && params["values"].is_object() ? params["values"] : none;
+  const std::string answer =
+      values.size() == 1 && values.contains(name) && values[name].is_string() ? values[name].get<std::string>() : "";
+  if (!mowbite_api::FindSetupName(mowbite_api::SetupPressedValues(), answer)) {
+    return Refuse("INVALID_VALUE", step.id + " takes " + name + " alone, yes or no", {{"name", name}});
+  }
+  if (answer == "no") {
+    Fail("NOT_DONE", "The action was not done", json::object(), now, wall);
+    return std::nullopt;
+  }
+  const std::string reason = run_->pressed_reason;
+  json fields = run_->pressed_fields;
+  Fail(reason, "The action was done and the step saw nothing of it", std::move(fields), now, wall);
+  return std::nullopt;
 }
 
 std::optional<Refusal> Program::Common(const json& params, const Step** step) const {
@@ -616,6 +769,10 @@ std::optional<Refusal> Program::Common(const json& params, const Step** step) co
                   {{"version", version_}});
   }
   if (!writable_) return Refuse("STORAGE_NOT_WRITABLE", "setup.json cannot be written", {{"file", "setup.json"}});
+  if (!lock_writable_) {
+    return Refuse("STORAGE_NOT_WRITABLE", std::string(mowbite_hold::kSafetyLockFile) + " cannot be written",
+                  {{"file", mowbite_hold::kSafetyLockFile}});
+  }
   return std::nullopt;
 }
 
@@ -718,6 +875,7 @@ std::optional<Refusal> Program::Answer(const json& params, double now, double wa
   const Step* found = nullptr;
   if (auto refusal = Common(params, &found)) return refusal;
   const Step& step = *found;
+  if (IsRun(step) && run_->pressed_at >= 0) return AnswerPressed(step, params, now, wall);
   // A step inputs_assign that runs takes the answer to its question, one that is ok the delays of its lines.
   if (IsAssign(step)) {
     return RecordOf(step).state == "ok" ? AnswerDelays(step, params, now, wall) : AnswerAssign(step, params);
@@ -923,7 +1081,9 @@ void Program::PartDone(double now, double wall) {
 
 void Program::Tick(double now, double wall) {
   TrackWorld(now);
-  if (run_) {
+  if (run_ && run_->pressed_at >= 0 && !IsDrive(StepOf(*run_))) {
+    TickPressed(now, wall);
+  } else if (run_) {
     const std::string& check = StepOf(*run_).check;
     if (check == "board") TickBoard(now, wall);
     if (check == "input") TickInput(now, wall);
@@ -1016,7 +1176,7 @@ void Program::TickInput(double now, double wall) {
       Fail("LINE_SILENT", "Only lines of the parts before switched, not " + silent.dump(), {{"lines", silent}}, now,
            wall);
     } else if (run.other.empty()) {
-      Fail("NOT_SEEN", "The input " + part.role + " did not switch and come back in time", {}, now, wall);
+      AskPressed("NOT_SEEN", json::object(), now, wall);
     } else {
       Fail("WRONG_INPUT", "The input " + run.other + " switched, not " + part.role, {{"seen", run.other}}, now, wall);
     }
@@ -1135,11 +1295,9 @@ void Program::TickImu(double now, double wall) {
   }
   const bool tilt_stop = part.move == "tilt_stop";
   if (now - run.part_began > step.Number("time")) {
-    if (tilt_stop) {
-      Fail("NO_EMERGENCY", "No emergency TILT in time", {{"limit", step.Number("time")}}, now, wall);
-    } else {
-      Fail("NOT_SEEN", "The IMU did not show the move " + part.move + " in time", {}, now, wall);
-    }
+    // Without an emergency TILT or a move the user may not have done it: the step asks.
+    AskPressed(tilt_stop ? "NO_EMERGENCY" : "NOT_SEEN",
+               tilt_stop ? json{{"limit", step.Number("time")}} : json::object(), now, wall);
     return;
   }
   const std::optional<double> value = ImuValue(run, part.move);
@@ -1463,6 +1621,9 @@ json Program::Blocked(const Step& step, double now) const {
     blocked.push_back({{"reason", reason}, {"message", message}});
   };
   if (!writable_) add("STORAGE_NOT_WRITABLE", "setup.json cannot be written");
+  if (!lock_writable_) add("STORAGE_NOT_WRITABLE", std::string(mowbite_hold::kSafetyLockFile) + " cannot be written");
+  // A step that asks pressed waits for the answer alone.
+  if (IsRun(step) && run_->pressed_at >= 0) return blocked;
   if (IsRun(step) && IsAssign(step)) {
     if (restart_wanted_ && !RestartAllowed(now)) {
       if (hardware_.hold) {
@@ -1624,6 +1785,20 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
                         {"texts", mowbite_api::Texts(question.texts)},
                         {"values", std::move(values)}});
     }
+    if (CanAsk(step)) {
+      const mowbite_api::SetupName& question = mowbite_api::SetupPressed();
+      json values = json::array();
+      for (const auto& value : mowbite_api::SetupPressedValues()) {
+        values.push_back({{"id", value.id}, {"texts", mowbite_api::Texts(value.texts)}});
+      }
+      inputs.push_back({{"name", question.id},
+                        {"type", "choice"},
+                        {"ask", is_run && run_->pressed_at >= 0},
+                        {"advanced", false},
+                        {"value", nullptr},
+                        {"texts", mowbite_api::Texts(question.texts)},
+                        {"values", std::move(values)}});
+    }
     json ask;
     if (asks) {
       ask = {{"part", step.parts[run_->part].id}, {"line", run_->proposed}, {"active_high", run_->proposed_high}};
@@ -1674,6 +1849,8 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
         ends_at = std::floor(run_->wall_began + step.Number(step.check == "position" ? "timeout" : "time"));
       }
     }
+    // The question pressed gives up after its own time.
+    if (is_run && run_->pressed_at >= 0) ends_at = std::floor(run_->pressed_wall + mowbite_api::kSetupPressedTime);
     json picture = image(step.image, false);
     if (!picture.is_null()) picture["accent"] = image(step.accent, true);
     steps.push_back({{"id", step.id},
@@ -1681,6 +1858,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
                      {"check", step.check},
                      {"kind", step.kind},
                      {"state", shown},
+                     {"safety", mowbite_api::FindSetupCheck(step.check)->safety},
                      {"attempt", record.attempt},
                      {"needs", step.needs},
                      {"blocked", Blocked(step, now)},
@@ -1722,18 +1900,13 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
     }
     stage["state"] = running ? "running" : ok == all ? "ok" : done == all ? "skipped" : failed ? "failed" : "open";
   }
-  const std::string& date = capabilities_.safety_measurement_date;
   return {{"version", version_},
           {"platform", platform_},
           {"catalog", list_.catalog},
           {"stage", std::move(first_stage)},
           {"current", std::move(current)},
           {"complete", Complete()},
-          {"safety",
-           {{"open", !date.empty()},
-            {"date", date.empty() ? json() : json(date)},
-            {"firmware", nullptr},
-            {"why", date.empty() ? json("NO_SAFETY_MEASUREMENT") : json()}}},
+          {"safety", SafetyState()},
           {"restart_pending", restart_wanted_ || (run_ && IsAssign(StepOf(*run_)) && run_->assign == Assign::kRestart)},
           {"stages", std::move(stages)},
           {"steps", std::move(steps)}};
