@@ -79,7 +79,7 @@ bool Program::AllowBlade(const Step& step) {
   if (capabilities_.blade_allowed) return false;
   layer_.Set(step.Word("node"), mowbite_api::kAllowBlade, true);
   WantRestart();
-  events_.push_back({"SETUP", {{"what", "blade_allowed"}, {"step", step.id}}});
+  allow_step_ = step.id;
   Changed();
   return true;
 }

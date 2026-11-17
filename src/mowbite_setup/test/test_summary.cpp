@@ -362,4 +362,14 @@ TEST(Summary, AFailedSafetyStepOpensItAgainAndResetClosesTheLock) {
   const json safety = bench.Safety();
   EXPECT_EQ(safety["source"], "program");
   EXPECT_EQ(safety["open"], false);
+
+  // Only the OS restarts: the driver still runs with the date the program wrote.
+  const std::string date = bench.capabilities.safety_measurement_date;
+  ASSERT_FALSE(date.empty());
+  bench.Boot();
+  bench.capabilities.safety_measurement_date = date;
+  bench.program->OnCapabilities(bench.capabilities);
+  bench.Run(0.2);
+  EXPECT_EQ(bench.Safety()["source"], "program");
+  EXPECT_EQ(bench.Safety()["open"], false);
 }

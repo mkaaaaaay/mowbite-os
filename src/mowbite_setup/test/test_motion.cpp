@@ -599,6 +599,38 @@ TEST(Motion, AStopNotPressedInTimeAsksWithTheWheelsStanding) {
   }
 }
 
+// setup.reset while the wheels turn ends the motion at once, as setup.abort does.
+TEST(Motion, AResetWhileTheWheelsTurnEndsTheMotion) {
+  Mower mower;
+  ASSERT_EQ(mower.Start("wheels"), "");
+  mower.Run(1);
+  ASSERT_TRUE(mower.program.CommandNow());
+  EXPECT_FALSE(mower.program.Reset({{"version", mower.program.version()}}, kWall + mower.now));
+  mower.Run(0.1);
+  EXPECT_EQ(mower.motion_ends, std::vector<std::string>{"wheels"});
+  EXPECT_FALSE(mower.program.MotionNow());
+  EXPECT_FALSE(mower.program.CommandNow());
+}
+
+// The question pressed waits for its answer without setup.keep, the wheels standing.
+TEST(Motion, TheQuestionPressedWaitsWithoutKeep) {
+  Mower mower;
+  ASSERT_EQ(mower.Start("stop_moving"), "");
+  mower.Run(12);
+  ASSERT_TRUE(mower.program.running());
+  mower.keep = false;
+  mower.Run(5);
+  ASSERT_TRUE(mower.program.running());
+  ASSERT_TRUE(mower.program.CommandNow());
+  EXPECT_EQ(mower.program.CommandNow()->linear, 0.0);
+  EXPECT_EQ(mower.program.CommandNow()->angular, 0.0);
+  json params = {{"step", "stop_moving"}, {"version", mower.program.version()}, {"values", {{"pressed", "yes"}}}};
+  ASSERT_FALSE(mower.program.Answer(params, mower.now, kWall + mower.now));
+  const json end = mower.RunToEnd(1);
+  EXPECT_EQ(end["reason"], "NOT_SEEN") << end.dump();
+  EXPECT_TRUE(mower.program.TakeLock().has_value());
+}
+
 TEST(Motion, NoAnswerWhichWheelTurnsIsNotDone) {
   Mower mower;
   ASSERT_EQ(mower.Start("wheels"), "");
@@ -867,6 +899,38 @@ TEST(Blade, TheFirstStartAllowsTheBladeAndRestartsNotTheStep) {
   EXPECT_EQ(after.StepState("blade")["restart"], false);
   EXPECT_EQ(after.Start("blade", kBladeConfirm), "");
   EXPECT_TRUE(after.program.running());
+}
+
+// allow_blade goes out as blade_allowed once the parameter file holds it; a file not written leaves the step open
+// with NOT_APPLIED and no restart.
+TEST(Blade, AllowBladeIsToldOnlyOnceWritten) {
+  for (const bool written : {true, false}) {
+    Mower mower(true, BladeList().c_str());
+    mower.program.SetLayer(Layer(), {});
+    mower.Run(0.2);
+    ASSERT_EQ(mower.Start("blade", kBladeConfirm), "");
+    for (const Event& event : mower.program.TakeEvents()) EXPECT_NE(event.details.value("what", ""), "blade_allowed");
+    ASSERT_TRUE(mower.program.TakeLayer());
+    mower.program.LayerWritten(written, mower.now, kWall + mower.now);
+    bool allowed = false;
+    std::string reason;
+    for (const Event& event : mower.program.TakeEvents()) {
+      json details = event.details;
+      details["id"] = "x";
+      details["t"] = kWall;
+      details["type"] = event.type;
+      const auto problems = mowbite_api::CheckEvent(event.type, mowbite_api::Json(details));
+      EXPECT_TRUE(problems.empty()) << event.type << ": " << (problems.empty() ? "" : problems[0]);
+      if (event.type == "SETUP" && event.details["what"] == "blade_allowed") allowed = true;
+      if (event.type == "SETUP_STEP" && event.details["step"] == "blade") reason = event.details.value("reason", "");
+    }
+    EXPECT_EQ(allowed, written);
+    EXPECT_EQ(reason, written ? "" : "NOT_APPLIED");
+    if (!written) {
+      EXPECT_FALSE(mower.program.TakeRestart(mower.now));
+    }
+    EXPECT_EQ(mower.StepState("blade")["state"], "open");
+  }
 }
 
 TEST(Blade, ABladeThatDoesNotStandOrRunsAgainClosesTheLock) {

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "mowbite_api/catalog.h"
 #include "mowbite_api/setup.h"
@@ -133,6 +134,8 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
     records[step.id] = std::move(record);
   }
   records_ = std::move(records);
+  reset_date_ = file.contains("reset_date") && file["reset_date"].is_string() ? file["reset_date"].get<std::string>()
+                                                                              : "";
   run_.reset();
   if (file.contains("version") && file["version"].is_number_integer()) {
     version_ = static_cast<int>(std::clamp<int64_t>(file["version"].get<int64_t>(), 0, 1000000000)) + 1;
@@ -189,11 +192,12 @@ std::string Program::Text() const {
     if (!record.assign.is_null()) steps[step.id]["assign"] = record.assign;
     if (!record.applied.is_null()) steps[step.id]["applied"] = record.applied;
   }
-  const json file = {{"schema", 1},
-                     {"platform", platform_},
-                     {"catalog", list_.catalog},
-                     {"version", version_},
-                     {"steps", std::move(steps)}};
+  json file = {{"schema", 1},
+               {"platform", platform_},
+               {"catalog", list_.catalog},
+               {"version", version_},
+               {"steps", std::move(steps)}};
+  if (!reset_date_.empty()) file["reset_date"] = reset_date_;
   // Texts of a board (firmware) may hold bytes that are no UTF-8.
   return file.dump(2, ' ', false, json::error_handler_t::replace) + "\n";
 }
@@ -458,11 +462,7 @@ void Program::EndRun(double now) {
   // A step inputs_assign that ends without its table: the next start does not learn, and should the driver learn
   // now, TickLearning restarts it.
   const Step& step = StepOf(*run_);
-  if (IsDrive(step)) {
-    motion_end_ = step.id;
-    silence_due_.reset();
-    end_due_ = false;
-  }
+  if (IsDrive(step)) EndMotion(step);
   Record& record = RecordOf(step);
   if (!record.assign.is_null()) {
     record.assign = nullptr;
@@ -472,6 +472,12 @@ void Program::EndRun(double now) {
   }
   if (!record.applied.is_null()) ForgetSummary(step);
   run_.reset();
+}
+
+void Program::EndMotion(const Step& step) {
+  motion_end_ = step.id;
+  silence_due_.reset();
+  end_due_ = false;
 }
 
 void Program::ForgetLearning(const Step& step) {
@@ -490,15 +496,21 @@ std::optional<std::string> Program::TakeLayer() {
 
 void Program::LayerWritten(bool written, double now, double wall) {
   layer_pending_ = false;
+  const std::string allow_step = std::exchange(allow_step_, "");
   if (written) {
     layer_disk_ = layer_;
     layer_failed_ = -1;
+    if (!allow_step.empty()) events_.push_back({"SETUP", {{"what", "blade_allowed"}, {"step", allow_step}}});
     return;
   }
   // What was not written is not kept for a later write either.
   layer_ = layer_disk_;
   layer_failed_ = now;
   restart_wanted_ = false;
+  if (const Step* step = allow_step.empty() ? nullptr : list_.Find(allow_step)) {
+    End(*step, "open", "NOT_APPLIED", "The parameter file of the setup program cannot be written", json::object(),
+        wall);
+  }
   if (run_ && (IsAssign(StepOf(*run_)) || IsSummary(StepOf(*run_)))) {
     Fail("NOT_APPLIED", "The parameter file of the setup program cannot be written", json::object(), now, wall);
   }
@@ -1077,6 +1089,7 @@ std::optional<Refusal> Program::Reset(const json& params, double wall) {
     leave_learning_ = true;
     ForgetLearning(StepOf(*run_));
   }
+  if (run_ && IsDrive(StepOf(*run_))) EndMotion(StepOf(*run_));
   restart_wanted_ = false;
   run_.reset();
   own_.reset();

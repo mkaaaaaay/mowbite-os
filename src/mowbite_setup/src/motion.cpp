@@ -366,7 +366,8 @@ uint32_t Program::AllowedNow() const {
 void Program::TickDrive(double now, double wall) {
   Run& run = *run_;
   const Step& step = StepOf(run);
-  if (now - run.keep > mowbite_api::kSetupKeepTimeout) {
+  // While pressed waits for its answer the motion stands: TickPressed bounds the wait, not setup.keep.
+  if (run.drive != Drive::kAsk && now - run.keep > mowbite_api::kSetupKeepTimeout) {
     DriveFail("RELEASED", "No setup.keep for " + std::to_string(now - run.keep) + " s", json::object(), now, wall);
     return;
   }

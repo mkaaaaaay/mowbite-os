@@ -433,6 +433,8 @@ class Program {
   void WatchOwnLatch();
   void TickRelease(double now);
   void EndRun(double now);
+  // setup/motion of the step ends at once, and no hw/silence or hw/end of it goes out any more.
+  void EndMotion(const Step& step);
   // Takes inputs.learn of the step out of the parameter file, if the program put it there.
   void ForgetLearning(const Step& step);
   bool RestartAllowed(double now) const;
@@ -619,6 +621,8 @@ class Program {
   std::string clock_reason_ = "never_synced";
   // The date setup.reset took out of the parameter file: the driver keeps it until the next restart.
   std::string reset_date_;
+  // The step blade whose allow_blade waits for the parameter file to be written.
+  std::string allow_step_;
 };
 
 }  // namespace mowbite_setup
