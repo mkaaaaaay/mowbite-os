@@ -108,6 +108,8 @@ class DockingSequence {
   DockingLeg Approach() const;
   // To stop_along m from the approach point along the way in (0: to the approach point).
   DockingLeg Out(double x, double y, double heading, double stop_along = 0.0) const;
+  // Whether a straight way out to stop_along is left from (x, y).
+  bool OutLeft(double x, double y, double stop_along) const;
   DockingLeg Line() const;
   // From the gate: kClose where the contact stretch is split, else kContact.
   DockingLeg AfterGate() const;

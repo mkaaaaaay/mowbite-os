@@ -6,7 +6,8 @@ blind contact and the charge, DOCKED with guide marker; every drive command reac
 with the marker beside the axis of the mower is refused where it stands, one whose marker yaw errs by 4 deg docks, a marker of the wrong size is caught at the gate (scale against the
 wheels), a marker hidden for a moment on the line stops the mower until it is back, one hidden for good ends the try
 with MARKER_LOST, a dark image with MARKER_NOT_SEEN and a camera that is off with MARKER_UNAVAILABLE. A series of
-three runs docks three times, driving out forwards by the marker in between, with DOCKING_TEST_RUN after each.
+three runs docks three times, driving out forwards by the marker in between, with DOCKING_TEST_RUN after each; a
+marker hidden for a moment on that way out does not move the start of the next run.
 
 The camera errs in the direction of the marker as measured in M3b (3 to 5 deg); the limit of the pose grows with the
 distance from the station (dock_accuracy_per_m) and allows that.
@@ -264,4 +265,37 @@ class TestDockTest(unittest.TestCase):
         truth = p.truth()
         self.assertTrue(truth["dock_ok"], truth)
         self.assertLess(abs(truth["y"]), 0.02, truth)
+        self.assertEqual(p.sources_since(began), {DriveCommand.SOURCE_DOCK})
+
+    def test_11_hidden_on_the_way_out_of_a_series_keeps_the_start(self):
+        p = self.probe
+        p.carry(ON_THE_LINE)
+        since, began = len(p.events), time.time()
+        self.assertEqual(p.test(runs=2)["state"], "DOCKING")
+        self.assertIsNotNone(p.event(since, "DOCKING_TEST_RUN", 150, run=1), p.events[since:])
+        # On the way out for run 2, well before its start 0.5 m in front of the station.
+        self.assertTrue(p.wait(lambda: p.station()[0] < -0.1, 60), p.station())
+        logs = len(p.logs)
+        p.flags(marker_hidden=True)
+        self.assertTrue(p.logged("Docking waits for the marker", 10, logs), p.logs[logs:])
+        self.assertTrue(p.wait(lambda: p.truth()["linear"] == 0.0, 5), p.truth())
+        standing, states = p.standing()
+        self.assertTrue(standing, states)
+        self.assertGreater(p.station()[0], -0.4, "hidden too late for this case")
+        p.flags()
+        self.assertTrue(p.logged("Docking goes on: the marker is back", 30, logs), p.logs[logs:])
+        # The way out goes on and ends where run 1 began: the sight of run 2 is there, not at the approach point.
+        back = len(p.logs)
+        self.assertTrue(p.logged("Docking waits for the marker", 60, back), p.logs[back:])
+        x = p.station()[0]
+        self.assertTrue(-0.62 < x < -0.4, x)
+        ended = lambda: any(e["type"] == "DOCKING_FAILED" or  # noqa: E731
+                            (e["type"] == "DOCKING_TEST_RUN" and e["run"] == 2) for e in p.events[since:])
+        self.assertTrue(p.wait(ended, 200), p.events[since:])
+        runs = [e for e in p.events[since:] if e["type"] == "DOCKING_TEST_RUN"]
+        self.assertEqual([(e["run"], e["of"], e["ok"]) for e in runs], [(1, 2, True), (2, 2, True)])
+        self.assertIsNone(next((e for e in p.events[since:] if e["type"] in ("DOCKING_RETRY", "DOCKING_FAILED")), None))
+        self.assertTrue(p.wait(lambda: p.robot and p.robot.current_state == "IDLE", 10))
+        truth = p.truth()
+        self.assertTrue(truth["dock_ok"], truth)
         self.assertEqual(p.sources_since(began), {DriveCommand.SOURCE_DOCK})

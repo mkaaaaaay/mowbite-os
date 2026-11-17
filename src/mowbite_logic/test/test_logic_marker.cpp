@@ -727,3 +727,75 @@ TEST(LogicMarkerSeries, TheWayOutEndsWhereTheFirstRunBegan) {
   const DockingLeg out = Take(core, DockingLeg::Kind::kOut);
   EXPECT_NEAR(out.poses.back().x, -0.5, 0.02);
 }
+
+namespace {
+
+// Run 1 of two from 0.3 m inside the start of the line, docked, charging off and the way out for run 2 taken.
+TestCore OnTheWayOutForRunTwo() {
+  TestCore core = Ready();
+  EXPECT_TRUE(Series(core, 2).accepted);
+  core.OnTick(100.0);
+  See(core, -0.5);
+  Take(core, DockingLeg::Kind::kOut);
+  core.OnDockPose(Pose(101.0, -0.8));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  Take(core, DockingLeg::Kind::kLine);
+  DockFrom(core, 102.0);
+  EXPECT_TRUE(core.TakeChargeOff());
+  core.OnChargeOff(true, "");
+  Take(core, DockingLeg::Kind::kOut);
+  core.TakeEvents();
+  return core;
+}
+
+// The marker lost at x on the way out at 120 s and good again from 131 s for gps_wait_time.
+void LoseAndFindOnTheWayOut(TestCore& core, double x) {
+  core.OnHardwareStatus(Healthy(120.0));
+  core.OnDockPose(Pose(120.0, x, 0.0, M_PI, 0.1));
+  core.OnDockingLegEnded(LegEnd::kGps, Reason("POSITION_ACCURACY", "the pose is not good"));
+  EXPECT_FALSE(core.TakeDockingLeg());
+  core.OnTick(130.0);
+  for (int i = 0; i <= 10; i++) {
+    const double t = 131.0 + i;
+    core.OnDockMarker(Message(t - 0.1, kMeasuring, true, true));
+    core.OnDockPose(Pose(t, x));
+    core.OnTick(t);
+  }
+}
+
+}  // namespace
+
+// The marker lost on the way out for run 2: back, the way out goes on to where run 1 began, and run 2 begins there
+// with a sight of the marker like after a way out in one piece.
+TEST(LogicMarkerSeries, AWayOutTheMarkerStoppedGoesOnToTheStartOfTheRun) {
+  TestCore core = OnTheWayOutForRunTwo();
+  LoseAndFindOnTheWayOut(core, -0.3);
+  const DockingLeg out = Take(core, DockingLeg::Kind::kOut);
+  EXPECT_FALSE(out.reverse);
+  EXPECT_NEAR(out.poses.back().x, -0.5, 0.02);
+  core.OnDockPose(Pose(145.0, -0.5, 0.0, M_PI, 0.1));
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  EXPECT_FALSE(core.TakeDockingLeg());
+  core.OnTick(150.0);
+  core.OnDockMarker(Message(150.4, kMeasuring, true, true));
+  core.OnDockPose(Pose(150.5, -0.5));
+  // Run 2 as run 1: from its start out to the approach point, then the line.
+  const DockingLeg first = Take(core, DockingLeg::Kind::kOut);
+  EXPECT_NEAR(first.poses.back().x, -0.8, 0.02);
+  const auto events = core.TakeEvents();
+  EXPECT_FALSE(Find(events, "DOCKING_FAILED"));
+  EXPECT_FALSE(RunEnded(events));
+}
+
+// Lost within reach of the start of the run: no way out is left, the sight of run 2 begins where the mower stands.
+TEST(LogicMarkerSeries, AWayOutTheMarkerStoppedAtItsEndBeginsTheRunThere) {
+  TestCore core = OnTheWayOutForRunTwo();
+  LoseAndFindOnTheWayOut(core, -0.45);
+  EXPECT_FALSE(core.TakeDockingLeg());
+  core.OnTick(150.0);
+  core.OnDockMarker(Message(150.4, kMeasuring, true, true));
+  core.OnDockPose(Pose(150.5, -0.45));
+  const DockingLeg first = Take(core, DockingLeg::Kind::kOut);
+  EXPECT_NEAR(first.poses.back().x, -0.8, 0.02);
+  EXPECT_FALSE(Find(core.TakeEvents(), "DOCKING_FAILED"));
+}

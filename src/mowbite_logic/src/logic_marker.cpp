@@ -207,6 +207,16 @@ void LogicCore::NextMarkerTry() {
     DockingTryFailed(Reason("dock_failed", "Docking failed: " + mismatch).With("cause", "MARKER_MISMATCH"));
     return;
   }
+  // A way out to the next run of a series that the marker stopped goes on to where the run begins.
+  if (test_next_run_) {
+    if (marker_legs_.OutLeft(p.x, p.y, test_start_along_)) {
+      SetDockingLeg(marker_legs_.Out(p.x, p.y, p.heading, test_start_along_));
+    } else {
+      test_next_run_ = false;
+      WaitForMarker(true);
+    }
+    return;
+  }
   if (docking_test_ && !marker_started_) {
     const std::string problem = TestStartProblem(marker_legs_, config_.marker, p, config_.marker.cross_track / 2);
     if (!problem.empty()) {
