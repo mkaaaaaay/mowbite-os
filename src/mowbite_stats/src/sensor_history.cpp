@@ -11,8 +11,6 @@ namespace mowbite_stats {
 namespace {
 
 constexpr int64_t kHour = 3600;
-// Wall times from here on are no clock: their values are not recorded.
-constexpr double kLatestWall = 1e11;
 // Most values of a sensor in one minute a file may give, one every 60 us.
 constexpr int64_t kMaxBucketValues = 1000000;
 
@@ -71,7 +69,7 @@ bool SensorHistory::Describe(const std::string& id, const std::string& name, con
 }
 
 void SensorHistory::Add(const std::string& id, double value, double wall) {
-  if (!std::isfinite(value) || !(wall >= kEarliestWall && wall < kLatestWall)) return;
+  if (!std::isfinite(value) || !WallSet(wall)) return;
   const auto it = series_.find(id);
   if (it == series_.end() || !it->second.recorded) return;
   const int64_t t = AlignDown(static_cast<int64_t>(std::floor(wall)), kBucketSeconds);
@@ -204,7 +202,7 @@ void SensorHistory::DropHour(int64_t hour) {
 }
 
 std::vector<HourFile> SensorHistory::TakeFiles(double now) {
-  if (now >= kEarliestWall && now < kLatestWall) {
+  if (WallSet(now)) {
     // Only what lies wholly before the window goes; after the clock went back nothing does.
     const double cutoff = now - static_cast<double>(kKeepSeconds);
     for (auto& [id, series] : series_) {

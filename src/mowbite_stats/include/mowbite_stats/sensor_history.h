@@ -24,8 +24,6 @@ constexpr size_t kMaxSensors = 64;
 constexpr size_t kMaxSensorText = 100;
 // All hour files together; at kMaxSensors full about 11.3 MB.
 constexpr size_t kMaxHistoryBytes = size_t{16} * 1024 * 1024;
-// Wall times before 2026-01-01 come from a clock that is not set: their values are not recorded.
-constexpr double kEarliestWall = 1767225600;
 
 // Values of one sensor in one minute; t its start in unix s.
 struct Bucket {

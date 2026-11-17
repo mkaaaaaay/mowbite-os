@@ -67,7 +67,7 @@ const std::vector<Part>& DefaultParts() {
 }
 
 Counter::Counter(const json& state, const json& hours, const json& parts, double now) : parts_(DefaultParts()) {
-  if (state.is_object() && state.value("schema", 0) == 1 && Number(state, "since") > 0) {
+  if (state.is_object() && state.value("schema", 0) == 1 && state.contains("since")) {
     since_ = Number(state, "since");
     total_ = AmountsFrom(state.value("total", json()));
     const json hour = state.value("hour", json());
@@ -77,12 +77,15 @@ Counter::Counter(const json& state, const json& hours, const json& parts, double
     since_ = std::floor(now);
     hour_.t = HourOf(now);
   }
+  // Without a set clock since is 0 and the hour going on 0 until the first sample with one.
+  if (!WallSet(since_)) since_ = WallSet(now) ? std::floor(now) : 0;
+  if (!WallSet(hour_.t)) hour_.t = 0;
   if (hours.is_array()) {
     for (const json& row : hours) {
       if (!row.is_array() || row.size() != 5) continue;
       bool numbers = true;
       for (const json& v : row) numbers = numbers && v.is_number() && v.get<double>() >= 0;
-      if (!numbers) continue;
+      if (!numbers || !WallSet(row[0].get<double>())) continue;
       hours_.push_back({row[0].get<int64_t>(),
                         {row[1].get<double>(), row[2].get<double>(), row[3].get<double>(), row[4].get<int64_t>()}});
     }
@@ -103,11 +106,16 @@ Counter::Counter(const json& state, const json& hours, const json& parts, double
 
 Changed Counter::Add(const Sample& sample) {
   Changed changed;
-  const int64_t hour = HourOf(sample.wall);
+  // What comes without a set clock goes into the hour 0, and from there into the first hour with a set clock.
+  const int64_t hour = WallSet(sample.wall) ? HourOf(sample.wall) : 0;
   if (hour != hour_.t) {
-    changed.hour_closed = CloseHour();
-    hour_ = Hour{hour, {}};
+    if (hour_.t != 0) {
+      changed.hour_closed = CloseHour();
+      hour_.amounts = {};
+    }
+    hour_.t = hour;
   }
+  if (hour != 0 && since_ == 0) since_ = std::floor(sample.wall);
   if (last_) {
     const Sample& last = *last_;
     const double gap = sample.mono - last.mono;
@@ -166,7 +174,7 @@ json Counter::Get(std::optional<int64_t> from, double now) const {
   for (const Hour& h : hours_) {
     if (h.t >= start) picked.push_back(&h);
   }
-  if (!hour_.amounts.Empty() && hour_.t >= start) picked.push_back(&hour_);
+  if (!hour_.amounts.Empty() && hour_.t != 0 && hour_.t >= start) picked.push_back(&hour_);
   // Cut to the newest; from then says where the hours begin.
   int64_t begins = start;
   // About 0.7 MB of JSON at the most, well below what MQTT carries.

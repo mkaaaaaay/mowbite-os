@@ -18,6 +18,13 @@ constexpr size_t kMaxHours = 10000;
 constexpr double kMaxGap = 5.0;
 // A step of the pose longer than this (m) between two samples is a jump of the position, not driven.
 constexpr double kMaxStep = 2.0;
+// Wall times before 2026-01-01 come from a clock that is not set, those from kLatestWall on are no clock.
+constexpr double kEarliestWall = 1767225600;
+constexpr double kLatestWall = 1e11;
+
+inline bool WallSet(double wall) {
+  return wall >= kEarliestWall && wall < kLatestWall;
+}
 
 struct Amounts {
   double blade_s = 0;   // the blade turned
@@ -65,7 +72,7 @@ class Counter {
 
   Changed Add(const Sample& sample);
 
-  // stats/state.json: since, the totals and the hour going on.
+  // stats/state.json: since, the totals and the hour going on; since and its t are 0 until the clock is set.
   json StateJson() const;
   // stats/hours.json: [t, blade_s, mowed_m, driven_m, runs] per closed hour, oldest first.
   json HoursJson() const;
