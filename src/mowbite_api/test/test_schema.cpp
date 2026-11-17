@@ -121,6 +121,10 @@ TEST(Schema, CommandsAndBits) {
   const Json& refusal = schema["$defs"]["refusal"];
   EXPECT_EQ(refusal["required"], Json({"event", "state", "sub_state", "reason", "severity", "resume"}));
   EXPECT_FALSE(refusal.contains("additionalProperties"));
+  // A blocked item carries the fields of its reason (SAFETY_STEPS: steps, skipped).
+  const Json& blocked = schema["$defs"]["setup"]["properties"]["steps"]["items"]["properties"]["blocked"]["items"];
+  EXPECT_FALSE(blocked.contains("additionalProperties"));
+  EXPECT_TRUE(schema["x-reasons"]["SETUP_BLOCKED"]["SAFETY_STEPS"].dump().find("skipped") != std::string::npos);
 }
 
 TEST(Additive, WhatIsTakenAwayIsFound) {

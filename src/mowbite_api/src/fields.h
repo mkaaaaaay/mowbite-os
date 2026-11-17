@@ -42,6 +42,12 @@ inline Field Rows(std::string name, std::string text, std::vector<Field> fields,
   return {std::move(name), Type::kArray, "", required, std::move(text), {}, false, std::move(fields), ""};
 }
 
+// Takes the fields of its reason in x-reasons as well.
+inline Field Open(Field field) {
+  field.open = true;
+  return field;
+}
+
 inline Field Nullable(Field field) {
   field.nullable = true;
   return field;

@@ -63,6 +63,8 @@ struct Field {
   std::map<std::string, UserTexts> value_texts = {};
   // The entry of $defs that is this value: the schema points there and does not write the fields out again.
   std::string defined = {};
+  // An object (or the objects of a list) with the fields of its reason in x-reasons beside these.
+  bool open = false;
 };
 
 // A reason as events and refusals carry it: reason, message, severity, resume and its own fields.

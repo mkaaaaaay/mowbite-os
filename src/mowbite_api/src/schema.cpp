@@ -80,7 +80,7 @@ Json Property(const Field& field) {
     }
     property["properties"] = properties;
     property["required"] = required;
-    property["additionalProperties"] = false;
+    if (!field.open) property["additionalProperties"] = false;
   }
   return property;
 }
