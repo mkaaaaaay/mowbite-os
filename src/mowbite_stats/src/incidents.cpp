@@ -130,13 +130,21 @@ class Incidents::Worker {
     idle_.wait(lock, [this] { return jobs_.empty() && !busy_; });
   }
 
+  void Hold(bool held) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      held_ = held;
+    }
+    wake_.notify_all();
+  }
+
  private:
   void Run() {
     // ioprio_set(IOPRIO_WHO_PROCESS, this thread, IOPRIO_CLASS_IDLE)
     syscall(SYS_ioprio_set, 1, 0, 3 << 13);
     std::unique_lock<std::mutex> lock(mutex_);
     for (;;) {
-      wake_.wait(lock, [this] { return stop_ || !jobs_.empty(); });
+      wake_.wait(lock, [this] { return stop_ || (!held_ && !jobs_.empty()); });
       if (stop_) return;
       Job job = std::move(jobs_.front());
       jobs_.pop_front();
@@ -156,6 +164,7 @@ class Incidents::Worker {
   std::deque<Job> jobs_;
   std::vector<std::function<void()>> done_;
   bool busy_ = false;
+  bool held_ = false;
   bool stop_ = false;
   std::thread thread_;
 };
@@ -410,6 +419,10 @@ void Incidents::Drain() {
   TakeDone();
 }
 
+void Incidents::HoldWorker(bool held) {
+  worker_->Hold(held);
+}
+
 std::string Incidents::StateOf(const std::string& id, const json& manifest) const {
   if (const Incident* incident = keeper_.Find(id)) {
     return incident->state == IncidentState::kCollecting ? "collecting" : "sealing";
@@ -577,6 +590,10 @@ RpcOutcome Incidents::Mark(const json& params, int64_t now_ns, double wall_s, No
 RpcOutcome Incidents::Delete(const json& params) {
   if (auto bad = CheckKeys(params, {"client", "id"}, true)) return *bad;
   if (auto bad = CheckClient(params)) return *bad;
+  // An archive the worker is still making, with or without location, keeps its incident.
+  const auto preparing = [this](const std::string& id) {
+    return preparing_.count({id, false}) != 0 || preparing_.count({id, true}) != 0;
+  };
   int64_t deleted = 0;
   std::string error;
   if (params.is_object() && params.contains("id")) {
@@ -584,11 +601,12 @@ RpcOutcome Incidents::Delete(const json& params) {
     if (auto bad = RequiredId(params, &id)) return *bad;
     if (!store_.Manifest(id)) return BadParam("id", "unknown", "no incident with this id");
     if (keeper_.Find(id) != nullptr) return BadParam("id", "state", "the incident is still collecting");
+    if (preparing(id)) return BadParam("id", "state", "the archive of the incident is being made");
     if (!store_.Remove(id, &error)) return Failed(error);
     return Result({{"deleted", 1}});
   }
   for (const StoredIncident& incident : store_.Stored()) {
-    if (keeper_.Find(incident.id) != nullptr) continue;
+    if (keeper_.Find(incident.id) != nullptr || preparing(incident.id)) continue;
     if (store_.Remove(incident.id, &error)) {
       ++deleted;
     } else {

@@ -75,6 +75,8 @@ class Incidents {
 
   // For tests: wait until the worker has nothing left.
   void Drain();
+  // For tests: while held, the worker starts no further job.
+  void HoldWorker(bool held);
 
  private:
   class Worker;

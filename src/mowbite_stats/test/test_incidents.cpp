@@ -375,6 +375,23 @@ TEST_F(IncidentsTest, DeleteOnlyWhatIsDone) {
   EXPECT_EQ(list[0]["id"], open);
 }
 
+TEST_F(IncidentsTest, DeleteWaitsForTheArchiveBeingMade) {
+  const std::string id = Sealed();
+  ASSERT_FALSE(id.empty());
+  incidents_->HoldWorker(true);
+  EXPECT_FALSE(Call("incidents.download", {{"id", id}, {"location", true}})["ready"].get<bool>());
+  std::optional<RpcError> error;
+  Call("incidents.delete", {{"id", id}}, &error);
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->data["reason"], "state");
+  // Without an id the one being prepared stays too.
+  EXPECT_EQ(Call("incidents.delete", nullptr)["deleted"], 0);
+  incidents_->HoldWorker(false);
+  incidents_->Drain();
+  EXPECT_EQ(Call("incidents.delete", {{"id", id}})["deleted"], 1);
+  EXPECT_TRUE(Call("incidents.list", nullptr).empty());
+}
+
 TEST_F(IncidentsTest, NoIncidentBelowTheReserveOrWithTheJournalOff) {
   auto journal = Open();
   Feed(*journal, 0.1);
