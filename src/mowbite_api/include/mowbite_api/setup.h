@@ -18,8 +18,22 @@ struct SetupName {
   UserTexts texts = {};
 };
 
+// An input a step input can check, named as its flag in hw/status; texts of a step and of a part of that role.
+struct SetupRole : SetupName {
+  // Roles of one group are sensors of one kind: the sides of a bumper.
+  std::string group;
+  // The emergency a press brings unless the step names another, a name of SetupEmergencies().
+  std::string emergency;
+};
+
+// What a step done_when can wait for; texts of a step of that condition.
+struct SetupCondition : SetupName {
+  // The screen of the app a step of it opens unless the step names another, a name of SetupOpens().
+  std::string open;
+};
+
 // A parameter of a check in setup.yaml. A number stays within min and max, the hard bounds of the code; without an
-// entry it is def. A text is one of values, a list holds only values (any text with none).
+// entry it is def. A text is one of values and word without an entry, a list holds only values (any text with none).
 struct SetupParam {
   std::string name;
   Type type = Type::kNumber;
@@ -30,6 +44,7 @@ struct SetupParam {
   double def = 0;
   std::vector<std::string> values = {};
   bool required = false;
+  std::string word = {};
 };
 
 // A value a check measures, in values[] of its step.
@@ -56,20 +71,20 @@ struct SetupCheck {
   std::vector<std::string> reasons = {};
   // Texts of a step of it; none where the step list has to bring them.
   UserTexts texts = {};
+  // The screen of the app a step of it opens unless the step names another; empty for none.
+  std::string open = {};
 };
 
 // Stages in the order the app shows them; a step list uses those it has steps for.
 const std::vector<SetupName>& SetupStages();
 const std::vector<SetupCheck>& SetupChecks();
 const SetupCheck* FindSetupCheck(const std::string& name);
-// The inputs of hw/status a step input can check; texts of a step and of a part of that role.
-const std::vector<SetupName>& SetupRoles();
-// How a part of a step input is done: press or short.
+const std::vector<SetupRole>& SetupRoles();
+// How a part is done: press or short in a step input, assign in a step inputs_assign.
 const std::vector<SetupName>& SetupModes();
 // The moves by hand a step imu can ask for.
 const std::vector<SetupName>& SetupMoves();
-// What a step done_when can wait for; texts of a step of that condition.
-const std::vector<SetupName>& SetupConditions();
+const std::vector<SetupCondition>& SetupConditions();
 // Points a step can ask the user to confirm before it starts; a step list may bring its own with texts.
 const std::vector<SetupName>& SetupPoints();
 // Why a step is skipped; other goes with a text of the user.
@@ -82,8 +97,19 @@ const std::vector<std::string>& SetupSymbols();
 const std::vector<std::string>& SetupStates();
 // The emergency a step input waits for, by the names of x-emergency-bits; NONE for an input that stops nothing.
 const std::vector<std::string>& SetupEmergencies();
+// The question of a step inputs_assign in inputs[] of the step, and the values setup.answer takes for it.
+const SetupName& SetupAccept();
+const std::vector<SetupName>& SetupAcceptValues();
+// How the OS restarts for a step that needs it: restart at the top of a step list.
+const std::vector<SetupName>& SetupRestarts();
 
-const SetupName* FindSetupName(const std::vector<SetupName>& names, const std::string& id);
+template <typename Name>
+const Name* FindSetupName(const std::vector<Name>& names, const std::string& id) {
+  for (const auto& name : names) {
+    if (name.id == id) return &name;
+  }
+  return nullptr;
+}
 
 // Bounds of a step list and of setup.*.
 constexpr int kSetupMaxSteps = 100;

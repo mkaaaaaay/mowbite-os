@@ -102,6 +102,7 @@ TEST(Catalog, RateReasonAsTheTableBefore) {
         const Rating before = scheduled != schedule_since_api_25.end() ? scheduled->second
                               : code == "STORAGE_NOT_WRITABLE"   ? Rating{"error", "user"}
                               : code == "REVERSING" ? Rating{"info", "auto"}
+                              : code == "LEARNING" ? Rating{"warning", "user"}
                               : std::string(event) == "STATE" && paused != paused_since_api_5.end() ? paused->second
                               : std::string(event) == "EMERGENCY_RESET_REFUSED" && refused != refused_since_api_10.end()
                                   ? refused->second
@@ -205,7 +206,7 @@ TEST(Catalog, DrivenReasonsInTheOrderOfTheCheck) {
 }
 
 TEST(Catalog, EmergencyBits) {
-  ASSERT_EQ(EmergencyBits().size(), 22u);
+  ASSERT_EQ(EmergencyBits().size(), 23u);
   for (size_t i = 0; i < EmergencyBits().size(); i++) {
     EXPECT_EQ(EmergencyBits()[i].bit, static_cast<int>(i));
     EXPECT_FALSE(EmergencyBits()[i].text.empty()) << i;
@@ -215,6 +216,7 @@ TEST(Catalog, EmergencyBits) {
   EXPECT_EQ(EmergencyNames((1 << 13) | (1 << 14) | (1 << 15)), "TILT, FENCE, STUCK");
   EXPECT_EQ(EmergencyNames((1 << 18) | (1 << 19) | (1 << 20)), "WHEEL_RUNAWAY, FOREIGN_HOST, DRIVER_STALL");
   EXPECT_EQ(EmergencyNames((1 << 0) | (1 << 21)), "LATCH, UNEXPECTED_RESTART");
+  EXPECT_EQ(EmergencyNames((1 << 0) | (1 << 22)), "LATCH, INPUTS_LEARNING");
 }
 
 // Home Assistant reads the names from the log line with [A-Z_, ]: each bit, set alone, gives a name that fits it.
@@ -233,7 +235,7 @@ TEST(Catalog, EmergencyNamesOfEachBit) {
     EXPECT_TRUE(std::regex_match(EmergencyNames(bits), line)) << i;
   }
   // One UNKNOWN for any number of bits without a name, after the named ones.
-  EXPECT_EQ(EmergencyNames((1 << 22) | (1 << 25) | static_cast<int>(1u << 31)), "UNKNOWN");
+  EXPECT_EQ(EmergencyNames((1 << 23) | (1 << 25) | static_cast<int>(1u << 31)), "UNKNOWN");
   EXPECT_EQ(EmergencyNames((1 << 0) | (1 << 25) | (1 << 3) | (1 << 30)), "LATCH, LIFT, UNKNOWN");
   const std::string all = EmergencyNames(-1);
   EXPECT_TRUE(std::regex_match(all, line));
@@ -576,10 +578,10 @@ void ExpectTexts(const UserTexts& texts, const std::string& where, bool explaine
 // What a step list can name: unique ids of the pattern, and texts in both languages where the app shows them.
 TEST(Catalog, TheNamesOfTheSetupProgram) {
   const std::regex id(kSetupIdPattern);
-  const auto named = [&id](const std::vector<SetupName>& names, const std::string& what, bool shown) {
+  const auto named = [&id](const auto& names, const std::string& what, bool shown) {
     std::set<std::string> seen;
     EXPECT_FALSE(names.empty()) << what;
-    for (const auto& name : names) {
+    for (const SetupName& name : names) {
       EXPECT_TRUE(seen.insert(name.id).second) << what << " " << name.id;
       EXPECT_TRUE(std::regex_match(name.id, id)) << what << " " << name.id;
       EXPECT_FALSE(name.text.empty()) << what << " " << name.id;
@@ -593,13 +595,42 @@ TEST(Catalog, TheNamesOfTheSetupProgram) {
   named(SetupPoints(), "point", true);
   named(SetupSkipReasons(), "skip reason", true);
   named(SetupModes(), "mode", false);
-  // The roles are inputs of hw/status, the emergencies names of its bits.
+  named(SetupAcceptValues(), "accept", true);
+  named(SetupRestarts(), "restart", false);
+  ExpectTexts(SetupAccept().texts, "accept", false);
+  // The emergencies are names of the bits of hw/status.
   for (const auto& name : SetupEmergencies()) {
     if (name == "NONE") continue;
     bool known = false;
     for (const auto& bit : EmergencyBits()) known = known || bit.name == name;
     EXPECT_TRUE(known) << name;
   }
+  // A role is a flag of hw/status, its group a role itself, its emergency one a step can name.
+  std::ifstream in(std::string(MOWBITE_SOURCE_ROOT) + "/mowbite_msgs/msg/HardwareStatus.msg");
+  ASSERT_TRUE(in.good());
+  std::stringstream status;
+  status << in.rdbuf();
+  const Json catalog = SetupCatalog();
+  for (const auto& role : SetupRoles()) {
+    EXPECT_NE(status.str().find("\nbool " + role.id + "\n"), std::string::npos) << role.id;
+    EXPECT_NE(FindSetupName(SetupRoles(), role.group), nullptr) << role.id;
+    EXPECT_EQ(std::count(SetupEmergencies().begin(), SetupEmergencies().end(), role.emergency), 1) << role.id;
+    EXPECT_NE(role.emergency, "NONE") << role.id;
+    EXPECT_EQ(catalog["roles"][role.id]["group"], role.group);
+    EXPECT_EQ(catalog["roles"][role.id]["emergency"], role.emergency);
+  }
+  // The screen of a condition or of a check is one the app knows.
+  for (const auto& condition : SetupConditions()) {
+    EXPECT_EQ(std::count(SetupOpens().begin(), SetupOpens().end(), condition.open), 1) << condition.id;
+    EXPECT_EQ(catalog["conditions"][condition.id]["open"], condition.open);
+  }
+  for (const auto& check : SetupChecks()) {
+    if (check.open.empty()) continue;
+    EXPECT_EQ(std::count(SetupOpens().begin(), SetupOpens().end(), check.open), 1) << check.name;
+    EXPECT_EQ(catalog["checks"][check.name]["open"], check.open);
+  }
+  EXPECT_EQ(catalog["accept"]["values"].size(), SetupAcceptValues().size());
+  EXPECT_EQ(catalog["restart"].size(), SetupRestarts().size());
 }
 
 // Every check: its params within bounds, its reasons those of SETUP_STEP, texts where the step list brings none.
@@ -625,6 +656,13 @@ TEST(Catalog, TheChecksOfTheSetupProgram) {
     for (const auto& param : check.params) {
       EXPECT_TRUE(params.insert(param.name).second) << check.name << "." << param.name;
       EXPECT_FALSE(param.text.empty()) << check.name << "." << param.name;
+      // A text a step may leave out is one of its values.
+      if (!param.word.empty()) {
+        EXPECT_EQ(param.type, Type::kString) << check.name << "." << param.name;
+        EXPECT_EQ(std::count(param.values.begin(), param.values.end(), param.word), 1)
+            << check.name << "." << param.name;
+        EXPECT_EQ(SetupCatalog()["checks"][check.name]["params"][param.name]["default"], param.word);
+      }
       if (param.type != Type::kNumber || param.required) continue;
       EXPECT_LT(param.min, param.max) << check.name << "." << param.name;
       EXPECT_GE(param.def, param.min) << check.name << "." << param.name;

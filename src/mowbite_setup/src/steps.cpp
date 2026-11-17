@@ -130,7 +130,7 @@ void ReadParams(const mowbite_api::SetupCheck& check, const json& params, const 
     if (!params.contains(param.name)) {
       if (param.required) throw Wrong(name + " is missing");
       if (param.type == mowbite_api::Type::kNumber) step->numbers[param.name] = param.def;
-      if (param.type == mowbite_api::Type::kString) step->words[param.name] = "";
+      if (param.type == mowbite_api::Type::kString) step->words[param.name] = param.word;
       if (param.type == mowbite_api::Type::kArray) step->lists[param.name] = {};
       continue;
     }
@@ -157,12 +157,6 @@ void ReadParams(const mowbite_api::SetupCheck& check, const json& params, const 
       step->lists[param.name] = list;
     }
   }
-}
-
-const char* DefaultEmergency(const std::string& role) {
-  if (role == "stop") return "STOP";
-  if (role == "lift") return "LIFT";
-  return "COLLISION";
 }
 
 void ReadParts(const json& entry, const std::string& where, Step* step) {
@@ -246,10 +240,8 @@ Step ReadStep(const json& entry, const std::vector<Step>& before, size_t* stage_
   ReadParams(*check, entry.contains("params") ? entry["params"] : json::object(), where, &step);
 
   if (step.check == "input" && step.Word("emergency").empty()) {
-    step.words["emergency"] = DefaultEmergency(step.Word("role"));
+    step.words["emergency"] = FindSetupName(mowbite_api::SetupRoles(), step.Word("role"))->emergency;
   }
-  if (step.check == "board" && step.Word("imu").empty()) step.words["imu"] = "yes";
-  if (step.check == "position" && step.Word("solution").empty()) step.words["solution"] = "fixed";
   if (step.check == "number" && !(step.Number("min") < step.Number("max"))) {
     throw Wrong(where + ": min is not below max");
   }
@@ -322,7 +314,10 @@ Step ReadStep(const json& entry, const std::vector<Step>& before, size_t* stage_
     }
   }
   step.open = TextOf(entry, "open", where);
-  if (step.open.empty() && step.check == "geometry") step.open = "geometry";
+  if (step.open.empty()) step.open = check->open;
+  if (step.open.empty() && step.check == "done_when") {
+    step.open = FindSetupName(mowbite_api::SetupConditions(), step.Word("condition"))->open;
+  }
   if (!step.open.empty() && !Has(mowbite_api::SetupOpens(), step.open)) throw Wrong(where + ": open is no screen");
   step.image = TextOf(entry, "image", where);
   step.accent = TextOf(entry, "accent", where);

@@ -32,7 +32,7 @@ const char* const kList = R"({
     {"id": "raised", "stage": "inputs", "check": "confirm",
      "confirm": ["raised", {"id": "switch", "texts": {"de": {"name": "Schalter an"}, "en": {"name": "Switch on"}}}],
      "texts": {"de": {"name": "Aufbocken"}, "en": {"name": "Jack up"}}, "skippable": false},
-    {"id": "ntrip", "stage": "position", "check": "done_when", "params": {"condition": "ntrip"}, "open": "ntrip"},
+    {"id": "ntrip", "stage": "position", "check": "done_when", "params": {"condition": "ntrip"}},
     {"id": "fix", "stage": "position", "check": "position"},
     {"id": "length", "stage": "dimensions", "check": "number",
      "params": {"name": "length", "unit": "m", "min": 0.1, "max": 2},
@@ -110,6 +110,18 @@ TEST(Steps, AListOfEveryCheckIsRead) {
   EXPECT_EQ(list->Find("dimensions")->open, "geometry");
   EXPECT_EQ(list->Find("variant")->choices[1].texts["de"]["name"], "Umgebaut");
   EXPECT_EQ(list->Find("nothing"), nullptr);
+}
+
+// The screen of a step is the one of its condition or check, unless the list names another.
+TEST(Steps, AStepNamesItsOwnScreen) {
+  json list = List();
+  list["steps"][6]["open"] = "map";
+  list["steps"][9]["open"] = "map";
+  const auto parsed = ParseSteps(list, nullptr);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->Find("ntrip")->open, "map");
+  EXPECT_EQ(parsed->Find("dimensions")->open, "map");
+  EXPECT_EQ(parsed->Find("fix")->open, "");
 }
 
 TEST(Steps, AGeometryStepWithoutKeysTakesAllTheUserSets) {

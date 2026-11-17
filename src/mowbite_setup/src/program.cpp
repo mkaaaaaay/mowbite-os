@@ -1009,6 +1009,8 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
                      {"inputs", std::move(inputs)},
                      {"values", Values(step, now, false)},
                      {"parts", std::move(parts)},
+                     {"lines", json::array()},
+                     {"ask", nullptr},
                      {"progress", std::move(progress)},
                      {"ends_at", std::move(ends_at)},
                      {"open", step.open.empty() ? json() : json(step.open)},

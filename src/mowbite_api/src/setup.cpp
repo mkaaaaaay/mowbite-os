@@ -34,15 +34,17 @@ SetupParam Amount(std::string name, std::string unit, double min, double max, do
   return {std::move(name), Type::kNumber, std::move(unit), std::move(text), min, max, def};
 }
 
-SetupParam Word(std::string name, std::string text, std::vector<std::string> values = {}, bool required = false) {
-  return {std::move(name), Type::kString, "", std::move(text), 0, 0, 0, std::move(values), required};
+SetupParam Word(std::string name, std::string text, std::vector<std::string> values = {}, bool required = false,
+                std::string word = {}) {
+  return {std::move(name), Type::kString, "", std::move(text), 0, 0, 0, std::move(values), required, std::move(word)};
 }
 
 SetupParam Words(std::string name, std::string text, std::vector<std::string> values = {}, bool required = false) {
   return {std::move(name), Type::kArray, "", std::move(text), 0, 0, 0, std::move(values), required};
 }
 
-std::vector<std::string> Ids(const std::vector<SetupName>& names) {
+template <typename Name>
+std::vector<std::string> Ids(const std::vector<Name>& names) {
   std::vector<std::string> ids;
   ids.reserve(names.size());
   for (const auto& name : names) ids.push_back(name.id);
@@ -113,35 +115,40 @@ const std::vector<SetupName>& SetupStages() {
   return stages;
 }
 
-const std::vector<SetupName>& SetupRoles() {
-  static const std::vector<SetupName> roles = {
-      {"stop", "stop of hw/status: a STOP button",
-       Both({"STOP-Taste", "Jede STOP-Taste einmal drücken und wieder loslassen. Der Mäher muss dabei sofort den "
+const std::vector<SetupRole>& SetupRoles() {
+  static const std::vector<SetupRole> roles = {
+      {{"stop", "A STOP button",
+        Both({"STOP-Taste", "Jede STOP-Taste einmal drücken und wieder loslassen. Der Mäher muss dabei sofort den "
                            "Notaus melden.",
              "Kommt kein Haken: Stecker und Kabel der Taste prüfen, dann wiederholen."},
             {"STOP button", "Press every STOP button once and let go. The mower has to report the emergency stop at "
                             "once.",
              "No tick: check plug and cable of the button, then try again."})},
-      {"lift", "lift of hw/status: the mower is lifted",
-       Both({"Anheben", "Den Mäher anheben, bis der Haken kommt, und wieder absetzen.",
+       "stop", "STOP"},
+      {{"lift", "The mower is lifted",
+        Both({"Anheben", "Den Mäher anheben, bis der Haken kommt, und wieder absetzen.",
              "Kommt kein Haken: die Hebesensoren und ihre Kabel prüfen, dann wiederholen."},
             {"Lifting", "Lift the mower until the tick comes, then put it down.",
              "No tick: check the lift sensors and their cables, then try again."})},
-      {"bumper", "bumper of hw/status: the bumper is pressed",
-       Both({"Stoßfänger", "Den Stoßfänger eindrücken, bis der Haken kommt, und loslassen.",
+       "lift", "LIFT"},
+      {{"bumper", "The bumper is pressed, on any side",
+        Both({"Stoßfänger", "Den Stoßfänger eindrücken, bis der Haken kommt, und loslassen.",
              "Kommt kein Haken: die Schalter des Stoßfängers und ihre Kabel prüfen, dann wiederholen."},
             {"Bumper", "Press the bumper in until the tick comes, then let go.",
              "No tick: check the switches of the bumper and their cables, then try again."})},
-      {"bumper_left", "bumper_left of hw/status, on platforms with separate bumpers",
-       Both({"Stoßfänger links", "Den Stoßfänger links eindrücken, bis der Haken kommt, und loslassen.",
+       "bumper", "COLLISION"},
+      {{"bumper_left", "The left side of the bumper, on platforms that tell the sides apart",
+        Both({"Stoßfänger links", "Den Stoßfänger links eindrücken, bis der Haken kommt, und loslassen.",
              "Kommt kein Haken: den linken Schalter des Stoßfängers und sein Kabel prüfen, dann wiederholen."},
             {"Bumper left", "Press the bumper in on the left until the tick comes, then let go.",
              "No tick: check the left switch of the bumper and its cable, then try again."})},
-      {"bumper_right", "bumper_right of hw/status, on platforms with separate bumpers",
-       Both({"Stoßfänger rechts", "Den Stoßfänger rechts eindrücken, bis der Haken kommt, und loslassen.",
+       "bumper", "COLLISION"},
+      {{"bumper_right", "The right side of the bumper, on platforms that tell the sides apart",
+        Both({"Stoßfänger rechts", "Den Stoßfänger rechts eindrücken, bis der Haken kommt, und loslassen.",
              "Kommt kein Haken: den rechten Schalter des Stoßfängers und sein Kabel prüfen, dann wiederholen."},
             {"Bumper right", "Press the bumper in on the right until the tick comes, then let go.",
              "No tick: check the right switch of the bumper and its cable, then try again."})},
+       "bumper", "COLLISION"},
   };
   return roles;
 }
@@ -156,6 +163,15 @@ const std::vector<SetupName>& SetupModes() {
        "stop",
        Both({"Kurz auslösen", "Nur kurz auslösen und sofort loslassen: der Mäher darf dabei nicht stoppen.", ""},
             {"Trigger briefly", "Trigger only briefly and let go at once: the mower must not stop.", ""})},
+      {"assign",
+       "A part of a step inputs_assign: one line alone changes, and the step asks whether it is the one of the role of "
+       "the part. Help and fix of such a part; its name is the one of its role",
+       Both({"Zuordnen",
+             "Diesen Sensor einmal auslösen und wieder loslassen. Der Mäher zeigt, an welcher Leitung er ihn gesehen "
+             "hat.",
+             "Kommt kein Vorschlag: Stecker und Kabel des Sensors prüfen, dann wiederholen."},
+            {"Assign", "Trigger this sensor once and let go. The mower shows the line it saw it on.",
+             "No proposal: check plug and cable of the sensor, then try again."})},
   };
   return modes;
 }
@@ -174,43 +190,48 @@ const std::vector<SetupName>& SetupMoves() {
   return moves;
 }
 
-const std::vector<SetupName>& SetupConditions() {
-  static const std::vector<SetupName> conditions = {
-      {"ntrip", "Correction data arrives from the caster",
-       Both({"Korrekturdaten", "Den Zugang zum Korrekturdienst eintragen. Der Haken kommt, sobald Korrekturdaten "
+const std::vector<SetupCondition>& SetupConditions() {
+  static const std::vector<SetupCondition> conditions = {
+      {{"ntrip", "Correction data arrives from the caster",
+        Both({"Korrekturdaten", "Den Zugang zum Korrekturdienst eintragen. Der Haken kommt, sobald Korrekturdaten "
                                "ankommen.",
              "Zugangsdaten, Mountpoint und die Internetverbindung des Mähers prüfen."},
             {"Correction data", "Enter the access to the correction service. The tick comes once correction data "
                                 "arrives.",
              "Check the access data, the mountpoint and the internet connection of the mower."})},
-      {"station", "A docking station is in the map and the mower stands on its contacts",
-       Both({"Ladestation aufnehmen", "Den Mäher auf die Ladestation fahren und die Station aufnehmen. Der Haken "
+       "ntrip"},
+      {{"station", "A docking station is in the map and the mower stands on its contacts",
+        Both({"Ladestation aufnehmen", "Den Mäher auf die Ladestation fahren und die Station aufnehmen. Der Haken "
                                       "kommt, sobald sie in der Karte steht und der Mäher auf den Kontakten ist.",
              "Den Mäher gerade auf die Kontakte schieben, bis er lädt, dann die Station aufnehmen."},
             {"Record the docking station", "Drive the mower onto the docking station and record the station. The "
                                            "tick comes once it is in the map and the mower is on the contacts.",
              "Push the mower straight onto the contacts until it charges, then record the station."})},
-      {"area", "The map has an area and allows mowing",
-       Both({"Mähfläche aufnehmen", "Eine Mähfläche aufnehmen. Der Haken kommt, sobald die Karte eine Fläche hat, "
+       "dock"},
+      {{"area", "The map has an area and allows mowing",
+        Both({"Mähfläche aufnehmen", "Eine Mähfläche aufnehmen. Der Haken kommt, sobald die Karte eine Fläche hat, "
                                     "auf der gemäht werden kann.",
              "Die Fläche einmal ganz umfahren und speichern."},
             {"Record a mowing area", "Record an area to mow. The tick comes once the map has an area the mower can "
                                      "mow.",
              "Drive around the whole area once and save it."})},
-      {"dock_test", "A docking test ended on the contacts",
-       Both({"Andocken testen", "Den Andocktest starten. Der Haken kommt, wenn der Mäher von selbst wieder auf den "
+       "recording"},
+      {{"dock_test", "A docking test ended on the contacts",
+        Both({"Andocken testen", "Den Andocktest starten. Der Haken kommt, wenn der Mäher von selbst wieder auf den "
                                 "Kontakten steht.",
              "Schlägt der Test fehl, die Station neu aufnehmen und wiederholen."},
             {"Test docking", "Start the docking test. The tick comes when the mower is back on the contacts by "
                              "itself.",
              "If the test fails, record the station again and repeat."})},
-      {"mow", "The mower mowed and came back onto the contacts",
-       Both({"Probelauf", "Mähen starten und den Mäher zur Ladestation zurückkehren lassen. Der Haken kommt, wenn er "
+       "dock_test"},
+      {{"mow", "The mower mowed and came back onto the contacts",
+        Both({"Probelauf", "Mähen starten und den Mäher zur Ladestation zurückkehren lassen. Der Haken kommt, wenn er "
                           "nach dem Mähen wieder auf den Kontakten steht.",
              "Bleibt der Mäher stehen, zeigt die App den Grund. Danach erneut starten."},
             {"Trial run", "Start mowing and let the mower return to the docking station. The tick comes when it is "
                           "back on the contacts after mowing.",
              "If the mower stops, the app shows why. Then start again."})},
+       "mow"},
   };
   return conditions;
 }
@@ -258,6 +279,30 @@ const std::vector<std::string>& SetupEmergencies() {
   return names;
 }
 
+const SetupName& SetupAccept() {
+  static const SetupName accept = {
+      "accept", "Whether the line of ask is the one of its part",
+      Both({"Leitung übernehmen?", "Der Mäher hat den Handgriff an dieser Leitung gesehen.", ""},
+           {"Take this line?", "The mower saw the action on this line.", ""})};
+  return accept;
+}
+
+const std::vector<SetupName>& SetupAcceptValues() {
+  static const std::vector<SetupName> values = {
+      {"yes", "The line is taken for the role of the part", Named("Übernehmen", "Take it")},
+      {"no", "The part waits for another line", Named("Nicht diese", "Not this one")},
+  };
+  return values;
+}
+
+const std::vector<SetupName>& SetupRestarts() {
+  static const std::vector<SetupName> restarts = {
+      {"self", "The OS ends in order and whatever runs it starts it again"},
+      {"host", "The OS asks its host service for the restart (host.restart_os)"},
+  };
+  return restarts;
+}
+
 const std::vector<std::string>& ShapeKinds() {
   static const std::vector<std::string> kinds = {"body", "wheel", "caster", "bumper", "button", "sensor", "handle"};
   return kinds;
@@ -283,7 +328,7 @@ const std::vector<SetupCheck>& SetupChecks() {
         Amount("status_rate", "Hz", 1, 50, 8, "hw/status at least this often"),
         Amount("link_errors", "", 0, 100, 0, "Errors on the link to the board at most, in time"),
         Amount("battery", "%", 0, 100, 0, "Charge of the battery at least; 0 only asks for a reading"),
-        Word("imu", "yes to check gravity on imu/data", {"yes", "no"})},
+        Word("imu", "yes to check gravity on imu/data", {"yes", "no"}, false, "yes")},
        {{"status_rate", "Hz", "Rate of hw/status", Named("Meldungen der Platine", "Reports of the board")},
         {"firmware", "", "Firmware of every board, as hw/capabilities names it", Named("Firmware", "Firmware")},
         {"link_errors", "", "Errors on the link in time", Named("Fehler auf der Leitung", "Errors on the link")},
@@ -301,16 +346,38 @@ const std::vector<SetupCheck>& SetupChecks() {
              "report. Nothing moves.",
              "Switch the mower on, let it stand free, press no button, then try again."})},
       {"input", "measure", true, true,
-       "One input of hw/status by hand, part by part: each part of mode press or short, see modes. Texts of the step "
-       "by its role",
+       "One input of hw/status by hand, part by part: each part of mode press or short, see modes. With hw/inputs line "
+       "by line: parts of one role need different lines, and every line of the role has to switch in the step. The "
+       "program releases the emergency a part of mode press brought by itself once the input is free, where the "
+       "driver counts its latches and no other reason came up. Texts of the step by its role",
        {Word("role", "The input", Ids(SetupRoles()), true),
-        Word("emergency", "The emergency a press brings, by default STOP, LIFT or COLLISION as the role says",
-             SetupEmergencies()),
+        Word("emergency", "The emergency a press brings; without, the one of the role", SetupEmergencies()),
         Seconds("within", 0.05, 10, 1, "The emergency follows the input within this time"),
         Seconds("time", 5, 300, 60, "Each part is done within this time"),
         Seconds("short_max", 0.1, 5, 0.5, "A part of mode short switches for less than this")},
        {{"delay", "s", "From the input to the emergency, one value by part of mode press with the id of the part"}},
-       {"NOT_SEEN", "WRONG_INPUT", "NO_EMERGENCY", "STOPPED_EARLY", "NO_DATA", "STOPPED", "INTERRUPTED"}},
+       {"NOT_SEEN", "WRONG_INPUT", "NO_EMERGENCY", "STOPPED_EARLY", "LINE_SILENT", "NO_DATA", "STOPPED",
+        "INTERRUPTED"}},
+      {"inputs_assign", "input", true, false,
+       "Finds the line of every sensor, on a platform whose driver learns its inputs: the OS restarts with the driver "
+       "watching its candidate lines (emergency INPUTS_LEARNING, nothing moves), watches them at rest for quiet, then "
+       "takes one part after the other, each of a role: one line alone changes, ask of the step names it, and "
+       "setup.answer with accept yes takes it. After the last part the table goes into the settings the program "
+       "writes for the platform, the OS restarts without learning and the step holds hw/inputs against the table. "
+       "setup.abort ends it with a restart as well. The steps input are open again after it",
+       {Seconds("quiet", 3, 60, 10, "The lines are watched untouched for this time first"),
+        Seconds("time", 5, 300, 60, "Each part is done within this time"),
+        Seconds("restart_time", 20, 600, 120, "The OS is back within this time after a restart")},
+       {{"line", "", "The line taken, one value by part with the id of the part"}},
+       {"NO_LINE", "AMBIGUOUS", "FLUTTER", "NOT_APPLIED", "RESTART_FAILED", "NO_DATA", "STOPPED", "INTERRUPTED"},
+       Both({"Eingänge zuordnen",
+             "Der Mäher findet heraus, an welcher Leitung jeder Sensor hängt. Dafür startet MowBite OS neu; "
+             "währenddessen stoppt kein Sensor, der Mäher fährt und mäht nicht.",
+             "Jeden Sensor einzeln auslösen und die anderen in Ruhe lassen."},
+            {"Assign the inputs",
+             "The mower finds the line every sensor is on. MowBite OS restarts for it; no sensor stops anything "
+             "meanwhile, the mower does not drive or mow.",
+             "Trigger every sensor on its own and leave the others alone."})},
       {"imu", "measure", true, true,
        "The mower is moved by hand, part by part, see moves: the IMU has to show each move with its sign",
        {Amount("tilt", "deg", 5, 25, 10, "How far a side goes up"),
@@ -330,7 +397,7 @@ const std::vector<SetupCheck>& SetupChecks() {
              "settings of the platform."})},
       {"position", "measure", true, true,
        "The position holds for time: solution, accuracy and rate of gps/absolute_pose",
-       {Word("solution", "The solution it needs at least", {"fixed", "float"}),
+       {Word("solution", "The solution it needs at least", {"fixed", "float"}, false, "fixed"),
         Amount("accuracy", "m", 0.005, 1, 0.05, "Accuracy at most"),
         Amount("rate", "Hz", 0.5, 20, 4, "Positions at least this often"),
         Seconds("time", 1, 60, 10, "How long all of it has to hold in a row"),
@@ -346,8 +413,8 @@ const std::vector<SetupCheck>& SetupChecks() {
              "The mower waits under the open sky for an exact position and holds it for some seconds.",
              "Give it a free view of the sky and check the correction data, then try again."})},
       {"done_when", "confirm", false, true,
-       "Done as soon as the OS sees its condition, see conditions; the app opens the screen open names. Texts of the "
-       "step by its condition",
+       "Done as soon as the OS sees its condition, see conditions; the app opens the screen open names, by default "
+       "the one of the condition. Texts of the step by its condition",
        {Word("condition", "What it waits for", Ids(SetupConditions()), true)}},
       {"geometry", "input", false, true,
        "Done once every key of keys is confirmed in robot.geometry (robot.geometry.set with a value or with confirm); "
@@ -362,7 +429,8 @@ const std::vector<SetupCheck>& SetupChecks() {
             {"Check the dimensions",
              "Check the dimensions of the mower on the drawing and confirm or change them. The mower plans and "
              "drives with them.",
-             "Measure again and enter the value; all dimensions count from the middle of the drive axle."})},
+             "Measure again and enter the value; all dimensions count from the middle of the drive axle."}),
+       "geometry"},
   };
   return checks;
 }
@@ -374,24 +442,27 @@ const SetupCheck* FindSetupCheck(const std::string& name) {
   return nullptr;
 }
 
-const SetupName* FindSetupName(const std::vector<SetupName>& names, const std::string& id) {
-  for (const auto& name : names) {
-    if (name.id == id) return &name;
-  }
-  return nullptr;
-}
-
 Json SetupCatalog() {
-  const auto named = [](const std::vector<SetupName>& names) {
+  const auto named = [](const auto& names) {
     Json out = Json::object();
     int order = 0;
-    for (const auto& name : names) {
+    for (const SetupName& name : names) {
       Json entry = {{"order", order++}, {"description", name.text}};
       if (!name.texts.empty()) entry["texts"] = Texts(name.texts);
       out[name.id] = entry;
     }
     return out;
   };
+  Json roles = named(SetupRoles());
+  for (const auto& role : SetupRoles()) {
+    roles[role.id]["group"] = role.group;
+    roles[role.id]["emergency"] = role.emergency;
+  }
+  Json conditions = named(SetupConditions());
+  for (const auto& condition : SetupConditions()) conditions[condition.id]["open"] = condition.open;
+  Json accept = {{"description", SetupAccept().text},
+                 {"texts", Texts(SetupAccept().texts)},
+                 {"values", named(SetupAcceptValues())}};
   Json checks = Json::object();
   for (const auto& check : SetupChecks()) {
     Json params = Json::object();
@@ -406,6 +477,7 @@ Json SetupCatalog() {
       } else {
         entry["type"] = param.type == Type::kArray ? "list" : "text";
         if (!param.values.empty()) entry["values"] = param.values;
+        if (!param.word.empty()) entry["default"] = param.word;
       }
       params[param.name] = entry;
     }
@@ -419,22 +491,26 @@ Json SetupCatalog() {
                   {"description", check.text}, {"params", params},     {"values", values},
                   {"reasons", check.reasons}};
     if (!check.texts.empty()) entry["texts"] = Texts(check.texts);
+    if (!check.open.empty()) entry["open"] = check.open;
     checks[check.name] = entry;
   }
   return {{"description",
            "The setup program: stages in their order, the checks a step of setup/setup.yaml of a platform can be "
-           "(kind, whether setup.start begins it, params with the bounds of the code, values, reasons of SETUP_STEP), "
-           "roles and modes of a step input, moves of a step imu, conditions of a step done_when, points to confirm, "
-           "reasons to skip, and the limits; texts by language where the OS has them. The steps themselves come with "
-           "setup.get"},
+           "(kind, whether setup.start begins it, params with the bounds and defaults of the code, values, reasons of "
+           "SETUP_STEP, the screen it opens), roles of the inputs (group, emergency of a press; a role is named as its "
+           "flag in hw/status) and modes of a part, moves of a step imu, conditions of a step done_when with their "
+           "screen, points to confirm, reasons to skip, the question of a step inputs_assign, the ways to restart, "
+           "and the limits; texts by language where the OS has them. The steps themselves come with setup.get"},
           {"stages", named(SetupStages())},
           {"checks", checks},
-          {"roles", named(SetupRoles())},
+          {"roles", roles},
           {"modes", named(SetupModes())},
           {"moves", named(SetupMoves())},
-          {"conditions", named(SetupConditions())},
+          {"conditions", conditions},
           {"points", named(SetupPoints())},
           {"skip_reasons", named(SetupSkipReasons())},
+          {"accept", accept},
+          {"restart", named(SetupRestarts())},
           {"open", SetupOpens()},
           {"symbols", SetupSymbols()},
           {"states", SetupStates()},
@@ -477,11 +553,13 @@ Field SetupState() {
        Bool("skippable", "setup.skip takes it"),
        Rows("skip_reasons", "Reasons setup.skip takes", {Text("id", "Name of the reason"), TextsField()}),
        Rows("inputs", "What setup.answer takes in values",
-            {Text("name", "Key in values"), Text("type", "choice or number", true, {"choice", "number"}),
+            {Text("name", "Key in values; accept in a step inputs_assign, see x-setup.accept"),
+             Text("type", "choice or number", true, {"choice", "number"}),
              Text("unit", "Unit of a number", false), Number("min", "", "Least number", false),
              Number("max", "", "Largest number", false),
              Rows("values", "Values of a choice", {Text("id", "The value"), TextsField()}, false),
-             Bool("ask", "A question of the running step that waits for its answer"),
+             Bool("ask", "A question of the running step that waits for its answer: accept while ask of the step is "
+                         "set"),
              {"value", Type::kAny, "", true, "The value given last, null before", {}, true, {}, ""}, TextsField()}),
        Rows("values", "What it measures, live while it runs and as it ended",
             {Text("id", "Name of the value"),
@@ -493,6 +571,19 @@ Field SetupState() {
        Rows("parts", "Its parts, each with a tick of its own",
             {Text("id", "Name of the part"),
              Text("state", "waiting for the one to do now", true, {"open", "waiting", "ok", "failed"}), TextsField()}),
+       Rows("lines", "The inputs of the platform one by one as hw/inputs has them, live, in a step input or "
+                     "inputs_assign; empty in other steps and where the driver has no hw/inputs",
+            {Text("name", "The line as the hardware names it"),
+             Text("role", "A key of x-setup.roles, empty for a line without a role"),
+             Text("reason", "The emergency the hardware latches with it: stop, lift or collision; empty for none"),
+             Bool("active", "Switched now; while the driver learns: the level of the line is high"),
+             Bool("assigned", "In the table of the mower; false for a line the driver only watches while it learns"),
+             Bool("held", "The hardware keeps it switched after the sensor is free, until the emergency is released"),
+             Integer("delay_ms", "How long it has to stand before the hardware latches")}),
+       Nullable(Object("ask", "What a running step inputs_assign proposes and waits for setup.answer {accept} with; "
+                              "null else",
+                       {Text("part", "The part it is for"), Text("line", "The line that changed, a name of lines[]"),
+                        Bool("active_high", "The line went high with the action")})),
        Nullable(Object("progress", "Where a running step is, null without parts or rounds",
                        {Integer("n", "The part or round now, from 1"), Integer("of", "How many there are")})),
        Nullable(Number("ends_at", "unix s", "When the part of now gives up, null for no limit")),
@@ -578,6 +669,62 @@ EventEntry SetupStepEvent() {
                         "A short trigger brought the emergency stop already. In use the mower would stop at every "
                         "bump.",
                         "Check the delay of the input, then repeat."})),
+           failed("LINE_SILENT", "A line of the role did not switch in the whole step",
+                  {Part(), List("lines", "The lines that did not switch", Type::kString, false)},
+                  Both({"Leitung blieb stumm",
+                        "Eine Leitung dieses Eingangs hat bei keinem Handgriff geschaltet. Ein Sensor oder ein "
+                        "Kontakt eines Paars ist defekt oder nicht angeschlossen.",
+                        "Jeden Sensor einzeln auslösen. Bleibt die Leitung stumm: Sensor, Stecker und Kabel prüfen."},
+                       {"Line stayed silent",
+                        "A line of this input did not switch with any action. A sensor or one contact of a pair is "
+                        "broken or not connected.",
+                        "Trigger every sensor on its own. If the line stays silent, check sensor, plug and cable."})),
+           failed("NO_LINE", "No line changed within the time of the part", {Part()},
+                  Both({"Keine Leitung gesehen",
+                        "Beim Handgriff hat keine der beobachteten Leitungen gewechselt. Der Sensor ist nicht "
+                        "angeschlossen, defekt oder hängt an einem Anschluss, den der Mäher nicht beobachtet.",
+                        "Stecker und Kabel des Sensors prüfen, dann wiederholen."},
+                       {"No line seen",
+                        "None of the lines watched changed with the action. The sensor is not connected, broken, or "
+                        "on a connector the mower does not watch.",
+                        "Check plug and cable of the sensor, then repeat."})),
+           failed("AMBIGUOUS", "More than one line changed with the action of the part",
+                  {Part(), List("lines", "The lines that changed", Type::kString, false)},
+                  Both({"Mehrere Leitungen",
+                        "Beim Handgriff haben mehrere Leitungen zugleich gewechselt. So lässt sich der Sensor keiner "
+                        "Leitung zuordnen.",
+                        "Nur einen Sensor auslösen und die anderen in Ruhe lassen, dann wiederholen."},
+                       {"More than one line",
+                        "More than one line changed with the action, so the sensor can't be put to one line.",
+                        "Trigger one sensor only and leave the others alone, then repeat."})),
+           failed("FLUTTER", "A line changed while nothing was to be touched",
+                  {List("lines", "The lines that changed", Type::kString, false)},
+                  Both({"Leitung unruhig",
+                        "Eine Leitung wechselt, ohne dass jemand etwas berührt. Ein Sensor oder Kabel hat einen "
+                        "Wackelkontakt.",
+                        "Den Mäher nicht berühren. Die genannte Leitung, ihren Stecker und Sensor prüfen, dann "
+                        "wiederholen."},
+                       {"Line unsteady",
+                        "A line changes while nobody touches anything. A sensor or cable has a loose contact.",
+                        "Don't touch the mower. Check the line named, its plug and sensor, then repeat."})),
+           failed("NOT_APPLIED", "After the restart hw/inputs does not show the table the step wrote",
+                  {Text("key", "A setting the file kept by hand sets as well", false)},
+                  Both({"Zuordnung nicht übernommen",
+                        "Nach dem Neustart arbeitet der Mäher nicht mit der neuen Zuordnung. Ein Eintrag in der von "
+                        "Hand gepflegten Gerätedatei hat Vorrang.",
+                        "Die Einträge zu den Eingängen aus der Gerätedatei des Mähers entfernen, dann den Schritt "
+                        "wiederholen."},
+                       {"Assignment not applied",
+                        "After the restart the mower does not work with the new assignment. An entry in the device "
+                        "file kept by hand comes first.",
+                        "Remove the entries of the inputs from the device file of the mower, then repeat the "
+                        "step."})),
+           failed("RESTART_FAILED", "The OS was not back within the time after the restart the step asked for",
+                  {Number("limit", "s", "The time it had", false)},
+                  Both({"Neustart blieb aus", "MowBite OS ist nicht rechtzeitig neu gestartet.",
+                        "MowBite OS von Hand neu starten, dann den Schritt wiederholen."},
+                       {"No restart", "MowBite OS did not restart in time.",
+                        "Restart MowBite OS by hand, then repeat the step."})),
            failed("WRONG_SIGN", "The IMU showed the move the other way round", {Part()},
                   Both({"Falsche Richtung",
                         "Der Lagesensor hat die Bewegung in die andere Richtung gemeldet. Er ist anders eingebaut "
@@ -672,6 +819,12 @@ EventEntry SetupRefused() {
                          "Die Einrichtung neu öffnen und der Anzeige folgen."},
                         {"Not possible this way", "This step is done another way.",
                          "Open the setup again and follow what it shows."})),
+           refused("EMERGENCY", "An emergency stands and the step restarts the OS", {},
+                   Both({"Notaus steht", "Für diesen Schritt startet MowBite OS neu. Das geht nur ohne Notaus.",
+                         "Den Notaus aufheben, dann den Schritt starten."},
+                        {"Emergency stop is on",
+                         "MowBite OS restarts for this step. That takes a mower without an emergency stop.",
+                         "Release the emergency stop, then start the step."})),
            DriverMissing("info"), NotWritable("error")},
           "info", "user"};
 }
@@ -682,19 +835,18 @@ EventEntry SetupBlocked() {
           "never an event",
           {Text("reason", "Why: a fixed name in capitals"), Text("message", "English text")},
           {NotWritable("error"), DriverMissing("warning"), Busy("info"),
-           Reason("EMERGENCY", "info", "user", "The emergency of the part before is still latched", {},
-                  Both({"Notaus aufheben", "Der Notaus vom letzten Handgriff steht noch. Erst danach zählt der "
-                                           "nächste.",
+           Reason("EMERGENCY", "info", "user", "An emergency is latched that the program does not release itself", {},
+                  Both({"Notaus aufheben", "Ein Notaus steht noch. Erst danach geht es weiter.",
                         "Den Notaus in der App aufheben."},
-                       {"Release the emergency stop",
-                        "The emergency stop of the last action is still on. The next one counts only after it.",
+                       {"Release the emergency stop", "An emergency stop is still on. It goes on only after it.",
                         "Release the emergency stop in the app."})),
-           Reason("INPUT_ACTIVE", "info", "user", "The input of the part is switched already", {},
-                  Both({"Eingang loslassen", "Der Eingang ist schon ausgelöst. Der Handgriff zählt erst, wenn er "
-                                             "vorher in Ruhe war.",
+           Reason("INPUT_ACTIVE", "info", "user",
+                  "The input of the part is still switched: before its action, or after it while its emergency waits "
+                  "for the input to be free",
+                  {},
+                  Both({"Noch ausgelöst", "Der Eingang ist noch ausgelöst. Es geht weiter, sobald er in Ruhe ist.",
                         "Taste, Stoßfänger oder Mäher loslassen bzw. absetzen."},
-                       {"Let go of the input",
-                        "The input is switched already. The action counts only once it was at rest before.",
+                       {"Still switched", "The input is still switched. It goes on once it is at rest.",
                         "Let go of the button or bumper, or put the mower down."})),
            Reason("NO_DATA", "warning", "user", "A source the step needs sends nothing",
                   {Text("source", "imu/data or gps/absolute_pose", false)},

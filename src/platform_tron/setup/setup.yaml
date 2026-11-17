@@ -83,7 +83,6 @@ steps:
     stage: position
     check: done_when
     params: {condition: ntrip}
-    open: ntrip
     symbol: antenna
     note:
       de: Mit einer eigenen Station per Funk diesen Schritt überspringen.
@@ -102,23 +101,19 @@ steps:
     stage: station
     check: done_when
     params: {condition: station}
-    open: dock
     symbol: dock
   - id: area
     stage: map
     check: done_when
     params: {condition: area}
-    open: recording
     symbol: map
   - id: dock_test
     stage: trial
     check: done_when
     params: {condition: dock_test}
-    open: dock_test
     symbol: dock
   - id: mow
     stage: trial
     check: done_when
     params: {condition: mow}
-    open: mow
     symbol: blade

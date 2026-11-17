@@ -473,6 +473,19 @@ const std::vector<EmergencyBit>& EmergencyBits() {
           "release, also after power off and on.",
           "Look at the mower and around it, then reset the emergency. The event UNEXPECTED_RESTART tells the "
           "cause."}}}},
+      {22, "INPUTS_LEARNING",
+       "The driver was started to learn its inputs (step inputs_assign of the setup): it watches its candidate lines, "
+       "none of them stops anything, so it holds the mower until it starts without; no release ends it",
+       {{"de",
+         {"Eingänge werden zugeordnet",
+          "Der Mäher beobachtet gerade seine Eingänge, um sie zuzuordnen. Solange stoppt kein Sensor, deshalb fährt "
+          "und mäht er nicht.",
+          "Die Zuordnung in der Einrichtung abschließen oder abbrechen. Danach startet MowBite OS neu."}},
+        {"en",
+         {"Inputs are being assigned",
+          "The mower is watching its inputs to assign them. No sensor stops anything meanwhile, so it does not "
+          "drive or mow.",
+          "Finish or stop the assignment in the setup. MowBite OS restarts after it."}}}},
   };
   return bits;
 }

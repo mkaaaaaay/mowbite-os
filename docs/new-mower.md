@@ -286,7 +286,8 @@ of a step or an image, `steps` come in the order the app shows them:
 | `skippable` | false for a step the user must not skip |
 | `texts`, `note` | `de` and `en` with `name`, `help`, `fix`; needed where the check brings none; `note` adds to help |
 | `image`, `accent` | files of `setup/images/`: the drawing and the part to look at, drawn over it in another colour |
-| `symbol`, `mark`, `open` | a sign for a step without image, ids of `robot_shape` to mark, the screen the app opens |
+| `symbol`, `mark` | a sign for a step without image, ids of `robot_shape` to mark |
+| `open` | the screen the app opens; without an entry the one of the condition or check in the schema |
 
 A step is one of: `choice` and `number` (the user answers), `confirm`, `board` (the driver reports, firmware, link,
 inputs at rest, motor controllers, battery, gravity), `input` (a STOP button, the lift or the bumper by hand: every
