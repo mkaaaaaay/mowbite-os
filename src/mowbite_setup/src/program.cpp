@@ -128,6 +128,7 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
       if (saved.contains("parts") && saved["parts"].is_array()) record.parts = saved["parts"];
       if (saved.contains("answers") && saved["answers"].is_object()) record.answers = saved["answers"];
       if (saved.contains("assign")) record.assign = saved["assign"];
+      if (saved.contains("applied")) record.applied = saved["applied"];
     }
     records[step.id] = std::move(record);
   }
@@ -138,6 +139,12 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
   }
   for (const Step& step : list_.steps) {
     Record& record = RecordOf(step);
+    // The restart a step summary asked for: it goes on with what the driver shows now.
+    if (record.state == "running" && IsSummary(step) && record.applied.is_object() && !run_) {
+      run_ = SummaryRun(step, wall);
+      continue;
+    }
+    record.applied = nullptr;
     const json& assign = record.assign;
     const bool learn = assign.is_object() && assign.value("phase", json()) == "learn";
     bool apply = assign.is_object() && assign.value("phase", json()) == "apply" && assign.contains("parts") &&
@@ -180,6 +187,7 @@ std::string Program::Text() const {
     steps[step.id] = {{"state", record.state},   {"attempt", record.attempt}, {"result", record.result},
                       {"values", record.values}, {"parts", record.parts},     {"answers", record.answers}};
     if (!record.assign.is_null()) steps[step.id]["assign"] = record.assign;
+    if (!record.applied.is_null()) steps[step.id]["applied"] = record.applied;
   }
   const json file = {{"schema", 1},
                      {"platform", platform_},
@@ -462,6 +470,7 @@ void Program::EndRun(double now) {
     restart_wanted_ = false;
     ForgetLearning(step);
   }
+  if (!record.applied.is_null()) ForgetSummary(step);
   run_.reset();
 }
 
@@ -490,7 +499,7 @@ void Program::LayerWritten(bool written, double now, double wall) {
   layer_ = layer_disk_;
   layer_failed_ = now;
   restart_wanted_ = false;
-  if (run_ && IsAssign(StepOf(*run_))) {
+  if (run_ && (IsAssign(StepOf(*run_)) || IsSummary(StepOf(*run_)))) {
     Fail("NOT_APPLIED", "The parameter file of the setup program cannot be written", json::object(), now, wall);
   }
 }
@@ -581,6 +590,7 @@ void Program::End(const Step& step, const std::string& state, const std::string&
   }
   events_.push_back({kStepEvent, std::move(details)});
   if (state == "failed" && mowbite_api::SetupClosesLock(step.check, reason)) CloseLock(step, reason, fields, wall);
+  if (state == "failed" && mowbite_api::FindSetupCheck(step.check)->safety) ReopenSummary();
   if (state == "ok") ReleaseLock(step);
   if (!stage_done && StageDone(step.stage)) {
     events_.push_back({"SETUP", {{"what", "stage_done"}, {"stage", step.stage}}});
@@ -595,6 +605,7 @@ void Program::Pass(const Step& step, double now, double wall) {
     record.values = Values(step, now, true);
     record.parts = json(std::vector<std::string>(step.parts.size(), "ok"));
     if (IsAssign(step)) record.assign = nullptr;
+    if (IsSummary(step)) record.applied = nullptr;
     EndRun(now);
   }
   End(step, "ok", "", "", {}, wall);
@@ -692,6 +703,16 @@ void Program::CloseLock(const Step& step, const std::string& reason, const json&
 
 void Program::ReleaseLock(const Step& step) {
   auto& causes = lock_.causes;
+  if (IsSummary(step)) {
+    // A passed summary takes every reset away; the causes of safety steps it had none of.
+    const auto end = std::remove_if(causes.begin(), causes.end(), [](const auto& cause) { return cause.reset; });
+    if (end != causes.end()) lock_due_ = true;
+    causes.erase(end, causes.end());
+    if (LockOpen()) {
+      events_.push_back({"SETUP", {{"what", "safety_opened"}, {"date", capabilities_.safety_measurement_date}}});
+    }
+    return;
+  }
   const auto end = std::remove_if(causes.begin(), causes.end(),
                                   [&step](const auto& cause) { return !cause.reset && cause.step == step.id; });
   if (end == causes.end()) return;
@@ -720,12 +741,19 @@ json Program::SafetyState() const {
   if (!LockOpen()) {
     why = lock_.causes.empty() ? "NO_SAFETY_MEASUREMENT" : failed ? "CHECK_FAILED" : "RESET";
   }
-  // The program writes no date yet: every date is one of the platform or of the file kept by hand.
+  const std::string source = SafetySource();
+  json firmware;
+  const Step* summary = SummaryStep();
+  if (source == "program" && summary) {
+    const Record& record = records_.at(summary->id);
+    const json text = record.result.is_object() ? record.result.value("firmware", json()) : json();
+    if (record.state == "ok" && text.is_string() && !text.get<std::string>().empty()) firmware = text;
+  }
   return {{"open", LockOpen()},
           {"date", date.empty() ? json() : json(date)},
-          {"firmware", nullptr},
+          {"firmware", std::move(firmware)},
           {"why", std::move(why)},
-          {"source", date.empty() ? json() : json("hand")},
+          {"source", source.empty() ? json() : json(source)},
           {"closed", std::move(closed)}};
 }
 
@@ -813,6 +841,10 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
     const auto problems = DriveProblems(step, now);
     if (!problems.empty()) return problems.front();
   }
+  if (IsSummary(step)) {
+    const auto problems = SummaryProblems(now);
+    if (!problems.empty()) return problems.front();
+  }
   if (step.kind == "measure" && !world_.state.empty() && world_.state != "IDLE") {
     return Refuse("BUSY", "The mower is in " + world_.state, {{"state", world_.state}});
   }
@@ -865,6 +897,8 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
     WantRestart();
   } else if (IsDrive(step)) {
     BeginDrive(now, wall);
+  } else if (IsSummary(step)) {
+    BeginSummary(step, wall);
   } else if (!step.parts.empty()) {
     BeginPart(now, wall);
   }
@@ -1036,7 +1070,7 @@ std::optional<Refusal> Program::Abort(const json& params, double now, double wal
   return std::nullopt;
 }
 
-std::optional<Refusal> Program::Reset(const json& params) {
+std::optional<Refusal> Program::Reset(const json& params, double wall) {
   if (auto refusal = Common(params, nullptr)) return refusal;
   if (run_ && IsAssign(StepOf(*run_))) {
     // Should the driver learn already, TickLearning restarts it; a learning that waited for its restart is taken back.
@@ -1047,6 +1081,7 @@ std::optional<Refusal> Program::Reset(const json& params) {
   run_.reset();
   own_.reset();
   release_.reset();
+  ResetSettings(wall);
   for (auto& [id, record] : records_) record = Record();
   reached_.clear();
   events_.push_back({"SETUP", {{"what", "reset"}}});
@@ -1107,6 +1142,7 @@ void Program::Tick(double now, double wall) {
     if (check == "imu") TickImu(now, wall);
     if (check == "position") TickPosition(now, wall);
     if (check == "inputs_assign") TickAssign(now, wall);
+    if (check == "summary") TickSummary(now, wall);
     if (run_ && IsDrive(StepOf(*run_))) TickDrive(now, wall);
   }
   TickLearning(now);
@@ -1589,6 +1625,7 @@ void Program::TickWaiting(double wall) {
 
 json Program::Values(const Step& step, double now, bool final) const {
   if (!IsRun(step)) return records_.at(step.id).values;
+  if (IsSummary(step)) return SummaryValues(step);
   const Run& run = *run_;
   if (step.check == "board") {
     return BoardValues(run, step, final ? step.Number("time") : now - run.began, final);
@@ -1641,7 +1678,7 @@ json Program::Blocked(const Step& step, double now) const {
   if (!lock_writable_) add("STORAGE_NOT_WRITABLE", std::string(mowbite_hold::kSafetyLockFile) + " cannot be written");
   // A step that asks pressed waits for the answer alone.
   if (IsRun(step) && run_->pressed_at >= 0) return blocked;
-  if (IsRun(step) && IsAssign(step)) {
+  if (IsRun(step) && (IsAssign(step) || IsSummary(step))) {
     if (restart_wanted_ && !RestartAllowed(now)) {
       if (hardware_.hold) {
         add("BUSY", "An update holds the mower");
@@ -1651,7 +1688,11 @@ json Program::Blocked(const Step& step, double now) const {
         add("EMERGENCY", "An emergency stands, the OS restarts once it is released");
       }
     }
-    if (run_->assign == Assign::kRest && !AtRest()) add("INPUT_ACTIVE", "A line is still switched");
+    if (IsAssign(step) && run_->assign == Assign::kRest && !AtRest()) add("INPUT_ACTIVE", "A line is still switched");
+    return blocked;
+  }
+  if (IsSummary(step)) {
+    for (const Refusal& problem : SummaryProblems(now)) add(problem.reason.c_str(), problem.message);
     return blocked;
   }
   if (IsRun(step) && IsDrive(step)) {
@@ -1861,7 +1902,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
       } else if (step.check == "wheels" && run_->drive == Drive::kMeasure && step.parts[run_->part].id == "one_wheel") {
         ends_at = std::floor(run_->drive_wall + step.Number("answer_time"));
       }
-    } else if (is_run) {
+    } else if (is_run && !IsSummary(step)) {
       if (!step.parts.empty()) {
         progress = {{"n", run_->part + 1}, {"of", step.parts.size()}};
         ends_at = std::floor(run_->part_wall + step.Number("time"));
@@ -1901,8 +1942,8 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
                      {"mark", step.mark},
                      {"texts", step.texts},
                      {"result", record.result},
-                     {"restart", IsAssign(step) || (IsBlade(step) && capabilities_known_ &&
-                                                    !capabilities_.blade_allowed)}});
+                     {"restart", IsAssign(step) || IsSummary(step) ||
+                                     (IsBlade(step) && capabilities_known_ && !capabilities_.blade_allowed)}});
     if (stages.empty() || stages.back()["id"] != step.stage) {
       const mowbite_api::SetupName* stage = mowbite_api::FindSetupName(mowbite_api::SetupStages(), step.stage);
       stages.push_back({{"id", step.stage}, {"state", ""}, {"texts", mowbite_api::Texts(stage->texts)}});
@@ -1928,7 +1969,9 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
           {"current", std::move(current)},
           {"complete", Complete()},
           {"safety", SafetyState()},
-          {"restart_pending", restart_wanted_ || (run_ && IsAssign(StepOf(*run_)) && run_->assign == Assign::kRestart)},
+          {"restart_pending",
+           restart_wanted_ || (run_ && IsAssign(StepOf(*run_)) && run_->assign == Assign::kRestart) ||
+               (run_ && IsSummary(StepOf(*run_)) && !run_->restarted)},
           {"stages", std::move(stages)},
           {"steps", std::move(steps)}};
 }

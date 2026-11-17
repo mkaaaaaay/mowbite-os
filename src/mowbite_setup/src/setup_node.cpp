@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <mowbite_component/node_options.h>
+#include <mowbite_msgs/msg/clock_status.hpp>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_inputs.hpp>
@@ -199,6 +200,7 @@ class SetupNode : public rclcpp::Node {
           capabilities.driver_end = msg->driver_end;
           capabilities.blade_allowed = msg->blade_allowed;
           capabilities.blade_lease_max_s = msg->blade_lease_max_s;
+          capabilities.failsafe_without_host_s = msg->failsafe_without_host_s;
           std::lock_guard<std::mutex> lock(mutex_);
           program_->OnCapabilities(capabilities);
           state_due_ = true;
@@ -250,6 +252,12 @@ class SetupNode : public rclcpp::Node {
           world_.ntrip = msg->state == "connected" && msg->frames > 0 && msg->last_frame_age >= 0 &&
                          msg->last_frame_age < kFrameAge;
           program_->OnWorld(world_);
+        });
+    // The date a summary writes needs a safe wall clock.
+    clock_sub_ = create_subscription<mowbite_msgs::msg::ClockStatus>(
+        "time/clock", LatchedQos(1), [this](mowbite_msgs::msg::ClockStatus::ConstSharedPtr msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          program_->OnClock(msg->ok, msg->reason);
         });
     params_sub_ = create_subscription<std_msgs::msg::String>(
         "bridge/params", LatchedQos(50), [this](std_msgs::msg::String::ConstSharedPtr msg) { OnParams(msg->data); });
@@ -665,7 +673,7 @@ class SetupNode : public rclcpp::Node {
       } else if (request.method == "setup.abort") {
         refusal = program_->Abort(params, now, wall);
       } else if (request.method == "setup.reset") {
-        refusal = program_->Reset(params);
+        refusal = program_->Reset(params, WallSeconds());
       } else if (request.method != "setup.get") {
         return;
       }
@@ -716,6 +724,7 @@ class SetupNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::RobotState>::SharedPtr state_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::MapStatus>::SharedPtr map_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::NtripStatus>::SharedPtr ntrip_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::ClockStatus>::SharedPtr clock_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr params_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr request_sub_;
   rclcpp::TimerBase::SharedPtr tick_timer_;

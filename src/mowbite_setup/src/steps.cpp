@@ -493,9 +493,17 @@ std::optional<StepList> ParseSteps(const json& list, std::string* why) {
     size_t stage_index = 0;
     for (const auto& entry : list["steps"]) out.steps.push_back(ReadStep(entry, out.steps, &stage_index));
     for (const Step& step : out.steps) {
-      if (step.check != "inputs_assign" && step.check != "blade") continue;
+      if (step.check != "inputs_assign" && step.check != "blade" && step.check != "summary") continue;
       if (out.restart.empty()) throw Wrong(step.id + " needs restart at the top of the list");
       if (!Layer::IsNode(step.Word("node"))) throw Wrong(step.id + ": node is no name of a node");
+    }
+    // summary writes the stand time of a step silence: one has to come before it, and only one summary.
+    const auto summaries = std::count_if(out.steps.begin(), out.steps.end(),
+                                         [](const Step& step) { return step.check == "summary"; });
+    if (summaries > 1) throw Wrong("more than one step summary");
+    for (const Step& step : out.steps) {
+      if (step.check == "summary") throw Wrong(step.id + " comes after a step silence");
+      if (step.check == "silence") break;
     }
     return out;
   } catch (const Wrong& wrong) {

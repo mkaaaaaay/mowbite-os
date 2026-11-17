@@ -74,6 +74,8 @@ struct Capabilities {
   // hw/blade may switch the blade on, and its longest lease (s).
   bool blade_allowed = false;
   double blade_lease_max_s = 0;
+  // How long the board stops the wheels without the host (s), below 0 unmeasured.
+  double failsafe_without_host_s = -1;
 };
 
 // setup/motion while a step that moves the wheels or the blade runs: the bounds mowbite_safety holds its commands to,
@@ -148,6 +150,8 @@ class Program {
   // overrules of it. Without this call the program has no place for the file.
   void SetLayer(Layer layer, std::set<std::string> shadowed);
   void OnCapabilities(const Capabilities& capabilities);
+  // time/clock: whether the wall clock is safe for the date, and why not. Unsafe until the first call.
+  void OnClock(bool ok, const std::string& reason);
   void OnImu(const ImuSample& sample, double now);
   // solution as GnssFix has it (3 float, 4 fixed), accuracy in m, the antenna at x, y in the map frame (m).
   void OnFix(int solution, double accuracy, double x, double y, double now);
@@ -179,7 +183,8 @@ class Program {
   std::optional<Refusal> Answer(const json& params, double now, double wall);
   std::optional<Refusal> Skip(const json& params, double wall);
   std::optional<Refusal> Abort(const json& params, double now, double wall);
-  std::optional<Refusal> Reset(const json& params);
+  // wall: when a lock the program opened closes with it.
+  std::optional<Refusal> Reset(const json& params, double wall = 0);
   // setup.keep: keeps a step that moves the wheels going; result tells whether the step runs.
   std::optional<Refusal> Keep(const json& params, double now, json* result);
 
@@ -237,6 +242,9 @@ class Program {
     // A step inputs_assign under way: phase learn (the driver learns, part by part) or apply (the table is written),
     // and the line of every part taken so far. It outlives the restarts of the step.
     json assign;
+    // A step summary under way: {date, failsafe} it wrote and {before} what the parameter file had for both (null:
+    // nothing). It outlives the restart of the step.
+    json applied;
   };
   // Where a step inputs_assign is: waiting to be restarted, for the driver after it, the lines untouched, a part, its
   // question, the lines back at rest.
@@ -362,6 +370,8 @@ class Program {
     // blade: what the logic is to do with the blade (SetupMotion BLADE_*) and the fastest it turned in the part.
     int blade = 0;
     double peak = 0;
+    // summary: the OS restarted since the step wrote; it waits for hw/capabilities then.
+    bool restarted = false;
   };
 
   // The emergency a part of mode press brought, which the program releases itself. It exists only while every
@@ -488,6 +498,29 @@ class Program {
   double BladeLimit(const Step& step, const std::string& part) const;
   // final: the part that ran without a stand is not ok.
   json BladeValues(const Run& run, const Step& step, bool final) const;
+  // summary.cpp: the step that opens the lock.
+  static bool IsSummary(const Step& step);
+  // What keeps the step summary from starting; the first of them refuses setup.start.
+  std::vector<Refusal> SummaryProblems(double now) const;
+  // The safety steps of the list that are not ok, or that a cause in the lock names.
+  std::vector<const Step*> SafetyStepsDue() const;
+  // The longest stand time a passed step silence measured; nothing without one.
+  std::optional<double> LongestSilence() const;
+  void BeginSummary(const Step& step, double wall);
+  void TickSummary(double now, double wall);
+  // The run of a step summary that waits for the driver after its restart.
+  Run SummaryRun(const Step& step, double wall) const;
+  // What the running step summary wrote.
+  json SummaryValues(const Step& step) const;
+  // A summary that ended without passing: the parameter file gets back what it had.
+  void ForgetSummary(const Step& step);
+  // A safety step failed: a passed summary is open again.
+  void ReopenSummary();
+  // setup.reset: the settings the program wrote come out of the parameter file, and a lock the program opened closes.
+  void ResetSettings(double wall);
+  // Who gave the date of hw/capabilities: hand, program, or empty without a date.
+  std::string SafetySource() const;
+  const Step* SummaryStep() const;
   // The part of the running step that waits for its input took it: trigger, expected emergency and own latch.
   bool TakeTrigger(const Part& part, double now);
   void EnterDrive(Drive drive, double now, double wall);
@@ -581,6 +614,11 @@ class Program {
   mowbite_hold::LockRecord lock_;
   bool lock_due_ = false;
   bool lock_writable_ = true;
+  // time/clock.
+  bool clock_ok_ = false;
+  std::string clock_reason_ = "never_synced";
+  // The date setup.reset took out of the parameter file: the driver keeps it until the next restart.
+  std::string reset_date_;
 };
 
 }  // namespace mowbite_setup
