@@ -136,6 +136,28 @@ TEST(IncidentKeeper, AMarkKeepsItsOwnTimeBefore) {
   EXPECT_EQ(keeper.Find(id)->from_ns, 700 * kS);
 }
 
+TEST(IncidentKeeper, AMarkInAnOpenWindowMovesItsBeginning) {
+  IncidentKeeper keeper{IncidentLimits{}};
+  const std::string id = keeper.OnTrigger(Make("DOCKING_FAILED", 1000));
+  Trigger mark = Make("MARK", 1010);
+  mark.before_s = 300;
+  EXPECT_EQ(keeper.OnTrigger(mark), id);
+  EXPECT_EQ(keeper.Find(id)->from_ns, 710 * kS);
+  EXPECT_EQ(keeper.Find(id)->start_ns, 1000 * kS);
+  EXPECT_EQ(keeper.Find(id)->to_ns, 1025 * kS);
+}
+
+TEST(IncidentKeeper, AnOrdinaryTriggerKeepsTheBeginning) {
+  IncidentKeeper keeper{IncidentLimits{}};
+  Trigger mark = Make("MARK", 1000);
+  mark.before_s = 300;
+  const std::string id = keeper.OnTrigger(mark);
+  EXPECT_EQ(keeper.OnTrigger(Make("POSITION_JUMP", 1010)), id);
+  EXPECT_EQ(keeper.Find(id)->from_ns, 700 * kS);
+  EXPECT_EQ(keeper.OnTrigger(Make("DOCKING_FAILED", 1020)), id);
+  EXPECT_EQ(keeper.Find(id)->from_ns, 700 * kS);
+}
+
 TEST(IncidentKeeper, IdsDifferFromThoseOnTheDisk) {
   IncidentKeeper keeper{IncidentLimits{}};
   keeper.Known("20261115T120000Z");

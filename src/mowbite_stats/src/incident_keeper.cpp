@@ -37,6 +37,11 @@ bool EndsWith(const std::string& text, const std::string& end) {
   return text.size() >= end.size() && text.compare(text.size() - end.size(), end.size(), end) == 0;
 }
 
+// Where the window of a trigger begins: its own time before, else before_s.
+int64_t FromNs(const Trigger& trigger, const IncidentLimits& limits) {
+  return trigger.t_ns - Ns(trigger.before_s >= 0 ? trigger.before_s : limits.before_s);
+}
+
 }  // namespace
 
 std::optional<Trigger> TriggerOfEvent(const json& event, int64_t t_ns, const std::string& utc) {
@@ -86,6 +91,7 @@ std::string IncidentKeeper::OnTrigger(const Trigger& trigger) {
     Incident& incident = *collecting_;
     incident.to_ns = std::min(std::max(incident.to_ns, trigger.t_ns + Ns(limits_.after_s)),
                               incident.start_ns + Ns(limits_.max_s));
+    incident.from_ns = std::min(incident.from_ns, FromNs(trigger, limits_));
     incident.safety = incident.safety || trigger.safety;
     if (incident.triggers.size() < kMaxTriggers) {
       incident.triggers.push_back(trigger);
@@ -104,7 +110,7 @@ std::string IncidentKeeper::OnTrigger(const Trigger& trigger) {
   Incident incident;
   incident.id = NewId(trigger.utc);
   incident.start_ns = trigger.t_ns;
-  incident.from_ns = trigger.t_ns - Ns(trigger.before_s >= 0 ? trigger.before_s : limits_.before_s);
+  incident.from_ns = FromNs(trigger, limits_);
   incident.to_ns = trigger.t_ns + Ns(limits_.after_s);
   incident.safety = trigger.safety;
   incident.triggers.push_back(trigger);
