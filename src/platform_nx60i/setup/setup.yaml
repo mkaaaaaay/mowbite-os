@@ -1,7 +1,7 @@
 # The steps of the setup program of the NX60i (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image.
-catalog: 2
+catalog: 3
 # inputs_assign ends with a restart of the OS: the launch ends and whatever runs it starts it again.
 restart: self
 steps:
@@ -171,6 +171,43 @@ steps:
     check: position
     params: {rate: 2}
     symbol: antenna
+  # With the mower jacked up, the inputs checked standing: the wheels, then how they stop. stop_max of silence:
+  # the board stops 1.0 s after it last heard of the host, so the silence gets more.
+  - id: wheels
+    stage: wheels
+    check: wheels
+    confirm: [raised, hand_at_stop]
+    symbol: wheels
+    mark: [wheel_left, wheel_right]
+  - id: stop_moving
+    stage: wheels
+    check: stop_moving
+    parts:
+      - id: stop
+        role: stop
+      - id: bumper_left
+        role: bumper_left
+      - id: bumper_right
+        role: bumper_right
+    confirm: [raised, hand_at_stop]
+    symbol: stop
+  - id: no_command
+    stage: wheels
+    check: no_command
+    confirm: [raised, hand_at_stop]
+    symbol: wheels
+  - id: silence
+    stage: wheels
+    check: silence
+    params: {stop_max: 1.5, rounds: 5, spread_max: 0.3, emergency: [HIGH_LEVEL, TIMEOUT_HIGH_LEVEL]}
+    confirm: [raised, hand_at_stop]
+    symbol: board
+  - id: driver_end
+    stage: wheels
+    check: driver_end
+    params: {emergency: [HIGH_LEVEL, TIMEOUT_HIGH_LEVEL]}
+    confirm: [raised, hand_at_stop]
+    symbol: board
   - id: dimensions
     stage: dimensions
     check: geometry

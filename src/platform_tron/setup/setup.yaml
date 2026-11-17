@@ -1,7 +1,7 @@
 # The steps of the setup program of the Tron (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image. mark names parts of robot_shape (geometry.yaml).
-catalog: 3
+catalog: 4
 steps:
   - id: board
     stage: device
@@ -93,6 +93,49 @@ steps:
     stage: position
     check: position
     symbol: antenna
+  # With the mower jacked up, the inputs checked standing: the wheels, then how they stop. stop_max of silence:
+  # the board of the Tron stops 0.15 to 0.28 s after the last setpoint.
+  - id: wheels
+    stage: wheels
+    check: wheels
+    confirm: [raised, hand_at_stop]
+    symbol: wheels
+    mark: [wheel_left, wheel_right]
+    # Lifted off a jack the Tron latches lift at a few degrees already (tron-geraet, T7.2).
+    note:
+      de: Die Tron auf einen Bock unter dem Gehäuse stellen, Räder frei, vorn nicht höher als hinten. Meldet sie
+        Anheben, anders aufbocken.
+      en: Put the Tron on a stand under its body, wheels free, the front no higher than the rear. If it reports
+        lifting, put it up another way.
+  - id: stop_moving
+    stage: wheels
+    check: stop_moving
+    parts:
+      - id: stop
+        role: stop
+      - id: bumper_left
+        role: bumper_left
+      - id: bumper_right
+        role: bumper_right
+    confirm: [raised, hand_at_stop]
+    symbol: stop
+  - id: no_command
+    stage: wheels
+    check: no_command
+    confirm: [raised, hand_at_stop]
+    symbol: wheels
+  - id: silence
+    stage: wheels
+    check: silence
+    params: {stop_max: 1.0, rounds: 5, spread_max: 0.3, emergency: [HIGH_LEVEL]}
+    confirm: [raised, hand_at_stop]
+    symbol: board
+  - id: driver_end
+    stage: wheels
+    check: driver_end
+    params: {emergency: [HIGH_LEVEL]}
+    confirm: [raised, hand_at_stop]
+    symbol: board
   - id: dimensions
     stage: dimensions
     check: geometry
