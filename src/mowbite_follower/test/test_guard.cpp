@@ -12,6 +12,7 @@ using mowbite_follower::GuardInput;
 using mowbite_follower::InsideRing;
 using mowbite_follower::Ring;
 using mowbite_follower::StopReason;
+using mowbite_follower::TurnFixFresh;
 
 namespace {
 
@@ -167,4 +168,15 @@ TEST(Guard, ATurnThatSlidesTooFarStops) {
   in.turn_slide = 0.4;
   in.pose = {-1, 3, 0};
   EXPECT_EQ(CheckGuard(config, in, fence).reason, StopReason::kOutside);
+}
+
+// The fix counts with its age now: the age it had at the pose plus the time since the pose.
+TEST(Guard, TheFixOfATurnCountsWithTheAgeOfThePose) {
+  EXPECT_TRUE(TurnFixFresh(0.2, 0.1, 0.5));
+  EXPECT_TRUE(TurnFixFresh(0.25, 0.25, 0.5));
+  EXPECT_FALSE(TurnFixFresh(0.4, 0.4, 0.5));
+  EXPECT_FALSE(TurnFixFresh(0.0, 0.6, 0.5));
+  EXPECT_FALSE(TurnFixFresh(0.0, 1e9, 0.5));
+  EXPECT_FALSE(TurnFixFresh(std::nan(""), 0.0, 0.5));
+  EXPECT_TRUE(TurnFixFresh(999, 1e9, 0));
 }

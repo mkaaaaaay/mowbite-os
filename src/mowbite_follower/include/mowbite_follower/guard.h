@@ -96,6 +96,10 @@ struct GuardResult {
 // The checks before every command, in order of importance: the first that fails is the reason.
 GuardResult CheckGuard(const GuardConfig& config, const GuardInput& in, const Geofence& fence);
 
+// Whether a turn on the spot may start: the last fix is at most limit s old now, its age at the pose plus the age of
+// the pose. A limit <= 0 is no such rule.
+bool TurnFixFresh(double fix_age, double pose_age, double limit);
+
 }  // namespace mowbite_follower
 
 #endif  // MOWBITE_FOLLOWER_GUARD_H

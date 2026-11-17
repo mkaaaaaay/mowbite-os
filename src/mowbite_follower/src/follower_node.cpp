@@ -337,7 +337,7 @@ class FollowerNode : public rclcpp::Node {
     const double wheel_turn = wheels && wheel_step_ ? wheel_angle_ - *wheel_step_ : std::nan("");
     wheel_step_ = wheels ? std::optional<double>(wheel_angle_) : std::nullopt;
     // In the map no turn on the spot on a pose whose last fix is older than turn_fix_timeout; 0: no such rule.
-    const bool fresh_fix = dock_frame_ || !(turn_fix_timeout_ > 0) || pose.fix_age <= turn_fix_timeout_;
+    const bool fresh_fix = dock_frame_ || TurnFixFresh(pose.fix_age, in.pose_age, turn_fix_timeout_);
     const PathFollower::Command cmd = follower_->Step(pose.pose, dt, wheel_turn, fresh_fix);
     ReportTurn();
     if (follower_->phase() == Phase::kFailed) {

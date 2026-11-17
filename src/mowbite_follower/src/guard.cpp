@@ -114,4 +114,8 @@ GuardResult CheckGuard(const GuardConfig& config, const GuardInput& in, const Ge
   return {};
 }
 
+bool TurnFixFresh(double fix_age, double pose_age, double limit) {
+  return !(limit > 0) || fix_age + pose_age <= limit;
+}
+
 }  // namespace mowbite_follower
