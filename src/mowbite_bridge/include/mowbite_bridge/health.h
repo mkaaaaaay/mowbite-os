@@ -20,7 +20,7 @@ std::optional<BrokerAddress> BrokerFromEnvironment(const char* host, const char*
 // Empty for a robot_state/json of a running stack (an object with current_state as text), else why not.
 std::string RobotStateProblem(const std::string& payload);
 
-// The first line of the halt note that tron.launch.py leaves for mowbite_health, empty when it has none.
+// The first line of the halt note that the start of the stack leaves for mowbite_health, empty when it has none.
 std::string HaltLine(const std::string& note);
 
 }  // namespace mowbite_bridge

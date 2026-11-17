@@ -77,15 +77,26 @@ const char* Architecture() {
 #endif
 }
 
-// GNU build IDs of the program and of the libraries of MowBite OS it loaded.
-json BuildIds() {
+struct BuildIdSearch {
+  const std::vector<std::string>& libraries;
   json ids = json::object();
+};
+
+// Whether a loaded object is the program, a library of mowbite or one of the platform, by a part of its name.
+bool Own(const std::string& name, const std::vector<std::string>& libraries) {
+  if (name == "program" || name.find("mowbite") != std::string::npos) return true;
+  return std::any_of(libraries.begin(), libraries.end(),
+                     [&](const std::string& part) { return !part.empty() && name.find(part) != std::string::npos; });
+}
+
+// GNU build IDs of the program and of the libraries of MowBite OS it loaded: those of mowbite and of the platform.
+json BuildIds(const std::vector<std::string>& libraries) {
+  BuildIdSearch search{libraries};
   dl_iterate_phdr(
       [](dl_phdr_info* info, size_t, void* data) {
+        auto* found = static_cast<BuildIdSearch*>(data);
         std::string name = info->dlpi_name && *info->dlpi_name ? info->dlpi_name : "program";
-        const bool own = name == "program" || name.find("mowbite") != std::string::npos ||
-                         name.find("tron_") != std::string::npos || name.find("xcore") != std::string::npos;
-        if (!own) return 0;
+        if (!Own(name, found->libraries)) return 0;
         for (int i = 0; i < info->dlpi_phnum; ++i) {
           const auto& ph = info->dlpi_phdr[i];
           if (ph.p_type != PT_NOTE) continue;
@@ -95,15 +106,15 @@ json BuildIds() {
             const auto* note = reinterpret_cast<const ElfW(Nhdr)*>(at);
             const uint8_t* desc = at + sizeof(ElfW(Nhdr)) + ((note->n_namesz + 3) & ~3u);
             if (note->n_type == NT_GNU_BUILD_ID && desc + note->n_descsz <= end) {
-              (*static_cast<json*>(data))[name] = Hex(desc, note->n_descsz);
+              found->ids[name] = Hex(desc, note->n_descsz);
             }
             at = desc + ((note->n_descsz + 3) & ~3u);
           }
         }
         return 0;
       },
-      &ids);
-  return ids;
+      &search);
+  return search.ids;
 }
 
 void SetIdleIoClass() {
@@ -221,7 +232,7 @@ class Journal::Impl {
              {"boot_id", ReadFirstLine("/proc/sys/kernel/random/boot_id")},
              {"start_ns", start_ns_},
              {"start_utc", IsoUtc(start_utc)},
-             {"build_ids", BuildIds()}};
+             {"build_ids", BuildIds(options_.libraries)}};
     zstd_ = ZSTD_createCCtx();
     ZSTD_CCtx_setParameter(zstd_, ZSTD_c_compressionLevel, 3);
     stats_.run_dir = run_dir_;

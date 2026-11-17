@@ -4,6 +4,7 @@
 /**:
   ros__parameters:
     journal_platform: tron
+    journal_libraries: [tron_]
     journal_max_mb: 2048.0
     journal_max_days: 14.0
     journal_reserve_mb: 1024.0

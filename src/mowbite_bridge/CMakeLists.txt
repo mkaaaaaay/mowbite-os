@@ -20,7 +20,7 @@ find_package(PahoMqttCpp REQUIRED)
 find_package(mowbite_api REQUIRED)
 find_package(mowbite_watch REQUIRED)
 
-# The schema of data_dir this image writes: one file for system.info here and for tron.launch.py, installed with
+# The schema of data_dir this image writes: one file for system.info here and for the start of the stack, installed with
 # the package.
 file(READ data_schema.json DATA_SCHEMA_JSON)
 string(JSON DATA_SCHEMA GET "${DATA_SCHEMA_JSON}" schema)

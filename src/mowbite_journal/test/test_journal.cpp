@@ -265,6 +265,32 @@ TEST_F(JournalTest, SegmentsFollowEachOther) {
   EXPECT_EQ(CheckRuns(dir_.string(), registry_).outcome, CheckOutcome::kSame);
 }
 
+// The head names the build IDs of the libraries the platform names, beside the program.
+TEST_F(JournalTest, TheHeadNamesTheLibrariesOfThePlatform) {
+  const auto ids = [this](const std::vector<std::string>& libraries) {
+    fs::remove_all(dir_);
+    fs::create_directories(dir_);
+    options_.libraries = libraries;
+    Record(1);
+    const auto runs = ListRuns(dir_.string());
+    json head;
+    std::string error;
+    EXPECT_EQ(runs.size(), 1u);
+    EXPECT_TRUE(!runs.empty() && ReadSegmentHead(ListRun(runs[0]).segments.at(0), &head, &error)) << error;
+    return head.value("build_ids", json::object());
+  };
+  const auto named = [](const json& ids, const std::string& part) {
+    for (const auto& id : ids.items()) {
+      if (id.key().find(part) != std::string::npos) return true;
+    }
+    return false;
+  };
+  const json plain = ids({});
+  EXPECT_TRUE(plain.contains("program"));
+  EXPECT_FALSE(named(plain, "libc.so"));
+  EXPECT_TRUE(named(ids({"libc.so"}), "libc.so"));
+}
+
 TEST_F(JournalTest, AFullBufferLeavesAGapThatStopsTheReplay) {
   options_.buffer_kb = 1;
   options_.flush_s = 10;

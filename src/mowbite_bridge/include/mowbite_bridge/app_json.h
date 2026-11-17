@@ -118,7 +118,8 @@ Json StopRelease(double free_s, double hold_s, double max_hold_s);
 // blade_height of system.info from hw/capabilities: null without blade_height_control.
 Json BladeHeight(bool control, int min_mm, int max_mm, int default_mm);
 
-// The schema of data_dir this image writes, from data_schema.json of the package (tron.launch.py reads the same file).
+// The schema of data_dir this image writes, from data_schema.json of the package (the start of the stack reads the same
+// file).
 int DataSchema();
 
 }  // namespace mowbite_bridge

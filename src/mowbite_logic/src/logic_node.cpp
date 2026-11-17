@@ -59,8 +59,8 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   pose_timeout_s_ = declare_parameter("pose_timeout", 2.0);
   // mowbite_map answers at once; a recording waits this long (s) before it counts as not saved.
   map_edit_timeout_s_ = declare_parameter("map_edit_timeout", 5.0);
-  // The checkpoint of the mowing job and the settings of params.set; empty: none, a restart starts over with
-  // tron.yaml.
+  // The checkpoint of the mowing job and the settings of params.set; empty: none, a restart starts over with the
+  // parameter files.
   data_dir_ = declare_parameter("data_dir", std::string());
   // system.hold of the updater; the drivers read the same file themselves.
   hold_path_ = data_dir_.empty() ? "" : data_dir_ + "/hold.json";
@@ -1727,7 +1727,8 @@ std::string LogicNode::LogicParamsPath() const {
   return data_dir_.empty() ? "" : data_dir_ + "/params/mower_logic.json";
 }
 
-// tron.yaml, then what params.set saved. A file that cannot be read stays as it is, tron.yaml holds.
+// The parameter files, then what params.set saved. A file that cannot be read stays as it is, the parameter files
+// hold.
 void LogicNode::LoadLogicParams() {
   json base = json::object();
   base["max_position_accuracy"] = get_parameter("max_position_accuracy").as_double();
@@ -1746,7 +1747,7 @@ void LogicNode::LoadLogicParams() {
     if (logic_params_.Load(text.str())) {
       RCLCPP_INFO(get_logger(), "Settings from %s", path.c_str());
     } else {
-      RCLCPP_ERROR(get_logger(), "%s is not valid, the settings of tron.yaml hold", path.c_str());
+      RCLCPP_ERROR(get_logger(), "%s is not valid, the settings of the parameter files hold", path.c_str());
     }
   }
   ApplyLogicParams();

@@ -66,7 +66,7 @@ constexpr char kSensorInfoTopic[] = "bridge/sensor_info";
 constexpr int kReachableTimeoutMs = 1000;
 constexpr char kClientId[] = "mowbite_bridge";
 constexpr char kRestartNote[] = "container_exit.json";
-// Left by tron.launch.py after it took data_dir back for an older image.
+// Left by the start of the stack after it took data_dir back for an older image.
 constexpr char kRollbackNote[] = "data_rollback.json";
 
 double WallNow() {

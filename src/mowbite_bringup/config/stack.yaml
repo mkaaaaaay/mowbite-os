@@ -17,8 +17,10 @@
     max_correction_age: 30.0
     # The journal in journal_dir (launch argument): all runs of all processes together at most journal_max_mb and
     # journal_max_days (whole old runs go first); below journal_reserve_mb free on its file system nothing is written.
-    # journal_platform names the platform in every run.
+    # journal_platform names the platform in every run, journal_libraries the libraries of its own packages by a
+    # part of their names: their build IDs stand in every run beside those of mowbite.
     journal_platform: <platform>
+    journal_libraries: <platform>
     journal_max_mb: <platform>
     journal_max_days: <platform>
     journal_reserve_mb: <platform>

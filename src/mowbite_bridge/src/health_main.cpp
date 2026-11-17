@@ -19,7 +19,7 @@ namespace {
 constexpr auto kConnectTimeout = std::chrono::seconds(2);
 // robot_state/json comes once a second.
 constexpr auto kStateWait = std::chrono::seconds(3);
-// Where tron.launch.py leaves its halt line; MOWBITE_HALT_FILE for both.
+// Where the start of the stack leaves its halt line; MOWBITE_HALT_FILE for both.
 constexpr char kHaltFile[] = "/tmp/mowbite_os_halt";
 
 std::string ReadFile(const std::string& path) {

@@ -20,6 +20,8 @@ struct Options {
   std::string dir;
   // Name of the platform for the head of every segment (tron, nx60i, sim).
   std::string platform;
+  // Parts of the names of the libraries of the platform: their build IDs go into the head beside those of mowbite.
+  std::vector<std::string> libraries;
   // All runs in dir together, every process counts them: whole old runs go first, then the oldest segments of the
   // running ones (the rest of such a run cannot be replayed from the start any more).
   double max_mb = 2048;
