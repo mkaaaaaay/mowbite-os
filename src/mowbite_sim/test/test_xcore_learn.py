@@ -99,6 +99,12 @@ class TestXcoreLearn(unittest.TestCase):
         answer = p.set_emergency(False)
         self.assertFalse(answer.success)
         self.assertEqual(answer.code, "LEARNING")
+        # A latch from above goes with a release as always, the one of learning stays.
+        self.assertTrue(p.set_emergency(True).success)
+        both = LEARNING | HardwareStatus.REASON_HIGH_LEVEL
+        self.assertTrue(p.wait_for(lambda p: p.status.emergency_reason == both, 3), p.status.emergency_reason)
+        self.assertEqual(p.set_emergency(False).code, "LEARNING")
+        self.assertTrue(p.wait_for(lambda p: p.status.emergency_reason == LEARNING, 3), p.status.emergency_reason)
         began = p.cmd_vel_for(0.2, 1.0)
         self.assertEqual(p.status.emergency_reason, LEARNING)
         moved = [e for e in log_entries(LOG, began or 0.0) if e.get("sid") == DIFF_DRIVE and e["type"] == DATA

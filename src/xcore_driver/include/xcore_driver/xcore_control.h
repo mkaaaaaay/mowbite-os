@@ -29,7 +29,8 @@ double MeasurementSpeedCap(double measurement_speed_limit);
 double CappedLimit(const char* name, double value, double cap);
 
 struct ControlConfig {
-  // Started with inputs.learn: INPUTS_LEARNING stands and holds the board, no release ends it.
+  // Started with inputs.learn: INPUTS_LEARNING stands and holds the board. A release ends what else is latched and
+  // is answered with LEARNING.
   bool learn_inputs = false;
   // The emergency input goes out this often; the board latches TIMEOUT_HIGH_LEVEL after 1 s without one.
   double emergency_period_s = 0.25;
@@ -133,7 +134,7 @@ enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvali
 
 const char* BladeResultText(BladeResult result);
 
-// Why a release over hw/emergency is refused; nothing is cleared then.
+// Why a release over hw/emergency is refused; nothing is cleared then, but with LEARNING all except INPUTS_LEARNING.
 struct ReleaseRefusal {
   // STILL_TILTED, TILT_UNKNOWN, FOREIGN_HOST, LATCH_CHANGED or LEARNING.
   std::string code;

@@ -58,7 +58,8 @@ Duties:
   shows. A driver whose table of inputs is a setting (`xcore_driver`: `inputs.*`) also takes `inputs.candidates`,
   the lines a sensor can be on, and `inputs.learn`: started with it, it watches the candidates instead of the table,
   none of them stops anything, and it holds the emergency `INPUTS_LEARNING` that no release ends, so nothing moves
-  until a start without it.
+  until a start without it. A release is answered with `LEARNING`; what else latched meanwhile (a tilt while the
+  mower is lifted) it ends by the usual checks, so the mower is never caught in learning.
 - Release at the mower (optional, G37): a driver that sees every sample of its stop button may recognise the gesture
   itself (`tron_mcu/stop_release.h`: free 2 s, then a short press of 0.1 to 2 s) and report HELD, LONG and CANCELED
   on `hw/button`. It never releases by itself: the logic does, like `emergency.reset`, with the `latch_count` of LONG,

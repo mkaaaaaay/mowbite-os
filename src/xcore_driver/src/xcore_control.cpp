@@ -155,9 +155,6 @@ bool XcoreControl::LatchEmergency(uint32_t bits) {
 }
 
 std::optional<ReleaseRefusal> XcoreControl::ReleaseEmergency(double now, uint32_t latch_count) {
-  if (config_.learn_inputs) {
-    return ReleaseRefusal{"LEARNING", "the driver learns its inputs, only a start without inputs.learn ends it"};
-  }
   CountLatches();
   if (latch_count != 0 && latch_count != latch_count_) {
     return ReleaseRefusal{"LATCH_CHANGED", "another reason latched since the release was asked for"};
@@ -196,6 +193,10 @@ std::optional<ReleaseRefusal> XcoreControl::ReleaseEmergency(double now, uint32_
   counted_ = Kept();
   clear_remaining_ = config_.repeat_count;
   next_emergency_s_ = now;
+  // What else was latched is released by the checks above, so a tilt while learning does not trap the mower.
+  if (config_.learn_inputs) {
+    return ReleaseRefusal{"LEARNING", "the driver learns its inputs, only a start without inputs.learn ends that"};
+  }
   return std::nullopt;
 }
 

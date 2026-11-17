@@ -522,9 +522,19 @@ TEST(XcoreControl, LearningHoldsTheBoardAndTakesNoRelease) {
   auto out = Of(f.control.Tick(0), kEmergencyService);
   ASSERT_EQ(out.size(), 1u);
   EXPECT_EQ(EmergencyOf(out[0]).first, reason::kHighLevel | reason::kLatch);
-  const auto refused = f.control.ReleaseEmergency(0.1);
+  auto refused = f.control.ReleaseEmergency(0.1);
   ASSERT_TRUE(refused);
   EXPECT_EQ(refused->code, "LEARNING");
+  // A latch from above goes with a release as always, the one of learning stays and holds the board.
+  ASSERT_TRUE(f.control.LatchEmergency(kReasonHighLevel));
+  EXPECT_EQ(f.control.Status(0.1).emergency_reason, kReasonInputsLearning | kReasonLatch | kReasonHighLevel);
+  refused = f.control.ReleaseEmergency(0.15);
+  ASSERT_TRUE(refused);
+  EXPECT_EQ(refused->code, "LEARNING");
+  EXPECT_EQ(f.control.Status(0.15).emergency_reason, kReasonInputsLearning | kReasonLatch);
+  out = Of(f.control.Tick(0.15), kEmergencyService);
+  ASSERT_FALSE(out.empty());
+  EXPECT_EQ(EmergencyOf(out.back()).first, reason::kHighLevel | reason::kLatch);
   f.control.OnCmdVel(0.2, 0, 0.2);
   EXPECT_TRUE(Of(f.control.Tick(0.2), kDiffDriveService).empty());
   EXPECT_TRUE(f.control.Status(0.2).blocked);
