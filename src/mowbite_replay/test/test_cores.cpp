@@ -274,8 +274,8 @@ TEST_F(CoreReplay, LogicCore) {
 // new ones only come at the end. The checksum covers the first kTableLength entries.
 TEST(LogicJournal, TheTableIsOnlyAppendedTo) {
   using L = mowbite_logic::LogicCore;
-  constexpr size_t kTableLength = 70;
-  constexpr char kTableChecksum[] = "86bc7d34bd2331dc";
+  constexpr size_t kTableLength = 72;
+  constexpr char kTableChecksum[] = "61bab3560bebe137";
   const auto definition = mowbite_journal::CoreDefinition<L>(mowbite_logic::LogicConfig(), nlohmann::json::object());
   const auto& methods = definition.at("methods");
   ASSERT_GE(methods.size(), kTableLength);
