@@ -35,6 +35,8 @@ class FakeOs:
         self.grant = True
         self.broken = set()
         self.holds = []
+        # How many releases of the hold get lost on their way.
+        self.lost_releases = 0
         self.started = None
         self.starts = self.stops = 0
         # The planner the last start took: the revision active named, None for the one of the OS.
@@ -84,6 +86,9 @@ class FakeOs:
 
     def release_hold(self):
         self.holds.append(0)
+        if self.lost_releases > 0:
+            self.lost_releases -= 1
+            return
         if os.path.exists(self.paths.hold):
             os.remove(self.paths.hold)
 
@@ -108,11 +113,11 @@ class Base(unittest.TestCase):
         self.updater.gate_wait = 0
         self.serial = 1000
         # A hold not granted and a closed gate are judged again within a fraction of a second.
-        self.waits = updater.HOLD_WAIT, updater.GATE_EVERY
-        updater.HOLD_WAIT, updater.GATE_EVERY = 0.3, 0.05
+        self.waits = updater.HOLD_WAIT, updater.GATE_EVERY, updater.RELEASE_WAIT
+        updater.HOLD_WAIT, updater.GATE_EVERY, updater.RELEASE_WAIT = 0.3, 0.05, 0.2
 
     def tearDown(self):
-        updater.HOLD_WAIT, updater.GATE_EVERY = self.waits
+        updater.HOLD_WAIT, updater.GATE_EVERY, updater.RELEASE_WAIT = self.waits
         shutil.rmtree(self.root)
 
     def write(self, path, text):
@@ -455,6 +460,31 @@ class GateTest(Base):
         self.fake.grant = False
         self.assertEqual(self.run_update("os")["reason"], "NO_HOLD")
         self.assertEqual(self.fake.holds[-1], 0)
+
+    # The release of the hold after a switch got lost: asked again until hold.json is gone.
+    def test_lost_release_of_the_hold_is_asked_again(self):
+        self.bundle(A)
+        self.updater.check()
+        self.run_update("os")
+        self.bundle(B)
+        self.updater.check()
+        self.fake.lost_releases = 1
+        self.assertEqual(self.run_update("os")["result"], "installed")
+        self.assertFalse(os.path.lexists(self.paths.hold))
+        self.assertEqual(self.fake.holds[-2:], [0, 0])
+
+    # An OS that runs and never gives the hold back keeps its file: its own state would hold on without it.
+    def test_hold_never_given_back_stays_with_the_running_os(self):
+        self.bundle(A)
+        self.updater.check()
+        self.run_update("os")
+        self.bundle(B)
+        self.updater.check()
+        self.fake.lost_releases = 100
+        self.assertEqual(self.run_update("os")["result"], "installed")
+        self.assertTrue(self.fake.running)
+        self.assertTrue(os.path.lexists(self.paths.hold))
+        self.assertEqual(self.fake.holds[-updater.RELEASE_TRIES:], [0] * updater.RELEASE_TRIES)
 
     def test_halted_and_down_count_as_stopped(self):
         self.fake.session()

@@ -32,6 +32,9 @@ RUNNING_HOST = os.path.dirname(os.path.dirname(os.path.realpath(mowbite_host.__f
 GATE_WAIT = 30 * 60.0
 GATE_EVERY = 5.0
 HOLD_WAIT = 10.0
+# A hold the OS still shows in hold.json is given back this often, each time waiting this long for the file to go.
+RELEASE_TRIES = 3
+RELEASE_WAIT = 3.0
 # The automatic tries a revision again at the earliest this long after its last try: once a night.
 AUTO_AGAIN = 20 * 3600.0
 # States of the service in which the gate judges; in any other it starts or stops, or nobody knows.
@@ -462,14 +465,23 @@ class Updater:
         self._check_abort()
         return why
 
+    # An OS that runs ends its hold itself and keeps it in memory: it is asked until hold.json is gone, the file is
+    # not taken from under it. A hold it never gave back ends in the OS when its time runs out.
     def _release_hold(self):
         if not self._holding:
             return
         self._holding = False
-        if self.carrier.active():
+        for _ in range(RELEASE_TRIES):
+            if not self.carrier.active():
+                files.remove(self.paths.hold)
+                return
             self.os_rpc.release_hold()
-        else:
-            files.remove(self.paths.hold)
+            until = time.monotonic() + RELEASE_WAIT
+            while os.path.lexists(self.paths.hold) and time.monotonic() < until:
+                time.sleep(0.05)
+            if not os.path.lexists(self.paths.hold):
+                return
+        print("hold: MowBite OS did not give it back, it ends there when its time runs out", flush=True)
 
     # revision None: to the planner or the app the OS brings along, to the seed of the host. by_hand_from: a rollback
     # by hand away from that revision.
