@@ -82,6 +82,8 @@ def _library(revision):
 def _set_current(revision):
     current = os.path.join(_path(OPT), "current")
     if revision:
+        if os.path.lexists(current + ".new"):
+            os.remove(current + ".new")
         os.symlink(revision, current + ".new")
         os.replace(current + ".new", current)
     elif os.path.lexists(current):

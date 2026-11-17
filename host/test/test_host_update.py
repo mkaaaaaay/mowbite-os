@@ -71,6 +71,14 @@ class BootTest(unittest.TestCase):
         note = files.read_json(self.root + mowbite_boot.BACK)
         self.assertEqual((note["to"], note["from"]), (B, A))
 
+    def test_going_back_over_a_left_new_link(self):
+        self.link("current", B)
+        self.link("current.new", B)
+        self.pending(to=B, **{"from": A}, tried=True)
+        self.assertEqual(mowbite_boot.choose(True), os.path.join(self.opt, A))
+        self.assertEqual(os.readlink(os.path.join(self.opt, "current")), A)
+        self.assertFalse(os.path.lexists(os.path.join(self.opt, "current.new")))
+
     def test_back_to_the_seed_without_one_before(self):
         self.link("current", B)
         self.pending(to=B, **{"from": ""}, tried=True)
