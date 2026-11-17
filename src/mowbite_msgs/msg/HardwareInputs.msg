@@ -4,5 +4,6 @@ builtin_interfaces/Time stamp
 
 # The driver started with inputs.learn (REASON_INPUTS_LEARNING of hw/status).
 bool learning
-# In the order of the table, candidates after it.
+# In the order of the table, candidates after it. Empty from a learning driver that does not know the levels of its
+# lines (yet, or any more).
 HardwareInput[] inputs

@@ -723,11 +723,13 @@ class XcoreNode : public rclcpp::Node {
   }
 
   // hw/inputs: every line of the table with bit i of the mask of the board, none switched while the mask is unknown.
+  // While learning active is the level of a line, so without the mask no line is told at all.
   void PublishInputs(const std::optional<uint64_t>& mask) {
     mowbite_msgs::msg::HardwareInputs msg;
     msg.stamp = now();
     msg.learning = inputs_.learning;
-    for (size_t i = 0; i < inputs_.gpio.size(); i++) {
+    const size_t lines = inputs_.learning && !mask ? 0 : inputs_.gpio.size();
+    for (size_t i = 0; i < lines; i++) {
       const xcore::GpioInput& in = inputs_.gpio[i];
       mowbite_msgs::msg::HardwareInput line;
       line.name = in.line;

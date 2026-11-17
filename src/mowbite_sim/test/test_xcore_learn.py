@@ -72,7 +72,8 @@ class TestXcoreLearn(unittest.TestCase):
     def test_a_candidates_without_a_role(self):
         p = self.probe
         self.assertTrue(p.wait_for(lambda p: p.status.emergency_reason == LEARNING, 5), p.status.emergency_reason)
-        self.assertTrue(p.wait_for(lambda p: p.inputs is not None, 2), "no hw/inputs")
+        # Without the levels of the board the driver names no line.
+        self.assertTrue(p.wait_for(lambda p: p.inputs is not None and p.inputs.inputs, 2), "no hw/inputs")
         self.assertTrue(p.inputs.learning)
         self.assertEqual([i.name for i in p.inputs.inputs], CANDIDATES)
         for line in p.inputs.inputs:
