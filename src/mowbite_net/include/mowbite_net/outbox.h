@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -27,12 +28,14 @@ struct Delivery {
   bool sent = false;                // at least one target took it
   bool targets = false;             // there was a target at all
   bool again = false;               // worth another try: no target took it, one did not answer or was busy
+  bool stopped = false;             // the stop came between two targets: not sent, not tried again
   std::vector<std::string> gone;    // phone addresses that answered 404 or 410
 };
 
-// To the topic and every phone of config, or to only (one phone, as notify.test may ask).
+// To the topic and every phone of config, or to only (one phone, as notify.test may ask); stop is asked before each
+// target after the first.
 Delivery Deliver(Http& http, const Push& push, const NotifyConfig& config, double t,
-                 const std::optional<std::string>& only = std::nullopt);
+                 const std::optional<std::string>& only = std::nullopt, const std::function<bool()>& stop = {});
 
 // Pushes waiting to go out, each with the settings of when it came; the oldest goes when it is full.
 class Outbox {

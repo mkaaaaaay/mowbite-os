@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -401,9 +402,10 @@ class NetNode : public rclcpp::Node {
       if (test) {
         RunTest(*http, *test);
       } else if (item) {
-        const Delivery delivery = Deliver(*http, item->push, item->config, item->t);
+        const Delivery delivery = Deliver(*http, item->push, item->config, item->t, std::nullopt, Stopping());
         std::lock_guard<std::mutex> lock(mutex_);
-        Logged(item->push, delivery.sent);
+        // A push cut short by the stop is lost with the outbox, like the ones still waiting.
+        if (!delivery.stopped) Logged(item->push, delivery.sent);
         Gone(delivery.gone);
         if (delivery.again) outbox_.Again(*item, MonotonicSeconds());
       }
@@ -418,13 +420,19 @@ class NetNode : public rclcpp::Node {
     push.title = Say(job.config.lang, "test.title");
     const std::string name = job.config.name.empty() ? Say(job.config.lang, "mower") : job.config.name;
     push.message = Say(job.config.lang, "test", {{"n", name}});
-    const Delivery delivery = Deliver(http, push, job.config, WallSeconds(), job.address);
+    const Delivery delivery = Deliver(http, push, job.config, WallSeconds(), job.address, Stopping());
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (delivery.targets) Logged(push, delivery.sent);
+      if (delivery.targets && !delivery.stopped) Logged(push, delivery.sent);
       Gone(delivery.gone);
     }
+    if (delivery.stopped) return;
     Answer(job.id, {{"result", !delivery.targets ? "no_target" : delivery.sent ? "sent" : "failed"}});
+  }
+
+  // For Deliver: whether the node is being stopped.
+  std::function<bool()> Stopping() const {
+    return [this] { return stop_.load(); };
   }
 
   // mutex_ held.

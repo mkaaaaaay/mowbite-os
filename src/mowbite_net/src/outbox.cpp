@@ -54,7 +54,7 @@ HttpRequest PhoneRequest(const Push& push, const NotifyConfig& config, const std
 }
 
 Delivery Deliver(Http& http, const Push& push, const NotifyConfig& config, double t,
-                 const std::optional<std::string>& only) {
+                 const std::optional<std::string>& only, const std::function<bool()>& stop) {
   Delivery delivery;
   bool transient = false;
   if (!only) {
@@ -67,6 +67,11 @@ Delivery Deliver(Http& http, const Push& push, const NotifyConfig& config, doubl
   }
   for (const std::string& address : config.pushes) {
     if (only && address != *only) continue;
+    if (delivery.targets && stop && stop()) {
+      delivery.sent = false;
+      delivery.stopped = true;
+      return delivery;
+    }
     delivery.targets = true;
     const HttpResult result = http.Send(PhoneRequest(push, config, address, t));
     delivery.sent = delivery.sent || Ok(result.status);

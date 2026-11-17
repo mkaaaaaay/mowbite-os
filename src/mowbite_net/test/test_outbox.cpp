@@ -86,6 +86,21 @@ TEST(Outbox, DeliverToAllAndDropGonePhones) {
   EXPECT_EQ(d.gone, (std::vector<std::string>{"https://up.example/b"}));
 }
 
+TEST(Outbox, TheStopEndsADeliveryBetweenTwoTargets) {
+  FakeHttp http;
+  const Delivery d = Deliver(http, Problem(), Config(), 0, std::nullopt, [&http] { return !http.sent.empty(); });
+  ASSERT_EQ(http.sent.size(), 1u);
+  EXPECT_EQ(http.sent[0].url, "https://ntfy.sh/");
+  EXPECT_TRUE(d.stopped);
+  EXPECT_FALSE(d.sent);
+  EXPECT_FALSE(d.again);
+  FakeHttp all;
+  const Delivery full = Deliver(all, Problem(), Config(), 0, std::nullopt, [] { return false; });
+  EXPECT_EQ(all.sent.size(), 3u);
+  EXPECT_FALSE(full.stopped);
+  EXPECT_TRUE(full.sent);
+}
+
 TEST(Outbox, DeliverToOnePhone) {
   FakeHttp http;
   const Delivery d = Deliver(http, Problem(), Config(), 0, std::string("https://up.example/b"));
