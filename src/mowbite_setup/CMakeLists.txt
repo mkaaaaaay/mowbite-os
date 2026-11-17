@@ -24,7 +24,8 @@ find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_watch REQUIRED)
 
 # The step list of a platform, the program over it and the parameter file it writes, without ROS.
-add_library(mowbite_setup_core STATIC src/steps.cpp src/program.cpp src/motion.cpp src/layer.cpp)
+add_library(mowbite_setup_core STATIC src/steps.cpp src/program.cpp src/motion.cpp src/ground.cpp
+            src/layer.cpp)
 target_include_directories(mowbite_setup_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)

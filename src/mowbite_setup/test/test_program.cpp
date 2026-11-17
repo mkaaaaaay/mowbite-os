@@ -67,8 +67,8 @@ struct Bench {
         for (int i = 0; i < 5; ++i) program.OnImu(imu, now - 0.1 + 0.02 * (i + 1));
       }
       if (solution >= 0) {
-        program.OnFix(solution, accuracy, now - 0.05);
-        program.OnFix(solution, accuracy, now);
+        program.OnFix(solution, accuracy, 0, 0, now - 0.05);
+        program.OnFix(solution, accuracy, 0, 0, now);
       }
       program.Tick(now, kWall + now);
       if (const auto release = program.TakeRelease()) releases.emplace_back(now, *release);

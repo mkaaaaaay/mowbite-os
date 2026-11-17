@@ -15,12 +15,9 @@ using namespace util;
 
 namespace {
 
-// The logic takes SETUP within this time (s).
-constexpr double kEnterWait = 2.0;
 // A part of wheels speeds up for this long before it is measured (s).
 constexpr double kRunUp = 0.5;
-// The wheels turn within kStartWait of the first command and within kRestartWait of the one after the release (s).
-constexpr double kStartWait = 3.0;
+// The wheels turn within kRestartWait of the command after the release (s).
 constexpr double kRestartWait = 2.0;
 // The driver answers hw/silence and hw/end within this time (s).
 constexpr double kServiceWait = 2.0;
@@ -66,9 +63,10 @@ const WheelPart& WheelPartOf(const std::string& id) {
   return kWheelParts[0];
 }
 
-// The emergency a press of the role brings.
+// The emergency a press of the role brings; the whole bumper pressed in its middle may bring both sides at once.
 uint32_t RoleBit(const std::string& role) {
-  return EmergencyBit(mowbite_api::FindSetupName(mowbite_api::SetupRoles(), role)->emergency);
+  const uint32_t bit = EmergencyBit(mowbite_api::FindSetupName(mowbite_api::SetupRoles(), role)->emergency);
+  return role == "bumper" ? bit | EmergencyBit("COLLISION_MULTIPLE") : bit;
 }
 
 uint32_t BitsOf(const std::vector<std::string>& names) {
@@ -94,12 +92,21 @@ double Program::TurnRate(const Step& step) const {
 
 json Program::MotionOf(const Step& step) const {
   if (!IsDrive(step)) return nullptr;
-  return {{"wheels", true},           {"blade", false},           {"raised", true},
-          {"max_speed", Speed(step)}, {"max_distance", nullptr}, {"max_time", mowbite_api::kSetupMoveTime}};
+  const bool ground = IsGround(step);
+  const double speed = ground ? std::max(Speed(step), step.Number("bumper_speed")) : Speed(step);
+  return {{"wheels", true},      {"blade", false},          {"raised", !ground},
+          {"max_speed", speed}, {"max_distance", nullptr}, {"max_time", mowbite_api::kSetupMoveTime}};
 }
 
 void Program::OnWheels(double left, double right, double now) {
   const double dt = wheels_at_ < 0 ? -1 : now - wheels_at_;
+  if (run_ && IsGround(StepOf(*run_)) && dt > 0) {
+    // The way and the turn by odometry; a gap counts as one sample long at most.
+    const double step = std::min(dt, kWheelGap);
+    run_->way += std::abs(left + right) / 2 * step;
+    run_->travel += (left + right) / 2 * step;
+    if (track_ > 0) run_->yaw_odom += (right - left) / track_ * step;
+  }
   if (dt < 0 || dt > kWheelGap) {
     left_filtered_ = left;
     right_filtered_ = right;
@@ -150,6 +157,14 @@ bool Program::Started() const {
 }
 
 bool Program::Turning(double speed) const {
+  if (run_ && IsGround(StepOf(*run_))) {
+    // Along the command of the part: forwards, backwards or on the spot.
+    const Command command = GroundCommand();
+    const double along = (left_filtered_ + right_filtered_) / 2;
+    const double spin = (right_filtered_ - left_filtered_) / 2;
+    if (command.linear != 0) return along * command.linear > 0 && std::abs(along) >= kTurnShare * speed;
+    return spin * command.angular > 0 && std::abs(spin) >= kTurnShare * speed;
+  }
   return left_filtered_ >= kTurnShare * speed && right_filtered_ >= kTurnShare * speed;
 }
 
@@ -183,6 +198,9 @@ std::vector<Refusal> Program::DriveProblems(const Step& step, double now) const 
         Refuse("SAFETY_INPUTS", "The inputs are not all checked: " + missing.dump(), {{"steps", missing}}));
   }
   if (track_ <= 0) problems.push_back(Refuse("NOT_OFFERED", "The track of the mower is not known yet"));
+  if (IsGround(step)) {
+    for (auto& problem : GroundProblems(now)) problems.push_back(std::move(problem));
+  }
   if (step.check == "silence" && capabilities_.silence_max_s <= 0) {
     problems.push_back(Refuse("NOT_OFFERED", "The driver offers no hw/silence"));
   }
@@ -219,6 +237,7 @@ void Program::EnterDrive(Drive drive, double now, double wall) {
     case Drive::kRunUp:
     case Drive::kRestart:
       command = Command{Speed(step), 0};
+      if (IsGround(step)) command = GroundCommand();
       if (step.check == "wheels") {
         const WheelPart& part = WheelPartOf(step.parts[run.part].id);
         // one_wheel: the right wheel at speed, the left one standing.
@@ -235,6 +254,8 @@ void Program::EnterDrive(Drive drive, double now, double wall) {
     case Drive::kMeasure:
       command = run.command;
       if (step.check == "no_command" && drive != Drive::kTrigger) command.reset();
+      // straight falls silent at its trigger.
+      if (IsGround(step) && step.parts[run.part].id == "straight" && drive != Drive::kMeasure) command.reset();
       break;
     case Drive::kLatch:
     case Drive::kRelease:
@@ -309,9 +330,13 @@ uint32_t Program::AllowedNow() const {
   const Run& run = *run_;
   const Step& step = StepOf(run);
   switch (run.drive) {
+    case Drive::kRunUp:
+      // On the ground the user may act as soon as the mower moves off.
+      if (IsGround(step) && GroundPress()) return RoleBit(step.parts[run.part].role) | LatchBit();
+      return 0;
     case Drive::kTrigger:
       // A press may latch before hw/status shows the input.
-      if (step.check == "stop_moving") {
+      if (step.check == "stop_moving" || (IsGround(step) && GroundPress())) {
         return RoleBit(step.parts[run.part].role) | LatchBit();
       }
       return 0;
@@ -349,6 +374,12 @@ void Program::TickDrive(double now, double wall) {
       DriveFail("EMERGENCY", "Emergency " + names, {{"emergency", names}}, now, wall);
       return;
     }
+  }
+  // ground: its own stages; the release after a press goes on below.
+  if (IsGround(step) && run.drive != Drive::kLatch && run.drive != Drive::kRelease && run.drive != Drive::kArm &&
+      run.drive != Drive::kAsk) {
+    TickGround(now, wall);
+    return;
   }
   // Where the user did not act in time: before the limit of a single move, which is no measurement.
   const bool stop_moving = step.check == "stop_moving";
@@ -408,24 +439,7 @@ void Program::TickDrive(double now, double wall) {
       return;
     case Drive::kTrigger:
       if (stop_moving) {
-        const Part& part = step.parts[run.part];
-        const uint32_t bit = RoleBit(part.role);
-        const bool latched = (hardware_.emergency_reason & bit) != 0;
-        if (!run.armed) {
-          run.armed = !Signal(part.role) && !latched;
-        } else if (Signal(part.role) || latched) {
-          run.trigger = now;
-          run.expected = bit;
-          const auto lines = LinesOf(part.role);
-          OwnLatch own;
-          own.role = part.role;
-          own.bit = bit;
-          own.held = std::any_of(lines.begin(), lines.end(), [](const Line* line) { return line->held; });
-          own.edge = now;
-          own_ = own;
-          EnterDrive(Drive::kStop, now, wall);
-          return;
-        }
+        if (TakeTrigger(step.parts[run.part], now)) EnterDrive(Drive::kStop, now, wall);
       } else if (run.asked && now - run.asked_at > kServiceWait) {
         DriveFail("DRIVER_REFUSED", "The driver did not answer", {{"code", "NO_ANSWER"}}, now, wall);
       }
@@ -478,7 +492,8 @@ void Program::TickDrive(double now, double wall) {
     }
     case Drive::kLatch:
       if ((hardware_.emergency_reason & run.expected) != 0) {
-        if (!stop_moving) {
+        // The press of stop_moving and of ground took its own latch at the trigger.
+        if (!stop_moving && !IsGround(step)) {
           OwnLatch own;
           own.bit = run.expected;
           own.held = true;
@@ -509,6 +524,9 @@ void Program::TickDrive(double now, double wall) {
       if (Started()) {
         DriveFail("STARTED_AGAIN", "A wheel turned with zero asked for",
                   {{"speed", Rounded(std::max(std::abs(left_), std::abs(right_)), 1000)}}, now, wall);
+      } else if (elapsed >= step.Number("hold") && IsGround(step)) {
+        // No new command after a stop on the ground.
+        NextGroundPart(now, wall);
       } else if (elapsed >= step.Number("hold")) {
         EnterDrive(Drive::kRestart, now, wall);
       }
@@ -535,6 +553,27 @@ void Program::TickDrive(double now, double wall) {
       TickPressed(now, wall);
       return;
   }
+}
+
+bool Program::TakeTrigger(const Part& part, double now) {
+  Run& run = *run_;
+  const uint32_t bit = RoleBit(part.role);
+  const bool latched = (hardware_.emergency_reason & bit) != 0;
+  if (!run.armed) {
+    run.armed = !Signal(part.role) && !latched;
+    return false;
+  }
+  if (!Signal(part.role) && !latched) return false;
+  run.trigger = now;
+  run.expected = bit;
+  const auto lines = LinesOf(part.role);
+  OwnLatch own;
+  own.role = part.role;
+  own.bit = bit;
+  own.held = std::any_of(lines.begin(), lines.end(), [](const Line* line) { return line->held; });
+  own.edge = now;
+  own_ = own;
+  return true;
 }
 
 void Program::TickWheels(double now, double wall) {
@@ -678,6 +717,9 @@ std::optional<Refusal> Program::Keep(const json& params, double now, json* resul
 std::optional<Motion> Program::MotionNow() const {
   if (!run_ || !IsDrive(StepOf(*run_))) return std::nullopt;
   const Step& step = StepOf(*run_);
+  if (IsGround(step)) {
+    return Motion{step.id, false, std::max(Speed(step), step.Number("bumper_speed")), step.Number("turn_rate")};
+  }
   return Motion{step.id, true, Speed(step), TurnRate(step)};
 }
 
@@ -705,6 +747,7 @@ bool Program::TakeEnd() {
 }
 
 json Program::DriveValues(const Run& run, const Step& step, bool final) const {
+  if (IsGround(step)) return GroundValues(run, step);
   json values = json::array();
   const auto judged = [](const std::string& state) {
     return state == "ok" ? json(true) : state == "failed" ? json(false) : json();

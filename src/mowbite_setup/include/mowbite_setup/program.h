@@ -138,8 +138,8 @@ class Program {
   void SetLayer(Layer layer, std::set<std::string> shadowed);
   void OnCapabilities(const Capabilities& capabilities);
   void OnImu(const ImuSample& sample, double now);
-  // solution as GnssFix has it (3 float, 4 fixed), accuracy in m.
-  void OnFix(int solution, double accuracy, double now);
+  // solution as GnssFix has it (3 float, 4 fixed), accuracy in m, the antenna at x, y in the map frame (m).
+  void OnFix(int solution, double accuracy, double x, double y, double now);
   void OnWorld(const World& world);
   // hw/wheel_odom as the speeds of the wheels (m/s, forwards positive).
   void OnWheels(double left, double right, double now);
@@ -333,6 +333,18 @@ class Program {
     double pressed_wall = 0;
     std::string pressed_reason;
     json pressed_fields;
+    // ground: the way by odometry since the trigger (m, any direction), the way along since the part began (m,
+    // forwards positive), how far straight went, the turn by odometry and by the IMU since the side began (rad), the
+    // side of turn (0 left, 1 right), the antenna where straight began, and what the parts measured by value id.
+    double way = 0;
+    double travel = 0;
+    double straight_way = 0;
+    double yaw_odom = 0;
+    double yaw_imu = 0;
+    int side = 0;
+    double fix_x = 0;
+    double fix_y = 0;
+    std::map<std::string, double> ground;
   };
 
   // The emergency a part of mode press brought, which the program releases itself. It exists only while every
@@ -427,6 +439,24 @@ class Program {
   void TickDrive(double now, double wall);
   void NoteDriverBack(const Hardware& hardware, double now);
   void TickWheels(double now, double wall);
+  // ground.cpp: the step on the ground.
+  static bool IsGround(const Step& step);
+  // The part of the running step ground is one the user ends by an input: stop or bumper.
+  bool GroundPress() const;
+  // What the part of the running step ground drives with.
+  Command GroundCommand() const;
+  // What keeps the step ground from starting besides what keeps every step that moves.
+  std::vector<Refusal> GroundProblems(double now) const;
+  void BeginGroundPart(double now, double wall);
+  void TickGround(double now, double wall);
+  // ground: the wheels stand after the stop of a part; false once the step failed.
+  bool GroundStood(double max_time, double max_way, double now, double wall);
+  void GroundTurnDone(double now, double wall);
+  void GroundStraightDone(double now, double wall);
+  void NextGroundPart(double now, double wall);
+  json GroundValues(const Run& run, const Step& step) const;
+  // The part of the running step that waits for its input took it: trigger, expected emergency and own latch.
+  bool TakeTrigger(const Part& part, double now);
   void EnterDrive(Drive drive, double now, double wall);
   void NextPass(double now, double wall);
   void DriveFail(const std::string& reason, const std::string& message, json fields, double now, double wall);
@@ -489,6 +519,8 @@ class Program {
   double imu_at_ = -1;
   int solution_ = 0;
   double accuracy_ = 0;
+  double fix_x_ = 0;
+  double fix_y_ = 0;
   std::deque<double> fixes_;
   World world_;
   // The mower left the station, mowed and is on its way back by itself: what dock_test and mow wait for.

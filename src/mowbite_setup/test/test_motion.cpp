@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <optional>
 #include <string>
 #include <vector>
@@ -27,6 +28,13 @@ const char* const kList = R"({
     {"id": "driver_end", "stage": "wheels", "check": "driver_end", "confirm": ["raised", "hand_at_stop"],
      "params": {"emergency": ["HIGH_LEVEL"]}}
   ]})";
+
+// The list with the step on the ground after those jacked up.
+std::string GroundList() {
+  json list = json::parse(kList);
+  list["steps"].push_back({{"id", "ground"}, {"stage", "ground"}, {"check", "ground"}, {"confirm", {"area_clear"}}});
+  return list.dump();
+}
 
 const char* const kInputsPassed =
     R"({"schema": 1, "platform": "tron", "steps": {"stop": {"state": "ok"}, "lift": {"state": "ok"},
@@ -97,7 +105,7 @@ struct Mower {
         setpoint_at = now;
       }
     }
-    const double kept = host ? (watchdog ? 0.5 : 1e9) : hold_without_host;
+    const double kept = host ? (watchdog ? watchdog_s : 1e9) : hold_without_host;
     double left = 0, right = 0;
     if (hardware.emergency_reason == 0 && setpoint_at >= 0 && now - setpoint_at <= kept) {
       left = setpoint.linear - setpoint.angular * kTrack / 2;
@@ -128,6 +136,18 @@ struct Mower {
     if (gone_until < 0) {
       program.OnHardware(hardware, now);
       program.OnWheels(left, right, now);
+    }
+    if (on_ground) {
+      // The mower moves as its wheels turn; the IMU and the antenna (at base_link) see it.
+      const double turn = (right - left) / kTrack;
+      yaw += turn * kTick;
+      x += (left + right) / 2 * std::cos(yaw) * kTick;
+      y += (left + right) / 2 * std::sin(yaw) * kTick;
+      program.OnImu({0, 0, 9.81, turn * imu_scale}, now);
+      if (now - fix_at >= 0.2) {
+        fix_at = now;
+        program.OnFix(solution, 0.02, x * gnss_scale, y * gnss_scale, now);
+      }
     }
     program.Tick(now, kWall + now);
     if (const auto release = program.TakeRelease()) {
@@ -219,6 +239,30 @@ struct Mower {
     hardware.*input = false;
   }
 
+  // On the ground with an RTK fix; with a date the lock is open.
+  void PutOnGround(bool date = true) {
+    on_ground = true;
+    if (date) capabilities.safety_measurement_date = "2026-11-17";
+    program.OnCapabilities(capabilities);
+    Run(0.5);
+  }
+
+  // Runs until part n of ground (from 1) drives, then triggers the input with its emergency and lets go after hold s.
+  void PressOnGround(int part, bool Hardware::*input, uint32_t bits, double hold = 0.5) {
+    const auto driving = [this, part] {
+      const json progress = StepState("ground")["progress"];
+      return progress.is_object() && progress["n"] == part && std::abs(setpoint.linear) > 0.01 &&
+             hardware.emergency_reason == 0;
+    };
+    for (const double end = now + 30; now < end && !driving();) Step();
+    ASSERT_TRUE(driving()) << StepState("ground").dump();
+    Run(0.5);
+    hardware.*input = true;
+    Latch(bits);
+    Run(hold);
+    hardware.*input = false;
+  }
+
   Program program;
   Capabilities capabilities;
   Hardware hardware;
@@ -231,6 +275,15 @@ struct Mower {
   bool keep = true;
   bool comes_back = true;
   double hold_without_host = 0.2;
+  double watchdog_s = 0.5;
+  bool on_ground = false;
+  double x = 0;
+  double y = 0;
+  double yaw = 0;
+  int solution = 4;
+  double imu_scale = 1;
+  double gnss_scale = 1;
+  double fix_at = -1;
   Command setpoint;
   double setpoint_at = -1;
   double silent_until = -1;
@@ -498,4 +551,147 @@ TEST(Motion, WheelsThatRunOnCloseTheLock) {
   EXPECT_EQ(lock["causes"][0]["step"], "no_command");
   EXPECT_EQ(lock["causes"][0]["reason"], "LIMIT");
   EXPECT_EQ(lock["causes"][0]["limit"], runs_on.StepState("no_command")["values"][0]["max"]);
+}
+
+TEST(Ground, DrivesItsPartsInOneRunAndPasses) {
+  Mower mower(true, GroundList().c_str());
+  mower.PutOnGround();
+  const json motion = mower.StepState("ground")["motion"];
+  EXPECT_EQ(motion["raised"], false);
+  EXPECT_EQ(motion["max_speed"], mowbite_api::kSetupGroundSpeed);
+  EXPECT_EQ(mower.Start("ground"), "CONFIRM_MISSING");
+  ASSERT_EQ(mower.Start("ground", json::array({"area_clear"})), "");
+  ASSERT_TRUE(mower.program.MotionNow());
+  EXPECT_FALSE(mower.program.MotionNow()->raised);
+  EXPECT_DOUBLE_EQ(mower.program.MotionNow()->max_linear, 0.3);
+  EXPECT_DOUBLE_EQ(mower.program.MotionNow()->max_angular, 0.3);
+  // straight and turn by themselves; stop back towards the start.
+  mower.PressOnGround(3, &Hardware::stop, Bit("STOP"));
+  EXPECT_LT(mower.setpoint.linear, 0.0);
+  // Pressed in its middle the bumper may bring both sides at once.
+  mower.PressOnGround(4, &Hardware::bumper_left, Bit("COLLISION") | Bit("COLLISION_MULTIPLE"));
+  const json end = mower.RunToEnd(20);
+  ASSERT_EQ(end["state"], "ok") << end.dump();
+  const json step = mower.StepState("ground");
+  for (const auto& value : step["values"]) EXPECT_EQ(value["ok"], true) << value.dump();
+  EXPECT_NEAR(ValueOf(step, "straight_gnss")["value"].get<double>(), 1.0, 0.03);
+  EXPECT_NEAR(ValueOf(step, "turn_left")["value"].get<double>(), 1.0, 0.03);
+  EXPECT_NEAR(ValueOf(step, "turn_right")["value"].get<double>(), 1.0, 0.03);
+  // The watchdog of 0.5 s: about 0.15 m on after the program fell silent.
+  EXPECT_NEAR(ValueOf(step, "straight_stand")["value"].get<double>(), 0.5, 0.1);
+  EXPECT_NEAR(ValueOf(step, "straight_way")["value"].get<double>(), 0.15, 0.04);
+  EXPECT_LE(ValueOf(step, "stop_stand")["value"].get<double>(), 0.1);
+  EXPECT_EQ(ValueOf(step, "turn_left")["texts"]["de"]["name"], "Drehen: Drehung Lagesensor");
+  // Both emergencies released by the program.
+  EXPECT_EQ(mower.hardware.emergency_reason, 0u);
+  EXPECT_EQ(mower.releases, 2);
+  mower.Run(0.1);
+  EXPECT_EQ(mower.motion_ends, std::vector<std::string>{"ground"});
+}
+
+TEST(Ground, NeedsAFixAndWithTheLockClosedTheStepsJackedUp) {
+  Mower mower(true, GroundList().c_str());
+  mower.solution = 3;
+  mower.PutOnGround(false);
+  json blocked = mower.StepState("ground")["blocked"];
+  ASSERT_EQ(blocked.size(), 2u) << blocked.dump();
+  EXPECT_EQ(blocked[0]["reason"], "NO_RTK");
+  EXPECT_EQ(blocked[1]["reason"], "SAFETY_AIR");
+  EXPECT_EQ(mower.Start("ground", json::array({"area_clear"})), "NO_RTK");
+  mower.solution = 4;
+  mower.Run(0.5);
+  EXPECT_EQ(mower.Start("ground", json::array({"area_clear"})), "SAFETY_AIR");
+  // Passed jacked up, also with the lock closed.
+  Mower passed(false, GroundList().c_str());
+  json record = json::parse(kInputsPassed);
+  for (const char* step : {"wheels", "stop_moving", "no_command", "silence", "driver_end"}) {
+    record["steps"][step] = {{"state", "ok"}};
+  }
+  ASSERT_TRUE(passed.program.Load(record.dump(), kWall, nullptr));
+  passed.PutOnGround(false);
+  EXPECT_EQ(passed.StepState("ground")["blocked"], json::array());
+  // With the lock open the steps jacked up are not asked for.
+  Mower open(true, GroundList().c_str());
+  open.PutOnGround(true);
+  EXPECT_EQ(open.StepState("ground")["blocked"], json::array());
+}
+
+TEST(Ground, AMowerThatDoesNotStandClosesTheLock) {
+  {
+    Mower runs_on(true, GroundList().c_str());
+    runs_on.watchdog = false;
+    runs_on.PutOnGround();
+    ASSERT_EQ(runs_on.Start("ground", json::array({"area_clear"})), "");
+    const json end = runs_on.RunToEnd(30);
+    ASSERT_EQ(end["reason"], "NO_STANDSTILL") << end.dump();
+    EXPECT_EQ(end["part"], "straight");
+    const auto text = runs_on.program.TakeLock();
+    ASSERT_TRUE(text);
+    EXPECT_EQ(json::parse(*text)["causes"][0]["reason"], "NO_STANDSTILL");
+    runs_on.Run(0.1);
+    EXPECT_FALSE(runs_on.program.CommandNow());
+  }
+  Mower slow(true, GroundList().c_str());
+  slow.watchdog_s = 1.5;
+  slow.PutOnGround();
+  ASSERT_EQ(slow.Start("ground", json::array({"area_clear"})), "");
+  const json end = slow.RunToEnd(30);
+  ASSERT_EQ(end["reason"], "LIMIT") << end.dump();
+  EXPECT_EQ(end["value_id"], "straight_stand");
+  EXPECT_TRUE(slow.program.TakeLock());
+}
+
+TEST(Ground, TheWayByGnssAndTheTurnOfTheImuAreChecked) {
+  {
+    Mower gnss(true, GroundList().c_str());
+    gnss.gnss_scale = 1.5;
+    gnss.PutOnGround();
+    ASSERT_EQ(gnss.Start("ground", json::array({"area_clear"})), "");
+    const json end = gnss.RunToEnd(30);
+    ASSERT_EQ(end["reason"], "LIMIT") << end.dump();
+    EXPECT_EQ(end["value_id"], "straight_gnss");
+  }
+  {
+    Mower imu(true, GroundList().c_str());
+    imu.imu_scale = -1;
+    imu.PutOnGround();
+    ASSERT_EQ(imu.Start("ground", json::array({"area_clear"})), "");
+    const json end = imu.RunToEnd(40);
+    ASSERT_EQ(end["reason"], "WRONG_DIRECTION") << end.dump();
+    EXPECT_EQ(end["part"], "turn");
+    EXPECT_TRUE(imu.program.TakeLock());
+  }
+  Mower lost(true, GroundList().c_str());
+  lost.PutOnGround();
+  ASSERT_EQ(lost.Start("ground", json::array({"area_clear"})), "");
+  lost.Run(2);
+  lost.solution = 3;
+  const json end = lost.RunToEnd(30);
+  ASSERT_EQ(end["reason"], "NO_RTK") << end.dump();
+  EXPECT_FALSE(lost.program.TakeLock());
+}
+
+TEST(Ground, AStopNotPressedAsksOnceBackAtTheStart) {
+  Mower mower(true, GroundList().c_str());
+  mower.PutOnGround();
+  ASSERT_EQ(mower.Start("ground", json::array({"area_clear"})), "");
+  json pressed;
+  for (const double end = mower.now + 60; mower.now < end && pressed.is_null();) {
+    mower.Step();
+    const json step = mower.StepState("ground");
+    for (const auto& input : step["inputs"]) {
+      if (input["name"] == "pressed" && input["ask"].get<bool>()) pressed = input;
+    }
+  }
+  ASSERT_FALSE(pressed.is_null()) << (mower.ends.empty() ? mower.StepState("ground").dump() : mower.ends.back().dump());
+  EXPECT_EQ(mower.StepState("ground")["progress"]["n"], 3);
+  // It came back to about where straight began and stands there.
+  EXPECT_LT(std::abs(mower.x), 0.3);
+  EXPECT_EQ(mower.program.CommandNow()->linear, 0.0);
+  json params = {{"step", "ground"}, {"version", mower.program.version()}, {"values", {{"pressed", "no"}}}};
+  ASSERT_FALSE(mower.program.Answer(params, mower.now, kWall + mower.now));
+  const json end = mower.RunToEnd(1);
+  EXPECT_EQ(end["reason"], "NOT_DONE") << end.dump();
+  EXPECT_EQ(end["part"], "stop");
+  EXPECT_FALSE(mower.program.TakeLock());
 }

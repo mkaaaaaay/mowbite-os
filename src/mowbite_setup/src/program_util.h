@@ -1,4 +1,4 @@
-// Pieces program.cpp and motion.cpp share.
+// Pieces program.cpp, motion.cpp and ground.cpp share.
 #ifndef MOWBITE_SETUP_PROGRAM_UTIL_H
 #define MOWBITE_SETUP_PROGRAM_UTIL_H
 
@@ -15,6 +15,10 @@ namespace mowbite_setup::util {
 // A source counts as there with a message this young (s); a running step gives up after kNoData without one.
 constexpr double kFresh = 1.0;
 constexpr double kNoData = 3.0;
+// A step that moves the wheels: the logic takes SETUP within kEnterWait, the wheels turn within kStartWait of the
+// first command (s).
+constexpr double kEnterWait = 2.0;
+constexpr double kStartWait = 3.0;
 
 inline uint32_t LatchBit() {
   static const uint32_t bit = EmergencyBit("LATCH");

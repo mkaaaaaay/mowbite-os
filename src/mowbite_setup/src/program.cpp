@@ -304,6 +304,12 @@ void Program::OnImu(const ImuSample& sample, double now) {
     ++run.gravity_count;
     return;
   }
+  if (IsGround(step)) {
+    const double dt = run.last_imu < 0 ? 0.0 : std::clamp(now - run.last_imu, 0.0, 0.1);
+    run.last_imu = now;
+    run.yaw_imu += sample.gz * dt;
+    return;
+  }
   if (step.check != "imu") return;
   const double a[3] = {sample.ax, sample.ay, sample.az};
   const double dt = run.last_imu < 0 ? 0.0 : std::clamp(now - run.last_imu, 0.0, 0.1);
@@ -324,9 +330,11 @@ void Program::OnImu(const ImuSample& sample, double now) {
   if (run.phase == Phase::kArmed && std::abs(sample.gz) > kTurnFloor) run.yaw += sample.gz * dt;
 }
 
-void Program::OnFix(int solution, double accuracy, double now) {
+void Program::OnFix(int solution, double accuracy, double x, double y, double now) {
   solution_ = solution;
   accuracy_ = accuracy;
+  fix_x_ = x;
+  fix_y_ = y;
   fixes_.push_back(now);
   while (!fixes_.empty() && now - fixes_.front() > kFixWindow) fixes_.pop_front();
 }
@@ -716,7 +724,7 @@ json Program::SafetyState() const {
 }
 
 bool Program::CanAsk(const Step& step) {
-  return step.check == "input" || step.check == "imu" || step.check == "stop_moving";
+  return step.check == "input" || step.check == "imu" || step.check == "stop_moving" || step.check == "ground";
 }
 
 void Program::AskPressed(const std::string& reason, json fields, double now, double wall) {
@@ -1638,7 +1646,7 @@ json Program::Blocked(const Step& step, double now) const {
     return blocked;
   }
   if (IsRun(step) && IsDrive(step)) {
-    const bool releasing = run_->drive == Drive::kRelease && step.check == "stop_moving";
+    const bool releasing = run_->drive == Drive::kRelease && (step.check == "stop_moving" || IsGround(step));
     if (releasing && Signal(step.parts[run_->part].role)) {
       add("INPUT_ACTIVE", "The input " + step.parts[run_->part].role + " is still switched");
     }
@@ -1836,7 +1844,8 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
         progress = {{"n", run_->round + 1}, {"of", std::lround(step.Number("rounds"))}};
       }
       // The user acts within this: the trigger of stop_moving, the answer of one_wheel.
-      if (run_->move_began >= 0 && step.check == "stop_moving" && run_->drive == Drive::kTrigger) {
+      const bool press = step.check == "stop_moving" || (IsGround(step) && GroundPress());
+      if (run_->move_began >= 0 && press && run_->drive == Drive::kTrigger) {
         ends_at = std::floor(run_->drive_wall + step.Number("time"));
       } else if (step.check == "wheels" && run_->drive == Drive::kMeasure && step.parts[run_->part].id == "one_wheel") {
         ends_at = std::floor(run_->drive_wall + step.Number("answer_time"));

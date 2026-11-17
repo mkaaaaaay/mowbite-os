@@ -228,6 +228,13 @@ void ReadParts(const json& entry, const std::string& where, Step* step) {
     for (const auto& name : mowbite_api::SetupWheelParts()) {
       step->parts.push_back({name.id, "", "", "", Texts(name.texts)});
     }
+  } else if (step->check == "ground") {
+    if (given) throw Wrong(where + ": the parts of ground are fixed");
+    // stop and bumper wait for their input as a part of stop_moving does.
+    for (const auto& name : mowbite_api::SetupGroundParts()) {
+      const bool press = name.id == "stop" || name.id == "bumper";
+      step->parts.push_back({name.id, press ? "press" : "", press ? name.id : "", "", Texts(name.texts)});
+    }
   } else if (step->check == "imu") {
     const std::vector<std::string> moves =
         given ? TextsOf(entry, "parts", where) : std::vector<std::string>{"front_up", "left_up", "turn_left"};
@@ -237,7 +244,7 @@ void ReadParts(const json& entry, const std::string& where, Step* step) {
       step->parts.push_back({move, "", "", move, Texts(name->texts)});
     }
   } else if (given) {
-    throw Wrong(where + ": parts go with input, inputs_assign, imu, stop_moving and wheels only");
+    throw Wrong(where + ": parts go with input, inputs_assign, imu, stop_moving, wheels and ground only");
   }
   if (step->parts.size() > static_cast<size_t>(mowbite_api::kSetupMaxParts)) throw Wrong(where + ": too many parts");
   if ((step->check == "input" || step->check == "inputs_assign" || step->check == "imu" ||
@@ -371,8 +378,11 @@ Step ReadStep(const json& entry, const std::vector<Step>& before, size_t* stage_
     }
   }
   if (step.kind == "drive") {
-    // The wheels turn only with the mower jacked up, a hand at a STOP button and the inputs checked standing.
-    for (const char* point : {"raised", "hand_at_stop"}) {
+    // The wheels turn only with the mower jacked up and a hand at a STOP button, on the ground with the way clear and
+    // the user next to it, and with the inputs checked standing.
+    const bool ground = step.check == "ground";
+    for (const char* point : ground ? std::vector<const char*>{"area_clear"}
+                                    : std::vector<const char*>{"raised", "hand_at_stop"}) {
       const auto has = [point](const Named& named) { return named.id == point; };
       if (std::none_of(step.confirm.begin(), step.confirm.end(), has)) {
         throw Wrong(where + ": a step that moves the wheels confirms " + point);

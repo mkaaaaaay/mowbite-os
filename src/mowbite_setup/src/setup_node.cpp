@@ -220,7 +220,7 @@ class SetupNode : public rclcpp::Node {
     gnss_sub_ = create_subscription<mowbite_msgs::msg::GnssFix>(
         "gps/absolute_pose", 10, [this](mowbite_msgs::msg::GnssFix::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          program_->OnFix(msg->solution, msg->accuracy, MonotonicSeconds());
+          program_->OnFix(msg->solution, msg->accuracy, msg->x, msg->y, MonotonicSeconds());
         });
     state_sub_ = create_subscription<mowbite_msgs::msg::RobotState>(
         "bridge/robot_state", 10, [this](mowbite_msgs::msg::RobotState::ConstSharedPtr msg) {
