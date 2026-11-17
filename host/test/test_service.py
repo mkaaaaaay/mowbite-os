@@ -101,6 +101,13 @@ class RequestTest(HostBase):
         self.assertEqual(answer["result"]["components"][0]["id"], "os")
         self.assertEqual(self.updater.state["app_version"], "1.5.0")
 
+    def test_only_an_app_version_that_compares_is_kept(self):
+        self.answer("update.status", {"app_version": "1.5.0-beta.2"})
+        for bad in ("latest", "", "1." * 40 + "0", "1.5.0-" + "x" * 60):
+            self.assertIn("result", self.answer("update.status", {"app_version": bad}))
+            self.updater.remember_app(bad)
+        self.assertEqual(self.updater.state["app_version"], "1.5.0-beta.2")
+
     def test_refusals_name_their_reason(self):
         error = self.answer("update.start", {"component": "os"})["error"]
         self.assertEqual((error["code"], error["data"]), (-32600, {"event": "UPDATE_REFUSED", "reason": "NO_NEWER",

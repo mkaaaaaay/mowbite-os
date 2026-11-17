@@ -45,6 +45,7 @@ AUTO_DEFAULT = {"enabled": False, "from": "02:00", "to": "05:00"}
 ORIGIN_DEFAULT = {"channel": "stable", "index_serial": 0, "last": None}
 IDLE = {"phase": "idle", "component": None, "revision": None, "reason": None}
 HHMM = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
+MAX_APP_VERSION = 64
 
 
 # Minute of the day of HH:MM.
@@ -97,6 +98,7 @@ class Updater:
         self._candidates = []
         # Whether a hold of this updater may stand: asked for at the gate or written by the switch.
         self._holding = False
+        self._bad_app_logged = False
         self.gate_wait = GATE_WAIT
         self.state = self._load()
 
@@ -279,8 +281,16 @@ class Updater:
                 print(f"update.json: {error}", flush=True)
         self._changed()
 
+    # Only a version of up to MAX_APP_VERSION characters that compares is kept; another is logged once.
     def remember_app(self, app_version):
-        if isinstance(app_version, str) and app_version != self.state["app_version"]:
+        if not isinstance(app_version, str):
+            return
+        if len(app_version) > MAX_APP_VERSION or compat.version_tuple(app_version) is None:
+            if not self._bad_app_logged:
+                self._bad_app_logged = True
+                print(f"app_version {app_version[:MAX_APP_VERSION]!r} is no version: ignored", flush=True)
+            return
+        if app_version != self.state["app_version"]:
             with self._lock:
                 self.state["app_version"] = app_version
                 self._save()
