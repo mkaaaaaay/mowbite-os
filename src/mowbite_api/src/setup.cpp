@@ -122,21 +122,46 @@ std::vector<ReasonEntry> DriveBlocks() {
                  Both({"Auf der Ladestation", "Auf der Ladestation dreht der Mäher keine Räder.",
                        "Den Mäher von der Station nehmen und aufbocken."},
                       {"On the docking station", "The mower turns no wheels on the docking station.",
-                       "Take the mower off the station and jack it up."}))};
+                       "Take the mower off the station and jack it up."})),
+          Reason("NO_RTK", "info", "user", "A step on the ground needs an RTK fix: it compares its way with the GNSS",
+                 {},
+                 Both({"Keine genaue Position",
+                       "Für die Fahrt am Boden braucht der Mäher eine genaue Position (RTK fix).",
+                       "Den Mäher unter freien Himmel stellen und warten, bis die Position genau ist."},
+                      {"No exact position", "Driving on the ground needs an exact position (RTK fix).",
+                       "Put the mower under the open sky and wait until the position is exact."})),
+          Reason("SAFETY_AIR", "info", "user",
+                 "The lock is closed: a step on the ground needs every safety step jacked up passed first",
+                 {List("steps", "The steps to pass first", Type::kString, false)},
+                 Both({"Erst aufgebockt prüfen",
+                       "Bevor der Mäher am Boden fährt, müssen die Prüfungen mit aufgebocktem Mäher bestanden sein.",
+                       "Die genannten Schritte mit aufgebocktem Mäher abschließen."},
+                      {"Check jacked up first",
+                       "Before the mower drives on the ground, the checks with the mower jacked up have to pass.",
+                       "Finish the steps named with the mower jacked up."}))};
 }
 
 // What holds for every check of kind drive.
 std::string DriveRules() {
-  return "Every step that moves the wheels: the mower is jacked up and setup.start confirms raised and hand_at_stop; "
-         "the mower is in IDLE, off the charging contacts, without emergency or hold; every step input of the roles "
-         "stop, lift and bumper of the list is ok (SAFETY_INPUTS, not to be skipped). The mower is in the sub state "
-         "SETUP meanwhile. setup.keep at least every " +
+  return "Every step that moves the wheels: jacked up (motion.raised) setup.start confirms raised and hand_at_stop, on "
+         "the ground area_clear; the mower is in IDLE, off the charging contacts, without emergency or hold; every "
+         "step input of the roles stop, lift and bumper of the list is ok (SAFETY_INPUTS, not to be skipped). The "
+         "mower is in the sub state SETUP meanwhile. setup.keep at least every " +
          Num(kSetupKeepTimeout) + " s keeps it going (else RELEASED), setup.abort and any emergency it did not ask "
          "for stop it; a single move lasts " + Num(kSetupMoveTime) + " s at most; motion of the step names its bounds";
 }
 
 SetupParam Speed() {
   return Amount("speed", "m/s", 0.02, kSetupRaisedSpeed, 0.05, "Speed of each wheel");
+}
+
+// Wheels stand still within this time of the trigger and go at most this far after it (m).
+SetupParam StandTime(std::string name, double def, std::string text) {
+  return Seconds(std::move(name), 0.1, 3, def, std::move(text));
+}
+
+SetupParam StandWay(std::string name, double def, std::string text) {
+  return Amount(std::move(name), "m", 0.05, 1, def, std::move(text));
 }
 
 SetupParam StopMax() {
@@ -315,6 +340,9 @@ const std::vector<SetupName>& SetupPoints() {
        Named("Hand an der STOP-Taste", "Hand at the STOP button")},
       {"blade_removed", "The blade is taken off", Named("Messer abgenommen", "Blade removed")},
       {"clear", "Nobody is close to the mower", Named("Niemand in der Nähe", "Nobody close by")},
+      {"area_clear", "3 m are clear in front of and behind the mower, and the user stands next to it at a STOP button",
+       Named("3 m frei vor und hinter dem Mäher, ich stehe daneben an der STOP-Taste",
+             "3 m clear in front of and behind the mower, I stand next to it at the STOP button")},
       {"outdoors", "The mower stands under the open sky",
        Named("Mäher steht im Freien", "Mower stands under the open sky")},
   };
@@ -404,6 +432,25 @@ const std::vector<SetupName>& SetupWheelParts() {
   return parts;
 }
 
+const std::vector<SetupName>& SetupGroundParts() {
+  static const std::vector<SetupName> parts = {
+      {"straight", "About distance m straight on at speed, then no command: it stands by itself",
+       Both({"Geradeaus", "Der Mäher fährt etwa 2 m geradeaus und bleibt von selbst stehen.", ""},
+            {"Straight on", "The mower drives about 2 m straight on and stops by itself.", ""})},
+      {"turn", "A turn on the spot by angle to the left, then back to the right",
+       Both({"Drehen", "Der Mäher dreht sich auf der Stelle nach links und wieder zurück.", ""},
+            {"Turn", "The mower turns on the spot to the left and back again.", ""})},
+      {"stop", "Back towards the start at speed until the user presses STOP",
+       Both({"STOP drücken", "Der Mäher fährt zurück zum Start. Jetzt die STOP-Taste drücken.", ""},
+            {"Press STOP", "The mower drives back towards the start. Press the STOP button now.", ""})},
+      {"bumper", "Slowly in bumper_direction against a soft obstacle the user holds, until the bumper stops it",
+       Both({"Stoßfänger", "Der Mäher fährt langsam an. Ein weiches Hindernis vor den Stoßfänger halten und "
+                           "andrücken lassen.", ""},
+            {"Bumper", "The mower drives slowly. Hold a soft obstacle against the bumper and let it press.", ""})},
+  };
+  return parts;
+}
+
 const SetupName& SetupWheelQuestion() {
   static const SetupName question = {
       "wheel", "Which wheel turns while the part one_wheel runs",
@@ -450,16 +497,16 @@ namespace {
 
 // The checks of the safety of the mower: the inputs, the IMU and everything that moves the wheels.
 const std::set<std::string>& SafetyChecks() {
-  static const std::set<std::string> names = {"input", "imu", "wheels", "stop_moving", "no_command", "silence",
-                                              "driver_end"};
+  static const std::set<std::string> names = {"input",   "imu",        "wheels", "stop_moving", "no_command",
+                                              "silence", "driver_end", "ground"};
   return names;
 }
 
 // Reasons of SETUP_STEP that close the lock when a safety step fails with them: what was measured broke a bound or
 // the hardware did not do what it has to. NOT_SEEN only comes after the user said yes to the question pressed.
 const std::set<std::string>& ClosingReasons() {
-  static const std::set<std::string> codes = {"LIMIT",           "STARTED_AGAIN", "NO_EMERGENCY",
-                                              "WRONG_DIRECTION", "WRONG_WHEEL",   "NOT_SEEN"};
+  static const std::set<std::string> codes = {"LIMIT",       "STARTED_AGAIN", "NO_EMERGENCY", "WRONG_DIRECTION",
+                                              "WRONG_WHEEL", "NO_STANDSTILL", "NOT_SEEN"};
   return codes;
 }
 
@@ -686,6 +733,53 @@ const std::vector<SetupCheck>& SetupChecks() {
              "stay locked until the program releases them.",
              "If the wheels do not stand or the driver does not come back, don't let the mower drive and restart "
              "MowBite OS."})},
+      {"ground", "drive", true, false,
+       "On the ground, the parts of ground_parts in one run. straight: about distance m forwards at speed, then the "
+       "program sends nothing: the mower stands within quiet_max s and goes quiet_way m at most after the last "
+       "command, and the way by odometry and by gps/absolute_pose differ by the share ratio at most. turn: angle deg "
+       "to the left on the spot at turn_rate, then back to the right: the IMU turns with the sign of each command and "
+       "by the odometry within the share ratio. stop: back towards the start at speed, at most as far as straight "
+       "went, until the user presses STOP: the mower stands within stop_max s and goes stop_way m at most after the "
+       "press, the emergency follows, nothing starts for hold s, the program releases it itself and nothing starts "
+       "for hold s. bumper: at bumper_speed in bumper_direction against a soft obstacle the user holds, the same as "
+       "stop for the bumper. No new command after a stop on the ground. A stop or bumper the step saw nothing of "
+       "within time asks pressed. Needs an RTK fix (NO_RTK) and, while the lock is closed, every safety step jacked up "
+       "of the list passed (SAFETY_AIR). Not jacked up: mowbite_safety holds it to its bounds on the ground, without "
+       "pose and fence. " + DriveRules(),
+       {Amount("speed", "m/s", 0.05, kSetupGroundSpeed, kSetupGroundSpeed, "Speed of straight and stop"),
+        Amount("distance", "m", 1, 2.5, 2, "How far straight goes before the program falls silent"),
+        Amount("turn_rate", "rad/s", 0.25, kSetupGroundTurn, 0.3, "Turn rate of turn"),
+        Amount("angle", "deg", 45, 120, 90, "How far turn goes to each side"),
+        Amount("ratio", "", 0.05, 0.5, 0.2,
+               "Share by which the way by GNSS may differ from the odometry, and the turn of the IMU from it"),
+        Amount("bumper_speed", "m/s", 0.03, 0.1, 0.1, "Speed of bumper"),
+        Word("bumper_direction", "The way bumper drives: where the bumper is", {"forward", "backward"}, false,
+             "forward"),
+        Seconds("time", 3, kSetupMoveTime, 8, "stop and bumper drive at most this long for the action"),
+        StandTime("quiet_max", 1, "straight: the mower stands within this time of the last command"),
+        StandWay("quiet_way", 0.6, "straight: the mower goes at most this far after the last command"),
+        StandTime("stop_max", 0.5, "stop and bumper: the mower stands within this time of the trigger"),
+        StandWay("stop_way", 0.3, "stop and bumper: the mower goes at most this far after the trigger"), Hold()},
+       {{"stand", "s", "From the last command (straight) or the trigger to standing wheels, by part: <part>_stand",
+         Named("Standzeit", "Time to stand")},
+        {"way", "m", "The way by odometry from the last command or the trigger until the wheels stand, by part: "
+                     "<part>_way",
+         Named("Weg bis zum Stand", "Way until standing")},
+        {"gnss", "", "straight: the way by GNSS divided by the way by odometry", Named("Weg nach GPS", "Way by GPS")},
+        {"turn", "", "turn: the turn of the IMU divided by the one of the odometry, by side: turn_left, turn_right",
+         Named("Drehung Lagesensor", "Turn of the motion sensor")}},
+       DriveReasons({"WRONG_DIRECTION", "LIMIT", "NO_STANDSTILL", "STARTED_AGAIN", "NO_EMERGENCY", "NOT_RELEASED",
+                     "NOT_SEEN", "NOT_DONE", "NO_RTK"}),
+       Both({"Fahren am Boden",
+             "Der Mäher fährt etwa 2 m geradeaus und bleibt von selbst stehen, dreht sich nach links und zurück, fährt "
+             "zurück, bis du STOP drückst, und zum Schluss langsam gegen ein weiches Hindernis, das du hältst.",
+             "Bleibt der Mäher nicht rechtzeitig stehen: nicht mähen lassen. Die Werte zeigen, wo es hakt; Räder, "
+             "Bremsweg und Platine prüfen."},
+            {"Driving on the ground",
+             "The mower drives about 2 m straight on and stops by itself, turns to the left and back, drives back "
+             "until you press STOP, and at the end slowly against a soft obstacle you hold.",
+             "If the mower does not stop in time, don't let it mow. The values show where it fails; check wheels, "
+             "braking distance and board."})},
   });
   return checks;
 }
@@ -770,10 +864,10 @@ Json SetupCatalog() {
            "SETUP_STEP, the screen it opens), roles of the inputs (group, emergency of a press; a role is named as its "
            "flag in hw/status) and modes of a part, moves of a step imu, conditions of a step done_when with their "
            "screen, points to confirm, reasons to skip, the question of a step inputs_assign and the delays it takes "
-           "once it is ok, the ways to restart, the parts of a step wheels and its question, the question pressed of a "
-           "safety step that saw nothing (a check with safety closes the lock when it fails with a reason that has "
-           "closes in x-reasons of SETUP_STEP), "
-           "and the limits; texts by language where the OS has them. The steps themselves come with setup.get"},
+           "once it is ok, the ways to restart, the parts of a step wheels and its question, the parts of a step "
+           "ground, the question pressed of a safety step that saw nothing (a check with safety closes the lock when "
+           "it fails with a reason that has closes in x-reasons of SETUP_STEP), and the limits; texts by language "
+           "where the OS has them. The steps themselves come with setup.get"},
           {"stages", named(SetupStages())},
           {"checks", checks},
           {"roles", roles},
@@ -786,6 +880,7 @@ Json SetupCatalog() {
           {"delay", delay},
           {"restart", named(SetupRestarts())},
           {"wheel_parts", named(SetupWheelParts())},
+          {"ground_parts", named(SetupGroundParts())},
           {"wheel", wheel},
           {"pressed", pressed},
           {"open", SetupOpens()},
@@ -801,6 +896,8 @@ Json SetupCatalog() {
             {"shape_points", kShapeMaxPoints},
             {"raised_speed", kSetupRaisedSpeed},
             {"raised_turn", kSetupRaisedTurn},
+            {"ground_speed", kSetupGroundSpeed},
+            {"ground_turn", kSetupGroundTurn},
             {"move_time", kSetupMoveTime},
             {"keep", kSetupKeepTimeout},
             {"closed", kSetupMaxClosed}}},
@@ -1138,6 +1235,13 @@ EventEntry SetupStepEvent() {
                         "Die Ursache am genannten Wert beheben, dann den Schritt wiederholen."},
                        {"Value out of bounds", "A value is outside of its bound. The list of values shows which.",
                         "Fix the cause at the value named, then repeat the step."})),
+           failed("NO_STANDSTILL", "The mower did not stand still within 3 s of the last command or of the trigger",
+                  {Part(), {"value", Type::kAny, "", false, "What was measured", {}, true, {}, ""}},
+                  Both({"Bleibt nicht stehen",
+                        "Der Mäher ist nach dem Stopp nicht zum Stillstand gekommen.",
+                        "Den Mäher nicht fahren lassen. Platine, Antrieb und Einstellungen der Plattform prüfen."},
+                       {"Does not stop", "The mower did not come to a standstill after the stop.",
+                        "Don't let the mower drive. Check board, drive and the settings of the platform."})),
            failed("NO_DATA", "A source the step needs sent nothing",
                   {Text("source", "hw/status, hw/inputs, hw/capabilities, imu/data or gps/absolute_pose", false),
                    Part()},
@@ -1146,7 +1250,9 @@ EventEntry SetupStepEvent() {
                         "Mäher einschalten, Kabel prüfen, dann wiederholen."},
                        {"No data", "The mower gets no data from board, motion sensor or GPS for this step.",
                         "Switch the mower on, check the cables, then repeat."})),
-           failed("NO_RTK", "No position of the solution, accuracy and rate asked for within the timeout", {},
+           failed("NO_RTK", "No position of the solution, accuracy and rate asked for within the timeout, or the RTK "
+                  "fix was lost in a step on the ground",
+                  {Part()},
                   Both({"Keine genaue Position",
                         "Der Mäher hat in der Zeit keine genaue Position bekommen.",
                         "Freie Sicht zum Himmel schaffen, Korrekturdaten prüfen, dann wiederholen."},

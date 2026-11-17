@@ -111,6 +111,8 @@ constexpr char kSetupDelayPrefix[] = "delay_";
 const std::vector<SetupName>& SetupRestarts();
 // The parts of a step wheels, always all of them in this order.
 const std::vector<SetupName>& SetupWheelParts();
+// The parts of a step ground, always all of them in this order.
+const std::vector<SetupName>& SetupGroundParts();
 // The question of the part one_wheel of a step wheels in inputs[] of the step, and the values setup.answer takes.
 const SetupName& SetupWheelQuestion();
 const std::vector<SetupName>& SetupWheelValues();
@@ -160,10 +162,13 @@ constexpr double kSetupGravityMin = 8.8;
 constexpr double kSetupGravityMax = 10.8;
 // setup/json goes out at most this often while a step runs (s).
 constexpr double kSetupLivePeriod = 0.5;
-// A step that moves the wheels of a mower jacked up: the most the program asks for (m/s of the body and of each
-// wheel, rad/s), and the longest single move (s). mowbite_safety holds its own bounds on top (kSetupMaxLinear).
+// A step that moves the wheels: the most the program asks for jacked up and on the ground (m/s of the body and of
+// each wheel, rad/s), and the longest single move (s). mowbite_safety holds its own bounds on top (kSetupMaxLinear,
+// kSetupGroundMaxLinear, kSetupMaxMove).
 constexpr double kSetupRaisedSpeed = 0.1;
 constexpr double kSetupRaisedTurn = 0.4;
+constexpr double kSetupGroundSpeed = 0.3;
+constexpr double kSetupGroundTurn = 0.4;
 constexpr double kSetupMoveTime = 10.0;
 // Such a step stops when setup.keep stays away this long (s).
 constexpr double kSetupKeepTimeout = 1.0;

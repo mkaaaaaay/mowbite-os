@@ -598,6 +598,7 @@ TEST(Catalog, TheNamesOfTheSetupProgram) {
   named(SetupAcceptValues(), "accept", true);
   named(SetupRestarts(), "restart", false);
   named(SetupWheelParts(), "wheel part", true);
+  named(SetupGroundParts(), "ground part", true);
   named(SetupWheelValues(), "wheel", true);
   ExpectTexts(SetupAccept().texts, "accept", false);
   ExpectTexts(SetupWheelQuestion().texts, "wheel", false);
@@ -635,6 +636,7 @@ TEST(Catalog, TheNamesOfTheSetupProgram) {
   EXPECT_EQ(catalog["accept"]["values"].size(), SetupAcceptValues().size());
   EXPECT_EQ(catalog["restart"].size(), SetupRestarts().size());
   EXPECT_EQ(catalog["wheel_parts"].size(), SetupWheelParts().size());
+  EXPECT_EQ(catalog["ground_parts"].size(), SetupGroundParts().size());
   EXPECT_EQ(catalog["wheel"]["values"].size(), SetupWheelValues().size());
   ASSERT_NE(FindSetupName(SetupWheelValues(), "right"), nullptr);
   ASSERT_NE(FindSetupName(SetupWheelParts(), "one_wheel"), nullptr);
@@ -681,16 +683,19 @@ TEST(Catalog, TheChecksOfTheSetupProgram) {
       if (!value.texts.empty()) ExpectTexts(value.texts, check.name + " " + value.id, false);
     }
     if (!check.texts.empty()) ExpectTexts(check.texts, check.name, true);
-    // A step that moves the wheels stays within the bounds of a mower jacked up, and a stop or end it asks for
-    // names emergencies the hardware has.
+    // A step that moves the wheels stays within the bounds of a mower jacked up or, ground alone, on the ground, and
+    // a stop or end it asks for names emergencies the hardware has.
     if (check.kind != "drive") continue;
     EXPECT_FALSE(check.texts.empty()) << check.name;
     for (const char* reason : {"NO_START", "LOGIC_REFUSED", "RELEASED", "EMERGENCY"}) {
       EXPECT_EQ(std::count(check.reasons.begin(), check.reasons.end(), reason), 1) << check.name << " " << reason;
     }
     for (const auto& param : check.params) {
-      if (param.name == "speed") {
-        EXPECT_LE(param.max, kSetupRaisedSpeed) << check.name;
+      if (param.unit == "m/s") {
+        EXPECT_LE(param.max, check.name == "ground" ? kSetupGroundSpeed : kSetupRaisedSpeed) << check.name;
+      }
+      if (param.unit == "rad/s") {
+        EXPECT_LE(param.max, check.name == "ground" ? kSetupGroundTurn : kSetupRaisedTurn) << check.name;
       }
       if (param.unit == "s" && param.name != "return_max") {
         EXPECT_LE(param.max, kSetupMoveTime) << check.name;
@@ -753,3 +758,24 @@ TEST(Catalog, TheReasonsOfTheSetupProgram) {
   }
 }
 
+
+// ground is a safety step: a mower that does not stop closes the lock, a step not done or without a fix does not.
+TEST(Catalog, GroundIsASafetyCheck) {
+  ASSERT_NE(FindSetupCheck("ground"), nullptr);
+  EXPECT_TRUE(FindSetupCheck("ground")->safety);
+  EXPECT_EQ(FindSetupCheck("ground")->kind, "drive");
+  for (const char* reason :
+       {"LIMIT", "NO_STANDSTILL", "STARTED_AGAIN", "NO_EMERGENCY", "WRONG_DIRECTION", "NOT_SEEN"}) {
+    EXPECT_TRUE(SetupClosesLock("ground", reason)) << reason;
+  }
+  for (const char* reason : {"NOT_DONE", "NO_RTK", "STOPPED", "RELEASED", "NOT_RELEASED", "NO_START"}) {
+    EXPECT_FALSE(SetupClosesLock("ground", reason)) << reason;
+  }
+  EXPECT_FALSE(SetupClosesLock("board", "LIMIT"));
+  std::vector<std::string> parts;
+  for (const auto& part : SetupGroundParts()) parts.push_back(part.id);
+  EXPECT_EQ(parts, (std::vector<std::string>{"straight", "turn", "stop", "bumper"}));
+  const Json catalog = SetupCatalog();
+  EXPECT_EQ(catalog["limits"]["ground_speed"], kSetupGroundSpeed);
+  EXPECT_NE(FindSetupName(SetupPoints(), "area_clear"), nullptr);
+}
