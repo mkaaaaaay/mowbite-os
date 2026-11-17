@@ -744,10 +744,10 @@ class McuNode : public rclcpp::Node {
     if (req.latch) {
       const uint32_t bits = req.bits ? req.bits : tron::kReasonHighLevel;
       if (bits & ~tron::kHostLatchReasons) {
-        RCLCPP_ERROR(get_logger(), "Refused to latch with reason bits 0x%x: only HIGH_LEVEL, TILT, FENCE, STUCK and UNEXPECTED_RESTART",
-                     bits);
+        RCLCPP_ERROR(get_logger(), "Refused to latch with reason bits 0x%x: %s", bits,
+                     mowbite_hold::kHostLatchRefusal);
         res.success = false;
-        res.message = "only HIGH_LEVEL, TILT, FENCE, STUCK and UNEXPECTED_RESTART can be latched by request";
+        res.message = mowbite_hold::kHostLatchRefusal;
         return;
       }
       RCLCPP_WARN(get_logger(), "Emergency latched by request (bits 0x%x): %s", bits, req.reason.c_str());

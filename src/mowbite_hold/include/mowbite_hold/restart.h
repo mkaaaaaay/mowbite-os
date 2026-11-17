@@ -16,6 +16,9 @@ constexpr uint32_t kReasonUnexpectedRestart = 1u << 21;
 // The bits a node above the driver may latch with over hw/emergency: HIGH_LEVEL, TILT, FENCE, STUCK and
 // UNEXPECTED_RESTART.
 constexpr uint32_t kHostLatchReasons = (1u << 7) | (1u << 13) | (1u << 14) | (1u << 15) | kReasonUnexpectedRestart;
+// What every driver answers to a latch with another bit.
+constexpr char kHostLatchRefusal[] =
+    "only HIGH_LEVEL, TILT, FENCE, STUCK and UNEXPECTED_RESTART can be latched by request";
 
 // In data_dir.
 constexpr char kSessionFile[] = "os-session.json";
