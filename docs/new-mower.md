@@ -28,6 +28,8 @@ no parameter services. A driver on a serial port takes it from `mowbite_serial` 
 | service | `hw/charge` | `mowbite_msgs/SetCharge` |
 | publishes, optional | `hw/button` | `mowbite_msgs/ButtonEvent` (reliable, never latched) |
 | publishes, latched, optional | `hw/inputs` | `mowbite_msgs/HardwareInputs` |
+| service, optional | `hw/silence` | `mowbite_msgs/SilenceDriver` |
+| service, optional | `hw/end` | `mowbite_msgs/EndDriver` |
 | publishes | `imu/data` | `sensor_msgs/Imu` |
 | publishes | `gps/absolute_pose` | `mowbite_msgs/GnssFix` |
 | publishes, latched | `gps/datum` | `sensor_msgs/NavSatFix` |
@@ -61,6 +63,15 @@ Duties:
   none of them stops anything, and it holds the emergency `INPUTS_LEARNING` that no release ends, so nothing moves
   until a start without it. A release is answered with `LEARNING`; what else latched meanwhile (a tilt while the
   mower is lifted) it ends by the usual checks, so the mower is never caught in learning.
+- Silence and end for the setup program (optional): `hw/silence` (seconds from 0.2 to `silence_max_s` of
+  `hw/capabilities`) makes the driver send nothing to the board from its answer on, keep publishing what it reads,
+  refuse releases and blade requests meanwhile (`SILENT`, `kBlocked`), and at the end latch `HIGH_LEVEL` (with
+  `latch_count` one up), send the blade off and three stops. `hw/end` answers and then ends the process with exit code
+  3 without another byte to the board; the start counts it like a crash and starts the driver again latched. Both
+  refuse with `READ_ONLY`, `CHARGING` (also on the raw contact), `BLADE` (lease, blade on, running down) and hw/silence
+  with `OUT_OF_RANGE` and `BUSY`. Offer them with `silence_max_s` (a parameter `silence_max` well past the time the
+  board stops without its host; 0 without) and `driver_end` in `hw/capabilities`. The steps `silence` and
+  `driver_end` measure with them how the board stops without its host.
 - Release at the mower (optional, G37): a driver that sees every sample of its stop button may recognise the gesture
   itself (`tron_mcu/stop_release.h`: free 2 s, then a short press of 0.1 to 2 s) and report HELD, LONG and CANCELED
   on `hw/button`. It never releases by itself: the logic does, like `emergency.reset`, with the `latch_count` of LONG,
@@ -288,7 +299,7 @@ restarts for it, `steps` come in the order the app shows them:
 |---|---|
 | `id`, `stage`, `check` | its name, one of `x-setup.stages` and one of `x-setup.checks` of the schema |
 | `params` | the params of the check, within the bounds the schema names; without an entry the default there |
-| `parts` | of `input`: `id`, optional `mode` (press, short), `role` and `texts`; of `inputs_assign`: `id`, `role`, `delay_ms`, optional `texts`; of `imu`: the moves in their order |
+| `parts` | of `input`: `id`, optional `mode` (press, short), `role` and `texts`; of `inputs_assign`: `id`, `role`, `delay_ms`, optional `texts`; of `imu`: the moves in their order; of `stop_moving`: `id`, `role`, optional `texts`; none of `wheels` (fixed) |
 | `value_texts` | of `choice`: `de` and `en` with `name` for every value |
 | `confirm` | points the user ticks before the step begins (`x-setup.points`, or own ones with texts) |
 | `needs` | steps ahead of it that have to be ok first |
@@ -351,7 +362,22 @@ image and accent share one viewBox. The start checks list and images by the rule
 and halts with `PLATFORM_CONFIG` and the first problem. `CMakeLists.txt` installs the folder
 (`install(DIRECTORY setup DESTINATION share/${PROJECT_NAME})`). `test_setup.py` does every step of the list of each
 platform by hand against the node (`test_setup_<name>`, with the case of the driver contract), but for a step
-`inputs_assign`, which needs the driver and the restarts.
+`inputs_assign`, which needs the driver and the restarts, and the steps that move the wheels.
+
+The steps of stage `wheels` turn the wheels of the mower jacked up (kind `drive`): `wheels` (each wheel forwards,
+backwards, both turns, then one wheel alone and the question which one turns), `stop_moving` (a STOP button or a side
+of the bumper while the wheels turn), `no_command` (the commands stop, the watchdogs have to), `silence` (rounds of
+`hw/silence`, the board has to stop by itself) and `driver_end` (`hw/end`, the driver comes back latched). Each
+confirms `raised` and `hand_at_stop` and comes after the steps `input` of stop, lift and bumper, which have to be ok,
+not skipped; the start of the list refuses it otherwise. While it runs the program sends `setup/motion` (the logic
+holds the sub state SETUP, mowbite_safety caps the commands to 0.1 m/s and 0.4 rad/s) and drives on `setup/cmd_vel`;
+the app has to call `setup.keep` at least every second. A stop or end of the driver has to bring the emergencies of
+`emergency` of the step and LATCH only, the program then releases them itself as for an input, waits `hold`, and a
+new command has to turn the wheels again. `stop_max` of `silence` comes from the board: the Tron stops 0.15 to 0.28 s
+after its last setpoint, the xCore 1.0 s after it last heard of the host (so 1.5 s there); `emergency` is what the
+driver shows after a silence (the Tron `HIGH_LEVEL`, the xCore `HIGH_LEVEL` and `TIMEOUT_HIGH_LEVEL`). `driver_end`
+is offered only while the start has at least two restarts of the driver left (`DRIVER_RESTARTS`, `driver_exit.json`).
+A mower that reports lift when jacked up cannot do these steps: its note has to tell how to put it up.
 
 The start is the same for every mower: `ros2 launch mowbite_bringup mowbite.launch.py platform:=<name>`, by default the
 platform `MOWBITE_PLATFORM` names, a value of the device (the compose file of the mower sets it, the Tron in
@@ -622,6 +648,8 @@ Around `mowbite_camera`:
       `test_setup_<name>` passes
 - [ ] A driver that learns its inputs: `inputs_assign` with `restart` in the list, a test of the step against the real
       start as `test_nx60i_inputs.py`
+- [ ] `hw/silence` and `hw/end` in the driver with `silence_max`, the steps of stage `wheels` in the list with
+      `stop_max` and `emergency` of this board, `test_setup_motion_<name>` passes
 - [ ] `mowbite.launch.py platform:=<name>` starts the stack, driver restarts latched
 - [ ] Every node of your own in the container attached to the watch (`test_stack.py`)
 - [ ] Simulation: mowing, going home, docking; `app_interface_check`

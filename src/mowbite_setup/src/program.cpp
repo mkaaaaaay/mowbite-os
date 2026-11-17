@@ -5,14 +5,14 @@
 
 #include "mowbite_api/catalog.h"
 #include "mowbite_api/setup.h"
+#include "program_util.h"
 
 namespace mowbite_setup {
 
+using namespace util;
+
 namespace {
 
-// A source counts as there with a message this young (s); a running step gives up after kNoData without one.
-constexpr double kFresh = 1.0;
-constexpr double kNoData = 3.0;
 // A step imu takes the gravity of the first half second as the mower at rest; a part begins once it is back within a
 // third of the angle asked for.
 constexpr double kRestTime = 0.5;
@@ -60,11 +60,6 @@ uint32_t TiltBit() {
   return bit;
 }
 
-uint32_t LatchBit() {
-  static const uint32_t bit = EmergencyBit("LATCH");
-  return bit;
-}
-
 uint32_t LearningBit() {
   static const uint32_t bit = EmergencyBit("INPUTS_LEARNING");
   return bit;
@@ -84,46 +79,10 @@ bool IsTurn(const std::string& move) {
   return move.rfind("turn", 0) == 0;
 }
 
-// The group of a role, empty for a text that is no role.
-std::string GroupOf(const std::string& role) {
-  const auto* known = mowbite_api::FindSetupName(mowbite_api::SetupRoles(), role);
-  return known ? known->group : "";
-}
-
 std::string Joined(const std::set<std::string>& names) {
   std::string text;
   for (const auto& name : names) text += (text.empty() ? "" : ", ") + name;
   return text;
-}
-
-double Rounded(double value, double scale) {
-  return std::round(value * scale) / scale;
-}
-
-// A value of values[]: bounds and ok are null where there is none or it is not judged yet.
-json Value(const std::string& id, json value, const std::string& unit, json min, json max, json ok, json texts) {
-  return {{"id", id},   {"value", std::move(value)}, {"unit", unit}, {"min", std::move(min)},
-          {"max", std::move(max)}, {"ok", std::move(ok)},       {"texts", std::move(texts)}};
-}
-
-// A value a check of the catalog measures, by its id, with the unit and the texts from there.
-json Measured(const char* check, const std::string& id, json value, json min, json max, json ok) {
-  std::string unit;
-  json texts = json::object();
-  for (const auto& measure : mowbite_api::FindSetupCheck(check)->values) {
-    if (measure.id != id) continue;
-    unit = measure.unit;
-    texts = mowbite_api::Texts(measure.texts);
-  }
-  return Value(id, std::move(value), unit, std::move(min), std::move(max), std::move(ok), std::move(texts));
-}
-
-Refusal Refuse(std::string reason, std::string message, json data = json::object()) {
-  return {std::move(reason), std::move(message), std::move(data), ""};
-}
-
-Refusal BadParam(std::string field, std::string message) {
-  return {"", std::move(message), json::object(), std::move(field)};
 }
 
 bool Done(const std::string& state) {
@@ -279,6 +238,7 @@ void Program::WatchOwnLatch() {
 }
 
 void Program::OnHardware(const Hardware& hardware, double now) {
+  NoteDriverBack(hardware, now);
   hardware_ = hardware;
   hardware_at_ = now;
   WatchOwnLatch();
@@ -476,6 +436,11 @@ void Program::EndRun(double now) {
   // A step inputs_assign that ends without its table: the next start does not learn, and should the driver learn
   // now, TickLearning restarts it.
   const Step& step = StepOf(*run_);
+  if (IsDrive(step)) {
+    motion_end_ = step.id;
+    silence_due_.reset();
+    end_due_ = false;
+  }
   Record& record = RecordOf(step);
   if (!record.assign.is_null()) {
     record.assign = nullptr;
@@ -563,7 +528,9 @@ void Program::TickRelease(double now) {
     own_.reset();
     return;
   }
-  if (!own.confirmed || !Fresh(hardware_at_, now, kFresh) || world_.state != "IDLE") return;
+  // In SETUP too: a step that moves the wheels releases the emergency its trigger brought.
+  const bool standing = world_.state == "IDLE" || world_.state == "SETUP";
+  if (!own.confirmed || !Fresh(hardware_at_, now, kFresh) || !standing) return;
   if (!own.held && Signal(own.role)) return;
   if (now - (own.last_try < 0 ? own.edge : own.last_try) < kReleaseEvery) return;
   own.last_try = now;
@@ -670,6 +637,10 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
     }
     return Refuse("LOCKED", step.id + " needs other steps first", {{"needs", needs}});
   }
+  if (IsDrive(step)) {
+    const auto problems = DriveProblems(step, now);
+    if (!problems.empty()) return problems.front();
+  }
   if (step.kind == "measure" && !world_.state.empty() && world_.state != "IDLE") {
     return Refuse("BUSY", "The mower is in " + world_.state, {{"state", world_.state}});
   }
@@ -718,6 +689,8 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
     layer_.Set(step.Word("node"), mowbite_api::kInputsLearn, true);
     leave_learning_ = false;
     WantRestart();
+  } else if (IsDrive(step)) {
+    BeginDrive(now, wall);
   } else if (!step.parts.empty()) {
     BeginPart(now, wall);
   }
@@ -749,6 +722,7 @@ std::optional<Refusal> Program::Answer(const json& params, double now, double wa
   if (IsAssign(step)) {
     return RecordOf(step).state == "ok" ? AnswerDelays(step, params, now, wall) : AnswerAssign(step, params);
   }
+  if (step.check == "wheels") return AnswerWheel(step, params);
   if (step.check != "choice" && step.check != "number") {
     return Refuse("WRONG_METHOD", step.id + " takes no setup.answer");
   }
@@ -956,6 +930,7 @@ void Program::Tick(double now, double wall) {
     if (check == "imu") TickImu(now, wall);
     if (check == "position") TickPosition(now, wall);
     if (check == "inputs_assign") TickAssign(now, wall);
+    if (run_ && IsDrive(StepOf(*run_))) TickDrive(now, wall);
   }
   TickLearning(now);
   TickRelease(now);
@@ -1443,6 +1418,7 @@ json Program::Values(const Step& step, double now, bool final) const {
   if (step.check == "board") {
     return BoardValues(run, step, final ? step.Number("time") : now - run.began, final);
   }
+  if (IsDrive(step)) return DriveValues(run, step, final);
   json values = json::array();
   if (IsAssign(step)) {
     const json& parts = records_.at(step.id).assign["parts"];
@@ -1498,6 +1474,17 @@ json Program::Blocked(const Step& step, double now) const {
       }
     }
     if (run_->assign == Assign::kRest && !AtRest()) add("INPUT_ACTIVE", "A line is still switched");
+    return blocked;
+  }
+  if (IsRun(step) && IsDrive(step)) {
+    const bool releasing = run_->drive == Drive::kRelease && step.check == "stop_moving";
+    if (releasing && Signal(step.parts[run_->part].role)) {
+      add("INPUT_ACTIVE", "The input " + step.parts[run_->part].role + " is still switched");
+    }
+    return blocked;
+  }
+  if (IsDrive(step)) {
+    for (const Refusal& problem : DriveProblems(step, now)) add(problem.reason.c_str(), problem.message);
     return blocked;
   }
   if (IsRun(step)) {
@@ -1621,6 +1608,22 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
                           {"max", part.delay_ms}});
       }
     }
+    if (step.check == "wheels") {
+      const mowbite_api::SetupName& question = mowbite_api::SetupWheelQuestion();
+      json values = json::array();
+      for (const auto& value : mowbite_api::SetupWheelValues()) {
+        values.push_back({{"id", value.id}, {"texts", mowbite_api::Texts(value.texts)}});
+      }
+      const bool wheel_asks = is_run && step.parts[run_->part].id == "one_wheel" && run_->drive == Drive::kMeasure &&
+                              run_->answer.empty();
+      inputs.push_back({{"name", question.id},
+                        {"type", "choice"},
+                        {"ask", wheel_asks},
+                        {"advanced", false},
+                        {"value", is_run && !run_->answer.empty() ? json(run_->answer) : json()},
+                        {"texts", mowbite_api::Texts(question.texts)},
+                        {"values", std::move(values)}});
+    }
     json ask;
     if (asks) {
       ask = {{"part", step.parts[run_->part].id}, {"line", run_->proposed}, {"active_high", run_->proposed_high}};
@@ -1652,6 +1655,17 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
     if (is_run && IsAssign(step)) {
       if (run_->assign == Assign::kPart || asks) progress = {{"n", run_->part + 1}, {"of", step.parts.size()}};
       if (run_->assign == Assign::kPart) ends_at = std::floor(run_->part_wall + step.Number("time"));
+    } else if (is_run && IsDrive(step)) {
+      if (!step.parts.empty()) progress = {{"n", run_->part + 1}, {"of", step.parts.size()}};
+      if (step.check == "silence") {
+        progress = {{"n", run_->round + 1}, {"of", std::lround(step.Number("rounds"))}};
+      }
+      // The user acts within this: the trigger of stop_moving, the answer of one_wheel.
+      if (run_->move_began >= 0 && step.check == "stop_moving" && run_->drive == Drive::kTrigger) {
+        ends_at = std::floor(run_->drive_wall + step.Number("time"));
+      } else if (step.check == "wheels" && run_->drive == Drive::kMeasure && step.parts[run_->part].id == "one_wheel") {
+        ends_at = std::floor(run_->drive_wall + step.Number("answer_time"));
+      }
     } else if (is_run) {
       if (!step.parts.empty()) {
         progress = {{"n", run_->part + 1}, {"of", step.parts.size()}};
@@ -1670,7 +1684,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
                      {"attempt", record.attempt},
                      {"needs", step.needs},
                      {"blocked", Blocked(step, now)},
-                     {"motion", nullptr},
+                     {"motion", MotionOf(step)},
                      {"confirm", named(step.confirm)},
                      {"start", step.start},
                      {"auto", step.automatic},

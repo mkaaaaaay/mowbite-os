@@ -1,6 +1,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <map>
 #include <memory>
 #include <mowbite_component/node_options.h>
@@ -16,7 +19,10 @@
 #include <mowbite_msgs/msg/rpc_methods.hpp>
 #include <mowbite_msgs/msg/rpc_request.hpp>
 #include <mowbite_msgs/msg/rpc_response.hpp>
+#include <mowbite_msgs/msg/setup_motion.hpp>
+#include <mowbite_msgs/srv/end_driver.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
+#include <mowbite_msgs/srv/silence_driver.hpp>
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -46,7 +52,9 @@ namespace {
 
 using mowbite_msgs::msg::HardwareStatus;
 using mowbite_msgs::msg::RpcError;
+using mowbite_msgs::srv::EndDriver;
 using mowbite_msgs::srv::SetEmergency;
+using mowbite_msgs::srv::SilenceDriver;
 
 constexpr const char* kTopic = "setup/json";
 constexpr const char* kRefused = "SETUP_REFUSED";
@@ -59,6 +67,13 @@ constexpr double kWriteRetry = 5.0;
 constexpr double kFrameAge = 10.0;
 // In data_dir: the setup program asked for a restart of the OS; the launch ends when it sees it (stack.py).
 constexpr const char* kRestartFile = "setup_restart.json";
+// In data_dir: the start noted the last end of the driver there (stack.py), read this often (s).
+constexpr const char* kDriverExitFile = "driver_exit.json";
+constexpr double kRestartsEvery = 1.0;
+// A note older than its stable_s and this (s): the driver ran long enough since, the start counts anew.
+constexpr double kStableMargin = 5.0;
+// setup/motion goes out this often while a step moves the wheels (s); setup/cmd_vel with every tick.
+constexpr double kMotionPeriod = 0.25;
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -82,9 +97,11 @@ struct Image {
 }  // namespace
 
 // The setup program of the platform: answers setup.*, keeps <data_dir>/setup.json, sends the state retained on
-// setup/json and the events SETUP_STEP and SETUP. It watches and moves nothing. What it asks of the mower: the
-// release of an emergency a part of its own brought (Program::OwnLatch), over the checks of the safety filter, and
-// a restart of the OS for a step that changed a setting of the driver, with the mower in IDLE (Program::TakeRestart).
+// setup/json and the events SETUP_STEP and SETUP. What it asks of the mower: the release of an emergency a part of
+// its own brought (Program::OwnLatch), over the checks of the safety filter; a restart of the OS for a step that
+// changed a setting of the driver, with the mower in IDLE (Program::TakeRestart); and in a step that moves the
+// wheels of the mower jacked up, setup/motion and commands on setup/cmd_vel, which the logic passes only in SETUP and
+// mowbite_safety caps, and hw/silence or hw/end of the driver.
 class SetupNode : public rclcpp::Node {
  public:
   explicit SetupNode(const rclcpp::NodeOptions& options)
@@ -95,6 +112,8 @@ class SetupNode : public rclcpp::Node {
     const std::string image_dir = declare_parameter("image_dir", std::string());
     layer_path_ = declare_parameter("layer", std::string());
     const std::string shadowed = declare_parameter("shadowed", std::string());
+    const std::string restarts = declare_parameter("driver_restarts", std::string("0"));
+    driver_restarts_ = std::atoi(restarts.c_str());
 
     response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
     error_pub_ = create_publisher<RpcError>("bridge/rpc/error", 100);
@@ -129,6 +148,7 @@ class SetupNode : public rclcpp::Node {
       Hardware hardware;
       hardware.emergency_reason = msg->emergency_reason;
       hardware.latch_count = msg->latch_count;
+      hardware.telemetry_ok = msg->telemetry_ok;
       hardware.stop = msg->stop;
       hardware.lift = msg->lift;
       hardware.bumper = msg->bumper;
@@ -170,6 +190,8 @@ class SetupNode : public rclcpp::Node {
           Capabilities capabilities;
           for (const auto& entry : msg->firmware) capabilities.firmware.emplace_back(entry.key, entry.value);
           capabilities.safety_measurement_date = msg->safety_measurement_date;
+          capabilities.silence_max_s = msg->silence_max_s;
+          capabilities.driver_end = msg->driver_end;
           std::lock_guard<std::mutex> lock(mutex_);
           program_->OnCapabilities(capabilities);
           state_due_ = true;
@@ -181,6 +203,17 @@ class SetupNode : public rclcpp::Node {
           std::lock_guard<std::mutex> lock(mutex_);
           program_->OnImu(sample, MonotonicSeconds());
         });
+    wheels_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
+        "hw/wheel_odom", 10, [this](geometry_msgs::msg::TwistStamped::ConstSharedPtr msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          const double v = msg->twist.linear.x;
+          const double turn = msg->twist.angular.z * track_ / 2;
+          program_->OnWheels(v - turn, v + turn, MonotonicSeconds());
+        });
+    motion_pub_ = create_publisher<mowbite_msgs::msg::SetupMotion>("setup/motion", 10);
+    cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("setup/cmd_vel", 10);
+    silence_client_ = create_client<SilenceDriver>("hw/silence");
+    end_client_ = create_client<EndDriver>("hw/end");
     gnss_sub_ = create_subscription<mowbite_msgs::msg::GnssFix>(
         "gps/absolute_pose", 10, [this](mowbite_msgs::msg::GnssFix::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -279,8 +312,13 @@ class SetupNode : public rclcpp::Node {
     if (!parsed.is_object() || !parsed.contains("node") || parsed["node"] != kGeometryNode) return;
     if (!parsed.contains("params")) return;
     const json& params = parsed["params"];
-    if (!params.is_object() || !params.contains("confirmed") || !params["confirmed"].is_array()) return;
+    if (!params.is_object()) return;
     std::lock_guard<std::mutex> lock(mutex_);
+    if (params.contains("track") && params["track"].is_number()) {
+      track_ = params["track"].get<double>();
+      program_->SetTrack(track_);
+    }
+    if (!params.contains("confirmed") || !params["confirmed"].is_array()) return;
     world_.confirmed.clear();
     for (const auto& key : params["confirmed"]) {
       if (key.is_string()) world_.confirmed.insert(key.get<std::string>());
@@ -351,8 +389,13 @@ class SetupNode : public rclcpp::Node {
   void OnTick() {
     std::lock_guard<std::mutex> lock(mutex_);
     const double now = MonotonicSeconds();
+    if (now - restarts_read_ >= kRestartsEvery) {
+      restarts_read_ = now;
+      program_->SetDriverRestarts(RestartsLeft(now));
+    }
     program_->Tick(now, WallSeconds());
     if (const auto release = program_->TakeRelease()) SendRelease(*release);
+    Drive(now);
     Flush(now);
     if (program_->TakeRestart(now)) Restart();
     if (!program_->writable() && now - write_tried_ >= kWriteRetry) Save(now);
@@ -374,6 +417,81 @@ class SetupNode : public rclcpp::Node {
     msg.payload = State(now).dump(-1, ' ', false, json::error_handler_t::replace);
     msg.retain = true;
     publish_pub_->publish(msg);
+  }
+
+  // How often the start would start an ended driver again from now on, by the note of its last end: none, the
+  // restarts of the platform; down, none; older than its stable_s, all again.
+  int RestartsLeft(double now) const {
+    if (data_dir_.empty()) return driver_restarts_;
+    std::string text, error;
+    const auto read = mowbite_hold::ReadSmallFile(data_dir_ + "/" + kDriverExitFile, 64 * 1024, &text, &error);
+    if (read == mowbite_hold::FileRead::kMissing) return driver_restarts_;
+    const json note = read == mowbite_hold::FileRead::kText ? json::parse(text, nullptr, false) : json();
+    if (!note.is_object()) return 0;
+    const auto number = [&note](const char* key) {
+      return note.contains(key) && note[key].is_number() ? note[key].get<double>() : -1.0;
+    };
+    const double max = number("max_restarts");
+    if (note.value("down", false) || max < 0) return 0;
+    if (now - number("mono") > number("stable_s") + kStableMargin) return static_cast<int>(max);
+    return std::max(0, static_cast<int>(max - number("restart")));
+  }
+
+  // A step that moves the wheels: setup/motion at its rate and once with active false at its end, its command with
+  // every tick, hw/silence and hw/end when it asks for them. Called with the mutex held.
+  void Drive(double now) {
+    if (const auto step = program_->TakeMotionEnd()) {
+      mowbite_msgs::msg::SetupMotion msg;
+      msg.stamp = get_clock()->now();
+      msg.active = false;
+      msg.step = *step;
+      motion_pub_->publish(msg);
+      motion_sent_ = -1;
+    }
+    if (const auto motion = program_->MotionNow()) {
+      if (motion_sent_ < 0 || now - motion_sent_ >= kMotionPeriod) {
+        motion_sent_ = now;
+        mowbite_msgs::msg::SetupMotion msg;
+        msg.stamp = get_clock()->now();
+        msg.active = true;
+        msg.step = motion->step;
+        msg.raised = motion->raised;
+        msg.max_linear = static_cast<float>(motion->max_linear);
+        msg.max_angular = static_cast<float>(motion->max_angular);
+        motion_pub_->publish(msg);
+      }
+      if (const auto command = program_->CommandNow()) {
+        geometry_msgs::msg::Twist twist;
+        twist.linear.x = command->linear;
+        twist.angular.z = command->angular;
+        cmd_pub_->publish(twist);
+      }
+    }
+    if (const auto seconds = program_->TakeSilence()) {
+      if (!silence_client_->service_is_ready()) {
+        program_->OnSilenceAnswer(false, "NO_SERVICE", now, WallSeconds());
+      } else {
+        auto request = std::make_shared<SilenceDriver::Request>();
+        request->seconds = static_cast<float>(*seconds);
+        silence_client_->async_send_request(request, [this](rclcpp::Client<SilenceDriver>::SharedFuture future) {
+          const auto& response = future.get();
+          std::lock_guard<std::mutex> lock(mutex_);
+          program_->OnSilenceAnswer(response->success, response->code, MonotonicSeconds(), WallSeconds());
+        });
+      }
+    }
+    if (program_->TakeEnd()) {
+      if (!end_client_->service_is_ready()) {
+        program_->OnEndAnswer(false, "NO_SERVICE", now, WallSeconds());
+      } else {
+        end_client_->async_send_request(
+            std::make_shared<EndDriver::Request>(), [this](rclcpp::Client<EndDriver>::SharedFuture future) {
+              const auto& response = future.get();
+              std::lock_guard<std::mutex> lock(mutex_);
+              program_->OnEndAnswer(response->success, response->code, MonotonicSeconds(), WallSeconds());
+            });
+      }
+    }
   }
 
   // The answer is only logged: whether the emergency ended shows in hw/status alone.
@@ -470,6 +588,20 @@ class SetupNode : public rclcpp::Node {
       OnImage(request.id, params);
       return;
     }
+    if (request.method == "setup.keep") {
+      json result;
+      std::optional<Refusal> refused;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        refused = program_->Keep(params, MonotonicSeconds(), &result);
+      }
+      if (refused) {
+        ReplyRefusal(request.id, *refused);
+      } else {
+        Reply(request.id, result);
+      }
+      return;
+    }
     std::optional<Refusal> refusal;
     json state;
     {
@@ -512,6 +644,10 @@ class SetupNode : public rclcpp::Node {
   bool state_due_ = true;
   std::string blocked_;
   double state_sent_ = -1;
+  int driver_restarts_ = 0;
+  double restarts_read_ = -1;
+  double track_ = 0;
+  double motion_sent_ = -1;
   rclcpp::Publisher<mowbite_msgs::msg::RpcResponse>::SharedPtr response_pub_;
   rclcpp::Publisher<RpcError>::SharedPtr error_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcMethods>::SharedPtr methods_pub_;
@@ -522,6 +658,11 @@ class SetupNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_in_;
   rclcpp::Subscription<mowbite_msgs::msg::GnssFix>::SharedPtr gnss_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr wheels_sub_;
+  rclcpp::Publisher<mowbite_msgs::msg::SetupMotion>::SharedPtr motion_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
+  rclcpp::Client<SilenceDriver>::SharedPtr silence_client_;
+  rclcpp::Client<EndDriver>::SharedPtr end_client_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotState>::SharedPtr state_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::MapStatus>::SharedPtr map_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::NtripStatus>::SharedPtr ntrip_sub_;

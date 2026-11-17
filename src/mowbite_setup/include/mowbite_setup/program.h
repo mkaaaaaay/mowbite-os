@@ -22,6 +22,8 @@ struct Hardware {
   uint32_t emergency_reason = 0;
   // Goes up with every reason that latches, 0 from a driver that does not count.
   uint32_t latch_count = 0;
+  // The driver hears its board.
+  bool telemetry_ok = false;
   bool stop = false;
   bool lift = false;
   bool bumper = false;
@@ -62,6 +64,23 @@ struct Capabilities {
   // Board and version, as the driver names them.
   std::vector<std::pair<std::string, std::string>> firmware;
   std::string safety_measurement_date;
+  // What the driver offers the steps that move the wheels: the longest hw/silence (s, 0 for none) and hw/end.
+  double silence_max_s = 0;
+  bool driver_end = false;
+};
+
+// setup/motion while a step that moves the wheels runs: the bounds mowbite_safety holds its commands to.
+struct Motion {
+  std::string step;
+  bool raised = true;
+  double max_linear = 0;
+  double max_angular = 0;
+};
+
+// A command on setup/cmd_vel: m/s and rad/s.
+struct Command {
+  double linear = 0;
+  double angular = 0;
 };
 
 // imu/data: acceleration (m/s²) and turn rate (rad/s) in base_link.
@@ -121,6 +140,12 @@ class Program {
   // solution as GnssFix has it (3 float, 4 fixed), accuracy in m.
   void OnFix(int solution, double accuracy, double now);
   void OnWorld(const World& world);
+  // hw/wheel_odom as the speeds of the wheels (m/s, forwards positive).
+  void OnWheels(double left, double right, double now);
+  // track of robot.geometry (m), 0 while unknown.
+  void SetTrack(double track);
+  // How often the start would start an ended driver again from now on.
+  void SetDriverRestarts(int left);
   // Whether setup.json could be written the last time; without, nothing changes the state.
   void SetWritable(bool writable);
   bool writable() const { return writable_; }
@@ -133,6 +158,19 @@ class Program {
   std::optional<Refusal> Skip(const json& params, double wall);
   std::optional<Refusal> Abort(const json& params, double now, double wall);
   std::optional<Refusal> Reset(const json& params);
+  // setup.keep: keeps a step that moves the wheels going; result tells whether the step runs.
+  std::optional<Refusal> Keep(const json& params, double now, json* result);
+
+  // What a step that moves the wheels asks for now: setup/motion while it runs (nothing else), the command to send
+  // (nothing: none), and once at its end the step to send setup/motion with active false for.
+  std::optional<Motion> MotionNow() const;
+  std::optional<Command> CommandNow() const;
+  std::optional<std::string> TakeMotionEnd();
+  // hw/silence (seconds) and hw/end to call now, once each, and their answers.
+  std::optional<double> TakeSilence();
+  bool TakeEnd();
+  void OnSilenceAnswer(bool success, const std::string& code, double now, double wall);
+  void OnEndAnswer(bool success, const std::string& code, double now, double wall);
 
   // setup.get and setup/json. images: name to {sha256, bytes} of the images that are there.
   json State(double now, const std::map<std::string, std::pair<std::string, int>>& images) const;
@@ -181,6 +219,23 @@ class Program {
   enum class Assign { kRestart, kDriver, kQuiet, kPart, kAsk, kRest };
   // The part of the running step: what it waits for.
   enum class Phase { kRest, kArmed, kSwitched, kWatch };
+  // A step that moves the wheels: the logic takes SETUP, the wheels speed up, the trigger, they stand, nothing starts,
+  // the emergency it brought, its release, armed again, a new command turns them, they stand again. wheels: a part
+  // drives and is measured, one_wheel waits for the answer. driver_end waits for the driver after the trigger.
+  enum class Drive {
+    kEnter,
+    kRunUp,
+    kTrigger,
+    kStop,
+    kReturn,
+    kQuiet,
+    kLatch,
+    kRelease,
+    kArm,
+    kRestart,
+    kPause,
+    kMeasure,
+  };
   struct Run {
     size_t step = 0;
     double began = 0;
@@ -233,6 +288,33 @@ class Program {
     json ambiguous = json::array();
     std::string proposed;
     bool proposed_high = true;
+    // A step that moves the wheels: where it is and since when, the trigger, standing wheels, the silence or the
+    // return of the driver, the last setup.keep, the command, when the wheels began to move, a service asked for.
+    Drive drive = Drive::kEnter;
+    double drive_began = 0;
+    double drive_wall = 0;
+    double trigger = -1;
+    double stood = -1;
+    double silence_end = -1;
+    double returned = -1;
+    // driver_end: hw/status was away after hw/end; the new driver counts once it hears its board.
+    bool gap = false;
+    double keep = 0;
+    std::optional<Command> command;
+    double move_began = -1;
+    bool asked = false;
+    double asked_at = -1;
+    bool armed = false;
+    // The emergencies a stop or end of the driver may bring, LATCH aside; 0 before the trigger.
+    uint32_t expected = 0;
+    // The round of a step silence, the stand times so far, and what a part of wheels measured.
+    int round = 0;
+    std::vector<double> stands;
+    double sum_left = 0;
+    double sum_right = 0;
+    int samples = 0;
+    std::string answer;
+    std::optional<double> returned_after;
   };
 
   // The emergency a part of mode press brought, which the program releases itself. It exists only while every
@@ -307,6 +389,27 @@ class Program {
   // The delay the line of a part gets (ms): what setup.answer set for it, at most the one of the step list.
   int DelayOf(const Step& step, const Part& part) const;
   bool IsRun(const Step& step) const;
+  // motion.cpp: the steps that move the wheels.
+  static bool IsDrive(const Step& step);
+  // What keeps a step that moves the wheels from starting now; the first of them refuses setup.start.
+  std::vector<Refusal> DriveProblems(const Step& step, double now) const;
+  void BeginDrive(double now, double wall);
+  void TickDrive(double now, double wall);
+  void NoteDriverBack(const Hardware& hardware, double now);
+  void TickWheels(double now, double wall);
+  void EnterDrive(Drive drive, double now, double wall);
+  void NextPass(double now, double wall);
+  void DriveFail(const std::string& reason, const std::string& message, json fields, double now, double wall);
+  // The emergencies that may stand now in the running step, LATCH with them; anything else ends it.
+  uint32_t AllowedNow() const;
+  bool Standing(double now) const;
+  bool Started() const;
+  bool Turning(double speed) const;
+  double Speed(const Step& step) const;
+  double TurnRate(const Step& step) const;
+  std::optional<Refusal> AnswerWheel(const Step& step, const json& params);
+  json DriveValues(const Run& run, const Step& step, bool final) const;
+  json MotionOf(const Step& step) const;
   // The position has the solution the step asks for.
   bool SolutionOk(const Step& step) const;
   void BeginPart(double now, double wall);
@@ -364,6 +467,19 @@ class Program {
   bool docking_ = false;
   double docking_idle_since_ = -1;
   std::set<std::string> reached_;
+  // hw/wheel_odom: the last speeds, the same filtered, when they came, and since when both stood below kStandSpeed.
+  double left_ = 0;
+  double right_ = 0;
+  double left_filtered_ = 0;
+  double right_filtered_ = 0;
+  double wheels_at_ = -1;
+  double still_since_ = -1;
+  double track_ = 0;
+  int restarts_left_ = 0;
+  // The step to end setup/motion for, and the services to call.
+  std::optional<std::string> motion_end_;
+  std::optional<double> silence_due_;
+  bool end_due_ = false;
 };
 
 }  // namespace mowbite_setup

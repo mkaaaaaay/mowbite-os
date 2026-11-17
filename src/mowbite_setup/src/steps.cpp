@@ -208,6 +208,26 @@ void ReadParts(const json& entry, const std::string& where, Step* step) {
       part.texts = Overlaid(std::move(base), TextsOrNull(item), where + ".parts." + part.id);
       step->parts.push_back(std::move(part));
     }
+  } else if (step->check == "stop_moving") {
+    // One part by input to trigger while the wheels turn, each of a role; the stop button alone without parts.
+    json parts = given ? entry["parts"] : json::array({json{{"id", "stop"}, {"role", "stop"}}});
+    for (const auto& item : parts) {
+      if (!item.is_object()) throw Wrong(where + ": a part is no object");
+      OnlyKeys(item, {"id", "role", "texts"}, where + ".parts");
+      Part part;
+      part.id = TextOf(item, "id", where + ".parts", true);
+      part.mode = "press";
+      part.role = TextOf(item, "role", where + ".parts", true);
+      const SetupName* role = FindSetupName(mowbite_api::SetupRoles(), part.role);
+      if (!role) throw Wrong(where + ": " + part.role + " is no role");
+      part.texts = Overlaid(Texts(role->texts), TextsOrNull(item), where + ".parts." + part.id);
+      step->parts.push_back(std::move(part));
+    }
+  } else if (step->check == "wheels") {
+    if (given) throw Wrong(where + ": the parts of wheels are fixed");
+    for (const auto& name : mowbite_api::SetupWheelParts()) {
+      step->parts.push_back({name.id, "", "", "", Texts(name.texts)});
+    }
   } else if (step->check == "imu") {
     const std::vector<std::string> moves =
         given ? TextsOf(entry, "parts", where) : std::vector<std::string>{"front_up", "left_up", "turn_left"};
@@ -217,10 +237,12 @@ void ReadParts(const json& entry, const std::string& where, Step* step) {
       step->parts.push_back({move, "", "", move, Texts(name->texts)});
     }
   } else if (given) {
-    throw Wrong(where + ": parts go with input, inputs_assign and imu only");
+    throw Wrong(where + ": parts go with input, inputs_assign, imu, stop_moving and wheels only");
   }
   if (step->parts.size() > static_cast<size_t>(mowbite_api::kSetupMaxParts)) throw Wrong(where + ": too many parts");
-  if ((step->check == "input" || step->check == "inputs_assign" || step->check == "imu") && step->parts.empty()) {
+  if ((step->check == "input" || step->check == "inputs_assign" || step->check == "imu" ||
+       step->check == "stop_moving") &&
+      step->parts.empty()) {
     throw Wrong(where + ": no part");
   }
   std::set<std::string> ids;
@@ -229,6 +251,11 @@ void ReadParts(const json& entry, const std::string& where, Step* step) {
     if (!ids.insert(part.id).second) throw Wrong(where + ": the part " + part.id + " comes twice");
     NeedNames(part.texts, where + ".parts." + part.id);
   }
+}
+
+std::string GroupOfRole(const std::string& role) {
+  const auto* known = FindSetupName(mowbite_api::SetupRoles(), role);
+  return known ? known->group : "";
 }
 
 // The texts a step of this check has before the list adds its own.
@@ -341,6 +368,26 @@ Step ReadStep(const json& entry, const std::vector<Step>& before, size_t* stage_
       step.confirm.push_back(NamedOf(point, mowbite_api::SetupPoints(), true, where + ".confirm"));
       const auto same = [&](const Named& other) { return other.id == step.confirm.back().id; };
       if (std::count_if(step.confirm.begin(), step.confirm.end(), same) > 1) throw Wrong(where + ": a point twice");
+    }
+  }
+  if (step.kind == "drive") {
+    // The wheels turn only with the mower jacked up, a hand at a STOP button and the inputs checked standing.
+    for (const char* point : {"raised", "hand_at_stop"}) {
+      const auto has = [point](const Named& named) { return named.id == point; };
+      if (std::none_of(step.confirm.begin(), step.confirm.end(), has)) {
+        throw Wrong(where + ": a step that moves the wheels confirms " + point);
+      }
+    }
+    for (const char* group : {"stop", "lift", "bumper"}) {
+      const auto checks = [group](const Step& other) {
+        return other.check == "input" && GroupOfRole(other.Word("role")) == group;
+      };
+      if (std::none_of(before.begin(), before.end(), checks)) {
+        throw Wrong(where + ": a step that moves the wheels comes after a step input of " + group);
+      }
+    }
+    if (step.lists.count("emergency") && step.lists.at("emergency").empty()) {
+      throw Wrong(where + ": emergency names no emergency");
     }
   }
   step.open = TextOf(entry, "open", where);

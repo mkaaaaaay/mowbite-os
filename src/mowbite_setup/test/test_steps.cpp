@@ -155,7 +155,7 @@ TEST(Steps, WhatBreaksTheRulesIsNamed) {
   EXPECT_EQ(Problem("/steps/5/confirm/0", "sober"), "raised.confirm: sober is not in the catalog");
   EXPECT_EQ(Problem("/steps/6/confirm", json::array({"raised"})),
             "ntrip: confirm goes with a step setup.start begins");
-  EXPECT_EQ(Problem("/steps/1/parts", json::array()), "board: parts go with input, inputs_assign and imu only");
+  EXPECT_EQ(Problem("/steps/1/parts", json::array()), "board: parts go with input, inputs_assign, imu, stop_moving and wheels only");
   EXPECT_EQ(Problem("/steps/2/parts/1/id", "top"), "stop: the part top comes twice");
   EXPECT_EQ(Problem("/steps/2/parts/1/mode", "long"), "stop: long is no mode");
   EXPECT_EQ(Problem("/steps/4/parts", json::array({"front_up", "jump"})), "imu: jump is no move");

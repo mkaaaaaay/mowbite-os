@@ -17,13 +17,14 @@ find_package(mowbite_ntrip REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(mowbite_component REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_watch REQUIRED)
 
 # The step list of a platform, the program over it and the parameter file it writes, without ROS.
-add_library(mowbite_setup_core STATIC src/steps.cpp src/program.cpp src/layer.cpp)
+add_library(mowbite_setup_core STATIC src/steps.cpp src/program.cpp src/motion.cpp src/layer.cpp)
 target_include_directories(mowbite_setup_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -38,7 +39,8 @@ add_library(mowbite_setup_component SHARED src/setup_node.cpp)
 target_link_libraries(mowbite_setup_component mowbite_setup_core mowbite_hold::mowbite_hold_core
   mowbite_bridge::mowbite_bridge_core mowbite_map::mowbite_map_core mowbite_ntrip::mowbite_ntrip_core
   mowbite_watch::mowbite_watch)
-ament_target_dependencies(mowbite_setup_component rclcpp rclcpp_components sensor_msgs std_msgs mowbite_msgs)
+ament_target_dependencies(mowbite_setup_component rclcpp rclcpp_components geometry_msgs sensor_msgs std_msgs
+                          mowbite_msgs)
 mowbite_component_register(mowbite_setup_component
   PLUGIN "mowbite_setup::SetupNode"
   EXECUTABLE mowbite_setup_node)
@@ -53,7 +55,8 @@ install(TARGETS mowbite_setup_core mowbite_setup_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(mowbite_setup_test test/test_steps.cpp test/test_program.cpp test/test_layer.cpp)
+  ament_add_gtest(mowbite_setup_test test/test_steps.cpp test/test_program.cpp test/test_motion.cpp
+                  test/test_layer.cpp)
   target_link_libraries(mowbite_setup_test mowbite_setup_core)
 endif()
 
