@@ -1,7 +1,7 @@
 # The steps of the setup program of the NX60i (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image.
-catalog: 3
+catalog: 4
 # inputs_assign ends with a restart of the OS: the launch ends and whatever runs it starts it again.
 restart: self
 steps:
@@ -208,6 +208,14 @@ steps:
     params: {emergency: [HIGH_LEVEL, TIMEOUT_HIGH_LEVEL]}
     confirm: [raised, hand_at_stop]
     symbol: board
+  # On the ground, 3 m clear: about 2 m straight on and silent, a turn, back until STOP, against a soft obstacle with
+  # the bumper at the rear. The bounds of standing are those of M8.
+  - id: ground
+    stage: ground
+    check: ground
+    params: {quiet_max: 1.0, quiet_way: 0.6, stop_max: 0.5, stop_way: 0.3, bumper_direction: backward}
+    confirm: [area_clear]
+    symbol: ground
   - id: dimensions
     stage: dimensions
     check: geometry
