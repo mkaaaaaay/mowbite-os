@@ -299,7 +299,7 @@ restarts for it, `steps` come in the order the app shows them:
 |---|---|
 | `id`, `stage`, `check` | its name, one of `x-setup.stages` and one of `x-setup.checks` of the schema |
 | `params` | the params of the check, within the bounds the schema names; without an entry the default there |
-| `parts` | of `input`: `id`, optional `mode` (press, short), `role` and `texts`; of `inputs_assign`: `id`, `role`, `delay_ms`, optional `texts`; of `imu`: the moves in their order; of `stop_moving`: `id`, `role`, optional `texts`; none of `wheels` (fixed) |
+| `parts` | of `input`: `id`, optional `mode` (press, short), `role` and `texts`; of `inputs_assign`: `id`, `role`, `delay_ms`, optional `texts`; of `imu`: the moves in their order; of `stop_moving`: `id`, `role`, optional `texts`; none of `wheels` and `ground` (fixed) |
 | `value_texts` | of `choice`: `de` and `en` with `name` for every value |
 | `confirm` | points the user ticks before the step begins (`x-setup.points`, or own ones with texts) |
 | `needs` | steps ahead of it that have to be ok first |
@@ -381,6 +381,20 @@ after its last setpoint, the xCore 1.0 s after it last heard of the host (so 1.5
 driver shows after a silence (the Tron `HIGH_LEVEL`, the xCore `HIGH_LEVEL` and `TIMEOUT_HIGH_LEVEL`). `driver_end`
 is offered only while the start has at least two restarts of the driver left (`DRIVER_RESTARTS`, `driver_exit.json`).
 A mower that reports lift when jacked up cannot do these steps: its note has to tell how to put it up.
+
+The step `ground` (stage `ground`, kind `drive`, `motion.raised` false) drives on the ground, its parts in one run:
+`straight` goes about `distance` m and the program falls silent, the mower has to stand within `quiet_max` s and
+`quiet_way` m, and the way by odometry and by `gps/absolute_pose` must not differ by more than the share `ratio`;
+`turn` goes `angle` deg to the left and back, the IMU has to turn with the sign of the command and as far as the
+odometry within `ratio`; `stop` drives back towards the start until the user presses STOP (at most as far as straight
+went) and `bumper` at `bumper_speed` against a soft obstacle the user holds, in `bumper_direction` (where the bumper
+is: the Tron forwards, the NX60i backwards), each to stand within `stop_max` s and `stop_way` m, then released as
+`stop_moving` does, without a new command. A mower still moving 3 s after a stop fails with `NO_STANDSTILL`. It
+confirms `area_clear` (3 m clear, the user next to it at a STOP button), needs an RTK fix (`NO_RTK`) and, while the
+lock of section 6 is closed, every step of stage `wheels` passed (`SAFETY_AIR`). mowbite_safety holds it to 0.3 m/s
+and 0.4 rad/s without pose and fence, like the remote control; every step that moves the wheels stops after one move
+of 10 s and moves again only after a zero. Take the bounds of standing from a measurement of the platform on the
+ground (the NX60i from M8); where there is none, the values of another mower and the first run as the measurement.
 
 The start is the same for every mower: `ros2 launch mowbite_bringup mowbite.launch.py platform:=<name>`, by default the
 platform `MOWBITE_PLATFORM` names, a value of the device (the compose file of the mower sets it, the Tron in
@@ -518,9 +532,10 @@ Then set `safety_measurement_date` in the driver parameters. Without it the mowe
 (`NO_SAFETY_MEASUREMENT`).
 
 The setup program can close that lock again, whatever the date: a safety step (`input`, `imu`, `wheels`,
-`stop_moving`, `no_command`, `silence`, `driver_end`; `safety` in `x-setup.checks`) that fails with a reason that
-closes (`closes` in `x-reasons` of SETUP_STEP: a value out of bounds, wheels that start again, an emergency that does
-not come, a wrong direction or wheel, or nothing seen after the user said the action was done) writes
+`stop_moving`, `no_command`, `silence`, `driver_end`, `ground`; `safety` in `x-setup.checks`) that fails with a
+reason that closes (`closes` in `x-reasons` of SETUP_STEP: a value out of bounds, wheels that start again, a mower
+that does not stand, an emergency that does not come, a wrong direction or wheel, or nothing seen after the user said
+the action was done) writes
 `<data_dir>/safety_lock.json` before anything else. mowbite_safety, the logic and the follower read it within 0.1 s
 through `mowbite_hold::SafetyMeasured` (date and lock, the one rule), so it acts at once, without a restart, against
 the date of the file kept by hand as well; mowbite_safety latches `HIGH_LEVEL` once for every new failure. Releasing
