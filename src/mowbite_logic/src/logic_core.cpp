@@ -223,7 +223,7 @@ std::string LogicCore::AddEvent(const std::string& type, json details) {
   if (!session_id_.empty()) details["session_id"] = session_id_;
   if (!client_.empty() && !details.contains("client")) details["client"] = client_;
   // Who released or asked names the source there.
-  if (run_ && !details.contains("source") && type != "EMERGENCY" && type != "EMERGENCY_RESET_REFUSED") {
+  if (schedule_.run() && !details.contains("source") && type != "EMERGENCY" && type != "EMERGENCY_RESET_REFUSED") {
     details["source"] = "schedule";
   }
   if (event_observer) event_observer(type, details);
@@ -642,7 +642,7 @@ void LogicCore::SetState(State state) {
   AddEvent("STATE", std::move(details));
   SetDue<ActionsChanged>(true);
   // The run of the schedule ends once the mower is idle again after it left the station.
-  if (state == State::kIdle && run_ && run_->phase >= RunPhase::kUndocking) FinishRun();
+  if (state == State::kIdle && schedule_.run() && schedule_.run()->phase >= RunPhase::kUndocking) FinishRun();
 }
 
 std::string LogicCore::CurrentStateName() const {
@@ -967,7 +967,7 @@ Reason LogicCore::HoldProblem() const {
 }
 
 bool LogicCore::HoldAllowed() const {
-  return state_ == State::kIdle && dock_check_ == DockCheck::kNone && !run_;
+  return state_ == State::kIdle && dock_check_ == DockCheck::kNone && !schedule_.run();
 }
 
 void LogicCore::SetGpsSettings(double max_position_accuracy, double gps_wait_time, double gps_timeout) {
@@ -984,7 +984,10 @@ void LogicCore::OnTick(double now_s) {
                     .With("bits", mowbite_api::EmergencyNameList(reason_)));
   }
   WatchAnnouncement();
-  if (run_ && run_->phase == RunPhase::kAnnouncing && now_s >= run_->announce_until) EndAnnouncement(now_s);
+  if (schedule_.run() && schedule_.run()->phase == RunPhase::kAnnouncing &&
+      now_s >= schedule_.run()->announce_until) {
+    EndAnnouncement(now_s);
+  }
   if (state_ == State::kDocking) TickDocking(now_s);
   if (state_ == State::kAreaRecording) recording_.TickRecording(CoreAccess(*this), now_s);
   if (state_ != State::kMowing) return;

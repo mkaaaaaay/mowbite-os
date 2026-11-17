@@ -133,7 +133,7 @@ Reason LogicCore::ContinueProblem() const {
 
 void LogicCore::ResumedByUser() {
   // The user took over: deadlines that came are dropped, those to come stay.
-  if (run_ && run_->end_passed) run_->end_due.reset();
+  if (schedule_.run() && schedule_.run()->end_passed) schedule_.run()->end_due.reset();
   sunset_due_.reset();
   sunset_try_ = true;
   ActOnHome(Reason());

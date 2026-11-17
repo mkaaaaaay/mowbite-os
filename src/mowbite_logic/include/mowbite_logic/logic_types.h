@@ -404,6 +404,16 @@ struct ScheduleRun {
   int64_t end_in_s = 0;
 };
 
+// What a mowing.start asks for: the areas in order (none for all) and whether to begin anew; a start of the schedule
+// also the areas it leaves out.
+struct StartRequest {
+  std::vector<std::string> tasks;
+  bool restart = false;
+  std::vector<std::string> pass_over;
+  // Taken by a job that begins with this start, kept by one it goes on with.
+  std::optional<double> angle_offset_deg;
+};
+
 // s a start of the schedule is announced (S7) before the logic checks again and leaves the station.
 constexpr double kAnnounceS = 10.0;
 

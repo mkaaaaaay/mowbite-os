@@ -27,6 +27,10 @@ class CoreFacts {
   Reason HoldProblem() const;
   Reason Unsafe() const;
   Reason AccuracyReason(float accuracy, double limit) const;
+  bool Held() const;
+  double clock_offset() const;
+  std::string InvalidRun(const ScheduleRun& run) const;
+  Reason ScheduleProblem(const StartRequest& request, const ScheduleRun& run, double now_s) const;
 
  private:
   const LogicCore* read_;

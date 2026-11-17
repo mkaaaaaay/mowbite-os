@@ -23,6 +23,7 @@
 #include "mowbite_logic/reasons.h"
 #include "mowbite_logic/recording_part.h"
 #include "mowbite_logic/release_part.h"
+#include "mowbite_logic/schedule_part.h"
 #include "mowbite_logic/setup_part.h"
 #include "mowbite_logic/undocking.h"
 
@@ -509,20 +510,10 @@ class LogicCore {
   void Docked();
   // IDLE; a leg on its way stops with why.
   void EndDocking(const Reason& why);
-  // What a mowing.start asks for: the areas in order (none for all) and whether to begin anew; a start of the schedule
-  // also the areas it leaves out.
-  struct StartRequest {
-    std::vector<std::string> tasks;
-    bool restart = false;
-    std::vector<std::string> pass_over;
-    // Taken by a job that begins with this start, kept by one it goes on with.
-    std::optional<double> angle_offset_deg;
-  };
   // The start problems of the areas of the request that are not passed over; NO_MOWING_AREA when none is left.
   Reason RequestMowProblem(const StartRequest& request) const;
   // Why a start of the schedule cannot go now (StartRun without node_problem), empty if it can.
   Reason ScheduleProblem(const StartRequest& request, const ScheduleRun& run, double now_s) const;
-  static StartRequest RunRequest(const ScheduleRun& run);
   // Why the list of a start of the schedule is not taken, empty if it is.
   std::string InvalidRun(const ScheduleRun& run) const;
   // The announcement ran out: checked again, then the reference check, or the refusal ends the run.
@@ -530,7 +521,6 @@ class LogicCore {
   // An emergency, a hold or leaving the contacts cancels the announcement; a command cancels it with source rpc.
   void WatchAnnouncement();
   void CommandCancels();
-  void CancelAnnouncement(const std::string& source);
   void SetRunPhase(RunPhase phase);
   // How the run ends, the first word counts; FinishRun tells it (EMERGENCY or STOPPED without one) and drops the run.
   void RunEnds(const std::string& code, const std::string& detail = "");
@@ -699,18 +689,7 @@ class LogicCore {
   std::optional<double> gps_good_since_;
   // The rules of going home while mowing or calibrating.
   HomeWatch home_;
-  // The run of the schedule from StartRun until the mower is idle again: its request, phase, the end of the
-  // announcement and of the plan (monotonic s), whether that end came, and how it ends.
-  struct Run {
-    ScheduleRun request;
-    RunPhase phase = RunPhase::kNone;
-    double announce_until = 0;
-    std::optional<double> end_due;
-    bool end_passed = false;
-    std::string end_code;
-    std::string detail;
-  };
-  std::optional<Run> run_;
+  SchedulePart schedule_;
   // Why the next skip of an area is made: MANUAL by the app, SCHEDULE for a pause of the schedule.
   Reason skip_why_;
   // The sunset: the switch, the clock and the datum it needs, and the deadline of this run (monotonic s), due once

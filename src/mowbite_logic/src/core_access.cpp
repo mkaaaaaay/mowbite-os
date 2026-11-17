@@ -50,6 +50,22 @@ Reason CoreFacts::AccuracyReason(float accuracy, double limit) const {
   return read_->AccuracyReason(accuracy, limit);
 }
 
+bool CoreFacts::Held() const {
+  return read_->Held();
+}
+
+double CoreFacts::clock_offset() const {
+  return read_->clock_offset_;
+}
+
+std::string CoreFacts::InvalidRun(const ScheduleRun& run) const {
+  return read_->InvalidRun(run);
+}
+
+Reason CoreFacts::ScheduleProblem(const StartRequest& request, const ScheduleRun& run, double now_s) const {
+  return read_->ScheduleProblem(request, run, now_s);
+}
+
 EffectQueue& CoreAccess::effects() {
   return core_->effects_;
 }

@@ -35,12 +35,6 @@ bool StartBlocksHold(int64_t next_start, int64_t now) {
   return next_start != 0 && next_start - now <= kHoldBeforeStartS;
 }
 
-LogicCore::StartRequest LogicCore::RunRequest(const ScheduleRun& run) {
-  StartRequest request{run.area_ids, run.restart, run.pass_over, std::nullopt};
-  if (run.has_angle) request.angle_offset_deg = run.angle_offset_deg;
-  return request;
-}
-
 std::string LogicCore::InvalidRun(const ScheduleRun& run) const {
   if (run.run_id.empty()) return "run_id is empty";
   if (const std::string id = Twice(run.area_ids); !id.empty()) return "area_ids: " + id + " is in the list twice";
@@ -95,38 +89,10 @@ Reason LogicCore::ScheduleProblem(const StartRequest& request, const ScheduleRun
   return {};
 }
 
-Reason LogicCore::StartRun(const ScheduleRun& run, const Reason& node_problem, double now_s) {
-  if (const std::string invalid = InvalidRun(run); !invalid.empty()) {
-    Notify("Start of the schedule " + run.run_id + " refused: " + invalid);
-    return Reason("INVALID", invalid);
-  }
-  const StartRequest request = RunRequest(run);
-  Reason why;
-  if (run_) why = Reason("BUSY", "The mower is busy: a start of the schedule is announced").With("state", "announcing");
-  if (why.empty()) why = ScheduleProblem(request, run, now_s);
-  if (why.empty()) why = node_problem;
-  if (!why.empty()) {
-    json details = {{"source", "schedule"}};
-    PutReason(&details, "MOWING_REFUSED", why);
-    AddEvent("MOWING_REFUSED", std::move(details));
-    return why;
-  }
-  run_ = Run{run, RunPhase::kNone, now_s + kAnnounceS, std::nullopt, false, "", ""};
-  if (run.end_in_s > 0) run_->end_due = now_s + static_cast<double>(run.end_in_s);
-  SetRunPhase(RunPhase::kAnnouncing);
-  AddEvent("SCHEDULE_START", {{"seconds", static_cast<int>(kAnnounceS)},
-                              {"until", static_cast<int64_t>(std::llround(now_s + clock_offset_ + kAnnounceS))},
-                              {"severity", "info"},
-                              {"resume", "auto"}});
-  Notify("Schedule: " + run.run_id + " starts in " + std::to_string(static_cast<int>(kAnnounceS)) + " s");
-  SetDue<ActionsChanged>(true);
-  return {};
-}
-
 void LogicCore::EndAnnouncement(double now_s) {
-  if (!run_) return;
-  StartRequest request = RunRequest(run_->request);
-  const Reason why = ScheduleProblem(request, run_->request, now_s);
+  if (!schedule_.run()) return;
+  StartRequest request = SchedulePart::RunRequest(schedule_.run()->request);
+  const Reason why = ScheduleProblem(request, schedule_.run()->request, now_s);
   if (!why.empty()) {
     RefuseStart(why);
     RunEnds("REFUSED", why.code);
@@ -138,70 +104,27 @@ void LogicCore::EndAnnouncement(double now_s) {
   BeginDockCheck(DockCheck::kMowing);
 }
 
-void LogicCore::WatchAnnouncement() {
-  if (!run_ || run_->phase != RunPhase::kAnnouncing) return;
-  if (emergency_) {
-    CancelAnnouncement("emergency");
-  } else if (Held()) {
-    CancelAnnouncement("hold");
-  } else if (!DockContact()) {
-    CancelAnnouncement("undocked");
-  }
-}
-
-void LogicCore::CommandCancels() {
-  if (run_ && run_->phase == RunPhase::kAnnouncing) CancelAnnouncement("rpc");
-}
-
-void LogicCore::CancelAnnouncement(const std::string& source) {
-  if (!run_) return;
-  AddEvent("SCHEDULE_START_CANCELED", {{"source", source}, {"severity", "info"}, {"resume", "auto"}});
-  Notify("Schedule: the start of " + run_->request.run_id + " was canceled (" + source + ")");
-  RunEnds("CANCELED", source);
-  FinishRun();
-}
-
-void LogicCore::SetRunPhase(RunPhase phase) {
-  if (!run_ || run_->phase == phase) return;
-  run_->phase = phase;
-  effects_.push_back(RunChanged{run_->request.run_id, phase, "", ""});
-}
-
-void LogicCore::RunEnds(const std::string& code, const std::string& detail) {
-  if (!run_ || !run_->end_code.empty()) return;
-  run_->end_code = code;
-  run_->detail = detail;
-}
-
-void LogicCore::FinishRun() {
-  if (!run_) return;
-  if (run_->end_code.empty()) run_->end_code = emergency_ ? "EMERGENCY" : "STOPPED";
-  effects_.push_back(RunChanged{run_->request.run_id, RunPhase::kEnded, run_->end_code, run_->detail});
-  run_.reset();
-  SetDue<ActionsChanged>(true);
-}
-
 std::optional<double> LogicCore::PlanAngle() const {
   return job_.progress().angle_offset_deg;
 }
 
 bool LogicCore::SunsetWanted() const {
-  if (!run_) return sunset_on_;
-  return !run_->request.dark_allowed || run_->request.until_sunset;
+  if (!schedule_.run()) return sunset_on_;
+  return !schedule_.run()->request.dark_allowed || schedule_.run()->request.until_sunset;
 }
 
 Reason LogicCore::DeadlineDue(double now_s) {
   if (sunset_due_ && now_s >= *sunset_due_) return DarkWhy(now_s);
-  if (!run_ || !run_->end_due || now_s < *run_->end_due) return {};
-  run_->end_passed = true;
+  if (!schedule_.run() || !schedule_.run()->end_due || now_s < *schedule_.run()->end_due) return {};
+  schedule_.run()->end_passed = true;
   return Reason("SCHEDULE", "the time of the plan is over").With("detail", "end");
 }
 
 Reason LogicCore::DropTasks(const std::string& run_id, const std::vector<std::string>& area_ids) {
-  if (!run_ || run_->request.run_id != run_id) {
+  if (!schedule_.run() || schedule_.run()->request.run_id != run_id) {
     return Reason("NOT_ALLOWED", "No run " + run_id + " of the schedule: a run by hand is not the schedule's");
   }
-  if (state_ != State::kMowing || run_->phase != RunPhase::kMowing) return WrongState();
+  if (state_ != State::kMowing || schedule_.run()->phase != RunPhase::kMowing) return WrongState();
   job_.PassOver(area_ids.empty() ? job_.TaskIds(job_.progress().tasks) : area_ids);
   if (!job_.AreaLeft()) {
     Reason why = SchedulePause();

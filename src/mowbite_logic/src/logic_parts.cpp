@@ -125,4 +125,28 @@ bool LogicCore::SetupActive() const {
   return state_ == State::kSetup && !emergency_;
 }
 
+Reason LogicCore::StartRun(const ScheduleRun& run, const Reason& node_problem, double now_s) {
+  return schedule_.StartRun(CoreAccess(*this), run, node_problem, now_s);
+}
+
+void LogicCore::WatchAnnouncement() {
+  schedule_.WatchAnnouncement(CoreAccess(*this));
+}
+
+void LogicCore::CommandCancels() {
+  schedule_.CommandCancels(CoreAccess(*this));
+}
+
+void LogicCore::SetRunPhase(RunPhase phase) {
+  schedule_.SetRunPhase(CoreAccess(*this), phase);
+}
+
+void LogicCore::RunEnds(const std::string& code, const std::string& detail) {
+  schedule_.RunEnds(code, detail);
+}
+
+void LogicCore::FinishRun() {
+  schedule_.FinishRun(CoreAccess(*this));
+}
+
 }  // namespace mowbite_logic
