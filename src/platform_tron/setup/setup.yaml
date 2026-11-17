@@ -1,7 +1,7 @@
 # The steps of the setup program of the Tron (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image. mark names parts of robot_shape (geometry.yaml).
-catalog: 2
+catalog: 3
 steps:
   - id: board
     stage: device
@@ -21,8 +21,8 @@ steps:
     mark: [stop_top]
     # The board holds stop until the release, so the step ends only with it.
     note:
-      de: Danach den Notaus in der App aufheben.
-      en: Then release the emergency stop in the app.
+      de: Nach dem Loslassen hebt der Mäher den Notaus dieser Prüfung selbst auf.
+      en: After the button is let go the mower releases the emergency stop of this check itself.
   - id: lift
     stage: inputs
     check: input
@@ -36,10 +36,12 @@ steps:
     accent: lift-accent.svg
     symbol: lift
     note:
-      de: Die Sensoren sitzen vorn unter der Haube. Danach absetzen und den Notaus in der App aufheben.
+      de: >-
+        Die Sensoren sitzen vorn unter der Haube, wenige Zentimeter reichen. Nach dem Absetzen hebt der Mäher den
+        Notaus selbst wieder auf.
       en: >-
-        The sensors sit at the front under the hood. Then put the mower down and release the emergency stop in the
-        app.
+        The sensors sit at the front under the hood, a few centimetres are enough. Put down again, the mower releases
+        the emergency stop itself.
   - id: bumper
     stage: inputs
     check: input
