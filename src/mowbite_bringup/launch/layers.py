@@ -131,8 +131,13 @@ def parameters(paths, node):
     return merged([sections(path) for path in paths], node)
 
 
+def placeholder(value):
+    """The value is the placeholder, alone or as the one item of a list."""
+    return value == PLACEHOLDER or value == [PLACEHOLDER]
+
+
 def unset(paths, nodes):
     """<node>.<parameter> of every value these nodes would get as the placeholder."""
     loaded = [sections(path) for path in paths]
     return sorted(f"{node}.{key}" for node in nodes for key, value in merged(loaded, node).items()
-                  if value == PLACEHOLDER)
+                  if placeholder(value))

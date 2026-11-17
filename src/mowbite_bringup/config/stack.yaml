@@ -1,8 +1,9 @@
 # Parameters of MowBite OS on every mower. The start loads this file first, then the file of the platform
 # (platform.yaml of its package), then the measured values of one mower from data_dir (<platform>.yaml).
 # <platform> marks a value every platform has to set in its own file, in the same section: the start halts with
-# PLATFORM_CONFIG while a node it starts has one left. A part that is off here (0, none, "") is turned on by the
-# platforms that have it. Every value has its meaning here and its value in one file.
+# PLATFORM_CONFIG while a node it starts has one left; a list stays a list, [<platform>] (rcl keeps a text of an
+# earlier file over a later list). A part that is off here (0, none, "") is turned on by the platforms that have it.
+# Every value has its meaning here and its value in one file.
 
 # Shared by all nodes, so it is set only here.
 /**:
@@ -20,7 +21,7 @@
     # journal_platform names the platform in every run, journal_libraries the libraries of its own packages by a
     # part of their names: their build IDs stand in every run beside those of mowbite.
     journal_platform: <platform>
-    journal_libraries: <platform>
+    journal_libraries: [<platform>]
     journal_max_mb: <platform>
     journal_max_days: <platform>
     journal_reserve_mb: <platform>
@@ -306,7 +307,7 @@ mowbite_light:
     # LEDs that are lit, of the buffer_leds the chain is driven with.
     leds: <platform>
     # Chase and gradient run along each strip at once, each "first-last" in the order the effect runs.
-    strips: <platform>
+    strips: [<platform>]
     buffer_leds: <platform>
     frame_rate: 25.0
     # Share of full brightness (0 to 1).
@@ -328,8 +329,8 @@ mowbite_sound:
     min_gap: 10.0
     # The announcements the platform brings (MP3), the folder searched first at the top; converted once into
     # <data_dir>/sounds. vendor_codes: situation=code of their list.
-    vendor_dirs: <platform>
-    vendor_codes: <platform>
+    vendor_dirs: [<platform>]
+    vendor_codes: [<platform>]
 
 # mowbite_camera, the pictures of the cameras of a platform for the app (starts with any of them): mjpeg_port,
 # webrtc_port, ice_port, media_api_port, media_server and runtime_dir have the defaults of the node.

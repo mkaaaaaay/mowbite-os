@@ -64,7 +64,26 @@ def test_a_platform_file_sets_only_known_values(platform):
 def test_a_placeholder_is_no_value_of_a_platform_file():
     for platform in PLATFORMS:
         for section, values in layers.sections(layers.files(platform)[1]):
-            assert layers.PLACEHOLDER not in values.values(), section
+            assert not any(layers.placeholder(value) for value in values.values()), section
+
+
+def test_a_list_of_stack_yaml_stays_a_list():
+    # rcl keeps a text of an earlier file over a later list: tron_mcu ended on journal_libraries.
+    stack_values = dict(layers.sections(layers.STACK))
+    for platform in PLATFORMS:
+        for section, values in layers.sections(layers.files(platform)[1]):
+            for key, value in values.items():
+                if key in stack_values.get(section, {}):
+                    assert isinstance(value, list) == isinstance(stack_values[section][key], list), \
+                        (platform, section, key)
+
+
+def test_a_placeholder_in_a_list_is_left_over(tmp_path):
+    stack_file = tmp_path / "stack.yaml"
+    stack_file.write_text("/**:\n  ros__parameters:\n    names: [<platform>]\n    other: <platform>\n")
+    platform_file = tmp_path / "platform.yaml"
+    platform_file.write_text("/**:\n  ros__parameters:\n    other: 1\n")
+    assert layers.unset([str(stack_file), str(platform_file)], ["node"]) == ["node.names"]
 
 
 def test_sections_match_by_name_and_wildcard():
