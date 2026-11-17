@@ -39,6 +39,9 @@ struct Hardware {
   // Names of the motor controllers that are not ok.
   std::vector<std::string> motors_down;
   uint64_t link_errors = 0;
+  // The blade motor reports, and its speed (rpm).
+  bool blade_ok = false;
+  double blade_rpm = 0;
 };
 
 // One input of hw/inputs.
@@ -68,14 +71,22 @@ struct Capabilities {
   // What the driver offers the steps that move the wheels: the longest hw/silence (s, 0 for none) and hw/end.
   double silence_max_s = 0;
   bool driver_end = false;
+  // hw/blade may switch the blade on, and its longest lease (s).
+  bool blade_allowed = false;
+  double blade_lease_max_s = 0;
 };
 
-// setup/motion while a step that moves the wheels runs: the bounds mowbite_safety holds its commands to.
+// setup/motion while a step that moves the wheels or the blade runs: the bounds mowbite_safety holds its commands to,
+// and the blade the logic is to turn (SetupMotion BLADE_*) with its speed (%), height (mm) and lease (s).
 struct Motion {
   std::string step;
   bool raised = true;
   double max_linear = 0;
   double max_angular = 0;
+  int blade = 0;
+  int blade_percent = 0;
+  int blade_height_mm = 0;
+  double blade_lease_s = 0;
 };
 
 // A command on setup/cmd_vel: m/s and rad/s.
@@ -177,8 +188,10 @@ class Program {
   std::optional<Motion> MotionNow() const;
   std::optional<Command> CommandNow() const;
   std::optional<std::string> TakeMotionEnd();
-  // hw/silence (seconds) and hw/end to call now, once each, and their answers.
+  // hw/silence (seconds) and hw/end to call now, once each, and their answers. A step blade asks hw/silence with the
+  // blade on.
   std::optional<double> TakeSilence();
+  bool SilenceWithBlade() const;
   bool TakeEnd();
   void OnSilenceAnswer(bool success, const std::string& code, double now, double wall);
   void OnEndAnswer(bool success, const std::string& code, double now, double wall);
@@ -335,7 +348,8 @@ class Program {
     json pressed_fields;
     // ground: the way by odometry since the trigger (m, any direction), the way along since the part began (m,
     // forwards positive), how far straight went, the turn by odometry and by the IMU since the side began (rad), the
-    // side of turn (0 left, 1 right), the antenna where straight began, and what the parts measured by value id.
+    // side of turn (0 left, 1 right), the antenna where straight began; what the parts of ground and blade measured
+    // by value id.
     double way = 0;
     double travel = 0;
     double straight_way = 0;
@@ -345,6 +359,9 @@ class Program {
     double fix_x = 0;
     double fix_y = 0;
     std::map<std::string, double> ground;
+    // blade: what the logic is to do with the blade (SetupMotion BLADE_*) and the fastest it turned in the part.
+    int blade = 0;
+    double peak = 0;
   };
 
   // The emergency a part of mode press brought, which the program releases itself. It exists only while every
@@ -455,6 +472,22 @@ class Program {
   void GroundStraightDone(double now, double wall);
   void NextGroundPart(double now, double wall);
   json GroundValues(const Run& run, const Step& step) const;
+  // blade.cpp: the step blade.
+  static bool IsBlade(const Step& step);
+  bool BladePress() const;
+  // What keeps the step blade from starting besides what keeps every step that moves.
+  std::vector<Refusal> BladeProblems(const Step& step) const;
+  // The driver does not allow the blade: true when the start wrote allow_blade and asked for the restart.
+  bool AllowBlade(const Step& step);
+  void BeginBladePart(double now, double wall);
+  void TickBlade(double now, double wall);
+  void NextBladePart(double now, double wall);
+  bool BladeTurns(const Step& step) const;
+  // The lease of the requests of the step: its own, at most the one of the driver (s).
+  double BladeLease(const Step& step) const;
+  double BladeLimit(const Step& step, const std::string& part) const;
+  // final: the part that ran without a stand is not ok.
+  json BladeValues(const Run& run, const Step& step, bool final) const;
   // The part of the running step that waits for its input took it: trigger, expected emergency and own latch.
   bool TakeTrigger(const Part& part, double now);
   void EnterDrive(Drive drive, double now, double wall);
@@ -536,6 +569,8 @@ class Program {
   double right_filtered_ = 0;
   double wheels_at_ = -1;
   double still_since_ = -1;
+  // Since when the blade turns below still_rpm of the running step (below 0: it turns or does not report).
+  double blade_still_since_ = -1;
   double track_ = 0;
   int restarts_left_ = 0;
   // The step to end setup/motion for, and the services to call.

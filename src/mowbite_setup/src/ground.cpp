@@ -57,7 +57,8 @@ std::vector<Refusal> Program::GroundProblems(double now) const {
   // passed; skipped does not count.
   json missing = json::array();
   for (const Step& other : list_.steps) {
-    if (IsDrive(other) && !IsGround(other) && records_.at(other.id).state != "ok") missing.push_back(other.id);
+    const bool raised = IsDrive(other) && !IsGround(other) && !IsBlade(other);
+    if (raised && records_.at(other.id).state != "ok") missing.push_back(other.id);
   }
   if (!missing.empty()) {
     problems.push_back(Refuse("SAFETY_AIR", "The lock is closed and the steps jacked up are not all passed: " +

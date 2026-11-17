@@ -235,6 +235,13 @@ void ReadParts(const json& entry, const std::string& where, Step* step) {
       const bool press = name.id == "stop" || name.id == "bumper";
       step->parts.push_back({name.id, press ? "press" : "", press ? name.id : "", "", Texts(name.texts)});
     }
+  } else if (step->check == "blade") {
+    if (given) throw Wrong(where + ": the parts of blade are fixed");
+    // stop, lift and bumper wait for the input of their role.
+    for (const auto& name : mowbite_api::SetupBladeParts()) {
+      const bool press = name.id == "stop" || name.id == "lift" || name.id == "bumper";
+      step->parts.push_back({name.id, press ? "press" : "", press ? name.id : "", "", Texts(name.texts)});
+    }
   } else if (step->check == "imu") {
     const std::vector<std::string> moves =
         given ? TextsOf(entry, "parts", where) : std::vector<std::string>{"front_up", "left_up", "turn_left"};
@@ -244,7 +251,7 @@ void ReadParts(const json& entry, const std::string& where, Step* step) {
       step->parts.push_back({move, "", "", move, Texts(name->texts)});
     }
   } else if (given) {
-    throw Wrong(where + ": parts go with input, inputs_assign, imu, stop_moving, wheels and ground only");
+    throw Wrong(where + ": parts go with input, inputs_assign, imu, stop_moving, wheels, ground and blade only");
   }
   if (step->parts.size() > static_cast<size_t>(mowbite_api::kSetupMaxParts)) throw Wrong(where + ": too many parts");
   if ((step->check == "input" || step->check == "inputs_assign" || step->check == "imu" ||
@@ -377,15 +384,17 @@ Step ReadStep(const json& entry, const std::vector<Step>& before, size_t* stage_
       if (std::count_if(step.confirm.begin(), step.confirm.end(), same) > 1) throw Wrong(where + ": a point twice");
     }
   }
-  if (step.kind == "drive") {
+  if (step.kind == "drive" || step.kind == "blade") {
     // The wheels turn only with the mower jacked up and a hand at a STOP button, on the ground with the way clear and
-    // the user next to it, and with the inputs checked standing.
-    const bool ground = step.check == "ground";
-    for (const char* point : ground ? std::vector<const char*>{"area_clear"}
-                                    : std::vector<const char*>{"raised", "hand_at_stop"}) {
+    // the user next to it, the blade only taken off with a hand at a STOP button; all with the inputs checked
+    // standing.
+    std::vector<const char*> points = {"raised", "hand_at_stop"};
+    if (step.check == "ground") points = {"area_clear"};
+    if (step.kind == "blade") points = {"blade_removed", "hand_at_stop"};
+    for (const char* point : points) {
       const auto has = [point](const Named& named) { return named.id == point; };
       if (std::none_of(step.confirm.begin(), step.confirm.end(), has)) {
-        throw Wrong(where + ": a step that moves the wheels confirms " + point);
+        throw Wrong(where + ": a step that moves the wheels or the blade confirms " + point);
       }
     }
     for (const char* group : {"stop", "lift", "bumper"}) {
@@ -393,7 +402,7 @@ Step ReadStep(const json& entry, const std::vector<Step>& before, size_t* stage_
         return other.check == "input" && GroupOfRole(other.Word("role")) == group;
       };
       if (std::none_of(before.begin(), before.end(), checks)) {
-        throw Wrong(where + ": a step that moves the wheels comes after a step input of " + group);
+        throw Wrong(where + ": a step that moves the wheels or the blade comes after a step input of " + group);
       }
     }
     if (step.lists.count("emergency") && step.lists.at("emergency").empty()) {
@@ -484,7 +493,7 @@ std::optional<StepList> ParseSteps(const json& list, std::string* why) {
     size_t stage_index = 0;
     for (const auto& entry : list["steps"]) out.steps.push_back(ReadStep(entry, out.steps, &stage_index));
     for (const Step& step : out.steps) {
-      if (step.check != "inputs_assign") continue;
+      if (step.check != "inputs_assign" && step.check != "blade") continue;
       if (out.restart.empty()) throw Wrong(step.id + " needs restart at the top of the list");
       if (!Layer::IsNode(step.Word("node"))) throw Wrong(step.id + ": node is no name of a node");
     }

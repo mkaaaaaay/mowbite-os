@@ -36,6 +36,20 @@ std::string GroundList() {
   return list.dump();
 }
 
+// The list with the step blade, which restarts the OS to allow the blade.
+std::string BladeList() {
+  json list = json::parse(kList);
+  list["restart"] = "self";
+  list["steps"].push_back({{"id", "blade"},
+                           {"stage", "blade"},
+                           {"check", "blade"},
+                           {"params", {{"node", "tron_mcu"}, {"rpm", 2500}, {"emergency", {"HIGH_LEVEL"}}}},
+                           {"confirm", {"blade_removed", "hand_at_stop"}}});
+  return list.dump();
+}
+
+const json kBladeConfirm = json::array({"blade_removed", "hand_at_stop"});
+
 const char* const kInputsPassed =
     R"({"schema": 1, "platform": "tron", "steps": {"stop": {"state": "ok"}, "lift": {"state": "ok"},
         "bumper": {"state": "ok"}}})";
@@ -92,6 +106,7 @@ struct Mower {
     }
     const bool host = now >= silent_until && now >= gone_until;
     if (hardware.emergency_reason != 0) armed = false;
+    TurnBlade(motion, host);
     const auto command = program.CommandNow();
     if (command && motion) {
       EXPECT_LE(std::abs(command->linear) + std::abs(command->angular) * kTrack / 2, motion->max_linear + 1e-9);
@@ -158,6 +173,7 @@ struct Mower {
     }
     if (const auto seconds = program.TakeSilence()) {
       silences++;
+      silence_blade = program.SilenceWithBlade();
       program.OnSilenceAnswer(silence_code.empty(), silence_code, now, kWall + now);
       if (silence_code.empty()) silent_until = now + *seconds;
     }
@@ -239,6 +255,50 @@ struct Mower {
     hardware.*input = false;
   }
 
+  // The blade as the logic and the board turn it: in SETUP without emergency the logic asks the board for it, renewing
+  // the lease while the step asks BLADE_ON and once on BLADE_ONCE; the board turns it up within a second and stops it
+  // blade_stop s after its lease ran out, an emergency or hold_without_host s without its host.
+  void TurnBlade(const std::optional<Motion>& motion, bool host) {
+    const int asked = motion && world == "SETUP" && hardware.emergency_reason == 0 && host ? motion->blade : 0;
+    if (asked == 1 || (asked == 2 && blade_asked != 2)) blade_until = now + motion->blade_lease_s;
+    if (asked == 0 && blade_asked != 0 && host) blade_until = -1;
+    blade_asked = asked;
+    if (host) heard_at = now;
+    const bool on = capabilities.blade_allowed && now < blade_until && hardware.emergency_reason == 0 &&
+                    now - heard_at <= hold_without_host;
+    if (on) {
+      if (blade_since < 0) blade_since = now;
+      blade_off_since = -1;
+      rpm = std::min(1.0, (now - blade_since) / 0.8) * 3000;
+    } else {
+      blade_since = -1;
+      if (blade_off_since < 0) blade_off_since = now;
+      if (now - blade_off_since >= blade_stop && !blade_runs_on) rpm = 0;
+    }
+    if (restarts_blade && hardware.emergency_reason == 0 && blade_off_since >= 0 && now - blade_off_since > 2.5) {
+      rpm = 3000;
+    }
+    hardware.blade_ok = true;
+    hardware.blade_rpm = rpm;
+  }
+
+  // Runs until part n of blade (from 1) waits with the blade turning, then triggers the input with its emergency and
+  // lets go after hold s.
+  void PressWhileBlade(int part, bool Hardware::*input, uint32_t bits, double hold = 0.5) {
+    const auto waits = [this, part] {
+      const json step = StepState("blade");
+      return step["progress"].is_object() && step["progress"]["n"] == part && !step["ends_at"].is_null();
+    };
+    for (const double end = now + 30; now < end && !waits();) Step();
+    ASSERT_TRUE(waits()) << StepState("blade").dump();
+    ASSERT_GE(rpm, 2500);
+    Run(0.3);
+    hardware.*input = true;
+    Latch(bits);
+    Run(hold);
+    hardware.*input = false;
+  }
+
   // On the ground with an RTK fix; with a date the lock is open.
   void PutOnGround(bool date = true) {
     on_ground = true;
@@ -291,7 +351,17 @@ struct Mower {
   double hearing_at = -1;
   double kept_at = -1;
   std::string silence_code;
+  bool silence_blade = false;
   std::string running_step;
+  double rpm = 0;
+  int blade_asked = 0;
+  double blade_until = -1;
+  double heard_at = 0;
+  double blade_since = -1;
+  double blade_off_since = -1;
+  double blade_stop = 0.3;
+  bool blade_runs_on = false;
+  bool restarts_blade = false;
   int releases = 0;
   int silences = 0;
   std::vector<json> ends;
@@ -694,4 +764,193 @@ TEST(Ground, AStopNotPressedAsksOnceBackAtTheStart) {
   EXPECT_EQ(end["reason"], "NOT_DONE") << end.dump();
   EXPECT_EQ(end["part"], "stop");
   EXPECT_FALSE(mower.program.TakeLock());
+}
+
+namespace {
+
+// The mower of BladeList with the blade allowed by the driver.
+struct BladeMower : Mower {
+  BladeMower() : Mower(true, BladeList().c_str()) {
+    capabilities.blade_allowed = true;
+    capabilities.blade_lease_max_s = 2.0;
+    program.OnCapabilities(capabilities);
+    Run(0.2);
+  }
+};
+
+}  // namespace
+
+TEST(Blade, StopsItsBladeInSixWaysAndPasses) {
+  BladeMower mower;
+  const json motion = mower.StepState("blade")["motion"];
+  EXPECT_EQ(motion["blade"], true);
+  EXPECT_EQ(motion["wheels"], false);
+  EXPECT_EQ(mower.StepState("blade")["restart"], false);
+  EXPECT_EQ(mower.Start("blade"), "CONFIRM_MISSING");
+  ASSERT_EQ(mower.Start("blade", kBladeConfirm), "");
+  ASSERT_TRUE(mower.program.MotionNow());
+  EXPECT_EQ(mower.program.MotionNow()->max_linear, 0);
+  EXPECT_EQ(mower.program.MotionNow()->blade_percent, 100);
+  EXPECT_DOUBLE_EQ(mower.program.MotionNow()->blade_lease_s, 1.0);
+  mower.PressWhileBlade(4, &Hardware::stop, Bit("STOP"));
+  EXPECT_TRUE(mower.silence_blade);
+  // Lifted at the front both sensors may switch.
+  mower.PressWhileBlade(5, &Hardware::lift, Bit("LIFT") | Bit("LIFT_MULTIPLE"));
+  mower.PressWhileBlade(6, &Hardware::bumper_left, Bit("COLLISION"));
+  const json end = mower.RunToEnd(20);
+  ASSERT_EQ(end["state"], "ok") << end.dump();
+  const json step = mower.StepState("blade");
+  for (const auto& value : step["values"]) EXPECT_EQ(value["ok"], true) << value.dump();
+  // The speed when it passed rpm.
+  EXPECT_GE(ValueOf(step, "rpm")["value"].get<double>(), 2500);
+  EXPECT_NEAR(ValueOf(step, "on_off")["value"].get<double>(), 0.3, 0.1);
+  // One lease of 1 s, then the board's 0.3 s.
+  EXPECT_NEAR(ValueOf(step, "lease")["value"].get<double>(), 1.3, 0.1);
+  EXPECT_NEAR(ValueOf(step, "silent")["value"].get<double>(), 0.5, 0.1);
+  EXPECT_LE(ValueOf(step, "stop")["value"].get<double>(), 0.4);
+  EXPECT_EQ(mower.hardware.emergency_reason, 0u);
+  // silent, stop, lift, bumper: four emergencies released by the program.
+  EXPECT_EQ(mower.releases, 4);
+  EXPECT_EQ(mower.silences, 1);
+  // No wheel got a command.
+  EXPECT_LT(mower.setpoint_at, 0);
+  mower.Run(0.1);
+  EXPECT_EQ(mower.motion_ends, std::vector<std::string>{"blade"});
+  EXPECT_FALSE(mower.program.MotionNow());
+}
+
+TEST(Blade, TheFirstStartAllowsTheBladeAndRestartsNotTheStep) {
+  Mower mower(true, BladeList().c_str());
+  mower.program.SetLayer(Layer(), {});
+  mower.Run(0.2);
+  EXPECT_EQ(mower.StepState("blade")["restart"], true);
+  EXPECT_EQ(mower.StepState("blade")["blocked"], json::array());
+  const int version = mower.program.version();
+  ASSERT_EQ(mower.Start("blade", kBladeConfirm), "");
+  // No attempt, no run: the step waits for the next start after the restart.
+  EXPECT_FALSE(mower.program.running());
+  EXPECT_GT(mower.program.version(), version);
+  EXPECT_EQ(mower.StepState("blade")["attempt"], 0);
+  EXPECT_EQ(mower.StepState("blade")["state"], "open");
+  const auto text = mower.program.TakeLayer();
+  ASSERT_TRUE(text);
+  EXPECT_NE(text->find("allow_blade: true"), std::string::npos) << *text;
+  EXPECT_FALSE(mower.program.TakeRestart(mower.now));
+  mower.program.LayerWritten(true, mower.now, kWall);
+  mower.program.TakeChanged();
+  EXPECT_EQ(mower.Start("blade", kBladeConfirm), "BUSY");
+  EXPECT_TRUE(mower.program.TakeRestart(mower.now));
+  EXPECT_EQ(mower.StepState("blade")["blocked"][0]["reason"], "BUSY");
+
+  // After the restart: the driver allows it, or the file kept by hand or the driver does not.
+  Layer layer;
+  ASSERT_TRUE(layer.Parse(*text, nullptr));
+  Mower after(true, BladeList().c_str());
+  after.program.SetLayer(layer, {});
+  after.Run(0.2);
+  json blocked = after.StepState("blade")["blocked"];
+  ASSERT_EQ(blocked.size(), 1u) << blocked.dump();
+  EXPECT_EQ(blocked[0]["reason"], "BLADE_NOT_ALLOWED");
+  EXPECT_EQ(after.Start("blade", kBladeConfirm), "BLADE_NOT_ALLOWED");
+  Mower hand(true, BladeList().c_str());
+  hand.program.SetLayer(Layer(), {"tron_mcu.allow_blade"});
+  hand.Run(0.2);
+  const auto refusal = hand.program.Start(
+      {{"step", "blade"}, {"version", hand.program.version()}, {"confirm", kBladeConfirm}}, hand.now, kWall);
+  ASSERT_TRUE(refusal);
+  EXPECT_EQ(refusal->reason, "BLADE_NOT_ALLOWED");
+  EXPECT_EQ(refusal->data["key"], "tron_mcu.allow_blade");
+  after.capabilities.blade_allowed = true;
+  after.program.OnCapabilities(after.capabilities);
+  after.Run(0.2);
+  EXPECT_EQ(after.StepState("blade")["restart"], false);
+  EXPECT_EQ(after.Start("blade", kBladeConfirm), "");
+  EXPECT_TRUE(after.program.running());
+}
+
+TEST(Blade, ABladeThatDoesNotStandOrRunsAgainClosesTheLock) {
+  {
+    BladeMower mower;
+    mower.blade_stop = 1.5;
+    ASSERT_EQ(mower.Start("blade", kBladeConfirm), "");
+    const json end = mower.RunToEnd(10);
+    EXPECT_EQ(end["state"], "failed");
+    EXPECT_EQ(end["reason"], "LIMIT");
+    EXPECT_EQ(end["part"], "on_off");
+    EXPECT_EQ(end["value_id"], "on_off");
+    EXPECT_EQ(mower.StepState("blade")["values"][1]["ok"], false);
+    const json safety = mower.program.State(mower.now, {})["safety"];
+    EXPECT_EQ(safety["why"], "CHECK_FAILED") << safety.dump();
+    EXPECT_EQ(safety["closed"][0]["step"], "blade");
+    mower.Run(0.1);
+    EXPECT_FALSE(mower.program.MotionNow());
+  }
+  {
+    BladeMower mower;
+    mower.restarts_blade = true;
+    ASSERT_EQ(mower.Start("blade", kBladeConfirm), "");
+    const json end = mower.RunToEnd(20);
+    EXPECT_EQ(end["state"], "failed");
+    EXPECT_EQ(end["reason"], "STARTED_AGAIN") << end.dump();
+    EXPECT_EQ(mower.program.State(mower.now, {})["safety"]["why"], "CHECK_FAILED");
+  }
+}
+
+TEST(Blade, ABladeThatDoesNotComeUpFailsWithoutClosing) {
+  BladeMower mower;
+  ASSERT_EQ(mower.Start("blade", kBladeConfirm), "");
+  // The board refuses: the blade does not turn.
+  mower.capabilities.blade_allowed = false;
+  const json end = mower.RunToEnd(10);
+  EXPECT_EQ(end["reason"], "NO_START") << end.dump();
+  EXPECT_EQ(end["rpm"], 0);
+  EXPECT_EQ(mower.program.State(mower.now, {})["safety"]["closed"], json::array());
+}
+
+TEST(Blade, AnInputNotTriggeredInTimeAsksWithTheBladeOff) {
+  BladeMower mower;
+  ASSERT_EQ(mower.Start("blade", kBladeConfirm), "");
+  const auto asks = [&mower] {
+    const json step = mower.StepState("blade");
+    for (const auto& input : step["inputs"]) {
+      if (input["name"] == "pressed" && input["ask"] == true) return true;
+    }
+    return false;
+  };
+  for (const double end = mower.now + 40; mower.now < end && !asks();) mower.Step();
+  ASSERT_TRUE(asks());
+  EXPECT_EQ(mower.StepState("blade")["progress"]["n"], 4);
+  ASSERT_TRUE(mower.program.MotionNow());
+  EXPECT_EQ(mower.program.MotionNow()->blade, 0);
+  mower.Run(0.5);
+  EXPECT_EQ(mower.rpm, 0);
+  json params = {{"step", "blade"}, {"version", mower.program.version()}, {"values", {{"pressed", "no"}}}};
+  EXPECT_FALSE(mower.program.Answer(params, mower.now, kWall + mower.now));
+  const json end = mower.RunToEnd(1);
+  EXPECT_EQ(end["reason"], "NOT_DONE");
+}
+
+TEST(Blade, TheStepListHoldsItsRules) {
+  json list = json::parse(BladeList());
+  list["steps"].back()["confirm"] = {"blade_removed"};
+  std::string why;
+  EXPECT_FALSE(ParseSteps(list, &why));
+  EXPECT_NE(why.find("hand_at_stop"), std::string::npos) << why;
+  list = json::parse(BladeList());
+  list.erase("restart");
+  EXPECT_FALSE(ParseSteps(list, &why));
+  EXPECT_NE(why.find("restart"), std::string::npos) << why;
+  list = json::parse(BladeList());
+  list["steps"].back()["parts"] = {"on_off"};
+  EXPECT_FALSE(ParseSteps(list, &why));
+  // Parts in their fixed order, stop, lift and bumper wait for their input.
+  const auto steps = ParseSteps(json::parse(BladeList()), &why);
+  ASSERT_TRUE(steps) << why;
+  const Step& blade = steps->steps.back();
+  ASSERT_EQ(blade.parts.size(), 6u);
+  EXPECT_EQ(blade.parts[0].id, "on_off");
+  EXPECT_EQ(blade.parts[3].role, "stop");
+  EXPECT_EQ(blade.parts[4].role, "lift");
+  EXPECT_EQ(blade.parts[5].role, "bumper");
+  EXPECT_EQ(blade.parts[2].role, "");
 }

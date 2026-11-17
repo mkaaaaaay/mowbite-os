@@ -19,6 +19,12 @@ constexpr double kNoData = 3.0;
 // first command (s).
 constexpr double kEnterWait = 2.0;
 constexpr double kStartWait = 3.0;
+// The driver answers hw/silence and hw/end within this time (s).
+constexpr double kServiceWait = 2.0;
+// The emergency of the trigger stands within this time once the wheels or the blade have to stand still no longer (s).
+constexpr double kLatchWait = 2.0;
+// The release of the program ends that emergency within this time (s).
+constexpr double kReleaseWithin = 10.0;
 
 inline uint32_t LatchBit() {
   static const uint32_t bit = EmergencyBit("LATCH");

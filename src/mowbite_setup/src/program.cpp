@@ -241,6 +241,12 @@ void Program::OnHardware(const Hardware& hardware, double now) {
   NoteDriverBack(hardware, now);
   hardware_ = hardware;
   hardware_at_ = now;
+  const bool blade = run_ && IsBlade(StepOf(*run_));
+  if (!blade || BladeTurns(StepOf(*run_)) || !hardware.blade_ok) {
+    blade_still_since_ = -1;
+  } else if (blade_still_since_ < 0) {
+    blade_still_since_ = now;
+  }
   WatchOwnLatch();
   if (!run_ || StepOf(*run_).check != "board") return;
   ++run_->status_count;
@@ -724,7 +730,8 @@ json Program::SafetyState() const {
 }
 
 bool Program::CanAsk(const Step& step) {
-  return step.check == "input" || step.check == "imu" || step.check == "stop_moving" || step.check == "ground";
+  return step.check == "input" || step.check == "imu" || step.check == "stop_moving" || step.check == "ground" ||
+         step.check == "blade";
 }
 
 void Program::AskPressed(const std::string& reason, json fields, double now, double wall) {
@@ -829,6 +836,8 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
   if ((step.check == "board" || step.check == "input") && !Fresh(hardware_at_, now, kFresh)) {
     return Refuse("DRIVER_MISSING", "The driver of the platform reports no status");
   }
+  // A driver that does not allow the blade yet: this start writes allow_blade and restarts the OS, the next one runs.
+  if (IsBlade(step) && AllowBlade(step)) return std::nullopt;
 
   Record& record = RecordOf(step);
   ++record.attempt;
@@ -1646,8 +1655,10 @@ json Program::Blocked(const Step& step, double now) const {
     return blocked;
   }
   if (IsRun(step) && IsDrive(step)) {
-    const bool releasing = run_->drive == Drive::kRelease && (step.check == "stop_moving" || IsGround(step));
-    if (releasing && Signal(step.parts[run_->part].role)) {
+    const std::string& role = step.parts.empty() ? "" : step.parts[run_->part].role;
+    const bool releasing = run_->drive == Drive::kRelease && !role.empty() &&
+                           (step.check == "stop_moving" || IsGround(step) || IsBlade(step));
+    if (releasing && Signal(role)) {
       add("INPUT_ACTIVE", "The input " + step.parts[run_->part].role + " is still switched");
     }
     return blocked;
@@ -1845,7 +1856,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
       }
       // The user acts within this: the trigger of stop_moving, the answer of one_wheel.
       const bool press = step.check == "stop_moving" || (IsGround(step) && GroundPress());
-      if (run_->move_began >= 0 && press && run_->drive == Drive::kTrigger) {
+      if (((run_->move_began >= 0 && press) || BladePress()) && run_->drive == Drive::kTrigger) {
         ends_at = std::floor(run_->drive_wall + step.Number("time"));
       } else if (step.check == "wheels" && run_->drive == Drive::kMeasure && step.parts[run_->part].id == "one_wheel") {
         ends_at = std::floor(run_->drive_wall + step.Number("answer_time"));
@@ -1890,7 +1901,8 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
                      {"mark", step.mark},
                      {"texts", step.texts},
                      {"result", record.result},
-                     {"restart", IsAssign(step)}});
+                     {"restart", IsAssign(step) || (IsBlade(step) && capabilities_known_ &&
+                                                    !capabilities_.blade_allowed)}});
     if (stages.empty() || stages.back()["id"] != step.stage) {
       const mowbite_api::SetupName* stage = mowbite_api::FindSetupName(mowbite_api::SetupStages(), step.stage);
       stages.push_back({{"id", step.stage}, {"state", ""}, {"texts", mowbite_api::Texts(stage->texts)}});

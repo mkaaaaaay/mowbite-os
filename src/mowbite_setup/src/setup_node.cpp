@@ -162,6 +162,8 @@ class SetupNode : public rclcpp::Node {
       hardware.battery = msg->battery_source != HardwareStatus::BATTERY_SOURCE_NONE;
       hardware.battery_percentage = msg->battery_percentage;
       if (!msg->blade_motor.ok) hardware.motors_down.push_back("blade");
+      hardware.blade_ok = msg->blade_motor.ok;
+      hardware.blade_rpm = msg->blade_motor.rpm;
       if (!msg->left_motor.ok) hardware.motors_down.push_back("left");
       if (!msg->right_motor.ok) hardware.motors_down.push_back("right");
       hardware.link_errors = msg->link_errors;
@@ -195,6 +197,8 @@ class SetupNode : public rclcpp::Node {
           capabilities.safety_measurement_date = msg->safety_measurement_date;
           capabilities.silence_max_s = msg->silence_max_s;
           capabilities.driver_end = msg->driver_end;
+          capabilities.blade_allowed = msg->blade_allowed;
+          capabilities.blade_lease_max_s = msg->blade_lease_max_s;
           std::lock_guard<std::mutex> lock(mutex_);
           program_->OnCapabilities(capabilities);
           state_due_ = true;
@@ -474,8 +478,9 @@ class SetupNode : public rclcpp::Node {
     return std::max(0, static_cast<int>(max - number("restart")));
   }
 
-  // A step that moves the wheels: setup/motion at its rate and once with active false at its end, its command with
-  // every tick, hw/silence and hw/end when it asks for them. Called with the mutex held.
+  // A step that moves the wheels or the blade: setup/motion at its rate, at once when the blade changes, and once with
+  // active false at its end, its command with every tick, hw/silence and hw/end when it asks for them. Called with the
+  // mutex held.
   void Drive(double now) {
     if (const auto step = program_->TakeMotionEnd()) {
       mowbite_msgs::msg::SetupMotion msg;
@@ -486,8 +491,9 @@ class SetupNode : public rclcpp::Node {
       motion_sent_ = -1;
     }
     if (const auto motion = program_->MotionNow()) {
-      if (motion_sent_ < 0 || now - motion_sent_ >= kMotionPeriod) {
+      if (motion_sent_ < 0 || now - motion_sent_ >= kMotionPeriod || motion->blade != motion_blade_) {
         motion_sent_ = now;
+        motion_blade_ = motion->blade;
         mowbite_msgs::msg::SetupMotion msg;
         msg.stamp = get_clock()->now();
         msg.active = true;
@@ -495,6 +501,10 @@ class SetupNode : public rclcpp::Node {
         msg.raised = motion->raised;
         msg.max_linear = static_cast<float>(motion->max_linear);
         msg.max_angular = static_cast<float>(motion->max_angular);
+        msg.blade = static_cast<uint8_t>(motion->blade);
+        msg.blade_percent = static_cast<uint8_t>(motion->blade_percent);
+        msg.blade_height_mm = static_cast<uint16_t>(motion->blade_height_mm);
+        msg.blade_lease_s = static_cast<float>(motion->blade_lease_s);
         motion_pub_->publish(msg);
       }
       if (const auto command = program_->CommandNow()) {
@@ -510,6 +520,7 @@ class SetupNode : public rclcpp::Node {
       } else {
         auto request = std::make_shared<SilenceDriver::Request>();
         request->seconds = static_cast<float>(*seconds);
+        request->blade = program_->SilenceWithBlade();
         silence_client_->async_send_request(request, [this](rclcpp::Client<SilenceDriver>::SharedFuture future) {
           const auto& response = future.get();
           std::lock_guard<std::mutex> lock(mutex_);
@@ -686,6 +697,7 @@ class SetupNode : public rclcpp::Node {
   double restarts_read_ = -1;
   double track_ = 0;
   double motion_sent_ = -1;
+  int motion_blade_ = 0;
   rclcpp::Publisher<mowbite_msgs::msg::RpcResponse>::SharedPtr response_pub_;
   rclcpp::Publisher<RpcError>::SharedPtr error_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcMethods>::SharedPtr methods_pub_;
