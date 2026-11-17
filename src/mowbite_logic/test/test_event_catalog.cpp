@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 
 #include "mowbite_api/catalog.h"
@@ -10,18 +12,36 @@ using namespace mowbite_logic;
 
 namespace {
 
+// With MOWBITE_EVENT_TRACE set, every event of the core goes as a line "test, type, details" into that file: the trace
+// of a commit that only moves code has to equal the one before it.
+FILE* trace = nullptr;
+
+void Trace(const std::string& type, const json& details) {
+  if (!trace) return;
+  const auto* test = ::testing::UnitTest::GetInstance()->current_test_info();
+  const std::string name = test ? std::string(test->test_suite_name()) + "." + test->name() : "-";
+  std::fprintf(trace, "%s\t%s\t%s\n", name.c_str(), type.c_str(), details.dump().c_str());
+}
+
 // Every event the core adds in any test of the logic goes against the catalog of the interface.
 void CheckAgainstCatalog(const std::string& type, const json& details) {
+  Trace(type, details);
   for (const auto& problem : mowbite_api::CheckEvent(type, details)) ADD_FAILURE() << problem;
 }
 
 class EventCatalog : public ::testing::Environment {
  public:
   void SetUp() override {
+    if (const char* path = std::getenv("MOWBITE_EVENT_TRACE")) {
+      trace = std::fopen(path, "w");
+      if (!trace) ADD_FAILURE() << "cannot write the event trace " << path;
+    }
     SetEventObserver(&CheckAgainstCatalog);
   }
   void TearDown() override {
     SetEventObserver(nullptr);
+    if (trace) std::fclose(trace);
+    trace = nullptr;
   }
 };
 
@@ -30,7 +50,8 @@ class EventCatalog : public ::testing::Environment {
 
 int seen = 0;
 
-void Count(const std::string&, const json&) {
+void Count(const std::string& type, const json& details) {
+  Trace(type, details);
   seen++;
 }
 

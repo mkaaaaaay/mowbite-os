@@ -20,6 +20,8 @@ CORES = {
 # Not part of a core although in its library: the STOP clear mark belongs to the node, the core only gets it as
 # SetStopClearMark.
 NOT_CORE = {"tron_mcu/src/stop_clear_mark.cpp", "tron_mcu/include/tron_mcu/stop_clear_mark.h"}
+# The parts of the logic core reach the core only through CoreAccess and CoreFacts, never through logic_core.h.
+LOGIC_PARTS = []
 RULES = [
     ("clock", r"\b(steady_clock|system_clock|high_resolution_clock|clock_gettime|gettimeofday)\b|\btime\s*\("),
     ("randomness", r"\b(random_device|rand|srand|drand48)\b\s*[({]"),
@@ -64,6 +66,16 @@ class CoreRules(unittest.TestCase):
                 for name, pattern in RULES:
                     if re.search(pattern, line) and not (name == "hidden state" and "(" in line):
                         found.append(f"{path}:{number}: {name}: {line.strip()}")
+        self.assertEqual(found, [], "\n".join(found))
+
+    def test_the_parts_of_the_logic_do_not_include_its_core(self):
+        found = []
+        for path in LOGIC_PARTS:
+            with open(os.path.join(SRC, path)) as f:
+                lines = f.read().split("\n")
+            for number, line in enumerate(lines, 1):
+                if re.match(r'\s*#\s*include\s*[<"]mowbite_logic/logic_core\.h[>"]', line):
+                    found.append(f"{path}:{number}")
         self.assertEqual(found, [], "\n".join(found))
 
 

@@ -270,6 +270,24 @@ TEST_F(CoreReplay, LogicCore) {
   EXPECT_NE(Text(report).find("logic: bit-identical"), std::string::npos) << Text(report);
 }
 
+// Journals replay while their table is the start of today's: the methods of the logic keep name, place and signature,
+// new ones only come at the end. The checksum covers the first kTableLength entries.
+TEST(LogicJournal, TheTableIsOnlyAppendedTo) {
+  using L = mowbite_logic::LogicCore;
+  constexpr size_t kTableLength = 70;
+  constexpr char kTableChecksum[] = "86bc7d34bd2331dc";
+  const auto definition = mowbite_journal::CoreDefinition<L>(mowbite_logic::LogicConfig(), nlohmann::json::object());
+  const auto& methods = definition.at("methods");
+  ASSERT_GE(methods.size(), kTableLength);
+  std::vector<std::string> names, signatures;
+  for (size_t i = 0; i < kTableLength; ++i) {
+    names.push_back(methods[i].at("name"));
+    signatures.push_back(methods[i].at("signature"));
+  }
+  EXPECT_EQ(mowbite_journal::detail::TableChecksum(names, signatures), kTableChecksum)
+      << "a method of the journal table changed: new methods only at its end";
+}
+
 // The bytes of a double as a call has them (little endian) and as CBOR has them (big endian).
 std::string DoubleBytes(double value, bool big_endian) {
   std::string bytes(sizeof(value), '\0');
