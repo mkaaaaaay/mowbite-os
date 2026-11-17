@@ -69,9 +69,13 @@ Duties:
   `latch_count` one up), send the blade off and three stops. `hw/end` answers and then ends the process with exit code
   3 without another byte to the board; the start counts it like a crash and starts the driver again latched. Both
   refuse with `READ_ONLY`, `CHARGING` (also on the raw contact), `BLADE` (lease, blade on, running down) and hw/silence
-  with `OUT_OF_RANGE` and `BUSY`. Offer them with `silence_max_s` (a parameter `silence_max` well past the time the
-  board stops without its host; 0 without) and `driver_end` in `hw/capabilities`. The steps `silence` and
-  `driver_end` measure with them how the board stops without its host.
+  with `OUT_OF_RANGE` and `BUSY`. hw/silence with `blade` true goes silent with the blade on as well (the step `blade`
+  measures that the board stops it alone); after it no lease runs on. Offer them with `silence_max_s` (a parameter
+  `silence_max` well past the time the board stops without its host; 0 without) and `driver_end` in
+  `hw/capabilities`. The steps `silence` and `driver_end` measure with them how the board stops without its host.
+- Blade allowed: `blade_allowed` of `hw/capabilities` is true when hw/blade would take an on (`allow_blade` of the
+  driver, false in read_only). The step `blade` writes `allow_blade` into the file of the setup program when it is
+  false.
 - Release at the mower (optional, G37): a driver that sees every sample of its stop button may recognise the gesture
   itself (`tron_mcu/stop_release.h`: free 2 s, then a short press of 0.1 to 2 s) and report HELD, LONG and CANCELED
   on `hw/button`. It never releases by itself: the logic does, like `emergency.reset`, with the `latch_count` of LONG,
@@ -292,14 +296,14 @@ arguments may be out of scope.
 
 Optional `setup/setup.yaml` with `setup/images/`: the steps of the setup program the app walks the user through
 (`setup.*`, node `mowbite_setup`). Without the file the methods are not offered. `catalog` counts up with every change
-of a step or an image, `restart` (`self` or `host`) is needed with a step `inputs_assign` and names how the OS
-restarts for it, `steps` come in the order the app shows them:
+of a step or an image, `restart` (`self` or `host`) is needed with a step `inputs_assign` or `blade` and names how
+the OS restarts for it, `steps` come in the order the app shows them:
 
 | Field | What |
 |---|---|
 | `id`, `stage`, `check` | its name, one of `x-setup.stages` and one of `x-setup.checks` of the schema |
 | `params` | the params of the check, within the bounds the schema names; without an entry the default there |
-| `parts` | of `input`: `id`, optional `mode` (press, short), `role` and `texts`; of `inputs_assign`: `id`, `role`, `delay_ms`, optional `texts`; of `imu`: the moves in their order; of `stop_moving`: `id`, `role`, optional `texts`; none of `wheels` and `ground` (fixed) |
+| `parts` | of `input`: `id`, optional `mode` (press, short), `role` and `texts`; of `inputs_assign`: `id`, `role`, `delay_ms`, optional `texts`; of `imu`: the moves in their order; of `stop_moving`: `id`, `role`, optional `texts`; none of `wheels`, `ground` and `blade` (fixed) |
 | `value_texts` | of `choice`: `de` and `en` with `name` for every value |
 | `confirm` | points the user ticks before the step begins (`x-setup.points`, or own ones with texts) |
 | `needs` | steps ahead of it that have to be ok first |
@@ -395,6 +399,18 @@ lock of section 6 is closed, every step of stage `wheels` passed (`SAFETY_AIR`).
 and 0.4 rad/s without pose and fence, like the remote control; every step that moves the wheels stops after one move
 of 10 s and moves again only after a zero. Take the bounds of standing from a measurement of the platform on the
 ground (the NX60i from M8); where there is none, the values of another mower and the first run as the measurement.
+
+The step `blade` (stage `blade`, kind `blade`) turns the blade with the disc taken off (confirm `blade_removed` and
+`hand_at_stop`), the wheels get no command. Its first start on a driver without `blade_allowed` writes `allow_blade`
+for `node` into the file of the setup program and restarts the OS; the user starts it again after that, never the
+program. A file kept by hand that sets `allow_blade: false` keeps it locked (`BLADE_NOT_ALLOWED`). Its parts in one
+run: `on_off` (on at `percent` and `height` until `rpm` within `spin_up` s, then off: it stands below `still_rpm`
+within `off_max` s), `lease` (one request on `lease` s that is not renewed: within the lease and `lease_extra` s),
+`silent` (hw/silence with the blade: within `silent_max` s, then released as `silence`), and `stop`, `lift`, `bumper`
+(the user triggers the input while the blade turns: within `stop_max` s, released by the program). After every stand
+nothing turns for `hold` s. The blade turns only through the logic, in SETUP, without emergency and off the station,
+and goes off when the step ends. Take the bounds from a measurement of the platform (the Tron: measured on the
+mower, all within 1.0 s); where there is none, those of the board's firmware and the first run as the measurement.
 
 The start is the same for every mower: `ros2 launch mowbite_bringup mowbite.launch.py platform:=<name>`, by default the
 platform `MOWBITE_PLATFORM` names, a value of the device (the compose file of the mower sets it, the Tron in
@@ -532,9 +548,9 @@ Then set `safety_measurement_date` in the driver parameters. Without it the mowe
 (`NO_SAFETY_MEASUREMENT`).
 
 The setup program can close that lock again, whatever the date: a safety step (`input`, `imu`, `wheels`,
-`stop_moving`, `no_command`, `silence`, `driver_end`, `ground`; `safety` in `x-setup.checks`) that fails with a
-reason that closes (`closes` in `x-reasons` of SETUP_STEP: a value out of bounds, wheels that start again, a mower
-that does not stand, an emergency that does not come, a wrong direction or wheel, or nothing seen after the user said
+`stop_moving`, `no_command`, `silence`, `driver_end`, `ground`, `blade`; `safety` in `x-setup.checks`) that fails
+with a reason that closes (`closes` in `x-reasons` of SETUP_STEP: a value out of bounds, wheels or a blade that start
+again, a mower that does not stand, an emergency that does not come, a wrong direction or wheel, or nothing seen after the user said
 the action was done) writes
 `<data_dir>/safety_lock.json` before anything else. mowbite_safety, the logic and the follower read it within 0.1 s
 through `mowbite_hold::SafetyMeasured` (date and lock, the one rule), so it acts at once, without a restart, against
@@ -679,6 +695,7 @@ Around `mowbite_camera`:
       start as `test_nx60i_inputs.py`
 - [ ] `hw/silence` and `hw/end` in the driver with `silence_max`, the steps of stage `wheels` in the list with
       `stop_max` and `emergency` of this board, `test_setup_motion_<name>` passes
+- [ ] `blade_allowed` in `hw/capabilities`, hw/silence with `blade`, the step `blade` with the bounds of this board
 - [ ] `mowbite.launch.py platform:=<name>` starts the stack, driver restarts latched
 - [ ] Every node of your own in the container attached to the watch (`test_stack.py`)
 - [ ] Simulation: mowing, going home, docking; `app_interface_check`
