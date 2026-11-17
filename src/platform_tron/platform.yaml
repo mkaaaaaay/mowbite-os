@@ -61,6 +61,9 @@ tron_mcu:
     stop_release: true
     stop_clear_period: 0.0
     stop_clear_delay: 1.5
+    # Longest hw/silence of the setup program in s (0 offers none). Without host the MCU stopped the wheels within
+    # 0.3 s and the blade within 0.6 s (07./08./14.11.), and in 20 s it latched nothing by itself (15.11.).
+    silence_max: 3.0
     # Set after reading the versions of this Tron in phase 4.
     expected_cutter_version: ""
     expected_chassis_version: ""

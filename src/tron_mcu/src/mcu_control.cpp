@@ -28,6 +28,17 @@ const char* BladeResultText(BladeResult result) {
   return "unknown";
 }
 
+const char* HostTestRefusalCode(HostTestRefusal refusal) {
+  switch (refusal) {
+    case HostTestRefusal::kNone: return "";
+    case HostTestRefusal::kOutOfRange: return "OUT_OF_RANGE";
+    case HostTestRefusal::kCharging: return "CHARGING";
+    case HostTestRefusal::kBusy: return "BUSY";
+    case HostTestRefusal::kBlade: return "BLADE";
+  }
+  return "";
+}
+
 McuControl::McuControl(const McuControlConfig& config) : config_(config) {
   if (config_.start_latched) Latch(kReasonHighLevel);
 }
@@ -53,6 +64,7 @@ void McuControl::OnImu(const ImuCounts& imu, double now) {
 }
 
 void McuControl::OnBladeRpm(int rpm, double now) {
+  blade_rpm_high_ = std::abs(rpm) >= config_.blade_still_rpm;
   // Only a blade that should have stopped by now counts: not while it is on, not while it runs down.
   if (blade_on_ || !blade_off_since_s_ || config_.blade_stop_time_s <= 0 ||
       now - *blade_off_since_s_ < config_.blade_stop_time_s) {
@@ -94,6 +106,8 @@ void McuControl::CountReason() {
 }
 
 bool McuControl::ReleaseEmergency(double now, uint32_t latch_count) {
+  // The end of a silence latches anew.
+  if (silent_until_s_ || ended_) return false;
   if (latch_count != 0 && latch_count != latch_count_) return false;
   release_requested_ = true;
   release_until_s_ = now + config_.release_window_s;
@@ -176,6 +190,46 @@ void McuControl::SetStopClearMark(bool written) {
   stop_clear_mark_ = written;
 }
 
+HostTestRefusal McuControl::HostTestRefused() const {
+  // Also a single sample: the stop frames afterwards would push the mower off the contacts.
+  if (DockContact() || dock_raw_) return HostTestRefusal::kCharging;
+  if (blade_request_ || blade_on_ || blade_turning_ || blade_rpm_high_) return HostTestRefusal::kBlade;
+  return HostTestRefusal::kNone;
+}
+
+HostTestRefusal McuControl::Silence(double seconds, double now) {
+  if (silent_until_s_ || ended_) return HostTestRefusal::kBusy;
+  if (!std::isfinite(seconds) || seconds < kMinSilenceS || seconds > config_.silence_max_s) {
+    return HostTestRefusal::kOutOfRange;
+  }
+  const HostTestRefusal refusal = HostTestRefused();
+  if (refusal != HostTestRefusal::kNone) return refusal;
+  silent_until_s_ = now + seconds;
+  return HostTestRefusal::kNone;
+}
+
+HostTestRefusal McuControl::End() {
+  const HostTestRefusal refusal = HostTestRefused();
+  if (refusal != HostTestRefusal::kNone) return refusal;
+  ended_ = true;
+  return HostTestRefusal::kNone;
+}
+
+void McuControl::EndSilence(double now) {
+  silent_until_s_.reset();
+  // A new reason, also when HIGH_LEVEL was latched before: a release asked for earlier does not apply.
+  Latch(kReasonHighLevel, true);
+  release_until_s_.reset();
+  // The MCU might still run the last setpoint; its blade state is unknown.
+  moving_ = false;
+  StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
+  blade_on_.reset();
+  StartRepeat(blade_off_repeat_, BladeOff(), now);
+  blade_off_since_s_ = now;
+  next_heartbeat_s_.reset();
+  stop_release_.Interrupt();
+}
+
 bool McuControl::StopClearReady(double now) const {
   return config_.stop_release && config_.stop_clear_period_s > 0 && latched_ && latched_since_s_ &&
          now - *latched_since_s_ + kDeadlineSlackS >= config_.stop_clear_delay_s && !release_until_s_ &&
@@ -183,7 +237,7 @@ bool McuControl::StopClearReady(double now) const {
 }
 
 bool McuControl::Blocked(double now) const {
-  return held_ || latched_ || TelemetryStale(now) || NoImuYet() || FirmwareIncompatible();
+  return silent_until_s_ || ended_ || held_ || latched_ || TelemetryStale(now) || NoImuYet() || FirmwareIncompatible();
 }
 
 // As hw/status shows it: an IMU still due after the start blocks without an emergency.
@@ -271,6 +325,17 @@ SubPacket McuControl::BladeOff() const {
 
 std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   std::vector<SubPacket> out;
+  if (ended_) return out;
+  if (silent_until_s_) {
+    if (now + kDeadlineSlackS < *silent_until_s_) {
+      pending_cmd_.reset();
+      pending_imu_.reset();
+      release_requested_ = false;
+      DropBlade(BladeOffReason::kBlocked);
+      return out;
+    }
+    EndSilence(now);
+  }
 
   // The blade state of the MCU is unknown when the driver takes over.
   if (!started_) {
@@ -469,6 +534,8 @@ McuControlStatus McuControl::Status(double now) const {
   status.latch_count = latch_count_;
   status.stop_event = stop_event_;
   status.stop_clear_mark_wanted = !stop_clear_mark_ && Stop(now) && StopClearReady(now);
+  status.silent = silent_until_s_.has_value();
+  status.ended = ended_;
   return status;
 }
 

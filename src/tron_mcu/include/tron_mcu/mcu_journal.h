@@ -42,6 +42,7 @@ inline void to_json(nlohmann::json& j, const McuControlConfig& c) {
   j["stop_clear_period_s"] = c.stop_clear_period_s;
   j["stop_clear_delay_s"] = c.stop_clear_delay_s;
   j["start_latched"] = c.start_latched;
+  j["silence_max_s"] = c.silence_max_s;
 }
 // Fields that came later take the value the journals from before ran with; all else is required.
 inline void from_json(const nlohmann::json& j, McuControlConfig& c) {
@@ -74,6 +75,7 @@ inline void from_json(const nlohmann::json& j, McuControlConfig& c) {
   c.stop_clear_period_s = j.value("stop_clear_period_s", McuControlConfig{}.stop_clear_period_s);
   c.stop_clear_delay_s = j.value("stop_clear_delay_s", McuControlConfig{}.stop_clear_delay_s);
   c.start_latched = j.value("start_latched", false);
+  c.silence_max_s = j.value("silence_max_s", 0.0);
 }
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SensorInfo, bumper, rain, lift, stop, power_off, battery_gate, cutter_size,
                                    press_module, bumper_right, bumper_left)
@@ -84,7 +86,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WallClock, year, month, day, hour, minute, se
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BladeRequest, on, speed_percent, height_mm, lease_s)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SubPacket, type, module, payload)
 
-static_assert(sizeof(McuControlConfig) == 248);
+static_assert(sizeof(McuControlConfig) == 256);
 static_assert(sizeof(SensorInfo) == 10);
 static_assert(sizeof(ImuCounts) == 18);
 static_assert(sizeof(VersionInfo) == 9);
@@ -126,7 +128,8 @@ struct mowbite_journal::CoreTraits<tron::McuControl> {
                           &tron::McuControl::OnBladeRpm, &tron::McuControl::OnVersions,
                           &tron::McuControl::LatchEmergency, &tron::McuControl::ReleaseEmergency,
                           &tron::McuControl::SetBlade, &tron::McuControl::SetCharging, &tron::McuControl::OnConnected,
-                          &tron::McuControl::SetHold, &tron::McuControl::Tick, &tron::McuControl::SetStopClearMark);
+                          &tron::McuControl::SetHold, &tron::McuControl::Tick, &tron::McuControl::SetStopClearMark,
+                          &tron::McuControl::Silence, &tron::McuControl::End);
 
   // Every call with the wall clock, for a copy of a journal without its place (mowbite_replay anonymize): the date of
   // a tick and of the heartbeat it sends.

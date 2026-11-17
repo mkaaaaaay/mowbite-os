@@ -70,6 +70,8 @@ struct McuControlConfig {
   // itself in that time, the driver's latch is the lock.
   double stop_clear_period_s = 0;
   double stop_clear_delay_s = 1.5;
+  // Longest hw/silence; 0 offers none.
+  double silence_max_s = 0;
 };
 
 // Bits of the emergency reason, numbered like EmergencyReason of OpenMower.
@@ -127,6 +129,15 @@ struct McuInput {
   bool active = false;
 };
 
+// Shortest hw/silence, as in the contract.
+constexpr double kMinSilenceS = 0.2;
+
+// Why hw/silence or hw/end was refused; kNone when it was taken.
+enum class HostTestRefusal : uint8_t { kNone, kOutOfRange, kCharging, kBusy, kBlade };
+
+// The code of the service answer: OUT_OF_RANGE, CHARGING, BUSY, BLADE; empty for kNone.
+const char* HostTestRefusalCode(HostTestRefusal refusal);
+
 enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked, kHeld };
 
 const char* BladeResultText(BladeResult result);
@@ -158,6 +169,9 @@ struct McuControlStatus {
   StopEvent stop_event;
   // The next clear frame for STOP waits for the mark (SetStopClearMark).
   bool stop_clear_mark_wanted = false;
+  // hw/silence runs, or hw/end was taken: nothing goes to the MCU.
+  bool silent = false;
+  bool ended = false;
 };
 
 // Decides what goes to the MCU and when. Time is passed in (monotonic seconds), nothing here touches the port.
@@ -195,6 +209,12 @@ class McuControl {
   void SetHold(bool held);
   // Whether the mark of a STOP cleared during the emergency is on disk; without it no such clear frame goes out.
   void SetStopClearMark(bool written);
+  // hw/silence: no frame to the MCU for seconds; commands, blade requests, releases and IMU samples meanwhile are
+  // dropped. At its end the emergency latches (HIGH_LEVEL, counted), and the blade off and the stop frames go out as
+  // after start_latched. Refused on the charging contacts and with the blade on or turning.
+  HostTestRefusal Silence(double seconds, double now);
+  // hw/end: from now on no frame to the MCU; the node then ends the process like a crash. Also during a silence.
+  HostTestRefusal End();
 
   std::vector<SubPacket> Tick(double now, const WallClock& wall);
   McuControlStatus Status(double now) const;
@@ -229,6 +249,8 @@ class McuControl {
   void UpdateStopRelease(bool stop, bool lift, bool latched_before, double now);
   bool StopClearReady(double now) const;
   bool Blocked(double now) const;
+  HostTestRefusal HostTestRefused() const;
+  void EndSilence(double now);
   bool Reported(double now) const;
   uint32_t EmergencyReason(double now) const;
   bool DockContact() const;
@@ -292,6 +314,8 @@ class McuControl {
   std::optional<double> blade_off_since_s_;
   // The last blade report after blade_stop_time_s still showed it turning; only a slower report clears it.
   bool blade_turning_ = false;
+  // The last blade report showed blade_still_rpm or more.
+  bool blade_rpm_high_ = false;
 
   int dock_samples_ = 0;
   bool dock_raw_ = false;
@@ -304,6 +328,10 @@ class McuControl {
   std::optional<bool> firmware_ok_;
 
   bool held_ = false;
+
+  // End of the running hw/silence; empty while none runs.
+  std::optional<double> silent_until_s_;
+  bool ended_ = false;
 
   std::optional<ImuCounts> pending_imu_;
   // Last forward to the MCU and last sample from the IMU.

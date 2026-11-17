@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <geometry_msgs/msg/twist.hpp>
@@ -15,7 +16,9 @@
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/srv/set_blade.hpp>
 #include <mowbite_msgs/srv/set_charge.hpp>
+#include <mowbite_msgs/srv/end_driver.hpp>
 #include <mowbite_msgs/srv/set_emergency.hpp>
+#include <mowbite_msgs/srv/silence_driver.hpp>
 #include <mowbite_hold/hold.h>
 #include <mowbite_journal/node_options.h>
 #include <mowbite_serial/serial_port.h>
@@ -83,6 +86,9 @@ constexpr double kReportMaxAge = 3.0;
 constexpr double kHoldPollS = 0.5;
 // Wait after a failed write or removal of the STOP clear mark.
 constexpr double kMarkRetryS = 1.0;
+// hw/end: the exit code, and the wait for the answer to go out besides the last flush of the journal.
+constexpr int kEndExitCode = 3;
+constexpr double kEndAnswerS = 0.2;
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -142,6 +148,7 @@ class McuNode : public rclcpp::Node {
     mow_height_mm_ = static_cast<uint16_t>(std::clamp<int64_t>(get_parameter("mow_height_mm").as_int(),
                                                                tron::kMinCutterHeightMm, tron::kMaxCutterHeightMm));
     stop_release_ = get_parameter("stop_release").as_bool() && !read_only_;
+    silence_max_s_ = read_only_ ? 0.0 : std::max(0.0, get_parameter("silence_max").as_double());
     imu_timeout_s_ = get_parameter("imu_timeout").as_double();
     measured_linear_scale_ = declare_parameter("measured_linear_scale", 1.0);
     measured_angular_scale_ = declare_parameter("measured_angular_scale", 1.0);
@@ -187,6 +194,14 @@ class McuNode : public rclcpp::Node {
     charge_srv_ = create_service<mowbite_msgs::srv::SetCharge>(
         "hw/charge", [this](const mowbite_msgs::srv::SetCharge::Request::SharedPtr& req,
                             const mowbite_msgs::srv::SetCharge::Response::SharedPtr& res) { OnCharge(*req, *res); });
+    silence_srv_ = create_service<mowbite_msgs::srv::SilenceDriver>(
+        "hw/silence", [this](const mowbite_msgs::srv::SilenceDriver::Request::SharedPtr& req,
+                             const mowbite_msgs::srv::SilenceDriver::Response::SharedPtr& res) {
+          OnSilence(*req, *res);
+        });
+    end_srv_ = create_service<mowbite_msgs::srv::EndDriver>(
+        "hw/end", [this](const mowbite_msgs::srv::EndDriver::Request::SharedPtr&,
+                         const mowbite_msgs::srv::EndDriver::Response::SharedPtr& res) { OnEnd(*res); });
     status_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { PublishStatus(); });
     journal_timer_ = create_wall_timer(std::chrono::seconds(10), [this] { journal_watch_.Check(get_logger()); });
     LogTimeZone();
@@ -233,6 +248,7 @@ class McuNode : public rclcpp::Node {
       config.stop_clear_period_s = 0;
     }
     if (!config.stop_release) config.stop_clear_period_s = 0;
+    config.silence_max_s = read_only ? 0.0 : std::max(0.0, declare_parameter("silence_max", 0.0));
     // Set by the launch when it starts the driver again after the last one ended.
     config.start_latched = declare_parameter("start_latched", false) && !read_only;
     if (config.start_latched) {
@@ -310,6 +326,7 @@ class McuNode : public rclcpp::Node {
           packets = control_.Call<&C::Tick>(now, LocalWallClock());
         }
         if (!read_only_) Send(packets);
+        EndIfDue(now);
         UpdateStopClearMark(now);
         PublishButton();
       }
@@ -432,7 +449,13 @@ class McuNode : public rclcpp::Node {
 
   void SendShutdownFrames() {
     if (!port_.IsOpen()) return;
-    if (read_only_) {
+    bool ended;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      ended = control_.View().Status(MonotonicSeconds()).ended;
+    }
+    // After hw/end no byte goes out, as after a crash.
+    if (read_only_ || ended) {
       port_.Close();
       return;
     }
@@ -602,6 +625,8 @@ class McuNode : public rclcpp::Node {
       msg.stop_release_hold_s = static_cast<float>(tron::kStopReleaseHoldS);
       msg.stop_release_max_hold_s = static_cast<float>(tron::kStopReleaseMaxHoldS);
     }
+    msg.silence_max_s = static_cast<float>(silence_max_s_);
+    msg.driver_end = !read_only_;
     msg.failsafe_without_host_s = static_cast<float>(failsafe_without_host_s_);
     msg.safety_measurement_date = safety_measurement_date_;
     capabilities_pub_->publish(msg);
@@ -761,10 +786,14 @@ class McuNode : public rclcpp::Node {
       res.message = "latched";
     } else {
       if (!control_.Call<&C::ReleaseEmergency>(MonotonicSeconds(), req.latch_count)) {
-        RCLCPP_WARN(get_logger(), "Emergency release refused (%s): another reason latched since", req.reason.c_str());
+        const auto state = control_.View().Status(MonotonicSeconds());
+        const bool silent = state.silent || state.ended;
+        RCLCPP_WARN(get_logger(), "Emergency release refused (%s): %s", req.reason.c_str(),
+                    silent ? "hw/silence or hw/end, the latch changes" : "another reason latched since");
         res.success = false;
-        res.message = "another reason latched since the press";
-        res.code = "LATCH_CHANGED";
+        res.message = silent ? "the driver is silent and latches again at its end"
+                             : "another reason latched since the press";
+        res.code = silent ? "SILENT" : "LATCH_CHANGED";
         return;
       }
       RCLCPP_INFO(get_logger(), "Emergency release requested: %s", req.reason.c_str());
@@ -809,6 +838,67 @@ class McuNode : public rclcpp::Node {
     res.success = true;
   }
 
+  void OnSilence(const mowbite_msgs::srv::SilenceDriver::Request& req,
+                 mowbite_msgs::srv::SilenceDriver::Response& res) {
+    if (read_only_) {
+      res.message = "read only: nothing goes to the MCU";
+      res.code = "READ_ONLY";
+      return;
+    }
+    tron::HostTestRefusal refusal;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      refusal = control_.Call<&C::Silence>(static_cast<double>(req.seconds), MonotonicSeconds());
+    }
+    if (refusal != tron::HostTestRefusal::kNone) {
+      res.code = tron::HostTestRefusalCode(refusal);
+      res.message = "silence refused: " + res.code;
+      RCLCPP_WARN(get_logger(), "hw/silence %.2f s refused: %s", req.seconds, res.code.c_str());
+      return;
+    }
+    RCLCPP_WARN(get_logger(), "hw/silence: no frame to the MCU for %.2f s, then latched with blade off and stop",
+                req.seconds);
+    res.success = true;
+    res.message = "silent";
+  }
+
+  void OnEnd(mowbite_msgs::srv::EndDriver::Response& res) {
+    if (read_only_) {
+      res.message = "read only: nothing goes to the MCU";
+      res.code = "READ_ONLY";
+      return;
+    }
+    const double wait_s = kEndAnswerS + (journal_ ? journal_->options().flush_s : 0.0);
+    tron::HostTestRefusal refusal;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      refusal = control_.Call<&C::End>();
+      // A second call does not put the end off.
+      if (refusal == tron::HostTestRefusal::kNone && !end_at_s_) end_at_s_ = MonotonicSeconds() + wait_s;
+    }
+    if (refusal != tron::HostTestRefusal::kNone) {
+      res.code = tron::HostTestRefusalCode(refusal);
+      res.message = "end refused: " + res.code;
+      RCLCPP_WARN(get_logger(), "hw/end refused: %s", res.code.c_str());
+      return;
+    }
+    RCLCPP_ERROR(get_logger(), "hw/end: no frame to the MCU from now on, exit code %d in %.1f s", kEndExitCode, wait_s);
+    res.success = true;
+    res.message = "ending";
+  }
+
+  // After hw/end, once its answer and the journal are out: ends like a crash, without destructors or frames.
+  void EndIfDue(double now) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!end_at_s_ || now < *end_at_s_) return;
+    }
+    RCLCPP_ERROR(get_logger(), "hw/end: exit %d", kEndExitCode);
+    std::fflush(stdout);
+    std::fflush(stderr);
+    std::_Exit(kEndExitCode);
+  }
+
   // One PublishStatus at a time; taken before mutex_, never while mutex_ is held.
   std::mutex publish_mutex_;
   std::mutex mutex_;
@@ -849,6 +939,9 @@ class McuNode : public rclcpp::Node {
   // mow_height_mm as the codec sends it.
   uint16_t mow_height_mm_;
   double failsafe_without_host_s_;
+  double silence_max_s_;
+  // When the process ends after hw/end, under mutex_.
+  std::optional<double> end_at_s_;
   std::string safety_measurement_date_;
   bool blade_on_logged_ = false;
   uint32_t logged_reason_ = 0;
@@ -874,6 +967,8 @@ class McuNode : public rclcpp::Node {
   rclcpp::Service<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetBlade>::SharedPtr blade_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetCharge>::SharedPtr charge_srv_;
+  rclcpp::Service<mowbite_msgs::srv::SilenceDriver>::SharedPtr silence_srv_;
+  rclcpp::Service<mowbite_msgs::srv::EndDriver>::SharedPtr end_srv_;
   rclcpp::TimerBase::SharedPtr status_timer_;
   rclcpp::TimerBase::SharedPtr journal_timer_;
 };

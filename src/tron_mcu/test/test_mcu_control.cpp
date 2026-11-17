@@ -2040,3 +2040,176 @@ TEST(McuJournal, ConfigFromBeforeTheStopClearReplays) {
   j.erase("release_window_s");
   EXPECT_THROW(j.get<tron::McuControlConfig>(), nlohmann::json::out_of_range);
 }
+
+class SilenceTest : public ControlTest {
+ protected:
+  static McuControlConfig SilenceConfig() {
+    McuControlConfig config;
+    config.allow_blade = true;
+    config.silence_max_s = 3.0;
+    return config;
+  }
+  SilenceTest() : ControlTest(SilenceConfig()) {
+  }
+  // Drives until now_ = 0.5, then the silence begins.
+  double DriveThenSilence(double seconds) {
+    Run(0.3);
+    control_.OnCmdVel(0.2f, 0.0f, now_);
+    Run(0.5);
+    EXPECT_EQ(control_.Silence(seconds, now_), HostTestRefusal::kNone);
+    return now_;
+  }
+};
+
+TEST_F(SilenceTest, NothingGoesOutUntilTheEndThenLatchBladeOffAndThreeStops) {
+  const double start = DriveThenSilence(1.0);
+  EXPECT_TRUE(control_.Status(now_).silent);
+  const uint32_t count = control_.Status(now_).latch_count;
+  Run(start + 0.99);
+  EXPECT_TRUE(Times([](const SubPacket&) { return true; }, start + 0.001).empty());
+  Run(start + 1.5);
+  const double end = start + 1.0;
+  EXPECT_EQ(Times(IsHeartbeat, end - 1e-6, end + 1e-6).size(), 1u);
+  auto zeros = Times(IsZeroSpeed, end - 1e-6);
+  ASSERT_EQ(zeros.size(), 3u);
+  EXPECT_NEAR(zeros[0], end, 1e-9);
+  EXPECT_NEAR(zeros[2], end + 0.2, 1e-9);
+  EXPECT_EQ(Times(IsBladeOff, end - 1e-6).size(), 3u);
+  EXPECT_TRUE(Times(IsMovingSpeed, start + 0.001).empty());
+  const auto status = control_.Status(now_);
+  EXPECT_FALSE(status.silent);
+  EXPECT_TRUE(status.latched);
+  EXPECT_EQ(status.emergency_reason, kReasonLatch | kReasonHighLevel);
+  EXPECT_EQ(status.latch_count, count + 1);
+}
+
+TEST_F(SilenceTest, CommandsBladeAndReleasesMeanwhileAreDropped) {
+  const double start = DriveThenSilence(0.5);
+  control_.LatchEmergency(kReasonHighLevel);
+  const uint32_t count = control_.Status(now_).latch_count;
+  for (int i = 0; i < 8; i++) {
+    control_.OnCmdVel(0.3f, 0.2f, now_);
+    EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kBlocked);
+    EXPECT_FALSE(control_.ReleaseEmergency(now_, count));
+    EXPECT_FALSE(control_.ReleaseEmergency(now_, 0));
+    Run(now_ + 0.05);
+  }
+  Run(start + 2.0);
+  EXPECT_TRUE(Times(IsMovingSpeed, start + 0.001).empty());
+  EXPECT_TRUE(Times(IsBladeOn).empty());
+  EXPECT_TRUE(Times(IsClear).empty());
+  // HIGH_LEVEL was latched already: the end counts anew all the same.
+  EXPECT_EQ(control_.Status(now_).latch_count, count + 1);
+  EXPECT_FALSE(control_.ReleaseEmergency(now_, count));
+  EXPECT_TRUE(control_.ReleaseEmergency(now_, count + 1));
+  Run(now_ + 0.05);
+  EXPECT_FALSE(control_.Status(now_).latched);
+  EXPECT_TRUE(Times(IsMovingSpeed, start + 0.001).empty());
+  EXPECT_TRUE(DrivesOrMows(now_ + 0.5));
+}
+
+TEST_F(SilenceTest, TheImuIsNotForwardedMeanwhile) {
+  feed_imu_ = true;
+  Run(0.5);
+  const double start = now_;
+  ASSERT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kNone);
+  Run(start + 2.0);
+  auto imu = [](const SubPacket& p) { return IsModule(p, Module::kImu); };
+  EXPECT_TRUE(Times(imu, start + 0.001, start + 0.999).empty());
+  EXPECT_FALSE(Times(imu, start + 1.0).empty());
+  // The samples kept coming, so no IMU gap.
+  EXPECT_FALSE(control_.Status(now_).emergency_reason & kReasonImuTimeout);
+}
+
+TEST_F(SilenceTest, RefusedOutOfRange) {
+  Run(0.5);
+  EXPECT_EQ(control_.Silence(0.19, now_), HostTestRefusal::kOutOfRange);
+  EXPECT_EQ(control_.Silence(3.01, now_), HostTestRefusal::kOutOfRange);
+  EXPECT_EQ(control_.Silence(-1.0, now_), HostTestRefusal::kOutOfRange);
+  EXPECT_EQ(control_.Silence(std::nan(""), now_), HostTestRefusal::kOutOfRange);
+  EXPECT_EQ(control_.Silence(INFINITY, now_), HostTestRefusal::kOutOfRange);
+  EXPECT_FALSE(control_.Status(now_).silent);
+  EXPECT_EQ(control_.Silence(static_cast<double>(0.2f), now_), HostTestRefusal::kNone);
+}
+
+TEST_F(ControlTest, WithoutSilenceMaxEverySilenceIsRefused) {
+  Run(0.5);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kOutOfRange);
+  EXPECT_FALSE(control_.Status(now_).silent);
+}
+
+TEST_F(SilenceTest, RefusedWhileSilentAlready) {
+  Run(0.5);
+  ASSERT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kNone);
+  Run(1.0);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kBusy);
+  Run(1.6);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kNone);
+}
+
+TEST_F(SilenceTest, RefusedOnTheChargingContactsAlsoBeforeTheDebounce) {
+  Run(0.5);
+  control_.OnDockContactSample(true);
+  EXPECT_FALSE(control_.Status(now_).dock_contact);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kCharging);
+  EXPECT_EQ(control_.End(), HostTestRefusal::kCharging);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kCharging);
+  control_.OnDockContactSample(false);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kNone);
+}
+
+TEST_F(SilenceTest, RefusedWithTheBladeOnOrTurning) {
+  Run(0.5);
+  ASSERT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kBlade);
+  Run(0.6);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kBlade);
+  EXPECT_EQ(control_.End(), HostTestRefusal::kBlade);
+  control_.SetBlade(kBladeOff, now_);
+  Run(0.7);
+  // Off, but still running down.
+  control_.OnBladeRpm(2500, now_);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kBlade);
+  EXPECT_EQ(control_.End(), HostTestRefusal::kBlade);
+  control_.OnBladeRpm(0, now_);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kNone);
+}
+
+TEST_F(SilenceTest, AfterTheEndNothingGoesOutAnyMore) {
+  Run(0.3);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(0.5);
+  ASSERT_EQ(control_.End(), HostTestRefusal::kNone);
+  const double end = now_;
+  for (int i = 0; i < 20; i++) {
+    control_.OnCmdVel(0.2f, 0.0f, now_);
+    EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kBlocked);
+    EXPECT_FALSE(control_.ReleaseEmergency(now_, 0));
+    control_.OnConnected(now_);
+    Run(now_ + 0.1);
+  }
+  EXPECT_TRUE(Times([](const SubPacket&) { return true; }, end + 0.001).empty());
+  EXPECT_TRUE(control_.Status(now_).ended);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kBusy);
+}
+
+TEST_F(SilenceTest, TheEndIsTakenDuringASilence) {
+  Run(0.5);
+  ASSERT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kNone);
+  const double start = now_;
+  Run(0.8);
+  EXPECT_EQ(control_.End(), HostTestRefusal::kNone);
+  Run(3.0);
+  EXPECT_TRUE(Times([](const SubPacket&) { return true; }, start + 0.001).empty());
+}
+
+// Journals from before hw/silence replay with what they ran with: none offered.
+TEST(McuJournal, ConfigFromBeforeTheSilenceReplays) {
+  tron::McuControlConfig config;
+  config.silence_max_s = 3.0;
+  nlohmann::json j = config;
+  EXPECT_EQ(j.get<tron::McuControlConfig>().silence_max_s, 3.0);
+  j.erase("silence_max_s");
+  EXPECT_EQ(j.get<tron::McuControlConfig>().silence_max_s, 0.0);
+}
