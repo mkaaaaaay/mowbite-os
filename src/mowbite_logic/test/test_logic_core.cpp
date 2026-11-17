@@ -292,6 +292,15 @@ TEST(Logic, PauseOfOneSecondArmsTeleopAfterRelease) {
   EXPECT_TRUE(core.OnTeleop(0.2, 0.0, 13.4));
 }
 
+// A new recording starts disarmed, also when the last one ended armed without a zero.
+TEST(Logic, ANewRecordingWaitsForZeroOrQuiet) {
+  TestCore core = RecordingCore();
+  EXPECT_EQ(Passed(core, 10.0, 11.0), 10);
+  ASSERT_EQ(core.OnAction("mower_logic:area_recording/exit_recording_mode"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
+  EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 11.0).has_value());
+}
+
 TEST(Logic, ZeroDuringEmergencyDoesNotArm) {
   TestCore core = RecordingCore();
   EXPECT_EQ(Passed(core, 10.0, 11.0), 10);
@@ -750,4 +759,29 @@ TEST(LogicDrive, TeleopNeverReachesTheWheelsWhileDriving) {
   ASSERT_TRUE(core.StartDrive(5, 3).empty());
   EXPECT_FALSE(core.OnTeleop(0.0, 0.0, 10.0).has_value());
   EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 12.0).has_value());
+}
+
+// A point asked for by hand is refused when the pose goes away, in the events of that same call.
+TEST(Logic, PoseTimeoutRefusesTheRequestedPointAtOnce) {
+  TestCore core = RecordingCore();
+  core.OnPose(Pose(1.0, 2.0, 0.02f));
+  ASSERT_EQ(core.OnAction("mower_logic:area_recording/start_recording"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mower_logic:area_recording/auto_point_collecting_disable"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mower_logic:area_recording/collect_point"), ActionResult::kDone);
+  core.TakeEvents();
+  core.OnPoseTimeout();
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].type, "RECORDING_REFUSED");
+  EXPECT_EQ(events[0].details["action"], "collect_point");
+  EXPECT_EQ(events[0].details["reason"], "NO_POSITION");
+}
+
+// Leaving recording takes the actions change of the recorder along: a later answer of the map changes nothing.
+TEST(Logic, AMapAnswerAfterRecordingChangesNoActions) {
+  TestCore core = RecordingCore();
+  ASSERT_EQ(core.OnAction("mower_logic:area_recording/exit_recording_mode"), ActionResult::kDone);
+  core.TakeActionsChanged();
+  core.OnMapEditResult(true, "lawn1", "", "");
+  EXPECT_FALSE(core.TakeActionsChanged());
 }

@@ -334,6 +334,20 @@ TEST(LogicCommands, ActionAndRpcAlikeInEveryState) {
   EXPECT_EQ(compared, 22 * static_cast<int>(Scenarios().size()));
 }
 
+// A start the node refuses goes out as MOWING_REFUSED with its reason and changes nothing else.
+TEST(LogicCommands, AStartRefusedByTheNodeIsOneEvent) {
+  TestCore core = Idle();
+  Settle(core);
+  core.RefuseStart(Reason("PLANNER_MISSING", "The planner is not running"));
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].type, "MOWING_REFUSED");
+  EXPECT_EQ(events[0].details["reason"], "PLANNER_MISSING");
+  EXPECT_EQ(events[0].details["message"], "The planner is not running");
+  EXPECT_TRUE(core.Idle());
+  EXPECT_TRUE(core.TakeEffects().empty());
+}
+
 TEST(LogicCommands, ARefusalNamesTheEventItWentOutAs) {
   TestCore core = Idle();
   core.OnHardwareStatus(InEmergency());
@@ -643,6 +657,30 @@ TEST(LogicCommands, ReleaseOutcomeForTheAnswer) {
   EXPECT_EQ(core.LastReleaseOutcome().seq, start + 2);
 }
 
+// STILL_ACTIVE only once more than kReleaseSourceS passed after the answer.
+TEST(LogicCommands, StillActiveOnlyAfterTheWholeWait) {
+  TestCore core = Idle();
+  core.OnHardwareStatus(InEmergency());
+  Rpc(core, "emergency.reset");
+  core.OnReleaseAnswered(20.0);
+  core.TakeEvents();
+  core.OnTick(20.0 + kReleaseSourceS);
+  EXPECT_TRUE(core.TakeEvents().empty());
+}
+
+// The end of the emergency ends the wait for it: no STILL_ACTIVE once kReleaseSourceS passed.
+TEST(LogicCommands, ReleaseEndsTheWaitForTheAnswer) {
+  TestCore core = Idle();
+  core.OnHardwareStatus(InEmergency());
+  Rpc(core, "emergency.reset");
+  core.OnReleaseAnswered(10.0);
+  core.OnHardwareStatus(Healthy());
+  core.TakeEvents();
+  core.OnTick(10.0 + kReleaseSourceS + 0.1);
+  EXPECT_TRUE(core.TakeEvents().empty());
+  EXPECT_TRUE(core.LastReleaseOutcome().released);
+}
+
 // STOP let go after the gesture of the driver: released like emergency.reset, with source button.
 TEST(LogicCommands, StopAtTheMowerReleasesWithSourceButton) {
   TestCore core = Idle();
@@ -941,4 +979,17 @@ TEST(LogicStorage, AStartWhoseRecordFailedEndsAtOnce) {
     EXPECT_EQ(TypesOf(core.TakeEvents()), std::vector<std::string>{"STORAGE"});
     EXPECT_TRUE(core.Idle());
   }
+}
+
+// While the reference check makes the start BUSY, the disk still decides start_area_recording.
+TEST(LogicStorage, TheActionsFollowTheDiskDuringTheReferenceCheck) {
+  TestCore core = OnDock();
+  core.CheckDockBeforeDrive(0.0, -1.0);
+  ASSERT_TRUE(core.TakeDockCheck());
+  ASSERT_EQ(core.StartProblem().code, "BUSY");
+  core.TakeActionsChanged();
+  core.SetUnwritableFile("os-session.json");
+  EXPECT_TRUE(core.TakeActionsChanged());
+  core.SetUnwritableFile("");
+  EXPECT_TRUE(core.TakeActionsChanged());
 }

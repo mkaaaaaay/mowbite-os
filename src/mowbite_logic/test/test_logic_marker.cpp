@@ -799,3 +799,11 @@ TEST(LogicMarkerSeries, AWayOutTheMarkerStoppedAtItsEndBeginsTheRunThere) {
   EXPECT_NEAR(first.poses.back().x, -0.8, 0.02);
   EXPECT_FALSE(Find(core.TakeEvents(), "DOCKING_FAILED"));
 }
+
+// A pose timeout of the map keeps a leg of the marker that is due in the station frame.
+TEST(LogicMarker, MapPoseLossKeepsADueLegOfTheMarker) {
+  TestCore core = Started();
+  See(core, -0.5);
+  core.OnPoseTimeout();
+  Take(core, DockingLeg::Kind::kOut);
+}

@@ -870,3 +870,62 @@ TEST(Sunset, ContinueFromAManualPauseInTheRainGoesHomeInTheSameCall) {
   EXPECT_TRUE(core.Docking());
   EXPECT_EQ(Find(core.TakeEvents(), "DOCKING")->details["reason"], "RAIN");
 }
+
+// A new run watches the battery from its own start: a low voltage of the run before does not count.
+TEST(GoingHome, ANewRunWatchesTheBatteryAnew) {
+  TestCore core = Mowing(Tron(), false);
+  Hold(core, Volts(19.5f), 0, 1);
+  core.OnHardwareStatus(Healthy());
+  ASSERT_EQ(core.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
+  ASSERT_TRUE(core.Idle());
+  ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  core.TakeEvents();
+  Hold(core, Volts(19.5f), 1.5, 2.5);
+  EXPECT_TRUE(core.Mowing());
+  EXPECT_FALSE(Find(core.TakeEvents(), "BATTERY_LOW"));
+}
+
+// Going home changes the actions, also where the reason against a start stays BUSY.
+TEST(GoingHome, TheWayHomeChangesTheActions) {
+  TestCore core = Mowing();
+  core.TakeActionsChanged();
+  Hold(core, Volts(19.5f), 0, 2);
+  ASSERT_TRUE(core.Docking());
+  EXPECT_EQ(core.StartProblem().code, "BUSY");
+  EXPECT_TRUE(core.TakeActionsChanged());
+}
+
+// Outside of mowing the ticks do not watch the battery: no BATTERY_LOW in IDLE.
+TEST(GoingHome, NothingWhileIdle) {
+  TestCore core = Ready(Tron(), false);
+  Hold(core, Volts(19.0f), 0, 30);
+  EXPECT_TRUE(core.Idle());
+  EXPECT_FALSE(Find(core.TakeEvents(), "BATTERY_LOW"));
+}
+
+// A new run reckons its own sunset: the one the run before would have gone home at does not end it.
+TEST(Sunset, ANewRunAfterTheSunsetMowsOnUntilTheNextEvening) {
+  TestCore core = ReadyForTheSun(Before(100), false);
+  Start(core);
+  Hold(core, Healthy(), 0, 50);
+  ASSERT_EQ(core.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
+  ASSERT_TRUE(core.Idle());
+  Start(core);
+  Hold(core, Healthy(), 200, 300);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  EXPECT_EQ(CountOf(core.TakeEvents(), "STATE"), 0);
+}
+
+// Each run tells once that it cannot reckon the sunset yet.
+TEST(Sunset, EachRunTellsTheUnsafeClockOnce) {
+  TestCore core = ReadyForTheSun(Before(100), false);
+  core.OnClock(false, "never_synced", Before(100));
+  Start(core);
+  Hold(core, Healthy(), 0, 10);
+  EXPECT_EQ(Lines(core.TakeNotices(), "No going home at sunset yet"), 1);
+  ASSERT_EQ(core.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
+  ASSERT_TRUE(core.Idle());
+  Start(core);
+  Hold(core, Healthy(), 11, 20);
+  EXPECT_EQ(Lines(core.TakeNotices(), "No going home at sunset yet"), 1);
+}

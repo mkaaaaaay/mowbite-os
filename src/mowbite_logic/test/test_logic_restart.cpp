@@ -185,3 +185,20 @@ TEST(RestartHold, AnEndByTheWatchNamesTheStalledNode) {
   odd["stalled"] = {{"node", "mowbite_bridge"}};
   EXPECT_FALSE(mowbite_api::CheckEvent("UNEXPECTED_RESTART", odd).empty());
 }
+
+TEST(RestartHold, TheSameHoldAgainChangesNothing) {
+  TestCore core = Started(true);
+  core.SetRestartHold(true);
+  EXPECT_FALSE(core.TakeActionsChanged());
+  EXPECT_TRUE(core.TakeEvents().empty());
+}
+
+TEST(RestartHold, AnyTimeOfTheCrashAboveZeroIsTold) {
+  TestCore core = Started(false);
+  RestartReport report = Report("KERNEL_CRASH", false);
+  report.crashed_at = 1;
+  core.ReportRestart(report);
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].details["crashed_at"], 1);
+}

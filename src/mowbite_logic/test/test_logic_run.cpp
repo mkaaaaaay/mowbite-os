@@ -756,3 +756,58 @@ TEST(ScheduleAngle, AStartByHandGoesOnWithTheAngleOfTheJob) {
       core.Command("mowing.start", json{{"tasks", json::array({{{"area_id", "a"}}, {{"area_id", "b"}}})}}).accepted);
   EXPECT_DOUBLE_EQ(*core.PlanAngle(), 30);
 }
+
+// The record of the start failed while the run mowed: the run ends REFUSED with the reason of the disk.
+TEST(ScheduleRunEnd, AStartWhoseRecordFailedEndsTheRunRefused) {
+  TestCore core = MowingRun();
+  Phases(core);
+  core.AbandonStart("os-session.json");
+  EXPECT_TRUE(core.Idle());
+  EXPECT_EQ(Ended(core), "ENDED REFUSED STORAGE_NOT_WRITABLE");
+}
+
+// The restart hold counts as an emergency: the tick at the end of the announcement cancels it before its check.
+TEST(ScheduleAnnouncement, ARestartHoldCancelsItAtTheNextTick) {
+  TestCore core = Docked();
+  ASSERT_TRUE(core.StartRun(Plan(), Reason(), 0).empty());
+  core.TakeEvents();
+  core.TakeRuns();
+  core.SetRestartHold(true);
+  core.OnTick(kAnnounceS);
+  const auto events = core.TakeEvents();
+  const Event* canceled = Find(events, "SCHEDULE_START_CANCELED");
+  ASSERT_TRUE(canceled);
+  EXPECT_EQ(canceled->details["source"], "emergency");
+  EXPECT_FALSE(Find(events, "MOWING_REFUSED"));
+  EXPECT_EQ(Ended(core), "ENDED CANCELED emergency");
+  EXPECT_FALSE(core.TakeDockCheck());
+}
+
+// The end of a run keeps the actions change of the step it ends in.
+TEST(ScheduleRunEnd, TheEndKeepsTheActionsChangeOfItsStep) {
+  TestCore core = Docked();
+  ASSERT_TRUE(core.StartRun(Plan(), Reason(), 0).empty());
+  core.TakeActionsChanged();
+  core.OnTick(kAnnounceS);
+  EXPECT_EQ(core.OnDockCheck(false, 0, 0, 999.0f, "no fix").code, "NO_POSITION");
+  EXPECT_TRUE(core.TakeActionsChanged());
+  EXPECT_EQ(Ended(core), "ENDED REFUSED NO_POSITION");
+}
+
+// What changed while the run left the station refuses mowing after UNDOCKED, and the run ends REFUSED with it.
+TEST(ScheduleRunEnd, ARefusalAfterUndockingEndsItRefused) {
+  TestCore core = Docked();
+  ASSERT_TRUE(core.StartRun(Plan(), Reason(), 0).empty());
+  core.OnTick(kAnnounceS);
+  ASSERT_TRUE(core.OnDockCheck(true, kStartX, kDock.y, 0.02f, "").empty());
+  core.OnChargeOff(true, "off");
+  ASSERT_TRUE(core.TakeUndockPath());
+  HardwareSnapshot rain = Healthy(false);
+  rain.rain = true;
+  core.OnHardwareStatus(rain);
+  core.OnPose(PoseAt(kStartX + 0.75, kDock.y));
+  core.TakeRuns();
+  core.OnUndockEnded(LegEnd::kDone, Reason("DONE", ""));
+  EXPECT_TRUE(core.Idle());
+  EXPECT_EQ(Ended(core), "ENDED REFUSED RAIN");
+}

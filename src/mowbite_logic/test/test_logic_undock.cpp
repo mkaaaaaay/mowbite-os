@@ -638,3 +638,99 @@ TEST(Undock, AStartRefusedDuringTheCheckKeepsTheListOfTheFirst) {
   ASSERT_EQ(step.kind, JobStep::Kind::kPlan);
   EXPECT_EQ(step.area_id, "rose");
 }
+
+// A stop without a failure is told as stopped; a failure tells by UNDOCKING_FAILED alone.
+TEST(Undock, OnlyAStopWithoutFailureIsToldAsStopped) {
+  const auto stopped = [](TestCore& core) {
+    int lines = 0;
+    for (const auto& line : core.TakeNotices()) lines += line.rfind("Undocking stopped: ", 0) == 0 ? 1 : 0;
+    return lines;
+  };
+  TestCore aborted = Docked();
+  StartUndocking(aborted);
+  aborted.TakeNotices();
+  ASSERT_EQ(aborted.OnAction(kAbort), ActionResult::kDone);
+  EXPECT_EQ(stopped(aborted), 1);
+
+  TestCore failed = Docked();
+  StartUndocking(failed);
+  ASSERT_TRUE(failed.TakeChargeOff());
+  failed.TakeNotices();
+  failed.OnChargeOff(false, "no answer from hw/charge");
+  ASSERT_TRUE(failed.Idle());
+  EXPECT_EQ(stopped(failed), 0);
+}
+
+// A way out the node has not taken yet goes away with the undocking.
+TEST(Undock, AnAbortDropsAWayOutNotTakenYet) {
+  TestCore core = Docked();
+  StartUndocking(core);
+  ASSERT_TRUE(core.TakeChargeOff());
+  core.OnChargeOff(true, "charging off");
+  ASSERT_EQ(core.OnAction(kAbort), ActionResult::kDone);
+  EXPECT_TRUE(core.Idle());
+  EXPECT_FALSE(core.TakeUndockPath());
+  EXPECT_TRUE(core.TakeChargeOn());
+}
+
+// UNDOCKED is a line of the log as well.
+TEST(Undock, UndockedIsToldInTheLog) {
+  TestCore core = Docked();
+  StartUndocking(core);
+  ChargedOff(core);
+  Out(core);
+  core.TakeNotices();
+  core.OnUndockEnded(LegEnd::kDone, Reason("DONE", "done"));
+  const auto notices = core.TakeNotices();
+  EXPECT_NE(std::find(notices.begin(), notices.end(), "Undocked"), notices.end());
+}
+
+// What changed during the way out refuses the drive after UNDOCKED, with DRIVE_REFUSED.
+TEST(Undock, WhatChangedMeanwhileRefusesTheDrive) {
+  TestCore core = Docked();
+  core.CheckDockBeforeDrive(2.0, 1.0);
+  ASSERT_TRUE(core.TakeDockCheck());
+  ASSERT_TRUE(core.OnDockCheck(true, kStartX, kDock.y, 0.02f, "").empty());
+  ChargedOff(core);
+  core.OnHardwareStatus(Healthy(false));
+  core.OnPose(PoseAt(kStartX + 0.75, kDock.y, 0.5f));
+  core.TakeEvents();
+  core.OnUndockEnded(LegEnd::kDone, Reason("DONE", "done"));
+  EXPECT_TRUE(core.Idle());
+  const auto events = core.TakeEvents();
+  ASSERT_TRUE(Find(events, "UNDOCKED"));
+  const Event* refused = Find(events, "DRIVE_REFUSED");
+  ASSERT_TRUE(refused);
+  EXPECT_EQ(refused->details["reason"], "POSITION_ACCURACY");
+  const auto outcome = core.TakeUndockOutcome();
+  ASSERT_TRUE(outcome);
+  EXPECT_TRUE(outcome->undocked);
+  EXPECT_TRUE(outcome->for_drive);
+  EXPECT_EQ(outcome->why.code, "POSITION_ACCURACY");
+}
+
+// logic/stop_drive while the mower leaves the station for a drive: stopped with its reason, without UNDOCKING_FAILED.
+TEST(Undock, StopDriveWhileLeavingForADriveEndsWithoutFailure) {
+  TestCore core = Docked();
+  core.CheckDockBeforeDrive(2.0, 1.0);
+  ASSERT_TRUE(core.TakeDockCheck());
+  ASSERT_TRUE(core.OnDockCheck(true, kStartX, kDock.y, 0.02f, "").empty());
+  ChargedOff(core);
+  core.TakeStopRequest();
+  core.TakeEvents();
+  core.AbortUndocking(Reason("STOPPED", "Stopped by logic/stop_drive"));
+  EXPECT_TRUE(core.TakeStopRequest());
+  const auto cancel = core.TakeDriveCancel();
+  ASSERT_TRUE(cancel);
+  EXPECT_EQ(cancel->code, "STOPPED");
+  EXPECT_TRUE(core.Undocking());
+  core.OnUndockEnded(LegEnd::kCanceled, Reason("STOPPED", "Stopped by logic/stop_drive (canceled)"));
+  EXPECT_TRUE(core.Idle());
+  EXPECT_FALSE(Find(core.TakeEvents(), "UNDOCKING_FAILED"));
+  EXPECT_TRUE(core.TakeChargeOn());
+  const auto outcome = core.TakeUndockOutcome();
+  ASSERT_TRUE(outcome);
+  EXPECT_FALSE(outcome->undocked);
+  EXPECT_TRUE(outcome->for_drive);
+  EXPECT_EQ(outcome->why.message, "Stopped by logic/stop_drive");
+}

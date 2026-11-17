@@ -1545,3 +1545,16 @@ TEST(ChargingLost, NothingWhileTheMowerIsBusy) {
   core.OnHardwareStatus(At(Healthy(), 40.0));
   EXPECT_FALSE(Find(core.TakeEvents(), "CHARGING_LOST"));
 }
+
+// An emergency in the report that brings the contact ends docking first: no stop for the contact on top.
+TEST(Docking, AnEmergencyWithTheContactEndsDockingFirst) {
+  TestCore core = OntoTheContacts();
+  HardwareSnapshot hw = Healthy(false, true);
+  hw.emergency = true;
+  hw.emergency_reason = kEmergencyStop;
+  core.OnHardwareStatus(hw);
+  EXPECT_FALSE(core.Docking());
+  for (const auto& line : core.TakeNotices()) {
+    EXPECT_EQ(line.find("Docking: contact with the docking station"), std::string::npos) << line;
+  }
+}

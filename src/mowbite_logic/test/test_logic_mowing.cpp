@@ -1222,3 +1222,81 @@ TEST(LogicTasks, ARestoredJobGoesOnInItsList) {
   EXPECT_EQ(step.start_index, 3u);
   EXPECT_EQ(core.RobotState().task_index, 1);
 }
+
+// A spin-up that ended with mowing is not taken into the next start: the blade waits for its path again.
+TEST(LogicMowing, ASpinUpLeftBehindDoesNotTurnTheBladeOnTheNextStart) {
+  LogicConfig config;
+  config.mow_with_blade = true;
+  config.mower_spinup_rpm = 2000;
+  config.mower_spinup_timeout = 10;
+  TestCore core = Ready(config);
+  core.OnAction(kStart);
+  core.NextJobStep(0);
+  JobPath path = Lane(1);
+  path.poses[0].kind = kSegmentLane;
+  core.OnJobPlanned({path, path}, "fp");
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kNone);
+  ASSERT_TRUE(core.BladeWanted());
+  ASSERT_EQ(core.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
+  if (core.Docking()) core.OnAction("mower_logic:docking/abort_docking");
+  ASSERT_FALSE(core.Mowing());
+  ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  ASSERT_TRUE(core.Mowing());
+  EXPECT_FALSE(core.BladeWanted());
+}
+
+// A pause ends with mowing: the next start mows at once.
+TEST(LogicMowing, APauseDoesNotCarryOverToTheNextStart) {
+  TestCore core = Following();
+  ASSERT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
+  ASSERT_FALSE(core.Mowing());
+  ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
+}
+
+// A skip still waiting for its leg to stop ends with mowing: the next start skips nothing.
+TEST(LogicMowing, ASkipLeftOpenDoesNotCarryOverToTheNextStart) {
+  TestCore core = Following();
+  ASSERT_EQ(core.OnAction(kMowing + "skip_area"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
+  ASSERT_FALSE(core.Mowing());
+  ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
+  core.OnJobPlanned({Lane(1), Lane(1)}, "fp");
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kFollow);
+  core.TakeEvents();
+  core.OnLegEnded(LegEnd::kDone, 4, Reason("DONE", "done"));
+  EXPECT_FALSE(Find(core.TakeEvents(), "AREA_SKIPPED"));
+  EXPECT_EQ(core.RobotState().current_area, 0);
+  EXPECT_EQ(core.RobotState().current_path, 1);
+}
+
+// The path a skip left belongs to its run: after a new start an approach without a way pauses as usual.
+TEST(LogicMowing, ThePathASkipLeftDoesNotCarryOverToTheNextStart) {
+  TestCore core = Ready();
+  ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
+  core.OnJobPlanned({Lane(1), Lane(5)}, "fp");
+  ASSERT_EQ(core.OnAction(kMowing + "skip_path"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
+  ASSERT_FALSE(core.Mowing());
+  ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
+  core.OnJobPlanned({Lane(1), Lane(5)}, "fp");
+  ASSERT_EQ(core.RobotState().current_path, 1);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
+  core.OnLegEnded(LegEnd::kNoWay, 0, kRefused);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+}
+
+// A pause by hand with a good position stays as it is: the wait for GPS changes no actions.
+TEST(LogicMowing, AManualPauseWithAGoodPositionChangesNoActions) {
+  TestCore core = Following();
+  ASSERT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+  core.TakeActionsChanged();
+  for (double t = 0; t <= 30; t += 1) core.OnTick(t);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_FALSE(core.TakeActionsChanged());
+}

@@ -220,3 +220,14 @@ TEST(LogicSetup, ARefusedBladeStaysOffUntilTheStepAsksAnew) {
   core.OnSetupBlade("blade", 1);
   EXPECT_TRUE(core.BladeWanted());
 }
+
+// The disk failed while a setup step ran: SETUP ends, no refusal of another kind.
+TEST(LogicSetup, AFailedRecordEndsTheStepAlone) {
+  TestCore core = Ready();
+  ASSERT_TRUE(core.OnSetupMotion(true, "wheels", 10.0).empty());
+  core.TakeEvents();
+  core.AbandonStart("os-session.json");
+  EXPECT_FALSE(core.InSetup());
+  EXPECT_TRUE(core.Idle());
+  for (const auto& e : core.TakeEvents()) EXPECT_NE(e.type, "RECORDING_REFUSED");
+}

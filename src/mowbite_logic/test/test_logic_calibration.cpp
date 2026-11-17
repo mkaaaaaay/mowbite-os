@@ -537,3 +537,12 @@ TEST(LogicCalibration, StorageThatCannotBeWrittenRefusesAndTakesBackTheStart) {
   EXPECT_FALSE(core.TakeCalibrationGoal().has_value());
   EXPECT_TRUE(core.TakeCalibrationCancel());
 }
+
+// A calibration whose record failed tells nothing of a setup step.
+TEST(LogicCalibration, AFailedRecordTellsOnlyTheCalibration) {
+  TestCore core = Ready();
+  ASSERT_TRUE(core.StartCalibration(10.0).empty());
+  core.TakeNotices();
+  core.AbandonStart("os-session.json");
+  for (const auto& line : core.TakeNotices()) EXPECT_EQ(line.rfind("Setup step", 0), std::string::npos) << line;
+}
