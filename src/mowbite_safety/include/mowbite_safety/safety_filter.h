@@ -15,14 +15,19 @@ namespace mowbite_safety {
 
 // Sources of drive commands, numbered like DriveCommand; kStop is the logic stopping the mower. The calibration drive
 // moves autonomously like the follower, and forward only. kDock is the follower in the station frame, by the pose from
-// the dock marker. kSetup is a step of the setup program with the mower jacked up, within the limits of its
+// the dock marker. kSetup is a step of the setup program, jacked up or on the ground, within the limits of its
 // setup/motion.
 enum class Source : uint8_t { kStop = 0, kTeleop = 1, kFollower = 2, kCalibration = 3, kDock = 4, kSetup = 5 };
 
-// The hard limits of a step of the setup program with the mower jacked up, whatever setup/motion says: m/s of the body
-// and rad/s. A setup/motion older than kSetupMotionTimeout s lets nothing of kSetup pass.
+// The hard limits of a step of the setup program, whatever setup/motion says: m/s of the body and rad/s, with the
+// mower jacked up and on the ground. On the ground it drives without pose and fence, like the remote control. A move
+// of kSetup lasts kSetupMaxMove s at most: then it stops and moves again only after a zero or at the end of the step.
+// A setup/motion older than kSetupMotionTimeout s lets nothing of kSetup pass.
 constexpr double kSetupMaxLinear = 0.1;
 constexpr double kSetupMaxAngular = 0.4;
+constexpr double kSetupGroundMaxLinear = 0.3;
+constexpr double kSetupGroundMaxAngular = 0.4;
+constexpr double kSetupMaxMove = 10.0;
 constexpr double kSetupMotionTimeout = 0.6;
 
 // The reason bits of hw/status the filter latches over hw/emergency.
@@ -212,6 +217,11 @@ class SafetyFilter {
   std::optional<SetupMotion> setup_;
   // Why kSetup may not move now, empty if it may.
   std::string SetupProblem(double now) const;
+  // When the move of kSetup that goes on began, and whether one ran out of kSetupMaxMove: none until a zero.
+  std::optional<double> setup_move_s_;
+  bool setup_spent_ = false;
+  // The move of kSetup that goes on lasts longer than kSetupMaxMove.
+  bool SetupMoveOver(double now) const;
   // The zone of the station in the station frame.
   Ring dock_zone_;
   std::optional<Region> region_;

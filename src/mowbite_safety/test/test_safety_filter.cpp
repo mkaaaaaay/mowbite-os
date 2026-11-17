@@ -1209,9 +1209,97 @@ TEST_F(FilterTest, SetupStopsWhenItsMotionEndsOrGoesSilent) {
   EXPECT_EQ(Cmd(Source::kSetup, 0.05).refusal, "no step of the setup program runs");
 }
 
-TEST_F(FilterTest, SetupOnTheGroundAndWithoutLimitsIsRefused) {
+TEST_F(FilterTest, SetupOnTheGroundMovesWithinItsOwnLimitsWithoutPoseOrFence) {
+  filter_.OnCapabilities(true, 0.5, 1.0);
+  filter_.OnSetupMotion(true, false, 5.0, 5.0, now_);
+  Decision d = Cmd(Source::kSetup, 0.5, 0.0);
+  ASSERT_TRUE(Moves(d)) << d.refusal;
+  EXPECT_DOUBLE_EQ(d.out->linear, kSetupGroundMaxLinear);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kSetup, -0.5, 0.0).out->linear, -kSetupGroundMaxLinear);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kSetup, 0.0, -1.0).out->angular, -kSetupGroundMaxAngular);
+  // The step names less: that holds.
+  filter_.OnSetupMotion(true, false, 0.2, 0.3, now_);
+  d = Cmd(Source::kSetup, 0.5, 1.0);
+  EXPECT_DOUBLE_EQ(d.out->linear, 0.2);
+  EXPECT_DOUBLE_EQ(d.out->angular, 0.3);
+  // Jacked up the bounds of the code are those of before.
+  filter_.OnSetupMotion(true, true, 5.0, 5.0, now_);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kSetup, 0.5, 0.0).out->linear, kSetupMaxLinear);
+  // Like the remote control: no pose and outside of every area, no fence latches.
+  pose_ = false;
+  Run(now_ + 0.3);
+  filter_.OnSetupMotion(true, false, 0.3, 0.4, now_);
+  EXPECT_TRUE(Moves(Cmd(Source::kSetup, 0.3))) << filter_.LastRefusal();
+  pose_ = true;
+  x_ = -20;
+  Run(now_ + 0.1);
+  filter_.OnSetupMotion(true, false, 0.3, 0.4, now_);
+  EXPECT_TRUE(Moves(Cmd(Source::kSetup, 0.3))) << filter_.LastRefusal();
+  EXPECT_EQ(filter_.Latched(), 0u);
+}
+
+TEST_F(FilterTest, AMoveOfTheSetupLastsTenSecondsAtMostThenWaitsForAZero) {
+  for (const bool raised : {false, true}) {
+    SCOPED_TRACE(raised ? "jacked up" : "on the ground");
+    filter_.OnSetupMotion(true, raised, 0.1, 0.4, now_);
+    ASSERT_TRUE(Stops(Cmd(Source::kSetup, 0.0)));
+    const double began = now_;
+    const int stopped = stops_;
+    // Commands every 0.1 s and setup/motion every 0.2 s: the tick after the bound stops the move.
+    while (now_ < began + kSetupMaxMove + 1.0 && stops_ == stopped) {
+      filter_.OnSetupMotion(true, raised, 0.1, 0.4, now_);
+      ASSERT_TRUE(Moves(Cmd(Source::kSetup, 0.05, 0.1))) << filter_.LastRefusal() << " at " << now_ - began;
+      Run(now_ + 0.1);
+    }
+    EXPECT_EQ(stops_, stopped + 1);
+    EXPECT_GT(now_ - began, kSetupMaxMove);
+    EXPECT_LT(now_ - began, kSetupMaxMove + 0.15);
+    // Moving commands stay refused, also after a pause, until a zero.
+    filter_.OnSetupMotion(true, raised, 0.1, 0.4, now_);
+    Decision d = Cmd(Source::kSetup, 0.05);
+    EXPECT_FALSE(Moves(d));
+    EXPECT_EQ(d.refusal, "a move of the setup lasts 10 s at most, it waits for a zero");
+    Run(now_ + 0.5);
+    filter_.OnSetupMotion(true, raised, 0.1, 0.4, now_);
+    EXPECT_FALSE(Moves(Cmd(Source::kSetup, 0.05)));
+    EXPECT_TRUE(Stops(Cmd(Source::kSetup, 0.0)));
+    EXPECT_TRUE(Moves(Cmd(Source::kSetup, 0.05))) << filter_.LastRefusal();
+    // A zero in between begins a new move.
+    Hold(Source::kSetup, 0.0, now_ + 0.2);
+    filter_.OnSetupMotion(false, raised, 0, 0, now_);
+  }
+}
+
+TEST_F(FilterTest, TheBoundOfAMoveEndsWithItsCommandOrWithTheStep) {
   filter_.OnSetupMotion(true, false, 0.1, 0.4, now_);
-  EXPECT_EQ(Cmd(Source::kSetup, 0.05).refusal, "the setup moves the wheels only with the mower jacked up");
+  ASSERT_TRUE(Moves(Cmd(Source::kSetup, 0.05)));
+  // Without commands the move ends with the timeout of its owner: the next one counts anew.
+  for (int i = 0; i < 2; i++) {
+    const double began = now_;
+    while (now_ < began + kSetupMaxMove - 1.0) {
+      filter_.OnSetupMotion(true, false, 0.1, 0.4, now_);
+      ASSERT_TRUE(Moves(Cmd(Source::kSetup, 0.05))) << filter_.LastRefusal();
+      Run(now_ + 0.1);
+    }
+    while (now_ < began + kSetupMaxMove + 1.0) {
+      filter_.OnSetupMotion(true, false, 0.1, 0.4, now_);
+      Run(now_ + 0.1);
+    }
+  }
+  // Out of its bound, the end of the step takes the wait for a zero away.
+  const double began = now_;
+  while (now_ < began + kSetupMaxMove + 0.5) {
+    filter_.OnSetupMotion(true, false, 0.1, 0.4, now_);
+    Cmd(Source::kSetup, 0.05);
+    Run(now_ + 0.1);
+  }
+  ASSERT_FALSE(Moves(Cmd(Source::kSetup, 0.05)));
+  filter_.OnSetupMotion(false, false, 0, 0, now_);
+  filter_.OnSetupMotion(true, false, 0.1, 0.4, now_);
+  EXPECT_TRUE(Moves(Cmd(Source::kSetup, 0.05))) << filter_.LastRefusal();
+}
+
+TEST_F(FilterTest, SetupWithoutLimitsIsRefused) {
   filter_.OnSetupMotion(true, true, std::nan(""), 0.4, now_);
   EXPECT_EQ(Cmd(Source::kSetup, 0.05).refusal, "setup/motion without limits");
   filter_.OnSetupMotion(true, true, 0.1, std::nan(""), now_);

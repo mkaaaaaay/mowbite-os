@@ -263,6 +263,8 @@ std::string SafetyFilter::MoveProblem(Source source, double linear, double quiet
   } else if (source == Source::kSetup) {
     std::string problem = SetupProblem(now);
     if (!problem.empty()) return problem;
+    if (SetupMoveOver(now)) setup_spent_ = true;
+    if (setup_spent_) return Format("a move of the setup lasts %.0f s at most, it waits for a zero", kSetupMaxMove);
   } else if (source == Source::kFollower || source == Source::kCalibration) {
     std::string problem = AutonomousProblem(now);
     if (!problem.empty()) return problem;
@@ -298,6 +300,7 @@ Decision SafetyFilter::OnCommand(Source source, double linear, double angular, d
   if (!valid || (linear == 0 && angular == 0)) {
     // A zero arms its source; it stops whatever moves, and so does a command that is no number.
     if (valid) state.armed = true;
+    if (valid && source == Source::kSetup) setup_spent_ = false;
     if (owner_ == source) owner_ = Source::kStop;
     moving_.reset();
     decision.out = Twist2{};
@@ -337,8 +340,10 @@ Decision SafetyFilter::OnCommand(Source source, double linear, double angular, d
   if (source == Source::kSetup) {
     // SetupProblem passed, so setup_ is there.
     const SetupMotion& motion = *setup_;  // NOLINT(bugprone-unchecked-optional-access)
-    const double linear_cap = std::min(motion.max_linear, kSetupMaxLinear);
-    const double angular_cap = std::min(motion.max_angular, kSetupMaxAngular);
+    const double linear_cap = std::min(motion.max_linear, motion.raised ? kSetupMaxLinear : kSetupGroundMaxLinear);
+    const double angular_cap =
+        std::min(motion.max_angular, motion.raised ? kSetupMaxAngular : kSetupGroundMaxAngular);
+    if (!goes_on) setup_move_s_ = now;
     out.linear = std::clamp(out.linear, -linear_cap, linear_cap);
     out.angular = std::clamp(out.angular, -angular_cap, angular_cap);
   }
@@ -356,7 +361,9 @@ std::optional<Twist2> SafetyFilter::Tick(double now) {
   UpdateEmergency(now);
   if (owner_ != Source::kStop && now - owner_s_ > config_.owner_timeout + kTimeEpsilon) owner_ = Source::kStop;
   if (!moving_) return std::nullopt;
-  if (emergency_ || !ImuFresh(now) || (moving_ == Source::kSetup && !SetupProblem(now).empty())) {
+  const bool setup = moving_ == Source::kSetup;
+  if (setup && SetupMoveOver(now)) setup_spent_ = true;
+  if (emergency_ || !ImuFresh(now) || (setup && (setup_spent_ || !SetupProblem(now).empty()))) {
     moving_.reset();
     return Twist2{};
   }
@@ -369,6 +376,7 @@ std::optional<Twist2> SafetyFilter::Tick(double now) {
 void SafetyFilter::OnSetupMotion(bool active, bool raised, double max_linear, double max_angular, double now) {
   if (!active) {
     setup_.reset();
+    setup_spent_ = false;
     return;
   }
   setup_ = SetupMotion{raised, max_linear, max_angular, now};
@@ -379,10 +387,12 @@ std::string SafetyFilter::SetupProblem(double now) const {
   if (now - setup_->s > kSetupMotionTimeout + kTimeEpsilon) {
     return Format("no setup/motion for %.1f s", now - setup_->s);
   }
-  // Steps on the ground come with their own limits (B4); until then the setup moves only jacked up.
-  if (!setup_->raised) return "the setup moves the wheels only with the mower jacked up";
   if (!(setup_->max_linear > 0) || !(setup_->max_angular >= 0)) return "setup/motion without limits";
   return "";
+}
+
+bool SafetyFilter::SetupMoveOver(double now) const {
+  return moving_ == Source::kSetup && setup_move_s_ && now - *setup_move_s_ > kSetupMaxMove + kTimeEpsilon;
 }
 
 void SafetyFilter::OnRestartHold(bool present) {
