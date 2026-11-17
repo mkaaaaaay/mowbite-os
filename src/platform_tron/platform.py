@@ -8,9 +8,9 @@ from launch.substitutions import EnvironmentVariable
 from launch_ros.actions import Node
 from launch_ros.descriptions import ComposableNode
 
-# The nodes of the Tron beside those of the stack, as the parameter files name them.
-NODES = ("tron_mcu", "tron_gnss", "tron_imu", "mowbite_light", "mowbite_sound", "tron_vision", "right/tron_vision",
-         "tron_stereo", "tron_side", "tron_rear", "mowbite_camera")
+# The nodes of the Tron beside its driver and those of the stack, as the parameter files name them.
+NODES = ("tron_gnss", "tron_imu", "mowbite_light", "mowbite_sound", "tron_vision", "right/tron_vision", "tron_stereo",
+         "tron_side", "tron_rear", "mowbite_camera")
 DRIVER = "tron_mcu"
 # tron_mcu stays down after it ended, until the next start of the OS.
 DRIVER_RESTARTS = 0
@@ -58,8 +58,7 @@ def parts(start):
     # missing IMU latches IMU_TIMEOUT. With the namespace the dict goes under the full name; without it, under /**,
     # the port in the node's own section of the files would win.
     # The driver reads the hold of an update itself, also without the logic and right after its own restart.
-    mcu_values = {"port": arg("mcu_port"), "hold_file": start.data_file(start.data_store.HOLD_FILE),
-                  "journal_dir": start.journal,
+    mcu_values = {"port": arg("mcu_port"), "hold_file": start.hold_file, "journal_dir": start.journal,
                   "stop_clear_mark": start.data_file(start.data_store.STOP_CLEAR_MARK_FILE),
                   "read_only": hardware == "read"}
 

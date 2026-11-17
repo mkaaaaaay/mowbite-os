@@ -19,10 +19,11 @@ import stack  # noqa: E402
 from stack_probe import start  # noqa: E402,F401
 
 
-STACK_NODES = stack.started(stack.components([], "", "", "127.0.0.1", "1883", ""))
+COMPONENTS = stack.components([], "", "", "127.0.0.1", "1883", "")
+STACK_NODES = stack.started(COMPONENTS)
 PLATFORMS = layers.platforms()
 # The nodes a platform can start.
-NODES = {platform: [*STACK_NODES, *stack.platform_module(platform).NODES] for platform in PLATFORMS}
+NODES = {platform: stack.checked_nodes(COMPONENTS, stack.platform_module(platform)) for platform in PLATFORMS}
 LOGGER = logging.getLogger("test_layers")
 
 
@@ -153,7 +154,7 @@ def test_a_file_that_cannot_be_read_halts(tmp_path, halt_file, content):
 @pytest.mark.parametrize("platform", PLATFORMS)
 def test_a_platform_has_what_the_start_asks_for(platform):
     module = stack.platform_module(platform)
-    assert module.DRIVER in module.NODES and module.DRIVER_RESTARTS >= 0
+    assert module.DRIVER and module.DRIVER not in module.NODES and module.DRIVER_RESTARTS >= 0
     assert callable(module.arguments) and callable(module.parts)
     assert os.path.isfile(layers.geometry(platform))
 

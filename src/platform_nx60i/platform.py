@@ -15,8 +15,8 @@ from launch_ros.substitutions import FindPackageShare
 sys.path.insert(0, os.path.join(FindPackageShare("xcore_driver").find("xcore_driver"), "launch"))
 import logic_params  # noqa: E402
 
-# The node of the NX60i beside those of the stack, as the parameter files name it.
-NODES = ("xcore_driver",)
+# The NX60i has no node beside its driver and those of the stack.
+NODES = ()
 DRIVER = "xcore_driver"
 DRIVER_RESTARTS = 3
 
@@ -56,8 +56,7 @@ def parts(start):
     # by hand in data_dir (ticks_per_meter, wheel_distance, the values of the safety measurement, the datum), if there
     # are any, then what is given here: the battery voltages of the logic and the arguments.
     driver_files = [arg("driver_params")] + [path for path in (start.setup_file, start.device) if path]
-    overrides = {"hold_file": start.data_file(start.data_store.HOLD_FILE),
-                 **logic_params.battery_voltages(start.parameters("mowbite_logic"))}
+    overrides = {"hold_file": start.hold_file, **logic_params.battery_voltages(start.parameters("mowbite_logic"))}
     for name in ("datum_lat", "datum_long", "datum_height"):
         value = number(arg(name), name)
         if value is not None:

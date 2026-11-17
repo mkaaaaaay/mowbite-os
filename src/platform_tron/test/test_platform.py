@@ -142,7 +142,7 @@ def test_the_parameter_check_knows_every_node(launched):
     built = set().union(*(s.names() for s in starts))
     checked = set().union(*(s.checked for s in starts))
     assert built and built <= checked, built - checked
-    assert checked == {*platform.NODES, *stack.started([])} | built
+    assert checked == set(stack.checked_nodes([], platform)) | built
 
 
 # tron_mcu is not started again after it ended: its exit note says down at once.

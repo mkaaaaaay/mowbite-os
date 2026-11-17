@@ -257,7 +257,7 @@ brings IMU and GNSS along) or `platform_tron` (nodes of its own in the container
 
 | Name | What |
 |---|---|
-| `NODES` | its nodes beside those of the stack, as the parameter files name them; the start checks their values |
+| `NODES` | its other nodes, as the parameter files name them; the start checks their values and those of `DRIVER` |
 | `DRIVER` | the node that holds the motors, also the label of its exit note |
 | `DRIVER_RESTARTS` | how often the driver starts again after it ended (the NX60i 3, each time latched) |
 | `DATA_DIR` | optional: `data_dir` when the start names none |
@@ -267,9 +267,10 @@ brings IMU and GNSS along) or `platform_tron` (nodes of its own in the container
 `parts` gets `start` with `arg(name)` (a launch argument), `files` (the parameter files in their order), `setup_file`
 (what the setup program wrote for this mower in `data_dir`, empty without it) and `device` (the file of this mower
 kept by hand, empty without one; a driver with files of its own gets both after them, in this order), `data_dir`,
-`data_file(name)`, `journal`, `logger`,
-`parameters(node)` (what the files give a node), `data_store` (the file names in `data_dir`, e.g. `HOLD_FILE`) and, for
-processes of its own, `own_process(make, name, **limits)` and `camera_service(**limits)`. It answers with
+`data_file(name)`, `journal`, `logger`, `hold_file` (the hold of an update in `data_dir`, which the driver reads
+itself), `data_store` (the names of the other files in `data_dir`), `parameters(node)` (what the files give a node)
+and, for processes of its own,
+`own_process(make, name, **limits)` and `camera_service(**limits)`. It answers with
 `driver(restart)`, which builds the driver for its start number (0 the first; every later one has to come up latched,
 `start_latched` of `xcore_driver`), the components `before` and `after` those of the stack in the container, and
 `processes`, its other actions. Read every argument before `driver` is built: a restart comes when the arguments may be

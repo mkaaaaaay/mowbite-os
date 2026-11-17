@@ -262,6 +262,11 @@ def started(nodes):
     return [*node_names(nodes), PLANNER, NET]
 
 
+# The nodes whose values the start checks: those of the stack, the driver and the others of the platform.
+def checked_nodes(nodes, module):
+    return [*started(nodes), module.DRIVER, *module.NODES]
+
+
 # On every start of action its oom_score_adj; raising it needs no privilege. Empty: inherited.
 def oom_score(action, oom_score_adj, logger):
     if not oom_score_adj:
@@ -451,7 +456,8 @@ class Start:
     """What parts(start) of a platform builds on: arg(name) gives a launch argument, files are the parameter files in
     their order, setup_file and device the last of them: what the setup program found for this mower and its file kept
     by hand in data_dir (empty: it has none); a driver with files of its own reads these two after them, in this
-    order. journal is the journal directory (empty: none)."""
+    order. journal is the journal directory (empty: none), hold_file the hold of an update, which a driver reads
+    itself (empty without data_dir), data_store has the names of the other files in data_dir."""
 
     Parts = Parts
     data_store = data_store
@@ -464,6 +470,7 @@ class Start:
         self.data_dir = data_dir
         self.journal = journal
         self.logger = logger
+        self.hold_file = self.data_file(data_store.HOLD_FILE)
 
     def data_file(self, name):
         """<data_dir>/<name>, empty without data_dir."""
@@ -508,7 +515,7 @@ def launch_setup(context, platform, module):
     setup["layer"] = setup_file
     setup["shadowed"] = ",".join(shadowed_values(found, device, logger))
     nodes = components(files, arg("geometry"), data_dir, arg("mqtt_host"), arg("mqtt_port"), journal, setup)
-    halt = check_parameters(files, [*started(nodes), *module.NODES], logger) or check_setup(setup, logger)
+    halt = check_parameters(files, checked_nodes(nodes, module), logger) or check_setup(setup, logger)
     if halt:
         return halt
     parts = module.parts(Start(arg, files, found, device, data_dir, journal, logger))
