@@ -22,6 +22,7 @@ from launch_ros.descriptions import ComposableNode, ParameterValue
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import data_store  # noqa: E402
 import layers  # noqa: E402
+import migrate  # noqa: E402
 
 # After a crash the container starts again at most this often, each time after RESTART_DELAY s, then it stays down
 # until the next start by hand. A run of STABLE_AFTER s counts the crashes from 0 again.
@@ -180,6 +181,10 @@ def arguments(platform, module):
         # Without it nothing is kept and no update can hold the driver; with it, it is prepared for the data schema of
         # the image before any node starts.
         DeclareLaunchArgument("data_dir", default_value=getattr(module, "DATA_DIR", "")),
+        # OpenMower's folders ros and params, read only; on a platform with OPENMOWER_IMPORT its map and values come
+        # over on the first start with data_dir (migrate.py). Empty: no import.
+        DeclareLaunchArgument("import_dir", default_value=EnvironmentVariable("MOWBITE_IMPORT_DIR",
+                                                                              default_value="")),
         # The broker of the OS, the same one mowbite_health asks.
         DeclareLaunchArgument("mqtt_host", default_value=EnvironmentVariable("MOWBITE_MQTT_HOST",
                                                                              default_value="127.0.0.1")),
@@ -521,6 +526,9 @@ def launch_setup(context, platform, module):
     halt = check_parameters(files, checked_nodes(nodes, module), logger) or check_setup(setup, logger)
     if halt:
         return halt
+    import_dir = arg("import_dir")
+    if import_dir and data_dir and getattr(module, "OPENMOWER_IMPORT", False) and migrate.wanted(data_dir):
+        migrate.take(data_dir, import_dir, int(layers.parameters(files, "mowbite_map")["max_map_bytes"]), logger)
     parts = module.parts(Start(arg, files, found, device, data_dir, journal, logger))
     driver = []
     if parts.driver:

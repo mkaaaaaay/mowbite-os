@@ -19,6 +19,8 @@ import logic_params  # noqa: E402
 NODES = ()
 DRIVER = "xcore_driver"
 DRIVER_RESTARTS = 3
+# A mower that ran OpenMower: its map and values come over on the first start (mowbite_bringup migrate.py).
+OPENMOWER_IMPORT = True
 
 
 def arguments():

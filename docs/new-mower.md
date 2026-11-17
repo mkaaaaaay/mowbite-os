@@ -279,6 +279,7 @@ brings IMU and GNSS along) or `platform_tron` (nodes of its own in the container
 | `DRIVER` | the node that holds the motors, also the label of its exit note |
 | `DRIVER_RESTARTS` | how often the driver starts again after it ended (3 on both mowers, each time latched) |
 | `DATA_DIR` | optional: `data_dir` when the start names none |
+| `OPENMOWER_IMPORT` | optional, `True` for a mower that may have run OpenMower: its map and values come over on the first start (section 5) |
 | `arguments()` | its launch arguments (ports, datum, switches), as `DeclareLaunchArgument` |
 | `parts(start)` | `start.Parts(driver=, before=, after=, processes=)` |
 
@@ -440,6 +441,17 @@ process is outside this watch and stops the mower by its own timeouts.
 
 - Docker Compose like the NX60i (`docker/mower/nx60i.compose.yaml`), or a native bundle on the mower's own rootfs like
   the Tron (`platform/tron/`).
+- From OpenMower (a platform with `OPENMOWER_IMPORT`, launch argument `import_dir`, `MOWBITE_IMPORT_DIR` in the
+  compose file): on the first start, while the data dir holds no data yet, `migrate.py` of `mowbite_bringup` reads
+  `<import_dir>/ros/map.json` and `<import_dir>/params/mower_params.yaml` (mounted read only) before any node starts.
+  The map comes over as it is if `mowbite_map_check` passes it, with its datum in `map_datum.json`; antenna, track and
+  ticks go into `geometry.json` unconfirmed (the setup step `dimensions` asks for them), the NTRIP access into
+  `ntrip.yaml` (0600). Nothing of the safety measurement, the blade or the charging limits comes over, and nothing of
+  another broker. `migrate.json` in the data dir names what came over and what stayed behind with its reason, never a
+  value; an import cut off runs again on the next start, a later start never imports. The way back:
+  `docker exec <container> mowbite-migrate export /export` while the mower rests (exit 0 written, 2 not at rest,
+  1 error) writes `map.json` in OpenMower's fields and `report.json`, whose `lost` lists what OpenMower cannot hold
+  (other area types, inactive areas, properties, dimensions or NTRIP changed since the import).
 - Map and settings live in the data dir, never in a container volume. The journal has a folder of its own outside it
   (`journal_dir`, a bind mount like the data dir); its incidents lie in `journal_dir/incidents`.
 - The data dir has to stay writable for the OS: while `os-session.json` or `restart-hold.json` cannot be written
