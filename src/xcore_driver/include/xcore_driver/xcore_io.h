@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -19,6 +20,13 @@
 
 namespace xcore {
 
+// The watch of the I/O thread, empty without one: `sign` at the start of every round, `mark` names the step it
+// takes next, for the line should it stall there.
+struct IoWatch {
+  std::function<void()> sign;
+  std::function<void(const char*)> mark;
+};
+
 struct IoConfig {
   std::string interface = "eth0";
   // Host byte order.
@@ -31,6 +39,7 @@ struct IoConfig {
   std::map<uint16_t, std::vector<Section>> services;
   // The outputs of the GPS service go to the output thread; without it they are dropped.
   bool gnss = false;
+  IoWatch watch;
 };
 
 // Seconds on the monotonic clock, the time of the I/O thread and the control.
@@ -152,6 +161,7 @@ class XcoreIo {
   // The link while the service socket is open; called with mutex_ held.
   XcoreLink& Link();
   void HandleEvents(const std::vector<LinkEvent>& events);
+  void Mark(const char* where) const;
   bool OnFirmwareAnswer(const LinkEvent& e, double now);
   // Wakes the output thread for hw/status when the block changed since the last request.
   void CheckBlock();

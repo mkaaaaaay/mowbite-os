@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <random>
+#include <set>
 #include <thread>
 
 #include "xcore_driver/schema.h"
@@ -189,6 +190,40 @@ TEST(XcoreIo, ReportsThroughTheOutbox) {
   EXPECT_TRUE(snapshot.status.blocked);
   EXPECT_NE(BlockOf(snapshot.status), 0u);
   io.Stop();
+}
+
+// The hooks of the watch: a sign at least every 0.25 s (its limit is 2 s), before the claim and after it, and each step named before it
+// runs, so that a hang names its step.
+TEST(XcoreIo, SignsItsWatchEveryRound) {
+  IoConfig config = LoopbackConfig();
+  std::mutex mutex;
+  std::vector<double> signs;
+  std::set<std::string> marks;
+  config.watch.sign = [&] {
+    std::lock_guard<std::mutex> lock(mutex);
+    signs.push_back(MonotonicSeconds());
+  };
+  config.watch.mark = [&](const char* where) {
+    std::lock_guard<std::mutex> lock(mutex);
+    marks.insert(where);
+  };
+  LoopbackBoard board(config.group_port);
+  XcoreIo io(config, ControlConfig{}, InputMap{});
+  io.Start();
+  const double start = MonotonicSeconds();
+  while (board.inputs().empty() && MonotonicSeconds() - start < 10.0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+  }
+  ASSERT_FALSE(board.inputs().empty()) << "the board was not claimed";
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+  io.Stop();
+
+  std::lock_guard<std::mutex> lock(mutex);
+  ASSERT_GE(signs.size(), 20u);
+  double largest = 0;
+  for (size_t i = 1; i < signs.size(); i++) largest = std::max(largest, signs[i] - signs[i - 1]);
+  EXPECT_LE(largest, 0.25);
+  EXPECT_EQ(marks, (std::set<std::string>{"foreign hosts", "open", "receive", "tick"}));
 }
 
 TEST(XcoreIo, BlockOfLeavesOutTheRest) {

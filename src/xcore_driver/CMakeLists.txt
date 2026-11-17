@@ -18,6 +18,7 @@ find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_gnss REQUIRED)
 find_package(mowbite_hold REQUIRED)
 find_package(mowbite_outbox REQUIRED)
+find_package(mowbite_watch REQUIRED)
 
 # Frames, CBOR, service descriptions and control logic without ROS, testable on any machine.
 add_library(xcore_core STATIC src/wire.cpp src/cbor.cpp src/schema.cpp src/services.cpp src/odometry.cpp src/xcore_control.cpp src/udp.cpp src/drive_regulator.cpp src/input_config.cpp src/link.cpp src/gnss.cpp src/socket_table.cpp)
@@ -33,7 +34,7 @@ target_link_libraries(xcore_io xcore_core mowbite_outbox::mowbite_outbox_core)
 set_target_properties(xcore_io PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(xcore_driver_component SHARED src/xcore_node.cpp)
-target_link_libraries(xcore_driver_component xcore_io mowbite_hold::mowbite_hold_core)
+target_link_libraries(xcore_driver_component xcore_io mowbite_hold::mowbite_hold_core mowbite_watch::mowbite_watch)
 # Only the image of the safety measurement (docker/measure.Dockerfile): the driver takes measurement_speed_limit as its
 # cap for driving, up to 0.6 m/s; every other build drives at most 0.3 m/s.
 option(XCORE_MEASUREMENT_BUILD "driver of the measurement image, see docker/measure.Dockerfile" OFF)

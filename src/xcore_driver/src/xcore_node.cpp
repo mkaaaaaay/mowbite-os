@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
@@ -23,6 +24,8 @@
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mowbite_msgs/srv/silence_driver.hpp>
 #include <mowbite_hold/hold.h>
+#include <mowbite_watch/attach.h>
+#include <mowbite_watch/watch.h>
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -86,6 +89,9 @@ constexpr double kForeignCheckS = 5.0;
 constexpr double kHoldPollS = 0.5;
 // hw/status goes out at least this often, at once when a block changes.
 constexpr double kStatusPeriodS = 0.1;
+// Executor, I/O thread and output thread each sign within this or the watch ends the process; the launch starts a
+// latched driver.
+constexpr double kWatchLimitS = 2.0;
 // Counts of frequent events become one line per this long at most.
 constexpr double kCountLogS = 10.0;
 const char kAgeSensor[] = "os_correction_age";
@@ -191,6 +197,8 @@ class XcoreNode : public rclcpp::Node {
       RCLCPP_INFO(get_logger(), "GNSS from %s, the board's GPS service is not passed on", gnss_source_.c_str());
     }
     io.gnss = gnss_enabled_;
+    io.watch.sign = [this] { io_watch_->Sign(); };
+    io.watch.mark = [this](const char* where) { io_watch_->Mark(where); };
     io_.emplace(io, control, xcore::InputMapOf(inputs_));
     // Started again by the launch after the last driver ended: it took the board without a latch (M4), so this one
     // holds it from the first frame until a release by the app or a key.
@@ -232,8 +240,10 @@ class XcoreNode : public rclcpp::Node {
     // At the end of the process the loop sends its stop inputs before the node goes away.
     context_ = get_node_base_interface()->get_context();
     on_shutdown_ = context_->add_on_shutdown_callback([this] { Io().RequestStop(); });
+    io_watch_ = std::make_unique<mowbite_watch::Watch>("xcore_io", kWatchLimitS);
     Io().Start();
     output_thread_ = std::thread([this] { OutputLoop(); });
+    watch_ = mowbite_watch::Attach(*this, kWatchLimitS);
   }
 
   ~XcoreNode() override {
@@ -509,6 +519,7 @@ class XcoreNode : public rclcpp::Node {
   // Publishes, logs and makes the slow checks, in this order of each round: a changed block first, then the
   // capabilities, the readings in their order, the log lines, the counts, hold.json and the sockets of other programs.
   void OutputLoop() {
+    mowbite_watch::Watch watch("xcore_output", kWatchLimitS);
     auto& out = Io().outbox();
     double now = MonotonicSeconds();
     double next_status = now;
@@ -517,6 +528,8 @@ class XcoreNode : public rclcpp::Node {
     while (!out.wakeup.stopped()) {
       const double wait = std::max(0.0, std::min(next_status, next_hold) - MonotonicSeconds());
       out.wakeup.WaitFor(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(wait)));
+      watch.Sign();
+      watch.Mark("publish");
       now = MonotonicSeconds();
       if (out.status_due.exchange(false) || now >= next_status) {
         next_status = now + kStatusPeriodS;
@@ -530,6 +543,7 @@ class XcoreNode : public rclcpp::Node {
       ReportCounts(now);
       if (now >= next_hold) {
         next_hold = now + kHoldPollS;
+        watch.Mark("hold file");
         PollHold();
       }
       // While the board is claimed, a second host beside this driver latches (FOREIGN_HOST).
@@ -537,6 +551,7 @@ class XcoreNode : public rclcpp::Node {
         next_foreign = now + kForeignCheckS;
       } else if (now >= next_foreign) {
         next_foreign = now + kForeignCheckS;
+        watch.Mark("foreign hosts");
         if (auto foreign = xcore::ForeignHosts(bind_ip_, group_port_)) Io().LatchForeignHost(*foreign);
       }
     }
@@ -923,7 +938,10 @@ class XcoreNode : public rclcpp::Node {
   mowbite_hold::HoldView hold_logged_;
   xcore::InputConfig inputs_;
   std::optional<xcore::XcoreIo> io_;
+  // Made before the I/O thread starts, which alone signs it.
+  std::unique_ptr<mowbite_watch::Watch> io_watch_;
   std::thread output_thread_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
   rclcpp::Context::SharedPtr context_;
   rclcpp::OnShutdownCallbackHandle on_shutdown_;
 

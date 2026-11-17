@@ -437,7 +437,8 @@ callbacks short, so the limits can come down after measuring; a sign later than 
 Limits are never parameters; `MOWBITE_WATCH_FACTOR` only lengthens them for sanitizer runs. A driver in its own
 process stops the mower by its own timeouts and has a watch of its own: `Attach(*this, 2.0)` for its executor and a
 `Watch` with the same limit for its I/O thread, signed every round (a read with a timeout, so a quiet port signs too).
-A silent one ends the process (code 86) and the launch starts a latched driver, as after a crash (`tron_mcu`).
+A silent one ends the process (code 86) and the launch starts a latched driver, as after a crash (`tron_mcu`;
+`xcore_driver` also watches its output thread, and its I/O thread without ROS signs through hooks in its config).
 
 ## 5. Onto the mower
 

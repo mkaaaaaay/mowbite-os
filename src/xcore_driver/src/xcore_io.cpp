@@ -269,12 +269,17 @@ void XcoreIo::Close() {
   service_socket_.Close();
 }
 
+void XcoreIo::Mark(const char* where) const {
+  if (config_.watch.mark) config_.watch.mark(where);
+}
+
 void XcoreIo::Loop() {
   uint8_t buffer[kMaxDatagram + 1];
   // 0: no tick due yet, so the first one after a start or a closed socket counts as on time.
   double next_tick = 0;
   double next_open = 0;
   while (running_) {
+    if (config_.watch.sign) config_.watch.sign();
     double now = MonotonicSeconds();
     if (!service_socket_.IsOpen()) {
       {
@@ -285,9 +290,11 @@ void XcoreIo::Loop() {
         next_open = now + 1.0;
         // A second host at the board takes over whatever this driver claims: no start beside one. The board is
         // not claimed yet, so reading /proc here holds up nothing.
+        Mark("foreign hosts");
         if (auto foreign = ForeignHosts(config_.bind_ip, config_.group_port)) {
           if (foreign_at_start_.Allow(now)) outbox_.log.Error("Board not claimed, checking again: " + *foreign);
         } else {
+          Mark("open");
           Open(now);
         }
       }
@@ -300,6 +307,7 @@ void XcoreIo::Loop() {
     }
     Endpoint from;
     long n;
+    Mark("receive");
     while ((n = announcements_.Receive(buffer, sizeof(buffer), from, 0)) > 0) {
       if (static_cast<size_t>(n) > kMaxDatagram) continue;
       std::vector<LinkEvent> events;
@@ -322,6 +330,7 @@ void XcoreIo::Loop() {
     if (now >= next_tick) {
       if (next_tick > 0 && now - next_tick > kLateTickS) outbox_.late_ticks.Add(now - next_tick);
       next_tick = now + kTickS;
+      Mark("tick");
       Tick(now);
     }
     // So that the logic learns of a block before a blade request it refuses, not only at the next status.
