@@ -67,7 +67,7 @@ xcore_driver:
       # Top stop, rear stop, lift front left and right, bumper rear right and left.
       gpio_roles: [stop, stop, lift, lift, bumper_right, bumper_left]
       cover: [hall_mux=om]
-      # The lines a sensor can be on at this board. Started with learn the driver watches these instead of the table
+      # The lines a sensor can be on at this board. Started with learn the driver reports these instead of the table
       # above and nothing moves: the setup program finds the line of every sensor that way.
       candidates: [GPIO1, GPIO5, GPIO6, GPIO8, GPIO9, GPIO10, GPIO11, GPIO12, GPIO13]
       learn: false

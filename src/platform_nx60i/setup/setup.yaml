@@ -1,7 +1,9 @@
 # The steps of the setup program of the NX60i (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image.
-catalog: 1
+catalog: 2
+# inputs_assign ends with a restart of the OS: the launch ends and whatever runs it starts it again.
+restart: self
 steps:
   - id: variant
     stage: device
@@ -31,6 +33,69 @@ steps:
     params: {time: 5}
     image: board.svg
     symbol: board
+  # The delays are those of the table in nx60i.yaml of the driver: a lift sensor stops after 2.5 s, the bumper after
+  # 0.5 s.
+  - id: inputs_assign
+    stage: inputs
+    check: inputs_assign
+    params: {node: xcore_driver}
+    parts:
+      - id: stop_top
+        role: stop
+        delay_ms: 10
+        texts:
+          de: {name: STOP oben}
+          en: {name: STOP on top}
+      - id: stop_rear
+        role: stop
+        delay_ms: 10
+        texts:
+          de: {name: STOP hinten}
+          en: {name: STOP at the rear}
+      - id: lift_left
+        role: lift
+        delay_ms: 2500
+        texts:
+          de:
+            name: Hebesensor links
+            help: Nur die linke Seite anheben, bis der Vorschlag kommt, dann absetzen.
+          en:
+            name: Lift sensor left
+            help: Lift the left side alone until the proposal comes, then put it down.
+      - id: lift_right
+        role: lift
+        delay_ms: 2500
+        texts:
+          de:
+            name: Hebesensor rechts
+            help: Nur die rechte Seite anheben, bis der Vorschlag kommt, dann absetzen.
+          en:
+            name: Lift sensor right
+            help: Lift the right side alone until the proposal comes, then put it down.
+      - id: bumper_left
+        role: bumper_left
+        delay_ms: 500
+        texts:
+          de:
+            name: Stoßfänger links
+            help: Den Stoßfänger nur links eindrücken, bis der Vorschlag kommt, dann loslassen.
+          en:
+            name: Bumper left
+            help: Press the bumper in on the left alone until the proposal comes, then let go.
+      - id: bumper_right
+        role: bumper_right
+        delay_ms: 500
+        texts:
+          de:
+            name: Stoßfänger rechts
+            help: Den Stoßfänger nur rechts eindrücken, bis der Vorschlag kommt, dann loslassen.
+          en:
+            name: Bumper right
+            help: Press the bumper in on the right alone until the proposal comes, then let go.
+    symbol: board
+    note:
+      de: Bei Verkabelung nach Standard kann dieser Schritt übersprungen werden.
+      en: Wired as standard, this step can be skipped.
   - id: stop
     stage: inputs
     check: input
@@ -48,8 +113,8 @@ steps:
     accent: stop-accent.svg
     symbol: stop
     note:
-      de: Nach jeder Taste den Notaus in der App aufheben, dann die nächste drücken.
-      en: Release the emergency stop in the app after each button, then press the next.
+      de: Nach dem Loslassen hebt der Mäher den Notaus dieser Prüfung selbst auf. Dann die nächste Taste drücken.
+      en: After the button is let go the mower releases the emergency stop of this check itself. Then press the next.
   # The board stops 2.5 s after a lift sensor switches, so a bump of 1.5 s must not stop.
   - id: lift
     stage: inputs
@@ -73,8 +138,8 @@ steps:
     accent: lift-accent.svg
     symbol: lift
     note:
-      de: Der Notaus kommt erst nach gut zwei Sekunden. Danach absetzen und den Notaus in der App aufheben.
-      en: The emergency stop comes only after a good two seconds. Then put the mower down and release it in the app.
+      de: Der Notaus kommt erst nach gut zwei Sekunden. Nach dem Absetzen hebt der Mäher ihn selbst wieder auf.
+      en: The emergency stop comes only after a good two seconds. Put down again, the mower releases it itself.
   - id: bumper
     stage: inputs
     check: input
