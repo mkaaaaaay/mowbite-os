@@ -447,3 +447,55 @@ TEST(Motion, WithoutKeepOrLogicTheStepStops) {
   EXPECT_EQ(aborted.motion_ends, std::vector<std::string>{"wheels"});
   EXPECT_FALSE(aborted.program.CommandNow());
 }
+
+TEST(Motion, AStopNotPressedInTimeAsksWithTheWheelsStanding) {
+  for (const char* answer : {"no", "yes"}) {
+    Mower mower;
+    ASSERT_EQ(mower.Start("stop_moving"), "");
+    mower.Run(12);
+    ASSERT_TRUE(mower.program.running()) << answer;
+    json pressed;
+    const json step = mower.StepState("stop_moving");
+    for (const auto& input : step["inputs"]) {
+      if (input["name"] == "pressed") pressed = input;
+    }
+    ASSERT_EQ(pressed["ask"], true) << answer;
+    // The step still runs with setup.keep, its motion stands.
+    ASSERT_TRUE(mower.program.MotionNow());
+    ASSERT_TRUE(mower.program.CommandNow());
+    EXPECT_EQ(mower.program.CommandNow()->linear, 0.0);
+    json params = {{"step", "stop_moving"}, {"version", mower.program.version()}, {"values", {{"pressed", answer}}}};
+    ASSERT_FALSE(mower.program.Answer(params, mower.now, kWall + mower.now)) << answer;
+    const json end = mower.RunToEnd(1);
+    EXPECT_EQ(end["reason"], std::string(answer) == "yes" ? "NOT_SEEN" : "NOT_DONE") << end.dump();
+    EXPECT_EQ(end["part"], "stop");
+    EXPECT_EQ(mower.StepState("stop_moving")["state"], std::string(answer) == "yes" ? "failed" : "open");
+    EXPECT_EQ(mower.program.TakeLock().has_value(), std::string(answer) == "yes") << answer;
+    mower.Run(0.1);
+    EXPECT_FALSE(mower.program.CommandNow());
+  }
+}
+
+TEST(Motion, NoAnswerWhichWheelTurnsIsNotDone) {
+  Mower mower;
+  ASSERT_EQ(mower.Start("wheels"), "");
+  const json end = mower.RunToEnd(40);
+  EXPECT_EQ(end["reason"], "NOT_DONE") << end.dump();
+  EXPECT_EQ(mower.StepState("wheels")["state"], "open");
+  EXPECT_FALSE(mower.program.TakeLock());
+}
+
+TEST(Motion, WheelsThatRunOnCloseTheLock) {
+  Mower runs_on;
+  runs_on.watchdog = false;
+  ASSERT_EQ(runs_on.Start("no_command"), "");
+  const json end = runs_on.RunToEnd(20);
+  ASSERT_EQ(end["reason"], "LIMIT") << end.dump();
+  const auto text = runs_on.program.TakeLock();
+  ASSERT_TRUE(text);
+  const json lock = json::parse(*text);
+  EXPECT_EQ(lock["failures"], 1);
+  EXPECT_EQ(lock["causes"][0]["step"], "no_command");
+  EXPECT_EQ(lock["causes"][0]["reason"], "LIMIT");
+  EXPECT_EQ(lock["causes"][0]["limit"], runs_on.StepState("no_command")["values"][0]["max"]);
+}

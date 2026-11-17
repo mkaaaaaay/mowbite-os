@@ -4,6 +4,8 @@
 #include <string>
 
 #include "mowbite_api/catalog.h"
+#include "mowbite_api/setup.h"
+#include "mowbite_hold/lock.h"
 #include "mowbite_setup/program.h"
 
 using namespace mowbite_setup;
@@ -300,7 +302,8 @@ TEST(Program, AFreshProgramShowsItsSteps) {
   EXPECT_EQ(state["current"], "variant");
   EXPECT_FALSE(state["complete"].get<bool>());
   EXPECT_EQ(state["safety"], (json{{"open", false}, {"date", nullptr}, {"firmware", nullptr},
-                                   {"why", "NO_SAFETY_MEASUREMENT"}}));
+                                   {"why", "NO_SAFETY_MEASUREMENT"}, {"source", nullptr},
+                                   {"closed", json::array()}}));
   ASSERT_EQ(state["stages"].size(), 7u);
   EXPECT_EQ(state["stages"][1]["texts"]["de"]["name"], "Eingänge");
   EXPECT_EQ(state["stages"][0]["state"], "open");
@@ -455,9 +458,12 @@ TEST(Program, AnInputWithoutEmergencyFails) {
   EXPECT_EQ(step["result"]["part"], "top");
   EXPECT_EQ(step["parts"][0]["state"], "failed");
   const auto events = bench.Events();
-  ASSERT_EQ(events.size(), 1u);
+  ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[0]["part"], "top");
   EXPECT_EQ(events[0]["limit"], 1.0);
+  // A safety step: the failure closes the lock.
+  EXPECT_EQ(events[1],
+            (json{{"what", "safety_closed"}, {"step", "stop"}, {"cause", "NO_EMERGENCY"}, {"type", "SETUP"}}));
 }
 
 TEST(Program, NothingSeenOrAnotherInputEndsThePartInTime) {
@@ -465,6 +471,12 @@ TEST(Program, NothingSeenOrAnotherInputEndsThePartInTime) {
   bench.PassBoard();
   ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
   bench.Run(10.3);
+  // Nothing seen: the step asks whether the user did it, and only yes fails it.
+  EXPECT_EQ(bench.StepState("stop")["state"], "running");
+  ASSERT_EQ(bench.Refused(bench.program.Answer(
+                {{"step", "stop"}, {"version", bench.program.version()}, {"values", {{"pressed", "yes"}}}}, bench.now,
+                kWall + bench.now)),
+            "");
   EXPECT_EQ(bench.StepState("stop")["result"]["reason"], "NOT_SEEN");
   ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
   bench.Run(0.2);
@@ -949,6 +961,10 @@ TEST(Program, AnImuTheWrongWayRoundFails) {
     Bench bench;
     ASSERT_EQ(bench.Refused(bench.Start("imu")), "");
     bench.Run(11.0);
+    ASSERT_EQ(bench.Refused(bench.program.Answer(
+                  {{"step", "imu"}, {"version", bench.program.version()}, {"values", {{"pressed", "yes"}}}},
+                  bench.now, kWall + bench.now)),
+              "");
     EXPECT_EQ(bench.StepState("imu")["result"]["reason"], "NOT_SEEN");
   }
 }
@@ -1800,4 +1816,313 @@ TEST(Program, OnlyAWholeTableIsKeptAndGoneOnWith) {
                 other.now, kWall + other.now)),
             "WRONG_METHOD");
   EXPECT_EQ(other.restarts, 2);
+}
+
+// A bench with a safety measurement date, the board passed and the events taken.
+struct LockBench : Bench {
+  LockBench() {
+    capabilities.safety_measurement_date = "2026-11-17";
+    program.OnCapabilities(capabilities);
+    PassBoard();
+    Events();
+  }
+  json Safety() {
+    return State()["safety"];
+  }
+  // bumper_left switches; with its emergency 0.1 s later when bring; let go after the time of the emergency.
+  void Bump(bool bring) {
+    hardware.bumper = hardware.bumper_left = true;
+    Run(0.1);
+    if (bring) hardware.emergency_reason |= bumper;
+    Run(1.3);
+    hardware.bumper = hardware.bumper_left = false;
+    Run(0.3);
+  }
+  std::string AnswerPressed(const std::string& id, const std::string& value) {
+    return Refused(program.Answer({{"step", id}, {"version", program.version()}, {"values", {{"pressed", value}}}},
+                                  now, kWall + now));
+  }
+  json Pressed(const std::string& id) {
+    const json step = StepState(id);
+    for (const auto& input : step["inputs"]) {
+      if (input["name"] == "pressed") return input;
+    }
+    return nullptr;
+  }
+  const uint32_t bumper =
+      EmergencyBit(mowbite_api::FindSetupName(mowbite_api::SetupRoles(), "bumper_left")->emergency);
+};
+
+TEST(Lock, AFailedSafetyStepClosesTheLockUntilItPassesAgain) {
+  LockBench bench;
+  EXPECT_EQ(bench.Safety(), (json{{"open", true},
+                                  {"date", "2026-11-17"},
+                                  {"firmware", nullptr},
+                                  {"why", nullptr},
+                                  {"source", "hand"},
+                                  {"closed", json::array()}}));
+  EXPECT_EQ(bench.StepState("left")["safety"], true);
+  EXPECT_EQ(bench.StepState("board")["safety"], false);
+  EXPECT_FALSE(bench.program.TakeLock());
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(0.2);
+  bench.Bump(false);
+  EXPECT_EQ(bench.StepState("left")["state"], "failed");
+  auto events = bench.Events();
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0]["reason"], "NO_EMERGENCY");
+  EXPECT_EQ(events[1],
+            (json{{"what", "safety_closed"}, {"step", "left"}, {"cause", "NO_EMERGENCY"}, {"type", "SETUP"}}));
+  const auto text = bench.program.TakeLock();
+  ASSERT_TRUE(text && !text->empty());
+  const auto record = mowbite_hold::ParseSafetyLock(*text);
+  ASSERT_TRUE(record);
+  EXPECT_EQ(record->failures, 1u);
+  ASSERT_EQ(record->causes.size(), 1u);
+  EXPECT_EQ(record->causes[0].step, "left");
+  EXPECT_EQ(record->causes[0].reason, "NO_EMERGENCY");
+  EXPECT_EQ(*record->causes[0].limit, 1.0);
+  EXPECT_EQ(record->causes[0].firmware, "chassis 0.6.36, cutter 0.6.34");
+  EXPECT_FALSE(bench.program.TakeLock());
+  json safety = bench.Safety();
+  EXPECT_EQ(safety["open"], false);
+  EXPECT_EQ(safety["why"], "CHECK_FAILED");
+  ASSERT_EQ(safety["closed"].size(), 1u);
+  EXPECT_EQ(safety["closed"][0]["step"], "left");
+  EXPECT_EQ(safety["closed"][0]["reason"], "NO_EMERGENCY");
+
+  // Skipped or reset, the step keeps the lock closed.
+  bench.hardware.emergency_reason = 0;
+  ASSERT_EQ(bench.Refused(bench.program.Skip(
+                {{"step", "left"}, {"version", bench.program.version()}, {"reason", "later"}}, kWall)),
+            "");
+  EXPECT_EQ(bench.Safety()["open"], false);
+  ASSERT_EQ(bench.Refused(bench.program.Reset({{"version", bench.program.version()}})), "");
+  EXPECT_EQ(bench.Safety()["open"], false);
+  EXPECT_FALSE(bench.program.TakeLock());
+  bench.Events();
+
+  // A failure again counts again.
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(0.2);
+  bench.Bump(false);
+  EXPECT_EQ(mowbite_hold::ParseSafetyLock(*bench.program.TakeLock())->failures, 2u);
+  bench.hardware.emergency_reason = 0;
+  bench.Events();
+
+  // Passed, the lock opens and the file goes.
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(0.2);
+  bench.Bump(true);
+  EXPECT_EQ(bench.StepState("left")["state"], "ok");
+  events = bench.Events();
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[1], (json{{"what", "safety_opened"}, {"type", "SETUP"}}));
+  EXPECT_EQ(bench.program.TakeLock(), std::optional<std::string>(""));
+  safety = bench.Safety();
+  EXPECT_EQ(safety["open"], true);
+  EXPECT_TRUE(safety["why"].is_null());
+  EXPECT_TRUE(safety["closed"].empty());
+}
+
+TEST(Lock, WithoutADateTheLockStaysClosedAfterThePass) {
+  Bench bench;
+  bench.PassBoard();
+  EXPECT_EQ(bench.State()["safety"]["why"], "NO_SAFETY_MEASUREMENT");
+  EXPECT_TRUE(bench.State()["safety"]["source"].is_null());
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(10.3);
+  ASSERT_EQ(bench.Refused(bench.program.Answer(
+                {{"step", "left"}, {"version", bench.program.version()}, {"values", {{"pressed", "yes"}}}}, bench.now,
+                kWall + bench.now)),
+            "");
+  bench.Events();
+  EXPECT_EQ(bench.State()["safety"]["why"], "CHECK_FAILED");
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(0.2);
+  bench.hardware.bumper = bench.hardware.bumper_left = true;
+  bench.Run(0.1);
+  bench.hardware.emergency_reason |=
+      EmergencyBit(mowbite_api::FindSetupName(mowbite_api::SetupRoles(), "bumper_left")->emergency);
+  bench.Run(0.5);
+  bench.hardware.bumper = bench.hardware.bumper_left = false;
+  bench.Run(0.3);
+  ASSERT_EQ(bench.StepState("left")["state"], "ok");
+  // The cause is gone, yet without a date it is not open: no safety_opened.
+  const auto events = bench.Events();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(bench.program.TakeLock(), std::optional<std::string>(""));
+  EXPECT_EQ(bench.State()["safety"]["why"], "NO_SAFETY_MEASUREMENT");
+}
+
+TEST(Lock, NothingSeenAsksAndOnlyYesCloses) {
+  LockBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  EXPECT_EQ(bench.Pressed("left")["ask"], false);
+  bench.Run(10.3);
+  json step = bench.StepState("left");
+  EXPECT_EQ(step["state"], "running");
+  EXPECT_EQ(bench.Pressed("left")["ask"], true);
+  EXPECT_EQ(bench.Pressed("left")["values"].size(), 2u);
+  EXPECT_NEAR(step["ends_at"].get<double>(), kWall + bench.now + mowbite_api::kSetupPressedTime, 1.0);
+  EXPECT_TRUE(step["blocked"].empty());
+  EXPECT_TRUE(bench.Events().empty());
+  EXPECT_EQ(bench.AnswerPressed("left", "maybe"), "INVALID_VALUE");
+
+  // No: open again, nothing closes.
+  EXPECT_EQ(bench.AnswerPressed("left", "no"), "");
+  step = bench.StepState("left");
+  EXPECT_EQ(step["state"], "open");
+  EXPECT_EQ(step["result"]["reason"], "NOT_DONE");
+  auto events = bench.Events();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0]["state"], "failed");
+  EXPECT_EQ(events[0]["reason"], "NOT_DONE");
+  EXPECT_EQ(events[0]["severity"], "info");
+  EXPECT_FALSE(bench.program.TakeLock());
+  EXPECT_EQ(bench.Safety()["open"], true);
+  EXPECT_EQ(bench.AnswerPressed("left", "yes"), "WRONG_METHOD");
+
+  // No answer within its time: the same.
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(10.3);
+  bench.Run(mowbite_api::kSetupPressedTime - 0.5);
+  EXPECT_EQ(bench.StepState("left")["state"], "running");
+  bench.Run(1.0);
+  EXPECT_EQ(bench.StepState("left")["result"]["reason"], "NOT_DONE");
+  EXPECT_FALSE(bench.program.TakeLock());
+  bench.Events();
+
+  // Yes: the sensor is dead, the lock closes.
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(10.3);
+  EXPECT_EQ(bench.AnswerPressed("left", "yes"), "");
+  step = bench.StepState("left");
+  EXPECT_EQ(step["state"], "failed");
+  EXPECT_EQ(step["result"]["reason"], "NOT_SEEN");
+  events = bench.Events();
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[1]["cause"], "NOT_SEEN");
+  EXPECT_TRUE(bench.program.TakeLock());
+  EXPECT_EQ(bench.Safety()["open"], false);
+}
+
+TEST(Lock, ATiltThatDoesNotStopAsksAsWell) {
+  const char* list = R"({"catalog": 1, "steps": [
+    {"id": "imu", "stage": "inputs", "check": "imu", "params": {"time": 5}, "parts": ["tilt_stop"]}]})";
+  Bench bench(list);
+  ASSERT_EQ(bench.Refused(bench.Start("imu")), "");
+  bench.Run(6.0);
+  ASSERT_EQ(bench.StepState("imu")["state"], "running");
+  ASSERT_EQ(bench.Refused(bench.program.Answer(
+                {{"step", "imu"}, {"version", bench.program.version()}, {"values", {{"pressed", "yes"}}}}, bench.now,
+                kWall + bench.now)),
+            "");
+  EXPECT_EQ(bench.StepState("imu")["result"]["reason"], "NO_EMERGENCY");
+  EXPECT_TRUE(bench.program.TakeLock());
+}
+
+TEST(Lock, AFailureOfAnotherStepOrReasonLeavesTheLock) {
+  LockBench bench;
+  // The board is no safety step; WRONG_INPUT and an abort do not close.
+  ASSERT_EQ(bench.Refused(bench.Start("board")), "");
+  bench.Run(0.5);
+  bench.hardware.link_errors = 5;
+  bench.Run(1.7);
+  ASSERT_EQ(bench.StepState("board")["state"], "failed");
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(0.2);
+  bench.hardware.stop = true;
+  bench.Run(10.3);
+  ASSERT_EQ(bench.StepState("left")["result"]["reason"], "WRONG_INPUT");
+  bench.hardware.stop = false;
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  ASSERT_EQ(bench.Refused(bench.program.Abort(nullptr, bench.now, kWall)), "");
+  EXPECT_FALSE(bench.program.TakeLock());
+  EXPECT_EQ(bench.Safety()["open"], true);
+  for (const auto& event : bench.Events()) EXPECT_NE(event.value("what", ""), "safety_closed");
+}
+
+TEST(Lock, TheFileOfTheLastStart) {
+  using mowbite_hold::LockCause;
+  using mowbite_hold::LockRecord;
+  {
+    // Not there: open, nothing to write.
+    LockBench bench;
+    bench.program.LoadLock(std::nullopt, kWall);
+    EXPECT_FALSE(bench.program.TakeLock());
+    EXPECT_EQ(bench.Safety()["open"], true);
+  }
+  {
+    // Unreadable: a reset closes it, written back in the form.
+    LockBench bench;
+    bench.program.LoadLock(std::string("{"), kWall);
+    const auto record = mowbite_hold::ParseSafetyLock(*bench.program.TakeLock());
+    ASSERT_TRUE(record);
+    EXPECT_EQ(record->failures, 0u);
+    ASSERT_EQ(record->causes.size(), 1u);
+    EXPECT_TRUE(record->causes[0].reset);
+    EXPECT_EQ(record->causes[0].reason, "UNREADABLE");
+    const json safety = bench.Safety();
+    EXPECT_EQ(safety["why"], "RESET");
+    EXPECT_TRUE(safety["closed"][0]["step"].is_null());
+    EXPECT_EQ(safety["closed"][0]["reason"], "UNREADABLE");
+    // Passing a safety step does not take a reset away.
+    ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+    bench.Run(0.2);
+    bench.Bump(true);
+    ASSERT_EQ(bench.StepState("left")["state"], "ok");
+    EXPECT_FALSE(bench.program.TakeLock());
+    EXPECT_EQ(bench.Safety()["open"], false);
+  }
+  LockCause left;
+  left.step = "left";
+  left.reason = "LIMIT";
+  left.t = 1700000000;
+  {
+    // Unchanged: closed, nothing to write; its step opens it.
+    LockBench bench;
+    bench.program.LoadLock(mowbite_hold::SafetyLockText(LockRecord{2, {left}}), kWall);
+    EXPECT_FALSE(bench.program.TakeLock());
+    EXPECT_EQ(bench.Safety()["why"], "CHECK_FAILED");
+    ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+    bench.Run(0.2);
+    bench.Bump(true);
+    EXPECT_EQ(bench.program.TakeLock(), std::optional<std::string>(""));
+    EXPECT_EQ(bench.Safety()["open"], true);
+  }
+  {
+    // A cause of a step the list does not have, or of one that is no safety step, becomes a reset.
+    LockCause gone = left;
+    gone.step = "gone";
+    LockCause board = left;
+    board.step = "board";
+    LockBench bench;
+    bench.program.LoadLock(mowbite_hold::SafetyLockText(LockRecord{5, {left, gone, board}}), kWall);
+    const auto record = mowbite_hold::ParseSafetyLock(*bench.program.TakeLock());
+    ASSERT_TRUE(record);
+    EXPECT_EQ(record->failures, 5u);
+    ASSERT_EQ(record->causes.size(), 2u);
+    EXPECT_EQ(record->causes[0].step, "left");
+    EXPECT_TRUE(record->causes[1].reset);
+    EXPECT_EQ(record->causes[1].reason, "RESET");
+    EXPECT_EQ(bench.Safety()["why"], "CHECK_FAILED");
+  }
+}
+
+TEST(Lock, AFileThatCannotBeWrittenBlocksEveryChange) {
+  LockBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(0.2);
+  bench.Bump(false);
+  ASSERT_TRUE(bench.program.TakeLock());
+  bench.program.LockWritten(false);
+  bench.hardware.emergency_reason = 0;
+  EXPECT_EQ(bench.Refused(bench.Start("left")), "STORAGE_NOT_WRITABLE");
+  EXPECT_EQ(bench.StepState("left")["blocked"][0]["reason"], "STORAGE_NOT_WRITABLE");
+  // It is due again until a write goes through.
+  ASSERT_TRUE(bench.program.TakeLock());
+  bench.program.LockWritten(true);
+  EXPECT_FALSE(bench.program.TakeLock());
+  EXPECT_EQ(bench.Refused(bench.Start("left")), "");
 }
