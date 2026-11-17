@@ -54,6 +54,10 @@ EffectQueue& CoreAccess::effects() {
   return core_->effects_;
 }
 
+std::string& CoreAccess::client() {
+  return core_->client_;
+}
+
 HomeWatch& CoreAccess::home() {
   return core_->home_;
 }

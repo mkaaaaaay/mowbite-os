@@ -21,6 +21,7 @@
 #include "mowbite_logic/marker_dock.h"
 #include "mowbite_logic/mowing_job.h"
 #include "mowbite_logic/reasons.h"
+#include "mowbite_logic/release_part.h"
 #include "mowbite_logic/setup_part.h"
 #include "mowbite_logic/undocking.h"
 
@@ -254,7 +255,7 @@ class LogicCore {
   // returns the id of the event.
   std::string RefuseReset(const Reason& why);
   const ReleaseOutcome& LastReleaseOutcome() const {
-    return release_outcome_;
+    return release_.release_outcome();
   }
   // The restart hold (G35): while it stands the logic counts as in emergency with UNEXPECTED_RESTART, so nothing that
   // drives or mows starts, whatever the driver reports. The node sets it at the start and clears it on emergency.reset
@@ -742,13 +743,7 @@ class LogicCore {
   // The client of the command being run, for its events; the one of a skip that waits for the leg to stop.
   std::string client_;
   std::string skip_client_;
-  // emergency.reset or STOP asked the safety node: the end of the emergency carries the source (rpc with its client,
-  // button), until a refusal, a new emergency or kReleaseSourceS after the answer; the latest request names it.
-  bool release_pending_ = false;
-  std::string release_source_;
-  std::string release_client_;
-  std::optional<double> release_answered_s_;
-  ReleaseOutcome release_outcome_;
+  ReleasePart release_;
 };
 
 template <typename T>

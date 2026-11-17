@@ -38,6 +38,8 @@ class CoreAccess : public CoreFacts {
   explicit CoreAccess(LogicCore& core) : CoreFacts(core), core_(&core) {}
 
   EffectQueue& effects();
+  // The client of the command being run, for its events.
+  std::string& client();
   HomeWatch& home();
   std::string AddEvent(const std::string& type, json details);
   void Notify(std::string line);

@@ -279,14 +279,7 @@ void LogicCore::UpdateEmergency(bool report) {
                     {"reason", reason_},
                     {"severity", emergency ? "error" : "info"},
                     {"resume", emergency ? "user" : "auto"}};
-    // The end after emergency.reset or STOP tells who released it (masterplan 3.1a); a new emergency drops the request.
-    if (!emergency && release_pending_) {
-      details["source"] = release_source_;
-      if (!release_client_.empty()) details["client"] = release_client_;
-      release_outcome_ = {release_outcome_.seq + 1, true, Reason(), ""};
-    }
-    release_pending_ = false;
-    release_answered_s_.reset();
+    release_.OnEmergencyChanged(emergency, &details);
     AddEvent("EMERGENCY", std::move(details));
     SetDue<ActionsChanged>(true);
   }
@@ -399,10 +392,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
                              CommandOutcome* out) {
   const std::string& name = command.name;
   if (name == "emergency.reset") {
-    release_pending_ = true;
-    release_source_ = "rpc";
-    release_client_ = client_;
-    release_answered_s_.reset();
+    release_.OnResetRequested(client_);
     out->release = true;
     return {};
   }
@@ -1004,7 +994,7 @@ void LogicCore::SetGpsSettings(double max_position_accuracy, double gps_wait_tim
 
 void LogicCore::OnTick(double now_s) {
   // Any end of the emergency drops the request, so one still pending is an emergency that stayed.
-  if (release_answered_s_ && now_s - *release_answered_s_ > kReleaseSourceS) {
+  if (release_.release_answered_s() && now_s - *release_.release_answered_s() > kReleaseSourceS) {
     RefuseReset(Reason("STILL_ACTIVE", "The emergency stays: " + EmergencyReasonNames(reason_))
                     .With("bits", mowbite_api::EmergencyNameList(reason_)));
   }

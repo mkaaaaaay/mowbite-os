@@ -55,6 +55,18 @@ bool LogicCore::CalibrationActive() const {
   return state_ == State::kCalibrating && !emergency_;
 }
 
+std::string LogicCore::RefuseReset(const Reason& why) {
+  return release_.RefuseReset(CoreAccess(*this), why);
+}
+
+void LogicCore::OnReleaseAnswered(double now_s) {
+  release_.OnReleaseAnswered(now_s);
+}
+
+bool LogicCore::OnStopRelease() {
+  return release_.OnStopRelease(CoreFacts(*this));
+}
+
 Reason LogicCore::OnSetupMotion(bool active, const std::string& step, double now_s) {
   return setup_.OnSetupMotion(CoreAccess(*this), active, step, now_s);
 }
