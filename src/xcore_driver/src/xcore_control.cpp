@@ -484,12 +484,13 @@ InputValue XcoreControl::MowerSpeed(float speed) const {
   return InputValue{kMowerService, mower::kInSpeed, w.Take()};
 }
 
-std::string XcoreControl::Silence(double seconds, double now) {
+std::string XcoreControl::Silence(double seconds, double now, bool blade) {
   if (Silent(now)) return "BUSY";
   if (!(seconds >= kSilenceMinS - kTimeEpsilon && seconds <= config_.silence_max_s + kTimeEpsilon)) {
     return "OUT_OF_RANGE";
   }
   std::string refused = EndRefusal();
+  if (blade && refused == "BLADE") refused.clear();
   if (!refused.empty()) return refused;
   silent_until_s_ = now + seconds;
   // What was commanded is gone: nothing runs again after the silence.

@@ -1888,6 +1888,8 @@ TEST(XcoreControl, SilenceIsRefusedOutOfRangeOnTheDockWithTheBladeAndTwice) {
   ASSERT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0), BladeResult::kOk);
   EXPECT_EQ(f.control.Silence(1.0, 0), "BLADE");
   EXPECT_EQ(f.control.EndRefusal(), "BLADE");
+  // With blade only the blade is no reason: the board has to stop it.
+  EXPECT_EQ(f.control.Silence(0.1, 0, true), "OUT_OF_RANGE");
   ASSERT_EQ(f.control.SetBlade({false, 0, 0, 0}, 0), BladeResult::kOk);
   EXPECT_EQ(f.control.EndRefusal(), "");
   EXPECT_EQ(f.control.Silence(1.0, 0), "");
@@ -1895,6 +1897,31 @@ TEST(XcoreControl, SilenceIsRefusedOutOfRangeOnTheDockWithTheBladeAndTwice) {
   f.control.OnOutput(kPowerService, power::kOutChargeVoltage, F32(29.0f), 0, 2);
   EXPECT_EQ(f.control.EndRefusal(), "CHARGING");
   EXPECT_EQ(f.control.Silence(1.0, 2), "CHARGING");
+}
+
+TEST(XcoreControl, SilenceWithTheBladeLeavesItToTheBoardThenSwitchesItOff) {
+  Fixture f(SilenceConfig());
+  ASSERT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0), BladeResult::kOk);
+  ASSERT_FALSE(Of(f.control.Tick(0), kMowerService).empty());
+  ASSERT_EQ(f.control.Silence(1.0, 0.05, true), "");
+  // Nothing goes out, not even an off of the blade or its renewal.
+  EXPECT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0.3), BladeResult::kSilent);
+  ASSERT_EQ(f.control.SetBlade({false, 0, 0, 0}, 0.4), BladeResult::kOk);
+  for (double t = 0.06; t < 1.04; t += 0.01) {
+    f.Board(0, t);
+    EXPECT_TRUE(f.control.Tick(t).empty()) << t;
+  }
+  // At the end: offs of the blade and HIGH_LEVEL; no lease runs on.
+  std::vector<InputValue> all;
+  for (double t = 1.05; t < 1.5; t += 0.01) {
+    f.Board(0, t);
+    for (auto& v : f.control.Tick(t)) all.push_back(v);
+  }
+  EXPECT_TRUE(f.control.Status(1.5).emergency_reason & kReasonHighLevel);
+  const auto mower = Of(all, kMowerService);
+  ASSERT_GE(mower.size(), 3u);
+  for (const auto& v : mower) EXPECT_EQ(SpeedOf(v), 0);
+  EXPECT_EQ(f.control.EndRefusal(), "");
 }
 
 TEST(XcoreControl, SilenceSendsNothingThenLatchesAndStops) {

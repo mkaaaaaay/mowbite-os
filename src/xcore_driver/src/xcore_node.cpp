@@ -399,6 +399,7 @@ class XcoreNode : public rclcpp::Node {
       throw std::invalid_argument("silence_max must be 0 or from 0.2 to 5 s");
     }
     silence_max_s_ = c.silence_max_s;
+    allow_blade_ = c.allow_blade;
     // The board stops after 1.0 s without the host; a stall must count as lost before that.
     if (!(c.tilt_limit_deg > 0) || !(c.tilt_time_s >= 0) || !(c.uncommanded_speed > 0) || !(c.overspeed_factor >= 1) ||
         !(c.io_stall_s > 0) || c.io_stall_s >= 1.0) {
@@ -724,6 +725,7 @@ class XcoreNode : public rclcpp::Node {
     msg.silence_max_s = static_cast<float>(silence_max_s_);
     msg.driver_end = true;
     msg.safety_measurement_date = safety_measurement_date_;
+    msg.blade_allowed = allow_blade_;
     capabilities_pub_->publish(msg);
   }
 
@@ -879,7 +881,7 @@ class XcoreNode : public rclcpp::Node {
 
   void OnSilence(const mowbite_msgs::srv::SilenceDriver::Request& req,
                  mowbite_msgs::srv::SilenceDriver::Response& res) {
-    res.code = silence_max_s_ > 0 ? Io().Silence(req.seconds) : "OUT_OF_RANGE";
+    res.code = silence_max_s_ > 0 ? Io().Silence(req.seconds, req.blade) : "OUT_OF_RANGE";
     res.success = res.code.empty();
     char text[120];
     std::snprintf(text, sizeof(text), res.success ? "silent for %.2f s" : "silence of %.2f s refused", req.seconds);
@@ -944,6 +946,7 @@ class XcoreNode : public rclcpp::Node {
   double failsafe_without_host_s_ = -1;
   double silence_max_s_ = 0;
   std::string safety_measurement_date_;
+  bool allow_blade_ = false;
   // Only the output thread.
   bool blade_on_logged_ = false;
   uint32_t logged_reason_ = 0;

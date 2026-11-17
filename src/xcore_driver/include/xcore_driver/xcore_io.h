@@ -128,7 +128,7 @@ class XcoreIo {
   void SetHold(bool held);
   void LatchForeignHost(const std::string& why);
   // hw/silence as XcoreControl::Silence: no datagram goes out meanwhile, not even the heartbeat.
-  std::string Silence(double seconds);
+  std::string Silence(double seconds, bool blade);
   // hw/end: empty when it may end, then from now on no datagram goes out, also not the stops at the end of the
   // loop; else why not, as XcoreControl::EndRefusal.
   std::string Mute();

@@ -151,10 +151,10 @@ std::optional<ReleaseRefusal> XcoreIo::ReleaseEmergency(uint32_t latch_count) {
   return control_.ReleaseEmergency(MonotonicSeconds(), latch_count);
 }
 
-std::string XcoreIo::Silence(double seconds) {
+std::string XcoreIo::Silence(double seconds, bool blade) {
   std::lock_guard<std::mutex> lock(mutex_);
   const double now = MonotonicSeconds();
-  std::string refused = control_.Silence(seconds, now);
+  std::string refused = control_.Silence(seconds, now, blade);
   silent_ = control_.Silent(now);
   return refused;
 }

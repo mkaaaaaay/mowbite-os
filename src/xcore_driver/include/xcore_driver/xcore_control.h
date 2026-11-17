@@ -269,9 +269,10 @@ class XcoreControl {
   void OnServiceRestart(uint16_t service_id, double now);
 
   // hw/silence: from now on nothing goes to the board for seconds, drive commands are dropped, blade requests and
-  // releases refused; then HIGH_LEVEL latches, the blade gets its offs and the wheels three stops. Empty when it began,
-  // else why not: BUSY, OUT_OF_RANGE, CHARGING or BLADE.
-  std::string Silence(double seconds, double now);
+  // releases refused; then HIGH_LEVEL latches, the blade gets its offs and the wheels three stops. With blade it begins
+  // also while the blade is on or turning: the board has to stop it. Empty when it began, else why not: BUSY,
+  // OUT_OF_RANGE, CHARGING or BLADE.
+  std::string Silence(double seconds, double now, bool blade = false);
   bool Silent(double now) const;
   // Why hw/end is refused now, empty if it may end: CHARGING or BLADE.
   std::string EndRefusal() const;
