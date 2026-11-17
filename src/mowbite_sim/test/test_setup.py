@@ -290,6 +290,7 @@ class TestSetup(unittest.TestCase):
             # A side of a split bumper comes with the bumper as a whole.
             names = {signal: True, "bumper": True} if signal.startswith("bumper") else {signal: True}
             self.part_ready(step, index)
+            asked = len(self.probe.releases)
             self.probe.switch(**names)
             if part.get("mode", "press") == "short":
                 time.sleep(0.3)
@@ -307,7 +308,6 @@ class TestSetup(unittest.TestCase):
             if reason:
                 delays.append(part["id"])
                 # The program releases the emergency of its press itself, with the latch count the driver reports.
-                asked = len(self.probe.releases)
                 self.assertTrue(self.probe.wait(lambda: self.probe.reason == 0, 5.0),
                                 f"{step} {part['id']}: the emergency is not released")
                 self.assertEqual(self.probe.releases[asked:], [(self.probe.latches, self.probe.releases[-1][1])])
