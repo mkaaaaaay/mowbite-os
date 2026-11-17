@@ -379,7 +379,8 @@ const std::vector<SetupCheck>& SetupChecks() {
        "takes one part after the other, each of a role (stop, lift, bumper_left or bumper_right) and with the delay_ms "
        "its line gets: one line alone changes, ask of the step names it, and setup.answer with accept yes takes it. "
        "After the last part the table goes into the settings the program writes for the platform, the OS restarts "
-       "without learning and the step holds hw/inputs against the table. setup.abort ends it with a restart as well. "
+       "without learning and the step holds hw/inputs against the table. A board the learning driver held stays "
+       "held after that restart (HIGH_LEVEL) until emergency.reset. setup.abort ends it with a restart as well. "
        "The steps input are open again after it. The step list names how the OS restarts (restart). Once the step "
        "is ok setup.answer takes delay_<part> for any of its parts, a whole number of ms from 0 to delay_ms of the "
        "part: the table is written with it, the OS restarts and the step holds hw/inputs against it again",
@@ -771,7 +772,8 @@ EventEntry SetupStepEvent() {
                        {"Value out of bounds", "A value is outside of its bound. The list of values shows which.",
                         "Fix the cause at the value named, then repeat the step."})),
            failed("NO_DATA", "A source the step needs sent nothing",
-                  {Text("source", "hw/status, hw/capabilities, imu/data or gps/absolute_pose", false)},
+                  {Text("source", "hw/status, hw/inputs, hw/capabilities, imu/data or gps/absolute_pose", false),
+                   Part()},
                   Both({"Keine Daten",
                         "Der Mäher bekommt für diesen Schritt keine Daten von Platine, Lagesensor oder GPS.",
                         "Mäher einschalten, Kabel prüfen, dann wiederholen."},

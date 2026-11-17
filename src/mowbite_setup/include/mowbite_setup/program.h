@@ -28,6 +28,8 @@ struct Hardware {
   bool bumper_left = false;
   bool bumper_right = false;
   bool dock_contact = false;
+  // An update holds the mower.
+  bool hold = false;
   // A reading of the battery is there, and its charge (%).
   bool battery = false;
   double battery_percentage = 0;
@@ -72,7 +74,8 @@ struct ImuSample {
 
 // What the other nodes report, for the steps that wait for it.
 struct World {
-  // current_state of the logic, empty before the first.
+  // current_state of the logic, with IDLE replaced by its sub state while it drives or calibrates
+  // (mowbite_hold::SessionState): IDLE is a mower that stands. Empty before the first.
   std::string state;
   int areas = 0;
   int docking_stations = 0;
@@ -277,9 +280,11 @@ class Program {
   void WatchOwnLatch();
   void TickRelease(double now);
   void EndRun(double now);
+  // Takes inputs.learn of the step out of the parameter file, if the program put it there.
+  void ForgetLearning(const Step& step);
   bool RestartAllowed(double now) const;
   void WantRestart();
-  void TickLearning();
+  void TickLearning(double now);
   void TickAssign(double now, double wall);
   void EnterAssign(Assign stage, double now);
   void BeginAssignPart(double now, double wall);
@@ -327,6 +332,9 @@ class Program {
   bool inputs_known_ = false;
   bool learning_ = false;
   Layer layer_;
+  // As the file is on disk: what layer_ goes back to when a write fails; when one did last (below 0: none).
+  Layer layer_disk_;
+  double layer_failed_ = -1;
   bool layer_set_ = false;
   std::set<std::string> shadowed_;
   // The file differs from layer_; it is with the node to be written.

@@ -31,6 +31,8 @@ constexpr double kReleaseEvery = 1.5;
 constexpr double kReleaseAfter = 10.0;
 // A step inputs_assign waits this long (s) after the first line changed for others that change with it.
 constexpr double kAssignSettle = 0.3;
+// The learning is taken back again this long after the parameter file could not be written (s).
+constexpr double kLayerRetry = 5.0;
 constexpr double kDegrees = 180.0 / M_PI;
 
 constexpr const char* kStepEvent = "SETUP_STEP";
@@ -179,8 +181,15 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
     Record& record = RecordOf(step);
     const json& assign = record.assign;
     const bool learn = assign.is_object() && assign.value("phase", json()) == "learn";
-    const bool apply = assign.is_object() && assign.value("phase", json()) == "apply" && assign.contains("parts") &&
-                       assign["parts"].is_object();
+    bool apply = assign.is_object() && assign.value("phase", json()) == "apply" && assign.contains("parts") &&
+                 assign["parts"].is_object();
+    // The table to hold hw/inputs against: a line and its level for every part.
+    for (const Part& part : step.parts) {
+      if (!apply) break;
+      const json found = assign["parts"].value(part.id, json());
+      apply = found.is_object() && found.value("line", json()).is_string() &&
+              found.value("active_high", json()).is_boolean();
+    }
     if (record.state != "running" || !IsAssign(step) || !(learn || apply) || run_) {
       record.assign = nullptr;
       if (record.state == "running") End(step, "open", "INTERRUPTED", "The OS restarted while it ran", {}, wall);
@@ -290,6 +299,7 @@ void Program::OnInputs(const std::vector<Line>& lines, bool learning) {
 }
 
 void Program::SetLayer(Layer layer, std::set<std::string> shadowed) {
+  layer_disk_ = layer;
   layer_ = std::move(layer);
   shadowed_ = std::move(shadowed);
   layer_set_ = true;
@@ -469,12 +479,16 @@ void Program::EndRun(double now) {
     record.assign = nullptr;
     leave_learning_ = true;
     restart_wanted_ = false;
-    if (!layer_.Get(step.Word("node"), mowbite_api::kInputsLearn).is_null()) {
-      layer_.Erase(step.Word("node"), mowbite_api::kInputsLearn);
-      layer_dirty_ = true;
-    }
+    ForgetLearning(step);
   }
   run_.reset();
+}
+
+void Program::ForgetLearning(const Step& step) {
+  const std::string& node = step.Word("node");
+  if (layer_.Get(node, mowbite_api::kInputsLearn).is_null()) return;
+  layer_.Erase(node, mowbite_api::kInputsLearn);
+  layer_dirty_ = true;
 }
 
 std::optional<std::string> Program::TakeLayer() {
@@ -486,19 +500,27 @@ std::optional<std::string> Program::TakeLayer() {
 
 void Program::LayerWritten(bool written, double now, double wall) {
   layer_pending_ = false;
-  if (written) return;
+  if (written) {
+    layer_disk_ = layer_;
+    layer_failed_ = -1;
+    return;
+  }
+  // What was not written is not kept for a later write either.
+  layer_ = layer_disk_;
+  layer_failed_ = now;
   restart_wanted_ = false;
   if (run_ && IsAssign(StepOf(*run_))) {
     Fail("NOT_APPLIED", "The parameter file of the setup program cannot be written", json::object(), now, wall);
   }
 }
 
-// Only a mower that stands, and never to get rid of an emergency: none may be on but the one of learning itself.
+// Only a mower that stands and that no update holds, and never to get rid of an emergency: none may be on but the
+// one of learning itself.
 bool Program::RestartAllowed(double now) const {
   const uint32_t reason = hardware_.emergency_reason;
   const bool learning = (reason & LearningBit()) != 0;
   const uint32_t allowed = learning ? LearningBit() | LatchBit() : 0;
-  return Fresh(hardware_at_, now, kFresh) && world_.state == "IDLE" && (reason & ~allowed) == 0;
+  return Fresh(hardware_at_, now, kFresh) && !hardware_.hold && world_.state == "IDLE" && (reason & ~allowed) == 0;
 }
 
 void Program::WantRestart() {
@@ -518,8 +540,9 @@ bool Program::TakeRestart(double now) {
 
 // The driver learns its inputs and no step is at it (stopped, failed, reset, or its record is lost): the program takes
 // the learning back and restarts, once. A learning the file kept by hand asks for is not its own.
-void Program::TickLearning() {
+void Program::TickLearning(double now) {
   if (!learning_ || !layer_set_ || restart_wanted_ || restart_sent_ >= 0) return;
+  if (layer_failed_ >= 0 && now - layer_failed_ < kLayerRetry) return;
   if (run_ && IsAssign(StepOf(*run_))) return;
   const auto step = std::find_if(list_.steps.begin(), list_.steps.end(), IsAssign);
   if (step == list_.steps.end()) return;
@@ -707,6 +730,7 @@ std::optional<Refusal> Program::AssignRefused(double now) const {
   if (!Fresh(hardware_at_, now, kFresh) || !inputs_known_) {
     return Refuse("DRIVER_MISSING", "The driver of the platform reports no status or no inputs");
   }
+  if (hardware_.hold) return Refuse("BUSY", "An update holds the mower", {{"state", "HOLD"}});
   if (world_.state != "IDLE") return Refuse("BUSY", "The mower is not in IDLE", {{"state", world_.state}});
   if (hardware_.emergency_reason != 0) {
     return Refuse("EMERGENCY", "An emergency stands: " + mowbite_api::EmergencyNames(
@@ -806,9 +830,12 @@ std::optional<Refusal> Program::AnswerDelays(const Step& step, const json& param
   const std::string& node = step.Word("node");
   const json lines = layer_.Get(node, mowbite_api::kInputsLines);
   const json levels = layer_.Get(node, mowbite_api::kInputsActiveHigh);
-  if (!lines.is_array() || !levels.is_array() || lines.size() != step.parts.size() || levels.size() != lines.size()) {
-    return Refuse("WRONG_METHOD", "The parameter file holds no table of " + step.id + ": do the step again");
-  }
+  const json roles = layer_.Get(node, mowbite_api::kInputsRoles);
+  // The table of these parts, in their order: one of another step list is found anew.
+  bool fits = lines.is_array() && levels.is_array() && roles.is_array() && lines.size() == step.parts.size() &&
+              levels.size() == lines.size() && roles.size() == lines.size();
+  for (size_t i = 0; fits && i < step.parts.size(); ++i) fits = roles[i] == step.parts[i].role;
+  if (!fits) return Refuse("WRONG_METHOD", "The parameter file holds no table of " + step.id + ": do the step again");
   Record& record = RecordOf(step);
   for (const auto& item : values.items()) record.answers[item.key()] = item.value();
   record.assign = {{"phase", "apply"}, {"parts", json::object()}};
@@ -860,7 +887,11 @@ std::optional<Refusal> Program::Abort(const json& params, double now, double wal
 
 std::optional<Refusal> Program::Reset(const json& params) {
   if (auto refusal = Common(params, nullptr)) return refusal;
-  if (run_ && IsAssign(StepOf(*run_))) leave_learning_ = true;
+  if (run_ && IsAssign(StepOf(*run_))) {
+    // Should the driver learn already, TickLearning restarts it; a learning that waited for its restart is taken back.
+    leave_learning_ = true;
+    ForgetLearning(StepOf(*run_));
+  }
   restart_wanted_ = false;
   run_.reset();
   own_.reset();
@@ -924,7 +955,7 @@ void Program::Tick(double now, double wall) {
     if (check == "position") TickPosition(now, wall);
     if (check == "inputs_assign") TickAssign(now, wall);
   }
-  TickLearning();
+  TickLearning(now);
   TickRelease(now);
   TickWaiting(wall);
 }
@@ -1284,6 +1315,13 @@ void Program::TickAssign(double now, double wall) {
   const bool learn = RecordOf(step).assign["phase"] == "learn";
   const double restart_time = step.Number("restart_time");
   const bool ambiguous = !run.ambiguous.empty();
+  // A driver that fell silent, or one that lost the levels of its lines (hw/inputs without a line), shows nothing.
+  const bool watches = run.assign != Assign::kRestart && run.assign != Assign::kDriver;
+  if (watches && (!Fresh(hardware_at_, now, kNoData) || lines_.empty())) {
+    const char* source = lines_.empty() ? "hw/inputs" : "hw/status";
+    Fail("NO_DATA", std::string("No ") + source + " any more", {{"source", source}}, now, wall);
+    return;
+  }
   switch (run.assign) {
     case Assign::kRestart:
       // Still here that long after the restart was asked for: it did not come.
@@ -1292,7 +1330,7 @@ void Program::TickAssign(double now, double wall) {
       }
       break;
     case Assign::kDriver:
-      if (inputs_known_ && Fresh(hardware_at_, now, kFresh) && learning_ == learn) {
+      if (inputs_known_ && Fresh(hardware_at_, now, kFresh) && learning_ == learn && !lines_.empty()) {
         if (learn) {
           EnterAssign(Assign::kQuiet, now);
           run.levels.clear();
@@ -1442,7 +1480,9 @@ json Program::Blocked(const Step& step, double now) const {
   if (!writable_) add("STORAGE_NOT_WRITABLE", "setup.json cannot be written");
   if (IsRun(step) && IsAssign(step)) {
     if (restart_wanted_ && !RestartAllowed(now)) {
-      if (world_.state != "IDLE") {
+      if (hardware_.hold) {
+        add("BUSY", "An update holds the mower");
+      } else if (world_.state != "IDLE") {
         add("BUSY", "The mower is not in IDLE");
       } else {
         add("EMERGENCY", "An emergency stands, the OS restarts once it is released");

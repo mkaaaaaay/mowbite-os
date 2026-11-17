@@ -96,6 +96,7 @@ class Probe(SimProbe):
         self.fix = None
         self.ntrip = False
         self.state = "IDLE"
+        self.sub = ""
         # Every setup/json with whether it came retained.
         self.states = []
         firmware = [KeyValue(key="main", value="1.2.3")]
@@ -116,6 +117,7 @@ class Probe(SimProbe):
             with self.lock:
                 driver, inputs, reason, latches = self.driver, dict(self.inputs), self.reason, self.latches
                 accel, turn, fix, ntrip, state = self.accel, self.turn, self.fix, self.ntrip, self.state
+                sub = self.sub
             imu = Imu()
             imu.linear_acceleration.x, imu.linear_acceleration.y, imu.linear_acceleration.z = accel
             imu.angular_velocity.z = turn
@@ -132,7 +134,7 @@ class Probe(SimProbe):
             if count % 10 == 0:
                 if fix:
                     self.fix_pub.publish(GnssFix(solution=fix[0], accuracy=fix[1]))
-                self.state_pub.publish(RobotState(current_state=state))
+                self.state_pub.publish(RobotState(current_state=state, current_sub_state=sub))
             if ntrip and count % 25 == 0:
                 self.ntrip_pub.publish(NtripStatus(state="connected", frames=5, last_frame_age=0.5))
             count += 1
@@ -491,6 +493,13 @@ class TestSetup(unittest.TestCase):
         self.probe.put(driver=True)
         state = wait_until(sent([]), 5.0)
         self.assertIsNotNone(state)
+        # Driving by hand is IDLE with a sub state: no check starts on a mower that moves.
+        self.probe.put(sub="DRIVING")
+        self.assertIsNotNone(wait_until(sent(["BUSY"]), 5.0), "setup/json does not tell that the mower drives")
+        refusal = self.probe.refused("setup.start", {"step": board, "version": version})[2]
+        self.assertEqual((refusal["reason"], refusal["state"]), ("BUSY", "DRIVING"))
+        self.probe.put(sub="")
+        self.assertIsNotNone(wait_until(sent([]), 5.0))
         # What went out last is what setup.get answers.
         time.sleep(1.0)
         with self.probe.lock:

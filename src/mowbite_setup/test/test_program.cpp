@@ -1669,3 +1669,113 @@ TEST(Program, TheDelaysOfAFoundTableGetShorterOnly) {
   bench.Restart(false, table);
   EXPECT_EQ(bench.StepState("assign")["inputs"][2]["value"], 2500);
 }
+
+TEST(Program, AnUpdateThatHoldsTheMowerKeepsTheRestartBack) {
+  AssignBench bench;
+  bench.hardware.hold = true;
+  bench.Run(0.2);
+  EXPECT_EQ(bench.Refused(bench.Start("assign")), "BUSY");
+  bench.hardware.hold = false;
+  bench.Run(0.2);
+  ASSERT_EQ(bench.Refused(bench.Start("assign")), "");
+  bench.hardware.hold = true;
+  bench.Run(0.5);
+  EXPECT_EQ(bench.restarts, 0);
+  EXPECT_EQ(bench.StepState("assign")["blocked"][0]["reason"], "BUSY");
+  bench.hardware.hold = false;
+  bench.Run(0.2);
+  EXPECT_EQ(bench.restarts, 1);
+}
+
+TEST(Program, AssigningNeedsTheLevelsOfTheLines) {
+  // A learning driver that does not know its lines yet: the lines are not taken as at rest.
+  AssignBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("assign")), "");
+  bench.Run(0.2);
+  bench.Restart(true, {});
+  bench.Run(5);
+  EXPECT_EQ(bench.StepState("assign")["parts"][0]["state"], "open");
+  bench.lines = AssignBench::Candidates();
+  bench.program.OnInputs(bench.lines, true);
+  bench.Run(3.2);
+  ASSERT_EQ(bench.StepState("assign")["parts"][0]["state"], "waiting");
+  // It loses them again: nothing is watched any more.
+  bench.program.OnInputs({}, true);
+  bench.Run(0.2);
+  ASSERT_EQ(bench.StepState("assign")["result"]["reason"], "NO_DATA");
+  EXPECT_EQ(bench.Events()[0]["source"], "hw/inputs");
+
+  // A driver that falls silent while the lines are watched untouched.
+  AssignBench silent;
+  ASSERT_EQ(silent.Refused(silent.Start("assign")), "");
+  silent.Run(0.2);
+  silent.Restart(true, AssignBench::Candidates());
+  silent.Run(1);
+  silent.driver = false;
+  silent.Run(3.5);
+  ASSERT_EQ(silent.StepState("assign")["result"]["reason"], "NO_DATA");
+  EXPECT_EQ(silent.Events()[0]["source"], "hw/status");
+}
+
+TEST(Program, AResetBeforeTheRestartTakesTheLearningBack) {
+  AssignBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("assign")), "");
+  bench.world.state = "DRIVING";
+  bench.program.OnWorld(bench.world);
+  bench.Run(0.3);
+  EXPECT_EQ(bench.restarts, 0);
+  EXPECT_NE(bench.layer_text.find("inputs.learn: true"), std::string::npos);
+  ASSERT_FALSE(bench.program.Reset({{"version", bench.program.version()}}));
+  bench.world.state = "IDLE";
+  bench.program.OnWorld(bench.world);
+  bench.Run(0.3);
+  EXPECT_EQ(bench.restarts, 0);
+  EXPECT_EQ(bench.layer_text.find("inputs.learn"), std::string::npos) << bench.layer_text;
+}
+
+TEST(Program, OnlyAWholeTableIsKeptAndGoneOnWith) {
+  // A table that could not be written is not kept for a later write, and the learning is taken back once the file
+  // can be written again.
+  AssignBench late;
+  late.ToTheParts();
+  late.layer_ok = false;
+  late.TakeBothParts();
+  late.Run(0.2);
+  EXPECT_EQ(late.StepState("assign")["result"]["reason"], "NOT_APPLIED");
+  EXPECT_EQ(late.restarts, 1);
+  late.layer_ok = true;
+  late.Run(6);
+  EXPECT_EQ(late.layer_text, "");
+  EXPECT_EQ(late.restarts, 2);
+
+  // A record whose table lacks a part does not go on after the restart.
+  AssignBench broken;
+  broken.ToTheParts();
+  broken.TakeBothParts();
+  ASSERT_EQ(broken.restarts, 2);
+  json record = json::parse(broken.saved);
+  ASSERT_EQ(record["steps"]["assign"]["assign"]["phase"], "apply");
+  record["steps"]["assign"]["assign"]["parts"]["lift_left"] = 3;
+  broken.saved = record.dump();
+  broken.Restart(false, AssignBench::Table());
+  const json step = broken.StepState("assign");
+  EXPECT_EQ(step["state"], "open");
+  EXPECT_EQ(step["result"]["reason"], "INTERRUPTED");
+
+  // The delays go with the table of the parts as the list has them now.
+  AssignBench other;
+  other.ToTheParts();
+  other.TakeBothParts();
+  other.Restart(false, AssignBench::Table());
+  ASSERT_EQ(other.StepState("assign")["state"], "ok");
+  const std::string roles = "inputs.gpio_roles: [\"stop\", \"lift\"]";
+  const size_t at = other.layer_text.find(roles);
+  ASSERT_NE(at, std::string::npos);
+  other.layer_text.replace(at, roles.size(), "inputs.gpio_roles: [\"lift\", \"stop\"]");
+  other.Restart(false, AssignBench::Table());
+  EXPECT_EQ(other.Refused(other.program.Answer(
+                {{"step", "assign"}, {"version", other.program.version()}, {"values", {{"delay_lift_left", 1000}}}},
+                other.now, kWall + other.now)),
+            "WRONG_METHOD");
+  EXPECT_EQ(other.restarts, 2);
+}

@@ -135,6 +135,7 @@ class SetupNode : public rclcpp::Node {
       hardware.bumper_left = msg->bumper_left;
       hardware.bumper_right = msg->bumper_right;
       hardware.dock_contact = msg->dock_contact;
+      hardware.hold = msg->hold;
       hardware.battery = msg->battery_source != HardwareStatus::BATTERY_SOURCE_NONE;
       hardware.battery_percentage = msg->battery_percentage;
       if (!msg->blade_motor.ok) hardware.motors_down.push_back("blade");
@@ -187,9 +188,11 @@ class SetupNode : public rclcpp::Node {
         });
     state_sub_ = create_subscription<mowbite_msgs::msg::RobotState>(
         "bridge/robot_state", 10, [this](mowbite_msgs::msg::RobotState::ConstSharedPtr msg) {
+          // Driving by hand and calibrating are IDLE with a sub state: the program takes IDLE as standing.
+          std::string state = mowbite_hold::SessionState(msg->current_state, msg->current_sub_state);
           std::lock_guard<std::mutex> lock(mutex_);
-          if (world_.state == msg->current_state) return;
-          world_.state = msg->current_state;
+          if (world_.state == state) return;
+          world_.state = std::move(state);
           program_->OnWorld(world_);
           state_due_ = true;
         });
