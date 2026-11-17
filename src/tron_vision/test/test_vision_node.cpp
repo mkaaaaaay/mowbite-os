@@ -1,6 +1,7 @@
 #include <dlfcn.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <map>
@@ -16,6 +17,7 @@
 #include <thread>
 #include <vector>
 
+#include "mowbite_watch/watch.h"
 #include "test_util.h"
 #include "tron_vision/vision_node.h"
 
@@ -24,10 +26,12 @@ namespace {
 
 using mowbite_msgs::msg::Camera;
 
-// A gray camera at 15 fps in real time.
+// A gray camera at 15 fps in real time; with `hang` its start never comes back.
 class GrayCamera : public tron_vision::Camera {
  public:
+  explicit GrayCamera(bool hang = false) : hang_(hang) {}
   bool Start(std::string&) override {
+    if (hang_) std::this_thread::sleep_for(std::chrono::seconds(30));
     return true;
   }
   void Stop() override {}
@@ -43,7 +47,31 @@ class GrayCamera : public tron_vision::Camera {
   }
 
  private:
+  bool hang_;
   test::Nv12Frame frame_{320, 180, 90, 128, 128};
+};
+
+// Spins a node in a thread of its own while it lives, so that the watch of the process sees its executor.
+class Spin {
+ public:
+  explicit Spin(const rclcpp::Node::SharedPtr& node) {
+    spinner_.add_node(node);
+    // Rounds instead of spin(): a cancel before spin() has begun would be lost.
+    thread_ = std::thread([this] {
+      while (!stop_) spinner_.spin_once(std::chrono::milliseconds(50));
+    });
+  }
+  ~Spin() {
+    stop_ = true;
+    thread_.join();
+  }
+  Spin(const Spin&) = delete;
+  Spin& operator=(const Spin&) = delete;
+
+ private:
+  rclcpp::executors::SingleThreadedExecutor spinner_;
+  std::atomic<bool> stop_{false};
+  std::thread thread_;
 };
 
 // Spins a listener until `done` or 10 s.
@@ -69,20 +97,36 @@ int OpenCoreMask() {
   return mask;
 }
 
+// One ROS context for all tests: once ROS has shut down, the watch of the process only counts its shutdown limit.
 class VisionNodeTest : public ::testing::Test {
  protected:
-  void SetUp() override {
+  static void SetUpTestSuite() {
     rclcpp::init(0, nullptr);
   }
-  void TearDown() override {
+  static void TearDownTestSuite() {
     rclcpp::shutdown();
   }
 };
+
+// Options of a node that runs the model of the test on the stand-in runtime, without video.
+rclcpp::NodeOptions DetectingOptions(const test::TempDir& dir, const std::string& camera_id, int core) {
+  rclcpp::NodeOptions options;
+  options.parameter_overrides({{"camera_id", camera_id},
+                               {"npu_core", core},
+                               {"library_path", std::string(FAKE_NPU_LIB)},
+                               {"model_path", dir.Write("m.rknn", "classes 3\nhit 0 0.8 8 30 40 2 2 2 2\n")},
+                               {"labels_path", dir.Write("labels.txt", "person\ndog\ncat\n")},
+                               {"crash_dir", dir.Path() + "/vision"},
+                               {"max_rss_mb", 8192},
+                               {"video", false}});
+  return options;
+}
 
 // Display only: the process publishes on the topics of the design and the defaults of every node, nothing else, and
 // listens to nothing of the stack.
 TEST_F(VisionNodeTest, PublishesOnlyTheTopicsOfTheDesign) {
   auto node = std::make_shared<VisionNode>(rclcpp::NodeOptions());
+  Spin spin(node);
   const std::set<std::string> allowed = {"/bridge/sensor_info", "/bridge/sensor_value", "/hw/cameras",
                                          "/vision/detections", "/rosout", "/parameter_events"};
   const std::regex jpeg("/camera/[a-z0-9_]+/jpeg(_plain)?");
@@ -105,6 +149,7 @@ TEST_F(VisionNodeTest, PublishesOnlyTheTopicsOfTheDesign) {
 // Without the files the state says why, as text on bridge/sensor_value, and the rate is 0.
 TEST_F(VisionNodeTest, ReportsTheStateAsSensors) {
   auto node = std::make_shared<VisionNode>(rclcpp::NodeOptions());
+  Spin spin(node);
   auto listener = std::make_shared<rclcpp::Node>("listener");
   std::string state;
   double rate = -1.0;
@@ -129,6 +174,7 @@ TEST_F(VisionNodeTest, ReportsTheCameraLatched) {
   rclcpp::NodeOptions options;
   options.parameter_overrides({{"process", "vision"}, {"rtsp_port", 0}});
   auto node = std::make_shared<VisionNode>(options);
+  Spin spin(node);
   auto listener = std::make_shared<rclcpp::Node>("listener");
   std::vector<mowbite_msgs::msg::Camera> got;
   rclcpp::executors::SingleThreadedExecutor spinner;
@@ -183,6 +229,7 @@ TEST_F(VisionNodeTest, RightInstanceReportsItsCameraAndSensors) {
   options.parameter_overrides(
       {{"process", "right"}, {"camera_id", "oa_right"}, {"sensor_suffix", "_right"}, {"video", false}});
   auto node = std::make_shared<VisionNode>(options);
+  Spin spin(node);
   EXPECT_EQ(node->get_parameter("sensor_name").as_string(), "m00_b_gc2093");
   EXPECT_EQ(node->get_parameter("video_device").as_string(), "/dev/video44");
   auto listener = std::make_shared<rclcpp::Node>("listener");
@@ -217,16 +264,8 @@ class VisionNodeDetects : public VisionNodeTest, public ::testing::WithParamInte
 TEST_P(VisionNodeDetects, OnItsCoreForItsCamera) {
   const auto& [camera_id, core] = GetParam();
   test::TempDir dir;
-  rclcpp::NodeOptions options;
-  options.parameter_overrides({{"camera_id", camera_id},
-                               {"npu_core", core},
-                               {"library_path", std::string(FAKE_NPU_LIB)},
-                               {"model_path", dir.Write("m.rknn", "classes 3\nhit 0 0.8 8 30 40 2 2 2 2\n")},
-                               {"labels_path", dir.Write("labels.txt", "person\ndog\ncat\n")},
-                               {"crash_dir", dir.Path() + "/vision"},
-                               {"max_rss_mb", 8192},
-                               {"video", false}});
-  auto node = std::make_shared<VisionNode>(options, std::make_unique<GrayCamera>());
+  auto node = std::make_shared<VisionNode>(DetectingOptions(dir, camera_id, core), std::make_unique<GrayCamera>());
+  Spin spin(node);
   auto listener = std::make_shared<rclcpp::Node>("listener");
   std::vector<mowbite_msgs::msg::Detections> got;
   auto sub = listener->create_subscription<mowbite_msgs::msg::Detections>(
@@ -266,6 +305,8 @@ TEST_F(VisionNodeTest, ParameterFileWithASharedAndARightSection) {
   right_options.arguments({"--ros-args", "--params-file", file, "-r", "__ns:=/right"});
   auto left = std::make_shared<VisionNode>(left_options);
   auto right = std::make_shared<VisionNode>(right_options);
+  Spin spin_left(left);
+  Spin spin_right(right);
   EXPECT_EQ(right->get_fully_qualified_name(), std::string("/right/tron_vision"));
   for (const auto& node : {left, right}) {
     EXPECT_EQ(node->get_parameter("labels_path").as_string(), "/shared/labels.txt");
@@ -279,6 +320,21 @@ TEST_F(VisionNodeTest, ParameterFileWithASharedAndARightSection) {
   EXPECT_EQ(right->get_parameter("npu_core").as_int(), 1);
   EXPECT_EQ(right->get_parameter("rtsp_port").as_int(), 8557);
   EXPECT_EQ(right->get_parameter("sensor_suffix").as_string(), "_right");
+}
+
+// A loop thread that hangs in the camera ends the process with the code of the watch.
+TEST_F(VisionNodeTest, LoopThatHangsEndsTheProcess) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  EXPECT_EXIT(
+      {
+        test::TempDir dir;
+        auto node =
+            std::make_shared<VisionNode>(DetectingOptions(dir, "oa_left", 0), std::make_unique<GrayCamera>(true));
+        Spin spin(node);
+        std::this_thread::sleep_for(std::chrono::seconds(10));
+        std::_Exit(0);
+      },
+      ::testing::ExitedWithCode(mowbite_watch::kExitCode), "tron_vision_loop silent");
 }
 
 TEST_F(VisionNodeTest, RefusesAnUnknownCameraOrSuffix) {

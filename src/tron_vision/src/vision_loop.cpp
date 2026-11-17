@@ -198,7 +198,8 @@ bool VisionLoop::Step() {
   }
   Nv12View frame;
   std::string error;
-  const int got = camera_.Next(static_cast<int>(std::ceil((deadline - now) * 1000.0)), frame, error);
+  const int got =
+      camera_.Next(static_cast<int>(std::ceil(std::min(deadline - now, kFrameWaitStepS) * 1000.0)), frame, error);
   if (got < 0) {
     StopStream(VisionState::kCameraError, error);
     return true;

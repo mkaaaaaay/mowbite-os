@@ -40,7 +40,8 @@ target_link_libraries(tron_video_out_lib tron_vision_core)
 ament_target_dependencies(tron_video_out_lib rclcpp mowbite_msgs ament_index_cpp)
 
 add_library(tron_vision_node_lib STATIC src/vision_node.cpp)
-target_link_libraries(tron_vision_node_lib tron_vision_core tron_video_out_lib mowbite_serial::mowbite_serial)
+target_link_libraries(tron_vision_node_lib tron_vision_core tron_video_out_lib mowbite_serial::mowbite_serial
+  mowbite_watch::mowbite_watch)
 ament_target_dependencies(tron_vision_node_lib rclcpp mowbite_msgs sensor_msgs)
 add_executable(tron_vision_node src/vision_node_main.cpp)
 target_link_libraries(tron_vision_node tron_vision_node_lib)
@@ -56,7 +57,8 @@ install(TARGETS tron_stereo_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 # The live picture of the right side camera, a process of its own beside the camera AI on the left one.
 add_library(tron_side_node_lib STATIC src/side_node.cpp)
-target_link_libraries(tron_side_node_lib tron_vision_core tron_video_out_lib mowbite_serial::mowbite_serial)
+target_link_libraries(tron_side_node_lib tron_vision_core tron_video_out_lib mowbite_serial::mowbite_serial
+  mowbite_watch::mowbite_watch)
 ament_target_dependencies(tron_side_node_lib rclcpp mowbite_msgs sensor_msgs ament_index_cpp)
 add_executable(tron_side_node src/side_node_main.cpp)
 target_link_libraries(tron_side_node tron_side_node_lib)

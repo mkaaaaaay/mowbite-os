@@ -12,6 +12,7 @@
 #include <string>
 #include <thread>
 
+#include "mowbite_watch/attach.h"
 #include "tron_vision/budget.h"
 #include "tron_vision/camera_node.h"
 #include "tron_vision/crash_guard.h"
@@ -27,10 +28,13 @@ Availability CameraAvailability(PreviewState state);
 // pictures and nothing else, and it subscribes to no topic. With `video` the pictures also go out as H.264 to the
 // client of an RTSP server on the loopback address (MediaMTX), and hw/cameras offers WebRTC before MJPEG. A loop
 // thread runs PreviewLoop with the wish of a viewer (a subscriber of the pictures, or the RTSP client); it ends the
-// process with the exit code of the loop when the limits are broken.
+// process with the exit code of the loop when the limits are broken. The watch of the process ends it (exit code 86)
+// when the loop thread or the ROS thread stays silent for 2 s.
 class SideNode : public rclcpp::Node {
  public:
   explicit SideNode(const rclcpp::NodeOptions& options);
+  // With another camera than the one the parameters name, for tests.
+  SideNode(const rclcpp::NodeOptions& options, std::unique_ptr<Camera> camera);
   ~SideNode() override;
   SideNode(const SideNode&) = delete;
   SideNode& operator=(const SideNode&) = delete;
@@ -45,10 +49,11 @@ class SideNode : public rclcpp::Node {
   void PublishCamera(const PreviewStatus& status);
   void PublishPicture();
 
-  std::unique_ptr<TronCamera> camera_;
+  std::unique_ptr<Camera> camera_;
   std::unique_ptr<VideoOut> video_;
   std::unique_ptr<CrashGuard> guard_;
   std::unique_ptr<PreviewLoop> loop_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
   std::string camera_id_;
   mowbite_msgs::msg::Camera camera_entry_;
   bool camera_published_ = false;

@@ -14,6 +14,7 @@
 #include <string>
 #include <thread>
 
+#include "mowbite_watch/attach.h"
 #include "tron_vision/budget.h"
 #include "tron_vision/camera.h"
 #include "tron_vision/camera_node.h"
@@ -31,7 +32,9 @@ Availability CameraAvailability(VisionState state);
 // topic and calls no service, so it cannot move the mower. With `video` the pictures with the boxes also go out as
 // H.264 to the client of an RTSP server on the loopback address (MediaMTX), and hw/cameras offers WebRTC before MJPEG.
 // The pictures without the boxes go out the same way, under the topic and the RTSP path with kPlainSuffix.
-// A loop thread runs VisionLoop; it ends the process with the exit code of the loop when the limits are broken.
+// A loop thread runs VisionLoop; it ends the process with the exit code of the loop when the limits are broken. The
+// watch of the process ends it (exit code 86) when the loop thread or the ROS thread stays silent for 2 s, or the
+// model does not load within 20 s.
 class VisionNode : public rclcpp::Node {
  public:
   explicit VisionNode(const rclcpp::NodeOptions& options);
@@ -57,6 +60,7 @@ class VisionNode : public rclcpp::Node {
   std::unique_ptr<VideoOut> video_;
   std::unique_ptr<CrashGuard> guard_;
   std::unique_ptr<VisionLoop> loop_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
   std::string camera_id_;
   std::string state_sensor_;
   std::string last_sensor_;

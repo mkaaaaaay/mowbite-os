@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "mowbite_serial/serial_port.h"
+#include "mowbite_watch/watch.h"
 
 namespace tron_vision {
 
@@ -15,6 +16,9 @@ namespace {
 constexpr double kReportPeriod = 1.0;
 // Step interval while no camera streams: retries and the heat pause count in seconds.
 constexpr auto kIdleWait = std::chrono::milliseconds(200);
+// The loop thread and the ROS thread sign within this, the loading of the model takes at most kLoadLimit.
+constexpr double kWatchLimit = 2.0;
+constexpr double kLoadLimit = 20.0;
 
 bool Streams(VisionState state) {
   return state == VisionState::kStarting || state == VisionState::kRunning;
@@ -147,6 +151,7 @@ VisionNode::VisionNode(const rclcpp::NodeOptions& options, std::unique_ptr<Camer
   sensor_info_pub_->publish(PlainSensor(rate_sensor_, name + " Rate", SensorSpec::KIND_NUMBER, "1/s"));
 
   thread_ = std::thread([this] { Run(); });
+  watch_ = mowbite_watch::Attach(*this, kWatchLimit);
 }
 
 VisionNode::~VisionNode() {
@@ -162,7 +167,12 @@ VisionNode::~VisionNode() {
 }
 
 void VisionNode::Run() {
-  loop_->Load();
+  {
+    mowbite_watch::Watch load("tron_vision_load", kLoadLimit);
+    loop_->Load();
+  }
+  // Signed after each step: a step that hangs in the camera, the encoders or the model ends the process.
+  mowbite_watch::Watch watch("tron_vision_loop", kWatchLimit);
   for (;;) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -171,6 +181,7 @@ void VisionNode::Run() {
     loop_->SetPreviewWanted(picture_pub_->get_subscription_count() > 0);
     loop_->SetPlainWanted(plain_pub_->get_subscription_count() > 0);
     const bool go_on = loop_->Step();
+    watch.Sign();
     const VisionStatus& status = loop_->Status();
     if (status.inferences != published_inferences_) PublishDetections(status);
     const Preview& preview = loop_->GetPreview();

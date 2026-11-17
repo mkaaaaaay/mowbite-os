@@ -10,6 +10,9 @@
 
 namespace tron_vision {
 
+// Longest wait for a frame in one step of a camera loop, so that its thread signs the watch of the process often.
+constexpr double kFrameWaitStepS = 0.1;
+
 // A camera that streams NV12 and takes exposure settings.
 class Camera {
  public:

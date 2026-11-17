@@ -1,14 +1,18 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <memory>
 #include <mowbite_msgs/msg/camera.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "mowbite_watch/watch.h"
 #include "test_util.h"
 #include "tron_vision/side_node.h"
 
@@ -17,12 +21,52 @@ namespace {
 
 using mowbite_msgs::msg::Camera;
 
+// A camera whose start never comes back.
+class HangingCamera : public tron_vision::Camera {
+ public:
+  bool Start(std::string&) override {
+    std::this_thread::sleep_for(std::chrono::seconds(30));
+    return true;
+  }
+  void Stop() override {}
+  int Next(int, Nv12View&, std::string&) override {
+    return 0;
+  }
+  bool SetExposure(const ExposureSetting&, std::string&) override {
+    return true;
+  }
+};
+
+// Spins a node in a thread of its own while it lives, so that the watch of the process sees its executor.
+class Spin {
+ public:
+  explicit Spin(const rclcpp::Node::SharedPtr& node) {
+    spinner_.add_node(node);
+    // Rounds instead of spin(): a cancel before spin() has begun would be lost.
+    thread_ = std::thread([this] {
+      while (!stop_) spinner_.spin_once(std::chrono::milliseconds(50));
+    });
+  }
+  ~Spin() {
+    stop_ = true;
+    thread_.join();
+  }
+  Spin(const Spin&) = delete;
+  Spin& operator=(const Spin&) = delete;
+
+ private:
+  rclcpp::executors::SingleThreadedExecutor spinner_;
+  std::atomic<bool> stop_{false};
+  std::thread thread_;
+};
+
+// One ROS context for all tests: once ROS has shut down, the watch of the process only counts its shutdown limit.
 class SideNodeTest : public ::testing::Test {
  protected:
-  void SetUp() override {
+  static void SetUpTestSuite() {
     rclcpp::init(0, nullptr);
   }
-  void TearDown() override {
+  static void TearDownTestSuite() {
     rclcpp::shutdown();
   }
   // The process name platform.py of the Tron gives, a crash directory of the test, and a memory limit above what the test
@@ -65,6 +109,7 @@ class SideNodeTest : public ::testing::Test {
 // nothing of the stack.
 TEST_F(SideNodeTest, PublishesOnlyTheCameraAndItsPictures) {
   auto node = std::make_shared<SideNode>(Options());
+  Spin spin(node);
   const std::set<std::string> allowed = {"/hw/cameras", "/camera/oa_right/jpeg", "/rosout", "/parameter_events"};
   const auto graph = node->get_node_graph_interface();
   const auto publishers = graph->get_publisher_names_and_types_by_node("tron_side", "/");
@@ -88,6 +133,7 @@ TEST_F(SideNodeTest, PublishesOnlyTheCameraAndItsPictures) {
 // One entry on hw/cameras, latched: without a viewer the camera is off and can stream.
 TEST_F(SideNodeTest, ReportsTheCameraLatched) {
   auto node = std::make_shared<SideNode>(Options());
+  Spin spin(node);
   const std::vector<Camera> got = Entries([](const Camera&) { return true; });
   ASSERT_FALSE(got.empty());
   const auto& c = got.back();
@@ -109,6 +155,7 @@ TEST_F(SideNodeTest, ReportsTheCameraLatched) {
 TEST_F(SideNodeTest, OffersVideoOnceTheEncoderWorks) {
   video = true;
   auto node = std::make_shared<SideNode>(Options());
+  Spin spin(node);
   const std::vector<Camera> got = Entries([](const Camera& c) { return !c.source.empty(); });
   ASSERT_FALSE(got.empty());
   const auto& c = got.back();
@@ -119,6 +166,25 @@ TEST_F(SideNodeTest, OffersVideoOnceTheEncoderWorks) {
   EXPECT_EQ(c.height, 720U);
   EXPECT_TRUE(c.available);
   EXPECT_EQ(node->ExitCode(), 0);
+}
+
+// A loop thread that hangs in the camera, opened for a subscriber of the pictures, ends the process with the code of
+// the watch.
+TEST_F(SideNodeTest, LoopThatHangsEndsTheProcess) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  EXPECT_EXIT(
+      {
+        auto node = std::make_shared<SideNode>(Options(), std::make_unique<HangingCamera>());
+        Spin spin(node);
+        auto viewer = std::make_shared<rclcpp::Node>("viewer");
+        auto sub = viewer->create_subscription<sensor_msgs::msg::CompressedImage>(
+            "camera/oa_right/jpeg", rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
+            [](const sensor_msgs::msg::CompressedImage&) {});
+        Spin spin_viewer(viewer);
+        std::this_thread::sleep_for(std::chrono::seconds(10));
+        std::_Exit(0);
+      },
+      ::testing::ExitedWithCode(mowbite_watch::kExitCode), "tron_side_loop silent");
 }
 
 TEST(SideCameraAvailability, ReasonsOfTheStates) {

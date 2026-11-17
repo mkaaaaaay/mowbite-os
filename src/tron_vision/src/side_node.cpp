@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "mowbite_serial/serial_port.h"
+#include "mowbite_watch/watch.h"
 
 namespace tron_vision {
 
@@ -11,6 +12,8 @@ namespace {
 
 // Step interval while the camera does not stream: demand, retries and the heat pause count in seconds.
 constexpr auto kIdleWait = std::chrono::milliseconds(200);
+// The loop thread and the ROS thread sign within this.
+constexpr double kWatchLimit = 2.0;
 
 bool Streams(PreviewState state) {
   return state == PreviewState::kStarting || state == PreviewState::kRunning;
@@ -39,7 +42,10 @@ Availability CameraAvailability(PreviewState state) {
   return {false, Camera::REASON_NO_SIGNAL};
 }
 
-SideNode::SideNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_side", options) {
+SideNode::SideNode(const rclcpp::NodeOptions& options) : SideNode(options, nullptr) {}
+
+SideNode::SideNode(const rclcpp::NodeOptions& options, std::unique_ptr<Camera> camera)
+    : rclcpp::Node("tron_side", options) {
   PreviewLoopConfig config;
   camera_id_ = config.camera_id;
   config.max_rss_bytes =
@@ -51,14 +57,14 @@ SideNode::SideNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_side
   if (config.temp_file.empty()) RCLCPP_WARN(get_logger(), "No soc-thermal zone: no pause when hot");
   const std::string crash_dir = declare_parameter("crash_dir", std::string("/var/lib/mowbite-vision"));
 
-  TronCameraConfig camera;
-  camera.sensor_name = declare_parameter("sensor_name", std::string(kRightSensorName));
-  camera.video_device = declare_parameter("video_device", std::string(kRightVideoDevice));
-  camera.vertical_blanking = static_cast<int>(declare_parameter("vertical_blanking", camera.vertical_blanking));
-  camera.processes_using = mowbite_serial::ProcessesUsing;
+  TronCameraConfig hardware;
+  hardware.sensor_name = declare_parameter("sensor_name", std::string(kRightSensorName));
+  hardware.video_device = declare_parameter("video_device", std::string(kRightVideoDevice));
+  hardware.vertical_blanking = static_cast<int>(declare_parameter("vertical_blanking", hardware.vertical_blanking));
+  hardware.processes_using = mowbite_serial::ProcessesUsing;
 
   video_ = std::make_unique<VideoOut>(*this, int64_t{8557});
-  video_->Configure(camera, config.video);
+  video_->Configure(hardware, config.video);
   camera_entry_.id = camera_id_;
   camera_entry_.name = "Right camera";
   // The name the start file gives stack.own_process, so the OS can tie an exit note to this camera.
@@ -67,11 +73,11 @@ SideNode::SideNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_side
   camera_entry_.position = mowbite_msgs::msg::Camera::POSITION_RIGHT;
   uint32_t jpeg_width = 0;
   uint32_t jpeg_height = 0;
-  PreviewSize(camera.width, camera.height, config.preview.width, jpeg_width, jpeg_height);
+  PreviewSize(hardware.width, hardware.height, config.preview.width, jpeg_width, jpeg_height);
   video_->SetJpegSize(jpeg_width, jpeg_height);
   camera_entry_.detections = false;
   camera_entry_.protocols = {mowbite_msgs::msg::Camera::PROTOCOL_MJPEG};
-  camera_ = std::make_unique<TronCamera>(std::move(camera));
+  camera_ = camera ? std::move(camera) : std::make_unique<TronCamera>(std::move(hardware));
   guard_ = std::make_unique<CrashGuard>(crash_dir, kCrashFlag, kBootId);
   std::string error;
   if (!video_->Open(camera_id_, error)) RCLCPP_WARN(get_logger(), "No H.264, only JPEG: %s", error.c_str());
@@ -84,6 +90,7 @@ SideNode::SideNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_side
                                                                      rclcpp::QoS(rclcpp::KeepLast(1)).best_effort());
 
   thread_ = std::thread([this] { Run(); });
+  watch_ = mowbite_watch::Attach(*this, kWatchLimit);
 }
 
 SideNode::~SideNode() {
@@ -99,6 +106,8 @@ SideNode::~SideNode() {
 }
 
 void SideNode::Run() {
+  // Signed after each step: a step that hangs in the camera or the encoder ends the process.
+  mowbite_watch::Watch watch("tron_side_loop", kWatchLimit);
   for (;;) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -107,6 +116,7 @@ void SideNode::Run() {
     // The OS subscribes to the pictures only while a viewer watches.
     loop_->SetWanted(picture_pub_->get_subscription_count() > 0);
     const bool go_on = loop_->Step();
+    watch.Sign();
     const PreviewStatus& status = loop_->Status();
     if (loop_->GetPreview().Count() != published_pictures_) PublishPicture();
     PublishCamera(status);
