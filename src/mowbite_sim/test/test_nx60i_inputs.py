@@ -133,10 +133,17 @@ class Probe(SimProbe):
         return self.wait(lambda: self.status is not None and self.status.telemetry_ok and self.inputs is not None
                          and self.robot is not None and self.methods.get("mowbite_setup"), timeout)
 
-    def step(self, step=STEP):
-        answer = self.rpc("setup.get")
+    def get(self):
+        """setup.get, asked again when the node of a start that just came up did not hear it yet."""
+        for _ in range(4):
+            answer = self.rpc("setup.get", timeout=4.0)
+            if answer:
+                break
         assert answer and "result" in answer, f"setup.get: {answer}"
-        return next(entry for entry in answer["result"]["steps"] if entry["id"] == step)
+        return answer["result"]
+
+    def step(self, step=STEP):
+        return next(entry for entry in self.get()["steps"] if entry["id"] == step)
 
     def step_when(self, pred, timeout, step=STEP):
         """The entry of the step once pred holds for it, else None."""
@@ -149,8 +156,7 @@ class Probe(SimProbe):
     def change(self, method, step=STEP, **params):
         """A setup.* call for the step with the version of now, once more if the state moved in between."""
         for _ in range(3):
-            version = self.rpc("setup.get")["result"]["version"]
-            answer = self.rpc(method, {"step": step, "version": version, **params})
+            answer = self.rpc(method, {"step": step, "version": self.get()["version"], **params})
             data = ((answer or {}).get("error") or {}).get("data") or {}
             if data.get("reason") != "VERSION":
                 break
