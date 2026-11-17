@@ -89,6 +89,8 @@ xcore_driver:
     overspeed_time: 0.5
     # A gap this long in the driver's own I/O thread counts as a lost link (the board stops after 1.0 s).
     io_stall: 0.8
+    # Longest hw/silence of the setup program in s: well past the 1.0 s after which the board stops without the host.
+    silence_max: 3.0
     # A running service lost this often within contest_window s at the same endpoint means another host claims it.
     contest_losses: 2
     contest_window: 10.0
