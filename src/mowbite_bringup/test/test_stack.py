@@ -248,6 +248,24 @@ def geometry_file(folder, text="mowbite_logic: {ros__parameters: {geometry: {pla
     (folder / "geometry.yaml").write_text(text)
 
 
+# What the setup program found for this mower comes before its file kept by hand, also for a driver with files of its
+# own, and the program learns which of its values that file overrules.
+def test_the_file_of_the_setup_program_comes_before_the_one_kept_by_hand(start, tmp_path):  # noqa: F811
+    found, device = tmp_path / "nx60i.setup.yaml", tmp_path / "nx60i.yaml"
+    program = next(k for k in start("nx60i").components if k["name"] == "mowbite_setup")["parameters"][-1]
+    assert program["layer"].value == str(found) and program["shadowed"].value == ""
+    found.write_text("xcore_driver:\n  ros__parameters:\n    inputs.learn: false\n    max_correction_age: 20.0\n")
+    device.write_text("xcore_driver:\n  ros__parameters:\n    max_correction_age: 25.0\n")
+    built = start("nx60i")
+    files = [value for value in built.node("xcore_driver")["parameters"] if isinstance(value, str)]
+    assert files[-2:] == [str(found), str(device)]
+    logic = next(k for k in built.components if k["name"] == "mowbite_logic")["parameters"]
+    assert [value for value in logic if isinstance(value, str)][-2:] == [str(found), str(device)]
+    program = next(k for k in built.components if k["name"] == "mowbite_setup")["parameters"][-1]
+    assert program["layer"].value == str(found)
+    assert program["shadowed"].value == "xcore_driver.max_correction_age"
+
+
 def step_list(folder, text):
     (folder / "setup").mkdir()
     (folder / "setup" / "setup.yaml").write_text(text)

@@ -1,4 +1,5 @@
-"""The parameter files of a platform in their order: stack.yaml for every mower, then the file of the platform. A value
+"""The parameter files of a platform in their order: stack.yaml for every mower, then the file of the platform; in
+data_dir what the setup program found for this mower (setup_file), then the file kept by hand (device_file). A value
 of stack.yaml that every platform has to set stands there as PLACEHOLDER; no node starts while one is left (stack.py).
 A platform is a package that enters its name in the ament index under RESOURCE and has platform.yaml, geometry.yaml
 and platform.py in its share folder, and setup/setup.yaml with the steps of the setup program if it has one.
@@ -68,9 +69,23 @@ def setup(platform, folder_of=None):
     return {"platform": name, "steps": json.dumps(steps), "image_dir": os.path.join(root, "images")}
 
 
+def setup_file(data_dir, platform):
+    """What the setup program found for one mower of this platform, in data_dir: read after the files above and before
+    device_file. mowbite_setup alone writes it."""
+    return os.path.join(data_dir, f"{platform}.setup.yaml")
+
+
 def device_file(data_dir, platform):
-    """The measured values of one mower of this platform in data_dir, read after the files above; kept like the data."""
+    """The measured values of one mower of this platform in data_dir, kept by hand and like the data; read last."""
     return os.path.join(data_dir, f"{platform}.yaml")
+
+
+def shadowed(setup_path, device_path):
+    """<node>.<parameter> of every value of the file of the setup program that the file kept by hand sets as well,
+    for the node of that section; ValueError when one of them is no parameter file."""
+    device = [sections(device_path)]
+    return sorted({f"{node}.{key}" for node, values in sections(setup_path) for key in values
+                   if key in merged(device, node)})
 
 
 def matches(section, node):

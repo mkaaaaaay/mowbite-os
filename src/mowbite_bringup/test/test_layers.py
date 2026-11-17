@@ -90,6 +90,20 @@ def test_a_later_file_and_a_later_section_win(tmp_path):
     assert layers.parameters([first, second], "other") == {"x": 1, "y": 4}
 
 
+def test_the_file_kept_by_hand_overrules_the_setup_program(tmp_path):
+    found = write(tmp_path / "mower.setup.yaml", "driver:\n  ros__parameters:\n    inputs.lines: [\"A\"]\n"
+                                                 "    inputs.learn: false\nlogic:\n  ros__parameters:\n    x: 1\n")
+    device = write(tmp_path / "mower.yaml", "driver:\n  ros__parameters:\n    inputs:\n      lines: [B]\n"
+                                            "/**:\n  ros__parameters:\n    x: 2\n")
+    assert layers.setup_file(str(tmp_path), "mower") == found
+    assert layers.device_file(str(tmp_path), "mower") == device
+    assert layers.shadowed(found, device) == ["driver.inputs.lines", "logic.x"]
+    assert layers.parameters([found, device], "driver") == {"inputs.lines": ["B"], "inputs.learn": False, "x": 2}
+    assert layers.shadowed(found, write(tmp_path / "other.yaml", "driver:\n  ros__parameters:\n    y: 1\n")) == []
+    with pytest.raises(ValueError):
+        layers.shadowed(found, write(tmp_path / "broken.yaml", "driver: [1\n"))
+
+
 def test_a_value_is_left_over_only_for_the_nodes_asked(tmp_path):
     base = write(tmp_path / "stack.yaml", "/**:\n  ros__parameters:\n    limit: <platform>\nlogic:\n"
                                           "  ros__parameters:\n    voltage: <platform>\n    speed: <platform>\n"

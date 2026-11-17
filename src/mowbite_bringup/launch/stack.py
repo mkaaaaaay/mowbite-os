@@ -141,6 +141,20 @@ def check_setup(setup, logger):
     return halt_actions(data_store.Halt("PLATFORM_CONFIG", text).line("-"), logger)
 
 
+# <node>.<parameter> of what the setup program found and the file kept by hand sets as well: that file has the last
+# word, so the value of the program does not hold. None for a file that cannot be read, which check_parameters halts on.
+def shadowed_values(found, device, logger):
+    if not found or not device:
+        return []
+    try:
+        names = layers.shadowed(found, device)
+    except (OSError, ValueError):
+        return []
+    for name in names:
+        logger.warning(f"{name} of the setup program does not hold: {device} sets it as well and is read last")
+    return names
+
+
 # journal_dir as given, or empty with an error when it lies in data_dir: the backup of data_dir would take it along
 # (contract 3.5 (7)), and the journal has limits of its own.
 def journal_dir(path, data_dir, logger):
@@ -225,8 +239,9 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=N
     stats = ComposableNode(
         package="mowbite_stats", plugin="mowbite_stats::StatsNode", name="mowbite_stats",
         parameters=[*files, {"data_dir": data_dir}, journal_dir])
-    # The setup program of the platform (setup.*): it only watches, its steps come from layers.setup.
-    setup = setup or {"platform": "", "steps": "", "image_dir": ""}
+    # The setup program of the platform (setup.*): its steps come from layers.setup, layer is the parameter file it
+    # writes for this mower, shadowed what the file kept by hand overrules of it.
+    setup = {"platform": "", "steps": "", "image_dir": "", "layer": "", "shadowed": "", **(setup or {})}
     program = ComposableNode(
         package="mowbite_setup", plugin="mowbite_setup::SetupNode", name="mowbite_setup",
         parameters=[*files, {"data_dir": data_dir},
@@ -423,15 +438,17 @@ class Parts:
 
 class Start:
     """What parts(start) of a platform builds on: arg(name) gives a launch argument, files are the parameter files in
-    their order, device is the last of them, the file of this mower in data_dir (empty: it has none), journal is the
-    journal directory (empty: none)."""
+    their order, setup_file and device the last of them: what the setup program found for this mower and its file kept
+    by hand in data_dir (empty: it has none); a driver with files of its own reads these two after them, in this
+    order. journal is the journal directory (empty: none)."""
 
     Parts = Parts
     data_store = data_store
 
-    def __init__(self, arg, files, device, data_dir, journal, logger):
+    def __init__(self, arg, files, setup_file, device, data_dir, journal, logger):
         self.arg = arg
         self.files = files
+        self.setup_file = setup_file
         self.device = device
         self.data_dir = data_dir
         self.journal = journal
@@ -463,11 +480,13 @@ def launch_setup(context, platform, module):
     halt = prepare_data_dir(data_dir, logger)
     if halt:
         return halt
-    # What every mower shares, the values of the platform, values on top of both, then the measured values of this
-    # mower, if there are any.
+    # What every mower shares, the values of the platform, values on top of both, then what the setup program found
+    # for this mower and its values kept by hand, if there are any.
     device = layers.device_file(data_dir, platform) if data_dir else ""
     device = device if os.path.isfile(device) else ""
-    files = [arg("config"), arg("platform_config"), arg("extra_config")] + ([device] if device else [])
+    setup_file = layers.setup_file(data_dir, platform) if data_dir else ""
+    found = setup_file if os.path.isfile(setup_file) else ""
+    files = [arg("config"), arg("platform_config"), arg("extra_config")] + [path for path in (found, device) if path]
     journal = journal_dir(arg("journal_dir"), data_dir, logger)
     # The dimensions of the platform come before the files, which can change single values (the simulation does).
     try:
@@ -475,11 +494,13 @@ def launch_setup(context, platform, module):
     except (OSError, ValueError) as error:
         return halt_actions(data_store.Halt("PLATFORM_CONFIG", f"The step list cannot be read: {error}.").line("-"),
                             logger)
+    setup["layer"] = setup_file
+    setup["shadowed"] = ",".join(shadowed_values(found, device, logger))
     nodes = components(files, arg("geometry"), data_dir, arg("mqtt_host"), arg("mqtt_port"), journal, setup)
     halt = check_parameters(files, [*started(nodes), *module.NODES], logger) or check_setup(setup, logger)
     if halt:
         return halt
-    parts = module.parts(Start(arg, files, device, data_dir, journal, logger))
+    parts = module.parts(Start(arg, files, found, device, data_dir, journal, logger))
     driver = []
     if parts.driver:
         # Should the container die, the driver stops the wheels after its own timeout and the blade lease runs out; a

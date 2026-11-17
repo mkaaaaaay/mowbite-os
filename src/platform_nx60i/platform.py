@@ -52,10 +52,10 @@ def number(value, name):
 
 def parts(start):
     arg = start.arg
-    # The driver's file, then the file of this mower in data_dir (ticks_per_meter, wheel_distance, the values of the
-    # safety measurement, the datum), if there is one, then what is given here: the battery voltages of the logic and
-    # the arguments.
-    driver_files = [arg("driver_params")] + ([start.device] if start.device else [])
+    # The driver's file, then what the setup program found for this mower (the table of its inputs) and its file kept
+    # by hand in data_dir (ticks_per_meter, wheel_distance, the values of the safety measurement, the datum), if there
+    # are any, then what is given here: the battery voltages of the logic and the arguments.
+    driver_files = [arg("driver_params")] + [path for path in (start.setup_file, start.device) if path]
     overrides = {"hold_file": start.data_file(start.data_store.HOLD_FILE),
                  **logic_params.battery_voltages(start.parameters("mowbite_logic"))}
     for name in ("datum_lat", "datum_long", "datum_height"):
