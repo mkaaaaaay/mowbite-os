@@ -15,8 +15,8 @@ namespace mowbite_logic {
 // Docking onto the station of the map, contacts first: over the drivable areas to the point approach_distance m in
 // front of it, facing the way the mower faces on it, then along its line to the gate (backwards with the contacts at
 // the back, forwards with them in front), where the mower stops and is checked, and on at contact_speed until the
-// contacts. RTK steers the whole way; a camera may take over the last part later (O8). Assumptions until measured on
-// the Tron in phase 7.
+// contacts. RTK steers the whole way; a camera may take over the last part later (O8). The values here are those of
+// the tests, each platform sets its own.
 struct DockConfig {
   // m in front of the station along its way in (docking_approach_distance of params.set).
   double approach_distance = 0.8;
@@ -168,7 +168,7 @@ class DockingSequence {
 // gap for time s, or at expected_below percent or more the contact alone for that long, as a charger stays off near
 // full. Without either within timeout s of the debounced contact the try fails. In IDLE on the station charging
 // counts as lost after lost_time s without the contact, or without the current that was there while the battery is
-// below expected_below. Per platform, assumptions until measured (Tron phase 7, YardForce "Dock YF").
+// below expected_below. The values here are those of the tests, each platform sets its own.
 struct ChargeConfig {
   double current = 0.5;
   double time = 5.0;

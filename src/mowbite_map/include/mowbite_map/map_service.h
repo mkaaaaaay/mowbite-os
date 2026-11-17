@@ -56,7 +56,7 @@ struct Event {
 };
 
 enum class DatumState {
-  // tron_gnss has not told its datum yet
+  // The GNSS driver has not told its datum yet
   kUnknown,
   // no areas and no docking station, nothing to tie to a datum
   kEmpty,
@@ -124,7 +124,7 @@ class MapService {
     planner_offered_ = offered;
   }
 
-  // The datum tron_gnss works in. Checks the map against it, and ties a first map to it.
+  // The datum the GNSS driver works in. Checks the map against it, and ties a first map to it.
   void SetDatum(const Datum& datum);
   // The hold of an update (logic/hold), until in unix s, 0 for none: map.replace and map/replace are refused with
   // kRpcHold and data {"reason": "HOLD", "until"} while it lasts.

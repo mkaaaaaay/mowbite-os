@@ -18,7 +18,7 @@ namespace mowbite_stats {
 // Width of a bucket (s), and how long buckets are kept (s).
 constexpr int64_t kBucketSeconds = mowbite_api::kSensorsHistorySteps[0];
 constexpr int64_t kKeepSeconds = int64_t{mowbite_api::kSensorsHistoryHours} * 3600;
-// Number sensors recorded at once; about 20 on the Tron.
+// Number sensors recorded at once.
 constexpr size_t kMaxSensors = 64;
 // Longest id, name or unit (bytes); a sensor with a longer one is not recorded.
 constexpr size_t kMaxSensorText = 100;

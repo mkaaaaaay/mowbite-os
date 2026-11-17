@@ -113,8 +113,8 @@ struct RecorderConfig {
   // The wheels this far (m) backwards are reversing, so that the next point does not join the driven track: more than
   // they roll back when stopping, less than the 0.10 m the pose needs to show it.
   static constexpr double kReverseTravel = 0.02;
-  // Travel backwards that grows slower than this (m/s) is noise of standing wheels (Tron: the reported speed swings
-  // around a small bias while it stands): it leaks away instead of adding up to kReverseTravel.
+  // Travel backwards that grows slower than this (m/s) is noise of standing wheels (a reported speed that swings
+  // around a small bias while they stand): it leaks away instead of adding up to kReverseTravel.
   static constexpr double kWheelLeak = 0.005;
   // Wheel measurements further apart than this (s), or none, are a break of the driven track.
   static constexpr double kWheelGap = 0.5;

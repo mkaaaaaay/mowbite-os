@@ -153,7 +153,7 @@ class NtripNode : public rclcpp::Node {
     t.data_timeout_s = declare_parameter("data_timeout", t.data_timeout_s);
     t.gga_interval_s = declare_parameter("gga_interval", t.gga_interval_s);
     t.gga_wait_s = declare_parameter("gga_wait", t.gga_wait_s);
-    // The same parameter as tron_gnss: LOST comes when the fix starts to count as float.
+    // The same parameter as the GNSS driver: LOST comes when the fix starts to count as float.
     t.lost_after_s = declare_parameter("max_correction_age", t.lost_after_s);
     return t;
   }

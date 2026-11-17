@@ -74,8 +74,8 @@ struct CalibrationConfig {
 };
 
 struct LogicConfig {
-  // 6S Li-ion; empty is 0 % for the app and where mowing goes home (the highest voltage of battery_low_window s below
-  // it). Assumption until the discharge curve of the Tron is measured: 3.5 V per cell.
+  // Empty is 0 % for the app and where mowing goes home (the highest voltage of battery_low_window s below it). The
+  // values here are those of the tests (6S Li-ion), each platform sets its own.
   double battery_empty_voltage = 21.0;
   double battery_full_voltage = 25.2;
   double battery_low_window = 20.0;

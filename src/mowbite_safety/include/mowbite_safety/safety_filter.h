@@ -25,7 +25,7 @@ using mowbite_hold::kReasonUnexpectedRestart;
 
 struct SafetyConfig {
   // TILT: the body more than tilt_limit degrees off the vertical for tilt_time s; a release needs it below
-  // tilt_release. The Tron mows slopes up to 31 degrees (vendor), its MCU reports a lift from about 37.
+  // tilt_release. The values here are those of the tests, each platform sets its own.
   double tilt_limit = 31.0;
   double tilt_time = 1.0;
   double tilt_release = 26.0;

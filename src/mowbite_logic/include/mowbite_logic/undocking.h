@@ -10,8 +10,8 @@
 namespace mowbite_logic {
 
 // Leaving the docking station before mowing or a drive starts on it: straight against the way in, out of the hollows
-// and guides for its wheels, without steering; forwards with the contacts at the back, else backwards. Assumptions
-// until measured on the Tron in phase 7.
+// and guides for its wheels, without steering; forwards with the contacts at the back, else backwards. The values
+// here are those of the tests, each platform sets its own.
 struct UndockConfig {
   // m along the line (undock_distance of params.set).
   double distance = 0.8;
