@@ -127,7 +127,7 @@ TEST_F(CoreReplay, SafetyFilter) {
 }
 
 // Journals from before the dock source: no dock_max_position_accuracy and dock_accuracy_per_m in the config and no
-// OnDockPose in the table, nor OnReleaseAnswer, which came after it; they ran with a limit the same everywhere.
+// OnDockPose in the table, nor the methods that came after it; they ran with a limit the same everywhere.
 TEST(SafetyJournal, ConfigFromBeforeTheDockSourceTakesTheDefault) {
   using F = mowbite_safety::SafetyFilter;
   mowbite_safety::SafetyConfig config;
@@ -137,10 +137,10 @@ TEST(SafetyJournal, ConfigFromBeforeTheDockSourceTakesTheDefault) {
   definition["config"].erase("dock_max_position_accuracy");
   definition["config"].erase("dock_accuracy_per_m");
   auto& methods = definition["methods"];
-  for (const char* later : {"OnReleaseAnswer", "OnDockPose"}) {
-    ASSERT_EQ(methods.back().at("name"), later);
-    methods.erase(methods.size() - 1);
-  }
+  const auto dock_pose = std::find_if(methods.begin(), methods.end(),
+                                      [](const nlohmann::json& method) { return method.at("name") == "OnDockPose"; });
+  ASSERT_NE(dock_pose, methods.end());
+  methods.erase(dock_pose, methods.end());
   std::vector<std::string> names, signatures;
   for (const auto& method : methods) {
     names.push_back(method.at("name"));
