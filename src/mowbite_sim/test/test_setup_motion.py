@@ -11,7 +11,9 @@ it as well. The Tron has a safety measurement date in its simulation, so there i
 At the end the step ground drives on the simulated ground: straight, turn, back until STOP, against the bumper; on the
 NX60i, whose lock stays closed without a date, only once every step jacked up passed again. Then the step blade, with
 the blade allowed as the restart of its first start leaves the file of the setup program: on and off, without renewal,
-without host, then STOP, lifting and the bumper.
+without host, then STOP, lifting and the bumper. Last the step summary up to its restart: it writes the date and the
+stand time of silence into the file of the setup program and keeps the lock closed with a reset until it checked them
+after the restart; the Tron asks mowbite-host for it, the launch of the NX60i ends (test_setup_summary.py goes on).
 
 Run in a sourced workspace: MOWBITE_PLATFORM=<platform> launch_test /ws/src/mowbite_sim/test/test_setup_motion.py
 """
@@ -68,16 +70,17 @@ with open(layers.setup_file(DATA, PLATFORM), "w") as f:
     f.write("# Written by the setup program of MowBite OS, which writes it anew: values of your own go into the "
             "file of this\n# mower beside it, which is read after this one.\n"
             f"{BLADE_NODE}:\n  ros__parameters:\n    allow_blade: true\n")
-# The steps of the inputs passed: the rule of the program lets no wheel turn before.
+# The steps of the inputs passed: the rule of the program lets no wheel turn before; imu as well, for summary.
 write_json(os.path.join(DATA, "setup.json"),
            {"schema": 1, "platform": SETUP["platform"],
-            "steps": {step: {"state": "ok"} for step in ("stop", "lift", "bumper")}})
+            "steps": {step: {"state": "ok"} for step in ("stop", "lift", "bumper", "imu")}})
 write_json(FLAGS, {"gps_fix": "fix"})
 
 
 def generate_test_description():
     if PLATFORM == "tron":
-        return sim_description(WORK, random.randint(18000, 18999), journal_dir=JOURNAL)
+        description, _ = sim_description(WORK, random.randint(18000, 18999), journal_dir=JOURNAL)
+        return description, {"system": None}
     board = fake_xcore(GROUP_PORT, "--origin", str(DATUM[0]), str(DATUM[1]), "--flags", FLAGS, "--state", STATE,
                        "--log", LOG, "--log-max-mb", "60")
     system = ExecuteProcess(
@@ -89,7 +92,15 @@ def generate_test_description():
     return launch.LaunchDescription([
         board,
         TimerAction(period=0.5, actions=[system, launch_testing.actions.ReadyToTest()]),
-    ]), {}
+    ]), {"system": system}
+
+
+def lock_causes():
+    try:
+        with open(LOCK) as f:
+            return json.load(f)["causes"]
+    except (OSError, ValueError, KeyError):
+        return []
 
 
 def set_flags(**flags):
@@ -107,6 +118,8 @@ class Probe(SimProbe):
         self.robot = None
         self.wheels = None
         self.sub_states = set()
+        # The requests of the OS to mowbite-host over the broker.
+        self.host_requests = []
         self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
         self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
         self.node.create_subscription(TwistStamped, "hw/wheel_odom", self._set("wheels"), 10)
@@ -132,6 +145,12 @@ class Probe(SimProbe):
         with self.lock:
             self.robot = msg
             self.sub_states.add(msg.current_sub_state)
+
+    def _publish(self, msg):
+        if msg.topic == "rpc/request":
+            with self.lock:
+                self.host_requests.append(json.loads(msg.payload).get("method"))
+        super()._publish(msg)
 
     def _keep(self):
         while rclpy.ok():
@@ -221,17 +240,21 @@ class TestSetupMotion(unittest.TestCase):
         refused = p.change("setup.start", "wheels", confirm=["raised"])
         self.assertEqual(refused["error"]["data"]["reason"], "CONFIRM_MISSING", refused)
 
-    def test_02_wheels(self):
+    def wheels(self):
         p = self.probe
         self.start("wheels")
-        self.assertTrue(p.wait(lambda: "SETUP" in p.sub_states, 5), p.sub_states)
         asked = wait_until(lambda: (lambda e: e if e["state"] != "running" or any(
             i["name"] == "wheel" and i["ask"] for i in e["inputs"]) else None)(p.step("wheels")), 40)
         self.assertIsNotNone(asked, p.step("wheels"))
         self.assertEqual(asked["state"], "running", asked["result"])
         time.sleep(0.5)
         self.assertIn("result", p.change("setup.answer", "wheels", values={"wheel": "right"}))
-        entry = self.passed("wheels", 10)
+        return self.passed("wheels", 10)
+
+    def test_02_wheels(self):
+        p = self.probe
+        entry = self.wheels()
+        self.assertIn("SETUP", p.sub_states)
         for value in entry["values"]:
             self.assertTrue(value["ok"], value)
 
@@ -389,13 +412,8 @@ class TestSetupMotion(unittest.TestCase):
             # The lock is closed: the steps jacked up that ended failed above come first.
             blocked = p.step("ground")["blocked"]
             self.assertEqual([b["reason"] for b in blocked], ["SAFETY_AIR"], blocked)
-            self.start("wheels")
-            asked = wait_until(lambda: (lambda e: e if e["state"] != "running" or any(
-                i["name"] == "wheel" and i["ask"] for i in e["inputs"]) else None)(p.step("wheels")), 40)
-            self.assertEqual((asked or {}).get("state"), "running", asked)
-            time.sleep(0.5)
-            self.assertIn("result", p.change("setup.answer", "wheels", values={"wheel": "right"}))
-            self.passed("wheels", 10)
+            self.assertEqual(blocked[0]["steps"], ["wheels", "stop_moving"], blocked)
+            self.wheels()
             self.test_03_stop_moving()
         refused = p.change("setup.start", "ground", confirm=CONFIRM)
         self.assertEqual(refused["error"]["data"]["reason"], "CONFIRM_MISSING", refused)
@@ -428,6 +446,44 @@ class TestSetupMotion(unittest.TestCase):
         for value in entry["values"]:
             self.assertTrue(value["ok"], value)
         self.assertEqual(p.status.blade_motor.rpm, 0)
+
+    def test_15_summary(self, proc_info, system):
+        p = self.probe
+        node = STEPS["summary"]["params"]["node"]
+        if PLATFORM == "tron":
+            # test_08 and test_09 left wheels and stop_moving failed: summary names them.
+            blocked = p.step("summary")["blocked"]
+            self.assertEqual([(b["reason"], b.get("steps")) for b in blocked],
+                             [("SAFETY_STEPS", ["wheels", "stop_moving"])], blocked)
+            self.wheels()
+            self.test_03_stop_moving()
+        entry = p.step("summary")
+        self.assertEqual((entry["kind"], entry["restart"], entry["state"]), ("confirm", True, "open"), entry)
+        refused = p.change("setup.start", "summary", confirm=[])
+        self.assertEqual(refused["error"]["data"]["reason"], "CONFIRM_MISSING", refused)
+        longest = max(value["value"] for value in p.step("silence")["values"] if value["id"].startswith("round_"))
+        self.start("summary", keep=False, confirm=["seen_myself"])
+        layer = layers.setup_file(DATA, PLATFORM)
+        written = wait_until(lambda: (lambda v: v if "safety_measurement_date" in v else None)(
+            (layers.parameters([layer], node) if os.path.exists(layer) else {})), 10)
+        self.assertIsNotNone(written, "the date is not written")
+        self.assertEqual(written["safety_measurement_date"], time.strftime("%Y-%m-%d", time.gmtime()))
+        self.assertAlmostEqual(written["failsafe_without_host"], longest, places=3)
+        self.assertTrue(written.get("allow_blade"), written)
+        # Until the check after the restart a reset keeps the lock closed.
+        self.assertTrue(wait_until(lambda: any(cause.get("reset") for cause in lock_causes()), 5), lock_causes())
+        if PLATFORM == "tron":
+            self.assertTrue(p.wait(lambda: "host.restart_os" in p.host_requests, 10), p.host_requests)
+            state = p.get()
+            self.assertTrue(state["restart_pending"], state)
+            self.assertEqual(p.step("summary")["state"], "running")
+            self.assertFalse(state["safety"]["open"], state["safety"])
+            self.assertTrue(p.wait(lambda: p.safety.lock_closed, 2), p.safety)
+            return
+        # The NX60i: the setup program leaves its note, the launch ends in order and nothing starts it here again.
+        proc_info.assertWaitForShutdown(process=system, timeout=60)
+        self.assertTrue(os.path.exists(os.path.join(DATA, "setup_restart.json")))
+        self.assertIn(proc_info[system].returncode, EXIT_CODES)
 
 
 @launch_testing.post_shutdown_test()
