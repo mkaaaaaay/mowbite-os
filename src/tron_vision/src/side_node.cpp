@@ -3,7 +3,7 @@
 #include <chrono>
 #include <utility>
 
-#include "tron_mcu/serial_port.h"
+#include "mowbite_serial/serial_port.h"
 
 namespace tron_vision {
 
@@ -55,7 +55,7 @@ SideNode::SideNode(const rclcpp::NodeOptions& options) : rclcpp::Node("tron_side
   camera.sensor_name = declare_parameter("sensor_name", std::string(kRightSensorName));
   camera.video_device = declare_parameter("video_device", std::string(kRightVideoDevice));
   camera.vertical_blanking = static_cast<int>(declare_parameter("vertical_blanking", camera.vertical_blanking));
-  camera.processes_using = tron::ProcessesUsing;
+  camera.processes_using = mowbite_serial::ProcessesUsing;
 
   video_ = std::make_unique<VideoOut>(*this, int64_t{8557});
   video_->Configure(camera, config.video);

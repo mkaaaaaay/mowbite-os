@@ -19,8 +19,8 @@
 #include "mowbite_light/light_service.h"
 #include "mowbite_light/output.h"
 #include "mowbite_light/ws2812.h"
+#include "mowbite_serial/serial_port.h"
 #include "mowbite_watch/attach.h"
-#include "tron_mcu/serial_port.h"
 
 namespace mowbite_light {
 
@@ -181,7 +181,7 @@ class LightNode : public rclcpp::Node {
       output_ = OpenFile(config_.file);
       return;
     }
-    const auto users = tron::ProcessesUsing(config_.device);
+    const auto users = mowbite_serial::ProcessesUsing(config_.device);
     if (!users.empty()) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 60000, "%s is open in another process (pid %d), not opening it",
                             config_.device.c_str(), users.front());

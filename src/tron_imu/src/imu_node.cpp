@@ -8,10 +8,10 @@
 #include <thread>
 #include <vector>
 
+#include "mowbite_serial/serial_port.h"
 #include "mowbite_watch/attach.h"
 #include "tron_imu/wit_imu.h"
 #include "tron_imu/wit_parser.h"
-#include "tron_mcu/serial_port.h"
 
 namespace tron_imu {
 
@@ -85,7 +85,7 @@ class ImuNode : public rclcpp::Node {
   }
 
   void TryOpen() {
-    auto users = tron::ProcessesUsing(port_name_);
+    auto users = mowbite_serial::ProcessesUsing(port_name_);
     if (!users.empty()) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "%s is open in another process (pid %d), not opening it",
                             port_name_.c_str(), users.front());
@@ -157,7 +157,7 @@ class ImuNode : public rclcpp::Node {
   std::string frame_id_;
   double tilt_variance_;
   double yaw_variance_;
-  tron::SerialPort port_;
+  mowbite_serial::SerialPort port_;
   tron::WitParser parser_;
   std::unique_ptr<tron::WitImu> imu_;
   std::vector<tron::WitPacket> packets_;

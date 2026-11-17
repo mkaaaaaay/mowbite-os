@@ -18,6 +18,7 @@
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mowbite_hold/hold.h>
 #include <mowbite_journal/node_options.h>
+#include <mowbite_serial/serial_port.h>
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -28,7 +29,6 @@
 #include "tron_mcu/mcu_codec.h"
 #include "tron_mcu/mcu_control.h"
 #include "tron_mcu/mcu_journal.h"
-#include "tron_mcu/serial_port.h"
 #include "tron_mcu/stop_clear_mark.h"
 
 namespace tron_mcu {
@@ -394,7 +394,7 @@ class McuNode : public rclcpp::Node {
   }
 
   void TryOpen() {
-    auto users = tron::ProcessesUsing(port_name_);
+    auto users = mowbite_serial::ProcessesUsing(port_name_);
     if (!users.empty()) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "%s is open in another process (pid %d), not opening it",
                             port_name_.c_str(), users.front());
@@ -830,7 +830,7 @@ class McuNode : public rclcpp::Node {
   // What PollHold logged last, only for the I/O thread after the start.
   mowbite_hold::HoldView hold_logged_;
 
-  tron::SerialPort port_;
+  mowbite_serial::SerialPort port_;
   std::string port_name_;
   std::atomic<bool> running_{true};
   std::thread io_thread_;

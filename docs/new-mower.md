@@ -14,7 +14,8 @@ One package, its own process: a crash of another node must leave the watchdog of
 without ROS in a library of its own with gtests; the node stays thin. Build the node like every component: register it
 with `mowbite_component_register` instead of `rclcpp_components_register_node` (hidden symbols, several MB less RSS)
 and give the base class `mowbite_component::StartupOnly(options)`: parameters are read once at the start, there are
-no parameter services.
+no parameter services. A driver on a serial port takes it from `mowbite_serial` (`SerialPort`: raw 8N1, exclusive;
+`ProcessesUsing`: who else holds the device, asked before the port is opened).
 
 | What | Name | Type |
 |---|---|---|

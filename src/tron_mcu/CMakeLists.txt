@@ -16,10 +16,11 @@ find_package(sensor_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_hold REQUIRED)
+find_package(mowbite_serial REQUIRED)
 find_package(mowbite_journal REQUIRED)
 
 # Codec, control logic and port without ROS, testable on any machine.
-add_library(tron_mcu_core STATIC src/mcu_codec.cpp src/mcu_control.cpp src/stop_release.cpp src/stop_clear_mark.cpp src/serial_port.cpp src/capture_dump.cpp)
+add_library(tron_mcu_core STATIC src/mcu_codec.cpp src/mcu_control.cpp src/stop_release.cpp src/stop_clear_mark.cpp src/capture_dump.cpp)
 target_include_directories(tron_mcu_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -27,7 +28,8 @@ target_link_libraries(tron_mcu_core mowbite_hold::mowbite_hold_core)
 set_target_properties(tron_mcu_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(tron_mcu_component SHARED src/mcu_node.cpp)
-target_link_libraries(tron_mcu_component tron_mcu_core mowbite_hold::mowbite_hold_core mowbite_journal::mowbite_journal)
+target_link_libraries(tron_mcu_component tron_mcu_core mowbite_hold::mowbite_hold_core mowbite_journal::mowbite_journal
+  mowbite_serial::mowbite_serial)
 ament_target_dependencies(tron_mcu_component rclcpp rclcpp_components geometry_msgs sensor_msgs diagnostic_msgs mowbite_msgs)
 mowbite_component_register(tron_mcu_component
   PLUGIN "tron_mcu::McuNode"
@@ -48,8 +50,8 @@ install(TARGETS tron_mcu_core tron_mcu_component
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(tron_mcu_test test/test_mcu_codec.cpp test/test_mcu_control.cpp test/test_stop_release.cpp test/test_capture_dump.cpp
-                  test/test_serial_port.cpp test/test_stop_clear_mark.cpp)
-  target_link_libraries(tron_mcu_test tron_mcu_core util mowbite_journal::mowbite_journal)
+                  test/test_stop_clear_mark.cpp)
+  target_link_libraries(tron_mcu_test tron_mcu_core mowbite_journal::mowbite_journal)
 endif()
 
 ament_export_targets(export_tron_mcu HAS_LIBRARY_TARGET)

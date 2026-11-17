@@ -20,11 +20,11 @@
 #include <thread>
 #include <vector>
 
+#include "mowbite_serial/serial_port.h"
 #include "mowbite_watch/attach.h"
 #include "tron_gnss/board_link.h"
 #include "tron_gnss/gnss_tracker.h"
 #include "tron_gnss/nmea.h"
-#include "tron_mcu/serial_port.h"
 
 namespace tron_gnss {
 
@@ -206,7 +206,7 @@ class GnssNode : public rclcpp::Node {
   }
 
   void TryOpen() {
-    auto users = tron::ProcessesUsing(port_name_);
+    auto users = mowbite_serial::ProcessesUsing(port_name_);
     if (!users.empty()) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "%s is open in another process (pid %d), not opening it",
                             port_name_.c_str(), users.front());
@@ -371,7 +371,7 @@ class GnssNode : public rclcpp::Node {
   std::string port_name_;
   int baud_;
   std::string frame_id_;
-  tron::SerialPort port_;
+  mowbite_serial::SerialPort port_;
   tron::NmeaParser parser_;
   std::optional<tron::GnssTracker> tracker_;
   // Guards board_, queue_ and port_open_ between the RTCM callback and the port thread.

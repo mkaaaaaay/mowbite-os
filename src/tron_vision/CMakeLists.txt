@@ -10,7 +10,7 @@ add_compile_options(-ffp-contract=off)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(mowbite_msgs REQUIRED)
-find_package(tron_mcu REQUIRED)
+find_package(mowbite_serial REQUIRED)
 find_package(mowbite_watch REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -40,7 +40,7 @@ target_link_libraries(tron_video_out_lib tron_vision_core)
 ament_target_dependencies(tron_video_out_lib rclcpp mowbite_msgs ament_index_cpp)
 
 add_library(tron_vision_node_lib STATIC src/vision_node.cpp)
-target_link_libraries(tron_vision_node_lib tron_vision_core tron_video_out_lib tron_mcu::tron_mcu_core)
+target_link_libraries(tron_vision_node_lib tron_vision_core tron_video_out_lib mowbite_serial::mowbite_serial)
 ament_target_dependencies(tron_vision_node_lib rclcpp mowbite_msgs sensor_msgs)
 add_executable(tron_vision_node src/vision_node_main.cpp)
 target_link_libraries(tron_vision_node tron_vision_node_lib)
@@ -48,7 +48,7 @@ install(TARGETS tron_vision_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 # The live picture of the stereo camera, a process of its own: a crash in the media library takes nothing else along.
 add_library(tron_stereo_node_lib STATIC src/stereo_node.cpp)
-target_link_libraries(tron_stereo_node_lib tron_vision_core tron_mcu::tron_mcu_core mowbite_watch::mowbite_watch)
+target_link_libraries(tron_stereo_node_lib tron_vision_core mowbite_serial::mowbite_serial mowbite_watch::mowbite_watch)
 ament_target_dependencies(tron_stereo_node_lib rclcpp mowbite_msgs ament_index_cpp)
 add_executable(tron_stereo_node src/stereo_node_main.cpp)
 target_link_libraries(tron_stereo_node tron_stereo_node_lib)
@@ -56,7 +56,7 @@ install(TARGETS tron_stereo_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 # The live picture of the right side camera, a process of its own beside the camera AI on the left one.
 add_library(tron_side_node_lib STATIC src/side_node.cpp)
-target_link_libraries(tron_side_node_lib tron_vision_core tron_video_out_lib tron_mcu::tron_mcu_core)
+target_link_libraries(tron_side_node_lib tron_vision_core tron_video_out_lib mowbite_serial::mowbite_serial)
 ament_target_dependencies(tron_side_node_lib rclcpp mowbite_msgs sensor_msgs ament_index_cpp)
 add_executable(tron_side_node src/side_node_main.cpp)
 target_link_libraries(tron_side_node tron_side_node_lib)
@@ -64,7 +64,7 @@ install(TARGETS tron_side_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 # The dock marker seen by the rear camera, a process of its own: a crash in the USB camera takes nothing else along.
 add_library(tron_rear_node_lib STATIC src/rear_node.cpp)
-target_link_libraries(tron_rear_node_lib tron_vision_core tron_video_out_lib tron_mcu::tron_mcu_core
+target_link_libraries(tron_rear_node_lib tron_vision_core tron_video_out_lib mowbite_serial::mowbite_serial
   mowbite_watch::mowbite_watch)
 ament_target_dependencies(tron_rear_node_lib rclcpp mowbite_msgs sensor_msgs std_msgs diagnostic_msgs)
 add_executable(tron_rear_node src/rear_node_main.cpp)

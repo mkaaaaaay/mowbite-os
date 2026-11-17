@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "tron_mcu/serial_port.h"
+#include "mowbite_serial/serial_port.h"
 
 namespace {
 
@@ -50,7 +50,7 @@ class PtyTest : public ::testing::Test {
 };
 
 TEST_F(PtyTest, ReadOnlyReadsAndSendsNothing) {
-  tron::SerialPort port;
+  mowbite_serial::SerialPort port;
   std::string error;
   ASSERT_TRUE(port.Open(path_, 115200, error, true)) << error;
   const std::string frame = "\xA5\x08\x0A\x5A\n";
@@ -69,7 +69,7 @@ TEST_F(PtyTest, ReadOnlyReadsAndSendsNothing) {
 }
 
 TEST_F(PtyTest, ReadWriteWrites) {
-  tron::SerialPort port;
+  mowbite_serial::SerialPort port;
   std::string error;
   ASSERT_TRUE(port.Open(path_, 115200, error)) << error;
   EXPECT_TRUE(port.Write({0xA5, 0x00, 0x5A}));

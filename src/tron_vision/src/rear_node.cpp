@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "tron_mcu/serial_port.h"
+#include "mowbite_serial/serial_port.h"
 
 namespace tron_vision {
 
@@ -136,7 +136,7 @@ RearNode::RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seam
 
   RearCameraConfig camera;
   camera.device = declare_parameter("device", camera.device);
-  camera.processes_using = tron::ProcessesUsing;
+  camera.processes_using = mowbite_serial::ProcessesUsing;
   camera.control_retried = [this](const std::string& error, int tries, bool taken) {
     LogControl(error, tries, taken);
   };

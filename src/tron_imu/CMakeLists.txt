@@ -12,7 +12,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(mowbite_component REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(tron_mcu REQUIRED)
+find_package(mowbite_serial REQUIRED)
 find_package(mowbite_watch REQUIRED)
 
 # WIT parser and mounting rotation without ROS, testable on any machine.
@@ -23,7 +23,7 @@ target_include_directories(tron_imu_core PUBLIC
 set_target_properties(tron_imu_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(tron_imu_component SHARED src/imu_node.cpp)
-target_link_libraries(tron_imu_component tron_imu_core tron_mcu::tron_mcu_core mowbite_watch::mowbite_watch)
+target_link_libraries(tron_imu_component tron_imu_core mowbite_serial::mowbite_serial mowbite_watch::mowbite_watch)
 ament_target_dependencies(tron_imu_component rclcpp rclcpp_components sensor_msgs)
 mowbite_component_register(tron_imu_component
   PLUGIN "tron_imu::ImuNode"

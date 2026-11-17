@@ -1,5 +1,5 @@
-#ifndef TRON_MCU_SERIAL_PORT_H
-#define TRON_MCU_SERIAL_PORT_H
+#ifndef MOWBITE_SERIAL_SERIAL_PORT_H
+#define MOWBITE_SERIAL_SERIAL_PORT_H
 
 #include <sys/types.h>
 
@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace tron {
+namespace mowbite_serial {
 
 // Raw 8N1 port without flow control.
 class SerialPort {
@@ -38,6 +38,6 @@ class SerialPort {
 // Process ids (other than our own) that have the device open. Only processes in our pid namespace are visible.
 std::vector<int> ProcessesUsing(const std::string& path);
 
-}  // namespace tron
+}  // namespace mowbite_serial
 
-#endif  // TRON_MCU_SERIAL_PORT_H
+#endif  // MOWBITE_SERIAL_SERIAL_PORT_H

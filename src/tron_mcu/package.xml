@@ -16,6 +16,7 @@
   <depend>diagnostic_msgs</depend>
   <depend>mowbite_msgs</depend>
   <depend>mowbite_hold</depend>
+  <depend>mowbite_serial</depend>
   <depend>mowbite_journal</depend>
   <test_depend>ament_cmake_gtest</test_depend>
 

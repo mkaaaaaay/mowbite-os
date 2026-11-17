@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "tron_mcu/serial_port.h"
+#include "mowbite_serial/serial_port.h"
 #include "tron_vision/encoder_library.h"
 
 namespace tron_vision {
@@ -77,7 +77,7 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   StereoCameraConfig camera;
   camera.capture_device = declare_parameter("capture_device", camera.capture_device);
   camera.stream_name = declare_parameter("stream_name", camera.stream_name);
-  camera.processes_using = tron::ProcessesUsing;
+  camera.processes_using = mowbite_serial::ProcessesUsing;
   if (seams.adjust) seams.adjust(config, camera);
 
   RtspConfig rtsp;

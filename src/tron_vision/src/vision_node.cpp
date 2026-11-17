@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "tron_mcu/serial_port.h"
+#include "mowbite_serial/serial_port.h"
 
 namespace tron_vision {
 
@@ -112,7 +112,7 @@ VisionNode::VisionNode(const rclcpp::NodeOptions& options, std::unique_ptr<Camer
   hardware.sensor_name = declare_parameter("sensor_name", hardware.sensor_name);
   hardware.video_device = declare_parameter("video_device", hardware.video_device);
   hardware.vertical_blanking = static_cast<int>(declare_parameter("vertical_blanking", hardware.vertical_blanking));
-  hardware.processes_using = tron::ProcessesUsing;
+  hardware.processes_using = mowbite_serial::ProcessesUsing;
   video_ = std::make_unique<VideoOut>(*this, int64_t{8556});
   video_->Configure(hardware, config.video);
   uint32_t jpeg_width = 0;

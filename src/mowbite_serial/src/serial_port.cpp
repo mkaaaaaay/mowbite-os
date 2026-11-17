@@ -1,4 +1,4 @@
-#include "tron_mcu/serial_port.h"
+#include "mowbite_serial/serial_port.h"
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -14,7 +14,7 @@
 
 #include "mowbite_hold/file_io.h"
 
-namespace tron {
+namespace mowbite_serial {
 
 namespace {
 
@@ -171,4 +171,4 @@ std::vector<int> ProcessesUsing(const std::string& path) {
   return pids;
 }
 
-}  // namespace tron
+}  // namespace mowbite_serial
