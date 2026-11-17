@@ -214,6 +214,8 @@ class Program {
     // imu: gravity at the start of the step, the filtered one of now, and the turn since the part began (rad).
     int rest_count = 0;
     double rest[3] = {0, 0, 0};
+    // The first imu/data of the run, from which the rest is taken; below 0 before it.
+    double rest_began = -1;
     double gravity[3] = {0, 0, 0};
     bool gravity_known = false;
     double yaw = 0;

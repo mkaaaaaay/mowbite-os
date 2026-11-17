@@ -903,6 +903,24 @@ TEST(Program, TheImuShowsEveryMoveWithItsSign) {
   EXPECT_EQ(bench.StepState("imu")["state"], "ok");
 }
 
+TEST(Program, TheRestOfTheImuCountsFromItsFirstSample) {
+  // The first sample comes later than the rest lasts, as after a start whose record took long to write.
+  Bench bench;
+  bench.imu_on = false;
+  ASSERT_EQ(bench.Refused(bench.Start("imu")), "");
+  bench.Run(0.8);
+  bench.imu_on = true;
+  bench.Run(0.8);
+  const json step = bench.StepState("imu");
+  EXPECT_EQ(step["state"], "running");
+  EXPECT_EQ(step["parts"][0]["state"], "waiting");
+  EXPECT_TRUE(step["blocked"].empty()) << step["blocked"].dump();
+  bench.imu.ax = 9.81 * std::sin(15 * M_PI / 180);
+  bench.imu.az = 9.81 * std::cos(15 * M_PI / 180);
+  bench.Run(1.5);
+  EXPECT_EQ(bench.StepState("imu")["parts"][0]["state"], "ok");
+}
+
 TEST(Program, AnImuTheWrongWayRoundFails) {
   {
     Bench bench;

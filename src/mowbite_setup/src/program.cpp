@@ -348,7 +348,9 @@ void Program::OnImu(const ImuSample& sample, double now) {
   const double a[3] = {sample.ax, sample.ay, sample.az};
   const double dt = run.last_imu < 0 ? 0.0 : std::clamp(now - run.last_imu, 0.0, 0.1);
   run.last_imu = now;
-  if (now - run.began <= kRestTime) {
+  // From the first sample, not from the start: a start that took long to save would leave the rest without one.
+  if (run.rest_began < 0) run.rest_began = now;
+  if (now - run.rest_began <= kRestTime) {
     for (int i = 0; i < 3; ++i) run.rest[i] += a[i];
     ++run.rest_count;
   }
@@ -1151,7 +1153,7 @@ void Program::TickImu(double now, double wall) {
     Fail("NO_DATA", "No imu/data", {{"source", "imu/data"}}, now, wall);
     return;
   }
-  if (now - run.began <= kRestTime) {
+  if (run.rest_began < 0 || now - run.rest_began <= kRestTime) {
     // The time of the part counts from the end of the rest.
     run.part_began = now;
     return;
@@ -1518,7 +1520,7 @@ json Program::Blocked(const Step& step, double now) const {
     if (!rest) return blocked;
     if (part.move == "tilt_stop") {
       if ((hardware_.emergency_reason & TiltBit()) != 0) add("EMERGENCY", "The emergency TILT is still latched");
-    } else if (now - run.began > kRestTime) {
+    } else if (run.rest_began >= 0 && now - run.rest_began > kRestTime) {
       add("INPUT_ACTIVE", "The mower does not stand level yet");
     }
     return blocked;
