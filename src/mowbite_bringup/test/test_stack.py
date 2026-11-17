@@ -275,6 +275,16 @@ def test_no_parameter_file_names_a_limit_of_the_watch():
         assert "watch" not in open(path).read().lower(), path
 
 
+# The three readers of the safety measurement find the lock of the setup program in data_dir.
+def test_the_readers_of_the_safety_measurement_get_data_dir(start, tmp_path):  # noqa: F811
+    for platform in layers.platforms():
+        built = start(platform)
+        for name in ("mowbite_safety", "mowbite_logic", "mowbite_follower", "mowbite_setup"):
+            parameters = next(k for k in built.components if k["name"] == name)["parameters"]
+            dirs = [str(p["data_dir"]) for p in parameters if isinstance(p, dict) and "data_dir" in p]
+            assert dirs == [str(tmp_path)], (platform, name, dirs)
+
+
 def geometry_file(folder, text="mowbite_logic: {ros__parameters: {geometry: {platform: some_mower}}}"):
     (folder / "geometry.yaml").write_text(text)
 

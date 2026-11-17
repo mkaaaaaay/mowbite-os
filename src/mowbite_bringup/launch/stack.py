@@ -216,7 +216,7 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=N
         parameters=[*files, {"data_dir": data_dir}])
     follower = ComposableNode(
         package="mowbite_follower", plugin="mowbite_follower::FollowerNode", name="mowbite_follower",
-        parameters=[*files])
+        parameters=[*files, {"data_dir": data_dir}])
     # Corrections from <data_dir>/ntrip.yaml for the GNSS of the platform; without the file it only reports "off".
     ntrip = ComposableNode(
         package="mowbite_ntrip", plugin="mowbite_ntrip::NtripNode", name="mowbite_ntrip",

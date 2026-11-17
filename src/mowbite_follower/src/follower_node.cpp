@@ -4,6 +4,7 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <memory>
 #include <mowbite_component/node_options.h>
+#include <mowbite_hold/lock.h>
 #include <mowbite_msgs/action/follow_path.hpp>
 #include <mowbite_msgs/msg/robot_pose.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
@@ -127,6 +128,10 @@ class FollowerNode : public rclcpp::Node {
     }
     geofence_margin_ = declare_parameter("geofence_margin", 0.5);
     const double rate = declare_parameter("control_rate", 20.0);
+    // The lock of the setup program, looked at with every step of a path; empty without data_dir.
+    const std::string data_dir = declare_parameter("data_dir", std::string());
+    lock_watch_ = std::make_unique<mowbite_hold::SafetyLockWatch>(
+        data_dir.empty() ? "" : data_dir + "/" + mowbite_hold::kSafetyLockFile);
 
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("follower/cmd_vel", 10);
     dock_cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("follower/dock_cmd_vel", 10);
@@ -156,7 +161,7 @@ class FollowerNode : public rclcpp::Node {
         "hw/capabilities", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
         [this](const mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          safety_measured_ = !msg->safety_measurement_date.empty();
+          safety_date_ = msg->safety_measurement_date;
           // A limit of 0 (max_duty 0) lets nothing move: the guard stops every path, the planner gets no speeds.
           driver_moves_ = msg->max_linear_speed > 0 && msg->max_angular_speed > 0;
           // The tighter of the driver's limits and our own.
@@ -307,7 +312,7 @@ class FollowerNode : public rclcpp::Node {
           dock_max_position_accuracy_ + dock_accuracy_per_m_ * std::hypot(pose.pose.x, pose.pose.y);
     }
     GuardInput in;
-    in.safety_measured = safety_measured_;
+    in.safety_measured = mowbite_hold::SafetyMeasured(safety_date_, lock_watch_->Poll());
     in.driver_moves = driver_moves_;
     in.hw_age = hw_time_ ? now - *hw_time_ : 1e9;
     in.emergency = emergency_;
@@ -462,7 +467,9 @@ class FollowerNode : public rclcpp::Node {
   PoseInput dock_pose_;
   bool emergency_ = true;
   std::optional<double> hw_time_;
-  bool safety_measured_ = false;
+  // The safety measurement date of hw/capabilities, empty until they came; with the lock it makes the one rule.
+  std::string safety_date_;
+  std::unique_ptr<mowbite_hold::SafetyLockWatch> lock_watch_;
   bool driver_moves_ = false;
   double driver_max_linear_ = 1e9;
   double driver_max_angular_ = 1e9;

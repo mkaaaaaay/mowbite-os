@@ -64,6 +64,10 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   data_dir_ = declare_parameter("data_dir", std::string());
   // system.hold of the updater; the drivers read the same file themselves.
   hold_path_ = data_dir_.empty() ? "" : data_dir_ + "/hold.json";
+  // The lock of the setup program, looked at every 100 ms with the blade; empty without data_dir.
+  lock_watch_ = std::make_unique<mowbite_hold::SafetyLockWatch>(
+      data_dir_.empty() ? "" : data_dir_ + "/" + mowbite_hold::kSafetyLockFile);
+  lock_watch_->Poll();
   RestoreHold();
   LoadLogicParams();
   LoadGeometryEntries();
@@ -264,7 +268,11 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
       "hw/capabilities", LatchedQos(1), [this](const mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr& msg) {
         {
           std::lock_guard<std::mutex> lock(mutex_);
-          core_.Call<&LogicCore::OnCapabilities>(!msg->safety_measurement_date.empty(), msg->charge_stop);
+          safety_date_ = msg->safety_measurement_date;
+          charge_stop_ = msg->charge_stop;
+          safety_told_.reset();
+          lock_watch_->Poll();
+          TellSafetyLocked();
           blade_lease_max_s_ = msg->blade_lease_max_s;
           blade_height_control_ = msg->blade_height_control;
           blade_height_min_mm_ = msg->blade_height_min_mm;

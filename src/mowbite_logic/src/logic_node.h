@@ -52,6 +52,7 @@
 #include <mowbite_hold/file_io.h>
 #include <mowbite_hold/file_writer.h>
 #include <mowbite_hold/hold.h>
+#include <mowbite_hold/lock.h>
 #include <mowbite_hold/restart.h>
 #include <map>
 #include <memory>
@@ -148,6 +149,9 @@ class LogicNode : public rclcpp::Node {
   void FollowJobPath(const JobPath& path, size_t start_index);
   void UpdateBlade();
   void UpdateBladeLocked();
+  // Tells the core the safety measurement by the one rule (date and lock) when it changed; true if it did. Called with
+  // the mutex held.
+  bool TellSafetyLocked();
   void SendBlade(bool on, uint16_t height_mm);
   void JudgeRestart(const std::string& crash_record);
   bool WriteSession(bool clean);
@@ -319,6 +323,12 @@ class LogicNode : public rclcpp::Node {
   double blade_lease_s_ = 1.0;
   double blade_renew_s_ = 0.5;
   float blade_lease_max_s_ = 0;
+  // The safety measurement: the date of hw/capabilities (none until they came), the lock of the setup program in
+  // data_dir, and what the core was told last.
+  std::optional<std::string> safety_date_;
+  bool charge_stop_ = false;
+  std::unique_ptr<mowbite_hold::SafetyLockWatch> lock_watch_;
+  std::optional<bool> safety_told_;
   // Height range of hw/capabilities, none until they came; the height of the blade's run, taken at its start.
   bool blade_height_control_ = false;
   uint16_t blade_height_min_mm_ = 0;
