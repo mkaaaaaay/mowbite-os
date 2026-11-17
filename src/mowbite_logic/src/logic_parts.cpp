@@ -149,4 +149,16 @@ void LogicCore::FinishRun() {
   schedule_.FinishRun(CoreAccess(*this));
 }
 
+Reason LogicCore::HomeWhy(HomeReason reason) const {
+  return home_.HomeWhy(CoreFacts(*this), reason);
+}
+
+void LogicCore::SetSunsetSettings(bool dock_at_sunset) {
+  home_.SetSunsetSettings(CoreFacts(*this), dock_at_sunset);
+}
+
+void LogicCore::TrySunset(double now_s) {
+  home_.TrySunset(CoreAccess(*this), now_s);
+}
+
 }  // namespace mowbite_logic

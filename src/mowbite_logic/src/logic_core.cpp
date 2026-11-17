@@ -626,9 +626,7 @@ void LogicCore::SetState(State state) {
     gps_good_since_.reset();
   }
   if (state_ == State::kMowing || state == State::kMowing) {
-    home_.Reset();
-    sunset_due_.reset();
-    sunset_try_ = sunset_tried_ = sunset_told_ = false;
+    home_.StartOver();
   }
   // Entering and leaving both start from nothing; what was not saved is gone, like with OpenMower.
   recording_.recorder().Reset();

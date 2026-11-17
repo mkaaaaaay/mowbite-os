@@ -66,6 +66,22 @@ Reason CoreFacts::ScheduleProblem(const StartRequest& request, const ScheduleRun
   return read_->ScheduleProblem(request, run, now_s);
 }
 
+bool CoreFacts::SunsetWanted() const {
+  return read_->SunsetWanted();
+}
+
+bool CoreFacts::clock_safe() const {
+  return read_->clock_safe_;
+}
+
+const std::string& CoreFacts::clock_reason() const {
+  return read_->clock_reason_;
+}
+
+const std::optional<std::pair<double, double>>& CoreFacts::datum() const {
+  return read_->datum_;
+}
+
 EffectQueue& CoreAccess::effects() {
   return core_->effects_;
 }
@@ -75,7 +91,7 @@ std::string& CoreAccess::client() {
 }
 
 HomeWatch& CoreAccess::home() {
-  return core_->home_;
+  return core_->home_.watch();
 }
 
 std::string CoreAccess::AddEvent(const std::string& type, json details) {

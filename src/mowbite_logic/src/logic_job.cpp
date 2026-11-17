@@ -77,7 +77,7 @@ void LogicCore::StartMowing() {
   announced_area_.clear();
   SetState(State::kMowing);
   SetRunPhase(RunPhase::kMowing);
-  sunset_try_ = true;
+  home_.TryAgain();
   CheckpointNow();
 }
 

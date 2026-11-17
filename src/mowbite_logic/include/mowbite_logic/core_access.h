@@ -3,6 +3,7 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "mowbite_logic/logic_types.h"
 
@@ -31,6 +32,10 @@ class CoreFacts {
   double clock_offset() const;
   std::string InvalidRun(const ScheduleRun& run) const;
   Reason ScheduleProblem(const StartRequest& request, const ScheduleRun& run, double now_s) const;
+  bool SunsetWanted() const;
+  bool clock_safe() const;
+  const std::string& clock_reason() const;
+  const std::optional<std::pair<double, double>>& datum() const;
 
  private:
   const LogicCore* read_;

@@ -109,12 +109,12 @@ std::optional<double> LogicCore::PlanAngle() const {
 }
 
 bool LogicCore::SunsetWanted() const {
-  if (!schedule_.run()) return sunset_on_;
+  if (!schedule_.run()) return home_.sunset_on();
   return !schedule_.run()->request.dark_allowed || schedule_.run()->request.until_sunset;
 }
 
 Reason LogicCore::DeadlineDue(double now_s) {
-  if (sunset_due_ && now_s >= *sunset_due_) return DarkWhy(now_s);
+  if (home_.sunset_due() && now_s >= *home_.sunset_due()) return DarkWhy(now_s);
   if (!schedule_.run() || !schedule_.run()->end_due || now_s < *schedule_.run()->end_due) return {};
   schedule_.run()->end_passed = true;
   return Reason("SCHEDULE", "the time of the plan is over").With("detail", "end");

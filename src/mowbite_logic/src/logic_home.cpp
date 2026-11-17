@@ -41,46 +41,12 @@ void LogicCore::SetHomeSettings(int rain_mode, double rain_check_seconds, double
   config_.rain_check_seconds = rain_check_seconds;
   config_.motor_hot_temperature = motor_hot_temperature;
   config_.motor_cold_temperature = motor_cold_temperature;
-  home_.SetConfig(HomeRules());
-}
-
-Reason LogicCore::HomeWhy(HomeReason reason) const {
-  char text[160];
-  switch (reason) {
-    case HomeReason::kBatteryCritical:
-      std::snprintf(text, sizeof(text), "the battery at %.1f V stayed below %.1f V for %.0f s",
-                    hw_.battery_voltage, config_.battery_critical_voltage, config_.battery_critical_time);
-      return Reason("BATTERY_CRITICAL", text)
-          .With("battery_voltage", hw_.battery_voltage)
-          .With("limit", config_.battery_critical_voltage);
-    case HomeReason::kBatteryHot:
-      std::snprintf(text, sizeof(text), "the battery at %d °C, %.0f °C or more", hw_.battery_temperature,
-                    config_.battery_hot_temperature);
-      return Reason("BATTERY_HOT", text)
-          .With("temperature", static_cast<int>(hw_.battery_temperature))
-          .With("limit", config_.battery_hot_temperature);
-    case HomeReason::kBatteryLow:
-      std::snprintf(text, sizeof(text), "the battery stayed below %.1f V for %.0f s (at most %.1f V)",
-                    config_.battery_empty_voltage, config_.battery_low_window, home_.WindowVoltage());
-      return Reason("BATTERY_LOW", text)
-          .With("battery_voltage", home_.WindowVoltage())
-          .With("limit", config_.battery_empty_voltage);
-    case HomeReason::kMotorHot:
-      std::snprintf(text, sizeof(text), "the blade motor at %d °C, %.0f °C or more",
-                    hw_.blade.temperature, config_.motor_hot_temperature);
-      return Reason("MOTOR_HOT", text)
-          .With("temperature", static_cast<int>(hw_.blade.temperature))
-          .With("limit", config_.motor_hot_temperature);
-    case HomeReason::kRain:
-    default:
-      std::snprintf(text, sizeof(text), "rain for %.0f s", config_.rain_check_seconds);
-      return Reason("RAIN", text);
-  }
+  home_.watch().SetConfig(HomeRules());
 }
 
 void LogicCore::BatteryEndsMowing(HomeReason reason) {
   const bool critical = reason == HomeReason::kBatteryCritical;
-  const double voltage = critical ? hw_.battery_voltage : home_.WindowVoltage();
+  const double voltage = critical ? hw_.battery_voltage : home_.watch().WindowVoltage();
   const double limit = critical ? config_.battery_critical_voltage : config_.battery_empty_voltage;
   AddEvent("BATTERY_LOW", {{"battery_voltage", voltage}, {"limit", limit}});
   RunEnds("BATTERY_LOW");
@@ -89,13 +55,13 @@ void LogicCore::BatteryEndsMowing(HomeReason reason) {
 }
 
 void LogicCore::WatchHome(double now_s) {
-  home_.OnSample(HomeSampleOf(hw_, now_s));
-  if (sunset_try_) TrySunset(now_s);
+  home_.watch().OnSample(HomeSampleOf(hw_, now_s));
+  if (home_.sunset_try()) TrySunset(now_s);
   ActOnHome(DeadlineDue(now_s));
 }
 
 void LogicCore::ActOnHome(const Reason& dark) {
-  const std::vector<HomeReason> due = home_.Due();
+  const std::vector<HomeReason> due = home_.watch().Due();
   if (due.empty() && dark.empty()) return;
   const Reason first = due.empty() ? dark : HomeWhy(due.front());
   // A pause that waits for the user never goes home: the user may stand at the mower (G11).
@@ -121,7 +87,7 @@ void LogicCore::ActOnHome(const Reason& dark) {
 
 Reason LogicCore::ContinueProblem() const {
   if (HomeReachable()) return {};
-  for (HomeReason reason : home_.Due()) {
+  for (HomeReason reason : home_.watch().Due()) {
     if (reason == HomeReason::kRain || reason == HomeReason::kBatteryHot || reason == HomeReason::kMotorHot) {
       Reason why = HomeWhy(reason);
       why.message = "Not while it cannot go home: " + why.message;
@@ -134,59 +100,20 @@ Reason LogicCore::ContinueProblem() const {
 void LogicCore::ResumedByUser() {
   // The user took over: deadlines that came are dropped, those to come stay.
   if (schedule_.run() && schedule_.run()->end_passed) schedule_.run()->end_due.reset();
-  sunset_due_.reset();
-  sunset_try_ = true;
+  home_.Resumed();
   ActOnHome(Reason());
-}
-
-void LogicCore::SetSunsetSettings(bool dock_at_sunset) {
-  sunset_on_ = dock_at_sunset;
-  if (!SunsetWanted()) {
-    sunset_due_.reset();
-    sunset_tried_ = sunset_told_ = false;
-  }
-  sunset_try_ = true;
 }
 
 void LogicCore::OnClock(bool safe, const std::string& reason, double unix_minus_mono_s) {
   clock_safe_ = safe;
   clock_reason_ = reason;
   clock_offset_ = unix_minus_mono_s;
-  sunset_try_ = true;
+  home_.TryAgain();
 }
 
 void LogicCore::OnDatum(double latitude, double longitude) {
   datum_ = std::make_pair(latitude, longitude);
-  sunset_try_ = true;
-}
-
-void LogicCore::TrySunset(double now_s) {
-  sunset_try_ = false;
-  if (!SunsetWanted() || sunset_due_) return;
-  const bool first = !std::exchange(sunset_tried_, true);
-  std::string missing;
-  if (!clock_safe_) missing = "the clock is not safe (" + clock_reason_ + ")";
-  else if (!datum_) missing = "no datum";
-  if (!missing.empty()) {
-    if (first) {
-      sunset_told_ = true;
-      Notify("No going home at sunset yet: " + missing);
-    }
-    return;
-  }
-  // The first sunset after now; before it lies daylight, whenever the run started.
-  const double unix_s = now_s + clock_offset_;
-  for (const double day : {unix_s, unix_s + 86400.0}) {
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access): missing is set above when datum_ is empty
-    const mowbite_time::SunDay sun = mowbite_time::SunTimes(datum_->first, datum_->second, day);
-    if (sun.set && *sun.set > unix_s) {
-      sunset_due_ = *sun.set - clock_offset_;
-      if (std::exchange(sunset_told_, false)) Notify("Going home at sunset after all");
-      return;
-    }
-  }
-  // No sunset within two days (polar day or night): the next clock tries again; until then the run saw no light to
-  // lose, like a start in the dark.
+  home_.TryAgain();
 }
 
 Reason LogicCore::DarkWhy(double now_s) const {

@@ -16,6 +16,7 @@
 #include "mowbite_logic/calibration_part.h"
 #include "mowbite_logic/core_access.h"
 #include "mowbite_logic/docking.h"
+#include "mowbite_logic/going_home_part.h"
 #include "mowbite_logic/home_watch.h"
 #include "mowbite_logic/logic_types.h"
 #include "mowbite_logic/marker_dock.h"
@@ -687,22 +688,15 @@ class LogicCore {
   std::string announced_area_;
   std::optional<double> spinup_since_;
   std::optional<double> gps_good_since_;
-  // The rules of going home while mowing or calibrating.
-  HomeWatch home_;
+  GoingHomePart home_;
   SchedulePart schedule_;
   // Why the next skip of an area is made: MANUAL by the app, SCHEDULE for a pause of the schedule.
   Reason skip_why_;
-  // The sunset: the switch, the clock and the datum it needs, and the deadline of this run (monotonic s), due once
-  // more after a start, a continue, a clock or a datum. sunset_told_: the first try of the run could not reckon it.
-  bool sunset_on_ = false;
+  // The clock and the datum the sunset needs.
   bool clock_safe_ = false;
   std::string clock_reason_ = "no_report";
   double clock_offset_ = 0;
   std::optional<std::pair<double, double>> datum_;
-  std::optional<double> sunset_due_;
-  bool sunset_try_ = false;
-  bool sunset_tried_ = false;
-  bool sunset_told_ = false;
   double last_checkpoint_s_ = 0;
   bool blades_running_ = false;
   // The reason of StartProblem() at the last actions, empty while a start would go.
