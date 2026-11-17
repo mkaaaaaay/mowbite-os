@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_bridge/app_json.h"
 
 namespace mowbite_bridge {
@@ -12,8 +13,10 @@ namespace mowbite_bridge {
 // The mowing track of position.history, kept on disk as <dir>/<epoch>_<job_id>.jsonl.
 class MowTrack {
  public:
-  // Files older than max_days and the oldest over max_bytes go, never the one of the current job.
-  MowTrack(std::string dir, double max_days, std::uintmax_t max_bytes);
+  // Files older than max_days and the oldest over max_bytes go, never the one of the current job. An answer of
+  // History stays below answer_bytes.
+  MowTrack(std::string dir, double max_days, std::uintmax_t max_bytes,
+           std::size_t answer_bytes = mowbite_api::kHistoryMaxAnswerBytes);
 
   // At start: the newest file is the current job, without a session until the next STATE event.
   void Open(double now);
@@ -29,6 +32,7 @@ class MowTrack {
   PoseAttributes Attributes() const;
 
   // position.history: {"job_id"} or none for the current job; {segments, buffer}, {"error": "not found"} if unknown.
+  // Too big an answer keeps only every n-th point, first and last of each run, and gets "thinned": true.
   Json History(const Json& params) const;
   // position.history.list: [{job_id, timestamp}], newest first.
   Json List() const;
@@ -62,11 +66,12 @@ class MowTrack {
   void Trim(double now);
   std::vector<JobFile> Scan() const;
   static std::vector<Run> Load(const std::string& path);
-  static Json Render(const std::vector<Run>& runs, const std::vector<Point>& open);
+  Json Render(const std::vector<Run>& runs, const std::vector<Point>& open) const;
 
   std::string dir_;
   double max_days_;
   std::uintmax_t max_bytes_;
+  std::size_t answer_bytes_;
   std::string job_id_;
   std::string session_id_;
   bool blades_ = false;

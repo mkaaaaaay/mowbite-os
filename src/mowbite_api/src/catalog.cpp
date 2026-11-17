@@ -650,7 +650,11 @@ const std::vector<Method>& Methods() {
       {"events.history", "mowbite_bridge", "The events of one local day as events/json sent them",
        Object("params", "None for today; [\"YYYYMMDD\"] works as well",
               {Text("date", "The day as YYYYMMDD", false)}, false),
-       List("result", "Events, oldest first; none for an unknown day", Type::kObject), ""},
+       List("result",
+            "Events, oldest first; none for an unknown day; over " + std::to_string(kHistoryMaxAnswerBytes) +
+                " bytes the oldest of the day are left out",
+            Type::kObject),
+       ""},
       {"system.stats", "mowbite_bridge",
        "Memory, disks, load, temperature, uptime and network of the machine the OS runs on, with the keys and units "
        "of system.cgi of the app; a value that cannot be read is left out",
@@ -684,6 +688,10 @@ const std::vector<Method>& Methods() {
                      List("points", "Points [x, y] in m", Type::kArray)},
                     false),
                List("buffer", "Points [x, y] in m not yet in a segment", Type::kArray, false),
+               Bool("thinned",
+                    "true when only every n-th point is in the answer (first and last of each stretch stay), so it "
+                    "stays below " + std::to_string(kHistoryMaxAnswerBytes) + " bytes",
+                    false),
                Text("error", "not found for an unknown job", false, {"not found"})}),
        ""},
       {"position.history.list", "mowbite_bridge", "The jobs with a track", NoParams(),
@@ -909,7 +917,7 @@ const std::vector<Method>& Methods() {
        Object("params", "None for all", {Client(), Text("id", "The incident", false)}, false), Deleted(), ""},
       {"sensors.history", "mowbite_stats",
        "Min, mean and max of the number sensors per step over the last " + std::to_string(kSensorsHistoryHours) +
-           " h; the answer stays below " + std::to_string(kSensorsHistoryMaxAnswerBytes) +
+           " h; the answer stays below " + std::to_string(kHistoryMaxAnswerBytes) +
            " bytes: the step grows to " + HistorySteps(1) + ", then the oldest points go",
        Object("params", "None: all number sensors over the last " + std::to_string(kSensorsHistoryHours) + " h",
               {Client(), List("sensor_ids", "Sensor ids, none for all; ids the history does not know are left out",

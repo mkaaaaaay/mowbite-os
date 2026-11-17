@@ -236,11 +236,12 @@ constexpr int kNotifyMaxPushes = 10;
 constexpr char kNotifyTopicPattern[] = "^[A-Za-z0-9_-]{0,64}$";
 constexpr int kStatsMaxDueHours = 10000;
 constexpr int kStatsMaxAnswerHours = 9000;
-// sensors.history: hours kept, the steps (s) from small to large, and the most bytes of an answer (MQTT ends at 2 MB).
+// The most bytes of the answer of sensors.history, position.history and events.history (MQTT ends at 2 MB).
+constexpr int kHistoryMaxAnswerBytes = 900000;
+// sensors.history: hours kept and the steps (s) from small to large.
 constexpr int kSensorsHistoryHours = 48;
 constexpr int kSensorsHistorySteps[] = {60, 300, 900};
 constexpr int kSensorsHistoryMaxStep = kSensorsHistorySteps[std::size(kSensorsHistorySteps) - 1];
-constexpr int kSensorsHistoryMaxAnswerBytes = 900000;
 // incidents.*: the most bytes of a timeline in incidents.get, of a piece of incidents.download (raw, before base64) and
 // characters of the note of incidents.mark.
 constexpr int kIncidentTimelineBytes = 65536;

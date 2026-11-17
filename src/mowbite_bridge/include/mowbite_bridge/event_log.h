@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_bridge/json_rpc.h"
 
 namespace mowbite_bridge {
@@ -13,12 +14,15 @@ namespace mowbite_bridge {
 class EventLog {
  public:
   // Without a directory nothing is kept. At most max_days files (the oldest go first) and max_bytes over all of them.
-  EventLog(std::string dir, std::size_t max_days, std::uintmax_t max_bytes);
+  // An answer of Read stays below answer_bytes.
+  EventLog(std::string dir, std::size_t max_days, std::uintmax_t max_bytes,
+           std::size_t answer_bytes = mowbite_api::kHistoryMaxAnswerBytes);
 
   // Appends one event to the file of today; over the byte limit older days go first.
   void Write(const Json& event, double now);
 
   // events.history: params {"date": "YYYYMMDD"} or ["YYYYMMDD"], none for today; an unknown or invalid day gives [].
+  // Too big an answer leaves out the oldest events of the day.
   Json Read(const Json& params, double now) const;
   // events.history.list: the days, newest first.
   Json List() const;
@@ -41,6 +45,7 @@ class EventLog {
   std::string dir_;
   std::size_t max_days_;
   std::uintmax_t max_bytes_;
+  std::size_t answer_bytes_;
   std::string trimmed_for_;
 };
 

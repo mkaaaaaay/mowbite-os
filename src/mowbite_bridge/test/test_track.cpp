@@ -27,8 +27,9 @@ class TrackTest : public ::testing::Test {
     fs::remove_all(dir_);
   }
 
-  MowTrack Make(double days = 60, std::uintmax_t bytes = 50000000) {
-    MowTrack track(dir_.string(), days, bytes);
+  MowTrack Make(double days = 60, std::uintmax_t bytes = 50000000,
+                std::size_t answer_bytes = mowbite_api::kHistoryMaxAnswerBytes) {
+    MowTrack track(dir_.string(), days, bytes, answer_bytes);
     track.Open(now_);
     return track;
   }
@@ -107,6 +108,31 @@ TEST_F(TrackTest, AStraightLineShrinksAndTheRestIsTheBuffer) {
   // The buffer goes on from the last kept point to the newest position.
   EXPECT_NEAR(h["buffer"].back()[0].get<double>(), 0.03 * 199, 1e-9);
   EXPECT_EQ(h["segments"][0]["attributes"].dump(), R"({"job_id":"job1","session_id":"s1","blades":false})");
+}
+
+TEST_F(TrackTest, TooBigAnAnswerKeepsEveryNthPointWithTheEnds) {
+  // A zigzag keeps every point.
+  const auto zigzag = [this](MowTrack& track) {
+    Session(track, "job1", "s1");
+    for (int i = 0; i < 400; ++i) track.Add(0.1 * i, (i % 2) * 0.5);
+    track.Close();
+  };
+  MowTrack whole = Make();
+  zigzag(whole);
+  const Json full = whole.History(nullptr);
+  EXPECT_FALSE(full.contains("thinned"));
+  fs::remove_all(dir_);
+  MowTrack small = Make(60, 50000000, 3000);
+  zigzag(small);
+  const Json thin = small.History(nullptr);
+  EXPECT_LT(thin.dump().size(), 3000u);
+  EXPECT_EQ(thin.value("thinned", false), true);
+  const Json& all = full["segments"][0]["points"];
+  const Json& kept = thin["segments"][0]["points"];
+  ASSERT_GE(kept.size(), 2u);
+  EXPECT_LT(kept.size(), all.size());
+  EXPECT_EQ(kept.front(), all.front());
+  EXPECT_EQ(kept.back(), all.back());
 }
 
 TEST_F(TrackTest, CornersStay) {

@@ -267,7 +267,7 @@ TEST(SensorHistory, FullHistoryFitsTheLimit) {
   const json answer = h.Query({}, end - 1);
   EXPECT_EQ(answer["step"], 900);
   EXPECT_FALSE(answer["truncated"].get<bool>());
-  EXPECT_LE(answer.dump().size(), static_cast<size_t>(mowbite_api::kSensorsHistoryMaxAnswerBytes));
+  EXPECT_LE(answer.dump().size(), static_cast<size_t>(mowbite_api::kHistoryMaxAnswerBytes));
 }
 
 TEST(SensorHistory, AnswerTooLargeEvenAt900LosesTheOldestPoints) {

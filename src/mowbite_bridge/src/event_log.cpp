@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <ctime>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 
@@ -32,8 +33,8 @@ std::string AskedDay(const Json& params) {
 
 }  // namespace
 
-EventLog::EventLog(std::string dir, std::size_t max_days, std::uintmax_t max_bytes)
-    : dir_(std::move(dir)), max_days_(max_days), max_bytes_(max_bytes) {}
+EventLog::EventLog(std::string dir, std::size_t max_days, std::uintmax_t max_bytes, std::size_t answer_bytes)
+    : dir_(std::move(dir)), max_days_(max_days), max_bytes_(max_bytes), answer_bytes_(answer_bytes) {}
 
 std::string EventLog::DayOf(double t) {
   const std::time_t seconds = static_cast<std::time_t>(t);
@@ -107,10 +108,20 @@ Json EventLog::Read(const Json& params, double now) const {
   if (day.empty()) day = DayOf(now);
   if (day == "-" || dir_.empty()) return events;
   std::ifstream in(PathOf(day));
+  std::deque<std::string> lines;
+  std::size_t bytes = 2;
   std::string line;
   while (std::getline(in, line)) {
     if (NestingDepth(line) > kMaxRequestDepth) continue;
-    Json event = Json::parse(line, nullptr, false);
+    bytes += line.size() + 1;
+    lines.push_back(std::move(line));
+    while (bytes >= answer_bytes_ && !lines.empty()) {
+      bytes -= lines.front().size() + 1;
+      lines.pop_front();
+    }
+  }
+  for (const auto& kept : lines) {
+    Json event = Json::parse(kept, nullptr, false);
     if (event.is_object()) events.push_back(std::move(event));
   }
   return events;

@@ -42,6 +42,17 @@ class EventLogTest : public ::testing::Test {
 
 }  // namespace
 
+TEST_F(EventLogTest, TooBigAnAnswerLeavesOutTheOldest) {
+  EventLog log(dir_.string(), 60, 20000000, 2000);
+  for (int i = 0; i < 100; ++i) log.Write(Json{{"id", std::to_string(i)}, {"t", 1.0}, {"type", "STATE"}}, now_);
+  const Json events = log.Read(nullptr, now_);
+  EXPECT_LT(events.dump().size(), 2000u);
+  ASSERT_GE(events.size(), 10u);
+  EXPECT_LT(events.size(), 100u);
+  EXPECT_EQ(events.back()["id"], "99");
+  EXPECT_EQ(events.front()["id"], std::to_string(100 - events.size()));
+}
+
 // B18
 TEST_F(EventLogTest, OneFilePerDayReadInFileOrder) {
   EventLog log(dir_.string(), 60, 20000000);

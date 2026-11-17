@@ -74,7 +74,7 @@ class SensorHistory {
   // The answer of sensors.history: the smallest step from query.step on whose answer has at most max_bytes; with
   // the largest step the oldest points go until it fits.
   json Query(const HistoryQuery& query, double now,
-             size_t max_bytes = mowbite_api::kSensorsHistoryMaxAnswerBytes) const;
+             size_t max_bytes = mowbite_api::kHistoryMaxAnswerBytes) const;
 
   size_t Bytes() const;
   size_t Buckets() const;

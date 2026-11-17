@@ -6277,7 +6277,7 @@
       "type": "object"
     },
     "events.history.result": {
-      "description": "The result of events.history: Events, oldest first; none for an unknown day",
+      "description": "The result of events.history: Events, oldest first; none for an unknown day; over 900000 bytes the oldest of the day are left out",
       "items": {
         "description": "One item",
         "type": "object"
@@ -8436,6 +8436,10 @@
             "type": "object"
           },
           "type": "array"
+        },
+        "thinned": {
+          "description": "true when only every n-th point is in the answer (first and last of each stretch stay), so it stays below 900000 bytes",
+          "type": "boolean"
         }
       },
       "required": [],

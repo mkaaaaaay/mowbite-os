@@ -57,6 +57,16 @@ Json PointsJson(const Points& points, std::size_t from = 0) {
   return out;
 }
 
+// Every step-th point and the last one.
+template <typename Points>
+Json ThinnedJson(const Points& points, std::size_t step) {
+  Json out = Json::array();
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    if (i % step == 0 || i + 1 == points.size()) out.push_back(Json::array({points[i].x, points[i].y}));
+  }
+  return out;
+}
+
 Json AttributesJson(const PoseAttributes& a) {
   return Json{{"job_id", a.job_id}, {"session_id", a.session_id}, {"blades", a.blades}};
 }
@@ -67,8 +77,8 @@ bool SameAttributes(const PoseAttributes& a, const PoseAttributes& b) {
 
 }  // namespace
 
-MowTrack::MowTrack(std::string dir, double max_days, std::uintmax_t max_bytes)
-    : dir_(std::move(dir)), max_days_(max_days), max_bytes_(max_bytes) {}
+MowTrack::MowTrack(std::string dir, double max_days, std::uintmax_t max_bytes, std::size_t answer_bytes)
+    : dir_(std::move(dir)), max_days_(max_days), max_bytes_(max_bytes), answer_bytes_(answer_bytes) {}
 
 MowTrack::Run MowTrack::NewRun(double now) const {
   Run run;
@@ -109,6 +119,8 @@ std::vector<MowTrack::JobFile> MowTrack::Scan() const {
 
 std::vector<MowTrack::Run> MowTrack::Load(const std::string& path) {
   std::vector<Run> runs;
+  // As many points as a job keeps in memory, whatever the file holds.
+  std::size_t loaded = 0;
   std::ifstream in(path);
   std::string line;
   while (std::getline(in, line)) {
@@ -130,8 +142,10 @@ std::vector<MowTrack::Run> MowTrack::Load(const std::string& path) {
     const auto points = j.find("points");
     if (points == j.end() || !points->is_array()) continue;
     for (const auto& p : *points) {
+      if (loaded >= kMaxKept) break;
       if (p.is_array() && p.size() == 2 && p[0].is_number() && p[1].is_number()) {
         runs.back().points.push_back({p[0].get<double>(), p[1].get<double>()});
+        ++loaded;
       }
     }
   }
@@ -142,12 +156,19 @@ std::vector<MowTrack::Run> MowTrack::Load(const std::string& path) {
   return runs;
 }
 
-Json MowTrack::Render(const std::vector<Run>& runs, const std::vector<Point>& open) {
-  Json segments = Json::array();
-  for (const auto& run : runs) {
-    segments.push_back(Json{{"attributes", AttributesJson(run.attributes)}, {"points", PointsJson(run.points)}});
+Json MowTrack::Render(const std::vector<Run>& runs, const std::vector<Point>& open) const {
+  std::size_t longest = open.size();
+  for (const auto& run : runs) longest = std::max(longest, run.points.size());
+  for (std::size_t step = 1;; step *= 2) {
+    Json segments = Json::array();
+    for (const auto& run : runs) {
+      segments.push_back(
+          Json{{"attributes", AttributesJson(run.attributes)}, {"points", ThinnedJson(run.points, step)}});
+    }
+    Json answer{{"segments", std::move(segments)}, {"buffer", ThinnedJson(open, step)}};
+    if (step > 1) answer["thinned"] = true;
+    if (step >= longest || answer.dump().size() < answer_bytes_) return answer;
   }
-  return Json{{"segments", std::move(segments)}, {"buffer", PointsJson(open)}};
 }
 
 void MowTrack::Open(double now) {
