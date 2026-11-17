@@ -435,7 +435,9 @@ container: the way of a crash, with the node in `container_exit.json` and in UNE
 three crashes in a row the container stays down (`down` true in the note), a run of 10 min counts from 0 again. Keep
 callbacks short, so the limits can come down after measuring; a sign later than a quarter of the limit is logged.
 Limits are never parameters; `MOWBITE_WATCH_FACTOR` only lengthens them for sanitizer runs. A driver in its own
-process is outside this watch and stops the mower by its own timeouts.
+process stops the mower by its own timeouts and has a watch of its own: `Attach(*this, 2.0)` for its executor and a
+`Watch` with the same limit for its I/O thread, signed every round (a read with a timeout, so a quiet port signs too).
+A silent one ends the process (code 86) and the launch starts a latched driver, as after a crash (`tron_mcu`).
 
 ## 5. Onto the mower
 

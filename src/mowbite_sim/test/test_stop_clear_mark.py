@@ -1,7 +1,7 @@
 """STOP cleared during an emergency (G37), here tron_mcu against fake_tron on a pty with STOP kept by the board as on the
 Tron: the mark is on disk before the first clear frame, which comes stop_clear_delay after the latch; a driver killed
 with the mark starts latched (HIGH_LEVEL) and writes the mark again before its own first clear frame, the release
-removes the mark, and a start without it is free.
+removes the mark, and a start without it is free. A driver whose I/O thread hangs ends by its watch.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_stop_clear_mark.py
 """
@@ -31,6 +31,9 @@ MARK = os.path.join(WORK, "stop-clear-mark")
 SENSOR = 10
 DELAY = 1.5
 BOARD = {"stop_latches": 1}
+# mowbite_watch::kExitCode, and the factor its limit of 2 s gets in sanitizer runs.
+WATCH_EXIT = 86
+WATCH_FACTOR = float(os.environ.get("MOWBITE_WATCH_FACTOR", "1"))
 
 
 def generate_test_description():
@@ -160,6 +163,22 @@ class TestStopClearMark(unittest.TestCase):
         self.assertTrue(s, "no telemetry after the restart")
         self.assertFalse(s.emergency, s.emergency_reason)
         self.assertFalse(os.path.exists(MARK))
+
+    def test_f_a_hanging_io_thread_ends_the_driver(self):
+        # A FIFO as the mark: writing it blocks the I/O thread until a reader comes, which never does.
+        self.driver.stop()
+        os.mkfifo(MARK)
+        self.probe.clear()
+        driver = type(self).driver = Driver()
+        self.assertTrue(self.probe.wait(lambda s: s.telemetry_ok and s.emergency, 15), "not latched with the mark")
+        press()
+        try:
+            code = driver.proc.wait(DELAY + 2.0 * WATCH_FACTOR + 4.0)
+        except subprocess.TimeoutExpired:
+            code = None
+        else:
+            type(self).driver = None
+        self.assertEqual(code, WATCH_EXIT, "the driver did not end by its watch")
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_hold REQUIRED)
 find_package(mowbite_serial REQUIRED)
 find_package(mowbite_journal REQUIRED)
+find_package(mowbite_watch REQUIRED)
 
 # Codec, control logic and port without ROS, testable on any machine.
 add_library(tron_mcu_core STATIC src/mcu_codec.cpp src/mcu_control.cpp src/stop_release.cpp src/stop_clear_mark.cpp src/capture_dump.cpp)
@@ -29,7 +30,7 @@ set_target_properties(tron_mcu_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(tron_mcu_component SHARED src/mcu_node.cpp)
 target_link_libraries(tron_mcu_component tron_mcu_core mowbite_hold::mowbite_hold_core mowbite_journal::mowbite_journal
-  mowbite_serial::mowbite_serial)
+  mowbite_serial::mowbite_serial mowbite_watch::mowbite_watch)
 ament_target_dependencies(tron_mcu_component rclcpp rclcpp_components geometry_msgs sensor_msgs diagnostic_msgs mowbite_msgs)
 mowbite_component_register(tron_mcu_component
   PLUGIN "tron_mcu::McuNode"

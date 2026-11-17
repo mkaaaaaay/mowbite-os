@@ -22,6 +22,8 @@
 #include <mowbite_hold/hold.h>
 #include <mowbite_journal/node_options.h>
 #include <mowbite_serial/serial_port.h>
+#include <mowbite_watch/attach.h>
+#include <mowbite_watch/watch.h>
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -89,6 +91,8 @@ constexpr double kMarkRetryS = 1.0;
 // hw/end: the exit code, and the wait for the answer to go out besides the last flush of the journal.
 constexpr int kEndExitCode = 3;
 constexpr double kEndAnswerS = 0.2;
+// Executor and I/O thread each sign within this or the watch ends the process; the launch starts a latched one.
+constexpr double kWatchLimitS = 2.0;
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -207,6 +211,7 @@ class McuNode : public rclcpp::Node {
     journal_timer_ = create_wall_timer(std::chrono::seconds(10), [this] { journal_watch_.Check(get_logger()); });
     LogTimeZone();
 
+    watch_ = mowbite_watch::Attach(*this, kWatchLimitS);
     io_thread_ = std::thread([this] { IoLoop(); });
   }
 
@@ -290,16 +295,20 @@ class McuNode : public rclcpp::Node {
 
   // Owns the port: reads telemetry, runs the control tick every 10 ms and writes all frames.
   void IoLoop() {
+    mowbite_watch::Watch watch("tron_mcu_io", kWatchLimitS);
     uint8_t buffer[512];
     double next_tick = 0;
     double next_open = 0;
     double next_hold = 0;
     while (running_ && rclcpp::ok()) {
+      watch.Sign();
       double now = MonotonicSeconds();
       if (now >= next_hold) {
         next_hold = now + kHoldPollS;
+        watch.Mark("hold file");
         PollHold();
       }
+      watch.Mark("port");
       if (!port_.IsOpen() && now >= next_open) {
         next_open = now + 1.0;
         TryOpen();
@@ -328,6 +337,7 @@ class McuNode : public rclcpp::Node {
         }
         if (!read_only_) Send(packets);
         EndIfDue(now);
+        watch.Mark("stop clear mark");
         UpdateStopClearMark(now);
         PublishButton();
       }
@@ -937,6 +947,7 @@ class McuNode : public rclcpp::Node {
   std::string port_name_;
   std::atomic<bool> running_{true};
   std::thread io_thread_;
+  std::unique_ptr<mowbite_watch::Attached> watch_;
 
   bool read_only_;
   bool stop_release_;

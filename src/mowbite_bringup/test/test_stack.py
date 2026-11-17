@@ -249,12 +249,14 @@ def test_the_watch_of_the_container_expects_its_nodes(tmp_path):
 SRC = os.path.normpath(os.path.join(HERE, "..", ".."))
 
 
-# Every component attaches itself to the watch, but for the driver of each platform.
-def test_every_component_has_its_watch_but_the_drivers(start):  # noqa: F811
-    drivers = set()
-    for platform in layers.platforms():
-        drivers.add(start(platform).node(stack.platform_module(platform).DRIVER)["package"])
-    assert drivers
+# Every component attaches itself to the watch once, a driver in its own process as well.
+WITHOUT_WATCH = {"xcore_driver"}
+
+
+def test_every_component_has_its_watch(start):  # noqa: F811
+    drivers = {start(platform).node(stack.platform_module(platform).DRIVER)["package"]
+               for platform in layers.platforms()}
+    assert WITHOUT_WATCH <= drivers
     seen = set()
     for path in glob.glob(os.path.join(SRC, "*", "src", "*.cpp")):
         text = open(path).read()
@@ -263,7 +265,7 @@ def test_every_component_has_its_watch_but_the_drivers(start):  # noqa: F811
         package = os.path.relpath(path, SRC).split(os.sep)[0]
         seen.add(package)
         calls = len(re.findall(r"mowbite_watch::Attach\(\*this", text))
-        assert calls == (0 if package in drivers else 1), path
+        assert calls == (0 if package in WITHOUT_WATCH else 1), path
     assert len(seen) >= 14, seen
 
 
