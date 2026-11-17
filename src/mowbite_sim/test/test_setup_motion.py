@@ -9,7 +9,9 @@ driver left. The failed step closes the lock of autonomous driving (safety_lock.
 leaves the lock closed and a calibration is refused, until the step passes again; a file that cannot be read closes
 it as well. The Tron has a safety measurement date in its simulation, so there it is the date the lock closes against.
 At the end the step ground drives on the simulated ground: straight, turn, back until STOP, against the bumper; on the
-NX60i, whose lock stays closed without a date, only once every step jacked up passed again.
+NX60i, whose lock stays closed without a date, only once every step jacked up passed again. Then the step blade, with
+the blade allowed as the restart of its first start leaves the file of the setup program: on and off, without renewal,
+without host, then STOP, lifting and the bumper.
 
 Run in a sourced workspace: MOWBITE_PLATFORM=<platform> launch_test /ws/src/mowbite_sim/test/test_setup_motion.py
 """
@@ -57,7 +59,15 @@ COUNTER = {"nx60i": ("no_command", {"zero_duty_ignored": 1}, None),
 DRIVER = {"nx60i": "xcore_driver", "tron": "tron_mcu_node"}[PLATFORM]
 LOCK = os.path.join(DATA, "safety_lock.json")
 
+BLADE_CONFIRM = ["blade_removed", "hand_at_stop"]
+BLADE_NODE = STEPS["blade"]["params"]["node"]
+
 os.makedirs(DATA, exist_ok=True)
+# allow_blade as the first start of the step blade writes it before the restart.
+with open(layers.setup_file(DATA, PLATFORM), "w") as f:
+    f.write("# Written by the setup program of MowBite OS, which writes it anew: values of your own go into the "
+            "file of this\n# mower beside it, which is read after this one.\n"
+            f"{BLADE_NODE}:\n  ros__parameters:\n    allow_blade: true\n")
 # The steps of the inputs passed: the rule of the program lets no wheel turn before.
 write_json(os.path.join(DATA, "setup.json"),
            {"schema": 1, "platform": SETUP["platform"],
@@ -396,6 +406,28 @@ class TestSetupMotion(unittest.TestCase):
         for value in entry["values"]:
             self.assertTrue(value["ok"], value)
         self.assertFalse(os.path.exists(LOCK))
+
+    def test_14_blade(self):
+        p = self.probe
+        entry = p.step("blade")
+        self.assertEqual((entry["kind"], entry["restart"], entry["motion"]["blade"]), ("blade", False, True), entry)
+        self.start("blade", confirm=BLADE_CONFIRM)
+        # on_off, lease and silent by themselves, then the inputs by hand while the blade turns.
+        for part, flag in ((4, "stop"), (5, "lift"), (6, "bumper")):
+            ready = wait_until(lambda: (lambda e: e if e["state"] != "running" or (
+                e["progress"]["n"] == part and e["ends_at"] is not None) else None)(p.step("blade")), 40)
+            self.assertEqual((ready or {}).get("state"), "running", p.step("blade"))
+            self.assertGreaterEqual(abs(p.status.blade_motor.rpm), STEPS["blade"]["params"]["rpm"], flag)
+            time.sleep(0.5)
+            set_flags(**{flag: 1})
+            # The NX60i latches a lift only after its delay.
+            self.assertTrue(p.wait(lambda: p.status.emergency_reason != 0, 4), flag)
+            time.sleep(0.5)
+            set_flags()
+        entry = self.passed("blade", 40)
+        for value in entry["values"]:
+            self.assertTrue(value["ok"], value)
+        self.assertEqual(p.status.blade_motor.rpm, 0)
 
 
 @launch_testing.post_shutdown_test()
