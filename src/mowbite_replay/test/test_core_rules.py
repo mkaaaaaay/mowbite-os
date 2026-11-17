@@ -20,8 +20,6 @@ CORES = {
 # Not part of a core although in its library: the STOP clear mark belongs to the node, the core only gets it as
 # SetStopClearMark.
 NOT_CORE = {"tron_mcu/src/stop_clear_mark.cpp", "tron_mcu/include/tron_mcu/stop_clear_mark.h"}
-# The parts of the logic core reach the core only through CoreAccess and CoreFacts, never through logic_core.h.
-LOGIC_PARTS = []
 RULES = [
     ("clock", r"\b(steady_clock|system_clock|high_resolution_clock|clock_gettime|gettimeofday)\b|\btime\s*\("),
     ("randomness", r"\b(random_device|rand|srand|drand48)\b\s*[({]"),
@@ -69,8 +67,16 @@ class CoreRules(unittest.TestCase):
         self.assertEqual(found, [], "\n".join(found))
 
     def test_the_parts_of_the_logic_do_not_include_its_core(self):
+        """A part of the logic core (include/mowbite_logic/<name>_part.h and src/logic_<name>.cpp) reaches the core only
+        through CoreAccess and CoreFacts, never through logic_core.h."""
+        include = os.path.join(SRC, "mowbite_logic", "include", "mowbite_logic")
+        parts = []
+        for header in sorted(os.listdir(include)):
+            if header.endswith("_part.h"):
+                parts.append(os.path.join("mowbite_logic", "include", "mowbite_logic", header))
+                parts.append(os.path.join("mowbite_logic", "src", "logic_" + header[:-len("_part.h")] + ".cpp"))
         found = []
-        for path in LOGIC_PARTS:
+        for path in parts:
             with open(os.path.join(SRC, path)) as f:
                 lines = f.read().split("\n")
             for number, line in enumerate(lines, 1):

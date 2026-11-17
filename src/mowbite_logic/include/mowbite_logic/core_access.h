@@ -1,6 +1,8 @@
 #ifndef MOWBITE_LOGIC_CORE_ACCESS_H
 #define MOWBITE_LOGIC_CORE_ACCESS_H
 
+#include <string>
+
 #include "mowbite_logic/logic_types.h"
 
 namespace mowbite_logic {
@@ -13,6 +15,13 @@ class CoreFacts {
  public:
   explicit CoreFacts(const LogicCore& core) : read_(&core) {}
 
+  State state() const;
+  bool emergency() const;
+  const HardwareSnapshot& hw() const;
+  bool DockContact() const;
+  Reason Busy() const;
+  Reason HoldProblem() const;
+
  private:
   const LogicCore* read_;
 };
@@ -21,6 +30,10 @@ class CoreFacts {
 class CoreAccess : public CoreFacts {
  public:
   explicit CoreAccess(LogicCore& core) : CoreFacts(core), core_(&core) {}
+
+  void Notify(std::string line);
+  void SetState(State state);
+  void CommandCancels();
 
  private:
   LogicCore* core_;

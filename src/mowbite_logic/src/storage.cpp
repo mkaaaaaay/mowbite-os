@@ -55,7 +55,7 @@ void LogicCore::AbandonStart(const std::string& file) {
       EndCalibration(std::nullopt, true);
       return;
     case State::kSetup:
-      EndSetup(why.message);
+      setup_.EndSetup(CoreAccess(*this), why.message);
       return;
     case State::kAreaRecording: {
       json details = {{"action", "start_area_recording"}};

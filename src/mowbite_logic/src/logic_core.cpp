@@ -1031,7 +1031,8 @@ void LogicCore::OnTick(double now_s) {
 
 bool LogicCore::BladeWanted() const {
   if (state_ == State::kSetup) {
-    return setup_blade_ != 0 && !setup_blade_refused_ && !emergency_ && hw_.telemetry_ok && !hw_.dock_contact;
+    return setup_.setup_blade() != 0 && !setup_.setup_blade_refused() && !emergency_ && hw_.telemetry_ok &&
+           !hw_.dock_contact;
   }
   if (state_ != State::kMowing || pause_ != 0 || emergency_ || !config_.mow_with_blade || !safety_measured_ ||
       !hw_.telemetry_ok || hw_.dock_contact) {
@@ -1045,8 +1046,7 @@ bool LogicCore::BladeWanted() const {
 void LogicCore::OnBladeRefused(const std::string& message, int emergency_reason) {
   if (!BladeWanted()) return;
   if (state_ == State::kSetup) {
-    setup_blade_refused_ = true;
-    Notify("Setup step " + setup_step_ + ": the blade was refused: " + message);
+    setup_.BladeRefused(CoreAccess(*this), message);
     return;
   }
   // The driver blocked before hw/status showed it: the pause of that emergency, its flag and event follow hw/status.

@@ -2,7 +2,7 @@
 #include <optional>
 #include <string>
 
-#include "mowbite_logic/logic_core.h"
+#include "mowbite_logic/setup_part.h"
 
 namespace mowbite_logic {
 
@@ -13,79 +13,76 @@ constexpr double kSetupSignTimeout = 1.0;
 
 }  // namespace
 
-Reason LogicCore::OnSetupMotion(bool active, const std::string& step, double now_s) {
+Reason SetupPart::OnSetupMotion(CoreAccess core, bool active, const std::string& step, double now_s) {
   if (!active) {
-    if (state_ == State::kSetup) EndSetup(std::nullopt);
+    if (core.state() == State::kSetup) EndSetup(core, std::nullopt);
     return {};
   }
-  if (state_ == State::kSetup) {
+  if (core.state() == State::kSetup) {
     setup_sign_s_ = now_s;
     if (step == setup_step_) return {};
     // Another step without an end of the first: it begins anew.
-    EndSetup(std::nullopt);
+    EndSetup(core, std::nullopt);
   }
-  Reason why = Busy();
-  if (why.empty()) why = HoldProblem();
-  if (why.empty() && emergency_) why = Reason("EMERGENCY", "Emergency: reset it first");
-  if (why.empty() && (DockContact() || (hw_.telemetry_ok && hw_.dock_contact_raw))) {
+  Reason why = core.Busy();
+  if (why.empty()) why = core.HoldProblem();
+  if (why.empty() && core.emergency()) why = Reason("EMERGENCY", "Emergency: reset it first");
+  if (why.empty() && (core.DockContact() || (core.hw().telemetry_ok && core.hw().dock_contact_raw))) {
     why = Reason("ON_DOCK", "The mower is on the docking station");
   }
   if (!why.empty()) return why;
-  CommandCancels();
+  core.CommandCancels();
   setup_step_ = step;
   setup_sign_s_ = now_s;
   setup_blade_ = 0;
   setup_blade_refused_ = false;
-  SetState(State::kSetup);
+  core.SetState(State::kSetup);
   return {};
 }
 
-void LogicCore::OnSetupBlade(const std::string& step, int blade) {
-  if (state_ != State::kSetup || step != setup_step_) return;
+void SetupPart::OnSetupBlade(CoreFacts core, const std::string& step, int blade) {
+  if (core.state() != State::kSetup || step != setup_step_) return;
   const int asked = blade == 1 || blade == 2 ? blade : 0;
   if (asked == setup_blade_) return;
   setup_blade_ = asked;
   setup_blade_refused_ = false;
 }
 
-bool LogicCore::SetupBladeOnce() const {
-  return state_ == State::kSetup && setup_blade_ == 2;
+bool SetupPart::SetupBladeOnce(CoreFacts core) const {
+  return core.state() == State::kSetup && setup_blade_ == 2;
 }
 
-bool LogicCore::TickSetup(double now_s) {
-  if (state_ != State::kSetup) return false;
+bool SetupPart::TickSetup(CoreAccess core, double now_s) {
+  if (core.state() != State::kSetup) return false;
   const double quiet = now_s - setup_sign_s_;
   if (quiet > kSetupSignTimeout) {
     char text[96];
     std::snprintf(text, sizeof(text), "No sign of the setup program for %.1f s", quiet);
-    EndSetup(std::string(text));
+    EndSetup(core, std::string(text));
     return true;
   }
-  Reason why = HoldProblem();
-  if (why.empty() && (DockContact() || (hw_.telemetry_ok && hw_.dock_contact_raw))) {
+  Reason why = core.HoldProblem();
+  if (why.empty() && (core.DockContact() || (core.hw().telemetry_ok && core.hw().dock_contact_raw))) {
     why = Reason("ON_DOCK", "The mower is on the docking station");
   }
   if (why.empty()) return false;
-  EndSetup(why.message);
+  EndSetup(core, why.message);
   return true;
 }
 
-bool LogicCore::InSetup() const {
-  return state_ == State::kSetup;
-}
-
-bool LogicCore::SetupActive() const {
-  return state_ == State::kSetup && !emergency_;
-}
-
-void LogicCore::EndSetup(const std::optional<std::string>& why) {
-  if (why) Notify("Setup step " + setup_step_ + " stopped: " + *why);
+void SetupPart::EndSetup(CoreAccess core, const std::optional<std::string>& why) {
+  if (why) core.Notify("Setup step " + setup_step_ + " stopped: " + *why);
   setup_step_.clear();
   // The blade goes off with the state: BladeWanted holds outside SETUP only while mowing.
   setup_blade_ = 0;
   setup_blade_refused_ = false;
   // One zero follows from leaving the state; the wheels stand.
-  SetState(State::kIdle);
+  core.SetState(State::kIdle);
+}
+
+void SetupPart::BladeRefused(CoreAccess core, const std::string& message) {
+  setup_blade_refused_ = true;
+  core.Notify("Setup step " + setup_step_ + ": the blade was refused: " + message);
 }
 
 }  // namespace mowbite_logic

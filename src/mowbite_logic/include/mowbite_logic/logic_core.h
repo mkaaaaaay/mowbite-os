@@ -20,6 +20,7 @@
 #include "mowbite_logic/marker_dock.h"
 #include "mowbite_logic/mowing_job.h"
 #include "mowbite_logic/reasons.h"
+#include "mowbite_logic/setup_part.h"
 #include "mowbite_logic/undocking.h"
 
 namespace mowbite_logic {
@@ -572,8 +573,6 @@ class LogicCore {
   void CheckpointNow();
   // Ends a calibration drive here: CALIBRATION_FAILED unless done, CALIBRATION end, IDLE; cancel: the program too.
   void EndCalibration(const std::optional<Reason>& failure, bool cancel);
-  // Leaves SETUP; why goes out as a notice unless the program ended it.
-  void EndSetup(const std::optional<std::string>& why);
   // STORAGE_NOT_WRITABLE with the file while one cannot be written, else empty.
   Reason StorageProblem() const;
   // The effects of one type in effects_: whether one waits; a flag added once or every one removed; the waiting one
@@ -738,12 +737,7 @@ class LogicCore {
   bool blades_running_ = false;
   // The reason of StartProblem() at the last actions, empty while a start would go.
   std::string last_start_reason_ = "-";
-  // SETUP: the step of the program and its last setup/motion.
-  std::string setup_step_;
-  double setup_sign_s_ = 0;
-  // SETUP: the blade the step asks for (SetupMotion BLADE_*) and whether hw/blade refused it.
-  int setup_blade_ = 0;
-  bool setup_blade_refused_ = false;
+  SetupPart setup_;
   // Calibration: the program's status and when it came, its last sign and the phase it reported last.
   std::optional<CalibrationStatus> calibration_status_;
   double calibration_status_s_ = 0;
