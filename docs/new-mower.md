@@ -284,6 +284,9 @@ as the OS sees corrections, a station, an area, a docking test or a trial run). 
 `within` from what the board does: the NX60i stops 2.5 s after a lift sensor, so its list waits 3.5 s and counts 1.5 s
 as short. An emergency that is on for more than 0.3 s before its input shows in `hw/status` counts as brought by
 something else, and the part waits for its release: a driver reports the input with or before the emergency it brings.
+A part of mode press is done once its input is off again. Where the board holds the input until the release (stop of
+the Tron), the part waits for it and shows the emergency as blocked meanwhile: give the step a `note` that tells the
+user to release, and a `time` that leaves room for it.
 
 An image is an SVG of one colour without text, raster images, scripts, styles or references, at most 65536 bytes;
 image and accent share one viewBox. The start checks list and images by the rules of the node (`mowbite_setup_check`)

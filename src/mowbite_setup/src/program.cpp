@@ -885,16 +885,22 @@ json Program::Blocked(const Step& step, double now) const {
   if (!writable_) add("STORAGE_NOT_WRITABLE", "setup.json cannot be written");
   if (IsRun(step)) {
     const Run& run = *run_;
-    if (run.phase != Phase::kRest || step.parts.empty()) return blocked;
+    if (step.parts.empty()) return blocked;
     const Part& part = step.parts[run.part];
+    const bool rest = run.phase == Phase::kRest;
     if (step.check == "input") {
       const uint32_t bit = EmergencyBit(step.Word("emergency"));
-      if (Signal(part.role)) {
+      // After a press the emergency shows as well: a board may hold the input until the release.
+      const bool pressed = run.phase == Phase::kWatch && part.mode == "press";
+      if (rest && Signal(part.role)) {
         add("INPUT_ACTIVE", "The input " + part.role + " is switched already");
-      } else if (bit != 0 && (hardware_.emergency_reason & bit) != 0) {
+      } else if ((rest || pressed) && bit != 0 && (hardware_.emergency_reason & bit) != 0) {
         add("EMERGENCY", "The emergency " + step.Word("emergency") + " is still latched");
       }
-    } else if (part.move == "tilt_stop") {
+      return blocked;
+    }
+    if (!rest) return blocked;
+    if (part.move == "tilt_stop") {
       if ((hardware_.emergency_reason & TiltBit()) != 0) add("EMERGENCY", "The emergency TILT is still latched");
     } else if (now - run.began > kRestTime) {
       add("INPUT_ACTIVE", "The mower does not stand level yet");

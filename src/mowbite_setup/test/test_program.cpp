@@ -369,6 +369,25 @@ TEST(Program, AnInputThatIsHeldAlreadyWaitsForItsRelease) {
   EXPECT_TRUE(bench.StepState("stop")["blocked"].empty());
 }
 
+TEST(Program, APressedInputTheBoardHoldsShowsItsEmergency) {
+  Bench bench;
+  bench.PassBoard();
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  bench.hardware.stop = true;
+  bench.Run(0.1);
+  bench.hardware.emergency_reason = EmergencyBit("STOP");
+  bench.Run(0.3);
+  EXPECT_EQ(bench.StepState("stop")["parts"][0]["state"], "waiting");
+  EXPECT_EQ(bench.StepState("stop")["blocked"][0]["reason"], "EMERGENCY");
+  // The release takes the input back with the emergency.
+  bench.hardware.stop = false;
+  bench.hardware.emergency_reason = 0;
+  bench.Run(0.3);
+  EXPECT_EQ(bench.StepState("stop")["parts"][0]["state"], "ok");
+  EXPECT_TRUE(bench.StepState("stop")["blocked"].empty());
+}
+
 TEST(Program, AShortLiftMustNotStop) {
   Bench bench;
   ASSERT_EQ(bench.Refused(bench.Start("lift")), "");
