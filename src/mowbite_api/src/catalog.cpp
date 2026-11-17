@@ -862,6 +862,13 @@ const std::vector<Method>& Methods() {
       {"setup.abort", "mowbite_setup", "Ends the running step with STOPPED; nothing happens without one",
        Object("params", "The step", {Text("step", "The running step; none for whichever runs", false)}, false),
        SetupAnswer(), kSetupOffered},
+      {"setup.keep", "mowbite_setup",
+       "Keeps a step that moves the wheels going: at least every " +
+           std::to_string(static_cast<int>(kSetupKeepTimeout)) + " s" +
+           " while it runs, else it stops with RELEASED. Not needed for other steps",
+       Object("params", "The step", {SetupStep()}),
+       Object("result", "Whether the step still runs", {Bool("running", "It runs; false once it ended")}),
+       kSetupOffered},
       {"setup.reset", "mowbite_setup", "Takes every result back: all steps are open again, the record starts anew",
        Object("params", "The version", {SetupVersion()}), SetupAnswer(), kSetupOffered},
       {"setup.image", "mowbite_setup",

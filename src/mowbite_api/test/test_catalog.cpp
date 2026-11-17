@@ -597,7 +597,10 @@ TEST(Catalog, TheNamesOfTheSetupProgram) {
   named(SetupModes(), "mode", false);
   named(SetupAcceptValues(), "accept", true);
   named(SetupRestarts(), "restart", false);
+  named(SetupWheelParts(), "wheel part", true);
+  named(SetupWheelValues(), "wheel", true);
   ExpectTexts(SetupAccept().texts, "accept", false);
+  ExpectTexts(SetupWheelQuestion().texts, "wheel", false);
   // The emergencies are names of the bits of hw/status.
   for (const auto& name : SetupEmergencies()) {
     if (name == "NONE") continue;
@@ -631,6 +634,10 @@ TEST(Catalog, TheNamesOfTheSetupProgram) {
   }
   EXPECT_EQ(catalog["accept"]["values"].size(), SetupAcceptValues().size());
   EXPECT_EQ(catalog["restart"].size(), SetupRestarts().size());
+  EXPECT_EQ(catalog["wheel_parts"].size(), SetupWheelParts().size());
+  EXPECT_EQ(catalog["wheel"]["values"].size(), SetupWheelValues().size());
+  ASSERT_NE(FindSetupName(SetupWheelValues(), "right"), nullptr);
+  ASSERT_NE(FindSetupName(SetupWheelParts(), "one_wheel"), nullptr);
 }
 
 // Every check: its params within bounds, its reasons those of SETUP_STEP, texts where the step list brings none.
@@ -641,13 +648,14 @@ TEST(Catalog, TheChecksOfTheSetupProgram) {
   for (const auto& check : SetupChecks()) {
     EXPECT_TRUE(names.insert(check.name).second) << check.name;
     EXPECT_EQ(FindSetupCheck(check.name), &check);
-    EXPECT_TRUE(check.kind == "confirm" || check.kind == "input" || check.kind == "measure") << check.name;
+    EXPECT_TRUE(check.kind == "confirm" || check.kind == "input" || check.kind == "measure" || check.kind == "drive")
+        << check.name;
     EXPECT_FALSE(check.text.empty()) << check.name;
     for (const auto& reason : check.reasons) {
       EXPECT_TRUE(reasons.count(reason)) << check.name << " " << reason;
     }
     // What setup.start begins and watches can be stopped and cut off.
-    if (check.start && check.kind == "measure") {
+    if (check.start && (check.kind == "measure" || check.kind == "drive")) {
       for (const char* reason : {"STOPPED", "INTERRUPTED"}) {
         EXPECT_EQ(std::count(check.reasons.begin(), check.reasons.end(), reason), 1) << check.name << " " << reason;
       }
@@ -673,6 +681,25 @@ TEST(Catalog, TheChecksOfTheSetupProgram) {
       if (!value.texts.empty()) ExpectTexts(value.texts, check.name + " " + value.id, false);
     }
     if (!check.texts.empty()) ExpectTexts(check.texts, check.name, true);
+    // A step that moves the wheels stays within the bounds of a mower jacked up, and a stop or end it asks for
+    // names emergencies the hardware has.
+    if (check.kind != "drive") continue;
+    EXPECT_FALSE(check.texts.empty()) << check.name;
+    for (const char* reason : {"NO_START", "LOGIC_REFUSED", "RELEASED", "EMERGENCY"}) {
+      EXPECT_EQ(std::count(check.reasons.begin(), check.reasons.end(), reason), 1) << check.name << " " << reason;
+    }
+    for (const auto& param : check.params) {
+      if (param.name == "speed") {
+        EXPECT_LE(param.max, kSetupRaisedSpeed) << check.name;
+      }
+      if (param.unit == "s" && param.name != "return_max") {
+        EXPECT_LE(param.max, kSetupMoveTime) << check.name;
+      }
+      if (param.name != "emergency") continue;
+      EXPECT_TRUE(param.required) << check.name;
+      for (const auto& name : param.values) EXPECT_NE(name, "LATCH") << check.name;
+      EXPECT_EQ(param.values.size() + 1, EmergencyBits().size()) << check.name;
+    }
   }
   for (const auto& [code, reason] : reasons) ExpectTexts(reason->texts, "SETUP_STEP " + code, true);
   EXPECT_EQ(FindSetupCheck("nothing"), nullptr);
@@ -688,15 +715,20 @@ TEST(Catalog, TheChecksOfTheSetupProgram) {
   EXPECT_EQ(catalog["limits"]["steps"], kSetupMaxSteps);
   EXPECT_EQ(catalog["limits"]["image_bytes"], kSetupImageBytes);
   EXPECT_EQ(catalog["limits"]["shape_points"], kShapeMaxPoints);
+  EXPECT_EQ(catalog["limits"]["raised_speed"], kSetupRaisedSpeed);
+  EXPECT_EQ(catalog["limits"]["move_time"], kSetupMoveTime);
+  EXPECT_EQ(catalog["limits"]["keep"], kSetupKeepTimeout);
 }
 
 // Every reason the program gives is one of its group: Fail() of SETUP_STEP, Refuse() of SETUP_REFUSED and what
 // blocks a step of SETUP_BLOCKED, each with texts.
 TEST(Catalog, TheReasonsOfTheSetupProgram) {
-  std::ifstream in(std::string(MOWBITE_SOURCE_ROOT) + "/mowbite_setup/src/program.cpp");
-  ASSERT_TRUE(in.good());
   std::stringstream text;
-  text << in.rdbuf();
+  for (const char* file : {"program.cpp", "motion.cpp"}) {
+    std::ifstream in(std::string(MOWBITE_SOURCE_ROOT) + "/mowbite_setup/src/" + file);
+    ASSERT_TRUE(in.good()) << file;
+    text << in.rdbuf();
+  }
   const std::string source = text.str();
   struct Call {
     const char* pattern;

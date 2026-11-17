@@ -95,6 +95,76 @@ ReasonEntry Busy(const char* severity) {
                       "End the running step or wait until the mower stands."}));
 }
 
+// What keeps a step of kind drive from starting; the same in SETUP_REFUSED and SETUP_BLOCKED.
+std::vector<ReasonEntry> DriveBlocks() {
+  return {Reason("NOT_OFFERED", "info", "user", "The driver does not offer what the step needs", {},
+                 Both({"Nicht angeboten", "Die Platine dieses Mähers bietet diese Prüfung nicht an.",
+                       "Den Schritt überspringen."},
+                      {"Not offered", "The board of this mower doesn't offer this check.", "Skip the step."})),
+          Reason("RESTARTS_LOW", "info", "user", "The launch has fewer than two restarts of the driver left",
+                 {Integer("left", "The restarts left", false)},
+                 Both({"Zu wenige Neustarts übrig",
+                       "Der Treiber ist zuletzt mehrmals neu gestartet. Für diese Prüfung braucht es noch Reserve.",
+                       "MowBite OS neu starten, dann den Schritt wiederholen."},
+                      {"Too few restarts left",
+                       "The driver restarted several times lately. This check needs some to spare.",
+                       "Restart MowBite OS, then repeat the step."})),
+          Reason("SAFETY_INPUTS", "info", "user", "A step input of the roles stop, lift or bumper is not ok",
+                 {List("steps", "The steps to pass first", Type::kString, false)},
+                 Both({"Erst die Sensoren prüfen",
+                       "Bevor sich Räder drehen, müssen STOP-Taste, Anheben und Stoßfänger im Stand geprüft sein.",
+                       "Die Prüfung der Eingänge abschließen; sie lässt sich hierfür nicht überspringen."},
+                      {"Check the sensors first",
+                       "Before any wheel turns, STOP button, lifting and bumper have to be checked standing.",
+                       "Finish the check of the inputs; it can't be skipped for this."})),
+          Reason("ON_DOCK", "info", "user", "The mower is on the charging contacts", {},
+                 Both({"Auf der Ladestation", "Auf der Ladestation dreht der Mäher keine Räder.",
+                       "Den Mäher von der Station nehmen und aufbocken."},
+                      {"On the docking station", "The mower turns no wheels on the docking station.",
+                       "Take the mower off the station and jack it up."}))};
+}
+
+// What holds for every check of kind drive.
+std::string DriveRules() {
+  return "Every step that moves the wheels: the mower is jacked up and setup.start confirms raised and hand_at_stop; "
+         "the mower is in IDLE, off the charging contacts, without emergency or hold; every step input of the roles "
+         "stop, lift and bumper of the list is ok (SAFETY_INPUTS, not to be skipped). The mower is in the sub state "
+         "SETUP meanwhile. setup.keep at least every " +
+         Num(kSetupKeepTimeout) + " s keeps it going (else RELEASED), setup.abort and any emergency it did not ask "
+         "for stop it; a single move lasts " + Num(kSetupMoveTime) + " s at most; motion of the step names its bounds";
+}
+
+SetupParam Speed() {
+  return Amount("speed", "m/s", 0.02, kSetupRaisedSpeed, 0.05, "Speed of each wheel");
+}
+
+SetupParam StopMax() {
+  return Seconds("stop_max", 0.1, 3, 1, "The wheels stand within this time of the trigger");
+}
+
+SetupParam Hold() {
+  return Seconds("hold", 0.5, 5, 1, "No wheel starts again for this time, after the stop and after the release");
+}
+
+SetupParam Emergencies() {
+  std::vector<std::string> names;
+  for (const auto& bit : EmergencyBits()) {
+    if (bit.name != "LATCH") names.push_back(bit.name);
+  }
+  return Words("emergency", "The emergencies, by the names of x-emergency-bits, of which the driver shows at least one "
+                            "after it, besides LATCH and no other",
+               names, true);
+}
+
+// The reasons a check of kind drive can fail with: its own, then those of all of them.
+std::vector<std::string> DriveReasons(std::vector<std::string> own) {
+  own.insert(own.begin(), "NO_START");
+  for (const char* reason : {"LOGIC_REFUSED", "RELEASED", "EMERGENCY", "NO_DATA", "STOPPED", "INTERRUPTED"}) {
+    own.push_back(reason);
+  }
+  return own;
+}
+
 }  // namespace
 
 const std::vector<SetupName>& SetupStages() {
@@ -240,6 +310,8 @@ const std::vector<SetupName>& SetupPoints() {
   static const std::vector<SetupName> points = {
       {"raised", "The mower is jacked up, its wheels turn freely",
        Named("Mäher aufgebockt, Räder frei", "Mower jacked up, wheels free")},
+      {"hand_at_stop", "A hand is at a STOP button, to press it at any time",
+       Named("Hand an der STOP-Taste", "Hand at the STOP button")},
       {"blade_removed", "The blade is taken off", Named("Messer abgenommen", "Blade removed")},
       {"clear", "Nobody is close to the mower", Named("Niemand in der Nähe", "Nobody close by")},
       {"outdoors", "The mower stands under the open sky",
@@ -316,6 +388,37 @@ const std::vector<SetupName>& SetupRestarts() {
       {"host", "The OS asks its host service for the restart (host.restart_os)"},
   };
   return restarts;
+}
+
+const std::vector<SetupName>& SetupWheelParts() {
+  static const std::vector<SetupName> parts = {
+      {"forward", "Both wheels forwards at speed", Named("Vorwärts", "Forwards")},
+      {"backward", "Both wheels backwards at speed", Named("Rückwärts", "Backwards")},
+      {"left", "A turn to the left on the spot, each wheel at speed", Named("Nach links drehen", "Turn to the left")},
+      {"right", "A turn to the right on the spot, each wheel at speed",
+       Named("Nach rechts drehen", "Turn to the right")},
+      {"one_wheel", "Only the right wheel turns forwards at speed, the left one stands; the step asks which one turns",
+       Named("Nur ein Rad", "One wheel only")},
+  };
+  return parts;
+}
+
+const SetupName& SetupWheelQuestion() {
+  static const SetupName question = {
+      "wheel", "Which wheel turns while the part one_wheel runs",
+      Both({"Welches Rad dreht?", "Jetzt sollte sich nur ein Rad drehen. Angeben, welches sich dreht.", ""},
+           {"Which wheel turns?", "Only one wheel should turn now. Tell which one turns.", ""})};
+  return question;
+}
+
+const std::vector<SetupName>& SetupWheelValues() {
+  static const std::vector<SetupName> values = {
+      {"left", "The left wheel, seen from behind", Named("Linkes Rad", "Left wheel")},
+      {"right", "The right wheel, seen from behind", Named("Rechtes Rad", "Right wheel")},
+      {"both", "Both wheels", Named("Beide", "Both")},
+      {"none", "No wheel", Named("Keines", "None")},
+  };
+  return values;
 }
 
 const std::vector<std::string>& ShapeKinds() {
@@ -451,6 +554,94 @@ const std::vector<SetupCheck>& SetupChecks() {
              "drives with them.",
              "Measure again and enter the value; all dimensions count from the middle of the drive axle."}),
        "geometry"},
+      {"wheels", "drive", true, false,
+       "The mower jacked up turns its wheels part by part, see wheel_parts: each part drives time s after a run-up of "
+       "0.5 s, and the odometry has to show it with its sign and 0.5 to 1.5 times speed. In the part one_wheel only "
+       "the right wheel turns, and inputs[] asks which one turns. " + DriveRules(),
+       {Speed(), Seconds("time", 1, 3, 2, "Each part drives this long"),
+        Seconds("answer_time", 3, kSetupMoveTime, kSetupMoveTime, "The part one_wheel waits this long for the answer")},
+       {{"speed", "m/s", "Speed of the wheels along the part, one value by part with the id of the part",
+         Named("Geschwindigkeit", "Speed")}},
+       DriveReasons({"WRONG_DIRECTION", "WRONG_WHEEL", "LIMIT", "NOT_SEEN"}),
+       Both({"Räder", "Der Mäher ist aufgebockt und dreht seine Räder langsam vor, zurück und zu beiden Seiten. Zum "
+                      "Schluss dreht nur ein Rad: angeben, welches.",
+             "Dreht ein Rad falsch herum oder das falsche: die Anschlüsse der Motoren und die Einstellungen der "
+             "Plattform prüfen."},
+            {"Wheels", "The mower is jacked up and turns its wheels slowly forwards, backwards and to both sides. At "
+                       "the end only one wheel turns: tell which one.",
+             "If a wheel turns the wrong way or the wrong one turns, check the plugs of the motors and the settings of "
+             "the platform."})},
+      {"stop_moving", "drive", true, false,
+       "While the wheels turn, the user triggers the input of a part (role as in a step input): the wheels stand "
+       "within stop_max, the emergency of the role follows, nothing starts again for hold s, the program releases the "
+       "emergency itself as in a step input, nothing starts for hold s, and a new command turns the wheels again. "
+       + DriveRules(),
+       {Speed(), Seconds("time", 3, kSetupMoveTime, 8, "The wheels turn at most this long for the action of a part"),
+        StopMax(), Hold()},
+       {{"stand", "s", "From the input to standing wheels, one value by part with the id of the part",
+         Named("Standzeit", "Time to stand")}},
+       DriveReasons({"NOT_SEEN", "LIMIT", "STARTED_AGAIN", "NO_EMERGENCY", "NOT_RELEASED", "NO_RESTART"}),
+       Both({"Stopp bei drehenden Rädern",
+             "Die Räder drehen langsam, der Mäher ist aufgebockt. Den angezeigten Sensor auslösen: die Räder müssen "
+             "sofort stehen und stehen bleiben.",
+             "Bleiben die Räder nicht stehen: den Mäher nicht fahren lassen, Sensor, Kabel und Platine prüfen."},
+            {"Stop with turning wheels",
+             "The wheels turn slowly with the mower jacked up. Trigger the sensor shown: the wheels have to stand at "
+             "once and stay so.",
+             "If the wheels do not stand, don't let the mower drive; check sensor, cable and board."})},
+      {"no_command", "drive", true, false,
+       "While the wheels turn, the program sends no commands any more: the wheels stand within stop_max of the last "
+       "one by the watchdogs alone and do not start for hold s; then a new command turns them again. No emergency. "
+       + DriveRules(),
+       {Speed(), StopMax(), Hold()},
+       {{"stand", "s", "From the last command to standing wheels", Named("Standzeit", "Time to stand")}},
+       DriveReasons({"LIMIT", "STARTED_AGAIN", "NO_RESTART"}),
+       Both({"Stopp ohne Fahrbefehl",
+             "Die Räder drehen langsam, dann kommen keine Fahrbefehle mehr. Die Räder müssen von selbst stehen "
+             "bleiben.",
+             "Drehen die Räder weiter: den Mäher nicht fahren lassen und die Wächter der Plattform prüfen."},
+            {"Stop without commands",
+             "The wheels turn slowly, then no commands come any more. The wheels have to stand by themselves.",
+             "If the wheels keep turning, don't let the mower drive; check the watchdogs of the platform."})},
+      {"silence", "drive", true, false,
+       "Round by round, while the wheels turn: hw/silence for silence_max_s of the driver, commands go on. The board "
+       "stops the wheels by itself within stop_max of the answer, nothing starts until hold s after the silence; then "
+       "the driver shows emergencies of the list and LATCH only, the program releases them itself, nothing starts for "
+       "hold s and a new command turns the wheels. The stand times of the rounds differ by spread_max at most. "
+       "Offered where hw/capabilities has silence_max_s. " + DriveRules(),
+       {Speed(), StopMax(), Hold(), Amount("rounds", "", 1, 10, 5, "How many rounds"),
+        Seconds("spread_max", 0.05, 1, 0.3, "Stand times of the rounds differ this much at most"), Emergencies()},
+       {{"stand", "s", "From the answer of hw/silence to standing wheels, one value by round, round_1 and on",
+         Named("Runde", "Round")},
+        {"spread", "s", "Longest less shortest stand of the rounds", Named("Streuung", "Spread")}},
+       DriveReasons({"DRIVER_REFUSED", "LIMIT", "STARTED_AGAIN", "NO_EMERGENCY", "NOT_RELEASED", "NO_RESTART"}),
+       Both({"Stopp ohne Steuerung",
+             "Die Räder drehen langsam, dann schweigt die Steuerung einige Sekunden, mehrmals hintereinander. Die "
+             "Platine muss die Räder jedes Mal von selbst anhalten.",
+             "Hält die Platine nicht an: den Mäher nicht fahren lassen und die Einstellungen der Platine prüfen."},
+            {"Stop without control",
+             "The wheels turn slowly, then the control stays silent for some seconds, several times. The board has to "
+             "stop the wheels by itself each time.",
+             "If the board does not stop, don't let the mower drive; check the settings of the board."})},
+      {"driver_end", "drive", true, false,
+       "While the wheels turn: hw/end, commands go on. The driver is back within return_max (hw/status fresh after a "
+       "gap), the wheels stand and do not start for hold s, the driver shows emergencies of the list and LATCH only, "
+       "the program releases them itself, nothing starts for hold s and a new command turns the wheels. Offered where "
+       "hw/capabilities has driver_end and the launch has at least two restarts of the driver left. " + DriveRules(),
+       {Speed(), Hold(), Seconds("return_max", 5, 60, 20, "The driver is back within this time"), Emergencies()},
+       {{"return", "s", "From the answer of hw/end to the first hw/status of the new driver",
+         Named("Treiber zurück nach", "Driver back after")}},
+       DriveReasons({"DRIVER_REFUSED", "NO_RETURN", "STARTED_AGAIN", "NO_EMERGENCY", "NOT_RELEASED", "NO_RESTART"}),
+       Both({"Stopp bei Treiberende",
+             "Die Räder drehen langsam, dann beendet sich der Treiber der Platine und startet neu. Die Räder müssen "
+             "stehen und gesperrt bleiben, bis das Programm sie freigibt.",
+             "Bleiben die Räder nicht stehen oder kommt der Treiber nicht zurück: den Mäher nicht fahren lassen und "
+             "MowBite OS neu starten."},
+            {"Stop when the driver ends",
+             "The wheels turn slowly, then the driver of the board ends and starts again. The wheels have to stand and "
+             "stay locked until the program releases them.",
+             "If the wheels do not stand or the driver does not come back, don't let the mower drive and restart "
+             "MowBite OS."})},
   };
   return checks;
 }
@@ -483,6 +674,9 @@ Json SetupCatalog() {
   Json accept = {{"description", SetupAccept().text},
                  {"texts", Texts(SetupAccept().texts)},
                  {"values", named(SetupAcceptValues())}};
+  Json wheel = {{"description", SetupWheelQuestion().text},
+                {"texts", Texts(SetupWheelQuestion().texts)},
+                {"values", named(SetupWheelValues())}};
   Json delay = {{"description", SetupDelay().text},
                 {"texts", Texts(SetupDelay().texts)},
                 {"prefix", kSetupDelayPrefix},
@@ -524,7 +718,7 @@ Json SetupCatalog() {
            "SETUP_STEP, the screen it opens), roles of the inputs (group, emergency of a press; a role is named as its "
            "flag in hw/status) and modes of a part, moves of a step imu, conditions of a step done_when with their "
            "screen, points to confirm, reasons to skip, the question of a step inputs_assign and the delays it takes "
-           "once it is ok, the ways to restart, "
+           "once it is ok, the ways to restart, the parts of a step wheels and its question, "
            "and the limits; texts by language where the OS has them. The steps themselves come with setup.get"},
           {"stages", named(SetupStages())},
           {"checks", checks},
@@ -537,6 +731,8 @@ Json SetupCatalog() {
           {"accept", accept},
           {"delay", delay},
           {"restart", named(SetupRestarts())},
+          {"wheel_parts", named(SetupWheelParts())},
+          {"wheel", wheel},
           {"open", SetupOpens()},
           {"symbols", SetupSymbols()},
           {"states", SetupStates()},
@@ -547,7 +743,11 @@ Json SetupCatalog() {
             {"skip_text", kSetupMaxSkipText},
             {"shape_parts", kShapeMaxParts},
             {"shape_part_points", kShapeMaxPartPoints},
-            {"shape_points", kShapeMaxPoints}}},
+            {"shape_points", kShapeMaxPoints},
+            {"raised_speed", kSetupRaisedSpeed},
+            {"raised_turn", kSetupRaisedTurn},
+            {"move_time", kSetupMoveTime},
+            {"keep", kSetupKeepTimeout}}},
           {"shape_kinds", ShapeKinds()}};
 }
 
@@ -565,14 +765,20 @@ Field SetupState() {
       {Text("id", "Name of the step in setup.*"),
        Text("stage", "Its stage"),
        Text("check", "Its check, a key of x-setup.checks"),
-       Text("kind", "How to show it: confirm, input or measure; a kind the app does not know as text with a button"),
+       Text("kind", "How to show it: confirm, input, measure or drive; a kind the app does not know as text with a "
+                    "button"),
        Text("state", "locked: a step of needs is not ok; open; running; ok; failed; skipped; stale", true,
             SetupStates()),
        Integer("attempt", "How often it was started or answered"),
        List("needs", "Steps that have to be ok before this one", Type::kString),
        Rows("blocked", "What keeps it from going on right now, reasons of SETUP_BLOCKED in x-reasons",
             {Text("reason", "A fixed name in capitals"), Text("message", "English text")}),
-       Nullable(Object("motion", "What moves in the step, null for nothing")),
+       Nullable(Object("motion", "What moves in the step, null for nothing",
+                       {Bool("wheels", "The program turns the wheels"), Bool("blade", "The program turns the blade"),
+                        Bool("raised", "The mower is jacked up"),
+                        Number("max_speed", "m/s", "The fastest a wheel turns"),
+                        Nullable(Number("max_distance", "m", "The longest way on the ground, null while jacked up")),
+                        Number("max_time", "s", "The longest single move")})),
        Rows("confirm", "Points setup.start has to name in confirm", {Text("id", "Name of the point"), TextsField()}),
        Bool("start", "setup.start begins it"),
        Bool("auto", "Its ticks come without a tap"),
@@ -580,13 +786,13 @@ Field SetupState() {
        Rows("skip_reasons", "Reasons setup.skip takes", {Text("id", "Name of the reason"), TextsField()}),
        Rows("inputs", "What setup.answer takes in values",
             {Text("name", "Key in values; in a step inputs_assign accept and delay_<part>, see x-setup.accept and "
-                          "x-setup.delay"),
+                          "x-setup.delay; in a step wheels wheel, see x-setup.wheel"),
              Text("type", "choice or number", true, {"choice", "number"}),
              Text("unit", "Unit of a number", false), Number("min", "", "Least number", false),
              Number("max", "", "Largest number", false),
              Rows("values", "Values of a choice", {Text("id", "The value"), TextsField()}, false),
              Bool("ask", "A question of the running step that waits for its answer: accept while ask of the step is "
-                         "set"),
+                         "set, wheel while the part one_wheel of a step wheels turns one wheel"),
              Bool("advanced", "A setting beside the check, to be shown apart: the delays of a step inputs_assign"),
              {"value", Type::kAny, "", true, "The value given last, null before", {}, true, {}, ""}, TextsField()}),
        Rows("values", "What it measures, live while it runs and as it ended",
@@ -677,17 +883,19 @@ EventEntry SetupStepEvent() {
                         "Another input switched than the one expected. The sensors are plugged in the wrong way "
                         "round or assigned wrongly.",
                         "Check where the sensors are plugged in, then repeat the step."})),
-           failed("NO_EMERGENCY", "The input switched, but the emergency of the step did not follow within its limit",
+           failed("NO_EMERGENCY",
+                  "The input switched, or the silence or end of the driver came, but the emergency of the step did "
+                  "not follow within its limit",
                   {Part(), Number("limit", "s", "The limit", false)},
                   Both({"Kein Notaus",
-                        "Der Eingang hat geschaltet, aber der Mäher hat nicht rechtzeitig den Notaus gemeldet. So "
-                        "würde er im Betrieb nicht anhalten.",
-                        "Den Mäher nicht fahren lassen. Zuordnung und Einstellung des Eingangs prüfen, dann "
+                        "Der Auslöser kam, aber der Mäher hat nicht rechtzeitig den Notaus gemeldet. So würde er im "
+                        "Betrieb nicht anhalten.",
+                        "Den Mäher nicht fahren lassen. Zuordnung und Einstellung des Auslösers prüfen, dann "
                         "wiederholen."},
                        {"No emergency stop",
-                        "The input switched, but the mower didn't report the emergency stop in time. It wouldn't "
-                        "stop like this in use.",
-                        "Don't let the mower drive. Check how the input is assigned and set, then repeat."})),
+                        "The trigger came, but the mower didn't report the emergency stop in time. It wouldn't stop "
+                        "like this in use.",
+                        "Don't let the mower drive. Check how the trigger is assigned and set, then repeat."})),
            failed("STOPPED_EARLY", "A short switch of the input brought the emergency already", {Part()},
                   Both({"Stoppt zu früh",
                         "Schon ein kurzes Auslösen hat den Notaus gebracht. Im Betrieb würde der Mäher bei jeder "
@@ -762,8 +970,90 @@ EventEntry SetupStepEvent() {
                         "The motion sensor reported the move the other way round. It is mounted another way than "
                         "set.",
                         "Change the mounting of the sensor in the settings of the platform, then repeat."})),
+           failed("NO_START", "The wheels did not turn within the time after the first command", {Part()},
+                  Both({"Räder drehen nicht",
+                        "Die Räder haben sich auf den Fahrbefehl nicht gedreht.",
+                        "Prüfen, ob der Mäher frei aufgebockt ist und die Motoren angeschlossen sind, dann "
+                        "wiederholen."},
+                       {"Wheels not turning", "The wheels didn't turn on the command.",
+                        "Check that the mower is jacked up freely and the motors are connected, then repeat."})),
+           failed("STARTED_AGAIN", "A wheel turned while nothing was to turn: after the stop or the release",
+                  {Part(), Number("speed", "m/s", "The fastest wheel then", false)},
+                  Both({"Wieder angelaufen",
+                        "Ein Rad hat sich gedreht, obwohl der Mäher stehen musste. So würde er nach einem Stopp "
+                        "von selbst weiterfahren.",
+                        "Den Mäher nicht fahren lassen. Platine und Treiber prüfen, dann wiederholen."},
+                       {"Started again",
+                        "A wheel turned while the mower had to stand. Like this it would drive on by itself after a "
+                        "stop.",
+                        "Don't let the mower drive. Check board and driver, then repeat."})),
+           failed("NO_RESTART", "After the release a new command did not turn the wheels within its time", {Part()},
+                  Both({"Kein Anlauf nach Freigabe",
+                        "Nach der Freigabe hat ein neuer Fahrbefehl die Räder nicht gedreht.",
+                        "Den Notaus in der App prüfen und aufheben, dann wiederholen."},
+                       {"No start after the release", "After the release a new command didn't turn the wheels.",
+                        "Check the emergency stop in the app and release it, then repeat."})),
+           failed("WRONG_DIRECTION", "A part turned the wheels the other way than asked", {Part()},
+                  Both({"Falsche Drehrichtung",
+                        "Ein Rad hat sich anders herum gedreht als verlangt.",
+                        "Anschlüsse der Motoren und die Drehrichtung in den Einstellungen der Plattform prüfen."},
+                       {"Wrong direction", "A wheel turned the other way round than asked.",
+                        "Check the plugs of the motors and their direction in the settings of the platform."})),
+           failed("WRONG_WHEEL", "In the part one_wheel the answer or the odometry named another wheel than the right",
+                  {Part(), Text("answer", "The wheel the user named", false)},
+                  Both({"Falsches Rad",
+                        "Es hat sich ein anderes Rad gedreht als das rechte. Die Motoren sind vertauscht.",
+                        "Die Anschlüsse der Motoren tauschen oder die Seiten in den Einstellungen der Plattform "
+                        "ändern, dann wiederholen."},
+                       {"Wrong wheel", "Another wheel than the right one turned. The motors are swapped.",
+                        "Swap the plugs of the motors or the sides in the settings of the platform, then repeat."})),
+           failed("NOT_RELEASED", "The emergency the step brought did not end with the release of the program",
+                  {Part()},
+                  Both({"Freigabe gescheitert",
+                        "Der Notaus des Schritts ließ sich nicht aufheben.",
+                        "Den Notaus in der App aufheben, dann wiederholen."},
+                       {"Release failed", "The emergency stop of the step couldn't be released.",
+                        "Release the emergency stop in the app, then repeat."})),
+           failed("NO_RETURN", "The driver was not back within return_max after hw/end",
+                  {Number("limit", "s", "The limit", false)},
+                  Both({"Treiber nicht zurück",
+                        "Der Treiber der Platine ist nach seinem Ende nicht rechtzeitig neu gestartet.",
+                        "MowBite OS neu starten, dann wiederholen."},
+                       {"Driver not back", "The driver of the board didn't start again in time after its end.",
+                        "Restart MowBite OS, then repeat."})),
+           failed("DRIVER_REFUSED", "The driver refused hw/silence or hw/end",
+                  {Text("code", "Its code: READ_ONLY, OUT_OF_RANGE, CHARGING, BLADE or BUSY", false), Part()},
+                  Both({"Platine lehnt ab",
+                        "Der Treiber der Platine hat die Prüfung abgelehnt, etwa weil der Mäher lädt oder das "
+                        "Messer läuft.",
+                        "Den Mäher von der Ladestation nehmen, das Messer stehen lassen, dann wiederholen."},
+                       {"Board refused", "The driver of the board refused the check, for instance because the mower "
+                                         "charges or the blade runs.",
+                        "Take the mower off the docking station, let the blade stand, then repeat."})),
+           failed("LOGIC_REFUSED", "The logic did not take the step into SETUP within its time",
+                  {Text("mower_state", "current_state of the mower then", false), Part()},
+                  Both({"Mäher nicht bereit",
+                        "Der Mäher hat den Prüfschritt nicht angenommen: er ist unterwegs, lädt oder steht im "
+                        "Notaus.",
+                        "Den Mäher von der Station nehmen, Notaus aufheben, dann wiederholen."},
+                       {"Mower not ready",
+                        "The mower didn't take the step: it is on its way, charges or has an emergency stop.",
+                        "Take the mower off the station, release the emergency stop, then repeat."})),
+           failed("RELEASED", "setup.keep stayed away: the app lost its connection or let go of the step", {Part()},
+                  Both({"Verbindung weg",
+                        "Die App hat den Schritt nicht mehr begleitet, der Mäher hat angehalten.",
+                        "Die App offen lassen und die Verbindung prüfen, dann wiederholen."},
+                       {"Connection lost", "The app stopped following the step, so the mower stopped.",
+                        "Keep the app open and check the connection, then repeat."})),
+           failed("EMERGENCY", "An emergency the step did not ask for came up",
+                  {Text("emergency", "The emergencies, by the names of x-emergency-bits", false), Part()},
+                  Both({"Notaus",
+                        "Ein Notaus hat den Schritt beendet.",
+                        "Den Grund in der App ansehen, den Notaus aufheben und den Schritt wiederholen."},
+                       {"Emergency stop", "An emergency stop ended the step.",
+                        "See the reason in the app, release the emergency stop and repeat the step."})),
            failed("LIMIT", "A value is outside of its bounds",
-                  {Text("value_id", "id of the value in values[] of the step", false),
+                  {Part(), Text("value_id", "id of the value in values[] of the step", false),
                    {"value", Type::kAny, "", false, "What was measured", {}, true, {}, ""},
                    Number("limit", "", "The bound it broke", false), Text("unit", "Unit of both", false)},
                   Both({"Wert außerhalb",
@@ -808,7 +1098,8 @@ EventEntry SetupRefused() {
   const auto refused = [](std::string code, std::string text, std::vector<Field> fields, UserTexts texts) {
     return Reason(std::move(code), "info", "user", std::move(text), std::move(fields), std::move(texts));
   };
-  return {"SETUP_REFUSED", "answer", "A method setup.* was refused: the data of its -32600, never an event",
+  EventEntry entry = {"SETUP_REFUSED", "answer",
+                      "A method setup.* was refused: the data of its -32600, never an event",
           Rated(true, {Text("event", "Always SETUP_REFUSED")}),
           {refused("UNKNOWN_STEP", "The step list has no step of this name", {Text("step", "The name", false)},
                    Both({"Schritt unbekannt", "Diesen Schritt gibt es auf diesem Mäher nicht.",
@@ -848,18 +1139,22 @@ EventEntry SetupRefused() {
                          "Die Einrichtung neu öffnen und der Anzeige folgen."},
                         {"Not possible this way", "This step is done another way.",
                          "Open the setup again and follow what it shows."})),
-           refused("EMERGENCY", "An emergency stands and the step restarts the OS", {},
-                   Both({"Notaus steht", "Für diesen Schritt startet MowBite OS neu. Das geht nur ohne Notaus.",
+           refused("EMERGENCY", "An emergency stands: a step that restarts the OS or moves the wheels needs none", {},
+                   Both({"Notaus steht",
+                         "Dieser Schritt startet MowBite OS neu oder dreht die Räder. Das geht nur ohne Notaus.",
                          "Den Notaus aufheben, dann den Schritt starten."},
                         {"Emergency stop is on",
-                         "MowBite OS restarts for this step. That takes a mower without an emergency stop.",
+                         "This step restarts MowBite OS or turns the wheels. That takes a mower without an emergency "
+                         "stop.",
                          "Release the emergency stop, then start the step."})),
            DriverMissing("info"), NotWritable("error")},
           "info", "user"};
+  for (auto& reason : DriveBlocks()) entry.reasons.push_back(std::move(reason));
+  return entry;
 }
 
 EventEntry SetupBlocked() {
-  return {"SETUP_BLOCKED", "answer",
+  EventEntry entry = {"SETUP_BLOCKED", "answer",
           "The reasons of blocked[] of a step of setup.get and setup/json: what keeps it from going on right now; "
           "never an event",
           {Text("reason", "Why: a fixed name in capitals"), Text("message", "English text")},
@@ -884,6 +1179,8 @@ EventEntry SetupBlocked() {
                        {"No data", "Motion sensor or GPS send no data right now.",
                         "Switch the mower on and check the cables."}))},
           "info", "user"};
+  for (auto& reason : DriveBlocks()) entry.reasons.push_back(std::move(reason));
+  return entry;
 }
 
 }  // namespace mowbite_api

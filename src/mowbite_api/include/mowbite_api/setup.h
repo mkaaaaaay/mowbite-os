@@ -58,7 +58,7 @@ struct SetupMeasure {
 
 struct SetupCheck {
   std::string name;
-  // How the app shows a step of it: confirm, input or measure.
+  // How the app shows a step of it: confirm, input, measure or drive (the program moves the wheels).
   std::string kind;
   // setup.start begins it. Without, setup.answer ends it (kind input) or the OS once it sees what the step waits for.
   bool start = false;
@@ -106,6 +106,11 @@ const SetupName& SetupDelay();
 constexpr char kSetupDelayPrefix[] = "delay_";
 // How the OS restarts for a step that needs it: restart at the top of a step list.
 const std::vector<SetupName>& SetupRestarts();
+// The parts of a step wheels, always all of them in this order.
+const std::vector<SetupName>& SetupWheelParts();
+// The question of the part one_wheel of a step wheels in inputs[] of the step, and the values setup.answer takes.
+const SetupName& SetupWheelQuestion();
+const std::vector<SetupName>& SetupWheelValues();
 
 template <typename Name>
 const Name* FindSetupName(const std::vector<Name>& names, const std::string& id) {
@@ -142,6 +147,13 @@ constexpr double kSetupGravityMin = 8.8;
 constexpr double kSetupGravityMax = 10.8;
 // setup/json goes out at most this often while a step runs (s).
 constexpr double kSetupLivePeriod = 0.5;
+// A step that moves the wheels of a mower jacked up: the most the program asks for (m/s of the body and of each
+// wheel, rad/s), and the longest single move (s). mowbite_safety holds its own bounds on top (kSetupMaxLinear).
+constexpr double kSetupRaisedSpeed = 0.1;
+constexpr double kSetupRaisedTurn = 0.4;
+constexpr double kSetupMoveTime = 10.0;
+// Such a step stops when setup.keep stays away this long (s).
+constexpr double kSetupKeepTimeout = 1.0;
 
 // robot_shape of robot.geometry: parts, points of one part and points of all parts at most.
 constexpr int kShapeMaxParts = 32;

@@ -1224,8 +1224,9 @@ const std::vector<EventEntry>& Events() {
       Event("STATE", "logic", "The state changed; a pause carries its reason",
             Rated(false, {Text("state", "The new state", true,
                                {"IDLE", "AREA_RECORDING", "MOWING", "PAUSED", "UNDOCKING", "DOCKING"}),
-                          Text("sub_state", "What IDLE does: a drive or a calibration drive", false,
-                               {"DRIVING", "CALIBRATING"})}),
+                          Text("sub_state", "What IDLE does: a drive, a calibration drive or a step of the setup "
+                                            "program that moves the wheels",
+                               false, {"DRIVING", "CALIBRATING", "SETUP"})}),
             {R("MANUAL", "info", "user"), R("NO_POSITION", "warning", "auto"), R("POSE_LOST", "warning", "auto"),
              R("POSITION_ACCURACY", "warning", "auto"), R("HEADING", "warning", "auto"),
              R("NO_HEADING", "warning", "auto"), R("EMERGENCY", "error", "user"),
@@ -1436,8 +1437,8 @@ const std::vector<EventEntry>& Events() {
                    Text("detail", "English text of what is known: the line of the kernel or what the OS found", true),
                    Nullable(Integer("crashed_at", "unix s", "When the kernel crashed, null when not known", true)),
                    Text("state_before",
-                        "The state before: current_state, DRIVING or CALIBRATING for IDLE with a drive; empty when "
-                        "not known",
+                        "The state before: current_state, DRIVING, CALIBRATING or SETUP for IDLE with a drive; empty "
+                        "when not known",
                         true),
                    Nullable(Text("job_id_before", "The job of mowing then, null without one", true)),
                    Bool("hold", "The mower is held until a release, also by a hold from before"),
