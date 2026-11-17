@@ -299,6 +299,9 @@ void Program::TickGround(double now, double wall) {
 json Program::GroundValues(const Run& run, const Step& step) const {
   const double r = step.Number("ratio");
   json values = json::array();
+  // The sides of turn, so that its two values do not read alike.
+  const json sides = {{"turn_left", {{"de", " links"}, {"en", " left"}}},
+                      {"turn_right", {{"de", " rechts"}, {"en", " right"}}}};
   const auto add = [&](const Part& part, const char* measure, const std::string& id, json min, json max) {
     const auto found = run.ground.find(id);
     json value = nullptr;
@@ -312,7 +315,8 @@ json Program::GroundValues(const Run& run, const Step& step) const {
     entry["id"] = id;
     for (auto& language : entry["texts"].items()) {
       const json& named = part.texts.contains(language.key()) ? part.texts[language.key()] : json::object();
-      language.value()["name"] = named.value("name", part.id) + ": " + language.value().value("name", "");
+      const std::string side = sides.contains(id) ? sides[id].value(language.key(), "") : "";
+      language.value()["name"] = named.value("name", part.id) + side + ": " + language.value().value("name", "");
     }
     values.push_back(std::move(entry));
   };

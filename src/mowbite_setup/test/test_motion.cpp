@@ -651,7 +651,8 @@ TEST(Ground, DrivesItsPartsInOneRunAndPasses) {
   EXPECT_NEAR(ValueOf(step, "straight_stand")["value"].get<double>(), 0.5, 0.1);
   EXPECT_NEAR(ValueOf(step, "straight_way")["value"].get<double>(), 0.15, 0.04);
   EXPECT_LE(ValueOf(step, "stop_stand")["value"].get<double>(), 0.1);
-  EXPECT_EQ(ValueOf(step, "turn_left")["texts"]["de"]["name"], "Drehen: Drehung Lagesensor");
+  EXPECT_EQ(ValueOf(step, "turn_left")["texts"]["de"]["name"], "Drehen links: Drehung Lagesensor");
+  EXPECT_EQ(ValueOf(step, "turn_right")["texts"]["en"]["name"], "Turn right: Turn of the motion sensor");
   // Both emergencies released by the program.
   EXPECT_EQ(mower.hardware.emergency_reason, 0u);
   EXPECT_EQ(mower.releases, 2);
