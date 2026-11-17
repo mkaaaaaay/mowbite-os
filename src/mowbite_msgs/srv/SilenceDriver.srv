@@ -7,5 +7,5 @@ float32 seconds
 bool success
 string message
 # Why it was refused, empty otherwise: READ_ONLY, OUT_OF_RANGE (seconds not in 0.2 to silence_max_s), CHARGING
-# (on the charging contacts), BUSY (already silent).
+# (on the charging contacts), BLADE (blade on or still turning), BUSY (already silent).
 string code
