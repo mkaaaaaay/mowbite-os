@@ -194,7 +194,7 @@ bool IsRunName(const std::string& name) {
 bool RunActive(const std::string& dir) {
   const int fd = open((dir + "/lock").c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) return false;
-  const bool active = flock(fd, LOCK_EX | LOCK_NB) != 0 && errno == EWOULDBLOCK;
+  const bool active = flock(fd, LOCK_SH | LOCK_NB) != 0 && errno == EWOULDBLOCK;
   close(fd);
   return active;
 }

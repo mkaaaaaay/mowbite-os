@@ -1,4 +1,6 @@
+#include <fcntl.h>
 #include <gtest/gtest.h>
+#include <sys/file.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -134,6 +136,16 @@ TEST_F(RunIndexTest, ARunningJournalIsActiveAndHasNotEnded) {
   EXPECT_FALSE(done.active);
   EXPECT_TRUE(done.ended);
   EXPECT_TRUE(done.segments[0].closed);
+}
+
+TEST_F(RunIndexTest, AnotherProbeAtTheSameTimeLeavesAFinishedRunInactive) {
+  const std::string run = Finished(0.1);
+  ASSERT_FALSE(run.empty());
+  const int probe = open((run + "/lock").c_str(), O_RDONLY | O_CLOEXEC);
+  ASSERT_GE(probe, 0);
+  ASSERT_EQ(flock(probe, LOCK_SH | LOCK_NB), 0);
+  EXPECT_FALSE(RunActive(run));
+  close(probe);
 }
 
 TEST_F(RunIndexTest, ARotationIsNoEndOfTheProcess) {

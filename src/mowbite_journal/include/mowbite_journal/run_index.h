@@ -79,7 +79,7 @@ class RunIndex {
 
 // A folder name the journal gives a run: <utc>_<process>_<pid>.
 bool IsRunName(const std::string& name);
-// True while a process holds the lock of the run; the check takes the lock only for a moment if it is free.
+// True while a writer holds the lock of the run; the check shares the lock for a moment, so checks never collide.
 bool RunActive(const std::string& dir);
 
 }  // namespace mowbite_journal

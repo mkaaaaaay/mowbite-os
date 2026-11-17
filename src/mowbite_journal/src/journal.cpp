@@ -191,6 +191,16 @@ void RemoveRun(const std::string& run) {
   rmdir(run.c_str());
 }
 
+// LOCK_EX within about 50 ms: a check of RunActive holds LOCK_SH only for a moment.
+bool LockSoon(int fd) {
+  for (int i = 0; i < 5; ++i) {
+    if (flock(fd, LOCK_EX | LOCK_NB) == 0) return true;
+    if (errno != EWOULDBLOCK) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
 }  // namespace
 
 class Journal::Impl {
@@ -213,7 +223,7 @@ class Journal::Impl {
       return false;
     }
     lock_fd_ = open((run_dir_ + "/lock").c_str(), O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
-    if (lock_fd_ < 0 || flock(lock_fd_, LOCK_EX | LOCK_NB) != 0) {
+    if (lock_fd_ < 0 || !LockSoon(lock_fd_)) {
       if (error) *error = "cannot lock " + run_dir_ + ": " + std::strerror(errno);
       return false;
     }
