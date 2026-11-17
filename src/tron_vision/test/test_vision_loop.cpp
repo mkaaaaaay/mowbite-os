@@ -106,19 +106,23 @@ struct Rig {
   }
   VisionLoop& Loop() {
     if (!loop) {
-      loop = std::make_unique<VisionLoop>(config, camera, guard, [this] { return Now(); }, stream.get());
+      loop = std::make_unique<VisionLoop>(config, camera, guard, [this] { return Now(); }, stream.get(),
+                                          plain_stream.get());
     }
     return *loop;
   }
-  // H.264 for an RTSP client on any free port, from an encoder of the test.
-  void WithVideo() {
+  // H.264 for an RTSP client on any free port, from an encoder of the test; with `plain` also without the boxes under
+  // oa_left_plain from another one.
+  void WithVideo(bool plain = false) {
     RtspConfig rtsp;
     rtsp.port = 0;
-    rtsp.path = "oa_left";
+    rtsp.paths = {"oa_left"};
+    if (plain) rtsp.paths.push_back("oa_left_plain");
     server = std::make_unique<RtspServer>(rtsp, [this] { return Now(); });
     std::string error;
     ASSERT_TRUE(server->Listen(error)) << error;
     stream = std::make_unique<H264Stream>(encoder, *server, 0.5, [this] { return Now(); });
+    if (plain) plain_stream = std::make_unique<H264Stream>(plain_encoder, *server, 0.5, [this] { return Now(); }, 1);
     camera.exported = true;
     config.video.idle_wait_ms = 5;
     config.video.encoder.format = PixelFormat::kNv12;
@@ -128,8 +132,18 @@ struct Rig {
     Run(0.3);
     return client.Receive();
   }
-  std::string Url(const std::string& rest = "") const {
-    return "rtsp://127.0.0.1:" + std::to_string(server->Port()) + "/oa_left" + rest;
+  std::string Url(const std::string& rest = "", const std::string& path = "oa_left") const {
+    return "rtsp://127.0.0.1:" + std::to_string(server->Port()) + "/" + path + rest;
+  }
+  // SETUP and PLAY of the path; false without a session.
+  bool Play(const test::Client& client, const std::string& path) {
+    const std::string setup =
+        Ask(client, "SETUP " + Url("/trackID=0", path) +
+                        " RTSP/1.0\r\nCSeq: 1\r\nTransport: RTP/AVP/TCP;interleaved=0-1\r\n\r\n");
+    const std::string session = test::SessionOf(setup);
+    if (session.empty()) return false;
+    client.Send("PLAY " + Url("/", path) + " RTSP/1.0\r\nCSeq: 2\r\nSession: " + session + "\r\n\r\n");
+    return true;
   }
   // The clock of the loop: camera time plus the real time the test took, or camera time alone without `real_time`.
   double Now() const {
@@ -158,8 +172,10 @@ struct Rig {
   CrashGuard guard{tmp.Path() + "/vision", tmp.Path() + "/crash", tmp.Write("boot_id", "boot-1\n")};
   VisionConfig config;
   test::FakeEncoder encoder{clock};
+  test::FakeEncoder plain_encoder{clock};
   std::unique_ptr<RtspServer> server;
   std::unique_ptr<H264Stream> stream;
+  std::unique_ptr<H264Stream> plain_stream;
   std::unique_ptr<VisionLoop> loop;
 };
 
@@ -181,6 +197,22 @@ TEST(VisionLoop, PicturesOnlyWhileWatchedAndRunning) {
   rig.Loop().SetPreviewWanted(false);
   rig.Run(2.0);
   EXPECT_EQ(rig.Loop().GetPreview().Count(), made);
+}
+
+TEST(VisionLoop, PicturesWithoutTheBoxesOnTheirOwn) {
+  Rig rig(kPersonModel);
+  ASSERT_TRUE(rig.Loop().Load());
+  rig.Loop().SetPlainWanted(true);
+  rig.Run(2.0);
+  EXPECT_GE(rig.Loop().GetPreview().Plain().Count(), 5U);
+  EXPECT_EQ(rig.Loop().GetPreview().Count(), 0U);
+  rig.Loop().SetPreviewWanted(true);
+  rig.Run(1.0);
+  EXPECT_GE(rig.Loop().GetPreview().Count(), 3U);
+  rig.Loop().SetPlainWanted(false);
+  const uint64_t plain = rig.Loop().GetPreview().Plain().Count();
+  rig.Run(1.0);
+  EXPECT_EQ(rig.Loop().GetPreview().Plain().Count(), plain);
 }
 
 TEST(VisionLoop, RefusesTheSmallModelAndNeverStreams) {
@@ -447,6 +479,57 @@ TEST(VisionLoop, VideoWithTheBoxes) {
   EXPECT_TRUE(rig.camera.streaming);
   rig.Loop().Shutdown();
   EXPECT_FALSE(rig.camera.streaming);
+}
+
+// The client of the plain path gets the frames without the boxes; with both clients each encoder takes the frame once,
+// gray-world shifted once, the plain one before the boxes are drawn.
+TEST(VisionLoop, VideoWithAndWithoutTheBoxes) {
+  Rig rig(kPersonModel);
+  rig.WithVideo(true);
+  rig.camera.u = 100;
+  std::vector<uint8_t> plain_seen;
+  std::vector<uint8_t> boxed_seen;
+  rig.plain_encoder.on_encode = [&] { plain_seen = rig.camera.edited; };
+  rig.encoder.on_encode = [&] { boxed_seen = rig.camera.edited; };
+  ASSERT_TRUE(rig.Loop().Load());
+  rig.Run(1.0);
+  ASSERT_EQ(rig.Loop().Detections().size(), 1U);
+  const Detection& d = rig.Loop().Detections()[0];
+  const auto x = static_cast<uint32_t>(d.x1 + d.x2) / 2 & ~1U;
+  const auto y = static_cast<uint32_t>(d.y1 + 0.5F) & ~1U;
+  {
+    test::Client plain(rig.server->Port());
+    ASSERT_TRUE(rig.Play(plain, "oa_left_plain"));
+    rig.Run(1.0);
+    EXPECT_TRUE(rig.plain_encoder.is_open);
+    EXPECT_FALSE(rig.encoder.is_open);
+    EXPECT_GT(rig.plain_stream->Frames(), 10U);
+    ASSERT_EQ(plain_seen.size(), kWidth * kHeight * 3 / 2);
+    EXPECT_NEAR(plain_seen[kWidth * kHeight], 128, 1);
+    EXPECT_EQ(plain_seen[y * kWidth + x], plain_seen[0]);
+    {
+      test::Client boxes(rig.server->Port());
+      ASSERT_TRUE(rig.Play(boxes, "oa_left"));
+      const uint64_t plain_frames = rig.plain_stream->Frames();
+      rig.Run(1.0);
+      EXPECT_TRUE(rig.encoder.is_open);
+      EXPECT_GT(rig.stream->Frames(), 10U);
+      EXPECT_GT(rig.plain_stream->Frames(), plain_frames + 10U);
+      ASSERT_EQ(boxed_seen.size(), kWidth * kHeight * 3 / 2);
+      EXPECT_NEAR(boxed_seen[kWidth * kHeight], 128, 1);
+      EXPECT_EQ(boxed_seen[y * kWidth + x], 120);
+      EXPECT_NEAR(plain_seen[kWidth * kHeight], 128, 1);
+      EXPECT_EQ(plain_seen[y * kWidth + x], plain_seen[0]);
+      EXPECT_NE(boxes.Receive().find('$'), std::string::npos);
+    }
+    rig.Run(0.5);
+    EXPECT_FALSE(rig.encoder.is_open);
+    EXPECT_TRUE(rig.plain_encoder.is_open);
+    EXPECT_NE(plain.Receive().find('$'), std::string::npos);
+  }
+  rig.Run(0.5);
+  EXPECT_FALSE(rig.plain_encoder.is_open);
+  EXPECT_TRUE(rig.camera.streaming);
 }
 
 TEST(VisionLoop, NpuErrorEndsTheProcess) {

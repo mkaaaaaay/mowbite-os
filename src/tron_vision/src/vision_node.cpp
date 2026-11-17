@@ -124,8 +124,9 @@ VisionNode::VisionNode(const rclcpp::NodeOptions& options, std::unique_ptr<Camer
   camera_ = camera ? std::move(camera) : std::make_unique<TronCamera>(std::move(hardware));
   guard_ = std::make_unique<CrashGuard>(crash_dir, kCrashFlag, kBootId);
   std::string error;
-  if (!video_->Open(camera_id_, error)) RCLCPP_WARN(get_logger(), "No H.264, only JPEG: %s", error.c_str());
-  loop_ = std::make_unique<VisionLoop>(std::move(config), *camera_, *guard_, MonotonicSeconds, video_->Stream());
+  if (!video_->Open(camera_id_, error, true)) RCLCPP_WARN(get_logger(), "No H.264, only JPEG: %s", error.c_str());
+  loop_ = std::make_unique<VisionLoop>(std::move(config), *camera_, *guard_, MonotonicSeconds, video_->Stream(),
+                                       video_->PlainStream());
 
   // The only publishers of this process; test_vision_node checks the list. Absolute names, so that an instance in a
   // namespace of its own publishes on the same topics.
@@ -137,6 +138,8 @@ VisionNode::VisionNode(const rclcpp::NodeOptions& options, std::unique_ptr<Camer
       "/hw/cameras", rclcpp::QoS(rclcpp::KeepLast(4)).reliable().transient_local());
   picture_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>("/camera/" + camera_id_ + "/jpeg",
                                                                      rclcpp::QoS(rclcpp::KeepLast(1)).best_effort());
+  plain_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(
+      "/camera/" + camera_id_ + "/jpeg" + kPlainSuffix, rclcpp::QoS(rclcpp::KeepLast(1)).best_effort());
   using mowbite_msgs::msg::SensorSpec;
   const std::string name = "Camera AI" + words;
   sensor_info_pub_->publish(PlainSensor(state_sensor_, name, SensorSpec::KIND_TEXT, ""));
@@ -166,10 +169,19 @@ void VisionNode::Run() {
       if (!running_) return;
     }
     loop_->SetPreviewWanted(picture_pub_->get_subscription_count() > 0);
+    loop_->SetPlainWanted(plain_pub_->get_subscription_count() > 0);
     const bool go_on = loop_->Step();
     const VisionStatus& status = loop_->Status();
     if (status.inferences != published_inferences_) PublishDetections(status);
-    if (loop_->GetPreview().Count() != published_pictures_) PublishPicture();
+    const Preview& preview = loop_->GetPreview();
+    if (preview.Count() != published_pictures_) {
+      published_pictures_ = preview.Count();
+      PublishPicture(preview.Jpeg(), picture_pub_);
+    }
+    if (preview.Plain().Count() != published_plain_) {
+      published_plain_ = preview.Plain().Count();
+      PublishPicture(preview.Plain().Jpeg(), plain_pub_);
+    }
     PublishCamera(status);
     Report(MonotonicSeconds());
     if (!go_on) {
@@ -243,15 +255,14 @@ void VisionNode::PublishCamera(const VisionStatus& status) {
   cameras_pub_->publish(camera_entry_);
 }
 
-void VisionNode::PublishPicture() {
-  const Preview& preview = loop_->GetPreview();
-  published_pictures_ = preview.Count();
+void VisionNode::PublishPicture(const std::vector<uint8_t>& jpeg,
+                                const rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr& publisher) {
   sensor_msgs::msg::CompressedImage msg;
   msg.header.stamp = now();
   msg.header.frame_id = camera_id_;
   msg.format = "jpeg";
-  msg.data = preview.Jpeg();
-  picture_pub_->publish(msg);
+  msg.data = jpeg;
+  publisher->publish(msg);
 }
 
 }  // namespace tron_vision

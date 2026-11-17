@@ -44,7 +44,7 @@ const char* StateName(VisionState state) {
 }
 
 VisionLoop::VisionLoop(VisionConfig config, Camera& camera, CrashGuard& guard, std::function<double()> now,
-                       H264Stream* stream)
+                       H264Stream* stream, H264Stream* plain_stream)
     : config_(std::move(config)),
       camera_(camera),
       guard_(guard),
@@ -55,6 +55,12 @@ VisionLoop::VisionLoop(VisionConfig config, Camera& camera, CrashGuard& guard, s
   status_.exposure.exposure = config_.exposure.exposure_max;
   status_.exposure.gain = config_.exposure.gain_min;
   if (stream != nullptr) video_ = std::make_unique<VideoFeed>(config_.video, *stream, now_);
+  if (stream != nullptr && plain_stream != nullptr) {
+    // Both streams share one server, which the feed with the boxes already waits on.
+    VideoFeedConfig plain = config_.video;
+    plain.idle_wait_ms = 0;
+    plain_video_ = std::make_unique<VideoFeed>(plain, *plain_stream, now_);
+  }
 }
 
 VisionLoop::~VisionLoop() {
@@ -133,7 +139,8 @@ bool VisionLoop::StartStream(double now) {
 
 void VisionLoop::StopStream(VisionState state, const std::string& detail) {
   if (streaming_) {
-    // The encoder lets go of the buffers before the camera frees them.
+    // The encoders let go of the buffers before the camera frees them.
+    if (plain_video_) plain_video_->End();
     if (video_) video_->End();
     camera_.Stop();
     guard_.Disarm(config_.camera_id);
@@ -224,9 +231,13 @@ void VisionLoop::OnFrame(const Nv12View& frame, double now) {
     }
   }
   if (now >= next_infer_ && worker_ && worker_->Idle()) Submit(frame, now);
-  if (preview_wanted_ && status_.state == VisionState::kRunning && preview_.Due(now)) {
+  const bool with_boxes = preview_wanted_ && preview_.Due(now);
+  const bool plain = plain_wanted_ && preview_.PlainDue(now);
+  if ((with_boxes || plain) && status_.state == VisionState::kRunning) {
     std::string error;
-    if (!preview_.Make(frame, status_.display_gains, detections_, now, error)) status_.detail = error;
+    if (!preview_.Make(frame, status_.display_gains, detections_, now, with_boxes, plain, error)) {
+      status_.detail = error;
+    }
   }
 }
 
@@ -237,18 +248,36 @@ void VisionLoop::StepVideo() {
                          status_.state != VisionState::kPausedHot && attempts_ < config_.max_attempts;
   const std::string detail = video_->Step(may_start, streaming_);
   if (!detail.empty()) status_.detail = detail;
+  if (plain_video_) {
+    const std::string plain = plain_video_->Step(may_start, streaming_);
+    if (!plain.empty()) status_.detail = plain;
+  }
   status_.video = video_->Active();
   status_.fps = video_->Fps();
   status_.kbps = video_->Kbps();
 }
 
 void VisionLoop::SendVideo() {
-  if (!video_ || !video_->Playing()) return;
+  const bool plain = plain_video_ && plain_video_->Playing();
+  const bool with_boxes = video_ && video_->Playing();
+  if (!plain && !with_boxes) return;
   const int du = white_.ShiftU();
   const int dv = white_.ShiftV();
-  const std::vector<Detection>& boxes = detections_;
-  const auto edit = [du, dv, &boxes](const Nv12Buffer& f) {
+  // The frame is edited in place: shifted once, encoded without the boxes, then the boxes drawn in for the other
+  // stream. Each encode is done with the frame before the next edit.
+  bool shifted = false;
+  const auto shift = [du, dv, &shifted](const Nv12Buffer& f) {
     ShiftChroma(f.uv, f.width, f.height, f.stride, du, dv);
+    shifted = true;
+  };
+  if (plain) {
+    const std::string detail = plain_video_->Send(camera_, shift);
+    if (!detail.empty()) status_.detail = detail;
+  }
+  if (!with_boxes) return;
+  const std::vector<Detection>& boxes = detections_;
+  const auto edit = [&shift, &shifted, &boxes](const Nv12Buffer& f) {
+    if (!shifted) shift(f);
     // Outlines a pixel wide per 320 of the picture width, 4 at 1280.
     DrawBoxes(f, boxes, std::max(2U, f.width / 320));
   };
@@ -334,6 +363,7 @@ void VisionLoop::StopWorker() {
 }
 
 void VisionLoop::Shutdown() {
+  if (plain_video_) plain_video_->End();
   if (video_) video_->End();
   if (streaming_) {
     camera_.Stop();

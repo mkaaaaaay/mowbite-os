@@ -130,7 +130,8 @@ class BoundedJpeg {
 };
 
 // The shown image of a camera: the frame scaled to the configured width, white balanced, with the boxes, as JPEG
-// within the limits of BoundedJpeg.
+// within the limits of BoundedJpeg. A camera with detections also has the same picture without the boxes, with limits
+// of its own.
 class Preview {
  public:
   explicit Preview(PreviewConfig config);
@@ -138,9 +139,19 @@ class Preview {
   bool Due(double now) const {
     return jpeg_.Due(now);
   }
-  // False with `error` if encoding failed; a picture that stays over the size limit at the lowest quality is dropped.
+  bool PlainDue(double now) const {
+    return plain_.Due(now);
+  }
+  // The picture with the boxes. False with `error` if encoding failed; a picture that stays over the size limit at
+  // the lowest quality is dropped.
   bool Make(const Nv12View& frame, const ColorGains& gains, const std::vector<Detection>& boxes, double now,
-            std::string& error);
+            std::string& error) {
+    return Make(frame, gains, boxes, now, true, false, error);
+  }
+  // The pictures asked for from one conversion of the frame: the one without the boxes first, then the boxes are
+  // drawn into the same image for the other. Returns as above, false if either failed.
+  bool Make(const Nv12View& frame, const ColorGains& gains, const std::vector<Detection>& boxes, double now,
+            bool with_boxes, bool plain, std::string& error);
 
   const std::vector<uint8_t>& Jpeg() const {
     return jpeg_.Jpeg();
@@ -158,10 +169,15 @@ class Preview {
   int Quality() const {
     return jpeg_.Quality();
   }
+  // The picture without the boxes.
+  const BoundedJpeg& Plain() const {
+    return plain_;
+  }
 
  private:
   uint32_t width_;
   BoundedJpeg jpeg_;
+  BoundedJpeg plain_;
   std::vector<uint8_t> rgb_;
 };
 

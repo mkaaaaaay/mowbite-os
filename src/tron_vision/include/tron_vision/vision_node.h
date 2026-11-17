@@ -30,6 +30,7 @@ Availability CameraAvailability(VisionState state);
 // sensor_suffix): it reports state, detections and the camera with its pictures and nothing else. It subscribes to no
 // topic and calls no service, so it cannot move the mower. With `video` the pictures with the boxes also go out as
 // H.264 to the client of an RTSP server on the loopback address (MediaMTX), and hw/cameras offers WebRTC before MJPEG.
+// The pictures without the boxes go out the same way, under the topic and the RTSP path with kPlainSuffix.
 // A loop thread runs VisionLoop; it ends the process with the exit code of the loop when the limits are broken.
 class VisionNode : public rclcpp::Node {
  public:
@@ -49,7 +50,8 @@ class VisionNode : public rclcpp::Node {
   void Report(double now);
   void PublishDetections(const VisionStatus& status);
   void PublishCamera(const VisionStatus& status);
-  void PublishPicture();
+  void PublishPicture(const std::vector<uint8_t>& jpeg,
+                      const rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr& publisher);
 
   std::unique_ptr<Camera> camera_;
   std::unique_ptr<VideoOut> video_;
@@ -66,11 +68,13 @@ class VisionNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::Detections>::SharedPtr detections_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::Camera>::SharedPtr cameras_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr picture_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr plain_pub_;
   LogGate log_gate_{60.0};
   std::string reported_state_;
   double next_report_ = 0.0;
   uint64_t published_inferences_ = 0;
   uint64_t published_pictures_ = 0;
+  uint64_t published_plain_ = 0;
   std::atomic<int> exit_code_{0};
   bool running_ = true;
   std::mutex mutex_;

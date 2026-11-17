@@ -646,8 +646,11 @@ second what `mowbite_camera` needs around it.
   is gone. A camera with detections draws
   its boxes into the frame before the encoder takes it and runs the model on a thread of its own, so the stream does
   not wait for the NPU. It offers the same frame without boxes as well, because `camera.stream` lets each viewer
-  choose (`detections`): JPEG on `camera/<id>/jpeg_plain` and H.264 at `<source>_plain`, each made only while someone
-  watches it; the OS serves that view at `<id>_plain`, so no camera id ends in `_plain`. A camera that sends JPEG, like a USB camera, is decoded scaled in the DCT into NV12 frames
+  choose (`detections`): JPEG on `camera/<id>/jpeg_plain` and the RTSP path `<source>_plain` beside `<source>` on the
+  same port, each made only while someone subscribes or plays, with the same limits; the OS serves that view at
+  `<id>_plain`, so no camera id ends in `_plain`. One RTSP server serves several paths, one client per path, and each
+  stream has its own encoder session. A frame is encoded first without the boxes, then the boxes are drawn into the
+  same frame for the other stream, so there is no copy. A camera that sends JPEG, like a USB camera, is decoded scaled in the DCT into NV12 frames
   of the process (`dma_frames`, from a dma-buf heap, lines rounded up to whole macroblocks) that the encoder reads
   (`tron_rear`: 960 x 540 from 1920 x 1080, port 8558; the dock marker still goes first).
 - A stream whose driver can crash the kernel does not run next to the blade by default: the loop ends it when the

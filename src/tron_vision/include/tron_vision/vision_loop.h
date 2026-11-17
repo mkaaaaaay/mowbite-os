@@ -55,7 +55,8 @@ struct VisionConfig {
   std::string statm = "/proc/self/statm";
   double check_s = 10.0;
   PreviewConfig preview;
-  // H.264 with the boxes for the client of the RTSP server; the camera exports its buffers then.
+  // H.264 with the boxes for the client of the RTSP server, and without them for the client of the plain stream; the
+  // camera exports its buffers then.
   VideoFeedConfig video;
 };
 
@@ -100,9 +101,10 @@ struct VisionStatus {
 // next frame deadline and returns false once the process has to end (status().exit_code).
 class VisionLoop {
  public:
-  // `stream` may be null: JPEG only.
+  // `stream` may be null: JPEG only. `plain_stream`, on the server of `stream`, carries the frames without the boxes;
+  // may be null.
   VisionLoop(VisionConfig config, Camera& camera, CrashGuard& guard, std::function<double()> now,
-             H264Stream* stream = nullptr);
+             H264Stream* stream = nullptr, H264Stream* plain_stream = nullptr);
   ~VisionLoop();
   VisionLoop(const VisionLoop&) = delete;
   VisionLoop& operator=(const VisionLoop&) = delete;
@@ -122,9 +124,12 @@ class VisionLoop {
   const std::vector<std::string>& ClassNames() const {
     return names_;
   }
-  // Pictures are made only while someone watches.
+  // Pictures are made only while someone watches, each kind on its own.
   void SetPreviewWanted(bool wanted) {
     preview_wanted_ = wanted;
+  }
+  void SetPlainWanted(bool wanted) {
+    plain_wanted_ = wanted;
   }
   const Preview& GetPreview() const {
     return preview_;
@@ -153,6 +158,7 @@ class VisionLoop {
   CrashGuard& guard_;
   std::function<double()> now_;
   std::unique_ptr<VideoFeed> video_;
+  std::unique_ptr<VideoFeed> plain_video_;
   std::shared_ptr<InferenceWorker> worker_;
   ModelLayout layout_;
   std::vector<std::string> names_;
@@ -168,6 +174,7 @@ class VisionLoop {
   uint64_t streams_ = 0;
   Preview preview_;
   bool preview_wanted_ = false;
+  bool plain_wanted_ = false;
   bool loaded_ = false;
   bool streaming_ = false;
   int attempts_ = 0;

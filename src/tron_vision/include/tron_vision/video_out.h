@@ -15,6 +15,9 @@
 
 namespace tron_vision {
 
+// Suffix of the RTSP path and of the picture topic of a camera with detections whose pictures show no boxes.
+constexpr char kPlainSuffix[] = "_plain";
+
 // The H.264 stream of a camera process of the Tron: its parameters, the encoder and the RTSP server on the loopback
 // address that MediaMTX reads. The ISP scales the sensor picture to the stream size, or the process decodes the
 // camera's JPEG to it; the frame rate is that of the camera.
@@ -34,11 +37,16 @@ class VideoOut {
   // With video: the settings of the feed for frames in buffers of the process, whose line bytes and lines are those
   // of whole macroblocks.
   void Configure(VideoFeedConfig& feed) const;
-  // Listens under `path`; false with the error if the server cannot, then there is no stream.
-  bool Open(const std::string& path, std::string& error);
+  // Listens under `path`, with `plain` also under path + kPlainSuffix with a stream of its own; false with the error
+  // if the server cannot, then there is no stream.
+  bool Open(const std::string& path, std::string& error, bool plain = false);
   // Null without video or before Open().
   H264Stream* Stream() const {
     return stream_.get();
+  }
+  // Null without video, before Open() or without `plain`.
+  H264Stream* PlainStream() const {
+    return plain_stream_.get();
   }
   // Ends the stream before the loop that feeds it goes.
   void Close();
@@ -66,8 +74,10 @@ class VideoOut {
   std::string library_;
   std::string source_;
   std::unique_ptr<MppEncoder> encoder_;
+  std::unique_ptr<MppEncoder> plain_encoder_;
   std::unique_ptr<RtspServer> server_;
   std::unique_ptr<H264Stream> stream_;
+  std::unique_ptr<H264Stream> plain_stream_;
 };
 
 }  // namespace tron_vision

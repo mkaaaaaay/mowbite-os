@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,7 @@ class FakeEncoder : public H264Encoder {
   }
   bool Encode(const CapturedFrame& frame, const uint8_t*& data, size_t& size, std::string& error) override {
     clock_ += encode_s;
+    if (on_encode) on_encode();
     if (fail_encode || !is_open || frame.dmabuf < 0) {
       error = "put frame -1";
       return false;
@@ -62,6 +64,8 @@ class FakeEncoder : public H264Encoder {
   bool is_open = false;
   bool first = true;
   EncoderSettings settings;
+  // Called with each frame the encoder takes.
+  std::function<void()> on_encode;
 
  private:
   double& clock_;

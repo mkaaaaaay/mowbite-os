@@ -71,22 +71,29 @@ void VideoOut::Configure(VideoFeedConfig& feed) const {
   feed.encoder.bitrate_bps = bitrate_bps_;
 }
 
-bool VideoOut::Open(const std::string& path, std::string& error) {
+bool VideoOut::Open(const std::string& path, std::string& error, bool plain) {
   if (!video_) return true;
   RtspConfig rtsp;
   rtsp.port = port_;
-  rtsp.path = path;
+  rtsp.paths = {path};
+  if (plain) rtsp.paths.push_back(path + kPlainSuffix);
   encoder_ = std::make_unique<MppEncoder>(library_);
   server_ = std::make_unique<RtspServer>(rtsp, MonotonicSeconds);
   if (!server_->Listen(error)) return false;
   stream_ = std::make_unique<H264Stream>(*encoder_, *server_, kSlowEncodeS, MonotonicSeconds);
+  if (plain) {
+    plain_encoder_ = std::make_unique<MppEncoder>(library_);
+    plain_stream_ = std::make_unique<H264Stream>(*plain_encoder_, *server_, kSlowEncodeS, MonotonicSeconds, 1);
+  }
   source_ = "rtsp://127.0.0.1:" + std::to_string(server_->Port()) + "/" + path;
   return true;
 }
 
 void VideoOut::Close() {
+  plain_stream_.reset();
   stream_.reset();
   server_.reset();
+  plain_encoder_.reset();
   encoder_.reset();
 }
 

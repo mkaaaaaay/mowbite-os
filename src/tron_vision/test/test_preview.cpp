@@ -79,6 +79,39 @@ TEST(Preview, JpegOfTheScaledFrame) {
   EXPECT_LE(preview.Jpeg().size(), 100U * 1024);
 }
 
+// The picture without the boxes comes from the same conversion, before the boxes are drawn; each kind only when asked
+// for and at its own rate.
+TEST(Preview, PlainPictureWithoutTheBoxes) {
+  test::Nv12Frame frame(640, 360, 120, 128, 128);
+  Preview preview(PreviewConfig{});
+  const std::vector<Detection> boxes{{0, 0.9F, 100, 100, 300, 300}};
+  std::string error;
+  ASSERT_TRUE(preview.Make(test::View(frame), ColorGains{}, boxes, 10.0, true, true, error)) << error;
+  ASSERT_EQ(preview.Count(), 1U);
+  ASSERT_EQ(preview.Plain().Count(), 1U);
+  JpegDecoder decoder;
+  std::vector<uint8_t> boxed;
+  std::vector<uint8_t> plain;
+  ASSERT_TRUE(decoder.Decode(preview.Jpeg().data(), preview.Jpeg().size(), 640, 360, {}, boxed, error)) << error;
+  ASSERT_TRUE(decoder.Decode(preview.Plain().Jpeg().data(), preview.Plain().Jpeg().size(), 640, 360, {}, plain, error))
+      << error;
+  // On the top edge of the box: red with the boxes, gray without; away from it both are gray.
+  EXPECT_GT(At(boxed, 640, 200, 100)[0], 200);
+  EXPECT_LT(At(boxed, 640, 200, 100)[1], 110);
+  EXPECT_NEAR(At(plain, 640, 200, 100)[0], At(plain, 640, 200, 100)[1], 4);
+  EXPECT_NEAR(At(plain, 640, 200, 100)[0], At(boxed, 640, 20, 20)[0], 4);
+
+  // Only the plain picture is due again: the other one stays.
+  EXPECT_FALSE(preview.Due(10.1));
+  EXPECT_FALSE(preview.PlainDue(10.1));
+  ASSERT_TRUE(preview.Make(test::View(frame), ColorGains{}, boxes, 10.2, false, true, error)) << error;
+  EXPECT_EQ(preview.Count(), 1U);
+  EXPECT_EQ(preview.Plain().Count(), 2U);
+  ASSERT_TRUE(preview.Make(test::View(frame), ColorGains{}, boxes, 10.4, true, false, error)) << error;
+  EXPECT_EQ(preview.Count(), 2U);
+  EXPECT_EQ(preview.Plain().Count(), 2U);
+}
+
 TEST(Preview, AtMostTheConfiguredRate) {
   test::Nv12Frame frame(640, 480, 120, 128, 128);
   PreviewConfig config;

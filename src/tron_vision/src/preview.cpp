@@ -288,10 +288,11 @@ bool BoundedJpeg::Make(const std::vector<uint8_t>& rgb, uint32_t width, uint32_t
   return true;
 }
 
-Preview::Preview(PreviewConfig config) : width_(config.width), jpeg_(config) {}
+Preview::Preview(PreviewConfig config) : width_(config.width), jpeg_(config), plain_(config) {}
 
 bool Preview::Make(const Nv12View& frame, const ColorGains& gains, const std::vector<Detection>& boxes, double now,
-                   std::string& error) {
+                   bool with_boxes, bool plain, std::string& error) {
+  if (!with_boxes && !plain) return true;
   uint32_t out_w = 0;
   uint32_t out_h = 0;
   PreviewSize(frame.width, frame.height, width_, out_w, out_h);
@@ -301,8 +302,16 @@ bool Preview::Make(const Nv12View& frame, const ColorGains& gains, const std::ve
   }
   ConvertFrame(frame, PlaceFrame(frame.width, frame.height, Fit::kPad, out_w, out_h), gains, false, out_w, out_h,
                rgb_);
-  DrawBoxes(rgb_, out_w, out_h, boxes, static_cast<float>(out_w) / static_cast<float>(frame.width));
-  return jpeg_.Make(rgb_, out_w, out_h, now, error);
+  bool ok = !plain || plain_.Make(rgb_, out_w, out_h, now, error);
+  if (with_boxes) {
+    DrawBoxes(rgb_, out_w, out_h, boxes, static_cast<float>(out_w) / static_cast<float>(frame.width));
+    std::string boxed_error;
+    if (!jpeg_.Make(rgb_, out_w, out_h, now, boxed_error)) {
+      error = boxed_error;
+      ok = false;
+    }
+  }
+  return ok;
 }
 
 }  // namespace tron_vision

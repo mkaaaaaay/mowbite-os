@@ -85,11 +85,13 @@ TEST_F(VisionNodeTest, PublishesOnlyTheTopicsOfTheDesign) {
   auto node = std::make_shared<VisionNode>(rclcpp::NodeOptions());
   const std::set<std::string> allowed = {"/bridge/sensor_info", "/bridge/sensor_value", "/hw/cameras",
                                          "/vision/detections", "/rosout", "/parameter_events"};
-  const std::regex jpeg("/camera/[a-z0-9_]+/jpeg");
+  const std::regex jpeg("/camera/[a-z0-9_]+/jpeg(_plain)?");
   const auto graph = node->get_node_graph_interface();
   const auto publishers = graph->get_publisher_names_and_types_by_node("tron_vision", "/");
   EXPECT_TRUE(publishers.count("/bridge/sensor_value"));
   EXPECT_TRUE(publishers.count("/vision/detections"));
+  EXPECT_TRUE(publishers.count("/camera/oa_left/jpeg"));
+  EXPECT_TRUE(publishers.count("/camera/oa_left/jpeg_plain"));
   for (const auto& [topic, types] : publishers) {
     EXPECT_TRUE(allowed.count(topic) || std::regex_match(topic, jpeg)) << topic;
   }
