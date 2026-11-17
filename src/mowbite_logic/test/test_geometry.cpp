@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <functional>
 #include <stdexcept>
 
 #include "mowbite_logic/geometry.h"
@@ -53,7 +54,7 @@ TEST(Geometry, GetListsEveryKeyInOrderWithItsRules) {
   EXPECT_EQ(names, (std::vector<std::string>{"robot_width", "robot_front", "robot_rear", "robot_outline", "mower_width",
                                              "blade_ahead", "blade_offset", "antenna_x", "antenna_y", "track",
                                              "wheel_radius", "wheel_width", "dock_contact_x", "dock_footprint",
-                                             "ticks_per_m", "imu_roll", "imu_pitch"}));
+                                             "ticks_per_m", "imu_roll", "imu_pitch", "robot_shape"}));
   const json& width = answer["settings"]["robot_width"];
   EXPECT_DOUBLE_EQ(width["value"].get<double>(), 0.47);
   EXPECT_DOUBLE_EQ(width["default"].get<double>(), 0.47);
@@ -85,7 +86,9 @@ TEST(Geometry, ParamsCarryEveryKeyAndTheVersion) {
   EXPECT_EQ(params["dock_footprint"], json::array());
   EXPECT_EQ(params["version"], 0);
   EXPECT_EQ(params["stored"], json::array());
-  EXPECT_EQ(params.size(), 19u);
+  EXPECT_EQ(params["confirmed"], json::array());
+  EXPECT_FALSE(params.contains("robot_shape"));
+  EXPECT_EQ(params.size(), 20u);
 }
 
 TEST(Geometry, ThePlatformsFileHasToBeWholeAndKeepTheRules) {
@@ -518,6 +521,168 @@ TEST(Geometry, AFileThatIsWrongChangesNothing) {
     EXPECT_EQ(geometry.Text(), text) << text_in;
   }
   EXPECT_FALSE(geometry.Load("not json", nullptr));
+}
+
+// A body and a bar ahead of it, as a platform draws itself.
+json Shaped() {
+  json values = TronValues();
+  values["robot_shape"] = json::array(
+      {{{"id", "body"}, {"kind", "body"}, {"points", {{0.56, 0.2}, {-0.06, 0.2}, {-0.06, -0.2}, {0.56, -0.2}}}},
+       {{"id", "bar"}, {"kind", "bumper"}, {"points", {{0.6, 0.14}, {0.55, 0.22}, {0.55, -0.22}, {0.6, -0.14}}}},
+       {{"id", "stop"}, {"kind", "button"}, {"points", {{0.27, 0.0}}}, {"closed", false}}});
+  return values;
+}
+
+TEST(GeometryShape, ThePlatformsShapeComesWithTheAnswerAndIsNotTheUsers) {
+  Geometry geometry("tron", Shaped());
+  const json shape = geometry.Get()["settings"]["robot_shape"];
+  EXPECT_EQ(shape["type"], "shape");
+  EXPECT_EQ(shape["unit"], "m");
+  EXPECT_FALSE(shape["settable"].get<bool>());
+  EXPECT_FALSE(shape["stored"].get<bool>());
+  EXPECT_FALSE(shape.contains("confirmed"));
+  ASSERT_EQ(shape["value"].size(), 3u);
+  EXPECT_EQ(shape["value"][1], (json{{"id", "bar"}, {"kind", "bumper"},
+                                     {"points", {{0.6, 0.14}, {0.55, 0.22}, {0.55, -0.22}, {0.6, -0.14}}},
+                                     {"closed", true}}));
+  EXPECT_EQ(shape["value"][2]["closed"], false);
+  EXPECT_EQ(shape["default"], shape["value"]);
+  EXPECT_EQ(Tron().Get()["settings"]["robot_shape"]["value"], json::array());
+  EXPECT_FALSE(geometry.Params().contains("robot_shape"));
+  ExpectRefused(geometry, Request(geometry, {{"robot_shape", json::array()}}), "NOT_SETTABLE", "robot_shape");
+  ExpectRefused(geometry, Request(geometry, json::object(), {"robot_shape"}), "NOT_SETTABLE", "robot_shape");
+  std::string why;
+  EXPECT_FALSE(geometry.Load(R"({"entries": {"robot_shape": []}})", &why));
+  // A change of the outline is no change of the shape.
+  const GeometryChange change = geometry.Set(Request(geometry, {{"robot_outline", kRectangle}}));
+  EXPECT_EQ(change.changed, (std::vector<std::string>{"robot_outline"}));
+}
+
+TEST(GeometryShape, AShapeBeyondTheLimitsOfTheInterfaceIsRefused) {
+  const auto broken = [](const std::function<void(json&)>& change) {
+    json values = Shaped();
+    change(values["robot_shape"]);
+    try {
+      Geometry("tron", values);
+    } catch (const std::invalid_argument& error) {
+      return std::string(error.what());
+    }
+    return std::string();
+  };
+  EXPECT_EQ(broken([](json&) {}), "");
+  EXPECT_EQ(broken([](json& shape) { shape = 5; }), "robot_shape: it must be a list of parts");
+  EXPECT_EQ(broken([](json& shape) { shape[1]["id"] = "body"; }), "robot_shape: the part body comes twice");
+  EXPECT_EQ(broken([](json& shape) { shape[1].erase("kind"); }), "robot_shape: a part needs id, kind and points");
+  EXPECT_EQ(broken([](json& shape) { shape[1]["points"] = json::array(); }), "robot_shape: the part bar has no point");
+  EXPECT_EQ(broken([](json& shape) { shape[1]["points"][0] = {2.0, 0.0}; }),
+            "robot_shape: a point of the part bar is farther than 1.5 m from base_link");
+  EXPECT_EQ(broken([](json& shape) { shape[1]["closed"] = 1; }), "robot_shape: closed of the part bar is no boolean");
+  EXPECT_EQ(broken([](json& shape) {
+              for (int i = 0; i < 201; ++i) shape[0]["points"].push_back({0.1, 0.0});
+            }),
+            "robot_shape: the part body has more than 200 points");
+  EXPECT_EQ(broken([](json& shape) {
+              for (int i = 0; i < 30; ++i) {
+                shape.push_back({{"id", "p" + std::to_string(i)}, {"kind", "body"}, {"points", {{0.0, 0.0}}}});
+              }
+            }),
+            "robot_shape: more than 32 parts");
+  EXPECT_EQ(broken([](json& shape) {
+              for (int part = 0; part < 6; ++part) {
+                json points = json::array();
+                for (int i = 0; i < 200; ++i) points.push_back({0.1, 0.0});
+                shape.push_back({{"id", "p" + std::to_string(part)}, {"kind", "body"}, {"points", points}});
+              }
+            }),
+            "robot_shape: more than 1000 points");
+}
+
+TEST(GeometryShape, ABodyThatLeavesOutAPartIsToldNotRefused) {
+  Geometry geometry("tron", Shaped());
+  EXPECT_TRUE(geometry.OutsideShape().empty());
+  // The bar reaches 0.6 m ahead and 0.22 m aside: an outline cut at 0.58 m leaves it out by 2 cm.
+  const json narrow = {{0.58, -0.235}, {0.58, 0.235}, {-0.12, 0.235}, {-0.12, -0.235}};
+  GeometryChange change = geometry.Set(Request(geometry, {{"robot_outline", narrow}}));
+  ASSERT_TRUE(change.ok);
+  ASSERT_EQ(change.outside_shape.size(), 1u);
+  EXPECT_EQ(change.outside_shape[0].part, "bar");
+  EXPECT_NEAR(change.outside_shape[0].by, 0.02, 1e-9);
+  EXPECT_EQ(geometry.OutsideShape().size(), 1u);
+  // Half a millimetre is what a ruler does not tell apart.
+  const json close = {{0.5995, -0.235}, {0.5995, 0.235}, {-0.12, 0.235}, {-0.12, -0.235}};
+  change = geometry.Set(Request(geometry, {{"robot_outline", close}}));
+  ASSERT_TRUE(change.ok);
+  EXPECT_TRUE(change.outside_shape.empty());
+  // Without an outline the rectangle of width, front and rear counts.
+  change = geometry.Set(Request(geometry, {{"robot_front", 0.59}}, {"robot_outline"}));
+  ASSERT_TRUE(change.ok) << change.problem.message;
+  ASSERT_EQ(change.outside_shape.size(), 1u);
+  EXPECT_NEAR(change.outside_shape[0].by, 0.01, 1e-9);
+}
+
+TEST(GeometryConfirmed, AKeySetOrConfirmedCarriesItsTime) {
+  Geometry geometry = Tron();
+  EXPECT_TRUE(geometry.Get()["settings"]["track"]["confirmed"].is_null());
+  EXPECT_FALSE(geometry.Get()["settings"]["wheel_radius"].contains("confirmed"));
+  GeometryChange change = geometry.Set(Request(geometry, {{"track", 0.40}}), 1000.0);
+  ASSERT_TRUE(change.ok);
+  EXPECT_EQ(geometry.Get()["settings"]["track"]["confirmed"], 1000.0);
+  EXPECT_EQ(geometry.version(), 1);
+  // Confirming alone saves and tells the others, but is no change of a value.
+  json request = {{"version", 1}, {"confirm", {"antenna_x", "robot_outline"}}};
+  change = geometry.Set(request, 2000.0);
+  ASSERT_TRUE(change.ok) << change.problem.message;
+  EXPECT_TRUE(change.stored);
+  EXPECT_TRUE(change.changed.empty());
+  EXPECT_EQ(geometry.version(), 1);
+  EXPECT_EQ(geometry.Get()["settings"]["antenna_x"]["confirmed"], 2000.0);
+  EXPECT_FALSE(geometry.Get()["settings"]["antenna_x"]["stored"].get<bool>());
+  EXPECT_EQ(geometry.Params()["confirmed"], json::array({"robot_outline", "antenna_x", "track"}));
+  // The file keeps it.
+  Geometry loaded = Tron();
+  std::string why;
+  ASSERT_TRUE(loaded.Load(geometry.Text(), &why)) << why;
+  EXPECT_EQ(loaded.Get(), geometry.Get());
+  EXPECT_EQ(json::parse(geometry.Text())["confirmed"], (json{{"antenna_x", 2000.0}, {"robot_outline", 2000.0},
+                                                             {"track", 1000.0}}));
+  // A key back at the platform's value is no longer confirmed.
+  change = geometry.Set(Request(geometry, json::object(), {"track"}), 3000.0);
+  ASSERT_TRUE(change.ok);
+  EXPECT_TRUE(geometry.Get()["settings"]["track"]["confirmed"].is_null());
+  EXPECT_FALSE(json::parse(Tron().Text()).contains("confirmed"));
+
+  ExpectRefused(geometry, {{"version", geometry.version()}, {"confirm", {"wheel_radius"}}}, "NOT_SETTABLE",
+                "wheel_radius");
+  ExpectRefused(geometry, {{"version", geometry.version()}, {"confirm", {"nothing"}}}, "UNKNOWN_KEY", "nothing");
+  ExpectRefused(geometry, {{"version", geometry.version()}, {"confirm", "track"}}, "INVALID_REQUEST", "");
+  ExpectRefused(geometry, {{"version", geometry.version()}, {"confirm", {"track"}}, {"reset", {"track"}}},
+                "INVALID_REQUEST", "track");
+  EXPECT_FALSE(loaded.Load(R"({"confirmed": {"wheel_radius": 1}})", &why));
+  EXPECT_FALSE(loaded.Load(R"({"confirmed": {"track": "now"}})", &why));
+}
+
+TEST(GeometryEvent, WarnsWhenTheBodyLeavesOutAPartOfTheShape) {
+  TestCore core{LogicConfig{}};
+  core.SetShapeOutside(R"([{"part": "bar", "by": 0.02}])");
+  core.GeometryChanged({"robot_outline"}, {}, 5);
+  auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  json details = events[0].details;
+  EXPECT_EQ(details["reason"], "SHAPE_OUTSIDE");
+  EXPECT_EQ(details["severity"], "warning");
+  EXPECT_EQ(details["outside_shape"], (json::array({{{"part", "bar"}, {"by", 0.02}}})));
+  EXPECT_EQ(details["message"], "The dimensions of the mower changed: robot_outline. The body leaves out bar of the "
+                                "shape of the mower: check the outline");
+  // Below the platform's value as well: that reason counts, the parts are named all the same.
+  core.GeometryChanged({"robot_outline"}, {"robot_outline"}, 6);
+  events = core.TakeEvents();
+  EXPECT_EQ(events[0].details["reason"], "BELOW_DEFAULT");
+  EXPECT_EQ(events[0].details["outside_shape"].size(), 1u);
+  core.SetShapeOutside("[]");
+  core.GeometryChanged({"robot_outline"}, {}, 7);
+  events = core.TakeEvents();
+  EXPECT_FALSE(events[0].details.contains("outside_shape"));
+  EXPECT_EQ(events[0].details["severity"], "info");
 }
 
 TEST(GeometryEvent, NamesWhatChangedAndStaysInfoWithoutASmallerBody) {

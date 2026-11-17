@@ -13,7 +13,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 41;
+constexpr int kApi = 42;
 
 // The break of the app interface: one up for a change that is not only adding (what counts: x-api-break in the
 // schema); an app goes with the OS of the same break whose api is at least the one it needs.
@@ -35,6 +35,8 @@ struct UserText {
 
 // Texts by language (de, en); none where the app has its own.
 using UserTexts = std::map<std::string, UserText>;
+// {language: {name, help, fix}}, as x-reasons and the setup program carry texts.
+Json Texts(const UserTexts& texts);
 
 struct Field {
   std::string name;
@@ -59,6 +61,8 @@ struct Field {
   std::optional<double> max = std::nullopt;
   // Texts of the values of an enum field, by value.
   std::map<std::string, UserTexts> value_texts = {};
+  // The entry of $defs that is this value: the schema points there and does not write the fields out again.
+  std::string defined = {};
 };
 
 // A reason as events and refusals carry it: reason, message, severity, resume and its own fields.
@@ -78,7 +82,7 @@ struct ReasonEntry {
 
 struct EventEntry {
   std::string type;
-  // logic, map, ntrip, camera, bridge or stats; logic events carry x, y, job_id and session_id as well.
+  // logic, map, ntrip, camera, bridge, stats or setup; logic events carry x, y, job_id and session_id as well.
   std::string emitter;
   std::string text;
   // The fields beyond the envelope (id, t, type) and those of the emitter.
@@ -121,7 +125,7 @@ struct Command {
 struct Method {
   std::string name;
   // mowbite_bridge, mowbite_logic, mowbite_map, mowbite_ntrip, mowbite_calibration, mowbite_light, mowbite_sound,
-  // mowbite_camera, mowbite_schedule, mowbite_stats, mowbite_net or mowbite_host.
+  // mowbite_camera, mowbite_schedule, mowbite_stats, mowbite_net, mowbite_setup or mowbite_host.
   std::string node;
   std::string text;
   // The params as one value, mostly an object of fields.
@@ -167,6 +171,8 @@ struct GeometryEntry {
   std::string unit = "m";
   bool relative = false;
   std::string text;
+  // robot_shape: a list of parts, the platform's alone.
+  bool shape = false;
 };
 
 // A situation the OS may play a sound for (sound.*), names as in open_mower_ros #347.
@@ -197,7 +203,7 @@ const std::vector<SensorEntry>& Sensors();
 const SensorEntry* FindSensor(const std::string& id);
 // The settings of /mower_logic in the order of the app's groups.
 const std::vector<SettingEntry>& LogicSettings();
-// The keys of the geometry in the order of the answers; robot_outline is the only list.
+// The keys of the geometry in the order of the answers; robot_outline is the only list the user sets.
 const std::vector<GeometryEntry>& GeometryKeys();
 // A word of schedule.log: what it means, what its detail and more hold (empty: null).
 struct ScheduleLogWord {
@@ -270,7 +276,7 @@ std::string EmergencyNames(int bits);
 std::vector<std::string> EmergencyNameList(int bits);
 
 // The JSON Schema 2020-12 of the interface with the catalog in x-reasons, x-emergency-bits, x-commands, x-methods,
-// x-sensors, x-settings and x-geometry; texts of reasons and bits by language; every object sorted by key.
+// x-sensors, x-settings, x-geometry and x-setup; texts of reasons and bits by language; every object sorted by key.
 const Json& Schema();
 
 // What is wrong with an event against the catalog: an unknown type (strict only), a missing or unknown field, a

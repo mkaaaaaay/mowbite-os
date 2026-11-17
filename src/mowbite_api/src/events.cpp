@@ -1,5 +1,7 @@
 #include <map>
 
+#include "fields.h"
+#include "internal.h"
 #include "mowbite_api/catalog.h"
 
 namespace mowbite_api {
@@ -49,15 +51,7 @@ Field Temperature() {
   return Number("temperature", "°C", "The temperature it measured");
 }
 
-// reason, message, severity and resume as PutReason of the logic writes them.
-std::vector<Field> Rated(bool always, std::vector<Field> fields = {}) {
-  fields.push_back(Text("reason", "Why: a fixed name in capitals, rated in x-reasons", always));
-  fields.push_back(Text("message", "English text for the log and for apps that do not know the reason"));
-  fields.push_back(Text("severity", "How bad it is", always, {"info", "warning", "error"}));
-  fields.push_back(
-      Text("resume", "auto when it goes on by itself, user when it waits for the user", always, {"auto", "user"}));
-  return fields;
-}
+using fields::Rated;
 
 // Why the planner gave no way to the docking station, one of its reasons in x-reasons.
 Field PlannerCause(bool required) {
@@ -819,6 +813,19 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
            "The mower took the release, but the emergency stays, for example because it is lifted or STOP is still "
            "pressed.",
            "Put the mower down, let go of STOP and release again."}}}}},
+      {"SHAPE_OUTSIDE",
+       {"The body leaves out a part of the shape of the mower: check the outline",
+        {},
+        {{"de",
+          {"Umriss kleiner als der Mäher",
+           "Der eingegebene Umriss lässt Teile des Mähers aus. Der Mäher plant und fährt mit dem Umriss und kann "
+           "mit dem überstehenden Teil anstoßen.",
+           "Den Umriss nachmessen und so eintragen, dass er alle Teile des Mähers umschließt."}},
+         {"en",
+          {"Outline smaller than the mower",
+           "The outline entered leaves out parts of the mower. The mower plans and drives with the outline and may "
+           "touch things with the part that sticks out.",
+           "Measure the outline again and enter it so that it covers every part of the mower."}}}}},
       {"STILL_SAVING", {"The last change of the map is still being saved", {}}},
       {"STILL_STOPPING", {"The last drive is still stopping", {}}},
       {"STILL_TILTED", {"The mower is still tilted", {Number("angle", "deg", "Its tilt"), Limit("deg")}}},
@@ -1535,10 +1542,14 @@ const std::vector<EventEntry>& Events() {
             {List("changed", "The keys whose value is another now"),
              List("below_default", "Keys of the body now below the value of the platform"),
              Integer("version", "", "Version of the dimensions after the change", true),
-             Text("reason", "BELOW_DEFAULT when below_default is not empty"),
-             Text("severity", "warning with BELOW_DEFAULT, else info", true, {"info", "warning"}),
-             Text("message", "English text naming the keys", true)},
-            {R("BELOW_DEFAULT", "warning", "user")}),
+             Text("reason", "BELOW_DEFAULT when below_default is not empty, else SHAPE_OUTSIDE with outside_shape"),
+             Text("severity", "warning with a reason, else info", true, {"info", "warning"}),
+             Text("message", "English text naming the keys", true),
+             {"outside_shape", Type::kArray, "", false,
+              "Only when not empty: the parts of robot_shape the body leaves out now, by more than a millimetre",
+              {}, false,
+              {Text("part", "id of the part", true), Number("by", "m", "How far it reaches out", true)}, ""}},
+            {R("BELOW_DEFAULT", "warning", "user"), R("SHAPE_OUTSIDE", "warning", "user")}),
       Event("STORAGE", "logic", "Writing in data_dir failed; the reason tells what, once each time it begins",
             Rated(true), User({{"STORAGE_NOT_WRITABLE", "error"}}), "error", "user"),
       Event("SCHEDULE_START", "logic",
@@ -1579,6 +1590,8 @@ const std::vector<EventEntry>& Events() {
       Event("METHODS_CHANGED", "bridge",
             "rpc.methods lists other methods than before: the changes of one second together, also those of the start",
             Notice({Names("added", "Methods offered now"), Names("removed", "Methods no longer offered")})),
+      SetupStepEvent(),
+      SetupProgramEvent(),
   };
   return events;
 }
@@ -1732,6 +1745,8 @@ const std::vector<EventEntry>& Refusals() {
                   {"DDS_PROFILE", "error"},
                   {"PLATFORM_CONFIG", "error"}}),
             "error", "user"),
+      SetupRefused(),
+      SetupBlocked(),
   };
   return groups;
 }

@@ -190,7 +190,8 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::OnTick, &L::OnBladeRefused, &L::TakeOverlayChanged, &L::SetRestartHold, &L::ReportRestart, &L::OnStopRelease,
       &L::TakeEffects, &L::SetUnwritableFile, &L::AbandonStart, &L::SetTurningRadius,
       &L::RecordedBodyKept, &L::OnWheelOdom, &L::SetSunsetSettings, &L::OnClock, &L::OnDatum,
-      &L::StartRun, &L::DropTasks, &L::OnDockMarker, &L::OnDockPose);
+      &L::StartRun, &L::DropTasks, &L::OnDockMarker, &L::OnDockPose,
+      &L::SetShapeOutside);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};

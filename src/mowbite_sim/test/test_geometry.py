@@ -32,8 +32,15 @@ FILE = os.path.join(WORK, "geometry.json")
 GEOMETRY = layers.geometry("tron")
 G = "/mowbite_geometry/"
 with open(GEOMETRY) as f:
-    FLAT = yaml.safe_load(f)["mowbite_logic"]["ros__parameters"]["geometry"]["robot_outline"]
-OUTLINE = [list(p) for p in zip(FLAT[::2], FLAT[1::2])]
+    PLATFORM = yaml.safe_load(f)["mowbite_logic"]["ros__parameters"]["geometry"]
+
+
+def pairs(flat):
+    return [list(p) for p in zip(flat[::2], flat[1::2])]
+
+
+OUTLINE = pairs(PLATFORM["robot_outline"])
+SHAPE = PLATFORM["robot_shape"]
 
 
 def generate_test_description():
@@ -148,8 +155,14 @@ class TestGeometry(unittest.TestCase):
         self.assertEqual(answer["settings"]["blade_ahead"]["value"], 0.3)
         self.assertEqual(answer["settings"]["blade_ahead"]["default"], 0.23)
         self.assertTrue(answer["settings"]["antenna_y"]["stored"])
-        self.assertEqual(saved(), {"version": 8,
-                                   "entries": {"blade_ahead": 0.3, "antenna_x": 0.15, "antenna_y": -0.02}})
+        file = saved()
+        self.assertEqual((file["version"], file["entries"]),
+                         (8, {"blade_ahead": 0.3, "antenna_x": 0.15, "antenna_y": -0.02}))
+        # What the user set counts as confirmed by them, with the time.
+        self.assertEqual(sorted(file["confirmed"]), ["antenna_x", "antenna_y", "blade_ahead"])
+        self.assertAlmostEqual(file["confirmed"]["blade_ahead"], time.time(), delta=10)
+        self.assertEqual(answer["settings"]["blade_ahead"]["confirmed"], file["confirmed"]["blade_ahead"])
+        self.assertIsNone(answer["settings"]["track"]["confirmed"])
         self.assertTrue(self.probe.wait(lambda: self.probe.params.get(G + "version") == 8))
         self.assertEqual(self.probe.params[G + "blade_ahead"], 0.3)
         self.assertTrue(self.probe.wait(lambda: self.probe.params.get("/xbot_positioning/antenna_offset_x") == 0.15))
@@ -184,7 +197,11 @@ class TestGeometry(unittest.TestCase):
         self.assertEqual(answer["settings"]["robot_width"]["value"], 0.47)
         self.assertFalse(answer["settings"]["robot_width"]["stored"])
         self.assertEqual(answer["settings"]["blade_ahead"]["value"], 0.23)
-        self.assertEqual(saved(), {"version": 10, "entries": {"antenna_x": 0.15, "antenna_y": -0.02}})
+        file = saved()
+        self.assertEqual((file["version"], file["entries"]), (10, {"antenna_x": 0.15, "antenna_y": -0.02}))
+        # A key back at the platform's value is not confirmed any more.
+        self.assertEqual(sorted(file["confirmed"]), ["antenna_x", "antenna_y"])
+        self.assertIsNone(answer["settings"]["robot_width"]["confirmed"])
         events = self.probe.wait(lambda: len(self.probe.geometry_events()) == 3 and self.probe.geometry_events())
         self.assertEqual(events[2]["changed"], ["robot_width", "blade_ahead"])
         self.assertEqual(events[2]["severity"], "info")
@@ -261,3 +278,70 @@ class TestGeometry(unittest.TestCase):
         time.sleep(0.5)
         self.assertEqual(len(self.probe.geometry_events()), events)
         self.assertEqual(self.set("again", 11, {"blade_offset": 0.02})["version"], 12)
+
+    def test_a_the_shape_of_the_platform_is_shown_not_set(self):
+        answer = self.probe.call("shape", "robot.geometry.get", None, raw="")
+        shape = answer["settings"]["robot_shape"]
+        self.assertEqual((shape["type"], shape["unit"], shape["settable"], shape["stored"]),
+                         ("shape", "m", False, False))
+        self.assertNotIn("confirmed", shape)
+        self.assertEqual([part["id"] for part in shape["value"]], SHAPE["parts"])
+        for part in shape["value"]:
+            file = SHAPE[part["id"]]
+            self.assertEqual((part["kind"], part["points"], part["closed"]),
+                             (file["kind"], pairs(file["points"]), file.get("closed", True)), part["id"])
+        self.assertEqual(shape["default"], shape["value"])
+        self.assertNotIn(G + "robot_shape", self.probe.params)
+        refused = self.set("shape_set", answer["version"], {"robot_shape": []})
+        self.assertEqual((refused[2]["reason"], refused[2]["key"]), ("NOT_SETTABLE", "robot_shape"))
+
+    def test_b_confirming_changes_no_value(self):
+        events = len(self.probe.geometry_events())
+        request = {"version": 12, "confirm": ["track", "robot_outline"]}
+        answer = self.probe.call("confirm", "robot.geometry.set", request)
+        self.assertEqual(answer["version"], 12)
+        for key in request["confirm"]:
+            self.assertAlmostEqual(answer["settings"][key]["confirmed"], time.time(), delta=10, msg=key)
+            self.assertFalse(answer["settings"][key]["stored"], key)
+        self.assertIsNone(answer["settings"]["mower_width"]["confirmed"])
+        confirmed = ["antenna_x", "antenna_y", "blade_offset", "robot_outline", "track"]
+        self.assertEqual(sorted(saved()["confirmed"]), confirmed)
+        self.assertEqual(saved()["version"], 12)
+        self.assertTrue(self.probe.wait(lambda: sorted(self.probe.params.get(G + "confirmed", [])) == confirmed),
+                        str(self.probe.params.get(G + "confirmed")))
+        cases = {
+            "confirm_fixed": ({"version": 12, "confirm": ["wheel_radius"]}, "NOT_SETTABLE"),
+            "confirm_unknown": ({"version": 12, "confirm": ["nope"]}, "UNKNOWN_KEY"),
+            "confirm_text": ({"version": 12, "confirm": "track"}, "INVALID_REQUEST"),
+            "confirm_reset": ({"version": 12, "reset": ["track"], "confirm": ["track"]}, "INVALID_REQUEST"),
+        }
+        for rid, (wrong, reason) in cases.items():
+            refused = self.probe.call(rid, "robot.geometry.set", wrong)
+            self.assertEqual((refused[0], refused[2]["reason"]), (RpcError.ERROR_INVALID_PARAMS, reason), rid)
+        time.sleep(0.5)
+        self.assertEqual(len(self.probe.geometry_events()), events)
+
+    def test_c_an_outline_that_leaves_out_a_part_is_told(self):
+        events = len(self.probe.geometry_events())
+        # The bar reaches as far as the outline of the platform: 2 cm less in front leaves it out.
+        front = max(x for x, _ in OUTLINE)
+        short = [[x - 0.02 if x == front else x, y] for x, y in OUTLINE]
+        answer = self.set("short", 12, {"robot_outline": short})
+        self.assertEqual(answer["version"], 13)
+        event = self.probe.wait(
+            lambda: len(self.probe.geometry_events()) > events and self.probe.geometry_events()[-1])
+        self.assertEqual(event["changed"], ["robot_outline"])
+        outside = {part["part"]: part["by"] for part in event["outside_shape"]}
+        self.assertLessEqual({"bumper_left", "bumper_right"}, set(outside))
+        self.assertLessEqual(set(outside), set(SHAPE["parts"]))
+        self.assertTrue(0.005 < outside["bumper_left"] <= 0.02, outside)
+        self.assertEqual(outside["bumper_left"], outside["bumper_right"])
+        self.assertEqual(event["severity"], "warning")
+        self.assertEqual(event["reason"], "BELOW_DEFAULT" if event["below_default"] else "SHAPE_OUTSIDE")
+        self.assertIn("of the shape of the mower", event["message"])
+        # Back at the outline of the platform nothing is left out.
+        self.assertEqual(self.set("whole", 13, reset=["robot_outline"])["version"], 14)
+        event = self.probe.wait(
+            lambda: len(self.probe.geometry_events()) > events + 1 and self.probe.geometry_events()[-1])
+        self.assertNotIn("outside_shape", event)
+        self.assertEqual(event["severity"], "info")

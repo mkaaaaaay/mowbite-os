@@ -1804,16 +1804,29 @@ Geometry LogicNode::FactoryGeometry() {
   for (const auto& key : GeometryKeys()) {
     if (key.type == GeometryType::kNumber) factory[key.name] = GeometryNumber(*this, key.name);
   }
-  // The outline of the body and the footprint of the station, if the platform has them: x0, y0, x1, y1, ...
-  for (const char* key : {"robot_outline", "dock_footprint"}) {
-    const std::string name = std::string("geometry.") + key;
+  // The points of a parameter x0, y0, x1, y1, ...
+  const auto points_of = [this](const std::string& name) {
     const std::vector<double> flat = declare_parameter(name, std::vector<double>());
     if (flat.size() % 2 != 0) throw std::invalid_argument(name + " needs pairs of x and y");
-    if (flat.empty()) continue;
     json points = json::array();
     for (size_t i = 0; i < flat.size(); i += 2) points.push_back(json::array({flat[i], flat[i + 1]}));
-    factory[key] = std::move(points);
+    return points;
+  };
+  // The outline of the body and the footprint of the station, if the platform has them.
+  for (const char* key : {"robot_outline", "dock_footprint"}) {
+    json points = points_of(std::string("geometry.") + key);
+    if (!points.empty()) factory[key] = std::move(points);
   }
+  // How the mower looks from above, for the app: the parts in their order, each with kind, points and closed.
+  json shape = json::array();
+  for (const std::string& id : declare_parameter("geometry.robot_shape.parts", std::vector<std::string>())) {
+    const std::string name = "geometry.robot_shape." + id;
+    shape.push_back({{"id", id},
+                     {"kind", declare_parameter(name + ".kind", std::string())},
+                     {"points", points_of(name + ".points")},
+                     {"closed", declare_parameter(name + ".closed", true)}});
+  }
+  if (!shape.empty()) factory["robot_shape"] = std::move(shape);
   const std::string platform = declare_parameter("geometry.platform", std::string());
   if (platform.empty()) throw std::invalid_argument("platform is missing in the geometry file of the platform");
   return Geometry(platform, factory);
@@ -1934,7 +1947,7 @@ void LogicNode::OnGeometrySet(const mowbite_msgs::msg::RpcRequest& request) {
     }
     const json body_before = geometry_.RecordedBody();
     Geometry changed = geometry_;
-    change = changed.Set(params);
+    change = changed.Set(params, static_cast<double>(WallSeconds()));
     if (!change.ok) {
       json data = json::object();
       data["reason"] = change.problem.reason;
@@ -1956,6 +1969,11 @@ void LogicNode::OnGeometrySet(const mowbite_msgs::msg::RpcRequest& request) {
       if (geometry_.RecordedBody() != body_before) SendRecordedBody();
       // Only a value that is another now is news; a key entered with the platform's own value is not.
       if (!change.changed.empty()) {
+        json outside = json::array();
+        for (const ShapeOver& over : change.outside_shape) {
+          outside.push_back({{"part", over.part}, {"by", std::round(over.by * 1000.0) / 1000.0}});
+        }
+        core_.Call<&LogicCore::SetShapeOutside>(outside.dump());
         core_.Call<&LogicCore::GeometryChanged>(change.changed, change.below_default, geometry_.version());
       }
     }

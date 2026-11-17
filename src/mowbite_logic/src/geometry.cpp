@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <set>
 #include <stdexcept>
 
 #include "mowbite_api/catalog.h"
+#include "mowbite_api/setup.h"
 
 namespace mowbite_logic {
 
@@ -15,8 +17,9 @@ const std::vector<GeometryKey>& GeometryKeys() {
   static const std::vector<GeometryKey> keys = [] {
     std::vector<GeometryKey> out;
     for (const auto& key : mowbite_api::GeometryKeys()) {
-      out.push_back({key.name, key.points ? GeometryType::kPoints : GeometryType::kNumber, key.settable, key.min,
-                     key.max, key.unit.c_str(), key.relative});
+      const GeometryType type =
+          key.shape ? GeometryType::kShape : key.points ? GeometryType::kPoints : GeometryType::kNumber;
+      out.push_back({key.name, type, key.settable, key.min, key.max, key.unit.c_str(), key.relative});
     }
     return out;
   }();
@@ -166,6 +169,62 @@ std::optional<std::string> WheelsOutside(const std::map<std::string, double>& nu
   return std::nullopt;
 }
 
+// The body from above: the outline, without one the rectangle of width, front and rear.
+std::vector<Point> BodyPolygon(const std::map<std::string, double>& numbers, const std::vector<Point>& outline) {
+  if (!outline.empty()) return outline;
+  const Body body = BodyOf(numbers, outline);
+  return {{body.x_max, body.y_max}, {body.x_min, body.y_max}, {body.x_min, -body.y_max}, {body.x_max, -body.y_max}};
+}
+
+// [{"id", "kind", "points": [[x, y], ...], "closed"}] within the limits of the interface, or throws naming the problem.
+std::vector<ShapePart> ParseShape(const json& value) {
+  const auto fail = [](const std::string& what) -> std::vector<ShapePart> {
+    throw std::invalid_argument("robot_shape: " + what);
+  };
+  if (!value.is_array()) return fail("it must be a list of parts");
+  if (value.size() > static_cast<size_t>(mowbite_api::kShapeMaxParts)) {
+    return fail("more than " + std::to_string(mowbite_api::kShapeMaxParts) + " parts");
+  }
+  std::vector<ShapePart> shape;
+  std::set<std::string> ids;
+  size_t total = 0;
+  for (const auto& item : value) {
+    if (!item.is_object() || !item.contains("id") || !item["id"].is_string() || !item.contains("kind") ||
+        !item["kind"].is_string() || !item.contains("points")) {
+      return fail("a part needs id, kind and points");
+    }
+    ShapePart part;
+    part.id = item["id"].get<std::string>();
+    part.kind = item["kind"].get<std::string>();
+    if (part.id.empty() || part.kind.empty()) return fail("a part has an empty id or kind");
+    if (!ids.insert(part.id).second) return fail("the part " + part.id + " comes twice");
+    std::string why;
+    auto points = ParsePoints(item["points"], &why, "robot_shape." + part.id);
+    if (!points) return fail(why);
+    if (points->empty()) return fail("the part " + part.id + " has no point");
+    if (points->size() > static_cast<size_t>(mowbite_api::kShapeMaxPartPoints)) {
+      return fail("the part " + part.id + " has more than " + std::to_string(mowbite_api::kShapeMaxPartPoints) +
+                  " points");
+    }
+    for (const Point& point : *points) {
+      if (!std::isfinite(point[0]) || !std::isfinite(point[1]) || std::hypot(point[0], point[1]) > kBodyMax + kEps) {
+        return fail("a point of the part " + part.id + " is farther than " + Num(kBodyMax) + " m from base_link");
+      }
+    }
+    total += points->size();
+    part.points = std::move(*points);
+    if (item.contains("closed")) {
+      if (!item["closed"].is_boolean()) return fail("closed of the part " + part.id + " is no boolean");
+      part.closed = item["closed"].get<bool>();
+    }
+    shape.push_back(std::move(part));
+  }
+  if (total > static_cast<size_t>(mowbite_api::kShapeMaxPoints)) {
+    return fail("more than " + std::to_string(mowbite_api::kShapeMaxPoints) + " points");
+  }
+  return shape;
+}
+
 GeometryProblem OutOfRange(const std::string& key, const std::string& message, double min, double max) {
   GeometryProblem problem = Problem("OUT_OF_RANGE", key, message);
   problem.data["min"] = min;
@@ -196,6 +255,8 @@ Geometry::Geometry(std::string platform, const json& factory) : platform_(std::m
         throw std::invalid_argument(key.name + " is missing in the geometry of the platform, or no number");
       }
       factory_.numbers[key.name] = factory[key.name].get<double>();
+    } else if (key.type == GeometryType::kShape) {
+      if (factory.contains(key.name)) shape_ = ParseShape(factory[key.name]);
     } else if (factory.contains(key.name)) {
       std::string why;
       auto points = ParsePoints(factory[key.name], &why, key.name);
@@ -388,9 +449,20 @@ bool Geometry::Load(const std::string& text, std::string* why) {
       }
     }
   }
+  std::map<std::string, double> confirmed;
+  if (parsed.contains("confirmed")) {
+    if (!parsed["confirmed"].is_object()) return fail("confirmed is no object");
+    for (const auto& item : parsed["confirmed"].items()) {
+      const GeometryKey* key = FindKey(item.key());
+      if (!key || !key->settable) return fail(item.key() + " is no key the user confirms");
+      if (!item.value().is_number()) return fail("confirmed." + item.key() + " must be a number");
+      confirmed[item.key()] = item.value().get<double>();
+    }
+  }
   const Values values = Effective(entries);
   if (auto problem = Check(values)) return fail(problem->message);
   entries_ = std::move(entries);
+  confirmed_ = std::move(confirmed);
   now_ = values;
   version_ = version;
   return true;
@@ -409,6 +481,7 @@ std::string Geometry::Text() const {
   json file = json::object();
   file["version"] = version_;
   file["entries"] = std::move(entries);
+  if (!confirmed_.empty()) file["confirmed"] = confirmed_;
   return file.dump(2) + "\n";
 }
 
@@ -425,6 +498,12 @@ json Geometry::Get() const {
       entry["unit"] = key.unit;
       entry["min"] = min;
       entry["max"] = max;
+    } else if (key.type == GeometryType::kShape) {
+      entry["value"] = ShapeJson();
+      entry["default"] = entry["value"];
+      entry["stored"] = false;
+      entry["type"] = "shape";
+      entry["unit"] = "m";
     } else {
       entry["value"] = PointsJson(PointsOf(now_, key.name));
       entry["default"] = PointsJson(PointsOf(factory_, key.name));
@@ -433,6 +512,10 @@ json Geometry::Get() const {
       entry["unit"] = "m";
     }
     entry["settable"] = key.settable;
+    if (key.settable) {
+      const auto it = confirmed_.find(key.name);
+      entry["confirmed"] = it == confirmed_.end() ? json() : json(it->second);
+    }
     settings[key.name] = std::move(entry);
   }
   json out = json::object();
@@ -445,33 +528,70 @@ json Geometry::Get() const {
 json Geometry::Params() const {
   json out = json::object();
   for (const auto& key : GeometryKeys()) {
+    if (key.type == GeometryType::kShape) continue;
     out[key.name] =
         key.type == GeometryType::kNumber ? json(now_.numbers.at(key.name)) : PointsJson(PointsOf(now_, key.name));
   }
   out["version"] = version_;
   json stored = json::array();
+  json confirmed = json::array();
   for (const auto& key : GeometryKeys()) {
     if (key.type == GeometryType::kNumber ? entries_.numbers.count(key.name) != 0
                                           : key.settable && entries_.outline.has_value()) {
       stored.push_back(key.name);
     }
+    if (confirmed_.count(key.name)) confirmed.push_back(key.name);
   }
   out["stored"] = std::move(stored);
+  out["confirmed"] = std::move(confirmed);
   return out;
 }
 
-GeometryChange Geometry::Set(const json& request) {
+json Geometry::ShapeJson() const {
+  json out = json::array();
+  for (const ShapePart& part : shape_) {
+    out.push_back({{"id", part.id}, {"kind", part.kind}, {"points", PointsJson(part.points)}, {"closed", part.closed}});
+  }
+  return out;
+}
+
+std::vector<ShapeOver> Geometry::Outside(const std::vector<ShapePart>& shape, const Values& values) {
+  // What a ruler does not tell apart.
+  constexpr double tolerance = 0.001;
+  const std::vector<Point> body = BodyPolygon(values.numbers, values.outline);
+  std::vector<ShapeOver> out;
+  for (const ShapePart& part : shape) {
+    double over = 0;
+    for (const Point& point : part.points) {
+      if (Inside(body, point[0], point[1])) continue;
+      double distance = std::numeric_limits<double>::infinity();
+      for (size_t i = 0, j = body.size() - 1; i < body.size(); j = i++) {
+        distance = std::min(distance, DistanceToSegment(body[j], body[i], point[0], point[1]));
+      }
+      over = std::max(over, distance);
+    }
+    if (over > tolerance) out.push_back({part.id, over});
+  }
+  return out;
+}
+
+std::vector<ShapeOver> Geometry::OutsideShape() const {
+  return Outside(shape_, now_);
+}
+
+GeometryChange Geometry::Set(const json& request, double now) {
   GeometryChange change;
   const auto refuse = [&change](GeometryProblem problem) {
     change.problem = std::move(problem);
     return change;
   };
-  const std::string usage = "Expected {\"version\": N, \"settings\": {key: value}, \"reset\": [key]}";
+  const std::string usage =
+      "Expected {\"version\": N, \"settings\": {key: value}, \"reset\": [key], \"confirm\": [key]}";
   if (!request.is_object() || !request.contains("version") || !request["version"].is_number_integer()) {
     return refuse(Problem("INVALID_REQUEST", "version", usage));
   }
   for (const auto& item : request.items()) {
-    if (item.key() != "version" && item.key() != "settings" && item.key() != "reset") {
+    if (item.key() != "version" && item.key() != "settings" && item.key() != "reset" && item.key() != "confirm") {
       return refuse(Problem("INVALID_REQUEST", item.key(), item.key() + " is no field of the request. " + usage));
     }
   }
@@ -486,8 +606,13 @@ GeometryChange Geometry::Set(const json& request) {
   const json none_reset = json::array();
   const json& settings = request.contains("settings") ? request["settings"] : none_set;
   const json& reset = request.contains("reset") ? request["reset"] : none_reset;
-  if (!settings.is_object() || !reset.is_array()) return refuse(Problem("INVALID_REQUEST", "", usage));
-  if (settings.empty() && reset.empty()) return refuse(Problem("INVALID_REQUEST", "", "Nothing to change. " + usage));
+  const json& confirm = request.contains("confirm") ? request["confirm"] : none_reset;
+  if (!settings.is_object() || !reset.is_array() || !confirm.is_array()) {
+    return refuse(Problem("INVALID_REQUEST", "", usage));
+  }
+  if (settings.empty() && reset.empty() && confirm.empty()) {
+    return refuse(Problem("INVALID_REQUEST", "", "Nothing to change. " + usage));
+  }
 
   // The key must exist and be the user's to set.
   const auto settable = [](const std::string& name, GeometryProblem* problem) -> const GeometryKey* {
@@ -504,6 +629,7 @@ GeometryChange Geometry::Set(const json& request) {
   };
 
   Entries entries = entries_;
+  std::map<std::string, double> confirmed = confirmed_;
   std::set<std::string> reset_keys;
   GeometryProblem problem;
   for (const auto& item : reset) {
@@ -512,6 +638,7 @@ GeometryChange Geometry::Set(const json& request) {
     const GeometryKey* key = settable(name, &problem);
     if (!key) return refuse(problem);
     reset_keys.insert(name);
+    confirmed.erase(name);
     if (key->type == GeometryType::kNumber) {
       entries.numbers.erase(name);
     } else {
@@ -534,14 +661,26 @@ GeometryChange Geometry::Set(const json& request) {
       if (!points) return refuse(Problem("INVALID_VALUE", item.key(), why));
       entries.outline = std::move(*points);
     }
+    confirmed[item.key()] = now;
+  }
+  for (const auto& item : confirm) {
+    if (!item.is_string()) {
+      return refuse(Problem("INVALID_REQUEST", "confirm", "confirm lists names of keys. " + usage));
+    }
+    const std::string name = item.get<std::string>();
+    if (!settable(name, &problem)) return refuse(problem);
+    if (reset_keys.count(name)) return refuse(Problem("INVALID_REQUEST", name, name + " is both reset and confirmed"));
+    confirmed[name] = now;
   }
 
   const Values values = Effective(entries);
   if (auto wrong = Check(values)) return refuse(*wrong);
   change.ok = true;
-  if (entries == entries_) return change;
+  if (entries == entries_ && confirmed == confirmed_) return change;
+  confirmed_ = std::move(confirmed);
 
   for (const auto& key : GeometryKeys()) {
+    if (key.type == GeometryType::kShape) continue;
     const bool differs = key.type == GeometryType::kNumber
                              ? std::abs(values.numbers.at(key.name) - now_.numbers.at(key.name)) > 1e-12
                              : PointsOf(values, key.name) != PointsOf(now_, key.name);
@@ -553,6 +692,7 @@ GeometryChange Geometry::Set(const json& request) {
   // The version counts a change of a value, so the event and the new version always come together.
   if (!change.changed.empty()) ++version_;
   change.below_default = Below(factory_, now_);
+  change.outside_shape = Outside(shape_, now_);
   return change;
 }
 

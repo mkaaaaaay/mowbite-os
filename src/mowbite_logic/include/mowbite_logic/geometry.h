@@ -20,7 +20,7 @@ using json = nlohmann::ordered_json;
 // The entry of bridge/params the planner and the other nodes read the dimensions from.
 constexpr const char* kGeometryNode = "/mowbite_geometry";
 
-enum class GeometryType { kNumber, kPoints };
+enum class GeometryType { kNumber, kPoints, kShape };
 
 struct GeometryKey {
   std::string name;
@@ -34,7 +34,7 @@ struct GeometryKey {
   bool relative = false;
 };
 
-// All keys in the order of the answers; robot_outline and dock_footprint are lists.
+// All keys in the order of the answers; robot_outline and dock_footprint are lists, robot_shape is a list of parts.
 const std::vector<GeometryKey>& GeometryKeys();
 
 using Point = std::array<double, 2>;
@@ -48,6 +48,22 @@ struct GeometryProblem {
   json data = json::object();
 };
 
+// A part of robot_shape: how the mower looks from above, for the app to draw. Never used to drive or to plan.
+struct ShapePart {
+  std::string id;
+  // body, wheel, caster, bumper, button, sensor or handle.
+  std::string kind;
+  // A line of points, or one point for a button or a sensor.
+  std::vector<Point> points;
+  bool closed = true;
+};
+
+// A part of robot_shape that reaches out of the body, and by how much (m).
+struct ShapeOver {
+  std::string part;
+  double by = 0;
+};
+
 struct GeometryChange {
   bool ok = false;
   // Why not, if !ok.
@@ -58,17 +74,21 @@ struct GeometryChange {
   std::vector<std::string> changed;
   // Keys of the body below the platform's value after the change (robot_width, robot_front, robot_rear, robot_outline).
   std::vector<std::string> below_default;
+  // Parts of robot_shape the body leaves out after the change; a warning, the change counts.
+  std::vector<ShapeOver> outside_shape;
 };
 
 class Geometry {
  public:
   // The platform's values: {"robot_width": 0.47, ...} with every number key of GeometryKeys(), and optionally
-  // "robot_outline" and "dock_footprint": [[x, y], ...]. Throws std::invalid_argument naming the problem if a number is missing, is none or
-  // the values break a rule.
+  // "robot_outline" and "dock_footprint": [[x, y], ...], and "robot_shape": [{"id", "kind", "points": [[x, y], ...],
+  // "closed"}] within the limits of the interface. Throws std::invalid_argument naming the problem if a number is
+  // missing, is none or the values break a rule.
   Geometry(std::string platform, const json& factory);
 
-  // The file written from Text(): {"version": N, "entries": {key: value}}. False with the reason in why if it is no
-  // JSON object, has a key that is unknown or not settable, or its values break a rule; then nothing changes.
+  // The file written from Text(): {"version": N, "entries": {key: value}, "confirmed": {key: unix s}}. False with the
+  // reason in why if it is no JSON object, has a key that is unknown or not settable, or its values break a rule; then
+  // nothing changes.
   bool Load(const std::string& text, std::string* why);
   std::string Text() const;
 
@@ -84,21 +104,25 @@ class Geometry {
   // The range of a number key: min and max, around the platform's value for a relative key.
   std::pair<double, double> Range(const GeometryKey& key) const;
 
-  // robot.geometry.get: {"settings": {key: {value, default, stored, type, unit, min, max, settable}}, "version",
-  // "platform"}.
+  // robot.geometry.get: {"settings": {key: {value, default, stored, type, unit, min, max, settable, confirmed}},
+  // "version", "platform"}. confirmed: unix s the user confirmed the value of a settable key, null before.
   json Get() const;
   // The "params" of the bridge/params entry: every key as it counts now (a list [] without one), version, and
-  // stored: the keys the user entered.
+  // stored: the keys the user entered, confirmed: those the user confirmed. Without robot_shape, which is for the
+  // app alone.
   json Params() const;
 
-  // robot.geometry.set: {"version": N, "settings": {key: value}, "reset": [key]}. All or nothing: a version that is not
-  // the current one, a key that is unknown or not settable, a value of the wrong kind or one that breaks a rule changes
-  // nothing. Out-of-range values are refused, not cut to the bound.
-  GeometryChange Set(const json& request);
+  // robot.geometry.set: {"version": N, "settings": {key: value}, "reset": [key], "confirm": [key]}. All or nothing: a
+  // version that is not the current one, a key that is unknown or not settable, a value of the wrong kind or one that
+  // breaks a rule changes nothing. Out-of-range values are refused, not cut to the bound. A key set or named in confirm
+  // counts as confirmed by the user at now (unix s), a key reset no longer.
+  GeometryChange Set(const json& request, double now = 0.0);
 
   // properties.recorded_body of an area recorded with the body as it is now, without by: robot_width, robot_front,
   // robot_rear (m) and robot_outline ([] for the rectangle).
   json RecordedBody() const;
+  // The parts of robot_shape the body of now leaves out by more than a millimetre.
+  std::vector<ShapeOver> OutsideShape() const;
   // Keys of the body below the platform's value now.
   std::vector<std::string> BelowDefault() const;
   // m from base_link to the farthest point of the body: the points of robot_outline, without one the corners of the
@@ -125,10 +149,16 @@ class Geometry {
   std::optional<GeometryProblem> Check(const Values& values) const;
   static std::vector<std::string> Below(const Values& factory, const Values& now);
   static json PointsJson(const std::vector<Point>& points);
+  static std::vector<ShapeOver> Outside(const std::vector<ShapePart>& shape, const Values& values);
+  json ShapeJson() const;
 
   std::string platform_;
   Values factory_;
+  // The platform's alone.
+  std::vector<ShapePart> shape_;
   Entries entries_;
+  // unix s by settable key the user confirmed.
+  std::map<std::string, double> confirmed_;
   Values now_;
   int version_ = 0;
 };

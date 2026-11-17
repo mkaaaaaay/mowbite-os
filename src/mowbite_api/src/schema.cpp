@@ -2,10 +2,20 @@
 #include <map>
 #include <set>
 
+#include "internal.h"
 #include "mowbite_api/catalog.h"
 #include "mowbite_api/planner_schema.h"
+#include "mowbite_api/setup.h"
 
 namespace mowbite_api {
+
+Json Texts(const UserTexts& texts) {
+  Json out = Json::object();
+  for (const auto& [language, text] : texts) {
+    out[language] = {{"name", text.name}, {"help", text.help}, {"fix", text.fix}};
+  }
+  return out;
+}
 
 namespace {
 
@@ -22,15 +32,9 @@ const char* TypeName(Type type) {
   return "string";
 }
 
-Json Texts(const UserTexts& texts) {
-  Json out = Json::object();
-  for (const auto& [language, text] : texts) {
-    out[language] = {{"name", text.name}, {"help", text.help}, {"fix", text.fix}};
-  }
-  return out;
-}
 
 Json Property(const Field& field) {
+  if (!field.defined.empty()) return {{"$ref", "#/$defs/" + field.defined}, {"description", field.text}};
   Json property = Json::object();
   if (field.type == Type::kAny) {
     // Any value, null included.
@@ -297,9 +301,11 @@ Json BuildSchema(const Json& planner) {
   }
   Json geometry = Json::object();
   for (const auto& key : GeometryKeys()) {
-    Json entry = {{"type", key.points ? "points" : "number"}, {"unit", key.unit}, {"settable", key.settable},
+    Json entry = {{"type", key.shape ? "shape" : key.points ? "points" : "number"},
+                  {"unit", key.unit},
+                  {"settable", key.settable},
                   {"description", key.text}};
-    if (!key.points) {
+    if (!key.points && !key.shape) {
       entry["min"] = key.min;
       entry["max"] = key.max;
       entry["relative"] = key.relative;
@@ -314,6 +320,13 @@ Json BuildSchema(const Json& planner) {
                             {"more", word.more.empty() ? Json() : Json(word.more)},
                             {"push", word.push}};
     if (word.ready) ready_reasons.push_back(word.word);
+  }
+  {
+    const Field state = SetupState();
+    defs["setup"] = Object("setup/json, retained where the platform has a step list: the state of the setup program, "
+                           "sent with every change and at most twice a second while a step runs; the same as "
+                           "setup.get",
+                           Pointers(state.fields), true);
   }
   defs["schedule_ready"] = {
       {"type", "object"},
@@ -347,7 +360,8 @@ Json BuildSchema(const Json& planner) {
                   "that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, "
                   "sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set "
                   "with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of "
-                  "schedule.log with what detail and more hold (null: always null). x-api counts every change, "
+                  "schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api "
+                  "counts every change, "
                   "x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or "
                   "meaning changed, a parameter newly required, fewer values taken in a request, an event a client "
                   "waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break "
@@ -363,7 +377,8 @@ Json BuildSchema(const Json& planner) {
                  {"x-sensors", sensors},
                  {"x-settings", settings},
                  {"x-geometry", geometry},
-                 {"x-schedule-log", log_words}};
+                 {"x-schedule-log", log_words},
+                 {"x-setup", SetupCatalog()}};
   if (planner.is_object()) schema["x-planner"] = {{"version", planner.value("version", 0)}};
   return Sorted(schema);
 }

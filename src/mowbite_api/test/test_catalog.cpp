@@ -11,6 +11,7 @@
 #include <string>
 
 #include "mowbite_api/catalog.h"
+#include "mowbite_api/setup.h"
 
 using namespace mowbite_api;
 
@@ -118,8 +119,8 @@ TEST(Catalog, EntriesAreWellFormed) {
   std::set<std::string> types;
   for (const auto& event : Events()) {
     EXPECT_TRUE(types.insert(event.type).second) << "twice: " << event.type;
-    EXPECT_TRUE(std::set<std::string>({"logic", "map", "ntrip", "camera", "bridge", "stats"}).count(event.emitter))
-        << event.type;
+    const std::set<std::string> emitters = {"logic", "map", "ntrip", "camera", "bridge", "stats", "setup"};
+    EXPECT_TRUE(emitters.count(event.emitter)) << event.type;
     EXPECT_FALSE(event.text.empty()) << event.type;
     EXPECT_TRUE(severities.count(event.other_severity)) << event.type;
     EXPECT_TRUE(resumes.count(event.other_resume)) << event.type;
@@ -160,7 +161,10 @@ TEST(Catalog, EntriesAreWellFormed) {
       if (reason.when.empty()) {
         EXPECT_TRUE(codes.insert(reason.code).second) << event.type << " " << reason.code;
       }
-      for (const auto& field : reason.fields) add(field, true);
+      for (const auto& field : reason.fields) {
+        EXPECT_EQ(envelope.count(field.name), 0u) << event.type << " " << reason.code << "." << field.name;
+        add(field, true);
+      }
     }
     if (!event.reasons.empty()) {
       EXPECT_TRUE(seen.count("reason")) << event.type << " has reasons but no field reason";
@@ -333,7 +337,7 @@ TEST(Catalog, EveryReasonOfTheSources) {
 // COMMAND_REFUSED, REQUEST_REFUSED, SOUND_REFUSED and CAMERA_REFUSED are groups of answers only: rated like an event,
 // but never one.
 TEST(Catalog, RefusalsAreNoEvents) {
-  ASSERT_EQ(Refusals().size(), 7u);
+  ASSERT_EQ(Refusals().size(), 9u);
   const EventEntry& answers = Refusals().front();
   EXPECT_EQ(answers.type, "COMMAND_REFUSED");
   EXPECT_EQ(FindEvent("COMMAND_REFUSED"), nullptr);
@@ -502,7 +506,8 @@ TEST(Catalog, ParamsOfACommand) {
 TEST(Catalog, MethodsSensorsSettingsAndGeometry) {
   const std::set<std::string> nodes = {"mowbite_bridge",      "mowbite_logic", "mowbite_map",   "mowbite_ntrip",
                                        "mowbite_calibration", "mowbite_light", "mowbite_sound", "mowbite_camera",
-                                       "mowbite_schedule",    "mowbite_stats", "mowbite_net",   "mowbite_host"};
+                                       "mowbite_schedule",    "mowbite_stats", "mowbite_net",   "mowbite_host",
+                                       "mowbite_setup"};
   std::set<std::string> names;
   for (const auto& command : Commands()) names.insert(command.name);
   for (const auto& method : Methods()) {
@@ -534,8 +539,147 @@ TEST(Catalog, MethodsSensorsSettingsAndGeometry) {
   std::set<std::string> keys;
   for (const auto& key : GeometryKeys()) {
     EXPECT_TRUE(keys.insert(key.name).second) << key.name;
-    if (!key.points) {
+    if (!key.points && !key.shape) {
       EXPECT_LT(key.min, key.max) << key.name;
     }
   }
 }
+
+namespace {
+
+// The reasons of an event or of a group of refusals, by code.
+std::map<std::string, const ReasonEntry*> ReasonsOf(const std::string& type) {
+  std::map<std::string, const ReasonEntry*> out;
+  for (const auto* list : {&Events(), &Refusals()}) {
+    for (const auto& entry : *list) {
+      if (entry.type != type) continue;
+      for (const auto& reason : entry.reasons) out[reason.code] = &reason;
+    }
+  }
+  return out;
+}
+
+// Texts in both languages, each with a name; help and fix as well where a failure has to be explained.
+void ExpectTexts(const UserTexts& texts, const std::string& where, bool explained) {
+  for (const char* language : {"de", "en"}) {
+    ASSERT_TRUE(texts.count(language)) << where << " " << language;
+    const UserText& text = texts.at(language);
+    EXPECT_FALSE(text.name.empty()) << where << " " << language;
+    if (!explained) continue;
+    EXPECT_FALSE(text.help.empty()) << where << " " << language;
+    EXPECT_FALSE(text.fix.empty()) << where << " " << language;
+  }
+}
+
+}  // namespace
+
+// What a step list can name: unique ids of the pattern, and texts in both languages where the app shows them.
+TEST(Catalog, TheNamesOfTheSetupProgram) {
+  const std::regex id(kSetupIdPattern);
+  const auto named = [&id](const std::vector<SetupName>& names, const std::string& what, bool shown) {
+    std::set<std::string> seen;
+    EXPECT_FALSE(names.empty()) << what;
+    for (const auto& name : names) {
+      EXPECT_TRUE(seen.insert(name.id).second) << what << " " << name.id;
+      EXPECT_TRUE(std::regex_match(name.id, id)) << what << " " << name.id;
+      EXPECT_FALSE(name.text.empty()) << what << " " << name.id;
+      if (shown) ExpectTexts(name.texts, what + " " + name.id, false);
+    }
+  };
+  named(SetupStages(), "stage", true);
+  named(SetupRoles(), "role", true);
+  named(SetupMoves(), "move", true);
+  named(SetupConditions(), "condition", true);
+  named(SetupPoints(), "point", true);
+  named(SetupSkipReasons(), "skip reason", true);
+  named(SetupModes(), "mode", false);
+  // The roles are inputs of hw/status, the emergencies names of its bits.
+  for (const auto& name : SetupEmergencies()) {
+    if (name == "NONE") continue;
+    bool known = false;
+    for (const auto& bit : EmergencyBits()) known = known || bit.name == name;
+    EXPECT_TRUE(known) << name;
+  }
+}
+
+// Every check: its params within bounds, its reasons those of SETUP_STEP, texts where the step list brings none.
+TEST(Catalog, TheChecksOfTheSetupProgram) {
+  const auto reasons = ReasonsOf("SETUP_STEP");
+  ASSERT_FALSE(reasons.empty());
+  std::set<std::string> names;
+  for (const auto& check : SetupChecks()) {
+    EXPECT_TRUE(names.insert(check.name).second) << check.name;
+    EXPECT_EQ(FindSetupCheck(check.name), &check);
+    EXPECT_TRUE(check.kind == "confirm" || check.kind == "input" || check.kind == "measure") << check.name;
+    EXPECT_FALSE(check.text.empty()) << check.name;
+    for (const auto& reason : check.reasons) {
+      EXPECT_TRUE(reasons.count(reason)) << check.name << " " << reason;
+    }
+    // What setup.start begins and watches can be stopped and cut off.
+    if (check.start && check.kind == "measure") {
+      for (const char* reason : {"STOPPED", "INTERRUPTED"}) {
+        EXPECT_EQ(std::count(check.reasons.begin(), check.reasons.end(), reason), 1) << check.name << " " << reason;
+      }
+    }
+    std::set<std::string> params;
+    for (const auto& param : check.params) {
+      EXPECT_TRUE(params.insert(param.name).second) << check.name << "." << param.name;
+      EXPECT_FALSE(param.text.empty()) << check.name << "." << param.name;
+      if (param.type != Type::kNumber || param.required) continue;
+      EXPECT_LT(param.min, param.max) << check.name << "." << param.name;
+      EXPECT_GE(param.def, param.min) << check.name << "." << param.name;
+      EXPECT_LE(param.def, param.max) << check.name << "." << param.name;
+    }
+    for (const auto& value : check.values) {
+      EXPECT_FALSE(value.text.empty()) << check.name << " " << value.id;
+      if (!value.texts.empty()) ExpectTexts(value.texts, check.name + " " + value.id, false);
+    }
+    if (!check.texts.empty()) ExpectTexts(check.texts, check.name, true);
+  }
+  for (const auto& [code, reason] : reasons) ExpectTexts(reason->texts, "SETUP_STEP " + code, true);
+  EXPECT_EQ(FindSetupCheck("nothing"), nullptr);
+  // x-setup of the schema carries all of it.
+  const Json catalog = SetupCatalog();
+  EXPECT_EQ(catalog["checks"].size(), SetupChecks().size());
+  for (const auto& check : SetupChecks()) {
+    ASSERT_TRUE(catalog["checks"].contains(check.name)) << check.name;
+    EXPECT_EQ(catalog["checks"][check.name]["params"].size(), check.params.size()) << check.name;
+    EXPECT_EQ(catalog["checks"][check.name]["reasons"], Json(check.reasons)) << check.name;
+  }
+  EXPECT_EQ(catalog["stages"].size(), SetupStages().size());
+  EXPECT_EQ(catalog["limits"]["steps"], kSetupMaxSteps);
+  EXPECT_EQ(catalog["limits"]["image_bytes"], kSetupImageBytes);
+  EXPECT_EQ(catalog["limits"]["shape_points"], kShapeMaxPoints);
+}
+
+// Every reason the program gives is one of its group: Fail() of SETUP_STEP, Refuse() of SETUP_REFUSED and what
+// blocks a step of SETUP_BLOCKED, each with texts.
+TEST(Catalog, TheReasonsOfTheSetupProgram) {
+  std::ifstream in(std::string(MOWBITE_SOURCE_ROOT) + "/mowbite_setup/src/program.cpp");
+  ASSERT_TRUE(in.good());
+  std::stringstream text;
+  text << in.rdbuf();
+  const std::string source = text.str();
+  struct Call {
+    const char* pattern;
+    const char* group;
+    int least;
+  };
+  const Call calls[] = {{R"(\bFail\("([A-Z_]+)\")", "SETUP_STEP", 9},
+                        {R"(\bEnd\(step, "open", "([A-Z_]+)\")", "SETUP_STEP", 1},
+                        {R"(\bRefuse\("([A-Z_]+)\")", "SETUP_REFUSED", 10},
+                        {R"(\badd\("([A-Z_]+)\")", "SETUP_BLOCKED", 6}};
+  for (const Call& call : calls) {
+    const auto reasons = ReasonsOf(call.group);
+    const std::regex pattern(call.pattern);
+    std::set<std::string> found;
+    for (std::sregex_iterator it(source.begin(), source.end(), pattern), end; it != end; ++it) found.insert((*it)[1]);
+    EXPECT_GE(static_cast<int>(found.size()), call.least) << call.group;
+    for (const auto& code : found) {
+      const auto reason = reasons.find(code);
+      ASSERT_NE(reason, reasons.end()) << call.group << " has no " << code;
+      ExpectTexts(reason->second->texts, std::string(call.group) + " " + code, true);
+    }
+  }
+}
+

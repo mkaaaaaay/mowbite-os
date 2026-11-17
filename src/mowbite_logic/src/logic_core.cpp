@@ -946,8 +946,21 @@ void LogicCore::GeometryChanged(const std::vector<std::string>& changed, const s
     details["severity"] = "warning";
     message += ". " + list(below_default) + " below the platform's value: check the measurement";
   }
+  if (!shape_outside_.empty()) {
+    std::vector<std::string> parts;
+    for (const auto& part : shape_outside_) parts.push_back(part.value("part", ""));
+    details["outside_shape"] = shape_outside_;
+    if (below_default.empty()) details["reason"] = "SHAPE_OUTSIDE";
+    details["severity"] = "warning";
+    message += ". The body leaves out " + list(parts) + " of the shape of the mower: check the outline";
+  }
   details["message"] = message;
   AddEvent("GEOMETRY_CHANGED", std::move(details));
+}
+
+void LogicCore::SetShapeOutside(const std::string& parts) {
+  const json parsed = json::parse(parts, nullptr, false);
+  shape_outside_ = parsed.is_array() ? parsed : json::array();
 }
 
 bool LogicCore::Idle() const {

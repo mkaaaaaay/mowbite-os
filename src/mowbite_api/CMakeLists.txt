@@ -29,7 +29,8 @@ endif()
 configure_file(src/planner_schema_text.h.in ${CMAKE_CURRENT_BINARY_DIR}/planner_schema_text.h @ONLY)
 
 # The catalog of the app interface, its JSON Schema and the check of events against it, without ROS.
-add_library(mowbite_api_core STATIC src/catalog.cpp src/events.cpp src/schema.cpp src/check.cpp src/planner.cpp)
+add_library(mowbite_api_core STATIC src/catalog.cpp src/events.cpp src/schema.cpp src/check.cpp src/planner.cpp
+  src/setup.cpp)
 target_include_directories(mowbite_api_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)

@@ -652,9 +652,13 @@ class LogicCore {
   bool OnStopRelease();
   // robot.geometry.set changed the dimensions: event GEOMETRY_CHANGED with the keys that are other now and the keys of
   // the body below the platform's value; with the latter it is a warning with the reason BELOW_DEFAULT, else info. It
-  // stops nothing, so it has no resume.
+  // stops nothing, so it has no resume. With parts of SetShapeOutside it is a warning as well and names them in
+  // outside_shape, with the reason SHAPE_OUTSIDE unless BELOW_DEFAULT counts.
   void GeometryChanged(const std::vector<std::string>& changed, const std::vector<std::string>& below_default,
                        int version);
+  // The parts of robot_shape the body leaves out since the last robot.geometry.set, as the JSON list
+  // [{"part", "by"}] (by in m); "[]" for none.
+  void SetShapeOutside(const std::string& parts);
   // map/set_recorded_body failed after robot.geometry.set changed the body: event RECORDED_BODY_KEPT, the areas
   // recorded here keep the old body. areas: how many carry the id of this installation, below 0 when not known.
   void RecordedBodyKept(int areas, const std::string& code, const std::string& message);
@@ -1038,6 +1042,7 @@ class LogicCore {
   // Why the planner gave no way for the try that drives straight, and the turning circle of the body for its check.
   std::string docking_direct_cause_;
   double turning_radius_ = 0;
+  json shape_outside_ = json::array();
   // Docking by the marker: this docking, the test, whether a leg went out, whether the scale of the marker failed (no
   // drive by it then), whether the next wait is a sight, what the marker told, and the latest monotonic s of it.
   bool marker_docking_ = false;

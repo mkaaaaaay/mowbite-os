@@ -3,27 +3,19 @@
 #include <map>
 #include <string>
 
+#include "fields.h"
 #include "mowbite_api/catalog.h"
+#include "mowbite_api/setup.h"
 
 namespace mowbite_api {
 
 namespace {
 
-Field Number(std::string name, std::string unit, std::string text, bool required = true) {
-  return {std::move(name), Type::kNumber, std::move(unit), required, std::move(text), {}, false, {}, ""};
-}
-
-Field Integer(std::string name, std::string text, bool required = true) {
-  return {std::move(name), Type::kInteger, "", required, std::move(text), {}, false, {}, ""};
-}
+using namespace fields;
 
 // An optional whole number with a unit.
 Field Count(std::string name, std::string unit, std::string text) {
   return {std::move(name), Type::kInteger, std::move(unit), false, std::move(text), {}, false, {}, ""};
-}
-
-Field Text(std::string name, std::string text, bool required = true, std::vector<std::string> values = {}) {
-  return {std::move(name), Type::kString, "", required, std::move(text), std::move(values), false, {}, ""};
 }
 
 // A number of this unit from min to max.
@@ -39,10 +31,6 @@ Field Whole(std::string name, std::string unit, double min, double max, std::str
   Field field = Ranged(std::move(name), std::move(unit), min, max, std::move(text), required);
   field.type = Type::kInteger;
   return field;
-}
-
-Field Bool(std::string name, std::string text, bool required = true) {
-  return {std::move(name), Type::kBoolean, "", required, std::move(text), {}, false, {}, ""};
 }
 
 Field Client() {
@@ -81,27 +69,6 @@ Field Switch(std::string name, std::string text) {
   return {std::move(name), Type::kInteger, "", true, std::move(text), {}, false, {}, ""};
 }
 
-Field Object(std::string name, std::string text, std::vector<Field> fields = {}, bool required = true) {
-  return {std::move(name), Type::kObject, "", required, std::move(text), {}, false, std::move(fields), ""};
-}
-
-// A list of values of one type.
-Field List(std::string name, std::string text, Type items, bool required = true) {
-  Field field = {std::move(name), Type::kArray, "", required, std::move(text), {}, false, {}, ""};
-  field.items = items;
-  return field;
-}
-
-// A list of objects of these fields.
-Field Rows(std::string name, std::string text, std::vector<Field> fields, bool required = true) {
-  return {std::move(name), Type::kArray, "", required, std::move(text), {}, false, std::move(fields), ""};
-}
-
-Field Nullable(Field field) {
-  field.nullable = true;
-  return field;
-}
-
 Field NoParams() {
   return Object("params", "None", {}, false);
 }
@@ -125,7 +92,8 @@ Field GeometryAnswer() {
   return Object("result", "The geometry now",
                 {Object("settings",
                         "By key of x-geometry: value, default (the platform's), stored (entered by the user), type "
-                        "(number or points), unit, min and max of a number, settable"),
+                        "(number, points or shape), unit, min and max of a number, settable, and for a settable key "
+                        "confirmed (unix s the user set or confirmed its value, null before)"),
                  Integer("version", "Goes up with every change; robot.geometry.set needs the one read last"),
                  Text("platform", "The platform whose file gives the defaults")});
 }
@@ -151,6 +119,24 @@ const char kSoundOffered[] = "with a speaker and at least one sound";
 const char kHostOffered[] = "while mowbite/host/status says online";
 
 const char kCameraOffered[] = "with at least one camera";
+
+const char kSetupOffered[] = "where the platform has a step list (setup/setup.yaml)";
+
+Field SetupAnswer() {
+  Field state = SetupState();
+  state.name = "result";
+  state.text = "The state of the program after the call, as setup/json";
+  state.defined = "setup";
+  return state;
+}
+
+Field SetupStep() {
+  return Text("step", "id of the step");
+}
+
+Field SetupVersion() {
+  return Integer("version", "version of the state read last");
+}
 
 // The steps of sensors.history from first on, as "60, 300 or 900".
 std::string HistorySteps(size_t first) {
@@ -720,11 +706,14 @@ const std::vector<Method>& Methods() {
        GeometryAnswer(), ""},
       {"robot.geometry.set", "mowbite_logic",
        "Changes dimensions in IDLE, all or nothing; GEOMETRY_CHANGED follows. A body that leaves out the drive wheels "
-       "(track, wheel_width, wheel_radius) is refused with WHEELS_OUTSIDE",
+       "(track, wheel_width, wheel_radius) is refused with WHEELS_OUTSIDE; one that leaves out a part of robot_shape "
+       "counts, and GEOMETRY_CHANGED warns with SHAPE_OUTSIDE",
        Object("params", "The change",
               {Integer("version", "version of the last robot.geometry.get"),
                Object("settings", "Values by key of x-geometry", {}, false),
-               List("reset", "Keys back to the platform's value", Type::kString, false)}),
+               List("reset", "Keys back to the platform's value", Type::kString, false),
+               List("confirm", "Keys the user confirms as they are; a key of settings counts as confirmed as well",
+                    Type::kString, false)}),
        GeometryAnswer(), ""},
       {"system.hold", "mowbite_logic",
        "Holds the mower for an update: granted only in IDLE with nothing on its way and no start of the schedule within "
@@ -833,6 +822,45 @@ const std::vector<Method>& Methods() {
                List("timeline", "Changes of state, events and calls of the cores in the window, oldest first",
                     Type::kObject)}),
        ""},
+      {"setup.get", "mowbite_setup", "The state of the setup program: the steps of the platform with their texts",
+       NoParams(), SetupAnswer(), kSetupOffered},
+      {"setup.start", "mowbite_setup",
+       "Begins a step whose start is true, or repeats one that ended; a step of the check confirm ends with it. "
+       "SETUP_STEP follows when it ends",
+       Object("params", "The step",
+              {SetupStep(), SetupVersion(),
+               List("confirm", "The points of confirm[] of the step the user confirmed", Type::kString, false)}),
+       SetupAnswer(), kSetupOffered},
+      {"setup.answer", "mowbite_setup", "Gives the inputs of a step: a choice, a number, the answer to a question",
+       Object("params", "The answer",
+              {SetupStep(), SetupVersion(), Object("values", "Values by name of inputs[] of the step")}),
+       SetupAnswer(), kSetupOffered},
+      {"setup.skip", "mowbite_setup",
+       "Skips a step that is skippable; it can be done later all the same. A skipped check never opens the lock of "
+       "the safety measurement",
+       Object("params", "The step and why",
+              {SetupStep(), SetupVersion(), Text("reason", "One of skip_reasons[] of the step"),
+               Text("note", "Text of the user, needed with other; at most " + std::to_string(kSetupMaxSkipText) +
+                                " characters",
+                    false)}),
+       SetupAnswer(), kSetupOffered},
+      {"setup.abort", "mowbite_setup", "Ends the running step with STOPPED; nothing happens without one",
+       Object("params", "The step", {Text("step", "The running step; none for whichever runs", false)}, false),
+       SetupAnswer(), kSetupOffered},
+      {"setup.reset", "mowbite_setup", "Takes every result back: all steps are open again, the record starts anew",
+       Object("params", "The version", {SetupVersion()}), SetupAnswer(), kSetupOffered},
+      {"setup.image", "mowbite_setup",
+       "An image of a step in pieces of at most " + std::to_string(kSetupImageBytes) + " bytes",
+       Object("params", "The piece",
+              {Text("name", "name of image or image.accent of a step"),
+               Count("offset", "B", "Where the piece begins, 0 without"),
+               Whole("size", "B", 1, kSetupImageBytes, "Its size at most, the whole image without", false)}),
+       Object("result", "The piece",
+              {Whole("size", "B", 0, kSetupImageBytes, "Size of the whole image"),
+               Whole("offset", "B", 0, kSetupImageBytes, "Where the piece begins"),
+               Text("data", "The piece in base64, empty at the end"), Text("sha256", "sha256 of the whole image"),
+               Text("type", "Always image/svg+xml")}),
+       kSetupOffered},
       {"incidents.download", "mowbite_stats",
        "An incident as a tar archive in pieces of at most " + std::to_string(kIncidentChunkBytes) +
            " bytes; without location the journal goes without place and with a shifted date",
@@ -1241,6 +1269,14 @@ const std::vector<GeometryEntry>& GeometryKeys() {
       {"ticks_per_m", false, true, 100.0, 10000.0, "1/m", false, "Wheel ticks per metre"},
       {"imu_roll", false, true, -0.087, 0.087, "rad", true, "Roll of the IMU against the platform's value"},
       {"imu_pitch", false, true, -0.087, 0.087, "rad", true, "Pitch of the IMU against the platform's value"},
+      {"robot_shape", false, false, 0.0, 0.0, "m", false,
+       "How the mower looks from above, for the app to draw: parts {id, kind, points [x, y], closed} in the order to "
+       "draw them, at most " +
+           std::to_string(kShapeMaxParts) + " parts, " + std::to_string(kShapeMaxPartPoints) + " points a part and " +
+           std::to_string(kShapeMaxPoints) +
+           " in all; kind as x-setup.shape_kinds; [] for a platform without one. Shown only: robot_outline stays "
+           "the body the mower drives and plans with",
+       true},
   };
   return keys;
 }
