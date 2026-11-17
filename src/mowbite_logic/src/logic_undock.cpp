@@ -37,7 +37,7 @@ bool LogicCore::Undocking() const {
 }
 
 void LogicCore::OnChargeOff(bool ok, const std::string& message) {
-  if (state_ == State::kDocking && docking_out_after_charge_off_) {
+  if (state_ == State::kDocking && docking_part_.out_after_charge_off()) {
     DockingChargeOff(ok, message);
     return;
   }

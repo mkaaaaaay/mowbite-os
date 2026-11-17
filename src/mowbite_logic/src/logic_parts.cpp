@@ -201,4 +201,100 @@ void LogicCore::EndUndocking(const std::optional<Reason>& failure, const Reason&
   undocking_.EndUndocking(CoreAccess(*this), failure, why);
 }
 
+Reason LogicCore::DockingProblem() const {
+  return docking_part_.DockingProblem(CoreFacts(*this));
+}
+
+Reason LogicCore::StartDocking() {
+  return docking_part_.StartDocking(CoreAccess(*this));
+}
+
+std::optional<DockingLeg> LogicCore::TakeDockingLeg() {
+  return docking_part_.TakeDockingLeg(CoreAccess(*this));
+}
+
+void LogicCore::OnDockingLegEnded(LegEnd end, const Reason& reason) {
+  docking_part_.OnDockingLegEnded(CoreAccess(*this), end, reason);
+}
+
+bool LogicCore::MarkerSource() const {
+  return docking_part_.MarkerSource(CoreFacts(*this));
+}
+
+bool LogicCore::Guided() const {
+  return docking_part_.Guided(CoreFacts(*this));
+}
+
+bool LogicCore::MarkerWanted() const {
+  return docking_part_.MarkerWanted(CoreFacts(*this));
+}
+
+std::optional<double> LogicCore::DockHeadingHint() const {
+  return docking_part_.DockHeadingHint(CoreFacts(*this));
+}
+
+bool LogicCore::DockFollowerActive() const {
+  return docking_part_.DockFollowerActive(CoreFacts(*this));
+}
+
+void LogicCore::OnDockMarker(const DockMarkerSample& sample) {
+  docking_part_.OnDockMarker(CoreFacts(*this), sample);
+}
+
+void LogicCore::OnDockPose(const DockPoseSample& pose) {
+  docking_part_.OnDockPose(CoreAccess(*this), pose);
+}
+
+void LogicCore::SetTurningRadius(double radius) {
+  docking_part_.SetTurningRadius(radius);
+}
+
+Reason LogicCore::ApproachProblem() const {
+  return docking_part_.ApproachProblem(CoreFacts(*this));
+}
+
+void LogicCore::BeginDocking() {
+  docking_part_.BeginDocking(CoreAccess(*this));
+}
+
+Reason LogicCore::StartDockingTest(const Reason& node_problem, int runs) {
+  return docking_part_.StartDockingTest(CoreAccess(*this), node_problem, runs);
+}
+
+void LogicCore::WatchMarkerNear() {
+  docking_part_.WatchMarkerNear(CoreFacts(*this));
+}
+
+void LogicCore::OnDockingContact() {
+  docking_part_.OnDockingContact(CoreAccess(*this));
+}
+
+void LogicCore::DockingChargeOff(bool ok, const std::string& message) {
+  docking_part_.DockingChargeOff(CoreAccess(*this), ok, message);
+}
+
+void LogicCore::WatchCharge() {
+  docking_part_.WatchCharge(CoreAccess(*this));
+}
+
+void LogicCore::CountDockingFailure(Reason why, bool last) {
+  docking_part_.CountDockingFailure(CoreAccess(*this), std::move(why), last);
+}
+
+void LogicCore::WaitForDockingGps() {
+  docking_part_.WaitForDockingGps(CoreAccess(*this));
+}
+
+void LogicCore::TickDocking(double now_s) {
+  docking_part_.TickDocking(CoreAccess(*this), now_s);
+}
+
+void LogicCore::CancelDockingLeg(const Reason& why) {
+  docking_part_.CancelDockingLeg(CoreAccess(*this), why);
+}
+
+void LogicCore::EndDocking(const Reason& why) {
+  docking_part_.EndDocking(CoreAccess(*this), why);
+}
+
 }  // namespace mowbite_logic

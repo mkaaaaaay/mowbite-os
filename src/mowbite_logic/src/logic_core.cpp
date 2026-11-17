@@ -84,7 +84,7 @@ LogicCore::LogicCore(const LogicConfig& config)
     : config_(config),
       ids_(config.id_seed),
       recording_(RecorderConfigOf(config)),
-      charge_watch_(config.charge),
+      docking_part_(config.charge),
       home_(HomeRules()) {
   // Without telemetry the mower counts as stopped until the driver reports.
   emergency_ = true;
@@ -149,7 +149,7 @@ void LogicCore::OnHardwareTimeout() {
   hw_.telemetry_ok = false;
   hw_.battery_ok = false;
   recording_.recorder().SetDockContact(false);
-  charge_watch_.OnBusy(false);
+  docking_part_.charge_watch().OnBusy(false);
   UpdateEmergency();
   WatchAnnouncement();
 }
@@ -172,8 +172,7 @@ void LogicCore::OnPoseTimeout() {
     StopUndocking(Reason("no_gps", "Undocking stopped: no position from the localization"),
                   Reason("POSE_LOST", "No position from the localization"));
   }
-  const bool map_leg = (docking_leg_ && docking_leg_frame_ == LegFrame::kMap) ||
-                       (docking_leg_due_ && docking_leg_due_->frame == LegFrame::kMap);
+  const bool map_leg = docking_part_.MapLeg();
   if (state_ == State::kDocking && map_leg) {
     CancelDockingLeg(Reason("POSE_LOST", "No position from the localization"));
     WaitForDockingGps();
@@ -531,7 +530,7 @@ void LogicCore::OnCapabilities(bool safety_measured, bool charge_stop) {
   if (state_ == State::kUndocking) StopUndocking(why, why);
   if (state_ == State::kCalibrating) calibration_.EndCalibration(CoreAccess(*this), why, true);
   if (state_ == State::kDocking) {
-    const bool approach = docking_last_kind_ == DockingLeg::Kind::kApproach;
+    const bool approach = docking_part_.last_kind() == DockingLeg::Kind::kApproach;
     CountDockingFailure(Reason(approach ? "approach_failed" : "dock_failed",
                                "Docking stopped: no safety measurement of this platform (hw/capabilities)"),
                         true);
@@ -593,7 +592,7 @@ bool LogicCore::FollowerActive() const {
   if (emergency_) return false;
   if (state_ == State::kDriving) return true;
   if (state_ == State::kUndocking) return undocking_.Leaving();
-  if (state_ == State::kDocking) return docking_leg_ && docking_leg_frame_ == LegFrame::kMap && !docking_hold_;
+  if (state_ == State::kDocking) return docking_part_.MapLegActive();
   return state_ == State::kMowing && pause_ == 0 && LegDrives();
 }
 

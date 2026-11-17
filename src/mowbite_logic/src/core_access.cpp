@@ -1,6 +1,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "mowbite_logic/logic_core.h"
 
@@ -124,6 +125,26 @@ double CoreFacts::DockAccuracyLimit() const {
 
 Reason CoreFacts::UndockEndProblem(double x, double y) const {
   return read_->UndockEndProblem(x, y);
+}
+
+bool CoreFacts::CanDock() const {
+  return read_->CanDock();
+}
+
+bool CoreFacts::PoseGood() const {
+  return read_->PoseGood();
+}
+
+Reason CoreFacts::PositionProblem() const {
+  return read_->PositionProblem();
+}
+
+const std::vector<Ring>& CoreFacts::drivable() const {
+  return read_->drivable_;
+}
+
+const std::vector<Ring>& CoreFacts::obstacles() const {
+  return read_->obstacles_;
 }
 
 EffectQueue& CoreAccess::effects() {

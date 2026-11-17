@@ -16,6 +16,7 @@
 #include "mowbite_logic/calibration_part.h"
 #include "mowbite_logic/core_access.h"
 #include "mowbite_logic/docking.h"
+#include "mowbite_logic/docking_part.h"
 #include "mowbite_logic/going_home_part.h"
 #include "mowbite_logic/home_watch.h"
 #include "mowbite_logic/logic_types.h"
@@ -402,8 +403,6 @@ class LogicCore {
   // DOCK_UNREACHABLE when the line onto the station begins outside of the drivable areas.
   Reason ApproachProblem() const;
   double DockAccuracyLimit() const;
-  // The limit for a pose from the dock marker at (x, y) in the station frame.
-  double MarkerAccuracyLimit(double x, double y) const;
   // The heading of the mower on the docking station.
   double DockedHeading() const;
   // The contacts lie behind base_link: the mower backs onto the station and leaves it forwards.
@@ -415,9 +414,6 @@ class LogicCore {
   // Stops the follower on its way out; undocking ends once it stopped, with UNDOCKING_FAILED if failure is set.
   void StopUndocking(const std::optional<Reason>& failure, const Reason& why);
   void EndUndocking(const std::optional<Reason>& failure, const Reason& why);
-  // Docking with the current settings onto the station of the map, the line within marker_range where Guided; in
-  // docking.test onto the station of the marker.
-  DockingSequence NewDocking() const;
   // After JOB_COMPLETE, abort_mowing and a reason to go home: DOCKING where the platform docks and the map has a
   // station, else IDLE. why: the reason of the event DOCKING, none after JOB_COMPLETE.
   void GoHome(const Reason& why = Reason());
@@ -442,71 +438,22 @@ class LogicCore {
   // The battery ends the run where it cannot go home: BATTERY_LOW with the limit it fell below, IDLE.
   void BatteryEndsMowing(HomeReason reason);
   void BeginDocking();
-  // The first leg of the next try from where the mower stands, or the wait for a good position.
-  void NextDockingTry();
-  // Busy, hold, no charge contacts, on the contacts already, unsafe: what refuses docking.start and docking.test.
-  Reason DockStartProblem() const;
   // runs 1 to 10: with more than one a series (runs above 1): after each DOCKED out to the start of the line in the
   // station frame and docking again, every run ends with DOCKING_TEST_RUN, the first failure ends the series.
   Reason StartDockingTest(const Reason& node_problem, int runs);
-  bool Series() const {
-    return docking_test_ && test_runs_ > 1;
-  }
-  // The run of the series ends: DOCKING_TEST_RUN, ok without a reason; nothing without an open run.
-  void TestRunEnded(const Reason& why);
-  // After a DOCKED of the series: out of the station to the start of the line for the next run, charging off first;
-  // without a good pose of the marker the series ends.
-  void DriveOutForNextRun();
-  // Docking by the marker (logic_marker.cpp): the next try in the station frame or the sight; a failed try, which
-  // drives out only with a good pose of the marker; the waits; why the mower may not go on at the gate (also by the
-  // map); a try failed by the marker; the end.
-  void NextMarkerTry();
-  // At the approach point of a try that may use the marker: its sight. Where the source cannot measure under prefer:
-  // the try by the position, with DOCKING_WITHOUT_MARKER.
-  void ChooseGuide();
-  void DockByPosition();
-  // The legs of the try: in the station frame by the marker, else in the map.
-  const DockingSequence& Legs() const;
   // Docking asks for the marker once the map puts the mower within kMarkerRequestDistance of the approach point.
   void WatchMarkerNear();
-  // Why the station by the marker does not fit the one of the map (gate: also the heading), empty if it does or there
-  // is no good position to compare; in docking.test only told.
-  std::string MarkerMapCheck(bool gate);
-  void WaitForMarker(bool sight);
-  void MarkerTryFailed(const Reason& why);
-  void TickMarkerDocking(double now_s);
-  Reason GateProblem();
-  void MarkerFailed(const std::string& cause, const std::string& text);
-  void EndMarkerDocking();
-  bool DockPoseGood() const;
-  bool SightDone() const;
-  // marker or position, for the events of docking.
-  const char* Guide() const;
   void OnDockingContact();
-  // A try failed: counted at once, or once the mower drove out to the approach point when it stands on the line.
-  void DockingTryFailed(const Reason& why);
-  // The planner gave no answer for the approach of a try: the straight way, or the try failed.
-  void DockingWithoutPlanner(const Reason& silent);
-  // The leg for the node; a way out from the contacts waits until charging is off, where the driver can stop it.
-  void SetDockingLeg(DockingLeg leg);
-  // Only while docking_out_after_charge_off_ holds the way out; OnChargeOff checks it.
+  // Only while the way out waits for charging off; OnChargeOff checks it.
   void DockingChargeOff(bool ok, const std::string& message);
-  // Once the docking switched charging off: allowed again after the way out and when docking ends.
-  void AllowChargeAgain();
-  // The check of the charge from the debounced contact on, its samples and how it ended.
-  void BeginChargeCheck();
-  ChargeSample ChargeSampleNow() const;
-  void OnChargeResult(ChargeCheck::Result result);
   // IDLE on the contacts: DOCKED once the charge is confirmed there, CHARGING_LOST when it stops (ChargeWatch).
   void WatchCharge();
-  void ChargingLost(const Reason& why);
   // DOCKING_RETRY and the next try, or DOCKING_FAILED and IDLE (also when last). A copy: why may be the failure kept.
   void CountDockingFailure(Reason why, bool last = false);
   void WaitForDockingGps();
   void TickDocking(double now_s);
   // Stops the leg on its way, if any.
   void CancelDockingLeg(const Reason& why);
-  void Docked();
   // IDLE; a leg on its way stops with why.
   void EndDocking(const Reason& why);
   // The start problems of the areas of the request that are not passed over; NO_MOWING_AREA when none is left.
@@ -605,55 +552,8 @@ class LogicCore {
   std::vector<Ring> obstacles_;
   Reason drivable_problem_;
   UndockingPart undocking_;
-  // Docking: its tries, the leg due for the node and the kind of the one on its way (and of the last one), stopped at a
-  // first contact, a failed try waiting for the mower to drive out, and the wait for a good position.
-  DockingSequence docking_;
-  std::optional<DockingLeg> docking_leg_due_;
-  std::optional<DockingLeg::Kind> docking_leg_;
-  DockingLeg::Kind docking_last_kind_ = DockingLeg::Kind::kApproach;
-  bool docking_hold_ = false;
-  std::optional<Reason> docking_failure_;
-  bool docking_gps_wait_ = false;
-  std::optional<double> docking_gps_since_;
-  std::optional<double> docking_gps_good_since_;
-  // The check of the charge on the contacts and whether it ran in this try; the way out kept until charging is off;
-  // whether this docking switched charging off (stopped once the driver confirmed it) and has to allow it again.
-  std::optional<ChargeCheck> docking_charge_;
-  bool docking_checked_ = false;
-  std::optional<DockingLeg> docking_out_after_charge_off_;
-  bool docking_charge_touched_ = false;
-  bool docking_charge_stopped_ = false;
-  // Why the planner gave no way for the try that drives straight, and the turning circle of the body for its check.
-  std::string docking_direct_cause_;
-  double turning_radius_ = 0;
+  DockingPart docking_part_;
   json shape_outside_ = json::array();
-  // Docking by the marker: this docking, the test, whether a leg went out, whether the scale of the marker failed (no
-  // drive by it then), whether the next wait is a sight, what the marker told, and the latest monotonic s of it.
-  bool marker_docking_ = false;
-  bool docking_test_ = false;
-  // The series of docking.test: its runs, the one on its way (from the drive out on), whether its event is due, and
-  // whether the drive out of the station leads to the next run.
-  int test_runs_ = 0;
-  int test_run_ = 0;
-  bool test_run_open_ = false;
-  bool test_next_run_ = false;
-  // m along the line from its start where run 1 began: the drive out for the next run ends there, where the marker
-  // gave a direction.
-  double test_start_along_ = 0.0;
-  bool marker_started_ = false;
-  bool marker_untrusted_ = false;
-  bool marker_sight_ = false;
-  // The legs in the station frame; the try chose the marker or the position; docking asks for the marker; the frame of
-  // the leg on its way.
-  DockingSequence marker_legs_;
-  bool try_by_marker_ = false;
-  bool try_by_position_ = false;
-  bool marker_near_ = false;
-  LegFrame docking_leg_frame_ = LegFrame::kMap;
-  MarkerWatch marker_;
-  double marker_clock_ = 0;
-  // Whether charging is confirmed on the station, and its loss.
-  ChargeWatch charge_watch_;
   std::string session_id_;
   int pause_ = 0;
   Reason pause_reason_;

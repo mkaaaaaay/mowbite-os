@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "mowbite_logic/logic_types.h"
 
@@ -47,6 +48,11 @@ class CoreFacts {
   Reason MoveProblem() const;
   double DockAccuracyLimit() const;
   Reason UndockEndProblem(double x, double y) const;
+  bool CanDock() const;
+  bool PoseGood() const;
+  Reason PositionProblem() const;
+  const std::vector<Ring>& drivable() const;
+  const std::vector<Ring>& obstacles() const;
 
  private:
   const LogicCore* read_;
