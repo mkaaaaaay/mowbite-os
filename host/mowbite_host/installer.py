@@ -386,8 +386,10 @@ class Installer:
             self.carrier.start()
         return pending
 
-    # Keeps current, previous and what pending names; removes other installations and broken unpacks.
+    # Keeps current, previous and what pending names, everything while pending is unreadable; removes the rest.
     def prune(self):
+        if not os.path.isdir(self.place.opt) or (os.path.lexists(self.place.pending) and self.pending() is None):
+            return
         keep = self.in_use()
         for name in os.listdir(self.place.opt):
             path = self.place.of(name)

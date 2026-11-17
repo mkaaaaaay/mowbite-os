@@ -634,6 +634,7 @@ class Updater:
             if not os.path.isdir(target):
                 self._check_abort()
                 self._set_phase("unpacking")
+                installer.prune()
                 bundle.check_space(staged, place.opt)
                 self._unpack(component, staged, place)
             self._set_phase("waiting_gate")
@@ -691,6 +692,7 @@ class Updater:
     def recover(self, start_stopped=False):
         for component, installer in self.installers.items():
             pending = installer.recover(start_stopped)
+            installer.prune()
             if pending is None:
                 continue
             revision = pending.get("to") or None

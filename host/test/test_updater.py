@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import support  # noqa: E402
 from mowbite_host import Refused, bundle, carrier, files, gate, installer, net, origin, paths, updater  # noqa: E402
 
-A, B, C = "aaaaaaa", "bbbbbbb", "ccccccc"
+A, B, C, D = "aaaaaaa", "bbbbbbb", "ccccccc", "ddddddd"
 
 
 class FakeOs:
@@ -800,6 +800,45 @@ class FlowTest(Base):
         finally:
             updater.GATE_EVERY = every
         self.assertEqual(os.readlink(self.paths.os.current), A)
+
+    # Left by an abort or a power cut: an unused installation and an unpack; current and previous stay.
+    def left_behind(self):
+        opt = self.paths.os.opt
+        for name in (B, C, f".{C}.partial"):
+            os.makedirs(os.path.join(opt, name, "x"))
+        os.symlink(B, self.paths.os.previous)
+        return opt
+
+    def test_recover_removes_what_an_update_left(self):
+        self.install(A)
+        opt = self.left_behind()
+        self.updater.recover()
+        self.assertEqual(sorted(os.listdir(opt)), sorted([A, B, "current", "previous"]))
+
+    def test_left_installations_go_before_the_space_check(self):
+        self.install(A)
+        self.left_behind()
+        self.bundle(D)
+        self.updater.check()
+        seen, check_space = [], updater.bundle.check_space
+
+        def space(staged, folder):
+            seen.append(sorted(os.listdir(folder)))
+            check_space(staged, folder)
+        updater.bundle.check_space = space
+        try:
+            self.assertEqual(self.run_update("os", D)["result"], "installed")
+        finally:
+            updater.bundle.check_space = check_space
+        self.assertEqual(seen, [sorted([A, B, "current", "previous"])])
+
+    def test_nothing_is_pruned_while_pending_is_unreadable(self):
+        self.install(A)
+        opt = self.left_behind()
+        self.write(self.paths.os.pending, "{")
+        self.updater.installer.prune()
+        self.assertIn(C, os.listdir(opt))
+        self.assertIn(f".{C}.partial", os.listdir(opt))
 
     def test_one_at_a_time(self):
         self.install(A)
