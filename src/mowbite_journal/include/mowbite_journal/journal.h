@@ -33,6 +33,8 @@ struct Options {
   double segment_mb = 16;
   // Packed and written this often, earlier when a buffer is half full.
   double flush_s = 1.0;
+  // The free space is checked this often; a segment that could not be created is tried again this long after.
+  double check_s = 10;
 };
 
 struct StreamStats {

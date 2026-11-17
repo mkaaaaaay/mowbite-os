@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -89,6 +90,17 @@ namespace {
 
 void Wait(double seconds) {
   std::this_thread::sleep_for(std::chrono::duration<double>(seconds));
+}
+
+// Polls the condition until it holds or the time is up.
+template <typename Condition>
+bool WaitFor(Condition condition, double seconds) {
+  const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+  while (!condition()) {
+    if (std::chrono::steady_clock::now() > end) return false;
+    Wait(0.02);
+  }
+  return true;
 }
 
 class JournalTest : public ::testing::Test {
@@ -321,6 +333,76 @@ TEST_F(JournalTest, ARunWithoutItsFirstSegmentIsNotReplayable) {
   const CheckReport report = CheckRuns(dir_.string(), registry_);
   EXPECT_EQ(report.outcome, CheckOutcome::kNotReplayable);
   EXPECT_NE(report.lines[0].find("segment 0 is missing"), std::string::npos) << report.lines[0];
+}
+
+// The run directory goes aside and a file takes its place, so that no segment can be created there, also as root.
+struct MovedRun {
+  fs::path run;
+  fs::path aside;
+  void Move() const {
+    fs::rename(run, aside);
+    std::ofstream(run) << "x";
+  }
+  void Restore() const {
+    fs::remove(run);
+    fs::rename(aside, run);
+  }
+};
+
+TEST_F(JournalTest, ASegmentThatCannotBeCreatedIsTriedAgainLater) {
+  options_.segment_s = 0.2;
+  options_.flush_s = 0.05;
+  options_.check_s = 0.5;
+  {
+    std::string error;
+    auto journal = Journal::Create(options_, &error);
+    ASSERT_TRUE(journal) << error;
+    Journaled<toy::Toy> core(journal.get(), toy::ToyConfig{});
+    const MovedRun moved{journal->GetStats().run_dir, dir_ / "aside"};
+    ASSERT_TRUE(WaitFor([&] { return journal->GetStats().segments >= 1; }, 2.0));
+    moved.Move();
+    ASSERT_TRUE(WaitFor(
+        [&] {
+          core.Call<&toy::Toy::Add>(1.0);
+          return !journal->GetStats().problem.empty();
+        },
+        2.0));
+    const Stats failed = journal->GetStats();
+    EXPECT_NE(failed.problem.find("cannot create"), std::string::npos) << failed.problem;
+    core.Call<&toy::Toy::Add>(1.0);
+    moved.Restore();
+    ASSERT_TRUE(WaitFor([&] { return journal->GetStats().problem.empty(); }, 3.0));
+    EXPECT_GT(journal->GetStats().segments, failed.segments);
+    core.Call<&toy::Toy::Add>(1.0);
+  }
+  const auto runs = ListRuns(dir_.string());
+  ASSERT_EQ(runs.size(), 1u);
+  EXPECT_TRUE(ListRun(runs[0]).missing.empty());
+  const CheckReport report = CheckRuns(dir_.string(), registry_);
+  EXPECT_EQ(report.outcome, CheckOutcome::kNotReplayable);
+  ASSERT_FALSE(report.lines.empty());
+  EXPECT_NE(report.lines.back().find("gap in the journal (cannot create"), std::string::npos) << report.lines.back();
+}
+
+TEST_F(JournalTest, ASegmentThatCannotBeCreatedIsNotTriedAgainBeforeTheCheckTime) {
+  options_.segment_s = 0.2;
+  options_.flush_s = 0.05;
+  options_.check_s = 2.0;
+  std::string error;
+  auto journal = Journal::Create(options_, &error);
+  ASSERT_TRUE(journal) << error;
+  const MovedRun moved{journal->GetStats().run_dir, dir_ / "aside"};
+  ASSERT_TRUE(WaitFor([&] { return journal->GetStats().segments >= 1; }, 2.0));
+  moved.Move();
+  ASSERT_TRUE(WaitFor([&] { return !journal->GetStats().problem.empty(); }, 2.0));
+  const Stats failed = journal->GetStats();
+  moved.Restore();
+  // Many flushes later the directory is fine again, but the next try waits for check_s after the failure.
+  Wait(1.0);
+  EXPECT_EQ(journal->GetStats().problem, failed.problem);
+  EXPECT_EQ(journal->GetStats().segments, failed.segments);
+  ASSERT_TRUE(WaitFor([&] { return journal->GetStats().problem.empty(); }, 3.0));
+  EXPECT_GT(journal->GetStats().segments, failed.segments);
 }
 
 std::vector<json> Lines(const std::string& text) {

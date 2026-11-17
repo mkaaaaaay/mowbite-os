@@ -38,7 +38,6 @@ int64_t MonotonicNs() {
 namespace {
 
 constexpr size_t kMaxStreams = 64;
-constexpr double kSpaceCheckS = 10.0;
 constexpr double kLimitsCheckS = 60.0;
 
 double Seconds() {
@@ -291,7 +290,7 @@ class Journal::Impl {
   void Run() {
     SetIdleIoClass();
     double last_flush = Seconds();
-    double last_space = -kSpaceCheckS;
+    double last_space = -options_.check_s;
     double last_limits = -kLimitsCheckS;
     for (;;) {
       bool stop;
@@ -301,7 +300,7 @@ class Journal::Impl {
         stop = stop_;
       }
       const double now = Seconds();
-      if (now - last_space >= kSpaceCheckS) {
+      if (now - last_space >= options_.check_s) {
         last_space = now;
         CheckSpace();
       }
@@ -332,10 +331,12 @@ class Journal::Impl {
     struct statvfs fs {};
     if (statvfs(options_.dir.c_str(), &fs) != 0) return;
     const double free_mb = static_cast<double>(fs.f_bavail) * static_cast<double>(fs.f_frsize) / 1e6;
-    if (free_mb < options_.reserve_mb) {
+    const bool was_low = low_space_;
+    low_space_ = free_mb < options_.reserve_mb;
+    if (low_space_) {
       SetProblem("less than " + std::to_string(static_cast<int>(options_.reserve_mb)) + " MB free on " +
                  options_.dir);
-    } else if (problem_.rfind("less than", 0) == 0) {
+    } else if (was_low) {
       SetProblem("");
     }
   }
@@ -346,9 +347,17 @@ class Journal::Impl {
     stats_.problem = problem;
   }
 
+  // A segment that could not be created or packed: the next one is tried check_s from now.
+  void Fail(const std::string& problem) {
+    SetProblem(problem);
+    retry_s_ = Seconds() + options_.check_s;
+  }
+
   // Swaps the buffers and writes the full one as a block, with the head and the definitions first in a new segment and
   // a gap record after the records when some were dropped.
   void Flush() {
+    // The problem stays in the stats until the new segment is open.
+    if (!problem_.empty() && !low_space_ && Seconds() >= retry_s_) problem_.clear();
     size_t size;
     std::array<uint64_t, kMaxStreams> dropped{};
     std::vector<std::vector<uint8_t>> definitions;
@@ -448,7 +457,8 @@ class Journal::Impl {
       do {
         left = ZSTD_compressStream2(zstd_, &out, &in, mode);
         if (ZSTD_isError(left)) {
-          SetProblem(std::string("zstd: ") + ZSTD_getErrorName(left));
+          Fail(std::string("zstd: ") + ZSTD_getErrorName(left));
+          CloseLosing(parts, problem_);
           return;
         }
       } while (mode == ZSTD_e_end ? left != 0 : in.pos < in.size);
@@ -468,14 +478,19 @@ class Journal::Impl {
     if (!ok) {
       // The segment may end in a broken block now: it is closed, the next flush starts a new one with a gap.
       stats_.problem = std::string("write: ") + std::strerror(errno);
-      close(fd_);
-      fd_ = -1;
-      for (const auto& part : parts) Lose(part.data, part.size, {}, stats_.problem);
+      CloseLosing(parts, stats_.problem);
       return;
     }
     stats_.raw_bytes += raw;
     stats_.packed_bytes += total;
     segment_bytes_ += total;
+  }
+
+  // Closes the segment after a block that was not written; its records go into the gap of the next segment.
+  void CloseLosing(const std::vector<Part>& parts, const std::string& why) {
+    close(fd_);
+    fd_ = -1;
+    for (const auto& part : parts) Lose(part.data, part.size, {}, why);
   }
 
   bool WriteAll(const uint8_t* data, size_t size) {
@@ -497,16 +512,18 @@ class Journal::Impl {
     const std::string path = run_dir_ + "/" + name + kSegmentSuffix;
     fd_ = open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
     if (fd_ < 0) {
-      SetProblem("cannot create " + path + ": " + std::strerror(errno));
+      Fail("cannot create " + path + ": " + std::strerror(errno));
       return false;
     }
     uint8_t header[kFileHeaderSize];
     std::memcpy(header, kMagic, 4);
     std::memcpy(header + 4, &kFormatVersion, 4);
     if (!WriteAll(header, sizeof(header))) {
-      SetProblem("cannot write " + path + ": " + std::strerror(errno));
+      Fail("cannot write " + path + ": " + std::strerror(errno));
       close(fd_);
       fd_ = -1;
+      // Removed, so that the next try can create it again.
+      unlink(path.c_str());
       return false;
     }
     segment_start_s_ = Seconds();
@@ -650,6 +667,8 @@ class Journal::Impl {
   std::vector<uint8_t> prefix_;
   std::vector<uint8_t> suffix_;
   std::string problem_;
+  bool low_space_ = false;
+  double retry_s_ = 0;
   std::array<uint64_t, kMaxStreams> pending_gap_{};
   std::string pending_why_;
   std::array<uint64_t, kMaxStreams> total_dropped_{};
