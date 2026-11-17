@@ -190,26 +190,34 @@ void McuControl::SetStopClearMark(bool written) {
   stop_clear_mark_ = written;
 }
 
-HostTestRefusal McuControl::HostTestRefused() const {
+HostTestRefusal McuControl::HostTestRefused(bool blade) const {
   // Also a single sample: the stop frames afterwards would push the mower off the contacts.
   if (DockContact() || dock_raw_) return HostTestRefusal::kCharging;
-  if (blade_request_ || blade_on_ || blade_turning_ || blade_rpm_high_) return HostTestRefusal::kBlade;
+  if (!blade && (blade_request_ || blade_on_ || blade_turning_ || blade_rpm_high_)) return HostTestRefusal::kBlade;
   return HostTestRefusal::kNone;
 }
 
 HostTestRefusal McuControl::Silence(double seconds, double now) {
+  return StartSilence(seconds, now, false);
+}
+
+HostTestRefusal McuControl::SilenceWithBlade(double seconds, double now) {
+  return StartSilence(seconds, now, true);
+}
+
+HostTestRefusal McuControl::StartSilence(double seconds, double now, bool blade) {
   if (silent_until_s_ || ended_) return HostTestRefusal::kBusy;
   if (!std::isfinite(seconds) || seconds < kMinSilenceS || seconds > config_.silence_max_s) {
     return HostTestRefusal::kOutOfRange;
   }
-  const HostTestRefusal refusal = HostTestRefused();
+  const HostTestRefusal refusal = HostTestRefused(blade);
   if (refusal != HostTestRefusal::kNone) return refusal;
   silent_until_s_ = now + seconds;
   return HostTestRefusal::kNone;
 }
 
 HostTestRefusal McuControl::End() {
-  const HostTestRefusal refusal = HostTestRefused();
+  const HostTestRefusal refusal = HostTestRefused(false);
   if (refusal != HostTestRefusal::kNone) return refusal;
   ended_ = true;
   return HostTestRefusal::kNone;

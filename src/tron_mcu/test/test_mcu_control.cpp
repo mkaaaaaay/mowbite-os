@@ -2213,3 +2213,63 @@ TEST(McuJournal, ConfigFromBeforeTheSilenceReplays) {
   j.erase("silence_max_s");
   EXPECT_EQ(j.get<tron::McuControlConfig>().silence_max_s, 0.0);
 }
+
+TEST_F(SilenceTest, WithTheBladeNothingGoesOutAndTheBladeStaysOffAfterwards) {
+  Run(0.5);
+  ASSERT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
+  Run(1.0);
+  control_.OnBladeRpm(3000, now_);
+  ASSERT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kBlade);
+  ASSERT_EQ(control_.SilenceWithBlade(1.0, now_), HostTestRefusal::kNone);
+  const double start = now_;
+  // A renewal meanwhile is refused.
+  Run(start + 0.3);
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kBlocked);
+  control_.OnBladeRpm(0, now_);
+  Run(start + 2.5);
+  EXPECT_TRUE(Times([](const SubPacket&) { return true; }, start + 0.001, start + 0.999).empty());
+  const double end = start + 1.0;
+  EXPECT_EQ(Times(IsBladeOff, end - 1e-6).size(), 3u);
+  EXPECT_EQ(Times(IsZeroSpeed, end - 1e-6).size(), 3u);
+  EXPECT_TRUE(Times(IsBladeOn, start + 0.001).empty());
+  auto status = control_.Status(now_);
+  EXPECT_FALSE(status.blade_on);
+  EXPECT_TRUE(status.latched);
+  EXPECT_EQ(status.emergency_reason, kReasonLatch | kReasonHighLevel);
+  // The lease from before does not come back with the release.
+  EXPECT_TRUE(control_.ReleaseEmergency(now_, status.latch_count));
+  Run(now_ + 1.0);
+  EXPECT_FALSE(control_.Status(now_).latched);
+  EXPECT_TRUE(Times(IsBladeOn, start + 0.001).empty());
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
+  Run(now_ + 0.05);
+  EXPECT_FALSE(Times(IsBladeOn, start + 0.001).empty());
+}
+
+TEST_F(SilenceTest, WithTheBladeAStillTurningBladeLatchesAfterTheEnd) {
+  Run(0.5);
+  ASSERT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
+  Run(1.0);
+  ASSERT_EQ(control_.SilenceWithBlade(1.0, now_), HostTestRefusal::kNone);
+  // The MCU does not stop it; blade_stop_time_s is 5 s here.
+  for (int i = 0; i < 80; i++) {
+    control_.OnBladeRpm(3000, now_);
+    Run(now_ + 0.1);
+  }
+  EXPECT_TRUE(control_.Status(now_).emergency_reason & kReasonMowerNotStopped);
+}
+
+TEST_F(SilenceTest, WithTheBladeTheOtherRefusalsStay) {
+  Run(0.5);
+  ASSERT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
+  EXPECT_EQ(control_.SilenceWithBlade(0.1, now_), HostTestRefusal::kOutOfRange);
+  EXPECT_EQ(control_.SilenceWithBlade(3.5, now_), HostTestRefusal::kOutOfRange);
+  control_.OnDockContactSample(true);
+  EXPECT_EQ(control_.SilenceWithBlade(1.0, now_), HostTestRefusal::kCharging);
+  control_.OnDockContactSample(false);
+  ASSERT_EQ(control_.SilenceWithBlade(1.0, now_), HostTestRefusal::kNone);
+  EXPECT_EQ(control_.SilenceWithBlade(1.0, now_), HostTestRefusal::kBusy);
+  // hw/end keeps refusing a blade that was on.
+  EXPECT_EQ(control_.End(), HostTestRefusal::kBlade);
+}

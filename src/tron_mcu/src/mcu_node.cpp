@@ -149,6 +149,7 @@ class McuNode : public rclcpp::Node {
                                                                tron::kMinCutterHeightMm, tron::kMaxCutterHeightMm));
     stop_release_ = get_parameter("stop_release").as_bool() && !read_only_;
     silence_max_s_ = read_only_ ? 0.0 : std::max(0.0, get_parameter("silence_max").as_double());
+    blade_allowed_ = get_parameter("allow_blade").as_bool() && !read_only_;
     imu_timeout_s_ = get_parameter("imu_timeout").as_double();
     measured_linear_scale_ = declare_parameter("measured_linear_scale", 1.0);
     measured_angular_scale_ = declare_parameter("measured_angular_scale", 1.0);
@@ -625,6 +626,7 @@ class McuNode : public rclcpp::Node {
       msg.stop_release_hold_s = static_cast<float>(tron::kStopReleaseHoldS);
       msg.stop_release_max_hold_s = static_cast<float>(tron::kStopReleaseMaxHoldS);
     }
+    msg.blade_allowed = blade_allowed_;
     msg.silence_max_s = static_cast<float>(silence_max_s_);
     msg.driver_end = !read_only_;
     msg.failsafe_without_host_s = static_cast<float>(failsafe_without_host_s_);
@@ -848,7 +850,8 @@ class McuNode : public rclcpp::Node {
     tron::HostTestRefusal refusal;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      refusal = control_.Call<&C::Silence>(static_cast<double>(req.seconds), MonotonicSeconds());
+      refusal = req.blade ? control_.Call<&C::SilenceWithBlade>(static_cast<double>(req.seconds), MonotonicSeconds())
+                          : control_.Call<&C::Silence>(static_cast<double>(req.seconds), MonotonicSeconds());
     }
     if (refusal != tron::HostTestRefusal::kNone) {
       res.code = tron::HostTestRefusalCode(refusal);
@@ -856,8 +859,8 @@ class McuNode : public rclcpp::Node {
       RCLCPP_WARN(get_logger(), "hw/silence %.2f s refused: %s", req.seconds, res.code.c_str());
       return;
     }
-    RCLCPP_WARN(get_logger(), "hw/silence: no frame to the MCU for %.2f s, then latched with blade off and stop",
-                req.seconds);
+    RCLCPP_WARN(get_logger(), "hw/silence%s: no frame to the MCU for %.2f s, then latched with blade off and stop",
+                req.blade ? " with the blade" : "", req.seconds);
     res.success = true;
     res.message = "silent";
   }
@@ -940,6 +943,7 @@ class McuNode : public rclcpp::Node {
   uint16_t mow_height_mm_;
   double failsafe_without_host_s_;
   double silence_max_s_;
+  bool blade_allowed_;
   // When the process ends after hw/end, under mutex_.
   std::optional<double> end_at_s_;
   std::string safety_measurement_date_;

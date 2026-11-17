@@ -213,6 +213,9 @@ class McuControl {
   // dropped. At its end the emergency latches (HIGH_LEVEL, counted), and the blade off and the stop frames go out as
   // after start_latched. Refused on the charging contacts and with the blade on or turning.
   HostTestRefusal Silence(double seconds, double now);
+  // As Silence, also with the blade on or turning: the MCU has to stop it without its host. The blade request is gone
+  // afterwards.
+  HostTestRefusal SilenceWithBlade(double seconds, double now);
   // hw/end: from now on no frame to the MCU; the node then ends the process like a crash. Also during a silence.
   HostTestRefusal End();
 
@@ -249,7 +252,8 @@ class McuControl {
   void UpdateStopRelease(bool stop, bool lift, bool latched_before, double now);
   bool StopClearReady(double now) const;
   bool Blocked(double now) const;
-  HostTestRefusal HostTestRefused() const;
+  HostTestRefusal HostTestRefused(bool blade) const;
+  HostTestRefusal StartSilence(double seconds, double now, bool blade);
   void EndSilence(double now);
   bool Reported(double now) const;
   uint32_t EmergencyReason(double now) const;
