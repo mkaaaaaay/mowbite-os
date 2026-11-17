@@ -476,7 +476,7 @@ class SetupNode : public rclcpp::Node {
       if (request.method == "setup.start") {
         refusal = program_->Start(params, now, wall);
       } else if (request.method == "setup.answer") {
-        refusal = program_->Answer(params, wall);
+        refusal = program_->Answer(params, now, wall);
       } else if (request.method == "setup.skip") {
         refusal = program_->Skip(params, wall);
       } else if (request.method == "setup.abort") {

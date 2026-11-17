@@ -126,7 +126,7 @@ class Program {
 
   // setup.*: the params as the call gave them. Nothing when done.
   std::optional<Refusal> Start(const json& params, double now, double wall);
-  std::optional<Refusal> Answer(const json& params, double wall);
+  std::optional<Refusal> Answer(const json& params, double now, double wall);
   std::optional<Refusal> Skip(const json& params, double wall);
   std::optional<Refusal> Abort(const json& params, double now, double wall);
   std::optional<Refusal> Reset(const json& params);
@@ -288,6 +288,13 @@ class Program {
   bool AtRest() const;
   bool TableApplied(const Step& step) const;
   std::optional<Refusal> AnswerAssign(const Step& step, const json& params);
+  std::optional<Refusal> AnswerDelays(const Step& step, const json& params, double now, double wall);
+  // What keeps a step inputs_assign from writing for the driver and restarting it; nothing when it can.
+  std::optional<Refusal> AssignRefused(double now) const;
+  // The run of a step inputs_assign that waits for the driver after a restart, with every part taken (apply) or none.
+  Run AssignRun(const Step& step, bool apply, double wall) const;
+  // The delay the line of a part gets (ms): what setup.answer set for it, at most the one of the step list.
+  int DelayOf(const Step& step, const Part& part) const;
   bool IsRun(const Step& step) const;
   // The position has the solution the step asks for.
   bool SolutionOk(const Step& step) const;

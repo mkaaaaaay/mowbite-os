@@ -259,7 +259,7 @@ struct AssignBench : Bench {
     return {stop, lift};
   }
   std::optional<Refusal> Accept(const std::string& value) {
-    return program.Answer({{"step", "assign"}, {"version", program.version()}, {"values", {{"accept", value}}}},
+    return program.Answer({{"step", "assign"}, {"version", program.version()}, {"values", {{"accept", value}}}}, now,
                           kWall + now);
   }
   // Up to the first part: started, restarted into learning, the lines untouched for the quiet time.
@@ -1035,7 +1035,7 @@ TEST(Program, AnswersAndConfirmations) {
   Bench bench;
   const auto answer = [&](const std::string& step, json values) {
     return bench.Refused(
-        bench.program.Answer({{"step", step}, {"version", bench.program.version()}, {"values", values}}, kWall));
+        bench.program.Answer({{"step", step}, {"version", bench.program.version()}, {"values", values}}, 0, kWall));
   };
   EXPECT_EQ(answer("variant", {{"variant", "c"}}), "INVALID_VALUE");
   EXPECT_EQ(answer("variant", {{"other", "a"}}), "INVALID_VALUE");
@@ -1185,7 +1185,7 @@ TEST(Program, SkippingAbortingAndResetting) {
 TEST(Program, EveryStepDoneCompletesTheProgram) {
   Program program(*ParseSteps(FirstTwo(), nullptr), "tron");
   ASSERT_FALSE(program.Answer({{"step", "variant"}, {"version", program.version()}, {"values", {{"variant", "a"}}}},
-                              kWall));
+                              0, kWall));
   ASSERT_FALSE(program.Skip({{"step", "board"}, {"version", program.version()}, {"reason", "later"}}, kWall));
   const auto events = program.TakeEvents();
   ASSERT_EQ(events.size(), 4u);
@@ -1202,7 +1202,7 @@ TEST(Program, ARecordWithBytesThatAreNoTextIsWritten) {
   bench.capabilities.firmware = {{"main", "1.\xff"}};
   bench.program.OnCapabilities(bench.capabilities);
   const json params = {{"step", "variant"}, {"version", bench.program.version()}, {"values", {{"variant", "a"}}}};
-  ASSERT_FALSE(bench.program.Answer(params, kWall));
+  ASSERT_FALSE(bench.program.Answer(params, 0, kWall));
   std::string text;
   ASSERT_NO_THROW(text = bench.program.Text());
   std::string why;
@@ -1566,4 +1566,106 @@ TEST(Program, ANewTableOpensTheChecksOfTheInputsAgain) {
   bench.TakeBothParts();
   EXPECT_EQ(bench.StepState("stop")["state"], "open");
   EXPECT_TRUE(bench.StepState("stop")["result"].is_null());
+}
+
+TEST(Program, TheDelaysOfAFoundTableGetShorterOnly) {
+  AssignBench bench;
+  const auto delays = [&bench](json values) {
+    return bench.Refused(bench.program.Answer(
+        {{"step", "assign"}, {"version", bench.program.version()}, {"values", values}}, bench.now, kWall + bench.now));
+  };
+  bench.ToTheParts();
+  bench.TakeBothParts();
+  ASSERT_EQ(bench.restarts, 2);
+  bench.Restart(false, AssignBench::Table());
+  ASSERT_EQ(bench.StepState("assign")["state"], "ok");
+  ASSERT_FALSE(bench.program.Skip({{"step", "stop"}, {"version", bench.program.version()}, {"reason", "later"}},
+                                  kWall + bench.now));
+  // One delay per part beside the question of the step, with the one of the list as its largest value.
+  json input = bench.StepState("assign")["inputs"][2];
+  EXPECT_EQ(input["name"], "delay_lift_left");
+  EXPECT_EQ(input["type"], "number");
+  EXPECT_EQ(input["advanced"], true);
+  EXPECT_EQ(input["value"], 2500);
+  EXPECT_EQ(input["unit"], "ms");
+  EXPECT_EQ(input["min"], 0);
+  EXPECT_EQ(input["max"], 2500);
+  EXPECT_EQ(input["texts"]["en"]["name"], "Lifting");
+  EXPECT_FALSE(input["texts"]["de"]["help"].get<std::string>().empty());
+  EXPECT_EQ(bench.StepState("assign")["inputs"][0]["advanced"], false);
+
+  // Never longer than the platform gives, a whole number, of a part of the step.
+  EXPECT_EQ(delays({{"delay_lift_left", 2501}}), "INVALID_VALUE");
+  EXPECT_EQ(delays({{"delay_lift_left", -1}}), "INVALID_VALUE");
+  EXPECT_EQ(delays({{"delay_lift_left", 100.5}}), "INVALID_VALUE");
+  EXPECT_EQ(delays({{"delay_stop_top", 5}, {"delay_nothing", 5}}), "INVALID_VALUE");
+  EXPECT_EQ(delays({{"accept", "yes"}}), "INVALID_VALUE");
+  EXPECT_EQ(delays(json::object()), "param values");
+  // The values of now change nothing.
+  EXPECT_EQ(delays({{"delay_lift_left", 2500}, {"delay_stop_top", 10}}), "");
+  bench.Run(0.2);
+  EXPECT_EQ(bench.restarts, 2);
+  // Only a mower at rest without an emergency restarts for it.
+  bench.hardware.emergency_reason = EmergencyBit("STOP");
+  bench.Run(0.2);
+  EXPECT_EQ(delays({{"delay_lift_left", 1000}}), "EMERGENCY");
+  bench.hardware.emergency_reason = 0;
+  bench.world.state = "MOWING";
+  bench.program.OnWorld(bench.world);
+  bench.Run(0.2);
+  EXPECT_EQ(delays({{"delay_lift_left", 1000}}), "BUSY");
+  bench.world.state = "IDLE";
+  bench.program.OnWorld(bench.world);
+  bench.Run(0.2);
+  EXPECT_EQ(bench.StepState("assign")["state"], "ok");
+  EXPECT_EQ(bench.StepState("assign")["attempt"], 1);
+  EXPECT_EQ(bench.restarts, 2);
+  bench.Events();
+
+  // A shorter one: the table is written again, the OS restarts, the checks of the inputs are open.
+  ASSERT_EQ(delays({{"delay_lift_left", 1000}}), "");
+  EXPECT_EQ(bench.StepState("assign")["state"], "running");
+  EXPECT_EQ(bench.StepState("assign")["attempt"], 2);
+  EXPECT_EQ(bench.StepState("stop")["state"], "open");
+  bench.Run(0.2);
+  EXPECT_EQ(bench.restarts, 3);
+  EXPECT_NE(bench.layer_text.find("    inputs.gpio_delays_ms: [10, 1000]\n"), std::string::npos) << bench.layer_text;
+  EXPECT_NE(bench.layer_text.find("    inputs.gpio_lines: [\"GPIO5\", \"GPIO12\"]\n"), std::string::npos);
+  EXPECT_EQ(bench.layer_text.find("inputs.learn"), std::string::npos);
+  std::vector<Line> table = AssignBench::Table();
+  table[1].delay_ms = 1000;
+  bench.Restart(false, table);
+  json step = bench.StepState("assign");
+  EXPECT_EQ(step["state"], "ok");
+  EXPECT_EQ(step["inputs"][2]["value"], 1000);
+  EXPECT_EQ(step["inputs"][1]["value"], 10);
+  EXPECT_EQ(step["values"][1]["value"], "GPIO12");
+  const auto events = bench.Events();
+  ASSERT_FALSE(events.empty());
+  EXPECT_EQ(events[0]["state"], "ok");
+  EXPECT_EQ(events[0]["attempt"], 2);
+
+  // A driver that does not show the delay asked for: the step fails as after its parts.
+  ASSERT_EQ(delays({{"delay_stop_top", 0}}), "");
+  bench.Run(0.2);
+  EXPECT_EQ(bench.restarts, 4);
+  EXPECT_NE(bench.layer_text.find("    inputs.gpio_delays_ms: [0, 1000]\n"), std::string::npos) << bench.layer_text;
+  bench.Restart(false, table);
+  bench.Run(21);
+  step = bench.StepState("assign");
+  EXPECT_EQ(step["state"], "failed");
+  EXPECT_EQ(step["result"]["reason"], "NOT_APPLIED");
+  // Not before the step found a table again.
+  EXPECT_EQ(delays({{"delay_stop_top", 5}}), "WRONG_METHOD");
+  // setup.reset forgets the delays.
+  ASSERT_FALSE(bench.program.Reset({{"version", bench.program.version()}}));
+  EXPECT_EQ(bench.StepState("assign")["inputs"][1]["value"], 10);
+  EXPECT_EQ(bench.StepState("assign")["inputs"][2]["value"], 2500);
+  // A delay of the record above the one of the list, as after a list that made it shorter, counts as that one.
+  bench.Run(0.2);
+  json record = json::parse(bench.saved);
+  record["steps"]["assign"]["answers"]["delay_lift_left"] = 9000;
+  bench.saved = record.dump();
+  bench.Restart(false, table);
+  EXPECT_EQ(bench.StepState("assign")["inputs"][2]["value"], 2500);
 }

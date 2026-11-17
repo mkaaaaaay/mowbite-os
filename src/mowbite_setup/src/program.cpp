@@ -187,18 +187,22 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
       continue;
     }
     // The restart the step asked for: it goes on with the driver, a learning one from its first part.
-    Run run;
-    run.step = static_cast<size_t>(&step - list_.steps.data());
-    run.began = run.stage_began = -1;
-    run.wall_began = wall;
-    run.part_states.assign(step.parts.size(), apply ? "ok" : "open");
-    run.measured.assign(step.parts.size(), std::nullopt);
-    run.part = apply ? step.parts.size() : 0;
-    run.assign = Assign::kDriver;
     if (learn) record.assign["parts"] = json::object();
-    run_ = std::move(run);
+    run_ = AssignRun(step, apply, wall);
   }
   return true;
+}
+
+Program::Run Program::AssignRun(const Step& step, bool apply, double wall) const {
+  Run run;
+  run.step = static_cast<size_t>(&step - list_.steps.data());
+  run.began = run.stage_began = -1;
+  run.wall_began = wall;
+  run.part_states.assign(step.parts.size(), apply ? "ok" : "open");
+  run.measured.assign(step.parts.size(), std::nullopt);
+  run.part = apply ? step.parts.size() : 0;
+  run.assign = Assign::kDriver;
+  return run;
 }
 
 std::string Program::Text() const {
@@ -646,17 +650,7 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
   }
   if (step.kind == "measure" && learning_) return Refuse("BUSY", "The driver learns its inputs");
   if (IsAssign(step)) {
-    if (!layer_set_) {
-      return Refuse("STORAGE_NOT_WRITABLE", "No data_dir for the table of the inputs", {{"file", "setup.yaml"}});
-    }
-    if (!Fresh(hardware_at_, now, kFresh) || !inputs_known_) {
-      return Refuse("DRIVER_MISSING", "The driver of the platform reports no status or no inputs");
-    }
-    if (world_.state != "IDLE") return Refuse("BUSY", "The mower is not in IDLE", {{"state", world_.state}});
-    if (hardware_.emergency_reason != 0) {
-      return Refuse("EMERGENCY", "An emergency stands: " + mowbite_api::EmergencyNames(
-                                     static_cast<int>(hardware_.emergency_reason)));
-    }
+    if (auto refusal = AssignRefused(now)) return refusal;
   }
   std::set<std::string> confirmed;
   if (params.contains("confirm")) {
@@ -706,11 +700,29 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
   return std::nullopt;
 }
 
-std::optional<Refusal> Program::Answer(const json& params, double wall) {
+std::optional<Refusal> Program::AssignRefused(double now) const {
+  if (!layer_set_) {
+    return Refuse("STORAGE_NOT_WRITABLE", "No data_dir for the table of the inputs", {{"file", "setup.yaml"}});
+  }
+  if (!Fresh(hardware_at_, now, kFresh) || !inputs_known_) {
+    return Refuse("DRIVER_MISSING", "The driver of the platform reports no status or no inputs");
+  }
+  if (world_.state != "IDLE") return Refuse("BUSY", "The mower is not in IDLE", {{"state", world_.state}});
+  if (hardware_.emergency_reason != 0) {
+    return Refuse("EMERGENCY", "An emergency stands: " + mowbite_api::EmergencyNames(
+                                   static_cast<int>(hardware_.emergency_reason)));
+  }
+  return std::nullopt;
+}
+
+std::optional<Refusal> Program::Answer(const json& params, double now, double wall) {
   const Step* found = nullptr;
   if (auto refusal = Common(params, &found)) return refusal;
   const Step& step = *found;
-  if (IsAssign(step)) return AnswerAssign(step, params);
+  // A step inputs_assign that runs takes the answer to its question, one that is ok the delays of its lines.
+  if (IsAssign(step)) {
+    return RecordOf(step).state == "ok" ? AnswerDelays(step, params, now, wall) : AnswerAssign(step, params);
+  }
   if (step.check != "choice" && step.check != "number") {
     return Refuse("WRONG_METHOD", step.id + " takes no setup.answer");
   }
@@ -759,6 +771,54 @@ std::optional<Refusal> Program::AnswerAssign(const Step& step, const json& param
   run.assign = Assign::kRest;
   run.stage_began = -1;
   Changed();
+  return std::nullopt;
+}
+
+int Program::DelayOf(const Step& step, const Part& part) const {
+  const json& answers = records_.at(step.id).answers;
+  const std::string name = mowbite_api::kSetupDelayPrefix + part.id;
+  if (!answers.contains(name) || !answers[name].is_number_integer()) return part.delay_ms;
+  return static_cast<int>(std::clamp<int64_t>(answers[name].get<int64_t>(), 0, part.delay_ms));
+}
+
+// The delays of lines the step found, each a whole number of ms up to the one of its part: never longer than the
+// platform gives. The table goes into the parameter file again and the OS restarts with it, as at the end of the
+// step; the steps of the inputs are open again after it.
+std::optional<Refusal> Program::AnswerDelays(const Step& step, const json& params, double now, double wall) {
+  if (run_) return Refuse("BUSY", StepOf(*run_).id + " is running", {{"step", StepOf(*run_).id}});
+  if (!params.contains("values") || !params["values"].is_object()) return BadParam("values", "values is no object");
+  const json& values = params["values"];
+  if (values.empty()) return BadParam("values", "values names no delay");
+  bool changes = false;
+  for (const auto& item : values.items()) {
+    const auto part = std::find_if(step.parts.begin(), step.parts.end(), [&item](const Part& part) {
+      return mowbite_api::kSetupDelayPrefix + part.id == item.key();
+    });
+    const json& value = item.value();
+    if (part == step.parts.end() || !value.is_number_integer() || value.get<int64_t>() < 0 ||
+        value.get<int64_t>() > part->delay_ms) {
+      return Refuse("INVALID_VALUE", item.key() + " is no delay " + step.id + " takes", {{"name", item.key()}});
+    }
+    changes = changes || value.get<int64_t>() != DelayOf(step, *part);
+  }
+  if (!changes) return std::nullopt;
+  if (auto refusal = AssignRefused(now)) return refusal;
+  const std::string& node = step.Word("node");
+  const json lines = layer_.Get(node, mowbite_api::kInputsLines);
+  const json levels = layer_.Get(node, mowbite_api::kInputsActiveHigh);
+  if (!lines.is_array() || !levels.is_array() || lines.size() != step.parts.size() || levels.size() != lines.size()) {
+    return Refuse("WRONG_METHOD", "The parameter file holds no table of " + step.id + ": do the step again");
+  }
+  Record& record = RecordOf(step);
+  for (const auto& item : values.items()) record.answers[item.key()] = item.value();
+  record.assign = {{"phase", "apply"}, {"parts", json::object()}};
+  for (size_t i = 0; i < step.parts.size(); ++i) {
+    record.assign["parts"][step.parts[i].id] = {{"line", lines[i]}, {"active_high", levels[i]}};
+  }
+  ++record.attempt;
+  record.state = "running";
+  run_ = AssignRun(step, true, wall);
+  FinishAssign(now, wall);
   return std::nullopt;
 }
 
@@ -1170,7 +1230,7 @@ bool Program::TableApplied(const Step& step) const {
     const json& found = parts[part.id];
     const auto line = std::find_if(lines_.begin(), lines_.end(),
                                    [&found](const Line& line) { return found["line"] == line.name; });
-    if (line == lines_.end() || !line->assigned || line->role != part.role || line->delay_ms != part.delay_ms ||
+    if (line == lines_.end() || !line->assigned || line->role != part.role || line->delay_ms != DelayOf(step, part) ||
         found["active_high"] != line->active_high) {
       return false;
     }
@@ -1192,7 +1252,7 @@ void Program::FinishAssign(double now, double wall) {
     std::string reason = mowbite_api::FindSetupName(mowbite_api::SetupRoles(), part.role)->emergency;
     std::transform(reason.begin(), reason.end(), reason.begin(), [](unsigned char c) { return std::tolower(c); });
     reasons.push_back(reason);
-    delays.push_back(part.delay_ms);
+    delays.push_back(DelayOf(step, part));
     roles.push_back(part.role);
   }
   const std::string& node = step.Word("node");
@@ -1470,6 +1530,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
       json input = {{"name", name},
                     {"type", step.check},
                     {"ask", false},
+                    {"advanced", false},
                     {"value", record.answers.contains(name) ? record.answers[name] : json()},
                     {"texts", step.texts}};
       if (step.check == "choice") {
@@ -1491,9 +1552,24 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
       inputs.push_back({{"name", accept.id},
                         {"type", "choice"},
                         {"ask", asks},
+                        {"advanced", false},
                         {"value", nullptr},
                         {"texts", mowbite_api::Texts(accept.texts)},
                         {"values", std::move(values)}});
+      // The delay of each line, to be made shorter once the step is ok: the name of its part, help of the catalog.
+      for (const Part& part : step.parts) {
+        json texts = mowbite_api::Texts(mowbite_api::SetupDelay().texts);
+        for (auto& language : texts.items()) language.value()["name"] = part.texts[language.key()]["name"];
+        inputs.push_back({{"name", mowbite_api::kSetupDelayPrefix + part.id},
+                          {"type", "number"},
+                          {"ask", false},
+                          {"advanced", true},
+                          {"value", DelayOf(step, part)},
+                          {"texts", std::move(texts)},
+                          {"unit", "ms"},
+                          {"min", 0},
+                          {"max", part.delay_ms}});
+      }
     }
     json ask;
     if (asks) {

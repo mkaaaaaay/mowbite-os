@@ -100,6 +100,10 @@ const std::vector<std::string>& SetupEmergencies();
 // The question of a step inputs_assign in inputs[] of the step, and the values setup.answer takes for it.
 const SetupName& SetupAccept();
 const std::vector<SetupName>& SetupAcceptValues();
+// The delay of the line of a part, in inputs[] of a step inputs_assign under this prefix and the id of the part:
+// setup.answer takes it once the step is ok, a whole number of ms from 0 to delay_ms of the part.
+const SetupName& SetupDelay();
+constexpr char kSetupDelayPrefix[] = "delay_";
 // How the OS restarts for a step that needs it: restart at the top of a step list.
 const std::vector<SetupName>& SetupRestarts();
 

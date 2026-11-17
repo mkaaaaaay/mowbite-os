@@ -844,7 +844,9 @@ const std::vector<Method>& Methods() {
               {SetupStep(), SetupVersion(),
                List("confirm", "The points of confirm[] of the step the user confirmed", Type::kString, false)}),
        SetupAnswer(), kSetupOffered},
-      {"setup.answer", "mowbite_setup", "Gives the inputs of a step: a choice, a number, the answer to a question",
+      {"setup.answer", "mowbite_setup",
+       "Gives the inputs of a step: a choice, a number, the answer to a question, the delays of a step inputs_assign "
+       "that is ok",
        Object("params", "The answer",
               {SetupStep(), SetupVersion(), Object("values", "Values by name of inputs[] of the step")}),
        SetupAnswer(), kSetupOffered},

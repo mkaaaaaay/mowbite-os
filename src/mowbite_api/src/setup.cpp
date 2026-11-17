@@ -295,6 +295,21 @@ const std::vector<SetupName>& SetupAcceptValues() {
   return values;
 }
 
+const SetupName& SetupDelay() {
+  static const SetupName delay = {
+      "delay", "How long the sensor of a part has to stay switched before the hardware stops, at most what the "
+               "platform gives",
+      Both({"Verzögerung",
+            "So lange muss der Sensor ausgelöst bleiben, bevor der Mäher stoppt. Kürzer als die Vorgabe geht, länger "
+            "nicht. Nach einer Änderung startet MowBite OS neu, die Eingänge sind danach neu zu prüfen.",
+            ""},
+           {"Delay",
+            "The sensor has to stay triggered this long before the mower stops. Shorter than the default works, "
+            "longer does not. MowBite OS restarts after a change, the inputs are to be checked again after it.",
+            ""})};
+  return delay;
+}
+
 const std::vector<SetupName>& SetupRestarts() {
   static const std::vector<SetupName> restarts = {
       {"self", "The OS ends in order and whatever runs it starts it again"},
@@ -365,7 +380,9 @@ const std::vector<SetupCheck>& SetupChecks() {
        "its line gets: one line alone changes, ask of the step names it, and setup.answer with accept yes takes it. "
        "After the last part the table goes into the settings the program writes for the platform, the OS restarts "
        "without learning and the step holds hw/inputs against the table. setup.abort ends it with a restart as well. "
-       "The steps input are open again after it. The step list names how the OS restarts (restart)",
+       "The steps input are open again after it. The step list names how the OS restarts (restart). Once the step "
+       "is ok setup.answer takes delay_<part> for any of its parts, a whole number of ms from 0 to delay_ms of the "
+       "part: the table is written with it, the OS restarts and the step holds hw/inputs against it again",
        {Word("node", "The node of the driver the table is written for", {}, true),
         Seconds("quiet", 3, 60, 10, "The lines are watched untouched for this time first"),
         Seconds("time", 5, 300, 60, "Each part is done within this time"),
@@ -465,6 +482,10 @@ Json SetupCatalog() {
   Json accept = {{"description", SetupAccept().text},
                  {"texts", Texts(SetupAccept().texts)},
                  {"values", named(SetupAcceptValues())}};
+  Json delay = {{"description", SetupDelay().text},
+                {"texts", Texts(SetupDelay().texts)},
+                {"prefix", kSetupDelayPrefix},
+                {"unit", "ms"}};
   Json checks = Json::object();
   for (const auto& check : SetupChecks()) {
     Json params = Json::object();
@@ -501,7 +522,8 @@ Json SetupCatalog() {
            "(kind, whether setup.start begins it, params with the bounds and defaults of the code, values, reasons of "
            "SETUP_STEP, the screen it opens), roles of the inputs (group, emergency of a press; a role is named as its "
            "flag in hw/status) and modes of a part, moves of a step imu, conditions of a step done_when with their "
-           "screen, points to confirm, reasons to skip, the question of a step inputs_assign, the ways to restart, "
+           "screen, points to confirm, reasons to skip, the question of a step inputs_assign and the delays it takes "
+           "once it is ok, the ways to restart, "
            "and the limits; texts by language where the OS has them. The steps themselves come with setup.get"},
           {"stages", named(SetupStages())},
           {"checks", checks},
@@ -512,6 +534,7 @@ Json SetupCatalog() {
           {"points", named(SetupPoints())},
           {"skip_reasons", named(SetupSkipReasons())},
           {"accept", accept},
+          {"delay", delay},
           {"restart", named(SetupRestarts())},
           {"open", SetupOpens()},
           {"symbols", SetupSymbols()},
@@ -555,13 +578,15 @@ Field SetupState() {
        Bool("skippable", "setup.skip takes it"),
        Rows("skip_reasons", "Reasons setup.skip takes", {Text("id", "Name of the reason"), TextsField()}),
        Rows("inputs", "What setup.answer takes in values",
-            {Text("name", "Key in values; accept in a step inputs_assign, see x-setup.accept"),
+            {Text("name", "Key in values; in a step inputs_assign accept and delay_<part>, see x-setup.accept and "
+                          "x-setup.delay"),
              Text("type", "choice or number", true, {"choice", "number"}),
              Text("unit", "Unit of a number", false), Number("min", "", "Least number", false),
              Number("max", "", "Largest number", false),
              Rows("values", "Values of a choice", {Text("id", "The value"), TextsField()}, false),
              Bool("ask", "A question of the running step that waits for its answer: accept while ask of the step is "
                          "set"),
+             Bool("advanced", "A setting beside the check, to be shown apart: the delays of a step inputs_assign"),
              {"value", Type::kAny, "", true, "The value given last, null before", {}, true, {}, ""}, TextsField()}),
        Rows("values", "What it measures, live while it runs and as it ended",
             {Text("id", "Name of the value"),
