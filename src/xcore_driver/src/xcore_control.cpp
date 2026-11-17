@@ -588,10 +588,14 @@ uint32_t XcoreControl::Kept() const {
   return bits;
 }
 
+uint32_t XcoreControl::LatchCount() const {
+  if ((Kept() & ~counted_) == 0) return latch_count_;
+  return latch_count_ + 1 == 0 ? 1 : latch_count_ + 1;
+}
+
 void XcoreControl::CountLatches() {
-  const uint32_t kept = Kept();
-  if ((kept & ~counted_) != 0 && ++latch_count_ == 0) latch_count_ = 1;
-  counted_ = kept;
+  latch_count_ = LatchCount();
+  counted_ = Kept();
 }
 
 uint32_t XcoreControl::Reason(double now) const {
@@ -639,7 +643,7 @@ ControlStatus XcoreControl::Status(double now) const {
   s.blocked = s.emergency_reason != 0;
   s.held = held_;
   s.latched = (s.emergency_reason & kReasonLatch) != 0;
-  s.latch_count = latch_count_;
+  s.latch_count = LatchCount();
   s.inputs = active_inputs_;
   s.telemetry_ok = !TelemetryStale(now);
   s.lift = InputActive(inputs_.lift);

@@ -492,6 +492,12 @@ TEST(XcoreControl, EveryReasonThatLatchesCounts) {
   f.Board(reason::kStop | reason::kLatch, 0.6);
   f.control.Tick(0.6);
   EXPECT_EQ(f.control.Status(0.6).latch_count, 3u);
+  // A status between the report of the board and the next tick has the count of its latch already.
+  f.Board(reason::kStop | reason::kLift | reason::kLatch, 0.7);
+  EXPECT_EQ(f.control.Status(0.7).emergency_reason, kReasonStop | kReasonLift | kReasonLatch);
+  EXPECT_EQ(f.control.Status(0.7).latch_count, 4u);
+  f.control.Tick(0.7);
+  EXPECT_EQ(f.control.Status(0.7).latch_count, 4u);
 }
 
 TEST(XcoreControl, AReleaseWithTheCountOfBeforeAnotherReasonIsRefused) {

@@ -269,6 +269,9 @@ class XcoreControl {
   bool HoldsBoard() const;
   // The reasons the driver keeps until a release.
   uint32_t Kept() const;
+  // The count with the reasons kept now: one more than counted when one of them was not kept at the last count.
+  // A status between two ticks so never shows a latch with the count of before it.
+  uint32_t LatchCount() const;
   // Counts a reason that is kept now and was not at the last call.
   void CountLatches();
   void Fault(uint32_t bit, const std::string& why, double now);
