@@ -5,7 +5,9 @@ and the start do what they do on the mower. The steps of the inputs passed befor
 then the counter checks: a board that does not stop as it should fails its step (the xCore keeping its last duty
 fails no_command, the Tron holding its setpoint without the host fails silence), the app that stops calling
 setup.keep ends a step, an emergency of the app ends it, and driver_end is not offered without two restarts of the
-driver left.
+driver left. The failed step closes the lock of autonomous driving (safety_lock.json): HIGH_LEVEL latches, its release
+leaves the lock closed and a calibration is refused, until the step passes again; a file that cannot be read closes
+it as well. The Tron has a safety measurement date in its simulation, so there it is the date the lock closes against.
 
 Run in a sourced workspace: MOWBITE_PLATFORM=<platform> launch_test /ws/src/mowbite_sim/test/test_setup_motion.py
 """
@@ -25,7 +27,8 @@ import launch_testing.asserts
 import rclpy
 from geometry_msgs.msg import TwistStamped
 from launch.actions import ExecuteProcess, TimerAction
-from mowbite_msgs.msg import HardwareStatus, MqttPublish, RobotState, RpcError, RpcMethods, RpcRequest, RpcResponse
+from mowbite_msgs.msg import (HardwareStatus, MqttPublish, RobotState, RpcError, RpcMethods, RpcRequest, RpcResponse,
+                              SafetyStatus)
 from mowbite_msgs.srv import SetEmergency
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -50,6 +53,7 @@ if PLATFORM == "nx60i":
 COUNTER = {"nx60i": ("no_command", {"zero_duty_ignored": 1}, None),
            "tron": ("silence", {"host_timeout": 30}, "round_1")}[PLATFORM]
 DRIVER = {"nx60i": "xcore_driver", "tron": "tron_mcu_node"}[PLATFORM]
+LOCK = os.path.join(DATA, "safety_lock.json")
 
 os.makedirs(DATA, exist_ok=True)
 # The steps of the inputs passed: the rule of the program lets no wheel turn before.
@@ -94,6 +98,8 @@ class Probe(SimProbe):
         self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
         self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
         self.node.create_subscription(TwistStamped, "hw/wheel_odom", self._set("wheels"), 10)
+        self.safety = None
+        self.node.create_subscription(SafetyStatus, "safety/status", self._set("safety"), 10)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
         self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
@@ -266,12 +272,28 @@ class TestSetupMotion(unittest.TestCase):
             set_flags()
         self.assertIsNotNone(entry, p.step(step))
         self.assertEqual((entry["result"]["reason"], entry["result"]["part"]), ("LIMIT", part), entry["result"])
+        # The failure closed the lock: the file, the state of the program, S2, and HIGH_LEVEL latched.
+        self.assertTrue(os.path.exists(LOCK))
+        safety = p.get()["safety"]
+        self.assertEqual((safety["open"], safety["why"]), (False, "CHECK_FAILED"), safety)
+        self.assertEqual((safety["closed"][0]["step"], safety["closed"][0]["reason"]), (step, "LIMIT"), safety)
+        self.assertTrue(p.wait(lambda: p.safety is not None and p.safety.lock_closed, 2), p.safety)
+        self.assertTrue(p.wait(lambda: p.status.emergency_reason & HardwareStatus.REASON_HIGH_LEVEL, 3),
+                        p.status.emergency_reason)
         # Such a board turns on until it takes a zero again; the step releases nothing it did not ask for, also not the
         # emergency at the end of a silence that is still on.
         self.assertTrue(p.wait(lambda: not p.turning(), 10), "the wheels turn on")
-        if p.wait(lambda: p.status.emergency_reason != 0, 6):
-            self.assertIn("result", p.rpc("emergency.reset"))
-            self.assertTrue(p.wait(lambda: p.status.emergency_reason == 0, 10), p.status.emergency_reason)
+        # A driver that is still silent refuses the release (SILENT) until the silence is over.
+        released = wait_until(lambda: "result" in (p.rpc("emergency.reset") or {}) or None, 15, poll=1.0)
+        self.assertTrue(released, "emergency.reset is refused")
+        self.assertTrue(p.wait(lambda: p.status.emergency_reason == 0, 10), p.status.emergency_reason)
+        # The release leaves the lock closed: nothing drives by itself.
+        time.sleep(1.0)
+        self.assertTrue(p.safety.lock_closed)
+        self.assertFalse(p.get()["safety"]["open"])
+        refused = p.rpc("calibration.start")
+        data = ((refused or {}).get("error") or {}).get("data") or {}
+        self.assertEqual(data.get("reason"), "NO_SAFETY_MEASUREMENT", refused)
 
     def test_08_without_keep_the_step_stops(self):
         p = self.probe
@@ -303,6 +325,30 @@ class TestSetupMotion(unittest.TestCase):
         self.assertEqual([b["reason"] for b in entry["blocked"]], ["RESTARTS_LOW"], entry["blocked"])
         refused = p.change("setup.start", "driver_end", confirm=CONFIRM)
         self.assertEqual(refused["error"]["data"]["reason"], "RESTARTS_LOW", refused)
+
+    def test_11_the_step_passed_again_opens_the_lock(self):
+        p = self.probe
+        step = COUNTER[0]
+        self.start(step)
+        self.passed(step, 90)
+        self.assertTrue(p.wait(lambda: not os.path.exists(LOCK), 5), "the lock file stays")
+        safety = p.get()["safety"]
+        self.assertEqual(safety["closed"], [], safety)
+        # Open only where the platform has a date: the simulated Tron.
+        self.assertEqual(safety["open"], PLATFORM == "tron", safety)
+        self.assertTrue(p.wait(lambda: not p.safety.lock_closed, 2), p.safety)
+        self.assertEqual(p.status.emergency_reason, 0)
+
+    def test_12_a_lock_file_that_cannot_be_read_closes(self):
+        p = self.probe
+        with open(LOCK, "w") as f:
+            f.write("{")
+        try:
+            self.assertTrue(p.wait(lambda: p.safety.lock_closed, 2), p.safety)
+            self.assertFalse(p.safety.autonomous_ok)
+        finally:
+            os.remove(LOCK)
+        self.assertTrue(p.wait(lambda: not p.safety.lock_closed, 2), p.safety)
 
 
 @launch_testing.post_shutdown_test()
