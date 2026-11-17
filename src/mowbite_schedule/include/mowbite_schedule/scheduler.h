@@ -250,6 +250,10 @@ class Scheduler {
 
 json EntryToJson(const LogEntry& entry);
 
+// The index in entries (oldest first) of the first one after noticed, the last entry told; entries.size() when none
+// came since. All are new when noticed is null (the log was empty) or no longer among them (more came than it keeps).
+size_t FirstUnnoticed(const json& entries, const json& noticed);
+
 }  // namespace mowbite_schedule
 
 #endif  // MOWBITE_SCHEDULE_SCHEDULER_H

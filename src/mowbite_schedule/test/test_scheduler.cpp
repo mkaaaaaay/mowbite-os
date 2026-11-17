@@ -1140,6 +1140,33 @@ TEST_F(SchedulerTest, LogStaysAtAHundred) {
   EXPECT_EQ(kept[99]["what"], "skip_emergency");
 }
 
+json Entries(int64_t from, int count) {
+  json entries = json::array();
+  for (int64_t t = from; t < from + count; ++t) {
+    entries.push_back(EntryToJson({t, "skip_missed", nullptr, nullptr, "10:00"}));
+  }
+  return entries;
+}
+
+TEST(FirstUnnoticed, AllAfterAnEmptyLog) {
+  // Three entries in one step after an empty log: all three are told.
+  const json entries = Entries(1, 3);
+  EXPECT_EQ(entries.size() - FirstUnnoticed(entries, nullptr), 3u);
+  EXPECT_EQ(FirstUnnoticed(json::array(), nullptr), 0u);
+}
+
+TEST(FirstUnnoticed, ThoseAfterTheLastTold) {
+  const json entries = Entries(1, 5);
+  EXPECT_EQ(FirstUnnoticed(entries, entries[1]), 2u);
+  EXPECT_EQ(FirstUnnoticed(entries, entries[4]), 5u);
+}
+
+TEST(FirstUnnoticed, AllWhenTheLastToldWasCut) {
+  // More came than the log keeps: every entry it still has came after the last one told.
+  const json entries = Entries(2, static_cast<int>(kLogEntries));
+  EXPECT_EQ(FirstUnnoticed(entries, Entries(1, 1)[0]), 0u);
+}
+
 TEST_F(SchedulerTest, StoredTextsOnlyAsWritten) {
   const json entry = {{"t", 5}, {"what", "skip_rain"}};
   const auto log_size = [&](const json& log) {

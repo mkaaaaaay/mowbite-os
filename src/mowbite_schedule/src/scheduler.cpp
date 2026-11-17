@@ -73,6 +73,13 @@ json EntryToJson(const LogEntry& entry) {
   return {{"t", entry.t}, {"what", entry.what}, {"detail", entry.detail}, {"more", entry.more}, {"at", entry.at}};
 }
 
+size_t FirstUnnoticed(const json& entries, const json& noticed) {
+  for (size_t i = noticed.is_null() ? 0 : entries.size(); i > 0; --i) {
+    if (entries[i - 1] == noticed) return i;
+  }
+  return 0;
+}
+
 Scheduler::Scheduler(const SchedulerStart& start) : file_(start.file), available_(start.available) {
   const json& log = start.log;
   const json& state = start.state;

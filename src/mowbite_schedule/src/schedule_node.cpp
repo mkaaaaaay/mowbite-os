@@ -276,15 +276,7 @@ class ScheduleNode : public rclcpp::Node {
   // The entries of the log since the last notice, for the pushes of mowbite_net.
   void NoticeLogged() {
     const json entries = core_.View().LogEntries(kLogEntries);
-    size_t first = 0;
-    for (size_t i = entries.size(); i > 0; --i) {
-      if (entries[i - 1] == noticed_) {
-        first = i;
-        break;
-      }
-    }
-    if (first == 0 && !entries.empty()) first = entries.size() - 1;
-    for (size_t i = first; i < entries.size(); ++i) {
+    for (size_t i = FirstUnnoticed(entries, noticed_); i < entries.size(); ++i) {
       const json& entry = entries[i];
       mowbite_msgs::msg::ScheduleNotice msg;
       msg.kind = mowbite_msgs::msg::ScheduleNotice::KIND_LOGGED;
@@ -477,7 +469,7 @@ class ScheduleNode : public rclcpp::Node {
   std::optional<double> longitude_;
   mowbite_logic::MowingPlanner map_;
   std::optional<int64_t> published_next_;
-  // The last log entry told on schedule/notice.
+  // The last log entry told on schedule/notice, at the start the newest one of the stored log; null for none.
   json noticed_;
   bool ready_mirrored_ = false;
   std::optional<Ready> ready_sent_;
