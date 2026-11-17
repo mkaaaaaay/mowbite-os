@@ -1,0 +1,9 @@
+# hw/end: once its answer is out, the driver ends at once with exit code 3, without another byte to the board, as if
+# it had crashed. The start counts it like any other end of the driver; the one it starts again comes up latched.
+# Offered where hw/capabilities has driver_end; the setup program measures with it how the board stops without its
+# host.
+---
+bool success
+string message
+# Why it was refused, empty otherwise: READ_ONLY, CHARGING (on the charging contacts).
+string code

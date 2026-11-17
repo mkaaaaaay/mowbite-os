@@ -62,6 +62,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/DriveTo.srv"
   "srv/StartRun.srv"
   "srv/DropTasks.srv"
+  "srv/SilenceDriver.srv"
+  "srv/EndDriver.srv"
   "action/FollowPath.action"
   "action/Calibrate.action"
   DEPENDENCIES builtin_interfaces std_msgs geometry_msgs diagnostic_msgs action_msgs

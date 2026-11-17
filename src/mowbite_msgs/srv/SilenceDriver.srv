@@ -1,0 +1,11 @@
+# hw/silence: from its answer on, the driver sends nothing to the board for seconds (no heartbeat, no setpoint, no
+# blade frame), drops what it is asked meanwhile and keeps publishing what it reads. Then it latches the emergency
+# (HIGH_LEVEL), sends the blade off and three stops, and goes on as before. Offered where hw/capabilities has
+# silence_max_s > 0; the setup program measures with it how the board stops without its host.
+float32 seconds
+---
+bool success
+string message
+# Why it was refused, empty otherwise: READ_ONLY, OUT_OF_RANGE (seconds not in 0.2 to silence_max_s), CHARGING
+# (on the charging contacts), BUSY (already silent).
+string code

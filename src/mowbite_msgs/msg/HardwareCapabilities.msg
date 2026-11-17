@@ -46,6 +46,10 @@ float32 stop_release_max_hold_s
 
 # How long the hardware keeps the last setpoint without the host, measured on the device; negative while unknown.
 float32 failsafe_without_host_s
+# Longest silence hw/silence takes (s); 0 where the driver offers no hw/silence.
+float32 silence_max_s
+# The driver offers hw/end.
+bool driver_end
 # Date of the safety measurement of this platform (YYYY-MM-DD), empty without one. Without it the logic stays with
 # remote control: no autonomous driving, no blade.
 string safety_measurement_date
