@@ -263,8 +263,10 @@ brings IMU and GNSS along) or `platform_tron` (nodes of its own in the container
 | `arguments()` | its launch arguments (ports, datum, switches), as `DeclareLaunchArgument` |
 | `parts(start)` | `start.Parts(driver=, before=, after=, processes=)` |
 
-`parts` gets `start` with `arg(name)` (a launch argument), `files` (the parameter files in their order), `device` (the
-file of this mower in `data_dir`, empty without one), `data_dir`, `data_file(name)`, `journal`, `logger`,
+`parts` gets `start` with `arg(name)` (a launch argument), `files` (the parameter files in their order), `setup_file`
+(what the setup program wrote for this mower in `data_dir`, empty without it) and `device` (the file of this mower
+kept by hand, empty without one; a driver with files of its own gets both after them, in this order), `data_dir`,
+`data_file(name)`, `journal`, `logger`,
 `parameters(node)` (what the files give a node), `data_store` (the file names in `data_dir`, e.g. `HOLD_FILE`) and, for
 processes of its own, `own_process(make, name, **limits)` and `camera_service(**limits)`. It answers with
 `driver(restart)`, which builds the driver for its start number (0 the first; every later one has to come up latched,
@@ -274,13 +276,14 @@ out of scope.
 
 Optional `setup/setup.yaml` with `setup/images/`: the steps of the setup program the app walks the user through
 (`setup.*`, node `mowbite_setup`). Without the file the methods are not offered. `catalog` counts up with every change
-of a step or an image, `steps` come in the order the app shows them:
+of a step or an image, `restart` (`self` or `host`) is needed with a step `inputs_assign` and names how the OS
+restarts for it, `steps` come in the order the app shows them:
 
 | Field | What |
 |---|---|
 | `id`, `stage`, `check` | its name, one of `x-setup.stages` and one of `x-setup.checks` of the schema |
 | `params` | the params of the check, within the bounds the schema names; without an entry the default there |
-| `parts` | of `input`: `id`, optional `mode` (press, short), `role` and `texts`; of `imu`: the moves in their order |
+| `parts` | of `input`: `id`, optional `mode` (press, short), `role` and `texts`; of `inputs_assign`: `id`, `role`, `delay_ms`, optional `texts`; of `imu`: the moves in their order |
 | `value_texts` | of `choice`: `de` and `en` with `name` for every value |
 | `confirm` | points the user ticks before the step begins (`x-setup.points`, or own ones with texts) |
 | `needs` | steps ahead of it that have to be ok first |
@@ -314,17 +317,39 @@ With `hw/inputs` the step checks line by line: a part has to switch a line no pa
 as the role has one left, and at the end every line of the roles of the step has switched once, else it fails with
 `LINE_SILENT` and the lines. Two buttons on two lines need two parts; a pair of contacts on one part shows a dead one.
 
+`inputs_assign` is for a driver whose table of inputs is a setting, on a mower that may be wired another way than the
+table of the platform. `params.node` names the node of the driver, each part is one sensor with its `role` (stop,
+lift, bumper_left, bumper_right) and the `delay_ms` its line gets. The step writes `inputs.learn` for that node into
+`<data_dir>/<name>.setup.yaml` and restarts the OS: with `restart: self` the node ends the container in order and the
+launch ends with it, for whatever runs the launch to start it again (compose on the NX60i); with `restart: host` it
+asks mowbite-host (`host.restart_os`). It restarts only in IDLE and with no emergency but the one of learning: a
+restart never takes an emergency away. With the driver learning the step looks at the lines untouched for `quiet`,
+then takes one line per part, each confirmed by the user, writes the table in place of `inputs.learn`, restarts again
+and holds `hw/inputs` against the table; a value the file kept by hand overrules fails it with `NOT_APPLIED` and the
+key. The checks `input` are open again after it, and once it is ok the user can make the delay of a line shorter than
+`delay_ms` (`delay_<part>` in `inputs[]` of the step), never longer. Make the step skippable where the table of the
+platform fits a mower wired as standard.
+
+A driver that learns takes these parameters under its node (names in `mowbite_api/setup.h`): `inputs.learn`, and the
+table as lists with one entry per line, `inputs.gpio_lines`, `inputs.gpio_active_high`, `inputs.gpio_reasons` (stop,
+lift, collision), `inputs.gpio_delays_ms` and `inputs.gpio_roles`. Started with `inputs.learn` it reports its
+candidate lines in `hw/inputs` with `learning` true, `assigned` false and `active` as the level of the line; started
+with the table, every line with `assigned`, its role, level and delay. `test_nx60i_inputs.py` runs the step against
+the real start, both restarts included.
+
 An image is an SVG of one colour without text, raster images, scripts, styles or references, at most 65536 bytes;
 image and accent share one viewBox. The start checks list and images by the rules of the node (`mowbite_setup_check`)
 and halts with `PLATFORM_CONFIG` and the first problem. `CMakeLists.txt` installs the folder
 (`install(DIRECTORY setup DESTINATION share/${PROJECT_NAME})`). `test_setup.py` does every step of the list of each
-platform by hand against the node (`test_setup_<name>`, with the case of the driver contract).
+platform by hand against the node (`test_setup_<name>`, with the case of the driver contract), but for a step
+`inputs_assign`, which needs the driver and the restarts.
 
 The start is the same for every mower: `ros2 launch mowbite_bringup mowbite.launch.py platform:=<name>`, by default the
 platform `MOWBITE_PLATFORM` names, a value of the device (the compose file of the mower sets it, the Tron in
 `/usr/lib/mowbite/os.defaults`); an update does not change it. `stack.py` prepares `data_dir`, lays the parameter files
 on top of each other (`stack.yaml`, `platform.yaml`, `extra_config` for a simulation or a test, then
-`<data_dir>/<name>.yaml`), checks them for the nodes the platform can start, runs the driver in a process of its own
+`<data_dir>/<name>.setup.yaml`, which the setup program writes, and `<data_dir>/<name>.yaml`, kept by hand, which has
+the last word), checks them for the nodes the platform can start, runs the driver in a process of its own
 (restarted `DRIVER_RESTARTS` times, each end in `<data_dir>/driver_exit.json`) and beside it the container with all
 nodes above the contract, the planner and the net service. A name no package entered halts with `PLATFORM_CONFIG`.
 `tron.launch.py` and `nx60i.launch.py` only name their platform, for start commands that name these files.
@@ -586,6 +611,8 @@ Around `mowbite_camera`:
 - [ ] `robot_shape` drawn from measured points, covered by box or outline
 - [ ] `setup/setup.yaml` with the inputs and sensors this mower has, `within` from the board, images of one colour,
       `test_setup_<name>` passes
+- [ ] A driver that learns its inputs: `inputs_assign` with `restart` in the list, a test of the step against the real
+      start as `test_nx60i_inputs.py`
 - [ ] `mowbite.launch.py platform:=<name>` starts the stack, driver restarts latched
 - [ ] Every node of your own in the container attached to the watch (`test_stack.py`)
 - [ ] Simulation: mowing, going home, docking; `app_interface_check`
