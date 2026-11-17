@@ -1,7 +1,7 @@
 # The steps of the setup program of the NX60i (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image.
-catalog: 4
+catalog: 5
 # inputs_assign ends with a restart of the OS: the launch ends and whatever runs it starts it again.
 restart: self
 steps:
@@ -216,6 +216,25 @@ steps:
     params: {quiet_max: 1.0, quiet_way: 0.6, stop_max: 0.5, stop_way: 0.3, bumper_direction: backward}
     confirm: [area_clear]
     symbol: ground
+  # The disc taken off, a hand at STOP. Unmeasured on the NX60i: the bounds follow the firmware (the blade follows a
+  # setpoint after 0.5 s and slows by about 2000 rpm/s from 2800, the board stops 1.0 s after it last heard of the host
+  # and 2.5 s after a lift sensor switches); its first run measures.
+  - id: blade
+    stage: blade
+    check: blade
+    params:
+      node: xcore_driver
+      percent: 100
+      rpm: 2000
+      spin_up: 3
+      off_max: 2.5
+      lease: 1.0
+      lease_extra: 2.5
+      silent_max: 3.5
+      stop_max: 5.0
+      emergency: [HIGH_LEVEL, TIMEOUT_HIGH_LEVEL]
+    confirm: [blade_removed, hand_at_stop]
+    symbol: blade
   - id: dimensions
     stage: dimensions
     check: geometry

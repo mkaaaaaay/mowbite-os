@@ -1,7 +1,9 @@
 # The steps of the setup program of the Tron (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image. mark names parts of robot_shape (geometry.yaml).
-catalog: 5
+catalog: 6
+# The step blade allows the blade with a restart of the OS: mowbite-host restarts the service (host.restart_os).
+restart: host
 steps:
   - id: board
     stage: device
@@ -144,6 +146,26 @@ steps:
     params: {quiet_max: 1.0, quiet_way: 0.6, stop_max: 0.5, stop_way: 0.3, bumper_direction: forward}
     confirm: [area_clear]
     symbol: ground
+  # The disc taken off, a hand at STOP. Bounds as measured on the Tron: one stage 100 % (30 and 100 % both turn about
+  # 3000 rpm), 2500 rpm within 3 s; off, STOP, bumper, lifting and without host stand within 1.0 s (measured 0.2 to
+  # 0.6 s), without renewal within the lease and 1.0 s (measured 1.4 s after the last renewal).
+  - id: blade
+    stage: blade
+    check: blade
+    params:
+      node: tron_mcu
+      percent: 100
+      height: 90
+      rpm: 2500
+      spin_up: 3
+      off_max: 1.0
+      lease: 1.0
+      lease_extra: 1.0
+      silent_max: 1.0
+      stop_max: 1.0
+      emergency: [HIGH_LEVEL]
+    confirm: [blade_removed, hand_at_stop]
+    symbol: blade
   - id: dimensions
     stage: dimensions
     check: geometry
