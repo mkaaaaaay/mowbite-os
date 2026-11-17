@@ -204,3 +204,9 @@ TEST(XcoreIo, BlockOfLeavesOutTheRest) {
   b.emergency_reason = kReasonStop;
   EXPECT_NE(BlockOf(a), BlockOf(b));
 }
+
+// The updater reads these lines after a start.
+TEST(XcoreIo, MajorVersionLinesKeepTheirText) {
+  EXPECT_EQ(MajorVersionLine(1, 1), "Firmware major version 1 as expected");
+  EXPECT_EQ(MajorVersionLine(2, 1), "Firmware major version 2, expected 1: motion and blade stay blocked");
+}

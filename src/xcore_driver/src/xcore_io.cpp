@@ -71,6 +71,11 @@ int64_t WallNanoseconds() {
   return duration_cast<nanoseconds>(system_clock::now().time_since_epoch()).count();
 }
 
+std::string MajorVersionLine(uint16_t major, uint16_t expected) {
+  if (major == expected) return Format("Firmware major version %u as expected", major);
+  return Format("Firmware major version %u, expected %u: motion and blade stay blocked", major, expected);
+}
+
 uint64_t BlockOf(const ControlStatus& status) {
   return status.emergency_reason | (uint64_t{status.blocked} << 32) | (uint64_t{status.latched} << 33) |
          (uint64_t{status.held} << 34);
@@ -498,10 +503,9 @@ bool XcoreIo::OnFirmwareAnswer(const LinkEvent& e, double now) {
     if (e.value.size() != 2) return false;
     major_ = Reader(e.value).U16();
     if (*major_ == config_.expected_major) {
-      outbox_.log.Info(Format("Firmware major version %u as expected", *major_));
+      outbox_.log.Info(MajorVersionLine(*major_, config_.expected_major));
     } else {
-      outbox_.log.Error(Format("Firmware major version %u, expected %u: motion and blade stay blocked", *major_,
-                               config_.expected_major));
+      outbox_.log.Error(MajorVersionLine(*major_, config_.expected_major));
     }
     return true;
   }

@@ -257,8 +257,16 @@ RUN --mount=type=bind,source=docker/min_app,target=/tmp/min_app \
        || [ "$MIN_APP" != "$(cat /tmp/min_app)" ]; then \
       echo "MIN_APP '$MIN_APP' has to be the value of docker/min_app, X.Y.Z or X.Y.Z-beta.N" >&2; exit 1; \
     fi
+# The firmware major version the xCore driver expects (label mowbite.xcore.firmware.major, read by the updater before
+# it stops OpenMower): expected_major_version of src/xcore_driver/config/nx60i.yaml, checked here.
+ARG XCORE_FIRMWARE_MAJOR
+RUN --mount=type=bind,source=src/xcore_driver/config/nx60i.yaml,target=/tmp/nx60i.yaml \
+    expected=$(sed -n 's/^ *expected_major_version: *\([0-9][0-9]*\) *$/\1/p' /tmp/nx60i.yaml) \
+    && if [ -z "$expected" ] || [ "$XCORE_FIRMWARE_MAJOR" != "$expected" ]; then \
+      echo "XCORE_FIRMWARE_MAJOR '$XCORE_FIRMWARE_MAJOR' has to be expected_major_version of nx60i.yaml" >&2; exit 1; \
+    fi
 LABEL org.opencontainers.image.title="mowbite-os" org.opencontainers.image.revision="$SOURCE_COMMIT" \
-      mowbite.min_app="$MIN_APP"
+      mowbite.min_app="$MIN_APP" mowbite.xcore.firmware.major="$XCORE_FIRMWARE_MAJOR"
 # Who wrote data_schema.json in data_dir.
 ENV MOWBITE_OS_REVISION=$SOURCE_COMMIT
 # ros2 launch catches only SIGINT; as PID 1 it ignores SIGTERM and docker stop would kill it without blade off.

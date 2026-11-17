@@ -68,6 +68,9 @@ struct IoSnapshot {
 // The part of hw/status that goes out at once when it changes: emergency, latch, reason bits and the hold.
 uint64_t BlockOf(const ControlStatus& status);
 
+// The log line of the check of the firmware major version. The updater waits for it after a start: keep the text.
+std::string MajorVersionLine(uint16_t major, uint16_t expected);
+
 // Why another host could talk to the board from this machine: UDP sockets of other programs at bind_ip or at the
 // announcement port, in the network namespace of this process. nullopt when there are none. Reads /proc: never from
 // the I/O thread while the board is claimed.

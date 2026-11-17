@@ -69,6 +69,12 @@ jobs:
         id: min_app
         run: echo "version=$(cat docker/min_app)" >> "$GITHUB_OUTPUT"
 
+      - name: Firmware major version of the xCore driver
+        id: xcore
+        run: |
+          major=$(sed -n 's/^ *expected_major_version: *\([0-9][0-9]*\) *$/\1/p' src/xcore_driver/config/nx60i.yaml)
+          echo "major=$major" >> "$GITHUB_OUTPUT"
+
       - name: Build
         uses: docker/build-push-action@v7
         with:
@@ -78,6 +84,7 @@ jobs:
           build-args: |
             SOURCE_COMMIT=${{ github.sha }}
             MIN_APP=${{ steps.min_app.outputs.version }}
+            XCORE_FIRMWARE_MAJOR=${{ steps.xcore.outputs.major }}
           platforms: linux/${{ matrix.arch }}
           load: true
           push: ${{ inputs.push == true }}
