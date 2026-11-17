@@ -13,7 +13,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 46;
+constexpr int kApi = 47;
 
 // The break of the app interface: one up for a change that is not only adding (what counts: x-api-break in the
 // schema); an app goes with the OS of the same break whose api is at least the one it needs.

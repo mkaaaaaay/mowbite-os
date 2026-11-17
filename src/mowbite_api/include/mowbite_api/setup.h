@@ -58,7 +58,8 @@ struct SetupMeasure {
 
 struct SetupCheck {
   std::string name;
-  // How the app shows a step of it: confirm, input, measure or drive (the program moves the wheels).
+  // How the app shows a step of it: confirm, input, measure, drive (the program moves the wheels) or blade (the
+  // program turns the blade).
   std::string kind;
   // setup.start begins it. Without, setup.answer ends it (kind input) or the OS once it sees what the step waits for.
   bool start = false;
@@ -113,6 +114,8 @@ const std::vector<SetupName>& SetupRestarts();
 const std::vector<SetupName>& SetupWheelParts();
 // The parts of a step ground, always all of them in this order.
 const std::vector<SetupName>& SetupGroundParts();
+// The parts of a step blade, always all of them in this order; stop, lift and bumper wait for the input of that role.
+const std::vector<SetupName>& SetupBladeParts();
 // The question of the part one_wheel of a step wheels in inputs[] of the step, and the values setup.answer takes.
 const SetupName& SetupWheelQuestion();
 const std::vector<SetupName>& SetupWheelValues();
@@ -145,6 +148,8 @@ constexpr char kInputsDelays[] = "inputs.gpio_delays_ms";
 constexpr char kInputsRoles[] = "inputs.gpio_roles";
 // The longest delay of a line the board takes (ms).
 constexpr int kInputsMaxDelayMs = 65535;
+// The parameter of the driver a step blade names that lets hw/blade switch the blade on.
+constexpr char kAllowBlade[] = "allow_blade";
 
 // Bounds of a step list and of setup.*.
 constexpr int kSetupMaxSteps = 100;

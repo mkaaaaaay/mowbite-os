@@ -138,7 +138,19 @@ std::vector<ReasonEntry> DriveBlocks() {
                        "Die genannten Schritte mit aufgebocktem Mäher abschließen."},
                       {"Check jacked up first",
                        "Before the mower drives on the ground, the checks with the mower jacked up have to pass.",
-                       "Finish the steps named with the mower jacked up."}))};
+                       "Finish the steps named with the mower jacked up."})),
+          Reason("BLADE_NOT_ALLOWED", "info", "user",
+                 "hw/capabilities has blade_allowed false although the parameter file of the program sets allow_blade: "
+                 "the file kept by hand or the driver overrules it",
+                 {Text("key", "<node>.allow_blade where the file kept by hand sets it", false)},
+                 Both({"Messer gesperrt",
+                       "Der Treiber lässt das Messer nicht drehen. Die von Hand gepflegte Einstellungsdatei oder der "
+                       "Treiber selbst sperrt es.",
+                       "allow_blade in der Einstellungsdatei von Hand prüfen, dann MowBite OS neu starten."},
+                      {"Blade locked",
+                       "The driver doesn't let the blade turn. The settings file kept by hand or the driver itself "
+                       "locks it.",
+                       "Check allow_blade in the settings file kept by hand, then restart MowBite OS."}))};
 }
 
 // What holds for every check of kind drive.
@@ -451,6 +463,31 @@ const std::vector<SetupName>& SetupGroundParts() {
   return parts;
 }
 
+const std::vector<SetupName>& SetupBladeParts() {
+  static const std::vector<SetupName> parts = {
+      {"on_off", "On at percent until rpm, then off: it stands within off_max s and stays for hold s",
+       Both({"An und aus", "Das Messer läuft an und wird wieder abgeschaltet.", ""},
+            {"On and off", "The blade starts and is switched off again.", ""})},
+      {"lease", "On with one lease that is not renewed: the driver switches it off, it stands within lease plus "
+                "lease_extra s",
+       Both({"Abschalten ohne Verlängerung", "Das Messer läuft, ohne dass es weiter angefordert wird.", ""},
+            {"Off without renewal", "The blade runs without being asked for any more.", ""})},
+      {"silent", "On, then hw/silence with the blade: the board stops it without its host within silent_max s",
+       Both({"Abschalten ohne Steuerung", "Das Messer läuft, dann schweigt die Steuerung.", ""},
+            {"Off without control", "The blade runs, then the control stays silent.", ""})},
+      {"stop", "On until the user presses STOP: it stands within stop_max s of the input",
+       Both({"STOP drücken", "Das Messer läuft. Jetzt die STOP-Taste drücken.", ""},
+            {"Press STOP", "The blade runs. Press the STOP button now.", ""})},
+      {"lift", "On until the user lifts the mower: it stands within stop_max s of the input",
+       Both({"Anheben", "Das Messer läuft. Jetzt den Mäher vorn anheben, bis der Haken kommt, und absetzen.", ""},
+            {"Lift", "The blade runs. Lift the mower at the front until the tick comes, then put it down.", ""})},
+      {"bumper", "On until the user presses the bumper: it stands within stop_max s of the input",
+       Both({"Stoßfänger", "Das Messer läuft. Jetzt den Stoßfänger eindrücken, bis der Haken kommt.", ""},
+            {"Bumper", "The blade runs. Press the bumper in until the tick comes.", ""})},
+  };
+  return parts;
+}
+
 const SetupName& SetupWheelQuestion() {
   static const SetupName question = {
       "wheel", "Which wheel turns while the part one_wheel runs",
@@ -495,10 +532,10 @@ const std::vector<std::string>& ShapeKinds() {
 
 namespace {
 
-// The checks of the safety of the mower: the inputs, the IMU and everything that moves the wheels.
+// The checks of the safety of the mower: the inputs, the IMU and everything that moves the wheels or the blade.
 const std::set<std::string>& SafetyChecks() {
   static const std::set<std::string> names = {"input",   "imu",        "wheels", "stop_moving", "no_command",
-                                              "silence", "driver_end", "ground"};
+                                              "silence", "driver_end", "ground", "blade"};
   return names;
 }
 
@@ -780,6 +817,55 @@ const std::vector<SetupCheck>& SetupChecks() {
              "until you press STOP, and at the end slowly against a soft obstacle you hold.",
              "If the mower does not stop in time, don't let it mow. The values show where it fails; check wheels, "
              "braking distance and board."})},
+      {"blade", "blade", true, false,
+       "The parts of blade_parts in one run, the blade taken off and the wheels without a command. Where "
+       "hw/capabilities has blade_allowed false, setup.start writes allow_blade for node into the parameter file of "
+       "the program and restarts the OS (restart of the step): after it a second setup.start runs the step, never "
+       "the restart itself; a blade the driver still does not allow blocks with BLADE_NOT_ALLOWED. Each part starts "
+       "the blade at percent and height through the logic (setup/motion blade) until it turns at rpm within spin_up "
+       "s. on_off: off, it stands (below still_rpm) within off_max s. lease: one request on lease s that is not "
+       "renewed, the driver switches it off: it stands within lease plus lease_extra s of that request. silent: "
+       "hw/silence with blade: the board stops it within silent_max s of the answer, then the driver shows "
+       "emergencies of the list and LATCH only and the program releases them itself. stop, lift and bumper: the user "
+       "triggers the input of the role within time s: it stands within stop_max s of the input, the emergency of the "
+       "role follows and the program releases it itself. After every stand nothing turns for hold s, after a release "
+       "again. A part the step saw nothing of within time asks pressed. Needs the inputs checked standing "
+       "(SAFETY_INPUTS) and a driver that offers hw/silence; the mower is in IDLE off the charging contacts, without "
+       "emergency or hold, in the sub state SETUP meanwhile, the blade turns only there and goes off when it ends. "
+       "setup.start confirms blade_removed and hand_at_stop; setup.keep at least every " +
+           Num(kSetupKeepTimeout) + " s keeps it going (else RELEASED).",
+       {Word("node", "The node of the driver allow_blade is written for", {}, true),
+        Amount("percent", "%", 1, 100, 100, "Speed of the blade in percent of the driver"),
+        Amount("height", "mm", 0, 120, 0, "Cutting height while it turns, 0 for the default of the driver"),
+        Amount("rpm", "rpm", 100, 10000, 2000, "The blade counts as turning from this speed on"),
+        Seconds("spin_up", 1, 10, 3, "The blade turns at rpm within this time of the request"),
+        Amount("still_rpm", "rpm", 10, 1000, 100, "Below this speed the blade stands"),
+        Seconds("off_max", 0.2, 6, 1, "on_off: the blade stands within this time of the off"),
+        Seconds("lease", 0.5, 5, 1, "Lease of the requests of the step, at most blade_lease_max_s of the driver"),
+        Seconds("lease_extra", 0.2, 6, 1, "lease: the blade stands within lease and this time of the request"),
+        Seconds("silent_max", 0.2, 6, 1, "silent: the blade stands within this time of the answer of hw/silence"),
+        Seconds("stop_max", 0.2, 6, 1, "stop, lift and bumper: the blade stands within this time of the input"),
+        Seconds("time", 3, kSetupMoveTime, 8, "stop, lift and bumper: the blade turns at most this long for the "
+                                               "action"),
+        Seconds("hold", 0.5, 5, 1, "The blade does not turn for this time, after it stood and after the release"),
+        Emergencies()},
+       {{"rpm", "rpm", "on_off: the speed the blade reached", Named("Drehzahl", "Speed")},
+        {"stand", "s", "From the off, the request not renewed, the answer of hw/silence or the input to the standing "
+                       "blade, by part with the id of the part",
+         Named("Standzeit", "Time to stand")}},
+       {"NO_START", "LIMIT", "STARTED_AGAIN", "NO_EMERGENCY", "NOT_RELEASED", "DRIVER_REFUSED", "NOT_SEEN",
+        "NOT_DONE", "LOGIC_REFUSED", "RELEASED", "EMERGENCY", "NO_DATA", "STOPPED", "INTERRUPTED"},
+       Both({"Messer",
+             "Die Messerscheibe ist ab. Der Motor läuft an und wird auf verschiedene Weise gestoppt: abschalten, ohne "
+             "Verlängerung, ohne Steuerung, dann mit STOP-Taste, Anheben und Stoßfänger. Er muss jedes Mal "
+             "rechtzeitig stehen und darf nicht wieder anlaufen.",
+             "Steht der Motor nicht rechtzeitig oder läuft er wieder an: nicht mähen lassen, Platine und Motor "
+             "prüfen."},
+            {"Blade",
+             "The blade disc is off. The motor starts and is stopped in several ways: switched off, without renewal, "
+             "without control, then with the STOP button, lifting and the bumper. It has to stand in time each time "
+             "and must not start again.",
+             "If the motor does not stand in time or starts again, don't let the mower mow; check board and motor."})},
   });
   return checks;
 }
@@ -864,8 +950,8 @@ Json SetupCatalog() {
            "SETUP_STEP, the screen it opens), roles of the inputs (group, emergency of a press; a role is named as its "
            "flag in hw/status) and modes of a part, moves of a step imu, conditions of a step done_when with their "
            "screen, points to confirm, reasons to skip, the question of a step inputs_assign and the delays it takes "
-           "once it is ok, the ways to restart, the parts of a step wheels and its question, the parts of a step "
-           "ground, the question pressed of a safety step that saw nothing (a check with safety closes the lock when "
+           "once it is ok, the ways to restart, the parts of a step wheels and its question, the parts of the steps "
+           "ground and blade, the question pressed of a safety step that saw nothing (a check with safety closes the lock when "
            "it fails with a reason that has closes in x-reasons of SETUP_STEP), and the limits; texts by language "
            "where the OS has them. The steps themselves come with setup.get"},
           {"stages", named(SetupStages())},
@@ -881,6 +967,7 @@ Json SetupCatalog() {
           {"restart", named(SetupRestarts())},
           {"wheel_parts", named(SetupWheelParts())},
           {"ground_parts", named(SetupGroundParts())},
+          {"blade_parts", named(SetupBladeParts())},
           {"wheel", wheel},
           {"pressed", pressed},
           {"open", SetupOpens()},
@@ -931,8 +1018,8 @@ Field SetupState() {
       {Text("id", "Name of the step in setup.*"),
        Text("stage", "Its stage"),
        Text("check", "Its check, a key of x-setup.checks"),
-       Text("kind", "How to show it: confirm, input, measure or drive; a kind the app does not know as text with a "
-                    "button"),
+       Text("kind", "How to show it: confirm, input, measure, drive or blade; a kind the app does not know as text "
+                    "with a button"),
        Text("state", "locked: a step of needs is not ok; open; running; ok; failed; skipped; stale", true,
             SetupStates()),
        Bool("safety", "A safety step: failing it with a reason that closes closes the lock, passing it opens it again"),
@@ -1004,7 +1091,8 @@ Field SetupState() {
                         Nullable(Text("note", "The text of setup.skip")), Number("t", "unix s", "When"),
                         Integer("attempt", "The attempt it ended"),
                         Text("firmware", "Firmware of the boards then, empty while unknown")})),
-       Bool("restart", "Its result counts only after a restart of the OS, which the program asks for itself")});
+       Bool("restart", "The program restarts the OS for it by itself: a step inputs_assign for its result, a step "
+                       "blade at its first start while the driver does not allow the blade")});
   return Object(
       "setup", "The state of the setup program",
       {Integer("version", "Goes up with every change of a step; setup.start, answer, skip and reset need the one "
@@ -1144,22 +1232,25 @@ EventEntry SetupStepEvent() {
                         "The motion sensor reported the move the other way round. It is mounted another way than "
                         "set.",
                         "Change the mounting of the sensor in the settings of the platform, then repeat."})),
-           failed("NO_START", "The wheels did not turn within the time after the first command", {Part()},
-                  Both({"Räder drehen nicht",
-                        "Die Räder haben sich auf den Fahrbefehl nicht gedreht.",
+           failed("NO_START", "The wheels or the blade did not turn within the time after the first command",
+                  {Part(), Number("rpm", "rpm", "A blade: the fastest it turned", false)},
+                  Both({"Läuft nicht an",
+                        "Räder oder Messer haben sich auf den Befehl nicht oder zu langsam gedreht.",
                         "Prüfen, ob der Mäher frei aufgebockt ist und die Motoren angeschlossen sind, dann "
                         "wiederholen."},
-                       {"Wheels not turning", "The wheels didn't turn on the command.",
+                       {"Not starting", "The wheels or the blade didn't turn on the command, or too slowly.",
                         "Check that the mower is jacked up freely and the motors are connected, then repeat."})),
-           failed("STARTED_AGAIN", "A wheel turned while nothing was to turn: after the stop or the release",
-                  {Part(), Number("speed", "m/s", "The fastest wheel then", false)},
+           failed("STARTED_AGAIN", "A wheel or the blade turned while nothing was to turn: after the stop or the "
+                  "release",
+                  {Part(), Number("speed", "m/s", "The fastest wheel then", false),
+                   Number("rpm", "rpm", "The blade then", false)},
                   Both({"Wieder angelaufen",
-                        "Ein Rad hat sich gedreht, obwohl der Mäher stehen musste. So würde er nach einem Stopp "
-                        "von selbst weiterfahren.",
+                        "Ein Rad oder das Messer hat sich gedreht, obwohl es stehen musste. So würde der Mäher nach "
+                        "einem Stopp von selbst weiterlaufen.",
                         "Den Mäher nicht fahren lassen. Platine und Treiber prüfen, dann wiederholen."},
                        {"Started again",
-                        "A wheel turned while the mower had to stand. Like this it would drive on by itself after a "
-                        "stop.",
+                        "A wheel or the blade turned while it had to stand. Like this the mower would go on by itself "
+                        "after a stop.",
                         "Don't let the mower drive. Check board and driver, then repeat."})),
            failed("NO_RESTART", "After the release a new command did not turn the wheels within its time", {Part()},
                   Both({"Kein Anlauf nach Freigabe",
@@ -1282,10 +1373,12 @@ EventEntry SetupProgramEvent() {
   return {"SETUP", "setup", "The setup program reached a mark",
           {Text("what", "stage_done: every step of stage is ok or skipped; complete: every step is; reset: "
                         "setup.reset took all results back; safety_closed: a safety step failed and closed the lock "
-                        "of autonomous driving and mowing; safety_opened: the lock is open again",
-                true, {"stage_done", "complete", "reset", "safety_closed", "safety_opened"}),
+                        "of autonomous driving and mowing; safety_opened: the lock is open again; blade_allowed: the "
+                        "first start of a step blade allowed the blade, the OS restarts and the step waits for its "
+                        "next start",
+                true, {"stage_done", "complete", "reset", "safety_closed", "safety_opened", "blade_allowed"}),
            Text("stage", "With stage_done: the stage", false),
-           Text("step", "With safety_closed: the step that failed", false),
+           Text("step", "With safety_closed: the step that failed; with blade_allowed: the step blade", false),
            Text("cause", "With safety_closed: its reason of SETUP_STEP", false)},
           {}};
 }

@@ -599,6 +599,7 @@ TEST(Catalog, TheNamesOfTheSetupProgram) {
   named(SetupRestarts(), "restart", false);
   named(SetupWheelParts(), "wheel part", true);
   named(SetupGroundParts(), "ground part", true);
+  named(SetupBladeParts(), "blade part", true);
   named(SetupWheelValues(), "wheel", true);
   ExpectTexts(SetupAccept().texts, "accept", false);
   ExpectTexts(SetupWheelQuestion().texts, "wheel", false);
@@ -637,6 +638,7 @@ TEST(Catalog, TheNamesOfTheSetupProgram) {
   EXPECT_EQ(catalog["restart"].size(), SetupRestarts().size());
   EXPECT_EQ(catalog["wheel_parts"].size(), SetupWheelParts().size());
   EXPECT_EQ(catalog["ground_parts"].size(), SetupGroundParts().size());
+  EXPECT_EQ(catalog["blade_parts"].size(), SetupBladeParts().size());
   EXPECT_EQ(catalog["wheel"]["values"].size(), SetupWheelValues().size());
   ASSERT_NE(FindSetupName(SetupWheelValues(), "right"), nullptr);
   ASSERT_NE(FindSetupName(SetupWheelParts(), "one_wheel"), nullptr);
@@ -650,14 +652,15 @@ TEST(Catalog, TheChecksOfTheSetupProgram) {
   for (const auto& check : SetupChecks()) {
     EXPECT_TRUE(names.insert(check.name).second) << check.name;
     EXPECT_EQ(FindSetupCheck(check.name), &check);
-    EXPECT_TRUE(check.kind == "confirm" || check.kind == "input" || check.kind == "measure" || check.kind == "drive")
+    EXPECT_TRUE(check.kind == "confirm" || check.kind == "input" || check.kind == "measure" ||
+                check.kind == "drive" || check.kind == "blade")
         << check.name;
     EXPECT_FALSE(check.text.empty()) << check.name;
     for (const auto& reason : check.reasons) {
       EXPECT_TRUE(reasons.count(reason)) << check.name << " " << reason;
     }
     // What setup.start begins and watches can be stopped and cut off.
-    if (check.start && (check.kind == "measure" || check.kind == "drive")) {
+    if (check.start && (check.kind == "measure" || check.kind == "drive" || check.kind == "blade")) {
       for (const char* reason : {"STOPPED", "INTERRUPTED"}) {
         EXPECT_EQ(std::count(check.reasons.begin(), check.reasons.end(), reason), 1) << check.name << " " << reason;
       }
@@ -778,4 +781,25 @@ TEST(Catalog, GroundIsASafetyCheck) {
   const Json catalog = SetupCatalog();
   EXPECT_EQ(catalog["limits"]["ground_speed"], kSetupGroundSpeed);
   EXPECT_NE(FindSetupName(SetupPoints(), "area_clear"), nullptr);
+}
+
+// blade is a safety step: a blade that does not stand or starts again closes the lock, one that does not come up or a
+// driver that refuses does not.
+TEST(Catalog, BladeIsASafetyCheck) {
+  ASSERT_NE(FindSetupCheck("blade"), nullptr);
+  EXPECT_TRUE(FindSetupCheck("blade")->safety);
+  EXPECT_EQ(FindSetupCheck("blade")->kind, "blade");
+  for (const char* reason : {"LIMIT", "STARTED_AGAIN", "NO_EMERGENCY", "NOT_SEEN"}) {
+    EXPECT_TRUE(SetupClosesLock("blade", reason)) << reason;
+  }
+  for (const char* reason : {"NO_START", "DRIVER_REFUSED", "NOT_DONE", "STOPPED", "RELEASED", "NOT_RELEASED"}) {
+    EXPECT_FALSE(SetupClosesLock("blade", reason)) << reason;
+  }
+  std::vector<std::string> parts;
+  for (const auto& part : SetupBladeParts()) parts.push_back(part.id);
+  EXPECT_EQ(parts, (std::vector<std::string>{"on_off", "lease", "silent", "stop", "lift", "bumper"}));
+  EXPECT_NE(FindSetupName(SetupPoints(), "blade_removed"), nullptr);
+  const auto blocks = ReasonsOf("SETUP_BLOCKED");
+  EXPECT_TRUE(blocks.count("BLADE_NOT_ALLOWED"));
+  EXPECT_TRUE(ReasonsOf("SETUP_REFUSED").count("BLADE_NOT_ALLOWED"));
 }
