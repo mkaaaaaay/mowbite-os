@@ -26,6 +26,11 @@ def _client(client_id):
     return mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv5)
 
 
+def _print_errors(client, userdata, level, text):
+    if level == mqtt.MQTT_LOG_ERR:
+        print(f"mqtt: {text}", flush=True)
+
+
 class Broker:
     """subscriptions: topics with their QoS, subscribed after every connect; will: (topic, payload) retained."""
 
@@ -37,6 +42,9 @@ class Broker:
         self._on_message, self._on_connect = on_message, on_connect
         self.connected = False
         self.client = _client(f"{name}-{os.getpid()}")
+        # An error in a callback is printed and the loop goes on.
+        self.client.suppress_exceptions = True
+        self.client.on_log = _print_errors
         self.client.on_connect = self._connected
         self.client.on_disconnect = self._disconnected
         self.client.on_message = self._message

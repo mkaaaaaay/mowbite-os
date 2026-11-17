@@ -449,6 +449,22 @@ class BrokerTest(unittest.TestCase):
         watcher.stop()
         os_side.stop()
 
+    def test_an_error_in_a_handler_does_not_end_the_loop(self):
+        host, got, arrived = self.client("host", [("rpc/request", 1)])
+        on_message = host._on_message
+
+        def fails_once(message):
+            if message.payload == b"first":
+                raise RuntimeError("handler failed")
+            on_message(message)
+        host._on_message = fails_once
+        sender, _, _ = self.client("app", [])
+        sender.publish("rpc/request", b"first")
+        sender.publish("rpc/request", b"second")
+        self.assertTrue(self.wait_for(got, arrived, lambda m: m.payload == b"second"))
+        sender.stop()
+        host.stop()
+
     def test_request_with_correlation_answered_by_the_host(self):
         app, got, arrived = self.client("app", [("rpc/response/app-1", 1)])
         try:
