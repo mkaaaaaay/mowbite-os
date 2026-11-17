@@ -54,7 +54,8 @@ Json Property(const Field& field) {
   }
   if (!field.pattern.empty()) property["pattern"] = field.pattern;
   if (field.min) property["minimum"] = *field.min;
-  if (field.max) property["maximum"] = *field.max;
+  // Of an array: how many items at most.
+  if (field.max) property[field.type == Type::kArray ? "maxItems" : "maximum"] = *field.max;
   property["description"] = field.text;
   if (!field.unit.empty()) property["x-unit"] = field.unit;
   if (field.type == Type::kArray && (!field.fields.empty() || field.items)) {
@@ -65,6 +66,7 @@ Json Property(const Field& field) {
     item.values.clear();
     item.pattern.clear();
     item.unit.clear();
+    item.max.reset();
     item.text = "One item";
     property["items"] = Property(item);
     return property;
@@ -168,6 +170,7 @@ Json Reasons(const EventEntry& event) {
     for (const auto& field : reason.fields) fields[field.name] = field.unit;
     Json entry = {{"severity", reason.severity}, {"resume", reason.resume}, {"description", reason.text},
                   {"fields", fields}};
+    if (event.type == "SETUP_STEP") entry["closes"] = reason.closes;
     if (!reason.texts.empty()) entry["texts"] = Texts(reason.texts);
     if (out.contains(reason.code) && out[reason.code].contains("when")) entry["when"] = out[reason.code]["when"];
     out[reason.code] = entry;

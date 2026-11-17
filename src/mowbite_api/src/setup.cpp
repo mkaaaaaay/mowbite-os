@@ -1,6 +1,7 @@
 #include "mowbite_api/setup.h"
 
 #include <cstdio>
+#include <set>
 
 #include "fields.h"
 #include "internal.h"
@@ -421,13 +422,56 @@ const std::vector<SetupName>& SetupWheelValues() {
   return values;
 }
 
+const SetupName& SetupPressed() {
+  static const SetupName question = {
+      "pressed", "Whether the user did the action of the part the step saw nothing of",
+      Both({"Hast du es gemacht?",
+            "Der Mäher hat in der Zeit nichts bemerkt. Hast du gedrückt, angehoben oder gekippt, wie angezeigt?", ""},
+           {"Did you do it?",
+            "The mower noticed nothing in time. Did you press, lift or tilt as shown?", ""})};
+  return question;
+}
+
+const std::vector<SetupName>& SetupPressedValues() {
+  static const std::vector<SetupName> values = {
+      {"yes", "The action was done: the sensor or its line is dead, the step fails with NOT_SEEN",
+       Named("Ja, gemacht", "Yes, I did")},
+      {"no", "The action was not done: the step ends open with NOT_DONE", Named("Nein, noch nicht", "No, not yet")},
+  };
+  return values;
+}
+
 const std::vector<std::string>& ShapeKinds() {
   static const std::vector<std::string> kinds = {"body", "wheel", "caster", "bumper", "button", "sensor", "handle"};
   return kinds;
 }
 
+namespace {
+
+// The checks of the safety of the mower: the inputs, the IMU and everything that moves the wheels.
+const std::set<std::string>& SafetyChecks() {
+  static const std::set<std::string> names = {"input", "imu", "wheels", "stop_moving", "no_command", "silence",
+                                              "driver_end"};
+  return names;
+}
+
+// Reasons of SETUP_STEP that close the lock when a safety step fails with them: what was measured broke a bound or
+// the hardware did not do what it has to. NOT_SEEN only comes after the user said yes to the question pressed.
+const std::set<std::string>& ClosingReasons() {
+  static const std::set<std::string> codes = {"LIMIT",           "STARTED_AGAIN", "NO_EMERGENCY",
+                                              "WRONG_DIRECTION", "WRONG_WHEEL",   "NOT_SEEN"};
+  return codes;
+}
+
+std::vector<SetupCheck> WithSafety(std::vector<SetupCheck> list) {
+  for (auto& check : list) check.safety = SafetyChecks().count(check.name) > 0;
+  return list;
+}
+
+}  // namespace
+
 const std::vector<SetupCheck>& SetupChecks() {
-  static const std::vector<SetupCheck> checks = {
+  static const std::vector<SetupCheck> checks = WithSafety({
       {"confirm", "confirm", true, false,
        "The user confirms what the step says: setup.start with every point of confirm[] ends it"},
       {"choice", "input", false, false,
@@ -475,7 +519,7 @@ const std::vector<SetupCheck>& SetupChecks() {
         Seconds("short_max", 0.1, 5, 0.5, "A part of mode short switches for less than this")},
        {{"delay", "s", "From the input to the emergency, one value by part of mode press with the id of the part"}},
        {"NOT_SEEN", "WRONG_INPUT", "NO_EMERGENCY", "STOPPED_EARLY", "LINE_SILENT", "NO_DATA", "STOPPED",
-        "INTERRUPTED"}},
+        "INTERRUPTED", "NOT_DONE"}},
       {"inputs_assign", "input", true, false,
        "Finds the line of every sensor, on a platform whose driver learns its inputs: the OS restarts with the driver "
        "watching its candidate lines (emergency INPUTS_LEARNING, nothing moves), watches them at rest for quiet, then "
@@ -507,7 +551,7 @@ const std::vector<SetupCheck>& SetupChecks() {
         Amount("turn", "deg", 10, 90, 30, "How far the mower turns"),
         Seconds("time", 5, 300, 60, "Each part is done within this time")},
        {{"angle", "deg", "The angle reached, one value by part with the id of the part"}},
-       {"NOT_SEEN", "WRONG_SIGN", "NO_EMERGENCY", "NO_DATA", "STOPPED", "INTERRUPTED"},
+       {"NOT_SEEN", "WRONG_SIGN", "NO_EMERGENCY", "NO_DATA", "STOPPED", "INTERRUPTED", "NOT_DONE"},
        Both({"Lagesensor",
              "Den Mäher von Hand kippen und drehen, wie angezeigt. So zeigt sich, ob der Sensor richtig herum "
              "eingebaut ist.",
@@ -562,7 +606,7 @@ const std::vector<SetupCheck>& SetupChecks() {
         Seconds("answer_time", 3, kSetupMoveTime, kSetupMoveTime, "The part one_wheel waits this long for the answer")},
        {{"speed", "m/s", "Speed of the wheels along the part, one value by part with the id of the part",
          Named("Geschwindigkeit", "Speed")}},
-       DriveReasons({"WRONG_DIRECTION", "WRONG_WHEEL", "LIMIT", "NOT_SEEN"}),
+       DriveReasons({"WRONG_DIRECTION", "WRONG_WHEEL", "LIMIT", "NOT_SEEN", "NOT_DONE"}),
        Both({"Räder", "Der Mäher ist aufgebockt und dreht seine Räder langsam vor, zurück und zu beiden Seiten. Zum "
                       "Schluss dreht nur ein Rad: angeben, welches.",
              "Dreht ein Rad falsch herum oder das falsche: die Anschlüsse der Motoren und die Einstellungen der "
@@ -580,7 +624,7 @@ const std::vector<SetupCheck>& SetupChecks() {
         StopMax(), Hold()},
        {{"stand", "s", "From the input to standing wheels, one value by part with the id of the part",
          Named("Standzeit", "Time to stand")}},
-       DriveReasons({"NOT_SEEN", "LIMIT", "STARTED_AGAIN", "NO_EMERGENCY", "NOT_RELEASED", "NO_RESTART"}),
+       DriveReasons({"NOT_SEEN", "LIMIT", "STARTED_AGAIN", "NO_EMERGENCY", "NOT_RELEASED", "NO_RESTART", "NOT_DONE"}),
        Both({"Stopp bei drehenden Rädern",
              "Die Räder drehen langsam, der Mäher ist aufgebockt. Den angezeigten Sensor auslösen: die Räder müssen "
              "sofort stehen und stehen bleiben.",
@@ -642,8 +686,12 @@ const std::vector<SetupCheck>& SetupChecks() {
              "stay locked until the program releases them.",
              "If the wheels do not stand or the driver does not come back, don't let the mower drive and restart "
              "MowBite OS."})},
-  };
+  });
   return checks;
+}
+
+bool SetupClosesLock(const std::string& check, const std::string& reason) {
+  return SafetyChecks().count(check) > 0 && ClosingReasons().count(reason) > 0;
 }
 
 const SetupCheck* FindSetupCheck(const std::string& name) {
@@ -677,6 +725,10 @@ Json SetupCatalog() {
   Json wheel = {{"description", SetupWheelQuestion().text},
                 {"texts", Texts(SetupWheelQuestion().texts)},
                 {"values", named(SetupWheelValues())}};
+  Json pressed = {{"description", SetupPressed().text},
+                  {"texts", Texts(SetupPressed().texts)},
+                  {"values", named(SetupPressedValues())},
+                  {"time", kSetupPressedTime}};
   Json delay = {{"description", SetupDelay().text},
                 {"texts", Texts(SetupDelay().texts)},
                 {"prefix", kSetupDelayPrefix},
@@ -707,7 +759,7 @@ Json SetupCatalog() {
     }
     Json entry = {{"kind", check.kind},        {"start", check.start}, {"auto", check.automatic},
                   {"description", check.text}, {"params", params},     {"values", values},
-                  {"reasons", check.reasons}};
+                  {"reasons", check.reasons},  {"safety", check.safety}};
     if (!check.texts.empty()) entry["texts"] = Texts(check.texts);
     if (!check.open.empty()) entry["open"] = check.open;
     checks[check.name] = entry;
@@ -718,7 +770,9 @@ Json SetupCatalog() {
            "SETUP_STEP, the screen it opens), roles of the inputs (group, emergency of a press; a role is named as its "
            "flag in hw/status) and modes of a part, moves of a step imu, conditions of a step done_when with their "
            "screen, points to confirm, reasons to skip, the question of a step inputs_assign and the delays it takes "
-           "once it is ok, the ways to restart, the parts of a step wheels and its question, "
+           "once it is ok, the ways to restart, the parts of a step wheels and its question, the question pressed of a "
+           "safety step that saw nothing (a check with safety closes the lock when it fails with a reason that has "
+           "closes in x-reasons of SETUP_STEP), "
            "and the limits; texts by language where the OS has them. The steps themselves come with setup.get"},
           {"stages", named(SetupStages())},
           {"checks", checks},
@@ -733,6 +787,7 @@ Json SetupCatalog() {
           {"restart", named(SetupRestarts())},
           {"wheel_parts", named(SetupWheelParts())},
           {"wheel", wheel},
+          {"pressed", pressed},
           {"open", SetupOpens()},
           {"symbols", SetupSymbols()},
           {"states", SetupStates()},
@@ -747,9 +802,23 @@ Json SetupCatalog() {
             {"raised_speed", kSetupRaisedSpeed},
             {"raised_turn", kSetupRaisedTurn},
             {"move_time", kSetupMoveTime},
-            {"keep", kSetupKeepTimeout}}},
+            {"keep", kSetupKeepTimeout},
+            {"closed", kSetupMaxClosed}}},
           {"shape_kinds", ShapeKinds()}};
 }
+
+namespace {
+
+Field Closed() {
+  Field closed = Rows("closed", "What keeps the lock closed: a failed safety step until it passes again, or a reset",
+                      {Nullable(Text("step", "The step, null for a reset")), Nullable(Text("part", "The part")),
+                       Text("reason", "A reason of SETUP_STEP, or for a reset RESET or UNREADABLE"),
+                       Number("t", "unix s", "When")});
+  closed.max = kSetupMaxClosed;
+  return closed;
+}
+
+}  // namespace
 
 Field SetupState() {
   const Field image_fields = Object(
@@ -769,6 +838,7 @@ Field SetupState() {
                     "button"),
        Text("state", "locked: a step of needs is not ok; open; running; ok; failed; skipped; stale", true,
             SetupStates()),
+       Bool("safety", "A safety step: failing it with a reason that closes closes the lock, passing it opens it again"),
        Integer("attempt", "How often it was started or answered"),
        List("needs", "Steps that have to be ok before this one", Type::kString),
        Rows("blocked", "What keeps it from going on right now, reasons of SETUP_BLOCKED in x-reasons",
@@ -792,7 +862,8 @@ Field SetupState() {
              Number("max", "", "Largest number", false),
              Rows("values", "Values of a choice", {Text("id", "The value"), TextsField()}, false),
              Bool("ask", "A question of the running step that waits for its answer: accept while ask of the step is "
-                         "set, wheel while the part one_wheel of a step wheels turns one wheel"),
+                         "set, wheel while the part one_wheel of a step wheels turns one wheel, pressed while a "
+                         "safety step saw nothing of the action of a part"),
              Bool("advanced", "A setting beside the check, to be shown apart: the delays of a step inputs_assign"),
              {"value", Type::kAny, "", true, "The value given last, null before", {}, true, {}, ""}, TextsField()}),
        Rows("values", "What it measures, live while it runs and as it ended",
@@ -847,10 +918,16 @@ Field SetupState() {
        Nullable(Text("current", "The step that runs, else the first one still to do; null once complete")),
        Bool("complete", "Every step is ok or skipped"),
        Object("safety", "The lock of autonomous driving and mowing",
-              {Bool("open", "The platform has a safety measurement"),
+              {Bool("open", "The platform has a safety measurement and no safety step closed the lock"),
                Nullable(Text("date", "Its date, YYYY-MM-DD")),
                Nullable(Text("firmware", "The firmware it was made with, null while unknown")),
-               Nullable(Text("why", "NO_SAFETY_MEASUREMENT while closed"))}),
+               Nullable(Text("why", "While closed: NO_SAFETY_MEASUREMENT (no date), CHECK_FAILED (a safety step "
+                                    "failed) or RESET (the program was reset or its file could not be read)",
+                             true, {"NO_SAFETY_MEASUREMENT", "CHECK_FAILED", "RESET"})),
+               Nullable(Text("source", "Who gave the date: hand (the file kept by hand or the platform) or program "
+                                       "(the summary of the setup program); null without one",
+                             true, {"hand", "program"})),
+               Closed()}),
        Bool("restart_pending", "A step waits for a restart of the OS"),
        Rows("stages", "The stages with steps, in their order",
             {Text("id", "A key of x-setup.stages"), Text("state", "Of all its steps together", true, SetupStates()),
@@ -862,7 +939,7 @@ EventEntry SetupStepEvent() {
   const auto failed = [](std::string code, std::string text, std::vector<Field> fields, UserTexts texts) {
     return Reason(std::move(code), "warning", "user", std::move(text), std::move(fields), std::move(texts));
   };
-  return {"SETUP_STEP", "setup", "A step of the setup program ended",
+  EventEntry entry = {"SETUP_STEP", "setup", "A step of the setup program ended",
           Rated(false, {Text("step", "The step"), Text("state", "How it ended", true, {"ok", "failed", "skipped"}),
                         Integer("attempt", "The attempt that ended"),
                         Text("skip", "With skipped: the reason of setup.skip", false),
@@ -1081,16 +1158,29 @@ EventEntry SetupStepEvent() {
            Reason("INTERRUPTED", "info", "user", "The OS restarted while the step ran", {},
                   Both({"Unterbrochen", "MowBite OS wurde neu gestartet, während der Schritt lief.",
                         "Den Schritt erneut starten."},
-                       {"Interrupted", "MowBite OS restarted while the step ran.", "Start the step again."}))},
+                       {"Interrupted", "MowBite OS restarted while the step ran.", "Start the step again."})),
+           Reason("NOT_DONE", "info", "user",
+                  "The step saw nothing of the action of a part, and the answer to pressed was no or did not come: "
+                  "the step is open again and the lock stays as it was",
+                  {Part()},
+                  Both({"Nicht gemacht", "Der Handgriff wurde nicht gemacht. Die Prüfung zählt nicht.",
+                        "Den Schritt wiederholen und den Handgriff in der angezeigten Zeit machen."},
+                       {"Not done", "The action wasn't done. The check doesn't count.",
+                        "Repeat the step and do the action within the time shown."}))},
           "warning", "user"};
+  for (auto& reason : entry.reasons) reason.closes = ClosingReasons().count(reason.code) > 0;
+  return entry;
 }
 
 EventEntry SetupProgramEvent() {
   return {"SETUP", "setup", "The setup program reached a mark",
           {Text("what", "stage_done: every step of stage is ok or skipped; complete: every step is; reset: "
-                        "setup.reset took all results back",
-                true, {"stage_done", "complete", "reset"}),
-           Text("stage", "With stage_done: the stage", false)},
+                        "setup.reset took all results back; safety_closed: a safety step failed and closed the lock "
+                        "of autonomous driving and mowing; safety_opened: the lock is open again",
+                true, {"stage_done", "complete", "reset", "safety_closed", "safety_opened"}),
+           Text("stage", "With stage_done: the stage", false),
+           Text("step", "With safety_closed: the step that failed", false),
+           Text("cause", "With safety_closed: its reason of SETUP_STEP", false)},
           {}};
 }
 

@@ -73,6 +73,9 @@ struct SetupCheck {
   UserTexts texts = {};
   // The screen of the app a step of it opens unless the step names another; empty for none.
   std::string open = {};
+  // A safety check: a step of it that fails with a reason that closes (closes of the reason) closes the lock of
+  // autonomous driving and mowing until it passes again. Not to be chosen by the step list.
+  bool safety = false;
 };
 
 // Stages in the order the app shows them; a step list uses those it has steps for.
@@ -111,6 +114,16 @@ const std::vector<SetupName>& SetupWheelParts();
 // The question of the part one_wheel of a step wheels in inputs[] of the step, and the values setup.answer takes.
 const SetupName& SetupWheelQuestion();
 const std::vector<SetupName>& SetupWheelValues();
+// The question of a safety step whose part saw nothing of the action within its time, in inputs[] of the step, and
+// the values setup.answer takes: yes ends the step failed with NOT_SEEN (it closes), no or no answer within
+// kSetupPressedTime ends it open with NOT_DONE.
+const SetupName& SetupPressed();
+const std::vector<SetupName>& SetupPressedValues();
+constexpr double kSetupPressedTime = 30.0;
+// Whether a step of this check that fails with this reason of SETUP_STEP closes the lock.
+bool SetupClosesLock(const std::string& check, const std::string& reason);
+// Most causes setup.get names in safety.closed.
+constexpr int kSetupMaxClosed = 32;
 
 template <typename Name>
 const Name* FindSetupName(const std::vector<Name>& names, const std::string& id) {

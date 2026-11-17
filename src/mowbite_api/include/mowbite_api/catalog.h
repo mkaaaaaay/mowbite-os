@@ -13,7 +13,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 44;
+constexpr int kApi = 45;
 
 // The break of the app interface: one up for a change that is not only adding (what counts: x-api-break in the
 // schema); an app goes with the OS of the same break whose api is at least the one it needs.
@@ -78,6 +78,8 @@ struct ReasonEntry {
   // first match counts.
   Json when = Json::object();
   UserTexts texts = {};
+  // SETUP_STEP: a safety step that fails with it closes the lock of autonomous driving and mowing.
+  bool closes = false;
 };
 
 struct EventEntry {

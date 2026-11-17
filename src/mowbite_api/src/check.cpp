@@ -55,6 +55,9 @@ void CheckField(const std::string& where, const Field& field, const Json& value,
   if (value.is_number() && field.max && value.get<double>() > *field.max) {
     problems->push_back(where + "." + field.name + ": " + value.dump() + " is above " + Json(*field.max).dump());
   }
+  if (value.is_array() && field.max && static_cast<double>(value.size()) > *field.max) {
+    problems->push_back(where + "." + field.name + ": more than " + Json(*field.max).dump() + " items");
+  }
   if (!field.pattern.empty() && value.is_string() &&
       !std::regex_search(value.get<std::string>(), std::regex(field.pattern, std::regex::ECMAScript))) {
     problems->push_back(where + "." + field.name + ": " + value.dump() + " does not match " + field.pattern);
