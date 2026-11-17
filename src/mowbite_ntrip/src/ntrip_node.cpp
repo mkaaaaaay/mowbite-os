@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -49,8 +50,24 @@ rclcpp::QoS LatchedQos(size_t depth) {
 
 const char kStateSensor[] = "os_ntrip_state";
 
-// Sends all of data within timeout_ms on a non-blocking socket.
-bool SendAll(int fd, const std::string& data, int timeout_ms) {
+// The longest single wait on the socket, so a shutdown is seen within it.
+constexpr int kPollStepMs = 100;
+
+// Polls fd for events until timeout_ms is over or running turns false; > 0 when ready.
+int PollWhile(int fd, short events, int timeout_ms, const std::atomic<bool>& running) {
+  const double end = MonotonicSeconds() + timeout_ms / 1000.0;
+  while (running) {
+    const int left = static_cast<int>((end - MonotonicSeconds()) * 1000.0);
+    if (left <= 0) return 0;
+    pollfd p{fd, events, 0};
+    const int ready = ::poll(&p, 1, std::min(left, kPollStepMs));
+    if (ready != 0) return ready;
+  }
+  return 0;
+}
+
+// Sends all of data within timeout_ms on a non-blocking socket, or gives up once running turns false.
+bool SendAll(int fd, const std::string& data, int timeout_ms, const std::atomic<bool>& running) {
   size_t sent = 0;
   const double end = MonotonicSeconds() + timeout_ms / 1000.0;
   while (sent < data.size()) {
@@ -61,9 +78,7 @@ bool SendAll(int fd, const std::string& data, int timeout_ms) {
     }
     if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) return false;
     const int left = static_cast<int>((end - MonotonicSeconds()) * 1000.0);
-    if (left <= 0) return false;
-    pollfd p{fd, POLLOUT, 0};
-    ::poll(&p, 1, left);
+    if (left <= 0 || PollWhile(fd, POLLOUT, left, running) == 0) return false;
   }
   return true;
 }
@@ -338,7 +353,7 @@ class NtripNode : public rclcpp::Node {
       return;
     }
     std::string error = "cannot connect";
-    for (addrinfo* a = result; a && fd_ < 0; a = a->ai_next) {
+    for (addrinfo* a = result; a && fd_ < 0 && running_; a = a->ai_next) {
       int fd = ::socket(a->ai_family, a->ai_socktype | SOCK_NONBLOCK | SOCK_CLOEXEC, a->ai_protocol);
       if (fd < 0) continue;
       if (::connect(fd, a->ai_addr, a->ai_addrlen) != 0 && errno != EINPROGRESS) {
@@ -346,10 +361,9 @@ class NtripNode : public rclcpp::Node {
         ::close(fd);
         continue;
       }
-      pollfd p{fd, POLLOUT, 0};
       int soerr = 0;
       socklen_t len = sizeof(soerr);
-      if (::poll(&p, 1, static_cast<int>(connect_timeout_s_ * 1000)) <= 0) {
+      if (PollWhile(fd, POLLOUT, static_cast<int>(connect_timeout_s_ * 1000), running_) <= 0) {
         error = "connect: timeout";
         ::close(fd);
         continue;
@@ -367,7 +381,7 @@ class NtripNode : public rclcpp::Node {
       Failed(error);
       return;
     }
-    if (!SendAll(fd_, request, 5000)) Close(std::string("sending the request: ") + std::strerror(errno));
+    if (!SendAll(fd_, request, 5000, running_)) Close(std::string("sending the request: ") + std::strerror(errno));
   }
 
   // An attempt failed before a socket was open.
@@ -439,7 +453,7 @@ class NtripNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       gga = client_.TakeGga(now);
     }
-    if (gga && !SendAll(fd_, *gga, 2000)) Close(std::string("sending GGA: ") + std::strerror(errno));
+    if (gga && !SendAll(fd_, *gga, 2000, running_)) Close(std::string("sending GGA: ") + std::strerror(errno));
   }
 
   void PublishStatus(double now) {
