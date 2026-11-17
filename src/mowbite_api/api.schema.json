@@ -5444,7 +5444,7 @@
           "type": "string"
         },
         "source": {
-          "description": "hw/status, hw/capabilities, imu/data or gps/absolute_pose",
+          "description": "hw/status, hw/inputs, hw/capabilities, imu/data or gps/absolute_pose",
           "type": "string"
         },
         "state": {
@@ -19412,6 +19412,7 @@
       "NO_DATA": {
         "description": "A source the step needs sent nothing",
         "fields": {
+          "part": "",
           "source": ""
         },
         "resume": "user",
@@ -21578,7 +21579,7 @@
       },
       "inputs_assign": {
         "auto": false,
-        "description": "Finds the line of every sensor, on a platform whose driver learns its inputs: the OS restarts with the driver watching its candidate lines (emergency INPUTS_LEARNING, nothing moves), watches them at rest for quiet, then takes one part after the other, each of a role (stop, lift, bumper_left or bumper_right) and with the delay_ms its line gets: one line alone changes, ask of the step names it, and setup.answer with accept yes takes it. After the last part the table goes into the settings the program writes for the platform, the OS restarts without learning and the step holds hw/inputs against the table. setup.abort ends it with a restart as well. The steps input are open again after it. The step list names how the OS restarts (restart). Once the step is ok setup.answer takes delay_<part> for any of its parts, a whole number of ms from 0 to delay_ms of the part: the table is written with it, the OS restarts and the step holds hw/inputs against it again",
+        "description": "Finds the line of every sensor, on a platform whose driver learns its inputs: the OS restarts with the driver watching its candidate lines (emergency INPUTS_LEARNING, nothing moves), watches them at rest for quiet, then takes one part after the other, each of a role (stop, lift, bumper_left or bumper_right) and with the delay_ms its line gets: one line alone changes, ask of the step names it, and setup.answer with accept yes takes it. After the last part the table goes into the settings the program writes for the platform, the OS restarts without learning and the step holds hw/inputs against the table. A board the learning driver held stays held after that restart (HIGH_LEVEL) until emergency.reset. setup.abort ends it with a restart as well. The steps input are open again after it. The step list names how the OS restarts (restart). Once the step is ok setup.answer takes delay_<part> for any of its parts, a whole number of ms from 0 to delay_ms of the part: the table is written with it, the OS restarts and the step holds hw/inputs against it again",
         "kind": "input",
         "params": {
           "node": {
