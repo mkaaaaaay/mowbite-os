@@ -192,14 +192,17 @@ has one.
   heading, how far base_link got) and the log sums them up per path. The calibration drive
   turns on the spot at `spin_rate` of `mowbite_calibration` (at most what the driver allows): raise it where
   the wheels stand in their dead band at that rate, the drive ends with `NOT_TURNING` then (the gyro on average
-  below `turn_min_ratio` of the rate, 0.7). `mowbite_safety` lets every moving command grow at
+  below `turn_min_ratio` of the rate, 0.7). Its lines never go below `line_min_speed` while their end is ahead: take
+  the slowest speed the wheels still turn at. `mowbite_safety` lets every moving command grow at
   most `ramp_linear` m/s² and `ramp_angular` rad/s² from the one before, whatever its source (0: no limit); less, a stop
   and an emergency go out at once. Measure how fast the wheels follow before raising any of them.
 - `platform.yaml` of the platform package: the values of this mower on top of `stack.yaml` of `mowbite_bringup`, which
   holds for every mower and has the meaning of each value. `stack.yaml` marks what a platform has to set as
   `<platform>`: battery and
   charge check, docking and the contacts, how the mower drives, tilt and ramps, gyro and noise, the limits of the
-  journal, and the devices of light and sound for a platform that starts them. Set each in the same section of your
+  journal and the libraries it names (`journal_libraries`: a part of the names of the libraries of your packages,
+  `[xcore]` on the NX60i; their build IDs stand in every run), and the devices of light and sound for a platform that
+  starts them. Set each in the same section of your
   file. While one is left for a node the platform starts, the start halts with `PLATFORM_CONFIG` and its names before
   any node runs; `test_layers.py` of `mowbite_bringup` holds the same for every platform of the workspace, yours
   among them once its package is built. A part that is off in `stack.yaml` (dock marker, `dock_guide`, `turn_hold_gain`,
