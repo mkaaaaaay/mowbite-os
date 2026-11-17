@@ -24,13 +24,13 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import TRON_CUTTER as CUTTER  # noqa: E402
 from sim_common import (DriverProbe, ROSOUT, TestShutdown, fake_tron, last_time, layers, sim_files,  # noqa: E402,F401
                         sim_links, sub_packets, write_json)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_safety_")
 LINKS = sim_links(WORK)
 _, FLAGS, LOG, _ = sim_files(WORK)
-CUTTER = 11
 BLADE_STOP_TIME = 2.0
 IMU_GAP = HardwareStatus.REASON_LATCH | HardwareStatus.REASON_IMU_TIMEOUT
 NOT_STOPPED = HardwareStatus.REASON_LATCH | HardwareStatus.REASON_MOWER_NOT_STOPPED

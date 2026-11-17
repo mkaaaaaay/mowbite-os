@@ -3,11 +3,9 @@ loopback."""
 import math
 import struct
 
-from sim_common import (fake_xcore, layers, log_entries, loopback_group, read_json, sim_files, write_json,
-                        xcore_config, xcore_driver)
-
-DIFF_DRIVE, MOWER = 2, 3
-DATA = 1
+from sim_common import XCORE_DATA as DATA, XCORE_DIFF_DRIVE as DIFF_DRIVE, XCORE_MOWER as MOWER
+from sim_common import (fake_xcore, layers, loopback_group, read_json, sim_files, write_json, xcore_config,
+                        xcore_datagrams, xcore_driver)
 
 
 class Case:
@@ -36,8 +34,7 @@ class Case:
         return read_json(self.state)["t"]
 
     def _received(self, since, sid):
-        return [(e["t"], bytes.fromhex(e["hex"])) for e in log_entries(self.log, since)
-                if e.get("sid") == sid and e["type"] == DATA and e["arg2"] == 0]
+        return [(e["t"], bytes.fromhex(e["hex"])) for e in xcore_datagrams(self.log, since, sid, DATA, 0)]
 
     def _wheel(self, duty):
         """The speed (m/s) a wheel turns at with that duty."""

@@ -36,8 +36,9 @@ from rcl_interfaces.msg import Log
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (HISTORY, LATCHED, ROSOUT, SimProbe, fake_xcore, journal_dir, log_entries,  # noqa: E402
-                        loopback_group, read_json, running, sim_files, wait_until, write_json)
+from sim_common import XCORE_CLAIM as CLAIM, XCORE_DATA as DATA_MSG, XCORE_EMERGENCY as EMERGENCY  # noqa: E402
+from sim_common import (HISTORY, LATCHED, ROSOUT, SimProbe, fake_xcore, journal_dir, loopback_group,  # noqa: E402
+                        read_json, running, sim_files, wait_until, write_json, xcore_datagrams)
 
 # stack.py of mowbite_bringup; sim_common put its folder on the path.
 import stack as bringup  # noqa: E402
@@ -48,8 +49,6 @@ STATE, FLAGS, LOG, DATA = sim_files(WORK)
 JOURNAL = journal_dir(WORK)
 GROUP_PORT, BIND_IP = loopback_group()
 DATUM = (52.0, 9.0, 80.0)
-EMERGENCY = 1
-CLAIM, DATA_MSG = 3, 1
 # The bits of the board as the driver sends them.
 BOARD_LATCH, BOARD_HIGH_LEVEL = 1, 128
 DRIVER_RESTARTS = bringup.platform_module("nx60i").DRIVER_RESTARTS
@@ -93,9 +92,7 @@ def set_flags(**flags):
 board = functools.partial(read_json, STATE)
 
 
-def received(since, sid, msg_type):
-    """Datagrams fake_xcore got from a driver since board time `since`."""
-    return [e for e in log_entries(LOG, since) if e.get("sid") == sid and e.get("type") == msg_type]
+received = functools.partial(xcore_datagrams, LOG)
 
 
 class Probe(SimProbe):

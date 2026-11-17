@@ -17,6 +17,7 @@ import launch_testing.actions
 from launch.actions import TimerAction
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import TRON_SPEED as SPEED  # noqa: E402
 from sim_common import EXIT_CODES, mosquitto, mqtt_connect, sim_files, sim_stack, wait_until  # noqa: E402
 
 MQTT_PORT = 18843
@@ -24,7 +25,6 @@ WORK = tempfile.mkdtemp(prefix="mowbite_os_hold_")
 _, _, LOG, DATA = sim_files(WORK)
 HOLD = os.path.join(DATA, "hold.json")
 UNTIL = int(time.time()) + 600
-SPEED = 4
 
 
 def generate_test_description():

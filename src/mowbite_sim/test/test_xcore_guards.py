@@ -25,16 +25,16 @@ from mowbite_msgs.msg import HardwareStatus
 from mowbite_msgs.srv import SetBlade, SetEmergency
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (DriverProbe, SimProbe, TestShutdown, fake_xcore, log_entries, loopback_group,  # noqa: E402,F401
-                        read_json, sim_files, write_json, xcore_driver)
+from sim_common import XCORE_CLAIM as CLAIM, XCORE_DATA as DATA, XCORE_DIFF_DRIVE as DIFF_DRIVE  # noqa: E402
+from sim_common import XCORE_EMERGENCY as EMERGENCY, XCORE_MOWER as MOWER  # noqa: E402
+from sim_common import (DriverProbe, SimProbe, TestShutdown, fake_xcore, loopback_group, read_json,  # noqa: E402,F401
+                        sim_files, write_json, xcore_datagrams, xcore_driver)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_xcore_guards_")
 STATE, FLAGS, LOG, _ = sim_files(WORK)
 GROUP_PORT, BIND_IP = loopback_group()
 # Another program holds a socket at the driver's address for this long after the launch.
 SQUATTER_S = 4.0
-EMERGENCY, DIFF_DRIVE, MOWER = 1, 2, 3
-CLAIM, DATA = 3, 1
 LATCH = HardwareStatus.REASON_LATCH
 HIGH_LEVEL = HardwareStatus.REASON_HIGH_LEVEL
 TILT = HardwareStatus.REASON_TILT
@@ -65,10 +65,7 @@ def set_flags(**flags):
 board = functools.partial(read_json, STATE)
 
 
-def received(since=0.0, sid=None, msg_type=None):
-    """Datagrams fake_xcore got from the driver since board time `since`, with the events of the board."""
-    return [e for e in log_entries(LOG, since)
-            if (sid is None or e.get("sid") == sid) and (msg_type is None or e.get("type") == msg_type)]
+received = functools.partial(xcore_datagrams, LOG)
 
 
 def setpoints(entries):

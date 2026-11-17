@@ -1,9 +1,7 @@
 """The Tron in the driver contract (test_driver_contract.py): tron_mcu against fake_tron on a pty."""
 from launch_ros.actions import Node
+from sim_common import TRON_CUTTER as CUTTER, TRON_SPEED as SPEED
 from sim_common import fake_tron, last_time, layers, sim_files, sim_links, sub_packets, write_json
-
-SPEED = 4
-CUTTER = 11
 
 
 class Case:

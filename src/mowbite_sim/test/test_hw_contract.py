@@ -21,7 +21,7 @@ from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus
 from mowbite_msgs.srv import SetBlade
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from contract_tron import CUTTER, SPEED  # noqa: E402
+from sim_common import TRON_CUTTER as CUTTER, TRON_SPEED as SPEED  # noqa: E402
 from sim_common import (LATCHED, DriverProbe, TestShutdown, fake_tron, last_time, sim_files,  # noqa: E402,F401
                         sim_links, sub_packets, write_json)
 

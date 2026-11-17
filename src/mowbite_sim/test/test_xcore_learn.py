@@ -19,13 +19,13 @@ from mowbite_msgs.msg import HardwareInputs, HardwareStatus
 from mowbite_msgs.srv import SetEmergency
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (LATCHED, DriverProbe, TestShutdown, fake_xcore, layers, log_entries,  # noqa: E402,F401
-                        loopback_group, sim_files, write_json, xcore_config, xcore_driver)
+from sim_common import XCORE_DATA as DATA, XCORE_DIFF_DRIVE as DIFF_DRIVE  # noqa: E402
+from sim_common import (LATCHED, DriverProbe, TestShutdown, fake_xcore, layers, loopback_group,  # noqa: E402,F401
+                        sim_files, write_json, xcore_config, xcore_datagrams, xcore_driver)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_xcore_learn_")
 STATE, FLAGS, LOG, _ = sim_files(WORK)
 GROUP_PORT, BIND_IP = loopback_group()
-DIFF_DRIVE, DATA = 2, 1
 LEARNING = HardwareStatus.REASON_LATCH | HardwareStatus.REASON_INPUTS_LEARNING
 CANDIDATES = layers.parameters([xcore_config()], "xcore_driver")["inputs.candidates"]
 
@@ -108,6 +108,5 @@ class TestXcoreLearn(unittest.TestCase):
         self.assertTrue(p.wait_for(lambda p: p.status.emergency_reason == LEARNING, 3), p.status.emergency_reason)
         began = p.cmd_vel_for(0.2, 1.0)
         self.assertEqual(p.status.emergency_reason, LEARNING)
-        moved = [e for e in log_entries(LOG, began or 0.0) if e.get("sid") == DIFF_DRIVE and e["type"] == DATA
-                 and e["arg2"] == 0 and any(bytes.fromhex(e["hex"]))]
+        moved = [e for e in xcore_datagrams(LOG, began or 0.0, DIFF_DRIVE, DATA, 0) if any(bytes.fromhex(e["hex"]))]
         self.assertEqual(moved, [])

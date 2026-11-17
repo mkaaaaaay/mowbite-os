@@ -24,14 +24,13 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import TRON_CUTTER as CUTTER, TRON_SPEED as SPEED  # noqa: E402
 from sim_common import (DriverProbe, TestShutdown, fake_tron, package_program, sim_files, sim_links,  # noqa: E402,F401
                         stop_process, sub_packets, wheel_speeds, write_json)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_start_")
 LINKS = sim_links(WORK)
 _, FLAGS, LOG, _ = sim_files(WORK)
-CUTTER = 11
-SPEED = 4
 # imu_start_timeout of the driver here, s: long enough to ask within it on a busy machine.
 START = 6.0
 

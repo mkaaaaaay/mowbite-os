@@ -43,6 +43,11 @@ HISTORY = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durabilit
 ROSOUT = QoSProfile(depth=1000, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 # A node stopped by launch ends with 0 or by its signal (SIGINT, SIGTERM; negative or 128 + n).
 EXIT_CODES = [0, -2, -15, 130, 143]
+# Modules of the Tron MCU as fake_tron numbers them.
+TRON_SPEED, TRON_CUTTER = 4, 11
+# Services and message types of the xCore as fake_xcore numbers them.
+XCORE_EMERGENCY, XCORE_DIFF_DRIVE, XCORE_MOWER = 1, 2, 3
+XCORE_DATA, XCORE_CLAIM = 1, 3
 
 
 def follower_max_linear():
@@ -294,6 +299,12 @@ def host_packets(path, since=0.0):
 def sub_packets(path, since=0.0, module=None):
     """The sub packets fake_tron got from the driver since its time since, of one module if given."""
     return [e for e in iter_entries(path, since) if e.get("type") == 0 and (module is None or e["mod"] == module)]
+
+
+def xcore_datagrams(log, since=0.0, sid=None, msg_type=None, arg2=None):
+    """The datagrams fake_xcore logged since its time since, of that service, message type and arg2 if given."""
+    return [e for e in iter_entries(log, since) if "sid" in e and (sid is None or e["sid"] == sid)
+            and (msg_type is None or e.get("type") == msg_type) and (arg2 is None or e.get("arg2") == arg2)]
 
 
 def moving(entry):

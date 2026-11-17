@@ -23,6 +23,7 @@ from mowbite_msgs.msg import HardwareStatus
 from mowbite_msgs.srv import SetBlade
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import TRON_CUTTER as CUTTER, TRON_SPEED as SPEED  # noqa: E402
 from sim_common import (DriverProbe, TestShutdown, fake_tron, package_program, sim_files, sim_links,  # noqa: E402,F401
                         stop_process, sub_packets, wait_until, wheel_speeds, write_json)
 
@@ -30,8 +31,6 @@ WORK = tempfile.mkdtemp(prefix="mowbite_hold_")
 LINKS = sim_links(WORK)
 _, FLAGS, LOG, _ = sim_files(WORK)
 HOLD = os.path.join(WORK, "hold.json")
-CUTTER = 11
-SPEED = 4
 
 
 def generate_test_description():

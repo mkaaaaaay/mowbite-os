@@ -26,15 +26,15 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from contract_nx60i import DATA, DIFF_DRIVE, MOWER  # noqa: E402
-from sim_common import (LATCHED, DriverProbe, TestShutdown, fake_xcore, log_entries,  # noqa: E402,F401
-                        loopback_group, read_json, sim_files, write_json, xcore_driver)
+from sim_common import XCORE_DATA as DATA, XCORE_DIFF_DRIVE as DIFF_DRIVE  # noqa: E402
+from sim_common import XCORE_EMERGENCY as EMERGENCY, XCORE_MOWER as MOWER  # noqa: E402
+from sim_common import (LATCHED, DriverProbe, TestShutdown, fake_xcore, loopback_group, read_json,  # noqa: E402,F401
+                        sim_files, write_json, xcore_datagrams, xcore_driver)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_xcore_")
 STATE, FLAGS, LOG, _ = sim_files(WORK)
 HOLD = os.path.join(WORK, "hold.json")
 GROUP_PORT, BIND_IP = loopback_group()
-EMERGENCY = 1
 LATCH, LIFT = HardwareStatus.REASON_LATCH, HardwareStatus.REASON_LIFT
 
 
@@ -54,10 +54,7 @@ def set_flags(**flags):
 board = functools.partial(read_json, STATE)
 
 
-def received(since, sid=None, msg_type=None, arg2=None):
-    """Datagrams fake_xcore got from the driver since board time `since`."""
-    return [e for e in log_entries(LOG, since) if "sid" in e and (sid is None or e["sid"] == sid)
-            and (msg_type is None or e["type"] == msg_type) and (arg2 is None or e["arg2"] == arg2)]
+received = functools.partial(xcore_datagrams, LOG)
 
 
 def board_time():
