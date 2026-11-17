@@ -285,6 +285,7 @@ def test_the_file_of_the_setup_program_comes_before_the_one_kept_by_hand(start, 
     found, device = tmp_path / "nx60i.setup.yaml", tmp_path / "nx60i.yaml"
     program = next(k for k in start("nx60i").components if k["name"] == "mowbite_setup")["parameters"][-1]
     assert program["layer"].value == str(found) and program["shadowed"].value == ""
+    assert program["driver_restarts"].value == "3"
     found.write_text("xcore_driver:\n  ros__parameters:\n    inputs.learn: false\n    max_correction_age: 20.0\n")
     device.write_text("xcore_driver:\n  ros__parameters:\n    max_correction_age: 25.0\n")
     built = start("nx60i")

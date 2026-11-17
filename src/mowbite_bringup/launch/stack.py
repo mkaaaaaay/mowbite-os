@@ -242,8 +242,10 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=N
         package="mowbite_stats", plugin="mowbite_stats::StatsNode", name="mowbite_stats",
         parameters=[*files, {"data_dir": data_dir}, journal_dir])
     # The setup program of the platform (setup.*): its steps come from layers.setup, layer is the parameter file it
-    # writes for this mower, shadowed what the file kept by hand overrules of it.
-    setup = {"platform": "", "steps": "", "image_dir": "", "layer": "", "shadowed": "", **(setup or {})}
+    # writes for this mower, shadowed what the file kept by hand overrules of it, driver_restarts how often the start
+    # starts an ended driver again.
+    setup = {"platform": "", "steps": "", "image_dir": "", "layer": "", "shadowed": "", "driver_restarts": "0",
+             **(setup or {})}
     program = ComposableNode(
         package="mowbite_setup", plugin="mowbite_setup::SetupNode", name="mowbite_setup",
         parameters=[*files, {"data_dir": data_dir},
@@ -514,6 +516,7 @@ def launch_setup(context, platform, module):
                             logger)
     setup["layer"] = setup_file
     setup["shadowed"] = ",".join(shadowed_values(found, device, logger))
+    setup["driver_restarts"] = str(module.DRIVER_RESTARTS)
     nodes = components(files, arg("geometry"), data_dir, arg("mqtt_host"), arg("mqtt_port"), journal, setup)
     halt = check_parameters(files, checked_nodes(nodes, module), logger) or check_setup(setup, logger)
     if halt:
