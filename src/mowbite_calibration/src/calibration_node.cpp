@@ -230,6 +230,10 @@ class CalibrationNode : public rclcpp::Node {
         "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRequest(*msg); });
     response_sub_ = create_subscription<mowbite_msgs::msg::RpcResponse>(
         "bridge/rpc/response", 100, [this](mowbite_msgs::msg::RpcResponse::ConstSharedPtr msg) {
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!Awaited(msg->id)) return;
+          }
           OnAnswer(msg->id, json::parse(msg->result, nullptr, false), std::nullopt);
         });
     error_sub_ = create_subscription<mowbite_msgs::msg::RpcError>(
@@ -583,9 +587,14 @@ class CalibrationNode : public rclcpp::Node {
     return false;
   }
 
+  // An answer to the evaluation asked for. Called with the mutex held.
+  bool Awaited(const std::string& id) const {
+    return evaluating_ && id == call_id_;
+  }
+
   void OnAnswer(const std::string& id, const json& result, const std::optional<std::pair<int, std::string>>& error) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!evaluating_ || id != call_id_) return;
+    if (!Awaited(id)) return;
     if (error) {
       RCLCPP_WARN(get_logger(), "Calibration: %s failed: %s (%d)", kEvaluate, error->second.c_str(), error->first);
       // Without the method there is no evaluation; any other error is the planner's verdict on the data.
