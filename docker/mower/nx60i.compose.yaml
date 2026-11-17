@@ -37,11 +37,19 @@ services:
       # The journal of the cores, outside of data_dir; limits in platform.yaml of the platform (writing stops below
       # 200 MB free there). An .env from before the journal works with the default.
       - ${MOWBITE_JOURNAL_DIR:-/var/lib/mowbite-journal}:/var/lib/mowbite-journal
+      # OpenMower's folders of the map and of mower_params.yaml, read only: taken over on the first start with an
+      # empty data_dir. The way back writes map.json and report.json to ./export (mowbite-migrate export /export).
+      - ${MOWBITE_IMPORT_ROS:-/home/openmower/ros}:/import/openmower/ros:ro
+      - ${MOWBITE_IMPORT_PARAMS:-/home/openmower/params}:/import/openmower/params:ro
+      - ./export:/export
     environment:
       - TZ=${TZ:-Europe/Berlin}
       - MOWBITE_OS_IMAGE=ghcr.io/mkaaaaaay/mowbite-os:${MOWBITE_OS_TAG}
       # The platform of this mower, a value of the device: an update leaves it as it is.
       - MOWBITE_PLATFORM=nx60i
+      - MOWBITE_IMPORT_DIR=/import/openmower
+      # For mowbite-migrate export.
+      - MOWBITE_DATA_DIR=${MOWBITE_DATA_DIR}
       - ROS_LOG_DIR=/tmp/ros_log
     tmpfs:
       - /tmp/ros_log:size=20m

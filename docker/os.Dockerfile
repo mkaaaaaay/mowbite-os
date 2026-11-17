@@ -230,6 +230,10 @@ COPY tools/yf/measure.py tools/yf/xcore_capture.py /ws/tools/
 # For docker exec, which skips the entrypoint: docker exec -it <container> measure --steps ...
 RUN printf '#!/bin/bash\nsource /ws/install/setup.bash\nexec python3 /ws/tools/measure.py "$@"\n' > /usr/local/bin/measure \
  && chmod 755 /usr/local/bin/measure
+# The way back to OpenMower (mowbite_bringup migrate.py): docker exec <container> mowbite-migrate export <folder>
+RUN printf '#!/bin/bash\nsource /ws/install/setup.bash\nexec python3 /ws/install/mowbite_bringup/share/mowbite_bringup/launch/migrate.py "$@"\n' \
+      > /usr/local/bin/mowbite-migrate \
+ && chmod 755 /usr/local/bin/mowbite-migrate
 # DDS on the loopback only, without shared memory (fastdds_loopback.xml of mowbite_bringup); the launch halts without it.
 COPY src/mowbite_bringup/config/fastdds_loopback.xml /etc/mowbite/fastdds_loopback.xml
 ENV ROS_AUTOMATIC_DISCOVERY_RANGE=SYSTEM_DEFAULT FASTRTPS_DEFAULT_PROFILES_FILE=/etc/mowbite/fastdds_loopback.xml
