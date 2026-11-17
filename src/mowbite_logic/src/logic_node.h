@@ -16,6 +16,7 @@
 #include <mowbite_msgs/action/calibrate.hpp>
 #include <mowbite_msgs/action/follow_path.hpp>
 #include <mowbite_msgs/msg/action_list.hpp>
+#include <mowbite_msgs/msg/setup_motion.hpp>
 #include <mowbite_msgs/msg/button_event.hpp>
 #include <mowbite_msgs/msg/calibration_status.hpp>
 #include <mowbite_msgs/msg/clock_status.hpp>
@@ -417,6 +418,10 @@ class LogicNode : public rclcpp::Node {
   rclcpp_action::Client<Calibrate>::SharedPtr calibration_client_;
   rclcpp::Subscription<mowbite_msgs::msg::CalibrationStatus>::SharedPtr calibration_status_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr calibration_cmd_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::SetupMotion>::SharedPtr setup_motion_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr setup_cmd_sub_;
+  // The reason the last setup/motion was refused with, so that it is logged once.
+  std::string setup_refusal_;
   // The goal of calibration/run, whether calibration.* is in rpc.methods, and the numbers of the goals.
   Calibration calibration_;
   bool calibration_offered_ = false;

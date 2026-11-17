@@ -9,5 +9,7 @@ uint8 SOURCE_FOLLOWER=2
 uint8 SOURCE_CALIBRATION=3
 # The follower in the station frame (follower/dock_cmd_vel): docking by the dock marker, near the station only.
 uint8 SOURCE_DOCK=4
+# A step of the setup program that moves the wheels (setup/cmd_vel, setup/motion).
+uint8 SOURCE_SETUP=5
 uint8 source
 geometry_msgs/Twist twist

@@ -1156,3 +1156,95 @@ TEST_F(FilterTest, AnotherSourceStartsFromAStop) {
   ASSERT_TRUE(d.out) << d.refusal;
   EXPECT_NEAR(d.out->linear, 0.05, 1e-9);
 }
+
+TEST_F(FilterTest, SetupMovesOnlyWithARecentMotionAndWithinItsLimits) {
+  // Without setup/motion nothing of the setup passes.
+  Decision d = Cmd(Source::kSetup, 0.05);
+  EXPECT_FALSE(Moves(d));
+  EXPECT_EQ(d.refusal, "no step of the setup program runs");
+  filter_.OnSetupMotion(true, true, 0.08, 0.3, now_);
+  d = Cmd(Source::kSetup, 0.2, 0.0);
+  ASSERT_TRUE(Moves(d)) << d.refusal;
+  EXPECT_DOUBLE_EQ(d.out->linear, 0.08);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kSetup, -0.2, -1.0).out->angular, -0.3);
+  // The hard limits of the code hold whatever the step says.
+  filter_.OnSetupMotion(true, true, 5.0, 5.0, now_);
+  d = Cmd(Source::kSetup, 0.3, 0.3);
+  EXPECT_DOUBLE_EQ(d.out->linear, kSetupMaxLinear);
+  d = Cmd(Source::kSetup, 0.0, -0.3);
+  EXPECT_DOUBLE_EQ(d.out->angular, -0.3);
+  filter_.OnCapabilities(true, 0.3, 1.0);
+  EXPECT_DOUBLE_EQ(Cmd(Source::kSetup, 0.0, 1.0).out->angular, kSetupMaxAngular);
+  // No pose and no fence: the mower is jacked up.
+  pose_ = false;
+  Run(now_ + 0.3);
+  filter_.OnSetupMotion(true, true, 0.1, 0.4, now_);
+  EXPECT_TRUE(Moves(Cmd(Source::kSetup, 0.05))) << filter_.LastRefusal();
+}
+
+TEST_F(FilterTest, SetupStopsWhenItsMotionEndsOrGoesSilent) {
+  filter_.OnSetupMotion(true, true, 0.1, 0.4, now_);
+  const double began = now_;
+  ASSERT_TRUE(Moves(Cmd(Source::kSetup, 0.05)));
+  // Commands go on, setup/motion does not: the tick after its timeout stops the motion, commands are refused.
+  const int stopped = stops_;
+  while (now_ < began + 1.0) {
+    Run(now_ + 0.02);
+    if (stops_ != stopped) break;
+    ASSERT_TRUE(Moves(Cmd(Source::kSetup, 0.05))) << filter_.LastRefusal();
+  }
+  EXPECT_EQ(stops_, stopped + 1);
+  EXPECT_GT(now_ - began, kSetupMotionTimeout);
+  EXPECT_LT(now_ - began, kSetupMotionTimeout + 0.05);
+  const Decision d = Cmd(Source::kSetup, 0.05);
+  EXPECT_FALSE(Moves(d));
+  EXPECT_NE(d.refusal.find("no setup/motion for"), std::string::npos) << d.refusal;
+  // Back again it moves; ended, the next tick stops it.
+  filter_.OnSetupMotion(true, true, 0.1, 0.4, now_);
+  ASSERT_TRUE(Moves(Cmd(Source::kSetup, 0.05))) << filter_.LastRefusal();
+  const int stops = stops_;
+  filter_.OnSetupMotion(false, false, 0, 0, now_);
+  Run(now_ + 0.02);
+  EXPECT_EQ(stops_, stops + 1);
+  EXPECT_EQ(Cmd(Source::kSetup, 0.05).refusal, "no step of the setup program runs");
+}
+
+TEST_F(FilterTest, SetupOnTheGroundAndWithoutLimitsIsRefused) {
+  filter_.OnSetupMotion(true, false, 0.1, 0.4, now_);
+  EXPECT_EQ(Cmd(Source::kSetup, 0.05).refusal, "the setup moves the wheels only with the mower jacked up");
+  filter_.OnSetupMotion(true, true, std::nan(""), 0.4, now_);
+  EXPECT_EQ(Cmd(Source::kSetup, 0.05).refusal, "setup/motion without limits");
+  filter_.OnSetupMotion(true, true, 0.1, std::nan(""), now_);
+  EXPECT_EQ(Cmd(Source::kSetup, 0.05).refusal, "setup/motion without limits");
+  filter_.OnSetupMotion(true, true, 0.0, 0.4, now_);
+  EXPECT_EQ(Cmd(Source::kSetup, 0.05).refusal, "setup/motion without limits");
+}
+
+TEST_F(FilterTest, SetupStopsInAnEmergencyAndArmsAgainAfterIt) {
+  filter_.OnSetupMotion(true, true, 0.1, 0.4, now_);
+  ASSERT_TRUE(Moves(Cmd(Source::kSetup, 0.05)));
+  hw_emergency_ = true;
+  hw_reason_ = 1u << 2;
+  const int stops = stops_;
+  Run(now_ + 0.04);
+  EXPECT_EQ(stops_, stops + 1);
+  filter_.OnSetupMotion(true, true, 0.1, 0.4, now_);
+  EXPECT_EQ(Cmd(Source::kSetup, 0.05).refusal, "emergency");
+  hw_emergency_ = false;
+  hw_reason_ = 0;
+  Run(now_ + 0.1);
+  filter_.OnSetupMotion(true, true, 0.1, 0.4, now_);
+  // After the emergency it waits for a zero first.
+  EXPECT_FALSE(Moves(Cmd(Source::kSetup, 0.05)));
+  EXPECT_TRUE(Stops(Cmd(Source::kSetup, 0.0)));
+  EXPECT_TRUE(Moves(Cmd(Source::kSetup, 0.05))) << filter_.LastRefusal();
+}
+
+TEST_F(FilterTest, SetupIsOneSourceAmongTheOthers) {
+  ASSERT_TRUE(Moves(Cmd(Source::kTeleop, 0.2)));
+  filter_.OnSetupMotion(true, true, 0.1, 0.4, now_);
+  const Decision d = Cmd(Source::kSetup, 0.05);
+  EXPECT_TRUE(d.conflict);
+  EXPECT_EQ(d.refusal, "the remote control drives");
+  EXPECT_STREQ(SourceName(Source::kSetup), "setup");
+}

@@ -11,6 +11,7 @@
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/map_status.hpp>
 #include <mowbite_msgs/msg/safety_status.hpp>
+#include <mowbite_msgs/msg/setup_motion.hpp>
 #include <mowbite_journal/node_options.h>
 #include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mutex>
@@ -49,6 +50,7 @@ static_assert(static_cast<uint8_t>(Source::kTeleop) == DriveCommand::SOURCE_TELE
 static_assert(static_cast<uint8_t>(Source::kFollower) == DriveCommand::SOURCE_FOLLOWER);
 static_assert(static_cast<uint8_t>(Source::kCalibration) == DriveCommand::SOURCE_CALIBRATION);
 static_assert(static_cast<uint8_t>(Source::kDock) == DriveCommand::SOURCE_DOCK);
+static_assert(static_cast<uint8_t>(Source::kSetup) == DriveCommand::SOURCE_SETUP);
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -97,6 +99,12 @@ class SafetyNode : public rclcpp::Node {
           std::lock_guard<std::mutex> lock(mutex_);
           filter_.Call<&SafetyFilter::OnCapabilities>(!msg->safety_measurement_date.empty(), msg->max_linear_speed,
                                                       msg->max_angular_speed);
+        });
+    setup_sub_ = create_subscription<mowbite_msgs::msg::SetupMotion>(
+        "setup/motion", 10, [this](const mowbite_msgs::msg::SetupMotion::ConstSharedPtr& msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          filter_.Call<&SafetyFilter::OnSetupMotion>(msg->active, msg->raised, msg->max_linear, msg->max_angular,
+                                                     MonotonicSeconds());
         });
     imu_in_ = create_subscription<sensor_msgs::msg::Imu>(
         "imu/data", rclcpp::SensorDataQoS(), [this](const sensor_msgs::msg::Imu::ConstSharedPtr& msg) { OnImu(*msg); });
@@ -180,13 +188,13 @@ class SafetyNode : public rclcpp::Node {
   }
 
   void OnDrive(const DriveCommand& msg) {
-    if (msg.source > DriveCommand::SOURCE_DOCK) {
+    if (msg.source > DriveCommand::SOURCE_SETUP) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "Drive command of unknown source %u: stopped",
                             msg.source);
     }
     // An unknown source stops like the logic.
     const Source source =
-        msg.source > DriveCommand::SOURCE_DOCK ? Source::kStop : static_cast<Source>(msg.source);
+        msg.source > DriveCommand::SOURCE_SETUP ? Source::kStop : static_cast<Source>(msg.source);
     Decision decision;
     std::optional<LatchRequest> latch;
     {
@@ -395,6 +403,7 @@ class SafetyNode : public rclcpp::Node {
   rclcpp::Subscription<DriveCommand>::SharedPtr drive_sub_;
   rclcpp::Subscription<HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::SetupMotion>::SharedPtr setup_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_in_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr pose_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr dock_pose_sub_;

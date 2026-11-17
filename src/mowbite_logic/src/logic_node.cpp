@@ -163,6 +163,29 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
         }
         if (active) SendDrive(mowbite_msgs::msg::DriveCommand::SOURCE_CALIBRATION, *msg);
       });
+  // A step of the setup program that moves the wheels: SETUP while its setup/motion lasts, its commands meanwhile.
+  setup_motion_sub_ = create_subscription<mowbite_msgs::msg::SetupMotion>(
+      "setup/motion", 10, [this](const mowbite_msgs::msg::SetupMotion::ConstSharedPtr& msg) {
+        Reason why;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          why = core_.Call<&LogicCore::OnSetupMotion>(msg->active, msg->step, MonotonicSeconds());
+        }
+        if (why.code != setup_refusal_ && !why.empty()) {
+          RCLCPP_WARN(get_logger(), "Setup step %s refused: %s", msg->step.c_str(), why.message.c_str());
+        }
+        setup_refusal_ = why.code;
+        Step();
+      });
+  setup_cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(
+      "setup/cmd_vel", 10, [this](const geometry_msgs::msg::Twist::ConstSharedPtr& msg) {
+        bool active;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          active = core_.View().SetupActive();
+        }
+        if (active) SendDrive(mowbite_msgs::msg::DriveCommand::SOURCE_SETUP, *msg);
+      });
   PublishRpcMethods();
 
   hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(

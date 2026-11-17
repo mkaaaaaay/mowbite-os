@@ -630,7 +630,8 @@ void LogicCore::CancelDrive(const Reason& reason) {
 void LogicCore::SetState(State state) {
   if (state == state_) return;
   if (state_ == State::kAreaRecording || state_ == State::kDriving || state_ == State::kMowing ||
-      state_ == State::kUndocking || state_ == State::kDocking || state_ == State::kCalibrating) {
+      state_ == State::kUndocking || state_ == State::kDocking || state_ == State::kCalibrating ||
+      state_ == State::kSetup) {
     SetDue<StopRequest>(true);
   }
   // A session is one run of mowing; the job lasts until it is finished or reset.
@@ -662,6 +663,7 @@ void LogicCore::SetState(State state) {
   json details = {{"state", CurrentStateName()}};
   if (state == State::kDriving) details["sub_state"] = "DRIVING";
   if (state == State::kCalibrating) details["sub_state"] = "CALIBRATING";
+  if (state == State::kSetup) details["sub_state"] = "SETUP";
   AddEvent("STATE", std::move(details));
   SetDue<ActionsChanged>(true);
   // The run of the schedule ends once the mower is idle again after it left the station.
@@ -682,6 +684,7 @@ const char* LogicCore::StateName(State state) {
     // OpenMower has no state for driving or calibrating without mowing; the sub state tells.
     case State::kDriving:
     case State::kCalibrating:
+    case State::kSetup:
     case State::kIdle:
     default: return "IDLE";
   }
@@ -700,6 +703,7 @@ RobotStateData LogicCore::RobotState() const {
   if (state_ == State::kAreaRecording) s.sub_state = recorder_.SubState();
   if (state_ == State::kDriving) s.sub_state = "DRIVING";
   if (state_ == State::kCalibrating) s.sub_state = "CALIBRATING";
+  if (state_ == State::kSetup) s.sub_state = "SETUP";
   s.emergency = emergency_;
   s.emergency_reason = reason_;
   s.is_charging = hw_.battery_ok && hw_.dock_contact;
@@ -839,6 +843,7 @@ Reason LogicCore::Busy() const {
   }
   const std::string state = state_ == State::kDriving       ? "driving"
                             : state_ == State::kCalibrating ? "calibrating"
+                            : state_ == State::kSetup       ? "setup"
                                                             : CurrentStateName();
   return Reason("BUSY", "The mower is busy: " + state).With("state", state);
 }

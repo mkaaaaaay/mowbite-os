@@ -71,7 +71,7 @@ struct mowbite_journal::CoreTraits<mowbite_safety::SafetyFilter> {
   using Config = mowbite_safety::SafetyConfig;
   MOWBITE_JOURNAL_METHODS(&F::OnHardware, &F::OnCapabilities, &F::OnTilt, &F::OnPose, &F::SetMap, &F::SetMapFits,
                           &F::SetMaxPositionAccuracy, &F::OnCommand, &F::Tick, &F::TakeLatchRequest, &F::OnRelease,
-                          &F::OnRestartHold, &F::OnDockPose, &F::OnReleaseAnswer);
+                          &F::OnRestartHold, &F::OnDockPose, &F::OnReleaseAnswer, &F::OnSetupMotion);
   // The latched reason bits of S2.
   static uint32_t View(const F& core) {
     return core.Latched();

@@ -9,15 +9,17 @@ namespace mowbite_logic {
 // wants the blade and switched off at once when not.
 void LogicNode::UpdateBlade() {
   bool stalled;
-  bool calibration_ended;
+  bool ended;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     stalled = CheckFollowerLocked();
     // The calibration program's sign of life and the battery while it drives.
-    calibration_ended = core_.Call<&LogicCore::TickCalibration>(MonotonicSeconds());
+    ended = core_.Call<&LogicCore::TickCalibration>(MonotonicSeconds());
+    // The setup program's sign of life, the station and a hold while a step moves the wheels.
+    ended = core_.Call<&LogicCore::TickSetup>(MonotonicSeconds()) || ended;
     UpdateBladeLocked();
   }
-  if (!stalled && !calibration_ended) return;
+  if (!stalled && !ended) return;
   // One zero command: the follower sends none any more, the driver's watchdog would stop the wheels only later.
   if (stalled) SendStop();
   Step();

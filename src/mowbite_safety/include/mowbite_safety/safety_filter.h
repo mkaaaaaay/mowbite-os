@@ -15,8 +15,15 @@ namespace mowbite_safety {
 
 // Sources of drive commands, numbered like DriveCommand; kStop is the logic stopping the mower. The calibration drive
 // moves autonomously like the follower, and forward only. kDock is the follower in the station frame, by the pose from
-// the dock marker.
-enum class Source : uint8_t { kStop = 0, kTeleop = 1, kFollower = 2, kCalibration = 3, kDock = 4 };
+// the dock marker. kSetup is a step of the setup program with the mower jacked up, within the limits of its
+// setup/motion.
+enum class Source : uint8_t { kStop = 0, kTeleop = 1, kFollower = 2, kCalibration = 3, kDock = 4, kSetup = 5 };
+
+// The hard limits of a step of the setup program with the mower jacked up, whatever setup/motion says: m/s of the body
+// and rad/s. A setup/motion older than kSetupMotionTimeout s lets nothing of kSetup pass.
+constexpr double kSetupMaxLinear = 0.1;
+constexpr double kSetupMaxAngular = 0.4;
+constexpr double kSetupMotionTimeout = 0.6;
 
 // The reason bits of hw/status the filter latches over hw/emergency.
 constexpr uint32_t kReasonTilt = 1u << 13;
@@ -113,6 +120,8 @@ class SafetyFilter {
   void SetMap(const std::string& map_json);
   void SetMapFits(bool fits);
   void SetMaxPositionAccuracy(double accuracy);
+  // setup/motion: a step of the setup program moves (active) within these limits; raised: the mower is jacked up.
+  void OnSetupMotion(bool active, bool raised, double max_linear, double max_angular, double now);
 
   Decision OnCommand(Source source, double linear, double angular, double now);
   // A stop when an emergency began or the IMU went silent while the mower moves.
@@ -145,6 +154,12 @@ class SafetyFilter {
   struct SourceState {
     bool armed = false;
     std::optional<double> last_s;
+  };
+  struct SetupMotion {
+    bool raised = false;
+    double max_linear = 0;
+    double max_angular = 0;
+    double s = 0;
   };
   struct Pose {
     double x;
@@ -186,6 +201,10 @@ class SafetyFilter {
   std::optional<double> tilt_since_;
   std::optional<Pose> pose_;
   std::optional<Pose> dock_pose_;
+  // The last active setup/motion, none after one that ended.
+  std::optional<SetupMotion> setup_;
+  // Why kSetup may not move now, empty if it may.
+  std::string SetupProblem(double now) const;
   // The zone of the station in the station frame.
   Ring dock_zone_;
   std::optional<Region> region_;
@@ -193,7 +212,7 @@ class SafetyFilter {
   std::vector<Ring> allowed_;
   std::string region_error_ = "no map yet";
   bool map_fits_ = false;
-  std::array<SourceState, 5> sources_;
+  std::array<SourceState, 6> sources_;
   Source owner_ = Source::kStop;
   double owner_s_ = 0;
   // The source whose moving command went out last, empty after a stop.

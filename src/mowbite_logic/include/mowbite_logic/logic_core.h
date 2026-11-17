@@ -504,6 +504,17 @@ class LogicCore {
   bool Calibrating() const;
   bool CalibrationActive() const;
 
+  // A step of the setup program that moves the wheels (setup/motion of mowbite_setup): IDLE with the sub state SETUP.
+  // It begins only from IDLE without a sub state, off the charging contacts, without emergency and without a hold; the
+  // program drives on setup/cmd_vel, which reaches safety/drive only in SETUP and without emergency (SOURCE_SETUP). An
+  // emergency does not end it (the step stops the wheels on purpose); it ends with one zero when setup/motion ends or
+  // stays away kSetupSignTimeout s, on the charging contacts and with a hold. Empty when SETUP holds now, else why not.
+  Reason OnSetupMotion(bool active, const std::string& step, double now_s);
+  // The watchdog of setup/motion; true when SETUP ended now.
+  bool TickSetup(double now_s);
+  bool InSetup() const;
+  bool SetupActive() const;
+
   // The mow areas of the map and why mowing may not plan from it (empty if it may).
   void OnMowMap(std::vector<JobArea> areas, const Reason& problem);
   // The docking station of the map, none without one.
@@ -734,7 +745,7 @@ class LogicCore {
   }
 
  private:
-  enum class State { kIdle, kAreaRecording, kDriving, kMowing, kUndocking, kDocking, kCalibrating };
+  enum class State { kIdle, kAreaRecording, kDriving, kMowing, kUndocking, kDocking, kCalibrating, kSetup };
   // Why mowing pauses; manual, emergency and fault wait for continue, GPS goes on by itself.
   static constexpr int kPauseManual = 1 << 0;
   static constexpr int kPauseEmergency = 1 << 1;
@@ -953,6 +964,8 @@ class LogicCore {
   void CheckpointNow();
   // Ends a calibration drive here: CALIBRATION_FAILED unless done, CALIBRATION end, IDLE; cancel: the program too.
   void EndCalibration(const std::optional<Reason>& failure, bool cancel);
+  // Leaves SETUP; why goes out as a notice unless the program ended it.
+  void EndSetup(const std::optional<std::string>& why);
   // STORAGE_NOT_WRITABLE with the file while one cannot be written, else empty.
   Reason StorageProblem() const;
   // The effects of one type in effects_: whether one waits; a flag added once or every one removed; the waiting one
@@ -1117,6 +1130,9 @@ class LogicCore {
   bool blades_running_ = false;
   // The reason of StartProblem() at the last actions, empty while a start would go.
   std::string last_start_reason_ = "-";
+  // SETUP: the step of the program and its last setup/motion.
+  std::string setup_step_;
+  double setup_sign_s_ = 0;
   // Calibration: the program's status and when it came, its last sign and the phase it reported last.
   std::optional<CalibrationStatus> calibration_status_;
   double calibration_status_s_ = 0;

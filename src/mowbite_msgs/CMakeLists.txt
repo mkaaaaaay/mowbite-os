@@ -50,6 +50,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ScheduleNotice.msg"
   "msg/PartUse.msg"
   "msg/PartsUse.msg"
+  "msg/SetupMotion.msg"
   "srv/AddArea.srv"
   "srv/ReplaceMap.srv"
   "srv/SetBlade.srv"
