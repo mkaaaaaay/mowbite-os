@@ -1899,6 +1899,131 @@ TEST_F(ShortTimeoutRepeatTest, AShorterCmdVelTimeoutStopsFirst) {
   EXPECT_LE(Times(IsMovingSpeed).back() - start, 0.2 + 1e-6);
 }
 
+class StartLatchedTest : public ControlTest {
+ protected:
+  static McuControlConfig StartLatchedConfig(double imu_timeout_s = 0) {
+    McuControlConfig config;
+    config.allow_blade = true;
+    config.start_latched = true;
+    config.imu_timeout_s = imu_timeout_s;
+    config.imu_start_timeout_s = 2.0;
+    return config;
+  }
+  explicit StartLatchedTest(double imu_timeout_s = 0) : ControlTest(StartLatchedConfig(imu_timeout_s)) {
+  }
+};
+
+class StartLatchedImuTest : public StartLatchedTest {
+ protected:
+  StartLatchedImuTest() : StartLatchedTest(0.5) {
+  }
+};
+
+TEST_F(StartLatchedTest, LatchedWithHighLevelBeforeTheFirstTick) {
+  auto status = control_.Status(0.0);
+  EXPECT_TRUE(status.latched);
+  EXPECT_TRUE(status.blocked);
+  EXPECT_EQ(status.latch_count, 1u);
+  EXPECT_TRUE(status.emergency_reason & kReasonHighLevel);
+  Run(0.01);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonHighLevel);
+  EXPECT_EQ(control_.Status(now_).latch_count, 1u);
+}
+
+TEST_F(StartLatchedTest, TheFirstTickSendsHeartbeatStopAndBladeOff) {
+  Run(0.01);
+  EXPECT_EQ(Times(IsHeartbeat).size(), 1u);
+  EXPECT_EQ(Times(IsZeroSpeed).size(), 1u);
+  EXPECT_EQ(Times(IsBladeOff).size(), 1u);
+  Run(1.0);
+  auto zeros = Times(IsZeroSpeed);
+  ASSERT_EQ(zeros.size(), 3u);
+  EXPECT_NEAR(zeros[0], 0.01, 1e-9);
+  EXPECT_NEAR(zeros[1], 0.11, 1e-9);
+  EXPECT_NEAR(zeros[2], 0.21, 1e-9);
+  EXPECT_EQ(Times(IsBladeOff).size(), 3u);
+  for (const auto& s : sent_) EXPECT_TRUE(IsHeartbeat(s.packet) || IsZeroSpeed(s.packet) || IsBladeOff(s.packet)) << s.t;
+}
+
+TEST_F(StartLatchedTest, NoMotionOrBladeUntilTheRelease) {
+  Run(0.1);
+  // A follower that still runs keeps commanding.
+  for (int i = 0; i < 40; i++) {
+    control_.OnCmdVel(0.2f, 0.1f, now_);
+    uint32_t reason = 0;
+    EXPECT_EQ(control_.SetBlade(BladeOn(), now_, &reason), BladeResult::kBlocked);
+    EXPECT_EQ(reason, kReasonLatch | kReasonHighLevel);
+    Run(now_ + 0.05);
+  }
+  EXPECT_TRUE(Times(IsMovingSpeed).empty());
+  EXPECT_TRUE(Times(IsBladeOn).empty());
+  EXPECT_TRUE(control_.Status(now_).latched);
+  EXPECT_TRUE(control_.ReleaseEmergency(now_, 1));
+  Run(now_ + 0.05);
+  EXPECT_FALSE(control_.Status(now_).latched);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+  // What was commanded before the release is gone.
+  Run(now_ + 0.5);
+  EXPECT_TRUE(Times(IsMovingSpeed).empty());
+  EXPECT_TRUE(DrivesOrMows(now_ + 0.5));
+}
+
+TEST_F(StartLatchedTest, AReconnectSendsNoStopFramesAgain) {
+  Run(1.0);
+  control_.OnConnected(now_);
+  Run(2.0);
+  EXPECT_TRUE(Times(IsZeroSpeed, 1.0).empty());
+  EXPECT_EQ(Times(IsBladeOff, 1.0).size(), 3u);
+  EXPECT_TRUE(control_.Status(now_).latched);
+}
+
+TEST_F(StartLatchedTest, ALatchWithTheSameBitCountsOnce) {
+  control_.LatchEmergency(kReasonHighLevel);
+  Run(0.1);
+  EXPECT_EQ(control_.Status(now_).latch_count, 1u);
+}
+
+TEST_F(StartLatchedTest, AReleaseWithoutTelemetryHasNoEffect) {
+  Run(0.5, false);
+  EXPECT_TRUE(control_.ReleaseEmergency(now_, 1));
+  Run(2.0, false);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  Run(2.5);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  EXPECT_FALSE(DrivesOrMows(now_ + 0.5));
+}
+
+TEST_F(StartLatchedImuTest, TheImuStillDueIsNoReasonAndAReleaseBeforeItHasNoEffect) {
+  Run(0.5);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonHighLevel);
+  EXPECT_TRUE(control_.ReleaseEmergency(now_, 1));
+  Run(1.8);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  feed_imu_ = true;
+  Run(1.9);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  EXPECT_TRUE(control_.ReleaseEmergency(now_, 1));
+  Run(2.0);
+  EXPECT_FALSE(control_.Status(now_).latched);
+}
+
+TEST_F(ControlTest, WithoutStartLatchedTheStartIsFree) {
+  Run(0.5);
+  EXPECT_FALSE(control_.Status(now_).latched);
+  EXPECT_EQ(control_.Status(now_).latch_count, 0u);
+  EXPECT_TRUE(Times(IsZeroSpeed).empty());
+}
+
+// Journals from before start_latched replay as they ran: started free.
+TEST(McuJournal, ConfigFromBeforeStartLatchedReplays) {
+  tron::McuControlConfig config;
+  config.start_latched = true;
+  nlohmann::json j = config;
+  EXPECT_TRUE(j.get<tron::McuControlConfig>().start_latched);
+  j.erase("start_latched");
+  EXPECT_FALSE(j.get<tron::McuControlConfig>().start_latched);
+}
+
 // Journals from before the clear of STOP during an emergency replay with what they ran with: never cleared.
 TEST(McuJournal, ConfigFromBeforeTheStopClearReplays) {
   tron::McuControlConfig config;

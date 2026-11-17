@@ -41,6 +41,7 @@ inline void to_json(nlohmann::json& j, const McuControlConfig& c) {
   j["stop_release"] = c.stop_release;
   j["stop_clear_period_s"] = c.stop_clear_period_s;
   j["stop_clear_delay_s"] = c.stop_clear_delay_s;
+  j["start_latched"] = c.start_latched;
 }
 // Fields that came later take the value the journals from before ran with; all else is required.
 inline void from_json(const nlohmann::json& j, McuControlConfig& c) {
@@ -72,6 +73,7 @@ inline void from_json(const nlohmann::json& j, McuControlConfig& c) {
   j.at("stop_release").get_to(c.stop_release);
   c.stop_clear_period_s = j.value("stop_clear_period_s", McuControlConfig{}.stop_clear_period_s);
   c.stop_clear_delay_s = j.value("stop_clear_delay_s", McuControlConfig{}.stop_clear_delay_s);
+  c.start_latched = j.value("start_latched", false);
 }
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SensorInfo, bumper, rain, lift, stop, power_off, battery_gate, cutter_size,
                                    press_module, bumper_right, bumper_left)

@@ -233,6 +233,12 @@ class McuNode : public rclcpp::Node {
       config.stop_clear_period_s = 0;
     }
     if (!config.stop_release) config.stop_clear_period_s = 0;
+    // Set by the launch when it starts the driver again after the last one ended.
+    config.start_latched = declare_parameter("start_latched", false) && !read_only;
+    if (config.start_latched) {
+      RCLCPP_WARN(get_logger(), "Started again after the last driver ended: emergency latched from the first frame on, "
+                  "motion and blade wait for a release");
+    }
     if (config.stop_release) {
       RCLCPP_INFO(get_logger(), "stop_release: STOP free %.1f s, then pressed %.1f to %.1f s, reports a release on "
                   "hw/button; STOP cleared during the emergency every %.2f s from %.1f s on (0: never)",

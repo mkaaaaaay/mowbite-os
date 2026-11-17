@@ -29,6 +29,7 @@ const char* BladeResultText(BladeResult result) {
 }
 
 McuControl::McuControl(const McuControlConfig& config) : config_(config) {
+  if (config_.start_latched) Latch(kReasonHighLevel);
 }
 
 void McuControl::OnCmdVel(float linear, float angular, double now) {
@@ -275,7 +276,11 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   if (!started_) {
     started_ = true;
     // A reconnect resends the off frames but does not restart the time the IMU has.
-    if (!start_s_) start_s_ = now;
+    if (!start_s_) {
+      start_s_ = now;
+      // The MCU might still run the last setpoint of the driver before this one.
+      if (config_.start_latched) StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
+    }
     StartRepeat(blade_off_repeat_, BladeOff(), now);
     blade_off_since_s_ = now;
   }

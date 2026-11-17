@@ -48,6 +48,10 @@ struct McuControlConfig {
   double blade_stop_time_s = 5.0;
   int blade_still_rpm = 100;
   bool bumper_latches_emergency = true;
+  // The driver before this one ended and the launch started this one: the MCU does not lock itself without a host and
+  // might still hold a setpoint, so the emergency is latched (HIGH_LEVEL) from the start and the first tick sends the
+  // stop frames.
+  bool start_latched = false;
   // A release waits this long for lift, stop and bumper to drop after the clear frame.
   double release_window_s = 1.0;
   double clear_min_interval_s = 1.0;
