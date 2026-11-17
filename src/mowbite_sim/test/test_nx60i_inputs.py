@@ -28,7 +28,7 @@ from mowbite_msgs.srv import SetEmergency
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import (HISTORY, LATCHED, SimProbe, TestShutdown, fake_xcore, journal_dir, layers,  # noqa: E402,F401
-                        loopback_group, sim_files, write_json, xcore_config)
+                        loopback_group, sim_files, wait_until, write_json, xcore_config)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_nx60i_inputs_")
 STATE, FLAGS, LOG, DATA = sim_files(WORK)
@@ -142,7 +142,8 @@ class Probe(SimProbe):
         def look():
             entry = self.step(step)
             return entry if pred(entry) else None
-        return self.wait(look, timeout)
+        # Without the lock of the probe: the answer of setup.get comes in under it.
+        return wait_until(look, timeout)
 
     def change(self, method, step=STEP, **params):
         """A setup.* call for the step with the version of now, once more if the state moved in between."""
@@ -176,7 +177,7 @@ class TestNx60iInputs(unittest.TestCase):
     def restarted(self, number, timeout=60.0):
         """Waits for start `number` of the launch and for its OS; what the launch before it left."""
         p = self.probe
-        self.assertTrue(p.wait(lambda: starts() >= number, timeout), f"the launch did not start again: {p.step()}")
+        self.assertTrue(p.wait(lambda: starts() >= number, timeout), "the launch did not start again")
         p.forget()
         self.assertTrue(p.up(), f"start {number} does not come up")
         self.assertEqual(starts(), number)
