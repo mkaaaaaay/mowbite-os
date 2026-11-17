@@ -592,7 +592,7 @@ bool LogicCore::Driving() const {
 bool LogicCore::FollowerActive() const {
   if (emergency_) return false;
   if (state_ == State::kDriving) return true;
-  if (state_ == State::kUndocking) return undock_step_ == UndockStep::kDrive && !undock_stopping_;
+  if (state_ == State::kUndocking) return undocking_.Leaving();
   if (state_ == State::kDocking) return docking_leg_ && docking_leg_frame_ == LegFrame::kMap && !docking_hold_;
   return state_ == State::kMowing && pause_ == 0 && LegDrives();
 }
@@ -811,7 +811,7 @@ bool LogicCore::PoseGood() const {
 
 Reason LogicCore::Busy() const {
   if (state_ == State::kIdle) {
-    if (dock_check_ == DockCheck::kNone) return {};
+    if (undocking_.dock_check() == DockCheck::kNone) return {};
     return Reason("BUSY", "The mower is busy: checking its position on the docking station").With("state", "checking");
   }
   const std::string state = state_ == State::kDriving       ? "driving"
@@ -965,7 +965,7 @@ Reason LogicCore::HoldProblem() const {
 }
 
 bool LogicCore::HoldAllowed() const {
-  return state_ == State::kIdle && dock_check_ == DockCheck::kNone && !schedule_.run();
+  return state_ == State::kIdle && undocking_.dock_check() == DockCheck::kNone && !schedule_.run();
 }
 
 void LogicCore::SetGpsSettings(double max_position_accuracy, double gps_wait_time, double gps_timeout) {

@@ -26,6 +26,7 @@
 #include "mowbite_logic/release_part.h"
 #include "mowbite_logic/schedule_part.h"
 #include "mowbite_logic/setup_part.h"
+#include "mowbite_logic/undocking_part.h"
 #include "mowbite_logic/undocking.h"
 
 namespace mowbite_logic {
@@ -411,12 +412,9 @@ class LogicCore {
   const char* LeaveWords() const;
   void BeginDockCheck(DockCheck purpose);
   void BeginDrive(double x, double y);
-  // Undocking from base_link at (x, y) for mowing or the drive: charging off first.
-  void StartUndocking(DockCheck purpose, double x, double y);
   // Stops the follower on its way out; undocking ends once it stopped, with UNDOCKING_FAILED if failure is set.
   void StopUndocking(const std::optional<Reason>& failure, const Reason& why);
   void EndUndocking(const std::optional<Reason>& failure, const Reason& why);
-  void Undocked();
   // Docking with the current settings onto the station of the map, the line within marker_range where Guided; in
   // docking.test onto the station of the marker.
   DockingSequence NewDocking() const;
@@ -603,26 +601,10 @@ class LogicCore {
   StartRequest start_request_;
   Reason mow_map_problem_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
   std::optional<DockPose> dock_;
-  // The reference check on its way and what for.
-  DockCheck dock_check_ = DockCheck::kNone;
-  // The goal of a drive from the station, for after undocking.
-  double drive_x_ = 0;
-  double drive_y_ = 0;
   std::vector<Ring> drivable_;
   std::vector<Ring> obstacles_;
   Reason drivable_problem_;
-  // Undocking: what for, where it started and the way it faces, and once it is stopping, whether that ends in
-  // UNDOCKING_FAILED.
-  enum class UndockStep { kChargeOff, kDrive };
-  DockCheck undock_for_ = DockCheck::kNone;
-  UndockStep undock_step_ = UndockStep::kChargeOff;
-  double undock_x_ = 0;
-  double undock_y_ = 0;
-  double undock_heading_ = 0;
-  std::optional<Point2> undock_fix_start_;
-  bool undock_stopping_ = false;
-  std::optional<Reason> undock_failure_;
-  Reason undock_stop_why_;
+  UndockingPart undocking_;
   // Docking: its tries, the leg due for the node and the kind of the one on its way (and of the last one), stopped at a
   // first contact, a failed try waiting for the mower to drive out, and the wait for a good position.
   DockingSequence docking_;

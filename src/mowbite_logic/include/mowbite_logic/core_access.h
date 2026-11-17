@@ -36,6 +36,17 @@ class CoreFacts {
   bool clock_safe() const;
   const std::string& clock_reason() const;
   const std::optional<std::pair<double, double>>& datum() const;
+  const std::optional<DockPose>& dock() const;
+  bool charge_stop() const;
+  const StartRequest& start_request() const;
+  double DockedHeading() const;
+  bool ContactsBack() const;
+  const char* LeaveWords() const;
+  Reason RequestMowProblem(const StartRequest& request) const;
+  Reason DriveProblem() const;
+  Reason MoveProblem() const;
+  double DockAccuracyLimit() const;
+  Reason UndockEndProblem(double x, double y) const;
 
  private:
   const LogicCore* read_;
@@ -54,6 +65,14 @@ class CoreAccess : public CoreFacts {
   void Notify(std::string line);
   void SetState(State state);
   void CommandCancels();
+  void RefuseStart(const Reason& why);
+  void RefuseDrive(const Reason& why);
+  void RunEnds(const std::string& code, const std::string& detail = "");
+  void FinishRun();
+  void SetRunPhase(RunPhase phase);
+  void BeginDrive(double x, double y);
+  void StartMowing();
+  void CancelDrive(const Reason& reason);
 
  private:
   LogicCore* core_;

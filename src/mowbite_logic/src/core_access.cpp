@@ -82,6 +82,50 @@ const std::optional<std::pair<double, double>>& CoreFacts::datum() const {
   return read_->datum_;
 }
 
+const std::optional<DockPose>& CoreFacts::dock() const {
+  return read_->dock_;
+}
+
+bool CoreFacts::charge_stop() const {
+  return read_->charge_stop_;
+}
+
+const StartRequest& CoreFacts::start_request() const {
+  return read_->start_request_;
+}
+
+double CoreFacts::DockedHeading() const {
+  return read_->DockedHeading();
+}
+
+bool CoreFacts::ContactsBack() const {
+  return read_->ContactsBack();
+}
+
+const char* CoreFacts::LeaveWords() const {
+  return read_->LeaveWords();
+}
+
+Reason CoreFacts::RequestMowProblem(const StartRequest& request) const {
+  return read_->RequestMowProblem(request);
+}
+
+Reason CoreFacts::DriveProblem() const {
+  return read_->DriveProblem();
+}
+
+Reason CoreFacts::MoveProblem() const {
+  return read_->MoveProblem();
+}
+
+double CoreFacts::DockAccuracyLimit() const {
+  return read_->DockAccuracyLimit();
+}
+
+Reason CoreFacts::UndockEndProblem(double x, double y) const {
+  return read_->UndockEndProblem(x, y);
+}
+
 EffectQueue& CoreAccess::effects() {
   return core_->effects_;
 }
@@ -108,6 +152,38 @@ void CoreAccess::SetState(State state) {
 
 void CoreAccess::CommandCancels() {
   core_->CommandCancels();
+}
+
+void CoreAccess::RefuseStart(const Reason& why) {
+  core_->RefuseStart(why);
+}
+
+void CoreAccess::RefuseDrive(const Reason& why) {
+  core_->RefuseDrive(why);
+}
+
+void CoreAccess::RunEnds(const std::string& code, const std::string& detail) {
+  core_->RunEnds(code, detail);
+}
+
+void CoreAccess::FinishRun() {
+  core_->FinishRun();
+}
+
+void CoreAccess::SetRunPhase(RunPhase phase) {
+  core_->SetRunPhase(phase);
+}
+
+void CoreAccess::BeginDrive(double x, double y) {
+  core_->BeginDrive(x, y);
+}
+
+void CoreAccess::StartMowing() {
+  core_->StartMowing();
+}
+
+void CoreAccess::CancelDrive(const Reason& reason) {
+  core_->CancelDrive(reason);
 }
 
 }  // namespace mowbite_logic

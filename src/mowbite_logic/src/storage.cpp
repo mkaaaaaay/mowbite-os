@@ -33,7 +33,7 @@ void LogicCore::AbandonStart(const std::string& file) {
       SetState(State::kIdle);
       return;
     case State::kUndocking:
-      if (undock_for_ == DockCheck::kDrive) {
+      if (undocking_.undock_for() == DockCheck::kDrive) {
         RefuseDrive(why);
       } else {
         RefuseStart(why);

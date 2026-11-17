@@ -161,4 +161,44 @@ void LogicCore::TrySunset(double now_s) {
   home_.TrySunset(CoreAccess(*this), now_s);
 }
 
+void LogicCore::OnGnssFix(double x, double y) {
+  undocking_.OnGnssFix(CoreAccess(*this), x, y);
+}
+
+void LogicCore::BeginDockCheck(DockCheck purpose) {
+  undocking_.BeginDockCheck(CoreAccess(*this), purpose);
+}
+
+void LogicCore::CheckDockBeforeDrive(double x, double y) {
+  undocking_.CheckDockBeforeDrive(CoreAccess(*this), x, y);
+}
+
+bool LogicCore::DockCheckPending() const {
+  return undocking_.DockCheckPending();
+}
+
+Reason LogicCore::OnDockCheck(bool ok, double x, double y, float accuracy, const std::string& message) {
+  return undocking_.OnDockCheck(CoreAccess(*this), ok, x, y, accuracy, message);
+}
+
+bool LogicCore::UndockingForDrive() const {
+  return undocking_.UndockingForDrive(CoreFacts(*this));
+}
+
+void LogicCore::StopUndocking(const std::optional<Reason>& failure, const Reason& why) {
+  undocking_.StopUndocking(CoreAccess(*this), failure, why);
+}
+
+void LogicCore::AbortUndocking(const Reason& why) {
+  undocking_.AbortUndocking(CoreAccess(*this), why);
+}
+
+void LogicCore::OnUndockEnded(LegEnd end, const Reason& reason) {
+  undocking_.OnUndockEnded(CoreAccess(*this), end, reason);
+}
+
+void LogicCore::EndUndocking(const std::optional<Reason>& failure, const Reason& why) {
+  undocking_.EndUndocking(CoreAccess(*this), failure, why);
+}
+
 }  // namespace mowbite_logic
