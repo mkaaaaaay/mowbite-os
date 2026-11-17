@@ -40,36 +40,36 @@ bool SameText(const std::string& a, const std::string& b) {
 
 Seats::Seats(RandomBytes random) : random_(std::move(random)) {}
 
-Seats::Granted Seats::Grant(const std::string& camera_id, const std::string& protocol, double now,
-                            std::string* token) {
+Seats::Granted Seats::Grant(const std::string& camera_id, const std::string& view, const std::string& protocol,
+                            double now, std::string* token) {
   Expire(now);
   if (seats_.size() >= kSeats) return Granted::kBusy;
   token->assign(RandomHex(random_, kTokenBytes));
   if (token->empty()) return Granted::kNoRandom;
-  seats_.push_back({*token, camera_id, protocol, now + kTokenSeconds, ""});
+  seats_.push_back({*token, camera_id, view, protocol, now + kTokenSeconds, ""});
   return Granted::kOk;
 }
 
-const Seat* Seats::Find(const std::string& token, const std::string& camera_id, const std::string& protocol) const {
+const Seat* Seats::Find(const std::string& token, const std::string& view, const std::string& protocol) const {
   // Every seat is compared, so the time does not tell which one came close.
   const Seat* found = nullptr;
   for (const Seat& seat : seats_) {
     if (SameText(seat.token, token)) found = &seat;
   }
-  if (!found || found->camera_id != camera_id || found->protocol != protocol) return nullptr;
+  if (!found || found->view != view || found->protocol != protocol) return nullptr;
   return found;
 }
 
-bool Seats::Waiting(const std::string& token, const std::string& camera_id, const std::string& protocol,
+bool Seats::Waiting(const std::string& token, const std::string& view, const std::string& protocol,
                     double now) const {
-  const Seat* seat = Find(token, camera_id, protocol);
+  const Seat* seat = Find(token, view, protocol);
   return seat && seat->connection.empty() && now <= seat->expires;
 }
 
-bool Seats::Connect(const std::string& token, const std::string& camera_id, const std::string& protocol,
+bool Seats::Connect(const std::string& token, const std::string& view, const std::string& protocol,
                     const std::string& connection, double now) {
   if (connection.empty()) return false;
-  const Seat* seat = Find(token, camera_id, protocol);
+  const Seat* seat = Find(token, view, protocol);
   if (!seat) return false;
   if (!seat->connection.empty()) return seat->connection == connection;
   if (now > seat->expires) return false;

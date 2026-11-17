@@ -76,6 +76,9 @@ def generate_test_description():
     ]), {}
 
 
+PLAIN = 1000000
+
+
 def picture(number):
     """A picture of the stand-in camera: the marks of a JPEG around its number."""
     return b"\xff\xd8" + number.to_bytes(4, "big") + bytes(PICTURE_BYTES) + b"\xff\xd9"
@@ -172,10 +175,13 @@ class TestCamera(unittest.TestCase):
                                              durability=DurabilityPolicy.TRANSIENT_LOCAL))
         cls.jpeg_pub = cls.node.create_publisher(
             CompressedImage, "camera/front/jpeg", QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+        cls.plain_pub = cls.node.create_publisher(
+            CompressedImage, "camera/front/jpeg_plain", QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         cls.lock = threading.Lock()
         cls.answers = {}
         cls.events = []
         cls.subscribers = 0
+        cls.plain_subscribers = 0
         cls.stop = threading.Event()
         cls.camera = threading.Thread(target=cls.play_camera)
         cls.camera.start()
@@ -206,16 +212,19 @@ class TestCamera(unittest.TestCase):
 
     @classmethod
     def play_camera(cls):
+        # The pictures without boxes count from PLAIN on.
         number = 0
         while not cls.stop.wait(0.1):
             cls.subscribers = cls.jpeg_pub.get_subscription_count()
-            if cls.subscribers == 0:
+            cls.plain_subscribers = cls.plain_pub.get_subscription_count()
+            if cls.subscribers == 0 and cls.plain_subscribers == 0:
                 continue
             number += 1
-            msg = CompressedImage()
-            msg.format = "jpeg"
-            msg.data = picture(number)
-            cls.jpeg_pub.publish(msg)
+            for publisher, base in ((cls.jpeg_pub, 0), (cls.plain_pub, PLAIN)):
+                msg = CompressedImage()
+                msg.format = "jpeg"
+                msg.data = picture(base + number)
+                publisher.publish(msg)
 
     @classmethod
     def on_message(cls, client, userdata, message):
@@ -300,7 +309,8 @@ class TestCamera(unittest.TestCase):
     def test_2_a_viewer_gets_the_pictures_of_its_token(self):
         self.assertEqual(self.subscribers, 0)
         answer = self.rpc("camera.stream", {"id": "front"})["result"]
-        self.assertEqual(sorted(answer), ["expires", "protocol", "url"])
+        self.assertEqual(sorted(answer), ["detections", "expires", "protocol", "url"])
+        self.assertIs(answer["detections"], True)
         self.assertEqual(answer["protocol"], "mjpeg")
         self.assertIsInstance(answer["expires"], int)
         self.assertTrue(25 < answer["expires"] - time.time() <= 30, answer)
@@ -329,6 +339,22 @@ class TestCamera(unittest.TestCase):
         viewer.close()
         self.assertTrue(self.wait_until(lambda: self.subscribers == 0), "the picture topic is still subscribed")
         self.assertEqual(status_of(url), 401)
+
+    def test_2b_a_viewer_without_boxes_gets_the_plain_pictures(self):
+        self.assertEqual((self.subscribers, self.plain_subscribers), (0, 0))
+        answer = self.rpc("camera.stream", {"id": "front", "detections": False})["result"]
+        self.assertIs(answer["detections"], False)
+        url = answer["url"]
+        self.assertRegex(url, rf"^http://127\.0\.0\.1:{MJPEG_PORT}/camera/front_plain\.mjpg\?t=[0-9a-f]{{32}}$")
+        self.assertEqual(status_of(url.replace("front_plain.mjpg", "front.mjpg")), 401)
+        viewer = Viewer(url)
+        status, _ = viewer.head()
+        self.assertEqual(status, 200)
+        self.assertTrue(all(n > PLAIN for n in viewer.wait_pictures(3)))
+        self.assertEqual((self.subscribers, self.plain_subscribers), (0, 1))
+        viewer.close()
+        self.assertTrue(self.wait_until(lambda: self.plain_subscribers == 0), "the plain topic is still subscribed")
+        self.assertEqual(self.rpc("camera.stream", {"id": "front", "detections": "no"})["error"]["code"], -32602)
 
     def test_3_the_third_viewer_is_refused(self):
         first = Viewer(self.stream())

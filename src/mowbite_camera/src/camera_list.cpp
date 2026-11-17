@@ -44,6 +44,12 @@ bool IsReason(const std::string& code) {
                      [&](const mowbite_api::ReasonEntry& reason) { return reason.code == code; });
 }
 
+constexpr size_t kPlainLength = sizeof(kPlainSuffix) - 1;
+
+bool EndsWithPlain(const std::string& name) {
+  return name.size() > kPlainLength && name.compare(name.size() - kPlainLength, kPlainLength, kPlainSuffix) == 0;
+}
+
 void Note(std::string* problem, const std::string& text) {
   if (!problem->empty()) *problem += "; ";
   *problem += text;
@@ -53,7 +59,17 @@ void Note(std::string* problem, const std::string& text) {
 
 bool IsCameraId(const std::string& id) {
   if (id.empty() || id.size() > kMaxIdLength || !std::isalpha(static_cast<unsigned char>(id[0]))) return false;
+  if (EndsWithPlain(id)) return false;
   return std::all_of(id.begin(), id.end(), [](unsigned char c) { return std::isalnum(c) || c == '_'; });
+}
+
+std::string ViewOf(const std::string& id, bool plain) {
+  return plain ? id + kPlainSuffix : id;
+}
+
+std::string PictureTopic(const std::string& view) {
+  if (!EndsWithPlain(view)) return "camera/" + view + "/jpeg";
+  return "camera/" + view.substr(0, view.size() - kPlainLength) + "/jpeg" + kPlainSuffix;
 }
 
 bool ParseExitNote(const std::string& text, double* mono, bool* down) {
@@ -67,7 +83,8 @@ bool ParseExitNote(const std::string& text, double* mono, bool* down) {
 bool CameraList::Update(const CameraEntry& entry, double t, std::string* problem) {
   problem->clear();
   if (!IsCameraId(entry.id)) {
-    *problem = "a camera id is a letter, then at most 31 letters, digits or underscores";
+    *problem = std::string("a camera id is a letter, then at most 31 letters, digits or underscores, not ending in ") +
+               kPlainSuffix;
     return false;
   }
   CameraEntry clean = entry;
@@ -184,9 +201,9 @@ std::map<std::string, std::string> CameraList::WebrtcSources() const {
   std::map<std::string, std::string> sources;
   for (const Camera& camera : cameras_) {
     const auto& protocols = camera.entry.protocols;
-    if (std::find(protocols.begin(), protocols.end(), kWebrtc) != protocols.end()) {
-      sources[camera.entry.id] = camera.entry.source;
-    }
+    if (std::find(protocols.begin(), protocols.end(), kWebrtc) == protocols.end()) continue;
+    sources[camera.entry.id] = camera.entry.source;
+    if (camera.entry.detections) sources[ViewOf(camera.entry.id, true)] = camera.entry.source + kPlainSuffix;
   }
   return sources;
 }

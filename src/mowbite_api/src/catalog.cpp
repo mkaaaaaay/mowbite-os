@@ -1082,15 +1082,21 @@ const std::vector<Method>& Methods() {
        "call. At most two viewers at once over all cameras (CAMERA_BUSY). mjpeg: a GET of url gives "
        "multipart/x-mixed-replace, every part one JPEG with its own Content-Length, and every answer to that GET, "
        "also a refusal, carries Access-Control-Allow-Origin: *; webrtc: url is a WHEP endpoint (H.264). Refused "
-       "(CAMERA_REFUSED) while the camera is not available; -32602 for an id or a protocol it does not have",
+       "(CAMERA_REFUSED) while the camera is not available; -32602 for an id or a protocol it does not have and "
+       "for detections true at a camera without",
        Object("params", "The camera",
               {Text("id", "An id of camera.list"),
-               Text("protocol", "One of its protocols; its first without", false, {"mjpeg", "webrtc"})}),
+               Text("protocol", "One of its protocols; its first without", false, {"mjpeg", "webrtc"}),
+               Bool("detections",
+                    "For this stream: true with the boxes of the camera AI, false without; without, the boxes are "
+                    "there when camera.list has detections true",
+                    false)}),
        Object("result", "The stream",
               {Text("url", "http address with the token of this connection; its host is the IPv4 of the mower in the "
                     "network of its default route"),
                Text("protocol", "The protocol of url", true, {"mjpeg", "webrtc"}),
-               UnixTime("expires", "The connection has to begin before this")}),
+               UnixTime("expires", "The connection has to begin before this"),
+               Bool("detections", "Whether the boxes of the camera AI are in the picture")}),
        kCameraOffered},
       {"map.replace", "mowbite_map", "Replaces the map with the one given, in the shape of map/json",
        List("params", "[map]", Type::kObject), Text("result", "Successfully stored map (n areas)"), ""},

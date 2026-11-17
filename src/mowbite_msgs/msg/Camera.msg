@@ -24,7 +24,9 @@ string position
 # Size of the image a viewer gets.
 uint32 width
 uint32 height
-# Boxes of the camera AI are burnt into the image and come on vision/detections.
+# Boxes of the camera AI are burnt into the image and come on vision/detections. Such a camera has the same image
+# without boxes as well: JPEG frames on camera/<id>/jpeg_plain and H.264 at <source>_plain, each only made while
+# someone watches it.
 bool detections
 
 # mjpeg: JPEG frames on camera/<id>/jpeg (sensor_msgs/CompressedImage), sent only while someone subscribes.

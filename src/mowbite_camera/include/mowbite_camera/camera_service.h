@@ -74,7 +74,7 @@ class CameraService {
   bool HasCameras() const;
   std::vector<std::string> Processes() const;
   std::map<std::string, std::string> WebrtcSources() const;
-  // The cameras someone watches over mjpeg.
+  // The views someone watches over mjpeg (ViewOf).
   std::vector<std::string> MjpegCameras() const;
 
   // The sessions of the stream server that hold a place.
@@ -84,7 +84,7 @@ class CameraService {
   // The stream server ended and its sessions with it.
   void OnStreamServerGone();
 
-  // GET /camera/<id>.mjpg?t=<token> of a viewer, and the end of its connection.
+  // GET /camera/<view>.mjpg?t=<token> of a viewer, and the end of its connection.
   HttpAnswer OnViewer(const HttpRequest& request);
   void OnViewerGone(uint64_t connection);
   // POST /auth of the stream server: 200 lets the request in, anything else keeps it out.

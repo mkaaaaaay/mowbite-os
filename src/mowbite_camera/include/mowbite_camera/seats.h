@@ -31,6 +31,8 @@ struct Seat {
   // Only in memory, never in a log.
   std::string token;
   std::string camera_id;
+  // What the viewer watches: the camera id, or the view without boxes (ViewOf); its connection names it.
+  std::string view;
   std::string protocol;
   // Its connection has to begin before this, on the clock of Grant.
   double expires = 0;
@@ -46,12 +48,13 @@ class Seats {
   explicit Seats(RandomBytes random = SystemRandom);
 
   enum class Granted { kOk, kBusy, kNoRandom };
-  // A place for one viewer of this camera, with its token.
-  Granted Grant(const std::string& camera_id, const std::string& protocol, double now, std::string* token);
-  // Whether the token still waits for its connection to this camera with this protocol.
-  bool Waiting(const std::string& token, const std::string& camera_id, const std::string& protocol, double now) const;
+  // A place for one viewer of this view of the camera, with its token.
+  Granted Grant(const std::string& camera_id, const std::string& view, const std::string& protocol, double now,
+                std::string* token);
+  // Whether the token still waits for its connection to this view with this protocol.
+  bool Waiting(const std::string& token, const std::string& view, const std::string& protocol, double now) const;
   // The connection of the token begins: true for the first one in time, and again for that same connection.
-  bool Connect(const std::string& token, const std::string& camera_id, const std::string& protocol,
+  bool Connect(const std::string& token, const std::string& view, const std::string& protocol,
                const std::string& connection, double now);
   // The connection ended and its place is free; false when it had none.
   bool Release(const std::string& protocol, const std::string& connection);
@@ -67,7 +70,7 @@ class Seats {
   }
 
  private:
-  const Seat* Find(const std::string& token, const std::string& camera_id, const std::string& protocol) const;
+  const Seat* Find(const std::string& token, const std::string& view, const std::string& protocol) const;
   std::vector<Seat> Drop(const std::function<bool(const Seat&)>& which);
 
   RandomBytes random_;

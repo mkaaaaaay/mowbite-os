@@ -127,6 +127,15 @@ RpcOutcome CameraService::Stream(const Json& params) {
     return Refuse(state.reason, "Camera " + id + " cannot stream now: " + state.reason +
                                     (state.detail.empty() ? "" : " (" + state.detail + ")"));
   }
+  bool detections = camera->detections;
+  if (params.contains("detections")) {
+    if (!params["detections"].is_boolean()) return Invalid("detections is true or false");
+    if (params["detections"].get<bool>() && !camera->detections) {
+      return Invalid("Camera " + id + " has no boxes of the camera AI");
+    }
+    detections = params["detections"].get<bool>();
+  }
+  const std::string view = ViewOf(id, camera->detections && !detections);
   if (protocol.empty()) protocol = camera->protocols.front();
   if (protocol == kWebrtc && !list_.webrtc_reason().empty()) {
     return Refuse(list_.webrtc_reason(), "Camera " + id + " cannot stream with webrtc now: " + list_.webrtc_detail());
@@ -136,7 +145,7 @@ RpcOutcome CameraService::Stream(const Json& params) {
     return Refuse(kNotSetUp, "The mower has no default route to take its address from: set public_host");
   }
   std::string token;
-  switch (seats_.Grant(id, protocol, clocks_.steady(), &token)) {
+  switch (seats_.Grant(id, view, protocol, clocks_.steady(), &token)) {
     case Seats::Granted::kOk: break;
     case Seats::Granted::kBusy: return Refuse("CAMERA_BUSY", "Two viewers are watching already");
     case Seats::Granted::kNoRandom:
@@ -144,11 +153,12 @@ RpcOutcome CameraService::Stream(const Json& params) {
   }
   const std::string url =
       protocol == kMjpeg
-          ? "http://" + host + ":" + std::to_string(config_.mjpeg_port) + kPathPrefix + id + kPathSuffix + "?t=" + token
-          : "http://" + host + ":" + std::to_string(config_.webrtc_port) + "/" + id + "/whep?t=" + token;
+          ? "http://" + host + ":" + std::to_string(config_.mjpeg_port) + kPathPrefix + view + kPathSuffix +
+                "?t=" + token
+          : "http://" + host + ":" + std::to_string(config_.webrtc_port) + "/" + view + "/whep?t=" + token;
   // Rounded down, so the client never counts on more time than the token has.
   const auto expires = static_cast<int64_t>(std::floor(clocks_.wall() + kTokenSeconds));
-  return Ok({{"url", url}, {"protocol", protocol}, {"expires", expires}});
+  return Ok({{"url", url}, {"protocol", protocol}, {"expires", expires}, {"detections", detections}});
 }
 
 void CameraService::Tick() {
@@ -183,7 +193,7 @@ std::vector<std::string> CameraService::MjpegCameras() const {
   std::vector<std::string> cameras;
   for (const Seat& seat : seats_.seats()) {
     if (seat.protocol != kMjpeg || seat.connection.empty()) continue;
-    if (std::find(cameras.begin(), cameras.end(), seat.camera_id) == cameras.end()) cameras.push_back(seat.camera_id);
+    if (std::find(cameras.begin(), cameras.end(), seat.view) == cameras.end()) cameras.push_back(seat.view);
   }
   return cameras;
 }
@@ -230,14 +240,14 @@ HttpAnswer CameraService::OnViewer(const HttpRequest& request) {
       path.compare(path.size() - suffix, suffix, kPathSuffix) != 0) {
     return {404, "not found\n", ""};
   }
-  const std::string id = path.substr(prefix, path.size() - prefix - suffix);
+  const std::string view = path.substr(prefix, path.size() - prefix - suffix);
   const std::lock_guard<std::mutex> lock(mutex_);
   // A place is lost when its camera can no longer stream, so a token that connects has a camera that can.
-  if (!seats_.Connect(QueryValue(request.query, "t"), id, kMjpeg, std::to_string(request.connection),
+  if (!seats_.Connect(QueryValue(request.query, "t"), view, kMjpeg, std::to_string(request.connection),
                       clocks_.steady())) {
     return {401, "no place for this token\n", ""};
   }
-  return {200, "", id};
+  return {200, "", view};
 }
 
 void CameraService::OnViewerGone(uint64_t connection) {
@@ -257,13 +267,13 @@ HttpAnswer CameraService::OnAuth(const HttpRequest& request) {
     const bool password_fits = SameText(Text(asked, "password"), api_password_);
     allowed = user_fits && password_fits && !api_password_.empty();
   } else if (action == "read" && Text(asked, "protocol") == kWebrtc) {
-    const std::string camera = Text(asked, "path");
+    const std::string view = Text(asked, "path");
     const std::string given = QueryValue(Text(asked, "query"), "t");
     const std::string session = Text(asked, "id");
     const std::lock_guard<std::mutex> lock(mutex_);
     // Without a session the client only asks how to connect; the session that follows takes the place.
-    allowed = session.empty() ? seats_.Waiting(given, camera, kWebrtc, clocks_.steady())
-                              : seats_.Connect(given, camera, kWebrtc, session, clocks_.steady());
+    allowed = session.empty() ? seats_.Waiting(given, view, kWebrtc, clocks_.steady())
+                              : seats_.Connect(given, view, kWebrtc, session, clocks_.steady());
   }
   return {allowed ? 200 : 401, "", ""};
 }

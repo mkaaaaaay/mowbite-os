@@ -62,9 +62,17 @@ struct CameraChange {
   CameraNews news;
 };
 
-// An id the OS takes: a letter, then letters, digits and underscores, 32 at most. It is part of a topic, of urls
-// and of the configuration of the stream server.
+// An id the OS takes: a letter, then letters, digits and underscores, 32 at most, not ending in kPlainSuffix. It is
+// part of a topic, of urls and of the configuration of the stream server.
 bool IsCameraId(const std::string& id);
+
+// A camera with detections has a view without the boxes as well (mowbite_msgs/Camera): <id>_plain in the urls and
+// the stream server, camera/<id>/jpeg_plain and <source>_plain at the camera.
+constexpr char kPlainSuffix[] = "_plain";
+// What a viewer watches: the id, or the view without the boxes.
+std::string ViewOf(const std::string& id, bool plain);
+// The picture topic of a view.
+std::string PictureTopic(const std::string& view);
 
 // When a process ended (mono, s on the steady clock) and whether it stays down, from the text of its exit note;
 // false when the text is not such a note.
@@ -94,7 +102,7 @@ class CameraList {
   Json List() const;
   // The processes of the listed cameras, each once.
   std::vector<std::string> Processes() const;
-  // Camera id -> its RTSP address, for the cameras with webrtc.
+  // View -> its RTSP address, for the cameras with webrtc; a camera with detections has its view without boxes too.
   std::map<std::string, std::string> WebrtcSources() const;
   // What SetWebrtc had last; the detail is empty with an empty reason.
   const std::string& webrtc_reason() const {

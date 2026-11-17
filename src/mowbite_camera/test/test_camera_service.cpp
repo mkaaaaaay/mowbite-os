@@ -126,6 +126,52 @@ TEST_F(CameraServiceTest, GivesAnAddressWithATokenForMjpeg) {
   EXPECT_TRUE(outcome.result["expires"].is_number_integer());
 }
 
+TEST_F(CameraServiceTest, EachStreamChoosesTheBoxesOfTheCameraAi) {
+  service_.OnCamera(Obstacle());
+  const RpcOutcome boxes = Stream("oa_left");
+  ASSERT_TRUE(boxes.ok) << boxes.message;
+  EXPECT_EQ(boxes.result["detections"], true);
+  const RpcOutcome plain = Call("camera.stream", {{"id", "oa_left"}, {"detections", false}});
+  ASSERT_TRUE(plain.ok) << plain.message;
+  EXPECT_EQ(plain.result["detections"], false);
+  const std::string token = TokenOf(plain);
+  EXPECT_EQ(plain.result["url"], "http://198.51.100.20:8890/camera/oa_left_plain.mjpg?t=" + token);
+  // Its token is good for the view it was given for only.
+  EXPECT_EQ(View("oa_left", token, 1).status, 401);
+  const HttpAnswer answer = View("oa_left_plain", token, 1);
+  EXPECT_EQ(answer.status, 200);
+  EXPECT_EQ(answer.stream, "oa_left_plain");
+  EXPECT_EQ(service_.MjpegCameras(), std::vector<std::string>{"oa_left_plain"});
+  const RpcOutcome asked = Call("camera.stream", {{"id", "oa_left"}, {"detections", true}});
+  // Both places are taken now.
+  ExpectRefused(asked, "CAMERA_BUSY");
+}
+
+TEST_F(CameraServiceTest, BoxesOnlyFromACameraThatHasThem) {
+  service_.OnCamera(Stereo());
+  const RpcOutcome refused = Call("camera.stream", {{"id", "stereo"}, {"detections", true}});
+  EXPECT_FALSE(refused.ok);
+  EXPECT_EQ(refused.code, mowbite_bridge::kInvalidParams);
+  const RpcOutcome kept = Call("camera.stream", {{"id", "stereo"}, {"detections", false}});
+  ASSERT_TRUE(kept.ok) << kept.message;
+  EXPECT_EQ(kept.result["detections"], false);
+  EXPECT_EQ(kept.result["url"], "http://198.51.100.20:8889/stereo/whep?t=" + TokenOf(kept));
+  service_.OnCamera(Obstacle());
+  const RpcOutcome wrong = Call("camera.stream", {{"id", "oa_left"}, {"detections", "no"}});
+  EXPECT_EQ(wrong.code, mowbite_bridge::kInvalidParams);
+}
+
+TEST_F(CameraServiceTest, TheStreamServerLetsAPlainViewerInAtItsPath) {
+  service_.OnCamera(ObstacleWithWebrtc());
+  const RpcOutcome plain = Call("camera.stream", {{"id", "oa_left"}, {"detections", false}});
+  ASSERT_TRUE(plain.ok) << plain.message;
+  const std::string token = TokenOf(plain);
+  EXPECT_EQ(plain.result["url"], "http://198.51.100.20:8889/oa_left_plain/whep?t=" + token);
+  EXPECT_EQ(Reader("oa_left", token, "s1").status, 401);
+  EXPECT_EQ(Reader("oa_left_plain", token, "s1").status, 200);
+  EXPECT_EQ(service_.WebrtcSessions(), std::vector<std::string>{"s1"});
+}
+
 TEST_F(CameraServiceTest, GivesAWhepAddressForWebrtc) {
   service_.OnCamera(Stereo());
   const RpcOutcome outcome = Call("camera.stream", {{"id", "stereo"}, {"protocol", "webrtc"}});
@@ -294,7 +340,7 @@ TEST_F(CameraServiceTest, TheExitNoteOfItsProcessTakesACameraOffUntilItReportsAg
 TEST_F(CameraServiceTest, WebrtcWaitsForTheStreamServer) {
   service_.OnCamera(Stereo());
   service_.OnCamera(ObstacleWithWebrtc());
-  EXPECT_EQ(service_.WebrtcSources().size(), 2u);
+  EXPECT_EQ(service_.WebrtcSources().size(), 3u);
   Events();
 
   service_.SetWebrtc("NO_SIGNAL", "the stream server starts");

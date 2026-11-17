@@ -254,21 +254,21 @@ class CameraNode : public rclcpp::Node {
     FollowViewers();
   }
 
-  // A picture topic is subscribed only while a viewer of that camera is connected: the camera makes pictures only
-  // for subscribers.
+  // A picture topic is subscribed only while a viewer of that view is connected: the camera makes pictures only for
+  // subscribers.
   void FollowViewers() {
     const std::vector<std::string> watched = service_->MjpegCameras();
     for (auto it = picture_subs_.begin(); it != picture_subs_.end();) {
       it = std::find(watched.begin(), watched.end(), it->first) == watched.end() ? picture_subs_.erase(it) : ++it;
     }
-    for (const std::string& id : watched) {
-      if (picture_subs_.count(id)) continue;
-      picture_subs_[id] = create_subscription<sensor_msgs::msg::CompressedImage>(
-          "camera/" + id + "/jpeg", rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
-          [this, id](const sensor_msgs::msg::CompressedImage::ConstSharedPtr& msg) {
+    for (const std::string& view : watched) {
+      if (picture_subs_.count(view)) continue;
+      picture_subs_[view] = create_subscription<sensor_msgs::msg::CompressedImage>(
+          PictureTopic(view), rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
+          [this, view](const sensor_msgs::msg::CompressedImage::ConstSharedPtr& msg) {
             if (msg->format != "jpeg" || msg->data.empty() || msg->data.size() > kMaxJpegBytes) return;
-            server_->Post([this, id, jpeg = std::string(msg->data.begin(), msg->data.end())] {
-              server_->Push(id, jpeg);
+            server_->Post([this, view, jpeg = std::string(msg->data.begin(), msg->data.end())] {
+              server_->Push(view, jpeg);
             });
           });
     }

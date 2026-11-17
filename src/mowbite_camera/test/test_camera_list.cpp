@@ -44,7 +44,7 @@ TEST(CameraList, AnUnknownPositionIsNull) {
 TEST(CameraList, RefusesAnIdThatIsNoName) {
   CameraList list;
   std::string problem;
-  for (const char* id : {"", "1cam", "a/b", "a b", "a.b", "abcdefghijklmnopqrstuvwxyz0123456"}) {
+  for (const char* id : {"", "1cam", "a/b", "a b", "a.b", "abcdefghijklmnopqrstuvwxyz0123456", "oa_left_plain"}) {
     CameraEntry entry = Obstacle();
     entry.id = id;
     EXPECT_FALSE(list.Update(entry, 1, &problem)) << id;
@@ -52,6 +52,21 @@ TEST(CameraList, RefusesAnIdThatIsNoName) {
   }
   EXPECT_TRUE(list.Empty());
   EXPECT_TRUE(IsCameraId("abcdefghijklmnopqrstuvwxyz012345"));
+}
+
+TEST(CameraList, ACameraWithBoxesHasItsViewWithout) {
+  CameraList list;
+  std::string problem;
+  ASSERT_TRUE(list.Update(ObstacleWithWebrtc(), 1, &problem));
+  ASSERT_TRUE(list.Update(Stereo(), 1, &problem));
+  EXPECT_EQ(list.WebrtcSources(), (std::map<std::string, std::string>{
+                                      {"oa_left", "rtsp://127.0.0.1:8556/oa_left"},
+                                      {"oa_left_plain", "rtsp://127.0.0.1:8556/oa_left_plain"},
+                                      {"stereo", "rtsp://127.0.0.1:8555/stereo"}}));
+  EXPECT_EQ(ViewOf("oa_left", false), "oa_left");
+  EXPECT_EQ(ViewOf("oa_left", true), "oa_left_plain");
+  EXPECT_EQ(PictureTopic("oa_left"), "camera/oa_left/jpeg");
+  EXPECT_EQ(PictureTopic("oa_left_plain"), "camera/oa_left/jpeg_plain");
 }
 
 TEST(CameraList, PassesOnlyTheProtocolsTheOsServes) {
