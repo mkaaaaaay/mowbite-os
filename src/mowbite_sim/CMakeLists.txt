@@ -49,6 +49,8 @@ if(BUILD_TESTING)
       ENV MOWBITE_PLATFORM=${platform})
     add_journaled_launch_test(test/test_setup.py TARGET test_setup_${platform} TIMEOUT 240
       ENV MOWBITE_PLATFORM=${platform})
+    add_journaled_launch_test(test/test_setup_motion.py TARGET test_setup_motion_${platform} TIMEOUT 420
+      ENV MOWBITE_PLATFORM=${platform})
   endforeach()
   add_journaled_launch_test(test/test_hw_contract.py TIMEOUT 120)
   add_journaled_launch_test(test/test_hw_start.py TIMEOUT 120)

@@ -1,0 +1,312 @@
+"""The steps of the setup program that move the wheels, on a platform as its start runs it against its fake board
+(the NX60i with mowbite.launch.py and fake_xcore, the Tron with sim.launch.py and fake_tron): the program drives on
+setup/cmd_vel while setup/motion holds the logic in SETUP, mowbite_safety caps the commands, and the driver, the board
+and the start do what they do on the mower. The steps of the inputs passed before (setup.json). Each step passes,
+then the counter checks: a board that does not stop as it should fails its step (the xCore keeping its last duty
+fails no_command, the Tron holding its setpoint without the host fails silence), the app that stops calling
+setup.keep ends a step, an emergency of the app ends it, and driver_end is not offered without two restarts of the
+driver left.
+
+Run in a sourced workspace: MOWBITE_PLATFORM=<platform> launch_test /ws/src/mowbite_sim/test/test_setup_motion.py
+"""
+import json
+import os
+import random
+import shutil
+import sys
+import tempfile
+import threading
+import time
+import unittest
+
+import launch
+import launch_testing.actions
+import launch_testing.asserts
+import rclpy
+from geometry_msgs.msg import TwistStamped
+from launch.actions import ExecuteProcess, TimerAction
+from mowbite_msgs.msg import HardwareStatus, MqttPublish, RobotState, RpcError, RpcMethods, RpcRequest, RpcResponse
+from mowbite_msgs.srv import SetEmergency
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sim_common import (EXIT_CODES, HISTORY, SimProbe, fake_xcore, journal_dir, layers,  # noqa: E402,F401
+                        loopback_group, sim_description, sim_files, wait_until, write_json)
+
+PLATFORM = os.environ["MOWBITE_PLATFORM"]
+WORK = tempfile.mkdtemp(prefix=f"mowbite_setup_motion_{PLATFORM}_")
+STATE, FLAGS, LOG, DATA = sim_files(WORK)
+JOURNAL = journal_dir(WORK)
+GROUP_PORT, BIND_IP = loopback_group()
+DATUM = (52.0, 9.0, 80.0)
+SETUP = layers.setup(PLATFORM)
+STEPS = {step["id"]: step for step in json.loads(SETUP["steps"])["steps"]}
+CONFIRM = ["raised", "hand_at_stop"]
+# What the driver shows after a silence: the xCore reports the host missing as well. The board that does not stop as it
+# should, the step that fails with it and the part, the name of the driver in driver_exit.json.
+SILENCE = HardwareStatus.REASON_LATCH | HardwareStatus.REASON_HIGH_LEVEL
+if PLATFORM == "nx60i":
+    # TIMEOUT_HIGH_LEVEL, bit 6 of x-emergency-bits.
+    SILENCE |= 1 << 6
+COUNTER = {"nx60i": ("no_command", {"zero_duty_ignored": 1}, None),
+           "tron": ("silence", {"host_timeout": 30}, "round_1")}[PLATFORM]
+DRIVER = {"nx60i": "xcore_driver", "tron": "tron_mcu_node"}[PLATFORM]
+
+os.makedirs(DATA, exist_ok=True)
+# The steps of the inputs passed: the rule of the program lets no wheel turn before.
+write_json(os.path.join(DATA, "setup.json"),
+           {"schema": 1, "platform": SETUP["platform"],
+            "steps": {step: {"state": "ok"} for step in ("stop", "lift", "bumper")}})
+write_json(FLAGS, {"gps_fix": "fix"})
+
+
+def generate_test_description():
+    if PLATFORM == "tron":
+        return sim_description(WORK, random.randint(18000, 18999), journal_dir=JOURNAL)
+    board = fake_xcore(GROUP_PORT, "--origin", str(DATUM[0]), str(DATUM[1]), "--flags", FLAGS, "--state", STATE,
+                       "--log", LOG, "--log-max-mb", "60")
+    system = ExecuteProcess(
+        cmd=["ros2", "launch", "mowbite_bringup", "mowbite.launch.py", "platform:=nx60i", "interface:=lo",
+             f"bind_ip:={BIND_IP}", f"announcement_port:={GROUP_PORT}", f"data_dir:={DATA}",
+             f"journal_dir:={JOURNAL}", f"datum_lat:={DATUM[0]}", f"datum_long:={DATUM[1]}",
+             f"datum_height:={DATUM[2]}", f"mqtt_port:={random.randint(18000, 18999)}"],
+        output="screen", sigterm_timeout="30", sigkill_timeout="30")
+    return launch.LaunchDescription([
+        board,
+        TimerAction(period=0.5, actions=[system, launch_testing.actions.ReadyToTest()]),
+    ]), {}
+
+
+def set_flags(**flags):
+    write_json(FLAGS, {"gps_fix": "fix", **flags})
+
+
+class Probe(SimProbe):
+    offer_timeout = 30.0
+    call_timeout = 20.0
+    emergency_reason = "setup motion test"
+
+    def __init__(self):
+        super().__init__(f"setup_motion_{PLATFORM}_probe")
+        self.status = None
+        self.robot = None
+        self.wheels = None
+        self.sub_states = set()
+        self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
+        self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
+        self.node.create_subscription(TwistStamped, "hw/wheel_odom", self._set("wheels"), 10)
+        self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
+        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
+        self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
+        self.node.create_subscription(RpcMethods, "bridge/rpc/methods", self._methods, HISTORY)
+        self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
+        self.emergency = self.node.create_client(SetEmergency, "hw/emergency")
+        # setup.keep as the app sends it while a step that moves runs.
+        self.keeping = None
+        self.keeper = threading.Thread(target=self._keep, daemon=True)
+        self.start()
+        self.keeper.start()
+
+    def _robot(self, msg):
+        with self.lock:
+            self.robot = msg
+            self.sub_states.add(msg.current_sub_state)
+
+    def _keep(self):
+        while rclpy.ok():
+            step = self.keeping
+            if step:
+                self._send("setup.keep", {"step": step}, None, None)
+            time.sleep(0.4)
+
+    def turning(self):
+        return self.wheels is not None and abs(self.wheels.twist.linear.x) > 0.02
+
+    def up(self, timeout=90.0):
+        return self.wait(lambda: self.status is not None and self.status.telemetry_ok and self.robot is not None
+                         and self.wheels is not None and self.methods.get("mowbite_setup"), timeout)
+
+    def get(self):
+        for _ in range(4):
+            answer = self.rpc("setup.get", timeout=4.0)
+            if answer:
+                break
+        assert answer and "result" in answer, f"setup.get: {answer}"
+        return answer["result"]
+
+    def step(self, step):
+        return next(entry for entry in self.get()["steps"] if entry["id"] == step)
+
+    def change(self, method, step, **params):
+        for _ in range(3):
+            answer = self.rpc(method, {"step": step, "version": self.get()["version"], **params})
+            data = ((answer or {}).get("error") or {}).get("data") or {}
+            if data.get("reason") != "VERSION":
+                break
+        return answer
+
+
+class TestSetupMotion(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        rclpy.init()
+        cls.probe = Probe()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.probe.keeping = None
+        cls.probe.stop()
+        rclpy.shutdown()
+        shutil.rmtree(WORK, ignore_errors=True)
+
+    def start(self, step, keep=True):
+        p = self.probe
+        entry = wait_until(lambda: (lambda e: e if not e["blocked"] else None)(p.step(step)), 15)
+        self.assertIsNotNone(entry, f"{step} stays blocked: {p.step(step)['blocked']}")
+        p.keeping = step if keep else None
+        answer = p.change("setup.start", step, confirm=CONFIRM)
+        self.assertIn("result", answer, answer)
+
+    def ended(self, step, timeout):
+        """The entry of the step once it no longer runs; the mower stands in IDLE again."""
+        p = self.probe
+        entry = wait_until(lambda: (lambda e: e if e["state"] != "running" else None)(p.step(step)), timeout)
+        p.keeping = None
+        self.assertIsNotNone(entry, f"{step} still runs: {p.step(step)}")
+        self.assertTrue(p.wait(lambda: p.robot.current_state == "IDLE" and p.robot.current_sub_state == "", 5),
+                        p.robot)
+        self.assertTrue(p.wait(lambda: not p.turning(), 5), "the wheels turn after the step")
+        return entry
+
+    def passed(self, step, timeout):
+        entry = self.ended(step, timeout)
+        self.assertEqual(entry["state"], "ok", entry["result"])
+        self.assertEqual(self.probe.status.emergency_reason, 0)
+        return entry
+
+    def test_01_the_os_comes_up_and_offers_the_steps(self):
+        p = self.probe
+        self.assertTrue(p.up(), "the OS does not come up")
+        self.assertTrue(p.wait(lambda: p.robot.current_state == "IDLE", 60), p.robot)
+        self.assertTrue(p.wait(lambda: p.status.emergency_reason == 0, 10), p.status.emergency_reason)
+        for step in ("wheels", "stop_moving", "no_command", "silence", "driver_end"):
+            entry = p.step(step)
+            self.assertEqual((entry["kind"], entry["state"]), ("drive", "open"), step)
+            self.assertEqual(entry["motion"]["raised"], True, step)
+        refused = p.change("setup.start", "wheels", confirm=["raised"])
+        self.assertEqual(refused["error"]["data"]["reason"], "CONFIRM_MISSING", refused)
+
+    def test_02_wheels(self):
+        p = self.probe
+        self.start("wheels")
+        self.assertTrue(p.wait(lambda: "SETUP" in p.sub_states, 5), p.sub_states)
+        asked = wait_until(lambda: (lambda e: e if e["state"] != "running" or any(
+            i["name"] == "wheel" and i["ask"] for i in e["inputs"]) else None)(p.step("wheels")), 40)
+        self.assertIsNotNone(asked, p.step("wheels"))
+        self.assertEqual(asked["state"], "running", asked["result"])
+        time.sleep(0.5)
+        self.assertIn("result", p.change("setup.answer", "wheels", values={"wheel": "right"}))
+        entry = self.passed("wheels", 10)
+        for value in entry["values"]:
+            self.assertTrue(value["ok"], value)
+
+    def test_03_stop_moving(self):
+        p = self.probe
+        self.start("stop_moving")
+        for index, part in enumerate(STEPS["stop_moving"]["parts"]):
+            ready = wait_until(lambda: (lambda e: e if e["state"] != "running" or (
+                e["progress"]["n"] == index + 1 and p.turning() and p.status.emergency_reason == 0) else None)(
+                    p.step("stop_moving")), 15)
+            self.assertEqual((ready or {}).get("state"), "running", p.step("stop_moving"))
+            time.sleep(0.5)
+            set_flags(**{part["role"]: 1})
+            self.assertTrue(p.wait(lambda: p.status.emergency_reason != 0, 2), part)
+            time.sleep(0.5)
+            set_flags()
+        entry = self.passed("stop_moving", 20)
+        for value in entry["values"]:
+            self.assertLessEqual(value["value"], 1.0, value)
+
+    def test_04_no_command(self):
+        self.start("no_command")
+        entry = self.passed("no_command", 20)
+        self.assertLessEqual(entry["values"][0]["value"], 1.0, entry["values"])
+
+    def test_05_silence(self):
+        p = self.probe
+        self.start("silence")
+        # Meanwhile the board reports the host missing as well, which the list of the step names.
+        self.assertTrue(p.wait(lambda: p.status.emergency_reason == SILENCE, 15), p.status.emergency_reason)
+        entry = self.passed("silence", 90)
+        rounds = [value for value in entry["values"] if value["id"].startswith("round_")]
+        self.assertEqual(len(rounds), STEPS["silence"]["params"]["rounds"])
+        for value in rounds:
+            self.assertGreater(value["value"], 0.0, value)
+            self.assertLessEqual(value["value"], STEPS["silence"]["params"]["stop_max"], value)
+
+    def test_06_driver_end(self):
+        p = self.probe
+        self.start("driver_end")
+        entry = self.passed("driver_end", 60)
+        self.assertGreater(entry["values"][0]["value"], 1.0)
+        with open(os.path.join(DATA, "driver_exit.json")) as f:
+            note = json.load(f)
+        self.assertEqual((note["exit_code"], note["restart"]), (3, 1), note)
+        # Two restarts left: still offered.
+        self.assertEqual(p.step("driver_end")["blocked"], [])
+
+    def test_07_a_board_that_does_not_stop_fails(self):
+        p = self.probe
+        step, flags, part = COUNTER
+        set_flags(**flags)
+        try:
+            self.start(step)
+            entry = wait_until(lambda: (lambda e: e if e["state"] != "running" else None)(p.step(step)), 30)
+        finally:
+            p.keeping = None
+            set_flags()
+        self.assertIsNotNone(entry, p.step(step))
+        self.assertEqual((entry["result"]["reason"], entry["result"]["part"]), ("LIMIT", part), entry["result"])
+        # Such a board turns on until it takes a zero again; the step releases nothing it did not ask for, also not the
+        # emergency at the end of a silence that is still on.
+        self.assertTrue(p.wait(lambda: not p.turning(), 10), "the wheels turn on")
+        if p.wait(lambda: p.status.emergency_reason != 0, 6):
+            self.assertIn("result", p.rpc("emergency.reset"))
+            self.assertTrue(p.wait(lambda: p.status.emergency_reason == 0, 10), p.status.emergency_reason)
+
+    def test_08_without_keep_the_step_stops(self):
+        p = self.probe
+        self.start("wheels", keep=False)
+        entry = self.ended("wheels", 10)
+        self.assertEqual(entry["result"]["reason"], "RELEASED", entry["result"])
+        self.assertEqual(p.status.emergency_reason, 0)
+
+    def test_09_an_emergency_of_the_app_ends_the_step(self):
+        p = self.probe
+        self.start("stop_moving")
+        self.assertTrue(p.wait(lambda: p.turning(), 10), "the wheels do not turn")
+        # As the emergency button of the app reaches the driver.
+        self.assertTrue(p.set_emergency(True).success)
+        entry = self.ended("stop_moving", 10)
+        self.assertEqual(entry["result"]["reason"], "EMERGENCY", entry["result"])
+        time.sleep(3.0)
+        self.assertNotEqual(p.status.emergency_reason, 0)
+        self.assertIn("result", p.rpc("emergency.reset"))
+        self.assertTrue(p.wait(lambda: p.status.emergency_reason == 0, 10), p.status.emergency_reason)
+
+    def test_10_driver_end_needs_two_restarts_left(self):
+        p = self.probe
+        write_json(os.path.join(DATA, "driver_exit.json"),
+                   {"name": DRIVER, "exit_code": 3, "restart": 2, "max_restarts": 3, "t": time.time(),
+                    "mono": time.monotonic(), "stalled": None, "down": False, "stable_s": 600.0})
+        entry = wait_until(lambda: (lambda e: e if e["blocked"] else None)(p.step("driver_end")), 5)
+        self.assertIsNotNone(entry)
+        self.assertEqual([b["reason"] for b in entry["blocked"]], ["RESTARTS_LOW"], entry["blocked"])
+        refused = p.change("setup.start", "driver_end", confirm=CONFIRM)
+        self.assertEqual(refused["error"]["data"]["reason"], "RESTARTS_LOW", refused)
+
+
+@launch_testing.post_shutdown_test()
+class TestExit(unittest.TestCase):
+    def test_processes_exit_cleanly(self, proc_info):
+        # The driver that hw/end ended leaves with exit code 3.
+        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=EXIT_CODES + [3])

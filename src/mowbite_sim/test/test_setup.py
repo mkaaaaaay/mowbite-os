@@ -1,6 +1,7 @@
 """setup.* of mowbite_setup with the step list of a platform: the test plays the bridge (bridge/rpc/request), the driver
 (hw/status, hw/capabilities, imu/data, gps/absolute_pose) and the other nodes (robot state, map, corrections,
-geometry) and does every step of the list by hand, as a user would, until the program is complete. Nothing moves.
+geometry) and does every step of the list by hand, as a user would, until the program is complete. Nothing moves:
+the steps that move the wheels are left out (test_setup_motion_<platform>.py).
 The emergency a press of an input brings is released by the program, over safety/release_emergency, which the test
 plays as well. A step inputs_assign is left out of the list: it restarts the OS and needs a driver that learns
 (test_nx60i_inputs.py).
@@ -39,11 +40,13 @@ WORK = tempfile.mkdtemp(prefix="mowbite_setup_")
 FILE = os.path.join(WORK, "setup.json")
 SETUP = layers.setup(PLATFORM)
 LIST = json.loads(SETUP["steps"]) if SETUP["steps"] else {"catalog": 0, "steps": []}
-LIST["steps"] = [step for step in LIST["steps"] if step["check"] != "inputs_assign"]
+DRIVE = ("wheels", "stop_moving", "no_command", "silence", "driver_end")
+LIST["steps"] = [step for step in LIST["steps"] if step["check"] != "inputs_assign" and step["check"] not in DRIVE]
 SETUP["steps"] = json.dumps(LIST) if LIST["steps"] else ""
 STEPS = {step["id"]: step for step in LIST["steps"]}
 BOARD = next((step["id"] for step in LIST["steps"] if step["check"] == "board"), None)
-METHODS = ["setup.get", "setup.start", "setup.answer", "setup.skip", "setup.abort", "setup.reset", "setup.image"]
+METHODS = ["setup.get", "setup.start", "setup.answer", "setup.skip", "setup.abort", "setup.keep", "setup.reset",
+           "setup.image"]
 G = 9.81
 FIRMWARE = "main 1.2.3"
 # The emergency a press of an input brings where the step names none.
