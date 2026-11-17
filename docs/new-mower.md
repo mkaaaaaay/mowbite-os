@@ -559,6 +559,19 @@ that emergency does not open the lock: only passing the same step again does (sk
 file that cannot be read keeps the lock closed. Remote control and the steps of the setup program stay free. A driver
 needs nothing for it; a new reader of the date has to take `SafetyMeasured` and the file in `data_dir` as well.
 
+Instead of the date by hand the setup program can open the lock with its step `summary` (stage `safety`, kind
+`confirm`, confirm `seen_myself`, after a `silence` in the list). It starts only when every safety step of the list
+passed and the lock holds no cause of one (`SAFETY_STEPS`, skipped ones named apart) and `time/clock` is safe
+(`CLOCK_UNSAFE`). It writes today's date (UTC) and the longest stand time of `silence` as `safety_measurement_date`
+and `failsafe_without_host` for `node` into the file of the setup program, closes the lock with a reset meanwhile and
+restarts the OS. After the restart it holds `hw/capabilities` against what it wrote: the same, the step passes and
+takes the reset away (`safety.source` `program`); else `NOT_APPLIED` (also for an empty date of the file kept by
+hand, which has the last word), `RESTART_FAILED` or `NO_DATA`, the file gets its old values back and the lock stays
+closed until a summary passes. The driver only has to take both parameters and show them in `hw/capabilities`. A
+safety step that fails later sets `summary` open again. `setup.reset` takes date, stand time and `allow_blade` out of
+the file of the setup program and, when the program had opened the lock, closes it with a reset until the next
+summary passes; a date of the file kept by hand stays as it is.
+
 ## 7. Lights (optional)
 
 `mowbite_light` drives a WS2812 chain on spidev after the robot state, with a profile per state in the app (`light.*`);
