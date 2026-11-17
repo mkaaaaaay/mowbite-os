@@ -208,6 +208,8 @@ mowbite_calibration:
     # rad/s of the turns on the spot of the calibration drive, within the limit of the driver and fast enough that
     # the wheels do not stick.
     spin_rate: <platform>
+    # m/s the lines of the drive never go below while their end is ahead: slower, the wheels stand still.
+    line_min_speed: <platform>
     # NOT_TURNING below this share of spin_rate on average: slipping wheels are no dead zone.
     turn_min_ratio: 0.5
 

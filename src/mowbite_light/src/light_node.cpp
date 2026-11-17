@@ -115,7 +115,7 @@ class LightNode : public rclcpp::Node {
     NodeConfig config;
     LightConfig& light = config.light;
     config.output = declare_parameter("output", std::string("none"));
-    config.device = declare_parameter("device", std::string("/dev/spidev3.0"));
+    config.device = declare_parameter("device", std::string());
     config.file = declare_parameter("file", std::string());
     const int64_t leds = declare_parameter("leds", static_cast<int64_t>(light.leds));
     const auto strip_texts = declare_parameter("strips", std::vector<std::string>{});

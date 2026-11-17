@@ -22,7 +22,7 @@ struct ProgramConfig {
   // Rounds of line, stand, turn on the spot, stand.
   int rounds = 4;
   // Lines go forward only: up to line_speed (m/s), faster and slower by line_accel (m/s²), and while the end is ahead
-  // never slower than line_min_speed, below which the wheels of the Tron stand still.
+  // never slower than line_min_speed, below which the wheels of the platform stand still.
   double line_speed = 0.2;
   double line_accel = 0.1;
   double line_min_speed = 0.08;

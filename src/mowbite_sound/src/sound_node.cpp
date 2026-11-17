@@ -102,7 +102,7 @@ class SoundNode : public rclcpp::Node {
     NodeConfig config;
     SoundConfig& sound = config.sound;
     config.output = declare_parameter("output", std::string("none"));
-    config.device = declare_parameter("device", std::string("plughw:0,0"));
+    config.device = declare_parameter("device", std::string());
     config.file = declare_parameter("file", std::string());
     config.converter = declare_parameter("converter", std::string());
     sound.max_volume = declare_parameter("max_volume", sound.max_volume);

@@ -82,7 +82,7 @@ class NtripNode : public rclcpp::Node {
  public:
   explicit NtripNode(const rclcpp::NodeOptions& options)
       : rclcpp::Node("mowbite_ntrip", mowbite_component::StartupOnly(options)), client_(Timing()) {
-    const std::string data_dir = declare_parameter("data_dir", "/userdata/mowbite");
+    const std::string data_dir = declare_parameter("data_dir", std::string());
     file_ = declare_parameter("access_file", "");
     if (file_.empty()) file_ = (std::filesystem::path(data_dir) / "ntrip.yaml").string();
     source_file_ = (std::filesystem::path(data_dir) / "ntrip_source.json").string();

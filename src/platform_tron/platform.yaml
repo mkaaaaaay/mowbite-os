@@ -150,6 +150,7 @@ mowbite_calibration:
     # 0.67 the wheels slipped by a third on wet lawn (16.11.). 0.4 is 0.08 m/s per wheel, the least the vendor turns
     # at.
     spin_rate: 0.4
+    line_min_speed: 0.08
 
 mowbite_follower:
   ros__parameters:

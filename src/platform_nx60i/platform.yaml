@@ -76,6 +76,7 @@ mowbite_calibration:
   ros__parameters:
     # Of the Tron:
     spin_rate: 0.4
+    line_min_speed: 0.08
 
 # The follower as before the faster values of the Tron: the driver of the NX60i drives at most 0.3 m/s and 0.3 rad/s.
 mowbite_follower:
