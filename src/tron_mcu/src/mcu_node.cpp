@@ -370,8 +370,8 @@ class McuNode : public rclcpp::Node {
     switch (stop_clear_mark_->Check(error)) {
       case tron::StopClearMark::State::kAbsent: return;
       case tron::StopClearMark::State::kPresent:
-        mark_written_ = true;
-        control_.Call<&C::SetStopClearMark>(true);
+        // Perhaps only in the page cache of a driver killed while writing it: written again before a clear frame.
+        mark_present_ = true;
         RCLCPP_ERROR(get_logger(), "STOP was cleared on the MCU during an emergency before this start (%s): latched "
                      "until released", path.c_str());
         break;
@@ -383,7 +383,8 @@ class McuNode : public rclcpp::Node {
     control_.Call<&C::LatchEmergency>(tron::kReasonHighLevel);
   }
 
-  // The mark is on disk before the first clear frame of STOP in an emergency, and goes once it is released.
+  // The mark is written and synced by this driver before its first clear frame of STOP in an emergency, and goes
+  // once it is released.
   void UpdateStopClearMark(double now) {
     if (!stop_clear_mark_ || now < next_mark_try_s_) return;
     tron::McuControlStatus status;
@@ -391,9 +392,11 @@ class McuNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       status = control_.View().Status(now);
     }
-    const bool write = status.stop_clear_mark_wanted && !mark_written_;
-    const bool remove = !status.latched && mark_written_;
+    const bool write = status.stop_clear_mark_wanted;
+    const bool remove = !status.latched && mark_present_;
     if (!write && !remove) return;
+    // A failed write may leave the file as well.
+    if (write) mark_present_ = true;
     std::string error;
     if (!(write ? stop_clear_mark_->Write(error) : stop_clear_mark_->Remove(error))) {
       next_mark_try_s_ = now + kMarkRetryS;
@@ -401,7 +404,7 @@ class McuNode : public rclcpp::Node {
                             stop_clear_mark_->path().c_str(), error.c_str());
       return;
     }
-    mark_written_ = write;
+    mark_present_ = write;
     if (write) {
       RCLCPP_INFO(get_logger(), "STOP is cleared on the MCU during this emergency (mark %s)",
                   stop_clear_mark_->path().c_str());
@@ -924,7 +927,8 @@ class McuNode : public rclcpp::Node {
   std::optional<mowbite_hold::HoldWatch> hold_watch_;
   // Only for the I/O thread after the start; empty without stop_clear_mark or read only.
   std::optional<tron::StopClearMark> stop_clear_mark_;
-  bool mark_written_ = false;
+  // The file may be there: removed after the release.
+  bool mark_present_ = false;
   double next_mark_try_s_ = 0;
   // What PollHold logged last, only for the I/O thread after the start.
   mowbite_hold::HoldView hold_logged_;

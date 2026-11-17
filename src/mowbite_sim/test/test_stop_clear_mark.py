@@ -1,6 +1,7 @@
 """STOP cleared during an emergency (G37), here tron_mcu against fake_tron on a pty with STOP kept by the board as on the
 Tron: the mark is on disk before the first clear frame, which comes stop_clear_delay after the latch; a driver killed
-with the mark starts latched (HIGH_LEVEL), the release removes the mark, and a start without it is free.
+with the mark starts latched (HIGH_LEVEL) and writes the mark again before its own first clear frame, the release
+removes the mark, and a start without it is free.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_stop_clear_mark.py
 """
@@ -139,6 +140,14 @@ class TestStopClearMark(unittest.TestCase):
         self.assertTrue(os.path.exists(MARK))
         self.assertTrue(s.emergency, "the driver started free with the mark")
         self.assertTrue(s.emergency_reason & HardwareStatus.REASON_HIGH_LEVEL, s.emergency_reason)
+
+    def test_cb_a_mark_found_at_the_start_is_written_again_before_a_clear_frame(self):
+        # Empty as a driver killed between creating and syncing it may leave it.
+        open(MARK, "w").close()
+        since = last_time(LOG)
+        press()
+        self.assertTrue(wait_until(lambda: clears(since) or None, DELAY + 3.0, poll=0.01), "no clear frame")
+        self.assertGreater(os.path.getsize(MARK), 0, "a clear frame went out on the mark found at the start")
 
     def test_d_the_release_removes_the_mark(self):
         answer = self.probe.call(self.probe.emergency, SetEmergency.Request(latch=False, reason="test"))
