@@ -109,7 +109,8 @@ class Updater:
         state = files.read_json(self.paths.state) or {}
         state.setdefault("auto", dict(AUTO_DEFAULT))
         state["origin"] = {**ORIGIN_DEFAULT, **state.get("origin", {})}
-        state.setdefault("app_version", None)
+        if not self._app_ok(state.setdefault("app_version", None)):
+            state["app_version"] = None
         state.setdefault("last", None)
         components = state.setdefault("components", {})
         for component in COMPONENTS:
@@ -281,14 +282,19 @@ class Updater:
                 print(f"update.json: {error}", flush=True)
         self._changed()
 
-    # Only a version of up to MAX_APP_VERSION characters that compares is kept; another is logged once.
+    # None, or a version of up to MAX_APP_VERSION characters that compares; another is logged once.
+    def _app_ok(self, app_version):
+        if app_version is None:
+            return True
+        if isinstance(app_version, str) and len(app_version) <= MAX_APP_VERSION and compat.version_tuple(app_version):
+            return True
+        if not self._bad_app_logged:
+            self._bad_app_logged = True
+            print(f"app_version {str(app_version)[:MAX_APP_VERSION]!r} is no version: ignored", flush=True)
+        return False
+
     def remember_app(self, app_version):
-        if not isinstance(app_version, str):
-            return
-        if len(app_version) > MAX_APP_VERSION or compat.version_tuple(app_version) is None:
-            if not self._bad_app_logged:
-                self._bad_app_logged = True
-                print(f"app_version {app_version[:MAX_APP_VERSION]!r} is no version: ignored", flush=True)
+        if not isinstance(app_version, str) or not self._app_ok(app_version):
             return
         if app_version != self.state["app_version"]:
             with self._lock:

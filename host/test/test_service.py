@@ -16,7 +16,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "boot"))
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from mowbite_host import files, installer, os_state, probe, service  # noqa: E402
+from mowbite_host import files, installer, os_state, probe, service, updater  # noqa: E402
 from mowbite_host.broker import Message  # noqa: E402
 import support  # noqa: E402
 from test_components import P1, X, ComponentBase  # noqa: E402
@@ -107,6 +107,13 @@ class RequestTest(HostBase):
             self.assertIn("result", self.answer("update.status", {"app_version": bad}))
             self.updater.remember_app(bad)
         self.assertEqual(self.updater.state["app_version"], "1.5.0-beta.2")
+
+    def test_a_stored_app_version_that_is_no_version_is_dropped(self):
+        os.makedirs(self.paths.var, exist_ok=True)
+        for stored, kept in (("1.5.0", "1.5.0"), ("x" * 65, None), ("latest", None), (5, None)):
+            files.write_json(self.paths.state, {"app_version": stored})
+            again = updater.Updater(self.paths, self.fake, None, None, self.fake)
+            self.assertEqual(again.state["app_version"], kept, stored)
 
     def test_refusals_name_their_reason(self):
         error = self.answer("update.start", {"component": "os"})["error"]
