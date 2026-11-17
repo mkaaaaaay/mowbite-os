@@ -1,6 +1,9 @@
 """setup.* of mowbite_setup with the step list of a platform: the test plays the bridge (bridge/rpc/request), the driver
 (hw/status, hw/capabilities, imu/data, gps/absolute_pose) and the other nodes (robot state, map, corrections,
 geometry) and does every step of the list by hand, as a user would, until the program is complete. Nothing moves.
+The emergency a press of an input brings is released by the program, over safety/release_emergency, which the test
+plays as well. A step inputs_assign is left out of the list: it restarts the OS and needs a driver that learns
+(test_nx60i_inputs.py).
 
 Run in a sourced workspace: MOWBITE_PLATFORM=<platform> launch_test /ws/src/mowbite_sim/test/test_setup.py
 """
@@ -23,6 +26,7 @@ from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterValue
 from mowbite_msgs.msg import GnssFix, HardwareCapabilities, HardwareStatus, MapStatus, MqttPublish, NtripStatus
 from mowbite_msgs.msg import RobotState, RpcError, RpcMethods, RpcRequest, RpcResponse
+from mowbite_msgs.srv import SetEmergency
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 from std_msgs.msg import String
@@ -35,6 +39,8 @@ WORK = tempfile.mkdtemp(prefix="mowbite_setup_")
 FILE = os.path.join(WORK, "setup.json")
 SETUP = layers.setup(PLATFORM)
 LIST = json.loads(SETUP["steps"]) if SETUP["steps"] else {"catalog": 0, "steps": []}
+LIST["steps"] = [step for step in LIST["steps"] if step["check"] != "inputs_assign"]
+SETUP["steps"] = json.dumps(LIST) if LIST["steps"] else ""
 STEPS = {step["id"]: step for step in LIST["steps"]}
 BOARD = next((step["id"] for step in LIST["steps"] if step["check"] == "board"), None)
 METHODS = ["setup.get", "setup.start", "setup.answer", "setup.skip", "setup.abort", "setup.reset", "setup.image"]
@@ -76,10 +82,15 @@ class Probe(SimProbe):
         self.node.create_subscription(RpcError, "bridge/rpc/error", self._failure, 10)
         self.node.create_subscription(RpcMethods, "bridge/rpc/methods", self._methods, HISTORY)
         self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
+        self.node.create_service(SetEmergency, "safety/release_emergency", self._release)
         # What the driver and the other nodes report, changed by the test.
         self.driver = True
         self.inputs = {}
         self.reason = 0
+        # latch_count of hw/status: one more with every reason that latches.
+        self.latches = 0
+        # Every release asked for, as (latch_count, reason).
+        self.releases = []
         self.accel = (0.0, 0.0, G)
         self.turn = 0.0
         self.fix = None
@@ -103,7 +114,7 @@ class Probe(SimProbe):
         count = 0
         while self.running:
             with self.lock:
-                driver, inputs, reason = self.driver, dict(self.inputs), self.reason
+                driver, inputs, reason, latches = self.driver, dict(self.inputs), self.reason, self.latches
                 accel, turn, fix, ntrip, state = self.accel, self.turn, self.fix, self.ntrip, self.state
             imu = Imu()
             imu.linear_acceleration.x, imu.linear_acceleration.y, imu.linear_acceleration.z = accel
@@ -112,7 +123,7 @@ class Probe(SimProbe):
             if driver and count % 5 == 0:
                 hw = HardwareStatus(telemetry_ok=True, battery_source=HardwareStatus.BATTERY_SOURCE_BMS,
                                     battery_voltage=24.5, battery_percentage=80, emergency=reason != 0,
-                                    emergency_reason=reason)
+                                    emergency_reason=reason, emergency_latched=reason != 0, latch_count=latches)
                 for motor in (hw.blade_motor, hw.left_motor, hw.right_motor):
                     motor.ok = True
                 for name, on in inputs.items():
@@ -127,9 +138,22 @@ class Probe(SimProbe):
             count += 1
             time.sleep(0.02)
 
+    def _release(self, request, response):
+        """The safety filter and the driver in one: a release with the latch count of now ends the emergency."""
+        with self.lock:
+            self.releases.append((request.latch_count, request.reason))
+            response.success = not request.latch and request.latch_count == self.latches
+            if response.success:
+                self.reason = 0
+            else:
+                response.code = "LATCH_CHANGED"
+        return response
+
     def put(self, **values):
         """Sets what the driver and the other nodes report from now on."""
         with self.lock:
+            if values.get("reason", 0) & ~self.reason:
+                self.latches += 1
             for name, value in values.items():
                 setattr(self, name, value)
 
@@ -280,8 +304,12 @@ class TestSetup(unittest.TestCase):
             self.part_ok(step, index)
             if reason:
                 delays.append(part["id"])
-            # The user releases the emergency before the next press.
-            self.probe.put(reason=0)
+                # The program releases the emergency of its press itself, with the latch count the driver reports.
+                asked = len(self.probe.releases)
+                self.assertTrue(self.probe.wait(lambda: self.probe.reason == 0, 5.0),
+                                f"{step} {part['id']}: the emergency is not released")
+                self.assertEqual(self.probe.releases[asked:], [(self.probe.latches, self.probe.releases[-1][1])])
+                self.assertIn(signal, self.probe.releases[-1][1])
         entry = self.probe.step(step)
         self.assertEqual(entry["state"], "ok", entry["result"])
         self.assertEqual([value["id"] for value in entry["values"]], delays)
