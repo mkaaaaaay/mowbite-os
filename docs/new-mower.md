@@ -373,7 +373,10 @@ not skipped; the start of the list refuses it otherwise. While it runs the progr
 holds the sub state SETUP, mowbite_safety caps the commands to 0.1 m/s and 0.4 rad/s) and drives on `setup/cmd_vel`;
 the app has to call `setup.keep` at least every second. A stop or end of the driver has to bring the emergencies of
 `emergency` of the step and LATCH only, the program then releases them itself as for an input, waits `hold`, and a
-new command has to turn the wheels again. `stop_max` of `silence` comes from the board: the Tron stops 0.15 to 0.28 s
+new command has to turn the wheels again. When a part waits for an action of the user that does not come in time
+(`input`, `imu`, `stop_moving`), the step stands its wheels and asks `pressed`: yes fails it with `NOT_SEEN` (or
+`NO_EMERGENCY` for `tilt_stop`), which closes the lock of section 6; no or no answer within 30 s leaves it open with
+`NOT_DONE`. `stop_max` of `silence` comes from the board: the Tron stops 0.15 to 0.28 s
 after its last setpoint, the xCore 1.0 s after it last heard of the host (so 1.5 s there); `emergency` is what the
 driver shows after a silence (the Tron `HIGH_LEVEL`, the xCore `HIGH_LEVEL` and `TIMEOUT_HIGH_LEVEL`). `driver_end`
 is offered only while the start has at least two restarts of the driver left (`DRIVER_RESTARTS`, `driver_exit.json`).
@@ -513,6 +516,17 @@ the OS, give the lock back and start the host again when it ran before, as `mowb
 
 Then set `safety_measurement_date` in the driver parameters. Without it the mower takes remote control only
 (`NO_SAFETY_MEASUREMENT`).
+
+The setup program can close that lock again, whatever the date: a safety step (`input`, `imu`, `wheels`,
+`stop_moving`, `no_command`, `silence`, `driver_end`; `safety` in `x-setup.checks`) that fails with a reason that
+closes (`closes` in `x-reasons` of SETUP_STEP: a value out of bounds, wheels that start again, an emergency that does
+not come, a wrong direction or wheel, or nothing seen after the user said the action was done) writes
+`<data_dir>/safety_lock.json` before anything else. mowbite_safety, the logic and the follower read it within 0.1 s
+through `mowbite_hold::SafetyMeasured` (date and lock, the one rule), so it acts at once, without a restart, against
+the date of the file kept by hand as well; mowbite_safety latches `HIGH_LEVEL` once for every new failure. Releasing
+that emergency does not open the lock: only passing the same step again does (skipping or `setup.reset` do not). A
+file that cannot be read keeps the lock closed. Remote control and the steps of the setup program stay free. A driver
+needs nothing for it; a new reader of the date has to take `SafetyMeasured` and the file in `data_dir` as well.
 
 ## 7. Lights (optional)
 
