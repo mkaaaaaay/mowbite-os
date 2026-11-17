@@ -89,6 +89,8 @@ class Incidents {
   void RefreshRuns(int64_t now_ns, double wall_s, Notices* notices);
   void LinkOpen();
   void FindCrashes(int64_t now_ns, double wall_s, Notices* notices);
+  // An archive the worker is still making, with or without location, keeps its incident.
+  bool Preparing(const std::string& id) const;
   void RemoveOld(double wall_s);
   void TakeDone();
   json Status() const;

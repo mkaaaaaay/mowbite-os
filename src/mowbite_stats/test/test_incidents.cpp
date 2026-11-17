@@ -392,6 +392,22 @@ TEST_F(IncidentsTest, DeleteWaitsForTheArchiveBeingMade) {
   EXPECT_TRUE(Call("incidents.list", nullptr).empty());
 }
 
+TEST_F(IncidentsTest, AnExpiredIncidentStaysWhileItsArchiveIsBeingMade) {
+  const std::string id = Sealed();
+  ASSERT_FALSE(id.empty());
+  incidents_->HoldWorker(true);
+  EXPECT_FALSE(Call("incidents.download", {{"id", id}, {"location", false}})["ready"].get<bool>());
+  const double later = Wall() + 400 * 86400.0;
+  now_ += static_cast<int64_t>(kIncidentRemoveEvery) * kS;
+  incidents_->Tick(now_, later);
+  ASSERT_EQ(Call("incidents.list", nullptr).size(), 1u);
+  incidents_->HoldWorker(false);
+  incidents_->Drain();
+  now_ += static_cast<int64_t>(kIncidentRemoveEvery) * kS;
+  incidents_->Tick(now_, later);
+  EXPECT_TRUE(Call("incidents.list", nullptr).empty());
+}
+
 TEST_F(IncidentsTest, NoIncidentBelowTheReserveOrWithTheJournalOff) {
   auto journal = Open();
   Feed(*journal, 0.1);

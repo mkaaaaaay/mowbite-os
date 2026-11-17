@@ -399,10 +399,14 @@ void Incidents::FindCrashes(int64_t now_ns, double wall_s, Notices* notices) {
   }
 }
 
+bool Incidents::Preparing(const std::string& id) const {
+  return preparing_.count({id, false}) != 0 || preparing_.count({id, true}) != 0;
+}
+
 void Incidents::RemoveOld(double wall_s) {
   std::vector<StoredIncident> stored = store_.Stored();
   for (StoredIncident& incident : stored) {
-    if (keeper_.Find(incident.id) != nullptr) incident.open = true;
+    if (keeper_.Find(incident.id) != nullptr || Preparing(incident.id)) incident.open = true;
   }
   for (const std::string& id : IncidentsToRemove(stored, wall_s, config_.limits)) {
     std::string error;
@@ -590,10 +594,6 @@ RpcOutcome Incidents::Mark(const json& params, int64_t now_ns, double wall_s, No
 RpcOutcome Incidents::Delete(const json& params) {
   if (auto bad = CheckKeys(params, {"client", "id"}, true)) return *bad;
   if (auto bad = CheckClient(params)) return *bad;
-  // An archive the worker is still making, with or without location, keeps its incident.
-  const auto preparing = [this](const std::string& id) {
-    return preparing_.count({id, false}) != 0 || preparing_.count({id, true}) != 0;
-  };
   int64_t deleted = 0;
   std::string error;
   if (params.is_object() && params.contains("id")) {
@@ -601,12 +601,12 @@ RpcOutcome Incidents::Delete(const json& params) {
     if (auto bad = RequiredId(params, &id)) return *bad;
     if (!store_.Manifest(id)) return BadParam("id", "unknown", "no incident with this id");
     if (keeper_.Find(id) != nullptr) return BadParam("id", "state", "the incident is still collecting");
-    if (preparing(id)) return BadParam("id", "state", "the archive of the incident is being made");
+    if (Preparing(id)) return BadParam("id", "state", "the archive of the incident is being made");
     if (!store_.Remove(id, &error)) return Failed(error);
     return Result({{"deleted", 1}});
   }
   for (const StoredIncident& incident : store_.Stored()) {
-    if (keeper_.Find(incident.id) != nullptr || preparing(incident.id)) continue;
+    if (keeper_.Find(incident.id) != nullptr || Preparing(incident.id)) continue;
     if (store_.Remove(incident.id, &error)) {
       ++deleted;
     } else {
