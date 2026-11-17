@@ -1674,6 +1674,13 @@ json Program::Blocked(const Step& step, double now) const {
   const auto add = [&blocked](const char* reason, const std::string& message) {
     blocked.push_back({{"reason", reason}, {"message", message}});
   };
+  // A refusal of the step also gives its fields, as SETUP_BLOCKED names them.
+  const auto add_problem = [&blocked](const Refusal& problem) {
+    json entry = problem.data.is_object() ? problem.data : json::object();
+    entry["reason"] = problem.reason;
+    entry["message"] = problem.message;
+    blocked.push_back(std::move(entry));
+  };
   if (!writable_) add("STORAGE_NOT_WRITABLE", "setup.json cannot be written");
   if (!lock_writable_) add("STORAGE_NOT_WRITABLE", std::string(mowbite_hold::kSafetyLockFile) + " cannot be written");
   // A step that asks pressed waits for the answer alone.
@@ -1692,7 +1699,7 @@ json Program::Blocked(const Step& step, double now) const {
     return blocked;
   }
   if (IsSummary(step)) {
-    for (const Refusal& problem : SummaryProblems(now)) add(problem.reason.c_str(), problem.message);
+    for (const Refusal& problem : SummaryProblems(now)) add_problem(problem);
     return blocked;
   }
   if (IsRun(step) && IsDrive(step)) {
@@ -1705,7 +1712,7 @@ json Program::Blocked(const Step& step, double now) const {
     return blocked;
   }
   if (IsDrive(step)) {
-    for (const Refusal& problem : DriveProblems(step, now)) add(problem.reason.c_str(), problem.message);
+    for (const Refusal& problem : DriveProblems(step, now)) add_problem(problem);
     return blocked;
   }
   if (IsRun(step)) {

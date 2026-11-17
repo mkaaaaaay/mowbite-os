@@ -223,6 +223,10 @@ TEST(Summary, NamesWhatKeepsItFromStarting) {
   bench.hardware.emergency_reason = EmergencyBit("STOP");
   bench.Run(0.2);
   EXPECT_EQ(bench.Blocked(), (std::vector<std::string>{"SAFETY_STEPS", "CLOCK_UNSAFE", "EMERGENCY"}));
+  const json blocked = bench.Step("summary")["blocked"];
+  EXPECT_EQ(blocked.at(0).value("steps", json()), json::array({"lift", "bumper", "blade"}));
+  EXPECT_EQ(blocked.at(0).value("skipped", json()), json::array({"lift"}));
+  EXPECT_EQ(blocked.at(1).value("clock_reason", ""), "never_synced");
   EXPECT_EQ(bench.Start(), "SAFETY_STEPS");
   const auto refusal =
       bench.program->Start({{"step", "summary"}, {"version", bench.program->version()}, {"confirm", kSeen}}, bench.now,
