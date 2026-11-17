@@ -19,6 +19,8 @@ namespace mowbite_setup {
 // hw/status as the checks need it.
 struct Hardware {
   uint32_t emergency_reason = 0;
+  // Goes up with every reason that latches, 0 from a driver that does not count.
+  uint32_t latch_count = 0;
   bool stop = false;
   bool lift = false;
   bool bumper = false;
@@ -31,6 +33,24 @@ struct Hardware {
   // Names of the motor controllers that are not ok.
   std::vector<std::string> motors_down;
   uint64_t link_errors = 0;
+};
+
+// One input of hw/inputs.
+struct Line {
+  std::string name;
+  std::string role;
+  std::string reason;
+  bool active = false;
+  bool assigned = false;
+  // The board keeps it switched after the sensor is free, until the emergency is released.
+  bool held = false;
+  int delay_ms = 0;
+};
+
+// A release of the emergency the node asks safety/release_emergency for.
+struct ReleaseRequest {
+  uint32_t latch_count = 0;
+  std::string reason;
 };
 
 // hw/capabilities as the checks need it.
@@ -86,6 +106,8 @@ class Program {
 
   // What the node hears; now is a monotonic clock (s), wall unix s.
   void OnHardware(const Hardware& hardware, double now);
+  // hw/inputs: the lines of the platform, none from a driver without the topic.
+  void OnInputs(const std::vector<Line>& lines);
   void OnCapabilities(const Capabilities& capabilities);
   void OnImu(const ImuSample& sample, double now);
   // solution as GnssFix has it (3 float, 4 fixed), accuracy in m.
@@ -119,6 +141,8 @@ class Program {
   // The record changed since the last call: save Text() and send the state.
   bool TakeChanged();
   std::vector<Event> TakeEvents();
+  // A release to ask for now, once.
+  std::optional<ReleaseRequest> TakeRelease();
 
  private:
   // What a step holds between restarts.
@@ -149,6 +173,11 @@ class Program {
     double latched_since = -1;
     // Another input that switched while this part waited.
     std::string other;
+    // Lines of the role that were active since the part was armed, and those of the parts before.
+    std::set<std::string> part_lines;
+    std::set<std::string> lines;
+    // The part saw a press, but only of lines an earlier part had already.
+    bool repeated = false;
     std::vector<std::string> part_states;
     // What a part measured: the delay of the emergency (s) or the angle reached (deg).
     std::vector<std::optional<double>> measured;
@@ -168,6 +197,26 @@ class Program {
     double last_imu = -1;
     // position
     double good_since = -1;
+  };
+
+  // The emergency a part of mode press brought, which the program releases itself. It exists only while every
+  // condition holds: gone, the emergency waits for emergency.reset.
+  //  - the input switched and its emergency followed within the limit of the step (confirmed);
+  //  - since the input switched hw/status never showed a bit other than this emergency and LATCH;
+  //  - the driver counts its latches, and the release carries the count of the last hw/status;
+  //  - the mower is in IDLE.
+  // A try comes at the earliest kReleaseEvery after the input switched and then as often; where the board does not
+  // hold the input, only once it is free. The tries end kReleaseAfter after the step. Only hw/status tells the
+  // outcome.
+  struct OwnLatch {
+    std::string role;
+    uint32_t bit = 0;
+    bool held = false;
+    bool confirmed = false;
+    double edge = 0;
+    double last_try = -1;
+    // No try after this; below 0 while the step runs.
+    double until = -1;
   };
 
   const Step& StepOf(const Run& run) const {
@@ -191,6 +240,12 @@ class Program {
   std::string FirmwareText() const;
   static bool Fresh(double last, double now, double limit);
   bool Signal(const std::string& role) const;
+  // The assigned lines a part of this role can switch.
+  std::vector<const Line*> LinesOf(const std::string& role) const;
+  void NoteLines();
+  void WatchOwnLatch();
+  void TickRelease(double now);
+  void EndRun(double now);
   bool IsRun(const Step& step) const;
   // The position has the solution the step asks for.
   bool SolutionOk(const Step& step) const;
@@ -217,6 +272,9 @@ class Program {
 
   Hardware hardware_;
   double hardware_at_ = -1;
+  std::vector<Line> lines_;
+  std::optional<OwnLatch> own_;
+  std::optional<ReleaseRequest> release_;
   Capabilities capabilities_;
   bool capabilities_known_ = false;
   double imu_at_ = -1;

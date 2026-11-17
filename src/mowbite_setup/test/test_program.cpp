@@ -69,6 +69,7 @@ struct Bench {
         program.OnFix(solution, accuracy, now);
       }
       program.Tick(now, kWall + now);
+      if (const auto release = program.TakeRelease()) releases.emplace_back(now, *release);
     }
   }
 
@@ -122,8 +123,19 @@ struct Bench {
     Run(0.2);
   }
 
+  // hw/inputs with this line switched or free.
+  void SetLine(const std::string& name, bool active) {
+    for (Line& line : lines) {
+      if (line.name == name) line.active = active;
+    }
+    program.OnInputs(lines);
+  }
+
   Program program;
   Hardware hardware;
+  std::vector<Line> lines;
+  // The releases the program asked for, with the time of each.
+  std::vector<std::pair<double, ReleaseRequest>> releases;
   Capabilities capabilities;
   ImuSample imu{0, 0, 9.81, 0};
   bool driver = true;
@@ -131,6 +143,43 @@ struct Bench {
   int solution = -1;
   double accuracy = 0.02;
   double now = 100;
+};
+
+Line MakeLine(const std::string& name, const std::string& role, const std::string& reason, bool held = false) {
+  Line line;
+  line.name = name;
+  line.role = role;
+  line.reason = reason;
+  line.assigned = true;
+  line.held = held;
+  return line;
+}
+
+// What the program's own release of an emergency needs: the mower in IDLE and a driver that counts its latches.
+struct ReleaseBench : Bench {
+  ReleaseBench() {
+    World world;
+    world.state = "IDLE";
+    program.OnWorld(world);
+    PassBoard();
+  }
+
+  // The driver latches these bits and counts it.
+  void Latch(uint32_t bits) {
+    hardware.emergency_reason = bits | EmergencyBit("LATCH");
+    ++hardware.latch_count;
+  }
+  // The input goes on, its emergency follows 0.1 s later. The time the program saw the input.
+  double Switch(bool Hardware::*input, uint32_t bit) {
+    hardware.*input = true;
+    Run(0.1);
+    const double edge = now;
+    Latch(bit);
+    Run(0.1);
+    return edge;
+  }
+
+  const uint32_t stop = EmergencyBit("STOP");
 };
 
 }  // namespace
@@ -386,6 +435,287 @@ TEST(Program, APressedInputTheBoardHoldsShowsItsEmergency) {
   bench.Run(0.3);
   EXPECT_EQ(bench.StepState("stop")["parts"][0]["state"], "ok");
   EXPECT_TRUE(bench.StepState("stop")["blocked"].empty());
+}
+
+// Rule of the own release: at the earliest 1.5 s after the input switched, only once it is free, with the count of the
+// last hw/status, again every 1.5 s until hw/status shows the emergency gone.
+TEST(Program, TheEmergencyOfACheckedInputIsReleasedOnceItIsFree) {
+  ReleaseBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  const double edge = bench.Switch(&Hardware::stop, bench.stop);
+  bench.Run(1.7);
+  // Still pressed: no try, and the step tells to let go instead of an emergency to release.
+  EXPECT_TRUE(bench.releases.empty());
+  EXPECT_EQ(bench.StepState("stop")["blocked"][0]["reason"], "INPUT_ACTIVE");
+  bench.hardware.stop = false;
+  bench.Run(0.1);
+  ASSERT_EQ(bench.releases.size(), 1u);
+  EXPECT_GE(bench.releases[0].first - edge, 1.5);
+  EXPECT_EQ(bench.releases[0].second.latch_count, 1u);
+  EXPECT_EQ(bench.StepState("stop")["parts"][0]["state"], "ok");
+  EXPECT_TRUE(bench.StepState("stop")["blocked"].empty());
+  // The driver did not take it yet: the next try comes 1.5 s later, not before.
+  bench.Run(1.3);
+  EXPECT_EQ(bench.releases.size(), 1u);
+  bench.Run(0.3);
+  ASSERT_EQ(bench.releases.size(), 2u);
+  EXPECT_NEAR(bench.releases[1].first - bench.releases[0].first, 1.5, 0.11);
+  // Gone in hw/status: no further try, and the second button counts.
+  bench.hardware.emergency_reason = 0;
+  bench.Run(4);
+  EXPECT_EQ(bench.releases.size(), 2u);
+  bench.Switch(&Hardware::stop, bench.stop);
+  bench.hardware.stop = false;
+  bench.Run(0.2);
+  EXPECT_EQ(bench.StepState("stop")["state"], "ok");
+  bench.Run(1.5);
+  ASSERT_EQ(bench.releases.size(), 3u);
+  EXPECT_EQ(bench.releases[2].second.latch_count, 2u);
+}
+
+TEST(Program, AnInputLetGoEarlyWaitsItsTimeBeforeTheRelease) {
+  ReleaseBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  const double edge = bench.Switch(&Hardware::stop, bench.stop);
+  bench.hardware.stop = false;
+  bench.Run(1.2);
+  EXPECT_TRUE(bench.releases.empty());
+  bench.Run(0.3);
+  ASSERT_EQ(bench.releases.size(), 1u);
+  EXPECT_NEAR(bench.releases[0].first - edge, 1.5, 0.11);
+}
+
+// Where the board holds the input until the release the try itself is the probe: it comes while the input shows.
+TEST(Program, AnInputTheBoardHoldsIsReleasedByTrying) {
+  ReleaseBench bench;
+  bench.lines = {MakeLine("stop", "stop", "stop", true)};
+  bench.program.OnInputs(bench.lines);
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  bench.SetLine("stop", true);
+  const double edge = bench.Switch(&Hardware::stop, bench.stop);
+  bench.Run(1.2);
+  EXPECT_TRUE(bench.releases.empty());
+  bench.Run(0.3);
+  ASSERT_EQ(bench.releases.size(), 1u);
+  EXPECT_NEAR(bench.releases[0].first - edge, 1.5, 0.11);
+  EXPECT_EQ(bench.StepState("stop")["parts"][0]["state"], "waiting");
+  EXPECT_EQ(bench.StepState("stop")["blocked"][0]["reason"], "INPUT_ACTIVE");
+  // The button is still down, the board keeps its bit: the same again 1.5 s later.
+  bench.Run(1.7);
+  ASSERT_EQ(bench.releases.size(), 2u);
+  EXPECT_NEAR(bench.releases[1].first - bench.releases[0].first, 1.5, 0.11);
+  // Let go, the next try clears the board.
+  bench.hardware.stop = false;
+  bench.hardware.emergency_reason = 0;
+  bench.SetLine("stop", false);
+  bench.Run(0.2);
+  EXPECT_EQ(bench.StepState("stop")["parts"][0]["state"], "ok");
+  bench.Run(3);
+  EXPECT_EQ(bench.releases.size(), 2u);
+}
+
+// Any other bit since the input switched, in one hw/status between two ticks: the program releases nothing.
+TEST(Program, AnotherReasonEndsTheOwnReleaseForGood) {
+  ReleaseBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  bench.Switch(&Hardware::stop, bench.stop);
+  Hardware tilted = bench.hardware;
+  tilted.emergency_reason |= EmergencyBit("TILT");
+  bench.program.OnHardware(tilted, bench.now + 0.01);
+  bench.program.OnHardware(bench.hardware, bench.now + 0.02);
+  bench.hardware.stop = false;
+  bench.Run(1);
+  EXPECT_EQ(bench.StepState("stop")["parts"][0]["state"], "ok");
+  EXPECT_EQ(bench.StepState("stop")["blocked"][0]["reason"], "EMERGENCY");
+  bench.Run(25);
+  EXPECT_TRUE(bench.releases.empty());
+}
+
+TEST(Program, AnotherReasonBeforeTheEmergencyOfTheInputEndsItAsWell) {
+  ReleaseBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  // HIGH_LEVEL stands while the button goes down.
+  bench.Latch(EmergencyBit("HIGH_LEVEL"));
+  bench.Run(0.5);
+  bench.hardware.stop = true;
+  bench.Run(0.1);
+  bench.Latch(bench.stop);
+  bench.Run(0.2);
+  bench.hardware.stop = false;
+  bench.Run(15);
+  EXPECT_TRUE(bench.releases.empty());
+}
+
+TEST(Program, ADriverThatDoesNotCountGetsNoOwnRelease) {
+  ReleaseBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  bench.hardware.stop = true;
+  bench.Run(0.1);
+  bench.hardware.emergency_reason = bench.stop | EmergencyBit("LATCH");
+  bench.Run(0.2);
+  bench.hardware.stop = false;
+  bench.Run(0.2);
+  EXPECT_EQ(bench.StepState("stop")["blocked"][0]["reason"], "EMERGENCY");
+  // A count that shows up later changes nothing.
+  bench.hardware.latch_count = 3;
+  bench.Run(15);
+  EXPECT_TRUE(bench.releases.empty());
+}
+
+TEST(Program, TheOwnReleaseWaitsForIdle) {
+  ReleaseBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  bench.Switch(&Hardware::stop, bench.stop);
+  bench.hardware.stop = false;
+  World world;
+  world.state = "MOWING";
+  bench.program.OnWorld(world);
+  bench.Run(5);
+  EXPECT_TRUE(bench.releases.empty());
+  world.state = "IDLE";
+  bench.program.OnWorld(world);
+  bench.Run(0.1);
+  EXPECT_EQ(bench.releases.size(), 1u);
+}
+
+TEST(Program, TheOwnReleaseNeedsAFreshStatus) {
+  ReleaseBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  bench.Switch(&Hardware::stop, bench.stop);
+  bench.hardware.stop = false;
+  bench.Run(0.1);
+  bench.driver = false;
+  bench.Run(5);
+  EXPECT_EQ(bench.StepState("stop")["result"]["reason"], "NO_DATA");
+  EXPECT_TRUE(bench.releases.empty());
+  bench.driver = true;
+  bench.Run(0.2);
+  EXPECT_EQ(bench.releases.size(), 1u);
+}
+
+// The tries end 10 s after the step: an emergency that stays is left to emergency.reset.
+TEST(Program, TheOwnReleaseEndsAfterTheStep) {
+  ReleaseBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(0.2);
+  bench.hardware.bumper = true;
+  bench.Switch(&Hardware::bumper_left, EmergencyBit("COLLISION"));
+  bench.hardware.bumper = bench.hardware.bumper_left = false;
+  bench.Run(0.1);
+  ASSERT_EQ(bench.StepState("left")["state"], "ok");
+  const double ended = bench.now;
+  bench.Run(30);
+  ASSERT_FALSE(bench.releases.empty());
+  EXPECT_LE(bench.releases.back().first - ended, 10.0);
+  EXPECT_GE(bench.releases.back().first - ended, 8.4);
+}
+
+// An emergency that stood before the input showed is not the one of the part, and a part of mode short has none.
+TEST(Program, OnlyTheEmergencyOfAPressIsReleased) {
+  ReleaseBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  bench.Latch(bench.stop);
+  bench.Run(0.5);
+  bench.hardware.stop = true;
+  bench.Run(0.5);
+  bench.hardware.stop = false;
+  bench.Run(5);
+  EXPECT_TRUE(bench.releases.empty());
+  EXPECT_EQ(bench.StepState("stop")["parts"][0]["state"], "waiting");
+  ASSERT_EQ(bench.Refused(bench.program.Abort(nullptr, bench.now, kWall)), "");
+  bench.hardware.emergency_reason = 0;
+
+  ASSERT_EQ(bench.Refused(bench.Start("lift")), "");
+  bench.Run(0.2);
+  bench.hardware.lift = true;
+  bench.Run(0.3);
+  bench.Latch(EmergencyBit("LIFT"));
+  bench.Run(0.2);
+  bench.hardware.lift = false;
+  bench.Run(15);
+  EXPECT_EQ(bench.StepState("lift")["result"]["reason"], "STOPPED_EARLY");
+  EXPECT_TRUE(bench.releases.empty());
+}
+
+// With hw/inputs every part of a role has to bring a line of its own, and the step shows the lines live.
+TEST(Program, PartsOfOneRoleNeedDifferentLines) {
+  Bench bench;
+  bench.PassBoard();
+  bench.lines = {MakeLine("GPIO1", "stop", "stop"), MakeLine("GPIO5", "stop", "stop"),
+                 MakeLine("GPIO10", "lift", "lift")};
+  bench.program.OnInputs(bench.lines);
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  const auto press = [&bench](const std::string& line) {
+    bench.SetLine(line, true);
+    bench.Press(&Hardware::stop, 4, 0.1, 0.4);
+    bench.SetLine(line, false);
+    bench.hardware.emergency_reason = 0;
+    bench.Run(0.3);
+  };
+  bench.SetLine("GPIO1", true);
+  bench.hardware.stop = true;
+  bench.Run(0.2);
+  json step = bench.StepState("stop");
+  ASSERT_EQ(step["lines"].size(), 3u);
+  EXPECT_EQ(step["lines"][0], (json{{"name", "GPIO1"}, {"role", "stop"}, {"reason", "stop"}, {"active", true},
+                                    {"assigned", true}, {"held", false}, {"delay_ms", 0}}));
+  EXPECT_EQ(step["lines"][1]["active"], false);
+  EXPECT_TRUE(bench.StepState("board")["lines"].empty());
+  press("GPIO1");
+  EXPECT_EQ(bench.StepState("stop")["parts"][0]["state"], "ok");
+  // The same button again does not count for the second one.
+  press("GPIO1");
+  EXPECT_EQ(bench.StepState("stop")["parts"][1]["state"], "waiting");
+  press("GPIO5");
+  EXPECT_EQ(bench.StepState("stop")["state"], "ok");
+}
+
+TEST(Program, ALineThatNeverSwitchesFailsTheStep) {
+  Bench bench;
+  bench.PassBoard();
+  bench.lines = {MakeLine("GPIO1", "stop", "stop"), MakeLine("GPIO5", "stop", "stop")};
+  bench.program.OnInputs(bench.lines);
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  bench.Events();
+  for (int i = 0; i < 2; ++i) {
+    bench.SetLine("GPIO1", true);
+    bench.Press(&Hardware::stop, 4, 0.1, 0.4);
+    bench.SetLine("GPIO1", false);
+    bench.hardware.emergency_reason = 0;
+    bench.Run(0.3);
+  }
+  bench.Run(10);
+  json step = bench.StepState("stop");
+  EXPECT_EQ(step["state"], "failed");
+  EXPECT_EQ(step["result"]["reason"], "LINE_SILENT");
+  EXPECT_EQ(step["result"]["part"], "rear");
+  const auto events = bench.Events();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0]["lines"], json::array({"GPIO5"}));
+
+  // One part for a pair of lines: the one that stayed silent is named at the end.
+  bench.lines = {MakeLine("GPIO12", "bumper_left", "collision"), MakeLine("GPIO13", "bumper_left", "collision")};
+  bench.program.OnInputs(bench.lines);
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(0.2);
+  bench.SetLine("GPIO13", true);
+  bench.hardware.bumper = true;
+  bench.Press(&Hardware::bumper_left, EmergencyBit("COLLISION"), 0.1, 0.4);
+  bench.SetLine("GPIO13", false);
+  step = bench.StepState("left");
+  EXPECT_EQ(step["result"]["reason"], "LINE_SILENT");
+  EXPECT_EQ(bench.Events()[0]["lines"], json::array({"GPIO12"}));
 }
 
 TEST(Program, AShortLiftMustNotStop) {

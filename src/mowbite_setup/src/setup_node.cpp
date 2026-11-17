@@ -5,6 +5,7 @@
 #include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
+#include <mowbite_msgs/msg/hardware_inputs.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/map_status.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
@@ -14,6 +15,7 @@
 #include <mowbite_msgs/msg/rpc_methods.hpp>
 #include <mowbite_msgs/msg/rpc_request.hpp>
 #include <mowbite_msgs/msg/rpc_response.hpp>
+#include <mowbite_msgs/srv/set_emergency.hpp>
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -40,6 +42,7 @@ namespace {
 
 using mowbite_msgs::msg::HardwareStatus;
 using mowbite_msgs::msg::RpcError;
+using mowbite_msgs::srv::SetEmergency;
 
 constexpr const char* kTopic = "setup/json";
 constexpr const char* kRefused = "SETUP_REFUSED";
@@ -73,7 +76,8 @@ struct Image {
 }  // namespace
 
 // The setup program of the platform: answers setup.*, keeps <data_dir>/setup.json, sends the state retained on
-// setup/json and the events SETUP_STEP and SETUP. It only watches: nothing here moves the mower.
+// setup/json and the events SETUP_STEP and SETUP. It watches and moves nothing. The one thing it asks of the mower is
+// the release of an emergency a part of its own brought (Program::OwnLatch), over the checks of the safety filter.
 class SetupNode : public rclcpp::Node {
  public:
   explicit SetupNode(const rclcpp::NodeOptions& options)
@@ -114,6 +118,7 @@ class SetupNode : public rclcpp::Node {
     hw_sub_ = create_subscription<HardwareStatus>("hw/status", 10, [this](HardwareStatus::ConstSharedPtr msg) {
       Hardware hardware;
       hardware.emergency_reason = msg->emergency_reason;
+      hardware.latch_count = msg->latch_count;
       hardware.stop = msg->stop;
       hardware.lift = msg->lift;
       hardware.bumper = msg->bumper;
@@ -129,6 +134,25 @@ class SetupNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       program_->OnHardware(hardware, MonotonicSeconds());
     });
+    inputs_sub_ = create_subscription<mowbite_msgs::msg::HardwareInputs>(
+        "hw/inputs", LatchedQos(1), [this](mowbite_msgs::msg::HardwareInputs::ConstSharedPtr msg) {
+          std::vector<Line> lines;
+          lines.reserve(msg->inputs.size());
+          for (const auto& input : msg->inputs) {
+            Line line;
+            line.name = input.name;
+            line.role = input.role;
+            line.reason = input.reason;
+            line.active = input.active;
+            line.assigned = input.assigned;
+            line.held = input.held;
+            line.delay_ms = input.delay_ms;
+            lines.push_back(std::move(line));
+          }
+          std::lock_guard<std::mutex> lock(mutex_);
+          program_->OnInputs(lines);
+        });
+    release_client_ = create_client<SetEmergency>("safety/release_emergency");
     caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
         "hw/capabilities", LatchedQos(1), [this](mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr msg) {
           Capabilities capabilities;
@@ -260,6 +284,7 @@ class SetupNode : public rclcpp::Node {
     std::lock_guard<std::mutex> lock(mutex_);
     const double now = MonotonicSeconds();
     program_->Tick(now, WallSeconds());
+    if (const auto release = program_->TakeRelease()) SendRelease(*release);
     Flush(now);
     if (!program_->writable() && now - write_tried_ >= kWriteRetry) Save(now);
     // What blocks a step changes without a change of the record: the app has to see it as well.
@@ -280,6 +305,26 @@ class SetupNode : public rclcpp::Node {
     msg.payload = State(now).dump(-1, ' ', false, json::error_handler_t::replace);
     msg.retain = true;
     publish_pub_->publish(msg);
+  }
+
+  // The answer is only logged: whether the emergency ended shows in hw/status alone.
+  void SendRelease(const ReleaseRequest& release) {
+    if (!release_client_->service_is_ready()) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "safety/release_emergency is not available");
+      return;
+    }
+    release_client_->prune_pending_requests();
+    auto request = std::make_shared<SetEmergency::Request>();
+    request->latch = false;
+    request->reason = release.reason;
+    request->latch_count = release.latch_count;
+    release_client_->async_send_request(request, [this](rclcpp::Client<SetEmergency>::SharedFuture future) {
+      const auto& response = future.get();
+      if (!response->success) {
+        RCLCPP_INFO(get_logger(), "The emergency of the checked input stays (%s): %s", response->code.c_str(),
+                    response->message.c_str());
+      }
+    });
   }
 
   void Reply(const std::string& id, const json& result) {
@@ -402,6 +447,8 @@ class SetupNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::RpcMethods>::SharedPtr methods_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_pub_;
   rclcpp::Subscription<HardwareStatus>::SharedPtr hw_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::HardwareInputs>::SharedPtr inputs_sub_;
+  rclcpp::Client<SetEmergency>::SharedPtr release_client_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_in_;
   rclcpp::Subscription<mowbite_msgs::msg::GnssFix>::SharedPtr gnss_sub_;

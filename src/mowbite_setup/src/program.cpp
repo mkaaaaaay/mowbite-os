@@ -25,11 +25,25 @@ constexpr double kFixWindow = 5.0;
 constexpr double kDockedWait = 3.0;
 // An emergency that is on this long (s) before its input shows was brought by something else.
 constexpr double kLatchLead = 0.3;
+// The program's own release of an emergency a part brought: a try this often (s), and for this long after the step.
+// A driver may take a release only every second.
+constexpr double kReleaseEvery = 1.5;
+constexpr double kReleaseAfter = 10.0;
 constexpr double kDegrees = 180.0 / M_PI;
 
 constexpr const char* kStepEvent = "SETUP_STEP";
 
-const char* const kGroups[] = {"stop", "lift", "bumper"};
+// The roles that stand for all inputs of their kind: stop, lift, bumper.
+const std::vector<std::string>& Groups() {
+  static const std::vector<std::string> groups = [] {
+    std::vector<std::string> out;
+    for (const auto& role : mowbite_api::SetupRoles()) {
+      if (role.group == role.id) out.push_back(role.id);
+    }
+    return out;
+  }();
+  return groups;
+}
 
 // Bits of emergency_reason of hw/status the checks ask for, by their names in the catalog.
 uint32_t FirmwareBit() {
@@ -42,12 +56,19 @@ uint32_t TiltBit() {
   return bit;
 }
 
+uint32_t LatchBit() {
+  static const uint32_t bit = EmergencyBit("LATCH");
+  return bit;
+}
+
 bool IsTurn(const std::string& move) {
   return move.rfind("turn", 0) == 0;
 }
 
+// The group of a role, empty for a text that is no role.
 std::string GroupOf(const std::string& role) {
-  return role.rfind("bumper", 0) == 0 ? "bumper" : role;
+  const auto* known = mowbite_api::FindSetupName(mowbite_api::SetupRoles(), role);
+  return known ? known->group : "";
 }
 
 std::string Joined(const std::set<std::string>& names) {
@@ -178,15 +199,48 @@ bool Program::Signal(const std::string& role) const {
   return hardware_.bumper || hardware_.bumper_left || hardware_.bumper_right;
 }
 
+std::vector<const Line*> Program::LinesOf(const std::string& role) const {
+  std::vector<const Line*> lines;
+  for (const Line& line : lines_) {
+    if (line.assigned && (line.role == role || GroupOf(line.role) == role)) lines.push_back(&line);
+  }
+  return lines;
+}
+
+// The lines of its role that are active count for the running part from the moment it waits for its press.
+void Program::NoteLines() {
+  if (!run_ || StepOf(*run_).check != "input" || run_->phase == Phase::kRest) return;
+  for (const Line* line : LinesOf(StepOf(*run_).parts[run_->part].role)) {
+    if (line->active) run_->part_lines.insert(line->name);
+  }
+}
+
+// Every hw/status counts here, not only the last one before a tick: a bit other than the emergency of the part, for
+// one message, and the program releases nothing itself. So does a driver that does not count its latches.
+void Program::WatchOwnLatch() {
+  if (!own_) return;
+  const uint32_t reason = hardware_.emergency_reason;
+  const bool other = (reason & ~(own_->bit | LatchBit())) != 0;
+  const bool released = own_->confirmed && (reason & (own_->bit | LatchBit())) == 0;
+  const bool uncounted = own_->confirmed && hardware_.latch_count == 0;
+  if (other || released || uncounted) own_.reset();
+}
+
 void Program::OnHardware(const Hardware& hardware, double now) {
   hardware_ = hardware;
   hardware_at_ = now;
+  WatchOwnLatch();
   if (!run_ || StepOf(*run_).check != "board") return;
   ++run_->status_count;
-  for (const char* group : kGroups) {
+  for (const auto& group : Groups()) {
     if (Signal(group)) run_->inputs_seen.insert(group);
   }
   for (const auto& motor : hardware.motors_down) run_->motors_down.insert(motor);
+}
+
+void Program::OnInputs(const std::vector<Line>& lines) {
+  lines_ = lines;
+  NoteLines();
 }
 
 void Program::OnCapabilities(const Capabilities& capabilities) {
@@ -321,6 +375,34 @@ std::vector<Event> Program::TakeEvents() {
   return events;
 }
 
+std::optional<ReleaseRequest> Program::TakeRelease() {
+  std::optional<ReleaseRequest> release;
+  release.swap(release_);
+  return release;
+}
+
+// The running step ended. An emergency its part brought and showed is released for a while yet.
+void Program::EndRun(double now) {
+  if (own_ && !own_->confirmed) own_.reset();
+  if (own_ && own_->until < 0) own_->until = now + kReleaseAfter;
+  run_.reset();
+}
+
+// Asks for the release of the emergency of own_ when its time has come; see OwnLatch for the conditions.
+void Program::TickRelease(double now) {
+  if (!own_) return;
+  OwnLatch& own = *own_;
+  if (own.until >= 0 && now > own.until) {
+    own_.reset();
+    return;
+  }
+  if (!own.confirmed || !Fresh(hardware_at_, now, kFresh) || world_.state != "IDLE") return;
+  if (!own.held && Signal(own.role)) return;
+  if (now - (own.last_try < 0 ? own.edge : own.last_try) < kReleaseEvery) return;
+  own.last_try = now;
+  release_ = ReleaseRequest{hardware_.latch_count, "setup: the input " + own.role + " was checked"};
+}
+
 // state: ok, failed, skipped, or open for a step that was stopped or cut off, which the event tells as failed.
 void Program::End(const Step& step, const std::string& state, const std::string& reason, const std::string& message,
                   json fields, double wall) {
@@ -362,7 +444,7 @@ void Program::Pass(const Step& step, double now, double wall) {
   if (IsRun(step)) {
     record.values = Values(step, now, true);
     record.parts = json(std::vector<std::string>(step.parts.size(), "ok"));
-    run_.reset();
+    EndRun(now);
   }
   End(step, "ok", "", "", {}, wall);
 }
@@ -377,7 +459,7 @@ void Program::Fail(const std::string& reason, const std::string& message, json f
     record.parts = run_->part_states;
     if (!stopped) fields["part"] = step.parts[run_->part].id;
   }
-  run_.reset();
+  EndRun(now);
   End(step, stopped ? "open" : "failed", reason, message, std::move(fields), wall);
 }
 
@@ -529,6 +611,8 @@ std::optional<Refusal> Program::Abort(const json& params, double now, double wal
 std::optional<Refusal> Program::Reset(const json& params) {
   if (auto refusal = Common(params, nullptr)) return refusal;
   run_.reset();
+  own_.reset();
+  release_.reset();
   for (auto& [id, record] : records_) record = Record();
   reached_.clear();
   events_.push_back({"SETUP", {{"what", "reset"}}});
@@ -545,15 +629,33 @@ void Program::BeginPart(double now, double wall) {
   run.released = 0;
   run.latched_since = -1;
   run.other.clear();
+  run.part_lines.clear();
+  run.repeated = false;
   run.yaw = 0;
   run.part_states[run.part] = "waiting";
 }
 
 void Program::PartDone(double now, double wall) {
   Run& run = *run_;
+  const Step& step = StepOf(run);
   run.part_states[run.part] = "ok";
-  if (run.part + 1 == StepOf(run).parts.size()) {
-    Pass(StepOf(run), now, wall);
+  run.lines.insert(run.part_lines.begin(), run.part_lines.end());
+  if (run.part + 1 == step.parts.size()) {
+    // With hw/inputs every line of the roles of the step has switched once by now: a dead contact of a pair shows.
+    json silent = json::array();
+    if (step.check == "input") {
+      std::set<std::string> asked;
+      for (const Part& part : step.parts) {
+        for (const Line* line : LinesOf(part.role)) {
+          if (!run.lines.count(line->name) && asked.insert(line->name).second) silent.push_back(line->name);
+        }
+      }
+    }
+    if (silent.empty()) {
+      Pass(step, now, wall);
+    } else {
+      Fail("LINE_SILENT", "Lines of the step did not switch: " + silent.dump(), {{"lines", silent}}, now, wall);
+    }
     return;
   }
   ++run.part;
@@ -569,6 +671,7 @@ void Program::Tick(double now, double wall) {
     if (check == "imu") TickImu(now, wall);
     if (check == "position") TickPosition(now, wall);
   }
+  TickRelease(now);
   TickWaiting(wall);
 }
 
@@ -643,7 +746,14 @@ void Program::TickInput(double now, double wall) {
   const bool signal = Signal(part.role);
   const bool latched = bit != 0 && (hardware_.emergency_reason & bit) != 0;
   if (now - run.part_began > step.Number("time")) {
-    if (run.other.empty()) {
+    if (run.repeated) {
+      json silent = json::array();
+      for (const Line* line : LinesOf(part.role)) {
+        if (!run.lines.count(line->name)) silent.push_back(line->name);
+      }
+      Fail("LINE_SILENT", "Only lines of the parts before switched, not " + silent.dump(), {{"lines", silent}}, now,
+           wall);
+    } else if (run.other.empty()) {
       Fail("NOT_SEEN", "The input " + part.role + " did not switch and come back in time", {}, now, wall);
     } else {
       Fail("WRONG_INPUT", "The input " + run.other + " switched, not " + part.role, {{"seen", run.other}}, now, wall);
@@ -654,6 +764,7 @@ void Program::TickInput(double now, double wall) {
     case Phase::kRest:
       if (!signal && !latched) {
         run.latched_since = -1;
+        run.part_lines.clear();
         run.phase = Phase::kArmed;
       }
       break;
@@ -661,9 +772,20 @@ void Program::TickInput(double now, double wall) {
       if (signal) {
         run.edge = now;
         run.phase = Phase::kSwitched;
+        NoteLines();
+        if (part.mode == "press" && bit != 0) {
+          const auto lines = LinesOf(part.role);
+          OwnLatch own;
+          own.role = part.role;
+          own.bit = bit;
+          own.held = std::any_of(lines.begin(), lines.end(), [](const Line* line) { return line->held; });
+          own.edge = now;
+          own_ = own;
+          WatchOwnLatch();
+        }
         break;
       }
-      for (const char* group : kGroups) {
+      for (const auto& group : Groups()) {
         if (GroupOf(part.role) != group && Signal(group)) run.other = group;
       }
       if (part.role == "bumper_left" && hardware_.bumper_right) run.other = "bumper_right";
@@ -684,6 +806,8 @@ void Program::TickInput(double now, double wall) {
         } else if (latched) {
           run.measured[run.part] = now - run.edge;
           run.phase = Phase::kWatch;
+          if (own_) own_->confirmed = true;
+          WatchOwnLatch();
         } else if (now - run.edge > step.Number("within")) {
           Fail("NO_EMERGENCY", "No emergency " + step.Word("emergency") + " after the input " + part.role,
                {{"limit", step.Number("within")}}, now, wall);
@@ -700,7 +824,17 @@ void Program::TickInput(double now, double wall) {
       break;
     case Phase::kWatch:
       if (part.mode == "press") {
-        if (!signal) PartDone(now, wall);
+        if (signal) break;
+        // With hw/inputs a part has to bring a line no part before had, as long as its role has one left.
+        const auto lines = LinesOf(part.role);
+        const auto fresh = [&run](const std::string& name) { return run.lines.count(name) == 0; };
+        const bool left = std::any_of(lines.begin(), lines.end(), [&](const Line* line) { return fresh(line->name); });
+        if (!left || std::any_of(run.part_lines.begin(), run.part_lines.end(), fresh)) {
+          PartDone(now, wall);
+        } else {
+          run.repeated = true;
+          run.phase = Phase::kRest;
+        }
       } else if (latched) {
         Fail("STOPPED_EARLY", "A short switch of " + part.role + " brought the emergency", {}, now, wall);
       } else if (now - run.released >= step.Number("within")) {
@@ -890,11 +1024,12 @@ json Program::Blocked(const Step& step, double now) const {
     const bool rest = run.phase == Phase::kRest;
     if (step.check == "input") {
       const uint32_t bit = EmergencyBit(step.Word("emergency"));
-      // After a press the emergency shows as well: a board may hold the input until the release.
       const bool pressed = run.phase == Phase::kWatch && part.mode == "press";
-      if (rest && Signal(part.role)) {
-        add("INPUT_ACTIVE", "The input " + part.role + " is switched already");
-      } else if ((rest || pressed) && bit != 0 && (hardware_.emergency_reason & bit) != 0) {
+      // The program releases the emergency of a press itself: until then only the input shows, while it is switched.
+      const bool own = own_ && own_->confirmed;
+      if ((rest || (pressed && own)) && Signal(part.role)) {
+        add("INPUT_ACTIVE", "The input " + part.role + " is still switched");
+      } else if ((rest || pressed) && !own && bit != 0 && (hardware_.emergency_reason & bit) != 0) {
         add("EMERGENCY", "The emergency " + step.Word("emergency") + " is still latched");
       }
       return blocked;
@@ -980,6 +1115,18 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
       }
       parts.push_back({{"id", step.parts[i].id}, {"state", state}, {"texts", step.parts[i].texts}});
     }
+    json lines = json::array();
+    if (step.check == "input" || step.check == "inputs_assign") {
+      for (const Line& line : lines_) {
+        lines.push_back({{"name", line.name},
+                         {"role", line.role},
+                         {"reason", line.reason},
+                         {"active", line.active},
+                         {"assigned", line.assigned},
+                         {"held", line.held},
+                         {"delay_ms", line.delay_ms}});
+      }
+    }
     json progress;
     json ends_at;
     if (is_run) {
@@ -1009,7 +1156,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
                      {"inputs", std::move(inputs)},
                      {"values", Values(step, now, false)},
                      {"parts", std::move(parts)},
-                     {"lines", json::array()},
+                     {"lines", std::move(lines)},
                      {"ask", nullptr},
                      {"progress", std::move(progress)},
                      {"ends_at", std::move(ends_at)},
