@@ -92,7 +92,9 @@ jobs:
         run: |
           docker run --rm "$TAG" ros2 pkg list > pkgs.txt
           grep -E '^(mowbite_|tron_|xcore_|platform_)' pkgs.txt
-          grep -q '^platform_' pkgs.txt
+          # At least one platform entered its name in the index.
+          docker run --rm "$TAG" python3 -c \
+            'import sys; from ament_index_python import get_resources; sys.exit(not get_resources("mowbite_platform"))'
           if grep -q '^mowbite_sim$' pkgs.txt; then echo "mowbite_sim must not be in the image"; exit 1; fi
           docker run --rm "$TAG" python3 -c 'import mowbite_planner_os.node'
           # The app docker/os.Dockerfile pins came along.
