@@ -1,6 +1,6 @@
 """hw/silence and hw/end of tron_mcu against fake_tron on a pty: silent, the board gets no frame, afterwards the driver
-latches with HIGH_LEVEL and sends the blade off and three stops; after hw/end the process ends with exit code 3 without
-another frame. Read only it offers neither.
+latches with HIGH_LEVEL and sends the blade off and three stops; with blade also while the blade turns, which the board
+then stops alone; after hw/end the process ends with exit code 3 without another frame. Read only it offers neither.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_driver_silence.py
 """
@@ -17,7 +17,7 @@ import launch_testing.actions
 import rclpy
 from geometry_msgs.msg import Twist
 from mowbite_msgs.msg import HardwareStatus
-from mowbite_msgs.srv import EndDriver, SetEmergency, SilenceDriver
+from mowbite_msgs.srv import EndDriver, SetBlade, SetEmergency, SilenceDriver
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import (HwProbe, TestShutdown, fake_tron, host_packets, last_time, moving,  # noqa: E402,F401
@@ -42,6 +42,7 @@ class Driver:
         exe = package_program("tron_mcu", "tron_mcu_node")
         self.proc = subprocess.Popen([exe, "--ros-args", "-p", f"port:={LINKS['mcu']}", "-p", "send_imu:=false",
                                       "-p", f"silence_max:={SILENCE_MAX}",
+                                      "-p", f"allow_blade:={str(not read_only).lower()}",
                                       "-p", f"read_only:={str(read_only).lower()}"], start_new_session=True)
 
     def stop(self):
@@ -97,6 +98,7 @@ class TestDriverSilence(unittest.TestCase):
         self.assertTrue(caps, "no hw/capabilities")
         self.assertAlmostEqual(caps.silence_max_s, SILENCE_MAX, places=3)
         self.assertTrue(caps.driver_end)
+        self.assertTrue(caps.blade_allowed)
 
     def test_b_silent_then_latched_with_blade_off_and_three_stops(self):
         s = self.probe.latest(lambda s: s.telemetry_ok and not s.emergency, 15)
@@ -132,6 +134,39 @@ class TestDriverSilence(unittest.TestCase):
         self.assertTrue(answer.success, answer)
         self.assertTrue(self.probe.latest(lambda s: not s.emergency, 3.0), "the release did not end the emergency")
 
+    def test_c2_silence_with_the_blade_turning(self):
+        self.assertTrue(self.probe.latest(lambda s: s.telemetry_ok and not s.emergency, 5), "no free status")
+        on = SetBlade.Request(on=True, lease_s=2.0)
+        self.assertTrue(self.probe.call(self.probe.blade, on).success)
+        self.assertTrue(self.probe.latest(lambda s: s.blade_motor.rpm > 2500, 5), "the blade did not start")
+        self.assertTrue(self.probe.call(self.probe.blade, on).success)
+        answer = self.probe.call(self.probe.silence, SilenceDriver.Request(seconds=2.0))
+        self.assertEqual((answer.success, answer.code), (False, "BLADE"))
+        answer = self.probe.call(self.probe.silence, SilenceDriver.Request(seconds=2.0, blade=True))
+        self.assertTrue(answer.success, answer)
+        time.sleep(0.1)
+        since = last_time(LOG)
+        self.assertTrue(self.probe.latest(lambda s: s.blade_motor.ok and s.blade_motor.rpm < 100, 1.5),
+                        "the board did not stop the blade without its host")
+        # A renewal meanwhile is refused and reaches nothing.
+        self.assertFalse(self.probe.call(self.probe.blade, on).success)
+        time.sleep(2.5)
+        got = host_packets(LOG, since + 0.001)
+        self.assertTrue(got, "nothing after the silence")
+        self.assertGreaterEqual(got[0]["t"] - since, 1.7, got[0])
+        blade = sub_packets(LOG, since + 0.001, CUTTER)
+        self.assertGreaterEqual(len(blade), 1)
+        self.assertTrue(all(bytes.fromhex(e["hex"])[0] == 0 for e in blade), blade)
+        s = self.probe.latest(lambda s: s.emergency_latched and not s.blade_on, 3.0)
+        self.assertTrue(s, "not latched with the blade off after the silence")
+        answer = self.probe.call(self.probe.emergency, SetEmergency.Request(latch=False, reason="test",
+                                                                            latch_count=s.latch_count))
+        self.assertTrue(answer.success, answer)
+        self.assertTrue(self.probe.latest(lambda s: not s.emergency, 3.0))
+        time.sleep(0.5)
+        self.assertEqual([e for e in sub_packets(LOG, since + 0.001, CUTTER) if bytes.fromhex(e["hex"])[0]], [],
+                         "the blade came back without a new request")
+
     def test_c_refusals(self):
         answer = self.probe.call(self.probe.silence, SilenceDriver.Request(seconds=0.1))
         self.assertEqual((answer.success, answer.code), (False, "OUT_OF_RANGE"))
@@ -147,7 +182,7 @@ class TestDriverSilence(unittest.TestCase):
     def test_d_read_only_offers_neither(self):
         self.assertTrue(self.restart(read_only=True), "no telemetry read only")
         caps = self.probe.wait(lambda: self.probe.capabilities, 5)
-        self.assertEqual((caps.silence_max_s, caps.driver_end), (0.0, False))
+        self.assertEqual((caps.silence_max_s, caps.driver_end, caps.blade_allowed), (0.0, False, False))
         for client, request in ((self.probe.silence, SilenceDriver.Request(seconds=1.0)),
                                 (self.probe.end, EndDriver.Request())):
             answer = self.probe.call(client, request)
