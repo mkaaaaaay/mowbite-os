@@ -86,6 +86,22 @@ TEST(NotifyConfig, TokenKeptDroppedAndNeverAnswered) {
   EXPECT_FALSE(ConfigAnswer(c, 0)["has_token"].get<bool>());
 }
 
+TEST(NotifyConfig, TokenStaysWithItsServer) {
+  NotifyConfig c = Set(R"({"server": "https://ntfy.example", "token": "tk_secret"})");
+  ASSERT_FALSE(ApplySet(json::parse(R"({"server": "https://NTFY.example:443/up/"})"), &c));
+  EXPECT_EQ(c.token, "tk_secret");
+  ASSERT_FALSE(ApplySet(json::parse(R"({"server": "http://ntfy.example"})"), &c));
+  EXPECT_EQ(c.token, "");
+  c = Set(R"({"server": "https://ntfy.example", "token": "tk_secret"})");
+  ASSERT_FALSE(ApplySet(json::parse(R"({"server": "https://ntfy.example:8443"})"), &c));
+  EXPECT_EQ(c.token, "");
+  c = Set(R"({"server": "https://ntfy.example", "token": "tk_secret"})");
+  ASSERT_FALSE(ApplySet(json::parse(R"({"server": "https://other.example"})"), &c));
+  EXPECT_EQ(c.token, "");
+  ASSERT_FALSE(ApplySet(json::parse(R"({"token": "tk_new", "server": "https://ntfy.example"})"), &c));
+  EXPECT_EQ(c.token, "tk_new");
+}
+
 TEST(NotifyConfig, FileRoundTrip) {
   NotifyConfig c = Set(R"({"topic": "t1", "token": "tk", "events": ["rain"]})");
   ASSERT_FALSE(AddPush(json::parse(R"({"address": "https://push.example/up/abc"})"), &c));

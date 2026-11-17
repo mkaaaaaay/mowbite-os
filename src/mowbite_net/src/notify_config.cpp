@@ -1,6 +1,7 @@
 #include "mowbite_net/notify_config.h"
 
 #include <algorithm>
+#include <cctype>
 #include <regex>
 #include <set>
 
@@ -35,6 +36,20 @@ bool Printable(const std::string& text) {
 std::string StripSlashes(std::string text) {
   while (!text.empty() && text.back() == '/') text.pop_back();
   return text;
+}
+
+// Scheme, host and port of a server that passed WebAddress, the port filled in.
+std::string Origin(const std::string& server) {
+  const size_t start = server.find("://") + 3;
+  const std::string scheme = server.substr(0, start - 3);
+  std::string authority = server.substr(start, server.find('/', start) - start);
+  std::transform(authority.begin(), authority.end(), authority.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  const size_t colon = authority.find(':');
+  if (colon == std::string::npos || colon + 1 == authority.size()) {
+    authority = authority.substr(0, colon) + (scheme == "https" ? ":443" : ":80");
+  }
+  return scheme + "://" + authority;
 }
 
 std::optional<Rejection> CheckKeys(const json& params, const std::set<std::string>& keys, bool none_ok) {
@@ -213,6 +228,8 @@ std::optional<Rejection> ApplySet(const json& params, NotifyConfig* config) {
       }
     }
   }
+  // A token only goes to the server it was given for.
+  if (!params.contains("token") && Origin(next.server) != Origin(config->server)) next.token.clear();
   next.stored = true;
   *config = next;
   return std::nullopt;

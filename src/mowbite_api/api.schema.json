@@ -7857,7 +7857,7 @@
           "type": "string"
         },
         "token": {
-          "description": "New token for the ntfy server; empty drops it",
+          "description": "New token for the ntfy server; empty drops it, so does a server of another scheme, host or port without a new token",
           "type": "string"
         },
         "topic": {

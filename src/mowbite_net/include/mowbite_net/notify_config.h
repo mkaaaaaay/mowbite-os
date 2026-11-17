@@ -48,7 +48,8 @@ struct Rejection {
 
 // The answer of notify.get: everything but the token, has_token instead; snooze in unix s.
 json ConfigAnswer(const NotifyConfig& config, int64_t snooze);
-// notify.set: the keys of params on top of config, all or nothing. token: a text is the new one, empty drops it.
+// notify.set: the keys of params on top of config, all or nothing. token: a text is the new one, empty drops it;
+// without token, a server of another scheme, host or port drops it.
 std::optional<Rejection> ApplySet(const json& params, NotifyConfig* config);
 // notify.push_add and notify.push_remove; the address of params checked.
 std::optional<Rejection> AddPush(const json& params, NotifyConfig* config);

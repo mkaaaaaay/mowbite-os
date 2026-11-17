@@ -939,7 +939,10 @@ const std::vector<Method>& Methods() {
        Object("params", "The change",
               [] {
                 std::vector<Field> fields = NotifySettings(false);
-                fields.push_back(Text("token", "New token for the ntfy server; empty drops it", false));
+                fields.push_back(Text("token",
+                                      "New token for the ntfy server; empty drops it, so does a server of another "
+                                      "scheme, host or port without a new token",
+                                      false));
                 return fields;
               }()),
        NotifyAnswer(), ""},
