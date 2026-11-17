@@ -1,8 +1,9 @@
-# MowBite OS on the YardForce NX60i (OpenMower v2, xCore over Ethernet): broker, OS and app on the host network. The OS
-# starts only with the profile os (docker compose --profile os up -d), on the user's word (A4); OpenMower and its broker
-# are stopped first, never two programs at the board. The parameter file of this mower lies in data_dir as nx60i.yaml
-# (ticks_per_meter, wheel_distance, the values of the safety measurement); without its date only remote control.
-# No label mowbite.update=on yet, as on the Tron.
+# MowBite OS on the YardForce NX60i (OpenMower v2, xCore over Ethernet): broker and OS on the host network; the app runs
+# in a stack of its own. The image carries this file with mosquitto.conf and env.example (/usr/share/mowbite-os/mower).
+# The OS starts only with the profile os (docker compose --profile os up -d), on the user's word (A4); OpenMower and its
+# broker are stopped first, never two programs at the board. The parameter file of this mower lies in data_dir as
+# nx60i.yaml (ticks_per_meter, wheel_distance, the values of the safety measurement); without its date only remote
+# control. Label mowbite.os, never mowbite.update=on: the MowBite Updater leaves these containers alone.
 name: mowbite-os
 x-logging: &logging
   driver: json-file
@@ -11,11 +12,13 @@ x-logging: &logging
     max-file: "3"
 services:
   mosquitto:
-    image: eclipse-mosquitto:2
+    image: eclipse-mosquitto:2.0.22
     container_name: mowbite-mosquitto
     restart: unless-stopped
     network_mode: host
     logging: *logging
+    labels:
+      - mowbite.os=true
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
   os:
@@ -27,6 +30,7 @@ services:
     network_mode: host
     logging: *logging
     labels:
+      - mowbite.os=true
       - mowbite.update.name=mowbite-os
     volumes:
       - ${MOWBITE_DATA_DIR:?set MOWBITE_DATA_DIR in .env}:${MOWBITE_DATA_DIR}
@@ -51,16 +55,3 @@ services:
     stop_grace_period: 20s
     ulimits:
       core: 0
-  mowbite:
-    image: ghcr.io/mkaaaaaay/mowbite:${MOWBITE_APP_TAG:?set MOWBITE_APP_TAG in .env}
-    container_name: mowbite
-    restart: unless-stopped
-    network_mode: host
-    logging: *logging
-    environment:
-      - MOWER_MQTT_WS_URL=ws://${MOWER_HOST:?set MOWER_HOST in .env}:9001
-      - MOWER_MQTT_HOST=localhost
-      - MOWER_MQTT_PORT=1883
-    volumes:
-      - /opt/stacks/mowbite-os/app-data:/data
-      - /proc/1/net:/host-net:ro

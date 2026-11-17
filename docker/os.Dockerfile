@@ -219,11 +219,12 @@ COPY --from=build /opt/runtime-packages.txt /opt/runtime-packages.txt
 RUN apt-get update \
  && apt-get install -y --no-install-recommends $(cat /opt/runtime-packages.txt) \
  && rm -rf /var/lib/apt/lists/*
-COPY --from=build /opt/mowbite_planner /opt/mowbite_planner
-COPY --from=build /ws/install /ws/install
-# Outside the packages, but in the install tree that the bundle takes along.
+# Outside the packages, but in the install tree that the bundle takes along; before it, so that an update of the
+# packages leaves these layers as they are.
 COPY --from=mpp /opt/mpp /ws/install/mpp
 COPY --from=mediamtx /opt/mediamtx /ws/install/mediamtx
+COPY --from=build /opt/mowbite_planner /opt/mowbite_planner
+COPY --from=build /ws/install /ws/install
 # The safety measurement runs on the image that drives (the driver's normal caps, no fast runs of M8).
 COPY tools/yf/measure.py tools/yf/xcore_capture.py /ws/tools/
 # For docker exec, which skips the entrypoint: docker exec -it <container> measure --steps ...
@@ -241,6 +242,8 @@ RUN . /ws/install/setup.sh \
  && rm /tmp/missing
 # No machine code, so after the library check: a new app leaves the layers above cached.
 COPY --from=app_export /opt/mowbite_app /opt/mowbite_app
+# The stack of a mower that runs the OS with Docker, for its updater: docker run --rm --entrypoint cat <image> <file>.
+COPY docker/mower/nx60i.compose.yaml docker/mower/mosquitto.conf docker/mower/env.example /usr/share/mowbite-os/mower/
 ARG SOURCE_COMMIT=unknown
 # The oldest MowBite app that handles this OS (label mowbite.min_app for the updater): the value of docker/min_app,
 # X.Y.Z or X.Y.Z-beta.N. No image without it; checked here, so that the layers above stay cached.
