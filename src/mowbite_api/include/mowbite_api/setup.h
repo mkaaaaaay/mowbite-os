@@ -111,6 +111,17 @@ const Name* FindSetupName(const std::vector<Name>& names, const std::string& id)
   return nullptr;
 }
 
+// The parameters a driver that learns its inputs takes, under the node a step inputs_assign names: started with
+// learn it watches its candidate lines; the others are its table, one entry per line.
+constexpr char kInputsLearn[] = "inputs.learn";
+constexpr char kInputsLines[] = "inputs.gpio_lines";
+constexpr char kInputsActiveHigh[] = "inputs.gpio_active_high";
+constexpr char kInputsReasons[] = "inputs.gpio_reasons";
+constexpr char kInputsDelays[] = "inputs.gpio_delays_ms";
+constexpr char kInputsRoles[] = "inputs.gpio_roles";
+// The longest delay of a line the board takes (ms).
+constexpr int kInputsMaxDelayMs = 65535;
+
 // Bounds of a step list and of setup.*.
 constexpr int kSetupMaxSteps = 100;
 constexpr int kSetupMaxParts = 8;

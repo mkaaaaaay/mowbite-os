@@ -10,6 +10,7 @@
 
 #include "mowbite_api/catalog.h"
 #include "mowbite_api/setup.h"
+#include "mowbite_setup/layer.h"
 
 namespace mowbite_setup {
 
@@ -180,6 +181,33 @@ void ReadParts(const json& entry, const std::string& where, Step* step) {
       part.texts = Overlaid(std::move(base), TextsOrNull(item), where + ".parts." + part.id);
       step->parts.push_back(std::move(part));
     }
+  } else if (step->check == "inputs_assign") {
+    const SetupName* assign = FindSetupName(mowbite_api::SetupModes(), "assign");
+    for (const auto& item : given ? entry["parts"] : json::array()) {
+      if (!item.is_object()) throw Wrong(where + ": a part is no object");
+      OnlyKeys(item, {"id", "role", "delay_ms", "texts"}, where + ".parts");
+      Part part;
+      part.id = TextOf(item, "id", where + ".parts", true);
+      part.mode = assign->id;
+      part.role = TextOf(item, "role", where + ".parts", true);
+      const auto* role = FindSetupName(mowbite_api::SetupRoles(), part.role);
+      // A line is one input of hw/status: the bumper as a whole is none.
+      if (!role || part.role == "bumper") throw Wrong(where + ": " + part.role + " is no role of a line");
+      if (item.contains("delay_ms")) {
+        const json& delay = item["delay_ms"];
+        if (!delay.is_number_integer() || delay.get<int64_t>() < 0 ||
+            delay.get<int64_t>() > mowbite_api::kInputsMaxDelayMs) {
+          throw Wrong(where + ".parts." + part.id + ": delay_ms is no whole number the board takes");
+        }
+        part.delay_ms = static_cast<int>(delay.get<int64_t>());
+      }
+      // The name of the role, help and fix of the mode, then what the list brings.
+      json base = Texts(assign->texts);
+      const json named = Texts(role->texts);
+      for (const char* language : kLanguages) base[language]["name"] = named[language]["name"];
+      part.texts = Overlaid(std::move(base), TextsOrNull(item), where + ".parts." + part.id);
+      step->parts.push_back(std::move(part));
+    }
   } else if (step->check == "imu") {
     const std::vector<std::string> moves =
         given ? TextsOf(entry, "parts", where) : std::vector<std::string>{"front_up", "left_up", "turn_left"};
@@ -189,10 +217,12 @@ void ReadParts(const json& entry, const std::string& where, Step* step) {
       step->parts.push_back({move, "", "", move, Texts(name->texts)});
     }
   } else if (given) {
-    throw Wrong(where + ": parts go with input and imu only");
+    throw Wrong(where + ": parts go with input, inputs_assign and imu only");
   }
   if (step->parts.size() > static_cast<size_t>(mowbite_api::kSetupMaxParts)) throw Wrong(where + ": too many parts");
-  if ((step->check == "input" || step->check == "imu") && step->parts.empty()) throw Wrong(where + ": no part");
+  if ((step->check == "input" || step->check == "inputs_assign" || step->check == "imu") && step->parts.empty()) {
+    throw Wrong(where + ": no part");
+  }
   std::set<std::string> ids;
   for (const Part& part : step->parts) {
     if (!IsId(part.id)) throw Wrong(where + ": " + part.id + " is no id of a part");
@@ -379,7 +409,7 @@ std::vector<std::string> StepList::Images() const {
 std::optional<StepList> ParseSteps(const json& list, std::string* why) {
   try {
     if (!list.is_object()) throw Wrong("the step list is no object");
-    OnlyKeys(list, {"catalog", "steps"}, "the step list");
+    OnlyKeys(list, {"catalog", "restart", "steps"}, "the step list");
     if (!list.contains("catalog") || !list["catalog"].is_number_integer() || list["catalog"].get<int64_t>() < 1 ||
         list["catalog"].get<int64_t>() > 1000000) {
       throw Wrong("catalog is no whole number from 1");
@@ -390,8 +420,19 @@ std::optional<StepList> ParseSteps(const json& list, std::string* why) {
     if (list["steps"].size() > static_cast<size_t>(mowbite_api::kSetupMaxSteps)) throw Wrong("too many steps");
     StepList out;
     out.catalog = static_cast<int>(list["catalog"].get<int64_t>());
+    out.restart = TextOf(list, "restart", "the step list");
+    if (!out.restart.empty() && !FindSetupName(mowbite_api::SetupRestarts(), out.restart)) {
+      throw Wrong("restart is no way to restart");
+    }
     size_t stage_index = 0;
     for (const auto& entry : list["steps"]) out.steps.push_back(ReadStep(entry, out.steps, &stage_index));
+    for (const Step& step : out.steps) {
+      if (step.check != "inputs_assign") continue;
+      if (out.restart.empty()) throw Wrong(step.id + " needs restart at the top of the list");
+      if (!Layer().Set(step.Word("node"), mowbite_api::kInputsLearn, true)) {
+        throw Wrong(step.id + ": node is no name of a node");
+      }
+    }
     return out;
   } catch (const Wrong& wrong) {
     if (why) *why = wrong.what();

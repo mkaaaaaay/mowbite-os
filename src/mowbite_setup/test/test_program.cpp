@@ -49,7 +49,7 @@ constexpr double kWall = 1700000000.0;
 
 // The program with a clock: every Run() ticks in steps of 0.1 s and feeds hw/status, IMU and position as set.
 struct Bench {
-  Bench() : program(*ParseSteps(json::parse(kList), nullptr), "tron") {
+  explicit Bench(const char* list = kList) : program(*ParseSteps(json::parse(list), nullptr), "tron") {
     capabilities.firmware = {{"chassis", "0.6.36"}, {"cutter", "0.6.34"}};
     program.OnCapabilities(capabilities);
     hardware.battery = true;
@@ -70,6 +70,14 @@ struct Bench {
       }
       program.Tick(now, kWall + now);
       if (const auto release = program.TakeRelease()) releases.emplace_back(now, *release);
+      if (!node) continue;
+      // What the node does after a tick: the record, the parameter file, then a restart.
+      if (program.TakeChanged()) saved = program.Text();
+      if (const auto layer = program.TakeLayer()) {
+        if (layer_ok) layer_text = *layer;
+        program.LayerWritten(layer_ok, now, kWall + now);
+      }
+      if (program.TakeRestart(now)) ++restarts;
     }
   }
 
@@ -128,14 +136,21 @@ struct Bench {
     for (Line& line : lines) {
       if (line.name == name) line.active = active;
     }
-    program.OnInputs(lines);
+    program.OnInputs(lines, learning);
   }
 
   Program program;
   Hardware hardware;
   std::vector<Line> lines;
+  bool learning = false;
   // The releases the program asked for, with the time of each.
   std::vector<std::pair<double, ReleaseRequest>> releases;
+  // With node: the record and the parameter file as written last, and the restarts asked for.
+  bool node = false;
+  bool layer_ok = true;
+  std::string saved;
+  std::string layer_text;
+  int restarts = 0;
   Capabilities capabilities;
   ImuSample imu{0, 0, 9.81, 0};
   bool driver = true;
@@ -180,6 +195,98 @@ struct ReleaseBench : Bench {
   }
 
   const uint32_t stop = EmergencyBit("STOP");
+};
+
+const char* const kAssignList = R"({
+  "catalog": 1,
+  "restart": "self",
+  "steps": [
+    {"id": "stop", "stage": "inputs", "check": "input", "params": {"role": "stop", "time": 10}},
+    {"id": "assign", "stage": "inputs", "check": "inputs_assign",
+     "params": {"node": "driver", "quiet": 3, "time": 10, "restart_time": 20},
+     "parts": [{"id": "stop_top", "role": "stop", "delay_ms": 10},
+               {"id": "lift_left", "role": "lift", "delay_ms": 2500}]}
+  ]})";
+
+// A mower whose driver learns its inputs, with what the node does around the program and the restarts of the OS.
+struct AssignBench : Bench {
+  AssignBench() : Bench(kAssignList) {
+    node = true;
+    world.state = "IDLE";
+    program.OnWorld(world);
+    program.SetLayer(Layer(), {});
+    lines = {MakeLine("GPIO1", "stop", "stop"), MakeLine("GPIO10", "lift", "lift")};
+    program.OnInputs(lines);
+    Run(0.2);
+  }
+
+  // The OS started again: a new program over the record and the parameter file, the driver with these lines.
+  void Restart(bool learns, std::vector<Line> with) {
+    program = Program(*ParseSteps(json::parse(kAssignList), nullptr), "tron");
+    std::string why;
+    if (!saved.empty()) {
+      ASSERT_TRUE(program.Load(saved, kWall + now, &why)) << why;
+    }
+    Layer layer;
+    ASSERT_TRUE(layer.Parse(layer_text, &why)) << why;
+    program.SetLayer(layer, shadowed);
+    program.OnCapabilities(capabilities);
+    program.OnWorld(world);
+    learning = learns;
+    hardware.emergency_reason = learns ? EmergencyBit("INPUTS_LEARNING") | EmergencyBit("LATCH") : 0;
+    lines = std::move(with);
+    program.OnInputs(lines, learning);
+    Run(0.2);
+  }
+  // The candidate lines of a driver that learns: none assigned, GPIO12 high at rest.
+  static std::vector<Line> Candidates() {
+    std::vector<Line> lines;
+    for (const char* name : {"GPIO1", "GPIO5", "GPIO10", "GPIO12"}) {
+      Line line;
+      line.name = name;
+      line.active = line.name == "GPIO12";
+      lines.push_back(line);
+    }
+    return lines;
+  }
+  // The table the parts of TakeBothParts find.
+  static std::vector<Line> Table() {
+    Line stop = MakeLine("GPIO5", "stop", "stop");
+    stop.delay_ms = 10;
+    Line lift = MakeLine("GPIO12", "lift", "lift");
+    lift.delay_ms = 2500;
+    lift.active_high = false;
+    return {stop, lift};
+  }
+  std::optional<Refusal> Accept(const std::string& value) {
+    return program.Answer({{"step", "assign"}, {"version", program.version()}, {"values", {{"accept", value}}}},
+                          kWall + now);
+  }
+  // Up to the first part: started, restarted into learning, the lines untouched for the quiet time.
+  void ToTheParts() {
+    ASSERT_EQ(Refused(Start("assign")), "");
+    Run(0.2);
+    ASSERT_EQ(restarts, 1);
+    Restart(true, Candidates());
+    Run(3.2);
+    ASSERT_EQ(StepState("assign")["parts"][0]["state"], "waiting");
+  }
+  // One line goes to its other level and back, and the question in between is answered.
+  void Take(const std::string& line, bool level, const std::string& answer) {
+    SetLine(line, level);
+    Run(0.5);
+    ASSERT_EQ(StepState("assign")["ask"]["line"], line);
+    ASSERT_EQ(Refused(Accept(answer)), "");
+    SetLine(line, !level);
+    Run(0.2);
+  }
+  void TakeBothParts() {
+    Take("GPIO5", true, "yes");
+    Take("GPIO12", false, "yes");
+  }
+
+  World world;
+  std::set<std::string> shadowed;
 };
 
 }  // namespace
@@ -1153,4 +1260,310 @@ TEST(Program, TheRecordOutlivesARestart) {
   Program less(*ParseSteps(FirstTwo(), nullptr), "tron");
   ASSERT_TRUE(less.Load(text, kWall, &why)) << why;
   EXPECT_EQ(less.State(0, {})["steps"][1]["state"], "ok");
+}
+
+// inputs_assign: restart into learning, the lines untouched, one line per part with its question, the table into the
+// parameter file, restart, and hw/inputs held against it.
+TEST(Program, TheInputsAreAssignedPartByPart) {
+  AssignBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("assign")), "");
+  bench.Run(0.2);
+  EXPECT_EQ(bench.restarts, 1);
+  EXPECT_NE(bench.layer_text.find("driver:\n  ros__parameters:\n    inputs.learn: true\n"), std::string::npos);
+  json state = bench.State();
+  EXPECT_EQ(state["restart_pending"], true);
+  EXPECT_EQ(state["steps"][1]["state"], "running");
+  EXPECT_EQ(state["steps"][1]["restart"], true);
+  EXPECT_EQ(state["steps"][0]["restart"], false);
+
+  bench.Restart(true, AssignBench::Candidates());
+  json step = bench.StepState("assign");
+  EXPECT_EQ(step["state"], "running");
+  EXPECT_EQ(step["parts"][0]["state"], "open");
+  EXPECT_EQ(step["lines"].size(), 4u);
+  EXPECT_EQ(bench.State()["restart_pending"], false);
+  bench.Run(3.2);
+  step = bench.StepState("assign");
+  EXPECT_EQ(step["parts"][0]["state"], "waiting");
+  EXPECT_EQ(step["progress"], (json{{"n", 1}, {"of", 2}}));
+  EXPECT_TRUE(step["ask"].is_null());
+  EXPECT_EQ(step["inputs"][0]["name"], "accept");
+  EXPECT_EQ(step["inputs"][0]["ask"], false);
+  EXPECT_EQ(step["inputs"][0]["values"][0]["id"], "yes");
+  EXPECT_EQ(step["parts"][0]["texts"]["en"]["name"], "STOP button");
+
+  bench.SetLine("GPIO5", true);
+  bench.Run(0.5);
+  step = bench.StepState("assign");
+  EXPECT_EQ(step["ask"], (json{{"part", "stop_top"}, {"line", "GPIO5"}, {"active_high", true}}));
+  EXPECT_EQ(step["inputs"][0]["ask"], true);
+  EXPECT_EQ(bench.Refused(bench.Accept("maybe")), "INVALID_VALUE");
+  ASSERT_EQ(bench.Refused(bench.Accept("yes")), "");
+  bench.Run(0.2);
+  step = bench.StepState("assign");
+  EXPECT_EQ(step["parts"][0]["state"], "ok");
+  EXPECT_EQ(step["values"][0]["value"], "GPIO5");
+  // The next part begins with the lines back at rest.
+  EXPECT_EQ(step["blocked"][0]["reason"], "INPUT_ACTIVE");
+  EXPECT_EQ(bench.Refused(bench.Accept("yes")), "WRONG_METHOD");
+  bench.SetLine("GPIO5", false);
+  bench.Run(0.2);
+  EXPECT_EQ(bench.StepState("assign")["parts"][1]["state"], "waiting");
+
+  // Two lines shortly after one another are no answer, and a line a part took is none either.
+  bench.SetLine("GPIO10", true);
+  bench.Run(0.1);
+  bench.SetLine("GPIO12", false);
+  bench.Run(0.5);
+  EXPECT_TRUE(bench.StepState("assign")["ask"].is_null());
+  bench.SetLine("GPIO10", false);
+  bench.SetLine("GPIO12", true);
+  bench.Run(0.2);
+  bench.SetLine("GPIO5", true);
+  bench.Run(0.5);
+  EXPECT_TRUE(bench.StepState("assign")["ask"].is_null());
+  bench.SetLine("GPIO5", false);
+  // No leaves the part waiting, a line that goes low is taken as active low.
+  bench.Take("GPIO10", true, "no");
+  EXPECT_EQ(bench.StepState("assign")["parts"][1]["state"], "waiting");
+  bench.SetLine("GPIO12", false);
+  bench.Run(0.5);
+  EXPECT_EQ(bench.StepState("assign")["ask"],
+            (json{{"part", "lift_left"}, {"line", "GPIO12"}, {"active_high", false}}));
+  ASSERT_EQ(bench.Refused(bench.Accept("yes")), "");
+  bench.Run(0.2);
+  EXPECT_EQ(bench.restarts, 1);
+  bench.SetLine("GPIO12", true);
+  bench.Run(0.2);
+  EXPECT_EQ(bench.restarts, 2);
+  const std::string values = bench.layer_text.substr(bench.layer_text.find("driver:"));
+  EXPECT_EQ(values, "driver:\n  ros__parameters:\n"
+                    "    inputs.gpio_active_high: [true, false]\n"
+                    "    inputs.gpio_delays_ms: [10, 2500]\n"
+                    "    inputs.gpio_lines: [\"GPIO5\", \"GPIO12\"]\n"
+                    "    inputs.gpio_reasons: [\"stop\", \"lift\"]\n"
+                    "    inputs.gpio_roles: [\"stop\", \"lift\"]\n");
+  bench.Events();
+
+  // Back without learning, the driver shows the table: done.
+  bench.Restart(false, AssignBench::Table());
+  step = bench.StepState("assign");
+  EXPECT_EQ(step["state"], "ok");
+  EXPECT_EQ(step["values"][1]["value"], "GPIO12");
+  EXPECT_EQ(step["parts"][1]["state"], "ok");
+  EXPECT_EQ(bench.State()["restart_pending"], false);
+  const auto events = bench.Events();
+  ASSERT_FALSE(events.empty());
+  EXPECT_EQ(events[0]["step"], "assign");
+  EXPECT_EQ(events[0]["state"], "ok");
+  bench.Run(30);
+  EXPECT_EQ(bench.restarts, 2);
+}
+
+TEST(Program, AssigningNeedsAMowerAtRestWithoutEmergency) {
+  AssignBench bench;
+  bench.world.state = "MOWING";
+  bench.program.OnWorld(bench.world);
+  EXPECT_EQ(bench.Refused(bench.Start("assign")), "BUSY");
+  bench.world.state = "IDLE";
+  bench.program.OnWorld(bench.world);
+  bench.hardware.emergency_reason = EmergencyBit("STOP") | EmergencyBit("LATCH");
+  bench.Run(0.2);
+  EXPECT_EQ(bench.Refused(bench.Start("assign")), "EMERGENCY");
+  EXPECT_EQ(bench.StepState("assign")["blocked"][0]["reason"], "EMERGENCY");
+  bench.hardware.emergency_reason = 0;
+  bench.driver = false;
+  bench.Run(1.5);
+  EXPECT_EQ(bench.Refused(bench.Start("assign")), "DRIVER_MISSING");
+  EXPECT_EQ(bench.restarts, 0);
+  EXPECT_EQ(bench.layer_text, "");
+
+  // Without hw/inputs or without a place for the file there is nothing to assign.
+  Bench plain(kAssignList);
+  World world;
+  world.state = "IDLE";
+  plain.program.OnWorld(world);
+  EXPECT_EQ(plain.Refused(plain.Start("assign")), "STORAGE_NOT_WRITABLE");
+  plain.program.SetLayer(Layer(), {});
+  EXPECT_EQ(plain.Refused(plain.Start("assign")), "DRIVER_MISSING");
+}
+
+// Another emergency while the driver learns holds the restart back until it is released.
+TEST(Program, ARestartNeverTakesAnEmergencyAway) {
+  AssignBench bench;
+  bench.ToTheParts();
+  bench.TakeBothParts();
+  ASSERT_EQ(bench.restarts, 2);
+
+  AssignBench tilted;
+  tilted.ToTheParts();
+  tilted.hardware.emergency_reason |= EmergencyBit("TILT");
+  tilted.TakeBothParts();
+  tilted.Run(5);
+  EXPECT_EQ(tilted.restarts, 1);
+  EXPECT_EQ(tilted.StepState("assign")["blocked"][0]["reason"], "EMERGENCY");
+  EXPECT_EQ(tilted.State()["restart_pending"], true);
+  tilted.world.state = "AREA_RECORDING";
+  tilted.program.OnWorld(tilted.world);
+  tilted.hardware.emergency_reason &= ~EmergencyBit("TILT");
+  tilted.Run(1);
+  EXPECT_EQ(tilted.restarts, 1);
+  EXPECT_EQ(tilted.StepState("assign")["blocked"][0]["reason"], "BUSY");
+  tilted.world.state = "IDLE";
+  tilted.program.OnWorld(tilted.world);
+  tilted.Run(0.2);
+  EXPECT_EQ(tilted.restarts, 2);
+}
+
+TEST(Program, ARestartThatDoesNotComeFailsTheStep) {
+  AssignBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("assign")), "");
+  // Not before the record is on disk: the step goes on from it.
+  bench.program.SetWritable(false);
+  bench.Run(1);
+  EXPECT_EQ(bench.restarts, 0);
+  bench.program.SetWritable(true);
+  bench.Run(0.1);
+  EXPECT_EQ(bench.restarts, 1);
+  bench.Run(18.9);
+  EXPECT_EQ(bench.StepState("assign")["state"], "running");
+  bench.Events();
+  bench.Run(2);
+  const json step = bench.StepState("assign");
+  EXPECT_EQ(step["state"], "failed");
+  EXPECT_EQ(step["result"]["reason"], "RESTART_FAILED");
+  EXPECT_EQ(bench.Events()[0]["limit"], 20.0);
+  // The next start does not learn, and nothing restarts for a driver that never learned.
+  EXPECT_EQ(bench.layer_text, "");
+  bench.Run(30);
+  EXPECT_EQ(bench.restarts, 1);
+}
+
+// However the step ends while the driver learns, the program takes the learning back and restarts.
+TEST(Program, AStepThatEndsWhileLearningLeavesTheLearning) {
+  AssignBench flutter;
+  ASSERT_EQ(flutter.Refused(flutter.Start("assign")), "");
+  flutter.Run(0.2);
+  flutter.Restart(true, AssignBench::Candidates());
+  flutter.Run(1);
+  flutter.SetLine("GPIO10", true);
+  flutter.SetLine("GPIO10", false);
+  flutter.Events();
+  flutter.Run(2.5);
+  EXPECT_EQ(flutter.StepState("assign")["result"]["reason"], "FLUTTER");
+  EXPECT_EQ(flutter.Events()[0]["lines"], json::array({"GPIO10"}));
+  EXPECT_EQ(flutter.restarts, 2);
+  EXPECT_EQ(flutter.layer_text, "");
+
+  AssignBench stopped;
+  stopped.ToTheParts();
+  stopped.Take("GPIO5", true, "yes");
+  ASSERT_EQ(stopped.Refused(stopped.program.Abort(nullptr, stopped.now, kWall)), "");
+  stopped.Run(0.2);
+  json step = stopped.StepState("assign");
+  EXPECT_EQ(step["state"], "open");
+  EXPECT_EQ(step["result"]["reason"], "STOPPED");
+  EXPECT_EQ(stopped.restarts, 2);
+  EXPECT_EQ(stopped.layer_text, "");
+  EXPECT_EQ(stopped.State()["restart_pending"], false);
+  stopped.Run(30);
+  EXPECT_EQ(stopped.restarts, 2);
+
+  // No line in time, or only several at once.
+  AssignBench silent;
+  silent.ToTheParts();
+  silent.Events();
+  silent.Run(10.2);
+  step = silent.StepState("assign");
+  EXPECT_EQ(step["result"]["reason"], "NO_LINE");
+  EXPECT_EQ(step["result"]["part"], "stop_top");
+  EXPECT_EQ(step["parts"][0]["state"], "failed");
+  EXPECT_EQ(silent.restarts, 2);
+
+  AssignBench both;
+  both.ToTheParts();
+  both.SetLine("GPIO1", true);
+  both.SetLine("GPIO5", true);
+  both.Run(0.5);
+  both.SetLine("GPIO1", false);
+  both.SetLine("GPIO5", false);
+  both.Events();
+  both.Run(10.2);
+  EXPECT_EQ(both.StepState("assign")["result"]["reason"], "AMBIGUOUS");
+  EXPECT_EQ(both.Events()[0]["lines"], json::array({"GPIO1", "GPIO5"}));
+}
+
+// The record is lost while the driver learns: the learning of the program's own file goes, one a file kept by hand
+// asks for stays.
+TEST(Program, ALearningNoStepIsAtIsTakenBack) {
+  AssignBench bench;
+  bench.saved.clear();
+  bench.layer_text = "driver:\n  ros__parameters:\n    inputs.learn: true\n";
+  bench.Restart(true, AssignBench::Candidates());
+  EXPECT_EQ(bench.restarts, 1);
+  EXPECT_EQ(bench.layer_text, "");
+  EXPECT_EQ(bench.StepState("assign")["blocked"][0]["reason"], "BUSY");
+
+  AssignBench by_hand;
+  by_hand.Restart(true, AssignBench::Candidates());
+  by_hand.Run(5);
+  EXPECT_EQ(by_hand.restarts, 0);
+  // No input stops anything while the driver learns: none is checked.
+  EXPECT_EQ(by_hand.Refused(by_hand.Start("stop")), "BUSY");
+}
+
+TEST(Program, ATableTheDriverDoesNotShowIsNotApplied) {
+  AssignBench bench;
+  bench.ToTheParts();
+  bench.TakeBothParts();
+  ASSERT_EQ(bench.restarts, 2);
+  // The file kept by hand names other lines: the driver comes back with those.
+  bench.shadowed = {"driver.inputs.gpio_lines", "logic.inputs.x"};
+  bench.Restart(false, {MakeLine("GPIO1", "stop", "stop"), MakeLine("GPIO10", "lift", "lift")});
+  bench.Events();
+  bench.Run(19.5);
+  EXPECT_EQ(bench.StepState("assign")["state"], "running");
+  // The right lines with another level or delay are not the table either.
+  std::vector<Line> close = AssignBench::Table();
+  close[1].active_high = true;
+  bench.lines = close;
+  bench.program.OnInputs(bench.lines, false);
+  bench.Run(0.2);
+  EXPECT_EQ(bench.StepState("assign")["state"], "running");
+  close = AssignBench::Table();
+  close[0].delay_ms = 20;
+  bench.lines = close;
+  bench.program.OnInputs(bench.lines, false);
+  bench.Run(1);
+  EXPECT_EQ(bench.StepState("assign")["result"]["reason"], "NOT_APPLIED");
+  EXPECT_EQ(bench.Events()[0]["key"], "driver.inputs.gpio_lines");
+  EXPECT_EQ(bench.restarts, 2);
+
+  // A file that cannot be written ends the step before any restart.
+  AssignBench full;
+  full.layer_ok = false;
+  ASSERT_EQ(full.Refused(full.Start("assign")), "");
+  full.Run(0.2);
+  EXPECT_EQ(full.StepState("assign")["result"]["reason"], "NOT_APPLIED");
+  EXPECT_EQ(full.restarts, 0);
+}
+
+// The checks of the inputs count only with the table they ran with.
+TEST(Program, ANewTableOpensTheChecksOfTheInputsAgain) {
+  AssignBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  bench.SetLine("GPIO1", true);
+  bench.Press(&Hardware::stop, 4, 0.1, 0.4);
+  bench.SetLine("GPIO1", false);
+  bench.hardware.emergency_reason = 0;
+  bench.Run(0.2);
+  ASSERT_EQ(bench.StepState("stop")["state"], "ok");
+  bench.ToTheParts();
+  EXPECT_EQ(bench.StepState("stop")["state"], "ok");
+  // While the driver learns no check of an input starts.
+  EXPECT_EQ(bench.Refused(bench.Start("stop")), "BUSY");
+  bench.TakeBothParts();
+  EXPECT_EQ(bench.StepState("stop")["state"], "open");
+  EXPECT_TRUE(bench.StepState("stop")["result"].is_null());
 }

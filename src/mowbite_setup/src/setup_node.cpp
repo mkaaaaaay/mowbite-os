@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <map>
@@ -20,6 +21,7 @@
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <set>
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <string>
@@ -30,8 +32,10 @@
 #include "mowbite_api/setup.h"
 #include "mowbite_bridge/event_builder.h"
 #include "mowbite_hold/file_io.h"
+#include "mowbite_hold/restart.h"
 #include "mowbite_map/sha256.h"
 #include "mowbite_ntrip/ntrip_protocol.h"
+#include "mowbite_setup/layer.h"
 #include "mowbite_setup/program.h"
 #include "mowbite_setup/steps.h"
 #include "mowbite_watch/attach.h"
@@ -53,6 +57,8 @@ constexpr double kRepeat = 30.0;
 constexpr double kWriteRetry = 5.0;
 // Correction data counts as arriving with a frame this young (s).
 constexpr double kFrameAge = 10.0;
+// In data_dir: the setup program asked for a restart of the OS; the launch ends when it sees it (stack.py).
+constexpr const char* kRestartFile = "setup_restart.json";
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -76,8 +82,9 @@ struct Image {
 }  // namespace
 
 // The setup program of the platform: answers setup.*, keeps <data_dir>/setup.json, sends the state retained on
-// setup/json and the events SETUP_STEP and SETUP. It watches and moves nothing. The one thing it asks of the mower is
-// the release of an emergency a part of its own brought (Program::OwnLatch), over the checks of the safety filter.
+// setup/json and the events SETUP_STEP and SETUP. It watches and moves nothing. What it asks of the mower: the
+// release of an emergency a part of its own brought (Program::OwnLatch), over the checks of the safety filter, and
+// a restart of the OS for a step that changed a setting of the driver, with the mower in IDLE (Program::TakeRestart).
 class SetupNode : public rclcpp::Node {
  public:
   explicit SetupNode(const rclcpp::NodeOptions& options)
@@ -86,6 +93,8 @@ class SetupNode : public rclcpp::Node {
     const std::string platform = declare_parameter("platform", std::string());
     const std::string steps = declare_parameter("steps", std::string());
     const std::string image_dir = declare_parameter("image_dir", std::string());
+    layer_path_ = declare_parameter("layer", std::string());
+    const std::string shadowed = declare_parameter("shadowed", std::string());
 
     response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
     error_pub_ = create_publisher<RpcError>("bridge/rpc/error", 100);
@@ -106,6 +115,7 @@ class SetupNode : public rclcpp::Node {
         LoadImages(*list, image_dir);
         program_.emplace(*list, platform);
         LoadRecord();
+        LoadLayer(shadowed);
         for (const auto& method : mowbite_api::Methods()) {
           if (method.node == methods.node_id) methods.methods.push_back(method.name);
         }
@@ -146,11 +156,12 @@ class SetupNode : public rclcpp::Node {
             line.active = input.active;
             line.assigned = input.assigned;
             line.held = input.held;
+            line.active_high = input.active_high;
             line.delay_ms = input.delay_ms;
             lines.push_back(std::move(line));
           }
           std::lock_guard<std::mutex> lock(mutex_);
-          program_->OnInputs(lines);
+          program_->OnInputs(lines, msg->learning);
         });
     release_client_ = create_client<SetEmergency>("safety/release_emergency");
     caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
@@ -235,6 +246,31 @@ class SetupNode : public rclcpp::Node {
     }
   }
 
+  // The parameter file the program wrote for this mower, and what the file kept by hand overrules of it
+  // (<node>.<parameter>, with commas, from the start).
+  void LoadLayer(const std::string& shadowed) {
+    if (layer_path_.empty()) return;
+    Layer layer;
+    std::string text, error;
+    const auto read = mowbite_hold::ReadSmallFile(layer_path_, 1024 * 1024, &text, &error);
+    if (read == mowbite_hold::FileRead::kText) {
+      if (!layer.Parse(text, &error)) {
+        RCLCPP_ERROR(get_logger(), "%s is not as the setup program writes it (%s): its values are left out of the "
+                                   "next one",
+                     layer_path_.c_str(), error.c_str());
+      }
+    } else if (read != mowbite_hold::FileRead::kMissing) {
+      RCLCPP_ERROR(get_logger(), "%s cannot be read: %s", layer_path_.c_str(), error.c_str());
+    }
+    std::set<std::string> names;
+    for (size_t begin = 0; begin < shadowed.size();) {
+      const size_t end = std::min(shadowed.find(',', begin), shadowed.size());
+      if (end > begin) names.insert(shadowed.substr(begin, end - begin));
+      begin = end + 1;
+    }
+    program_->SetLayer(std::move(layer), std::move(names));
+  }
+
   void OnParams(const std::string& text) {
     const json parsed = json::parse(text, nullptr, false);
     if (!parsed.is_object() || !parsed.contains("node") || parsed["node"] != kGeometryNode) return;
@@ -271,6 +307,14 @@ class SetupNode : public rclcpp::Node {
       state_due_ = true;
       Save(now);
     }
+    if (const auto layer = program_->TakeLayer()) {
+      std::string error;
+      const bool written = layer->empty() ? mowbite_hold::RemoveRecordFile(layer_path_, &error)
+                                          : mowbite_hold::WriteFileSafely(layer_path_, *layer, &error);
+      if (!written) RCLCPP_ERROR(get_logger(), "Cannot write %s: %s", layer_path_.c_str(), error.c_str());
+      program_->LayerWritten(written, now, WallSeconds());
+      if (program_->TakeChanged()) Save(now);
+    }
     for (const Event& event : program_->TakeEvents()) {
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "events/json";
@@ -280,12 +324,34 @@ class SetupNode : public rclcpp::Node {
     }
   }
 
+  // The restart a step asked for, by the way of the step list: self leaves a note for the launch and ends this
+  // process in order, so that whatever runs the OS starts it again; host asks mowbite-host over the broker.
+  void Restart() {
+    if (program_->restart_way() == "host") {
+      RCLCPP_INFO(get_logger(), "The setup program asks mowbite-host to restart the OS");
+      mowbite_msgs::msg::MqttPublish msg;
+      msg.topic = "rpc/request";
+      msg.payload = json{{"jsonrpc", "2.0"}, {"method", "host.restart_os"}}.dump();
+      publish_pub_->publish(msg);
+      return;
+    }
+    std::string error;
+    const std::string note = data_dir_ + "/" + kRestartFile;
+    if (!mowbite_hold::WriteFileSafely(note, json{{"t", std::floor(WallSeconds())}}.dump() + "\n", &error)) {
+      RCLCPP_ERROR(get_logger(), "Cannot write %s, the OS does not restart: %s", note.c_str(), error.c_str());
+      return;
+    }
+    RCLCPP_INFO(get_logger(), "The setup program restarts the OS");
+    rclcpp::shutdown();
+  }
+
   void OnTick() {
     std::lock_guard<std::mutex> lock(mutex_);
     const double now = MonotonicSeconds();
     program_->Tick(now, WallSeconds());
     if (const auto release = program_->TakeRelease()) SendRelease(*release);
     Flush(now);
+    if (program_->TakeRestart(now)) Restart();
     if (!program_->writable() && now - write_tried_ >= kWriteRetry) Save(now);
     // What blocks a step changes without a change of the record: the app has to see it as well.
     std::string blocked = program_->BlockedNow(now);
@@ -434,6 +500,7 @@ class SetupNode : public rclcpp::Node {
 
   std::mutex mutex_;
   std::string data_dir_;
+  std::string layer_path_;
   std::optional<Program> program_;
   std::map<std::string, Image> images_;
   std::map<std::string, std::pair<std::string, int>> image_infos_;

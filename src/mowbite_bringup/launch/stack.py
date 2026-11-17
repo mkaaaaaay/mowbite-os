@@ -12,7 +12,7 @@ import time
 
 import launch.logging
 from launch.actions import (DeclareLaunchArgument, OpaqueCoroutine, OpaqueFunction, RegisterEventHandler,
-                            SetEnvironmentVariable, TimerAction)
+                            SetEnvironmentVariable, Shutdown, TimerAction)
 from launch.event_handlers import OnProcessExit, OnProcessStart
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, Node
@@ -32,6 +32,8 @@ STABLE_AFTER = 600.0
 EXIT_NOTE = "container_exit.json"
 # In data_dir: the node the watch of the container (mowbite_watch) ended it for, taken into EXIT_NOTE as stalled.
 WATCH_NOTE = "watch_exit.json"
+# In data_dir: the setup program asked for a restart of the OS and ended the container for it (mowbite_setup).
+RESTART_NOTE = "setup_restart.json"
 # In data_dir: how the driver of the platform ended outside the shutdown, written before it starts again.
 DRIVER_EXIT_NOTE = "driver_exit.json"
 # The nodes beside the container, in their own processes.
@@ -307,8 +309,10 @@ def take_watch_note(path, logger):
 # make(start) as a process that starts again after it ended outside the shutdown, at most `restarts` times in a row,
 # each time after RESTART_DELAY s; start counts every start for a name of its own. A run of STABLE_AFTER s begins the
 # count again. Each end goes into `note` (None: none) under the name `label`, with what the watch of the process left
-# in `watch_note` (None: none) as stalled, the last one with down true. Every start gets oom_score_adj.
-def restarting(make, note, label, logger, restarts, oom_score_adj="", watch_note=None, clock=time.monotonic):
+# in `watch_note` (None: none) as stalled, the last one with down true. Every start gets oom_score_adj. A process that
+# ended while leave() holds wanted the whole launch to end: no restart and no note, the launch shuts down.
+def restarting(make, note, label, logger, restarts, oom_score_adj="", watch_note=None, clock=time.monotonic,
+               leave=None):
     # A start by hand begins without restarts.
     remove(note, logger)
     remove(watch_note, logger)
@@ -325,6 +329,9 @@ def restarting(make, note, label, logger, restarts, oom_score_adj="", watch_note
         # At the end of the launch the process is stopped, it did not crash.
         if context.is_shutdown:
             return None
+        if leave and leave():
+            logger.info(f"{label} ended for a restart of the OS: the launch ends")
+            return [Shutdown(reason="restart of the OS asked for")]
         stalled = take_watch_note(watch_note, logger)
         now = clock()
         if now - began >= STABLE_AFTER:
@@ -393,6 +400,9 @@ def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
     # only itself, not S2 or the follower beside it; the watch of the container ends it when one stays silent or one
     # of these nodes does not come (mowbite_watch).
     watch_note = os.path.join(data_dir, WATCH_NOTE) if data_dir else None
+    # The note of a restart the setup program asked for belongs to the start before this one.
+    restart_note = os.path.join(data_dir, RESTART_NOTE) if data_dir else None
+    remove(restart_note, logger)
     watch_env = {"MOWBITE_WATCH_NODES": ",".join(node_names(nodes))}
     if watch_note:
         watch_env["MOWBITE_WATCH_NOTE"] = watch_note
@@ -411,7 +421,8 @@ def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
                    namespace="/", parameters=[*files, {"data_dir": data_dir, "calib_root": calib_root}],
                    output="screen", respawn=True, respawn_delay=5.0)
     return [*restarting(container, os.path.join(data_dir, EXIT_NOTE), "The container", logger, CONTAINER_RESTARTS,
-                        oom_score_adj, watch_note),
+                        oom_score_adj, watch_note,
+                        leave=lambda: bool(restart_note) and os.path.lexists(restart_note)),
             *oom_score(planner, oom_score_adj, logger), planner, *net_service(files, data_dir, logger)]
 
 

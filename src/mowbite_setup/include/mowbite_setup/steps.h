@@ -20,13 +20,15 @@ struct Named {
   json texts;
 };
 
-// A part of a step input (mode, role) or of a step imu (move).
+// A part of a step input (mode, role), of a step inputs_assign (mode assign, role, delay_ms) or of a step imu (move).
 struct Part {
   std::string id;
   std::string mode;
   std::string role;
   std::string move;
   json texts;
+  // The delay the line of the part gets in the table of the driver.
+  int delay_ms = 0;
 };
 
 struct Step {
@@ -65,6 +67,8 @@ struct Step {
 struct StepList {
   // Counter of the list: another one tells the app that steps or images changed.
   int catalog = 0;
+  // How the OS restarts for a step that needs it, a name of SetupRestarts(); empty for a list without such a step.
+  std::string restart;
   std::vector<Step> steps;
 
   const Step* Find(const std::string& id) const;
@@ -72,8 +76,9 @@ struct StepList {
   std::vector<std::string> Images() const;
 };
 
-// The list as {"catalog": N, "steps": [...]}. Nothing with the first problem in why: a field the catalog does not
-// know, a value outside of the bounds of the code, a step that needs a later one, a text missing in de or en.
+// The list as {"catalog": N, "restart": way, "steps": [...]}. Nothing with the first problem in why: a field the
+// catalog does not know, a value outside of the bounds of the code, a step that needs a later one, a text missing in
+// de or en.
 std::optional<StepList> ParseSteps(const json& list, std::string* why);
 
 // What is wrong with an image of a step, empty for none: SVG of one colour without text, raster images, scripts,

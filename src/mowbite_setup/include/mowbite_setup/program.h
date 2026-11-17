@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "mowbite_setup/layer.h"
 #include "mowbite_setup/steps.h"
 
 namespace mowbite_setup {
@@ -44,6 +45,7 @@ struct Line {
   bool assigned = false;
   // The board keeps it switched after the sensor is free, until the emergency is released.
   bool held = false;
+  bool active_high = true;
   int delay_ms = 0;
 };
 
@@ -106,8 +108,11 @@ class Program {
 
   // What the node hears; now is a monotonic clock (s), wall unix s.
   void OnHardware(const Hardware& hardware, double now);
-  // hw/inputs: the lines of the platform, none from a driver without the topic.
-  void OnInputs(const std::vector<Line>& lines);
+  // hw/inputs: the lines of the platform, and whether the driver learns them (then active is the level of a line).
+  void OnInputs(const std::vector<Line>& lines, bool learning = false);
+  // The parameter file of the program as it is on disk, and <node>.<parameter> of what the file kept by hand
+  // overrules of it. Without this call the program has no place for the file.
+  void SetLayer(Layer layer, std::set<std::string> shadowed);
   void OnCapabilities(const Capabilities& capabilities);
   void OnImu(const ImuSample& sample, double now);
   // solution as GnssFix has it (3 float, 4 fixed), accuracy in m.
@@ -143,6 +148,15 @@ class Program {
   std::vector<Event> TakeEvents();
   // A release to ask for now, once.
   std::optional<ReleaseRequest> TakeRelease();
+  // The parameter file to write now, once (empty: to remove); LayerWritten tells how it went.
+  std::optional<std::string> TakeLayer();
+  void LayerWritten(bool written, double now, double wall);
+  // Whether to restart the OS now, once: a step asked for it, record and parameter file are on disk, the mower
+  // stands in IDLE and no emergency is on but the one of learning.
+  bool TakeRestart(double now);
+  const std::string& restart_way() const {
+    return list_.restart;
+  }
 
  private:
   // What a step holds between restarts.
@@ -155,7 +169,13 @@ class Program {
     // open, waiting, ok or failed by part, as the last attempt left them.
     json parts = json::array();
     json answers = json::object();
+    // A step inputs_assign under way: phase learn (the driver learns, part by part) or apply (the table is written),
+    // and the line of every part taken so far. It outlives the restarts of the step.
+    json assign;
   };
+  // Where a step inputs_assign is: waiting to be restarted, for the driver after it, the lines untouched, a part, its
+  // question, the lines back at rest.
+  enum class Assign { kRestart, kDriver, kQuiet, kPart, kAsk, kRest };
   // The part of the running step: what it waits for.
   enum class Phase { kRest, kArmed, kSwitched, kWatch };
   struct Run {
@@ -197,6 +217,17 @@ class Program {
     double last_imu = -1;
     // position
     double good_since = -1;
+    // inputs_assign: the stage and since when (below 0: from the next tick), the level of every line at rest, the
+    // lines that left it with the level they went to and when the first did, what a try of the part showed more than
+    // one line of, and the line ask names.
+    Assign assign = Assign::kRestart;
+    double stage_began = 0;
+    std::map<std::string, bool> levels;
+    std::map<std::string, bool> changed;
+    double first_change = -1;
+    json ambiguous = json::array();
+    std::string proposed;
+    bool proposed_high = true;
   };
 
   // The emergency a part of mode press brought, which the program releases itself. It exists only while every
@@ -246,6 +277,17 @@ class Program {
   void WatchOwnLatch();
   void TickRelease(double now);
   void EndRun(double now);
+  bool RestartAllowed(double now) const;
+  void WantRestart();
+  void TickLearning();
+  void TickAssign(double now, double wall);
+  void EnterAssign(Assign stage, double now);
+  void BeginAssignPart(double now, double wall);
+  void FinishAssign(double now, double wall);
+  void NoteLevels();
+  bool AtRest() const;
+  bool TableApplied(const Step& step) const;
+  std::optional<Refusal> AnswerAssign(const Step& step, const json& params);
   bool IsRun(const Step& step) const;
   // The position has the solution the step asks for.
   bool SolutionOk(const Step& step) const;
@@ -275,6 +317,19 @@ class Program {
   std::vector<Line> lines_;
   std::optional<OwnLatch> own_;
   std::optional<ReleaseRequest> release_;
+  bool inputs_known_ = false;
+  bool learning_ = false;
+  Layer layer_;
+  bool layer_set_ = false;
+  std::set<std::string> shadowed_;
+  // The file differs from layer_; it is with the node to be written.
+  bool layer_dirty_ = false;
+  bool layer_pending_ = false;
+  // A restart is to be asked for; when it was (below 0: not yet).
+  bool restart_wanted_ = false;
+  double restart_sent_ = -1;
+  // A step inputs_assign ended without its table: the driver may still learn.
+  bool leave_learning_ = false;
   Capabilities capabilities_;
   bool capabilities_known_ = false;
   double imu_at_ = -1;

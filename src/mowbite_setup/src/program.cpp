@@ -29,6 +29,8 @@ constexpr double kLatchLead = 0.3;
 // A driver may take a release only every second.
 constexpr double kReleaseEvery = 1.5;
 constexpr double kReleaseAfter = 10.0;
+// A step inputs_assign waits this long (s) after the first line changed for others that change with it.
+constexpr double kAssignSettle = 0.3;
 constexpr double kDegrees = 180.0 / M_PI;
 
 constexpr const char* kStepEvent = "SETUP_STEP";
@@ -59,6 +61,21 @@ uint32_t TiltBit() {
 uint32_t LatchBit() {
   static const uint32_t bit = EmergencyBit("LATCH");
   return bit;
+}
+
+uint32_t LearningBit() {
+  static const uint32_t bit = EmergencyBit("INPUTS_LEARNING");
+  return bit;
+}
+
+bool IsAssign(const Step& step) {
+  return step.check == "inputs_assign";
+}
+
+json Keys(const std::map<std::string, bool>& lines) {
+  json names = json::array();
+  for (const auto& [name, level] : lines) names.push_back(name);
+  return names;
 }
 
 bool IsTurn(const std::string& move) {
@@ -149,6 +166,7 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
       if (saved.contains("values") && saved["values"].is_array()) record.values = saved["values"];
       if (saved.contains("parts") && saved["parts"].is_array()) record.parts = saved["parts"];
       if (saved.contains("answers") && saved["answers"].is_object()) record.answers = saved["answers"];
+      if (saved.contains("assign")) record.assign = saved["assign"];
     }
     records[step.id] = std::move(record);
   }
@@ -158,7 +176,27 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
     version_ = static_cast<int>(std::clamp<int64_t>(file["version"].get<int64_t>(), 0, 1000000000)) + 1;
   }
   for (const Step& step : list_.steps) {
-    if (RecordOf(step).state == "running") End(step, "open", "INTERRUPTED", "The OS restarted while it ran", {}, wall);
+    Record& record = RecordOf(step);
+    const json& assign = record.assign;
+    const bool learn = assign.is_object() && assign.value("phase", json()) == "learn";
+    const bool apply = assign.is_object() && assign.value("phase", json()) == "apply" && assign.contains("parts") &&
+                       assign["parts"].is_object();
+    if (record.state != "running" || !IsAssign(step) || !(learn || apply) || run_) {
+      record.assign = nullptr;
+      if (record.state == "running") End(step, "open", "INTERRUPTED", "The OS restarted while it ran", {}, wall);
+      continue;
+    }
+    // The restart the step asked for: it goes on with the driver, a learning one from its first part.
+    Run run;
+    run.step = static_cast<size_t>(&step - list_.steps.data());
+    run.began = run.stage_began = -1;
+    run.wall_began = wall;
+    run.part_states.assign(step.parts.size(), apply ? "ok" : "open");
+    run.measured.assign(step.parts.size(), std::nullopt);
+    run.part = apply ? step.parts.size() : 0;
+    run.assign = Assign::kDriver;
+    if (learn) record.assign["parts"] = json::object();
+    run_ = std::move(run);
   }
   return true;
 }
@@ -169,6 +207,7 @@ std::string Program::Text() const {
     const Record& record = records_.at(step.id);
     steps[step.id] = {{"state", record.state},   {"attempt", record.attempt}, {"result", record.result},
                       {"values", record.values}, {"parts", record.parts},     {"answers", record.answers}};
+    if (!record.assign.is_null()) steps[step.id]["assign"] = record.assign;
   }
   const json file = {{"schema", 1},
                      {"platform", platform_},
@@ -238,9 +277,42 @@ void Program::OnHardware(const Hardware& hardware, double now) {
   for (const auto& motor : hardware.motors_down) run_->motors_down.insert(motor);
 }
 
-void Program::OnInputs(const std::vector<Line>& lines) {
+void Program::OnInputs(const std::vector<Line>& lines, bool learning) {
   lines_ = lines;
+  learning_ = learning;
+  inputs_known_ = true;
   NoteLines();
+  NoteLevels();
+}
+
+void Program::SetLayer(Layer layer, std::set<std::string> shadowed) {
+  layer_ = std::move(layer);
+  shadowed_ = std::move(shadowed);
+  layer_set_ = true;
+}
+
+// Every hw/inputs counts for a step inputs_assign that watches: a line that left its level at rest, with the level
+// it went to. A line a part took already is out of it.
+void Program::NoteLevels() {
+  if (!run_ || !IsAssign(StepOf(*run_))) return;
+  Run& run = *run_;
+  if (run.assign != Assign::kQuiet && run.assign != Assign::kPart) return;
+  const json& taken = RecordOf(StepOf(run)).assign["parts"];
+  for (const Line& line : lines_) {
+    const auto rest = run.levels.find(line.name);
+    if (rest == run.levels.end() || rest->second == line.active || run.changed.count(line.name)) continue;
+    const bool is_taken = std::any_of(taken.begin(), taken.end(),
+                                      [&line](const json& part) { return part["line"] == line.name; });
+    if (!is_taken) run.changed[line.name] = line.active;
+  }
+}
+
+bool Program::AtRest() const {
+  for (const Line& line : lines_) {
+    const auto rest = run_->levels.find(line.name);
+    if (rest != run_->levels.end() && rest->second != line.active) return false;
+  }
+  return true;
 }
 
 void Program::OnCapabilities(const Capabilities& capabilities) {
@@ -385,7 +457,73 @@ std::optional<ReleaseRequest> Program::TakeRelease() {
 void Program::EndRun(double now) {
   if (own_ && !own_->confirmed) own_.reset();
   if (own_ && own_->until < 0) own_->until = now + kReleaseAfter;
+  // A step inputs_assign that ends without its table: the next start does not learn, and should the driver learn
+  // now, TickLearning restarts it.
+  const Step& step = StepOf(*run_);
+  Record& record = RecordOf(step);
+  if (!record.assign.is_null()) {
+    record.assign = nullptr;
+    leave_learning_ = true;
+    restart_wanted_ = false;
+    if (!layer_.Get(step.Word("node"), mowbite_api::kInputsLearn).is_null()) {
+      layer_.Erase(step.Word("node"), mowbite_api::kInputsLearn);
+      layer_dirty_ = true;
+    }
+  }
   run_.reset();
+}
+
+std::optional<std::string> Program::TakeLayer() {
+  if (!layer_dirty_) return std::nullopt;
+  layer_dirty_ = false;
+  layer_pending_ = true;
+  return layer_.Text();
+}
+
+void Program::LayerWritten(bool written, double now, double wall) {
+  layer_pending_ = false;
+  if (written) return;
+  restart_wanted_ = false;
+  if (run_ && IsAssign(StepOf(*run_))) {
+    Fail("NOT_APPLIED", "The parameter file of the setup program cannot be written", json::object(), now, wall);
+  }
+}
+
+// Only a mower that stands, and never to get rid of an emergency: none may be on but the one of learning itself.
+bool Program::RestartAllowed(double now) const {
+  const uint32_t reason = hardware_.emergency_reason;
+  const bool learning = (reason & LearningBit()) != 0;
+  const uint32_t allowed = learning ? LearningBit() | LatchBit() : 0;
+  return Fresh(hardware_at_, now, kFresh) && world_.state == "IDLE" && (reason & ~allowed) == 0;
+}
+
+void Program::WantRestart() {
+  layer_dirty_ = true;
+  restart_wanted_ = true;
+  restart_sent_ = -1;
+}
+
+bool Program::TakeRestart(double now) {
+  if (!restart_wanted_ || layer_dirty_ || layer_pending_ || changed_ || !writable_ || !RestartAllowed(now)) {
+    return false;
+  }
+  restart_wanted_ = false;
+  restart_sent_ = now;
+  return true;
+}
+
+// The driver learns its inputs and no step is at it (stopped, failed, reset, or its record is lost): the program takes
+// the learning back and restarts, once. A learning the file kept by hand asks for is not its own.
+void Program::TickLearning() {
+  if (!learning_ || !layer_set_ || restart_wanted_ || restart_sent_ >= 0) return;
+  if (run_ && IsAssign(StepOf(*run_))) return;
+  const auto step = std::find_if(list_.steps.begin(), list_.steps.end(), IsAssign);
+  if (step == list_.steps.end()) return;
+  const std::string& node = step->Word("node");
+  if (!leave_learning_ && layer_.Get(node, mowbite_api::kInputsLearn).is_null()) return;
+  leave_learning_ = false;
+  layer_.Erase(node, mowbite_api::kInputsLearn);
+  WantRestart();
 }
 
 // Asks for the release of the emergency of own_ when its time has come; see OwnLatch for the conditions.
@@ -444,6 +582,7 @@ void Program::Pass(const Step& step, double now, double wall) {
   if (IsRun(step)) {
     record.values = Values(step, now, true);
     record.parts = json(std::vector<std::string>(step.parts.size(), "ok"));
+    if (IsAssign(step)) record.assign = nullptr;
     EndRun(now);
   }
   End(step, "ok", "", "", {}, wall);
@@ -454,11 +593,13 @@ void Program::Fail(const std::string& reason, const std::string& message, json f
   Record& record = RecordOf(step);
   const bool stopped = reason == "STOPPED";
   record.values = Values(step, now, true);
-  if (!step.parts.empty()) {
+  // A step inputs_assign is in a part only while it asks for its line.
+  const bool in_part = !IsAssign(step) || run_->assign == Assign::kPart || run_->assign == Assign::kAsk;
+  if (!step.parts.empty() && in_part && run_->part < step.parts.size()) {
     run_->part_states[run_->part] = stopped ? "open" : "failed";
-    record.parts = run_->part_states;
     if (!stopped) fields["part"] = step.parts[run_->part].id;
   }
+  if (!step.parts.empty()) record.parts = run_->part_states;
   EndRun(now);
   End(step, stopped ? "open" : "failed", reason, message, std::move(fields), wall);
 }
@@ -503,6 +644,20 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
   if (step.kind == "measure" && !world_.state.empty() && world_.state != "IDLE") {
     return Refuse("BUSY", "The mower is in " + world_.state, {{"state", world_.state}});
   }
+  if (step.kind == "measure" && learning_) return Refuse("BUSY", "The driver learns its inputs");
+  if (IsAssign(step)) {
+    if (!layer_set_) {
+      return Refuse("STORAGE_NOT_WRITABLE", "No data_dir for the table of the inputs", {{"file", "setup.yaml"}});
+    }
+    if (!Fresh(hardware_at_, now, kFresh) || !inputs_known_) {
+      return Refuse("DRIVER_MISSING", "The driver of the platform reports no status or no inputs");
+    }
+    if (world_.state != "IDLE") return Refuse("BUSY", "The mower is not in IDLE", {{"state", world_.state}});
+    if (hardware_.emergency_reason != 0) {
+      return Refuse("EMERGENCY", "An emergency stands: " + mowbite_api::EmergencyNames(
+                                     static_cast<int>(hardware_.emergency_reason)));
+    }
+  }
   std::set<std::string> confirmed;
   if (params.contains("confirm")) {
     if (!params["confirm"].is_array()) return BadParam("confirm", "confirm is no list");
@@ -536,8 +691,17 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
   run.link_errors_first = hardware_.link_errors;
   run.part_states.assign(step.parts.size(), "open");
   run.measured.assign(step.parts.size(), std::nullopt);
+  run.stage_began = now;
   run_ = std::move(run);
-  if (!step.parts.empty()) BeginPart(now, wall);
+  if (IsAssign(step)) {
+    // The driver starts again learning; the step goes on after that restart.
+    record.assign = {{"phase", "learn"}, {"parts", json::object()}};
+    layer_.Set(step.Word("node"), mowbite_api::kInputsLearn, true);
+    leave_learning_ = false;
+    WantRestart();
+  } else if (!step.parts.empty()) {
+    BeginPart(now, wall);
+  }
   Changed();
   return std::nullopt;
 }
@@ -546,6 +710,7 @@ std::optional<Refusal> Program::Answer(const json& params, double wall) {
   const Step* found = nullptr;
   if (auto refusal = Common(params, &found)) return refusal;
   const Step& step = *found;
+  if (IsAssign(step)) return AnswerAssign(step, params);
   if (step.check != "choice" && step.check != "number") {
     return Refuse("WRONG_METHOD", step.id + " takes no setup.answer");
   }
@@ -569,6 +734,31 @@ std::optional<Refusal> Program::Answer(const json& params, double wall) {
   ++record.attempt;
   record.answers = {{name, value}};
   Pass(step, 0, wall);
+  return std::nullopt;
+}
+
+// accept yes takes the line ask names for its part, no leaves the part waiting for another one.
+std::optional<Refusal> Program::AnswerAssign(const Step& step, const json& params) {
+  if (!IsRun(step) || run_->assign != Assign::kAsk) return Refuse("WRONG_METHOD", step.id + " asks nothing right now");
+  const std::string& name = mowbite_api::SetupAccept().id;
+  const json none = json::object();
+  const json& values = params.contains("values") && params["values"].is_object() ? params["values"] : none;
+  const std::string accept = values.size() == 1 && values.contains(name) && values[name].is_string()
+                                 ? values[name].get<std::string>()
+                                 : "";
+  if (!mowbite_api::FindSetupName(mowbite_api::SetupAcceptValues(), accept)) {
+    return Refuse("INVALID_VALUE", step.id + " takes " + name + " alone, yes or no", {{"name", name}});
+  }
+  Run& run = *run_;
+  if (accept == "yes") {
+    RecordOf(step).assign["parts"][step.parts[run.part].id] = {{"line", run.proposed},
+                                                               {"active_high", run.proposed_high}};
+    run.part_states[run.part] = "ok";
+    ++run.part;
+  }
+  run.assign = Assign::kRest;
+  run.stage_began = -1;
+  Changed();
   return std::nullopt;
 }
 
@@ -610,6 +800,8 @@ std::optional<Refusal> Program::Abort(const json& params, double now, double wal
 
 std::optional<Refusal> Program::Reset(const json& params) {
   if (auto refusal = Common(params, nullptr)) return refusal;
+  if (run_ && IsAssign(StepOf(*run_))) leave_learning_ = true;
+  restart_wanted_ = false;
   run_.reset();
   own_.reset();
   release_.reset();
@@ -670,7 +862,9 @@ void Program::Tick(double now, double wall) {
     if (check == "input") TickInput(now, wall);
     if (check == "imu") TickImu(now, wall);
     if (check == "position") TickPosition(now, wall);
+    if (check == "inputs_assign") TickAssign(now, wall);
   }
+  TickLearning();
   TickRelease(now);
   TickWaiting(wall);
 }
@@ -951,6 +1145,166 @@ void Program::TickPosition(double now, double wall) {
   }
 }
 
+void Program::EnterAssign(Assign stage, double now) {
+  run_->assign = stage;
+  run_->stage_began = now;
+}
+
+void Program::BeginAssignPart(double now, double wall) {
+  Run& run = *run_;
+  EnterAssign(Assign::kPart, now);
+  run.part_began = now;
+  run.part_wall = wall;
+  run.levels.clear();
+  for (const Line& line : lines_) run.levels[line.name] = line.active;
+  run.changed.clear();
+  run.first_change = -1;
+  run.part_states[run.part] = "waiting";
+}
+
+// The table hw/inputs shows is the one the parts found: every line assigned with its role, level and delay.
+bool Program::TableApplied(const Step& step) const {
+  const json& parts = records_.at(step.id).assign["parts"];
+  for (const Part& part : step.parts) {
+    if (!parts.contains(part.id)) return false;
+    const json& found = parts[part.id];
+    const auto line = std::find_if(lines_.begin(), lines_.end(),
+                                   [&found](const Line& line) { return found["line"] == line.name; });
+    if (line == lines_.end() || !line->assigned || line->role != part.role || line->delay_ms != part.delay_ms ||
+        found["active_high"] != line->active_high) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The table of the parts goes into the parameter file, without the learning, and the OS restarts with it.
+void Program::FinishAssign(double now, double wall) {
+  const Step& step = StepOf(*run_);
+  Record& record = RecordOf(step);
+  json lines = json::array(), levels = json::array(), reasons = json::array(), delays = json::array();
+  json roles = json::array();
+  for (const Part& part : step.parts) {
+    const json& found = record.assign["parts"][part.id];
+    lines.push_back(found["line"]);
+    levels.push_back(found["active_high"]);
+    // The reason of a line as hw/inputs names it: the emergency of its role in small letters.
+    std::string reason = mowbite_api::FindSetupName(mowbite_api::SetupRoles(), part.role)->emergency;
+    std::transform(reason.begin(), reason.end(), reason.begin(), [](unsigned char c) { return std::tolower(c); });
+    reasons.push_back(reason);
+    delays.push_back(part.delay_ms);
+    roles.push_back(part.role);
+  }
+  const std::string& node = step.Word("node");
+  const bool set = layer_.Set(node, mowbite_api::kInputsLines, lines) &&
+                   layer_.Set(node, mowbite_api::kInputsActiveHigh, levels) &&
+                   layer_.Set(node, mowbite_api::kInputsReasons, reasons) &&
+                   layer_.Set(node, mowbite_api::kInputsDelays, delays) &&
+                   layer_.Set(node, mowbite_api::kInputsRoles, roles);
+  if (!set) {
+    Fail("NOT_APPLIED", "The table of the inputs is none a parameter file holds", json::object(), now, wall);
+    return;
+  }
+  layer_.Erase(node, mowbite_api::kInputsLearn);
+  // The table is another one from the next start on: only a check of the inputs with it counts.
+  for (const Step& other : list_.steps) {
+    if (other.check == "input") RecordOf(other) = Record();
+  }
+  record.assign["phase"] = "apply";
+  EnterAssign(Assign::kRestart, now);
+  WantRestart();
+  Changed();
+}
+
+void Program::TickAssign(double now, double wall) {
+  Run& run = *run_;
+  const Step& step = StepOf(run);
+  if (run.stage_began < 0) run.stage_began = now;
+  if (run.began < 0) run.began = now;
+  const bool learn = RecordOf(step).assign["phase"] == "learn";
+  const double restart_time = step.Number("restart_time");
+  const bool ambiguous = !run.ambiguous.empty();
+  switch (run.assign) {
+    case Assign::kRestart:
+      // Still here that long after the restart was asked for: it did not come.
+      if (restart_sent_ >= 0 && now - restart_sent_ > restart_time) {
+        Fail("RESTART_FAILED", "The OS did not restart", {{"limit", restart_time}}, now, wall);
+      }
+      break;
+    case Assign::kDriver:
+      if (inputs_known_ && Fresh(hardware_at_, now, kFresh) && learning_ == learn) {
+        if (learn) {
+          EnterAssign(Assign::kQuiet, now);
+          run.levels.clear();
+          for (const Line& line : lines_) run.levels[line.name] = line.active;
+          run.changed.clear();
+          break;
+        }
+        if (TableApplied(step)) {
+          Pass(step, now, wall);
+          break;
+        }
+      }
+      if (now - run.stage_began > restart_time) {
+        // The driver is not as the file of the program asks: the file kept by hand may overrule it.
+        json fields = json::object();
+        const std::string prefix = step.Word("node") + ".inputs.";
+        const auto key = std::find_if(shadowed_.begin(), shadowed_.end(),
+                                      [&prefix](const std::string& name) { return name.rfind(prefix, 0) == 0; });
+        if (key != shadowed_.end()) fields["key"] = *key;
+        Fail("NOT_APPLIED", learn ? "The driver does not learn its inputs" : "hw/inputs does not show the table",
+             std::move(fields), now, wall);
+      }
+      break;
+    case Assign::kQuiet:
+      if (now - run.stage_began < step.Number("quiet")) break;
+      if (!run.changed.empty()) {
+        Fail("FLUTTER", "Lines changed while nothing was touched: " + Keys(run.changed).dump(),
+             {{"lines", Keys(run.changed)}}, now, wall);
+        break;
+      }
+      run.part = 0;
+      BeginAssignPart(now, wall);
+      break;
+    case Assign::kPart:
+      if (!run.changed.empty()) {
+        if (run.first_change < 0) run.first_change = now;
+        if (now - run.first_change < kAssignSettle) break;
+        if (run.changed.size() == 1) {
+          run.proposed = run.changed.begin()->first;
+          run.proposed_high = run.changed.begin()->second;
+          EnterAssign(Assign::kAsk, now);
+          Changed();
+        } else {
+          // More than one line: once more, when all are back.
+          run.ambiguous = Keys(run.changed);
+          EnterAssign(Assign::kRest, now);
+        }
+      } else if (now - run.part_began > step.Number("time")) {
+        Fail(ambiguous ? "AMBIGUOUS" : "NO_LINE",
+             ambiguous ? "More than one line changed: " + run.ambiguous.dump() : "No line changed in time",
+             ambiguous ? json{{"lines", run.ambiguous}} : json::object(), now, wall);
+      }
+      break;
+    case Assign::kAsk:
+      break;
+    case Assign::kRest:
+      if (AtRest()) {
+        if (run.part == step.parts.size()) {
+          FinishAssign(now, wall);
+        } else {
+          if (run.part_states[run.part] != "waiting") run.ambiguous = json::array();
+          BeginAssignPart(now, wall);
+        }
+      } else if (now - run.stage_began > step.Number("time")) {
+        Fail(ambiguous ? "AMBIGUOUS" : "NO_LINE",
+             ambiguous ? "More than one line changed: " + run.ambiguous.dump() : "The lines did not come back to rest",
+             ambiguous ? json{{"lines", run.ambiguous}} : json::object(), now, wall);
+      }
+      break;
+  }
+}
+
 // The steps the OS ends by what it sees: a condition of done_when, the confirmed keys of geometry.
 void Program::TickWaiting(double wall) {
   if (!writable_) return;
@@ -983,6 +1337,15 @@ json Program::Values(const Step& step, double now, bool final) const {
     return BoardValues(run, step, final ? step.Number("time") : now - run.began, final);
   }
   json values = json::array();
+  if (IsAssign(step)) {
+    const json& parts = records_.at(step.id).assign["parts"];
+    for (const Part& part : step.parts) {
+      const bool taken = parts.contains(part.id);
+      values.push_back(Value(part.id, taken ? parts[part.id]["line"] : json(), "", nullptr, nullptr,
+                             taken ? json(true) : json(), part.texts));
+    }
+    return values;
+  }
   if (step.check == "input" || step.check == "imu") {
     const bool input = step.check == "input";
     for (size_t i = 0; i < step.parts.size(); ++i) {
@@ -1017,6 +1380,17 @@ json Program::Blocked(const Step& step, double now) const {
     blocked.push_back({{"reason", reason}, {"message", message}});
   };
   if (!writable_) add("STORAGE_NOT_WRITABLE", "setup.json cannot be written");
+  if (IsRun(step) && IsAssign(step)) {
+    if (restart_wanted_ && !RestartAllowed(now)) {
+      if (world_.state != "IDLE") {
+        add("BUSY", "The mower is not in IDLE");
+      } else {
+        add("EMERGENCY", "An emergency stands, the OS restarts once it is released");
+      }
+    }
+    if (run_->assign == Assign::kRest && !AtRest()) add("INPUT_ACTIVE", "A line is still switched");
+    return blocked;
+  }
   if (IsRun(step)) {
     const Run& run = *run_;
     if (step.parts.empty()) return blocked;
@@ -1042,12 +1416,14 @@ json Program::Blocked(const Step& step, double now) const {
     }
     return blocked;
   }
-  if (!step.start || step.kind != "measure") return blocked;
+  if (!step.start || (step.kind != "measure" && !IsAssign(step))) return blocked;
   if (run_) add("BUSY", StepOf(*run_).id + " is running");
   if (!world_.state.empty() && world_.state != "IDLE") add("BUSY", "The mower is in " + world_.state);
-  if ((step.check == "board" || step.check == "input") && !Fresh(hardware_at_, now, kFresh)) {
+  if (learning_ && !run_) add("BUSY", "The driver learns its inputs");
+  if ((step.check == "board" || step.check == "input" || IsAssign(step)) && !Fresh(hardware_at_, now, kFresh)) {
     add("DRIVER_MISSING", "The driver of the platform reports no status");
   }
+  if (IsAssign(step) && !learning_ && hardware_.emergency_reason != 0) add("EMERGENCY", "An emergency stands");
   if (step.check == "imu" && !Fresh(imu_at_, now, kFresh)) add("NO_DATA", "No imu/data");
   if (step.check == "position" && (fixes_.empty() || !Fresh(fixes_.back(), now, kNoData))) {
     add("NO_DATA", "No gps/absolute_pose");
@@ -1105,6 +1481,24 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
       }
       inputs.push_back(std::move(input));
     }
+    const bool asks = is_run && IsAssign(step) && run_->assign == Assign::kAsk;
+    if (IsAssign(step)) {
+      const mowbite_api::SetupName& accept = mowbite_api::SetupAccept();
+      json values = json::array();
+      for (const auto& value : mowbite_api::SetupAcceptValues()) {
+        values.push_back({{"id", value.id}, {"texts", mowbite_api::Texts(value.texts)}});
+      }
+      inputs.push_back({{"name", accept.id},
+                        {"type", "choice"},
+                        {"ask", asks},
+                        {"value", nullptr},
+                        {"texts", mowbite_api::Texts(accept.texts)},
+                        {"values", std::move(values)}});
+    }
+    json ask;
+    if (asks) {
+      ask = {{"part", step.parts[run_->part].id}, {"line", run_->proposed}, {"active_high", run_->proposed_high}};
+    }
     json parts = json::array();
     for (size_t i = 0; i < step.parts.size(); ++i) {
       std::string state = "open";
@@ -1129,7 +1523,10 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
     }
     json progress;
     json ends_at;
-    if (is_run) {
+    if (is_run && IsAssign(step)) {
+      if (run_->assign == Assign::kPart || asks) progress = {{"n", run_->part + 1}, {"of", step.parts.size()}};
+      if (run_->assign == Assign::kPart) ends_at = std::floor(run_->part_wall + step.Number("time"));
+    } else if (is_run) {
       if (!step.parts.empty()) {
         progress = {{"n", run_->part + 1}, {"of", step.parts.size()}};
         ends_at = std::floor(run_->part_wall + step.Number("time"));
@@ -1157,7 +1554,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
                      {"values", Values(step, now, false)},
                      {"parts", std::move(parts)},
                      {"lines", std::move(lines)},
-                     {"ask", nullptr},
+                     {"ask", std::move(ask)},
                      {"progress", std::move(progress)},
                      {"ends_at", std::move(ends_at)},
                      {"open", step.open.empty() ? json() : json(step.open)},
@@ -1166,7 +1563,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
                      {"mark", step.mark},
                      {"texts", step.texts},
                      {"result", record.result},
-                     {"restart", false}});
+                     {"restart", IsAssign(step)}});
     if (stages.empty() || stages.back()["id"] != step.stage) {
       const mowbite_api::SetupName* stage = mowbite_api::FindSetupName(mowbite_api::SetupStages(), step.stage);
       stages.push_back({{"id", step.stage}, {"state", ""}, {"texts", mowbite_api::Texts(stage->texts)}});
@@ -1197,7 +1594,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
             {"date", date.empty() ? json() : json(date)},
             {"firmware", nullptr},
             {"why", date.empty() ? json("NO_SAFETY_MEASUREMENT") : json()}}},
-          {"restart_pending", false},
+          {"restart_pending", restart_wanted_ || (run_ && IsAssign(StepOf(*run_)) && run_->assign == Assign::kRestart)},
           {"stages", std::move(stages)},
           {"steps", std::move(steps)}};
 }

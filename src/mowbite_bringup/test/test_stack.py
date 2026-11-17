@@ -99,6 +99,37 @@ def test_the_process_restarts_three_times_with_its_limits(tmp_path, monkeypatch)
     assert before < note["mono"] <= time.monotonic()
 
 
+# The container ends itself for a restart of the OS the setup program asked for: the launch ends with it, without a
+# restart of the container and without the note of a crash.
+def test_a_process_that_ends_for_a_restart_of_the_os_ends_the_launch(tmp_path, monkeypatch):
+    monkeypatch.setattr(stack, "RESTART_DELAY", 0.1)
+    asked = tmp_path / stack.RESTART_NOTE
+    starts = []
+
+    def make(number):
+        starts.append(number)
+        return ExecuteProcess(cmd=[sys.executable, "-c", f"open({str(asked)!r}, 'w').close()"])
+    actions = stack.restarting(make, str(tmp_path / stack.EXIT_NOTE), "The container", LOGGER, 3,
+                               leave=asked.exists)
+    # Beside it a process that would run on: the end of the launch stops it.
+    actions.append(ExecuteProcess(cmd=[sys.executable, "-c", "import time; time.sleep(60)"]))
+    service = LaunchService()
+    service.include_launch_description(LaunchDescription(actions))
+    before = time.monotonic()
+    assert service.run() == 0
+    assert time.monotonic() - before < 30
+    assert starts == [0]
+    assert not (tmp_path / stack.EXIT_NOTE).exists()
+
+
+def test_a_start_removes_the_note_of_the_restart_before(tmp_path):
+    asked = tmp_path / stack.RESTART_NOTE
+    asked.write_text("{}")
+    nodes = stack.components(["a.yaml"], "g.yaml", str(tmp_path), "127.0.0.1", "1883", "")
+    stack.container_and_planner(nodes, str(tmp_path), ["a.yaml"], LOGGER)
+    assert not asked.exists()
+
+
 # Writes the note of the watch as mowbite_watch does and ends with its code.
 WATCH_PROBE = """
 import sys

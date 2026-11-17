@@ -361,11 +361,13 @@ const std::vector<SetupCheck>& SetupChecks() {
       {"inputs_assign", "input", true, false,
        "Finds the line of every sensor, on a platform whose driver learns its inputs: the OS restarts with the driver "
        "watching its candidate lines (emergency INPUTS_LEARNING, nothing moves), watches them at rest for quiet, then "
-       "takes one part after the other, each of a role: one line alone changes, ask of the step names it, and "
-       "setup.answer with accept yes takes it. After the last part the table goes into the settings the program "
-       "writes for the platform, the OS restarts without learning and the step holds hw/inputs against the table. "
-       "setup.abort ends it with a restart as well. The steps input are open again after it",
-       {Seconds("quiet", 3, 60, 10, "The lines are watched untouched for this time first"),
+       "takes one part after the other, each of a role (stop, lift, bumper_left or bumper_right) and with the delay_ms "
+       "its line gets: one line alone changes, ask of the step names it, and setup.answer with accept yes takes it. "
+       "After the last part the table goes into the settings the program writes for the platform, the OS restarts "
+       "without learning and the step holds hw/inputs against the table. setup.abort ends it with a restart as well. "
+       "The steps input are open again after it. The step list names how the OS restarts (restart)",
+       {Word("node", "The node of the driver the table is written for", {}, true),
+        Seconds("quiet", 3, 60, 10, "The lines are watched untouched for this time first"),
         Seconds("time", 5, 300, 60, "Each part is done within this time"),
         Seconds("restart_time", 20, 600, 120, "The OS is back within this time after a restart")},
        {{"line", "", "The line taken, one value by part with the id of the part"}},
