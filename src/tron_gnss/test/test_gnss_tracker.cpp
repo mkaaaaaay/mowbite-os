@@ -319,6 +319,26 @@ class FixMotionTest : public ::testing::Test {
     return pose;
   }
 
+  // One epoch that gives no pose within a straight drive, then 0.5 s more of the drive.
+  void DriveAcrossEpochWithoutPose(int quality, bool with_position) {
+    double e = 0.0;
+    double n = 0.0;
+    ASSERT_TRUE(Drive(e, n, 0.0, 0.25, 2.0)->motion_valid);
+    e += 0.025;
+    utc_ += 0.1;
+    NmeaMessage gap = Gga(quality, 52.0, 9.0 + e * kM / std::cos(52.0 * M_PI / 180.0), 60.0, utc_);
+    if (!with_position) {
+      gap.gga.lat_deg.reset();
+      gap.gga.lon_deg.reset();
+    }
+    ASSERT_FALSE(tracker.Update(gap, utc_));
+    int valid = 0;
+    // 0.075 m of fixed positions after it: not yet.
+    Drive(e, n, 0.0, 0.25, 0.3, &valid);
+    EXPECT_EQ(valid, 0);
+    EXPECT_TRUE(Drive(e, n, 0.0, 0.25, 0.2)->motion_valid);
+  }
+
   GnssTracker tracker{GnssConfig{}, LocalFrame(52.0, 9.0, 60.0)};
   double utc_ = 43200.0;
 };
@@ -398,6 +418,18 @@ TEST_F(FixMotionTest, AFixThatIsNotRtkFixedStartsAgain) {
   Drive(e, n, 0.0, 0.25, 0.3, &valid);
   EXPECT_EQ(valid, 0);
   EXPECT_TRUE(Drive(e, n, 0.0, 0.25, 0.2)->motion_valid);
+}
+
+TEST_F(FixMotionTest, AnEpochWithoutFixStartsAgain) {
+  DriveAcrossEpochWithoutPose(0, true);
+}
+
+TEST_F(FixMotionTest, AnEpochOfUnknownQualityStartsAgain) {
+  DriveAcrossEpochWithoutPose(9, true);
+}
+
+TEST_F(FixMotionTest, AnEpochWithoutPositionStartsAgain) {
+  DriveAcrossEpochWithoutPose(4, false);
 }
 
 TEST_F(FixMotionTest, ReceiverCourseWhenSwitchedBack) {

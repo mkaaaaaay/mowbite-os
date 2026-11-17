@@ -58,7 +58,11 @@ std::optional<GnssPose> GnssTracker::Update(const NmeaMessage& message, double n
     stale_gga_++;
     return std::nullopt;
   }
-  if (!gga.lat_deg || !gga.lon_deg) return std::nullopt;
+  // An epoch that gives no pose is not RTK fixed either: the run of fixed positions ends with it.
+  if (!gga.lat_deg || !gga.lon_deg) {
+    fixes_.clear();
+    return std::nullopt;
+  }
   GnssPose pose;
   switch (gga.quality) {
     case static_cast<int>(FixQuality::kSingle):
@@ -96,7 +100,9 @@ std::optional<GnssPose> GnssTracker::Update(const NmeaMessage& message, double n
       pose.solution = Solution::kDeadReckoning;
       pose.accuracy_m = config_.accuracy_dead_reckoning_m;
       break;
-    default: return std::nullopt;
+    default:
+      fixes_.clear();
+      return std::nullopt;
   }
   pose.position = frame_.ToEnu(*gga.lat_deg, *gga.lon_deg, gga.altitude_m.value_or(0.0));
   pose.sensor_stamp_ms = static_cast<uint32_t>(std::lround(gga.utc_s * 1000.0));
