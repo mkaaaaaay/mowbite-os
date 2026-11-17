@@ -152,5 +152,40 @@ TEST_F(StreamSupervisorTest, AStartThatFailsCountsAsAnEnd) {
   EXPECT_EQ(supervisor_.reason(), kNotSetUp);
 }
 
+TEST_F(StreamSupervisorTest, StopsWhenNoCameraWantsItAndStartsAgainWhenOneDoes) {
+  supervisor_.Tick(true);
+  supervisor_.Answered();
+  EXPECT_EQ(Run(kStreamIdleStop - 1.0, false), 0);
+  EXPECT_EQ(server_.stops, 0);
+  EXPECT_TRUE(supervisor_.Up());
+  EXPECT_EQ(Run(1.0, false), 1);
+  EXPECT_EQ(server_.stops, 1);
+  EXPECT_FALSE(supervisor_.Up());
+  EXPECT_FALSE(supervisor_.Starting());
+  EXPECT_EQ(supervisor_.reason(), kNoSignal);
+  EXPECT_EQ(supervisor_.detail(), "the stream server is stopped while no camera needs it");
+  EXPECT_EQ(Run(60.0, false), 0);
+  EXPECT_EQ(server_.stops, 1);
+  EXPECT_EQ(server_.starts, 1);
+  EXPECT_FALSE(supervisor_.Tick(true));
+  EXPECT_EQ(server_.starts, 2);
+  EXPECT_TRUE(supervisor_.Starting());
+  EXPECT_EQ(supervisor_.detail(), "the stream server is starting");
+  // The stop was no end: three ends in a row are still restarted.
+  for (int restart = 0; restart < kStreamRestarts; ++restart) EndAndStartAgain();
+  EXPECT_EQ(server_.starts, 2 + kStreamRestarts);
+}
+
+TEST_F(StreamSupervisorTest, AShortGapKeepsItRunning) {
+  supervisor_.Tick(true);
+  supervisor_.Answered();
+  EXPECT_EQ(Run(kStreamIdleStop / 2, false), 0);
+  EXPECT_EQ(Run(1.0), 0);
+  EXPECT_EQ(Run(kStreamIdleStop - 1.0, false), 0);
+  EXPECT_EQ(server_.stops, 0);
+  EXPECT_EQ(server_.starts, 1);
+  EXPECT_TRUE(supervisor_.Up());
+}
+
 }  // namespace
 }  // namespace mowbite_camera

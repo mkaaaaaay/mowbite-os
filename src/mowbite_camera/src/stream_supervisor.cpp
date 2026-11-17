@@ -26,7 +26,16 @@ bool StreamSupervisor::Tick(bool wanted) {
       Ended(now, true, "no answer of its API");
     }
   }
-  if (!wanted) return ended;
+  if (!wanted) {
+    if ((phase_ == Phase::kStarting || phase_ == Phase::kUp) && now - wanted_at_ >= kStreamIdleStop) {
+      server_->Stop();
+      ended = true;
+      phase_ = Phase::kIdle;
+      Tell(kNoSignal, "the stream server is stopped while no camera needs it");
+    }
+    return ended;
+  }
+  wanted_at_ = now;
   if (phase_ == Phase::kIdle) {
     if (!server_->Installed()) {
       Tell(kNotSetUp, "the stream server is not installed");
