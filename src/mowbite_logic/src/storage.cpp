@@ -51,8 +51,8 @@ void LogicCore::AbandonStart(const std::string& file) {
       EndDocking(why);
       return;
     case State::kCalibrating:
-      RefuseCalibration(why);
-      EndCalibration(std::nullopt, true);
+      calibration_.RefuseCalibration(CoreAccess(*this), why);
+      calibration_.EndCalibration(CoreAccess(*this), std::nullopt, true);
       return;
     case State::kSetup:
       setup_.EndSetup(CoreAccess(*this), why.message);

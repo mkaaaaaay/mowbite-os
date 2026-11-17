@@ -178,7 +178,9 @@ void LogicCore::OnPoseTimeout() {
     CancelDockingLeg(Reason("POSE_LOST", "No position from the localization"));
     WaitForDockingGps();
   }
-  if (state_ == State::kCalibrating) EndCalibration(Reason("POSE_LOST", "No position from the localization"), true);
+  if (state_ == State::kCalibrating) {
+    calibration_.EndCalibration(CoreAccess(*this), Reason("POSE_LOST", "No position from the localization"), true);
+  }
   recorder_.OnPoseLost();
   PullRecorder();
 }
@@ -271,7 +273,7 @@ void LogicCore::UpdateEmergency(bool report) {
     // Like OpenMower: the emergency tells, no UNDOCKING_FAILED or DOCKING_FAILED.
     if (emergency && state_ == State::kUndocking) StopUndocking(std::nullopt, why);
     if (emergency && state_ == State::kDocking) EndDocking(why);
-    if (emergency && state_ == State::kCalibrating) EndCalibration(why, true);
+    if (emergency && state_ == State::kCalibrating) calibration_.EndCalibration(CoreAccess(*this), why, true);
     // reason stays the bits of OpenMower; resetting is up to the user.
     json details = {{"emergency", emergency},
                     {"reason", reason_},
@@ -552,7 +554,7 @@ void LogicCore::OnCapabilities(bool safety_measured, bool charge_stop) {
   const Reason why("NO_SAFETY_MEASUREMENT", "No safety measurement of this platform (hw/capabilities)");
   if (state_ == State::kDriving) CancelDrive(why);
   if (state_ == State::kUndocking) StopUndocking(why, why);
-  if (state_ == State::kCalibrating) EndCalibration(why, true);
+  if (state_ == State::kCalibrating) calibration_.EndCalibration(CoreAccess(*this), why, true);
   if (state_ == State::kDocking) {
     const bool approach = docking_last_kind_ == DockingLeg::Kind::kApproach;
     CountDockingFailure(Reason(approach ? "approach_failed" : "dock_failed",

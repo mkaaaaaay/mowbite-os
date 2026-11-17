@@ -13,6 +13,7 @@
 
 #include "mowbite_api/catalog.h"
 #include "mowbite_logic/area_recorder.h"
+#include "mowbite_logic/calibration_part.h"
 #include "mowbite_logic/core_access.h"
 #include "mowbite_logic/docking.h"
 #include "mowbite_logic/home_watch.h"
@@ -571,8 +572,6 @@ class LogicCore {
   void JobWithoutPlanner(const Reason& silent, const Reason& pause, bool retry);
   bool PoseGood() const;
   void CheckpointNow();
-  // Ends a calibration drive here: CALIBRATION_FAILED unless done, CALIBRATION end, IDLE; cancel: the program too.
-  void EndCalibration(const std::optional<Reason>& failure, bool cancel);
   // STORAGE_NOT_WRITABLE with the file while one cannot be written, else empty.
   Reason StorageProblem() const;
   // The effects of one type in effects_: whether one waits; a flag added once or every one removed; the waiting one
@@ -738,12 +737,7 @@ class LogicCore {
   // The reason of StartProblem() at the last actions, empty while a start would go.
   std::string last_start_reason_ = "-";
   SetupPart setup_;
-  // Calibration: the program's status and when it came, its last sign and the phase it reported last.
-  std::optional<CalibrationStatus> calibration_status_;
-  double calibration_status_s_ = 0;
-  double calibration_sign_s_ = 0;
-  std::string calibration_phase_;
-  int calibration_index_ = 0;
+  CalibrationPart calibration_;
   int64_t hold_until_ = 0;
   // The client of the command being run, for its events; the one of a skip that waits for the leg to stop.
   std::string client_;
