@@ -36,6 +36,11 @@ mowbite_component_register(mowbite_ntrip_component
   EXECUTABLE mowbite_ntrip_node)
 
 install(DIRECTORY include/ DESTINATION include)
+# The access file written as the node reads it, for the import from OpenMower (mowbite_bringup migrate.py).
+add_executable(mowbite_ntrip_write src/write_main.cpp)
+target_link_libraries(mowbite_ntrip_write mowbite_ntrip_core)
+install(TARGETS mowbite_ntrip_write DESTINATION lib/${PROJECT_NAME})
+
 install(TARGETS mowbite_ntrip_core mowbite_ntrip_component
   EXPORT export_mowbite_ntrip
   ARCHIVE DESTINATION lib
