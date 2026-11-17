@@ -35,6 +35,11 @@ mowbite_component_register(mowbite_map_component
   PLUGIN "mowbite_map::MapNode"
   EXECUTABLE mowbite_map_node)
 
+# The rules of map.json for the import of a map before the node starts (mowbite_bringup migrate.py).
+add_executable(mowbite_map_check src/check_main.cpp)
+target_link_libraries(mowbite_map_check mowbite_map_core)
+install(TARGETS mowbite_map_check DESTINATION lib/${PROJECT_NAME})
+
 install(DIRECTORY include/ DESTINATION include)
 install(TARGETS mowbite_map_core mowbite_map_component
   EXPORT export_mowbite_map
