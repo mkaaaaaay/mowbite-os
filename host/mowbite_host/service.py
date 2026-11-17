@@ -112,7 +112,7 @@ class Host:
             return
         try:
             request = json.loads(message.payload)
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
             return
         if not isinstance(request, dict) or request.get("method") not in METHODS:
             return

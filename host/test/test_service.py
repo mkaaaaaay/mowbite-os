@@ -86,6 +86,11 @@ class RequestTest(HostBase):
         self.assertEqual(self.ask("update.status", response_topic="robot_state/json"), [])
         self.assertEqual(self.ask("update.status", response_topic="rpc/response/app-1", correlation=b"x" * 1025), [])
 
+    def test_unreadable_requests_are_dropped(self):
+        for payload in (b"{", b"\xff", b"[" * 100000):
+            self.host.on_request(Message("rpc/request", payload, False))
+        self.assertTrue(self.host.requests.empty())
+
     def test_without_id_only_to_a_response_topic(self):
         self.assertEqual(self.ask("update.status", call_id=None), [])
         self.assertEqual(len(self.ask("update.status", call_id=None, response_topic="rpc/response/a")), 1)
@@ -333,6 +338,13 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual(check(since), (False, "system.info says api 13, the bundle 14"))
         rpc.answers["rpc.methods"] = ["rpc.methods"]
         self.assertFalse(check(since)[0])
+
+    def test_unreadable_payloads_are_dropped(self):
+        check = probe.Probe(FakeRpc())
+        check.on_robot_state(json.dumps({"current_state": "IDLE", "emergency_reason": 1 << 1}))
+        check.on_robot_state(b"[" * 100000)
+        self.assertEqual(check.bits(), 1 << 1)
+        probe.OsRpc(None).on_answer(b"[" * 100000)
 
     def test_health_takes_the_last_word_of_settled(self):
         class Settles:

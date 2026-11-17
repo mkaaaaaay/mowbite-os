@@ -50,7 +50,7 @@ class OsRpc:
     def on_answer(self, payload):
         try:
             answer = json.loads(payload)
-        except ValueError:
+        except (ValueError, RecursionError):
             return
         if not isinstance(answer, dict):
             return
@@ -82,7 +82,7 @@ class Probe:
     def on_robot_state(self, payload):
         try:
             state = json.loads(payload)
-        except ValueError:
+        except (ValueError, RecursionError):
             return
         if isinstance(state, dict):
             with self._lock:
