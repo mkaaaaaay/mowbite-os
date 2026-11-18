@@ -168,6 +168,10 @@ Field ObstacleRow() {
        Number("confidence", "", "Best score of the model, 0 to 1; 1 for UNKNOWN"),
        Text("camera_id", "The sensor that saw it, an id of camera.list for a camera"),
        Text("action", "What the mower did", true, ObstacleActions()),
+       Nullable(Number("keep_out_r", "m",
+                       "While the mower keeps out of a circle around it (action avoided): its radius around x, y; "
+                       "null without one")),
+       Nullable(Number("left_out", "m", "With keep_out_r: m of the paths of the job left unmowed for it")),
        Nullable(Object("image", "Its photo, null without one",
                        {Text("name", "For vision.obstacles.image; stays while the entry stays"),
                         Text("sha256", "sha256 of the JPEG"), Integer("bytes", "Size of the JPEG"),
@@ -1379,8 +1383,9 @@ const std::vector<SettingEntry>& LogicSettings() {
        "Whether the OS keeps a journal of its processes for incidents; a change counts from the next start"},
       {"obstacle_mode", true, 0, 3, 0, "",
        "What obstacles the sensors see do: off; show them in the list and on the map without any effect on driving; "
-       "stop: the mower stands with the blade off while one is in the way; avoid acts as stop for now. Above "
-       "mode_max of vision.obstacles.list it acts as that",
+       "stop: the mower stands with the blade off while one is in the way; avoid: as stop, but an object that stands "
+       "3 s is driven around within its area with the blade on, a person or animal never. Above mode_max of "
+       "vision.obstacles.list it acts as that",
        ObstacleModes()},
       {"obstacle_photos", true, 0, 1, 1, "",
        "Whether a new entry of the obstacles gets a photo of the whole image, kept on the mower only"},

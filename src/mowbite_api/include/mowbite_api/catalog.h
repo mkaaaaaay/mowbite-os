@@ -13,7 +13,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 51;
+constexpr int kApi = 52;
 
 // The break of the app interface: one up for a change that is not only adding (what counts: x-api-break in the
 // schema); an app goes with the OS of the same break whose api is at least the one it needs.
@@ -257,8 +257,8 @@ constexpr int kObstacleImageBytes = 65536;
 const std::vector<std::string>& ObstacleModes();
 const std::vector<std::string>& ObstacleKinds();
 const std::vector<std::string>& ObstacleActions();
-// The highest obstacle_mode built: avoid acts as stop until the mower drives around obstacles.
-constexpr int kObstacleModeBuilt = 2;
+// The highest obstacle_mode built: avoid, driving around objects.
+constexpr int kObstacleModeBuilt = 3;
 // obstacle_mode as it acts: the setting, at most mode_max of the platform and what is built, at least off.
 int EffectiveObstacleMode(int setting, int mode_max);
 // A person or animal (kind of ObstacleKinds()).
