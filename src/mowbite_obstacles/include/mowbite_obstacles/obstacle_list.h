@@ -44,6 +44,10 @@ struct Entry {
   // One of mowbite_api::ObstacleActions().
   std::string action = "seen";
   std::optional<Photo> photo;
+  // While the mower keeps out of a circle around it: its radius and the m of the job left unmowed for it (m); not
+  // kept over a restart.
+  std::optional<double> keep_out_r;
+  std::optional<double> left_out;
 };
 
 struct ListLimits {
@@ -80,6 +84,8 @@ class ObstacleList {
   bool SetPhoto(uint32_t id, const Photo& photo);
   // What the mower did about it.
   void SetAction(uint32_t id, const std::string& action);
+  // The circle the mower keeps out of around it, none once it is gone.
+  void SetCircle(uint32_t id, std::optional<double> keep_out_r, std::optional<double> left_out);
   void DropPhoto(uint32_t id);
   // The entry with this photo name, 0 without one.
   uint32_t ByPhoto(const std::string& name) const;

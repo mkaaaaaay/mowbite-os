@@ -80,6 +80,13 @@ void ObstacleList::SetAction(uint32_t id, const std::string& action) {
   if (Entry* entry = Mutable(id)) entry->action = action;
 }
 
+void ObstacleList::SetCircle(uint32_t id, std::optional<double> keep_out_r, std::optional<double> left_out) {
+  if (Entry* entry = Mutable(id)) {
+    entry->keep_out_r = keep_out_r;
+    entry->left_out = left_out;
+  }
+}
+
 bool ObstacleList::SetPhoto(uint32_t id, const Photo& photo) {
   Entry* entry = Mutable(id);
   if (!entry || entry->photo) return false;
@@ -160,6 +167,8 @@ Json ObstacleList::EntryJson(const Entry& entry) {
           {"confidence", Round(entry.confidence, 0.001)},
           {"camera_id", entry.camera_id},
           {"action", entry.action},
+          {"keep_out_r", entry.keep_out_r ? Json(Round(*entry.keep_out_r, 0.001)) : Json(nullptr)},
+          {"left_out", entry.left_out ? Json(Round(*entry.left_out, 0.01)) : Json(nullptr)},
           {"image", photo}};
 }
 

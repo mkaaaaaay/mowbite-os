@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <map>
+#include <optional>
 #include <utility>
 
 #include "mowbite_api/catalog.h"
@@ -86,9 +88,27 @@ void ObstacleService::SetModeMax(int mode_max) {
   if (!PhotosWanted()) images_.clear();
 }
 
-void ObstacleService::OnAction(uint32_t track, const std::string& action) {
+void ObstacleService::OnAction(uint32_t track, const std::string& action, double keep_out_r, double left_out,
+                               const std::string& area_id, const std::string& area_name) {
+  const auto circle = circles_.find(track);
+  if (action == "avoided" && !(keep_out_r > 0.0)) {
+    if (circle == circles_.end()) return;
+    list_.SetCircle(circle->second, std::nullopt, std::nullopt);
+    circles_.erase(circle);
+    dirty_ = true;
+    return;
+  }
   const Entry* entry = list_.Get(list_.EntryOf(track));
   if (mode() == Mode::kOff || !entry) return;
+  if (action == "avoided") {
+    circles_[track] = entry->id;
+    list_.SetCircle(entry->id, keep_out_r, left_out);
+    events_.push_back({"OBSTACLE_AVOIDED",
+                       {{"obstacle_id", entry->id}, {"area_id", area_id}, {"area_name", area_name}, {"x", entry->x},
+                        {"y", entry->y}, {"keep_out_r", std::round(keep_out_r * 1000.0) / 1000.0},
+                        {"left_out", std::round(left_out * 100.0) / 100.0}}});
+    dirty_ = true;
+  }
   // An entry keeps the most the mower did about it.
   if (mowbite_api::ObstacleActionRank(action) <= mowbite_api::ObstacleActionRank(entry->action)) return;
   list_.SetAction(entry->id, action);

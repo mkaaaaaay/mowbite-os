@@ -72,8 +72,10 @@ class ObstacleService {
   void OnFrame(const Tracker& tracker, const FrameResult& frame, double now);
   void OnEnded(const std::vector<uint32_t>& tracks);
   void OnImage(const Tracker& tracker, Image image);
-  // What the mower did about a track (obstacles/action), for its entry.
-  void OnAction(uint32_t track, const std::string& action);
+  // What the mower did about a track (obstacles/action), for its entry. avoided with keep_out_r above 0: the circle
+  // goes into the entry with OBSTACLE_AVOIDED; with 0 it leaves the entry again, also after the track ended.
+  void OnAction(uint32_t track, const std::string& action, double keep_out_r = 0.0, double left_out = 0.0,
+                const std::string& area_id = "", const std::string& area_name = "");
   // Events that waited for a photo, writing the list, the limits.
   void Tick(double now);
   // Writes the list now if it changed.
@@ -81,7 +83,7 @@ class ObstacleService {
 
   // vision.obstacles.*; -32601 for another method.
   Outcome Call(const std::string& method, const Json& params);
-  // Details of OBSTACLE_SEEN and OBSTACLES_CLEARED by type, in their order.
+  // Details of OBSTACLE_SEEN, OBSTACLE_AVOIDED and OBSTACLES_CLEARED by type, in their order.
   std::vector<std::pair<std::string, Json>> TakeEvents();
 
  private:
@@ -118,6 +120,8 @@ class ObstacleService {
   std::deque<Image> images_;
   std::vector<Pending> pending_;
   std::vector<std::pair<std::string, Json>> events_;
+  // The entries of the circles kept out of, by the track they were made for.
+  std::map<uint32_t, uint32_t> circles_;
   bool dirty_ = false;
   bool touched_ = false;
   double saved_at_ = -1e18;

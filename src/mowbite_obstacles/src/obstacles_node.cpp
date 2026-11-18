@@ -115,7 +115,7 @@ class ObstaclesNode : public rclcpp::Node {
         });
     action_sub_ = create_subscription<mowbite_msgs::msg::ObstacleAction>(
         "obstacles/action", 10, [this](const mowbite_msgs::msg::ObstacleAction& msg) {
-          service_->OnAction(msg.track_id, msg.action);
+          service_->OnAction(msg.track_id, msg.action, msg.keep_out_r, msg.left_out, msg.area_id, msg.area_name);
         });
     pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
         "localization/pose", 10, [this](const mowbite_msgs::msg::RobotPose& msg) {

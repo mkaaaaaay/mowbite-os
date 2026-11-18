@@ -125,10 +125,9 @@ TEST_F(ServiceTest, TheModeIsAtMostThatOfThePlatform) {
   const Json list = Call("vision.obstacles.list");
   EXPECT_EQ(list["mode"], "stop");
   EXPECT_EQ(list["mode_max"], "stop");
-  // Avoid is not built yet: it acts as stop, and the list offers stop at most.
   service->SetModeMax(3);
-  EXPECT_EQ(service->mode(), Mode::kStop);
-  EXPECT_EQ(Call("vision.obstacles.list")["mode_max"], "stop");
+  EXPECT_EQ(service->mode(), Mode::kAvoid);
+  EXPECT_EQ(Call("vision.obstacles.list")["mode_max"], "avoid");
   service->SetModeMax(0);
   EXPECT_EQ(service->mode(), Mode::kOff);
   service->SetModeMax(1);
@@ -149,6 +148,36 @@ TEST_F(ServiceTest, AnEntryKeepsTheMostTheMowerDidAboutIt) {
   EXPECT_EQ(Call("vision.obstacles.list")["obstacles"][0]["action"], "would_stop");
   service->OnAction(track, "stopped");
   EXPECT_EQ(Call("vision.obstacles.list")["obstacles"][0]["action"], "stopped");
+}
+
+TEST_F(ServiceTest, ACircleDrivenAroundStandsInTheEntryUntilItGoes) {
+  service->SetMode(1);
+  Feed(kT, {Ball()});
+  Feed(kT + 0.2, {Ball()});
+  const uint32_t track = tracker.tracks().begin()->first;
+  Types();
+  EXPECT_TRUE(Call("vision.obstacles.list")["obstacles"][0]["keep_out_r"].is_null());
+  service->OnAction(track, "avoided", 0.5, 1.25, "lawn", "Lawn");
+  Json entry = Call("vision.obstacles.list")["obstacles"][0];
+  EXPECT_EQ(entry["action"], "avoided");
+  EXPECT_EQ(entry["keep_out_r"], 0.5);
+  EXPECT_EQ(entry["left_out"], 1.25);
+  const auto events = service->TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].first, "OBSTACLE_AVOIDED");
+  EXPECT_EQ(events[0].second["obstacle_id"], entry["id"]);
+  EXPECT_EQ(events[0].second["area_id"], "lawn");
+  EXPECT_EQ(events[0].second["keep_out_r"], 0.5);
+  EXPECT_EQ(events[0].second["x"], entry["x"]);
+  EXPECT_EQ(events[0].second["severity"], "info");
+  // The track ended; the circle goes all the same, without an event.
+  service->OnEnded({track});
+  service->OnAction(track, "avoided");
+  entry = Call("vision.obstacles.list")["obstacles"][0];
+  EXPECT_TRUE(entry["keep_out_r"].is_null());
+  EXPECT_TRUE(entry["left_out"].is_null());
+  EXPECT_EQ(entry["action"], "avoided");
+  EXPECT_TRUE(Types().empty());
 }
 
 TEST_F(ServiceTest, ThePhotoOfTheFrameComesWithTheEventAndStays) {
