@@ -762,6 +762,13 @@ stop holds the mower (see the last points). The sensor stays an extra: the bumpe
   temporary obstacles of every transit while mowing, the inner ones obstacles of the follower's geofence; they go
   once their place is seen free, after `obstacle_avoid_keep` (30 min) or when mowing ends. Without a cut or a way
   around the mower waits as with stop. The list entry gets the circle, the event OBSTACLE_AVOIDED tells of it.
+- The Tron as an example: `tron_stereo` (`obstacles: true`) runs its stereo camera on after the self-test, the model
+  on the left eye on an NPU core of its own at 5 Hz, and places each box by the ground (`mowbite_obstacles::ground`)
+  and by stereo depth (search along the epipolar line, median in the lower part of the box). Its file holds the
+  classes by kind (`kind_person`, `kind_animal`, `kind_ignore`), `calibration_path` (both eyes as fisheye, made from
+  boards held before the camera, also low and at the edges) and `mount` (measured with a board lying flat at known
+  places on the floor); without one of them it reports NOT_SET_UP. Sight: dark, bright, covered (eyes unlike, or
+  no depth while driving), frames that stand still; the limits are start values until measured on the mower.
 - In the simulation `fake_obstacles` reports the things of a scene file (`config/obstacles_scene.example.json`) from
   the true pose of the fake board, and reads the file again when it changes; `test_obstacles.py` drives the node
   through the app interface, `test_obstacle_stop.py` the hold in the whole stack, `test_obstacle_avoid.py` driving

@@ -4,6 +4,11 @@
 /**:
   ros__parameters:
     journal_platform: tron
+    # The vendor's NPU runtime, model and class list for tron_vision and the obstacles of tron_stereo, copied by hand
+    # from its update; never in repo, bundle or image.
+    library_path: /userdata/mowbite-vision/librknnrt.so
+    model_path: /userdata/mowbite-vision/model.rknn
+    labels_path: /userdata/mowbite-vision/labels.txt
     journal_libraries: [tron_]
     journal_max_mb: 2048.0
     journal_max_days: 14.0
@@ -242,10 +247,6 @@ mowbite_sound:
 # instance in the namespace /right. These values hold for both.
 /**/tron_vision:
   ros__parameters:
-    # The vendor's NPU runtime, model and class list, copied by hand from its update; never in repo, bundle or image.
-    library_path: /userdata/mowbite-vision/librknnrt.so
-    model_path: /userdata/mowbite-vision/model.rknn
-    labels_path: /userdata/mowbite-vision/labels.txt
     # Inferences per second (0.5 to 5).
     infer_rate: 2.0
     # crop: the middle 3:4 of the frame fills the upright model input; pad: the whole frame with gray bars.
@@ -282,6 +283,20 @@ tron_stereo:
     # off), the pause when hot and the lock after a kernel crash stay. A kernel crash in the camera driver while mowing
     # leaves the blade without the host: the MCU then stops the blade motor by itself within 0.4 s (T6, without disc).
     stream_while_mowing: true
+    # Obstacles ahead (hw/obstacles at obstacle_rate 5/s): the camera runs on after its self-test and the model of
+    # tron_vision looks at the left eye on NPU core 2. Without calibration_path (both eyes, from the calibration of this
+    # Tron) or mount (x, y, z in m and yaw, pitch, roll in rad of the left eye in base_link, measured on this Tron, in
+    # <data_dir>/tron.yaml) it reports NOT_SET_UP. obstacle_rate, range_max, score_threshold: the defaults of the node.
+    obstacles: true
+    calibration_path: /userdata/mowbite-vision/stereo-calibration.txt
+    npu_core: 2
+    # Classes of the model by kind; any other class is an object. The classes of best_large_0208.
+    kind_person: [person]
+    kind_animal: [dog, cat, hedgehog, rabbit]
+    kind_ignore: [manhole, dock]
+    # Heights for the size probe (m): a stereo depth below half the one from the height of the box is taken for the
+    # grass in front of it.
+    known_heights: ["person=1.7", "dog=0.6", "cat=0.3"]
 
 # tron_side, only the live picture of the right side camera (MOWBITE_RIGHT=on, MOWBITE_RIGHT_NODE=side), streaming only
 # while a viewer is there:

@@ -5,6 +5,9 @@ marker of the rear camera with its live picture, and with any of these the camer
 the shutdown starts again at most DRIVER_RESTARTS times, each new one latched from its first frame (start_latched):
 the MCU does not latch by itself when its host is gone.
 """
+import os
+
+import yaml
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import EnvironmentVariable
 from launch_ros.actions import Node
@@ -17,6 +20,14 @@ DRIVER = "tron_mcu"
 DRIVER_RESTARTS = 3
 # Where the rootfs of the Tron keeps the data of the OS.
 DATA_DIR = "/userdata/mowbite"
+
+
+
+def wheel_radius():
+    """The radius of the drive wheels from geometry.yaml beside this file, the only place that sets it."""
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "geometry.yaml")) as f:
+        return float(yaml.safe_load(f)["mowbite_logic"]["ros__parameters"]["geometry"]["wheel_radius"])
+
 
 # What every process around the cameras gets: the kernel ends it first when memory runs out, and it keeps CPU 4-7 free.
 CAMERA_LIMITS = {"oom_score_adj": 1000, "nice": 10, "cpus": "0-3"}
@@ -95,7 +106,9 @@ def parts(start):
     # Only here: with hardware:=read another host drives the blade, and blade_on of hw/status would always be false.
     video = camera_video(arg("camera_video"), logger)
     cameras = [*camera(start, arg("vision"), "vision", "tron_vision_node", "tron_vision", video),
-               *camera(start, arg("stereo"), "stereo", "tron_stereo_node", "tron_stereo"),
+               # The obstacles of the stereo camera put the ground at -wheel_radius.
+               *camera(start, arg("stereo"), "stereo", "tron_stereo_node", "tron_stereo",
+                       {"wheel_radius": wheel_radius()}),
                *right_camera(start, arg("right"), arg("right_node"), video),
                *camera(start, arg("rear"), "rear", "tron_rear_node", "tron_rear", video)]
     # The camera service of the OS shows their pictures in the app; without a camera process it has none to show.

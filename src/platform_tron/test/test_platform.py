@@ -101,9 +101,10 @@ def test_each_camera_process_names_itself(camera_params, monkeypatch):
     params = camera_params(**CAMERAS)
     names = {"vision": ("tron_vision", "tron_vision_node"), "stereo": ("tron_stereo", "tron_stereo_node"),
              "right": ("tron_vision_right", "tron_vision_node"), "rear": ("tron_rear", "tron_rear_node")}
+    extra = {"stereo": {"wheel_radius": 0.1125}}
     for process, (exec_name, executable) in names.items():
         assert made[process].node_executable == executable
-        assert params[exec_name] == {"process": process}
+        assert params[exec_name] == {"process": process, **extra.get(process, {})}
 
 
 def test_camera_video_off_turns_off_each_h264_stream(camera_params):
